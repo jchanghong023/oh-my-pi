@@ -38,6 +38,7 @@ export interface ZCodeQueryContext {
 	manager: Pick<ZCodeSessionManager, "get" | "getAsyncJob" | "read" | "list" | "childIdentities">;
 	getProjection(sessionId: string): ZCodeProjection | undefined;
 	reasoning?(
+		cwd: string,
 		providerId: string,
 		modelId: string,
 		thinkingLevel: string,
@@ -176,6 +177,7 @@ export class ZCodeQueries {
 		const reasoning =
 			selected && separator > 0
 				? await this.#context.reasoning?.(
+						facts.cwd,
 						selected.slice(0, separator),
 						selected.slice(separator + 1),
 						context.thinkingLevel ?? "off",

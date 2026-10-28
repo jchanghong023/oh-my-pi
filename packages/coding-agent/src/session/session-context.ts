@@ -167,8 +167,6 @@ export interface BuildSessionContextOptions {
 	 * latest compacted tail.
 	 */
 	transcript?: boolean;
-	/** Replay original source history after the latest reset for remote-Agent projection, including failed turns. */
-	preserveFailedTurns?: boolean;
 	/** In transcript mode, elide entries replaced by the latest compaction. */
 	collapseCompactedHistory?: boolean;
 	/**
@@ -423,7 +421,6 @@ export function buildSessionContext(
 		if (entry.type === "message") {
 			if (
 				!options?.transcript &&
-				!options?.preserveFailedTurns &&
 				entry.message.role === "assistant" &&
 				(entry.message.retryRecovery || isEmptyErrorTurn(entry.message))
 			) {
@@ -484,14 +481,6 @@ export function buildSessionContext(
 			} else {
 				appendMessage(entry);
 			}
-		}
-	} else if (options?.preserveFailedTurns && !options.transcript) {
-		// A remote Agent needs the visible source conversation, not the local
-		// provider's compacted replacement. Keep provenance for its projection
-		// to exclude generated notifications, and honor `/clear` independently
-		// of any later compaction. Full transcript exports remain unchanged.
-		for (let i = resetBoundaryIdx + 1; i < path.length; i++) {
-			appendMessage(path[i]);
 		}
 	} else if (
 		resetBoundaryIdx >= 0 &&
@@ -678,7 +667,7 @@ export function buildSessionContext(
 		}
 	}
 
-	if (!options?.transcript && !options?.preserveFailedTurns) {
+	if (!options?.transcript) {
 		const notes = getContextNotes(path);
 		const renderedNotes = renderContextNotes(path);
 		if (notes && renderedNotes.length > 0) {
@@ -729,7 +718,7 @@ export function buildSessionContext(
 	// Those callers pass `inFlightToolCallIds` so the in-flight call stays visible as
 	// a pending block instead of vanishing from the chat, while older abandoned calls
 	// are still stripped.)
-	if (!options?.preserveFailedTurns) {
+	{
 		const pairedToolResultIds = new Set<string>(options?.inFlightToolCallIds);
 		for (const message of messages) {
 			if (message.role === "toolResult") pairedToolResultIds.add(message.toolCallId);
@@ -776,7 +765,7 @@ export function buildSessionContext(
 	// Keep the interrupted-thinking continuity pair: convertToLlm strips the
 	// unsafe trailing thinking from that assistant and sends the hidden
 	// continuity note instead.
-	if (!options?.transcript && !options?.preserveFailedTurns) {
+	if (!options?.transcript) {
 		for (let i = messages.length - 1; i >= 0; i--) {
 			const message = messages[i];
 			if (message?.role !== "assistant") continue;

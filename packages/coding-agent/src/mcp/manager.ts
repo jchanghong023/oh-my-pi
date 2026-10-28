@@ -41,7 +41,7 @@ import {
 	type MCPOAuthCredentialLookup,
 	refreshStoredManagedMcpOAuthCredential,
 } from "./oauth-credentials";
-import { type MCPStoredOAuthCredential, requestMCPClientCredentialsToken } from "./oauth-flow";
+import type { MCPStoredOAuthCredential } from "./oauth-flow";
 import type { McpConnectionStatusEvent } from "./startup-events";
 import { resolveMCPStartupTimeoutMs } from "./timeout";
 
@@ -304,7 +304,6 @@ export class MCPManager {
 	#startupFailures = new Map<string, string>();
 	#sources = new Map<string, SourceMeta>();
 	#authStorage: AuthStorage | null = null;
-	#clientCredentialsTokens = new WeakMap<MCPServerConfig, { access: string; expires: number }>();
 	#authHandler?: MCPAuthHandler;
 	#notificationListeners = new Set<(serverName: string, method: string, params: unknown) => void>();
 	#connectionStatusListeners = new Set<(event: McpConnectionStatusEvent) => void>();
@@ -886,7 +885,7 @@ export class MCPManager {
 					// too and need the same mid-session refresh hook.
 					if (
 						isAuthRefreshableMCPTransport(connection.transport) &&
-						(lookupMcpOAuthCredential(this.#authStorage, config) || config.oauth?.type === "client_credentials")
+						lookupMcpOAuthCredential(this.#authStorage, config)
 					) {
 						connection.transport.onAuthError = async () => {
 							const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
@@ -1742,10 +1741,7 @@ export class MCPManager {
 
 		// Wire auth refresh for HTTP-like transports, and reconnect for any transport.
 		// Same gate as connectServers: any resolvable managed credential.
-		if (
-			isAuthRefreshableMCPTransport(connection.transport) &&
-			(lookupMcpOAuthCredential(this.#authStorage, config) || config.oauth?.type === "client_credentials")
-		) {
+		if (isAuthRefreshableMCPTransport(connection.transport) && lookupMcpOAuthCredential(this.#authStorage, config)) {
 			connection.transport.onAuthError = async () => {
 				const refreshed = await this.#resolveAuthConfig(config, { forceRefresh: true });
 				if (refreshed.type === "http" || refreshed.type === "sse") {
@@ -2080,26 +2076,13 @@ export class MCPManager {
 	): Promise<MCPServerConfig> {
 		const signal = opts?.signal ?? this.#connectAbort.signal;
 		let resolved: MCPServerConfig = { ...config };
-		if (opts?.oauth !== false && config.oauth?.type === "client_credentials") {
-			if (config.type !== "http" && config.type !== "sse")
-				throw new Error("MCP client credentials require an HTTP server");
-			const { clientId, clientSecret, scope } = config.oauth;
-			if (!clientId || !clientSecret) throw new Error("MCP client credentials are incomplete");
-			let token = this.#clientCredentialsTokens.get(config);
-			if (!token || token.expires <= Date.now() + 30_000 || opts?.forceRefresh) {
-				token = await requestMCPClientCredentialsToken(config.url, { clientId, clientSecret, scope }, signal);
-				this.#clientCredentialsTokens.set(config, token);
-			}
-			const headers = { ...config.headers };
-			setGeneratedHeader(headers, "Authorization", `Bearer ${token.access}`);
-			resolved = { ...config, headers };
+		if (config.oauth?.type === "client_credentials") {
+			throw new Error("MCP OAuth client_credentials grant is not supported");
 		}
 
 		const auth = config.auth;
 		const lookup: MCPOAuthCredentialLookup | undefined =
-			opts?.oauth !== false && config.oauth?.type !== "client_credentials"
-				? lookupMcpOAuthCredential(this.#authStorage, config)
-				: undefined;
+			opts?.oauth !== false ? lookupMcpOAuthCredential(this.#authStorage, config) : undefined;
 		if (
 			opts?.oauth !== false &&
 			config.oauth?.type === "authorization_code" &&

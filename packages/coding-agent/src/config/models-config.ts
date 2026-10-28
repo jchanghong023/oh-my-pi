@@ -141,13 +141,11 @@ const getReservedModelsConfigSchema = once(() => {
 		if (!isRecord(input) || !isRecord(input.providers)) return schema(input);
 		const originalProviders = input.providers;
 		const hasCompany = Object.hasOwn(originalProviders, "company");
-		const hasJchTools = Object.hasOwn(originalProviders, "jchtools");
 		const hasCodeAgent = Object.hasOwn(originalProviders, "codeagent");
-		if (!hasCompany && !hasJchTools && !hasCodeAgent) return schema(input);
+		if (!hasCompany && !hasCodeAgent) return schema(input);
 
 		const providers = { ...originalProviders };
 		if (hasCompany) providers.company = {};
-		if (hasJchTools) providers.jchtools = {};
 		if (hasCodeAgent) providers.codeagent = {};
 		return schema({ ...input, providers });
 	});
@@ -220,7 +218,7 @@ export const ModelsConfigFile = new ConfigFile<ModelsConfig>("models", {
 }).withValidation("models", config => {
 	const providers = config.providers ?? {};
 	for (const providerName in providers) {
-		if (providerName === "company" || providerName === "jchtools" || providerName === "codeagent") continue;
+		if (providerName === "company" || providerName === "codeagent") continue;
 		const providerConfig = providers[providerName];
 		validateProviderConfiguration(
 			providerName,

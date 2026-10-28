@@ -4,7 +4,6 @@ import { getLogsDir, postmortem } from "@oh-my-pi/pi-utils";
 import { AgentSideConnection, ndJsonStream, type Stream } from "@oh-my-pi/pi-utils/acp";
 import type { ExtensionUIContext } from "../../extensibility/extensions/types";
 import type { AgentSession } from "../../session/agent-session";
-import { startOfflineShmBackup } from "../../offline/backup-lifecycle";
 import { AcpAgent } from "./acp-agent";
 
 /** Session and deferred tool UI hook created for an ACP client workspace. */
@@ -93,23 +92,6 @@ export async function runAcpMode(createSession: AcpSessionFactory, initialSessio
 	const connection = createAcpConnection(transport, createSession, initialSession, createdAgent => {
 		agent = createdAgent;
 	});
-	// Construction starts the transport reader; ACP can now accept requests.
-	// Own the lifecycle here for both launch --mode acp and the standalone acp
-	// command, whose first-output hook must not create a second scheduler.
-	const stopBackup = startOfflineShmBackup(message => process.stderr.write(`${message}\n`));
-	connection.signal.addEventListener("abort", stopBackup, { once: true });
-	// Clean EOF can drain in-flight protocol requests before connection.closed.
-	// End the backup lifetime immediately without changing that session drain.
-	process.stdin.once("end", stopBackup);
-	process.stdin.once("error", stopBackup);
-	try {
-		await connection.closed;
-	} finally {
-		// Stop before session teardown, without waiting for a backup worker.
-		stopBackup();
-		connection.signal.removeEventListener("abort", stopBackup);
-		process.stdin.off("end", stopBackup);
-		process.stdin.off("error", stopBackup);
-	}
+	await connection.closed;
 	await postmortem.quit(0);
 }

@@ -42,7 +42,7 @@
 
 ### Provider 配置保存现状
 
-当前 `ConfigFile`／`ModelsConfigFile` 只承担读取／迁移，没有主动 `models.yml` writer 或 provider 保存 API；这不豁免下述已授权 provider 变更的双端要求，也不表示 Team 接口提供 provider 配置。Agent 获授权新增 provider 时仍须双端最小安全写，不能把任意文本 `edit` 视为具有共享程序服务的锁、版本校验或事务保证。
+当前 `ConfigFile`／`ModelsConfigFile` 只承担读取／迁移，没有主动 `models.yml` writer 或 provider 保存 API；Team 接口不提供 provider 配置。Agent 获授权新增 provider 时，不能把任意文本 `edit` 视为具有共享程序服务的锁、版本校验或事务保证。
 
 ### TUI 显示验证参考
 

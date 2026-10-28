@@ -7,6 +7,10 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { BashExecutionComponent } from "@oh-my-pi/pi-tui/chat/bash-execution";
 import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import { CompactionSummaryMessageComponent } from "@oh-my-pi/pi-tui/chat/compaction-summary-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import { LateDiagnosticsMessageComponent } from "@oh-my-pi/pi-tui/chat/late-diagnostics-message";
@@ -28,11 +32,13 @@ beforeAll(async () => {
 	await initTheme(false);
 });
 
+const preferences = { ...chatTranscriptDisplayPreferences };
 let harness: TspHarness | undefined;
 afterEach(() => {
 	harness?.stop();
 	harness = undefined;
 	setNativeRendering(false);
+	setChatTranscriptDisplayPreferences(preferences);
 	stopSharedSpinnerTicker();
 });
 
@@ -273,6 +279,11 @@ describe("native transcript", () => {
 	});
 
 	it("keeps replayed read groups in call order across prose and writes when results arrive in reverse order", async () => {
+		setChatTranscriptDisplayPreferences({
+			hideToolActivity: false,
+			compactToolActivity: false,
+			readToolResultPreview: true,
+		});
 		const calls: AssistantMessage["content"] = [
 			{ type: "text", text: "Before reads" },
 			{ type: "toolCall", id: "a0", name: "read", arguments: { path: "a0.ts" } },
@@ -311,11 +322,6 @@ describe("native transcript", () => {
 			builder = new ChatTranscriptBuilder({
 				ui: h.tui,
 				cwd: "/tmp",
-				toolActivityDisplay: {
-					hideToolActivity: false,
-					compactToolActivity: false,
-					readToolResultPreview: true,
-				},
 				requestRender: () => h.tui.requestRender(),
 			});
 			builder.setExpanded(true);

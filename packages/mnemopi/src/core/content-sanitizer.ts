@@ -1,8 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
-import { resolveMemoryPath } from "../config";
 
 export const SIZE_HARD_CAP = 1_000_000;
 export const SIZE_BASE64_CHECK = 100_000;
@@ -20,11 +18,9 @@ export interface BlobMetadata {
 }
 
 export function blobRoot(env: NodeJS.ProcessEnv = process.env): string {
-	const configured =
-		env.MNEMOPI_BLOB_DIR && env.MNEMOPI_BLOB_DIR.length > 0
-			? env.MNEMOPI_BLOB_DIR
-			: join(homedir(), ".hermes", "mnemopi", "blobs");
-	return resolveMemoryPath(configured, "blobs", env);
+	return env.MNEMOPI_BLOB_DIR && env.MNEMOPI_BLOB_DIR.length > 0
+		? env.MNEMOPI_BLOB_DIR
+		: join(homedir(), ".hermes", "mnemopi", "blobs");
 }
 
 export function computeSha256(data: Uint8Array | string): string {
@@ -69,7 +65,6 @@ export function storeBlob(rawBytes: Uint8Array): string {
 	const sha256 = computeSha256(rawBytes);
 	const blobDir = join(blobRoot(), sha256.slice(0, 2), sha256.slice(0, 4));
 	const blobPath = join(blobDir, sha256);
-	assertOfflineShmPath(blobPath);
 	mkdirSync(blobDir, { recursive: true });
 	if (!existsSync(blobPath)) writeFileSync(blobPath, rawBytes);
 	return sha256;

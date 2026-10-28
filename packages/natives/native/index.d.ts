@@ -438,17 +438,6 @@ export declare class NativeOAuthCallback {
 }
 
 /**
- * A stable-sidecar POSIX lock, separate from the local-only `FileLock`
- * protocol.
- */
-export declare class PersistentFileLock {
-  /** Whether this attempt acquired ownership (false means contention). */
-  get acquired(): boolean
-  /** Release on a native blocking worker; repeated calls are safe. */
-  release(): Promise<undefined>
-}
-
-/**
  * The bytes crossing one shell run's pipeline pipes, during and after the run.
  *
  * For `cargo build 2>&1 | tail -5`, stream 1 holds what `cargo` has written
@@ -2523,11 +2512,9 @@ export interface IpcConnectOptions {
  *
  * Unix: `<dir>/<stem>.sock`; when that path does not fit `sun_path` (104 bytes
  * on macOS/BSD, 108 on Linux, including NUL), `/tmp/omp-<euid>/<hash16>.sock`
- * (under `/dev/shm/omp-<euid>` on Linux with truthy `OMP_OFFLINE`).
  * Windows: `\\.\pipe\omp-<stem>-<hash16(lowercase(resolve(dir)))>`.
  * `stem` is `name` with every char outside `[A-Za-z0-9._-]` replaced by "_".
- * No filesystem IO; deterministic for processes sharing the offline
- * environment.
+ * No filesystem IO; deterministic for processes sharing the directory.
  */
 export declare function ipcEndpoint(dir: string, name: string): string
 
@@ -3992,12 +3979,6 @@ export interface TextPredictorOptions {
  * Pads with spaces when requested.
  */
 export declare function truncateToWidth(text: string, maxWidth: number, ellipsisKind: Ellipsis | undefined | null, pad: boolean | undefined | null, tabWidth: number): string
-
-/**
- * Open and try `F_SETLK` on a native blocking worker. Unsupported platforms
- * fail explicitly.
- */
-export declare function tryAcquirePersistentFileLock(path: string): Promise<PersistentFileLock>
 
 /** Patch application options. */
 export interface VcsApplyOptions {

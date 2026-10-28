@@ -59,18 +59,6 @@ import { type ApiKeyResolverModel, type ApiKeyResolverOptions, createApiKeyResol
 import { getCompanyChatModelIds, getCompanyChatModels } from "./company-models";
 import { COMPANY_PROVIDER_ID, getCompanyConfig, getCompanyConfigError, isCompanyLaneActive } from "./company-provider";
 import { CODEAGENT_PROVIDER_ID, getCodeAgentModels, initializeCodeAgentProvider } from "./codeagent-provider";
-import {
-	discoverJchToolsModels,
-	isJchToolsDiscoveryEnabled,
-	type JchToolsDiscoveryOptions,
-} from "./jchtools-discovery";
-import {
-	JCHTOOLS_API,
-	JCHTOOLS_INSTANCE,
-	JCHTOOLS_PROVIDER_ID,
-	type JchToolsModel,
-	streamJchToolsAgent,
-} from "./jchtools-provider";
 import type { ConfigError, ConfigFile } from "./config-file";
 import {
 	buildCustomModelOverlay,
@@ -415,14 +403,6 @@ export class ModelRegistry {
 	#ignoreLocalModelConfig: boolean;
 	#fetch: FetchImpl;
 	#settings: Settings | undefined;
-	#jchToolsDiscovery: JchToolsDiscoveryOptions;
-	#jchToolsModels: JchToolsModel[] = [];
-	// Existing selected model objects must see discoveries without being reselected.
-	#jchToolsInstance: { id: string | undefined } = { id: undefined };
-	#jchToolsRefresh?: Promise<boolean>;
-	#jchToolsDiscoveryAbort?: AbortController;
-	#jchToolsAutomaticDiscoveryAllowed = true;
-	#jchToolsDiscoveryGeneration = 0;
 	#diagnosticOperationId = logger.getLogContext().operation_id ?? `model-registry-${randomUUID()}`;
 	#companyLaneModelCount?: number;
 
@@ -436,15 +416,8 @@ export class ModelRegistry {
 	}
 
 	/** Final pass over every published model list: catalog metrics, then implicit local providers last. */
-	#finalizeModels(models: Model<Api>[], providerFilter?: ReadonlySet<string>): Model<Api>[] {
-		const projected = applyCatalogMetrics(
-			models.filter(model => model.provider !== JCHTOOLS_PROVIDER_ID),
-			this.#catalogMetrics,
-		);
-		if (this.#canDiscoverJchTools() && (!providerFilter || providerFilter.has(JCHTOOLS_PROVIDER_ID))) {
-			projected.push(...this.#jchToolsModels);
-		}
-		return this.#orderImplicitProvidersLast(projected);
+	#finalizeModels(models: Model<Api>[]): Model<Api>[] {
+		return this.#orderImplicitProvidersLast(applyCatalogMetrics(models, this.#catalogMetrics));
 	}
 
 	/**
@@ -530,7 +503,6 @@ export class ModelRegistry {
 	}
 
 	#reloadStaticModelsForRefresh(options?: ModelRegistryRefreshOptions, providerId?: string): void {
-		if (!this.#canDiscoverJchTools() || !this.#jchToolsAutomaticDiscoveryAllowed) this.#clearJchToolsModels();
 		if (options?.refreshCommandCredentials) {
 			if (providerId) this.#invalidateProviderCommandConfigs(providerId);
 			else invalidateAllCommandConfigs();
@@ -570,8 +542,6 @@ export class ModelRegistry {
 			/** Model discovery cache database. Defaults beside an explicit models config. */
 			cacheDbPath?: string;
 			fetch?: FetchImpl;
-			/** Isolated discovery transport options for SDK integration tests. */
-			jchToolsDiscovery?: JchToolsDiscoveryOptions;
 		},
 	) {
 		this.#ignoreLocalModelConfig = options?.ignoreLocalModelConfig ?? false;
@@ -581,11 +551,6 @@ export class ModelRegistry {
 			(isBunTestRuntime()
 				? () => Promise.reject(new Error("network disabled in model-registry runtime test"))
 				: wrapFetchForExtraCa(fetch));
-		this.#jchToolsDiscovery = {
-			...options?.jchToolsDiscovery,
-			fetch: options?.jchToolsDiscovery?.fetch ?? this.#fetch,
-		};
-		if (this.#canDiscoverJchTools()) registerCustomApi(JCHTOOLS_API, streamJchToolsAgent, "builtin:jchtools");
 		if (
 			!this.#ignoreLocalModelConfig &&
 			!isCompanyLaneActive() &&
@@ -607,7 +572,6 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online-if-uncached",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
-		this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
 		// Credential minting is opt-in. `strategy: "online"` only means "hit the
 		// network for catalogs" — the unscoped model hub opens with that strategy
 		// as a background reconcile, and must not spawn `!command` helpers.
@@ -742,134 +706,6 @@ export class ModelRegistry {
 		return changed;
 	}
 
-	#canDiscoverJchTools(): boolean {
-		return (
-			!this.#ignoreLocalModelConfig &&
-			!isCompanyLaneActive() &&
-			!getDisabledProviderIdsFromSettings(this.#settings).has(JCHTOOLS_PROVIDER_ID) &&
-			isJchToolsDiscoveryEnabled(this.#jchToolsDiscovery)
-		);
-	}
-
-	/** Revoke published rows and any in-flight result, even if eligibility is later restored. */
-	#clearJchToolsModels(): void {
-		this.#jchToolsDiscoveryAbort?.abort();
-		this.#jchToolsDiscoveryGeneration++;
-		this.#jchToolsModels = [];
-		this.#keylessProviders.delete(JCHTOOLS_PROVIDER_ID);
-		this.#invalidateProviderModelCache(JCHTOOLS_PROVIDER_ID);
-		if (this.#hasFullSnapshot)
-			this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
-	}
-
-	/** Refresh only the ephemeral local service, never unrelated online catalogs. */
-	async refreshLocalProviders(): Promise<boolean> {
-		if (this.#jchToolsRefresh) {
-			if (!this.#canDiscoverJchTools() || !this.#jchToolsAutomaticDiscoveryAllowed) {
-				this.#clearJchToolsModels();
-				return this.#jchToolsRefresh;
-			}
-			if (!this.#jchToolsDiscoveryAbort || this.#jchToolsDiscoveryAbort.signal.aborted) {
-				// An invalidated flight cannot satisfy a newly eligible refresh. Wait
-				// for its cleanup, then let all waiters share the next discovery.
-				const changed = await this.#jchToolsRefresh;
-				return (await this.refreshLocalProviders()) || changed;
-			}
-			return this.#jchToolsRefresh;
-		}
-		const operationId = logger.getLogContext().operation_id ?? this.#diagnosticOperationId;
-		const callId = `local-provider-refresh-${randomUUID()}`;
-		const startedAt = performance.now();
-		const run = async () => {
-			logger.info("Local provider registry refresh started", {
-				component: "model-registry",
-				event: "local_provider_refresh_started",
-				stage: "discovery",
-				result: "started",
-				operation_id: operationId,
-				call_id: callId,
-				provider: JCHTOOLS_PROVIDER_ID,
-			});
-			const previous = this.#jchToolsModels;
-			this.#clearJchToolsModels();
-			const generation = this.#jchToolsDiscoveryGeneration;
-			const controller =
-				this.#canDiscoverJchTools() && this.#jchToolsAutomaticDiscoveryAllowed ? new AbortController() : undefined;
-			this.#jchToolsDiscoveryAbort = controller;
-			const models = controller
-				? await discoverJchToolsModels({
-						...this.#jchToolsDiscovery,
-						signal: this.#jchToolsDiscovery.signal
-							? AbortSignal.any([this.#jchToolsDiscovery.signal, controller.signal])
-							: controller.signal,
-					})
-				: [];
-			this.#jchToolsModels =
-				generation === this.#jchToolsDiscoveryGeneration &&
-				this.#jchToolsAutomaticDiscoveryAllowed &&
-				this.#canDiscoverJchTools()
-					? models
-					: [];
-			const instanceId = this.#jchToolsModels[0]?.[JCHTOOLS_INSTANCE]?.id;
-			const instanceChanged = this.#jchToolsInstance.id !== instanceId;
-			this.#jchToolsInstance.id = instanceId;
-			for (const model of this.#jchToolsModels) model[JCHTOOLS_INSTANCE] = this.#jchToolsInstance;
-			if (this.#jchToolsModels.length > 0) registerCustomApi(JCHTOOLS_API, streamJchToolsAgent, "builtin:jchtools");
-			if (this.#jchToolsModels.length > 0) this.#keylessProviders.add(JCHTOOLS_PROVIDER_ID);
-			this.#invalidateProviderModelCache(JCHTOOLS_PROVIDER_ID);
-			if (this.#hasFullSnapshot)
-				this.#models = this.#finalizeModels(this.#applyRuntimeModelModifiers(this.#unprojectedModels));
-			const changed =
-				instanceChanged ||
-				previous.length !== this.#jchToolsModels.length ||
-				previous.some(
-					(model, index) =>
-						model.id !== this.#jchToolsModels[index]?.id ||
-						model.baseUrl !== this.#jchToolsModels[index]?.baseUrl,
-				);
-			logger.info("Local provider model publication completed", {
-				component: "model-registry",
-				event: "local_provider_refresh_completed",
-				stage: "publish",
-				result: controller?.signal.aborted ? "cancelled" : controller ? "completed" : "skipped",
-				operation_id: operationId,
-				call_id: callId,
-				provider: JCHTOOLS_PROVIDER_ID,
-				previous_model_count: previous.length,
-				discovered_model_count: models.length,
-				published_model_count: this.#jchToolsModels.length,
-				changed,
-				stale_generation: generation !== this.#jchToolsDiscoveryGeneration,
-				automatic_discovery_allowed: this.#jchToolsAutomaticDiscoveryAllowed,
-				elapsed_ms: performance.now() - startedAt,
-			});
-			return changed;
-		};
-		this.#jchToolsRefresh = logger.withLogContext({ operation_id: operationId, call_id: callId }, run);
-		try {
-			return await this.#jchToolsRefresh;
-		} catch (error) {
-			const cancelled = this.#jchToolsDiscoveryAbort?.signal.aborted === true;
-			const fields = {
-				component: "model-registry",
-				event: "local_provider_refresh_failed",
-				stage: "discovery",
-				result: cancelled ? "cancelled" : "failed",
-				operation_id: operationId,
-				call_id: callId,
-				provider: JCHTOOLS_PROVIDER_ID,
-				elapsed_ms: performance.now() - startedAt,
-				...logger.diagnosticError(error),
-			};
-			if (cancelled) logger.info("Local provider registry refresh cancelled", fields);
-			else logger.error("Local provider registry refresh failed", fields);
-			throw error;
-		} finally {
-			this.#jchToolsRefresh = undefined;
-			this.#jchToolsDiscoveryAbort = undefined;
-		}
-	}
-
 	/**
 	 * Resolve once the initial background discovery has settled, arming a waiter
 	 * even when the refresh has not started yet. In the CLI path
@@ -912,7 +748,6 @@ export class ModelRegistry {
 		strategy: ModelRefreshStrategy = isCompanyLaneActive() ? "offline" : "online",
 		options?: ModelRegistryRefreshOptions,
 	): Promise<void> {
-		if (providerId === JCHTOOLS_PROVIDER_ID) this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
 		// Hover / auto-refresh uses `"online"` for a live catalog. Only F5 (and
 		// other explicit callers) pass refreshCommandCredentials to re-mint
 		// `!command` keys and headers for this provider.
@@ -952,10 +787,6 @@ export class ModelRegistry {
 	): Promise<void> {
 		const filter = new Set(providerIds);
 		if (filter.size === 0) return;
-		if (filter.has(JCHTOOLS_PROVIDER_ID)) {
-			this.#jchToolsAutomaticDiscoveryAllowed = strategy !== "offline";
-			if (!this.#jchToolsAutomaticDiscoveryAllowed) this.#clearJchToolsModels();
-		}
 		await this.#refreshRuntimeDiscoveries(strategy, filter);
 	}
 
@@ -1234,8 +1065,6 @@ export class ModelRegistry {
 			});
 		}
 		this.#keylessProviders = keylessProviders;
-		if (this.#jchToolsModels.length > 0 && this.#canDiscoverJchTools())
-			this.#keylessProviders.add(JCHTOOLS_PROVIDER_ID);
 		this.#discoverableProviders = this.#ignoreLocalModelConfig
 			? discoverableProviders
 			: discoverableProviders.filter(provider => provider.provider !== COMPANY_PROVIDER_ID);
@@ -1290,7 +1119,6 @@ export class ModelRegistry {
 			if (isCompanyLaneActive()) providers.add(COMPANY_PROVIDER_ID);
 			else providers.add(CODEAGENT_PROVIDER_ID);
 		}
-		if (this.#jchToolsModels.length > 0 && this.#canDiscoverJchTools()) providers.add(JCHTOOLS_PROVIDER_ID);
 		for (const provider of this.#pendingStandardCacheProviders) providers.add(provider);
 		for (const provider of this.#cachedStandardModelsByProvider.keys()) providers.add(provider);
 		for (const model of this.#cachedDiscoverableModels) providers.add(model.provider);
@@ -1409,7 +1237,7 @@ export class ModelRegistry {
 	}
 
 	/** Startup-visible notices for models.yml sections this fork ignores because
-	 * the provider id is reserved (company, codeagent, jchtools); empty unless
+	 * the provider id is reserved (company, codeagent); empty unless
 	 * models.yml defines such sections. */
 	getReservedProviderWarnings(): string[] {
 		return [...this.#reservedProviderWarnings.values()];
@@ -1526,7 +1354,7 @@ export class ModelRegistry {
 		const projectFullCatalog = providerFilter !== undefined && this.#runtimeModelModifiers.size > 0;
 		const compositionFilter = projectFullCatalog ? undefined : providerFilter;
 		const unprojected = this.#projectBaseModels(this.#composeBaseModels(compositionFilter), compositionFilter);
-		const projected = this.#finalizeModels(this.#applyRuntimeModelModifiers(unprojected), compositionFilter);
+		const projected = this.#finalizeModels(this.#applyRuntimeModelModifiers(unprojected));
 		const selected = projectFullCatalog ? projected.filter(model => providerFilter.has(model.provider)) : projected;
 		return this.#internStaticModels(selected);
 	}
@@ -2071,13 +1899,6 @@ export class ModelRegistry {
 				);
 				continue;
 			}
-			if (providerName === JCHTOOLS_PROVIDER_ID) {
-				this.#warnReservedProviderConfig(
-					providerName,
-					"this provider is discovered from the live same-user JchTools service; the whole section is ignored",
-				);
-				continue;
-			}
 			if (providerName === COMPANY_PROVIDER_ID) {
 				this.#warnReservedProviderConfig(
 					providerName,
@@ -2200,9 +2021,6 @@ export class ModelRegistry {
 		// Offline is a process policy, not an opt-in at each CLI/SDK callsite.
 		// Explicit inference and OAuth requests remain available; catalog discovery does not.
 		if (offlineFromEnv() || isCompanyLaneActive()) strategy = "offline";
-		if ((!providerFilter || providerFilter.has(JCHTOOLS_PROVIDER_ID)) && strategy !== "offline") {
-			await this.refreshLocalProviders();
-		}
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const selectedDiscoverableProviders = (
 			providerFilter
@@ -3296,12 +3114,7 @@ export class ModelRegistry {
 	#parseModels(config: ModelsConfig): CustomModelOverlay[] {
 		const models: CustomModelOverlay[] = [];
 		for (const [providerName, providerConfig] of Object.entries(config.providers ?? {})) {
-			if (
-				providerName === COMPANY_PROVIDER_ID ||
-				providerName === CODEAGENT_PROVIDER_ID ||
-				providerName === JCHTOOLS_PROVIDER_ID
-			)
-				continue;
+			if (providerName === COMPANY_PROVIDER_ID || providerName === CODEAGENT_PROVIDER_ID) continue;
 			const modelDefs = providerConfig.models ?? [];
 			if (modelDefs.length === 0) continue; // Override-only, no custom models
 			if (providerConfig.apiKey) {
@@ -3385,7 +3198,6 @@ export class ModelRegistry {
 				// by `#keylessProviders`.
 				available =
 					!disabledProviders.has(provider) &&
-					(provider !== JCHTOOLS_PROVIDER_ID || this.#canDiscoverJchTools()) &&
 					(provider === COMPANY_PROVIDER_ID && !this.#ignoreLocalModelConfig
 						? getCompanyConfig() !== undefined
 						: this.#runtimeRequestAuthSources.get(provider)?.() === true ||
@@ -3503,14 +3315,12 @@ export class ModelRegistry {
 		const providers = this.#discoverableProviders
 			.filter(provider => !disabledProviders.has(provider.provider))
 			.map(provider => provider.provider);
-		if (this.#canDiscoverJchTools()) providers.push(JCHTOOLS_PROVIDER_ID);
 		return providers;
 	}
 
 	/** Canonical id of a configured or extension-backed discovery provider. */
 	getDiscoveryProviderId(requestedId: string): string | undefined {
 		const normalized = requestedId.toLowerCase();
-		if (normalized === JCHTOOLS_PROVIDER_ID && this.#canDiscoverJchTools()) return JCHTOOLS_PROVIDER_ID;
 		for (const { provider } of this.#discoverableProviders) {
 			if (provider.toLowerCase() === normalized) return provider;
 		}
@@ -3530,7 +3340,6 @@ export class ModelRegistry {
 	 * the online refresh completes.
 	 */
 	hasProvider(providerId: string): boolean {
-		if (providerId === JCHTOOLS_PROVIDER_ID) return this.#canDiscoverJchTools();
 		const providerModels = this.#hasFullSnapshot ? this.#models : this.#composeStaticModels(new Set([providerId]));
 		if (providerModels.some(model => model.provider === providerId)) return true;
 		if (getDisabledProviderIdsFromSettings(this.#settings).has(providerId)) return false;
@@ -3576,7 +3385,6 @@ export class ModelRegistry {
 
 	/** Whether settings disable `provider` (`disabledProviders`). */
 	#isProviderDisabled(provider: string): boolean {
-		if (provider === JCHTOOLS_PROVIDER_ID && !this.#canDiscoverJchTools()) return true;
 		if (provider === CODEAGENT_PROVIDER_ID && (this.#ignoreLocalModelConfig || isCompanyLaneActive())) return true;
 		return getDisabledProviderIdsFromSettings(this.#settings).has(provider);
 	}
@@ -3877,7 +3685,6 @@ export class ModelRegistry {
 		sourceLifetime: "extension" | "runtime" = "extension",
 	): void {
 		if (providerName === COMPANY_PROVIDER_ID) throw new Error("The built-in company provider cannot be replaced.");
-		if (providerName === JCHTOOLS_PROVIDER_ID) throw new Error("The live JchTools provider cannot be replaced.");
 		if (providerName === CODEAGENT_PROVIDER_ID)
 			throw new Error("The built-in CodeAgent provider cannot be replaced.");
 		if (config.streamSimple && !config.api) {

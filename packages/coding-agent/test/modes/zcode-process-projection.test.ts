@@ -581,15 +581,17 @@ describe("ZCode actual public app-server process", () => {
 		expect(initial.options.map(option => option.value)).toContain("zcode-fixture/chat-b");
 		// 临时会话选 B 不能覆盖 workspace 持久 default=A。
 		const sessionId = await create(peer, config.cwdA, { providerId: model.providerId, modelId: "chat-b" });
-		expect(await peer.request("provider/refreshRegistry", { reason: "native-catalog" })).toEqual({ refreshed: true });
-		expect((await readModelOption("zcode-fixture/chat-a")).currentValue).toBe("zcode-fixture/chat-a");
+		expect((await peer.requestFrame("provider/refreshRegistry", { reason: "native-catalog" })).error).toMatchObject({
+			code: -32601,
+			message: "Host provider configuration is not supported",
+		});
 		const rejected = await peer.requestFrame("provider/updateAccountConfig", {
 			revision: "1",
 			basedOnZCodeBuiltinRevision: "1",
 			providers: {},
 			states: {},
 		});
-		expect(rejected.error).toMatchObject({ message: "Account config requires matching built-in source" });
+		expect(rejected.error).toMatchObject({ code: -32601, message: "Host provider configuration is not supported" });
 		// 外部原生配置写入必须推送 config.updated，不依赖重连或切换会话。
 		await fs.writeFile(
 			path.join(config.agentDir, "config.yml"),

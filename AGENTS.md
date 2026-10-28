@@ -26,7 +26,7 @@
 核心代码入口：
 
 - CLI 链路：`packages/coding-agent/src/cli.ts` → `src/main.ts` → `src/sdk.ts`。
-- fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/modes/magic-keywords.ts`（含 fullsend 关键词）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `openspec/specs/goal-autopilot/spec.md`）、`src/modes/zcode/hosts/`（命令宿主：plan／loop／goal、命令目录与补全、role 持久保存，由 app-server 命令链路同进程调用）。`src/modes/rpc/` 与上游保持逐字一致，fork 不修改、不使用。ZCode app-server 的独立协议目录、同进程 AgentSession API 调用、多会话隔离、存储准备及完整交付契约见 `openspec/specs/zcode-app-server/spec.md`；不提前登记尚未实现的源码入口。
+- fork 自有实现：`src/jch-commands/`（`/jch*` 命令）、`src/config/company-provider.ts` 与 `company-models.ts`、`src/docs/` 与 `src/tools/wiki.ts`（文档索引）、`src/goals/` 与 `src/prompts/goals/`（`/goal-autopilot` 无人值守编排，需求见 `openspec/specs/goal-autopilot/spec.md`）、`src/modes/zcode/hosts/`（命令宿主：plan／loop／goal、命令目录与补全、role 持久保存，由 app-server 命令链路同进程调用）。`src/modes/rpc/` 与上游保持逐字一致，fork 不修改、不使用。ZCode app-server 的独立协议目录、同进程 AgentSession API 调用、多会话隔离、存储准备及完整交付契约见 `openspec/specs/zcode-app-server/spec.md`；不提前登记尚未实现的源码入口。
 - ZCode app-server：`src/modes/zcode/index.ts` 注册独立 stdio 入口，`server.ts` 路由公开协议，`sessions.ts` 直接组合同进程 AgentSession，`projection.ts`／`topics.ts` 管理可重建投影与订阅，`storage.ts` 生产真实存储准备事实；`spec-driven.ts` 观察当前已有工作区同一原生 Dev 控制者，以显式协商的 `schema/omp-spec-extension.ts` 提供阶段、原生消息、完整材料、已保存 Team 配置与共用动作事实，操作仍走既有原生命令。冷历史查询不取得控制权、不恢复批准或执行；只有用户显式进入 Dev 才按有效必要状态恢复同一流程，不借动态工作流 journal 接管。桌面 UI 不在本轮实现；完整功能与验收仍以 `openspec/specs/zcode-app-server/spec.md` 为准。
 - 协同开发模式：`src/spec-driven/controller.ts` 管理工作区流程、原生阶段会话切换与共用动作；`workspace.ts` 管理已有工作树统一身份、唯一控制权锁及必要业务状态；`orchestrator.ts` 管理四阶段、正式材料字节版本与用户决定；`runtime.ts`／`actors.ts` 管理需求／方案／计划／执行四个独立、可持续对话及恢复原生历史的 SDK 会话；`artifacts.ts` 读取真实文件并检查最低格式。Dev 只有无代理、需求、方案、计划、执行五种角色，同一时刻仅一个活动阶段 Agent，忙碌和错误依据原生运行事实显示。每个已有工作区最多一个未结束流程和一个控制者；Git 工作树的子目录、别名、分支及不同普通会话共用身份，不同已有工作树隔离，非 Git 项目按进入时目录确定范围；Dev 及其内部协作不得创建工作树或要求工作树隔离。单能力五个正式文件为原 OpenSpec proposal／增量 spec，以及同放 `docs/superpowers/plans/` 的 `YYYY-MM-DD-<change>-solutions.json`、`YYYY-MM-DD-<change>.md` 原格式计划和 `YYYY-MM-DD-<change>-completion.md`。`next` 检查真实产物、最低格式和仍依赖的上游批准版本；正常澄清不因产物尚未生成报错。阶段进入直接交接完整正式文件、全部候选、推荐 ID、所选 ID 和用户原始决定，不调用模型总结；同阶段输入及受支持附件直接续接当前原生会话，不反复注入未变材料。不生成交接、确认或逐任务状态文件，不强制 commit。权威需求见 `openspec/specs/spec-driven-orchestration/spec.md`。
 - 阶段检索：需求与方案 Agent 直接开放原生只读 `wiki`，复用当前 profile 的既有索引，不自动建库。需求、方案和计划 Agent 可通过原生 `task` 派发只读 `scout`，不得派发可写子代理或绕过只读权限，不扩大文件写入白名单；方案 Team 与执行阶段权限不变。实现及调用守卫位于 `runtime.ts`／`actors.ts`，契约见 `openspec/specs/spec-driven-orchestration/spec.md`。
@@ -70,7 +70,6 @@
 | 构建                                                                                                                                                                           | `bun run build`（workspace 包）、`bun run build:native`（native addon）                                                                                                                             |
 | 显式选择独立公开 Bazel 任务（普通受支持 root scripts 已默认路由；不扩展 fulltest）                                                                                             | `bun run bazel -- <existing-task> [task arguments]`，例如 `check:ts`、`build:native`、`test:py`、`sdk:test:go`；支持列表、原命令语义与缓存边界见 `openspec/specs/fork-verification-gates/spec.md`「Fork 验证体系」 |
 | 启动独立 profile（fork 新增 `-P`，无需 shell alias）                                                                                                                           | `omp -P <name>`（等同 `omp --profile <name>`）                                                                                                                                                      |
-| 导出代码审查材料（内置命令）                                                                                                                                                   | `/code-review-export`，参数与交互同 `/review`；固定导出到仓库根 `.tmp/review-bundle.zip`，契约见 [代码审查材料导出需求](openspec/specs/code-review-export/spec.md)                              |
 
 ## 开发约束
 
@@ -93,7 +92,7 @@
 - 仓库根 `README.md` 是上游 README 的**中文版**，内容跟随上游：上游改了正文，同步时把对应段落重译进 `README.md`。
 - `docs-zh-CN/README.upstream.md` 是最近一次合入的上游 README 英文快照，只作对照稿源，不对外；同步时用本次 fetch 的上游 README 与快照比较，先更新快照，再据差异改中文正文（上游 README 未变则不动）。merge 或恢复过程改动了根 `README.md` 时，提交前按快照复核正文。
 - `README.md` 的 Install / 下载段是 fork 专有内容（fork release 链接、`install.sh --binary`、`install.ps1 -Binary`、`+fork.N` 版本说明、平台支持声明），NEVER 采用上游的 npm / Homebrew / Nix / mise / `omp.sh` 写法；中文翻译照此段本身翻译。
-- 除下载段与「提示词控制」中 fork 新增的 `fullsend` 条目外，`README.md` 不保留 fork 专有内容：其余正文以当前上游快照为准。
+- 除下载段外，`README.md` 不保留 fork 专有内容：其余正文以当前上游快照为准。
 
 ## 开发与差异记录
 
@@ -136,7 +135,7 @@
 
 现状与缺口（2026-10-07 依据仓库内容整理；当日精简会话运行的验证以各功能域记录为准）：
 
-- fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`modes/fullsend`、`slash-commands/jch-git`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`modes/zcode`（hosts 宿主），以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `openspec/specs/fork-verification-gates/spec.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
+- fork 功能多数随改动附带自动化测试，例如 `packages/coding-agent/test/` 下的 `wiki-tool`、`docs-index`、`slash-commands/magic-keywords`、`company-provider`、`cli-offline-flag`、`modes/zcode`（hosts 宿主），以及 `scripts/fulltest.test.ts`、`scripts/slowtest.test.ts`、`scripts/test-gate-runtime.test.ts`、`scripts/slowtest-wsl-stage.test.ts`、`scripts/install-tests/fork-installer-routing.test.ts`。按维护者明确要求，标准门禁沿用既有 fork 范围，完整范围与未覆盖项以 `openspec/specs/fork-verification-gates/spec.md`「Fork 验证体系」为准，不自动扩大到 Python、独立 SDK 或全部 workspace 打包。
 - fork 的 `.github/workflows/ci.yml` 只有手动 `workflow_dispatch` 触发（没有 push / pull_request 触发器），永久只构建和发布，不运行测试、冒烟、lint、类型检查或独立校验作业。该独立发布流程保持不变，但 NEVER 由 fastcheck/fulltest/slowtest 推送、触发或监控；直接运行 CI 不代表本地验证通过。
 - 标准 fulltest 必须包含 fastcheck 的全部检查。现有 `test:rs` 在 Windows 过滤上游确定性失败的 `pi-builtins sed::fast_io::tests::test_file_truncated_after_open`，Linux 不过滤；该既有测试定义在门禁迁移中不改写，不能据此声称该用例已通过。上游带入的格式差异与 Linux 会话隔离测试的既有适配仍按相应源码注释维护；门禁迁移不改变其检查定义、产品行为或通过标准。
 - 未执行的门禁与因工具/环境受阻的验证均须如实记录为未验证；运行授权本身不是通过证据，不能报告未运行的检查已通过或功能已验收。

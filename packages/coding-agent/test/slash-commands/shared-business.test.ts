@@ -216,11 +216,11 @@ describe("shared clear business", () => {
 	});
 });
 
-function remoteTaskDispatchFixture(remote: boolean) {
+function ordinaryTaskDispatchFixture() {
 	const resetSessionContext = vi.fn(async () => ({ droppedCount: 2 }));
 	const newSession = vi.fn(async () => true);
 	const session = {
-		model: { api: remote ? "jchtools-agent" : "openai-responses" },
+		model: { api: "openai-responses" },
 		isCompacting: false,
 		abortCompaction: vi.fn(),
 		sessionGeneration: 0,
@@ -268,36 +268,18 @@ function remoteTaskDispatchFixture(remote: boolean) {
 	};
 }
 
-describe("shared remote task dispatch", () => {
+describe("shared task dispatch", () => {
 	for (const host of ["tui", "acp", "rpc"] as const) {
-		test(`${host} forwards remote task commands without expansion or whitespace changes`, async () => {
-			const fixture = remoteTaskDispatchFixture(true);
-			const commands = [
-				["ultrathink", "/ultrathink:\t first line  \r\n\r\n```ts\r\nconst n = 1;  \r\n```\t \r\n"],
-				["jchfix", "/jchfix\t  preserve this task  \r\n\r\nlast line\t \r\n"],
-				["jch-workflowzbatch", "/jch-workflowzbatch 2 1 \t first line  \r\n\r\nlast line\t \r\n"],
-			] as const;
-			for (const [name, text] of commands) {
-				const command = lookupBuiltinSlashCommand(name)!;
-				const handle = vi.spyOn(command, "handle");
-				const result = await fixture[host](text);
-				expect(result).toEqual(host === "tui" ? text : { prompt: text });
-				expect(handle).not.toHaveBeenCalled();
-			}
-			expect(fixture.output).toEqual([]);
-			expect(fixture.resetSessionContext).not.toHaveBeenCalled();
-		});
-
 		test(`${host} keeps ordinary model command expansion`, async () => {
-			const fixture = remoteTaskDispatchFixture(false);
+			const fixture = ordinaryTaskDispatchFixture();
 			const task = "first line  \r\n\r\nlast line";
 			const result = await fixture[host](`/ultrathink:\t ${task}\t \r\n`);
 			const prompt = `ultrathink ${task}`;
 			expect(result).toEqual(host === "tui" ? prompt : { prompt });
 
-			const command = lookupBuiltinSlashCommand("jchfix")!;
+			const command = lookupBuiltinSlashCommand("jchime")!;
 			const handle = vi.spyOn(command, "handle");
-			const text = "/jchfix investigate the distinct dispatch regression";
+			const text = "/jchime investigate the distinct dispatch regression";
 			const expanded = await fixture[host](text);
 			expect(handle).toHaveBeenCalledTimes(1);
 			const expandedPrompt =
@@ -309,33 +291,5 @@ describe("shared remote task dispatch", () => {
 			expect(expandedPrompt).toContain("investigate the distinct dispatch regression");
 			expect(expandedPrompt).not.toBe(text);
 		});
-
-		test(`${host} still consumes local management commands for remote models`, async () => {
-			const fixture = remoteTaskDispatchFixture(true);
-			expect(await fixture[host]("/clear")).toEqual(host === "tui" ? true : { consumed: true });
-			expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
-			expect(fixture.newSession).not.toHaveBeenCalled();
-		});
-
-		test(`${host} preserves management argument rejection for remote models`, async () => {
-			const fixture = remoteTaskDispatchFixture(true);
-			if (host === "rpc") {
-				await expect(fixture[host]("/clear unexpected")).rejects.toThrow("/clear does not accept arguments.");
-			} else {
-				expect(await fixture[host]("/clear unexpected")).toBe(false);
-			}
-			expect(fixture.resetSessionContext).not.toHaveBeenCalled();
-		});
 	}
-
-	test("TUI remote tasks retain collaboration guest permission checks", async () => {
-		const fixture = remoteTaskDispatchFixture(true);
-		Object.assign(fixture.tuiRuntime.ctx, { collabGuest: { readOnly: true } });
-		expect(await fixture.tui("/ultrathink task")).toBe(true);
-		expect(fixture.output).toEqual(["This collab link is read-only — prompting is disabled"]);
-
-		Object.assign(fixture.tuiRuntime.ctx, { collabGuest: { readOnly: false } });
-		expect(await fixture.tui("/jchfix task")).toBe(true);
-		expect(fixture.output.at(-1)).toBe("/jchfix is host-only during a collab session");
-	});
 });

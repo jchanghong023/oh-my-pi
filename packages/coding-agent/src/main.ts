@@ -26,7 +26,6 @@ import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@o
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
-import { startOfflineShmBackup } from "./offline/backup-lifecycle";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { reset as resetCapabilities } from "./capability";
 import {
@@ -854,9 +853,6 @@ async function runInteractiveMode(
 		}
 		throw error;
 	}
-
-	// Setup dialogs and transcript replay are finished; the composer accepts input.
-	using _backupLifecycle = { [Symbol.dispose]: startOfflineShmBackup(message => mode.showWarning(message)) };
 
 	if (startupGoal !== undefined) {
 		try {
@@ -2631,14 +2627,7 @@ export async function runRootCommand(
 				result: "completed",
 				session_id: result.session.sessionId,
 				elapsed_ms: performance.now() - startedAt,
-				lane:
-					effectiveModel?.provider === COMPANY_PROVIDER_ID
-						? "company"
-						: effectiveModel?.provider === "jchtools"
-							? "jchtools"
-							: effectiveModel
-								? "other"
-								: "none",
+				lane: effectiveModel?.provider === COMPANY_PROVIDER_ID ? "company" : effectiveModel ? "other" : "none",
 				company_default_model:
 					effectiveModel?.provider === COMPANY_PROVIDER_ID
 						? Object.values(COMPANY_OFFLINE_ROLE_DEFAULTS).find(
@@ -3110,7 +3099,6 @@ export async function runRootCommand(
 				// long `-p` run's subagents do not keep growing it.
 				if (!$env.PI_TIMING) logger.endTiming();
 				const runPrintMode: RunPrintMode = (await import("./modes/print-mode")).runPrintMode;
-				const stopBackup = startOfflineShmBackup(message => process.stderr.write(`${message}\n`));
 				const exitCode = await runPrintMode(session, {
 					mode,
 					messages: initialArgs.messages,
@@ -3120,7 +3108,7 @@ export async function runRootCommand(
 					planYolo: parsedArgs.planYolo,
 					mcpManager,
 					deadline: sessionOptions.deadline,
-				}).finally(stopBackup);
+				});
 				if ($env.PI_TIMING) {
 					logger.printTimings();
 				}

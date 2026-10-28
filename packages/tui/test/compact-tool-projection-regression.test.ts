@@ -11,8 +11,8 @@ import { initTheme } from "../src/theme";
 
 const preferences = { ...chatTranscriptDisplayPreferences };
 const components: ToolExecutionComponent[] = [];
-function tool(name: string, args: unknown, compactToolActivity?: boolean): ToolExecutionComponent {
-	const component = new ToolExecutionComponent(name, args, { compactToolActivity }, undefined, {
+function tool(name: string, args: unknown): ToolExecutionComponent {
+	const component = new ToolExecutionComponent(name, args, {}, undefined, {
 		requestRender() {},
 		requestComponentRender() {},
 		resetDisplay() {},
@@ -347,17 +347,6 @@ describe("compact tool component integration", () => {
 			expect(view).toContain("RAW_READ_ERROR: missing source file");
 			expect(view).toContain("later-a.ts");
 		}
-	});
-
-	it("keeps explicit detailed components outside compact quotas", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		const root = new TranscriptContainer();
-		const detailed = tool("bash", { command: "explicit-detail" }, false);
-		detailed.updateResult({ content: [{ type: "text", text: "FULL_DETAIL" }] });
-		root.addChild(detailed);
-		root.addChild(new Text("PROSE", 0, 0));
-		for (const command of ["old", "one", "two"]) root.addChild(tool("bash", { command }));
-		expect(output(root)).toContain("FULL_DETAIL");
 	});
 
 	it("retains only the last three conflict file diffs and keeps partial failure details", () => {

@@ -17,7 +17,6 @@ import { completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { diffLineRuns, editDiffString, parseCodeStatus } from "@oh-my-pi/pi-natives";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import { resolveRoleSelection } from "../config/model-resolver";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { WritethroughCallback } from "../lsp";
 import type { ToolSession } from "../tools";
 import { invalidateFsScanAfterWrite } from "../tools/fs-cache-invalidation";
@@ -391,7 +390,7 @@ export async function attemptEditAutoRepair(options: {
 			{
 				signal,
 				provider: model.provider,
-				maxAttempts: model.provider === "codeagent" || isJchToolsAgentModel(model) ? 1 : undefined,
+				maxAttempts: model.provider === "codeagent" ? 1 : undefined,
 			},
 		);
 		session.costGate?.record(response.usage.cost.total);

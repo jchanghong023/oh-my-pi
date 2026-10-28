@@ -45,9 +45,7 @@ export const launchHelp = {
 			description: "Handlebars system prompt template (mutually exclusive with --system-prompt)",
 		}),
 		"append-system-prompt": Flags.string({ description: "Append text or file contents to the system prompt" }),
-		"allow-home": Flags.boolean({
-			description: "Allow starting in ~ without auto-switching to a temp dir (default)",
-		}),
+		"allow-home": Flags.boolean({ description: "Allow starting in ~ without auto-switching to a temp dir" }),
 		profile: Flags.string({
 			char: "P",
 			description: "Use an isolated profile for auth, sessions, settings, and caches",

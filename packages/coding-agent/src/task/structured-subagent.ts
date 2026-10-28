@@ -7,7 +7,6 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import path from "node:path";
-import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
 import { $env, prompt, Snowflake } from "@oh-my-pi/pi-utils";
 import { shortenPath } from "@oh-my-pi/pi-tui/render/render-utils";
 import { resolveAgentModelSelection, resolveConfiguredModelPatterns } from "../config/model-resolver";
@@ -552,14 +551,14 @@ async function leaseArtifacts(
 	const sessionFile = session.getSessionFile();
 	if (sessionFile) {
 		const artifactsDir = sessionFile.slice(0, -6);
-		if (!ensureOfflineShmDirectory(artifactsDir)) await fs.mkdir(artifactsDir, { recursive: true });
+		await fs.mkdir(artifactsDir, { recursive: true });
 		return { sessionFile, artifactsDir, temporary: false, unregister: undefined };
 	}
 	const artifactsDir = path.join(
-		ensureOfflineShmDirectory("tmp") ?? os.tmpdir(),
+		os.tmpdir(),
 		`${invocationKind === "eval" ? "omp-eval-agent" : "omp-task"}-${Snowflake.next()}`,
 	);
-	if (!ensureOfflineShmDirectory(artifactsDir)) await fs.mkdir(artifactsDir, { recursive: true });
+	await fs.mkdir(artifactsDir, { recursive: true });
 	return { sessionFile: null, artifactsDir, temporary: true, unregister: registerArtifactsDir(artifactsDir) };
 }
 

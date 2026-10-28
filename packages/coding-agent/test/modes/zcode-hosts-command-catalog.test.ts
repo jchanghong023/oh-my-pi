@@ -150,7 +150,6 @@ describe("CommandCatalogService", () => {
 			"ultrathink",
 			"orchestrate",
 			"workflowz",
-			"fullsend",
 			"compact",
 		]) {
 			expect(catalog.get(name)).toMatchObject({ execution: "omp", availability: { available: true } });

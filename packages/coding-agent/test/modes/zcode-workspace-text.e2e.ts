@@ -3,7 +3,7 @@ import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
-import { LegacyProtocol as L, zcodeSessionConfigureResultSchema } from "../../src/modes/zcode/schema";
+import { LegacyProtocol as L, ompTeamConfigureResultSchema } from "../../src/modes/zcode/schema";
 
 type Frame = Record<string, unknown>;
 const selection = { providerId: "workspace-local", modelId: "helper" };
@@ -320,41 +320,39 @@ test("Team wire errors preserve distinct revision and invalid-config codes with 
 	await using f = await fixture(root);
 	await using peer = new Peer(f.cwd, f.env);
 	await peer.ready();
-	const created = L.zcodeSessionStateSnapshotSchema.parse(
-		await peer.request("session/create", { workspace: f.workspace, model: selection, titleGenerationEnabled: false }),
-	);
-	const sessionId = created.session.sessionId;
-	const read = zcodeSessionConfigureResultSchema.parse(
-		await peer.request("session/configure", { sessionId, operation: "get_team_config" }),
+	const read = ompTeamConfigureResultSchema.parse(
+		await peer.request("omp/team/configure", { workspace: f.workspace, request: { operation: "get_team_config" } }),
 	);
 	if (read.operation !== "get_team_config") throw new Error("Expected Team configuration");
 	const save = {
-		sessionId,
-		operation: "set_team_config",
-		scope: "user",
-		members: [],
-		expectedRevision: read.data.revision,
+		workspace: f.workspace,
+		request: {
+			operation: "set_team_config",
+			scope: "user",
+			members: [],
+			expectedRevision: read.data.revision,
+		},
 	};
-	await peer.request("session/configure", save);
-	const conflict = await peer.reply("session/configure", save);
+	await peer.request("omp/team/configure", save);
+	const conflict = await peer.reply("omp/team/configure", save);
 	expect(conflict.error).toMatchObject({
 		code: -32000,
 		data: {
 			code: "revision_conflict",
 			saveState: "failed",
 			config: expect.any(Object),
-			writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+			write: { status: "not_attempted" },
 		},
 	});
 	await fs.writeFile(f.configFile, "team: invalid-parent\n");
-	const invalid = await peer.reply("session/configure", save);
+	const invalid = await peer.reply("omp/team/configure", save);
 	expect(invalid.error).toMatchObject({
 		code: -32000,
 		data: {
 			code: "invalid_config",
 			saveState: "failed",
 			issues: expect.any(Array),
-			writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+			write: { status: "not_attempted" },
 		},
 	});
 }, 120_000);

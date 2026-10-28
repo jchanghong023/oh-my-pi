@@ -238,7 +238,7 @@ afterEach(() => {
 describe("structured subagent primitive", () => {
 	it("keeps automatic task and eval role choices out of a remote-only catalog", async () => {
 		mockDiscovery({ ...AGENT, model: ["@smol:high"] });
-		const remote = consumerModel("jchtools", "claude-haiku-5-5");
+		const remote = consumerModel("apple", "claude-haiku-5-5");
 		const ordinary = consumerModel("anthropic", "claude-haiku-5-5");
 		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
 			for (const invocationKind of ["task", "eval"] satisfies StructuredSubagentRequest["invocationKind"][]) {
@@ -288,7 +288,7 @@ describe("structured subagent primitive", () => {
 
 	it("preserves automatic spawn-hook roles while allowing explicit agent and configured role selections", async () => {
 		mockDiscovery({ ...AGENT, model: ["@smol"] });
-		const remote = consumerModel("jchtools", "claude-haiku-5-5");
+		const remote = consumerModel("apple", "claude-haiku-5-5");
 		const ordinary = consumerModel("anthropic", "claude-haiku-5-5");
 		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
 			parent.emitBeforeSubagentSpawn = async () => ({ model: "@smol:high" });
@@ -301,12 +301,12 @@ describe("structured subagent primitive", () => {
 			expect(selections.at(-1)?.thinkingLevel).toBe("high");
 			parent.emitBeforeSubagentSpawn = undefined;
 			setModels([remote]);
-			cfgTaskAgentModelOverrides.override(parent.settings, { worker: "jchtools/claude-haiku-5-5:high" });
+			cfgTaskAgentModelOverrides.override(parent.settings, { worker: "apple/claude-haiku-5-5:high" });
 			await runStructuredSubagent(request({ session: parent }));
 			expect(selections.at(-1)?.model).toBe(remote);
 			expect(selections.at(-1)?.thinkingLevel).toBe("high");
 			cfgTaskAgentModelOverrides.override(parent.settings, {});
-			parent.settings.setModelRole("smol", "jchtools/claude-haiku-5-5:high");
+			parent.settings.setModelRole("smol", "apple/claude-haiku-5-5:high");
 			await runStructuredSubagent(request({ session: parent }));
 			expect(selections.at(-1)?.model).toBe(remote);
 			expect(selections.at(-1)?.thinkingLevel).toBe("high");
@@ -315,9 +315,9 @@ describe("structured subagent primitive", () => {
 	});
 
 	it("keeps both vibe worker tiers role-aware without preventing an explicit remote override", async () => {
-		const remoteFast = consumerModel("jchtools", "claude-haiku-5-5");
+		const remoteFast = consumerModel("apple", "claude-haiku-5-5");
 		const ordinaryFast = consumerModel("anthropic", "claude-haiku-5-5");
-		const remoteGood = consumerModel("jchtools", "gpt-5.6-sol");
+		const remoteGood = consumerModel("apple", "gpt-5.6-sol");
 		const ordinaryGood = consumerModel("openai-codex", "gpt-5.6-sol");
 		await withConsumerCatalog(async ({ parent, selections, setModels }) => {
 			parent.settings.setModelRole("task", "@slow");
@@ -335,7 +335,7 @@ describe("structured subagent primitive", () => {
 				expect(selections.at(-1)?.model).toBe(ordinary);
 			}
 			setModels([remoteGood]);
-			cfgTaskAgentModelOverrides.override(parent.settings, { task: "jchtools/gpt-5.6-sol:high" });
+			cfgTaskAgentModelOverrides.override(parent.settings, { task: "apple/gpt-5.6-sol:high" });
 			await VibeSessionRegistry.global().spawn(parent, { cli: "good", prompt: "Inspect the target." });
 			await parent.asyncJobManager?.waitForAll();
 			expect(selections.at(-1)?.model).toBe(remoteGood);
@@ -347,7 +347,7 @@ describe("structured subagent primitive", () => {
 	it("stamps automatic advisors without recursive selection or losing explicit owner choices", async () => {
 		mockDiscovery({ ...AGENT, model: ["anthropic/claude-haiku-5-5"], advisor: "@advisor:high" });
 		const primary = consumerModel("anthropic", "claude-haiku-5-5");
-		const remote = consumerModel("jchtools", "gpt-5.6-sol");
+		const remote = consumerModel("apple", "gpt-5.6-sol");
 		const ordinary = consumerModel("openai-codex", "gpt-5.6-sol");
 		await withConsumerCatalog(async ({ parent, selections, advisors, setModels }) => {
 			setModels([primary, remote]);
@@ -358,7 +358,7 @@ describe("structured subagent primitive", () => {
 			await runStructuredSubagent(request({ session: parent }));
 			expect(advisors.at(-1)?.model).toBe(ordinary);
 			expect(advisors.at(-1)?.thinkingLevel).toBe("high");
-			parent.settings.setModelRole("advisor", "@advisor,jchtools/gpt-5.6-sol");
+			parent.settings.setModelRole("advisor", "@advisor,apple/gpt-5.6-sol");
 			setModels([primary, remote]);
 			await runStructuredSubagent(request({ session: parent }));
 			expect(advisors.at(-1)?.model).toBe(remote);

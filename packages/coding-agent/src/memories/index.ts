@@ -15,7 +15,6 @@ import {
 	prompt,
 } from "@oh-my-pi/pi-utils";
 
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -918,10 +917,7 @@ async function runStage1Job(options: {
 				),
 			{
 				provider: model.provider,
-				maxAttempts:
-					model.api === "openai-completions" || model.provider === "codeagent" || isJchToolsAgentModel(model)
-						? 1
-						: undefined,
+				maxAttempts: model.api === "openai-completions" || model.provider === "codeagent" ? 1 : undefined,
 			},
 		);
 
@@ -1069,10 +1065,7 @@ async function runConsolidationModel(options: {
 			),
 		{
 			provider: model.provider,
-			maxAttempts:
-				model.api === "openai-completions" || model.provider === "codeagent" || isJchToolsAgentModel(model)
-					? 1
-					: undefined,
+			maxAttempts: model.api === "openai-completions" || model.provider === "codeagent" ? 1 : undefined,
 		},
 	);
 	if (response.stopReason === "error") {

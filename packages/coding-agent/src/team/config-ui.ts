@@ -226,7 +226,7 @@ class TeamConfigPanel implements Component {
 			if (!this.#current()) return;
 			++this.#readGeneration;
 			this.#snapshot = result.config;
-			this.#message = `${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但有效值受高层覆盖"}；${printable(result.writes)} ${result.effectiveNote ?? ""}`;
+			this.#message = `${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但有效值受高层覆盖"}；${printable(result.write)} ${result.effectiveNote ?? ""}`;
 			if (result.saveState === "complete") {
 				this.#baseline = JSON.stringify(this.#draft);
 				this.#revision = result.config.revision;
@@ -314,9 +314,7 @@ class TeamConfigPanel implements Component {
 		add(`Team 配置 ${this.#dirty() ? "[未保存]" : ""} — 主模型不变`);
 		add(this.#message);
 		if (snapshot) {
-			add(
-				`profile: ${snapshot.profile ?? "default"} | source: ${snapshot.source} | ${snapshot.storage.mode}/${snapshot.storage.syncState}`,
-			);
+			add(`profile: ${snapshot.profile ?? "default"} | source: ${snapshot.source} | ${snapshot.storage.readState}`);
 			if (snapshot.source === "project" || snapshot.source === "overlay" || snapshot.source === "runtime")
 				add(`覆盖提示：${snapshot.source} 层高于用户层；保存用户名单不会移除此覆盖。`);
 			const showSlots = (name: string, slots: readonly TeamMemberSlot[] | null | undefined) => {
@@ -326,8 +324,7 @@ class TeamConfigPanel implements Component {
 				for (const slot of slots ?? [])
 					add(`  ${slot.index + 1}. ${slot.rawSelector} [${slot.status}] ${slot.reason ?? ""}`);
 			};
-			showSlots(`活动原值 [${snapshot.storage.active.readState}]`, snapshot.userMembers);
-			showSlots(`持久原值 [${snapshot.storage.persistent.readState}]`, snapshot.persistentMembers);
+			showSlots(`用户原值 [${snapshot.storage.readState}]`, snapshot.userMembers);
 			showSlots("当前有效名单", snapshot.effectiveMembers);
 			add(`主模型（对齐/综合）: ${printable(snapshot.sessionModel)}`);
 			add(`实际运行槽位: ${printable(snapshot.participants)}`);

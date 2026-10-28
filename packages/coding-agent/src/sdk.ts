@@ -109,13 +109,6 @@ import { createBridgeEditTool, createBridgeGrepFactory } from "./cursor-bridge-t
 import "./discovery";
 import { LiveImageUrlService } from "./blob-broker/service";
 import { wrapStreamFnWithBlobUrlFallback } from "./blob-broker/stream-fallback";
-import {
-	projectJchToolsMessages,
-	isJchToolsAgentModel,
-	JCHTOOLS_PROVIDER_ID,
-	projectJchToolsContext,
-	streamJchToolsAgent,
-} from "./config/jchtools-provider";
 import { initializeWithSettings } from "./discovery";
 import { setInvocationConfiguredExtensions, withOmpExtensionRootScope } from "./discovery/omp-extension-roots";
 import { disposeVmContextsByOwner } from "./eval/js/context-manager";
@@ -585,13 +578,6 @@ export interface CreateAgentSessionOptions {
 	onPayload?: (payload: unknown, model?: Model, signal?: AbortSignal) => void | Promise<void>;
 	/** Observe actual provider response metadata after extension handlers. */
 	onResponse?: SimpleStreamOptions["onResponse"];
-	/** Apply a host's explicit provider option mapping before request observers see the payload. */
-	transformRequestPayload?: (
-		payload: unknown,
-		model?: Model,
-		signal?: AbortSignal,
-		context?: { thinkingLevel?: ConfiguredThinkingLevel },
-	) => unknown | Promise<unknown>;
 	/** Observe terminal provider output for both primary and auxiliary requests. */
 	onModelResponse?: (message: unknown, model: Model, signal?: AbortSignal) => void | Promise<void>;
 	/** Resolve embedding-host credentials for this actual request, including temporary headers. */
@@ -1802,7 +1788,6 @@ export function createAutoLearnCaptureRunner(
 		if (captureTools.length === 0 || signal?.aborted) return;
 		const captureModel = options.sourceAgent.state.model;
 		if (!captureModel) return;
-		if (isJchToolsAgentModel(captureModel)) return;
 
 		const captureSessionId = options.createSessionId?.() ?? Bun.randomUUIDv7();
 		const captureProviderSessionState = new Map<string, ProviderSessionState>();
@@ -1976,12 +1961,7 @@ const embeddingSessionHooks = new WeakMap<
 	ModelRegistry,
 	Pick<
 		CreateAgentSessionOptions,
-		| "resolveRequestAuth"
-		| "transformRequestPayload"
-		| "onPayload"
-		| "onResponse"
-		| "onModelResponse"
-		| "toolRestrictions"
+		"resolveRequestAuth" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
 	>
 >();
 
@@ -2251,7 +2231,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		options = {
 			...options,
 			resolveRequestAuth: options.resolveRequestAuth ?? inheritedHooks.resolveRequestAuth,
-			transformRequestPayload: options.transformRequestPayload ?? inheritedHooks.transformRequestPayload,
 			onPayload: options.onPayload ?? inheritedHooks.onPayload,
 			onResponse: options.onResponse ?? inheritedHooks.onResponse,
 			onModelResponse: options.onModelResponse ?? inheritedHooks.onModelResponse,
@@ -2260,7 +2239,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	if (!options.parentTaskPrefix)
 		embeddingSessionHooks.set(modelRegistry, {
 			resolveRequestAuth: options.resolveRequestAuth,
-			transformRequestPayload: options.transformRequestPayload,
 			onPayload: options.onPayload,
 			onResponse: options.onResponse,
 			onModelResponse: options.onModelResponse,
@@ -2352,7 +2330,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		}
 	}
 	await credentialScopedCacheHydration;
-	await modelRegistry.refreshLocalProviders();
 	if (!options.modelRegistry && !options.offline) {
 		modelRegistry.refreshInBackground();
 	}
@@ -3459,7 +3436,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const { pattern, retryFallback } = expandedModelPatterns[patternIndex];
 				const primary = resolveDeferredPattern(pattern, resolutionModels);
 				if (!primary.model || (retryFallback && !hasModelAuth(primary.model))) continue;
-				if (retryFallback && isJchToolsAgentModel(primary.model)) continue;
 				let hasUsageFallbackCandidate = false;
 				for (
 					let candidateIndex = patternIndex + 1;
@@ -3478,7 +3454,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				const usageReservePolicy = cfgRetryUsageReservePolicy.get(settings);
 				const modelFallbackEnabled = cfgRetryModelFallback.get(settings);
 				if (
-					!isJchToolsAgentModel(primary.model) &&
 					((modelFallbackEnabled && (hasUsageFallbackCandidate || usageFallbackTriggered)) ||
 						usageReservePolicy === "fail-closed") &&
 					cfgRetryUsageAwareFallback.get(settings)
@@ -4767,9 +4742,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Read both dynamically so a `/model` switch or setting change takes
 		// effect on the next turn.
 		const convertToLlmWithBlockImages = (messages: AgentMessage[]): Message[] => {
-			if (isJchToolsAgentModel(agent?.state.model ?? model)) {
-				return convertToLlm(projectJchToolsMessages(messages));
-			}
 			const converted = convertToLlm(messages);
 			if (cfgImagesBlockImages.get(settings)) {
 				return replaceLlmImagesWithText(converted, "Image reading is disabled.");
@@ -4788,9 +4760,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// then applies secret obfuscation to the remaining outbound context.
 		const convertToLlmFinal = (messages: AgentMessage[]): Message[] => {
 			const convertedMessages = convertToLlmWithBlockImages(messages);
-			const converted = isJchToolsAgentModel(agent?.state.model ?? model)
-				? convertedMessages
-				: filterProviderReplayMessages(convertedMessages);
+			const converted = filterProviderReplayMessages(convertedMessages);
 			if (!obfuscator?.hasSecrets()) return converted;
 			return obfuscateMessages(obfuscator, converted);
 		};
@@ -4807,7 +4777,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						(latestInput as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist ?? [],
 					);
 			}
-			if (isJchToolsAgentModel(agent?.state.model ?? model)) return messages;
 			const withContext = await extensionRunner.emitContext(messages, signal);
 			return wrapSteeringForModel(withContext);
 		};
@@ -4857,9 +4826,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const createTransformProviderContext = () => {
 			const dateCwdReminder = new DateCwdReminderInjector();
 			return async (context: Context, transformModel: Model): Promise<Context> => {
-				if (isJchToolsAgentModel(transformModel)) {
-					return projectJchToolsContext(context);
-				}
 				const offlineContext = withOfflineSystemNotice(context);
 				let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;
 				// The archive was sized for the model active at the last context build; a model switch may have lowered the budget.
@@ -4883,14 +4849,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const transformProviderContext = createTransformProviderContext();
 		const onPayload = async (payload: unknown, model?: Model, signal?: AbortSignal) => {
 			const transformed = await extensionRunner.emitBeforeProviderRequest(payload, model, signal);
-			const mapped = options.transformRequestPayload
-				? await options.transformRequestPayload(transformed ?? payload, model, signal, {
-						// Host wire 只接收本会话已解析的实际档位；auto 是内部选择策略，undefined 表示关闭。
-						thinkingLevel: (session ? session.thinkingLevel : effectiveThinkingLevel) ?? "off",
-					})
-				: transformed;
-			await options.onPayload?.(mapped ?? payload, model, signal);
-			return mapped;
+			await options.onPayload?.(transformed ?? payload, model, signal);
+			return transformed;
 		};
 		const onResponse: SimpleStreamOptions["onResponse"] = async (response, model, signal) => {
 			await extensionRunner.emitAfterProviderResponse(response, model, signal);
@@ -5031,9 +4991,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			if (options.toolRestrictions) {
 				if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 			}
-			if (isJchToolsAgentModel(streamModel)) {
-				throw new Error("JchTools remote Agent does not support frontend auxiliary or automatic requests.");
-			}
 			const execution = currentExecutionModel();
 			if (execution?.recoverModelRequest) {
 				return streamWithExecutionRecovery(
@@ -5056,23 +5013,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// request, so `/settings` changes to budgets, Kimi format, or the Codex
 		// websocket policy reach the next call without a session recreate.
 		const primaryStreamFn: StreamFn = (streamModel, context, streamOptions) => {
-			if (isJchToolsAgentModel(streamModel)) {
-				const liveModel =
-					streamModel.provider === JCHTOOLS_PROVIDER_ID
-						? modelRegistry.find(JCHTOOLS_PROVIDER_ID, streamModel.id)
-						: streamModel;
-				if (!liveModel || !isJchToolsAgentModel(liveModel)) {
-					throw new Error("JchTools remote Agent is unavailable; no request was sent.");
-				}
-				return withCredentialRedaction(cfgSecretsEnabled.get(settings), () =>
-					streamJchToolsAgent(liveModel, context, {
-						signal: streamOptions?.signal,
-						cwd: sessionManager.getCwd(),
-						sessionId: sessionManager.getSessionId(),
-						providerSessionState: session?.providerSessionState,
-					}),
-				);
-			}
 			const kimiApiFormat = cfgProvidersKimiApiFormat.get(settings);
 			return settingsAwareStreamFn(streamModel, context, {
 				...streamOptions,
@@ -5113,7 +5053,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		const localSpeculation = createSpeculativeToolExecutionConfig(settings, toolSession, extensionRunner);
 		const speculativeToolExecution = {
 			get enabled() {
-				return !isJchToolsAgentModel(agent?.state.model ?? model) && localSpeculation.enabled;
+				return localSpeculation.enabled;
 			},
 			get maxInFlight() {
 				return localSpeculation.maxInFlight;
@@ -5168,9 +5108,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 						});
 					}
 				}
-				if (isJchToolsAgentModel(streamModel)) {
-					return primaryStreamFn(streamModel, context, { signal: streamOptions?.signal });
-				}
 				const externalThinking =
 					cfgExternalThinking.get(settings) &&
 					agent.state.tools.some(tool => tool.name === "think") &&
@@ -5205,7 +5142,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			// A stray sloppy payload in plain text becomes a real edit tool call so
 			// the normal pipeline (validation, approval, rendering) executes it.
 			transformAssistantMessage: async (message, signal) => {
-				if (isJchToolsAgentModel(message)) return;
 				if (cfgEditRecoverInlineEdits.get(settings)) {
 					// The live tool is an ExtensionToolWrapper whose proxy forwards the
 					// EditTool `mode` getter; a bridge/custom edit tool without a sloppy
@@ -5233,8 +5169,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			dialectResolver: dialectModel => resolveDialect(cfgToolsFormat.get(settings), dialectModel),
 			abortOnFabricatedToolResult: cfgToolsAbortOnFabricatedResult.get(settings),
 			speculativeToolExecution,
-			getToolChoice: () =>
-				isJchToolsAgentModel(agent.state.model) ? undefined : session?.nextToolChoiceDirective(),
+			getToolChoice: () => session?.nextToolChoiceDirective(),
 			onToolChoiceUnavailable: () => session?.toolChoiceQueue.reject("unavailable"),
 			telemetry: options.telemetry,
 			appendOnlyContext: model
@@ -5263,14 +5198,12 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		// Restore messages if session has existing data
 		if (hasExistingSession) {
 			// The restore above used the default frame budget before the model was known.
-			// Remote agents also need visible failed turns retained for full-history projection.
 			const frameBudget = frameDataBytesBudget(model);
-			const preserveFailedTurns = isJchToolsAgentModel(model);
 			const restored =
-				frameBudget === DEFAULT_FRAME_DATA_BYTES_BUDGET && !preserveFailedTurns
+				frameBudget === DEFAULT_FRAME_DATA_BYTES_BUDGET
 					? existingSession
 					: deobfuscateSessionContext(
-							sessionManager.buildSessionContext({ maxFrameDataBytes: frameBudget, preserveFailedTurns }),
+							sessionManager.buildSessionContext({ maxFrameDataBytes: frameBudget }),
 							obfuscator,
 						);
 			agent.replaceMessages(restored.messages);
@@ -6068,9 +6001,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					convertToLlm: convertToLlmFinal,
 					transformContext: async messages => wrapSteeringForModel(messages),
 					transformProviderContext: async (context, transformModel) => {
-						if (isJchToolsAgentModel(transformModel)) {
-							return projectJchToolsContext(context);
-						}
 						const offlineContext = withOfflineSystemNotice(context);
 						let transformed = obfuscator ? obfuscateProviderContext(obfuscator, offlineContext) : offlineContext;
 						transformed = capArchiveFrameBytes(transformed, transformModel);

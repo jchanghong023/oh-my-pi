@@ -73,13 +73,6 @@ describe("ordinary user message display", () => {
 		expect(JSON.stringify(wrapped.describe({ ...cx, cols: 160 }))).not.toContain("已折叠");
 	});
 
-	it("keeps explicit detailed history viewers independent of the main compact preference", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const message = new UserMessageComponent("history\n".repeat(20), { compactToolActivity: false });
-		expect(Bun.stripANSI(message.render(80).join("\n"))).not.toContain("已折叠");
-		expect(JSON.stringify(message.describe())).not.toContain("已折叠");
-	});
-
 	it("keeps the upstream native message toolbar", () => {
 		setTranscriptActionHandler(() => {});
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });

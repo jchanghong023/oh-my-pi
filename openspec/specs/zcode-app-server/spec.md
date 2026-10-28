@@ -99,7 +99,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 **Profile 身份与重启屏障**
 
 - 三个方法均带 `workspace`。`list` 可带 `candidate`，返回 `activeProfile`、`configRoot`、`storageScope`、`profiles:[{name,active}]` 及请求中的规范化 `candidate`；默认 profile 为 `null`。候选选择不是运行身份，不创建、复制或激活 profile。
-- `configRoot` 保留原生配置根含义；`storageScope` 标识实际有效持久数据域与运行 profile，以存储准备所声明的真实数据位置为依据。XDG 分流的数据域不能仅按配置根合并；offline 的临时 shm 路径须映射回持久根，不把主机／用户临时缓存身份当成数据域。相同域重启稳定，数据域或运行 profile 不同则隔离；不使用待重启选择或进程随机身份。
+- `configRoot` 保留原生配置根含义；`storageScope` 标识实际有效持久数据域与运行 profile，以存储准备所声明的真实数据位置为依据。XDG 分流的数据域不能仅按配置根合并。相同域重启稳定，数据域或运行 profile 不同则隔离；不使用待重启选择或进程随机身份。
 - `prepareSwitch` 带 `expectedProfile`，先核对当前运行身份，再同步检查原生任务与生命周期 blocker；有阻塞返回 `{ready:false,blockers}`，无阻塞返回 `{ready:true,token,blockers:[]}` 并设进程准入屏障，不热切换。屏障期间业务请求以 `-32000`／`data.kind:"omp.profileSwitchPrepared"` 拒绝，profile 控制与能力查询仍可用。`cancelSwitch` 带同 workspace 的 `token`，仅匹配屏障时返回 `{cancelled:true}`；不匹配返回 `false`，不解除他人的屏障。实际切换仍由应用完整退出并重启完成。
 
 **Tan 与 Team 运行观测**
@@ -518,6 +518,7 @@ OMP MUST 把 `session/create` 的 `mcpServers` 当作该会话完整、私有、
 - 供给配置 MUST 只按本次会话 cwd 解析，不把 workspace 身份变成执行目录，也不新增额外根的配置搜索。
 - 创建前 MUST 完成真实连接与工具发现；发现错误集合、失败集合或仍 pending 集合任一非空时 MUST 以 "MCP startup failed" 拒绝创建，MUST NOT 用缓存占位、延迟工具或重试等待冒充就绪。
 - 受限会话（`restrictToolNames`）携带非空 `mcpServers` MUST 报错；禁用 MCP 的请求同样 MUST NOT 建立 MCP 连接或注册其工具。
+- 保留 vendor 既有协议 schema，不修改 vendor 基线；运行时不支持 `client_credentials` grant，也不恢复其实现。不支持的旧授权配置 MUST 明确拒绝，MUST NOT 静默丢弃 server 或凭据。
 
 #### Scenario: MCP 发现未全部成功时拒绝创建
 
@@ -537,13 +538,20 @@ OMP MUST 在会话 journal 中只保存 MCP 配置的引用身份，把真实配
 - `identity` MUST 为 `ambient`（未提供 `mcpServers`）或规范配置的 sha256：server 按名称排序，`env`／`header` 项按名称排序后序列化。
 - 非 ambient 供给 MUST 写入 auth credentials 的 `api_key`，provider 名 MUST 形如 `zcode-mcp:<sha256([cwd, sessionId])>`。
 - `session/resume` 对已驻留会话发现 `identity` 不符时 MUST 拒绝，MUST NOT 热替换 MCP 配置。
-- 冷恢复 MUST 按引用重建同一配置；`identity` 不符、凭据缺失、凭据内容不可解析或内容不合法 MUST 以明确错误拒绝恢复，不得回落为 ambient 或空配置。
+- 冷恢复默认 MUST 按引用重建同一配置；`identity` 不符、凭据缺失、凭据内容不可解析或内容不合法 MUST 以明确错误拒绝恢复，不得回落为 ambient 或空配置。旧 `client_credentials` 配置 MUST 返回结构化业务码 `MCP_OAUTH_UNSUPPORTED`，错误数据包含 `authorizationMethod: "client_credentials"` 与指向显式 `mcpServers` 数组覆盖的 `recovery`，且不损坏凭据或历史。用户 MAY 通过现有 `session/resume` 显式提供完整有效的 `mcpServers` 数组替换冷会话供给；空数组 `[]` 必须由用户明确提供，表示移除全部 MCP server。成功恢复同一会话后 MUST 持久化新供给，使后续不带覆盖的冷恢复可读回；驻留会话 identity 不符仍 MUST 拒绝。
 - 仅显式删除会话 MUST forget 该凭据；普通关闭、切换、EOF 与重启 MUST 保留凭据以供冷恢复。
 
 #### Scenario: 冷恢复缺少 MCP 凭据
 
 - **WHEN** 冷恢复一个带会话级 MCP 供给的会话，但对应凭据已被移除或与 identity 不符
 - **THEN** 恢复以明确错误失败，不静默以无 MCP 工具的空配置继续
+
+#### Scenario: 旧 MCP OAuth 配置的显式恢复
+
+- **WHEN** 冷恢复会话引用旧 `client_credentials` 配置而未提供覆盖
+- **THEN** 返回 `MCP_OAUTH_UNSUPPORTED` 结构化错误及恢复指引，保留凭据和历史，不静默移除 server
+- **WHEN** 用户在 `session/resume` 显式提供有效的完整 `mcpServers` 数组或明确提供 `[]`
+- **THEN** 恢复同一冷会话并持久化替换配置，后续无覆盖冷恢复读回该配置；已驻留会话的 identity 不符仍被拒绝
 
 ### Requirement: 会话工具面约束与受限会话
 
@@ -807,14 +815,14 @@ sequenceDiagram
 - Skill 管理在 OMP 现有能力范围内尽力完整适配；Provider 只保留原生目录、就绪事实、模型选择、role 配置与连接测试。复用原生 Settings、Skill 发现／刷新及 Provider registry／认证／请求 API，不改变 OMP 核心执行语义，不建立平行配置或业务状态。下述 fork 桌面模型认证入口退役是明确产品取舍，不是因能力缺失隐藏管理面。
 - Skill 页面以原生发现清单与有效启用状态为事实源；启停通过原生已有配置入口保存，刷新复用原生发现与会话资源刷新。清单能力以可选 `toggleScope:"profile"` 明确原生只能保存当前 profile 用户层；UI 必须提示影响该 profile 下工作区，并发送 `scope:"user"`，不得根据资源的 workspace 发现范围伪装工作区持久化。字段缺省保持旧 Agent 的 scope 语义，显式原生 workspace 写请求明确拒绝。仅原生已有安全业务入口支持的删除／复制才提供真实操作；缺少等价 API 时在现有页面明确返回不支持，不擅自操作原 ZCode 技能目录或删除共享／插件资源。
 - `OMP_SKILLS_DIR` 以原生 catalog 的真实来源元数据展示 `Shared`、执行端和只读路径，不根据路径猜测来源、不另行扫描。共享技能仍沿用原生命名与优先级；启停只写当前 profile 设置，不修改共享源文件。尚无原生安全 API 的新建、导入、删除、复制或同步 UI 必须保留可见，禁用并说明原因，不执行旧 ZCode 目录操作。目录环境变量只展示执行端实际值，不修改系统环境或静默重启 Agent。
-- fork 桌面不激活 Host 的账户配置同步、provider 源注入或其触发的 registry 刷新；模型与认证唯一来自同一配置根、运行 profile 和有效环境的 OMP 原生 registry／Settings／auth 链。GUI 取消所有模型 Provider 登录、OAuth、API key 录入、登出及登录提示入口，不增加凭据写入协议；ZCode 产品账号不在本次取消范围。OMP 的 `provider-config` 老 Host 兼容实现保留，但不由本 fork 桌面调用，也不能保留一条隐藏的桌面注入路径。
+- app-server 不支持 Host 的账户配置同步、provider 源注入及其 registry 刷新，不读取 Host provider 配置文件，不向 Host 请求 provider 认证或使用其配置的模型选项映射；保留 `provider/updateAccountConfig` 与 `provider/refreshRegistry` 协议接口并明确返回不支持。模型与常规认证来自同一配置根、运行 profile 和有效环境的 OMP 原生 registry／Settings／auth 链；执行期请求级认证仍按「执行期模型与请求级认证」生效。GUI 取消所有模型 Provider 登录、OAuth、API key 录入、登出及登录提示入口，不增加凭据写入协议；ZCode 产品账号不在本次取消范围。
 - `provider/testModelConnectivity` 保留，使用目标 workspace 下原生实际解析的模型及原生凭据进行最小真实请求；原生支持的内置免凭据模型直接沿其原生请求链执行，不要求补 key。确实需要凭据而缺失、认证失败及不可达须保留结构化原因，不能注入测试凭据、只检查配置存在或伪造成功。连接测试不改变默认模型、已有会话或持久凭据。
 - 管理操作保持 workspaceIdentity／远端路由、profile 与请求代际归属；只读清单不启动会话，不把 Host 的旧 `.zcode/cli` 配置当成 OMP 配置。MCP 等其他管理面不随本需求扩大。
 
 **Team、Wiki 与 Repo 核心界面**
 
 - Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；完整合同见 [Team 2.9–2.10](../team-run-view/spec.md)。
-- Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，CAS 与离线双写合同不变。
+- Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，单文件本机锁、CAS 与原子保存遵循 [Team 配置保存服务](../team-configuration/spec.md)。
 - Wiki 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Wiki 专页](../wiki-index/spec.md)；Repo 专页承接全部 TUI 维护操作及原生查询，权威合同见 [Repo 专页](../repo-index/spec.md)。两者左侧入口位于自动化下方，相邻展示。
 - 除本次明确取消的模型 Provider 认证界面及操作外，OMP 已尽力适配但仍无法实现的功能，其 ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Wiki／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因；此例外不扩大到 Skill、MCP 或其他管理面。
 - Wiki／Repo 严格只增加可选能力、独立方法／通知和 schema，不修改既有 ZCode 协议的字段、方法、通知、信封、版本或语义，不改 vendor 基线。Host 只桥接、UI 只展示，管理与查询仍由各自原生索引服务拥有。新增进度、取消和错误也属于扩展，不借修改旧聊天／会话合同承载；旧客户端与缺少扩展的旧 Agent 保持既有行为。
@@ -824,27 +832,11 @@ sequenceDiagram
 - **WHEN** 原生工具需要用户批准或交互回答
 - **THEN** 通过既有 interaction 显示允许选项，拒绝或迟到答复不执行工具
 
-### Requirement: 老 Host provider 配置兼容加载门槛
+#### Scenario: 旧 Host 提供者配置与同步
 
-保留的老 Host provider 配置源 MUST 仅在两个来源同时配置时加载，且 MUST NOT 让个人层或账号层的异常放宽既有访问边界。
+- **WHEN** 进程收到 Host provider 配置文件路径或旧账号同步、registry 刷新请求
+- **THEN** 不读取或注入 Host provider 配置；旧同步请求明确拒绝，原生模型目录、认证和连接测试仍可用。
 
-#### Scenario: provider 配置源加载的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 只有 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 同时设置时才加载；只设置其一时 MUST 报 "Both provider sources required"。
-- 内置源 MUST 提供 revision，缺失 MUST 报错；同一层内重复 `providerId` MUST 报错。
-- 账号层 MUST 以 `basedOnZCodeBuiltinRevision` 精确锁定内置源：取值 MUST 等于 `zcode-builtin:<revision>:<sha256(绝对路径)>`，不符 MUST 报错。
-- `account:` 前缀 provider 的 access MUST NOT 被个人层覆盖，违反 MUST 报错。
-- 个人层只有文件不存在（ENOENT）MAY 被容忍并按空规则集处理；解析或校验失败 MUST 报错，MUST NOT 退化为空配置。
-- 没有内置源时 `provider/updateAccountConfig` MUST 报 "Account config requires matching built-in source"。
-- `provider/refreshRegistry` MUST 只重新提交当前模板并返回 `{refreshed:true}`，MUST NOT 借此改写账号配置或放宽访问边界。
-
-#### Scenario: 个人层文件损坏
-
-- **WHEN** 个人层配置文件存在但无法解析
-- **THEN** 加载失败并保持既有 provider 状态，不回退为空规则集
 
 ### Requirement: 协作模式与原生授权映射
 

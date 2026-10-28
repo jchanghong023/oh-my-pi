@@ -1,7 +1,5 @@
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { assertOfflineShmPath, getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
-import { getFastembedCacheDir, resolveProfileEnv } from "@oh-my-pi/pi-utils/dirs";
+import { join } from "node:path";
 import {
 	type Env,
 	envBool,
@@ -17,13 +15,10 @@ import {
 export type { Env };
 export { envBool, envDisabled, envFloat, envInt, envOneOf, envOptionalString, envString, envTruthy };
 
-const LEGACY_DATA_DIR = join(homedir(), ".hermes", "mnemopi", "data");
-export const DEFAULT_DATA_DIR = resolveMemoryPath(LEGACY_DATA_DIR);
+export const DEFAULT_DATA_DIR = join(homedir(), ".hermes", "mnemopi", "data");
 export const DEFAULT_DB_FILENAME = "mnemopi.db";
-export const FASTEMBED_CACHE_DIR = getOfflineShmState()
-	? getFastembedCacheDir()
-	: join(homedir(), ".hermes", "cache", "fastembed");
-export const MODEL_CACHE_DIR = resolveMemoryPath(join(homedir(), ".hermes", "mnemopi", "models"), "models");
+export const FASTEMBED_CACHE_DIR = join(homedir(), ".hermes", "cache", "fastembed");
+export const MODEL_CACHE_DIR = join(homedir(), ".hermes", "mnemopi", "models");
 
 export const DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5";
 export const DEFAULT_EMBEDDING_API_URL = "https://openrouter.ai/api/v1";
@@ -61,36 +56,12 @@ export const VERACITY_WEIGHT_DEFAULTS = {
 	unknown: 0.8,
 } as const;
 
-/**
- * Keep owned memory data in the active offline runtime domain. External overrides
- * are ignored in that mode; host-provided paths already in shm retain their layout.
- * Existing local components are checked without following restored symbolic links.
- */
-export function resolveMemoryPath(path: string, relativeDefault = "", env: Env = process.env): string {
-	const offline = getOfflineShmState(env);
-	if (!offline) return path;
-	const within = relative(offline.runtimeRoot, resolve(path));
-	let destination = path;
-	if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) {
-		const profile = resolveProfileEnv(env.OMP_PROFILE, env.PI_PROFILE);
-		const root = profile ? join(offline.runtimeRoot, "profiles", profile) : offline.runtimeRoot;
-		destination = join(root, "agent", "memories", "mnemopi", relativeDefault);
-	}
-	assertOfflineShmPath(destination, env);
-	return destination;
-}
-
-/** In-memory connections are not disk storage and must remain in memory. */
-export function resolveMemoryDbPath(path: string, env: Env = process.env): string {
-	return path === ":memory:" ? path : resolveMemoryPath(path, basename(path), env);
-}
-
 export function dataDir(env: Env = process.env): string {
-	return resolveMemoryPath(envOptionalString("MNEMOPI_DATA_DIR", env) ?? LEGACY_DATA_DIR, "", env);
+	return envOptionalString("MNEMOPI_DATA_DIR", env) ?? DEFAULT_DATA_DIR;
 }
 
 export function dbPath(env: Env = process.env): string {
-	return resolveMemoryDbPath(join(dataDir(env), DEFAULT_DB_FILENAME), env);
+	return join(dataDir(env), DEFAULT_DB_FILENAME);
 }
 
 export function beamOptimizationsEnabled(env: Env = process.env): boolean {

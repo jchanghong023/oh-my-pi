@@ -5,9 +5,7 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { getTerminalId } from "@oh-my-pi/pi-tui/ttyid";
 import {
 	getCustomSessionFilesDir,
-	getOfflineShmState,
 	getSessionsDir,
-	getSessionsDirPath,
 	getTerminalSessionsDir,
 	hashPath,
 	pathIsWithin,
@@ -15,48 +13,20 @@ import {
 } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import {
-	assertOfflineSessionPath,
-	FileSessionStorage,
-	OfflineSessionPathError,
-	type SessionStorage,
-} from "./session-storage";
+import type { SessionStorage } from "./session-storage";
 
 const migratedSessionRoots = new Set<string>();
-
-/**
- * Custom roots are namespaces, not offline restore sources. Resolve them
- * without probing the original directory and keep the public manager paths
- * identical to the paths actually used by storage. Runtime paths are idempotent.
- * Non-filesystem backends retain their caller-provided keys.
- */
-export function resolveSessionDirectory(sessionDir: string, storage: SessionStorage): string {
-	if (!(storage instanceof FileSessionStorage)) return sessionDir;
-	const state = getOfflineShmState();
-	if (!state) return sessionDir;
-	const resolved = path.resolve(sessionDir);
-	const relative = path.relative(state.runtimeRoot, resolved);
-	if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) {
-		assertOfflineSessionPath(sessionDir, storage);
-		return resolved;
-	}
-	return path.join(getSessionsDir(), `custom-${Bun.SHA256.hash(resolved, "hex")}`);
-}
 
 /**
  * Merge or rename a legacy session directory into its canonical target.
  * Best effort: callers decide whether migration failures should surface.
  */
 function migrateSessionDirPath(oldPath: string, newPath: string): void {
-	assertOfflineSessionPath(oldPath);
-	assertOfflineSessionPath(newPath);
 	const existing = fs.statSync(newPath, { throwIfNoEntry: false });
 	if (existing?.isDirectory()) {
 		for (const file of fs.readdirSync(oldPath)) {
 			const src = path.join(oldPath, file);
 			const dst = path.join(newPath, file);
-			assertOfflineSessionPath(src);
-			assertOfflineSessionPath(dst);
 			if (fs.existsSync(dst)) {
 				logger.warn("Session directory migration collision; preserving legacy entry", { src, dst });
 				continue;
@@ -156,7 +126,6 @@ function getDefaultSessionDirName(cwd: string): {
  * Runs once per sessions root on first access, best-effort.
  */
 function migrateHomeSessionDirs(sessionsRoot: string): void {
-	assertOfflineSessionPath(sessionsRoot);
 	if (migratedSessionRoots.has(sessionsRoot)) return;
 
 	const home = os.homedir();
@@ -189,7 +158,6 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 		try {
 			migrateSessionDirPath(oldPath, newPath);
 		} catch (error) {
-			if (error instanceof OfflineSessionPathError) throw error;
 			logger.warn("Failed to migrate legacy home session directory", {
 				oldPath,
 				newPath,
@@ -204,14 +172,11 @@ function migrateHomeSessionDirs(sessionsRoot: string): void {
 function migrateNamedSessionDir(legacyDirName: string, sessionDir: string, sessionsRoot: string): void {
 	const legacyDir = path.join(sessionsRoot, legacyDirName);
 	if (legacyDir === sessionDir) return;
-	assertOfflineSessionPath(legacyDir);
-	assertOfflineSessionPath(sessionDir);
 	if (!fs.existsSync(legacyDir)) return;
 
 	try {
 		migrateSessionDirPath(legacyDir, sessionDir);
 	} catch (error) {
-		if (error instanceof OfflineSessionPathError) throw error;
 		logger.warn("Failed to migrate legacy session directory", {
 			oldPath: legacyDir,
 			newPath: sessionDir,
@@ -228,14 +193,11 @@ function migrateNamedSessionDir(legacyDirName: string, sessionDir: string, sessi
 function migrateHashedSessionDir(hashedDirName: string, sessionDir: string, sessionsRoot: string): void {
 	const hashedDir = path.join(sessionsRoot, hashedDirName);
 	if (hashedDir === sessionDir) return;
-	assertOfflineSessionPath(hashedDir);
-	assertOfflineSessionPath(sessionDir);
 	if (!fs.existsSync(hashedDir)) return;
 
 	try {
 		migrateSessionDirPath(hashedDir, sessionDir);
 	} catch (error) {
-		if (error instanceof OfflineSessionPathError) throw error;
 		logger.warn("Failed to migrate hashed session directory", {
 			oldPath: hashedDir,
 			newPath: sessionDir,
@@ -260,10 +222,7 @@ export function resolveManagedSessionRoot(sessionDir: string, cwd: string): stri
  * never creates or moves a session bucket.
  */
 export function sessionDirForCwd(cwd: string, sessionsRoot: string = getSessionsDir()): string {
-	return path.join(
-		resolveSessionDirectory(sessionsRoot, new FileSessionStorage()),
-		getDefaultSessionDirName(cwd).encodedDirName,
-	);
+	return path.join(sessionsRoot, getDefaultSessionDirName(cwd).encodedDirName);
 }
 
 /**
@@ -339,28 +298,20 @@ function managedWorktreeSessionDirs(primaryRoot: string, prefix: string, session
  * Compute the default session directory for a cwd.
  * Classifies cwd by canonical location so symlink/alias paths resolve to the
  * same home-relative or temp-root directory names as their real targets.
- * Non-filesystem offline backends resolve the default root without inspecting disk.
  */
 export function computeDefaultSessionDir(
 	cwd: string,
 	storage: SessionStorage,
-	sessionsRoot: string = storage instanceof FileSessionStorage || !getOfflineShmState()
-		? getSessionsDir()
-		: getSessionsDirPath(),
+	sessionsRoot: string = getSessionsDir(),
 ): string {
-	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
-	assertOfflineSessionPath(sessionsRoot, storage);
 	const { encodedDirName, hashedDirName, shadowedHomeDirName, shadowedHomeHashedDirName, resolvedCwd } =
 		getDefaultSessionDirName(cwd);
 	const sessionDir = path.join(sessionsRoot, encodedDirName);
-	// Non-filesystem offline backends keep opaque keys and must not probe disk.
-	if (storage instanceof FileSessionStorage || !getOfflineShmState()) {
-		migrateHomeSessionDirs(sessionsRoot);
-		migrateNamedSessionDir(encodeLegacyAbsoluteSessionDirName(resolvedCwd), sessionDir, sessionsRoot);
-		if (shadowedHomeDirName) migrateNamedSessionDir(shadowedHomeDirName, sessionDir, sessionsRoot);
-		if (shadowedHomeHashedDirName) migrateNamedSessionDir(shadowedHomeHashedDirName, sessionDir, sessionsRoot);
-		migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
-	}
+	migrateHomeSessionDirs(sessionsRoot);
+	migrateNamedSessionDir(encodeLegacyAbsoluteSessionDirName(resolvedCwd), sessionDir, sessionsRoot);
+	if (shadowedHomeDirName) migrateNamedSessionDir(shadowedHomeDirName, sessionDir, sessionsRoot);
+	if (shadowedHomeHashedDirName) migrateNamedSessionDir(shadowedHomeHashedDirName, sessionDir, sessionsRoot);
+	migrateHashedSessionDir(hashedDirName, sessionDir, sessionsRoot);
 	storage.ensureDirSync(sessionDir);
 	return sessionDir;
 }
@@ -570,7 +521,7 @@ export interface TerminalBreadcrumb {
  * entry is returned with `exists:false` so the caller can distinguish it from a
  * genuinely stale/deleted breadcrumb.
  */
-export async function readTerminalBreadcrumbEntry(storage?: SessionStorage): Promise<TerminalBreadcrumb | null> {
+export async function readTerminalBreadcrumbEntry(): Promise<TerminalBreadcrumb | null> {
 	const terminalId = getTerminalId();
 	if (!terminalId) return null;
 
@@ -580,8 +531,6 @@ export async function readTerminalBreadcrumbEntry(storage?: SessionStorage): Pro
 		if (!parsed) return null;
 		const { cwd: breadcrumbCwd, sessionFile, fresh, cwdIdentity } = parsed;
 
-		// A manually restored stale pointer must never probe its former disk file.
-		assertOfflineSessionPath(sessionFile, storage);
 		const stat = fs.statSync(sessionFile, { throwIfNoEntry: false });
 		const exists = stat?.isFile() === true;
 		// A materialized target resumes normally; a missing target is honored only

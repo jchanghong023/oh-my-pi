@@ -294,7 +294,6 @@ export class AssistantMessageComponent extends Container {
 	#showImages = true;
 	#showToolResultImages = true;
 	#displayCompactToolActivity = displayPreferences.compactToolActivity;
-	readonly #compactToolActivityOverride: boolean | undefined;
 	/** Charts under numeric tables; off for subagent transcripts. */
 	#showTableCharts = true;
 	#transcriptBlockFinalized: boolean;
@@ -552,11 +551,9 @@ export class AssistantMessageComponent extends Container {
 		proseOnlyThinking = true,
 		linkTargets?: ReadonlyMap<string, string>,
 		expandThinkingBlocks = false,
-		compactToolActivity?: boolean,
 	) {
 		super();
 		this.#hideThinkingBlock = hideThinkingBlock;
-		this.#compactToolActivityOverride = compactToolActivity;
 		this.#onImageUpdate = onImageUpdate;
 		this.#thinkingRenderers = thinkingRenderers;
 		this.#imageBudget = imageBudget;
@@ -1549,10 +1546,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return (
-			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) &&
-			!displayPreferences.hideToolActivity
-		);
+		return displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity;
 	}
 
 	getTranscriptBlockVersion(): number {

@@ -6,7 +6,6 @@ import {
 	type WikiToolPage,
 	wikiWaitMinimum,
 } from "@oh-my-pi/pi-natives";
-import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
 import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { DOCS_WORKER_ARG } from "../cli/worker-selectors";
@@ -133,7 +132,6 @@ export class DocsService {
 		// The helper's SDK/test fallback has its own cwd; resolve the DB in the caller's cwd.
 		const agentDir = path.resolve(options.agentDir);
 		this.databasePath = path.join(agentDir, "docs.db");
-		assertOfflineShmPath(this.databasePath);
 		this.#options = { agentDir, cwd: this.cwd };
 	}
 
@@ -328,7 +326,6 @@ export class DocsService {
 		try {
 			let worker = this.#worker;
 			if (!worker) {
-				assertOfflineShmPath(this.databasePath);
 				const { spawned, handle } = spawnDocsWorker(error => {
 					if (this.#worker === owned) this.#failAll(error);
 				});

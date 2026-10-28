@@ -185,13 +185,13 @@ describe("ZCode business read queries", () => {
 		const queries = new ZCodeQueries({
 			manager: f.manager,
 			getProjection: () => undefined,
-			reasoning: async (provider, model, level) => {
-				requests.push([provider, model, level]);
+			reasoning: async (cwd, provider, model, level) => {
+				requests.push([cwd, provider, model, level]);
 				return { thought: "disabled", thoughtLevels: ["disabled", "enabled"] };
 			},
 		});
 		const state = await queries.projectionState("session");
-		expect(requests).toEqual([["chosen", "new-model", "off"]]);
+		expect(requests).toEqual([[f.cwd, "chosen", "new-model", "off"]]);
 		expect(state.config).toMatchObject({
 			provider: "chosen",
 			model: "new-model",

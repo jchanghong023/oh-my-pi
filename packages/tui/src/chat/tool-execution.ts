@@ -236,8 +236,6 @@ export interface ToolExecutionUi {
 
 export interface ToolExecutionOptions {
 	showImages?: boolean; // default: true (only used if terminal supports images)
-	/** Instance-local presentation override for explicit transcript details. */
-	compactToolActivity?: boolean;
 	/** Allow the name-keyed renderer registry only when the active tool is the built-in implementation. */
 	useBuiltInRenderer?: boolean;
 }
@@ -405,7 +403,6 @@ export class ToolExecutionComponent extends Container {
 	#compactToolResultListener: (() => void) | undefined;
 	#compactIntent: string | undefined;
 	#showImages: boolean;
-	readonly #compactToolActivityOverride: boolean | undefined;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
@@ -503,7 +500,6 @@ export class ToolExecutionComponent extends Container {
 		spinnerFrame?: number;
 		expanded: boolean;
 		isPartial: boolean;
-		compactToolActivity?: boolean;
 		argsComplete?: boolean;
 		executionStarted?: boolean;
 		renderContext?: Record<string, unknown>;
@@ -536,7 +532,6 @@ export class ToolExecutionComponent extends Container {
 		this.#toolLabel = tool?.label ?? toolName;
 		this.#renderer = options.useBuiltInRenderer === false ? undefined : toolRenderers[toolName];
 		this.#showImages = options.showImages ?? true;
-		this.#compactToolActivityOverride = options.compactToolActivity;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#args = args;
@@ -927,7 +922,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	isCompactToolActivity(): boolean {
-		return (!this.#expanded || this.isCompactWriteCall()) && this.#compactToolActivityOverride !== false;
+		return !this.#expanded || this.isCompactWriteCall();
 	}
 
 	/** UI-only marker from the existing blocked prompt decision. */
@@ -1020,7 +1015,7 @@ export class ToolExecutionComponent extends Container {
 			!this.#expanded &&
 			!this.hasCompactCriticalFeedback() &&
 			!this.isCompactActualFileWrite() &&
-			(this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity) &&
+			displayPreferences.compactToolActivity &&
 			this.isCompactToolActivity()
 		);
 	}
@@ -1772,7 +1767,6 @@ export class ToolExecutionComponent extends Container {
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
-		this.#renderState.compactToolActivity = this.#compactToolActivity;
 		this.#renderState.argsComplete = this.#argsComplete;
 		this.#renderState.executionStarted = this.#executionStarted;
 		this.#renderState.spinnerFrame = this.#spinnerFrame;

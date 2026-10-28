@@ -223,10 +223,7 @@ describe("native IPC", () => {
 		const dir = path.join(await tempDir(), "d".repeat(120));
 		const name = `long-${process.pid}`;
 		const endpoint = ipcEndpoint(dir, name);
-		const offline =
-			process.platform === "linux" && /^(?:1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
-		const relocationRoot = offline ? "/dev/shm" : "/tmp";
-		expect(endpoint).toMatch(new RegExp(`^${relocationRoot}/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
+		expect(endpoint).toMatch(new RegExp(`^/tmp/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
 		expect(ipcEndpoint(dir, name)).toBe(endpoint);
 		expect(Buffer.byteLength(endpoint)).toBeLessThan(104);
 		await listen(endpoint, { framing: "lines" }, connection => {
@@ -243,12 +240,12 @@ describe("native IPC", () => {
 	});
 
 	test.skipIf(process.platform !== "linux")(
-		"relocated endpoints honor exact offline values and agree across independent processes",
+		"relocated endpoints agree across independent processes regardless of offline setting",
 		async () => {
 			const nativeUrl = new URL("../native/index.js", import.meta.url).href;
 			const values = ["1", " TrUe ", "YES", "oN", "", "0", "false", "enabled"];
 			for (const value of values) {
-				const dir = `/dev/shm/omp-ipc-domain-${process.pid}-${"long-domain-".repeat(15)}`;
+				const dir = `/tmp/omp-ipc-domain-${process.pid}-${"long-domain-".repeat(15)}`;
 				const name = `cross-process-${process.pid}-${values.indexOf(value)}`;
 				const clientScript = `
 					import { IpcConnection, ipcEndpoint } from ${JSON.stringify(nativeUrl)};
@@ -257,7 +254,7 @@ describe("native IPC", () => {
 					try {
 						const reply = Promise.withResolvers();
 						client.start(line => reply.resolve(line), reason => reply.reject(new Error(String(reason))));
-						client.send("shm-round-trip");
+						client.send("round-trip");
 						console.log(JSON.stringify({ endpoint, reply: await reply.promise }));
 					} finally {
 						client.destroy();
@@ -306,11 +303,10 @@ describe("native IPC", () => {
 				]);
 				expect({ value, code, stderr }).toEqual({ value, code: 0, stderr: "" });
 				const result = JSON.parse(stdout);
-				const root = /^(?:1|true|yes|on)$/i.test(value.trim()) ? "/dev/shm" : "/tmp";
-				expect(result.endpoint).toMatch(new RegExp(`^${root}/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
+				expect(result.endpoint).toMatch(new RegExp(`^/tmp/omp-${process.geteuid!()}/[0-9a-f]{16}\\.sock$`));
 				expect(Buffer.byteLength(result.endpoint)).toBeLessThan(104);
 				expect(result).toMatchObject({
-					reply: "shm-round-trip",
+					reply: "round-trip",
 					uid: process.geteuid!(),
 					mode: 0o700,
 					directory: true,

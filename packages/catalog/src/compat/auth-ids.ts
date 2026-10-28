@@ -44,7 +44,6 @@ export type AuthProviderId =
 	| "helmcode"
 	| "huggingface"
 	| "inception"
-	| "jchtools"
 	| "kagi"
 	| "kilo"
 	| "kimi-code"

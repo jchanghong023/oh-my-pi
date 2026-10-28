@@ -7,9 +7,7 @@ import { AgentProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/ag
 import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse";
 import { registerArtifactsDir } from "@oh-my-pi/pi-coding-agent/internal-urls/registry-helpers";
 import { ArtifactManager, writeArtifact } from "@oh-my-pi/pi-coding-agent/session/artifacts";
-import { OfflineSessionPathError } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
-import * as dirs from "@oh-my-pi/pi-utils/dirs";
 
 describe("ArtifactManager write integrity", () => {
 	const dirs: string[] = [];
@@ -187,11 +185,10 @@ describe("ArtifactManager write integrity", () => {
 	}
 });
 
-describe("ArtifactManager offline runtime boundary", () => {
+describe("ArtifactManager attachment discovery", () => {
 	let root: string;
 	let runtimeRoot: string;
 	let external: string;
-	let offlineState: dirs.OfflineShmState | undefined;
 
 	beforeEach(() => {
 		root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "omp-artifact-boundary-")));
@@ -199,12 +196,6 @@ describe("ArtifactManager offline runtime boundary", () => {
 		external = path.join(root, "external");
 		fs.mkdirSync(runtimeRoot);
 		fs.mkdirSync(external);
-		offlineState = {
-			runtimeRoot,
-			persistentRoot: external,
-			domainId: crypto.randomUUID(),
-		};
-		vi.spyOn(dirs, "getOfflineShmState").mockImplementation(() => offlineState);
 	});
 
 	afterEach(() => {
@@ -227,66 +218,7 @@ describe("ArtifactManager offline runtime boundary", () => {
 		expect(await Bun.file(artifact!).text()).toBe("runtime attachment");
 	});
 
-	it("rejects external, linked, and unnormalized linked directories before discovery", async () => {
-		fs.mkdirSync(path.join(external, "nested"));
-		fs.mkdirSync(path.join(external, "session"));
-		fs.writeFileSync(path.join(external, "session", "0.bash.log"), "external private payload");
-		const link = path.join(runtimeRoot, "linked");
-		fs.symlinkSync(path.join(external, "nested"), link, process.platform === "win32" ? "junction" : "dir");
-		const linkedSession = path.join(runtimeRoot, "session-link");
-		fs.symlinkSync(path.join(external, "session"), linkedSession, process.platform === "win32" ? "junction" : "dir");
-		for (const dir of [path.join(external, "session"), linkedSession, `${link}${path.sep}..${path.sep}session`]) {
-			const manager = new ArtifactManager(dir);
-			await expect(manager.listFiles()).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.exists("0")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.getPath("0")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.allocatePath("bash")).rejects.toBeInstanceOf(OfflineSessionPathError);
-		}
-	});
-
-	it.skipIf(process.platform === "win32")(
-		"rejects linked individual files until offline mode is disabled",
-		async () => {
-			const dir = path.join(runtimeRoot, "session");
-			fs.mkdirSync(dir);
-			const privateFile = path.join(external, "private.log");
-			fs.writeFileSync(privateFile, "external private payload");
-			const artifact = path.join(dir, "0.bash.log");
-			fs.symlinkSync(privateFile, artifact);
-			const manager = new ArtifactManager(dir);
-			await expect(manager.listFiles()).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.exists("0")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.getPath("0")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(manager.allocatePath("bash")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			await expect(writeArtifact(artifact, "replacement")).rejects.toBeInstanceOf(OfflineSessionPathError);
-			expect(fs.readFileSync(privateFile, "utf8")).toBe("external private payload");
-			offlineState = undefined;
-			expect(await manager.getPath("0")).toBe(artifact);
-			expect(await Bun.file((await manager.getPath("0"))!).text()).toBe("external private payload");
-		},
-	);
-
-	it("rejects unsafe reserved source directories during id scans", async () => {
-		fs.writeFileSync(path.join(external, "8.bash.log"), "external private payload");
-		const linkedSource = path.join(runtimeRoot, "source-link");
-		fs.symlinkSync(external, linkedSource, process.platform === "win32" ? "junction" : "dir");
-		for (const [index, reserved] of [external, linkedSource].entries()) {
-			const manager = new ArtifactManager(path.join(runtimeRoot, `session-${index}`), undefined, reserved);
-			await expect(manager.allocatePath("bash")).rejects.toBeInstanceOf(OfflineSessionPathError);
-		}
-	});
-
-	it.skipIf(process.platform === "win32")("rejects linked reserved source files during id scans", async () => {
-		fs.writeFileSync(path.join(external, "8.bash.log"), "external private payload");
-		const source = path.join(runtimeRoot, "source");
-		fs.mkdirSync(source);
-		fs.symlinkSync(path.join(external, "8.bash.log"), path.join(source, "8.bash.log"));
-		const manager = new ArtifactManager(path.join(runtimeRoot, "session"), undefined, source);
-		await expect(manager.allocatePath("bash")).rejects.toBeInstanceOf(OfflineSessionPathError);
-	});
-
 	it("keeps ordinary-mode linked attachment discovery and reading unchanged", async () => {
-		offlineState = undefined;
 		fs.writeFileSync(path.join(external, "0.bash.log"), "ordinary attachment");
 		const dir = path.join(runtimeRoot, "linked");
 		fs.symlinkSync(external, dir, process.platform === "win32" ? "junction" : "dir");

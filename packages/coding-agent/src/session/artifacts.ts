@@ -6,9 +6,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { ensureOfflineShmDirectory } from "@oh-my-pi/pi-natives/offline-root";
 import { replaceFileAtomically } from "../utils/atomic-file";
-import { assertOfflineSessionPath } from "./session-storage";
 
 /**
  * Sanitize a tool name for safe use as the middle segment of the artifact
@@ -44,7 +42,6 @@ function sanitizeToolType(toolType: string): string {
  * Returns the verified UTF-8 byte count.
  */
 export async function writeArtifact(path: string, content: string): Promise<number> {
-	assertOfflineSessionPath(path);
 	const expectedBytes = Buffer.byteLength(content);
 	const tempPath = `${path}.tmp-${crypto.randomUUID()}`;
 	try {
@@ -129,9 +126,8 @@ export class ArtifactManager {
 
 	async #ensureDir(): Promise<void> {
 		await this.#ready;
-		assertOfflineSessionPath(this.#dir);
 		if (!this.#dirCreated) {
-			if (!ensureOfflineShmDirectory(this.#dir)) await fs.mkdir(this.#dir, { recursive: true });
+			await fs.mkdir(this.#dir, { recursive: true });
 			this.#dirCreated = true;
 		}
 		// Memoize the first-use scan so it runs exactly once. Concurrent callers
@@ -180,7 +176,6 @@ export class ArtifactManager {
 		const id = String(this.allocateId());
 		const filename = `${id}.${sanitizeToolType(toolType)}.log`;
 		const artifactPath = path.join(this.#dir, filename);
-		assertOfflineSessionPath(artifactPath);
 		return { id, path: artifactPath };
 	}
 
@@ -216,16 +211,12 @@ export class ArtifactManager {
 	}
 
 	async #listFiles(dir: string): Promise<string[]> {
-		// Validate the original directory before joining paths can erase link/..
-		// components, and keep boundary failures outside the missing-dir fallback.
-		assertOfflineSessionPath(dir);
 		let files: string[];
 		try {
 			files = await fs.readdir(dir);
 		} catch {
 			return [];
 		}
-		for (const file of files) assertOfflineSessionPath(path.join(dir, file));
 		return files;
 	}
 
@@ -240,7 +231,6 @@ export class ArtifactManager {
 		const match = files.find(f => f.startsWith(`${id}.`));
 		if (!match) return null;
 		const artifactPath = path.join(this.#dir, match);
-		assertOfflineSessionPath(artifactPath);
 		return artifactPath;
 	}
 }

@@ -14,7 +14,6 @@ import {
 	resolveModelFromString,
 	resolveProviderModelReference,
 } from "../config/model-resolver";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { TeamParticipant } from "./types";
 
 export interface TeamMembersInput {
@@ -52,12 +51,6 @@ function describeConfiguredEntry(entry: unknown): string {
 
 /** Capability policy shared by discussion preflight and the configuration catalog. */
 export function teamModelCapabilityIssue(model: Model): { code: string; message: string } | undefined {
-	if (isJchToolsAgentModel(model)) {
-		return {
-			code: "unsupported_agent",
-			message: `/team 不支持远端 Agent 模型 ${modelKey(model)}：后端执行权限无法由前端只读工具集限制，且不支持必需的结构化 yield。`,
-		};
-	}
 	if (model.supportsTools === false || (model.kind !== undefined && model.kind !== "chat")) {
 		return {
 			code: "missing_capability",

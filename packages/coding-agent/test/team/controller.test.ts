@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
-import { JCHTOOLS_API } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import {
@@ -206,33 +205,6 @@ describe("effective team rosters", () => {
 				expect(result.error).toContain(MODEL_PATTERN);
 				expect(result.error).toContain("主代理");
 			}
-		},
-	);
-
-	it.each([{ remoteSession: true }, { remoteSession: false }])(
-		"rejects remote Agent execution before dispatch whether the remote model is the anchor or a member: %j",
-		async ({ remoteSession }) => {
-			const remote: Model = { ...MODEL, provider: "jchtools", id: "remote-agent", api: JCHTOOLS_API };
-			const remotePattern = `${remote.provider}/${remote.id}`;
-			const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
-			const sent: { customType: string; content: string }[] = [];
-			const session = {
-				...stubSession(jobManager, sent),
-				model: remoteSession ? remote : MODEL,
-				modelRegistry: { getAvailable: () => [MODEL, remote] },
-			} as unknown as AgentSession;
-			const result = await startTeamDiscussion("分析 X", {
-				session,
-				settings: Settings.isolated({ "team.members": [remoteSession ? MODEL_PATTERN : remotePattern] }),
-				cwd: "/tmp/repo",
-				hooks: {},
-			});
-			expect(result.started).toBe(false);
-			expect(result.message).toContain(remotePattern);
-			expect(result.message).toContain("只读");
-			expect(result.message).toContain("yield");
-			expect(jobManager.registerCalls).toBe(0);
-			expect(sent).toEqual([]);
 		},
 	);
 });

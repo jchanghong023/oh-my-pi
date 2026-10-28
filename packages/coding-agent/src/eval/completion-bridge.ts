@@ -19,7 +19,6 @@ import { clampThinkingLevelForModel, getSupportedEfforts } from "@oh-my-pi/pi-ca
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import { Snowflake } from "@oh-my-pi/pi-utils";
 import { extractTextContent, extractToolCall, parseJsonPayload } from "../commit/utils";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
 import type { ModelRegistry } from "../config/model-registry";
 import {
@@ -361,11 +360,11 @@ async function executeCompletion(
 	let lastError: unknown;
 	let retriesUsed = 0;
 	let completed = false;
-	// Backend Agent and CodeAgent failures are terminal, even inside an ordinary model's fallback chain.
+	// CodeAgent failures are terminal, even inside an ordinary model's fallback chain.
 	for (const [index, candidate] of candidates.entries()) {
 		if (index > 0 && retriesUsed >= maxRetries) break;
 		model = candidate.model;
-		const terminalFailure = model.provider === "codeagent" || isJchToolsAgentModel(model);
+		const terminalFailure = model.provider === "codeagent";
 		// The session's cost cap covers completions a cell makes, attempt by attempt.
 		const refusal = session.costGate?.check();
 		if (refusal) throw new ToolError(refusal.message);
@@ -394,7 +393,6 @@ async function executeCompletion(
 					reasoning: candidate.reasoning,
 					disableReasoning: candidate.disableReasoning,
 					toolChoice: schema ? { type: "tool", name: STRUCTURED_TOOL_NAME } : undefined,
-					...(isJchToolsAgentModel(model) ? { cwd: session.cwd } : {}),
 				},
 				{ telemetry, oneshotKind: "eval_completion" },
 			);

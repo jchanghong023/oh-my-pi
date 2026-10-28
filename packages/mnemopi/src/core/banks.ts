@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
-import { dataDir as configuredDataDir, DEFAULT_DATA_DIR, resolveMemoryPath } from "../config";
+import { dataDir as configuredDataDir, DEFAULT_DATA_DIR } from "../config";
 import { closeQuietly, openDatabase } from "../db";
 
 export { DEFAULT_DATA_DIR };
@@ -25,18 +24,15 @@ export class BankManager {
 	readonly banksDir: string;
 
 	constructor(dataDir?: string) {
-		this.dataDir = resolveMemoryPath(dataDir ?? configuredDataDir());
+		this.dataDir = dataDir ?? configuredDataDir();
 		this.banksDir = join(this.dataDir, "banks");
-		assertOfflineShmPath(this.banksDir);
 		mkdirSync(this.banksDir, { recursive: true });
 	}
 
 	createBank(name: string): string {
 		this.validateName(name);
 		const bankDir = join(this.banksDir, name);
-		assertOfflineShmPath(bankDir);
 		const dbPath = join(bankDir, DB_FILENAME);
-		assertOfflineShmPath(dbPath);
 		if (existsSync(bankDir)) throw new ValueError(`Bank '${name}' already exists`);
 		mkdirSync(bankDir, { recursive: true });
 		const db = openDatabase(dbPath);
@@ -47,7 +43,6 @@ export class BankManager {
 		this.validateName(name);
 		if (name === "default" && !force) throw new ValueError("Cannot delete 'default' bank without force=True");
 		const bankDir = join(this.banksDir, name);
-		assertOfflineShmPath(bankDir);
 		if (!existsSync(bankDir)) return false;
 		rmSync(bankDir, { recursive: true, force: true });
 		return true;
@@ -76,8 +71,6 @@ export class BankManager {
 		this.validateName(newName);
 		const oldDir = join(this.banksDir, oldName);
 		const newDir = join(this.banksDir, newName);
-		assertOfflineShmPath(oldDir);
-		assertOfflineShmPath(newDir);
 		if (!existsSync(oldDir)) throw new ValueError(`Bank '${oldName}' does not exist`);
 		if (existsSync(newDir)) throw new ValueError(`Bank '${newName}' already exists`);
 		renameSync(oldDir, newDir);

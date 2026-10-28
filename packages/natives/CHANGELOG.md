@@ -4,11 +4,13 @@
 
 ### Fixed
 
+- Fixed native addon and grammar installation paths to share the effective configuration root and normalized profile, while honoring an explicit `PI_NATIVES_DIR`.
 - Bounded the built-in `grep` and `rg` search buffer to 256 MiB plus one byte; when a file or stdin exceeds the buffer budget, they report an error instead of buffering without limit, and continue searching other files. Pattern files and `grep --exclude-from` sources are limited to 256 MiB. Errors return status 2 except when a `-q` match takes precedence ([#17108](https://github.com/can1357/oh-my-pi/pull/17108)).
 
 ### Changed
 
 - Updated Bun engine requirement to ≥1.4.4
+- Removed the unused persistent file lock API; ordinary file locks remain available.
 
 ## [18.13.2] - 2026-10-27
 
@@ -239,14 +241,11 @@
 
 ### Changed
 
-- Keep Linux offline native caches and shortened IPC endpoints in private shm locations.
 - Wiki readers now use memory-mapped database pages that the operating system can share across processes reading the same index, without enlarging private SQLite page caches.
 
 ### Fixed
 
 - Restored Windows native quality checks without changing GNU/Linux idle heap trimming.
-- Load Linux offline native cache images normally when shm is executable, falling back to sealed executable memfds only when the file-backed load fails (including `noexec` mounts); reuse process-owned memory images across recreated workers without persistent-disk fallback.
-- Reject offline native version-directory and addon symlinks before probing, touching, extracting or loading their external targets.
 - Preserve glibc heap trimming while making inactive-platform memory bookkeeping `const`-correct for strict Windows checks.
 - Preserved TERM cleanup and output when shell cancellation arrives just after a foreground process starts.
 - Restored Windows native quality checks while keeping shell termination immediate and preserving Unix TERM cleanup grace.

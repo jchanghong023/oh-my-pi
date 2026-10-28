@@ -19,6 +19,10 @@ import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { DaemonCompletionNotification } from "@oh-my-pi/pi-coding-agent/launch/protocol";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { buildAsyncResultBlock } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -497,15 +501,20 @@ describe("AgentSession owner-routed async delivery", () => {
 		expect(batch.content.match(/artifact write failed/g)).toHaveLength(1);
 		await initTheme(false, undefined, undefined, "dark", "light");
 		const persisted = JSON.parse(JSON.stringify(batch)) as typeof batch;
-		for (const message of [batch, persisted]) {
-			// This contract checks each original job identity and its warning, not the compact projection.
-			const rendered = buildAsyncResultBlock(message, false)
-				.render(160)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
-			expect(rendered).toMatch(/batch-0[^]*artifact open failed[^]*batch-1[^]*artifact write failed[^]*batch-2/);
-			expect(rendered.match(/artifact open failed/g)).toHaveLength(1);
-			expect(rendered.match(/artifact write failed/g)).toHaveLength(1);
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		try {
+			for (const message of [batch, persisted]) {
+				const rendered = buildAsyncResultBlock(message)
+					.render(160)
+					.map(line => Bun.stripANSI(line))
+					.join("\n");
+				expect(rendered).toMatch(/batch-0[^]*artifact open failed[^]*batch-1[^]*artifact write failed[^]*batch-2/);
+				expect(rendered.match(/artifact open failed/g)).toHaveLength(1);
+				expect(rendered.match(/artifact write failed/g)).toHaveLength(1);
+			}
+		} finally {
+			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 

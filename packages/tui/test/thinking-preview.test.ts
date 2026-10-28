@@ -44,18 +44,8 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
 }
 
 function assistant(compact: boolean, hide = false): AssistantMessageComponent {
-	setChatTranscriptDisplayPreferences({ hideToolActivity: false });
-	const component = new AssistantMessageComponent(
-		undefined,
-		hide,
-		undefined,
-		[],
-		undefined,
-		true,
-		undefined,
-		false,
-		compact,
-	);
+	setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: false });
+	const component = new AssistantMessageComponent(undefined, hide, undefined, [], undefined, true, undefined, false);
 	components.push(component);
 	return component;
 }

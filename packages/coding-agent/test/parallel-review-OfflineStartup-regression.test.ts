@@ -1,5 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import * as fs from "node:fs/promises";
+import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { resolveCliModel } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
@@ -7,12 +6,10 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 const CHILD_FLAG = "--disabled-company-startup-child";
 const STOP = new Error("startup role snapshot captured");
 const AVAILABLE_SELECTOR = "anthropic/claude-opus-4-5";
-const shmDomains: string[] = [];
 
 // Startup publishes process-global company/worker state, so isolate the real
 // startup path rather than changing the test runner's environment or providers.
@@ -62,9 +59,6 @@ if (process.argv.includes(CHILD_FLAG)) {
 	process.exit(0);
 }
 
-afterEach(async () => {
-	await Promise.all(shmDomains.splice(0).map(dir => fs.rm(dir, { recursive: true, force: true })));
-});
 describe("offline startup with a disabled company provider", () => {
 	it("does not pin otherwise unconfigured model roles to the disabled lane", async () => {
 		using tempDir = TempDir.createSync("@omp-disabled-company-startup-");
@@ -94,11 +88,6 @@ describe("offline startup with a disabled company provider", () => {
 			PI_SLOW_MODEL: undefined,
 			PI_PLAN_MODEL: undefined,
 		};
-		const shm = getOfflineShmState(env);
-		if (shm) {
-			shmDomains.push(path.dirname(shm.runtimeRoot));
-			await fs.mkdir(path.join(shm.runtimeRoot, "agent"), { recursive: true, mode: 0o700 });
-		}
 		const child = Bun.spawn([process.execPath, "run", import.meta.path, CHILD_FLAG], {
 			cwd: root,
 			env,

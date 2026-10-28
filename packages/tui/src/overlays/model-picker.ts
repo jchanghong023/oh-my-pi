@@ -15,7 +15,6 @@ import {
 	ModelBrowser,
 	type ModelBrowserItem,
 	type ModelPickerCatalogue,
-	resolveLiveScopedModels,
 } from "./model-browser";
 import type { ModelBrowserRegistry, ModelBrowserSource } from "./model-browser";
 import type { ConfiguredThinkingLevel } from "../thinking";
@@ -42,8 +41,6 @@ export interface ResolvedRoleModel {
 export interface ModelPickerRegistry extends ModelBrowserRegistry {
 	/** Bring the catalog up to date without rebuilding a current one; `true` when the picker must re-read it. */
 	refreshIfStale(): Promise<boolean>;
-	/** Fresh bounded local lookup only; does not refresh unrelated online providers. */
-	refreshLocalProviders?(): Promise<boolean>;
 }
 
 export interface ModelPickerCallbacks {
@@ -190,17 +187,8 @@ export class ModelPickerComponent implements Component {
 		this.#browser.onActivate = item => {
 			const quickRole = this.#quickRoles.get(item.selector);
 			if (quickRole) {
-				const model =
-					quickRole.model.provider === "jchtools"
-						? resolveLiveScopedModels(this.#registry, [quickRole.model])[0]
-						: quickRole.model;
-				if (model) callbacks.onPickRole?.(model === quickRole.model ? quickRole : { ...quickRole, model });
+				callbacks.onPickRole?.(quickRole);
 				return;
-			}
-			if (item.model.provider === "jchtools") {
-				const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
-				if (!model) return;
-				item = { ...item, model };
 			}
 			if (this.#taskMode) {
 				callbacks.onPickTask?.(item.model, item.selector);
@@ -220,12 +208,8 @@ export class ModelPickerComponent implements Component {
 		}
 		if (this.#getCandidates) return;
 
-		// Reconcile cached state and the live local service without refreshing
-		// unrelated provider networks or delaying the first paint.
-		Promise.all([
-			this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false),
-			this.#registry.refreshLocalProviders?.() ?? Promise.resolve(false),
-		])
+		// Refresh stale catalog state without delaying the first paint.
+		Promise.all([this.#scopedModels.length === 0 ? this.#registry.refreshIfStale() : Promise.resolve(false)])
 			.then(changes => {
 				if (changes.some(Boolean)) this.#syncFromRegistryState();
 			})
@@ -260,11 +244,7 @@ export class ModelPickerComponent implements Component {
 		);
 		this.#configError = scope.error;
 		this.#modelItems = scope.items;
-		this.#quickRoleItems = this.#quickRoleSourceItems.flatMap(item => {
-			if (item.model.provider !== "jchtools") return [item];
-			const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
-			return model ? [{ ...item, model }] : [];
-		});
+		this.#quickRoleItems = [...this.#quickRoleSourceItems];
 		this.#browser.setRoles(scope.roles);
 		this.#browser.setMruOrder(scope.mruOrder);
 		this.#browser.setPerfStats(this.#settings.modelPerf);

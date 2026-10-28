@@ -12,7 +12,6 @@ import { withTimeoutSignal } from "../utils/fetch-timeout";
 const DISCOVERY_FETCH_TIMEOUT_MS = 10_000;
 
 export interface OAuthEndpoints {
-	/** Empty only for token-only client_credentials discovery when the issuer exposes no authorization endpoint. */
 	authorizationUrl: string;
 	tokenUrl: string;
 	/** Authorization-server issuer URL used for metadata discovery. */
@@ -473,7 +472,7 @@ export async function discoverOAuthEndpoints(
 	serverUrl: string,
 	authServerUrl?: string,
 	resourceMetadataUrl?: string,
-	opts?: { fetch?: FetchImpl; protectedScopes?: string; signal?: AbortSignal; tokenOnly?: boolean },
+	opts?: { fetch?: FetchImpl; protectedScopes?: string; signal?: AbortSignal },
 ): Promise<OAuthEndpoints | null> {
 	const fetchImpl: FetchImpl = opts?.fetch ?? fetch;
 	// Authorization servers are not protected resources: probing
@@ -563,12 +562,11 @@ export async function discoverOAuthEndpoints(
 		scopeOptions: { includeSupportedScopes: boolean },
 	): OAuthEndpoints | null => {
 		const metadataScopes = readMetadataScopes(metadata, scopeOptions);
-		if ((metadata.authorization_endpoint || opts?.tokenOnly) && typeof metadata.token_endpoint === "string") {
+		if (metadata.authorization_endpoint && typeof metadata.token_endpoint === "string") {
 			const resource = typeof metadata.resource === "string" ? metadata.resource : protectedResource;
 
 			return {
-				authorizationUrl:
-					typeof metadata.authorization_endpoint === "string" ? metadata.authorization_endpoint : "",
+				authorizationUrl: String(metadata.authorization_endpoint),
 				tokenUrl: String(metadata.token_endpoint),
 				issuerUrl: readIssuerUrl(metadata),
 				registrationUrl: readRegistrationUrl(metadata),
@@ -590,14 +588,11 @@ export async function discoverOAuthEndpoints(
 
 		if (metadata.oauth || metadata.authorization || metadata.auth) {
 			const oauthData = (metadata.oauth || metadata.authorization || metadata.auth) as Record<string, unknown>;
-			if (
-				(typeof oauthData.authorization_url === "string" || opts?.tokenOnly) &&
-				typeof oauthData.token_url === "string"
-			) {
+			if (typeof oauthData.authorization_url === "string" && typeof oauthData.token_url === "string") {
 				const resource = typeof oauthData.resource === "string" ? oauthData.resource : protectedResource;
 
 				return {
-					authorizationUrl: typeof oauthData.authorization_url === "string" ? oauthData.authorization_url : "",
+					authorizationUrl: oauthData.authorization_url,
 					tokenUrl: oauthData.token_url,
 					issuerUrl: readIssuerUrl(oauthData) ?? readIssuerUrl(metadata),
 					registrationUrl: readRegistrationUrl(oauthData),

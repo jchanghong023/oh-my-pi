@@ -27,8 +27,7 @@ import {
 import { BlobStore } from "../../session/blob-store";
 import type { SessionEntry } from "../../session/session-entries";
 import { SessionManager } from "../../session/session-manager";
-import { assertOfflineSessionPath, FileSessionStorage } from "../../session/session-storage";
-import { resolveSessionDirectory } from "../../session/session-paths";
+import { FileSessionStorage } from "../../session/session-storage";
 import { normalizeSessionWorkspace } from "../../session/session-workspace";
 import { collectSubSessions } from "../../session/sub-sessions";
 import type { AsyncJob } from "../../async/job-manager";
@@ -42,6 +41,7 @@ import { createAuthStorageSettingsSync } from "../../session/auth-broker-config"
 import type { MCPManager } from "../../mcp";
 import { cfgMcpEnableProjectConfig, cfgMcpStartupTimeoutMs } from "../../mcp/settings";
 import {
+	normalizeZCodeMcpServers,
 	prepareZCodeMcpManager,
 	persistZCodeMcpConfiguration,
 	restoreZCodeMcpConfiguration,
@@ -146,27 +146,6 @@ export interface ZCodeSessionManagerOptions {
 	onSessionClosing?: (sessionId: string) => Promise<void>;
 	runtimeTools?: (sessionId: string, cwd: string) => NonNullable<CreateAgentSessionOptions["customTools"]>;
 	getAgentDefinitions?: (sessionId: string) => readonly AgentDefinition[];
-	resolveRequestAuth?: (
-		sessionId: string,
-		cwd: string,
-		model: Model,
-		signal?: AbortSignal,
-		context?: Parameters<NonNullable<CreateAgentSessionOptions["resolveRequestAuth"]>>[2],
-	) => Promise<
-		| {
-				apiKey?: string;
-				headers?: Record<string, string>;
-		  }
-		| undefined
-	>;
-	transformRequestPayload?: (
-		sessionId: string,
-		cwd: string,
-		payload: unknown,
-		model?: Model,
-		signal?: AbortSignal,
-		context?: Parameters<NonNullable<CreateAgentSessionOptions["transformRequestPayload"]>>[3],
-	) => unknown | Promise<unknown>;
 	onOffPeakEvent?: (notification: OffPeakLifecycleNotification) => void;
 	onSelectionFallback?: (
 		sessionId: string,
@@ -658,12 +637,7 @@ export class ZCodeSessionManager {
 				model,
 				signal,
 				context,
-			) =>
-				supplied.interactionParentSessionId && supplied.resolveRequestAuth
-					? supplied.resolveRequestAuth(model, signal, context)
-					: this.#options.resolveRequestAuth
-						? this.#options.resolveRequestAuth(manager.getSessionId(), manager.getCwd(), model, signal, context)
-						: (supplied.resolveRequestAuth?.(model, signal, context) ?? Promise.resolve(undefined));
+			) => supplied.resolveRequestAuth?.(model, signal, context) ?? Promise.resolve(undefined);
 			const authStorage =
 				supplied.authStorage ??
 				supplied.modelRegistry?.authStorage ??
@@ -702,7 +676,10 @@ export class ZCodeSessionManager {
 						},
 					}),
 				);
-			} else if (mcpServers?.length) throw new Error("MCP servers cannot be enabled in a restricted session");
+			} else if (mcpServers?.length) {
+				normalizeZCodeMcpServers(cwd, mcpServers);
+				throw new Error("MCP servers cannot be enabled in a restricted session");
+			}
 			// The Host creates a durable session, unlike the TUI's lazy draft. SDK startup
 			// may read its journal, so materialize it under the existing writer lease first.
 			await manager.ensureOnDisk();
@@ -750,21 +727,6 @@ export class ZCodeSessionManager {
 						captureForSession.onModelResponse(message, model, signal);
 					},
 					resolveRequestAuth,
-					transformRequestPayload: async (payload, model, signal, context) => {
-						const mapped = supplied.transformRequestPayload
-							? await supplied.transformRequestPayload(payload, model, signal, context)
-							: payload;
-						return this.#options.transformRequestPayload
-							? this.#options.transformRequestPayload(
-									manager.getSessionId(),
-									manager.getCwd(),
-									mapped,
-									model,
-									signal,
-									context,
-								)
-							: mapped;
-					},
 				}),
 			);
 			this.#assertOpen();
@@ -875,9 +837,8 @@ export class ZCodeSessionManager {
 		// Existing discovery may recover a committed orphan backup; inventory must follow recovery.
 		const listed = await this.list();
 		for (const info of listed) this.#commandJournalOwners.set(path.resolve(info.path), info.id);
-		const directories = new Set([resolveSessionDirectory(this.#sessionDir, this.#storage)]);
+		const directories = new Set([this.#sessionDir]);
 		const readDirectory = async (directory: string) => {
-			assertOfflineSessionPath(directory, this.#storage);
 			try {
 				return await fs.readdir(directory, { withFileTypes: true });
 			} catch (error) {
@@ -893,7 +854,7 @@ export class ZCodeSessionManager {
 			}
 		};
 		if (path.resolve(this.#agentDir) === path.resolve(getAgentDir())) {
-			const root = resolveSessionDirectory(getSessionsDir(), this.#storage);
+			const root = getSessionsDir();
 			for (const entry of await readDirectory(root)) {
 				if (entry.isDirectory() && !entry.isSymbolicLink()) directories.add(path.join(root, entry.name));
 			}
@@ -903,10 +864,8 @@ export class ZCodeSessionManager {
 			for (const entry of await readDirectory(directory)) {
 				if (!entry.name.endsWith(".jsonl")) continue;
 				const file = path.join(directory, entry.name);
-				assertOfflineSessionPath(file, this.#storage);
 				const real = await this.withCommandJournalRead(file, () => fs.realpath(file));
 				if (real !== undefined) {
-					assertOfflineSessionPath(real, this.#storage);
 					files.set(real, file);
 				}
 			}

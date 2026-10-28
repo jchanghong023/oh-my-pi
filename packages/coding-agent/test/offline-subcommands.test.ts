@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { stripClaudeToolPrefix } from "../../ai/src/providers/anthropic-identity";
 
 const CLI = path.join(import.meta.dir, "../src/cli.ts");
@@ -38,9 +37,7 @@ async function fixture(
 		NO_COLOR: "1",
 	};
 	if (options.offline !== false) env.OMP_OFFLINE = "1";
-	const shm = getOfflineShmState(env);
-	if (shm) tempDirs.push(path.dirname(shm.runtimeRoot));
-	const agentDir = shm ? path.join(shm.runtimeRoot, "agent") : env.PI_CODING_AGENT_DIR!;
+	const agentDir = env.PI_CODING_AGENT_DIR!;
 	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	const companyPath = path.join(claudeDir, "settings.json");
 	const companyText = JSON.stringify({

@@ -2,8 +2,6 @@ import { Database } from "bun:sqlite";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MnemopiOptions } from "@oh-my-pi/pi-mnemopi";
-import { resolveMemoryDbPath } from "@oh-my-pi/pi-mnemopi/config";
-import { assertOfflineShmPath } from "@oh-my-pi/pi-natives/offline-root";
 import { getMemoriesDir, logger, withLoopPhase } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { getCompanyEmbeddingDefaults } from "./company-embeddings";
@@ -73,9 +71,9 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const configuredDbPath = cfgMnemopiDbPath.get(settings);
 	const cwd = settings.getCwd();
 	const scoping = cfgMnemopiScoping.get(settings);
-	const dbPath = resolveMemoryDbPath(
-		configuredDbPath?.trim() ? configuredDbPath : path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db"),
-	);
+	const dbPath = configuredDbPath?.trim()
+		? configuredDbPath
+		: path.join(getMemoriesDir(agentDir), "mnemopi", "mnemopi.db");
 	const scope = computeMnemopiBankScope(cfgMnemopiBank.get(settings), cwd, scoping);
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
@@ -234,7 +232,6 @@ export function projectBankSegment(projectRoot: string): string {
  * Robust by design: a missing banks directory, unreadable bank dir, or
  * corrupt SQLite file is silently skipped. Scanning is capped at
  * {@link LEGACY_BANK_SCAN_LIMIT} to bound startup cost.
- * Unsafe offline paths are rejected before directory or database access.
  */
 export function extendRecallWithLegacyBanks(
 	resolved: readonly string[],
@@ -245,7 +242,6 @@ export function extendRecallWithLegacyBanks(
 		// SQLite's in-memory marker has no disk siblings, even when cwd contains banks/.
 		if (dbPath === ":memory:") return resolved;
 		const banksDir = path.join(path.dirname(dbPath), "banks");
-		assertOfflineShmPath(banksDir);
 		const cwdAbs = path.resolve(cwd || ".");
 		let entries: fs.Dirent[];
 		try {
@@ -268,14 +264,6 @@ export function extendRecallWithLegacyBanks(
 }
 
 function bankOnlyHasCwd(dbPath: string, cwd: string): boolean {
-	try {
-		assertOfflineShmPath(dbPath);
-	} catch (error) {
-		const code = (error as NodeJS.ErrnoException).code;
-		if (code !== "EACCES" && code !== "EPERM") throw error;
-		logger.debug("Mnemopi: legacy bank path is inaccessible", { dbPath, error: String(error) });
-		return false;
-	}
 	let db: Database | undefined;
 	try {
 		db = new Database(dbPath, { readonly: true });

@@ -1856,41 +1856,13 @@ describe("Responses Lite remote compaction", () => {
 	);
 
 	test.each([false, true])(
-		"luna V2 compaction sends low even when the live session is Off (Lite: %s)",
-		async responsesLite => {
-			const model = makeCodexLiteModel({ id: "gpt-6-luna", useResponsesLite: responsesLite });
-			const preparation: CompactionPreparation = {
-				firstKeptEntryId: "kept-1",
-				messagesToSummarize: [{ role: "user", content: "Summarize this request", timestamp: 1 }],
-				turnPrefixMessages: [],
-				recentMessages: [],
-				isSplitTurn: false,
-				tokensBefore: 100_000,
-				fileOps: createFileOps(),
-				settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteStreamingV2Enabled: true },
-			};
-			let captured: CapturedLiteExchange | undefined;
-			await compact(preparation, model, CODEX_RESIDENCY_TOKEN, undefined, undefined, {
-				thinkingLevel: ThinkingLevel.Off,
-				fetch: async (_input, init) => {
-					captured = captureStreamLite(init);
-					return sseResponse(compactionV2Events("enc-luna-low"));
-				},
-			});
-			expect(captured?.body.reasoning?.effort).toBe("low");
-		},
-	);
-
-	test.each([false, true])(
-		"luna prefix compaction keeps low effort and excludes the replayed user tail (Lite: %s)",
+		"Codex prefix compaction honors Off and excludes the replayed user tail (Lite: %s)",
 		async responsesLite => {
 			const model = makeCodexLiteModel({
 				id: "gpt-6-luna",
 				useResponsesLite: responsesLite,
 			});
-			// The catalog pins openai-codex/gpt-6-luna to its 500K default with a
-			// limits-patch, so a spec-level window loses. Explicit overrides land
-			// after building; shrink the window here so the kept tail cannot fit.
+			// Shrink the window so the kept tail cannot fit.
 			model.contextWindow = 20_000;
 			const preparation: CompactionPreparation = {
 				firstKeptEntryId: "kept-1",
@@ -1912,7 +1884,7 @@ describe("Responses Lite remote compaction", () => {
 				},
 			});
 			expect(requests).toHaveLength(1);
-			expect(requests[0].body.reasoning?.effort).toBe("low");
+			expect(requests[0].body.reasoning?.effort).toBe("none");
 			expect(JSON.stringify(requests[0].body.input)).toContain("prefix user request");
 			expect(JSON.stringify(requests[0].body.input)).not.toContain("kept user request");
 			expect(JSON.stringify(result.preserveData)).not.toContain("kept user request");
@@ -2845,7 +2817,7 @@ describe("compact() remote compaction failure handling", () => {
 		};
 	}
 
-	test.each(["codeagent", "jchtools"])(
+	test.each(["codeagent"])(
 		"%s summary context rejection never replays through the window-reduction fallback",
 		async provider => {
 			const model = buildModel({

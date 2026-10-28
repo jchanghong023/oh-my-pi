@@ -251,8 +251,6 @@ describe("central logger file level and batching", () => {
 			} finally {
 				dispose();
 				logger.setTransports({ console: false, file: false });
-				const state = getOfflineShmState();
-				if (state) fs.rmSync(path.dirname(state.runtimeRoot), { recursive: true, force: true });
 			}
 		`,
 			{ offline: " YeS " },
@@ -474,7 +472,7 @@ async function runDiagnosticConsumer(
 			"--eval",
 			`
 		import * as logger from ${JSON.stringify(moduleUrl)};
-		import { getLogPath, getOfflineShmState } from ${JSON.stringify(new URL("./dirs.ts", moduleUrl).href)};
+		import { getLogPath } from ${JSON.stringify(new URL("./dirs.ts", moduleUrl).href)};
 		import * as fs from "node:fs";
 		import * as path from "node:path";
 		const root = ${JSON.stringify(root)};

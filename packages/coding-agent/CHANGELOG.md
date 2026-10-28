@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
+- Removed ZCode Host account and provider configuration compatibility; app-server uses native OMP providers and credentials.
+- Removed MCP OAuth `client_credentials` support. To recover a closed ZCode session using this grant, resume it with an explicit replacement `mcpServers` array; `[]` explicitly removes all MCP servers. The replacement is saved for subsequent cold resumes.
+- Removed JchTools remote Agent discovery and execution.
+- Removed Linux offline `/dev/shm` runtime storage and its automatic backups; existing data is not migrated.
+- Removed the `fullsend` keyword, `/fullsend` command, and associated setting.
+- Removed JCH review, repair, CI, catchup, Git and DFT explanation commands; `/jchime` and `/jch-workflowzbatch` remain available.
+
+### Removed
+
+- Removed the built-in `/code-review-export` command.
+
 ### Added
 
 - Added workspace-owned `/dev` orchestration with one unfinished flow and one controller per existing workspace, four persistent native stage sessions and minimal recoverable business state. Git worktree subdirectories, aliases and branches share ownership; Dev neither creates nor requires worktrees.
@@ -19,7 +33,10 @@
 
 ### Changed
 
+- Restore the upstream `classic` shimmer default; explicit display settings remain unchanged.
+
 - Clarify how to retrieve device documentation after invalid `xd://` JSON.
+- Restore upstream smooth-streaming defaults and help text; explicit `display.smoothStreaming` settings remain effective.
 
 - Guide `/dev` requirements exploration from project evidence using Grill-me's interview process instead of Brainstorming; users can stop the interview in natural language.
 
@@ -46,7 +63,6 @@
 - Explain unavailable tool calls, list the request's tools and guide models toward available alternatives without changing tool permissions.
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
 - Compact working status now distinguishes the viewed agent's model waiting, thinking, replies, tool-call generation, tool execution and user/background waits without aggregating other agents or changing execution.
-- Prefer Handoff before Snapcompact in the default compaction fallback order; remote compaction remains first and explicit preferences are unchanged.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
 - Automatically inject the original stage skills in `/dev`: Brainstorming then Grill-me at the end of the requirements system prompt, writing-plans for planning and subagent-driven-development for execution. Solutions receive no interview skill; solution, planning and execution proceed from approved inputs without mandatory interviews or extra skill confirmation rounds. Fixed stage boundaries follow non-requirements skill text. No manual skill invocation is required; Dev authorization boundaries remain unchanged.
 - Limit Dev to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.
@@ -63,7 +79,7 @@
 - Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
-- Automatic titles now prefer the same `@smol` model role as the built-in scout, then fall back to the current session model unless model fallback is disabled, without inserting unrelated retry chains, forking the main conversation, or prewarming an unrelated tiny-title worker; explicit fork and tiny modes remain available.
+- Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Simplified Bazel gate source graphs by reusing the complete native-build file union with excluded products restored, and by linking consumers directly to deduplicated cycle domains without dropping transitive inputs.
 - Existing supported developer check, type-check, lint, build and test commands now route through Bazel by default; explicit `bun run bazel -- <existing-task>` remains available. Original selection and reporting are preserved without expanding fork-affected fulltest. Declared workspace products are restored from real cached artifacts; native installation and version stamping still run, with writable generated bindings. Untracked external environments and side effects rerun rather than claiming cached success. The gate contract requires local-filesystem `--watchfs` (plus `--experimental_windows_watchfs` on Windows hosts), the native 500000-entry computed-digest cache, scoped `.bazelignore` exclusions, actual dependency/glob/macro simplification, and Server preservation on every outcome while cancelling only owned invocations/actions. Full scope, 90/900/1500-second limits and same-source two-run fulltest acceptance with a second external wall clock strictly below 30 seconds remain unchanged; this change does not establish that acceptance.
@@ -758,11 +774,11 @@
 - Ignore non-repository `.git` cache sentinel files during WSL repository discovery without pruning real repositories inside cache directories.
 - Verify the documentation worker smoke against an imported isolated corpus instead of treating a missing index as a successful empty search.
 
-- `/clear` now clears fully completed or abandoned todo plans immediately and keeps them cleared on resume, while preserving unfinished plans and task history.
-
 ### Removed
 
 - Removed the fork's built-in `zcode-api` local proxy provider and its reserved configuration handling.
+- Removed the fork-specific `/clear` behavior that deleted fully closed todo plans; context reset preserves the current plan.
+- Removed the fork-specific build timestamp from version output, restoring plain version display.
 
 ### Added
 
@@ -875,8 +891,7 @@
 - Renamed the unattended Goal command to `/goal-autopilot` without changing its execution, permissions, continuation settings or saved-session format.
 - Updated the empty composer help to show `/goal-autopilot` instead of `/goal`.
 - Ask dialogs now default to 60 seconds; only active `/goal-autopilot` uses the automatic continuation reply, while other modes retain upstream timeout answers and plan mode keeps waiting.
-- Enable LSP access for subagents and terminal error notifications by default, while preserving explicit settings.
-- Allow sessions in the home directory by default and disable OTLP telemetry export by default, while preserving explicit telemetry settings.
+- Enable LSP access for subagents by default, while preserving explicit settings.
 - `/team` now preserves ordered model rosters and duplicates, cycles them across at least three independent agents, and defaults to the session model in both offline and normal modes without adding it to explicit rosters.
 
 ### Fixed
@@ -1630,7 +1645,6 @@
 - Made RPC command completion and saved-session listing, renaming, and deletion follow the session's current directory after `/move`.
 - Fixed structured-output schemas whose root references a shared primitive, enum, or empty definition.
 - Preserved explicitly cleared model roles against process defaults and retained valid user settings when saving a role after malformed YAML.
-- Kept distinct compaction fallback models available after Codex-to-Luna substitution.
 - Prevented concurrent saved-session rewrites from overwriting newer changes on Windows and allowed publication when the target does not yet exist.
 - Stopped in-flight browser supervisor tool calls before recovering a failed supervisor run.
 - Kept automatic offline model discovery cache-only and restored retry-fallback validation after the first interactive paint.

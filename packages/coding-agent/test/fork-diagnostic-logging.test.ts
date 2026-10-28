@@ -2,7 +2,6 @@ import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 type RecordLine = {
 	timestamp: string;
@@ -28,8 +27,7 @@ async function sandbox(level = "debug", offline = false) {
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
 	const configRoot = path.join(directory, "config");
-	const offlineState = offline ? getOfflineShmState({ OMP_CONFIG_ROOT: configRoot, OMP_OFFLINE: "1" }) : null;
-	const profileRoot = path.join(offlineState?.runtimeRoot ?? configRoot, "profiles", profile);
+	const profileRoot = path.join(configRoot, "profiles", profile);
 	const agent = path.join(profileRoot, "agent");
 	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
 	await fs.writeFile(
@@ -59,7 +57,6 @@ async function sandbox(level = "debug", offline = false) {
 		OMP_PROFILE: profile,
 		PI_PROFILE: profile,
 		PI_CODING_AGENT_DIR: "",
-		OMP_JCHTOOLS_DISCOVERY: "0",
 		OMP_OFFLINE: offline ? "1" : "0",
 		OMP_LOG_LEVEL: level,
 	});
@@ -129,33 +126,27 @@ async function sandbox(level = "debug", offline = false) {
 			return value;
 		},
 		async cleanup() {
-			if (offlineState) await fs.rm(path.dirname(offlineState.runtimeRoot), { recursive: true, force: true });
 			await fs.rm(directory, { recursive: true, force: true });
 		},
 	};
 }
 
 function terminal(record: RecordLine) {
-	if (/^jchtools_(?:discovery|models|request)_finished$/.test(record.event ?? "")) return true;
 	return /^(?:docs\.init\.(?:completed|finished)|docs\.database\.(?:completed|failed)|docs\.cli\.command\.(?:completed|failed|cancelled|rejected)|wiki\.query\.(?:completed|finished)|docs\.storage\.migration\.(?:completed|failed))$/.test(
 		record.message,
 	);
 }
 
 function expectClosedOperations(records: RecordLine[]) {
-	const business = records.filter(record =>
-		/^(?:docs(?:\.cli|\.storage)?|wiki|jchtools)$/.test(record.component ?? ""),
-	);
+	const business = records.filter(record => /^(?:docs(?:\.cli|\.storage)?|wiki)$/.test(record.component ?? ""));
 	for (const record of business.filter(record => record.event && record.stage)) {
 		expect(typeof record.operation_id).toBe("string");
 		expect(record.operation_id?.length).toBeGreaterThan(0);
 	}
-	const starts = business.filter(
-		record =>
-			/^jchtools_(?:discovery|models|request)_started$/.test(record.event ?? "") ||
-			/^(?:docs\.init|docs\.database|docs\.cli\.command|wiki\.query|docs\.storage\.migration)\.started$/.test(
-				record.message,
-			),
+	const starts = business.filter(record =>
+		/^(?:docs\.init|docs\.database|docs\.cli\.command|wiki\.query|docs\.storage\.migration)\.started$/.test(
+			record.message,
+		),
 	);
 	expect(starts.length).toBeGreaterThan(0);
 	for (const start of starts) {
@@ -329,133 +320,6 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			await box.cleanup();
 		}
 	}, 120_000);
-
-	it("diagnoses isolated same-OS IPC and concurrent localhost model/Agent failures without leaking wire data or changing partial-message semantics", async () => {
-		const box = await sandbox("info");
-		const canary = "FORKDIAGNOSTICTRANSPORTPRIVATE";
-		try {
-			const value = await box.probe("transport", canary);
-			expect(value.discovery.slice(0, 4)).toEqual([null, null, null, null]);
-			expect(value.discovery[4]).toEqual([]);
-			expect(value.ipcRequests).toEqual(["Discover", "Discover", "Discover"]);
-			const http = value.remote.find((item: { kind: string }) => item.kind === "http503");
-			expect(http).toMatchObject({ stopReason: "error", errorStatus: 503, content: [] });
-			expect(http.errorMessage).toContain(`${canary}ERRORBODY`);
-			for (const kind of ["truncated", "cancel"]) {
-				const result = value.remote.find((item: { kind: string }) => item.kind === kind);
-				expect(result.stopReason).toBe(kind === "cancel" ? "aborted" : "error");
-				expect(result.content).toEqual([{ type: "text", text: `${canary}PARTIAL` }]);
-				expect(result.events).toContain("text_delta");
-				expect(result.events.at(-1)).toBe("error");
-				expect(result.events).not.toContain("done");
-			}
-			expect(value.remote.find((item: { kind: string }) => item.kind === "url-query")).toMatchObject({
-				stopReason: "error",
-				content: [],
-			});
-			expect(value.requests.filter((request: { method: string }) => request.method === "GET")).toHaveLength(1);
-			expect(value.requests.filter((request: { method: string }) => request.method === "POST")).toHaveLength(3);
-			for (const request of value.requests) {
-				expect(request.authorization).toBeNull();
-				expect(request.credential).toBeNull();
-				expect(request.path).toBe(request.method === "GET" ? "/v1/models" : "/v1/chat/completions");
-			}
-			const { raw, records } = await box.logs();
-			expect(raw).not.toContain(canary);
-			expectClosedOperations(records);
-			const diagnostics = records.filter(record => record.component === "jchtools");
-			const absent = diagnostics.find(
-				record => record.event === "jchtools_discovery_finished" && record.result === "pipe-absent",
-			);
-			expect(absent).toMatchObject({ stage: "ipc_connect" });
-			expect(sameOperation(diagnostics, absent as RecordLine).some(record => record.level === "error")).toBe(false);
-			expect(
-				diagnostics.some(
-					record =>
-						record.event === "jchtools_discovery_finished" &&
-						record.result === "JSON" &&
-						record.stage === "decode_json",
-				),
-			).toBe(true);
-			expect(
-				diagnostics.some(
-					record =>
-						record.event === "jchtools_discovery_finished" &&
-						record.result === "oversize" &&
-						record.stage === "read_header",
-				),
-			).toBe(true);
-			const discoveries = diagnostics.filter(record => record.event === "jchtools_discovery_started");
-			expect(new Set(discoveries.map(record => record.operation_id)).size).toBe(value.discovery.length);
-			expect(new Set(discoveries.map(record => record.call_id)).size).toBe(value.discovery.length);
-			const cancelledDiscovery = diagnostics.find(
-				record => record.event === "jchtools_discovery_finished" && record.result === "aborted",
-			);
-			expect(cancelledDiscovery).toMatchObject({ stage: "resolve_pipe" });
-			expect(
-				sameOperation(diagnostics, cancelledDiscovery as RecordLine).some(record => record.level === "error"),
-			).toBe(false);
-			const models = diagnostics.find(record => record.event === "jchtools_models_finished");
-			expect(models).toMatchObject({ result: "http-non2xx", status: 503, stage: "http_request" });
-			expect(
-				sameOperation(diagnostics, models as RecordLine).some(
-					record => record.event === "jchtools_discovery_finished" && record.result === "success",
-				),
-			).toBe(true);
-			const remote = diagnostics.filter(record => record.event === "jchtools_request_finished");
-			expect(
-				remote.some(
-					record => record.result === "failed" && record.status === 503 && record.stage === "http_error_body",
-				),
-			).toBe(true);
-			const truncated = remote.find(record => record.result === "failed" && record.status === 200);
-			expect(truncated).toMatchObject({
-				stage: "decode_sse_json",
-				first_event_received: true,
-				text_received: true,
-				finish_marker_received: false,
-				done_marker_received: false,
-			});
-			expect(
-				sameOperation(diagnostics, truncated as RecordLine).some(
-					record => record.event === "jchtools_request_first_text",
-				),
-			).toBe(true);
-			const invalidUrl = remote.find(record => record.stage === "construct_request");
-			expect(invalidUrl).toMatchObject({ result: "failed" });
-			expect(
-				sameOperation(diagnostics, invalidUrl as RecordLine).some(
-					record => record.event === "jchtools_request_http_started",
-				),
-			).toBe(false);
-			for (const end of remote.filter(record => record.result === "aborted")) {
-				expect(sameOperation(diagnostics, end).some(record => record.level === "error")).toBe(false);
-			}
-			expect(remote.some(record => record.result === "aborted")).toBe(true);
-			const requests = diagnostics.filter(record => record.event === "jchtools_request_started");
-			expect(new Set(requests.map(record => record.operation_id)).size).toBe(value.remote.length);
-			expect(new Set(requests.map(record => record.call_id)).size).toBe(value.remote.length);
-			for (const start of requests) {
-				const own = diagnostics.filter(record => record.call_id === start.call_id);
-				expect(own.every(record => record.operation_id === start.operation_id)).toBe(true);
-				expect(own.filter(record => record.event === "jchtools_request_finished")).toHaveLength(1);
-			}
-			const httpFailure = remote.find(record => record.status === 503);
-			const httpStart = requests.find(record => record.operation_id === httpFailure?.operation_id);
-			const otherStart = requests.find(record => record.operation_id === truncated?.operation_id);
-			expect(httpStart).toBeDefined();
-			expect(otherStart).toBeDefined();
-			// Both scripted requests must start before the barrier releases either response.
-			expect(diagnostics.indexOf(httpStart as RecordLine)).toBeLessThan(
-				diagnostics.indexOf(truncated as RecordLine),
-			);
-			expect(diagnostics.indexOf(otherStart as RecordLine)).toBeLessThan(
-				diagnostics.indexOf(httpFailure as RecordLine),
-			);
-		} finally {
-			await box.cleanup();
-		}
-	}, 35_000);
 
 	it("closes SQLite list failures without leaking host content", async () => {
 		const box = await sandbox("info");

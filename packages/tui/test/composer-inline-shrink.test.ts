@@ -297,17 +297,7 @@ describe("composer inline shrink (#11007)", () => {
 		const activity = new InlineWidget();
 		activity.rows = 3;
 		const transcript = new TranscriptContainer();
-		const message = new AssistantMessageComponent(
-			undefined,
-			false,
-			undefined,
-			[],
-			undefined,
-			true,
-			undefined,
-			false,
-			true,
-		);
+		const message = new AssistantMessageComponent(undefined, false, undefined, [], undefined, true, undefined, false);
 		transcript.addChild(message);
 		composer.setRuntimeChildren([transcript, activity, composer.editor], {
 			transientChrome: [composer.editor],

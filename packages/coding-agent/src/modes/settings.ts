@@ -599,7 +599,7 @@ export const cfgDisplayShimmer = register({
 	id: "display.shimmer",
 	type: "enum",
 	values: ["classic", "kitt", "disabled"] as const,
-	default: "disabled",
+	default: "classic",
 	ui: {
 		tab: "appearance",
 		group: "显示",
@@ -647,12 +647,12 @@ export const cfgDisplaySubagentLivePreview = register({
 export const cfgDisplaySmoothStreaming = register({
 	id: "display.smoothStreaming",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "显示",
-		label: "平滑流式显示",
-		description: "数据块到达时平滑显示助手文字和流式工具输入",
+		label: "Smooth Streaming",
+		description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
 	},
 });
 
@@ -1236,7 +1236,7 @@ export const cfgErrorNotify = register({
 	id: "error.notify",
 	type: "enum",
 	values: ["on", "off"] as const,
-	default: "on",
+	default: "off",
 	ui: {
 		tab: "interaction",
 		group: "通知",

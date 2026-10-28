@@ -376,6 +376,9 @@ export async function resolveMcpOAuthEndpointsFromServer(
 		cwd?: string;
 	},
 ): Promise<OAuthEndpoints> {
+	if (config.oauth?.type === "client_credentials") {
+		throw new McpReauthRefusalError("MCP OAuth client_credentials grant is not supported");
+	}
 	// Stdio servers manage credentials inside the child process; OMP's OAuth
 	// flow only applies to http/sse transports. Without this guard the
 	// unauthenticated preflight below spawns the child, which happily reuses

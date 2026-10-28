@@ -57,8 +57,6 @@ if (
 }
 const transformersVersion = transformersManifest.version;
 
-const buildTimestamp = new Date().toISOString().replace(/:\d{2}\.\d{3}Z$/u, "Z");
-
 // Self-update target baked into local binaries (same role as the CI
 // UPDATE_REPOSITORY env in ci-release-build-binaries.ts): without it the
 // compile-time PI_UPDATE_REPOSITORY stays undefined and `omp update` falls
@@ -113,7 +111,6 @@ async function main(): Promise<void> {
 			transformersVersion,
 			native: crossBuild ?? { platform: process.platform, arch: process.arch },
 			target: crossBuild?.target,
-			buildTimestamp,
 			updateRepository,
 			executablePath: Bun.env.BUN_COMPILE_EXECUTABLE_PATH || undefined,
 			skipBuiltinCodesign: shouldAdhocSign,

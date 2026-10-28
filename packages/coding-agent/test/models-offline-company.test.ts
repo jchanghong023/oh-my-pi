@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 
 /**
  * `OMP_OFFLINE=1 omp models` in the company environment must list the internal
@@ -62,10 +61,7 @@ async function runModels(
 		NO_COLOR: "1",
 	};
 	if (options.offline) env.OMP_OFFLINE = "1";
-	const shm = getOfflineShmState(env);
-	// A unique persistent fixture root owns exactly this mapped shm domain.
-	if (shm) tempDirs.push(path.dirname(shm.runtimeRoot));
-	const agentDir = shm ? path.join(shm.runtimeRoot, "agent") : env.PI_CODING_AGENT_DIR!;
+	const agentDir = env.PI_CODING_AGENT_DIR!;
 	await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
 	if (options.modelsConfig !== undefined) {
 		await fs.writeFile(path.join(agentDir, "models.yml"), JSON.stringify(options.modelsConfig));

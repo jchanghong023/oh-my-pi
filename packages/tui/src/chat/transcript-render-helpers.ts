@@ -28,18 +28,16 @@ type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 /** Tool completions stay out of compact history; independent diagnostics remain visible. */
 class AsyncResultBlock extends ToolActivityContainer {
-	readonly #compactOverride: boolean | undefined;
 	readonly #compactBlock: TranscriptStatusBlock;
 	#visible = true;
 
-	constructor(original: TranscriptStatusBlock, warnings: TranscriptStatusRow[], compactOverride?: boolean) {
+	constructor(original: TranscriptStatusBlock, warnings: TranscriptStatusRow[]) {
 		super(original);
-		this.#compactOverride = compactOverride;
 		this.#compactBlock = new TranscriptStatusBlock(warnings);
 	}
 
 	isCompactToolActivity(): boolean {
-		return this.#compactOverride ?? displayPreferences.compactToolActivity;
+		return displayPreferences.compactToolActivity;
 	}
 
 	override setToolActivityVisible(visible: boolean): void {
@@ -62,10 +60,7 @@ class AsyncResultBlock extends ToolActivityContainer {
 }
 
 /** Preserve detailed delivery receipts while compact history keeps only independent diagnostics. */
-export function buildAsyncResultBlock(
-	message: CustomOrHookMessage,
-	compactToolActivity?: boolean,
-): ToolActivityContainer {
+export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
 		type?: JobSnapshot["type"];
@@ -116,17 +111,14 @@ export function buildAsyncResultBlock(
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
 		addWarning({ parts: [{ text: formatArtifactErrorNotice(details.meta.artifactError), color: "warning" }] });
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows, compactToolActivity);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows);
 }
 
 /**
  * Render a `launch-completion` custom message (terminal supervised-process
  * exits from the launch broker). Receipt rows belong to detailed mode only.
  */
-export function buildLaunchCompletionBlock(
-	message: CustomOrHookMessage,
-	compactToolActivity?: boolean,
-): ToolActivityContainer {
+export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	const details = (message as CustomMessage<{ daemons?: DaemonSnapshot[] }>).details;
 	const rows: TranscriptStatusRow[] = [];
 	const daemons = details?.daemons ?? [];
@@ -150,7 +142,7 @@ export function buildLaunchCompletionBlock(
 			],
 		});
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), [], compactToolActivity);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), []);
 }
 
 /**

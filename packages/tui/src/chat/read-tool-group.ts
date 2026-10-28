@@ -105,7 +105,6 @@ type ReadToolSuffixResolution = {
 
 type ReadToolGroupOptions = {
 	showContentPreview?: boolean;
-	compactToolActivity?: boolean;
 };
 
 function getSuffixResolution(details: ReadToolDetails | undefined): ReadToolSuffixResolution | undefined {
@@ -374,7 +373,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#toolActivityVisible = true;
 	#compactToolResultListener: (() => void) | undefined;
 	#showContentPreview: boolean;
-	readonly #compactToolActivityOverride: boolean | undefined;
 	#compactSelection: ReadonlySet<string | object> | undefined;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
@@ -399,7 +397,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	constructor(options: ReadToolGroupOptions = {}) {
 		super();
 		this.#showContentPreview = options.showContentPreview ?? false;
-		this.#compactToolActivityOverride = options.compactToolActivity;
 		this.#text = new Text("", 0, 0);
 		this.addChild(this.#text);
 		this.#updateDisplay();
@@ -416,11 +413,11 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	isCompactToolActivity(): boolean {
-		return !this.#expanded && this.#compactToolActivityOverride !== false;
+		return !this.#expanded;
 	}
 
 	get #compactToolActivity(): boolean {
-		return !this.#expanded && (this.#compactToolActivityOverride ?? displayPreferences.compactToolActivity);
+		return !this.#expanded && displayPreferences.compactToolActivity;
 	}
 
 	getCompactToolCount(): number {

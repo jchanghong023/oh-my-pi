@@ -60,7 +60,6 @@ import {
 	thinkingDotToken,
 	type RoleAssignments,
 	resolveRoleAssignments,
-	resolveLiveScopedModels,
 	scopedRolePool,
 	sortModelItems,
 } from "./model-browser";
@@ -132,8 +131,6 @@ export interface ModelHubRegistry extends ModelBrowserRegistry {
 		| undefined;
 	find(provider: string, id: string): Model | undefined;
 	refresh(strategy: "online"): Promise<void>;
-	/** Bounded local service reconciliation, including scoped picker opens. */
-	refreshLocalProviders?(): Promise<boolean>;
 	refreshProvider(
 		provider: string,
 		strategy: "online",
@@ -544,13 +541,8 @@ export class ModelHubComponent implements Component {
 			this.#setActiveEntry("all");
 		}
 
-		// Scoped catalogs remain network-independent except for the ephemeral
-		// local service: stale JchTools endpoints must never remain selectable.
 		this.#catalogRefreshing = true;
-		Promise.all([
-			this.#scopedModels.length === 0 ? this.#registry.refresh("online") : Promise.resolve(),
-			this.#registry.refreshLocalProviders?.() ?? Promise.resolve(false),
-		])
+		Promise.all([this.#scopedModels.length === 0 ? this.#registry.refresh("online") : Promise.resolve()])
 			.then(() => this.#syncFromRegistryState())
 			.catch(error => {
 				this.#configError = error instanceof Error ? error.message : String(error);
@@ -610,10 +602,7 @@ export class ModelHubComponent implements Component {
 		let availableModels: ReadonlyArray<Model>;
 		if (this.#scopedModels.length > 0) {
 			this.#configError = undefined;
-			const scopedModels = resolveLiveScopedModels(
-				this.#registry,
-				this.#scopedModels.map(scoped => scoped.model),
-			);
+			const scopedModels = this.#scopedModels.map(scoped => scoped.model);
 			try {
 				allModels = scopedRolePool(scopedModels, this.#registry);
 			} catch (error) {
@@ -1106,7 +1095,7 @@ export class ModelHubComponent implements Component {
 	}
 
 	#scheduleProviderRefresh(providerId: string, options?: { force?: boolean }): void {
-		if ((this.#scopedModels.length > 0 && providerId !== "jchtools") || !providerId) return;
+		if (this.#scopedModels.length > 0 || !providerId) return;
 		const force = options?.force === true;
 		if (force) {
 			const pending = this.#scheduledProviderRefreshes.get(providerId);
@@ -1211,11 +1200,6 @@ export class ModelHubComponent implements Component {
 	// ═══════════════════════════════════════════════════════════════════════
 
 	#activateItem(item: ModelBrowserItem): void {
-		if (item.model.provider === "jchtools") {
-			const model = resolveLiveScopedModels(this.#registry, [item.model])[0];
-			if (!model) return;
-			item = { ...item, model };
-		}
 		// Also reached from the browser's own native list events, which bypass handleInput.
 		this.#nativeVersion++;
 		if (this.#assigning) {
@@ -1239,10 +1223,7 @@ export class ModelHubComponent implements Component {
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
-						resolveLiveScopedModels(
-							this.#registry,
-							this.#scopedModels.map(scoped => scoped.model),
-						),
+						this.#scopedModels.map(scoped => scoped.model),
 						this.#registry,
 					)
 				: this.#registry.getAll("all");

@@ -5,7 +5,7 @@ import type { ModelRegistry } from "../config/model-registry";
 import { filterAvailableModelsByEnabledPatterns, resolveProviderModelReference } from "../config/model-resolver";
 import { cfgEnabledModels } from "../config/model-settings";
 import type { Settings, SettingProvenance } from "../config/settings";
-import { UserSettingError, type UserSettingSaveResult, type UserSettingSide } from "../config/user-settings";
+import { UserSettingError, type UserSettingSaveResult } from "../config/user-settings";
 import { expandTeamRoster, teamModelCapabilityIssue } from "./members";
 import type {
 	TeamConfigErrorCode,
@@ -55,7 +55,7 @@ function strings(value: unknown): value is string[] {
 function noWrites(): UserSettingSaveResult {
 	return {
 		saveState: "failed",
-		writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+		write: { status: "not_attempted" },
 	};
 }
 function invalid(message: string): never {
@@ -233,11 +233,6 @@ export class TeamConfigService {
 					index,
 					selector: rawSelector,
 					...(provenance ? { source: provenance } : {}),
-					...(list === "userMembers"
-						? { side: "active" as const }
-						: list === "persistentMembers"
-							? { side: "persistent" as const }
-							: {}),
 				});
 			return {
 				index,
@@ -311,54 +306,42 @@ export class TeamConfigService {
 			code: issue.code,
 			message: issue.message,
 			target: "storage",
-			...(issue.side ? { side: issue.side } : {}),
 			...(issue.source ? { source: issue.source } : {}),
 		}));
-		const readSide = (
-			side: UserSettingSide,
-			list: "userMembers" | "persistentMembers",
-			sideName: "active" | "persistent",
-		): { readState: UserSettingSide["readState"]; members?: TeamMemberSlot[] | null } => {
-			if (side.readState === "missing") return { readState: "missing", members: null };
-			if (side.readState !== "present") return { readState: side.readState };
-			if (!strings(side.value)) {
+		let readState = stored.readState;
+		let userMembers: TeamMemberSlot[] | null | undefined;
+		if (readState === "missing") userMembers = null;
+		else if (readState === "present") {
+			if (!strings(stored.value)) {
 				issues.push({
 					code: "invalid_config",
 					message: "team.members must be an ordered string array",
 					target: "config",
-					side: sideName,
 				});
-				return { readState: "invalid" };
+				readState = "invalid";
+			} else {
+				userMembers = this.#slots(stored.value, "userMembers", issues, catalog);
 			}
-			return { readState: "present", members: this.#slots(side.value, list, issues, catalog) };
-		};
-		const active = readSide(stored.active, "userMembers", "active");
-		const persistent = readSide(stored.persistent, "persistentMembers", "persistent");
-		const projected = this.#settings.projectUserSetting("team.members", stored.active.value);
+		}
+		const projected = this.#settings.projectUserSetting("team.members", stored.value);
 		const effective = this.#projection(projected.value, projected.source, issues, catalog, false);
 		if (
-			(active.readState === "invalid" || active.readState === "unreadable") &&
+			(readState === "invalid" || readState === "unreadable") &&
 			(projected.source === "global" || projected.source === "default")
 		) {
 			effective.effectiveMembers = null;
 			effective.participants = [];
 		}
-		const revision = active.readState === "invalid" || persistent.readState === "invalid" ? null : stored.revision;
+		const revision = readState === "invalid" ? null : stored.revision;
 		const config: TeamConfigSnapshot = {
 			profile: this.#profile,
 			revision,
-			...(active.members !== undefined ? { userMembers: active.members } : {}),
-			...(persistent.members !== undefined ? { persistentMembers: persistent.members } : {}),
+			...(userMembers !== undefined ? { userMembers } : {}),
 			...effective,
 			sessionModel: null,
 			issues,
 			writableScopes: revision === null ? [] : ["user"],
-			storage: {
-				mode: stored.mode,
-				syncState: stored.syncState,
-				active: { readState: active.readState },
-				persistent: { readState: persistent.readState },
-			},
+			storage: { readState },
 		};
 		if (preview !== undefined) {
 			const previewIssues: TeamConfigIssue[] = [];
@@ -419,18 +402,17 @@ export class TeamConfigService {
 					code: issue.code,
 					message: issue.message,
 					target: "storage",
-					...(issue.side ? { side: issue.side } : {}),
 					...(issue.source ? { source: issue.source } : {}),
 				}));
 			} else {
 				receipt = {
 					saveState: "unknown",
-					writes: { active: { status: "unknown" }, persistent: { status: "unknown" } },
+					write: { status: "unknown" },
 				};
 				failure = { code: "execution_failed", message: error instanceof Error ? error.message : String(error) };
 			}
 		}
-		const committed = receipt.writes.active.status === "saved" || receipt.writes.persistent.status === "saved";
+		const committed = receipt.write.status === "saved";
 		if (
 			committed &&
 			this.deps.isCurrent?.() !== false &&

@@ -1,21 +1,10 @@
-/**
- * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
- * compaction candidates that would land on the `openai-codex` provider are
- * substituted with `openai-codex/gpt-6-luna` (cheap, fast, pinned `low`
- * effort); an explicitly configured `compactionModel` target is never
- * substituted, and non-codex chains pass through untouched.
- */
 import { afterAll, describe, expect, test } from "bun:test";
 import { DEFAULT_COMPACTION_SETTINGS, shouldUseProviderNativeCompaction } from "@oh-my-pi/pi-agent-core/compaction";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import {
-	SessionMaintenance,
-	substituteForkCodexCompactionModel,
-	type SessionMaintenanceHost,
-} from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
+import { SessionMaintenance, type SessionMaintenanceHost } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
 
 const authStorage = createInMemoryAuthStorage();
@@ -35,46 +24,14 @@ function makeMaintenance(model: Model | undefined, settings = Settings.isolated(
 	return new SessionMaintenance(host);
 }
 
-describe("substituteForkCodexCompactionModel (pure)", () => {
-	test("codex non-luna candidate → luna", () => {
-		const sol = requireModel("openai-codex", "gpt-6.1-sol");
-		const luna = requireModel("openai-codex", "gpt-6-luna");
-		expect(substituteForkCodexCompactionModel(sol, [sol, luna])).toBe(luna);
-	});
-
-	test("codex candidate without luna available → passthrough", () => {
-		const sol = requireModel("openai-codex", "gpt-6.1-sol");
-		expect(substituteForkCodexCompactionModel(sol, [sol])).toBe(sol);
-	});
-
-	test("non-codex candidate → passthrough", () => {
-		const sonnet = requireModel("anthropic", "claude-sonnet-4-5");
-		const luna = requireModel("openai-codex", "gpt-6-luna");
-		expect(substituteForkCodexCompactionModel(sonnet, [sonnet, luna])).toBe(sonnet);
-	});
-
-	test("luna itself → passthrough; undefined → undefined", () => {
-		const luna = requireModel("openai-codex", "gpt-6-luna");
-		expect(substituteForkCodexCompactionModel(luna, [luna])).toBe(luna);
-		expect(substituteForkCodexCompactionModel(undefined, [luna])).toBeUndefined();
-	});
-});
-
-describe("resolveCompactionModelCandidates (fork contract)", () => {
+describe("resolveCompactionModelCandidates", () => {
 	const sol = requireModel("openai-codex", "gpt-6.1-sol");
 	const luna = requireModel("openai-codex", "gpt-6-luna");
 	const sonnet = requireModel("anthropic", "claude-sonnet-4-5");
 
-	test("already-selected luna does not block the next distinct largest-context fallback", () => {
-		const largestSol: Model = { ...sol, contextWindow: 300_000 };
-		const fallbackSonnet: Model = { ...sonnet, contextWindow: 250_000 };
-		const smallerLuna: Model = { ...luna, contextWindow: 200_000 };
-		const candidates = makeMaintenance(largestSol).resolveCompactionModelCandidates(largestSol, [
-			largestSol,
-			smallerLuna,
-			fallbackSonnet,
-		]);
-		expect(candidates).toEqual([smallerLuna, fallbackSonnet]);
+	test("preferred Codex model remains selected when Luna is available", () => {
+		const candidates = makeMaintenance(sol).resolveCompactionModelCandidates(sol, [sol, luna]);
+		expect(candidates[0]).toBe(sol);
 	});
 
 	test("a filtered largest model does not hide a smaller provider-native fallback", () => {
@@ -99,14 +56,14 @@ describe("resolveCompactionModelCandidates (fork contract)", () => {
 		expect(candidates).toEqual([fallbackCodex]);
 	});
 
-	test("explicitly configured compactionModel target is never substituted", () => {
-		const configured: Model = { ...sol, compactionModel: "openai-codex/gpt-6.1-sol" };
+	test("explicitly configured compactionModel target takes precedence", () => {
+		const configured: Model = { ...sol, compactionModel: "openai-codex/gpt-6-luna" };
 		const candidates = makeMaintenance(configured).resolveCompactionModelCandidates(configured, [sol, luna]);
-		expect(candidates[0]).toBe(sol);
-		expect(candidates).toContain(luna);
+		expect(candidates[0]).toBe(luna);
+		expect(candidates).toContain(configured);
 	});
 
-	test("codex model reached via a model role is substituted too", () => {
+	test("Codex model reached via a model role is retained", () => {
 		const settings = Settings.isolated({ modelRoles: { smol: "openai-codex/gpt-6.1-sol" } });
 		const candidates = makeMaintenance(sonnet, settings).resolveCompactionModelCandidates(sonnet, [
 			sonnet,
@@ -114,8 +71,7 @@ describe("resolveCompactionModelCandidates (fork contract)", () => {
 			luna,
 		]);
 		expect(candidates[0]).toBe(sonnet);
-		expect(candidates).toContain(luna);
-		expect(candidates.some(c => c.provider === "openai-codex" && c.id !== "gpt-6-luna")).toBe(false);
+		expect(candidates).toContain(sol);
 	});
 
 	test("non-codex chain untouched", () => {

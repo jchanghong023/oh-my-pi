@@ -426,29 +426,12 @@ interface SessionModelScopeInputs {
 	error: string | undefined;
 }
 
-/** Preserve ordinary scoped rows, but never serve a stale local-service endpoint. */
-export function resolveLiveScopedModels(registry: ModelBrowserRegistry, scopedModels: ReadonlyArray<Model>): Model[] {
-	if (!scopedModels.some(model => model.provider === "jchtools")) return [...scopedModels];
-	let live: Model[];
-	try {
-		live = registry.getAvailable("all").filter(model => model.provider === "jchtools");
-	} catch {
-		live = [];
-	}
-	const byId = new Map(live.map(model => [model.id, model]));
-	return scopedModels.flatMap(model => {
-		if (model.provider !== "jchtools") return [model];
-		const current = byId.get(model.id);
-		return current ? [current] : [];
-	});
-}
-
 function readSessionModelScopeInputs(
 	registry: ModelBrowserRegistry,
 	scopedModels: ReadonlyArray<Model>,
 ): SessionModelScopeInputs {
 	if (scopedModels.length > 0) {
-		const models = resolveLiveScopedModels(registry, scopedModels);
+		const models = [...scopedModels];
 		let roleModels: ReadonlyArray<Model>;
 		let error: string | undefined;
 		try {

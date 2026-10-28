@@ -2,8 +2,6 @@ import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { copyFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
-import { resolveMemoryDbPath, resolveMemoryPath } from "../config";
 import { closeQuietly, type DatabasePath, openDatabase } from "../db";
 
 export interface TripleRow {
@@ -80,9 +78,7 @@ export function legacyDataDir(env: ProcessEnv = process.env): string {
 }
 
 export function defaultDataDir(env: ProcessEnv = process.env): string {
-	const configured =
-		env.MNEMOPI_DATA_DIR && env.MNEMOPI_DATA_DIR.length > 0 ? env.MNEMOPI_DATA_DIR : legacyDataDir(env);
-	return resolveMemoryPath(configured, "", env);
+	return env.MNEMOPI_DATA_DIR && env.MNEMOPI_DATA_DIR.length > 0 ? env.MNEMOPI_DATA_DIR : legacyDataDir(env);
 }
 
 export function defaultTripleDbPath(env: ProcessEnv = process.env): string {
@@ -116,7 +112,6 @@ function copyLegacyDb(source: string, destination: string): void {
 
 export function resolveDefaultTripleDb(env: ProcessEnv = process.env): string {
 	const destination = defaultTripleDbPath(env);
-	if (getOfflineShmState(env)) return destination;
 	const legacy = legacyTripleDbPath(env);
 	if (destination !== legacy && !existsSync(destination) && existsSync(legacy)) copyLegacyDb(legacy, destination);
 	return destination;
@@ -239,7 +234,7 @@ export class TripleStore {
 			initTriples(this.conn);
 			return;
 		}
-		this.dbPath = resolveMemoryDbPath(dbPath ?? resolveDefaultTripleDb());
+		this.dbPath = dbPath ?? resolveDefaultTripleDb();
 		this.conn = openDatabase(this.dbPath);
 		this.#ownsConnection = true;
 		initTriples(this.conn);

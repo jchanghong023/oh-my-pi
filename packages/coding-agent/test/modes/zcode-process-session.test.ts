@@ -11,6 +11,7 @@ import {
 	LegacyProtocol,
 	conversationTopicWireFrameSchema,
 	v4ConversationRowsRangeResultSchema,
+	ompTeamConfigureResultSchema,
 	zcodeSessionConfigureResultSchema,
 } from "../../src/modes/zcode/schema";
 import { SessionManager } from "../../src/session/session-manager";
@@ -370,12 +371,12 @@ describe("ZCode actual public app-server process", () => {
 		await peer.ready();
 		const target = { workspace: workspace(config.cwdA) };
 		const sessions = await peer.request("session/list", {});
-		const team = zcodeSessionConfigureResultSchema.parse(
+		const team = ompTeamConfigureResultSchema.parse(
 			await peer.request("omp/team/configure", { ...target, request: { operation: "get_team_config" } }),
 		);
 		if (team.operation !== "get_team_config") throw new Error("Expected Team configuration");
 		expect(team.data.sessionModel).toBeNull();
-		const models = zcodeSessionConfigureResultSchema.parse(
+		const models = ompTeamConfigureResultSchema.parse(
 			await peer.request("omp/team/configure", { ...target, request: { operation: "get_team_models" } }),
 		);
 		if (models.operation !== "get_team_models") throw new Error("Expected Team models");
@@ -421,10 +422,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(stale.error).toMatchObject({
 			data: {
 				code: "revision_conflict",
-				writes: {
-					active: { status: "not_attempted" },
-					persistent: { status: "not_attempted" },
-				},
+				write: { status: "not_attempted" },
 			},
 		});
 		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(persisted);
@@ -435,12 +433,16 @@ describe("ZCode actual public app-server process", () => {
 		expect(foreign.error).toMatchObject({ code: -32602 });
 		expect(await peer.request("session/list", {})).toEqual(sessions);
 		expect(config.requests).toHaveLength(0);
-		const [a, b] = await Promise.all([create(peer, config.cwdA), create(peer, config.cwdB)]);
-		for (const sessionId of [a, b]) {
-			expect(await peer.request("session/configure", { sessionId, operation: "get_team_config" })).toMatchObject({
-				data: { userMembers: [{ model: members[0] }, { model: members[1] }] },
-			});
+		const sessionId = await create(peer, config.cwdA);
+		for (const request of [
+			{ operation: "get_team_config" },
+			{ operation: "get_team_models" },
+			{ operation: "set_team_config", scope: "user", expectedRevision: team.data.revision, members: [] },
+		]) {
+			const rejected = await peer.requestFrame("session/configure", { sessionId, ...request });
+			expect(rejected.error).toMatchObject({ code: -32602 });
 		}
+		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(persisted);
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
@@ -486,7 +488,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(
 			LegacyProtocol.zcodeSessionListResultSchema.parse(await peer.request("session/list", {})).sessions,
 		).toEqual([]);
-		const models = zcodeSessionConfigureResultSchema.parse(
+		const models = ompTeamConfigureResultSchema.parse(
 			await peer.request("omp/team/configure", {
 				workspace: workspace(config.cwdA),
 				request: { operation: "get_team_models", query: cached.id },
@@ -541,18 +543,20 @@ describe("ZCode actual public app-server process", () => {
 			selection: { kind: "model", model: { provider: model.providerId, modelId: "chat-b" } },
 		});
 		expect(saved).toMatchObject({ operation: "set_model_role", data: { persisted: true } });
-		const team = zcodeSessionConfigureResultSchema.parse(
-			await peer.request("session/configure", { sessionId: a, operation: "get_team_config" }),
+		const team = ompTeamConfigureResultSchema.parse(
+			await peer.request("omp/team/configure", {
+				workspace: workspace(config.cwdA),
+				request: { operation: "get_team_config" },
+			}),
 		);
 		if (team.operation !== "get_team_config") throw new Error("Unexpected Team operation");
 		expect(team.data.userMembers).toContainEqual(
 			expect.objectContaining({ rawSelector: "stale-provider/removed-model", status: "unresolved" }),
 		);
 		const before = await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8");
-		const preview = await peer.request("session/configure", {
-			sessionId: a,
-			operation: "get_team_config",
-			preview: { clientRevision: "draft-1", members: [] },
+		const preview = await peer.request("omp/team/configure", {
+			workspace: workspace(config.cwdA),
+			request: { operation: "get_team_config", preview: { clientRevision: "draft-1", members: [] } },
 		});
 		expect(preview).toMatchObject({ data: { preview: { clientRevision: "draft-1", userMembers: [] } } });
 		expect(await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8")).toBe(before);
@@ -569,22 +573,22 @@ describe("ZCode actual public app-server process", () => {
 			},
 		});
 		expect(save).toMatchObject({ data: { saveState: "complete" } });
-		for (const sessionId of [a, b]) {
-			expect(await peer.request("session/configure", { sessionId, operation: "get_team_config" })).toMatchObject({
-				data: {
-					effectiveMembers: [
-						{ index: 0, model: { provider: model.providerId, modelId: "chat-b" } },
-						{ index: 1, model: { provider: model.providerId, modelId: "chat-b" } },
-					],
-				},
-			});
-		}
-		const stale = await peer.requestFrame("session/configure", {
-			sessionId: a,
-			operation: "set_team_config",
-			scope: "user",
-			expectedRevision: team.data.revision,
-			members: [],
+		expect(
+			await peer.request("omp/team/configure", {
+				workspace: workspace(config.cwdA),
+				request: { operation: "get_team_config" },
+			}),
+		).toMatchObject({
+			data: {
+				effectiveMembers: [
+					{ index: 0, model: { provider: model.providerId, modelId: "chat-b" } },
+					{ index: 1, model: { provider: model.providerId, modelId: "chat-b" } },
+				],
+			},
+		});
+		const stale = await peer.requestFrame("omp/team/configure", {
+			workspace: workspace(config.cwdA),
+			request: { operation: "set_team_config", scope: "user", expectedRevision: team.data.revision, members: [] },
 		});
 		expect(stale.error).toMatchObject({ code: expect.any(Number) });
 		await Promise.all([
@@ -592,7 +596,7 @@ describe("ZCode actual public app-server process", () => {
 			command(peer, b, "sendText", { text: "ZCODE_TEST_MODEL_B" }),
 		]);
 		await Promise.all([output(peer, a, "ZCODE_TEST_MODEL_A_DONE"), output(peer, b, "ZCODE_TEST_MODEL_B_DONE")]);
-		// 标题 sidecar 同样携带用户 marker，且固定用 smol；本场景须等带工具面的主请求，
+		// 标题 sidecar 同样携带用户 marker；本场景须等带工具面的主请求，
 		// 不能按首次包含 marker 的辅助请求误判会话模型隔离。
 		const mainRequest = (marker: string) =>
 			config.waitForRequest(request => {

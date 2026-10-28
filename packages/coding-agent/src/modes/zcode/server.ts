@@ -35,7 +35,6 @@ import { ZCodeTopics } from "./topics";
 import type { ModelSelection } from "./schema/vendor/model-selection";
 import type { HighspeedMessageMeta } from "./schema/vendor/highspeed";
 import { cfgTaskAgentModelOverrides } from "../../task/settings";
-import { startOfflineShmBackup } from "../../offline/backup-lifecycle";
 import { offPeakControlParamsSchema } from "./schema/vendor/off-peak-execution";
 import { ZCodeWorkflowService } from "./workflows/service";
 import { ZCodeConversationTelemetry } from "./memory-telemetry";
@@ -171,7 +170,6 @@ export class ZCodeServer {
 	readonly #lifetime = new AbortController();
 	#ownerSignal?: AbortSignal;
 	#initialization?: Promise<void>;
-	#stopBackup = () => {};
 	#workspaceEpoch = randomUUID();
 	#workspaceIds = new Map<string, string>();
 	// workspaceId(key/identity/路径)→ 该工作区 cwd 的显式登记。#workspaceIds 是
@@ -201,16 +199,6 @@ export class ZCodeServer {
 					.filter(hosted => hosted.record.cwd === cwd)
 					.reduce((count, hosted) => count + hosted.commands.interactions.setAutoResolutionEnabled(enabled), 0),
 			applyModelIoPreferences: (cwd, enabled) => this.manager.applyModelIoPreferences(cwd, enabled),
-			requestRuntimeHeaders: (params, signal) =>
-				this.requestHost(L.zcodeProtocolMethods.interactionRequestProviderRuntimeHeaders, params, signal),
-			applyRegistryUpdate: async current => {
-				const hosted = Array.from(this.#hosted.values()).find(
-					item => item.record.session.modelRegistry === current.modelRegistry,
-				);
-				if (!hosted) return;
-				// 目录刷新只重绑同一模型元数据，不把原生 max 当公开选择重交，也不改稀疏选择意图。
-				await hosted.record.run(() => hosted.record.session.refreshCurrentModelMetadata());
-			},
 		});
 		this.manager = new ZCodeSessionManager({
 			cwd: path.resolve(options.cwd ?? process.cwd()),
@@ -292,32 +280,6 @@ export class ZCodeServer {
 			onOffPeakEvent: params => {
 				void this.writer.write({ method: P.V4_NOTIFICATIONS.offPeakLifecycle, params });
 			},
-			resolveRequestAuth: (sessionId, cwd, model, signal, context) => {
-				const thought = context?.thinkingLevel ?? this.manager.get(sessionId)?.session.configuredThinkingLevel();
-				return this.configuration.resolveRequestAuth(
-					{
-						sessionId,
-						workspace: { workspacePath: cwd, workspaceKey: this.#workspaceIds.get(cwd) ?? cwd },
-						modelSelection: {
-							providerId: model.provider,
-							modelId: model.id,
-							options: thought ? { reasoningLevel: toZCodeReasoningLevel(thought) } : undefined,
-						},
-					},
-					model,
-					signal,
-				);
-			},
-			transformRequestPayload: (sessionId, _cwd, payload, model, _signal, context) => {
-				if (!model) return payload;
-				// hook 可由 child 继承，但思考配置必须取当前请求 owner，不能捕获父模型的 off。
-				const thought = context?.thinkingLevel ?? this.manager.get(sessionId)?.session.configuredThinkingLevel();
-				return this.configuration.transformRequestPayload(payload, model, {
-					providerId: model.provider,
-					modelId: model.id,
-					options: thought ? { reasoningLevel: thought } : undefined,
-				});
-			},
 			sessionOptions: {
 				prepareConfiguration: (cwd, settings, registry) => this.#prepareConfiguration(cwd, settings, registry),
 			},
@@ -374,7 +336,19 @@ export class ZCodeServer {
 				this.#hosted.get(id)?.projection ??
 				this.#nativeProjections.get(id)?.projection ??
 				this.#cold.get(id)?.projection,
-			reasoning: (provider, model, level) => this.configuration.readReasoningConfig(provider, model, level),
+			reasoning: async (cwd, provider, model, level) => {
+				const candidate = (await this.#catalog(cwd)).modelRegistry.find(provider, model);
+				return {
+					thought: toZCodeReasoningLevel(level),
+					thoughtLevels: candidate
+						? [
+								"off",
+								...(candidate.reasoning && !candidate.thinking?.unverified ? ["auto"] : []),
+								...getSupportedEfforts(candidate),
+							].map(toZCodeReasoningLevel)
+						: [],
+				};
+			},
 		});
 		this.attachments = new ZCodeAttachmentResources({
 			getSession: async id => (await this.#active(id)).record,
@@ -406,7 +380,6 @@ export class ZCodeServer {
 		this.#ownerSignal ??= signal;
 		return (this.#initialization ??= this.startup.open(signal).then(() => {
 			this.#ready = true;
-			this.#stopBackup = startOfflineShmBackup(message => process.stderr.write(`${message}\n`));
 		}));
 	}
 	async requestHost(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
@@ -422,15 +395,6 @@ export class ZCodeServer {
 		void promise.catch(() => {});
 		const abort = () => {
 			reject(new ZCodeProtocolError(-32800, "Host request cancelled"));
-			if (method === L.zcodeProtocolMethods.interactionRequestProviderRuntimeHeaders) {
-				const request = L.zcodeProviderRuntimeHeadersRequestParamsSchema.parse(params);
-				void this.writer
-					.write({
-						method: "interaction/providerRuntimeHeadersCancelled",
-						params: { requestId: request.requestId, sessionId: request.sessionId, workspace: request.workspace },
-					})
-					.catch(() => {});
-			}
 		};
 		this.#reverse.set(id, { resolve, reject, timer });
 		signal?.addEventListener("abort", abort, { once: true });
@@ -550,17 +514,10 @@ export class ZCodeServer {
 			agentId: record.registry.list().find(ref => ref.session === record.session)?.id,
 			childSessions: await this.manager.childIdentities(record.id),
 			...(await this.manager.forkProjection(record.id)),
-			reasoning: session => {
-				const model = session.model;
-				const declared = model ? this.configuration.getReasoningLevels(model.provider, model.id) : undefined;
-				const nativeThought = toZCodeReasoningLevel(session.thinkingLevel ?? "off");
-				return {
-					thought: declared?.includes("enabled") && nativeThought !== "disabled" ? "enabled" : nativeThought,
-					thoughtLevels: declared
-						? declared.map(toZCodeReasoningLevel)
-						: session.getAvailableThinkingLevels().map(toZCodeReasoningLevel),
-				};
-			},
+			reasoning: session => ({
+				thought: toZCodeReasoningLevel(session.thinkingLevel ?? "off"),
+				thoughtLevels: session.getAvailableThinkingLevels().map(toZCodeReasoningLevel),
+			}),
 		});
 		const commands = new ZCodeCommandHost(
 			record.session,
@@ -956,19 +913,13 @@ export class ZCodeServer {
 				outputFormat: { supportsText: true },
 			},
 		}));
-		const configuredThoughtLevels = model
-			? this.configuration.getReasoningLevels(model.provider, model.id)
-			: undefined;
 		const thoughtLevels = (
-			configuredThoughtLevels ??
 			hosted?.record.session.getAvailableEffortSelectors().map(value => toZCodeReasoningLevel(value)) ??
 			state.config.thoughtLevels
 		).map(value => ({ value: toZCodeReasoningLevel(value), label: toZCodeReasoningLevel(value) }));
-		const nativeThought = toZCodeReasoningLevel(
+		const currentThought = toZCodeReasoningLevel(
 			hosted?.record.session.configuredThinkingLevel() ?? state.config.thought,
 		);
-		const currentThought =
-			configuredThoughtLevels?.includes("enabled") && nativeThought !== "disabled" ? "enabled" : nativeThought;
 		const messages = await this.legacy.messages(id);
 		const selectedMessages = (options.messageLimit ? messages.slice(-options.messageLimit) : messages).map(message =>
 			options.contentProfile === "index"
@@ -1060,8 +1011,7 @@ export class ZCodeServer {
 			messages: selectedMessages,
 		});
 	}
-	async #prepareConfiguration(cwd: string, settings: Settings, registry: ModelRegistry): Promise<void> {
-		await this.configuration.prepare(cwd, settings, registry);
+	async #prepareConfiguration(_cwd: string, _settings: Settings, registry: ModelRegistry): Promise<void> {
 		// resident 会话会接管 workspace 目录；仅 SDK 凭据域水合会重新暴露构造器的过期元数据。
 		// 两条初始化路径均完整解析本地缓存，在线时保留原生自动 provider discovery 权限。
 		if (offlineFromEnv()) await registry.refresh("offline");
@@ -1229,13 +1179,11 @@ export class ZCodeServer {
 									: source.defaultThinkingLevel,
 						),
 						origin: "native",
-						modelThoughtLevels: (
-							this.configuration.getReasoningLevels(model.provider, model.id) ?? [
-								"off",
-								...(model.reasoning && !model.thinking?.unverified ? ["auto"] : []),
-								...getSupportedEfforts(model),
-							]
-						).map(toZCodeReasoningLevel),
+						modelThoughtLevels: [
+							"off",
+							...(model.reasoning && !model.thinking?.unverified ? ["auto"] : []),
+							...getSupportedEfforts(model),
+						].map(toZCodeReasoningLevel),
 					})),
 				},
 				{
@@ -1260,11 +1208,7 @@ export class ZCodeServer {
 		const model = session.modelRegistry.find(selection.providerId, selection.modelId);
 		if (!model) throw new ZCodeProtocolError(-32602, "Model not found");
 		const thought = selection.options?.reasoningLevel
-			? this.configuration.resolveThinkingLevel(
-					selection.providerId,
-					selection.modelId,
-					selection.options.reasoningLevel,
-				)
+			? parseZCodeThinkingLevel(selection.options.reasoningLevel)
 			: undefined;
 		if (selection.options?.reasoningLevel && thought === undefined)
 			throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
@@ -1560,8 +1504,7 @@ export class ZCodeServer {
 								modelId: create.config.model,
 								options: create.config.thought ? { reasoningLevel: create.config.thought } : undefined,
 							}
-						: undefined) ??
-					this.configuration.getDefaultModelSelection();
+						: undefined);
 				if (selected) await this.#model(hosted, selected);
 				if (create.config?.followupMode) {
 					await this.manager.mutate(hosted.record.id, "setFollowupMode", { mode: create.config.followupMode });
@@ -2185,11 +2128,7 @@ export class ZCodeServer {
 				const controller = new AbortController();
 				if (operationId) this.#workspaceText.set(operationId, controller);
 				try {
-					return await generateWorkspaceText(
-						this.configuration,
-						params,
-						AbortSignal.any([this.#lifetime.signal, controller.signal]),
-					);
+					return await generateWorkspaceText(params, AbortSignal.any([this.#lifetime.signal, controller.signal]));
 				} finally {
 					if (operationId && this.#workspaceText.get(operationId) === controller)
 						this.#workspaceText.delete(operationId);
@@ -2260,7 +2199,6 @@ export class ZCodeServer {
 				const auth = await discoverAuthStorage(undefined, { cwd, settings });
 				try {
 					const registry = new ModelRegistry(auth, undefined, { settings });
-					await this.configuration.prepare(cwd, settings, registry);
 					// 构造器不恢复账号隔离缓存；与 SDK 一致仅离线补齐，不能靠隐藏会话或联网刷新模型目录。
 					await registry.hydrateCredentialScopedModelCaches();
 					let committed = false;
@@ -2289,7 +2227,7 @@ export class ZCodeServer {
 								});
 							} catch (error) {
 								failure = error;
-								if (error instanceof TeamConfigError && error.data?.writes.active.status === "unknown")
+								if (error instanceof TeamConfigError && error.data?.write.status === "unknown")
 									committed = true;
 								throw error;
 							} finally {
@@ -2308,7 +2246,7 @@ export class ZCodeServer {
 							break;
 						}
 					}
-					return P.zcodeSessionConfigureResultSchema.parse({ operation: request.operation, data });
+					return P.ompTeamConfigureResultSchema.parse({ operation: request.operation, data });
 				} finally {
 					auth.close();
 					settings.cancelPendingSaves();
@@ -2488,16 +2426,9 @@ export class ZCodeServer {
 					raw,
 					this.#ownerSignal ? AbortSignal.any([this.#lifetime.signal, this.#ownerSignal]) : this.#lifetime.signal,
 				);
-			case "provider/updateAccountConfig": {
-				const result = await this.configuration.updateAccountConfig(raw);
-				await this.#refreshAllWorkspaceConfigs();
-				return result;
-			}
-			case "provider/refreshRegistry": {
-				const result = await this.configuration.refreshRegistry(raw);
-				await this.#refreshAllWorkspaceConfigs();
-				return result;
-			}
+			case "provider/updateAccountConfig":
+			case "provider/refreshRegistry":
+				throw new ZCodeProtocolError(-32601, "Host provider configuration is not supported");
 			case "workspace/hooks/trustGrant": {
 				L.zcodeWorkspaceHookTrustGrantParamsSchema.parse(raw);
 				// Native hooks have no Host-managed trust store; never pretend to persist a grant.
@@ -2524,15 +2455,12 @@ export class ZCodeServer {
 						autoTitle: params.titleGenerationEnabled ?? true,
 					}),
 				);
-				const selected = params.model ?? this.configuration.getDefaultModelSelection();
+				const selected = params.model;
 				if (selected) await this.#model(hosted, selected);
 				const mode = params.mode;
 				if (mode && mode !== "auto") await hosted.record.run(() => hosted.controls.switchMode(mode));
 				if (params.thoughtLevel) {
-					const model = hosted.record.session.model;
-					const thought = model
-						? this.configuration.resolveThinkingLevel(model.provider, model.id, params.thoughtLevel)
-						: parseZCodeThinkingLevel(params.thoughtLevel);
+					const thought = parseZCodeThinkingLevel(params.thoughtLevel);
 					if (thought === undefined) throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
 					hosted.record.run(() => hosted.record.session.setThinkingLevel(thought, false));
 				}
@@ -2639,13 +2567,8 @@ export class ZCodeServer {
 			case "session/setThoughtLevel": {
 				const params = L.zcodeSessionSetThoughtLevelParamsSchema.parse(raw);
 				const hosted = await this.#active(params.sessionId);
-				const model = hosted.record.session.model;
 				const thought =
-					params.thoughtLevel === undefined
-						? undefined
-						: model
-							? this.configuration.resolveThinkingLevel(model.provider, model.id, params.thoughtLevel)
-							: parseZCodeThinkingLevel(params.thoughtLevel);
+					params.thoughtLevel === undefined ? undefined : parseZCodeThinkingLevel(params.thoughtLevel);
 				if (params.thoughtLevel !== undefined && thought === undefined)
 					throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
 				hosted.record.run(() => hosted.record.session.setThinkingLevel(thought, false));
@@ -3162,7 +3085,6 @@ export class ZCodeServer {
 		this.#catalogDisposers.clear();
 		this.#catalogRecords.clear();
 		this.#catalogs.clear();
-		this.#stopBackup();
 		// 取消审批会同步发布投影，订阅者仍需查询 workflow journal；
 		// 必须先取消自有交互并卸载订阅，再关闭这些订阅依赖的资源。
 		for (const hosted of this.#hosted.values()) {

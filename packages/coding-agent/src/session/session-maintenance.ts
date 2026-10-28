@@ -31,7 +31,6 @@ import {
 	DEFAULT_SHAKE_CONFIG,
 	type CompactionSettings as EngineCompactionSettings,
 	effectiveReserveTokens,
-	FORK_CODEX_COMPACTION_MODEL,
 	invalidateMessageCache,
 	isTranscriptUsageAnchor,
 	NativeCompactionError,
@@ -77,7 +76,6 @@ import { writeArtifact } from "./artifacts";
 import type { ModelRegistry } from "../config/model-registry";
 import { CHAT_MODEL_ROLE_IDS } from "../config/model-roles";
 import type { Settings } from "../config/settings";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ExtensionRunner, SessionBeforeCompactResult } from "../extensibility/extensions";
 import type { CompactOptions, ContextUsage } from "../extensibility/extensions/types";
 import type { GoalModeState } from "../goals/state";
@@ -179,31 +177,6 @@ function canUseLiveProviderNativeCompaction(
 		candidate.provider === liveModel.provider &&
 		(!requiresSameModel || (candidate.api === liveModel.api && candidate.id === liveModel.id)) &&
 		shouldUseProviderNativeCompaction(candidate, settings)
-	);
-}
-
-/**
- * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
- * replace an `openai-codex` compaction candidate with `gpt-6-luna`, so
- * compaction on the Codex lane always runs on the cheap fast model at its
- * pinned `low` effort (see `FORK_CODEX_COMPACTION_MODEL`). Non-codex models
- * and luna itself pass through; luna missing from `availableModels` keeps the
- * original candidate so compaction still has a chain to walk.
- */
-export function substituteForkCodexCompactionModel(
-	model: Model | undefined,
-	availableModels: readonly Model[],
-): Model | undefined {
-	if (!model) return model;
-	if (model.provider !== FORK_CODEX_COMPACTION_MODEL.provider || model.id === FORK_CODEX_COMPACTION_MODEL.id) {
-		return model;
-	}
-	return (
-		availableModels.find(
-			candidate =>
-				candidate.provider === FORK_CODEX_COMPACTION_MODEL.provider &&
-				candidate.id === FORK_CODEX_COMPACTION_MODEL.id,
-		) ?? model
 	);
 }
 
@@ -3772,19 +3745,9 @@ export class SessionMaintenance {
 				availableModels = availableModels.map(model => registry.fitContextWindow(model, settings));
 				const candidates: Model[] = [];
 				const seen = new Set<string>();
-				const lunaAvailable = availableModels.some(
-					candidate =>
-						candidate.provider === FORK_CODEX_COMPACTION_MODEL.provider &&
-						candidate.id === FORK_CODEX_COMPACTION_MODEL.id,
-				);
 				let eligibilitySkipped = 0;
 
-				const addCandidate = (
-					model: Model | undefined,
-					source: string,
-					original?: Model,
-					explicit = false,
-				): boolean => {
+				const addCandidate = (model: Model | undefined, source: string): boolean => {
 					const fields = {
 						component: "compaction",
 						event: "compaction_candidate",
@@ -3792,20 +3755,6 @@ export class SessionMaintenance {
 						source,
 						provider: compactionDiagnosticId(model?.provider),
 						model: compactionDiagnosticId(model?.id),
-						original_provider: compactionDiagnosticId(original?.provider),
-						original_model: compactionDiagnosticId(original?.id),
-						substitution_reason: explicit
-							? "explicit_override"
-							: original?.provider !== "openai-codex"
-								? "not_codex"
-								: original.id === FORK_CODEX_COMPACTION_MODEL.id
-									? "already_luna"
-									: lunaAvailable
-										? "fork_default"
-										: "luna_unavailable",
-						codex_luna_replaced: !!original && !!model && !modelsAreEqual(original, model),
-						explicit_override: explicit,
-						luna_available: lunaAvailable,
 					};
 					if (!model) {
 						logger.info("Compaction candidate skipped", { ...fields, result: "skipped", reason: "unresolved" });
@@ -3842,21 +3791,9 @@ export class SessionMaintenance {
 				};
 
 				if (preferredModel) {
-					// Explicit `compactionModel` configuration outranks the fork default —
-					// a user-named target is never substituted (see
-					// substituteForkCodexCompactionModel).
-					addCandidate(
-						resolveCompactionConfiguredTarget(preferredModel, availableModels),
-						"explicit",
-						undefined,
-						true,
-					);
+					addCandidate(resolveCompactionConfiguredTarget(preferredModel, availableModels), "explicit");
 				}
-				addCandidate(
-					substituteForkCodexCompactionModel(preferredModel ?? undefined, availableModels),
-					"preferred",
-					preferredModel ?? undefined,
-				);
+				addCandidate(preferredModel ?? undefined, "preferred");
 				for (const role of CHAT_MODEL_ROLE_IDS) {
 					const original = resolveRoleModelFull(
 						this.#host.settings,
@@ -3864,15 +3801,14 @@ export class SessionMaintenance {
 						availableModels,
 						preferredModel ?? undefined,
 					).model;
-					addCandidate(substituteForkCodexCompactionModel(original, availableModels), `role:${role}`, original);
+					addCandidate(original, `role:${role}`);
 				}
 
 				const sortedByContext = [...availableModels].sort(
 					(a, b) => (b.contextWindow ?? 0) - (a.contextWindow ?? 0),
 				);
 				for (const model of sortedByContext) {
-					const candidate = substituteForkCodexCompactionModel(model, availableModels);
-					if (addCandidate(candidate, "largest_context", model)) break;
+					if (addCandidate(model, "largest_context")) break;
 				}
 
 				logger.info("Compaction candidate chain resolved", {
@@ -3882,7 +3818,6 @@ export class SessionMaintenance {
 					result: "completed",
 					candidate_count: candidates.length,
 					eligibility_skipped_count: eligibilitySkipped,
-					luna_available: lunaAvailable,
 				});
 				return candidates;
 			},
@@ -3989,11 +3924,8 @@ export class SessionMaintenance {
 								signal,
 								{
 									...options,
-									// These transports own replay policy; summary retries must not bypass it.
-									oneshotRetry:
-										candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)
-											? false
-											: options?.oneshotRetry,
+									// CodeAgent owns replay policy; summary retries must not bypass it.
+									oneshotRetry: candidate.provider === "codeagent" ? false : options?.oneshotRetry,
 									metadata: this.#host.agent.metadataForProvider(candidate.provider),
 									convertToLlm: messages => this.#host.convertToLlmForSideRequest(messages),
 									buildProviderContext: (summarized, retained, signal, model) =>
@@ -4061,7 +3993,7 @@ export class SessionMaintenance {
 								elapsed_ms: performance.now() - attemptStarted,
 								...logger.diagnosticError(error),
 							});
-							if (candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)) {
+							if (candidate.provider === "codeagent") {
 								onReplayBlocked?.();
 								throw error;
 							}
@@ -5637,8 +5569,7 @@ export class SessionMaintenance {
 							// configured preference.
 							let handoffDocument: HandoffResult | undefined;
 							if (action === "handoff" && compactionPrep.kind !== "fromHook") {
-								requestReplayBlocked =
-									this.#model?.provider === "codeagent" || isJchToolsAgentModel(this.#model ?? undefined);
+								requestReplayBlocked = this.#model?.provider === "codeagent";
 								handoffDocument = await this.#host.generateHandoffDocument(AUTO_HANDOFF_THRESHOLD_FOCUS, {
 									autoTriggered: true,
 									signal: autoCompactionSignal,
@@ -6045,7 +5976,7 @@ export class SessionMaintenance {
 											if (autoCompactionSignal.aborted) {
 												throw error;
 											}
-											if (candidate.provider === "codeagent" || isJchToolsAgentModel(candidate)) {
+											if (candidate.provider === "codeagent") {
 												requestReplayBlocked = true;
 												throw error;
 											}

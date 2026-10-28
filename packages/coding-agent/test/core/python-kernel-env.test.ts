@@ -10,7 +10,6 @@ import {
 	resolveExplicitPythonRuntime,
 	resolvePythonRuntime,
 } from "@oh-my-pi/pi-coding-agent/eval/py/runtime";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
 import { cfgIdaInstall } from "../../src/ida/install";
@@ -82,49 +81,42 @@ describe("Python gateway environment filtering", () => {
 				OMP_API_TOKEN: "private",
 				OPENAI_API_KEY: "private",
 			});
-			const expected = getOfflineShmState(env)!;
-			try {
-				const script = `
-					import { getConfigRootDir, getOfflineShmState } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-utils"))};
-					console.log(JSON.stringify({
-						state: getOfflineShmState(),
-						configRoot: getConfigRootDir(),
-						offline: process.env.OMP_OFFLINE,
-						originalRoot: process.env.OMP_CONFIG_ROOT,
-						profile: process.env.OMP_PROFILE,
-						skills: process.env.OMP_SKILLS_DIR,
-						leaked: !!(process.env.OMP_API_TOKEN || process.env.OPENAI_API_KEY),
-					}));
-				`;
-				const child = Bun.spawn(
-					[
-						python!,
-						"-c",
-						"import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:]).returncode)",
-						process.execPath,
-						"--eval",
-						script,
-					],
-					{ env, stdout: "pipe", stderr: "pipe" },
-				);
-				const [stdout, stderr, code] = await Promise.all([
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-					child.exited,
-				]);
-				expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
-				expect(JSON.parse(stdout)).toEqual({
-					state: expected,
-					configRoot: path.join(expected.runtimeRoot, "profiles", "python-nested"),
-					offline: " YeS ",
-					originalRoot,
-					profile: "python-nested",
-					skills: "/nfs/shared-omp-skills",
-					leaked: false,
-				});
-			} finally {
-				fs.rmSync(path.dirname(expected.runtimeRoot), { recursive: true, force: true });
-			}
+			const script = `
+				import { getConfigRootDir } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-utils"))};
+				console.log(JSON.stringify({
+					configRoot: getConfigRootDir(),
+					offline: process.env.OMP_OFFLINE,
+					originalRoot: process.env.OMP_CONFIG_ROOT,
+					profile: process.env.OMP_PROFILE,
+					skills: process.env.OMP_SKILLS_DIR,
+					leaked: !!(process.env.OMP_API_TOKEN || process.env.OPENAI_API_KEY),
+				}));
+			`;
+			const child = Bun.spawn(
+				[
+					python!,
+					"-c",
+					"import subprocess, sys; sys.exit(subprocess.run(sys.argv[1:]).returncode)",
+					process.execPath,
+					"--eval",
+					script,
+				],
+				{ env, stdout: "pipe", stderr: "pipe" },
+			);
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+			expect(JSON.parse(stdout)).toEqual({
+				configRoot: path.join(originalRoot, "profiles", "python-nested"),
+				offline: " YeS ",
+				originalRoot,
+				profile: "python-nested",
+				skills: "/nfs/shared-omp-skills",
+				leaked: false,
+			});
 		},
 		10_000,
 	);

@@ -53,19 +53,10 @@ const ompTeamIssueSchema = z
 		code: z.string(),
 		message: z.string(),
 		target: z.enum(["member", "session_model", "config", "storage"]),
-		list: z
-			.enum([
-				"userMembers",
-				"persistentMembers",
-				"effectiveMembers",
-				"preview.userMembers",
-				"preview.effectiveMembers",
-			])
-			.optional(),
+		list: z.enum(["userMembers", "effectiveMembers", "preview.userMembers", "preview.effectiveMembers"]).optional(),
 		source: z.string().optional(),
 		index: z.number().int().optional(),
 		selector: z.string().optional(),
-		side: z.enum(["active", "persistent"]).optional(),
 	})
 	.strict();
 const ompParticipantsSchema = z.array(
@@ -87,13 +78,12 @@ const ompTeamPreviewSchema = z
 		issues: z.array(ompTeamIssueSchema),
 	})
 	.strict();
-const ompReadStateSchema = z.enum(["present", "missing", "invalid", "unreadable", "not_applicable"]);
+const ompReadStateSchema = z.enum(["present", "missing", "invalid", "unreadable"]);
 export const ompTeamConfigSchema = z
 	.object({
 		profile: z.string().nullable(),
 		revision: z.string().nullable(),
 		userMembers: z.array(ompTeamMemberSlotSchema).nullable().optional(),
-		persistentMembers: z.array(ompTeamMemberSlotSchema).nullable().optional(),
 		effectiveMembers: z.array(ompTeamMemberSlotSchema).nullable(),
 		source: ompConfigSourceSchema.nullable(),
 		sessionModel: z
@@ -103,14 +93,7 @@ export const ompTeamConfigSchema = z
 		participants: ompParticipantsSchema,
 		issues: z.array(ompTeamIssueSchema),
 		writableScopes: z.array(z.literal("user")),
-		storage: z
-			.object({
-				mode: z.enum(["single", "offline_shm"]),
-				syncState: z.enum(["in_sync", "different", "unknown", "not_applicable"]),
-				active: z.object({ readState: ompReadStateSchema }).strict(),
-				persistent: z.object({ readState: ompReadStateSchema }).strict(),
-			})
-			.strict(),
+		storage: z.object({ readState: ompReadStateSchema }).strict(),
 		preview: ompTeamPreviewSchema.optional(),
 	})
 	.strict();
@@ -131,14 +114,14 @@ export const ompTeamModelsSchema = z
 	.strict();
 const ompWriteReceiptSchema = z
 	.object({
-		status: z.enum(["saved", "unchanged", "failed", "not_attempted", "unknown", "not_applicable"]),
+		status: z.enum(["saved", "unchanged", "failed", "not_attempted", "unknown"]),
 		message: z.string().optional(),
 	})
 	.strict();
 export const ompSaveReceiptSchema = z
 	.object({
-		saveState: z.enum(["complete", "partial", "failed", "unknown"]),
-		writes: z.object({ active: ompWriteReceiptSchema, persistent: ompWriteReceiptSchema }).strict(),
+		saveState: z.enum(["complete", "failed", "unknown"]),
+		write: ompWriteReceiptSchema,
 		config: ompTeamConfigSchema.optional(),
 		issues: z.array(ompTeamIssueSchema).optional(),
 		effectiveMatchesRequested: z.boolean().optional(),
@@ -188,25 +171,6 @@ export const zcodeSessionConfigureParamsSchema = z.discriminatedUnion("operation
 			selection: ompRoleSelectionSchema,
 		})
 		.strict(),
-	z
-		.object({
-			sessionId: z.string().min(1),
-			operation: z.literal("get_team_config"),
-			preview: ompPreviewInputSchema.optional(),
-		})
-		.strict(),
-	z
-		.object({ sessionId: z.string().min(1), operation: z.literal("get_team_models"), query: z.string().optional() })
-		.strict(),
-	z
-		.object({
-			sessionId: z.string().min(1),
-			operation: z.literal("set_team_config"),
-			scope: z.literal("user"),
-			expectedRevision: z.string().min(1),
-			members: z.array(ompTeamModelRefSchema).nullable(),
-		})
-		.strict(),
 ]);
 export const zcodeSessionConfigureResultSchema = z.discriminatedUnion("operation", [
 	z
@@ -232,6 +196,8 @@ export const zcodeSessionConfigureResultSchema = z.discriminatedUnion("operation
 				.strict(),
 		})
 		.strict(),
+]);
+export const ompTeamConfigureResultSchema = z.discriminatedUnion("operation", [
 	z.object({ operation: z.literal("get_team_config"), data: ompTeamConfigSchema }).strict(),
 	z.object({ operation: z.literal("get_team_models"), data: ompTeamModelsSchema }).strict(),
 	z

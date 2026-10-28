@@ -132,70 +132,48 @@ describe("ZCode caller MCP configuration", () => {
 		expect(manager.getTools().find(tool => tool.name === "mcp__resident_marker")?.loadMode).toBe("essential");
 	});
 
-	it("obtains and renews actual client credentials tokens through the original HTTP transport", async () => {
-		let grants = 0;
-		const server = Bun.serve({
-			port: 0,
-			async fetch(request) {
-				const url = new URL(request.url);
-				if (url.pathname.startsWith("/.well-known/oauth-protected-resource")) {
-					return Response.json({ resource: `${url.origin}/mcp`, authorization_servers: [url.origin] });
-				}
-				if (url.pathname === "/.well-known/oauth-authorization-server") {
-					return Response.json({ issuer: url.origin, token_endpoint: `${url.origin}/token` });
-				}
-				if (url.pathname === "/token") {
-					const params = new URLSearchParams(await request.text());
-					expect(params.get("grant_type")).toBe("client_credentials");
-					expect(params.get("client_id")).toBe("caller-id");
-					expect(params.get("client_secret")).toBe("caller-secret");
-					expect(params.get("scope")).toBe("tools");
-					grants++;
-					return Response.json({ access_token: `access-${grants}`, token_type: "Bearer", expires_in: 3600 });
-				}
-				if (request.method !== "POST") return new Response(null, { status: 405 });
-				const body = (await request.json()) as { id?: number; method: string };
-				if (body.id === undefined) return new Response(null, { status: 202 });
-				if (body.method === "tools/call" && request.headers.get("authorization") === "Bearer access-1") {
-					return new Response(null, { status: 401 });
-				}
-				expect(request.headers.get("authorization")).toBe(`Bearer access-${grants}`);
-				const result =
-					body.method === "initialize"
-						? {
-								protocolVersion: "2025-11-25",
-								capabilities: { tools: {} },
-								serverInfo: { name: "oauth", version: "1" },
-							}
-						: body.method === "tools/list"
-							? { tools: [{ name: "marker", inputSchema: { type: "object", properties: {} } }] }
-							: { content: [{ type: "text", text: "OAUTH_EXECUTED" }] };
-				return Response.json({ jsonrpc: "2.0", id: body.id, result });
+	it("rejects unsupported client credentials grants before connecting with a safe recovery contract", async () => {
+		const servers = [
+			{
+				name: "oauth",
+				type: "http" as const,
+				url: "https://secret-host.example/mcp",
+				headers: [],
+				oauth: { type: "client_credentials" as const, clientId: "caller-id", clientSecret: "caller-secret" },
 			},
-		});
-		servers.push(server);
-		const manager = await prepareZCodeMcpManager({
-			cwd: import.meta.dir,
-			servers: [
-				{
-					name: "oauth",
-					type: "http",
-					url: `http://127.0.0.1:${server.port}/mcp`,
-					headers: [],
-					oauth: {
-						type: "client_credentials",
-						clientId: "caller-id",
-						clientSecret: "caller-secret",
-						scope: "tools",
-					},
+		];
+		const assertFault = (error: unknown) => {
+			expect(error).toBeInstanceOf(Error);
+			expect(error).toMatchObject({
+				code: "MCP_OAUTH_UNSUPPORTED",
+				data: {
+					authorizationMethod: "client_credentials",
+					recovery: expect.any(String),
 				},
-			],
-		});
-		managers.push(manager);
-		const connection = manager.getConnection("oauth");
-		if (!connection) throw new Error("OAuth server did not connect");
-		expect((await callTool(connection, "marker")).content).toEqual([{ type: "text", text: "OAUTH_EXECUTED" }]);
-		expect(grants).toBe(2);
+			});
+			const fault = error as Error & { code: string; data: unknown };
+			const wire = JSON.stringify({ message: fault.message, code: fault.code, data: fault.data });
+			expect(wire).not.toContain("caller-id");
+			expect(wire).not.toContain("caller-secret");
+			expect(wire).not.toContain("secret-host.example");
+		};
+		try {
+			normalizeZCodeMcpServers(import.meta.dir, servers);
+			throw new Error("Expected unsupported grant rejection");
+		} catch (error) {
+			assertFault(error);
+		}
+		await expect(
+			prepareZCodeMcpManager({ cwd: import.meta.dir, servers }).catch(assertFault),
+		).resolves.toBeUndefined();
+		const auth = createInMemoryAuthStorage();
+		try {
+			await expect(
+				persistZCodeMcpConfiguration(auth, "unsupported", import.meta.dir, servers).catch(assertFault),
+			).resolves.toBeUndefined();
+		} finally {
+			auth.close();
+		}
 	});
 
 	it("fails a bad session before admission without disconnecting a live session", async () => {

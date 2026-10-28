@@ -121,7 +121,6 @@ import { frameDataBytesBudget, readerIncludesThinking } from "@oh-my-pi/snapcomp
 import type { AdvisorConfig } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { formatUsageResetWindow } from "@oh-my-pi/pi-tui/overlays/usage-display";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { isJchToolsAgentModel, JCHTOOLS_PROVIDER_ID, JCHTOOLS_SESSION_STATE_KEY } from "../config/jchtools-provider";
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
 import { reset as resetCapabilities } from "../capability";
@@ -274,9 +273,8 @@ import {
 } from "../tools/resolve";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
-import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
 import type { XdevDispatch } from "../tools/xdev";
-import { isClosedTodo, type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { WorkPoolYieldItem } from "../task/workpool-yield";
 import type { AgentDefinition } from "../task/types";
@@ -1021,7 +1019,6 @@ export class AgentSession implements SettingsScope {
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
 	readonly #advisors: SessionAdvisors;
-	#jchToolsSuspendedAdvisors: boolean | undefined;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
 	#goalTurnCounter = 0;
@@ -1564,7 +1561,7 @@ export class AgentSession implements SettingsScope {
 	 *  because #canAutoContinueForFollowUp suppresses follow-up auto-resume while a user interrupt is
 	 *  in effect, even though the wake left a provider-valid tail. */
 	#wakeForIrc(wakeRecords: AgentMessage[]): void {
-		if (isJchToolsAgentModel(this.model) || this.#modeExitDrainSuppressionDepth > 0) {
+		if (this.#modeExitDrainSuppressionDepth > 0) {
 			this.#irc.queueAside(wakeRecords);
 			return;
 		}
@@ -1898,7 +1895,6 @@ export class AgentSession implements SettingsScope {
 	 * Arm prewalk outside the normal startup path so an explicit slash command starts immediately.
 	 */
 	armPrewalk(target: Model, thinkingLevel?: ConfiguredThinkingLevel): boolean {
-		if (isJchToolsAgentModel(this.model) || isJchToolsAgentModel(target)) return false;
 		return this.#prewalk.arm(target, thinkingLevel);
 	}
 
@@ -1918,9 +1914,6 @@ export class AgentSession implements SettingsScope {
 		target: Model,
 		targetThinkingLevel: ConfiguredThinkingLevel | undefined,
 	): Promise<PrewalkRestartResult> {
-		if (isJchToolsAgentModel(this.model) || isJchToolsAgentModel(source) || isJchToolsAgentModel(target)) {
-			return Promise.resolve("rejected");
-		}
 		return this.#prewalk.restart(source, sourceThinkingLevel, target, targetThinkingLevel);
 	}
 
@@ -2081,10 +2074,7 @@ export class AgentSession implements SettingsScope {
 			localProtocolOptions: () => this.#localProtocolOptions(),
 		};
 		this.#prewalk = new PrewalkCoordinator(prewalkHost, {
-			prewalk:
-				isJchToolsAgentModel(this.model) || isJchToolsAgentModel(config.prewalk?.target)
-					? undefined
-					: config.prewalk,
+			prewalk: config.prewalk,
 			planYolo: config.planYolo,
 			suppressAutoPrewalk: config.suppressAutoPrewalk,
 		});
@@ -2220,10 +2210,6 @@ export class AgentSession implements SettingsScope {
 			unexpectedStopJudgeTimeoutMs: config.unexpectedStopJudgeTimeoutMs,
 		});
 		this.#detachUsageBeforeQueueDequeue = this.agent.addBeforeQueuedMessageDequeueHook(async signal => {
-			if (isJchToolsAgentModel(this.model)) {
-				await this.#refreshJchToolsModel(signal);
-				return;
-			}
 			if (
 				!cfgRetryUsageAwareFallback.get(this.settings) ||
 				(this.#usagePreflightReadyForNextModelCall && this.#usagePreflightReadyModel === this.model)
@@ -2237,7 +2223,6 @@ export class AgentSession implements SettingsScope {
 		});
 		this.agent.prepareQueuedMessages = this.#prepareQueuedUserMessages;
 		this.#detachUsageBeforeModelCall = this.agent.addBeforeModelCallHook(async signal => {
-			if (isJchToolsAgentModel(this.model)) return;
 			if (!cfgRetryUsageAwareFallback.get(this.settings)) return;
 			if (this.#usagePreflightReadyForNextModelCall) {
 				const checkedModel = this.#usagePreflightReadyModel;
@@ -2326,7 +2311,6 @@ export class AgentSession implements SettingsScope {
 		this.agent.setProviderResponseInterceptor(this.#onResponse);
 		this.agent.setRawSseEventInterceptor(this.#onSseEvent);
 		this.agent.setOnTurnEnd(async (messages, signal, context) => {
-			if (isJchToolsAgentModel(this.model)) return;
 			if (signal?.aborted) return;
 			const rewindReport = this.#extractRewindReport(messages);
 			if (rewindReport) {
@@ -2363,9 +2347,6 @@ export class AgentSession implements SettingsScope {
 			// settles, so a result from the outgoing session cannot start a turn in the target.
 			isStreaming: () => this.isStreaming || this.isSessionTransitioning,
 			injectIdle: async messages => {
-				if (isJchToolsAgentModel(this.model)) {
-					throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
-				}
 				const first = messages[0];
 				if (!first) return;
 				// A user interrupt is still in effect: background completions (async job
@@ -2620,7 +2601,6 @@ export class AgentSession implements SettingsScope {
 			});
 		}
 		this.agent.setAssistantMessageEventInterceptor((message, assistantMessageEvent) => {
-			if (isJchToolsAgentModel(message)) return;
 			this.#loopGuards.onAssistantEvent(message, assistantMessageEvent);
 		});
 		// Tool-result hook owns synchronous post-tool actions that must affect the current loop.
@@ -2723,12 +2703,9 @@ export class AgentSession implements SettingsScope {
 			restrictOAuthAccounts: providerSessionId => this.#accountPoolScope?.restrict(providerSessionId),
 			agentKind: () => this.#agentKind,
 		};
-		if (isJchToolsAgentModel(this.model)) {
-			this.#jchToolsSuspendedAdvisors = cfgAdvisorEnabled.get(this.settings);
-		}
 		const sharedTransformProviderContext = config.transformProviderContext;
 		this.#advisors = new SessionAdvisors(advisorsHost, {
-			enabled: this.#jchToolsSuspendedAdvisors === undefined && cfgAdvisorEnabled.get(this.settings),
+			enabled: cfgAdvisorEnabled.get(this.settings),
 			tools: config.advisorTools,
 			createGrepTool: config.advisorCreateGrepTool,
 			createEditTool: config.advisorCreateEditTool,
@@ -3046,7 +3023,6 @@ export class AgentSession implements SettingsScope {
 
 	/** Resolves a prewalk target selector like `--prewalk-into`: role aliases, scoped models, match preferences. */
 	#resolvePrewalkTarget(selector: string): Prewalk | string | undefined {
-		if (isJchToolsAgentModel(this.model)) return undefined;
 		const scoped = this.scopedModels.map(entry => entry.model);
 		const resolved = resolveCliModel({
 			cliModel: selector,
@@ -3056,7 +3032,6 @@ export class AgentSession implements SettingsScope {
 			preferences: getModelMatchPreferences(this.settings),
 		});
 		const target = resolved.model;
-		if (isJchToolsAgentModel(target)) return undefined;
 		if (!target) return resolved.error ?? `model "${selector}" not found`;
 		if (cfgDisabledProviders.get(this.settings).includes(target.provider)) {
 			return `provider "${target.provider}" is disabled`;
@@ -4243,7 +4218,7 @@ export class AgentSession implements SettingsScope {
 		if (message.role === "assistant") {
 			const assistantMsg = message as AssistantMessage;
 			if (this.#recovery.isClassifierRefusal(assistantMsg)) return;
-			if (isEmptyErrorTurn(assistantMsg) && !isJchToolsAgentModel(assistantMsg)) return;
+			if (isEmptyErrorTurn(assistantMsg)) return;
 			if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 				assistantMsg.contextSnapshot = {
 					promptTokens: calculatePromptTokens(assistantMsg.usage),
@@ -4510,7 +4485,7 @@ export class AgentSession implements SettingsScope {
 			// batch) executes that turn's calls without a new message_end.
 			this.#runToolCallIds = new Set(event.resumedToolCallIds);
 			this.#prunedTerminalFailure = undefined;
-			if (!isJchToolsAgentModel(this.model)) this.#advisors.onPrimaryAgentStart();
+			this.#advisors.onPrimaryAgentStart();
 			this.#emitRunState("running");
 			this.#maintenance.noteTurnStarted();
 		}
@@ -4538,14 +4513,6 @@ export class AgentSession implements SettingsScope {
 		// toolUse) assistant message and skipping settle-only work.
 		if (event.type === "message_end" && event.message.role === "assistant") {
 			this.#lastAssistantMessage = event.message;
-			if (
-				isJchToolsAgentModel(event.message) &&
-				(event.message.stopReason === "error" || event.message.stopReason === "aborted")
-			) {
-				// A failed/cancelled request can restore an undelivered queue claim.
-				// Only a later explicit submission may re-arm its idle drain.
-				this.#queuedMessageDrainBlocked = true;
-			}
 			for (const block of event.message.content) {
 				if (block.type === "toolCall") this.#runToolCallIds.add(block.id);
 			}
@@ -4559,9 +4526,9 @@ export class AgentSession implements SettingsScope {
 		// Title the session once the reply to the operator's latest message starts
 		// a non-thinking block, synchronously: a title fork snapshots the streaming
 		// reply before its first await.
-		if (event.type === "message_end" && !isJchToolsAgentModel(this.model)) {
+		if (event.type === "message_end") {
 			this.#noteTitleInput(event.message);
-		} else if (event.type === "message_update" && this.#titleInput && !isJchToolsAgentModel(this.model)) {
+		} else if (event.type === "message_update" && this.#titleInput) {
 			const kind = event.assistantMessageEvent.type;
 			if (kind === "text_start" || kind === "toolcall_start") {
 				this.#titleInput.replied = true;
@@ -4675,7 +4642,7 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 
-		if (event.type === "turn_start" && !isJchToolsAgentModel(this.model)) {
+		if (event.type === "turn_start") {
 			this.#advisors.onPrimaryTurnStart();
 			this.#goalRuntime.onTurnStart(`turn-${++this.#goalTurnCounter}`, this.#goalUsage());
 		}
@@ -4763,7 +4730,7 @@ export class AgentSession implements SettingsScope {
 
 		if (event.type === "tool_stream_update") this.#streamingEditGuard.maybeAbort(event);
 
-		if (!isJchToolsAgentModel(this.model) && (await this.#ttsr.checkMessageUpdate(event))) return;
+		if (await this.#ttsr.checkMessageUpdate(event)) return;
 
 		// Handle session persistence
 		if (event.type === "message_end") {
@@ -4924,9 +4891,7 @@ export class AgentSession implements SettingsScope {
 			const ttsrAbortPendingAtAgentEnd = this.#ttsr.abortPending;
 			const emitAgentEndNotification = (options?: AgentEndSettleOptions) =>
 				this.#settleAgentEnd(event, activeMessages, options);
-			if (!isJchToolsAgentModel(this.model)) {
-				await this.#goalRuntime.onAgentEnd({ currentUsage: () => this.#goalUsage() });
-			}
+			await this.#goalRuntime.onAgentEnd({ currentUsage: () => this.#goalUsage() });
 			const fallbackAssistant = settledMessages.findLast(
 				(message): message is AssistantMessage => message.role === "assistant",
 			);
@@ -4939,16 +4904,6 @@ export class AgentSession implements SettingsScope {
 					goalModeEnabled: this.#goalModeState?.enabled === true,
 					goalStatus: this.#goalModeState?.goal.status,
 				});
-				await emitAgentEndNotification();
-				return;
-			}
-			if (isJchToolsAgentModel(msg)) {
-				// The backend may already have executed tools even when no text arrived.
-				// Keep its terminal turn intact and never replay, repair or reprompt it.
-				logProviderTurnError(msg);
-				await this.#recovery.persistTerminalEmptyErrorTurn(msg);
-				this.#recovery.resolveRetry();
-				this.#resetSessionStopContinuationState();
 				await emitAgentEndNotification();
 				return;
 			}
@@ -5370,15 +5325,6 @@ export class AgentSession implements SettingsScope {
 		coalescedSources: Set<string>,
 		onStart?: () => void,
 	): Promise<AgentContinueOutcome> {
-		const remote = isJchToolsAgentModel(this.model);
-		if (
-			remote &&
-			(request.options.source !== "queued-message-drain" ||
-				this.#queuedMessageDrainBlocked ||
-				!this.#hasOnlyExplicitUserQueuedMessages())
-		) {
-			return { status: "skipped", reason: "session-unavailable" };
-		}
 		try {
 			// During an automatic-retry saga the primary model's selector cooldown
 			// can expire while a chain-tail fallback is still mid-backoff. Restoring
@@ -5387,7 +5333,7 @@ export class AgentSession implements SettingsScope {
 			// for retries; the primary can still be restored on the next user
 			// prompt or after the saga terminates.
 			const isAutomaticRetry = request.options.source === "automatic-retry";
-			const reverted = !remote && !isAutomaticRetry && (await this.#recovery.maybeRestoreRetryFallbackPrimary());
+			const reverted = !isAutomaticRetry && (await this.#recovery.maybeRestoreRetryFallbackPrimary());
 			if (signal.aborted || this.#isDisposed || this.#abortInProgress) {
 				return { status: "skipped", reason: "post-restore-unavailable" };
 			}
@@ -5402,7 +5348,7 @@ export class AgentSession implements SettingsScope {
 					return { status: "skipped", reason: "post-restore-unavailable" };
 				}
 			}
-			if (!remote && cfgRetryUsageAwareFallback.get(this.settings)) {
+			if (cfgRetryUsageAwareFallback.get(this.settings)) {
 				if (!(await this.#runQueuedUsageAwarePreflight(signal))) {
 					return { status: "skipped", reason: "session-unavailable" };
 				}
@@ -5457,7 +5403,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#scheduleAgentContinue(options: ScheduledAgentContinueOptions): void {
-		if (isJchToolsAgentModel(this.model) && options.source !== "queued-message-drain") return;
 		const request: ScheduledAgentContinueRequest = {
 			schedulerToken: ++this.#agentContinueSchedulerToken,
 			options,
@@ -5585,7 +5530,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#scheduleAutoContinuePrompt(generation: number): boolean {
-		if (isJchToolsAgentModel(this.model)) return false;
 		const continuePrompt = async () => {
 			// Compaction summarizes away the first-message eager preludes, so re-assert the
 			// delegate-via-tasks / phased-todo reminders on this auto-resumed turn. This runs
@@ -5994,10 +5938,6 @@ export class AgentSession implements SettingsScope {
 	 * A no-op when the session has no warmer.
 	 */
 	startCacheWarming(model: Model, context: Context, options: SimpleStreamOptions): void {
-		if (isJchToolsAgentModel(model)) {
-			this.#cacheWarmer?.cancel();
-			return;
-		}
 		const warmer = this.#cacheWarmer;
 		if (!warmer) return;
 		const armMessages = this.messages;
@@ -6161,16 +6101,6 @@ export class AgentSession implements SettingsScope {
 		this.#repoLifecycle?.onSessionChange();
 	}
 
-	/**
-	 * Report that a built-in non-tool path (e.g. the JCH git slash commands)
-	 * executed and may have mutated the working tree, so the repository index
-	 * marks its coverage uncertain instead of serving pre-command content as
-	 * complete. Best-effort: sessions without an attached repo lifecycle ignore it.
-	 */
-	notifyRepoCommandExecuted(kind: "bash" | "eval" | "git", cwd?: string): void {
-		this.#repoLifecycle?.commandExecuted(kind, cwd);
-	}
-
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
 		this.#commandMetadataChangedListeners.push(listener);
 		return () => {
@@ -6297,7 +6227,6 @@ export class AgentSession implements SettingsScope {
 
 	/** Run one abortable auto-learn capture outside the primary agent loop. */
 	async runAutolearnCapture(capture: (signal: AbortSignal) => Promise<void>): Promise<void> {
-		if (isJchToolsAgentModel(this.model)) return;
 		if (this.#autolearnCaptureTask || this.#isDisposed) return;
 		const controller = new AbortController();
 		this.#autolearnCaptureAbortController = controller;
@@ -6839,14 +6768,6 @@ export class AgentSession implements SettingsScope {
 		// pre-reset history.
 		this.sessionManager.appendResetBoundary();
 
-		const todoPhases = this.getTodoPhases();
-		if (todoPhases.length > 0 && todoPhases.every(phase => phase.tasks.every(isClosedTodo))) {
-			// An empty canonical snapshot keeps settled plans cleared on resume
-			// without deleting their pre-reset history or touching unfinished work.
-			this.sessionManager.appendCustomEntry(USER_TODO_EDIT_CUSTOM_TYPE, { phases: [] });
-			this.setTodoPhases([]);
-		}
-
 		resetCapabilities();
 		await this.refreshBaseSystemPrompt();
 
@@ -6989,7 +6910,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #runUsageAwarePreflight(signal?: AbortSignal): Promise<boolean> {
-		if (isJchToolsAgentModel(this.model)) return !signal?.aborted;
 		if (signal?.aborted) return false;
 		const generation = this.#promptGeneration;
 
@@ -7641,15 +7561,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	buildDisplaySessionContext(model = this.model): SessionContext {
-		if (isJchToolsAgentModel(model)) {
-			return deobfuscateSessionContext(
-				this.sessionManager.buildSessionContext({
-					preserveFailedTurns: true,
-					maxFrameDataBytes: frameDataBytesBudget(model),
-				}),
-				this.#obfuscator,
-			);
-		}
 		return this.#withEvalStateContext(this.#providerBoundary.buildDisplaySessionContext(model));
 	}
 
@@ -8225,7 +8136,7 @@ export class AgentSession implements SettingsScope {
 		) {
 			return undefined;
 		}
-		const tools = isJchToolsAgentModel(this.model) ? [] : this.getEnabledToolNames();
+		const tools = this.getEnabledToolNames();
 		const notice = buildGoalAutoOrchestrateMessage(state, tools);
 		if (!notice) return undefined;
 		if (compactionEntryId !== undefined) {
@@ -8311,24 +8222,7 @@ export class AgentSession implements SettingsScope {
 		});
 	}
 
-	/** Refresh runtime coordinates of the deliberately selected backend, never its identity. */
-	async #refreshJchToolsModel(signal?: AbortSignal): Promise<void> {
-		const selected = this.model;
-		if (!isJchToolsAgentModel(selected) || selected?.provider !== JCHTOOLS_PROVIDER_ID) return;
-		await this.#modelRegistry.refreshLocalProviders();
-		signal?.throwIfAborted();
-		if (this.model !== selected) return;
-		const liveModel = this.#modelRegistry.find(JCHTOOLS_PROVIDER_ID, selected.id);
-		if (!liveModel || !isJchToolsAgentModel(liveModel)) {
-			throw new Error("JchTools remote Agent is unavailable; no request was sent.");
-		}
-		await this.#setModelWithProviderSessionReset(liveModel);
-	}
-
 	#normalizeImagesForModel(images: ImageContent[] | undefined): Promise<ImageContent[] | undefined> {
-		if (isJchToolsAgentModel(this.model) && images?.length) {
-			throw new Error("JchTools remote Agent supports text only; media input is not supported.");
-		}
 		return normalizeModelContextImages(images, { model: this.model });
 	}
 
@@ -8372,9 +8266,6 @@ export class AgentSession implements SettingsScope {
 		normalizedImages: ImageContent[],
 		signal?: AbortSignal,
 	): Promise<CustomMessage | undefined> {
-		if (isJchToolsAgentModel(this.model)) {
-			throw new Error("JchTools remote Agent supports text only; media input is not supported.");
-		}
 		const controller = new AbortController();
 		this.#imageDescriptionAbortControllers.add(controller);
 		try {
@@ -8392,14 +8283,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#normalizeAgentMessageImages<T extends AgentMessage>(message: T): Promise<T> {
-		if (
-			isJchToolsAgentModel(this.model) &&
-			"content" in message &&
-			Array.isArray(message.content) &&
-			message.content.some(part => part.type !== "text")
-		) {
-			throw new Error("JchTools remote Agent supports text only; media input is not supported.");
-		}
 		return this.#providerBoundary.normalizeAgentMessageImages(message);
 	}
 
@@ -8408,7 +8291,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	#createMagicKeywordNotices(text: string, goalAutoOrchestrateInitialId?: string): CustomMessage[] {
-		if (isJchToolsAgentModel(this.model)) return [];
 		const timestamp = Date.now();
 		const turnBudget = parseTurnBudget(text);
 		this.sessionManager.beginTurnBudget(turnBudget?.total ?? null, turnBudget?.hard ?? false);
@@ -8553,7 +8435,6 @@ export class AgentSession implements SettingsScope {
 						this.#todo.syncFromBranch();
 						this.#modelMentions.syncFromBranch();
 						this.#closeCodexProviderSessionsForHistoryRewrite();
-						this.#providerSessionState.get(JCHTOOLS_SESSION_STATE_KEY)?.close();
 					}
 				}
 			});
@@ -8617,16 +8498,7 @@ export class AgentSession implements SettingsScope {
 		submittedAt: number,
 		outcome: PromptDispatchOutcome,
 	): Promise<boolean> {
-		if (isJchToolsAgentModel(this.model)) {
-			if (options?.images?.length) {
-				throw new Error("JchTools remote Agent supports text only; media input is not supported.");
-			}
-			if (options?.synthetic && options.userInitiated !== true) {
-				throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
-			}
-		}
-		// Remote slash commands belong to the backend, not local command handlers or templates.
-		const expandPromptTemplates = !isJchToolsAgentModel(this.model) && (options?.expandPromptTemplates ?? true);
+		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
 		// Slash/custom-command handling below rewrites `text`; keep the original
 		// so a dropped prompt is handed back exactly as the user typed it.
 		const typedText = text;
@@ -8667,11 +8539,7 @@ export class AgentSession implements SettingsScope {
 
 		// Expand file-based prompt templates if requested
 		const templated = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
-		const expandedText = isJchToolsAgentModel(this.model)
-			? typedText
-			: options?.synthetic
-				? templated
-				: this.#modelMentions.expandMentions(templated);
+		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
 
 		// Magic keywords (see modes/magic-keywords.ts): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
@@ -8699,10 +8567,7 @@ export class AgentSession implements SettingsScope {
 			this.#toolChoiceQueue.removeByLabel("plan-mode-decision");
 		}
 
-		const remoteUserContinuation =
-			isJchToolsAgentModel(this.model) && options?.synthetic === true && options.userInitiated === true;
-		const promptAttribution =
-			options?.attribution ?? (options?.synthetic && !remoteUserContinuation ? "agent" : "user");
+		const promptAttribution = options?.attribution ?? (options?.synthetic ? "agent" : "user");
 
 		// Explicit queue-only submissions use the same preprocessing and canonical queue.
 		if (options?.queueOnly || this.isStreaming) {
@@ -8756,13 +8621,9 @@ export class AgentSession implements SettingsScope {
 				? buildNamedToolChoice("think", activeModel)
 				: undefined;
 		const eagerTodoPrelude =
-			!isJchToolsAgentModel(this.model) && !options?.synthetic && !hasPendingUserDirective
-				? this.#todo.createEagerTodoPrelude(expandedText)
-				: undefined;
+			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTodoPrelude(expandedText) : undefined;
 		const eagerTaskPrelude =
-			!isJchToolsAgentModel(this.model) && !options?.synthetic && !hasPendingUserDirective
-				? this.#todo.createEagerTaskPrelude(expandedText)
-				: undefined;
+			!options?.synthetic && !hasPendingUserDirective ? this.#todo.createEagerTaskPrelude(expandedText) : undefined;
 		const attachmentSourceNotices = this.#createAttachmentSourceNotices(options?.images, submittedAt);
 		const normalizedImages = await this.#normalizeImagesForModel(options?.images);
 
@@ -8832,17 +8693,16 @@ export class AgentSession implements SettingsScope {
 				now: true,
 			});
 		}
-		const message =
-			options?.synthetic && !remoteUserContinuation
-				? {
-						role: "developer" as const,
-						content: userContent,
-						attribution: promptAttribution,
-						timestamp: submittedAt,
-						synthetic: true,
-						userInitiated: options?.userInitiated === true ? true : undefined,
-					}
-				: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
+		const message = options?.synthetic
+			? {
+					role: "developer" as const,
+					content: userContent,
+					attribution: promptAttribution,
+					timestamp: submittedAt,
+					synthetic: true,
+					userInitiated: options?.userInitiated === true ? true : undefined,
+				}
+			: { role: "user" as const, content: userContent, attribution: promptAttribution, timestamp: submittedAt };
 
 		if (options?.inputId !== undefined) Object.assign(message, { inputId: options.inputId });
 		if (options?.attachments !== undefined) Object.assign(message, { attachments: options.attachments });
@@ -9023,16 +8883,6 @@ export class AgentSession implements SettingsScope {
 			| undefined,
 		outcome: PromptDispatchOutcome,
 	): Promise<boolean> {
-		if (
-			isJchToolsAgentModel(this.model) &&
-			Array.isArray(message.content) &&
-			message.content.some(part => part.type !== "text")
-		) {
-			throw new Error("JchTools remote Agent supports text only; media input is not supported.");
-		}
-		if (isJchToolsAgentModel(this.model) && message.attribution !== "user") {
-			throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
-		}
 		if (message.customType === "goal-tool-recovery") {
 			const state = this.getGoalModeState();
 			if (!state?.enabled || state.mode !== "active" || state.goal.status !== "active") return false;
@@ -9265,7 +9115,7 @@ export class AgentSession implements SettingsScope {
 
 	/** A new top-level task the user authored: a typed prompt or a user-invoked skill, never injected or delegated. */
 	#isAutoPrewalkTask(message: AgentMessage): boolean {
-		if (this.#agentKind !== "main" || isJchToolsAgentModel(this.model)) return false;
+		if (this.#agentKind !== "main") return false;
 		if (message.role === "user") return !message.synthetic && message.attribution !== "agent";
 		return message.role === "custom" && isUserInvokedSkillPrompt(message);
 	}
@@ -9285,9 +9135,6 @@ export class AgentSession implements SettingsScope {
 		signal: AbortSignal | undefined,
 		origin: "direct" | "queued",
 	): Promise<QueuedMessagePreparation & { baseXdevCatalogDelivered: boolean }> {
-		if (isJchToolsAgentModel(this.model)) {
-			return { baseXdevCatalogDelivered: false, commit: () => [] };
-		}
 		const sessionGeneration = this.#sessionGeneration;
 		const alreadyDisposing = this.#isDisposed && origin === "direct";
 		const isCurrent = () =>
@@ -9407,13 +9254,6 @@ export class AgentSession implements SettingsScope {
 			acceptTerminalEmptyStop?: boolean;
 		},
 	): Promise<boolean> {
-		if (
-			isJchToolsAgentModel(this.model) &&
-			message.role !== "user" &&
-			!(message.role === "custom" && message.attribution === "user")
-		) {
-			throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
-		}
 		// Returns false when the prompt was dropped before reaching the agent —
 		// every pre-dispatch bail (generation bump from abort, disposal, usage
 		// preflight denial) exits silently, and prompt() uses the outcome to hand
@@ -9430,10 +9270,6 @@ export class AgentSession implements SettingsScope {
 		try {
 			if (this.#inputDeliveryHandler) {
 				await this.#prepareInputDelivery(message, setupAbort.signal);
-				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-			}
-			if (isJchToolsAgentModel(this.model)) {
-				await this.#refreshJchToolsModel(setupAbort.signal);
 				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
 			}
 			await this.#recovery.maybeRestoreRetryFallbackPrimary();
@@ -9483,19 +9319,6 @@ export class AgentSession implements SettingsScope {
 						`Use /login, set an API key environment variable, or create ${getAgentDbPath()}\n\n` +
 						"Then use /model to select a model.",
 				);
-			}
-			if (isJchToolsAgentModel(this.model)) {
-				if (this.#promptGeneration !== generation || setupAbort.signal.aborted) return false;
-				// Use the same Agent loop and canonical persistence without frontend
-				// tool preludes, auto-read, compaction, classification or recovery.
-				this.#appendGoalAutoOrchestrateContext(undefined, options?.goalAutoOrchestrateInitialId);
-				if (Object.hasOwn(message, "inputId") && !Object.hasOwn(message, "inputAdmissionSeq")) {
-					Object.assign(message, { inputAdmissionSeq: ++this.#inputAdmissionSequence });
-				}
-				options?.onPromptAdmitted?.();
-				await this.agent.prompt([message]);
-				await this.#waitForPostPromptRecovery(generation);
-				return true;
 			}
 			// Recover a previously failed/incomplete assistant turn before sending.
 			// Successful historical turns take the cheaper pre-prompt threshold path
@@ -9883,24 +9706,13 @@ export class AgentSession implements SettingsScope {
 
 		const controller = new AbortController();
 		this.#customCommandAbortControllers.add(controller);
-		let headlessExport = false;
 		let result: string | undefined;
 
 		try {
 			// Get command context from extension runner (includes session control methods)
 			const baseCtx = this.#createCommandContext();
-			headlessExport = commandName === "code-review-export" && !baseCtx.hasUI;
 			const ctx = {
 				...baseCtx,
-				// Keep hasUI false and the picker methods unchanged; export results are
-				// notices, never prompts or model messages.
-				ui: headlessExport
-					? {
-							...baseCtx.ui,
-							notify: (message: string, level: "info" | "warning" | "error" = "info") =>
-								this.emitNotice(level, message, `custom-command:${commandName}`),
-						}
-					: baseCtx.ui,
 				signal: controller.signal,
 				hasQueuedMessages: baseCtx.hasPendingMessages,
 			} as unknown as CustomCommandContext;
@@ -9913,13 +9725,7 @@ export class AgentSession implements SettingsScope {
 			controller.signal.throwIfAborted();
 		} catch (err) {
 			if (controller.signal.aborted) return "";
-			if (headlessExport) {
-				this.emitNotice(
-					"error",
-					`Code review export failed: ${err instanceof Error ? err.message : String(err)}`,
-					`custom-command:${commandName}`,
-				);
-			} else if (this.#extensionRunner) {
+			if (this.#extensionRunner) {
 				this.#extensionRunner.emitError({
 					extensionPath: `custom-command:${commandName}`,
 					event: "command",
@@ -9946,9 +9752,7 @@ export class AgentSession implements SettingsScope {
 			this.#throwIfExtensionCommand(text);
 		}
 
-		const expandedText = isJchToolsAgentModel(this.model)
-			? text
-			: expandPromptTemplate(text, [...this.#promptTemplates]);
+		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
 		// Stamp before image preprocessing so a queued image steer measures from
 		// the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
@@ -9968,17 +9772,12 @@ export class AgentSession implements SettingsScope {
 	 * flipping advisor auto-resume.
 	 */
 	async followUp(text: string, images?: ImageContent[], options?: FollowUpOptions): Promise<void> {
-		if (isJchToolsAgentModel(this.model) && options?.synthetic) {
-			throw new Error("JchTools remote Agent requires an explicit user task; automatic prompts are disabled.");
-		}
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
 
 		const expandedText =
-			isJchToolsAgentModel(this.model) || options?.expandPromptTemplates === false
-				? text
-				: expandPromptTemplate(text, [...this.#promptTemplates]);
+			options?.expandPromptTemplates === false ? text : expandPromptTemplate(text, [...this.#promptTemplates]);
 		// Stamp before image preprocessing so a queued image follow-up measures
 		// from the operator's submission, not after the vision-model description.
 		const submittedAt = Date.now();
@@ -10100,9 +9899,7 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		const mode = options?.queue === "followUp" ? "followUp" : "steer";
-		const expandedText = isJchToolsAgentModel(this.model)
-			? text
-			: expandPromptTemplate(text, [...this.#promptTemplates]);
+		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
 		return await this.#queueUserMessage(expandedText, images, mode, {
 			timestamp: Date.now(),
 			rawText: text,
@@ -10552,29 +10349,12 @@ export class AgentSession implements SettingsScope {
 		});
 	}
 
-	#hasOnlyExplicitUserQueuedMessages(): boolean {
-		const steering = this.agent.peekSteeringQueue();
-		const followUp = this.agent.peekFollowUpQueue();
-		return (
-			steering.length + followUp.length > 0 &&
-			steering.every(
-				message => isUserAuthoredQueuedMessage(message) && (message.role !== "user" || !message.synthetic),
-			) &&
-			followUp.every(
-				message => isUserAuthoredQueuedMessage(message) && (message.role !== "user" || !message.synthetic),
-			)
-		);
-	}
-
 	/**
 	 * Gate for idle-path queued-message auto-continue (see `#scheduleQueuedMessageDrain`).
 	 */
 	#canAutoContinueForFollowUp(allowOpeningFollowUp = false): boolean {
 		if (this.agent.queuedMessagesHeld) return false;
 		if (!this.agent.followUpAutoDrain && this.agent.peekSteeringQueue().length === 0) return false;
-		// Queue ownership, not a continuation label alone, authorizes a remote task.
-		// Internal notifications and synthetic prompts must never wake the backend.
-		if (isJchToolsAgentModel(this.model) && !this.#hasOnlyExplicitUserQueuedMessages()) return false;
 		if (this.isStreaming) return false;
 		if (this.isRetrying) return false;
 		// An ACP client that defers agent-initiated turns owns turn
@@ -10637,7 +10417,7 @@ export class AgentSession implements SettingsScope {
 
 	#queueHiddenNextTurnMessage(message: CustomMessage, triggerTurn: boolean): void {
 		this.#pendingNextTurnMessages.push(message);
-		if (!triggerTurn || isJchToolsAgentModel(this.model)) return;
+		if (!triggerTurn) return;
 		const generation = this.#promptGeneration;
 		if (this.#scheduledHiddenNextTurnGeneration === generation) {
 			return;
@@ -10669,7 +10449,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #promptQueuedHiddenNextTurnMessages(): Promise<void> {
-		if (isJchToolsAgentModel(this.model)) return;
 		if (this.#pendingNextTurnMessages.length === 0) {
 			return;
 		}
@@ -10708,7 +10487,7 @@ export class AgentSession implements SettingsScope {
 	 * Throw an error if the text is an extension command.
 	 */
 	#throwIfExtensionCommand(text: string): void {
-		if (isJchToolsAgentModel(this.model) || !this.#extensionRunner) return;
+		if (!this.#extensionRunner) return;
 
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -10729,7 +10508,6 @@ export class AgentSession implements SettingsScope {
 		message: CustomMessage,
 		options?: { acceptTerminalEmptyStop?: boolean },
 	): Promise<boolean> {
-		if (isJchToolsAgentModel(this.model)) return false;
 		const inFlightEpoch = this.#beginInFlight();
 		try {
 			if (!(await this.#runUsageAwarePreflightForNextModelCall())) return false;
@@ -11026,8 +10804,7 @@ export class AgentSession implements SettingsScope {
 		const normalizedAppMessage = await this.#normalizeAgentMessageImages(appMessage);
 		if (this.#sessionGeneration !== sessionGeneration && (await this.#sessionGenerationChanged(sessionGeneration)))
 			return false;
-		const remoteNotice = isJchToolsAgentModel(this.model) && normalizedAppMessage.attribution !== "user";
-		if (this.isStreaming && !remoteNotice) {
+		if (this.isStreaming) {
 			// Queued into a turn the agent owns: that turn holds the session. Busy only
 			// from another prompt's setup claims nothing (that prompt decides).
 			outcome.sessionClaimed = this.agent.state.isStreaming;
@@ -11055,7 +10832,7 @@ export class AgentSession implements SettingsScope {
 			return false;
 		}
 
-		if (options?.deliverAs === "nextTurn" && !remoteNotice) {
+		if (options?.deliverAs === "nextTurn") {
 			if (options?.triggerTurn) {
 				if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 					this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
@@ -11077,7 +10854,7 @@ export class AgentSession implements SettingsScope {
 			return false;
 		}
 
-		if (options?.deliverAs === "aside" && !remoteNotice) {
+		if (options?.deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			if (this.#planModeState?.enabled) {
 				// Plan mode stays user-driven: fold into context without an autonomous turn, same as
@@ -11116,7 +10893,7 @@ export class AgentSession implements SettingsScope {
 			return outcome.sessionClaimed;
 		}
 
-		if (options?.triggerTurn && !remoteNotice) {
+		if (options?.triggerTurn) {
 			if (this.#clientBridge?.deferAgentInitiatedTurns && !this.#allowAcpAgentInitiatedTurns) {
 				this.#queueHiddenNextTurnMessage(normalizedAppMessage, false);
 				return false;
@@ -11910,7 +11687,7 @@ export class AgentSession implements SettingsScope {
 	 * own reading of the task, and asks for a card (icon and code, unless
 	 * `title.icons` is `boring`) to head the title. The title model
 	 * ({@link generateTitle}) takes over when the fork fails, times out or
-	 * declines, and is the only path under `smol`, `tiny` or a TITLE_SYSTEM.md override.
+	 * declines, and is the only path under `tiny` or a TITLE_SYSTEM.md override.
 	 * Under `fork`, a title that comes back without a card gets one from a card
 	 * request ({@link #cardTitle}).
 	 *
@@ -13349,14 +13126,6 @@ export class AgentSession implements SettingsScope {
 			}
 		}
 		this.agent.setModel(model);
-		if (isJchToolsAgentModel(currentModel) !== isJchToolsAgentModel(model)) {
-			this.agent.replaceMessages(this.buildDisplaySessionContext(model).messages);
-		}
-		if (isJchToolsAgentModel(model)) {
-			this.#prewalk.disarm();
-			this.#cacheWarmer?.cancel();
-			this.#abortAutolearnCapture();
-		}
 		// Model mutations driven through ModelControls (explicit /model, prewalk
 		// hand-offs, retry-fallback, model cycling) funnel through this method,
 		// so this is the single point that notifies subscribers (ACP config
@@ -13378,14 +13147,6 @@ export class AgentSession implements SettingsScope {
 	}
 
 	async #reconcileModelDependentState(model: Model): Promise<void> {
-		if (isJchToolsAgentModel(model)) {
-			this.#jchToolsSuspendedAdvisors ??= this.#advisors.isAdvisorEnabled();
-			this.#advisors.setAdvisorEnabled(false);
-		} else if (this.#jchToolsSuspendedAdvisors !== undefined) {
-			const enabled = this.#jchToolsSuspendedAdvisors;
-			this.#jchToolsSuspendedAdvisors = undefined;
-			this.#advisors.setAdvisorEnabled(enabled);
-		}
 		// Re-evaluate append-only context mode — provider or setting may have changed
 		this.#syncAppendOnlyContext(model);
 
@@ -13462,9 +13223,6 @@ export class AgentSession implements SettingsScope {
 
 	#closeProviderSessionsForModelSwitch(currentModel: Model, nextModel: Model): void {
 		const providerKeys = new Set<string>();
-		if (isJchToolsAgentModel(currentModel) && !isJchToolsAgentModel(nextModel)) {
-			providerKeys.add(JCHTOOLS_SESSION_STATE_KEY);
-		}
 		if (currentModel.api === "openai-codex-responses" || nextModel.api === "openai-codex-responses") {
 			providerKeys.add("openai-codex-responses");
 		}
@@ -14202,7 +13960,6 @@ export class AgentSession implements SettingsScope {
 		const previousUsagePreflightReadyModel = this.#usagePreflightReadyModel;
 		const previousModel = this.model;
 		const previousAdvisorEnabled = this.#advisors.isAdvisorEnabled();
-		const previousJchToolsSuspendedAdvisors = this.#jchToolsSuspendedAdvisors;
 		const previousThinkingLevel = this.thinkingLevel;
 		const previousAutoThinking = this.isAutoThinking;
 		const previousAutoResolvedLevel = this.autoResolvedThinkingLevel();
@@ -14308,12 +14065,8 @@ export class AgentSession implements SettingsScope {
 						: `Could not restore model ${targetModelStrings[0]}`;
 				}
 			}
-			// Rebuild for the adopted model's archive budget and remote-history policy.
-			if (
-				targetModel &&
-				(frameDataBytesBudget(targetModel) !== frameDataBytesBudget(this.model) ||
-					isJchToolsAgentModel(targetModel) !== isJchToolsAgentModel(this.model))
-			) {
+			// Rebuild for the adopted model's archive budget.
+			if (targetModel && frameDataBytesBudget(targetModel) !== frameDataBytesBudget(this.model)) {
 				sessionContext = this.buildDisplaySessionContext(targetModel);
 			}
 			const didReloadConversationChange =
@@ -14514,7 +14267,6 @@ export class AgentSession implements SettingsScope {
 				this.agent.setModel(previousModel);
 				modelRolledBack = !modelsAreEqual(rolledBackModel, previousModel);
 			}
-			this.#jchToolsSuspendedAdvisors = previousJchToolsSuspendedAdvisors;
 			this.#advisors.setAdvisorEnabled(previousAdvisorEnabled);
 			this.#models.restoreThinkingSnapshot(previousThinkingLevel, previousAutoThinking, previousAutoResolvedLevel);
 			this.#models.restoreServiceTiers(previousServiceTierByFamily);
@@ -15153,20 +14905,16 @@ export class AgentSession implements SettingsScope {
 
 		// Update agent state — build display context to populate agent messages.
 		const stateContext = this.sessionManager.buildSessionContext({
-			preserveFailedTurns: isJchToolsAgentModel(this.model),
 			maxFrameDataBytes: frameDataBytesBudget(this.model),
 		});
 		const restoredContext = deobfuscateSessionContext(stateContext, this.#obfuscator);
-		const displayContext = isJchToolsAgentModel(this.model)
-			? restoredContext
-			: this.#withEvalStateContext(restoredContext);
+		const displayContext = this.#withEvalStateContext(restoredContext);
 		this.agent.replaceMessages(displayContext.messages);
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
 		this.#modelMentions.syncFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
-		this.#providerSessionState.get(JCHTOOLS_SESSION_STATE_KEY)?.close();
 
 		this.#branchSummaryAbortController = undefined;
 
@@ -15190,12 +14938,8 @@ export class AgentSession implements SettingsScope {
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
 			const rawContext = this.sessionManager.buildSessionContext({
-				preserveFailedTurns: isJchToolsAgentModel(this.model),
 				maxFrameDataBytes: frameDataBytesBudget(this.model),
 			});
-			if (isJchToolsAgentModel(this.model)) {
-				this.agent.replaceMessages(deobfuscateSessionContext(rawContext, this.#obfuscator).messages);
-			}
 			return {
 				editorText,
 				editorImages,
@@ -16225,10 +15969,6 @@ export class AgentSession implements SettingsScope {
 	 * @returns true when the advisor is actively running after the call.
 	 */
 	setAdvisorEnabled(enabled: boolean): boolean {
-		if (isJchToolsAgentModel(this.model)) {
-			this.#jchToolsSuspendedAdvisors = enabled;
-			return this.#advisors.setAdvisorEnabled(false);
-		}
 		return this.#advisors.setAdvisorEnabled(enabled);
 	}
 
@@ -16338,9 +16078,6 @@ export class AgentSession implements SettingsScope {
 	 * @returns true when the advisor is actively running after the call.
 	 */
 	toggleAdvisorEnabled(): boolean {
-		if (isJchToolsAgentModel(this.model)) {
-			return this.setAdvisorEnabled(!this.#jchToolsSuspendedAdvisors);
-		}
 		return this.#advisors.toggleAdvisorEnabled();
 	}
 

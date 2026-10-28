@@ -69,7 +69,7 @@ describe("Settings layer refresh", () => {
 		cfgCompactionEnabled.set(settings, false);
 		const snapshot = await settings.readUserSetting("temperature");
 		const receipt = await settings.saveUserSetting("temperature", 0.7, snapshot.revision!);
-		expect(receipt.writes.active.status).toBe("unchanged");
+		expect(receipt.write.status).toBe("unchanged");
 		expect(cfgTemperature.get(settings)).toBe(0.7);
 		expect(cfgCompactionEnabled.get(settings)).toBe(false);
 		expect(YAML.parse(await Bun.file(configPath()).text())).toMatchObject({ compaction: { enabled: true } });

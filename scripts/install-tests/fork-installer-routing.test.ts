@@ -342,11 +342,7 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 	test("an already-installed release skips binary download and still gives a PATH hint", async () => {
 		const fixture = await createFixture();
 		await fs.mkdir(fixture.installDir, { recursive: true });
-		await writeExecutable(
-			fixture.installDir,
-			"omp",
-			'#!/bin/sh\necho "omp/18.0.9+fork.125 (built 2026-10-04T00:00Z)"\n',
-		);
+		await writeExecutable(fixture.installDir, "omp", '#!/bin/sh\necho "omp/18.0.9+fork.125"\n');
 		const result = await runInstallerWithFixture([], fixture);
 		expect(result.exitCode, result.stderr).toBe(0);
 		expect(result.stdout).toContain("already installed");

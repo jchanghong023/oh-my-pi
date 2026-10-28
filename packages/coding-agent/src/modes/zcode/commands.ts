@@ -17,8 +17,6 @@ import {
 } from "../../slash-commands/builtin-spec-driven";
 import { peekSpecDrivenController } from "../../spec-driven/controller";
 import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
-import { TeamConfigService } from "../../team/config";
-import type { TeamConfigPreviewInput, TeamConfigSaveInput } from "../../team/config-types";
 import { initializeExtensions } from "../runtime-init";
 import { CommandCatalogService } from "./hosts/command-catalog";
 import { GoalHost } from "./hosts/goal-host";
@@ -659,14 +657,6 @@ export class ZCodeCommandHost {
 	async #configure(operation: string, params: Record<string, unknown>): Promise<unknown> {
 		if (this.#disposed) throw new Error("Session command host is closed");
 		const model = this.session.model;
-		const team = new TeamConfigService({
-			getSettings: () => this.session.settings,
-			getModelRegistry: () => this.session.modelRegistry,
-			isCurrent: () => !this.#disposed,
-			emit: frame => {
-				if (!this.#disposed) this.options.settingsChanged?.(frame);
-			},
-		});
 		switch (operation) {
 			case "get_model_roles":
 				return this.#roles.listRoles({
@@ -675,16 +665,6 @@ export class ZCodeCommandHost {
 				});
 			case "set_model_role":
 				return this.#roles.setRole(params as unknown as ModelRoleSetOptions);
-			case "get_team_config":
-				return team.getConfig(params.preview as TeamConfigPreviewInput | undefined);
-			case "get_team_models":
-				return team.getModels(typeof params.query === "string" ? params.query : undefined);
-			case "set_team_config":
-				return team.setConfig({
-					scope: params.scope,
-					expectedRevision: params.expectedRevision,
-					members: params.members,
-				} as TeamConfigSaveInput);
 			default:
 				throw Object.assign(new Error(`Unknown configuration operation: ${operation}`), { code: "unsupported" });
 		}

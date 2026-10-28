@@ -93,69 +93,6 @@ describe("InteractiveMode todo HUD persistence", () => {
 		cfgTasksTodoClearDelay.override(session.settings, todoClearDelay);
 	}
 
-	it("switches TODO hierarchy live for ANSI and native without changing statuses or closed counts", async () => {
-		await replaceMode();
-		setTodoClearDelay(-1);
-		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
-		cfgDisplayCompactToolActivity.override(session.settings, false);
-		cfgDisplayHideToolActivity.override(session.settings, false);
-		await mode.init();
-		const phases: TodoPhase[] = [
-			{
-				name: "Work",
-				tasks: [
-					{ content: "queued work", status: "pending" },
-					{ content: "running work", status: "in_progress" },
-					{ content: "waiting work", status: "blocked" },
-					{ content: "finished work", status: "completed" },
-					{ content: "cancelled work", status: "abandoned" },
-				],
-			},
-		];
-		session.setTodoPhases(phases);
-		mode.setTodos(phases);
-		mode.setTodoExpanded(true);
-		const detailed = mode.todoContainer.render(160).join("\n");
-		const context = {
-			cols: 160,
-			reduceMotion: true,
-			dark: true,
-			supports: () => true,
-			feature: () => false,
-		};
-		const detailedNative = mode.describeStatusHud([], context);
-		cfgDisplayCompactToolActivity.override(session.settings, true);
-		await Promise.resolve();
-		const compact = mode.todoContainer.render(160).join("\n");
-		const plain = Bun.stripANSI(compact);
-		expect(plain).toContain("[active] running work");
-		expect(plain).toContain("[blocked] waiting work");
-		expect(plain).toContain("[abandoned] cancelled work");
-		expect(plain).toContain(`${theme.checkbox.checked} finished work`);
-		expect(plain).toContain("2/5");
-		expect(compact).toContain(theme.fg("text", `${theme.checkbox.unchecked} queued work`));
-		const checklist = JSON.stringify(mode.describeStatusHud([], context));
-		const tree = JSON.stringify(mode.describeStatusHud([], { ...context, supports: () => false }));
-		for (const native of [checklist, tree]) {
-			expect(native).toContain("[active] running work");
-			expect(native).toContain("[blocked] waiting work");
-			expect(native).toContain("[abandoned] cancelled work");
-		}
-		expect(checklist).toContain('"status":"blocked"');
-		expect(checklist).toContain('"status":"dropped"');
-		expect(session.getTodoPhases()).toEqual(phases);
-		expect(mode.todoPhases).toEqual(phases);
-		cfgDisplayCompactToolActivity.override(session.settings, false);
-		await Promise.resolve();
-		expect(mode.todoContainer.render(160).join("\n")).toBe(detailed);
-		expect(mode.describeStatusHud([], context)).toEqual(detailedNative);
-		cfgDisplayCompactToolActivity.override(session.settings, true);
-		cfgDisplayHideToolActivity.override(session.settings, true);
-		await Promise.resolve();
-		expect(mode.todoContainer.render(160).join("\n")).toBe(detailed);
-		expect(mode.describeStatusHud([], context)).toEqual(detailedNative);
-	});
-
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s chat rebuild", async presentation => {
 		await replaceMode();
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
@@ -240,7 +177,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(JSON.stringify(session.sessionManager.buildSessionContext().messages)).toBe(storedMessages);
 	});
 
-	it("/clear removes a settled plan from the HUD and resumed state while retaining its history", async () => {
+	it("/clear retains a settled plan in the HUD and resumed state while retaining its history", async () => {
 		await replaceMode();
 		setTodoClearDelay(-1);
 		const phases: TodoPhase[] = [
@@ -259,8 +196,9 @@ describe("InteractiveMode todo HUD persistence", () => {
 
 		await mode.handleResetContextCommand();
 
-		expect(session.getTodoPhases()).toEqual([]);
-		expect(renderTodos(mode)).toBe("");
+		expect(session.getTodoPhases()).toEqual(phases);
+		expect(renderTodos(mode)).toContain("verify upstream");
+		expect(renderTodos(mode)).toContain("merge unnecessary changes");
 		expect(session.sessionManager.getSessionId()).toBe(sessionId);
 		expect(session.sessionManager.getBranch().find(entry => entry.id === sourceId)).toMatchObject({
 			type: "custom",
@@ -270,8 +208,9 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await replaceMode(await SessionManager.open(file));
 		await mode.reloadTodos();
 		mode.setTodoExpanded(true);
-		expect(session.getTodoPhases()).toEqual([]);
-		expect(renderTodos(mode)).toBe("");
+		expect(session.getTodoPhases()).toEqual(phases);
+		expect(renderTodos(mode)).toContain("verify upstream");
+		expect(renderTodos(mode)).toContain("merge unnecessary changes");
 	});
 
 	for (const status of ["pending", "in_progress", "blocked"] as const) {
@@ -991,30 +930,6 @@ describe("InteractiveMode todo HUD anchor", () => {
 			setTerminalRows(24);
 			mode.loadingAnimation = undefined;
 			mode.statusContainer.disposeChildren();
-		});
-
-		it("never labels blocked-only or abandoned work successful in compact display", () => {
-			const previousCompact = cfgDisplayCompactToolActivity.get(session.settings);
-			const previousHidden = cfgDisplayHideToolActivity.get(session.settings);
-			try {
-				cfgDisplayCompactToolActivity.override(session.settings, true);
-				cfgDisplayHideToolActivity.override(session.settings, false);
-				setTerminalRows(15);
-				mode.setTodos([{ name: "Work", tasks: [{ content: "waiting work", status: "blocked" }] }]);
-				const blocked = Bun.stripANSI(mode.statusContainer.render(120).join("\n"));
-				expect(blocked).toContain("TODO 0/1");
-				expect(blocked).toContain("[blocked] waiting work");
-				expect(blocked).not.toContain("done");
-				mode.setTodos([{ name: "Work", tasks: [{ content: "cancelled work", status: "abandoned" }] }]);
-				const abandoned = Bun.stripANSI(mode.statusContainer.render(120).join("\n"));
-				expect(abandoned).toContain("TODO 1/1");
-				expect(abandoned).toContain("abandoned");
-				expect(abandoned).not.toContain(theme.checkbox.checked);
-				expect(abandoned).not.toMatch(/\bdone\b/i);
-			} finally {
-				cfgDisplayCompactToolActivity.override(session.settings, previousCompact);
-				cfgDisplayHideToolActivity.override(session.settings, previousHidden);
-			}
 		});
 
 		it("renders todo as a single line item aligned to the right when terminal height < 18", () => {

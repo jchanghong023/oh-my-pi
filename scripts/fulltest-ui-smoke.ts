@@ -18,7 +18,6 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IpcConnection, Process, PtySession } from "@oh-my-pi/pi-natives";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { isEnoent, postmortem } from "@oh-my-pi/pi-utils";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { daemonBrokerEndpoint } from "../packages/coding-agent/src/launch/paths";
@@ -306,14 +305,8 @@ if (process.argv.includes("--repo-only")) {
 // ── 1. Startup render ────────────────────────────────────────────────────────
 console.log("ui-smoke: waiting for the full-screen interface to render…");
 const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
-let baseRuntimeRoot = baseConfigRoot;
-let baseShmDomain: string | undefined;
 stubServerCleanup.run = async () => {
-	await removeFixture(baseRuntimeRoot);
-	if (baseShmDomain) {
-		await removeWithRetries(baseShmDomain);
-		await removeFixture(baseConfigRoot);
-	}
+	await removeFixture(baseConfigRoot);
 };
 // Startup/input/exit never submits a model request; keep any accidental target on loopback.
 const baseClaudeDir = path.join(baseConfigRoot, "claude");
@@ -331,12 +324,7 @@ const baseEnv = tuiEnvironment({
 	OMP_OFFLINE: "1",
 	CLAUDE_CONFIG_DIR: baseClaudeDir,
 });
-const baseShm = getOfflineShmState(baseEnv);
-if (baseShm) {
-	baseRuntimeRoot = baseShm.runtimeRoot;
-	baseShmDomain = path.dirname(baseShm.runtimeRoot);
-}
-const baseAgentDir = path.join(baseRuntimeRoot, "profiles", "localci-ui", "agent");
+const baseAgentDir = path.join(baseConfigRoot, "profiles", "localci-ui", "agent");
 await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
 await fs.writeFile(
 	path.join(baseAgentDir, "config.yml"),
@@ -388,16 +376,7 @@ main.session.write("\x04");
 		fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
 	}
 }
-// Read the actual runtime artifact, not the original persistent fixture root.
 await fs.access(path.join(baseAgentDir, "agent.db"));
-if (baseShm) {
-	try {
-		await fs.access(path.join(baseConfigRoot, "profiles", "localci-ui", "agent", "agent.db"));
-		fail("offline TUI wrote its active settings database under the persistent fixture root");
-	} catch (error) {
-		if (!isEnoent(error)) throw error;
-	}
-}
 console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
 await cleanupSmokeFixture();
 await recordUiCase("startup-render-liveness-and-exit");
@@ -854,7 +833,7 @@ try {
 	console.log("ui-smoke: starting /team TUI case…");
 	const team = startTui(["--profile", TEAM_PROFILE, "--model", "smoke/glm-5.2"], {
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
-		// Keep host offline defaults and Linux shm remapping out of this fixture.
+		// Keep host offline defaults out of this fixture.
 		OMP_OFFLINE: "",
 		OMP_PROFILE: TEAM_PROFILE,
 		PI_PROFILE: "",

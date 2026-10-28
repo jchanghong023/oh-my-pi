@@ -5,6 +5,7 @@ import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
+import { ompSaveReceiptSchema, ompTeamConfigSchema } from "../../src/modes/zcode/schema/omp-config-extension";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigError, TeamConfigService } from "../../src/team/config";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
@@ -71,6 +72,8 @@ describe("TeamConfigService", () => {
 		const before = await service.getConfig();
 		expect(before.revision).toBeString();
 		expect(before.writableScopes).toEqual(["user"]);
+		expect(before.storage).toEqual({ readState: "present" });
+		expect(ompTeamConfigSchema.parse(before)).toEqual(before);
 		expect(before.userMembers?.map(slot => slot.rawSelector)).toEqual([
 			"test/Qwen3.8-27B",
 			"retired old selector",
@@ -89,8 +92,10 @@ describe("TeamConfigService", () => {
 			],
 		});
 		expect(result.saveState).toBe("complete");
+		expect(result.write.status).toBe("saved");
 		expect(result.config.participants.map(slot => slot.label)).toEqual(["A", "B", "C"]);
 		expect(result.config.userMembers).toHaveLength(2);
+		expect(ompSaveReceiptSchema.parse(result)).toEqual(result);
 		expect(result.effectiveMatchesRequested).toBe(true);
 		expect(notifications).toEqual([{ type: "settings_changed", scope: "user" }]);
 	});
@@ -201,7 +206,7 @@ describe("TeamConfigService", () => {
 			members: [second, first, second, first],
 		});
 		expect(result.saveState).toBe("complete");
-		expect(result.writes.persistent.status).toBe("not_applicable");
+		expect(result.write.status).toBe("saved");
 		expect(result.effectiveMatchesRequested).toBe(true);
 		expect(result.config.participants.map(slot => slot.model)).toEqual([second, first, second, first]);
 		expect(result.config.userMembers?.map(slot => slot.model)).toEqual([second, first, second, first]);
@@ -244,6 +249,17 @@ describe("TeamConfigService", () => {
 		expect(cleared.config.issues).toEqual([]);
 	});
 
+	it("blocks writes when the stored roster has an invalid type", async () => {
+		await Bun.write(path.join(agentDir, "config.yml"), "team:\n  members: 42\n");
+		const config = await service.getConfig();
+		expect(config.storage).toEqual({ readState: "invalid" });
+		expect(config.revision).toBeNull();
+		expect(config.writableScopes).toEqual([]);
+		expect(config.userMembers).toBeUndefined();
+		expect(config.issues).toContainEqual(expect.objectContaining({ code: "invalid_config", target: "config" }));
+		expect(config.effectiveMembers).toBeNull();
+	});
+
 	it("rejects stale revisions before writing and does not emit a commit notification", async () => {
 		const config = await service.getConfig();
 		const file = path.join(agentDir, "config.yml");
@@ -260,7 +276,7 @@ describe("TeamConfigService", () => {
 			if (!(error instanceof TeamConfigError)) throw error;
 			expect(error.code).toBe("revision_conflict");
 			expect(error.data?.saveState).toBe("failed");
-			expect(error.data?.writes.active.status).toBe("not_attempted");
+			expect(error.data?.write.status).toBe("not_attempted");
 		}
 		expect(notifications).toEqual([]);
 		expect(await Bun.file(file).text()).toBe("team:\n  members: []\n");

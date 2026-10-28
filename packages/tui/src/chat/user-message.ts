@@ -60,8 +60,6 @@ const OSC133_ZONE_CLOSE = OSC133_ZONE_END + OSC133_COMMAND_START + OSC133_COMMAN
 
 /** How a user bubble styles its prose and chips (see {@link userBubbleColor}). */
 export interface UserBubbleOptions {
-	/** Explicit history viewers can retain full messages independently of the main chat. */
-	compactToolActivity?: boolean;
 	/** Filesystem paths for attached image chips, indexed by chip number. */
 	imageLinks?: readonly (string | undefined)[];
 	/** The message's attached images in chip order (`#1` first); a native bubble shows them. */
@@ -138,7 +136,6 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	#zoneSource: readonly string[] | undefined;
 	#zoneLines: string[] | undefined;
 	#zoneCompact = false;
-	readonly #compactOverride: boolean | undefined;
 	readonly #bgColor: (value: string) => string;
 	readonly #liveSteered: boolean;
 	readonly #synthetic: boolean;
@@ -175,7 +172,6 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 		this.#bgColor = bgColor;
 		this.#liveSteered = options.liveSteered === true;
 		this.#synthetic = options.synthetic === true;
-		this.#compactOverride = options.compactToolActivity;
 		this.#timestamp = options.timestamp;
 		this.#images = options.images ?? [];
 		this.#imageLinks = options.imageLinks;
@@ -368,11 +364,7 @@ export class UserMessageComponent extends Container implements ReactionTarget, T
 	}
 
 	get #compact(): boolean {
-		return (
-			!this.#synthetic &&
-			!displayPreferences.hideToolActivity &&
-			(this.#compactOverride ?? displayPreferences.compactToolActivity)
-		);
+		return !this.#synthetic && !displayPreferences.hideToolActivity && displayPreferences.compactToolActivity;
 	}
 
 	#foldedRows(lines: readonly string[], width: number): readonly string[] | undefined {

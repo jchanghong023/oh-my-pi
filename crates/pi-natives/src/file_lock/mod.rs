@@ -14,7 +14,6 @@ use crate::js;
 
 #[cfg(target_os = "linux")]
 mod linux;
-mod persistent;
 #[cfg(all(unix, not(target_os = "linux")))]
 mod unix;
 #[cfg(target_os = "windows")]

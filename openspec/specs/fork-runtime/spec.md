@@ -26,8 +26,8 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 - 会话删除须区分主文件删除、备份清理和附件清理，明确已提交、部分清理及未知状态；team 通知发送与后续 UI 更新分别定位，内部终止仅记录安全原因分类；repo 整代读取失败使用文件指纹定位，不记录原路径或源码。
 - 离线 models/bench 的 cache-only 日志仅描述目录发现/刷新，不代表模型请求离线；初始化及后续 selector-miss 刷新保留起止关联。WSL helper 预检拒绝记录有界原因码，不复制 helper 输出正文。
 - 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
-- 日志目录不可写时 MUST 尝试合理的用户级目录回退；适用的 Linux offline shm 模式下，回退仍须限定在运行根内，不得转写原始持久根或其他磁盘目录。仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
-- 本契约覆盖已保留的 fork 功能及其公共边界：JchTools、team、Goal、docs/wiki、repo/AST 通知、company 与向量请求、Codex 压缩、JCH Git、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
+- 日志目录不可写时 MUST 尝试合理的用户级目录回退；仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
+- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、docs/wiki、repo/AST 通知、company 与向量请求、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
 
 #### Scenario: 运行诊断日志的可观察行为
 
@@ -43,13 +43,14 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
+- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
 - fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定。
 - fork 新增 `-P <name>` 作为 `--profile <name>` 的短参数，无需 shell alias。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 原始数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。非 offline 时直接使用该根；适用的 offline shm 模式按下述契约区分运行根与原始持久根。
-- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。
-- **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。非 offline 时，一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；离线 shm 模式（Linux offline）时该变量按[offline 下被忽略的显式路径覆盖](../offline-shm/spec.md)规则被忽略，native 根因此固定为运行根内的 `natives/`，此处不重复该 MUST；宿主不要求永久保留其临时叶，也不通过 `client.close()` 关闭共享 scope。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
+- native addon 与 grammar 安装器 MUST 使用同一有效数据根及 profile 解析；显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录。此规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
+- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录。
+- **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；宿主不要求永久保留其临时叶，也不通过 `client.close()` 关闭共享 scope。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
@@ -65,7 +66,7 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 - 仓库只启用 `.github/workflows/ci.yml`；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
 - 构建发布 CI 使用 GitHub 原生缓存保存 Bazel action cache、依赖下载及 Cargo registry/git；无需自建缓存服务器或额外凭据。各 native target 独立恢复缓存，仅 main 保存缓存，键包含宿主平台、目标、工具链/构建配置及 native 源码指纹；精确键缺失时优先回退同配置缓存，再回退同平台同目标的旧缓存，由 Bazel 根据实际输入判断哪些 action 可复用。运行摘要记录命中键、Bazel action 统计及各缓存目录大小；缓存缺失或被 GitHub 淘汰时正常冷编译，不跳过构建。
-- 二进制必须携带 fork 版本、构建时间和更新仓库信息。
+- 二进制必须携带 fork 版本和更新仓库信息。
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名、生成文件恢复及可选 ZCode 产物阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
@@ -101,31 +102,13 @@ OMP MUST 只从编译二进制自身的 manifest 提取并加载按内容寻址�
 - 内嵌 addon 的缓存文件名 MUST 为 `pi_natives.<平台>-<架构>[-modern|-baseline].<sha256>.node`：x64 提供 `-modern` 与 `-baseline` 两个变体，其他架构只有不带变体后缀的一个文件；`<sha256>` 为解压后 addon 字节的 SHA-256。
 - 编译二进制 MUST 只考虑自身 manifest 列出的内容寻址文件名（按 CPU 变体选择，`modern` 加载失败时可再试同一 manifest 的 `baseline`），MUST NOT 回退到按版本号命名的缓存目录文件或相邻的其他 addon；这些文件可能来自同一版本号的另一构建。
 - 解压前 MUST 校验内嵌帧解压后长度与其 manifest 记录一致；目标已存在且字节数一致时 MUST 复用，不重复写入。
-- offline 加载路径（普通文件加载与可执行内存后备）MUST 在加载前按文件名中的 SHA-256 校验内容，不匹配 MUST 拒绝加载并报错；其他加载路径 MUST 只使用自身 manifest 列出的内容寻址文件，MUST NOT 借版本号或相邻文件绕过 manifest。
-- 提取与发布 MUST 使用不跟随符号链接的独占写入；离线 shm 模式下还 MUST 通过运行根校验把落点限定在运行根内。发布后 MUST NOT 遗留临时文件。
+- offline 加载路径 MUST 在加载前按文件名中的 SHA-256 校验内容，不匹配 MUST 拒绝加载并报错；其他加载路径 MUST 只使用自身 manifest 列出的内容寻址文件，MUST NOT 借版本号或相邻文件绕过 manifest。
+- 提取与发布 MUST 使用不跟随符号链接的独占写入；发布后 MUST NOT 遗留临时文件。
 
 #### Scenario: 内嵌 native addon 的内容寻址加载的可观察行为
 
 - **WHEN** 编译二进制启动并需要加载 native addon
 - **THEN** 它只提取／加载自身 manifest 中校验通过的内容寻址文件，内容不匹配或仅存在版本号命名的旧文件时明确失败
-
-### Requirement: 版本显示与构建时间戳
-
-OMP MUST 在嵌入了构建时间戳的发行构建中显示版本加构建时间，其他构建只显示版本。
-
-#### Scenario: 版本显示与构建时间戳的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 设置了 `PI_BUILD_TIMESTAMP` 时，`--version` 与根帮助 MUST 显示 `VERSION (built <timestamp>)`，`<timestamp>` 为嵌入值原样呈现，不做本地时区转换或重新格式化。
-- 未设置时 MUST 只显示 `VERSION`，MUST NOT 输出空括号、占位符或伪造时间。
-- 该显示值 MUST NOT 写入配置文件，也不影响 `omp update` 的版本比较与安装器对 `omp --version` 前缀的核对。
-
-#### Scenario: 版本显示与构建时间戳的可观察行为
-
-- **WHEN** 分别用带与不带构建时间戳的二进制执行 `omp --version`
-- **THEN** 前者输出 `VERSION (built <timestamp>)`，后者只输出 `VERSION`
 
 ### Requirement: 发布 CI 的触发、并发与权限
 

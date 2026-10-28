@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -13,7 +12,6 @@ import {
 	subscribeAckSchema,
 	v4ConversationRowsRangeResultSchema,
 	workspaceConfigTopicWireFrameSchema,
-	zcodeSessionConfigureResultSchema,
 } from "../../src/modes/zcode/schema";
 import {
 	type Frame,
@@ -310,12 +308,19 @@ describe("ZCode actual public app-server process", () => {
 			),
 		).toBe(true);
 	}, 120_000);
-	test("header-only account credentials cross the actual Host reverse-request boundary without persistence or fallback", async () => {
-		await using root = await TempDir.create("@zcode-header-auth-");
+	test("Host provider files and legacy sync requests cannot inject providers into the native catalog", async () => {
+		await using root = await TempDir.create("@zcode-native-provider-boundary-");
 		await using config = await fixture(root);
 		const builtinPath = root.join("builtin-provider.json");
 		const personalPath = root.join("personal-provider.json");
-		const accountModel = { providerId: "account:test", modelId: "chat-a" };
+		const modelConfig = {
+			properties: {
+				contextWindow: 8192,
+				inputFormat: { supportsText: true, supportsImage: false },
+				supportsToolCall: true,
+			},
+			optionSpecs: { maxOutputTokens: { max: 1024 }, reasoningLevel: { values: ["off"] } },
+		};
 		await fs.writeFile(
 			builtinPath,
 			JSON.stringify({
@@ -326,17 +331,12 @@ describe("ZCode actual public app-server process", () => {
 						templateRules: [],
 						providerRules: [
 							{
-								providerId: accountModel.providerId,
+								providerId: "host-injected",
 								config: {
-									group: "zai-family",
-									access: {
-										type: "zhipu-account",
-										accountType: "zai",
-										mode: "individual-coding-plan",
-										entitled: true,
-									},
+									group: "standard-personal",
+									access: { type: "api-key", apiKey: "host-secret" },
 									api: { type: "openai-chat-completions", baseUrl: config.providerBaseUrl },
-									builtinModelIds: [accountModel.modelId, "chat-b"],
+									builtinModelIds: ["chat-a"],
 								},
 							},
 						],
@@ -346,19 +346,7 @@ describe("ZCode actual public app-server process", () => {
 						modelApiRules: [],
 						providerSiteRules: [],
 						templateModelRules: [],
-						builtinProviderModelRules: [
-							{
-								providerId: accountModel.providerId,
-								config: {
-									properties: {
-										contextWindow: 8192,
-										inputFormat: { supportsText: true, supportsImage: false },
-										supportsToolCall: true,
-									},
-									optionSpecs: { maxOutputTokens: { max: 1024 }, reasoningLevel: { values: ["off"] } },
-								},
-							},
-						],
+						builtinProviderModelRules: [{ providerId: "host-injected", config: modelConfig }],
 					},
 				},
 			}),
@@ -368,132 +356,66 @@ describe("ZCode actual public app-server process", () => {
 			JSON.stringify({
 				schemaVersion: 1,
 				config: {
-					providerConfigRules: { providerRules: [] },
-					modelConfigRules: { providerModelRules: [], manualProviderModelRules: [] },
+					providerConfigRules: {
+						providerRules: [
+							{
+								providerId: "host-personal",
+								config: {
+									group: "standard-personal",
+									access: { type: "api-key", apiKey: "host-secret" },
+									api: { type: "openai-chat-completions", baseUrl: config.providerBaseUrl },
+									personalModelIds: ["chat-a"],
+								},
+							},
+						],
+					},
+					modelConfigRules: {
+						providerModelRules: [],
+						manualProviderModelRules: [{ providerId: "host-personal", modelId: "chat-a", config: modelConfig }],
+					},
 				},
 			}),
 		);
 		config.env.ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = builtinPath;
 		config.env.ZCODE_PERSONAL_PROVIDER_CONFIG_FILE = personalPath;
-		const secret = `fixture-request-only-${crypto.randomUUID()}`;
-		let authMode: "allow" | "deny" | "hold" = "allow";
 		await using peer = new ProcessPeer(config.cwdA, config.env);
-		peer.reverseReply = frame => {
-			if (frame.method !== "interaction/requestProviderRuntimeHeaders") return undefined;
-			const params = LegacyProtocol.zcodeProviderRuntimeHeadersRequestParamsSchema.parse(frame.params);
-			expect(params.providerId).toBe(accountModel.providerId);
-			expect(params.workspace).toEqual(workspace(config.cwdA));
-			if (authMode === "hold") return undefined;
-			if (authMode === "deny") return { headersApplied: false, errorMessage: "Fixture authorization denied" };
-			return {
-				headersApplied: true,
-				requestAuth: { headers: { authorization: `Bearer ${secret}`, "x-fixture-auth": secret } },
-			};
-		};
 		await peer.ready();
-		const basedOnZCodeBuiltinRevision = `zcode-builtin:1:${createHash("sha256").update(path.resolve(builtinPath)).digest("hex")}`;
-		const providers = { [accountModel.providerId]: { access: { type: "zhipu-account", entitled: true } } };
-		const states = { [accountModel.providerId]: { availability: "available", entitled: true, current: true } };
-		const account = {
-			revision: `account:${JSON.stringify([basedOnZCodeBuiltinRevision, [{ providerId: accountModel.providerId, config: providers[accountModel.providerId] }], states])}`,
-			basedOnZCodeBuiltinRevision,
-			providers,
-			states,
-		};
-		expect(await peer.request("provider/updateAccountConfig", account)).toMatchObject({ status: "received" });
-		const allowed = await create(peer, config.cwdA, accountModel);
-		const [roles, models] = await Promise.all(
-			["get_model_roles", "get_team_models"].map(async operation =>
-				zcodeSessionConfigureResultSchema.parse(
-					await peer.request("session/configure", { sessionId: allowed, operation }),
-				),
-			),
-		);
-		if (roles?.operation !== "get_model_roles" || models?.operation !== "get_team_models")
-			throw new Error("Expected complete public role and Team catalogs");
-		const expectedModels = ["chat-a", "chat-b"].map(modelId => ({
-			provider: accountModel.providerId,
-			modelId,
-		}));
-		expect(
-			roles.data.roles
-				.find(role => role.roleId === "default")
-				?.candidateModels.filter(candidate => candidate.provider === accountModel.providerId),
-		).toEqual(expectedModels);
-		expect(roles.data.sessionModel?.model).toEqual(expectedModels[0]);
-		expect(models.data.models.filter(candidate => candidate.model.provider === accountModel.providerId)).toEqual(
-			expectedModels.map(candidate => ({ model: candidate, name: candidate.modelId, selectable: true })),
-		);
-		expect(models.data.models).toContainEqual({
-			model: { provider: model.providerId, modelId: "chat-b" },
-			name: "chat-b",
-			selectable: true,
-		});
-		expect(
-			models.data.models.some(candidate => !candidate.selectable && !!candidate.reasonCode && !!candidate.reason),
-		).toBe(true);
-		expect(peer.seen.some(frame => frame.method === "interaction/requestProviderRuntimeHeaders")).toBe(false);
-		expect(config.requests).toHaveLength(0);
-		await subscribe(peer, allowed);
-		await peer.request("workspace/updateModelIoPreferences", {
-			workspace: workspace(config.cwdA),
-			preferences: { fullRetentionEnabled: true },
-		});
-		expect(await command(peer, allowed, "sendText", { text: "ZCODE_TEST_ACCOUNT_ALLOWED" })).toMatchObject({
-			status: "accepted",
-		});
-		await finishedOutput(peer, allowed, "ZCODE_TEST_ACCOUNT_ALLOWED_DONE");
-		expect(config.requests).toHaveLength(1);
-		expect(config.requestHeaders[0]!.get("authorization")).toBe(`Bearer ${secret}`);
-		expect(config.requestHeaders[0]!.get("x-fixture-auth")).toBe(secret);
-		await peer.request("session/close", { sessionId: allowed });
-		const retained = await retainedModelIo(config.configRoot);
-		expect(retained.size).toBe(1);
-		expect([...retained.values()].join("\n")).toContain("ZCODE_TEST_ACCOUNT_ALLOWED_DONE");
-		expect([...retained.values()].join("\n")).not.toContain(secret);
-
-		authMode = "deny";
-		const denied = await create(peer, config.cwdA, accountModel);
-		await subscribe(peer, denied);
-		expect(await command(peer, denied, "sendText", { text: "ZCODE_TEST_ACCOUNT_DENIED" })).toMatchObject({
-			status: "failed",
-		});
-		expect(config.requests).toHaveLength(1);
-
-		authMode = "hold";
-		const cancelled = await create(peer, config.cwdA, accountModel);
-		await subscribe(peer, cancelled);
-		const pending = command(peer, cancelled, "sendText", { text: "ZCODE_TEST_ACCOUNT_CANCELLED" });
-		const reverse = await peer.next(
-			frame =>
-				frame.method === "interaction/requestProviderRuntimeHeaders" &&
-				isRecord(frame.params) &&
-				frame.params.sessionId === cancelled,
-		);
-		const params = LegacyProtocol.zcodeProviderRuntimeHeadersRequestParamsSchema.parse(reverse.params);
-		await command(peer, cancelled, "stop", {});
-		await peer.next(
-			frame =>
-				frame.method === "interaction/providerRuntimeHeadersCancelled" &&
-				isRecord(frame.params) &&
-				frame.params.requestId === params.requestId,
-		);
-		expect(await pending).toMatchObject({ status: "failed" });
-		// A late Host answer cannot revive cancelled work or fall back to an available local model.
-		peer.write({
-			id: reverse.id,
-			result: { headersApplied: true, requestAuth: { headers: { "x-fixture-auth": secret } } },
-		});
-		await Promise.all([denied, cancelled].map(sessionId => peer.request("session/close", { sessionId })));
-		expect(await peer.eof()).toBe(0);
-		expect(config.requests).toHaveLength(1);
-		expect(JSON.stringify(peer.seen)).not.toContain(secret);
-		expect(await peer.stderr).not.toContain(secret);
-		for (const relative of await fs.readdir(root.path(), { recursive: true })) {
-			const actualPath = path.join(root.path(), relative);
-			if ((await fs.stat(actualPath)).isFile())
-				expect((await fs.readFile(actualPath)).includes(Buffer.from(secret))).toBe(false);
+		for (const method of ["provider/updateAccountConfig", "provider/refreshRegistry"]) {
+			expect((await peer.requestFrame(method, {})).error).toMatchObject({
+				code: -32601,
+				message: "Host provider configuration is not supported",
+			});
 		}
+		const topic = `workspace-config/${config.cwdA}`;
+		await peer.request("v4/conversation/subscribe", {
+			topic,
+			connectionId: "native-provider-boundary",
+			clientMode: "desktop-continuous",
+			workspace: workspace(config.cwdA),
+		});
+		const notification = await peer.next(
+			frame => frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
+		);
+		const wire = workspaceConfigTopicWireFrameSchema.parse(notification.params);
+		if (wire.kind !== "complete" || wire.frame.payload.kind !== "snapshot") {
+			throw new Error("Expected native workspace catalog snapshot");
+		}
+		const options =
+			wire.frame.payload.snapshot.config.configOptions.find(option => option.id === "model")?.options ?? [];
+		expect(options).toContainEqual(expect.objectContaining({ value: "zcode-fixture/chat-a", origin: "native" }));
+		expect(
+			options.some(
+				option => option.modelProviderId === "host-injected" || option.modelProviderId === "host-personal",
+			),
+		).toBe(false);
+		expect(
+			await peer.request("provider/testModelConnectivity", {
+				workspace: workspace(config.cwdA),
+				selection: model,
+			}),
+		).toEqual({ success: true });
+		expect(config.requests).toHaveLength(1);
+		expect(peer.seen.some(frame => frame.method === "interaction/requestProviderRuntimeHeaders")).toBe(false);
 	}, 120_000);
 	test("legacy Goal set and replace preserve reserved objectives through native execution and canonical cold recovery", async () => {
 		await using root = await TempDir.create("@zcode-goal-boundary-");

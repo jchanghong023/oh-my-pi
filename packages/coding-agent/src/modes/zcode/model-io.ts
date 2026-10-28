@@ -1,11 +1,10 @@
 import * as fs from "node:fs/promises";
 import type { Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import type { ArtifactManager } from "../../session/artifacts";
-import { assertOfflineSessionPath } from "../../session/session-storage";
 
 export interface ZCodeModelIoRetentionOptions {
 	sessionId: string;
-	/** The original session owner supplies its artifact manager, including offline-root policy. */
+	/** The original session owner supplies its artifact manager. */
 	artifacts: () => ArtifactManager | null;
 	/** Diagnostic failure only: original ZCode capture never interrupts model execution. */
 	onError: (error: Error) => void;
@@ -195,7 +194,6 @@ export class ZCodeModelIoRetention {
 				this.#path = allocated.path;
 			}
 			if (!this.#valid(request)) return;
-			assertOfflineSessionPath(this.#path);
 			await fs.appendFile(this.#path, line, { encoding: "utf8", mode: 0o600 });
 		});
 		this.#tail = write

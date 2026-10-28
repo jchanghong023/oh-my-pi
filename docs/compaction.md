@@ -499,6 +499,7 @@ Post-navigation event exposing new/old leaf and optional summary entry.
 - `abortCompaction()` cancels manual compaction, auto-compaction, and handoff generation controllers.
 - Auto compaction emits start/end session events for UI/state updates.
 - Auto compaction can try multiple model candidates and retry transient failures; long retry delays prefer the next candidate when one is available.
+- Candidate selection keeps the active model rather than substituting a Codex-specific default; an explicitly configured `compactionModel` is tried first. Compaction reasoning follows the session thinking level, with unset or inherited levels defaulting to high and model-supported effort limits applied.
 - Overflow errors are excluded from generic retry path because they are handled by context promotion/compaction.
 - If auto-compaction fails:
    - overflow path emits `Context overflow recovery failed: ...`

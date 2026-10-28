@@ -1,6 +1,6 @@
 //! Deterministic endpoint naming shared by every process that dials or binds.
 //!
-//! Naming is deterministic for a shared environment, including `OMP_OFFLINE`.
+//! Naming is deterministic for processes using the same directory.
 //! Stem sanitizing, `sun_path` relocation and Windows pipe shape are testable.
 
 #[cfg(windows)]
@@ -35,16 +35,6 @@ pub fn hash16(bytes: &[u8]) -> String {
 /// Private per-user directory that hosts relocated Unix sockets.
 #[cfg_attr(windows, allow(dead_code, reason = "pure helper unit-tested on every host"))]
 pub fn relocation_dir(euid: u32) -> String {
-	#[cfg(target_os = "linux")]
-	if std::env::var("OMP_OFFLINE").is_ok_and(|value| {
-		let value = value.trim();
-		value == "1"
-			|| value.eq_ignore_ascii_case("true")
-			|| value.eq_ignore_ascii_case("yes")
-			|| value.eq_ignore_ascii_case("on")
-	}) {
-		return format!("/dev/shm/omp-{euid}");
-	}
 	format!("/tmp/omp-{euid}")
 }
 

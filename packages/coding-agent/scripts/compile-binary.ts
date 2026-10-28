@@ -23,8 +23,6 @@ export interface CodingAgentCompileOptions {
 	readonly transformersVersion: string;
 	/** Optional application version embedded into the standalone executable. */
 	readonly buildVersion?: string;
-	/** Optional UTC build timestamp, rounded to the minute, shown by `omp --version`. */
-	readonly buildTimestamp?: string;
 	/** Optional GitHub repository used by binary-only self-updates. */
 	readonly updateRepository?: string;
 	/**
@@ -60,9 +58,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
-				...(options.buildTimestamp
-					? { "process.env.PI_BUILD_TIMESTAMP": JSON.stringify(options.buildTimestamp) }
-					: {}),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository

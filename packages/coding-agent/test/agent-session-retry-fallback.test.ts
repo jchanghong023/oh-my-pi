@@ -335,10 +335,7 @@ describe("AgentSession retry fallback", () => {
 		vi.restoreAllMocks();
 	});
 
-	async function createDeferredRoleFallback(
-		originalSelector: string,
-		options: { pinned?: boolean; primaryApi?: Api } = {},
-	) {
+	async function createDeferredRoleFallback(originalSelector: string, options: { pinned?: boolean } = {}) {
 		const primaryTemplate = getBundledModel("openai-codex", "gpt-5.6-sol");
 		if (!primaryTemplate) throw new Error("Expected bundled reasoning model");
 		const primaryProvider = "retry-role-primary";
@@ -355,7 +352,7 @@ describe("AgentSession retry fallback", () => {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `${role}-recovery.yml`), {
 			settings,
 			ignoreLocalModelConfig: true,
-			cacheDbPath: path.join(tempDir.path(), `${role}-${options.pinned}-${options.primaryApi}-recovery.db`),
+			cacheDbPath: path.join(tempDir.path(), `${role}-${options.pinned}-recovery.db`),
 		});
 		const modelDefinition = {
 			id: "gpt-5.6-sol",
@@ -375,7 +372,7 @@ describe("AgentSession retry fallback", () => {
 		});
 		let catalogReady = false;
 		registry.registerProvider(primaryProvider, {
-			api: options.primaryApi ?? "openai-responses",
+			api: "openai-responses",
 			baseUrl: "https://retry-role.invalid/v1",
 			apiKey: "test-key",
 			models: [],
@@ -6465,19 +6462,6 @@ describe("AgentSession retry fallback", () => {
 		await active.waitForIdle();
 		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
 		expect(active.configuredThinkingLevel()).toBe(Effort.Medium);
-		expect(active.servingModel?.isFallback).toBe(true);
-	});
-
-	it("never restores a role primary backed by the remote Agent API", async () => {
-		const fixture = await createDeferredRoleFallback("@review:high", { primaryApi: "jchtools-agent" });
-		const active = session!;
-		fixture.settings.setModelRole("review", fixture.primarySelector);
-		await fixture.refreshPrimary();
-
-		await active.prompt("Remote availability must not replay or reroute this turn");
-		await active.waitForIdle();
-		expect(fixture.requestedModels).toEqual([fixture.fallbackSelector]);
-		expect(active.model?.api).toBe("openai-responses");
 		expect(active.servingModel?.isFallback).toBe(true);
 	});
 

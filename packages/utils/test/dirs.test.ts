@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as nativePath from "@oh-my-pi/pi-natives/path";
+import { resolvePersistentRoot } from "@oh-my-pi/pi-natives/offline-root";
 import {
 	__resetDirsFromEnvForTests,
 	__resetProjectDirCacheForTests,
@@ -25,6 +26,40 @@ import {
 	setProfile,
 	setProjectDir,
 } from "@oh-my-pi/pi-utils/dirs";
+describe("persistent root lexical identity", () => {
+	it("canonicalizes redundant separators without changing the original environment", () => {
+		const root = path.resolve("fixture", "data-root");
+		for (const override of [
+			root,
+			`${root}${path.sep}`,
+			`${root}${path.sep.repeat(3)}`,
+			`${root}${path.sep}nested${path.sep}..${path.sep}`,
+		]) {
+			const env = { OMP_CONFIG_ROOT: override };
+			expect(resolvePersistentRoot(env)).toBe(root);
+			expect(env.OMP_CONFIG_ROOT).toBe(override);
+		}
+	});
+
+	it("preserves filesystem roots, including Windows drive and UNC roots", () => {
+		const roots = [path.parse(process.cwd()).root];
+		if (process.platform === "win32") roots.push("C:\\", "\\\\server\\share\\");
+		for (const root of roots) {
+			expect(resolvePersistentRoot({ OMP_CONFIG_ROOT: `${root}${path.sep.repeat(3)}` })).toBe(root);
+		}
+	});
+
+	it("canonicalizes the default-root result and tilde-expanded overrides", () => {
+		const home = path.resolve("fixture", "home");
+		const homeEnv = process.platform === "win32" ? { USERPROFILE: home } : { HOME: home };
+		expect(resolvePersistentRoot({ ...homeEnv, PI_CONFIG_DIR: `data-root${path.sep.repeat(3)}` })).toBe(
+			path.join(home, "data-root"),
+		);
+		expect(resolvePersistentRoot({ ...homeEnv, OMP_CONFIG_ROOT: "~/data-root///" })).toBe(
+			path.join(home, "data-root"),
+		);
+	});
+});
 
 const originalProjectDir = fs.realpathSync(process.cwd()).replace(/^\/private(?=\/)/, "");
 

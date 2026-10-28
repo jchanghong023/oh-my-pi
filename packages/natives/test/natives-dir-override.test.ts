@@ -10,6 +10,11 @@ const ENV_KEYS = [
 	"USERPROFILE",
 	"OMP_CONFIG_ROOT",
 	"PI_NATIVES_DIR",
+	"PI_CONFIG_DIR",
+	"OMP_PROFILE",
+	"PI_PROFILE",
+	"PI_CODING_AGENT_DIR",
+	"XDG_CACHE_HOME",
 	"XDG_DATA_HOME",
 	"PI_NATIVE_VARIANT",
 	"__PI_NATIVE_VARIANT_CACHE",
@@ -47,19 +52,19 @@ describe("native addon directory override", () => {
 
 	it("places the versioned cache outside a fresh HOME and takes precedence over initialized XDG", async () => {
 		const shared = path.join(tempRoot, "shared");
-		const xdgData = path.join(tempRoot, "data");
-		await fs.mkdir(path.join(xdgData, "omp"), { recursive: true });
+		const xdgCache = path.join(tempRoot, "cache");
+		await fs.mkdir(path.join(xdgCache, "omp"), { recursive: true });
 		process.env.PI_NATIVES_DIR = ` ${shared} `;
 
 		const ctx = initLoaderContext({ isCompiledBinary: true });
 		prepareNativeVersionDir(ctx.versionedDir);
 
 		expect(ctx.versionedDir).toBe(path.join(shared, packageJson.version));
-		process.env.XDG_DATA_HOME = xdgData;
+		process.env.XDG_CACHE_HOME = xdgCache;
 		expect(initLoaderContext({ isCompiledBinary: true }).versionedDir).toBe(ctx.versionedDir);
 		expect(await fs.readdir(shared)).toEqual([packageJson.version]);
 		expect(await fs.readdir(home)).toEqual([]);
-		expect(await fs.readdir(path.join(xdgData, "omp"))).toEqual([]);
+		expect(await fs.readdir(path.join(xdgCache, "omp"))).toEqual([]);
 	});
 
 	it("expands home-relative overrides before appending the package version", () => {
@@ -76,14 +81,15 @@ describe("native addon directory override", () => {
 		["empty", ""],
 		["whitespace", " \t "],
 		["relative", "relative/natives"],
-	])("falls back to XDG when the override is %s", async (_label, override) => {
-		const xdgData = path.join(tempRoot, "data");
-		await fs.mkdir(path.join(xdgData, "omp"), { recursive: true });
-		process.env.XDG_DATA_HOME = xdgData;
+	])("falls back to the migrated XDG cache when the override is %s", async (_label, override) => {
+		const xdgCache = path.join(tempRoot, "cache");
+		await fs.mkdir(path.join(xdgCache, "omp"), { recursive: true });
+		process.env.XDG_CACHE_HOME = xdgCache;
 		process.env.PI_NATIVES_DIR = override;
 
+		const root = process.platform === "linux" || process.platform === "darwin" ? path.join(xdgCache, "omp") : home;
 		expect(initLoaderContext({ isCompiledBinary: true }).versionedDir).toBe(
-			path.join(xdgData, "omp", "natives", packageJson.version),
+			path.join(root === home ? path.join(home, ".omp") : root, "natives", packageJson.version),
 		);
 	});
 });

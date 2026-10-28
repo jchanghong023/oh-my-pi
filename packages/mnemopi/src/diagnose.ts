@@ -7,8 +7,6 @@ import {
 	dbPath as configuredDbPath,
 	DEFAULT_DATA_DIR,
 	DEFAULT_DB_FILENAME,
-	resolveMemoryDbPath,
-	resolveMemoryPath,
 } from "./config";
 import { initBeam } from "./core/beam";
 import { closeQuietly, openDatabase } from "./db";
@@ -115,9 +113,8 @@ export function inspectDatabase(options: DiagnosticOptions = {}): DiagnosticSumm
 	let owned = false;
 	try {
 		path = options.dbPath ?? configuredDbPath();
-		path = resolveMemoryDbPath(path);
 		log("db", "db_path", "OK", path);
-		log("db", "data_dir", "OK", resolveMemoryPath(options.dataDir ?? configuredDataDir()));
+		log("db", "data_dir", "OK", options.dataDir ?? configuredDataDir());
 		log("db", "data_dir_parent", existsSync(dirname(path)) ? "OK" : "MISSING", dirname(path));
 
 		if (!db) {

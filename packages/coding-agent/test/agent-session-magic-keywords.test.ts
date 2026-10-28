@@ -93,7 +93,7 @@ describe("AgentSession magic keyword settings", () => {
 		cfgMagicKeywordsEnabled.set(created.settings, false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
-		await session.prompt("please workflowz this, ultrathink through it, and fullsend");
+		await session.prompt("please workflowz this and ultrathink through it");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
@@ -104,10 +104,9 @@ describe("AgentSession magic keyword settings", () => {
 		session = created.session;
 		cfgMagicKeyword.orchestrate.set(created.settings, false);
 		cfgMagicKeyword.workflow.set(created.settings, false);
-		cfgMagicKeyword.fullsend.set(created.settings, false);
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
-		await session.prompt("please orchestrate, workflowz, and fullsend this");
+		await session.prompt("please orchestrate and workflowz this");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
@@ -144,12 +143,12 @@ describe("AgentSession magic keyword settings", () => {
 		expect(promptMessages.find(message => message.role === "user")?.content).toEqual([{ type: "text", text }]);
 	});
 
-	it("prepends a hidden user-attributed fullsend notice without task and preserves the user message", async () => {
+	it("prepends a hidden user-attributed ultrathink notice without task and preserves the user message", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
-		await session.prompt("fullsend 完成这个任务");
+		await session.prompt("ultrathink 完成这个任务");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{
 			role?: string;
@@ -158,17 +157,17 @@ describe("AgentSession magic keyword settings", () => {
 			display?: boolean;
 			attribution?: string;
 		}>;
-		const noticeIdx = promptMessages.findIndex(message => message.customType === "fullsend-notice");
+		const noticeIdx = promptMessages.findIndex(message => message.customType === "ultrathink-notice");
 		const userIdx = promptMessages.findIndex(message => message.role === "user");
 		const notice = promptMessages[noticeIdx];
 		expect(notice).toMatchObject({
 			role: "custom",
-			customType: "fullsend-notice",
+			customType: "ultrathink-notice",
 			display: false,
 			attribution: "user",
 		});
 		expect(noticeIdx).toBeLessThan(userIdx);
-		expect(promptMessages[userIdx]?.content).toEqual([{ type: "text", text: "fullsend 完成这个任务" }]);
+		expect(promptMessages[userIdx]?.content).toEqual([{ type: "text", text: "ultrathink 完成这个任务" }]);
 	});
 
 	it("orders all magic notices deterministically", async () => {
@@ -176,23 +175,22 @@ describe("AgentSession magic keyword settings", () => {
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
-		await session.prompt("ultrathink orchestrate workflowz fullsend 完成这个任务");
+		await session.prompt("ultrathink orchestrate workflowz 完成这个任务");
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([
 			"ultrathink-notice",
 			"orchestrate-notice",
 			"workflow-notice",
-			"fullsend-notice",
 		]);
 	});
 
-	it("does not trigger fullsend for synthetic turns", async () => {
+	it("does not trigger ultrathink for synthetic turns", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
-		await session.prompt("fullsend 完成这个任务", { synthetic: true });
+		await session.prompt("ultrathink 完成这个任务", { synthetic: true });
 
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([]);
@@ -281,14 +279,14 @@ describe("AgentSession magic keyword settings", () => {
 		expect(session.autoResolvedThinkingLevel()).toBe(Effort.Low);
 	});
 
-	it("retains ultrathink maximum effort when combined with fullsend", async () => {
+	it("retains ultrathink maximum effort when combined with orchestrate", async () => {
 		const created = await createMagicKeywordSession(modelRegistry);
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 		const classifierSpy = vi.spyOn(autoThinkingClassifier, "classifyDifficulty");
 		session.setThinkingLevel(AUTO_THINKING);
 
-		await session.prompt("ultrathink fullsend 完成这个任务");
+		await session.prompt("ultrathink orchestrate 完成这个任务");
 
 		expect(classifierSpy).not.toHaveBeenCalled();
 		expect(session.thinkingLevel).toBe(Effort.XHigh);
@@ -296,7 +294,7 @@ describe("AgentSession magic keyword settings", () => {
 		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{ customType?: string }>;
 		expect(promptMessages.map(message => message.customType).filter(Boolean)).toEqual([
 			"ultrathink-notice",
-			"fullsend-notice",
+			"orchestrate-notice",
 		]);
 	});
 
@@ -315,14 +313,14 @@ describe("AgentSession magic keyword settings", () => {
 		expect(noticeIdx).toBeLessThan(userIdx);
 	});
 
-	it("injects the fullsend notice for collab-forwarded guest prompts", async () => {
+	it("injects the ultrathink notice for collab-forwarded guest prompts", async () => {
 		const created = await createMagicKeywordSession(modelRegistry, []);
 		session = created.session;
 		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
 
 		await session.promptCustomMessage({
 			customType: COLLAB_PROMPT_MESSAGE_TYPE,
-			content: "fullsend 帮我完成这个任务",
+			content: "ultrathink 帮我完成这个任务",
 			display: true,
 			attribution: "user",
 		});
@@ -332,12 +330,12 @@ describe("AgentSession magic keyword settings", () => {
 			customType?: string;
 			content?: string | Array<{ type: string; text?: string }>;
 		}>;
-		const noticeIdx = promptMessages.findIndex(message => message.customType === "fullsend-notice");
+		const noticeIdx = promptMessages.findIndex(message => message.customType === "ultrathink-notice");
 		const collabIdx = promptMessages.findIndex(message => message.customType === COLLAB_PROMPT_MESSAGE_TYPE);
 		const notice = promptMessages[noticeIdx];
 		expect(notice).toMatchObject({
 			role: "custom",
-			customType: "fullsend-notice",
+			customType: "ultrathink-notice",
 			display: false,
 			attribution: "user",
 		});

@@ -19,7 +19,7 @@ function textRuntime() {
 }
 
 describe("magic keyword public slash dispatch", () => {
-	it.each(["ultrathink", "orchestrate", "workflowz", "fullsend"])(
+	it.each(["ultrathink", "orchestrate", "workflowz"])(
 		"expands /%s in both the public TUI and ACP paths",
 		async keyword => {
 			const { runtime } = textRuntime();
@@ -46,7 +46,7 @@ describe("magic keyword public slash dispatch", () => {
 	);
 
 	it("preserves a read-only collab guest's keyword draft instead of returning a host prompt", async () => {
-		const draft = "/fullsend task-marker-43d";
+		const draft = "/ultrathink task-marker-43d";
 		let editor = draft;
 		const statuses: string[] = [];
 		const result = await executeBuiltinSlashCommand(draft, {
@@ -70,7 +70,7 @@ describe("magic keyword public slash dispatch", () => {
 	});
 
 	it("expands and clears a writable collab guest's keyword draft for host forwarding", async () => {
-		let editor = "/fullsend task-marker-43d";
+		let editor = "/ultrathink task-marker-43d";
 		const statuses: string[] = [];
 		const result = await executeBuiltinSlashCommand(editor, {
 			ctx: {
@@ -86,51 +86,9 @@ describe("magic keyword public slash dispatch", () => {
 			},
 		} as unknown as TuiSlashCommandRuntime);
 
-		expect(result).toBe("fullsend task-marker-43d");
+		expect(result).toBe("ultrathink task-marker-43d");
 		expect(editor).toBe("");
 		expect(statuses).toEqual([]);
-	});
-});
-
-describe("JCH scope parsing through the public ACP dispatcher", () => {
-	it.each([
-		["jchfuncreviewfix", "commit", "audit-ref-$&-43d"],
-		["jchfuncreview", "commit", "audit-ref-$&-43d"],
-		["jchverify", "commit", "audit-ref-$&-43d"],
-		["jchfuncreview", "path", "src/path marker-$&-43d"],
-		["jchverify", "path", "src/path marker-$&-43d"],
-	])("passes the complete %s %s target without replacement-string expansion", async (name, scope, target) => {
-		const { runtime, output } = textRuntime();
-		const prompt = await executeAcpBuiltinSlashCommand(`/${name} ${scope} ${target}`, runtime);
-		if (!prompt || !("prompt" in prompt)) throw new Error("Expected a residual model prompt");
-		expect(prompt.prompt).toContain(JSON.stringify(target));
-		expect(output).toEqual([]);
-	});
-
-	it.each([
-		"/jchfix",
-		"/jchdiagnose",
-		"/jchfuncreviewfix commit a b",
-		"/jchfuncreviewfix path src",
-		"/jchfuncreview repo",
-		"/jchfuncreview commit",
-		"/jchverify",
-		"/jchverify uncommitted extra",
-		"/jchcatchup unknown",
-	])("rejects %s without producing a model prompt", async input => {
-		const { runtime } = textRuntime();
-		expect(await executeAcpBuiltinSlashCommand(input, runtime)).toEqual({ consumed: true, failed: true });
-	});
-
-	it.each([
-		["/jchfuncreviewfix repo", "当前整个代码仓库（以工作区现状为准，包括未提交内容）。"],
-		["/jchfuncreview uncommitted", "当前工作区的全部未提交修改（包括 staged、unstaged 和 untracked 内容）。"],
-		["/jchverify uncommitted", "当前工作区的全部未提交修改（包括 staged、unstaged 和 untracked 内容）。"],
-	])("accepts the explicit no-target scope %s", async (input, scopeText) => {
-		const { runtime } = textRuntime();
-		const result = await executeAcpBuiltinSlashCommand(input, runtime);
-		if (!result || !("prompt" in result)) throw new Error("Expected a residual model prompt");
-		expect(result.prompt).toContain(scopeText);
 	});
 });
 
@@ -224,9 +182,9 @@ describe("public command inventory", () => {
 	});
 });
 
-describe("JCH DFT explanation target handoff", () => {
+describe("JCH input method target handoff", () => {
 	it("clears the TUI command only after expanding its complete target", async () => {
-		let editorText = "/jchdftexplain DFT-target-marker-43d";
+		let editorText = "/jchime IME-target-marker-43d";
 		const prompt = await executeBuiltinSlashCommand(editorText, {
 			ctx: {
 				session: { model: undefined },
@@ -238,7 +196,7 @@ describe("JCH DFT explanation target handoff", () => {
 				sessionManager: { getCwd: () => process.cwd() },
 			},
 		} as unknown as TuiSlashCommandRuntime);
-		expect(prompt).toContain("DFT-target-marker-43d");
+		expect(prompt).toContain("IME-target-marker-43d");
 		expect(editorText).toBe("");
 	});
 });

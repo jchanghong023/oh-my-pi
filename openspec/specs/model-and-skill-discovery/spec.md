@@ -2,7 +2,7 @@
 
 ## Purpose
 
-规定用户技能与共享技能发现、Codex 压缩模型选择等 fork 默认能力。用户和项目显式配置的优先级及同名来源规则保持原有边界。
+规定用户技能与共享技能发现等 fork 默认能力。用户和项目显式配置的优先级及同名来源规则保持原有边界。
 
 ## Requirements
 
@@ -40,49 +40,6 @@ OMP MUST 按单层目录发现及优先级加载；禁用时执行侧不扫描�
 
 - **WHEN** 设置有效共享技能根或禁用该来源
 - **THEN** 按单层目录发现及优先级加载；禁用时执行侧不扫描，管理侧仍可重新启用
-
-### Requirement: Codex GPT-6 Luna 默认上下文窗口
-
-OMP MUST 将 `openai-codex/gpt-6-luna`（含 `-wm` 路由）的默认上下文窗口设为 500000；扩展上下文与显式覆盖仍按原优先级生效。
-
-#### Scenario: 默认窗口与扩展窗口
-
-- **WHEN** 用户选择 `openai-codex/gpt-6-luna` 且未显式覆盖其上下文窗口
-- **THEN** 默认窗口为 500000；开启扩展上下文时使用服务端上报的 872000 上限，关闭时回到 500000。
-- **AND** 其他 provider 的同名模型、`gpt-5.6-luna` 及 `maxTokens` 不变。
-
-### Requirement: Codex 压缩默认模型
-
-OMP MUST 默认选择规定的 Codex 低思考模型；显式配置不被替换。
-
-#### Scenario: Codex 压缩默认模型的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 压缩候选链（主模型自身、model role 兜底、最大上下文兜底，含 advisor 上下文维护的同名解析）里凡落到 `openai-codex` provider 的候选一律替换为 `openai-codex/gpt-6-luna` 后再参与认证与 remote 资格过滤；luna 不在可用模型中（未认证/被禁用）时保留原候选，不阻断压缩回退。服务器压缩（Responses V2 流式）因此也在 luna 上执行；preserve 数据的 provider 仍是 `openai-codex`，与主模型同 provider，原生回放不受影响。
-- 显式配置的 `compactionModel`（models.json `modelOverrides`）不被替换：用户显式指定优先于本默认值。
-- 以 `gpt-6-luna` 为压缩模型时，压缩请求的推理档位固定为 `low`（本地摘要、handoff、短摘要与 V2 流式服务器压缩共用同一生效点 `resolveCompactionEffort`），不继承会话当前档位——包括 high/max、未设置时的 high 默认与显式 Off。
-- 仅约束压缩链路：主模型选择、主模型推理档位及其他 provider 的压缩行为不变；luna 作为主模型正常使用时档位不受影响（钉制只在压缩调用生效）。
-
-#### Scenario: Codex 压缩默认模型的可观察行为
-
-- **WHEN** 压缩候选为可用的 openai-codex 且用户未显式选择压缩模型
-- **THEN** 默认选择规定的 Codex 低思考模型；显式配置不被替换
-
-### Requirement: 默认压缩方法顺序
-
-OMP MUST 使用 `remote → handoff → snapcompact → shake → soft` 作为缺省压缩方法回退顺序，仅将 handoff 调整到 snapcompact 之前；压缩参数和各方法实现保持不变。
-
-#### Scenario: 未显式配置方法顺序
-
-- **WHEN** 未配置 `compaction.methodOrder`
-- **THEN** 远程压缩仍优先；远程不可用或失败时，在 handoff 可用的情况下先尝试 handoff，再回退到 snapcompact。
-
-#### Scenario: 显式配置优先
-
-- **WHEN** 用户或项目显式配置 `compaction.methodOrder`
-- **THEN** 沿用既有配置优先级和显式顺序，不自动重排或改写配置文件。
 
 ### Requirement: 压缩触发的待输入预算
 

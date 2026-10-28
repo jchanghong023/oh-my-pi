@@ -21,10 +21,9 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { SPINNER_FRAMES } from "@oh-my-pi/pi-tui/theme/symbols";
 import { $env, isTerminalHeadless, isWsl, logger, prompt } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../config/model-registry";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 
-import { formatModelRoleAlias, roleCandidatePool } from "../config/model-roles";
-import { formatModelStringWithRouting, resolveModelRoleValue } from "../config/model-resolver";
+import { roleCandidatePool } from "../config/model-roles";
+import { formatModelStringWithRouting } from "../config/model-resolver";
 import { collectOnlineTinyCandidates, expandOnlineTinyModelFallbacks } from "../tiny/online-candidates";
 import type { Settings } from "../config/settings";
 import titleMarkerInstruction from "../prompts/system/title-marker-instruction.md" with { type: "text" };
@@ -32,7 +31,6 @@ import titleSystemPrompt from "../prompts/system/title-system.md" with { type: "
 import { formatTitleUserMessage } from "../tiny/message-preproc";
 import { isLowSignalTitleInput, normalizeGeneratedTitle } from "../tiny/text";
 import { tinyTitleClient } from "../tiny/title-client";
-import { cfgTitleGenerator } from "./title-settings";
 
 import { cfgRetryModelFallback } from "../session/settings";
 
@@ -155,19 +153,6 @@ const LEADING_PROSE_THINKING_PREAMBLE_RE =
 	/^[ \t]*(?:(?:here(?:['’]s| is)[ \t]+(?:a|the|my)[ \t]+)|my[ \t]+)?(?:thinking|thought|reasoning)[ \t]+process[ \t]*:?[ \t]*(?:\r?\n|$)/i;
 
 function getTitleModels(registry: ModelRegistry, settings: Settings, currentModel?: Model<Api>): Model<Api>[] {
-	if (cfgTitleGenerator.get(settings) === "smol") {
-		const availableModels = roleCandidatePool("smol", settings, registry);
-		const model = resolveModelRoleValue(formatModelRoleAlias("smol"), availableModels, { settings }).model;
-		const models = model ? [model] : [];
-		if (
-			currentModel &&
-			(!model || cfgRetryModelFallback.get(settings) !== false) &&
-			(!model || formatModelStringWithRouting(model) !== formatModelStringWithRouting(currentModel))
-		) {
-			models.push(currentModel);
-		}
-		return models;
-	}
 	const availableModels = roleCandidatePool("tiny", settings, registry);
 	if (availableModels.length === 0) return [];
 
@@ -197,7 +182,7 @@ function getTitleModels(registry: ModelRegistry, settings: Settings, currentMode
  *
  * @param firstMessage The first user message
  * @param registry Model registry
- * @param settings Settings used to resolve the smol role
+ * @param settings Settings used to resolve the title model
  * @param cwd The caller's current task directory for online completion requests
  * @param sessionId Optional session id for sticky API key selection
  * @param currentModel Current model (used to derive title model)
@@ -341,7 +326,7 @@ async function generateTitleOnlineWithModels(
 	const userMessage = formatTitleUserMessage(firstMessage);
 
 	for (const model of models) {
-		const terminalFailure = model.provider === "codeagent" || isJchToolsAgentModel(model);
+		const terminalFailure = model.provider === "codeagent";
 		const modelName = `${model.provider}/${model.id}`;
 		const modelContext = {
 			sessionId,

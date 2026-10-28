@@ -2,7 +2,6 @@ import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Api, ApiKey, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
 import { toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
-import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import type { ResolvedCommitModel } from "../model-selection";
 import { extractTextContent } from "../utils";
 import { type CommitInferenceCache, computeCommitCacheKey } from "./cache";
@@ -121,7 +120,7 @@ export class OmpCommitInference implements CommitInference {
 			reasoning,
 		});
 		let lastError: Error | undefined;
-		const terminalFailure = target.model.provider === "codeagent" || isJchToolsAgentModel(target.model);
+		const terminalFailure = target.model.provider === "codeagent";
 		const maxAttempts = terminalFailure ? 1 : Math.max(1, this.#config.maxRetries);
 		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
 			this.#signal?.throwIfAborted();

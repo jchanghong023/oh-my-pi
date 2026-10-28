@@ -1198,12 +1198,12 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 
 	function compactTranscript(run: () => void): () => void {
 		return () => {
-			const compactToolActivity = chatTranscriptDisplayPreferences.compactToolActivity;
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			const previous = { ...chatTranscriptDisplayPreferences };
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 			try {
 				run();
 			} finally {
-				setChatTranscriptDisplayPreferences({ compactToolActivity });
+				setChatTranscriptDisplayPreferences(previous);
 			}
 		};
 	}
@@ -1359,7 +1359,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 					true,
 					undefined,
 					false,
-					true,
 				);
 				let source = shape === "table" ? "| Name | Body |\n| --- | --- |\n" : shape === "fence" ? "```text\n" : "";
 				for (let index = 0; index < 8; index++) {
@@ -1383,7 +1382,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 						true,
 						undefined,
 						false,
-						true,
 					);
 					fresh.updateContent({ ...finalAnswer, content: [{ type: "text", text: source }] }, { transient: true });
 					expect(component.render(width)).toEqual(fresh.render(width));
@@ -1450,7 +1448,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				true,
 				undefined,
 				false,
-				true,
 			);
 			transcript.addChild(component);
 			const history: string[] = [];
@@ -1494,7 +1491,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				true,
 				undefined,
 				false,
-				true,
 			);
 			transcript.addChild(component);
 			const history: string[] = [];
@@ -1542,7 +1538,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				true,
 				undefined,
 				false,
-				true,
 			);
 			transcript.addChild(component);
 			const history: string[] = [];
@@ -1586,7 +1581,6 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 					true,
 					undefined,
 					false,
-					true,
 				);
 				transcript.addChild(component);
 				const history: string[] = [];

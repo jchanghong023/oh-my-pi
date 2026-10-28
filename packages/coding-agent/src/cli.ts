@@ -155,7 +155,6 @@ async function runSmokeTest(): Promise<void> {
 	// Keep the smoke-only subprocess graph out of normal CLI startup.
 	const { smokeTestDocsWorker } = await import("./docs/service");
 	const { smokeTestJsEvalWorker } = await import("./eval/js/context-manager");
-	const { smokeTestOfflineShmBackupWorker } = await import("./offline/backup-lifecycle");
 	// Other smoke dependencies stay lazy so normal CLI startup does not load their worker clients.
 	const { smokeTestDaemonBroker } = await import("./launch/client");
 	const { smokeTestLspMux } = await import("./lsp/mux/daemon");
@@ -166,7 +165,6 @@ async function runSmokeTest(): Promise<void> {
 	await smokeTestSyncWorker();
 	await smokeTestStatsActivityWorker();
 	await smokeTestDocsWorker();
-	await smokeTestOfflineShmBackupWorker();
 
 	const statsServer = await startServer(0);
 	try {
@@ -204,16 +202,8 @@ const JS_EVAL_PROCESS_ARG = "__omp_worker_js_eval_process";
 const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
 const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
-const OFFLINE_SHM_BACKUP_WORKER_ARG = "__omp_worker_offline_shm_backup";
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
-	if (arg === OFFLINE_SHM_BACKUP_WORKER_ARG) {
-		const parentPort = getWorkerParentPort();
-		if (parentPort) installWorkerInbox(parentPort);
-		// Isolation boundary: the backup/SQLite graph must never load in the foreground.
-		await import("./offline/backup-worker");
-		return true;
-	}
 	if (arg === TINY_WORKER_ARG) {
 		await runTinyWorker();
 		return true;
@@ -468,11 +458,6 @@ async function runTinyWorker(): Promise<void> {
 /** Resolved top-level command name (never its arguments), for the unsettled-entry report. */
 let runningCommand: string | undefined;
 
-/** Version shown by `--version` and root help; release builds append their embedded build timestamp. */
-const displayVersion = process.env.PI_BUILD_TIMESTAMP
-	? `${VERSION} (built ${process.env.PI_BUILD_TIMESTAMP})`
-	: VERSION;
-
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
 	// The workflow entry is self-contained. Dispatch before profile/CLI parsing:
@@ -672,21 +657,7 @@ export async function runCli(argv: string[]): Promise<void> {
 			return;
 		}
 		runningCommand = resolved.argv[0];
-		let stopBackup = (): void => {};
-		if (
-			!["launch", "join", "setup", "app-server"].includes(runningCommand ?? "") &&
-			process.platform === "linux" &&
-			/^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")
-		) {
-			// Profile/env bootstrap must finish before the lifecycle's logger imports.
-			const { armOfflineShmBackupOnOutput } = await import("./offline/backup-lifecycle");
-			stopBackup = armOfflineShmBackupOnOutput(message => process.stderr.write(`${message}\n`));
-		}
-		try {
-			await run({ bin: APP_NAME, version: displayVersion, argv: resolved.argv, commands, metadataHelp: showHelp });
-		} finally {
-			stopBackup();
-		}
+		await run({ bin: APP_NAME, version: VERSION, argv: resolved.argv, commands, metadataHelp: showHelp });
 	} finally {
 		stopStartupComposer?.();
 	}

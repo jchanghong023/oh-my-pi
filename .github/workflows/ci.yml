@@ -27,7 +27,6 @@ jobs:
          is-release: "true"
          release-tag: ${{ steps.detect.outputs.release-tag }}
          version: ${{ steps.detect.outputs.version }}
-         release-timestamp: ${{ steps.detect.outputs.release-timestamp }}
          channel: "stable"
       steps:
          - name: Reject release publication outside main
@@ -63,11 +62,9 @@ jobs:
                 exit 1
               fi
               version="${baseline_tag#v}+fork.${{ github.run_number }}"
-              release_timestamp="$(date -u +%Y-%m-%dT%H:%MZ)"
               {
                 echo "release-tag=v$version"
                 echo "version=$version"
-                echo "release-timestamp=$release_timestamp"
               } >> "$GITHUB_OUTPUT"
               echo "Building fork version $version from upstream baseline $baseline_tag"
 
@@ -230,7 +227,6 @@ jobs:
            env:
               RELEASE_TARGETS: ${{ matrix.target_id }}
               RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
-              RELEASE_TIMESTAMP: ${{ needs.release_metadata.outputs.release-timestamp }}
               UPDATE_REPOSITORY: ${{ github.repository }}
               RELEASE_COMMIT: ${{ github.sha }}
            run: bun run ci:release:build-binaries

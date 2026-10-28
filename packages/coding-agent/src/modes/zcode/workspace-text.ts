@@ -5,9 +5,9 @@ import { concreteThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/think
 import { Type } from "@sinclair/typebox";
 import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
-import { discoverAuthStorage } from "../../sdk";
+import { discoverAuthStorage, loadCliExtensionProviders } from "../../sdk";
 import type { AuthStorage } from "../../session/auth-storage";
-import type { ZCodeProviderConfiguration } from "./provider-config";
+import { parseZCodeThinkingLevel } from "./provider-config";
 import type { LegacyProtocol as L } from "./schema";
 
 function contextFor(params: L.ZCodeWorkspaceGenerateTextParams, model: Model): Context {
@@ -70,7 +70,6 @@ function contextFor(params: L.ZCodeWorkspaceGenerateTextParams, model: Model): C
 
 /** 工作区辅助生成不属于聊天：只借用原生模型配置和 completion，不创建会话或写 transcript。 */
 export async function generateWorkspaceText(
-	configuration: ZCodeProviderConfiguration,
 	params: L.ZCodeWorkspaceGenerateTextParams,
 	signal: AbortSignal,
 ): Promise<L.ZCodeWorkspaceGenerateTextResult> {
@@ -81,23 +80,18 @@ export async function generateWorkspaceText(
 	try {
 		auth = await discoverAuthStorage(undefined, { cwd, settings });
 		const registry = new ModelRegistry(auth, undefined, { settings });
-		await configuration.prepare(cwd, settings, registry);
+		await loadCliExtensionProviders(registry, settings, cwd, { discoverModels: false });
+		await registry.hydrateCredentialScopedModelCaches();
 		signal.throwIfAborted();
 		const selection = params.selection;
 		const model = registry.find(selection.providerId, selection.modelId);
 		if (!model) throw new Error(`Unknown model: ${selection.providerId}/${selection.modelId}`);
 		const level = selection.options?.reasoningLevel;
-		const thinking =
-			level === undefined ? undefined : configuration.resolveThinkingLevel(model.provider, model.id, level);
-		if (level !== undefined && thinking === undefined) throw new Error("Unsupported Host reasoning level");
+		const thinking = level === undefined ? undefined : parseZCodeThinkingLevel(level);
+		if (level !== undefined && thinking === undefined) throw new Error("Unsupported reasoning level");
 		const sessionId = randomUUID();
-		const supplied = await configuration.resolveRequestAuth(
-			{ sessionId, workspace: params.workspace, modelSelection: selection },
-			model,
-			signal,
-		);
-		const apiKey = supplied?.apiKey ?? (await registry.getApiKey(model, sessionId, { signal }));
-		const headers = { ...(await registry.getProviderHeaders(model.provider)), ...supplied?.headers };
+		const apiKey = await registry.getApiKey(model, sessionId, { signal });
+		const headers = (await registry.getProviderHeaders(model.provider)) ?? {};
 		if (apiKey === undefined && Object.keys(headers).length === 0)
 			throw new Error(`No request authentication for provider: ${model.provider}`);
 		const response = await completeSimple(model, contextFor(params, model), {
@@ -108,7 +102,6 @@ export async function generateWorkspaceText(
 			maxHttpAttempts: 1,
 			reasoning: toReasoningEffort(concreteThinkingLevel(thinking)),
 			disableReasoning: thinking === "off",
-			onPayload: payload => configuration.transformRequestPayload(payload, model, selection, params.maxOutputTokens),
 		});
 		signal.throwIfAborted();
 		if (response.stopReason === "error" || response.stopReason === "aborted")

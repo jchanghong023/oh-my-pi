@@ -84,28 +84,23 @@ OMP MUST 对 `/loop` 间隔实施上限校验，并只在可识别为单位时�
 - **WHEN** 用户给出的间隔超过上限，或在间隔位给出未知单位的时长 token
 - **THEN** 超限时明确报错且不运行，未知单位时该 token 退回正文
 
-### Requirement: 魔法关键词的内置命令与 fullsend
+### Requirement: 魔法关键词的内置命令
 
-OMP MUST fullsend 在正文的独立小写词处触发，代码与标签内容不触发，显式禁用配置生效。
+OMP MUST 提供魔法关键词对应的内置命令，并允许命令后直接携带任务文本。
 
-#### Scenario: 魔法关键词的内置命令与 fullsend的详细边界
+#### Scenario: 魔法关键词的内置命令的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-- fork 新增 `fullsend` 关键词及对应设置；在任务正文中以独立小写词触发，代码块、行内代码和 XML/HTML 区域不触发。
-- fork 为这四个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`，方便输入，并允许命令后直接携带任务文本。
-- `fullsend` 注入执行策略：成本和 token 用量不作为优化约束；在同等正确性、完整性与验证标准下缩短完成时间，端到端完成任务。仅做对速度或验证质量有实际收益的调用与并行，不把额外调用或花费视为目标，不扩大任务范围或权限。
-- 经 collab 转发的 guest 提示词和关键词命令同样支持 fork 的 fullsend 通知。
-- collab guest 的本地命令白名单额外放行 fork 新增的 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 与 `display`；白名单只决定 guest 可本地执行哪些命令，不扩大主机端权限，也不替代主机对参数的校验。
+- fork 为三个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`，方便输入，并允许命令后直接携带任务文本。
+- collab guest 的本地命令白名单额外放行 fork 新增的 `ultrathink`、`orchestrate`、`workflowz` 与 `display`；白名单只决定 guest 可本地执行哪些命令，不扩大主机端权限，也不替代主机对参数的校验。
 - guest 只镜像宿主的运行事实：进入、结束与逐条消息/工具事件按 state-only 应用，`isStreaming` 等状态取自宿主快照；离开或恢复本地会话时以一次 state-only `agent_end` 结束镜像，不重放模型回合、不改写历史条目、不新增消息系统。`message_end` 之后重置本地流式去重标记，避免同一条助手消息计两次。
-- 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
-- 用户设置 `magicKeywords.fullsend`（默认 `true`，`/settings` 面板 → Interaction → Magic Keywords）可关闭 fullsend 关键词注入。
 
-#### Scenario: 魔法关键词的内置命令与 fullsend的可观察行为
+#### Scenario: 魔法关键词的内置命令的可观察行为
 
-- **WHEN** 普通文本含独立 fullsend 关键词
-- **THEN** fullsend 在正文的独立小写词处触发，代码与标签内容不触发，显式禁用配置生效
+- **WHEN** 用户调用 `/ultrathink`、`/orchestrate` 或 `/workflowz` 并携带任务文本
+- **THEN** 对应命令接受任务文本并触发相应关键词行为
 
 ### Requirement: collab 只读链接的命令拒绝
 
@@ -156,24 +151,11 @@ OMP MUST 各命令按其指定权限、参数、失败与取消边界执行，�
 
 保留以下个人命令及其核心语义：
 
-- `/jchfix`：定位根因并最小修复，不提交、不推送。
-- `/jchdiagnose`：只读诊断根因、影响和修复边界。
-- `/jchfuncreview`：独立只读功能审查，仅报告高置信问题。
-- `/jchfuncreviewfix`：审查后最小修复。
-- `/jchverify`：只读验证指定修改是否可交付。
-- `/jchfuncreview`、`/jchfuncreviewfix`、`/jchverify` 的范围参数：三命令都支持 `uncommitted`（未提交改动）与 `commit <ref>`；`/jchfuncreview` 与 `/jchverify` 另支持 `path <路径>`，`/jchfuncreviewfix` 另支持 `repo`（全仓）；空参或非法 verb 在执行前报用法错误。
-- `/jchci`：只读分析当前 HEAD/PR 的 GitHub Actions。
-- `/jchcifix`：修复当前有效 CI 失败，并仅提交、普通推送相关修改；push 后 CI 不会自然触发新 run 时，仅对已定义 `workflow_dispatch` 的 workflow 以 `--ref` 指向已推送分支执行 `gh workflow run`。
-- `/jchcatchup`：查看本地状态/最近提交；`full` 时深入比较远端差异。
-- `/jchgs`：`fetch --all` 后显示状态。
-- `/jchgitpull`：直接按当前 upstream/pull 配置执行 `git pull`。
-- `/jchgitdiscardall [--ignored=true|false]`：始终无交互确认，先执行 `git fetch --all --prune`、`git reset --hard @{upstream}`。无参数或 `--ignored=false` 时以 `git clean -df` 清理未跟踪内容，保留 ignored；`--ignored=true` 时以 `git clean -xdf` 同时清理 ignored 文件和目录。clean 以 `git rev-parse --show-toplevel` 解析的仓库根为工作目录，会话位于仓库子目录时同样清理整个工作树（reset 本就是全仓生效）。该命令在交互界面（TUI）执行；ACP/RPC 通道返回提示、不派发；print/SDK 通道没有内置命令派发，命令文本会原样作为用户消息进入模型。非法、重复或多余参数在任何 Git 操作前报用法错误；任一步失败即停止。重置目标是当前分支配置的跟踪分支，不是本仓库名为 `upstream` 的分支。
-- `/jchdftexplain`：面向 DFT 新手解释文件、目录、代码和业务概念，命令参数为待解释对象。只读：可读取文件、搜索代码和调用 `wiki`，不修改文件、不执行待解释脚本、不启动 EDA 流程；内部术语主动用 `wiki` 核对并标注来源，代码解释按命令去重、结论先行。
 - `/jchime [故障现象]`：内置提示词恢复命令，面向内网较小模型提供完整可执行步骤及有边界的自主恢复空间；不是无模型的本地动作。默认环境为 CentOS 7、GNOME Terminal、SSH X11/Exceed、IBus 1.5.17 与 `libpinyin`；运行时重新核实，不使用快照中的历史地址或 PID。
   - 首选恢复块使用 Bash + 系统 Python 3.6+（本次调用显式 UTF-8 标准流编码），核对当前 UID、DISPLAY、唯一 daemon、地址文件归属和 PID、引擎可用性后，请求一次 `ibus restart`，重新发现实时总线并切回、核验 `libpinyin`。覆盖仅切引擎不能解决的 daemon/XIM 状态异常；同 daemon 的客户端会短暂中断，未提交的预编辑文字可能丢失。
   - 首选路径失败或实际症状未恢复时，模型必须根据真实结果继续诊断，自主选择引擎重切、恢复调用的总线/X11 环境对齐或当前显示会话 IBus 重建，不因脚本退出直接结束，不无依据重复失败步骤。正常重启无响应时，可在保存原始启动参数和必要环境、核对 UID/DISPLAY/PID/启动时间及信号前重验身份后，仅向该 daemon 的正数 PID 发送 SIGTERM；确认原进程退出且无其他 daemon 接管后按原启动方式重建，不自动升级 SIGKILL。daemon 已退出时，仅在当前用户、DISPLAY、X11 与现有 D-Bus 会话归属明确且无重复实例时启动，不创建替代 D-Bus 会话。
   - 只操作当前用户、当前 DISPLAY；目标或权限未确认时不执行变更。禁止 sudo、全局/进程组杀进程、安装、联网、持久配置修改及自动关闭终端/重启客户端；必要信息只读调查可继续，环境调整只作用于恢复调用及其子进程。安全手段耗尽或需客户端手动操作时报告具体阻塞，不将子进程环境修改当作运行中终端已修复。
-  - 各路径均重新核验总线和实际引擎；原脚本成功标记不是自主方案的必要条件。服务正常与实际中文输入恢复分开报告，最后由用户在故障窗口切换并输入中文确认；Windows 本机、ZCode/Electron 或客户端故障不承诺由服务端恢复。普通模型复用现有 TUI/ACP/RPC 提示词展开机制，显式 JchTools 远端 Agent 模型沿用远端命令原文转交契约；验收包含提示词真实送达、目标隔离、首选失败后的自主权限和停止边界，不把模拟模型或本机 Windows 验证当作公司实机输入验收。
+  - 各路径均重新核验总线和实际引擎；原脚本成功标记不是自主方案的必要条件。服务正常与实际中文输入恢复分开报告，最后由用户在故障窗口切换并输入中文确认；Windows 本机、ZCode/Electron 或客户端故障不承诺由服务端恢复。复用现有 TUI/ACP/RPC 提示词展开机制；验收包含提示词真实送达、目标隔离、首选失败后的自主权限和停止边界，不把模拟模型或本机 Windows 验证当作公司实机输入验收。
 - `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>`：内置提示词快捷命令，两个数量必须为正的安全整数，正文非空；非法输入只报用法，不启动模型回合。展开为以独立 `workflowz` 关键词开头的普通用户消息，保留正文首行缩进、内部换行、尾部空白与字面量，不新增关键词、调度器或配置写入。
   - 用于全仓审查、补日志、格式优化等互不依赖的批处理。任务块数量参数表示软上限，可按实际工作量调整，无需接近或凑足该数量，不扩大范围；任务块数与并发槽数独立，可以多于并发槽数，不以并发上限决定拆分数量。并发数量是向 OMP 下达的同时运行子代理总数上限指令（含嵌套），不是命令新增的程序级限制，现有配置上限更低时仍遵守，由工作池自动截断为较低值；提示词明确要求不向用户询问是否覆盖或修改并发上限，也不修改任何全局配置。
   - 按任务正文确认实际范围和统一规则，向子代理提供已核实的适用规则/需求路径，修改型任务分配不重叠文件集合并保留无关已有修改；复用现有工作池排队、完成即补位，不等待整批屏障。
@@ -188,25 +170,6 @@ OMP MUST 各命令按其指定权限、参数、失败与取消边界执行，�
 
 - **WHEN** 用户调用 JCH 命令且输入有效或无效
 - **THEN** 各命令按其指定权限、参数、失败与取消边界执行，不让无效输入产生隐式副作用
-
-### Requirement: `/clear` 已结束待办清理
-
-OMP MUST 全部结束时清空并移除显示；否则保留完整清单。
-
-#### Scenario: `/clear` 已结束待办清理的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- `/clear` 原地清空对话上下文时，若当前 TODO 的所有任务均为 `completed`（已完成）或 `abandoned`（已放弃），同时清空当前生效的清单并立即移除 TODO 显示，不等待自动隐藏延迟；手动展开或禁用自动隐藏不阻止此次清理。
-- 只要仍有 `pending`、`in_progress` 或 `blocked` 任务，就保留整份清单，包括已完成／已放弃任务、阶段与阻塞说明，不部分删除。
-- 清理通过既有会话记录持久化空清单，不删除此前任务历史，不改变会话 ID、标题、目录、模型与设置；刷新、重新展开或重启恢复会话后，不得重新出现已清理的清单。
-- 复用共享会话重置链路与已有 `isClosedTodo` 状态定义，不新增配置或第二套终态判定；TUI 重置后同步刷新当前 TODO 面板。
-
-#### Scenario: `/clear` 已结束待办清理的可观察行为
-
-- **WHEN** 执行 clear 时当前 TODO 全部结束或仍有未结束项
-- **THEN** 全部结束时清空并移除显示；否则保留完整清单
 
 ### Requirement: `/clear` 在非 TUI 宿主的上下文重置
 

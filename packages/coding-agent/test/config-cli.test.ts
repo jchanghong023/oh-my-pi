@@ -68,14 +68,12 @@ describe("config CLI schema coverage", () => {
 			await Bun.write(file, source);
 			const result = await runCliProcess(["config", "reset", "startup.changelogMode", "--json"], {
 				PI_CODING_AGENT_DIR: testAgentDir!.path(),
-				PI_OFFLINE_SHM: undefined,
 			});
 			expect(result.exitCode).toBe(0);
 			expect(JSON.parse(result.output).value).toBe("summary");
 			expect(YAML.parse(await Bun.file(file).text())).toEqual(expected);
 			const reread = await runCliProcess(["config", "get", "startup.changelogMode", "--json"], {
 				PI_CODING_AGENT_DIR: testAgentDir!.path(),
-				PI_OFFLINE_SHM: undefined,
 			});
 			expect(reread.exitCode).toBe(0);
 			expect(JSON.parse(reread.output).value).toBe("summary");

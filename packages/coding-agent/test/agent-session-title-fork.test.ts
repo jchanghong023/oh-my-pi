@@ -43,7 +43,7 @@ const CARD_REPLY = '<title nf="nf-md-flask" emoji="🧪" code="FLAKY">Fix flaky 
 async function createSession(
 	main: MockModel,
 	side: MockModel,
-	settings: Record<string, unknown> = { "title.generator": "fork" },
+	settings: Record<string, unknown> = {},
 	{ autoTitle = true, todo = false }: { autoTitle?: boolean; todo?: boolean } = {},
 ): Promise<AgentSession> {
 	authStorage = await AuthStorage.create(":memory:");
@@ -105,7 +105,7 @@ function nextTitle(target: AgentSession): Promise<void> {
 }
 
 describe("AgentSession title fork", () => {
-	it("titles the session from a fork of the first reply, sharing the main request's prefix and cache key", async () => {
+	it("defaults to titling from a fork of the first reply, sharing the main request's prefix and cache key", async () => {
 		const main = createMockModel({ responses: [{ content: ["Reading the park tests first."] }] });
 		const side = createMockModel({ handler: { content: [CARD_REPLY] } });
 		const target = await createSession(main, side);
@@ -252,26 +252,6 @@ describe("AgentSession title fork", () => {
 
 		expect(target.sessionName).toBe("Fix flaky park tests");
 		expect(side.calls).toHaveLength(0);
-	});
-
-	it("uses the scout smol model by default without forking the main model", async () => {
-		const main = createMockModel({ responses: [{ content: ["Reading the park tests first."] }] });
-		const side = createMockModel({ handler: { content: [CARD_REPLY] } });
-		const scoutModel = getBundledModel("anthropic", "claude-haiku-4-5")!;
-		const target = await createSession(main, side, {
-			modelRoles: { smol: `${scoutModel.provider}/${scoutModel.id}`, tiny: "anthropic/claude-sonnet-4-5" },
-		});
-		const titleRequest = vi
-			.spyOn(ai, "completeSimple")
-			.mockResolvedValue(createAssistantMessage("<title>Fix flaky park tests</title>"));
-		const titled = nextTitle(target);
-
-		await target.prompt(FIRST_MESSAGE);
-		await titled;
-
-		expect(target.sessionName).toBe("Fix flaky park tests");
-		expect(titleRequest.mock.calls[0]?.[0]).toMatchObject({ provider: scoutModel.provider, id: scoutModel.id });
-		expect(side.calls).toEqual([]);
 	});
 
 	it("retitles from the steer an interrupt flushes after it cancelled the first message's fork", async () => {

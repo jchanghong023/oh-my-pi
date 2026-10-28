@@ -2,7 +2,7 @@
 
 ## Purpose
 
-规定 fork 的 CodeAgent、JchTools、Ascend 和公司内网模型接入、发现、认证与请求边界。不同运行环境和显式模型选择的条件必须分别遵守，不推断公网可用。
+规定 fork 的 CodeAgent、Ascend 和公司内网模型接入、发现、认证与请求边界。不同运行环境和显式模型选择的条件必须分别遵守，不推断公网可用。
 
 ## Requirements
 
@@ -26,34 +26,6 @@ OMP MUST 无需单独登录或手写模型配置即可发现内置模型，认�
 
 - **WHEN** Windows 非 offline 启动并选择 CodeAgent
 - **THEN** 无需单独登录或手写模型配置即可发现内置模型，认证轮换仅按规定条件重试
-
-### Requirement: JchTools 零配置发现与远端 Agent
-
-OMP MUST 从真实目录注册模型；选用后按来源投影历史并以 ACP/SSE 交给远端 Agent。
-
-#### Scenario: JchTools 零配置发现与远端 Agent的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- Windows 上默认通过当前用户、当前登录会话的 JchTools 控制管道进行只读发现，仅接收版本化服务身份、状态、实例标识、实际运行 HTTP 地址与能力；不读取或暴露启动程序、参数、凭据及保存配置，不启动、应用配置、重启或停止服务。服务缺席或未就绪时探测有界，不阻塞正常启动与模型选择。
-- 仅在服务已就绪、发现身份与能力匹配时访问实际端点的 `GET /v1/models`，按返回的真实模型 ID 注册进程内 `jchtools/<ID>`；不猜测端口、不伪造模型、不写 OMP 配置，不自动改变默认模型、角色或用户选择。`disabledProviders` 禁用 `jchtools` 或进程环境 `OMP_JCHTOOLS_DISCOVERY=0` 时不探测、不注册；此开关只影响当前进程，不持久化。JchTools 启动的子 Agent 继承关闭发现的防递归保护，服务端职责统一按 JchTools AH 需求执行。
-- 启动及模型选择器打开/刷新时重新发现：OMP 先启动、服务后启动也能出现；服务重启或应用新端口后按新实例与实际地址刷新，撤销失效目录和地址，不继续使用旧端点。可用性变化不自动切换模型或补发已有任务。
-- `models.yml` 的 `providers.jchtools` 为 fork 保留 ID：整段忽略并在启动时输出保留提示（不阻断启动），该段的格式或字段错误 MUST NOT 使其他自定义 Provider 配置失效。
-- 选择该 provider 即进入真实远端 Agent 模式，OMP 仅作为文本/SSE 的 ACP 客户端，而非普通模型的客户端工具循环：不注入自己的 system、工具 schema／指令或技能正文，不发送工具调用控制字段，不在前端执行工具；后端 ACP Agent 的系统提示、工具、技能、决策、执行与权限边界以 JchTools `docs/requirements/ACP-MODEL-SERVICE.md` 的 AH-03～AH-05 / AH-13 为权威，不在本仓库替换或重复实现。
-- 将会话模型切换到该远端模型时 MUST 跳过“先用当前模型压缩、再应用切换”的路径：远端 ACP 接收的是按来源投影的文本 epoch，而非本地对话记录，其体量不构成用当前本地模型先行压缩的理由。因容量不足而需要压缩的本地模型切换路径保持不变。
-- 请求使用 `POST /v1/chat/completions` 的受支持文本消息、流式选项、后端公布的模型 ID 及顶层 `cwd` 字符串。2026-10-12 用户确认：仅 `server_agent` 模式按来源投影用户亲自提交的原文、用户明确提供的任务背景／约束及当前聊天的完整可见用户／助手文本历史；普通模型接口不变。OMP 生成的系统／开发者提示、技能正文、工具定义／指令、子代理规则、魔法关键词通知、Goal 编排／授权／自动提醒及其他自动通知、推理、工具调用／结果和调试元数据不进入请求，即使已持久化为 user 角色也不变成用户亲自提交内容。用户亲自输入的“使用 scout”、system/developer、目标或授权等字面文本原样保留，不按正文关键词清洗，也不要求 JchTools 全局丢弃其他调用方显式提供的 system/developer 背景。普通模型历史中的可见用户／助手文本保留，工具和推理记录不转入远端。接口仍仅接受文本，用户媒体输入明确报错，不扩展图片／工具协议。
-- 远端任务 slash 命令按用户原文提交给后端 Agent；公开 SDK、TUI、RPC 与 ACP 输入链不执行或展开 OMP 本地 extension 命令、custom prompt、file templates 或同名技能，不读取 OMP 本地技能正文，不用本地模板或技能覆盖同名远端命令。ACP slash 按官方协议由 Agent 识别原始命令前缀（如 `/web ...`），不是 OMP 的本地工具调用。宿主本地管理命令的派发、状态和确认机制保持不变；被本地管理命令消费的输入不作为远端任务重放。
-- 每个 ACP 会话使用调用方当前任务目录。OMP 每次请求从当前会话的运行目录取得绝对、已存在目录，通过独立 `cwd` 字段显式传给 JchTools；后端 ACP 会话及省略目录的终端回调使用该目录。受支持的内置文本请求（含显式远端角色的补全、提交推断/摘要、编辑修复、标注摘要、技能描述、语音改写、标题/任务标签及内存处理）同样传递所属任务目录；后台会话消费者在请求时读取当前目录，命令消费者使用该命令的任务目录，隔离子任务使用其工作树目录。不扩展图片或客户端工具能力，不改变模型角色选择。目录缺失、相对或不可用时明确失败，不从提示猜测，不静默使用进程全局目录，不修改进程全局 cwd。
-- 当前聊天首次请求不带后端会话 ID，保存成功响应的 `X-JchTools-Session-ID`，后续自动回传；仍发送按来源投影后的完整 HTTP 历史，供 JchTools 校验并仅向 ACP 提交新增部分。新建／分支聊天、任务目录或服务地址改变时不复用旧关联；切换离开该模式也清除关联。关联仅在内存中保存，不跨进程／后台重启恢复；新投影规则使用版本化关联键并清除旧键，旧聊天下次用投影后的历史建立新后端会话。后端明确报告 `session_unavailable`，或请求已发出 HTTP／ACP 后被取消时，清除该内存关联，不采纳该轮会话头或因迟到响应恢复关联；本轮不自动重试或重放，下一次用户显式请求不带已取消／失效会话 ID，建立新会话。不因其他 HTTP 错误清除关联，不采纳错误响应的会话头。
-- 响应按真实 SSE 文本增量展示；取消传播到在途 HTTP 请求并按 JchTools 取消契约收尾，已发送请求的取消同时按上述规则清除内存会话关联。HTTP、协议、后端与中途断流错误如实呈现，保留已收到文本但不伪称成功。任何失败、取消或服务重启均不自动重试、回退模型或重放任务。
-- CLI/TUI 明确展示“后端 Agent 执行”，不把后端文本伪造成前端工具事件或已验证的工具执行记录；模型目录缺失的上下文、输出容量等元信息不得作为已确认的远端实际能力宣称，界面所需占位值不构成容量承诺。
-- 验收须覆盖本地单元与集成测试，以及真实 CLI/TUI 或公开 SDK 入口连接实际 JchTools 服务、由合成 ACP Agent 提供可核对行为的端到端测试，验证发现／禁用、防递归、后启动／重启刷新、真实 ID、按来源投影且保留真实用户原文／背景／约束和完整可见历史、不注入 OMP system／tools／skills／Goal 或魔法通知、SDK 远端 slash 原文送达且不执行／展开本地 extension／custom／file templates、TUI／RPC／ACP 同名技能不消费远端原文或读取本地技能文件、宿主本地管理命令不变、完整 HTTP 历史与 ACP 新增提交、同聊天复用、新建／分支／目录隔离、实际会话及终端工作目录、增量输出，以及已发请求取消后清除关联、下一次用户显式请求新会话且不自动重试／重放。合成 Agent 或本地测试通过不代表真实 OpenCode／付费模型、账号与任务质量已验证；真实 OpenCode 多轮验证须当次另行授权，未执行的验收不得标为通过。
-
-#### Scenario: JchTools 零配置发现与远端 Agent的可观察行为
-
-- **WHEN** Windows 用户的 JchTools 服务就绪且模型身份匹配
-- **THEN** 从真实目录注册模型；选用后按来源投影历史并以 ACP/SSE 交给远端 Agent
 
 ### Requirement: Ascend 内置模型
 
@@ -127,11 +99,11 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 
 ### Requirement: 保留 Provider ID 的运行时注册
 
-扩展与运行时 MUST NOT 替换 `company`、`jchtools`、`codeagent` 三个保留 Provider；注册这类 ID MUST 失败并返回明确错误，而不是静默覆盖。
+扩展与运行时 MUST NOT 替换 `company`、`codeagent` 两个保留 Provider；注册这类 ID MUST 失败并返回明确错误，而不是静默覆盖。
 
 #### Scenario: 扩展或运行时注册保留 ID
 
-- **WHEN** 扩展或运行时通过 Provider 注册入口注册名为 `company`、`jchtools` 或 `codeagent` 的 Provider
+- **WHEN** 扩展或运行时通过 Provider 注册入口注册名为 `company` 或 `codeagent` 的 Provider
 - **THEN** 注册 MUST 失败，并返回指明该 Provider 为内置或实时 Provider、不可替换的错误
 - **AND** 既有注册状态、模型目录与其他 Provider 的注册行为保持不变。
 
@@ -154,23 +126,6 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 
 - **WHEN** 通配回退项解析后的 Provider 与来源 Provider 相同
 - **THEN** 候选 MUST 保留原 `@upstream` 路由。
-
-### Requirement: MCP OAuth 客户端凭据授权
-
-MCP 服务器配置的 `oauth.type` 为 `client_credentials` 时，OMP MUST 以非交互的 client credentials 流程取得访问令牌，不进入浏览器授权或设备码流程。
-
-#### Scenario: client credentials 授权流程
-
-- **WHEN** 服务器配置的 `oauth.type` 为 `client_credentials`，且 `oauth.clientId`、`oauth.clientSecret` 均非空
-- **THEN** OMP MUST 先以该服务器 URL 做 token-only 的 OAuth 元数据发现取得 token 端点，再向其发送 `grant_type=client_credentials` 表单请求，携带 `client_id`、`client_secret`、`resource`（取发现元数据公布的资源；未公布时使用服务器 URL）以及存在时的 `oauth.scope`
-- **AND** 请求超时 MUST 为 30 秒，重定向 MUST 按错误处理，不跟随跳转
-- **AND** 响应 MUST 含非空 `access_token`；出现 `token_type` 时其值必须为 bearer（大小写不敏感）；`expires_in` 必须为正有限数，未提供时按 3600 秒处理
-- **AND** 令牌按连接缓存，在过期前 30 秒或强制刷新时重新获取，后续请求以 `Authorization: Bearer` 头注入。
-
-#### Scenario: 配置或响应不合规
-
-- **WHEN** 凭据缺失、服务器类型不是 HTTP/SSE、token 端点不可用，或响应缺少合规 token 或有效期
-- **THEN** 连接 MUST 明确失败并报告原因，MUST NOT 回退到交互式授权或复用其他连接的令牌。
 
 ### Requirement: 容量未知的模型
 

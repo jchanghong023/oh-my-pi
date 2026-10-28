@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getOfflineShmState } from "@oh-my-pi/pi-natives/offline-root";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import { LegacyProtocol } from "../../src/modes/zcode/schema";
 
@@ -314,38 +313,28 @@ test("default profile scope follows the effective agent data root and survives r
 	}
 }, 90_000);
 
-test.skipIf(process.platform !== "linux")(
-	"offline profile scope matches its persistent storage domain",
-	async () => {
-		await using root = await TempDir.create("@zcode-profiles-offline-scope-");
-		await using fx = await fixture(root);
-		const offlineEnv = { ...fx.env, OMP_OFFLINE: "1" };
-		const offline = getOfflineShmState(offlineEnv);
-		if (!offline) throw new Error("Missing Linux offline runtime");
-		try {
-			for (const profile of ["default", "alpha"]) {
-				let scope: string;
-				{
-					await using persistent = new ProfilePeer(fx.cwd, fx.env, profile);
-					await persistent.ready();
-					scope = (await profileIdentity(persistent, fx.workspace)).storageScope;
-				}
-				for (let restart = 0; restart < 2; restart++) {
-					await using peer = new ProfilePeer(fx.cwd, offlineEnv, profile);
-					await peer.ready();
-					expect(await profileIdentity(peer, fx.workspace)).toEqual({
-						configRoot: fx.configRoot,
-						activeProfile: profile === "default" ? null : profile,
-						storageScope: scope,
-					});
-				}
-			}
-		} finally {
-			await fs.rm(path.dirname(offline.runtimeRoot), { recursive: true, force: true });
+test("offline profile scope matches its persistent storage domain", async () => {
+	await using root = await TempDir.create("@zcode-profiles-offline-scope-");
+	await using fx = await fixture(root);
+	const offlineEnv = { ...fx.env, OMP_OFFLINE: "1" };
+	for (const profile of ["default", "alpha"]) {
+		let scope: string;
+		{
+			await using persistent = new ProfilePeer(fx.cwd, fx.env, profile);
+			await persistent.ready();
+			scope = (await profileIdentity(persistent, fx.workspace)).storageScope;
 		}
-	},
-	90_000,
-);
+		for (let restart = 0; restart < 2; restart++) {
+			await using peer = new ProfilePeer(fx.cwd, offlineEnv, profile);
+			await peer.ready();
+			expect(await profileIdentity(peer, fx.workspace)).toEqual({
+				configRoot: fx.configRoot,
+				activeProfile: profile === "default" ? null : profile,
+				storageScope: scope,
+			});
+		}
+	}
+}, 90_000);
 
 test("two real profile processes isolate role persistence and session discovery across restart", async () => {
 	await using root = await TempDir.create("@zcode-profiles-isolation-");

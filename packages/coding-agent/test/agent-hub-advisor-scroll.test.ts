@@ -15,6 +15,10 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import type { AgentHubRemote } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { AgentTranscriptViewer } from "@oh-my-pi/pi-tui/overlays/agent-transcript-viewer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { CURRENT_SESSION_VERSION } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import {
@@ -368,6 +372,8 @@ describe("AgentTranscriptViewer", () => {
 	});
 
 	it("renders tool-result images through the shared Kitty placeholder budget", () => {
+		const previousPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false, showImages: true });
 		cfgTerminalShowImages.override(Settings.instance, true);
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "adv-view-image-"));
 		const file = path.join(dir, "__advisor.jsonl");
@@ -392,6 +398,7 @@ describe("AgentTranscriptViewer", () => {
 			expect(imageBudget.takeTransmits().join("")).toContain("a=t");
 		} finally {
 			viewer.dispose();
+			setChatTranscriptDisplayPreferences(previousPreferences);
 			cfgTerminalShowImages.clearOverride(Settings.instance);
 			setKittyGraphics(previousGraphics);
 			setTerminalImageProtocol(previousProtocol);

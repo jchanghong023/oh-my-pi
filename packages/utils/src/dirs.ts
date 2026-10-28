@@ -18,26 +18,16 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
-	assertOfflineShmPath,
 	DEFAULT_CONFIG_DIR_NAME,
-	ensureOfflineShmDirectory,
-	getOfflineShmState as resolveOfflineShmState,
-	initializeOfflineShmEnvironment,
+	normalizeProfileName,
+	resolveAbsoluteDir,
 	resolvePersistentRoot,
+	resolveXdgRoot,
 } from "@oh-my-pi/pi-natives/offline-root";
 import { expandWindowsLongPath } from "@oh-my-pi/pi-natives/path";
 import { engines, version } from "../package.json" with { type: "json" };
 import { isEnoent, isEnotdir } from "./fs-error";
 import { isBunTestRuntime } from "./test-runtime";
-
-export function getOfflineShmState(): OfflineShmState | undefined {
-	return resolveOfflineShmState();
-}
-export interface OfflineShmState {
-	persistentRoot: string;
-	runtimeRoot: string;
-	domainId: string;
-}
 
 /** App name (e.g. "omp") */
 export const APP_NAME: string = "omp";
@@ -60,45 +50,8 @@ export const USER_AGENT = `omp/${VERSION}`;
 /** Minimum Bun version */
 export const MIN_BUN_VERSION: string = engines.bun.replace(/[^0-9.]/g, "");
 
-const PROFILE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export { normalizeProfileName };
 const PROFILE_ENV_KEYS = ["OMP_PROFILE", "PI_PROFILE"] as const;
-
-/**
- * Names Windows treats as reserved device aliases. Matches the basename
- * itself as well as any `BASENAME.<anything>` form, because Windows reserves
- * `CON.foo`/`PRN.txt`/etc. too — using them as a profile name would let
- * `setProfile` accept the input only for directory creation to fail later
- * with a confusing `ENOENT`/`EINVAL`. Case-insensitive: NTFS treats `CON`
- * and `con` identically.
- */
-const WINDOWS_RESERVED_BASENAME_RE = /^(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?$/i;
-
-/**
- * Normalize and validate a profile name. Returns `undefined` for the implicit
- * default (empty string, whitespace, or the explicit "default" sentinel) and
- * throws for syntactically invalid or platform-reserved names.
- *
- * Exported so consumers of `@oh-my-pi/pi-utils/dirs` (CLI bootstrap, tests,
- * downstream tools) can validate user input without re-deriving the rules.
- */
-export function normalizeProfileName(profile: string | undefined): string | undefined {
-	const normalized = profile?.trim();
-	if (!normalized || normalized === "default") return undefined;
-	if (
-		normalized === "." ||
-		normalized === ".." ||
-		normalized.endsWith(".") ||
-		!PROFILE_NAME_RE.test(normalized) ||
-		WINDOWS_RESERVED_BASENAME_RE.test(normalized)
-	) {
-		throw new Error(
-			`Invalid OMP profile "${profile}". Profile names must match ${PROFILE_NAME_RE.source}, ` +
-				`cannot be "." or "..", cannot end with ".", and cannot be a Windows reserved device name ` +
-				`(CON, PRN, AUX, NUL, COM0-9, LPT0-9, or any of those with an extension).`,
-		);
-	}
-	return normalized;
-}
 
 /**
  * Resolve the active profile from the two profile env vars. `OMP_PROFILE` is the
@@ -139,13 +92,13 @@ function readProfileFromEnvSafe(): string | undefined {
  * silently re-anchor every path onto cwd).
  */
 export function getBaseConfigRoot(): string {
-	return getOfflineShmState()?.runtimeRoot ?? resolvePersistentRoot();
+	return resolvePersistentRoot();
 }
 
 function getProfileConfigRoot(profile: string | undefined): string {
 	const root = getBaseConfigRoot();
 	const relative = profile ? path.join("profiles", profile) : "";
-	return ensureOfflineShmDirectory(relative) ?? path.join(root, relative);
+	return path.join(root, relative);
 }
 
 function readPiProfileFromEnvSafe(): string | undefined {
@@ -369,11 +322,6 @@ export function getConfigAgentDirName(): string {
 
 type XdgCategory = "data" | "state" | "cache";
 
-function checkedOwnedPath(destination: string): string {
-	assertOfflineShmPath(destination);
-	return destination;
-}
-
 /**
  * Resolves and caches all omp directory paths. On Linux, when XDG environment
  * variables are set, paths are redirected under $XDG_*_HOME/omp/. A new
@@ -398,12 +346,9 @@ class DirResolver {
 		this.configRoot = getProfileConfigRoot(profile);
 
 		const defaultAgent = path.join(this.configRoot, "agent");
-		const offline = getOfflineShmState();
-		if (offline) initializeOfflineShmEnvironment(profile ? path.join("profiles", profile) : "");
-		const agentDirOverride = profile || offline ? undefined : options.agentDirOverride;
+		const agentDirOverride = profile ? undefined : options.agentDirOverride;
 		this.agentDir = agentDirOverride ? path.resolve(agentDirOverride) : defaultAgent;
 		const isDefault = this.agentDir === defaultAgent;
-		if (offline) ensureOfflineShmDirectory(path.relative(offline.runtimeRoot, this.agentDir));
 
 		// XDG is a Linux convention. On supported platforms, default profile state
 		// resolves under $XDG_*_HOME/omp once `omp config init-xdg` has migrated
@@ -423,23 +368,9 @@ class DirResolver {
 		// An explicit OMP root owns data, cache, and runtime paths even when XDG is set.
 		const xdgPlatform =
 			(process.platform === "linux" || process.platform === "darwin") &&
-			!offline &&
 			!resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT);
 		if (xdgPlatform && isDefault) {
-			const resolveIf = (envVar: string) => {
-				const value = process.env[envVar];
-				if (!value) return undefined;
-				try {
-					const appRoot = path.join(value, APP_NAME);
-					if (profile) {
-						const profilePath = path.join(appRoot, "profiles", profile);
-						if (fs.existsSync(profilePath)) return profilePath;
-						return undefined;
-					}
-					return fs.existsSync(appRoot) ? appRoot : undefined;
-				} catch {}
-				return undefined;
-			};
+			const resolveIf = (envVar: string) => resolveXdgRoot(process.env[envVar], profile);
 			xdgData = resolveIf("XDG_DATA_HOME");
 			xdgState = resolveIf("XDG_STATE_HOME");
 			xdgCache = resolveIf("XDG_CACHE_HOME");
@@ -482,55 +413,37 @@ class DirResolver {
 
 	/** Profile-independent config-root subdirectory, with optional XDG override. Shared across profiles. */
 	baseRootSubdir(subdir: string, xdg?: XdgCategory): string {
-		return checkedOwnedPath(path.join(xdg ? this.#baseRootDirs[xdg] : getBaseConfigRoot(), subdir));
+		return path.join(xdg ? this.#baseRootDirs[xdg] : getBaseConfigRoot(), subdir);
 	}
 
 	/** Config-root subdirectory, with optional XDG override. */
 	rootSubdir(subdir: string, xdg?: XdgCategory): string {
 		const cached = this.#rootCache.get(subdir);
-		if (cached) return checkedOwnedPath(cached);
+		if (cached) return cached;
 		const base = xdg ? this.#rootDirs[xdg] : this.configRoot;
-		const result = checkedOwnedPath(path.join(base, subdir));
+		const result = path.join(base, subdir);
 		this.#rootCache.set(subdir, result);
 		return result;
 	}
 
 	/** Agent subdirectory, with optional XDG override. */
 	agentSubdir(userAgentDir: string | undefined, subdir: string, xdg?: XdgCategory): string {
-		const offline = getOfflineShmState();
-		if (offline && userAgentDir) {
-			const relative = path.relative(offline.runtimeRoot, path.resolve(userAgentDir));
-			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-				userAgentDir = undefined;
-			}
-		}
 		if (!userAgentDir || userAgentDir === this.agentDir) {
-			if (offline) ensureOfflineShmDirectory(path.relative(offline.runtimeRoot, this.agentDir));
 			const cached = this.#agentCache.get(subdir);
-			if (cached) return checkedOwnedPath(cached);
+			if (cached) return cached;
 			const base = xdg ? this.#agentDirs[xdg] : this.agentDir;
-			const result = checkedOwnedPath(path.join(base, subdir));
+			const result = path.join(base, subdir);
 			this.#agentCache.set(subdir, result);
 			return result;
 		}
-		if (offline) ensureOfflineShmDirectory(path.relative(offline.runtimeRoot, path.resolve(userAgentDir)));
-		return checkedOwnedPath(path.join(userAgentDir, subdir));
+		return path.join(userAgentDir, subdir);
 	}
 
 	/**
-	 * Agent subdirectory path without offline directory creation, owned-path
-	 * validation, or caching. Reserved for callers that keep opaque keys and
-	 * must not probe disk (non-filesystem offline backends); everything else
-	 * uses {@link DirResolver.agentSubdir}.
+	 * Agent subdirectory path without caching or filesystem access, for callers
+	 * that keep opaque keys in non-filesystem backends.
 	 */
 	agentSubdirPath(userAgentDir: string | undefined, subdir: string, xdg?: XdgCategory): string {
-		const offline = getOfflineShmState();
-		if (offline && userAgentDir) {
-			const relative = path.relative(offline.runtimeRoot, path.resolve(userAgentDir));
-			if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-				userAgentDir = undefined;
-			}
-		}
 		const base =
 			!userAgentDir || userAgentDir === this.agentDir ? (xdg ? this.#agentDirs[xdg] : this.agentDir) : userAgentDir;
 		return path.join(base, subdir);
@@ -724,13 +637,13 @@ export function getReportsDir(): string {
 }
 
 /**
- * Get the logs directory (~/.omp/logs). Unless an explicit OMP root or offline
- * shm domain owns the path, `bun test` processes get `<tmpdir>/omp-test-logs-<uid>`
+ * Get the logs directory (~/.omp/logs). Unless an explicit OMP root owns the
+ * path, `bun test` processes get `<tmpdir>/omp-test-logs-<uid>`
  * instead, so suites never write into the developer's real logs. The uid suffix
  * keeps users of a shared `/tmp` from owning each other's directory.
  */
 export function getLogsDir(): string {
-	if (isBunTestRuntime() && !getOfflineShmState() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
+	if (isBunTestRuntime() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
 		const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
 		return path.join(os.tmpdir(), `omp-test-logs-${uid}`);
 	}
@@ -765,7 +678,7 @@ export function getLogPath(date = new Date(), pid = process.pid): string {
  * no-arg form — XDG semantics are preserved.
  */
 export function getPluginsDir(home?: string): string {
-	if (!getOfflineShmState() && home !== undefined && home !== RESOLVER_HOME) {
+	if (home !== undefined && home !== RESOLVER_HOME) {
 		return path.join(home, getConfigDirName(), "plugins");
 	}
 	return dirs.rootSubdir("plugins", "data");
@@ -789,26 +702,6 @@ export function getPluginsLockfile(home?: string): string {
 /** Get the remote mount directory (~/.omp/remote). */
 export function getRemoteDir(): string {
 	return dirs.rootSubdir("remote", "data");
-}
-
-/**
- * Expand a leading `~` and require an absolute result. Returns `undefined` for
- * empty/whitespace input or a path that is still relative after expansion.
- *
- * Worktree bases and the natives directory are process-global: a worktree base
- * is consumed by both creation (PR checkout, task isolation) and cleanup
- * (`omp worktree`), and every launch extracts or loads the native addon from
- * the same natives directory. A relative value would resolve against whatever
- * cwd happened to launch `omp`, so those readers could disagree — we refuse it
- * rather than silently bind it to cwd.
- */
-function resolveAbsoluteDir(value: string | undefined): string | undefined {
-	const trimmed = value?.trim();
-	if (!trimmed) return undefined;
-	let p = trimmed;
-	if (p === "~") p = os.homedir();
-	else if (p.startsWith("~/") || p.startsWith("~\\")) p = os.homedir() + p.slice(1);
-	return path.isAbsolute(p) ? path.normalize(p) : undefined;
 }
 
 let worktreesDirOverride: string | undefined;
@@ -909,7 +802,7 @@ export function getWorktreeDir(segment: string): string {
  */
 export function getGithubCacheDbPath(): string {
 	const override = process.env.OMP_GITHUB_CACHE_DB;
-	if (override && !getOfflineShmState()) return override;
+	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
 }
 /**
@@ -918,7 +811,7 @@ export function getGithubCacheDbPath(): string {
  */
 export function getCommitCacheDbPath(): string {
 	const override = process.env.OMP_COMMIT_CACHE_DB;
-	if (override && !getOfflineShmState()) return override;
+	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "commit-inference.db"), "cache");
 }
 
@@ -928,7 +821,7 @@ export function getCommitCacheDbPath(): string {
  */
 export function getJudgmentCacheDbPath(): string {
 	const override = process.env.OMP_JUDGMENT_CACHE_DB;
-	if (override && !getOfflineShmState()) return override;
+	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "judgment-cache.db"), "cache");
 }
 
@@ -944,7 +837,7 @@ export function getLegacyPiExtensionCacheDbPath(): string {
  */
 export function getAuthBrokerSnapshotCachePath(): string {
 	const override = process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE;
-	if (override && !getOfflineShmState()) return override;
+	if (override) return override;
 	return dirs.rootSubdir(path.join("cache", "auth-broker-snapshot.enc"), "cache");
 }
 
@@ -974,7 +867,6 @@ export function getNativeGrammarsDir(): string {
 
 /** Get the natives directory. PI_NATIVES_DIR overrides the usual cache root; relative values are ignored. */
 export function getNativesDir(): string {
-	if (getOfflineShmState()) return dirs.rootSubdir("natives", "cache");
 	return resolveAbsoluteDir(process.env.PI_NATIVES_DIR) ?? dirs.rootSubdir("natives", "cache");
 }
 
@@ -1068,9 +960,8 @@ export function getSessionsDir(agentDir?: string): string {
 }
 
 /**
- * Get the sessions directory path (~/.omp/agent/sessions) without offline
- * directory creation or owned-path validation; for non-filesystem offline
- * backends that keep opaque keys and must not probe disk.
+ * Get the sessions directory path without filesystem access, for backends
+ * that keep opaque keys and must not probe disk.
  */
 export function getSessionsDirPath(agentDir?: string): string {
 	return dirs.agentSubdirPath(agentDir, "sessions", "data");
@@ -1144,7 +1035,7 @@ export function getDebugLogPath(agentDir?: string): string {
  * versions sharing the profile.
  */
 function adoptLegacyFile(legacyPath: string, targetPath: string): void {
-	if (getOfflineShmState() || targetPath === legacyPath) return;
+	if (targetPath === legacyPath) return;
 	try {
 		if (fs.existsSync(targetPath) || !fs.existsSync(legacyPath)) return;
 		fs.mkdirSync(path.dirname(targetPath), { recursive: true });
@@ -1163,7 +1054,7 @@ function adoptLegacyFile(legacyPath: string, targetPath: string): void {
  * left in place for older omp versions sharing the profile.
  */
 function adoptLegacyDir(legacyPath: string, targetPath: string): void {
-	if (getOfflineShmState() || targetPath === legacyPath) return;
+	if (targetPath === legacyPath) return;
 	const staging = `${targetPath}.adopt-${process.pid}`;
 	try {
 		if (fs.existsSync(targetPath) || !fs.statSync(legacyPath, { throwIfNoEntry: false })?.isDirectory()) return;

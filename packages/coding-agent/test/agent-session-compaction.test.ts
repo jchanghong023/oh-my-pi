@@ -21,7 +21,6 @@ import {
 	getCodeAgentModels,
 	streamCodeAgent,
 } from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
-import { streamJchToolsAgent } from "@oh-my-pi/pi-coding-agent/config/jchtools-provider";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { ExtensionEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
@@ -874,9 +873,6 @@ describe("AgentSession compaction provider replay policy", () => {
 		["codeagent", "compact", "http"],
 		["codeagent", "compact", "stream"],
 		["codeagent", "compact", "auth"],
-		["jchtools", "compact", "http"],
-		["jchtools", "compact", "stream"],
-		["jchtools", "compact", "auth"],
 		["codeagent", "handoff", "http"],
 		["codeagent", "handoff", "stream"],
 		["codeagent", "handoff", "auth"],
@@ -903,7 +899,7 @@ describe("AgentSession compaction provider replay policy", () => {
 		const model = {
 			...getCodeAgentModels()[0]!,
 			provider,
-			api: provider === "jchtools" ? ("jchtools-agent" as const) : ("openai-completions" as const),
+			api: "openai-completions" as const,
 			baseUrl: server.url.origin,
 		};
 		const fallback = { ...model, id: "fallback-summary", contextWindow: 300000 };
@@ -954,9 +950,6 @@ describe("AgentSession compaction provider replay policy", () => {
 				"compaction.asyncEnabled": false,
 			}),
 			sideStreamFn: (requestModel, context, options) => {
-				if (provider === "jchtools") {
-					return streamJchToolsAgent(requestModel, context, { ...options, cwd: process.cwd(), fetch });
-				}
 				if (!isOpenAICompletionsModel(requestModel)) {
 					throw new Error(`Unexpected CodeAgent summary API: ${requestModel.api}`);
 				}

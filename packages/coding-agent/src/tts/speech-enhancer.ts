@@ -17,7 +17,6 @@
  */
 import { type AssistantMessage, completeSimple, retryTransientCompletion } from "@oh-my-pi/pi-ai";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
@@ -109,11 +108,10 @@ export class SpeechEnhancer {
 				{
 					signal,
 					provider: model.provider,
-					maxAttempts: model.provider === "codeagent" || isJchToolsAgentModel(model) ? 1 : undefined,
+					maxAttempts: model.provider === "codeagent" ? 1 : undefined,
 				},
 			);
-			if (response.stopReason === "aborted" && (model.provider === "codeagent" || isJchToolsAgentModel(model)))
-				return null;
+			if (response.stopReason === "aborted" && model.provider === "codeagent") return null;
 			if (response.stopReason === "error") {
 				logger.debug("speech-enhancer: rewrite errored", { error: response.errorMessage });
 				return null;

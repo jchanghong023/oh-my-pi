@@ -115,17 +115,14 @@ export function assertReviewablePatchSize(target: ResolvedReviewTarget): void {
 }
 
 /** Renders a review request from one frozen target snapshot. */
-export function buildReviewPrompt(
-	target: ResolvedReviewTarget,
-	additionalInstructions?: string,
-	frozenMaterials?: { baseCommit?: string; targetCommit: string },
-): string {
+export function buildReviewPrompt(target: ResolvedReviewTarget, additionalInstructions?: string): string {
 	assertReviewablePatchSize(target);
 	const skipDiff = exceedsInlineDiffLimit(target);
 	const linesPerFile = skipDiff ? Math.max(5, Math.floor(100 / target.snapshot.files.length)) : 0;
-	const prDiffUrl = frozenMaterials ? undefined : target.prDiffUrl;
 	const prDiffQuery = target.prDiffQuery ?? "";
-	const files = target.snapshot.files.map(file => renderReviewPromptFile(file, linesPerFile, prDiffUrl, prDiffQuery));
+	const files = target.snapshot.files.map(file =>
+		renderReviewPromptFile(file, linesPerFile, target.prDiffUrl, prDiffQuery),
+	);
 	const agentCount = getRecommendedReviewAgentCount(target.snapshot);
 	return prompt.render(reviewRequestTemplate, {
 		mode: target.mode,
@@ -141,8 +138,7 @@ export function buildReviewPrompt(
 		diffInstruction: target.diffInstruction,
 		contextInstruction: target.contextInstruction,
 		suppliedPatch: target.kind === "patch",
-		prDiffUrl,
-		frozenMaterials,
+		prDiffUrl: target.prDiffUrl,
 		prDiffQuery,
 		additionalInstructions: additionalInstructions?.trim(),
 	});

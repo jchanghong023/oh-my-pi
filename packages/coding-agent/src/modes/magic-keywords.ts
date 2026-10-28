@@ -1,5 +1,4 @@
 import { prompt } from "@oh-my-pi/pi-utils";
-import fullsendNotice from "../prompts/system/fullsend-notice.md" with { type: "text" };
 import jevifyNotice from "../prompts/system/jevify-notice.md" with { type: "text" };
 import orchestrateNotice from "../prompts/system/orchestrate-notice.md" with { type: "text" };
 import ultrathinkNotice from "../prompts/system/ultrathink-notice.md" with { type: "text" };
@@ -59,11 +58,6 @@ export const ULTRATHINK_NOTICE: string = ultrathinkNotice.trim();
 
 /** Hidden notice for "jevify": bulk classification through the eval kernel's `judge()`. */
 export const JEVIFY_NOTICE: string = jevifyNotice.trim();
-
-/** Hidden notice for "fullsend", shaped by whether the session can dispatch `task` subagents. */
-export function renderFullsendNotice({ tools }: Pick<MagicKeywordContext, "tools">): string {
-	return prompt.render(fullsendNotice, { tools }).trim();
-}
 
 /** Render the shared orchestration rules; explicit goal requests retain user authority. */
 export function renderOrchestrateNotice(
@@ -126,16 +120,6 @@ export const MAGIC_KEYWORDS = [
 		// The contract is entirely about the eval kernel's `judge()` helper.
 		requires: ["eval"],
 		notice: () => JEVIFY_NOTICE,
-	},
-	{
-		id: "fullsend",
-		word: "fullsend",
-		slashCommand: true,
-		hue: [300, 360],
-		label: "Fullsend Keyword",
-		description: "Let standalone fullsend prioritize fastest verified execution without cost or token constraints",
-		requires: [],
-		notice: renderFullsendNotice,
 	},
 ] as const satisfies readonly MagicKeyword[];
 

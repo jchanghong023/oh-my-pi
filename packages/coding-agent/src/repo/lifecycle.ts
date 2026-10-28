@@ -187,10 +187,9 @@ export class RepoLifecycle {
 
 	/**
 	 * Arbitrary code and shell commands can mutate files; command text is never
-	 * parsed for paths. `git` reports the built-in JCH git slash commands, which
-	 * run git directly and bypass the bash/eval tool pipeline.
+	 * parsed for paths.
 	 */
-	commandExecuted(kind: "bash" | "eval" | "git", cwd?: string): void {
+	commandExecuted(kind: "bash" | "eval"): void {
 		this.#safely(`${kind} execution`, () => {
 			const service = this.#current();
 			if (!service?.storage.state().generation) {
@@ -204,27 +203,11 @@ export class RepoLifecycle {
 				return;
 			}
 			service.markUncertain(`${kind} execution may have modified repository files; reconcile to verify coverage`);
-			// Commands may run outside the session's working directory. The scope is
-			// still marked uncertain; Git hints are merely candidates, not proof.
-			// win32 path.relative across drive letters returns an absolute path.
-			if (cwd) {
-				const rel = path.relative(service.root, cwd);
-				if (!path.isAbsolute(cwd) || path.isAbsolute(rel) || rel.startsWith("..")) {
-					logger.info("Repository Git discovery skipped outside scope", {
-						component: "repo_lifecycle",
-						event: "repo_discovery_hint",
-						stage: "scope",
-						result: "outside_scope",
-						source: kind,
-					});
-					return;
-				}
-			}
 			this.#discover(service, kind);
 		});
 	}
 
-	#discover(service: RepoService, source: "session" | "bash" | "eval" | "git" | "coalesced"): void {
+	#discover(service: RepoService, source: "session" | "bash" | "eval" | "coalesced"): void {
 		if (this.#discoveryService === service) {
 			this.#discoveryRequested = true;
 			logger.info("Repository discovery hint coalesced", {

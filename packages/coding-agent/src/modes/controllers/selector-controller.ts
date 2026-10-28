@@ -30,7 +30,6 @@ import { reset as resetCapabilities } from "../../capability";
 import type { AdvisorConfigScope } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { showGitOverlay } from "../../cli/git-tui";
 import { formatLoginIdentity } from "../../cli/oauth-terminal";
-import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import {
 	acquireModelRoleMutation,
 	applyModelPreset,
@@ -828,9 +827,7 @@ export class SelectorController {
 			const roleSelectorHint = appKey(this.ctx.keybindings, "app.model.select") || formatKeyHint("alt+m");
 			this.ctx.showStatus(`仅当前会话的模型：${selector}。使用 ${roleSelectorHint} 或 /model 设置角色。`);
 		};
-		// Remote Agents receive an isolated text epoch, not the ordinary transcript.
-		// Its size cannot justify compacting with the current local model first.
-		if (!compactFirst || focusedAgentId || isJchToolsAgentModel(model)) {
+		if (!compactFirst || focusedAgentId) {
 			await apply();
 			return;
 		}

@@ -1,38 +1,33 @@
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getOfflineShmState, isEnoent, isRecord, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
-import { withFileLock, withPersistentFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import { isEnoent, isRecord, MAIN_CONFIG_FILENAMES } from "@oh-my-pi/pi-utils";
+import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
 import { setYamlConfigValue } from "@oh-my-pi/pi-utils/yaml-config";
 import { isScalar, LineCounter, parseDocument, visit } from "yaml";
 import type { RawSettings, SettingProvenance } from "./settings";
 import { replaceFileAtomically } from "../utils/atomic-file";
 
-export interface UserSettingSide {
-	readState: "present" | "missing" | "invalid" | "unreadable" | "not_applicable";
+export interface UserSettingValue {
+	readState: "present" | "missing" | "invalid" | "unreadable";
 	value?: unknown;
 }
 export interface UserSettingIssue {
 	code: string;
 	message: string;
-	side?: "active" | "persistent";
 	source?: SettingProvenance;
 }
-export interface UserSettingSnapshot {
+export interface UserSettingSnapshot extends UserSettingValue {
 	revision: string | null;
-	mode: "single" | "offline_shm";
-	syncState: "in_sync" | "different" | "unknown" | "not_applicable";
-	active: UserSettingSide;
-	persistent: UserSettingSide;
 	issues: UserSettingIssue[];
 }
 export interface UserSettingWrite {
-	status: "saved" | "unchanged" | "failed" | "not_attempted" | "unknown" | "not_applicable";
+	status: "saved" | "unchanged" | "failed" | "not_attempted" | "unknown";
 	message?: string;
 }
 export interface UserSettingSaveResult {
-	saveState: "complete" | "partial" | "failed" | "unknown";
-	writes: { active: UserSettingWrite; persistent: UserSettingWrite };
+	saveState: "complete" | "failed" | "unknown";
+	write: UserSettingWrite;
 }
 export class UserSettingError extends Error {
 	constructor(
@@ -49,20 +44,18 @@ interface LoadedSide {
 	file: string;
 	source: string;
 	raw: RawSettings;
-	state: UserSettingSide["readState"];
+	state: UserSettingValue["readState"];
 	message?: string;
 }
 export interface UserSettingMutation {
 	segments: readonly string[];
 	value: unknown;
-	/** Optional active-side CAS for staged Settings writes. */
+	/** Optional CAS for staged Settings writes. */
 	baseValue?: unknown;
 	checkBase?: boolean;
 }
 export interface UserSettingsStoreOptions {
 	agentDir: string;
-	offline?: { runtimeRoot: string; persistentRoot: string; domainId: string };
-	persistentLock?: typeof withPersistentFileLock;
 	/** Existing Settings migration, applied only in memory to identify reset sources. */
 	migrate?: (raw: RawSettings) => RawSettings;
 }
@@ -100,7 +93,7 @@ function equal(left: unknown, right: unknown): boolean {
 function emptyReceipt(): UserSettingSaveResult {
 	return {
 		saveState: "failed",
-		writes: { active: { status: "not_attempted" }, persistent: { status: "not_attempted" } },
+		write: { status: "not_attempted" },
 	};
 }
 function within(root: string, target: string): boolean {
@@ -108,29 +101,15 @@ function within(root: string, target: string): boolean {
 	return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
 }
 
-/** Explicit user access only: construction never probes either root. */
+/** Explicit user access only: construction never probes the configuration directory. */
 export class UserSettingsStore {
 	readonly #activeDir: string;
-	readonly #persistentDir: string | undefined;
 	readonly #domain: string;
-	readonly #persistentLock: typeof withPersistentFileLock;
 	readonly #migrate: UserSettingsStoreOptions["migrate"];
 	constructor(options: UserSettingsStoreOptions) {
 		this.#activeDir = path.resolve(options.agentDir);
-		const offline = options.offline ?? getOfflineShmState();
-		this.#persistentLock = options.persistentLock ?? withPersistentFileLock;
 		this.#migrate = options.migrate;
-		if (offline) {
-			const relative = path.relative(offline.runtimeRoot, this.#activeDir);
-			if (!/^(?:agent|profiles[\\/][^\\/]+[\\/]agent)$/.test(relative)) {
-				throw new Error("Offline user settings must belong to the current runtime profile agent directory.");
-			}
-			this.#persistentDir = path.join(offline.persistentRoot, relative);
-			this.#domain = `${offline.domainId}:${relative}`;
-		} else this.#domain = this.#activeDir;
-	}
-	get offline(): boolean {
-		return this.#persistentDir !== undefined;
+		this.#domain = this.#activeDir;
 	}
 
 	async #target(directory: string): Promise<string> {
@@ -161,11 +140,7 @@ export class UserSettingsStore {
 				await fs.lstat(file);
 				exists = true;
 				const actual = await fs.realpath(file);
-				if (
-					!within(directory, actual) ||
-					path.relative(directory, actual).split(path.sep).includes(".offline-shm-backups")
-				)
-					throw new Error("Configuration symlink escapes its profile.");
+				if (!within(directory, actual)) throw new Error("Configuration symlink escapes its profile.");
 				const stat = await fs.stat(actual);
 				if (!stat.isFile()) throw new Error("Configuration target is not a regular file.");
 				if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid !== process.getuid())
@@ -279,16 +254,15 @@ export class UserSettingsStore {
 		preserve(before, []);
 		return result;
 	}
-	#snapshot(active: LoadedSide, persistent: LoadedSide | undefined, keys: readonly string[]): UserSettingSnapshot {
+	#snapshot(active: LoadedSide, keys: readonly string[]): UserSettingSnapshot {
 		const issues: UserSettingIssue[] = [];
-		const side = (loaded: LoadedSide | undefined, name: "active" | "persistent"): UserSettingSide => {
-			if (!loaded) return { readState: "not_applicable" };
-			if (loaded.message) issues.push({ code: loaded.state, message: loaded.message, side: name });
+		const side = (loaded: LoadedSide): UserSettingValue => {
+			if (loaded.message) issues.push({ code: loaded.state, message: loaded.message });
 			if (loaded.state === "present")
 				for (let length = 1; length < keys.length; length++) {
 					const parent = leaf(loaded.raw, keys.slice(0, length));
 					if (parent !== undefined && parent !== null && !isRecord(parent)) {
-						issues.push({ code: "invalid", message: "Setting parent must be a mapping.", side: name });
+						issues.push({ code: "invalid", message: "Setting parent must be a mapping." });
 						return { readState: "invalid" };
 					}
 				}
@@ -298,50 +272,21 @@ export class UserSettingsStore {
 			}
 			return { readState: loaded.state };
 		};
-		const a = side(active, "active"),
-			p = side(persistent, "persistent");
+		const a = side(active);
 		const valid = issues.length === 0;
 		const activeReset = this.#resetMutations(active.raw, keys).map(mutation => [
 			mutation.segments,
 			leaf(active.raw, mutation.segments),
 		]);
-		const persistentReset = persistent
-			? this.#resetMutations(persistent.raw, keys).map(mutation => [
-					mutation.segments,
-					leaf(persistent.raw, mutation.segments),
-				])
-			: undefined;
-		const identity = [
-			this.#domain,
-			keys,
-			active.file,
-			persistent?.file,
-			canonical(a.value),
-			canonical(p.value),
-			canonical(activeReset),
-			canonical(persistentReset),
-		];
+		const identity = [this.#domain, keys, active.file, canonical(a.value), canonical(activeReset)];
 		return {
 			revision: valid ? createHash("sha256").update(JSON.stringify(identity)).digest("hex") : null,
-			mode: this.offline ? "offline_shm" : "single",
-			syncState: !this.offline
-				? "not_applicable"
-				: !valid
-					? "unknown"
-					: equal(a.value, p.value)
-						? "in_sync"
-						: "different",
-			active: a,
-			persistent: p,
+			...a,
 			issues,
 		};
 	}
 	async read(keys: readonly string[]): Promise<UserSettingSnapshot> {
-		const [active, persistent] = await Promise.all([
-			this.#load(this.#activeDir),
-			this.#persistentDir ? this.#load(this.#persistentDir) : undefined,
-		]);
-		return this.#snapshot(active, persistent, keys);
+		return this.#snapshot(await this.#load(this.#activeDir), keys);
 	}
 	async readActiveRaw(): Promise<RawSettings> {
 		const loaded = await this.#load(this.#activeDir);
@@ -355,12 +300,10 @@ export class UserSettingsStore {
 		};
 		try {
 			const initialActive = await this.#load(this.#activeDir);
-			const initialPersistent = this.#persistentDir ? await this.#load(this.#persistentDir) : undefined;
-			if (initialActive.message || initialPersistent?.message)
-				fail("invalid_config", "Configuration cannot be safely read.");
+			if (initialActive.message) fail("invalid_config", "Configuration cannot be safely read.");
 			const initialRevisions =
 				expectedRevision === undefined
-					? mutations.map(mutation => this.#snapshot(initialActive, initialPersistent, mutation.segments).revision)
+					? mutations.map(mutation => this.#snapshot(initialActive, mutation.segments).revision)
 					: undefined;
 			if (initialRevisions?.some(revision => revision === null))
 				fail("invalid_config", "Configuration cannot be safely parsed.");
@@ -368,38 +311,33 @@ export class UserSettingsStore {
 				await fs.mkdir(path.dirname(initialActive.file), { recursive: true, mode: 0o700 });
 				return withFileLock(initialActive.file, async () => {
 					const active = await this.#load(this.#activeDir);
-					const persistent = this.#persistentDir ? await this.#load(this.#persistentDir) : undefined;
-					const snapshot = this.#snapshot(active, persistent, mutations[0].segments);
+					const snapshot = this.#snapshot(active, mutations[0].segments);
 					if (snapshot.revision === null)
 						fail("invalid_config", "Configuration cannot be safely parsed.", snapshot.issues);
-					if (active.file !== initialActive.file || persistent?.file !== initialPersistent?.file)
+					if (active.file !== initialActive.file)
 						fail("revision_conflict", "Configuration target changed while acquiring locks.");
 					if (expectedRevision !== undefined && expectedRevision !== snapshot.revision)
-						fail("revision_conflict", "User configuration changed. Read both sides before saving again.");
+						fail("revision_conflict", "User configuration changed. Read it before saving again.");
 					if (
 						initialRevisions &&
 						mutations.some(
 							(mutation, index) =>
-								this.#snapshot(active, persistent, mutation.segments).revision !== initialRevisions[index],
+								this.#snapshot(active, mutation.segments).revision !== initialRevisions[index],
 						)
 					)
 						fail(
 							"revision_conflict",
-							"User configuration changed while acquiring locks. Read both sides before saving again.",
+							"User configuration changed while acquiring locks. Read it before saving again.",
 						);
 					for (const mutation of mutations) {
 						if (mutation.checkBase && !equal(leaf(active.raw, mutation.segments), mutation.baseValue))
 							fail("revision_conflict", "A pending user setting conflicts with an external edit.");
 						for (let length = 1; length < mutation.segments.length; length++) {
-							for (const loaded of [active, persistent]) {
-								if (!loaded) continue;
-								const parent = leaf(loaded.raw, mutation.segments.slice(0, length));
-								if (parent !== undefined && parent !== null && !isRecord(parent))
-									fail("invalid_config", "Setting parent must be a mapping.");
-							}
+							const parent = leaf(active.raw, mutation.segments.slice(0, length));
+							if (parent !== undefined && parent !== null && !isRecord(parent))
+								fail("invalid_config", "Setting parent must be a mapping.");
 						}
 					}
-					// Prepare both ASTs before the first commit; malformed structures cannot cause a partial save.
 					const prepare = (loaded: LoadedSide) => {
 						const edits = mutations.flatMap(mutation =>
 							mutation.value === undefined ? this.#resetMutations(loaded.raw, mutation.segments) : [mutation],
@@ -412,18 +350,14 @@ export class UserSettingsStore {
 							),
 						};
 					};
-					const activePrepared = prepare(active),
-						persistentPrepared = persistent ? prepare(persistent) : undefined;
-					// Only an actual commit phase establishes that the persistent side is not applicable.
-					if (!persistent) receipt.writes.persistent = { status: "not_applicable" };
+					const activePrepared = prepare(active);
 					const commit = async (
 						loaded: LoadedSide,
 						prepared: { edits: readonly UserSettingMutation[]; source: string },
-						name: "active" | "persistent",
 					) => {
 						const { edits, source } = prepared;
 						if (edits.every(mutation => equal(leaf(loaded.raw, mutation.segments), mutation.value))) {
-							receipt.writes[name] = { status: "unchanged" };
+							receipt.write = { status: "unchanged" };
 							return;
 						}
 						const temp = `${loaded.file}.${randomUUID()}.tmp`;
@@ -439,33 +373,27 @@ export class UserSettingsStore {
 							}
 							publishing = true;
 							await replaceFileAtomically(temp, loaded.file);
-							const readback = await this.#load(name === "active" ? this.#activeDir : this.#persistentDir!);
+							const readback = await this.#load(this.#activeDir);
 							if (
 								readback.file !== loaded.file ||
 								readback.message ||
 								!edits.every(mutation => equal(leaf(readback.raw, mutation.segments), mutation.value))
 							)
 								throw new Error("Configuration readback could not confirm the saved fields.");
-							receipt.writes[name] = { status: "saved" };
+							receipt.write = { status: "saved" };
 						} catch (error) {
-							receipt.writes[name] = { status: publishing ? "unknown" : "failed", message: String(error) };
-							receipt.saveState = publishing ? "unknown" : name === "persistent" ? "partial" : "failed";
+							receipt.write = { status: publishing ? "unknown" : "failed", message: String(error) };
+							receipt.saveState = publishing ? "unknown" : "failed";
 							fail("persistence_failed", "User configuration persistence did not complete.");
 						} finally {
 							await fs.rm(temp, { force: true }).catch(() => {});
 						}
 					};
-					await commit(active, activePrepared, "active");
-					if (persistent && persistentPrepared !== undefined)
-						await commit(persistent, persistentPrepared, "persistent");
+					await commit(active, activePrepared);
 					receipt.saveState = "complete";
 					return receipt;
 				});
 			};
-			if (initialPersistent) {
-				await fs.mkdir(path.dirname(initialPersistent.file), { recursive: true, mode: 0o700 });
-				return await this.#persistentLock(initialPersistent.file, locked);
-			}
 			return await locked();
 		} catch (error) {
 			if (error instanceof UserSettingError) throw error;

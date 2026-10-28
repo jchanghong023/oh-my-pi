@@ -16,9 +16,6 @@ export interface ResolvedReviewTarget {
 	contextInstruction?: string;
 	/** Base URL for per-file slices of the original, unfiltered PR/MR diff. */
 	prDiffUrl?: string;
-	/** Selected identities for callers that capture their own complete diff. */
-	baseRef?: string;
-	targetRef?: string;
 	/** Leading `?at=<generation>` when `prDiffUrl` is pinned, otherwise empty. */
 	prDiffQuery?: string;
 }
@@ -45,13 +42,7 @@ export function createResolvedReviewTarget(
 	emptyMessage: string,
 	options: Pick<
 		ResolvedReviewTarget,
-		| "filteredMessage"
-		| "diffInstruction"
-		| "contextInstruction"
-		| "prDiffUrl"
-		| "baseRef"
-		| "targetRef"
-		| "prDiffQuery"
+		"filteredMessage" | "diffInstruction" | "contextInstruction" | "prDiffUrl" | "prDiffQuery"
 	> = {},
 ): ResolvedReviewTarget {
 	return {
@@ -151,7 +142,6 @@ export async function resolveLocalReviewTarget(
 				`Reviewing changes between \`${baseBranch}\` and \`${currentBranch}\` (PR-style)`,
 				diffText,
 				`No changes between ${baseBranch} and ${currentBranch}`,
-				{ baseRef: baseBranch, targetRef: currentBranch },
 			);
 		}
 		case "uncommitted":
@@ -184,7 +174,6 @@ export async function resolveLocalReviewTarget(
 				"Commit has no diff content",
 				{
 					filteredMessage: "No reviewable files in commit (all changes filtered out)",
-					targetRef: hash,
 				},
 			);
 		}

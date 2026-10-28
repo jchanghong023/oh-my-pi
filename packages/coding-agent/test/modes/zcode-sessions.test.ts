@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ZCodeSessionManager } from "../../src/modes/zcode/sessions";
+import { zcodeMcpConfigurationIdentity } from "../../src/modes/zcode/tool-config";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { AgentLifecycleManager } from "../../src/registry/agent-lifecycle";
@@ -20,7 +21,7 @@ afterEach(async () => {
 	for (const cleanup of resources.splice(0).reverse()) await cleanup();
 });
 
-async function fixture() {
+async function fixture(enableMcp = false) {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-sessions-"));
 	resources.push(() => fs.rm(root, { recursive: true, force: true }));
 	resources.push(async () => {
@@ -43,7 +44,7 @@ async function fixture() {
 		agentDir: path.join(root, "agent"),
 		sessionOptions: {
 			toolNames: [],
-			restrictToolNames: true,
+			restrictToolNames: !enableMcp,
 			skills: [],
 			customTools: [],
 			extensions: [],
@@ -53,7 +54,7 @@ async function fixture() {
 		},
 	});
 	resources.push(() => manager.dispose());
-	return { manager, cwd, other, root };
+	return { manager, cwd, other, root, authStorage };
 }
 
 describe("ZCodeSessionManager", () => {
@@ -378,6 +379,72 @@ describe("ZCodeSessionManager", () => {
 		} finally {
 			closeSpy.mockRestore();
 		}
+	});
+
+	it("fails closed on legacy MCP credentials and persists an explicit cold recovery", async () => {
+		const { manager, authStorage } = await fixture(true);
+		const record = await manager.create({ mcpServers: [] });
+		const file = record.session.sessionManager.getSessionFile()!;
+		const credentialProvider = record.configuration.mcp.credentialProvider!;
+		const legacy = [
+			{
+				name: "old",
+				type: "http" as const,
+				url: "https://private-host.example/mcp",
+				headers: [],
+				oauth: { type: "client_credentials" as const, clientId: "old-id", clientSecret: "old-secret" },
+			},
+		];
+		const credential = { type: "api_key" as const, key: JSON.stringify(legacy) };
+		await authStorage.credentials.set(credentialProvider, credential);
+		record.session.sessionManager.appendCustomEntry("recovery_history_marker", { value: "preserved" });
+		record.session.sessionManager.appendCustomEntry("zcode_session_configuration", {
+			...record.configuration,
+			mcp: { version: 1, identity: zcodeMcpConfigurationIdentity(legacy), credentialProvider },
+		});
+		await record.session.sessionManager.flush();
+		await manager.close(record.id);
+		const history = await fs.readFile(file, "utf8");
+
+		let failure: unknown;
+		try {
+			await manager.resume(record.id);
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toMatchObject({
+			code: "MCP_OAUTH_UNSUPPORTED",
+			data: {
+				authorizationMethod: "client_credentials",
+				recovery: expect.any(String),
+			},
+		});
+		const fault = failure as Error & { code: string; data: unknown };
+		const wire = JSON.stringify({ message: fault.message, code: fault.code, data: fault.data });
+		expect(wire).not.toContain("old-id");
+		expect(wire).not.toContain("old-secret");
+		expect(wire).not.toContain("private-host.example");
+		expect(await fs.readFile(file, "utf8")).toBe(history);
+		expect(authStorage.credentials.get(credentialProvider)).toEqual(credential);
+		expect(manager.get(record.id)).toBeUndefined();
+
+		const restored = await manager.resume(record.id, { mcpServers: [] });
+		expect(restored.id).toBe(record.id);
+		expect(restored.session.sessionManager.getEntries()).toContainEqual(
+			expect.objectContaining({
+				type: "custom",
+				customType: "recovery_history_marker",
+				data: { value: "preserved" },
+			}),
+		);
+		await expect(manager.resume(record.id, { mcpServers: legacy })).rejects.toThrow(
+			"Live session MCP configuration cannot be replaced",
+		);
+		await manager.close(record.id);
+		const reopened = await manager.resume(record.id);
+		expect(reopened.id).toBe(record.id);
+		expect(reopened.configuration.mcp.identity).toBe(zcodeMcpConfigurationIdentity([]));
+		expect(authStorage.credentials.get(credentialProvider)).toEqual({ type: "api_key", key: "[]" });
 	});
 
 	it("validates concurrent resume options against the winning session without replacing its configuration", async () => {

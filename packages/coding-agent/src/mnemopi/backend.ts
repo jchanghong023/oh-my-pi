@@ -8,7 +8,6 @@ import type { MnemopiLlmCompleteOptions } from "@oh-my-pi/pi-mnemopi/core/runtim
 import type * as MnemopiDiagnoseNs from "@oh-my-pi/pi-mnemopi/diagnose";
 import type { DiagnosticSummary } from "@oh-my-pi/pi-mnemopi/diagnose";
 import { logger, prompt, withLoopPhase } from "@oh-my-pi/pi-utils";
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { roleCandidatePool } from "../config/model-roles";
 import { resolveRoleChain } from "../config/model-resolver";
@@ -611,7 +610,7 @@ async function resolveMnemopiProviderOptions(
 
 			for (const { model, thinkingLevel } of candidates) {
 				if (signal?.aborted) return null;
-				const replayForbidden = model.provider === "codeagent" || isJchToolsAgentModel(model);
+				const replayForbidden = model.provider === "codeagent";
 				try {
 					if (model.api === "local-inference") {
 						const result = await tinyModelClient.complete(model.id, request.prompt, {

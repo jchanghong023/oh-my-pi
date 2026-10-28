@@ -12,10 +12,8 @@ import {
 	directoryIsEnterable,
 	directoryIsMissing,
 	getBlobsDir,
-	getOfflineShmState,
 	getProjectDir,
 	getSessionsDir,
-	getSessionsDirPath,
 	isEexist,
 	isEnoent,
 	isEnotdir,
@@ -110,14 +108,12 @@ import {
 	hasPositiveMovedProjectEvidence,
 	readTerminalBreadcrumbEntry,
 	resolveManagedSessionRoot,
-	resolveSessionDirectory,
 	worktreeSessionDirs,
 	writeTerminalBreadcrumb,
 } from "./session-paths";
 import { forgetExternalizedImages, prepareEntryForPersistence } from "./session-persistence";
 import { loadPinnedSessionIds, sortPinnedFirst } from "./session-pins";
 import {
-	assertOfflineSessionPath,
 	FileSessionStorage,
 	MemorySessionStorage,
 	type SessionStorage,
@@ -1036,12 +1032,11 @@ export class SessionManager {
 
 	private constructor(cwd: string, sessionDir: string, persist: boolean, storage: SessionStorage) {
 		this.#cwd = cwd;
-		// Resolve file-backed paths before mapping them into the offline runtime so
-		// session files stay valid after a command changes directory. Other storage
-		// backends use the directory as an opaque key, not a filesystem path.
+		// File-backed paths remain valid after a command changes directory; other
+		// storage backends use the directory as an opaque key.
 		const resolvedSessionDir =
 			sessionDir && storage instanceof FileSessionStorage ? path.resolve(sessionDir) : sessionDir;
-		this.#sessionDir = persist ? resolveSessionDirectory(resolvedSessionDir, storage) : resolvedSessionDir;
+		this.#sessionDir = resolvedSessionDir;
 		this.#persist = persist;
 		this.#storage = storage;
 		this.#blobs = new BlobStore(getBlobsDir());
@@ -2100,13 +2095,12 @@ export class SessionManager {
 		forcedSessionFile?: string,
 		requestedSessionId?: string,
 	): string | undefined {
-		if (forcedSessionFile) assertOfflineSessionPath(forcedSessionFile, this.#storage);
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 		this.#expectedDiskSize = null;
 		this.#reconcileSessionDirForFallback();
 		if (options?.sessionDir && this.#persist) {
-			this.#sessionDir = resolveSessionDirectory(path.resolve(options.sessionDir), this.#storage);
+			this.#sessionDir = path.resolve(options.sessionDir);
 			this.#storage.ensureDirSync(this.#sessionDir);
 		}
 		if (requestedSessionId !== undefined && !/^[A-Za-z0-9_-]+$/.test(requestedSessionId)) {
@@ -2370,14 +2364,13 @@ export class SessionManager {
 	}
 
 	restoreState(snapshot: SessionManagerStateSnapshot): void {
-		if (snapshot.sessionFile) assertOfflineSessionPath(snapshot.sessionFile, this.#storage);
 		this.#transitionSessionClaim(snapshot.sessionId, snapshot.sessionFile);
 		this.#closeWriterEventually();
 		this.#diskTail = Promise.resolve();
 		this.#clearDiskError();
 
 		this.#cwd = snapshot.cwd;
-		this.#sessionDir = resolveSessionDirectory(snapshot.sessionDir, this.#storage);
+		this.#sessionDir = snapshot.sessionDir;
 		this.#sessionFile = snapshot.sessionFile;
 		this.#expectedDiskSize = snapshot.expectedDiskSize;
 		this.#fileIsCurrent = snapshot.onDisk;
@@ -2449,7 +2442,6 @@ export class SessionManager {
 		loadedSession?: SessionLoadResult,
 		options?: { throwIfMissing?: boolean; newSession?: NewSessionOptions },
 	): Promise<void> {
-		assertOfflineSessionPath(sessionFile, this.#storage);
 		await this.#drainAndCloseWriter();
 		this.#clearDiskError();
 		this.#draftOnlySessionCleanupArmed = false;
@@ -2616,16 +2608,13 @@ export class SessionManager {
 	/** Move the session to a new working directory. */
 	async moveTo(newCwd: string, targetSessionDir?: string): Promise<void> {
 		const resolvedCwd = path.resolve(newCwd);
-		const resolvedTargetDir = targetSessionDir
-			? resolveSessionDirectory(path.resolve(targetSessionDir), this.#storage)
-			: undefined;
+		const resolvedTargetDir = targetSessionDir ? path.resolve(targetSessionDir) : undefined;
 		const managedRoot = resolveManagedSessionRoot(this.#sessionDir, this.#cwd);
 		const nextSessionDir =
 			resolvedTargetDir ??
 			(managedRoot
 				? computeDefaultSessionDir(resolvedCwd, this.#storage, managedRoot)
 				: computeDefaultSessionDir(resolvedCwd, this.#storage));
-		assertOfflineSessionPath(nextSessionDir, this.#storage);
 		const expectedSessionFile = this.#sessionFile
 			? path.join(nextSessionDir, path.basename(this.#sessionFile))
 			: undefined;
@@ -2647,7 +2636,6 @@ export class SessionManager {
 		// settles, so its owner cannot start writing mid-move. Our own id is
 		// refcounted, never contended.
 		const claimDestination = async (file: string): Promise<void> => {
-			assertOfflineSessionPath(file, this.#storage);
 			const id = await readSessionHeaderId(file);
 			if (id === undefined || id === destination?.id) return;
 			const release = this.#storage.claimSession?.(id, file);
@@ -3365,7 +3353,6 @@ export class SessionManager {
 	}
 
 	adoptArtifactManager(manager: ArtifactManager): void {
-		assertOfflineSessionPath(manager.dir, this.#storage);
 		this.#adoptedArtifactManager = manager;
 	}
 
@@ -4234,12 +4221,7 @@ export class SessionManager {
 		agentDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): string {
-		// Non-filesystem offline backends keep opaque keys and must not probe
-		// disk, so resolve the sessions root without owned-path validation.
-		const sessionsRoot =
-			storage instanceof FileSessionStorage || !getOfflineShmState()
-				? getSessionsDir(agentDir)
-				: getSessionsDirPath(agentDir);
+		const sessionsRoot = getSessionsDir(agentDir);
 		return computeDefaultSessionDir(cwd, storage, sessionsRoot);
 	}
 
@@ -4313,8 +4295,6 @@ export class SessionManager {
 			entryId?: string;
 		},
 	): Promise<SessionManager> {
-		assertOfflineSessionPath(sourcePath, storage);
-		if (options?.sessionFile) assertOfflineSessionPath(options.sessionFile, storage);
 		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const manager = new SessionManager(cwd, dir, true, storage);
 		manager.#suppressBreadcrumb = options?.suppressBreadcrumb === true;
@@ -4480,7 +4460,6 @@ export class SessionManager {
 			runtimeOwnership?: boolean;
 		},
 	): Promise<SessionManager> {
-		assertOfflineSessionPath(filePath, storage);
 		const probed = await loadSessionFile(filePath, storage, { throwIfMissing: options?.throwIfMissing });
 		const header = probed.entries.find(entry => entry.type === "session") as SessionHeader | undefined;
 		// Resume into the session's recorded cwd only when it is verifiably
@@ -4579,7 +4558,6 @@ export class SessionManager {
 		init: PersistedSessionInit | null;
 		seanceSource?: string;
 	} | null> {
-		assertOfflineSessionPath(filePath, storage);
 		let header: SessionHeader | undefined;
 		const initEntries: FileEntry[] = [];
 		const visit = (entry: FileEntry): void => {
@@ -4622,12 +4600,9 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		options: { onSessionContinuation?: (continuation: SessionContinuation) => void } = {},
 	): Promise<SessionManager> {
-		const dir = resolveSessionDirectory(
-			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
-			storage,
-		);
+		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const resolvedCwd = path.resolve(cwd);
-		const breadcrumb = await readTerminalBreadcrumbEntry(storage);
+		const breadcrumb = await readTerminalBreadcrumbEntry();
 		let chosenSession: string | null | undefined;
 
 		if (breadcrumb) {
@@ -4767,10 +4742,7 @@ export class SessionManager {
 		sessionDir?: string,
 		storage: SessionStorage = new FileSessionStorage(),
 	): Promise<SessionInfo[]> {
-		const dir = resolveSessionDirectory(
-			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
-			storage,
-		);
+		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const sessions = await listSessions(dir, storage);
 		return sortPinnedFirst(sessions, await loadPinnedSessionIds());
 	}
@@ -4794,10 +4766,7 @@ export class SessionManager {
 		storage: SessionStorage = new FileSessionStorage(),
 		worktreeScope: "directory" | "repo" = "repo",
 	): Promise<SessionInfo[]> {
-		const dir = resolveSessionDirectory(
-			sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage),
-			storage,
-		);
+		const dir = sessionDir ?? SessionManager.getDefaultSessionDir(cwd, undefined, storage);
 		const [pinned, siblingDirs] = await Promise.all([
 			loadPinnedSessionIds(),
 			worktreeScope === "repo" ? worktreeSessionDirs(cwd, dir) : [],

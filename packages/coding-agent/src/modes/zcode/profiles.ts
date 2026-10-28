@@ -6,10 +6,8 @@ import {
 	APP_NAME,
 	getActiveProfile,
 	getBaseConfigRoot,
-	getOfflineShmState,
 	getSessionsDirPath,
 	normalizeProfileName,
-	relativePathWithinNormalizedRoot,
 	resolveEquivalentPath,
 } from "@oh-my-pi/pi-utils/dirs";
 import { z } from "zod";
@@ -29,14 +27,10 @@ export interface OmpProfileBlocker {
 
 export function getOmpProfileStorageIdentity() {
 	const activeProfile = getActiveProfile() ?? null;
-	const offline = getOfflineShmState();
-	const configRoot = path.resolve(offline?.persistentRoot ?? getBaseConfigRoot());
+	const configRoot = path.resolve(getBaseConfigRoot());
 	const resourcePath = path.resolve(path.dirname(getSessionsDirPath()));
-	// scope 必须跟随实际数据域；相同 configRoot 下 agent override 可指向不同存储，
-	// offline 则映射回持久路径，不能把临时 shm 的 host/uid 域写入客户端身份。
-	const relative = offline ? relativePathWithinNormalizedRoot(offline.runtimeRoot, resourcePath) : null;
-	const persistentPath = offline && relative !== null ? path.join(offline.persistentRoot, relative) : resourcePath;
-	const canonicalPath = offline ? persistentPath : resolveEquivalentPath(persistentPath, { throughMissing: true });
+	// scope 必须跟随实际数据域；相同 configRoot 下 agent override 可指向不同存储。
+	const canonicalPath = resolveEquivalentPath(resourcePath, { throughMissing: true });
 	const storageScope = createHash("sha256")
 		.update(process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath)
 		.digest("hex");
@@ -63,14 +57,11 @@ export class OmpProfilesBridge {
 		const activeProfile = getActiveProfile() ?? null;
 		const names = new Set<string>();
 		if (activeProfile) names.add(activeProfile);
-		const offline = getOfflineShmState();
 		const { configRoot, storageScope } = getOmpProfileStorageIdentity();
 		const roots = new Set([getBaseConfigRoot()]);
-		if (offline) roots.add(offline.persistentRoot);
-		// 与原生 resolver 一致：显式绝对 OMP root/offline 不采用 XDG。
+		// 与原生 resolver 一致：显式绝对 OMP root 不采用 XDG。
 		const explicitRoot = process.env.OMP_CONFIG_ROOT?.trim().replace(/^~(?=$|[\\/])/, homedir());
 		if (
-			!offline &&
 			!(explicitRoot && path.isAbsolute(explicitRoot)) &&
 			(process.platform === "linux" || process.platform === "darwin")
 		) {

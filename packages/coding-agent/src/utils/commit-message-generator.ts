@@ -9,7 +9,6 @@ import { roleDefaultModels } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 
-import { isJchToolsAgentModel } from "../config/jchtools-provider";
 import type { ModelRegistry } from "../config/model-registry";
 import { getModelMatchPreferences, resolveModelRoleValue } from "../config/model-resolver";
 import type { Settings } from "../config/settings";
@@ -105,7 +104,7 @@ export async function generateCommitMessage(
 	const userMessage = `<diff>\n${truncatedDiff}\n</diff>`;
 
 	for (const candidate of candidates) {
-		const terminalFailure = candidate.model.provider === "codeagent" || isJchToolsAgentModel(candidate.model);
+		const terminalFailure = candidate.model.provider === "codeagent";
 		const apiKey = await registry.getApiKey(candidate.model, sessionId);
 		if (!apiKey) {
 			if (terminalFailure) return null;

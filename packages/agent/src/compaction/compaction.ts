@@ -648,26 +648,8 @@ function effortFromThinkingLevel(level: ThinkingLevel): Effort {
 }
 
 /**
- * Fork contract (openspec/specs/model-and-skill-discovery/spec.md, 「Codex 压缩默认模型」):
- * automatically selected `openai-codex` compaction candidates are redirected
- * to `gpt-6-luna` when available; explicit `compactionModel` overrides are
- * left alone. This module pins compaction requests using luna to `low`.
- */
-export const FORK_CODEX_COMPACTION_MODEL = {
-	provider: "openai-codex",
-	id: "gpt-6-luna",
-} as const;
-
-function isForkCodexCompactionModel(model: Model): boolean {
-	return model.provider === FORK_CODEX_COMPACTION_MODEL.provider && model.id === FORK_CODEX_COMPACTION_MODEL.id;
-}
-
-/**
  * Resolves the reasoning effort to send on a compaction LLM call.
  *
- * - Fork contract: `openai-codex/gpt-6-luna` always compacts at `low` — the
- *   session dial (high/max, the unset `high` default, or `Off`) must not leak
- *   into its summarization calls.
  * - Explicit `Off` → `undefined` (omit reasoning entirely; the user said no thinking).
  * - `undefined` / `Inherit` → historical `Effort.High` default → clamped per model
  *   (preserves current behavior for users who never touched the dial).
@@ -681,7 +663,6 @@ function isForkCodexCompactionModel(model: Model): boolean {
  * `requireSupportedEffort` throw.
  */
 function resolveCompactionEffort(model: Model, level: ThinkingLevel | undefined): Effort | undefined {
-	if (isForkCodexCompactionModel(model)) return clampThinkingLevelForModel(model, Effort.Low) ?? Effort.Low;
 	if (level === ThinkingLevel.Off) return undefined;
 	const requested: Effort =
 		level === undefined || level === ThinkingLevel.Inherit ? Effort.High : effortFromThinkingLevel(level);
@@ -1067,9 +1048,8 @@ export async function generateSummary(
 				options,
 			);
 		} catch (error) {
-			// These transports own their replay policy. Even a context rejection
-			// cannot trigger an outer request with a smaller summary window.
-			if (signal?.aborted || model.provider === "codeagent" || model.provider === "jchtools") throw error;
+			// CodeAgent owns replay policy, including context rejections.
+			if (signal?.aborted || model.provider === "codeagent") throw error;
 			// The catalog window can overstate what the provider actually accepts:
 			// `claude-sonnet-4-5` advertises 1M but is beta-gated to 200k on OAuth
 			// credentials (see `anthropic.ts` — the 1M beta is never advertised).
@@ -1282,10 +1262,6 @@ export async function generateHandoffFromContext(
 		reasoning: resolveCompactionEffort(model, options.thinkingLevel),
 		toolChoice: "none" as const,
 	};
-	if (isForkCodexCompactionModel(model)) {
-		requestOptions.disableReasoning = false;
-		requestOptions.forceReasoningOff = false;
-	}
 	const retry = options.oneshotRetry === false ? undefined : (options.oneshotRetry ?? {});
 	let response = await completeCompaction(model, context, requestOptions, {
 		telemetry: options.telemetry,
@@ -2056,8 +2032,7 @@ export async function compact(
 								{ systemPrompt: remoteSystemPrompt, messages, tools: summaryOptions.tools },
 								{
 									reasoning: resolveCompactionEffort(model, summaryOptions.thinkingLevel),
-									forceReasoningOff:
-										summaryOptions.thinkingLevel === ThinkingLevel.Off && !isForkCodexCompactionModel(model),
+									forceReasoningOff: summaryOptions.thinkingLevel === ThinkingLevel.Off,
 									responsesLite: model.useResponsesLite,
 									sessionId: summaryOptions.sessionId,
 									promptCacheKey: summaryOptions.remotePromptCacheKey,

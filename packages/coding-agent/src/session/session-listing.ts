@@ -3,20 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
-import { getOfflineShmState, getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
+import { getSessionsDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import { parseJsonlLenient } from "@oh-my-pi/pi-utils/stream";
 import { toError } from "@oh-my-pi/pi-utils/type-guards";
 import { EVAL_STATE_CONTEXT_TYPE } from "../eval/state";
 import { visitEntriesFromFile } from "./session-loader";
-import { computeDefaultSessionDir, resolveSessionDirectory } from "./session-paths";
-import {
-	assertOfflineSessionPath,
-	FileSessionStorage,
-	type SessionStorage,
-	type SessionStorageStat,
-} from "./session-storage";
+import { computeDefaultSessionDir } from "./session-paths";
+import { FileSessionStorage, type SessionStorage, type SessionStorageStat } from "./session-storage";
 import { lookupSessionTitle, recordSessionTitle } from "./session-index";
 
 /**
@@ -76,12 +71,6 @@ export interface RecentSessionInfo {
 }
 
 const SESSION_LIST_PREFIX_BYTES = 4096;
-/**
- * 首条用户消息被 4 KB 前缀窗口截断时的扩窗上限:默认标题合同要求完整首条
- * 输入,但列表扫描必须保持有界,超过该上限仍未读到完整行时放弃(标题退回
- * "(no messages)"),不再无限读大文件。
- */
-const SESSION_LIST_PREFIX_GROW_MAX_BYTES = 1024 * 1024;
 /**
  * Tail window read to derive {@link SessionStatus}. Large enough to capture a
  * typical final assistant turn (thinking + text); when the final message exceeds
@@ -420,16 +409,6 @@ function sameFileSnapshot(
 	return left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
-/** Drop disallowed offline candidates without hiding valid sessions in the same listing. */
-function isAllowedSessionPath(file: string, storage: SessionStorage): boolean {
-	try {
-		assertOfflineSessionPath(file, storage);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Scan a single session file into a {@link SessionInfo}. Always reads the 4 KB
  * header/first-message prefix; only reads the 32 KB tail window (and derives
@@ -442,11 +421,9 @@ async function scanSessionFile(
 	withStatus: boolean,
 	knownStat?: SessionStorageStat,
 	retries = 2,
-	prefixBytes = SESSION_LIST_PREFIX_BYTES,
 ): Promise<SessionInfo | undefined> {
 	let stat: SessionStorageStat;
 	try {
-		assertOfflineSessionPath(file, storage);
 		stat = knownStat ?? storage.statSync(file);
 	} catch {
 		// Missing/unstatable file: no stat identity to cache under.
@@ -463,21 +440,12 @@ async function scanSessionFile(
 	try {
 		const [content, suffix] = await storage.readTextSlices(
 			file,
-			prefixBytes,
+			SESSION_LIST_PREFIX_BYTES,
 			withStatus ? SESSION_LIST_SUFFIX_BYTES : 0,
 		);
 		if (!sameFileSnapshot(stat, storage.statSync(file))) {
 			return retries > 0 ? scanSessionFile(file, storage, withStatus, undefined, retries - 1) : undefined;
 		}
-		// 缺陷(automation 首条输入默认标题截断): 4 KB 前缀窗口可能正好把首条
-		// 用户消息行截断在词/字节中间。截断的行 JSON 解析失败被跳过,而
-		// fallback(extractFirstDisplayMessageFromPrefix)曾把窗口碎片当完整文本
-		// 提取,产出被截断的默认标题(如 E2E_AUTOMA)。这里只保留完整行参与
-		// fallback;当窗口确实被截断且尚未找到首条用户消息时,按界扩窗重读。
-		// stat.size 与 prefixBytes 都是字节口径;多字节字符被窗口切开时
-		// content.length 不可靠。
-		const windowTruncated = !content.endsWith("\n") && stat.size > prefixBytes;
-		const completeContent = windowTruncated ? content.slice(0, content.lastIndexOf("\n") + 1) : content;
 		const { size, mtime } = stat;
 		const entries = parseJsonlLenient<Record<string, unknown>>(content);
 		const header = parseSessionListHeader(content, entries);
@@ -519,20 +487,7 @@ async function scanSessionFile(
 			}
 		}
 
-		// 只在完整行上做 fallback 提取,窗口碎片不再产生截断文本;若窗口被截断
-		// 且尚未找到首条用户消息,扩窗重读直到该行完整或达到上限(默认标题合同:
-		// 无标题会话的默认标题就是完整首条输入,不能被读取窗口截断)。
-		firstMessage ||= extractFirstDisplayMessageFromPrefix(completeContent) ?? "";
-		if (!firstMessage && windowTruncated && prefixBytes < SESSION_LIST_PREFIX_GROW_MAX_BYTES) {
-			return scanSessionFile(
-				file,
-				storage,
-				withStatus,
-				stat,
-				retries,
-				Math.min(prefixBytes * 4, SESSION_LIST_PREFIX_GROW_MAX_BYTES),
-			);
-		}
+		firstMessage ||= extractFirstDisplayMessageFromPrefix(content) ?? "";
 		const messageCount = Math.max(parsedMessageCount, countMessageMarkers(content));
 		// Either bounded window may hold the only copy of an assistant record,
 		// and neither may: a >prefix record before a >suffix tail leaves the
@@ -633,7 +588,6 @@ async function collectSessionsFromFiles(
  * Exported for testing.
  */
 export async function recoverOrphanedBackups(sessionDir: string, storage: SessionStorage): Promise<void> {
-	sessionDir = resolveSessionDirectory(sessionDir, storage);
 	let backups: string[];
 	try {
 		backups = storage.listFilesSync(sessionDir, "*.bak");
@@ -690,8 +644,6 @@ async function scanSessionDir(
 	withStatus: boolean,
 	siblingDirs: readonly string[] = [],
 ): Promise<SessionInfo[]> {
-	sessionDir = resolveSessionDirectory(sessionDir, storage);
-	siblingDirs = siblingDirs.map(dir => resolveSessionDirectory(dir, storage));
 	try {
 		await recoverOrphanedBackups(sessionDir, storage);
 		const files = [sessionDir, ...siblingDirs].flatMap(dir => storage.listFilesSync(dir, "*.jsonl"));
@@ -706,7 +658,6 @@ async function scanSessionDirReadOnly(
 	storage: SessionStorage,
 	withStatus: boolean,
 ): Promise<SessionInfo[]> {
-	sessionDir = resolveSessionDirectory(sessionDir, storage);
 	try {
 		const files = storage.listFilesSync(sessionDir, "*.jsonl");
 		return await collectSessionsFromFiles(files, storage, withStatus);
@@ -754,11 +705,10 @@ export async function listAllSessions(
 	storage: SessionStorage = new FileSessionStorage(),
 	sessionsRoot: string = getSessionsDir(),
 ): Promise<SessionInfo[]> {
-	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
 		const files =
 			storage instanceof FileSessionStorage
-				? await dedupeRealPaths(await scanBucketFiles(sessionsRoot, "*.jsonl", storage), storage)
+				? await dedupeRealPaths(await scanBucketFiles(sessionsRoot, "*.jsonl"))
 				: storage.listFilesSync(sessionsRoot, "*/*.jsonl");
 		return await collectSessionsFromFiles(files, storage, true);
 	} catch {
@@ -983,7 +933,6 @@ export async function findSessionContinuation(
 	storage: SessionStorage = new FileSessionStorage(),
 	options: FindSessionContinuationOptions = {},
 ): Promise<SessionContinuation | undefined> {
-	assertOfflineSessionPath(sessionPath, storage);
 	const target = path.resolve(sessionPath);
 	const start = await scanSessionFile(target, storage, false);
 	const named = parseSessionFileName(target);
@@ -1093,7 +1042,7 @@ async function findUnlistedSessionContinuation(
 ): Promise<SessionContinuation | undefined> {
 	const prefix = idPrefix.toLowerCase();
 	if (!/^[\w-]+$/.test(prefix)) return undefined;
-	const localDir = resolveSessionDirectory(sessionDir ?? computeDefaultSessionDir(cwd, storage), storage);
+	const localDir = sessionDir ?? computeDefaultSessionDir(cwd, storage);
 	const globalToo = !sessionDir || options.allowGlobalFallback === true;
 	for (const scope of globalToo ? ["local", "global"] : ["local"]) {
 		const files =
@@ -1126,7 +1075,6 @@ export async function findRecentSessionContinuation(
 	sessionPath: string,
 	storage: SessionStorage = new FileSessionStorage(),
 ): Promise<SessionContinuation | undefined> {
-	assertOfflineSessionPath(sessionPath, storage);
 	const target = path.resolve(sessionPath);
 	const picked = await scanSessionFile(target, storage, false);
 	if (!picked) return undefined;
@@ -1269,11 +1217,10 @@ function sessionIdFromSessionPath(file: string): string | undefined {
  * (removed between the scan and this call) is kept as it is: it was listed a
  * moment ago.
  */
-async function dedupeRealPaths(files: readonly string[], storage: SessionStorage): Promise<string[]> {
+async function dedupeRealPaths(files: readonly string[]): Promise<string[]> {
 	const seen = new Set<string>();
 	const out: string[] = [];
 	for (const file of files) {
-		if (!isAllowedSessionPath(file, storage)) continue;
 		let key: string;
 		try {
 			key = await fs.promises.realpath(file);
@@ -1299,10 +1246,9 @@ async function dedupeRealPaths(files: readonly string[], storage: SessionStorage
  * bucket does follow symlinks, which is what #15878 asks for: a transcript
  * staged in as a symlink is a transcript.
  */
-async function scanBucketFiles(root: string, pattern: string, storage: SessionStorage): Promise<string[]> {
+async function scanBucketFiles(root: string, pattern: string): Promise<string[]> {
 	let entries: fs.Dirent[];
 	try {
-		assertOfflineSessionPath(root, storage);
 		entries = await fs.promises.readdir(root, { withFileTypes: true });
 	} catch {
 		return [];
@@ -1311,10 +1257,8 @@ async function scanBucketFiles(root: string, pattern: string, storage: SessionSt
 	for (const entry of entries) {
 		if (entry.isSymbolicLink() || !entry.isDirectory()) continue;
 		const dir = path.join(root, entry.name);
-		if (!isAllowedSessionPath(dir, storage)) continue;
-		for await (const name of new Bun.Glob(pattern).scan({ cwd: dir, followSymlinks: !getOfflineShmState() })) {
-			const file = path.join(dir, name);
-			if (isAllowedSessionPath(file, storage)) out.push(file);
+		for await (const name of new Bun.Glob(pattern).scan({ cwd: dir, followSymlinks: true })) {
+			out.push(path.join(dir, name));
 		}
 	}
 	return out;
@@ -1336,20 +1280,17 @@ async function newestSessionFiles(
 	pattern: string,
 	storage: SessionStorage,
 ): Promise<StatedSessionFile[]> {
-	root = resolveSessionDirectory(root, storage);
 	let files: string[];
 	try {
 		if (storage instanceof FileSessionStorage) {
-			assertOfflineSessionPath(root, storage);
 			// Crossing buckets must skip directory aliases; ordinary-mode leaf
 			// symlinks still participate and are deduplicated by referent.
 			const slash = pattern.lastIndexOf("/");
 			files =
 				slash >= 0
-					? await dedupeRealPaths(await scanBucketFiles(root, pattern.slice(slash + 1), storage), storage)
-					: await Array.fromAsync(
-							new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: !getOfflineShmState() }),
-							name => path.join(root, name),
+					? await dedupeRealPaths(await scanBucketFiles(root, pattern.slice(slash + 1)))
+					: await Array.fromAsync(new Bun.Glob(pattern).scan({ cwd: root, followSymlinks: true }), name =>
+							path.join(root, name),
 						);
 		} else {
 			files = storage.listFilesSync(root, pattern);
@@ -1362,7 +1303,6 @@ async function newestSessionFiles(
 		const stats = await Promise.all(
 			files.map(async file => {
 				try {
-					assertOfflineSessionPath(file, storage);
 					return { file, stat: await fs.promises.stat(file) };
 				} catch {
 					return undefined;
@@ -1472,17 +1412,10 @@ export async function listRecentProjects(
  */
 export async function findSessionFiles(idPrefix: string, sessionsRoot: string = getSessionsDir()): Promise<string[]> {
 	if (!/^[\w-]+$/.test(idPrefix)) return [];
-	const storage = new FileSessionStorage();
-	sessionsRoot = resolveSessionDirectory(sessionsRoot, storage);
 	try {
-		const files = await dedupeRealPaths(
-			await scanBucketFiles(sessionsRoot, `*_${idPrefix}*.jsonl`, storage),
-			storage,
-		);
+		const files = await dedupeRealPaths(await scanBucketFiles(sessionsRoot, `*_${idPrefix}*.jsonl`));
 		// `*_` can also match an underscore inside an id; keep true id-prefix matches only.
-		return files.filter(
-			file => sessionIdFromSessionPath(file)?.startsWith(idPrefix) && isAllowedSessionPath(file, storage),
-		);
+		return files.filter(file => sessionIdFromSessionPath(file)?.startsWith(idPrefix));
 	} catch {
 		return [];
 	}

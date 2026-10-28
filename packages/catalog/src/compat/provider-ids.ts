@@ -43,7 +43,6 @@ export type KnownProvider =
 	| "helmcode"
 	| "huggingface"
 	| "inception"
-	| "jchtools"
 	| "kilo"
 	| "kimi-code"
 	| "litellm"

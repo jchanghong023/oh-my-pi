@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { AgentBusyError, type AgentToolResult } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import { getBlobsDir, isEnoent, logger, type postmortem, VERSION } from "@oh-my-pi/pi-utils";
-import { isJchToolsAgentModel } from "../../config/jchtools-provider";
 import {
 	type Agent,
 	type AgentSideConnection,
@@ -1050,7 +1049,7 @@ export class AcpAgent implements Agent {
 				}
 				this.#throwIfRecordClosed(record);
 
-				const converted = this.#convertPromptBlocks(params.prompt, isJchToolsAgentModel(record.session.model));
+				const converted = this.#convertPromptBlocks(params.prompt);
 				const pendingPrompt = Promise.withResolvers<PromptResponse>();
 				record.promptTurn = {
 					abortController: new AbortController(),
@@ -1297,7 +1296,6 @@ export class AcpAgent implements Agent {
 	}
 
 	async #tryRunSkillCommand(record: ManagedSessionRecord, text: string): Promise<boolean> {
-		if (isJchToolsAgentModel(record.session.model)) return false;
 		if (!record.session.skillsSettings?.enableSkillCommands) {
 			return false;
 		}
@@ -1557,7 +1555,7 @@ export class AcpAgent implements Agent {
 		this.#throwIfRecordClosed(record);
 
 		const promptBlocks = toSteeringPromptBlocks(params.prompt);
-		const converted = this.#convertPromptBlocks(promptBlocks, isJchToolsAgentModel(record.session.model));
+		const converted = this.#convertPromptBlocks(promptBlocks);
 		if (converted.text.length === 0 && converted.images.length === 0) {
 			throw RequestError.invalidParams({ method: SESSION_STEERING_METHOD }, "prompt is empty");
 		}
@@ -2082,21 +2080,10 @@ export class AcpAgent implements Agent {
 		}
 	}
 
-	#convertPromptBlocks(
-		blocks: PromptRequest["prompt"],
-		remoteAgent: boolean,
-	): { text: string; images: AgentImageContent[] } {
+	#convertPromptBlocks(blocks: PromptRequest["prompt"]): { text: string; images: AgentImageContent[] } {
 		const textParts: string[] = [];
 		const images: AgentImageContent[] = [];
 		for (const block of blocks) {
-			if (
-				remoteAgent &&
-				(block.type === "image" ||
-					block.type === "audio" ||
-					(block.type === "resource" && !("text" in block.resource && typeof block.resource.text === "string")))
-			) {
-				throw new Error("JchTools remote Agent supports text-only ACP input.");
-			}
 			switch (block.type) {
 				case "text":
 					textParts.push(block.text);
@@ -2138,7 +2125,7 @@ export class AcpAgent implements Agent {
 			}
 		}
 		return {
-			text: remoteAgent ? textParts.join("\n\n") : textParts.join("\n\n").trim(),
+			text: textParts.join("\n\n").trim(),
 			images,
 		};
 	}

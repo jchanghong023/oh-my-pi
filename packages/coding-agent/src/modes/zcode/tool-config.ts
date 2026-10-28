@@ -9,6 +9,18 @@ import { LegacyProtocol } from "./schema";
 
 type ZCodeProtocolMcpServer = LegacyProtocol.ZCodeProtocolMcpServer;
 
+export class ZCodeMcpOAuthUnsupportedError extends Error {
+	readonly code = "MCP_OAUTH_UNSUPPORTED";
+	readonly data = {
+		authorizationMethod: "client_credentials",
+		recovery: "Resume the closed session with an explicit mcpServers array; [] removes all MCP servers.",
+	};
+
+	constructor() {
+		super("MCP OAuth client_credentials grant is not supported");
+	}
+}
+
 export interface PrepareZCodeMcpManagerOptions {
 	cwd: string;
 	/** Undefined uses normal scoped OMP discovery; an array is the complete caller-owned configuration. */
@@ -64,6 +76,9 @@ export function normalizeZCodeMcpServers(
 				cwd: path.resolve(cwd),
 			};
 		} else {
+			if (server.oauth?.type === "client_credentials") {
+				throw new ZCodeMcpOAuthUnsupportedError();
+			}
 			let url: URL;
 			try {
 				url = new URL(server.url);

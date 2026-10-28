@@ -19,11 +19,10 @@ export interface TeamConfigIssue {
 	code: string;
 	message: string;
 	target: "member" | "session_model" | "config" | "storage";
-	list?: "userMembers" | "persistentMembers" | "effectiveMembers" | "preview.userMembers" | "preview.effectiveMembers";
+	list?: "userMembers" | "effectiveMembers" | "preview.userMembers" | "preview.effectiveMembers";
 	source?: SettingProvenance;
 	index?: number;
 	selector?: string;
-	side?: "active" | "persistent";
 }
 export interface TeamConfigParticipant {
 	index: number;
@@ -46,19 +45,13 @@ export interface TeamConfigSnapshot {
 	profile: string | null;
 	revision: string | null;
 	userMembers?: TeamMemberSlot[] | null;
-	persistentMembers?: TeamMemberSlot[] | null;
 	effectiveMembers: TeamMemberSlot[] | null;
 	source: TeamConfigSource | null;
 	sessionModel: { model: TeamModelRef; name: string; available: boolean } | null;
 	participants: TeamConfigParticipant[];
 	issues: TeamConfigIssue[];
 	writableScopes: "user"[];
-	storage: {
-		mode: UserSettingSnapshot["mode"];
-		syncState: UserSettingSnapshot["syncState"];
-		active: { readState: UserSettingSnapshot["active"]["readState"] };
-		persistent: { readState: UserSettingSnapshot["persistent"]["readState"] };
-	};
+	storage: { readState: UserSettingSnapshot["readState"] };
 	preview?: TeamConfigPreview;
 }
 export interface TeamConfigModel {
