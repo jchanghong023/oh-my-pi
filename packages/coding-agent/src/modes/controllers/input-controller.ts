@@ -7,7 +7,10 @@ import {
 	BRACKETED_PASTE_START,
 	type Component,
 	emergencyTerminalRestore,
+	isKeyRelease,
+	isKeyRepeat,
 	matchesKey,
+	parseKey,
 	parseSgrMouse,
 	type PasteOptions,
 	type SlashCommand,
@@ -318,6 +321,7 @@ export class InputController {
 	#globalEditorActionsListenerInstalled = false;
 	#expandToolsListenerInstalled = false;
 	#inlineMouseListenerInstalled = false;
+	#linkHintListenerInstalled = false;
 
 	/** Click-candidate id the hover band currently tracks; repaint only on change. */
 	#lastHoverClickId: string | undefined;
@@ -360,6 +364,11 @@ export class InputController {
 	setupKeyHandlers(): void {
 		this.#draftText ??= this.ctx.editor.getText();
 		this.ctx.editor.setActionKeys("app.interrupt", this.ctx.keybindings.getKeys("app.interrupt"));
+		if (!this.#linkHintListenerInstalled) {
+			this.#linkHintListenerInstalled = true;
+			// First, so a tag letter typed in link-hint mode reaches no other listener or the editor.
+			this.ctx.ui.addInputListener(data => this.#handleLinkHintInput(data));
+		}
 		if (!this.#focusedLeftTapListenerInstalled) {
 			this.#focusedLeftTapListenerInstalled = true;
 			this.ctx.ui.addInputListener(data => {
@@ -851,7 +860,38 @@ export class InputController {
 		const event = parseSgrMouse(data);
 		if (!event) return undefined;
 		if (event.motion) this.#updateHoverHighlight(event.row);
-		else if (event.leftClick) this.#focusClickedAgent(event.row);
+		else if (event.leftClick && !this.#activateClickedLink(event.row, event.col)) this.#focusClickedAgent(event.row);
+		return { consume: true };
+	}
+
+	/**
+	 * Keyboard link picking. `app.links.hint` enters link-hint mode, which then owns the keyboard
+	 * while the editor has focus: a lowercase letter narrows the tags, and any other key cancels and
+	 * is swallowed so a stray Esc or Enter does nothing else. Ctrl+C and a paste cancel and still do
+	 * what they always do. Key releases and repeats (the hint key's own) are ignored; mouse reports
+	 * pass through untouched. Keys the TUI routes before input listeners (a space held for
+	 * push-to-talk) never reach this.
+	 */
+	#handleLinkHintInput(data: string): { consume?: boolean } | undefined {
+		// Overlays and editor-area dialogs (ask, selectors, hook input) own the keyboard.
+		const editorFocused = () => !this.ctx.ui.hasOverlay() && this.ctx.ui.getFocused() === this.ctx.editor;
+		if (!this.ctx.linkHintsActive) {
+			if (!this.ctx.keybindings.matches(data, "app.links.hint") || !editorFocused()) return undefined;
+			return this.ctx.startLinkHints() ? { consume: true } : undefined;
+		}
+		if (!editorFocused()) {
+			this.ctx.cancelLinkHints();
+			return undefined;
+		}
+		if (isKeyRelease(data) || isKeyRepeat(data)) return { consume: true };
+		if (data.startsWith("\x1b[<")) return undefined;
+		if (matchesKey(data, "ctrl+c") || data.startsWith("\x1b[200~")) {
+			this.ctx.cancelLinkHints();
+			return undefined;
+		}
+		const key = parseKey(data);
+		if (key !== undefined && /^[a-z]$/.test(key)) this.ctx.typeLinkHint(key);
+		else this.ctx.cancelLinkHints();
 		return { consume: true };
 	}
 
@@ -872,10 +912,22 @@ export class InputController {
 	// empty (resize transactions) or the row falls outside it: routing stale
 	// spans would highlight or focus an unrelated agent from old rows.
 	#viewportCandidates(screenRow: number): string[] {
+		const line = this.#viewportLine(screenRow);
+		return line === undefined ? [] : this.ctx.resolveViewportClickCandidates(line);
+	}
+
+	/** Mutable-viewport line under a screen row, or `undefined` outside the published viewport. */
+	#viewportLine(screenRow: number): number | undefined {
 		const viewport = this.ctx.ui.getMutableViewport();
 		const local = screenRow - viewport.top;
-		if (viewport.length === 0 || local < 0 || local >= viewport.length) return [];
-		return this.ctx.resolveViewportClickCandidates(local);
+		if (viewport.length === 0 || local < 0 || local >= viewport.length) return undefined;
+		return local;
+	}
+
+	// A click on an extension-owned link goes to that extension instead of focusing an agent.
+	#activateClickedLink(screenRow: number, col: number): boolean {
+		const line = this.#viewportLine(screenRow);
+		return line !== undefined && this.ctx.activateViewportLink(line, col);
 	}
 
 	/**

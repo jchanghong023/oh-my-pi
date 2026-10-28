@@ -1098,8 +1098,8 @@ export class UiHelpers {
 
 	/**
 	 * Make a transcript replay still in flight rebuild its components with the current extension
-	 * text renderers before it commits. Components take the renderer set when built, so a set that
-	 * changes while a replay yields would otherwise stay on the committed transcript. Returns
+	 * text renderers and link schemes before it commits. Components take both when built, so a
+	 * change while a replay yields would otherwise stay on the committed transcript. Returns
 	 * whether a replay was in flight; the caller then leaves the redraw to it.
 	 */
 	restartTranscriptReplay(): boolean {

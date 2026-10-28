@@ -243,6 +243,7 @@ export class ZCodeInteractions {
 			onTerminalInput: () => () => {},
 			// Assistant text renderers are terminal-only; this API is a no-op on other surfaces.
 			rerenderMessage: () => {},
+			getLinkClicksAvailable: () => false,
 			setStatus: (_key, text) => {
 				if (text) output(text);
 			},

@@ -483,6 +483,12 @@ function renderTaskSection(
 	return lines;
 }
 
+function taskPreviewText(task: unknown, taskFile: unknown): string {
+	if (typeof task === "string") return task;
+	if (typeof taskFile !== "string") return "";
+	return flattenLine(replaceTabs(shortenPath(sanitizeText(taskFile))));
+}
+
 /**
  * First line of a streamed `task` brief, trimmed — a row's secondary text.
  * The args stream in token by token, so non-string values fall through to "".
@@ -523,7 +529,7 @@ function renderTaskCallLines(args: Partial<TaskParams> | undefined, theme: Theme
 
 	const rawName = typeof args.name === "string" ? args.name.trim() : "";
 	const idLabel = rawName ? formatTaskId(rawName) : "";
-	const brief = taskFirstLine(args.task);
+	const brief = taskFirstLine(taskPreviewText(args.task, args.taskFile));
 	if (idLabel || brief) {
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel || "agent"))}`;
 		if (brief) {
@@ -559,7 +565,7 @@ function renderTaskItemLines(tasks: TaskItem[] | undefined, theme: Theme): strin
 		const rawName = typeof item?.name === "string" ? item.name.trim() : "";
 		const idLabel = rawName ? formatTaskId(rawName) : `#${i + 1}`;
 		let line = `${bullet} ${theme.fg("accent", theme.bold(idLabel))}`;
-		const brief = taskFirstLine(item?.task);
+		const brief = taskFirstLine(taskPreviewText(item?.task, item?.taskFile));
 		if (brief) {
 			line += `: ${theme.fg("muted", previewLine(brief, 64))}`;
 		}
@@ -2037,12 +2043,13 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 			key,
 		);
 	const flatName = typeof args?.name === "string" ? args.name.trim() : "";
-	if (flatName || taskFirstLine(args?.task)) {
+	const flatBrief = taskPreviewText(args?.task, args?.taskFile);
+	if (flatName || taskFirstLine(flatBrief)) {
 		agents.push(
 			pending(
 				flatName ? formatTaskId(flatName) : "agent",
 				args?.agent,
-				args?.task,
+				flatBrief,
 				args?.isolated,
 				flatName || "agent",
 			),
@@ -2055,7 +2062,7 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 				pending(
 					name ? formatTaskId(name) : `#${index + 1}`,
 					entry?.agent,
-					entry?.task,
+					taskPreviewText(entry?.task, entry?.taskFile),
 					entry?.isolated,
 					name || `#${index + 1}`,
 				),
@@ -2235,8 +2242,9 @@ export interface TaskItem {
 	sourceSession?: string;
 	/** Optional model selector override for the historical source session. */
 	model?: string | string[];
-	/** The work; required by the schema. */
+	/** Inline instructions; exactly one of task or taskFile is required. */
 	task?: string;
+	taskFile?: string;
 	/** How open-ended the work is; required by the schema and the child's sole `auto` thinking classification input. */
 	solutionSpace?: string;
 	/** Per-spawn thinking effort: lowest/middle/highest level the resolved model supports. Overrides the agent's default selector (e.g. `auto`). */
@@ -2268,6 +2276,8 @@ export interface TaskParams {
 	model?: string | string[];
 	/** The work (flat form). */
 	task?: string;
+	/** Absolute path or local:// URL to a UTF-8 file (flat form), mutually exclusive with task. */
+	taskFile?: string;
 	/** How open-ended the work is (flat form); see {@link TaskItem.solutionSpace}. */
 	solutionSpace?: string;
 	/** Per-spawn thinking effort (flat form): lowest/middle/highest level the resolved model supports. */
@@ -2356,6 +2366,9 @@ export interface AgentProgress {
 	status: "pending" | "running" | "completed" | "failed" | "aborted";
 	task: string;
 	assignment?: string;
+	taskFile?: string;
+	/** SHA-256 of the exact task file bytes before decoding and trimming. */
+	taskFileSha256?: string;
 	description?: string;
 	lastIntent?: string;
 	currentTool?: string;
@@ -2464,6 +2477,8 @@ export interface SingleResult {
 	agentSource: AgentSource;
 	task: string;
 	assignment?: string;
+	taskFile?: string;
+	taskFileSha256?: string;
 	description?: string;
 	lastIntent?: string;
 	exitCode: number;

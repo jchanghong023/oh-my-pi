@@ -236,6 +236,14 @@ import {
 } from "@oh-my-pi/pi-tui/tools/todo";
 import { vocalizer } from "../tts/vocalizer";
 import { applyFileLinkSetting, applyHyperlinkSetting, fileHyperlink } from "@oh-my-pi/pi-tui/render/hyperlink";
+import {
+	extensionLinkClicksAvailable,
+	extensionLinksRouted,
+	extensionLinksVersion,
+	setExtensionLinkPicking,
+	setExtensionLinks,
+} from "@oh-my-pi/pi-tui/render/extension-links";
+import { onNativeRenderingChange } from "@oh-my-pi/pi-tui/native/state";
 import { renderTreeList } from "@oh-my-pi/pi-tui/render/tree-list";
 import { formatStartupChangelogSummary, type StartupChangelogSelection } from "../utils/changelog";
 import { copyToClipboard } from "../utils/clipboard";
@@ -530,6 +538,8 @@ const STILL_CLOSING_DELAY_MS = 3_000;
 const JUDGMENT_BATCH_PROGRESS_RETAIN_MS = 1_000;
 /** Startup emits several status-bar changes within a second; persist only the settled one. */
 const COMPOSER_STATUS_PERSIST_DELAY_MS = 1_000;
+/** Status-line slot of the link-hint mode prompt; the `omp:` prefix keeps it apart from extension keys. */
+const LINK_HINT_STATUS_KEY = "omp:link-hints";
 const DEFAULT_WORKING_MESSAGE = "处理中…";
 /** Native working-message shimmer under a session accent: the hue itself is the terminal's `accent`. */
 const NATIVE_ACCENT_SHIMMER: ShimmerPalette = { low: "dim", mid: "accent", high: "accent", bold: true };
@@ -2026,6 +2036,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	#eventBusUnsubscribers: Array<() => void> = [];
 	/** Mirror of `tui.mouse`, read by the TUI's per-frame inline mouse tracking probe. */
 	#mouseCapture = false;
+	/** A link-scheme change awaits its transcript rebuild; any rebuild before it covers it. */
+	#extensionLinkRebuildPending = false;
 	#observerUiSyncTimer?: NodeJS.Timeout;
 	/** Repaints the subagent HUD so live-preview elapsed markers advance between progress events. */
 	#subagentPreviewTickTimer?: NodeJS.Timeout;
@@ -2131,6 +2143,14 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Session settings overlay the global layer and forward its changes.
 		this.#mouseCapture = cfgTuiMouse.get(this.settings);
 		this.ui.setInlineMouseTrackingProvider(() => this.#mouseCapture);
+		setExtensionLinkPicking(this.#linkPickable);
+		// Tern's native view routes link clicks itself, so claimed links stop (or start) being
+		// pickable here: re-run the renderers reading `getLinkClicksAvailable()`.
+		this.#eventBusUnsubscribers.push(
+			onNativeRenderingChange(() => {
+				if ((this.viewSession.extensionRunner?.getLinkSchemes().length ?? 0) > 0) this.#redrawExtensionLinks();
+			}),
+		);
 		this.chatContainer = new TranscriptContainer();
 		this.pendingMessagesContainer = new AnchoredLiveContainer();
 		this.progressHudContainer = new AnchoredLiveContainer();
@@ -2713,20 +2733,14 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Initialize hooks with TUI-based UI context
 		await logger.time("InteractiveMode.init:hooks", () => this.initHooksAndCustomTools());
-		// A live `disabledExtensions` edit suspends or resumes extensions: redraw the transcript
-		// without (or with) their assistant text renderers, as toggling the setting does.
+		// A live `disabledExtensions` edit suspends or resumes extensions: drop (or restore) their link
+		// schemes and renderers from the transcript.
 		const extensionRunner = this.session.extensionRunner;
 		if (extensionRunner) {
 			this.#eventBusUnsubscribers.push(
 				extensionRunner.onSuspensionChange(() => {
-					if (!cfgExtensionAssistantTextRenderers.get(this.settings)) return;
-					this.#eventController.applyAssistantTextRenderers();
-					// A transcript replay in flight builds its components again before it commits.
-					if (this.#uiHelpers.restartTranscriptReplay()) return;
-					// Before the first transcript replay, that replay draws with the current set.
-					if (!this.initialChatRendered) return;
-					this.rebuildChatFromMessages();
-					this.ui.resetDisplay();
+					this.#applyExtensionLinks();
+					this.#redrawExtensionLinks();
 				}),
 			);
 		}
@@ -2757,11 +2771,12 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Restore unsent editor draft from previous session shutdown (Ctrl+D).
 		// One-shot: consumeDraft removes the sidecar after read so the next
-		// resume does not re-restore the same text.
+		// resume does not re-restore the same text. Text typed while startup
+		// ran stays after it, where the caret lands.
 		try {
 			const draft = await logger.time("InteractiveMode.init:draft", () => this.sessionManager.consumeDraft());
-			if (draft && !this.editor.getText()) {
-				this.editor.setText(draft);
+			if (draft) {
+				this.editor.setText(draft + this.editor.getText());
 				this.updateEditorBorderColor();
 				this.ui.requestRender();
 			}
@@ -2864,13 +2879,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			onTerminalAppearanceChange(mode, appearanceRefreshWasRequested ? {} : undefined);
 		});
 
-		// Keys pressed while a Tern startup loaded were held until hooks ran, the
-		// session mode settled, the draft was restored and every subscription
-		// above was installed. They replay into the restored draft, never over
-		// it, a startup shortcut (Alt+P, Ctrl+G, extension shortcuts) acts on the
-		// final mode, editor contents and observed session, and a held Enter
-		// still meets the bootstrap submit gate lifted just below.
-		this.ui.releaseHeldInput();
+		// Tern kept the typing of a startup and draws it in the composer; plain
+		// typing that reached omp already went into the draft. The first other
+		// key and everything after it were held until hooks ran, the session
+		// mode settled, the draft was restored and every subscription above was
+		// installed. Tern now sends what it kept, a startup shortcut (Alt+P,
+		// Ctrl+G, extension shortcuts) acts on the final mode, editor contents
+		// and observed session, and a held Enter still meets the bootstrap
+		// submit gate lifted just below.
+		this.composer.releaseHeldInput();
 
 		// Everything is wired: subscriptions observe agent events, the session
 		// mode is reconciled, and the submit handler is installed. Lift the
@@ -3341,7 +3358,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			cfgLiveUiSettings.listen(this.settings, (next, previous) => this.#applyUiSettingChanges(next, previous)),
 			cfgModelRoles.listen(this.settings, () => this.#reapplyPlanModeModelOnRoleChange()),
 			cfgTuiMouse.listen(this.settings, on => {
+				const linksWereAvailable = extensionLinkClicksAvailable();
 				this.#mouseCapture = on;
+				// With the hint key unbound, the mouse is the only way to activate extension links.
+				if (extensionLinkClicksAvailable() !== linksWereAvailable) this.#redrawExtensionLinks();
 				if (!on) {
 					this.composer.setHoveredClickId(undefined);
 					this.#inputController.clearHoverHighlight();
@@ -4684,6 +4704,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// Components take the extension text renderers when built; the rebuild keeps the streaming
 		// reply's components, so hand them the new set directly.
 		if (any("extensionRenderers.assistantText")) {
+			this.#applyExtensionLinks();
 			this.#eventController.applyAssistantTextRenderers();
 			rebuildChat = true;
 		}
@@ -4769,6 +4790,98 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.updateEditorBorderColor();
 		this.#scheduleComposerStatusPersist();
 		this.ui.requestRender();
+	}
+
+	/**
+	 * Push the viewed session's extension link schemes to the markdown renderer; returns whether that
+	 * changed. A focused subagent's runner draws with what the main runner leaves active.
+	 */
+	#applyExtensionLinks(): boolean {
+		const before = extensionLinksVersion();
+		const viewed = this.viewSession.extensionRunner;
+		viewed?.followSuspension(this.session.extensionRunner);
+		setExtensionLinks(viewed?.getLinkSchemes() ?? []);
+		return extensionLinksVersion() !== before;
+	}
+
+	/** Whether the user can pick a claimed link: the link-hint key is bound or `tui.mouse` delivers clicks. */
+	#linkPickable = (): boolean => this.#mouseCapture || Boolean(appKey(this.keybindings, "app.links.hint"));
+
+	syncExtensionLinks(): void {
+		if (!this.#applyExtensionLinks()) return;
+		this.#redrawExtensionLinks();
+	}
+
+	/** Redraw the transcript so renderers reading `getLinkClicksAvailable()` switch form now. */
+	#redrawExtensionLinks(): void {
+		// The rebuild keeps the live reply's components; re-run their renderers rather than waiting
+		// for the next streaming update.
+		this.#eventController.applyAssistantTextRenderers();
+		// A transcript replay in flight builds its components again before it commits.
+		if (this.#uiHelpers.restartTranscriptReplay()) return;
+		// Before the first transcript replay commits, that replay draws with the current links; a
+		// rebuild now would put the transcript in the chat it re-appends (#1955).
+		if (!this.initialChatRendered) return;
+		// Coalesced: a settings apply changing another transcript setting in the same pass rebuilds once.
+		if (this.#extensionLinkRebuildPending) return;
+		this.#extensionLinkRebuildPending = true;
+		queueMicrotask(() => {
+			// Cleared by any rebuild since; a replay started since draws the current links itself.
+			const pending = this.#extensionLinkRebuildPending;
+			this.#extensionLinkRebuildPending = false;
+			if (!pending || !this.initialChatRendered) return;
+			this.rebuildChatFromMessages();
+			this.ui.resetDisplay();
+		});
+	}
+
+	/** Raise `link_activate` for `url` on the viewed session's extension runner. */
+	#activateLink(url: string): boolean {
+		const runner = this.viewSession.extensionRunner;
+		if (!runner) return false;
+		// A focused subagent's runner is headless: hand its handler the UI drawing that transcript.
+		runner.emitLinkActivate(url, this.session.extensionRunner?.getUIContext()).catch((error: unknown) => {
+			logger.warn("link_activate dispatch failed", { url, error: String(error) });
+		});
+		return true;
+	}
+
+	activateViewportLink(index: number, col: number): boolean {
+		const url = this.composer.viewportLinkAt(index, col)?.url;
+		return url !== undefined && this.#activateLink(url);
+	}
+
+	startLinkHints(): boolean {
+		if (!extensionLinksRouted()) return false;
+		if (this.composer.viewportLinkCount() === 0) {
+			this.showStatus("当前屏幕没有扩展链接");
+			return true;
+		}
+		this.composer.startLinkHints(reason => {
+			this.statusLine.setHookStatus(LINK_HINT_STATUS_KEY, undefined);
+			if (reason === "crowded") {
+				// Raised while the composer paints; show the status after this frame.
+				queueMicrotask(() => this.showStatus("同一行的扩展链接过多，无法标注；请加宽终端"));
+			}
+			this.ui.requestRender();
+		});
+		this.statusLine.setHookStatus(LINK_HINT_STATUS_KEY, "输入链接标记 · Esc 取消");
+		this.ui.requestRender();
+		return true;
+	}
+
+	get linkHintsActive(): boolean {
+		return this.composer.linkHintsActive;
+	}
+
+	typeLinkHint(letter: string): void {
+		const picked = this.composer.typeLinkHint(letter);
+		if (typeof picked === "object") this.#activateLink(picked.url);
+		this.ui.requestRender();
+	}
+
+	cancelLinkHints(): void {
+		this.composer.cancelLinkHints();
 	}
 
 	/** Coalesce status-cache writes; `stop()` flushes a pending one synchronously. */
@@ -4973,6 +5086,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	rebuildChatFromMessages(options: { reuseSettledComponents?: boolean } = {}): void {
+		this.#extensionLinkRebuildPending = false;
 		// Mid-stream rebuilds (e.g. `/shake`, theme/setting changes that touch the
 		// transcript) replay only committed `state.messages`. The agent's in-flight
 		// `streamMessage` and its still-pending tool calls live OUTSIDE
@@ -8355,6 +8469,10 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.ui.stop();
 			this.#ownsStartedUi = false;
 		}
+		// The markdown renderer's extension-link state is process-wide; release this session's schemes
+		// only after the TUI's final history flush, which still strips their markers.
+		setExtensionLinks([]);
+		setExtensionLinkPicking(undefined);
 		this.isInitialized = false;
 	}
 
@@ -9157,6 +9275,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		preserveExistingChat?: boolean;
 		clearTerminalHistory?: boolean;
 	}): Promise<void> {
+		// A focus switch replays another session's transcript: claim that session's link schemes first.
+		this.#applyExtensionLinks();
 		if (this.#devEmptyView && this.viewSession === this.#rootSession) {
 			this.resetTranscript();
 			this.initialChatRendered = true;

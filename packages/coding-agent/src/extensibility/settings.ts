@@ -182,6 +182,6 @@ export const cfgExtensionAssistantTextRenderers = register({
 		group: "Extensions",
 		label: "Extension Reply Renderers",
 		description:
-			"Let extensions change how assistant replies are drawn and redraw a reply in place; the session, exports and model context keep the reply as written",
+			"允许扩展调整助手回复的显示、原地重绘回复，并接收其专属链接的点击；会话、导出和模型上下文仍保留原始回复",
 	},
 });

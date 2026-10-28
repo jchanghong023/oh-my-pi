@@ -1571,6 +1571,10 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			// No transcript is drawn in RPC mode
 		}
 
+		getLinkClicksAvailable(): boolean {
+			return false;
+		}
+
 		notify(message: string, type?: "info" | "warning" | "error"): void {
 			// Fire and forget - no response needed
 			this.output({

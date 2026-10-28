@@ -409,6 +409,9 @@ export interface TspEditorProps {
 	 *  Independent of text editability or keyboard focus; absent or false is not ready. */
 	sendable?: boolean;
 	maxLines?: number;
+	/** The program cannot read input yet: while the field has the focus, the terminal keeps
+	 *  what is typed into it, draws it at the caret, and sends it once this clears. */
+	typeahead?: boolean;
 }
 export type TspInputProps = Omit<TspEditorProps, "maxLines">;
 export interface TspStatusProps {

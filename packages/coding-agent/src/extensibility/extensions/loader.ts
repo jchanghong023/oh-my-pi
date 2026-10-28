@@ -31,6 +31,7 @@ import type { SendUserMessageOptions } from "../../session/agent-session";
 import type { CustomMessagePayload } from "../../session/messages";
 import type { FileDeleteFallbackHandler, FileWriteFallbackHandler } from "../../tools/file-write-fallback";
 import { isFilesystemSourcePath } from "../../tools/path-utils";
+import { InternalUrlRouter } from "../../internal-urls/router";
 import { EventBus } from "../../utils/event-bus";
 import * as TypeBox from "../legacy-typebox";
 import { resolveExtensionDirectory } from "./directory-resolution";
@@ -61,6 +62,25 @@ installLegacyPiSpecifierShim();
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 type LoadedExtensionModule = ExtensionFactory | { default?: ExtensionFactory };
+
+/** RFC 3986 scheme syntax, lowercased, two characters at least so `c` cannot capture `C:/` paths. */
+const LINK_SCHEME_PATTERN = /^[a-z][a-z0-9+.-]+$/;
+
+/** Standard schemes an extension may not claim: web, file and mail links. omp's internal URLs are refused too. */
+const STANDARD_LINK_SCHEMES: Readonly<Record<string, true>> = {
+	about: true,
+	blob: true,
+	data: true,
+	file: true,
+	ftp: true,
+	http: true,
+	https: true,
+	javascript: true,
+	mailto: true,
+	ssh: true,
+	ws: true,
+	wss: true,
+};
 
 function getExtensionFactory(module: LoadedExtensionModule): ExtensionFactory | null {
 	const candidate = typeof module === "function" ? module : module.default;
@@ -284,6 +304,20 @@ class ConcreteExtensionAPI implements ExtensionAPI, IExtensionRuntime {
 		this.extension.assistantTextRenderers.push(renderer);
 	}
 
+	registerLinkScheme(scheme: string): void {
+		const normalized = scheme.toLowerCase();
+		if (!LINK_SCHEME_PATTERN.test(normalized)) {
+			throw new Error(
+				`registerLinkScheme: "${scheme}" is not a URL scheme of two or more characters (letters, digits, "+", "-", ".")`,
+			);
+		}
+		// `=== true`: inherited keys such as `constructor` are not reserved.
+		if (STANDARD_LINK_SCHEMES[normalized] === true || InternalUrlRouter.instance().isBuiltin(normalized)) {
+			throw new Error(`registerLinkScheme: "${scheme}" is reserved for standard or omp-internal links`);
+		}
+		if (!this.extension.linkSchemes.includes(normalized)) this.extension.linkSchemes.push(normalized);
+	}
+
 	registerComposerShape(definition: ComposerShapeDefinition): void {
 		const id = definition.style.id;
 		if (id.length === 0 || id !== id.trim()) {
@@ -391,6 +425,7 @@ function createExtension(extensionPath: string, resolvedPath: string): Extension
 		toolRegistrationListeners: new Set(),
 		assistantThinkingRenderers: [],
 		assistantTextRenderers: [],
+		linkSchemes: [],
 		fileWriteFallbackHandlers: [],
 		fileDeleteFallbackHandlers: [],
 		messageRenderers: new Map(),

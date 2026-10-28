@@ -71,6 +71,7 @@ function runnerWith(sessionManager: SessionManager, select: ExtensionUIContext["
 			notify: () => {},
 			onTerminalInput: () => () => {},
 			rerenderMessage: () => {},
+			getLinkClicksAvailable: () => false,
 			setStatus: () => {},
 			setWorkingMessage: () => {},
 			setWidget: () => {},

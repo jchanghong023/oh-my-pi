@@ -578,7 +578,7 @@ export const cfgTuiMouse = register({
 		label: "鼠标点击聚焦",
 		get description() {
 			const shift = formatKeyHint("shift");
-			return `在主会话中捕获鼠标点击，使活动 Subagent 卡片和 HUD 行可点击聚焦，并在悬停时高亮目标。开启后，原生文本选择改为 ${shift}+拖动，滚轮滚动改为 ${shift}+滚轮`;
+			return `在主会话中捕获鼠标点击，使活动 Subagent 卡片和 HUD 行可点击聚焦，并在悬停时高亮目标；点击扩展专属链接可交由对应扩展处理（也可通过链接提示快捷键选择，无需鼠标）。开启后，原生文本选择改为 ${shift}+拖动，滚轮滚动改为 ${shift}+滚轮`;
 		},
 	},
 });
