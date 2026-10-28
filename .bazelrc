@@ -7,6 +7,11 @@ common --enable_platform_specific_config
 common --watchfs
 common --cache_computed_file_digests=500000
 common:windows --experimental_windows_watchfs
+# Bound metadata scanning on Windows: the default thread pool contends on
+# junction-backed toolchain input trees even when every action is cached
+# (same measured bound the test gate applies to its isolated servers). Keeps
+# warm analysis/package loading from starving action execution.
+common:windows --experimental_fsvc_threads=8
 
 # Hermetic-ish action env: no host env leaks into action keys. Build scripts
 # that need host tools (cmake for opusic-sys' bundled Opus) get an explicit
@@ -25,6 +30,15 @@ build --incompatible_strict_action_env
 #      with `Timed out` (rules_rust common_utils.bzl:61) before we can help.
 common --repo_env=CARGO_BAZEL_ISOLATED=0
 common --repo_env=CARGO_BAZEL_TIMEOUT=1800
+
+# Repository materialization. The repository cache is shared across output
+# bases (output_user_root), but each new output base — a fresh worktree/branch
+# checkout, an ephemeral CI pod — copies every toolchain archive out of it into
+# external/ again. On POSIX, hardlinking the cache entry makes that
+# metadata-only work; Bazel falls back to copying when the cache and the output
+# base live on different filesystems. Windows keeps copies.
+common:linux --experimental_repository_cache_hardlinks
+common:macos --experimental_repository_cache_hardlinks
 
 # NOTE: rust pipelined_compilation stays OFF: handing dependents rmeta-only
 # crates breaks `rust_test(crate = ...)` harness compiles whose deps export

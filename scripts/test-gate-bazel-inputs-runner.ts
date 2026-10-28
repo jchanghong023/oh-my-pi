@@ -5,7 +5,7 @@ import type { GateCommand } from "./test-gate-runtime";
 interface InputRequest {
 	root: string;
 	files: string[];
-	commands: Pick<GateCommand, "label" | "argv" | "cwd" | "sourceEntrypoints">[];
+	commands: Pick<GateCommand, "label" | "argv" | "cwd" | "sourceEntrypoints" | "dispatched">[];
 	output: string;
 }
 

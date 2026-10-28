@@ -604,6 +604,8 @@ for (const argv of [
 				label: "static/Rust fmt+clippy",
 				argv: ["bun", "run", "check:rs"],
 				cwd: root,
+				sourceEntrypoints: ["rust-check.ts"],
+				dispatched: true,
 				env: { ...homes, SDKROOT: sdk, CI: "1", RUSTUP_AUTO_INSTALL: "0" },
 			};
 			let runs = 0;
@@ -623,6 +625,19 @@ for (const argv of [
 			}
 			expect(cached.targets[0]?.status).toBe("cached");
 			expect(await Bun.file(counter).text()).toBe("run\n".repeat(runs));
+			// A dispatched check declares its Bun wrapper closure plus shared
+			// root/scripts inputs, never the whole repository: an unrelated package
+			// file must not re-run clippy, while editing the wrapper entry must.
+			await Bun.write(path.join(root, "packages/a/unrelated.md"), "unrelated\n");
+			const unrelated = await batch(root, [command], "fulltest");
+			expect(unrelated.exitCode).toBe(0);
+			expect(unrelated.targets[0]?.status).toBe("cached");
+			expect(await Bun.file(counter).text()).toBe("run\n".repeat(runs));
+			await Bun.write(
+				path.join(root, "rust-check.ts"),
+				`${await Bun.file(path.join(root, "rust-check.ts")).text()}\n// dispatch entry edit\n`,
+			);
+			await fresh();
 			// Creating a package must switch away from the root glob. Editing
 			// an existing file beneath it must still rerun the Cargo consumer.
 			await Bun.write(path.join(sdk, "include/BUILD.bazel"), "# SDK-owned package\n");

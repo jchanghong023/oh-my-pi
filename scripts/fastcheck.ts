@@ -42,6 +42,13 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 			label: "static/Rust fmt+clippy",
 			argv: ["bun", "run", "check:rs"],
 			cwd: gateRepoRoot,
+			// `bun run check:rs` -> scripts/bazel-tasks.ts -> the
+			// ompBazelPrimitives literal (`bun scripts/run-rs-task.ts check:rs`).
+			// Declaring both entries plus `dispatched` gives the cached clippy
+			// action its real wrapper closure instead of the whole repository; the
+			// Cargo workspace itself is declared by @rust_inputs.
+			sourceEntrypoints: ["scripts/bazel-tasks.ts", "scripts/run-rs-task.ts"],
+			dispatched: true,
 			env: {
 				CI: "1",
 				RUSTUP_AUTO_INSTALL: "0",

@@ -420,13 +420,17 @@ async function declareTargets(
 	files.push(...binaries.filter(binary => !files.includes(binary)));
 	const commandSources: Record<string, string> = {};
 	for (const command of commands) {
-		if (!/^(test|smoke)\//.test(command.label)) continue;
+		const id = `command_${Bun.hash(command.label).toString(16)}`;
 		const owner = path
 			.relative(root, command.cwd ?? root)
 			.replaceAll("\\", "/")
 			.match(/^packages\/([^/]+)/)?.[1];
-		commandSources[`command_${Bun.hash(command.label).toString(16)}`] =
-			/^test\/Rust/.test(command.label) || !owner ? "all" : `pkg_${owner}`;
+		const fallback = /^test\/Rust/.test(command.label) || !owner ? "all" : `pkg_${owner}`;
+		if (/^(test|smoke)\//.test(command.label)) commandSources[id] = fallback;
+		// A dispatched command declares its narrow closure; if discovery declines
+		// the command, that target falls back to the conservative group instead
+		// of disappearing.
+		else if (command.dispatched) commandSources[`${id}_narrow`] = "all";
 	}
 	const graphWorkspace = path.join(workspace, "graph-workspace");
 	// Both native servers resolve implicit bazel_tools dependencies. The graph's
@@ -457,7 +461,7 @@ async function declareTargets(
 			'gate_inputs = use_repo_rule("//:inputs.bzl", "gate_inputs_repository")',
 			'gate_sources = use_repo_rule("//:sources.bzl", "gate_sources_repository")',
 			'gate_cycles = use_repo_rule("//:sources.bzl", "gate_cycles_repository")',
-			`gate_inputs(name = "inputs", root = ${JSON.stringify(root)}, files = ${JSON.stringify(files)}, commands = ${JSON.stringify(JSON.stringify(commands.map(command => ({ label: command.label, argv: command.argv, cwd: command.cwd ?? root, sourceEntrypoints: command.sourceEntrypoints }))))}, bun = ${JSON.stringify(process.execPath)}, runner = ${JSON.stringify(path.join(import.meta.dir, "test-gate-bazel-inputs-runner.ts"))}, helper_packages = ${JSON.stringify(helperInputs.packages)}, helper_paths = ${JSON.stringify(helperInputs.paths)})`,
+			`gate_inputs(name = "inputs", root = ${JSON.stringify(root)}, files = ${JSON.stringify(files)}, commands = ${JSON.stringify(JSON.stringify(commands.map(command => ({ label: command.label, argv: command.argv, cwd: command.cwd ?? root, sourceEntrypoints: command.sourceEntrypoints, dispatched: command.dispatched }))))}, bun = ${JSON.stringify(process.execPath)}, runner = ${JSON.stringify(path.join(import.meta.dir, "test-gate-bazel-inputs-runner.ts"))}, helper_packages = ${JSON.stringify(helperInputs.packages)}, helper_paths = ${JSON.stringify(helperInputs.paths)})`,
 			`gate_cycles(name = "cycles", package_deps = ${JSON.stringify(packageDeps)}, input_graph = "@inputs//:cycles.json", graph_workspace = ${JSON.stringify(graphWorkspace)}, graph_bazel = ${JSON.stringify(bazel)}, graph_bun = ${JSON.stringify(process.execPath)}, graph_runner = ${JSON.stringify(path.join(import.meta.dir, "test-gate-bazel-discovery.ts"))}, graph_runtime_inputs = ${JSON.stringify(graphRuntimeInputs)})`,
 			`gate_sources(name = "sources", root = ${JSON.stringify(root)}, files = ${JSON.stringify(files)}, package_deps = ${JSON.stringify(packageDeps)}, input_graph = "@inputs//:graph.json", command_sources = ${JSON.stringify(commandSources)}, cycle_domains = "@cycles//:cyclic-inputs.json")`,
 			`gate_sources(name = "launcher", root = ${JSON.stringify(root)}, tools = ${JSON.stringify({ [process.platform === "win32" ? "bun.exe" : "bun"]: process.execPath })})`,
@@ -583,9 +587,11 @@ async function declareTargets(
 			? "@sources//:native_build"
 			: test
 				? `@sources//:command_${Bun.hash(command.label).toString(16)}`
-				: rustTest || !owner
-					? "@sources//:all"
-					: `@sources//:pkg_${owner}`;
+				: command.dispatched
+					? `@sources//:command_${Bun.hash(command.label).toString(16)}_narrow`
+					: rustTest || !owner
+						? "@sources//:all"
+						: `@sources//:pkg_${owner}`;
 		const noCache =
 			command.resultReuse === "disabled" ||
 			command.label.startsWith("build/") ||

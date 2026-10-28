@@ -56,6 +56,14 @@ export interface GateCommand {
 	resultReuse?: "disabled";
 	/** Additional real source entries launched indirectly by the command. */
 	sourceEntrypoints?: readonly string[];
+	/**
+	 * The command's work runs through the literal `package.json#ompBazelPrimitives`
+	 * command it dispatches to. Its inputs are that Bun module closure plus shared
+	 * root/scripts files; the dispatcher's repository-wide fallbacks belong to code
+	 * paths this command never executes. Only for commands that load a gate
+	 * dispatcher and spawn exactly one literal primitive.
+	 */
+	dispatched?: boolean;
 	/** Real producer outputs declared and retained by the native Bazel action. */
 	artifactFiles?: readonly string[];
 }

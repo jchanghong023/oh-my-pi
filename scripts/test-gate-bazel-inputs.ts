@@ -628,6 +628,30 @@ export async function discoverGateInputs(
 				),
 			);
 		}
+		if (command.dispatched) {
+			// A dispatched command runs exactly one literal package.json primitive,
+			// so its real reads are the Bun module closure plus the shared root and
+			// Rust inventory groups, which Bazel digests from live sources. The
+			// dispatcher modules are marked repository-wide because they *can*
+			// enumerate and rewrite the repository; those paths are not executed
+			// here, so the closure is flattened without them and bounded by the
+			// coarse source groups instead. Installed packages stay declared for
+			// runtime resolution; non-Git inputs (toolchain, ignored definitions,
+			// external SDK roots) remain the caller's @rust_inputs.
+			const narrow = `${name}_narrow`;
+			const files = new Set<string>();
+			const visited = new Set<string>();
+			const stack = [...(deps[name] ?? [])];
+			while (stack.length) {
+				const dependency = stack.pop()!;
+				if (visited.has(dependency)) continue;
+				visited.add(dependency);
+				for (const file of groups[dependency] ?? []) files.add(file);
+				for (const next of deps[dependency] ?? []) stack.push(next);
+			}
+			groups[narrow] = [...files].sort();
+			deps[narrow] = ["shared", "crates", "@installed//:installed"];
+		}
 		targets[command.label] = name;
 	}
 	console.log(
