@@ -212,7 +212,7 @@
 			"oxfmt"
 		]
 	},
-	"packageManager": "bun@1.4.4",
+	"packageManager": "bun@>=1.4.4",
 	"ompBazelPrimitives": {
 		"check": "bun run --parallel check:ts check:rs",
 		"check:ts": "bun run check:tools && bun run --filter './packages/*' --sequential --if-present check:types",

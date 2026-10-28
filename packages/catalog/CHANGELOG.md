@@ -10,6 +10,10 @@
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

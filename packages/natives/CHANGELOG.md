@@ -6,6 +6,10 @@
 
 - Bounded the built-in `grep` and `rg` search buffer to 256 MiB plus one byte; when a file or stdin exceeds the buffer budget, they report an error instead of buffering without limit, and continue searching other files. Pattern files and `grep --exclude-from` sources are limited to 256 MiB. Errors return status 2 except when a `-q` match takes precedence ([#17108](https://github.com/can1357/oh-my-pi/pull/17108)).
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

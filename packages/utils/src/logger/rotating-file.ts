@@ -4,7 +4,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { localDay } from "../dirs";
 import { isEexist } from "../fs-error";
-import { openCloexecSync } from "../fs-open";
 
 /** Write batching for {@link RotatingFileSink}. */
 export interface RotatingFileBatchOptions {
@@ -101,7 +100,7 @@ export class RotatingFileSink {
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		for (;;) {
 			try {
-				this.#fd = openCloexecSync(
+				this.#fd = fs.openSync(
 					filePath,
 					fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_APPEND,
 				);

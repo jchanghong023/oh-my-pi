@@ -7,6 +7,10 @@
 - Guide agents to correct and retry tool calls rejected by argument validation.
 - Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Fixed

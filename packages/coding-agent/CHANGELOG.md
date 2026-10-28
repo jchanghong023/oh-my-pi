@@ -141,6 +141,10 @@
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.
 - Avoid synchronous per-skill existence probes and duplicate shared/custom directory scans on Linux offline launches.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

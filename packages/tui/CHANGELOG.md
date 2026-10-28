@@ -62,6 +62,10 @@
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.
 - Kept the Rounded Box default consistent during uncached startup, shape previews, and setup selection.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

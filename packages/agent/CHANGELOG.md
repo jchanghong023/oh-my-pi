@@ -14,6 +14,10 @@
 - Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

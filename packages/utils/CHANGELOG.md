@@ -12,6 +12,10 @@
 
 - Treat removal of an absent nested YAML setting as a no-op, including missing or null parent mappings.
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.13.2] - 2026-10-27
 
 ### Added

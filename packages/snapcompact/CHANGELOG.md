@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Updated Bun engine requirement to ≥1.4.4
+
 ## [18.12.4] - 2026-10-20
 
 ### Fixed
