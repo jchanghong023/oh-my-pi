@@ -101,6 +101,11 @@ export const ompSpecDetailsSchema = z
 					.object({ paths: z.array(id), diagnostic: id })
 					.strict()
 					.optional(),
+				sideEffects: z
+					.object({ paths: z.array(id), diagnostic: id })
+					.strict()
+					.optional(),
+				archiveCleanup: z.object({ path: id, diagnostic: id }).strict().optional(),
 			})
 			.strict()
 			.optional(),

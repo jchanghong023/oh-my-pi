@@ -106,6 +106,7 @@ function createContext(sessionOverride?: InteractiveModeContext["session"]) {
 			getSessionName: () => "named-session",
 		} as InteractiveModeContext["sessionManager"],
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		skillCommands: new Map(),
 		fileSlashCommands: new Set<string>(),

@@ -119,6 +119,7 @@ function createStubInputControllerContext(opts: {
 		ui: { requestRender },
 		sessionManager: { getSessionId: () => sessionId },
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		skillCommands: opts.skillCommands,
 		fileSlashCommands: new Set<string>(),
 		session: {

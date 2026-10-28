@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
+import { hasSpecCloseSideEffects } from "./artifacts";
 import type {
 	SpecAgentInput,
 	SpecApproval,
@@ -30,8 +31,25 @@ const version = ({ path, version }: SpecFileVersion): SpecFileVersion => ({ path
 
 /** Explicit imperative only: discussion/assent is not repair authorization or stage approval. */
 export function hasExplicitRepairIntent(text: string): boolean {
-	return /^\s*(?:repair\b|(?:请(?:你)?(?:帮我)?\s*|帮我\s*)修复|(?:请(?:你)?\s*)?(?:修复(?:[:：\s]|$|这个|这份|这些|该|当前|报告|归档|收尾|已批准|批准范围内)|继续实施已批准))/iu.test(
-		text,
+	const value = text.trim();
+	// A narrowly scoped preservation constraint does not prohibit the requested repair.
+	const withoutPreservationConstraints = value.replace(
+		/(^|[，,、；;\n])\s*(?:(?:不|不要)(?:改|修改|变更|改动)(?:(?:已批准|已验收)的?(?:材料|文件|内容)|公开\s*API)|without (?:changing|modifying) (?:the )?(?:(?:approved|accepted) (?:materials|files|content)|public API))\s*(?=$|[，,、；;。.!！\n])/giu,
+		"$1",
+	);
+	// Questions, requests for explanation and general prohibitions are not authorization.
+	if (
+		/[?？]/u.test(value) ||
+		/(?:需要(?:改|修改|变更|调整|修复)[^。！？?\n]*(?:哪些|什么)|会(?:影响|导致|改变)[^。！？?\n]*(?:哪些|什么|吗|么)|是否|能否|如何|怎么|为什么|为何)/u.test(
+			value,
+		) ||
+		/(?:不要|别\s*(?:改|修改|变更|改动|修复|修正|修好|继续)|勿|禁止|无需|不(?:要|许|改|修改|修复|修正)|先解释|只(?:需|要)?(?:解释|分析|讨论)|do not|don't|never|without (?:changing|modifying|fixing)|explain (?:first|only))/iu.test(
+			withoutPreservationConstraints,
+		)
+	)
+		return false;
+	return /^(?:(?:(?:could|would) you\s+)?(?:please\s+)?(?:fix|repair|correct)\b|(?:请(?:你)?(?:帮我)?\s*|帮我\s*)?(?:修复|修正|修好|改正|纠正|继续实施已批准|把[^。！？?\n]{1,80}(?:修复|修正|修好)))/iu.test(
+		value,
 	);
 }
 
@@ -311,8 +329,7 @@ export class SpecDrivenOrchestrator {
 		return this.#control(async context => {
 			const role = this.currentRole();
 			if (!role || role === "requirements") throw new SpecAdmissionError("当前阶段不能回退");
-			if (this.#state.closing?.synced || this.#state.closing?.archivedChangePath)
-				throw new SpecAdmissionError("收尾已产生实际结果，不能回退");
+			if (hasSpecCloseSideEffects(this.#state.closing)) throw new SpecAdmissionError("收尾已产生实际结果，不能回退");
 			const target = ROLES[ROLES.indexOf(role) - 1];
 			const approvals = { ...this.#approvals };
 			for (const removed of ROLES.slice(ROLES.indexOf(target))) delete approvals[removed];
@@ -390,7 +407,7 @@ export class SpecDrivenOrchestrator {
 			throw error;
 		}
 	}
-	/** Called only after a successful native write/edit of this run's report, never after a reply. */
+	/** Called after an actual change to this run's report, never merely after a reply. */
 	async observeReport(): Promise<void> {
 		if (this.#state.phase !== "executing" || this.#approvals.executor) return;
 		this.#reportNeedsUpdate = undefined;

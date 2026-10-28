@@ -106,7 +106,7 @@ test.skipIf(!tuiTest)(
 				expect(await Bun.file(preserved).text()).toBe("unrelated user change\n");
 				expect(await nativeTranscript(saved, "requirements")).toContain(REQUIREMENT);
 				for (const file of entry(provider, "requirements").outputPaths as string[])
-					expect(await Bun.file(path.join(cwd, file.replace("*", "greeting"))).exists()).toBe(true);
+					expect(await Bun.file(path.join(cwd, file.replace(/\*+/, "greeting"))).exists()).toBe(true);
 			},
 		);
 	},
@@ -500,7 +500,7 @@ test.skipIf(!tuiTest || process.platform !== "win32")(
 			expect(provider.requests).toHaveLength(calls);
 			expect(await nativeTranscript(original, "requirements")).toContain(REQUIREMENT);
 			for (const file of entry(provider, "requirements").outputPaths as string[])
-				expect(await Bun.file(path.join(cwd, file.replace("*", "greeting"))).exists()).toBe(true);
+				expect(await Bun.file(path.join(cwd, file.replace(/\*+/, "greeting"))).exists()).toBe(true);
 			await tui("submit", "/dev drop");
 			await eventually(state, value => !value.run && !value.team);
 			await idle();

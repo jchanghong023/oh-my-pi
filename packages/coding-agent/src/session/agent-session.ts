@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { scheduler } from "node:timers/promises";
 import { isPromise } from "node:util/types";
+import type { NativeChildCapabilities } from "../sdk";
 
 import {
 	type AfterToolCallContext,
@@ -898,6 +899,8 @@ export class AgentSession implements SettingsScope {
 	readonly sessionManager: SessionManager;
 	readonly settings: Settings;
 	readonly eventBus: EventBus | undefined;
+	/** SDK-provided capability configuration inherited by native child sessions. */
+	nativeChildCapabilities?: NativeChildCapabilities;
 	readonly subagentEventBus: EventBus | undefined;
 	/** Session-start policy, independent of the selected project memory backend. */
 	readonly memoryEnabled: boolean;
@@ -3405,6 +3408,16 @@ export class AgentSession implements SettingsScope {
 		};
 	}
 
+	/** Whether this agent or a descendant still has native job cleanup in flight. */
+	hasUnsettledAsyncJobTree(options?: { cancelledOnly?: boolean }): boolean {
+		const manager = this.#asyncJobManager;
+		if (!manager) return false;
+		const parents = this.#jobTreeParents();
+		return manager
+			.getUnsettledJobs()
+			.some(job => (!options?.cancelledOnly || job.status === "cancelled") && this.#inJobTree(job, parents));
+	}
+
 	/**
 	 * Inspect one async job in this agent's tree (see {@link getAsyncJobTree}):
 	 * its command, live pids, exit status and output. Undefined when the job is
@@ -3438,13 +3451,7 @@ export class AgentSession implements SettingsScope {
 
 	/** Each agent's parent: the registry's link, else the owner of the task job that runs it. */
 	#jobTreeParents(): Map<string, string> {
-		const parents = new Map<string, string>();
-		const manager = this.#asyncJobManager;
-		if (manager) {
-			for (const job of [...manager.getRunningJobs(), ...manager.getRecentJobs(Number.POSITIVE_INFINITY)]) {
-				if (job.agentId !== undefined && job.ownerId !== undefined) parents.set(job.agentId, job.ownerId);
-			}
-		}
+		const parents = new Map(this.#asyncJobManager?.getAgentParentLinks());
 		for (const ref of AgentRegistry.global().list()) {
 			if (ref.parentId !== undefined) parents.set(ref.id, ref.parentId);
 		}

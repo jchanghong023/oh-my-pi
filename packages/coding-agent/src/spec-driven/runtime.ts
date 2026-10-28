@@ -3,7 +3,9 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { formatModelStringWithRouting } from "../config/model-resolver";
 import type { AgentSession } from "../session/agent-session";
+import { loadSessionFile, readSessionHeaderId } from "../session/session-loader";
 import { buildRunnerDeps, resolveTeamParticipantsForSession } from "../team/controller";
+import { createMCPProxyTools, followMCPTools } from "../task/executor";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { runTeamDiscussion } from "../team/orchestrator";
 import { createTeamSubagentRunner } from "../team/runner";
@@ -152,9 +154,16 @@ export async function createSpecDrivenRuntime(args: {
 			let sessionFile = saved?.sessionFile;
 			if (sessionFile) {
 				try {
-					await fs.stat(sessionFile);
+					const history = await loadSessionFile(sessionFile, undefined, { throwIfMissing: true });
+					if (
+						history.invalidHeader ||
+						history.malformedRecords > 0 ||
+						history.entries.length === 0 ||
+						!(await readSessionHeaderId(sessionFile))
+					)
+						sessionFile = undefined;
 				} catch (error) {
-					if (!isEnoent(error)) throw error;
+					if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error;
 					sessionFile = undefined;
 				}
 			}
@@ -196,6 +205,16 @@ export async function createSpecDrivenRuntime(args: {
 				executionSkills.push(visible);
 				return visible;
 			});
+			// Subscribe before taking the snapshot so changes during actor creation
+			// are replayed, without transferring ownership of the parent's manager.
+			const capabilities = session.nativeChildCapabilities;
+			const inheritedMcpManager =
+				executor && capabilities?.enableMCP !== false && !capabilities?.restrictToolNames
+					? capabilities?.mcpManager
+					: undefined;
+			const mcpFollower = inheritedMcpManager
+				? followMCPTools(inheritedMcpManager, new Set(capabilities?.customTools?.map(tool => tool.name)))
+				: undefined;
 			const actor = await createSpecActor({
 				role,
 				methods,
@@ -238,7 +257,7 @@ export async function createSpecDrivenRuntime(args: {
 				options: {
 					cwd,
 					settings: settings.overlay(),
-					model: session.model,
+					model: sessionFile ? undefined : session.model,
 					modelRegistry: session.modelRegistry,
 					authStorage: deps.authStorage,
 					getApiKey: deps.getApiKey,
@@ -246,28 +265,61 @@ export async function createSpecDrivenRuntime(args: {
 					parentAgentId: session.getAgentId(),
 					eventBus: deps.eventBus,
 					subagentEventBus: deps.subagentEventBus,
+					additionalDirectories: session.sessionManager.getAdditionalDirectories(),
+					...(executor
+						? {
+								...session.nativeChildCapabilities,
+								mcpTools:
+									capabilities?.enableMCP === false || capabilities?.restrictToolNames
+										? undefined
+										: inheritedMcpManager
+											? createMCPProxyTools(inheritedMcpManager)
+											: capabilities?.mcpTools,
+								extensionRoots: () => session.effectiveExtensionRoots,
+								preloadedPreparedExtensions: session.preparedExtensions?.filter(prepared =>
+									session.extensionRunner?.isExtensionActive(prepared.path),
+								),
+								preloadedExtensionPaths:
+									session.extensionPaths?.filter(extensionPath =>
+										session.extensionRunner
+											?.getLoadedExtensions()
+											.some(
+												extension =>
+													(extension.path === extensionPath || extension.resolvedPath === extensionPath) &&
+													session.extensionRunner?.isExtensionActive(extension.path),
+											),
+									) ?? [],
+							}
+						: {}),
 					contextFiles: [...(loadedContext.contextFiles ?? [])],
 					rules: [...(loadedContext.activeRules ?? [])],
-					skills: executor ? executionSkills : skills,
+					skills: executor
+						? executionSkills
+						: [
+								...session.skills.map(skill => ({ ...skill, hide: true })),
+								...skills.filter(skill => !session.skills.some(existing => existing.name === skill.name)),
+							],
 					promptTemplates: [],
 					spawns: executor ? "*" : "scout",
 					hasUI: false,
-					toolNames: executor
-						? ["read", "grep", "glob", "write", "edit", "bash", "task", "wait"]
-						: [
-								"read",
-								"grep",
-								"glob",
-								"write",
-								"edit",
-								"task",
-								...(role === "requirements" || role === "solution" ? ["wiki"] : []),
-							],
-					restrictToolNames: true,
-					enableMCP: false,
-					enableLsp: false,
-					enableIrc: false,
-					disableExtensionDiscovery: true,
+					...(executor
+						? {}
+						: {
+								toolNames: [
+									"read",
+									"grep",
+									"glob",
+									"write",
+									"edit",
+									"task",
+									...(role === "requirements" || role === "solution" ? ["wiki"] : []),
+								],
+								restrictToolNames: true,
+								enableMCP: false,
+								enableLsp: false,
+								enableIrc: false,
+								disableExtensionDiscovery: true,
+							}),
 				},
 				executionSkills: executor ? executionGrants : undefined,
 				onSessionCreated(child) {
@@ -284,7 +336,11 @@ export async function createSpecDrivenRuntime(args: {
 						for (const release of grants) release();
 					};
 				},
+			}).catch(error => {
+				mcpFollower?.dispose();
+				throw error;
 			});
+			mcpFollower?.bind(actor.session);
 			actors.set(role, actor);
 			return actor;
 		})();

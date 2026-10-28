@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
+import { hasExplicitRepairIntent, SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import type {
 	SpecAgentInput,
 	SpecDocument,
@@ -8,6 +8,32 @@ import type {
 	SpecSolution,
 	SpecStageRole,
 } from "../../src/spec-driven/types";
+
+describe("explicit repair intent", () => {
+	it("distinguishes constrained repairs from questions, discussion and general prohibitions", () => {
+		for (const text of [
+			"repair closing 明确只移除同步路径障碍，不修改已批准材料",
+			"修复这个错误，不要修改公开 API",
+			"修复报告中区别不清的问题",
+			"请修正批准范围内的失败测试",
+			"Please fix the obstruction, without changing the approved files",
+			"修复：仅修复归档目录阻塞，删除刚才夹具自有的标记文件和目标目录；不修改已验收材料、不执行业务实现、不运行同步归档，等待我 /dev next。",
+		]) {
+			expect(hasExplicitRepairIntent(text)).toBe(true);
+		}
+		for (const text of [
+			"修复这个错误是否会影响现有调用？先解释，不要改代码",
+			"修正这个问题需要改哪些文件",
+			"改正这个错误会影响哪些调用",
+			"不要修复，只解释",
+			"修复这个错误，不要改代码",
+			"修复这个错误，不修改已批准材料和代码",
+			"好的",
+		]) {
+			expect(hasExplicitRepairIntent(text)).toBe(false);
+		}
+	});
+});
 
 function fixture(saved?: SpecSavedRun) {
 	const document = (path: string): SpecDocument => ({ path, version: `${path}-v1`, content: `完整原文 ${path} Ω` });
@@ -402,6 +428,16 @@ describe("explicit Dev file decisions", () => {
 		await f.core.observeReport();
 		await f.core.next();
 		expect(f.core.status().phase).toBe("idle");
+	});
+	it("blocks back when a failed sync left unrestored side effects without an archive", async () => {
+		const f = fixture();
+		await execution(f);
+		const saved = f.core.save();
+		saved.closing = { sideEffects: { paths: ["openspec/specs/example/spec.md"], diagnostic: "rollback failed" } };
+		const restored = fixture(saved);
+		await restored.core.restore(saved);
+		await expect(restored.core.back()).rejects.toThrow("实际结果");
+		expect(restored.core.status().phase).toBe("executing");
 	});
 	it("preserves acceptance and actual closing progress, keeps executor conversation, retries remaining work", async () => {
 		const f = fixture();

@@ -59,6 +59,7 @@ function createContext() {
 			getSessionName: () => "named-session",
 		} as unknown as InteractiveModeContext["sessionManager"],
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		compactionQueuedMessages: [] as InteractiveModeContext["compactionQueuedMessages"],
 		locallySubmittedUserSignatures: new Set<string>(),
 		onInputCallback,

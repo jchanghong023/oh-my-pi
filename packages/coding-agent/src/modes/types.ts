@@ -546,6 +546,7 @@ export interface InteractiveModeContext {
 	/** Reload session skills and derived `/skill:<name>` commands. */
 	refreshSkillState(): Promise<void>;
 	applyCwdChange(newCwd: string): Promise<boolean>;
+	exitDevForSessionMove(): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -658,6 +659,7 @@ export interface InteractiveModeContext {
 	): Promise<boolean>;
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
 	handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
+	isDevInputRoute(text: string): boolean;
 	showDevCommandStatus(text: string): void;
 	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */

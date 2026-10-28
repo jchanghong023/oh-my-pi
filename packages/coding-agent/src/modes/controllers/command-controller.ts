@@ -1801,6 +1801,15 @@ export class CommandController {
 	/** Save source settings before acquiring the gate for a complete relocation operation. */
 	async #withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
 		try {
+			await this.ctx.exitDevForSessionMove();
+		} catch (err) {
+			this.ctx.session.emitNotice(
+				"error",
+				`Cannot move session: ${err instanceof Error ? err.message : String(err)}`,
+			);
+			return false;
+		}
+		try {
 			await this.ctx.settings.flush();
 		} catch (err) {
 			this.ctx.session.emitNotice(

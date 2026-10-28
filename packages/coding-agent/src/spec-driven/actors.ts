@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AsyncJobManager } from "../async/job-manager";
 import { prompt } from "@oh-my-pi/pi-utils";
@@ -11,7 +12,7 @@ import { cfgTaskIsolationEnabled, cfgTaskSpeculativeLaunch, cfgWorktreeOnStart }
 import { getBundledAgent } from "../task/agents";
 import { isSeanceIsolationSkills } from "../task/seance-policy";
 import type { NativeSubagentHooks } from "../task/types";
-import { assertSpecWritePath } from "./artifacts";
+import { assertSpecWritePath, existingNativeSpec, matchesNativeSpecPattern } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { SessionManager } from "../session/session-manager";
@@ -70,7 +71,7 @@ export function specDescendantAgentIds(registry: AgentRegistry, ownerId: string)
 async function waitOwnedSettled(manager: AsyncJobManager, ownerId: string): Promise<void> {
 	const awaited = new Set<string>();
 	for (;;) {
-		const pending = manager.getAllJobs({ ownerId }).filter(job => !awaited.has(job.id));
+		const pending = manager.getUnsettledJobs().filter(job => job.ownerId === ownerId && !awaited.has(job.id));
 		if (pending.length === 0) return;
 		for (const job of pending) awaited.add(job.id);
 		await Promise.all(pending.map(job => job.promise.catch(() => {})));
@@ -90,7 +91,18 @@ export async function cancelSpecDescendantJobs(
 	const targets = new Set<string>([ownerId]);
 	for (let pass = 0; pass < 3; pass++) {
 		for (const id of specDescendantAgentIds(registry, ownerId)) targets.add(id);
-		for (const id of targets) manager.cancelAll({ ownerId: id });
+		// Native registration retains lineage even after a parent job or ref disappears.
+		const jobs = manager.getUnsettledJobs();
+		let discovered = true;
+		while (discovered) {
+			discovered = false;
+			for (const [child, parent] of manager.getAgentParentLinks()) {
+				if (!targets.has(parent) || targets.has(child)) continue;
+				targets.add(child);
+				discovered = true;
+			}
+		}
+		for (const job of jobs) if (job.ownerId && targets.has(job.ownerId)) manager.cancel(job.id);
 		await Promise.all(
 			[...targets]
 				.filter(id => id !== ownerId)
@@ -103,7 +115,12 @@ export async function cancelSpecDescendantJobs(
 				}),
 		);
 		for (const id of targets) await waitOwnedSettled(manager, id);
-		if (!specDescendantAgentIds(registry, ownerId).some(id => !targets.has(id))) return true;
+		const remaining = manager.getUnsettledJobs();
+		if (
+			!specDescendantAgentIds(registry, ownerId).some(id => !targets.has(id)) &&
+			!remaining.some(job => job.ownerId && targets.has(job.ownerId))
+		)
+			return true;
 	}
 	return false;
 }
@@ -140,6 +157,32 @@ export async function createSpecActor(args: {
 	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
 	let stageOutputPaths: readonly string[] | undefined;
 	let reportTurn: unknown;
+	const reportFile = args.reportPath ? path.resolve(args.options.cwd!, args.reportPath) : undefined;
+	const reportVersion = async (): Promise<string | undefined> => {
+		if (!reportFile) return undefined;
+		try {
+			const stat = await fs.stat(reportFile, { bigint: true });
+			return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+			throw error;
+		}
+	};
+	let observedReport = await reportVersion();
+	const reportBeforeTool = new Map<string, string | undefined>();
+	let reportObservation = Promise.resolve();
+	const observeChangedReport = (before: string | undefined) => {
+		reportObservation = reportObservation.then(async () => {
+			const current = await reportVersion();
+			if (current === before || current === observedReport) return;
+			observedReport = current;
+			if (current === undefined) return;
+			reportTurn = lastUser();
+			await args.observeReport?.();
+			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+		});
+		return reportObservation;
+	};
 	let needsRecovery = !!args.recoverContext;
 	let guardStop: Promise<void> | undefined;
 	const lastUser = () => session?.messages.findLast(message => message.role === "user");
@@ -170,6 +213,23 @@ export async function createSpecActor(args: {
 		return undefined;
 	};
 	const checkScoutAdmission = async () => {
+		const manager = session.asyncJobManager;
+		if (manager) {
+			const owners = new Set([id, ...specDescendantAgentIds(registry, id)]);
+			let changed = true;
+			while (changed) {
+				changed = false;
+				for (const [child, parent] of manager.getAgentParentLinks()) {
+					if (!owners.has(parent) || owners.has(child)) continue;
+					owners.add(child);
+					changed = true;
+				}
+			}
+			if (
+				manager.getUnsettledJobs().some(job => job.status === "cancelled" && job.ownerId && owners.has(job.ownerId))
+			)
+				throw new Error("已取消的原生工作尚未结清，不得派发新的协作。");
+		}
 		const approval = await args.checkApproved?.();
 		if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
 			throw new Error("正式批准版本已变化，不得继续协作。");
@@ -220,9 +280,18 @@ export async function createSpecActor(args: {
 		},
 		async configureSession(_request, options) {
 			return {
-				toolNames: options.toolNames ?? args.options.toolNames ?? [],
 				toolRestrictions: restrictions.clone(),
-				restrictToolNames: true,
+				...(options.restrictToolNames || options.toolNames ? { restrictToolNames: true } : {}),
+				...(!options.restrictToolNames && !options.toolNames && args.options.customTools?.length
+					? {
+							customTools: [
+								...args.options.customTools.filter(
+									tool => !options.customTools?.some(existing => existing.name === tool.name),
+								),
+								...(options.customTools ?? []),
+							],
+						}
+					: {}),
 				// Seance isolation strips the inherited catalog. Restore only the
 				// execution resources explicitly granted to this Dev chain.
 				skills: isSeanceIsolationSkills(options.skills)
@@ -230,7 +299,7 @@ export async function createSpecActor(args: {
 					: (options.skills ?? args.options.skills),
 				subagentHooks: executorHooks,
 				onSessionCreated(child) {
-					return grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []);
+					child.addDisposer(grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []));
 				},
 			};
 		},
@@ -281,7 +350,10 @@ export async function createSpecActor(args: {
 				if (status?.closing) return { block: true, reason: "当前阶段不可派发协作。" };
 				return undefined;
 			}
-			if (args.role === "executor") return undefined;
+			if (args.role === "executor") {
+				reportBeforeTool.set(event.toolCallId, await reportVersion());
+				return undefined;
+			}
 			if (event.toolName !== "write" && event.toolName !== "edit")
 				return { block: true, reason: "执行确认前只能写本阶段的指定产物。" };
 			const requested = event.input.path;
@@ -304,17 +376,24 @@ export async function createSpecActor(args: {
 						? paths.requirements
 						: [args.role === "solution" ? paths.solution : paths.plan]
 					: []);
-			const allowed = outputPaths.some(output => {
-				if (!output.includes("*")) return output === relative;
-				const prefix = output.slice(0, output.indexOf("*"));
-				return (
-					output.endsWith("*/spec.md") &&
-					relative.startsWith(prefix) &&
-					/^[a-z0-9]+(?:-[a-z0-9]+)*\/spec\.md$/.test(relative.slice(prefix.length))
-				);
-			});
-			if (!allowed) return { block: true, reason: `未授权的阶段文件写入：${requested}` };
+			let allowed = outputPaths.some(output => output === relative);
 			try {
+				if (!allowed) {
+					for (const output of outputPaths) {
+						if (!matchesNativeSpecPattern(output, relative)) continue;
+						const prefix = output.slice(0, output.indexOf("*"));
+						const capability = relative.slice(prefix.length);
+						if (
+							/^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)+spec\.md$/.test(capability) ||
+							(await existingNativeSpec(cwd, relative)) ||
+							(await existingNativeSpec(cwd, `openspec/specs/${capability}`))
+						) {
+							allowed = true;
+							break;
+						}
+					}
+				}
+				if (!allowed) return { block: true, reason: `未授权的阶段文件写入：${requested}` };
 				await assertSpecWritePath(cwd, relative);
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
@@ -341,15 +420,13 @@ export async function createSpecActor(args: {
 					return;
 				}
 			}
-			if (event.isError || !["write", "edit"].includes(event.toolName) || !args.reportPath) return;
-			const requested = event.input.path;
-			if (typeof requested !== "string") return;
-			if (path.resolve(args.options.cwd!, requested) !== path.resolve(args.options.cwd!, args.reportPath)) return;
-			reportTurn = lastUser();
-			await args.observeReport?.();
-			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+			if (reportBeforeTool.has(event.toolCallId)) {
+				const before = reportBeforeTool.get(event.toolCallId);
+				reportBeforeTool.delete(event.toolCallId);
+				await observeChangedReport(before);
+			}
 		});
-		pi.on("before_agent_start", async event => {
+		pi.on("before_agent_start", async (event, ctx) => {
 			let valid = true;
 			try {
 				const approval = await args.checkApproved?.();
@@ -359,7 +436,13 @@ export async function createSpecActor(args: {
 			}
 			const status = args.getStatus?.();
 			const explicitRepair = hasExplicitRepairIntent(event.prompt);
-			if (valid && status?.awaitingAcceptance && !status.accepted && explicitRepair) {
+			if (
+				ctx.sessionManager.getSessionId() === session.sessionId &&
+				valid &&
+				status?.awaitingAcceptance &&
+				!status.accepted &&
+				explicitRepair
+			) {
 				await args.beginRepair?.();
 			}
 			// Keep read-only explanations available after invalidation; tool_call is authoritative for writes.
@@ -429,9 +512,7 @@ export async function createSpecActor(args: {
 			? {
 					allowRestrictedGoal: true,
 					subagentHooks: executorHooks,
-					toolNames: [
-						...new Set([...(args.options.toolNames ?? ["read", "grep", "glob", "write", "edit"]), "goal"]),
-					],
+					...(args.options.toolNames ? { toolNames: [...new Set([...args.options.toolNames, "goal"])] } : {}),
 				}
 			: {}),
 		agentId: id,

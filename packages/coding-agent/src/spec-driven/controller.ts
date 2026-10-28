@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentSession } from "../session/agent-session";
 import type { SlashCommandRuntime } from "../slash-commands/types";
+import { hasSpecCloseSideEffects, matchesNativeSpecPattern } from "./artifacts";
 import { hasExplicitRepairIntent, SpecAdmissionError, SpecDrivenOrchestrator } from "./orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "./runtime";
 import { SPEC_PHASES } from "./stages";
@@ -122,6 +123,15 @@ function validState(value: unknown): value is WorkspaceState {
 		if (!object(cleanup) || !Array.isArray(cleanup.paths) || !cleanup.paths.every(text) || !text(cleanup.diagnostic))
 			return false;
 	}
+	if (object(run.closing) && run.closing.sideEffects !== undefined) {
+		const effects = run.closing.sideEffects;
+		if (!object(effects) || !Array.isArray(effects.paths) || !effects.paths.every(text) || !text(effects.diagnostic))
+			return false;
+	}
+	if (object(run.closing) && run.closing.archiveCleanup !== undefined) {
+		const cleanup = run.closing.archiveCleanup;
+		if (!object(cleanup) || !text(cleanup.path) || !text(cleanup.diagnostic)) return false;
+	}
 	const roles = ["requirements", "solution", "planner", "executor"];
 	for (const [role, ref] of Object.entries(run.sessions))
 		if (
@@ -167,14 +177,15 @@ function validState(value: unknown): value is WorkspaceState {
 			if (
 				!requiredFiles[index].every(required => {
 					const pattern =
-						index === 0 && typeof required === "string" && required.includes("*")
-							? new Bun.Glob(required)
-							: undefined;
+						index === 0 && typeof required === "string" && required.includes("*") ? required : undefined;
 					return files.some(
 						file =>
 							object(file) &&
 							(pattern
-								? typeof file.path === "string" && !file.path.includes("*") && pattern.match(file.path)
+								? typeof file.path === "string" &&
+									(/\/specs\/\*{1,2}\/spec\.md$/.test(pattern)
+										? matchesNativeSpecPattern(pattern, file.path)
+										: !file.path.includes("*") && new Bun.Glob(pattern).match(file.path))
 								: file.path === required),
 					);
 				})
@@ -191,7 +202,7 @@ function nativeBusy(session: AgentSession): boolean {
 		session.hasAdmittedSubmission ||
 		session.queuedMessageCount > 0 ||
 		session.hasPendingAsyncWork() ||
-		(session.getAsyncJobTree()?.running.length ?? 0) > 0
+		session.hasUnsettledAsyncJobTree()
 	);
 }
 /** One held workspace lease; all conversation, admission and cancellation remain native. */
@@ -301,6 +312,11 @@ export class SpecDrivenController {
 	#busy(): boolean {
 		return [...this.#subscriptions.keys()].some(session => session !== this.#root && nativeBusy(session));
 	}
+	#cancelledJobsUnsettled(): boolean {
+		return [...this.#subscriptions.keys()].some(
+			session => session !== this.#root && session.hasUnsettledAsyncJobTree({ cancelledOnly: true }),
+		);
+	}
 	assertControlAllowed(): void {
 		if (this.#control || this.#stopping) throw new SpecAdmissionError("当前控制操作尚未结清");
 		if (this.#halted) throw new SpecAdmissionError("停止尚未完成，请重试退出或丢弃");
@@ -315,7 +331,7 @@ export class SpecDrivenController {
 					: this.#busy()
 						? "原生输入或任务尚未结清"
 						: undefined;
-		const closing = !!(state.closing?.synced || state.closing?.archivedChangePath);
+		const closing = hasSpecCloseSideEffects(state.closing);
 		return [
 			{ id: "new", label: "新需求", command: "/dev new", requiresInput: true, allowed: state.phase === "idle" },
 			{ id: "next", label: "确认并继续", command: "/dev next", allowed: state.phase !== "idle" && !!this.#native },
@@ -531,12 +547,14 @@ export class SpecDrivenController {
 		if (this.#mode !== "dev" || !this.#core || !this.nativeSession())
 			throw new SpecAdmissionError("请先 /dev new <需求内容>");
 		if (this.#core.isTransitioning()) throw new SpecAdmissionError("当前控制操作尚未结清");
+		if (this.#cancelledJobsUnsettled()) throw new SpecAdmissionError("已取消的原生异步任务尚未结清");
 		const core = this.#core;
 		const phase = core.status().phase;
 		const generation = core.status().generation;
 		// Mismatches permit native read-only diagnosis; actor tool guards enforce writes.
 		await this.#core.checkApproved();
 		if (core.isTransitioning()) throw new SpecAdmissionError("当前控制操作尚未结清");
+		if (this.#cancelledJobsUnsettled()) throw new SpecAdmissionError("已取消的原生异步任务尚未结清");
 		if (
 			this.#stopping ||
 			this.#halted ||
@@ -568,6 +586,8 @@ export class SpecDrivenController {
 		this.#halted = true;
 		await this.#core?.stop();
 		await this.#native?.stop();
+		if ([...this.#subscriptions.keys()].some(session => session !== this.#root && session.hasUnsettledAsyncJobTree()))
+			throw new SpecAdmissionError("原生异步任务尚未结清，请重试退出或丢弃");
 	}
 	async #disposeNative(): Promise<void> {
 		await this.#native?.dispose();

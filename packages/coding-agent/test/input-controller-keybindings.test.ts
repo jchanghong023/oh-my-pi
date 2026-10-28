@@ -129,6 +129,7 @@ async function createContext() {
 		sessionManager: {},
 		subscribe: () => () => {},
 		hasPendingAsyncWork: () => false,
+		hasUnsettledAsyncJobTree: () => false,
 		getAsyncJobTree: () => null,
 	};
 	const updatePendingMessagesDisplay = vi.fn();
@@ -244,6 +245,7 @@ async function createContext() {
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		handleHotkeysCommand: vi.fn(),
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		handlePlanModeCommand: vi.fn(),
 		handleNewCommand: vi.fn(),
 		showTreeSelector: vi.fn(),

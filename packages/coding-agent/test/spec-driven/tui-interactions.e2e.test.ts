@@ -57,13 +57,30 @@ test.skipIf(!tuiTest)(
 				const calls = provider.requests.length;
 				// Raw PTY bracketed paste uses the real editor's file-image attachment path.
 				await tui("write", `\u001b[200~${image}\u001b[201~`);
-				await tui("expect", "text", "#[0-9]+", "--regex", "--timeout", "30000");
+				await tui("expect", "text", "#1", "--timeout", "30000");
 				await tui("type", "unclaimed-image-draft");
 				await tui("key", "press", "Enter");
 				await tui("expect", "text", "当前无阶段 Agent", "--timeout", "30000");
 				expect(provider.requests).toHaveLength(calls);
-				await tui("expect", "text", "#[0-9]+", "--regex", "--timeout", "30000");
-				expect(await tui("text")).toContain("unclaimed-image-draft");
+				const rejected = await nativeDraftSnapshot(tui);
+				const draftRows = rejected.screen.split("\n");
+				const draftStart = draftRows.findLastIndex(line => line.startsWith("╭── "));
+				const draftEnd = draftRows.findIndex((line, index) => index > draftStart && line.startsWith("╰─"));
+				const draft = draftRows.slice(draftStart + 1, draftEnd).join("\n");
+				expect(draft.match(/#\d+/g)).toEqual(["#1"]);
+				expect(draft).toContain("unclaimed-image-draft");
+				await tui("key", "press", "Ctrl+Enter");
+				await eventually(
+					() => nativeDraftSnapshot(tui),
+					({ screen }) => {
+						const lines = screen.split("\n");
+						const start = lines.findLastIndex(line => line.startsWith("╭── "));
+						const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
+						const restored = lines.slice(start + 1, end).join("\n");
+						return restored.includes("unclaimed-image-draft") && restored.match(/#\d+/g)?.join(",") === "#1";
+					},
+				);
+				expect(provider.requests).toHaveLength(calls);
 				// Keep the rejected draft's inline image token: clearing the draft
 				// intentionally deletes the attachment under the native composer contract.
 				await tui("key", "press", "Home");
@@ -79,8 +96,21 @@ test.skipIf(!tuiTest)(
 						),
 				).toHaveLength(1);
 				expect(userTexts(initial).at(-1)).toContain("unclaimed-image-draft");
+				await eventually(
+					() => nativeDraftSnapshot(tui),
+					({ screen, cursor }) => nativeDraftMatches(screen, "", cursor),
+				);
 				await tui("submit", "held-native-dialogue");
 				await eventually(async () => held, Boolean);
+				const heldRequest = provider.requests.find(
+					request => continuationText(request) === "held-native-dialogue",
+				)!;
+				const heldUser = heldRequest.messages.findLast(message => message.role === "user")!;
+				expect(
+					(Array.isArray(heldUser.content) ? heldUser.content : []).filter(
+						part => typeof part === "object" && part !== null && "type" in part && part.type === "image_url",
+					),
+				).toHaveLength(0);
 				await tui("type", "queued-native-followup");
 				await tui("key", "press", "Ctrl+Enter");
 				release.resolve();

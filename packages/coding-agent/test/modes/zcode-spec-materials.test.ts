@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { OmpSpecDrivenBridge } from "../../src/modes/zcode/spec-driven";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "../../src/modes/zcode/sessions";
+import type { SpecCloseProgress } from "../../src/spec-driven/artifacts";
 import * as controllers from "../../src/spec-driven/controller";
 import type { SpecControllerObservation } from "../../src/spec-driven/controller";
 import type { SpecDocument } from "../../src/spec-driven/types";
@@ -106,6 +107,78 @@ function fixture(cwd: string) {
 }
 
 describe("desktop real file materials", () => {
+	it.each([
+		{
+			name: "sync side effects",
+			closing: {
+				sideEffects: {
+					paths: ["openspec/specs/capability/spec.md"],
+					diagnostic: "Rollback failed: original sync diagnostic",
+				},
+			},
+			diagnostic: "Rollback failed: original sync diagnostic",
+			archive: undefined,
+		},
+		{
+			name: "archive cleanup",
+			closing: {
+				synced: true,
+				archivedChangePath: "openspec/changes/archive/2026-10-26-materials",
+				archiveCleanup: {
+					path: "openspec/changes/materials",
+					diagnostic: "Archive cleanup failed: original diagnostic",
+				},
+			},
+			diagnostic: "Archive cleanup failed: original diagnostic",
+			archive: "openspec/changes/archive/2026-10-26-materials",
+		},
+	] satisfies { name: string; closing: SpecCloseProgress; diagnostic: string; archive: string | undefined }[])(
+		"preserves $name in live and cold read-only queries",
+		async ({ closing, diagnostic, archive }) => {
+			await using root = await TempDir.create("@omp-spec-closing-materials-");
+			const f = fixture(root.path());
+			const cold = new OmpSpecDrivenBridge(f.manager);
+			try {
+				await f.initialize();
+				if (archive) {
+					await fs.mkdir(root.join("openspec/changes/archive"), { recursive: true });
+					await fs.cp(root.join(change), root.join(archive), { recursive: true });
+				}
+				f.observation.status.closing = closing;
+				const live = await f.capture();
+				expect(live.spec).toMatchObject({ live: true, state: "blocked", explanation: diagnostic, closing });
+				const history = await cold.runs("session");
+				expect(history).toHaveLength(1);
+				expect(history[0]!.spec).toMatchObject({
+					live: false,
+					readOnly: true,
+					state: "blocked",
+					explanation: diagnostic,
+					actions: [],
+					closing,
+				});
+				for (const bridge of [f.bridge, cold]) {
+					const artifacts = await bridge.artifacts("session", live.runId);
+					const proposal = artifacts!.artifacts.find(
+						artifact => artifact.sourcePath === `${archive ?? change}/proposal.md`,
+					)!;
+					const result = await bridge.artifactRead({
+						sessionId: "session",
+						runId: live.runId,
+						artifactId: proposal.id,
+						version: proposal.version,
+						offset: 0,
+						limit: 8192,
+					});
+					expect(Buffer.from(result!.dataBase64, "base64").toString()).toBe("Approved proposal");
+				}
+			} finally {
+				await cold.dispose();
+				await f.bridge.dispose();
+			}
+		},
+	);
+
 	it("reads every written capability before next without approving or copying pending requirements", async () => {
 		await using root = await TempDir.create("@omp-spec-pending-materials-");
 		const f = fixture(root.path());

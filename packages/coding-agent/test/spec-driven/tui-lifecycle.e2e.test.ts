@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
 	BEHAVIOR_TEST,
@@ -55,6 +56,61 @@ function goalChanges(
 }
 
 test.skipIf(!tuiTest)(
+	"persistent shell cwd exits execution before moving the root session and preserves the stage journal",
+	async () => {
+		await withTui({}, [120, 36], async ({ cwd, tui, state, stage, idle }) => {
+			await fs.mkdir(path.join(cwd, "dev-cwd-target"));
+			await tui("submit", "/dev");
+			await idle();
+			await tui("submit", `/dev new ${REQUIREMENT}`);
+			await stage("requirements");
+			await tui("submit", "/dev next");
+			await stage("solution");
+			await tui("submit", "/dev next pure");
+			await stage("planning");
+			await tui("submit", "/dev next");
+			await stage("executing");
+			const executing = (await eventually(state, value => value.run?.awaitingAcceptance === true)).run!;
+			const journal = await nativeTranscript(executing, "executor");
+			const journalFile = executing.sessions.executor!.sessionFile!;
+
+			await tui("submit", "!cd dev-cwd-target");
+			await eventually(
+				() => tui("text"),
+				screen =>
+					screen
+						.split("\n")
+						.slice(-4)
+						.some(line => line.includes("dev-cwd-target")),
+			);
+			expect(await Bun.file(journalFile).exists()).toBe(true);
+			expect(nativeMessageEntries(await nativeTranscript(executing, "executor"))).toEqual(
+				nativeMessageEntries(journal),
+			);
+			await tui("submit", "!pwd");
+			await tui("expect", "text", "[/\\\\]dev-cwd-target", "--regex", "--timeout", "30000");
+			await tui("submit", "!cd ..");
+			await eventually(
+				() => tui("text"),
+				screen =>
+					screen
+						.split("\n")
+						.slice(-4)
+						.some(line => line.includes(path.basename(cwd))),
+			);
+			await tui("submit", "/dev");
+			const restored = (await stage("executing")).run!;
+			expect(restored.runId).toBe(executing.runId);
+			expect(restored.sessions.executor).toEqual(executing.sessions.executor);
+			expect(nativeMessageEntries(await nativeTranscript(restored, "executor"))).toEqual(
+				nativeMessageEntries(journal),
+			);
+		});
+	},
+	180_000,
+);
+
+test.skipIf(!tuiTest)(
 	"native execution scope revision preserves business work but requires fresh downstream decisions and delivery",
 	async () => {
 		const scope =
@@ -62,7 +118,7 @@ test.skipIf(!tuiTest)(
 		let revised = false;
 		function reviseRequirements(request: ModelRequest): Reply {
 			const input = rolePayload(request)!.input;
-			const outputs = (input.outputPaths as string[]).map(file => file.replace("*", "greeting"));
+			const outputs = (input.outputPaths as string[]).map(file => file.replace(/\*+/, "greeting"));
 			const results = turnResults(request, scope);
 			if (results.length >= outputs.length) {
 				revised = true;
@@ -483,7 +539,7 @@ test.skipIf(!tuiTest)(
 					expect(resultRequest).toBeDefined();
 					expect(await Bun.file(path.join(cwd, `business-unauthorized-${role}.txt`)).exists()).toBe(false);
 					for (const output of entry(provider, role).outputPaths as string[]) {
-						expect(await Bun.file(path.join(cwd, output.replace("*", "greeting"))).exists()).toBe(true);
+						expect(await Bun.file(path.join(cwd, output.replace(/\*+/, "greeting"))).exists()).toBe(true);
 					}
 				}
 				const scouts = provider.requests.filter(isScoutProbeRequest);

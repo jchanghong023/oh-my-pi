@@ -71,6 +71,7 @@ function createHarness(
 		showWarning: vi.fn(),
 		showError,
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		handlePlanModeCommand,
 		handleVibeModeCommand,
 		handleGoalModeCommand,

@@ -42,6 +42,7 @@ function createContext(approvalOwnsComposer: boolean) {
 		approvalOwnsComposer,
 		sessionManager: { putBlob: vi.fn(), getSessionId: () => "approval-session" },
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		loopModeEnabled: false,
 		flushPendingBashComponents: vi.fn(),
 		startPendingSubmission: vi.fn((input: { text: string }) => ({ ...input, cancelled: false, started: false })),

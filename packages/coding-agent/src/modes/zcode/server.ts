@@ -2571,8 +2571,14 @@ export class ZCodeServer {
 					params.thoughtLevel === undefined ? undefined : parseZCodeThinkingLevel(params.thoughtLevel);
 				if (params.thoughtLevel !== undefined && thought === undefined)
 					throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
-				hosted.record.run(() => hosted.record.session.setThinkingLevel(thought, false));
-				hosted.projection.refresh();
+				const session =
+					peekSpecDrivenController(hosted.record.session.sessionManager)?.nativeSession() ?? hosted.record.session;
+				await hosted.record.run(() => session.setThinkingLevel(thought, false));
+				const projection =
+					session === hosted.record.session
+						? hosted.projection
+						: await this.#projection(session.sessionManager.getSessionId());
+				projection.refresh();
 				return this.#snapshot(params.sessionId);
 			}
 			case "session/compact": {

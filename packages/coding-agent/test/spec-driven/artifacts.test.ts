@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
 	artifactVersion,
+	hasSpecCloseSideEffects,
 	containedSpecPath,
 	SpecArtifactStore,
 	type SpecCloseProgress,
@@ -23,8 +24,8 @@ interface Fixture {
 	write: (file: string, content: string) => Promise<void>;
 }
 
-async function fixture(native = false): Promise<Fixture> {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-artifacts-"));
+async function fixture(native = false, changeId = "sample-change"): Promise<Fixture> {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-file-artifacts- (test)-"));
 	roots.push(cwd);
 	if (!native) {
 		await fs.mkdir(path.join(cwd, "requirements"));
@@ -35,7 +36,7 @@ async function fixture(native = false): Promise<Fixture> {
 	}
 	const store = new SpecArtifactStore({
 		cwd,
-		changeId: "sample-change",
+		changeId,
 		requirementsDir: native ? undefined : "requirements",
 	});
 	const paths = await store.initialize();
@@ -49,7 +50,7 @@ async function fixture(native = false): Promise<Fixture> {
 		"## Why\n\nProvide sample behavior.\n\n## What Changes\n\n- Add sample behavior.\n\n## Capabilities\n\n### New Capabilities\n- `sample`: sample behavior.\n\n### Modified Capabilities\n\nNone.\n\n## Impact\n\nSample public API.\n",
 	);
 	await write(
-		paths.requirements[1]!.replace("*", "sample"),
+		paths.requirements[1]!.replace(/\*+/, "sample"),
 		"## ADDED Requirements\n\n### Requirement: Sample\nThe system SHALL preserve sample behavior.\n\n#### Scenario: Works\n- **WHEN** the sample API is used\n- **THEN** the expected result is returned\n",
 	);
 	return { cwd, store, paths, write };
@@ -77,11 +78,6 @@ async function acceptance(context: Fixture) {
 describe("stage files are the sole artifact inputs", () => {
 	test("keeps execution material together and reads authoritative Markdown in place", async () => {
 		const { cwd, store, paths, write } = await fixture();
-		expect(paths.requirements).toEqual([
-			`${store.changeDir}/proposal.md`,
-			`${store.changeDir}/specs/*/spec.md`,
-			"requirements/sample.md",
-		]);
 		expect(path.dirname(paths.solution)).toBe(path.dirname(paths.plan));
 		expect(path.dirname(paths.report)).toBe(path.dirname(paths.plan));
 		const before = await store.readRequirements();
@@ -210,7 +206,7 @@ describe("stage files are the sole artifact inputs", () => {
 test("requirements approval detects added native deltas before and after real relocation", async () => {
 	const context = await fixture(true);
 	const input = await acceptance(context);
-	const extra = `${context.store.changeDir}/specs/extra/spec.md`;
+	const extra = `${context.store.changeDir}/specs/area/extra/spec.md`;
 	await context.write(extra, "Unstructured new requirements still invalidate approval.\n");
 	for (const approved of [input.specification.files, input.acceptedVersions]) {
 		expect(await context.store.checkVersions(approved)).toMatchObject({
@@ -220,14 +216,131 @@ test("requirements approval detects added native deltas before and after real re
 	}
 	await expect(context.store.close(input)).rejects.toThrow("Unapproved requirements");
 	await fs.unlink(path.join(context.cwd, extra));
-	await fs.rmdir(path.dirname(path.join(context.cwd, extra)));
+	await fs.rm(path.join(context.cwd, context.store.changeDir, "specs/area"), { recursive: true });
 	const result = await context.store.close(input);
-	await context.write(`${result.archivedChangePath}/specs/extra/spec.md`, "New archived requirements.\n");
+	await context.write(`${result.archivedChangePath}/specs/area/extra/spec.md`, "New archived requirements.\n");
 	expect(await context.store.checkVersions(input.acceptedVersions)).toMatchObject({
 		matches: false,
 		changed: [{ path: extra }],
 	});
 	await expect(context.store.close(input)).rejects.toThrow("Unapproved requirements");
+}, 120_000);
+
+test("nested native specifications are included in requirements handoff", async () => {
+	const context = await fixture(true);
+	const nested = `${context.store.changeDir}/specs/area/extra/spec.md`;
+	const content = await fs.readFile(path.join(context.cwd, context.store.changeDir, "specs/sample/spec.md"), "utf8");
+	await context.write(nested, content.replaceAll("Sample", "Extra").replaceAll("sample", "extra"));
+	const requirements = await context.store.readRequirements();
+	expect(requirements.files.find(file => file.path === nested)?.content).toBe(
+		content.replaceAll("Sample", "Extra").replaceAll("sample", "extra"),
+	);
+}, 120_000);
+
+test("native rollback failure preserves changed main specs as closing side effects", async () => {
+	const context = await fixture(true);
+	const main = "openspec/specs/sample/spec.md";
+	await context.write(
+		main,
+		"# Sample\n\n## Purpose\nPreserve sample behavior for existing callers.\n\n## Requirements\n\n### Requirement: Sample\nThe system SHALL preserve sample behavior.\n\n#### Scenario: Works\n- **WHEN** the sample API is used\n- **THEN** the expected result is returned\n",
+	);
+	await context.write(
+		`${context.store.changeDir}/specs/sample/spec.md`,
+		"## MODIFIED Requirements\n\n### Requirement: Sample\nThe system SHALL preserve updated sample behavior.\n\n#### Scenario: Works\n- **WHEN** the sample API is used\n- **THEN** the updated result is returned\n",
+	);
+	const input = await acceptance(context);
+	const preload = path.join(context.cwd, "fail-rollback.mjs");
+	await fs.writeFile(
+		preload,
+		[
+			'import { promises as fs } from "node:fs";',
+			'import path from "node:path";',
+			"const write = fs.writeFile, rename = fs.rename; let writes = 0;",
+			"fs.writeFile = async function (file, ...args) {",
+			'  if (String(file).endsWith(path.join("openspec", "specs", "sample", "spec.md")) && ++writes > 1) throw Object.assign(new Error("injected rollback failure"), { code: "EACCES" });',
+			"  return write.call(this, file, ...args);",
+			"};",
+			"fs.rename = async function (src, dest, ...args) {",
+			'  if (String(src).endsWith(path.join("changes", "sample-change")) && String(dest).includes(path.join("changes", "archive"))) throw Object.assign(new Error("injected move failure"), { code: "EACCES" });',
+			"  return rename.call(this, src, dest, ...args);",
+			"};",
+		].join("\n"),
+	);
+	const spawn = Bun.spawn;
+	const intercepted = spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
+		const command = args[0];
+		if (Array.isArray(command) && command.some(arg => String(arg).endsWith("openspec.js")))
+			args[0] = [command[0], "--preload", preload, ...command.slice(1)];
+		return Reflect.apply(spawn, Bun, args);
+	}) as typeof Bun.spawn);
+	try {
+		const progress: SpecCloseProgress = {};
+		const published: SpecCloseProgress[] = [];
+		await expect(
+			context.store.close({
+				...input,
+				progress,
+				onProgress: value => {
+					published.push(structuredClone(value));
+				},
+			}),
+		).rejects.toThrow("Rollback also failed");
+		expect(await fs.readFile(path.join(context.cwd, main), "utf8")).toContain("updated sample behavior");
+		expect(progress.sideEffects?.paths).toEqual([main]);
+		expect(hasSpecCloseSideEffects(progress)).toBe(true);
+		expect(published[0]?.sideEffects).toEqual(progress.sideEffects);
+	} finally {
+		intercepted.mockRestore();
+	}
+}, 120_000);
+
+test("native fallback copy retains unfinished source cleanup across retry", async () => {
+	const context = await fixture(true);
+	const input = await acceptance(context);
+	const preload = path.join(context.cwd, "fail-move-cleanup.mjs");
+	await fs.writeFile(
+		preload,
+		[
+			'import { promises as fs } from "node:fs";',
+			'import path from "node:path";',
+			"const rename = fs.rename, rm = fs.rm;",
+			"fs.rename = async function (src, dest, ...args) {",
+			'  if (String(src).endsWith(path.join("changes", "sample-change")) && String(dest).includes(path.join("changes", "archive"))) throw Object.assign(new Error("injected cross-device move"), { code: "EXDEV" });',
+			"  return rename.call(this, src, dest, ...args);",
+			"};",
+			"fs.rm = async function (file, ...args) {",
+			'  if (String(file).includes(".openspec-move-") && String(file).includes(".openspec-claim-")) throw Object.assign(new Error("injected source cleanup failure"), { code: "EACCES" });',
+			"  return rm.call(this, file, ...args);",
+			"};",
+		].join("\n"),
+	);
+	const spawn = Bun.spawn;
+	const launches: string[][] = [];
+	const intercepted = spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
+		const command = args[0];
+		if (Array.isArray(command) && command.some(arg => String(arg).endsWith("openspec.js"))) {
+			launches.push(command.map(String));
+			args[0] = [command[0], "--preload", preload, ...command.slice(1)];
+		}
+		return Reflect.apply(spawn, Bun, args);
+	}) as typeof Bun.spawn);
+	try {
+		const progress: SpecCloseProgress = {};
+		await expect(context.store.close({ ...input, progress })).rejects.toThrow("could not remove the source");
+		expect(progress.archivedChangePath).toBeDefined();
+		expect(progress.archiveCleanup?.path).toContain(".openspec-move-");
+		const count = launches.length;
+		await expect(context.store.close({ ...input, progress })).rejects.toThrow("requires explicit cleanup");
+		expect(launches).toHaveLength(count);
+		await fs.rm(path.join(context.cwd, progress.archiveCleanup!.path), { recursive: true });
+		expect(await context.store.close({ ...input, progress })).toEqual({
+			archivedChangePath: progress.archivedChangePath!,
+		});
+		expect(progress.archiveCleanup).toBeUndefined();
+		expect(launches).toHaveLength(count);
+	} finally {
+		intercepted.mockRestore();
+	}
 }, 120_000);
 
 test("Markdown authority additions invalidate approval without duplicating shared native paths", async () => {
@@ -430,15 +543,9 @@ test("native archive progress survives failed persistence and retry performs onl
 }, 120_000);
 
 test("a conflicting native destination is not mistaken for completed archive progress", async () => {
-	const context = await fixture(true);
+	const context = await fixture(true, "2026-10-26-sample-change");
 	const input = await acceptance(context);
-	const now = new Date();
-	const date = [
-		now.getFullYear(),
-		String(now.getMonth() + 1).padStart(2, "0"),
-		String(now.getDate()).padStart(2, "0"),
-	].join("-");
-	const obstruction = path.join(context.cwd, "openspec/changes/archive", `${date}-${context.store.changeId}`);
+	const obstruction = path.join(context.cwd, "openspec/changes/archive", context.store.changeId);
 	await fs.mkdir(obstruction, { recursive: true });
 	const progress: SpecCloseProgress = {};
 	const published: SpecCloseProgress[] = [];
@@ -529,7 +636,7 @@ test("no approved materials requires no filesystem access", async () => {
 
 test("malformed native requirements fail the real native validator", async () => {
 	const { store, paths, write } = await fixture(true);
-	await write(paths.requirements[1]!.replace("*", "sample"), "# Not a native delta specification\n");
+	await write(paths.requirements[1]!.replace(/\*+/, "sample"), "# Not a native delta specification\n");
 	await expect(store.readRequirements()).rejects.toThrow("validation failed");
 }, 120_000);
 

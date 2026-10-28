@@ -469,6 +469,7 @@ export class ZCodeSessionManager {
 		const parent = this.get(parentId);
 		if (parent) await parent.session.sessionManager.flush();
 		const info = await this.#find(parentId);
+		await this.exitDev(info.cwd);
 		const manager = await SessionManager.forkFrom(info.path, info.cwd, this.#sessionDir, this.#storage, {
 			suppressBreadcrumb: true,
 		});

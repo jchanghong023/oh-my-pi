@@ -314,6 +314,21 @@ function nativeDetails(value: unknown): OmpSpecDetails[] {
 			.flatMap(([, item]) => nativeDetails(item)),
 	];
 }
+function teamConfigurationInteraction(frame: Frame) {
+	const parsed = conversationTopicFrameSchema.safeParse(frame.params);
+	if (!parsed.success || parsed.data.payload.kind !== "snapshot") return undefined;
+	return parsed.data.payload.snapshot.pendingInteractions.find(item => {
+		const payload = item.payload;
+		return (
+			payload.kind === "userInput" &&
+			!payload.freeText &&
+			payload.options?.length === 2 &&
+			payload.options.some(option => option.optionId === "开启") &&
+			payload.options.some(option => option.optionId === "关闭")
+		);
+	});
+}
+
 async function fixture(root: TempDir, baseUrl: string) {
 	const cwd = root.join("project"),
 		home = root.join("home"),
@@ -323,7 +338,7 @@ async function fixture(root: TempDir, baseUrl: string) {
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 200000\n`,
+		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-reasoning\n        reasoning: true\n        thinking:\n          mode: effort\n          efforts: [low, medium, high]\n        contextWindow: 200000\n`,
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
@@ -489,6 +504,144 @@ async function rejectChangedApproval(
 
 describe("Native Dev public stdio acceptance", () => {
 	test(
+		"side selection cannot fork or send until the workspace Dev owner exits successfully",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-side-selection-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new SpecPeer(config.cwd, config.env);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			await peer.subscribe(session, "side-root", "desktop-continuous");
+			await command(peer, session, "/dev");
+			await command(peer, session, startText);
+			await stageReady(peer, session, "requirements");
+			const sessions = async () =>
+				LegacyProtocol.zcodeSessionListResultSchema
+					.parse(await peer.request("session/list", { workspace: workspace(config.cwd) }))
+					.sessions.map(item => item.sessionId)
+					.sort();
+			const before = await sessions();
+			const requestCount = provider.requests.length;
+			const side = async (text: string) =>
+				commandAckSchema.parse(
+					await peer.request("v4/command", {
+						commandId: crypto.randomUUID(),
+						clientId: "native-spec-consumer",
+						sessionId: session,
+						type: "createSelectionSideSession",
+						payload: { firstInput: { text } },
+						issuedAt: Date.now(),
+					}),
+				);
+			const devDir = path.join(config.cwd, ".omp", "dev");
+			const statePath = path.join(devDir, "state.json");
+			const stateBefore = await fs.readFile(statePath);
+			if (process.platform === "win32") {
+				const runWindowsTool = async (name: string, args: string[]) => {
+					const child = Bun.spawn([path.join(process.env.SystemRoot!, "System32", name), ...args], {
+						stdin: "ignore",
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					const [code, stdout, stderr] = await Promise.all([
+						child.exited,
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+					]);
+					if (code !== 0) throw new Error(`${name} failed (${code}): ${stdout}\n${stderr}`);
+					return stdout;
+				};
+				const identity = await runWindowsTool("whoami.exe", ["/user", "/fo", "csv", "/nh"]);
+				const sid = identity.match(/S-1-(?:\d+-)+\d+/)?.[0];
+				if (!sid) throw new Error("Could not determine current Windows user SID");
+				try {
+					// Deny adding files only on this owned directory, so the atomic temp file cannot be created.
+					await runWindowsTool("icacls.exe", [devDir, "/deny", `*${sid}:(WD)`]);
+					const refused = await side("SIDE_REFUSED_INPUT");
+					expect(refused.status).toBe("failed");
+					expect(refused.result).toBeUndefined();
+					expect(provider.requests.length).toBe(requestCount);
+				} finally {
+					await runWindowsTool("icacls.exe", [devDir, "/remove:d", `*${sid}`]);
+				}
+			} else {
+				// A directory cannot be replaced by the staged state file on Unix.
+				const savedState = `${statePath}-saved`;
+				await fs.rename(statePath, savedState);
+				try {
+					await fs.mkdir(statePath);
+					await fs.writeFile(path.join(statePath, "obstruction"), "save obstruction");
+					const refused = await side("SIDE_REFUSED_INPUT");
+					expect(refused.status).toBe("failed");
+					expect(refused.result).toBeUndefined();
+					expect(provider.requests.length).toBe(requestCount);
+				} finally {
+					await fs.rm(statePath, { recursive: true, force: true });
+					await fs.rename(savedState, statePath);
+				}
+			}
+			expect(await fs.readFile(statePath)).toEqual(stateBefore);
+			expect(await sessions()).toEqual(before);
+			expect((await peer.interaction(session, current => current?.mode === "dev"))?.mode).toBe("dev");
+			const accepted = await side("OMP_SPEC_ORDINARY_CHILD");
+			expect(accepted).toMatchObject({ status: "accepted", result: { type: "createSelectionSideSession" } });
+			if (accepted.result?.type !== "createSelectionSideSession") throw new Error("Missing side session");
+			const child = accepted.result.sessionId;
+			expect(child).not.toBe(session);
+			await peer.interaction(session, current => !current || current.mode === "chat");
+			const subscription = await peer.subscribe(child, "side-child", "desktop-continuous");
+			await peer.next(
+				frame =>
+					isRecord(frame.params) &&
+					frame.params.subscriptionId === subscription.subscriptionId &&
+					strings(frame).includes("OMP_SPEC_ORDINARY_CHILD_DONE"),
+				subscription.since,
+			);
+			expect(
+				provider.requests.some(request => JSON.stringify(request.messages).includes("SIDE_REFUSED_INPUT")),
+			).toBe(false);
+			expect(provider.failures).toEqual([]);
+			await peer.close();
+		},
+		BUDGET,
+	);
+	test(
+		"root and stage reasoning controls affect only the visible native stage",
+		async () => {
+			await using root = await TempDir.create("@omp-dev-stage-reasoning-");
+			await using provider = createProviderFixture();
+			const config = await fixture(root, provider.baseUrl);
+			await using peer = new SpecPeer(config.cwd, config.env);
+			await peer.ready();
+			const session = await peer.create(config.cwd);
+			await peer.subscribe(session, "reasoning-root", "desktop-continuous");
+			await command(peer, session, "/dev");
+			await command(peer, session, startText);
+			const { stageId } = await stageReady(peer, session, "requirements");
+			const snapshot = async (id: string) =>
+				LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(await peer.request("session/read", { sessionId: id }));
+			const rootThought = (await snapshot(session)).settings.thoughtLevel.current;
+			await peer.request("session/setModel", {
+				sessionId: stageId,
+				model: { providerId: "spec-fixture", modelId: "chat-reasoning", options: { reasoningLevel: "high" } },
+			});
+			expect((await snapshot(stageId)).settings.thoughtLevel.available.map(item => item.value)).toContain("low");
+			expect((await snapshot(stageId)).settings.thoughtLevel.current).toBe("high");
+			await peer.request("session/setThoughtLevel", { sessionId: session, thoughtLevel: "low" });
+			expect((await snapshot(stageId)).settings.thoughtLevel.current).toBe("low");
+			expect((await snapshot(session)).settings.thoughtLevel.current).toBe(rootThought);
+			await peer.request("session/setThoughtLevel", { sessionId: stageId, thoughtLevel: "high" });
+			expect((await snapshot(stageId)).settings.thoughtLevel.current).toBe("high");
+			await peer.request("session/setThoughtLevel", { sessionId: stageId, thoughtLevel: "low" });
+			expect((await snapshot(stageId)).settings.thoughtLevel.current).toBe("low");
+			expect((await snapshot(session)).settings.thoughtLevel.current).toBe(rootThought);
+			expect(provider.failures).toEqual([]);
+			await peer.close();
+		},
+		BUDGET,
+	);
+	test(
 		"idle controls preserve baseline/replay; one workspace owner restores Team for another ordinary session",
 		async () => {
 			await using root = await TempDir.create("@omp-dev-owner-");
@@ -509,14 +662,10 @@ describe("Native Dev public stdio acceptance", () => {
 				frame =>
 					isRecord(frame.params) &&
 					frame.params.subscriptionId === configuration.subscriptionId &&
-					strings(frame).includes("方案 Team"),
+					!!teamConfigurationInteraction(frame),
 				configuration.since,
 			);
-			const payload = conversationTopicFrameSchema.parse(pending.params).payload;
-			if (payload.kind !== "snapshot") throw new Error("Missing native selector snapshot");
-			const interaction = payload.snapshot.pendingInteractions.find(
-				item => item.payload.kind === "userInput" && item.payload.prompt === "方案 Team",
-			);
+			const interaction = teamConfigurationInteraction(pending);
 			if (!interaction) throw new Error("Missing real configuration interaction");
 			expect(
 				commandAckSchema.parse(
@@ -934,14 +1083,10 @@ describe("Native Dev public stdio acceptance", () => {
 					frame =>
 						isRecord(frame.params) &&
 						frame.params.subscriptionId === configuration.subscriptionId &&
-						strings(frame).includes("方案 Team"),
+						!!teamConfigurationInteraction(frame),
 					configuration.since,
 				);
-				const payload = conversationTopicFrameSchema.parse(pending.params).payload;
-				if (payload.kind !== "snapshot") throw new Error("Missing native selector snapshot");
-				const interaction = payload.snapshot.pendingInteractions.find(
-					item => item.payload.kind === "userInput" && item.payload.prompt === "方案 Team",
-				);
+				const interaction = teamConfigurationInteraction(pending);
 				if (!interaction) throw new Error("Missing real Team configuration interaction");
 				expect(
 					commandAckSchema.parse(

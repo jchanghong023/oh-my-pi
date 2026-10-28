@@ -2,7 +2,13 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentSession } from "../../src/session/agent-session";
+import { Agent } from "@oh-my-pi/pi-agent-core";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { AsyncJobManager } from "../../src/async/job-manager";
+import { ModelRegistry } from "../../src/config/model-registry";
+import { Settings } from "../../src/config/settings";
+import { AgentSession } from "../../src/session/agent-session";
+import { SessionManager } from "../../src/session/session-manager";
 import type { SlashCommandRuntime } from "../../src/slash-commands/types";
 import {
 	getSpecDrivenController,
@@ -13,6 +19,7 @@ import {
 } from "../../src/spec-driven/controller";
 import type { SpecAgentInput, SpecConversationRecipient, SpecStageRole } from "../../src/spec-driven/types";
 import { DevWorkspace } from "../../src/spec-driven/workspace";
+import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 const roots: string[] = [];
 const owners: SpecDrivenController[] = [];
 afterEach(async () => {
@@ -30,6 +37,7 @@ function session(cwd: string): AgentSession {
 		queuedMessageCount: 0,
 		hasPendingAsyncWork: () => false,
 		getAsyncJobTree: () => null,
+		hasUnsettledAsyncJobTree: () => false,
 		waitForAdmittedSubmissions: async () => {},
 		waitForIdle: async () => {},
 		subscribe: (listener: (event: SessionEvent) => unknown) => {
@@ -132,7 +140,10 @@ async function fixture(cwd?: string) {
 					return paths;
 				},
 				async readRequirements() {
-					return { files: paths.requirements.map(file => doc(file.replace("*", "greeting"))), version: "bytes-1" };
+					return {
+						files: paths.requirements.map(file => doc(file.replace(/\*{1,2}/, "area/greeting"))),
+						version: "bytes-1",
+					};
 				},
 				async readSolution() {
 					return {
@@ -351,31 +362,40 @@ describe("Dev workspace controller", () => {
 		expect(f.owner.inputMode()).toBe("dev");
 		expect(peekSpecDrivenController(f.stages.get("requirements")!.sessionManager)).toBeUndefined();
 	});
-	test("restores executing sessions whose approved requirement files resolve output patterns", async () => {
-		const a = await fixture();
-		a.paths.requirements = ["openspec/changes/native/proposal.md", "openspec/changes/native/specs/*/spec.md"];
-		await a.owner.enter();
-		await a.owner.new("request");
-		await a.owner.next();
-		await a.owner.next("one");
-		await a.owner.next();
-		const saved = await a.state();
-		expect(saved.run.approvals.requirements.files.map((file: { path: string }) => file.path)).toEqual([
-			"openspec/changes/native/proposal.md",
-			"openspec/changes/native/specs/greeting/spec.md",
-		]);
-		expect(saved.run.paths.requirements).toContain("openspec/changes/native/specs/*/spec.md");
-		await a.owner.exit();
-		const b = await fixture(a.root);
-		await b.owner.enter();
-		expect(b.owner.status().phase).toBe("executing");
-		expect(b.owner.observation().interaction.recipient?.sessionFile).toBe(saved.run.sessions.executor.sessionFile);
-		const native = b.owner.nativeSession();
-		if (!native) throw new Error("Restored executor native session is missing");
-		expect(b.bound()).toBe(native);
-		expect(b.calls.some(call => call.startsWith("model:"))).toBe(false);
-		expect(await b.state()).toEqual(saved);
-	});
+	test.each(["*", "**"])(
+		"restores nested-only approved requirements from %s native output pattern",
+		async wildcard => {
+			const a = await fixture();
+			a.paths.requirements = [
+				"openspec/changes/native/proposal.md",
+				`openspec/changes/native/specs/${wildcard}/spec.md`,
+			];
+			await a.owner.enter();
+			await a.owner.setTeam(true);
+			await a.owner.new("request");
+			await a.owner.next();
+			await a.owner.next("one");
+			await a.owner.next();
+			const saved = await a.state();
+			expect(saved.run.approvals.requirements.files.map((file: { path: string }) => file.path)).toEqual([
+				"openspec/changes/native/proposal.md",
+				"openspec/changes/native/specs/area/greeting/spec.md",
+			]);
+			expect(saved.run.paths.requirements).toContain(`openspec/changes/native/specs/${wildcard}/spec.md`);
+			await a.owner.exit();
+			const b = await fixture(a.root);
+			await b.owner.enter();
+			expect(b.owner.status().phase).toBe("executing");
+			expect(b.owner.status().useTeam).toBe(true);
+			expect(b.owner.observation().approvals).toEqual(saved.run.approvals);
+			expect(b.owner.observation().interaction.recipient?.sessionFile).toBe(saved.run.sessions.executor.sessionFile);
+			const native = b.owner.nativeSession();
+			if (!native) throw new Error("Restored executor native session is missing");
+			expect(b.bound()).toBe(native);
+			expect(b.calls.some(call => call.startsWith("model:"))).toBe(false);
+			expect(await b.state()).toEqual(saved);
+		},
+	);
 	test("restores native references without model work even when history is unavailable", async () => {
 		const a = await fixture();
 		await a.owner.enter();
@@ -874,6 +894,25 @@ describe("Dev workspace controller", () => {
 		expect(f.owner.status().useTeam).toBe(true);
 		expect((await f.state()).run.archivedChangePath).toBe("archive/change");
 	});
+	test("restores incomplete close side effects and prevents back", async () => {
+		const f = await fixture();
+		await f.owner.enter();
+		await f.owner.new("request");
+		await f.owner.next();
+		await f.owner.next();
+		await f.owner.next();
+		await f.owner.exit();
+		const saved = await f.state();
+		saved.run.closing = {
+			sideEffects: { paths: ["openspec/specs/a/spec.md"], diagnostic: "rollback failed" },
+			archiveCleanup: { path: "openspec/changes/change (staged)", diagnostic: "cleanup failed" },
+		};
+		await fs.writeFile(path.join(f.root, ".omp/dev/state.json"), JSON.stringify(saved));
+		await f.owner.enter();
+		expect((await f.state()).run.closing).toEqual(saved.run.closing);
+		expect(f.owner.status().phase).toBe("executing");
+		expect(f.owner.actions().find(action => action.id === "back")?.available).toBe(false);
+	});
 	test("drop after partial archive abandons tracking without claiming side effects were reverted", async () => {
 		const f = await fixture();
 		await f.owner.enter();
@@ -966,4 +1005,75 @@ describe("Dev workspace controller", () => {
 		expect(f.owner.inputMode()).toBe("chat");
 		expect(f.owner.observation().released).toBe(true);
 	});
+});
+
+test("cancelled native jobs block control and new work until actual owner-tree settlement", async () => {
+	const f = await fixture();
+	await f.owner.enter();
+	await f.owner.new("request");
+	const manager = new AsyncJobManager({ maxRunningJobs: 100 });
+	const auth = createInMemoryAuthStorage();
+	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	if (!model) throw new Error("expected bundled model");
+	const rootId = `settlement-${crypto.randomUUID()}`;
+	const native = new AgentSession({
+		agent: new Agent({ initialState: { model, systemPrompt: ["test"], tools: [] } }),
+		sessionManager: SessionManager.inMemory(),
+		settings: Settings.isolated(),
+		modelRegistry: new ModelRegistry(auth),
+		agentId: rootId,
+		asyncJobManager: manager,
+	});
+	const stage = f.owner.nativeSession()!;
+	Object.assign(stage, { hasUnsettledAsyncJobTree: native.hasUnsettledAsyncJobTree.bind(native) });
+	const direct = Promise.withResolvers<string>();
+	const descendant = Promise.withResolvers<string>();
+	const unrelated = Promise.withResolvers<string>();
+	try {
+		const directId = manager.register("bash", "direct", () => direct.promise, { ownerId: rootId });
+		manager.cancel(directId);
+		const recent = Array.from({ length: 12 }, (_, index) =>
+			manager.register("bash", `recent-${index}`, async () => "done", { ownerId: rootId }),
+		);
+		await Promise.all(recent.map(id => manager.getJob(id)!.promise));
+		expect(manager.getJob(directId)?.endTime).toBeUndefined();
+		expect(() => f.owner.assertControlAllowed()).toThrow("尚未结清");
+		await expect(f.owner.next()).rejects.toThrow("尚未结清");
+		await expect(f.owner.back()).rejects.toThrow("尚未结清");
+		await expect(f.owner.submitText("continue")).rejects.toThrow("尚未结清");
+		direct.resolve("done");
+		await manager.getJob(directId)!.promise;
+		f.owner.assertControlAllowed();
+
+		const child = `${rootId}-child`;
+		const grandchild = `${rootId}-grandchild`;
+		const link1 = manager.register("task", "child", async () => "done", { ownerId: rootId, agentId: child });
+		const link2 = manager.register("task", "grandchild", async () => "done", { ownerId: child, agentId: grandchild });
+		await Promise.all([manager.getJob(link1)!.promise, manager.getJob(link2)!.promise]);
+		manager.evictCompletedJobs({ ownerId: rootId });
+		manager.evictCompletedJobs({ ownerId: child });
+		const otherId = manager.register("bash", "other", () => unrelated.promise, { ownerId: `${rootId}-other` });
+		manager.cancel(otherId);
+		f.owner.assertControlAllowed();
+		const descendantId = manager.register("bash", "descendant", () => descendant.promise, {
+			ownerId: grandchild,
+			foreground: true,
+		});
+		manager.cancel(descendantId);
+		expect(() => f.owner.assertControlAllowed()).toThrow("尚未结清");
+		await expect(f.owner.exit()).rejects.toThrow("尚未结清");
+		expect(f.owner.inputMode()).toBe("dev");
+		descendant.resolve("done");
+		await manager.getJob(descendantId)!.promise;
+		await f.owner.exit();
+		expect(f.owner.inputMode()).toBe("chat");
+	} finally {
+		direct.resolve("done");
+		descendant.resolve("done");
+		unrelated.resolve("done");
+		await manager.waitForAll();
+		await native.dispose();
+		await manager.dispose();
+		auth.close();
+	}
 });

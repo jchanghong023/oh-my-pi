@@ -51,6 +51,7 @@ function createContext(options?: {
 		},
 		sessionManager: { getSessionId: () => "session" },
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		compactionQueuedMessages: [],
 		locallySubmittedUserSignatures: new Set<string>(),
 		isBashMode: false,

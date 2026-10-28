@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { Type } from "@oh-my-pi/omptype/typebox";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -34,6 +35,7 @@ import { cfgAsyncEnabled } from "../../src/tools/settings";
 async function consumer(
 	options: Parameters<typeof createProviderFixture>[0] = {},
 	setup?: (cwd: string) => Promise<void>,
+	rootOptions?: Partial<Parameters<typeof createAgentSession>[0]>,
 ) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-four-native-"));
 	const agentDir = path.join(cwd, ".isolated-agent");
@@ -65,7 +67,9 @@ async function consumer(
 			"prewalk.enabled": false,
 			"tools.xdev": false,
 			"async.enabled": false,
+			"eval.js": true,
 			"todo.enabled": false,
+			"mcp.startupTimeoutMs": 0,
 		});
 		const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
 		const model = registry.find("spec-fixture", "chat-a");
@@ -89,6 +93,7 @@ async function consumer(
 			autoTitle: false,
 			offline: true,
 			bindProcessState: false,
+			...rootOptions,
 		}));
 		runtime = await createSpecDrivenRuntime({ session, settings, cwd });
 		return {
@@ -125,6 +130,90 @@ test("preparation creates four persistent native sessions without calling the mo
 	}
 	expect(fixture.provider.requests).toHaveLength(0);
 	expect(new Set(Object.values(fixture.runtime.sessionRefs()).map(ref => ref?.sessionId)).size).toBe(4);
+}, 120_000);
+
+test("executor inherits SDK custom tools and root capability switches", async () => {
+	const customTool = {
+		name: "sdk_dev_probe",
+		label: "SDK probe",
+		description: "Probe inherited SDK tool availability",
+		parameters: Type.Object({}),
+		async execute() {
+			return { content: [{ type: "text" as const, text: "ok" }] };
+		},
+	};
+	await using fixture = await consumer({}, undefined, { customTools: [customTool] });
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("native-capabilities", context);
+	await fixture.runtime.ports.agents.prepare("executor", context);
+	const stage = fixture.runtime.nativeSession("executor")!;
+	expect(stage.getEnabledToolNames()).toContain("sdk_dev_probe");
+	expect(stage.nativeChildCapabilities?.enableMCP).toBe(false);
+	expect(stage.nativeChildCapabilities?.enableLsp).toBe(false);
+	expect(stage.nativeChildCapabilities?.disableExtensionDiscovery).toBe(true);
+	expect(stage.getEnabledToolNames()).toContain("eval");
+}, 120_000);
+
+test("executor rebinds only active parent extension factories", async () => {
+	const starts = { disabled: 0, enabled: 0 };
+	await using fixture = await consumer({}, undefined, {
+		extensions: (["disabled", "enabled"] as const).map(name => api => {
+			api.on("session_start", () => {
+				starts[name]++;
+			});
+			api.registerTool({
+				name: `dev_${name}_extension`,
+				label: name,
+				description: `Probe ${name} extension`,
+				parameters: Type.Object({}),
+				async execute() {
+					return { content: [{ type: "text" as const, text: name }] };
+				},
+			});
+		}),
+	});
+	const runner = fixture.session.extensionRunner!;
+	const disabled = fixture.session.preparedExtensions!.find(prepared => prepared.path === "<inline-0>")!;
+	expect(runner.getRegisteredTool("dev_disabled_extension")).toBeDefined();
+	expect(runner.getRegisteredTool("dev_enabled_extension")).toBeDefined();
+	runner.setSuspendedExtensions(extension => extension.path === disabled.path);
+	const before = { ...starts };
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("active-extensions", context);
+	await fixture.runtime.ports.agents.prepare("executor", context);
+	const stage = fixture.runtime.nativeSession("executor")!;
+	expect(stage.getEnabledToolNames()).not.toContain("dev_disabled_extension");
+	expect(stage.getEnabledToolNames()).toContain("dev_enabled_extension");
+	expect(stage.extensionRunner?.getRegisteredTool("dev_disabled_extension")).toBeUndefined();
+	expect(stage.extensionRunner?.getRegisteredTool("dev_enabled_extension")).toBeDefined();
+	await stage.extensionRunner!.emit({ type: "session_start" });
+	expect(starts.disabled).toBe(before.disabled);
+	expect(starts.enabled).toBeGreaterThan(before.enabled);
+	expect(fixture.provider.requests).toHaveLength(0);
+}, 120_000);
+
+test("early stage retains explicit user skill invocation without adding automatic discovery", async () => {
+	const skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
+	await using fixture = await consumer(
+		{},
+		async cwd => {
+			const baseDir = path.join(cwd, "manual-skill");
+			await fs.mkdir(baseDir);
+			const filePath = path.join(baseDir, "SKILL.md");
+			await fs.writeFile(filePath, "---\nname: manual-probe\ndescription: manual probe\n---\nExplicit skill body");
+			skills.push({ name: "manual-probe", description: "manual probe", filePath, baseDir, source: "project" });
+		},
+		{ skills },
+	);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("manual-skill", context);
+	await fixture.runtime.ports.agents.prepare("solution", context);
+	const stage = fixture.runtime.nativeSession("solution")!;
+	const skill = stage.skills.find(item => item.name === "manual-probe");
+	expect(skill?.hide).toBe(true);
+	if (!skill) throw new Error("Manual skill missing from stage catalog");
+	const invoked = await stage.buildUserSkillPrompt(skill, { args: "" });
+	expect(JSON.stringify(invoked)).toContain("Explicit skill body");
 }, 120_000);
 
 test("original request remains in native requirements history, not saved workspace state", async () => {
@@ -522,6 +611,79 @@ test("saved session references reopen native history without model calls", async
 	}
 }, 120_000);
 
+test("stage model selection survives native history restoration", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "澄清需求。" }) });
+	await fixture.orchestrator.start("恢复阶段模型", "restore-stage-model");
+	const stage = fixture.runtime.nativeSession("requirements")!;
+	const selected = fixture.registry.find("spec-fixture", "chat-b");
+	if (!selected) throw new Error("Fixture model unavailable");
+	await stage.setModel(selected);
+	await stage.sessionManager.flush();
+	const saved = fixture.orchestrator.save();
+	const count = fixture.provider.requests.length;
+	await fixture.runtime.dispose();
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		const core = new SpecDrivenOrchestrator(restored.ports, {
+			...restored.options,
+			getUseTeam: () => false,
+			persist: async () => {},
+		});
+		await core.restore(saved);
+		expect(restored.nativeSession("requirements")?.model?.id).toBe("chat-b");
+		expect(fixture.session.model?.id).toBe("chat-a");
+		expect(fixture.provider.requests).toHaveLength(count);
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
+test("malformed stage journal preserves the run and recovers only on user continuation", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "继续澄清。" }) });
+	await fixture.orchestrator.start("原始需求", "malformed-native");
+	const saved = fixture.orchestrator.save();
+	const journal = saved.sessions.requirements?.sessionFile;
+	if (!journal) throw new Error("Expected persisted stage journal");
+	const damaged = "{invalid header\n";
+	await fixture.runtime.dispose();
+	await fs.writeFile(journal, damaged);
+	const count = fixture.provider.requests.length;
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		const core = new SpecDrivenOrchestrator(restored.ports, {
+			...restored.options,
+			getUseTeam: () => false,
+			persist: async () => {},
+		});
+		await core.restore(saved);
+		expect(core.status().phase).toBe("requirements");
+		expect(core.save().runId).toBe(saved.runId);
+		expect(fixture.provider.requests).toHaveLength(count);
+		expect(await fs.readFile(journal, "utf8")).toBe(damaged);
+		await core.converse("请继续");
+		const native = restored.nativeSession("requirements")!;
+		const recovered = native.messages.find(
+			message => message.role === "custom" && message.customType === "dev-history-recovery",
+		);
+		if (recovered?.role !== "custom" || typeof recovered.content !== "string")
+			throw new Error("Expected the native history recovery context");
+		expect(JSON.parse(recovered.content).unavailableSessionFile).toBe(journal);
+		expect(await fs.readFile(journal, "utf8")).toBe(damaged);
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
 test("archived executing recovery prepares old roles without active change instructions or automatic turns", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "恢复后的只读说明。" }) });
 	await fixture.orchestrator.start("归档前的原始需求", "archived-recovery");
@@ -659,36 +821,80 @@ test("stage scout uses native read-only capabilities even when the project overr
 test("executor delegates writable work to a native task child within the stage tool boundary", async () => {
 	const marker = "OMP_EXECUTOR_WRITE_PROBE";
 	let dispatched = false;
-	await using fixture = await consumer({
-		reply(request) {
-			const child = request.messages.some(
-				message =>
-					message.role === "user" &&
-					contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
-			);
-			if (child) {
-				if (!request.messages.some(message => message.role === "tool"))
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				const child = request.messages.some(
+					message =>
+						message.role === "user" &&
+						contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+				);
+				if (child) {
+					if (!request.messages.some(message => message.role === "tool"))
+						return {
+							tool: {
+								name: "write",
+								args: { i: "Writing probe", path: "probe.txt", content: "child wrote this" },
+							},
+						};
+					return { text: "wrote the probe" };
+				}
+				if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
+					dispatched = true;
 					return {
-						tool: { name: "write", args: { i: "Writing probe", path: "probe.txt", content: "child wrote this" } },
-					};
-				return { text: "wrote the probe" };
-			}
-			if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
-				dispatched = true;
-				return {
-					tool: {
-						name: "task",
-						args: {
-							i: "Delegating probe",
-							context: "Write the probe in the current workspace.",
-							tasks: [{ agent: "task", task: marker, solutionSpace: "write one file" }],
+						tool: {
+							name: "task",
+							args: {
+								i: "Delegating probe",
+								context: "Write the probe in the current workspace.",
+								tasks: [{ agent: "task", task: marker, solutionSpace: "write one file" }],
+							},
 						},
-					},
-				};
-			}
-			return { text: "finished" };
+					};
+				}
+				return { text: "finished" };
+			},
 		},
-	});
+		undefined,
+		{
+			extensions: [
+				api => {
+					api.registerTool({
+						name: "extension_child_probe",
+						label: "Extension child probe",
+						description: "Probe extension propagation",
+						parameters: Type.Object({}),
+						async execute() {
+							return { content: [{ type: "text" as const, text: "ok" }] };
+						},
+					});
+				},
+				api => {
+					api.registerTool({
+						name: "disabled_child_probe",
+						label: "Disabled child probe",
+						description: "Probe suspended extension propagation",
+						parameters: Type.Object({}),
+						async execute() {
+							return { content: [{ type: "text" as const, text: "disabled" }] };
+						},
+					});
+				},
+			],
+			customTools: [
+				{
+					name: "sdk_child_probe",
+					label: "SDK child probe",
+					description: "Probe SDK tool propagation",
+					parameters: Type.Object({}),
+					async execute() {
+						return { content: [{ type: "text" as const, text: "ok" }] };
+					},
+				},
+			],
+		},
+	);
+	fixture.session.extensionRunner!.setSuspendedExtensions(extension => extension.path === "<inline-1>");
 	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
 	await fixture.runtime.ports.artifacts.initialize("executor-child", context);
 	await fixture.runtime.ports.agents.run(
@@ -705,7 +911,96 @@ test("executor delegates writable work to a native task child within the stage t
 	);
 	const tools = (child?.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
 	expect(tools).toContain("write");
-	expect(tools).not.toContain("eval");
+	expect(tools).toContain("eval");
+	expect(tools).toContain("sdk_child_probe");
+	expect(tools).toContain("extension_child_probe");
+	expect(tools).not.toContain("disabled_child_probe");
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test("executor's explicitly restricted native reviewers cannot inherit extension or MCP capabilities", async () => {
+	const agents = ["reviewer", "security-reviewer", "scout"] as const;
+	let dispatched = false;
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
+					dispatched = true;
+					return {
+						tool: {
+							name: "task",
+							args: {
+								i: "Reviewing boundaries",
+								context: "Inspect only.",
+								tasks: agents.map(agent => ({
+									agent,
+									task: `OMP_RESTRICTED_${agent}`,
+									solutionSpace: "read-only inspection",
+								})),
+							},
+						},
+					};
+				}
+				return { text: "inspection complete" };
+			},
+		},
+		async cwd => {
+			await fs.writeFile(
+				path.join(cwd, ".mcp.json"),
+				JSON.stringify({
+					mcpServers: {
+						boundary: {
+							type: "stdio",
+							command: process.execPath,
+							args: [
+								path.join(import.meta.dir, "../fixtures/instructions-mcp.ts"),
+								"--context-mode-no-instructions",
+							],
+						},
+					},
+				}),
+			);
+		},
+		{
+			enableMCP: true,
+			extensions: [
+				api => {
+					api.registerTool({
+						name: "extension_write_probe",
+						label: "Extension write probe",
+						description: "Probe extension capability boundary",
+						parameters: Type.Object({}),
+						async execute() {
+							return { content: [{ type: "text" as const, text: "ok" }] };
+						},
+					});
+				},
+			],
+		},
+	);
+	expect(fixture.session.hasMCPManagerTool("mcp__boundary_ctx_execute")).toBe(true);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("reviewer-capabilities", context);
+	await fixture.runtime.ports.agents.prepare("executor", context);
+	const stage = fixture.runtime.nativeSession("executor")!;
+	expect(stage.getEnabledToolNames()).toContain("extension_write_probe");
+	expect(stage.hasMCPManagerTool("mcp__boundary_ctx_execute")).toBe(true);
+	await fixture.runtime.ports.agents.run(
+		{ role: "executor", entry: true, request: "Review the project", files: [], outputPaths: ["completion.md"] },
+		context,
+	);
+	for (const agent of agents) {
+		const child = fixture.provider.requests.find(request =>
+			request.messages.some(
+				message => message.role === "user" && contentText(message.content).includes(`OMP_RESTRICTED_${agent}`),
+			),
+		);
+		expect(child).toBeDefined();
+		const tools = (child?.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
+		expect(tools).not.toContain("extension_write_probe");
+		expect(tools).not.toContain("mcp__boundary_ctx_execute");
+		expect(JSON.stringify(child?.messages)).not.toContain("mcp__boundary_ctx_execute");
+	}
 	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);
 

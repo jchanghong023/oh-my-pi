@@ -241,6 +241,8 @@ export function createInteractiveModeContext(overrides: ContextOverrides = {}): 
 		focusedAgentId: undefined,
 		settings: contextSettings,
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
+		exitDevForSessionMove: async () => {},
 		assertCanActivateMode: () => {},
 		mcpManager: undefined,
 		oauthManualInput: new OAuthManualInputManager(),

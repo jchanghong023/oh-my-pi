@@ -296,6 +296,8 @@ export class AsyncJobManager {
 	}
 
 	readonly #jobs = new Map<string, AsyncJob>();
+	/** Native task lineage survives result eviction while descendants may still own work. */
+	readonly #agentParents = new Map<string, string>();
 	readonly #deliveries: AsyncJobDelivery[] = [];
 	readonly #inFlightDeliveries: AsyncJobDelivery[] = [];
 	readonly #suppressedDeliveries = new Set<string>();
@@ -469,6 +471,7 @@ export class AsyncJobManager {
 		})();
 
 		this.#jobs.set(id, job);
+		if (job.agentId !== undefined && job.ownerId !== undefined) this.#agentParents.set(job.agentId, job.ownerId);
 		return id;
 	}
 
@@ -501,6 +504,7 @@ export class AsyncJobManager {
 			agentOutputPublished: result.agentOutputPublished,
 		};
 		this.#jobs.set(id, job);
+		if (job.agentId !== undefined && job.ownerId !== undefined) this.#agentParents.set(job.agentId, job.ownerId);
 		this.#recordAgentReply(job);
 		this.#enqueueDelivery(id, result.text);
 		this.#scheduleEviction(id);
@@ -533,6 +537,16 @@ export class AsyncJobManager {
 
 	getJob(id: string): AsyncJob | undefined {
 		return this.#jobs.get(id);
+	}
+
+	/** Owner links established by native task registration, for descendant settlement. */
+	getAgentParentLinks(): ReadonlyMap<string, string> {
+		return this.#agentParents;
+	}
+
+	/** Jobs whose native run and cleanup have not yet returned, including cancelled and foreground jobs. */
+	getUnsettledJobs(): AsyncJob[] {
+		return Array.from(this.#jobs.values()).filter(job => job.endTime === undefined);
 	}
 
 	/** Running background jobs; foreground-backed jobs stay hidden until promoted. */
@@ -869,6 +883,7 @@ export class AsyncJobManager {
 		// process exit, since dispose does not await these cleanups).
 		for (const job of this.#jobs.values()) this.#runRetainedArtifactsCleanup(job, { bypassGrace: true });
 		this.#jobs.clear();
+		this.#agentParents.clear();
 		this.#deliveries.length = 0;
 		this.#notifyDeliveryQueueChanged();
 		this.#inFlightDeliveries.length = 0;

@@ -226,6 +226,7 @@ function createContext(): {
 		locallySubmittedUserSignatures: new Set<string>(),
 		onInputCallback,
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		addMessageToChat,
 		cancelPendingSubmission,
 		ensureLoadingAnimation,

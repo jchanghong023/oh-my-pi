@@ -70,6 +70,7 @@ function makeCtx(isStreaming = false, messages: AgentMessage[] = []) {
 		flushPendingBashComponents: vi.fn(),
 		handleHotkeysCommand: vi.fn(),
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		handleMCPCommand,
 		showStatus: vi.fn(),
 		onInputCallback,

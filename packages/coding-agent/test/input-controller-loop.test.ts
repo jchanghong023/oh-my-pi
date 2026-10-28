@@ -53,6 +53,7 @@ function createLoopContext(options: {
 		},
 		sessionManager: { getSessionId: () => sessionId, putBlob: vi.fn() },
 		handleDevInput: async () => false,
+		isDevInputRoute: () => false,
 		loopModeEnabled: true,
 		get loopPrompt() {
 			return loopPrompt;

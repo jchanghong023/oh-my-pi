@@ -34,7 +34,9 @@ export function registerMaterialFailureTests(roles: readonly ("requirements" | "
 							await tui("submit", role === "solution" ? "/dev next pure" : "/dev next");
 							const material =
 								role === "requirements"
-									? `openspec/changes/${before.run!.changeId}${kind === "malformed" ? "" : "/specs/*/spec.md"}`
+									? kind === "malformed"
+										? `openspec/changes/${before.run!.changeId}`
+										: before.run!.paths!.requirements.find(file => file.includes("*"))!
 									: (entry(provider, role).outputPaths as string[])[0]!;
 							const reason =
 								kind !== "malformed"

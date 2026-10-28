@@ -3336,6 +3336,17 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.vibeModeEnabled || this.#vibeModeEntry) throw new Error("请先退出 Vibe 模式。");
 	}
 
+	isDevInputRoute(text: string): boolean {
+		return (
+			peekSpecDrivenController(this.#rootSession.sessionManager)?.inputMode() === "dev" ||
+			parseSlashCommand(text)?.name === "dev"
+		);
+	}
+
+	async exitDevForSessionMove(): Promise<void> {
+		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
+	}
+
 	async handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean> {
 		const controller = peekSpecDrivenController(this.#rootSession.sessionManager);
 		const command = parseSlashCommand(text);

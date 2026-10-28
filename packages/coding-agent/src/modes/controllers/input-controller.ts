@@ -1056,6 +1056,10 @@ export class InputController {
 			let inputImages = this.ctx.editor.pendingImages.length > 0 ? [...this.ctx.editor.pendingImages] : undefined;
 			let inputImageLinks =
 				this.ctx.editor.pendingImageLinks.length > 0 ? [...this.ctx.editor.pendingImageLinks] : undefined;
+			// Dev routing may restore a rejected submission or consume it itself.
+			// Its snapshot must no longer be owned by the reset editor.
+			const devDraftDetached = this.ctx.isDevInputRoute(text);
+			if (devDraftDetached) this.#dropSubmittedPending(inputImages);
 			const devSessionId = this.ctx.sessionManager.getSessionId();
 			if (
 				await this.ctx.handleDevInput(text, {
@@ -1105,8 +1109,8 @@ export class InputController {
 			const submittedImages = inputImages;
 			// Team owns this submission before hooks can await: a new paste must
 			// start at #1, not inherit the submitted image prefix.
-			const teamDraftDetached = parseSlashCommand(text)?.name === "team";
-			if (teamDraftDetached) this.#dropSubmittedPending(inputImages);
+			const teamDraftDetached = devDraftDetached || parseSlashCommand(text)?.name === "team";
+			if (teamDraftDetached && !devDraftDetached) this.#dropSubmittedPending(inputImages);
 
 			// A startup-deferred extension's input hook must see the first submission.
 			if (this.ctx.session.hasPendingDeferredExtensions) await this.ctx.session.loadDeferredExtensions();
@@ -1309,10 +1313,16 @@ export class InputController {
 			// submission path creates an optimistic user message; otherwise a
 			// consumed command remains rendered like a prompt sent to the model.
 			if (this.#isLocalExtensionCommand(text)) {
-				this.ctx.editor.clearDraft(text);
+				if (devDraftDetached) this.ctx.editor.addToHistory(text);
+				else this.ctx.editor.clearDraft(text);
 				try {
 					await this.ctx.session.prompt(text, { images: inputImages });
 				} catch (error) {
+					if (devDraftDetached) {
+						restoreDetachedDraft(this.ctx.editor, text, inputImages, inputImageLinks);
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						return;
+					}
 					// Restore the snapshot only when nothing newer was attached
 					// while the command ran; otherwise the newer draft wins.
 					if (inputImages && inputImages.length > 0 && this.ctx.editor.pendingImages.length === 0) {
@@ -1334,10 +1344,12 @@ export class InputController {
 				this.ctx.editor.addToHistory(text);
 				// Enter already cleared the editor synchronously. A later clear here
 				// can erase the tail of an unbracketed paste arriving after Enter.
-				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.editor.pendingImages = [];
-				this.ctx.editor.pendingImageLinks = [];
+				if (!devDraftDetached) {
+					this.ctx.editor.imageLinks = undefined;
+					this.ctx.editor.pendingImages = [];
+					this.ctx.editor.pendingImageLinks = [];
+				}
 				// Record the signature so the queued message's eventual delivery
 				// (a user-role `message_start` event) leaves any draft the user has
 				// typed since queuing intact. Same protection as #783, applied to
@@ -1355,6 +1367,13 @@ export class InputController {
 					// state untouched, so the previous body (if any) survives.
 					if (submittedMode === "loop" && forwarded) this.ctx.setLoopPrompt(text);
 				} catch (error) {
+					if (devDraftDetached) {
+						restoreDetachedDraft(this.ctx.editor, text, images, inputImageLinks);
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						this.ctx.updatePendingMessagesDisplay();
+						this.ctx.ui.requestRender();
+						return;
+					}
 					// Don't lose the queued steer draft: restore images then the collapsed
 					// text so chip tokens (and band cards) survive the retry.
 					if (images && images.length > 0) {
@@ -1386,10 +1405,12 @@ export class InputController {
 
 			if (this.ctx.onInputCallback) {
 				// Include any pending images from clipboard paste
-				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.editor.pendingImages = [];
-				this.ctx.editor.pendingImageLinks = [];
+				if (!devDraftDetached) {
+					this.ctx.editor.imageLinks = undefined;
+					this.ctx.editor.pendingImages = [];
+					this.ctx.editor.pendingImageLinks = [];
+				}
 
 				// Render user message immediately, then let session events catch up.
 				// Tag the submission as "steer": this is a normal Enter the controller
@@ -1415,10 +1436,12 @@ export class InputController {
 				// real prompt directly; if a background turn starts in the gap,
 				// `streamingBehavior: "steer"` preserves the typed-message queueing
 				// semantics instead of throwing AgentBusyError.
-				this.ctx.editor.imageLinks = undefined;
 				const images = inputImages && inputImages.length > 0 ? [...inputImages] : undefined;
-				this.ctx.editor.pendingImages = [];
-				this.ctx.editor.pendingImageLinks = [];
+				if (!devDraftDetached) {
+					this.ctx.editor.imageLinks = undefined;
+					this.ctx.editor.pendingImages = [];
+					this.ctx.editor.pendingImageLinks = [];
+				}
 				try {
 					const forwarded = await this.ctx.withLocalSubmission(
 						text,
@@ -1432,6 +1455,14 @@ export class InputController {
 					// loop instead of resubmitting a local action on next idle.
 					if (!forwarded && this.ctx.loopPrompt === text) this.ctx.pauseLoop();
 				} catch (error) {
+					if (devDraftDetached) {
+						restoreDetachedDraft(this.ctx.editor, text, images, inputImageLinks);
+						this.ctx.showError(error instanceof Error ? error.message : String(error));
+						if (this.ctx.loopPrompt === text) this.ctx.pauseLoop();
+						this.ctx.updatePendingMessagesDisplay();
+						this.ctx.ui.requestRender();
+						return;
+					}
 					// Don't lose the message: hand images then collapsed text back to the
 					// editor so the user can retry (e.g. prompt dispatch rejecting an
 					// extension command).

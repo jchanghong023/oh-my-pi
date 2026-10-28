@@ -167,7 +167,7 @@ test.skipIf(!tuiTest)(
 				const requirements = (await stage("requirements")).run!;
 				const requirementsInput = entry(provider, "requirements");
 				await viewMaterials(
-					(requirementsInput.outputPaths as string[]).map(file => file.replace("*", "greeting")),
+					(requirementsInput.outputPaths as string[]).map(file => file.replace(/\*+/, "greeting")),
 					"requirements-details-returned-focus",
 					true,
 				);

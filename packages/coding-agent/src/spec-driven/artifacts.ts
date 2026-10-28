@@ -25,6 +25,53 @@ export interface SpecCloseProgress {
 	synced?: boolean;
 	archivedChangePath?: string;
 	retirementCleanup?: { paths: string[]; diagnostic: string };
+	sideEffects?: { paths: string[]; diagnostic: string };
+	archiveCleanup?: { path: string; diagnostic: string };
+}
+
+export function hasSpecCloseSideEffects(progress?: SpecCloseProgress): boolean {
+	return !!(progress?.synced || progress?.archivedChangePath || progress?.sideEffects);
+}
+
+function isNativeSpec(file: string): boolean {
+	const segments = file.split(/[\\/]/);
+	return segments.length > 1 && segments.at(-1) === "spec.md" && segments.every(segment => !segment.startsWith("."));
+}
+
+/** Both the recursive pattern and previously saved native patterns represent native discovery. */
+export function matchesNativeSpecPattern(pattern: string, file: string): boolean {
+	const match = /^(.*\/specs\/)\*{1,2}\/spec\.md$/.exec(pattern);
+	if (!match || !file.startsWith(match[1])) return false;
+	const relative = file.slice(match[1].length);
+	const segments = relative.split("/");
+	return (
+		segments.length >= 2 &&
+		segments.at(-1) === "spec.md" &&
+		segments.every(
+			segment => segment.length > 0 && !segment.startsWith(".") && !segment.includes("*") && !segment.includes("\\"),
+		)
+	);
+}
+
+/** Check exact native-discovered spelling without accepting links or file aliases as authority. */
+export async function existingNativeSpec(cwd: string, relative: string): Promise<boolean> {
+	const segments = relative.split("/");
+	if (!isNativeSpec(relative) || segments.some(segment => !segment || segment === "..")) return false;
+	let current = cwd;
+	try {
+		for (const [index, segment] of segments.entries()) {
+			if (!(await fs.readdir(current)).includes(segment)) return false;
+			current = path.join(current, segment);
+			const entry = await fs.lstat(current);
+			if (entry.isSymbolicLink()) return false;
+			if (index === segments.length - 1) return entry.isFile() && entry.nlink === 1;
+			if (!entry.isDirectory()) return false;
+		}
+	} catch (error) {
+		if (isEnoent(error) || (error as NodeJS.ErrnoException).code === "ENOTDIR") return false;
+		throw error;
+	}
+	return false;
 }
 export function artifactVersion(content: string | Uint8Array): string {
 	return crypto.createHash("sha256").update(content).digest("hex");
@@ -136,6 +183,33 @@ async function filesBelow(root: string, prefix = ""): Promise<string[]> {
 	return result.sort();
 }
 
+/** Match native discovery: skip dot entries and linked directories, but read linked spec files. */
+async function nativeSpecsBelow(cwd: string, directory: string): Promise<string[]> {
+	const root = await containedSpecPath(cwd, directory);
+	const files: string[] = [];
+	const walk = async (relative: string): Promise<void> => {
+		for (const entry of await fs.readdir(path.join(root, relative), { withFileTypes: true })) {
+			if (entry.name.startsWith(".")) continue;
+			const child = path.join(relative, entry.name);
+			if (entry.isDirectory()) await walk(child);
+			else if (entry.name === "spec.md" && relative) {
+				if (entry.isSymbolicLink()) {
+					try {
+						if (!(await fs.stat(path.join(root, child))).isFile()) continue;
+					} catch (error) {
+						if (isEnoent(error)) continue;
+						throw error;
+					}
+				} else if (!entry.isFile()) continue;
+				await containedSpecPath(cwd, `${directory}/${child.replaceAll(path.sep, "/")}`);
+				files.push(child);
+			}
+		}
+	};
+	await walk("");
+	return files.sort();
+}
+
 /** Enumerate formal materials without validating or changing the workflow. */
 export async function formalMaterialPaths(
 	cwd: string,
@@ -150,17 +224,14 @@ export async function formalMaterialPaths(
 			: file;
 	const requirements: string[] = [];
 	for (const file of paths.requirements) {
-		if (file !== `${changeDir}/specs/*/spec.md`) {
+		if (file !== `${changeDir}/specs/*/spec.md` && file !== `${changeDir}/specs/**/spec.md`) {
 			requirements.push(relocate(file));
 			continue;
 		}
 		const directory = relocate(`${changeDir}/specs`);
 		try {
-			const root = await containedSpecPath(cwd, directory);
 			requirements.push(
-				...(await filesBelow(root))
-					.filter(entry => /^[^\\/]+[\\/]spec\.md$/.test(entry))
-					.map(entry => `${directory}/${entry.replaceAll(path.sep, "/")}`),
+				...(await nativeSpecsBelow(cwd, directory)).map(entry => `${directory}/${entry.replaceAll(path.sep, "/")}`),
 			);
 		} catch (error) {
 			if (!isEnoent(error) && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
@@ -211,7 +282,7 @@ export class SpecArtifactStore {
 		return {
 			requirements: [
 				`${this.changeDir}/proposal.md`,
-				`${this.changeDir}/specs/*/spec.md`,
+				`${this.changeDir}/specs/**/spec.md`,
 				...(!this.native ? await this.#markdownPaths() : []),
 			],
 			solution: this.planPath.replace(/\.md$/, "-solutions.json"),
@@ -260,14 +331,14 @@ export class SpecArtifactStore {
 		const root = await containedSpecPath(this.cwd, directory);
 		let entries: string[];
 		try {
-			entries = await filesBelow(root);
+			entries = await nativeSpecsBelow(this.cwd, directory);
 		} catch (error) {
 			if (!isEnoent(error) || (error as NodeJS.ErrnoException).path !== root) throw error;
 			throw new Error(`缺少需求规格，请补齐后重试 /dev next。路径：${directory}/*/spec.md；原因：${error.message}`, {
 				cause: error,
 			});
 		}
-		const specs = entries.filter(file => /^[a-z0-9]+(?:-[a-z0-9]+)*[\\/]spec\.md$/.test(file));
+		const specs = entries.filter(isNativeSpec);
 		if (!specs.length)
 			throw new Error(
 				`缺少需求规格，请补齐后重试 /dev next。路径：${directory}/*/spec.md；原因：目录中没有有效规格文件`,
@@ -314,7 +385,7 @@ export class SpecArtifactStore {
 		const approved = new Set(files.map(file => file.path));
 		const requirementPaths = this.paths?.requirements ?? [
 			`${this.changeDir}/proposal.md`,
-			`${this.changeDir}/specs/*/spec.md`,
+			`${this.changeDir}/specs/**/spec.md`,
 		];
 		const isRequirement = (file: string) =>
 			file === `${this.changeDir}/proposal.md` ||
@@ -440,8 +511,40 @@ export class SpecArtifactStore {
 			delete progress.retirementCleanup;
 			await publish();
 		}
+		if (progress.archiveCleanup) {
+			const { path: source, diagnostic } = progress.archiveCleanup;
+			try {
+				await fs.lstat(await containedSpecPath(this.cwd, source));
+				throw new Error(`${diagnostic}\nArchive source still requires explicit cleanup: ${source}`);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+			delete progress.archiveCleanup;
+			await publish();
+		}
 		if (!progress.archivedChangePath) {
 			await this.#assertOwnSchema(signal);
+			// Only the main specs corresponding to accepted deltas can be mutated by native sync.
+			const targets =
+				this.native && !progress.synced
+					? input.acceptedVersions
+							.map(file => file.path)
+							.filter(
+								file =>
+									file.startsWith(`${this.changeDir}/specs/`) &&
+									isNativeSpec(file.slice(`${this.changeDir}/specs/`.length)),
+							)
+							.map(file => `openspec/specs/${file.slice(`${this.changeDir}/specs/`.length)}`)
+					: [];
+			const fingerprint = async (file: string): Promise<string | null> => {
+				try {
+					return artifactVersion(await fs.readFile(await containedSpecPath(this.cwd, file)));
+				} catch (error) {
+					if (isEnoent(error)) return null;
+					throw error;
+				}
+			};
+			const before = await Promise.all(targets.map(fingerprint));
 			let result: SpecDrivenProcessResult | undefined;
 			let failure: unknown;
 			try {
@@ -478,21 +581,60 @@ export class SpecArtifactStore {
 					// A failed/lost response is recoverable from the native destination, not a guessed date.
 				}
 			}
-			// Even a nonzero exit can follow a completed native move (e.g. retirement cleanup failed).
+			// Even a nonzero exit can follow a completed native move.
 			archived ??= await this.#findArchive(input.acceptedVersions);
 			if (result && result.exitCode !== 0) {
 				try {
 					const value = JSON.parse(result.stdout) as { status?: { code?: string; message?: string }[] };
-					const cleanup = value.status?.find(item => item.code === "archive_retirement_cleanup_failed");
+					const diagnostics = value.status ?? [];
+					const cleanup = diagnostics.find(item => item.code === "archive_retirement_cleanup_failed");
 					if (cleanup) {
 						const diagnostic = cleanup.message ?? "Native archive retirement cleanup failed";
-						const paths = [...diagnostic.matchAll(/Could not finalize the retirement backup at (.*?) \(/g)]
+						const paths = [
+							...diagnostic.matchAll(
+								/Could not finalize the retirement backup at (.+?spec\.md\.openspec-retire-[a-f0-9-]+) \(/g,
+							),
+						]
 							.map(match => path.relative(this.cwd, path.resolve(this.cwd, match[1]!)).replaceAll(path.sep, "/"))
-							.filter(
-								file =>
-									file.startsWith("openspec/specs/") && /\/spec\.md\.openspec-retire-[a-f0-9-]+$/.test(file),
-							);
+							.filter(file => file.startsWith("openspec/specs/") && !file.split("/").includes(".."));
 						progress.retirementCleanup = { paths: [...new Set(paths)], diagnostic };
+					}
+					for (const item of diagnostics) {
+						const diagnostic = item.message ?? "";
+						const move = diagnostic.match(
+							/Copied ([\s\S]+?) to ([\s\S]+?), but could not remove the source at ([\s\S]+?) completely \(/,
+						);
+						if (move && move[1] === move[3]) {
+							const source = path.relative(this.cwd, path.resolve(this.cwd, move[3]!)).replaceAll(path.sep, "/");
+							const destination = path
+								.relative(this.cwd, path.resolve(this.cwd, move[2]!))
+								.replaceAll(path.sep, "/");
+							const validSource =
+								source === this.changeDir || /^openspec\/changes\/\.openspec-move-[a-f0-9-]+$/.test(source);
+							const validDestination =
+								destination.startsWith("openspec/changes/archive/") && !destination.split("/").includes("..");
+							if (
+								validSource &&
+								validDestination &&
+								(await this.#checkVersionsAt(input.acceptedVersions, destination)).matches
+							) {
+								archived = destination;
+								progress.archiveCleanup = { path: source, diagnostic };
+							}
+						}
+					}
+					const rollback = diagnostics.find(item => item.message?.includes("Rollback also failed:"));
+					if (rollback) {
+						const changed: string[] = [];
+						for (let i = 0; i < targets.length; i++) {
+							try {
+								if ((await fingerprint(targets[i]!)) !== before[i]) changed.push(targets[i]!);
+							} catch {
+								// An unreadable target cannot be proven restored.
+								changed.push(targets[i]!);
+							}
+						}
+						if (changed.length) progress.sideEffects = { paths: changed, diagnostic: rollback.message! };
 					}
 				} catch {
 					// Non-JSON diagnostics retain the ordinary native failure below.
@@ -501,6 +643,9 @@ export class SpecArtifactStore {
 			if (archived) {
 				progress.archivedChangePath = archived;
 				progress.synced = true;
+				delete progress.sideEffects;
+			}
+			if (archived || progress.sideEffects || progress.retirementCleanup || progress.archiveCleanup) {
 				await publish();
 			}
 			if (failure) throw failure;

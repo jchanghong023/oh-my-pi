@@ -51,7 +51,6 @@
 - Restore bundled Superpowers skills and supporting prompts to their pinned upstream contents.
 - Restore the pinned upstream Superpowers plugins, extensions and runtime resources without rewriting their tool, agent or script instructions.
 
-
 - Retain the bundled upstream OpenSpec skill resources while limiting ordinary discovery to the five requirements workflows.
 
 - Require `/dev` requirements clarification, explicit solution recommendations, and implementation and review delegation with test-first execution.
@@ -64,7 +63,7 @@
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
 - Compact working status now distinguishes the viewed agent's model waiting, thinking, replies, tool-call generation, tool execution and user/background waits without aggregating other agents or changing execution.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
-- Automatically inject the original stage skills in `/dev`: Brainstorming then Grill-me at the end of the requirements system prompt, writing-plans for planning and subagent-driven-development for execution. Solutions receive no interview skill; solution, planning and execution proceed from approved inputs without mandatory interviews or extra skill confirmation rounds. Fixed stage boundaries follow non-requirements skill text. No manual skill invocation is required; Dev authorization boundaries remain unchanged.
+- Automatically inject the original stage skills in `/dev`: Grill-me for requirements, writing-plans for planning, and using-superpowers plus subagent-driven-development for execution. Requirements do not automatically inject Brainstorming; solutions receive no interview skill. Stage authorization boundaries remain unchanged.
 - Limit Dev to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.
 - Hand complete original artifacts, all solution candidates, the selected ID, raw approvals and Team configuration directly to each entering stage without model summaries. Same-stage input continues the native session without reinjecting unchanged materials or rerunning Team. Formal-material version mismatches block dependent work without changing phase or scanning business code.
 - Make executor next the user's sole final acceptance: the program directly invokes native OpenSpec sync, validation and archive without a model or closing agent. Partial failure preserves the executor conversation and actual closing progress; ordinary questions stay read-only, explicitly requested fixes are limited to closing faults that do not change accepted content, and the user's next continues only remaining steps. A completed archive move does not hide failed retirement-backup cleanup; retry verifies that remaining cleanup without repeating sync or archive.
@@ -86,6 +85,8 @@
 
 ### Fixed
 
+- Let `/dev` execution agents wait for asynchronous subagent results without repeatedly polling status or filling the conversation with waiting updates.
+- Fix `/dev` native execution capabilities, recursive requirements handoff and approval checks, report acceptance boundaries, cancellation settlement, stage recovery, and partial sync/archive cleanup so failures and remaining work are retained accurately.
 - Show actual diffs for conflict resolutions, including successful files when a bulk resolution partially fails.
 - Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
 - Project and save global Team configuration without requiring a chat session; preserve ordered explicit members and defer default model selection until a discussion starts.

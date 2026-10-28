@@ -80,6 +80,7 @@ function createCwdContext(sourceDir: string, isStreaming = false, showImages = t
 			state.workspaceCwd = cwd;
 			return true;
 		}),
+		exitDevForSessionMove: async () => {},
 		withBtwSessionMove: vi.fn(async (operation: () => Promise<boolean>) => {
 			if (state.gateHeld) throw new Error("Nested session move gate");
 			state.gateHeld = true;
@@ -103,6 +104,22 @@ describe("bash shortcut command", () => {
 		const theme = await getThemeByName("dark");
 		if (!theme) throw new Error("Expected dark theme");
 		setThemeInstance(theme);
+	});
+
+	it("does not execute or move a persistent shell cd when Dev cannot exit", async () => {
+		const source = path.resolve("dev-exit-source");
+		const { ctx, executeBash, state } = createCwdContext(source);
+		ctx.exitDevForSessionMove = async () => {
+			throw new Error("stage still settling");
+		};
+		await new CommandController(ctx).handleBashCommand("cd child");
+		expect(executeBash).not.toHaveBeenCalled();
+		expect(ctx.session.moveSession).not.toHaveBeenCalled();
+		expect(ctx.applyCwdChange).not.toHaveBeenCalled();
+		expect(state.cwd).toBe(source);
+		expect(state.workspaceCwd).toBe(source);
+		expect(state.artifactCwd).toBe(source);
+		expect(ctx.session.emitNotice).toHaveBeenCalledWith("error", expect.stringContaining("stage still settling"));
 	});
 
 	it("persists standalone and bare cd before the next user-shell command", async () => {

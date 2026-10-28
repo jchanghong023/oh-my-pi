@@ -416,7 +416,7 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 			return tool(request, "read", { i: "Reading complete stage input", path: `${file.path}:raw` });
 	const outputs = (input.outputPaths as unknown[])
 		.filter((value): value is string => typeof value === "string")
-		.map(value => value.replace("*", "greeting"));
+		.map(value => value.replace(/\*+/, "greeting"));
 	if (!outputs.length) throw new Error(`Missing native outputPaths for ${role}`);
 	const failure = options.fileFailure?.role === role ? options.fileFailure : undefined;
 	if (failure?.kind === "missing" && role !== "executor") return { text: "已讨论需求，但尚未创建阶段交付文件。" };

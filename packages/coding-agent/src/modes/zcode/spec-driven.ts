@@ -298,10 +298,15 @@ export class OmpSpecDrivenBridge {
 			)
 				materials.push({ id: id!, title: title!, readiness: "not_generated", sourceVersion: null });
 		}
-		const terminal = saved.phase === "idle" && !!saved.archivedChangePath;
+		const closing = status?.closing ?? saved.closing;
+		const recoveryDiagnostic =
+			closing?.sideEffects?.diagnostic ??
+			closing?.archiveCleanup?.diagnostic ??
+			closing?.retirementCleanup?.diagnostic;
+		const terminal = saved.phase === "idle" && !!saved.archivedChangePath && !recoveryDiagnostic;
 		const state: OmpSpecDetails["state"] = terminal
 			? "terminal"
-			: !live || status?.blockedReason || owner?.current?.error
+			: !live || status?.blockedReason || owner?.current?.error || recoveryDiagnostic
 				? "blocked"
 				: status?.awaitingAcceptance
 					? "waiting"
@@ -327,8 +332,8 @@ export class OmpSpecDrivenBridge {
 				explanation:
 					status?.blockedReason ??
 					(live
-						? (owner.current!.error ?? owner.current!.notice ?? state)
-						: "Read-only historical observation; no live native owner"),
+						? (owner.current!.error ?? recoveryDiagnostic ?? owner.current!.notice ?? state)
+						: (recoveryDiagnostic ?? "Read-only historical observation; no live native owner")),
 				useTeam,
 				teamMutable: live && owner.current!.teamMutable,
 				generation: status?.generation ?? saved.generation,
@@ -340,7 +345,7 @@ export class OmpSpecDrivenBridge {
 				createdAt: saved.createdAt,
 				updatedAt: saved.updatedAt,
 				awaitingAcceptance: status?.awaitingAcceptance ?? saved.awaitingAcceptance,
-				closing: status?.closing ?? saved.closing,
+				closing,
 				archivedChangePath: saved.archivedChangePath,
 				versions: {
 					...versions,

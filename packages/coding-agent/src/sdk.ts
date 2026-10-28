@@ -1969,6 +1969,20 @@ const embeddingSessionHooks = new WeakMap<
 export function cloneEmbeddingToolRestrictions(modelRegistry: ModelRegistry | undefined): ToolRestrictions | undefined {
 	return modelRegistry ? embeddingSessionHooks.get(modelRegistry)?.toolRestrictions?.clone() : undefined;
 }
+export type NativeChildCapabilities = Pick<
+	CreateAgentSessionOptions,
+	| "customTools"
+	| "enableMCP"
+	| "disableExtensionDiscovery"
+	| "enableLsp"
+	| "lspReadOnly"
+	| "enableIrc"
+	| "toolNames"
+	| "restrictToolNames"
+	| "allowRestrictedCustomTools"
+	| "mcpTools"
+	| "mcpManager"
+>;
 
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const execution = currentExecutionModel();
@@ -1990,7 +2004,21 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
-	return await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options));
+	const result = await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options));
+	result.session.nativeChildCapabilities = {
+		customTools: options.customTools,
+		disableExtensionDiscovery: options.disableExtensionDiscovery,
+		enableMCP: options.enableMCP,
+		enableLsp: options.enableLsp,
+		lspReadOnly: options.lspReadOnly,
+		enableIrc: options.enableIrc,
+		toolNames: options.toolNames,
+		restrictToolNames: options.restrictToolNames,
+		allowRestrictedCustomTools: options.allowRestrictedCustomTools,
+		mcpTools: options.mcpTools,
+		mcpManager: result.mcpManager,
+	};
+	return result;
 }
 
 async function createAgentSessionScoped(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
