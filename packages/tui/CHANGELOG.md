@@ -34,7 +34,6 @@
 - Keep selected `/jobs` rows and their details reachable in tall task trees, and keep autocomplete selection visible in short terminals without accepting hidden candidates.
 - Offer one canonical logout entry per stored credential while retaining distinct providers and login methods.
 - Fold successful conflict-resolution writes with other file changes and retain their diffs and error feedback.
-- Keep compact user messages and replies reachable in terminal history when the input, thinking area, or HUD grows, without dropping or duplicating rows at the viewport boundary.
 - Keep tree guides aligned on wrapped `/session` detail lines.
 - Keep UI status notices in place without splitting surrounding compact tool runs or consuming preview slots.
 - Keep Agent `Message` calls in the surrounding compact tool run instead of treating them as file-write boundaries.
