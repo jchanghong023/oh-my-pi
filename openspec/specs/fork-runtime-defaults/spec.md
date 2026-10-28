@@ -37,6 +37,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 
 - `recap.enabled=false`
 - `title.generator=smol`：所有平台、普通与 offline 进程的自动会话标题优先使用与内置 `scout` 相同的 `@smol` 角色解析，随当前 smol 配置／预设变化，不固定模型 ID。smol 无法解析时直接使用当前会话模型；smol 请求失败、缺少凭证或未生成有效标题时，除非显式设置 `retry.modelFallback=false`，否则回退到当前会话模型；两者相同（含路由）只尝试一次，不插入 tiny／commit／default 或模型专属 fallback 链。不默认分叉主模型，也不预热无关 tiny 标题 Worker；保留取消及本地推理不回退付费模型的边界。重新规划触发的标题刷新共用此解析；显式 `title.generator=fork`／`tiny` 保持各自行为，`--no-title` 和手动命名优先，不改写已有配置。
+- 无标题会话在列表中的默认标题等于完整首条用户消息：扫描使用有界前缀窗口，窗口把该行截断时按界扩窗重读到行结束或达到上限；只允许在完整行上提取，不得用窗口碎片生成截断标题，超过上限仍未完整时退回 `(no messages)`。
 - `debug.enabled=false`、`ida.enabled=false`、`archive.enabled=false`（普通与 offline 启动均默认关闭；已有配置和用户显式开启仍优先，不改写配置文件）。
 - `eval.js=false`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。未开启时拒绝 JavaScript 执行，显式开启后可实际执行。
 - 主目录会话与 OTLP 导出的默认值及显式覆盖契约见 [主目录会话与 OTLP 默认值](#requirements)。

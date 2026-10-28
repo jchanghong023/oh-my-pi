@@ -43,6 +43,7 @@ OMP MUST 使用当前 profile 的 shm 运行根，项目文件仍按原路径访
 - 会话、分支、Goal／计划／任务持久状态、会话附件及输出产物。
 - Wiki、记忆等 OMP 自有数据库及 SQLite 的 WAL／SHM 辅助文件；Repo 数据库的 NFS 共置例外见[代码定位索引](../repo-index/spec.md)。
 - 日志、缓存、native 展开文件、OMP 自有临时文件、锁与 IPC 运行状态。
+- DAP 等外部调试适配器的 Unix socket／IPC 端点同样落在运行根（`dap/client.ts` 经 `ipcEndpoint` 生成，必要时缩短以满足 `sun_path` 长度限制）；对应目录须为当前用户私有（0700、属主为进程 UID），校验不通过时在启动适配器前报错，不回退到 `/tmp`。
 
 程序安装位置、项目源码、项目级 `.omp/`、显式交付到项目中的输出、外部 EDA 产物不自动迁移。外部 Claude 配置、`OMP_SKILLS_DIR` 等外部输入仍从原位置读取；本需求不承诺消除既有外部输入的 NFS 访问。
 

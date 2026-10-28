@@ -59,6 +59,8 @@ OMP MUST fullsend 在正文的独立小写词处触发，代码与标签内容�
 - fork 为这四个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`、`/fullsend`，方便输入，并允许命令后直接携带任务文本。
 - `fullsend` 注入执行策略：成本和 token 用量不作为优化约束；在同等正确性、完整性与验证标准下缩短完成时间，端到端完成任务。仅做对速度或验证质量有实际收益的调用与并行，不把额外调用或花费视为目标，不扩大任务范围或权限。
 - 经 collab 转发的 guest 提示词和关键词命令同样支持 fork 的 fullsend 通知。
+- collab guest 的本地命令白名单额外放行 fork 新增的 `ultrathink`、`orchestrate`、`workflowz`、`fullsend` 与 `display`；白名单只决定 guest 可本地执行哪些命令，不扩大主机端权限，也不替代主机对参数的校验。
+- guest 只镜像宿主的运行事实：进入、结束与逐条消息/工具事件按 state-only 应用，`isStreaming` 等状态取自宿主快照；离开或恢复本地会话时以一次 state-only `agent_end` 结束镜像，不重放模型回合、不改写历史条目、不新增消息系统。`message_end` 之后重置本地流式去重标记，避免同一条助手消息计两次。
 - 有 `task` 工具且委派更快时，该策略要求并行处理独立工作；有等待任务则完成一个立即补位，任务不足并发上限时全部启动，不为凑并发扩大范围。这是对模型的提示词要求，不是程序调度保证。
 - 用户设置 `magicKeywords.fullsend`（默认 `true`，`/settings` 面板 → Interaction → Magic Keywords）可关闭 fullsend 关键词注入。
 

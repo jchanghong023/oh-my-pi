@@ -83,3 +83,39 @@ OMP MUST 使用 `remote → handoff → snapcompact → shake → soft` 作为�
 
 - **WHEN** 用户或项目显式配置 `compaction.methodOrder`
 - **THEN** 沿用既有配置优先级和显式顺序，不自动重排或改写配置文件。
+
+### Requirement: 压缩触发的待输入预算
+
+OMP MUST 把即将被自动消费的排队输入计入自动压缩的待输入预算，与直接 prompt 同口径，不改变阈值与方法顺序。
+
+#### Scenario: 压缩触发的待输入预算的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 轮次文本结束（`willContinue=false`）时，若 agent loop 在 yield 边界会自动 drain 队列输入，则这些输入与直接 prompt 一样属于待输入预算：先按同一阈值判断是否需要自动压缩，再消费队列首条。仅在显式 hold（`queuedMessagesHeld`）时不消费，`followUpAutoDrain=false` 时 follow-up 队列保持排队；steering 在 stop 边界同样强制下一轮模型调用。
+- 计算沿用直接 prompt 的 `max` 语义：provider usage 锚定估算加 pending 与本地估算加 pending 取较大者；排队输入未进入 prepared history 时，以 `pendingContextTokens` 参与已武装 speculation 的校验，阶段按 `pre_turn` 处理。
+- 不改压缩阈值、方法顺序、触发判定和非排队路径行为；被取消、已释放或已结清的会话不因该预算额外压缩，消费顺序不变。
+
+#### Scenario: 队列输入在自动压缩后消费
+
+- **WHEN** 一轮结束且待消费队列非空，加入队列输入后超过自动压缩阈值
+- **THEN** 先执行自动压缩，再消费队列首条，不把排队输入当作已在上文中的历史
+
+### Requirement: Judge 候选池的会话作用域
+
+OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池限制在同一作用域内，作用域外模型不进入主候选或 fallback。
+
+#### Scenario: Judge 候选池的会话作用域的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 自动 thinking、图片、文本等经 judge 角色发起的判定，其候选链先经当前会话/项目 `enabledModels`（与 `ModelControls.getAvailableModels`、Team 配置同一语义）过滤，再参与角色链解析；主候选与 fallback 均不得外呼作用域外的远端模型。
+- 未配置 `enabledModels` 时保持原候选池不变；会话自身模型仍按既有 `withSessionFallback` 追加，不受该过滤影响。
+- 该过滤只影响 judge 调用，不改变主模型选择、其他角色候选、压缩、标题或 Team 成员配置；也不改写用户配置或缓存结果。
+
+#### Scenario: 作用域外模型不参与判定
+
+- **WHEN** 会话配置的 `enabledModels` 不包含远端的 judge 默认模型
+- **THEN** 判定请求使用作用域内候选或会话自身模型，不先请求作用域外模型

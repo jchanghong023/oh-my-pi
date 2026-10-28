@@ -72,6 +72,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 - 字段、枚举、必填项、方法名、通知名和大小限制按固定提交中的公开 schema／纯函数实现；产品效果、事件顺序、恢复和拒绝条件按上述当前规格解释。生产者与消费者用于核实真实边界，不要求 OMP 复制 ZCode 的内部类、数据库或实现结构。
 - `09-protocol-schema.md` 是 `10-protocol-spec.md` 的结构速查，不能覆盖当前 schema 和字段级主规格；历史 phasing、review、deletion 计划及旧协议草案不能作为本次交付依据。
 - 接口全集直接由 `V4_METHODS`、`V4_NOTIFICATIONS`、`commandPayloadSchemas`、legacy 方法／通知定义及 Host 的实际消费点确定，不能仅照着聊天示例实现几个命令；仍被启动、普通会话、历史或配置链路使用的接口必须一并接通。无消费者的废弃入口不因 schema 中仍有声明而重新启用；本文明确排除的独立管理面不自动扩成新产品需求。
+- **协议驱动实现的边界**：`modes/zcode/workspace-text.ts`（workspace 生成文本）、`memory-telemetry.ts`（记忆偏好采纳与 conversation telemetry 事实）、`model-io.ts`（模型请求／响应保留：已提交记录不轮转不截断，仅未提交内存有界，采集故障只记诊断、不打断模型执行）、`execution-policies.ts`（off-peak 生命周期、fallback reason 与 `requestAuth` ticket）与 `legacy-session.ts`（legacy 会话调试查询）按固定提交的 schema 与 Host 调用实现，OMP 不额外定义产品语义；失败按协议 reason／错误码返回，不伪报成功。
 - schema、当前规格与实际调用发生冲突时，必须在实现中核对固定提交的生产者、消费者和相应用例，并在本次完整交付前解决；不能任意选一份历史文档、静默改变语义或伪造成功。涉及产品取舍的冲突应先明确合同，不以降级代替尚未完成的必需能力。
 - 更新兼容基线时同时更新本节完整 SHA、来源及相关验收结果，重新核对受影响接口与行为；不自动追随浮动分支，不仅比较 schema 文本就宣称兼容。若需要提取 schema，保留完整依赖闭包和来源，不能只复制一个入口文件。
 - **兼容评估触发**：OmpCode 合并 ZCode 上游、升级目标发行，或修改协议 schema、Host 调用、启动装配、UI 消费链时，必须核对固定基线与目标合同。合同未变可复用有效兼容结果；合同变化才重钉 SHA、适配并验证受影响链路。纯注释、排版或无关代码变化不机械重钉，不仅盯 `zcode-protocol*` 文件而遗漏调用方变化。
@@ -127,6 +128,32 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 
 - **WHEN** ZCode 按固定协议基线连接 OMP
 - **THEN** app-server 使用既有信封、方法、字段和恢复语义，不混用独立 RPC
+
+### Requirement: 工作区文件回退
+
+OMP MUST 以写入时记录的完整快照实现工作区文件回退，只回退可确认安全的文件，且不改写聊天历史。
+
+#### Scenario: 工作区文件回退的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 回退由固定基线的 `v4/conversation/fileRewindPreview`、`applyFileRewind` 命令（含 `editUserQuery` 的 `workspaceMode:"rewind"`）触发；目标按真实执行端会话的消息实体解析，会话不在活动列表时拒绝应用，不跨会话、不按消息顺序猜测目标。
+- 检查点只取自 `write`／`edit` 实际提交的 before／after 完整快照（含 create、delete）。链不连续、快照被裁剪、只有补丁没有完整快照时分别标为 `unsupported_checkpoint`（链断裂附原因）与 `checkpoint_missing`；不解析补丁、不推断快照、不回读源目录补证。
+- 预览逐文件核对当前内容：与最后快照哈希不一致标 `external_modified`，读取失败标 `file_read_failed`，符号链接或非普通文件标 `unsupported_checkpoint`；`canApply` 仅在存在安全文件且没有任何不安全文件时为真，已回退目标再次预览不可应用。
+- 应用前重新预览，条件变化返回 `applied:false` 与原因，不部分回退。确认后按规范路径互斥锁恢复（跨会话共享同一文件锁）；只接受完整已知 UTF-8 快照，符号链接路径、父目录重定向、硬链接、非普通文件、Windows 备用数据流、重复路径与非法 UTF-8 一律拒绝（`unsafe_path`、`path_redirected`、`duplicate_path`、`invalid_utf8_checkpoint`）。进程外写入不受该锁约束，提交无法确认时报 `unknown`，不自动回滚。
+- 成功后追加 `workspace-file-rewind` 自定义条目（目标 `entryId`／`entityId`、逐文件 receipt 与 `restored`／`unchanged`／`rejected`／`unknown` 状态）并 flush，文件变更与索引失效沿用 write／edit 的既有通知。
+- 回退不调用模型、不新建会话、不截断或重写消息历史，也不改变 Dev 工作流 `drop` 及既有文件恢复的语义。
+
+#### Scenario: 预览发现文件已被外部修改
+
+- **WHEN** 目标文件当前内容与该检查点的最后快照不一致
+- **THEN** 预览标为不可应用并给出该文件原因，应用不修改任何文件
+
+#### Scenario: 安全回退后记录事实
+
+- **WHEN** 预览可应用且应用期间文件未变化
+- **THEN** 文件恢复到首个检查点之前的内容，会话追加 `workspace-file-rewind` 条目并返回逐文件 receipt
 
 ### Requirement: 接入架构与启动合同
 
