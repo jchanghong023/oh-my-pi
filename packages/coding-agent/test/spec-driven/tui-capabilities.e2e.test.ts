@@ -79,6 +79,101 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 test.skipIf(!tuiTest)(
+	"invalid bash arguments give actionable feedback before a corrected call executes",
+	async () => {
+		const marker = "OMP_INVALID_BASH_ARGUMENT";
+		await withTui(
+			{
+				reply(request) {
+					if (
+						!request.messages.some(message => message.role === "user" && contentText(message.content) === marker)
+					)
+						return respond(request);
+					const bashCalls = calls(request).filter(call => call.name === "bash");
+					if (bashCalls.length === 0)
+						return invoke(request, "bash", { i: "Checking directory", "<rfl:parameter name=": "pwd" });
+					if (bashCalls.length === 1) {
+						expect(result(request, "bash")).toContain('{"command":"pwd"}');
+						return invoke(request, "bash", { i: "Checking directory", command: "pwd" });
+					}
+					return { text: "OMP_INVALID_BASH_RECOVERED" };
+				},
+			},
+			[120, 36],
+			async ({ cwd, provider, tui }) => {
+				await tui("submit", marker);
+				await tui("expect", "text", "OMP_INVALID_BASH_RECOVERED", "--timeout", "60000");
+				const completed = provider.requests.findLast(
+					request => calls(request).filter(call => call.name === "bash").length === 2,
+				);
+				if (!completed) throw new Error("Corrected bash call was not observed");
+				const second = calls(completed).filter(call => call.name === "bash")[1]!;
+				const output = completed.messages.find(
+					message => message.role === "tool" && message.tool_call_id === second.id,
+				);
+				expect(contentText(output?.content)).toContain(path.basename(cwd));
+			},
+		);
+	},
+	120_000,
+);
+
+test.skipIf(!tuiTest)(
+	"malformed task intent is rejected before spawning and the corrected reviewer runs",
+	async () => {
+		const marker = "OMP_MALFORMED_REVIEW_INTENT";
+		const badIntent = 'y",\n "tasks": [{"agent": "reviewer", "task": "Review"}]}';
+		await withTui(
+			{
+				reply(request) {
+					if (
+						!request.messages.some(message => message.role === "user" && contentText(message.content) === marker)
+					)
+						return respond(request);
+					const tasks = calls(request).filter(call => call.name === "task");
+					if (tasks.length === 0)
+						return invoke(request, "task", {
+							i: badIntent,
+							context: "Review changes",
+							tasks: [{ task: "SHOULD_NOT_SPAWN", solutionSpace: "review" }],
+						});
+					if (tasks.length === 1) {
+						expect(result(request, "task")).toContain("not run");
+						return invoke(request, "task", {
+							i: "Reviewing changes",
+							context: "Review changes",
+							tasks: [{ agent: "reviewer", task: "OMP_SPEC_REVIEW_CHILD", solutionSpace: "review" }],
+						});
+					}
+					return { text: "OMP_MALFORMED_REVIEW_RECOVERED" };
+				},
+			},
+			[120, 36],
+			async ({ provider, tui }) => {
+				await tui("submit", marker);
+				await tui("expect", "text", "OMP_MALFORMED_REVIEW_RECOVERED", "--timeout", "60000");
+				expect(
+					provider.requests.some(request =>
+						request.messages.some(
+							message => message.role === "user" && contentText(message.content).includes("SHOULD_NOT_SPAWN"),
+						),
+					),
+				).toBe(false);
+				expect(
+					provider.requests.some(request =>
+						request.messages.some(
+							message =>
+								message.role === "user" && contentText(message.content).includes("OMP_SPEC_REVIEW_CHILD"),
+						),
+					),
+				).toBe(true);
+			},
+		);
+	},
+	120_000,
+);
+
+test.skipIf(!tuiTest)(
 	"ordinary openspec-update-change completes existing requirements maintenance without Dev or implementation",
 	async () => {
 		const target = "openspec/changes/manual-maintenance/specs/greeting/spec.md";

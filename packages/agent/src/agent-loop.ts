@@ -3160,6 +3160,12 @@ async function prepareToolCallDispatch(
 				? { intent: undefined, strippedArgs: argsForExecution }
 				: extractIntent(toolCall.arguments);
 			argsForExecution = strippedArgs;
+			if (tool?.name === "task" && intent && /"tasks"\s*:\s*\[/u.test(intent) && /"agent"\s*:\s*"/u.test(intent)) {
+				entry.args = strippedArgs;
+				entry.validationErrorMessage =
+					'The task tool was not run: `i` contains task arguments instead of a short intent label. Put `agent` inside the actual `tasks[]` item, not inside `i`, and retry. Example: {"i":"Review code","context":"Review changes","tasks":[{"agent":"reviewer","task":"Review code","solutionSpace":"code review"}]}';
+				continue;
+			}
 			if (intent !== undefined && intent.length > MAX_INTENT_LENGTH && tool) {
 				entry.args = strippedArgs;
 				entry.validationErrorMessage = `\`${INTENT_FIELD}\` is a short intent label (at most ${MAX_INTENT_LENGTH} chars); the value you sent is ${intent.length} chars. The tool was not run. Put that content in the tool's own parameters and retry with a brief \`${INTENT_FIELD}\`.`;
@@ -3189,7 +3195,10 @@ async function prepareToolCallDispatch(
 				entry.args = parseFailed ? { __parseError: args.__parseError } : args;
 				entry.validationErrorMessage =
 					validationError instanceof Error ? validationError.message : String(validationError);
-				if (parseFailed) {
+				if (tool?.name === "bash") {
+					entry.validationErrorMessage +=
+						'\nThe bash tool was not run. Correct the invalid arguments and call it again: `command` must be a JSON string, e.g. {"command":"pwd"}. Use actual JSON fields, not XML or tool-call markup. Do not repeat successful calls.';
+				} else if (parseFailed) {
 					entry.validationErrorMessage +=
 						"\nThe tool was not run. Correct the arguments and call this tool again with valid JSON; do not just explain the error or repeat successful tool calls.";
 				}

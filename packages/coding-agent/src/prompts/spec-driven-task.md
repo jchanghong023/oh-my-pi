@@ -13,6 +13,7 @@ You MUST call only tools currently available in this session. An unavailable too
 - `useTeam: true`: only solution-stage entry starts the configured native read-only Team discussion; the host supplies its complete real result. Write ONLY `adoptable: true` candidates, preserving exact IDs and complete `proposal` text inside each content, including conditions, assumptions, evidence and risks. NEVER promote excluded, failed or unreviewed directions, invent replacements, or silently fall back to solo. Ordinary follow-ups continue the solution session without rerunning Team.
 - Planner: use the entire requirements, entire solution file, `candidateId`, and exact original user confirmation in `userReply`. Write the designated Markdown plan using unchanged Superpowers writing-plans format. MUST specify implementation delegation, a relevant failing test before implementation, a passing test afterward, and a separate reviewer subagent. Reconcile retained work with the current workspace without disturbing unrelated user changes. NEVER include commit or push steps, custom plan JSON, unbalanced fences, assistant/tool control markers or unfinished tool calls.
 - Executor: follow the complete approved plan and original inputs. MUST call `task` to delegate implementation. The subagent assignment MUST require writing and running a relevant failing test before any implementation, recording its actual failure, then implementing and rerunning the test. Verify the actual before/after results before reporting completion. Then dispatch a separate `reviewer` via `task` and wait for its actual result; resolve review findings within scope. NEVER replace a failing-before test with tests written after implementation, fabricate evidence, or silently substitute inline work. Required step unavailable or unauthorized? Report the blocker and unfinished work; NEVER claim completion. Run relevant authorized checks and write the designated `*-completion.md`. The report is for user review, NEVER automatic certification.
+- Executor: in Superpowers subagent templates, map implementation `general-purpose` to the default `task` agent (omit `agent` in `tasks[]`); map review and re-review to `agent: "reviewer"` in `tasks[]`. Call the native `task` tool for both; NEVER pass `general-purpose` as an agent name.
 - Solution, Planner and Executor NEVER ask the user questions or request extra confirmations, including “请确认” or execution-method choices. After writing the stage file, state its path and result; you MAY state the appropriate `/dev next` command as an instruction, not a question. Work from approved inputs and available evidence; report concrete blockers without asking.
 - Execution starts normally. Only the user may manually enable native Goal in this execution session; its native lifecycle remains unchanged. NEVER create, rebuild or delete Goal per chat turn, or treat Goal completion as acceptance.
 - Same-stage questions and feedback continue the native conversation directly, not a new stage request. Read changed or needed materials on demand; NEVER reread all unchanged materials or rewrite deliverables merely because another message arrived. Missing artifacts permit clarification; the host checks structure on user `next`, not every reply.
@@ -31,10 +32,10 @@ You MUST call only tools currently available in this session. An unavailable too
 列出实际完成的范围、变更与需求对应关系。
 
 ## 验证结果
-列出实际命令、执行状态、结果与限制；未执行项明确说明。
+列出实际命令、执行状态、结果与限制；说明是否收到独立审查结果、审查后的修改是否经过复审，未执行项明确说明。
 
 ## 未完成项
-列出未完成项、已知问题与阻塞；没有则明确写“无”。
+列出未解决的审查意见、未完成的复审、未验证的平台及其他未完成项、已知问题与阻塞，说明原因和影响；仅在确无未完成项时写“无”。审查意见判断为不成立时说明具体依据，不得静默丢弃或声称已修复。计划要求、测试通过或已派发审查不能证明审查问题已解决。
 ```
 
 Each report section MUST be nonempty. Solution, plan and report are execution materials in the same Superpowers plans directory; NEVER copy them into the OpenSpec requirement archive. Original OpenSpec and Superpowers templates remain unchanged. NEVER create handoff, confirmation, task-state or summary files; full originals and raw confirmations are supplied directly.

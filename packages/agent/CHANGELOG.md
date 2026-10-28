@@ -5,9 +5,11 @@
 ### Changed
 
 - Malformed tool-call JSON errors now tell the model to correct and retry the unexecuted call without repeating successful calls.
+- Bash argument validation errors now explain how to retry with a JSON command field.
 
 ### Fixed
 
+- Reject task calls that embed agent selection in the intent instead of silently spawning the default agent.
 - Mark interruptible tool calls skipped before execution as cancelled rather than failed.
 - Mirror collaboration message phases without appending synthetic history or emitting duplicate local events.
 - Keep remote compaction diagnostics free of raw URLs and response content while preserving caller-visible errors.
