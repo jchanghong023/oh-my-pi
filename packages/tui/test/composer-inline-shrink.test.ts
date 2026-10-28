@@ -1184,65 +1184,83 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
-	it("keeps the editor on the bottom row when a live block collapses under retired history", async () => {
+	it("keeps the compact editor adjacent to a collapsed live block under retired history", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const h = makeHarness();
-		const transcript = new TranscriptContainer();
-		for (let i = 0; i < TRANSCRIPT_ROWS; i++) transcript.addChild({ render: () => [`${TRANSCRIPT_PREFIX}${i}`] });
-		// A streaming tool preview that collapses to its short result.
-		let toolRows = 12;
-		transcript.addChild({ render: () => Array.from({ length: toolRows }, (_, i) => `Tool row ${i}`) });
-		h.composer.setRuntimeChildren([transcript, h.hud, h.editor]);
-		await h.scheduler.settle(h.terminal);
-		toolRows = 4;
-		h.composer.ui.requestRender();
-		await h.scheduler.settle(h.terminal);
-		const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-		expect(view.findIndex(row => row.includes("EDITOR"))).toBe(ROWS - 1);
-		expect(view.filter(row => row.startsWith("Tool row "))).toHaveLength(4);
-		h.composer.stop();
+		try {
+			const transcript = new TranscriptContainer();
+			for (let i = 0; i < TRANSCRIPT_ROWS; i++) transcript.addChild({ render: () => [`${TRANSCRIPT_PREFIX}${i}`] });
+			let toolRows = 12;
+			transcript.addChild({ render: () => Array.from({ length: toolRows }, (_, i) => `Tool row ${i}`) });
+			h.composer.setRuntimeChildren([transcript, h.hud, h.editor]);
+			await h.scheduler.settle(h.terminal);
+			toolRows = 4;
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			const toolEnd = view.findIndex(row => row === "Tool row 3");
+			const editor = view.findIndex(row => row.includes("EDITOR"));
+			expect(toolEnd).toBeGreaterThanOrEqual(0);
+			expect(editor).toBeGreaterThan(toolEnd);
+			expect(editor - toolEnd).toBe(1);
+			expect(view.filter(row => row.startsWith("Tool row "))).toHaveLength(4);
+		} finally {
+			h.composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
 	});
 
 	it("parks a collapsing block's slack below the reply instead of banding its history", async () => {
+		// Non-compact path only: compact history lets the input follow the transcript
+		// instead of parking slack, so pin the preference rather than inherit the
+		// module default (which the host overrides).
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const rows = 50;
 		const h = makeHarness(107, rows, 10);
-		const card = new InlineWidget();
-		card.rows = 25;
-		h.transcript.addChild(card);
-		const message = new AssistantMessageComponent();
-		h.transcript.addChild(message);
-		h.hud.rows = 2;
-		await h.scheduler.settle(h.terminal);
-		const table = [
-			"| When | Where / unit | What he reports |",
-			"|---|---|---|",
-			`| 2024-08→ | **Kursk** | ${"Joined the Kursk counterattack after Ukraine's incursion; the unit retook territory; in Feb 2025 awarded a medal. ".repeat(3)} |`,
-		].join("\n");
-		const text = `**What the sources describe** — his own account, as printed in the interviews.\n\n${table}\n\n**Motivation.** Another paragraph of the reply, long enough to wrap at this width.\n`;
-		for (let i = 1; i <= text.length; i += 24) {
-			if (i / text.length > 0.7) card.rows = 1;
-			message.updateContent(reply(text.slice(0, i)), { transient: true });
+		try {
+			const card = new InlineWidget();
+			card.rows = 25;
+			h.transcript.addChild(card);
+			const message = new AssistantMessageComponent();
+			h.transcript.addChild(message);
+			h.hud.rows = 2;
+			await h.scheduler.settle(h.terminal);
+			const table = [
+				"| When | Where / unit | What he reports |",
+				"|---|---|---|",
+				`| 2024-08→ | **Kursk** | ${"Joined the Kursk counterattack after Ukraine's incursion; the unit retook territory; in Feb 2025 awarded a medal. ".repeat(3)} |`,
+			].join("\n");
+			const text = `**What the sources describe** — his own account, as printed in the interviews.\n\n${table}\n\n**Motivation.** Another paragraph of the reply, long enough to wrap at this width.\n`;
+			for (let i = 1; i <= text.length; i += 24) {
+				if (i / text.length > 0.7) card.rows = 1;
+				message.updateContent(reply(text.slice(0, i)), { transient: true });
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+			}
+			message.updateContent(reply(text));
+			message.markTranscriptBlockFinalized();
+			h.hud.rows = 0;
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
+			const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
+			const bottom = view.findIndex(row => row.includes("└"));
+			let run = 0;
+			let longest = 0;
+			for (const row of view.slice(0, bottom + 1)) {
+				run = row === "" ? run + 1 : 0;
+				longest = Math.max(longest, run);
+			}
+			// The reply rides directly under the retired history: the slack the collapse
+			// opened must not sit above the live rows, where it reads as a hole punched
+			// into the answer (and, carrying no cells, cannot be covered by any repaint).
+			expect(view[0]).not.toBe("");
+			expect(longest).toBeLessThanOrEqual(1);
+			expect(view.findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
+		} finally {
+			h.composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
 		}
-		message.updateContent(reply(text));
-		message.markTranscriptBlockFinalized();
-		h.hud.rows = 0;
-		h.composer.ui.requestRender();
-		await h.scheduler.settle(h.terminal);
-		const view = h.terminal.getViewport().map(row => Bun.stripANSI(row).trimEnd());
-		const bottom = view.findIndex(row => row.includes("└"));
-		let run = 0;
-		let longest = 0;
-		for (const row of view.slice(0, bottom + 1)) {
-			run = row === "" ? run + 1 : 0;
-			longest = Math.max(longest, run);
-		}
-		// The reply rides directly under the retired history: the slack the collapse
-		// opened must not sit above the live rows, where it reads as a hole punched
-		// into the answer (and, carrying no cells, cannot be covered by any repaint).
-		expect(view[0]).not.toBe("");
-		expect(longest).toBeLessThanOrEqual(1);
-		expect(view.findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
-		h.composer.stop();
 	});
 });

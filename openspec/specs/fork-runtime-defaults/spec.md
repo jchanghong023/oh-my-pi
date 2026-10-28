@@ -26,7 +26,7 @@ OMP MUST 将内置默认值设为 `telemetry.otlpExportEnabled=false`；未显�
 
 ### Requirement: 默认设置
 
-OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置和环境变量仍按原优先级覆盖。
+OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置和环境变量仍按原优先级覆盖。纯默认值统一在“默认设置”表中维护；`tools.approvalMode` 的默认值归[审批策略](../approval-policy/spec.md)，此处不重复。
 
 #### Scenario: 默认设置的详细边界
 
@@ -50,6 +50,8 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `theme.dark=dark-terminal`
 - `display.showTurnTime=true`
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
+- `display.shimmer=disabled`：工作中与加载中消息默认不播放动画，显示静态淡色文字；显式配置 `classic` 或 `kitt` 时按所选动画呈现。
+- `display.smoothStreaming=false`：助手文字与流式工具输入在数据块到达后直接推进到全部可见内容，不做逐字符揭示；显式开启后按平滑揭示呈现。
 - **LSP 默认关闭**：将 `lsp.enabled` 的缺省值改为 `false`。所有平台、普通与 offline 启动，在用户未显式启用时，主会话及其 task 子代理均不启用 LSP；文件写入、编辑、移动和删除的自动格式化、诊断及 LSP 文件通知同样受关闭状态约束。
 - `error.notify=on`（默认在 Agent 因错误停止时发送终端通知；实际呈现取决于终端支持）
 - `mnemopi.embeddingVariant=multilingual`

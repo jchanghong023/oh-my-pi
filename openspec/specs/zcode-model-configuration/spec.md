@@ -149,3 +149,64 @@ GUI 提供专用 Team 模型配置面板，交互能力和预览按 Team 第 2.9
 
 - **WHEN** GUI 配置 profile、role、临时模型或全局 Team
 - **THEN** ZCode 请求到达明确的原生 owner，结果投影不跨会话／profile；全局 Team 配置不消费聊天会话事实
+
+### Requirement: 模型 role 的会话配置方法
+
+ZCode 的 `session/configure` MUST 强制携带非空 `sessionId`，并支持 `get_model_roles` 与 `set_model_role` 两个 role 操作。role 事实仍由原生 Settings 与模型目录持有，app-server 只投影和转发，不在 Host 或 GUI 拼写配置值。
+
+#### Scenario: 读取 role 目录
+
+- **WHEN** GUI 以 `get_model_roles` 查询 role 目录，可选携带 `roleId`
+- **THEN** OMP 返回该 profile 已知的全部 role（含隐藏 role 与自定义 role），`roleId` 指定的未配置 role 也被列出并带可用于 CAS 的 `revision`；查询不创建会话、不写配置。
+
+#### Scenario: role 描述子字段
+
+- **WHEN** OMP 返回 role 目录
+- **THEN** 每个描述子 MUST 含 `roleId`、`name`、`configurable`、`userValue`、`projectValue`、`candidateModels`（元素含必填 `provider`、`modelId` 与可选 `thinkingLevel`，当前投影只写 `provider`、`modelId`）、`writableScopes`、`hidden`、`section`（字面量 `chat` 或 `kind`）、`source`（`default`、`global`、`project`、`overlay` 或 `runtime`）与 `revision`，可解析时 MUST 含带 `provider`、`modelId` 及可选 `thinkingLevel` 的 `effectiveModel`，不可解析时 MUST 以 `unresolvedReason` 说明原因；`explicitValue`、`description` 仅在存在时出现。
+
+### Requirement: 模型 role 选择取值与可写范围
+
+`set_model_role` 的 `selection` MUST 为 `{kind:"model",model:{provider,modelId,thinkingLevel?}}`、`{kind:"auto"}` 或 `null`。`auto` 与 `null` MUST 等价移除用户层值并回落原生自动选择；`scope` 只允许 `user`，其他取值 MUST 以 `scope_not_allowed` 拒绝。
+
+#### Scenario: 清空用户层 role 值
+
+- **WHEN** GUI 以 `{kind:"auto"}` 或 `null` 保存某 role
+- **THEN** 该 role 的用户层值 MUST 被移除，有效值改由原生自动选择策略在取用时解析；其他 role、Team 成员与当前主模型不变。
+
+#### Scenario: 具体模型与候选校验
+
+- **WHEN** GUI 提交具体模型
+- **THEN** 该模型 MUST 存在于当前可用目录且被目标 role 接受，否则 MUST 以 `invalid_params` 拒绝；OMP MUST NOT 按名称猜测、改写或静默替换候选。
+
+#### Scenario: 非用户作用域写入
+
+- **WHEN** 请求携带 `user` 以外的 `scope`
+- **THEN** OMP MUST 以 `scope_not_allowed` 拒绝，且不修改任何配置层。
+
+### Requirement: 模型 role 写入的版本校验与生效
+
+`set_model_role` MUST 以 `expectedRevision` 对目标 role 的用户层值做 CAS，版本不符 MUST 以 `revision_conflict` 拒绝；同一 role 的写入 MUST 串行执行。保存成功后 OMP MUST 重载驻留会话的 Settings 克隆、在计划模式下重新解析 plan 模型，并广播 `settings_changed{scope:"user"}`。
+
+#### Scenario: 并发修改同一 role
+
+- **WHEN** 两个客户端用相同 `expectedRevision` 保存同一 role
+- **THEN** 先提交者成功，后到者 MUST 收到 `revision_conflict`，已有值 MUST NOT 被覆盖。
+
+#### Scenario: 保存后驻留会话立即采用新值
+
+- **WHEN** role 保存成功
+- **THEN** 驻留会话的 `/switch @role`、子代理 role 选择与计划模式模型解析 MUST 立即使用新值，GUI 通过 `settings_changed{scope:"user"}` 得知变化；仍被更高层（运行时、overlay 或项目）覆盖时，有效来源 MUST 如实投影。
+
+#### Scenario: 保存未确认落盘
+
+- **WHEN** 原生 Settings 保存失败
+- **THEN** OMP MUST 以 `persistence_failed` 报告，MUST NOT 返回 `persisted:true`，也 MUST NOT 广播已保存。
+
+### Requirement: 会话配置方法不承载 Team 配置
+
+`session/configure` MUST NOT 暴露 Team 配置操作。Team 成员、候选模型与保存的唯一协议入口是 `omp/team/configure`，其行为见 [Team 配置](../team-configuration/spec.md)。
+
+#### Scenario: 从会话配置请求 Team 操作
+
+- **WHEN** 客户端向 `session/configure` 提交 `get_team_config`、`get_team_models` 或 `set_team_config`
+- **THEN** OMP MUST 拒绝该请求，Team 配置 MUST 只经 `omp/team/configure` 完成，会话配置方法不得成为第二个入口。

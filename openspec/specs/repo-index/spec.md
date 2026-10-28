@@ -108,6 +108,30 @@ AI 侧提供一个只读 `repo` 工具，普通搜索只需 `{"query":"关键词
 - **WHEN** the documented capability is used in the section's applicable context
 - **THEN** AI 查询 search、symbol 或 status，区分无索引和零命中
 
+### Requirement: repo 查询的规模上限与拒绝条件
+
+OMP MUST 对 `repo` 查询的查询长度、候选规模和页大小施加上限，超出上限时明确拒绝，不静默截断也不返回部分结果。
+
+#### Scenario: repo 查询的规模上限与拒绝条件的详细边界
+
+- **WHEN** AI 或 ZCode 页面经 `repo` 服务发起 `search` 或 `symbol` 查询
+- **THEN** 以下上限与拒绝条件适用：
+
+- 查询词长度（UTF-16 单元，即 JavaScript `query.length`）超过 500 MUST 直接报错 `Repository query exceeds 500 characters; narrow it.`；工具层与服务层 MUST 使用同一 500 上限与同一计量单位，服务层 MUST NOT 用截断后的查询执行检索或生成游标，续页回显的查询 MUST 与参与检索的查询一致。
+- 文本候选或符号候选超过 100,000 条 MUST 使整次查询失败并提示收窄路径或查询词；MUST NOT 静默截断候选，也 MUST NOT 以部分结果冒充完整结果。
+- 服务端 `limit` MUST 收敛到 `[1, 20]`，非有限值按默认 20 处理，与“每页固定最多 20 条”一致；服务层可接受的上限 MUST NOT 高于每页条数上限。
+- 上述超限错误 MUST 与“无匹配”区分并单独报错，不得伪装成零命中。
+
+#### Scenario: 超长查询被拒绝
+
+- **WHEN** `repo` 查询词的长度（UTF-16 单元）超过 500
+- **THEN** 返回明确错误并要求收窄查询，不执行检索，也不返回截断查询的结果。
+
+#### Scenario: 候选规模超限
+
+- **WHEN** 一次文本或符号查询的候选数超过 100,000
+- **THEN** 整次查询报错并要求收窄路径或查询词，不返回分页结果。
+
 ### Requirement: 索引内容与实现方式
 
 OMP MUST Python 解析失败仍保留文本候选且不返回过期定义。
@@ -150,6 +174,24 @@ OMP MUST Python 解析失败仍保留文本候选且不返回过期定义。
 
 - **WHEN** the documented capability is used in the section's applicable context
 - **THEN** Python 解析失败仍保留文本候选且不返回过期定义
+
+### Requirement: 严格枚举下的目录错误边界
+
+OMP MUST 以严格错误模式枚举索引范围：任何不可读目录使整次枚举失败并暴露覆盖缺口，不得静默跳过。
+
+#### Scenario: 严格枚举下的目录错误边界的详细边界
+
+- **WHEN** 建立、更新或完整核对枚举索引根目录
+- **THEN** 以下边界适用：
+
+- 枚举 MUST 使用严格错误模式：目录打开失败（权限不足、目录在枚举中被删除、其他 I/O 错误）MUST 使整次枚举失败，并报告失败路径与原因。
+- MUST NOT 跳过不可读目录后继续发布索引，也不得把跳过的目录当作“已核对且无文件”；失败时保留旧代次并记录未核对或失败原因。
+- 该严格语义只约束索引枚举；普通文件搜索的可跳过语义 MUST NOT 被当作索引覆盖完整的依据。
+
+#### Scenario: 不可读目录使核对失败
+
+- **WHEN** 枚举过程中某个子目录无法打开
+- **THEN** 本次建立或核对失败并报告覆盖缺口，不发布新代次，不声称该目录已核对。
 
 ### Requirement: 索引如何更新
 

@@ -30,7 +30,7 @@ OMP MUST 按各入口规定范围、预算、缓存失效与失败汇总执行�
 - 以下受支持的 root scripts 默认经 Bazel 执行，显式适配器 `bun run bazel -- <existing-task> [task arguments]` 同样可用；这不是第四层门禁，不从 Bazel 目标递归调用 fastcheck/fulltest/slowtest。检查／类型族包含 `check`、`check:ts`（含原 package 类型检查）、`check:tools`、`check:rs`、`lint`、`lint:ts`、`lint:tools`、`lint:rs`、`lint:py`；构建族包含 `build`、`build:native`、`collab:web:build`、`robomp:web:build`；测试族包含 `test`、`test:ts`、`ci:test:ts` 及既有 workspace/native/coding-agent 分片、`test:scripts`、`test:rs`、`test:py`、`robomp:test:integration`、`sdk:test:go`／`sdk:test:go:smoke`／`sdk:test:rust`、`ci:test:smoke`、`ci:test:install-methods`。原叶子命令的选择、顺序、并发、平台限制、工具前置与报告语义不变；仅接受相应适配器明确支持的原参数（Rust `--affected`／`--dry-run`、Go `--smoke`），不扩展命令授权。已在真实 Bazel payload 内的嵌套原语直接执行，避免重入同一 lane；原始命令只保留一处，不建立可绕过默认路由的第二套公开入口。会写源码的 `fmt`／`fix` 族保持原入口，不纳入只读静态检查路由。
 - 独立任务报告 `scope=standalone-public-task`，不冒充 `scope=fork-affected`，不将 Python、独立 SDK、安装测试、无关 workspace 构建或完整上游 TS 套件自动加入 fulltest。声明闭合的输入与真实产物可复用 Bazel 成功结果；`lint:tools`／`lint:ts` 保留现有本地 TS lint 原语并可复用结果，未声明完整 Rust 闭包的 `lint:rs` 及包含它的聚合 `lint` 禁用结果复用、每轮真实执行。未闭合的 Python／Go／独立 Rust SDK 工具与依赖、真实 CLI／集成环境、安装等树外状态或副作用须禁用相应结果复用：测试使用原生 `external`，非测试使用每轮实际执行原命令的 `bazel run`，只复用启动器构建。可达不等于环境可用、已获执行授权或已经通过；三层预算及上述无改动双轮、第二轮外部总墙钟严格小于 30 秒的验收均不变。
 - workspace 构建保留六个原有生产者及其依赖顺序：browser-relay、collab-web、stats、robomp-web 的独立目录归档与 coding-agent CLI 可执行文件归档由真实 Bazel action 声明，native 保留既有三个原生产物。新执行与缓存命中均从本轮真实 BEP 产物恢复输出，不能以成功标记冒充构建产物；native 安装、版本戳与宿主加载核验每轮执行。CLI 缓存保留产物的真实编译日期，不伪造请求时刻的新构建；未闭合的自定义编译器或 macOS 签名环境仍禁用相关结果复用。Windows ZIP 生产者使用已安装系统 bsdtar，不为此自动安装工具。
-- native 安装每轮仍从真实构建产物执行版本戳及宿主加载核验；最终版本戳后的 addon 字节与 bindings 内容均未变化、且已有文件可写时，保留安装文件及其修改时间，避免无内容变化的写入触发下游图重算。版本或内容变化时仍使用既有替换、权限恢复与失败处理，不以时间戳或自建成功标记代替字节比较。
+- native 安装每轮仍从真实构建产物执行版本戳及宿主加载核验；最终版本戳后的 addon 字节与 bindings 内容均未变化、且已有文件可写时，保留安装文件及其修改时间，避免无内容变化的写入触发下游图重算。版本或内容变化时 MUST 按下文「原生安装替换与回滚」执行替换（POSIX 上安装文件与 bindings 的 mode MUST 为 0644），是否变化 MUST 依据文件内容字节比较判定，NEVER 以时间戳或自建成功标记代替字节比较。
 
 - 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除。fulltest/slowtest 另有包含编译及全部收尾的总墙钟硬上限，不因纯编译排除而延长；嵌套阶段共享外层剩余额度，并保持更严格的内层上限。`--limit-seconds` 同时下调本入口的非编译与总墙钟上限。
 - 到限主动终止本次拥有的普通进程树，Bazel 仅取消本轮自有 invocation/actions、保留 Server（生命周期边界见下文）；非零退出并报告 `TIMEOUT`，不在阶段间重置时钟、不放宽上限。所有退出路径（成功、失败、缺工具、超时、中断、参数错误）都输出 status、total、compile_excluded、budgeted、limit 与退出码，秒至少一位小数。fastcheck 按 budgeted 判断到限；fulltest/slowtest 在 budgeted 或 total 任一到限时退出，独立线程须能在主线程同步阻塞时执行总墙钟强退。
@@ -84,3 +84,63 @@ OMP MUST 按各入口规定范围、预算、缓存失效与失败汇总执行�
 
 - **WHEN** 执行 fastcheck、fulltest、slowtest 或公开 Bazel 任务
 - **THEN** 按各入口规定范围、预算、缓存失效与失败汇总执行，并只报告实际完成的证据
+
+### Requirement: 门禁入口的参数解析
+
+OMP MUST 只接受声明过的命令行参数，非法输入以用法提示和退出码 2 结束。
+
+#### Scenario: 门禁入口的参数解析的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `fastcheck`、`fulltest` 与 `slowtest` 均 MUST 接受 `--limit-seconds=<秒>`，取值 MUST 为有限正数且不超过该入口自己的硬上限（360／1800／3000 秒）；`fulltest` 与 `slowtest` 另 MUST 接受 `--debug`。重复的 `--limit-seconds` 只认第一次出现，第二个即视为非法。
+- `fulltest` 开启 `--debug` 时 MUST 把该标志透传给其隔离 UI 冒烟阶段的运行入口，使冒烟阶段输出调试信息。
+- 未声明参数、重复限制参数或超界数值 MUST 输出该入口的用法行并以退出码 2 结束，MUST NOT 静默忽略或退化为默认值。
+- `--debug` MUST 只影响诊断输出，MUST NOT 改变检查范围、预算、成功判据或结果复用。
+
+#### Scenario: 门禁入口的参数解析的可观察行为
+
+- **WHEN** 以 `--debug`（fulltest／slowtest）、合法或非法的 `--limit-seconds` 值，或未声明参数执行各门禁入口
+- **THEN** 合法参数正常启动（fulltest 把 `--debug` 传给 UI 冒烟），非法参数打印用法并以退出码 2 结束
+
+### Requirement: Windows 测试临时目录的选择
+
+OMP MUST 在存在其他可写驱动器的 Windows 主机上把测试临时目录移出系统盘。
+
+#### Scenario: Windows 测试临时目录的选择的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 仅 Windows 生效：当前 `TEMP`（缺省时 `TMP`）已位于非系统盘时 MUST 原样返回、不做改动。
+- 存在非系统盘时 MUST 逐盘尝试创建 `<驱动器>:\\omp-test-tmp` 并做实际写入探针（建临时目录再删除）；创建或写入失败 MUST 跳过该盘。
+- 多个可用盘 MUST 按剩余空间择优；空间不可知时 MUST 保留探测顺序中的第一个可用盘。
+- 选定后 MUST 同时返回 `TMP` 与 `TEMP` 指向该目录；没有任何可用盘时 MUST 返回空，由调用方保留系统默认值。
+- 非 Windows 平台 MUST NOT 返回任何覆盖，MUST NOT 修改宿主环境或系统 PATH。
+
+#### Scenario: Windows 测试临时目录的选择的可观察行为
+
+- **WHEN** Windows 主机有可写的第二块盘且 `TEMP` 仍在系统盘
+- **THEN** 测试进程的 `TMP`／`TEMP` 指向 `<盘>:\\omp-test-tmp`；`TEMP` 已在他盘或不存在其他盘时保持默认
+
+### Requirement: 原生安装替换与回滚
+
+OMP MUST 在不中断已加载映像的前提下替换 native 产物，失败时保留可恢复文件并报错。
+
+#### Scenario: 原生安装替换与回滚的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 替换前 MUST 把新产物写入同目录的唯一临时文件；能直接原子重命名覆盖目标时 MUST 直接重命名。
+- 目标映像已被加载而无法覆盖时 MUST 先把现有文件改名让位为 `<目标>.old.<PID>`（继续运行的进程保留旧映像），再安装新文件；仅在改名让位不可用时才允许先删除目标再换入。
+- 换入新文件失败且已发生改名让位时 MUST 回滚：把让位文件改回原目标。回滚失败时 MUST 报错并保留让位文件与新产物两个恢复文件的路径，MUST NOT 静默删除其中任何一个。
+- 换入成功后 MUST 删除让位文件；删除失败 MUST NOT 使安装失败。
+- POSIX 上安装文件与 bindings MUST 为 0644：替换前把产物写入同目录临时文件后即设置该 mode，MUST NOT 依赖目标原有权限位。
+- 是否需要安装 MUST 依据目标与产物内容字节比较（含“目标为普通文件且可写”），NEVER 以时间戳、大小或自建成功标记代替字节比较。
+
+#### Scenario: 原生安装替换与回滚的可观察行为
+
+- **WHEN** native 产物内容变化且目标映像正被占用（或未变化）
+- **THEN** 占用时以改名让位完成替换、失败时回滚并保留恢复文件路径；未变化时保留原文件与修改时间

@@ -72,6 +72,50 @@ Superpowers 的技能、上游插件及扩展保留固定版本原始文件，�
 - **WHEN** 用户运行 `omp openspec init [path]`，包括已检测到工具、显式指定工具或重复初始化
 - **THEN** 仅执行原生项目初始化，建立必要的 `openspec/` 目录及配置，不生成技能和命令；保留已有自定义命令及配置，仍支持 `--language` 和 `--` 后的目标路径
 
+### Requirement: Dev 需求 schema 固定为包内 omp-spec
+
+OMP MUST 把 `omp-spec` 的唯一来源固定为随包内置 schema；项目或用户同名覆盖 MUST 被拒绝，不得静默改用另一套 Dev 工作流。
+
+#### Scenario: 解析来源必须是包内 schema
+
+- **WHEN** Dev 初始化新流程、需求阶段读取 OpenSpec 指令，或需求校验与归档前确认 schema
+- **THEN** schema 解析结果 MUST 声明来源为包内，且其实际路径按真实路径比较等于随包内置的 `omp-spec` 目录，两者同时满足才可继续
+- **AND** 不得接受工作区或用户目录中的同名 schema，也不得为通过检查而复制、改写或移动内置 schema
+
+#### Scenario: 外部覆盖阻断流程
+
+- **WHEN** `omp-spec` 被项目级或用户级 schema 覆盖，或解析结果来源不是包内
+- **THEN** MUST 拒绝并阻断初始化、需求校验与归档，报错说明外部 schema 遮蔽了内置 schema，且须在不修改已有 change 的前提下解决冲突
+- **AND** 不创建 change、不迁移或转换已有 change、不回退为其他 schema，也不报告成功
+
+### Requirement: 包内 Superpowers 脚本执行入口
+
+OMP MUST 通过 `omp superpowers <relative-script> [args...]` 提供包内技能脚本入口，只运行随包交付的脚本，不执行工作区任意脚本。
+
+#### Scenario: 只运行包内清单内脚本
+
+- **WHEN** 用户运行 `omp superpowers <relative-script> [args...]`
+- **THEN** 只接受随包脚本清单中存在且位于 `skills/` 下的相对路径；其他路径 MUST 报“不是包内技能脚本”并拒绝执行
+- **AND** 脚本参数原样透传，不解释为 Dev 命令或阶段操作
+
+#### Scenario: 运行环境与外部工具
+
+- **WHEN** 运行包内 JavaScript 或 shell 脚本
+- **THEN** JavaScript MUST 由 OMP 内嵌的 Bun 执行，不依赖外部 Node；shell 脚本 MUST 要求 Bash 与 POSIX 工具，Unix 使用可用的 `bash`，Windows 使用 Git for Windows 的 Bash，WSL 的 `bash` 不适用；缺少 Bash MUST 报固定错误并失败
+- **AND** MUST 在 PATH 前置包内运行时目录（Windows 另加所用 Bash 及其 POSIX 工具目录），并设置 `BRAINSTORM_DIR` 指向工作区下的 `.superpowers/brainstorm`
+- **AND** Graphviz 等外部工具由脚本自行解析，其真实退出状态随脚本透传，不预先替换或伪造
+
+#### Scenario: 缺参与帮助的退出码
+
+- **WHEN** 未提供脚本参数，或提供 `-h`／`--help`
+- **THEN** 缺参 MUST 把用法写入 stderr 并以退出码 2 结束；`-h`／`--help` MUST 把用法写入 stdout 并以退出码 0 结束
+- **AND** 脚本的 stdout、stderr 与退出码 MUST 原样透传；入口自身异常（例如 Bash 缺失或脚本不存在）MUST 写入 stderr 并以退出码 1 结束
+
+#### Scenario: 中断转为脚本中止
+
+- **WHEN** 脚本执行期间收到 SIGINT 或 SIGTERM
+- **THEN** MUST 转为中止信号并等待脚本结束，再按实际结果退出；不得遗留子进程，也不得把中断报成成功
+
 ### Requirement: 四个固定 Agent 与真实文件门禁
 
 OMP MUST 仅设置需求、方案、计划、执行四个固定阶段 Agent，各有独立、可持续对话及可恢复原生历史的 SDK 会话，承接原生模型、上下文与工具能力。角色状态仅为无代理、需求、方案、计划、执行；同一时刻仅一个活动阶段 Agent。忙碌、错误及停止进度依据实际原生运行情况显示，待验收及待收尾保留必要约束，不增加代理角色或重复持久化运行状态。
@@ -186,6 +230,73 @@ OMP MUST 仅设置需求、方案、计划、执行四个固定阶段 Agent，�
 - **WHEN** 用户仅编辑 Team 开关后取消或关闭面板，或在普通文字中提及 Team 配置参数
 - **THEN** 不改变已保存 Team 值，不因配置编辑启动模型、Team 或 Goal；重新打开显示保存值，未保存勾选或普通说明不代替配置保存及阶段批准
 
+### Requirement: Dev 子代理的宿主约束
+
+Dev 阶段 MUST 通过原生子代理宿主钩子约束派生会话，受限会话的能力放宽 MUST 只限 Goal。
+
+#### Scenario: Dev 子代理宿主约束的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 派生前的钩子 MUST 能配置子会话的工具面、工作目录与保活方式；派生失败 MUST 清理已创建的子会话与工件。
+- 子代理结束时 MUST 能按阶段策略应用或丢弃变更，并保持既有隔离边界：不创建工作树、不扩大阶段写入白名单。
+- 受限会话 MUST 只允许追加 Goal 能力；该放宽 MUST NOT 扩大工具清单、读取隔离或写入白名单。
+- 钩子 MUST NOT 改变普通（非 Dev）会话的子代理默认行为。
+
+#### Scenario: 受限会话不放宽工具面
+
+- **WHEN** Dev 为受限子代理开启 Goal 能力
+- **THEN** 该子代理仍只拥有既有工具清单与读取范围，Goal 之外的调用继续被拒绝
+
+### Requirement: Markdown 需求权威探测
+
+OMP MUST 为沿用既有 Markdown 需求权威的项目确定唯一权威目录，并把该目录下的全部 Markdown 纳入需求物版本集合。
+
+#### Scenario: 权威目录探测顺序与歧义
+
+- **WHEN** Dev 建立新流程或读取需求物
+- **THEN** MUST 依次检查 `docs-zh-CN/requirements`、`docs/requirements`、`requirements`，取第一个真实存在的目录作为唯一权威
+- **AND** 同时存在多个候选 MUST 报歧义并阻断新建，不任选其一、不自动合并；检查候选时的非“不存在”错误 MUST 直接报错，不静默跳过
+
+#### Scenario: 权威目录内容进入版本集合
+
+- **WHEN** 权威目录内存在 Markdown 文件
+- **THEN** 该目录下递归的任一新 `.md` MUST 纳入需求物版本集合，按相对权威目录的路径记录，与 proposal 及增量规格共同构成需求物版本
+- **AND** 目录为空 MUST 报“无权威 Markdown 需求”并阻断；不复制原文、不改写原文件、不另建第二套主规格
+
+### Requirement: 方案来源须可从原生阶段历史确证
+
+OMP MUST 在读取正式方案时不仅校验格式，还须能从原生阶段历史确证其来源；无法确证 MUST 阻断，不得降级为单 Agent 结果。
+
+#### Scenario: 读取正式方案时核对来源
+
+- **WHEN** Dev 读取正式方案 JSON，包括 `next` 检查及阶段交接
+- **THEN** MUST 从原生阶段历史中最近一次方案阶段进入记录确证角色为方案、该记录为阶段进入、且带有本轮 Team 开关状态
+- **AND** 无法确证 MUST 阻断并报“方案来源无法从原生阶段历史确证”，同时提示返回需求阶段后重新进入；不得按候选内容猜测来源，不得静默改用单 Agent 结果
+
+#### Scenario: Team 开启时每个候选必须可采用
+
+- **WHEN** 原生阶段历史表明本轮方案由 Team 讨论产生
+- **THEN** 每个正式候选 MUST 对应本轮一个可采用的 Team 候选，且其正文 MUST 包含该 Team 候选的原始 proposal 原文
+- **AND** 任一候选不满足 MUST 阻断并指出该候选 ID；不得改写候选 ID、裁剪原文或把不可采用方向写成正式候选；本轮未启用 Team 时不要求候选与 Team 结果对应
+
+### Requirement: Dev 阶段会话的强制运行默认值
+
+OMP MUST 在所有 Dev 阶段会话上强制一组运行默认值，且只作用于该会话，不写回用户或项目配置。
+
+#### Scenario: 编辑模式强制整文件替换
+
+- **WHEN** Dev 建立任一阶段 Agent 会话，包括新建与恢复
+- **THEN** `edit.mode` MUST 被覆盖为 `replace`（整文件替换），显式压过用户设置及按模型变体回退
+- **AND** 该覆盖不改写持久配置，普通会话仍按原设置解析
+
+#### Scenario: 前三阶段关闭投机启动
+
+- **WHEN** 需求、方案或计划阶段会话执行工具调用或派发任务
+- **THEN** 工具与任务的投机启动 MUST 关闭，即使配置为开启
+- **AND** 执行阶段沿用配置值；该关闭不改变阶段工具权限或阶段门禁
+
 ### Requirement: 完整文件与用户原始确认交接
 
 OMP MUST 在阶段进入时直接交接完整正式原文件、选定候选 ID、原始用户决定及相关 Team 配置，不以摘要代替原文，不额外调用模型总结，不生成交接或确认文档，不调用 `AgentSession.handoff()`；同阶段追问复用原生会话，不反复注入全部未变化材料。批准只对当时确认的材料版本有效。
@@ -218,6 +329,26 @@ OMP MUST 在阶段进入时直接交接完整正式原文件、选定候选 ID�
 
 - **WHEN** 用户在最终验收前明确要求在批准范围内进行业务修复或继续实施
 - **THEN** 撤销旧完成报告的本轮验收资格；更新后的报告及验证结论对应当前交付，不适用的旧验证明确标为过期，验证范围按实际变化确定，完成后重新等待最终 `next`
+
+### Requirement: 已批准需求集合新增产物即视为变化
+
+OMP MUST 把“已批准之后的任何新增需求产物”视为批准失效，即使已批准文件的字节未变。
+
+#### Scenario: 新增未获批准的增量规格
+
+- **WHEN** 需求已获批准后，出现新的 `openspec/changes/<change-id>/specs/<capability>/spec.md`
+- **THEN** MUST 判为需求材料变化，并以“新增未获批准的需求产物”为原因阻断推进与续做，要求用户重新确认
+- **AND** 不要求仍被批准的原文件被修改；不得把新增文件视为已批准范围
+
+#### Scenario: 权威目录新增 Markdown
+
+- **WHEN** 已批准后既有 Markdown 需求权威目录内新增任一 `.md` 文件
+- **THEN** MUST 同样判为变化并阻断，原因指向该文件的实际路径
+
+#### Scenario: 无法枚举已批准集合
+
+- **WHEN** 已批准集合无法被枚举，例如权威目录不可读
+- **THEN** MUST 判为不匹配并阻断，报出无法枚举的原因；不得当作匹配而继续依赖旧批准
 
 ### Requirement: 工程责任、完成报告与验收后收尾
 

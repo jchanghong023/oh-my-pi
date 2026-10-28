@@ -102,6 +102,23 @@ OMP MUST 把即将被自动消费的排队输入计入自动压缩的待输入�
 - **WHEN** 一轮结束且待消费队列非空，加入队列输入后超过自动压缩阈值
 - **THEN** 先执行自动压缩，再消费队列首条，不把排队输入当作已在上文中的历史
 
+### Requirement: 请求级上下文的独立计数
+
+OMP MUST 用 `markPerCallContextMessage` 标记仅本次请求携带的消息并单独计数，只以增量形式计入当次调用的 prompt 估算，MUST NOT 让其混入后续压缩基线。
+
+#### Scenario: 有 usage 锚点的请求级上下文
+
+- **WHEN** 一次调用包含仅本次请求使用的消息，历史中存在 `TranscriptUsageAnchor`，锚点记录的总请求级计数不小于其按来源分项之和，且本次请求级消息都带来源
+- **THEN** prompt 估算 MUST 以锚点用量为基础加请求级计数增量：增量增加时按本地计数并叠加估算余量，增量减少时只从锚点用量中扣除且不降到零以下
+- **AND** 锚点之后追加的普通消息 MUST 本地计数并叠加同一余量（本地计数 + 向上取整的 1/10），每个本地计数的消息 MUST 额外计入 `MESSAGE_FRAMING_TOKENS`（16）
+- **AND** 统计结果 MUST 写入该次 assistant 消息的 `perCallContextTokens`；每条请求级消息都带具名来源时，MUST 同时写入按来源分项的 `perCallContextTokensBySource`。
+
+#### Scenario: 匿名变换或缺少锚点
+
+- **WHEN** 锚点记录的总请求级计数大于其按来源分项之和、存在无来源的请求级消息，或没有可用锚点
+- **THEN** MUST 退回本地全量估算：上下文总计数叠加估算余量，并按消息条数叠加 `MESSAGE_FRAMING_TOKENS`
+- **AND** MUST NOT 依据已无法重建的锚点推断增量。
+
 ### Requirement: Judge 候选池的会话作用域
 
 OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池限制在同一作用域内，作用域外模型不进入主候选或 fallback。
@@ -119,3 +136,36 @@ OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池�
 
 - **WHEN** 会话配置的 `enabledModels` 不包含远端的 judge 默认模型
 - **THEN** 判定请求使用作用域内候选或会话自身模型，不先请求作用域外模型
+
+### Requirement: 逐输入元数据边界
+
+入队输入 MUST 能携带逐输入的工具禁用清单、命令自动化来源标识与附件清单，且这些字段 MUST NOT 作为 Provider 选项发送。
+
+#### Scenario: 输入附带禁用工具与附件
+
+- **WHEN** 一条用户输入携带工具禁用清单、`sourceCommand.automationId` 或附件清单（引用、文件名、MIME、字节数等）
+- **THEN** 该元数据 MUST 随运行时队列与 journal 保留，并用于本轮工具可用性与来源记录
+- **AND** 元数据 MUST NOT 作为请求参数发送给模型 Provider
+- **AND** 受限会话 MUST NOT 因这些字段放宽原有工具清单或授权边界。
+
+### Requirement: 补全层级的模型角色解析
+
+`completion()` 的层级只有 `smol`、`default`、`slow`；候选 MUST 按对应层级的模型角色解析，且只有 `slow` 会发送思考档位。
+
+#### Scenario: 层级候选解析
+
+- **WHEN** 以 `smol`、`default` 或 `slow` 层级调用补全
+- **THEN** `smol`、`slow` 分别按模型角色 `@smol`、`@slow` 解析候选；`default` 优先使用会话当前模型，会话无当前模型时回落到 `@default` 角色
+- **AND** `slow` 使用该角色配置的具体思考档位；配置为 `auto` 或未配置时，仅在支持推理的模型上请求其最高支持档
+- **AND** `smol` 与 `default` MUST NOT 发送思考档位，也 MUST NOT 因用户配置的档位改变行为
+- **AND** 启用模型回退时按既有重试回退链在层级主候选之后追加，回退项继承主候选的有效思考设置，不绕过层级角色语义。
+
+### Requirement: 自动角色别名的来源保留
+
+按 agent 配置解析模型覆盖时，OMP MUST 保留自动角色来源，使执行期解析仍能识别该选择来自自动角色。
+
+#### Scenario: 子代理与 vibe 的模型覆盖
+
+- **WHEN** 子代理或 vibe 启动按 agent 或任务配置解析模型覆盖，且匹配到自动角色别名
+- **THEN** 解析结果 MUST 保留该自动角色来源（不展开成具体模型 ID）
+- **AND** 执行期仍能据此识别来源，并沿用角色身份解析继承的重试回退链。

@@ -243,3 +243,22 @@ OMP MUST 生成的 ZIP 可解包，完整保留选定范围的原始字节；失
 
 - **WHEN** the documented capability is used in the section's applicable context
 - **THEN** ZIP 可解包且字节与冻结范围一致，失败和取消不损坏旧包
+
+### Requirement: 9. 非交互导出的诊断输出与退出码
+
+OMP MUST 在无界面 print 模式下把导出诊断写入 stderr，并在导出失败时以非零退出码结束。
+
+#### Scenario: 9. 非交互导出的诊断输出与退出码的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- text 模式下，导出命令产生的通知 MUST 写入 stderr，MUST NOT 混入标准输出的对话正文；错误级 MUST 带 `Error: ` 前缀，警告级 MUST 带 `Warning: ` 前缀。
+- json 模式下导出通知 MUST 作为事件流的一部分输出到标准输出，MUST NOT 在标准输出额外插入非事件文本。
+- 任何一次导出以错误级通知失败时，进程退出码 MUST 为 1，即使模型回合本身成功。
+- 仅出现警告或信息级通知时 MUST NOT 改变退出码；成功导出 MUST 保持正常退出码。
+
+#### Scenario: 9. 非交互导出的诊断输出与退出码的可观察行为
+
+- **WHEN** 在无界面 print 模式（text）执行 `/code-review-export` 且导出失败
+- **THEN** 错误与警告写入 stderr，进程以退出码 1 结束，stdout 只保留正常对话输出

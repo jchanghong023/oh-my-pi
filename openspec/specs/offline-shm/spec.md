@@ -43,7 +43,8 @@ OMP MUST 使用当前 profile 的 shm 运行根，项目文件仍按原路径访
 - 会话、分支、Goal／计划／任务持久状态、会话附件及输出产物。
 - Wiki、记忆等 OMP 自有数据库及 SQLite 的 WAL／SHM 辅助文件；Repo 数据库的 NFS 共置例外见[代码定位索引](../repo-index/spec.md)。
 - 日志、缓存、native 展开文件、OMP 自有临时文件、锁与 IPC 运行状态。
-- DAP 等外部调试适配器的 Unix socket／IPC 端点同样落在运行根（`dap/client.ts` 经 `ipcEndpoint` 生成，必要时缩短以满足 `sun_path` 长度限制）；对应目录须为当前用户私有（0700、属主为进程 UID），校验不通过时在启动适配器前报错，不回退到 `/tmp`。
+- DAP 等外部调试适配器的 Unix socket／IPC 端点（offline 下落在运行根）由 `ipcEndpoint` 生成：只有当 `<目录>/<清洗后名称>.sock` 的字节长度（含结尾 NUL）达到平台上限（Linux 108、其他平台 104 字节）时才迁移。迁移落点 MUST 为每用户私有目录：Linux offline 为 `/dev/shm/omp-<有效 UID>`，其他情形为 `/tmp/omp-<有效 UID>`；basename MUST 为对「解析后目录字节 + 单个 NUL + 原始名称字节」计算的 xxh64（种子 0）16 位小写十六进制加 `.sock`，对同一目录／名称及同一 offline 取值确定性一致。DAP 只在 offline 分支使用该端点与迁移；非 offline 沿用既有 `/tmp/<名称>.sock`。
+- 端点落点目录 MUST 为真实目录（非符号链接，按 `lstat` 判定）且属主为进程有效 UID。DAP 自建的 offline 端点目录已存在却带组／其他用户访问位时 MUST 报错并拒绝启动适配器（不收紧权限）；native `IpcServer` 监听同一落点目录时 MUST 收紧为 0700。目录类型或属主校验失败 MUST 在启动适配器之前报错，NEVER 静默改用其他共享临时目录。
 
 程序安装位置、项目源码、项目级 `.omp/`、显式交付到项目中的输出、外部 EDA 产物不自动迁移。外部 Claude 配置、`OMP_SKILLS_DIR` 等外部输入仍从原位置读取；本需求不承诺消除既有外部输入的 NFS 访问。
 
@@ -81,6 +82,82 @@ shm 路径映射及磁盘边界检查仅作用于文件会话存储；非文件�
 
 - **WHEN** Linux offline 读写会话、Wiki、日志及附件
 - **THEN** 使用当前 profile 的 shm 运行根，项目文件仍按原路径访问
+
+### Requirement: 操作系统临时目录重定向
+
+OMP MUST 让 offline 进程及其派生进程把操作系统临时目录解析到运行根内，且不改写配置根。
+
+#### Scenario: 操作系统临时目录重定向的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- offline 启动 MUST 把 `TMPDIR`、`TMP`、`TEMP` 三者都改写为 `<运行根>/tmp`；存在 profile 时为 `<运行根>/profiles/<profile>/tmp`。该目录 MUST 按运行根规则创建为 0700 且属主为当前用户的私有目录。
+- 改写 MUST 发生在启动阶段、任何工具或子进程继承环境之前；派生的工具进程、Worker、子 Agent 与 shell 子进程 MUST 继承该临时目录，其临时文件因此落在 shm 而非原始持久根。
+- `OMP_CONFIG_ROOT` MUST NOT 被改写为运行根内路径；子进程仍需据此定位真正的原始持久根与备份目标。
+- 非 offline 运行 MUST NOT 触碰这三个变量，沿用宿主既有临时目录。
+
+#### Scenario: 操作系统临时目录重定向的可观察行为
+
+- **WHEN** offline 进程执行需要临时目录的命令或工具
+- **THEN** 其临时文件出现在运行根的 `tmp`（或 profile 的 `tmp`）下，`OMP_CONFIG_ROOT` 保持原值
+
+### Requirement: 运行根内 native 缓存路径校验
+
+OMP MUST 逐段确认 native 缓存目标仍在运行根内且不含符号链接，并以不跟随链接的方式写入与加载。
+
+#### Scenario: 运行根内 native 缓存路径校验的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 在 offline 运行根内创建、解压、发布或加载 native addon 之前，MUST 逐段解析目标路径：任何一段逃出运行根，或任一分量为符号链接，MUST 报错并拒绝该次写入／加载；非叶子分量 MUST 为目录，叶子不存在时视为通过。
+- 校验 MUST 基于原始路径分量逐段进行，NEVER 先词法折叠再校验。
+- 解压写入 MUST 采用不跟随符号链接、目标已存在即失败的独占创建；发布 MUST 使用同目录重命名，MUST NOT 覆盖已存在的其他文件。
+- 加载 native addon MUST 以不跟随符号链接的只读方式打开，且 MUST 确认打开对象仍是普通文件。
+
+#### Scenario: 运行根内 native 缓存路径校验的可观察行为
+
+- **WHEN** 运行根内的 native 缓存分量被换成符号链接或逃出运行根
+- **THEN** 该次写入或加载失败并报错，不读取链接目标也不在运行根外落文件
+
+### Requirement: offline 下被忽略的显式路径覆盖
+
+OMP MUST 在离线 shm 模式（Linux offline）下忽略指向运行根之外的显式缓存与 native 路径覆盖，并把这些数据收敛到运行根。
+
+#### Scenario: offline 下被忽略的显式路径覆盖的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 离线 shm 模式生效时，`OMP_GITHUB_CACHE_DB`、`OMP_COMMIT_CACHE_DB`、`OMP_JUDGMENT_CACHE_DB`、`OMP_AUTH_BROKER_SNAPSHOT_CACHE`、`PI_NATIVES_DIR` MUST 被忽略，对应数据库、缓存文件与 native 目录 MUST 使用运行根内的 profile 默认布局。
+- 因此该模式下的进程 MUST NOT 因这些变量在原始持久根或其他磁盘上创建、读取或写入缓存文件；派生进程继承同样的取值，不因透传而在别处重建缓存。
+- 其他情形（非 offline，或 offline 但未启用 shm 运行根，例如 Windows／macOS）这些变量 MUST 保持既有语义（绝对路径生效、相对值被忽略）。
+
+#### Scenario: offline 下被忽略的显式路径覆盖的可观察行为
+
+- **WHEN** offline 进程带着指向原始持久根的上述覆盖变量启动
+- **THEN** 缓存与 native 文件仍写在运行根内，覆盖变量指向的位置不被访问
+
+### Requirement: 跨主机配置锁的 sidecar 约束
+
+OMP MUST 只在通过身份与权限校验的 sidecar 上取得跨主机锁，校验失败即拒绝写入。
+
+#### Scenario: 跨主机配置锁的 sidecar 约束的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 打开 sidecar 之前 MUST 校验：普通文件、属主为进程有效 UID、mode 恰为 0600（含粘滞位与 setuid／setgid 位在内的权限位整体匹配）、硬链接数为 1；创建时同样以 0600 建立。不满足时 MUST 以权限拒绝失败，MUST NOT 退化为无锁写入。
+- 打开 MUST 使用不跟随符号链接、关闭即关（close-on-exec）、非阻塞的方式；打开后 MUST 复核已打开 inode 与该路径当前 inode 一致，不一致 MUST 视为冲突。
+- 同一进程重复获取同一 inode MUST 视为争用（返回未取得锁），NEVER 因进程内记录锁可重入而当成独占成功。
+- 释放失败时 MUST 保留该 inode 的所有权与描述符供重试，MUST NOT 丢锁后继续；只有在最终销毁路径才允许关闭描述符并放弃。
+- 非 Unix 平台 MUST 以“不支持”失败，MUST NOT 用替代实现冒充跨主机互斥。
+
+#### Scenario: 跨主机配置锁的 sidecar 约束的可观察行为
+
+- **WHEN** sidecar 权限、类型、链接数或属主不合法，或路径在打开期间被替换
+- **THEN** 保存以权限拒绝或冲突失败，不产生无锁写入
 
 ### Requirement: 3. 启动与前台性能
 

@@ -39,7 +39,9 @@ OMP MUST 从真实目录注册模型；选用后按来源投影历史并以 ACP/
 - Windows 上默认通过当前用户、当前登录会话的 JchTools 控制管道进行只读发现，仅接收版本化服务身份、状态、实例标识、实际运行 HTTP 地址与能力；不读取或暴露启动程序、参数、凭据及保存配置，不启动、应用配置、重启或停止服务。服务缺席或未就绪时探测有界，不阻塞正常启动与模型选择。
 - 仅在服务已就绪、发现身份与能力匹配时访问实际端点的 `GET /v1/models`，按返回的真实模型 ID 注册进程内 `jchtools/<ID>`；不猜测端口、不伪造模型、不写 OMP 配置，不自动改变默认模型、角色或用户选择。`disabledProviders` 禁用 `jchtools` 或进程环境 `OMP_JCHTOOLS_DISCOVERY=0` 时不探测、不注册；此开关只影响当前进程，不持久化。JchTools 启动的子 Agent 继承关闭发现的防递归保护，服务端职责统一按 JchTools AH 需求执行。
 - 启动及模型选择器打开/刷新时重新发现：OMP 先启动、服务后启动也能出现；服务重启或应用新端口后按新实例与实际地址刷新，撤销失效目录和地址，不继续使用旧端点。可用性变化不自动切换模型或补发已有任务。
+- `models.yml` 的 `providers.jchtools` 为 fork 保留 ID：整段忽略并在启动时输出保留提示（不阻断启动），该段的格式或字段错误 MUST NOT 使其他自定义 Provider 配置失效。
 - 选择该 provider 即进入真实远端 Agent 模式，OMP 仅作为文本/SSE 的 ACP 客户端，而非普通模型的客户端工具循环：不注入自己的 system、工具 schema／指令或技能正文，不发送工具调用控制字段，不在前端执行工具；后端 ACP Agent 的系统提示、工具、技能、决策、执行与权限边界以 JchTools `docs/requirements/ACP-MODEL-SERVICE.md` 的 AH-03～AH-05 / AH-13 为权威，不在本仓库替换或重复实现。
+- 将会话模型切换到该远端模型时 MUST 跳过“先用当前模型压缩、再应用切换”的路径：远端 ACP 接收的是按来源投影的文本 epoch，而非本地对话记录，其体量不构成用当前本地模型先行压缩的理由。因容量不足而需要压缩的本地模型切换路径保持不变。
 - 请求使用 `POST /v1/chat/completions` 的受支持文本消息、流式选项、后端公布的模型 ID 及顶层 `cwd` 字符串。2026-10-12 用户确认：仅 `server_agent` 模式按来源投影用户亲自提交的原文、用户明确提供的任务背景／约束及当前聊天的完整可见用户／助手文本历史；普通模型接口不变。OMP 生成的系统／开发者提示、技能正文、工具定义／指令、子代理规则、魔法关键词通知、Goal 编排／授权／自动提醒及其他自动通知、推理、工具调用／结果和调试元数据不进入请求，即使已持久化为 user 角色也不变成用户亲自提交内容。用户亲自输入的“使用 scout”、system/developer、目标或授权等字面文本原样保留，不按正文关键词清洗，也不要求 JchTools 全局丢弃其他调用方显式提供的 system/developer 背景。普通模型历史中的可见用户／助手文本保留，工具和推理记录不转入远端。接口仍仅接受文本，用户媒体输入明确报错，不扩展图片／工具协议。
 - 远端任务 slash 命令按用户原文提交给后端 Agent；公开 SDK、TUI、RPC 与 ACP 输入链不执行或展开 OMP 本地 extension 命令、custom prompt、file templates 或同名技能，不读取 OMP 本地技能正文，不用本地模板或技能覆盖同名远端命令。ACP slash 按官方协议由 Agent 识别原始命令前缀（如 `/web ...`），不是 OMP 的本地工具调用。宿主本地管理命令的派发、状态和确认机制保持不变；被本地管理命令消费的输入不作为远端任务重放。
 - 每个 ACP 会话使用调用方当前任务目录。OMP 每次请求从当前会话的运行目录取得绝对、已存在目录，通过独立 `cwd` 字段显式传给 JchTools；后端 ACP 会话及省略目录的终端回调使用该目录。受支持的内置文本请求（含显式远端角色的补全、提交推断/摘要、编辑修复、标注摘要、技能描述、语音改写、标题/任务标签及内存处理）同样传递所属任务目录；后台会话消费者在请求时读取当前目录，命令消费者使用该命令的任务目录，隔离子任务使用其工作树目录。不扩展图片或客户端工具能力，不改变模型角色选择。目录缺失、相对或不可用时明确失败，不从提示猜测，不静默使用进程全局目录，不修改进程全局 cwd。
@@ -122,3 +124,70 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 
 - **WHEN** OMP_OFFLINE 开启且有效 Claude Code 配置可用
 - **THEN** 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据
+
+### Requirement: 保留 Provider ID 的运行时注册
+
+扩展与运行时 MUST NOT 替换 `company`、`jchtools`、`codeagent` 三个保留 Provider；注册这类 ID MUST 失败并返回明确错误，而不是静默覆盖。
+
+#### Scenario: 扩展或运行时注册保留 ID
+
+- **WHEN** 扩展或运行时通过 Provider 注册入口注册名为 `company`、`jchtools` 或 `codeagent` 的 Provider
+- **THEN** 注册 MUST 失败，并返回指明该 Provider 为内置或实时 Provider、不可替换的错误
+- **AND** 既有注册状态、模型目录与其他 Provider 的注册行为保持不变。
+
+#### Scenario: 注册其他 Provider
+
+- **WHEN** 扩展或运行时注册其他 ID 的 Provider
+- **THEN** 沿用既有注册、校验与凭据解析行为，不受保留 ID 限制影响。
+
+### Requirement: 重试回退链的路由剥离
+
+重试回退链 MUST 只在目标 Provider 与来源 Provider 相同时保留 `@upstream` 路由；跨 Provider 复制模型 ID MUST 剥离该路由。
+
+#### Scenario: 回退项指向其他 Provider
+
+- **WHEN** 回退链把失败模型解析到与来源不同的 Provider
+- **THEN** 生成的候选选择器 MUST NOT 携带来源 Provider 的 `@upstream` 后缀
+- **AND** 目录中确实存在的字面模型 ID（本身含 `@`）优先按字面解析，不被当作路由选择器。
+
+#### Scenario: 通配回退项仍指向同一 Provider
+
+- **WHEN** 通配回退项解析后的 Provider 与来源 Provider 相同
+- **THEN** 候选 MUST 保留原 `@upstream` 路由。
+
+### Requirement: MCP OAuth 客户端凭据授权
+
+MCP 服务器配置的 `oauth.type` 为 `client_credentials` 时，OMP MUST 以非交互的 client credentials 流程取得访问令牌，不进入浏览器授权或设备码流程。
+
+#### Scenario: client credentials 授权流程
+
+- **WHEN** 服务器配置的 `oauth.type` 为 `client_credentials`，且 `oauth.clientId`、`oauth.clientSecret` 均非空
+- **THEN** OMP MUST 先以该服务器 URL 做 token-only 的 OAuth 元数据发现取得 token 端点，再向其发送 `grant_type=client_credentials` 表单请求，携带 `client_id`、`client_secret`、`resource`（取发现元数据公布的资源；未公布时使用服务器 URL）以及存在时的 `oauth.scope`
+- **AND** 请求超时 MUST 为 30 秒，重定向 MUST 按错误处理，不跟随跳转
+- **AND** 响应 MUST 含非空 `access_token`；出现 `token_type` 时其值必须为 bearer（大小写不敏感）；`expires_in` 必须为正有限数，未提供时按 3600 秒处理
+- **AND** 令牌按连接缓存，在过期前 30 秒或强制刷新时重新获取，后续请求以 `Authorization: Bearer` 头注入。
+
+#### Scenario: 配置或响应不合规
+
+- **WHEN** 凭据缺失、服务器类型不是 HTTP/SSE、token 端点不可用，或响应缺少合规 token 或有效期
+- **THEN** 连接 MUST 明确失败并报告原因，MUST NOT 回退到交互式授权或复用其他连接的令牌。
+
+### Requirement: 容量未知的模型
+
+模型的上下文窗口或最大输出缺失时 MUST 视为未知，MUST NOT 当作本地预算、零容量或已知上限。
+
+#### Scenario: 容量未知的展示与选择
+
+- **WHEN** 模型的 `contextWindow` 或 `maxTokens` 为空
+- **THEN** 界面 MUST 以未知占位形式显示，不得补 0、不得借用其他模型或本地估算的数值
+- **AND** 该模型 MUST NOT 因本地估算的对话体量被标记为超出上下文，也 MUST NOT 触发“先压缩再切换”路径。
+
+### Requirement: Anthropic 思考块保真
+
+Anthropic 兼容流经本地投影器重建 assistant 消息时，`redacted_thinking` 块 MUST 按源位置原样保留。
+
+#### Scenario: 缺少增量事件的加密思考块
+
+- **WHEN** 流中出现仅有开始与结束事件、没有增量事件的 `redacted_thinking` 内容块
+- **THEN** 该块 MUST 按原始内容与源位置合并进持久化的 assistant 消息，并在后续请求中原样回传
+- **AND** MUST NOT 伪造签名、改写内容，也 MUST NOT 因其缺少增量事件而丢弃。

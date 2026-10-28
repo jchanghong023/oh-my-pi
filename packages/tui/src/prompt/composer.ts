@@ -290,7 +290,6 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	// with rows — so it is retained across resizes rather than rediscovered
 	// from whatever chrome is expanded when the height changes.
 	#chromeFloor: number | undefined;
-	// Settled idle chrome has retired rows; contraction must preserve native history.
 	#chromeFloorPromoted = false;
 	#runActive = false;
 	#transientChrome: ReadonlySet<Component> = new Set();
@@ -485,35 +484,18 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
-		// Once a paint reaches the bottom row over committed history, rows above
-		// it may already be in native scrollback, which no later frame can pull
-		// back down. Keep the input on the bottom row whenever the frame shrinks
-		// — a closing dialog, report or HUD, or a live block collapsing. The
-		// slack that leaves has to sit somewhere: rows above the live area hold
-		// committed history still on screen, so the live rows cannot move up into
-		// them, and replaying those rows would duplicate them while clearing
-		// history would lose them. Replays position themselves. Without native
-		// history the live viewport is the whole document and shrinks in place.
+		// Compact mode lets the input follow a shrinking transcript instead of
+		// leaving a blank band between the last message and the working area.
 		const filledHistoryRows =
 			history?.kind === "replay" || !(history !== undefined || this.ui.hasProviderHistory())
 				? undefined
 				: this.ui.getFilledHistoryRows();
-		// Once settled chrome has retired rows, shrinking it cannot pull those
-		// rows back out of native scrollback. Let the editor move up instead of
-		// inserting a seam band; subsequent frames retain that natural anchor
-		// until new output fills the screen again. Shell history stays untouched.
 		const slack =
-			filledHistoryRows === undefined || promotedChromeContracted
+			(displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity) ||
+			filledHistoryRows === undefined ||
+			promotedChromeContracted
 				? 0
 				: Math.max(0, rows - Math.min(rows, filledHistoryRows + (history?.rows.length ?? 0)) - mutable.length);
-		// Park the slack below the live rows rather than above them. Above, it
-		// splits the on-screen history from the live tail and reads as a hole
-		// punched into whatever was streaming — a table's rows included — and
-		// each slack row is written with no cells, so no repaint, mark or
-		// selection can cover it until something scrolls it away. Below, the
-		// transcript stays contiguous with the history, the slack reads as the
-		// empty tail of a short document, and growth consumes it before any row
-		// can scroll.
 		if (slack > 0) {
 			const at = Math.max(0, Math.min(mutable.length, before.length + active.length - drop));
 			mutable.splice(at, 0, ...Array<string>(slack).fill(""));

@@ -80,7 +80,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 
 **OMP 附加能力与方法契约**
 
-本节说明当前 OMP 适配层已有的附加 wire，不改变上述固定基线、既有方法／字段／枚举或版本。`runtime/capabilities` 分别以 `ompProfiles`、`ompTan`、`ompTeam`、`ompIndexes`、`ompSkillManagement` 宣布下列能力；Team／role 配置另由 `ompConfiguration` 宣布，不能将运行观测与配置能力互相替代。客户端仅在对应能力为 `true` 时开放入口，缺失时明确不支持，不直接读写执行端配置或另造调用。
+本节说明当前 OMP 适配层已有的附加 wire，不改变上述固定基线、既有方法／字段／枚举或版本。`runtime/capabilities` 分别以 `ompProfiles`、`ompTan`、`ompTeam`、`ompIndexes`、`ompSkillManagement`、`ompSpecDriven` 宣布下列能力；Team／role 配置另由 `ompConfiguration` 宣布，不能将运行观测与配置能力互相替代。客户端仅在对应能力为 `true` 时开放入口，缺失时明确不支持，不直接读写执行端配置或另造调用。
 
 字段及严格校验直接引用以下当前源码，方法名由 `server.ts` 分发；本地声明不是对 vendored schema 的修改。以下路径均相对本仓 `packages/coding-agent/src/`：
 
@@ -91,6 +91,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 | `ompTeam` | `omp/team` 的 `list`／`read`／`stop` action；`modes/zcode/team.ts` 的 `handle` 字段校验、`OmpTeamRun`、`OmpTeamNode`、`OmpTeamEdge` |
 | `ompIndexes` | `omp/wiki/list`、`init`、`remove`、`search`、`grep`、`cancel` 及 `omp/repo/status`、`init`、`update`、`rebuild`、`remove`、`text`、`symbol`、`cancel`；各 action 均加对应 `omp/wiki/` 或 `omp/repo/` 前缀，参数见 `modes/zcode/indexes.ts` 的 `ompWikiParamsSchema`、`ompRepoParamsSchema` |
 | `ompSkillManagement` | `skills/manage` 的 `list`／`refresh`／`setEnabled` action；`modes/zcode/catalogs.ts` 的 `zcodeSkillsManageParamsSchema`、`zcodeSkillsManageResultSchema` |
+| `ompSpecDriven` | 会话订阅与运行查询的 `includeSpecDriven:true`、`v4/conversation/workflowRuns` 的 `runId` 过滤及 `sendText` 的 `specRun` 准入绑定；见 `modes/zcode/schema/omp-spec-extension.ts` |
 
 - 上述 workspace 对象复用 `LegacyProtocol.zcodeWorkflowsListParamsSchema.shape.workspace`，不是新的身份格式。外层沿用既有 stdio 请求 ID、result／error 信封；数字协议错误码原样保留，字符串业务码放在数字 `error.code:-32000` 的 `error.data.code`，已知业务 data／回执不得丢失。无专用数字码的校验或业务异常按当前分发器返回 `-32602`，客户端不凭消息文本推断成功、取消或可自动重试。
 - 全部请求受既有启动 ready 门禁与进程生命周期约束；owner EOF 关闭本进程资源，不增加 shutdown／exit 方法。attachment／详情关闭只释放原订阅，不等于关闭原生运行 owner。附加查询不改变 desktop-continuous／web-remote-replayable 的快照与恢复语义，也不把临时响应当作持久执行事实。
@@ -502,6 +503,270 @@ ZCode 子代理投影须覆盖配置／模型隔离、真实派生与父问答�
 - **WHEN** 客户端在同一 Dev 阶段继续澄清、补充或请求批准范围内修复
 - **THEN** 原生会话直接接收本次输入及支持的附件，消息和工具事件直接投影，不复制父会话回复、不重复交接未变化的全部材料、不重跑 Team，也不按聊天轮次重建 Goal；仍受批准版本及当前验收收尾约束
 
+### Requirement: 会话级 MCP 供给与启动校验
+
+OMP MUST 把 `session/create` 的 `mcpServers` 当作该会话完整、私有、启动前即须真实可用的 MCP 供给；任何无法唯一解释或未完成工具发现的供给都 MUST 在创建阶段拒绝。会话级 MCP 供给与冷恢复属本能力，不扩大通用 MCP 安装／编辑／凭据管理面。
+
+#### Scenario: 会话级 MCP 供给的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 同一请求内 MCP server 重名 MUST 拒绝；同一 server 的 `env` 名重复 MUST 拒绝，`header` 名重复 MUST 按小写比较后拒绝。校验信息只报告字段路径，MUST NOT 回显调用方提供的凭据。
+- `protocolVersion` 为 `2026-07-28` MUST 拒绝；版本协商由 OMP 的 MCP 传输自行完成，不接受调用方指定该修订。
+- `url` 只接受 `http` 与 `https`；解析失败 MUST 拒绝；URL 内嵌用户名或密码 MUST 拒绝并提示改用 header 传递凭据。
+- 供给配置 MUST 只按本次会话 cwd 解析，不把 workspace 身份变成执行目录，也不新增额外根的配置搜索。
+- 创建前 MUST 完成真实连接与工具发现；发现错误集合、失败集合或仍 pending 集合任一非空时 MUST 以 "MCP startup failed" 拒绝创建，MUST NOT 用缓存占位、延迟工具或重试等待冒充就绪。
+- 受限会话（`restrictToolNames`）携带非空 `mcpServers` MUST 报错；禁用 MCP 的请求同样 MUST NOT 建立 MCP 连接或注册其工具。
+
+#### Scenario: MCP 发现未全部成功时拒绝创建
+
+- **WHEN** `session/create` 携带的某个 MCP server 连接失败、握手超时或工具发现未完成
+- **THEN** 创建被拒绝并返回 "MCP startup failed"，不产生半就绪会话，也不暴露任何占位工具
+
+### Requirement: 会话级 MCP 配置的引用式持久化
+
+OMP MUST 在会话 journal 中只保存 MCP 配置的引用身份，把真实配置与凭据留在既有 auth credentials 存储，并只在显式删除会话时移除凭据。
+
+#### Scenario: 会话级 MCP 配置的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 会话配置中的 MCP 引用 MUST 只含 `{version:1, identity, credentialProvider?}`；真实 server 配置（含 `env`、`header`、OAuth secret）MUST NOT 进入 journal、snapshot、投影或错误文本。
+- `identity` MUST 为 `ambient`（未提供 `mcpServers`）或规范配置的 sha256：server 按名称排序，`env`／`header` 项按名称排序后序列化。
+- 非 ambient 供给 MUST 写入 auth credentials 的 `api_key`，provider 名 MUST 形如 `zcode-mcp:<sha256([cwd, sessionId])>`。
+- `session/resume` 对已驻留会话发现 `identity` 不符时 MUST 拒绝，MUST NOT 热替换 MCP 配置。
+- 冷恢复 MUST 按引用重建同一配置；`identity` 不符、凭据缺失、凭据内容不可解析或内容不合法 MUST 以明确错误拒绝恢复，不得回落为 ambient 或空配置。
+- 仅显式删除会话 MUST forget 该凭据；普通关闭、切换、EOF 与重启 MUST 保留凭据以供冷恢复。
+
+#### Scenario: 冷恢复缺少 MCP 凭据
+
+- **WHEN** 冷恢复一个带会话级 MCP 供给的会话，但对应凭据已被移除或与 identity 不符
+- **THEN** 恢复以明确错误失败，不静默以无 MCP 工具的空配置继续
+
+### Requirement: 会话工具面约束与受限会话
+
+OMP MUST 把 `toolAllowlist`／`toolDenylist` 作为该会话的工具面约束持久化，并在恢复与受限派生中保持一致。
+
+#### Scenario: 会话工具面约束的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `toolAllowlist`／`toolDenylist` MUST 写入会话配置条目并随 journal 持久化，冷恢复 MUST 沿用；缺省时按原生默认工具面。
+- 热恢复提交的清单与在驻留会话不一致时 MUST 拒绝，不得静默替换工具面。
+- 热恢复的 `additionalDirectories` MUST 只能确认已有覆盖，出现新目录 MUST 拒绝；只读历史访问不改变工具面。
+- 受限 actor 会话 MUST 合并父会话 allowlist 与 actor 自有工具，并并入当前输入携带的 denylist；受限会话 MUST NOT 注册 runtime tools，MUST NOT 启用 MCP。
+- 提交的清单只约束工具可见性，MUST NOT 借其绕过原生审批、拒绝规则或扩展工具钩子。
+
+#### Scenario: 热恢复提交不同工具清单被拒绝
+
+- **WHEN** 对已驻留会话调用 `session/resume` 并提交与该会话不同或新增的 `toolAllowlist`／`toolDenylist`
+- **THEN** 请求被拒绝，驻留会话保持原有工具面与目录覆盖
+
+### Requirement: workspace 交互与模型 IO 偏好
+
+OMP MUST 以 workspace 为单位管理提问自动结束与模型 IO 全量保留两项偏好，默认值为自动结束开启、全量保留关闭，且偏好只存在进程内存。
+
+#### Scenario: workspace 偏好更新的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `workspace/updateInteractionPreferences` 的 `askUserQuestionAutoResolutionEnabled` 默认 `true`，`workspace/updateModelIoPreferences` 的 `fullRetentionEnabled` 默认 `false`。
+- 更新 MUST 改写该 workspace 内所有驻留会话的对应行为并返回更新计数：交互偏好返回 `snoozedInteractionCount`，模型 IO 偏好返回 `updatedSessionCount`；无驻留会话时计数为 0。
+- 该 workspace 存在驻留会话但宿主未注入对应 consumer 时 MUST 报错（"Interaction preference consumer is unavailable"／"Model IO retention consumer is unavailable"），MUST NOT 静默返回成功。
+- 偏好 MUST 按 cwd 保存于进程内存，MUST NOT 写入用户或项目配置文件，也 MUST NOT 跨进程保留。
+- 偏好变化 MUST NOT 自动批准、跳过审批或改写已提交事实；关闭自动结束只影响后续提问的倒计时。
+
+#### Scenario: 缺少 consumer 时偏好更新失败
+
+- **WHEN** 该 workspace 有驻留会话，但 app-server 未注入交互偏好 consumer
+- **THEN** 请求以明确错误失败，驻留会话的倒计时不被声称已更新
+
+### Requirement: 执行期模型与请求级认证
+
+OMP MUST 支持为单次执行临时绑定模型与请求级认证，并在该次执行结束后恢复原状态。
+
+#### Scenario: 执行期模型绑定的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 单次执行 MUST 独占模型：同一会话已有其它执行进行时 MUST 拒绝，并校验会话 generation 未变化。
+- 请求级认证 MUST 只在该次请求内生效，MUST NOT 写入凭据存储、设置文件或会话记录。
+- 执行失败需要恢复时 MUST 替换该次执行使用的模型，并受既有执行租约限制；MUST NOT 因此改写会话默认模型或用户角色配置。
+- 执行结束 MUST 恢复先前模型与思考档位；此前未绑定执行模型时 MUST 清除本次绑定。
+- 并发、取消或异常 MUST NOT 把临时模型或请求级认证泄漏到后续回合。
+
+#### Scenario: 请求级认证不落盘
+
+- **WHEN** 某次执行携带请求级认证
+- **THEN** 该次请求完成后凭据不留在凭据存储或设置文件中，后续请求按原解析结果使用认证
+
+### Requirement: Dev 运行注册表与冷查询观测
+
+OMP MUST 为每个原生 Dev 流程维护只含身份与版本索引的运行注册表，使无 live owner 的冷查询仍可读取真实阶段、Team 开关与材料就绪度。
+
+#### Scenario: Dev 运行注册表的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 注册表文件 MUST 位于工作区 `.omp/spec-sessions/<runId>/zcode.json`，`format` 为 `2`，内容含 `storage`、`sourceFile`、`workspaceIdentity`、`remoteSessionId`、`runId`、`sessionId`、`cwd`、`changeId`、`phase`、`archivedChangePath`、`closing`、`awaitingAcceptance`、`generation`、时间戳与 `artifacts[{versions:[{version,digest,bytes,sourceVersion}]}]`。
+- `runId` MUST 只允许 `[a-zA-Z0-9_-]+`，且目录路径 MUST 受包含校验限制在工作区内；不合法身份或越界路径 MUST 拒绝读取与写入。
+- 冷查询的 `useTeam` MAY 回退读取 `.omp/dev/state.json`，且仅当该文件 `version` 为 `1`、`team` 为布尔值且 `run.runId` 与当前 run 一致时采用。
+- 运行状态 MUST 只取 `completed`、`running`、`stopped`；失去 live owner 且未归档的运行 MUST 以 `stopReason:"interrupted"` 结算，MUST NOT 显示为仍在运行。
+- 观测状态 MUST 由运行事实推导：已归档且阶段结束为 `terminal`，无 owner 或被阻断为 `blocked`，等待验收为 `waiting`，其余为 `active`。
+- 材料就绪度 MUST 为 `present`、`missing`、`not_generated`、`unreadable`、`unknown` 之一：哈希与最新版本一致为 `present`，有版本但文件缺失为 `missing`，从未生成且无构建版本为 `not_generated`，读取或解析失败为 `unreadable`，其余为 `unknown`。
+- 注册表 MUST 只采样材料摘要与哈希，MUST NOT 复制材料正文、逐任务状态、消息或执行队列；确认、阶段决定与批准原文仍由原生流程与产物文件拥有。
+
+#### Scenario: owner 消失后的冷查询
+
+- **WHEN** 读取一个没有 live owner、也未归档的 Dev 运行
+- **THEN** 该行显示为 stopped 且 `stopReason:"interrupted"`，状态为 blocked，材料就绪度按实际文件与版本哈希判定
+
+### Requirement: 工作流沙箱进程入口
+
+OMP MUST 由同一个 omp 可执行文件自执行工作流沙箱子进程，使源码运行、打包与编译发行三种形态共用同一入口，且不依赖外部 Node 安装。
+
+#### Scenario: 沙箱子进程自执行的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 子进程 MUST 由当前 omp 可执行文件以隐藏 argv 选择子启动；编译形态 MUST 走自二进制派发，源码与打包形态 MUST 走同一 CLI 入口，二者均在 profile 与普通参数解析之前分流。
+- 选择子之后 MUST 恰好接受一个沙箱入口路径；数量不符 MUST 报错，MUST NOT 猜测或回落到其他入口。
+- 宿主 MUST 向沙箱注入 vm、readline、stdin 与 stdout 能力，并要求入口模块导出 `start`；缺失该导出 MUST 报错。
+- 沙箱入口文件 MUST 由运行目录下的自有文件承载，MUST NOT 把脚本正文放进命令行，也 MUST NOT 依赖 Node 专有 CLI 旗标启动。
+- 子进程的中断、超时与输出上限仍由工作流 harness 拥有；协议层 MUST NOT 另建沙箱或复用 TUI 执行路径。
+
+#### Scenario: 缺少或多余的沙箱入口参数
+
+- **WHEN** 隐藏选择子后未提供入口路径，或提供了多个路径
+- **THEN** 启动以明确错误失败，不执行任何脚本
+
+### Requirement: 工作流模型绑定解析
+
+工作流脚本引用的模型 MUST 按原生模型目录解析，无法唯一解析时 MUST 在启动前拒绝，MUST NOT 以其他模型顶替执行。
+
+#### Scenario: 模型绑定解析的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 脚本 `model` 引用 MUST 先按 `provider/id` 精确匹配，再按裸 `id` 匹配；比较 MUST 大小写不敏感。
+- 匹配数为零或多个时 MUST 以 `MODEL_UNRESOLVED` 编译诊断拒绝启动，并说明是无匹配还是歧义。
+- actor 模型选择 MUST 依次取种子解析模型、persona 声明的模型、run 的 `subagentModel`、父会话当前模型；全部不可用时 MUST 以 `DriverError` 失败。
+- 运行中调用的模型 MUST 来自同一原生目录，MUST NOT 读取脚本自带的模型清单或客户端提交的模型表。
+
+#### Scenario: 脚本模型名歧义
+
+- **WHEN** 脚本声明的模型名在原生目录中匹配到多个模型，且没有 `provider/id` 消歧
+- **THEN** 编译以 `MODEL_UNRESOLVED` 失败，run 不启动、不产生任何执行事实
+
+### Requirement: 工作流并发闸门
+
+OMP MUST 以逐 run 的并发上限约束真实 provider 请求，默认上限为可用并行度，越界配置 MUST 拒绝。
+
+#### Scenario: 并发上限的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 默认上限 MUST 为 `max(1, availableParallelism())`。
+- `max_concurrency`／caps MUST 逐 run 生效，运行中 MAY 调整；小于 1 或非安全整数 MUST 拒绝，MUST NOT 截断为最近合法值。
+- 恢复、继续与修订 MUST 继承前驱 run 的 caps，除非本次显式提交新值。
+- 投影 MUST 在 run-started 与 run-caps-changed 事件上注入当前 `concurrencyCeiling`，供客户端展示真实上限。
+- 闸门 MUST 作用于真实 provider 请求，而不是工作流节点或会话准入计数；取消 MUST 释放等待者且不残留配额。
+
+#### Scenario: 非法并发值被拒绝
+
+- **WHEN** 启动或调整工作流并发为 0、负数、小数或超出安全整数范围
+- **THEN** 请求被拒绝，run 保持原有并发上限
+
+### Requirement: 工作流 world 权限与产物提交
+
+工作流 world 的读取、命令与 Git 操作 MUST 经父会话的原生权限与扩展工具链执行，产物 MUST 写入原生会话产物存储。
+
+#### Scenario: world 操作与产物提交的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 每个 `world.read`、`world.run` 与 `world.git-*` 调用 MUST 先经父会话的工具限制判定，再经扩展工具钩子实际执行；被限制或被拒绝时 MUST 失败，MUST NOT 绕过父会话策略直连文件系统或进程。
+- `world.run` MUST 只接受命令与 argv；命令或参数被改写导致与提交不一致时 MUST 报错，MUST NOT 执行改写后的命令。
+- 命令超时、取消或输出超过上限 MUST 以工作流错误结算，不返回部分成功。
+- 产物字节 MUST 写入原生会话产物存储并返回 `artifact://<id>` 引用；存储不可用或超过字节上限 MUST 失败。
+- 产物读取 MUST 限定在工作区内，符号链接与越界路径 MUST 拒绝。
+
+#### Scenario: 命令被改写时拒绝执行
+
+- **WHEN** 扩展工具钩子改写了 `world.run` 的命令或参数
+- **THEN** 该次调用以错误失败，不执行被改写的命令
+
+### Requirement: 工作流 actor 转录播种
+
+接续前驱工作时，actor 会话 MUST 按值克隆指定数量的源消息，并以幂等标记记录来源；出现目标自有历史后 MUST 永久停止播种。
+
+#### Scenario: actor 转录播种的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 播种 MUST 按值克隆源会话前 `messageCount` 条消息，并为每条消息写入 `zcode.workflow.actor-seed` 标记（`sourceSessionId`、`index`、摘要）。
+- 重复播种 MUST 幂等：已有标记与内容一致时 MUST 只补齐剩余前缀，不重复追加。
+- 目标会话出现自有消息、`custom_message`、压缩、分支摘要或重置边界时 MUST 永久停止播种，MUST NOT 覆盖或重排已有历史。
+- 源会话消息数少于边界时 MUST 以 `DriverError` 失败，MUST NOT 截断边界或降级为部分播种。
+- 播种 MUST 在 actor 首次提问前完成，MUST NOT 在运行中改写其历史。
+
+#### Scenario: 源消息不足时拒绝播种
+
+- **WHEN** 播种边界要求的消息数超过源会话现有消息数
+- **THEN** actor 创建以 `DriverError` 失败，不产生只含部分前缀的会话
+
+### Requirement: 工作流修订与继续的后继运行
+
+修改工作流设置 MUST 以可追溯的后继运行接续前驱已消费的 journal 前缀，并在停下前完成预检；同一 run 的修订与继续 MUST 互斥。
+
+#### Scenario: 修订与继续的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 修改模型、或对已结束 run 修改并发上限 MUST 新建后继 run；仅调整在飞 run 的并发 MAY 原地生效而不新建 run。
+- 后继 run MUST 继承前驱的设置、脚本与已消费事件，并通过导入缓存接续前驱已消费的 journal 前缀，不重复已提交的 actor 与副作用。
+- 前驱仍在运行时 MUST 先中止其执行，再以 `stopReason:"superseded"` 与 `supersededBy` 结算。
+- 预检 MUST 在停下前判定：前驱不存在报 `run_not_found`，已完成提问缺少消息边界报 `missing_boundaries`；被拒时前驱 MUST 继续运行且 MUST NOT 创建新行。
+- 同一 run 的修订与继续 MUST 互斥；进行中再次提交 MUST 以 busy 拒绝。
+- 修订未改变任何设置时 MUST 以 `unchanged` 拒绝，不创建后继运行。
+
+#### Scenario: 预检失败不打断前驱
+
+- **WHEN** 对缺少消息边界的已完成前驱提交修订
+- **THEN** 修订以 `missing_boundaries` 拒绝，前驱保持原状态，journal 不新增运行行
+
+### Requirement: 工作流运行时投影边界
+
+工作流投影 MUST 每会话只取最近 8 个 run，且只为仍在 pending 或 running 的运行生成后台工作项。
+
+#### Scenario: 工作流投影边界的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 每个会话的 `workflowRuns` MUST 只包含最近 8 个 run，超出部分不进入投影。
+- 只有 pending／running 的运行 MUST 生成 `backgroundWorks` 项，`kind` 为 `workflow`、`cancellable` 为 `true`、`anchorRowId` 为 `null`。
+- 历史行 MUST 只保留在 `workflowRuns`，MUST NOT 生成后台工作项或可取消句柄。
+- 终态行的状态、停止原因、`supersededBy` 与结果预览 MUST 取自持久事实，MUST NOT 由事件流推断覆盖。
+- 投影 MUST NOT 修改持久事件游标或伪造缺失事件。
+
+#### Scenario: 已完成运行不再产生后台工作项
+
+- **WHEN** 会话包含已完成、已停止与新启动的运行
+- **THEN** 只有正在运行的运行出现在后台工作项，历史运行仅可在 workflowRuns 中查看
+
 ### Requirement: 权限与提问
 
 OMP MUST 通过既有 interaction 显示允许选项，拒绝或迟到答复不执行工具。
@@ -559,6 +824,96 @@ sequenceDiagram
 - **WHEN** 原生工具需要用户批准或交互回答
 - **THEN** 通过既有 interaction 显示允许选项，拒绝或迟到答复不执行工具
 
+### Requirement: 老 Host provider 配置兼容加载门槛
+
+保留的老 Host provider 配置源 MUST 仅在两个来源同时配置时加载，且 MUST NOT 让个人层或账号层的异常放宽既有访问边界。
+
+#### Scenario: provider 配置源加载的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 只有 `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE` 与 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` 同时设置时才加载；只设置其一时 MUST 报 "Both provider sources required"。
+- 内置源 MUST 提供 revision，缺失 MUST 报错；同一层内重复 `providerId` MUST 报错。
+- 账号层 MUST 以 `basedOnZCodeBuiltinRevision` 精确锁定内置源：取值 MUST 等于 `zcode-builtin:<revision>:<sha256(绝对路径)>`，不符 MUST 报错。
+- `account:` 前缀 provider 的 access MUST NOT 被个人层覆盖，违反 MUST 报错。
+- 个人层只有文件不存在（ENOENT）MAY 被容忍并按空规则集处理；解析或校验失败 MUST 报错，MUST NOT 退化为空配置。
+- 没有内置源时 `provider/updateAccountConfig` MUST 报 "Account config requires matching built-in source"。
+- `provider/refreshRegistry` MUST 只重新提交当前模板并返回 `{refreshed:true}`，MUST NOT 借此改写账号配置或放宽访问边界。
+
+#### Scenario: 个人层文件损坏
+
+- **WHEN** 个人层配置文件存在但无法解析
+- **THEN** 加载失败并保持既有 provider 状态，不回退为空规则集
+
+### Requirement: 协作模式与原生授权映射
+
+ZCode 协作模式 MUST 映射到原生授权模式并只在该会话运行时生效，MUST NOT 写入共享默认值；未实现的模式 MUST 明确拒绝。
+
+#### Scenario: 协作模式映射的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `build` MUST 映射为 `always-ask`，`edit` 映射为 `write`，`yolo` 映射为 `yolo`，`guarded` 映射为 `guarded`。
+- `plan` MUST 由原生计划状态决定，MUST NOT 直接改写授权模式；退出计划后按当时授权模式重新呈现。
+- `session/setMode` 的 `auto` MUST 返回 `-32602` 且 `reasonCode:"mode.auto.unimplemented"`。
+- `session/create` 的 `mode:"auto"` MUST 同样拒绝，MUST NOT 静默忽略。
+- 切换并发进行时 MUST 返回 `session_busy`；未知模式 MUST 返回 `invalid_params`。
+- 切换 MUST 只做该会话的运行时覆盖，MUST NOT 写用户或项目默认授权配置。
+- 工作区展示的默认模式 MUST 由当前有效授权模式推导，不依赖会话存在。
+
+#### Scenario: 创建会话请求 auto 模式
+
+- **WHEN** `session/create` 携带 `mode:"auto"`
+- **THEN** 创建请求被拒绝并返回未实现原因码，不创建以其他模式静默运行的会话
+
+### Requirement: 计划模式的原生状态与呈现
+
+计划模式 MUST 以原生计划状态拥有进入、暂停与退出，切换角色模型与工具呈现，并把状态持久化以便重连后重建。
+
+#### Scenario: 计划模式状态与呈现的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 进入 MUST 切换到 plan 角色模型（含其思考档）；会话正在流式执行时 MUST 延后到回合结束再应用；退出 MUST 恢复进入前的模型与思考档。
+- plan 角色保存后 MUST 重新解析，并在计划模式下采用新值。
+- 状态 MUST 以 `plan`／`plan_paused`／`none` 持久化，并在重连、切换会话或恢复后重建同一状态。
+- 暂停态的无参 `/plan` MUST 关闭计划模式，不重新进入。
+- 进入 MUST 移除扩展提供的 `write` 并提示只有内置 `write` 可提交计划；退出 MUST 恢复原工具呈现。
+- 计划批准并交回执行后 MUST 保证 `read` 工具可用，以便读取已批准计划。
+- Goal 或 Vibe 激活时 MUST 拒绝进入计划模式；计划激活或暂停时 MUST 拒绝进入 Goal 模式。
+- 计划模式 MUST NOT 自动批准工具调用或改写既有审批结果。
+
+#### Scenario: 流式执行中进入计划模式
+
+- **WHEN** 会话正在生成回复时用户进入计划模式
+- **THEN** 计划状态立即生效，plan 角色模型延后到该回合结束应用，MUST NOT 中断当前回合
+
+#### Scenario: 计划暂停时启动 Goal
+
+- **WHEN** 计划模式处于暂停状态时用户尝试进入 Goal 模式
+- **THEN** 请求被拒绝并提示先完全退出计划模式
+
+### Requirement: loop 与计划审批互斥
+
+loop MUST NOT 在存在待处理计划审批时自动续跑，审批结束后 MUST 重新武装。
+
+#### Scenario: 待审计划期间 loop 不续跑
+
+- **WHEN** loop 已启用且当前存在待处理计划审批
+- **THEN** loop MUST NOT 触发自动续跑；审批结束（批准或拒绝）后 MUST 按原提示词、间隔与条件重新武装
+
+### Requirement: 执行期模型恢复关闭投机执行
+
+会话启用执行期模型恢复时，工具投机执行与任务投机启动 MUST 对该会话整体关闭，即使对应配置为开启。
+
+#### Scenario: 恢复能力开启时投机执行不生效
+
+- **WHEN** 会话配置启用了执行期模型恢复，且工具投机执行或任务投机启动配置为开
+- **THEN** 该会话不产生任何投机候选或投机启动，工具与任务按普通路径执行
+
 ### Requirement: 命令与技能
 
 OMP MUST 走同一 slash 注册与处理链，保留参数、取消和会话身份。
@@ -568,13 +923,13 @@ OMP MUST 走同一 slash 注册与处理链，保留参数、取消和会话身�
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-保留完整真实命令目录、命令名补全及已有参数用法提示。名称、别名、说明和用法来自目标工作区当前 OMP 注册信息，不维护人工白名单；本次不要求动态参数候选或命令专属表单。
+保留完整真实命令目录、命令名与参数补全；动态参数候选复用现有 OMP 补全器。名称、别名、说明和用法来自目标工作区当前 OMP 注册信息，不维护人工白名单；不提供命令专属表单。
 
 ZCode 对仅支持终端的操作返回明确不支持；其他命令的输出与错误从原生处理结果投影，不由桌面层重解释。
 
 **必须接入的命令**
 
-app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原生内置命令及其合法参数，不以此文档的示例命令限制实际目录。使用既有 `createSession.firstInput.text`、`sendText.text` 与交互应答，不新增逐命令接口、参数字段或协议版本；ZCode 不复制参数解析、校验或业务逻辑。新增普通内置命令应由实际目录发现并复用同一提交路径，无需增加 ZCode 命令分支。下列已有命令的业务合同继续有效，但不得据旧本地解析拦截实际注册的命令。
+app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原生内置命令及其合法参数，不以此文档的示例命令限制实际目录。使用既有 `createSession.firstInput.text`、`sendText.text` 与交互应答，除 Dev 准入绑定（`sendText.specRun`）外不新增逐命令接口、参数字段或协议版本；ZCode 不复制参数解析、校验或业务逻辑。新增普通内置命令应由实际目录发现并复用同一提交路径，无需增加 ZCode 命令分支。下列已有命令的业务合同继续有效，但不得据旧本地解析拦截实际注册的命令。
 
 - app-server 直接调用目标会话的 prompt／命令业务入口，复用同一注册表的命令、别名与补全，不另维护人工目录。已识别但仅限 TUI 的命令必须明确拒绝，不能原样交给模型。
 - 原生 custom command 以 `void`／空串完成、不产生模型正文时，在真实处理完成的原生 admission 边界记录受理并返回 accepted；原处理器已消费并展示的错误仍保留其真实输出，不将 accepted 解释为业务成功。返回非空 prompt 的命令继续在原 prompt／queue 边界准入，未知、取消或未完成的处理不能提前接受；同 commandId 沿用既有 ledger 去重。
@@ -602,6 +957,63 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 
 - **WHEN** 用户从 ZCode 调用原生命令或技能
 - **THEN** 走同一 slash 注册与处理链，保留参数、取消和会话身份
+
+### Requirement: 命令目录与补全契约
+
+命令目录与补全 MUST 以单调 revision 表达漂移，参数补全 MUST 复用现有 OMP 补全器。
+
+#### Scenario: 命令目录与补全契约的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 目录与补全 MUST 返回单调递增的 revision，只有内容变化时才递增。
+- 变化 MUST NOT 以推送通知发布，客户端 MUST 通过比较两次 listing 的 revision 检测漂移。
+- revision MUST 只标识目录内容代际，MUST NOT 被当作会话执行状态或消息水位。
+- `complete` MAY 提供动态参数候选：`/mcp`、`/move`、`/effort`、`/switch`、`/model` MUST 复用 OMP 现有补全器，其余命令按静态参数用法提示。
+- 参数解析 MUST 支持引号与转义 token；`/move` MUST 以整个参数段替换，不保留被空格分隔的旧后缀。
+- 补全 MUST 无副作用：MUST NOT 创建会话、执行命令、写入配置或产生模型请求。
+
+#### Scenario: 参数补全的替换边界
+
+- **WHEN** 客户端在带引号或转义空格的参数中间请求补全
+- **THEN** 返回该命令的动态候选，并按解析出的 token 边界替换，不破坏其余参数
+
+### Requirement: Dev 观测的能力协商与查询过滤
+
+Dev 观测 MUST 只在客户端声明能力时出现，缺席时 MUST 完全剥离；逐命令入口只保留材料版本准入绑定这一例外。
+
+#### Scenario: Dev 观测协商的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `runtime/capabilities` MUST 增列 `ompSpecDriven`；客户端只在为 `true` 时开放 Dev 观测入口。
+- 会话订阅与运行查询 MUST 支持 `includeSpecDriven:true`；`v4/conversation/workflowRuns` MUST 支持 `runId` 过滤。
+- 未声明 `includeSpecDriven` 时 MUST 剥离 Dev 交互状态与带 spec 的运行行，既有动态工作流响应保持原形。
+- `sendText.specRun`（`runId`、`generation`、`phase`、`files[path,version]`、可选 `actionId`）是本协议唯一的逐命令字段例外，用于 Dev 材料版本准入守卫：绑定过期、run 或阶段不符、文件哈希不符时 MUST 拒绝输入；未携带时 MUST NOT 触发 Dev 守卫。
+- 旧客户端不发送该字段，其行为 MUST 与既有协议一致；服务端 MUST NOT 因缺席而放宽 Dev 守卫。
+- Dev 观测 MUST NOT 改变既有方法、通知、信封或版本语义。
+
+#### Scenario: 材料版本过期时拒绝 Dev 输入
+
+- **WHEN** 客户端携带的 `specRun.files` 与实际材料哈希不一致
+- **THEN** 输入以材料绑定过期原因拒绝，不送达模型也不改变阶段
+
+### Requirement: Dev 材料版本域
+
+OMP MUST 只放宽基线 `workflowRunArtifact*` 的 `version` 数值域，不改变材料身份、元数据与字节读取边界；Dev 的不可变捕获不受脚本引擎的发布次数上限约束。
+
+#### Scenario: 版本历史超过基线发布上限
+
+- **WHEN** 同一材料的不可变捕获产生的版本数超过基线 `versions` 的 16 条上限，客户端随后读取该材料
+- **THEN** 新版本 MUST 正常写入并保留在 `versions` 中，MUST NOT 按 16 条裁剪或淘汰最旧版本；读取 MUST 返回真实写入的全部版本
+- **AND** `version` MUST 为不超过 `Number.MAX_SAFE_INTEGER` 的正整数，`versions` 元素结构与身份、元数据、字节读取范围上限 MUST 与基线一致
+
+#### Scenario: 版本域之外的取值被拒绝
+
+- **WHEN** 客户端请求的 `version` 为零、负数、非整数或超过 `Number.MAX_SAFE_INTEGER`
+- **THEN** 请求以协议校验错误拒绝，不返回材料字节
 
 ### Requirement: 范围与验收
 

@@ -49,7 +49,7 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
 - `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 原始数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。非 offline 时直接使用该根；适用的 offline shm 模式按下述契约区分运行根与原始持久根。
 - **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录或备份目标。此项是通用目录需求变更，不受下述 shm 功能的启用条件限制。
-- **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；不要求宿主永久保留其临时叶，不通过 `client.close()` 关闭共享 scope。Linux offline 继续使用既有 profile shm native 根。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
+- **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。非 offline 时，一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；离线 shm 模式（Linux offline）时该变量按[offline 下被忽略的显式路径覆盖](../offline-shm/spec.md)规则被忽略，native 根因此固定为运行根内的 `natives/`，此处不重复该 MUST；宿主不要求永久保留其临时叶，也不通过 `client.close()` 关闭共享 scope。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
 - **内网交互减负**：仅 Linux offline 将普通后台 TUI 重绘合并到最多 10 FPS；输入回显与取消沿用原输入优先调度，强制最终刷新、终端输出反压与自适应限速不变。品牌渐变刷新降为 250ms，活动计时装饰刷新降为 1000ms。Git 状态缓存由普通模式的 10 秒延长到 60 秒，沿用 HEAD／工作目录／显式失效；未显式失效的外部工作树修改可能延后显示，不新增工具修改通知或修改 Git 配置。非 Linux 和非 offline 保持原行为，不要求改变企业远程软件，不预先承诺公司实机提速。
@@ -66,6 +66,7 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 - 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
 - 构建发布 CI 使用 GitHub 原生缓存保存 Bazel action cache、依赖下载及 Cargo registry/git；无需自建缓存服务器或额外凭据。各 native target 独立恢复缓存，仅 main 保存缓存，键包含宿主平台、目标、工具链/构建配置及 native 源码指纹；精确键缺失时优先回退同配置缓存，再回退同平台同目标的旧缓存，由 Bazel 根据实际输入判断哪些 action 可复用。运行摘要记录命中键、Bazel action 统计及各缓存目录大小；缓存缺失或被 GitHub 淘汰时正常冷编译，不跳过构建。
 - 二进制必须携带 fork 版本、构建时间和更新仓库信息。
+- `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名、生成文件恢复及可选 ZCode 产物阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
@@ -87,6 +88,198 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 
 - **WHEN** 用户在普通或 offline 场景安装、启动或更新
 - **THEN** 按有效配置根、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告
+
+### Requirement: 内嵌 native addon 的内容寻址加载
+
+OMP MUST 只从编译二进制自身的 manifest 提取并加载按内容寻址的 native addon。
+
+#### Scenario: 内嵌 native addon 的内容寻址加载的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 内嵌 addon 的缓存文件名 MUST 为 `pi_natives.<平台>-<架构>[-modern|-baseline].<sha256>.node`：x64 提供 `-modern` 与 `-baseline` 两个变体，其他架构只有不带变体后缀的一个文件；`<sha256>` 为解压后 addon 字节的 SHA-256。
+- 编译二进制 MUST 只考虑自身 manifest 列出的内容寻址文件名（按 CPU 变体选择，`modern` 加载失败时可再试同一 manifest 的 `baseline`），MUST NOT 回退到按版本号命名的缓存目录文件或相邻的其他 addon；这些文件可能来自同一版本号的另一构建。
+- 解压前 MUST 校验内嵌帧解压后长度与其 manifest 记录一致；目标已存在且字节数一致时 MUST 复用，不重复写入。
+- offline 加载路径（普通文件加载与可执行内存后备）MUST 在加载前按文件名中的 SHA-256 校验内容，不匹配 MUST 拒绝加载并报错；其他加载路径 MUST 只使用自身 manifest 列出的内容寻址文件，MUST NOT 借版本号或相邻文件绕过 manifest。
+- 提取与发布 MUST 使用不跟随符号链接的独占写入；离线 shm 模式下还 MUST 通过运行根校验把落点限定在运行根内。发布后 MUST NOT 遗留临时文件。
+
+#### Scenario: 内嵌 native addon 的内容寻址加载的可观察行为
+
+- **WHEN** 编译二进制启动并需要加载 native addon
+- **THEN** 它只提取／加载自身 manifest 中校验通过的内容寻址文件，内容不匹配或仅存在版本号命名的旧文件时明确失败
+
+### Requirement: 版本显示与构建时间戳
+
+OMP MUST 在嵌入了构建时间戳的发行构建中显示版本加构建时间，其他构建只显示版本。
+
+#### Scenario: 版本显示与构建时间戳的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 设置了 `PI_BUILD_TIMESTAMP` 时，`--version` 与根帮助 MUST 显示 `VERSION (built <timestamp>)`，`<timestamp>` 为嵌入值原样呈现，不做本地时区转换或重新格式化。
+- 未设置时 MUST 只显示 `VERSION`，MUST NOT 输出空括号、占位符或伪造时间。
+- 该显示值 MUST NOT 写入配置文件，也不影响 `omp update` 的版本比较与安装器对 `omp --version` 前缀的核对。
+
+#### Scenario: 版本显示与构建时间戳的可观察行为
+
+- **WHEN** 分别用带与不带构建时间戳的二进制执行 `omp --version`
+- **THEN** 前者输出 `VERSION (built <timestamp>)`，后者只输出 `VERSION`
+
+### Requirement: 发布 CI 的触发、并发与权限
+
+OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做最小授权。
+
+#### Scenario: 发布 CI 的触发、并发与权限的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 仓库唯一的发布工作流 MUST 只由 `workflow_dispatch` 触发，MUST NOT 配置推送、标签、定时或上游默认触发。
+- 并发组 MUST 为 `<工作流名>-<ref>`，MUST NOT 取消进行中的运行；同一 ref 的多次手动运行排队执行，不并发改写同一版本的产出。
+- 工作流默认权限 MUST 为 `contents: read`；只有实际创建 Release 的发布 job MAY 提升到 `contents: write`，其他 job（元数据、构建、产物汇总）MUST NOT 获得写权限。
+- 该工作流 MUST 只承担构建、产物汇总与发布，MUST NOT 运行测试、冒烟、lint、类型检查或独立校验作业。
+
+#### Scenario: 发布 CI 的触发、并发与权限的可观察行为
+
+- **WHEN** 查看工作流定义或以非手动方式尝试触发发布
+- **THEN** 只有手动派发会启动，并发组按 `<工作流名>-<ref>` 排队且不取消运行，写权限仅存在于发布 job
+
+### Requirement: 安装器诊断日志
+
+OMP MUST 将安装诊断写入按运行唯一命名的日志文件，字段脱敏且写入失败不阻断安装。
+
+#### Scenario: 安装器诊断日志的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 日志文件名 MUST 为 `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`：日期为 UTC 的 `YYYY-MM-DD`，其余两段使同一进程的不同次安装也各自独立。
+- 每条记录 MUST 含 `operation_id`、`stage`、`elapsed_ms`、`platform`、`target_version`，以及级别、事件名与有界的结果字段；`target_version` MUST 只接受可选的 `v` 前缀加 `<数字>.<数字>.<数字>`、可再带 `+fork.<数字>` 的形式，其他输入 MUST 记为 `redacted`。
+- 目录选择 MUST 依次尝试：绝对有效的 `OMP_CONFIG_ROOT`（含 profile 子目录）下的 `logs/`，否则用户数据根（`PI_CONFIG_DIR` 或 `.omp`）的 `logs/`；未显式指定根且 `<XDG_STATE_HOME>/omp` 已存在时改用该目录；仍不可写时回退到 `~/.local/state/omp`。Windows 上首选同一数据根，回退到 `%LOCALAPPDATA%\omp`。回退（而非首选目录）生效时 MUST 留下一条 WARN。
+- 保留策略 MUST 只清理本安装器模式的日志：保留最近 20 次尝试、最近 5 天，且 MUST 跳过 PID 仍存活的文件；不得删除应用日志或无关文件。
+- 日志写入失败 MUST 只在 stderr 输出一行提示并继续安装，MUST NOT 使安装失败或改变退出码。
+
+#### Scenario: 安装器诊断日志的可观察行为
+
+- **WHEN** 安装器在可写或不可写的数据根下执行
+- **THEN** 可写时生成唯一命名的安装日志并按 20 次／5 天保留，不可写时仅打印一行提示且安装继续
+
+### Requirement: ZCode 发布产物的校验与布局
+
+OMP MUST 只为干净且已提交的源码生成 ZCode 产物，并按目标校验可执行文件格式后原子发布。
+
+#### Scenario: ZCode 发布产物的校验与布局的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `ZCODE_ARTIFACT_ROOT` 在 dry-run 下 MUST NOT 生效；启用时 MUST 要求 `RELEASE_VERSION`，缺失即失败。
+- 输出根 MUST 不存在且由本次调用新建：已存在时 MUST 失败，MUST NOT 删除或复用用户已有目录；失败后 MUST 递归删除本次自建的输出根，不留半成品。
+- 源码 MUST 干净且 HEAD 与调用方给出的期望提交一致；构建前、拷贝后 MUST 各校验一次，拷贝前后同一文件 MUST 字节一致，否则失败。
+- 每个 target MUST 校验可执行头与目标匹配（PE 的机器类型、ELF 的类／字节序／机器、Mach-O 的魔数与 CPU 类型），不匹配即失败。
+- 产物布局 MUST 为：每个 target 目录下的 `omp`（Windows 为 `omp.exe`）、`omp-artifact.json`（含 `schemaVersion: 1`、`version`、`commit`、`protocolBaseline`、`files` 的 SHA-256）以及输出根下的 `omp-release.json`（版本、提交、协议基线及各 target manifest 的 SHA-256）。
+- 版本号 MUST 符合语义化版本形式，target 列表 MUST 非空且不重复。
+
+#### Scenario: ZCode 发布产物的校验与布局的可观察行为
+
+- **WHEN** 带 `ZCODE_ARTIFACT_ROOT` 构建发布二进制
+- **THEN** 输出根为新建目录，内含逐 target 的 `omp`／`omp.exe`、`omp-artifact.json` 与根级 `omp-release.json`；不干净、提交不符或可执行格式不符时整体失败并删除自建输出根
+
+### Requirement: POSIX 安装器对运行中会话的检测
+
+OMP MUST 在替换已安装二进制前提示仍在使用它的会话，且不终止这些会话。
+
+#### Scenario: POSIX 安装器对运行中会话的检测的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 替换前 MUST 扫描 `/proc/*/exe`，把解析后（含 ` (deleted)` 后缀归一化）等于安装目标真实路径的进程收集为运行中会话。
+- 命中时 MUST 提示安装目标、PID 列表及“它们会继续使用旧版本、需重启才能用新版本”，MUST NOT 发送信号或强制结束。
+- 无 `/proc` 时 MUST 降级为无法检测的状态继续安装，MUST NOT 因平台限制失败。
+- 安装目标尚不存在（全新安装）时 MUST 以字面路径参与比较，不因解析失败中断安装。
+
+#### Scenario: POSIX 安装器对运行中会话的检测的可观察行为
+
+- **WHEN** 安装目标正被若干会话使用（或反之）
+- **THEN** 安装器列出对应 PID 并完成原子替换，未命中或无 `/proc` 时静默继续
+
+### Requirement: Windows 安装器强杀回退的身份校验
+
+OMP MUST 只在能确认进程映像就是安装目标时执行强杀回退。
+
+#### Scenario: Windows 安装器强杀回退的身份校验的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 强杀回退 MUST 只针对可执行映像已重命名让位失败（如被占用）后的恢复路径执行，MUST NOT 用于常规更新。
+- 每个同名进程 MUST 读取其可执行路径并与安装目标做大小写不敏感的完整路径比较；只有完全相等者 MAY 被强制结束。
+- 任一进程的可执行路径不可读时 MUST 以 `unsafe_identity` 失败并列出这些 PID，MUST NOT 猜测或扩大到其他进程。
+- 结束与等待 MUST 有超时；仍有存活目标进程 MUST 报告剩余 PID 并失败。
+- 日志 MUST 记录匹配策略为精确可执行路径及匹配／剩余数量，MUST NOT 记录进程命令行。
+
+#### Scenario: Windows 安装器强杀回退的身份校验的可观察行为
+
+- **WHEN** 旧 `omp.exe` 无法重命名且存在同名进程
+- **THEN** 仅映像路径完全等于安装目标的进程被结束；路径不可读时安装以 `unsafe_identity` 失败并列出 PID
+
+### Requirement: native 能力缺失时的运行期降级
+
+OMP MUST 在加载到的 native addon 缺少管道流能力时降级相关视图而不影响命令执行。
+
+#### Scenario: native 能力缺失时的运行期降级的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 当 addon 不导出管道流类或其实例化失败时，bash 工具 MUST 仍然执行命令并返回正常结果，MUST NOT 抛错、MUST NOT 因此改用交互式 pty 模式。
+- `proc://<id>/streams` 与该 job 的管道组件 MUST 降级为不含流数据的说明性结果（报告该 job 没有可用管道流），MUST NOT 使后台 job 状态、退出码或输出读取失效。
+- 该降级 MUST 只影响管道流视图；其余 native 功能缺失仍按各自既有诊断报错。
+
+#### Scenario: native 能力缺失时的运行期降级的可观察行为
+
+- **WHEN** 一个较早版本的 addon 被加载且命令含管道（如 `| tail`）
+- **THEN** bash 调用成功返回命令结果，`proc://<id>/streams` 报告无可用管道流
+
+### Requirement: 被中断工具结果的取消标记
+
+OMP MUST 区分“被中断取消”与“执行失败”，并在工具结果中持久化该事实。
+
+#### Scenario: 被中断工具结果的取消标记的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 工具调用因中断在执行前被跳过、在等待用户授权时被取消、或在执行中被信号中断时，持久化的工具结果 MUST 带 `cancelled: true`，并与 `isError` 同时存在。
+- 已产生真实结果的工具 MUST 保留原结果，MUST NOT 因随后到达的中断把结果改标为取消；未开始执行的不可中断工具同样 MUST 继续执行。
+- 该标记 MUST 写入会话记录（含 fork 复制与投影读取），使用户界面与上层消费者能把取消显示为取消而非错误，且 MUST NOT 改变工具自身的内容或退出码。
+
+#### Scenario: 被中断工具结果的取消标记的可观察行为
+
+- **WHEN** 一批工具调用在中断期间被跳过或中断
+- **THEN** 对应工具结果在会话记录中带 `cancelled: true`，已完成调用保留真实结果
+
+### Requirement: 设置写入的版本校验
+
+`omp config set`／`omp config reset` MUST 以 revision 判定快照并做 CAS 写入；无法安全读取当前配置时 MUST 失败而非覆盖。
+
+#### Scenario: 设置写入的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 写入前 MUST 取得当前配置 revision；提交时 revision 已变化 MUST 拒绝写入并报冲突，MUST NOT 静默覆盖他人改动。
+- 配置文件不存在、不可解析或 revision 无法确立时 MUST 以非零退出码失败，MUST NOT 退化为整文件覆盖。
+- 成功写入 MUST 保留无关键、注释与结构，并返回新 revision。
+- 该版本校验 MUST NOT 扩大到普通会话中的运行时设置写入。
+
+#### Scenario: 无法安全读取时拒绝写入
+
+- **WHEN** 配置文件损坏或 revision 无法确立时执行 `omp config set`
+- **THEN** 命令以退出码 1 失败，原文件保持不变
 
 ### Requirement: 会话通信回执
 

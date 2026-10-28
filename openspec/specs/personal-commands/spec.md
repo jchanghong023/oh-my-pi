@@ -27,6 +27,25 @@ OMP MUST 反馈本次工具未执行并要求模型修正重调，不重复已�
 - **WHEN** 工具参数 JSON 解析失败
 - **THEN** 反馈本次工具未执行并要求模型修正重调，不重复已成功的调用
 
+### Requirement: 非 TUI 宿主的命令参数门禁
+
+OMP MUST 在 ACP 与 RPC 宿主按各自规则判定内置命令是否可执行及是否接受参数，不允许时不得隐式执行命令。
+
+#### Scenario: 非 TUI 宿主的命令参数门禁的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- ACP 宿主收到带参数的内置命令时，MUST 按 `acpAllowArgs`（未声明时回退 `allowArgs`）判定是否接受；不允许时 MUST NOT 执行该命令，原始输入 MUST 作为普通提示词转发。
+- ACP MAY 为在 TUI 中打开选择器的命令声明独立的 ACP 参数许可；`/model` 在 ACP 中 MUST 接受模型参数，并按该参数切换模型或报告解析失败。
+- RPC 宿主 MUST 对全部注册名独立派发：仅实现 TUI 处理器的命令 MUST 抛错 `/name is only available in the interactive TUI.`；不接受参数的命令在带参调用时 MUST 抛错 `/name does not accept arguments.`。两者 MUST NOT 静默回退为普通提示词。
+- 没有命中内置命令的输入 MUST 交由宿主按普通提示词处理，命令层不解释其内容或改写参数。
+
+#### Scenario: 非 TUI 宿主的命令参数门禁的可观察行为
+
+- **WHEN** ACP 或 RPC 宿主收到带参数的内置命令或仅 TUI 可用的命令
+- **THEN** 按 ACP 参数许可接受或回退为提示词，RPC 则按独立派发接受或抛出明确错误，均不隐式执行
+
 ### Requirement: `/loop` 轮次间隔
 
 OMP MUST 首轮立即执行并按指定轮次或总时长限制等待和继续，暂停或切换后旧定时器不提交。
@@ -45,6 +64,25 @@ OMP MUST 首轮立即执行并按指定轮次或总时长限制等待和继续�
 
 - **WHEN** 用户输入带间隔的 loop 命令
 - **THEN** 首轮立即执行并按指定轮次或总时长限制等待和继续，暂停或切换后旧定时器不提交
+
+### Requirement: `/loop` 间隔上限与时长 tokens 的退化
+
+OMP MUST 对 `/loop` 间隔实施上限校验，并只在可识别为单位时长时消费该 token。
+
+#### Scenario: `/loop` 间隔上限与时长 tokens 的退化的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 间隔上限 MUST 为 2147483647 毫秒；推算结果超出该值 MUST 报 `Loop interval must not exceed 2147483647 milliseconds.`，且 MUST NOT 启动任何轮次。
+- 间隔位上的形如时长的 token 使用未知单位时，MUST 不被当作间隔，MUST 作为任务正文保留；已知单位的非正数或非安全整数金额 MUST 报错而非当作正文。
+- 限制位与条件标志的解析失败（负号或小数形式的限制、未知标志、缺失条件命令、重复条件）MUST 只报用法错误，MUST NOT 启动模型回合。
+- 既非限制形态也非标志形态的 token MUST 原样作为正文，保持无界 loop 语义。
+
+#### Scenario: `/loop` 间隔上限与时长 tokens 的退化的可观察行为
+
+- **WHEN** 用户给出的间隔超过上限，或在间隔位给出未知单位的时长 token
+- **THEN** 超限时明确报错且不运行，未知单位时该 token 退回正文
 
 ### Requirement: 魔法关键词的内置命令与 fullsend
 
@@ -68,6 +106,44 @@ OMP MUST fullsend 在正文的独立小写词处触发，代码与标签内容�
 
 - **WHEN** 普通文本含独立 fullsend 关键词
 - **THEN** fullsend 在正文的独立小写词处触发，代码与标签内容不触发，显式禁用配置生效
+
+### Requirement: collab 只读链接的命令拒绝
+
+OMP MUST 在只读 collab 会话中拒绝会产生提示词的命令，并且不得提交或转发内容。
+
+#### Scenario: collab 只读链接的命令拒绝的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 只读链接上调用远端任务类命令（`remoteTask`）时 MUST 显示 `This collab link is read-only — prompting is disabled`，MUST NOT 提交提示词、MUST NOT 转发给宿主。
+- 命令自身返回待发送提示词时同样 MUST 只显示该提示且 MUST NOT 提交，不得因命令已进入本地执行路径而放行。
+- 拒绝时 MUST 保留用户草稿内容（含图片与图片链接），不静默丢弃或提交。
+- 只读之外的可写 guest 会话中，已放行的远端命令 MUST 连同图片一起转发给宿主执行。
+
+#### Scenario: collab 只读链接的命令拒绝的可观察行为
+
+- **WHEN** 只读 collab 链接上执行远端任务命令或返回提示词的命令
+- **THEN** 显示只读提示且不提交、不转发，草稿保留
+
+### Requirement: collab 命令目录与共享进程会话迁移
+
+OMP MUST 让 guest 命令目录与派发能力一致，并在共享进程宿主中以会话级方式切换目录。
+
+#### Scenario: collab 命令目录与共享进程会话迁移的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 命令目录 MUST 支持 `includeTuiOnlyBuiltins` 与 `includeRpcBuiltins`：省略时 MUST NOT 广告仅 TUI 命令，声明时 MUST 同时广告可用处理器对应的命令。
+- 声明仅 TUI 命令的宿主 MUST 将其派发回落到宿主端 TUI 处理器执行，作为 guest 可运行能力的唯一依据，不扩大主机权限。
+- 共享进程宿主的会话迁移 MUST 通过 `rebindCwd` 建立会话级目录绑定；MUST NOT 修改进程级项目目录，以免影响同进程中的兄弟会话。
+- `/wt` 解析出的目标路径与当前会话目录相同时 MUST 跳过重定位，并且 MUST NOT 清理源工作树或其中的未提交内容。
+
+#### Scenario: collab 命令目录与共享进程会话迁移的可观察行为
+
+- **WHEN** 宿主广告命令，或在共享进程中执行 `/move`、`/wt`
+- **THEN** 目录与派发能力一致，目录切换只作用于当前会话，同路径目标不触发清理
 
 ### Requirement: JCH 命令
 
@@ -131,6 +207,109 @@ OMP MUST 全部结束时清空并移除显示；否则保留完整清单。
 
 - **WHEN** 执行 clear 时当前 TODO 全部结束或仍有未结束项
 - **THEN** 全部结束时清空并移除显示；否则保留完整清单
+
+### Requirement: `/clear` 在非 TUI 宿主的上下文重置
+
+OMP MUST 在非 TUI 宿主原地重置上下文并保留会话身份，重置竞态时明确报告且不清空数据。
+
+#### Scenario: `/clear` 在非 TUI 宿主的上下文重置的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 重置 MUST 原地清空对话上下文，会话 MUST 继续存在，会话 ID、标题、目录、模型与设置 MUST NOT 改变。
+- 压缩进行中时 MUST 先中止压缩并等待其真正结束，再执行重置。
+- 成功回执 MUST 为 `Context reset — N messages dropped; session continues.`，`N` 为实际丢弃的消息数；`N` 为 1 时 MUST 使用单数 `message`。
+- 流式响应进行中 MUST NOT 重置，回执 MUST 提示先结束或中断当前响应。
+- 等待压缩结束时若会话被切换或销毁，MUST 输出 `Session changed while resetting the context; nothing was cleared.`，MUST NOT 以异常使整个请求失败，也 MUST NOT 清空新会话的上下文。
+
+#### Scenario: `/clear` 在非 TUI 宿主的上下文重置的可观察行为
+
+- **WHEN** 在 ACP/RPC 会话中执行 `/clear`，且当时正在压缩、正在流式或发生会话切换
+- **THEN** 按压缩等待、流式拒绝或竞态回执处理，成功时给出丢弃消息数的回执
+
+### Requirement: `/delete` 在非 TUI 宿主的会话删除
+
+OMP MUST 删除当前会话文件并切换到新会话，取消或失败时不得宣称已删除。
+
+#### Scenario: `/delete` 在非 TUI 宿主的会话删除的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 删除 MUST 经 `AgentSession.newSession({ drop: true })` 完成，使持久化写入器关闭、会话文件被删除，并重置为全新会话；MUST NOT 只删除文件而保留管理器指向该路径。
+- 流式响应进行中 MUST 拒绝删除并说明原因；无会话文件（内存会话）MUST 拒绝并说明原因。
+- 成功回执 MUST 包含被删除的会话文件路径，并 MUST 包含 `A new session is now active`。
+- 切换被会话钩子取消时 MUST 报 `nothing was deleted`，且 MUST NOT 删除任何文件。
+- 删除抛错且会话已切换时 MUST 在错误信息后追加 `A new session is now active.`；未切换时 MUST NOT 追加。
+
+#### Scenario: `/delete` 在非 TUI 宿主的会话删除的可观察行为
+
+- **WHEN** 在 ACP/RPC 会话中执行 `/delete`，或该操作被钩子取消、删除失败
+- **THEN** 成功时文件被删除并切到新会话，取消与失败时给出对应回执而不宣称删除
+
+### Requirement: `/logout` 在非 TUI 宿主的凭据移除
+
+OMP MUST 按 provider 与账号移除存储凭据并刷新 provider 状态，其他凭据来源仍生效时明确警告。
+
+#### Scenario: `/logout` 在非 TUI 宿主的凭据移除的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 未指定 provider 时 MUST 只列出存在存储凭据的 provider；仅一个时 MUST 直接使用，多个时 MUST 经选择界面选择；选择被取消 MUST 不删除任何凭据且不输出结果。
+- 指定的 provider 未知 MUST 以警告跳过；没有存储凭据时 MUST 说明当前认证来自环境或配置文件并提示在其来源处移除。
+- 同一 provider 有多个账号时 MUST 经账号选择；只有一个账号时 MUST 直接使用。
+- 移除 MUST 只删除所选账号的存储凭据，并 MUST 刷新该 provider 的模型/认证状态。
+- 移除后仍存在其他凭据来源时，回执 MUST 以警告级输出并包含 `still authenticated via …` 与实际来源；否则 MUST 为信息级。
+- 选择期间会话 ID、generation、模型注册表或生命周期状态发生变化时 MUST 取消移除并报 `Logout cancelled: the session changed during account selection.`。
+
+#### Scenario: `/logout` 在非 TUI 宿主的凭据移除的可观察行为
+
+- **WHEN** 在 ACP/RPC 会话中执行 `/logout`，且存在多个账号、其他凭据来源或期间切换了会话
+- **THEN** 按选择结果删除单个凭据并刷新 provider，必要时给出仍已认证的警告，竞态时取消
+
+### Requirement: `/skills` 在非 TUI 宿主的注册表操作
+
+OMP MUST 使用配置的注册表源并仅经确认授权安装带脚本的技能，结果以会话通知输出。
+
+#### Scenario: `/skills` 在非 TUI 宿主的注册表操作的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- 注册表源 MUST 为已配置的技能注册表地址，未配置时 MUST 使用默认注册表地址。
+- `search`、`install`、`installed`、`update` 与帮助子命令 MUST 与非 TUI 结果输出一致；缺少查询或目标时必须报用法错误，未知子命令 MUST 报错并给出用法。
+- 安装或更新包含脚本的技能时 MUST 经 `ui.confirm` 获取授权；宿主没有确认界面时 MUST 失败并说明需要确认能力，MUST NOT 默认同意。
+- 输出 MUST 经会话通知机制发送（信息/警告/错误分级），变更完成后 MUST 刷新技能列表与命令列表；已是最新时 MUST 明确说明无需更新。
+- 注册表或安装错误 MUST 以 `Skills: <原因>` 形式输出为错误通知，MUST NOT 使整个请求失败。
+
+#### Scenario: `/skills` 在非 TUI 宿主的注册表操作的可观察行为
+
+- **WHEN** 在 ACP/RPC 会话中执行 `/skills` 子命令，包括带脚本技能的安装
+- **THEN** 使用配置或默认注册表，未获确认时不安装，结果经会话通知输出并刷新技能状态
+
+### Requirement: `/wiki` 与 `/repo` 的 RPC 面板
+
+OMP MUST 在 RPC 宿主以对话框面板提供索引维护，破坏性操作需二次确认，取消与会话切换安全中止。
+
+#### Scenario: `/wiki` 与 `/repo` 的 RPC 面板的详细边界
+
+- **WHEN** 本节所述功能在适用条件下运行
+- **THEN** 以下具体约束适用：
+
+- `/wiki` 面板 MUST 提供索引列表、新建索引（目录与名称输入）、删除索引、搜索与 grep，并 MUST 支持分页浏览命中章节。
+- `/repo` 面板 MUST 提供索引状态、构建、更新、重建与删除；删除 MUST 保留项目文件。
+- 删除等破坏性操作 MUST 先经确认对话框；用户取消 MUST 本次操作不产生任何变更。
+- 索引进度 MUST 节流上报（同一阶段未完成时至少间隔 200 毫秒），完成时 MUST 输出最终结果行。
+- 任一阶段 MUST 记录包含操作标识与阶段名的操作日志；输出失败 MUST 只记录警告，不中断索引。
+- 会话切换、销毁或取消信号触发时 MUST 中止当前索引操作并输出取消结果，MUST NOT 写入已切换会话。
+- TUI MUST 继续打开既有面板，语义与外观不变。
+
+#### Scenario: `/wiki` 与 `/repo` 的 RPC 面板的可观察行为
+
+- **WHEN** 在 RPC 宿主执行 `/wiki` 或 `/repo` 并选择操作，或中途取消
+- **THEN** 经确认后执行对应索引操作并按节流输出进度，取消与会话切换时安全中止
 
 ### Requirement: `/wt` 会话工作树
 

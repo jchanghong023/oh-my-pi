@@ -65,3 +65,72 @@ Wiki 是 OMP 核心功能，ZCode 必须提供独立页面，左侧入口放在�
 
 - **WHEN** 已导入索引后执行搜索、grep、续页或取消
 - **THEN** 从 docs.db 的同一快照交付完整原文与来源，按固定分页和游标规则处理变更与失败
+
+### Requirement: Wiki 语料发现与导入顺序
+
+`omp docs init` MUST 只收录文件名以 `.md` 结尾的普通文件，跳过符号链接，忽略任何忽略规则，并以稳定顺序导入。
+
+#### Scenario: Wiki 语料发现的详细边界
+
+- **WHEN** 用户对一个目录执行 `omp docs init`
+- **THEN** 以下收录规则适用：
+
+- 只收录文件名以 `.md` 结尾（ASCII 大小写不敏感，如 `.MD` 同样收录）的普通文件；其他扩展名 MUST NOT 入库。
+- 文件符号链接与目录符号链接 MUST NOT 跟随；链接目标即使位于语料根内也不收录。
+- 递归 MUST 覆盖隐藏目录与隐藏文件，且 MUST NOT 读取任何忽略规则（`.gitignore`、`.ignore` 等不缩小或扩大收录范围）。
+- 同一真实目录 MUST 按其规范化（canonicalize）路径去重，避免经路径别名重复枚举同一批文件。
+- 导入顺序 MUST 稳定：目录项按名称字节序枚举，最终文件清单按 `en_US` collator 稳定排序，同一语料多次 `init` MUST 产生相同顺序。
+
+#### Scenario: 隐藏目录与大小写扩展名
+
+- **WHEN** 语料根下的隐藏目录中存在 `notes.MD`
+- **THEN** 该文件 MUST 被收录，无需修改忽略规则或重命名文件。
+
+### Requirement: 文档索引名称的校验与保留前缀
+
+`omp docs init --name` MUST 在创建索引前校验名称，任一规则不满足即拒绝。
+
+#### Scenario: 文档索引名称的校验与保留前缀的详细边界
+
+- **WHEN** 用户以 `--name` 提供文档索引名称
+- **THEN** 名称 MUST 先裁剪首尾 Unicode 空白字符，再满足以下条件：
+
+- 裁剪后 MUST 非空；
+- Unicode 标量值个数 MUST ≤ 64；
+- MUST NOT 含 Unicode `Cc`（控制）字符，含 C0、DEL 与 C1；
+- MUST NOT 以保留前缀 `__building__` 开头（该前缀表示未发布的半成品索引）。
+
+任一条件不满足 MUST 报错并说明原因，MUST NOT 创建索引或数据库中的任何可见索引记录。
+
+#### Scenario: 名称只含空白
+
+- **WHEN** `--name` 的值裁剪后为空
+- **THEN** 命令报名称不得为空并以失败退出，不创建索引。
+
+#### Scenario: 名称使用保留前缀
+
+- **WHEN** `--name` 的值以 `__building__` 开头
+- **THEN** 命令报使用保留前缀并以失败退出，不创建索引。
+
+### Requirement: 文档索引数据库的打开、版本与文件权限
+
+打开 `docs.db` MUST 拒绝高于支持版本的数据库，MUST 保证 Unix 上的文件权限，并 MUST 区分“空库被创建”与“索引已建立”。
+
+#### Scenario: 文档索引数据库的打开、版本与文件权限的详细边界
+
+- **WHEN** 任意入口（`init`、`remove`、查询、`/wiki` 面板、ZCode 专页）打开文档索引数据库
+- **THEN** 以下边界适用：
+
+- `PRAGMA user_version` 高于当前支持的 schema 版本时 MUST 直接报错并关闭连接，MUST NOT 迁移、降级、清空或重建该数据库；该拒绝 MUST 记录 `docs.storage.open.rejected` 诊断事件，并带上实际版本与支持版本。
+- 数据库文件不存在时 MUST 创建一个空的 WAL 模式数据库（含父目录）；该空库 MUST NOT 被视为“已建立索引”，索引列表仍为空，`/wiki` 与 `wiki` 工具仍报告无索引。
+- Unix 上打开（含创建）后 MUST 将数据库文件权限设为 0600。
+
+#### Scenario: 更高版本的数据库被拒绝
+
+- **WHEN** `docs.db` 的 `user_version` 高于支持的 schema 版本
+- **THEN** 打开失败并报不支持该版本，既有证据 MUST NOT 被修改或迁移。
+
+#### Scenario: 无索引时的查询副作用
+
+- **WHEN** 当前 profile 尚无任何文档索引时构造查询服务（含仅执行只读查询）
+- **THEN** 磁盘上 MUST 生成空的 `docs.db`（WAL 模式），但查询仍报无索引，不返回零命中结果，也不得据此认定索引已建立。
