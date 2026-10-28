@@ -888,7 +888,7 @@ test("cached risk bands retain one supervised Bazel server and complete native e
 	}
 }, 120_000);
 
-test("a failing risk band never dispatches the lower-risk native test band", async () => {
+test("a failing risk band still dispatches the lower-risk native test band", async () => {
 	const root = await fixture();
 	try {
 		await Bun.write(path.join(root, "packages/a/status.txt"), "fail");
@@ -901,7 +901,7 @@ test("a failing risk band never dispatches the lower-risk native test band", asy
 			"fulltest",
 		);
 		expect(result.exitCode).not.toBe(0);
-		expect(await Bun.file(path.join(root, ".state/b.runs")).exists()).toBe(false);
+		expect(await Bun.file(path.join(root, ".state/b.runs")).text()).toBe("run\n");
 	} finally {
 		await cleanup(root);
 	}

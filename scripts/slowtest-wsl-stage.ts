@@ -12,7 +12,7 @@ import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 export const WSL_TEST_DISTRIBUTION = "Ubuntu-24.04";
-const HELPER_HANG_GUARD_SECONDS = 3600;
+const HELPER_HANG_GUARD_SECONDS = 7200;
 export interface WslDistro {
 	name: string;
 	state: string;
@@ -112,7 +112,7 @@ export async function discoverWsl(gate: GateRun, options: WslOptions): Promise<W
 		});
 		return result;
 	} catch (error) {
-		gate.fail(error);
+		gate.record(error);
 		const cancelled =
 			gate.signal.aborted &&
 			gate.signal.reason instanceof GateCommandError &&
@@ -485,7 +485,7 @@ export async function runWslStage(gate: GateRun, options: WslOptions): Promise<W
 			});
 			return result;
 		} catch (error) {
-			gate.fail(error);
+			gate.record(error);
 			const cancelled =
 				gate.signal.aborted &&
 				gate.signal.reason instanceof GateCommandError &&
@@ -533,7 +533,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 		failureCode: WslFailureCode,
 		exitCode = 1,
 	): WslStageResult => {
-		gate.fail(
+		gate.record(
 			new GateCommandError(
 				`${status}: ${reason}`,
 				exitCode || 1,
@@ -618,7 +618,7 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	try {
 		remote = await resolveWslRemoteSource(gate, root, source);
 	} catch (error) {
-		gate.fail(error);
+		gate.record(error);
 		logger.error("WSL remote source blocked", {
 			component: "test-gate-wsl",
 			event: "wsl_remote_source_settled",
@@ -939,7 +939,7 @@ test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fi
 			elapsed_ms: performance.now() - executionStarted,
 		});
 	} catch (error) {
-		gate.fail(error);
+		gate.record(error);
 		const cancelled =
 			gate.signal.aborted &&
 			gate.signal.reason instanceof GateCommandError &&
@@ -974,7 +974,7 @@ test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fi
 	});
 	const observedExit = testCode === undefined ? undefined : Number(testCode);
 	if (observedExit !== undefined && observedExit !== 0)
-		gate.fail(
+		gate.record(
 			new GateCommandError(
 				"Linux fulltest failed",
 				observedExit,

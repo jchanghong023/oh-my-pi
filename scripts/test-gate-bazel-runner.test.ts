@@ -109,7 +109,7 @@ Bun.serve = () => ({ url: new URL("http://127.0.0.1:1/"), async stop() {
 				.trim()
 				.split("\n")
 				.map(line => JSON.parse(line.slice("OMP_GATE_EVENT fixture-auth ".length)));
-			expect(failures).toHaveLength(1);
+			expect(failures.length).toBeGreaterThan(0);
 			expect(failures[0].exitCode).toBe(scenario === "native exit" ? 37 : scenario === "payload exit" ? 39 : 1);
 			expect(failures[0].message).not.toContain("cleanup must not replace");
 		} finally {
@@ -173,7 +173,7 @@ for (const scenario of [
 			);
 			expect(await child.exited).not.toBe(0);
 			const lines = (await Bun.file(events).text()).trim().split("\n");
-			expect(lines).toHaveLength(1);
+			expect(lines.length).toBeGreaterThan(0);
 			expect(lines[0]).toStartWith("OMP_GATE_EVENT context-auth ");
 			const failure = JSON.parse(lines[0]!.slice("OMP_GATE_EVENT context-auth ".length));
 			expect(failure.kind).toBe("failure");
@@ -183,3 +183,116 @@ for (const scenario of [
 		}
 	});
 }
+
+test("continues remaining batches after a failed native invocation", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-driver-continue-"));
+	let child: Bun.Subprocess | undefined;
+	try {
+		await fs.copyFile(path.join(import.meta.dir, "test-gate-bazel-runner.ts"), path.join(root, "runner.ts"));
+		await Bun.write(
+			path.join(root, "test-gate-events.ts"),
+			"export async function withChargedActivity(fn) { return await fn(); }",
+		);
+		await Bun.write(
+			path.join(root, "test-gate-clock.ts"),
+			"export function gateClockNanoseconds() { return process.hrtime.bigint(); }",
+		);
+		await Bun.write(path.join(root, "test-gate-bazel-report.ts"), "export async function recordBazelInvocation() {}");
+		const marker = path.join(root, "second-payload-ran");
+		await Bun.write(
+			path.join(root, "test-gate-process.ts"),
+			`
+let calls = 0;
+export async function requestPersistentBazel(argv) {
+  calls++;
+  if (argv.includes(${JSON.stringify("fixture-second-payload")})) {
+    await Bun.write(${JSON.stringify(marker)}, "ran");
+    return { pid: process.pid, exited: Promise.resolve(0), async cancel() {} };
+  }
+  return { pid: process.pid, exited: Promise.resolve(calls === 1 ? 37 : 0), async cancel() {} };
+}
+export function relayPersistentBazel() {}
+`,
+		);
+		await Bun.write(
+			path.join(root, "preload.ts"),
+			`
+Bun.serve = () => ({ url: new URL("http://127.0.0.1:1/"), async stop() {
+  process.send({ type: "fixture-cleanup" });
+  const release = Promise.withResolvers();
+  process.on("message", message => { if (message === "fixture-release") release.resolve(); });
+  await release.promise;
+} });
+`,
+		);
+		const firstBep = path.join(root, "first-bep.json");
+		const secondBep = path.join(root, "second-bep.json");
+		for (const bep of [firstBep, secondBep])
+			await Bun.write(bep, `${JSON.stringify({ finished: { overallSuccess: true } })}\n`);
+		await Bun.write(
+			path.join(root, "batches.json"),
+			JSON.stringify({
+				batches: [
+					{
+						argv: ["fixture-bazel", `--output_base=${root}-output`, "test-first"],
+						targets: [],
+						bep: firstBep,
+					},
+					{
+						argv: ["fixture-bazel", `--output_base=${root}-output`, "test-second"],
+						targets: [],
+						bep: secondBep,
+						script: "fixture-second-payload",
+					},
+				],
+			}),
+		);
+		const events = path.join(root, "events");
+		await Bun.write(events, "");
+		const cleanup = Promise.withResolvers<void>();
+		child = Bun.spawn(
+			[
+				process.execPath,
+				"--preload",
+				path.join(root, "preload.ts"),
+				path.join(root, "runner.ts"),
+				"bazel",
+				path.join(root, "context.json"),
+				path.join(root, "batches.json"),
+			],
+			{
+				cwd: root,
+				env: { ...process.env, OMP_GATE_EVENT_FILE: events, OMP_GATE_EVENT_TOKEN: "fixture-auth" },
+				stdout: "ignore",
+				stderr: "ignore",
+				ipc(message) {
+					if (message?.type === "fixture-cleanup") cleanup.resolve();
+				},
+			},
+		);
+		await Promise.race([
+			cleanup.promise,
+			child.exited.then(code => {
+				throw new Error(`Driver exited before cleanup: ${code}`);
+			}),
+		]);
+		expect(await Bun.file(marker).exists()).toBe(true);
+		child.send("fixture-release");
+		expect(await child.exited).toBe(37);
+		const failures = (await Bun.file(events).text())
+			.trim()
+			.split("\n")
+			.filter(Boolean)
+			.map(line => JSON.parse(line.slice("OMP_GATE_EVENT fixture-auth ".length)));
+		expect(failures.length).toBeGreaterThan(0);
+		expect(failures[0].exitCode).toBe(37);
+	} finally {
+		if (child && child.exitCode === null) {
+			try {
+				child.send("fixture-release");
+			} catch {}
+		}
+		await child?.exited;
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});

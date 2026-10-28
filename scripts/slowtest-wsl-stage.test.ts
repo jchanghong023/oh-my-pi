@@ -37,14 +37,18 @@ function resolveGitBash(): string | null {
 function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCapture> = async () => "") {
 	const commands: GateCommand[] = [];
 	const controller = new AbortController();
+	const failureOf = (error: unknown): GateCommandError =>
+		error instanceof GateCommandError ? error : new GateCommandError(String(error), 1);
+	const abort = (failure: GateCommandError): GateCommandError => {
+		if (!controller.signal.aborted) controller.abort(failure);
+		return controller.signal.reason as GateCommandError;
+	};
 	const gate = {
 		signal: controller.signal,
-		fail: (error: unknown) => {
-			const failure = error instanceof GateCommandError ? error : new GateCommandError(String(error), 1);
-			if (!controller.signal.aborted) {
-				controller.abort(failure);
-			}
-			return controller.signal.reason as GateCommandError;
+		fail: (error: unknown) => abort(failureOf(error)),
+		record: (error: unknown) => {
+			const failure = failureOf(error);
+			return failure.status === "TIMEOUT" || failure.status === "INTERRUPTED" ? abort(failure) : failure;
 		},
 		charged: async <T>(work: () => Promise<T>) => await work(),
 		capture: async (command: GateCommand) => {
@@ -449,7 +453,7 @@ describe("streamed deployed fixed-commit execution", () => {
 			remote: "fork",
 			branch: "tested-feature",
 			expected_sha: source().head,
-			timeout: 3600,
+			timeout: 7200,
 		});
 		expect(request.argv.join(" ")).toContain("bun scripts/fulltest.ts --debug");
 		expect(request.env.OMP_GATE_EVENT_FILE).toBe("");

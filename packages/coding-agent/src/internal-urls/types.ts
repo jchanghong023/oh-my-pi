@@ -26,6 +26,7 @@ import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import type { ProcReadDetails, ProcWriteDetails } from "@oh-my-pi/pi-tui/tools/proc-render";
 import type { CfgReadDetails, CfgWriteDetails } from "@oh-my-pi/pi-tui/tools/cfg-render";
 import type { XdevRenderDispatch } from "@oh-my-pi/pi-tui/tools/xdev";
+import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
 
 /** Transcript-only render state a handler write attaches to the `write` tool result. */
 export interface InternalWriteDetails {
@@ -33,6 +34,7 @@ export interface InternalWriteDetails {
 	proc?: ProcWriteDetails;
 	cfg?: CfgWriteDetails;
 	xdev?: XdevRenderDispatch;
+	conflictChanges?: EditToolPerFileResult[];
 	/** Absolute file the write landed in, for the transcript card's file link (conflict://). */
 	resolvedPath?: string;
 }

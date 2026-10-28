@@ -23,17 +23,17 @@ let firstFailure: { exitCode: number; status: string; message: string } | undefi
 
 // Keep this wire local: native primitive runfiles do not include host failure modules.
 function reportFailure(error: unknown, exitCode?: number): void {
-	if (firstFailure) return;
 	const cause = error as { exitCode?: number; status?: string };
-	firstFailure = {
+	const failure = {
 		exitCode: exitCode ?? cause?.exitCode ?? 1,
 		status: cause?.status ?? "FAIL",
 		message: error instanceof Error ? error.message : String(error),
 	};
+	firstFailure ??= failure;
 	const token = process.env.OMP_GATE_EVENT_TOKEN || failureContext?.eventToken;
 	const eventFile = process.env.OMP_GATE_EVENT_FILE || failureContext?.eventFile;
 	if (!token) return;
-	const line = `OMP_GATE_EVENT ${token} ${JSON.stringify({ id: randomUUID(), kind: "failure", ...firstFailure })}\n`;
+	const line = `OMP_GATE_EVENT ${token} ${JSON.stringify({ id: randomUUID(), kind: "failure", ...failure })}\n`;
 	try {
 		if (eventFile) appendFileSync(eventFile, line);
 		else process.stderr.write(line);
@@ -515,6 +515,7 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 		};
 		// Sequential risk bands share one native server; cancellation belongs to
 		// the active client, not the persistent server or another agent's command.
+		let failureCode = 0;
 		for (const batch of request.batches) {
 			console.log(
 				`bazel dispatch priority=${batch.priority} reason=${JSON.stringify(batch.reason)} targets=${batch.targets.map(target => target.label).join(",")}`,
@@ -522,20 +523,28 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 			const code = batch.charged ? await withChargedActivity(() => run(batch.argv)) : await run(batch.argv);
 			if (code !== 0) {
 				if (!cancelled) reportFailure("Native Bazel command failed", code);
-				return code;
+				failureCode ||= code;
 			}
-			// A zero client exit is insufficient: do not start a lower-risk band
-			// unless every required native action/test has successful BEP evidence.
-			const evidenceCode = await withChargedActivity(async () => {
-				const events = Bun.JSONL.parse(await Bun.file(batch.bep).text()) as BazelEvidence[];
-				if (!events.some(event => event.finished?.overallSuccess === true)) return 1;
-				return verifyTargets(events, batch.targets);
-			});
+			// A zero client exit is insufficient: every remaining batch is still
+			// inspected so one failing risk band does not hide another's results.
+			let evidenceCode = 1;
+			if (code === 0) {
+				try {
+					evidenceCode = await withChargedActivity(async () => {
+						const events = Bun.JSONL.parse(await Bun.file(batch.bep).text()) as BazelEvidence[];
+						if (!events.some(event => event.finished?.overallSuccess === true)) return 1;
+						return verifyTargets(events, batch.targets);
+					});
+				} catch (error) {
+					reportFailure(error);
+					evidenceCode = 1;
+				}
+			}
 			if (evidenceCode !== 0) {
 				reportFailure(`Required Bazel evidence is missing or unsuccessful: ${batch.bep}`, evidenceCode);
-				return evidenceCode;
+				failureCode ||= evidenceCode;
 			}
-			const script = batch.script;
+			const script = code === 0 && evidenceCode === 0 ? batch.script : undefined;
 			if (script) {
 				// Native --script_path preserves Bazel's argv/env/cwd. Run its payload
 				// under the ordinary Job/subreaper, never the persistent server owner.
@@ -554,12 +563,12 @@ async function launch(contextFile: string, requestFile: string): Promise<number>
 				active = undefined;
 				if (exitCode !== 0) {
 					if (!cancelled) reportFailure(`Bazel run payload failed: ${script}`, exitCode);
-					return exitCode;
+					failureCode ||= exitCode;
 				}
 			}
 		}
-		succeeded = true;
-		return 0;
+		succeeded = !cancelled;
+		return failureCode;
 	} catch (error) {
 		reportFailure(error);
 		throw error;

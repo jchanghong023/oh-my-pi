@@ -976,6 +976,7 @@ export class ToolExecutionComponent extends Container {
 			return hasAppliedFileChange(this.#result.details);
 		if (this.#toolName !== "write") return false;
 		const details = this.#result.details;
+		if (isRecord(details) && Array.isArray(details.conflictChanges)) return details.conflictChanges.length > 0;
 		if (isRecord(details) && isRecord(details.xdev)) {
 			if (details.xdev.mode !== "execute") return false;
 			if (details.xdev.tool === "write") return true;

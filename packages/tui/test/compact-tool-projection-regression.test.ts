@@ -360,6 +360,35 @@ describe("compact tool component integration", () => {
 		expect(output(root)).toContain("FULL_DETAIL");
 	});
 
+	it("retains only the last three conflict file diffs and keeps partial failure details", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const root = new TranscriptContainer();
+		const calls = ["one", "two", "three", "four"].map((name, index) => {
+			const call = tool("write", { path: `conflict://${index + 1}`, content: "@ours" });
+			call.updateResult({
+				content: [{ type: "text", text: `resolved ${name}` }],
+				details: { conflictChanges: [{ path: `${name}.ts`, diff: `-1 old_${name}\n+1 new_${name}` }] },
+			});
+			root.addChild(call);
+			return call;
+		});
+		for (const view of [output(root), native(root)]) {
+			expect(view).not.toContain("old_one");
+			expect(view).toContain("old_two");
+			expect(view).toContain("new_four");
+		}
+		calls[0]!.updateResult({
+			content: [{ type: "text", text: "FAILED_CONFLICT_FILE" }],
+			isError: true,
+			details: { conflictChanges: [{ path: "one.ts", diff: "-1 old_one\n+1 new_one" }] },
+		});
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("FAILED_CONFLICT_FILE");
+			expect(view).toContain("new_one");
+			expect(view).toContain("new_four");
+		}
+	});
+
 	it("retains device-dispatched edit cards without changing their results", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const edit = tool("write", { path: "xd://edit", content: JSON.stringify({ path: "sample.ts" }) });

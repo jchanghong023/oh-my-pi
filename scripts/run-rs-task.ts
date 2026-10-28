@@ -68,7 +68,7 @@ const TASK_COMMANDS = {
 			"cargo",
 			"nextest",
 			"run",
-			"--max-fail=1:immediate",
+			"--no-fail-fast",
 			// The plus reporter flushes each classified result before native grace cleanup.
 			"--message-format=libtest-json-plus",
 			"--message-format-version=0.1",
@@ -102,7 +102,6 @@ const TASK_COMMANDS = {
 			...VENDORED_FORK_EXCLUDES,
 			"--",
 			"-Zunstable-options",
-			"--fail-fast",
 			"--format=json",
 			"--report-time",
 		],

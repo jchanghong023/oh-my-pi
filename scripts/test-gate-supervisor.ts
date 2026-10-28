@@ -498,9 +498,8 @@ process.on("message", async (message: unknown) => {
 		});
 		const exitCode = await child.exited;
 		nativeAccepting = false;
-		// Publish failure without releasing the ownership/lease acknowledgment.
-		// The final IPC reply still follows native cancellation.
-		if (exitCode !== 0) reportFailure("Supervised command failed", exitCode);
+		// The IPC exit reply carries this command's status; do not also publish
+		// an otherwise identical failure event for the same command boundary.
 		if (persistentBazel) await cancelNativeClients();
 		commandSettled = true;
 		if (persistentBazel && aborting) process.exit(0);

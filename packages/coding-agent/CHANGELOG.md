@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Clarify how to retrieve device documentation after invalid `xd://` JSON.
+
 - Guide `/dev` requirements exploration from project evidence using Grill-me's interview process instead of Brainstorming; users can stop the interview in natural language.
 
 - Hide all bundled Superpowers skills from automatic discovery in ordinary sessions, their subagents and the first three `/dev` stages and their descendants; retain explicit user invocation and allow `/dev` executors and all recursive subagents to discover and read them. Preserve stage injection, permissions and same-name custom skill precedence, and retain the disabling frontmatter on future upstream updates.
@@ -68,6 +70,7 @@
 
 ### Fixed
 
+- Show actual diffs for conflict resolutions, including successful files when a bulk resolution partially fails.
 - Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
 - Project and save global Team configuration without requiring a chat session; preserve ordered explicit members and defer default model selection until a discussion starts.
 - Use the visible Dev solution session's model and settings for Team participants, alignment and synthesis.

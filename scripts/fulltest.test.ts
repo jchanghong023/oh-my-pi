@@ -72,7 +72,7 @@ test("fulltest reaches its CLI error boundary without loading the native addon",
 		expect(exitCode).toBe(2);
 		expect(stdout).toContain("Usage: bun run fulltest");
 		expect(stdout).toMatch(
-			/fulltest: FAIL total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=900\.0s exit=2/,
+			/fulltest: FAIL total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=1800\.0s exit=2/,
 		);
 		expect(stderr).not.toContain("Failed to load pi_natives native addon");
 	} finally {
@@ -131,7 +131,6 @@ describe("complete fork-delta TS selection", () => {
 				expect(tests[index].argv).toEqual([
 					"bun",
 					"../../scripts/test-report-bun.ts",
-					"--bail=1",
 					`--timeout=${testTimeoutMs()}`,
 					file.slice(separator + 1),
 				]);
@@ -234,6 +233,7 @@ describe("fulltest source snapshot checkpoints", () => {
 			capture: async (command: { label: string }) => ({
 				stdout: command.label === "scope/complete fork delta" ? changedPaths.join("\0") : "",
 			}),
+			record: (error: unknown) => error,
 			fail: (error: unknown) => error,
 		} as unknown as GateRun;
 		let failure: unknown;
@@ -425,10 +425,11 @@ describe("standard gate charged-budget parameters", () => {
 
 	test("fulltest retains debug and rejects budget relaxation or ambiguous options", () => {
 		expect(parseFulltestArgs(["--debug", "--debug"])).toEqual({ debug: true });
-		expect(parseFulltestArgs(["--limit-seconds=900", "--debug"])).toEqual({ debug: true, limitSeconds: 900 });
+		const max = GATE_LIMIT_SECONDS.fulltest;
+		expect(parseFulltestArgs([`--limit-seconds=${max}`, "--debug"])).toEqual({ debug: true, limitSeconds: max });
 		expect(parseFulltestArgs(["--debug", "--limit-seconds=0.25"])).toEqual({ debug: true, limitSeconds: 0.25 });
 		for (const args of [
-			["--limit-seconds=900.01"],
+			[`--limit-seconds=${max + 0.01}`],
 			["--limit-seconds=0"],
 			["--limit-seconds=-1"],
 			["--limit-seconds=Infinity"],

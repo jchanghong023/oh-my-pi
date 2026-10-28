@@ -1058,10 +1058,9 @@ it("cannot swallow a failed child gate to produce outer success", async () => {
 	expect(result.status).toBe("FAIL");
 	expect(result.exitCode).toBe(19);
 });
-it("cancels parallel commands at the failing reply and preserves it through failing cleanup", async () => {
+it("keeps parallel commands and later stages after a failing reply", async () => {
 	const output: string[] = [];
-	const hooks: string[] = [];
-	const siblingCancelled = Promise.withResolvers<void>();
+	let siblingAborted = false;
 	const ready = ["failure", "sibling"].map(id => path.join(directory, `first-failure-${id}.ready`));
 	const release = path.join(directory, "first-failure.release");
 	const nextPid = path.join(directory, "first-failure-next.pid");
@@ -1069,25 +1068,13 @@ it("cancels parallel commands at the failing reply and preserves it through fail
 		"fulltest",
 		async gate => {
 			await Promise.allSettled([
+				gate.run(command({ barrierReady: ready[0], barrierRelease: release, exit: 23 })),
 				gate.run(
 					command(
-						{ barrierReady: ready[0], barrierRelease: release, exit: 23 },
+						{ barrierReady: ready[1], barrierRelease: release, ms: 100 },
 						{
 							onAbort: async () => {
-								hooks.push("failing stage cleanup");
-								await siblingCancelled.promise;
-								throw new Error("fixture failing stage cleanup failed");
-							},
-						},
-					),
-				),
-				gate.run(
-					command(
-						{ barrierReady: ready[1], barrierRelease: release, ms: 30000 },
-						{
-							onAbort: async () => {
-								hooks.push("sibling cancelled");
-								siblingCancelled.resolve();
+								siblingAborted = true;
 							},
 						},
 					),
@@ -1103,17 +1090,35 @@ it("cancels parallel commands at the failing reply and preserves it through fail
 	);
 	expect(result.status).toBe("FAIL");
 	expect(result.exitCode).toBe(23);
-	expect(hooks).toContain("failing stage cleanup");
-	expect(hooks).toContain("sibling cancelled");
-	expect(await Bun.file(nextPid).exists()).toBe(false);
-	expect(
-		output.some(line => line.includes("CLEANUP_FAIL") && line.includes("fixture failing stage cleanup failed")),
-	).toBe(true);
+	expect(siblingAborted).toBe(false);
+	expect(await Bun.file(nextPid).exists()).toBe(true);
 	expect(output.at(-1)).toMatch(/FAIL total=\d+\.\ds compile_excluded=\d+\.\ds budgeted=\d+\.\ds limit=2\.0s exit=23/);
 	expect(result.totalSeconds).toBeCloseTo(result.budgetedSeconds + result.compileExcludedSeconds, 5);
 });
 
-it("honors explicit nested failure events without waiting for their enclosing command to exit", async () => {
+it("collects every independent command failure and keeps the first exit code", async () => {
+	const nextPid = path.join(directory, "aggregate-next.pid");
+	const result = await runGate(
+		"fastcheck",
+		async gate => {
+			for (const exit of [19, 23]) {
+				try {
+					await gate.run(command({ exit }));
+				} catch {
+					/* The checker continues after a result; the gate owns the summary. */
+				}
+			}
+			await gate.run(command({ pidFile: nextPid }));
+		},
+		{ print: quiet },
+	);
+	expect(await Bun.file(nextPid).exists()).toBe(true);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(19);
+	expect(result.failures?.map(failure => failure.exitCode)).toEqual([19, 23]);
+});
+
+it("records explicit nested failure events while the enclosing command continues", async () => {
 	for (const allowFailure of [false, true]) {
 		const pidFile = path.join(directory, `nested-failure-${allowFailure}.pid`);
 		const result = await runGate(
@@ -1125,7 +1130,7 @@ it("honors explicit nested failure events without waiting for their enclosing co
 							reportFailure: 29,
 							runtime: pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href,
 							pidFile,
-							ms: 30000,
+							ms: 100,
 						},
 						{ allowFailure },
 					),
@@ -1348,7 +1353,7 @@ process.exit(result.exitCode);`;
 			const output = JSON.parse(await stdout);
 			expect(output.result.status).toBe("FAIL");
 			expect(output.result.exitCode).toBe(1);
-			expect(output.siblingStarted).toBe(false);
+			expect(output.siblingStarted).toBe(boundary === "event");
 		} finally {
 			clearTimeout(timer);
 			if (child.exitCode === null) child.kill("SIGKILL");
@@ -2035,7 +2040,10 @@ while (Date.now() < deadline) {
 		async gate => {
 			await Promise.all([
 				gate.run({ label: "churn stage", argv: [process.execPath, churn] }),
-				gate.run(command({ ms: 250, exit: 1 })),
+				gate.charged(async () => {
+					await sleep(250);
+					throw gate.fail(new GateCommandError("fixture explicit first failure", 1));
+				}),
 			]);
 		},
 		{ print: quiet },

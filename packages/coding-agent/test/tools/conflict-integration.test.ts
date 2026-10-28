@@ -406,6 +406,10 @@ describe("write resolves conflicts via conflict://N", () => {
 		expect(getText(result)).toContain("Resolved conflict #1");
 		const after = await Bun.file(filePath).text();
 		expect(after).toBe("line 1\nnewApi(x);\nline N\n");
+		const changes = (result.details as { conflictChanges: Array<{ path: string; diff: string }> }).conflictChanges;
+		expect(changes[0]?.path).toBe(filePath);
+		expect(changes[0]?.diff).toContain("<<<<<<< HEAD");
+		expect(changes[0]?.diff).toContain("newApi(x);");
 		// History is invalidated after resolve so the id no longer works.
 		expect(session.conflictHistory?.get(1)).toBeUndefined();
 	});
@@ -878,9 +882,33 @@ describe("write resolves conflicts via conflict://N", () => {
 
 		// Per-entry expansion: each block keeps its own theirs side.
 		expect(await Bun.file(fileA).text()).toBe("a-theirs\nmiddle\nb-theirs\ntail\n");
+		const changes = (result.details as { conflictChanges: Array<{ path: string; diff: string }> }).conflictChanges;
+		expect(changes.map(change => change.path)).toEqual([fileA, fileB]);
+		expect(changes[0]?.diff).toContain("a-theirs");
+		expect(changes[1]?.diff).toContain("newApi(x)");
 		expect(await Bun.file(fileB).text()).toBe("line 1\nnewApi(x)\nline N\n");
 		// History cleared after bulk resolve.
 		expect(session.conflictHistory?.entries()).toHaveLength(0);
+	});
+
+	it("reports only successfully changed files when a bulk conflict resolution partially fails", async () => {
+		const fileA = path.join(tempDir, "ok.ts");
+		const fileB = path.join(tempDir, "missing.ts");
+		await Bun.write(fileA, TWO_WAY);
+		await Bun.write(fileB, TWO_WAY);
+		const session = createTestSession(tempDir);
+		const read = await getTool(session, "read");
+		const write = await getTool(session, "write");
+		await read.execute("read-ok", { path: "ok.ts:conflicts" });
+		await read.execute("read-missing", { path: "missing.ts:conflicts" });
+		await fs.unlink(fileB);
+		const result = await write.execute("write-partial", { path: "conflict://*", content: "@theirs" });
+		expect(result.isError).toBe(true);
+		expect(getText(result)).toContain("missing.ts");
+		const changes = (result.details as { conflictChanges: Array<{ path: string; diff: string }> }).conflictChanges;
+		expect(changes.map(change => change.path)).toEqual([fileA]);
+		expect(changes[0]?.diff).toContain("newApi(x)");
+		expect(await Bun.file(fileA).text()).toBe("line 1\nnewApi(x)\nline N\n");
 	});
 
 	it("`write conflict://*` errors when no conflicts are registered", async () => {

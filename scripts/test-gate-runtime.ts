@@ -8,7 +8,7 @@ import { ownGateProcess } from "./test-gate-process";
 import type { GateEventRelay } from "./test-gate-events";
 import { createGateEventRelay, emitEvent, GATE_EVENT_PREFIX } from "./test-gate-events";
 import { gateClockNanoseconds } from "./test-gate-clock";
-import { GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
+import { GateAbortError, GateCommandError, gateFailure, reportGateFailure } from "./test-gate-failure-events";
 import {
 	exitGateProcess,
 	prepareGateDiagnosticOutput,
@@ -22,9 +22,9 @@ import {
 export type GateLevel = "fastcheck" | "fulltest" | "slowtest";
 export type GateStatus = "PASS" | "FAIL" | "TIMEOUT" | "INTERRUPTED" | "MISSING_TOOL";
 export const GATE_LIMIT_SECONDS: Readonly<Record<GateLevel, number>> = {
-	fastcheck: 180,
-	fulltest: 900,
-	slowtest: 1500,
+	fastcheck: 360,
+	fulltest: 1800,
+	slowtest: 3000,
 };
 type RunLabel = GateLevel | "bazel";
 type Activity = "charged" | "compile";
@@ -59,6 +59,11 @@ export interface GateCommand {
 	/** Real producer outputs declared and retained by the native Bazel action. */
 	artifactFiles?: readonly string[];
 }
+export interface GateFailure {
+	message: string;
+	exitCode: number;
+	status: GateStatus;
+}
 export interface GateResult {
 	level: RunLabel;
 	status: GateStatus;
@@ -67,6 +72,8 @@ export interface GateResult {
 	compileExcludedSeconds: number;
 	budgetedSeconds: number;
 	limitSeconds: number;
+	/** Every verification failure collected in this tier; the first one owns the exit code. */
+	failures?: GateFailure[];
 }
 export interface GateOptions {
 	limitSeconds?: number;
@@ -101,6 +108,8 @@ interface Scope {
 	events: Array<{ at: number; key: object; kind?: Activity; source?: string; compilerEvents?: boolean }>;
 	controller: AbortController;
 	failure?: GateCommandError;
+	failures: GateCommandError[];
+	aggregate: boolean;
 	finalizers: Array<(exitCode: number) => Promise<void>>;
 	closed: boolean;
 	reportFailure: boolean;
@@ -164,6 +173,13 @@ function ancestors(scope: Scope): Scope[] {
 	const scopes: Scope[] = [];
 	for (let current: Scope | undefined = scope; current; current = current.parent) scopes.push(current);
 	return scopes;
+}
+const reportedFailures = new WeakSet<GateCommandError>();
+function sameFailure(left: GateCommandError, right: GateCommandError): boolean {
+	return (
+		left === right ||
+		(left.message === right.message && left.exitCode === right.exitCode && left.status === right.status)
+	);
 }
 function accrue(scope: Scope, now = performance.now()): void {
 	if (scope.closed) return;
@@ -318,7 +334,7 @@ export class GateEventParser {
 class Runtime {
 	readonly scopes = new Set<Scope>();
 	readonly owned = new Set<Owned>();
-	readonly pending = new Map<Promise<unknown>, Scope>();
+	readonly pending = new Map<Promise<unknown>, { scope: Scope; blocking: boolean }>();
 	readonly executions = new Map<Scope, Promise<GateResult>>();
 	private readonly outerToken = process.env.OMP_GATE_EVENT_TOKEN;
 	private readonly eventId = randomUUID();
@@ -362,6 +378,8 @@ class Runtime {
 			events: [],
 			controller: new AbortController(),
 			closed: false,
+			failures: [],
+			aggregate: level !== "bazel" && (parent?.aggregate ?? true),
 			finalizers: [],
 			reportFailure: options.reportFailure ?? false,
 			exitOnFailure: options.exitOnFailure ?? false,
@@ -416,6 +434,24 @@ class Runtime {
 		if (event !== this.lastEvent) {
 			emitEvent(this.outerToken, this.eventId, event);
 			this.lastEvent = event;
+		}
+	}
+	/** Collect an ordinary verification failure without cancelling independent work. */
+	record(scope: Scope, failure: GateCommandError, report = true): void {
+		if (scope.failure || scope.closed || scope.controller.signal.aborted) return;
+		if (!scope.aggregate) {
+			this.cancel(scope, failure);
+			return;
+		}
+		for (const current of ancestors(scope)) {
+			if (!current.aggregate || current.failure || current.closed) continue;
+			if (current.failures.some(existing => sameFailure(existing, failure))) continue;
+			current.failures.push(failure);
+		}
+		const reporter = report && ancestors(scope).find(current => current.reportFailure);
+		if (reporter && !reportedFailures.has(failure)) {
+			reportedFailures.add(failure);
+			reportGateFailure(failure);
 		}
 	}
 	cancel(scope: Scope, error: GateCommandError): void {
@@ -491,6 +527,11 @@ class Runtime {
 			for (const current of this.scopes) {
 				if (current.closed || !ancestors(current).includes(scope)) continue;
 				accrue(current);
+				for (const failure of current.failures)
+					writeGateDiagnostic(
+						1,
+						`${current.level}: ${failure.status} exit=${failure.exitCode} ${failure.message}\n`,
+					);
 				writeGateDiagnostic(
 					1,
 					`${current.level}: ${error.message}\n${current.level}: ${error.status}${current.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${((current.last - current.started) / 1000).toFixed(1)}s compile_excluded=${(current.compile / 1000).toFixed(1)}s budgeted=${(current.charged / 1000).toFixed(1)}s limit=${(current.limit / 1000).toFixed(1)}s exit=${error.exitCode}\n`,
@@ -681,12 +722,17 @@ class Runtime {
 								result: "failed",
 								...logger.diagnosticError(error),
 							});
-						this.cancel(
-							scope,
+						const failure =
 							error instanceof GateCommandError
 								? error
-								: new GateCommandError(error instanceof Error ? error.message : String(error), 1),
-						);
+								: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
+						if (
+							failure.status === "TIMEOUT" ||
+							failure.status === "INTERRUPTED" ||
+							failure instanceof GateAbortError
+						)
+							this.cancel(scope, failure);
+						else this.record(scope, failure);
 					});
 		let result!: GateResult;
 		try {
@@ -701,21 +747,45 @@ class Runtime {
 					// Promise-job queue, not an arbitrary number of microtasks.
 					await gate.charged(() => setImmediate());
 					const owned = [...this.owned].filter(owned => ancestors(owned.scope).includes(scope));
-					const pending = [...this.pending]
-						.filter(([, owner]) => ancestors(owner).includes(scope))
-						.map(([promise]) => promise);
+					const hardPending: Promise<unknown>[] = [];
+					const softPending: Promise<unknown>[] = [];
+					for (const [promise, entry] of this.pending) {
+						if (!ancestors(entry.scope).includes(scope)) continue;
+						if (!scope.failure || entry.blocking) hardPending.push(promise);
+						else {
+							// Post-failure cleanup still gets a bounded chance to
+							// finish; an indefinitely blocked hook is abandoned.
+							softPending.push(promise);
+							this.pending.delete(promise);
+						}
+					}
 					const executions = [...this.executions]
 						.filter(([owner]) => owner !== scope && ancestors(owner).includes(scope))
 						.map(([, execution]) => execution);
-					if (!owned.length && !pending.length && !executions.length) break;
+					if (!owned.length && !hardPending.length && !softPending.length && !executions.length) break;
 					const cleanup = await Promise.allSettled([
 						...owned.map(owned => this.cleanup(owned)),
-						...pending,
+						...hardPending,
 						...executions,
 					]);
 					for (let index = 0; index < owned.length; index++) {
 						const settled = cleanup[index];
 						if (settled?.status === "rejected") failedCleanup ??= settled;
+					}
+					if (softPending.length) {
+						let timer: Timer | undefined;
+						try {
+							const grace = Math.min(1000, Math.max(0, scope.limit - scope.charged));
+							if (grace > 0)
+								await Promise.race([
+									Promise.allSettled(softPending),
+									new Promise<void>(resolve => {
+										timer = setTimeout(resolve, grace);
+									}),
+								]);
+						} finally {
+							if (timer) clearTimeout(timer);
+						}
 					}
 				}
 				// Owned commands/streams above must finish; an untracked blocked
@@ -739,15 +809,41 @@ class Runtime {
 			// the preserved first failure before closing the scope.
 			let finalizedExitCode: number;
 			do {
-				finalizedExitCode = scope.failure?.exitCode ?? 0;
+				// Recorded failures stay unpromoted until finalizers finish so a
+				// metadata write failure can still join the collected list.
+				const knownFailure = scope.failure ?? scope.failures[0];
+				finalizedExitCode = knownFailure?.exitCode ?? 0;
+				// A failed tier must not wait indefinitely for hung report cleanup;
+				// a successful one still lets its finalizer consume the real budget.
+				const finalizerDeadline = knownFailure
+					? performance.now() + Math.min(1000, Math.max(50, scope.limit * 0.2))
+					: Infinity;
 				for (const finalizer of scope.finalizers) {
+					const remaining = finalizerDeadline - performance.now();
+					if (remaining <= 0) {
+						print(`${scope.level}: FINALIZE_FAIL finalizer budget exhausted`);
+						break;
+					}
+					let timer: Timer | undefined;
 					try {
-						await gate.charged(() => finalizer(finalizedExitCode));
+						const work = gate.charged(() => finalizer(finalizedExitCode));
+						if (!Number.isFinite(remaining)) await work;
+						else
+							await Promise.race([
+								work,
+								new Promise<never>((_, reject) => {
+									timer = setTimeout(() => reject(new Error("finalizer timeout")), remaining);
+								}),
+							]);
 					} catch (error) {
 						print(`${scope.level}: FINALIZE_FAIL ${String(error)}`);
+						break;
+					} finally {
+						if (timer) clearTimeout(timer);
 					}
 				}
 				accrue(scope);
+				if (!scope.failure && scope.failures[0]) scope.failure = scope.failures[0];
 				result = {
 					level: scope.level,
 					status: scope.failure?.status ?? "PASS",
@@ -756,6 +852,11 @@ class Runtime {
 					compileExcludedSeconds: scope.compile / 1000,
 					budgetedSeconds: scope.charged / 1000,
 					limitSeconds: scope.limit / 1000,
+					failures: scope.failures.map(failure => ({
+						message: failure.message,
+						exitCode: failure.exitCode,
+						status: failure.status,
+					})),
 				};
 				logGateResult(result);
 				// Native success exits skip the logger's exit hook. Persist the terminal
@@ -785,7 +886,13 @@ class Runtime {
 				emitEvent(this.outerToken, this.eventId, "idle");
 			}
 		}
-		if (scope.failure) print(`${scope.level}: ${scope.failure.message}`);
+		if (scope.failures.length) {
+			print(`${scope.level}: failures=${scope.failures.length}`);
+			for (const failure of scope.failures)
+				print(`${scope.level}: ${failure.status} exit=${failure.exitCode} ${failure.message}`);
+		}
+		if (scope.failure && !scope.failures.includes(scope.failure))
+			print(`${scope.level}: ${scope.failure.message}`);
 		print(
 			`${scope.level}: ${result.status}${scope.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,
 		);
@@ -821,24 +928,34 @@ export class GateRun {
 		this.runtime.cancel(this.scope, failure);
 		return this.signal.reason instanceof GateCommandError ? this.signal.reason : failure;
 	}
+	/** Record a verification failure and let independent remaining work continue. */
+	record(error: unknown): GateCommandError {
+		const failure = gateFailure(error);
+		if (failure instanceof GateAbortError || failure.status === "TIMEOUT" || failure.status === "INTERRUPTED")
+			return this.fail(failure);
+		this.runtime.record(this.scope, failure);
+		return failure;
+	}
 	async run(command: GateCommand): Promise<number> {
 		const pending = this.spawn(command, false);
-		this.runtime.pending.set(pending, this.scope);
+		this.runtime.pending.set(pending, { scope: this.scope, blocking: true });
 		try {
 			return (await pending).exitCode;
 		} catch (error) {
-			throw this.fail(error);
+			if (this.signal.aborted) throw this.signal.reason;
+			throw this.record(error);
 		} finally {
 			this.runtime.pending.delete(pending);
 		}
 	}
 	async capture(command: GateCommand): Promise<GateCapture> {
 		const pending = this.spawn(command, true);
-		this.runtime.pending.set(pending, this.scope);
+		this.runtime.pending.set(pending, { scope: this.scope, blocking: true });
 		try {
 			return await pending;
 		} catch (error) {
-			throw this.fail(error);
+			if (this.signal.aborted) throw this.signal.reason;
+			throw this.record(error);
 		} finally {
 			this.runtime.pending.delete(pending);
 		}
@@ -849,10 +966,13 @@ export class GateRun {
 		const key = {};
 		this.runtime.activity(this.scope, key, "charged");
 		const pending = Promise.resolve().then(work);
-		this.runtime.pending.set(pending, this.scope);
+		// Charged work is bounded by the cleanup grace after a failure; only
+		// owned command/stream settlement is an unconditional barrier.
+		this.runtime.pending.set(pending, { scope: this.scope, blocking: false });
 		try {
 			return await pending;
 		} catch (error) {
+			if (this.signal.aborted) throw this.signal.reason;
 			if (!(error instanceof GateCommandError))
 				logger.error("Charged gate work failed", {
 					component: "test-gate",
@@ -865,7 +985,7 @@ export class GateRun {
 				error instanceof GateCommandError
 					? error
 					: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
-			this.runtime.cancel(this.scope, failure);
+			this.record(failure);
 			throw failure;
 		} finally {
 			this.runtime.pending.delete(pending);
@@ -876,10 +996,13 @@ export class GateRun {
 		this.throwIfAborted();
 		try {
 			const result = await this.runtime.execute(this.runtime.create(level, options, this.scope), work, options);
-			if (result.exitCode !== 0) throw new GateCommandError(`${level} failed`, result.exitCode, result.status);
+			if (result.exitCode !== 0) {
+				const first = result.failures?.[0];
+				throw new GateCommandError(first?.message ?? `${level} failed`, result.exitCode, first?.status ?? result.status);
+			}
 			return result;
 		} catch (error) {
-			throw this.fail(error);
+			throw this.record(error);
 		}
 	}
 	private throwIfAborted(): void {
@@ -925,15 +1048,22 @@ export class GateRun {
 		});
 		let owned: Owned | undefined;
 		let completed = false;
+		let commandSettled = false;
 		let wallTimer: Timer | undefined;
 		let wallExpired = false;
 		let relay: GateEventRelay | undefined;
 		const event = (activity: Activity, at?: number, raw?: GateActivityEvent) =>
 			this.runtime.activity(this.scope, key, kind === "compile" ? kind : activity, { at, raw });
+		const observed = (failure: GateCommandError) => {
+			this.runtime.record(this.scope, failure, false);
+		};
 		const failed = (failure: GateCommandError) => {
+			this.runtime.record(this.scope, failure);
+		};
+		const fatal = (failure: GateCommandError) => {
 			this.fail(failure);
 		};
-		const fileParser = new GateEventParser(token, event, token, failed);
+		const fileParser = new GateEventParser(token, event, token, observed);
 		try {
 			this.throwIfAborted();
 			if (
@@ -1044,9 +1174,9 @@ export class GateRun {
 						// normal cleanup also closes IPC. Only an earlier disconnect
 						// is a failure; cancellation uses the same idempotent cleanup.
 						if (replied || owned?.cleanup || wallExpired) return;
-						const failure = new GateCommandError(`${command.label}: supervisor IPC disconnected`, 1);
+						const failure = new GateAbortError(`${command.label}: supervisor IPC disconnected`, 1);
 						outcome.resolve({ exitCode: failure.exitCode, error: failure.message });
-						failed(failure);
+						fatal(failure);
 					},
 				});
 				void child.exited.then(exitCode => {
@@ -1061,7 +1191,7 @@ export class GateRun {
 					ready.resolve();
 					outcome.resolve({ exitCode: exitCode || 1 });
 					if (!replied && !owned?.cleanup && !wallExpired)
-						failed(new GateCommandError(`${command.label}: supervisor exited unexpectedly`, exitCode || 1));
+						fatal(new GateAbortError(`${command.label}: supervisor exited unexpectedly`, exitCode || 1));
 				});
 			} catch (error) {
 				logger.error("Supervisor spawn failed", {
@@ -1125,7 +1255,7 @@ export class GateRun {
 			}
 			const pump = async (stream: ReadableStream<Uint8Array>, target: NodeJS.WriteStream): Promise<string> => {
 				const decoder = new TextDecoder();
-				const parser = new GateEventParser(token, event, token, failed);
+				const parser = new GateEventParser(token, event, token, observed);
 				let text = "";
 				for await (const bytes of stream) {
 					const chunk = command.decodeOutput
@@ -1149,7 +1279,7 @@ export class GateRun {
 			];
 			const streams = Promise.all(pumps);
 			void streams.catch(error => this.fail(error));
-			this.runtime.pending.set(streams, this.scope);
+			this.runtime.pending.set(streams, { scope: this.scope, blocking: true });
 			let stdout: string;
 			let stderr: string;
 			let result: { exitCode: number; error?: string; missing?: boolean };
@@ -1171,14 +1301,17 @@ export class GateRun {
 					child.send("start");
 				}
 				result = await outcome.promise;
-				if (result.exitCode !== 0 && (!command.allowFailure || result.missing))
-					throw this.fail(
+				if (result.exitCode !== 0 && (!command.allowFailure || result.missing)) {
+					if (this.signal.aborted) throw this.signal.reason;
+					throw this.record(
 						new GateCommandError(
 							`${command.label}: ${result.error ?? `exited ${result.exitCode}`}`,
 							result.exitCode,
 							result.missing ? "MISSING_TOOL" : "FAIL",
 						),
 					);
+				}
+				commandSettled = true;
 				clearTimeout(wallTimer);
 				wallTimer = undefined;
 				this.runtime.activity(this.scope, key, "charged");
@@ -1186,8 +1319,12 @@ export class GateRun {
 				await this.runtime.cleanup(owned, false);
 				[stdout, stderr] = await streams;
 			} catch (error) {
-				throw this.fail(error);
+				throw this.record(error);
 			} finally {
+				// A failed command still owns its supervisor until cleanup releases
+				// the process and closes its pipes. Await that before draining the
+				// streams, or an aggregated failure would deadlock on open pipes.
+				if (owned && !commandSettled) await this.runtime.cleanup(owned).catch(() => {});
 				await Promise.allSettled(pumps);
 				this.runtime.pending.delete(streams);
 			}
@@ -1218,7 +1355,7 @@ export class GateRun {
 				elapsed_ms: performance.now() - started,
 				...logger.diagnosticError(error),
 			});
-			this.runtime.cancel(this.scope, failure);
+			this.runtime.record(this.scope, failure);
 			throw failure;
 		} finally {
 			clearTimeout(wallTimer);
@@ -1271,7 +1408,11 @@ async function runLifecycle(level: RunLabel, work: Work, options: GateOptions): 
 		},
 		async () => {
 			try {
-				return await runtime.execute(runtime.create(level, options, undefined, started), work, options);
+				const result = await runtime.execute(runtime.create(level, options, undefined, started), work, options);
+				// Public exit-on-failure entries stop after the full aggregate has
+				// settled; never return a failed result to their CLI wrapper.
+				if (options.exitOnFailure && result.exitCode !== 0) exitGateProcess(result.exitCode);
+				return result;
 			} catch (error) {
 				const elapsed = (performance.now() - started) / 1000;
 				const result: GateResult = {

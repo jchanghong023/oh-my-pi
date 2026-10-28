@@ -98,7 +98,7 @@ export function affectedRustTestCommands(
 			"cargo",
 			"nextest",
 			"run",
-			"--max-fail=1:immediate",
+			"--no-fail-fast",
 			"--message-format=libtest-json-plus",
 			"--message-format-version=0.1",
 			...crates.flatMap(crate => ["-p", crate]),
@@ -117,7 +117,6 @@ export function affectedRustTestCommands(
 			...doctestCrates.flatMap(crate => ["-p", crate]),
 			"--",
 			"-Zunstable-options",
-			"--fail-fast",
 			"--format=json",
 			"--report-time",
 		]);

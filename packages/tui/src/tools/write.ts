@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { HighlightStream } from "@oh-my-pi/pi-natives";
-import type { Component } from "../tui";
+import { Container, type Component } from "../tui";
 import { fencedCode } from "../components/markdown";
 import { Text } from "../components/text";
 import { getLanguageFromPath } from "../lang-from-path";
@@ -69,6 +69,7 @@ import {
 	renderReportIssueDeviceCall,
 } from "./report-tool-issue";
 import { pendingFileLinkPath } from "./read";
+import { editToolRenderer, type EditToolPerFileResult } from "./edit";
 
 /** Details returned by the write tool for transcript rendering. */
 export interface WriteToolDetails {
@@ -89,6 +90,8 @@ export interface WriteToolDetails {
 	newText?: string;
 	/** The prior or committed state could not be captured exactly within the budget. */
 	snapshotsPruned?: boolean;
+	/** Actual file changes produced by conflict resolution. */
+	conflictChanges?: EditToolPerFileResult[];
 	/** Set when the write dispatched an `xd://` tool device; drives renderer delegation. */
 	xdev?: XdevRenderDispatch;
 	message?: CoordinationDetails;
@@ -727,6 +730,16 @@ export const writeToolRenderer = {
 			const text = result.content?.find(c => c.type === "text")?.text ?? "";
 			return new Text(uiTheme.fg("toolOutput", replaceTabs(text)), 0, 0);
 		}
+		const changes = result.details?.conflictChanges;
+		if (changes?.length) {
+			const details = changes.length === 1 ? changes[0] : { diff: "", perFileResults: changes };
+			const rendered = editToolRenderer.renderResult({ content: [], details }, options, uiTheme);
+			if (!result.isError) return rendered;
+			const container = new Container();
+			container.addChild(new Text(formatErrorDetail(resultText(result), uiTheme), 0, 0));
+			container.addChild(rendered);
+			return container;
+		}
 		const rawPath =
 			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const filePath = sanitizeText(shortenPath(rawPath));
@@ -852,6 +865,14 @@ export const writeToolRenderer = {
 		if (routed) return describeWriteUrl(routed, cardPath, args?.content, result, result.details);
 		const xdev = result.details?.xdev;
 		if (xdev) return describeXdevResult(xdev, result, options, options.renderContext?.resolveXdevMounted);
+		const changes = result.details?.conflictChanges;
+		if (changes?.length) {
+			const details = changes.length === 1 ? changes[0] : { diff: "", perFileResults: changes };
+			const view = editToolRenderer.describeResult({ content: [], details }, options);
+			return result.isError
+				? { ...view, tone: "error", body: [errorText(resultText(result)), ...(view.body ?? [])] }
+				: view;
+		}
 		const rawPath =
 			typeof args?.file_path === "string" ? args.file_path : typeof args?.path === "string" ? args.path : "";
 		const fileContent = normalizeDisplayText(args?.content);

@@ -10,8 +10,8 @@ import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
 import { normalizeRustScopeChangedPaths } from "./rust-test-scope";
 import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
-import { runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
-import { GateCommandError } from "./test-gate-failure-events";
+import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
+import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
@@ -32,7 +32,8 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 		if (arg === "--debug") debug = true;
 		else if (arg.startsWith("--limit-seconds=") && limitSeconds === undefined) {
 			limitSeconds = Number(arg.slice("--limit-seconds=".length));
-			if (!Number.isFinite(limitSeconds) || limitSeconds <= 0 || limitSeconds > 900) return null;
+			if (!Number.isFinite(limitSeconds) || limitSeconds <= 0 || limitSeconds > GATE_LIMIT_SECONDS.fulltest)
+				return null;
 		} else return null;
 	}
 	return limitSeconds === undefined ? { debug } : { debug, limitSeconds };
@@ -161,7 +162,6 @@ export function fulltestCommands(
 			argv: [
 				"bun",
 				"../../scripts/test-report-bun.ts",
-				"--bail=1",
 				`--timeout=${testTimeoutMs()}`,
 				file.slice(separator + 1),
 			],
@@ -252,7 +252,7 @@ function assertFulltestSourceStable(before: SourceIdentity, after: SourceIdentit
 				})
 			: before.digest === after.digest);
 	if (!unchanged) {
-		throw new GateCommandError(
+		throw new GateAbortError(
 			"Source changed while preparing or running tests; result does not verify one source snapshot",
 			1,
 		);
@@ -319,12 +319,36 @@ async function runFulltestObserved(
 ): Promise<void> {
 	const { captureSourceIdentity, runBazelCommands, fastcheckCommands } = infrastructure;
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
-		throw new GateCommandError(
+		throw new GateAbortError(
 			`UNVERIFIED: supported local platform is Windows/Linux x64, found ${process.platform}-${process.arch}`,
 			1,
 		);
 	}
-	const before = await captureSourceIdentity(gate, gateRepoRoot);
+	/** A prerequisite whose failure makes the remaining snapshot invalid. */
+	const acquire = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
+		try {
+			return await work();
+		} catch (error) {
+			const failure = gate.record(error);
+			console.error(`fulltest: prerequisite failed (${label}): ${failure.message}`);
+			gate.fail(failure);
+			throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+		}
+	};
+	/** A verification stage whose failure is collected while independent work continues. */
+	const attempt = async (label: string, work: () => Promise<unknown>): Promise<boolean> => {
+		try {
+			await work();
+			return true;
+		} catch (error) {
+			const failure = gate.record(error);
+			if (gate.signal.aborted)
+				throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+			console.error(`fulltest: stage failed (${label}): ${failure.message}`);
+			return false;
+		}
+	};
+	const before = await acquire("source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 	logger.info("Fulltest source identity resolved", {
 		component: "test-gate-fulltest",
 		event: "fulltest_source_identity",
@@ -348,29 +372,35 @@ async function runFulltestObserved(
 				cwd: gateRepoRoot,
 			},
 			{ label: "version/Rust", argv: ["cargo", "--version"], cwd: gateRepoRoot, env: { RUSTUP_AUTO_INSTALL: "0" } },
-		].map(command => gate.run(command)),
+		].map(command => attempt(command.label, () => gate.run(command))),
 	);
-	const home = await gate.charged(() => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
+	const home = await acquire("isolated test home", () => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
 	try {
 		// Preparation is not a producer: even generated bindings must remain unchanged here.
-		const beforeNative = await captureSourceIdentity(gate, gateRepoRoot);
-		assertFulltestSourceStable(before, beforeNative);
+		const beforeNative = await acquire("pre-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
+		await acquire("pre-build source check", async () => assertFulltestSourceStable(before, beforeNative));
 		// Native source/binding generation must finish before static/test readers.
 		// Invoke the install primitive directly; the public adapter would re-enter this Bazel lane.
-		await runBazelCommands(
-			gate,
-			[
-				{
-					label: "build/native",
-					argv: ["bun", "scripts/bazel-primitive.ts", "build:native"],
-					cwd: gateRepoRoot,
-					env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
-				},
-			],
-			{ concurrency: 1 },
+		await attempt("native build", () =>
+			runBazelCommands(
+				gate,
+				[
+					{
+						label: "build/native",
+						argv: ["bun", "scripts/bazel-primitive.ts", "build:native"],
+						cwd: gateRepoRoot,
+						env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
+					},
+				],
+				{ concurrency: 1 },
+			),
 		);
-		const afterBuild = await captureSourceIdentity(gate, gateRepoRoot);
-		assertFulltestSourceStable(beforeNative, afterBuild, true);
+		const afterBuild = await acquire("post-build source identity", () =>
+			captureSourceIdentity(gate, gateRepoRoot),
+		);
+		await acquire("post-build source check", async () =>
+			assertFulltestSourceStable(beforeNative, afterBuild, true),
+		);
 		logger.info("Fulltest post-build source identity resolved", {
 			component: "test-gate-fulltest",
 			event: "fulltest_source_identity",
@@ -383,40 +413,49 @@ async function runFulltestObserved(
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		const changedPaths = await discoverForkChangedPaths(gate);
+		const changedPaths = await acquire("fork delta selection", () => discoverForkChangedPaths(gate));
 		// Gate orchestration selftests are the highest-risk readers after native
 		// generation. Keep their short injected budgets isolated from heavy test
 		// trees, but fail here before dispatching the bulk fork regressions.
-		const scriptConfig = Bun.TOML.parse(await Bun.file(path.join(gateRepoRoot, "bunfig.toml")).text()) as {
-			test?: { pathIgnorePatterns?: string[] };
-		};
-		const ignored = (scriptConfig.test?.pathIgnorePatterns ?? []).map(pattern => new Bun.Glob(pattern));
 		const scriptTests = new Set<string>();
-		for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"])
-			for await (const file of new Bun.Glob(pattern).scan({
-				cwd: path.join(gateRepoRoot, "scripts"),
-				onlyFiles: true,
-			})) {
-				const relative = `scripts/${file.replaceAll("\\", "/")}`;
-				// Heavy native Bazel integration runs once on the slowtest host,
-				// never in standalone fulltest or its WSL invocation.
-				if (relative === "scripts/test-gate-bazel.test.ts") continue;
-				if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
-			}
-		await runBazelCommands(
-			gate,
-			[...scriptTests].sort().map((file, index) => ({
-				label: `test/repository scripts ${file}`,
-				// The shared hang ceiling, not bun's 5s default: stub-heavy script
-				// tests spawn long Git Bash chains that exceed it under Bazel actions.
-				argv: ["bun", "scripts/test-report-bun.ts", file, "--bail=1", `--timeout=${testTimeoutMs()}`],
-				cwd: gateRepoRoot,
-				env: localTestEnvironment(path.join(home, "script-tests", String(index))),
-				kind: "charged" as const,
-			})),
-			{ concurrency: 1 },
-		);
-		const tests = fulltestCommands(options, home, changedPaths);
+		await attempt("repository script selection", async () => {
+			const scriptConfig = Bun.TOML.parse(await Bun.file(path.join(gateRepoRoot, "bunfig.toml")).text()) as {
+				test?: { pathIgnorePatterns?: string[] };
+			};
+			const ignored = (scriptConfig.test?.pathIgnorePatterns ?? []).map(pattern => new Bun.Glob(pattern));
+			for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"])
+				for await (const file of new Bun.Glob(pattern).scan({
+					cwd: path.join(gateRepoRoot, "scripts"),
+					onlyFiles: true,
+				})) {
+					const relative = `scripts/${file.replaceAll("\\", "/")}`;
+					// Heavy native Bazel integration runs once on the slowtest host,
+					// never in standalone fulltest or its WSL invocation.
+					if (relative === "scripts/test-gate-bazel.test.ts") continue;
+					if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
+				}
+		});
+		if (scriptTests.size)
+			await attempt("repository scripts", () =>
+				runBazelCommands(
+					gate,
+					[...scriptTests].sort().map((file, index) => ({
+						label: `test/repository scripts ${file}`,
+						// The shared hang ceiling, not bun's 5s default: stub-heavy script
+						// tests spawn long Git Bash chains that exceed it under Bazel actions.
+						argv: ["bun", "scripts/test-report-bun.ts", file, `--timeout=${testTimeoutMs()}`],
+						cwd: gateRepoRoot,
+						env: localTestEnvironment(path.join(home, "script-tests", String(index))),
+						kind: "charged" as const,
+					})),
+					{ concurrency: 1 },
+				),
+			);
+		else console.error("fulltest: NOT_RUN repository script tests");
+		let tests: GateCommand[] = [];
+		await attempt("test plan", async () => {
+			tests = fulltestCommands(options, home, changedPaths);
+		});
 		logger.info("Fulltest command plan selected", {
 			component: "test-gate-fulltest",
 			event: "fulltest_plan_selected",
@@ -426,20 +465,27 @@ async function runFulltestObserved(
 			concurrent_fastcheck: true,
 			scope: "fork-affected",
 		});
-		for (const command of tests) {
-			if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
-		}
+		await attempt("test homes", async () => {
+			for (const command of tests)
+				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
+		});
 		// Static checks and tests share one Bazel graph. Only Rust tests depend
 		// on clippy; TS actions/tests remain independently schedulable.
 		const cpuBudget = gateCpuBudget();
 		const concurrency = gatePoolWidth(cpuBudget, 4, 4);
-		const checks = (await gate.charged(fastcheckCommands)).map(command =>
-			command.label.startsWith("static/Rust")
-				? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
-				: command,
+		let checks: GateCommand[] = [];
+		await attempt("static check plan", async () => {
+			checks = (await gate.charged(fastcheckCommands)).map(command =>
+				command.label.startsWith("static/Rust")
+					? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
+					: command,
+			);
+		});
+		if (!checks.length) console.error("fulltest: NOT_RUN static checks");
+		await attempt("shared Bazel graph", () =>
+			runBazelCommands(gate, [...checks, ...tests], { concurrency, fastcheck: true }),
 		);
-		await runBazelCommands(gate, [...checks, ...tests], { concurrency, fastcheck: true });
-		const after = await captureSourceIdentity(gate, gateRepoRoot);
+		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		logger.info("Fulltest source stability resolved", {
 			component: "test-gate-fulltest",
 			event: "fulltest_source_identity",
@@ -449,10 +495,10 @@ async function runFulltestObserved(
 			dirty: after.dirty,
 			source_fingerprint: after.digest,
 		});
-		assertFulltestSourceStable(afterBuild, after);
+		await acquire("post-test source check", async () => assertFulltestSourceStable(afterBuild, after));
 	} catch (error) {
 		// Record the triggering failure before cleanup can report its own error.
-		throw gate.fail(error);
+		throw gate.record(error);
 	} finally {
 		const cleanupStarted = performance.now();
 		logger.info("Fulltest isolated home cleanup started", {
@@ -479,7 +525,7 @@ async function runFulltestObserved(
 				elapsed_ms: performance.now() - cleanupStarted,
 				...logger.diagnosticError(error),
 			});
-			throw gate.fail(error);
+			gate.record(error);
 		}
 	}
 }
@@ -490,7 +536,10 @@ if (import.meta.main) {
 		"fulltest",
 		async gate => {
 			if (!options)
-				throw new GateCommandError("Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= 900>]", 2);
+				throw new GateCommandError(
+					`Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= ${GATE_LIMIT_SECONDS.fulltest}>]`,
+					2,
+				);
 			const run = await gate.charged(() => beginTestRun("fulltest: fork-affected current-platform tests"));
 			finalizeTestRun(
 				gate,

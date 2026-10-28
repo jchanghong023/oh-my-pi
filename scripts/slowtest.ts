@@ -13,7 +13,7 @@ import {
 	type WslSelection,
 	type WslStageResult,
 } from "./slowtest-wsl-stage";
-import { runGate, type GateRun } from "./test-gate-runtime";
+import { GATE_LIMIT_SECONDS, runGate, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
@@ -32,7 +32,7 @@ export function parseSlowtestArgs(args: readonly string[]): SlowtestArgs | null 
 		if (arg === "--debug") options.debug = true;
 		else if (arg.startsWith("--limit-seconds=") && options.limitSeconds === undefined) {
 			const limit = Number(arg.slice("--limit-seconds=".length));
-			if (!Number.isFinite(limit) || limit <= 0 || limit > 1500) return null;
+			if (!Number.isFinite(limit) || limit <= 0 || limit > GATE_LIMIT_SECONDS.slowtest) return null;
 			options.limitSeconds = limit;
 		} else return null;
 	}
@@ -59,7 +59,6 @@ const dependencies: SlowtestDependencies = {
 							"bun",
 							"scripts/test-report-bun.ts",
 							"scripts/test-gate-bazel.test.ts",
-							"--bail=1",
 							`--timeout=${testTimeoutMs()}`,
 						],
 						cwd: root,
@@ -148,7 +147,19 @@ async function runSlowtestObserved(
 		});
 		console.log(`slowtest: current source HEAD=${before.head} digest=${before.digest} dirty=${before.dirty}`);
 		if (before.dirty) console.log(`slowtest: uncommitted source summary\n${before.status.trimEnd()}`);
-		const linux = (async (): Promise<WslStageResult> => {
+		const attempt = async (label: string, work: () => Promise<unknown>): Promise<boolean> => {
+			try {
+				await work();
+				return true;
+			} catch (error) {
+				const failure = gate.record(error);
+				if (gate.signal.aborted)
+					throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+				console.error(`slowtest: stage failed (${label}): ${failure.message}`);
+				return false;
+			}
+		};
+		const linux = (async (): Promise<WslStageResult | undefined> => {
 			const linuxStarted = performance.now();
 			logger.info("Slowtest Linux leg started", {
 				component: "test-gate-slowtest",
@@ -169,14 +180,19 @@ async function runSlowtestObserved(
 						);
 					result = await injected.wsl(gate, { ...wslOptions, selection, identity: before });
 				}
-				if ("exitCode" in result)
-					throw new GateCommandError(
-						`${result.status}: ${result.reason}`,
-						result.exitCode || 1,
-						result.status === "TIMEOUT" ? "TIMEOUT" : result.status === "CANCELLED" ? "INTERRUPTED" : "FAIL",
+				if ("exitCode" in result) {
+					const failure = gate.record(
+						new GateCommandError(
+							`${result.status}: ${result.reason}`,
+							result.exitCode || 1,
+							result.status === "TIMEOUT" ? "TIMEOUT" : result.status === "CANCELLED" ? "INTERRUPTED" : "FAIL",
+						),
 					);
-				if (result.status === "PASS" && result.head !== before.head)
-					throw new GateCommandError("UNVERIFIED: WSL result belongs to a different fixed commit", 1);
+					if (gate.signal.aborted)
+						throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+				} else if (result.status === "PASS" && result.head !== before.head) {
+					gate.record(new GateCommandError("UNVERIFIED: WSL result belongs to a different fixed commit", 1));
+				}
 				const skipped = result.status !== "PASS";
 				logger.info("Slowtest Linux leg settled", {
 					component: "test-gate-slowtest",
@@ -195,7 +211,9 @@ async function runSlowtestObserved(
 					);
 				return result;
 			} catch (error) {
-				const failure = gate.fail(error);
+				const failure = gate.record(error);
+				if (gate.signal.aborted)
+					throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
 				const cancelled = failure.status === "INTERRUPTED";
 				(cancelled ? logger.info : logger.error)("Slowtest Linux leg failed", {
 					component: "test-gate-slowtest",
@@ -205,23 +223,38 @@ async function runSlowtestObserved(
 					elapsed_ms: performance.now() - linuxStarted,
 					...logger.diagnosticError(failure),
 				});
-				throw failure;
+				return undefined;
 			}
 		})();
 		const current = (async () => {
-			await gate.childGate("fulltest", async child => {
-				try {
-					await injected.fulltest(child, { debug: options.debug });
-				} catch (error) {
-					throw child.fail(error);
-				}
-			});
-			// Outside the 900s fulltest scope, still inside slowtest's original
-			// 1500s budget. WSL only runs fulltest and never this extra suite.
-			await injected.bazelIntegration(gate, root);
+			await attempt("current-platform fulltest", () =>
+				gate.childGate("fulltest", async child => {
+					try {
+						await injected.fulltest(child, { debug: options.debug });
+					} catch (error) {
+						throw child.record(error);
+					}
+				}),
+			);
+			if (gate.signal.aborted) return;
+			// Outside the 1800s fulltest scope, still inside slowtest's original
+			// 3000s budget. WSL only runs fulltest and never this extra suite.
+			await attempt("host Bazel integration", () => injected.bazelIntegration(gate, root));
 		})();
-		const [, wslResult] = await Promise.all([current, linux]);
-		const after = await injected.identity(gate, root);
+		const settled = await Promise.allSettled([current, linux] as const);
+		for (const result of settled) {
+			if (result.status !== "rejected") continue;
+			const failure = gate.record(result.reason);
+			if (gate.signal.aborted)
+				throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+		}
+		const wslResult = settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
+		let after: SourceIdentity;
+		try {
+			after = await injected.identity(gate, root);
+		} catch (error) {
+			throw gate.fail(error);
+		}
 		if (before.head !== after.head || before.digest !== after.digest)
 			throw gate.fail(
 				new GateCommandError(
@@ -238,7 +271,7 @@ async function runSlowtestObserved(
 			source_fingerprint: after.digest,
 			dirty: after.dirty,
 		});
-		if (wslResult.status === "PASS") {
+		if (wslResult?.status === "PASS") {
 			console.log(`slowtest: both platforms verified fixed commit ${before.head}; local digest=${before.digest}`);
 			logger.info("Slowtest fixed commit coverage merged", {
 				component: "test-gate-slowtest",
@@ -261,7 +294,10 @@ if (import.meta.main) {
 		"slowtest",
 		async gate => {
 			if (!options)
-				throw new GateCommandError("Usage: bun run slowtest [--debug] [--limit-seconds=N] (0 < N <= 1500)", 2);
+				throw new GateCommandError(
+					`Usage: bun run slowtest [--debug] [--limit-seconds=N] (0 < N <= ${GATE_LIMIT_SECONDS.slowtest})`,
+					2,
+				);
 			const run = await gate.charged(() =>
 				beginTestRun("slowtest: fork-affected current platform; Linux reports stay in the WSL native workspace"),
 			);

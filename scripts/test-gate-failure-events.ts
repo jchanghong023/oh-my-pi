@@ -15,6 +15,9 @@ export class GateCommandError extends Error {
 		this.exitCode = exitCode === 0 ? 1 : exitCode;
 	}
 }
+
+/** A failure that invalidates the remaining work, unlike an ordinary verification result. */
+export class GateAbortError extends GateCommandError {}
 export function gateFailure(error: unknown): GateCommandError {
 	return error instanceof GateCommandError
 		? error

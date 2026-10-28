@@ -4,6 +4,8 @@
  * file line numbers, and splicing replacement content over registered blocks.
  */
 import * as fs from "node:fs/promises";
+import { editDiffString } from "@oh-my-pi/pi-natives";
+import type { EditToolPerFileResult } from "@oh-my-pi/pi-tui/tools/edit";
 import { type ConflictEntry, renderConflictRegion } from "@oh-my-pi/pi-tui/tools/conflict-detect";
 import { PREVIEW_LIMITS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
@@ -165,6 +167,10 @@ async function resolveConflict(
 	const originalText = await Bun.file(absolutePath).text();
 	const splice = spliceConflict(originalText, entry, expanded);
 	const newContent = splice.text;
+	const change: EditToolPerFileResult = {
+		path: absolutePath,
+		...editDiffString(originalText, newContent, absolutePath),
+	};
 
 	await writethroughNoop(absolutePath, newContent, signal);
 	invalidateFsScanAfterWrite(absolutePath);
@@ -204,7 +210,7 @@ async function resolveConflict(
 
 	return {
 		content: [{ type: "text", text: resultText }],
-		details: { resolvedPath: absolutePath },
+		details: { resolvedPath: absolutePath, conflictChanges: [change] },
 	};
 }
 
@@ -383,6 +389,7 @@ async function resolveAllConflicts(
 
 	const succeededFiles: { displayPath: string; count: number; header?: string }[] = [];
 	const failedFiles: { displayPath: string; count: number; error: string }[] = [];
+	const conflictChanges: EditToolPerFileResult[] = [];
 	let totalResolvedIds = 0;
 	let totalEchoTrimmed = 0;
 
@@ -413,6 +420,7 @@ async function resolveAllConflicts(
 			});
 			continue;
 		}
+		const originalText = text;
 		for (const entry of fileEntries) {
 			try {
 				const expanded = expandContentTokens(contentFor(entry), entry);
@@ -441,7 +449,9 @@ async function resolveAllConflicts(
 			continue;
 		}
 
+		const change: EditToolPerFileResult = { path: absolutePath, ...editDiffString(originalText, text, absolutePath) };
 		await writethroughNoop(absolutePath, text, signal);
+		conflictChanges.push(change);
 		invalidateFsScanAfterWrite(absolutePath);
 		session.bumpFileMutationVersion?.(absolutePath);
 		getEditStore(session).invalidate(absolutePath);
@@ -499,7 +509,7 @@ async function resolveAllConflicts(
 	}
 	return {
 		content: [{ type: "text", text: resultText }],
-		details: {},
+		details: { conflictChanges },
 		isError: failedFiles.length > 0 ? true : undefined,
 	};
 }

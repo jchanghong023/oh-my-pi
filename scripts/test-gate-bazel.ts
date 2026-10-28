@@ -794,9 +794,9 @@ export async function runBazelCommands(
 			"--incompatible_autoload_externally=",
 			"--spawn_strategy=local",
 			"--test_strategy=standalone",
-			"--nokeep_going",
-			"--notest_keep_going",
-			"--test_runner_fail_fast",
+			"--keep_going",
+			"--test_keep_going",
+			"--notest_runner_fail_fast",
 			"--flaky_test_attempts=1",
 			"--cache_test_results=auto",
 			"--test_output=errors",
@@ -881,7 +881,7 @@ export async function runBazelCommands(
 								}
 								if (target && staticTargets.has(target)) {
 									if (!successful)
-										throw gate.fail(new GateCommandError(`Static Bazel target failed: ${target}`, 1));
+										gate.record(new GateCommandError(`Static Bazel target failed: ${target}`, 1));
 									staticTargets.delete(target);
 									if (staticTargets.size === 0) staticCompletion.resolve();
 								}
@@ -916,49 +916,79 @@ export async function runBazelCommands(
 				}),
 			),
 		);
-		await gate.run({
-			label: "bazel/risk bands",
-			argv: [
-				process.execPath,
-				path.join(import.meta.dir, "test-gate-bazel-runner.ts"),
-				"bazel",
-				path.join(plan.workspace, "context.json"),
-				requestFile,
-			],
-			cwd: plan.workspace,
-			env: {
-				...(plan.shell ? { BAZEL_SH: plan.shell } : {}),
-				OMP_GATE_BAZEL_LEASE_FD: lease.fd?.toString(),
-				USE_BAZEL_VERSION: "9.2.0",
-				BAZELISK_SKIP_WRAPPER: "true",
-			},
-			persistentBazel: { outputBase: `${plan.workspace}-output` },
-		});
-		for (const relay of relays) await relay.flush();
-		if (staticTargets.size) throw new GateCommandError("Required fastcheck Bazel results are missing", 1);
-		await fastcheck;
-		await gate.charged(async () => {
-			const nested = (await Bun.file(`${requestFile}.invocation-evidence.json`).json()) as {
-				queryProfiles: string[];
-				hostedBuildEvents: string[];
-			};
-			for (const file of new Set([...nested.queryProfiles, ...nested.hostedBuildEvents]))
-				registerBazelInvocation(gate.runId, file);
-		});
+		// A failed risk band does not discard other bands' BEPs or evidence:
+		// record the failure, keep inspecting every completed batch, and let the
+		// tier aggregate the first failure after all independent targets ran.
+		const noteFailure = (error: unknown): void => {
+			const failure = gate.record(error);
+			if (gate.signal.aborted) throw failure;
+		};
+		try {
+			await gate.run({
+				label: "bazel/risk bands",
+				argv: [
+					process.execPath,
+					path.join(import.meta.dir, "test-gate-bazel-runner.ts"),
+					"bazel",
+					path.join(plan.workspace, "context.json"),
+					requestFile,
+				],
+				cwd: plan.workspace,
+				env: {
+					...(plan.shell ? { BAZEL_SH: plan.shell } : {}),
+					OMP_GATE_BAZEL_LEASE_FD: lease.fd?.toString(),
+					USE_BAZEL_VERSION: "9.2.0",
+					BAZELISK_SKIP_WRAPPER: "true",
+				},
+				persistentBazel: { outputBase: `${plan.workspace}-output` },
+			});
+		} catch (error) {
+			noteFailure(error);
+		}
+		try {
+			for (const relay of relays) await relay.flush();
+		} catch (error) {
+			noteFailure(error);
+		}
+		if (staticTargets.size) {
+			staticCompletion.reject(new GateCommandError("Required fastcheck Bazel results are missing", 1));
+			staticTargets.clear();
+		}
+		try {
+			await fastcheck;
+		} catch (error) {
+			noteFailure(error);
+		}
+		try {
+			await gate.charged(async () => {
+				const nested = (await Bun.file(`${requestFile}.invocation-evidence.json`).json()) as {
+					queryProfiles: string[];
+					hostedBuildEvents: string[];
+				};
+				for (const file of new Set([...nested.queryProfiles, ...nested.hostedBuildEvents]))
+					registerBazelInvocation(gate.runId, file);
+			});
+		} catch (error) {
+			noteFailure(error);
+		}
 		for (const { pending, bep, execution } of evidence) {
-			reports.push(...(await gate.charged(() => reportTargets(plan, pending, bep, execution))));
+			try {
+				reports.push(...(await gate.charged(() => reportTargets(plan, pending, bep, execution))));
+			} catch (error) {
+				noteFailure(error);
+			}
 		}
 		return reports;
 	} catch (error) {
 		staticCompletion.reject(error);
 		// No observer exists for standalone commands.
 		if (!fastcheck) void staticCompletion.promise.catch(() => {});
-		throw gate.fail(error);
+		throw gate.record(error);
 	} finally {
 		try {
 			await Promise.all(relays.map(relay => relay.close()));
 		} catch (error) {
-			throw gate.fail(error);
+			gate.record(error);
 		} finally {
 			lease?.release();
 		}
