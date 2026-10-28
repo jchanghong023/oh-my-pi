@@ -159,12 +159,7 @@ export function fulltestCommands(
 		const testHome = path.join(home, "fork-tests", String(commands.length));
 		commands.push({
 			label: `test/fork ${file}`,
-			argv: [
-				"bun",
-				"../../scripts/test-report-bun.ts",
-				`--timeout=${testTimeoutMs()}`,
-				file.slice(separator + 1),
-			],
+			argv: ["bun", "../../scripts/test-report-bun.ts", `--timeout=${testTimeoutMs()}`, file.slice(separator + 1)],
 			cwd: path.join(root, packageRoot),
 			sourceEntrypoints: [
 				"packages/coding-agent/test/spec-driven/tui.e2e.test.ts",
@@ -342,8 +337,7 @@ async function runFulltestObserved(
 			return true;
 		} catch (error) {
 			const failure = gate.record(error);
-			if (gate.signal.aborted)
-				throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+			if (gate.signal.aborted) throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
 			console.error(`fulltest: stage failed (${label}): ${failure.message}`);
 			return false;
 		}
@@ -395,12 +389,8 @@ async function runFulltestObserved(
 				{ concurrency: 1 },
 			),
 		);
-		const afterBuild = await acquire("post-build source identity", () =>
-			captureSourceIdentity(gate, gateRepoRoot),
-		);
-		await acquire("post-build source check", async () =>
-			assertFulltestSourceStable(beforeNative, afterBuild, true),
-		);
+		const afterBuild = await acquire("post-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
+		await acquire("post-build source check", async () => assertFulltestSourceStable(beforeNative, afterBuild, true));
 		logger.info("Fulltest post-build source identity resolved", {
 			component: "test-gate-fulltest",
 			event: "fulltest_source_identity",

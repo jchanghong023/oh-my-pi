@@ -245,8 +245,7 @@ async function runSlowtestObserved(
 		for (const result of settled) {
 			if (result.status !== "rejected") continue;
 			const failure = gate.record(result.reason);
-			if (gate.signal.aborted)
-				throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
+			if (gate.signal.aborted) throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
 		}
 		const wslResult = settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
 		let after: SourceIdentity;

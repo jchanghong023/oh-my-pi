@@ -891,8 +891,7 @@ class Runtime {
 			for (const failure of scope.failures)
 				print(`${scope.level}: ${failure.status} exit=${failure.exitCode} ${failure.message}`);
 		}
-		if (scope.failure && !scope.failures.includes(scope.failure))
-			print(`${scope.level}: ${scope.failure.message}`);
+		if (scope.failure && !scope.failures.includes(scope.failure)) print(`${scope.level}: ${scope.failure.message}`);
 		print(
 			`${scope.level}: ${result.status}${scope.level === "bazel" ? " scope=standalone name=bazel" : ""} total=${result.totalSeconds.toFixed(1)}s compile_excluded=${result.compileExcludedSeconds.toFixed(1)}s budgeted=${result.budgetedSeconds.toFixed(1)}s limit=${result.limitSeconds.toFixed(1)}s exit=${result.exitCode}`,
 		);
@@ -998,7 +997,11 @@ export class GateRun {
 			const result = await this.runtime.execute(this.runtime.create(level, options, this.scope), work, options);
 			if (result.exitCode !== 0) {
 				const first = result.failures?.[0];
-				throw new GateCommandError(first?.message ?? `${level} failed`, result.exitCode, first?.status ?? result.status);
+				throw new GateCommandError(
+					first?.message ?? `${level} failed`,
+					result.exitCode,
+					first?.status ?? result.status,
+				);
 			}
 			return result;
 		} catch (error) {
