@@ -88,6 +88,7 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
    | `Qwen3.6-35B-A3B`          | 文本、图片 |   262,144 |   81,920 |
    | `Qwen3.8-27B`              | 文本、图片 |   262,144 |   81,920 |
 
+- 公司 Provider 的默认模型为 `GLM-5.3-public`，原有 `GLM-5.2-public` 继续保留供显式选择。GLM-5.3 支持工具调用及 `minimal`／`low`／`medium`／`high` 预算思考，沿用上述公司网关协议与认证。表中为内置目录参数；运行时上下文覆盖及各默认角色遵循[offline 启动约定](../fork-runtime/spec.md)。
 - Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-VL-Embedding-2B`，复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址、凭据，以及显式设置的 `mnemopi.embeddingVariant` 仍优先（只有它的 schema 默认值会让位给公司模型）；不会将公司 Token 发送给显式配置的其他地址。
 - company 嵌入默认值同样让位于通用 API 路由：company lane 激活时，若 `OPENROUTER_BASE_URL` 指向非 openrouter 主机（自定义通用网关），或 `MNEMOPI_EMBEDDINGS_VIA_API` 为真值（显式要求向量走 API），向量改按通用 API 配置解析（模型、地址、密钥），不注入公司 URL 与 Token；仅有共享的通用 API 密钥而无自定义网关地址时不构成让位条件。官方嵌入地址判定仅认可 `openrouter.ai` 和既有 `www.openrouter.ai` 别名，不因路径、相似域名或任意子域包含该字符串就信任它。
 - 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
@@ -97,6 +98,12 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 
 - **WHEN** OMP_OFFLINE 开启且有效 Claude Code 配置可用
 - **THEN** 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据
+
+#### Scenario: offline 选择 GLM-5.3-public
+
+- **WHEN** offline 进程具有有效公司配置并列出模型或解析 `company/GLM-5.3-public`
+- **THEN** 新模型可列出和选择，使用公司网关及缓存凭据，不发起公网目录发现；运行时上下文为 200,000，最大输出保持 81,920。
+- **AND** 未显式配置的默认主模型、PLAN 和 SLOW 角色使用该模型，其他角色沿用既有规则；原有 `GLM-5.2-public` 仍可显式选择，已有角色配置及显式 CLI 选择优先，普通模式不注册该 company 模型。
 
 ### Requirement: 保留 Provider ID 的运行时注册
 

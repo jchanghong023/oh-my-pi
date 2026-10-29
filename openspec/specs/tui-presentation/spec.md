@@ -404,6 +404,40 @@ OMP MUST 以 `/display` 的 clean、compact、detailed 三档作为工具活动�
 - **AND** 既有的 `terminal.showImages` 与 `images.*` 内联图片设置继续独立生效；档位切换 MUST NOT 隐式改写这些设置，也 MUST NOT 以档位语义覆盖其实时值。
 - **AND** 不新增独立于该命令、单独控制工具活动或工具结果图片的显示开关；档位写入的仍是既有显示偏好，覆盖来源（环境变量、运行时、启动配置、项目或全局配置、默认值）继续按既有优先级生效。
 
+### Requirement: offline 图标的旧终端兼容
+
+OMP MUST 仅在 offline（`OMP_OFFLINE`）进程的 Unicode 符号预设中，对已确认缺字的内置图标采用下表的基础字符替代。替换在统一主题符号层生效，覆盖命令补全、状态栏和扩展列表等消费位置；不将全部图标统一为 `/fast`。显式主题符号覆盖仍优先，普通模式、其他图标及 Nerd Font、ASCII 预设保持原有行为。此行为不依赖 CentOS 版本检测，不自动探测字体缺字、不安装或打包字体，也不自动切换整套符号预设。
+
+#### Scenario: Unicode 界面保留可显示图标
+
+- **WHEN** offline 进程使用 Unicode 符号预设打开上述命令的补全列表、状态栏或扩展列表
+- **THEN** 七类内置图标默认使用表中的不同替代字符；其他图标（包括 `/fast` 的 `⚡`）保留原值，切换预设仍沿用既有刷新机制。
+
+| 符号键 | 使用位置 | offline Unicode 默认替代 |
+| --- | --- | --- |
+| `cmd.eraser` | `/clear` | `×`（清除） |
+| `cmd.extension` | `/extensions` 及扩展命令（包括 `/autoresearch`） | `⊞`（扩展） |
+| `cmd.compass` | `/skillful`、`/guided-goal` | `→`（引导） |
+| `cmd.stethoscope` | `/cleanse` | `✚`（诊断修复） |
+| `cmd.power` | `/quit`、`/q` | `■`（停止） |
+| `icon.tokens` | 状态栏 Token 数量 | `#`（计数） |
+| `icon.extensionHook` | 扩展列表及其他 Hook 图标位置 | `↪`（回调） |
+
+#### Scenario: 普通模式保留原有命令图标
+
+- **WHEN** 普通模式打开上述命令的补全列表
+- **THEN** 保留当前主题原有图标；七类内置 Unicode 图标分别为 `🧹`、`🧩`、`🧭`、`🩺`、`⏻`、`🪙` 和 `🪝`。
+
+#### Scenario: offline 的其他图标和符号预设不受影响
+
+- **WHEN** offline 进程使用 Unicode 预设显示其他命令，或切换到 Nerd Font、ASCII 预设
+- **THEN** 其他 Unicode 命令图标保留；Nerd Font 保留其原有图标，ASCII 仍不显示命令图标列。图片附件、图片展示和模型识图不受该兼容处理影响。
+
+#### Scenario: 显式主题符号覆盖优先
+
+- **WHEN** offline 进程的主题为上述符号键提供显式覆盖
+- **THEN** 对应位置采用用户指定的符号，兼容默认值不覆盖该选择。
+
 ### Requirement: 简体中文用户界面
 
 OMP MUST 导航和说明使用简体中文，命令、模型标识及机器字段保持原样。

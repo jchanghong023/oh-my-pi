@@ -44,6 +44,14 @@ omp
 
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
 
+内网未显式配置时，默认主模型、PLAN 和 SLOW 角色均使用 `company/GLM-5.3-public`；也可用 `omp --model company/GLM-5.3-public` 显式选择。TASK、VISION 和 ADVISOR 仍使用 `company/Qwen3.8-27B`，SMOL、TINY 和 COMMIT 仍使用 `company/Qwen3.6-35B-A3B`，MEMORY 保持自动解析。`GLM-5.2-public` 仍保留供显式选择，已有角色设置及 CLI 模型参数优先。模型输入、目录参数及公司服务约定见[公司内网模型需求](../openspec/specs/model-providers/spec.md)。
+
+### 旧终端的状态字符与图标
+
+offline 模式默认关闭 `terminal.programStatus`，避免终端将 `7501;state=done:app=omp` 等程序状态序列显示为文本；已有显式设置优先。如果以前手动开启过，可执行 `omp config set terminal.programStatus false` 后重启，使用独立 profile 时须带上相同的 `-P` 参数。
+
+offline 的 Unicode 预设将已确认缺字的图标分别替换为基础字符：清空 `×`、扩展 `⊞`、引导 `→`、诊断修复 `✚`、退出 `■`、Token 计数 `#`、Hook `↪`。命令补全、状态栏和扩展列表统一生效，其他图标（包括 `/fast` 的 `⚡`）保留；显式主题符号覆盖仍优先。Nerd Font、ASCII 预设保持原有行为，聊天图片和模型识图不受影响。无需整体切换 ASCII 或安装字体。普通模式保留原图标及默认开启的程序状态通知，详细边界见[运行默认值](../openspec/specs/fork-runtime-defaults/spec.md)和[offline 图标兼容需求](../openspec/specs/tui-presentation/spec.md)。
+
 ### 内网子命令与 Python 分工
 
 以下命令在**系统终端**运行，沿用上面的环境变量和当前 profile：

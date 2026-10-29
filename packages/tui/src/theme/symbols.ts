@@ -313,6 +313,18 @@ export type SymbolKey =
 	| "key.right";
 
 export type SymbolMap = Record<SymbolKey, string>;
+
+/** Default glyphs missing from legacy intranet terminal fonts; Unicode offline mode only. */
+export const OFFLINE_UNICODE_SYMBOL_OVERRIDES: Partial<SymbolMap> = {
+	"cmd.eraser": "×",
+	"cmd.extension": "⊞",
+	"cmd.compass": "→",
+	"cmd.stethoscope": "✚",
+	"cmd.power": "■",
+	"icon.tokens": "#",
+	"icon.extensionHook": "↪",
+};
+
 /**
  * Icon vocabulary for slash-command autocomplete type indicators. Each name
  * resolves through `Theme.cmd` to either a dedicated `cmd.*` symbol or an

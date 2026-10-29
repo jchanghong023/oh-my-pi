@@ -7,6 +7,10 @@
 - Added `company/GLM-5.3-public` to the built-in offline intranet model catalog.
 - Added six built-in Ascend models, available with `ASCEND_API_KEY` without a custom `models.yml`.
 
+### Changed
+
+- Use `GLM-5.3-public` as the offline company provider's default model.
+
 ### Removed
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.

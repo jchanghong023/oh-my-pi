@@ -28,6 +28,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `composer.predictions=true`：所有平台、普通与 offline 启动均默认启用上游输入区预测；沿用当前模型生成下一条消息建议、Tab／右方向键插入但不发送及额外用量计入 `/stats` 的行为。用户显式配置 `false` 时保持关闭，不改写已有配置。
 - `theme.dark=dark-terminal`
 - `display.showTurnTime=true`
+- `terminal.programStatus`：所有平台的 offline（`OMP_OFFLINE`）进程默认 `false`，避免不兼容终端把 OSC 7501 程序状态序列显示为文本；普通模式仍默认 `true`。用户显式配置优先，不改写已有配置文件。
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
 - **LSP 默认关闭**：将 `lsp.enabled` 的缺省值改为 `false`。所有平台、普通与 offline 启动，在用户未显式启用时，主会话及其 task 子代理均不启用 LSP；文件写入、编辑、移动和删除的自动格式化、诊断及 LSP 文件通知同样受关闭状态约束。
 - `mnemopi.embeddingVariant=multilingual`
@@ -44,3 +45,17 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - **THEN** 输入区预测默认启用，正常完成一轮后按上游条件请求预测并在空输入区展示有效建议；没有有效预测时不显示。
 - **WHEN** 用户显式设置 `composer.predictions=false`
 - **THEN** 不请求或展示输入区预测；默认值变更不覆盖该选择。
+
+#### Scenario: offline 默认不发送程序状态序列
+
+- **WHEN** offline 进程未显式配置 `terminal.programStatus`
+- **THEN** 该设置解析为 `false`，交互式运行状态变化不发送 OSC 7501 程序状态序列；不要求用户额外创建或修改配置文件。
+- **WHEN** 普通模式未显式配置该设置
+- **THEN** 仍解析为 `true`，沿用既有程序状态通知行为。
+
+#### Scenario: 程序状态通知尊重显式配置
+
+- **WHEN** 用户在 offline 模式显式设置 `terminal.programStatus=true`
+- **THEN** 按既有行为发送程序状态通知，默认值不覆盖该选择。
+- **WHEN** 用户显式设置 `terminal.programStatus=false`
+- **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。

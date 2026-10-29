@@ -1,8 +1,7 @@
 // Fork-owned intranet lane. The runtime supplies the cached Claude endpoint;
 // these rows are never bundled or discovered from a public catalog.
 provider "company" {
-	// Preserve the first-row fallback used before this runtime-only catalog entry.
-	default-model "DeepSeek-V4-Flash-public"
+	default-model "GLM-5.3-public"
 	seed api="anthropic-messages" base-url="" bundle="never" {
 		model "DeepSeek-V4-Flash-public" name="DeepSeek-V4-Flash-public" {
 			reasoning #true

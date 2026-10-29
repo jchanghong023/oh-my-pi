@@ -296,7 +296,7 @@ describe("offline model-dependent subcommands", () => {
 		expect(JSON.parse(result.stdout)).toEqual({
 			provider: "company",
 			model: "Qwen3.6-35B-A3B",
-			defaultRole: "company/Qwen3.8-27B",
+			defaultRole: "company/GLM-5.3-public",
 			commitRole: "company/Qwen3.6-35B-A3B",
 		});
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
@@ -340,7 +340,7 @@ describe("offline model-dependent subcommands", () => {
 				expect(turn).toBe(4);
 				expect(requests.splice(0)).toEqual(
 					Array.from({ length: 4 }, () => ({
-						model: selector ? "GLM-5.2-public" : "Qwen3.8-27B",
+						model: selector ? "GLM-5.2-public" : "GLM-5.3-public",
 						authorization: "Bearer fixture-token",
 					})),
 				);
@@ -725,7 +725,7 @@ describe("offline model-dependent subcommands", () => {
 			expect(result.exitCode).toBe(1);
 			const summary = JSON.parse(result.stdout);
 			expect(summary.provider).toBe("company");
-			expect(summary.model).toBe(args.length ? "company/GLM-5.2-public" : "company/Qwen3.8-27B");
+			expect(summary.model).toBe(args.length ? "company/GLM-5.2-public" : "company/GLM-5.3-public");
 			expect(summary.failure.reasons[0].reason).toBe("no OAuth access resolved");
 		}
 		const miss = await f.run(["dry-balance", "offline-subcommand-extension/missing", "--count", "1", "--json"]);

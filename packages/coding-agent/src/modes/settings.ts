@@ -1,5 +1,6 @@
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
+import { offlineFromEnv } from "../cli/args";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
@@ -421,7 +422,7 @@ export const cfgTerminalShowProgress = register({
 export const cfgTerminalProgramStatus = register({
 	id: "terminal.programStatus",
 	type: "boolean",
-	default: true,
+	default: !offlineFromEnv(),
 	ui: {
 		tab: "appearance",
 		group: "显示",

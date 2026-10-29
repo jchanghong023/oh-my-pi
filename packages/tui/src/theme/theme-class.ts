@@ -12,6 +12,7 @@ import {
 import type { SessionAccentTheme } from "./session-color";
 import {
 	type SlashCommandIconName,
+	OFFLINE_UNICODE_SYMBOL_OVERRIDES,
 	SPINNER_FRAMES,
 	type SpinnerType,
 	SYMBOL_PRESETS,
@@ -226,7 +227,12 @@ export class Theme {
 		}
 		// Build symbol map from preset + overrides
 		const baseSymbols = SYMBOL_PRESETS[symbolPreset];
-		this.#symbols = { ...baseSymbols };
+		this.#symbols = {
+			...baseSymbols,
+			...(symbolPreset === "unicode" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")
+				? OFFLINE_UNICODE_SYMBOL_OVERRIDES
+				: {}),
+		};
 		for (const [key, value] of Object.entries(symbolOverrides)) {
 			if (key in this.#symbols) {
 				this.#symbols[key as SymbolKey] = value;

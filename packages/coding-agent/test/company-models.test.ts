@@ -178,15 +178,15 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.retrievalVisible).toBe(false);
 		expect(result.requests).toBe(0);
 		expect(result.roles).toEqual({
-			default: "Qwen3.8-27B",
+			default: "GLM-5.3-public",
 			task: "Qwen3.8-27B",
 			vision: "Qwen3.8-27B",
 			advisor: "Qwen3.8-27B",
 			smol: "Qwen3.6-35B-A3B",
 			tiny: "Qwen3.6-35B-A3B",
 			commit: "Qwen3.6-35B-A3B",
-			plan: "GLM-5.2-public",
-			slow: "GLM-5.2-public",
+			plan: "GLM-5.3-public",
+			slow: "GLM-5.3-public",
 		});
 		for (const model of result.capped) {
 			expect(model.baseUrl).toBe("http://127.0.0.1:8081/gateway");
