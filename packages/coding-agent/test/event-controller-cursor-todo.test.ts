@@ -474,8 +474,8 @@ describe("compact Todo failure feedback", () => {
 		const storedResult = JSON.stringify(context.messages[1]);
 		f.ctx.viewSession.buildTranscriptSessionContext = () => context;
 		await f.helpers.renderInitialMessages();
-		// Rebuilding retains the original failure feedback in transcript order.
-		expect(renderTranscript(f.ctx)).toContain("HISTORY_FAILURE_REASON");
+		// Compact replay hides ordinary tool errors while retaining the stored result.
+		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		setChatTranscriptDisplayPreferences({
 			compactToolActivity: presentation === "clean",
 			hideToolActivity: presentation === "clean",
@@ -499,7 +499,7 @@ describe("compact Todo failure feedback", () => {
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		expect(renderTranscript(f.ctx)).toContain("HISTORY_FAILURE_REASON");
+		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		expect(JSON.stringify(context.messages[1])).toBe(storedResult);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});

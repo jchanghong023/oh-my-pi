@@ -326,7 +326,6 @@ export class TranscriptContainer extends Container {
 		{
 			visible: boolean;
 			count: number;
-			failures: number;
 			ids: ReadonlySet<string | object>;
 			summary?: { archived: boolean };
 			run?: Component;
@@ -363,7 +362,6 @@ export class TranscriptContainer extends Container {
 				this.#compactSelection.set(component, {
 					visible,
 					count: 0,
-					failures: 0,
 					ids: selected,
 					summary,
 					run: runId,
@@ -372,7 +370,6 @@ export class TranscriptContainer extends Container {
 			if (!writeRun && facts.length > 2) {
 				const first = this.#compactSelection.get(run[0]!)!;
 				first.count = facts.length;
-				first.failures = facts.filter(call => call.failed).length;
 			}
 			run = [];
 		};
@@ -438,9 +435,7 @@ export class TranscriptContainer extends Container {
 
 	#compactSummary(component: Component, width: number): string | undefined {
 		const selection = this.#compactDecision(component);
-		return selection?.count
-			? truncateToWidth(theme.fg("dim", `工具调用 ${selection.count} 次 · 失败 ${selection.failures} 次`), width)
-			: undefined;
+		return selection?.count ? truncateToWidth(theme.fg("dim", `工具调用 ${selection.count} 次`), width) : undefined;
 	}
 
 	#renderComponent(component: Component, width: number): readonly string[] {

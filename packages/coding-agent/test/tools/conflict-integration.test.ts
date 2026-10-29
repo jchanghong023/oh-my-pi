@@ -893,18 +893,17 @@ describe("write resolves conflicts via conflict://N", () => {
 
 	it("reports only successfully changed files when a bulk conflict resolution partially fails", async () => {
 		const fileA = path.join(tempDir, "ok.ts");
-		const fileB = path.join(tempDir, "missing.ts");
+		const fileB = path.join(tempDir, "no-base.ts");
 		await Bun.write(fileA, TWO_WAY);
 		await Bun.write(fileB, TWO_WAY);
 		const session = createTestSession(tempDir);
 		const read = await getTool(session, "read");
 		const write = await getTool(session, "write");
 		await read.execute("read-ok", { path: "ok.ts:conflicts" });
-		await read.execute("read-missing", { path: "missing.ts:conflicts" });
-		await fs.unlink(fileB);
-		const result = await write.execute("write-partial", { path: "conflict://*", content: "@theirs" });
+		await read.execute("read-no-base", { path: "no-base.ts:conflicts" });
+		const result = await write.execute("write-partial", { path: "conflict://*", content: "1: @theirs\n2: @base" });
 		expect(result.isError).toBe(true);
-		expect(getText(result)).toContain("missing.ts");
+		expect(getText(result)).toContain("no-base.ts");
 		const changes = (result.details as { conflictChanges: Array<{ path: string; diff: string }> }).conflictChanges;
 		expect(changes.map(change => change.path)).toEqual([fileA]);
 		expect(changes[0]?.diff).toContain("newApi(x)");

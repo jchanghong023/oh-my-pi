@@ -407,7 +407,7 @@ describe("compact grouped read warnings", () => {
 		}
 	});
 
-	it("keeps original error feedback ahead of warning metadata and retains expanded content", () => {
+	it("hides ordinary grouped read errors until expanded", () => {
 		const preferences = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		try {
@@ -423,7 +423,7 @@ describe("compact grouped read warnings", () => {
 				false,
 				"read",
 			);
-			expect(Bun.stripANSI(group.render(200).join("\n"))).toContain("READ FAILURE: original diagnostic");
+			expect(Bun.stripANSI(group.render(200).join("\n"))).not.toContain("READ FAILURE: original diagnostic");
 			expect(
 				JSON.stringify(
 					group.describe({
@@ -434,7 +434,7 @@ describe("compact grouped read warnings", () => {
 						feature: () => true,
 					}),
 				),
-			).toContain("READ FAILURE: original diagnostic");
+			).not.toContain("READ FAILURE: original diagnostic");
 			group.setExpanded(true);
 			expect(Bun.stripANSI(group.render(200).join("\n"))).toContain("READ FAILURE: original diagnostic");
 		} finally {

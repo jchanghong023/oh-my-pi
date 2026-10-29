@@ -429,11 +429,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	}
 
 	getCompactToolCalls(): readonly CompactToolCall[] {
-		return [...this.#entries.values()].map(entry => ({ id: entry, failed: entry.status === "error" }));
-	}
-
-	hasCompactCriticalFeedback(): boolean {
-		return [...this.#entries.values()].some(entry => entry.status === "error");
+		return [...this.#entries.values()].map(entry => ({ id: entry }));
 	}
 
 	setCompactToolSelection(ids: ReadonlySet<string | object> | undefined): void {
@@ -448,24 +444,18 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#compactToolResultListener = listener;
 	}
 
-	/** Each grouped call keeps its insertion position, including pending/errors. */
+	/** Each visible grouped call keeps its insertion position; invocation errors stay in detailed mode. */
 	renderCompactActivityRows(width: number): readonly string[] {
 		const rows: string[] = [];
 		for (const entry of this.#compactEntries()) {
-			if (entry.status === "error") {
-				this.#updateDisplay([entry]);
-				rows.push(...super.render(width));
-				this.#displayCompact = true;
-			} else {
-				rows.push(this.#renderCompactEntry(entry, width));
-			}
+			rows.push(this.#renderCompactEntry(entry, width));
 		}
 		return rows;
 	}
 
 	*#compactEntries(): IterableIterator<ReadEntry> {
 		for (const entry of this.#entries.values()) {
-			if (!this.#compactSelection || this.#compactSelection.has(entry) || entry.status === "error") yield entry;
+			if (entry.status !== "error" && (!this.#compactSelection || this.#compactSelection.has(entry))) yield entry;
 		}
 	}
 
@@ -754,10 +744,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
 		const calls: NativeChild[] = [];
 		for (const entry of this.#compactEntries()) {
-			if (entry.status === "error") {
-				calls.push(dataFirst ? this.#describeTool([entry]) : this.#describeGroup([entry]));
-				continue;
-			}
 			const status = this.#compactStatus(entry);
 			const ms = this.#compactElapsed(entry);
 			const live = status === "running" || status === "pending";

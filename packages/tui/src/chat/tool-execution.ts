@@ -90,6 +90,16 @@ function hasAppliedFileChange(details: unknown): boolean {
 	);
 }
 
+function hasCompactExecutionFeedback(details: unknown): boolean {
+	return (
+		isRecord(details) &&
+		((typeof details.exitCode === "number" && details.exitCode !== 0) ||
+			details.timedOut === true ||
+			hasAppliedFileChange(details) ||
+			(Array.isArray(details.conflictChanges) && details.conflictChanges.length > 0))
+	);
+}
+
 interface ToolImageBlock {
 	data?: string;
 	mimeType?: string;
@@ -943,20 +953,20 @@ export class ToolExecutionComponent extends Container {
 
 	/** Critical upstream feedback bypasses ordinary compact previews. */
 	hasCompactCriticalFeedback(): boolean {
-		if (
-			this.#result?.isError === true ||
-			this.#compactNeedsUserInput !== undefined ||
-			this.#compactOutcome() === "待确认"
-		) {
+		if (this.#compactNeedsUserInput !== undefined || this.#compactOutcome() === "待确认") {
 			return true;
 		}
 		if (!this.#result) return false;
 		if (this.#renderer?.hasCompactCriticalFeedback?.(this.#result)) return true;
 		const details = this.#result.details;
+		if (this.#result.isError && hasCompactExecutionFeedback(details)) return true;
 		const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
 		if (dispatch?.mode !== "execute" || typeof dispatch.tool !== "string") return false;
 		const innerRenderer = toolRenderers[dispatch.tool];
-		return innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true;
+		return (
+			(this.#result.isError === true && hasCompactExecutionFeedback(dispatch.inner)) ||
+			innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true
+		);
 	}
 
 	isCompactWriteCall(): boolean {
@@ -1026,7 +1036,7 @@ export class ToolExecutionComponent extends Container {
 	/** Stable actual-call identity survives provider tool-call ID corrections. */
 	getCompactToolCalls(): readonly CompactToolCall[] {
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
-		return [{ id: this, failed: this.#nativeStatus() === "error" }];
+		return [{ id: this }];
 	}
 
 	setCompactToolResultListener(listener: (() => void) | undefined): void {
@@ -1236,6 +1246,7 @@ export class ToolExecutionComponent extends Container {
 
 	/** Ordinary compact preview; expansion and critical feedback use the original renderer. */
 	#describeCompact(dataFirst: boolean, width: number): NativeNode {
+		if (this.#result?.isError) return EMPTY_NODE;
 		const summary = this.#compactActivity();
 		const outcome = this.#compactOutcome();
 		const title = `${this.#compactNeedsUserInput === undefined ? "" : "等待用户输入 · "}${summary.label}${outcome ? ` · ${outcome}` : ""}`;
@@ -1715,6 +1726,7 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
+			if (this.#result?.isError) return [];
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);

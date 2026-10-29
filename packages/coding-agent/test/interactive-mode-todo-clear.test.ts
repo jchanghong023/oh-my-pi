@@ -141,7 +141,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(compact.indexOf("REBUILD_FAILURE_CAUSE")).toBeLessThan(compact.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"));
 		mode.rebuildChatFromMessages();
 		const compactRebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		expect(compactRebuilt).toContain("REBUILD_FAILURE_CAUSE");
+		expect(compactRebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
 		expect(compactRebuilt).not.toContain("Warning:");
 
 		cfgDisplayCompactToolActivity.override(session.settings, presentation === "clean");

@@ -32,7 +32,7 @@ class Call implements Component {
 		return true;
 	}
 	getCompactToolCalls(): readonly CompactToolCall[] {
-		return [{ id: this, failed: this.failed }];
+		return [{ id: this }];
 	}
 	hasCompactCriticalFeedback() {
 		return this.critical || this.failed;
@@ -100,7 +100,7 @@ describe("compact original-position continuous runs", () => {
 		const calls = add(root, "OLD", "ONE", "TWO");
 		for (const call of calls) call.finalized = false;
 		root.addChild(new Text("AFTER", 0, 0));
-		const expected = ["BEFORE", "", "工具调用 3 次 · 失败 0 次", "ONE", "TWO", "", "AFTER"];
+		const expected = ["BEFORE", "", "工具调用 3 次", "ONE", "TWO", "", "AFTER"];
 		expect(root.render(80).map(row => Bun.stripANSI(row).trimEnd())).toEqual(expected);
 		expect(root.renderViewport(80, 20, { tick: 0, now: 0 }).map(row => Bun.stripANSI(row).trimEnd())).toEqual(
 			expected,
@@ -128,7 +128,7 @@ describe("compact original-position continuous runs", () => {
 		write.write = write.actualWrite = true;
 		add(root, "THREE", "FOUR");
 		expect(view(root).split("\n")).toEqual([
-			"工具调用 3 次 · 失败 1 次",
+			"工具调用 3 次",
 			"FAILURE",
 			"",
 			"ONE",
@@ -186,7 +186,7 @@ describe("compact original-position continuous runs", () => {
 		input!.critical = true;
 		add(root, "PREVIEW_ONE", "PREVIEW_TWO");
 		for (const output of [view(root), native(root)]) {
-			expect(output).toContain("工具调用 5 次 · 失败 1 次");
+			expect(output).toContain("工具调用 5 次");
 			expect(output).toMatch(/RAW_FAILURE[^]*APPROVAL[^]*INPUT[^]*PREVIEW_ONE[^]*PREVIEW_TWO/);
 		}
 	});

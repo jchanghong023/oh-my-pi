@@ -101,7 +101,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("read", { path: "after-prose.ts" }));
 		for (const view of [output(root), native(root)]) {
 			expect(view.match(/工具调用/g)).toHaveLength(1);
-			expect(view).toContain("工具调用 4 次 · 失败 0 次");
+			expect(view).toContain("工具调用 4 次");
 			expect(view).not.toContain("before-status-a.ts");
 			expect(view).not.toContain("before-status-b.ts");
 			expect(view).toMatch(/after-status-a\.ts[^]*after-status-b\.ts[^]*PROSE_BOUNDARY[^]*after-prose\.ts/);
@@ -109,7 +109,7 @@ describe("compact tool component integration", () => {
 		expect(output(root)).toMatch(/Viewing agent Review[^]*after-status-a\.ts/);
 		status.setMessage("Returned to main session");
 		expect(output(root)).toMatch(/Returned to main session[^]*after-status-a\.ts/);
-		expect(output(root)).toContain("工具调用 4 次 · 失败 0 次");
+		expect(output(root)).toContain("工具调用 4 次");
 	});
 
 	it("keeps Agent messages in ordinary tool runs through pending, delivery, and failure", () => {
@@ -121,7 +121,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("bash", { command: "echo after-message" }));
 		const expectContinuous = () => {
 			for (const view of [output(root), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).not.toContain("before-message.ts");
 				expect(view).toContain("Message");
 				expect(view).toContain("after-message");
@@ -135,7 +135,7 @@ describe("compact tool component integration", () => {
 		expectContinuous();
 		root.addChild(tool("bash", { command: "echo latest-command" }));
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 4 次 · 失败 0 次");
+			expect(view).toContain("工具调用 4 次");
 			expect(view).not.toContain("Message");
 		}
 		message.updateResult({
@@ -144,13 +144,13 @@ describe("compact tool component integration", () => {
 			details: { message: {} },
 		});
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 4 次 · 失败 1 次");
-			expect(view).toContain("MESSAGE_DELIVERY_FAILED");
+			expect(view).toContain("工具调用 4 次");
+			expect(view).not.toContain("MESSAGE_DELIVERY_FAILED");
 			expect(view).toContain("latest-command");
 		}
 	});
 
-	it("keeps process input, mode, and cancellation in one run without hiding critical feedback", () => {
+	it("keeps process controls and approvals in one run while hiding invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-process.ts" }));
@@ -161,7 +161,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("bash", { command: "echo after-process" }));
 		const expectContinuous = () => {
 			for (const view of [output(root), native(root)]) {
-				expect(view).toContain("工具调用 5 次 · 失败 0 次");
+				expect(view).toContain("工具调用 5 次");
 				expect(view).not.toContain("before-process.ts");
 				expect(view).not.toContain("input-service");
 				expect(view).not.toContain("mode-service");
@@ -177,15 +177,15 @@ describe("compact tool component integration", () => {
 		input.updateResult({ content: [{ type: "text", text: "PROCESS_INPUT_FAILED" }], isError: true });
 		mode.setCompactNeedsUserInput("Confirm mode change");
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 5 次 · 失败 1 次");
-			expect(view).toContain("PROCESS_INPUT_FAILED");
+			expect(view).toContain("工具调用 5 次");
+			expect(view).not.toContain("PROCESS_INPUT_FAILED");
 			expect(view).toContain("mode-service");
 			expect(view).toContain("kill-job");
 			expect(view).toContain("after-process");
 		}
 	});
 
-	it("keeps configuration changes in ordinary runs while retaining approval and failure feedback", () => {
+	it("keeps configuration approvals in ordinary runs while hiding invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-config.ts" }));
@@ -194,7 +194,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("bash", { command: "echo after-config" }));
 		const expectContinuous = () => {
 			for (const view of [output(root), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).not.toContain("before-config.ts");
 				expect(view).toContain("Config");
 				expect(view).toContain("after-config");
@@ -211,8 +211,8 @@ describe("compact tool component integration", () => {
 		config.setCompactNeedsUserInput();
 		config.updateResult({ content: [{ type: "text", text: "CONFIG_CHANGE_FAILED" }], isError: true });
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 4 次 · 失败 1 次");
-			expect(view).toContain("CONFIG_CHANGE_FAILED");
+			expect(view).toContain("工具调用 4 次");
+			expect(view).not.toContain("CONFIG_CHANGE_FAILED");
 			expect(view).toContain("latest-config");
 		}
 	});
@@ -229,7 +229,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("bash", { command: "echo after-device" }));
 		const expectContinuous = () => {
 			for (const view of [output(root), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).not.toContain("before-device.ts");
 				expect(view).toContain("DEVICE_EVAL");
 				expect(view).toContain("after-device");
@@ -245,46 +245,54 @@ describe("compact tool component integration", () => {
 		const help = tool("write", { path: "xd://edit", content: "?" });
 		root.addChild(help);
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 4 次 · 失败 0 次");
+			expect(view).toContain("工具调用 4 次");
 			expect(view).not.toContain("DEVICE_EVAL");
 		}
 		help.updateResult({
 			content: [{ type: "text", text: "edit usage" }],
 			details: { xdev: { tool: "edit", mode: "help" } },
 		});
-		for (const view of [output(root), native(root)]) expect(view).toContain("工具调用 4 次 · 失败 0 次");
+		for (const view of [output(root), native(root)]) expect(view).toContain("工具调用 4 次");
 		device.updateResult({
 			content: [{ type: "text", text: "DEVICE_EXECUTION_FAILED" }],
 			isError: true,
 			details: { xdev: { tool: "eval", mode: "execute", inner: {} } },
 		});
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("工具调用 4 次 · 失败 1 次");
-			expect(view).toContain("DEVICE_EXECUTION_FAILED");
+			expect(view).toContain("工具调用 4 次");
+			expect(view).not.toContain("DEVICE_EXECUTION_FAILED");
 		}
 	});
 
-	it("preserves raw structured Bash errors outside the ordinary preview quota", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+	it("hides invocation errors and failure tallies without changing detailed history", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
-		const bash = tool("bash", { command: "failing-command" });
+		const read = tool("read", { path: "missing-source.ts" });
 		const result = {
-			content: [{ type: "text" as const, text: '{"error":{"code":"RAW_DIAGNOSTIC","detail":["reason"]}}' }],
+			content: [{ type: "text" as const, text: "Path not found: missing-source.ts" }],
 			isError: true,
 		};
 		const original = JSON.stringify(result);
-		bash.updateResult(result);
-		root.addChild(bash);
-		for (const path of ["latest-a.ts", "latest-b.ts"]) {
-			const read = tool("read", { path });
-			read.updateResult({ content: [] });
-			root.addChild(read);
+		root.addChild(read);
+		read.updateResult(result);
+		expect(output(root)).toBe("");
+		for (const view of [native(root, false), native(root)]) {
+			expect(view).not.toContain("missing-source.ts");
 		}
-		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("RAW_DIAGNOSTIC");
+		for (const path of ["latest-a.ts", "latest-b.ts"]) {
+			const later = tool("read", { path });
+			later.updateResult({ content: [] });
+			root.addChild(later);
+		}
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).not.toContain("Path not found");
+			expect(view).not.toContain("失败");
 			expect(view).toContain("latest-a.ts");
 			expect(view).toContain("latest-b.ts");
-			expect(view).toContain("工具调用 3 次 · 失败 1 次");
+		}
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).toContain("Path not found: missing-source.ts");
 		}
 		expect(JSON.stringify(result)).toBe(original);
 	});
@@ -323,7 +331,7 @@ describe("compact tool component integration", () => {
 		expect(output(root)).toContain("last-command");
 	});
 
-	it("keeps original grouped-read error details rather than an extracted failure line", () => {
+	it("hides grouped-read invocation errors until explicit detail is requested", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const root = new TranscriptContainer();
 		// Upstream ANSI/fallback read groups show result bodies only with content previews enabled.
@@ -337,7 +345,7 @@ describe("compact tool component integration", () => {
 		for (const id of ["later-a", "later-b", "later-c"]) group.updateArgs({ path: `${id}.ts` }, id);
 		root.addChild(group);
 		for (const view of [output(root), native(root)]) {
-			expect(view).toContain("RAW_READ_ERROR");
+			expect(view).not.toContain("RAW_READ_ERROR");
 			expect(view).toContain("later-b.ts");
 			expect(view).toContain("later-c.ts");
 			expect(view).not.toContain("later-a.ts");
@@ -441,7 +449,7 @@ describe("compact tool component integration", () => {
 			expect(call.isCompactActualFileWrite()).toBe(false);
 			expect(root.render(80)).toHaveLength(3);
 			for (const view of [output(root), native(root, false), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).toContain("after");
 				expect(view).not.toContain("before.ts");
 			}
@@ -517,7 +525,7 @@ describe("compact tool component integration", () => {
 			root.addChild(tool("bash", { command: "echo latest-one" }));
 			root.addChild(tool("bash", { command: "echo latest-two" }));
 			for (const view of [output(root), native(root, false), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).toContain("latest-two");
 				if ("waited" in details) {
 					expect(view).toContain("Worker");
@@ -546,19 +554,19 @@ describe("compact tool component integration", () => {
 			root.addChild(call);
 			root.addChild(tool("bash", { command: "echo last" }));
 			for (const view of [output(root), native(root, false), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).toContain("Eval");
 				expect(view).toContain("last");
 			}
 			call.updateArgs(args("VALID_TITLE"));
 			for (const view of [output(root), native(root, false), native(root)]) {
-				expect(view).toContain("工具调用 3 次 · 失败 0 次");
+				expect(view).toContain("工具调用 3 次");
 				expect(view).toContain("VALID_TITLE");
 			}
 		}
 	});
 
-	it("keeps task agent failures and cancellations without changing tool-level failure counts", () => {
+	it("keeps task agent failures and cancellations without exposing a tool-failure tally", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		const task = tool("task", { tasks: [] });
@@ -591,7 +599,7 @@ describe("compact tool component integration", () => {
 		root.addChild(tool("bash", { command: "echo later-one" }));
 		root.addChild(tool("bash", { command: "echo later-two" }));
 		for (const view of [output(root), native(root, false), native(root)]) {
-			expect(view).toContain("工具调用 3 次 · 失败 0 次");
+			expect(view).toContain("工具调用 3 次");
 			for (const text of [
 				"FailedWorker",
 				"AbortedWorker",

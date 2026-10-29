@@ -15,7 +15,8 @@
 ### Changed
 
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
-- Compact tools retain the last two calls per continuous run at their original positions, with a dim run-local summary only above two calls; errors, approvals, and input requests keep original feedback.
+- Compact tools retain the last two calls per continuous run at their original positions, with a dim call-total summary only above two calls; internal invocation errors stay hidden until explicitly expanded, while execution failures, approvals, and input requests keep original feedback.
+- Soften the default `dark-terminal` theme's semantic red, green, and accent using the existing `dark` palette without changing its other colors.
 - Compact `bash` summaries without an explicit intent skip leading assignments and context-only builtins (`cd`, `export`, `set`, …) and keep the remaining command text on one line, collapsed and truncated to the row width; leading assignment values stay hidden.
 - Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals. The actual busy loader shows tool intent without duplicating it.
 - Each continuous write/edit run retains the last three actual-write cards with upstream expansion and scrolling behavior; tool history is not cleared on the next input.

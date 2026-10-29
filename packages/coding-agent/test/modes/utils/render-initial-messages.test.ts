@@ -652,18 +652,14 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 				(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
 			);
 			expect(groups).toHaveLength(2);
-			expect(groups.map(group => group.getCompactToolCalls().map(call => call.failed))).toEqual([
-				[false, false, true],
-				[false, false, true],
-			]);
 			const rendered = Bun.stripANSI(chatContainer.render(160).join("\n"));
 			const expectedOrder = [
 				"BEFORE_READS",
-				...(compact ? ["A1.txt", "A2.txt"] : ["A0.txt", "A1.txt", "A2.txt"]),
+				...(compact ? ["A1.txt"] : ["A0.txt", "A1.txt", "A2.txt"]),
 				"BETWEEN_READ_AND_WRITE",
 				"W0.txt",
 				"BETWEEN_WRITE_AND_READ",
-				...(compact ? ["B1.txt", "B2.txt"] : ["B0.txt", "B1.txt", "B2.txt"]),
+				...(compact ? ["B1.txt"] : ["B0.txt", "B1.txt", "B2.txt"]),
 				"AFTER_READS",
 			];
 			let previous = -1;
@@ -673,7 +669,7 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 				previous = position;
 			}
 			if (compact) {
-				expect(rendered.match(/工具调用 3 次 · 失败 1 次/g)).toHaveLength(2);
+				expect(rendered).not.toContain("失败 1 次");
 				expect(rendered).not.toContain("A0.txt");
 				expect(rendered).not.toContain("B0.txt");
 				if (firstCompact !== undefined) expect(rendered).toBe(firstCompact);

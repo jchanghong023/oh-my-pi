@@ -13,7 +13,6 @@ export const COMPACT_STATUS_LABEL: Record<TspCardStatus, string> = {
 
 export interface CompactToolCall {
 	id: string | object;
-	failed: boolean;
 }
 
 export interface ToolActivityComponent {
