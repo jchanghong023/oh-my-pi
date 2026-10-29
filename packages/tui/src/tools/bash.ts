@@ -29,7 +29,8 @@ import type {
 	ToolRenderer,
 } from "./renderer";
 import { INTENT_FIELD, type TspTone } from "@oh-my-pi/pi-wire";
-import { plainText } from "../native/spans";
+import { node, text } from "../native/describe";
+import { plainText, styledSpans } from "../native/spans";
 import { resultText, runBox, runFoot, runInput, runOutput, type RunState } from "./native-view";
 
 /** Default collapsed shell output preview height. */
@@ -724,15 +725,16 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							: SHELL_INPUT,
 					),
 					output.trim().length > 0 &&
-						runOutput(
-							compactError
-								? nonEmptyTailLines(output, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED).join("\n")
-								: output,
-							{
-								role: "omp.tool.bash.output",
-								previewLines: compactError ? PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED : previewLines,
-							},
-						),
+						(compactError
+							? node(
+									"col",
+									{ role: "omp.tool.bash.output", gap: "none" },
+									nonEmptyTailLines(output, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED).map(line =>
+										text(styledSpans(line), { wrap: "none", truncate: "end" }),
+									),
+									"output",
+								)
+							: runOutput(output, { role: "omp.tool.bash.output", previewLines })),
 					runFoot({
 						state,
 						exitCode: details?.exitCode,

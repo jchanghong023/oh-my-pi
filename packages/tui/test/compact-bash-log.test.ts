@@ -129,6 +129,52 @@ describe("compact upstream tool feedback", () => {
 		expect(component.render(80).map(Bun.stripANSI)).toEqual(rows);
 	});
 
+	it("applies compact error previews to Bash dispatched through write across mode and expansion changes", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const command = "python3 - <<'EOF'\nprint('script body')\nEOF";
+		const write = new ToolExecutionComponent(
+			"write",
+			{ path: "xd://bash", content: JSON.stringify({ command }) },
+			{},
+			undefined,
+			{ requestRender() {}, requestComponentRender() {}, resetDisplay() {} },
+		);
+		components.push(write);
+		write.setExecutionStarted();
+		write.updateResult(
+			{
+				content: [
+					{
+						type: "text",
+						text: "first output\nsecond output\n\n\u001b[31m \u001b[0m\nthird output\nCommand exited with code 1",
+					},
+				],
+				isError: true,
+				details: { xdev: { tool: "bash", mode: "execute", args: { command }, inner: { exitCode: 1 } } },
+			},
+			false,
+		);
+		const render = () => Bun.stripANSI(write.render(80).join("\n"));
+		const compact = render();
+		expect(compact).toContain("python3");
+		expect(compact).not.toContain("script body");
+		expect(compact).not.toContain("first output");
+		expect(compact).toContain("second output");
+		expect(compact).toContain("third output");
+		expect(compact).toContain("Exit: 1");
+
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(render()).toContain("script body");
+		expect(render()).toContain("first output");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		expect(render()).toBe(compact);
+		write.setExpanded(true);
+		expect(render()).toContain("script body");
+		expect(render()).toContain("first output");
+		write.setExpanded(false);
+		expect(render()).toBe(compact);
+	});
+
 	it("retains an input-blocked call outside the two normal previews", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const transcript = new TranscriptContainer();

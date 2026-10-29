@@ -65,7 +65,7 @@ it.each([
 		expect(child.exitCode, child.stderr.toString()).toBe(0);
 		const result: IconProbe = JSON.parse(child.stdout.toString());
 		expect(result.unicode.icons).toEqual(expected.slice(0, 5));
-		expect(result.unicode.raw).toEqual(expected);
+		expect(result.unicode.raw).toEqual(expected.slice());
 		expect([result.unicode.tokens, result.unicode.hook]).toEqual(expected.slice(5));
 		expect(result.unicode.gear).toBe("⚙");
 		expect(result.unicode.fast).toBe("⚡");

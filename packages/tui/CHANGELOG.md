@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Keep both compact Bash error output rows visible on native terminals and for device-dispatched commands.
 - Preserve upstream input anchoring and Complete Scrollback behavior in compact mode; clean mode also hides live thinking titles and expandable native thoughts.
 - Keep failed or cancelled task results, consumed peer messages, and mixed background or supervised-process failure receipts visible outside compact preview limits.
 - Retain original cards for file-URL writes, classify nested device operations by their real targets, and safely display incomplete or malformed Eval titles.

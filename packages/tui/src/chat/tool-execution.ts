@@ -2260,6 +2260,12 @@ export class ToolExecutionComponent extends Container {
 			}
 			context.renderDiff = renderDiff;
 		} else if (this.#toolName === "write") {
+			// Delegated renderers such as Bash read this preference at paint time,
+			// including after the display mode changes without a result rebuild.
+			Object.defineProperty(context, "compactToolActivity", {
+				get: () => displayPreferences.compactToolActivity,
+				enumerable: true,
+			});
 			// Device-dispatch previews render through the host's canonical resolver,
 			// which covers mounted devices and active top-level tools (the `write`
 			// transport accepts both). Deciding the predicate here instead would

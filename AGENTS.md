@@ -340,10 +340,7 @@ Location: `packages/*/CHANGELOG.md` (per package).
 
 ## Releasing
 
-1. Ensure all changes since last release are in each affected package's `[Unreleased]` section.
-2. Run `bun run release`.
-
-The script handles version bump, CHANGELOG finalization, commit, tag, publish, and adding new `[Unreleased]` sections.
+Fork releases require explicit user authorization and use the manual CI workflow on `main` as specified in [fork-runtime](openspec/specs/fork-runtime/spec.md). Do not use the upstream `bun run release` script for fork releases.
 
 ## Fork Requirements and Additional Runbooks
 

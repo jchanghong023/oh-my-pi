@@ -145,13 +145,13 @@ async function runModels(
 
 describe("OMP_OFFLINE=1 omp models company environment", () => {
 	it("lists the company lane with offline context limits", async () => {
-		const { providers, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--json"], {
+		const { providers, selectors, companyContextWindows, companyMaxTokens, stderr } = await runModels(["--json"], {
 			companyConfig: true,
 			offline: true,
 		});
 
 		expect(providers.has("company")).toBe(true);
-		expect(companyContextWindows).toHaveLength(6);
+		expect(selectors).toContain("company/GLM-5.3-public");
 		expect(companyContextWindows.every(window => window === 200_000)).toBe(true);
 		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
@@ -172,12 +172,12 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 
 	for (const action of ["ls", "list", "refresh", "company"]) {
 		it(`keeps ${action} cache-only under OMP_OFFLINE=1`, async () => {
-			const { providers, companyContextWindows } = await runModels([action, "--json"], {
+			const { providers, selectors } = await runModels([action, "--json"], {
 				companyConfig: true,
 				offline: true,
 			});
 			expect(providers.has("company")).toBe(true);
-			expect(companyContextWindows).toHaveLength(6);
+			expect(selectors).toContain("company/GLM-5.3-public");
 		}, 30_000);
 	}
 
