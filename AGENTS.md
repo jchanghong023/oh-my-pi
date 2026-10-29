@@ -84,7 +84,7 @@
 本仓库是持续同步上游的 Fork（同步来源与分支约定见「上游与分支」），文档职责如下：
 
 - `AGENTS.md`：本仓库的维护原则与 agent 规则。
-- JCH 的 `jch-upstream-sync` Skill：每日定时同步或手动同步上游的通用流程及 Git 执行脚本；本仓库的来源、镜像、基线记录与验证限制由本文件维护。调用入口统一使用新名称，不保留旧名称别名或平行实现。
+- JCH 的 `jch-upstream-sync` Skill：每日定时同步或手动同步上游的通用流程及 Git 执行脚本；本仓库的来源、基线记录与验证限制由本文件维护。调用入口统一使用新名称，不保留旧名称别名或平行实现。
 - `openspec/specs/`：本仓库唯一已批准的 fork 差异需求基线，仅记录相对当前上游仍有效的本地特性、修复、默认值及明确规划，按能力域维护行为、约束和验收场景。未修改的纯上游需求不记录；本地特性或修复已由上游等价提供后，删除对应需求及当前差异说明，不保留“由上游满足”的占位条目。`openspec/changes/` 仅保存尚未批准的本地需求提案与增量。上游基线元数据见 `fork-upstream-baseline`，桌面接入见 `zcode-app-server`。
 
 同步 MUST 保留 `AGENTS.md`、整个 `openspec/`、`docs-zh-CN/quick-start-intranet.md` 和根 `README.md` 的 fork 版本，NEVER 用上游版本覆盖；按实际变化维护内容（README 的更新方式见下节）。共享 Skill 不随本仓库同步改写。
@@ -114,12 +114,10 @@
 - 唯一同步来源：`https://github.com/can1357/oh-my-pi.git` 的 `refs/heads/main` HEAD；NEVER 使用 Release、tag、其他分支、`origin/main` 或配置型 `upstream/main` 代替。
 - fork 身份固定为 `jchanghong023/oh-my-pi`；同步使用 `origin`，其有效 fetch/push URL 必须均匹配该身份，不满足则停止。
 - `main`：上游代码与个人改动的集成分支。
-- `upstream`：最近成功合入的上游 `main` 的精确镜像，不含 fork commit；GitHub 上用于 PR/差异比较（base 为 `upstream`，compare 为 `main`）。
-- 已集成基线以本仓库自有的本地 `upstream` 和远端 `origin/upstream` 分支为准；本地 `main:openspec/specs/fork-upstream-baseline/spec.md` 是基线文档，`Upstream commit` 必须唯一、有效并与已集成状态一致，分支或文档矛盾时先查明，不盲目推进。成功集成时在同一提交更新完整 SHA、UTC 同步日期和当前功能差异，保留 `can1357/oh-my-pi@main`；版本取本次上游目标的 `packages/coding-agent/package.json`，保持现有机器可读格式，不追加历史或第二份清单。
-- 本仓库明确授权同步流程只推送 fork 的 `refs/heads/upstream` 镜像，使用实际远端 SHA 的精确 lease；本地 `upstream` 跟踪 `origin/upstream`，三者须指向同一已成功集成的上游 SHA，不指向 fork 集成提交。镜像失败保留已验证的本地集成，下次仅修复镜像。
+- 已集成基线以本地 `main:openspec/specs/fork-upstream-baseline/spec.md` 为准；`Upstream commit` 必须唯一、有效且是 `main` 的祖先，否则先查明，不盲目推进。成功集成时在同一提交更新完整 SHA、UTC 同步日期和当前功能差异，保留 `can1357/oh-my-pi@main`；版本取本次上游目标的 `packages/coding-agent/package.json`，保持现有机器可读格式，不追加历史或第二份清单。
 - 同步请求包含完成该次集成所需的本地提交授权；提交采用 `sync(upstream): merge main@<目标前12位>`，以命令级设置禁用 hooks/签名，避免隐式重型任务，不改用户全局 Git 配置。
-- 同步 MUST 遵循 Skill 的门禁、集成、验证、镜像与中止流程；Git 写操作统一通过已部署技能的受限脚本会话执行，不在 Agent 外部命令中绕过检查。NEVER 接受上游历史改写。
-- 同步只完成本地 `main` 集成与 `upstream` 镜像，不自动推送 `main`；本地完成不代表 GitHub 已可比较最新 fork 差异，后者取决于远端 `main` 是否另行更新。
+- 同步 MUST 遵循 Skill 的门禁、集成、验证与中止流程；Git 写操作统一通过已部署技能的受限脚本会话执行，不在 Agent 外部命令中绕过检查。NEVER 接受上游历史改写。
+- 同步只完成本地 `main` 集成，不推送分支或标签。
 
 ## 测试与验证要求
 
@@ -167,7 +165,7 @@
 - 标准门禁按维护者要求沿用既有 fork 范围，以规格记录的上游基线纳入**完整已提交与未提交 fork 差异**，包括未跟踪的新测试；不以最新提交或本轮文件代替完整差异。TS 测试沿用差异测试集合，Rust 测试复用现有 `test:rs --affected` 及 vendor 消费者选择，保留脚本测试和 native/TUI 集成边界。各层按 `openspec/specs/fork-verification-gates/spec.md` 继承对应范围，报告 `scope=fork-affected`、基线、选择依据和未跑全项目覆盖；预算仍为 360/1800/3000 秒，不通过排除失败项、放宽预算或改写测试标准求绿。全项目原有独立入口保留。
 - 检查、测试与构建工具不可用时说明所缺环境及未验证部分，不自动安装工具或将缺失记为通过。完整本地门禁不等同公司模型、真实模型任务质量、独立发布 CI 或共享鼠标测试验收；上游原样检查失败仍遵循「测试与验证要求」的报告边界。
 - fulltest 内的 UI 冒烟 MUST 使用 `bun run dev`，仅使用本地当前源码编译的 native addon；不存在则本地编译，不下载或复用其他来源的包。上游同步不运行 UI 测试。
-- 上游同步仅做 staged Git 检查与必要的源码语义审查；无冲突时只在 TS 或工具链变化确有必要时运行一次 `bun run check:tools`，有冲突时同样最多一次，不运行编译、类型检查或测试（含 `check:types` 与精确测试）。缺依赖时仅允许 `bun install --frozen-lockfile --ignore-scripts`；首次检查失败只可修复本次相关问题并对首轮失败项额外复验一轮，不重跑已通过项、不追加范围，仍失败或无法确认时中止、不提交、不更新镜像。
+- 上游同步仅做 staged Git 检查与必要的源码语义审查；无冲突时只在 TS 或工具链变化确有必要时运行一次 `bun run check:tools`，有冲突时同样最多一次，不运行编译、类型检查或测试（含 `check:types` 与精确测试）。缺依赖时仅允许 `bun install --frozen-lockfile --ignore-scripts`；首次检查失败只可修复本次相关问题并对首轮失败项额外复验一轮，不重跑已通过项、不追加范围，仍失败或无法确认时中止、不提交。
 - 上游同步 NEVER 运行全 workspace 检查、根级 `bun run check`、`bun run fastcheck`、`bun run fulltest`、`bun run slowtest`、完整测试、UI/browser/heavy、Docker、benchmark、打包、发布或任何 Rust/native build/check/test/lint/fmt/clippy/codegen/packaging（含 `cargo`、`bazel`、`nix build`）。冲突重建需要 UT 与真实入口 E2E 而本次未获明确验证授权时，按共享 Skill 中止并报告未验证；额外验证必须由用户明确要求。
 
 ## 中文文档
