@@ -36,14 +36,19 @@ OMP MUST 按 `/display` 选择的 `clean`、`compact` 或 `detailed` 呈现同�
 - **THEN** 按上游原顺序与位置显示全部工具调用及结果、思考和用户全文，不保留 compact 统计摘要、最后两条／三个筛选或专用单行思考区域。
 - **AND** 展开、折叠、图片、截断、复制与滚动遵循上游原组件和既有独立设置；完整可查看不等于强制展开全部内容。
 
-### Requirement: 默认深色主题局部柔化
+### Requirement: dark-terminal 可选主题局部柔化
 
-OMP MUST 保持 `theme.dark=dark-terminal` 及既有主题结构，仅将其绿色与红色语义变量改用现有 `dark` 主题的 `#89d281` 与 `#fc3a4b`，强调色引用该绿色；不整体切换主题或修改其他独立颜色、背景与语法高亮。
+OMP MUST 保留可选 `dark-terminal` 主题的既有结构，仅将其绿色与红色语义变量改用现有 `dark` 主题的 `#89d281` 与 `#fc3a4b`，强调色引用该绿色；不修改其他独立颜色、背景与语法高亮。默认深色主题按[运行默认值](../fork-runtime-defaults/spec.md)使用上游 `titanium` 原配色，此局部柔化仅在用户选择 `dark-terminal` 时生效。
 
-#### Scenario: 默认主题的状态与强调颜色
+#### Scenario: 可选 dark-terminal 主题的状态与强调颜色
 
 - **WHEN** 使用 `dark-terminal` 主题显示强调、成功或错误
 - **THEN** 使用柔化后的绿色或红色；其他主题、显式独立颜色、用户主题选择与配置优先级保持不变。
+
+#### Scenario: 默认深色主题与上游一致
+
+- **WHEN** 普通或 offline 进程未显式配置深色主题
+- **THEN** 使用 `titanium` 及其上游内置原配色，不对 Titanium 应用 `dark-terminal` 的局部柔化；已有显式主题配置继续优先。
 
 
 ### Requirement: 紧凑模式连续工具段

@@ -61,7 +61,7 @@ export const cfgGitEnabled = register({
 export const cfgThemeDark = register({
 	id: "theme.dark",
 	type: "string",
-	default: "dark-terminal",
+	default: "titanium",
 	ui: {
 		tab: "appearance",
 		group: "主题",

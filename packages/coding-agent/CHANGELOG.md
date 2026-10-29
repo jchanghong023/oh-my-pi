@@ -33,6 +33,7 @@
 
 ### Changed
 
+- Restore the upstream `titanium` dark-theme default and palette; preserve explicit theme settings.
 - Use `company/GLM-5.3-public` for the offline default, Plan, and Slow roles; preserve other roles and explicit settings.
 - Disable OSC 7501 program status reporting by default in offline mode; explicit settings still take precedence.
 - Restore the upstream `classic` shimmer default; explicit display settings remain unchanged.
