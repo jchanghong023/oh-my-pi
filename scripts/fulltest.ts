@@ -104,6 +104,7 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceD
 			env: {
 				...localTestEnvironment(path.join(home, "typescript")),
 				OMP_TEST_CONCURRENCY: "all",
+				OMP_FULLTEST_AFFECTED: "1",
 				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},
 		},
@@ -286,8 +287,8 @@ async function runFulltestObserved(
 	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=full-project`);
 	console.log(
 		process.platform === "win32"
-			? "coverage: full TypeScript, repository script, Rust workspace/Nextest/doctest and Python RPC SDK suites; native build; dev-TUI smoke; SKIPPED: Robomp tests are unsupported on native Windows"
-			: "coverage: full TypeScript, repository script, Rust workspace/Nextest/doctest and Python suites; native build; dev-TUI smoke",
+			? "coverage: TypeScript, repository script, Rust workspace/Nextest/doctest and Python RPC SDK suites (native affected selection where available); native build; dev-TUI smoke; SKIPPED: Robomp tests are unsupported on native Windows"
+			: "coverage: TypeScript, repository script, Rust workspace/Nextest/doctest and Python suites (native affected selection where available); native build; dev-TUI smoke",
 	);
 	console.log(
 		"coverage outside gates: real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
@@ -325,7 +326,13 @@ async function runFulltestObserved(
 		);
 		const afterBuild = await acquire("post-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		await acquire("post-build source check", async () => assertFulltestSourceStable(beforeNative, afterBuild, true));
-		if (report?.owner) report.sourceDigest = afterBuild.digest;
+		if (report?.owner) {
+			report.sourceDigest = afterBuild.digest;
+			report.sourceRevision = afterBuild.head;
+			report.dirtyState = afterBuild.dirty ? "dirty" : "clean";
+			// The pre-build Git diff identity may no longer describe generated bindings.
+			report.dirtyStateIdentity = null;
+		}
 		logger.info("Fulltest post-build source identity resolved", {
 			component: "test-gate-fulltest",
 			event: "fulltest_source_identity",
@@ -369,7 +376,11 @@ async function runFulltestObserved(
 				// Use the shared hang ceiling, not bun's 5s default.
 				argv: ["bun", "scripts/test-report-bun.ts", file, `--timeout=${testTimeoutMs()}`],
 				cwd: gateRepoRoot,
-				env: localTestEnvironment(path.join(home, "script-tests", String(index))),
+				env: {
+					...localTestEnvironment(path.join(home, "script-tests", String(index))),
+					OMP_FULLTEST_AFFECTED: "1",
+					OMP_FULLTEST_SOURCE_DIGEST: afterBuild.digest,
+				},
 				kind: "charged" as const,
 			}));
 			await attempt("independent repository scripts", () =>

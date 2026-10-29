@@ -7,7 +7,7 @@ import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
+import { beginTestRun, endTestRun, recordTestProducer, testReportPath, type TestSelection } from "./test-reporting";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -107,7 +107,12 @@ if (!isRustTaskName(taskName)) {
 	process.exit(1);
 }
 
-if (process.argv.length > 3) {
+const testMode = process.argv[3] ?? "--affected";
+
+if (
+	process.argv.length > 4 ||
+	(process.argv.length === 4 && (taskName !== "test:rs" || (testMode !== "--collect" && testMode !== "--full")))
+) {
 	console.error(`Unknown Rust task argument: ${process.argv[3]}`);
 	process.exit(1);
 }
@@ -126,7 +131,13 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 	let exitCode = 0;
 	try {
 		for (const command of commands) {
-			const commandExitCode = await runCommand(command, scope);
+			let commandExitCode: number;
+			try {
+				commandExitCode = await runCommand(command, scope);
+			} catch (error) {
+				commandExitCode = 1;
+				reportGateFailure(new GateCommandError(`${command.join(" ")} failed: ${String(error)}`, commandExitCode));
+			}
 			if (exitCode === 0) exitCode = commandExitCode;
 			if (commandExitCode !== 0 && !scope) break;
 		}
@@ -288,17 +299,75 @@ function toolVersion(command: string[], env: Record<string, string>): string | u
 	}
 }
 
+async function shouldCollectCoverage(
+	executable: string,
+	env: Record<string, string>,
+	reportPath: string,
+	args: string[],
+	recover: boolean,
+): Promise<boolean> {
+	// Never anchor coverage to HEAD when the compiled source differs from it.
+	const git = Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=normal"], {
+		cwd: repoRoot,
+		env,
+		stdout: "pipe",
+		stderr: "ignore",
+	});
+	if (git.exitCode !== 0 || git.stdout.length !== 0) return false;
+	if (recover) return true;
+	const statusPath = `${reportPath}.status.json`;
+	try {
+		const status = Bun.spawnSync([executable, "affected", "status", "--report-json", statusPath, "--", ...args], {
+			cwd: repoRoot,
+			env,
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		if (status.exitCode !== 0) return false;
+		const report = (await Bun.file(statusPath).json()) as { schema_version?: number; cache?: { status?: string } };
+		return (
+			report.schema_version === 1 &&
+			["miss-no-coverage", "miss-fingerprint", "miss-no-reachable-sha"].includes(report.cache?.status ?? "")
+		);
+	} catch {
+		// A status/tool failure is not evidence of missing coverage. Let run report it.
+		return false;
+	} finally {
+		await fs.promises.rm(statusPath, { force: true }).catch(() => {});
+	}
+}
+
 async function runCommand(command: readonly string[], scope?: string): Promise<number> {
 	const [head, ...rest] = command;
 	const isCargo = head === "cargo";
 	const isNextest = isCargo && rest[0] === "nextest" && rest[1] === "run";
 	const isDoctest = isCargo && rest[0] === "test" && rest.includes("--doc");
 	const executable = isCargo ? await ensureCargoBinary() : head;
-	const argv = [executable, ...rest];
+	let argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
 	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
 	const reportPath =
 		scope && (isNextest || isDoctest) ? testReportPath(isNextest ? "rust-nextest" : "rust-doctests") : undefined;
+	const markerPath = path.join(repoRoot, "target", "affected", "omp-incomplete-run");
+	const recoveryRequired = isNextest && fs.existsSync(markerPath);
+	const collect =
+		isNextest &&
+		(testMode === "--collect" ||
+			(testMode === "--affected" &&
+				reportPath != null &&
+				(await shouldCollectCoverage(executable, env, reportPath, rest.slice(2), recoveryRequired))));
+	const selectionPath = isNextest && reportPath && !collect ? `${reportPath}.selection.json` : undefined;
+	if (isNextest) {
+		argv = [
+			executable,
+			"affected",
+			collect ? "collect" : "run",
+			...(testMode === "--full" || (recoveryRequired && !collect) ? ["--all"] : []),
+			...(selectionPath ? ["--report-json", selectionPath, "--report-detail", "full"] : []),
+			"--",
+			...rest.slice(2),
+		];
+	}
 	let nextestStore: string | undefined;
 	if (reportPath && isNextest) {
 		// Nextest's JUnit path is relative to store.dir/<profile>. A lower-priority
@@ -311,6 +380,10 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 	}
 	const startedAt = new Date().toISOString();
 	const startedMs = performance.now();
+	if (isNextest) {
+		await fs.promises.mkdir(path.dirname(markerPath), { recursive: true });
+		await Bun.write(markerPath, "Native Rust run incomplete or failed; a clean collection is required.\n");
+	}
 	const doctests = isDoctest && reportPath ? new DoctestResults() : undefined;
 	const exitCode = await withRustCompilerEvents(env, async compilerEnv => {
 		const proc = Bun.spawn(argv, {
@@ -339,13 +412,59 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 	});
 	if (reportPath && scope) {
 		let partial = false;
-		if (nextestStore) {
+		let selection: TestSelection | undefined;
+		if (isNextest) {
+			if (selectionPath) {
+				try {
+					const native = (await Bun.file(selectionPath).json()) as {
+						schema_version?: number;
+						cache?: { status?: string };
+						selection?: { summary?: { mode?: string; selected?: number | null; skipped?: number | null } };
+					};
+					if (
+						native.schema_version !== 1 ||
+						typeof native.cache?.status !== "string" ||
+						!["selection", "full-suite-no-listing"].includes(native.selection?.summary?.mode ?? "")
+					)
+						throw new Error("Invalid cargo-affected selection report");
+					const summary = native.selection!.summary!;
+					if (
+						summary.mode === "selection" &&
+						(typeof summary.selected !== "number" ||
+							!Number.isSafeInteger(summary.selected) ||
+							summary.selected < 0 ||
+							typeof summary.skipped !== "number" ||
+							!Number.isSafeInteger(summary.skipped) ||
+							summary.skipped < 0)
+					)
+						throw new Error("Invalid cargo-affected selection counts");
+					selection = {
+						tool: "cargo-affected",
+						mode: summary.mode === "selection" ? "affected" : "full",
+						selected: summary.selected ?? undefined,
+						deselected: summary.skipped ?? undefined,
+						reason: native.cache.status,
+						reportPath: selectionPath,
+					};
+				} catch (error) {
+					partial = true;
+					console.warn(`Warning: cargo-affected selection evidence unavailable: ${String(error)}`);
+				}
+			} else {
+				selection = { tool: "cargo-affected", mode: "full", reason: "collect coverage baseline" };
+			}
+		}
+		const notSelected = exitCode === 0 && selection?.mode === "affected" && selection.selected === 0;
+		if (nextestStore && !notSelected) {
 			const profile = process.env.NEXTEST_PROFILE || "default";
 			const source = path.join(nextestStore, profile, "junit.xml");
 			try {
 				if (path.basename(profile) !== profile || profile === "." || profile === "..")
 					throw new Error(`Invalid nextest profile path: ${profile}`);
 				await fs.promises.copyFile(source, reportPath);
+				const junit = await Bun.file(reportPath).text();
+				if (!/<testsuites?(?:\s|>)/.test(junit) || !/<\/testsuites?\s*>/.test(junit))
+					throw new Error("Invalid nextest JUnit report");
 			} catch (error) {
 				partial = true;
 				console.warn(
@@ -365,21 +484,29 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				}
 			} else console.warn("Warning: rustdoc emitted no structured libtest JSON suite; doctest timing is partial.");
 		}
+		if (isNextest && exitCode === 0 && !partial && (!recoveryRequired || collect)) {
+			// A failed/interrupted collection can have stored incomplete coverage.
+			// Only a successful clean collection can make that baseline trustworthy again.
+			await fs.promises.rm(markerPath, { force: true }).catch(error => {
+				console.warn(`Warning: unable to clear Rust recovery marker: ${String(error)}`);
+			});
+		}
 		try {
 			await recordTestProducer({
-				producer: isNextest ? "cargo nextest run" : "cargo test --doc",
+				producer: isNextest ? `cargo affected ${collect ? "collect" : "run"}` : "cargo test --doc",
 				command: argv,
 				scope,
 				startedAt,
 				durationSeconds: (performance.now() - startedMs) / 1000,
 				exitCode,
-				reportPath,
-				status: partial ? "partial" : undefined,
+				reportPath: notSelected ? undefined : reportPath,
+				status: partial ? "partial" : notSelected ? "not-selected" : undefined,
+				selection,
 				timingBasis: isNextest
 					? "nextest native JUnit case time"
 					: "rustdoc libtest JSON exec_time (--report-time)",
 				runnerVersion: toolVersion(
-					isNextest ? [executable, "nextest", "--version"] : ["rustdoc", "--version"],
+					isNextest ? [executable, "affected", "--version"] : ["rustdoc", "--version"],
 					env,
 				),
 			});

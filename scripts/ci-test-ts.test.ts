@@ -3,7 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+	bunCleanBaseline,
 	budgetedParallel,
+	bunTestSelection,
 	isIntegrationCommand,
 	prioritizeLocalCommands,
 	runBoundedPool,
@@ -12,6 +14,89 @@ import {
 import { latestLocalTestProducers, type TestProducerRecord } from "./test-reporting";
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
+
+test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
+	const previous = process.env.OMP_FULLTEST_AFFECTED;
+	const previousDigest = process.env.OMP_FULLTEST_SOURCE_DIGEST;
+	const git = async (...args: string[]) => {
+		const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		const [out, err, code] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(code, err).toBe(0);
+		return out.trim();
+	};
+	try {
+		process.env.OMP_FULLTEST_AFFECTED = "1";
+		delete process.env.OMP_FULLTEST_SOURCE_DIGEST;
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		await git("init", "-q");
+		await git("config", "user.email", "fixture@example.invalid");
+		await git("config", "user.name", "Fixture");
+		await fs.writeFile(path.join(root, "fixture.ts"), "export const value = 1;\n");
+		await fs.writeFile(path.join(root, ".gitignore"), "runs/\n");
+		await git("add", "fixture.ts", ".gitignore");
+		await git("commit", "-qm", "fixture baseline");
+		const revision = await git("rev-parse", "HEAD");
+		const dir = path.join(root, "runs", "test-timing", "fixture");
+		await fs.mkdir(dir, { recursive: true });
+		const report = {
+			scope: "fulltest: full current-platform project suites",
+			completion: "complete",
+			exitCode: 0,
+			dirtyState: "clean",
+			sourceRevision: revision,
+			sourceDigest: "a".repeat(64),
+			platform: process.platform,
+			architecture: process.arch,
+			runtimeVersions: { bun: Bun.version },
+			startedAtUtc: new Date().toISOString(),
+			reconciliation: { status: "validated" },
+			producers: [{ scope: "ci-test-ts:local-ts", exitCode: 0, status: "passed", report: "available" }],
+		};
+		const save = () => fs.writeFile(path.join(dir, "run.json"), JSON.stringify(report));
+		await save();
+		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(true);
+		await fs.writeFile(path.join(root, "new-source.ts"), "export {};\n");
+		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
+		await fs.rm(path.join(root, "new-source.ts"));
+		await fs.appendFile(path.join(root, "fixture.ts"), "// working tree change\n");
+		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
+		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		report.dirtyState = "dirty";
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		process.env.OMP_FULLTEST_SOURCE_DIGEST = "b".repeat(64);
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		process.env.OMP_FULLTEST_SOURCE_DIGEST = "a".repeat(64);
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.dirtyState = "clean";
+		report.producers[0] = {
+			...report.producers[0]!,
+			selection: { mode: "affected" },
+		} as (typeof report.producers)[number];
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers[0] = { scope: "ci-test-ts:local-ts", exitCode: 0, status: "passed", report: "available" };
+		await save();
+		await git("add", "fixture.ts");
+		await git("commit", "-qm", "working tree change");
+		await git("checkout", "-q", "--orphan", "unrelated");
+		await git("add", "fixture.ts");
+		await git("commit", "-qm", "unrelated history");
+		expect((await bunTestSelection(root)).mode).toBe("full");
+	} finally {
+		if (previous === undefined) delete process.env.OMP_FULLTEST_AFFECTED;
+		else process.env.OMP_FULLTEST_AFFECTED = previous;
+		if (previousDigest === undefined) delete process.env.OMP_FULLTEST_SOURCE_DIGEST;
+		else process.env.OMP_FULLTEST_SOURCE_DIGEST = previousDigest;
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 20_000);
 
 test("shared test concurrency limit respects platform and available cores", () => {
 	for (const platform of ["win32", "linux", "darwin"] as const) {
@@ -185,6 +270,7 @@ test("only the latest complete successful same-source fulltest supplies history"
 		startedAt: new Date(now).toISOString(),
 		durationSeconds: 12,
 		exitCode: 0,
+		selection: { tool: "bun", mode: "full" },
 		report: "available",
 	};
 	const put = async (name: string, overrides: object = {}) => {

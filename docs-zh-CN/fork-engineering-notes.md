@@ -27,15 +27,17 @@
 
 ### Fork 门禁与 Dev TUI 分片
 
-- 三层门禁直接运行既有 Bun／Cargo 原语，保留源码快照、预算和失败汇总；slowtest 运行本机 fulltest 及适用的 WSL fulltest。本地 TS、全部仓库脚本、Rust workspace/Nextest/doctest 和本平台适用的 Python 普通 pytest 每轮全量执行，不按 HEAD、upstream 差异、依赖覆盖率或历史 PASS 选测。`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变全量范围；TS 的 `--full` 仅控制详细输出。
-- `bun run test:py` 不再使用 pytest-testmon；Windows 原生的 `test:py` 和 fulltest 完整运行 Python RPC SDK 普通套件，Robomp 因不支持原生 Windows 明确报告跳过，不记为通过。Linux 保留 Robomp 和 Python RPC SDK 两套普通测试。Robomp integration 仍需单独显式启用，Windows 原生调用报告不支持并非零退出，不记为通过。`bun run test:rs` 保留既有 Cargo workspace 与第三方排除，不再接受 `--affected`、`--experimental-affected` 或 `--full` 选择参数。
-- 普通失败继续执行同文件、后续文件及其他独立语言套件，保留首个实际失败退出码；取消、完整性破坏和原有预算到限仍停止本次拥有的工作。每轮生成独立逐用例报告；编译和工具缓存可保留，不缓存测试 PASS 或跳过用例制造第二轮提速。
-- fastcheck、fulltest、slowtest 默认隐藏成功用例、成功分块及成功命令输出，仅显示失败用例和错误诊断；最外层最终状态、耗时、退出码和报告路径保留。`--debug` 不恢复成功用例刷屏。静默只影响呈现，本平台纳入门禁的用例仍实际执行并写入完整 JUnit／计时结果，平台跳过明确报告，首错通知、失败继续、取消与预算不变。
+- 三层门禁直接运行既有 Bun／Cargo 原语，保留源码快照、预算和失败汇总；fastcheck 不运行测试，保留原有工具和增量编译缓存。slowtest 运行本机 fulltest 及适用的 WSL fulltest，各端独立选测并保留固定提交同步；不缓存门禁或完整命令结果，也不引入自建结果缓存框架。
+- fulltest 的 Bun 以 `--changed` 按变更文件及依赖选测，缺少合格完整基线或工具不支持时回退全量；`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变本地范围。Python 普通测试使用 pytest-testmon 的逐用例覆盖数据：Windows 原生只运行 Python RPC SDK，Robomp 平台跳过不记通过；Linux 保留 Robomp 和 Python RPC SDK。Robomp integration 仍需单独显式启用，Windows 原生调用报告不支持并非零退出。
+- `bun run test:rs` 使用 cargo-affected、Cargo 和 Nextest 的逐用例 LLVM 覆盖映射，默认受影响选测，无有效覆盖数据时全量回退；干净工作树 collect 建立基线，`--collect` 显式采集，`--full` 强制全量，不在脏树使用 `--allow-dirty` collect。Cargo doctest 仍完整运行，保留既有 workspace 第三方排除。非 Rust 构建、配置、清单、锁文件、工具链、生成输入与跨语言依赖可能影响 Rust，不能一律忽略；不确定时保守处理。
+- 精准选测的目标是：建立有效基线后只修改源码 A，只重跑直接或间接依赖 A 的测试，独立 B 的测试不执行。Bun 的原生粒度为测试文件，cargo-affected／pytest-testmon 使用逐用例覆盖映射；必须以独立 A／B 源码的真实修改及执行记录验收，不能以修改测试文件或整个 fast／full 命令命中缓存代替。缺失或失效依赖数据时明确报告全量回退。
+- Bun 依赖图及 testmon 运行时覆盖是近似，动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。报告区分本轮实际执行、deselected、not-selected 与未运行，并记录 full／affected、工具及可用的选中数、排除数、基线、原因和报告路径；历史用例耗时不算本轮新执行。普通失败继续其他独立工作，保留首个实际失败退出码；取消、完整性破坏和原预算到限仍停止本次拥有的工作。
+- fastcheck、fulltest、slowtest 默认隐藏成功用例、成功分块及成功命令输出，仅显示失败用例和错误诊断；最外层最终状态、耗时、退出码和报告路径保留。`--debug` 不恢复成功用例刷屏。静默只影响呈现，本轮实际执行的用例写入 JUnit／计时结果，平台跳过明确报告，首错通知、失败继续、取消与预算不变。真实桌面输入仍需单独授权。
 - 手动 CI 只执行构建、打包及其必要准备，不执行单元、集成、冒烟或安装测试，发布只依赖版本元数据、二进制和浏览器扩展构建成功。保留的 `ci:test:*` 名称是显式测试工具，不由工作流调用；本地 fulltest／slowtest 仍须用户明确授权。现有上游显式目标 Bazel 工具和产物保留，不恢复 fork 专用 Bazel 图或引入统一框架。
 - 测试运行器按可用核心数动态限制并发，任务不足时再缩小；Windows 本机 TS 初始完整轮及无合格计时提示时最多 `min(14, 可用核心数)`。只有前次真实 fulltest 完整执行并成功、报告完整校验通过、在 7 天内且平台、架构及 post-native 完整源码指纹一致时，fulltest 的 TS 短任务池才可提升至最多 `min(20, 可用核心数)`；报告缺失、过期、失败、不完整或任何不一致均回退到 14 的上限。Windows Rust Nextest 始终最多 `min(14, 可用核心数)`，Linux 等其他平台维持 `min(28, 可用核心数)`。Bun 的 chunk 池和文件 worker 共用预算，显式配置仍可降低并发。TS 与 Rust 并行时各自并发可能叠加，静态检查并发、测试覆盖、隔离、超时、时间预算及计费保持不变。
-- fulltest 可将合格的既有完整计时报告用于启动排序和资源容量提示；报告缺失、不完整或无对应耗时不妨碍必需测试执行。历史 PASS、缓存或跳过均不能作为本轮通过，所有必需测试每轮完整执行。本地高成本 integration／E2E chunk 同时最多 4 个，仍受 Bun 测试并发上限约束；达到子限制时空余并发继续运行其他可调度工作。原有分片、超时、断言、覆盖及结果合同不变；是否提速和稳定须以实际完整运行验证，尚不能预称通过。
+- fulltest 可将合格的既有完整计时报告用于启动排序和资源容量提示；报告缺失、不完整或无对应耗时不妨碍必需工作执行，历史 PASS 和耗时不算本轮执行。本地高成本 integration／E2E chunk 同时最多 4 个，仍受 Bun 测试并发上限约束；达到子限制时空余并发继续运行其他可调度工作。最终验收要求同一最终源码连续两轮 fastcheck 和 fulltest 均通过，第二轮两条命令各自实际墙钟小于 100 秒；是否满足须以实测证据为准。
 - fulltest 的 TS／Python／隔离 TUI 套件可同时启动；Rust 测试只等待 Rust 静态检查结束，不再等待无关的 TS 静态检查。仓库脚本先运行安全的并行夹具批次，其余脚本仍串行且先于重型套件，保留门禁时钟自测隔离。
-- singleton／全局状态桶按最多 10 文件切成独立进程，每个进程仍以 `--parallel=1` 执行；UI 与 Windows runtime／native 的原有分块隔离不变。明确命名的 E2E／integration chunk 在分片选择后优先启动，减少长任务排队，不改变分片归属或全量覆盖；本地入口不因继承 `CI` 而退回串行。
+- singleton／全局状态桶按最多 10 文件切成独立进程，每个进程仍以 `--parallel=1` 执行；UI 与 Windows runtime／native 的原有分块隔离不变。明确命名的 E2E／integration chunk 在分片选择后优先启动，减少长任务排队，不改变分片归属；本地入口不因继承 `CI` 而退回串行。
 - 功能回归夹具显式启用被测能力：idle maintenance 用例自行开启 recap，仍保留 fork 的默认关闭及显式关闭覆盖；顾问配置验证布局、选择、鼠标操作与工具授权差异，不绑定中英文提示文案。
 - Cursor TLS reset 子进程按退出码与结构化错误事件验证传输合同，stderr 保留为失败诊断，合法的运行时警告不当作协议错误。Rust CLI 选择夹具沿用既有用例／门禁时限，不另设提前终止子进程的 10 秒截止。
 - 受限目录审批夹具从当前选项解析一次允许／拒绝，未知回答仍拒绝执行；不再返回过时的英文标签。SDK 恢复夹具先关闭原 journal 所有者再重开，以模拟进程退出，不能只 flush 后让两个存活 manager 同时占用日志。

@@ -9,10 +9,28 @@ import {
 	reportGateFailure,
 } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
+import { bunNoTestsSelected, bunTestSelection, type BunSelection } from "./ci-test-ts";
 
 observeGateUnhandledFailures();
 
 const args = process.argv.slice(2);
+const changed = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
+if (changed.length > 1 || changed.some(arg => arg === "--changed="))
+	throw new Error("Expected at most one --changed or --changed=<ref> option");
+const selection: BunSelection = changed.length
+	? {
+			tool: "bun",
+			mode: "affected",
+			baseline: changed[0]!.slice("--changed=".length) || undefined,
+			reason: "explicit affected selection",
+		}
+	: await bunTestSelection();
+if (selection.mode === "affected" && !changed.length) args.push(`--changed=${selection.baseline}`);
+console.log(
+	selection.mode === "affected"
+		? `selection=affected-tests-only tool=bun baseline=${selection.baseline ?? "working-tree"}; not full coverage`
+		: `selection=full tool=bun reason=${selection.reason}`,
+);
 const scope =
 	path.relative(path.join(import.meta.dir, ".."), process.cwd()).replaceAll(path.sep, "/") || "repository scripts";
 const run = await beginTestRun(`bun test: ${scope}`);
@@ -30,9 +48,12 @@ try {
 		stderr: "pipe",
 	});
 	const observer = new BunTestFailureObserver(reportGateFailure);
+	let stderrText = "";
+	const decoder = new TextDecoder();
 	const output = (async () => {
 		for await (const bytes of child.stderr) {
 			observer.push(bytes);
+			stderrText += decoder.decode(bytes, { stream: true });
 			process.stderr.write(bytes);
 		}
 		observer.end();
@@ -44,6 +65,7 @@ try {
 		}),
 		output,
 	]);
+	const notSelected = selection.mode === "affected" && exitCode === 0 && bunNoTestsSelected(stderrText);
 	await recordTestProducer({
 		producer: `bun/${scope}`,
 		command,
@@ -52,7 +74,9 @@ try {
 		startedAt,
 		durationSeconds: (performance.now() - started) / 1000,
 		exitCode,
-		reportPath,
+		reportPath: notSelected ? undefined : reportPath,
+		status: notSelected ? "not-selected" : undefined,
+		selection: notSelected ? { ...selection, selected: 0, reason: "Bun reported no affected test files" } : selection,
 		timingBasis: "Bun testcase execution time (seconds)",
 		runnerVersion: Bun.version,
 	});

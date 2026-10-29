@@ -88,7 +88,7 @@
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
-- Run complete local TypeScript, repository-script, Rust/Nextest/doctest and Python suites on every fulltest invocation, without affected-test selection or cached test results.
+- Use native Bun, pytest-testmon and cargo-affected testcase selection for local verification, retaining Rust doctests and reporting affected coverage separately from executed cases.
 - Continue independent tests after failures and retain complete failure reports instead of stopping at the first failing case or chunk.
 - Limit Bun test workers to the smaller of 15 and the available CPU count, sharing the budget across chunks and file workers instead of fixing fulltest to one chunk.
 - Show only failing cases and error diagnostics in the three verification gates, hiding successful cases, chunks and command output while retaining the final status, timings and complete test reports.

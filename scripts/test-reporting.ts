@@ -18,6 +18,16 @@ export interface TestReportRun {
 	sourceDigest?: string;
 }
 
+export interface TestSelection {
+	tool: string;
+	mode: "full" | "affected";
+	selected?: number;
+	deselected?: number;
+	reason?: string;
+	baseline?: string;
+	reportPath?: string;
+}
+
 export interface TestProducerRecord {
 	producer: string;
 	command: string[];
@@ -32,6 +42,7 @@ export interface TestProducerRecord {
 	status?: string;
 	timingBasis?: string;
 	runnerVersion?: string;
+	selection?: TestSelection;
 }
 
 interface HistoryRun {
@@ -101,7 +112,8 @@ export async function latestLocalTestProducers(
 			)
 		)
 			return [];
-		return latest.producers.filter((producer: TestProducerRecord) => producer?.scope === "ci-test-ts:local-ts");
+		const typescript = latest.producers.filter(producer => producer?.scope === "ci-test-ts:local-ts");
+		return typescript.every(producer => producer.selection?.mode === "full") ? typescript : [];
 	} catch {
 		return [];
 	}
@@ -243,6 +255,7 @@ interface ReportReconciliation {
 	status: string;
 	cases?: number;
 	executed?: number;
+	deselected?: number;
 	failures?: number;
 	python?: string;
 	reason?: string;
@@ -250,6 +263,66 @@ interface ReportReconciliation {
 interface ReconciledTestRun {
 	producers: ReportProducer[];
 	reconciliation: ReportReconciliation;
+}
+
+/** Selection evidence is independent of JUnit: omitted tests are never testcase results. */
+async function validSelection(producer: ReportProducer): Promise<boolean> {
+	const selection = producer.selection;
+	const nativeAffected =
+		producer.command?.some(arg => arg === "--testmon" || arg === "--changed" || arg.startsWith("--changed=")) ??
+		false;
+	if (!selection)
+		return producer.status !== "not-selected" && !nativeAffected && !producer.producer.startsWith("cargo affected ");
+	if (
+		!selection.tool ||
+		!["full", "affected"].includes(selection.mode) ||
+		(nativeAffected && selection.mode !== "affected")
+	)
+		return false;
+	for (const count of [selection.selected, selection.deselected]) {
+		if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) return false;
+	}
+	if (
+		selection.tool === "pytest-testmon" &&
+		selection.mode === "affected" &&
+		(selection.selected === undefined || selection.deselected === undefined)
+	)
+		return false;
+	if (selection.tool === "cargo-affected" && selection.reportPath) {
+		try {
+			const native = JSON.parse(await fs.readFile(selection.reportPath, "utf8"));
+			const summary = native.selection?.summary;
+			if (native.schema_version !== 1 || typeof native.cache?.status !== "string") return false;
+			if (selection.mode === "affected") {
+				if (
+					selection.selected === undefined ||
+					selection.deselected === undefined ||
+					summary?.mode !== "selection" ||
+					summary.selected !== selection.selected ||
+					summary.skipped !== selection.deselected
+				)
+					return false;
+			} else if (summary?.mode !== "full-suite-no-listing") return false;
+		} catch {
+			return false;
+		}
+	} else if (selection.tool === "cargo-affected" && selection.mode === "affected") {
+		return false;
+	}
+	if (
+		selection.mode === "affected" &&
+		selection.selected === 0 &&
+		producer.exitCode === 0 &&
+		producer.status !== "not-selected"
+	)
+		return false;
+	if (producer.status === "not-selected") {
+		if (producer.exitCode !== 0 || selection.mode !== "affected" || selection.selected !== 0) return false;
+		if (selection.tool === "bun") return selection.reason === "Bun reported no affected test files";
+		if (selection.tool === "pytest-testmon") return (selection.deselected ?? 0) > 0;
+		return selection.tool === "cargo-affected";
+	}
+	return true;
 }
 
 async function reconcileTestRun(run: TestReportRun, gate?: GateRun): Promise<ReconciledTestRun> {
@@ -275,12 +348,14 @@ for producer in directory.glob("*.producer.json"):
     root = ET.parse(path).getroot()
     if root.tag.rsplit("}", 1)[-1] not in ("testsuite", "testsuites"):
         raise ValueError("not a JUnit suite: " + str(path))
+    producer_cases = 0
     for item in root.iter():
         if item.tag.rsplit("}", 1)[-1] != "testcase":
             continue
         if not item.get("name"):
             raise ValueError("case has no name: " + str(path))
         cases += 1
+        producer_cases += 1
         skipped = any(child.tag.rsplit("}", 1)[-1] == "skipped" for child in item)
         failed = any(child.tag.rsplit("}", 1)[-1] in ("failure", "error") for child in item)
         failures += int(failed)
@@ -290,6 +365,9 @@ for producer in directory.glob("*.producer.json"):
         raw = item.get("time")
         if raw is None or not math.isfinite(float(raw)) or float(raw) < 0:
             raise ValueError("executed case has invalid time: " + str(path))
+    selection = record.get("selection") or {}
+    if selection.get("tool") == "pytest-testmon" and selection.get("selected") != producer_cases:
+        raise ValueError("pytest selection count disagrees with JUnit: " + str(path))
 print(json.dumps({"status": "validated", "cases": cases, "executed": executed, "failures": failures, "python": sys.version.split()[0]}))
 `;
 		try {
@@ -320,7 +398,16 @@ print(json.dumps({"status": "validated", "cases": cases, "executed": executed, "
 		} catch (error) {
 			reconciliation = { status: "unavailable", reason: `XML verifier unavailable: ${String(error)}` };
 		}
+	} else if (producers.some(producer => producer.status === "not-selected")) {
+		reconciliation = { status: "validated", cases: 0, executed: 0, failures: 0 };
 	}
+	if (!(await Promise.all(producers.map(validSelection))).every(Boolean)) {
+		reconciliation = { ...reconciliation, status: "invalid", reason: "Missing or invalid native selection evidence" };
+	}
+	const counts = producers
+		.map(producer => producer.selection?.deselected)
+		.filter((count): count is number => count !== undefined);
+	if (counts.length) reconciliation.deselected = counts.reduce((sum, count) => sum + count, 0);
 	return { producers, reconciliation };
 }
 
@@ -335,13 +422,18 @@ async function writeTestRun(
 		!unreconciledScope &&
 		exitCode === 0 &&
 		reconciliation.status === "validated" &&
-		reconciliation.cases! > 0 &&
+		(reconciliation.cases! > 0 || producers.some(producer => producer.status === "not-selected")) &&
 		reconciliation.failures === 0 &&
-		producers.some(producer => producer.report === "available") &&
+		producers.some(producer => producer.report === "available" || producer.status === "not-selected") &&
 		producers.every(
 			producer =>
-				(producer.report === "available" && producer.status !== "partial" && producer.status !== "unsupported") ||
-				(producer.report === "not-supported" && producer.status === "stage"),
+				producer.exitCode === 0 &&
+				((producer.report === "available" &&
+					producer.status !== "partial" &&
+					producer.status !== "unsupported" &&
+					producer.status !== "failed") ||
+					(producer.report === "not-supported" &&
+						(producer.status === "stage" || producer.status === "not-selected"))),
 		)
 			? "complete"
 			: "partial";
@@ -358,14 +450,7 @@ async function writeRun(
 	completion: string,
 	exitCode: number | null,
 	producers: TestProducerRecord[],
-	reconciliation: {
-		status: string;
-		cases?: number;
-		executed?: number;
-		failures?: number;
-		python?: string;
-		reason?: string;
-	} | null = null,
+	reconciliation: ReportReconciliation | null = null,
 	unreconciledScope: string | null = null,
 ): Promise<void> {
 	await Bun.write(
@@ -395,7 +480,12 @@ async function writeRun(
 				wallSeconds: completion === "running" ? null : (performance.now() - run.startedMs) / 1000,
 				exitCode,
 				completion,
-				coverage: completion === "complete" ? "selected-producers-only" : "partial-or-unverified",
+				coverage:
+					completion === "complete"
+						? producers.some(producer => producer.selection?.mode === "affected")
+							? "affected-tests-only"
+							: "selected-producers-only"
+						: "partial-or-unverified",
 				unreconciledScope,
 				reconciliation,
 				producers,

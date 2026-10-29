@@ -7,11 +7,12 @@ const python = process.platform === "win32" ? "python" : "python3";
 const runner = path.join(import.meta.dir, "test-report-py.ts");
 let available = false;
 try {
-	available = Bun.spawnSync([python, "-c", "import pytest"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
+	available =
+		Bun.spawnSync([python, "-c", "import pytest, testmon"], { stdout: "ignore", stderr: "ignore" }).exitCode === 0;
 } catch {
 	// Optional for the Bun script suite; Python dependencies may not be installed.
 }
-if (!available) console.warn("Skipping Python runner behavior tests: Python or pytest unavailable");
+if (!available) console.warn("Skipping Python runner behavior tests: Python, pytest or pytest-testmon unavailable");
 const roots: string[] = [];
 afterAll(() => {
 	for (const root of roots) fs.rmSync(root, { recursive: true, force: true });
@@ -23,9 +24,11 @@ function fixture() {
 	for (const project of ["sdk/python/omp-rpc", "python/robomp"]) {
 		const dir = path.join(root, project, "tests");
 		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "source_a.py"), "def marker():\n    return 'a'\n");
+		fs.writeFileSync(path.join(dir, "source_b.py"), "def marker():\n    return 'b'\n");
 		fs.writeFileSync(
 			path.join(dir, "test_cases.py"),
-			`import os\n\ndef record(name):\n    with open(os.environ['CASE_LOG'], 'a') as f:\n        f.write('${project}:' + name + '\\n')\n\ndef test_a():\n    record('a')\n\ndef test_b():\n    record('b')\n`,
+			`import os\nimport source_a\nimport source_b\n\ndef record(name):\n    with open(os.environ['CASE_LOG'], 'a') as f:\n        f.write('${project}:' + name + '\\n')\n\ndef test_a():\n    record(source_a.marker())\n\ndef test_b():\n    record(source_b.marker())\n`,
 		);
 	}
 	const smoke = path.join(root, "python/robomp/tests/test_worker_smoke.py");
@@ -69,27 +72,40 @@ const sdkCases = ["sdk/python/omp-rpc:a", "sdk/python/omp-rpc:b"];
 const allCases = windows ? sdkCases : ["python/robomp:a", "python/robomp:b", ...sdkCases].sort();
 
 test.skipIf(!available)(
-	"every ordinary run executes all supported complete suites regardless of CI",
+	"ordinary runs select changed cases and preserve independent integration scope",
 	() => {
 		const root = fixture();
-		// The second invocation must execute the same complete suites again,
-		// rather than consulting pytest's previous-run state or the CI marker.
 		const first = run(root);
 		expect(first.result.exitCode).toBe(0);
 		expect(first.cases).toEqual(allCases);
 		const second = run(root, [], "true");
 		expect(second.result.exitCode).toBe(0);
-		expect(second.cases).toEqual(allCases);
+		expect(second.cases).toEqual([]);
 		for (const invocation of [first, second]) {
 			expect(invocation.reports.map(report => report.report)).toEqual(
 				windows ? ["available"] : ["available", "available"],
 			);
+			expect(invocation.reports.every(report => report.selection?.tool === "pytest-testmon")).toBe(true);
 			if (windows) {
 				expect(invocation.result.stdout.toString()).toContain(
 					"SKIPPED: Robomp tests are unsupported on native Windows.",
 				);
 			}
 		}
+		expect(first.reports.every(report => report.selection.selected > 0 && report.selection.deselected === 0)).toBe(
+			true,
+		);
+		expect(
+			second.reports.every(
+				report =>
+					report.status === "not-selected" && report.selection.selected === 0 && report.selection.deselected > 0,
+			),
+		).toBe(true);
+		const sdkSourceA = path.join(root, "sdk/python/omp-rpc/tests/source_a.py");
+		fs.writeFileSync(sdkSourceA, "def marker():\n    return 'a-changed'\n");
+		const changed = run(root);
+		expect(changed.result.exitCode).toBe(0);
+		expect(changed.cases).toEqual(["sdk/python/omp-rpc:a-changed"]);
 		const execution = run(root, ["integration"]);
 		if (windows) {
 			expect(execution.result.exitCode).not.toBe(0);

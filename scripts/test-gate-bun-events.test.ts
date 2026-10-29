@@ -251,3 +251,79 @@ ${kind === "rejection" ? 'Promise.reject(new Error("fixture unhandled rejection"
 	},
 	15_000,
 );
+
+it("reports affected Bun files and empty selections without fabricating testcases", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-affected-"));
+	const repo = path.join(directory, "repo");
+	const marker = path.join(directory, "executions.txt");
+	await fs.mkdir(repo);
+	const git = async (...args: string[]) => {
+		const proc = Bun.spawn(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+		const [code, stderr] = await Promise.all([proc.exited, new Response(proc.stderr).text()]);
+		expect(code, stderr).toBe(0);
+	};
+	try {
+		await git("init", "-q");
+		await git("config", "user.email", "fixture@example.invalid");
+		await git("config", "user.name", "Fixture");
+		await fs.writeFile(path.join(repo, "A.ts"), "export const value = 1;\n");
+		await fs.writeFile(path.join(repo, "B.ts"), "export const value = 2;\n");
+		await fs.writeFile(
+			path.join(repo, "A.test.ts"),
+			`import { appendFileSync } from "node:fs"; import { expect, test } from "bun:test"; import { value } from "./A"; test("dependent A", () => { appendFileSync(${JSON.stringify(marker)}, \`A:\${value}\\n\`); expect(value).toBeGreaterThan(0); });\n`,
+		);
+		await fs.writeFile(
+			path.join(repo, "B.test.ts"),
+			`import { appendFileSync } from "node:fs"; import { expect, test } from "bun:test"; import { value } from "./B"; test("independent B", () => { appendFileSync(${JSON.stringify(marker)}, \`B:\${value}\\n\`); expect(value).toBeGreaterThan(0); });\n`,
+		);
+		await git("add", ".");
+		await git("commit", "-qm", "fixture baseline");
+		await fs.writeFile(path.join(repo, "A.ts"), "export const value = 3;\n");
+		const invoke = async (report: string) => {
+			const reportDir = path.join(directory, report);
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					path.join(import.meta.dir, "test-report-bun.ts"),
+					"./A.test.ts",
+					"./B.test.ts",
+					"--changed=HEAD",
+				],
+				{
+					cwd: repo,
+					env: {
+						...process.env,
+						OMP_FULLTEST_AFFECTED: "",
+						OMP_GATE_EVENT_TOKEN: "",
+						OMP_GATE_EVENT_FILE: "",
+						OMP_TEST_REPORT_DIR: reportDir,
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect(code, `${stdout}\n${stderr}`).toBe(0);
+			const name = (await fs.readdir(reportDir)).find(entry => entry.endsWith(".producer.json"))!;
+			return JSON.parse(await fs.readFile(path.join(reportDir, name), "utf8"));
+		};
+		const selected = await invoke("selected");
+		expect(selected.selection.mode).toBe("affected");
+		expect(selected.report).toBe("available");
+		expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toEqual(["A:3"]);
+		await git("restore", "A.ts");
+		const unchanged = await invoke("unchanged");
+		expect(unchanged.selection.mode).toBe("affected");
+		expect(unchanged.selection.selected).toBe(0);
+		expect(unchanged.status).toBe("not-selected");
+		expect(unchanged.reportPath).toBeNull();
+		expect(unchanged.report).toBe("not-supported");
+		expect((await fs.readFile(marker, "utf8")).trim().split("\n")).toEqual(["A:3"]);
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 20_000);

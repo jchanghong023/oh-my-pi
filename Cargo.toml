@@ -24,6 +24,30 @@ members = [
 ]
 resolver = "3"
 
+# Inputs outside instrumented Rust test code must explicitly select consumers.
+[[workspace.metadata.affected.rule]]
+globs = ["rust-toolchain.toml", "rust-toolchain", ".cargo/config", ".cargo/config.toml", ".config/nextest.toml", "**/build.rs", "crates/vendor/cfg_aliases/src/**", "crates/vendor/tree-sitter-go/src/**", "crates/vendor/tree-sitter-go/queries/**"]
+filterset = "all()"
+
+[[workspace.metadata.affected.rule]]
+globs = [
+   "crates/pi-ast/src/language/testdata/**",
+   "crates/pi-builtins/src/jq-help.txt",
+   "crates/pi-edit/prompts/**",
+   "crates/pi-edit/grammars/**",
+   "crates/pi-edit/tests/fixtures/**",
+   "crates/pi-natives/fixtures/**",
+   "crates/pi-natives/data/**",
+   "crates/pi-natives/src/**/testdata/**",
+   "crates/pi-natives/src/fonts/**",
+   "crates/pi-natives/src/syntaxes/**",
+   "crates/pi-natives/src/applefm/**",
+   "crates/pi-natives/src/desktop/macos/**",
+   "crates/pi-natives/src/oauth_callback/**",
+   "packages/coding-agent/test/fixtures/docs-v3.sql",
+]
+filterset = "all()"
+
 [workspace.package]
 version = "18.13.3"
 edition = "2024"

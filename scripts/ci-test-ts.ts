@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -39,11 +40,113 @@ interface TestCommand {
 	command: string[];
 	/** `bun test --parallel` width this chunk wants when it has the machine to itself. */
 	parallel?: number;
+	requireNoSelection?: boolean;
+	selection?: BunSelection;
 }
 
 type CodingAgentTestPartition = Record<CodingAgentBucket, string[]>;
 
 const repoRoot = path.join(import.meta.dir, "..");
+
+export interface BunSelection {
+	tool: "bun";
+	mode: "full" | "affected";
+	baseline?: string;
+	reason?: string;
+	selected?: number;
+}
+
+/** A clean full TS baseline lets Bun compare the current worktree against its revision. */
+export async function bunTestSelection(root: string = repoRoot): Promise<BunSelection> {
+	const fallback = { tool: "bun", mode: "full", reason: "no qualifying clean fulltest baseline" } as const;
+	if (process.env.OMP_FULLTEST_AFFECTED !== "1")
+		return { tool: "bun", mode: "full", reason: "full selection requested" };
+	const version = Bun.version.split(".").map(Number);
+	if (version[0]! < 1 || (version[0] === 1 && (version[1]! < 3 || (version[1] === 3 && version[2]! < 13))))
+		return { ...fallback, reason: "Bun does not support --changed" };
+	let entries: Dirent[];
+	try {
+		entries = await fs.readdir(path.join(root, "runs", "test-timing"), { withFileTypes: true });
+	} catch {
+		return fallback;
+	}
+	const candidates: { revision: string; started: number }[] = [];
+	for (const entry of entries) {
+		if (!entry.isDirectory()) continue;
+		try {
+			const run = JSON.parse(
+				await fs.readFile(path.join(root, "runs", "test-timing", entry.name, "run.json"), "utf8"),
+			);
+			const producers = Array.isArray(run.producers)
+				? run.producers.filter((producer: TestProducerRecord) => producer.scope === "ci-test-ts:local-ts")
+				: [];
+			if (
+				run.scope !== "fulltest: full current-platform project suites" ||
+				!["complete", "partial"].includes(run.completion) ||
+				run.exitCode !== 0 ||
+				run.dirtyState !== "clean" ||
+				run.platform !== process.platform ||
+				run.architecture !== process.arch ||
+				run.runtimeVersions?.bun !== Bun.version ||
+				run.reconciliation?.status !== "validated" ||
+				!Array.isArray(run.producers) ||
+				!producers.length ||
+				!producers.every(
+					(producer: TestProducerRecord & { report?: string }) =>
+						producer.exitCode === 0 &&
+						producer.status === "passed" &&
+						producer.report === "available" &&
+						producer.selection?.mode !== "affected",
+				) ||
+				!/^[a-f0-9]{40,64}$/i.test(run.sourceRevision ?? "") ||
+				!Number.isFinite(Date.parse(run.startedAtUtc))
+			)
+				continue;
+			candidates.push({ revision: run.sourceRevision, started: Date.parse(run.startedAtUtc) });
+		} catch {
+			// Unreadable reports are not baselines.
+		}
+	}
+	candidates.sort((a, b) => b.started - a.started);
+	for (const candidate of candidates) {
+		try {
+			const child = Bun.spawn(["git", "merge-base", "--is-ancestor", candidate.revision, "HEAD"], {
+				cwd: root,
+				stdout: "ignore",
+				stderr: "ignore",
+			});
+			if ((await child.exited) === 0) return { tool: "bun", mode: "affected", baseline: candidate.revision };
+		} catch {
+			return { ...fallback, reason: "Git unavailable to validate baseline" };
+		}
+	}
+	return fallback;
+}
+/** Consolidation is safe only when Git confirms that the baseline is the entire current tree. */
+export async function bunCleanBaseline(selection: BunSelection, root = repoRoot): Promise<boolean> {
+	if (selection.mode !== "affected" || !selection.baseline) return false;
+	try {
+		const git = async (...args: string[]) => {
+			const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "ignore" });
+			const [output, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+			return code === 0 ? output : undefined;
+		};
+		const [head, status] = await Promise.all([
+			git("rev-parse", "HEAD"),
+			git("status", "--porcelain=v1", "--untracked-files=all"),
+		]);
+		return head?.trim() === selection.baseline && status === "";
+	} catch {
+		return false;
+	}
+}
+
+export function bunNoTestsSelected(output: string): boolean {
+	const plain = output.replaceAll(/\x1b\[[0-9;]*m/g, "");
+	return /--changed:\s*(?:no changed files, nothing to run|\d+ changed files?, but no test files are affected)/.test(
+		plain,
+	);
+}
 const args = process.argv.slice(2);
 const isDryRun = args.includes("--dry-run");
 const requestedMode = args.find(arg => !arg.startsWith("--")) ?? "all";
@@ -453,6 +556,7 @@ async function recordAttempt(
 	durationSeconds: number,
 	exitCode: number,
 	timedOut: boolean,
+	output: string,
 ): Promise<boolean> {
 	let missing = false;
 	if (reportPath) {
@@ -463,6 +567,9 @@ async function recordAttempt(
 			missing = true;
 		}
 	}
+	const notSelected =
+		exitCode === 0 && !timedOut && testCommand.selection?.mode === "affected" && bunNoTestsSelected(output);
+	if (notSelected) missing = false;
 	const partial = missing || timedOut || exitCode >= 128;
 	try {
 		await recordTestProducer({
@@ -475,8 +582,19 @@ async function recordAttempt(
 			startedAt,
 			durationSeconds,
 			exitCode,
-			reportPath,
-			status: reportPath ? (partial ? "partial" : exitCode === 0 ? "passed" : "failed") : "stage",
+			reportPath: notSelected ? undefined : reportPath,
+			status: notSelected
+				? "not-selected"
+				: reportPath
+					? partial
+						? "partial"
+						: exitCode === 0
+							? "passed"
+							: "failed"
+					: "stage",
+			selection: notSelected
+				? { ...testCommand.selection!, selected: 0, reason: "Bun reported no affected test files" }
+				: testCommand.selection,
 			timingBasis: "Bun testcase execution time (seconds); durationSeconds is command wall time",
 		});
 	} catch (error) {
@@ -512,12 +630,15 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		});
 		const failureObserver = gateReportsFailures ? new BunTestFailureObserver(reportGateFailure) : undefined;
 		const stderrReader = proc.stderr.getReader();
+		let stderrText = "";
+		const decoder = new TextDecoder();
 		const stderrDrain = (async () => {
 			try {
 				for (;;) {
 					const { done, value } = await stderrReader.read();
 					if (done) break;
 					failureObserver?.push(value);
+					stderrText += decoder.decode(value, { stream: true });
 					process.stderr.write(value);
 				}
 			} catch {
@@ -551,6 +672,11 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 		} finally {
 			clearTimeout(drainTimer);
 		}
+		const unexpectedSelection =
+			testCommand.requireNoSelection &&
+			exitCode === 0 &&
+			!/--changed:\s*no changed files, nothing to run/.test(stderrText.replaceAll(/\x1b\[[0-9;]*m/g, ""));
+		const recordedExitCode = unexpectedSelection ? 1 : exitCode;
 		const missing = await recordAttempt(
 			testCommand,
 			attempt,
@@ -558,9 +684,13 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			reportPath,
 			startedAt,
 			(performance.now() - start) / 1000,
-			exitCode,
+			recordedExitCode,
 			timedOut,
+			stderrText,
 		);
+		if (unexpectedSelection) {
+			throw new GateCommandError("Bun did not confirm an empty affected selection", 1);
+		}
 		if (exitCode === 0) {
 			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 			return;
@@ -1123,6 +1253,7 @@ async function runTestCommandsInParallel(
 			(performance.now() - start) / 1000,
 			exitCode,
 			timedOut,
+			`${stdout.text}${stderr.text}`,
 		);
 		if (missing && exitCode === 0) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 		return {
@@ -1310,7 +1441,43 @@ if (import.meta.main) {
 		}
 	}
 	const localMode = requestedMode === "local" || requestedMode === "local-ts";
-	const requestedCommands = localMode ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	let requestedCommands = localMode ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
+	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
+		throw new Error("Expected at most one --changed or --changed=<ref> option");
+	const selection: BunSelection = changedArgs.length
+		? {
+				tool: "bun",
+				mode: "affected",
+				baseline: changedArgs[0]!.slice("--changed=".length) || undefined,
+				reason: "explicit affected selection",
+			}
+		: localMode
+			? await bunTestSelection()
+			: { tool: "bun", mode: "full", reason: "full selection requested" };
+	if (requestedMode === "local-ts" && !changedArgs.length && (await bunCleanBaseline(selection))) {
+		// Bun itself confirms the zero-file selection; the explicit safe file keeps
+		// desktop input excluded even if the worktree changes before it starts.
+		requestedCommands = [
+			{
+				label: "Bun native empty affected selection",
+				cwd: ".",
+				command: ["bun", "test", ...onlyFailuresArgs, "./scripts/ci-test-ts.test.ts"],
+				parallel: 1,
+				requireNoSelection: true,
+			},
+		];
+	}
+	console.log(
+		selection.mode === "affected"
+			? `selection=affected-tests-only tool=bun baseline=${selection.baseline ?? "working-tree"}; not full coverage`
+			: `selection=full tool=bun reason=${selection.reason}`,
+	);
+	for (const command of requestedCommands) {
+		if (command.parallel === undefined) continue;
+		command.selection = selection;
+		if (selection.mode === "affected") command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
+	}
 	// Prioritize within the selected shard, without changing shard membership.
 	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));
 	const digest =

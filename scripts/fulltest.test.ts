@@ -167,6 +167,8 @@ describe("fulltest source snapshot checkpoints", () => {
 		};
 		let mutated = false;
 		let testsRun = false;
+		let scriptEnv: Record<string, string | undefined> | undefined;
+		let tsAffected: string | undefined;
 		let childDigest: string | undefined;
 		const report = { owner: true } as TestReportRun;
 		const mutate = () => {
@@ -214,10 +216,14 @@ describe("fulltest source snapshot checkpoints", () => {
 						if (commands.some(command => command.label === "build/native")) {
 							if (interval === "native") mutate();
 						} else if (commands.some(command => command.label.startsWith("test/repository scripts "))) {
+							scriptEnv = commands.find(command => command.label.startsWith("test/repository scripts "))?.env;
 							if (interval === "scripts") mutate();
 						} else {
 							const typescript = commands.find(command => command.label === "test/TypeScript full suite");
-							if (typescript) childDigest = typescript.env?.OMP_FULLTEST_SOURCE_DIGEST;
+							if (typescript) {
+								childDigest = typescript.env?.OMP_FULLTEST_SOURCE_DIGEST;
+								tsAffected = typescript.env?.OMP_FULLTEST_AFFECTED;
+							}
 							if (commands.some(command => command.label.startsWith("test/"))) testsRun = true;
 							if (interval === "tests") mutate();
 						}
@@ -229,7 +235,7 @@ describe("fulltest source snapshot checkpoints", () => {
 			failure = error;
 		}
 		expect(mutated).toBe(true);
-		return { failure, testsRun, childDigest, report };
+		return { failure, testsRun, childDigest, tsAffected, scriptEnv, report };
 	}
 
 	for (const interval of ["preparation", "native", "scripts", "tests"] as const) {
@@ -256,11 +262,16 @@ describe("fulltest source snapshot checkpoints", () => {
 	});
 
 	test("allows native binding regeneration and still executes the full test plan", async () => {
-		const { failure, testsRun, childDigest, report } = await exercise("bindings", "native");
+		const { failure, testsRun, childDigest, tsAffected, scriptEnv, report } = await exercise("bindings", "native");
 		expect(failure).toBeUndefined();
 		expect(testsRun).toBe(true);
 		expect(childDigest).toBe("changed-digest");
 		expect(report.sourceDigest).toBe("changed-digest");
+		expect(report.sourceRevision).toBe("initial-head");
+		expect(report.dirtyState).toBe("dirty");
+		expect(tsAffected).toBe("1");
+		expect(scriptEnv?.OMP_FULLTEST_AFFECTED).toBe("1");
+		expect(scriptEnv?.OMP_FULLTEST_SOURCE_DIGEST).toBe("changed-digest");
 	});
 });
 
