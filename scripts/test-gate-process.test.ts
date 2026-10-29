@@ -536,14 +536,12 @@ await import(${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gat
 	},
 );
 
-it.skipIf(process.platform !== "linux")(
-	"refuses readiness and reports a missing tool when proc task children is unavailable",
-	async () => {
-		const prefix = path.join(directory, "missing-proc-children");
-		const preload = `${prefix}-preload.ts`;
-		await fs.writeFile(
-			preload,
-			`
+it.skipIf(process.platform !== "linux")("starts the command when proc task children is unavailable", async () => {
+	const prefix = path.join(directory, "missing-proc-children");
+	const preload = `${prefix}-preload.ts`;
+	await fs.writeFile(
+		preload,
+		`
 import { spyOn } from "bun:test";
 import * as syncFs from "node:fs";
 import * as fs from "node:fs/promises";
@@ -560,50 +558,42 @@ spyOn(fs, "readFile").mockImplementation((file, ...args) => {
   return readFile(file, ...args);
 });
 `,
-		);
-		const messages: unknown[] = [];
-		const commandMarker = `${prefix}.started`;
-		const child = Bun.spawn(
-			[process.execPath, "--preload", preload, path.join(import.meta.dir, "test-gate-supervisor.ts")],
-			{
-				env: {
-					...process.env,
-					OMP_GATE_SUPERVISED_COMMAND: JSON.stringify([
-						process.execPath,
-						"--eval",
-						`await Bun.write(${JSON.stringify(commandMarker)}, "started");`,
-					]),
-				},
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-				ipc(message: unknown) {
-					messages.push(message);
-					if (message && typeof message === "object" && "ready" in message && message.ready === true)
-						child.send("start");
-				},
+	);
+	const messages: unknown[] = [];
+	const commandMarker = `${prefix}.started`;
+	const child = Bun.spawn(
+		[process.execPath, "--preload", preload, path.join(import.meta.dir, "test-gate-supervisor.ts")],
+		{
+			env: {
+				...process.env,
+				OMP_GATE_SUPERVISED_COMMAND: JSON.stringify([
+					process.execPath,
+					"--eval",
+					`await Bun.write(${JSON.stringify(commandMarker)}, "started");`,
+				]),
 			},
-		);
-		const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
-		try {
-			expect(await within(child.exited)).not.toBe(0);
-			const [, stderr] = await output;
-			expect(stderr).toContain("CONFIG_PROC_CHILDREN");
-			expect(messages).toEqual([
-				{
-					exitCode: 127,
-					error: expect.stringContaining("MISSING_TOOL"),
-					missing: true,
-				},
-			]);
-			expect(await Bun.file(commandMarker).exists()).toBe(false);
-		} finally {
-			if (child.exitCode === null) child.kill("SIGKILL");
-			await child.exited;
-			await output;
-		}
-	},
-);
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			ipc(message: unknown) {
+				messages.push(message);
+				if (message && typeof message === "object" && "ready" in message && message.ready === true)
+					child.send("start");
+			},
+		},
+	);
+	const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+	try {
+		expect(await within(child.exited)).toBe(0);
+		await output;
+		expect(messages).toContainEqual(expect.objectContaining({ ready: true }));
+		expect(await Bun.file(commandMarker).exists()).toBe(true);
+	} finally {
+		if (child.exitCode === null) child.kill("SIGKILL");
+		await child.exited;
+		await output;
+	}
+});
 
 it.skipIf(process.platform !== "linux")(
 	"reclaims owned descendants when a task exits after the proc task snapshot",

@@ -1,6 +1,5 @@
 import { dlopen, FFIType, ptr } from "bun:ffi";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { terminateOwnedSubprocess } from "../packages/utils/src/subprocess";
 import { openGateLibc } from "./test-gate-libc";
@@ -440,7 +439,7 @@ function openLinuxSignals(): LinuxSignalLibrary {
 }
 let linuxSignals: LinuxSignalLibrary | undefined;
 
-/** Refuse work before readiness without safe pidfd ownership and child enumeration. */
+/** Refuse work before readiness without safe pidfd signaling. */
 export function assertLinuxGateSignals(): void {
 	const symbols = (linuxSignals ??= openLinuxSignals()).symbols;
 	const required =
@@ -452,21 +451,6 @@ export function assertLinuxGateSignals(): void {
 		if (Number(symbols.syscall(424, fd, 0, 0, 0)) !== 0) throw new Error(`${required}: pidfd_send_signal failed`);
 	} finally {
 		symbols.close(fd);
-	}
-	// The main task cannot exit while this synchronous probe runs. ENOENT here
-	// means the kernel lacks the interface, not the normal disappearing-task race
-	// that descendant traversal must tolerate after readiness.
-	try {
-		readFileSync(`/proc/self/task/${process.pid}/children`, "utf8");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT")
-			throw Object.assign(
-				new Error("MISSING_TOOL: Safe Linux gate ownership requires proc task children (CONFIG_PROC_CHILDREN)", {
-					cause: error,
-				}),
-				{ code: "ENOENT" },
-			);
-		throw error;
 	}
 }
 async function signalLinuxIdentity(entry: LinuxIdentity, signal: number): Promise<boolean> {
