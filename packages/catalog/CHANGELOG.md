@@ -4,6 +4,7 @@
 
 ### Added
 
+- Added `company/GLM-5.3-public` to the built-in offline intranet model catalog.
 - Added six built-in Ascend models, available with `ASCEND_API_KEY` without a custom `models.yml`.
 
 ### Removed

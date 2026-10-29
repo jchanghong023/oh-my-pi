@@ -8,6 +8,7 @@ interface CompanyProbe {
 	models: Model<"anthropic-messages">[];
 	capped: Model<"anthropic-messages">[];
 	roles: Record<string, string>;
+	selectedModel: string;
 	companyKey: string;
 	credentialKey: string;
 	resolvedKey: string;
@@ -90,11 +91,12 @@ function runCompanyProbe(): CompanyProbe {
 				const registry = new ModelRegistry(authStorage, ${JSON.stringify(modelsFile)}, { settings });
 				await registry.refresh("offline");
 				const available = registry.getAvailable();
-				const model = registry.find("company", "Qwen3.6-27B-public");
+				const model = registry.find("company", "GLM-5.3-public");
 				if (!model) throw new Error("company model missing");
 				const companyKey = await registry.getApiKey(model);
 				const result = {
 					models,
+					selectedModel: resolveSessionModelSelector(registry, "company/GLM-5.3-public")?.model.id,
 					capped: registry.getAll().filter(row => row.provider === "company"),
 					roles: Object.fromEntries(Object.keys(COMPANY_OFFLINE_ROLE_DEFAULTS).map(role => [role,
 						resolveModelRoleValue("@" + role, available, { settings }).model?.id])),
@@ -171,7 +173,8 @@ function runCompanyProbe(): CompanyProbe {
 describe("company runtime catalog and request auth", () => {
 	test("resolves the fixed chat lane and roles without discovery or YAML routing overrides", () => {
 		const result = runCompanyProbe();
-		expect(result.capped).toHaveLength(6);
+		expect(result.capped).toHaveLength(7);
+		expect(result.selectedModel).toBe("GLM-5.3-public");
 		expect(result.retrievalVisible).toBe(false);
 		expect(result.requests).toBe(0);
 		expect(result.roles).toEqual({
@@ -197,6 +200,11 @@ describe("company runtime catalog and request auth", () => {
 			tokenizer: "deepseek-v3",
 		});
 		expect(byId.get("GLM-5.2-public")).toMatchObject({ contextWindow: 1_000_000, tokenizer: "glm5" });
+		expect(byId.get("GLM-5.3-public")).toMatchObject({
+			contextWindow: 1_000_000,
+			tokenizer: "glm5",
+			input: ["text"],
+		});
 		expect(byId.get("MiniMax-M2.7")?.contextWindow).toBe(204_800);
 		for (const id of ["Qwen3.6-27B-public", "Qwen3.6-35B-A3B", "Qwen3.8-27B"]) {
 			expect(byId.get(id)).toMatchObject({ contextWindow: 262_144, tokenizer: "qwen3", input: ["text", "image"] });
