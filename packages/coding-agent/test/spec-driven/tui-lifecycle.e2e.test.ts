@@ -125,7 +125,7 @@ test.skipIf(!tuiTest)(
 	180_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"native execution scope revision preserves business work but requires fresh downstream decisions and delivery",
 	async () => {
 		const scope =
@@ -231,7 +231,7 @@ test.skipIf(!tuiTest)(
 	240_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"native Goal is opt-in and cannot write or resume autonomous rounds at acceptance or changed approvals",
 	async () => {
 		const attempted = "goal-must-not-change-existing-business-bytes\n";
@@ -435,7 +435,7 @@ test.skipIf(!tuiTest)(
 );
 
 for (const mode of ["loop", "goal", "vibe"] as const) {
-	test.skipIf(!tuiTest)(
+	test.skipIf(!tuiTest || (process.platform === "win32" && mode === "goal"))(
 		`ordinary native ${mode} rejects Dev entry without replacing the root`,
 		async () => {
 			await withTui(

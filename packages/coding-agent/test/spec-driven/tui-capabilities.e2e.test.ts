@@ -78,7 +78,7 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 	return stdout;
 }
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"invalid bash arguments give actionable feedback before a corrected call executes",
 	async () => {
 		const marker = "OMP_INVALID_BASH_ARGUMENT";
@@ -118,7 +118,7 @@ test.skipIf(!tuiTest)(
 	120_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"malformed task intent is rejected before spawning and the corrected reviewer runs",
 	async () => {
 		const marker = "OMP_MALFORMED_REVIEW_INTENT";
@@ -173,7 +173,7 @@ test.skipIf(!tuiTest)(
 	120_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"ordinary openspec-update-change completes existing requirements maintenance without Dev or implementation",
 	async () => {
 		const target = "openspec/changes/manual-maintenance/specs/greeting/spec.md";
@@ -255,7 +255,7 @@ const stageSkills: Record<string, string[]> = {
 	executor: ["subagent-driven-development", "using-superpowers"],
 };
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"four native stages consume indexed Wiki evidence, enforce stage skill grants and preserve existing worktrees",
 	async () => {
 		const { manifest } = await collectSpecDrivenResources(

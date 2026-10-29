@@ -34,6 +34,8 @@ describe("AdvisorConfigOverlayComponent", () => {
 		notify: () => {},
 	};
 	const strip = (lines: readonly string[]): string => lines.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+	const preview = (frame: readonly string[]): string =>
+		frame.map(line => strip([line]).split("│")[2] ?? "").join("\n");
 	const make = (doc: WatchdogConfigDoc, extra?: Partial<AdvisorConfigDeps>): AdvisorConfigOverlayComponent =>
 		new AdvisorConfigOverlayComponent({} as unknown as TUI, { ...deps, ...extra }, "project", doc, callbacks);
 	const fullHeight = Math.max(14, process.stdout.rows || 40);
@@ -53,16 +55,11 @@ describe("AdvisorConfigOverlayComponent", () => {
 		// Fills the screen top-to-bottom (the fix for the bottom-anchored frame
 		// whose offset broke mouse hit-testing and wasted the upper space).
 		expect(frame.length).toBe(fullHeight);
-		const text = strip(frame);
-		expect(text).toContain("Advisor configuration");
-		expect(text).toContain("project");
-		expect(text).toContain("Architecture");
-		expect(text).toContain("Security");
-		expect(text).toContain("+ Add advisor");
-		expect(text).toContain("Save & apply");
-		// Right preview reflects the highlighted (first) advisor.
-		expect(text).toContain("x-ai/grok-code-fast:high");
-		expect(text).toContain("read, grep, glob (default)");
+		for (const line of frame) expect(Bun.stringWidth(line)).toBe(200);
+		const firstRow = strip([frame[1]!]);
+		const rosterColumn = firstRow.indexOf("Architecture");
+		expect(rosterColumn).toBeGreaterThan(0);
+		expect(firstRow.lastIndexOf("Architecture")).toBeGreaterThan(rosterColumn);
 	});
 
 	it("renders an explicit no-tools advisor distinctly from the omitted default", async () => {
@@ -70,12 +67,13 @@ describe("AdvisorConfigOverlayComponent", () => {
 		if (!uiTheme) throw new Error("theme unavailable");
 		setThemeInstance(uiTheme);
 		const overlay = make({
-			advisors: [{ name: "Blank", tools: [] }],
+			advisors: [{ name: "Default" }, { name: "Blank", tools: [] }],
 		});
 
-		const text = strip(overlay.render(200));
-		expect(text.toLowerCase()).toContain("no tools");
-		expect(text).not.toContain("read, grep, glob (default)");
+		expect(preview(overlay.render(200))).toContain("read, grep, glob");
+		overlay.handleInput("\x1b[B");
+		const noTools = preview(overlay.render(200));
+		for (const tool of deps.defaultToolNames) expect(noTools).not.toContain(tool);
 	});
 
 	it("moves the preview with keyboard selection and preserves an explicit tool set", async () => {
@@ -99,12 +97,13 @@ describe("AdvisorConfigOverlayComponent", () => {
 		// the first body row (0-based screen row 1 → SGR 1-based row 2).
 		overlay.render(120);
 		overlay.handleInput("\x1b[<0;4;2M"); // left-button press, col 4, row 2
-		const text = strip(overlay.render(120));
-		expect(text).toContain("Editing");
-		expect(text).toContain("Architecture");
+		overlay.handleInput("\x1b[B"); // Enabled toggle, only reachable after opening detail.
+		overlay.handleInput("\r");
+		overlay.handleInput("\x1b"); // Return to the roster.
+		expect(strip(overlay.render(120))).toContain("○ Architecture");
 	});
 
-	it("shows disabled advisors with a dim circle marker and toggles them in the detail editor", async () => {
+	it("distinguishes disabled advisors from enabled advisors in the roster", async () => {
 		const uiTheme = await getThemeByName("dark");
 		if (!uiTheme) throw new Error("theme unavailable");
 		setThemeInstance(uiTheme);
@@ -118,7 +117,5 @@ describe("AdvisorConfigOverlayComponent", () => {
 		// The list shows ● for enabled and ○ for disabled.
 		expect(text).toContain("● Active");
 		expect(text).toContain("○ Disabled");
-		// The preview of the highlighted (first) advisor shows its enabled status.
-		expect(text).toContain("● on");
 	});
 });

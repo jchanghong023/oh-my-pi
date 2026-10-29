@@ -10,12 +10,9 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
-// Switching the active model (Ctrl+P role cycling, /models selection) must be a
-// cheap, synchronous operation. It used to call the async `getApiKey`, which can
-// block the event loop on a command-backed key program (`execSync`) or stall on
-// a network OAuth refresh. The real key is resolved lazily per request via the
-// resolver, so the switch only needs a synchronous "is a credential configured"
-// pre-flight (`hasConfiguredAuth`) — never the resolver.
+// Model selection uses the cheap configured-auth check first. If no configured
+// credential is found, it also checks request-local authorization via the
+// execution auth resolver before rejecting the selection.
 describe("AgentSession model switch auth pre-flight", () => {
 	let sharedDir: TempDir;
 	let authStorage: AuthStorage;
@@ -121,17 +118,35 @@ describe("AgentSession model switch auth pre-flight", () => {
 		expect(getApiKeySpy).not.toHaveBeenCalled();
 	});
 
-	it("rejects the switch synchronously when no credential is configured, without calling the resolver", async () => {
+	it("accepts a credential resolved when configured auth is unavailable", async () => {
 		const from = modelOrThrow("claude-sonnet-4-5");
 		const to = modelOrThrow("claude-sonnet-4-6");
 		const s = makeSession(from);
 
-		const getApiKeySpy = spyOn(registry, "getApiKey");
+		const getApiKeySpy = spyOn(registry, "getApiKey").mockResolvedValue("request-key");
+		const hasAuthSpy = spyOn(registry, "hasConfiguredAuth").mockReturnValue(false);
+		spies.push(getApiKeySpy, hasAuthSpy);
+
+		await s.setModel(to);
+		expect(s.model?.id).toBe(to.id);
+		expect(hasAuthSpy).toHaveBeenCalledWith(to);
+		expect(getApiKeySpy).toHaveBeenCalledTimes(1);
+		expect(getApiKeySpy).toHaveBeenCalledWith(to, s.sessionId, expect.any(Object));
+	});
+
+	it("rejects the switch when neither configured nor request-local auth is available", async () => {
+		const from = modelOrThrow("claude-sonnet-4-5");
+		const to = modelOrThrow("claude-sonnet-4-6");
+		const s = makeSession(from);
+
+		const getApiKeySpy = spyOn(registry, "getApiKey").mockResolvedValue(undefined);
 		const hasAuthSpy = spyOn(registry, "hasConfiguredAuth").mockReturnValue(false);
 		spies.push(getApiKeySpy, hasAuthSpy);
 
 		await expect(s.setModel(to)).rejects.toThrow(/No API key/);
 		expect(s.model?.id).toBe(from.id);
-		expect(getApiKeySpy).not.toHaveBeenCalled();
+		expect(hasAuthSpy).toHaveBeenCalledWith(to);
+		expect(getApiKeySpy).toHaveBeenCalledTimes(1);
+		expect(getApiKeySpy).toHaveBeenCalledWith(to, s.sessionId, expect.any(Object));
 	});
 });

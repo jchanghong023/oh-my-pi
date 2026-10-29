@@ -2,6 +2,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "b
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent, resetThinkingSpeedTracker } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { setTerminalImageProtocol, TERMINAL } from "@oh-my-pi/pi-tui";
 
@@ -51,6 +55,15 @@ afterEach(() => {
 	resetSettingsForTest();
 	setTerminalImageProtocol(originalImageProtocol);
 });
+
+function useDetailedDisplay() {
+	let previous: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previous));
+}
 
 describe("AssistantMessageComponent error rendering", () => {
 	// A proxy 502 returns its own HTML page as the body; AnthropicApiError folds
@@ -103,6 +116,8 @@ describe("AssistantMessageComponent error rendering", () => {
 });
 
 describe("AssistantMessageComponent hidden thinking rendering", () => {
+	useDetailedDisplay();
+
 	function thinkingMessage(): AssistantMessage {
 		return {
 			role: "assistant",
@@ -140,6 +155,8 @@ describe("AssistantMessageComponent hidden thinking rendering", () => {
 });
 
 describe("AssistantMessageComponent streaming thinking pulse", () => {
+	useDetailedDisplay();
+
 	// The in-flight streaming partial always carries stopReason "stop" (proxy.ts
 	// seeds it), so "still streaming" is keyed off the block not yet being
 	// finalized — a live component is constructed with no message.

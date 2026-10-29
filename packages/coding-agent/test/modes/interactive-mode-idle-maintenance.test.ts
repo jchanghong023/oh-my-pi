@@ -31,7 +31,13 @@ const RECAP = "Reworked the login flow; next: wire the focused token-refresh tes
 const WORKER_RECAP = "The worker is mid-way through the migration; next: run the backfill.";
 /** `recap.idleSeconds` is set explicitly, to the smallest delay the scheduler allows, never inherited from a default. */
 const RECAP_DELAY_MS = 1_000;
-const RECAP_SETTINGS = { "compaction.enabled": false, "todo.reminders": false, "recap.idleSeconds": 1 };
+const RECAP_SETTINGS = {
+	"compaction.enabled": false,
+	"todo.reminders": false,
+	"composer.predictions": false,
+	"recap.enabled": true,
+	"recap.idleSeconds": 1,
+};
 
 /** The providers of one session: `main` answers its turns, `side` its idle recaps. Both record every request. */
 interface Models {

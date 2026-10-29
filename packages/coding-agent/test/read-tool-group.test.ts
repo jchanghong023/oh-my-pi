@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
 import * as url from "node:url";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -6,6 +6,10 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import "@oh-my-pi/pi-coding-agent/internal-urls/router";
 
 import { ReadToolGroupComponent, readArgsCollapseIntoGroup } from "@oh-my-pi/pi-tui/chat/read-tool-group";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { cfgReadToolResultPreview } from "@oh-my-pi/pi-coding-agent/tools/settings";
 import { cfgTuiHyperlinks } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -21,13 +25,19 @@ function extractLinkTexts(text: string): string[] {
 }
 
 describe("ReadToolGroupComponent", () => {
+	let previousPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeAll(async () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		await themeModule.initTheme(false, undefined, undefined, "dark", "light");
 	});
 
+	beforeEach(() => {
+		previousPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
 	afterEach(() => {
+		setChatTranscriptDisplayPreferences(previousPreferences);
 		cfgTuiHyperlinks.clearOverride(settings);
 		vi.restoreAllMocks();
 	});

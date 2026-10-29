@@ -45,6 +45,7 @@ import { ToolActivityContainer } from "@oh-my-pi/pi-tui/chrome/tool-activity";
 import {
 	isSettledJobFrame,
 	parksAsBackground,
+	settledBashCards,
 	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
@@ -338,7 +339,7 @@ export class UiHelpers {
 			case "custom": {
 				if (message.display) {
 					if (message.customType === "async-result") {
-						const component = buildAsyncResultBlock(message);
+						const component = buildAsyncResultBlock(message, settledBashCards(this.ctx.chatContainer.children));
 						this.ctx.chatContainer.addChild(component);
 						break;
 					}
@@ -761,6 +762,7 @@ export class UiHelpers {
 							{ content: [{ type: "text", text: errorMessage }], isError: true },
 							false,
 							content.id,
+							true,
 						);
 					} else {
 						this.ctx.pendingTools.set(content.id, component);
@@ -848,6 +850,9 @@ export class UiHelpers {
 				// Match tool results to pending tool components
 				const component = this.ctx.pendingTools.get(message.toolCallId);
 				if (component) {
+					if (message.toolName === "wait" && component instanceof ToolExecutionComponent) {
+						component.setSettledBashJobs(() => settledBashCards(this.ctx.chatContainer.children));
+					}
 					const jobId = (message.details as { async?: { jobId?: string } } | undefined)?.async?.jobId;
 					const frame = activeToolExecutionUpdates.find(
 						event => event.toolCallId === message.toolCallId,
@@ -870,7 +875,11 @@ export class UiHelpers {
 					} else if (frame && isBackground) {
 						component.updateResult(frame, true, message.toolCallId);
 					} else {
-						component.updateResult(message, isBackground, message.toolCallId);
+						if (component instanceof ToolExecutionComponent) {
+							component.updateResult(message, isBackground, message.toolCallId, true);
+						} else {
+							component.updateResult(message, isBackground, message.toolCallId);
+						}
 					}
 					if (isBackground && !settled) {
 						component.parkAsBackground();

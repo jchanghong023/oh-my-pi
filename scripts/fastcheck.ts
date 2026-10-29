@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import { runBazelCommands } from "./test-gate-bazel";
+import { runGateCommands } from "./test-gate-scheduler";
 
 export const gateRepoRoot = path.resolve(import.meta.dir, "..");
 
@@ -42,13 +42,6 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 			label: "static/Rust fmt+clippy",
 			argv: ["bun", "run", "check:rs"],
 			cwd: gateRepoRoot,
-			// `bun run check:rs` -> scripts/bazel-tasks.ts -> the
-			// ompBazelPrimitives literal (`bun scripts/run-rs-task.ts check:rs`).
-			// Declaring both entries plus `dispatched` gives the cached clippy
-			// action its real wrapper closure instead of the whole repository; the
-			// Cargo workspace itself is declared by @rust_inputs.
-			sourceEntrypoints: ["scripts/bazel-tasks.ts", "scripts/run-rs-task.ts"],
-			dispatched: true,
 			env: {
 				CI: "1",
 				RUSTUP_AUTO_INSTALL: "0",
@@ -98,16 +91,11 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 }
 
 export async function runFastcheck(gate: GateRun, concurrency?: number): Promise<void> {
-	const requirements = await gate.charged(() =>
-		Bun.file(path.join(gateRepoRoot, "openspec/specs/fork-upstream-baseline/spec.md")).text(),
-	);
-	const baseline = requirements.match(/\*\*Upstream commit\*\*：`([0-9a-f]{40})`/)?.[1];
-	if (!baseline) throw new GateCommandError("Fork requirements do not identify the upstream baseline", 1);
-	console.log(`scope=fork-affected baseline=${baseline} selection=user-requested-prior-scope`);
+	console.log("scope=repository-static selection=all-project-static-checks");
 	console.log("coverage: existing TS/Rust static checks; fastcheck runs no tests");
 	console.log("omitted: all test execution; Python and standalone SDK checks; packaging");
 	const commands = await gate.charged(fastcheckCommands);
-	await runBazelCommands(gate, commands, { concurrency: concurrency ?? gatePoolWidth(undefined, 3, 12) });
+	await runGateCommands(gate, commands, { concurrency: concurrency ?? gatePoolWidth(undefined, 3, 12) });
 }
 
 if (import.meta.main) {
@@ -122,7 +110,7 @@ if (import.meta.main) {
 				);
 			await runFastcheck(gate);
 		},
-		{ ...options, reportFailure: true },
+		{ ...options, reportFailure: true, failureOnlyOutput: true },
 	);
 	process.exitCode = result.exitCode;
 }

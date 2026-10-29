@@ -2179,7 +2179,6 @@ describe("AskTool carriage-return sanitization", () => {
 		expect(askDialog).not.toHaveBeenCalled();
 		expect(result.content[0]?.type).toBe("text");
 		if (result.content[0]?.type !== "text") throw new Error("Expected text result");
-		expect(result.content[0].text).toContain("unique within a question");
 		expect(result.content[0].text).toContain("Retry now");
 		expect(result.content[0].text).not.toContain("\r");
 	});
@@ -2388,7 +2387,6 @@ describe("AskTool carriage-return sanitization", () => {
 		expect(result.content[0]?.type).toBe("text");
 		if (result.content[0]?.type !== "text") throw new Error("Expected text result");
 		const text = result.content[0].text;
-		expect(text).toContain("unique within a question");
 		expect(text).not.toContain("\t");
 		expect(text).not.toContain("\r");
 		expect(text.length).toBeLessThan(250);

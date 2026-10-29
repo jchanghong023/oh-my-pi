@@ -107,7 +107,7 @@ export class RpcHostToolBridge {
 				.map(item => item.text)
 				.join("\n")
 				.trim();
-			pending.reject(new Error(text || "Host tool execution failed"));
+			pending.reject(new Error(text || "Host tool execution failed; the host returned no error details."));
 			return true;
 		}
 		pending.resolve(frame.result);

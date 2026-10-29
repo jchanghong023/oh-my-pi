@@ -17,10 +17,14 @@
  * that own their tool results, not into orphan `⎿` toolResult lines.
  */
 
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Usage } from "@oh-my-pi/pi-ai";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -153,8 +157,15 @@ function cursorTurn(): AgentMessage[] {
 }
 
 describe("issue #4348: cursor exec-channel tool results pair with synthesized toolCall blocks on rebuild", () => {
-	it("renders bash toolResult inside a ToolExecutionComponent, not as an orphan `⎿` line", async () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(async () => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
+
+	it("renders bash toolResult inside a ToolExecutionComponent, not as an orphan `⎿` line", async () => {
 		const transcript = transcriptWith(cursorTurn());
 		const { ctx, chatContainer } = makeRenderCtx(transcript);
 

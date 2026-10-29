@@ -111,7 +111,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("PDF page screenshots in Chromium", () => {
 		await removeWithRetries(testDir);
 	});
 
-	it(
+	it.skipIf(process.platform === "win32")(
 		"paints each requested image-only page instead of the empty viewer",
 		async () => {
 			const pdfPath = path.join(testDir, "scan.pdf");
@@ -129,6 +129,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("PDF page screenshots in Chromium", () => {
 				const { light, dark } = await countPagePixels(screenshot.dest).finally(() =>
 					fs.rm(screenshot.dest, { force: true }),
 				);
+				expect({ width: screenshot.width, height: screenshot.height }).toEqual({ width: 874, height: 874 });
 				// An unpainted frame is only the viewer's grey background. A
 				// painted one shows the white page, and the share of it the black
 				// square covers identifies which page was rendered. The letter page

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { GateCommand, GateLevel, GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import { GateEventParser, GATE_LIMIT_SECONDS, runBazelTask, runGate } from "./test-gate-runtime";
+import { GateEventParser, GATE_LIMIT_SECONDS, runGate } from "./test-gate-runtime";
 import { withRustCompilerEvents } from "./test-gate-native-events";
 import { splitGoCommand } from "./test-gate-go";
 import { finalizeTestRun, writeCommandCase, type TestReportRun } from "./test-reporting";
@@ -289,31 +289,12 @@ async function waitForFiles(files: string[], signal: AbortSignal): Promise<void>
 	throw signal.reason;
 }
 
-it("settles an unbounded standalone lifecycle with finalizers under strict process ownership", async () => {
-	const source = `
-import {runBazelTask} from ${JSON.stringify(pathToFileURL(path.join(import.meta.dir, "test-gate-runtime.ts")).href)};
-let finalized = false;
-const result = await runBazelTask(async gate => {
-  gate.onFinalize(async exitCode => { finalized = exitCode === 0; });
-  await gate.run({label:"standalone fixture",argv:[process.execPath,"-e","void 0;"]});
-}, {exitOnFailure:true,print:()=>{}});
-process.stdout.write(JSON.stringify({level:result.level,status:result.status,unbounded:result.limitSeconds === Infinity,finalized}));
-`;
-	const child = Bun.spawn([process.execPath, "--eval", source], { stdout: "pipe", stderr: "pipe" });
-	const [exitCode, stdout, stderr] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-	]);
-	expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
-	expect(JSON.parse(stdout)).toEqual({ level: "bazel", status: "PASS", unbounded: true, finalized: true });
-});
-
-it("preserves standalone first failure and finishes owned process cleanup before finalization", async () => {
-	const pidFile = path.join(directory, "standalone-failure.pid");
+it("finishes owned process cleanup before finalization after the first failure", async () => {
+	const pidFile = path.join(directory, "finalization-failure.pid");
 	let finalizedExitCode: number | undefined;
 	let cleanedAtFinalization = false;
-	const result = await runBazelTask(
+	const result = await runGate(
+		"fulltest",
 		async gate => {
 			gate.onFinalize(async exitCode => {
 				finalizedExitCode = exitCode;
@@ -328,63 +309,33 @@ it("preserves standalone first failure and finishes owned process cleanup before
 				gate.run(command({ ms: 30000, pidFile })),
 				gate.charged(async () => {
 					await waitForFiles([pidFile], gate.signal);
-					throw gate.fail(new GateCommandError("standalone first failure", 23));
+					throw gate.fail(new GateCommandError("first failure", 23));
 				}),
 			]);
 		},
 		{ print: quiet },
 	);
-	expect(result.level).toBe("bazel");
-	expect(result.limitSeconds).toBe(Infinity);
 	expect(result.status).toBe("FAIL");
 	expect(result.exitCode).toBe(23);
 	expect(finalizedExitCode).toBe(23);
 	expect(cleanedAtFinalization).toBe(true);
 });
 
-it("keeps a finite child tier deadline within an unbounded standalone lifecycle", async () => {
-	const result = await runBazelTask(
-		async gate => {
-			// The real lifecycle clock must expire while work waits for its cancellation signal.
-			await gate.childGate(
-				"fulltest",
-				async child =>
-					new Promise<void>(resolve => {
-						child.signal.addEventListener("abort", () => resolve(), { once: true });
-					}),
-				{
-					limitSeconds: 0.3,
-					cleanupReserveMs: 0,
-					print: quiet,
-				},
-			);
+it.each(["fastcheck", "fulltest", "slowtest"] as const)("rejects an unbounded %s limit", async level => {
+	let started = false;
+	const result = await runGate(
+		level,
+		async () => {
+			started = true;
 		},
-		{ print: quiet },
+		{ limitSeconds: Infinity, print: quiet },
 	);
-	expect(result.level).toBe("bazel");
-	expect(result.limitSeconds).toBe(Infinity);
-	expect(result.status).toBe("TIMEOUT");
-	expect(result.exitCode).toBe(124);
+	expect(started).toBe(false);
+	expect(result.level).toBe(level);
+	expect(result.limitSeconds).toBe(GATE_LIMIT_SECONDS[level]);
+	expect(result.status).toBe("FAIL");
+	expect(result.exitCode).toBe(1);
 });
-
-it.each(["fastcheck", "fulltest", "slowtest"] as const)(
-	"does not allow %s to adopt the standalone unbounded limit",
-	async level => {
-		let started = false;
-		const result = await runGate(
-			level,
-			async () => {
-				started = true;
-			},
-			{ limitSeconds: Infinity, print: quiet },
-		);
-		expect(started).toBe(false);
-		expect(result.level).toBe(level);
-		expect(result.limitSeconds).toBe(GATE_LIMIT_SECONDS[level]);
-		expect(result.status).toBe("FAIL");
-		expect(result.exitCode).toBe(1);
-	},
-);
 
 it.each(["libc.so.6", "libc.so"])("resolves %s for both the gate clock and native watchdog exit", async soname => {
 	const source = `

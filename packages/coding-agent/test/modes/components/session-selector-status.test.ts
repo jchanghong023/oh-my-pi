@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it } from "bun:test";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo, SessionStatus } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -7,7 +7,7 @@ beforeAll(async () => {
 	await initTheme();
 });
 
-afterAll(async () => {
+afterEach(async () => {
 	// Other suites in the run share the global theme; restore the default preset.
 	await initTheme();
 });
@@ -47,19 +47,20 @@ function renderPlain(sessions: SessionInfo[]): string {
 
 describe("SessionSelectorComponent status labels", () => {
 	it("renders each derived status as a themed glyph + label on the metadata line", () => {
-		const rendered = renderPlain([
-			createSession("complete", "complete"),
-			createSession("interrupted", "interrupted"),
-			createSession("aborted", "aborted"),
-			createSession("error", "error"),
-			createSession("pending", "pending"),
-		]);
-
-		expect(rendered).toContain(`${theme.status.success} done`);
-		expect(rendered).toContain(`${theme.status.warning} interrupted`);
-		expect(rendered).toContain(`${theme.status.aborted} aborted`);
-		expect(rendered).toContain(`${theme.status.error} error`);
-		expect(rendered).toContain(`${theme.status.pending} pending`);
+		const cases: [SessionStatus, string][] = [
+			["complete", theme.status.success],
+			["interrupted", theme.status.warning],
+			["aborted", theme.status.aborted],
+			["error", theme.status.error],
+			["pending", theme.status.pending],
+		];
+		for (const [status, glyph] of cases) {
+			const rendered = renderPlain([createSession("sample", status)]);
+			const baseline = renderPlain([createSession("sample", undefined)]);
+			const metadata = rendered.split("\n").find(line => line.includes("2.0KB"));
+			expect(metadata).toContain(glyph);
+			expect(metadata).not.toBe(baseline.split("\n").find(line => line.includes("2.0KB")));
+		}
 	});
 
 	it("draws the glyph from the active symbol preset (nerdfont / unicode / ascii)", async () => {
@@ -68,7 +69,7 @@ describe("SessionSelectorComponent status labels", () => {
 		for (const preset of ["unicode", "nerd", "ascii"] as const) {
 			await initTheme(false, preset);
 			// The rendered glyph tracks whatever the active preset resolves.
-			expect(renderPlain(sessions)).toContain(`${theme.status.success} done`);
+			expect(renderPlain(sessions)).toContain(theme.status.success);
 			glyphs.add(theme.status.success);
 		}
 		// Each preset maps to a distinct glyph, so the status is genuinely
@@ -77,14 +78,8 @@ describe("SessionSelectorComponent status labels", () => {
 	});
 
 	it("omits the status segment when status is unknown or unset", () => {
-		const rendered = renderPlain([createSession("a", "unknown"), createSession("b", undefined)]);
-
-		// The session rows still render (titles present)…
-		expect(rendered).toContain("Session a");
-		expect(rendered).toContain("Session b");
-		// …but no status label is emitted for either row.
-		for (const label of ["done", "interrupted", "aborted", "error", "pending"]) {
-			expect(rendered).not.toContain(label);
+		for (const id of ["a", "b"]) {
+			expect(renderPlain([createSession(id, "unknown")])).toBe(renderPlain([createSession(id, undefined)]));
 		}
 	});
 });

@@ -733,19 +733,21 @@ export function getTablePrimaryKey(db: Database, table: string): { column: strin
 	return { column: column.name, type: column.type };
 }
 
-export function resolveTableRowLookup(db: Database, table: string): SqliteRowLookup {
+export function resolveTableRowLookup(db: Database, table: string, context: "read" | "write"): SqliteRowLookup {
 	const primaryKeyColumns = getPrimaryKeyColumns(db, table);
 	if (primaryKeyColumns.length === 1) {
 		const column = primaryKeyColumns[0]!;
 		return { kind: "pk", column: column.name, type: column.type };
 	}
 	if (primaryKeyColumns.length > 1) {
-		throw new ToolError(`SQLite table '${table}' has a composite primary key; use '?where=' instead`);
+		const guidance = context === "read" ? "; use '?where=' instead" : "; row-key writes are not supported";
+		throw new ToolError(`SQLite table '${table}' has a composite primary key${guidance}`);
 	}
 
 	const schema = getTableSchema(db, table);
 	if (/\bWITHOUT\s+ROWID\b/i.test(schema)) {
-		throw new ToolError(`SQLite table '${table}' does not expose ROWID; use '?where=' instead`);
+		const guidance = context === "read" ? "; use '?where=' instead" : "; row-key writes are not supported";
+		throw new ToolError(`SQLite table '${table}' does not expose ROWID${guidance}`);
 	}
 
 	return { kind: "rowid" };

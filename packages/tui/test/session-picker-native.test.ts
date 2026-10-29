@@ -85,23 +85,25 @@ describe("session selector picker", () => {
 		const p = props(root);
 		expect(p.size).toBe("lg");
 		expect(p.layout).toBe("cards");
-		expect(p.actions?.find(a => a.id === "scope")?.label).toBe("All projects");
-		expect(p.placeholder).toMatch(/^Search sessions in .+…$/);
-		expect(p.order).toEqual([
-			{ group: "today-0", label: "Today", count: 2 },
+		expect(p.actions?.some(a => a.id === "scope")).toBe(true);
+		expect(p.placeholder).toBeTruthy();
+		expect(
+			p.order?.map(entry => (typeof entry === "string" ? entry : { group: entry.group, count: entry.count })),
+		).toEqual([
+			{ group: "today-0", count: 2 },
 			today.path,
 			todayToo.path,
-			{ group: "earlier-2", label: "Earlier", count: 1 },
+			{ group: "earlier-2", count: 1 },
 			old.path,
 		]);
 		expect(p.selected).toBe(todayToo.path);
 		expect(p.current).toEqual([todayToo.path]);
 		const beta = p.items?.find(item => item.id === todayToo.path);
-		expect(beta?.badges?.map(b => b.text)).toEqual(["current"]);
+		expect(beta?.badges).toHaveLength(1);
 		expect(beta?.dot).toBe("success");
 		const preview = root.c as NativeNode[];
 		expect(preview[0]).toMatchObject({ k: "text", p: { text: "Beta", role: "omp.picker.title" } });
-		expect(preview.find(child => child.k === "section")?.p).toEqual({ head: "Conversation" });
+		expect(preview.some(child => child.k === "section")).toBe(true);
 
 		expect(selector.nativeSheet(withoutPicker)).toBe(false);
 		expect(selector.describe(withoutPicker).k).toBe("card");
@@ -142,7 +144,7 @@ describe("session selector picker", () => {
 
 		// Backspace on an empty query opens the same confirm strip.
 		selector.handleInput("\x7f");
-		expect(props(selector.describe(withPicker)).confirm?.text).toBe("Delete “Gamma”? This removes the session file.");
+		expect(props(selector.describe(withPicker)).confirm?.text).toContain("Gamma");
 		const closed = renderedWhen(selector, p => p.confirm === null);
 		selector.handleNativeEvent({ type: "action", key: "", act: "delete-confirm", mods: [] });
 		await closed;
@@ -151,13 +153,13 @@ describe("session selector picker", () => {
 
 		const loaded = renderedWhen(
 			selector,
-			p => p.state === "ready" && p.actions?.find(a => a.id === "scope")?.label === "This folder",
+			p => p.state === "ready" && p.items?.some(item => item.id === others.path) === true,
 		);
 		selector.handleNativeEvent({ type: "action", key: "", act: "scope", mods: [] });
 		expect(props(selector.describe(withPicker)).state).toBe("loading");
 		await loaded;
 		const all = props(selector.describe(withPicker));
-		expect(all.placeholder).toBe("Search all sessions…");
+		expect(all.placeholder).toBeTruthy();
 		expect(all.items?.find(item => item.id === others.path)?.detail).toEqual([
 			{ t: "/work/", s: "path dim" },
 			{ t: "other", s: "path" },
@@ -208,7 +210,7 @@ describe("session selector rename", () => {
 
 	it("shows the rename action only when onRename is set", () => {
 		const withHook = makeRename({ calls: [] });
-		expect(props(withHook.selector.describe(withPicker)).actions?.find(a => a.id === "rename")?.label).toBe("Rename");
+		expect(props(withHook.selector.describe(withPicker)).actions?.some(a => a.id === "rename")).toBe(true);
 		const withoutHook = makeRename();
 		expect(props(withoutHook.selector.describe(withPicker)).actions?.some(a => a.id === "rename")).toBe(false);
 	});

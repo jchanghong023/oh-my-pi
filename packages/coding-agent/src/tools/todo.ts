@@ -61,11 +61,11 @@ const todoSchema = type({
 	op: TodoOp,
 	"list?": InitListEntry.array().describe("phases for init"),
 	"task?": type("string").describe("verbatim task content"),
-	"phase?": type("string"),
+	"phase?": type("string").describe("required for append; target phase name (created if absent)"),
 	// No `atLeastLength(1)` here: `items` is only meaningful for `init`/`append`,
 	// and both enforce non-empty with op-specific errors. A stray `items: []` on
 	// an op that ignores it (e.g. `view`) must not be a hard schema rejection.
-	"items?": type("string").array().describe("tasks for flat init or append"),
+	"items?": type("string").array().describe("tasks for flat init or append; required and non-empty for append"),
 	"reason?": type("string").describe("blocker note for block"),
 });
 
@@ -344,11 +344,15 @@ function initPhases(entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 
 function appendItems(phases: TodoPhase[], entry: TodoOpEntryValue, errors: string[]): TodoPhase[] {
 	if (!entry.phase) {
-		errors.push("Missing phase name for append operation");
+		errors.push(
+			'Missing phase name for append operation. No items were added. Use op="view" to find the target phase, then retry op="append" with phase="<phase name>" and the original items. Do not reinitialize the todo list.',
+		);
 		return phases;
 	}
 	if (!entry.items || entry.items.length === 0) {
-		errors.push("Missing items for append operation");
+		errors.push(
+			'Missing items for append operation. No items were added. Retry op="append" with the target phase and a non-empty items array containing the tasks to add.',
+		);
 		return phases;
 	}
 
@@ -746,6 +750,18 @@ export class TodoTool implements AgentTool<typeof todoSchema, TodoToolDetails> {
 		}
 		const entry = resolved;
 		const op = entry.op;
+		if ((op === "done" || op === "drop" || op === "rm") && !entry.task && !entry.phase) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: `${op} requires a task or phase target. No tasks were changed. Use view to recover the exact target.`,
+					},
+				],
+				details: { op, phases: previousPhases, storage },
+				isError: true,
+			};
+		}
 		// Pure-view calls are reads: no normalization, no state write.
 		const readOnly = op === "view";
 		const { phases: updated, errors } = readOnly

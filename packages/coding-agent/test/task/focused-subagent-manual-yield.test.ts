@@ -175,117 +175,129 @@ async function spawnKeptAliveChild(options?: { handler?: MockHandler; structured
 	return { session, artifact, deliveries, firstDelivery: firstDelivery.promise, close, mock };
 }
 
-it("a focused manual prompt's yield rewrites the artifact and notifies the parent", async () => {
-	const child = await spawnKeptAliveChild();
-	try {
-		// The focused-session input path: a plain user prompt on the idle child.
-		await child.session.prompt("go on");
+it.skipIf(process.platform === "win32")(
+	"a focused manual prompt's yield rewrites the artifact and notifies the parent",
+	async () => {
+		const child = await spawnKeptAliveChild();
+		try {
+			// The focused-session input path: a plain user prompt on the idle child.
+			await child.session.prompt("go on");
 
-		// The job settles only after finalization has rewritten the artifact.
-		expect(await child.firstDelivery).toContain("manual result");
-		expect(await Bun.file(child.artifact).text()).toContain("manual result");
-	} finally {
-		child.close();
-	}
-}, 15_000);
+			// The job settles only after finalization has rewritten the artifact.
+			expect(await child.firstDelivery).toContain("manual result");
+			expect(await Bun.file(child.artifact).text()).toContain("manual result");
+		} finally {
+			child.close();
+		}
+	},
+	15_000,
+);
 
-it("a prompt typed while the previous turn awaits owned background work reports each turn's own result", async () => {
-	const child = await spawnKeptAliveChild();
-	try {
-		// Owned background work keeps the first manual turn's observation open
-		// after the turn itself returns, leaving the child idle for another prompt.
-		const gate = Promise.withResolvers<void>();
-		manager.register(
-			"bash",
-			"background build",
-			async () => {
-				await gate.promise;
-				return "build done";
+it.skipIf(process.platform === "win32")(
+	"a prompt typed while the previous turn awaits owned background work reports each turn's own result",
+	async () => {
+		const child = await spawnKeptAliveChild();
+		try {
+			// Owned background work keeps the first manual turn's observation open
+			// after the turn itself returns, leaving the child idle for another prompt.
+			const gate = Promise.withResolvers<void>();
+			manager.register(
+				"bash",
+				"background build",
+				async () => {
+					await gate.promise;
+					return "build done";
+				},
+				{ ownerId: AGENT_ID, agentId: AGENT_ID },
+			);
+			await child.session.prompt("go on");
+			await child.session.prompt("finish up");
+			gate.resolve();
+
+			await child.firstDelivery;
+			await manager.waitForOwnerJobs(PARENT_ID);
+			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
+			// One completion per turn, each carrying only that turn's yield.
+			const manual = child.deliveries.filter(text => text.includes("manual result"));
+			const final = child.deliveries.filter(text => text.includes("final result"));
+			expect(child.deliveries).toHaveLength(2);
+			expect(manual).toHaveLength(1);
+			expect(final).toHaveLength(1);
+			expect(manual[0]).not.toContain("final result");
+			expect(await Bun.file(child.artifact).text()).toContain("final result");
+		} finally {
+			child.close();
+		}
+	},
+	15_000,
+);
+
+it.skipIf(process.platform === "win32")(
+	"publishes a consumed parent injection during a peer wake without publishing peer-only replies",
+	async () => {
+		const peerStarted = Promise.withResolvers<void>();
+		const releasePeer = Promise.withResolvers<void>();
+		let request = 0;
+		const child = await spawnKeptAliveChild({
+			structured: false,
+			enableIrc: true,
+			handler: async () => {
+				request++;
+				if (request === 1) return { content: ["INITIAL_FINAL"] };
+				if (request === 2) return { content: ["POSITIVE_FINAL"] };
+				if (request === 3) {
+					peerStarted.resolve();
+					await releasePeer.promise;
+					return { content: ["PEER_INTERMEDIATE"] };
+				}
+				return { content: [request === 4 ? "NEGATIVE_FINAL" : "PEER_ONLY_FINAL"] };
 			},
-			{ ownerId: AGENT_ID, agentId: AGENT_ID },
-		);
-		await child.session.prompt("go on");
-		await child.session.prompt("finish up");
-		gate.resolve();
-
-		await child.firstDelivery;
-		await manager.waitForOwnerJobs(PARENT_ID);
-		await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
-		// One completion per turn, each carrying only that turn's yield.
-		const manual = child.deliveries.filter(text => text.includes("manual result"));
-		const final = child.deliveries.filter(text => text.includes("final result"));
-		expect(child.deliveries).toHaveLength(2);
-		expect(manual).toHaveLength(1);
-		expect(final).toHaveLength(1);
-		expect(manual[0]).not.toContain("final result");
-		expect(await Bun.file(child.artifact).text()).toContain("final result");
-	} finally {
-		child.close();
-	}
-}, 15_000);
-
-it("publishes a consumed parent injection during a peer wake without publishing peer-only replies", async () => {
-	const peerStarted = Promise.withResolvers<void>();
-	const releasePeer = Promise.withResolvers<void>();
-	let request = 0;
-	const child = await spawnKeptAliveChild({
-		structured: false,
-		enableIrc: true,
-		handler: async () => {
-			request++;
-			if (request === 1) return { content: ["INITIAL_FINAL"] };
-			if (request === 2) return { content: ["POSITIVE_FINAL"] };
-			if (request === 3) {
-				peerStarted.resolve();
-				await releasePeer.promise;
-				return { content: ["PEER_INTERMEDIATE"] };
-			}
-			return { content: [request === 4 ? "NEGATIVE_FINAL" : "PEER_ONLY_FINAL"] };
-		},
-	});
-	try {
-		const bus = IrcBus.global();
-		const positive = await bus.send({ from: PARENT_ID, to: AGENT_ID, body: "First follow-up" });
-		expect(positive.outcome).toBe("woken");
-		await child.session.waitForIdle();
-		await child.session.waitForIrcReplies();
-		await manager.waitForOwnerJobs(PARENT_ID);
-		await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
-		expect(await Bun.file(child.artifact).text()).toContain("POSITIVE_FINAL");
-		expect(child.deliveries.filter(text => text.includes("POSITIVE_FINAL"))).toHaveLength(1);
-		const peer = await bus.send({ from: "Peer", to: AGENT_ID, body: "Can you check?" });
-		expect(peer.outcome).toBe("woken");
-		await peerStarted.promise;
-		const parent = await bus.send({ from: PARENT_ID, to: AGENT_ID, body: "Publish the follow-up" });
-		expect(parent.outcome).toBe("injected");
-		// Receiving the request is not consumption; the prior result is still authoritative.
-		expect(await Bun.file(child.artifact).text()).toContain("POSITIVE_FINAL");
-		expect(child.deliveries).toHaveLength(1);
-		expect(manager.getAllJobs({ ownerId: PARENT_ID })).toHaveLength(1);
-		releasePeer.resolve();
-		await child.session.waitForIdle();
-		await child.session.waitForIrcReplies();
-		await manager.waitForOwnerJobs(PARENT_ID);
-		await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
-		expect(JSON.stringify(child.mock.calls.at(-1)?.context.messages)).toContain("Publish the follow-up");
-		expect(await Bun.file(child.artifact).text()).toContain("NEGATIVE_FINAL");
-		expect(child.deliveries.filter(text => text.includes("NEGATIVE_FINAL"))).toHaveLength(1);
-		expect(
-			manager.getAllJobs({ ownerId: PARENT_ID }).filter(job => job.resultText?.includes("NEGATIVE_FINAL")),
-		).toHaveLength(1);
-		const peerOnly = await bus.send({ from: "Peer", to: AGENT_ID, body: "One more check?" });
-		expect(peerOnly.outcome).toBe("woken");
-		await child.session.waitForIdle();
-		await child.session.waitForIrcReplies();
-		await manager.waitForOwnerJobs(PARENT_ID);
-		expect(await Bun.file(child.artifact).text()).toContain("NEGATIVE_FINAL");
-		expect(child.deliveries).toHaveLength(2);
-		expect(manager.getAllJobs({ ownerId: PARENT_ID })).toHaveLength(2);
-	} finally {
-		releasePeer.resolve();
-		child.close();
-	}
-}, 15_000);
+		});
+		try {
+			const bus = IrcBus.global();
+			const positive = await bus.send({ from: PARENT_ID, to: AGENT_ID, body: "First follow-up" });
+			expect(positive.outcome).toBe("woken");
+			await child.session.waitForIdle();
+			await child.session.waitForIrcReplies();
+			await manager.waitForOwnerJobs(PARENT_ID);
+			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
+			expect(await Bun.file(child.artifact).text()).toContain("POSITIVE_FINAL");
+			expect(child.deliveries.filter(text => text.includes("POSITIVE_FINAL"))).toHaveLength(1);
+			const peer = await bus.send({ from: "Peer", to: AGENT_ID, body: "Can you check?" });
+			expect(peer.outcome).toBe("woken");
+			await peerStarted.promise;
+			const parent = await bus.send({ from: PARENT_ID, to: AGENT_ID, body: "Publish the follow-up" });
+			expect(parent.outcome).toBe("injected");
+			// Receiving the request is not consumption; the prior result is still authoritative.
+			expect(await Bun.file(child.artifact).text()).toContain("POSITIVE_FINAL");
+			expect(child.deliveries).toHaveLength(1);
+			expect(manager.getAllJobs({ ownerId: PARENT_ID })).toHaveLength(1);
+			releasePeer.resolve();
+			await child.session.waitForIdle();
+			await child.session.waitForIrcReplies();
+			await manager.waitForOwnerJobs(PARENT_ID);
+			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
+			expect(JSON.stringify(child.mock.calls.at(-1)?.context.messages)).toContain("Publish the follow-up");
+			expect(await Bun.file(child.artifact).text()).toContain("NEGATIVE_FINAL");
+			expect(child.deliveries.filter(text => text.includes("NEGATIVE_FINAL"))).toHaveLength(1);
+			expect(
+				manager.getAllJobs({ ownerId: PARENT_ID }).filter(job => job.resultText?.includes("NEGATIVE_FINAL")),
+			).toHaveLength(1);
+			const peerOnly = await bus.send({ from: "Peer", to: AGENT_ID, body: "One more check?" });
+			expect(peerOnly.outcome).toBe("woken");
+			await child.session.waitForIdle();
+			await child.session.waitForIrcReplies();
+			await manager.waitForOwnerJobs(PARENT_ID);
+			expect(await Bun.file(child.artifact).text()).toContain("NEGATIVE_FINAL");
+			expect(child.deliveries).toHaveLength(2);
+			expect(manager.getAllJobs({ ownerId: PARENT_ID })).toHaveLength(2);
+		} finally {
+			releasePeer.resolve();
+			child.close();
+		}
+	},
+	15_000,
+);
 
 for (const source of ["queued steering", "async completion"] as const) {
 	it(`publishes a consumed parent injection during ${source}`, async () => {

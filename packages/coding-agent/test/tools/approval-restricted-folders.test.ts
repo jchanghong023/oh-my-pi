@@ -17,6 +17,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import {
 	type ApprovalRestrictions,
+	approvalAnswerForChoice,
 	resolveApproval,
 	sessionApprovalScope,
 } from "@oh-my-pi/pi-coding-agent/tools/approval";
@@ -73,7 +74,7 @@ describe("restricted folder resolution", () => {
 		const read = pathTool("read", "read", cwd);
 		const resolved = resolveApproval(read, { path: "restricted/secret.txt" }, "yolo", {}, undefined, restrictions());
 		expect(resolved).toMatchObject({ policy: "prompt", source: "restriction", override: true });
-		expect(resolved.reason).toStartWith("Restricted folder: ");
+		expect(resolved.reason).toBeTruthy();
 		// Neither a session approval nor a remembered grant can be offered for it.
 		expect(sessionApprovalScope(resolved, "read")).toBeUndefined();
 		// The folder itself is restricted, not only what it holds.
@@ -205,10 +206,20 @@ describe("restricted folder wrapper gate", () => {
 		return runner;
 	}
 
-	it("asks with only Approve/Deny on every call in yolo mode", async () => {
+	it("asks for each restricted call in yolo mode and fails closed for denial or an unknown answer", async () => {
 		const session = SessionManager.inMemory(cwd);
-		const select = vi.fn(async () => "Approve");
-		const wrapper = new ExtensionToolWrapper(pathTool("read", "read", cwd), runnerWith(session, select));
+		let response: "once" | "deny" | "unknown" = "once";
+		const select = vi.fn(async (_title: string, options: Parameters<ExtensionUIContext["select"]>[1]) => {
+			expect(options).toHaveLength(2);
+			const labels = options.map(option => (typeof option === "string" ? option : option.label));
+			const answers = labels.map(option => approvalAnswerForChoice({}, option));
+			expect(answers).toEqual(["once", "deny"]);
+			if (response === "unknown") return "unrecognized answer";
+			return labels[answers.indexOf(response)]!;
+		});
+		const tool = pathTool("read", "read", cwd);
+		const execute = vi.spyOn(tool, "execute");
+		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
 		const context = {
 			sessionManager: session,
 			modelRegistry,
@@ -218,10 +229,16 @@ describe("restricted folder wrapper gate", () => {
 		await wrapper.execute("r1", { path: "restricted/secret.txt" }, undefined, undefined, context);
 		await wrapper.execute("r2", { path: "restricted/secret.txt" }, undefined, undefined, context);
 		await wrapper.execute("r3", { path: "plain/open.txt" }, undefined, undefined, context);
+		response = "deny";
+		await expect(
+			wrapper.execute("r4", { path: "restricted/secret.txt" }, undefined, undefined, context),
+		).rejects.toThrow();
+		response = "unknown";
+		await expect(
+			wrapper.execute("r5", { path: "restricted/secret.txt" }, undefined, undefined, context),
+		).rejects.toThrow();
 
-		expect(select).toHaveBeenCalledTimes(2);
-		const [title, options] = select.mock.calls[0]! as unknown as [string, string[]];
-		expect(title).toContain("Reason: Restricted folder: ");
-		expect(options).toEqual(["Approve", "Deny"]);
+		expect(select).toHaveBeenCalledTimes(4);
+		expect(execute).toHaveBeenCalledTimes(3);
 	});
 });

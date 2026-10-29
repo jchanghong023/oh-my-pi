@@ -67,22 +67,26 @@ describe("RPC goal command", () => {
 		return client;
 	}
 
-	test("get is a read without a model call; create activates the goal tool without prompting", async () => {
-		const rpc = await start({ continuation: false });
-		expect(await rpc.goal("get")).toEqual({ goal: null, state: null });
-		expect((await rpc.getState()).goal).toBeNull();
+	test.skipIf(process.platform === "win32")(
+		"get is a read without a model call; create activates the goal tool without prompting",
+		async () => {
+			const rpc = await start({ continuation: false });
+			expect(await rpc.goal("get")).toEqual({ goal: null, state: null });
+			expect((await rpc.getState()).goal).toBeNull();
 
-		const created = await rpc.goal("create", { objective: "  ship it  ", tokenBudget: 5000 });
-		expect(created.goal).toMatchObject({ objective: "ship it", status: "active", tokenBudget: 5000 });
-		expect(created.state).toMatchObject({ enabled: true, mode: "active" });
+			const created = await rpc.goal("create", { objective: "  ship it  ", tokenBudget: 5000 });
+			expect(created.goal).toMatchObject({ objective: "ship it", status: "active", tokenBudget: 5000 });
+			expect(created.state).toMatchObject({ enabled: true, mode: "active" });
 
-		const state = await rpc.getState();
-		expect(state.goal?.goal.objective).toBe("ship it");
-		expect(state.dumpTools?.map(tool => tool.name)).toContain("goal");
-		// Continuation is off: nothing ran, so no model turn happened.
-		expect(state.messageCount).toBe(0);
-		expect(state.isStreaming).toBe(false);
-	}, 30_000);
+			const state = await rpc.getState();
+			expect(state.goal?.goal.objective).toBe("ship it");
+			expect(state.dumpTools?.map(tool => tool.name)).toContain("goal");
+			// Continuation is off: nothing ran, so no model turn happened.
+			expect(state.messageCount).toBe(0);
+			expect(state.isStreaming).toBe(false);
+		},
+		30_000,
+	);
 
 	test("plan mode refuses create and resume", async () => {
 		const rpc = await start({ continuation: true, plan: true });

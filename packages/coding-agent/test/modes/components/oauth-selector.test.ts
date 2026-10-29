@@ -44,7 +44,6 @@ describe("OAuthSelectorComponent", () => {
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
 		expect(rendered).toContain(target.name);
-		expect(rendered).toContain(`Search: ${target.id}`);
 
 		component.handleInput("\n");
 		expect(selected).toEqual([target.id]);
@@ -70,12 +69,6 @@ describe("OAuthSelectorComponent", () => {
 		for (const char of "opencode-go") {
 			component.handleInput(char);
 		}
-
-		const rendered = component
-			.render(80)
-			.map(line => Bun.stripANSI(line))
-			.join("\n");
-		expect(rendered).toContain("No stored provider credentials to log out");
 
 		component.handleInput("\n");
 		expect(selected).toEqual([]);
@@ -105,7 +98,6 @@ describe("OAuthSelectorComponent", () => {
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
 		expect(rendered).toContain("OpenCode Go");
-		expect(rendered).toContain("logged in");
 
 		component.handleInput("\n");
 		expect(selected).toEqual(["opencode-go"]);

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
+import { getSettingDef } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -91,10 +92,12 @@ describe("settings section sidebar", () => {
 		for (let i = 0; i < 7; i++) comp.handleInput("\x1b[C");
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 
-		clickOption(comp, "Developer");
+		const group = getSettingDef(createSettingsHost().entries, "dev.autoqa")?.group;
+		expect(group).toBeDefined();
+		clickOption(comp, group!);
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 
-		clickOption(comp, "Developer");
+		clickOption(comp, group!);
 		expect(cfgDevAutoqa.get(settings)).toBe(true);
 	});
 });
@@ -165,7 +168,9 @@ describe("extra context filenames editor", () => {
 			component.handleInput("\r");
 			await settings.flush();
 
-			expect(Bun.stripANSI(component.render(120).join("\n"))).not.toContain("Extra Context Files");
+			const extraLabel = getSettingDef(createSettingsHost().entries, "contextFiles.extra")?.label;
+			expect(extraLabel).toBeDefined();
+			expect(Bun.stripANSI(component.render(120).join("\n"))).not.toContain(extraLabel!);
 			const globalConfig = Bun.file(path.join(agentDir, "config.yml"));
 			expect((await globalConfig.exists()) ? await globalConfig.text() : "").not.toContain("TEAM.md");
 		} finally {

@@ -24,6 +24,7 @@ import {
 	asyncJobState,
 	isSettledJobFrame,
 	parksAsBackground,
+	settledBashCards,
 	settleWithJobFrame,
 	ToolExecutionComponent,
 	type ToolExecutionHandle,
@@ -2173,6 +2174,9 @@ export class EventController {
 		component: ToolExecutionHandle,
 		event: Extract<AgentSessionEvent, { type: "tool_execution_end" }>,
 	): void {
+		if (event.toolName === "wait" && component instanceof ToolExecutionComponent) {
+			component.setSettledBashJobs(() => settledBashCards(this.ctx.chatContainer.children));
+		}
 		if (component instanceof ToolExecutionComponent) component.setCompactNeedsUserInput(undefined);
 		const settled = this.#settledBeforeReturn.get(event.toolCallId)?.partialResult;
 		this.#settledBeforeReturn.delete(event.toolCallId);

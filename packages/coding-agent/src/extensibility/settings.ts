@@ -166,7 +166,7 @@ export const cfgExtensionHandlersModeControl = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Extensions",
+		group: "扩展",
 		label: "Extension Mode Control",
 		description:
 			"Let extensions enter and exit plan, vibe, goal, and loop modes via ctx.sessionModes.set(); reading mode state stays available",
@@ -179,7 +179,7 @@ export const cfgExtensionAssistantTextRenderers = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "Extensions",
+		group: "扩展",
 		label: "Extension Reply Renderers",
 		description:
 			"允许扩展调整助手回复的显示、原地重绘回复，并接收其专属链接的点击；会话、导出和模型上下文仍保留原始回复",

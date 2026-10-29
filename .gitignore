@@ -66,6 +66,7 @@ packages/ai/test/.temp-images/
 compaction-results/
 changes/
 __pycache__/
+.testmondata*
 
 # Scratch files
 syntax.jsonl

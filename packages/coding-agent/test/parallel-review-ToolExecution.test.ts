@@ -1,8 +1,8 @@
-import { describe, expect, it, spyOn } from "bun:test";
+import { describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as natives from "@oh-my-pi/pi-natives";
+import { astEdit } from "@oh-my-pi/pi-natives";
 import { Settings } from "../src/config/settings";
 import { RepoLifecycle } from "../src/repo/lifecycle";
 import { RepoService } from "../src/repo/service";
@@ -37,30 +37,31 @@ describe("failed AST apply repository coverage", () => {
 				buildToolChoice: () => ({ type: "tool", name: "resolve" }),
 				steer: () => {},
 			};
-			let restoreApply: (() => void) | undefined;
 			try {
 				await service.build();
 				lifecycle.start();
 				await service.reconcile();
-				const tool = new AstEditTool(session);
+				let applyCalls = 0;
+				const tool = new AstEditTool(session, async options => {
+					if (options.dryRun) return astEdit(options);
+					applyCalls++;
+					await Bun.write(firstFile, "modernWrap(firstValue, firstArg)\n");
+					throw new Error("Failed to write second.ts: permission denied");
+				});
 				await tool.execute("preview", {
 					ops: [{ pat: "legacyWrap($A, $B)", out: "modernWrap($A, $B)" }],
 					paths: scope === "single root" ? [cwd] : [firstDir, secondDir],
 				});
 				expect((await service.status()).pendingPaths).toEqual([]);
 				expect((await service.status()).unchecked).toBe(false);
-				// Reproduce the native boundary: one commit followed by a failed write.
-				// The real preview and resolve flow, filesystem, and index remain in use.
-				const apply = spyOn(natives, "astEdit").mockImplementation(async () => {
-					await Bun.write(firstFile, "modernWrap(firstValue, firstArg)\n");
-					throw new Error("Failed to write second.ts: permission denied");
-				});
-				restoreApply = () => apply.mockRestore();
+				// The real preview and resolve flow, filesystem, and index remain in use;
+				// the injected native apply simulates one commit followed by a failed write.
 				const invoker = queue.peekPendingInvoker();
 				expect(invoker).toBeDefined();
 				await expect(invoker!({ action: "apply", reason: "apply preview" })).rejects.toThrow(
 					"Failed to write second.ts: permission denied",
 				);
+				expect(applyCalls).toBe(1);
 				expect((await service.status()).pendingPaths.sort()).toEqual(["first/first.ts", "second/second.ts"]);
 				expect((await service.search("modernWrap")).hits.map(hit => hit.path)).toEqual(["first/first.ts"]);
 				expect((await service.search("legacyWrap")).hits.map(hit => hit.path)).toEqual(["second/second.ts"]);
@@ -72,7 +73,6 @@ describe("failed AST apply repository coverage", () => {
 					"AST edit apply failed; files may have been partially written; reconcile to verify coverage",
 				);
 			} finally {
-				restoreApply?.();
 				lifecycle.dispose();
 				service.close();
 				await fs.rm(temp, { recursive: true, force: true });

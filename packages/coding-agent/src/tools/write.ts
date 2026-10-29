@@ -942,7 +942,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 					throw new ToolError("SQLite deletes require a row key in the path");
 				}
 
-				const lookup = resolveTableRowLookup(db, resolvedSqlitePath.table);
+				const lookup = resolveTableRowLookup(db, resolvedSqlitePath.table, "write");
 				const deleted =
 					lookup.kind === "pk"
 						? deleteRowByKey(db, resolvedSqlitePath.table, lookup, resolvedSqlitePath.key)
@@ -966,7 +966,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}
 
 				if (resolvedSqlitePath.key) {
-					const lookup = resolveTableRowLookup(db, resolvedSqlitePath.table);
+					const lookup = resolveTableRowLookup(db, resolvedSqlitePath.table, "write");
 					const updated =
 						lookup.kind === "pk"
 							? updateRowByKey(db, resolvedSqlitePath.table, lookup, resolvedSqlitePath.key, parsedContent)

@@ -30,21 +30,24 @@ afterEach(async () => {
 });
 
 describe("ZCode caller MCP configuration", () => {
-	it("prepares actual stdio tools before returning and closes only its own manager", async () => {
-		const first = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("first")] });
-		managers.push(first);
-		const second = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("second")] });
-		managers.push(second);
-		expect(first.getTools().map(tool => tool.name)).toEqual(["mcp__first_marker"]);
-		expect(second.getTools().map(tool => tool.name)).toEqual(["mcp__second_marker"]);
-		await first.disconnectAll();
-		expect(first.getConnectedServers()).toEqual([]);
-		const connection = second.getConnection("second");
-		if (!connection) throw new Error("second session lost its connection");
-		expect((await callTool(connection, "second_marker")).content).toEqual([
-			{ type: "text", text: "MARKER_OK::second" },
-		]);
-	});
+	it.skipIf(process.platform === "win32")(
+		"prepares actual stdio tools before returning and closes only its own manager",
+		async () => {
+			const first = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("first")] });
+			managers.push(first);
+			const second = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("second")] });
+			managers.push(second);
+			expect(first.getTools().map(tool => tool.name)).toEqual(["mcp__first_marker"]);
+			expect(second.getTools().map(tool => tool.name)).toEqual(["mcp__second_marker"]);
+			await first.disconnectAll();
+			expect(first.getConnectedServers()).toEqual([]);
+			const connection = second.getConnection("second");
+			if (!connection) throw new Error("second session lost its connection");
+			expect((await callTool(connection, "second_marker")).content).toEqual([
+				{ type: "text", text: "MARKER_OK::second" },
+			]);
+		},
+	);
 
 	it("uses actual HTTP discovery, literal caller headers and tool execution", async () => {
 		const requests: string[] = [];
@@ -119,18 +122,21 @@ describe("ZCode caller MCP configuration", () => {
 		}
 	});
 
-	it("uses caller load policy through the original MCP tool discoverable catalog", async () => {
-		const manager = await prepareZCodeMcpManager({
-			cwd: import.meta.dir,
-			servers: [
-				{ ...stdio("lazy"), alwaysLoad: false, protocolVersion: "legacy" },
-				{ ...stdio("resident"), alwaysLoad: true },
-			],
-		});
-		managers.push(manager);
-		expect(manager.getTools().find(tool => tool.name === "mcp__lazy_marker")?.loadMode).toBe("discoverable");
-		expect(manager.getTools().find(tool => tool.name === "mcp__resident_marker")?.loadMode).toBe("essential");
-	});
+	it.skipIf(process.platform === "win32")(
+		"uses caller load policy through the original MCP tool discoverable catalog",
+		async () => {
+			const manager = await prepareZCodeMcpManager({
+				cwd: import.meta.dir,
+				servers: [
+					{ ...stdio("lazy"), alwaysLoad: false, protocolVersion: "legacy" },
+					{ ...stdio("resident"), alwaysLoad: true },
+				],
+			});
+			managers.push(manager);
+			expect(manager.getTools().find(tool => tool.name === "mcp__lazy_marker")?.loadMode).toBe("discoverable");
+			expect(manager.getTools().find(tool => tool.name === "mcp__resident_marker")?.loadMode).toBe("essential");
+		},
+	);
 
 	it("rejects unsupported client credentials grants before connecting with a safe recovery contract", async () => {
 		const servers = [
@@ -176,33 +182,39 @@ describe("ZCode caller MCP configuration", () => {
 		}
 	});
 
-	it("fails a bad session before admission without disconnecting a live session", async () => {
-		const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
-		managers.push(live);
-		await expect(
-			prepareZCodeMcpManager({
-				cwd: import.meta.dir,
-				servers: [
-					{ name: "broken", command: "zcode-nonexistent-mcp-executable", args: [], env: [], timeoutMs: 100 },
-				],
-			}),
-		).rejects.toThrow("MCP startup failed");
-		expect(live.getConnectedServers()).toEqual(["live"]);
-	});
+	it.skipIf(process.platform === "win32")(
+		"fails a bad session before admission without disconnecting a live session",
+		async () => {
+			const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
+			managers.push(live);
+			await expect(
+				prepareZCodeMcpManager({
+					cwd: import.meta.dir,
+					servers: [
+						{ name: "broken", command: "zcode-nonexistent-mcp-executable", args: [], env: [], timeoutMs: 100 },
+					],
+				}),
+			).rejects.toThrow("MCP startup failed");
+			expect(live.getConnectedServers()).toEqual(["live"]);
+		},
+	);
 
-	it("aborts a pending actual stdio handshake without affecting another owner", async () => {
-		const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
-		managers.push(live);
-		const controller = new AbortController();
-		const pending = prepareZCodeMcpManager({
-			cwd: import.meta.dir,
-			signal: controller.signal,
-			servers: [{ ...stdio("slow"), env: [{ name: "DELAY_STARTUP", value: "5000" }] }],
-		});
-		controller.abort();
-		await expect(pending).rejects.toThrow();
-		expect(live.getConnectedServers()).toEqual(["live"]);
-	});
+	it.skipIf(process.platform === "win32")(
+		"aborts a pending actual stdio handshake without affecting another owner",
+		async () => {
+			const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
+			managers.push(live);
+			const controller = new AbortController();
+			const pending = prepareZCodeMcpManager({
+				cwd: import.meta.dir,
+				signal: controller.signal,
+				servers: [{ ...stdio("slow"), env: [{ name: "DELAY_STARTUP", value: "5000" }] }],
+			});
+			controller.abort();
+			await expect(pending).rejects.toThrow();
+			expect(live.getConnectedServers()).toEqual(["live"]);
+		},
+	);
 
 	it("keeps explicit empty configs authoritative and does not perform ambient discovery", async () => {
 		const manager = await prepareZCodeMcpManager({

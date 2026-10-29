@@ -4,6 +4,11 @@ import type { AssistantMessage, ToolCall } from "@oh-my-pi/pi-ai";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -70,6 +75,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 	let session: AgentSession;
 	let tempDir: TempDir;
 	let settingsDir: TempDir;
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
 	beforeAll(async () => {
 		initTheme();
@@ -81,6 +87,8 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 	});
 
 	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		vi.spyOn(process.stdout, "write").mockReturnValue(true);
 		vi.spyOn(process.stdin, "resume").mockReturnValue(process.stdin);
 		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
@@ -99,6 +107,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
+		cfgDisplayCompactToolActivity.override(session.settings, false);
 		// The session is constructed with no tools; bash is a built-in in real
 		// sessions, so provenance-gated rendering must treat it as one here.
 		vi.spyOn(session, "hasBuiltInTool").mockReturnValue(true);
@@ -111,6 +120,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 		mode?.stop();
 		vi.restoreAllMocks();
 		await session?.dispose();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 		tempDir?.removeSync();
 	});
 

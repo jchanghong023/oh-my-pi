@@ -1053,10 +1053,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 			if (asyncRequested)
 				pendingNotices.push("Ignored async: service-only; a service start is asynchronous already.");
 		} else if (ready !== undefined && (ready.log !== undefined || ready.port !== undefined)) {
-			// Host/timeout only configure a readiness condition; neither requests one.
-			// Keep service validation unchanged, but only warn when a condition was
-			// actually ignored.
-			pendingNotices.push("Ignored ready: service-only, and no service name was given.");
+			throw new ToolError("ready requires a service name; the command was not executed.");
+		}
+		if (name === undefined && asyncRequested && pty === true) {
+			throw new ToolError("Async bash does not support pty; the command was not executed.");
 		}
 		if (name === undefined && asyncRequested && !cfgAsyncEnabled.get(this.session.settings)) {
 			throw new ToolError("Async bash execution is disabled. Enable async.enabled to use async mode.");
@@ -1170,10 +1170,19 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				);
 			if (daemon.exitReason) lines.push(`Reason: ${daemon.exitReason}`);
 			lines.push(...pendingNotices);
-			const log = await serviceLogs(this.session, name, signal);
-			if (log) lines.push(log);
+			let logFailed = false;
+			try {
+				const log = await serviceLogs(this.session, name, signal);
+				if (log) lines.push(log);
+			} catch (error) {
+				logFailed = true;
+				lines.push(
+					`Service started, but fetching logs failed: ${error instanceof Error ? error.message : String(error)}. Read proc://${name} for status before taking further action; do not blindly retry the start.`,
+				);
+			}
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
+				...(logFailed ? { isError: true } : {}),
 				details: {
 					service: {
 						name,

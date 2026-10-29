@@ -102,7 +102,7 @@ describe("InputController.handleLargePaste gate", () => {
 			editor.handleInput(`\x1b[200~${payload}\x1b[201~${enter}`);
 
 			expect(spies.showHookSelector).not.toHaveBeenCalled();
-			expect(submitted).toHaveBeenCalledWith(payload);
+			expect(submitted).toHaveBeenCalledWith(payload, `${payload} `);
 		});
 	}
 
@@ -142,7 +142,10 @@ describe("InputController.presentLargePasteMenu actions", () => {
 		const submitted = vi.fn();
 		editor.onSubmit = submitted;
 		editor.handleInput("\r");
-		expect(submitted).toHaveBeenCalledWith("<attachment>\nline one\nline two\n</attachment>");
+		expect(submitted).toHaveBeenCalledWith(
+			"<attachment>\nline one\nline two\n</attachment>",
+			"<attachment>\nline one\nline two\n</attachment> ",
+		);
 	});
 
 	it("pastes inline when explicitly selected", async () => {
@@ -208,7 +211,7 @@ describe("InputController.presentLargePasteMenu file attachment", () => {
 		const submitted = vi.fn();
 		editor.onSubmit = submitted;
 		editor.handleInput("\r");
-		expect(submitted).toHaveBeenCalledWith("local://paste-1.md");
+		expect(submitted).toHaveBeenCalledWith("local://paste-1.md", "local://paste-1.md ");
 		expect(await Bun.file(path.join(dir, "local", "paste-1.md")).text()).toBe("first file\nsecond line");
 		expect(await Bun.file(path.join(dir, "local", "paste-2.md")).text()).toBe("another paste");
 	});

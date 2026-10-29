@@ -301,9 +301,12 @@ export class AstGrepTool implements AgentTool<typeof astGrepSchema, AstGrepToolD
 			};
 
 			if (result.matches.length === 0) {
-				const noMatchMessage = cappedParseErrors.length
-					? "No matches found. Parse issues mean the query may be mis-scoped; narrow `path` before concluding absence."
-					: "No matches found";
+				const noMatchMessage =
+					result.filesSearched === 0
+						? "No searchable files were found; no files were searched. Check `path` and set `lang` for files whose language cannot be inferred."
+						: cappedParseErrors.length
+							? "No matches found. Parse issues mean the query may be mis-scoped; narrow `path` before concluding absence."
+							: "No matches found";
 				const parseMessage = cappedParseErrors.length
 					? `\n${formatParseErrors(cappedParseErrors, parseErrorsTotal).join("\n")}`
 					: "";

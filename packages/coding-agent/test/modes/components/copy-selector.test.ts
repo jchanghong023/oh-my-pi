@@ -10,6 +10,10 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CopySelectorComponent, type CopyPickSource } from "@oh-my-pi/pi-tui/overlays/copy-selector";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionMessageEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { setKeybindings, type TUI } from "@oh-my-pi/pi-tui";
@@ -144,16 +148,19 @@ function makeSelector(
 }
 
 describe("CopySelectorComponent", () => {
+	let previousPreferences: typeof chatTranscriptDisplayPreferences;
 	beforeAll(async () => {
 		await initTheme();
 	});
 	beforeEach(async () => {
+		previousPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 	afterEach(() => {
 		setKeybindings(KeybindingsManager.inMemory());
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousPreferences);
 	});
 
 	it("keeps whole-turn picks exact and ties them to the native transcript entries", () => {
@@ -217,6 +224,7 @@ describe("CopySelectorComponent", () => {
 	});
 
 	it("folds lazily created grouped reads into the assistant turn so Enter copies the yield", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const picks: Array<{ content: string; label: string }> = [];
 		const selector = makeSelector(picks, () => {}, undefined, makeGroupedReadEntries());
 		const lines = selector.render(100).map(line => Bun.stripANSI(line));
@@ -226,7 +234,8 @@ describe("CopySelectorComponent", () => {
 		// leaving the Read card below the outline.
 		const boxed = lines.filter(line => line.startsWith("┆")).join("\n");
 		expect(boxed).toContain(GROUPED_READ_YIELD);
-		expect(boxed).toContain("Read (2)");
+		expect(boxed).toContain("Read a.ts");
+		expect(boxed).toContain("Read b.ts");
 
 		selector.handleInput(ENTER);
 		selector.dispose();

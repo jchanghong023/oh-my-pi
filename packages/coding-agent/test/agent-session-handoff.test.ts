@@ -501,12 +501,24 @@ describe("AgentSession handoff", () => {
 
 		await session.runIdleCompaction();
 
+		const startEvent = events.find(
+			(event): event is Extract<AgentSessionEvent, { type: "auto_compaction_start" }> =>
+				event.type === "auto_compaction_start" && event.action === "snapcompact",
+		);
+		const fallbackStart = events.find(
+			(event): event is Extract<AgentSessionEvent, { type: "auto_compaction_start" }> =>
+				event.type === "auto_compaction_start" && event.action === "context-full",
+		);
 		const endEvent = events.find(
 			(event): event is Extract<AgentSessionEvent, { type: "auto_compaction_end" }> =>
 				event.type === "auto_compaction_end" && event.action === "context-full",
 		);
 		expect(compactSpy).toHaveBeenCalled();
-		expect(events).toContainEqual({ type: "auto_compaction_start", reason: "idle", action: "snapcompact" });
+		expect(startEvent).toMatchObject({ type: "auto_compaction_start", reason: "idle", action: "snapcompact" });
+		expect(fallbackStart).toMatchObject({ type: "auto_compaction_start", reason: "idle", action: "context-full" });
+		expect(events.indexOf(startEvent!)).toBeLessThan(events.indexOf(fallbackStart!));
+		expect(fallbackStart?.operationId).toBe(startEvent?.operationId);
+		expect(endEvent?.operationId).toBe(startEvent?.operationId);
 		expect(endEvent).toMatchObject({
 			type: "auto_compaction_end",
 			action: "context-full",

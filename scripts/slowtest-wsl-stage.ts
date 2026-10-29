@@ -896,7 +896,7 @@ test -z "$source_status" || { echo 'UNVERIFIED: Linux source changed from the fi
 	const inner = `set -eu\nread -r -a stat < /proc/$$/stat\nprintf '%s %s\\n' "$$" "\${stat[21]}" > ${quote(`${control}/pid`)}\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\n${program}`;
 	const script = `set -eu\nmkdir -p -m 700 -- ${quote(control)}\ntrap ${quote(`status=$?; rm -rf -- ${quote(control)}; exit "$status"`)} EXIT\n[ ! -f ${quote(`${control}/canceled`)} ] || exit 130\nsetsid --wait bash -c ${quote(inner)}\n`;
 	console.log(
-		`wsl-stage: distro=${selection.distro} root=${linux.linux_repo} expected_sha=${source.head} scope=fork-affected; helper wall hang guard=${HELPER_HANG_GUARD_SECONDS}s (not charged limit); live compiler-phase accounting`,
+		`wsl-stage: distro=${selection.distro} root=${linux.linux_repo} expected_sha=${source.head} scope=full-project; helper wall hang guard=${HELPER_HANG_GUARD_SECONDS}s (not charged limit); live compiler-phase accounting`,
 	);
 	const command: GateCommand = {
 		label: `wsl/${selection.distro}/fulltest`,

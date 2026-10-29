@@ -162,6 +162,35 @@ function hasJobFeedback(job: JobSnapshot): boolean {
 	);
 }
 
+/** Keep independent diagnostics even when the original Bash card owns the outcome. */
+function duplicatesBashCard(job: JobSnapshot, jobs: ReadonlyMap<string, string> | undefined): boolean {
+	return (
+		job.type === "bash" &&
+		jobs?.get(job.id) === job.status &&
+		!job.meta?.artifactError &&
+		!job.artifactError &&
+		(job.structured === undefined || job.structured.status === "valid")
+	);
+}
+
+export function isDuplicateOnlyWait(
+	result: ToolRenderResult<CoordinationDetails>,
+	jobs: ReadonlyMap<string, string> | undefined,
+): boolean {
+	const details = result.details;
+	return Boolean(
+		!result.isError &&
+		details &&
+		!details.waited &&
+		!details.interrupted &&
+		!details.meta?.artifactError &&
+		!details.agents?.length &&
+		!details.cancelled?.length &&
+		details.jobs?.length &&
+		details.jobs.every(job => duplicatesBashCard(job, jobs)),
+	);
+}
+
 // =============================================================================
 // TUI Renderer
 // =============================================================================
@@ -393,13 +422,12 @@ function jobsRenderResult(
 	const widgetJobs = sortedJobs.filter(job => job.status === "running" && job.widget?.state === "live");
 	const compactJobLines = (width: number, live: boolean): string[] => {
 		const lines: string[] = [];
+		const represented = options.settledBashJobs;
+		const visibleSettledJobs = settledJobs.filter(job => !duplicatesBashCard(job, represented));
 		const indent = " ".repeat(visibleWidth(formatStatusIcon("done", uiTheme)) + 1);
 		// Failures sort first, so the cap never hides one behind successes;
 		// Ctrl+O lists the rest.
-		const shownSettled = settledJobs.filter(
-			(job, index) => index < PREVIEW_LIMITS.COLLAPSED_ITEMS || hasJobFeedback(job),
-		);
-		for (const job of shownSettled) {
+		for (const job of visibleSettledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {
 			const icon = formatStatusIcon(statusToIcon(job.status), uiTheme);
 			const word = job.status === "completed" ? "done" : job.status;
 			const exit =
@@ -441,19 +469,8 @@ function jobsRenderResult(
 			if (artifactError) {
 				lines.push(uiTheme.fg("warning", truncateToWidth(formatArtifactErrorNotice(artifactError), width)));
 			}
-			if (job.structured && job.structured.status !== "valid") {
-				lines.push(
-					uiTheme.fg(
-						"warning",
-						truncateToWidth(
-							`Structured output: ${job.structured.status}${job.structured.error ? `: ${job.structured.error}` : ""}`,
-							width,
-						),
-					),
-				);
-			}
 		}
-		const hiddenSettled = settledJobs.length - shownSettled.length;
+		const hiddenSettled = visibleSettledJobs.length - PREVIEW_LIMITS.COLLAPSED_ITEMS;
 		if (hiddenSettled > 0) lines.push(`${indent}${uiTheme.fg("dim", `… ${hiddenSettled} more settled`)}`);
 		const shownWidgetJobs = widgetJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS);
 		for (const job of shownWidgetJobs) {
@@ -498,6 +515,7 @@ function jobsRenderResult(
 				.bool(shimmerActive)
 				.bool(showModelBadge)
 				.str(widgetStamp(jobs))
+				.str(JSON.stringify([...(options.settledBashJobs ?? [])]))
 				.digest();
 			if (!shimmerActive && cached?.key === key) return cached.lines;
 
@@ -838,28 +856,11 @@ function describeJobsResult(
 	// and errors fill the card of the call that started it (`parksAsBackground`), so no previews.
 	const body: NativeNode[] = [];
 	if (sorted.length > 0) {
-		const shown = sorted.filter((job, index) => index < TILES_SHOWN || hasJobFeedback(job));
-		body.push(keyed(describeJobTiles(shown.map(job => jobTile(job, isPartial))), "tiles"));
-		for (const job of shown.filter(hasJobFeedback)) {
-			const diagnostics = [
-				job.errorText,
-				job.structured && job.structured.status !== "valid"
-					? `Structured output: ${job.structured.status}${job.structured.error ? `: ${job.structured.error}` : ""}`
-					: undefined,
-			];
-			for (const diagnostic of diagnostics) {
-				if (diagnostic) body.push(text([span(plainText(`${job.id}: ${diagnostic}`), "error")], { wrap: "word" }));
-			}
-			const artifact = job.meta?.artifactError ?? job.artifactError;
-			if (artifact)
-				body.push(text([span(plainText(formatArtifactErrorNotice(artifact)), "warning")], { wrap: "word" }));
-		}
-		if (sorted.length > shown.length) {
-			const rest = sorted.length - shown.length;
-			body.push(
-				text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }),
-			);
-		}
+		body.push(keyed(describeJobTiles(sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, isPartial))), "tiles"));
+	}
+	if (sorted.length > TILES_SHOWN) {
+		const rest = sorted.length - TILES_SHOWN;
+		body.push(text([span(`+${rest} more ${rest === 1 ? "job" : "jobs"} · /jobs`, "dim")], { role: "omp.wait.more" }));
 	}
 	if (result.details?.meta?.artifactError) {
 		body.push(
@@ -951,20 +952,39 @@ export const waitToolRenderer = {
 		result: ToolRenderResult<CoordinationDetails>,
 		options: RenderResultOptions,
 	): NativeToolView | undefined {
-		return waitResultMemo.get(result, [options.isPartial, widgetStamp(result.details?.jobs)], () => {
-			if (result.isError) return errorView("Wait", resultText(result));
-			const details = result.details;
-			if (details?.interrupted && !details.waited) {
-				return {
-					head: toolHead("Wait", "interrupted by message"),
-					tone: "info",
-					inline: true,
-				};
-			}
-			const waited = details?.waited;
-			if (!waited) return describeJobsResult(result, options.isPartial);
-			return describeMessage(waited.from, waited.ts, waited.body, waited.replyTo ? ["reply"] : []);
-		});
+		return waitResultMemo.get(
+			result,
+			[options.isPartial, options.expanded, options.settledBashJobs, widgetStamp(result.details?.jobs)],
+			() => {
+				if (result.isError) return errorView("Wait", resultText(result));
+				const details = result.details;
+				if (details?.interrupted && !details.waited) {
+					return {
+						head: toolHead("Wait", "interrupted by message"),
+						tone: "info",
+						inline: true,
+					};
+				}
+				const waited = details?.waited;
+				if (!waited) {
+					const jobs = details?.jobs;
+					if (!options.expanded && jobs && options.settledBashJobs) {
+						const visible = jobs.filter(job => !duplicatesBashCard(job, options.settledBashJobs));
+						if (visible.length !== jobs.length) {
+							if (!visible.length && !details.agents?.length && !details.meta?.artifactError) {
+								return { head: [], inline: true };
+							}
+							return describeJobsResult(
+								{ ...result, details: { ...details, jobs: visible } },
+								options.isPartial,
+							);
+						}
+					}
+					return describeJobsResult(result, options.isPartial);
+				}
+				return describeMessage(waited.from, waited.ts, waited.body, waited.replyTo ? ["reply"] : []);
+			},
+		);
 	},
 	renderResult(
 		result: {

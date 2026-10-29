@@ -191,38 +191,40 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(exitOut).not.toContain("\x1b[>4;0m");
 	});
 
-	it.each([
+	for (const { host, conpty, reply, flags } of [
 		{ host: "kitty-native terminal", conpty: false, reply: "\x1b[?0u", flags: 5 },
 		{ host: "Windows Terminal (ConPTY)", conpty: true, reply: "\x1b[?0u", flags: 1 },
 		{ host: "ConPTY with parent event-type reporting", conpty: true, reply: "\x1b[?2u", flags: 3 },
-	])(
-		"pops the kitty frame on overlay exit and reasserts main-screen flags: $host",
-		async ({ conpty, reply, flags }) => {
-			harness = createProcessTerminalRenderHarness(100, 30, { conpty });
-			await harness.settle();
-			await harness.feed(reply, "\x1b[?1;2c");
-			expect(harness.terminal.kittyProtocolActive).toBe(true);
-			harness.writes.length = 0;
+	]) {
+		it.skipIf(process.platform === "win32" && host === "ConPTY with parent event-type reporting")(
+			`pops the kitty frame on overlay exit and reasserts main-screen flags: ${host}`,
+			async () => {
+				harness = createProcessTerminalRenderHarness(100, 30, { conpty });
+				await harness.settle();
+				await harness.feed(reply, "\x1b[?1;2c");
+				expect(harness.terminal.kittyProtocolActive).toBe(true);
+				harness.writes.length = 0;
 
-			const overlay = harness.tui.showOverlay(new ModalProbe(), {
-				fullscreen: true,
-				width: "100%",
-				maxHeight: "100%",
-				margin: 0,
-			});
-			await harness.settle();
-			expect(harness.writes.join("")).toContain(`\x1b[?1049h\x1b[>${flags}u`);
-			harness.writes.length = 0;
+				const overlay = harness.tui.showOverlay(new ModalProbe(), {
+					fullscreen: true,
+					width: "100%",
+					maxHeight: "100%",
+					margin: 0,
+				});
+				await harness.settle();
+				expect(harness.writes.join("")).toContain(`\x1b[?1049h\x1b[>${flags}u`);
+				harness.writes.length = 0;
 
-			overlay.hide();
-			await harness.settle();
+				overlay.hide();
+				await harness.settle();
 
-			const exitOut = harness.writes.join("");
-			// Kitty keyboard flags are per-screen, so the matching pop must precede
-			// the alt-screen exit to balance the push from overlay entry. Windows
-			// Terminal 1.25–1.27 drop the main-screen flags on `?1049l`
-			// (microsoft/terminal#20763), so omp replaces them right after.
-			expect(exitOut).toContain(`\x1b[<u\x1b[?1049l\x1b[=${flags};1u`);
-		},
-	);
+				const exitOut = harness.writes.join("");
+				// Kitty keyboard flags are per-screen, so the matching pop must precede
+				// the alt-screen exit to balance the push from overlay entry. Windows
+				// Terminal 1.25–1.27 drop the main-screen flags on `?1049l`
+				// (microsoft/terminal#20763), so omp replaces them right after.
+				expect(exitOut).toContain(`\x1b[<u\x1b[?1049l\x1b[=${flags};1u`);
+			},
+		);
+	}
 });

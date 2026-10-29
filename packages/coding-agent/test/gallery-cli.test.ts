@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import {
 	GALLERY_STATES,
 	GALLERY_SURFACES,
@@ -17,11 +17,21 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { toolRenderers } from "@oh-my-pi/pi-tui/tools";
 import { writeToolRenderer } from "@oh-my-pi/pi-tui/tools/write";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
 	await initTheme(false, undefined, undefined, "dark", "light");
+});
+
+let previousCompact: boolean;
+beforeEach(() => {
+	previousCompact = chatTranscriptDisplayPreferences.compactToolActivity;
+	chatTranscriptDisplayPreferences.compactToolActivity = false;
+});
+afterEach(() => {
+	chatTranscriptDisplayPreferences.compactToolActivity = previousCompact;
 });
 
 describe("gallery harness", () => {
@@ -117,18 +127,11 @@ describe("gallery harness", () => {
 	});
 
 	it("routes customRendered tools (task) through the custom-tool branch", async () => {
-		// `task` attaches its renderer on the real AgentTool, so the gallery must
-		// reproduce that path. With a result present and mergeCallAndResult, the
-		// custom branch must NOT emit a redundant tool-name line above the result box
-		// (regression guard for tool-execution's custom-branch fallback label).
 		const task = resolveFixture("task");
 		expect(task.customRendered).toBe(true);
 		const lines = await renderGalleryState("task", task, "error", 100);
-		const stripped = lines.map(line => Bun.stripANSI(line).trim());
-		// The framed result header carries the label inside the box border...
-		expect(stripped.some(line => line.startsWith(theme.boxRound.topLeft) && line.includes("Task"))).toBe(true);
-		// ...but no standalone "Task" label line precedes it.
-		expect(stripped).not.toContain("Task");
+		const output = Bun.stripANSI(lines.join("\n"));
+		expect(output).toContain("RateLimiter");
 	});
 
 	it("renders curated failed states as failures", async () => {

@@ -98,6 +98,7 @@ describe("ToolExecutionComponent custom renderer failures", () => {
 			ui,
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: rawResultText }] }, false);
 		let text = "";
 
@@ -131,6 +132,7 @@ describe("ToolExecutionComponent custom renderer failures", () => {
 			ui,
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		component.updateResult({ content: [{ type: "text", text: resultText }] }, false);
 
 		const rendered = visibleText(component.render(80));

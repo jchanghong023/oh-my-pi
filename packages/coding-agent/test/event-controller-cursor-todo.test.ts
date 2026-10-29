@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import { ChatTranscriptBuilder } from "@oh-my-pi/pi-tui/chat/chat-transcript-builder";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -433,6 +434,21 @@ describe("compact Todo failure feedback", () => {
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
 
+	it("shows a new live failure after a replayed result", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const f = createPresentationFixture();
+		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
+		component.updateResult(
+			{ content: [{ type: "text", text: "OLD_FAILURE" }], isError: true },
+			false,
+			"todo-1",
+			true,
+		);
+		expect(Bun.stripANSI(component.render(180).join("\n"))).not.toContain("OLD_FAILURE");
+		component.updateResult({ content: [{ type: "text", text: "NEW_LIVE_FAILURE" }], isError: true });
+		expect(Bun.stripANSI(component.render(180).join("\n"))).toContain("NEW_LIVE_FAILURE");
+	});
+
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const f = createPresentationFixture();
@@ -475,6 +491,21 @@ describe("compact Todo failure feedback", () => {
 		f.ctx.viewSession.buildTranscriptSessionContext = () => context;
 		await f.helpers.renderInitialMessages();
 		// Compact replay hides ordinary tool errors while retaining the stored result.
+		const builder = new ChatTranscriptBuilder({
+			ui: f.ctx.ui,
+			cwd: process.cwd(),
+			requestRender() {},
+		});
+		builder.rebuild(
+			context.messages.map((message, index) => ({
+				type: "message" as const,
+				id: String(index),
+				parentId: index === 0 ? null : String(index - 1),
+				timestamp: new Date(0).toISOString(),
+				message,
+			})),
+		);
+		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
 		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		setChatTranscriptDisplayPreferences({
 			compactToolActivity: presentation === "clean",
@@ -491,6 +522,9 @@ describe("compact Todo failure feedback", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		f.ctx.hideToolActivity = false;
 		f.ctx.chatContainer.setToolActivityVisible(true);
+		const builderDetailed = Bun.stripANSI(builder.container.render(180).join("\n"));
+		expect(builderDetailed).toContain("HISTORY_FAILURE_REASON");
+		expect(builderDetailed).toContain("PRESERVED_DETAIL_LINE");
 		const detailed = renderTranscript(f.ctx);
 		expect(detailed.match(/HISTORY_FAILURE_REASON/g)).toHaveLength(1);
 		expect(detailed).toContain("PRESERVED_DETAIL_LINE");

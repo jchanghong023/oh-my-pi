@@ -65,7 +65,7 @@ import {
 } from "./late-diagnostics-message";
 import { groupedReadUsageCallIds, ReadToolGroupComponent, readArgsCollapseIntoGroup } from "./read-tool-group";
 import { SkillMessageComponent } from "./skill-message";
-import { ToolExecutionComponent } from "./tool-execution";
+import { settledBashCards, ToolExecutionComponent } from "./tool-execution";
 import { TranscriptContainer } from "../chrome/transcript-container";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "../overlays/usage-row";
 import { CollapsedSyntheticMessageComponent, UserMessageComponent } from "./user-message";
@@ -507,6 +507,7 @@ export class ChatTranscriptBuilder {
 					{ content: [{ type: "text", text: errorMessage }], isError: true },
 					false,
 					content.id,
+					true,
 				);
 			} else {
 				this.#pendingTools.set(content.id, component);
@@ -536,7 +537,11 @@ export class ChatTranscriptBuilder {
 			return;
 		}
 		if (!pending) return;
-		pending.updateResult(message, false, message.toolCallId);
+		if (message.toolName === "wait" && pending instanceof ToolExecutionComponent) {
+			pending.setSettledBashJobs(() => settledBashCards(this.container.children));
+		}
+		if (pending instanceof ToolExecutionComponent) pending.updateResult(message, false, message.toolCallId, true);
+		else pending.updateResult(message, false, message.toolCallId);
 		this.#pendingTools.delete(message.toolCallId);
 		if (message.toolName === "wait" && pending instanceof ToolExecutionComponent && pending.isDisplaceableBlock()) {
 			this.#waitingPoll = pending;
@@ -555,7 +560,7 @@ export class ChatTranscriptBuilder {
 	#appendCustomMessage(message: Extract<AgentMessage, { role: "custom" | "hookMessage" }>): void {
 		if (!message.display) return;
 		if (message.customType === "async-result") {
-			const component = buildAsyncResultBlock(message);
+			const component = buildAsyncResultBlock(message, settledBashCards(this.container.children));
 			this.container.addChild(component);
 			return;
 		}

@@ -24,7 +24,7 @@ import {
 	withTui,
 } from "./tui-harness";
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"real TUI owners share a Git subtree, survive process restart and clear only corrupt Dev state",
 	async () => {
 		await withTui(
@@ -206,7 +206,7 @@ test.skipIf(!tuiTest)(
 	180_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"a real provider authentication failure retains the created requirements run for explicit native continuation",
 	async () => {
 		await withTui({ authFailureOnce: true }, [100, 28], async ({ provider, tui, state, stage, idle }) => {

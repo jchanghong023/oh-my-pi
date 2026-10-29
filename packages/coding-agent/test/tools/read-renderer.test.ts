@@ -1,6 +1,10 @@
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { TUI } from "@oh-my-pi/pi-tui";
 import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -15,6 +19,13 @@ afterAll(() => {
 });
 
 describe("read ToolExecutionComponent framing", () => {
+	let previousPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousPreferences));
+
 	it("renders framed read results inside the standard tool container padding", () => {
 		const uiStub = { requestRender() {}, requestComponentRender() {} } as unknown as TUI;
 		const component = new ToolExecutionComponent("read", { path: "src/example.ts" }, {}, undefined, uiStub);

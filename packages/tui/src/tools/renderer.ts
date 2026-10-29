@@ -16,6 +16,8 @@ export interface RenderResultOptions {
 	isPartial: boolean;
 	/** Effective compact preference for this rendered result. */
 	compactToolActivity?: boolean;
+	/** Terminal Bash cards already showing these job outcomes in this transcript. */
+	settledBashJobs?: ReadonlyMap<string, string>;
 	/** Current spinner frame index for animated elements (0-9, only provided during partial results) */
 	spinnerFrame?: number;
 	/**

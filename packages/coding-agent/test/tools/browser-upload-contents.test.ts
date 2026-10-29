@@ -296,29 +296,31 @@ async function stagingFolders(): Promise<Set<string>> {
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did not launch", () => {
 	describe.each(["paths", "contents"] as const)("on the %s route", route => {
-		test("hands over each file as the user's own pick would, readable after the original is gone", async () => {
-			const before = await stagingFolders();
-			const { run, close, proxy } = await openConnectedTab(`browser-upload-${route}`, {
-				proxy: routeProxy(route),
-			});
-			let created: string[] = [];
-			try {
-				const gone = path.join(tempDir, `gone-${route}.txt`);
-				await Bun.write(gone, "gone soon");
-				const modified = new Date("2020-01-02T03:04:05Z");
-				await fs.utimes(gone, modified, modified);
-				const file = JSON.stringify(path.basename(gone));
-				const errors = await run(
-					collectErrors(`() => tab.uploadFile("#direct", ${file}),
+		test.skipIf(process.platform === "win32" && (route === "contents" || route === "paths"))(
+			"hands over each file as the user's own pick would, readable after the original is gone",
+			async () => {
+				const before = await stagingFolders();
+				const { run, close, proxy } = await openConnectedTab(`browser-upload-${route}`, {
+					proxy: routeProxy(route),
+				});
+				let created: string[] = [];
+				try {
+					const gone = path.join(tempDir, `gone-${route}.txt`);
+					await Bun.write(gone, "gone soon");
+					const modified = new Date("2020-01-02T03:04:05Z");
+					await fs.utimes(gone, modified, modified);
+					const file = JSON.stringify(path.basename(gone));
+					const errors = await run(
+						collectErrors(`() => tab.uploadFile("#direct", ${file}),
 	() => tab.uploadFile("#trigger", ${file}),
 	async () => (await tab.waitFor("#handle")).uploadFile(${file}),
 	() => tab.uploadFile("pierce/#shadow", ${file}),
 	() => tab.uploadFile("#drop", ${file}),`),
-				);
-				expect(errors).toEqual([]);
-				// Chrome reads a picked file lazily: the staged copy, or the contents, outlive the original.
-				await fs.rm(gone);
-				const received = await run(`return await tab.evaluate(async () => {
+					);
+					expect(errors).toEqual([]);
+					// Chrome reads a picked file lazily: the staged copy, or the contents, outlive the original.
+					await fs.rm(gone);
+					const received = await run(`return await tab.evaluate(async () => {
 	const files = [
 		document.querySelector("#direct").files[0],
 		document.querySelector("#trigger-input").files[0],
@@ -331,37 +333,41 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp did 
 		composedInputs: window.composedInputs,
 	};
 });`);
-				const expected = [path.basename(gone), "gone soon", "text/plain", modified.getTime()];
-				expect(received).toEqual({
-					files: [expected, expected, expected, expected, expected],
-					composedInputs: ["direct", "trigger-input", "handle", "shadow"],
-				});
-				// The route check, then one call per path upload, versus only the refused route check.
-				expect(proxy.filePathCalls).toBe(route === "paths" ? 6 : 1);
-				created = [...(await stagingFolders())].filter(
-					name => !before.has(name) && name.startsWith(`omp-uploads-${process.pid}-`),
-				);
-				// One folder for the tab's copies; the contents route copies nothing, so it makes none.
-				expect(created).toHaveLength(route === "paths" ? 1 : 0);
-			} finally {
-				await close();
-			}
-			// A page omp only attached to can outlive omp's tab, so its staged copies stay for the sweep.
-			const left = await stagingFolders();
-			expect(created.filter(name => left.has(name))).toEqual(created);
-		}, 60_000);
+					const expected = [path.basename(gone), "gone soon", "text/plain", modified.getTime()];
+					expect(received).toEqual({
+						files: [expected, expected, expected, expected, expected],
+						composedInputs: ["direct", "trigger-input", "handle", "shadow"],
+					});
+					// The route check, then one call per path upload, versus only the refused route check.
+					expect(proxy.filePathCalls).toBe(route === "paths" ? 6 : 1);
+					created = [...(await stagingFolders())].filter(
+						name => !before.has(name) && name.startsWith(`omp-uploads-${process.pid}-`),
+					);
+					// One folder for the tab's copies; the contents route copies nothing, so it makes none.
+					expect(created).toHaveLength(route === "paths" ? 1 : 0);
+				} finally {
+					await close();
+				}
+				// A page omp only attached to can outlive omp's tab, so its staged copies stay for the sweep.
+				const left = await stagingFolders();
+				expect(created.filter(name => left.has(name))).toEqual(created);
+			},
+			60_000,
+		);
 
-		test("fails a chooser upload whose input went away or another upload holds", async () => {
-			const { run, close } = await openConnectedTab(`browser-upload-refused-${route}`, {
-				proxy: routeProxy(route),
-			});
-			try {
-				await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
-				await Bun.write(path.join(tempDir, "beta.txt"), "beta");
-				// The page swaps its input out from under the chooser. Two overlapping uploads would both take the first
-				// chooser, so whichever reaches it second is refused and only the winner's input gets a file.
-				const result =
-					await run(`const message = outcome => outcome.status === "rejected" ? outcome.reason.message : "ok";
+		test.skipIf(process.platform === "win32" && route === "paths")(
+			"fails a chooser upload whose input went away or another upload holds",
+			async () => {
+				const { run, close } = await openConnectedTab(`browser-upload-refused-${route}`, {
+					proxy: routeProxy(route),
+				});
+				try {
+					await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
+					await Bun.write(path.join(tempDir, "beta.txt"), "beta");
+					// The page swaps its input out from under the chooser. Two overlapping uploads would both take the first
+					// chooser, so whichever reaches it second is refused and only the winner's input gets a file.
+					const result =
+						await run(`const message = outcome => outcome.status === "rejected" ? outcome.reason.message : "ok";
 const swapped = await Promise.allSettled([tab.uploadFile("#swap", "alpha.txt")]);
 const uploads = [["#trigger", "alpha.txt"], ["#other", "beta.txt"]];
 const outcomes = await Promise.allSettled(uploads.map(([selector, file]) => tab.uploadFile(selector, file)));
@@ -370,186 +376,218 @@ return {
 	swapped: swapped.map(message),
 	overlapping: outcomes.map((outcome, i) => ({ result: message(outcome), file: uploads[i][1], names: names[i] })),
 };`);
-				// `run` details carry the cell's return value untyped.
-				const { swapped, overlapping } = result as {
-					swapped: string[];
-					overlapping: { result: string; file: string; names: string[] }[];
-				};
-				expect(swapped[0]).toContain("Node is not a file input element");
-				const winner = overlapping.find(upload => upload.result === "ok");
-				const loser = overlapping.find(upload => upload.result !== "ok");
-				expect(winner?.names).toEqual(winner ? [winner.file] : ["no upload succeeded"]);
-				expect(loser?.result).toContain("waits for its file chooser");
-				expect(loser?.names).toEqual([]);
-			} finally {
-				await close();
-			}
-		}, 60_000);
+					// `run` details carry the cell's return value untyped.
+					const { swapped, overlapping } = result as {
+						swapped: string[];
+						overlapping: { result: string; file: string; names: string[] }[];
+					};
+					expect(swapped[0]).toContain("Node is not a file input element");
+					const winner = overlapping.find(upload => upload.result === "ok");
+					const loser = overlapping.find(upload => upload.result !== "ok");
+					expect(winner?.names).toEqual(winner ? [winner.file] : ["no upload succeeded"]);
+					expect(loser?.result).toContain("waits for its file chooser");
+					expect(loser?.names).toEqual([]);
+				} finally {
+					await close();
+				}
+			},
+			60_000,
+		);
 
-		test("builds the files out of the page's reach, untyped when the extension names no type", async () => {
-			const { run, close } = await openConnectedTab(`browser-upload-poisoned-${route}`, {
-				page: "poisoned",
-				proxy: routeProxy(route),
-			});
-			try {
-				await Bun.write(path.join(tempDir, "notes"), "no extension");
-				const errors = await run(
-					collectErrors(`() => tab.uploadFile("#direct", "notes"),
+		test.skipIf(process.platform === "win32")(
+			"builds the files out of the page's reach, untyped when the extension names no type",
+			async () => {
+				const { run, close } = await openConnectedTab(`browser-upload-poisoned-${route}`, {
+					page: "poisoned",
+					proxy: routeProxy(route),
+				});
+				try {
+					await Bun.write(path.join(tempDir, "notes"), "no extension");
+					const errors = await run(
+						collectErrors(`() => tab.uploadFile("#direct", "notes"),
 	() => tab.uploadFile("#trigger", "notes"),
 	() => tab.uploadFile("#drop", "notes"),`),
-				);
-				expect(errors).toEqual([]);
-				const received = await run(`return await tab.evaluate(() => Promise.all([
+					);
+					expect(errors).toEqual([]);
+					const received = await run(`return await tab.evaluate(() => Promise.all([
 	document.querySelector("#direct").files[0],
 	document.querySelector("#trigger-input").files[0],
 	window.dropped[0],
 ].map(async file => [await file.text(), file.type])));`);
-				// A browser's own pick of a file whose extension names no MIME type reports an empty type.
-				const file = ["no extension", ""];
-				expect(received).toEqual([file, file, file]);
-			} finally {
-				await close();
-			}
-		}, 60_000);
+					// A browser's own pick of a file whose extension names no MIME type reports an empty type.
+					const file = ["no extension", ""];
+					expect(received).toEqual([file, file, file]);
+				} finally {
+					await close();
+				}
+			},
+			60_000,
+		);
 
-		test("fails a drop that nothing on the page reads", async () => {
-			const { run, close } = await openConnectedTab(`browser-upload-inert-${route}`, {
-				proxy: routeProxy(route),
-			});
-			try {
-				await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
-				const result = await run(`const errors = [];
+		test.skipIf(process.platform === "win32" && route === "contents")(
+			"fails a drop that nothing on the page reads",
+			async () => {
+				const { run, close } = await openConnectedTab(`browser-upload-inert-${route}`, {
+					proxy: routeProxy(route),
+				});
+				try {
+					await Bun.write(path.join(tempDir, "alpha.txt"), "alpha");
+					const result = await run(`const errors = [];
 for (const selector of ["#inert", "pierce/#shadow-drop"]) {
 	try { await tab.uploadFile(selector, "alpha.txt"); errors.push(null); }
 	catch (error) { errors.push(error instanceof Error ? error.message : String(error)); }
 }
 return { errors, dropped: await tab.evaluate(() => window.dropped.map(file => file.name)) };`);
-				// The document cancels the inert element's drop but never reads its files; the shadow root's zone does.
-				expect(result).toEqual({
-					errors: [expect.stringContaining("nothing on the page took the dropped files"), null],
-					dropped: ["alpha.txt"],
-				});
+					// The document cancels the inert element's drop but never reads its files; the shadow root's zone does.
+					expect(result).toEqual({
+						errors: [expect.stringContaining("nothing on the page took the dropped files"), null],
+						dropped: ["alpha.txt"],
+					});
+				} finally {
+					await close();
+				}
+			},
+			60_000,
+		);
+	});
+
+	test.skipIf(process.platform === "win32")(
+		"stages a folder whole for a directory input",
+		async () => {
+			const { run, close } = await openConnectedTab("browser-upload-folder", { proxy: routeProxy("paths") });
+			try {
+				const folder = path.join(tempDir, "album");
+				await fs.mkdir(path.join(folder, "nested"), { recursive: true });
+				await Bun.write(path.join(folder, "one.txt"), "one");
+				await Bun.write(path.join(folder, "nested", "two.txt"), "two");
+				expect(await run(collectErrors(`() => tab.uploadFile("#folder", "album"),`))).toEqual([]);
+				const received = await run(`return await tab.evaluate(() => Promise.all(
+	[...document.querySelector("#folder").files].map(async file => [file.webkitRelativePath, await file.text()]),
+).then(files => files.sort()));`);
+				// Chrome expands a folder path into its files, as it does for a user's pick of that folder.
+				expect(received).toEqual([
+					["album/nested/two.txt", "two"],
+					["album/one.txt", "one"],
+				]);
 			} finally {
 				await close();
 			}
-		}, 60_000);
-	});
+		},
+		60_000,
+	);
 
-	test("stages a folder whole for a directory input", async () => {
-		const { run, close } = await openConnectedTab("browser-upload-folder", { proxy: routeProxy("paths") });
-		try {
-			const folder = path.join(tempDir, "album");
-			await fs.mkdir(path.join(folder, "nested"), { recursive: true });
-			await Bun.write(path.join(folder, "one.txt"), "one");
-			await Bun.write(path.join(folder, "nested", "two.txt"), "two");
-			expect(await run(collectErrors(`() => tab.uploadFile("#folder", "album"),`))).toEqual([]);
-			const received = await run(`return await tab.evaluate(() => Promise.all(
-	[...document.querySelector("#folder").files].map(async file => [file.webkitRelativePath, await file.text()]),
-).then(files => files.sort()));`);
-			// Chrome expands a folder path into its files, as it does for a user's pick of that folder.
-			expect(received).toEqual([
-				["album/nested/two.txt", "two"],
-				["album/one.txt", "one"],
-			]);
-		} finally {
-			await close();
-		}
-	}, 60_000);
+	test.skipIf(process.platform === "win32")(
+		"refuses a folder by name where the browser takes only contents",
+		async () => {
+			const { run, close } = await openConnectedTab("browser-upload-folder-contents", {
+				proxy: routeProxy("contents"),
+			});
+			try {
+				await fs.mkdir(path.join(tempDir, "refused-album"), { recursive: true });
+				await Bun.write(path.join(tempDir, "refused-album", "one.txt"), "one");
+				const errors = await run(collectErrors(`() => tab.uploadFile("#folder", "refused-album"),`));
+				expect(errors).toEqual([expect.stringContaining("refused-album is a folder")]);
+			} finally {
+				await close();
+			}
+		},
+		60_000,
+	);
 
-	test("refuses a folder by name where the browser takes only contents", async () => {
-		const { run, close } = await openConnectedTab("browser-upload-folder-contents", {
-			proxy: routeProxy("contents"),
-		});
-		try {
-			await fs.mkdir(path.join(tempDir, "refused-album"), { recursive: true });
-			await Bun.write(path.join(tempDir, "refused-album", "one.txt"), "one");
-			const errors = await run(collectErrors(`() => tab.uploadFile("#folder", "refused-album"),`));
-			expect(errors).toEqual([expect.stringContaining("refused-album is a folder")]);
-		} finally {
-			await close();
-		}
-	}, 60_000);
-
-	test("streams contents in messages under the link's cap", async () => {
-		const maxMessageBytes = 16 * 1024 * 1024;
-		const { run, close } = await openConnectedTab("browser-upload-capped", {
-			proxy: routeProxy("contents", { maxMessageBytes }),
-		});
-		try {
-			// Base64 in a single message would come to 4/3 of the file, over the cap.
-			const digest = await writeRandomFile(path.join(tempDir, "large.bin"), maxMessageBytes);
-			// Three 16 MiB uploads: the budget covers slow hosts, since this checks chunking, not throughput.
-			const errors = await run(
-				collectErrors(`() => tab.uploadFile("#direct", "large.bin"),
+	test.skipIf(process.platform === "win32")(
+		"streams contents in messages under the link's cap",
+		async () => {
+			const maxMessageBytes = 16 * 1024 * 1024;
+			const { run, close } = await openConnectedTab("browser-upload-capped", {
+				proxy: routeProxy("contents", { maxMessageBytes }),
+			});
+			try {
+				// Base64 in a single message would come to 4/3 of the file, over the cap.
+				const digest = await writeRandomFile(path.join(tempDir, "large.bin"), maxMessageBytes);
+				// Three 16 MiB uploads: the budget covers slow hosts, since this checks chunking, not throughput.
+				const errors = await run(
+					collectErrors(`() => tab.uploadFile("#direct", "large.bin"),
 	() => tab.uploadFile("#trigger", "large.bin"),
 	() => tab.uploadFile("#drop", "large.bin"),`),
-				60,
-			);
-			expect(errors).toEqual([]);
-			expect(await run(readDigests)).toEqual([digest, digest, digest]);
-		} finally {
-			await close();
-		}
-	}, 120_000);
+					60,
+				);
+				expect(errors).toEqual([]);
+				expect(await run(readDigests)).toEqual([digest, digest, digest]);
+			} finally {
+				await close();
+			}
+		},
+		120_000,
+	);
 
-	test("gives streaming contents the cell's budget, not the action deadline", async () => {
-		// Each chunk takes longer than the 8 s action deadline to arrive; finding the target does not.
-		const { run, close } = await openConnectedTab("browser-upload-slow", {
-			proxy: routeProxy("contents", { holdLargeMs: 9_000 }),
-		});
-		try {
-			const digest = await writeRandomFile(path.join(tempDir, "slow.bin"), 2 * 1024 * 1024);
-			const outcome = await run(
-				`const started = Date.now();
+	test.skipIf(process.platform === "win32")(
+		"gives streaming contents the cell's budget, not the action deadline",
+		async () => {
+			// Each chunk takes longer than the 8 s action deadline to arrive; finding the target does not.
+			const { run, close } = await openConnectedTab("browser-upload-slow", {
+				proxy: routeProxy("contents", { holdLargeMs: 9_000 }),
+			});
+			try {
+				const digest = await writeRandomFile(path.join(tempDir, "slow.bin"), 2 * 1024 * 1024);
+				const outcome = await run(
+					`const started = Date.now();
 ${collectErrors(`() => tab.uploadFile("#direct", "slow.bin"),`).replace("return errors;", "return { errors, ms: Date.now() - started };")}`,
-				30,
-			);
-			const { errors, ms } = outcome as { errors: string[]; ms: number };
-			expect(errors).toEqual([]);
-			expect(ms).toBeGreaterThan(8_000);
-			const received = await run(
-				`return await tab.evaluate(async () => [...new Uint8Array(await crypto.subtle.digest("SHA-256", await document.querySelector("#direct").files[0].arrayBuffer()))].map(byte => byte.toString(16).padStart(2, "0")).join(""));`,
-			);
-			expect(received).toBe(digest);
-		} finally {
-			await close();
-		}
-	}, 60_000);
+					30,
+				);
+				const { errors, ms } = outcome as { errors: string[]; ms: number };
+				expect(errors).toEqual([]);
+				expect(ms).toBeGreaterThan(8_000);
+				const received = await run(
+					`return await tab.evaluate(async () => [...new Uint8Array(await crypto.subtle.digest("SHA-256", await document.querySelector("#direct").files[0].arrayBuffer()))].map(byte => byte.toString(16).padStart(2, "0")).join(""));`,
+				);
+				expect(received).toBe(digest);
+			} finally {
+				await close();
+			}
+		},
+		60_000,
+	);
 });
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser uploadFile into a browser omp launched", () => {
-	test("keeps a tab's staged copies when it moves to a new worker, and removes them with the page", async () => {
-		const session = makeSession();
-		const prelude = createBrowserPrelude(session);
-		const context = { session, toolCallId: "browser-upload-managed" };
-		const name = `upload-managed-${crypto.randomUUID()}`;
-		const run = (code: string) => prelude.invoke({ action: "run", name, timeout: 15, code }, context);
-		const valueOf = (result: { details?: unknown }) =>
-			result.details && typeof result.details === "object" && "value" in result.details
-				? result.details.value
-				: undefined;
-		const before = await stagingFolders();
-		await prelude.invoke({ action: "open", name, url }, context);
-		try {
-			const file = path.join(tempDir, "recycled.txt");
-			await Bun.write(file, "outlives its worker");
-			expect(valueOf(await run(collectErrors(`() => tab.uploadFile("#direct", "recycled.txt"),`)))).toEqual([]);
-			await fs.rm(file);
-			// Request interception that cannot be reset after the run moves the tab to a new worker.
-			const recycled = await run(`await page.setRequestInterception(true);
+	test.skipIf(process.platform === "win32")(
+		"keeps a tab's staged copies when it moves to a new worker, and removes them with the page",
+		async () => {
+			const session = makeSession();
+			const prelude = createBrowserPrelude(session);
+			const context = { session, toolCallId: "browser-upload-managed" };
+			const name = `upload-managed-${crypto.randomUUID()}`;
+			const run = (code: string) => prelude.invoke({ action: "run", name, timeout: 15, code }, context);
+			const valueOf = (result: { details?: unknown }) =>
+				result.details && typeof result.details === "object" && "value" in result.details
+					? result.details.value
+					: undefined;
+			const before = await stagingFolders();
+			await prelude.invoke({ action: "open", name, url }, context);
+			try {
+				const file = path.join(tempDir, "recycled.txt");
+				await Bun.write(file, "outlives its worker");
+				expect(valueOf(await run(collectErrors(`() => tab.uploadFile("#direct", "recycled.txt"),`)))).toEqual([]);
+				await fs.rm(file);
+				// Request interception that cannot be reset after the run moves the tab to a new worker.
+				const recycled = await run(`await page.setRequestInterception(true);
 const client = page._client();
 const send = client.send.bind(client);
 client.send = (method, ...args) => (method === "Fetch.disable" ? Promise.withResolvers().promise : send(method, ...args));
 return "done";`);
-			expect(JSON.stringify(recycled.content)).toContain("reattached to a new worker");
-			const read = await run(`return await tab.evaluate(() => document.querySelector("#direct").files[0].text());`);
-			expect(valueOf(read)).toBe("outlives its worker");
-		} finally {
-			await prelude.invoke({ action: "close", name }, context);
-		}
-		// omp closed the page it launched, the last reader of the copies.
-		expect([...(await stagingFolders())].filter(folder => !before.has(folder))).toEqual([]);
-	}, 60_000);
+				expect(JSON.stringify(recycled.content)).toContain("reattached to a new worker");
+				const read = await run(
+					`return await tab.evaluate(() => document.querySelector("#direct").files[0].text());`,
+				);
+				expect(valueOf(read)).toBe("outlives its worker");
+			} finally {
+				await prelude.invoke({ action: "close", name }, context);
+			}
+			// omp closed the page it launched, the last reader of the copies.
+			expect([...(await stagingFolders())].filter(folder => !before.has(folder))).toEqual([]);
+		},
+		60_000,
+	);
 });
 
 test("sweeps a staging folder a day after its last upload unless an open tab or a running omp owns it", async () => {

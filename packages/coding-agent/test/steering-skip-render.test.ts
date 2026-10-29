@@ -1,8 +1,7 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { getThemeByName, initTheme } from "@oh-my-pi/pi-tui/theme";
-import { formatStatusIcon } from "@oh-my-pi/pi-tui/render/render-utils";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
@@ -49,30 +48,29 @@ describe("mid-turn steering skip rendering", () => {
 	});
 
 	it("preserves other skipped tool cards and real wait results", async () => {
-		const uiTheme = await getThemeByName("dark");
-		if (!uiTheme) throw new Error("dark theme missing");
-		const infoIcon = Bun.stripANSI(formatStatusIcon("info", uiTheme));
 		const skippedEdit = renderTool("edit", {
 			content: [{ type: "text", text: SKIP_TEXT }],
 			details: { __synthetic: true, source: "interrupt_skipped", executed: false },
 			isError: true,
 		});
-		expect(skippedEdit).toContain(infoIcon);
+		expect(skippedEdit).toContain("Edit");
 
-		const realWait = renderTool("wait", {
-			content: [{ type: "text", text: "No background work to wait for" }],
-			details: { op: "wait", jobs: [] },
-		});
+		const realWait = renderTool(
+			"wait",
+			{
+				content: [{ type: "text", text: "No background work to wait for" }],
+				details: { op: "wait", jobs: [] },
+			},
+			{ expanded: true },
+		);
 		expect(realWait).toContain("No background work to wait for");
 	}, 15_000);
 
 	it("still renders a genuine edit failure as an error", async () => {
-		const uiTheme = await getThemeByName("dark");
-		if (!uiTheme) throw new Error("dark theme missing");
-		const errorIcon = Bun.stripANSI(formatStatusIcon("error", uiTheme));
+		const failure = "Cannot apply edit: target was not found";
 
-		const rendered = renderTool("edit", { content: [{ type: "text", text: SKIP_TEXT }], details: {}, isError: true });
+		const rendered = renderTool("edit", { content: [{ type: "text", text: failure }], details: {}, isError: true });
 
-		expect(rendered).toContain(errorIcon);
+		expect(rendered).toContain(failure);
 	}, 15_000);
 });

@@ -1,29 +1,47 @@
-import type { GateCommand } from "./test-gate-runtime";
+import * as os from "node:os";
+import type { GateCommand, GateRun } from "./test-gate-runtime";
 
-export interface GateCommandRisk {
-	priority: number;
-	reason: string;
+/** Share a platform-specific test-worker ceiling bounded by the available CPU allocation. */
+export function testConcurrencyLimit(
+	cores: number = os.availableParallelism(),
+	platform: NodeJS.Platform = process.platform,
+): number {
+	return Math.min(platform === "win32" ? 14 : 28, Math.max(1, Math.floor(cores)));
 }
 
-/** Engineering heuristics, not invented historical failure rates. Scheduling
- * metadata stays outside Bazel action inputs so reprioritization preserves hits. */
-export function gateCommandRisk(command: GateCommand): GateCommandRisk {
-	const label = command.label;
-	if (/^build\//.test(label)) return { priority: 100, reason: "generated native bindings must precede their readers" };
-	if (/^test\/repository scripts/.test(label) || /test-gate|fulltest|slowtest|fastcheck/.test(label))
-		return { priority: 95, reason: "changed gate orchestration and cancellation boundaries" };
-	if (/^static\/TS types.*(?:coding-agent|pi-utils|pi-agent-core)/.test(label))
-		return { priority: 90, reason: "shared interfaces and high-fanout consumers" };
-	if (/^test\/Rust|^static\/Rust/.test(label))
-		return { priority: 85, reason: "native toolchain and platform integration boundary" };
-	if (
-		/rpc|mcp|stdio|pty|terminal|cli|spawn|offline|company|config|session|team|subprocess|worker|index|wiki/i.test(
-			label,
-		)
-	)
-		return { priority: 80, reason: "stateful configuration, concurrency, or platform boundary" };
-	if (/^smoke\//.test(label)) return { priority: 75, reason: "public CLI and native integration boundary" };
-	if (/^static\/TS types/.test(label)) return { priority: 70, reason: "type errors block package consumers" };
-	if (/^static\//.test(label)) return { priority: 60, reason: "format and lint checks after higher-risk interfaces" };
-	return { priority: 50, reason: "remaining independent regression coverage" };
+/** Run independent commands with bounded concurrency, continuing after ordinary failures. */
+export async function runGateCommands(
+	gate: GateRun,
+	commands: readonly GateCommand[],
+	options: { concurrency?: number; onCommandSettled?: (command: GateCommand) => void } = {},
+): Promise<void> {
+	const concurrency = Math.max(1, Math.floor(options.concurrency ?? 1));
+	let next = 0;
+	let firstFailure: unknown;
+	let failed = false;
+	function recordFailure(error: unknown): void {
+		if (!failed) {
+			failed = true;
+			firstFailure = error;
+		}
+	}
+	async function worker(): Promise<void> {
+		while (!gate.signal.aborted && next < commands.length) {
+			const command = commands[next++]!;
+			try {
+				await gate.run(command);
+			} catch (error) {
+				recordFailure(error);
+			} finally {
+				try {
+					options.onCommandSettled?.(command);
+				} catch (error) {
+					recordFailure(error);
+				}
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: Math.min(concurrency, commands.length) }, () => worker()));
+	if (gate.signal.aborted) throw gate.signal.reason;
+	if (failed) throw firstFailure;
 }

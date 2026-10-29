@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Use the existing Cargo host build for native development instead of the fork-only Bazel host cache; retain upstream explicit-target Bazel builds and native installation rollback.
+- Keep Cargo/Nextest and doctests as the normal Rust test path, with conservative crate-level `--affected` selection and an explicit local-only early cargo-affected experiment; manual CI runs the full Rust suite without that experiment.
+- Limit Nextest test threads to the smaller of 15 and the available CPU count for normal, affected and experimental Rust test runs.
+
 ### Fixed
 
 - Fixed native addon and grammar installation paths to share the effective configuration root and normalized profile, while honoring an explicit `PI_NATIVES_DIR`.

@@ -317,12 +317,25 @@ function stripBashNotices(
 			: stripTrailingNotice(withoutExit, formatWallTimeNotice(details.wallTimeMs));
 	return stripRawOutputArtifactNotice(withoutWall);
 }
+
+/** Prefer command diagnostics over Bun's trailing script-exit wrappers in compact previews. */
+function compactBashOutputLines(output: string): string[] {
+	const lines = nonEmptyTailLines(output, Number.MAX_SAFE_INTEGER);
+	let end = lines.length;
+	while (end > 0 && /^error: script .+ exited with code \d+\s*$/u.test(Bun.stripANSI(lines[end - 1]).trim())) {
+		end--;
+	}
+	// A wrapper may be the only available explanation; never discard it in that case.
+	if (end === 0) end = lines.length;
+	return lines.slice(Math.max(0, end - PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED), end);
+}
 /** `Wall: 1.20s`, `Timeout: 30s`, … metadata parts shown under bash output. */
 function bashStatsParts(
 	details: BashToolDetails | undefined,
 	contextTimeout: number | undefined,
 	artifactId: string | undefined,
 	isError: boolean,
+	compact: boolean,
 ): string[] {
 	const timeoutDisabled = details?.timeoutDisabled === true || contextTimeout === 0;
 	const timeoutSeconds = timeoutDisabled ? undefined : (details?.timeoutSeconds ?? contextTimeout);
@@ -336,15 +349,15 @@ function bashStatsParts(
 		const service = details.service;
 		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
 		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
-		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
+		if (!compact && service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
 	}
-	if (wallTimeMs !== undefined) {
+	if (!compact && wallTimeMs !== undefined) {
 		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
 	}
-	if (timeoutDisabled) {
+	if (!compact && timeoutDisabled) {
 		statsParts.push("Timeout: disabled");
 	}
-	if (typeof timeoutSeconds === "number") {
+	if (!compact && typeof timeoutSeconds === "number") {
 		statsParts.push(
 			requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
 				? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
@@ -393,14 +406,18 @@ function callIntent(args: unknown): string | undefined {
 }
 
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
-function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
+function shellFootParts(
+	details: BashToolDetails | undefined,
+	artifactId: string | undefined,
+	compact = false,
+): string[] {
 	const parts: string[] = [];
 	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
 	const service = details?.service;
 	if (service) {
 		parts.push(`Service ${service.name}`, service.state);
 		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
-		if (service.pid !== undefined) parts.push(`PID ${service.pid}`);
+		if (!compact && service.pid !== undefined) parts.push(`PID ${service.pid}`);
 	}
 	if (artifactId) parts.push(`Artifact ${artifactId}`);
 	return parts;
@@ -409,7 +426,7 @@ function shellFootParts(details: BashToolDetails | undefined, artifactId: string
 /** The command line as a run's input: wrapped shell source. */
 const SHELL_INPUT = { role: "omp.tool.bash.command", lang: "bash", wrap: true } as const;
 
-/** Box tint per run state: failed runs read as errors, timed-out ones as warnings. */
+/** Expanded box tint per run state. */
 const RUN_BOX_TONE: Partial<Record<RunState, TspTone>> = { failed: "error", "timed-out": "warning" };
 
 /** The foot state of a shell call from its result. */
@@ -485,8 +502,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cmdLines: string[] | undefined;
 			const isError = result.isError === true;
 			const isPartial = options.isPartial === true;
-			const success = !isPartial && !isError;
 			const details = result.details;
+			const success = !isPartial && !isError && (details?.exitCode === undefined || details.exitCode === 0);
 			const isTimeout = details?.timedOut === true;
 			const header =
 				config.showHeader === false
@@ -552,7 +569,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
 						!expanded &&
 						!isPartial &&
-						isError;
+						(isError || (details?.exitCode !== undefined && details.exitCode !== 0));
 					const previewWindow = previewWindowRows();
 					// A running command shows its live elapsed time in the bottom
 					// border; key the cache on whole seconds so it advances once a
@@ -582,13 +599,28 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						details,
 						renderContext?.timeout,
 						rawOutputArtifact.artifactId,
-						isError,
+						isError || (details?.exitCode !== undefined && details.exitCode !== 0),
+						compactError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
+					if (compactError && typeof details?.exitCode !== "number") {
+						statsParts.push(isTimeout ? "Timed out" : "Failed");
+					}
 					const footerMeta =
-						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
+						statsParts.length > 0
+							? compactError
+								? statsParts
+										.map((part, index) =>
+											uiTheme.fg(
+												index === statsParts.length - 1 ? (isTimeout ? "warning" : "error") : "dim",
+												part,
+											),
+										)
+										.join(uiTheme.fg("dim", uiTheme.sep.dot))
+								: uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot))
+							: undefined;
 					let warningLine: string | undefined;
 					if (details?.meta?.artifactError || (details?.meta?.truncation && !showingFullOutput)) {
 						warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
@@ -605,7 +637,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const formatted = formatOutputPaneLines(
 						{
 							lines: compactError
-								? nonEmptyTailLines(displayOutput, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED)
+								? compactBashOutputLines(displayOutput)
 								: hasOutput
 									? displayOutput.split("\n")
 									: [],
@@ -629,7 +661,9 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 
 					const snapshot: ToolCardSnapshot = {
 						header,
-						phase: isPartial ? "partial" : isError ? (isTimeout ? "warning" : "error") : "success",
+						phase: isPartial ? "partial" : !success ? (isTimeout ? "warning" : "error") : "success",
+						borderColor: compactError ? "borderMuted" : undefined,
+						applyBg: compactError ? false : undefined,
 						footerMeta,
 						sections: [
 							{
@@ -703,7 +737,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 				(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
 				!expanded &&
 				!isPartial &&
-				isError;
+				(isError || (details?.exitCode !== undefined && details.exitCode !== 0));
 			const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 			const command = formatBashCommandText(toBashRenderArgs(args, config));
 			const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
@@ -729,7 +763,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 							? node(
 									"col",
 									{ role: "omp.tool.bash.output", gap: "none" },
-									nonEmptyTailLines(output, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED).map(line =>
+									compactBashOutputLines(output).map(line =>
 										text(styledSpans(line), { wrap: "none", truncate: "end" }),
 									),
 									"output",
@@ -738,12 +772,12 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					runFoot({
 						state,
 						exitCode: details?.exitCode,
-						elapsedMs,
-						facts: shellFootParts(details, stripped.artifactId),
+						elapsedMs: compactError ? undefined : elapsedMs,
+						facts: shellFootParts(details, stripped.artifactId, compactError),
 						meta: { ...meta, truncation: showingFullOutput ? undefined : meta?.truncation },
 					}),
 				],
-				{ key: "run", tone: RUN_BOX_TONE[state] },
+				{ key: "run", tone: compactError && state === "failed" ? undefined : RUN_BOX_TONE[state] },
 			);
 			return {
 				tool: shellToolHead(config.resolveTitle(args, options), command, callIntent(args), details, !isPartial),

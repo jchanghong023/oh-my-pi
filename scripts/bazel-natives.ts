@@ -19,15 +19,14 @@
  * Extra args after `--` are passed to bazel verbatim (cache configs, endpoints,
  * headers — see .bazelrc for the cache-rw/cache-ro policy configs).
  *
- * The Windows `host` build compiles through the local Cargo/N-API primitive
- * inside a cached Bazel action with declared raw addon and binding outputs.
- * Installation, version stamping and load probing still run on every request.
- * Other hosts retain the local Cargo path by default; their external system
- * inputs are not yet declared for reusable compilation artifacts.
- * OMP_NATIVE_BUILD_BACKEND=bazel or extra bazel args select the cross-build
- * backend on non-Windows hosts. Explicit targets and aggregates always use it.
- * The shipping msvc cross toolchain supports only linux/mac execution hosts,
- * so Windows can build only `host` against installed VS Build Tools.
+ * The `host` pseudo-target builds through the local Cargo/N-API path
+ * (packages/natives/scripts/build-bindings.ts) by default. Bazel is opt-in
+ * for host via OMP_NATIVE_BUILD_BACKEND=bazel or extra bazel args after `--`;
+ * explicit targets and aggregates use Bazel.
+ *
+ * Windows hosts cannot run the msvc cross toolchain, which supports only
+ * linux/mac execution hosts. Windows builds `host` locally using VS Build Tools;
+ * other targets fail with guidance.
  *
  * Note: musl addons intentionally reuse the plain linux-<arch> filenames, so an
  * `all` copy overwrites the gnu addon with the musl one (and vice versa);
@@ -41,7 +40,6 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { buildCachedHostArtifacts } from "./bazel-native-host";
 import { detectHostAvx2Support, detectHostMusl, resolveLocalHostAddon } from "./host-detect";
 import { hasVersionStampSlot, nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 
@@ -394,33 +392,8 @@ export async function verifyHostAddonLoads(
 	throw new Error(`${header}:\n${stderr.trim()}\n${ADDON_LOAD_FAILURE_EXPLANATION}`);
 }
 
-/** Build raw Windows products through Bazel, then always install, stamp and probe the destination. */
+/** Build and install the host addon through the local Cargo/N-API path. */
 async function buildLocalHostAddon(host: HostInfo, destDir: string, skipLoadProbe = false): Promise<void> {
-	if (host.platform === "win32") {
-		const artifacts = await buildCachedHostArtifacts();
-		const filename = resolveLocalHostAddon(host).filename;
-		const destPath = path.join(destDir, filename);
-		const version = await nativesPackageVersion();
-		await fs.mkdir(destDir, { recursive: true });
-		await installAddon(artifacts.addon, destPath, version, false);
-		for (const [source, name] of [
-			[artifacts.declarations, "index.d.ts"],
-			[artifacts.loader, "index.js"],
-		] as const) {
-			const destination = path.join(destDir, name);
-			if (await matchesInstalledFile(source, destination)) continue;
-			try {
-				await fs.chmod(destination, 0o644);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-			await fs.copyFile(source, destination);
-			await fs.chmod(destination, 0o644);
-		}
-		console.log(`installed ${filename} (stamped ${version}) → ${destPath}`);
-		if (!skipLoadProbe) await verifyHostAddonLoads(destPath, undefined, version);
-		return;
-	}
 	const script = path.join(repoRoot, "packages/natives/scripts/build-bindings.ts");
 	console.log(`local host build: using ${path.relative(repoRoot, script)}`);
 	const proc = Bun.spawn([process.execPath, script], {
@@ -458,8 +431,8 @@ async function main(): Promise<void> {
 		throw new Error(`Unknown OMP_NATIVE_BUILD_BACKEND "${backend}" (expected "cargo" or "bazel")`);
 	}
 	const hostOnly = options.targets.length === 1 && options.targets[0] === "host";
-	// Windows host compilation uses the local Cargo primitive under Bazel's
-	// declared artifact action. Other hosts keep their existing backend selection.
+	// Windows hosts can only build `host` locally. Other hosts default to the
+	// Cargo/N-API path for host and use Bazel for explicit targets or opt-in.
 	const cargoBackend =
 		backend === "cargo" ||
 		host.platform === "win32" ||

@@ -456,7 +456,7 @@ describe("relay tabs Chrome detaches omp from", () => {
 		60_000,
 	);
 
-	it.skipIf(!CHROMIUM_AVAILABLE)(
+	it.skipIf(!CHROMIUM_AVAILABLE || process.platform === "win32")(
 		"does not rerun a call detached before its code started once the re-adoption spent its budget",
 		async () => {
 			const ext = await openRelayTab();

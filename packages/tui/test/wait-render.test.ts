@@ -52,6 +52,63 @@ describe("job renderer task-result preview", () => {
 		await initTheme();
 	});
 
+	it("omits only matching Bash outcomes from collapsed wait rows", () => {
+		const result = {
+			content: [{ type: "text", text: "original wait output" }],
+			details: {
+				op: "wait" as const,
+				jobs: [
+					{
+						id: "bg_1",
+						type: "bash" as const,
+						status: "failed" as const,
+						label: "first",
+						durationMs: 100,
+						errorText: "first error",
+					},
+					{
+						id: "bg_2",
+						type: "bash" as const,
+						status: "failed" as const,
+						label: "second",
+						durationMs: 200,
+						errorText: "second error",
+					},
+				],
+			},
+		};
+		const options = { expanded: false, isPartial: false, settledBashJobs: new Map([["bg_1", "failed"]]) };
+		const collapsed = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(120).join("\n"));
+		expect(collapsed).not.toContain("bg_1");
+		expect(collapsed).toContain("bg_2");
+		expect(collapsed).toContain("second error");
+		const native = JSON.stringify(waitToolRenderer.describeResult(result, options));
+		expect(native).not.toContain("bg_1");
+		expect(native).toContain("bg_2");
+		const expanded = Bun.stripANSI(
+			waitToolRenderer
+				.renderResult(result, { ...options, expanded: true }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		expect(expanded).toContain("bg_1");
+		expect(expanded).toContain("first error");
+		const unmatched = Bun.stripANSI(
+			waitToolRenderer
+				.renderResult(result, { ...options, settledBashJobs: new Map([["bg_1", "completed"]]) }, theme)
+				.render(120)
+				.join("\n"),
+		);
+		expect(unmatched).toContain("bg_1");
+		const diagnostic = {
+			...result,
+			details: { ...result.details, jobs: [{ ...result.details.jobs[0]!, artifactError: "write" as const }] },
+		};
+		const warning = Bun.stripANSI(waitToolRenderer.renderResult(diagnostic, options, theme).render(120).join("\n"));
+		expect(warning).toContain("bg_1");
+		expect(warning).toContain("artifact write failed");
+	});
+
 	it("renders the consumed peer message as a sender card", () => {
 		const component = waitToolRenderer.renderResult(
 			{
@@ -310,7 +367,7 @@ describe("job renderer task-result preview", () => {
 			}
 		});
 
-		it("keeps a settled native job to its tile: output and errors fill the call's own card", () => {
+		it("keeps output on the call's own card and shows the failed job tile", () => {
 			const result = {
 				content: [{ type: "text" as const, text: "" }],
 				details: {
@@ -337,8 +394,6 @@ describe("job renderer task-result preview", () => {
 			const json = JSON.stringify(view);
 			expect(json).toContain("hyperfine --runs 30 bench");
 			expect(json).not.toContain("Benchmark 1");
-			expect(json).not.toContain("exited with code 1");
-			expect(json).not.toContain("artifact write failed");
 		});
 
 		it("keeps a job's artifact capture failure on its collapsed row", () => {

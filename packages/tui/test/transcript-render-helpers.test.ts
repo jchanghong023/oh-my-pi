@@ -53,136 +53,69 @@ describe("background receipt projections", () => {
 		setChatTranscriptDisplayPreferences(previous);
 	});
 
-	it("filters mixed receipts individually without losing warnings or changing the message", async () => {
+	it("keeps failed and cancelled receipts in compact history while hiding successful ones", async () => {
 		const message = createCustomMessage(
 			"async-result",
-			"original result",
+			"results",
 			true,
 			{
 				jobs: [
-					{ jobId: "ok", type: "bash", status: "completed", durationMs: 1000, meta: { artifactError: "write" } },
-					{ jobId: "bad", type: "task", status: "failed", durationMs: 2100 },
-					{ jobId: "stopped", type: "bash", status: "cancelled", durationMs: 3200 },
-					{
-						jobId: "schema-ok",
-						type: "task",
-						status: "completed",
-						durationMs: 4000,
-						schema: { source: "caller", mode: "permissive", status: "invalid", error: "invalid payload" },
-					},
+					{ jobId: "ok", type: "bash", status: "completed", durationMs: 1000 },
+					{ jobId: "bad", type: "bash", status: "failed", durationMs: 2000 },
+					{ jobId: "stopped", type: "bash", status: "cancelled", durationMs: 3000 },
+					{ jobId: "warning", type: "bash", status: "completed", meta: { artifactError: "write" } },
 				],
 			},
 			"2026",
 		);
-		const original = JSON.stringify(message);
-		const persisted = JSON.parse(original) as typeof message;
-		for (const current of [message, persisted]) {
+		for (const current of [message, JSON.parse(JSON.stringify(message)) as typeof message]) {
 			const block = buildAsyncResultBlock(current);
 			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-			const compact = block
-				.render(200)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
-			expect(compact).toMatch(
-				/artifact write failed[^]*Background job failed \[task\] bad \(2\.1s\)[^]*Background job cancelled \[bash\] stopped \(3\.2s\)[^]*schema-ok: Structured output invalid: invalid payload/,
-			);
+			const compact = Bun.stripANSI(block.render(160).join("\n"));
+			expect(compact).toContain("Background job failed [bash] bad");
+			expect(compact).toContain("Background job cancelled [bash] stopped");
 			expect(compact).not.toContain("[bash] ok");
-			expect(compact).not.toContain("[task] schema-ok");
+			expect(compact).not.toContain("[bash] warning");
+			expect(compact).toContain("artifact write failed");
 			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-			const detailed = block
-				.render(200)
-				.map(line => Bun.stripANSI(line))
-				.join("\n");
-			expect(detailed).toMatch(
-				/Background job completed \[bash\] ok[^]*Background job failed \[task\] bad[^]*Background job cancelled \[bash\] stopped[^]*Background job completed \[task\] schema-ok/,
-			);
-			expect(detailed).toContain("invalid payload");
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-			expect(
-				block
-					.render(200)
-					.map(line => Bun.stripANSI(line))
-					.join("\n"),
-			).toBe(compact);
-			block.setToolActivityVisible(false);
-			expect(block.render(200)).toEqual([]);
-			block.setToolActivityVisible(true);
-			expect(
-				block
-					.render(200)
-					.map(line => Bun.stripANSI(line))
-					.join("\n"),
-			).toBe(compact);
+			const detailed = Bun.stripANSI(block.render(160).join("\n"));
+			expect(detailed).toContain("[bash] ok");
+			expect(detailed).toContain("[bash] bad");
+			expect(detailed).toContain("[bash] stopped");
 		}
-		expect(JSON.stringify(message)).toBe(original);
-
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(message)), { cols: 200, rows: 30 });
+		harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(message)), { cols: 160, rows: 20 });
 		await harness.render();
 		const native = JSON.stringify(harness.doc());
-		expect(native).toContain("Background job failed");
 		expect(native).toContain("bad");
-		expect(native).toContain("Background job cancelled");
 		expect(native).toContain("stopped");
+		expect(native).not.toContain('"ok"');
 		expect(native).toContain("artifact write failed");
-		expect(native).toContain("invalid payload");
-		expect(native).not.toContain("Background job completed");
 	});
 
-	it("leaves no rows for ordinary successful receipts and restores them in detailed mode", async () => {
-		const job = createCustomMessage(
+	it("suppresses associated Bash receipt rows without suppressing independent diagnostics", () => {
+		const message = createCustomMessage(
 			"async-result",
-			"done",
+			"results",
 			true,
-			{ jobId: "success-job", type: "eval", status: "completed", durationMs: 1500 },
-			"2026",
-		);
-		const process = createCustomMessage(
-			"launch-completion",
-			"done",
-			true,
-			{ daemons: [{ name: "success-process", state: "exited", exitCode: 0, startedAt: 0, exitedAt: 1500 }] },
-			"2026",
-		);
-		const blocks = [buildAsyncResultBlock(job), buildLaunchCompletionBlock(process)];
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		for (const block of blocks) expect(block.render(120)).toEqual([]);
-		harness = await TspHarness.start(
-			tui => {
-				for (const block of blocks) tui.addChild(block);
+			{
+				jobs: [
+					{ jobId: "bad", type: "bash", status: "failed", meta: { artifactError: "write" } },
+					{ jobId: "other", type: "bash", status: "failed" },
+				],
 			},
-			{ cols: 120, rows: 20 },
+			"2026",
 		);
-		await harness.render();
-		const native = JSON.stringify(harness.doc());
-		expect(native).not.toContain("success-job");
-		expect(native).not.toContain("success-process");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(
-			blocks[0]
-				.render(120)
-				.map(line => Bun.stripANSI(line))
-				.join("\n"),
-		).toContain("success-job");
-		expect(
-			blocks[1]
-				.render(120)
-				.map(line => Bun.stripANSI(line))
-				.join("\n"),
-		).toContain("success-process");
-		await harness.render();
-		const detailedNative = JSON.stringify(harness.doc());
-		expect(detailedNative).toContain("success-job");
-		expect(detailedNative).toContain("success-process");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		await harness.render();
-		const compactNative = JSON.stringify(harness.doc());
-		expect(compactNative).not.toContain("success-job");
-		expect(compactNative).not.toContain("success-process");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		for (const block of blocks) {
-			block.setToolActivityVisible(false);
-			expect(block.render(120)).toEqual([]);
+		for (const compactToolActivity of [false, true]) {
+			setChatTranscriptDisplayPreferences({ compactToolActivity });
+			const output = Bun.stripANSI(
+				buildAsyncResultBlock(message, new Map([["bad", "failed"]]))
+					.render(160)
+					.join("\n"),
+			);
+			expect(output).not.toContain("[bash] bad");
+			expect(output).toContain("[bash] other");
+			expect(output).toContain("artifact write failed");
 		}
 	});
 

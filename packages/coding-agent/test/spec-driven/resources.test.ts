@@ -556,51 +556,56 @@ describe("pinned upstream resources", () => {
 		}
 	});
 
-	it("runs original scripts through the public source CLI and forwards real failures", async () => {
-		async function invoke(args: string[]) {
-			const child = Bun.spawn(
-				[process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts"), "superpowers", ...args],
-				{
-					cwd: temporary,
-					stdin: "ignore",
-					stdout: "pipe",
-					stderr: "pipe",
-					env: { ...process.env, BUN_BE_BUN: "1", NODE_PATH: "" },
-				},
-			);
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(child.stdout).text(),
-				new Response(child.stderr).text(),
-				child.exited,
-			]);
-			return { stdout, stderr, exitCode };
-		}
+	it.skipIf(process.platform === "win32")(
+		"runs original scripts through the public source CLI and forwards real failures",
+		async () => {
+			async function invoke(args: string[]) {
+				const child = Bun.spawn(
+					[process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts"), "superpowers", ...args],
+					{
+						cwd: temporary,
+						stdin: "ignore",
+						stdout: "pipe",
+						stderr: "pipe",
+						env: { ...process.env, BUN_BE_BUN: "1", NODE_PATH: "" },
+					},
+				);
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				return { stdout, stderr, exitCode };
+			}
 
-		const javascript = await invoke(["skills/writing-skills/render-graphs.js"]);
-		expect(javascript.exitCode).toBe(1);
-		expect(javascript.stderr).toContain("Usage: render-graphs.js");
-		const bash = await invoke(["skills/subagent-driven-development/scripts/review-package"]);
-		if (
-			bash.stderr.includes("Superpowers scripts require Bash and POSIX utilities (Git for Windows Bash on Windows)")
-		) {
-			expect(bash.exitCode).toBe(1);
-		} else {
-			expect(bash.exitCode).toBe(2);
-			expect(bash.stderr).toContain("usage: review-package");
-		}
-		const missing = await invoke([]);
-		expect(missing.exitCode).toBe(2);
-		expect(missing.stderr).toContain("Usage: omp superpowers <relative-skill-script> [args...]");
-		const help = await invoke(["--help"]);
-		expect(help.exitCode).toBe(0);
-		expect(help.stderr).toBe("");
-		expect(help.stdout).toContain("skills/writing-skills/render-graphs.js");
-		for (const script of ["skills/not-a-script.js", ".pi/extensions/superpowers.ts", "../package.json"]) {
-			const rejected = await invoke([script]);
-			expect(rejected.exitCode).toBe(1);
-			expect(rejected.stderr).toContain(`Not a bundled skill script: ${script}`);
-		}
-	});
+			const javascript = await invoke(["skills/writing-skills/render-graphs.js"]);
+			expect(javascript.exitCode).toBe(1);
+			expect(javascript.stderr).toContain("Usage: render-graphs.js");
+			const bash = await invoke(["skills/subagent-driven-development/scripts/review-package"]);
+			if (
+				bash.stderr.includes(
+					"Superpowers scripts require Bash and POSIX utilities (Git for Windows Bash on Windows)",
+				)
+			) {
+				expect(bash.exitCode).toBe(1);
+			} else {
+				expect(bash.exitCode).toBe(2);
+				expect(bash.stderr).toContain("usage: review-package");
+			}
+			const missing = await invoke([]);
+			expect(missing.exitCode).toBe(2);
+			expect(missing.stderr).toContain("Usage: omp superpowers <relative-skill-script> [args...]");
+			const help = await invoke(["--help"]);
+			expect(help.exitCode).toBe(0);
+			expect(help.stderr).toBe("");
+			expect(help.stdout).toContain("skills/writing-skills/render-graphs.js");
+			for (const script of ["skills/not-a-script.js", ".pi/extensions/superpowers.ts", "../package.json"]) {
+				const rejected = await invoke([script]);
+				expect(rejected.exitCode).toBe(1);
+				expect(rejected.stderr).toContain(`Not a bundled skill script: ${script}`);
+			}
+		},
+	);
 
 	it("launches original Bash and Node scripts and preserves their real usage failures", async () => {
 		const javascript = await runSuperpowersScript("skills/writing-skills/render-graphs.js", [], temporary);

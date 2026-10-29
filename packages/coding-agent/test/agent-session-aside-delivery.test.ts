@@ -1429,122 +1429,138 @@ describe("AgentSession aside delivery", () => {
 		}
 	});
 
-	it("preserves a normalized aside across a rolled-back switchSession()", async () => {
-		// Regression: the #sessionGeneration guard in #queueUserMessage's aside branch used to
-		// discard a record outright on any generation mismatch. switchSession() bumps the
-		// generation before its transition and only rolls it back to the exact prior value in its
-		// catch block, so a record whose normalization resolved during that window was lost even
-		// though the switch ultimately failed and the original session stayed live.
-		const sessionDir = path.join(tempDir.path(), "sessions");
-		const modelRegistry = new ModelRegistry(authStorage);
-		const started = Promise.withResolvers<void>();
-		const contexts: Context[] = [];
-		const mock = createMockModel({
-			provider: "openai",
-			id: "gpt-test",
-			responses: [
-				() => {
-					started.resolve();
-					return { content: ["working"], delayMs: 60_000 };
-				},
-				context => {
-					contexts.push(context);
-					return { content: ["woken reply"] };
-				},
-			],
-		});
-		const agent = new Agent({
-			getApiKey: () => "test-key",
-			initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
-			convertToLlm,
-			streamFn: mock.stream,
-		});
-		const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
-		settings.setModelRole("default", `${mock.model.provider}/${mock.model.id}`);
-		session = new AgentSession({
-			agent,
-			sessionManager: SessionManager.create(tempDir.path(), sessionDir),
-			settings,
-			modelRegistry,
-			toolRegistry: new Map(),
-		});
-
-		const targetManager = SessionManager.create(tempDir.path(), sessionDir);
-		targetManager.appendMessage({ role: "user", content: "target", timestamp: Date.now() });
-		await targetManager.ensureOnDisk();
-		const targetFile = targetManager.getSessionFile();
-		if (!targetFile) throw new Error("Expected target session file");
-		await targetManager.close();
-
-		const run = session.prompt("go");
-		await started.promise;
-
-		const normalizeStarted = Promise.withResolvers<void>();
-		const releaseNormalize = Promise.withResolvers<void>();
-		const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
-			normalizeStarted.resolve();
-			await releaseNormalize.promise;
-			return images;
-		});
-		const setSessionFileReached = Promise.withResolvers<void>();
-		const releaseSetSessionFileFailure = Promise.withResolvers<void>();
-		const setSessionFileSpy = spyOn(SessionManager.prototype, "setSessionFile").mockImplementation(async () => {
-			setSessionFileReached.resolve();
-			await releaseSetSessionFileFailure.promise;
-			throw new Error("forced switchSession failure");
-		});
-
-		const rollbackReached = Promise.withResolvers<void>();
-		const releaseRollback = Promise.withResolvers<void>();
-		session.setSessionSwitchReconciler(async () => {
-			rollbackReached.resolve();
-			await releaseRollback.promise;
-		});
-		let asideSettled = false;
-		const asidePromise = session.sendUserMessage("ROLLBACK_ASIDE", { deliverAs: "aside" }).then(() => {
-			asideSettled = true;
-		});
-		let switchedPromise: Promise<boolean> | undefined;
-		try {
-			await normalizeStarted.promise;
-			switchedPromise = session.switchSession(targetFile);
-			// #sessionGeneration has bumped by now; setSessionFile is paused before it fails.
-			await setSessionFileReached.promise;
-			let ready = false;
-			const waiting = session.waitForSessionTransition().then(() => {
-				ready = true;
+	it.each(["user", "custom"] as const)(
+		"preserves a normalized %s aside across a rolled-back switchSession()",
+		async kind => {
+			// Both queue entrypoints must reach the rollback-aware generation barrier.
+			// Normalization finishing during a switch must not discard the original
+			// session's aside when the switch fails and restores that generation.
+			const sessionDir = path.join(tempDir.path(), "sessions");
+			const modelRegistry = new ModelRegistry(authStorage);
+			const started = Promise.withResolvers<void>();
+			const contexts: Context[] = [];
+			const mock = createMockModel({
+				provider: "openai",
+				id: "gpt-test",
+				responses: [
+					() => {
+						started.resolve();
+						return { content: ["working"], delayMs: 60_000 };
+					},
+					context => {
+						contexts.push(context);
+						return { content: ["woken reply"] };
+					},
+				],
+			});
+			const agent = new Agent({
+				getApiKey: () => "test-key",
+				initialState: { model: mock.model, systemPrompt: ["Test"], tools: [], messages: [] },
+				convertToLlm,
+				streamFn: mock.stream,
+			});
+			const settings = Settings.isolated({ "compaction.enabled": false, "todo.enabled": false });
+			settings.setModelRole("default", `${mock.model.provider}/${mock.model.id}`);
+			session = new AgentSession({
+				agent,
+				sessionManager: SessionManager.create(tempDir.path(), sessionDir),
+				settings,
+				modelRegistry,
+				toolRegistry: new Map(),
 			});
 
-			releaseNormalize.resolve();
-			await setImmediate();
-			expect(asideSettled).toBe(false);
-			releaseSetSessionFileFailure.resolve();
-			await rollbackReached.promise;
-			await setImmediate();
-			// The restored generation belongs to the aside again, even while
-			// Collab readiness still waits for rollback reconciliation.
-			expect(asideSettled).toBe(true);
-			expect(session.isSessionTransitioning).toBe(true);
-			expect(ready).toBe(false);
+			const targetManager = SessionManager.create(tempDir.path(), sessionDir);
+			targetManager.appendMessage({ role: "user", content: "target", timestamp: Date.now() });
+			await targetManager.ensureOnDisk();
+			const targetFile = targetManager.getSessionFile();
+			if (!targetFile) throw new Error("Expected target session file");
+			await targetManager.close();
 
-			releaseRollback.resolve();
-			await expect(switchedPromise).rejects.toThrow("forced switchSession failure");
-			await waiting;
-			await session.waitForIdle();
-			expect(session.isSessionTransitioning).toBe(false);
-			expect(contexts).toHaveLength(1);
-			expect(JSON.stringify(contexts[0]!.messages)).toContain("ROLLBACK_ASIDE");
-		} finally {
-			releaseNormalize.resolve();
-			releaseSetSessionFileFailure.resolve();
-			releaseRollback.resolve();
-			await switchedPromise?.catch(() => {});
-			await asidePromise;
-			await run.catch(() => {});
-			normalizeSpy.mockRestore();
-			setSessionFileSpy.mockRestore();
-		}
-	});
+			const run = session.prompt("go");
+			await started.promise;
+
+			const normalizeStarted = Promise.withResolvers<void>();
+			const releaseNormalize = Promise.withResolvers<void>();
+			const normalizeSpy = spyOn(imageLoading, "normalizeModelContextImages").mockImplementation(async images => {
+				normalizeStarted.resolve();
+				await releaseNormalize.promise;
+				return images;
+			});
+			const setSessionFileReached = Promise.withResolvers<void>();
+			const releaseSetSessionFileFailure = Promise.withResolvers<void>();
+			const setSessionFileSpy = spyOn(SessionManager.prototype, "setSessionFile").mockImplementation(async () => {
+				setSessionFileReached.resolve();
+				await releaseSetSessionFileFailure.promise;
+				throw new Error("forced switchSession failure");
+			});
+
+			const rollbackReached = Promise.withResolvers<void>();
+			const releaseRollback = Promise.withResolvers<void>();
+			session.setSessionSwitchReconciler(async () => {
+				rollbackReached.resolve();
+				await releaseRollback.promise;
+			});
+			let asideSettled = false;
+			const delivery =
+				kind === "user"
+					? session.sendUserMessage("ROLLBACK_ASIDE", { deliverAs: "aside" })
+					: session.promptCustomMessage(
+							{
+								customType: "ext-aside",
+								content: [
+									{ type: "text", text: "ROLLBACK_ASIDE" },
+									{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+								],
+								display: false,
+								attribution: "agent",
+							},
+							{ streamingBehavior: "aside", queueOnly: true },
+						);
+			const asidePromise = delivery.then(() => {
+				asideSettled = true;
+			});
+			let switchedPromise: Promise<boolean> | undefined;
+			try {
+				await normalizeStarted.promise;
+				switchedPromise = session.switchSession(targetFile);
+				// #sessionGeneration has bumped by now; setSessionFile is paused before it fails.
+				await setSessionFileReached.promise;
+				let ready = false;
+				const waiting = session.waitForSessionTransition().then(() => {
+					ready = true;
+				});
+
+				releaseNormalize.resolve();
+				await setImmediate();
+				expect(asideSettled).toBe(false);
+				releaseSetSessionFileFailure.resolve();
+				await rollbackReached.promise;
+				await setImmediate();
+				// The restored generation belongs to the aside again, even while
+				// Collab readiness still waits for rollback reconciliation.
+				expect(asideSettled).toBe(true);
+				expect(session.isSessionTransitioning).toBe(true);
+				expect(ready).toBe(false);
+
+				releaseRollback.resolve();
+				await expect(switchedPromise).rejects.toThrow("forced switchSession failure");
+				await waiting;
+				await session.waitForIdle();
+				expect(session.isSessionTransitioning).toBe(false);
+				expect(contexts).toHaveLength(1);
+				expect(JSON.stringify(contexts[0]!.messages)).toContain("ROLLBACK_ASIDE");
+			} finally {
+				releaseNormalize.resolve();
+				releaseSetSessionFileFailure.resolve();
+				releaseRollback.resolve();
+				await switchedPromise?.catch(() => {});
+				await asidePromise;
+				await run.catch(() => {});
+				normalizeSpy.mockRestore();
+				setSessionFileSpy.mockRestore();
+			}
+		},
+	);
 
 	it("holds the wake observer across the async-result continuation so a late yield still registers (#11564)", async () => {
 		const modelRegistry = new ModelRegistry(authStorage);

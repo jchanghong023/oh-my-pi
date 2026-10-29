@@ -39,7 +39,7 @@ export const cfgSessionWorktreeScope = register({
 	default: "repo",
 	ui: {
 		tab: "interaction",
-		group: "Startup & Updates",
+		group: "启动与更新",
 		label: "Resume Worktree Scope",
 		description:
 			"Choose whether the resume picker's current folder includes sessions from other repository worktrees",
@@ -785,7 +785,7 @@ export const cfgRetryRateLimitWalksChain = register({
 	default: false,
 	ui: {
 		tab: "model",
-		group: "Retry & Fallback",
+		group: "重试与回退",
 		label: "Rate Limit Walks Chain",
 		description:
 			"On a rate limit, do not hold the retry.fallbackChains walk for a turn whose thinking is signed by the failing model. Off (the default), such a turn keeps retrying the rate-limited model until retry.maxRetries is spent before the chain is reached.",

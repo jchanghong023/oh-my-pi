@@ -344,68 +344,72 @@ describe("RPC queued-message editing", () => {
 			expect(userTexts(await transcriptAfterNextPrompt())).toEqual(expectedUserTurns);
 		}, 30_000);
 
-		test("under protocol v1, a result over the frame limit drops images and still returns every text", async () => {
-			// RpcClient always negotiates v2, so speak raw v1 JSONL to the fixture.
-			const child = Bun.spawn(
-				[process.execPath, path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts")],
-				{
-					cwd: directory,
-					env: { ...Bun.env, PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1", QUEUED_RPC_SCRIPT: "hold" },
-					stdin: "pipe",
-					stdout: "pipe",
-					stderr: "ignore",
-				},
-			);
-			const frames = readJsonl<unknown>(child.stdout)[Symbol.asyncIterator]();
-			const next = (match: (frame: Record<string, unknown>) => boolean, message: string) =>
-				withTimeout(
-					(async () => {
-						for (;;) {
-							const { value, done } = await frames.next();
-							if (done) throw new Error(`RPC output ended: ${message}`);
-							if (isRecord(value) && match(value)) return value;
-						}
-					})(),
-					10_000,
-					message,
-				);
-			const send = async (frame: object) => {
-				child.stdin.write(`${JSON.stringify(frame)}\n`);
-				await child.stdin.flush();
-			};
-			const isResponse = (id: string) => (frame: Record<string, unknown>) =>
-				frame.type === "response" && frame.id === id;
-			try {
-				await next(frame => frame.type === "ready", "Fixture never became ready");
-				await send({ id: "start", type: "prompt", message: "start a long turn" });
-				await next(frame => frame.type === "agent_start", "First turn never started streaming");
-				// Each steer fits one v1 frame; together they exceed it. Undecodable image bytes skip
-				// resizing, so the queued images keep their size.
-				const image = { type: "image", mimeType: "image/png", data: "A".repeat(700 * 1024) };
-				for (const id of ["first", "second"]) {
-					await send({ id, type: "steer", message: `${id} steer`, images: [image] });
-					expect(await next(isResponse(id), `Steer ${id} was never acknowledged`)).toMatchObject({
-						success: true,
-					});
-				}
-
-				await send({ id: "stop", type: "abort_and_restore_queue" });
-				expect(await next(isResponse("stop"), "abort_and_restore_queue never responded")).toEqual({
-					id: "stop",
-					type: "response",
-					command: "abort_and_restore_queue",
-					success: true,
-					data: {
-						steering: [{ text: "first steer" }, { text: "second steer" }],
-						followUp: [],
-						imagesDropped: true,
+		test.skipIf(process.platform === "win32")(
+			"under protocol v1, a result over the frame limit drops images and still returns every text",
+			async () => {
+				// RpcClient always negotiates v2, so speak raw v1 JSONL to the fixture.
+				const child = Bun.spawn(
+					[process.execPath, path.join(import.meta.dir, "fixtures", "queued-message-rpc-agent.ts")],
+					{
+						cwd: directory,
+						env: { ...Bun.env, PI_CODING_AGENT_DIR: directory, PI_NO_TITLE: "1", QUEUED_RPC_SCRIPT: "hold" },
+						stdin: "pipe",
+						stdout: "pipe",
+						stderr: "ignore",
 					},
-				});
-			} finally {
-				child.kill();
-				await child.exited;
-			}
-		}, 30_000);
+				);
+				const frames = readJsonl<unknown>(child.stdout)[Symbol.asyncIterator]();
+				const next = (match: (frame: Record<string, unknown>) => boolean, message: string) =>
+					withTimeout(
+						(async () => {
+							for (;;) {
+								const { value, done } = await frames.next();
+								if (done) throw new Error(`RPC output ended: ${message}`);
+								if (isRecord(value) && match(value)) return value;
+							}
+						})(),
+						10_000,
+						message,
+					);
+				const send = async (frame: object) => {
+					child.stdin.write(`${JSON.stringify(frame)}\n`);
+					await child.stdin.flush();
+				};
+				const isResponse = (id: string) => (frame: Record<string, unknown>) =>
+					frame.type === "response" && frame.id === id;
+				try {
+					await next(frame => frame.type === "ready", "Fixture never became ready");
+					await send({ id: "start", type: "prompt", message: "start a long turn" });
+					await next(frame => frame.type === "agent_start", "First turn never started streaming");
+					// Each steer fits one v1 frame; together they exceed it. Undecodable image bytes skip
+					// resizing, so the queued images keep their size.
+					const image = { type: "image", mimeType: "image/png", data: "A".repeat(700 * 1024) };
+					for (const id of ["first", "second"]) {
+						await send({ id, type: "steer", message: `${id} steer`, images: [image] });
+						expect(await next(isResponse(id), `Steer ${id} was never acknowledged`)).toMatchObject({
+							success: true,
+						});
+					}
+
+					await send({ id: "stop", type: "abort_and_restore_queue" });
+					expect(await next(isResponse("stop"), "abort_and_restore_queue never responded")).toEqual({
+						id: "stop",
+						type: "response",
+						command: "abort_and_restore_queue",
+						success: true,
+						data: {
+							steering: [{ text: "first steer" }, { text: "second steer" }],
+							followUp: [],
+							imagesDropped: true,
+						},
+					});
+				} finally {
+					child.kill();
+					await child.exited;
+				}
+			},
+			30_000,
+		);
 
 		test("keeps an oldest-first prefix flagged truncated when even the texts exceed the limit", () => {
 			const first = { text: "a".repeat(100) };

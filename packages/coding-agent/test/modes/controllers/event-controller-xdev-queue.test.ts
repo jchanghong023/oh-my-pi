@@ -2,10 +2,14 @@
  * Exclusive `write xd://…` calls stay queued after `message_end` (which marks
  * every pending call args-complete) until that call's own `tool_execution_start`.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import type { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -51,6 +55,7 @@ function deviceWrite(id: string, name: string, inner: Record<string, unknown>) {
 }
 
 function createFixture(streamingMessage: AssistantMessage) {
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	const pendingTools = new Map<string, ToolExecutionComponent>();
 	const ctx = createInteractiveModeContext({
 		streamingComponent: new AssistantMessageComponent(),
@@ -70,8 +75,15 @@ function cardText(pendingTools: Map<string, ToolExecutionComponent>, id: string)
 }
 
 describe("EventController queues exclusive device writes until execution starts", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	});
+
 	afterEach(() => {
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 		vi.restoreAllMocks();
 	});
 

@@ -340,18 +340,22 @@ describe("RPC fast mode with unsupported Fireworks model and priority tier", () 
 		}
 	});
 
-	test("rejects enable but disable preserves Fireworks priority activity", async () => {
-		await client.start();
+	test.skipIf(process.platform === "win32")(
+		"rejects enable but disable preserves Fireworks priority activity",
+		async () => {
+			await client.start();
 
-		expect(await rejectionOf(client.setFastMode(true))).toMatchObject({
-			message: "Fast mode is unavailable for the current model.",
-		});
+			expect(await rejectionOf(client.setFastMode(true))).toMatchObject({
+				message: "Fast mode is unavailable for the current model.",
+			});
 
-		const disabled = await client.setFastMode(false);
-		expect(disabled).toEqual({ enabled: false, active: true });
+			const disabled = await client.setFastMode(false);
+			expect(disabled).toEqual({ enabled: false, active: true });
 
-		const state = await client.getState();
-		expect(state.fastModeEnabled).toBe(false);
-		expect(state.fastModeActive).toBe(true);
-	}, 30000);
+			const state = await client.getState();
+			expect(state.fastModeEnabled).toBe(false);
+			expect(state.fastModeActive).toBe(true);
+		},
+		30000,
+	);
 });

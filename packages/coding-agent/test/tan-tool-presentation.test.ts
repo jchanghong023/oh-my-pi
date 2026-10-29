@@ -69,7 +69,7 @@ describe("/tan prompt-cache tool presentation", () => {
 						session.agent.state.tools.map(tool => ({
 							name: tool.name,
 							description: tool.description,
-							parameters: tool.parameters,
+							parameters: tool.parameters.toJsonSchema(),
 						}));
 					if (xdev) expect(parent.getMountedXdevToolNames()).toContain(mcpTool.name);
 					else expect(parent.getMountedXdevToolNames()).toEqual([]);

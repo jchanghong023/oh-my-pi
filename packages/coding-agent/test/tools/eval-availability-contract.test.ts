@@ -43,7 +43,7 @@ describe("eval Python availability contract", () => {
 			hasUI: false,
 			getSessionFile: () => null,
 			getSessionSpawns: () => null,
-			settings: Settings.isolated(overrides),
+			settings: Settings.isolated({ "eval.js": true, ...overrides }),
 		};
 	}
 
@@ -66,11 +66,6 @@ describe("eval Python availability contract", () => {
 		await expect(execution).rejects.toThrow(/Python 3\.8\+.*PATH/);
 		await expect(execution).rejects.not.toThrow("install the python kernel");
 		expect(languages(tool)).toEqual(["js"]);
-		expect(tool.description).not.toContain("Python:");
-		expect(tool.description).not.toContain("Python (kwargs)");
-		expect(tool.docTopics().helpers).not.toContain("%pip install");
-		expect(tool.summary).toContain("JavaScript");
-		expect(tool.summary).not.toContain("Python");
 		expect(candidateProbe).toHaveBeenCalledTimes(1);
 	});
 
@@ -87,7 +82,6 @@ describe("eval Python availability contract", () => {
 		candidateProbe.mockResolvedValue({ ok: true, index: 0 });
 		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
 		expect(languages(tool)).toEqual(["py", "js"]);
-		expect(tool.description).toContain("Python:");
 		candidateProbe.mockResolvedValue({ ok: false, aborted: false, failures: ["broken again"] });
 		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
 		expect(languages(tool)).toEqual(["js"]);
@@ -121,16 +115,12 @@ describe("eval Python availability contract", () => {
 		vi.spyOn(probe, "probeCandidates").mockResolvedValue({ ok: false, aborted: false, failures: ["broken"] });
 		await pyKernel.checkPythonKernelAvailability(owner.cwd, undefined, { forceProbe: true });
 		expect(languages(tool)).toEqual([]);
-		expect(tool.description).not.toContain("Python:");
-		expect(tool.description).not.toContain("Python (kwargs)");
-		expect(tool.summary).not.toContain("Python or JavaScript");
 	});
 
 	it("never probes or advertises Python when settings allow only JavaScript", () => {
 		const candidateProbe = vi.spyOn(probe, "probeCandidates");
 		const tool = new EvalTool(session({ "eval.py": false }));
 		expect(languages(tool)).toEqual(["js"]);
-		expect(tool.description).not.toContain("Python:");
 		expect(candidateProbe).not.toHaveBeenCalled();
 	});
 

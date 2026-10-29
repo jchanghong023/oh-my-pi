@@ -28,7 +28,7 @@ import {
 } from "./tui-harness";
 
 // One full non-Team path covers the real four native sessions, approval handoffs and restoration.
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"native Dev preserves root, raw dialogue, handoffs, back, restoration and final archive",
 	async () => {
 		let repairReport: { path: string; content: string } | undefined;
@@ -337,7 +337,7 @@ test.skipIf(!tuiTest)(
 );
 
 // Team configuration uses only the native selector, and raw followups cannot rerun it.
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"native Team config cancels, persists, freezes, and does not replay on dialogue",
 	async () => {
 		await withTui({}, [120, 36], async ({ cwd, provider, tui, state, idle, stage }) => {

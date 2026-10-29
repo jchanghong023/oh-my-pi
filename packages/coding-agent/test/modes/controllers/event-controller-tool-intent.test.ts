@@ -2,6 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -27,14 +31,19 @@ function headTarget(component: ToolExecutionComponent): unknown {
 }
 
 describe("EventController tool intent", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+
 	beforeEach(async () => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		await initTheme();
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 	});
 
 	afterEach(() => {
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	});
 
 	function fixture() {
@@ -61,7 +70,7 @@ describe("EventController tool intent", () => {
 		await controller.handleEvent(start("Listing the working tree"));
 		const card = pendingTools.get("tc-bash");
 		if (!card) throw new Error("no card for the call");
-		expect(headTarget(card)).toBe("Listing the working tree");
+		expect(headTarget(card)).toEqual([{ t: "Listing the working tree", s: "text" }]);
 	});
 
 	it("keeps the intent when tool_execution_start refreshes a streamed card", async () => {
@@ -77,6 +86,6 @@ describe("EventController tool intent", () => {
 		);
 		pendingTools.set("tc-bash", streamed);
 		await controller.handleEvent(start("Listing the working tree"));
-		expect(headTarget(streamed)).toBe("Listing the working tree");
+		expect(headTarget(streamed)).toEqual([{ t: "Listing the working tree", s: "text" }]);
 	});
 });

@@ -85,52 +85,11 @@ jobs:
 
          - id: cache
            uses: ./.github/actions/bazel-cache
-           with:
-              scope: ${{ matrix.target_id }}
          - name: Build native addon
            run: |
               set -eo pipefail
               if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build "//:${{ matrix.target }}" 2>&1 | tee "$RUNNER_TEMP/bazel-build.log"
-         # Cache-hit visibility: a supposedly warm build that executes
-         # thousands of actions is the failure mode that made CI slow — make
-         # it visible in the run summary instead of discovering it weeks in.
-         - name: Report bazel cache stats
-           shell: bash
-           env:
-              CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
-              CACHE_MATCHED_KEY: ${{ steps.cache.outputs.matched-key }}
-           run: |
-              # Bazel runs with --color=yes (config=ci); strip ANSI before
-              # matching — escapes split "INFO:" from the process count in
-              # the raw log.
-              summary=$(sed -E 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/bazel-build.log" | grep -E '[0-9]+ processes:' | tail -1 || true)
-              echo "::notice title=Bazel build summary::${summary:-no process summary found}"
-              {
-                echo "### Bazel cache: ${{ matrix.target_id }}"
-                echo "Exact hit: ${CACHE_HIT:-false}"
-                echo "Restored key: ${CACHE_MATCHED_KEY:-none}"
-                echo "Build processes: ${summary:-unavailable}"
-                echo 'Cache directory sizes:'
-                echo '```'
-                du -sh ~/.cache/omp-bazel-disk ~/.cache/omp-bazel-repo ~/.cargo/registry ~/.cargo/git 2>/dev/null || true
-                echo '```'
-              } >> "$GITHUB_STEP_SUMMARY"
-
-         # Save only on main: branch-specific copies consume quota but cannot
-         # be restored by main. Each target retains an independent cache.
-         - name: Save bazel disk cache
-           if: github.ref == 'refs/heads/main' && steps.cache.outputs.save-needed == 'true'
-           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-           with:
-              # Must mirror the restore path list in the bazel-cache action.
-              path: |
-                 ~/.cache/omp-bazel-disk
-                 ~/.cache/omp-bazel-repo
-                 ~/.cargo/registry
-                 ~/.cargo/git
-              key: ${{ steps.cache.outputs.cache-key }}
-
+              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build "//:${{ matrix.target }}"
          # Stage outputs underneath a natives-<target> directory so this
          # artifact keeps the same internal layout as the upstream
          # bazel-bin/natives-*/*.node upload: a glob like
@@ -237,7 +196,7 @@ jobs:
               path: ${{ matrix.binary_path }}
          # Main-only save, after the build so it is off the leg's critical
          # path: caches saved on a tag or branch are readable only by that ref
-         # yet count against the shared 10 GB quota (see bazel-cache).
+         # yet count against the shared 10 GB repo cache quota.
          - name: Save bun store
            if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
            continue-on-error: true

@@ -1,36 +1,47 @@
 #!/usr/bin/env bun
-// Keep the two independent pytest invocations and their -x stop rule.
+// Run supported independent pytest suites and report each result.
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
-const integration = process.argv[2] === "integration";
-if (process.argv.length > 3 || (process.argv[2] && !integration))
-	throw new Error("Expected integration or no arguments");
-const python = process.platform === "win32" ? "python" : "python3";
-const directories = integration
+const args = process.argv.slice(2);
+if (args.length > 1 || args.some(arg => arg !== "integration")) throw new Error("Expected [integration]");
+const integration = args.includes("integration");
+const windows = process.platform === "win32";
+if (windows && integration) {
+	console.error("UNSUPPORTED: Robomp integration tests are unsupported on native Windows.");
+	process.exit(1);
+}
+if (windows) console.log("SKIPPED: Robomp tests are unsupported on native Windows.");
+const python = windows ? "python" : "python3";
+const suites = integration
 	? ["python/robomp/tests/test_worker_smoke.py"]
-	: ["sdk/python/omp-rpc/tests", "python/robomp/tests"];
-const run = await beginTestRun(integration ? "robomp opt-in integration" : "Python SDK and robomp unit/integration");
-const probe = Bun.spawnSync([python, "-m", "pytest", "--version"], { stdout: "pipe", stderr: "ignore" });
-const pytestVersion = probe.exitCode === 0 ? probe.stdout.toString().trim() : "unavailable";
-let exitCode = 0;
+	: windows
+		? ["sdk/python/omp-rpc/tests"]
+		: ["sdk/python/omp-rpc/tests", "python/robomp/tests"];
+const run = await beginTestRun(
+	integration ? "robomp opt-in integration" : windows ? "Python RPC SDK" : "Python SDK and robomp unit/integration",
+);
+let pytestVersion = "unavailable";
 try {
-	for (const directory of directories) {
+	const probe = Bun.spawnSync([python, "-m", "pytest", "--version"], { stdout: "pipe", stderr: "ignore" });
+	if (probe.exitCode === 0) pytestVersion = probe.stdout.toString().trim();
+} catch {
+	// The preflight below reports the unavailable interpreter.
+}
+let exitCode = 0;
+let reportingFailed = false;
+try {
+	for (const directory of suites) {
 		const reportPath = testReportPath(directory);
-		const command = [
-			python,
-			"-m",
-			"pytest",
-			"-x",
-			directory,
-			`--junitxml=${reportPath}`,
-			`--junit-prefix=${directory}`,
-		];
+		const command = [python, "-m", "pytest", directory, `--junitxml=${reportPath}`, `--junit-prefix=${directory}`];
 		const startedAt = new Date().toISOString();
 		const started = performance.now();
-		const env = integration ? { ...process.env, ROBOMP_INTEGRATION: "1" } : process.env;
+		const env = { ...process.env };
+		if (integration) env.ROBOMP_INTEGRATION = "1";
+		else delete env.ROBOMP_INTEGRATION;
 		try {
 			const child = Bun.spawn(command, { env, stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-			exitCode = await child.exited;
+			const suiteExitCode = await child.exited;
+			if (exitCode === 0 && suiteExitCode !== 0) exitCode = suiteExitCode;
 			await recordTestProducer({
 				producer: `pytest/${directory}`,
 				command,
@@ -38,17 +49,17 @@ try {
 				concurrency: 1,
 				startedAt,
 				durationSeconds: (performance.now() - started) / 1000,
-				exitCode,
+				exitCode: suiteExitCode,
 				reportPath,
 				timingBasis: "pytest testcase.time: setup + call + teardown (seconds)",
 				runnerVersion: pytestVersion,
 			});
 		} catch (error) {
 			console.error(`Pytest reporting failed for ${directory}: ${String(error)}`);
-			if (exitCode === 0) exitCode = 1;
+			reportingFailed = true;
 		}
-		if (exitCode !== 0) break;
 	}
+	if (exitCode === 0 && reportingFailed) exitCode = 1;
 } finally {
 	try {
 		await endTestRun(run, exitCode);

@@ -330,6 +330,15 @@ export class VirtualTerminal implements Terminal {
 		return this.#rowColumnsWithColor(row, CELL_FG);
 	}
 
+	/** Raw foreground color words, using the same kitty cell encoding as backgrounds. */
+	getViewportRowForegroundValues(row: number): number[] {
+		const words = this.#presentedRowCells(row);
+		if (!words) return [];
+		const values: number[] = [];
+		for (let col = 0; col * CELL_U32 < words.length; col++) values.push(words[col * CELL_U32 + CELL_FG] ?? 0);
+		return values;
+	}
+
 	/**
 	 * Columns in a viewport row whose cells carry underline.
 	 * Used with unreset-SGR regressions to ensure style attributes do not bleed

@@ -7,7 +7,7 @@ import {
 	VERSION_STAMP_MAGIC,
 	VERSION_STAMP_SIZE,
 } from "../packages/natives/native/version-sentinel.js";
-import { ADDON_OUTPUTS, hostTargetName } from "./bazel-natives";
+import { ADDON_OUTPUTS, hostTargetName, parseCliArgs } from "./bazel-natives";
 import { detectHostAvx2Support, detectHostMusl } from "./host-detect";
 import { nativesPackageVersion } from "./stamp-native-version";
 
@@ -29,12 +29,12 @@ test("build-only artifact install retains stamping while the default rejects an 
 		const invalidImage = Buffer.alloc(VERSION_STAMP_SIZE);
 		invalidImage.write(VERSION_STAMP_MAGIC, "latin1");
 		await Bun.write(path.join(sourceDir, filename), invalidImage);
-		const install = async (dest: string, skip: boolean) => {
+		const install = async (dest: string, skip: boolean, requestedTarget = target) => {
 			const child = Bun.spawn(
 				[
 					process.execPath,
 					"scripts/bazel-natives.ts",
-					target,
+					requestedTarget,
 					"--source",
 					source,
 					"--dest",
@@ -51,7 +51,7 @@ test("build-only artifact install retains stamping while the default rejects an 
 			return { exitCode, stdout, stderr };
 		};
 		const skippedDest = path.join(temp, "skipped");
-		const skipped = await install(skippedDest, true);
+		const skipped = await install(skippedDest, true, "host");
 		expect(skipped.exitCode).toBe(0);
 		const stamped = new Uint8Array(await Bun.file(path.join(skippedDest, filename)).arrayBuffer());
 		expect(containsVersionStamp(stamped, await nativesPackageVersion())).toBe(true);
@@ -71,4 +71,36 @@ test("build-only artifact install retains stamping while the default rejects an 
 	} finally {
 		await fs.rm(temp, { recursive: true, force: true });
 	}
+});
+
+test("native driver options distinguish probe flags from forwarded Bazel arguments", () => {
+	expect(parseCliArgs(["host", "--skip-load-probe"])).toEqual({
+		targets: ["host"],
+		dest: null,
+		source: null,
+		bazelArgs: [],
+		skipLoadProbe: true,
+	});
+	expect(parseCliArgs(["host", "--", "--skip-load-probe"])).toEqual({
+		targets: ["host"],
+		dest: null,
+		source: null,
+		bazelArgs: ["--skip-load-probe"],
+	});
+	expect(() => parseCliArgs(["host", "--source", "artifacts", "--", "--config=ci"])).toThrow(
+		"--source cannot be combined with extra bazel arguments",
+	);
+	expect(() => parseCliArgs(["host", "--dest"])).toThrow("--dest requires a directory argument");
+	expect(() => parseCliArgs(["host", "--output-dir=artifacts"])).toThrow("Unknown flag --output-dir=artifacts");
+});
+
+test("binding build rejects the removed output producer option before building", async () => {
+	const child = Bun.spawn([process.execPath, "packages/natives/scripts/build-bindings.ts", "--output-dir=artifacts"], {
+		cwd: repoRoot,
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [exitCode, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+	expect(exitCode).not.toBe(0);
+	expect(stderr).toContain("Usage: bun packages/natives/scripts/build-bindings.ts");
 });

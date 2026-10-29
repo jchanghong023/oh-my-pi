@@ -464,6 +464,8 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const closeSpy = vi.fn();
 		session.providerSessionState.set("openai-codex-responses", { close: closeSpy } satisfies ProviderSessionState);
 
+		// Release the live writer before simulating an external journal edit.
+		await session.sessionManager.close();
 		const rewrittenLines = fs
 			.readFileSync(sessionFile, "utf8")
 			.trimEnd()
@@ -548,6 +550,8 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const closeSpy = vi.fn();
 		session.providerSessionState.set("openai-codex-responses", { close: closeSpy } satisfies ProviderSessionState);
 
+		// Simulate an external writer without overlapping journal ownership.
+		await session.sessionManager.close();
 		const mutatedSessionManager = await SessionManager.open(sessionFile, tempDir);
 		mutatedSessionManager.appendMessage({
 			role: "user",
@@ -587,6 +591,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const closeSpy = vi.fn();
 		session.providerSessionState.set("openai-codex-responses", { close: closeSpy } satisfies ProviderSessionState);
 
+		await session.sessionManager.close();
 		const mutatedSessionManager = await SessionManager.open(sessionFile, tempDir);
 		mutatedSessionManager.appendModelChange(modelSelector(openaiModel));
 		await mutatedSessionManager.flush();
@@ -619,6 +624,7 @@ describe("AgentSession OpenAI Responses replay boundaries", () => {
 		const closeSpy = vi.fn();
 		session.providerSessionState.set("openai-responses:openai", { close: closeSpy } satisfies ProviderSessionState);
 
+		await session.sessionManager.close();
 		const mutatedSessionManager = await SessionManager.open(sessionFile, tempDir);
 		mutatedSessionManager.appendModelChange(modelSelector(alternateOpenaiModel));
 		await mutatedSessionManager.flush();

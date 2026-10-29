@@ -4,6 +4,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { toolRenderers } from "@oh-my-pi/pi-tui/tools";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -16,11 +20,16 @@ async function getUiTheme() {
 	return theme!;
 }
 
+let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+
 beforeEach(async () => {
+	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 });
 
 afterEach(() => {
+	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 	resetSettingsForTest();
 });
 

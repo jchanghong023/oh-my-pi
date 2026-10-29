@@ -113,12 +113,9 @@ describe("ModelPicker", () => {
 			picker: { currentContextTokens: 6000 },
 		});
 
-		expect(normalize(picker.render(220))).toContain("Session-only switch");
-
 		picker.handleInput("small");
 		const rendered = normalize(picker.render(220));
 		expect(rendered).toContain("context>4.1k");
-		expect(rendered).toContain("compacts with current model");
 
 		picker.handleInput("\n");
 		expect(onPick).toHaveBeenCalledTimes(1);

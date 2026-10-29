@@ -1529,6 +1529,7 @@ class DaemonBroker {
 				// Recovery may only change a subset of records; #persist writes only
 				// the files whose serialized form differs from what was read.
 				this.#persist(record);
+				await record.persistQueue;
 			} catch (error) {
 				logger.warn("Failed to recover daemon record", {
 					name: entry.name,

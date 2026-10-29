@@ -33,6 +33,10 @@
 
 ### Changed
 
+- Raise the shared Bun and Rust Nextest test concurrency ceiling to 28, bounded by available CPU cores and any lower Bun concurrency override.
+- Run independent fulltest suites concurrently and distribute singleton and E2E tests to avoid serial bottlenecks without reducing coverage.
+- Avoid repeating background Bash failures in wait results and completion receipts when the original tool card already shows the same job outcome, including after session restoration.
+- Clarified required todo append parameters and added retry guidance for missing phase or items without resetting progress.
 - Restore the upstream `titanium` dark-theme default and palette; preserve explicit theme settings.
 - Use `company/GLM-5.3-public` for the offline default, Plan, and Slow roles; preserve other roles and explicit settings.
 - Disable OSC 7501 program status reporting by default in offline mode; explicit settings still take precedence.
@@ -83,11 +87,22 @@
 - Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
-- Simplified Bazel gate source graphs by reusing the complete native-build file union with excluded products restored, and by linking consumers directly to deduplicated cycle domains without dropping transitive inputs.
-- Existing supported developer check, type-check, lint, build and test commands now route through Bazel by default; explicit `bun run bazel -- <existing-task>` remains available. Original selection and reporting are preserved without expanding fork-affected fulltest. Declared workspace products are restored from real cached artifacts; native installation and version stamping still run, with writable generated bindings. Untracked external environments and side effects rerun rather than claiming cached success. The gate contract requires local-filesystem `--watchfs` (plus `--experimental_windows_watchfs` on Windows hosts), the native 500000-entry computed-digest cache, scoped `.bazelignore` exclusions, actual dependency/glob/macro simplification, and Server preservation on every outcome while cancelling only owned invocations/actions. Full scope, 90/900/1500-second limits and same-source two-run fulltest acceptance with a second external wall clock strictly below 30 seconds remain unchanged; this change does not establish that acceptance.
+- Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
+- Run complete local TypeScript, repository-script, Rust/Nextest/doctest and Python suites on every fulltest invocation, without affected-test selection or cached test results.
+- Continue independent tests after failures and retain complete failure reports instead of stopping at the first failing case or chunk.
+- Limit Bun test workers to the smaller of 15 and the available CPU count, sharing the budget across chunks and file workers instead of fixing fulltest to one chunk.
+- Show only failing cases and error diagnostics in the three verification gates, hiding successful cases, chunks and command output while retaining the final status, timings and complete test reports.
 
 ### Fixed
 
+- Require an explicit task or phase before todo completion, removal, or abandonment.
+- Reject unnamed Bash readiness checks and asynchronous PTY requests before executing commands; retain started service details if log retrieval fails.
+- Report files already changed when a multi-file edit fails partway.
+- Report committed file renames when LSP notifications are interrupted, and distinguish server-provided reference edits from complete reference coverage.
+- Distinguish AST searches with no searchable files from zero matches, and mark failed web searches as errors.
+- Keep SQLite write recovery guidance within supported row-key addressing without changing read-query guidance.
+- Preserve user and custom asides across failed session switches instead of silently discarding messages prepared during rollback.
+- Keep manual CI limited to build and packaging; do not run tests or make release publication depend on test jobs.
 - Let `/dev` execution agents wait for asynchronous subagent results without repeatedly polling status or filling the conversation with waiting updates.
 - Fix `/dev` native execution capabilities, recursive requirements handoff and approval checks, report acceptance boundaries, cancellation settlement, stage recovery, and partial sync/archive cleanup so failures and remaining work are retained accurately.
 - Enforce material-version bindings for ordinary `/dev` desktop inputs and recognize explicit requests to continue the approved plan without requiring a fixed repair keyword.
@@ -98,9 +113,8 @@
 - Use the visible Dev solution session's model and settings for Team participants, alignment and synthesis.
 - Let users accept completion reports that honestly disclose incomplete work without a separate persisted worker/reviewer-success gate, while retaining report structure, version checks and read-only acceptance boundaries.
 - Preserve arrival order between custom messages and user prompts held by idle compaction without adding an unnecessary asynchronous generation check.
-- Exclude vendored dependency test files from fork test dispatch and remove unstaged deleted files from cached Bazel source declarations.
+- Exclude vendored dependency test files from fork test dispatch.
 - Keep the permanent compact thinking area from obscuring sent messages when idle or between turns.
-- Keep Bazel test caches scoped to real source inputs by distinguishing file contents, process handles, temporary-directory capability probes and generated wrapper outputs from dynamic source paths, while retaining conservative runtime-loading boundaries.
 - Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
 - Keep Dev command failures visible outside Dev, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.
 - Preserve ZCode stage row controls and ordinary mutations after Dev; closing a worker view or resuming a live root no longer stops its Dev flow, and malformed historical observations are skipped.
@@ -126,7 +140,6 @@
 - Preserve quoted Windows verification commands and external edits during failed specification publication.
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.
 - Preserve native stage input, attachments and drafts when Dev admission or artifact checks fail; retain no-agent Dev mode after successful completion without manufacturing model replies.
-- Refresh Bazel source overlays when source directory membership changes, preserving incremental caches and the running Server.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
 - Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
 - Keep ZCode clock calibration independent of history scans and reuse indexed receipts across restarts, without queuing foreground lookups behind full background rebuilds or shortening deduplication history.
@@ -153,11 +166,8 @@
 - Keep runtime journal leases exclusive within one process and held through writer shutdown; preserve callable tool schemas through admission wrappers and cancel failed MCP initialization without affecting other sessions.
 - Keep gate scope tied to one source snapshot, fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
 - Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.
-- Keep package-local dynamic loaders from inheriting unrelated shared and Rust inputs through transitive workspace dependencies and package cycles, while retaining complete package resources and explicit cross-package inputs.
-- Avoid rewriting unchanged stamped native addons and writable bindings during installation, while retaining version/load verification, and bound Windows gate filesystem scanning to avoid metadata contention.
+- Avoid rewriting unchanged stamped native addons and writable bindings during installation, while retaining version and load verification.
 - Fixed compacted-history replay losing running background tool updates, dropping message-form skill requests, and showing synthetic prompts as user messages.
-- Run fulltest static checks and tests in one Bazel graph, with affected Rust tests depending on clippy completion while TypeScript work remains parallel and the existing fastcheck budget is preserved.
-- Let fulltest observe completed static targets even when BEP file notifications are delayed, avoiding false fastcheck timeouts without changing budgets or check coverage.
 - Preserve migrated settings and fresh effective values across configuration saves and reloads, reset legacy setting sources safely, and keep valid higher-priority Team preview participants when a user draft contains unavailable models.
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.

@@ -201,7 +201,7 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.details.response.provider).toBe("brave");
+		expect(result.details?.response.provider).toBe("brave");
 		expect(timeoutMs).toBe(180_000);
 	});
 
@@ -264,6 +264,56 @@ describe("executeSearch abort propagation", () => {
 		expect(fallbackSearch).not.toHaveBeenCalled();
 	});
 
+	it("marks an empty configured provider chain as an error", async () => {
+		const config = await Settings.init({ inMemory: true });
+		config.setModelRole("web", "missing-provider/no-such-search-model");
+		cfgRetryFallbackChains.set(config, { web: [] });
+		const authStorage = createInMemoryAuthStorage();
+		openAuthStorages.push(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, undefined, { settings: config });
+
+		const result = await runSearchQuery({ query: "anything" }, { authStorage, modelRegistry });
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.response.provider).toBe("none");
+		expect(result.details?.error).toBe("No web search model configured.");
+	});
+
+	it("marks an unmatched model selector as an error", async () => {
+		const context = await configureProviderChain([
+			fakeProvider("brave", async () => ({ provider: "brave", sources: [] })),
+		]);
+
+		const result = await runSearchQuery(
+			{ query: "anything", model: "missing-provider/no-such-search-model" },
+			context,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.response.provider).toBe("none");
+		expect(result.details?.error).toContain("No web search model matches selector");
+		expect(context.getProvider).not.toHaveBeenCalled();
+	});
+
+	it("marks an exhausted provider chain as an error", async () => {
+		const context = await configureProviderChain([
+			fakeProvider("brave", async () => {
+				throw new Error("brave failed");
+			}),
+			fakeProvider("exa", async () => {
+				throw new Error("exa failed");
+			}),
+		]);
+
+		const result = await runSearchQuery({ query: "anything" }, context);
+
+		expect(result.isError).toBe(true);
+		expect(result.details?.error).toContain("All web search providers failed");
+		expect(result.details?.error).toContain("brave failed");
+		expect(result.details?.error).toContain("exa failed");
+		expect(result.details?.response.provider).toBe("exa");
+	});
+
 	it("still reports provider failures when the caller has not aborted", async () => {
 		const context = await configureProviderChain([
 			fakeProvider("brave", async () => {
@@ -274,7 +324,8 @@ describe("executeSearch abort propagation", () => {
 		const result = await runSearchQuery({ query: "anything" }, context);
 
 		expect(result.content[0]?.text).toContain("upstream 500");
-		expect(result.details.error).toContain("upstream 500");
+		expect(result.isError).toBe(true);
+		expect(result.details?.error).toContain("upstream 500");
 	});
 
 	it("falls through when the configured role candidate returns no renderable content", async () => {
@@ -293,7 +344,8 @@ describe("executeSearch abort propagation", () => {
 		expect(emptySearch).toHaveBeenCalledTimes(1);
 		expect(fallbackSearch).toHaveBeenCalledTimes(1);
 		expect(result.content[0]?.text).toContain("Fallback result");
-		expect(result.details.response.provider).toBe("brave");
+		expect(result.isError).not.toBe(true);
+		expect(result.details?.response.provider).toBe("brave");
 	});
 
 	it("stops loading the role chain after the preferred candidate succeeds", async () => {
@@ -308,7 +360,7 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.details.response.provider).toBe("exa");
+		expect(result.details?.response.provider).toBe("exa");
 		expect(context.getProvider).toHaveBeenCalledTimes(1);
 		expect(context.getProvider).toHaveBeenCalledWith("exa");
 		expect(fallbackSearch).not.toHaveBeenCalled();
@@ -329,7 +381,8 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.details.response.provider).toBe("brave");
+		expect(result.isError).not.toBe(true);
+		expect(result.details?.response.provider).toBe("brave");
 		expect(context.getProvider).toHaveBeenCalledTimes(2);
 		expect(fallbackSearch).toHaveBeenCalledTimes(1);
 		expect(result.content[0]?.text).toStartWith(
@@ -373,8 +426,8 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything", model: "web/exa" }, context);
 
-		expect(result.details.error).toContain("Explicit Exa search failed.");
-		expect(result.details.response.provider).toBe("exa");
+		expect(result.details?.error).toContain("Explicit Exa search failed.");
+		expect(result.details?.response.provider).toBe("exa");
 		expect(context.getProvider).toHaveBeenCalledTimes(1);
 		expect(fallbackSearch).not.toHaveBeenCalled();
 	});

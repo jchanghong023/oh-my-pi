@@ -770,7 +770,7 @@ export class AskTool implements AgentTool<typeof askSchema, AskToolDetails> {
 						content: [
 							{
 								type: "text" as const,
-								text: `Error: option labels must be unique within a question: ${formatErrorValue(option.label)}`,
+								text: `Error: option labels must be unique within question ${formatErrorValue(question.id)}: ${formatErrorValue(option.label)}`,
 							},
 						],
 						details: {},

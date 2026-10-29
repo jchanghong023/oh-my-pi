@@ -11,6 +11,7 @@ import { AgentTranscriptViewer } from "@oh-my-pi/pi-tui/overlays/agent-transcrip
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import type { ObservableSession, SessionObserverRegistry } from "@oh-my-pi/pi-tui/overlays/session-observer-registry";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { SessionEntry, SessionTreeNode } from "@oh-my-pi/pi-coding-agent/session/session-entries";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
@@ -370,8 +371,15 @@ describe("tool path arrays", () => {
 			onClose: () => {},
 			onHubClose: () => {},
 		});
-		const rendered = Bun.stripANSI(viewer.render(120).join("\n"));
-		viewer.dispose();
+		const previousCompact = chatTranscriptDisplayPreferences.compactToolActivity;
+		let rendered: string;
+		try {
+			chatTranscriptDisplayPreferences.compactToolActivity = false;
+			rendered = Bun.stripANSI(viewer.render(120).join("\n"));
+		} finally {
+			chatTranscriptDisplayPreferences.compactToolActivity = previousCompact;
+			viewer.dispose();
+		}
 
 		// The hub chat now renders through grepToolRenderer.renderCall; the
 		// single-string `paths` arg shows up as the "in <paths>" scope meta on the

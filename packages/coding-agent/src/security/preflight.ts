@@ -262,7 +262,9 @@ async function normalizeOutput(
 		const entries = await fs.readdir(canonicalCandidate);
 		existingState = entries.length === 0 ? "empty" : "archivable";
 		if (entries.length > 0 && !archiveExisting) {
-			throw new Error("Security output directory is not empty; enable archiveExisting or choose another directory");
+			throw new Error(
+				"Security output directory is not empty; enable archiveExisting (archive_existing=true in security_scan) or choose another output_root",
+			);
 		}
 	} catch (error) {
 		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
@@ -292,7 +294,9 @@ export async function prepareSecurityOutputDirectory(
 	let archivedTo: string | undefined;
 	if (entries.length > 0) {
 		if (!output.archiveExisting) {
-			throw new Error("Security output directory is not empty; enable archiveExisting or choose another directory");
+			throw new Error(
+				"Security output directory is not empty; enable archiveExisting (archive_existing=true in security_scan) or choose another output_root",
+			);
 		}
 		const safeSuffix = archiveSuffix.replace(/[^a-zA-Z0-9._-]/g, "-");
 		archivedTo = `${root}.archive-${safeSuffix}`;

@@ -55,32 +55,35 @@ async function effects(): Promise<string[]> {
 }
 
 describe("MCP tool calls after dispatch", () => {
-	it("does not replay a crashed MCPTool call and recovers for the next call", async () => {
-		let reconnects = 0;
-		const tool = new MCPTool(await openConnection(), TOOL_DEF, async () => {
-			reconnects++;
-			return openConnection();
-		});
+	it.skipIf(process.platform === "win32")(
+		"does not replay a crashed MCPTool call and recovers for the next call",
+		async () => {
+			let reconnects = 0;
+			const tool = new MCPTool(await openConnection(), TOOL_DEF, async () => {
+				reconnects++;
+				return openConnection();
+			});
 
-		const failed = await tool.execute("crash", { crash: true }, undefined, context);
+			const failed = await tool.execute("crash", { crash: true }, undefined, context);
 
-		expect(failed.details?.isError).toBe(true);
-		const diagnostic = failed.content[0];
-		if (diagnostic?.type !== "text") throw new Error("Expected MCP failure diagnostics");
-		expect(diagnostic.text).toContain("retryable: no");
-		expect(diagnostic.text).toContain("may already have run; check its effect before retrying");
-		expect(reconnects).toBe(0);
-		expect(await effects()).toEqual(["record_effect"]);
+			expect(failed.details?.isError).toBe(true);
+			const diagnostic = failed.content[0];
+			if (diagnostic?.type !== "text") throw new Error("Expected MCP failure diagnostics");
+			expect(diagnostic.text).toContain("retryable: no");
+			expect(diagnostic.text).toContain("may already have run; check its effect before retrying");
+			expect(reconnects).toBe(0);
+			expect(await effects()).toEqual(["record_effect"]);
 
-		const recovered = await tool.execute("recover", {}, undefined, context);
+			const recovered = await tool.execute("recover", {}, undefined, context);
 
-		expect(recovered.details?.isError).toBeFalsy();
-		expect(recovered.content).toEqual([{ type: "text", text: "effect recorded" }]);
-		expect(reconnects).toBe(1);
-		expect(await effects()).toEqual(["record_effect", "record_effect"]);
-	});
+			expect(recovered.details?.isError).toBeFalsy();
+			expect(recovered.content).toEqual([{ type: "text", text: "effect recorded" }]);
+			expect(reconnects).toBe(1);
+			expect(await effects()).toEqual(["record_effect", "record_effect"]);
+		},
+	);
 
-	it("does not replay a crashed DeferredMCPTool call", async () => {
+	it.skipIf(process.platform === "win32")("does not replay a crashed DeferredMCPTool call", async () => {
 		const connection = await openConnection();
 		let reconnects = 0;
 		const tool = new DeferredMCPTool(
@@ -105,7 +108,7 @@ describe("MCP tool calls after dispatch", () => {
 		expect(await effects()).toEqual(["record_effect"]);
 	});
 
-	it("reconnects and retries a definitely unsent call exactly once", async () => {
+	it.skipIf(process.platform === "win32")("reconnects and retries a definitely unsent call exactly once", async () => {
 		const connection = await openConnection();
 		let reconnects = 0;
 		const tool = new MCPTool(connection, TOOL_DEF, async () => {

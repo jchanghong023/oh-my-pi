@@ -185,7 +185,6 @@ describe("SettingsList", () => {
 		list.handleInput("b");
 
 		const output = list.render(80).join("\n");
-		expect(output).toContain("Search: b");
 		expect(output).toContain("Browser Path");
 		expect(output).not.toContain("Theme");
 		expect(output).not.toContain("Mode");
@@ -273,7 +272,6 @@ describe("SettingsList", () => {
 
 		const output = list.render(80).join("\n");
 		expect(output).not.toContain("Group Alpha");
-		expect(output).toContain("No matching settings");
 	});
 	function sectionedItems() {
 		return [

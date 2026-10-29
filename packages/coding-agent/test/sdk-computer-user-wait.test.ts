@@ -112,7 +112,7 @@ describe("SDK session dialogs and the computer display hold", () => {
 	});
 
 	it("ends the hold while `ask` waits for an answer", async () => {
-		const target = await createSession({}, [
+		const target = await createSession({ "ask.timeout": 0 }, [
 			call("ask", { questions: [{ id: "go", question: "Go on?", options: [{ label: "Yes" }, { label: "No" }] }] }),
 			{ content: ["done"] },
 		]);

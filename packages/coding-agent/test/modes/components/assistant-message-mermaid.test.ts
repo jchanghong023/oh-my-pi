@@ -4,6 +4,10 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AssistantThinkingRenderer } from "@oh-my-pi/pi-coding-agent/extensibility/extensions";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { clearMermaidCache } from "@oh-my-pi/pi-tui/theme/mermaid-cache";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -56,7 +60,18 @@ afterEach(() => {
 	clearMermaidCache();
 });
 
+function useDetailedDisplay() {
+	let previous: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previous));
+}
+
 describe("AssistantMessageComponent transcript lifecycle", () => {
+	useDetailedDisplay();
+
 	it("keeps a revised streaming message mutable until finalization", () => {
 		const component = new AssistantMessageComponent();
 		const transcript = new TranscriptContainer();
@@ -246,6 +261,8 @@ describe("AssistantMessageComponent mermaid markdown", () => {
 });
 
 describe("AssistantMessageComponent thinking renderers", () => {
+	useDetailedDisplay();
+
 	it("renders all extension outputs below visible thinking blocks in registration order", () => {
 		const contexts: Array<{ contentIndex: number; thinkingIndex: number; text: string }> = [];
 		const component = new AssistantMessageComponent(
@@ -357,6 +374,8 @@ describe("AssistantMessageComponent thinking renderers", () => {
 });
 
 describe("AssistantMessageComponent images", () => {
+	useDetailedDisplay();
+
 	it("renders native assistant images in content order and honors image visibility", () => {
 		const message: AssistantMessage = {
 			...createAssistantMessage(""),

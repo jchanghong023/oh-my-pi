@@ -1,11 +1,9 @@
 #!/usr/bin/env bun
-// Current-platform fulltest and host-only Bazel integration, plus optional WSL coverage.
+// Current-platform fulltest plus optional WSL coverage.
 // No commits/pushes, CI, publishing, tool installation, or desktop automation.
 import * as path from "node:path";
-import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as logger from "@oh-my-pi/pi-utils/logger";
-import { localTestEnvironment, removeFulltestHome, runFulltest } from "./fulltest";
+import { runFulltest } from "./fulltest";
 import {
 	discoverWsl,
 	runWslStage,
@@ -18,8 +16,6 @@ import { GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
-import { runBazelCommands } from "./test-gate-bazel";
-import { testTimeoutMs } from "./ci-test-ts";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 export interface SlowtestArgs {
@@ -40,40 +36,12 @@ export function parseSlowtestArgs(args: readonly string[]): SlowtestArgs | null 
 }
 export interface SlowtestDependencies {
 	fulltest(gate: GateRun, options: { debug: boolean }): Promise<void>;
-	bazelIntegration(gate: GateRun, root: string): Promise<void>;
 	discover(gate: GateRun, options: WslOptions): Promise<WslSelection>;
 	identity(gate: GateRun, root: string): Promise<SourceIdentity>;
 	wsl(gate: GateRun, options: WslOptions): Promise<WslStageResult>;
 }
 const dependencies: SlowtestDependencies = {
 	fulltest: runFulltest,
-	bazelIntegration: async (gate, root) => {
-		const home = await gate.charged(() => fs.mkdtemp(path.join(os.tmpdir(), "omp-slowtest-bazel-home-")));
-		try {
-			await runBazelCommands(
-				gate,
-				[
-					{
-						label: "test/repository scripts scripts/test-gate-bazel.test.ts",
-						argv: [
-							"bun",
-							"scripts/test-report-bun.ts",
-							"scripts/test-gate-bazel.test.ts",
-							`--timeout=${testTimeoutMs()}`,
-						],
-						cwd: root,
-						env: localTestEnvironment(home),
-						kind: "charged",
-					},
-				],
-				{ root, concurrency: 1 },
-			);
-		} catch (error) {
-			throw gate.fail(error);
-		} finally {
-			await gate.charged(() => removeFulltestHome(home));
-		}
-	},
 	discover: discoverWsl,
 	identity: captureSourceIdentity,
 	wsl: runWslStage,
@@ -96,7 +64,7 @@ export async function runSlowtest(
 		stage: "orchestration",
 		result: "started",
 		platform: options.platform ?? process.platform,
-		scope: "fork-affected",
+		scope: "full-project",
 	});
 	try {
 		await runSlowtestObserved(gate, options, injected);
@@ -206,9 +174,7 @@ async function runSlowtestObserved(
 					head: result.status === "PASS" ? result.head : undefined,
 				});
 				if (result.status !== "PASS")
-					console.log(
-						`slowtest: ${result.status} — ${result.reason}; current-platform fulltest plus host-only Bazel integration`,
-					);
+					console.log(`slowtest: ${result.status} — ${result.reason}; current-platform fulltest`);
 				return result;
 			} catch (error) {
 				const failure = gate.record(error);
@@ -236,10 +202,6 @@ async function runSlowtestObserved(
 					}
 				}),
 			);
-			if (gate.signal.aborted) return;
-			// Outside the 1800s fulltest scope, still inside slowtest's original
-			// 3000s budget. WSL only runs fulltest and never this extra suite.
-			await attempt("host Bazel integration", () => injected.bazelIntegration(gate, root));
 		})();
 		const settled = await Promise.allSettled([current, linux] as const);
 		for (const result of settled) {
@@ -280,7 +242,7 @@ async function runSlowtestObserved(
 				head: before.head,
 				source_fingerprint: before.digest,
 				platform_count: 2,
-				scope: "fork-affected",
+				scope: "full-project",
 			});
 		}
 	} catch (error) {
@@ -298,7 +260,7 @@ if (import.meta.main) {
 					2,
 				);
 			const run = await gate.charged(() =>
-				beginTestRun("slowtest: fork-affected current platform; Linux reports stay in the WSL native workspace"),
+				beginTestRun("slowtest: full current platform; Linux reports stay in the WSL native workspace"),
 			);
 			finalizeTestRun(
 				gate,
@@ -307,7 +269,7 @@ if (import.meta.main) {
 			);
 			await runSlowtest(gate, options);
 		},
-		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true },
+		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true, failureOnlyOutput: true },
 	);
 	exitGateProcess(result.exitCode);
 }

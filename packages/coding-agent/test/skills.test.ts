@@ -794,18 +794,21 @@ describe("skills", () => {
 			expect(resolved).toBe("/mnt/c/Users/alice");
 		});
 
-		it("kills a host probe that never exits instead of blocking startup (#8402)", () => {
-			// Integration test against real OS timer behavior: the contract is that
-			// runHostProbe's spawnSync `timeout` actually kills a genuinely blocked
-			// child. Injecting a short deadline preserves that native lifecycle
-			// coverage without paying the production discovery budget.
-			const start = performance.now();
-			const result = runHostProbe([process.execPath, "-e", "await Bun.sleep(60_000)"], 25);
-			const elapsed = performance.now() - start;
-			expect(result).toBeUndefined();
-			// Loose bound proves the probe returned via its timeout, not the child.
-			expect(elapsed).toBeLessThan(1_000);
-		});
+		it.skipIf(process.platform === "win32")(
+			"kills a host probe that never exits instead of blocking startup (#8402)",
+			() => {
+				// Integration test against real OS timer behavior: the contract is that
+				// runHostProbe's spawnSync `timeout` actually kills a genuinely blocked
+				// child. Injecting a short deadline preserves that native lifecycle
+				// coverage without paying the production discovery budget.
+				const start = performance.now();
+				const result = runHostProbe([process.execPath, "-e", "await Bun.sleep(60_000)"], 25);
+				const elapsed = performance.now() - start;
+				expect(result).toBeUndefined();
+				// Loose bound proves the probe returned via its timeout, not the child.
+				expect(elapsed).toBeLessThan(1_000);
+			},
+		);
 
 		it("returns trimmed stdout for a host probe that succeeds (#8402)", () => {
 			const result = runHostProbe([process.execPath, "-e", "process.stdout.write('  host-home  ')"]);

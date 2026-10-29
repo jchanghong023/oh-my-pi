@@ -81,7 +81,6 @@ describe("SessionSelectorComponent pin actions", () => {
 		expect(onSetPinned).toHaveBeenLastCalledWith(oldest, true);
 		expect(order(selector)).toEqual(["oldest", "newest", "middle"]);
 		expect(list.selectedSession?.id).toBe("oldest");
-		expect(selector.render(120).join("\n")).toContain("unpin");
 
 		// Pin on an already-pinned session is a no-op, not a toggle.
 		selector.handleInput(ALT_K);
@@ -114,7 +113,7 @@ describe("SessionSelectorComponent pin actions", () => {
 		await Bun.sleep(0);
 
 		const rendered = selector.render(120).join("\n");
-		expect(rendered).toContain("Error: pins file locked");
+		expect(rendered).toContain("pins file locked");
 		expect(order(selector)).toEqual(["newest", "middle", "oldest"]);
 	});
 });

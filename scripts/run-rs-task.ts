@@ -6,15 +6,8 @@ import { $ } from "bun";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
+import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
-import {
-	affectedRustTestCommands,
-	parseFulltestChangedPaths,
-	selectRustTestScope,
-	type CargoLockPackageForRustScope,
-	type CargoMetadataForRustScope,
-	type RustTestScope,
-} from "./rust-test-scope";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -68,19 +61,13 @@ const TASK_COMMANDS = {
 			"cargo",
 			"nextest",
 			"run",
+			`--test-threads=${testConcurrencyLimit()}`,
 			"--no-fail-fast",
 			// The plus reporter flushes each classified result before native grace cleanup.
 			"--message-format=libtest-json-plus",
 			"--message-format-version=0.1",
 			"--workspace",
 			...VENDORED_FORK_EXCLUDES,
-			// Upstream's sed fast_io truncation test is deterministically red on
-			// Windows (LineReader serves zero bytes after an external set_len(0);
-			// upstream only tests on Linux and never sees it). Windows-only, so
-			// the Linux gates keep running it; drop the filter once upstream fixes it.
-			...(process.platform === "win32"
-				? ["-E", "not(test(=sed::fast_io::tests::test_file_truncated_after_open))"]
-				: []),
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
@@ -99,6 +86,7 @@ const TASK_COMMANDS = {
 			"test",
 			"--doc",
 			"--workspace",
+			"--no-fail-fast",
 			...VENDORED_FORK_EXCLUDES,
 			"--",
 			"-Zunstable-options",
@@ -119,114 +107,28 @@ if (!isRustTaskName(taskName)) {
 	process.exit(1);
 }
 
-const taskOptions = parseTaskOptions(taskName, process.argv.slice(3));
-if (taskOptions === null) process.exit(1);
-
-if (taskName === "test:rs" && taskOptions.affected) {
-	await runAffectedRustTests(taskOptions.dryRun);
-} else {
-	if (taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
-		console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
-		process.exit(0);
-	}
-
-	const commands = TASK_COMMANDS[taskName];
-	if (taskOptions.dryRun) {
-		printTestPlan({ crates: [] }, commands, "full workspace (existing vendored exclusions)");
-		process.exit(0);
-	}
-
-	Object.assign(process.env, windowsTestTempOverride());
-	prepareWindowsRustEnvironment();
-	await runCommands(commands, taskName === "test:rs" ? "rust-workspace" : undefined);
+if (process.argv.length > 3) {
+	console.error(`Unknown Rust task argument: ${process.argv[3]}`);
+	process.exit(1);
 }
 
-async function runAffectedRustTests(dryRun: boolean): Promise<void> {
-	let changedPaths: string[];
-	try {
-		changedPaths = parseFulltestChangedPaths(process.env.OMP_FULLTEST_CHANGED_PATHS);
-	} catch (error) {
-		console.error(error instanceof Error ? error.message : String(error));
-		process.exit(1);
-	}
-	if (changedPaths.length === 0) {
-		console.log("Rust affected test crates: none");
-		if (dryRun) console.log("Rust test commands: none (empty affected scope).");
-		console.log("Skipping test:rs --affected (no affected Rust crates were found).");
-		return;
-	}
-
-	const needsVendorGraph = changedPaths.some(changedPath =>
-		changedPath.replaceAll("\\", "/").replace(/^\.\//, "").startsWith("crates/vendor/"),
-	);
-	const lockPackages = needsVendorGraph ? await loadCargoLockPackages() : undefined;
-	let scope: RustTestScope;
-	let commands: readonly (readonly string[])[];
-	try {
-		const metadata = await loadCargoWorkspaceMetadata();
-		scope = selectRustTestScope(changedPaths, metadata, repoRoot, VENDORED_FORK_EXCLUDED_PACKAGE_NAMES, lockPackages);
-		commands = affectedRustTestCommands(scope.crates, metadata);
-	} catch (error) {
-		const detail = error instanceof Error ? error.message : String(error);
-		const message = `Error: unable to resolve affected Rust crates: ${detail}`;
-		console.error(message);
-		reportGateFailure(new GateCommandError(message, 1));
-		process.exit(1);
-	}
-	if (scope.crates.length === 0) {
-		console.log("Rust affected test crates: none");
-		if (dryRun) console.log("Rust test commands: none (empty affected scope).");
-		console.log("Skipping test:rs --affected (no affected Rust crates were found).");
-		return;
-	}
-
-	if (dryRun) {
-		printTestPlan(scope, commands, scope.kind === "all" ? "all affected workspace crates" : "affected crates");
-		return;
-	}
-
-	Object.assign(process.env, windowsTestTempOverride());
-	prepareWindowsRustEnvironment();
-	await runCommands(commands, "rust-affected");
+if (taskName !== "test:rs" && taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
+	console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
+	process.exit(0);
 }
 
-function parseTaskOptions(name: RustTaskName, args: readonly string[]): { affected: boolean; dryRun: boolean } | null {
-	let affected = false;
-	let dryRun = false;
-	for (const arg of args) {
-		if (arg === "--affected" && !affected) {
-			affected = true;
-		} else if (arg === "--dry-run" && !dryRun) {
-			dryRun = true;
-		} else {
-			console.error(`Unknown or duplicate Rust task argument: ${arg}`);
-			return null;
-		}
-	}
-	if ((affected || dryRun) && name !== "test:rs") {
-		console.error(`Rust task arguments --affected and --dry-run are only valid with test:rs.`);
-		return null;
-	}
-	return { affected, dryRun };
-}
-
-function printTestPlan(
-	scope: { crates: readonly string[] },
-	commands: readonly (readonly string[])[],
-	description: string,
-): void {
-	const crates = scope.crates.length === 0 ? "(selected by Cargo workspace exclusions)" : scope.crates.join(", ");
-	console.log(`Rust test crates (${description}): ${crates}`);
-	for (const command of commands) console.log(`  ${command.join(" ")}`);
-}
+Object.assign(process.env, windowsTestTempOverride());
+prepareWindowsRustEnvironment();
+await runCommands(TASK_COMMANDS[taskName], taskName === "test:rs" ? "rust-workspace" : undefined);
 
 async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
 	const run = scope ? await beginTestRun(scope) : undefined;
 	let exitCode = 0;
 	try {
 		for (const command of commands) {
-			exitCode = await runCommand(command, scope);
-			if (exitCode !== 0) break;
+			const commandExitCode = await runCommand(command, scope);
+			if (exitCode === 0) exitCode = commandExitCode;
+			if (commandExitCode !== 0 && !scope) break;
 		}
 	} catch (error) {
 		exitCode = 1;
@@ -243,47 +145,6 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 		}
 	}
 	if (exitCode !== 0) process.exit(exitCode);
-}
-
-async function loadCargoWorkspaceMetadata(): Promise<CargoMetadataForRustScope> {
-	const cargo = await ensureCargoBinary();
-	const env = cargoEnvironment(cargo);
-	const child = Bun.spawn([cargo, "metadata", "--no-deps", "--format-version=1"], {
-		cwd: repoRoot,
-		env,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	const [exitCode, stdout, stderr] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-	]);
-	if (exitCode !== 0) {
-		const detail = stderr.trim();
-		throw new Error(`cargo metadata --no-deps failed${detail === "" ? ` (exit ${exitCode})` : `: ${detail}`}`);
-	}
-	try {
-		return JSON.parse(stdout) as CargoMetadataForRustScope;
-	} catch {
-		throw new Error("cargo metadata --no-deps returned invalid JSON.");
-	}
-}
-
-async function loadCargoLockPackages(): Promise<CargoLockPackageForRustScope[] | null> {
-	try {
-		const cargoLockText = await Bun.file(path.join(repoRoot, "Cargo.lock")).text();
-		const parsed = Bun.TOML.parse(cargoLockText) as { package?: unknown };
-		if (!Array.isArray(parsed.package)) throw new Error("Cargo.lock has no package table.");
-		return parsed.package as CargoLockPackageForRustScope[];
-	} catch (error) {
-		const detail = error instanceof Error ? error.message : String(error);
-		console.warn(
-			`Warning: unable to read Cargo.lock for vendor scope: ${detail}. Selecting the full Rust workspace.`,
-		);
-		return null;
-	}
 }
 
 async function ensureCargoBinary(): Promise<string> {

@@ -72,13 +72,15 @@ function finalSnapshot(output: string): {
 
 function makeComponent(): ToolExecutionComponent {
 	const ui = { requestRender: vi.fn(), requestComponentRender: vi.fn() } as unknown as TUI;
-	return new ToolExecutionComponent(
+	const component = new ToolExecutionComponent(
 		"task",
 		{ agent: "scout", id: "Anna", description: "scout auth", assignment: "investigate the auth flow" },
 		{},
 		undefined,
 		ui,
 	);
+	component.setExpanded(true);
+	return component;
 }
 
 describe("ToolExecutionComponent detached task lifecycle", () => {

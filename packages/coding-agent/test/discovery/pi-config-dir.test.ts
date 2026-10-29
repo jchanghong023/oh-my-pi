@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { LoadContext } from "@oh-my-pi/pi-coding-agent/capability/types";
 import { getConfigDirs } from "@oh-my-pi/pi-coding-agent/config";
@@ -31,11 +30,10 @@ describe("PI_CONFIG_DIR", () => {
 		expect(getUserPath(ctx, "native", "commands")).not.toContain(ctx.home);
 	});
 
-	test("getConfigDirs respects PI_CONFIG_DIR for user base", () => {
+	test("getConfigDirs uses the initialized profile-aware agent directory", () => {
 		process.env.PI_CONFIG_DIR = ".config/omp";
 		const result = getConfigDirs("commands", { project: false });
-		const expected = path.resolve(path.join(os.homedir(), ".config/omp", "agent", "commands"));
-		expect(result[0]).toEqual({ path: expected, source: ".omp", level: "user" });
+		expect(result[0]).toEqual({ path: path.join(getAgentDir(), "commands"), source: ".omp", level: "user" });
 	});
 });
 

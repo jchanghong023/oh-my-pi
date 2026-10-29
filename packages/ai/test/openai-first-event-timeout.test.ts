@@ -917,7 +917,6 @@ describe("OpenAI-family first-event timeouts", () => {
 	});
 
 	it("keeps a local first-event disable after SSE headers arrive", async () => {
-		vi.useFakeTimers();
 		const localResponsesModel: Model<"openai-responses"> = buildModel({
 			id: "slow-local-prefill",
 			name: "Slow Local Prefill",
@@ -953,8 +952,13 @@ describe("OpenAI-family first-event timeouts", () => {
 				}),
 			);
 		};
+		const previousOpenAIFirstEventTimeout = Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+		const previousGenericFirstEventTimeout = Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
 
 		try {
+			delete Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			vi.useFakeTimers();
 			const resultPromise = streamOpenAIResponses(localResponsesModel, baseContext(), {
 				apiKey: "test-key",
 				fetch: fetchMock,
@@ -962,7 +966,9 @@ describe("OpenAI-family first-event timeouts", () => {
 			await bodyRead.promise;
 			for (let i = 0; i < 10; i++) await Promise.resolve();
 
-			expect(vi.getTimerCount()).toBe(0);
+			// A local disable must survive a silent body longer than the idle budget.
+			// Other subsystems may legitimately own timers in the same process.
+			vi.advanceTimersByTime(100);
 			releaseBody.resolve();
 			const result = await resultPromise;
 			expect(result.stopReason).toBe("stop");
@@ -970,6 +976,16 @@ describe("OpenAI-family first-event timeouts", () => {
 		} finally {
 			releaseBody.resolve();
 			vi.useRealTimers();
+			if (previousOpenAIFirstEventTimeout === undefined) {
+				delete Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_OPENAI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousOpenAIFirstEventTimeout;
+			}
+			if (previousGenericFirstEventTimeout === undefined) {
+				delete Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS;
+			} else {
+				Bun.env.PI_STREAM_FIRST_EVENT_TIMEOUT_MS = previousGenericFirstEventTimeout;
+			}
 		}
 	});
 });

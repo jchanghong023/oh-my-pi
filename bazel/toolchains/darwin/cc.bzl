@@ -221,12 +221,6 @@ def _darwin_cc_impl(rctx):
         triple = t["triple"],
     ), executable = False)
 
-    # Pure function of the attrs and the anchored repo names (no downloads, no
-    # host probing): opt into the repo contents cache so a new output base
-    # hardlinks these wrappers instead of rewriting them. Same contract as
-    # //bazel/toolchains:llvm.bzl.
-    return rctx.repo_metadata(reproducible = True)
-
 darwin_cc_repository = repository_rule(
     implementation = _darwin_cc_impl,
     doc = "clang/ld64.lld wrapper scripts + macOS-flavored cc_toolchain for {arm64,x86_64}-apple-darwin.",

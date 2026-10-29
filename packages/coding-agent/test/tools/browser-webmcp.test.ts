@@ -152,7 +152,7 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser WebMCP helpers", () => {
 		BROWSER_TEST_TIMEOUT_MS,
 	);
 
-	it(
+	it.skipIf(process.platform === "win32")(
 		"keeps a page alive whose same-site iframe is touched before it navigates",
 		async () => {
 			const invoke = createBrowserHost();

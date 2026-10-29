@@ -183,11 +183,11 @@ describe("EventController loader recovery after overflow maintenance", () => {
 		const first = visible(ctx.retryLoader!.render(80).join("\n"));
 		expect(first).toContain("Retrying (1/3) in 1.0s");
 
-		// 400ms of spinner ticks re-evaluate the closure: 600ms remain. A
-		// static label (the pre-fix banner) would still read "1.0s" here.
-		vi.advanceTimersByTime(400);
+		// The loader refreshes the label on its 160ms spinner cadence. Two ticks
+		// have elapsed, leaving 680ms rather than the original static 1.0s.
+		vi.advanceTimersByTime(320);
 		const second = visible(ctx.retryLoader!.render(80).join("\n"));
-		expect(second).toContain("in 600ms");
+		expect(second).toContain("in 680ms");
 		expect(second).not.toContain("in 1.0s");
 
 		// Past the deadline the remaining wait clamps at zero.

@@ -16,6 +16,7 @@ import { wrapToolWithMetaNotice } from "../../src/tools/output-meta";
 function toolFor(result: MCPToolCallResult | ((params: MCPToolCallParams) => MCPToolCallResult)): MCPTool {
 	const connection = {
 		name: "rhizome-mcp",
+		config: { command: "fixture" },
 		transport: {
 			request: async (method: string, params: MCPToolCallParams) => {
 				if (method === "tools/call") return typeof result === "function" ? result(params) : result;

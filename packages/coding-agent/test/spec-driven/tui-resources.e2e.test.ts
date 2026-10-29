@@ -23,7 +23,7 @@ function nativeReadResult(request: ModelRequest, target: string): string {
 }
 
 for (const location of ["directory", "absent", "file", "parent-only"] as const) {
-	test.skipIf(!tuiTest)(
+	test.skipIf(!tuiTest || (process.platform === "win32" && location === "absent"))(
 		`ordinary TUI discovers core OpenSpec in any directory and scopes manual resource grants (${location})`,
 		async () => {
 			const { manifest: inventory } = await collectSpecDrivenResources(

@@ -15,6 +15,7 @@ export interface TestReportRun {
 	sourceRevision: string | null;
 	dirtyState: string | null;
 	dirtyStateIdentity: string | null;
+	sourceDigest?: string;
 }
 
 export interface TestProducerRecord {
@@ -31,6 +32,79 @@ export interface TestProducerRecord {
 	status?: string;
 	timingBasis?: string;
 	runnerVersion?: string;
+}
+
+interface HistoryRun {
+	scope?: string;
+	startedAtUtc?: string;
+	platform?: string;
+	architecture?: string;
+	completion?: string;
+	exitCode?: number | null;
+	sourceDigest?: string | null;
+	unreconciledScope?: string | null;
+	reconciliation?: { status?: string; cases?: number; failures?: number };
+	producers?: (TestProducerRecord & { report?: string })[];
+}
+
+// History is a scheduling hint, never a test result. Only the most recent
+// fulltest on this machine can qualify, and only for the tested source.
+export async function latestLocalTestProducers(
+	sourceDigest: string | undefined,
+	root: string = reportRoot,
+	now: number = Date.now(),
+	currentRunId: string | undefined = process.env.OMP_TEST_RUN_ID,
+): Promise<TestProducerRecord[]> {
+	if (!sourceDigest || !/^[a-f0-9]{64}$/.test(sourceDigest)) return [];
+	try {
+		const entries = await fs.readdir(root, { withFileTypes: true });
+		let latestTime = -Infinity;
+		let latest: HistoryRun | undefined;
+		for (const entry of entries) {
+			if (!entry.isDirectory()) continue;
+			let run: HistoryRun;
+			try {
+				run = JSON.parse(await fs.readFile(path.join(root, entry.name, "run.json"), "utf8"));
+			} catch {
+				// An unreadable report cannot safely establish which run was last.
+				return [];
+			}
+			if (entry.name === currentRunId && run.completion === "running" && run.sourceDigest == null) continue;
+			if (run.scope !== "fulltest: full current-platform project suites") continue;
+			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
+			const started = Date.parse(run.startedAtUtc ?? "");
+			if (!Number.isFinite(started) || started > now) return [];
+			if (started === latestTime) return [];
+			if (started > latestTime) {
+				latestTime = started;
+				latest = run;
+			}
+		}
+		if (
+			!latest ||
+			now - latestTime > 7 * 24 * 60 * 60 * 1000 ||
+			latest.completion !== "complete" ||
+			latest.exitCode !== 0 ||
+			latest.sourceDigest !== sourceDigest ||
+			latest.reconciliation?.status !== "validated" ||
+			!(typeof latest.reconciliation.cases === "number" && latest.reconciliation.cases > 0) ||
+			latest.reconciliation.failures !== 0 ||
+			latest.unreconciledScope != null ||
+			!Array.isArray(latest.producers) ||
+			!latest.producers.some(producer => producer?.report === "available") ||
+			!latest.producers.every(
+				producer =>
+					(producer?.report === "available" &&
+						producer.status !== "partial" &&
+						producer.status !== "unsupported") ||
+					(producer?.report === "not-supported" && producer.status === "stage"),
+			)
+		)
+			return [];
+		return latest.producers.filter((producer: TestProducerRecord) => producer?.scope === "ci-test-ts:local-ts");
+	} catch {
+		return [];
+	}
 }
 
 /** Command-level cases are only for a single observable CLI probe, never a whole multi-case runner. */
@@ -303,6 +377,7 @@ async function writeRun(
 				sourceRevision: run.sourceRevision,
 				dirtyState: run.dirtyState,
 				dirtyStateIdentity: run.dirtyStateIdentity,
+				sourceDigest: run.sourceDigest ?? null,
 				dirtyStateIdentityBasis: "git status plus tracked diff; untracked file names, not their contents",
 				platform: process.platform,
 				architecture: process.arch,

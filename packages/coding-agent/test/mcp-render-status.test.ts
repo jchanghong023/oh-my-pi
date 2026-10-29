@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -7,6 +7,10 @@ import { DeferredMCPTool, MCPTool } from "@oh-my-pi/pi-coding-agent/mcp/tool-bri
 import { type MCPToolDetails } from "@oh-my-pi/pi-tui/tools/mcp";
 import type { MCPServerConnection, MCPToolDefinition, MCPTransport } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { theme as activeTheme, getThemeByName, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
@@ -19,6 +23,15 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false, undefined, undefined, "dark", "light");
 }, 15_000);
+
+let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+beforeEach(() => {
+	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+});
+afterEach(() => {
+	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
+});
 
 async function getRequiredTheme() {
 	const uiTheme = await getThemeByName("dark");

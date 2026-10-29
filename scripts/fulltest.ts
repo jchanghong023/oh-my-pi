@@ -1,24 +1,19 @@
 #!/usr/bin/env bun
 // Full current-platform validation. No WSL, remote pipelines, publication,
 // desktop input, or quality-definition changes belong in this entry point.
-import { existsSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
-import { normalizeRustScopeChangedPaths } from "./rust-test-scope";
 import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
 import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
-import { beginTestRun, finalizeTestRun } from "./test-reporting";
+import { beginTestRun, finalizeTestRun, type TestReportRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
-import { runBazelCommands } from "./test-gate-bazel";
-import { gateClockNanoseconds } from "./test-gate-clock";
-import { reportBazelRun } from "./test-gate-bazel-report";
-import { bazelShell, bazelToolPath } from "./test-gate-bazel-tools";
+import { runGateCommands, testConcurrencyLimit } from "./test-gate-scheduler";
 
 export interface FulltestOptions {
 	debug: boolean;
@@ -55,9 +50,13 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 	if (process.platform === "win32") {
 		for (const key of Object.keys(env)) {
 			if (key.toUpperCase() !== "PATH" || !env[key]) continue;
-			env[key] = bazelToolPath(env[key]);
+			env[key] = env[key]
+				.split(";")
+				.filter(
+					directory => !/[\\/]Microsoft[\\/]WindowsApps(?:[\\/]|$)/i.test(directory.replace(/^"(.*)"$/, "$1")),
+				)
+				.join(";");
 		}
-		env.BAZEL_SH = bazelShell(env);
 	}
 	// GateRun overlays command environments on the host environment. Preserve
 	// the shared scrubber's deletions so that overlay cannot restore credentials.
@@ -94,112 +93,39 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 	};
 }
 
-/** Use the complete fork delta, including new unstaged tests, as before. */
-async function discoverForkChangedPaths(gate: GateRun): Promise<string[]> {
-	const requirements = await Bun.file(path.join(gateRepoRoot, "openspec/specs/fork-upstream-baseline/spec.md")).text();
-	const baseline = requirements.match(/\*\*Upstream commit\*\*：`([0-9a-f]{40})`/)?.[1];
-	if (!baseline) throw new GateCommandError("Fork requirements do not identify the upstream baseline", 1);
-	const diff = await gate.capture({
-		label: "scope/complete fork delta",
-		argv: ["git", "diff", "--no-renames", "--name-only", "-z", baseline],
-		cwd: gateRepoRoot,
-	});
-	const untracked = await gate.capture({
-		label: "scope/untracked fork files",
-		argv: ["git", "ls-files", "--others", "--exclude-standard", "-z"],
-		cwd: gateRepoRoot,
-	});
-	const paths = [...new Set([...diff.stdout.split("\0"), ...untracked.stdout.split("\0")].filter(Boolean))].sort();
-	logger.info("Fork test scope selected", {
-		component: "test-gate-fulltest",
-		event: "fulltest_scope_selected",
-		stage: "scope",
-		result: "completed",
-		scope: "fork-affected",
-		baseline,
-		selection: "user-requested-prior-scope",
-		changed_path_count: paths.length,
-	});
-	console.log(`scope=fork-affected baseline=${baseline} selection=user-requested-prior-scope`);
-	console.log(
-		"coverage: existing TS/Rust static checks; fork TS tests; affected Rust crates; repository scripts; native build; dev-TUI smoke",
-	);
-	console.log(
-		"omitted: full upstream TS suite; Python and standalone SDK checks/tests; unrelated workspace/package builds",
-	);
-	return paths;
-}
-
-function isDocumentation(file: string): boolean {
-	return (
-		/(^|\/)(docs|docs-zh-CN)\//.test(file) ||
-		/(^|\/)(README|CHANGELOG|CONTRIBUTING|AGENTS)(?:\.[^/]*)?\.md$/i.test(file)
-	);
-}
-
-/** Preserve the earlier fork-test range and the existing runner's test budgets. */
-export function fulltestCommands(
-	options: FulltestOptions,
-	home: string,
-	changedPaths: readonly string[],
-): GateCommand[] {
+/** Execute every project suite; only independently authorized integrations stay separate. */
+export function fulltestCommands(options: FulltestOptions, home: string, sourceDigest?: string): GateCommand[] {
 	const env = localTestEnvironment(home);
-	const root = gateRepoRoot;
-	const commands: GateCommand[] = [];
-	for (const file of changedPaths) {
-		// Packaged dependency sources remain inputs, not fork-owned Bun test entrypoints.
-		if (file.includes("/node_modules/")) continue;
-		if (!/^packages\/[^/]+\/.+\.test\.(ts|tsx)$/.test(file) || !existsSync(path.join(root, file))) continue;
-		if (file === "packages/natives/test/desktop.test.ts") {
-			console.log(`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${file}`);
-			continue;
-		}
-		const separator = file.indexOf("/", "packages/".length);
-		const packageRoot = file.slice(0, separator);
-		const testHome = path.join(home, "fork-tests", String(commands.length));
-		commands.push({
-			label: `test/fork ${file}`,
-			argv: ["bun", "../../scripts/test-report-bun.ts", `--timeout=${testTimeoutMs()}`, file.slice(separator + 1)],
-			cwd: path.join(root, packageRoot),
-			sourceEntrypoints: [
-				"packages/coding-agent/test/spec-driven/tui.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-materials.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-materials-later-roles.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts",
-				"packages/coding-agent/test/spec-driven/tui-resource-lifecycle.e2e.test.ts",
-			].includes(file)
-				? [path.join(root, "packages/coding-agent/src/cli.ts")]
-				: undefined,
-			env: localTestEnvironment(testHome),
-		});
-	}
-	console.log(`fork TS test files=${commands.length}; changed Rust paths drive the existing --affected runner`);
-	commands.push(
+	return [
 		{
-			label: "test/Rust affected crates",
-			argv: ["bun", "scripts/run-rs-task.ts", "test:rs", "--affected"],
-			cwd: root,
+			label: "test/TypeScript full suite",
+			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop"],
+			cwd: gateRepoRoot,
 			env: {
-				...env,
-				CI: "1",
-				OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(
-					normalizeRustScopeChangedPaths(changedPaths.filter(file => !isDocumentation(file))),
-				),
+				...localTestEnvironment(path.join(home, "typescript")),
+				OMP_TEST_CONCURRENCY: "all",
+				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},
+		},
+		{
+			label: "test/Rust full workspace",
+			argv: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+			cwd: gateRepoRoot,
+			env,
+		},
+		{
+			label: process.platform === "win32" ? "test/Python RPC SDK" : "test/Python full suites",
+			argv: ["bun", "scripts/test-report-py.ts"],
+			cwd: gateRepoRoot,
+			env: localTestEnvironment(path.join(home, "python")),
 		},
 		{
 			label: "smoke/isolated dev TUI PTY",
 			argv: ["bun", "scripts/test-report-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
-			cwd: root,
-			sourceEntrypoints: [path.join(root, "packages/coding-agent/src/cli.ts")],
+			cwd: gateRepoRoot,
 			env,
 		},
-	);
-	return commands;
+	];
 }
 
 /** Detach Windows directory junctions without reading their denied ACLs or targets. */
@@ -256,13 +182,13 @@ function assertFulltestSourceStable(before: SourceIdentity, after: SourceIdentit
 
 interface FulltestInfrastructure {
 	captureSourceIdentity: typeof captureSourceIdentity;
-	runBazelCommands: typeof runBazelCommands;
+	runGateCommands: typeof runGateCommands;
 	fastcheckCommands: typeof fastcheckCommands;
 }
 
 const fulltestInfrastructure: FulltestInfrastructure = {
 	captureSourceIdentity,
-	runBazelCommands,
+	runGateCommands,
 	fastcheckCommands,
 };
 
@@ -270,6 +196,7 @@ export async function runFulltest(
 	gate: GateRun,
 	options: FulltestOptions,
 	infrastructure: FulltestInfrastructure = fulltestInfrastructure,
+	report?: TestReportRun,
 ): Promise<void> {
 	const started = performance.now();
 	logger.info("Current platform fulltest started", {
@@ -279,10 +206,10 @@ export async function runFulltest(
 		result: "started",
 		platform: process.platform,
 		arch: process.arch,
-		scope: "fork-affected",
+		scope: "full-project",
 	});
 	try {
-		await runFulltestObserved(gate, options, infrastructure);
+		await runFulltestObserved(gate, options, infrastructure, report);
 		logger.info("Current platform fulltest completed", {
 			component: "test-gate-fulltest",
 			event: "fulltest_settled",
@@ -311,8 +238,9 @@ async function runFulltestObserved(
 	gate: GateRun,
 	options: FulltestOptions,
 	infrastructure: FulltestInfrastructure,
+	report?: TestReportRun,
 ): Promise<void> {
-	const { captureSourceIdentity, runBazelCommands, fastcheckCommands } = infrastructure;
+	const { captureSourceIdentity, runGateCommands, fastcheckCommands } = infrastructure;
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
 		throw new GateAbortError(
 			`UNVERIFIED: supported local platform is Windows/Linux x64, found ${process.platform}-${process.arch}`,
@@ -355,8 +283,15 @@ async function runFulltestObserved(
 	});
 	console.log(`source: HEAD=${before.head} dirty=${before.dirty} digest=${before.digest}`);
 	if (before.dirty) console.log(`source: uncommitted summary\n${before.status.trimEnd()}`);
-	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-affected`);
-	console.log("coverage outside gates: real desktop input; live credential-backed model/gateway integration");
+	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=full-project`);
+	console.log(
+		process.platform === "win32"
+			? "coverage: full TypeScript, repository script, Rust workspace/Nextest/doctest and Python RPC SDK suites; native build; dev-TUI smoke; SKIPPED: Robomp tests are unsupported on native Windows"
+			: "coverage: full TypeScript, repository script, Rust workspace/Nextest/doctest and Python suites; native build; dev-TUI smoke",
+	);
+	console.log(
+		"coverage outside gates: real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
+	);
 	await Promise.all(
 		[
 			{ label: "version/Git", argv: ["git", "--version"], cwd: gateRepoRoot },
@@ -374,14 +309,13 @@ async function runFulltestObserved(
 		const beforeNative = await acquire("pre-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		await acquire("pre-build source check", async () => assertFulltestSourceStable(before, beforeNative));
 		// Native source/binding generation must finish before static/test readers.
-		// Invoke the install primitive directly; the public adapter would re-enter this Bazel lane.
 		await attempt("native build", () =>
-			runBazelCommands(
+			runGateCommands(
 				gate,
 				[
 					{
 						label: "build/native",
-						argv: ["bun", "scripts/bazel-primitive.ts", "build:native"],
+						argv: ["bun", "run", "build:native"],
 						cwd: gateRepoRoot,
 						env: { RUSTUP_AUTO_INSTALL: "0", CROSS_TARGET: "" },
 					},
@@ -391,6 +325,7 @@ async function runFulltestObserved(
 		);
 		const afterBuild = await acquire("post-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		await acquire("post-build source check", async () => assertFulltestSourceStable(beforeNative, afterBuild, true));
+		if (report?.owner) report.sourceDigest = afterBuild.digest;
 		logger.info("Fulltest post-build source identity resolved", {
 			component: "test-gate-fulltest",
 			event: "fulltest_source_identity",
@@ -403,10 +338,8 @@ async function runFulltestObserved(
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		const changedPaths = await acquire("fork delta selection", () => discoverForkChangedPaths(gate));
-		// Gate orchestration selftests are the highest-risk readers after native
-		// generation. Keep their short injected budgets isolated from heavy test
-		// trees, but fail here before dispatching the bulk fork regressions.
+		// Keep gate orchestration selftests isolated from the heavy suites.
+		// All script files run, irrespective of the Git diff or CI environment.
 		const scriptTests = new Set<string>();
 		await attempt("repository script selection", async () => {
 			const scriptConfig = Bun.TOML.parse(await Bun.file(path.join(gateRepoRoot, "bunfig.toml")).text()) as {
@@ -419,32 +352,46 @@ async function runFulltestObserved(
 					onlyFiles: true,
 				})) {
 					const relative = `scripts/${file.replaceAll("\\", "/")}`;
-					// Heavy native Bazel integration runs once on the slowtest host,
-					// never in standalone fulltest or its WSL invocation.
-					if (relative === "scripts/test-gate-bazel.test.ts") continue;
 					if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
 				}
 		});
-		if (scriptTests.size)
-			await attempt("repository scripts", () =>
-				runBazelCommands(
+		if (scriptTests.size) {
+			// These fixture-only scripts use independent temporary or in-memory state.
+			// Keep every other script serial, including timing-sensitive gate selftests.
+			const parallelScripts = new Set([
+				"scripts/ci-release-checksums.test.ts",
+				"scripts/gen-nix-bun.test.ts",
+				"scripts/inline-functions.test.ts",
+				"scripts/install-tests/fork-installer-routing.test.ts",
+			]);
+			const commands = [...scriptTests].sort().map((file, index) => ({
+				label: `test/repository scripts ${file}`,
+				// Use the shared hang ceiling, not bun's 5s default.
+				argv: ["bun", "scripts/test-report-bun.ts", file, `--timeout=${testTimeoutMs()}`],
+				cwd: gateRepoRoot,
+				env: localTestEnvironment(path.join(home, "script-tests", String(index))),
+				kind: "charged" as const,
+			}));
+			await attempt("independent repository scripts", () =>
+				runGateCommands(
 					gate,
-					[...scriptTests].sort().map((file, index) => ({
-						label: `test/repository scripts ${file}`,
-						// The shared hang ceiling, not bun's 5s default: stub-heavy script
-						// tests spawn long Git Bash chains that exceed it under Bazel actions.
-						argv: ["bun", "scripts/test-report-bun.ts", file, `--timeout=${testTimeoutMs()}`],
-						cwd: gateRepoRoot,
-						env: localTestEnvironment(path.join(home, "script-tests", String(index))),
-						kind: "charged" as const,
-					})),
+					commands.filter(command => parallelScripts.has(command.argv[2]!)),
+					{
+						concurrency: testConcurrencyLimit(),
+					},
+				),
+			);
+			await attempt("repository scripts", () =>
+				runGateCommands(
+					gate,
+					commands.filter(command => !parallelScripts.has(command.argv[2]!)),
 					{ concurrency: 1 },
 				),
 			);
-		else console.error("fulltest: NOT_RUN repository script tests");
+		} else console.error("fulltest: NOT_RUN repository script tests");
 		let tests: GateCommand[] = [];
 		await attempt("test plan", async () => {
-			tests = fulltestCommands(options, home, changedPaths);
+			tests = fulltestCommands(options, home, afterBuild.digest);
 		});
 		logger.info("Fulltest command plan selected", {
 			component: "test-gate-fulltest",
@@ -453,28 +400,52 @@ async function runFulltestObserved(
 			result: "completed",
 			command_count: tests.length,
 			concurrent_fastcheck: true,
-			scope: "fork-affected",
+			scope: "full-project",
 		});
 		await attempt("test homes", async () => {
 			for (const command of tests)
 				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		});
-		// Static checks and tests share one Bazel graph. Only Rust tests depend
-		// on clippy; TS actions/tests remain independently schedulable.
+		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
+		const rustChecksFinished = Promise.withResolvers<void>();
 		const cpuBudget = gateCpuBudget();
 		const concurrency = gatePoolWidth(cpuBudget, 4, 4);
-		let checks: GateCommand[] = [];
-		await attempt("static check plan", async () => {
-			checks = (await gate.charged(fastcheckCommands)).map(command =>
-				command.label.startsWith("static/Rust")
-					? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
-					: command,
-			);
-		});
-		if (!checks.length) console.error("fulltest: NOT_RUN static checks");
-		await attempt("shared Bazel graph", () =>
-			runBazelCommands(gate, [...checks, ...tests], { concurrency, fastcheck: true }),
+		const staticRun = (async () => {
+			try {
+				await attempt("static checks", () =>
+					gate.childGate("fastcheck", async child => {
+						const checks = (await child.charged(fastcheckCommands)).map(command =>
+							command.label.startsWith("static/Rust")
+								? { ...command, env: { ...localTestEnvironment(home), ...command.env } }
+								: command,
+						);
+						if (!checks.length) console.error("fulltest: NOT_RUN static checks");
+						let remainingRustChecks = checks.filter(command => command.label.startsWith("static/Rust")).length;
+						if (!remainingRustChecks) rustChecksFinished.resolve();
+						await runGateCommands(child, checks, {
+							concurrency: 2,
+							onCommandSettled: command => {
+								if (command.label.startsWith("static/Rust") && --remainingRustChecks === 0)
+									rustChecksFinished.resolve();
+							},
+						});
+					}),
+				);
+			} finally {
+				// Also release on selection failure or cancellation before a Rust check starts.
+				rustChecksFinished.resolve();
+			}
+		})();
+		const otherTests = tests.filter(command => !command.label.startsWith("test/Rust"));
+		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
+		const testRun = attempt("non-Rust tests", () =>
+			runGateCommands(gate, otherTests, { concurrency: concurrency - 1 }),
 		);
+		const rustRun = (async () => {
+			await rustChecksFinished.promise;
+			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
+		})();
+		await Promise.all([staticRun, testRun, rustRun]);
 		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		logger.info("Fulltest source stability resolved", {
 			component: "test-gate-fulltest",
@@ -530,21 +501,11 @@ if (import.meta.main) {
 					`Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= ${GATE_LIMIT_SECONDS.fulltest}>]`,
 					2,
 				);
-			const run = await gate.charged(() => beginTestRun("fulltest: fork-affected current-platform tests"));
-			finalizeTestRun(
-				gate,
-				run,
-				"Bazel owns test-result XML and cached artifacts; target evidence and artifact references are printed in the gate log",
-			);
-			// Finalizers remain charged and bounded by this fulltest's original watchdog.
-			// Preserve immediate first-failure exit rather than completing summary I/O.
-			gate.onFinalize(async exitCode => {
-				if (exitCode !== 0 || gate.signal.aborted) return;
-				await reportBazelRun(gate.runId, gate.startedNs, gateClockNanoseconds());
-			});
-			await runFulltest(gate, options);
+			const run = await gate.charged(() => beginTestRun("fulltest: full current-platform project suites"));
+			finalizeTestRun(gate, run);
+			await runFulltest(gate, options, fulltestInfrastructure, run);
 		},
-		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true },
+		{ limitSeconds: options?.limitSeconds, reportFailure: true, exitOnFailure: true, failureOnlyOutput: true },
 	);
 	exitGateProcess(result.exitCode);
 }

@@ -142,7 +142,7 @@ test("the model hub describes a data-first picker when the terminal has the kind
 
 	const root = hub.describe(withPicker);
 	const p = props(root);
-	expect(p).toMatchObject({ size: "lg", layout: "rows", preview: "side", icon: "cpu", title: "Models", scope: "all" });
+	expect(p).toMatchObject({ size: "lg", layout: "rows", preview: "side", icon: "cpu", scope: "all" });
 	expect(p.scopes?.map(scope => [scope.id, scope.count, scope.group])).toEqual([
 		["roles", 2, undefined],
 		["all", 5, undefined],
@@ -279,7 +279,7 @@ test("pointer events drive the hub through the same paths as its keys", () => {
 		depth: 1,
 	});
 	expect(p.items?.find(entry => entry.id === "role:default")?.facts).toEqual({ model: "demo/demo", thinking: "off" });
-	expect(groups(p)).toContain("Model fallback chains");
+	expect(p.order).toContainEqual(expect.objectContaining({ group: "chains" }));
 	// The head's total counts the rows Tern counts as shown (fallbacks, chains, "New …" rows), so All reads no "N of M".
 	expect(p.total).toBe(p.order?.filter(entry => typeof entry === "string").length);
 
@@ -321,10 +321,10 @@ test("the Roles view picker names the active preset and ctrl+←/→ switches it
 	};
 
 	hub.handleInput("\x1b[A"); // All models → Roles
-	expect(subtitleText()).toStartWith("Preset fast");
+	expect(subtitleText()).toContain("fast");
 	hub.handleInput("\x1b[1;5C");
 	expect(switched).toEqual(["slow"]);
-	expect(subtitleText()).toStartWith("Preset slow");
+	expect(subtitleText()).toContain("slow");
 	hub.handleInput("\x1b[1;5D");
 	expect(switched).toEqual(["slow", "fast"]);
 });
@@ -346,15 +346,17 @@ test("the quick picker is an md sheet with the summary below and a task-model to
 	expect(picker.describe(withoutPicker).k).not.toBe("picker");
 	let root = picker.describe(withPicker);
 	let p = props(root);
-	expect(p).toMatchObject({ size: "md", preview: "below", title: "Switch model", selected: "demo/demo" });
+	expect(p).toMatchObject({ size: "md", preview: "below", selected: "demo/demo" });
 	expect(p.scopes).toBeUndefined();
-	expect(groups(p)).toEqual(["Recent", "All"]);
+	expect(p.order?.filter((entry): entry is TspPickerGroup => typeof entry !== "string").map(g => g.group)).toEqual([
+		"recent",
+		"rest",
+	]);
 	expect(root.c?.some(child => prop(child, "layout") === "inline")).toBe(true);
 
 	picker.handleNativeEvent({ type: "action", key: "", act: "task", mods: [] });
 	root = picker.describe(withPicker);
 	p = props(root);
-	expect(p.title).toBe("Switch task model");
 	expect(p.actions?.find(action => action.id === "task")?.on).toBe(true);
 	picker.handleNativeEvent({ type: "activate", key: "", item: "openai/gpt-5.6" });
 	expect(picked).toEqual(["task:openai/gpt-5.6"]);

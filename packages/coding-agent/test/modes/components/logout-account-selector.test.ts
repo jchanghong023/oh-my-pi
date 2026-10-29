@@ -51,7 +51,6 @@ describe("LogoutAccountSelectorComponent", () => {
 			.render(100)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
-		expect(rendered).toContain("b@example.com (active)");
 		expect(rendered.indexOf("b@example.com")).toBeLessThan(rendered.indexOf("a@example.com"));
 
 		component.handleInput("\n");

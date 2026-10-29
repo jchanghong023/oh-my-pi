@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { loadHindsightConfig } from "@oh-my-pi/pi-coding-agent/hindsight/config";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
+import { getSettingDef } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -62,6 +63,21 @@ function createSelector(onCancel: () => void = () => {}): SettingsSelectorCompon
 	);
 }
 
+function settingLabel(path: string): string {
+	const def = getSettingDef(createSettingsHost().entries, path);
+	if (!def) throw new Error(`Missing setting: ${path}`);
+	return def.label;
+}
+
+function searchBanner(comp: SettingsSelectorComponent): string {
+	return (
+		comp
+			.render(120)
+			.map(Bun.stripANSI)
+			.find(line => line.includes("🔍")) ?? ""
+	);
+}
+
 /** Switch the selector to the memory tab. SETTING_TABS puts memory at index 4 (after appearance/model/interaction/context). */
 function focusMemoryTab(comp: SettingsSelectorComponent): void {
 	for (let i = 0; i < 4; i++) {
@@ -77,12 +93,11 @@ describe("SettingsSelectorComponent memory tab", () => {
 		// Width 70 keeps the flat single-column layout (the wide split layout
 		// shows only the active section's rows, covered by the sidebar test).
 		const before = comp.render(70).join("\n");
-		expect(before).toContain("Memory Backend");
-		expect(before).not.toContain("Hindsight API URL");
-		expect(before).not.toContain("Hindsight API Token");
+		expect(before).toContain(settingLabel("memory.backend"));
+		expect(before).not.toContain(settingLabel("hindsight.apiUrl"));
+		expect(before).not.toContain(settingLabel("hindsight.apiToken"));
 
-		// Memory Backend is the only visible row, so it's already selected at index 0.
-		// Enter opens the SelectSubmenu pre-positioned on "off"; navigate to "hindsight" (index 2) and confirm.
+		// The backend is the first row. Select Hindsight in its submenu.
 		comp.handleInput("\n");
 		comp.handleInput("\x1b[B");
 		comp.handleInput("\x1b[B");
@@ -90,10 +105,10 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		expect(cfgMemoryBackend.get(settings)).toBe("hindsight");
 		const after = comp.render(70).join("\n");
-		expect(after).toContain("Memory Backend");
-		expect(after).toContain("Hindsight API URL");
-		expect(after).toContain("Hindsight API Token");
-		expect(after).toContain("Hindsight Auto Recall");
+		expect(after).toContain(settingLabel("memory.backend"));
+		expect(after).toContain(settingLabel("hindsight.apiUrl"));
+		expect(after).toContain(settingLabel("hindsight.apiToken"));
+		expect(after).toContain(settingLabel("hindsight.autoRecall"));
 	});
 
 	it("saves a pasted Hindsight API token from its settings row", () => {
@@ -103,7 +118,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		for (const ch of "hindsight api token") comp.handleInput(ch);
 		const row = comp.render(120).join("\n");
-		expect(row).toContain("Hindsight API Token");
+		expect(row).toContain(settingLabel("hindsight.apiToken"));
 		expect(row).toContain("••••••••");
 		expect(row).not.toContain("saved-secret-token");
 
@@ -129,7 +144,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const comp = createSelector();
 		focusMemoryTab(comp);
 		// Width 70 keeps the flat layout so all sections' rows render inline.
-		expect(comp.render(70).join("\n")).toContain("Hindsight API URL");
+		expect(comp.render(70).join("\n")).toContain(settingLabel("hindsight.apiUrl"));
 
 		// Open Memory Backend → SelectSubmenu pre-selects the current value
 		// ("hindsight" at index 2) → step up twice to reach "off" → Enter confirms.
@@ -140,9 +155,9 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		expect(cfgMemoryBackend.get(settings)).toBe("off");
 		const after = comp.render(70).join("\n");
-		expect(after).toContain("Memory Backend");
-		expect(after).not.toContain("Hindsight API URL");
-		expect(after).not.toContain("Hindsight Auto Recall");
+		expect(after).toContain(settingLabel("memory.backend"));
+		expect(after).not.toContain(settingLabel("hindsight.apiUrl"));
+		expect(after).not.toContain(settingLabel("hindsight.autoRecall"));
 	});
 
 	it("clears the global settings search on Escape before closing the selector", () => {
@@ -153,20 +168,12 @@ describe("SettingsSelectorComponent memory tab", () => {
 
 		// Typing starts the cross-tab search: banner shows the query and matches.
 		comp.handleInput("b");
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
-		const searching = comp.render(120).map(strip).join("\n");
-		const banner =
-			comp
-				.render(120)
-				.map(strip)
-				.find(line => /\d+ match/.test(line)) ?? "";
-		expect(banner).toContain(" b ");
-		expect(searching).toMatch(/\d+ match/);
+		expect(searchBanner(comp)).toContain(" b ");
 
 		// First Escape exits search mode without closing the panel.
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(0);
-		expect(comp.render(120).join("\n")).not.toContain("matches");
+		expect(searchBanner(comp)).toBe("");
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);
@@ -176,28 +183,16 @@ describe("SettingsSelectorComponent memory tab", () => {
 		const comp = createSelector();
 		for (const ch of "fetch provider") comp.handleInput(ch);
 
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
-		const rendered = comp.render(120).map(strip).join("\n");
-		const providersIndex = rendered.indexOf("Providers");
-		const appearanceIndex = rendered.indexOf("Appearance");
-
-		expect(rendered).toContain("Fetch Provider");
-		expect(rendered).not.toContain("Include Model in Prompt");
-		expect(rendered).not.toContain("Service Tier");
-		expect(providersIndex).toBeGreaterThanOrEqual(0);
-		if (appearanceIndex >= 0) {
-			expect(appearanceIndex).toBeGreaterThan(providersIndex);
-		}
+		const selected = comp
+			.render(120)
+			.map(Bun.stripANSI)
+			.find(line => line.includes("❯"));
+		expect(selected).toContain(settingLabel("providers.fetch"));
 	});
 
 	it("supports editor hotkeys in the global search bar", () => {
 		const comp = createSelector();
-		const strip = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
-		const banner = (): string =>
-			comp
-				.render(120)
-				.map(strip)
-				.find(line => /\d+ match/.test(line)) ?? "";
+		const banner = (): string => searchBanner(comp);
 
 		// alt+backspace deletes the trailing word from the query.
 		for (const ch of "image provider") comp.handleInput(ch);
@@ -225,7 +220,7 @@ describe("SettingsSelectorComponent memory tab", () => {
 		comp.handleInput("\x1b");
 		const afterBack = comp.render(120).join("\n");
 		expect(cancelCount).toBe(0);
-		expect(afterBack).toContain("Memory Backend");
+		expect(afterBack).toContain(settingLabel("memory.backend"));
 
 		comp.handleInput("\x1b");
 		expect(cancelCount).toBe(1);

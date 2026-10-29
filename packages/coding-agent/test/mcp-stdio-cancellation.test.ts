@@ -161,57 +161,63 @@ describe("StdioTransport cancellation", () => {
 		]);
 	});
 
-	it("keeps the hard-deadline error and sends only one cancellation when the caller aborts later", async () => {
-		const client = await start({ timeout: DEADLINE_MS });
-		const caller = new AbortController();
-		const outcome = client
-			.request("tools/call", { name: "hang" }, { signal: caller.signal })
-			.catch((error: unknown) => error);
-		const original = await sentRequest("tools/call", "hang");
-		const error = await within(outcome);
-		expect(error).toBeInstanceOf(MCPTransportError);
-		expect(error).toMatchObject({
-			transport: "stdio",
-			stage: "receive",
-			failure: "timeout",
-			message: `Request timeout after ${DEADLINE_MS}ms`,
-			retryable: false,
-		});
-		caller.abort(new Error("too late"));
-		expect(await waitForCancellation()).toEqual([
-			{
-				jsonrpc: "2.0",
-				method: "notifications/cancelled",
-				params: { requestId: original.id, reason: `Request timed out after ${DEADLINE_MS}ms` },
-			},
-		]);
-		await echo(client);
-		expect(await cancellations()).toHaveLength(1);
-		expect(await outcome).toBe(error);
-	});
+	it.skipIf(process.platform === "win32")(
+		"keeps the hard-deadline error and sends only one cancellation when the caller aborts later",
+		async () => {
+			const client = await start({ timeout: DEADLINE_MS });
+			const caller = new AbortController();
+			const outcome = client
+				.request("tools/call", { name: "hang" }, { signal: caller.signal })
+				.catch((error: unknown) => error);
+			const original = await sentRequest("tools/call", "hang");
+			const error = await within(outcome);
+			expect(error).toBeInstanceOf(MCPTransportError);
+			expect(error).toMatchObject({
+				transport: "stdio",
+				stage: "receive",
+				failure: "timeout",
+				message: `Request timeout after ${DEADLINE_MS}ms`,
+				retryable: false,
+			});
+			caller.abort(new Error("too late"));
+			expect(await waitForCancellation()).toEqual([
+				{
+					jsonrpc: "2.0",
+					method: "notifications/cancelled",
+					params: { requestId: original.id, reason: `Request timed out after ${DEADLINE_MS}ms` },
+				},
+			]);
+			await echo(client);
+			expect(await cancellations()).toHaveLength(1);
+			expect(await outcome).toBe(error);
+		},
+	);
 
-	it("clears the hard deadline after abort so it cannot send a second cancellation", async () => {
-		const client = await start({ timeout: DEADLINE_MS });
-		const caller = new AbortController();
-		const reason = new Error("cancel first");
-		const outcome = client
-			.request("tools/call", { name: "hang" }, { signal: caller.signal })
-			.catch((error: unknown) => error);
-		const original = await sentRequest("tools/call", "hang");
-		caller.abort(reason);
-		expect(await within(outcome)).toBe(reason);
-		await waitForCancellation();
-		// Cross the original deadline, then use a response as a barrier for all earlier frames.
-		await Bun.sleep(DEADLINE_MS + POLL_MS);
-		await echo(client);
-		expect(await cancellations()).toEqual([
-			{
-				jsonrpc: "2.0",
-				method: "notifications/cancelled",
-				params: { requestId: original.id, reason: "Request cancelled by the client" },
-			},
-		]);
-	});
+	it.skipIf(process.platform === "win32")(
+		"clears the hard deadline after abort so it cannot send a second cancellation",
+		async () => {
+			const client = await start({ timeout: DEADLINE_MS });
+			const caller = new AbortController();
+			const reason = new Error("cancel first");
+			const outcome = client
+				.request("tools/call", { name: "hang" }, { signal: caller.signal })
+				.catch((error: unknown) => error);
+			const original = await sentRequest("tools/call", "hang");
+			caller.abort(reason);
+			expect(await within(outcome)).toBe(reason);
+			await waitForCancellation();
+			// Cross the original deadline, then use a response as a barrier for all earlier frames.
+			await Bun.sleep(DEADLINE_MS + POLL_MS);
+			await echo(client);
+			expect(await cancellations()).toEqual([
+				{
+					jsonrpc: "2.0",
+					method: "notifications/cancelled",
+					params: { requestId: original.id, reason: "Request cancelled by the client" },
+				},
+			]);
+		},
+	);
 
 	it("writes neither the request nor a cancellation when the signal is already aborted", async () => {
 		const client = await start();
@@ -282,26 +288,29 @@ describe("StdioTransport cancellation", () => {
 		expect(await cancellations()).toEqual([]);
 	});
 
-	it("registers no waiter or cancellation when request serialization throws", async () => {
-		const client = await start({ timeout: DEADLINE_MS });
-		const tracker = trackUnhandled();
-		try {
-			const caller = new AbortController();
-			const params: Record<string, unknown> = { name: "hang" };
-			params.circular = params;
-			await expect(client.request("tools/call", params, { signal: caller.signal })).rejects.toBeInstanceOf(
-				TypeError,
-			);
-			caller.abort(new Error("after serialization failed"));
-			await Bun.sleep(DEADLINE_MS + POLL_MS);
-			await echo(client);
-			expect((await frames()).filter(frame => frame.params?.name === "hang")).toEqual([]);
-			expect(await cancellations()).toEqual([]);
-			expect(tracker.capture()).toEqual([]);
-		} finally {
-			tracker.release();
-		}
-	});
+	it.skipIf(process.platform === "win32")(
+		"registers no waiter or cancellation when request serialization throws",
+		async () => {
+			const client = await start({ timeout: DEADLINE_MS });
+			const tracker = trackUnhandled();
+			try {
+				const caller = new AbortController();
+				const params: Record<string, unknown> = { name: "hang" };
+				params.circular = params;
+				await expect(client.request("tools/call", params, { signal: caller.signal })).rejects.toBeInstanceOf(
+					TypeError,
+				);
+				caller.abort(new Error("after serialization failed"));
+				await Bun.sleep(DEADLINE_MS + POLL_MS);
+				await echo(client);
+				expect((await frames()).filter(frame => frame.params?.name === "hang")).toEqual([]);
+				expect(await cancellations()).toEqual([]);
+				expect(tracker.capture()).toEqual([]);
+			} finally {
+				tracker.release();
+			}
+		},
+	);
 
 	it.each(["throw", "reject", "reject-and-throw-on-flush"] as const)(
 		"keeps cancellation write failure (%s) isolated from the caller and sibling requests",

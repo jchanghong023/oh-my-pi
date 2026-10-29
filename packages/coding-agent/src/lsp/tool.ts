@@ -670,9 +670,11 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					if (err instanceof ToolAbortError || signal?.aborted) {
 						throw err;
 					}
-					// method-not-found means the server doesn't implement the request;
-					// skip it silently. Any other error is a genuine failure from a
-					// server that supports willRenameFiles.
+					// Method-not-found means the server does not implement the request.
+					// Any other error is a genuine failure from a supporting server.
+					if (isMethodNotFoundError(err)) {
+						serverNotes.push(`  ${serverName}: willRenameFiles not supported`);
+					}
 					if (!isMethodNotFoundError(err)) {
 						const msg = err instanceof Error ? err.message : String(err);
 						serverNotes.push(`  ${serverName}: ${msg}`);
@@ -691,6 +693,9 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			if (!shouldApply) {
 				const lines: string[] = [];
 				lines.push(`Rename preview: ${fileCountLabel} → ${destLabel}`);
+				lines.push(
+					`  Servers responding to willRenameFiles: ${Array.from(respondingServers).join(", ") || "none"}`,
+				);
 				if (perServerEdits.length === 0) {
 					lines.push("  No LSP edits would be applied");
 				} else {
@@ -703,6 +708,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						}
 					}
 				}
+				lines.push("  Check references not covered by server-provided edits.");
 				if (serverNotes.length > 0) {
 					lines.push("  Server notes:");
 					lines.push(...serverNotes);
@@ -830,6 +836,13 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			// reference file are left unchanged.
 			await applyEditsThenRename(referenceEdits, source, dest);
 			summary.push(`  Renamed ${sourceLabel} → ${destLabel}`);
+			const referenceEditCount = referenceEdits.reduce((count, entry) => count + entry.edits.length, 0);
+			summary.push(`  Servers responding to willRenameFiles: ${Array.from(respondingServers).join(", ") || "none"}`);
+			summary.push(
+				`  Applied ${referenceEditCount} reference edit(s). Check references not covered by server-provided edits.`,
+			);
+
+			let notificationsComplete = true;
 
 			for (const [serverName, serverConfig] of servers) {
 				try {
@@ -843,9 +856,26 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					await sendNotification(client, "workspace/didRenameFiles", lspParams, signal);
 				} catch (err) {
 					if (err instanceof ToolAbortError || signal?.aborted) {
-						throw err;
+						notificationsComplete = false;
+						const reason = timeoutSignal.aborted && !callerSignal?.aborted ? "timed out" : "cancelled";
+						summary.push(
+							`  Server notifications ${reason} on ${serverName}; notification delivery is incomplete.`,
+						);
+						summary.push("  The move and reference edits were committed. Do not retry the move.");
+						return {
+							content: [{ type: "text", text: summary.join("\n") }],
+							isError: true,
+							details: {
+								action,
+								serverName: Array.from(respondingServers).join(", "),
+								success: false,
+								request: params,
+								renameFile: { committed: true, referenceEditCount, notificationsComplete },
+							},
+						};
 					}
 					const msg = err instanceof Error ? err.message : String(err);
+					notificationsComplete = false;
 					serverNotes.push(`  ${serverName}: ${msg}`);
 				}
 			}
@@ -863,6 +893,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					serverName: Array.from(respondingServers).join(", "),
 					success: true,
 					request: params,
+					renameFile: { committed: true, referenceEditCount, notificationsComplete },
 				},
 			};
 		}
@@ -1594,7 +1625,15 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			return {
-				content: [{ type: "text", text: output }],
+				content: [
+					{
+						type: "text",
+						text:
+							action === "code_actions" && apply === true && !query?.trim() && !output.startsWith("Error:")
+								? `${output}\nError: no code action was applied; provide query as an action title substring or index when apply=true.`
+								: output,
+					},
+				],
 				details: { serverName, action, success: true, request: params },
 				...(useless ? { useless: true } : {}),
 			};

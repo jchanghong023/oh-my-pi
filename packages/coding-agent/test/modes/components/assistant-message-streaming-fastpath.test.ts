@@ -2,7 +2,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
-import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { trimBlankEdges } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { type Component, Container, Markdown } from "@oh-my-pi/pi-tui";
@@ -56,6 +59,13 @@ afterEach(() => {
 // the same message — at every step. If they ever diverge, the optimization
 // silently corrupts the transcript.
 describe("AssistantMessageComponent streaming fast path", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
+
 	it("replays retired thinking prefixes after cache eviction, reflow, and finalization", () => {
 		const component = new AssistantMessageComponent();
 		const widths = [36, W];

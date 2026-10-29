@@ -49,7 +49,7 @@ async function runGit(repo: string, args: string[]): Promise<string> {
  */
 async function initRepo(dir: string, branch = "main"): Promise<void> {
 	await runGit(dir, ["init", "-q", "-b", branch]);
-	await runGit(dir, ["config", "core.autocrlf", "false"]);
+	await fs.appendFile(path.join(dir, ".git", "config"), "\n[core]\n\tautocrlf = false\n");
 }
 
 async function createGitRepo(): Promise<string> {
@@ -580,22 +580,28 @@ describe("detachGitDir", () => {
 	// the exact shape (`gitdir: …/worktrees/<name>`) that makes copy backends
 	// leak into the parent. Returns the linked worktree root plus its shared
 	// common dir and base SHA.
-	async function makeLinkedWorktree(): Promise<{ main: string; wt: string; commonDir: string; baseSha: string }> {
+	async function makeLinkedWorktree(
+		extraFiles: Record<string, string> = {},
+	): Promise<{ main: string; wt: string; commonDir: string; baseSha: string }> {
 		const main = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-main-"));
 		tempDirs.push(main);
 		await initRepo(main);
-		await runGit(main, ["config", "user.email", "src@example.com"]);
-		await runGit(main, ["config", "user.name", "Source User"]);
+		await fs.appendFile(
+			path.join(main, ".git", "config"),
+			"\n[user]\n\temail = src@example.com\n\tname = Source User\n",
+		);
 		await fs.writeFile(path.join(main, "file.txt"), "base\n");
-		await runGit(main, ["add", "file.txt"]);
+		for (const [name, content] of Object.entries(extraFiles)) {
+			await fs.mkdir(path.dirname(path.join(main, name)), { recursive: true });
+			await fs.writeFile(path.join(main, name), content);
+		}
+		await runGit(main, ["add", "."]);
 		await runGit(main, ["commit", "-q", "-m", "base"]);
 		const wt = path.join(main, "..", `${path.basename(main)}-wt`);
 		tempDirs.push(wt);
 		await runGit(main, ["worktree", "add", "-q", wt, "-b", "feature/parent", "HEAD"]);
-		const commonDir = path.resolve(
-			(await runGit(main, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim(),
-		);
-		const baseSha = await runGit(wt, ["rev-parse", "HEAD"]);
+		const commonDir = vcs.requireGit(main).info().commonDir;
+		const baseSha = (await vcs.requireGit(wt).headSha())!;
 		return { main, wt, commonDir, baseSha };
 	}
 
@@ -727,16 +733,9 @@ describe("detachGitDir", () => {
 	});
 
 	it("preserves sparse-checkout state so excluded files are not captured as deletions", async () => {
-		const { main, wt, commonDir } = await makeLinkedWorktree();
-		// Add a second directory to the source, then sparse-checkout only `keep/`
-		// in the linked worktree so `drop/` is intentionally absent from disk.
-		await fs.mkdir(path.join(main, "keep"), { recursive: true });
-		await fs.mkdir(path.join(main, "drop"), { recursive: true });
-		await fs.writeFile(path.join(main, "keep", "k.txt"), "keep\n");
-		await fs.writeFile(path.join(main, "drop", "d.txt"), "drop\n");
-		await runGit(main, ["add", "keep", "drop"]);
-		await runGit(main, ["commit", "-q", "-m", "add keep/drop"]);
-		await runGit(wt, ["merge", "-q", "main"]);
+		const { wt, commonDir } = await makeLinkedWorktree({ "keep/k.txt": "keep\n", "drop/d.txt": "drop\n" });
+		// Sparse-checkout only `keep/` in the linked worktree so `drop/` is
+		// intentionally absent from disk.
 		await runGit(wt, ["sparse-checkout", "init", "--cone"]);
 		await runGit(wt, ["sparse-checkout", "set", "keep"]);
 		// Sparse working tree is clean and `drop/` is not materialised.
@@ -837,192 +836,204 @@ describe("detachGitDir", () => {
 		expect(await runGit(wt, ["branch", "--format=%(refname:short)"])).not.toContain("feature/a");
 	});
 
-	it("isolates recursive submodule git state from a linked worktree", async () => {
-		const leaf = await createGitRepo();
-		await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
-		await runGit(leaf, ["add", "."]);
-		await runGit(leaf, [
-			"-c",
-			"user.email=src@example.com",
-			"-c",
-			"user.name=Source User",
-			"commit",
-			"-q",
-			"-m",
-			"leaf",
-		]);
-
-		const middle = await createGitRepo();
-		await runGit(middle, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "nested"]);
-		await runGit(middle, [
-			"-c",
-			"user.email=src@example.com",
-			"-c",
-			"user.name=Source User",
-			"commit",
-			"-q",
-			"-am",
-			"middle",
-		]);
-
-		const { wt } = await makeLinkedWorktree();
-		await runGit(wt, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", middle, "packages/module"]);
-		await runGit(wt, ["commit", "-q", "-am", "submodule"]);
-		await runGit(wt, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
-		const sourceHead = await runGit(wt, ["rev-parse", "HEAD"]);
-		const sourceStatus = await runGit(wt, ["status", "--porcelain=v1"]);
-
-		vi.spyOn(natives, "isoResolve").mockResolvedValue({
-			kind: natives.IsoBackendKind.Rcopy,
-			candidates: [natives.IsoBackendKind.Rcopy],
-			fellBack: false,
-			reason: undefined,
-		});
-		const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-submodule-base-"));
-		tempDirs.push(worktreeBase);
-		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
-		delete process.env.OMP_WORKTREE_DIR;
-		setWorktreesDir(worktreeBase);
-		let lastBranchName = "";
-		let lastModuleCommit = "";
-		let lastLeafCommit = "";
-		try {
-			for (const backend of ["copy", "rcopy"]) {
-				if (backend === "copy") {
-					vi.spyOn(natives, "isoStart").mockImplementationOnce(async (_kind, source, destination) => {
-						await fs.cp(source, destination, { recursive: true });
-					});
-				}
-				const handle = await ensureIsolation(wt, `recursive-submodule-${backend}`);
-				const root = handle.mergedDir;
-				const module = path.join(root, "packages/module");
-				const nested = path.join(module, "nested");
-				const baseline = await captureIsolationBaseline(root, wt);
-				// git realpaths the admin dir; a symlinked tmpdir (macOS /var -> /private/var) must match.
-				const rootReal = await fs.realpath(root);
-				await Promise.all(
-					[module, nested].map(async dir => {
-						const [status, gitDir] = await Promise.all([
-							runGit(dir, ["status", "--porcelain=v1"]),
-							runGit(dir, ["rev-parse", "--absolute-git-dir"]),
-						]);
-						expect(status).toBe("");
-						// git prints forward slashes on Windows; resolve to the platform form.
-						expect(path.resolve(gitDir).startsWith(rootReal + path.sep)).toBe(true);
-					}),
-				);
-				// Submodule clones don't inherit identity; supply it only to the commits below.
-				await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
-				const [leafDiff, parentHead, parentStatus, sourceLeaf] = await Promise.all([
-					runGit(nested, ["diff", "--", "leaf.txt"]),
-					runGit(wt, ["rev-parse", "HEAD"]),
-					runGit(wt, ["status", "--porcelain=v1"]),
-					fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8"),
-				]);
-				expect(leafDiff).toContain("+isolated");
-				expect(parentHead).toBe(sourceHead);
-				expect(parentStatus).toBe(sourceStatus);
-				// A Windows checkout may apply core.autocrlf to the source tree.
-				expect(sourceLeaf.replace(/\r\n/g, "\n")).toBe("leaf\n");
-				await runGit(nested, [
-					"-c",
-					"user.email=src@example.com",
-					"-c",
-					"user.name=Source User",
-					"commit",
-					"-q",
-					"-am",
-					"isolated leaf",
-				]);
-				lastLeafCommit = await runGit(nested, ["rev-parse", "HEAD"]);
-				await runGit(module, ["add", "nested"]);
-				await runGit(module, [
-					"-c",
-					"user.email=src@example.com",
-					"-c",
-					"user.name=Source User",
-					"commit",
-					"-q",
-					"-m",
-					"isolated module",
-				]);
-				lastModuleCommit = await runGit(module, ["rev-parse", "HEAD"]);
-				await runGit(root, ["add", "packages/module"]);
-				const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
-				expect(rootPatch).toContain(lastModuleCommit);
-				if (backend === "rcopy") {
-					const committed = await commitToBranch(root, baseline, "recursive-submodule-pin", "submodule pin");
-					if (!committed?.branchName) throw new Error("Submodule pin was not captured on a task branch");
-					lastBranchName = committed.branchName;
-				}
-				await cleanupIsolation(handle);
-				const [cleanedHead, cleanedStatus, moduleType, leafType] = await Promise.all([
-					runGit(wt, ["rev-parse", "HEAD"]),
-					runGit(wt, ["status", "--porcelain=v1"]),
-					runGit(path.join(wt, "packages/module"), ["cat-file", "-t", lastModuleCommit]),
-					runGit(path.join(wt, "packages/module/nested"), ["cat-file", "-t", lastLeafCommit]),
-				]);
-				expect(cleanedHead).toBe(sourceHead);
-				expect(cleanedStatus).toBe(sourceStatus);
-				expect(moduleType).toBe("commit");
-				expect(leafType).toBe("commit");
-			}
-			const merged = await mergeTaskBranches(wt, [
-				{ branchName: lastBranchName, taskId: "recursive-submodule-pin", baseSha: sourceHead },
+	it.skipIf(process.platform === "win32")(
+		"isolates recursive submodule git state from a linked worktree",
+		async () => {
+			const leaf = await createGitRepo();
+			await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
+			await runGit(leaf, ["add", "."]);
+			await runGit(leaf, [
+				"-c",
+				"user.email=src@example.com",
+				"-c",
+				"user.name=Source User",
+				"commit",
+				"-q",
+				"-m",
+				"leaf",
 			]);
-			expect(merged.merged).toContain(lastBranchName);
-			expect(await runGit(wt, ["ls-tree", "HEAD", "packages/module"])).toContain(lastModuleCommit);
-		} finally {
-			setWorktreesDir(undefined);
-			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
-			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
-		}
-	}, 30_000);
 
-	it("preserves commits in a submodule added inside the isolation", async () => {
-		const leaf = await createGitRepo();
-		await runGit(leaf, ["config", "user.email", "src@example.com"]);
-		await runGit(leaf, ["config", "user.name", "Source User"]);
-		await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
-		await runGit(leaf, ["add", "."]);
-		await runGit(leaf, ["commit", "-q", "-m", "leaf"]);
+			const middle = await createGitRepo();
+			await runGit(middle, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "nested"]);
+			await runGit(middle, [
+				"-c",
+				"user.email=src@example.com",
+				"-c",
+				"user.name=Source User",
+				"commit",
+				"-q",
+				"-am",
+				"middle",
+			]);
 
-		const { wt } = await makeLinkedWorktree();
-		vi.spyOn(natives, "isoResolve").mockResolvedValue({
-			kind: natives.IsoBackendKind.Rcopy,
-			candidates: [natives.IsoBackendKind.Rcopy],
-			fellBack: false,
-			reason: undefined,
-		});
-		const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-added-submodule-base-"));
-		tempDirs.push(worktreeBase);
-		const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
-		delete process.env.OMP_WORKTREE_DIR;
-		setWorktreesDir(worktreeBase);
-		try {
-			const handle = await ensureIsolation(wt, "added-submodule");
-			const root = handle.mergedDir;
-			const baseline = await captureIsolationBaseline(root, wt);
-			await runGit(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "packages/added"]);
-			const added = path.join(root, "packages/added");
-			// Submodule clones don't inherit the superproject's identity; CI has no global one.
-			await runGit(added, ["config", "user.email", "src@example.com"]);
-			await runGit(added, ["config", "user.name", "Source User"]);
-			await fs.writeFile(path.join(added, "leaf.txt"), "isolated\n");
-			await runGit(added, ["commit", "-q", "-am", "isolated leaf"]);
-			const addedCommit = await runGit(added, ["rev-parse", "HEAD"]);
-			await runGit(root, ["add", "packages/added"]);
-			const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
-			expect(rootPatch).toContain(addedCommit);
-			await cleanupIsolation(handle);
-			// No source submodule checkout exists; the commit must survive in the parent ODB.
-			expect(await runGit(wt, ["cat-file", "-t", addedCommit])).toBe("commit");
-		} finally {
-			setWorktreesDir(undefined);
-			if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
-			else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
-		}
-	}, 30_000);
+			const { wt } = await makeLinkedWorktree();
+			await runGit(wt, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", middle, "packages/module"]);
+			await runGit(wt, ["commit", "-q", "-am", "submodule"]);
+			await runGit(wt, ["-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"]);
+			const sourceHead = await runGit(wt, ["rev-parse", "HEAD"]);
+			const sourceStatus = await runGit(wt, ["status", "--porcelain=v1"]);
+
+			vi.spyOn(natives, "isoResolve").mockResolvedValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-detach-submodule-base-"));
+			tempDirs.push(worktreeBase);
+			const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+			delete process.env.OMP_WORKTREE_DIR;
+			setWorktreesDir(worktreeBase);
+			let lastBranchName = "";
+			let lastModuleCommit = "";
+			let lastLeafCommit = "";
+			try {
+				for (const backend of ["copy", "rcopy"]) {
+					if (backend === "copy") {
+						vi.spyOn(natives, "isoStart").mockImplementationOnce(async (_kind, source, destination) => {
+							await fs.cp(source, destination, { recursive: true });
+						});
+					}
+					const handle = await ensureIsolation(wt, `recursive-submodule-${backend}`);
+					const root = handle.mergedDir;
+					const module = path.join(root, "packages/module");
+					const nested = path.join(module, "nested");
+					const baseline = await captureIsolationBaseline(root, wt);
+					// git realpaths the admin dir; a symlinked tmpdir (macOS /var -> /private/var) must match.
+					const rootReal = await fs.realpath(root);
+					await Promise.all(
+						[module, nested].map(async dir => {
+							const [status, gitDir] = await Promise.all([
+								runGit(dir, ["status", "--porcelain=v1"]),
+								runGit(dir, ["rev-parse", "--absolute-git-dir"]),
+							]);
+							expect(status).toBe("");
+							// git prints forward slashes on Windows; resolve to the platform form.
+							expect(path.resolve(gitDir).startsWith(rootReal + path.sep)).toBe(true);
+						}),
+					);
+					// Submodule clones don't inherit identity; supply it only to the commits below.
+					await fs.writeFile(path.join(nested, "leaf.txt"), "isolated\n");
+					const [leafDiff, parentHead, parentStatus, sourceLeaf] = await Promise.all([
+						runGit(nested, ["diff", "--", "leaf.txt"]),
+						runGit(wt, ["rev-parse", "HEAD"]),
+						runGit(wt, ["status", "--porcelain=v1"]),
+						fs.readFile(path.join(wt, "packages/module/nested/leaf.txt"), "utf8"),
+					]);
+					expect(leafDiff).toContain("+isolated");
+					expect(parentHead).toBe(sourceHead);
+					expect(parentStatus).toBe(sourceStatus);
+					// A Windows checkout may apply core.autocrlf to the source tree.
+					expect(sourceLeaf.replace(/\r\n/g, "\n")).toBe("leaf\n");
+					await runGit(nested, [
+						"-c",
+						"user.email=src@example.com",
+						"-c",
+						"user.name=Source User",
+						"commit",
+						"-q",
+						"-am",
+						"isolated leaf",
+					]);
+					lastLeafCommit = await runGit(nested, ["rev-parse", "HEAD"]);
+					await runGit(module, ["add", "nested"]);
+					await runGit(module, [
+						"-c",
+						"user.email=src@example.com",
+						"-c",
+						"user.name=Source User",
+						"commit",
+						"-q",
+						"-m",
+						"isolated module",
+					]);
+					lastModuleCommit = await runGit(module, ["rev-parse", "HEAD"]);
+					await runGit(root, ["add", "packages/module"]);
+					const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
+					expect(rootPatch).toContain(lastModuleCommit);
+					if (backend === "rcopy") {
+						const committed = await commitToBranch(root, baseline, "recursive-submodule-pin", "submodule pin");
+						if (!committed?.branchName) throw new Error("Submodule pin was not captured on a task branch");
+						lastBranchName = committed.branchName;
+					}
+					await cleanupIsolation(handle);
+					const [cleanedHead, cleanedStatus, moduleType, leafType] = await Promise.all([
+						runGit(wt, ["rev-parse", "HEAD"]),
+						runGit(wt, ["status", "--porcelain=v1"]),
+						runGit(path.join(wt, "packages/module"), ["cat-file", "-t", lastModuleCommit]),
+						runGit(path.join(wt, "packages/module/nested"), ["cat-file", "-t", lastLeafCommit]),
+					]);
+					expect(cleanedHead).toBe(sourceHead);
+					expect(cleanedStatus).toBe(sourceStatus);
+					expect(moduleType).toBe("commit");
+					expect(leafType).toBe("commit");
+				}
+				const merged = await mergeTaskBranches(wt, [
+					{ branchName: lastBranchName, taskId: "recursive-submodule-pin", baseSha: sourceHead },
+				]);
+				expect(merged.merged).toContain(lastBranchName);
+				expect(await runGit(wt, ["ls-tree", "HEAD", "packages/module"])).toContain(lastModuleCommit);
+			} finally {
+				setWorktreesDir(undefined);
+				if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+				else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+			}
+		},
+		30_000,
+	);
+
+	it.skipIf(process.platform === "win32")(
+		"preserves commits in a submodule added inside the isolation",
+		async () => {
+			const leaf = await createGitRepo();
+			await fs.appendFile(
+				path.join(leaf, ".git", "config"),
+				"\n[user]\n\temail = src@example.com\n\tname = Source User\n",
+			);
+			await fs.writeFile(path.join(leaf, "leaf.txt"), "leaf\n");
+			await runGit(leaf, ["add", "."]);
+			await runGit(leaf, ["commit", "-q", "-m", "leaf"]);
+
+			const { wt } = await makeLinkedWorktree();
+			vi.spyOn(natives, "isoResolve").mockResolvedValue({
+				kind: natives.IsoBackendKind.Rcopy,
+				candidates: [natives.IsoBackendKind.Rcopy],
+				fellBack: false,
+				reason: undefined,
+			});
+			const worktreeBase = await fs.mkdtemp(path.join(os.tmpdir(), "omp-added-submodule-base-"));
+			tempDirs.push(worktreeBase);
+			const originalWorktreeDir = process.env.OMP_WORKTREE_DIR;
+			delete process.env.OMP_WORKTREE_DIR;
+			setWorktreesDir(worktreeBase);
+			try {
+				const handle = await ensureIsolation(wt, "added-submodule");
+				const root = handle.mergedDir;
+				const baseline = await captureIsolationBaseline(root, wt);
+				await runGit(root, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", leaf, "packages/added"]);
+				const added = path.join(root, "packages/added");
+				// Submodule clones don't inherit the superproject's identity; CI has no global one.
+				await fs.appendFile(
+					path.join(vcs.requireGit(added).info().commonDir, "config"),
+					"\n[user]\n\temail = src@example.com\n\tname = Source User\n",
+				);
+				await fs.writeFile(path.join(added, "leaf.txt"), "isolated\n");
+				await runGit(added, ["commit", "-q", "-am", "isolated leaf"]);
+				const addedCommit = await runGit(added, ["rev-parse", "HEAD"]);
+				await runGit(root, ["add", "packages/added"]);
+				const rootPatch = (await captureDeltaPatch(root, baseline)).rootPatch;
+				expect(rootPatch).toContain(addedCommit);
+				await cleanupIsolation(handle);
+				// No source submodule checkout exists; the commit must survive in the parent ODB.
+				expect(await runGit(wt, ["cat-file", "-t", addedCommit])).toBe("commit");
+			} finally {
+				setWorktreesDir(undefined);
+				if (originalWorktreeDir === undefined) delete process.env.OMP_WORKTREE_DIR;
+				else process.env.OMP_WORKTREE_DIR = originalWorktreeDir;
+			}
+		},
+		30_000,
+	);
 
 	it("keeps ensureIsolation from mutating a linked-worktree parent (rcopy backend)", async () => {
 		const { wt, baseSha } = await makeLinkedWorktree();

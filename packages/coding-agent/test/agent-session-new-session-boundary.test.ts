@@ -280,6 +280,10 @@ describe("AgentSession.newSession boundary", () => {
 		await target.sessionManager.flush();
 		const targetFile = target.sessionManager.getSessionFile();
 		if (!targetFile) throw new Error("Expected persisted target session");
+		const targetId = target.sessionManager.getSessionId();
+		// Simulate the target process exiting before switching to its journal.
+		await target.session.dispose();
+		await target.sessionManager.close();
 		const adopted = Promise.withResolvers<void>();
 		const failAdoption = Promise.withResolvers<void>();
 		const rollbackReached = Promise.withResolvers<void>();
@@ -301,7 +305,7 @@ describe("AgentSession.newSession boundary", () => {
 		});
 		try {
 			await adopted.promise;
-			expect(sessionManager.getSessionId()).toBe(target.sessionManager.getSessionId());
+			expect(sessionManager.getSessionId()).toBe(targetId);
 			expect(session.isSessionTransitioning).toBe(true);
 			let ready = false;
 			const waiting = session.waitForSessionTransition().then(() => {

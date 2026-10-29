@@ -73,7 +73,7 @@ const sessionTools = new SessionTools(host, {
 	baseSystemPrompt: [],
 	rebuildSystemPrompt: async toolNames => ({ systemPrompt: [toolNames.join(",")] }),
 });
-const connection = { name: "alpha" } as MCPServerConnection;
+const connection = { name: "alpha", config: { command: "fixture" } } as MCPServerConnection;
 
 // The refresh loop lives in its own frame so the arrays it materialises
 // (wrapper lists, dedupe sets, promise plumbing) are not left in this module's

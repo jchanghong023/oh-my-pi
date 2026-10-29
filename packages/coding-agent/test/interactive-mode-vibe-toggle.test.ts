@@ -754,7 +754,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 		await session.sessionManager.ensureOnDisk();
 		const sessionFile = session.sessionFile;
 		if (!sessionFile) throw new Error("Expected persisted session file");
-		const warning = vi.spyOn(mode, "showWarning");
+		const warning = vi.spyOn(session, "emitNotice");
 
 		await expect(mode.handleClearCommand()).resolves.toBeUndefined();
 		await expect(mode.handleDeleteCommand()).resolves.toBeUndefined();
@@ -762,7 +762,7 @@ describe("InteractiveMode vibe mode toggle", () => {
 		await expect(mode.handleMoveCommand(path.join(tempDir.path(), "other-project"))).resolves.toBeUndefined();
 
 		expect(warning).toHaveBeenCalledTimes(4);
-		expect(warning).toHaveBeenCalledWith("Exit vibe mode first.");
+		expect(warning).toHaveBeenCalledWith("warning", "Exit vibe mode first.");
 		expect(session.sessionFile).toBe(sessionFile);
 		expect(mode.vibeModeEnabled).toBe(true);
 	});

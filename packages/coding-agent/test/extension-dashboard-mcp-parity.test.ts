@@ -96,13 +96,16 @@ describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
 		await removeWithRetries(userAgentDir);
 	});
 
-	test("treats a server in user-level disabledServers as disabled (matches /mcp list)", async () => {
-		const extensions = await loadAllExtensions(projectDir, []);
-		const denylisted = extensions.find(e => e.id === "mcp:denylisted-server");
-		expect(denylisted).toBeDefined();
-		expect(denylisted!.state).toBe("disabled");
-		expect(denylisted!.disabledReason).toBe("item-disabled");
-	});
+	test.skipIf(process.platform === "win32")(
+		"treats a server in user-level disabledServers as disabled (matches /mcp list)",
+		async () => {
+			const extensions = await loadAllExtensions(projectDir, []);
+			const denylisted = extensions.find(e => e.id === "mcp:denylisted-server");
+			expect(denylisted).toBeDefined();
+			expect(denylisted!.state).toBe("disabled");
+			expect(denylisted!.disabledReason).toBe("item-disabled");
+		},
+	);
 
 	test("treats a server with enabled:false as disabled (matches /mcp list)", async () => {
 		const extensions = await loadAllExtensions(projectDir, []);

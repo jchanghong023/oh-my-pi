@@ -294,9 +294,17 @@ function buildResult(
 	};
 	if (result.isError) {
 		if (content[0]?.type === "text") {
-			content[0] = { type: "text", text: `Error: ${content[0].text}` };
+			content[0] = {
+				type: "text",
+				text: content[0].text.trim()
+					? `Error: ${content[0].text}`
+					: `Error: MCP server "${serverName}" reported an error for tool "${mcpToolName}" without a text explanation.`,
+			};
 		} else {
-			content.unshift({ type: "text", text: "Error:" });
+			content.unshift({
+				type: "text",
+				text: `Error: MCP server "${serverName}" reported an error for tool "${mcpToolName}" without a text explanation.`,
+			});
 		}
 	}
 	const structured = result.structuredContent;

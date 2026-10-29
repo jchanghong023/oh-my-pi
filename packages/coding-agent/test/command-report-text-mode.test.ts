@@ -68,20 +68,41 @@ describe("text-mode command reports on a real terminal core", () => {
 		return last;
 	}
 
-	async function runCommand(command: string, shown: string): Promise<void> {
+	async function prepareCommand(command: string): Promise<void> {
 		term.sendInput(command);
 		await term.waitForRender(() => screen(term).some(row => row.includes(command)));
+		if (mode.editor.isShowingAutocomplete()) {
+			term.sendInput("\x1b");
+			await term.waitForRender(() => !mode.editor.isShowingAutocomplete());
+		}
+	}
+
+	async function runCommand(command: string, shown: string, last: string): Promise<number> {
+		await prepareCommand(command);
+		const lastRow = screen(term).indexOf(last);
+		expect(lastRow).toBeGreaterThanOrEqual(0);
 		term.sendInput("\r");
 		await term.waitForRender(() => screen(term).some(row => row.includes(shown)));
+		return lastRow;
 	}
 
 	it.each([5, 40])(
 		"opens `/changelog full` as a scrollable full-screen page and Esc returns to the untouched screen (%i transcript rows)",
 		async rows => {
 			const last = await mountTranscript(rows);
-			const before = screen(term);
-			await runCommand("/changelog full", "Full Changelog");
-			expect(screen(term).some(row => row.includes("PgUp/PgDn scroll"))).toBe(true);
+			await prepareCommand("/changelog full");
+			// Capture the normal buffer at the actual alternate-screen boundary,
+			// after typing and completion have had their own opportunity to reflow it.
+			let beforeOverlay: string[] | undefined;
+			let restoredScreen: string[] | undefined;
+			const write = term.write.bind(term);
+			term.write = data => {
+				if (data.includes("\x1b[?1049h")) beforeOverlay = screen(term);
+				write(data);
+				if (data.includes("\x1b[?1049l")) restoredScreen = screen(term);
+			};
+			term.sendInput("\r");
+			await term.waitForRender(() => screen(term).some(row => row.includes("Full Changelog")));
 			expect(screen(term).some(row => row.includes(last))).toBe(false);
 			const page = screen(term).join("\n");
 			term.sendInput("\x1b[6~");
@@ -90,7 +111,10 @@ describe("text-mode command reports on a real terminal core", () => {
 
 			term.sendInput("\x1b");
 			await term.waitForRender(() => !screen(term).some(row => row.includes("Full Changelog")));
-			expect(screen(term).indexOf(last)).toBe(before.indexOf(last));
+			expect(beforeOverlay).toBeDefined();
+			expect(restoredScreen).toEqual(beforeOverlay);
+			expect(beforeOverlay!.indexOf(last)).toBeGreaterThanOrEqual(0);
+			expect(screen(term).indexOf(last)).toBe(beforeOverlay!.indexOf(last));
 			// Nothing of the page reached the main screen, and no transcript row was duplicated.
 			const buffer = term.getScrollBuffer().map(row => Bun.stripANSI(row).trimEnd());
 			expect(buffer.filter(row => row === last)).toHaveLength(1);
@@ -100,9 +124,7 @@ describe("text-mode command reports on a real terminal core", () => {
 
 	it("shows a report that fits above the editor like /btw and Esc takes it away", async () => {
 		const last = await mountTranscript(40);
-		const lastRow = screen(term).indexOf(last);
-		await runCommand("/tools", "Available Tools");
-		expect(screen(term).some(row => row.includes("to close"))).toBe(true);
+		const lastRow = await runCommand("/tools", "Available Tools", last);
 		// Inline: the transcript stays on the main screen, only covered from below.
 		expect(screen(term).some(row => row.startsWith("TRANSCRIPT"))).toBe(true);
 
@@ -118,9 +140,8 @@ describe("text-mode command reports on a real terminal core", () => {
 		["/ssh list", "SSH Hosts"],
 	])("`%s` reports outside the transcript and Esc takes it away", async (command, title) => {
 		const last = await mountTranscript(40);
-		const lastRow = screen(term).indexOf(last);
 		const blocks = mode.chatContainer.children.length;
-		await runCommand(command, title);
+		const lastRow = await runCommand(command, title, last);
 		expect(mode.chatContainer.children).toHaveLength(blocks);
 
 		term.sendInput("\x1b");

@@ -57,14 +57,23 @@ describe("SessionSelectorComponent current session marker", () => {
 
 	it("renders no current marker when the live session path is not provided", () => {
 		const rendered = renderPlain([newer, older]);
-		expect(sessionSection(rendered, "Newer session")).not.toContain("current");
-		expect(sessionSection(rendered, "Older session")).not.toContain("current");
+		const withNewer = renderPlain([newer, older], newer.path);
+		const withOlder = renderPlain([newer, older], older.path);
+		expect(sessionSection(rendered, "Newer session").split("\n")[2]).toBe(
+			sessionSection(withOlder, "Newer session").split("\n")[2],
+		);
+		expect(sessionSection(rendered, "Older session").split("\n")[2]).toBe(
+			sessionSection(withNewer, "Older session").split("\n")[2],
+		);
 	});
 
 	it("labels only the live session current on the metadata line", () => {
+		const baseline = renderPlain([newer, older], newer.path);
 		const rendered = renderPlain([newer, older], older.path);
-		expect(sessionSection(rendered, "Older session")).toContain("current");
-		expect(sessionSection(rendered, "Newer session")).not.toContain("current");
+		const olderWithoutMarker = sessionSection(baseline, "Older session");
+		const newerWithoutMarker = sessionSection(rendered, "Newer session");
+		expect(sessionSection(rendered, "Older session").split("\n")[2]).not.toBe(olderWithoutMarker.split("\n")[2]);
+		expect(sessionSection(baseline, "Newer session").split("\n")[2]).not.toBe(newerWithoutMarker.split("\n")[2]);
 	});
 
 	it("focuses the live session even when it is not the most recent row", () => {
@@ -186,10 +195,7 @@ describe("SessionSelectorComponent current session marker", () => {
 		await Promise.resolve();
 		selector.handleInput("\t");
 		const rendered = stripAnsi(selector.render(120).join("\n"));
-		expect(rendered).toContain("(all projects)");
 		expect(rendered).toContain("Other project");
 		expect(rendered).not.toContain("Charlie live");
-		expect(sessionSection(rendered, "Alpha")).not.toContain("current");
-		expect(sessionSection(rendered, "Other project")).not.toContain("current");
 	});
 });

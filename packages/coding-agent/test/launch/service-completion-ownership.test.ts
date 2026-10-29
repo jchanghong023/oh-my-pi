@@ -325,4 +325,68 @@ describe("session-owned supervised services", () => {
 			process.title = previousTitle;
 		}
 	}, 15_000);
+	it("preserves started service details when log retrieval fails or is cancelled", async () => {
+		using tempDir = TempDir.createSync("@omp-service-log-failure-");
+		const projectDir = path.join(tempDir.path(), "project");
+		const runtimeDir = path.join(tempDir.path(), "runtime");
+		await fs.mkdir(projectDir);
+		const client = await brokerClients.createDaemonBrokerClient(projectDir, { runtimeDir, idleGraceMs: 5_000 });
+		const previousTitle = process.title;
+		const broker = await startBroker(projectDir, runtimeDir);
+		const session: ToolSession = {
+			cwd: projectDir,
+			hasUI: false,
+			settings: serviceSettings(),
+			getSessionFile: () => null,
+			getSessionSpawns: () => "*",
+			getAgentId: () => "Main",
+			getSessionId: () => "session-log-failure",
+		};
+		try {
+			vi.spyOn(brokerClients, "daemonClientForProject").mockResolvedValue(client);
+			const request = client.request.bind(client);
+			let cancelLogs = false;
+			const controller = new AbortController();
+			vi.spyOn(client, "request").mockImplementation(async (operation, signal) => {
+				if (operation.op === "logs") {
+					if (cancelLogs) {
+						controller.abort();
+						return request(operation, signal);
+					}
+					throw new Error("log transport failed");
+				}
+				return request(operation, signal);
+			});
+			for (const name of ["log-failure", "log-cancelled"]) {
+				cancelLogs = name === "log-cancelled";
+				const result = await new BashTool(session).execute(
+					name,
+					{ command: "await Bun.stdin.stream().getReader().read();", name, pty: false },
+					controller.signal,
+				);
+				expect(result.isError).toBe(true);
+				expect(result.details?.service).toMatchObject({ name, timedOut: false });
+				expect(result.details?.service?.pid).toBeDefined();
+				const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
+				expect(text).toContain(`${name}: ${result.details?.service?.state} pid=${result.details?.service?.pid}`);
+				expect(text).toContain("Service started, but fetching logs failed");
+				expect(text).toContain(cancelLogs ? "Daemon broker request aborted" : "log transport failed");
+				expect(text).toContain(`proc://${name}`);
+				expect(text).toContain("do not blindly retry");
+				expect((await listServices(session)).some(service => service.name === name)).toBe(true);
+			}
+			await expect(
+				new BashTool(session).execute("bad-name", {
+					command: "console.log('never')",
+					name: "bad name",
+				}),
+			).rejects.toThrow("Service name");
+		} finally {
+			vi.restoreAllMocks();
+			await client.request({ op: "shutdown" }).catch(() => undefined);
+			client.close();
+			await broker.finished;
+			process.title = previousTitle;
+		}
+	}, 15_000);
 });

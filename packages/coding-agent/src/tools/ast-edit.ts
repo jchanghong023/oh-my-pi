@@ -80,6 +80,7 @@ function resolveAstEditResultPath(basePath: string, isDirectory: boolean, result
 
 async function runNativeAstEdit(
 	options: AstEditCallOptions & { path: string; glob?: string },
+	nativeAstEdit: typeof astEdit,
 	targetIndex?: number,
 ): Promise<AstEditAggregatedResult> {
 	const stage = options.dryRun ? "native_preview" : "native_apply";
@@ -94,7 +95,7 @@ async function runNativeAstEdit(
 			reported_written_count: options.dryRun ? 0 : "unknown",
 		});
 		try {
-			const result = await astEdit(options);
+			const result = await nativeAstEdit(options);
 			logger.info("AST edit native call completed", {
 				...fields,
 				event: "ast_edit_native_completed",
@@ -133,6 +134,7 @@ async function runAstEditTargets(
 	targets: Array<{ basePath: string; glob?: string; isDirectory: boolean }>,
 	commonBasePath: string,
 	options: AstEditCallOptions,
+	nativeAstEdit: typeof astEdit,
 ): Promise<AstEditAggregatedResult> {
 	const aggregatedChanges: AstReplaceChange[] = [];
 	const fileCounts = new Map<string, number>();
@@ -155,6 +157,7 @@ async function runAstEditTargets(
 				signal: options.signal,
 				filesystem: options.filesystem,
 			},
+			nativeAstEdit,
 			targetIndex++,
 		);
 		if (targetResult.applied && targetResult.fileChanges.length) {
@@ -203,20 +206,24 @@ function runAstEditOnce(
 	isDirectory: boolean,
 	globFilter: string | undefined,
 	options: AstEditCallOptions,
+	nativeAstEdit: typeof astEdit,
 ): Promise<AstEditAggregatedResult> {
 	if (targets) {
-		return runAstEditTargets(targets, resolvedSearchPath, options);
+		return runAstEditTargets(targets, resolvedSearchPath, options, nativeAstEdit);
 	}
-	return runNativeAstEdit({
-		rewrites: options.rewrites,
-		path: resolvedSearchPath,
-		glob: globFilter,
-		dryRun: options.dryRun,
-		maxFiles: options.maxFiles,
-		failOnParseError: options.failOnParseError,
-		signal: options.signal,
-		filesystem: options.filesystem,
-	}).then(result => {
+	return runNativeAstEdit(
+		{
+			rewrites: options.rewrites,
+			path: resolvedSearchPath,
+			glob: globFilter,
+			dryRun: options.dryRun,
+			maxFiles: options.maxFiles,
+			failOnParseError: options.failOnParseError,
+			signal: options.signal,
+			filesystem: options.filesystem,
+		},
+		nativeAstEdit,
+	).then(result => {
 		if (result.applied && result.fileChanges.length) {
 			invalidateFsScanAfterWrites(
 				result.fileChanges.map(change => resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path)),
@@ -312,7 +319,10 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 	];
 	readonly deferrable = true;
 	readonly loadMode = "discoverable";
-	constructor(private readonly session: ToolSession) {
+	constructor(
+		private readonly session: ToolSession,
+		private readonly nativeAstEdit: typeof astEdit = astEdit,
+	) {
 		this.description = prompt.render(astEditDescription);
 	}
 
@@ -389,14 +399,21 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 				previewStage = "native_preview";
 				// Dry run, so a re-run after installing missing grammars cannot double-apply.
 				const result = await rerunWithGrammars(() =>
-					runAstEditOnce(targets, resolvedSearchPath, isDirectory, globFilter, {
-						rewrites: normalizedRewrites,
-						dryRun: true,
-						maxFiles,
-						failOnParseError: false,
-						signal,
-						filesystem: urlFilesystem.shellFilesystem(),
-					}),
+					runAstEditOnce(
+						targets,
+						resolvedSearchPath,
+						isDirectory,
+						globFilter,
+						{
+							rewrites: normalizedRewrites,
+							dryRun: true,
+							maxFiles,
+							failOnParseError: false,
+							signal,
+							filesystem: urlFilesystem.shellFilesystem(),
+						},
+						this.nativeAstEdit,
+					),
 				);
 				const grammarNote = result.missingGrammars?.length
 					? missingGrammarsNote(result.missingGrammars)
@@ -610,6 +627,7 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 												failOnParseError: false,
 												filesystem: applyFilesystem.shellFilesystem(),
 											},
+											this.nativeAstEdit,
 										);
 										reportedWrittenCount = applyResult.applied ? applyResult.fileChanges.length : 0;
 										applyStage = "render_apply_result";

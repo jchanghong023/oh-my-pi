@@ -195,6 +195,15 @@ describe("ast_grep parse errors", () => {
 			});
 			expect(inferred.details).toMatchObject({ matchCount: 1, files: ["source.ts"] });
 
+			const skipped = await tool.execute("ast-grep-unsupported", {
+				pat: "console.log($X)",
+				path: path.join(tempDir, "notes.unsupported"),
+			});
+			expect(skipped.details).toMatchObject({ filesSearched: 0, matchCount: 0 });
+			const skippedText = skipped.content.find(content => content.type === "text")?.text ?? "";
+			expect(skippedText).toMatch(/no files were searched/i);
+			expect(skippedText).toContain("`lang`");
+
 			const explicit = await tool.execute("ast-grep-explicit", {
 				pat: "console.log($X)",
 				path: tempDir,

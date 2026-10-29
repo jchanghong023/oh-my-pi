@@ -16,16 +16,18 @@ import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
 // or CI runner's real agent config leaks into every assertion here.
 let tempHome: string;
 let originalAgentDir: string;
+let restoreHome: () => void;
 
 beforeEach(async () => {
 	originalAgentDir = getAgentDir();
 	tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-list-home-"));
-	spyOn(os, "homedir").mockReturnValue(tempHome);
+	const homeSpy = spyOn(os, "homedir").mockReturnValue(tempHome);
+	restoreHome = () => homeSpy.mockRestore();
 	setAgentDir(path.join(tempHome, ".omp", "agent"));
 });
 
 afterEach(async () => {
-	spyOn(os, "homedir").mockRestore();
+	restoreHome();
 	setAgentDir(originalAgentDir);
 	await removeWithRetries(tempHome);
 });
@@ -51,9 +53,11 @@ describe("runSkillsCommand", () => {
 				skillsSettings: { customDirectories: [path.join(skillsRoot, "first"), path.join(skillsRoot, "second")] },
 			});
 
-			// Home/agent-dir isolation (see the file-level beforeEach) means only the
-			// two fixture skills below are discoverable — pin the whole listing.
-			expect(result.skills.map(skill => skill.name)).toEqual(["calendar", "reviewer"]);
+			// Bundled skills are also discoverable; assert the custom provider's listing.
+			expect(result.skills.filter(skill => skill.source === "custom:user").map(skill => skill.name)).toEqual([
+				"calendar",
+				"reviewer",
+			]);
 			const reviewer = result.skills.find(skill => skill.name === "reviewer");
 			expect(reviewer?.description).toBe("Review code.");
 			expect(reviewer?.filePath).toBe(path.join(skillsRoot, "second", "reviewer", "SKILL.md"));
@@ -114,8 +118,9 @@ describe("runSkillsCommand", () => {
 			});
 			// The listing must agree with the loader: a tilde entry resolves
 			// against the home directory, not against the inspected directory.
-			expect(result.skills.map(skill => skill.name)).toEqual(["demo"]);
-			expect(result.skills[0]?.filePath).toBe(path.join(skillsRoot, "demo", "SKILL.md"));
+			const demo = result.skills.find(skill => skill.filePath === path.join(skillsRoot, "demo", "SKILL.md"));
+			expect(demo?.name).toBe("demo");
+			expect(demo?.source).toBe("custom:user");
 		} finally {
 			await removeWithRetries(directory);
 		}

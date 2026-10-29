@@ -62,13 +62,15 @@ class AsyncResultBlock extends ToolActivityContainer {
 	}
 }
 
-/** Preserve detailed receipts while compact history retains failures and diagnostics. */
-export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
+/** Render upstream completion receipts, retaining only failures and diagnostics in compact history. */
+export function buildAsyncResultBlock(
+	message: CustomOrHookMessage,
+	settledBashJobs: ReadonlyMap<string, string> = new Map(),
+): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
 		type?: JobSnapshot["type"];
 		status?: JobSnapshot["status"];
-		label?: string;
 		durationMs?: number;
 		meta?: OutputMeta;
 		schema?: StructuredSubagentOutput;
@@ -85,28 +87,52 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 		const jobId = job.jobId ?? "unknown";
 		const type = job.type ?? "job";
 		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		const failed = job.status === "failed";
-		const cancelled = job.status === "cancelled";
-		const original: TranscriptStatusRow = {
+		const duplicate =
+			job.type === "bash" &&
+			job.jobId !== undefined &&
+			job.status !== undefined &&
+			settledBashJobs.get(job.jobId) === job.status;
+		const status =
+			job.status === "failed"
+				? "failed"
+				: job.status === "cancelled"
+					? "cancelled"
+					: job.status === "completed"
+						? "completed"
+						: "finished";
+		const color =
+			status === "failed"
+				? "error"
+				: status === "cancelled"
+					? "warning"
+					: status === "completed"
+						? "success"
+						: "dim";
+		const icon =
+			status === "failed" ? theme.status.error : status === "cancelled" ? theme.status.warning : theme.status.done;
+		const row: TranscriptStatusRow = {
 			parts: [
-				failed
-					? { text: `${theme.status.error} Background job failed`, color: "error" }
-					: cancelled
-						? { text: `${theme.status.error} Background job cancelled`, color: "warning" }
-						: job.status === "completed"
-							? { text: `${theme.status.done} Background job completed`, color: "success" }
-							: { text: `Background job ${job.status ?? "result"}`, color: "dim" },
+				{ text: `${icon} Background job ${status}`, color },
 				{ text: `[${type}]`, color: "dim" },
 				{ text: jobId, color: "accent" },
 				duration ? { text: `(${duration})`, color: "dim" } : undefined,
 			],
 			native: {
-				tone: failed ? "error" : cancelled ? "warning" : job.status === "completed" ? "success" : "info",
-				message: [span(`Background job ${job.status ?? "result"}`), ...facts([type, jobId, duration])],
+				tone:
+					status === "failed"
+						? "error"
+						: status === "cancelled"
+							? "warning"
+							: status === "completed"
+								? "success"
+								: "info",
+				message: [span(`Background job ${status}`), ...facts([type, jobId, duration])],
 			},
 		};
-		rows.push(original);
-		if (job.status !== "completed") compactRows.push(original);
+		if (!duplicate) {
+			rows.push(row);
+			if (job.status !== "completed") compactRows.push(row);
+		}
 		if (job.meta?.artifactError) addWarning(artifactErrorRow(job.meta.artifactError));
 		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
 			const notice = `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`;

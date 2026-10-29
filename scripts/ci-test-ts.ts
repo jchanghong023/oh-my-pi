@@ -6,7 +6,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
-import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
+import { testConcurrencyLimit } from "./test-gate-scheduler";
+import { captureSourceIdentity } from "./test-gate-source";
+import type { GateCommand, GateRun } from "./test-gate-runtime";
+import {
+	beginTestRun,
+	endTestRun,
+	latestLocalTestProducers,
+	recordTestProducer,
+	testReportPath,
+} from "./test-reporting";
+import type { TestProducerRecord } from "./test-reporting";
 
 type Mode =
 	| "all"
@@ -51,9 +61,9 @@ const onlyFailuresArgs = onlyFailures ? ["--only-failures"] : [];
 // opts back into inline replay of every chunk. Tied to `onlyFailures` so the
 // quiet path is whatever the verbose filter is not.
 const quiet = onlyFailures;
-// Standalone CI aggregation/retries remain unchanged; a gate owns first-failure
-// cancellation and must see a nested failure before this runner drains/exits.
-const gateFailFast = Boolean(process.env.OMP_GATE_EVENT_TOKEN);
+// A gate receives failures immediately; independent chunks and the rest of
+// each suite still run so one failure cannot hide the remaining results.
+const gateReportsFailures = Boolean(process.env.OMP_GATE_EVENT_TOKEN);
 
 const validModes: Record<Mode, true> = {
 	all: true,
@@ -72,8 +82,8 @@ const validModes: Record<Mode, true> = {
 // separate `bun test` child process. A fresh process per chunk resets Bun's
 // heap and reaps any dangling spawned children between groups, keeping peak RSS
 // under the CI runner's OOM ceiling (a single 170–370-file invocation gets
-// SIGKILLed at 137). The singleton/global-state bucket is left whole: its suites
-// co-locate in one process to exercise process-wide state, so they must not split.
+// SIGKILLed at 137). Singleton/global-state files also run serially within
+// bounded fresh processes, avoiding a single long-running bucket.
 //
 // The UI/TUI bucket uses a smaller chunk (5) than the others: its suites build up
 // native ghostty-vt cells, and bun 1.3.14's GC aborts (SIGTRAP/SIGABRT, exit
@@ -86,7 +96,7 @@ const validModes: Record<Mode, true> = {
 // process: the next file can spin past the watchdog. Isolate runtime and native
 // files on that platform while retaining larger chunks elsewhere.
 const codingAgentBucketPlans: Record<CodingAgentBucket, { label: string; parallel: number; chunkSize?: number }> = {
-	singleton: { label: "singleton/global-state bucket", parallel: 1 },
+	singleton: { label: "singleton/global-state bucket", parallel: 1, chunkSize: 10 },
 	ui: { label: "UI/TUI bucket", parallel: 1, chunkSize: 5 },
 	runtime: { label: "runtime/session bucket", parallel: 1, chunkSize: process.platform === "win32" ? 1 : 10 },
 	native: {
@@ -117,6 +127,9 @@ const nativeAndIntegrationPackages = [
 	"packages/tui",
 	"packages/collab-web",
 	"packages/typescript-edit-benchmark",
+	"packages/stats",
+	"packages/metaharness",
+	"python/robomp/web",
 ];
 
 const projectToolTestCommand: TestCommand = {
@@ -125,10 +138,6 @@ const projectToolTestCommand: TestCommand = {
 	command: ["bun", "test", ...onlyFailuresArgs, "./.omp/tests/tui.test.ts"],
 	parallel: 1,
 };
-
-// Packages the CI buckets deliberately skip but a local full run should still
-// cover. robomp-web lives under python/robomp and is outside every CI TS bucket.
-const localOnlyWorkspacePackages = ["python/robomp/web"];
 
 const codingAgentNativePathPatterns = [
 	/(^|\/)[^/]*(bash|native|browser|cmux|mnemopi|hindsight|memory)[^/]*\.test\.ts$/i,
@@ -232,13 +241,11 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 	};
 }
 
-// The Rust suite as one pooled command, so root `bun run test` reports TS and
-// Rust under the same progress stream / failure report. Delegates to
-// run-rs-task.ts, which self-skips when no Rust-affecting files changed locally
-// (printing a one-line notice) and resolves the cargo/nextest invocation.
+// Root `bun run test` reports the full Rust suite under the same progress
+// stream and failure report as TypeScript.
 function rustTestCommand(): TestCommand {
 	return {
-		label: "rust (cargo nextest; skipped if no Rust changes)",
+		label: "rust (full Cargo/Nextest workspace and doctests)",
 		cwd: ".",
 		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
 	};
@@ -321,6 +328,16 @@ async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> 
 	return codingAgentTestPartitionPromise;
 }
 
+// Start explicitly named end-to-end and integration tests early, rather than
+// leaving them behind the alphabetical backlog. Preserve order within each group.
+function isIntegrationTest(testFile: string): boolean {
+	return /(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile);
+}
+
+export function isIntegrationCommand(command: TestCommand): boolean {
+	return command.cwd === "packages/coding-agent" && command.command.some(isIntegrationTest);
+}
+
 async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
 	const partition = await getCodingAgentTestPartition();
 	const testFiles = partition[bucket];
@@ -371,22 +388,15 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 				...(await commandsForMode("native")),
 				...(await commandsForMode("coding-agent-heavy")),
 			];
-		// `local-ts` is the full local TypeScript run that root `bun run test:ts`
-		// drives: every package the old `--workspaces` fan-out covered (the CI
-		// `all` set plus robomp-web, which CI omits), routed through
-		// this one quiet runner so the whole suite shares one progress stream and
-		// one failure report. Repo script tests remain available via `test:scripts`.
+		// Ordinary local runs execute every package; repository scripts run separately.
 		case "local-ts":
 			return [
 				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
 				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				projectToolTestCommand,
-				...localOnlyWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
 				...(await commandsForMode("coding-agent-heavy")),
 			];
-		// `local` is what root `bun run test` drives: the full TS suite plus the
-		// Rust task, so a single invocation reports TS and Rust together. The Rust
-		// command self-skips when no Rust-affecting files changed (see run-rs-task).
+		// Root `bun run test` adds the full Rust task to local TypeScript.
 		case "local":
 			return [...(await commandsForMode("local-ts")), rustTestCommand()];
 	}
@@ -453,7 +463,7 @@ async function recordAttempt(
 			missing = true;
 		}
 	}
-	const partial = missing || timedOut || exitCode >= 128 || (gateFailFast && exitCode !== 0);
+	const partial = missing || timedOut || exitCode >= 128;
 	try {
 		await recordTestProducer({
 			producer: `${reportScope}:${reportRunnerId}:${testCommand.label}:attempt-${attempt}`,
@@ -500,7 +510,7 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			stdout: "inherit",
 			stderr: "pipe",
 		});
-		const failureObserver = gateFailFast ? new BunTestFailureObserver(reportGateFailure) : undefined;
+		const failureObserver = gateReportsFailures ? new BunTestFailureObserver(reportGateFailure) : undefined;
 		const stderrReader = proc.stderr.getReader();
 		const stderrDrain = (async () => {
 			try {
@@ -529,7 +539,7 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			}
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
-		if (gateFailFast && exitCode !== 0)
+		if (gateReportsFailures && exitCode !== 0)
 			reportGateFailure(
 				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
 			);
@@ -555,13 +565,16 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 			if (missing) console.error(`${testCommand.label} missing JUnit report: ${reportPath}`);
 			return;
 		}
-		if (!gateFailFast && !timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
+		if (!gateReportsFailures && !timedOut && BUN_CRASH_EXITS[exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
 			console.log(
 				`==> ${testCommand.label}: bun crashed (exit ${exitCode}); retrying (attempt ${attempt + 1}/${MAX_CHUNK_ATTEMPTS})`,
 			);
 			continue;
 		}
-		throw new Error(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`);
+		throw new GateCommandError(
+			`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}: ${renderedCommand}`,
+			exitCode,
+		);
 	}
 }
 
@@ -734,16 +747,22 @@ function isCI(): boolean {
 	return normalized !== "" && normalized !== "0" && normalized !== "false";
 }
 
-// Fan-out width is capped at the command count and logical core count: each
-// chunk is a full bun process (~1 GB on coding-agent), so an unbounded pool
-// trades CPU contention for OOM kills. Windows defaults to half the cores to
-// avoid pagefile thrashing; explicit overrides still obey the upstream cap.
-function testConcurrency(total: number, spec: string | undefined, cores: number): number {
-	const cap = Math.min(Math.max(1, cores), total);
+// Each chunk is a full bun process, so cap the pool by both the number of
+// commands and the shared CPU budget, including on Windows.
+export function testConcurrency(
+	total: number,
+	spec: string | undefined,
+	cores: number,
+	eligibleFulltest = false,
+	platform: NodeJS.Platform = process.platform,
+): number {
+	const limit =
+		eligibleFulltest && platform === "win32"
+			? Math.min(20, Math.max(1, Math.floor(cores)))
+			: testConcurrencyLimit(cores, platform);
+	const cap = Math.min(limit, total);
 	const raw = spec?.trim().toLowerCase();
-	if (!raw) {
-		return process.platform === "win32" ? Math.min(Math.max(1, Math.floor(cores / 2)), cap) : cap;
-	}
+	if (!raw) return cap;
 	if (raw === "all" || raw === "max") return cap;
 	const override = Number(raw);
 	if (Number.isFinite(override) && override >= 1) {
@@ -752,11 +771,6 @@ function testConcurrency(total: number, spec: string | undefined, cores: number)
 	throw new Error(`Invalid OMP_TEST_CONCURRENCY=${JSON.stringify(raw)}; expected a positive integer, all, or max`);
 }
 
-// Test files interleave real IO — sqlite writes, temp dirs, spawned CLIs — with
-// CPU, so keeping every core busy needs more in-flight files than cores. This is
-// the factor by which the shared budget exceeds `availableParallelism()`.
-const FILE_OVERSUBSCRIBE = 2;
-
 // Two independent parallelism knobs stack multiplicatively: the chunk pool runs
 // `poolWidth` `bun test` processes at once, and each of those runs its own
 // `--parallel=N` test files concurrently, so up to `poolWidth * N` files are in
@@ -764,11 +778,14 @@ const FILE_OVERSUBSCRIBE = 2;
 // workspace bucket asked for 4 x 8 = 32 files on a 4-core box — and because
 // bun's per-test timeout is wall-clock, CPU-starved suites blow it and fail at
 // random (mnemopi's sqlite/CLI files did, a different set each run). Spend one
-// budget instead: each live chunk gets an equal share, never below 1 and never
-// above the width it asked for. A chunk that runs alone still gets everything,
-// so the sequential CI path is unchanged.
-function budgetedParallel(requested: number, poolWidth: number): number {
-	const budget = Math.max(1, os.availableParallelism()) * FILE_OVERSUBSCRIBE;
+// CPU budget instead: each live chunk gets an equal share, never below 1 and
+// never above the width it asked for.
+export function budgetedParallel(
+	requested: number,
+	poolWidth: number,
+	cores: number = os.availableParallelism(),
+): number {
+	const budget = testConcurrencyLimit(cores);
 	return Math.max(1, Math.min(requested, Math.floor(budget / poolWidth)));
 }
 
@@ -798,12 +815,7 @@ function applyChunkBudget(commands: TestCommand[], poolWidth: number): TestComma
 		const parallel = budgetedParallel(testCommand.parallel, poolWidth);
 		return {
 			...testCommand,
-			command: [
-				...testCommand.command,
-				...(gateFailFast ? ["--bail=1"] : []),
-				`--parallel=${parallel}`,
-				`--timeout=${timeout}`,
-			],
+			command: [...testCommand.command, `--parallel=${parallel}`, `--timeout=${timeout}`],
 			parallel,
 		};
 	});
@@ -952,21 +964,52 @@ function formatChunkFailure(failure: ChunkOutcome, replayOutput: boolean): strin
 	return lines.join("\n");
 }
 
+// Workers exit when no runnable item remains. If only capped items are left,
+// their active workers will take them as slots open; no polling or wakeup is
+// needed, and runnable items retain their original relative order.
+export async function runBoundedPool<T>(
+	items: T[],
+	concurrency: number,
+	isBounded: (item: T) => boolean,
+	boundedLimit: number,
+	run: (item: T) => Promise<void>,
+): Promise<void> {
+	const queue = items.map(item => ({ item, bounded: isBounded(item) }));
+	let activeBounded = 0;
+	async function worker(): Promise<void> {
+		for (;;) {
+			const index = queue.findIndex(entry => !entry.bounded || activeBounded < boundedLimit);
+			if (index === -1) return;
+			const [entry] = queue.splice(index, 1);
+			if (entry.bounded) activeBounded++;
+			try {
+				await run(entry.item);
+			} finally {
+				if (entry.bounded) activeBounded--;
+			}
+		}
+	}
+	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+}
+
 // Run every command through a fixed-width worker pool. Each child's stdout and
 // stderr are drained concurrently (so a chatty test never deadlocks on a full
 // pipe) and buffered. Quiet mode (the default) prints one progress line per
 // finished chunk and replays full output only for failures, in a single report
 // at the end; `--full` streams every chunk's output inline as it completes.
-// Standalone runs aggregate failures. Under a gate, output is streamed and the
-// authenticated first failure cancels the entire gate-owned process tree.
-async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
+// Gate-owned runs also stream authenticated failure notifications, but keep
+// executing independent work until the shared deadline or cancellation.
+async function runTestCommandsInParallel(
+	commands: TestCommand[],
+	concurrency: number,
+	localMode: boolean,
+): Promise<void> {
 	const env = buildChildEnv();
-	const queue = [...commands];
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
 	let firstFailure: GateCommandError | undefined;
-	function failFast(error: GateCommandError): void {
-		if (!gateFailFast || firstFailure) return;
+	function reportFirstFailure(error: GateCommandError): void {
+		if (firstFailure) return;
 		firstFailure = error;
 		reportGateFailure(error);
 	}
@@ -994,7 +1037,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 					failureObserver?.push(value);
 					const text = decoder.decode(value, { stream: true });
 					sink.text += text;
-					if (gateFailFast) process.stdout.write(text);
+					if (gateReportsFailures) process.stdout.write(text);
 				}
 			} catch {
 				// cancelled or broken pipe — keep what was captured
@@ -1002,7 +1045,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 			failureObserver?.end();
 			const final = decoder.decode();
 			sink.text += final;
-			if (gateFailFast && final) process.stdout.write(final);
+			if (gateReportsFailures && final) process.stdout.write(final);
 		})();
 		return { done, cancel: () => void reader.cancel().catch(() => {}) };
 	}
@@ -1045,7 +1088,7 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		const stderrDrain = drainInto(
 			proc.stderr as ReadableStream<Uint8Array>,
 			stderr,
-			gateFailFast ? new BunTestFailureObserver(failFast) : undefined,
+			gateReportsFailures ? new BunTestFailureObserver(reportFirstFailure) : undefined,
 		);
 		const drains = Promise.all([stdoutDrain.done, stderrDrain.done]);
 		// Watchdog: a wedged child (e.g. bun's panic handler deadlocking
@@ -1062,7 +1105,9 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		}, chunkTimeoutMs());
 		const exitCode = await proc.exited;
 		if (exitCode !== 0)
-			failFast(new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode));
+			reportFirstFailure(
+				new GateCommandError(`${testCommand.label} ${describeChunkFailure(exitCode, timedOut)}`, exitCode),
+			);
 		clearTimeout(killTimer);
 		if (!(await settleWithin(drains, 5000))) {
 			stdoutDrain.cancel();
@@ -1089,54 +1134,52 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 		};
 	}
 
-	async function worker(): Promise<void> {
-		for (;;) {
-			if (firstFailure) return;
-			const testCommand = queue.shift();
-			if (!testCommand) {
-				return;
+	async function runChunk(testCommand: TestCommand): Promise<void> {
+		const startedAt = performance.now();
+		let attempt = 1;
+		let result = await runAttempt(testCommand, attempt);
+		// Bun-crash retry: a 128+signal exit means the runtime died (GC
+		// segfault/abort), not that tests failed — rerun in a fresh heap.
+		while (
+			!gateReportsFailures &&
+			!result.timedOut &&
+			BUN_CRASH_EXITS[result.exitCode] &&
+			attempt < MAX_CHUNK_ATTEMPTS
+		) {
+			attempt += 1;
+			process.stdout.write(
+				`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
+			);
+			result = await runAttempt(testCommand, attempt);
+		}
+		completed += 1;
+		const outcome: ChunkOutcome = {
+			label: testCommand.label,
+			command: result.command,
+			exitCode: result.exitCode,
+			seconds: (performance.now() - startedAt) / 1000,
+			output: result.output,
+			retries: attempt - 1,
+		};
+		if (quiet) {
+			let msg = `${formatProgressLine(outcome)}\n`;
+			if (!gateReportsFailures && (outcome.exitCode !== 0 || result.timedOut)) {
+				msg += `${formatChunkFailure(outcome, true)}\n`;
 			}
-			const startedAt = performance.now();
-			let attempt = 1;
-			let result = await runAttempt(testCommand, attempt);
-			// Bun-crash retry: a 128+signal exit means the runtime died (GC
-			// segfault/abort), not that tests failed — rerun in a fresh heap.
-			while (!gateFailFast && !result.timedOut && BUN_CRASH_EXITS[result.exitCode] && attempt < MAX_CHUNK_ATTEMPTS) {
-				attempt += 1;
-				process.stdout.write(
-					`${style.dim(`↻ ${testCommand.label} — bun crashed (exit ${result.exitCode}); retrying (attempt ${attempt}/${MAX_CHUNK_ATTEMPTS})`)}\n`,
-				);
-				result = await runAttempt(testCommand, attempt);
-			}
-			completed += 1;
-			const outcome: ChunkOutcome = {
-				label: testCommand.label,
-				command: result.command,
-				exitCode: result.exitCode,
-				seconds: (performance.now() - startedAt) / 1000,
-				output: result.output,
-				retries: attempt - 1,
-			};
-			if (quiet) {
-				let msg = `${formatProgressLine(outcome)}\n`;
-				if (!gateFailFast && (outcome.exitCode !== 0 || result.timedOut)) {
-					msg += `${formatChunkFailure(outcome, true)}\n`;
-				}
-				process.stdout.write(msg);
-			} else {
-				const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
-				process.stdout.write(
-					`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${result.command}\n${gateFailFast ? "" : outcome.output}`,
-				);
-			}
-			if (outcome.exitCode !== 0 || result.timedOut) {
-				failures.push(outcome);
-			}
+			process.stdout.write(msg);
+		} else {
+			const status = outcome.exitCode === 0 ? "ok" : `FAILED exit ${outcome.exitCode}`;
+			process.stdout.write(
+				`\n==> [${completed}/${commands.length}] ${testCommand.label} (${status}, ${outcome.seconds.toFixed(1)}s)\n$ ${result.command}\n${gateReportsFailures ? "" : outcome.output}`,
+			);
+		}
+		if (outcome.exitCode !== 0 || result.timedOut) {
+			failures.push(outcome);
 		}
 	}
 
 	const runStartedAt = performance.now();
-	await Promise.all(Array.from({ length: concurrency }, () => worker()));
+	await runBoundedPool(commands, concurrency, command => localMode && isIntegrationCommand(command), 4, runChunk);
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
@@ -1151,9 +1194,9 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 
 // `OMP_TEST_SHARD=i/n` splits a mode's chunk commands across n CI jobs; job i
 // runs every chunk whose index ≡ i-1 (mod n). Round-robin rather than
-// contiguous ranges because the chunk list follows sorted file order, so slow
-// neighbouring suites spread evenly instead of piling into one shard. Every
-// chunk lands in exactly one shard; unset/empty runs everything.
+// contiguous ranges so neighbouring suites spread evenly instead of piling
+// into one shard. The command order is deterministic.
+// Every chunk lands in exactly one shard; unset/empty runs everything.
 function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	const trimmed = spec?.trim();
 	if (!trimmed) return commands;
@@ -1170,6 +1213,73 @@ function selectShard<T>(commands: T[], spec: string | undefined): T[] {
 	return selected;
 }
 
+// The producer label and exact pre-budget argv together identify an unchanged
+// chunk. Never distribute a chunk's wall time among its files or rechunk it.
+export function prioritizeLocalCommands<T extends TestCommand>(commands: T[], producers: TestProducerRecord[]): T[] {
+	const durations = new Map<string, number>();
+	const ambiguous = new Set<string>();
+	for (const producer of producers) {
+		if (
+			(producer.scope !== "ci-test-ts:local" && producer.scope !== "ci-test-ts:local-ts") ||
+			typeof producer.producer !== "string" ||
+			!Array.isArray(producer.command) ||
+			!producer.command.every(arg => typeof arg === "string") ||
+			producer.command[0] !== "bun" ||
+			producer.command[1] !== "test" ||
+			producer.attempt !== 1 ||
+			!Number.isFinite(producer.durationSeconds) ||
+			producer.durationSeconds < 0
+		)
+			continue;
+		const prefix = `${producer.scope}:`;
+		const match = /^([0-9a-f]{8}):(.+):attempt-1$/.exec(producer.producer.slice(prefix.length));
+		if (!producer.producer.startsWith(prefix) || !match) continue;
+		const argv = producer.command.filter(
+			arg => !/^(?:--parallel=|--timeout=|--reporter=|--reporter-outfile=)/.test(arg),
+		);
+		const key = JSON.stringify([match[2], argv]);
+		if (durations.has(key)) {
+			ambiguous.add(key);
+			continue;
+		}
+		durations.set(key, producer.durationSeconds);
+	}
+	for (const key of ambiguous) durations.delete(key);
+	return commands
+		.map((command, index) => ({
+			command,
+			index,
+			duration: durations.get(JSON.stringify([command.label, command.command])),
+		}))
+		.sort((a, b) => (b.duration ?? -1) - (a.duration ?? -1) || a.index - b.index)
+		.map(item => item.command);
+}
+
+/** Never let a caller-supplied digest stand in for the current source inventory. */
+async function verifiedFulltestDigest(expected: string | undefined): Promise<string | undefined> {
+	if (!expected || !/^[a-f0-9]{64}$/.test(expected)) return undefined;
+	try {
+		const gate = {
+			signal: new AbortController().signal,
+			charged: async <T>(work: () => T | Promise<T>) => work(),
+			capture: async (command: GateCommand) => {
+				const child = Bun.spawn([...command.argv], { cwd: command.cwd, stdout: "pipe", stderr: "pipe" });
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				if (exitCode !== 0) throw new Error(stderr);
+				return { stdout };
+			},
+		} as unknown as GateRun;
+		const actual = await captureSourceIdentity(gate, repoRoot);
+		return actual.digest === expected ? expected : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 // Fork gates and changelog tests reuse the child environment and timeout helpers.
 // Importing them must not validate a CLI mode or start the upstream test plan.
 if (import.meta.main) {
@@ -1179,27 +1289,72 @@ if (import.meta.main) {
 		);
 	}
 	const commands = await commandsForMode(requestedMode as Mode);
-	const requestedCommands = selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	// Real desktop input still requires independent authorization. All other
+	// files run without Git-, dependency-, or environment-based selection.
+	if (args.includes("--exclude-desktop")) {
+		const native = commands.find(command => command.cwd === "packages/natives");
+		if (native) {
+			const files: string[] = [];
+			for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"]) {
+				for await (const file of new Bun.Glob(pattern).scan({
+					cwd: path.join(repoRoot, native.cwd),
+					onlyFiles: true,
+				})) {
+					const normalized = file.replaceAll("\\", "/");
+					if (normalized !== "test/desktop.test.ts" && !normalized.split("/").includes("node_modules"))
+						files.push(normalized);
+				}
+			}
+			if (!files.length) throw new Error("No native tests remain after excluding desktop input");
+			native.command.push(...[...new Set(files)].sort());
+		}
+	}
+	const localMode = requestedMode === "local" || requestedMode === "local-ts";
+	const requestedCommands = localMode ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	// Prioritize within the selected shard, without changing shard membership.
+	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));
+	const digest =
+		requestedMode === "local-ts" ? await verifiedFulltestDigest(Bun.env.OMP_FULLTEST_SOURCE_DIGEST) : undefined;
+	const producers = digest ? await latestLocalTestProducers(digest) : [];
+	const scheduledCommands = localMode ? prioritizeLocalCommands(requestedCommands, producers) : requestedCommands;
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets
 	// explicitly opt into bounded process concurrency. Local runs fan out by
 	// default and may use the same override. Resolve before dry-run so it prints
 	// the selected test argv with the CPU budget; reporter paths are live-run only.
-	const pooled = requestedCommands.length > 1 && (!isCI() || explicitConcurrency);
+	const pooled = scheduledCommands.length > 1 && (localMode || !isCI() || explicitConcurrency);
 	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 	const poolWidth = pooled
-		? testConcurrency(requestedCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
+		? testConcurrency(
+				scheduledCommands.length,
+				Bun.env.OMP_TEST_CONCURRENCY,
+				os.availableParallelism(),
+				producers.length > 0,
+			)
 		: 1;
-	const testCommands = applyChunkBudget(requestedCommands, poolWidth);
+	const testCommands = applyChunkBudget(scheduledCommands, poolWidth);
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);
 	let failed = false;
 	try {
 		if (pooled && !isDryRun) {
-			await runTestCommandsInParallel(testCommands, poolWidth);
+			await runTestCommandsInParallel(testCommands, poolWidth, localMode);
 		} else {
+			let firstFailure: GateCommandError | undefined;
 			for (const testCommand of testCommands) {
-				await runTestCommand(testCommand);
+				try {
+					await runTestCommand(testCommand);
+				} catch (error) {
+					failed = true;
+					const failure =
+						error instanceof GateCommandError
+							? error
+							: new GateCommandError(error instanceof Error ? error.message : String(error), 1);
+					firstFailure ??= failure;
+					reportGateFailure(failure);
+					console.error(failure.message);
+				}
 			}
+			if (firstFailure) process.exitCode = firstFailure.exitCode;
 		}
 	} catch (error) {
 		failed = true;

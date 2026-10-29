@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import { toolWireSchema } from "@oh-my-pi/pi-ai";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -7,6 +7,7 @@ import type { ExecutorBackendResult } from "@oh-my-pi/pi-coding-agent/eval/backe
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EvalTool } from "@oh-my-pi/pi-coding-agent/tools/eval";
 import { cfgToolsMaxTimeout } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { restoreEnvValue } from "../helpers/settings-test-state";
 
 function makeSession(settings: Settings, asyncJobManager?: AsyncJobManager): ToolSession {
 	return {
@@ -35,7 +36,21 @@ function result(): ExecutorBackendResult {
 }
 
 describe("eval timeout admission contract", () => {
-	afterEach(() => vi.restoreAllMocks());
+	let savedPy: string | undefined;
+	let savedJs: string | undefined;
+
+	beforeEach(() => {
+		savedPy = Bun.env.PI_PY;
+		savedJs = Bun.env.PI_JS;
+		delete Bun.env.PI_PY;
+		delete Bun.env.PI_JS;
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+		restoreEnvValue("PI_PY", savedPy);
+		restoreEnvValue("PI_JS", savedJs);
+	});
 
 	for (const { label, timeout, cap, effective } of [
 		{ label: "per-tool ceiling", timeout: 5400, effective: 3600 },
@@ -48,7 +63,10 @@ describe("eval timeout admission contract", () => {
 		{ label: "disabled deadline", timeout: 0, cap: 5, effective: 0 },
 	]) {
 		it(`discloses a changed supplied deadline before execution (${label})`, async () => {
-			const settings = Settings.isolated(cap === undefined ? {} : { "tools.maxTimeout": cap });
+			const settings = Settings.isolated({
+				"eval.js": true,
+				...(cap === undefined ? {} : { "tools.maxTimeout": cap }),
+			});
 			const updates: string[] = [];
 			const clamped = timeout !== undefined && timeout !== effective;
 			const execute = vi.spyOn(jsBackend, "execute").mockImplementation(async (_code, options) => {

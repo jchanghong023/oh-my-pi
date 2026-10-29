@@ -59,7 +59,7 @@ describe("theme selector picker", () => {
 		expect(p.items?.[2]?.mark?.seed).toBe("nord");
 		expect(p.current).toEqual(["dark"]);
 		expect(p.selected).toBe("dark");
-		expect(p.actions?.map(a => a.label)).toEqual(["Apply", "Close"]);
+		expect(p.actions?.map(a => a.id)).toEqual(["confirm", "close"]);
 		expect(selector.describe(genericCx)?.c?.[0]).not.toMatchObject({ k: "picker" });
 	});
 
@@ -122,7 +122,7 @@ describe("session account picker", () => {
 		expect(p.current).toEqual(["12"]);
 		expect(p.selected).toBe("12");
 		expect(p.items?.find(item => item.id === "11")?.detail).toBe("Acme");
-		expect(p.actions?.map(a => a.label)).toEqual(["Pin", "Close"]);
+		expect(p.actions?.map(a => a.id)).toEqual(["confirm", "close"]);
 		selector.handleNativeEvent(at("select", "11"));
 		selector.handleNativeEvent(act("confirm"));
 		selector.handleNativeEvent(act("close"));
@@ -234,7 +234,7 @@ describe("oauth selector picker", () => {
 		expect(first.layout).toBe("cards");
 		const row = first.items?.find(item => item.id === signedIn);
 		expect(row?.dot).toBe("success");
-		expect(row?.detail).toBe("Signed in · login");
+		expect(row?.detail).toContain("login");
 		expect(first.items?.find(item => item.id !== signedIn)?.dot).toBe("muted");
 		expect(first.query).toBe("");
 		selector.handleInput(providers[1]!.name.slice(0, 3));

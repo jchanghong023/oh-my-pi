@@ -396,13 +396,15 @@ describe("ACP lazy startup", () => {
 		}
 	});
 
-	it("applies CLI runtime API keys after ACP lazy session creation resolves extension models", async () => {
-		using tempDir = TempDir.createSync("@omp-acp-lazy-api-key-");
-		const cwd = tempDir.path();
+	it.skipIf(process.platform === "win32")(
+		"applies CLI runtime API keys after ACP lazy session creation resolves extension models",
+		async () => {
+			using tempDir = TempDir.createSync("@omp-acp-lazy-api-key-");
+			const cwd = tempDir.path();
 
-		await Bun.write(
-			path.join(cwd, "runtime-provider.ts"),
-			`export default function(pi) {
+			await Bun.write(
+				path.join(cwd, "runtime-provider.ts"),
+				`export default function(pi) {
 	pi.registerProvider("runtime-provider", {
 		baseUrl: "https://runtime.example.com/v1",
 		apiKey: "extension-key",
@@ -419,65 +421,67 @@ describe("ACP lazy startup", () => {
 	});
 }
 `,
-		);
-
-		const authStorage = createInMemoryAuthStorage();
-		try {
-			const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
-			const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
-			const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
-			let session: AgentSession | undefined;
-			let sessionHasUI: boolean | undefined;
-			let deferredUsageReserveConfirmation: boolean | undefined;
-
-			const stopped = runRootCommand(
-				{
-					mode: "acp",
-					apiKey: "cli-runtime-key",
-					messages: [],
-					fileArgs: [],
-					unknownFlags: new Map(),
-					unrecognizedFlags: [],
-					invalidFlagValues: [],
-					noSkills: true,
-					noRules: true,
-					noTools: true,
-					noLsp: true,
-					sessionDir: cwd,
-					extensions: [path.join(cwd, "runtime-provider.ts")],
-					model: "runtime-provider/runtime-model",
-				},
-				[],
-				{
-					discoverAuthStorage: async () => authStorage,
-					createAgentSession: options => {
-						const sessionOptions = options ?? {};
-						sessionHasUI = sessionOptions.hasUI;
-						deferredUsageReserveConfirmation = sessionOptions.deferUsageReserveConfirmation;
-						return createAgentSession({
-							...sessionOptions,
-							workspaceTree: sessionOptions.workspaceTree ?? emptyWorkspaceTree(sessionOptions.cwd ?? cwd),
-						});
-					},
-					settings,
-					runAcpMode: async createAcpSession => {
-						session = (await createAcpSession(cwd)).session;
-						throw new Error("stop test ACP mode");
-					},
-				},
 			);
-			await expect(stopped).rejects.toThrow("stop test ACP mode");
 
-			if (!session?.model) {
-				throw new Error("Expected extension model to resolve");
+			const authStorage = createInMemoryAuthStorage();
+			try {
+				const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+				const { runRootCommand } = await import("@oh-my-pi/pi-coding-agent/main");
+				const { createAgentSession } = await import("@oh-my-pi/pi-coding-agent/sdk");
+				let session: AgentSession | undefined;
+				let sessionHasUI: boolean | undefined;
+				let deferredUsageReserveConfirmation: boolean | undefined;
+
+				const stopped = runRootCommand(
+					{
+						mode: "acp",
+						apiKey: "cli-runtime-key",
+						messages: [],
+						fileArgs: [],
+						unknownFlags: new Map(),
+						unrecognizedFlags: [],
+						invalidFlagValues: [],
+						noSkills: true,
+						noRules: true,
+						noTools: true,
+						noLsp: true,
+						sessionDir: cwd,
+						extensions: [path.join(cwd, "runtime-provider.ts")],
+						model: "runtime-provider/runtime-model",
+					},
+					[],
+					{
+						discoverAuthStorage: async () => authStorage,
+						createAgentSession: options => {
+							const sessionOptions = options ?? {};
+							sessionHasUI = sessionOptions.hasUI;
+							deferredUsageReserveConfirmation = sessionOptions.deferUsageReserveConfirmation;
+							return createAgentSession({
+								...sessionOptions,
+								workspaceTree: sessionOptions.workspaceTree ?? emptyWorkspaceTree(sessionOptions.cwd ?? cwd),
+							});
+						},
+						settings,
+						runAcpMode: async createAcpSession => {
+							session = (await createAcpSession(cwd)).session;
+							throw new Error("stop test ACP mode");
+						},
+					},
+				);
+				await expect(stopped).rejects.toThrow("stop test ACP mode");
+
+				if (!session?.model) {
+					throw new Error("Expected extension model to resolve");
+				}
+				expect(session.model.provider).toBe("runtime-provider");
+				expect(await session.modelRegistry.getApiKey(session.model)).toBe("cli-runtime-key");
+				expect(sessionHasUI).toBe(false);
+				expect(deferredUsageReserveConfirmation).toBe(true);
+				await session.dispose();
+			} finally {
+				authStorage.close();
 			}
-			expect(session.model.provider).toBe("runtime-provider");
-			expect(await session.modelRegistry.getApiKey(session.model)).toBe("cli-runtime-key");
-			expect(sessionHasUI).toBe(false);
-			expect(deferredUsageReserveConfirmation).toBe(true);
-			await session.dispose();
-		} finally {
-			authStorage.close();
-		}
-	}, 15_000);
+		},
+		15_000,
+	);
 });

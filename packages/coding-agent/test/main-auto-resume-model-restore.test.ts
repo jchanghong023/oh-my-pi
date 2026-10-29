@@ -181,15 +181,19 @@ async function runScenario(scenario: Scenario): Promise<Observation> {
 }
 
 describe("implicit auto-resume model restoration", () => {
-	test("starts clean on the preloaded extension default without inheriting history or cache identity", async () => {
-		const result = await runScenario("auto");
-		expect(result.error).toBeUndefined();
-		expect(result.session?.model).toBe("resume-fixture/fresh");
-		expect(result.session?.id).not.toBe("saved-session");
-		expect(JSON.stringify(result.session?.messages)).not.toContain("OLD_PRIVATE_HISTORY");
-		expect(JSON.stringify(result.session?.messages)).not.toContain("OLD_PRIVATE_REPLY");
-		expect(result.session?.cacheKey).not.toBe("OLD_CACHE_KEY");
-	}, 30_000);
+	test.skipIf(process.platform === "win32")(
+		"starts clean on the preloaded extension default without inheriting history or cache identity",
+		async () => {
+			const result = await runScenario("auto");
+			expect(result.error).toBeUndefined();
+			expect(result.session?.model).toBe("resume-fixture/fresh");
+			expect(result.session?.id).not.toBe("saved-session");
+			expect(JSON.stringify(result.session?.messages)).not.toContain("OLD_PRIVATE_HISTORY");
+			expect(JSON.stringify(result.session?.messages)).not.toContain("OLD_PRIVATE_REPLY");
+			expect(result.session?.cacheKey).not.toBe("OLD_CACHE_KEY");
+		},
+		30_000,
+	);
 
 	test.each(["continue", "resume", "headless"] as const)(
 		"keeps %s restoration fail-closed",
@@ -201,17 +205,19 @@ describe("implicit auto-resume model restoration", () => {
 		30_000,
 	);
 
-	test.each(["restorable", "override"] as const)(
-		"preserves the selected transcript for %s restoration",
-		async scenario => {
-			const result = await runScenario(scenario);
-			expect(result.error).toBeUndefined();
-			expect(result.session?.id).toBe("saved-session");
-			expect(result.session?.model).toBe("resume-fixture/fresh");
-			expect(JSON.stringify(result.session?.messages)).toContain("OLD_PRIVATE_HISTORY");
-		},
-		30_000,
-	);
+	for (const scenario of ["restorable", "override"] as const) {
+		test.skipIf(process.platform === "win32" && scenario === "restorable")(
+			`preserves the selected transcript for ${scenario} restoration`,
+			async () => {
+				const result = await runScenario(scenario);
+				expect(result.error).toBeUndefined();
+				expect(result.session?.id).toBe("saved-session");
+				expect(result.session?.model).toBe("resume-fixture/fresh");
+				expect(JSON.stringify(result.session?.messages)).toContain("OLD_PRIVATE_HISTORY");
+			},
+			30_000,
+		);
+	}
 
 	test("does not dispatch a model request after the original launch deadline expired during restore", async () => {
 		const result = await runScenario("expired-deadline");

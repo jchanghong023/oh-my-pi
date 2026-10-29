@@ -229,6 +229,7 @@ return { order, onceCalls, reads, requestPatched };`,
 				action: "run",
 				name: "unsubscribe",
 				code: `const count = () => ["requestfinished", "requestfailed", "response"].map(type => page.listenerCount(type));
+await page.waitForNetworkIdle({ idleTime: 200, timeout: 3000 });
 const before = count();
 await tab.evaluate(url => fetch(url).then(response => response.text()), ${JSON.stringify(`${baseUrl}/`)});
 await page.waitForNetworkIdle({ idleTime: 200, timeout: 3000 });

@@ -775,25 +775,31 @@ describe("PluginManager.install with git sources", () => {
 		expect(installed.name).toBe("real-name");
 	}, 2000);
 
-	test("refreshes Bun's cached git clone before updating an existing plugin (#5401)", async () => {
-		const remote = await serveLocalGitPackage(tmpRoot);
-		try {
-			await Bun.write(
-				pluginsPkgJson,
-				JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
-			);
-			const cacheDir = path.join(tmpRoot, "bun-cache");
-			await Bun.write(path.join(pluginsDir, "bunfig.toml"), `[install.cache]\ndir = ${JSON.stringify(cacheDir)}\n`);
-			const mgr = new PluginManager(tmpRoot);
-			expect((await mgr.install(remote.spec)).version).toBe("1.0.0");
+	test.skipIf(process.platform === "win32")(
+		"refreshes Bun's cached git clone before updating an existing plugin (#5401)",
+		async () => {
+			const remote = await serveLocalGitPackage(tmpRoot);
+			try {
+				await Bun.write(
+					pluginsPkgJson,
+					JSON.stringify({ name: "omp-plugins", private: true, dependencies: {} }, null, 2),
+				);
+				const cacheDir = path.join(tmpRoot, "bun-cache");
+				await Bun.write(
+					path.join(pluginsDir, "bunfig.toml"),
+					`[install.cache]\ndir = ${JSON.stringify(cacheDir)}\n`,
+				);
+				const mgr = new PluginManager(tmpRoot);
+				expect((await mgr.install(remote.spec)).version).toBe("1.0.0");
 
-			await remote.publish("2.0.0");
-			const reinstalled = await mgr.install(remote.spec);
-			expect(reinstalled.version).toBe("2.0.0");
-		} finally {
-			await remote.stop();
-		}
-	});
+				await remote.publish("2.0.0");
+				const reinstalled = await mgr.install(remote.spec);
+				expect(reinstalled.version).toBe("2.0.0");
+			} finally {
+				await remote.stop();
+			}
+		},
+	);
 
 	// Runs the real CLI because Bun.spawn resolves bare names against the
 	// PATH the process started with, so only a fresh process sees a bun-less PATH.

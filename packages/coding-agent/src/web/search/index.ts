@@ -53,6 +53,11 @@ export const webSearchSchema = type({
 
 export type SearchToolParams = typeof webSearchSchema.infer;
 
+export type SearchToolResult = AgentToolResult<SearchResultDetails> & {
+	content: Array<{ type: "text"; text: string }>;
+	details: SearchResultDetails;
+};
+
 export interface SearchQueryParams extends SearchToolParams {
 	model?: string;
 }
@@ -189,7 +194,7 @@ async function executeSearch(
 	_toolCallId: string,
 	params: SearchQueryParams,
 	options: ExecuteSearchOptions,
-): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchResultDetails }> {
+): Promise<SearchToolResult> {
 	const { authStorage, sessionId, signal } = options;
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage, undefined, { settings });
 	const pool = roleCandidatePool("web", settings, modelRegistry);
@@ -337,6 +342,7 @@ async function executeSearch(
 			: "No web search model configured.";
 		return {
 			content: [{ type: "text" as const, text: `Error: ${message}` }],
+			isError: true,
 			details: { response: { provider: "none", sources: [] }, error: message },
 		};
 	}
@@ -350,6 +356,7 @@ async function executeSearch(
 
 	return {
 		content: [{ type: "text" as const, text: `Error: ${message}` }],
+		isError: true,
 		details: {
 			response: { provider: failedResponseProvider, sources: [] },
 			error: message,
@@ -373,7 +380,7 @@ export async function runSearchQuery(
 		sessionModel?: Model<Api>;
 		signal?: AbortSignal;
 	} = {},
-): Promise<{ content: Array<{ type: "text"; text: string }>; details: SearchResultDetails }> {
+): Promise<SearchToolResult> {
 	const createdAuthStorage = options.authStorage || options.modelRegistry ? undefined : await discoverAuthStorage();
 	const authStorage = options.authStorage ?? options.modelRegistry?.authStorage ?? createdAuthStorage;
 	if (!authStorage) {

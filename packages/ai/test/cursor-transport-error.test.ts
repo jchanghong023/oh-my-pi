@@ -14,8 +14,7 @@ describe("Cursor transport errors", () => {
 			child.exited,
 		]);
 
-		expect(exitCode).toBe(0);
-		expect(stderr).toBe("");
+		expect(exitCode, stderr).toBe(0);
 		expect(JSON.parse(stdout)).toEqual({
 			eventTypes: ["start", "error"],
 			stopReason: "error",

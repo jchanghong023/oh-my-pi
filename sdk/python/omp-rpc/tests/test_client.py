@@ -50,6 +50,7 @@ FAKE_SERVER = textwrap.dedent(
     import sys
     import threading
     import time
+    from pathlib import Path
 
     # Background-job completions print from a timer thread; keep frames whole.
     print_lock = threading.Lock()
@@ -479,7 +480,7 @@ FAKE_SERVER = textwrap.dedent(
             respond(request_id, "new_session", {"cancelled": False})
         elif command_type in {"open_session", "switch_session"}:
             session_path = command["sessionDir" if command_type == "open_session" else "sessionPath"]
-            if session_path.startswith("/tmp/unavailable") and "provider" not in command:
+            if Path(session_path).name.startswith("unavailable") and "provider" not in command:
                 respond(
                     request_id, command_type, success=False,
                     error="Could not restore model local/missing-model",
@@ -497,7 +498,7 @@ FAKE_SERVER = textwrap.dedent(
                         "cancelled": False,
                         "resumed": True,
                         "sessionId": "resumed-session",
-                        "sessionFile": f"{session_path}/resumed.jsonl",
+                        "sessionFile": str(Path(session_path) / "resumed.jsonl"),
                     },
                 )
         elif command_type == "set_event_filter":
@@ -1493,7 +1494,7 @@ class RpcClientTests(unittest.TestCase):
                 cancelled=False,
                 resumed=True,
                 session_id="resumed-session",
-                session_file="/tmp/host-key/resumed.jsonl",
+                session_file=str(Path("/tmp/host-key") / "resumed.jsonl"),
             ),
         )
 
@@ -1820,7 +1821,7 @@ class RpcClientTests(unittest.TestCase):
             self.assertEqual(stats.tokens.total, 15)
 
             exported = client.export_html("/tmp/custom.html")
-            self.assertEqual(str(exported), "/tmp/custom.html")
+            self.assertEqual(exported, Path("/tmp/custom.html"))
 
             new_session = client.new_session()
             switched = client.switch_session("/tmp/session.jsonl")

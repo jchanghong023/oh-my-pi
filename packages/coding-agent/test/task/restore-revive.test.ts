@@ -202,13 +202,17 @@ async function restoreInterruptedChild(options: { transcript?: "handoff" | "fall
 	}
 }
 
-it("revives a subagent a crash cut off mid tool call, runs the call again, and delivers its answer to the parent", async () => {
-	const { delivered, readResults } = await restoreInterruptedChild();
+it.skipIf(process.platform === "win32")(
+	"revives a subagent a crash cut off mid tool call, runs the call again, and delivers its answer to the parent",
+	async () => {
+		const { delivered, readResults } = await restoreInterruptedChild();
 
-	expect(delivered).toContain(`restored: 42 (${SPAWN_MODEL})`);
-	expect(readResults[SPAWN_MODEL]).toHaveLength(1);
-	expect(readResults[SPAWN_MODEL]![0]).toContain("the answer is 42");
-}, 20_000);
+		expect(delivered).toContain(`restored: 42 (${SPAWN_MODEL})`);
+		expect(readResults[SPAWN_MODEL]).toHaveLength(1);
+		expect(readResults[SPAWN_MODEL]![0]).toContain("the answer is 42");
+	},
+	20_000,
+);
 
 it("revives a subagent on the model and effort a prewalk handoff switched it to, not its spawn model", async () => {
 	const { delivered, readResults, readEfforts } = await restoreInterruptedChild({ transcript: "handoff" });

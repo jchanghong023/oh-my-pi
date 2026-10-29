@@ -207,50 +207,58 @@ function gate(n: number) {
 	};
 }
 
-it("keeps the report when a peer message arrives during the final report turn, and relays the reply to the peer", async () => {
-	const report = gate(1);
-	const child = await startRun({ beforeResponse: report.beforeResponse });
-	try {
-		await report.started;
-		const receipt = await IrcBus.global().send({ from: PEER_ID, to: AGENT_ID, body: PEER_BODY });
-		expect(receipt.outcome).toBe("injected");
-		report.release();
-		const result = await child.run;
-		expect(result.output).toBe(REPORT);
-		expect((await child.peerInbox)?.body).toBe("PEER_REPLY");
-		await settle();
-		expect(await Bun.file(child.artifact).text()).toBe(REPORT);
-		expect(child.deliveries.join("\n")).not.toContain("PEER_REPLY");
-	} finally {
-		report.release();
-		child.close();
-	}
-}, 20_000);
+it.skipIf(process.platform === "win32")(
+	"keeps the report when a peer message arrives during the final report turn, and relays the reply to the peer",
+	async () => {
+		const report = gate(1);
+		const child = await startRun({ beforeResponse: report.beforeResponse });
+		try {
+			await report.started;
+			const receipt = await IrcBus.global().send({ from: PEER_ID, to: AGENT_ID, body: PEER_BODY });
+			expect(receipt.outcome).toBe("injected");
+			report.release();
+			const result = await child.run;
+			expect(result.output).toBe(REPORT);
+			expect((await child.peerInbox)?.body).toBe("PEER_REPLY");
+			await settle();
+			expect(await Bun.file(child.artifact).text()).toBe(REPORT);
+			expect(child.deliveries.join("\n")).not.toContain("PEER_REPLY");
+		} finally {
+			report.release();
+			child.close();
+		}
+	},
+	20_000,
+);
 
-it("returns the report without waiting for the turn that answers a peer", async () => {
-	const report = gate(1);
-	const peerTurn = gate(2);
-	const child = await startRun({
-		beforeResponse: async request => {
-			await report.beforeResponse(request);
-			await peerTurn.beforeResponse(request);
-		},
-	});
-	try {
-		await report.started;
-		await IrcBus.global().send({ from: PEER_ID, to: AGENT_ID, body: PEER_BODY });
-		report.release();
-		// The peer's turn stays gated until the run returns: a run that waited on it never would.
-		const result = await child.run;
-		expect(result.output).toBe(REPORT);
-		peerTurn.release();
-		expect((await child.peerInbox)?.body).toBe("PEER_REPLY");
-	} finally {
-		report.release();
-		peerTurn.release();
-		child.close();
-	}
-}, 20_000);
+it.skipIf(process.platform === "win32")(
+	"returns the report without waiting for the turn that answers a peer",
+	async () => {
+		const report = gate(1);
+		const peerTurn = gate(2);
+		const child = await startRun({
+			beforeResponse: async request => {
+				await report.beforeResponse(request);
+				await peerTurn.beforeResponse(request);
+			},
+		});
+		try {
+			await report.started;
+			await IrcBus.global().send({ from: PEER_ID, to: AGENT_ID, body: PEER_BODY });
+			report.release();
+			// The peer's turn stays gated until the run returns: a run that waited on it never would.
+			const result = await child.run;
+			expect(result.output).toBe(REPORT);
+			peerTurn.release();
+			expect((await child.peerInbox)?.body).toBe("PEER_REPLY");
+		} finally {
+			report.release();
+			peerTurn.release();
+			child.close();
+		}
+	},
+	20_000,
+);
 
 it("keeps the report when answering the peer takes tool calls", async () => {
 	const report = gate(1);

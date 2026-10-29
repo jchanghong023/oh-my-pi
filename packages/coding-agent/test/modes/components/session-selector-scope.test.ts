@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "bun:test";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 
 beforeAll(async () => {
@@ -46,22 +46,21 @@ describe("SessionSelectorComponent scope toggle", () => {
 			},
 		);
 
-		// Folder scope: header says current folder, no foreign cwd column.
-		expect(selector.render(120).join("\n")).toContain("(current folder)");
+		// Folder scope does not include remote sessions.
+		expect(selector.render(120).join("\n")).toContain("Local");
 		expect(selector.render(120).join("\n")).not.toContain("other-project");
 
 		selector.handleInput(TAB);
 		await Bun.sleep(0);
 
 		const rendered = selector.render(120).join("\n");
-		expect(rendered).toContain("(all projects)");
 		expect(rendered).toContain("other-project");
 		expect(loads).toBe(1);
 
 		// Toggling back returns to folder scope without reloading.
 		selector.handleInput(TAB);
 		await Bun.sleep(0);
-		expect(selector.render(120).join("\n")).toContain("(current folder)");
+		expect(selector.render(120).join("\n")).not.toContain("other-project");
 		expect(loads).toBe(1);
 
 		// Re-entering all scope reuses the cached global list.
@@ -91,10 +90,8 @@ describe("SessionSelectorComponent scope toggle", () => {
 		expect(selector.render(120).join("\n")).toContain("/work/repo-wt");
 
 		selector.handleInput(TAB);
-		expect(selector.render(120).join("\n")).toContain("(all projects)");
 		selector.handleInput(TAB);
 		const rendered = selector.render(120).join("\n");
-		expect(rendered).toContain("(current folder)");
 		expect(rendered).toContain("/work/repo-wt");
 	});
 
@@ -136,17 +133,14 @@ describe("SessionSelectorComponent scope toggle", () => {
 		);
 
 		const rendered = selector.render(120).join("\n");
-		// Header stays scoped to the cwd so the user is never silently shown
-		// other projects' sessions just because the current folder is empty.
-		expect(rendered).toContain("(current folder)");
-		expect(rendered).not.toContain("(all projects)");
 		expect(rendered).not.toContain("other-project");
-		expect(rendered).toContain("No sessions in current folder");
+		selector.handleInput(TAB);
+		expect(selector.render(120).join("\n")).toContain("Remote");
 	});
 
 	it("marks forked child sessions in the rendered list", () => {
-		const parent = createSession("root", "Incident", "/work/current");
-		const child = createSession("child", "Incident", "/work/current", parent.path);
+		const parent = createSession("root", "Parent incident", "/work/current");
+		const child = createSession("child", "Child incident", "/work/current", parent.path);
 		const selector = new SessionSelectorComponent(
 			[parent, child],
 			() => {},
@@ -154,10 +148,12 @@ describe("SessionSelectorComponent scope toggle", () => {
 			() => {},
 		);
 
-		const rendered = selector.render(120).join("\n");
-		const forkLines = rendered.split("\n").filter(line => line.includes("fork"));
-
-		expect(forkLines).toHaveLength(1);
-		expect(forkLines[0]).toContain("fork");
+		const lines = selector.render(120).map(line => Bun.stripANSI(line));
+		const parentRow = lines.findIndex(line => line.includes("Parent incident"));
+		const childRow = lines.findIndex(line => line.includes("Child incident"));
+		expect(parentRow).toBeGreaterThanOrEqual(0);
+		expect(childRow).toBeGreaterThanOrEqual(0);
+		expect(lines.slice(childRow, childRow + 4).join("\n")).toContain(theme.icon.branch);
+		expect(lines.slice(parentRow, parentRow + 4).join("\n")).not.toContain(theme.icon.branch);
 	});
 });

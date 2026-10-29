@@ -400,7 +400,7 @@ export const cfgTuiCompleteScrollback = register({
 	default: false,
 	ui: {
 		tab: "appearance",
-		group: "Display",
+		group: "显示",
 		label: "Complete Scrollback",
 		description:
 			"Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback; when it shrinks, blank rows sit between the transcript and the input until new output fills them",
@@ -724,7 +724,7 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 	default: 0,
 	ui: {
 		tab: "appearance",
-		group: "Display",
+		group: "显示",
 		label: "Advisor Collapsed Lines",
 		description:
 			"Maximum note lines a collapsed advisor card shows below its header (0 keeps the full preview; expand with the tool-output toggle)",

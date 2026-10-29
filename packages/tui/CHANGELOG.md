@@ -14,7 +14,8 @@
 
 ### Changed
 
-- Compact Bash errors show one command row and the last two nonblank output rows; existing cards, error status, and complete expanded output remain available.
+- Background Bash outcomes appear once when the original card already shows the result; unmatched failures, cancellations, and independent diagnostics remain visible, with complete wait details available on expansion.
+- Compact Bash failures use a neutral card with a highlighted failure status, keep diagnostics ahead of trailing Bun exit wrappers, and leave full output and technical details available when expanded.
 - In offline Unicode mode, use distinct basic symbols for clear, extension, guide, repair, quit, token-count, and Hook icons missing from older terminal fonts; preserve other icons, presets, and explicit theme overrides.
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
 - Compact tools retain the last two calls per continuous run at their original positions, with a dim call-total summary only above two calls; internal invocation errors stay hidden until explicitly expanded, while execution failures, approvals, and input requests keep original feedback.
@@ -34,9 +35,10 @@
 
 ### Fixed
 
+- Compact transcript replay hides historical tool errors while keeping live failure feedback and detailed history available.
 - Keep both compact Bash error output rows visible on native terminals and for device-dispatched commands.
 - Preserve upstream input anchoring and Complete Scrollback behavior in compact mode; clean mode also hides live thinking titles and expandable native thoughts.
-- Keep failed or cancelled task results, consumed peer messages, and mixed background or supervised-process failure receipts visible outside compact preview limits.
+- Keep failed or cancelled task results, consumed peer messages, and supervised-process failure receipts visible outside compact preview limits.
 - Retain original cards for file-URL writes, classify nested device operations by their real targets, and safely display incomplete or malformed Eval titles.
 - Show corrected read targets and conflict warnings consistently across ANSI and native views, including calls with explicit intent.
 - Keep selected `/jobs` rows and their details reachable in tall task trees, and keep autocomplete selection visible in short terminals without accepting hidden candidates.

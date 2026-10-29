@@ -140,6 +140,7 @@ describe("RewindSelectorComponent", () => {
 			// The cutoff turn keeps its folded tool result after the reload.
 			selector.handleInput(DOWN);
 			selector.handleInput(DOWN);
+			selector.handleInput("\x0f"); // Expand tool output.
 			expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("file.txt");
 			selector.handleInput(ENTER);
 

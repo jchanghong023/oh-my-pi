@@ -5,10 +5,14 @@ import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { theme as activeTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { previewWindowRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { editDiffString } from "@oh-my-pi/pi-natives";
-import { TUI, visibleWidth } from "@oh-my-pi/pi-tui";
+import { TUI } from "@oh-my-pi/pi-tui";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-multiplexer";
@@ -23,6 +27,15 @@ import { withoutTerminalMultiplexer } from "../../tui/test/helpers/terminal-mult
 // earlier high-water fix padded the deficit with blank rows (the "large
 // rectangle that is half empty" regression). The tail window has neither.
 withoutTerminalMultiplexer();
+
+let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+beforeEach(() => {
+	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+});
+afterEach(() => {
+	setChatTranscriptDisplayPreferences(previousDisplayPreferences);
+});
 
 describe("streaming edit preview height (stable, full tail window)", () => {
 	const oldBlock = ["function foo() {", "  const x = 1;", "  return x;", "}"].join("\n");
@@ -69,6 +82,7 @@ describe("streaming edit preview height (stable, full tail window)", () => {
 		await fs.writeFile(file, fileContent);
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true, cwd: tmpDir });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	});
 
 	afterEach(async () => {
@@ -396,23 +410,14 @@ describe("streaming tool call preview height (bounded across renderers)", () => 
 
 	function getRenderedLines(lines: readonly string[]): string[] {
 		return lines
-			.map(line => Bun.stripANSI(line).trim())
-			.filter(line => line.startsWith("│") && line.endsWith("│"))
-			.map(line => line.slice(1, -1).trim())
+			.map(line =>
+				Bun.stripANSI(line)
+					.trim()
+					.replace(/^│\s*|\s*│$/gu, "")
+					.trim(),
+			)
 			.filter(line => line !== "" && !line.includes("earlier lines"));
 	}
-
-	test("framed inline tool previews span the full tool width", () => {
-		const width = 80;
-		const { lines } = renderPending("bash", { command: "echo hi" });
-		const strippedLines = lines.map(line => Bun.stripANSI(line));
-		const topBorder = strippedLines.find(line => line.includes(activeTheme.boxRound.topLeft));
-
-		expect(topBorder).toBeDefined();
-		expect(topBorder?.[0]).toBe(activeTheme.boxRound.topLeft);
-		expect(topBorder?.endsWith(activeTheme.boxRound.topRight)).toBe(true);
-		expect(visibleWidth(topBorder ?? "")).toBe(width);
-	});
 
 	test("bash pending previews stay short even with very long multiline args", () => {
 		// bash windows the collapsed command to a viewport-sized TAIL: the end

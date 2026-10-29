@@ -389,18 +389,22 @@ describe("TodoTool operations", () => {
 		expect(allTasks.map(task => task.status)).toEqual(["completed", "completed", "in_progress"]);
 	});
 
-	it("removes all tasks when rm omits task and phase", async () => {
-		const tool = new TodoTool(createSession());
-		await tool.execute("call-1", {
+	it.each(["done", "drop", "rm"] as const)("rejects %s without a target and preserves all tasks", async op => {
+		const session = createSession();
+		const tool = new TodoTool(session);
+		const initialized = await tool.execute("init", {
 			op: "init",
-			list: [{ phase: "Work", items: ["First", "Second"] }],
+			list: [
+				{ phase: "Work", items: ["First", "Second"] },
+				{ phase: "Later", items: ["Third"] },
+			],
 		});
 
-		const result = await tool.execute("call-2", { op: "rm" });
-		expect(result.details?.phases[0]?.tasks).toEqual([]);
-		const summary = result.content.find(part => part.type === "text");
-		if (summary?.type !== "text") throw new Error("Expected text summary");
-		expect(summary.text).toContain("Todo list cleared.");
+		const result = await tool.execute("missing-target", { op });
+		expect(result.isError).toBe(true);
+		expect(result.details?.phases).toEqual(initialized.details?.phases);
+		expect(session.getTodoPhases?.()).toEqual(initialized.details?.phases);
+		expect(result.details?.completedTasks).toBeUndefined();
 	});
 
 	it("drops all tasks in a phase", async () => {

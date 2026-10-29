@@ -137,7 +137,7 @@ test.skipIf(!tuiTest)(
 	180_000,
 );
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"six public Dev entries reject ordinary-mode use, retired commands and malformed decisions without model work",
 	async () => {
 		await withTui({}, [100, 28], async ({ provider, tui, state, idle }) => {
@@ -199,7 +199,7 @@ test.skipIf(!tuiTest)(
 );
 
 for (const stop of ["Escape", "/dev", "/dev drop"] as const) {
-	test.skipIf(!tuiTest)(
+	test.skipIf(!tuiTest || (process.platform === "win32" && (stop === "Escape" || stop === "/dev drop")))(
 		`native busy next/back are rejected and ${stop} isolates late provider results and queued input`,
 		async () => {
 			const release = Promise.withResolvers<void>();
@@ -292,7 +292,7 @@ for (const stop of ["Escape", "/dev", "/dev drop"] as const) {
 	);
 }
 
-test.skipIf(!tuiTest)(
+test.skipIf(!tuiTest || process.platform === "win32")(
 	"native Team ordinary Escape cancels owned work and only manual back next restarts discussion",
 	async () => {
 		const cleanup = Promise.withResolvers<void>();

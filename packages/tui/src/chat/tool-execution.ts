@@ -17,6 +17,7 @@ import {
 	type NativeToolView,
 	type RenderResultContextOptions,
 	type ToolActivitySummary,
+	type ToolRenderResult,
 	type ToolRenderer,
 	toolRenderers,
 } from "../tools/index";
@@ -40,7 +41,7 @@ import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from 
 import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
-import { isWaitingPollDetails } from "../tools/wait";
+import { isDuplicateOnlyWait, isWaitingPollDetails, type CoordinationDetails } from "../tools/wait";
 import {
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatStatusIcon,
@@ -87,16 +88,6 @@ function hasAppliedFileChange(details: unknown): boolean {
 		(typeof details.oldText === "string" &&
 			typeof details.newText === "string" &&
 			details.oldText !== details.newText)
-	);
-}
-
-function hasCompactExecutionFeedback(details: unknown): boolean {
-	return (
-		isRecord(details) &&
-		((typeof details.exitCode === "number" && details.exitCode !== 0) ||
-			details.timedOut === true ||
-			hasAppliedFileChange(details) ||
-			(Array.isArray(details.conflictChanges) && details.conflictChanges.length > 0))
 	);
 }
 
@@ -319,6 +310,17 @@ export function settleWithJobFrame(component: ToolExecutionHandle, frame: ToolRe
 	component.updateResult({ ...frame, isError: state === "failed" }, false, toolCallId);
 }
 
+/** Terminal Bash cards already present in this transcript, keyed by their actual job identity. */
+export function settledBashCards(children: readonly Component[]): Map<string, string> {
+	const jobs = new Map<string, string>();
+	for (const child of children) {
+		if (!(child instanceof ToolExecutionComponent)) continue;
+		const job = child.settledBashJob();
+		if (job) jobs.set(job.id, job.state);
+	}
+	return jobs;
+}
+
 /** Card tone per status when the renderer doesn't choose one; settled cards stay neutral. */
 const NATIVE_STATUS_TONE: Record<TspCardStatus, TspTone | undefined> = {
 	pending: "pending",
@@ -417,6 +419,7 @@ export class ToolExecutionComponent extends Container {
 	#compactIntent: string | undefined;
 	#showImages: boolean;
 	#isPartial = true;
+	#historicalResult = false;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
 	#parkedBackground = false;
@@ -515,6 +518,7 @@ export class ToolExecutionComponent extends Container {
 		isPartial: boolean;
 		argsComplete?: boolean;
 		executionStarted?: boolean;
+		settledBashJobs?: ReadonlyMap<string, string>;
 		renderContext?: Record<string, unknown>;
 		/** Live: read at render time, so a ticking spinner advances it. */
 		readonly elapsedMs?: number;
@@ -689,7 +693,24 @@ export class ToolExecutionComponent extends Container {
 		return result !== undefined && !this.#isPartial && (result.isError === true || result.details != null);
 	}
 
-	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string): void {
+	/** Only a terminal frame on the original Bash card can replace another job row. */
+	settledBashJob(): { id: string; state: string } | undefined {
+		if (this.#toolName !== "bash" || !isRecord(this.#rawDetails) || !isRecord(this.#rawDetails.async)) return;
+		const { jobId, state } = this.#rawDetails.async;
+		if (typeof jobId !== "string" || !jobId || !isSettledJobFrame(this.#rawDetails)) return;
+		if (this.#isPartial && !this.#sealed) return;
+		if (displayPreferences.compactToolActivity && !this.hasCompactCriticalFeedback()) return;
+		if (!this.#result?.content.some(part => part.type === "text" && part.text?.trim())) return;
+		return { id: jobId, state: state as string };
+	}
+
+	setSettledBashJobs(jobs: () => ReadonlyMap<string, string>): void {
+		Object.defineProperty(this.#renderState, "settledBashJobs", { get: jobs, configurable: true });
+	}
+
+	// Replay only suppresses the generic error override; later live frames regain it.
+	// Renderer-specific critical feedback and input requests remain visible.
+	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string, historical = false): void {
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
@@ -700,6 +721,7 @@ export class ToolExecutionComponent extends Container {
 		// Renderers receive sanitized details for display; raw paths are available
 		// separately for links and media through the built-in render context.
 		const details = sanitizeTextDeep(result.details);
+		this.#historicalResult = historical;
 		this.#result = details === result.details ? result : { ...result, details };
 		this.#resultVersion++;
 		this.#blockVersion++;
@@ -957,16 +979,13 @@ export class ToolExecutionComponent extends Container {
 			return true;
 		}
 		if (!this.#result) return false;
+		if (this.#result.isError && !this.#historicalResult && !this.#isBenignSkip()) return true;
 		if (this.#renderer?.hasCompactCriticalFeedback?.(this.#result)) return true;
 		const details = this.#result.details;
-		if (this.#result.isError && hasCompactExecutionFeedback(details)) return true;
 		const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
 		if (dispatch?.mode !== "execute" || typeof dispatch.tool !== "string") return false;
 		const innerRenderer = toolRenderers[dispatch.tool];
-		return (
-			(this.#result.isError === true && hasCompactExecutionFeedback(dispatch.inner)) ||
-			innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true
-		);
+		return innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true;
 	}
 
 	isCompactWriteCall(): boolean {
@@ -1195,6 +1214,13 @@ export class ToolExecutionComponent extends Container {
 	 * mounted so toggling it is one prop change.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
+		if (
+			this.#toolName === "wait" &&
+			!this.#expanded &&
+			this.#result &&
+			isDuplicateOnlyWait(this.#result as ToolRenderResult<CoordinationDetails>, this.#renderState.settledBashJobs)
+		)
+			return EMPTY_NODE;
 		if (this.#toolName === "wait" && this.#isBenignSkip()) return EMPTY_NODE;
 		const dataFirst = cx?.supports("tool") === true;
 		const host: NativeHostKinds = { media: cx?.supports("media") === true, json: cx?.supports("json") === true };
@@ -1213,6 +1239,7 @@ export class ToolExecutionComponent extends Container {
 			this.#toolActivityVisible,
 			this.#compactToolActivity,
 			displayPreferences.compactToolActivity,
+			this.#renderState.settledBashJobs ? JSON.stringify([...this.#renderState.settledBashJobs]) : undefined,
 			cx?.cols,
 			host.media,
 			host.json,
@@ -1542,6 +1569,7 @@ export class ToolExecutionComponent extends Container {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			compactToolActivity: displayPreferences.compactToolActivity,
+			settledBashJobs: this.#renderState.settledBashJobs,
 			argsComplete: this.#argsComplete,
 			executionStarted: this.#executionStarted,
 			elapsedMs: this.#elapsedMs(status),
@@ -1726,7 +1754,7 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
-			if (this.#result?.isError) return [];
+			if (this.#result?.isError && !this.#isBenignSkip()) return [];
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);

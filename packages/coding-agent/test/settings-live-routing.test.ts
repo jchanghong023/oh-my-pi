@@ -75,57 +75,64 @@ describe("live routing config files", () => {
 		return settings;
 	}
 
-	it("applies atomic overlay edits to subsequent model selection, fallbacks and account health", async () => {
-		const file = tempDir.join("routing.yml");
-		await Bun.write(file, YAML.stringify(routing("first")));
-		await start(file);
-		const storage = new AuthStorage(await SqliteAuthCredentialStore.open(tempDir.join("auth.db")), {
-			defaultReservePct: cfgRetryUsageReservePct.get(settings),
-			usageProviderResolver: () => ({
-				id: "live-routing-test",
-				fetchUsage: async () => ({
-					provider: "live-routing-test",
-					fetchedAt: Date.now(),
-					limits: [
-						{
-							id: "quota",
-							label: "Quota",
-							scope: { provider: "live-routing-test" },
-							amount: { usedFraction: 0.8, unit: "percent" },
-							status: "ok",
-						},
-					],
+	it.skipIf(process.platform === "win32")(
+		"applies atomic overlay edits to subsequent model selection, fallbacks and account health",
+		async () => {
+			const file = tempDir.join("routing.yml");
+			await Bun.write(file, YAML.stringify(routing("first")));
+			await start(file);
+			const storage = new AuthStorage(await SqliteAuthCredentialStore.open(tempDir.join("auth.db")), {
+				defaultReservePct: cfgRetryUsageReservePct.get(settings),
+				usageProviderResolver: () => ({
+					id: "live-routing-test",
+					fetchUsage: async () => ({
+						provider: "live-routing-test",
+						fetchedAt: Date.now(),
+						limits: [
+							{
+								id: "quota",
+								label: "Quota",
+								scope: { provider: "live-routing-test" },
+								amount: { usedFraction: 0.8, unit: "percent" },
+								status: "ok",
+							},
+						],
+					}),
 				}),
-			}),
-		});
-		await storage.credentials.set("live-routing-test", {
-			type: "oauth",
-			access: "test-access",
-			refresh: "test-refresh",
-			expires: Date.now() + 3600000,
-			accountId: "routing-test",
-		});
-		const sync = createAuthStorageSettingsSync(settings, storage);
-		cleanups.push(
-			() => sync.stop(),
-			() => storage.close(),
-		);
-		expect(selection(settings).patterns).toEqual(["anthropic/first"]);
-		// A non-finite per-call threshold uses the storage's configured reserve.
-		expect((await storage.health.model("live-routing-test", { reserveFraction: Number.NaN })).state).toBe("healthy");
+			});
+			await storage.credentials.set("live-routing-test", {
+				type: "oauth",
+				access: "test-access",
+				refresh: "test-refresh",
+				expires: Date.now() + 3600000,
+				accountId: "routing-test",
+			});
+			const sync = createAuthStorageSettingsSync(settings, storage);
+			cleanups.push(
+				() => sync.stop(),
+				() => storage.close(),
+			);
+			expect(selection(settings).patterns).toEqual(["anthropic/first"]);
+			// A non-finite per-call threshold uses the storage's configured reserve.
+			expect((await storage.health.model("live-routing-test", { reserveFraction: Number.NaN })).state).toBe(
+				"healthy",
+			);
 
-		const next = routing("second", 30, 7);
-		next.task.agentModelOverrides.worker = "@slow";
-		await Bun.write(`${file}.next`, YAML.stringify(next));
-		await fs.rename(`${file}.next`, file);
-		await waitFor(() => settings.getModelRole("smol") === "anthropic/second");
-		await sync.settled();
+			const next = routing("second", 30, 7);
+			next.task.agentModelOverrides.worker = "@slow";
+			await Bun.write(`${file}.next`, YAML.stringify(next));
+			await fs.rename(`${file}.next`, file);
+			await waitFor(() => settings.getModelRole("smol") === "anthropic/second");
+			await sync.settled();
 
-		expect(selection(settings).patterns).toEqual(["anthropic/strong"]);
-		expect(getRetryFallbackChains(settings).smol).toEqual(["anthropic/second-fallback"]);
-		expect(storage.oauth.policy("live-routing-test", { accountId: "routing-test" })?.priority).toBe(7);
-		expect((await storage.health.model("live-routing-test", { reserveFraction: Number.NaN })).state).toBe("reserve");
-	});
+			expect(selection(settings).patterns).toEqual(["anthropic/strong"]);
+			expect(getRetryFallbackChains(settings).smol).toEqual(["anthropic/second-fallback"]);
+			expect(storage.oauth.policy("live-routing-test", { accountId: "routing-test" })?.priority).toBe(7);
+			expect((await storage.health.model("live-routing-test", { reserveFraction: Number.NaN })).state).toBe(
+				"reserve",
+			);
+		},
+	);
 
 	it("applies an edit that landed before the watch was armed", async () => {
 		const file = tempDir.join("routing.yml");

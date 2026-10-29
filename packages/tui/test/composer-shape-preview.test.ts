@@ -3,6 +3,7 @@ import { renderComposerShapePreview } from "../src/overlays/composer-shape-previ
 import { getComposerShapeOptions, installExtensionComposerShape } from "../src/overlays/composer-shape-registry";
 import { initTheme, setTheme } from "../src/theme/theme";
 import { type ComposerStyle, visibleWidth } from "../src/index";
+import { VirtualTerminal } from "./virtual-terminal";
 
 beforeAll(async () => {
 	await initTheme();
@@ -14,9 +15,16 @@ describe("composer shape preview", () => {
 		// still emit an explicit contrast foreground instead of ESC[39m, matching
 		// the live editor so the preview stays readable on a light terminal.
 		await setTheme("light");
-		const box = renderComposerShapePreview("box", 80).join("\n");
-		expect(box).not.toContain("\x1b[39mAsk anything");
-		expect(box).toMatch(/\x1b\[38[;0-9]*mAsk anything/);
+		const lines = renderComposerShapePreview("box", 80);
+		const term = new VirtualTerminal(80, 5);
+		term.write(lines.join("\r\n"));
+		// The box's content starts after its border and padding, regardless of
+		// the localized preview text. Inspect the actual terminal cell, not SGR
+		// text adjacent to a particular translation.
+		const contentColumn = 3;
+		expect(Array.from(Bun.stripANSI(term.getViewport()[1] ?? ""))[contentColumn]?.trim()).toBeTruthy();
+		expect(term.getViewportRowForegroundColumns(1)).toContain(contentColumn);
+		expect(term.getViewportRowBackgroundColumns(1)).not.toContain(contentColumn);
 	});
 
 	it("borrows status rows from the live status source per shape layout", async () => {
@@ -102,15 +110,9 @@ describe("composer shape preview", () => {
 		});
 
 		try {
-			expect(getComposerShapeOptions().at(-1)).toEqual({
-				value: "extension-dock",
-				label: "Extension Dock",
-				description: "Custom extension composer",
-			});
-			const rendered = renderComposerShapePreview("extension-dock", 76).join("\n");
-			expect(rendered).toContain("=".repeat(76));
-			expect(rendered).toContain("EXT ");
-			expect(rendered).toContain("Ask anything");
+			expect(getComposerShapeOptions().some(option => option.value === style.id)).toBe(true);
+			const rendered = renderComposerShapePreview("extension-dock", 76);
+			expect(Bun.stripANSI(rendered[0]!)).toBe("=".repeat(76));
 		} finally {
 			dispose();
 		}

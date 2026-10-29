@@ -52,7 +52,7 @@ describe("security feature gate", () => {
 	});
 
 	test("restricted security sessions retain read-only LSP access", async () => {
-		const restricted = Settings.isolated();
+		const restricted = Settings.isolated({ "lsp.enabled": true });
 		const session = {
 			...toolSession(restricted),
 			enableLsp: true,

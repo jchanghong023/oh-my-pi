@@ -499,7 +499,7 @@ describe("AgentSession model persistence", () => {
 			kind: "process_exit",
 			recordedAt: "2026-07-11T02:20:08.800Z",
 		});
-		await sessionManager.flush();
+		await sessionManager.close();
 		const sessionFile = sessionManager.getSessionFile();
 		if (!sessionFile) throw new Error("Expected interrupted session file");
 
@@ -770,7 +770,7 @@ describe("AgentSession model persistence", () => {
 				timestamp: Date.now(),
 			});
 			appendFrameArchive(target, firstKeptEntryId);
-			await target.flush();
+			await target.close();
 			const targetFile = target.getSessionFile();
 			if (!targetFile) throw new Error("Expected target session file");
 			session = new AgentSession({

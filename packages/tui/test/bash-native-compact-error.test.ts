@@ -43,4 +43,37 @@ describe("native compact Bash failures", () => {
 		expect(expanded?.k).toBe("ansi");
 		expect(expanded?.p).toMatchObject({ text: output.trimEnd() });
 	});
+
+	it("keeps diagnostics ahead of trailing Bun wrappers and preserves the full output when expanded", () => {
+		const output =
+			'diagnostic one\ndiagnostic two\nerror: script "test" exited with code 1\nerror: script "check" exited with code 1';
+		const result = {
+			content: [{ type: "text", text: output }],
+			details: { exitCode: 1, wallTimeMs: 500 },
+			isError: true,
+		};
+		const options = { expanded: false, isPartial: false, compactToolActivity: true };
+		const view = bashToolRenderer.describeResult(result, options, { command: "bun run check" });
+		const box = nodes(view.body)[0];
+		expect((box?.p as { tone?: string } | undefined)?.tone).toBeUndefined();
+		expect(view.tool?.exit).toBe(1);
+		const compact = JSON.stringify(outputSection(view));
+		expect(compact).toContain("diagnostic one");
+		expect(compact).toContain("diagnostic two");
+		expect(compact).not.toContain("exited with code");
+		const expanded = outputSection(
+			bashToolRenderer.describeResult(result, { ...options, expanded: true }, { command: "bun run check" }),
+		);
+		expect(expanded?.p).toMatchObject({ text: output });
+	});
+
+	it("retains a Bun wrapper when it is the only available output", () => {
+		const output = 'error: script "test" exited with code 1';
+		const view = bashToolRenderer.describeResult(
+			{ content: [{ type: "text", text: output }], details: { exitCode: 1 }, isError: true },
+			{ expanded: false, isPartial: false, compactToolActivity: true },
+			{ command: "bun test" },
+		);
+		expect(JSON.stringify(outputSection(view))).toContain("exited with code 1");
+	});
 });

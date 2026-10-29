@@ -549,17 +549,54 @@ export class EditTool implements AgentTool<TInput> {
 		}
 		const editSession = open.native;
 		const batch = getLspBatchRequest(context?.toolCall);
+		const committedPaths: string[] = [];
+		let uncertainPaths: string[] = [];
+		const failureResult = (message: string, errorKind?: string): AgentToolResult<EditToolDetails, TInput> => {
+			const lines = [message];
+			if (committedPaths.length)
+				lines.push(`Already committed: ${committedPaths.map(p => JSON.stringify(p)).join(", ")}`);
+			if (uncertainPaths.length)
+				lines.push(`May have changed: ${uncertainPaths.map(p => JSON.stringify(p)).join(", ")}`);
+			if (committedPaths.length || uncertainPaths.length) {
+				lines.push(
+					"Changes were not rolled back. Read these paths before retrying; do not replay the original edit blindly.",
+				);
+			}
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: { diff: "", errorKind, committedPaths, uncertainPaths },
+				isError: true,
+			};
+		};
 		let outcome;
 		try {
 			outcome = await editSession.apply(
 				{ lspBatchId: batch?.id, lspFlush: batch?.flush ?? false },
-				(_error, request) => this.#write(request, signal),
+				async (_error, request) => {
+					uncertainPaths = [request.displayPath];
+					if (request.moveTo) uncertainPaths.push(path.relative(this.session.cwd, request.moveTo));
+					const response = await this.#write(request, signal);
+					committedPaths.push(...uncertainPaths);
+					uncertainPaths = [];
+					return response;
+				},
 			);
 			if (outcome.isError && batch?.flush) {
 				await flushLspWritethroughBatch(batch.id, this.session.cwd, signal);
 			}
 		} catch (error) {
-			if (batch?.flush) await flushLspWritethroughBatch(batch.id, this.session.cwd, signal);
+			if (batch?.flush) {
+				try {
+					await flushLspWritethroughBatch(batch.id, this.session.cwd, signal);
+				} catch (flushError) {
+					logger.warn("LSP flush failed after edit failure", {
+						error: flushError instanceof Error ? flushError.message : String(flushError),
+					});
+				}
+			}
+			if (committedPaths.length || uncertainPaths.length) {
+				return failureResult(error instanceof Error ? error.message : String(error));
+			}
 			throw error;
 		} finally {
 			editSession.close();
@@ -568,11 +605,14 @@ export class EditTool implements AgentTool<TInput> {
 		}
 
 		if (outcome.isError) {
-			return {
-				content: [{ type: "text", text: outcome.text }],
-				details: { diff: "", errorKind: outcome.errorKind },
-				isError: true,
-			};
+			return failureResult(
+				outcome.text === "No files were modified." && this.mode === "patch"
+					? `${outcome.text} The edits array must contain at least one operation.`
+					: outcome.text === "No files were modified." && this.mode === "apply_patch"
+						? `${outcome.text} The patch must contain at least one Add File, Update File, or Delete File section.`
+						: outcome.text,
+				outcome.errorKind,
+			);
 		}
 
 		const details = aggregateDetails(outcome.files, this.mode);

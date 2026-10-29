@@ -87,6 +87,21 @@ Build invalidation is bounded: editing roboomp Python touches only the
 runtime layer; editing pi source rebuilds `oh-my-pi/pi:dev`, which
 roboomp's `Dockerfile.robomp` extends via `FROM ${PI_BASE}`.
 
+### Local Python tests
+
+Robomp targets POSIX, not native Windows (its cache uses `fcntl.flock`).
+On Windows run the suites in a Linux environment such as WSL. From the
+monorepo root, install both local packages and the robomp development
+dependencies into the Python interpreter used by the test runner:
+
+```bash
+python -m pip install -e sdk/python/omp-rpc -e "python/robomp[dev]"
+bun scripts/test-report-py.ts
+```
+
+The ordinary suites do not require a live model or GitHub service. The
+separate `integration` runner opts into the external smoke test.
+
 ### Public URL
 
 roboomp does not ship a tunnel. Cloudflare, smee, ngrok are all fine. The
@@ -153,13 +168,16 @@ lifecycle commands (`robomp:dev`, `robomp:build`, `robomp:up`, `robomp:down`,
 ## Tests
 
 ```bash
-pytest -x tests/                              # unit suite, no network
-ROBOMP_INTEGRATION=1 pytest -x tests/test_worker_smoke.py
+bun run robomp:install                  # installs SDK and robomp development dependencies
+bun run test:py                         # complete ordinary SDK and robomp suites, every run
+bun run robomp:test:integration         # explicit full integration smoke test
 ```
 
-The integration test spawns a real `omp --mode rpc` against an
-`httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on
-`PATH`. `bun run test:py` runs the unit suite.
+Every ordinary run executes both complete suites, including inside `fulltest`.
+There is no changed-test selection or reuse of prior test results; the manual CI
+workflow builds and packages without running tests. The integration test is never
+enabled by the ordinary runner; it spawns a real `omp --mode rpc` against an
+`httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on `PATH`.
 
 ## Security posture
 

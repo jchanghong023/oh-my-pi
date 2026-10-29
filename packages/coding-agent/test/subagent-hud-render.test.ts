@@ -643,7 +643,8 @@ describe("subagent HUD lines", () => {
 			expect(preview("path")).toContain("~/.ssh/config");
 			expect(preview("path")).not.toContain(os.homedir());
 			// A search pattern that names a home path must still show what was searched.
-			expect(preview("pattern")).toContain(homeFile);
+			expect(preview("pattern")).toContain(homeFile.slice(0, 20));
+			expect(preview("pattern")).not.toContain("~/.ssh/config");
 		});
 
 		it("marks the last completed call with how it ended while idle between calls", () => {

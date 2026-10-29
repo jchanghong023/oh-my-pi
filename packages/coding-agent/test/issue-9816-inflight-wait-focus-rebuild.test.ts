@@ -11,12 +11,16 @@
  * focus blackout is authoritative in the rebuilt transcript; a later event is
  * delivered through the newly installed subscription.
  */
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -315,6 +319,15 @@ function createFixture(main = makeSession([danglingWait], true)) {
 	return { ctx, focus, main };
 }
 
+function useDetailedDisplay(): void {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
+}
+
 beforeAll(async () => {
 	resetSettingsForTest();
 	await Settings.init({ inMemory: true });
@@ -326,6 +339,8 @@ afterAll(() => {
 });
 
 describe("#9816 focus blackout across an in-flight wait", () => {
+	useDetailedDisplay();
+
 	it("drains a lost completion into the transcript before rebuilding the main session", async () => {
 		const { ctx, focus, main } = createFixture();
 		await ctx.renderInitialMessages();
@@ -351,6 +366,8 @@ describe("#9816 focus blackout across an in-flight wait", () => {
 });
 
 describe("#10446 task progress across a focus rebuild", () => {
+	useDetailedDisplay();
+
 	it("restores the latest in-flight task board after returning to main", async () => {
 		const main = makeSession([danglingTask], true);
 		const fixture = createFixture(main);
@@ -371,6 +388,8 @@ describe("#10446 task progress across a focus rebuild", () => {
 });
 
 describe("#10447 persisted background task board across a focus rebuild", () => {
+	useDetailedDisplay();
+
 	it("keeps a returned detached task parked so cached and later progress land after return", async () => {
 		// Detached task: its call already returned an async.state "running" result
 		// (persisted), and the main session is idle while the job keeps streaming.
@@ -422,6 +441,8 @@ describe("#10447 persisted background task board across a focus rebuild", () => 
 });
 
 describe("live Cursor focus recovery without another delta", () => {
+	useDetailedDisplay();
+
 	const paused: AssistantMessage = {
 		role: "assistant",
 		content: [

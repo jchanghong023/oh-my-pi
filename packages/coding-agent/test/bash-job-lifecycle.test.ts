@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { AsyncJobManager } from "../src/async";
 import { Settings } from "../src/config/settings";
 import type { ToolSession } from "../src/tools";
@@ -32,6 +33,32 @@ beforeEach(async () => {
 afterEach(async () => {
 	await manager.dispose();
 	await fs.rm(cwd, { recursive: true, force: true });
+});
+
+it("rejects unnamed readiness and async PTY before executing commands", async () => {
+	const marker = path.join(cwd, "should-not-exist");
+	const command = "printf side-effect > should-not-exist";
+	for (const { options, message } of [
+		{ options: { ready: { log: "ready" } }, message: "ready requires a service name" },
+		{ options: { name: " ", ready: { port: 12345 } }, message: "ready requires a service name" },
+		{ options: { async: true, pty: true }, message: "Async bash does not support pty" },
+	]) {
+		const execution = tool.execute("invalid-mode", { command, ...options });
+		await expect(execution).rejects.toBeInstanceOf(ToolError);
+		await expect(execution).rejects.toThrow(message);
+		expect(await Bun.file(marker).exists()).toBe(false);
+	}
+});
+
+it("keeps empty readiness placeholders as a plain command", async () => {
+	await tool.execute("empty-ready", {
+		command: "printf executed > placeholder-marker",
+		name: " ",
+		ready: { log: " ", port: 0 },
+		async: false,
+		pty: false,
+	});
+	expect(await Bun.file(path.join(cwd, "placeholder-marker")).text()).toBe("executed");
 });
 
 it.skipIf(process.platform === "win32")(

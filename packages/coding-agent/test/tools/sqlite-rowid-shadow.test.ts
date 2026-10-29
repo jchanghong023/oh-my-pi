@@ -72,4 +72,30 @@ describe("SQLite row selectors with shadowed rowid names", () => {
 		);
 		expect(db.query("SELECT body FROM records ORDER BY body").all()).toEqual([{ body: "first" }, { body: "second" }]);
 	});
+	it("gives read-only recovery guidance for composite-key row selectors", async () => {
+		db.run(`CREATE TABLE pairs (a INTEGER, b INTEGER, body TEXT, PRIMARY KEY (a, b));
+			CREATE TABLE pairs_without_rowid (a INTEGER, b INTEGER, body TEXT, PRIMARY KEY (a, b)) WITHOUT ROWID;
+			INSERT INTO pairs VALUES (1, 2, 'first');
+			INSERT INTO pairs_without_rowid VALUES (1, 2, 'second')`);
+		const read = new ReadTool(session);
+		const write = new WriteTool(session);
+		for (const table of ["pairs", "pairs_without_rowid"]) {
+			const rowPath = `${file}:${table}:1`;
+			await expect(read.execute("read", { path: rowPath })).rejects.toThrow(
+				`SQLite table '${table}' has a composite primary key; use '?where=' instead`,
+			);
+			const result = await read.execute("query", { path: `${file}:${table}?where=a=1 AND b=2` });
+			expect(result.content).toEqual(
+				expect.arrayContaining([expect.objectContaining({ text: expect.stringContaining("body") })]),
+			);
+			for (const content of ['{body: "changed"}', ""]) {
+				await expect(write.execute("write", { path: rowPath, content })).rejects.toThrow(
+					`SQLite table '${table}' has a composite primary key; row-key writes are not supported`,
+				);
+			}
+			expect(db.query(`SELECT body FROM ${table}`).all()).toEqual([
+				{ body: table === "pairs" ? "first" : "second" },
+			]);
+		}
+	});
 });

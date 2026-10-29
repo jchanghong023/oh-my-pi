@@ -18,6 +18,7 @@ import { taskSubprocessRenderer } from "@oh-my-pi/pi-tui/tools/subprocess";
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { type } from "@oh-my-pi/omptype";
 import type {
 	AgentTool,
 	AgentToolResult,
@@ -1067,6 +1068,18 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		this.#launchSessions.delete(toolCallId);
 		try {
 			return await this.#dispatch(toolCallId, rawParams, launchSession, signal, onUpdate);
+		} catch (error) {
+			if (error instanceof Error) {
+				try {
+					const diagnostics = this.parameters(rawParams);
+					if (diagnostics instanceof type.errors) {
+						error.message += `\nTask argument schema diagnostics: ${diagnostics.summary}`;
+					}
+				} catch {
+					// Preserve the original error if diagnostic validation itself fails.
+				}
+			}
+			throw error;
 		} finally {
 			// No-op once dispatch adopted; otherwise nothing launched early may outlive the call.
 			launchSession?.discard("task call settled without adopting speculative launches");

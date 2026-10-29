@@ -64,6 +64,35 @@ afterEach(async () => {
 });
 
 describe("EditTool ACP write routing", () => {
+	it("reports committed and uncertain files when a later bridge write fails", async () => {
+		const first = path.join(tmpDir, "first.txt");
+		const second = path.join(tmpDir, "second.txt");
+		await Bun.write(first, "old\n");
+		await Bun.write(second, "old\n");
+		const bridge: ClientBridge = {
+			capabilities: { writeTextFile: true },
+			writeTextFile: async ({ path: target, content }) => {
+				if (target === second) {
+					await Bun.write(target, "partial\n");
+					throw new Error("Bridge disconnected during write");
+				}
+				await Bun.write(target, content);
+			},
+		};
+		const tag = hashlineFileHash("old\n");
+		const input = `[first.txt#${tag}]\nPUT 1.=1:\n+new\n[second.txt#${tag}]\nPUT 1.=1:\n+new\n`;
+		const result = await new EditTool(createSession(tmpDir, { bridge }), "hashline").execute("partial", { input });
+
+		expect(result.isError).toBe(true);
+		expect(await Bun.file(first).text()).toBe("new\n");
+		expect(await Bun.file(second).text()).toBe("partial\n");
+		expect(result.details).toMatchObject({
+			committedPaths: ["first.txt"],
+			uncertainPaths: ["second.txt"],
+		});
+		expect(resultText(result)).toMatch(/not rolled back/i);
+	});
+
 	it("routes replace writes through the ACP bridge", async () => {
 		const target = path.join(tmpDir, "replace.txt");
 		await Bun.write(target, "old content\n");

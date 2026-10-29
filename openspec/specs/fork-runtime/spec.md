@@ -62,10 +62,10 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
-- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 永久只承担构建、产物汇总与发布，不运行测试、冒烟、lint、类型检查或独立校验作业；发布只等待版本元数据与全部二进制构建成功，不承担本地验收门禁。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 - 仓库只启用 `.github/workflows/ci.yml`；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
-- 构建发布 CI 使用 GitHub 原生缓存保存 Bazel action cache、依赖下载及 Cargo registry/git；无需自建缓存服务器或额外凭据。各 native target 独立恢复缓存，仅 main 保存缓存，键包含宿主平台、目标、工具链/构建配置及 native 源码指纹；精确键缺失时优先回退同配置缓存，再回退同平台同目标的旧缓存，由 Bazel 根据实际输入判断哪些 action 可复用。运行摘要记录命中键、Bazel action 统计及各缓存目录大小；缓存缺失或被 GitHub 淘汰时正常冷编译，不跳过构建。
+- 构建发布 CI 使用上游 Bazel cache 配置 action；没有集群远程缓存凭据时仍执行构建，不依赖 fork 专用的 GitHub Bazel 磁盘或依赖缓存。
 - 二进制必须携带 fork 版本和更新仓库信息。
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
@@ -121,8 +121,8 @@ OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做�
 
 - 仓库唯一的发布工作流 MUST 只由 `workflow_dispatch` 触发，MUST NOT 配置推送、标签、定时或上游默认触发。
 - 并发组 MUST 为 `<工作流名>-<ref>`，MUST NOT 取消进行中的运行；同一 ref 的多次手动运行排队执行，不并发改写同一版本的产出。
-- 工作流默认权限 MUST 为 `contents: read`；只有实际创建 Release 的发布 job MAY 提升到 `contents: write`，其他 job（元数据、构建、产物汇总）MUST NOT 获得写权限。
-- 该工作流 MUST 只承担构建、产物汇总与发布，MUST NOT 运行测试、冒烟、lint、类型检查或独立校验作业。
+- 工作流默认权限 MUST 为 `contents: read`；只有实际创建 Release 的发布 job MAY 提升到 `contents: write`，其他 job（元数据、构建、产物汇总及测试）MUST NOT 获得写权限。
+- 工作流只运行版本元数据、构建、打包和发布所需步骤，不运行测试；本地 fulltest 验证独立执行，不以工作流构建成功替代测试结果。构建产物可在未选择发布时下载，发布依赖版本元数据、全部二进制和浏览器扩展构建成功，不增加 Bazel 测试框架或 push／PR 触发。
 
 #### Scenario: 发布 CI 的触发、并发与权限的可观察行为
 
@@ -244,6 +244,24 @@ OMP MUST 区分“被中断取消”与“执行失败”，并在工具结果�
 
 - **WHEN** 一批工具调用在中断期间被跳过或中断
 - **THEN** 对应工具结果在会话记录中带 `cancelled: true`，已完成调用保留真实结果
+
+### Requirement: Todo 追加参数说明与错误恢复
+
+`todo` MUST 在参数描述、工具说明及缺参错误中明确追加操作的输入约束和恢复方式，避免模型通过重置待办丢失已有进度。
+
+#### Scenario: 追加操作的调用说明
+
+- **WHEN** 模型读取 `todo` 的参数描述及工具说明
+- **THEN** 两者 MUST 明确 `op="append"` 必须提供 `phase` 和非空 `items`，使用扁平 `init` 后也不例外
+- **AND** 工具说明 MUST 明确使用目标阶段的准确名称，新名称会创建阶段；不知道已有阶段名时先调用 `op="view"`，不得为恢复追加错误重新初始化待办
+
+#### Scenario: 缺参失败后保留进度并重试
+
+- **WHEN** `append` 缺少阶段名，或缺少任务项、任务项为空数组
+- **THEN** 工具 MUST 拒绝追加且保留原有阶段、任务及状态，错误信息 MUST 明确本次未添加任务，并说明补齐目标阶段及非空任务项后重试
+- **AND** 缺少阶段名的错误 MUST 引导先用 `view` 查找目标阶段，再携带原任务项重试，且不得重新初始化待办
+- **WHEN** 模型查询已有阶段并补齐参数重试
+- **THEN** 工具 MUST 将任务追加至指定阶段并保留原有进度，不自动猜测目标阶段
 
 ### Requirement: 设置写入的版本校验
 

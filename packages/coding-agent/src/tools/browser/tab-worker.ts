@@ -1886,17 +1886,31 @@ export class WorkerCore {
 	 */
 	async #recoverAttachedTarget(target: Target): Promise<void> {
 		let session: CDPSession | undefined;
+		let initialCrash = false;
 		try {
 			session = await target.createCDPSession();
-			// A crashed page answers none of the steps below. `Inspector.enable` reports a renderer
-			// still dead (a relay attach leaves it so), the listener one that dies again as it reloads.
-			session.on("Inspector.targetCrashed", this.#onPageCrashed);
+			// Enabling Inspector on Edge replays targetCrashed for a renderer that was already
+			// dead before this session attached. That is not a second crash: reload that
+			// target, then treat subsequent crash events as failures of the replacement.
+			let inspecting = false;
+			const reloaded = Promise.withResolvers<void>();
+			session.on("Inspector.targetCrashed", () => {
+				if (!inspecting) initialCrash = true;
+				else this.#onPageCrashed();
+			});
+			session.on("Inspector.targetReloadedAfterCrash", () => reloaded.resolve());
 			await session.send("Inspector.enable").catch(() => undefined);
+			inspecting = true;
+			if (initialCrash) {
+				await session.send("Page.reload");
+				await reloaded.promise;
+			}
 			await session.send("Page.enable").catch(() => undefined);
 			await session.send("Page.handleJavaScriptDialog", { accept: false }).catch(() => undefined);
 			await session.send("Page.stopLoading").catch(() => undefined);
 			await session.send("Fetch.disable").catch(() => undefined);
 		} catch (error) {
+			if (initialCrash) throw error;
 			this.#log("debug", "Recovery CDP session failed; proceeding with attach", {
 				error: error instanceof Error ? error.message : String(error),
 			});

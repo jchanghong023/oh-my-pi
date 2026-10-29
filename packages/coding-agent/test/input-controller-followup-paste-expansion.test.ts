@@ -38,6 +38,8 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				},
 			},
 			ui: { requestRender: vi.fn() },
+			sessionManager: { getSessionId: () => "follow-up-session" },
+			handleDevInput: async () => false,
 			skillCommands: new Map<string, string>(),
 			session: {
 				isStreaming: true,
@@ -85,6 +87,8 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				},
 			},
 			ui: { requestRender: vi.fn() },
+			sessionManager: { getSessionId: () => "follow-up-session" },
+			handleDevInput: async () => false,
 			skillCommands: new Map<string, string>(),
 			session: {
 				isStreaming: false,

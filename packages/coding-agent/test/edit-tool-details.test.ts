@@ -104,7 +104,7 @@ describe("EditTool details", () => {
 		const session = makeSession(tempDir, { "edit.fuzzyThreshold": 0.8 });
 		const result = await new EditTool(session, "apply_patch").execute("wrong-context", { input });
 		expect(result.isError).toBe(true);
-		expect(result.details).toEqual({ diff: "", errorKind: "apply" });
+		expect(result.details).toEqual({ diff: "", errorKind: "apply", committedPaths: [], uncertainPaths: [] });
 		expect(await Bun.file(path.join(tempDir, "fixture.py")).text()).toBe(before);
 		expect(await Bun.file(path.join(tempDir, "first.txt")).text()).toBe("before\n");
 	});
@@ -207,7 +207,7 @@ describe("EditTool details", () => {
 			input: `[a.ts#${tag}]\nPUT 1-1:\n+A`,
 		});
 		expect(result.isError).toBe(true);
-		expect(result.details).toEqual({ diff: "", errorKind: "stale_tag" });
+		expect(result.details).toEqual({ diff: "", errorKind: "stale_tag", committedPaths: [], uncertainPaths: [] });
 		expect(result.content[0]).toMatchObject({ text: expect.stringContaining("file changed between read and edit") });
 	});
 

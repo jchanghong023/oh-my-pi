@@ -71,6 +71,8 @@ export interface LspToolDetails {
 	action: string;
 	success: boolean;
 	request?: LspParams;
+	/** Rename was committed even if subsequent server notifications failed. */
+	renameFile?: { committed: boolean; referenceEditCount: number; notificationsComplete: boolean };
 }
 
 /** Diagnostics and formatting status for one file. */

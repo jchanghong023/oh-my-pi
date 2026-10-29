@@ -241,6 +241,7 @@ describe("snapcompact archive read by a Claude model", () => {
 		const refs = [...slot.frames, ...slot.withoutThinking.archive.frames].map(frame => frame.data as string);
 		expect(refs.length).toBeGreaterThan(slot.frames.length);
 		expect(refs.every(data => data.startsWith("blob:sha256:"))).toBe(true);
+		await session.dispose();
 
 		const resumedManager = await SessionManager.open(sessionFile, sessionDir, undefined, {
 			suppressBreadcrumb: true,

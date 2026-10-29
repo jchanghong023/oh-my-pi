@@ -406,50 +406,76 @@ describe("stats subscription cost correction", () => {
 
 describe("stats scheduled response costs", () => {
 	it("prices missing legacy costs at each response timestamp and retains the resulting history", async () => {
-		const database = await initDb();
-		const requests = [
-			["peak", "2026-09-10T03:00:00Z"],
-			["off-peak", "2026-09-10T04:00:00Z"],
-			["new-rate", "2026-09-14T04:00:00Z"],
-		].map(([entryId, timestamp]) => {
-			const stats = createCodexGptStats(entryId);
-			stats.provider = "deepseek";
-			stats.model = "deepseek-v4-pro";
-			stats.api = "openai-completions";
-			stats.timestamp = Date.parse(timestamp);
-			stats.usage = {
-				input: 0,
-				output: 0,
-				cacheRead: 1_000_000,
+		const switchAt = Date.parse("2026-09-14T04:00:00Z");
+		// Exercise both recurring discounts and dated rate changes independently of
+		// the bundled catalog's current commercial rates.
+		const scheduled = {
+			...codexReferenceModel,
+			id: "scheduled-card-model",
+			provider: "deepseek",
+			cost: {
+				input: 1.32,
+				output: 3.96,
+				cacheRead: 0.044,
 				cacheWrite: 0,
-				totalTokens: 1_000_000,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			};
-			// Old session payloads may genuinely omit cost; zero is not absence.
-			Reflect.deleteProperty(stats.usage, "cost");
-			return stats;
-		});
-		insertMessageStats(requests);
-		const stored = getRecentRequests(3);
-		expect(stored.find(request => request.entryId === "peak")?.usage.cost.total).toBeCloseTo(0.044, 8);
-		expect(stored.find(request => request.entryId === "off-peak")?.usage.cost.total).toBeCloseTo(0.022, 8);
-		expect(stored.find(request => request.entryId === "new-rate")?.usage.cost.total).toBeCloseTo(0.003, 8);
-		expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
-		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
+				timeBased: {
+					offPeakMultiplier: 0.5,
+					peakWindows: [{ weekdays: [1, 2, 3, 4, 5], startMinute: 60, endMinute: 240 }],
+					effectiveRates: [
+						{ effectiveFrom: -8_640_000_000_000_000, input: 1.32, output: 3.96, cacheRead: 0.044, cacheWrite: 0 },
+						{ effectiveFrom: switchAt, input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0 },
+					],
+				},
+			},
+		};
+		const lookup = spyOn(catalogModels, "getBundledModel").mockReturnValue(scheduled);
+		try {
+			const database = await initDb();
+			const requests = [
+				["peak", "2026-09-10T03:00:00Z"],
+				["off-peak", "2026-09-10T04:00:00Z"],
+				["new-rate", "2026-09-14T04:00:00Z"],
+			].map(([entryId, timestamp]) => {
+				const stats = createCodexGptStats(entryId);
+				stats.provider = scheduled.provider;
+				stats.model = scheduled.id;
+				stats.api = "openai-completions";
+				stats.timestamp = Date.parse(timestamp);
+				stats.usage = {
+					input: 0,
+					output: 0,
+					cacheRead: 1_000_000,
+					cacheWrite: 0,
+					totalTokens: 1_000_000,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				};
+				// Old session payloads may genuinely omit cost; zero is not absence.
+				Reflect.deleteProperty(stats.usage, "cost");
+				return stats;
+			});
+			insertMessageStats(requests);
+			const stored = getRecentRequests(3);
+			expect(stored.find(request => request.entryId === "peak")?.usage.cost.total).toBeCloseTo(0.044, 8);
+			expect(stored.find(request => request.entryId === "off-peak")?.usage.cost.total).toBeCloseTo(0.022, 8);
+			expect(stored.find(request => request.entryId === "new-rate")?.usage.cost.total).toBeCloseTo(0.003, 8);
+			expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
+			expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
 
-		// Simulate a database predating the no-cache estimate column's backfill.
-		database.run("UPDATE messages SET cost_no_cache_input = NULL");
-		database.run("DELETE FROM meta WHERE key = 'cost_no_cache_input_v1'");
-		closeDb();
-		await initDb();
-		expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
-		expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
+			// Simulate a database predating the no-cache estimate column's backfill.
+			database.run("UPDATE messages SET cost_no_cache_input = NULL");
+			database.run("DELETE FROM meta WHERE key = 'cost_no_cache_input_v1'");
+			closeDb();
+			await initDb();
+			expect(getOverallStats().totalCost).toBeCloseTo(0.069, 8);
+			expect(getOverallStats().cacheSavings).toBeCloseTo(1 - 0.069 / 2.13, 8);
+		} finally {
+			lookup.mockRestore();
+		}
 	});
 
 	it("reprices recorded zeros on a dated rate card at the card in force for each request", async () => {
-		// A dated list-price change (Gemini 4 Argon's), not a recurring tariff:
-		// the zero Argon usage recorded before its price existed is legacy
-		// absence, so it gets priced like any other unscheduled model's.
+		// A dated list-price card is not a recurring tariff. A recorded zero
+		// before historical rates were known is legacy absence and must be repriced.
 		const switchAt = Date.parse("2026-12-01T08:00:00Z");
 		const dated = {
 			...codexReferenceModel,

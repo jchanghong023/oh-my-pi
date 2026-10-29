@@ -15,48 +15,111 @@ const PDF_RENDER_TIMEOUT_MS = 30_000;
 // read 8 pt print.
 const PDF_VIEWPORT = { width: 874, height: 874, deviceScaleFactor: 1 };
 
-// Chromium's PDF plugin paints in an out-of-process frame after navigation has
-// completed. Wait for document dimensions, then cross compositor boundaries
-// before capturing; otherwise the screenshot can contain only the viewer shell.
-// Capture the viewport: the viewer fits the page into it, and a full-page
-// capture (beyond the viewport) often comes back without the plugin's frame.
+// The PDF plugin paints out of process after navigation. Chrome exposes its
+// viewer as a frame; Edge exposes a separate webview target, while its
+// about:blank plugin frame does not answer JavaScript evaluation.
+// Capture the viewport: full-page capture often omits the plugin's frame.
 const PDF_SCREENSHOT_CODE = `
 let viewerFrame;
-await wait(async () => {
-	for (const frame of page.frames()) {
-		try {
-			const loaded = await frame.evaluate(() => {
-				const viewer = document.querySelector("pdf-viewer");
-				const toolbar = viewer?.shadowRoot?.querySelector("viewer-toolbar");
-				const pageLength = toolbar
-					?.shadowRoot?.querySelector("viewer-page-selector")
-					?.shadowRoot?.querySelector("#pagelength")
-					?.textContent;
-				if (Number(pageLength) > 0 && !toolbar?.hasAttribute("loading_")) return true;
-
+let edgeSession;
+const pageSession = await page.createCDPSession();
+try {
+	const requestedPage = Number(new URL(page.url()).hash.match(/(?:^|[&#])page=(\\d+)/)?.[1] ?? 1);
+	const pageId = (await pageSession.send("Target.getTargetInfo")).targetInfo.targetId;
+	await wait(async () => {
+		for (const frame of page.frames()) {
+			if (frame !== page.mainFrame() && !frame.url().startsWith("chrome-extension://")) continue;
+			try {
+				const loaded = await frame.evaluate(() => {
+					const viewer = document.querySelector("pdf-viewer");
+					const toolbar = viewer?.shadowRoot?.querySelector("viewer-toolbar");
+					const pageLength = toolbar
+						?.shadowRoot?.querySelector("viewer-page-selector")
+						?.shadowRoot?.querySelector("#pagelength")
+						?.textContent;
+					if (Number(pageLength) > 0 && !toolbar?.hasAttribute("loading_")) return true;
+					const plugin = document.querySelector('embed[type="application/x-google-chrome-pdf"]');
+					const sizer = document.querySelector("#sizer");
+					return plugin !== null && sizer !== null && sizer.clientWidth > 0 && sizer.clientHeight > 0;
+				});
+				if (loaded) {
+					viewerFrame = frame;
+					return true;
+				}
+			} catch {}
+		}
+		if (!edgeSession) {
+			const { targetInfos } = await pageSession.send("Target.getTargets");
+			const info = targetInfos.find(target =>
+				target.parentId === pageId && target.type === "webview" &&
+				target.url.startsWith("chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/edge_pdf/"),
+			);
+			const target = info && browser.targets().find(candidate => candidate._targetId === info.targetId);
+			if (target) edgeSession = await target.createCDPSession();
+		}
+		if (!edgeSession) return false;
+		const { result } = await edgeSession.send("Runtime.evaluate", {
+			expression: \`(() => {
 				const plugin = document.querySelector('embed[type="application/x-google-chrome-pdf"]');
-				const sizer = document.querySelector("#sizer");
-				return plugin !== null && sizer !== null && sizer.clientWidth > 0 && sizer.clientHeight > 0;
+				const selector = document.querySelector("#pageselector");
+				const count = document.querySelector("#pagelength")?.textContent?.match(/\\\\d+/);
+				return !!plugin && !!selector && !selector.disabled && Number(count?.[0]) > 0 &&
+					Number(selector.value) === \${requestedPage};
+			})()\`,
+			returnByValue: true,
+		});
+		return result.value === true;
+	});
+	if (edgeSession) {
+		// Edge's #view=Fit can leave the plugin at its previous zoom even
+		// though the toolbar reports page fit. Toggle through width first,
+		// then explicitly select page fit using the viewer's own control.
+		await edgeSession.send("Runtime.evaluate", {
+			expression: \`(() => {
+				const button = document.querySelector("#pagefit");
+				if (button?.querySelector("#fit-to-width-icon")) button.click();
+			})()\`,
+			returnByValue: true,
+		});
+		await wait(async () => {
+			const { result } = await edgeSession.send("Runtime.evaluate", {
+				expression: '!!document.querySelector("#pagefit #fit-to-page-icon")',
+				returnByValue: true,
 			});
-			if (loaded) {
-				viewerFrame = frame;
-				return true;
-			}
-		} catch {}
+			return result.value === true;
+		});
+		await edgeSession.send("Runtime.evaluate", {
+			expression: 'document.querySelector("#pagefit").click()',
+			returnByValue: true,
+		});
+		await wait(async () => {
+			const { result } = await edgeSession.send("Runtime.evaluate", {
+				expression: '!!document.querySelector("#pagefit #fit-to-width-icon")',
+				returnByValue: true,
+			});
+			return result.value === true;
+		});
 	}
-	return false;
-});
-await page.screenshot({ type: "png" });
-await viewerFrame.evaluate(() => {
-	const { promise, resolve } = Promise.withResolvers();
-	requestAnimationFrame(() =>
-		requestAnimationFrame(() =>
-			requestAnimationFrame(() => requestAnimationFrame(resolve)),
-		),
-	);
-	return promise;
-});
-return await tab.screenshot({ silent: true });
+	// Force an initial compositor capture, then let the actual viewer advance
+	// several frames before taking the returned screenshot.
+	await page.screenshot({ type: "png" });
+	if (viewerFrame) {
+		await viewerFrame.evaluate(() => new Promise(resolve =>
+			requestAnimationFrame(() => requestAnimationFrame(() =>
+				requestAnimationFrame(() => requestAnimationFrame(resolve)),
+			)),
+		));
+	} else {
+		await edgeSession.send("Runtime.evaluate", {
+			expression: "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))))",
+			awaitPromise: true,
+		});
+	}
+	return await tab.screenshot({ silent: true });
+} finally {
+	await edgeSession?.detach();
+	await pageSession.detach();
+}
 `;
 
 /** A legacy PDF image-member path interpreted as a page screenshot request. */

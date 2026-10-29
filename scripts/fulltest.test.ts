@@ -1,12 +1,63 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
-import { fulltestCommands, gateCpuBudget, parseFulltestArgs, removeFulltestHome, runFulltest } from "./fulltest";
+import { gateCpuBudget, parseFulltestArgs, removeFulltestHome, runFulltest } from "./fulltest";
 import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
 import type { SourceIdentity } from "./test-gate-source";
+import type { TestReportRun } from "./test-reporting";
+import { runGateCommands } from "./test-gate-scheduler";
+
+test("direct scheduler overlaps commands and continues after a failure", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-scheduler-"));
+	try {
+		const script = path.join(directory, "worker.ts");
+		const settled: string[] = [];
+		await fs.writeFile(
+			script,
+			`
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+const [dir, role] = process.argv.slice(2);
+await fs.writeFile(path.join(dir, role), "started");
+if (role !== "later") {
+  const other = path.join(dir, role === "first" ? "second" : "first");
+  const deadline = Date.now() + 5000;
+  while (!(await fs.stat(other).catch(() => null))) {
+    if (Date.now() > deadline) process.exit(90);
+    await Bun.sleep(20);
+  }
+}
+if (role === "first") process.exit(17);
+if (role === "second") {
+  const deadline = Date.now() + 5000;
+  while (!(await fs.stat(path.join(dir, "later")).catch(() => null))) {
+    if (Date.now() > deadline) process.exit(91);
+    await Bun.sleep(20);
+  }
+}
+`,
+		);
+		const result = await runGate("fulltest", gate =>
+			runGateCommands(
+				gate,
+				["first", "second", "later"].map(role => ({
+					label: role,
+					argv: [process.execPath, script, directory, role],
+				})),
+				{ concurrency: 2, onCommandSettled: command => settled.push(command.label) },
+			),
+		);
+		expect(result.exitCode).toBe(17);
+		expect(settled.sort()).toEqual(["first", "later", "second"]);
+		expect(await fs.readFile(path.join(directory, "second"), "utf8")).toBe("started");
+		expect(await fs.readFile(path.join(directory, "later"), "utf8")).toBe("started");
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
+	}
+}, 20_000);
 
 test("fulltest reaches its CLI error boundary without loading the native addon", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-bootstrap-"));
@@ -92,89 +143,6 @@ describe("shared per-test budget", () => {
 	});
 });
 
-describe("complete fork-delta TS selection", () => {
-	test("selects existing changed tests anywhere in a package, with package-local execution", () => {
-		const tuiTests = [
-			"packages/coding-agent/test/spec-driven/tui.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-lifecycle.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-closing.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-materials.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-materials-later-roles.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts",
-			"packages/coding-agent/test/spec-driven/tui-resource-lifecycle.e2e.test.ts",
-		];
-		const changedTests = [
-			"packages/metaharness/adapters/edit/runner.test.ts",
-			"packages/coding-agent/src/edit/auto-repair.test.ts",
-			"packages/collab-web/test/markdown.test.tsx",
-			...tuiTests,
-		];
-		const desktop = "packages/natives/test/desktop.test.ts";
-		const dependencyTest =
-			"packages/coding-agent/src/spec-driven/vendor/resources/openspec/node_modules/zod/src/v3/tests/all-errors.test.ts";
-		const log = spyOn(console, "log").mockImplementation(() => {});
-		try {
-			const commands = fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), [
-				...changedTests,
-				"packages/metaharness/adapters/edit/runner.ts",
-				"packages/metaharness/adapters/edit/removed-runner.test.ts",
-				desktop,
-				dependencyTest,
-			]);
-			const tests = commands.filter(command => command.label.startsWith("test/fork "));
-			expect(tests.map(command => command.label)).toEqual(changedTests.map(file => `test/fork ${file}`));
-			for (const [index, file] of changedTests.entries()) {
-				const separator = file.indexOf("/", "packages/".length);
-				expect(tests[index].cwd).toBe(path.resolve(import.meta.dir, "..", file.slice(0, separator)));
-				expect(tests[index].argv).toEqual([
-					"bun",
-					"../../scripts/test-report-bun.ts",
-					`--timeout=${testTimeoutMs()}`,
-					file.slice(separator + 1),
-				]);
-				expect(tests[index].sourceEntrypoints).toEqual(
-					tuiTests.includes(file)
-						? [path.resolve(import.meta.dir, "../packages/coding-agent/src/cli.ts")]
-						: undefined,
-				);
-			}
-			expect(log.mock.calls).toContainEqual([`NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED: ${desktop}`]);
-			const rust = commands.find(command => command.label === "test/Rust affected crates")!;
-			expect(JSON.parse(rust.env!.OMP_FULLTEST_CHANGED_PATHS as string)).toContain(dependencyTest);
-		} finally {
-			log.mockRestore();
-		}
-	});
-
-	test("does not discover unchanged workspace tests when the delta has no package tests", () => {
-		const commands = fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), [
-			"packages/metaharness/adapters/edit/runner.ts",
-			"scripts/fulltest.test.ts",
-		]);
-		expect(commands.map(command => command.label)).toEqual([
-			"test/Rust affected crates",
-			"smoke/isolated dev TUI PTY",
-		]);
-	});
-
-	test("normalizes the Rust scope only after filtering documentation", () => {
-		const rust = (files: string[]) =>
-			fulltestCommands({ debug: false }, path.join(os.tmpdir(), "omp-selection-home"), files).find(
-				command => command.label === "test/Rust affected crates",
-			)!.env!.OMP_FULLTEST_CHANGED_PATHS;
-		expect(JSON.parse(rust(["packages/x/a.ts", "crates/pi-edit/src/lib.rs", "crates/pi-edit/README.md"])!)).toEqual([
-			"crates/pi-edit/src/lib.rs",
-		]);
-		expect(JSON.parse(rust(["packages/x/b.ts", "packages/x/a.ts", "packages/x/b.ts", "README.md"])!)).toEqual([
-			"packages/x/a.ts",
-			"packages/x/b.ts",
-		]);
-		expect(JSON.parse(rust(["README.md"])!)).toEqual([]);
-	});
-});
-
 describe("fulltest source snapshot checkpoints", () => {
 	const sourcePath = "packages/metaharness/adapters/edit/runner.test.ts";
 	const generatedPaths = ["packages/natives/native/index.js", "packages/natives/native/index.d.ts"];
@@ -197,9 +165,10 @@ describe("fulltest source snapshot checkpoints", () => {
 					executable: false,
 				})),
 		};
-		let changedPaths: string[] = [];
 		let mutated = false;
-		const selectedPaths: string[][] = [];
+		let testsRun = false;
+		let childDigest: string | undefined;
+		const report = { owner: true } as TestReportRun;
 		const mutate = () => {
 			if (mutated) return;
 			mutated = true;
@@ -222,7 +191,6 @@ describe("fulltest source snapshot checkpoints", () => {
 					{ path: sourcePath, kind: "file", sha256: "new-test", executable: false },
 				];
 			}
-			changedPaths = paths;
 		};
 		const gate = {
 			signal: new AbortController().signal,
@@ -230,9 +198,7 @@ describe("fulltest source snapshot checkpoints", () => {
 			run: async () => {
 				if (interval === "preparation") mutate();
 			},
-			capture: async (command: { label: string }) => ({
-				stdout: command.label === "scope/complete fork delta" ? changedPaths.join("\0") : "",
-			}),
+			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
 			record: (error: unknown) => error,
 			fail: (error: unknown) => error,
 		} as unknown as GateRun;
@@ -244,26 +210,26 @@ describe("fulltest source snapshot checkpoints", () => {
 				{
 					captureSourceIdentity: async () => identity,
 					fastcheckCommands: async () => [],
-					runBazelCommands: async (_gate, commands) => {
+					runGateCommands: async (_gate, commands) => {
 						if (commands.some(command => command.label === "build/native")) {
 							if (interval === "native") mutate();
 						} else if (commands.some(command => command.label.startsWith("test/repository scripts "))) {
 							if (interval === "scripts") mutate();
 						} else {
-							const rust = commands.find(command => command.label === "test/Rust affected crates");
-							if (rust) selectedPaths.push(JSON.parse(rust.env!.OMP_FULLTEST_CHANGED_PATHS!));
+							const typescript = commands.find(command => command.label === "test/TypeScript full suite");
+							if (typescript) childDigest = typescript.env?.OMP_FULLTEST_SOURCE_DIGEST;
+							if (commands.some(command => command.label.startsWith("test/"))) testsRun = true;
 							if (interval === "tests") mutate();
 						}
-						// No command is executed: this replaces the native/script/static/product dispatch boundary.
-						return [];
 					},
 				},
+				report,
 			);
 		} catch (error) {
 			failure = error;
 		}
 		expect(mutated).toBe(true);
-		return { failure, selectedPaths };
+		return { failure, testsRun, childDigest, report };
 	}
 
 	for (const interval of ["preparation", "native", "scripts", "tests"] as const) {
@@ -289,11 +255,95 @@ describe("fulltest source snapshot checkpoints", () => {
 		expect(String(failure)).toContain("Source changed");
 	});
 
-	test("preserves sanctioned native bindings and selects the complete post-native fork delta", async () => {
-		const { failure, selectedPaths } = await exercise("bindings", "native");
+	test("allows native binding regeneration and still executes the full test plan", async () => {
+		const { failure, testsRun, childDigest, report } = await exercise("bindings", "native");
 		expect(failure).toBeUndefined();
-		expect(selectedPaths.map(paths => [...paths].sort())).toEqual([[...generatedPaths].sort()]);
+		expect(testsRun).toBe(true);
+		expect(childDigest).toBe("changed-digest");
+		expect(report.sourceDigest).toBe("changed-digest");
 	});
+});
+
+describe("fulltest lane scheduling", () => {
+	for (const rustCheck of ["success", "failure", "absent"] as const) {
+		test(`releases Rust tests independently of TypeScript static checks when Rust checks are ${rustCheck}`, async () => {
+			const tsStarted = Promise.withResolvers<void>();
+			const finishTs = Promise.withResolvers<void>();
+			const rustStarted = Promise.withResolvers<void>();
+			const finishFirstRust = Promise.withResolvers<void>();
+			const secondRustStarted = Promise.withResolvers<void>();
+			const finishSecondRust = Promise.withResolvers<void>();
+			const rustTestsStarted = Promise.withResolvers<void>();
+			let rustTestsHaveStarted = false;
+			const identity: SourceIdentity = {
+				head: "head",
+				digest: "digest",
+				dirty: false,
+				status: "",
+				files: [],
+			};
+			const gate = {
+				signal: new AbortController().signal,
+				charged: async <T>(operation: () => T | Promise<T>) => operation(),
+				run: async (command: { label: string }) => {
+					if (command.label === "static/TS") {
+						tsStarted.resolve();
+						await finishTs.promise;
+					} else if (command.label === "static/Rust first") {
+						rustStarted.resolve();
+						await finishFirstRust.promise;
+						if (rustCheck === "failure") throw new Error("Rust static failure");
+					} else if (command.label === "static/Rust second") {
+						secondRustStarted.resolve();
+						await finishSecondRust.promise;
+					}
+				},
+				childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+				record: (error: unknown) => error,
+				fail: (error: unknown) => error,
+			} as unknown as GateRun;
+			const run = runFulltest(
+				gate,
+				{ debug: false },
+				{
+					captureSourceIdentity: async () => identity,
+					fastcheckCommands: async () => [
+						{ label: "static/TS", argv: ["ts"] },
+						...(rustCheck === "absent"
+							? []
+							: [
+									{ label: "static/Rust first", argv: ["rust-first"] },
+									{ label: "static/Rust second", argv: ["rust-second"] },
+								]),
+					],
+					runGateCommands: async (runner, commands, options) => {
+						if (commands.some(command => command.label === "static/TS")) {
+							await runGateCommands(runner, commands, options);
+						} else if (commands.some(command => command.label.startsWith("test/Rust"))) {
+							rustTestsHaveStarted = true;
+							rustTestsStarted.resolve();
+						}
+					},
+				},
+			);
+			try {
+				await tsStarted.promise;
+				if (rustCheck !== "absent") {
+					await rustStarted.promise;
+					finishFirstRust.resolve();
+					await secondRustStarted.promise;
+					expect(rustTestsHaveStarted).toBe(false);
+					finishSecondRust.resolve();
+				}
+				await rustTestsStarted.promise;
+			} finally {
+				finishTs.resolve();
+				finishFirstRust.resolve();
+				finishSecondRust.resolve();
+				await run;
+			}
+		});
+	}
 });
 
 describe("gate-local profile fixture isolation", () => {

@@ -68,7 +68,9 @@ export class ManageSkillTool implements AgentTool<typeof manageSkillSchema> {
 		// without both fields, so this is unreachable for valid input — it only
 		// proves the strings are present to `writeManagedSkill`'s typed contract.
 		if (!params.description || !params.body) {
-			throw new Error(`"${params.action}" requires both "description" and "body".`);
+			throw new Error(
+				`"${params.action}" requires non-empty "description" and "body"; ${!params.description ? '"description"' : '"body"'} is missing or empty.`,
+			);
 		}
 		// A managed skill resolves below any authored skill of the same name
 		// (authored always wins in discovery), so creating one under a name an

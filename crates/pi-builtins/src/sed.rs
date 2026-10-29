@@ -5378,8 +5378,8 @@ impl IOChunkContent<'_> {
 // driving write(2)/copy_file_range(2) output fast paths) is removed, because
 // the output writer is a plain `Write` handle without a file descriptor.
 
-/// Unified reader: regular host files are read whole into memory and served
-/// zero-copy; everything else streams through a buffered reader.
+/// Unified reader: on Unix regular host files are read whole and served
+/// zero-copy; on other platforms and for other inputs it streams.
 pub enum LineReader<'a> {
 	#[cfg(unix)]
 	SliceInput {
@@ -6188,11 +6188,9 @@ mod tests {
 		Ok(())
 	}
 
-	/// Truncating an input file after sed opened it must not fault the host
-	/// process; the reader keeps serving the bytes captured at open. Unix only:
-	/// the snapshot is the `SliceInput` path; Windows always streams.
+	/// Unix snapshots regular files at open; other platforms stream and see
+	/// the truncation when no bytes have yet been read.
 	#[test]
-	#[cfg(unix)]
 	fn test_file_truncated_after_open() -> io::Result<()> {
 		let mut tmp = NamedTempFile::new()?;
 		for _ in 0..4 {
@@ -6208,7 +6206,10 @@ mod tests {
 			assert_eq!(chunk.as_bytes(), [b'.'; 4095]);
 			lines += 1;
 		}
+		#[cfg(unix)]
 		assert_eq!(lines, 4);
+		#[cfg(not(unix))]
+		assert_eq!(lines, 0);
 		Ok(())
 	}
 

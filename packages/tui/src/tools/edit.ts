@@ -99,6 +99,10 @@ export interface EditToolDetails {
 	diff: string;
 	/** Why the edit failed, as the engine classed it (`unseen_lines`, `stale_tag`, `parse`, …) */
 	errorKind?: string;
+	/** Paths whose writes completed before a later failure. */
+	committedPaths?: string[];
+	/** Paths whose write failed and may already have changed. */
+	uncertainPaths?: string[];
 	/** Line number of the first change in the new file (for editor navigation) */
 	firstChangedLine?: number;
 	/** Diagnostic result (if available) */

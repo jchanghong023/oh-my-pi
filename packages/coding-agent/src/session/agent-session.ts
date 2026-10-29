@@ -10030,7 +10030,7 @@ export class AgentSession implements SettingsScope {
 		if (
 			((mode !== "aside" || options?.promptGeneration !== undefined) &&
 				this.#promptGeneration !== sourceGeneration) ||
-			this.#sessionGeneration !== sessionGeneration ||
+			(mode !== "aside" && this.#sessionGeneration !== sessionGeneration) ||
 			this.#isDisposed
 		) {
 			return false;
@@ -10593,7 +10593,7 @@ export class AgentSession implements SettingsScope {
 			? preprocessed.descriptionNotice
 			: await this.#buildSkillImageDescriptionNotice(normalizedAppMessage);
 		if (
-			this.#sessionGeneration !== sessionGeneration ||
+			(deliverAs !== "aside" && this.#sessionGeneration !== sessionGeneration) ||
 			this.#isDisposed ||
 			(deliverAs !== "aside" && this.#promptGeneration !== sourceGeneration)
 		) {

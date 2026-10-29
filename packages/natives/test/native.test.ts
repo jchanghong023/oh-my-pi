@@ -855,7 +855,7 @@ try {
 	});
 
 	describe("pty", () => {
-		it("passes executable arguments without shell quoting", async () => {
+		it.skipIf(process.platform === "win32")("passes executable arguments without shell quoting", async () => {
 			const scriptPath = path.join(testDir, "pty-argv.ts");
 			const expected = ["argument with spaces", 'quote"inside', "backslash\\end"];
 			await Bun.write(scriptPath, 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");\n');

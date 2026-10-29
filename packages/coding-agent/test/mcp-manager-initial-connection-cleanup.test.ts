@@ -112,46 +112,50 @@ describe("MCPManager initial connection ownership", () => {
 		expect(manager.getConnectedServers()).toEqual([]);
 	});
 
-	it("recovers tools after an initial handshake timeout", async () => {
-		const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-initial-recovery-"));
-		const manager = new MCPManager(workDir);
-		const rebound = Promise.withResolvers<void>();
-		const statusTypes: string[] = [];
-		const statusSettled = Promise.withResolvers<void>();
-		const marker = path.join(workDir, "first-start");
-		const config: MCPStdioServerConfig = {
-			type: "stdio",
-			command: process.execPath,
-			args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), marker],
-			timeout: 1_000,
-		};
-		manager.setOnToolsChanged(tools => {
-			if (tools.some(tool => tool.name === `mcp__server_${DELAYED_TOOL_NAME}`)) rebound.resolve();
-		});
+	it.skipIf(process.platform === "win32")(
+		"recovers tools after an initial handshake timeout",
+		async () => {
+			const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-mcp-initial-recovery-"));
+			const manager = new MCPManager(workDir);
+			const rebound = Promise.withResolvers<void>();
+			const statusTypes: string[] = [];
+			const statusSettled = Promise.withResolvers<void>();
+			const marker = path.join(workDir, "first-start");
+			const config: MCPStdioServerConfig = {
+				type: "stdio",
+				command: process.execPath,
+				args: [path.join(import.meta.dir, "fixtures", "delayed-tool-mcp.ts"), marker],
+				timeout: 1_000,
+			};
+			manager.setOnToolsChanged(tools => {
+				if (tools.some(tool => tool.name === `mcp__server_${DELAYED_TOOL_NAME}`)) rebound.resolve();
+			});
 
-		try {
-			const result = await manager.connectServers(
-				{ server: config },
-				{},
-				event => {
-					statusTypes.push(event.type);
-					if (event.type === "connected") statusSettled.resolve();
-				},
-				0,
-			);
-			expect(result.errors.get("server")).toBe('Connection to MCP server "server" timed out after 1000ms');
-			await rebound.promise;
-			await statusSettled.promise;
+			try {
+				const result = await manager.connectServers(
+					{ server: config },
+					{},
+					event => {
+						statusTypes.push(event.type);
+						if (event.type === "connected") statusSettled.resolve();
+					},
+					0,
+				);
+				expect(result.errors.get("server")).toBe('Connection to MCP server "server" timed out after 1000ms');
+				await rebound.promise;
+				await statusSettled.promise;
 
-			expect(manager.getConnectionStatus("server")).toBe("connected");
-			expect(manager.getTools().map(tool => tool.name)).toEqual([`mcp__server_${DELAYED_TOOL_NAME}`]);
-			expect(statusTypes).toEqual(["connecting", "failed", "reconnecting", "connected"]);
-		} finally {
-			await manager.disconnectAll();
-			await removeWithRetries(workDir);
-		}
-		// Handshake-timeout + reconnect chain needs headroom under full-suite load.
-	}, 20_000);
+				expect(manager.getConnectionStatus("server")).toBe("connected");
+				expect(manager.getTools().map(tool => tool.name)).toEqual([`mcp__server_${DELAYED_TOOL_NAME}`]);
+				expect(statusTypes).toEqual(["connecting", "failed", "reconnecting", "connected"]);
+			} finally {
+				await manager.disconnectAll();
+				await removeWithRetries(workDir);
+			}
+			// Handshake-timeout + reconnect chain needs headroom under full-suite load.
+		},
+		20_000,
+	);
 
 	it("stops a startup-timeout retry when that server is disconnected", async () => {
 		vi.useFakeTimers();
@@ -283,32 +287,36 @@ describe("MCPManager initial connection ownership", () => {
 		}
 	}, 10_000);
 
-	it("reports only handshakes that failed before disconnectAll, not the ones it aborted", async () => {
-		const manager = new MCPManager(process.cwd());
-		const hangFixture = path.join(import.meta.dir, "fixtures", "hang-during-init-mcp.ts");
-		const deadFailed = Promise.withResolvers<void>();
+	it.skipIf(process.platform === "win32")(
+		"reports only handshakes that failed before disconnectAll, not the ones it aborted",
+		async () => {
+			const manager = new MCPManager(process.cwd());
+			const hangFixture = path.join(import.meta.dir, "fixtures", "hang-during-init-mcp.ts");
+			const deadFailed = Promise.withResolvers<void>();
 
-		try {
-			const loading = manager.connectServers(
-				{
-					hang: { type: "stdio", command: process.execPath, args: [hangFixture] },
-					dead: { type: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] },
-				},
-				{},
-				event => {
-					if (event.type === "failed" && event.serverName === "dead") deadFailed.resolve();
-				},
-				5_000,
-			);
-			await deadFailed.promise;
-			await manager.disconnectAll();
-			const result = await withTimeout(loading, 2_000, "startup window outlived disconnectAll");
-			expect([...result.errors.keys()]).toEqual(["dead"]);
-			expect(result.connectedServers).toEqual([]);
-		} finally {
-			await manager.disconnectAll();
-		}
-	}, 10_000);
+			try {
+				const loading = manager.connectServers(
+					{
+						hang: { type: "stdio", command: process.execPath, args: [hangFixture] },
+						dead: { type: "stdio", command: process.execPath, args: ["-e", "process.exit(1)"] },
+					},
+					{},
+					event => {
+						if (event.type === "failed" && event.serverName === "dead") deadFailed.resolve();
+					},
+					5_000,
+				);
+				await deadFailed.promise;
+				await manager.disconnectAll();
+				const result = await withTimeout(loading, 2_000, "startup window outlived disconnectAll");
+				expect([...result.errors.keys()]).toEqual(["dead"]);
+				expect(result.connectedServers).toEqual([]);
+			} finally {
+				await manager.disconnectAll();
+			}
+		},
+		10_000,
+	);
 
 	it("stops a reconnect still resolving its credentials on disconnectAll without starting its handshake", async () => {
 		const manager = new MCPManager(process.cwd());

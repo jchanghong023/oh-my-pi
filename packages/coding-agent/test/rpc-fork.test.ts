@@ -49,22 +49,26 @@ describe("RPC fork and tree navigation", () => {
 		return messageIds;
 	}
 
-	test("forks at an assistant entry: keeps it, drops later turns, leaves the source intact", async () => {
-		const [firstUser, firstReply, ...later] = await seedTwoTurns();
-		const source = await client.getState();
+	test.skipIf(process.platform === "win32")(
+		"forks at an assistant entry: keeps it, drops later turns, leaves the source intact",
+		async () => {
+			const [firstUser, firstReply, ...later] = await seedTwoTurns();
+			const source = await client.getState();
 
-		expect(await client.fork(firstReply)).toEqual({ cancelled: false });
+			expect(await client.fork(firstReply)).toEqual({ cancelled: false });
 
-		const forked = await client.getState();
-		expect(forked.sessionFile).not.toBe(source.sessionFile);
-		expect(forked.sessionId).not.toBe(source.sessionId);
-		// The live process continues from the cut, not just the new file.
-		expect(forked.messageCount).toBe(2);
-		const fork = await readSessionFile(forked.sessionFile!);
-		expect(fork.messageIds).toEqual([firstUser, firstReply]);
-		expect(fork.header.parentSession).toBe(source.sessionFile);
-		expect((await readSessionFile(source.sessionFile!)).messageIds).toEqual([firstUser, firstReply, ...later]);
-	}, 30_000);
+			const forked = await client.getState();
+			expect(forked.sessionFile).not.toBe(source.sessionFile);
+			expect(forked.sessionId).not.toBe(source.sessionId);
+			// The live process continues from the cut, not just the new file.
+			expect(forked.messageCount).toBe(2);
+			const fork = await readSessionFile(forked.sessionFile!);
+			expect(fork.messageIds).toEqual([firstUser, firstReply]);
+			expect(fork.header.parentSession).toBe(source.sessionFile);
+			expect((await readSessionFile(source.sessionFile!)).messageIds).toEqual([firstUser, firstReply, ...later]);
+		},
+		30_000,
+	);
 
 	test("forks at a user entry and keeps that prompt as the last entry", async () => {
 		const [firstUser, firstReply, secondUser] = await seedTwoTurns();

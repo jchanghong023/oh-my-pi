@@ -99,9 +99,11 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			expect(superpowers.length).toBeGreaterThan(0);
 			const unauthorizedPaths = superpowers.map(entry => `skill://${entry.name}:raw`);
 			const unauthorizedRequestStart = provider.requests.length;
+			const unauthorizedTurn = "unauthorized";
 			since = await peer.send(
 				ordinary,
 				`${MARKER} inspect resource access without invoking a skill\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({
+					turn: unauthorizedTurn,
 					path: unauthorizedPaths[0],
 					allowedPaths: [],
 					deniedPaths: unauthorizedPaths.slice(1),
@@ -109,7 +111,8 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			);
 			await peer.next(
 				frame =>
-					isConversation(frame, ordinary) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+					isConversation(frame, ordinary) &&
+					textValues(frame).some(text => text.includes(`${MARKER}_RESOURCE_READY_${unauthorizedTurn}`)),
 				since,
 			);
 			const unauthorizedRequests = provider.requests
@@ -128,18 +131,19 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			for (const entry of inventory.skills.filter(entry => !isHiddenOpenSpec(entry))) {
 				const session = await peer.create(config.cwd);
 				const requestStart = provider.requests.length;
+				const turn = entry.name;
 				const selectedPath = `skill://${entry.name}:raw`;
 				const allowedPaths: string[] = [];
 				const others = inventory.skills.filter(other => other.name !== entry.name && !defaultSkills[other.name]);
 				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
 				since = await peer.send(
 					session,
-					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ path: selectedPath, allowedPaths, deniedPaths })}`,
+					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ turn, path: selectedPath, allowedPaths, deniedPaths })}`,
 				);
 				await peer.next(
 					frame =>
 						isConversation(frame, session) &&
-						textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
+						textValues(frame).some(text => text.includes(`${MARKER}_RESOURCE_READY_${turn}`)),
 					since,
 				);
 				const requests = provider.requests.slice(requestStart).filter(request => (request.tools?.length ?? 0) > 0);

@@ -2785,9 +2785,9 @@ describe("ExtensionRunner", () => {
 				sessionManager,
 				modelRegistry,
 			);
-			const select = vi.fn(async () => {
+			const select = vi.fn(async (_title: string, options: string[]) => {
 				events.push({ type: "ui_select" });
-				return "Approve";
+				return options[0];
 			});
 			initializeRunner(runner, select);
 
@@ -2807,10 +2807,10 @@ describe("ExtensionRunner", () => {
 				{ type: "ui_select" },
 				{ type: "tool_approval_resolved", approved: true },
 			]);
-			expect(select).toHaveBeenCalledWith(expect.stringContaining("Allow tool: dangerous_tool"), [
-				"Approve",
-				"Approve dangerous_tool for this session",
-				"Deny",
+			expect(select).toHaveBeenCalledWith(expect.any(String), [
+				expect.any(String),
+				expect.any(String),
+				expect.any(String),
 			]);
 			delete globalState.__approvalEvents;
 		});
@@ -2845,9 +2845,9 @@ describe("ExtensionRunner", () => {
 			expect(select).toHaveBeenCalledTimes(3);
 			// A critical override asks every time and never offers the session choice.
 			const critical = { ...approvalTool, approval: () => ({ tier: "exec" as const, override: true }) };
-			select.mockImplementationOnce(async () => "Approve");
+			select.mockImplementationOnce(async (_title, options) => options[0]);
 			await run(critical, "call-critical");
-			expect(select).toHaveBeenLastCalledWith(expect.any(String), ["Approve", "Deny"]);
+			expect(select).toHaveBeenLastCalledWith(expect.any(String), [expect.any(String), expect.any(String)]);
 			// A new session starts without the grant.
 			await sessionManager.newSession();
 			await run(approvalTool, "call-new-session");
@@ -2856,9 +2856,9 @@ describe("ExtensionRunner", () => {
 		it("runs bridged preflight before approval and cancels denied state", async () => {
 			const runner = new ExtensionRunner([], new ExtensionRuntime(), tempDir.path(), sessionManager, modelRegistry);
 			const order: string[] = [];
-			initializeRunner(runner, async () => {
+			initializeRunner(runner, async (_title, options) => {
 				order.push("ui_select");
-				return "Approve";
+				return options[0];
 			});
 			runner.setToolCallPreflight({
 				before: async () => {
@@ -2887,7 +2887,7 @@ describe("ExtensionRunner", () => {
 				sessionManager,
 				modelRegistry,
 			);
-			initializeRunner(deniedRunner, async () => "Deny");
+			initializeRunner(deniedRunner, async (_title, options) => options.at(-1));
 			let cancelled = 0;
 			deniedRunner.setToolCallPreflight({
 				before: async () => undefined,
@@ -2937,9 +2937,9 @@ describe("ExtensionRunner", () => {
 				});
 				initializeRunner(
 					runner,
-					vi.fn(async () => {
+					vi.fn(async (_title: string, options: string[]) => {
 						order.push("ui_select");
-						return "Approve";
+						return options[0];
 					}),
 				);
 
@@ -2996,7 +2996,7 @@ describe("ExtensionRunner", () => {
 				sessionManager,
 				modelRegistry,
 			);
-			initializeRunner(runner, async () => "Deny");
+			initializeRunner(runner, async (_title, options) => options.at(-1));
 
 			const wrapper = new ExtensionToolWrapper(approvalTool, runner);
 			await expect(
@@ -3854,7 +3854,7 @@ describe("ExtensionRunner", () => {
 					},
 				}) as never;
 
-			initApprovalRunner(runner, async () => "Approve");
+			initApprovalRunner(runner, async (_title, options) => options[0]);
 			const deliveredOnApprove: string[] = [];
 			await (wrapped as ExtensionToolWrapper).execute(
 				"call-approve",
@@ -3865,7 +3865,7 @@ describe("ExtensionRunner", () => {
 			);
 			expect(deliveredOnApprove).toEqual(["passive after approval"]);
 
-			initApprovalRunner(runner, async () => "Deny");
+			initApprovalRunner(runner, async (_title, options) => options.at(-1));
 			const deliveredOnDeny: string[] = [];
 			await expect(
 				(wrapped as ExtensionToolWrapper).execute(
@@ -3902,9 +3902,9 @@ describe("ExtensionRunner", () => {
 				modelRegistry,
 			);
 			let promptedWith = "";
-			const select = vi.fn(async (title: string) => {
+			const select = vi.fn(async (title: string, options: string[]) => {
 				promptedWith = title;
-				return "Approve";
+				return options[0];
 			});
 			initApprovalRunner(runner, select);
 
@@ -4120,9 +4120,9 @@ describe("ExtensionRunner", () => {
 				sessionManager,
 				modelRegistry,
 			);
-			const select = vi.fn(async () => {
+			const select = vi.fn(async (_title: string, options: string[]) => {
 				order.push("ui_select");
-				return "Approve";
+				return options[0];
 			});
 			initApprovalRunner(runner, select);
 

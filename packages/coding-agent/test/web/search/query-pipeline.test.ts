@@ -64,7 +64,7 @@ describe("web search directive pipeline", () => {
 		expect(seen?.model.id).toBe("brave");
 		expect(seen?.parsedQuery?.sites).toEqual(["docs.example.com"]);
 		expect(seen?.parsedQuery?.text).toBe("guide");
-		expect(result.details.response.sources.map(source => source.url)).toEqual(["https://docs.example.com/guide"]);
+		expect(result.details?.response.sources.map(source => source.url)).toEqual(["https://docs.example.com/guide"]);
 		expect(result.content[0]?.text).not.toContain("Note:");
 	});
 
@@ -73,7 +73,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query: "guide site:nowhere.example" }, context);
 
-		expect(result.details.response.sources).toHaveLength(SOURCES.length);
+		expect(result.details?.response.sources).toHaveLength(SOURCES.length);
 		expect(result.content[0]?.text).toStartWith(
 			"Note: no results matched `site:nowhere.example`; the constraint was relaxed",
 		);
@@ -95,7 +95,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query }, context);
 
-		expect(result.details.response.provider).toBe(expectedProvider);
+		expect(result.details?.response.provider).toBe(expectedProvider);
 	});
 
 	it("uses a request model override instead of modelRoles.web", async () => {
@@ -120,7 +120,7 @@ describe("web search directive pipeline", () => {
 
 		const result = await runSearchQuery({ query: "override", model: "web/exa" }, context);
 
-		expect(result.details.response.provider).toBe("exa");
-		expect(result.details.response.sources[0]?.title).toBe("exa");
+		expect(result.details?.response.provider).toBe("exa");
+		expect(result.details?.response.sources[0]?.title).toBe("exa");
 	});
 });

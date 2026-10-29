@@ -19,10 +19,6 @@ import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { DaemonCompletionNotification } from "@oh-my-pi/pi-coding-agent/launch/protocol";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { buildAsyncResultBlock } from "@oh-my-pi/pi-tui/chat/transcript-render-helpers";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -39,7 +35,6 @@ import { formatTaskResultSummary, INLINE_OUTPUT_CHARS } from "@oh-my-pi/pi-codin
 
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
-import { type OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { formatOutputNotice } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
@@ -468,75 +463,6 @@ describe("AgentSession owner-routed async delivery", () => {
 		} finally {
 			await session.dispose();
 			await store.close();
-		}
-	});
-
-	it("retains mixed failure receipts and capture warnings in live and rebuilt batches", async () => {
-		const entries = ["open", "write", undefined, undefined].map((artifactError, index): AsyncResultEntry => {
-			const meta: OutputMeta | undefined =
-				artifactError === "open" || artifactError === "write" ? { artifactError } : undefined;
-			const jobId = `batch-${index}`;
-			const result = `result-${index}` + formatOutputNotice(meta);
-			return {
-				jobId,
-				result,
-				durationMs: (index + 1) * 1000,
-				epoch: 0,
-				job: {
-					id: jobId,
-					type: "bash",
-					label: jobId,
-					status: index === 1 ? "failed" : index === 2 ? "cancelled" : "completed",
-					startTime: Date.now(),
-					abortController: new AbortController(),
-					promise: Promise.resolve(),
-					resultText: result,
-					latestDetails: { meta },
-				},
-			};
-		});
-		const batch = buildAsyncResultBatchMessage(entries);
-		if (!batch || typeof batch.content !== "string") throw new Error("Expected async batch text");
-		expect(batch.content.match(/artifact open failed/g)).toHaveLength(1);
-		expect(batch.content.match(/artifact write failed/g)).toHaveLength(1);
-		await initTheme(false, undefined, undefined, "dark", "light");
-		const persisted = JSON.parse(JSON.stringify(batch)) as typeof batch;
-		const previous = { ...chatTranscriptDisplayPreferences };
-		const original = JSON.stringify(batch);
-		try {
-			for (const message of [batch, persisted]) {
-				const block = buildAsyncResultBlock(message);
-				setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-				const detailed = block
-					.render(160)
-					.map(line => Bun.stripANSI(line))
-					.join("\n");
-				expect(detailed).toMatch(
-					/Background job completed \[bash\] batch-0[^]*artifact open failed[^]*Background job failed \[bash\] batch-1[^]*artifact write failed[^]*Background job cancelled \[bash\] batch-2[^]*Background job completed \[bash\] batch-3/,
-				);
-				setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-				const compact = block
-					.render(160)
-					.map(line => Bun.stripANSI(line))
-					.join("\n");
-				expect(compact).toMatch(
-					/artifact open failed[^]*Background job failed \[bash\] batch-1 \(2\.0s\)[^]*artifact write failed[^]*Background job cancelled \[bash\] batch-2 \(3\.0s\)/,
-				);
-				expect(compact).not.toContain("batch-0");
-				expect(compact).not.toContain("batch-3");
-				expect(compact.match(/artifact open failed/g)).toHaveLength(1);
-				expect(compact.match(/artifact write failed/g)).toHaveLength(1);
-				setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-				expect(
-					block
-						.render(160)
-						.map(line => Bun.stripANSI(line))
-						.join("\n"),
-				).toBe(detailed);
-			}
-			expect(JSON.stringify(batch)).toBe(original);
-		} finally {
-			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 

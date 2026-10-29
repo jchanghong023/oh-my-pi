@@ -16,6 +16,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -107,6 +111,8 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 	for (const arrival of ["buffered", "live", "persisted", "during-replay"] as const) {
 		it(`keeps replayed read images visible after ${arrival} completion`, async () => {
 			const protocol = Object.getOwnPropertyDescriptor(TERMINAL, "imageProtocol")!;
+			const previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false, showImages: true });
 			Object.defineProperty(TERMINAL, "imageProtocol", { value: null });
 			const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
 			const showImages = cfgTerminalShowImages.get(ctx.settings);
@@ -181,6 +187,7 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 				expect(ctx.pendingTools.size).toBe(0);
 			} finally {
 				cfgTerminalShowImages.set(ctx.settings, showImages);
+				setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 				Object.defineProperty(TERMINAL, "imageProtocol", protocol);
 			}
 		});

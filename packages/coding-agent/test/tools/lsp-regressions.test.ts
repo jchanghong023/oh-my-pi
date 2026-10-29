@@ -4387,6 +4387,74 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	for (const notification of ["textDocument/didClose", "workspace/didRenameFiles"] as const) {
+		for (const interruption of ["cancel", "timeout"] as const) {
+			it(`reports committed rename when ${notification} is interrupted by ${interruption}`, async () => {
+				const tempDir = TempDir.createSync("@omp-lsp-rename-notification-");
+				try {
+					const source = path.join(tempDir.path(), "old.ts");
+					const dest = path.join(tempDir.path(), "new.ts");
+					const reference = path.join(tempDir.path(), "consumer.ts");
+					await Bun.write(source, "export const x = 1;\n");
+					await Bun.write(reference, "import './old';\n");
+					const server: ServerConfig = { command: "test-lsp", fileTypes: ["ts"], rootMarkers: [] };
+					const client = {
+						name: "test-lsp",
+						cwd: tempDir.path(),
+						config: server,
+						projectLoaded: Promise.resolve(),
+						openFiles: new Map(notification === "textDocument/didClose" ? [[fileToUri(source), {}]] : []),
+					} as unknown as LspClient;
+					vi.spyOn(lspConfig, "loadConfig").mockReturnValue({
+						servers: { "test-lsp": server },
+						idleTimeoutMs: undefined,
+					});
+					vi.spyOn(lspClient, "getOrCreateClient").mockResolvedValue(client);
+					vi.spyOn(lspClient, "sendRequest").mockResolvedValue({
+						changes: {
+							[fileToUri(reference)]: [
+								{
+									range: { start: { line: 0, character: 8 }, end: { line: 0, character: 13 } },
+									newText: "./new",
+								},
+							],
+						},
+					});
+					const controller = new AbortController();
+					vi.spyOn(lspClient, "sendNotification").mockImplementation(async (_client, method, _params, signal) => {
+						if (method !== notification) return;
+						if (interruption === "cancel") controller.abort();
+						if (!signal?.aborted) {
+							const aborted = Promise.withResolvers<void>();
+							signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
+							await aborted.promise;
+						}
+						throw new ToolAbortError();
+					});
+					const result = await new LspTool(makeLspSession(tempDir.path())).execute(
+						"rename-interrupted",
+						{ action: "rename_file", file: source, new_name: dest, timeout: 5 },
+						controller.signal,
+					);
+					expect(fs.existsSync(source)).toBe(false);
+					expect(fs.existsSync(dest)).toBe(true);
+					expect(await Bun.file(reference).text()).toBe("import './new';\n");
+					expect(result.isError).toBe(true);
+					expect(result.details).toMatchObject({
+						success: false,
+						renameFile: { committed: true, referenceEditCount: 1, notificationsComplete: false },
+					});
+					const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
+					expect(text).toContain(interruption === "timeout" ? "timed out" : "cancelled");
+					expect(text).toContain("Do not retry the move");
+				} finally {
+					vi.restoreAllMocks();
+					tempDir.removeSync();
+				}
+			}, 10_000);
+		}
+	}
+
 	it("rename_file rejects a snippet edit before writing any file", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-rename-snippet-");
 		try {
@@ -6102,6 +6170,17 @@ describe("lsp regressions", () => {
 			const getClientSpy = vi.spyOn(lspClient, "getOrCreateClient");
 
 			const tool = new LspTool(makeLspSession(tempDir.path()));
+			const preview = await tool.execute("rename-md-preview", {
+				action: "rename_file",
+				file: sourceFile,
+				new_name: destFile,
+				apply: false,
+				timeout: 5,
+			});
+			const previewText = preview.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
+			expect(previewText).toContain("Servers responding to willRenameFiles: none");
+			expect(previewText).toContain("No LSP edits would be applied");
+			expect(previewText).toContain("Check references not covered");
 			const result = await tool.execute("rename-md", {
 				action: "rename_file",
 				file: sourceFile,
@@ -6119,6 +6198,13 @@ describe("lsp regressions", () => {
 				.map(block => block.text)
 				.join("\n");
 			expect(output).toContain("Renamed");
+			expect(output).toContain("Servers responding to willRenameFiles: none");
+			expect(output).toContain("Applied 0 reference edit(s)");
+			expect(output).toContain("Check references not covered");
+			expect(result.details).toMatchObject({
+				success: true,
+				renameFile: { committed: true, referenceEditCount: 0, notificationsComplete: true },
+			});
 		} finally {
 			vi.restoreAllMocks();
 			tempDir.removeSync();

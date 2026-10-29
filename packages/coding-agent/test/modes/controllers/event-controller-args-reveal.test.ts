@@ -5,12 +5,16 @@
  * the JSON closes the final parsed arguments render as-is (snap), mirroring
  * how assistant text snaps at message_end.
  */
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { STREAMING_REVEAL_FRAME_MS } from "@oh-my-pi/pi-coding-agent/modes/controllers/streaming-reveal";
@@ -45,6 +49,7 @@ function makeStreamingMessage(content: AssistantMessage["content"]): AssistantMe
 }
 
 function createFixture(streamingMessage: AssistantMessage, tool?: AgentTool) {
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	const pendingTools = new Map<string, ToolExecutionComponent>();
 	let approvalWaiter: ((toolCallId: string) => Promise<void>) | undefined;
 	const extensionRunner = {
@@ -91,9 +96,16 @@ async function dispatchToolStart(
 }
 
 describe("EventController paces streamed tool args", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	});
+
 	afterEach(() => {
 		vi.useRealTimers();
 		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
 		vi.restoreAllMocks();
 	});
 

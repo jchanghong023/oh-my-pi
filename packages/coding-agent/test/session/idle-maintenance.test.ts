@@ -127,6 +127,7 @@ describe("AgentSession idle maintenance", () => {
 		if (!model) throw new Error("Expected built-in anthropic model to exist");
 		const settings = Settings.isolated({
 			"todo.reminders": false,
+			"recap.enabled": true,
 			"recap.idleSeconds": RECAP_SECONDS,
 			"compaction.idleTimeoutSeconds": COMPACTION_SECONDS,
 			...options.settings,

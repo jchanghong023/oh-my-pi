@@ -16,6 +16,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import type { AssistantMessage, ImageContent } from "@oh-my-pi/pi-ai";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
@@ -28,19 +32,6 @@ import { cfgDisplayShowTokenUsage, cfgTerminalShowImages } from "@oh-my-pi/pi-co
 
 beforeAll(async () => {
 	await initTheme(false, undefined, undefined, "dark", "light");
-});
-
-const originalImageProtocol = TERMINAL.imageProtocol;
-
-beforeEach(async () => {
-	resetSettingsForTest();
-	await Settings.init({ inMemory: true });
-});
-
-afterEach(() => {
-	resetSettingsForTest();
-	setTerminalImageProtocol(originalImageProtocol);
-	vi.restoreAllMocks();
 });
 
 type Block = AssistantMessage["content"][number];
@@ -104,6 +95,23 @@ function hasImageComponent(component: Component): boolean {
 }
 
 describe("EventController read-group accretion", () => {
+	const originalImageProtocol = TERMINAL.imageProtocol;
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+
+	beforeEach(async () => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		resetSettingsForTest();
+		await Settings.init({ inMemory: true, overrides: { "display.compactToolActivity": false } });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+	});
+
+	afterEach(() => {
+		resetSettingsForTest();
+		setChatTranscriptDisplayPreferences(previousDisplayPreferences);
+		setTerminalImageProtocol(originalImageProtocol);
+		vi.restoreAllMocks();
+	});
+
 	it("collapses a run of single-read completions into one group (mixed/empty thinking)", async () => {
 		const { controller, chatContainer } = createFixture();
 

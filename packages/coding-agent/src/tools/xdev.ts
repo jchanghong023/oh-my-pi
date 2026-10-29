@@ -158,7 +158,7 @@ function parseDeviceArgs(
 	}
 	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
 		throw new ToolError(
-			`${XD_URL_PREFIX}${device.name} content must be a JSON object, got ${Array.isArray(parsed) ? "array" : typeof parsed}.`,
+			`${XD_URL_PREFIX}${device.name} content must be a JSON object, got ${parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed}.`,
 		);
 	}
 	// The harness only injects the intent field into top-level schemas; strip a

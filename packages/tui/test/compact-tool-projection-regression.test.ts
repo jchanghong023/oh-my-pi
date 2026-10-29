@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import { chatTranscriptDisplayPreferences, setChatTranscriptDisplayPreferences } from "../src/chat/display-preferences";
 import { ReadToolGroupComponent } from "../src/chat/read-tool-group";
-import { stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
+import { settledBashCards, stopSharedSpinnerTicker, ToolExecutionComponent } from "../src/chat/tool-execution";
 import { StatusNotice } from "../src/chrome/status-notice";
 import { TranscriptContainer } from "../src/chrome/transcript-container";
 import { Text } from "../src/components/text";
@@ -49,6 +49,18 @@ afterEach(() => {
 });
 
 describe("compact tool component integration", () => {
+	it("correlates only terminal Bash cards with actual output", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const bash = tool("bash", { command: "exit 1" });
+		const details = { async: { state: "failed", jobId: "bg_1", type: "bash" } };
+		bash.updateResult({ content: [], details, isError: true }, false);
+		expect(settledBashCards([bash]).size).toBe(0);
+		bash.updateResult({ content: [{ type: "text", text: "failure" }], details, isError: true }, true);
+		expect(settledBashCards([bash]).size).toBe(0);
+		bash.updateResult({ content: [{ type: "text", text: "failure" }], details, isError: true }, false);
+		expect(settledBashCards([bash]).get("bg_1")).toBe("failed");
+	});
+
 	it("restores a background row from the job start instead of restarting at zero on replay", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		let now = 61_000;
@@ -145,12 +157,12 @@ describe("compact tool component integration", () => {
 		});
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).not.toContain("MESSAGE_DELIVERY_FAILED");
+			expect(view).toContain("MESSAGE_DELIVERY_FAILED");
 			expect(view).toContain("latest-command");
 		}
 	});
 
-	it("keeps process controls and approvals in one run while hiding invocation errors", () => {
+	it("keeps process controls and approvals in one run while displaying invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-process.ts" }));
@@ -178,14 +190,14 @@ describe("compact tool component integration", () => {
 		mode.setCompactNeedsUserInput("Confirm mode change");
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 5 次");
-			expect(view).not.toContain("PROCESS_INPUT_FAILED");
+			expect(view).toContain("PROCESS_INPUT_FAILED");
 			expect(view).toContain("mode-service");
 			expect(view).toContain("kill-job");
 			expect(view).toContain("after-process");
 		}
 	});
 
-	it("keeps configuration approvals in ordinary runs while hiding invocation errors", () => {
+	it("keeps configuration approvals in ordinary runs while displaying invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-config.ts" }));
@@ -212,7 +224,7 @@ describe("compact tool component integration", () => {
 		config.updateResult({ content: [{ type: "text", text: "CONFIG_CHANGE_FAILED" }], isError: true });
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).not.toContain("CONFIG_CHANGE_FAILED");
+			expect(view).toContain("CONFIG_CHANGE_FAILED");
 			expect(view).toContain("latest-config");
 		}
 	});
@@ -260,11 +272,11 @@ describe("compact tool component integration", () => {
 		});
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).not.toContain("DEVICE_EXECUTION_FAILED");
+			expect(view).toContain("DEVICE_EXECUTION_FAILED");
 		}
 	});
 
-	it("hides invocation errors and failure tallies without changing detailed history", () => {
+	it("retains invocation errors in compact and detailed history", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		const read = tool("read", { path: "missing-source.ts" });
@@ -275,9 +287,9 @@ describe("compact tool component integration", () => {
 		const original = JSON.stringify(result);
 		root.addChild(read);
 		read.updateResult(result);
-		expect(output(root)).toBe("");
+		expect(output(root)).toContain("Path not found: missing-source.ts");
 		for (const view of [native(root, false), native(root)]) {
-			expect(view).not.toContain("missing-source.ts");
+			expect(view).toContain("Path not found: missing-source.ts");
 		}
 		for (const path of ["latest-a.ts", "latest-b.ts"]) {
 			const later = tool("read", { path });
@@ -285,8 +297,7 @@ describe("compact tool component integration", () => {
 			root.addChild(later);
 		}
 		for (const view of [output(root), native(root, false), native(root)]) {
-			expect(view).not.toContain("Path not found");
-			expect(view).not.toContain("失败");
+			expect(view).toContain("Path not found: missing-source.ts");
 			expect(view).toContain("latest-a.ts");
 			expect(view).toContain("latest-b.ts");
 		}
@@ -468,76 +479,48 @@ describe("compact tool component integration", () => {
 		expect(file.isCompactActualFileWrite()).toBe(true);
 	});
 
-	it("retains consumed wait messages and embedded job failures beyond the preview quota", () => {
+	it("retains consumed wait messages beyond the preview quota", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		for (const details of [
-			{ op: "wait", waited: { id: "42", from: "Worker", to: "Main", body: "MESSAGE_BODY", ts: Date.now() - 5000 } },
-			{
-				op: "wait",
-				jobs: [
-					{
-						id: "failed-job",
-						type: "bash",
-						status: "failed",
-						label: "broken",
-						durationMs: 1000,
-						errorText: "JOB_DIAGNOSTIC",
-					},
-				],
-			},
-			{
-				op: "wait",
-				jobs: [{ id: "cancelled-job", type: "task", status: "cancelled", label: "stopped", durationMs: 1000 }],
-			},
-			{
-				op: "wait",
-				jobs: [
-					{
-						id: "schema-job",
-						type: "task",
-						status: "completed",
-						label: "schema",
-						durationMs: 1000,
-						structured: { status: "invalid", error: "SCHEMA_DIAGNOSTIC" },
-					},
-				],
-			},
-			{
-				op: "wait",
-				jobs: [
-					{
-						id: "artifact-job",
-						type: "task",
-						status: "completed",
-						label: "artifact",
-						durationMs: 1000,
-						artifactError: "write",
-					},
-				],
-			},
-		]) {
+		const details = {
+			op: "wait",
+			waited: { id: "42", from: "Worker", to: "Main", body: "MESSAGE_BODY", ts: Date.now() - 5000 },
+		};
+		const root = new TranscriptContainer();
+		const wait = tool("wait", {});
+		const result = { content: [{ type: "text" as const, text: "wait result" }], details };
+		const original = JSON.stringify(result);
+		wait.updateResult(result);
+		root.addChild(wait);
+		root.addChild(tool("bash", { command: "echo latest-one" }));
+		root.addChild(tool("bash", { command: "echo latest-two" }));
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).toContain("工具调用 3 次");
+			expect(view).toContain("latest-two");
+			expect(view).toContain("Worker");
+			expect(view).toContain("MESSAGE_BODY");
+		}
+		expect(JSON.stringify(result)).toBe(original);
+	});
+
+	it("retains failed and cancelled wait results beyond the compact preview quota", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		for (const status of ["failed", "cancelled"] as const) {
 			const root = new TranscriptContainer();
 			const wait = tool("wait", {});
-			const result = { content: [{ type: "text" as const, text: "wait result" }], details };
-			const original = JSON.stringify(result);
-			wait.updateResult(result);
+			wait.updateResult({
+				content: [{ type: "text", text: "wait result" }],
+				details: {
+					op: "wait",
+					jobs: [{ id: "bg_99", type: "bash", status, label: "unique-command", durationMs: 1000 }],
+				},
+			});
 			root.addChild(wait);
 			root.addChild(tool("bash", { command: "echo latest-one" }));
 			root.addChild(tool("bash", { command: "echo latest-two" }));
 			for (const view of [output(root), native(root, false), native(root)]) {
-				expect(view).toContain("工具调用 3 次");
+				expect(view).toContain("unique-command");
 				expect(view).toContain("latest-two");
-				if ("waited" in details) {
-					expect(view).toContain("Worker");
-					expect(view).toContain("MESSAGE_BODY");
-				} else {
-					expect(view).toContain(details.jobs[0]!.id);
-					if ("errorText" in details.jobs[0]!) expect(view).toContain("JOB_DIAGNOSTIC");
-					if ("structured" in details.jobs[0]!) expect(view).toContain("SCHEMA_DIAGNOSTIC");
-					if ("artifactError" in details.jobs[0]!) expect(view).toContain("artifact write failed");
-				}
 			}
-			expect(JSON.stringify(result)).toBe(original);
 		}
 	});
 

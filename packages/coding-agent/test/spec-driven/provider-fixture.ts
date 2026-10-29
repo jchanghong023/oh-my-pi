@@ -309,7 +309,9 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 		for (const target of targets)
 			if (!calls(request).some(call => call.name === "read" && call.args.path === target))
 				return tool(request, "read", { i: "Inspecting packaged resource access", path: target });
-		return { text: `${MARKER}_CHAT_READY` };
+		return {
+			text: typeof selected.turn === "string" ? `${MARKER}_RESOURCE_READY_${selected.turn}` : `${MARKER}_CHAT_READY`,
+		};
 	}
 	if (!payload && ordinary.includes("OMP_SPEC_IMPLEMENT_CHILD") && request.tools?.length) {
 		const executed = calls(request);

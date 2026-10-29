@@ -1,14 +1,13 @@
 /**
  * Local napi build: regenerates TypeScript bindings and runtime enum exports,
- * then installs the host addon. Internal --output-dir=<dir> mode instead emits
- * raw, unstamped addon.node and bindings as Bazel-owned outputs without changing
- * the installed package. Host target only — no cross-compilation.
+ * then installs the host addon. This is the default backend for the `host`
+ * target; explicit release targets build through Bazel. No cross-compilation.
  *
  * `OMP_NATIVE_CARGO_PROFILE` selects the cargo profile (default `local`:
  * incremental, unstripped). Image builds set `ci` for a stripped addon.
  *
  * `OMP_NATIVE_FEATURES` passes extra cargo features to `napi build --features`
- * (e.g. `wayland-pipewire`), including the Bazel-cached host build.
+ * (e.g. `wayland-pipewire`). Bazel builds ignore it.
  */
 
 import * as fsSync from "node:fs";
@@ -20,6 +19,10 @@ import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/h
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
 import { withRustCompilerEvents } from "../../../scripts/test-gate-native-events";
 import { generateEnumExports } from "./gen-enums";
+
+if (process.argv.length > 2) {
+	throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts");
+}
 
 // pcre2-sys prefers a system libpcre2 when pkg-config finds one. Keep the
 // static build so the local addon never retains host Homebrew paths.
@@ -62,13 +65,6 @@ const repoRoot = path.join(import.meta.dir, "../../..");
 const rustDir = path.join(repoRoot, "crates/pi-natives");
 const nativeDir = path.join(import.meta.dir, "../native");
 const packageJsonPath = path.join(import.meta.dir, "../package.json");
-const outputArgs = process.argv.slice(2);
-if (outputArgs.length > 1 || (outputArgs.length === 1 && !outputArgs[0]!.startsWith("--output-dir="))) {
-	throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts [--output-dir=<dir>]");
-}
-const outputArgument = outputArgs[0]?.slice("--output-dir=".length);
-if (outputArgument === "") throw new Error("--output-dir requires a directory");
-const artifactDir = outputArgument === undefined ? undefined : path.resolve(outputArgument);
 
 const localAddon = resolveLocalHostAddon({
 	platform: process.platform,
@@ -210,18 +206,12 @@ const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);
 
 console.log(`Building pi-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
 
-let buildOutputDir: string;
-if (artifactDir) {
-	await fs.mkdir(artifactDir, { recursive: true });
-	buildOutputDir = await fs.mkdtemp(path.join(artifactDir, ".build-"));
-} else {
-	await fs.mkdir(nativeDir, { recursive: true });
-	await cleanupStaleTemps(nativeDir);
-	await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
-	buildOutputDir = await fs.mkdtemp(
-		path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
-	);
-}
+await fs.mkdir(nativeDir, { recursive: true });
+await cleanupStaleTemps(nativeDir);
+await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
+const buildOutputDir = await fs.mkdtemp(
+	path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
+);
 
 // Resolve the CLI's JS entry from the package manifest rather than the
 // `node_modules/.bin` shim: `bunx @napi-rs/cli` can pick up the wrong bin on
@@ -302,21 +292,15 @@ try {
 	}
 
 	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
-	if (artifactDir) {
-		await fs.copyFile(builtAddonPath, path.join(artifactDir, "addon.node"));
-		await fs.copyFile(path.join(buildOutputDir, "index.d.ts"), path.join(artifactDir, "index.d.ts"));
-		await generateEnumExports(artifactDir);
-	} else {
-		// Stamp only the installed copy; raw Bazel artifacts never carry a release version.
-		const { version } = (await Bun.file(packageJsonPath).json()) as { version: string };
-		await stampNativeVersion(builtAddonPath, version);
-		if (builtAddonPath !== canonicalAddonPath) {
-			console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
-			await installBinary(builtAddonPath, canonicalAddonPath);
-		}
-		await installGeneratedBindings(buildOutputDir);
-		await generateEnumExports();
+	// Stamp before the addon becomes visible under its canonical name.
+	const { version } = (await Bun.file(packageJsonPath).json()) as { version: string };
+	await stampNativeVersion(builtAddonPath, version);
+	if (builtAddonPath !== canonicalAddonPath) {
+		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
+		await installBinary(builtAddonPath, canonicalAddonPath);
 	}
+	await installGeneratedBindings(buildOutputDir);
+	await generateEnumExports();
 
 	console.log("Bindings build complete.");
 } finally {

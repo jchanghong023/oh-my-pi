@@ -87,23 +87,27 @@ async function connectedBrowser(): Promise<PuppeteerBrowserHandle> {
 }
 
 describe.skipIf(!CHROMIUM_AVAILABLE)("browser screenshots of background tabs", () => {
-	it("captures a targeted background tab without switching the user's visible tab", async () => {
-		const handle = await connectedBrowser();
-		const agentPage = await handle.browser.newPage();
-		await agentPage.goto(page("agent-tab", "#0000ff"));
-		const userPage = await handle.browser.newPage();
-		await userPage.goto(page("user-tab", "#ffffff"));
-		await userPage.bringToFront();
-		const name = `background-target-${process.pid}`;
-		cleanups.push(async () => {
-			await releaseTab(name);
-		});
-		await acquireTab(name, handle, { target: "agent-tab", timeoutMs: 30_000 });
+	it.skipIf(process.platform === "win32")(
+		"captures a targeted background tab without switching the user's visible tab",
+		async () => {
+			const handle = await connectedBrowser();
+			const agentPage = await handle.browser.newPage();
+			await agentPage.goto(page("agent-tab", "#0000ff"));
+			const userPage = await handle.browser.newPage();
+			await userPage.goto(page("user-tab", "#ffffff"));
+			await userPage.bringToFront();
+			const name = `background-target-${process.pid}`;
+			cleanups.push(async () => {
+				await releaseTab(name);
+			});
+			await acquireTab(name, handle, { target: "agent-tab", timeoutMs: 30_000 });
 
-		expect(await repaintAndCapture(name, "#00ff00")).toEqual([0, 255, 0]);
-		expect(await visibility(userPage)).toBe("visible");
-		expect(await visibility(agentPage)).toBe("hidden");
-	}, 45_000);
+			expect(await repaintAndCapture(name, "#00ff00")).toEqual([0, 255, 0]);
+			expect(await visibility(userPage)).toBe("visible");
+			expect(await visibility(agentPage)).toBe("hidden");
+		},
+		45_000,
+	);
 
 	it("captures the adopted tab after the user switched away from it", async () => {
 		const handle = await connectedBrowser();

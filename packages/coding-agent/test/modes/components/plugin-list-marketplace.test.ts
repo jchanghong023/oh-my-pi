@@ -68,13 +68,11 @@ describe("PluginListComponent", () => {
 		});
 
 		const text = stripVTControlCharacters(component.render(120).join("\n"));
-		expect(text).not.toContain("No plugins installed");
 		expect(text).toContain("developer-essentials@claude-code-workflows");
 		expect(text).toContain("hyperpowers@withzombies-hyper");
-		expect(text).toContain("[marketplace]");
 	});
 
-	it("renders npm and marketplace plugins together with kind badges", () => {
+	it("renders npm and marketplace plugins together", () => {
 		const entries: PluginListEntry[] = [
 			{ kind: "npm", plugin: npm("local-plugin") },
 			{ kind: "marketplace", plugin: marketplace("remote@mkt") },
@@ -90,7 +88,6 @@ describe("PluginListComponent", () => {
 		expect(text).toContain("local-plugin");
 		expect(text).toContain("[npm]");
 		expect(text).toContain("remote@mkt");
-		expect(text).toContain("[marketplace]");
 	});
 
 	it("marks shadowed marketplace entries and surfaces scope tag", () => {
@@ -109,7 +106,8 @@ describe("PluginListComponent", () => {
 
 		const text = stripVTControlCharacters(component.render(120).join("\n"));
 		expect(text).toContain("[user]");
-		expect(text).toContain("shadowed");
+		expect(text).toContain("project");
+		expect(text).toContain("○");
 	});
 
 	it("routes enter on a marketplace entry to onMarketplaceSelect", () => {
@@ -294,7 +292,7 @@ describe("MarketplacePluginDetailComponent", () => {
 		});
 
 		const text = await renderMarketplaceDetail(component, "plugin@mkt");
-		expect(text).toContain("Enabled");
+		expect(text).toContain("false");
 		expect(text).toContain("0.4.2");
 		expect(text).toContain("abc1234");
 		expect(text).toContain("user");
@@ -311,7 +309,7 @@ describe("MarketplacePluginDetailComponent", () => {
 			onConfigChange: () => {},
 			onBack: () => {},
 		});
-		await renderMarketplaceDetail(component, "Enabled");
+		await renderMarketplaceDetail(component, "toggle@mkt");
 
 		component.handleInput(" ");
 

@@ -21,6 +21,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
 import { cfgTuiMouse } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { setNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 
 function plainRows(rows: readonly string[]): string[] {
@@ -35,12 +37,14 @@ describe("inline click-to-focus geometry", () => {
 	let term: VirtualTerminal;
 	let eventBus: EventBus;
 	let modelRegistry: ModelRegistry;
+	let previousCompact: boolean;
 
 	beforeAll(() => {
 		initTheme();
 	});
 
 	beforeEach(async () => {
+		previousCompact = chatTranscriptDisplayPreferences.compactToolActivity;
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-click-focus-e2e-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -58,6 +62,8 @@ describe("inline click-to-focus geometry", () => {
 		eventBus = new EventBus();
 		const composer = new Composer({ terminal: term });
 		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, eventBus, composer);
+		cfgDisplayCompactToolActivity.set(mode.settings, false);
+		chatTranscriptDisplayPreferences.compactToolActivity = false;
 	});
 	afterEach(async () => {
 		vi.restoreAllMocks();
@@ -66,6 +72,7 @@ describe("inline click-to-focus geometry", () => {
 		authStorage?.close();
 		tempDir?.removeSync();
 		resetSettingsForTest();
+		chatTranscriptDisplayPreferences.compactToolActivity = previousCompact;
 	});
 
 	it("maps a painted live task row back to its agent id", async () => {

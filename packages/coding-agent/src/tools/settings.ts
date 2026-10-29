@@ -357,7 +357,7 @@ export const cfgToolsRestrictedFolders = register({
 	default: EMPTY_STRING_ARRAY,
 	ui: {
 		tab: "interaction",
-		group: "Approvals",
+		group: "授权确认",
 		label: "Restricted Folders",
 		editor: "json",
 		description:
@@ -700,7 +700,7 @@ export const cfgComputerBackgroundFallback = register({
 	default: "takeover",
 	ui: {
 		tab: "tools",
-		group: "Computer",
+		group: "计算机",
 		label: "Computer Background Fallback",
 		description:
 			"What window input does when its background route is unavailable: rerun it in takeover and return focus to your app (macOS; elsewhere plain takeover), or refuse, which also keeps the agent from taking the foreground or opening macOS menus itself",
@@ -973,7 +973,7 @@ export const cfgAsyncPrintWake = register({
 	default: false,
 	ui: {
 		tab: "tools",
-		group: "Execution",
+		group: "执行",
 		label: "Wake Print Mode on Job Results",
 		description:
 			"In print mode (-p, --mode json), keep running after the last prompt while this run's background jobs are active, and start another turn in the same session with each job's result; exits once no job or result is pending. Off: print mode exits after its prompts and cancels running jobs",
@@ -986,7 +986,7 @@ export const cfgAsyncWidgets = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Execution",
+		group: "执行",
 		label: "Live Job Widgets",
 		description:
 			"Draw a live widget for each running background job (charts, bars, status grids derived from its output) in the wait card, the jobs pill and the jobs sheet. The `widget` model role (default: `smol`) writes one spec per job; updates need no further model calls",
@@ -1048,7 +1048,7 @@ export const cfgToolsXdevNotices = register({
 	default: true,
 	ui: {
 		tab: "tools",
-		group: "Discovery & MCP",
+		group: "发现与 MCP",
 		label: "xd:// Mount Notices",
 		description:
 			"Show an `xd://: mounted …` notice when MCP or extension tools are mounted or unmounted. The model still learns of the change with its next prompt.",

@@ -6,6 +6,7 @@ import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { approvalGrantKey, SessionApprovals } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
@@ -19,14 +20,20 @@ function textOf(result: { content: ReadonlyArray<{ type: string; text?: string }
 describe("artifact reads through session approval", () => {
 	let root: string;
 	let session: AgentSession | undefined;
+	let sessionManager: SessionManager | undefined;
+	let authStorage: AuthStorage | undefined;
 
 	beforeEach(async () => {
 		root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-artifact-approval-"));
 	});
 
 	afterEach(async () => {
-		await session?.dispose();
+		if (session) await session.dispose();
+		else await sessionManager?.close();
+		authStorage?.close();
 		session = undefined;
+		sessionManager = undefined;
+		authStorage = undefined;
 		await fs.rm(root, { recursive: true, force: true });
 	});
 
@@ -38,10 +45,13 @@ describe("artifact reads through session approval", () => {
 		async (_kind, taskDepth) => {
 			const cwd = path.join(root, "cwd");
 			await fs.mkdir(cwd);
+			sessionManager = SessionManager.create(cwd, path.join(root, "sessions"));
+			authStorage = await AuthStorage.create(":memory:");
 			const created = await createAgentSession({
 				cwd,
 				agentDir: path.join(root, "agent"),
-				sessionManager: SessionManager.create(cwd, path.join(root, "sessions")),
+				sessionManager,
+				authStorage,
 				settings: Settings.isolated({
 					"tools.approvalMode": "yolo",
 					"tools.restrictedFolders": [path.join(root, "restricted")],

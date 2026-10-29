@@ -82,7 +82,7 @@ describe("task progress rendering", () => {
 			["command", false, `cat <${file}`, "cat <~/private/file"],
 			["task", false, `Inspect ${file}`, "Inspect ~/private/file"],
 			["prompt", false, `Explain ${file}`, "Explain ~/private/file"],
-			["pattern", false, file, file],
+			["pattern", false, "private/file", "private/file"],
 		] as const) {
 			const progress = runningProgress(
 				recent

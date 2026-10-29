@@ -150,7 +150,7 @@ export async function readSqlite(
 					.done();
 			}
 			case "row": {
-				const lookup = resolveTableRowLookup(db, selector.table);
+				const lookup = resolveTableRowLookup(db, selector.table, "read");
 				const row =
 					lookup.kind === "pk"
 						? getRowByKey(db, selector.table, lookup, selector.key)

@@ -245,10 +245,12 @@ describe("custom session-file registry", () => {
 
 describe("relative session directory", () => {
 	test("stores the session file under an absolute path", async () => {
-		const cwd = makeTempDir("omp-cwd-");
-		// `--session-dir ./sess` arrives relative to the process cwd.
+		const cwd = fs.mkdtempSync(path.join(process.cwd(), "omp-cwd-"));
+		cleanup.push(cwd);
+		// Keep the directory on the process cwd's volume so this is relative on Windows too.
 		const relativeDir = path.relative(process.cwd(), path.join(cwd, "sess"));
-		const manager = SessionManager.create(cwd, relativeDir, new MemorySessionStorage());
+		expect(path.isAbsolute(relativeDir)).toBe(false);
+		const manager = SessionManager.create(cwd, relativeDir, new FileSessionStorage());
 		try {
 			expect(manager.getSessionDir()).toBe(path.join(cwd, "sess"));
 			const file = manager.getSessionFile();

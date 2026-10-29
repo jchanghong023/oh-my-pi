@@ -73,6 +73,7 @@ beforeAll(async () => {
 		<button><div>Next</div><div>step</div></button>
 		<button><span aria-label="Close dialog">×</span></button>
 		<input type="submit">
+		<input type="reset">
 		<input placeholder="Email">
 		<input aria-placeholder="Search records">
 		<button><span style="visibility:hidden">x</span>Keep</button>
@@ -115,7 +116,6 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 		["hidden text is left out", "button", "Save"],
 		["block children are separated", "button", "Next step"],
 		["a child's aria-label replaces its text", "button", "Close dialog"],
-		["a submit input has no value", "button", "Submit"],
 		["a textbox is named by its placeholder", "textbox", "Email"],
 		["a textbox is named by its aria-placeholder", "textbox", "Search records"],
 		["visibility: hidden text is left out", "button", "Keep"],
@@ -141,6 +141,42 @@ describe.skipIf(!CHROMIUM_AVAILABLE)("browser semantic selectors and queries", (
 		})) as { details?: { value?: number } };
 		expect(result.details?.value).toBe(1);
 	});
+	it.skipIf(process.platform === "win32")(
+		"uses native submit and reset names for exact and substring role queries",
+		async () => {
+			const result = (await invoke({
+				action: "run",
+				name: namesTab,
+				code: `const inputs = await tab.evaluate(() => Array.from(document.querySelectorAll('input[type=submit], input[type=reset]'), el => ({
+				type: el.type, hasValue: el.hasAttribute("value")
+			})));
+			const counts = [];
+			for (const input of inputs) {
+				const observed = (await tab.observe({ selector: 'input[type="' + input.type + '"]' })).elements.find(entry => entry.role === "button");
+				if (!observed || !observed.name) return { inputs, counts, missing: input.type };
+				const exact = 'role/button[name="' + observed.name.toLocaleUpperCase() + '" exact]';
+				const partial = 'role/button[name="' + observed.name.slice(0, 1) + '"]';
+				counts.push([await tab.count(exact), await tab.count(partial)]);
+			}
+			return { inputs, counts };`,
+			})) as {
+				details?: {
+					value?: { inputs: { type: string; hasValue: boolean }[]; counts: number[][]; missing?: string };
+				};
+			};
+			const value = result.details?.value;
+			expect(value?.inputs).toEqual([
+				{ type: "submit", hasValue: false },
+				{ type: "reset", hasValue: false },
+			]);
+			expect(value?.missing).toBeUndefined();
+			expect(value?.counts).toHaveLength(2);
+			for (const [exact, partial] of value?.counts ?? []) {
+				expect(exact).toBeGreaterThanOrEqual(1);
+				expect(partial).toBeGreaterThanOrEqual(exact);
+			}
+		},
+	);
 
 	it("matches role/ exact names to every name the Tern page kit's observe() shows", async () => {
 		const result = (await invoke({

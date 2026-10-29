@@ -134,13 +134,13 @@ describe("default web chain", () => {
 			{ authStorage, modelRegistry, sessionModel: sessionModel("anthropic", "claude-sonnet-4-5") },
 		);
 
-		expect(result.details.error).toContain("returned no sources");
+		expect(result.details?.error).toContain("returned no sources");
 	});
 
 	it("fails an explicit web/hosted selection outside a session instead of substituting another engine", async () => {
 		const result = await runSearchQuery({ query: "anything", model: "web/hosted" }, { authStorage, modelRegistry });
 
 		expect(attempted).toEqual([]);
-		expect(result.details.error).toContain("no web search grounding");
+		expect(result.details?.error).toContain("no web search grounding");
 	});
 });

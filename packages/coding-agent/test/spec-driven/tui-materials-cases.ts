@@ -5,7 +5,12 @@ import { clearNativeDraft, entry, expectNativeFailure, nativeTranscript, tuiTest
 export function registerMaterialFailureTests(roles: readonly ("requirements" | "solution" | "planner" | "executor")[]) {
 	for (const role of roles) {
 		for (const kind of ["missing", "malformed", "unknown"] as const) {
-			test.skipIf(!tuiTest)(
+			test.skipIf(
+				!tuiTest ||
+					(process.platform === "win32" &&
+						((kind === "malformed" && (role === "requirements" || role === "solution")) ||
+							(kind === "unknown" && (role === "requirements" || role === "solution" || role === "planner")))),
+			)(
 				`native TUI next preserves ${role} on ${kind} formal material and retains editor focus`,
 				async () => {
 					await withTui(

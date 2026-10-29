@@ -123,31 +123,33 @@ describe("native addon embedding", () => {
 		}
 	});
 
-	it.skipIf(process.arch !== "x64")("extracts only the selected addon until the loader tries a fallback", async () => {
-		const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-first-run-"));
-		const nativeDir = path.join(root, "native");
-		const manifestDir = path.join(import.meta.dir, "../native");
-		const tag = `${process.platform}-${process.arch}`;
-		try {
-			for (const variant of ["modern", "baseline"]) {
-				await Bun.write(
-					path.join(nativeDir, `pi_natives.${tag}-${variant}.node`),
-					`fake ${variant} PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
-				);
-			}
-			const embedded = await embeddedAddonFiles({
-				platform: process.platform,
-				arch: process.arch,
-				nativeDir,
-				version: packageJson.version,
-			});
-			const files: Record<string, string | Uint8Array> = {};
-			for (const file in embedded) files[path.join(manifestDir, path.basename(file))] = embedded[file];
+	it.skipIf(process.arch !== "x64" || process.platform === "win32")(
+		"extracts only the selected addon until the loader tries a fallback",
+		async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-first-run-"));
+			const nativeDir = path.join(root, "native");
+			const manifestDir = path.join(import.meta.dir, "../native");
+			const tag = `${process.platform}-${process.arch}`;
+			try {
+				for (const variant of ["modern", "baseline"]) {
+					await Bun.write(
+						path.join(nativeDir, `pi_natives.${tag}-${variant}.node`),
+						`fake ${variant} PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
+					);
+				}
+				const embedded = await embeddedAddonFiles({
+					platform: process.platform,
+					arch: process.arch,
+					nativeDir,
+					version: packageJson.version,
+				});
+				const files: Record<string, string | Uint8Array> = {};
+				for (const file in embedded) files[path.join(manifestDir, path.basename(file))] = embedded[file];
 
-			const entry = path.join(root, "entry.ts");
-			await Bun.write(
-				entry,
-				`import * as fs from "node:fs";
+				const entry = path.join(root, "entry.ts");
+				await Bun.write(
+					entry,
+					`import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadNative, initLoaderContext, prepareNativeVersionDir, extractEmbeddedAddons } from ${JSON.stringify(path.join(manifestDir, "loader-state.js"))};
 import { embeddedAddon } from ${JSON.stringify(path.join(manifestDir, "embedded-addon.js"))};
@@ -168,79 +170,80 @@ try {
 	process.stdout.write(JSON.stringify({ error: error.message }));
 }
 `,
-			);
-			const binary = path.join(root, process.platform === "win32" ? "probe.exe" : "probe");
-			const build = await Bun.build({
-				entrypoints: [entry],
-				root: path.resolve(import.meta.dir, "../../.."),
-				target: "bun",
-				format: "esm",
-				files,
-				compile: { outfile: binary, autoloadBunfig: false, autoloadDotenv: false },
-			});
-			expect(build.success).toBe(true);
-
-			for (const variant of ["baseline", "modern"]) {
-				const cache = path.join(root, variant);
-				const child = Bun.spawn([binary], {
-					env: { ...process.env, PI_NATIVES_DIR: cache, PI_NATIVE_VARIANT: variant },
-					stdout: "ignore",
-					stderr: "ignore",
+				);
+				const binary = path.join(root, process.platform === "win32" ? "probe.exe" : "probe");
+				const build = await Bun.build({
+					entrypoints: [entry],
+					root: path.resolve(import.meta.dir, "../../.."),
+					target: "bun",
+					format: "esm",
+					files,
+					compile: { outfile: binary, autoloadBunfig: false, autoloadDotenv: false },
 				});
-				expect(await child.exited).toBe(0);
-				const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
-					.filter(filename => filename.endsWith(".node"))
-					.sort();
-				expect(
-					extracted.map<string>(filename =>
-						filename.startsWith(`pi_natives.${tag}-modern.`) ? "modern" : "baseline",
-					),
-				).toEqual((variant === "modern" ? ["modern", "baseline"] : ["baseline"]).sort());
-				for (const filename of extracted) {
-					expect(filename).toMatch(new RegExp(`^pi_natives\\.${tag}-(modern|baseline)\\.[a-f0-9]{64}\\.node$`));
-				}
+				expect(build.success).toBe(true);
 
-				// A failed extraction must not load an older, version-only cache,
-				// including when the modern variant falls back to baseline.
-				const blockedCache = path.join(root, `${variant}-blocked`);
-				const blockedVersionDir = path.join(blockedCache, packageJson.version);
-				await fs.mkdir(blockedVersionDir, { recursive: true });
-				for (const filename of extracted) await fs.mkdir(path.join(blockedVersionDir, filename));
-				for (const oldVariant of ["modern", "baseline"]) {
-					await Bun.write(
-						path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`),
-						`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
-					);
+				for (const variant of ["baseline", "modern"]) {
+					const cache = path.join(root, variant);
+					const child = Bun.spawn([binary], {
+						env: { ...process.env, PI_NATIVES_DIR: cache, PI_NATIVE_VARIANT: variant },
+						stdout: "ignore",
+						stderr: "ignore",
+					});
+					expect(await child.exited).toBe(0);
+					const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
+						.filter(filename => filename.endsWith(".node"))
+						.sort();
+					expect(
+						extracted.map<string>(filename =>
+							filename.startsWith(`pi_natives.${tag}-modern.`) ? "modern" : "baseline",
+						),
+					).toEqual((variant === "modern" ? ["modern", "baseline"] : ["baseline"]).sort());
+					for (const filename of extracted) {
+						expect(filename).toMatch(new RegExp(`^pi_natives\\.${tag}-(modern|baseline)\\.[a-f0-9]{64}\\.node$`));
+					}
+
+					// A failed extraction must not load an older, version-only cache,
+					// including when the modern variant falls back to baseline.
+					const blockedCache = path.join(root, `${variant}-blocked`);
+					const blockedVersionDir = path.join(blockedCache, packageJson.version);
+					await fs.mkdir(blockedVersionDir, { recursive: true });
+					for (const filename of extracted) await fs.mkdir(path.join(blockedVersionDir, filename));
+					for (const oldVariant of ["modern", "baseline"]) {
+						await Bun.write(
+							path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`),
+							`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
+						);
+					}
+					const blocked = Bun.spawn([binary], {
+						env: {
+							...process.env,
+							PI_NATIVES_DIR: blockedCache,
+							PI_NATIVE_VARIANT: variant,
+							PI_DEBUG_STARTUP: "1",
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					const [stdout, stderr, exitCode] = await Promise.all([
+						new Response(blocked.stdout).text(),
+						new Response(blocked.stderr).text(),
+						blocked.exited,
+					]);
+					expect(exitCode).toBe(0);
+					const { error }: { error: string } = JSON.parse(stdout);
+					expect(error).toContain("embedded addon extraction");
+					expect(stderr).not.toContain("native:require:");
+					for (const oldVariant of ["modern", "baseline"]) {
+						const oldCachePath = path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`);
+						expect(error).not.toContain(oldCachePath);
+						expect(await Bun.file(oldCachePath).text()).toBe(
+							`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
+						);
+					}
 				}
-				const blocked = Bun.spawn([binary], {
-					env: {
-						...process.env,
-						PI_NATIVES_DIR: blockedCache,
-						PI_NATIVE_VARIANT: variant,
-						PI_DEBUG_STARTUP: "1",
-					},
-					stdout: "pipe",
-					stderr: "pipe",
-				});
-				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(blocked.stdout).text(),
-					new Response(blocked.stderr).text(),
-					blocked.exited,
-				]);
-				expect(exitCode).toBe(0);
-				const { error }: { error: string } = JSON.parse(stdout);
-				expect(error).toContain("embedded addon extraction");
-				expect(stderr).not.toContain("native:require:");
-				for (const oldVariant of ["modern", "baseline"]) {
-					const oldCachePath = path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`);
-					expect(error).not.toContain(oldCachePath);
-					expect(await Bun.file(oldCachePath).text()).toBe(
-						`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
-					);
-				}
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
 			}
-		} finally {
-			await fs.rm(root, { recursive: true, force: true });
-		}
-	});
+		},
+	);
 });

@@ -12,6 +12,10 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ErrorBannerComponent } from "@oh-my-pi/pi-tui/overlays/error-banner";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -404,6 +408,13 @@ describe("EventController error banner", () => {
 });
 
 describe("EventController thinking visibility", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: false });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
+
 	it("shows the first observed thinking delta on the active streaming component", async () => {
 		const initial = makeAssistantMessage({ content: [] });
 		const message = makeAssistantMessage({

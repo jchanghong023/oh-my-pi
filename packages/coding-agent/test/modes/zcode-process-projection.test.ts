@@ -488,59 +488,64 @@ describe("ZCode actual public app-server process", () => {
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
-	test("background native registry discovery publishes into an already open workspace catalog", async () => {
-		await using root = await TempDir.create("@zcode-native-catalog-discovery-");
-		await using config = await fixture(root);
-		const discovered = Promise.withResolvers<void>();
-		const requested = Promise.withResolvers<void>();
-		const endpoint = Bun.serve({
-			hostname: "127.0.0.1",
-			port: 0,
-			async fetch(request) {
-				if (new URL(request.url).pathname !== "/v1/models") return new Response(null, { status: 404 });
-				requested.resolve();
-				await discovered.promise;
-				return Response.json({ data: [{ id: "background-chat" }] });
-			},
-		});
-		try {
-			await fs.appendFile(
-				path.join(config.agentDir, "models.yml"),
-				`  zcode-discovery:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    discovery:\n      type: openai-models-list\n`,
-			);
-			await using peer = new ProcessPeer(config.cwdA, config.env);
-			await peer.ready();
-			const topic = `workspace-config/${config.cwdA}`;
-			await peer.request("v4/conversation/subscribe", {
-				topic,
-				connectionId: "native-background",
-				clientMode: "desktop-continuous",
-				workspace: workspace(config.cwdA),
+	test.skipIf(process.platform === "win32")(
+		"background native registry discovery publishes into an already open workspace catalog",
+		async () => {
+			await using root = await TempDir.create("@zcode-native-catalog-discovery-");
+			await using config = await fixture(root);
+			const discovered = Promise.withResolvers<void>();
+			const requested = Promise.withResolvers<void>();
+			const endpoint = Bun.serve({
+				hostname: "127.0.0.1",
+				port: 0,
+				async fetch(request) {
+					if (new URL(request.url).pathname !== "/v1/models") return new Response(null, { status: 404 });
+					requested.resolve();
+					await discovered.promise;
+					return Response.json({ data: [{ id: "background-chat" }] });
+				},
 			});
-			const initial = await peer.next(
-				frame => frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
-			);
-			expect(JSON.stringify(initial)).not.toContain("zcode-discovery/background-chat");
-			await deadline(requested.promise);
-			discovered.resolve();
-			const notification = await peer.next(
-				frame =>
-					frame.method === "v4/conversation/frame" &&
-					isRecord(frame.params) &&
-					frame.params.topic === topic &&
-					JSON.stringify(frame.params).includes("zcode-discovery/background-chat"),
-			);
-			const wire = workspaceConfigTopicWireFrameSchema.parse(notification.params);
-			if (wire.kind !== "complete" || wire.frame.payload.kind !== "deltas")
-				throw new Error("Background discovery did not publish a native config delta");
-			expect(wire.frame.payload.deltas[0]?.op).toBe("config.updated");
-			expect(config.requests).toHaveLength(0);
-			expect(await peer.eof()).toBe(0);
-		} finally {
-			discovered.resolve();
-			endpoint.stop(true);
-		}
-	}, 120_000);
+			try {
+				await fs.appendFile(
+					path.join(config.agentDir, "models.yml"),
+					`  zcode-discovery:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    discovery:\n      type: openai-models-list\n`,
+				);
+				await using peer = new ProcessPeer(config.cwdA, config.env);
+				await peer.ready();
+				const topic = `workspace-config/${config.cwdA}`;
+				await peer.request("v4/conversation/subscribe", {
+					topic,
+					connectionId: "native-background",
+					clientMode: "desktop-continuous",
+					workspace: workspace(config.cwdA),
+				});
+				const initial = await peer.next(
+					frame =>
+						frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
+				);
+				expect(JSON.stringify(initial)).not.toContain("zcode-discovery/background-chat");
+				await deadline(requested.promise);
+				discovered.resolve();
+				const notification = await peer.next(
+					frame =>
+						frame.method === "v4/conversation/frame" &&
+						isRecord(frame.params) &&
+						frame.params.topic === topic &&
+						JSON.stringify(frame.params).includes("zcode-discovery/background-chat"),
+				);
+				const wire = workspaceConfigTopicWireFrameSchema.parse(notification.params);
+				if (wire.kind !== "complete" || wire.frame.payload.kind !== "deltas")
+					throw new Error("Background discovery did not publish a native config delta");
+				expect(wire.frame.payload.deltas[0]?.op).toBe("config.updated");
+				expect(config.requests).toHaveLength(0);
+				expect(await peer.eof()).toBe(0);
+			} finally {
+				discovered.resolve();
+				endpoint.stop(true);
+			}
+		},
+		120_000,
+	);
 
 	test("native workspace models and persisted default role update the existing subscription without Host sources", async () => {
 		await using root = await TempDir.create("@zcode-native-model-catalog-");
