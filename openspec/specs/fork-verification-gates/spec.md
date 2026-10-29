@@ -6,6 +6,40 @@
 
 ## Requirements
 
+### Requirement: 按风险选择验证和报告证据
+
+验证 MUST 选择与行为和风险相称的最小充分集合，并准确区分实际执行、有效复用与未验证的范围。
+
+#### Scenario: 选择与变更相称的验证
+
+- **WHEN** 为变更选择验证
+- **THEN** 复用仍有效的测试及通过结果；局部逻辑用 UT，真实跨模块或公开入口验收用集成/E2E；测试对应相关规格的需求与验收场景，覆盖核心成功路径及关键失败路径，不仅验证没有崩溃；模拟、静态检查和编译不证明未运行的真实边界
+- **AND** 纯文档变更只检查内容、差异和链接，不运行产品构建或测试；三层门禁的范围、缓存及运行授权遵循本规格的「Fork 验证体系」
+- **AND** 保留有效构建缓存，不无理由 `cargo clean` 或删除 `target/`
+- **AND** 已有公开入口从仓库根运行；`bun run robomp:test:integration` 需要 Python 依赖及 PATH 中的 `omp`，不因入口存在而扩大 fork 门禁范围。其他入口及其范围见本规格的「Fork 验证体系」
+
+#### Scenario: 验证失败或证据不完整
+
+- **WHEN** 验证失败、缺工具或部分工作未运行
+- **THEN** 对比上游基线；上游原样代码失败默认只报告，除非用户明确要求修复或已有真实入口证据确认核心业务缺陷
+- **AND** 区分已实现、验证通过、失败及未验证；缺工具不自动安装，不将跳过、缓存命中或未运行写成新执行通过
+
+### Requirement: 临时 TUI 交互验证
+
+临时 TUI 交互验证 MUST 使用源码入口及隔离环境，不以模拟或其他产物冒充真实边界。
+
+#### Scenario: 验证 TUI 交互
+
+- **WHEN** 临时验证 TUI 交互
+- **THEN** 使用源码入口 `bun run dev`（`packages/coding-agent/src/cli.ts` → `main.ts` → `sdk.ts`）和 `tui-test`，首次使用先通过 Bash 执行 CLI 子命令 `tui-test skill` 并阅读完整指南；以唯一 session 显式指定 cwd、cols、rows，通过业务断言确认结果，`wait idle` 不能代替业务完成断言，核对各命令失败及进程退出状态，最后仅关闭自有 session；不另写 PTY/ANSI 驱动脚本，工具缺失时如实报告、不自动安装或绕过
+- **AND** 仅在明确要求验证 exe 或打包产物时使用确认过的当前构建产物绝对路径，不能以源码运行结果代替产物验证；已有 fulltest PTY 冒烟不迁移、不重复实现
+
+#### Scenario: TUI 验证需要模型响应
+
+- **WHEN** TUI 交互验证需要模型响应
+- **THEN** 使用隔离配置及本地模拟模型，发消息前确认实际模型与请求目标；失败时报告阻塞，不回退真实模型。真实模型/提供者认证及共享桌面输入需各自明确授权，模拟响应不能作为真实模型能力或提供者认证的验收证据
+
+
 ### Requirement: Fork 验证体系
 
 OMP MUST 按各入口规定范围、预算、缓存失效与失败汇总执行，并只报告实际完成的证据。
@@ -73,7 +107,7 @@ OMP MUST 按各入口规定范围、预算、缓存失效与失败汇总执行�
 - WSL 通过 `scripts/slowtest-wsl-stage.ts` 在 slowtest 内执行，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须立即报告为该端失败，不能测试旧提交代表当前改动。既有固定提交同步 helper 的 plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 7200 秒墙钟防挂另行报告，不得放宽外层 3000 秒总墙钟上限。记录两端 HEAD、本机源码指纹、工作树、Linux 工具路径与版本；不同提交不得合并 PASS。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
 - WSL 验证使用已就绪的本机依赖，不自动执行 `bun install` 或安装缺失工具；依赖不足按原始准备／执行失败报告，不降级为不可用跳过，也不运行旧源码冒充当前固定提交。
 - WSL 原生仓库发现受 slowtest 同一累计非编译与总墙钟额度约束，不另设 25/30 秒的提前截止；宿主与 Linux 的有限防挂不能延长外层时限。完整发现须保留嵌套工作区与多匹配拒绝语义，不通过缩小遍历范围规避超时。
-- 按维护者明确要求沿用原有 fork 改动相关范围，不自动扩大到全仓库测试。比较基准为本页记录的 Upstream commit，纳入全部已提交、未提交及未跟踪差异；TS 沿用存在的差异测试文件集合，Rust 沿用现有 `test:rs --affected` 的 crate/vendor 消费者选择，不新增手工白名单，不排除该集合内失败项。保留现有 TS/Rust 静态检查、仓库脚本测试、native 构建和 dev-TUI 集成边界；Python、独立 Go/Python/Rust SDK、无关 workspace 打包、完整上游 TS 套件不在此门禁范围，原有独立入口保留。各层及 WSL 按上表和重型 Bazel 集成测试分层条款继承对应范围，报告 `scope=fork-affected`、基线、选择依据和上述未测覆盖；不得把该范围的 PASS 表述为全仓库 PASS。非编译预算、缓存、计时及失败标准不因范围选择改变。
+- 按维护者明确要求沿用原有 fork 改动相关范围，不自动扩大到全仓库测试。比较基准为 [fork-upstream-baseline](../fork-upstream-baseline/spec.md) 记录的 Upstream commit，纳入全部已提交、未提交及未跟踪差异；TS 沿用存在的差异测试文件集合，Rust 沿用现有 `test:rs --affected` 的 crate/vendor 消费者选择，不新增手工白名单，不排除该集合内失败项。保留现有 TS/Rust 静态检查、仓库脚本测试、native 构建和 dev-TUI 集成边界；Python、独立 Go/Python/Rust SDK、无关 workspace 打包、完整上游 TS 套件不在此门禁范围，原有独立入口保留。各层及 WSL 按上表和重型 Bazel 集成测试分层条款继承对应范围，报告 `scope=fork-affected`、基线、选择依据和上述未测覆盖；不得把该范围的 PASS 表述为全仓库 PASS。非编译预算、缓存、计时及失败标准不因范围选择改变。
 - 既有公开测试入口在原有选择、失败汇总、并发与平台限制内写入被 Git 忽略的 `runs/test-timing/<run-id>/`：Bun、pytest、nextest 与可提供结构化结果的 rustdoc 各自输出独立 JUnit XML，CLI/PTY 的明确场景按实际命令或场景计时；`run.json` 保存源码与环境、选择范围、原始退出码、每个 producer 的命令、报告路径及完成状态。独立运行与重试不得覆盖前次报告；报告缺失、被取消、提前失败或只能取得阶段耗时须标为部分覆盖，不能把阶段时间冒充单测时间，也不能把 fork-affected 门禁当作全仓报告。Bun/nextest/rustdoc 的 testcase 时间与 pytest 包含 setup/call/teardown 的时间不直接比较；JUnit 用例时间之和不是并行运行的挂钟时间。Go SDK、Rust SDK 及 Python 的独立测试入口不因计时需求纳入 fulltest/slowtest；额外的安装发布测试、桌面输入和跨 WSL 运行仍需各自的原有授权。
 - 正常报告收尾由门禁生命周期跟踪，计入同一预算与总墙钟时限；验证失败须在预算内完成全量失败汇总报告后退出，发生超时、中断或阻断时立即退出优先于报告补写，不能为生成完整 `run.json` 延迟结束。强退可能留下缺失、未完成或临时报告；报告须结合门禁最终输出及进程退出码判读，非零退出时任何暂存的 complete/0 元数据均不代表通过。
 - `slowtest` 的 Linux JUnit/XML 与元数据留在 WSL 原生仓库，宿主运行的 `run.json` 标注未汇总范围并保持部分报告状态；即使门禁在两端通过，也不能把宿主 XML 当成两端完整测试报告。WSL 不可用时以门禁原有跳过状态为准。

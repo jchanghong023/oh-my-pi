@@ -819,7 +819,7 @@ sequenceDiagram
 
 **Team、Wiki 与 Repo 核心界面**
 
-- Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；完整合同见 [Team 2.9–2.10](../team-run-view/spec.md)。
+- Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；配置合同见 [Team 模型配置界面](../team-configuration/spec.md#requirement-team-模型配置界面)，运行观测合同见 [Team 动态运行视图与交互关系](../team-run-view/spec.md#requirement-team-动态运行视图与交互关系)。
 - Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，单文件本机锁、CAS 与原子保存遵循 [Team 配置保存服务](../team-configuration/spec.md)。
 - Wiki 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Wiki 专页](../wiki-index/spec.md)；Repo 专页承接全部 TUI 维护操作及原生查询，权威合同见 [Repo 专页](../repo-index/spec.md)。两者左侧入口位于自动化下方，相邻展示。
 - 除本次明确取消的模型 Provider 认证界面及操作外，OMP 已尽力适配但仍无法实现的功能，其 ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Wiki／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因；此例外不扩大到 Skill、MCP 或其他管理面。
@@ -980,8 +980,8 @@ Dev 观测 MUST 只在客户端声明能力时出现，缺席时 MUST 完全剥�
 - `runtime/capabilities` MUST 增列 `ompSpecDriven`；客户端只在为 `true` 时开放 Dev 观测入口。
 - 会话订阅与运行查询 MUST 支持 `includeSpecDriven:true`；`v4/conversation/workflowRuns` MUST 支持 `runId` 过滤。
 - 未声明 `includeSpecDriven` 时 MUST 剥离 Dev 交互状态与带 spec 的运行行，既有动态工作流响应保持原形。
-- `sendText.specRun`（`runId`、`generation`、`phase`、`files[path,version]`、可选 `actionId`）是本协议唯一的逐命令字段例外，用于 Dev 材料版本准入守卫：绑定过期、run 或阶段不符、文件哈希不符时 MUST 拒绝输入；未携带时 MUST NOT 触发 Dev 守卫。
-- 旧客户端不发送该字段，其行为 MUST 与既有协议一致；服务端 MUST NOT 因缺席而放宽 Dev 守卫。
+- `sendText.specRun`（`runId`、`generation`、`phase`、`files[path,version]`、可选 `actionId`）是本协议唯一的逐命令字段例外；携带时执行协议附加绑定校验，绑定过期、run 或阶段不符、文件哈希不符时 MUST 拒绝输入。未携带时 MUST NOT 因缺少该字段拒绝旧客户端，也不执行该附加绑定校验。
+- 旧客户端不发送该字段，其既有协议字段及默认行为保持不变；无论是否携带，所有客户端仍受原生 Dev 控制权、阶段及批准版本准入守卫约束，缺席 MUST NOT 绕过或放宽这些原生守卫。
 - Dev 观测 MUST NOT 改变既有方法、通知、信封或版本语义。
 
 #### Scenario: 材料版本过期时拒绝 Dev 输入

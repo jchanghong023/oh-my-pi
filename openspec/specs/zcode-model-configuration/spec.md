@@ -47,14 +47,14 @@ ZCode 的 role 保存请求必须路由原生 Settings 服务并投影其回执�
 
 **能力发现与通用约定**
 
-- 传输与能力发现使用既有附加式扩展：`omp/team/configure` 携带 operation 与参数（schema 在 `packages/coding-agent/src/modes/zcode/schema/omp-config-extension.ts`，不改任何既有方法与 vendored schema），能力经 `runtime/capabilities` 的 `ompConfiguration` 宣布；沿用既有请求关联与分帧，不增加协议大版本、HTTP 服务或独立连接。旧版本未声明该能力时 GUI 禁用配置入口并说明不支持，不能改读配置文件兜底。
+- 传输与能力发现使用既有附加式扩展：`omp/team/configure` 的 `params` 严格为 `{workspace,request:{operation,...}}`（schema 在 `packages/coding-agent/src/modes/zcode/schema/omp-config-extension.ts`，不改任何既有方法与 vendored schema），能力经 `runtime/capabilities` 的 `ompConfiguration` 宣布；请求 ID 仅在既有外层关联信封，不放入 `params` 或 `request`，也不使用业务 `type`。沿用既有分帧，不增加协议大版本、HTTP 服务或独立连接。旧版本未声明该能力时 GUI 禁用配置入口并说明不支持，不能改读配置文件兜底。
 - 三个 Team 配置操作属于运行 profile 的全局用户配置，通过显式 workspace 作可信进程路由和模型目录解析，不依赖、不创建也不绑定聊天会话。均不接受任意路径、跨 profile 写入、凭据或 YAML 文本；GUI 切换 workspace／profile 后重新读取，不要求切换或重启进程。
 - 写入的模型引用使用 `provider`／`modelId` 组成的具体身份，不接受自然语言、通配符、`auto` 或思考级别扩展。查询采用下述无损槽位表示，原始 selector 即使失效也不能丢弃；只读预览可以携带该原文用于诊断，不能借预览将其写入。顺序及重复项完整保留，响应不含密钥、完整配置文件或无关设置。
-- 正常响应与失败回执沿用 ZCode 协议 `omp/team/configure` 的 result／error 信封（data 结构以扩展 schema 为准）及机器可读错误码。外层 `error.code` 仍是数字；共享配置服务的字符串错误码保留在 `error.data.code`，已有问题索引、实际保存回执及可取得的最新配置一并保留。GUI 不从错误消息文本解析状态。
+- 正常响应与失败回执沿用 ZCode 协议 `omp/team/configure` 的 result／error 信封。成功时 `result` 为 `{operation,data}`，其中 `operation` 对应请求，查询分别返回配置快照或模型目录，保存返回保存回执；`data` 结构以扩展 schema 为准。失败时外层 `error.code` 为数字：共享配置服务的字符串错误码映射为 `-32000`，并保留在 `error.data.code`，已知问题索引、实际保存回执及可取得的最新配置一并保留；无专用数字码的校验或业务异常按当前分发器返回 `-32602`。GUI 不从错误消息文本解析状态。
 
 **`get_team_config`**
 
-请求含 `id`、`type:"get_team_config"` 及可选 `preview`（见后文），不执行模型推理、不发起讨论、不修改配置。未提供 `preview` 时只返回已保存配置的查询快照；返回 `data`：
+请求的 `request.operation` 为 `"get_team_config"`，可选 `request.preview`（见后文），不执行模型推理、不发起讨论、不修改配置。未提供 `preview` 时只返回已保存配置的查询快照；成功的 `result.data`：
 
 | 字段                | 契约                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -77,17 +77,21 @@ GUI 编辑 `userMembers`，分别展示用户值和 `effectiveMembers/source`，
 
 保留三个接口，不增加第四个预览接口。`get_team_config` 可带 `{preview:{clientRevision,members}}`：`clientRevision` 为 GUI 草稿版本的非空不透明字符串，服务原样回传；`members` 与保存的数组／`[]`／`null` 语义相同。为诊断未修复的旧槽位，数组项额外允许 `{rawSelector:string}`，只读解析为真实候选或带问题的槽位，不进行自然语言猜选。写接口不接受此原文变体。
 
+以下为请求的 `params` 示例；`workspacePath` 须替换为实际执行进程的绝对工作目录（服务端核对真实路径），`workspaceKey` 为该工作区的非空标识：
+
 ```json
 {
-	"id": "team-preview-1",
-	"type": "get_team_config",
-	"preview": {
-		"clientRevision": "draft-7",
-		"members": [
-			{ "provider": "company", "modelId": "GLM-5.2-public" },
-			{ "rawSelector": "失效旧别名" },
-			{ "provider": "company", "modelId": "Qwen3.8-27B" }
-		]
+	"workspace": { "workspacePath": "/home/user/project", "workspaceKey": "project" },
+	"request": {
+		"operation": "get_team_config",
+		"preview": {
+			"clientRevision": "draft-7",
+			"members": [
+				{ "provider": "company", "modelId": "GLM-5.2-public" },
+				{ "rawSelector": "失效旧别名" },
+				{ "provider": "company", "modelId": "Qwen3.8-27B" }
+			]
+		}
 	}
 }
 ```
@@ -98,7 +102,7 @@ GUI 编辑 `userMembers`，分别展示用户值和 `effectiveMembers/source`，
 
 **`get_team_models`**
 
-请求：`{id,type:"get_team_models",query?:string}`。省略或空查询返回当前上下文全部已知聊天候选，支持 GUI 本地过滤；不受当前成员、少数预置模型或其他界面的最近使用列表限制，不截断为前若干项。模型数据、可选资格和原因由共享服务提供；非聊天模型不进入此目录。
+请求的 `params` 为 `{workspace,request:{operation:"get_team_models",query?:string}}`，`workspace` 与上例使用同一既有对象形状。省略或空查询返回当前上下文全部已知聊天候选，支持 GUI 本地过滤；不受当前成员、少数预置模型或其他界面的最近使用列表限制，不截断为前若干项。模型数据、可选资格和原因由共享服务提供；非聊天模型不进入此目录。
 
 返回 `data.models` 数组，每项为 `{model,name,selectable,reasonCode?,reason?}`。`model` 是具体模型引用，`name` 是展示名称；`selectable:false` 必须有原因。原因至少区分未认证、被禁用／当前范围不允许或必要能力缺失；可选性不等于真实提供者认证／任务质量已验证。旧成员不论是否仍在候选目录，都在 `get_team_config` 对应完整列表中保留原始槽位和问题。
 
@@ -106,19 +110,21 @@ GUI 编辑 `userMembers`，分别展示用户值和 `effectiveMembers/source`，
 
 **`set_team_config`**
 
-请求使用完整列表替换，不增加逐项写接口：
+请求使用完整列表替换，不增加逐项写接口；以下为 `params` 示例，工作区路径同样须与实际执行目录一致：
 
 ```json
 {
-	"id": "team-save-1",
-	"type": "set_team_config",
-	"scope": "user",
-	"expectedRevision": "opaque-revision-from-get_team_config",
-	"members": [
-		{ "provider": "company", "modelId": "GLM-5.2-public" },
-		{ "provider": "company", "modelId": "Qwen3.8-27B" },
-		{ "provider": "company", "modelId": "GLM-5.2-public" }
-	]
+	"workspace": { "workspacePath": "/home/user/project", "workspaceKey": "project" },
+	"request": {
+		"operation": "set_team_config",
+		"scope": "user",
+		"expectedRevision": "opaque-revision-from-get_team_config",
+		"members": [
+			{ "provider": "company", "modelId": "GLM-5.2-public" },
+			{ "provider": "company", "modelId": "Qwen3.8-27B" },
+			{ "provider": "company", "modelId": "GLM-5.2-public" }
+		]
+	}
 }
 ```
 
@@ -126,15 +132,15 @@ GUI 编辑 `userMembers`，分别展示用户值和 `effectiveMembers/source`，
 
 - 保存前重新核对当前候选资格，非法项返回零基位置及原因，不静默删除；允许重复身份。全局配置不查询聊天会话的主模型，也不以会话运行条件阻止成员修复。
 - 校验 revision、重复键和实际目标后，持有设置层本机锁，在锁内重读、比较版本，提交前发现冲突不改配置。
-- `success:true` 仅表示本请求在锁保护下确认保存或判定同值无变更，并完成锁内读回；不代表没有高层覆盖。返回 `data` 含 `config`（随后取得的最新查询快照）、`saveState`、`write`、`effectiveMatchesRequested` 及可选 `effectiveNote`。`write` 是本请求已确认的提交事实，不冒充永久不变的现值；若随后查询已被新保存改变，`config` 展示现值并明确说明。
-- `saveState` 为 `complete`、`failed` 或 `unknown`；`write` 为 `{status,message?}`，`status` 为 `saved`、`unchanged`、`failed`、`not_attempted` 或 `unknown`。确认完成且读回成功才为 `complete`；确定没有提交且失败为 `failed`；关键提交／读回事实无法确定为 `unknown`。失败或未知均 `success:false` 并携带已知回执；未知不是可自动重试的普通失败。
+- 保存成功仅表示本请求在锁保护下确认保存或判定同值无变更，并完成锁内读回；不代表没有高层覆盖。成功 `result.data` 含 `config`（随后取得的最新查询快照）、`saveState`、`write`、`effectiveMatchesRequested` 及可选 `effectiveNote`。`write` 是本请求已确认的提交事实，不冒充永久不变的现值；若随后查询已被新保存改变，`config` 展示现值并明确说明。
+- `saveState` 为 `complete`、`failed` 或 `unknown`；`write` 为 `{status,message?}`，`status` 为 `saved`、`unchanged`、`failed`、`not_attempted` 或 `unknown`。确认完成且读回成功才为 `complete`；确定没有提交且失败为 `failed`；关键提交／读回事实无法确定为 `unknown`。失败或未知经 `error` 返回已知回执，回执字段位于 `error.data`，可取得时包括 `config`、`issues`、`effectiveMatchesRequested` 和 `effectiveNote`；未知不是可自动重试的普通失败。`success:true/false` 仅是对成功或失败语义的描述，不是公开 wire 的新增字段；即使保存已完成，后续处理失败仍可能以 `error` 携带实际回执返回。
 - `effectiveMatchesRequested` 是布尔值；存在高层覆盖或不能确定有效值时为 `false` 并给 `effectiveNote`，不能用保存成功遮蔽未生效。清除／空名单时按删除用户字段／默认回退语义判断，不与非空运行槽位机械比较。
 - 复用 `invalid_params`、`scope_not_allowed`、`revision_conflict`、`persistence_failed`、`execution_failed`；本能力增加 `invalid_config` 区分重复键、非法 YAML 等必须先修复的配置问题。前置校验失败为 `failed`、写入 `not_attempted`；错误 data 可附 `issues` 和可安全取得的 `config`。返回错误码不能抹去实际提交状态。
 - 本能力只改 `team.members`，不写 `models.yml`、role、凭据或 provider 开关，不创建／迁移数据库，不触发真实模型探测。失败或连接断开后 GUI 先重新查询，不自动重放保存或用旧 revision 覆盖。
 
 **GUI 展示、通知与配置上下文隔离**
 
-GUI 提供专用 Team 模型配置面板，交互能力和预览按 Team 第 2.9 节，不要求用户了解配置文件。打开时读取完整用户／有效名单及各自问题，分别展示具体原值、读取状态和覆盖来源；失效原槽位不得丢弃。草稿编辑、排序、复制、删除后通过可选 `preview` 查询共享投影，不逐次写盘；保存时将所有修复后的具体模型引用一次提交，使用返回快照更新页面，不能在请求发出时乐观标为已持久化。
+GUI 提供专用 Team 模型配置面板，交互能力和预览按 [Team 模型配置界面](../team-configuration/spec.md#requirement-team-模型配置界面)，不要求用户了解配置文件。打开时读取完整用户／有效名单及各自问题，分别展示具体原值、读取状态和覆盖来源；失效原槽位不得丢弃。草稿编辑、排序、复制、删除后通过可选 `preview` 查询共享投影，不逐次写盘；保存时将所有修复后的具体模型引用一次提交，使用返回快照更新页面，不能在请求发出时乐观标为已持久化。
 
 - 交互形态对齐 ZCode 既有样式：成员名单与模型候选是查询返回的有序列表（`get_team_config`／`get_team_models`），面板内选择框由 GUI 依据候选数据本地渲染，保存只提交具体 `provider`／`modelId`（同 `switchModelConfig` 形态），不在扩展里另造选择框 wire。
 
