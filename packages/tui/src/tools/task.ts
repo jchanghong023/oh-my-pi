@@ -48,8 +48,8 @@ import { formatOutputInline, renderJsonTreeLines } from "./json-tree";
 import { repairDoubleEncodedJsonString } from "./task-repair-args";
 import { getSubprocessToolRenderer } from "./subprocess";
 import { assembleYieldResult, type YieldSectionShapes } from "./task-yield-assembly";
-import type { TspAgentProps, TspTone } from "@oh-my-pi/pi-wire";
-import { compact, kv, md, node, span, text } from "../native/describe";
+import type { TspAgentProps, TspProps, TspTone } from "@oh-my-pi/pi-wire";
+import { compact, kv, md, node, propNode, span, text } from "../native/describe";
 import type { NativeNode } from "../native/node";
 import { OwnerMemo, sameItems } from "../native/memo";
 import { plainText } from "../native/spans";
@@ -1806,7 +1806,7 @@ function describeContext(raw: unknown): NativeNode | undefined {
 	return line ? text([span(line, "muted")], { wrap: "word", lines: 2, role: "omp.tool.context" }) : undefined;
 }
 
-/** The full assignment, markdown, as the first expanded child of an agent. */
+/** The full assignment, markdown: an agent's first expanded child and its row's hover card. */
 function describeAssignment(raw: string | undefined): NativeNode | undefined {
 	const source = raw ? sanitizeText(repairDoubleEncodedJsonString(raw)).trim() : "";
 	return source ? md(source, { role: "omp.task.assignment" }) : undefined;
@@ -1870,8 +1870,15 @@ function describeNestedTasks(
 	return out;
 }
 
-function agentNode(p: TspAgentProps, children: readonly (NativeNode | undefined)[], key: string): NativeNode {
-	return node("agent", p, compact(children), key);
+/** An `agent` node; its row's hover card shows the whole `assignment` the row only summarizes. */
+function agentNode(
+	p: TspAgentProps,
+	assignment: NativeNode | undefined,
+	children: readonly (NativeNode | undefined)[],
+	key: string,
+): NativeNode {
+	const props: TspProps<"agent"> = assignment ? { ...p, hovercard: propNode(assignment) } : p;
+	return node("agent", props, compact(children), key);
 }
 
 function describeProgressAgent(progress: AgentProgress, state: AgentDescribeState, depth: number): NativeNode {
@@ -1893,6 +1900,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 	const summary = taskSummary(progress.description || progress.assignment || progress.task);
 	// The agent's own stage line (from its completion probe) rides beside the task while it runs.
 	const stage = running && progress.stage ? plainText(progress.stage) : "";
+	const assignment = describeAssignment(progress.assignment ?? progress.task);
 	const retry =
 		running && progress.retryState
 			? {
@@ -1927,8 +1935,9 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 			collapsible: true,
 			collapsed: !state.expanded,
 		},
+		assignment,
 		[
-			describeAssignment(progress.assignment ?? progress.task),
+			assignment,
 			progress.resolvedModelRoute ? noteText(progress.resolvedModelRoute, "dim") : undefined,
 			!running && progress.retryFailure
 				? text(
@@ -1962,6 +1971,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 	else if (warning && success) badges.push({ text: "warning", tone: "warning" });
 	if (result.truncated) badges.push({ text: "truncated", tone: "warning" });
 	const cost = result.usage?.cost.total ?? 0;
+	const assignment = describeAssignment(result.assignment ?? result.task);
 	return agentNode(
 		{
 			name: formatTaskId(result.id),
@@ -1984,8 +1994,9 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			collapsible: true,
 			collapsed: !state.expanded && !(state.criticalPreview && (aborted || !success)),
 		},
+		assignment,
 		[
-			describeAssignment(result.assignment ?? result.task),
+			assignment,
 			result.resolvedModelRoute ? noteText(result.resolvedModelRoute, "dim") : undefined,
 			aborted && result.abortReason ? errorLine(result.abortReason) : undefined,
 			warning ? errorLine(warning, "warning") : undefined,
@@ -2039,6 +2050,7 @@ function describeTaskCall(args: TaskParams | undefined): NativeToolView {
 				status: "pending",
 				badges: agentBadges(false, isolated === true),
 			},
+			describeAssignment(typeof brief === "string" ? brief : undefined),
 			[],
 			key,
 		);

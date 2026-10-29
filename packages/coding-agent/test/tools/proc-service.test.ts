@@ -915,6 +915,33 @@ describe("bash services via proc://", () => {
 		}
 	}, 20_000);
 
+	it("starts a service at log readiness when the tool call materialized an unset port as zero", async () => {
+		using temp = TempDir.createSync("@omp-proc-service-port0-");
+		const cwd = path.join(temp.path(), "project");
+		const runtimeDir = path.join(temp.path(), "runtime");
+		await fs.mkdir(cwd);
+		const client = await createDaemonBrokerClient(cwd, { runtimeDir, idleGraceMs: 5_000 });
+		const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
+		const oldTitle = process.title;
+		const broker = startBroker(cwd, runtimeDir);
+		try {
+			const result = await new BashTool(toolSession(cwd)).execute("service", {
+				command: "printf 'READY\\n'; sleep 30",
+				name: "port0-service",
+				ready: { log: "READY", port: 0, host: "", timeout: 5 },
+				pty: false,
+			});
+			expect(result.details?.service).toMatchObject({ name: "port0-service", ready: true, timedOut: false });
+		} finally {
+			await client.request({ op: "stop", name: "port0-service", timeoutMs: 1_000 }).catch(() => undefined);
+			await client.request({ op: "shutdown" }).catch(() => undefined);
+			client.close();
+			await broker;
+			setProcessName(oldTitle);
+			spy.mockRestore();
+		}
+	}, 20_000);
+
 	it("still rejects validation and launch failures when a steer is queued", async () => {
 		const steering = new AbortController();
 		const client = {

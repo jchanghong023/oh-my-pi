@@ -403,14 +403,15 @@ function blankToUndefined(value: string | undefined): string | undefined {
 /**
  * Drops readiness fields that carry no condition, and the whole spec when none
  * survive. An empty `log` pattern would otherwise match the first byte of
- * output and an empty `host` would break the TCP probe, so placeholder values
- * must not reach {@link startService}.
+ * output, an empty `host` would break the TCP probe, and a zero `port` (how
+ * tool-call layers materialize an unset number; no listener has it) would fail
+ * port validation, so placeholder values must not reach {@link startService}.
  */
 function normalizeReady(ready: ServiceReady | undefined): ServiceReady | undefined {
 	if (!ready) return undefined;
 	const log = blankToUndefined(ready.log);
 	const host = blankToUndefined(ready.host);
-	const port = Number.isFinite(ready.port) ? ready.port : undefined;
+	const port = Number.isFinite(ready.port) && ready.port !== 0 ? ready.port : undefined;
 	const timeout = Number.isFinite(ready.timeout) ? ready.timeout : undefined;
 	if (log === undefined && host === undefined && port === undefined && timeout === undefined) return undefined;
 	return { log, host, port, timeout };
@@ -1051,10 +1052,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				pendingNotices.push("Ignored timeout: service-only; readiness follows ready.timeout.");
 			if (asyncRequested)
 				pendingNotices.push("Ignored async: service-only; a service start is asynchronous already.");
-		} else if (ready !== undefined && (ready.log !== undefined || (ready.port !== undefined && ready.port !== 0))) {
-			// Host/timeout only configure a readiness condition; neither requests one,
-			// and tool-call layers may materialize an unset port as zero. Keep service
-			// validation unchanged, but only warn when a condition was actually ignored.
+		} else if (ready !== undefined && (ready.log !== undefined || ready.port !== undefined)) {
+			// Host/timeout only configure a readiness condition; neither requests one.
+			// Keep service validation unchanged, but only warn when a condition was
+			// actually ignored.
 			pendingNotices.push("Ignored ready: service-only, and no service name was given.");
 		}
 		if (name === undefined && asyncRequested && !cfgAsyncEnabled.get(this.session.settings)) {
