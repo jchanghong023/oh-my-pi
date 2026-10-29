@@ -8,21 +8,13 @@ import { Reconciler } from "../src/native/reconcile";
 
 const components: ToolExecutionComponent[] = [];
 
-function bash(toolCallId?: string) {
+function bash(toolCallId?: string, command = "bun test") {
 	const ui = {
 		requestRender: vi.fn(),
 		requestComponentRender: vi.fn(),
 		resetDisplay: vi.fn(),
 	};
-	const component = new ToolExecutionComponent(
-		"bash",
-		{ command: "bun test" },
-		{},
-		undefined,
-		ui,
-		undefined,
-		toolCallId,
-	);
+	const component = new ToolExecutionComponent("bash", { command }, {}, undefined, ui, undefined, toolCallId);
 	components.push(component);
 	component.setExecutionStarted();
 	return { component, ui };
@@ -79,7 +71,7 @@ describe("compact upstream tool feedback", () => {
 		expect(nativeActivity(component)).not.toContain("permission denied");
 	});
 
-	it("keeps a structured failure cause visible without changing detailed output", () => {
+	it("previews literal error tails while retaining structured diagnostics in detailed mode", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const { component } = bash();
 		const original = '{\n  "error": "permission denied"\n}\n]\n,\n\nCommand exited with code 1';
@@ -88,12 +80,53 @@ describe("compact upstream tool feedback", () => {
 			false,
 		);
 		const rows = component.render(80).map(Bun.stripANSI);
-		expect(rows.join("\n")).toContain("permission denied");
+		expect(rows.join("\n")).not.toContain("permission denied");
+		expect(rows.some(row => row.includes("]"))).toBe(true);
+		expect(nativeActivity(component)).not.toContain("permission denied");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		const detailed = Bun.stripANSI(component.render(80).join("\n"));
 		expect(detailed).toContain("permission denied");
 		expect(detailed).toContain("}");
 		expect(detailed).toContain("]");
+		expect(nativeActivity(component)).toContain("permission denied");
+	});
+
+	it("bounds failed heredocs to one command row and the last two nonblank output rows", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const command = "python3 - <<'EOF'\nprint('script body')\nEOF";
+		const { component } = bash(undefined, command);
+		const original = [
+			"code units: ['0xd83d', '0xdda5']",
+			"Traceback (most recent call last):",
+			'  File "<stdin>", line 4, in <module>',
+			"",
+			`UnicodeEncodeError: surrogates not allowed ${"x".repeat(150)}`,
+			"  ",
+			"\u001b[31m \u001b[0m",
+			"Command exited with code 1",
+		].join("\n");
+		component.updateResult(
+			{ content: [{ type: "text", text: original }], isError: true, details: { exitCode: 1 } },
+			false,
+		);
+		const rows = component.render(80).map(Bun.stripANSI);
+		const compact = rows.join("\n");
+		expect(compact).toContain("python3");
+		expect(compact).not.toContain("script body");
+		expect(compact).not.toContain("Traceback");
+		expect(compact).not.toContain("code units");
+		expect(rows.filter(row => row.includes("<stdin>") || row.includes("UnicodeEncodeError"))).toHaveLength(2);
+		expect(compact).not.toContain("x".repeat(150));
+		expect(compact).toContain("Exit: 1");
+		expect(nativeActivity(component)).not.toContain("Traceback");
+		expect(nativeActivity(component)).toContain("UnicodeEncodeError");
+		component.setExpanded(true);
+		const expanded = Bun.stripANSI(component.render(80).join("\n"));
+		expect(expanded).toContain("Traceback");
+		expect(expanded).toContain("script body");
+		expect(nativeActivity(component)).toContain("code units");
+		component.setExpanded(false);
+		expect(component.render(80).map(Bun.stripANSI)).toEqual(rows);
 	});
 
 	it("retains an input-blocked call outside the two normal previews", () => {

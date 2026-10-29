@@ -3,14 +3,16 @@ import { getProjectDir, jsonContainerEnd } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
-import { formatOutputPaneLines } from "../render/output-pane";
+import { formatOutputPaneLines, nonEmptyTailLines } from "../render/output-pane";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
 	formatToolWorkingDirectory,
 	previewWindowRows,
+	PREVIEW_LIMITS,
 	replaceTabs,
+	truncateToWidth,
 } from "../render/render-utils";
 import {
 	formatStyledTruncationWarning,
@@ -219,6 +221,8 @@ export interface BashRenderArgs {
 
 /** Mutable transcript viewport state for shell output. */
 export interface BashRenderContext {
+	/** Current compact preference, read reactively for existing cards. */
+	compactToolActivity?: boolean;
 	/** Raw output text */
 	output?: string;
 	/** Whether output came from artifact storage */
@@ -512,6 +516,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cachedWidth: number | undefined;
 			let cachedPreviewLines: number | undefined;
 			let cachedExpanded: boolean | undefined;
+			let cachedCompactError: boolean | undefined;
 			let cachedRawOutput: string | undefined;
 			let cachedIsPartial: boolean | undefined;
 			let cachedPreviewWindow: number | undefined;
@@ -542,6 +547,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 
 					const isPartial = options.isPartial === true;
+					const compactError =
+						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
+						!expanded &&
+						!isPartial &&
+						isError;
 					const previewWindow = previewWindowRows();
 					// A running command shows its live elapsed time in the bottom
 					// border; key the cache on whole seconds so it advances once a
@@ -554,6 +564,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						cachedWidth === width &&
 						cachedPreviewLines === previewLines &&
 						cachedExpanded === expanded &&
+						cachedCompactError === compactError &&
 						cachedRawOutput === rawOutput &&
 						cachedIsPartial === isPartial &&
 						cachedPreviewWindow === previewWindow &&
@@ -592,13 +603,22 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const hasOutput = displayOutput.trim().length > 0;
 					const formatted = formatOutputPaneLines(
 						{
-							lines: hasOutput ? displayOutput.split("\n") : [],
+							lines: compactError
+								? nonEmptyTailLines(displayOutput, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED)
+								: hasOutput
+									? displayOutput.split("\n")
+									: [],
 							expanded,
 							collapsedMaxLines: Math.min(previewLines, previewWindow),
 							edge: "tail",
 							visual: true,
 							width: contentWidth,
-							styleLine: line => uiTheme.fg("toolOutput", replaceTabs(line)),
+							styleLine: line =>
+								uiTheme.fg(
+									"toolOutput",
+									compactError ? truncateToWidth(replaceTabs(line), contentWidth) : replaceTabs(line),
+								),
+							showHiddenMarker: !compactError,
 							uncapSixel: true,
 						},
 						uiTheme,
@@ -612,13 +632,16 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						footerMeta,
 						sections: [
 							{
-								// Viewport-sized tail window in every state — streaming and final
-								// render identically; only ctrl+o uncaps.
-								content: capPreviewLines(
-									args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
-									uiTheme,
-									{ expanded },
-								),
+								// Compact failures keep a single command row; ctrl+o uncaps.
+								content: compactError
+									? (args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [])
+											.slice(0, PREVIEW_LIMITS.ERROR_COMMAND_COLLAPSED)
+											.map(line => truncateToWidth(line, contentWidth))
+									: capPreviewLines(
+											args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
+											uiTheme,
+											{ expanded },
+										),
 							},
 							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
 						],
@@ -627,6 +650,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					cachedWidth = width;
 					cachedPreviewLines = previewLines;
 					cachedExpanded = expanded;
+					cachedCompactError = compactError;
 					cachedRawOutput = rawOutput;
 					cachedIsPartial = isPartial;
 					cachedPreviewWindow = previewWindow;
@@ -674,6 +698,11 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const stripped = stripBashNotices(rawOutput, details);
 			const output = stripped.text.trimEnd();
 			const expanded = renderContext?.expanded ?? options.expanded;
+			const compactError =
+				(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
+				!expanded &&
+				!isPartial &&
+				isError;
 			const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 			const command = formatBashCommandText(toBashRenderArgs(args, config));
 			const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
@@ -688,8 +717,22 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const meta = details?.meta;
 			const box = runBox(
 				[
-					runInput(command, SHELL_INPUT),
-					output.trim().length > 0 && runOutput(output, { role: "omp.tool.bash.output", previewLines }),
+					runInput(
+						command,
+						compactError
+							? { ...SHELL_INPUT, wrap: false, previewLines: PREVIEW_LIMITS.ERROR_COMMAND_COLLAPSED }
+							: SHELL_INPUT,
+					),
+					output.trim().length > 0 &&
+						runOutput(
+							compactError
+								? nonEmptyTailLines(output, PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED).join("\n")
+								: output,
+							{
+								role: "omp.tool.bash.output",
+								previewLines: compactError ? PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED : previewLines,
+							},
+						),
 					runFoot({
 						state,
 						exitCode: details?.exitCode,

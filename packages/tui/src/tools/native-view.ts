@@ -266,9 +266,17 @@ export function runFoot(input: RunFootInput): NativeNode {
 }
 
 /** A run's input section: the command or cell source, clamped to {@link RUN_INPUT_PREVIEW_LINES}. */
-export function runInput(source: string, p: { role: string; lang: string; wrap: boolean }): NativeNode {
+export function runInput(
+	source: string,
+	p: { role: string; lang: string; wrap: boolean; previewLines?: number },
+): NativeNode {
 	return keyed(
-		code(source.trimEnd(), { role: p.role, lang: p.lang, wrap: p.wrap, preview: { lines: RUN_INPUT_PREVIEW_LINES } }),
+		code(source.trimEnd(), {
+			role: p.role,
+			lang: p.lang,
+			wrap: p.wrap,
+			preview: { lines: p.previewLines ?? RUN_INPUT_PREVIEW_LINES },
+		}),
 		"input",
 	);
 }

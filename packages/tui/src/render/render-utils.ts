@@ -105,6 +105,10 @@ export const PREVIEW_LIMITS = {
 	COLLAPSED_ITEMS: 8,
 	/** Output preview lines in collapsed view */
 	OUTPUT_COLLAPSED: 3,
+	/** Nonblank output rows in a compact shell failure preview. */
+	ERROR_OUTPUT_COLLAPSED: 2,
+	/** Command rows in a compact shell failure preview. */
+	ERROR_COMMAND_COLLAPSED: 1,
 	/** Output preview lines in expanded view */
 	OUTPUT_EXPANDED: 10,
 	/** Computer script lines shown in collapsed view */

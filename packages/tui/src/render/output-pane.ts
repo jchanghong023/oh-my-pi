@@ -52,6 +52,13 @@ export function splitTerminalOutputLines(text: string): string[] {
 	});
 }
 
+/** Select the last visible, nonblank output rows without interpreting their content. */
+export function nonEmptyTailLines(text: string, maxLines: number): string[] {
+	return splitTerminalOutputLines(text)
+		.filter(line => Bun.stripANSI(line).trim().length > 0)
+		.slice(-maxLines);
+}
+
 function defaultHiddenLabel(hidden: number, shown: number, total: number, edge: OutputPaneEdge): string {
 	return edge === "tail"
 		? `… (${hidden} earlier lines, showing ${shown} of ${total})`

@@ -2213,6 +2213,10 @@ export class ToolExecutionComponent extends Container {
 			context.rawDetails = this.#rawDetails;
 		}
 		if (this.#toolName === "bash") {
+			Object.defineProperty(context, "compactToolActivity", {
+				get: () => displayPreferences.compactToolActivity,
+				enumerable: true,
+			});
 			// Bash needs render context even before a result exists. The renderer uses the pending-call args
 			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
 			if (this.#result) {
