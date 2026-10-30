@@ -85,6 +85,12 @@ export class XdProtocolHandler implements ProtocolHandler {
 		const session = context?.session;
 		if (!session) throw new ToolError(NOT_MOUNTED);
 		const { name } = target;
+		if (name && content.trim() === "?" && (name === REPORT_ISSUE_DEVICE_NAME || isResolutionDeviceName(name))) {
+			return {
+				content: [{ type: "text", text: this.#usage(session, name) }],
+				details: { xdev: { tool: name, mode: "help" } },
+			};
+		}
 		if (name === REPORT_ISSUE_DEVICE_NAME) {
 			const { result, xdev } = await dispatchReportIssueDevice(session, content);
 			return { content: result.content, details: { xdev }, isError: result.isError, useless: result.useless };

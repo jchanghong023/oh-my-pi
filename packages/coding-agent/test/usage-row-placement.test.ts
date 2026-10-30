@@ -88,8 +88,7 @@ function makeHarness(showTokenUsage: boolean): { ctx: InteractiveModeContext; he
 		updateEditorBorderColor: vi.fn(),
 		settings: Settings.isolated({
 			"display.showTokenUsage": showTokenUsage,
-			"display.compactToolActivity": false,
-			"display.hideToolActivity": false,
+			"display.mode": "detailed",
 		}),
 		addMessageToChat: (message: AgentMessage) => helpers.addMessageToChat(message),
 		session: {
@@ -165,7 +164,7 @@ describe("ChatTranscriptBuilder token-usage row timestamp", () => {
 		await Settings.init({
 			inMemory: true,
 			cwd: process.cwd(),
-			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+			overrides: { "display.mode": "detailed" },
 		});
 		cfgDisplayShowTokenUsage.set(settings, true);
 	});

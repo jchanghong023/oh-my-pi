@@ -98,7 +98,7 @@ describe("EventController mixed assistant text/tool rendering", () => {
 		// not the compact mode's intentional one-line tool previews.
 		await Settings.init({
 			inMemory: true,
-			overrides: { "display.smoothStreaming": false, "display.compactToolActivity": false },
+			overrides: { "display.smoothStreaming": false, "display.mode": "detailed" },
 		});
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	});

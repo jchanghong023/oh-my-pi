@@ -264,7 +264,7 @@ describe("executeSearch abort propagation", () => {
 		expect(fallbackSearch).not.toHaveBeenCalled();
 	});
 
-	it("marks an empty configured provider chain as an error", async () => {
+	it("reports an empty configured provider chain", async () => {
 		const config = await Settings.init({ inMemory: true });
 		config.setModelRole("web", "missing-provider/no-such-search-model");
 		cfgRetryFallbackChains.set(config, { web: [] });
@@ -274,12 +274,12 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, { authStorage, modelRegistry });
 
-		expect(result.isError).toBe(true);
+		expect(result.isError).toBeUndefined();
 		expect(result.details?.response.provider).toBe("none");
 		expect(result.details?.error).toBe("No web search model configured.");
 	});
 
-	it("marks an unmatched model selector as an error", async () => {
+	it("reports an unmatched model selector", async () => {
 		const context = await configureProviderChain([
 			fakeProvider("brave", async () => ({ provider: "brave", sources: [] })),
 		]);
@@ -289,13 +289,13 @@ describe("executeSearch abort propagation", () => {
 			context,
 		);
 
-		expect(result.isError).toBe(true);
+		expect(result.isError).toBeUndefined();
 		expect(result.details?.response.provider).toBe("none");
 		expect(result.details?.error).toContain("No web search model matches selector");
 		expect(context.getProvider).not.toHaveBeenCalled();
 	});
 
-	it("marks an exhausted provider chain as an error", async () => {
+	it("reports an exhausted provider chain", async () => {
 		const context = await configureProviderChain([
 			fakeProvider("brave", async () => {
 				throw new Error("brave failed");
@@ -307,7 +307,7 @@ describe("executeSearch abort propagation", () => {
 
 		const result = await runSearchQuery({ query: "anything" }, context);
 
-		expect(result.isError).toBe(true);
+		expect(result.isError).toBeUndefined();
 		expect(result.details?.error).toContain("All web search providers failed");
 		expect(result.details?.error).toContain("brave failed");
 		expect(result.details?.error).toContain("exa failed");
@@ -324,7 +324,7 @@ describe("executeSearch abort propagation", () => {
 		const result = await runSearchQuery({ query: "anything" }, context);
 
 		expect(result.content[0]?.text).toContain("upstream 500");
-		expect(result.isError).toBe(true);
+		expect(result.isError).toBeUndefined();
 		expect(result.details?.error).toContain("upstream 500");
 	});
 

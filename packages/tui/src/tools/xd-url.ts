@@ -1,9 +1,9 @@
 /** Canonical prefix for virtual tool-device URLs. */
 export const XD_URL_PREFIX = "xd://";
 
-/** Device-write content that requests docs instead of executing: empty, `?`, or `help`. */
+/** Device-write content that requests docs instead of executing. */
 export function isXdHelpContent(content: string): boolean {
-	return /^\s*(\?|help)?\s*$/i.test(content);
+	return content.trim() === "?";
 }
 
 /** Returns the canonical tool name from a bare or `xd://`-prefixed spelling. */

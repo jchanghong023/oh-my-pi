@@ -6,6 +6,7 @@ import { VERSION } from "@oh-my-pi/pi-utils";
 import { parseHTML } from "@oh-my-pi/pi-utils/dom";
 import type { BunPlugin } from "bun";
 import { getTemplate } from "../src/export/html/index";
+import viewerAsset from "../src/export/html/viewer.generated.json" with { type: "json" };
 
 const bundleDistUrl = new URL("../scripts/bundle-dist.ts", import.meta.url).href;
 const probePath = path.resolve(import.meta.dir, "fixtures", "html-export-template-probe.ts");
@@ -77,23 +78,73 @@ afterAll(async () => {
 });
 
 describe("HTML export template", () => {
-	test("source and packaged exports inline the viewer and its dependencies", async () => {
+	test("source exports inline the viewer but load both shared libraries", async () => {
 		const html = getTemplate();
 		const { document } = parseHTML(html);
-		expect(document.querySelectorAll("script[src]")).toHaveLength(0);
-		expect(html).toContain("globalThis.ompMarkdown = globalThis.marked");
-		expect(html).toContain("style.dataset.ompExportViewer");
+		const scripts = document.querySelectorAll("script[src]");
+		expect(scripts).toHaveLength(2);
+		expect(scripts[0]!.getAttribute("src")).toStartWith("https://stencil.so/assets/omp/marked.");
+		expect(scripts[1]!.getAttribute("src")).toStartWith("https://stencil.so/assets/omp/highlight.");
 		expect(html).toBe(await runProbe([process.execPath, probePath]));
-		expect(html).toBe(await runProbe([process.execPath, bundlePath]));
 	});
 
-	test("npm-style bundle and compiled binary export identical offline HTML from an unrelated directory", async () => {
+	test("source exports explain how to generate a missing development viewer", async () => {
+		const checkoutDir = path.join(tempRoot, "checkout", "packages", "coding-agent", "src", "export", "html");
+		await Bun.write(path.join(checkoutDir, "shell.html"), "checkout marker");
+		const bundle = await Bun.build({
+			entrypoints: [probePath],
+			outdir: checkoutDir,
+			target: "bun",
+			plugins: [focusedBundlePlugin],
+		});
+		if (!bundle.success) throw new AggregateError(bundle.logs, "Development probe bundle failed");
+		const entrypoint = bundle.outputs.find(output => output.kind === "entry-point");
+		if (!entrypoint) throw new Error("Development probe emitted no entry point");
+		const proc = Bun.spawn([process.execPath, entrypoint.path], {
+			cwd: unrelatedCwd,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+		expect(exitCode).not.toBe(0);
+		expect(stderr).toContain("Run bun gen:export-viewer");
+	});
+
+	test("packaged exports load the version-pinned viewer after both integrity-checked shared libraries", async () => {
+		const html = await runProbe([process.execPath, bundlePath]);
+		const { document } = parseHTML(html);
+		const scripts = document.querySelectorAll("script[src]");
+		expect(Buffer.byteLength(html)).toBeLessThan(3072);
+		expect(scripts).toHaveLength(3);
+		for (const [index, name] of ["marked", "highlight"].entries()) {
+			const script = scripts[index]!;
+			const url = new URL(script.getAttribute("src")!);
+			expect(url.origin).toBe("https://stencil.so");
+			const match = new RegExp(`^/assets/omp/${name}\\.([a-f0-9]{8})\\.js$`).exec(url.pathname);
+			expect(match).not.toBeNull();
+			const integrity = script.getAttribute("integrity");
+			expect(integrity).toMatch(/^sha256-[A-Za-z0-9+/]{43}=$/);
+			expect(Buffer.from(integrity!.slice("sha256-".length), "base64").toHex()).toStartWith(match![1]!);
+		}
+		expect(scripts[2]!.getAttribute("src")).toBe(
+			`https://build.stencil.so/web/omp/${encodeURIComponent(VERSION)}/${viewerAsset.file}`,
+		);
+		expect(scripts[2]!.getAttribute("integrity")).toBe(viewerAsset.integrity);
+		for (const script of scripts) {
+			expect(script.getAttribute("crossorigin")).toBe("anonymous");
+			expect(script.hasAttribute("defer")).toBe(true);
+			expect(script.getAttribute("onerror")).toContain("Could not load the session viewer");
+		}
+	});
+
+	test("npm-style bundle and compiled binary export identical hosted HTML from an unrelated directory", async () => {
 		const expected = await runProbe([process.execPath, bundlePath]);
 		expect(await runProbe([compiledPath])).toBe(expected);
 		expect(await fs.readdir(bundleDir)).toEqual([path.basename(bundlePath)]);
 	});
 
-	test("npm packages include the embedded viewer and omit its build inputs", async () => {
+	test("npm packages keep the tiny loader and metadata but omit hosted viewer source assets", async () => {
 		const productionDir = path.join(tempRoot, "production-bundle");
 		const staleAsset = path.join(productionDir, "template-stale.css");
 		await Bun.write(staleAsset, "obsolete viewer sidecar");
@@ -142,9 +193,6 @@ describe("HTML export template", () => {
 		const packed = Array.from(packOut.matchAll(/^packed \S+ (.+)$/gm), match => match[1]);
 		expect(packed).toContain("src/export/html/template.html.txt");
 		expect(packed).toContain("src/export/html/viewer.generated.json");
-		expect(packed).toContain("src/export/html/viewer.generated.js");
-		expect(packed).toContain("src/export/html/vendor/marked.min.js");
-		expect(packed).toContain("src/export/html/vendor/highlight.min.js");
 		for (const name of ["shell.html", "template.css", "template.js", "share-loader.js"]) {
 			expect(packed).not.toContain(`src/export/html/${name}`);
 		}

@@ -40,12 +40,11 @@ export const cfgSessionWorktreeScope = register({
 	ui: {
 		tab: "interaction",
 		group: "启动与更新",
-		label: "Resume Worktree Scope",
-		description:
-			"Choose whether the resume picker's current folder includes sessions from other repository worktrees",
+		label: "恢复会话的工作树范围",
+		description: "选择恢复会话时，当前目录列表是否包含同一仓库其他工作树中的会话",
 		options: [
-			{ value: "directory", label: "This Directory", description: "Only sessions saved for this directory" },
-			{ value: "repo", label: "Repository Worktrees", description: "Also include sessions from sibling worktrees" },
+			{ value: "directory", label: "当前目录", description: "仅包含保存在当前目录的会话" },
+			{ value: "repo", label: "仓库工作树", description: "同时包含其他工作树中的会话" },
 		],
 	},
 });

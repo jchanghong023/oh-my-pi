@@ -764,10 +764,9 @@ export function googleStreamChunkError(error: NonNullable<GenerateContentRespons
 			? ` ${JSON.stringify({ error: { status: error.status, details: error.details } })}`
 			: "";
 	const message = `Google API stream error: ${detail}${residue}`;
-	const providerErrorCode = AIError.OpenAIHttpError.parseEnvelope({ error }, undefined).code;
 	return typeof error.code === "number" && error.code >= 400
-		? new AIError.GoogleApiError(message, error.code, { code: providerErrorCode })
-		: new AIError.ProviderResponseError(message, { provider, kind: "output", providerErrorCode });
+		? new AIError.GoogleApiError(message, error.code)
+		: new AIError.ProviderResponseError(message, { provider, kind: "output" });
 }
 /**
  * Drives the chunked `generateContentStream` iterator into an `AssistantMessage` and
@@ -1091,7 +1090,7 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 						throw new AIError.GoogleApiError(
 							`Google API error (${response.status}): ${extractGoogleErrorMessage(errorText, response.status)}`,
 							response.status,
-							{ headers: response.headers, code: extractGoogleErrorCode(errorText) },
+							{ headers: response.headers },
 						);
 					}
 				} finally {
@@ -1179,7 +1178,6 @@ export function streamGoogleGenAI<T extends "google-generative-ai" | "google-ver
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;
@@ -1256,14 +1254,5 @@ export function extractGoogleErrorMessage(errorText: string, status: number): st
 			: `${error.message} ${JSON.stringify(residue)}`;
 	} catch {
 		return errorText;
-	}
-}
-
-/** Read only a structured wire code, never HTTP status or human-readable text. */
-export function extractGoogleErrorCode(errorText: string): string | undefined {
-	try {
-		return AIError.OpenAIHttpError.parseEnvelope(JSON.parse(errorText), undefined).code;
-	} catch {
-		return undefined;
 	}
 }

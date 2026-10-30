@@ -119,8 +119,7 @@ async function installBinary(src: string, dest: string): Promise<void> {
 	} catch {
 		// On Windows, loaded DLLs cannot be overwritten or deleted, but they can
 		// be renamed: move the loaded image aside so the new addon takes its
-		// place. The holding process keeps running on the renamed image, and
-		// cleanupStaleTemps reclaims the .old. file on a later build.
+		// place. The holding process keeps running on the renamed image.
 		const backupPath = `${dest}.old.${process.pid}`;
 		let renamedAside = false;
 		try {
@@ -156,6 +155,7 @@ async function installBinary(src: string, dest: string): Promise<void> {
 			await fs.unlink(tempPath).catch(() => {});
 			throw new Error(`Failed to install ${path.basename(dest)}: ${(finalErr as Error).message}`);
 		}
+		if (renamedAside) await fs.unlink(backupPath).catch(() => {});
 	}
 }
 

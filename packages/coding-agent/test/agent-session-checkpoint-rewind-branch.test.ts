@@ -33,7 +33,7 @@ const xdevWriteTool: AgentTool<typeof xdevWriteSchema, unknown> = {
 	parameters: xdevWriteSchema,
 	async execute(_toolCallId, params) {
 		const tool = params.path === "xd://checkpoint" ? "checkpoint" : "rewind";
-		if (/^\s*(?:\?|help)?\s*$/i.test(params.content)) {
+		if (params.content.trim() === "?") {
 			return {
 				content: [{ type: "text" as const, text: `${tool} docs via xdev` }],
 				details: { xdev: { tool, mode: "help" } },
@@ -567,7 +567,7 @@ describe("AgentSession checkpoint rewind branch context", () => {
 							type: "toolCall",
 							id: "call_checkpoint_help",
 							name: "write",
-							arguments: { path: "xd://checkpoint", content: "help" },
+							arguments: { path: "xd://checkpoint", content: "?" },
 						},
 					],
 					stopReason: "toolUse",

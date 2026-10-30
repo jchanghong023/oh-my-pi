@@ -92,7 +92,7 @@ describe("wait block lifecycle", () => {
 		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
-			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+			overrides: { "display.mode": "detailed" },
 		});
 		await initTheme();
 	});
@@ -173,7 +173,7 @@ describe("EventController displaces consecutive waiting polls", () => {
 		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
-			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+			overrides: { "display.mode": "detailed" },
 		});
 		await initTheme();
 	});
@@ -428,7 +428,7 @@ describe("#12248 completed wait turn replay", () => {
 		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
-			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+			overrides: { "display.mode": "detailed" },
 		});
 		cfgDisplayShowTokenUsage.set(settings, true);
 		await initTheme();
@@ -509,7 +509,7 @@ describe("UiHelpers.renderSessionContext collapses repeated todo snapshots", () 
 		resetSettingsForTest();
 		await Settings.init({
 			inMemory: true,
-			overrides: { "display.compactToolActivity": false, "display.hideToolActivity": false },
+			overrides: { "display.mode": "detailed" },
 		});
 		await initTheme();
 	});

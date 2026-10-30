@@ -2,7 +2,7 @@
 
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { captureArtifactSource, produceZCodeArtifacts } from "../../../scripts/zcode-artifact";
+import { captureArtifactSource, produceZCodeArtifacts, requireArtifactVersion } from "../../../scripts/zcode-artifact";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -83,8 +83,8 @@ async function main(): Promise<void> {
 	const arch = crossBuild?.arch ?? process.arch;
 	console.log(`[build-binary] Starting build for ${platform}-${arch}`);
 	const artifactRoot = Bun.env.ZCODE_ARTIFACT_ROOT;
+	const artifactVersion = artifactRoot ? requireArtifactVersion(Bun.env.RELEASE_VERSION) : undefined;
 	const artifactSource = artifactRoot ? await captureArtifactSource(repoRoot) : undefined;
-	const artifactVersion: string = (await Bun.file(path.join(packageDir, "package.json")).json()).version;
 	const shouldAdhocSign =
 		process.platform === "darwin" &&
 		(!crossBuild || crossBuild.platform === "darwin") &&
@@ -131,7 +131,7 @@ async function main(): Promise<void> {
 		console.log("[build-binary] Resetting generated stats client...");
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}
-	if (artifactRoot && artifactSource) {
+	if (artifactRoot && artifactSource && artifactVersion) {
 		console.log(`[build-binary] Producing ZCode artifacts: ${artifactRoot}`);
 		await produceZCodeArtifacts({
 			source: artifactSource,

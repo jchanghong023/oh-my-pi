@@ -829,6 +829,44 @@ describe("title generator", () => {
 		expect(attempted).not.toContain(roleOnly.id);
 	});
 
+	it.each(["missing-auth", "exception", "response-error", "invalid-title"] as const)(
+		"continues from a CodeAgent candidate after %s",
+		async failure => {
+			const primary = { ...getModelOrThrow("claude-haiku-4-5"), provider: "codeagent", id: "test-codeagent" };
+			const fallback = getModelOrThrow("claude-sonnet-4-5");
+			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
+				if (model.provider !== "codeagent") {
+					return {
+						stopReason: "stop",
+						content: [{ type: "text", text: "<title>Recovered Title</title>" }],
+					} as never;
+				}
+				if (failure === "exception") throw new Error("request failed");
+				if (failure === "response-error") {
+					return { stopReason: "error", errorStatus: 400, errorMessage: "request failed", content: [] } as never;
+				}
+				return { stopReason: "stop", content: [] } as never;
+			});
+			const settings = Settings.isolated({
+				modelRoles: { smol: `${primary.provider}/${primary.id}` },
+				"retry.modelFallback": true,
+				"retry.fallbackChains": { [`${primary.provider}/${primary.id}`]: [`${fallback.provider}/${fallback.id}`] },
+			});
+			const registry = {
+				getAvailable: () => [primary, fallback],
+				getApiKey: async (model: Model<Api>) =>
+					model.provider === "codeagent" && failure === "missing-auth" ? undefined : "test-key",
+				getApiKeyForProvider: async () => "test-key",
+				authStorage: { rotateSessionCredential: async () => false },
+				resolver: () => async () => "test-key",
+			} as never;
+			expect(await generateSessionTitle("Investigate the resolver", registry, settings, import.meta.dir)).toBe(
+				"Recovered Title",
+			);
+			expect(complete.mock.calls.at(-1)?.[0]).toBe(fallback);
+		},
+	);
+
 	it.each([true, false])("honors modelFallback=%s when the title model returns a provider error", async enabled => {
 		const smolModel = getModelOrThrow("claude-opus-4-8");
 		const fallbackModel = getModelOrThrow("claude-sonnet-4-5");

@@ -7,6 +7,7 @@
  */
 import { describe, expect, it } from "bun:test";
 import { type } from "@oh-my-pi/omptype";
+import { validateAgentToolArguments } from "@oh-my-pi/pi-agent-core";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CustomToolAdapter } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/wrapper";
 import type { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
@@ -52,6 +53,45 @@ describe("issue #5764: registerTool loadMode default", () => {
 		// An explicit mode always wins.
 		expect(defaultLoadModeForToolName("read", "discoverable")).toBe("discoverable");
 		expect(defaultLoadModeForToolName("some_extension_tool", "essential")).toBe("essential");
+	});
+	it("rejects schema mismatches for extension tools even if a legacy definition requests lenience", () => {
+		const definition = {
+			name: "custom_validation",
+			label: "Custom validation",
+			description: "extension tool",
+			parameters: type({ value: "string" }),
+			lenientArgValidation: true,
+			execute: noopExecute,
+		};
+		const registered = new RegisteredToolAdapter(
+			{
+				definition,
+				extensionPath: "<test>",
+				sourceInfo: extensionToolSourceInfo({ name: definition.name }, "<test>"),
+			},
+			{} as ExtensionRunner,
+		);
+		const custom = new CustomToolAdapter(definition, () => ({}) as never);
+		for (const tool of [registered, custom]) {
+			expect(() =>
+				validateAgentToolArguments(
+					{
+						name: tool.name,
+						label: tool.label,
+						description: definition.description,
+						parameters: tool.parameters,
+						lenientArgValidation: tool.lenientArgValidation,
+						execute: noopExecute,
+					},
+					{
+						type: "toolCall",
+						id: "invalid",
+						name: definition.name,
+						arguments: {},
+					},
+				),
+			).toThrow(/value/);
+		}
 	});
 
 	it("RegisteredToolAdapter keeps a re-registered essential built-in essential (not mountable)", () => {

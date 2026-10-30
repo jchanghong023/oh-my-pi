@@ -101,7 +101,7 @@ describe("EventController read-group accretion", () => {
 	beforeEach(async () => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		resetSettingsForTest();
-		await Settings.init({ inMemory: true, overrides: { "display.compactToolActivity": false } });
+		await Settings.init({ inMemory: true, overrides: { "display.mode": "detailed" } });
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	});
 

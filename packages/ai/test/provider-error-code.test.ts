@@ -43,7 +43,7 @@ async function terminal(api: BoundaryApi, baseUrl: string, signal?: AbortSignal)
 	}
 	const result = await stream.result();
 	expect(terminalMessage).toBeDefined();
-	expect(terminalMessage?.providerErrorCode).toBe(result.providerErrorCode);
+	expect(terminalMessage?.stopReason).toBe(result.stopReason);
 	return result;
 }
 
@@ -106,10 +106,10 @@ function successBody(api: BoundaryApi): string {
 	);
 }
 
-describe("provider error codes at the local HTTP boundary", () => {
+describe("provider errors at the local HTTP boundary", () => {
 	for (const api of apis) {
 		for (const code of ["Quota.Exact_CASE", 7103]) {
-			it(`${api} forwards the actual structured code ${code} without replacing HTTP status`, async () => {
+			it(`${api} reports HTTP status without exposing structured code ${code}`, async () => {
 				let requests = 0;
 				const server = Bun.serve({
 					hostname: "127.0.0.1",
@@ -129,7 +129,7 @@ describe("provider error codes at the local HTTP boundary", () => {
 					const message = await terminal(api, server.url.origin);
 					expect(message.stopReason).toBe("error");
 					expect(message.errorStatus).toBe(400);
-					expect(message.providerErrorCode).toBe(String(code));
+					expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 					expect(requests).toBe(1);
 				} finally {
 					await server.stop(true);
@@ -146,7 +146,7 @@ describe("provider error codes at the local HTTP boundary", () => {
 			try {
 				const message = await terminal(api, server.url.origin);
 				expect(message.errorStatus).toBe(400);
-				expect(message.providerErrorCode).toBeUndefined();
+				expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 			} finally {
 				await server.stop(true);
 			}
@@ -161,7 +161,7 @@ describe("provider error codes at the local HTTP boundary", () => {
 			try {
 				const message = await terminal(api, server.url.origin);
 				expect(message.stopReason).toBe("stop");
-				expect(message.providerErrorCode).toBeUndefined();
+				expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 				expect(message.errorStatus).toBeUndefined();
 			} finally {
 				await server.stop(true);
@@ -192,7 +192,7 @@ describe("provider error codes at the local HTTP boundary", () => {
 				controller.abort(Object.assign(new Error("Quota.Exact_CASE"), { code: "Quota.Exact_CASE" }));
 				const message = await pending;
 				expect(message.stopReason).toBe("aborted");
-				expect(message.providerErrorCode).toBeUndefined();
+				expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 			} finally {
 				await server.stop(true);
 			}
@@ -202,7 +202,7 @@ describe("provider error codes at the local HTTP boundary", () => {
 
 describe("structured stream errors and recovered requests", () => {
 	for (const api of apis) {
-		it(`${api} preserves the original code in an HTTP 200 error frame`, async () => {
+		it(`${api} reports an HTTP 200 error frame without a raw code field`, async () => {
 			const error = { code: "Exact.Stream_CODE", type: "invalid_request_error", message: "Rejected stream" };
 			const frame = { type: "error", error };
 			const body = `event: error\ndata: ${JSON.stringify(frame)}\n\n`;
@@ -215,14 +215,14 @@ describe("structured stream errors and recovered requests", () => {
 				const message = await terminal(api, server.url.origin);
 				expect(message.stopReason).toBe("error");
 				expect(message.errorStatus).toBeUndefined();
-				expect(message.providerErrorCode).toBe("Exact.Stream_CODE");
+				expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 			} finally {
 				await server.stop(true);
 			}
 		});
 	}
 
-	it("Anthropic retains the structured code when a retryable error truncates committed output", async () => {
+	it("Anthropic reports a retryable error truncating committed output", async () => {
 		let requests = 0;
 		const prefix = successBody("anthropic-messages").split("event: message_delta\n")[0];
 		const frame = {
@@ -244,7 +244,7 @@ describe("structured stream errors and recovered requests", () => {
 			expect(requests).toBe(1);
 			expect(message.stopReason).toBe("error");
 			expect(message.content).toContainEqual(expect.objectContaining({ type: "text", text: "ok" }));
-			expect(message.providerErrorCode).toBe("Exact.Overload_CODE");
+			expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 			expect(message.errorMessage).toContain("error frame received before message_stop");
 		} finally {
 			await server.stop(true);
@@ -273,7 +273,7 @@ describe("structured stream errors and recovered requests", () => {
 			const message = await terminal("anthropic-messages", server.url.origin);
 			expect(requests).toBe(2);
 			expect(message.stopReason).toBe("stop");
-			expect(message.providerErrorCode).toBeUndefined();
+			expect(Object.hasOwn(message, "providerErrorCode")).toBe(false);
 			expect(message.errorStatus).toBeUndefined();
 		} finally {
 			await server.stop(true);
@@ -281,7 +281,7 @@ describe("structured stream errors and recovered requests", () => {
 	});
 });
 
-it("in-band retry classification preserves exact wire code without promoting the event type", async () => {
+it("in-band retry classification preserves HTTP status without exposing raw codes", async () => {
 	let requests = 0;
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -300,10 +300,10 @@ it("in-band retry classification preserves exact wire code without promoting the
 	try {
 		const coded = await terminal("openai-completions", server.url.origin);
 		expect(coded.errorStatus).toBe(429);
-		expect(coded.providerErrorCode).toBe("Throttling.AllocationQuota");
+		expect(Object.hasOwn(coded, "providerErrorCode")).toBe(false);
 		const uncoded = await terminal("openai-completions", server.url.origin);
 		expect(uncoded.errorStatus).toBe(429);
-		expect(uncoded.providerErrorCode).toBeUndefined();
+		expect(Object.hasOwn(uncoded, "providerErrorCode")).toBe(false);
 	} finally {
 		await server.stop(true);
 	}

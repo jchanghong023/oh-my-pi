@@ -93,7 +93,7 @@ function convertSchemaForm(schema: unknown): unknown {
 		const result: Record<string, unknown> = {
 			type: "object",
 			properties,
-			additionalProperties: "additionalProperties" in schema && schema.additionalProperties === true,
+			additionalProperties: false,
 		};
 
 		if (required.length > 0) {
@@ -130,9 +130,7 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
-		// Escape the pointer token before encoding its URI-fragment representation.
-		const name = String(schema.ref).replace(/~/g, "~0").replace(/\//g, "~1");
-		return { $ref: `#/$defs/${encodeURIComponent(name)}` };
+		return { $ref: `#/$defs/${schema.ref}` };
 	}
 
 	// Empty form: {} → {} (accepts anything)
@@ -189,18 +187,6 @@ function isJTDDocument(schema: unknown): boolean {
 		if (!Object.hasOwn(jtdKeywords, key)) return false;
 	}
 
-	// JTD forms are mutually exclusive. JSON Schema may combine these keywords;
-	// treating such a document as JTD would silently discard constraints.
-	const forms =
-		Number("type" in schema) +
-		Number("enum" in schema) +
-		Number("ref" in schema) +
-		Number("elements" in schema) +
-		Number("values" in schema) +
-		Number("discriminator" in schema) +
-		Number("properties" in schema || "optionalProperties" in schema);
-	if (forms > 1) return false;
-
 	if ("type" in schema && !(typeof schema.type === "string" && Object.hasOwn(primitiveMap, schema.type))) return false;
 	if ("enum" in schema && !(Array.isArray(schema.enum) && schema.enum.every(value => typeof value === "string"))) {
 		return false;
@@ -209,9 +195,6 @@ function isJTDDocument(schema: unknown): boolean {
 	if ("discriminator" in schema && typeof schema.discriminator !== "string") return false;
 	if ("nullable" in schema && typeof schema.nullable !== "boolean") return false;
 	if ("additionalProperties" in schema && typeof schema.additionalProperties !== "boolean") return false;
-	if ("additionalProperties" in schema && !("properties" in schema || "optionalProperties" in schema)) {
-		return false;
-	}
 	if ("elements" in schema && !isJTDDocument(schema.elements)) return false;
 	if ("values" in schema && !isJTDDocument(schema.values)) return false;
 
@@ -252,11 +235,6 @@ export function isJTDSchema(schema: unknown): boolean {
 	if (typeof obj.type === "string" && Object.hasOwn(jtdOnlyPrimitiveTypes, obj.type)) {
 		return true;
 	}
-
-	// A JTD document can have a shared primitive, enum, or empty root form.
-	// Its definitions still need conversion even when the root has no
-	// JTD-only keyword; inspect the complete grammar to preserve native schemas.
-	if ("definitions" in obj && isJTDDocument(obj)) return true;
 
 	// `properties` without `type` parses as both JTD and JSON Schema. Only the whole
 	// document separates them, because the JTD reading is destructive: `convertSchema`
@@ -381,33 +359,13 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 }
 
 /**
- * Convert a JTD document, mapping the root `definitions` map (RFC 8927 §2.2.1) to
- * JSON Schema `$defs` so `{ ref: "X" }` → `{ $ref: "#/$defs/X" }` resolves; without
- * this the refs dangle and consumers drop the whole schema as unvalidatable.
- */
-function convertJtdDocument(schema: unknown): unknown {
-	if (!isRecord(schema) || !isRecord(schema.definitions)) {
-		return convertSchema(schema);
-	}
-	const $defs = Object.fromEntries(
-		Object.entries(schema.definitions).map(([name, definition]) => [name, convertSchema(definition)]),
-	);
-	const root: Record<string, unknown> = {};
-	for (const [key, value] of Object.entries(schema)) {
-		if (key !== "definitions") root[key] = value;
-	}
-	const convertedRoot = convertSchema(root) as Record<string, unknown>;
-	return { ...convertedRoot, $defs };
-}
-
-/**
  * Convert JTD schema to JSON Schema.
  * If already JSON Schema, returns as-is.
  */
 export function jtdToJsonSchema(schema: unknown): unknown {
 	if (isJTDSchema(schema)) {
 		// convertSchema is recursive; re-walking its JSON Schema output caused #1345.
-		return convertJtdDocument(schema);
+		return convertSchema(schema);
 	}
 	return normalizeJsonSchemaNode(schema);
 }

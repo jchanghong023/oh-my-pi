@@ -3,6 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { withExecutionModelContext } from "@oh-my-pi/pi-coding-agent/session/execution-model";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { createSpeculativeToolExecutionConfig } from "@oh-my-pi/pi-coding-agent/speculation/host";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
@@ -54,6 +56,23 @@ describe("createSpeculativeToolExecutionConfig", () => {
 		cfgToolsSpeculativeExecutionEnabled.set(settings, true);
 
 		expect(config.enabled).toBe(true);
+	});
+
+	it("applies live speculation settings to recovery requests", async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "speculative-recovery-"));
+		temporaryDirectories.push(directory);
+		const settings = Settings.isolated({});
+		const session = createSession(directory, settings);
+		const config = createSpeculativeToolExecutionConfig(settings, session, { hasHandlers: () => false });
+		const model = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!model) throw new Error("expected bundled model");
+		await withExecutionModelContext({ model, recoverModelRequest: async () => undefined }, async () => {
+			expect(config.enabled).toBe(true);
+			cfgTaskSpeculativeLaunch.set(settings, false);
+			expect(config.enabled).toBe(false);
+			cfgToolsSpeculativeExecutionEnabled.set(settings, true);
+			expect(config.enabled).toBe(true);
+		});
 	});
 
 	it("propagates maxInFlight changes to the same config object", async () => {

@@ -78,6 +78,12 @@ describe("theme symbols.spinnerFrames", () => {
 		await expect(getThemeByName("custom-empty-object")).resolves.toBeUndefined();
 	});
 
+	it("advances the shared spinner at 80 millisecond boundaries", () => {
+		expect(sharedSpinnerFrame(4, 79)).toBe(0);
+		expect(sharedSpinnerFrame(4, 80)).toBe(1);
+		expect(sharedSpinnerFrame(4, 160)).toBe(2);
+	});
+
 	it("derives live tool spinner frames from a shared clock", () => {
 		const frameCount = 4;
 		const now = SPINNER_ADVANCE_MS * 3 + 12;

@@ -237,89 +237,70 @@ async def test_triage_issue_reopen_tears_down_finalized_workspace(db, settings, 
     assert row.state == "reproducing"
 
 
-async def _github_fetch_boom(*_args, **_kwargs):
-    raise GitHubError(502, "upstream connect error")
-
-
-def _forbid_run_task(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The agent turn must never start when the GitHub fetch itself fails."""
-
-    async def _unreachable(**_kwargs):
-        raise AssertionError("run_task must not run when the GitHub fetch fails")
-
-    monkeypatch.setattr(tasks, "run_task", _unreachable)
-
-
-async def test_review_pr_propagates_github_fetch_error(db, settings, monkeypatch):
-    """A GitHub fetch failure must reach the queue dispatcher, not vanish as a done event.
-
-    Pre-fix, review_pr swallowed GitHubError after a warning log and returned
-    normally, so `_dispatch_and_mark` marked the delivery done and the review
-    was silently lost — the queue's `schedule_retry` path never ran.
-    """
-    _forbid_run_task(monkeypatch)
-    github = SimpleNamespace(get_repo=_github_fetch_boom)
-
-    with pytest.raises(GitHubError) as excinfo:
-        await tasks.review_pr(
-            settings=settings,
-            db=db,
-            github=github,
-            sandbox=SimpleNamespace(natives_cache=None),
-            git_transport=SimpleNamespace(),
-            payload={"pull_request": {"number": 12}, "repository": {"full_name": "octo/widget"}},
-            delivery_id="d1",
-        )
-    assert excinfo.value.status == 502
-
-
-async def test_handle_review_propagates_github_fetch_error(db, settings, monkeypatch):
-    """Same contract as review_pr: the repo/issue fetch failure must surface for retry."""
-    _forbid_run_task(monkeypatch)
-    db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12)
-    github = SimpleNamespace(get_repo=_github_fetch_boom)
-
-    with pytest.raises(GitHubError):
-        await tasks.handle_review(
-            settings=settings,
-            db=db,
-            github=github,
-            sandbox=SimpleNamespace(natives_cache=None),
-            git_transport=SimpleNamespace(),
-            payload={"pull_request": {"number": 12}, "repository": {"full_name": "octo/widget"}},
-            delivery_id="d1",
-        )
-
-
-async def test_handle_pr_conversation_propagates_github_fetch_error(db, settings, monkeypatch):
-    """Same contract as review_pr: the repo/issue fetch failure must surface for retry."""
-    _forbid_run_task(monkeypatch)
-    db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12)
-    github = SimpleNamespace(get_repo=_github_fetch_boom)
-
-    with pytest.raises(GitHubError):
-        await tasks.handle_pr_conversation(
-            settings=settings,
-            db=db,
-            github=github,
-            sandbox=SimpleNamespace(natives_cache=None),
-            git_transport=SimpleNamespace(),
-            payload={"repository": {"full_name": "octo/widget"}, "issue": {"number": 12}},
-            delivery_id="d1",
-        )
-
-
-@pytest.mark.parametrize("handler", [tasks.handle_review, tasks.handle_pr_conversation])
 @pytest.mark.parametrize("branchless_mapping", [False, True])
-async def test_pr_comment_handlers_propagate_mapping_metadata_fetch_error(
-    handler, branchless_mapping, db, settings, monkeypatch
-):
-    _forbid_run_task(monkeypatch)
+@pytest.mark.parametrize("error", [GitHubError(502, "upstream connect error"), ValueError("unexpected")])
+async def test_pr_metadata_fetch_failure(db, caplog, branchless_mapping, error):
     if branchless_mapping:
         db.upsert_issue(key="octo/widget#7", repo="octo/widget", number=7, state="opened", pr_number=12)
-    github = SimpleNamespace(get_pull_request=_github_fetch_boom)
-    with pytest.raises(GitHubError) as excinfo:
-        await handler(
+
+    async def fail(*_args):
+        raise error
+
+    async def resolve():
+        return await tasks._resolve_issue_row_for_pr(
+            db=db, github=SimpleNamespace(get_pull_request=fail), repo_full="octo/widget", pr_number=12
+        )
+
+    if isinstance(error, GitHubError):
+        row, pr = await resolve()
+        assert (row.number if row else None) == (7 if branchless_mapping else None)
+        assert pr is None
+        assert "PR metadata fetch failed" in caplog.text
+    else:
+        with pytest.raises(ValueError, match="unexpected"):
+            await resolve()
+
+
+@pytest.mark.parametrize(
+    ("handler", "warning", "fetches", "failure_index"),
+    [
+        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 0),
+        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 1),
+        (tasks.review_pr, "review_pr fetch failed", ("get_repo", "get_issue", "get_pull_request"), 2),
+        (tasks.handle_review, "review fetch failed", ("get_repo", "get_issue"), 0),
+        (tasks.handle_review, "review fetch failed", ("get_repo", "get_issue"), 1),
+        (tasks.handle_pr_conversation, "pr-conversation fetch failed", ("get_repo", "get_issue"), 0),
+        (tasks.handle_pr_conversation, "pr-conversation fetch failed", ("get_repo", "get_issue"), 1),
+    ],
+)
+@pytest.mark.parametrize("error", [GitHubError(502, "upstream connect error"), ValueError("unexpected")])
+async def test_pr_handler_fetch_failure(
+    db, settings, monkeypatch, caplog, handler, warning, fetches, failure_index, error
+):
+    if handler is not tasks.review_pr:
+        db.upsert_issue(
+            key="octo/widget#7", repo="octo/widget", number=7, state="opened", branch="farm/7", pr_number=12
+        )
+
+    calls = []
+
+    def fetch(name, should_fail):
+        async def run(*_args):
+            calls.append(name)
+            if should_fail:
+                raise error
+            return SimpleNamespace()
+
+        return run
+
+    async def unreachable(**_kwargs):
+        raise AssertionError("agent must not run after fetch failure")
+
+    monkeypatch.setattr(tasks, "run_task", unreachable)
+    github = SimpleNamespace(**{name: fetch(name, index == failure_index) for index, name in enumerate(fetches)})
+
+    async def invoke():
+        return await handler(
             settings=settings,
             db=db,
             github=github,
@@ -332,4 +313,11 @@ async def test_pr_comment_handlers_propagate_mapping_metadata_fetch_error(
             },
             delivery_id="d1",
         )
-    assert excinfo.value.status == 502
+
+    if isinstance(error, GitHubError):
+        assert await invoke() is None
+        assert warning in caplog.text
+    else:
+        with pytest.raises(ValueError, match="unexpected"):
+            await invoke()
+    assert calls == list(fetches[: failure_index + 1])

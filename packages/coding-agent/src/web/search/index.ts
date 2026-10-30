@@ -342,7 +342,6 @@ async function executeSearch(
 			: "No web search model configured.";
 		return {
 			content: [{ type: "text" as const, text: `Error: ${message}` }],
-			isError: true,
 			details: { response: { provider: "none", sources: [] }, error: message },
 		};
 	}
@@ -356,7 +355,6 @@ async function executeSearch(
 
 	return {
 		content: [{ type: "text" as const, text: `Error: ${message}` }],
-		isError: true,
 		details: {
 			response: { provider: failedResponseProvider, sources: [] },
 			error: message,

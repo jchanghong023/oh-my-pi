@@ -875,7 +875,7 @@ tui:
 
 | Key                           | Type    | Default          | Values                                                                    |
 | ----------------------------- | ------- | ---------------- | ------------------------------------------------------------------------- |
-| `theme.dark`                  | string  | `dark-terminal`  | Theme used on a dark terminal background.                                 |
+| `theme.dark`                  | string  | `titanium`       | Theme used on a dark terminal background.                                 |
 | `theme.light`                 | string  | `light`          | Theme used on a light terminal background.                                |
 | `symbolPreset`                | enum    | `unicode`        | `unicode`, `nerd`, `ascii`.                                               |
 | `colorBlindMode`              | boolean | `false`          | Use blue instead of green for diff additions.                             |
@@ -891,10 +891,13 @@ tui:
 | `tui.hyperlinks`              | enum    | `auto`           | `off`, `auto`, `always`.                                                  |
 | `tui.autoGraph` | enum | `auto` | Chart numeric tables in the agent's answers on terminals that show graphics: `always` uses the built-in best guess, `smart` lets the judge model refine each chart or choose no chart, `auto` uses `smart` for a native TypeSafe jev judge and `always` otherwise, and `off` leaves tables alone. Tern receives SVG. Only the main TUI session renders charts; subagent, print, RPC, and ACP output remains plain. |
 | `tui.mouse`                   | boolean | `false`          | Capture mouse clicks in the main session so live subagent cards and HUD rows focus on click, with a hover highlight on the target, and clicks on [extension-owned links](./extensions.md#extension-link-schemes) reach their extension (`app.links.hint` picks them without the mouse). Native text selection becomes Shift+drag and wheel scroll becomes Shift+wheel while on. |
+| `display.mode`                | enum    | `compact`        | `clean`, `compact`, or `detailed`; use `/display` or the tool-visibility shortcut to cycle. Result images appear only in detailed mode, subject to `terminal.showImages`. Image provider settings remain independent. |
 | `display.pinnedAgents`        | enum    | `collapsed`      | Pinned live-agent jump list above the editor: `off` hides it, `collapsed` shows a few rows with an expander, `full` lists all. |
 | `display.subagentLivePreview` | boolean | `false`          | Show each pinned subagent's current (or most recent) tool call beneath its jump-list row. |
 | `tui.resizeScrollback`        | enum    | `rebuild`        | How a settled width resize refreshes transcript rows kept in terminal scrollback: `append` replays the transcript at the new width below retained history, `rebuild` erases pane scrollback then replays one current-width copy, `preserve` repaints only the viewport. |
 | `tui.completeScrollback`      | boolean | `false`          | Send transcript rows pushed off screen by a growing HUD or dialog straight to scrollback. When it shrinks, blank rows sit between the transcript and the input until new output fills them. |
+
+The display tier is saved as `display.mode`; the former `display.compactToolActivity` and `display.hideToolActivity` switches no longer control presentation. Select the desired tier with `/display` instead. Existing configuration layer precedence still applies to `display.mode`.
 
 For a custom status line, set `statusLine.preset: custom` and configure `statusLine.leftSegments`, `statusLine.rightSegments`, and `statusLine.segmentOptions`. Include `status` in either segment list to render extension statuses registered through `ctx.ui.setStatus()`, ordered by key and joined inline. Set `statusLine.showHookStatus: false` to suppress the same statuses in the footer.
 

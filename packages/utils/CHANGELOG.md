@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Restore upstream archive encoding without the additional `AbortSignal` cancellation interface.
+
 ### Fixed
 
 - Avoid delivering duplicate termination signals to process-group members or newly spawned cleanup children.

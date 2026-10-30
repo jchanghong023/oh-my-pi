@@ -187,7 +187,7 @@ describe("managed-skills primitives", () => {
 			}
 		});
 
-		it("refuses to write through a broken symlinked root", async () => {
+		it("refuses writes and deletes through a broken symlinked root", async () => {
 			await fs.mkdir(path.dirname(getManagedSkillsDir()), { recursive: true });
 			await fs.symlink(
 				path.join(tempHome, "missing-root"),
@@ -197,6 +197,11 @@ describe("managed-skills primitives", () => {
 			await expect(
 				writeManagedSkill({ action: "create", name: "demo", description: "d", body: "b" }),
 			).rejects.toThrow(/managed-skills root is a symlink/);
+			await expect(
+				writeManagedSkill({ action: "update", name: "demo", description: "d", body: "b" }),
+			).rejects.toThrow(/managed-skills root is a symlink/);
+			await expect(deleteManagedSkill("demo")).rejects.toThrow(/managed-skills root is a symlink/);
+			expect(await Bun.file(path.join(tempHome, "missing-root", "demo", "SKILL.md")).exists()).toBe(false);
 		});
 
 		it.skipIf(process.platform === "win32")("refuses to write through a root that links to a file", async () => {

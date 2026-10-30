@@ -2,7 +2,7 @@
 /**
  * Build the HTML export viewer, including shared React tool/trace views.
  * Local `bun run gen:export-viewer` updates the committed viewer metadata;
- * CI and `--check` verify it. The generated viewer is also embedded in exports.
+ * CI and `--check` verify it. Checkout exports inline the generated viewer.
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -123,7 +123,6 @@ export async function buildExportViewer(options: ExportViewerBuildOptions = {}):
 	}
 	await fs.mkdir(outDir, { recursive: true });
 	await Bun.write(path.join(outDir, metadata.file), bytes);
-	await Bun.write(path.join(options.outDir ?? htmlDir, "viewer.generated.js"), bytes);
 	if (!options.check) await Bun.write(metadataPath, `${JSON.stringify(metadata, null, "\t")}\n`);
 	// Only discard our obsolete content-addressed files, never other build outputs.
 	for (const entry of await fs.readdir(outDir, { withFileTypes: true })) {

@@ -41,7 +41,7 @@ import {
 	cfgRatchetEnabled,
 } from "../tools/settings";
 import { cfgHideThinkingBlock, cfgPrewalkFrom, cfgPrewalkInto, cfgSkillful } from "../session/settings";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "../modes/settings";
+import { cfgDisplayMode } from "../modes/settings";
 import { formatSlowModeResetClock } from "../session/anthropic-slow-mode";
 import { cfgExtendedContext } from "../session/context-settings";
 import { cfgGoalEnabled } from "../goals/settings";
@@ -309,11 +309,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		],
 		handleTui: async (command, runtime) => {
 			const { settings } = runtime.ctx;
-			const current = cfgDisplayHideToolActivity.get(settings)
-				? "clean"
-				: cfgDisplayCompactToolActivity.get(settings)
-					? "compact"
-					: "detailed";
+			const current = cfgDisplayMode.get(settings);
 			const mode = command.args.trim() || { clean: "compact", compact: "detailed", detailed: "clean" }[current];
 			if (mode !== "clean" && mode !== "compact" && mode !== "detailed") {
 				runtime.ctx.showWarning("用法：/display [clean|compact|detailed]");
@@ -323,10 +319,10 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const preferences = [
 				// Detailed retains upstream inline reasoning; clean hides it entirely.
 				[cfgHideThinkingBlock, mode === "clean"],
-				[cfgDisplayHideToolActivity, mode === "clean"],
-				[cfgDisplayCompactToolActivity, mode !== "detailed"],
+				[cfgDisplayMode, mode],
 			] as const;
-			for (const [setting, value] of preferences) setting.set(settings, value);
+			cfgHideThinkingBlock.set(settings, mode === "clean");
+			cfgDisplayMode.set(settings, mode);
 			// Settings listeners apply display preferences in a coalesced microtask.
 			await Promise.resolve();
 			const label = { clean: "干净", compact: "紧凑", detailed: "详细" }[mode];
@@ -344,11 +340,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					.map(([setting]) => `${setting.id}（${sources[setting.provenance(settings)]}）`)
 					.join("、");
 				const thinking = cfgHideThinkingBlock.get(settings) ? "隐藏" : "显示";
-				const tools = cfgDisplayHideToolActivity.get(settings)
-					? "隐藏"
-					: cfgDisplayCompactToolActivity.get(settings)
-						? "连续工具段末两条预览（写入段保留末三次修改）"
-						: "详细";
+				const tools = { clean: "隐藏", compact: "连续工具段末两条预览（写入段保留末三次修改）", detailed: "详细" }[
+					cfgDisplayMode.get(settings)
+				];
 				runtime.ctx.showWarning(
 					`显示偏好：${label}（${mode}）；当前：实时思考窗口${thinking}、工具${tools}；覆盖：${overrides}`,
 				);

@@ -1,11 +1,49 @@
 import { describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { $ } from "bun";
 import { resolveCrossBuild } from "../packages/coding-agent/scripts/build-binary";
 import { compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
+import { requireArtifactVersion } from "./zcode-artifact";
 
 const repoRoot = path.join(import.meta.dir, "..");
+
+describe("ZCode artifact release version", () => {
+	it("rejects missing and invalid local release versions before starting a build", async () => {
+		using temp = TempDir.createSync("@omp-artifact-version-");
+		for (const version of [undefined, "", "1.2", "not-a-version", "1.2.3+"]) {
+			const outputRoot = temp.join("artifact");
+			const env = { ...process.env, ZCODE_ARTIFACT_ROOT: outputRoot };
+			if (version === undefined) delete env.RELEASE_VERSION;
+			else env.RELEASE_VERSION = version;
+			const proc = Bun.spawn([process.execPath, "packages/coding-agent/scripts/build-binary.ts"], {
+				cwd: repoRoot,
+				env,
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(proc.stdout).text(),
+				new Response(proc.stderr).text(),
+				proc.exited,
+			]);
+			expect(exitCode).not.toBe(0);
+			expect(stderr).toContain(version ? "OMP artifact invalid version" : "requires RELEASE_VERSION");
+			expect(stdout).not.toContain("Generating stats client");
+			expect(
+				await fs.stat(outputRoot).then(
+					() => true,
+					() => false,
+				),
+			).toBe(false);
+		}
+	});
+
+	it("preserves a valid explicit version with build metadata", () => {
+		expect(requireArtifactVersion("18.12.5+fork.9")).toBe("18.12.5+fork.9");
+	});
+});
 
 describe("Windows release binary target", () => {
 	it("builds both Windows architecture release assets with their native runtimes", async () => {

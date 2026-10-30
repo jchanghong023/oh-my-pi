@@ -662,29 +662,11 @@ export const cfgDisplaySmoothStreaming = register({
 	},
 });
 
-export const cfgDisplayHideToolActivity = register({
-	id: "display.hideToolActivity",
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "appearance",
-		group: "显示",
-		label: "隐藏工具活动",
-		description: "在对话记录中隐藏模型发起的工具调用和结果",
-	},
-});
-
-export const cfgDisplayCompactToolActivity = register({
-	id: "display.compactToolActivity",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "appearance",
-		group: "显示",
-		label: "紧凑显示工具调用",
-		description:
-			"普通工具段预览最后两次调用，写入段保留最后三个原组件；输入框上方固定一行显示最新活跃思考，空闲时留白，完整详情在全量模式查看",
-	},
+export const cfgDisplayMode = register({
+	id: "display.mode",
+	type: "enum",
+	values: ["clean", "compact", "detailed"] as const,
+	default: "compact",
 });
 
 export const cfgDisplayShowTokenUsage = register({
@@ -744,8 +726,8 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 });
 effect(
 	combine({
-		hideToolActivity: cfgDisplayHideToolActivity,
-		compactToolActivity: cfgDisplayCompactToolActivity,
+		hideToolActivity: cfgDisplayMode.map(mode => mode === "clean"),
+		compactToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
 		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,
 		cacheMissMarker: cfgDisplayCacheMissMarker,

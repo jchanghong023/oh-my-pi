@@ -8,11 +8,7 @@ import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import {
-	cfgDisplayCompactToolActivity,
-	cfgDisplayHideToolActivity,
-	cfgStartupQuiet,
-} from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode, cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -574,8 +570,7 @@ describe("libkitty end-to-end", () => {
 		});
 
 		// This shortcut test inspects detailed tool output, not compact summaries.
-		cfgDisplayCompactToolActivity.set(session.settings, false);
-		cfgDisplayHideToolActivity.set(session.settings, false);
+		cfgDisplayMode.set(session.settings, "detailed");
 		// Direct AgentSession construction bypasses the SDK's process-wide settings binding.
 		releaseSessionEffects = bindEffects(session.settings);
 		expect(chatTranscriptDisplayPreferences.compactToolActivity).toBe(false);

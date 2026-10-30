@@ -14,7 +14,6 @@ import {
 import { notifyProviderResponse } from "../../utils/provider-response";
 import { dereferenceJsonSchema, normalizeSchemaForFactoryDroid, toolWireSchema } from "../../utils/schema";
 import {
-	extractGoogleErrorCode,
 	extractGoogleErrorMessage,
 	FunctionCallOrder,
 	googleStreamChunkError,
@@ -368,7 +367,7 @@ export function streamFactoryDroidGemini(
 				throw new AIError.GoogleApiError(
 					`Factory Gemini generate failed (${response.status}): ${extractGoogleErrorMessage(bodyText, response.status)}`,
 					response.status,
-					{ headers: response.headers, code: extractGoogleErrorCode(bodyText) },
+					{ headers: response.headers },
 				);
 			}
 			await notifyProviderResponse(options, response, model, response.headers.get("x-request-id"));
@@ -497,7 +496,6 @@ export function streamFactoryDroidGemini(
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime !== undefined) output.ttft = firstTokenTime - startTime;

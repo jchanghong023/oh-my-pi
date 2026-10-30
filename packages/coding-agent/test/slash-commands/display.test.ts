@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -15,8 +16,8 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 function displayPreferences(settings: Settings) {
 	return {
 		hideThinkingBlock: cfgHideThinkingBlock.get(settings),
-		hideToolActivity: cfgDisplayHideToolActivity.get(settings),
-		compactToolActivity: cfgDisplayCompactToolActivity.get(settings),
+		hideToolActivity: cfgDisplayMode.get(settings) === "clean",
+		compactToolActivity: cfgDisplayMode.get(settings) !== "detailed",
 	};
 }
 
@@ -69,8 +70,7 @@ describe("/display slash command", () => {
 		const h = createRuntime();
 		for (const mode of ["clean", "detailed", "compact"] as const) {
 			cfgHideThinkingBlock.set(h.settings, false);
-			cfgDisplayHideToolActivity.set(h.settings, true);
-			cfgDisplayCompactToolActivity.set(h.settings, false);
+			cfgDisplayMode.set(h.settings, "detailed");
 			expect(await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime)).toBe(true);
 			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
 		}
@@ -87,6 +87,25 @@ describe("/display slash command", () => {
 		for (const mode of ["detailed", "clean", "compact"] as const) {
 			expect(await executeBuiltinSlashCommand("/display", h.runtime)).toBe(true);
 			expect(displayPreferences(h.settings)).toEqual(presets[mode]);
+		}
+	});
+
+	it("uses one display tier without changing independent image settings", async () => {
+		const settings = Settings.isolated({
+			"terminal.showImages": false,
+			"images.autoResize": false,
+			"images.blockImages": true,
+		});
+		const h = createRuntime(settings);
+		expect(lookup("display.compactToolActivity")).toBeUndefined();
+		expect(displayPreferences(settings)).toEqual(presets.compact);
+		for (const mode of ["clean", "compact", "detailed"] as const) {
+			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
+			expect(cfgDisplayMode.get(settings)).toBe(mode);
+			expect(displayPreferences(settings)).toEqual(presets[mode]);
+			expect(lookup("terminal.showImages")?.get(settings)).toBe(false);
+			expect(lookup("images.autoResize")?.get(settings)).toBe(false);
+			expect(lookup("images.blockImages")?.get(settings)).toBe(true);
 		}
 	});
 
@@ -113,11 +132,10 @@ describe("/display slash command", () => {
 		expect(h.prompt).not.toHaveBeenCalled();
 	});
 
-	it("derives the cycle from independent tool preferences rather than thinking visibility", async () => {
+	it("derives the cycle from the display tier rather than thinking visibility", async () => {
 		const h = createRuntime();
 		cfgHideThinkingBlock.set(h.settings, false);
-		cfgDisplayHideToolActivity.set(h.settings, true);
-		cfgDisplayCompactToolActivity.set(h.settings, false);
+		cfgDisplayMode.set(h.settings, "clean");
 		await executeBuiltinSlashCommand("/display", h.runtime);
 		expect(displayPreferences(h.settings)).toEqual(presets.compact);
 		cfgHideThinkingBlock.set(h.settings, true);
@@ -146,22 +164,22 @@ describe("/display slash command", () => {
 	it("reports runtime overrides instead of claiming a blocked preset is active", async () => {
 		const h = createRuntime();
 		cfgHideThinkingBlock.override(h.settings, true);
-		cfgDisplayHideToolActivity.override(h.settings, true);
+		cfgDisplayMode.override(h.settings, "clean");
 		for (const mode of ["compact", "detailed"] as const) {
 			await executeBuiltinSlashCommand(`/display ${mode}`, h.runtime);
 			expect(displayPreferences(h.settings)).toEqual({
 				hideThinkingBlock: true,
 				hideToolActivity: true,
-				compactToolActivity: mode === "compact",
+				compactToolActivity: true,
 			});
 			expect(h.settings.getGlobalSettings()).toMatchObject({
 				hideThinkingBlock: false,
-				display: { hideToolActivity: false, compactToolActivity: mode === "compact" },
+				display: { mode },
 			});
 			expect(h.showStatus).not.toHaveBeenCalled();
 			const warning = h.showWarning.mock.calls.at(-1)?.[0];
 			// Both visible presets must report a blocked thinking preference.
-			expect(warning).toContain("display.hideToolActivity");
+			expect(warning).toContain("display.mode");
 			expect(warning).toContain("运行时");
 			expect(warning).toContain("hideThinkingBlock");
 			expect(warning).toMatch(/实时思考窗口隐藏.*工具隐藏/);
@@ -185,7 +203,7 @@ describe("/display slash command", () => {
 		});
 		expect(settings.getGlobalSettings()).toMatchObject({
 			hideThinkingBlock: false,
-			display: { hideToolActivity: false, compactToolActivity: true },
+			display: { mode: "compact" },
 		});
 		expect(h.showStatus).not.toHaveBeenCalled();
 		expect(h.showWarning).toHaveBeenCalledTimes(1);

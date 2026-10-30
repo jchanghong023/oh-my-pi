@@ -5,6 +5,15 @@ import * as path from "node:path";
 
 export const ZCODE_PROTOCOL_BASELINE = "c7c190724f3a00a2de998a0a5511201d5a2ba1a0";
 
+/** Require an explicit SemVer release version before starting an artifact build. */
+export function requireArtifactVersion(version: string | undefined): string {
+	if (!version) throw new Error("ZCODE_ARTIFACT_ROOT requires RELEASE_VERSION");
+	if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+		throw new Error(`OMP artifact invalid version: ${version}`);
+	}
+	return version;
+}
+
 export interface ArtifactSource {
 	readonly repoRoot: string;
 	readonly commit: string;
@@ -97,8 +106,7 @@ export async function produceZCodeArtifacts(options: {
 	readonly binaries: readonly ZCodeArtifactInput[];
 }): Promise<void> {
 	const { source, version, binaries } = options;
-	if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version))
-		throw new Error(`OMP artifact invalid version: ${version}`);
+	requireArtifactVersion(version);
 	if (binaries.length === 0 || new Set(binaries.map(binary => binary.target)).size !== binaries.length) {
 		throw new Error("OMP artifact requires unique, nonempty targets");
 	}

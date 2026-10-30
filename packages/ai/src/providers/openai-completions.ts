@@ -804,11 +804,7 @@ function createOpenAICompletionsStreamError(chunk: unknown, provider: string): E
 		parseOpenAICompletionsErrorStatus(codeValue) ??
 		(type ? OPENAI_COMPLETIONS_ERROR_STATUS_BY_TYPE[type.toUpperCase()] : undefined);
 	if (status === undefined) {
-		return new AIError.ProviderResponseError(detail, {
-			provider,
-			kind: "runtime",
-			providerErrorCode: parsed.code,
-		});
+		return new AIError.ProviderResponseError(detail, { provider, kind: "runtime" });
 	}
 	return new AIError.ProviderHttpError(`${status} ${detail}`, status, { code: parsed.code });
 }
@@ -1887,8 +1883,6 @@ export const streamOpenAICompletionsOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode =
-				codeAgent && result.stopReason === "error" ? AIError.providerErrorCode(error) : result.providerErrorCode;
 			output.errorMessage = result.message;
 			// Some providers via OpenRouter include extra details here.
 			if (!codeAgent) {

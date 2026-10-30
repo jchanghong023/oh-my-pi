@@ -6,6 +6,7 @@ import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { SpaceHoldGesture } from "@oh-my-pi/pi-tui/space-hold";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
@@ -1542,7 +1543,7 @@ describe("InputController global editor actions", () => {
 		expect(dispatchInput(listeners, CTRL_G)).toEqual({ consume: true });
 		expect(openExternalEditor).toHaveBeenCalledTimes(1);
 		expect(dispatchInput(listeners, CTRL_SHIFT_O)).toEqual({ consume: true });
-		expect(context.ctx.hideToolActivity).toBe(true);
+		expect(cfgDisplayMode.get(context.ctx.settings)).toBe("detailed");
 		expect(dispatchInput(listeners, ALT_L)).toEqual({ consume: true });
 		expect(context.spies.resetDisplayAfterAppearanceRefresh).toHaveBeenCalledTimes(1);
 	});

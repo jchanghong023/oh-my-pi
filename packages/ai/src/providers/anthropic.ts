@@ -973,11 +973,7 @@ function createAnthropicSseStreamError(data: string, midMessage: boolean): Error
 				? `Anthropic stream error (${errorType}): ${message}`
 				: `Anthropic stream error: ${message}`
 			: data,
-		{
-			provider: "anthropic",
-			kind: "output",
-			providerErrorCode: AIError.OpenAIHttpError.parseEnvelope(parsed, undefined).code,
-		},
+		{ provider: "anthropic", kind: "output" },
 	);
 	if (!midMessage || !AIError.isProviderRetryableError(rejection)) {
 		return rejection;
@@ -985,11 +981,9 @@ function createAnthropicSseStreamError(data: string, midMessage: boolean): Error
 	const fields = [errorType ? `type=${errorType}` : undefined, errorCode ? `code=${errorCode}` : undefined]
 		.filter(field => field !== undefined)
 		.join(" ");
-	const envelopeError = new AIError.AnthropicStreamEnvelopeError(
+	return new AIError.AnthropicStreamEnvelopeError(
 		`error frame received before message_stop${fields ? ` (${fields})` : ""}: ${message ?? data}`,
 	);
-	envelopeError.cause = rejection;
-	return envelopeError;
 }
 
 async function* iterateAnthropicEvents(
@@ -3934,7 +3928,6 @@ const streamAnthropicOnce = (
 			});
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = transport ? result.message : maybeAddReplayUnsignedThinkingHint(model, result.message);
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

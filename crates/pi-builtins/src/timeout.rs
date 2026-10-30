@@ -315,7 +315,7 @@ impl builtins::Command for TimeoutCommand {
 						args.command[0]
 					);
 				}
-				killed = true;
+				killed = !cfg!(windows);
 				let kill = TrapSignal::try_from("KILL").expect("SIGKILL must be a known signal");
 				spawns.signal(kill, !args.foreground);
 				child_cancel.cancel();
@@ -852,9 +852,7 @@ mod tests {
 		assert_eq!(u8::from(result.exit_code), 128);
 	}
 
-	// SIGKILL takedown semantics do not exist on Windows; the escalated
-	// `-k` variant below reaches EXIT_KILLED cross-platform, but a bare
-	// `-s KILL` does not.
+	// SIGKILL takedown semantics do not exist on Windows.
 	#[cfg(unix)]
 	#[tokio::test]
 	async fn kill_signal_reports_137() {
@@ -872,34 +870,41 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn kill_after_escalates_and_reports_137() {
-		// stubborn-test ignores the initial (cancellation-based) signal; the
-		// -k deadline must escalate and report the SIGKILL status.
+	async fn kill_after_escalation_status_depends_on_platform() {
 		let mut shell = test_shell().await;
-		shell
-			.register_builtin(
-				"stubborn-test",
-				builtins::builtin::<StubbornCommand, DefaultShellExtensions>(),
-			);
+		shell.register_builtin(
+			"stubborn-test",
+			builtins::builtin::<StubbornCommand, DefaultShellExtensions>(),
+		);
 		let mut params = shell.default_exec_params();
-		// Keep the inner shell's interrupted notice off the test runner's
-		// terminal, like run_with_deadline does.
 		for fd in [OpenFiles::STDIN_FD, OpenFiles::STDOUT_FD, OpenFiles::STDERR_FD] {
 			params.set_fd(fd, brush_core::openfiles::null().expect("null device"));
 		}
-		let result = tokio::time::timeout(
-			Duration::from_secs(1),
-			shell.run_string(
-				"timeout -k 0.075 0.010 stubborn-test",
-				&SourceInfo::default(),
-				&params,
-			),
-		)
-		.await
-		.expect("escalation test exceeded its safety deadline")
-		.expect("execute escalation command");
+		for (command, windows_status) in [
+			("timeout -k 0.075 0.010 stubborn-test", 124),
+			("timeout --preserve-status -k 0.075 0.010 stubborn-test", 128),
+		] {
+			let result = tokio::time::timeout(
+				Duration::from_secs(1),
+				shell.run_string(command, &SourceInfo::default(), &params),
+			)
+			.await
+			.expect("escalation test exceeded its safety deadline")
+			.expect("execute escalation command");
+			assert_eq!(u8::from(result.exit_code), if cfg!(windows) { windows_status } else { 137 }, "{command}");
+		}
+	}
 
-		assert_eq!(u8::from(result.exit_code), 137);
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn kill_after_reports_actual_posix_kill() {
+		for command in [
+			"timeout -k 0.1 0.1 /bin/sh -c 'trap \"\" TERM; while :; do :; done'",
+			"timeout --preserve-status -k 0.1 0.1 /bin/sh -c 'trap \"\" TERM; while :; do :; done'",
+		] {
+			let result = run_with_deadline(command).await;
+			assert_eq!(u8::from(result.exit_code), 137, "{command}");
+		}
 	}
 
 	#[tokio::test]

@@ -172,7 +172,7 @@ impl DeclareCommand {
 		let name = match declaration {
 			brush_core::CommandArg::String(s) => s,
 			brush_core::CommandArg::OsString(_) | brush_core::CommandArg::Assignment(_) => {
-				writeln!(context.stderr(), "declare: {declaration}: not found")?;
+				writeln!(context.stderr(), "{}: {declaration}: not found", context.command_name)?;
 				return Ok(false);
 			},
 		};
@@ -639,5 +639,82 @@ impl DeclareCommand {
 		}
 
 		Ok(())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use std::io::{Read, Seek, SeekFrom};
+
+	use brush_core::{Shell, SourceInfo, extensions::DefaultShellExtensions, openfiles::OpenFiles};
+	#[cfg(unix)]
+	use brush_core::{ExecutionContext, ExecutionResult, builtins};
+
+	#[cfg(unix)]
+	#[derive(clap::Parser)]
+	struct NativeLocal;
+
+	#[cfg(unix)]
+	impl builtins::Command for NativeLocal {
+		type Error = brush_core::Error;
+
+		async fn execute<SE: brush_core::ShellExtensions>(
+			&self,
+			context: ExecutionContext<'_, SE>,
+		) -> Result<ExecutionResult, Self::Error> {
+			use std::os::unix::ffi::OsStringExt;
+			use brush_core::{CommandArg, ExecutionSpawnResult, commands::{ShellForCommand, SimpleCommand}};
+
+			let args = vec![
+				CommandArg::String("local".into()),
+				CommandArg::String("-p".into()),
+				CommandArg::OsString(std::ffi::OsString::from_vec(b"bad-\xff".to_vec())),
+			];
+			let command = SimpleCommand::new(
+				ShellForCommand::ParentShell(context.shell),
+				context.params.clone(),
+				"local".into(),
+				args,
+			);
+			match command.execute().await? {
+				ExecutionSpawnResult::Completed(result) => Ok(result),
+				_ => panic!("local must complete in process"),
+			}
+		}
+	}
+
+	async fn run(command: &str) -> (u8, String) {
+		let builder = Shell::<DefaultShellExtensions>::builder().builtins(crate::default_builtins(crate::BuiltinSet::BashMode));
+		#[cfg(unix)]
+		let builder = builder.builtin("native-local", builtins::builtin::<NativeLocal, DefaultShellExtensions>());
+		let mut shell = builder.build().await.expect("build shell");
+		let mut stderr = tempfile::tempfile().expect("capture stderr");
+		let mut params = shell.default_exec_params();
+		params.set_fd(OpenFiles::STDERR_FD, stderr.try_clone().expect("clone stderr").into());
+		let result = shell.run_string(command, &SourceInfo::default(), &params).await.expect("run shell");
+		stderr.seek(SeekFrom::Start(0)).expect("rewind stderr");
+		let mut diagnostic = String::new();
+		stderr.read_to_string(&mut diagnostic).expect("read stderr");
+		(u8::from(result.exit_code), diagnostic)
+	}
+
+	#[tokio::test]
+	async fn display_assignment_reports_invoked_command_and_failure() {
+		for (command, expected) in [
+			("f() { local -p bad=1; }; f", "local: bad=1: not found\n"),
+			("declare -p bad=1", "declare: bad=1: not found\n"),
+		] {
+			let (status, stderr) = run(command).await;
+			assert_ne!(status, 0, "{command}");
+			assert_eq!(stderr, expected, "{command}");
+		}
+	}
+
+	#[cfg(unix)]
+	#[tokio::test]
+	async fn local_display_native_operand_reports_local_and_failure() {
+		let (status, stderr) = run("f() { native-local; }; f").await;
+		assert_ne!(status, 0);
+		assert_eq!(stderr, "local: bad-\u{fffd}: not found\n");
 	}
 }

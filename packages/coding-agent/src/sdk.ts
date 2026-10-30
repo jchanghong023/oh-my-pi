@@ -1600,7 +1600,6 @@ export function customToolToDefinition(tool: CustomTool, sourcePath?: string): T
 		// Preserved through RegisteredToolAdapter so MCP-backed tools' explicit
 		// `strict: false` (#4336/#4340) survives the custom-tool → definition bridge.
 		strict: tool.strict,
-		lenientArgValidation: tool.lenientArgValidation,
 		mcpServerName: tool.mcpServerName,
 		mcpToolName: tool.mcpToolName,
 		mcpReadOnlyHint: tool.mcpReadOnlyHint,

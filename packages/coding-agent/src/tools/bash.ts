@@ -1201,19 +1201,10 @@ export class BashTool implements AgentTool<BashToolSchema, BashToolDetails> {
 				);
 			if (daemon.exitReason) lines.push(`Reason: ${daemon.exitReason}`);
 			lines.push(...pendingNotices);
-			let logFailed = false;
-			try {
-				const log = await serviceLogs(this.session, name, signal);
-				if (log) lines.push(log);
-			} catch (error) {
-				logFailed = true;
-				lines.push(
-					`Service started, but fetching logs failed: ${error instanceof Error ? error.message : String(error)}. Read proc://${name} for status before taking further action; do not blindly retry the start.`,
-				);
-			}
+			const log = await serviceLogs(this.session, name, signal);
+			if (log) lines.push(log);
 			return {
 				content: [{ type: "text", text: lines.join("\n") }],
-				...(logFailed ? { isError: true } : {}),
 				details: {
 					service: {
 						name,

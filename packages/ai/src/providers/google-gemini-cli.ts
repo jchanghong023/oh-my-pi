@@ -46,7 +46,6 @@ import {
 	convertMessages,
 	convertTools,
 	EMPTY_STREAM_BASE_DELAY_MS,
-	extractGoogleErrorCode,
 	type GoogleThinkingLevel,
 	hasMeaningfulGoogleContent,
 	isThinkingPart,
@@ -813,14 +812,9 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 								? ` ${JSON.stringify({ error: { status: chunk.error.status, details: chunk.error.details } })}`
 								: "";
 						const message = `Cloud Code Assist stream error: ${detail}${residue}`;
-						const providerErrorCode = AIError.OpenAIHttpError.parseEnvelope(chunk, undefined).code;
 						throw typeof chunk.error.code === "number" && chunk.error.code >= 400
-							? new AIError.GeminiCliApiError(message, chunk.error.code, { code: providerErrorCode })
-							: new AIError.ProviderResponseError(message, {
-									provider: model.provider,
-									kind: "runtime",
-									providerErrorCode,
-								});
+							? new AIError.GeminiCliApiError(message, chunk.error.code)
+							: new AIError.ProviderResponseError(message, { provider: model.provider, kind: "runtime" });
 					}
 					const responseData = chunk.response;
 					if (!responseData) continue;
@@ -1003,7 +997,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 						throw new AIError.GeminiCliApiError(
 							`Cloud Code Assist API error (${response.status}): ${errorMessage}`,
 							response.status,
-							{ headers: response.headers, code: extractGoogleErrorCode(errorText) },
+							{ headers: response.headers },
 						);
 					}
 
@@ -1039,7 +1033,7 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 								throw new AIError.GeminiCliApiError(
 									`Cloud Code Assist API error (${currentResponse.status}): ${retryErrorText}`,
 									currentResponse.status,
-									{ headers: currentResponse.headers, code: extractGoogleErrorCode(retryErrorText) },
+									{ headers: currentResponse.headers },
 								);
 							}
 						}
@@ -1147,7 +1141,6 @@ export const streamGoogleGeminiCli: StreamFunction<"google-gemini-cli"> = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			output.duration = performance.now() - startTime;
 			if (firstTokenTime) output.ttft = firstTokenTime - startTime;

@@ -23,7 +23,7 @@
 - Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals. The actual busy loader shows tool intent without duplicating it.
 - Each continuous write/edit run retains the last three actual-write cards with upstream expansion and scrolling behavior; tool history is not cleared on the next input.
 - Compact thinking shows only the latest nonempty physical line above the input, skipping trailing whitespace and ANSI-only rows, with the host reserving its row even when thinking is empty or hidden to prevent layout jumps; detailed mode retains original thinking, and Bash output, timing, and background feedback use upstream rendering.
-- Advance host-driven loading, tool, and status-line spinner glyphs on a shared 160ms cadence.
+- Restore the shared Spinner frame interval to 80 ms while preserving offline display throttling.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
 - The default status line groups its segments on the left and shows subagent counts, token throughput, cache hit rate, context usage, and active time.

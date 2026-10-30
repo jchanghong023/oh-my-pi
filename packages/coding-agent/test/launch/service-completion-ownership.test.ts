@@ -325,7 +325,7 @@ describe("session-owned supervised services", () => {
 			process.title = previousTitle;
 		}
 	}, 15_000);
-	it("preserves started service details when log retrieval fails or is cancelled", async () => {
+	it("propagates log retrieval failure or cancellation without stopping the started service", async () => {
 		using tempDir = TempDir.createSync("@omp-service-log-failure-");
 		const projectDir = path.join(tempDir.path(), "project");
 		const runtimeDir = path.join(tempDir.path(), "runtime");
@@ -359,20 +359,13 @@ describe("session-owned supervised services", () => {
 			});
 			for (const name of ["log-failure", "log-cancelled"]) {
 				cancelLogs = name === "log-cancelled";
-				const result = await new BashTool(session).execute(
-					name,
-					{ command: "await Bun.stdin.stream().getReader().read();", name, pty: false },
-					controller.signal,
-				);
-				expect(result.isError).toBe(true);
-				expect(result.details?.service).toMatchObject({ name, timedOut: false });
-				expect(result.details?.service?.pid).toBeDefined();
-				const text = result.content.map(block => (block.type === "text" ? block.text : "")).join("\n");
-				expect(text).toContain(`${name}: ${result.details?.service?.state} pid=${result.details?.service?.pid}`);
-				expect(text).toContain("Service started, but fetching logs failed");
-				expect(text).toContain(cancelLogs ? "Daemon broker request aborted" : "log transport failed");
-				expect(text).toContain(`proc://${name}`);
-				expect(text).toContain("do not blindly retry");
+				await expect(
+					new BashTool(session).execute(
+						name,
+						{ command: "await Bun.stdin.stream().getReader().read();", name, pty: false },
+						controller.signal,
+					),
+				).rejects.toThrow(cancelLogs ? "Daemon broker request aborted" : "log transport failed");
 				expect((await listServices(session)).some(service => service.name === name)).toBe(true);
 			}
 			await expect(

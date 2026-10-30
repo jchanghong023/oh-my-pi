@@ -14,8 +14,8 @@
   <p id="viewer-status" role="status">Loading session viewer…</p>
   <noscript>JavaScript is required to view this session.</noscript>
   <script id="session-data" type="application/json">{{SESSION_DATA}}</script>
-  <marked-script/>
-  <highlight-script/>
+  <script defer src="{{MARKED_URL}}" integrity="{{MARKED_INTEGRITY}}" crossorigin="anonymous" onerror="document.getElementById('viewer-status').textContent='Could not load the session viewer. Connect to the internet and reload this file.'"></script>
+  <script defer src="{{HIGHLIGHT_URL}}" integrity="{{HIGHLIGHT_INTEGRITY}}" crossorigin="anonymous" onerror="document.getElementById('viewer-status').textContent='Could not load the session viewer. Connect to the internet and reload this file.'"></script>
   <viewer-script/>
 </body>
 </html>

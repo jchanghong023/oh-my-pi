@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 describe("InputController tool output expansion", () => {
@@ -47,7 +47,7 @@ describe("InputController tool output expansion", () => {
 		expect(ctx.toolOutputExpanded).toBe(false);
 		expect(expandable.setExpanded).not.toHaveBeenCalled();
 		expect(requestRender).not.toHaveBeenCalled();
-		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("/settings"));
+		expect(showStatus).toHaveBeenCalledWith(expect.stringContaining("/display"));
 	});
 });
 
@@ -56,23 +56,19 @@ describe("InputController tool activity visibility", () => {
 		const settings = Settings.isolated();
 		const showStatus = vi.fn();
 		const controller = new InputController({ settings, showStatus } as unknown as InteractiveModeContext);
-		cfgDisplayHideToolActivity.set(settings, false);
-		cfgDisplayCompactToolActivity.set(settings, true);
+		cfgDisplayMode.set(settings, "compact");
 
 		controller.toggleToolActivityVisibility();
-		expect(cfgDisplayHideToolActivity.get(settings)).toBe(false);
-		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(false);
+		expect(cfgDisplayMode.get(settings)).toBe("detailed");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
 		expect(showStatus).toHaveBeenLastCalledWith("Display: detailed");
 
 		controller.toggleToolActivityVisibility();
-		expect(cfgDisplayHideToolActivity.get(settings)).toBe(true);
-		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(true);
+		expect(cfgDisplayMode.get(settings)).toBe("clean");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(true);
 
 		controller.toggleToolActivityVisibility();
-		expect(cfgDisplayHideToolActivity.get(settings)).toBe(false);
-		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(true);
+		expect(cfgDisplayMode.get(settings)).toBe("compact");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
 	});
 });

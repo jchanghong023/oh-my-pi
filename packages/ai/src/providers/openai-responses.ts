@@ -1238,7 +1238,6 @@ const streamOpenAIResponsesOnce = (
 					output.errorMessage = undefined;
 					output.errorStatus = undefined;
 					output.errorId = undefined;
-					output.providerErrorCode = undefined;
 					output.stopDetails = undefined;
 					output.providerPayload = undefined;
 					output.usage = retryOutput.usage;
@@ -1332,7 +1331,6 @@ const streamOpenAIResponsesOnce = (
 			output.stopReason = result.stopReason;
 			output.errorStatus = result.status;
 			output.errorId = result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			output.errorMessage = result.message;
 			if (AIError.isRequestBodyReadTimeout(result.status, result.message) && lastSubmittedRequestWasFullReplay) {
 				output.requestBodyReadTimeoutFullReplay = true;

@@ -229,7 +229,11 @@ async def _resolve_issue_row_for_pr(
     issue_row = db.find_issue_by_pr(repo_full, pr_number)
     pr_info: PullRequestInfo | None = None
     if issue_row is None or issue_row.branch is None:
-        pr_info = await github.get_pull_request(repo_full, pr_number)
+        try:
+            pr_info = await github.get_pull_request(repo_full, pr_number)
+        except GitHubError as exc:
+            log.warning("PR metadata fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
+            return issue_row, None
 
     if issue_row is None and pr_info is not None and pr_info.head_ref:
         issue_row = db.find_issue_by_branch(repo_full, pr_info.head_ref)
@@ -568,9 +572,13 @@ async def review_pr(
     if pr_number <= 0 or not repo_full:
         log.info("skip: review_pr missing repo/number")
         return
-    repo = await github.get_repo(repo_full)
-    issue = await github.get_issue(repo_full, pr_number)
-    pr = await github.get_pull_request(repo_full, pr_number)
+    try:
+        repo = await github.get_repo(repo_full)
+        issue = await github.get_issue(repo_full, pr_number)
+        pr = await github.get_pull_request(repo_full, pr_number)
+    except GitHubError as exc:
+        log.warning("review_pr fetch failed", extra={"repo": repo_full, "pr": pr_number, "err": str(exc)})
+        return
 
     labels = {label.lower() for label in issue.labels}
     key = issue_key(repo.full_name, pr_number)
@@ -808,8 +816,12 @@ async def handle_review(
             return
         issue_number = issue_row.number
         existing_branch = issue_row.branch
-    repo = await github.get_repo(repo_full)
-    issue = await github.get_issue(repo_full, issue_number)
+    try:
+        repo = await github.get_repo(repo_full)
+        issue = await github.get_issue(repo_full, issue_number)
+    except GitHubError as exc:
+        log.warning("review fetch failed", extra={"err": str(exc)})
+        return
     clone_url = repo.clone_url
     workspace = await _run_workspace_op(
         sandbox.ensure_workspace,
@@ -939,8 +951,12 @@ async def handle_pr_conversation(
             log.warning("bare mention reply failed", extra={"err": str(exc)})
         return
     issue_number = issue_row.number if issue_row is not None else pr_number
-    repo = await github.get_repo(repo_full)
-    issue = await github.get_issue(repo_full, issue_number)
+    try:
+        repo = await github.get_repo(repo_full)
+        issue = await github.get_issue(repo_full, issue_number)
+    except GitHubError as exc:
+        log.warning("pr-conversation fetch failed", extra={"err": str(exc)})
+        return
     clone_url = repo.clone_url
     if issue_row is None:
         assert pr_info is not None

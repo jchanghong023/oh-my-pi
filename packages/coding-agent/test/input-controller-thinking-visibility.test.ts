@@ -7,7 +7,7 @@ import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -150,13 +150,8 @@ describe("InputController thinking visibility", () => {
 		expect(render()).toContain("historical answer");
 		cfgExpandThinkingBlocks.set(session.settings, true);
 		const original = structuredClone(history);
-		for (const [compact, hidden] of [
-			[true, false],
-			[true, true],
-			[false, false],
-		] as const) {
-			cfgDisplayCompactToolActivity.set(session.settings, compact);
-			cfgDisplayHideToolActivity.set(session.settings, hidden);
+		for (const presentation of ["compact", "clean", "detailed"] as const) {
+			cfgDisplayMode.set(session.settings, presentation);
 			await Promise.resolve();
 			const rendered = render();
 			expect(rendered).toContain("historical answer");

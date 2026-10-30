@@ -8,13 +8,6 @@ import { type CommitInferenceCache, computeCommitCacheKey } from "./cache";
 import type { ConventionalGenerationConfig } from "./config";
 import type { ConventionalPromptFamily } from "./prompts";
 
-const terminalCommitInferenceErrors = new WeakSet<Error>();
-
-/** Terminal provider failures must also bypass workflow-level fallbacks. */
-export function isTerminalCommitInferenceError(error: unknown): boolean {
-	return error instanceof Error && terminalCommitInferenceErrors.has(error);
-}
-
 /** Model roles preserved from llm-git's analysis/summary/map/fast pipeline. */
 export type CommitInferenceRole = "analysis" | "summary" | "map" | "fast";
 
@@ -120,9 +113,7 @@ export class OmpCommitInference implements CommitInference {
 			reasoning,
 		});
 		let lastError: Error | undefined;
-		const terminalFailure = target.model.provider === "codeagent";
-		const maxAttempts = terminalFailure ? 1 : Math.max(1, this.#config.maxRetries);
-		for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+		for (let attempt = 1; attempt <= Math.max(1, this.#config.maxRetries); attempt += 1) {
 			this.#signal?.throwIfAborted();
 			let responseText = "";
 			try {
@@ -145,8 +136,6 @@ export class OmpCommitInference implements CommitInference {
 					},
 				);
 				responseText = extractTextContent(message);
-				if (terminalFailure && message.stopReason === "aborted")
-					throw new Error("Commit inference request aborted");
 				if (message.stopReason === "error") throw new Error(message.errorMessage ?? "Provider error");
 				if (!responseText.trim()) throw new Error("Empty model response");
 				const raw = { text: responseText, stopReason: message.stopReason };
@@ -177,14 +166,12 @@ export class OmpCommitInference implements CommitInference {
 					response: responseText,
 					error: lastError.message,
 				});
-				if (attempt < maxAttempts) {
+				if (attempt < this.#config.maxRetries) {
 					await Bun.sleep(Math.max(0, this.#config.initialBackoffMs) * 2 ** (attempt - 1));
 				}
 			}
 		}
-		const error = lastError ?? new Error(`Max retries exceeded for ${request.operation}`);
-		if (terminalFailure) terminalCommitInferenceErrors.add(error);
-		throw error;
+		throw lastError ?? new Error(`Max retries exceeded for ${request.operation}`);
 	}
 
 	/** Release the cache and auth-storage handles after generation completes. */

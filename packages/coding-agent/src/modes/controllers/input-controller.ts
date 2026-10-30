@@ -84,8 +84,7 @@ import { cfgCycleOrder } from "../../config/model-settings";
 import {
 	cfgBareExitOnEmptySession,
 	cfgBareSlashCommands,
-	cfgDisplayCompactToolActivity,
-	cfgDisplayHideToolActivity,
+	cfgDisplayMode,
 	cfgDoubleEscapeAction,
 	cfgEmojiAutocomplete,
 	cfgImagesAutoResize,
@@ -3147,7 +3146,7 @@ export class InputController {
 	toggleToolOutputExpansion(): void {
 		if (this.ctx.hideToolActivity) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
-			const visibilityHint = visibilityKey ? `${visibilityKey} or /settings` : "/settings";
+			const visibilityHint = visibilityKey ? `${visibilityKey} or /display` : "/display";
 			this.ctx.showStatus(`Tool activity is hidden — show it with ${visibilityHint} before expanding`);
 			return;
 		}
@@ -3157,14 +3156,11 @@ export class InputController {
 
 	toggleToolActivityVisibility(): void {
 		const settings = this.ctx.settings;
-		const mode = cfgDisplayHideToolActivity.get(settings)
-			? "compact"
-			: cfgDisplayCompactToolActivity.get(settings)
-				? "detailed"
-				: "clean";
+		const mode = ({ clean: "compact", compact: "detailed", detailed: "clean" } as const)[
+			cfgDisplayMode.get(settings)
+		];
 		cfgHideThinkingBlock.set(settings, mode === "clean");
-		cfgDisplayHideToolActivity.set(settings, mode === "clean");
-		cfgDisplayCompactToolActivity.set(settings, mode !== "detailed");
+		cfgDisplayMode.set(settings, mode);
 		this.ctx.showStatus(`Display: ${mode}`);
 	}
 

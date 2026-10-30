@@ -19,7 +19,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
 import { cfgTasksTodoClearDelay } from "@oh-my-pi/pi-coding-agent/tools/settings";
-import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { assistantMsg } from "./utilities";
 
 function renderTodos(mode: InteractiveMode): string {
@@ -97,8 +97,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		await replaceMode();
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 		vi.spyOn(session, "hasBuiltInTool").mockImplementation(name => name === "todo");
-		cfgDisplayCompactToolActivity.override(session.settings, true);
-		cfgDisplayHideToolActivity.override(session.settings, false);
+		cfgDisplayMode.override(session.settings, "compact");
 		await mode.init();
 		// Isolated settings do not own the host's process-wide display effect.
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
@@ -144,8 +143,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(compactRebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
 		expect(compactRebuilt).not.toContain("Warning:");
 
-		cfgDisplayCompactToolActivity.override(session.settings, presentation === "clean");
-		cfgDisplayHideToolActivity.override(session.settings, presentation === "clean");
+		cfgDisplayMode.override(session.settings, presentation);
 		await Promise.resolve();
 		setChatTranscriptDisplayPreferences({
 			compactToolActivity: presentation === "clean",
@@ -159,8 +157,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		expect(rebuilt).not.toContain("Warning:");
 		if (presentation === "clean") expect(rebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
 		// Revealing clean history must not resurrect a warning retained while hidden.
-		cfgDisplayCompactToolActivity.override(session.settings, false);
-		cfgDisplayHideToolActivity.override(session.settings, false);
+		cfgDisplayMode.override(session.settings, "detailed");
 		await Promise.resolve();
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		mode.hideToolActivity = false;

@@ -820,6 +820,68 @@ describe("lsp regressions", () => {
 		}
 	});
 
+	it("rejects code action apply without a selector and applies a selected action", async () => {
+		const tempDir = TempDir.createSync("@omp-lsp-action-selector-");
+		let executed = 0;
+		try {
+			const config: ServerConfig = { command: "fake-lsp", fileTypes: [".ts"], rootMarkers: [] };
+			installFakeLsp((message, server) => {
+				if (message.method === "initialize") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: { capabilities: { codeActionProvider: true } } });
+				} else if (message.method === "textDocument/codeAction") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: [{ title: "Fix it", command: "fix" }] });
+				} else if (message.method === "workspace/executeCommand") {
+					executed++;
+					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "shutdown") {
+					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+				} else if (message.method === "exit") {
+					server.exit(0);
+				}
+			});
+			vi.spyOn(lspConfig, "loadConfig").mockReturnValue({ servers: { "fake-lsp": config } });
+			const client = await lspClient.getOrCreateClient(config, tempDir.path(), 1_000);
+			const file = await openDocument(client, "target.ts");
+			const tool = new LspTool(makeLspSession(tempDir.path()));
+			for (const query of [undefined, "   "]) {
+				const result = await tool.execute("missing-selector", {
+					action: "code_actions",
+					file,
+					line: 1,
+					apply: true,
+					query,
+				});
+				expect(result.details?.success).toBe(false);
+				expect(result.isError).toBe(true);
+				expect(result.content[0]).toMatchObject({ type: "text", text: expect.stringContaining("query") });
+				expect(executed).toBe(0);
+			}
+			const unmatched = await tool.execute("unmatched-action", {
+				action: "code_actions",
+				file,
+				line: 1,
+				apply: true,
+				query: "missing",
+			});
+			expect(unmatched.details?.success).toBe(false);
+			expect(unmatched.isError).toBe(true);
+			expect(executed).toBe(0);
+			const result = await tool.execute("selected-action", {
+				action: "code_actions",
+				file,
+				line: 1,
+				apply: true,
+				query: "Fix",
+			});
+			expect(result.details?.success).toBe(true);
+			expect(result.isError).not.toBe(true);
+			expect(executed).toBe(1);
+		} finally {
+			await lspClient.shutdownAll();
+			tempDir.removeSync();
+		}
+	});
+
 	it("pulls fresh diagnostics for code actions on a document reopened after an idle close", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-idle-docs-code-actions-");
 		const error: Diagnostic = {

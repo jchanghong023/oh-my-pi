@@ -46,7 +46,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
 	resetSettingsForTest();
-	await Settings.init({ inMemory: true, overrides: { "display.compactToolActivity": false } });
+	await Settings.init({ inMemory: true, overrides: { "display.mode": "detailed" } });
 });
 
 afterEach(() => {

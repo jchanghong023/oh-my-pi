@@ -36,7 +36,10 @@
 
 ### Changed
 
-- Update to upstream 18.14.0 while retaining fork offline models, orchestration, and self-contained HTML exports.
+- Update to upstream 18.14.0 while retaining fork offline models and orchestration.
+- Restore upstream HTML export resource loading, extension-tool schema validation, service log failure propagation, Web Search failure receipts, and JTD conversion.
+- Save the clean, compact, and detailed tiers as `display.mode`; remove independent compact/hide switches while retaining image-setting precedence.
+- Require `?` to request `xd://` device documentation; empty content and `help` follow the device's normal input rules.
 - Limit Repo search and symbol queries and page sizes consistently across tools and ZCode.
 - Notify same-process Team settings and app-server clients when user configuration is saved; preserve unsaved TUI drafts during refresh.
 - Apply desktop presentation to app-server sessions and keep display shortcuts aligned with `/display`.
@@ -107,6 +110,11 @@
 
 ### Fixed
 
+- Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
+- Restore CodeAgent commit-message and session-title retries and fallbacks, and normal speculative execution for recovered requests.
+- Report unapplied LSP code actions as failures instead of successful applications.
+- Require a valid explicit release version for local ZCode artifact builds.
+- Show worktree-scope settings in Simplified Chinese.
 - Suggest a similar available model when a `/team` session model is unavailable without silently replacing it.
 - Avoid forcing full TypeScript tests or UI smoke for changes limited to root documentation and `AGENTS.md` when a valid baseline exists.
 - Avoid spurious app-server command rejections when a session journal changes while being indexed.

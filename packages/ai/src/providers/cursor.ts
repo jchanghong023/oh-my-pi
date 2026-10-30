@@ -2233,7 +2233,6 @@ function streamCursorWithWireMode(
 			output.errorStatus = result.status;
 			// A rotated conversation is a fresh request and may be retried once.
 			output.errorId = rotatedRejection ? AIError.create(AIError.Flag.Transient) : result.id;
-			output.providerErrorCode = result.providerErrorCode;
 			if (error instanceof ConnectEndStreamError) {
 				output.errorClassificationMessage = result.message;
 				output.errorMessage = error.diagnosticMessage;

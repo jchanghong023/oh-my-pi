@@ -3910,11 +3910,7 @@ export async function processResponsesStream<TApi extends Api>(
 						: typeof statusDetailsReason === "string" && statusDetailsReason.length > 0
 							? `status_details: ${statusDetailsReason}`
 							: "Unknown error (no error details in response)";
-				throw new AIError.ProviderResponseError(message, {
-					provider: model.provider,
-					kind: "output",
-					providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error }, undefined).code,
-				});
+				throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 			}
 			if (response?.status === "incomplete" && response.incomplete_details?.reason === "content_filter") {
 				// A content-filtered turn is a failure, not a token-cap truncation —
@@ -3960,7 +3956,6 @@ export async function processResponsesStream<TApi extends Api>(
 			throw new AIError.ProviderResponseError(`Error Code ${code}: ${message}`, {
 				provider: model.provider,
 				kind: "output",
-				providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error: err }, undefined).code,
 			});
 		} else if (event.type === "response.failed") {
 			populateResponsesUsageFromResponse(output, event.response?.usage);
@@ -3973,11 +3968,7 @@ export async function processResponsesStream<TApi extends Api>(
 				: details?.reason
 					? `incomplete: ${details.reason}`
 					: "Unknown error (no error details in response)";
-			throw new AIError.ProviderResponseError(message, {
-				provider: model.provider,
-				kind: "output",
-				providerErrorCode: AIError.OpenAIHttpError.parseEnvelope({ error }, undefined).code,
-			});
+			throw new AIError.ProviderResponseError(message, { provider: model.provider, kind: "output" });
 		}
 	}
 }

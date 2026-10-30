@@ -391,8 +391,7 @@ import {
 	cfgDisplayAdvisorCollapsedLines,
 	cfgDisplayCacheMissMarker,
 	cfgDisplayCollapseCompacted,
-	cfgDisplayCompactToolActivity,
-	cfgDisplayHideToolActivity,
+	cfgDisplayMode,
 	cfgDisplayPinnedAgents,
 	cfgDisplayShowTokenUsage,
 	cfgDisplayShowTurnTime,
@@ -488,8 +487,7 @@ const cfgLiveUiSettings = combine({
 	"composer.predictions": cfgComposerPredictions,
 	"compaction.enabled": cfgCompactionEnabled,
 	"compaction.methodOrder": cfgCompactionMethodOrder,
-	"display.hideToolActivity": cfgDisplayHideToolActivity,
-	"display.compactToolActivity": cfgDisplayCompactToolActivity,
+	"display.mode": cfgDisplayMode,
 	"terminal.showImages": cfgTerminalShowImages,
 	"terminal.programStatus": cfgTerminalProgramStatus,
 	hideThinkingBlock: cfgHideThinkingBlock,
@@ -1530,7 +1528,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Message the working row shows; mirrors what the loader was last given. */
 	#workingMessage: string | (() => string) = DEFAULT_WORKING_MESSAGE;
 	#workingLabel = () =>
-		this.hideToolActivity || !cfgDisplayCompactToolActivity.get(this.settings)
+		this.hideToolActivity || cfgDisplayMode.get(this.settings) !== "compact"
 			? typeof this.#workingMessage === "function"
 				? this.#workingMessage()
 				: this.#workingMessage
@@ -2247,7 +2245,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			aggregateVibeWorkerTokensPerSecond(this.session.getAgentId() ?? MAIN_AGENT_ID),
 		);
 
-		this.hideToolActivity = cfgDisplayHideToolActivity.get(settings);
+		this.hideToolActivity = cfgDisplayMode.get(settings) === "clean";
 		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
 		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.proseOnlyThinking = cfgProseOnlyThinking.get(settings);
@@ -4618,12 +4616,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		// Field comparisons skip effects the keybinding toggles already applied.
-		const hideToolActivity = cfgDisplayHideToolActivity.get(this.settings);
-		const compactToolActivity = cfgDisplayCompactToolActivity.get(this.settings);
-		if (
-			(any("display.hideToolActivity") && hideToolActivity !== this.hideToolActivity) ||
-			any("display.compactToolActivity")
-		) {
+		const displayMode = cfgDisplayMode.get(this.settings);
+		const hideToolActivity = displayMode === "clean";
+		const compactToolActivity = displayMode !== "detailed";
+		if (any("display.mode")) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
 			for (const child of this.chatContainer.children) {
@@ -4667,15 +4663,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.expandThinkingBlocks = expandThinkingBlocks;
 		}
 
-		if (
-			any(
-				"display.hideToolActivity",
-				"display.compactToolActivity",
-				"hideThinkingBlock",
-				"proseOnlyThinking",
-				"expandThinkingBlocks",
-			)
-		) {
+		if (any("display.mode", "hideThinkingBlock", "proseOnlyThinking", "expandThinkingBlocks")) {
 			this.#eventController.refreshThinkingVisibility();
 			if (!hideToolActivity && !compactToolActivity) {
 				this.chatContainer.resetStableEmission();

@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
+import * as ai from "@oh-my-pi/pi-ai";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { CommitInferenceCache, computeCommitCacheKey } from "../src/commit/conventional/cache";
 import { type ConventionalGenerationConfig, conventionalGenerationConfig } from "../src/commit/conventional/config";
@@ -16,6 +18,7 @@ import type {
 	CommitInferenceRequest,
 	CommitInferenceResponse,
 } from "../src/commit/conventional/inference";
+import { OmpCommitInference } from "../src/commit/conventional/inference";
 import { conventionalCommit } from "../src/commit/conventional/commit-types";
 import { buildFileBatches } from "../src/commit/conventional/map-reduce";
 import {
@@ -209,6 +212,48 @@ describe("llm-git generation routing", () => {
 			summary: "corrected null dereference",
 			body: ["Guarded empty parser input."],
 		});
+	});
+
+	test("retries failed CodeAgent fast generation before falling back to analysis", async () => {
+		const bundled = getBundledModel("anthropic", "claude-haiku-4-5");
+		if (!bundled) throw new Error("expected bundled model");
+		const target = { model: { ...bundled, provider: "codeagent" }, apiKey: "test-key" };
+		let calls = 0;
+		const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
+			calls += 1;
+			if (calls <= 2) return { stopReason: "error", errorMessage: "request failed", content: [] } as never;
+			return {
+				stopReason: "stop",
+				content: [
+					{
+						type: "text",
+						text: "# feat(parser): added parser recovery\n\n- Added recovery after malformed input.",
+					},
+				],
+				usage: { cost: { total: 0 } },
+			} as never;
+		});
+		const inference = new OmpCommitInference({
+			primary: target,
+			smol: target,
+			cwd: import.meta.dir,
+			config: config({ maxRetries: 2, initialBackoffMs: 0, mapReduceEnabled: false }),
+			cache: null,
+		});
+		try {
+			const result = await generateConventionalCommit({
+				diff: SIMPLE_DIFF,
+				stat: " src/parser.ts | 2 +-",
+				numstat: "1\t1\tsrc/parser.ts\n",
+				config: config({ maxRetries: 2, initialBackoffMs: 0, mapReduceEnabled: false }),
+				inference,
+			});
+			expect(calls).toBe(3);
+			expect(result.commit.summary).toBe("added parser recovery");
+		} finally {
+			inference.dispose();
+			complete.mockRestore();
+		}
 	});
 
 	test("accepts a valid holistic analysis summary without a second call", async () => {

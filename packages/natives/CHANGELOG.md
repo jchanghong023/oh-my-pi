@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Attempt immediate cleanup of old native addons after successful replacement without failing installation when cleanup is denied.
+- Report invalid `local -p` operands with the correct command name and preserve Windows timeout cancellation fallback exit statuses.
 - Fixed native addon and grammar installation paths to share the effective configuration root and normalized profile, while honoring an explicit `PI_NATIVES_DIR`.
 - Bounded the built-in `grep` and `rg` search buffer to 256 MiB plus one byte; when a file or stdin exceeds the buffer budget, they report an error instead of buffering without limit, and continue searching other files. Pattern files and `grep --exclude-from` sources are limited to 256 MiB. Errors return status 2 except when a `-q` match takes precedence ([#17108](https://github.com/can1357/oh-my-pi/pull/17108)).
 

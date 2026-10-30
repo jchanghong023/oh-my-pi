@@ -8,7 +8,7 @@ import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -107,7 +107,7 @@ describe("issue #6879 — tool output appears twice after a superseded turn", ()
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		cfgDisplayCompactToolActivity.override(session.settings, false);
+		cfgDisplayMode.override(session.settings, "detailed");
 		// The session is constructed with no tools; bash is a built-in in real
 		// sessions, so provenance-gated rendering must treat it as one here.
 		vi.spyOn(session, "hasBuiltInTool").mockReturnValue(true);

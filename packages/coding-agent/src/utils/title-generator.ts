@@ -326,7 +326,6 @@ async function generateTitleOnlineWithModels(
 	const userMessage = formatTitleUserMessage(firstMessage);
 
 	for (const model of models) {
-		const terminalFailure = model.provider === "codeagent";
 		const modelName = `${model.provider}/${model.id}`;
 		const modelContext = {
 			titleSessionId: sessionId,
@@ -356,7 +355,6 @@ async function generateTitleOnlineWithModels(
 			const apiKey = await registry.getApiKey(model, sessionId);
 			if (!apiKey) {
 				logger.warn("title-generator: no API key", { ...modelContext, reason: "missing-api-key" });
-				if (terminalFailure) return null;
 				continue;
 			}
 			if (signal?.aborted) {
@@ -402,7 +400,7 @@ async function generateTitleOnlineWithModels(
 							signal,
 						},
 					),
-				{ signal, provider: model.provider, maxAttempts: terminalFailure ? 1 : undefined },
+				{ signal, provider: model.provider },
 			);
 
 			if (response.stopReason === "aborted" || signal?.aborted) {
@@ -421,7 +419,6 @@ async function generateTitleOnlineWithModels(
 					stopReason: response.stopReason,
 					errorMessage: response.errorMessage,
 				});
-				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -434,7 +431,6 @@ async function generateTitleOnlineWithModels(
 					usage: response.usage,
 					stopReason: response.stopReason,
 				});
-				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -460,7 +456,6 @@ async function generateTitleOnlineWithModels(
 				reason: "exception",
 				error: err instanceof Error ? err.message : String(err),
 			});
-			if (terminalFailure) return null;
 		}
 	}
 	return null;

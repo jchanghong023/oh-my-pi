@@ -222,6 +222,18 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 		if (this.session.lspReadOnly && !LSP_READONLY_ACTIONS.has(action)) {
 			throw new ToolError(`LSP action ${action} is disabled in this read-only session`);
 		}
+		if (action === "code_actions" && apply === true && !query?.trim()) {
+			return {
+				content: [
+					{
+						type: "text",
+						text: "Error: query parameter required when apply=true for code_actions; no action was applied.",
+					},
+				],
+				details: { action, success: false, request: params },
+				isError: true,
+			};
+		}
 		const budget = resolveLspTimeouts(
 			timeout,
 			cfgLspRequestTimeout.get(this.session.settings),
@@ -1496,16 +1508,20 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 					)) as (CodeAction | Command)[] | null;
 
 					if (!result || result.length === 0) {
+						if (apply === true) {
+							return {
+								content: [{ type: "text", text: "No code actions available to apply" }],
+								details: { serverName, action, success: false, request: params },
+								isError: true,
+							};
+						}
 						output = "No code actions available";
 						break;
 					}
 
 					if (apply === true && query) {
 						const normalizedQuery = query.trim();
-						if (normalizedQuery.length === 0) {
-							output = "Error: query parameter required when apply=true for code_actions";
-							break;
-						}
+						// apply=true was checked for a non-empty selector before contacting the server.
 						const parsedIndex = /^\d+$/.test(normalizedQuery) ? Number.parseInt(normalizedQuery, 10) : null;
 						const selectedAction =
 							parsedIndex !== null
@@ -1516,8 +1532,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 
 						if (!selectedAction) {
 							const actionLines = result.map((actionItem, index) => `  ${formatCodeAction(actionItem, index)}`);
-							output = `No code action matches "${normalizedQuery}". Available actions:\n${actionLines.join("\n")}`;
-							break;
+							return {
+								content: [
+									{
+										type: "text",
+										text: `No code action matches "${normalizedQuery}". Available actions:\n${actionLines.join("\n")}`,
+									},
+								],
+								details: { serverName, action, success: false, request: params },
+								isError: true,
+							};
 						}
 
 						const appliedAction = await applyCodeAction(selectedAction, {
@@ -1538,8 +1562,16 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 						});
 
 						if (!appliedAction) {
-							output = `Action "${selectedAction.title}" has no workspace edit or command to apply`;
-							break;
+							return {
+								content: [
+									{
+										type: "text",
+										text: `Action "${selectedAction.title}" has no workspace edit or command to apply`,
+									},
+								],
+								details: { serverName, action, success: false, request: params },
+								isError: true,
+							};
 						}
 
 						const summaryLines: string[] = [];
@@ -1648,15 +1680,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			}
 
 			return {
-				content: [
-					{
-						type: "text",
-						text:
-							action === "code_actions" && apply === true && !query?.trim() && !output.startsWith("Error:")
-								? `${output}\nError: no code action was applied; provide query as an action title substring or index when apply=true.`
-								: output,
-					},
-				],
+				content: [{ type: "text", text: output }],
 				details: { serverName, action, success: true, request: params },
 				...(useless ? { useless: true } : {}),
 			};
@@ -1667,6 +1691,7 @@ export class LspTool implements AgentTool<typeof lspSchema, LspToolDetails, Them
 			return {
 				content: [{ type: "text", text: `LSP error: ${errorMessage}` }],
 				details: { serverName, action, success: false, request: params },
+				...(action === "code_actions" && apply === true ? { isError: true } : {}),
 			};
 		}
 	}

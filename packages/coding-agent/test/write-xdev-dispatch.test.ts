@@ -138,6 +138,49 @@ describe("read and write route xd:// device URLs", () => {
 		}
 	});
 
+	it("only treats a trimmed question mark as device documentation", async () => {
+		let calls = 0;
+		const device: AgentTool = {
+			name: "peek",
+			label: "Peek",
+			description: "Read-only device",
+			parameters: type({ q: "string" }),
+			async execute() {
+				calls++;
+				return { content: [{ type: "text", text: "peeked" }] };
+			},
+		};
+		const write = new WriteTool(xdevSession(process.cwd(), { xdev: createTestXdevState([device]) }));
+		const docs = await write.execute("docs", { path: "xd://peek", content: " \t? \n" });
+		expect(docs.details?.xdev?.mode).toBe("help");
+		expect(docs.isError).not.toBe(true);
+		for (const content of ["", " ", "help", "HELP", "Help"]) {
+			const result = await write.execute("invalid", { path: "xd://peek", content });
+			expect(result.details?.xdev?.mode).toBe("execute");
+			expect(result.isError).toBe(true);
+		}
+		expect(calls).toBe(0);
+	});
+
+	it("documents resolution devices without invoking their action", async () => {
+		let calls = 0;
+		const session = xdevSession(process.cwd(), {
+			peekPlanProposalHandler: () => async () => {
+				calls++;
+				return { content: [{ type: "text", text: "submitted" }] };
+			},
+		});
+		const write = new WriteTool(session);
+		const docs = await write.execute("docs", { path: "xd://propose", content: " ? " });
+		expect(docs.details?.xdev?.mode).toBe("help");
+		expect(calls).toBe(0);
+		for (const content of ["", "help", "HELP"]) {
+			const result = await write.execute("action", { path: "xd://propose", content });
+			expect(result.details?.xdev?.mode).toBe("execute");
+		}
+		expect(calls).toBe(3);
+	});
+
 	it("records a read tier on the dispatch of a read-only device", async () => {
 		const readDevice: AgentTool = {
 			name: "peek",

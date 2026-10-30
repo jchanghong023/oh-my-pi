@@ -14,7 +14,7 @@ import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { kStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { cfgDisplayCollapseCompacted, cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCollapseCompacted, cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
@@ -155,7 +155,10 @@ function makeRenderCtx(
 	hideToolActivity = false,
 	compactToolActivity = false,
 ): { ctx: InteractiveModeContext; chatContainer: TranscriptContainer } {
-	cfgDisplayCompactToolActivity.override(Settings.instance, compactToolActivity);
+	cfgDisplayMode.override(
+		Settings.instance,
+		hideToolActivity ? "clean" : compactToolActivity ? "compact" : "detailed",
+	);
 	setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity });
 	const chatContainer = new TranscriptContainer();
 	chatContainer.setToolActivityVisible(!hideToolActivity);
@@ -185,8 +188,7 @@ function makeRenderCtx(
 		// keep it on so the image-replay contracts below stay meaningful.
 		settings: Settings.isolated({
 			"terminal.showImages": showImages,
-			"display.hideToolActivity": hideToolActivity,
-			"display.compactToolActivity": compactToolActivity,
+			"display.mode": hideToolActivity ? "clean" : compactToolActivity ? "compact" : "detailed",
 			"composer.recallClearedDrafts": false,
 		}),
 		toolOutputExpanded: false,
@@ -372,7 +374,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
 		cfgDisplayCollapseCompacted.override(Settings.instance, false);
-		cfgDisplayCompactToolActivity.override(Settings.instance, false);
+		cfgDisplayMode.override(Settings.instance, "detailed");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		await helpers.renderInitialMessages();
 		const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
@@ -382,7 +384,7 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(detailed).toContain("RECENT_FILE_BODY");
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
-		cfgDisplayCompactToolActivity.override(Settings.instance, true);
+		cfgDisplayMode.override(Settings.instance, "compact");
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		await helpers.renderInitialMessages();
 		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("ORIGINAL_USER_REQUEST");
@@ -644,8 +646,8 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 		const helpers = new UiHelpers(ctx);
 		let firstCompact: string | undefined;
 		for (const compact of [true, false, true]) {
-			cfgDisplayCompactToolActivity.override(Settings.instance, compact);
-			cfgDisplayCompactToolActivity.override(ctx.settings, compact);
+			cfgDisplayMode.override(Settings.instance, compact ? "compact" : "detailed");
+			cfgDisplayMode.override(ctx.settings, compact ? "compact" : "detailed");
 			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
 			await helpers.renderInitialMessages();
 			const groups = chatContainer.children.filter(
@@ -936,7 +938,13 @@ describe("UiHelpers.renderInitialMessages — hidden tool activity", () => {
 				customType: "async-result",
 				content: "",
 				display: true,
-				details: { jobId: "ASYNC_JOB_MARKER", type: "bash", label: "async marker" },
+				// Completion receipts render only actionable diagnostics, not duplicate job status.
+				details: {
+					jobId: "ASYNC_JOB_MARKER",
+					type: "agent",
+					label: "async marker",
+					schema: { source: "caller", mode: "strict", status: "invalid", error: "invalid output" },
+				},
 				timestamp: 1,
 			},
 			{

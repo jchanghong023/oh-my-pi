@@ -25,11 +25,10 @@ Run from `packages/coding-agent/` (or add `--cwd=packages/coding-agent`):
 Never invoke `tsc`/`npx tsc` directly — `bun run check` is the typecheck gate. After
 changing export HTML/CSS/JS, web themes, or the shared tool/trace renderers, run
 `bun run gen:export-viewer` and include `src/export/html/viewer.generated.json`
-and `src/export/html/viewer.generated.js` with the change. CI verifies the
-metadata (`--check`, also implied by `CI=true`) and generates the embedded viewer.
-Source, bundled, and compiled exports inline the viewer and vendored Markdown and
-Highlight.js scripts; opening an exported HTML file does not require a server.
-Binary and package builds generate the viewer explicitly without install hooks.
+with the change. CI verifies the metadata (`--check`, also implied by `CI=true`).
+Source exports inline the generated checkout viewer; bundled and compiled exports
+load the version-pinned viewer remotely. All exports load Markdown and Highlight.js
+remotely. Binary and package builds generate the viewer without install hooks.
 
 Scope fake timers to the deadline a test exercises, then restore real timers
 before real socket listeners are started. Bun's mocked clock can defer

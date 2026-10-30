@@ -9,7 +9,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
-import { cfgDisplayCompactToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -133,12 +133,12 @@ describe("InteractiveMode live working label", () => {
 			let rendered = Bun.stripANSI(mode.statusContainer.render(COLUMNS).join("\n"));
 			expect(rendered).toContain("模型回复");
 			expect(rendered).not.toContain("工具执行中");
-			cfgDisplayCompactToolActivity.override(mode.settings, false);
+			cfgDisplayMode.override(mode.settings, "detailed");
 			mode.setWorkingMessage("custom activity");
 			rendered = Bun.stripANSI(mode.statusContainer.render(COLUMNS).join("\n"));
 			expect(rendered).toContain("custom activity");
 		} finally {
-			cfgDisplayCompactToolActivity.override(mode.settings, true);
+			cfgDisplayMode.override(mode.settings, "compact");
 			delete (mode as unknown as { viewSession?: AgentSession }).viewSession;
 			session.agent.state.pendingToolCalls.clear();
 			focusedSession.agent.emitExternalEvent({ type: "message_end", message }, { stateOnly: true });

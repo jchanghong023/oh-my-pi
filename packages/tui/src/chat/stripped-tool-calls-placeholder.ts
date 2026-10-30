@@ -6,7 +6,7 @@ import type { NativeNode } from "../native/node";
 /**
  * Dim transcript marker for tool calls stripped from the resolved branch
  * (failed/retried turns, results on sibling branches). It is tool activity,
- * so it hides and reappears with the `display.hideToolActivity` toggle.
+ * so it hides in the clean display tier and reappears in compact or detailed.
  */
 export class StrippedToolCallsPlaceholder extends Text {
 	#toolActivityVisible: boolean;

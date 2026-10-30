@@ -1,7 +1,6 @@
 import type * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { currentExecutionModel } from "../session/execution-model";
 import type {
 	AgentToolResult,
 	SpeculativeAuthorization,
@@ -334,10 +333,7 @@ export function createSpeculativeToolExecutionConfig(
 	const host = new CodingAgentSpeculativeExecutionHost(settings, toolSession, extensionRunner);
 	return {
 		get enabled() {
-			return (
-				!currentExecutionModel()?.recoverModelRequest &&
-				(cfgToolsSpeculativeExecutionEnabled.get(settings) || cfgTaskSpeculativeLaunch.get(settings))
-			);
+			return cfgToolsSpeculativeExecutionEnabled.get(settings) || cfgTaskSpeculativeLaunch.get(settings);
 		},
 		get maxInFlight() {
 			return cfgToolsSpeculativeExecutionMaxInFlight.get(settings);
