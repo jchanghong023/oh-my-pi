@@ -60,6 +60,16 @@ const emptyGit = {
 		changedPaths: ["packages/example/src/a.ts"],
 	},
 };
+const emptyDelta = {
+	...emptyGit,
+	selection: { ...emptyGit.selection, tool: "cargo-delta", packages: [] },
+};
+const affectedDelta = {
+	tool: "cargo-delta",
+	mode: "affected",
+	baseline: "a".repeat(40),
+	packages: ["pi-natives"],
+};
 
 test("affected selection reports only executed XML cases and native deselections", async () => {
 	const report = await fixture([
@@ -181,5 +191,64 @@ test("Git selection rejects incomplete, contradictory or fabricated evidence", a
 	for (const status of ["partial", "failed", "blocked"]) {
 		const report = await fixture([{ ...emptyGit, status }]);
 		expect(report.completion).toBe("partial");
+	}
+});
+
+test("cargo-delta reports empty and executed package selections without fabricated cases", async () => {
+	const empty = await fixture([emptyDelta, emptyDelta]);
+	expect(empty.completion).toBe("complete");
+	expect(empty.coverage).toBe("affected-tests-only");
+	expect(empty.reconciliation).toMatchObject({ status: "validated", cases: 0, executed: 0, failures: 0 });
+	expect(empty.producers[0].selection.packages).toEqual([]);
+
+	const mixed = await fixture([{ xml: oneCase, status: "passed", selection: affectedDelta }, emptyDelta]);
+	expect(mixed.completion).toBe("complete");
+	expect(mixed.coverage).toBe("affected-tests-only");
+	expect(mixed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
+	expect(mixed.producers[0].selection.packages).toEqual(["pi-natives"]);
+
+	const withDoctest = await fixture([
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["pi-wiki"] } },
+		{ status: "stage", selection: { ...affectedDelta, packages: ["pi-wiki"] } },
+	]);
+	expect(withDoctest.completion).toBe("complete");
+	expect(withDoctest.reconciliation).toMatchObject({ cases: 1, executed: 1, failures: 0 });
+	expect(withDoctest.producers[1].reportPath).toBeNull();
+
+	const failedXml = '<testsuite><testcase name="failed" time="0.2"><failure /></testcase></testsuite>';
+	for (const record of [
+		{ xml: failedXml, status: "failed", exitCode: 1, selection: affectedDelta },
+		{ xml: failedXml, status: "passed", exitCode: 0, selection: affectedDelta },
+		{ xml: oneCase, status: "partial", selection: affectedDelta },
+		{ status: "failed", exitCode: 1, selection: affectedDelta },
+		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["pi-wiki"] } },
+	]) {
+		const report = await fixture([record, emptyDelta]);
+		expect(report.completion).toBe("partial");
+	}
+});
+
+test("cargo-delta rejects incomplete or fabricated empty selection evidence", async () => {
+	const selection = emptyDelta.selection;
+	for (const record of [
+		{ ...emptyDelta, selection: { ...selection, baseline: undefined } },
+		{ ...emptyDelta, selection: { ...selection, baseline: "bad" } },
+		{ ...emptyDelta, selection: { ...selection, packages: undefined } },
+		{ ...emptyDelta, selection: { ...selection, packages: ["pi-wiki"] } },
+		{ ...emptyDelta, selection: { ...selection, selected: 1 } },
+		{ ...emptyDelta, selection: { ...selection, mode: "full" } },
+		{ ...emptyDelta, selection: { ...selection, changedPaths: ["../outside"] } },
+		{ ...emptyDelta, selection: { ...selection, reason: "" } },
+		{ ...emptyDelta, durationSeconds: 1 },
+		{ ...emptyDelta, xml: oneCase },
+		{ ...emptyDelta, cases: 1 },
+		{ ...emptyDelta, exitCode: 1 },
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: [] } },
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, baseline: undefined } },
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: [""] } },
+	]) {
+		const report = await fixture([record]);
+		expect(report.completion).toBe("partial");
+		expect(report.reconciliation.status).toBe("invalid");
 	}
 });

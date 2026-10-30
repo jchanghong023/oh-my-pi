@@ -26,6 +26,7 @@ export interface TestSelection {
 	reason?: string;
 	baseline?: string;
 	changedPaths?: string[];
+	packages?: string[];
 	reportPath?: string;
 }
 
@@ -284,6 +285,16 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 		if (count !== undefined && (!Number.isSafeInteger(count) || count < 0)) return false;
 	}
 	if (
+		selection.tool === "cargo-delta" &&
+		(selection.mode !== "affected" ||
+			typeof selection.baseline !== "string" ||
+			!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(selection.baseline) ||
+			!Array.isArray(selection.packages) ||
+			!selection.packages.every((name: unknown) => typeof name === "string" && name.trim().length > 0) ||
+			(producer.status !== "not-selected" && selection.packages.length === 0))
+	)
+		return false;
+	if (
 		selection.tool === "pytest-testmon" &&
 		selection.mode === "affected" &&
 		(selection.selected === undefined || selection.deselected === undefined)
@@ -298,10 +309,11 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 		return false;
 	if (producer.status === "not-selected") {
 		if (producer.exitCode !== 0 || selection.mode !== "affected" || selection.selected !== 0) return false;
-		if (selection.tool === "git") {
+		if (selection.tool === "git" || selection.tool === "cargo-delta") {
 			const record = producer as unknown as Record<string, unknown>;
 			const evidence = selection as unknown as Record<string, unknown>;
 			return (
+				(selection.tool !== "cargo-delta" || selection.packages?.length === 0) &&
 				producer.report === "not-supported" &&
 				producer.reportPath == null &&
 				producer.durationSeconds === 0 &&

@@ -13,7 +13,7 @@ import {
 	selectChangedScriptTests,
 } from "./fulltest";
 import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
-import { captureChangedPaths, classifyFulltestChanges, type SourceIdentity } from "./test-gate-source";
+import { bunRequiresFullSelection, captureChangedPaths, type SourceIdentity } from "./test-gate-source";
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
 
@@ -33,6 +33,8 @@ test("script selection uses changed modules and existing tests, not business fil
 		"scripts/fulltest.test.ts",
 		"scripts/ci-test-ts.test.ts",
 		"scripts/test-reporting.test.ts",
+		"scripts/test-gate-delta.test.ts",
+		"scripts/run-rs-task.test.ts",
 		"scripts/release.test.ts",
 	];
 	expect(selectChangedScriptTests([], files)).toEqual([]);
@@ -42,18 +44,22 @@ test("script selection uses changed modules and existing tests, not business fil
 	expect(selectChangedScriptTests(["scripts/fulltest.ts", "scripts/test-reporting.ts"], files)).toEqual([
 		"scripts/ci-test-ts.test.ts",
 		"scripts/fulltest.test.ts",
+		"scripts/run-rs-task.test.ts",
 		"scripts/test-reporting.test.ts",
+	]);
+	expect(selectChangedScriptTests(["scripts/test-gate-delta.ts"], files)).toEqual([
+		"scripts/fulltest.test.ts",
+		"scripts/run-rs-task.test.ts",
+		"scripts/test-gate-delta.test.ts",
 	]);
 	expect(selectChangedScriptTests(["scripts/release.test.ts", "scripts/unknown.ts"], files)).toEqual([
 		"scripts/release.test.ts",
 	]);
 });
 
-test("affected boundary retains Rust for unknown inputs and UI for CLI and Repo changes", () => {
-	expect(classifyFulltestChanges([])).toEqual({ bun: false, rust: false, ui: false });
-	expect(
-		classifyFulltestChanges(["packages/coding-agent/src/tools/wiki.ts", "packages/coding-agent/src/repo/files.ts"]),
-	).toEqual({ bun: false, rust: false, ui: true });
+test("Bun traces only known static inputs; unknown and dynamic inputs fall back", () => {
+	expect(bunRequiresFullSelection([])).toBe(false);
+	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/wiki.ts"])).toBe(false);
 	for (const file of [
 		"Cargo.lock",
 		"packages/natives/src/lib.rs",
@@ -63,11 +69,11 @@ test("affected boundary retains Rust for unknown inputs and UI for CLI and Repo 
 		"scripts/build.ts",
 		"bun.lock",
 	]) {
-		expect(classifyFulltestChanges([file])).toEqual({ bun: true, rust: true, ui: true });
+		expect(bunRequiresFullSelection([file])).toBe(true);
 	}
 });
 
-test("fulltest applies one baseline to both TS lanes and omits only unaffected independent stages", async () => {
+test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it for --full", async () => {
 	const baseline = "a".repeat(40);
 	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
 	const gate = {
@@ -78,37 +84,127 @@ test("fulltest applies one baseline to both TS lanes and omits only unaffected i
 		record: (error: unknown) => error,
 		fail: (error: unknown) => error,
 	} as unknown as GateRun;
-	for (const [changed, full, expectRust] of [
-		[["packages/coding-agent/src/tools/wiki.ts", "packages/coding-agent/src/repo/files.ts"], false, false],
-		[["Cargo.lock"], false, true],
-		[["packages/coding-agent/src/tools/wiki.ts"], true, true],
-	] as const) {
-		const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
+	const cases = [
+		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: [], full: false, bunFull: false },
+		{ changed: ["Cargo.lock"], packages: [], full: false, bunFull: true },
+		{
+			changed: ["packages/coding-agent/src/tools/wiki.ts"],
+			packages: ["pi-wiki", "other-crate"],
+			full: false,
+			bunFull: false,
+		},
+		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: ["other-crate"], full: false, bunFull: false },
+		{ changed: ["Cargo.lock"], packages: ["pi-natives"], full: false, bunFull: true },
+		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: [], full: true, bunFull: true },
+	] as const;
+	for (const scenario of cases) {
+		const commands: { label: string; argv: readonly string[]; env?: Record<string, string | undefined> }[] = [];
 		let observedBase: string | undefined;
+		let deltaBase: string | undefined;
+		let deltaCalls = 0;
 		await runFulltest(
 			gate,
-			{ debug: false, full },
+			{ debug: false, full: scenario.full },
 			{
 				captureSourceIdentity: async () => identity,
 				captureChangedPaths: async (_gate, _root, base) => {
 					observedBase = base;
-					return [...changed];
+					return [...scenario.changed];
 				},
 				bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline }),
+				selectRustPackages: async (_gate, _root, base) => {
+					deltaCalls++;
+					deltaBase = base;
+					return {
+						tool: "cargo-delta",
+						mode: "affected",
+						baseline,
+						packages: [...scenario.packages],
+						reason: "fixture",
+					};
+				},
 				fastcheckCommands: async () => [],
 				runGateCommands: async (_gate, selected) => {
 					commands.push(...selected);
 				},
 			},
 		);
-		expect(observedBase).toBe(full ? "HEAD" : baseline);
-		expect(commands.some(command => command.label.startsWith("test/Rust"))).toBe(expectRust);
+		expect(observedBase).toBe(scenario.full ? "HEAD" : baseline);
+		expect(deltaCalls).toBe(scenario.full ? 0 : 1);
+		if (!scenario.full) expect(deltaBase).toBe(baseline);
+		const rust = commands.filter(
+			command => command.label === (scenario.full ? "test/Rust workspace" : "test/Rust fork features"),
+		);
+		const forkAffected = scenario.packages.some(pkg => pkg === "pi-wiki" || pkg === "pi-natives");
+		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
+		if (rust.length) {
+			expect(rust[0]!.argv).toEqual([
+				"bun",
+				"scripts/run-rs-task.ts",
+				"test:rs",
+				...(scenario.full ? ["--full"] : []),
+			]);
+			if (!scenario.full) {
+				expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
+					tool: "cargo-delta",
+					mode: "affected",
+					baseline,
+					packages: [...scenario.packages],
+				});
+				expect(JSON.parse(rust[0]!.env!.OMP_FULLTEST_CHANGED_PATHS!)).toEqual([...scenario.changed]);
+			}
+		}
 		expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
 		expect(ts).toHaveLength(2);
 		expect(ts.map(command => command.env?.OMP_FULLTEST_BASELINE)).toEqual(
-			full || expectRust ? ["none", "none"] : [baseline, baseline],
+			scenario.bunFull ? ["none", "none"] : [baseline, baseline],
 		);
+	}
+});
+
+test("delta failure and absence of a qualified baseline retain the full Rust fork", async () => {
+	const baseline = "a".repeat(40);
+	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
+	const gate = {
+		signal: new AbortController().signal,
+		charged: async <T>(work: () => T | Promise<T>) => work(),
+		run: async () => {},
+		childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+		record: (error: unknown) => error,
+		fail: (error: unknown) => error,
+	} as unknown as GateRun;
+	for (const missingBaseline of [false, true]) {
+		const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
+		let deltaBase: string | undefined;
+		await runFulltest(
+			gate,
+			{ debug: false },
+			{
+				captureSourceIdentity: async () => identity,
+				captureChangedPaths: async () => [],
+				bunTestSelection: async () =>
+					missingBaseline
+						? { tool: "bun", mode: "full", reason: "no baseline" }
+						: { tool: "bun", mode: "affected", baseline },
+				selectRustPackages: async (_gate, _root, base) => {
+					deltaBase = base;
+					throw new Error("delta unavailable");
+				},
+				fastcheckCommands: async () => [],
+				runGateCommands: async (_gate, selected) => {
+					commands.push(...selected);
+				},
+			},
+		);
+		expect(deltaBase).toBe(missingBaseline ? undefined : baseline);
+		const rust = commands.filter(command => command.label.startsWith("test/Rust"));
+		expect(rust).toHaveLength(1);
+		expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
+			tool: "cargo-delta",
+			mode: "full",
+			packages: ["pi-wiki", "pi-natives"],
+		});
 	}
 });
 

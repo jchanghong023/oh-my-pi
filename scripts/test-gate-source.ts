@@ -40,12 +40,11 @@ const CACHE_COMPONENTS: Record<string, true | undefined> = {
 };
 
 /** Conservative boundary for inputs Bun cannot trace through native or dynamic builds. */
-export function classifyFulltestChanges(changed: readonly string[]): { bun: boolean; rust: boolean; ui: boolean } {
+export function bunRequiresFullSelection(changed: readonly string[]): boolean {
 	const ordinarySource = (file: string) =>
 		/^packages\/coding-agent\/src\/(?:tools|repo)\/.+\.[cm]?tsx?$/.test(file) &&
 		!/(?:^|\/)(?:generated|generator|generators|fixtures?|native|build|config)(?:\/|[.-])/i.test(file);
-	const known = changed.every(ordinarySource);
-	return { bun: !known, rust: !known, ui: changed.length > 0 };
+	return !changed.every(ordinarySource);
 }
 
 /** Paths changed against a revision, including both sides of renames and untracked files. */

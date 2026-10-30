@@ -37,6 +37,7 @@
 ### Changed
 
 - Raise the shared Bun and Rust Nextest test concurrency ceiling to 28, bounded by available CPU cores and any lower Bun concurrency override.
+- Use cargo-delta to select affected Rust fork packages for fulltest, with conservative full-scope fallback and explicit selection reporting.
 - Run independent selected fork feature fulltest suites concurrently and distribute singleton and E2E tests to avoid serial bottlenecks.
 - Avoid repeating background Bash failures in wait results and completion receipts when the original tool card already shows the same job outcome, including after session restoration.
 - Clarified required todo append parameters and added retry guidance for missing phase or items without resetting progress.

@@ -11,11 +11,12 @@ import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
 import {
+	bunRequiresFullSelection,
 	captureChangedPaths,
 	captureSourceIdentity,
-	classifyFulltestChanges,
 	type SourceIdentity,
 } from "./test-gate-source";
+import { selectRustPackages, type RustDeltaSelection } from "./test-gate-delta";
 import { beginTestRun, finalizeTestRun, recordTestProducer, type TestReportRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
 import { runGateCommands, testConcurrencyLimit } from "./test-gate-scheduler";
@@ -227,6 +228,7 @@ export function selectChangedScriptTests(changed: readonly string[], files: read
 	const dependencies: Record<string, string[]> = {
 		fastcheck: ["fulltest"],
 		"test-gate-source": ["fulltest", "slowtest", "slowtest-wsl-stage", "ci-test-ts"],
+		"test-gate-delta": ["fulltest", "run-rs-task"],
 		"test-gate-scheduler": ["fulltest", "ci-test-ts", "run-rs-task"],
 		"test-gate-runtime": ["fulltest", "slowtest", "slowtest-wsl-stage", "test-gate-runtime", "test-gate-go"],
 		"test-gate-failure-events": [
@@ -266,6 +268,7 @@ interface FulltestInfrastructure {
 	runGateCommands: typeof runGateCommands;
 	fastcheckCommands: typeof fastcheckCommands;
 	bunTestSelection?: typeof bunTestSelection;
+	selectRustPackages?: typeof selectRustPackages;
 }
 
 const fulltestInfrastructure: FulltestInfrastructure = {
@@ -273,6 +276,7 @@ const fulltestInfrastructure: FulltestInfrastructure = {
 	captureChangedPaths,
 	runGateCommands,
 	fastcheckCommands,
+	selectRustPackages,
 };
 
 export async function runFulltest(
@@ -445,8 +449,33 @@ async function runFulltestObserved(
 		const changedPaths = await acquire("changed paths", () =>
 			infrastructure.captureChangedPaths(gate, gateRepoRoot, baseline ?? "HEAD"),
 		);
-		const affected = baseline ? classifyFulltestChanges(changedPaths) : undefined;
-		const recordNotSelected = async (producer: string, command: string[], scope: string, reason: string) => {
+		const bunRequiresFull = baseline ? bunRequiresFullSelection(changedPaths) : true;
+		const rustSelection: RustDeltaSelection | undefined = options.full
+			? undefined
+			: await (infrastructure.selectRustPackages ?? selectRustPackages)(gate, gateRepoRoot, baseline).catch(
+					error => {
+						if (
+							gate.signal.aborted ||
+							error instanceof GateAbortError ||
+							(error instanceof GateCommandError &&
+								(error.status === "TIMEOUT" || error.status === "INTERRUPTED"))
+						)
+							throw error;
+						return {
+							tool: "cargo-delta" as const,
+							mode: "full" as const,
+							packages: ["pi-wiki", "pi-natives"],
+							reason: `cargo-delta selection failed: ${String(error)}`,
+						};
+					},
+				);
+		const recordNotSelected = async (
+			producer: string,
+			command: string[],
+			scope: string,
+			reason: string,
+			rust = false,
+		) => {
 			if (!report || !baseline) return;
 			await recordTestProducer({
 				producer,
@@ -456,7 +485,9 @@ async function runFulltestObserved(
 				durationSeconds: 0,
 				exitCode: 0,
 				status: "not-selected",
-				selection: { tool: "git", mode: "affected", baseline, selected: 0, reason, changedPaths },
+				selection: rust
+					? { tool: "cargo-delta", mode: "affected", baseline, selected: 0, reason, changedPaths, packages: [] }
+					: { tool: "git", mode: "affected", baseline, selected: 0, reason, changedPaths },
 			});
 		};
 		// A clean committed tree has no changed script modules, so runs no script selftests.
@@ -514,30 +545,46 @@ async function runFulltestObserved(
 		}
 		let tests: GateCommand[] = [];
 		await attempt("test plan", async () => {
-			tests = fulltestCommands(options, home, afterBuild.digest).map(command =>
-				command.label.startsWith("test/TypeScript")
-					? {
-							...command,
-							env: { ...command.env, OMP_FULLTEST_BASELINE: baseline && !affected?.bun ? baseline : "none" },
-						}
-					: command,
-			);
-			if (affected && !affected.rust) {
+			tests = fulltestCommands(options, home, afterBuild.digest).map(command => {
+				if (command.label.startsWith("test/TypeScript")) {
+					return {
+						...command,
+						env: { ...command.env, OMP_FULLTEST_BASELINE: baseline && !bunRequiresFull ? baseline : "none" },
+					};
+				}
+				if (command.label.startsWith("test/Rust") && rustSelection) {
+					return {
+						...command,
+						env: {
+							...command.env,
+							OMP_RUST_DELTA_SELECTION: JSON.stringify(rustSelection),
+							OMP_FULLTEST_CHANGED_PATHS: JSON.stringify(changedPaths),
+						},
+					};
+				}
+				return command;
+			});
+			if (
+				rustSelection?.mode === "affected" &&
+				!rustSelection.packages.some(pkg => pkg === "pi-wiki" || pkg === "pi-natives")
+			) {
 				tests = tests.filter(command => !command.label.startsWith("test/Rust"));
 				await recordNotSelected(
 					"cargo nextest run",
 					["bun", "scripts/run-rs-task.ts", "test:rs"],
 					"rust-fork-features",
-					"no Rust or cross-language inputs changed",
+					rustSelection.reason,
+					true,
 				);
 				await recordNotSelected(
 					"cargo test --doc",
 					["bun", "scripts/run-rs-task.ts", "test:rs"],
 					"rust-fork-features",
-					"no Rust or cross-language inputs changed",
+					rustSelection.reason,
+					true,
 				);
 			}
-			if (affected && !affected.ui) {
+			if (baseline && changedPaths.length === 0) {
 				tests = tests.filter(command => command.label !== "smoke/isolated dev TUI PTY");
 				await recordNotSelected(
 					"ui-smoke/runner-stage",

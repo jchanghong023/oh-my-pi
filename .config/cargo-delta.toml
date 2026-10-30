@@ -1,0 +1,25 @@
+# Do not exclude dotfiles: Cargo configuration and other hidden inputs matter.
+file_exclude_patterns = ["target"]
+
+# Cargo-delta is best-effort. These include build.rs inputs assembled at runtime
+# and cross-language helper sources that its Rust parser cannot reliably follow.
+trip_wire_patterns = [
+  "Cargo.toml", "Cargo.lock", "rust-toolchain", "rust-toolchain.toml",
+  ".cargo/**", ".config/nextest.toml", ".config/cargo-delta.toml",
+  "**/Cargo.toml", "**/build.rs",
+  # N-API build/feature selection, its host helpers, and Rust gate execution.
+  "packages/natives/package.json", "packages/natives/scripts/**",
+  "scripts/bazel-natives.ts", "scripts/host-detect.ts", "scripts/stamp-native-version.ts",
+  "scripts/run-rs-task.ts", "scripts/test-gate-delta.ts", "scripts/test-gate-native-events.ts",
+  # Generates pi-ast's compiled grammar table.
+  "scripts/gen-grammars.ts",
+  "crates/pi-natives/src/syntaxes/**",
+  "crates/pi-natives/src/applefm/**",
+  "crates/pi-natives/src/desktop/macos/**",
+  "crates/pi-natives/src/oauth_callback/**",
+]
+
+[parser]
+mods = true
+includes = true
+file_refs = true

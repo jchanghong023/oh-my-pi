@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { captureChangedPaths, captureSourceIdentity, classifyFulltestChanges } from "./test-gate-source";
+import { bunRequiresFullSelection, captureChangedPaths, captureSourceIdentity } from "./test-gate-source";
 import type { GateCommand, GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
@@ -161,7 +161,7 @@ async function bunCanTraceChanges(root: string, baseline: string): Promise<boole
 				return { stdout };
 			},
 		} as unknown as GateRun;
-		return !classifyFulltestChanges(await captureChangedPaths(gitGate, root, baseline)).bun;
+		return !bunRequiresFullSelection(await captureChangedPaths(gitGate, root, baseline));
 	} catch {
 		return false;
 	}

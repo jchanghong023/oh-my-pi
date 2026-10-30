@@ -8,6 +8,11 @@ import { GateCommandError, reportGateFailure } from "./test-gate-failure-events"
 import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
+import type { RustDeltaSelection } from "./test-gate-delta";
+
+const forkPackages = ["pi-wiki", "pi-natives"] as const;
+const packageNamePattern = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+const baselinePattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -56,27 +61,7 @@ const TASK_COMMANDS = {
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
 	"lint:rs": [["cargo", "clippy", "--workspace", ...VENDORED_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"]],
-	"test:rs": [
-		[
-			"cargo",
-			"nextest",
-			"run",
-			`--test-threads=${testConcurrencyLimit()}`,
-			"--no-fail-fast",
-			// The plus reporter flushes each classified result before native grace cleanup.
-			"--message-format=libtest-json-plus",
-			"--message-format-version=0.1",
-			"-p",
-			"pi-wiki",
-			"-p",
-			"pi-natives",
-			"-E",
-			"package(pi-wiki) | (package(pi-natives) & (test(/^wiki::/) | test(/^python_symbols::/)))",
-			"--status-level=fail",
-			"--final-status-level=fail",
-		],
-		["cargo", "test", "-p", "pi-wiki", "--doc", "--no-fail-fast"],
-	],
+	"test:rs": [],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 const FULL_TEST_COMMANDS = [
 	[
@@ -116,17 +101,127 @@ if (taskName !== "test:rs" && taskName !== "fmt:rs" && !(isCI() || (await hasRus
 	process.exit(0);
 }
 
+const selection = taskName === "test:rs" && !full ? readDeltaSelection() : undefined;
+const selectedPackages =
+	selection?.mode === "affected" ? forkPackages.filter(name => selection.packages.includes(name)) : [...forkPackages];
 Object.assign(process.env, windowsTestTempOverride());
 prepareWindowsRustEnvironment();
-await runCommands(
-	full ? FULL_TEST_COMMANDS : TASK_COMMANDS[taskName],
-	taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined,
-);
+const commands =
+	taskName !== "test:rs" ? TASK_COMMANDS[taskName] : full ? FULL_TEST_COMMANDS : forkTestCommands(selectedPackages);
+await runCommands(commands, taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined);
+
+function readDeltaSelection(): RustDeltaSelection | undefined {
+	const raw = process.env.OMP_RUST_DELTA_SELECTION;
+	if (raw === undefined) return undefined;
+	try {
+		const value: unknown = JSON.parse(raw);
+		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+		const item = value as Record<string, unknown>;
+		if (
+			item.tool !== "cargo-delta" ||
+			!["affected", "full"].includes(item.mode as string) ||
+			!Array.isArray(item.packages) ||
+			!item.packages.every(name => typeof name === "string" && packageNamePattern.test(name)) ||
+			new Set(item.packages).size !== item.packages.length ||
+			typeof item.reason !== "string" ||
+			!item.reason.trim() ||
+			(item.baseline !== undefined && (typeof item.baseline !== "string" || !baselinePattern.test(item.baseline))) ||
+			(item.mode === "affected" && (typeof item.baseline !== "string" || !baselinePattern.test(item.baseline)))
+		)
+			throw new Error("invalid selection");
+		if (item.mode === "affected" && !validChangedPaths()) throw new Error("missing changed-path evidence");
+		return item as unknown as RustDeltaSelection;
+	} catch {
+		console.warn("Warning: invalid Rust delta selection or evidence; running full fork tests.");
+		return undefined;
+	}
+}
+
+function validChangedPaths(): string[] | undefined {
+	try {
+		const paths: unknown = JSON.parse(process.env.OMP_FULLTEST_CHANGED_PATHS ?? "null");
+		if (
+			!Array.isArray(paths) ||
+			!paths.every(
+				value =>
+					typeof value === "string" &&
+					value.length > 0 &&
+					!value.includes("\\") &&
+					!value.startsWith("/") &&
+					!/^[a-z]:/i.test(value) &&
+					value.split("/").every(part => part !== "" && part !== "." && part !== ".."),
+			)
+		)
+			return undefined;
+		return paths;
+	} catch {
+		return undefined;
+	}
+}
+
+function forkTestCommands(packages: readonly string[]): readonly (readonly string[])[] {
+	if (!packages.length) return [];
+	const wiki = packages.includes("pi-wiki");
+	const native = packages.includes("pi-natives");
+	const expression = [
+		wiki && "package(pi-wiki)",
+		native && "(package(pi-natives) & (test(/^wiki::/) | test(/^python_symbols::/)))",
+	]
+		.filter(Boolean)
+		.join(" | ");
+	return [
+		[
+			"cargo",
+			"nextest",
+			"run",
+			`--test-threads=${testConcurrencyLimit()}`,
+			"--no-fail-fast",
+			"--message-format=libtest-json-plus",
+			"--message-format-version=0.1",
+			...packages.flatMap(name => ["-p", name]),
+			"-E",
+			expression,
+			"--status-level=fail",
+			"--final-status-level=fail",
+		],
+		...(wiki ? [["cargo", "test", "-p", "pi-wiki", "--doc", "--no-fail-fast"]] : []),
+	];
+}
 
 async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
 	const run = scope ? await beginTestRun(scope) : undefined;
 	let exitCode = 0;
 	try {
+		if (selection?.mode === "affected") {
+			const skipped = !selectedPackages.length
+				? ([
+						["cargo nextest run", ["cargo", "nextest", "run"]],
+						["cargo test --doc", ["cargo", "test", "--doc"]],
+					] as const)
+				: !selectedPackages.includes("pi-wiki")
+					? ([["cargo test --doc", ["cargo", "test", "-p", "pi-wiki", "--doc"]]] as const)
+					: [];
+			for (const [producer, command] of skipped) {
+				await recordTestProducer({
+					producer,
+					command: [...command],
+					scope: scope!,
+					startedAt: new Date().toISOString(),
+					durationSeconds: 0,
+					exitCode: 0,
+					status: "not-selected",
+					selection: {
+						tool: "cargo-delta",
+						mode: "affected",
+						baseline: selection.baseline,
+						packages: [],
+						selected: 0,
+						changedPaths: validChangedPaths()!,
+						reason: producer === "cargo test --doc" ? "pi-wiki is not affected" : "no fork packages are affected",
+					},
+				});
+			}
+		}
 		for (const command of commands) {
 			let commandExitCode: number;
 			try {
@@ -370,13 +465,22 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				exitCode,
 				reportPath,
 				status: partial ? "partial" : undefined,
-				selection: {
-					tool: "cargo-nextest",
-					mode: "full",
-					reason: full
-						? "all workspace packages and test namespaces"
-						: "full pi-wiki package and pi-natives wiki bindings and python_symbols namespaces",
-				},
+				selection:
+					selection?.mode === "affected"
+						? {
+								tool: "cargo-delta",
+								mode: "affected",
+								baseline: selection.baseline,
+								packages: selectedPackages,
+								reason: selection.reason,
+							}
+						: {
+								tool: "cargo-nextest",
+								mode: "full",
+								reason: full
+									? "all workspace packages and test namespaces"
+									: "full pi-wiki package and pi-natives wiki bindings and python_symbols namespaces",
+							},
 				timingBasis: "nextest native JUnit case time",
 				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
 			});
@@ -398,7 +502,16 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 				exitCode,
 				status: exitCode === 0 ? "stage" : "failed",
 				timingBasis: "command wall time; Cargo doctests do not provide standard JUnit reports",
-				selection: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-wiki doctests" },
+				selection:
+					selection?.mode === "affected"
+						? {
+								tool: "cargo-delta",
+								mode: "affected",
+								baseline: selection.baseline,
+								packages: ["pi-wiki"],
+								reason: selection.reason,
+							}
+						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-wiki doctests" },
 				runnerVersion: toolVersion([executable, "--version"], env),
 			});
 		} catch (error) {
