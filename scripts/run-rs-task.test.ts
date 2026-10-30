@@ -158,7 +158,7 @@ describe("cargo-affected native selection", () => {
 					path.join(root, ".gitignore"),
 					"/target/\n/reports/\n/marker\n/scripts/\n/node_modules\n/packages\n",
 				);
-				const names = ["leaf", "other", "brush-core", "brush-parser", "cfg_aliases", "napi"];
+				const names = ["leaf", "consumer", "other", "brush-core", "brush-parser", "cfg_aliases", "napi"];
 				fs.writeFileSync(
 					path.join(root, "Cargo.toml"),
 					`[workspace]\nresolver = "2"\nmembers = ${JSON.stringify(names)}\n`,
@@ -167,13 +167,18 @@ describe("cargo-affected native selection", () => {
 					fs.mkdirSync(path.join(root, name, "src"), { recursive: true });
 					fs.writeFileSync(
 						path.join(root, name, "Cargo.toml"),
-						`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n`,
+						`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n` +
+							(name === "consumer"
+								? '\n[lib]\ncrate-type = ["cdylib"]\n\n[dependencies]\nleaf = { path = "../leaf" }\n'
+								: ""),
 					);
 					fs.writeFileSync(
 						path.join(root, name, "src", "lib.rs"),
-						name === "leaf" || name === "other"
-							? `#[test]\nfn ${name}_case() {\n    use std::io::Write;\n    writeln!(std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("MARKER").unwrap()).unwrap(), "${name}").unwrap();\n}\n`
-							: "",
+						name === "consumer"
+							? '#[test]\nfn consumer_case() { use std::io::Write; assert_eq!(leaf::value(), 1); writeln!(std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("MARKER").unwrap()).unwrap(), "consumer").unwrap(); }\n'
+							: name === "leaf" || name === "other"
+								? `${name === "leaf" ? "pub fn value() -> u8 { 1 }\n" : ""}#[test]\nfn ${name}_case() {\n    use std::io::Write;\n    writeln!(std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("MARKER").unwrap()).unwrap(), "${name}").unwrap();\n}\n`
+								: "",
 					);
 				}
 				const cargoLookup = Bun.spawnSync(["rustup", "which", "cargo"], {
@@ -258,6 +263,7 @@ describe("cargo-affected native selection", () => {
 				expect(recovered.producer).toBe("cargo affected collect");
 				expect(recovered.selection?.mode).toBe("full");
 				expect(fs.readFileSync(path.join(root, "marker"), "utf8").trim().split(/\r?\n/).sort()).toEqual([
+					"consumer",
 					"leaf",
 					"other",
 				]);
@@ -266,13 +272,16 @@ describe("cargo-affected native selection", () => {
 				const leaf = path.join(root, "leaf", "src", "lib.rs");
 				fs.writeFileSync(
 					leaf,
-					fs.readFileSync(leaf, "utf8").replace('"leaf").unwrap()', '"leaf_changed").unwrap()') +
+					fs
+						.readFileSync(leaf, "utf8")
+						.replace("-> u8 { 1 }", "-> u8 { 1 /* changed */ }")
+						.replace('"leaf").unwrap()', '"leaf_changed").unwrap()') +
 						'\n#[test]\nfn new_case() { use std::io::Write; writeln!(std::fs::OpenOptions::new().create(true).append(true).open(std::env::var("MARKER").unwrap()).unwrap(), "new").unwrap(); }\n',
 				);
 				const changed = await run();
 				expect(changed.selection?.mode).toBe("affected");
 				const markers = fs.readFileSync(path.join(root, "marker"), "utf8").trim().split(/\r?\n/).sort();
-				expect(markers).toEqual(["leaf_changed", "new"]);
+				expect(markers).toEqual(["consumer", "leaf_changed", "new"]);
 				// An interrupted baseline cannot be trusted on a dirty tree, where
 				// re-collection would incorrectly anchor working-tree lines to HEAD.
 				fs.rmSync(path.join(root, "marker"));
@@ -281,6 +290,7 @@ describe("cargo-affected native selection", () => {
 				expect(dirtyRecovery.producer).toBe("cargo affected run");
 				expect(dirtyRecovery.selection?.mode).toBe("full");
 				expect(fs.readFileSync(path.join(root, "marker"), "utf8").trim().split(/\r?\n/).sort()).toEqual([
+					"consumer",
 					"leaf_changed",
 					"new",
 					"other",

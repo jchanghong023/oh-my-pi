@@ -54,6 +54,7 @@ export interface BunSelection {
 	baseline?: string;
 	reason?: string;
 	selected?: number;
+	group?: "ordinary" | "startup";
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
@@ -70,9 +71,10 @@ export async function bunTestSelection(root: string = repoRoot): Promise<BunSele
 	} catch {
 		return fallback;
 	}
-	const candidates: { revision: string; started: number }[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
+	// Run directories are timestamp-prefixed by beginTestRun. Inspect newest
+	// first and stop at the first usable ancestor rather than parsing all history.
+	const directories = entries.filter(entry => entry.isDirectory()).sort((a, b) => b.name.localeCompare(a.name));
+	for (const entry of directories) {
 		try {
 			const run = JSON.parse(
 				await fs.readFile(path.join(root, "runs", "test-timing", entry.name, "run.json"), "utf8"),
@@ -98,26 +100,31 @@ export async function bunTestSelection(root: string = repoRoot): Promise<BunSele
 						producer.report === "available" &&
 						producer.selection?.mode !== "affected",
 				) ||
+				(producers.some(
+					(producer: TestProducerRecord) => (producer.selection as BunSelection | undefined)?.group,
+				) &&
+					!["ordinary", "startup"].every(group =>
+						producers.some(
+							(producer: TestProducerRecord) =>
+								(producer.selection as BunSelection | undefined)?.group === group,
+						),
+					)) ||
 				!/^[a-f0-9]{40,64}$/i.test(run.sourceRevision ?? "") ||
 				!Number.isFinite(Date.parse(run.startedAtUtc))
 			)
 				continue;
-			candidates.push({ revision: run.sourceRevision, started: Date.parse(run.startedAtUtc) });
+			try {
+				const child = Bun.spawn(["git", "merge-base", "--is-ancestor", run.sourceRevision, "HEAD"], {
+					cwd: root,
+					stdout: "ignore",
+					stderr: "ignore",
+				});
+				if ((await child.exited) === 0) return { tool: "bun", mode: "affected", baseline: run.sourceRevision };
+			} catch {
+				return { ...fallback, reason: "Git unavailable to validate baseline" };
+			}
 		} catch {
 			// Unreadable reports are not baselines.
-		}
-	}
-	candidates.sort((a, b) => b.started - a.started);
-	for (const candidate of candidates) {
-		try {
-			const child = Bun.spawn(["git", "merge-base", "--is-ancestor", candidate.revision, "HEAD"], {
-				cwd: root,
-				stdout: "ignore",
-				stderr: "ignore",
-			});
-			if ((await child.exited) === 0) return { tool: "bun", mode: "affected", baseline: candidate.revision };
-		} catch {
-			return { ...fallback, reason: "Git unavailable to validate baseline" };
 		}
 	}
 	return fallback;
@@ -439,6 +446,19 @@ function isIntegrationTest(testFile: string): boolean {
 
 export function isIntegrationCommand(command: TestCommand): boolean {
 	return command.cwd === "packages/coding-agent" && command.command.some(isIntegrationTest);
+}
+
+// Keep entire original chunks together, including unrelated files sharing a UI
+// chunk with the goal test, so process isolation and chunk membership are stable.
+function isStartupCommand(command: TestCommand): boolean {
+	return (
+		command.cwd === "packages/coding-agent" &&
+		command.command.some(
+			file =>
+				/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
+				file === "test/modes/zcode-hosts-goal.test.ts",
+		)
+	);
 }
 
 async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
@@ -1419,6 +1439,11 @@ if (import.meta.main) {
 			`Unknown mode ${shellQuote(requestedMode)}. Expected one of: ${Object.keys(validModes).join(", ")}`,
 		);
 	}
+	const deferStartup = args.includes("--defer-startup");
+	const onlyStartup = args.includes("--only-startup");
+	if (deferStartup && onlyStartup) throw new Error("--defer-startup and --only-startup are mutually exclusive");
+	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts")
+		throw new Error("--defer-startup and --only-startup require local-ts mode");
 	const commands = await commandsForMode(requestedMode as Mode);
 	// Real desktop input still requires independent authorization. All other
 	// files run without Git-, dependency-, or environment-based selection.
@@ -1442,6 +1467,11 @@ if (import.meta.main) {
 	}
 	const localMode = requestedMode === "local" || requestedMode === "local-ts";
 	let requestedCommands = localMode ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	if (deferStartup || onlyStartup)
+		requestedCommands = requestedCommands.filter(command => isStartupCommand(command) === onlyStartup);
+	const group = onlyStartup ? "startup" : deferStartup ? "ordinary" : "all";
+	if (deferStartup || onlyStartup)
+		console.log(`test-command-group=${group} chunks=${requestedCommands.length}; partial local-ts plan`);
 	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
 	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
 		throw new Error("Expected at most one --changed or --changed=<ref> option");
@@ -1455,7 +1485,13 @@ if (import.meta.main) {
 		: localMode
 			? await bunTestSelection()
 			: { tool: "bun", mode: "full", reason: "full selection requested" };
-	if (requestedMode === "local-ts" && !changedArgs.length && (await bunCleanBaseline(selection))) {
+	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
+	if (
+		requestedCommands.length &&
+		requestedMode === "local-ts" &&
+		!changedArgs.length &&
+		(await bunCleanBaseline(selection))
+	) {
 		// Bun itself confirms the zero-file selection; the explicit safe file keeps
 		// desktop input excluded even if the worktree changes before it starts.
 		requestedCommands = [
@@ -1471,7 +1507,7 @@ if (import.meta.main) {
 	console.log(
 		selection.mode === "affected"
 			? `selection=affected-tests-only tool=bun baseline=${selection.baseline ?? "working-tree"}; not full coverage`
-			: `selection=full tool=bun reason=${selection.reason}`,
+			: `selection=${group === "all" ? "full" : `full-${group}-group`} tool=bun reason=${selection.reason}`,
 	);
 	for (const command of requestedCommands) {
 		if (command.parallel === undefined) continue;

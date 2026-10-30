@@ -296,90 +296,97 @@ async function recordUiCase(name: string): Promise<void> {
 
 if (process.argv.includes("--repo-only")) {
 	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
-	await recordUiCase("repo-only");
+	await recordUiCase("repo-index-e2e");
 	await endTestRun(timingRun, 0);
 	cancelFailureReport();
 	process.exit(0);
 }
 
-// ── 1. Startup render ────────────────────────────────────────────────────────
-console.log("ui-smoke: waiting for the full-screen interface to render…");
-const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
-stubServerCleanup.run = async () => {
-	await removeFixture(baseConfigRoot);
-};
-// Startup/input/exit never submits a model request; keep any accidental target on loopback.
-const baseClaudeDir = path.join(baseConfigRoot, "claude");
-await Bun.write(
-	path.join(baseClaudeDir, "settings.json"),
-	JSON.stringify({
-		env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1", ANTHROPIC_AUTH_TOKEN: "ui-smoke-fixture" },
-	}),
-);
-const baseEnv = tuiEnvironment({
-	PI_CONFIG_DIR: path.basename(baseConfigRoot),
-	OMP_CONFIG_ROOT: baseConfigRoot,
-	OMP_PROFILE: "localci-ui",
-	PI_PROFILE: "",
-	OMP_OFFLINE: "1",
-	CLAUDE_CONFIG_DIR: baseClaudeDir,
-});
-const baseAgentDir = path.join(baseConfigRoot, "profiles", "localci-ui", "agent");
-await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
-await fs.writeFile(
-	path.join(baseAgentDir, "config.yml"),
-	"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
-);
-const main = startTui(["--profile", "localci-ui"], baseEnv);
-const rendered = await waitFor(() => {
-	// The TUI repaints in place: hides the cursor, positions it absolutely,
-	// and paints the status line (whose "π" brand segment is present under
-	// the fork-default `composer.shape=pi`). It does not use the alternate screen.
-	const cursorControl =
-		main.output.includes("\x1b[?25l") || main.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(main.output);
-	return cursorControl && main.output.includes("π") && normalizePtyOutput(main.output).includes("Ctrl+T");
-}, 120_000);
-if (!rendered) {
-	fail(
-		`interface did not render within 120 s (bytes=${main.totalBytes}, cursorControl=${/\x1b\[\d+;\d+H/.test(main.output)}, mainMarker=${main.output.includes("π")})`,
-		main.session,
+if (!process.argv.includes("--team-group-only")) {
+	// ── 1. Startup render ────────────────────────────────────────────────────────
+	console.log("ui-smoke: waiting for the full-screen interface to render…");
+	const baseConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-base-smoke-"));
+	stubServerCleanup.run = async () => {
+		await removeFixture(baseConfigRoot);
+	};
+	// Startup/input/exit never submits a model request; keep any accidental target on loopback.
+	const baseClaudeDir = path.join(baseConfigRoot, "claude");
+	await Bun.write(
+		path.join(baseClaudeDir, "settings.json"),
+		JSON.stringify({
+			env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:1", ANTHROPIC_AUTH_TOKEN: "ui-smoke-fixture" },
+		}),
 	);
-}
-console.log(`ui-smoke: interface rendered (${main.totalBytes} bytes captured)`);
+	const baseEnv = tuiEnvironment({
+		PI_CONFIG_DIR: path.basename(baseConfigRoot),
+		OMP_CONFIG_ROOT: baseConfigRoot,
+		OMP_PROFILE: "localci-ui",
+		PI_PROFILE: "",
+		OMP_OFFLINE: "1",
+		CLAUDE_CONFIG_DIR: baseClaudeDir,
+	});
+	const baseAgentDir = path.join(baseConfigRoot, "profiles", "localci-ui", "agent");
+	await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
+	await fs.writeFile(
+		path.join(baseAgentDir, "config.yml"),
+		"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
+	);
+	const main = startTui(["--profile", "localci-ui"], baseEnv);
+	const rendered = await waitFor(() => {
+		// The TUI repaints in place: hides the cursor, positions it absolutely,
+		// and paints the status line (whose "π" brand segment is present under
+		// the fork-default `composer.shape=pi`). It does not use the alternate screen.
+		const cursorControl =
+			main.output.includes("\x1b[?25l") || main.output.includes("\x1b[H") || /\x1b\[\d+;\d+H/.test(main.output);
+		return cursorControl && main.output.includes("π") && normalizePtyOutput(main.output).includes("Ctrl+T");
+	}, 120_000);
+	if (!rendered) {
+		fail(
+			`interface did not render within 120 s (bytes=${main.totalBytes}, cursorControl=${/\x1b\[\d+;\d+H/.test(main.output)}, mainMarker=${main.output.includes("π")})`,
+			main.session,
+		);
+	}
+	console.log(`ui-smoke: interface rendered (${main.totalBytes} bytes captured)`);
 
-// ── 2. Liveness probe: a keypress must trigger a repaint ────────────────────
-if (!teamOnly) {
-	const bytesBefore = main.totalBytes;
-	main.session.write("\x1b[Z"); // Shift-Tab (plan mode toggle): always handled by the composer
-	await sleep(1_500);
-	main.session.write("\x1b[Z"); // toggle back
-	await sleep(1_500);
-	if (main.totalBytes <= bytesBefore) {
-		fail("no repaint after keypress; the input loop looks dead", main.session);
+	// ── 2. Liveness probe: a keypress must trigger a repaint ────────────────────
+	if (!teamOnly) {
+		const bytesBefore = main.totalBytes;
+		main.session.write("\x1b[Z"); // Shift-Tab (plan mode toggle): always handled by the composer
+		await sleep(1_500);
+		main.session.write("\x1b[Z"); // toggle back
+		await sleep(1_500);
+		if (main.totalBytes <= bytesBefore) {
+			fail("no repaint after keypress; the input loop looks dead", main.session);
+		}
+		console.log(`ui-smoke: input loop alive (+${main.totalBytes - bytesBefore} bytes after keypress)`);
 	}
-	console.log(`ui-smoke: input loop alive (+${main.totalBytes - bytesBefore} bytes after keypress)`);
-}
 
-// ── 3. Clean exit ───────────────────────────────────────────────────────────
-// Ctrl+D is the `app.exit` keybinding in both the startup composer and the
-// main session: one press runs the graceful shutdown path (exit code 0).
-// Ctrl+C needs a <500 ms double-press and exits 130 mid-teardown, so it is
-// deliberately not used here.
-console.log("ui-smoke: sending Ctrl+D to exit…");
-main.session.write("\x04");
-{
-	const outcome = await Promise.race([main.exitPromise, sleep(20_000).then(() => undefined)]);
-	if (!outcome) {
-		fail("TUI did not exit within 20 s after Ctrl+D", main.session);
+	// ── 3. Clean exit ───────────────────────────────────────────────────────────
+	// Ctrl+D is the `app.exit` keybinding in both the startup composer and the
+	// main session: one press runs the graceful shutdown path (exit code 0).
+	// Ctrl+C needs a <500 ms double-press and exits 130 mid-teardown, so it is
+	// deliberately not used here.
+	console.log("ui-smoke: sending Ctrl+D to exit…");
+	main.session.write("\x04");
+	{
+		const outcome = await Promise.race([main.exitPromise, sleep(20_000).then(() => undefined)]);
+		if (!outcome) {
+			fail("TUI did not exit within 20 s after Ctrl+D", main.session);
+		}
+		if (outcome.exitCode !== 0) {
+			fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
+		}
 	}
-	if (outcome.exitCode !== 0) {
-		fail(`TUI exited with code ${outcome.exitCode} (expected 0)`);
-	}
+	await fs.access(path.join(baseAgentDir, "agent.db"));
+	console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
+	await cleanupSmokeFixture();
+	await recordUiCase("startup-render-liveness-and-exit");
 }
-await fs.access(path.join(baseAgentDir, "agent.db"));
-console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
-await cleanupSmokeFixture();
-await recordUiCase("startup-render-liveness-and-exit");
+if (process.argv.includes("--startup-only")) {
+	await endTestRun(timingRun, 0);
+	cancelFailureReport();
+	process.exit(0);
+}
 
 // ── 4. /team end-to-end against a local stub Anthropic server ────────────────
 // The `/team` case runs a real TUI whose session model and team.members use a
@@ -1096,9 +1103,15 @@ try {
 }
 
 await recordUiCase("team-cancel-propagation");
-await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
-await recordUiCase("repo-index-e2e");
+if (!process.argv.includes("--team-group-only")) {
+	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
+	await recordUiCase("repo-index-e2e");
+}
 
 await endTestRun(timingRun, 0);
 cancelFailureReport();
-console.log("ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end");
+console.log(
+	process.argv.includes("--team-group-only")
+		? "ui-smoke: PASS — /team runs and cancels"
+		: "ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end",
+);

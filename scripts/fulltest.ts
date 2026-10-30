@@ -99,11 +99,22 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceD
 	return [
 		{
 			label: "test/TypeScript full suite",
-			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop"],
+			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--defer-startup"],
 			cwd: gateRepoRoot,
 			env: {
 				...localTestEnvironment(path.join(home, "typescript")),
 				OMP_TEST_CONCURRENCY: "all",
+				OMP_FULLTEST_AFFECTED: "1",
+				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
+			},
+		},
+		{
+			label: "test/TypeScript startup suite",
+			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"],
+			cwd: gateRepoRoot,
+			env: {
+				...localTestEnvironment(path.join(home, "typescript-startup")),
+				OMP_TEST_CONCURRENCY: "1",
 				OMP_FULLTEST_AFFECTED: "1",
 				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},
@@ -447,7 +458,10 @@ async function runFulltestObserved(
 				rustChecksFinished.resolve();
 			}
 		})();
-		const otherTests = tests.filter(command => !command.label.startsWith("test/Rust"));
+		const startupTests = tests.filter(command => command.label === "test/TypeScript startup suite");
+		const otherTests = tests.filter(
+			command => !command.label.startsWith("test/Rust") && command.label !== "test/TypeScript startup suite",
+		);
 		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
 		const testRun = attempt("non-Rust tests", () =>
 			runGateCommands(gate, otherTests, { concurrency: concurrency - 1 }),
@@ -457,6 +471,7 @@ async function runFulltestObserved(
 			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
 		})();
 		await Promise.all([staticRun, testRun, rustRun]);
+		await attempt("TypeScript startup tests", () => runGateCommands(gate, startupTests, { concurrency: 1 }));
 		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		logger.info("Fulltest source stability resolved", {
 			component: "test-gate-fulltest",

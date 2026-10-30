@@ -260,7 +260,8 @@ For the bash tool specifically:
 
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
-- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It runs `cargo nextest run` (config: `.config/nextest.toml`) followed by a `cargo test --doc` pass, because nextest does not execute doctests. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
+- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It uses cargo-affected and cargo-nextest (config: `.config/nextest.toml`), then runs `cargo test --doc`; `--collect` explicitly refreshes the clean-tree coverage baseline and `--full` forces all Nextest cases. Doctests remain independent because Nextest does not execute them. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
+- Required cargo-affected compatibility tool: explicitly run `bun scripts/setup-cargo-affected.ts <cargo-affected-0.4.1-source-dir>` after native bindings are available. Gates use the prepared `target/omp-tools/bin` tool but NEVER install it automatically; see [verification requirements](openspec/specs/fork-verification-gates/spec.md).
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 ## Rust Build Profiles
 

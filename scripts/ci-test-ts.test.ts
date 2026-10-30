@@ -83,6 +83,18 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers[0] = { scope: "ci-test-ts:local-ts", exitCode: 0, status: "passed", report: "available" };
 		await save();
+		report.producers[0] = {
+			...report.producers[0]!,
+			selection: { mode: "full", group: "ordinary" },
+		} as (typeof report.producers)[number];
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers.push({
+			...report.producers[0]!,
+			selection: { mode: "full", group: "startup" },
+		} as (typeof report.producers)[number]);
+		await save();
+		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
 		await git("add", "fixture.ts");
 		await git("commit", "-qm", "working tree change");
 		await git("checkout", "-q", "--orphan", "unrelated");
@@ -433,6 +445,11 @@ test("local suites run fully and failures do not hide later cases or commands", 
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts"], { OMP_TEST_SHARD: "1/20" });
 		expect(await executed()).toEqual(fullMarkers);
 		await clear();
+		const emptyStartup = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--only-startup"]);
+		expect(emptyStartup).toContain("test-command-group=startup chunks=0");
+		expect(await executed()).toEqual([]);
+		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup", "--only-startup"], {}, 1);
+		expect(await executed()).toEqual([]);
 		const fulltest = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
 			command => command.label === "test/TypeScript full suite",
 		)!;
@@ -456,6 +473,37 @@ test("local suites run fully and failures do not hide later cases or commands", 
 			);
 			expect(await executed()).toEqual(fullMarkers);
 		}
+		const startupFiles = ["test/spec-driven/tui-start.e2e.test.ts", "test/modes/zcode-hosts-goal.test.ts"];
+		const uiCompanion = "test/modes/zcode-hosts-companion.test.ts";
+		for (const file of [...startupFiles, uiCompanion]) await put(`packages/coding-agent/${file}`, fixture(file));
+		const partitionMarkers = [...fullMarkers.filter(name => name !== "desktop"), ...startupFiles, uiCompanion].sort();
+		await clear();
+		const ordinaryOutput = await run([
+			process.execPath,
+			"scripts/ci-test-ts.ts",
+			"local-ts",
+			"--exclude-desktop",
+			"--defer-startup",
+		]);
+		const ordinaryMarkers = await executed();
+		expect(ordinaryOutput).toContain("test-command-group=ordinary");
+		for (const file of startupFiles) expect(ordinaryMarkers).not.toContain(file);
+		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"]);
+		expect(await executed()).toEqual(partitionMarkers);
+		const startupDryRun = await run([
+			process.execPath,
+			"scripts/ci-test-ts.ts",
+			"local-ts",
+			"--only-startup",
+			"--dry-run",
+		]);
+		const goalChunk = startupDryRun
+			.split("\n")
+			.find(line => line.startsWith("$ ") && line.includes(startupFiles[1]!));
+		expect(goalChunk).toContain(uiCompanion);
+		expect(ordinaryMarkers).not.toContain(uiCompanion);
+		fullMarkers.push(...startupFiles, uiCompanion);
+		fullMarkers.sort();
 		// Exercise chunk construction without starting the larger fixture suites.
 		const singletonFiles = Array.from(
 			{ length: 23 },

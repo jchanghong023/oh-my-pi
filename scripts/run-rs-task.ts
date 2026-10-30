@@ -168,7 +168,10 @@ function cargoEnvironment(binary: string): Record<string, string> {
 	const toolchainBin = path.dirname(binary);
 	const pathSep = process.platform === "win32" ? ";" : ":";
 	const currentPath = env.PATH ?? env.Path ?? "";
-	env.PATH = currentPath === "" ? toolchainBin : `${toolchainBin}${pathSep}${currentPath}`;
+	const localTools = path.join(repoRoot, "target", "omp-tools", "bin");
+	const affected = path.join(localTools, process.platform === "win32" ? "cargo-affected.exe" : "cargo-affected");
+	const entries = [fs.existsSync(affected) ? localTools : undefined, toolchainBin, currentPath].filter(Boolean);
+	env.PATH = entries.join(pathSep);
 	return env;
 }
 

@@ -95,6 +95,8 @@
 
 ### Fixed
 
+- Prevent full verification from timing out startup-sensitive TUI/RPC tests under heavy load, while overlapping independent real TUI smoke scenarios without reducing coverage.
+- Keep native Rust affected-test collection working for cdylib targets and reliably clean up owned Chromium upload fixtures on Windows.
 - Require an explicit task or phase before todo completion, removal, or abandonment.
 - Reject unnamed Bash readiness checks and asynchronous PTY requests before executing commands; retain started service details if log retrieval fails.
 - Report files already changed when a multi-file edit fails partway.

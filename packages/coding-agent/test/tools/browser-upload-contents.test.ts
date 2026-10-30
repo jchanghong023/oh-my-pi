@@ -16,6 +16,8 @@ import {
 	UploadStaging,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/upload-files";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools/index";
+import { Process } from "@oh-my-pi/pi-natives";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { ElementHandle, Page } from "puppeteer-core";
 import { rejectionOf } from "../helpers/rejection";
 import { chromiumAvailable } from "./chromium-probe";
@@ -204,6 +206,8 @@ async function openConnectedTab(toolCallId: string, options: { page?: string; pr
 		],
 		{ stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 	);
+	// Keep a stable reference so Windows can still identify the owned tree if the root exits.
+	const browserProcess = Process.fromPid(child.pid);
 	const proxy = startCdpProxy(port, options.proxy ?? {});
 	const session = makeSession();
 	const prelude = createBrowserPrelude(session);
@@ -212,9 +216,11 @@ async function openConnectedTab(toolCallId: string, options: { page?: string; pr
 	const close = async () => {
 		await prelude.invoke({ action: "close", name }, context).catch(() => undefined);
 		proxy.stop();
-		child.kill();
+		if (browserProcess && !(await browserProcess.terminate({ gracefulMs: 2000, timeoutMs: 500 }))) {
+			throw new Error(`Failed to terminate Chromium process tree ${child.pid}`);
+		}
 		await child.exited;
-		await fs.rm(root, { recursive: true, force: true });
+		await removeWithRetries(root);
 	};
 	try {
 		await waitForCdp(`http://127.0.0.1:${port}`, 15_000);

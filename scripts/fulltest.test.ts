@@ -355,6 +355,116 @@ describe("fulltest lane scheduling", () => {
 			}
 		});
 	}
+
+	test("runs startup tests only after static and ordinary test lanes settle, even on failure", async () => {
+		const staticStarted = Promise.withResolvers<void>();
+		const ordinaryStarted = Promise.withResolvers<void>();
+		const rustStarted = Promise.withResolvers<void>();
+		const finishStatic = Promise.withResolvers<void>();
+		const finishOrdinary = Promise.withResolvers<void>();
+		const finishRust = Promise.withResolvers<void>();
+		const ordinarySettled = Promise.withResolvers<void>();
+		const rustSettled = Promise.withResolvers<void>();
+		const failures: unknown[] = [];
+		let startupHasStarted = false;
+		let ordinaryHome: string | undefined;
+		let sourceCaptures = 0;
+		const identity: SourceIdentity = {
+			head: "head",
+			digest: "digest",
+			dirty: false,
+			status: "",
+			files: [],
+		};
+		const gate = {
+			signal: new AbortController().signal,
+			charged: async <T>(operation: () => T | Promise<T>) => operation(),
+			run: async () => {},
+			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+			record: (error: unknown) => {
+				failures.push(error);
+				return error;
+			},
+			fail: (error: unknown) => error,
+		} as unknown as GateRun;
+		const run = runFulltest(
+			gate,
+			{ debug: false },
+			{
+				captureSourceIdentity: async () => {
+					sourceCaptures++;
+					if (sourceCaptures === 4) expect(startupHasStarted).toBe(true);
+					return identity;
+				},
+				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
+				runGateCommands: async (_runner, commands, options) => {
+					const ordinary = commands.find(command => command.label === "test/TypeScript full suite");
+					const startup = commands.find(command => command.label === "test/TypeScript startup suite");
+					if (commands.some(command => command.label === "static/TS")) {
+						staticStarted.resolve();
+						await finishStatic.promise;
+					} else if (ordinary) {
+						expect(startup).toBeUndefined();
+						expect(ordinary.argv).toEqual([
+							"bun",
+							"scripts/ci-test-ts.ts",
+							"local-ts",
+							"--exclude-desktop",
+							"--defer-startup",
+						]);
+						expect(ordinary.env?.OMP_FULLTEST_AFFECTED).toBe("1");
+						expect(ordinary.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
+						ordinaryHome = ordinary.env?.HOME;
+						ordinaryStarted.resolve();
+						await finishOrdinary.promise;
+						ordinarySettled.resolve();
+						throw new Error("ordinary failure");
+					} else if (commands.some(command => command.label.startsWith("test/Rust"))) {
+						rustStarted.resolve();
+						await finishRust.promise;
+						rustSettled.resolve();
+						throw new Error("Rust failure");
+					} else if (startup) {
+						expect(commands).toHaveLength(1);
+						expect(startup.argv).toEqual([
+							"bun",
+							"scripts/ci-test-ts.ts",
+							"local-ts",
+							"--exclude-desktop",
+							"--only-startup",
+						]);
+						expect(startup.env?.HOME).toBeDefined();
+						expect(startup.env?.HOME).not.toBe(ordinaryHome);
+						expect(startup.env?.OMP_TEST_CONCURRENCY).toBe("1");
+						expect(startup.env?.OMP_FULLTEST_AFFECTED).toBe("1");
+						expect(startup.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
+						expect(options?.concurrency).toBe(1);
+						startupHasStarted = true;
+					}
+				},
+			},
+		);
+		try {
+			await Promise.all([staticStarted.promise, ordinaryStarted.promise, rustStarted.promise]);
+			expect(startupHasStarted).toBe(false);
+			finishOrdinary.resolve();
+			await ordinarySettled.promise;
+			expect(startupHasStarted).toBe(false);
+			finishRust.resolve();
+			await rustSettled.promise;
+			expect(startupHasStarted).toBe(false);
+			finishStatic.resolve();
+			await run;
+			expect(startupHasStarted).toBe(true);
+			expect(sourceCaptures).toBe(4);
+			expect(failures.map(error => String(error))).toEqual(["Error: ordinary failure", "Error: Rust failure"]);
+		} finally {
+			finishOrdinary.resolve();
+			finishRust.resolve();
+			finishStatic.resolve();
+			await run;
+		}
+	});
 });
 
 describe("gate-local profile fixture isolation", () => {
