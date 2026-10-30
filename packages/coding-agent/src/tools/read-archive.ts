@@ -35,6 +35,7 @@ import { formatBytes } from "@oh-my-pi/pi-tui/render/render-utils";
 import { throwIfAborted } from "./tool-errors";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { toolResult } from "./tool-result";
+import { RACY_STAMP_WINDOW_MS } from "./racy-stamp";
 
 interface ResolvedArchiveReadPath {
 	absolutePath: string;
@@ -75,6 +76,8 @@ async function openArchiveCached(absolutePath: string): Promise<ArchiveReader> {
 	// Windows can preserve ctime across rapid same-size writes, even before
 	// restoring mtime. Metadata cannot safely validate a cached member index.
 	if (process.platform === "win32") return openArchive(absolutePath);
+	// The clock is read before the stat, so a change landing between the two counts as recent.
+	const checkedAtMs = Date.now();
 	// A vanished or unreadable archive is reported by the opener, as it always has been.
 	const stat = await Bun.file(absolutePath)
 		.stat()
@@ -91,7 +94,7 @@ async function openArchiveCached(absolutePath: string): Promise<ArchiveReader> {
 		return cached.reader;
 	}
 	const reader = await openArchive(absolutePath);
-	if (!CACHEABLE_ARCHIVE_FORMATS[reader.format]) {
+	if (!CACHEABLE_ARCHIVE_FORMATS[reader.format] || checkedAtMs - stat.ctimeMs < RACY_STAMP_WINDOW_MS) {
 		archiveReaderCache.delete(absolutePath);
 		return reader;
 	}
