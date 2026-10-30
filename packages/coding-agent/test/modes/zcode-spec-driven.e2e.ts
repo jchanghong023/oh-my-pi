@@ -897,22 +897,33 @@ describe("Native Dev public stdio acceptance", () => {
 			expect((await peer.phase(session, "solution")).spec.interaction?.recipient?.sessionId).toBe(solution.stageId);
 			const mutateQueue = async (id: string, base: { baseRevision?: number; baseLogEpoch?: string } = {}) => {
 				await peer.subscribe(id, `native-stage-cas-${id}`, "desktop-continuous");
-				const state = v4ConversationRowsRangeResultSchema.parse(
-					await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 1 }),
-				);
-				return commandAckSchema.parse(
-					await peer.request("v4/command", {
-						commandId: crypto.randomUUID(),
-						clientId: "native-stage-cas",
-						issuedAt: Date.now(),
-						sessionId: id,
-						baseRevision: state.atRevision,
-						baseLogEpoch: state.atLogEpoch,
-						...base,
-						type: "setAutoDrain",
-						payload: { autoDrain: true },
-					}),
-				);
+				for (;;) {
+					const state = v4ConversationRowsRangeResultSchema.parse(
+						await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 1 }),
+					);
+					const result = commandAckSchema.parse(
+						await peer.request("v4/command", {
+							commandId: crypto.randomUUID(),
+							clientId: "native-stage-cas",
+							issuedAt: Date.now(),
+							sessionId: id,
+							baseRevision: state.atRevision,
+							baseLogEpoch: state.atLogEpoch,
+							...base,
+							type: "setAutoDrain",
+							payload: { autoDrain: true },
+						}),
+					);
+					// A live stage can advance between the watermark read and command admission.
+					// Preserve deliberately stale revision probes; refresh only incidental conflicts.
+					if (
+						base.baseRevision === undefined &&
+						result.status === "stale" &&
+						result.reasonCode === "guard.revision"
+					)
+						continue;
+					return result;
+				}
 			};
 			const rootWatermark = v4ConversationRowsRangeResultSchema.parse(
 				await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 1 }),
