@@ -7,6 +7,7 @@ import {
 	budgetedParallel,
 	bunTestSelection,
 	isIntegrationCommand,
+	isLimitedIntegrationCommand,
 	prioritizeLocalCommands,
 	runBoundedPool,
 	testConcurrency,
@@ -160,7 +161,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 
 test("shared test concurrency limit respects platform and available cores", () => {
 	for (const platform of ["win32", "linux", "darwin"] as const) {
-		const cap = platform === "win32" ? 14 : 28;
+		const cap = 28;
 		expect(testConcurrencyLimit(0, platform)).toBe(1);
 		expect(testConcurrencyLimit(1, platform)).toBe(1);
 		expect(testConcurrencyLimit(6.9, platform)).toBe(6);
@@ -183,12 +184,11 @@ test("chunk pools respect CPU, command count and explicit concurrency limits", (
 	expect(testConcurrency(3, "27", 64)).toBe(3);
 	expect(testConcurrency(40, "4.9", 6)).toBe(4);
 	expect(() => testConcurrency(40, "invalid", 64)).toThrow();
-	expect(testConcurrency(40, "all", 64, false, "win32")).toBe(14);
-	expect(testConcurrency(40, "all", 64, true, "win32")).toBe(20);
-	expect(testConcurrency(40, "all", 16, true, "win32")).toBe(16);
-	expect(testConcurrency(3, "all", 64, true, "win32")).toBe(3);
-	expect(testConcurrency(40, "2", 64, true, "win32")).toBe(2);
-	expect(testConcurrency(40, "all", 64, true, "linux")).toBe(28);
+	expect(testConcurrency(40, "all", 64, "win32")).toBe(28);
+	expect(testConcurrency(40, "all", 16, "win32")).toBe(16);
+	expect(testConcurrency(3, "all", 64, "win32")).toBe(3);
+	expect(testConcurrency(40, "2", 64, "win32")).toBe(2);
+	expect(testConcurrency(40, "all", 64, "linux")).toBe(28);
 });
 
 test("integration chunk classification matches coding-agent test paths only", () => {
@@ -215,6 +215,15 @@ test("integration chunk classification matches coding-agent test paths only", ()
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/modes/zcode-workflow.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/tui", ["test/process.e2e.test.ts"]))).toBe(false);
+});
+
+test("startup integration chunks bypass only the heavy integration limit", () => {
+	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
+	const startup = command("test/spec-driven/tui-example.e2e.test.ts");
+	expect(isIntegrationCommand(startup)).toBe(true);
+	expect(isLimitedIntegrationCommand(startup)).toBe(false);
+	expect(isLimitedIntegrationCommand(command("test/modes/zcode-hosts-goal.test.ts"))).toBe(false);
+	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
 test("bounded pool runs eligible chunks in order, caps heavy work and drains the entire queue", async () => {
@@ -294,7 +303,9 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 	for (const [cores, count, expected] of [
 		[1, 3, 1],
 		[8, 1, 1],
-		[8, 3, 2],
+		[8, 3, 3],
+		[64, 40, 28],
+		[16, 40, 16],
 	] as const) {
 		const files = Array.from({ length: count }, (_, index) => index);
 		const releases = new Map<number, () => void>();
@@ -303,7 +314,12 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 		const pool = runBoundedPool(
 			files,
 			testConcurrency(count, startup.env?.OMP_TEST_CONCURRENCY, cores),
-			() => false,
+			() =>
+				isLimitedIntegrationCommand({
+					label: "startup",
+					cwd: "packages/coding-agent",
+					command: ["bun", "test", "test/spec-driven/tui-example.e2e.test.ts"],
+				}),
 			4,
 			async file => {
 				active++;

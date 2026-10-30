@@ -132,7 +132,6 @@ impl GlobMatch {
 	pub(crate) const fn millis(nanos: i64) -> f64 {
 		nanos.div_euclid(1_000_000) as f64
 	}
-
 }
 
 /// Find filesystem entries matching a glob pattern.
@@ -198,7 +197,9 @@ pub fn glob<'env>(
 			.map_err(|err| match err {
 				pi_walker::glob::GlobError::Walk(err) => task::walk_failure(err),
 				pi_walker::glob::GlobError::Directory(err) => Error::from_reason(format!(
-					"Native directory scan failed for {}: {}", err.path.display(), err.error
+					"Native directory scan failed for {}: {}",
+					err.path.display(),
+					err.error
 				)),
 				err @ pi_walker::glob::GlobError::Pattern(_) => Error::from_reason(err.to_string()),
 			})?

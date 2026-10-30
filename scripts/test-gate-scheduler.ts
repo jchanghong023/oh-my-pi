@@ -1,12 +1,12 @@
 import * as os from "node:os";
 import type { GateCommand, GateRun } from "./test-gate-runtime";
 
-/** Share a platform-specific test-worker ceiling bounded by the available CPU allocation. */
+/** Share a test-worker ceiling bounded by the available CPU allocation. */
 export function testConcurrencyLimit(
 	cores: number = os.availableParallelism(),
-	platform: NodeJS.Platform = process.platform,
+	_platform: NodeJS.Platform = process.platform,
 ): number {
-	return Math.min(platform === "win32" ? 14 : 28, Math.max(1, Math.floor(cores)));
+	return Math.min(28, Math.max(1, Math.floor(cores)));
 }
 
 /** Run independent commands with bounded concurrency, continuing after ordinary failures. */

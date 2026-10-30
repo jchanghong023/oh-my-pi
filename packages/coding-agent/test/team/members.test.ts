@@ -372,6 +372,19 @@ describe("team member resolution", () => {
 		}
 	});
 
+	it("suggests only a same-provider sibling, ignoring case, for an unavailable session anchor", () => {
+		const result = resolveTeamParticipants({
+			configuredMembers: [],
+			sessionModel: fakeModel("company", "glm-5.2"),
+			availableModels: [fakeModel("other", "glm-5.2-public"), fakeModel("COMPANY", "GLM-5.2-public")],
+		});
+		expect(result.ok).toBe(false);
+		if (!result.ok) {
+			expect(result.error).toContain("COMPANY/GLM-5.2-public");
+			expect(result.error).not.toContain("other/glm-5.2-public");
+		}
+	});
+
 	it.each([{ configuredMembers: [] }, { configuredMembers: ["openai/gpt-5"] }])(
 		"accepts a synthetic Bedrock session anchor without adding it to explicit roster %j",
 		({ configuredMembers }) => {

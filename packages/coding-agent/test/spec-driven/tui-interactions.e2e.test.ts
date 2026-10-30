@@ -83,7 +83,15 @@ test.skipIf(!tuiTest)(
 				expect(provider.requests).toHaveLength(calls);
 				// Keep the rejected draft's inline image token: clearing the draft
 				// intentionally deletes the attachment under the native composer contract.
-				await tui("key", "press", "Home");
+				await tui("key", "press", "Ctrl+A");
+				await eventually(
+					() => nativeDraftSnapshot(tui),
+					({ screen, cursor }) => {
+						const lines = screen.split("\n");
+						const start = lines.findLastIndex(line => line.startsWith("╭── "));
+						return start >= 0 && cursor.y === start + 1 && cursor.x === 3;
+					},
+				);
 				await tui("type", `/dev new ${REQUIREMENT} `);
 				await tui("key", "press", "Enter");
 				const requirements = (await stage("requirements")).run!;
@@ -185,14 +193,24 @@ for (const stop of ["Escape", "/dev", "/dev drop"] as const) {
 		async () => {
 			const release = Promise.withResolvers<void>();
 			let held = false;
+			let aborted = false;
 			let returned = false;
 			await withTui(
 				{
-					async delay(request) {
+					async delay(request, signal) {
 						if (continuationText(request) !== "late-old-stage-beacon" || held) return;
 						held = true;
 						// Deliberately ignore transport abort to exercise a real late HTTP
 						// response after native cancellation, not a forged session event.
+						if (signal.aborted) aborted = true;
+						else
+							signal.addEventListener(
+								"abort",
+								() => {
+									aborted = true;
+								},
+								{ once: true },
+							);
 						await release.promise;
 						returned = true;
 					},
@@ -229,6 +247,9 @@ for (const stop of ["Escape", "/dev", "/dev drop"] as const) {
 					expect(provider.requests).toHaveLength(calls);
 					if (stop === "Escape") await tui("key", "press", "Escape");
 					else await tui("submit", stop);
+					// PTY submission only writes the key; wait for cancellation to reach
+					// the provider before allowing the old request to finish.
+					await eventually(async () => aborted, Boolean);
 					release.resolve();
 					await eventually(async () => returned, Boolean);
 					if (stop === "Escape") {

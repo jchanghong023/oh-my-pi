@@ -9,7 +9,6 @@ import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type Component } from "../tui";
 import { formatBytes, formatCount, formatDuration } from "@oh-my-pi/pi-utils";
 import { span } from "../native/describe";
-import type { JobSnapshot } from "../tools/wait";
 import type { StructuredSubagentOutput } from "../tools/task";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
 import { col } from "../native/describe";
@@ -31,12 +30,12 @@ type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 /** Keep the detailed and compact receipt projections under the same visibility control. */
 class AsyncResultBlock extends ToolActivityContainer {
-	readonly #compactBlock: TranscriptStatusBlock;
+	readonly #compactRows: readonly Component[];
 	#visible = true;
 
-	constructor(original: TranscriptStatusBlock, compactRows: TranscriptStatusRow[]) {
+	constructor(original: Component | Component[], compactRows: readonly Component[]) {
 		super(original);
-		this.#compactBlock = new TranscriptStatusBlock(compactRows);
+		this.#compactRows = compactRows;
 	}
 
 	isCompactToolActivity(): boolean {
@@ -50,102 +49,44 @@ class AsyncResultBlock extends ToolActivityContainer {
 
 	override render(width: number): readonly string[] {
 		if (!this.isCompactToolActivity()) return super.render(width);
-		return this.#visible ? this.#compactBlock.render(width) : [];
+		return this.#visible ? this.#compactRows.flatMap(row => row.render(width)) : [];
 	}
 
 	override describe(): NativeNode {
 		if (!this.isCompactToolActivity()) return super.describe();
-		return col(
-			[this.#compactBlock],
-			this.#visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true },
-		);
+		return col(this.#compactRows, this.#visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true });
 	}
 }
 
-/** Render upstream completion receipts, retaining only failures and diagnostics in compact history. */
+/** Render diagnostics from upstream completion receipts without repeating their status. */
 export function buildAsyncResultBlock(
 	message: CustomOrHookMessage,
-	settledBashJobs: ReadonlyMap<string, string> = new Map(),
+	_settledBashJobs?: ReadonlyMap<string, string>,
 ): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
-		type?: JobSnapshot["type"];
-		status?: JobSnapshot["status"];
-		durationMs?: number;
 		meta?: OutputMeta;
 		schema?: StructuredSubagentOutput;
 	};
 	const details = (message as CustomMessage<JobDetails & { jobs?: JobDetails[] }>).details;
 	const jobs = details?.jobs && details.jobs.length > 0 ? details.jobs : [details ?? {}];
 	const rows: TranscriptStatusRow[] = [];
-	const compactRows: TranscriptStatusRow[] = [];
-	const addWarning = (row: TranscriptStatusRow) => {
-		rows.push(row);
-		compactRows.push(row);
-	};
 	for (const job of jobs) {
 		const jobId = job.jobId ?? "unknown";
-		const type = job.type ?? "job";
-		const duration = typeof job.durationMs === "number" ? formatDuration(job.durationMs) : undefined;
-		const duplicate =
-			job.type === "bash" &&
-			job.jobId !== undefined &&
-			job.status !== undefined &&
-			settledBashJobs.get(job.jobId) === job.status;
-		const status =
-			job.status === "failed"
-				? "failed"
-				: job.status === "cancelled"
-					? "cancelled"
-					: job.status === "completed"
-						? "completed"
-						: "finished";
-		const color =
-			status === "failed"
-				? "error"
-				: status === "cancelled"
-					? "warning"
-					: status === "completed"
-						? "success"
-						: "dim";
-		const icon =
-			status === "failed" ? theme.status.error : status === "cancelled" ? theme.status.warning : theme.status.done;
-		const row: TranscriptStatusRow = {
-			parts: [
-				{ text: `${icon} Background job ${status}`, color },
-				{ text: `[${type}]`, color: "dim" },
-				{ text: jobId, color: "accent" },
-				duration ? { text: `(${duration})`, color: "dim" } : undefined,
-			],
-			native: {
-				tone:
-					status === "failed"
-						? "error"
-						: status === "cancelled"
-							? "warning"
-							: status === "completed"
-								? "success"
-								: "info",
-				message: [span(`Background job ${status}`), ...facts([type, jobId, duration])],
-			},
-		};
-		if (!duplicate) {
-			rows.push(row);
-			if (job.status !== "completed") compactRows.push(row);
-		}
-		if (job.meta?.artifactError) addWarning(artifactErrorRow(job.meta.artifactError));
+		if (job.meta?.artifactError) rows.push(artifactErrorRow(job.meta.artifactError));
 		if (job.schema && (job.schema.status !== "valid" || job.schema.error)) {
 			const notice = `${jobId}: Structured output ${job.schema.status}${job.schema.error ? `: ${job.schema.error}` : ""}`;
-			addWarning({
+			rows.push({
 				parts: [{ text: notice, color: "warning" }],
 				native: { tone: "warning", message: [span(notice)] },
 			});
 		}
 	}
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
-		addWarning(artifactErrorRow(details.meta.artifactError));
+		rows.push(artifactErrorRow(details.meta.artifactError));
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows);
+	const block = rows.length > 0 ? new TranscriptStatusBlock(rows) : undefined;
+	return new AsyncResultBlock(block ?? [], block ? [block] : []);
 }
 
 /** The warning row under a background job whose output artifact could not be saved. */
@@ -210,7 +151,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 		rows.push(row);
 		if (failed || daemon.exitCode !== 0) compactRows.push(row);
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), compactRows);
+	return new AsyncResultBlock(new TranscriptStatusBlock(rows), [new TranscriptStatusBlock(compactRows)]);
 }
 
 /**

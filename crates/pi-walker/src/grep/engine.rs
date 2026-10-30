@@ -128,7 +128,10 @@ impl std::error::Error for StrictMatcherError {}
 ///
 /// # Errors
 /// Returns both engine errors if neither can compile the expression.
-pub fn build_strict_matcher(pattern: &str, ignore_case: bool) -> Result<Engine, StrictMatcherError> {
+pub fn build_strict_matcher(
+	pattern: &str,
+	ignore_case: bool,
+) -> Result<Engine, StrictMatcherError> {
 	let build = |line_terminated| {
 		let mut builder = RegexMatcherBuilder::new();
 		builder.case_insensitive(ignore_case).multi_line(false);

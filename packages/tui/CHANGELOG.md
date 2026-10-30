@@ -10,7 +10,7 @@
 
 ### Changed
 
-- Background Bash outcomes appear once when the original card already shows the result; unmatched failures, cancellations, and independent diagnostics remain visible, with complete wait details available on expansion.
+- Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.
 - Compact Bash failures use a neutral card with a highlighted failure status, keep diagnostics ahead of trailing Bun exit wrappers, and leave full output and technical details available when expanded.
 - In offline Unicode mode, use distinct basic symbols for clear, extension, guide, repair, quit, token-count, and Hook icons missing from older terminal fonts; preserve other icons, presets, and explicit theme overrides.
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
@@ -31,6 +31,7 @@
 
 ### Fixed
 
+- Show the tail of failed background Bash output and available artifact references in wait previews instead of misleading truncated beginnings.
 - Keep the beginning of long streaming tables reachable with PageUp/PageDown or captured mouse-wheel scrolling; Escape returns to the live tail without cancelling generation, and completed content enters history once.
 - Compact transcript replay hides historical tool errors while keeping live failure feedback and detailed history available.
 - Keep both compact Bash error output rows visible on native terminals and for device-dispatched commands.

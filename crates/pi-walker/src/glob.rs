@@ -409,7 +409,11 @@ mod tests {
 
 	#[async_trait::async_trait]
 	impl pi_vfs::FileSystem for FailingDirectory {
-		async fn open(&self, path: &Path, options: &pi_vfs::OpenOptions) -> std::io::Result<pi_vfs::File> {
+		async fn open(
+			&self,
+			path: &Path,
+			options: &pi_vfs::OpenOptions,
+		) -> std::io::Result<pi_vfs::File> {
 			pi_vfs::FileSystem::open(&*self.0, path, options).await
 		}
 
@@ -438,7 +442,9 @@ mod tests {
 		let found = glob(&fs, root, &opts).await.unwrap();
 		assert_eq!(paths(&found), ["kept.txt"]);
 		opts.strict_errors = true;
-		assert!(matches!(glob(&fs, root, &opts).await, Err(GlobError::Directory(err)) if err.path.to_string_lossy().ends_with("/sub") && err.error.kind() == std::io::ErrorKind::PermissionDenied));
+		assert!(
+			matches!(glob(&fs, root, &opts).await, Err(GlobError::Directory(err)) if err.path.to_string_lossy().ends_with("/sub") && err.error.kind() == std::io::ErrorKind::PermissionDenied)
+		);
 	}
 
 	#[test]

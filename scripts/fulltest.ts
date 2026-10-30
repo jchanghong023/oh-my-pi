@@ -127,7 +127,7 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceD
 			cwd: gateRepoRoot,
 			env: {
 				...localTestEnvironment(path.join(home, "typescript-startup")),
-				OMP_TEST_CONCURRENCY: "2",
+				OMP_TEST_CONCURRENCY: "all",
 				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
 				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},

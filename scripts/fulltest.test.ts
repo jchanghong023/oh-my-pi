@@ -28,6 +28,15 @@ test("fork plan excludes standalone Python suites while preserving the public TU
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
 });
 
+test("both TypeScript lanes use the available worker budget in fork and full plans", () => {
+	for (const full of [false, true]) {
+		const commands = fulltestCommands({ debug: false, full }, "/tmp/home");
+		for (const label of ["test/TypeScript fork feature suite", "test/TypeScript startup suite"]) {
+			expect(commands.find(command => command.label === label)?.env?.OMP_TEST_CONCURRENCY).toBe("all");
+		}
+	}
+});
+
 test("script selection uses changed modules and existing tests, not business files or a clean tree", () => {
 	const files = [
 		"scripts/fulltest.test.ts",
@@ -711,6 +720,7 @@ describe("fulltest lane scheduling", () => {
 						expect(startup.env?.HOME).not.toBe(ordinaryHome);
 						expect(startup.env?.OMP_FULLTEST_AFFECTED).toBe("1");
 						expect(startup.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
+						expect(startup.env?.OMP_TEST_CONCURRENCY).toBe("all");
 						expect(options?.concurrency).toBe(1);
 						startupHasStarted = true;
 					}

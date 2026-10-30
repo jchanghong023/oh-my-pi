@@ -600,6 +600,11 @@ function isStartupCommand(command: TestCommand): boolean {
 	return command.cwd === "packages/coding-agent" && command.command.some(isStartupTest);
 }
 
+/** Startup chunks run in their own lane; retain the integration cap for other chunks. */
+export function isLimitedIntegrationCommand(command: TestCommand): boolean {
+	return !isStartupCommand(command) && isIntegrationCommand(command);
+}
+
 async function codingAgentTestCommands(
 	bucket: CodingAgentBucket,
 	forkOnly = false,
@@ -1092,14 +1097,9 @@ export function testConcurrency(
 	total: number,
 	spec: string | undefined,
 	cores: number,
-	eligibleFulltest = false,
 	platform: NodeJS.Platform = process.platform,
 ): number {
-	const limit =
-		eligibleFulltest && platform === "win32"
-			? Math.min(20, Math.max(1, Math.floor(cores)))
-			: testConcurrencyLimit(cores, platform);
-	const cap = Math.min(limit, total);
+	const cap = Math.min(testConcurrencyLimit(cores, platform), total);
 	const raw = spec?.trim().toLowerCase();
 	if (!raw) return cap;
 	if (raw === "all" || raw === "max") return cap;
@@ -1519,7 +1519,13 @@ async function runTestCommandsInParallel(
 	}
 
 	const runStartedAt = performance.now();
-	await runBoundedPool(commands, concurrency, command => localMode && isIntegrationCommand(command), 4, runChunk);
+	await runBoundedPool(
+		commands,
+		concurrency,
+		command => localMode && isLimitedIntegrationCommand(command),
+		4,
+		runChunk,
+	);
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
@@ -1733,12 +1739,7 @@ if (import.meta.main) {
 	const pooled = scheduledCommands.length > 1 && (localMode || !isCI() || explicitConcurrency);
 	// The sequential path is a pool of one, so a lone chunk keeps the whole budget.
 	const poolWidth = pooled
-		? testConcurrency(
-				scheduledCommands.length,
-				Bun.env.OMP_TEST_CONCURRENCY,
-				os.availableParallelism(),
-				producers.length > 0,
-			)
+		? testConcurrency(scheduledCommands.length, Bun.env.OMP_TEST_CONCURRENCY, os.availableParallelism())
 		: 1;
 	const testCommands = applyChunkBudget(scheduledCommands, poolWidth);
 	const run = isDryRun ? undefined : await beginTestRun(reportScope);

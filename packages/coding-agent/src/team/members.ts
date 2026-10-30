@@ -124,7 +124,15 @@ export function resolveTeamParticipants(input: TeamMembersInput): TeamMembersRes
 		// missing literal entry is not an availability problem. Only a
 		// resolution to a different concrete model is a fuzzy sibling.
 		if (resolvedKey !== sessionKey) {
-			const fuzzyNote = resolvedKey ? `（存在相近的可用模型 ${resolvedKey}，但 /team 不会用它替代会话模型）` : "";
+			// Provider-qualified resolution deliberately does not fuzzy-match siblings.
+			// Find a suggestion separately; it must never make the anchor available.
+			const sibling = availableModels.find(
+				model =>
+					model.provider.toLowerCase() === sessionModel.provider.toLowerCase() &&
+					model.id.toLowerCase().includes(sessionModel.id.toLowerCase()),
+			);
+			const suggestion = resolvedKey ?? (sibling ? modelKey(sibling) : undefined);
+			const fuzzyNote = suggestion ? `（存在相近的可用模型 ${suggestion}，但 /team 不会用它替代会话模型）` : "";
 			return {
 				ok: false,
 				error: [

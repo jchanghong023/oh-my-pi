@@ -59,11 +59,7 @@ describe("spec-driven actual OMP public entry", () => {
 						blockedWrite = reply.tool;
 						linkedDirectory = path.dirname(path.join(cwd, requested));
 						await fs.mkdir(path.dirname(linkedDirectory), { recursive: true });
-						await fs.symlink(
-							path.join(cwd, "src"),
-							linkedDirectory,
-							process.platform === "win32" ? "junction" : "dir",
-						);
+						await fs.rename(root.join("staged-link"), linkedDirectory);
 					}
 					return reply;
 				},
@@ -73,6 +69,12 @@ describe("spec-driven actual OMP public entry", () => {
 			await fs.mkdir(path.join(cwd, "src"));
 			const business = path.join(cwd, "src/spec.md");
 			await fs.writeFile(business, "business bytes");
+			// Create the junction before the public process can inspect the workspace.
+			await fs.symlink(
+				path.join(cwd, "src"),
+				root.join("staged-link"),
+				process.platform === "win32" ? "junction" : "dir",
+			);
 			await using peer = new PublicPeer(cwd, config.env, provider);
 			await peer.ready();
 			const session = await peer.create(cwd);

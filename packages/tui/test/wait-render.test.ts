@@ -10,6 +10,7 @@ import { prompt } from "@oh-my-pi/pi-utils";
 import taskSummaryTemplate from "../../coding-agent/src/prompts/tools/task-summary.md" with { type: "text" };
 import type { NativeChild, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
+import { formatOutputNotice, type TruncationMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { decodeBench } from "./fixtures/job-widget-views";
 
 /** Every described node under `children`, depth first. */
@@ -107,6 +108,152 @@ describe("job renderer task-result preview", () => {
 		const warning = Bun.stripANSI(waitToolRenderer.renderResult(diagnostic, options, theme).render(120).join("\n"));
 		expect(warning).toContain("bg_1");
 		expect(warning).toContain("artifact write failed");
+	});
+
+	describe("failed job previews", () => {
+		const truncation = {
+			direction: "tail" as const,
+			truncatedBy: "bytes" as const,
+			totalLines: 900,
+			totalBytes: 100_000,
+			outputLines: 500,
+			outputBytes: 50_000,
+			maxBytes: 50_000,
+			artifactId: "capture-123",
+		};
+		const output = [
+			'","truncated_json_fragment":true}',
+			"earlier output not in the preview",
+			"diagnostic: configuration is invalid",
+			"",
+			"details: check the input path",
+			"",
+			"Command exited with code 2",
+			"",
+			"Wall time: 3.20 seconds",
+		].join("\n");
+		const failure = (meta: { truncation: TruncationMeta }) => ({
+			content: [{ type: "text" as const, text: "" }],
+			details: {
+				op: "wait" as const,
+				jobs: [
+					{
+						id: "bg_failure",
+						type: "bash" as const,
+						status: "failed" as const,
+						label: "run checks",
+						durationMs: 3_200,
+						errorText: output + formatOutputNotice(meta),
+						meta,
+					},
+				],
+			},
+		});
+		const options = { expanded: false, isPartial: false };
+
+		it("shows the last two output lines and a real artifact, not the clipped JSON or tool footer", () => {
+			const result = failure({ truncation });
+			const lines = waitToolRenderer
+				.renderResult(result, options, theme)
+				.render(160)
+				.map(line => Bun.stripANSI(line));
+			const collapsed = lines.join("\n");
+			expect(collapsed).toContain("diagnostic: configuration is invalid");
+			expect(collapsed).toContain("details: check the input path");
+			expect(collapsed.indexOf("diagnostic:")).toBeLessThan(collapsed.indexOf("details:"));
+			expect(collapsed).not.toContain("truncated_json_fragment");
+			expect(collapsed).not.toContain("earlier output not in the preview");
+			expect(collapsed).not.toContain("Command exited with code");
+			expect(collapsed).not.toContain("Wall time:");
+			expect(collapsed).toMatch(/\b(?:tail|end|last)\b|末尾/i);
+			expect(collapsed).toContain("artifact://capture-123");
+			for (const line of lines) expect(Bun.stringWidth(line)).toBeLessThanOrEqual(160);
+
+			const expanded = Bun.stripANSI(
+				waitToolRenderer
+					.renderResult(result, { ...options, expanded: true }, theme)
+					.render(160)
+					.join("\n"),
+			);
+			expect(expanded).toContain("truncated_json_fragment");
+			expect(expanded).toContain("diagnostic: configuration is invalid");
+		});
+
+		it("exposes the same tail and artifact in the native description", () => {
+			const native = JSON.stringify(waitToolRenderer.describeResult!(failure({ truncation }), options));
+			expect(native).toContain("diagnostic: configuration is invalid");
+			expect(native).toContain("details: check the input path");
+			expect(native).not.toContain("truncated_json_fragment");
+			expect(native).not.toContain("earlier output not in the preview");
+			expect(native).not.toContain("Command exited with code");
+			expect(native).not.toContain("Wall time:");
+			expect(native).toMatch(/\b(?:tail|end|last)\b|末尾/i);
+			expect(native).toContain("artifact://capture-123");
+		});
+
+		it("labels a capped artifact as a sample in both views", () => {
+			const result = failure({ truncation: { ...truncation, artifactElidedBytes: 4096 } });
+			const terminal = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
+			const native = JSON.stringify(waitToolRenderer.describeResult!(result, options));
+			for (const view of [terminal, native]) {
+				expect(view).toContain("artifact://capture-123");
+				expect(view).toMatch(/(?:sample|not saved|样本)/i);
+				expect(view).not.toMatch(/full output/i);
+			}
+		});
+
+		it("keeps literal escape sequences and does not invent an artifact for a short Bash failure", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: {
+					op: "wait" as const,
+					jobs: [
+						{
+							id: "bg_short",
+							type: "bash" as const,
+							status: "failed" as const,
+							label: "short command",
+							durationMs: 10,
+							errorText: "literal\\ntext\nlast output line\n\nCommand exited with code 1",
+						},
+					],
+				},
+			};
+			const terminal = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
+			const native = JSON.stringify(waitToolRenderer.describeResult!(result, options));
+			expect(terminal).toContain("literal\\ntext");
+			expect(native).toContain("literal\\\\ntext");
+			for (const view of [terminal, native]) {
+				expect(view).toContain("last output line");
+				expect(view).not.toContain("artifact://");
+			}
+		});
+
+		it("keeps task failure summaries on the first line without inventing an artifact", () => {
+			const result = {
+				content: [{ type: "text" as const, text: "" }],
+				details: {
+					op: "wait" as const,
+					jobs: [
+						{
+							id: "Worker",
+							type: "task" as const,
+							status: "failed" as const,
+							label: "Worker",
+							durationMs: 100,
+							errorText: "task exception first line\nadditional task detail",
+						},
+					],
+				},
+			};
+			const terminal = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
+			const native = JSON.stringify(waitToolRenderer.describeResult!(result, options));
+			for (const view of [terminal, native]) {
+				expect(view).toContain("task exception first line");
+				expect(view).not.toContain("additional task detail");
+				expect(view).not.toContain("artifact://");
+			}
+		});
 	});
 
 	it("renders the consumed peer message as a sender card", () => {

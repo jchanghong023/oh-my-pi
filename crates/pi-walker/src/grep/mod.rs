@@ -37,7 +37,9 @@ mod types;
 
 use std::{fmt, io, path::Path, sync::Arc};
 
-pub use engine::{Engine, EngineError, StrictMatcherError, build_strict_matcher, pcre2_jit_enabled};
+pub use engine::{
+	Engine, EngineError, StrictMatcherError, build_strict_matcher, pcre2_jit_enabled,
+};
 use scan::{ScanParams, Scanner};
 
 use crate::{

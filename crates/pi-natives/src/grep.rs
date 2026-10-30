@@ -10,7 +10,6 @@
 use std::{path::Path, sync::Arc};
 
 use grep_matcher::Matcher;
-
 use napi::{
 	JsString,
 	bindgen_prelude::*,

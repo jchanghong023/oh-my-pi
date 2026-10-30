@@ -38,7 +38,7 @@
 
 - Update to upstream 18.14.0 while retaining fork offline models, orchestration, and self-contained HTML exports.
 
-- Raise the shared Bun and Rust Nextest test concurrency ceiling to 28, bounded by available CPU cores and any lower Bun concurrency override.
+- Raise the Windows Bun and Rust Nextest test concurrency ceiling to 28, including startup-sensitive tests, bounded by available CPU cores, runnable tasks and any lower Bun concurrency override; preserve test isolation, timeouts and assertions.
 - Use cargo-delta to select affected Rust fork packages for fulltest, with conservative full-scope fallback and explicit selection reporting.
 - Run independent selected fork feature fulltest suites concurrently and distribute singleton and E2E tests to avoid serial bottlenecks.
 - Avoid repeating background Bash failures in wait results and completion receipts when the original tool card already shows the same job outcome, including after session restoration.
@@ -101,6 +101,7 @@
 
 ### Fixed
 
+- Suggest a similar available model when a `/team` session model is unavailable without silently replacing it.
 - Avoid forcing full TypeScript tests or UI smoke for changes limited to root documentation and `AGENTS.md` when a valid baseline exists.
 - Avoid spurious app-server command rejections when a session journal changes while being indexed.
 - Correct the Linux x64 musl baseline release target passed to Bun.

@@ -5,7 +5,14 @@ import { formatAge } from "@oh-my-pi/pi-utils";
 import { shimmerEnabled, shimmerText } from "../theme/shimmer";
 import type { Theme } from "../theme/theme";
 import { Ellipsis, Hasher, type RenderCache, renderStatusLine, renderTreeList, truncateToWidth } from "../render/index";
-import { formatArtifactErrorNotice, stripOutputNotice, type OutputMeta } from "./output-meta";
+import {
+	formatArtifactErrorNotice,
+	formatFullOutputReference,
+	stripOutputNotice,
+	stripRawOutputArtifactNotice,
+	stripTrailingNotice,
+	type OutputMeta,
+} from "./output-meta";
 import {
 	FEED_MODEL_BADGE_WIDTH,
 	formatBadge,
@@ -23,6 +30,7 @@ import {
 	createCachedComponent,
 	type ConfiguredThinkingLevel,
 } from "../render/render-utils";
+import { nonEmptyTailLines } from "../render/output-pane";
 import type { StructuredSubagentOutput } from "./task";
 import { describeJobTiles, type JobTile, type JobWidgetView, renderJobTileLines } from "./job-widget";
 import type { RenderResultOptions, ToolRenderer, ToolActivityContext, ToolActivitySummary } from "./renderer";
@@ -252,6 +260,38 @@ function flattenStructuredPreview(text: string): string {
 	return text.slice(0, PREVIEW_LINES_EXPANDED * PREVIEW_LINE_WIDTH * 2).replace(/\s+/g, " ");
 }
 
+/** Collapsed failure output is a tail sample, not necessarily the cause of failure. */
+function failurePreview(job: JobSnapshot): { lines: string[]; artifact?: string } {
+	if (job.status !== "failed") return { lines: [] };
+	const raw = stripOutputNotice(
+		job.type === "bash" ? job.errorText?.trim() || job.resultText?.trim() || "" : (job.errorText ?? ""),
+		job.meta,
+	);
+	if (job.type !== "bash") {
+		const first = raw
+			.split(/\r?\n/)
+			.find(line => line.trim())
+			?.trim();
+		return { lines: first ? [first] : [] };
+	}
+	// Wait snapshots retain the exit code but not Bash's exact wall-time metadata.
+	// Either notice can be last; remove each at most once, with blank lines between.
+	const withoutWall = stripTrailingNotice(raw, line => /^Wall time: \d+\.\d{2} seconds$/u.test(line));
+	const withoutExit = stripTrailingNotice(withoutWall, line => /^Command exited with code -?\d+$/u.test(line));
+	const withoutNotices =
+		withoutWall === raw
+			? stripTrailingNotice(withoutExit, line => /^Wall time: \d+\.\d{2} seconds$/u.test(line))
+			: withoutExit;
+	const output = stripRawOutputArtifactNotice(withoutNotices).text;
+	const truncation = job.meta?.truncation;
+	return {
+		lines: nonEmptyTailLines(output, 2),
+		artifact: truncation?.artifactId
+			? `${truncation.artifactElidedBytes ? "Sample only · " : ""}${formatFullOutputReference(truncation.artifactId, truncation.artifactElidedBytes)}`
+			: undefined,
+	};
+}
+
 /** The row label: a running task's own stage line when it reports one, else the job's label. */
 function jobRowLabel(job: JobSnapshot): string {
 	return job.type === "task" && job.status === "running" && job.stage?.trim() ? job.stage : job.label;
@@ -449,18 +489,18 @@ function jobsRenderResult(
 				line += `  ${uiTheme.fg("muted", truncateToWidth(label, labelBudget, Ellipsis.Unicode))}`;
 			}
 			lines.push(line);
-			// A failure says why on the collapsed row; the rest of its output
-			// stays behind Ctrl+O.
-			const reason =
-				job.status === "failed"
-					? stripOutputNotice(job.errorText ?? "", job.meta)
-							.split(/\r?\n/)
-							.find(part => part.trim())
-							?.trim()
-					: undefined;
-			if (reason) {
+			const preview = failurePreview(job);
+			if (job.type === "bash" && preview.lines.length > 0) {
+				lines.push(`${indent}${uiTheme.fg("muted", "Output tail:")}`);
+			}
+			for (const outputLine of preview.lines) {
 				lines.push(
-					`${indent}${uiTheme.fg("error", truncateToWidth(replaceTabs(reason), Math.max(1, width - indent.length), Ellipsis.Unicode))}`,
+					`${indent}${uiTheme.fg("error", truncateToWidth(replaceTabs(plainText(outputLine)), Math.max(0, width - indent.length), Ellipsis.Unicode))}`,
+				);
+			}
+			if (preview.artifact) {
+				lines.push(
+					`${indent}${uiTheme.fg("warning", truncateToWidth(preview.artifact, Math.max(0, width - indent.length), Ellipsis.Unicode))}`,
 				);
 			}
 			// The root warning is suppressed when a row owns the failure, so the
@@ -815,6 +855,7 @@ export function createIrcMessageCard(
 function describeJobsResult(
 	result: ToolRenderResult<CoordinationDetails>,
 	isPartial: boolean,
+	expanded: boolean,
 ): NativeToolView | undefined {
 	const jobs = result.details?.jobs ?? [];
 	const agents = result.details?.agents ?? [];
@@ -852,11 +893,26 @@ function describeJobsResult(
 		completed: 3,
 	};
 	const sorted = [...jobs].sort((a, b) => order[a.status] - order[b.status] || b.durationMs - a.durationMs);
-	// One frame of tiles: each job's status, title, figure and widget together. The job's output
-	// and errors fill the card of the call that started it (`parksAsBackground`), so no previews.
+	// Compact cards add failure output only for jobs not already represented by a Bash card.
 	const body: NativeNode[] = [];
 	if (sorted.length > 0) {
 		body.push(keyed(describeJobTiles(sorted.slice(0, TILES_SHOWN).map(job => jobTile(job, isPartial))), "tiles"));
+	}
+	if (!expanded) {
+		for (const job of sorted.slice(0, TILES_SHOWN)) {
+			const preview = failurePreview(job);
+			if (preview.lines.length === 0 && !preview.artifact) continue;
+			if (job.type === "bash" && preview.lines.length > 0) {
+				body.push(text([span(`${plainText(job.id)} · Output tail:`, "muted")], { truncate: "end" }));
+			}
+			for (const line of preview.lines) {
+				const prefix = job.type === "bash" ? "" : `${plainText(job.id)} · `;
+				body.push(text([span(`${prefix}${plainText(replaceTabs(line))}`, "error")], { truncate: "end" }));
+			}
+			if (preview.artifact) {
+				body.push(text([span(plainText(preview.artifact), "warning")], { wrap: "word" }));
+			}
+		}
 	}
 	if (sorted.length > TILES_SHOWN) {
 		const rest = sorted.length - TILES_SHOWN;
@@ -977,10 +1033,11 @@ export const waitToolRenderer = {
 							return describeJobsResult(
 								{ ...result, details: { ...details, jobs: visible } },
 								options.isPartial,
+								options.expanded,
 							);
 						}
 					}
-					return describeJobsResult(result, options.isPartial);
+					return describeJobsResult(result, options.isPartial, options.expanded);
 				}
 				return describeMessage(waited.from, waited.ts, waited.body, waited.replyTo ? ["reply"] : []);
 			},
