@@ -312,6 +312,33 @@ describe("compact tool component integration", () => {
 		expect(JSON.stringify(result)).toBe(original);
 	});
 
+	it("hides a failed grep while later calls finish in the same compact run", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const root = new TranscriptContainer();
+		const grep = tool("grep", { pattern: "stdout", path: "missing.ts;missing-dir" });
+		root.addChild(grep);
+		grep.setExecutionStarted();
+		grep.updateResult({
+			content: [{ type: "text", text: "Path not found: missing.ts, missing-dir" }],
+			details: {},
+			isError: true,
+		});
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).not.toContain("Path not found");
+		}
+		for (const path of ["later-a.ts", "later-b.ts"]) {
+			const read = tool("read", { path });
+			root.addChild(read);
+			read.updateResult({ content: [{ type: "text", text: "read result" }], isError: false });
+		}
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).toContain("工具调用 3 次");
+			expect(view).toContain("later-a.ts");
+			expect(view).toContain("later-b.ts");
+			expect(view).not.toContain("Path not found");
+		}
+	});
+
 	it("retains actual command failures and partially applied edits", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();

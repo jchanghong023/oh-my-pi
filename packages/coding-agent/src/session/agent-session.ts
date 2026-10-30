@@ -3911,6 +3911,7 @@ export class AgentSession implements SettingsScope {
 			// Returned background calls have no later tool result to persist their
 			// terminal frame. Keep the latest update for future focus rebuilds;
 			// logical session transitions clear the cache.
+			this.#activeToolExecutionUpdates.delete(event.toolCallId);
 			this.#activeToolExecutionUpdates.set(event.toolCallId, event);
 		} else if (event.type === "tool_execution_end") {
 			this.#activeToolExecutionUpdates.delete(event.toolCallId);
@@ -5913,8 +5914,8 @@ export class AgentSession implements SettingsScope {
 
 	/**
 	 * Snapshot the latest unpersisted display result for each active tool or
-	 * returned background call. Focus rebuilds replay these after reconstructing
-	 * persisted transcript state.
+	 * returned background call, in oldest-to-newest update order. Focus rebuilds
+	 * replay these after reconstructing persisted transcript state.
 	 */
 	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
 		return [...this.#activeToolExecutionUpdates.values()];

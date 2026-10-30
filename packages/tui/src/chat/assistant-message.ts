@@ -54,7 +54,7 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
  */
 const MAX_TRANSCRIPT_ERROR_ROWS = 8;
 const EMPTY_STABLE_RENDER: readonly string[] = [];
-const paintCompactThinking = createGradientHighlighter({
+export const paintCompactThinking = createGradientHighlighter({
 	probe: "",
 	highlight: /[^\n]+/gu,
 	stops: 14,

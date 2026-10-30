@@ -336,7 +336,6 @@ function bashStatsParts(
 	details: BashToolDetails | undefined,
 	contextTimeout: number | undefined,
 	artifactId: string | undefined,
-	isError: boolean,
 	compact: boolean,
 ): string[] {
 	const timeoutDisabled = details?.timeoutDisabled === true || contextTimeout === 0;
@@ -368,9 +367,6 @@ function bashStatsParts(
 	}
 	if (artifactId) {
 		statsParts.push(`Artifact: ${artifactId}`);
-	}
-	if (isError && typeof details?.exitCode === "number") {
-		statsParts.push(`Exit: ${details.exitCode}`);
 	}
 	return statsParts;
 }
@@ -601,13 +597,12 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						details,
 						renderContext?.timeout,
 						rawOutputArtifact.artifactId,
-						isError || (details?.exitCode !== undefined && details.exitCode !== 0),
 						compactError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
-					if (compactError && typeof details?.exitCode !== "number") {
+					if (compactError) {
 						statsParts.push(isTimeout ? "Timed out" : "Failed");
 					}
 					const footerMeta =

@@ -80,6 +80,7 @@
 - Explain unavailable tool calls, list the request's tools and guide models toward available alternatives without changing tool permissions.
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
 - Compact working status now distinguishes the viewed agent's model waiting, thinking, replies, tool-call generation, tool execution and user/background waits without aggregating other agents or changing execution.
+- Show the latest live tool-output line in the compact thinking row when no thinking text is visible, without duplicating tool names or changing its style.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
 - Automatically inject the original stage skills in `/dev`: Grill-me for requirements, writing-plans for planning, and using-superpowers plus subagent-driven-development for execution. Requirements do not automatically inject Brainstorming; solutions receive no interview skill. Stage authorization boundaries remain unchanged.
 - Limit Dev to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.

@@ -231,7 +231,7 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("[raw output: artifact://13]");
 		expect(rendered).not.toContain("artifact://13");
 	});
-	it("renders the exit status in the footer and strips the textual exit notice for failed commands", async () => {
+	it("hides the footer exit code and strips the textual exit notice for failed commands", async () => {
 		const component = bashToolRenderer.renderResult(
 			{
 				content: [{ type: "text", text: "boom\n\nWall time: 0.02 seconds\n\nCommand exited with code 1" }],
@@ -243,12 +243,11 @@ describe("bashToolRenderer", () => {
 			{ command: "false" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		// The footer carries the styled stats including the non-zero exit status.
+		// Other command statistics remain visible without the exit-code footer.
 		expect(rendered).toContain("Wall: 0.02s");
 		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).toContain("Exit: 1");
-		// Both the exit-code and wall-time notices are folded into the footer, not
-		// echoed verbatim in the output region.
+		expect(rendered).not.toContain("Exit: 1");
+		// The generated notices are not echoed in the output region.
 		expect(rendered).not.toContain("Command exited with code 1");
 		expect(rendered).not.toContain("Wall time: 0.02 seconds");
 		// The command's own output still shows.
@@ -273,7 +272,8 @@ describe("bashToolRenderer", () => {
 		expect(compact).toContain("diagnostic one");
 		expect(compact).toContain("diagnostic two");
 		expect(compact).not.toContain("exited with code");
-		expect(compact).toContain("Exit: 1");
+		expect(compact).toContain("Failed");
+		expect(compact).not.toContain("Exit: 1");
 		expect(compact).not.toContain("Timeout:");
 		expect(compact).not.toContain("Wall:");
 		const expanded = sanitizeText(
