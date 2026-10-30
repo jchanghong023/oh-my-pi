@@ -259,6 +259,8 @@ For the bash tool specifically:
 
 ## Commands
 
+- MUST run requested project commands with their existing defaults. NEVER append flags or positional arguments unless the user explicitly requests those arguments.
+- `跑 full` / `运行 fulltest` means `bun run fulltest`; `跑 fast` means `bun run fastcheck`. NEVER infer `--full` or other flags from command names or words such as “完整” and “全量”.
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
 - NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. Cargo and Nextest select all of `pi-wiki` and `pi-natives` namespaces `wiki::` and `python_symbols::`; scope is `rust-fork-features`. The independent `pi-wiki` doctest stage runs `cargo test -p pi-wiki --doc --no-fail-fast`; the native `cdylib` has no doctests. `fulltest` and `slowtest` test fork features, not the entire workspace; static checks and compilation retain their full scope.
