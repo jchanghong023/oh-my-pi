@@ -41,6 +41,22 @@ impl FileLock {
 		})
 	}
 
+	/// Whether any handle, in any process including this one, holds `path`.
+	///
+	/// Observes without locking or opening the lock: a `connect(2)` probe on
+	/// Linux, an `F_GETLK` query on other Unix platforms, a `\BaseNamedObjects`
+	/// directory listing on Windows. A concurrent `tryAcquire()` never meets it.
+	#[napi]
+	pub fn is_held(path: JsString) -> napi::Result<bool> {
+		let path = js::utf8(path)?;
+		pi_vfs::file_lock::FileLock::is_held_path(Path::new(&*path)).map_err(|error| {
+			napi::Error::from_reason(format!(
+				"Failed to probe native file lock for {}: {error}",
+				&*path
+			))
+		})
+	}
+
 	/// Whether this handle owns the requested lock.
 	#[napi(getter)]
 	#[allow(clippy::missing_const_for_fn, reason = "napi method signature")]

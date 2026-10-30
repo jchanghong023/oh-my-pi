@@ -50,6 +50,17 @@ impl FileLock {
 		platform::try_acquire(path).map(|inner| Self { inner })
 	}
 
+	/// Observes ownership without acquiring the lock.
+	///
+	/// # Errors
+	/// Returns an error if the path is not UTF-8 or the platform probe fails.
+	pub fn is_held_path(path: &Path) -> io::Result<bool> {
+		let path = path.to_str().ok_or_else(|| {
+			io::Error::new(io::ErrorKind::InvalidInput, "lock path is not valid UTF-8")
+		})?;
+		platform::is_held(path)
+	}
+
 	/// Whether this handle owns the requested lock.
 	pub const fn is_acquired(&self) -> bool {
 		self.inner.is_some()
@@ -76,5 +87,34 @@ impl Drop for FileLock {
 		if let Some(inner) = self.inner.as_mut() {
 			let _ = inner.release();
 		}
+	}
+}
+
+// Android has no probe (`unix::is_held` reports Unsupported).
+#[cfg(all(test, not(target_os = "android")))]
+mod tests {
+	use std::time::{SystemTime, UNIX_EPOCH};
+
+	use super::FileLock;
+
+	#[test]
+	fn probe_sees_holder_without_taking_the_lock() {
+		let nonce = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.expect("system clock")
+			.as_nanos();
+		let path =
+			std::env::temp_dir().join(format!("omp-file-lock-probe-{}-{nonce}", std::process::id()));
+		assert!(!FileLock::is_held_path(&path).expect("probe unlocked path"));
+		let mut lease = FileLock::try_acquire_path(&path).expect("acquire");
+		assert!(lease.is_acquired(), "free lease");
+		assert!(FileLock::is_held_path(&path).expect("probe held path"));
+		lease.release_native().expect("release");
+		assert!(!FileLock::is_held_path(&path).expect("probe released path"));
+		// A probe never leaves the path held for the next acquirer.
+		let mut successor = FileLock::try_acquire_path(&path).expect("reacquire");
+		assert!(successor.is_acquired(), "probe left the lease free");
+		successor.release_native().expect("release successor");
+		let _ = std::fs::remove_file(path);
 	}
 }
