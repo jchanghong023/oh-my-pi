@@ -602,18 +602,15 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
-					if (compactError) {
-						statsParts.push(isTimeout ? "Timed out" : "Failed");
+					if (compactError && isTimeout) {
+						statsParts.push("Timed out");
 					}
 					const footerMeta =
 						statsParts.length > 0
-							? compactError
+							? compactError && isTimeout
 								? statsParts
 										.map((part, index) =>
-											uiTheme.fg(
-												index === statsParts.length - 1 ? (isTimeout ? "warning" : "error") : "dim",
-												part,
-											),
+											uiTheme.fg(index === statsParts.length - 1 ? "warning" : "dim", part),
 										)
 										.join(uiTheme.fg("dim", uiTheme.sep.dot))
 								: uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot))

@@ -272,7 +272,7 @@ describe("bashToolRenderer", () => {
 		expect(compact).toContain("diagnostic one");
 		expect(compact).toContain("diagnostic two");
 		expect(compact).not.toContain("exited with code");
-		expect(compact).toContain("Failed");
+		expect(compact).not.toContain("Failed");
 		expect(compact).not.toContain("Exit: 1");
 		expect(compact).not.toContain("Timeout:");
 		expect(compact).not.toContain("Wall:");

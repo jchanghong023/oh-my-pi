@@ -117,7 +117,7 @@ describe("compact upstream tool feedback", () => {
 		expect(compact).not.toContain("code units");
 		expect(rows.filter(row => row.includes("<stdin>") || row.includes("UnicodeEncodeError"))).toHaveLength(2);
 		expect(compact).not.toContain("x".repeat(150));
-		expect(compact).toContain("Failed");
+		expect(compact).not.toContain("Failed");
 		expect(compact).not.toContain("Exit: 1");
 		expect(nativeActivity(component)).not.toContain("Traceback");
 		expect(nativeActivity(component)).toContain("UnicodeEncodeError");
@@ -162,7 +162,7 @@ describe("compact upstream tool feedback", () => {
 		expect(compact).not.toContain("first output");
 		expect(compact).toContain("second output");
 		expect(compact).toContain("third output");
-		expect(compact).toContain("Failed");
+		expect(compact).not.toContain("Failed");
 		expect(compact).not.toContain("Exit: 1");
 
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
