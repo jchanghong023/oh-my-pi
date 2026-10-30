@@ -11,10 +11,15 @@ type GoEvent = {
 };
 type GoCase = { name: string; seconds?: number; result: "pass" | "fail" | "skip"; output: string };
 
+const full = process.argv.length === 3 && process.argv[2] === "--full";
 const mode =
-	process.argv[2] === "--smoke" && process.argv.length === 3 ? "smoke" : process.argv.length === 2 ? "unit" : null;
+	process.argv[2] === "--smoke" && process.argv.length === 3
+		? "smoke"
+		: process.argv.length === 2 || full
+			? "unit"
+			: null;
 if (!mode) {
-	console.error("Usage: bun scripts/sdk-test-go.ts [--smoke]");
+	console.error("Usage: bun scripts/sdk-test-go.ts [--smoke|--full]");
 	process.exit(2);
 }
 
@@ -24,7 +29,7 @@ const reportPath = testReportPath(`sdk-go-omp-rpc-${mode}`);
 const command =
 	mode === "smoke"
 		? ["go", "test", "-json", "-run", "TestSmoke", "-v", "./..."]
-		: ["go", "test", "-json", "-race", "./..."];
+		: ["go", "test", "-json", "-race", ...(full ? ["-count=1"] : []), "./..."];
 const startedAt = new Date().toISOString();
 const started = performance.now();
 const suites = new Map<string, Map<string, GoCase>>();

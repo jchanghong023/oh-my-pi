@@ -1,10 +1,9 @@
 //! `rg` builtin: ripgrep-compatible search, with ripgrep defaults — recursive
 //! directory search, ignore/hidden filtering, and binary-file suppression.
 //!
-//! Shares its matcher, exit status, record layout, and PCRE2 JIT toggle with
-//! the `grep` builtin (`crate::grep`); the two commands otherwise have separate
-//! argument models and output formats, which is why they are separate modules
-//! rather than one with a mode flag.
+//! Shares its matcher and PCRE2 JIT toggle through `pi-walker`, and exit status
+//! and record layout with the `grep` builtin (`crate::grep`). The commands have
+//! separate argument models and output formats.
 
 //! `rg` implemented as an in-process shell builtin on top of the ripgrep
 //! libraries, with ripgrep defaults: recursive directory search, ignore/hidden
@@ -25,9 +24,11 @@ use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{
 	BinaryDetection, Encoding, Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch,
 };
+use pi_walker::grep::{CompiledMatcher, pcre2_jit_enabled};
+
 use crate::grep::{
-	BoundedSearchReader, CompiledMatcher, RecordFormat, SEARCH_HEAP_LIMIT, describe_search_error,
-	exit_status, for_each_nonempty_match, pcre2_jit_enabled, read_pattern_source,
+	BoundedSearchReader, RecordFormat, SEARCH_HEAP_LIMIT, describe_search_error, exit_status,
+	for_each_nonempty_match, read_pattern_source,
 };
 use crate::host::{Host, StreamWriter, Utility, forward_slash_display};
 

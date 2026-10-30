@@ -755,11 +755,6 @@ export declare class VcsGitRepo {
   diffNoIndex(left: string, right: string, binary: boolean, signal?: unknown | undefined | null): Promise<string>
   /** Changed paths. */
   changedFiles(options: VcsDiffOptions, signal?: unknown | undefined | null): Promise<Array<string>>
-  /**
-   * Changed identities and modes; a head without a base compares against the
-   * empty tree.
-   */
-  diffChanges(options: VcsDiffOptions, signal?: unknown | undefined | null): Promise<Array<VcsDiffChange>>
   /** Per-file line counts. */
   numstat(options: VcsDiffOptions, signal?: unknown | undefined | null): Promise<Array<VcsNumstatEntry>>
   /** Test for a diff. */
@@ -4027,16 +4022,6 @@ export interface VcsCommitOptions {
 
 /** Detach copied Git metadata. */
 export declare function vcsDetachGitDir(worktreeRoot: string, sourceCommonDir: string, signal?: unknown | undefined | null): Promise<string>
-
-/** Changed identities and modes without rendered blob contents. */
-export interface VcsDiffChange {
-  path: string
-  previousPath?: string
-  beforeMode?: string
-  afterMode?: string
-  beforeId?: string
-  afterId?: string
-}
 
 /** Diff generation options. */
 export interface VcsDiffOptions {

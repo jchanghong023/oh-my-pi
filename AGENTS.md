@@ -20,6 +20,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
 | `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops                                       |
+| `crates/pi-wiki`        | Independent Rust wiki indexing core; `pi-natives` provides thin N-API bindings          |
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
@@ -260,8 +261,7 @@ For the bash tool specifically:
 
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
-- Never run `cargo test` directly for Rust tests — use `bun run test:rs`. It uses cargo-affected and cargo-nextest (config: `.config/nextest.toml`), then runs `cargo test --doc`; `--collect` explicitly refreshes the clean-tree coverage baseline and `--full` forces all Nextest cases. Doctests remain independent because Nextest does not execute them. The doctest pass runs every runnable doctest in the workspace's lib crates; today that is tree-sitter-go's one example (pi-natives is a `cdylib`, which rustdoc skips; pi-builtins' examples are `ignore`d vendored uutils docs).
-- Required cargo-affected compatibility tool: explicitly run `bun scripts/setup-cargo-affected.ts <cargo-affected-0.4.1-source-dir>` after native bindings are available. Gates use the prepared `target/omp-tools/bin` tool but NEVER install it automatically; see [verification requirements](openspec/specs/fork-verification-gates/spec.md).
+- NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. Cargo and Nextest select all of `pi-wiki` and `pi-natives` namespaces `wiki::` and `python_symbols::`; scope is `rust-fork-features`. The independent `pi-wiki` doctest stage runs `cargo test -p pi-wiki --doc --no-fail-fast`; the native `cdylib` has no doctests. `fulltest` and `slowtest` test fork features, not the entire workspace; static checks and compilation retain their full scope.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 ## Rust Build Profiles
 

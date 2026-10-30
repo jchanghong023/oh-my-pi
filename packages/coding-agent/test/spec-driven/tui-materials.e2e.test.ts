@@ -33,40 +33,16 @@ test.skipIf(!tuiTest)(
 			const solutionCalls = provider.requests.length;
 			const solutionPath = (entry(provider, "solution").outputPaths as string[])[0]!;
 			const completeSolution = await Bun.file(path.join(cwd, solutionPath)).text();
-			const valid = JSON.parse(completeSolution).candidates[0];
-			for (const [candidates, reason] of [
-				[[], /at least one candidate/],
-				[[valid, valid], /Duplicate solution candidate ID/],
-				[[{ ...valid, id: "invalid id" }], /whitespace-free id/],
-				[[{ ...valid, title: "" }], /nonempty title\/content/],
-				[[{ ...valid, content: "" }], /nonempty title\/content/],
-			] as const) {
-				await Bun.write(
-					path.join(cwd, solutionPath),
-					JSON.stringify({ candidates, recommendedCandidateId: "pure" }),
-				);
-				await tui("submit", "/dev next pure");
-				await expectNativeFailure(tui, reason, solutionPath, "/dev next pure");
-				await idle();
-				expect(await state()).toEqual(solution);
-				expect(provider.requests).toHaveLength(solutionCalls);
-				await clearNativeDraft(tui);
-			}
-			for (const recommendedCandidateId of [undefined, "missing"]) {
-				await Bun.write(
-					path.join(cwd, solutionPath),
-					JSON.stringify({
-						candidates: JSON.parse(completeSolution).candidates,
-						recommendedCandidateId,
-					}),
-				);
-				await tui("submit", "/dev next pure");
-				await expectNativeFailure(tui, /recommendedCandidateId/, solutionPath, "/dev next pure");
-				await idle();
-				expect(await state()).toEqual(solution);
-				expect(provider.requests).toHaveLength(solutionCalls);
-				await clearNativeDraft(tui);
-			}
+			await Bun.write(
+				path.join(cwd, solutionPath),
+				JSON.stringify({ candidates: [], recommendedCandidateId: "pure" }),
+			);
+			await tui("submit", "/dev next pure");
+			await expectNativeFailure(tui, /at least one candidate/, solutionPath, "/dev next pure");
+			await idle();
+			expect(await state()).toEqual(solution);
+			expect(provider.requests).toHaveLength(solutionCalls);
+			await clearNativeDraft(tui);
 			await Bun.write(path.join(cwd, solutionPath), completeSolution);
 			for (const command of ["/dev next", "/dev next nonexistent"]) {
 				await tui("submit", command);

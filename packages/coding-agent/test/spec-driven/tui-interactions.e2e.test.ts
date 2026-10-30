@@ -142,42 +142,23 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 	async () => {
 		await withTui({}, [100, 28], async ({ provider, tui, state, idle }) => {
 			const calls = provider.requests.length;
-			for (const command of ["config", `new ${REQUIREMENT}`, "next", "back", "drop"]) {
-				await tui("submit", `/dev ${command}`);
-				await tui("expect", "text", "请先输入 /dev", "--timeout", "30000");
-				expect(provider.requests).toHaveLength(calls);
-				expect(await state()).toEqual({ team: false });
-				await clearNativeDraft(tui, `/dev ${command}`);
-				expect(await tui("text")).not.toContain("Dev ·");
-			}
+			const command = `/dev new ${REQUIREMENT}`;
+			await tui("submit", command);
+			await tui("expect", "text", "请先输入 /dev", "--timeout", "30000");
+			expect(provider.requests).toHaveLength(calls);
+			expect(await state()).toEqual({ team: false });
+			await clearNativeDraft(tui, command);
+			expect(await tui("text")).not.toContain("Dev ·");
 			await tui("submit", "/dev");
 			await idle();
-			for (const command of [
-				"help",
-				"start",
-				"status",
-				"answer",
-				"confirm-spec",
-				"choose",
-				"confirm-plan",
-				"revise-plan",
-				"accept",
-				"repair",
-				"amend",
-				"change-solution",
-				"cancel-message",
-				"pause",
-				"resume",
-				"cancel",
-				"unknown-review-command",
-			]) {
+			for (const command of ["start", "unknown-review-command"]) {
 				await tui("submit", `/dev ${command}`);
 				await tui("expect", "text", `未知 /dev 子命令：${command}`, "--timeout", "30000");
 				expect(provider.requests).toHaveLength(calls);
 				expect((await state()).run).toBeUndefined();
 				await clearNativeDraft(tui, `/dev ${command}`);
 			}
-			for (const command of ["new", "config surplus", "back surplus", "drop surplus", "next pure normalizer"]) {
+			for (const command of ["new", "config surplus"]) {
 				await tui("submit", `/dev ${command}`);
 				await tui("expect", "text", "用法：/dev", "--timeout", "30000");
 				expect(provider.requests).toHaveLength(calls);

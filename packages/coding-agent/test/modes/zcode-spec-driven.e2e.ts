@@ -18,6 +18,7 @@ import {
 	type OmpSpecDetails,
 	type OmpSpecRunBinding,
 } from "../../src/modes/zcode/schema";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import * as Baseline from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/index";
 import {
 	IMPLEMENTATION,

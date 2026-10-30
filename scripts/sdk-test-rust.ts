@@ -20,14 +20,23 @@ type RustCase = {
 };
 type Suite = { cases: RustCase[]; count: number; completed: boolean };
 
-if (process.argv.length !== 2) {
-	console.error("Usage: bun scripts/sdk-test-rust.ts");
+const full = process.argv.length === 3 && process.argv[2] === "--full";
+if (process.argv.length !== 2 && !full) {
+	console.error("Usage: bun scripts/sdk-test-rust.ts [--full]");
 	process.exit(2);
 }
 
 // Keep cargo test itself: it runs both ordinary test targets and rustdoc tests.
 // libtest's JSON formatter and per-case exec_time require the nightly test flags.
-const command = ["cargo", "test", "--", "--format=json", "--report-time", "-Zunstable-options"];
+const command = [
+	"cargo",
+	"test",
+	...(full ? ["--no-fail-fast"] : []),
+	"--",
+	"--format=json",
+	"--report-time",
+	"-Zunstable-options",
+];
 const cwd = path.join(import.meta.dir, "..", "sdk", "rust", "omp-rpc");
 const run = await beginTestRun("sdk/rust/omp-rpc unit and doctest");
 const reportPath = testReportPath("sdk-rust-omp-rpc-unit-doc");

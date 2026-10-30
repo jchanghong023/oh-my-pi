@@ -158,7 +158,7 @@ function logGateResult(result: GateResult, fields: Record<string, unknown> = {})
 		limit_ms: result.limitSeconds * 1000,
 		platform: process.platform,
 		arch: process.arch,
-		scope: "full-project",
+		scope: result.level === "fastcheck" ? "full-project" : "fork-features",
 		name: result.level,
 		...fields,
 	});
@@ -637,7 +637,7 @@ class Runtime {
 			platform: process.platform,
 			arch: process.arch,
 			limit_ms: scope.limit,
-			scope: "full-project",
+			scope: scope.level === "fastcheck" ? "full-project" : "fork-features",
 			name: scope.level,
 		});
 		if (!scope.parent) {
@@ -649,7 +649,7 @@ class Runtime {
 				gate_level: scope.level,
 				platform: process.platform,
 				arch: process.arch,
-				scope: "full-project",
+				scope: scope.level === "fastcheck" ? "full-project" : "fork-features",
 				name: scope.level,
 			});
 		}

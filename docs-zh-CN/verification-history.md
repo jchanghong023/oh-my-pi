@@ -2,6 +2,25 @@
 
 本页保存原需求目录索引中的定向验收和历史运行证据。各条结论只适用于其中列明的源码、平台和范围；当前批准需求以相应 OpenSpec 规格为准。此前门禁运行均为历史源码证据，不证明本次直接 Bun／Cargo 门禁切换已通过。
 
+## 全量测试竞态与上游归属（2026-10-30）
+
+Windows x64、Bun 1.4.4，源码 HEAD `93b18ac087fb71239b7163fcdceca61e8da50730` 加当时未提交改动；有效上游基线为 [`can1357/oh-my-pi@b0756921ed231869ea92feef0056629a429d3fe1`](https://github.com/can1357/oh-my-pi/tree/b0756921ed231869ea92feef0056629a429d3fe1)，版本 v18.13.3。首轮 fulltest 1488.7 秒、exit=1，5 个失败分块共 6 项失败，报告 `runs/test-timing/2026-10-30T01-08-26.148Z-106340-00fcbaa5/run.json`；第二轮 1231.8 秒、exit=1，原 6 项均通过，但另有 1 个失败分块（1590／1591 通过），报告 `runs/test-timing/2026-10-30T01-39-10.326Z-100196-d6c125e3/run.json`。第二轮不是全量通过。
+
+- **上游继承的测试 fixture 缺陷线索：** 基线的 [focused-subagent-manual-yield 测试](https://github.com/can1357/oh-my-pi/blob/b0756921ed231869ea92feef0056629a429d3fe1/packages/coding-agent/test/task/focused-subagent-manual-yield.test.ts)未提供 `description`，后台 task-label 调用会与测试按序号分配的 mock 竞争；本地 fixture 显式传入 description。基线的 [kitty keyboard overlay 测试](https://github.com/can1357/oh-my-pi/blob/b0756921ed231869ea92feef0056629a429d3fe1/packages/tui/test/kitty-keyboard-da1-ordering.test.ts)以固定 67ms 等待代替绘制完成；本地改为等待 TUI 实际绘制完成事件。相同写法已在基线源码中确认，但未单独运行纯上游基线；这是测试竞态线索，不认定为上游产品功能缺陷或已在纯上游运行复现。
+- **fork 新增测试：** interactive-terminal 的长回复 auto-shake 用例为 fork 新增，不归上游；原测试依赖固定帧，本地改为等待实际 shake 通知并保留首行。上述处理仅修改测试 fixture，未提高超时、新增跳过或弱化断言。
+- **未确认原因：** 首轮 Git 侧栏和服务就绪超时，定向运行及第二轮未改相关代码即通过；根因未确认，不认定已修复或属于上游 bug。
+- **第二轮 relay 失败待定：** `relay tab ownership` 中“opens a default tab in the browser of the tab omp used last, not the first selected one”运行 20.516 秒后报 `Selected tab did not become available before omp could attach`。只读对比基线，browser relay 的 `bridge.ts`、`attach.ts`、`server.ts` 及 `browser-relay-tab-isolation.test.ts` 相同；`tab-supervisor.ts` 的 `buildInitPayload` 和选择路径相同，其差异在 worker 恢复及工具调用清理。失败发生于共享代码，但未在纯上游复现，根因及上游归属未确认，暂未认定修复。
+
+首轮后定向结果：focused 2 通过／3 既有跳过，interactive 17 通过，kitty 10 通过／1 既有跳过，Git 10 通过，服务原 5 文件 57 通过／1 既有跳过；跳过不计通过。这些定向结果不替代完整门禁。
+
+第三轮 fulltest（源码指纹 `77e344148f0ec2e3bd15259e511e22952bd563a2736de97666b2bee3fc28fb3f`）1323.4 秒、exit=1，1589／1591 分块通过；relay 用例通过，但服务 log readiness 再次超时，另有 `browser-upload-contents.test.ts` 的 contents 路径在夹具导航时出现 `net::ERR_ABORTED`。报告 `runs/test-timing/2026-10-30T02-05-56.245Z-18744-082452f3/run.json`；重复超时及新导航失败仍须定位，不能因前次单独通过认定已修复或归为上游 bug。
+
+上传测试的外部 Chromium 夹具在上述上游基线中同样未指定启动 URL；本地按既有连接浏览器测试约定显式传入 `about:blank`，消除对默认启动页的依赖，原导航预算及上传错误断言不变。定向文件 10 项通过／11 项既有跳过；这不证明 `ERR_ABORTED` 的根因，也不等同纯上游复现或完整门禁通过。服务原分组再次定向 57 项通过／1 项既有跳过，临时失败诊断用于下一轮全负载采证，尚未认定修复。
+
+第四轮 fulltest 已通过：源码指纹 `79e74e1f17fbaae806f138f8e31231d2c879edac7f1f45bac9c421f31512bb20`，总墙钟 1356.7 秒，compile_excluded=17.5 秒，budgeted=1339.2 秒，exit=0。报告 `runs/test-timing/2026-10-30T02-33-03.117Z-96292-e67292c6/run.json` 为 complete，JUnit 核对 43419 项／实际执行 42231 项／0 失败，Python 增量排除 107 项；既有跳过与排除不算本轮执行。该快照仍含服务及上传夹具的临时失败诊断，不认定两次间歇性超时的根因已经消除；收尾删除诊断，只保留最小 fixture 改动。
+
+删除临时诊断后的下一轮 fulltest 1579.4 秒、exit=1，1590／1591 分块通过，仅 `changelog-static-import.test.ts` 的编译产物临时目录在 `finally` 删除时出现 Windows `EBUSY`；资源条目和版本断言已通过。报告 `runs/test-timing/2026-10-30T02-57-17.753Z-99724-6372efd7/run.json`。该测试与上游基线[同名文件](https://github.com/can1357/oh-my-pi/blob/b0756921ed231869ea92feef0056629a429d3fe1/packages/coding-agent/test/utils/changelog-static-import.test.ts)一致，属于共享测试夹具的清理问题，不是 changelog 资源读取失败；纯上游未单独运行。本地仅将该目录清理改用既有 `removeWithRetries`，保留资源断言和原 30 秒测试时限；真实源码／bundle／编译产物定向 7 项通过。之前的服务、relay、上传用例本轮均通过，间歇性问题的根因仍不冒称已确认。
+
 ## 全量门禁发现的上游问题与平台边界（2026-10-29）
 
 - **上游浏览器角色查询：** 集成基线 `b0756921ed231869ea92feef0056629a429d3fe1` 的 `packages/coding-agent/src/tools/browser/query-handlers.ts` 对未指定 `value` 的 submit／reset 输入硬编码英文默认名称；Chromium 无障碍树返回的本地化原生名称可能不同，导致 `observe` 返回的名称不能用于精确或子串角色查询。Windows 定向运行 `packages/coding-agent/test/tools/browser-queries.test.ts` 重现精确查询零结果；该测试是 fork 工作树中的覆盖，失败证明当前工作树的问题，不证明其他语言或平台的具体结果。修复尚未完成；Tern 的页面脚本接口不能直接读取 Chromium 无障碍树。

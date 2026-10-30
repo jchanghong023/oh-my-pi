@@ -15,6 +15,7 @@ import { OmpTanBridge } from "../../src/modes/zcode/tan";
 import type { ZCodeSessionManager, ZCodeSessionRecord } from "../../src/modes/zcode/sessions";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../src/session/messages";
 import type { SessionEntry } from "../../src/session/session-entries";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 type Frame = Record<string, unknown>;
 type Request = {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 import type { BunPlugin } from "bun";
 import { resolveBundledChangelogPath } from "../../src/utils/changelog";
 
@@ -152,7 +153,7 @@ describe("changelog static import resources", () => {
 			expect(result.entries).toBe(sourceResult.entries);
 			expect(result.version).toBe(sourceResult.version);
 		} finally {
-			await fs.rm(tempDir, { force: true, recursive: true });
+			await removeWithRetries(tempDir);
 		}
 	}, 30_000);
 });

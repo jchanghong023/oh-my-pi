@@ -39,6 +39,44 @@ const CACHE_COMPONENTS: Record<string, true | undefined> = {
 	".ruff_cache": true,
 };
 
+/** Conservative boundary for inputs Bun cannot trace through native or dynamic builds. */
+export function classifyFulltestChanges(changed: readonly string[]): { bun: boolean; rust: boolean; ui: boolean } {
+	const ordinarySource = (file: string) =>
+		/^packages\/coding-agent\/src\/(?:tools|repo)\/.+\.[cm]?tsx?$/.test(file) &&
+		!/(?:^|\/)(?:generated|generator|generators|fixtures?|native|build|config)(?:\/|[.-])/i.test(file);
+	const known = changed.every(ordinarySource);
+	return { bun: !known, rust: !known, ui: changed.length > 0 };
+}
+
+/** Paths changed against a revision, including both sides of renames and untracked files. */
+export async function captureChangedPaths(gate: GateRun, root = repoRoot, baseRevision = "HEAD"): Promise<string[]> {
+	return gate.charged(async () => {
+		const capture = async (label: string, args: string[]) =>
+			(await gate.capture({ label, argv: ["git", ...args], cwd: root })).stdout;
+		const tracked = await capture("source/changed", [
+			"diff",
+			"--name-only",
+			"--no-renames",
+			"-z",
+			baseRevision,
+			"--",
+		]);
+		const staged = await capture("source/staged", [
+			"diff",
+			"--cached",
+			"--name-only",
+			"--no-renames",
+			"-z",
+			baseRevision,
+			"--",
+		]);
+		const untracked = await capture("source/untracked", ["ls-files", "--others", "--exclude-standard", "-z"]);
+		const names = [...new Set(`${tracked}\0${staged}\0${untracked}`.split("\0").filter(Boolean))].sort();
+		for (const name of names) sourcePath(root, name);
+		return names;
+	});
+}
+
 /** Local Git reads only. Tracked files and nonignored new source preserve dirty
  * additions/edits/deletions; generated/build caches do not enter the inventory. */
 export async function captureSourceIdentity(gate: GateRun, root = repoRoot): Promise<SourceIdentity> {

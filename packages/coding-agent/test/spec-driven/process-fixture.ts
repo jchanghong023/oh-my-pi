@@ -13,6 +13,7 @@ import {
 	v4ConversationRowsRangeResultSchema,
 	v4ConversationWorkflowRunsResultSchema,
 } from "../../src/modes/zcode/schema";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import {
 	contentText,
 	createProviderFixture,

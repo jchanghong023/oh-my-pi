@@ -116,21 +116,39 @@ describe("stage files are the sole artifact inputs", () => {
 	test("rejects absent, malformed, empty and duplicate candidates, accepts any positive count", async () => {
 		const { store, paths, write } = await fixture();
 		await expect(store.readSolution()).rejects.toThrow();
-		for (const content of [
-			"not JSON",
-			"{}",
-			'{"candidates":[]}',
-			'{"candidates":[{"id":"a","title":" ","content":"x"}]}',
-			'{"candidates":[{"id":"方案 一","title":"方案","content":"完整方案"}]}',
-			JSON.stringify({
-				candidates: [
-					{ id: "a", title: "A", content: "A" },
-					{ id: "a", title: "B", content: "B" },
-				],
-			}),
-		]) {
+		for (const [content, reason] of [
+			["not JSON", /valid JSON/],
+			["{}", /at least one candidate/],
+			['{"candidates":[],"recommendedCandidateId":"a"}', /at least one candidate/],
+			[
+				'{"candidates":[{"id":"a","title":" ","content":"x"}],"recommendedCandidateId":"a"}',
+				/nonempty title\/content/,
+			],
+			[
+				'{"candidates":[{"id":"a","title":"","content":"x"}],"recommendedCandidateId":"a"}',
+				/nonempty title\/content/,
+			],
+			[
+				'{"candidates":[{"id":"a","title":"A","content":""}],"recommendedCandidateId":"a"}',
+				/nonempty title\/content/,
+			],
+			[
+				'{"candidates":[{"id":"方案 一","title":"方案","content":"完整方案"}],"recommendedCandidateId":"方案 一"}',
+				/whitespace-free id/,
+			],
+			[
+				JSON.stringify({
+					candidates: [
+						{ id: "a", title: "A", content: "A" },
+						{ id: "a", title: "B", content: "B" },
+					],
+					recommendedCandidateId: "a",
+				}),
+				/Duplicate solution candidate ID/,
+			],
+		] as const) {
 			await write(paths.solution, content);
-			await expect(store.readSolution()).rejects.toThrow();
+			await expect(store.readSolution()).rejects.toThrow(reason);
 		}
 		const content = JSON.stringify({
 			candidates: [{ id: "a", title: "原方案", content: "# 完整方案\n\n未经摘要的全文。" }],

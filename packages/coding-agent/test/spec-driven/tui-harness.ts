@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import {
 	contentText,
 	createProviderFixture,

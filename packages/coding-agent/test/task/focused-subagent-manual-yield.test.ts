@@ -138,6 +138,9 @@ async function spawnKeptAliveChild(options?: { handler?: MockHandler; structured
 			artifactsDir,
 			agent: { name: "task", description: "test", systemPrompt: "test", tools: ["read"], source: "bundled" },
 			task: "report",
+			// Keep the mock's request sequence exclusive to the child turn; otherwise
+			// the off-thread task-label model call can consume or block a response.
+			description: "test",
 			index: 0,
 			id: AGENT_ID,
 			parentAgentId: PARENT_ID,
@@ -347,12 +350,20 @@ for (const source of ["queued steering", "async completion"] as const) {
 			).toHaveLength(1);
 			if (source === "queued steering") {
 				await child.session.steer("Continue without parent input", undefined, { attribution: "agent" });
-				await peerOnlySeen.promise;
-				await child.session.waitForIdle();
-				await child.session.waitForIrcReplies();
-				expect(await Bun.file(child.artifact).text()).toContain("PARENT_FRESH_FINAL");
-				expect(child.deliveries).toHaveLength(1);
+			} else {
+				manager.register("bash", "more child-owned work", async () => "more work complete", {
+					ownerId: AGENT_ID,
+					agentId: AGENT_ID,
+				});
 			}
+			await peerOnlySeen.promise;
+			await child.session.waitForIdle();
+			await child.session.settleAsyncWork();
+			await child.session.waitForIrcReplies();
+			await manager.waitForOwnerJobs(PARENT_ID);
+			await manager.drainDeliveries({ filter: { ownerId: PARENT_ID } });
+			expect(await Bun.file(child.artifact).text()).toContain("PARENT_FRESH_FINAL");
+			expect(child.deliveries).toHaveLength(1);
 		} finally {
 			releaseContinuation.resolve();
 			child.close();

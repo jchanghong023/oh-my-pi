@@ -318,7 +318,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(otherInputs[0]!.highspeed).toBeUndefined();
 		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
-	test("contract noop commands stay idempotent, late interaction answers do not fail, unknown createSession workspaces are rejected", async () => {
+	test("noop and late-answer contracts, createSession routing, and sessions-index workspace isolation", async () => {
 		await using root = await TempDir.create("@zcode-noop-contract-");
 		await using config = await fixture(root);
 		await using peer = new ProcessPeer(config.cwdA, config.env);
@@ -443,16 +443,6 @@ describe("ZCode actual public app-server process", () => {
 		);
 		expect(draft.session.workspace.workspacePath).toBe(config.cwdB);
 		expect(draft.session.workspace.workspaceKey).toBe(config.cwdB);
-		expect(await peer.eof()).toBe(0);
-	}, 120_000);
-
-	test("sessions-index topics only carry sessions owned by their workspace", async () => {
-		await using root = await TempDir.create("@zcode-index-isolation-");
-		await using config = await fixture(root);
-		await using peer = new ProcessPeer(config.cwdA, config.env);
-		await peer.ready();
-		const a = await create(peer, config.cwdA);
-		const b = await create(peer, config.cwdB);
 		const topic = `sessions-index/${config.cwdB}`;
 		expect(
 			await peer.request("v4/conversation/subscribe", {
@@ -470,21 +460,21 @@ describe("ZCode actual public app-server process", () => {
 			throw new Error("Expected complete initial sessions-index snapshot");
 		// sessions-index 快照只含归属该工作区 cwd 的会话;manager.list() 的 listAll 合并了
 		// 所有项目的会话,不过滤会把 cwdA 的会话泄漏进 cwdB 侧栏(findings P2)。
-		const snapshot = wire.frame.payload.snapshot;
-		expect(snapshot.workspaceId).toBe(config.cwdB);
-		expect(snapshot.sessions.map(session => session.sessionId)).toEqual([b]);
-		const c = await create(peer, config.cwdB);
+		const indexSnapshot = wire.frame.payload.snapshot;
+		expect(indexSnapshot.workspaceId).toBe(config.cwdB);
+		expect(indexSnapshot.sessions.map(session => session.sessionId)).toEqual([created.result.sessionId]);
+		const secondB = await create(peer, config.cwdB);
 		await peer.next(
 			frame =>
 				frame.method === "v4/conversation/frame" &&
 				isRecord(frame.params) &&
 				frame.params.topic === topic &&
-				JSON.stringify(frame.params).includes(c),
+				JSON.stringify(frame.params).includes(secondB),
 		);
 		const indexFrames = peer.seen.filter(
 			frame => frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
 		);
-		expect(JSON.stringify(indexFrames)).not.toContain(a);
+		expect(JSON.stringify(indexFrames)).not.toContain(id);
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 

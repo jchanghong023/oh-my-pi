@@ -5,13 +5,17 @@
 ### Changed
 
 - Use the existing Cargo host build for native development instead of the fork-only Bazel host cache; retain upstream explicit-target Bazel builds and native installation rollback.
-- Keep Cargo/Nextest and doctests as the normal Rust test path, with conservative crate-level `--affected` selection and an explicit local-only early cargo-affected experiment; manual CI runs the full Rust suite without that experiment.
-- Limit Nextest test threads to the smaller of 15 and the available CPU count for normal, affected and experimental Rust test runs.
+- Move the Wiki Rust core to the independent `pi-wiki` crate while retaining thin native bindings, existing TypeScript and database contracts, and single-addon distribution; `test:rs` selects the complete Wiki crate and native fork-feature tests, with a separate `pi-wiki` doctest stage.
+- Limit Nextest test threads to the smaller of available CPU cores and 14 on Windows or 28 on other platforms.
 
 ### Fixed
 
 - Fixed native addon and grammar installation paths to share the effective configuration root and normalized profile, while honoring an explicit `PI_NATIVES_DIR`.
 - Bounded the built-in `grep` and `rg` search buffer to 256 MiB plus one byte; when a file or stdin exceeds the buffer budget, they report an error instead of buffering without limit, and continue searching other files. Pattern files and `grep --exclude-from` sources are limited to 256 MiB. Errors return status 2 except when a `-q` match takes precedence ([#17108](https://github.com/can1357/oh-my-pi/pull/17108)).
+
+### Removed
+
+- Removed the unused `VcsGitRepo.diffChanges` native API.
 
 ### Fixed
 

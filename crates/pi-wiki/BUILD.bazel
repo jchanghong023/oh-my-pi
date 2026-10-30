@@ -1,0 +1,28 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["Cargo.toml"])
+
+rust_library(
+    name = "pi-wiki",
+    srcs = glob(["src/**/*.rs"]),
+    aliases = aliases(),
+    crate_name = "pi_wiki",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro = True),
+    version = "18.13.3",
+    deps = all_crate_deps(normal = True) + [
+        "//crates/pi-vfs",
+        "//crates/pi-walker",
+    ],
+)
+
+rust_test(
+    name = "pi-wiki_test",
+    crate = ":pi-wiki",
+    edition = "2024",
+    proc_macro_deps = all_crate_deps(proc_macro_dev = True),
+    deps = all_crate_deps(normal_dev = True),
+)

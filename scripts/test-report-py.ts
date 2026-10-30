@@ -5,8 +5,10 @@ import * as path from "node:path";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 const args = process.argv.slice(2);
-if (args.length > 1 || args.some(arg => arg !== "integration")) throw new Error("Expected [integration]");
+if (args.length > 1 || args.some(arg => arg !== "integration" && arg !== "--full"))
+	throw new Error("Expected [integration|--full]");
 const integration = args.includes("integration");
+const full = args.includes("--full");
 const windows = process.platform === "win32";
 if (windows && integration) {
 	console.error("UNSUPPORTED: Robomp integration tests are unsupported on native Windows.");
@@ -34,17 +36,18 @@ let reportingFailed = false;
 const testmonDir = path.resolve("runs", "testmon", `${process.platform}-${process.arch}`);
 try {
 	for (const directory of suites) {
-		if (!integration) await fs.mkdir(testmonDir, { recursive: true });
+		if (!integration && !full) await fs.mkdir(testmonDir, { recursive: true });
 		const reportPath = testReportPath(directory);
 		const command = [python, "-m", "pytest", directory, `--junitxml=${reportPath}`, `--junit-prefix=${directory}`];
-		if (!integration) command.push("--testmon", "-vv");
+		if (!integration) command.push(...(full ? ["-p", "no:testmon", "-vv"] : ["--testmon", "-vv"]));
 		const startedAt = new Date().toISOString();
 		const started = performance.now();
 		const env = { ...process.env };
+		if (full) delete env.PYTEST_ADDOPTS;
 		if (integration) env.ROBOMP_INTEGRATION = "1";
 		else {
 			delete env.ROBOMP_INTEGRATION;
-			env.TESTMON_DATAFILE = path.join(testmonDir, `${directory.replaceAll("/", "-")}.sqlite`);
+			if (!full) env.TESTMON_DATAFILE = path.join(testmonDir, `${directory.replaceAll("/", "-")}.sqlite`);
 		}
 		try {
 			const child = Bun.spawn(command, {
@@ -54,7 +57,7 @@ try {
 				stderr: "inherit",
 			});
 			let output = "";
-			if (!integration && child.stdout !== null && typeof child.stdout !== "number") {
+			if (!integration && child.stdout !== undefined && child.stdout !== null && typeof child.stdout !== "number") {
 				const decoder = new TextDecoder();
 				for await (const chunk of child.stdout) {
 					process.stdout.write(chunk);
@@ -94,20 +97,22 @@ try {
 				exitCode: suiteExitCode,
 				reportPath,
 				status:
-					!integration && (selected === undefined || (selected === 0 && !deselected))
+					!integration && !full && (selected === undefined || (selected === 0 && !deselected))
 						? "partial"
 						: !integration && suiteExitCode === 0 && selected === 0 && deselected
 							? "not-selected"
 							: undefined,
 				selection: integration
 					? undefined
-					: {
-							tool: "pytest-testmon",
-							mode: "affected",
-							selected,
-							deselected,
-							baseline: env.TESTMON_DATAFILE,
-						},
+					: full
+						? { tool: "pytest", mode: "full", reason: "all ordinary tests in suite; integration is opt-in" }
+						: {
+								tool: "pytest-testmon",
+								mode: "affected",
+								selected,
+								deselected,
+								baseline: env.TESTMON_DATAFILE,
+							},
 				timingBasis: "pytest testcase.time: setup + call + teardown (seconds)",
 				runnerVersion: pytestVersion,
 			});

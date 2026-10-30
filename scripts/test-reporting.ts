@@ -25,6 +25,7 @@ export interface TestSelection {
 	deselected?: number;
 	reason?: string;
 	baseline?: string;
+	changedPaths?: string[];
 	reportPath?: string;
 }
 
@@ -81,7 +82,7 @@ export async function latestLocalTestProducers(
 				return [];
 			}
 			if (entry.name === currentRunId && run.completion === "running" && run.sourceDigest == null) continue;
-			if (run.scope !== "fulltest: full current-platform project suites") continue;
+			if (run.scope !== "fulltest: fork feature suites") continue;
 			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
 			const started = Date.parse(run.startedAtUtc ?? "");
 			if (!Number.isFinite(started) || started > now) return [];
@@ -105,10 +106,11 @@ export async function latestLocalTestProducers(
 			!latest.producers.some(producer => producer?.report === "available") ||
 			!latest.producers.every(
 				producer =>
-					(producer?.report === "available" &&
+					producer?.selection?.mode !== "affected" &&
+					((producer?.report === "available" &&
 						producer.status !== "partial" &&
 						producer.status !== "unsupported") ||
-					(producer?.report === "not-supported" && producer.status === "stage"),
+						(producer?.report === "not-supported" && producer.status === "stage")),
 			)
 		)
 			return [];
@@ -271,8 +273,7 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 	const nativeAffected =
 		producer.command?.some(arg => arg === "--testmon" || arg === "--changed" || arg.startsWith("--changed=")) ??
 		false;
-	if (!selection)
-		return producer.status !== "not-selected" && !nativeAffected && !producer.producer.startsWith("cargo affected ");
+	if (!selection) return producer.status !== "not-selected" && !nativeAffected;
 	if (
 		!selection.tool ||
 		!["full", "affected"].includes(selection.mode) ||
@@ -288,27 +289,6 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 		(selection.selected === undefined || selection.deselected === undefined)
 	)
 		return false;
-	if (selection.tool === "cargo-affected" && selection.reportPath) {
-		try {
-			const native = JSON.parse(await fs.readFile(selection.reportPath, "utf8"));
-			const summary = native.selection?.summary;
-			if (native.schema_version !== 1 || typeof native.cache?.status !== "string") return false;
-			if (selection.mode === "affected") {
-				if (
-					selection.selected === undefined ||
-					selection.deselected === undefined ||
-					summary?.mode !== "selection" ||
-					summary.selected !== selection.selected ||
-					summary.skipped !== selection.deselected
-				)
-					return false;
-			} else if (summary?.mode !== "full-suite-no-listing") return false;
-		} catch {
-			return false;
-		}
-	} else if (selection.tool === "cargo-affected" && selection.mode === "affected") {
-		return false;
-	}
 	if (
 		selection.mode === "affected" &&
 		selection.selected === 0 &&
@@ -318,9 +298,36 @@ async function validSelection(producer: ReportProducer): Promise<boolean> {
 		return false;
 	if (producer.status === "not-selected") {
 		if (producer.exitCode !== 0 || selection.mode !== "affected" || selection.selected !== 0) return false;
+		if (selection.tool === "git") {
+			const record = producer as unknown as Record<string, unknown>;
+			const evidence = selection as unknown as Record<string, unknown>;
+			return (
+				producer.report === "not-supported" &&
+				producer.reportPath == null &&
+				producer.durationSeconds === 0 &&
+				!["case", "cases", "testcase", "testcases", "time"].some(
+					key => record[key] != null || evidence[key] != null,
+				) &&
+				selection.reportPath == null &&
+				typeof selection.baseline === "string" &&
+				/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(selection.baseline) &&
+				typeof selection.reason === "string" &&
+				selection.reason.trim().length > 0 &&
+				Array.isArray(selection.changedPaths) &&
+				selection.changedPaths.every(
+					(value: unknown) =>
+						typeof value === "string" &&
+						value.length > 0 &&
+						!value.includes("\\") &&
+						!value.startsWith("/") &&
+						!/^[a-z]:/i.test(value) &&
+						value.split("/").every(part => part !== "" && part !== "." && part !== ".."),
+				)
+			);
+		}
 		if (selection.tool === "bun") return selection.reason === "Bun reported no affected test files";
 		if (selection.tool === "pytest-testmon") return (selection.deselected ?? 0) > 0;
-		return selection.tool === "cargo-affected";
+		return false;
 	}
 	return true;
 }
@@ -428,10 +435,7 @@ async function writeTestRun(
 		producers.every(
 			producer =>
 				producer.exitCode === 0 &&
-				((producer.report === "available" &&
-					producer.status !== "partial" &&
-					producer.status !== "unsupported" &&
-					producer.status !== "failed") ||
+				((producer.report === "available" && producer.status === "passed") ||
 					(producer.report === "not-supported" &&
 						(producer.status === "stage" || producer.status === "not-selected"))),
 		)

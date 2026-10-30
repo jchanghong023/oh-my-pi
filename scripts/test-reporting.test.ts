@@ -48,6 +48,18 @@ const emptyBun = {
 	status: "not-selected",
 	selection: { tool: "bun", mode: "affected", selected: 0, reason: "Bun reported no affected test files" },
 };
+const emptyGit = {
+	status: "not-selected",
+	durationSeconds: 0,
+	selection: {
+		tool: "git",
+		mode: "affected",
+		selected: 0,
+		baseline: "a".repeat(40),
+		reason: "No dependent source changed",
+		changedPaths: ["packages/example/src/a.ts"],
+	},
+};
 
 test("affected selection reports only executed XML cases and native deselections", async () => {
 	const report = await fixture([
@@ -94,33 +106,6 @@ test("missing selection evidence and failed commands stay partial", async () => 
 	expect(gateFailed.completion).toBe("partial");
 });
 
-test("cargo-affected zero selection requires its native diagnostic", async () => {
-	const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cargo-selection-"));
-	try {
-		const reportPath = path.join(dir, "selection.json");
-		await fs.writeFile(
-			reportPath,
-			JSON.stringify({
-				schema_version: 1,
-				cache: { status: "warm" },
-				selection: { summary: { mode: "selection", selected: 0, skipped: 12 } },
-			}),
-		);
-		const record = {
-			status: "not-selected",
-			selection: { tool: "cargo-affected", mode: "affected", selected: 0, deselected: 12, reportPath },
-		};
-		const report = await fixture([record]);
-		expect(report.completion).toBe("complete");
-		expect(report.reconciliation).toMatchObject({ cases: 0, executed: 0, deselected: 12 });
-		expect(report.producers[0].selection.reportPath).toBe(reportPath);
-		await fs.unlink(reportPath);
-		expect((await fixture([record])).completion).toBe("partial");
-	} finally {
-		await fs.rm(dir, { recursive: true, force: true });
-	}
-});
-
 test("pytest selection count must agree with XML", async () => {
 	const report = await fixture([
 		{
@@ -131,4 +116,70 @@ test("pytest selection count must agree with XML", async () => {
 	]);
 	expect(report.completion).toBe("partial");
 	expect(report.reconciliation.status).toBe("invalid");
+});
+
+test("Git-planned unselected stages complete without claiming executed cases", async () => {
+	for (const changedPaths of [[], ["packages/example/src/a.ts"]]) {
+		const report = await fixture([
+			{ ...emptyGit, selection: { ...emptyGit.selection, changedPaths } },
+			{ ...emptyGit, selection: { ...emptyGit.selection, baseline: "b".repeat(64), changedPaths } },
+		]);
+		expect(report.completion).toBe("complete");
+		expect(report.coverage).toBe("affected-tests-only");
+		expect(report.reconciliation).toMatchObject({ status: "validated", cases: 0, executed: 0, failures: 0 });
+		expect(report.producers.every((producer: { reportPath: string | null }) => producer.reportPath === null)).toBe(
+			true,
+		);
+	}
+});
+
+test("Git-planned stages coexist with real XML and never hide failures", async () => {
+	const passed = await fixture([{ xml: oneCase, status: "passed" }, emptyGit]);
+	expect(passed.completion).toBe("complete");
+	expect(passed.coverage).toBe("affected-tests-only");
+	expect(passed.reconciliation).toMatchObject({ status: "validated", cases: 1, executed: 1, failures: 0 });
+	const failedXml = '<testsuite><testcase name="failed" time="0.2"><failure /></testcase></testsuite>';
+	const failed = await fixture([{ xml: failedXml, status: "failed", exitCode: 1 }, emptyGit]);
+	expect(failed.completion).toBe("partial");
+	expect(failed.reconciliation).toMatchObject({ cases: 1, executed: 1, failures: 1 });
+	const inconsistent = await fixture([{ xml: failedXml, status: "passed", exitCode: 0 }, emptyGit]);
+	expect(inconsistent.completion).toBe("partial");
+	expect(inconsistent.reconciliation.failures).toBe(1);
+	for (const status of ["partial", "failed", "blocked", "error"]) {
+		const report = await fixture([{ xml: oneCase, status }, emptyGit]);
+		expect(report.completion).toBe("partial");
+	}
+});
+
+test("Git selection rejects incomplete, contradictory or fabricated evidence", async () => {
+	const selection = emptyGit.selection;
+	const invalid = [
+		{ ...emptyGit, selection: { ...selection, tool: "unknown" } },
+		{ ...emptyGit, selection: { ...selection, mode: "full" } },
+		{ ...emptyGit, selection: { ...selection, selected: 1 } },
+		{ ...emptyGit, selection: { ...selection, baseline: undefined } },
+		{ ...emptyGit, selection: { ...selection, baseline: "z".repeat(40) } },
+		{ ...emptyGit, selection: { ...selection, reason: "  " } },
+		{ ...emptyGit, selection: { ...selection, changedPaths: undefined } },
+		{ ...emptyGit, selection: { ...selection, changedPaths: ["../outside"] } },
+		{ ...emptyGit, selection: { ...selection, changedPaths: ["/absolute"] } },
+		{ ...emptyGit, selection: { ...selection, changedPaths: ["C:\\outside"] } },
+		{ ...emptyGit, selection: { ...selection, reportPath: "fake.xml" } },
+		{ ...emptyGit, exitCode: 1 },
+		{ ...emptyGit, durationSeconds: 1 },
+		{ ...emptyGit, xml: oneCase },
+		{ ...emptyGit, reportPath: "fake.xml" },
+		{ ...emptyGit, cases: 1 },
+		{ ...emptyGit, time: 0.1 },
+		{ ...emptyGit, selection: { ...selection, testcases: ["fabricated"] } },
+	];
+	for (const record of invalid) {
+		const report = await fixture([record]);
+		expect(report.completion).toBe("partial");
+		expect(report.reconciliation.status).toBe("invalid");
+	}
+	for (const status of ["partial", "failed", "blocked"]) {
+		const report = await fixture([{ ...emptyGit, status }]);
+		expect(report.completion).toBe("partial");
+	}
 });

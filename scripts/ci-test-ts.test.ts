@@ -44,7 +44,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		const dir = path.join(root, "runs", "test-timing", "fixture");
 		await fs.mkdir(dir, { recursive: true });
 		const report = {
-			scope: "fulltest: full current-platform project suites",
+			scope: "fulltest: fork feature suites",
 			completion: "complete",
 			exitCode: 0,
 			dirtyState: "clean",
@@ -55,11 +55,60 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			runtimeVersions: { bun: Bun.version },
 			startedAtUtc: new Date().toISOString(),
 			reconciliation: { status: "validated" },
-			producers: [{ scope: "ci-test-ts:local-ts", exitCode: 0, status: "passed", report: "available" }],
+			producers: [
+				{
+					scope: "ci-test-ts:local-ts",
+					exitCode: 0,
+					status: "passed",
+					report: "available",
+					selection: { mode: "full", group: "ordinary" },
+				},
+				{
+					scope: "ci-test-ts:local-ts",
+					exitCode: 0,
+					status: "passed",
+					report: "available",
+					selection: { mode: "full", group: "startup" },
+				},
+				{
+					scope: "rust-fork-features",
+					producer: "cargo nextest run",
+					exitCode: 0,
+					status: "passed",
+					report: "available",
+					selection: { mode: "full" },
+				},
+				{
+					scope: "rust-fork-features",
+					producer: "cargo test --doc",
+					exitCode: 0,
+					status: "stage",
+					selection: { mode: "full" },
+				},
+				{ scope: "all scenarios", producer: "ui-smoke/runner-stage", exitCode: 0, status: "stage" },
+			] as {
+				scope: string;
+				producer?: string;
+				exitCode: number;
+				status: string;
+				report?: string;
+				selection?: { mode: string; group?: string };
+			}[],
 		};
 		const save = () => fs.writeFile(path.join(dir, "run.json"), JSON.stringify(report));
 		await save();
+		report.scope = "fulltest: full current-platform project suites";
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.scope = "fulltest: fork feature suites";
+		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		expect((await bunTestSelection(root, true, "f".repeat(40))).mode).toBe("full");
+		report.completion = "partial";
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.completion = "complete";
+		await save();
 		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(true);
 		await fs.writeFile(path.join(root, "new-source.ts"), "export {};\n");
 		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
@@ -81,18 +130,17 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		} as (typeof report.producers)[number];
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0] = { scope: "ci-test-ts:local-ts", exitCode: 0, status: "passed", report: "available" };
-		await save();
 		report.producers[0] = {
-			...report.producers[0]!,
+			scope: "ci-test-ts:local-ts",
+			exitCode: 0,
+			status: "passed",
+			report: "available",
 			selection: { mode: "full", group: "ordinary" },
-		} as (typeof report.producers)[number];
+		};
+		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers.push({
-			...report.producers[0]!,
-			selection: { mode: "full", group: "startup" },
-		} as (typeof report.producers)[number]);
+		report.producers.push(startup);
 		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
 		await git("add", "fixture.ts");
@@ -149,6 +197,22 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
+	for (const file of [
+		"zcode-process.test.ts",
+		"zcode-process-projection.test.ts",
+		"zcode-process-session.test.ts",
+		"zcode-process-catalog.test.ts",
+		"zcode-process-execution.test.ts",
+		"zcode-workflow-process.test.ts",
+		"zcode-workflow-sandbox-process.test.ts",
+	]) {
+		expect(isIntegrationCommand(command("packages/coding-agent", [`test/modes/${file}`]))).toBe(true);
+	}
+	expect(isIntegrationCommand(command("packages/coding-agent", ["test/modes/zcode-process-unit.test.ts"]))).toBe(
+		false,
+	);
+	expect(isIntegrationCommand(command("packages/coding-agent", ["test/other/zcode-process.test.ts"]))).toBe(false);
+	expect(isIntegrationCommand(command("packages/coding-agent", ["test/modes/zcode-workflow.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/tui", ["test/process.e2e.test.ts"]))).toBe(false);
 });
@@ -165,7 +229,12 @@ test("bounded pool runs eligible chunks in order, caps heavy work and drains the
 	const pool = runBoundedPool(
 		items,
 		6,
-		item => item.startsWith("h"),
+		item =>
+			isIntegrationCommand({
+				label: item,
+				cwd: "packages/coding-agent",
+				command: ["bun", "test", item.startsWith("h") ? "test/modes/zcode-process.test.ts" : "test/unit.test.ts"],
+			}),
 		4,
 		async item => {
 			started.push(item);
@@ -216,6 +285,42 @@ test("bounded pool preserves order with fewer workers than the heavy limit", asy
 		},
 	);
 	expect(started).toEqual(items);
+});
+
+test("startup file workers use the fulltest budget without exceeding CPU or command count", async () => {
+	const startup = fulltestCommands({ debug: false }, "home").find(
+		command => command.label === "test/TypeScript startup suite",
+	)!;
+	for (const [cores, count, expected] of [
+		[1, 3, 1],
+		[8, 1, 1],
+		[8, 3, 2],
+	] as const) {
+		const files = Array.from({ length: count }, (_, index) => index);
+		const releases = new Map<number, () => void>();
+		let active = 0;
+		let peak = 0;
+		const pool = runBoundedPool(
+			files,
+			testConcurrency(count, startup.env?.OMP_TEST_CONCURRENCY, cores),
+			() => false,
+			4,
+			async file => {
+				active++;
+				peak = Math.max(peak, active);
+				await new Promise<void>(resolve => releases.set(file, resolve));
+				active--;
+			},
+		);
+		for (const file of files) {
+			expect(releases.has(file)).toBe(true);
+			releases.get(file)!();
+			await Promise.resolve();
+			await Promise.resolve();
+		}
+		await pool;
+		expect(peak).toBe(expected);
+	}
 });
 
 test("chunk and file parallelism spend the same CPU budget", () => {
@@ -291,7 +396,7 @@ test("only the latest complete successful same-source fulltest supplies history"
 		await Bun.write(
 			path.join(dir, "run.json"),
 			JSON.stringify({
-				scope: "fulltest: full current-platform project suites",
+				scope: "fulltest: fork feature suites",
 				startedAtUtc: new Date(now - 1000).toISOString(),
 				completion: "complete",
 				exitCode: 0,
@@ -315,6 +420,7 @@ test("only the latest complete successful same-source fulltest supplies history"
 		for (const overrides of [
 			{ completion: "partial" },
 			{ exitCode: 1 },
+			{ scope: "fulltest: full current-platform project suites" },
 			{ sourceDigest: "b".repeat(64) },
 			{ startedAtUtc: new Date(now - 8 * 86400000).toISOString() },
 			{ reconciliation: { status: "invalid", cases: 1, failures: 0 } },
@@ -343,9 +449,8 @@ test("only the latest complete successful same-source fulltest supplies history"
 	}
 });
 
-// Execute the real driver in a checkout without Git metadata. Markers prove
-// full execution, the desktop authorization boundary, and failure aggregation.
-test("local suites run fully and failures do not hide later cases or commands", async () => {
+// Exercise the real driver with selected and upstream fixtures in the same checkout.
+test("local suites select fork consumers and drain failures without widening to upstream", async () => {
 	const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ts-full-"));
 	const root = path.join(temp, "repo");
 	const marker = path.join(temp, "executed");
@@ -401,47 +506,42 @@ test("local suites run fully and failures do not hide later cases or commands", 
 			path.join(root, "node_modules"),
 			process.platform === "win32" ? "junction" : "dir",
 		);
-		const packages = [
-			"utils",
-			"catalog",
-			"ai",
-			"snapcompact",
-			"agent",
-			"mnemopi",
-			"natives",
-			"tui",
-			"collab-web",
-			"typescript-edit-benchmark",
-			"stats",
-			"metaharness",
-		];
-		const buckets = ["settings", "interactive-mode", "session", "native"];
 		const fixture = (name: string) =>
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
-		for (const pkg of packages) {
-			await put(`packages/${pkg}/test/basic.test.ts`, fixture(`package:${pkg}`));
-		}
-		await put("python/robomp/web/test/basic.test.ts", fixture("web"));
-		await put(".omp/tests/tui.test.ts", fixture("project:tui"));
-		for (const name of buckets) {
-			await put(`packages/coding-agent/test/${name}.test.ts`, fixture(`coding:${name}`));
-		}
+		const selected = [
+			"packages/ai/test/proxy.test.ts",
+			"packages/natives/test/python-symbols.test.ts",
+			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
+			"packages/coding-agent/test/team/integration.test.ts",
+			"packages/coding-agent/test/goals/goal-runtime.test.ts",
+			"packages/coding-agent/test/modes/zcode-permissions.e2e.ts",
+			"packages/coding-agent/test/modes/zcode-process-session.test.ts",
+			"packages/coding-agent/test/repo-index.test.ts",
+			"packages/coding-agent/test/repo-review-regressions.test.ts",
+			"packages/coding-agent/test/lsp/edits.test.ts",
+			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
+			"packages/coding-agent/test/acp-builtins.test.ts",
+		];
+		const excluded = [
+			"packages/ai/test/unrelated.test.ts",
+			"packages/natives/test/desktop.test.ts",
+			"packages/coding-agent/test/tools/browser-launch.test.ts",
+			"packages/coding-agent/test/tools/proc-service.test.ts",
+			"packages/coding-agent/test/tools/lsp-regressions.test.ts",
+			"packages/coding-agent/test/task/worktree.test.ts",
+			"packages/coding-agent/test/rpc.test.ts",
+		];
+		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
 		await put(
-			"packages/omptype/test/failure.test.ts",
+			"packages/coding-agent/test/wiki-tool.test.ts",
 			'import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; test("failure", () => { appendFileSync(process.env.MARKER!, "failure\\n"); expect(Boolean(process.env.FAIL_FIXTURE)).toBe(false); }); test("after failure", () => appendFileSync(process.env.MARKER!, "after-failure\\n"));\n',
 		);
-		await put("packages/omptype/test/unrelated.test.ts", fixture("unrelated"));
-		await put("packages/natives/test/desktop.test.ts", fixture("desktop"));
-		const fullMarkers = [
-			...packages.map(pkg => `package:${pkg}`),
-			...buckets.map(name => `coding:${name}`),
-			"failure",
-			"after-failure",
-			"desktop",
-			"unrelated",
-			"web",
-			"project:tui",
-		].sort();
+		const fullMarkers = [...selected, "failure", "after-failure"].sort();
+		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
+		expect(dry).toContain("scope=fork-features selected-files=13");
+		expect(await executed()).toEqual([]);
+		expect(dry).toContain("./test/modes/zcode-permissions.e2e.ts");
+		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts"], { OMP_TEST_SHARD: "1/20" });
 		expect(await executed()).toEqual(fullMarkers);
 		await clear();
@@ -449,16 +549,15 @@ test("local suites run fully and failures do not hide later cases or commands", 
 		expect(emptyStartup).toContain("test-command-group=startup chunks=0");
 		expect(await executed()).toEqual([]);
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup", "--only-startup"], {}, 1);
-		expect(await executed()).toEqual([]);
 		const fulltest = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
-			command => command.label === "test/TypeScript full suite",
+			command => command.label === "test/TypeScript fork feature suite",
 		)!;
 		await run([process.execPath, ...fulltest.argv.slice(1)], {
 			...fulltest.env,
 			CI: "true",
 			OMP_TEST_CONCURRENCY: "2",
 		});
-		expect(await executed()).toEqual(fullMarkers.filter(name => name !== "desktop"));
+		expect(await executed()).toEqual(fullMarkers);
 		for (const concurrency of ["2", ""]) {
 			await clear();
 			await run(
@@ -473,68 +572,36 @@ test("local suites run fully and failures do not hide later cases or commands", 
 			);
 			expect(await executed()).toEqual(fullMarkers);
 		}
-		const startupFiles = ["test/spec-driven/tui-start.e2e.test.ts", "test/modes/zcode-hosts-goal.test.ts"];
-		const uiCompanion = "test/modes/zcode-hosts-companion.test.ts";
-		for (const file of [...startupFiles, uiCompanion]) await put(`packages/coding-agent/${file}`, fixture(file));
-		const partitionMarkers = [...fullMarkers.filter(name => name !== "desktop"), ...startupFiles, uiCompanion].sort();
+		const startupFiles = [
+			"test/spec-driven/tui-start.e2e.test.ts",
+			"test/spec-driven/tui-another.e2e.test.ts",
+			"test/modes/zcode-hosts-goal.test.ts",
+		];
+		for (const file of startupFiles) {
+			await put(
+				`packages/coding-agent/${file}`,
+				`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(file)}, () => { appendFileSync(process.env.MARKER!, ${JSON.stringify(`${file}\n`)}); appendFileSync(process.env.MARKER! + ".pids", process.pid + "\\n"); });\n`,
+			);
+		}
 		await clear();
-		const ordinaryOutput = await run([
-			process.execPath,
-			"scripts/ci-test-ts.ts",
-			"local-ts",
-			"--exclude-desktop",
-			"--defer-startup",
-		]);
-		const ordinaryMarkers = await executed();
+		const ordinaryOutput = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--defer-startup"]);
 		expect(ordinaryOutput).toContain("test-command-group=ordinary");
-		for (const file of startupFiles) expect(ordinaryMarkers).not.toContain(file);
-		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"]);
-		expect(await executed()).toEqual(partitionMarkers);
-		const startupDryRun = await run([
-			process.execPath,
-			"scripts/ci-test-ts.ts",
-			"local-ts",
-			"--only-startup",
-			"--dry-run",
-		]);
-		const goalChunk = startupDryRun
-			.split("\n")
-			.find(line => line.startsWith("$ ") && line.includes(startupFiles[1]!));
-		expect(goalChunk).toContain(uiCompanion);
-		expect(ordinaryMarkers).not.toContain(uiCompanion);
-		fullMarkers.push(...startupFiles, uiCompanion);
-		fullMarkers.sort();
-		// Exercise chunk construction without starting the larger fixture suites.
+		for (const file of startupFiles) expect(await executed()).not.toContain(file);
+		const startup = fulltestCommands({ debug: false }, path.join(temp, "home")).find(
+			command => command.label === "test/TypeScript startup suite",
+		)!;
+		await run([process.execPath, ...startup.argv.slice(1)], { ...startup.env });
+		expect(await executed()).toEqual([...fullMarkers, ...startupFiles].sort());
+		const pids = (await fs.readFile(`${marker}.pids`, "utf8")).trim().split("\n");
+		expect(new Set(pids).size).toBe(startupFiles.length);
 		const singletonFiles = Array.from(
 			{ length: 23 },
 			(_, i) => `test/settings-${String(i).padStart(2, "0")}.test.ts`,
 		);
+		await put("packages/coding-agent/test/settings.test.ts", fixture("settings"));
 		for (const file of singletonFiles) await put(`packages/coding-agent/${file}`, fixture(file));
-		const heavyFile = "test/spec-driven/process.e2e.test.ts";
-		await put(`packages/coding-agent/${heavyFile}`, fixture(heavyFile));
-		const integrationFiles = Array.from(
-			{ length: 50 },
-			(_, i) => `test/integration/process-${String(i).padStart(2, "0")}.test.ts`,
-		);
-		for (const file of integrationFiles) await put(`packages/coding-agent/${file}`, fixture(file));
-		const output = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"], {
-			CI: "true",
-			OMP_TEST_SHARD: "1/20",
-		});
-		const commandLines = output.split("\n").filter(line => line.startsWith("$ "));
-		const singletonLines = commandLines.filter(line => line.includes("test/settings"));
-		expect(singletonLines.length).toBeGreaterThan(1);
-		for (const file of ["test/settings.test.ts", ...singletonFiles]) expect(output.split(file).length - 1).toBe(1);
-		for (const line of singletonLines) expect(line).toContain("--parallel=1");
-		expect(commandLines.some(line => line.includes(heavyFile))).toBe(true);
-		expect(output.split(heavyFile).length - 1).toBe(1);
-		await clear();
-		await run(
-			[process.execPath, "scripts/ci-test-ts.ts", "local-ts"],
-			{ OMP_TEST_CONCURRENCY: "8", OMP_GATE_EVENT_TOKEN: "isolated-fixture-token", FAIL_FIXTURE: "1" },
-			1,
-		);
-		expect(await executed()).toEqual([...fullMarkers, ...singletonFiles, heavyFile, ...integrationFiles].sort());
+		const output = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
+		for (const file of singletonFiles) expect(output).not.toContain(file);
 		const shards = await Promise.all(
 			["1/3", "2/3", "3/3"].map(shard =>
 				run([process.execPath, "scripts/ci-test-ts.ts", "coding-agent-singleton", "--dry-run"], {
@@ -551,6 +618,7 @@ test("local suites run fully and failures do not hide later cases or commands", 
 			for (const number of chunkNumbers) expect((number - 1) % 3).toBe(index);
 		}
 		const nativeFiles = Array.from({ length: 11 }, (_, i) => `test/native-${String(i).padStart(2, "0")}.test.ts`);
+		await put("packages/coding-agent/test/native.test.ts", fixture("native"));
 		for (const file of nativeFiles) await put(`packages/coding-agent/${file}`, fixture(file));
 		const nativeShards = await Promise.all(
 			["1/2", "2/2"].map(shard =>

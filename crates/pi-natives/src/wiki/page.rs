@@ -9,7 +9,7 @@ use napi::{Env, Error, JsValue, Result, ValueType, bindgen_prelude::*};
 use napi_derive::napi;
 use serde::Serialize;
 
-use super::database::{WikiCursorBase, WikiError, WikiSearchHit};
+use super::database::{WikiCursorBase, WikiError, WikiErrorNapi, WikiSearchHit};
 use crate::{
 	task::{self, CancelToken},
 	text::ansi_seq_len_u16,

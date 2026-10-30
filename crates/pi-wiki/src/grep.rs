@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 
 use grep_matcher::Matcher;
-use pi_builtins::CompiledMatcher;
+use pi_walker::grep::CompiledMatcher;
 use rusqlite::Connection;
 
 use super::{
@@ -193,7 +193,8 @@ impl Lines {
 	}
 }
 
-pub(super) fn scan(
+/// Scan stored document slices for regex matches on original lines.
+pub(crate) fn scan(
 	connection: &Connection,
 	matcher: &CompiledMatcher,
 	index: Option<&str>,
@@ -285,7 +286,7 @@ mod tests {
 	}
 
 	fn matched_ids(connection: &Connection, expression: &str) -> CoreResult<Vec<i64>> {
-		let matcher = crate::grep::build_strict_matcher(expression, false).unwrap();
+		let matcher = pi_walker::grep::build_strict_matcher(expression, false).unwrap();
 		Ok(scan(connection, &matcher, None, &|| Ok(()))?
 			.into_iter()
 			.map(|section| section.section_id)

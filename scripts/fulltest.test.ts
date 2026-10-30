@@ -4,11 +4,169 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
-import { gateCpuBudget, parseFulltestArgs, removeFulltestHome, runFulltest } from "./fulltest";
+import {
+	fulltestCommands,
+	gateCpuBudget,
+	parseFulltestArgs,
+	removeFulltestHome,
+	runFulltest,
+	selectChangedScriptTests,
+} from "./fulltest";
 import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
-import type { SourceIdentity } from "./test-gate-source";
+import { captureChangedPaths, classifyFulltestChanges, type SourceIdentity } from "./test-gate-source";
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
+
+test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
+	const commands = fulltestCommands({ debug: false }, "/tmp/home", "digest");
+	expect(commands.map(command => command.label)).toEqual([
+		"test/TypeScript fork feature suite",
+		"test/TypeScript startup suite",
+		"test/Rust fork features",
+		"smoke/isolated dev TUI PTY",
+	]);
+	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
+});
+
+test("script selection uses changed modules and existing tests, not business files or a clean tree", () => {
+	const files = [
+		"scripts/fulltest.test.ts",
+		"scripts/ci-test-ts.test.ts",
+		"scripts/test-reporting.test.ts",
+		"scripts/release.test.ts",
+	];
+	expect(selectChangedScriptTests([], files)).toEqual([]);
+	expect(
+		selectChangedScriptTests(["packages/natives/src/lib.rs", "packages/coding-agent/src/index.ts"], files),
+	).toEqual([]);
+	expect(selectChangedScriptTests(["scripts/fulltest.ts", "scripts/test-reporting.ts"], files)).toEqual([
+		"scripts/ci-test-ts.test.ts",
+		"scripts/fulltest.test.ts",
+		"scripts/test-reporting.test.ts",
+	]);
+	expect(selectChangedScriptTests(["scripts/release.test.ts", "scripts/unknown.ts"], files)).toEqual([
+		"scripts/release.test.ts",
+	]);
+});
+
+test("affected boundary retains Rust for unknown inputs and UI for CLI and Repo changes", () => {
+	expect(classifyFulltestChanges([])).toEqual({ bun: false, rust: false, ui: false });
+	expect(
+		classifyFulltestChanges(["packages/coding-agent/src/tools/wiki.ts", "packages/coding-agent/src/repo/files.ts"]),
+	).toEqual({ bun: false, rust: false, ui: true });
+	for (const file of [
+		"Cargo.lock",
+		"packages/natives/src/lib.rs",
+		"packages/coding-agent/src/config/settings.ts",
+		"packages/coding-agent/src/generated/bindings.ts",
+		"packages/coding-agent/test/fixtures/input.ts",
+		"scripts/build.ts",
+		"bun.lock",
+	]) {
+		expect(classifyFulltestChanges([file])).toEqual({ bun: true, rust: true, ui: true });
+	}
+});
+
+test("fulltest applies one baseline to both TS lanes and omits only unaffected independent stages", async () => {
+	const baseline = "a".repeat(40);
+	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
+	const gate = {
+		signal: new AbortController().signal,
+		charged: async <T>(work: () => T | Promise<T>) => work(),
+		run: async () => {},
+		childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+		record: (error: unknown) => error,
+		fail: (error: unknown) => error,
+	} as unknown as GateRun;
+	for (const [changed, full, expectRust] of [
+		[["packages/coding-agent/src/tools/wiki.ts", "packages/coding-agent/src/repo/files.ts"], false, false],
+		[["Cargo.lock"], false, true],
+		[["packages/coding-agent/src/tools/wiki.ts"], true, true],
+	] as const) {
+		const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
+		let observedBase: string | undefined;
+		await runFulltest(
+			gate,
+			{ debug: false, full },
+			{
+				captureSourceIdentity: async () => identity,
+				captureChangedPaths: async (_gate, _root, base) => {
+					observedBase = base;
+					return [...changed];
+				},
+				bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline }),
+				fastcheckCommands: async () => [],
+				runGateCommands: async (_gate, selected) => {
+					commands.push(...selected);
+				},
+			},
+		);
+		expect(observedBase).toBe(full ? "HEAD" : baseline);
+		expect(commands.some(command => command.label.startsWith("test/Rust"))).toBe(expectRust);
+		expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
+		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
+		expect(ts).toHaveLength(2);
+		expect(ts.map(command => command.env?.OMP_FULLTEST_BASELINE)).toEqual(
+			full || expectRust ? ["none", "none"] : [baseline, baseline],
+		);
+	}
+});
+
+test("changed paths include staged, deleted, rename sides and untracked paths", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-changes-"));
+	const git = async (...args: string[]) => {
+		const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(code, stderr).toBe(0);
+		return stdout;
+	};
+	const gate = {
+		charged: async <T>(operation: () => T | Promise<T>) => operation(),
+		capture: async ({ argv }: { argv: string[] }) => ({ stdout: await git(...argv.slice(1)) }),
+	} as unknown as GateRun;
+	try {
+		await git("init", "-q");
+		await git("config", "user.email", "fixture@example.invalid");
+		await git("config", "user.name", "Fixture");
+		await fs.mkdir(path.join(root, "scripts"));
+		for (const name of ["old.ts", "deleted.ts", "staged.ts"])
+			await fs.writeFile(path.join(root, "scripts", name), "original\n");
+		await git("add", ".");
+		await git("commit", "-qm", "baseline");
+		const baseline = (await git("rev-parse", "HEAD")).trim();
+		await fs.writeFile(path.join(root, "scripts", "committed.ts"), "committed\n");
+		await git("add", "scripts/committed.ts");
+		await git("commit", "-qm", "later unverified commit");
+		expect(await captureChangedPaths(gate, root)).toEqual([]);
+		await git("mv", "scripts/old.ts", "scripts/new.ts");
+		await fs.rm(path.join(root, "scripts", "deleted.ts"));
+		await fs.writeFile(path.join(root, "scripts", "staged.ts"), "staged\n");
+		await git("add", "scripts/staged.ts");
+		await fs.writeFile(path.join(root, "scripts", "staged.ts"), "original\n");
+		await fs.writeFile(path.join(root, "scripts", "untracked.ts"), "new\n");
+		expect(await captureChangedPaths(gate, root)).toEqual([
+			"scripts/deleted.ts",
+			"scripts/new.ts",
+			"scripts/old.ts",
+			"scripts/staged.ts",
+			"scripts/untracked.ts",
+		]);
+		expect(await captureChangedPaths(gate, root, baseline)).toEqual([
+			"scripts/committed.ts",
+			"scripts/deleted.ts",
+			"scripts/new.ts",
+			"scripts/old.ts",
+			"scripts/staged.ts",
+			"scripts/untracked.ts",
+		]);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 20_000);
 
 test("direct scheduler overlaps commands and continues after a failure", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-scheduler-"));
@@ -156,7 +314,7 @@ describe("fulltest source snapshot checkpoints", () => {
 			digest: "initial-digest",
 			dirty: false,
 			status: "",
-			files: [sourcePath, ...generatedPaths]
+			files: [sourcePath, ...generatedPaths, "scripts/fulltest.test.ts"]
 				.filter(file => change !== "new-test" || file !== sourcePath)
 				.map(file => ({
 					path: file,
@@ -211,6 +369,7 @@ describe("fulltest source snapshot checkpoints", () => {
 				{ debug: false },
 				{
 					captureSourceIdentity: async () => identity,
+					captureChangedPaths: async () => ["scripts/fulltest.ts"],
 					fastcheckCommands: async () => [],
 					runGateCommands: async (_gate, commands) => {
 						if (commands.some(command => command.label === "build/native")) {
@@ -219,7 +378,9 @@ describe("fulltest source snapshot checkpoints", () => {
 							scriptEnv = commands.find(command => command.label.startsWith("test/repository scripts "))?.env;
 							if (interval === "scripts") mutate();
 						} else {
-							const typescript = commands.find(command => command.label === "test/TypeScript full suite");
+							const typescript = commands.find(
+								command => command.label === "test/TypeScript fork feature suite",
+							);
 							if (typescript) {
 								childDigest = typescript.env?.OMP_FULLTEST_SOURCE_DIGEST;
 								tsAffected = typescript.env?.OMP_FULLTEST_AFFECTED;
@@ -318,6 +479,7 @@ describe("fulltest lane scheduling", () => {
 				{ debug: false },
 				{
 					captureSourceIdentity: async () => identity,
+					captureChangedPaths: async () => [],
 					fastcheckCommands: async () => [
 						{ label: "static/TS", argv: ["ts"] },
 						...(rustCheck === "absent"
@@ -391,6 +553,7 @@ describe("fulltest lane scheduling", () => {
 			gate,
 			{ debug: false },
 			{
+				captureChangedPaths: async () => [],
 				captureSourceIdentity: async () => {
 					sourceCaptures++;
 					if (sourceCaptures === 4) expect(startupHasStarted).toBe(true);
@@ -398,7 +561,7 @@ describe("fulltest lane scheduling", () => {
 				},
 				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 				runGateCommands: async (_runner, commands, options) => {
-					const ordinary = commands.find(command => command.label === "test/TypeScript full suite");
+					const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite");
 					const startup = commands.find(command => command.label === "test/TypeScript startup suite");
 					if (commands.some(command => command.label === "static/TS")) {
 						staticStarted.resolve();
@@ -435,7 +598,6 @@ describe("fulltest lane scheduling", () => {
 						]);
 						expect(startup.env?.HOME).toBeDefined();
 						expect(startup.env?.HOME).not.toBe(ordinaryHome);
-						expect(startup.env?.OMP_TEST_CONCURRENCY).toBe("1");
 						expect(startup.env?.OMP_FULLTEST_AFFECTED).toBe("1");
 						expect(startup.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
 						expect(options?.concurrency).toBe(1);

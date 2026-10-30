@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { captureSourceIdentity } from "./test-gate-source";
+import { captureChangedPaths, captureSourceIdentity, classifyFulltestChanges } from "./test-gate-source";
 import type { GateCommand, GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
@@ -58,10 +58,17 @@ export interface BunSelection {
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
-export async function bunTestSelection(root: string = repoRoot): Promise<BunSelection> {
-	const fallback = { tool: "bun", mode: "full", reason: "no qualifying clean fulltest baseline" } as const;
-	if (process.env.OMP_FULLTEST_AFFECTED !== "1")
-		return { tool: "bun", mode: "full", reason: "full selection requested" };
+export async function bunTestSelection(
+	root: string = repoRoot,
+	enabled = process.env.OMP_FULLTEST_AFFECTED === "1",
+	hint: string | null | undefined = process.env.OMP_FULLTEST_BASELINE,
+): Promise<BunSelection> {
+	const fallback = {
+		tool: "bun",
+		mode: "full",
+		reason: "no qualifying clean fork-feature fulltest baseline",
+	} as const;
+	if (!enabled || hint === "none") return { tool: "bun", mode: "full", reason: "full selected fork feature suites" };
 	const version = Bun.version.split(".").map(Number);
 	if (version[0]! < 1 || (version[0] === 1 && (version[1]! < 3 || (version[1] === 3 && version[2]! < 13))))
 		return { ...fallback, reason: "Bun does not support --changed" };
@@ -83,14 +90,16 @@ export async function bunTestSelection(root: string = repoRoot): Promise<BunSele
 				? run.producers.filter((producer: TestProducerRecord) => producer.scope === "ci-test-ts:local-ts")
 				: [];
 			if (
-				run.scope !== "fulltest: full current-platform project suites" ||
-				!["complete", "partial"].includes(run.completion) ||
+				run.scope !== "fulltest: fork feature suites" ||
+				run.completion !== "complete" ||
 				run.exitCode !== 0 ||
 				run.dirtyState !== "clean" ||
 				run.platform !== process.platform ||
 				run.architecture !== process.arch ||
 				run.runtimeVersions?.bun !== Bun.version ||
 				run.reconciliation?.status !== "validated" ||
+				run.unreconciledScope != null ||
+				run.coverage === "affected-tests-only" ||
 				!Array.isArray(run.producers) ||
 				!producers.length ||
 				!producers.every(
@@ -98,17 +107,27 @@ export async function bunTestSelection(root: string = repoRoot): Promise<BunSele
 						producer.exitCode === 0 &&
 						producer.status === "passed" &&
 						producer.report === "available" &&
-						producer.selection?.mode !== "affected",
+						producer.selection?.mode === "full",
 				) ||
-				(producers.some(
-					(producer: TestProducerRecord) => (producer.selection as BunSelection | undefined)?.group,
-				) &&
-					!["ordinary", "startup"].every(group =>
-						producers.some(
-							(producer: TestProducerRecord) =>
-								(producer.selection as BunSelection | undefined)?.group === group,
-						),
-					)) ||
+				!["ordinary", "startup"].every(group =>
+					producers.some(
+						(producer: TestProducerRecord) => (producer.selection as BunSelection | undefined)?.group === group,
+					),
+				) ||
+				!["cargo nextest run", "cargo test --doc", "ui-smoke/runner-stage"].every(name =>
+					run.producers.some(
+						(producer: TestProducerRecord) =>
+							producer.producer === name &&
+							producer.exitCode === 0 &&
+							(producer.status === "passed" || producer.status === "stage") &&
+							(name === "ui-smoke/runner-stage" || producer.selection?.mode === "full"),
+					),
+				) ||
+				run.producers.some(
+					(producer: TestProducerRecord) =>
+						producer.status === "not-selected" || producer.selection?.mode === "affected",
+				) ||
+				(hint != null && run.sourceRevision !== hint) ||
 				!/^[a-f0-9]{40,64}$/i.test(run.sourceRevision ?? "") ||
 				!Number.isFinite(Date.parse(run.startedAtUtc))
 			)
@@ -128,6 +147,24 @@ export async function bunTestSelection(root: string = repoRoot): Promise<BunSele
 		}
 	}
 	return fallback;
+}
+
+/** Git failure or a dynamic/native input makes automatic Bun selection unsafe. */
+async function bunCanTraceChanges(root: string, baseline: string): Promise<boolean> {
+	try {
+		const gitGate = {
+			charged: async <T>(work: () => Promise<T>) => work(),
+			capture: async ({ argv }: { argv: string[] }) => {
+				const child = Bun.spawn(argv, { cwd: root, stdout: "pipe", stderr: "ignore" });
+				const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+				if (exitCode !== 0) throw new Error("Git change capture failed");
+				return { stdout };
+			},
+		} as unknown as GateRun;
+		return !classifyFulltestChanges(await captureChangedPaths(gitGate, root, baseline)).bun;
+	} catch {
+		return false;
+	}
 }
 /** Consolidation is safe only when Git confirms that the baseline is the entire current tree. */
 export async function bunCleanBaseline(selection: BunSelection, root = repoRoot): Promise<boolean> {
@@ -242,6 +279,93 @@ const nativeAndIntegrationPackages = [
 	"python/robomp/web",
 ];
 
+// Discover coding-agent tests at file granularity before chunking. Full mode
+// uses Bun's test filename conventions plus the standalone ZCode E2E files.
+const forkCodingAgentDirectories = ["test/spec-driven/", "test/team/", "test/goals/"];
+const forkCodingAgentPatterns = [/^test\/modes\/zcode-[^/]+\.(?:test|e2e)\.ts$/];
+const forkCodingAgentFiles = new Set([
+	"test/acp-builtins.test.ts", // /wt consumer
+	"test/session/picker-worktrees.test.ts",
+	"test/cli-goal-flag.test.ts",
+	"test/goal-tool-runtime-enable.test.ts",
+	"test/skills.test.ts",
+	"test/skill-descriptions-xdg.test.ts",
+	"test/skill-protocol-customdirs.test.ts",
+	"test/skillful-toggle.test.ts",
+	"test/cli/skill-list.test.ts",
+	"test/slash-commands/shared-skills.test.ts",
+	"test/slash-commands/team-command.test.ts",
+	"test/slash-commands/guided-goal.test.ts",
+	"test/slash-commands/compact.test.ts",
+	"test/slash-commands/jch-ime.test.ts",
+	"test/slash-commands/tan.test.ts",
+	"test/slash-commands/shared-business.test.ts",
+	"test/docs-index.test.ts",
+	"test/wiki-cli.test.ts",
+	"test/wiki-tool.test.ts",
+	"test/wiki-tool-availability.test.ts",
+	"test/repo-index.test.ts",
+	"test/repo-lifecycle.test.ts",
+	"test/repo-tool.test.ts",
+	"test/repo-review-regressions.test.ts",
+	"test/modes/components/repo-hub.test.ts",
+	"test/lsp/edits.test.ts", // Repo index update and rollback consumers
+	"test/models-offline-company.test.ts",
+	"test/company-models.test.ts",
+	"test/company-provider.test.ts",
+	"test/codeagent-provider.test.ts",
+	"test/offline-subcommands.test.ts",
+	"test/cli-offline-env.test.ts",
+	"test/mnemopi-company-embeddings.test.ts",
+	"test/profile-cli.test.ts",
+	"test/profile-bootstrap.test.ts",
+	"test/profile-alias.test.ts",
+	"test/sample-profile.test.ts",
+	"test/interactive-mode-restart-profile.test.ts",
+	"test/session-paths.test.ts",
+	"test/config-cli.test.ts",
+	"test/config/user-settings.test.ts",
+	"test/config/config-file.test.ts",
+	"test/config/model-registry.test.ts",
+	"test/config/models-config-validation.test.ts",
+	"test/settings-manager.test.ts",
+	"test/interactive-mode-default-plan-mode.test.ts",
+	"test/input-controller-approval-routing.test.ts",
+	"test/cfg-approval-timeout.test.ts",
+	"test/tools/approval-mode.test.ts",
+	"test/tools/approval-cached-mode.test.ts",
+	"test/tools/approval-restricted-folders.test.ts",
+	"test/agent-session-snapcompact-reader.test.ts",
+	"test/session-manager/snapcompact-archive-persistence.test.ts",
+	"test/tools/approval.test.ts",
+	"test/compact-modes.test.ts",
+	"test/compaction.test.ts",
+	"test/snapcompact-inline.test.ts",
+	"test/status-line-usage.test.ts",
+	"test/status-line-time-spent.test.ts",
+	"test/status-line-transparent.test.ts",
+	"test/status-line-segment-padding.test.ts",
+	"test/status-line-brand-fade.test.ts",
+]);
+const forkPackageFiles: Record<string, string[]> = {
+	"packages/ai": ["test/proxy.test.ts"],
+	"packages/natives": ["test/python-symbols.test.ts"],
+	"packages/tui": [
+		"test/compact-transcript.test.ts",
+		"test/compact-tool-projection-regression.test.ts",
+		"test/status-line-profile.test.ts",
+	],
+	"packages/snapcompact": ["test/snapcompact.test.ts"],
+};
+
+export function isForkCodingAgentTest(file: string): boolean {
+	return (
+		forkCodingAgentFiles.has(file) ||
+		forkCodingAgentDirectories.some(dir => file.startsWith(dir)) ||
+		forkCodingAgentPatterns.some(pattern => pattern.test(file))
+	);
+}
+
 const projectToolTestCommand: TestCommand = {
 	label: ".omp/tests (project-local TUI debug tool)",
 	cwd: ".",
@@ -332,7 +456,7 @@ const codingAgentUiContentMarkers = [
 
 const codingAgentRuntimeContentMarkers = ["AgentSession", "SessionManager", "AuthStorage", "Bun.sleep", "setTimeout("];
 
-let codingAgentTestPartitionPromise: Promise<CodingAgentTestPartition> | null = null;
+const codingAgentTestPartitionPromises = new Map<boolean, Promise<CodingAgentTestPartition>>();
 
 function shellQuote(value: string): string {
 	if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
@@ -355,25 +479,34 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 // stream and failure report as TypeScript.
 function rustTestCommand(): TestCommand {
 	return {
-		label: "rust (full Cargo/Nextest workspace and doctests)",
+		label: "rust (selected fork features and applicable doctests)",
 		cwd: ".",
 		command: ["bun", "scripts/run-rs-task.ts", "test:rs"],
 	};
 }
 
-async function collectTestsUnder(root: string, baseDir: string): Promise<string[]> {
+async function collectTestsUnder(root: string, baseDir: string, all = false): Promise<string[]> {
 	const entries = await fs.readdir(root, { withFileTypes: true });
 	const files: string[] = [];
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 		const filePath = path.join(root, entry.name);
 		if (entry.isDirectory()) {
-			files.push(...(await collectTestsUnder(filePath, baseDir)));
+			if (all && (entry.name === "node_modules" || entry.name.startsWith("."))) continue;
+			files.push(...(await collectTestsUnder(filePath, baseDir, all)));
 			continue;
 		}
-		if (!entry.isFile() || !entry.name.endsWith(".test.ts")) {
+		const relative = path.relative(baseDir, filePath).split(path.sep).join("/");
+		if (
+			!entry.isFile() ||
+			!(
+				entry.name.endsWith(".test.ts") ||
+				(all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)) ||
+				/^test\/modes\/zcode-[^/]+\.e2e\.ts$/.test(relative)
+			)
+		) {
 			continue;
 		}
-		files.push(path.relative(baseDir, filePath).split(path.sep).join("/"));
+		files.push(relative);
 	}
 	return files;
 }
@@ -417,67 +550,100 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 	return "native";
 }
 
-async function getCodingAgentTestPartition(): Promise<CodingAgentTestPartition> {
-	codingAgentTestPartitionPromise ??= (async () => {
-		const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
-		const testFiles = (await collectTestsUnder(path.join(codingAgentDir, "test"), codingAgentDir)).sort();
-		const partition: CodingAgentTestPartition = {
-			singleton: [],
-			ui: [],
-			runtime: [],
-			native: [],
-		};
+async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTestPartition> {
+	let promise = codingAgentTestPartitionPromises.get(all);
+	if (!promise) {
+		promise = (async () => {
+			const codingAgentDir = path.join(repoRoot, "packages/coding-agent");
+			const testRoot = all ? codingAgentDir : path.join(codingAgentDir, "test");
+			const testFiles = (await collectTestsUnder(testRoot, codingAgentDir, all)).sort();
+			const partition: CodingAgentTestPartition = {
+				singleton: [],
+				ui: [],
+				runtime: [],
+				native: [],
+			};
 
-		for (const testFile of testFiles) {
-			const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
-			partition[classifyCodingAgentTest(testFile, content)].push(testFile);
-		}
+			for (const testFile of testFiles) {
+				const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
+				partition[classifyCodingAgentTest(testFile, content)].push(testFile);
+			}
 
-		return partition;
-	})();
-	return codingAgentTestPartitionPromise;
+			return partition;
+		})();
+		codingAgentTestPartitionPromises.set(all, promise);
+	}
+	return promise;
 }
 
-// Start explicitly named end-to-end and integration tests early, rather than
-// leaving them behind the alphabetical backlog. Preserve order within each group.
+// Start explicitly named end-to-end, integration and ZCode process tests early.
+// Preserve order within each group.
 function isIntegrationTest(testFile: string): boolean {
-	return /(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile);
+	return (
+		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
+		/^(?:\.\/)?test\/modes\/(?:zcode-process(?:-(?:projection|session|catalog|execution))?|zcode-workflow-(?:sandbox-)?process)\.test\.ts$/.test(
+			testFile,
+		)
+	);
 }
 
 export function isIntegrationCommand(command: TestCommand): boolean {
 	return command.cwd === "packages/coding-agent" && command.command.some(isIntegrationTest);
 }
 
-// Keep entire original chunks together, including unrelated files sharing a UI
-// chunk with the goal test, so process isolation and chunk membership are stable.
-function isStartupCommand(command: TestCommand): boolean {
-	return (
-		command.cwd === "packages/coding-agent" &&
-		command.command.some(
-			file =>
-				/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
-				file === "test/modes/zcode-hosts-goal.test.ts",
-		)
-	);
+function isStartupTest(file: string): boolean {
+	return /^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) || file === "test/modes/zcode-hosts-goal.test.ts";
 }
 
-async function codingAgentTestCommands(bucket: CodingAgentBucket): Promise<TestCommand[]> {
-	const partition = await getCodingAgentTestPartition();
-	const testFiles = partition[bucket];
+// Startup files are isolated before chunking, including in full mode.
+function isStartupCommand(command: TestCommand): boolean {
+	return command.cwd === "packages/coding-agent" && command.command.some(isStartupTest);
+}
+
+async function codingAgentTestCommands(
+	bucket: CodingAgentBucket,
+	forkOnly = false,
+	all = false,
+): Promise<TestCommand[]> {
+	const partition = await getCodingAgentTestPartition(all);
+	const testFiles = partition[bucket].filter(file =>
+		forkOnly ? isForkCodingAgentTest(file) : all || file.endsWith(".test.ts"),
+	);
 	if (testFiles.length === 0) {
+		if (forkOnly) return [];
 		throw new Error(`No coding-agent ${bucket} tests matched`);
 	}
 	const plan = codingAgentBucketPlans[bucket];
 	const chunkSize = plan.chunkSize ?? testFiles.length;
-	const chunkCount = Math.ceil(testFiles.length / chunkSize);
+	const chunks: string[][] = [];
+	let pending: string[] = [];
+	for (const file of testFiles) {
+		if (isStartupTest(file)) {
+			if (pending.length) chunks.push(pending);
+			pending = [];
+			chunks.push([file]);
+		} else {
+			pending.push(file);
+			if (pending.length === chunkSize) {
+				chunks.push(pending);
+				pending = [];
+			}
+		}
+	}
+	if (pending.length) chunks.push(pending);
+	const chunkCount = chunks.length;
 	const commands: TestCommand[] = [];
-	for (let i = 0; i < testFiles.length; i += chunkSize) {
-		const chunk = testFiles.slice(i, i + chunkSize);
+	for (const chunk of chunks) {
 		const chunkLabel = chunkCount > 1 ? ` chunk ${commands.length + 1}/${chunkCount}` : "";
 		commands.push({
 			label: `packages/coding-agent (${plan.label}; ${testFiles.length} files; parallel=${plan.parallel}${chunkLabel}; ${chunk.length} files)`,
 			cwd: "packages/coding-agent",
-			command: ["bun", "test", ...onlyFailuresArgs, ...chunk],
+			command: [
+				"bun",
+				"test",
+				...onlyFailuresArgs,
+				...chunk.map(file => (file.endsWith(".e2e.ts") ? `./${file}` : file)),
+			],
 			parallel: plan.parallel,
 		});
 	}
@@ -509,17 +675,39 @@ async function commandsForMode(mode: Mode): Promise<TestCommand[]> {
 			return [
 				...(await commandsForMode("workspace")),
 				...(await commandsForMode("native")),
-				...(await commandsForMode("coding-agent-heavy")),
+				...(await codingAgentTestCommands("singleton", false, true)),
+				...(await codingAgentTestCommands("ui", false, true)),
+				...(await codingAgentTestCommands("runtime", false, true)),
+				...(await codingAgentTestCommands("native", false, true)),
 			];
-		// Ordinary local runs execute every package; repository scripts run separately.
-		case "local-ts":
+		// Select individual fork consumers before applying the usual isolation chunks.
+		case "local-ts": {
+			const packages: TestCommand[] = [];
+			for (const [cwd, candidates] of Object.entries(forkPackageFiles)) {
+				const files = (
+					await Promise.all(
+						candidates.map(async file =>
+							(await Bun.file(path.join(repoRoot, cwd, file)).exists()) ? file : undefined,
+						),
+					)
+				).filter((file): file is string => file !== undefined);
+				if (files.length)
+					packages.push({
+						label: `${cwd} (fork feature tests; ${files.length} files)`,
+						cwd,
+						command: ["bun", "test", ...onlyFailuresArgs, ...files],
+						parallel: 1,
+					});
+			}
 			return [
-				...fastWorkspacePackages.map(pkg => workspaceTestCommand(pkg, 8, { extraArgs: onlyFailuresArgs })),
-				...nativeAndIntegrationPackages.map(pkg => workspaceTestCommand(pkg, 4, { extraArgs: onlyFailuresArgs })),
-				projectToolTestCommand,
-				...(await commandsForMode("coding-agent-heavy")),
+				...packages,
+				...(await codingAgentTestCommands("singleton", true)),
+				...(await codingAgentTestCommands("ui", true)),
+				...(await codingAgentTestCommands("runtime", true)),
+				...(await codingAgentTestCommands("native", true)),
 			];
-		// Root `bun run test` adds the full Rust task to local TypeScript.
+		}
+		// Root `bun run test` adds the Rust fork task to local TypeScript.
 		case "local":
 			return [...(await commandsForMode("local-ts")), rustTestCommand()];
 	}
@@ -553,7 +741,8 @@ function isScrubbedEnvVar(key: string): boolean {
 	return /_(API_KEY|OAUTH_TOKEN)$/.test(key) || key.includes("BEARER_TOKEN");
 }
 
-const reportScope = `ci-test-ts:${requestedMode}${Bun.env.OMP_TEST_SHARD?.trim() ? `:shard-${Bun.env.OMP_TEST_SHARD.trim()}` : ""}`;
+const reportShard = args.includes("--unsharded") ? undefined : Bun.env.OMP_TEST_SHARD?.trim();
+const reportScope = `ci-test-ts:${requestedMode}${reportShard ? `:shard-${reportShard}` : ""}`;
 
 const reportRunnerId = randomUUID().slice(0, 8);
 // Bun's JUnit reporter writes a separate file without replacing console output.
@@ -1442,12 +1631,11 @@ if (import.meta.main) {
 	const deferStartup = args.includes("--defer-startup");
 	const onlyStartup = args.includes("--only-startup");
 	if (deferStartup && onlyStartup) throw new Error("--defer-startup and --only-startup are mutually exclusive");
-	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts")
-		throw new Error("--defer-startup and --only-startup require local-ts mode");
+	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts" && requestedMode !== "all")
+		throw new Error("--defer-startup and --only-startup require local-ts or all mode");
 	const commands = await commandsForMode(requestedMode as Mode);
-	// Real desktop input still requires independent authorization. All other
-	// files run without Git-, dependency-, or environment-based selection.
-	if (args.includes("--exclude-desktop")) {
+	// Explicit upstream native mode may require the desktop authorization boundary.
+	if (args.includes("--exclude-desktop") && requestedMode !== "local" && requestedMode !== "local-ts") {
 		const native = commands.find(command => command.cwd === "packages/natives");
 		if (native) {
 			const files: string[] = [];
@@ -1466,16 +1654,17 @@ if (import.meta.main) {
 		}
 	}
 	const localMode = requestedMode === "local" || requestedMode === "local-ts";
-	let requestedCommands = localMode ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
+	let requestedCommands =
+		localMode || args.includes("--unsharded") ? commands : selectShard(commands, Bun.env.OMP_TEST_SHARD);
 	if (deferStartup || onlyStartup)
 		requestedCommands = requestedCommands.filter(command => isStartupCommand(command) === onlyStartup);
 	const group = onlyStartup ? "startup" : deferStartup ? "ordinary" : "all";
 	if (deferStartup || onlyStartup)
-		console.log(`test-command-group=${group} chunks=${requestedCommands.length}; partial local-ts plan`);
+		console.log(`test-command-group=${group} chunks=${requestedCommands.length}; partial ${requestedMode} plan`);
 	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
 	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
 		throw new Error("Expected at most one --changed or --changed=<ref> option");
-	const selection: BunSelection = changedArgs.length
+	let selection: BunSelection = changedArgs.length
 		? {
 				tool: "bun",
 				mode: "affected",
@@ -1485,6 +1674,14 @@ if (import.meta.main) {
 		: localMode
 			? await bunTestSelection()
 			: { tool: "bun", mode: "full", reason: "full selection requested" };
+	if (
+		!changedArgs.length &&
+		selection.mode === "affected" &&
+		selection.baseline &&
+		!(await bunCanTraceChanges(repoRoot, selection.baseline))
+	) {
+		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
+	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
 	if (
 		requestedCommands.length &&
@@ -1492,17 +1689,25 @@ if (import.meta.main) {
 		!changedArgs.length &&
 		(await bunCleanBaseline(selection))
 	) {
-		// Bun itself confirms the zero-file selection; the explicit safe file keeps
-		// desktop input excluded even if the worktree changes before it starts.
+		// Ask Bun to confirm the empty selection using one selected fork file.
+		const first = requestedCommands.find(command => command.parallel !== undefined)!;
+		const file = first.command.find(arg => /\.(?:test|e2e)\.ts$/.test(arg))!;
 		requestedCommands = [
 			{
 				label: "Bun native empty affected selection",
-				cwd: ".",
-				command: ["bun", "test", ...onlyFailuresArgs, "./scripts/ci-test-ts.test.ts"],
+				cwd: first.cwd,
+				command: ["bun", "test", ...onlyFailuresArgs, file],
 				parallel: 1,
 				requireNoSelection: true,
 			},
 		];
+	}
+	if (localMode) {
+		const count = requestedCommands.reduce(
+			(sum, command) => sum + command.command.filter(arg => /\.(?:test|e2e)\.ts$/.test(arg)).length,
+			0,
+		);
+		console.log(`scope=fork-features selected-files=${count} chunks=${requestedCommands.length}`);
 	}
 	console.log(
 		selection.mode === "affected"

@@ -14,6 +14,9 @@
 
 mod cache;
 
+/// Shared regex matching for grep consumers.
+pub mod grep;
+
 #[cfg(not(unix))]
 use std::ffi::OsString;
 #[cfg(unix)]

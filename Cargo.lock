@@ -7037,8 +7037,6 @@ dependencies = [
  "heapless 0.9.3",
  "html-escape 0.2.15",
  "html-to-markdown-rs",
- "icu_collator",
- "icu_locale_core",
  "icy_sixel",
  "ignore",
  "image",
@@ -7071,6 +7069,7 @@ dependencies = [
  "pi-vfs",
  "pi-voice",
  "pi-walker",
+ "pi-wiki",
  "pipewire",
  "png",
  "portable-pty",
@@ -7079,7 +7078,6 @@ dependencies = [
  "reis",
  "resvg",
  "rusqlite",
- "ryu-js",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -7182,6 +7180,7 @@ dependencies = [
  "tokio-util",
  "windows-sys 0.61.2",
  "xattr",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -7203,11 +7202,36 @@ name = "pi-walker"
 version = "18.13.3"
 dependencies = [
  "globset",
+ "grep-matcher",
+ "grep-pcre2",
+ "grep-regex",
  "ignore",
  "libc",
  "parking_lot",
  "pi-vfs",
  "rayon",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "pi-wiki"
+version = "18.13.3"
+dependencies = [
+ "base64 0.23.1",
+ "grep-matcher",
+ "icu_collator",
+ "icu_locale_core",
+ "libc",
+ "pi-vfs",
+ "pi-walker",
+ "regex",
+ "rusqlite",
+ "ryu-js",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "unicode-normalization",
+ "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 

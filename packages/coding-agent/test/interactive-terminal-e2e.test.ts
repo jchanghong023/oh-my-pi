@@ -666,7 +666,11 @@ describe("libkitty end-to-end", () => {
 		const buffer = () => plainRows(term.getScrollBuffer());
 		expect(buffer().some(row => row.includes("SHAKE_RETIRED_REASONING"))).toBe(false);
 		await mode.handleShakeCommand("thinking");
-		await term.waitForRender();
+		await term.waitForRender(
+			() =>
+				buffer().some(row => row.includes("Dropped 1 thinking block")) &&
+				buffer().some(row => row.trim() === "Answer marker 1"),
+		);
 
 		const rows = buffer();
 		expect(rows.some(row => row.includes("SHAKE_RETIRED_REASONING"))).toBe(false);
@@ -684,8 +688,16 @@ describe("libkitty end-to-end", () => {
 				skipped: false,
 				...(errorMessage ? { errorMessage } : {}),
 			});
-			await term.waitForRender();
+			// The prior answer is already in scrollback, so wait for this event's
+			// new notice as well as the retired prefix rather than a fixed frame delay.
+			const notice = errorMessage ?? "Auto-shake completed";
+			await term.waitForRender(
+				() => buffer().some(row => row.includes(notice)) && buffer().some(row => row.trim() === "Answer marker 1"),
+			);
+			expect(buffer().some(row => row.includes(notice))).toBe(true);
+			expect(buffer().some(row => row.includes("SHAKE_RETIRED_REASONING"))).toBe(false);
 			expect(buffer().filter(row => row.trim() === "Answer marker 1")).toHaveLength(1);
+			expect(buffer().filter(row => row.trim() === "Answer marker 35")).toHaveLength(1);
 			expect(plainRows(term.getViewport()).some(row => row.includes("Review answer"))).toBe(true);
 		}
 	});

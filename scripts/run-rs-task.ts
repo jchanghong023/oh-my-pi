@@ -7,7 +7,7 @@ import { windowsTestTempOverride } from "./windows-test-temp";
 import { GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { forwardNextestOutput, withRustCompilerEvents } from "./test-gate-native-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { beginTestRun, endTestRun, recordTestProducer, testReportPath, type TestSelection } from "./test-reporting";
+import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 
 const RUST_AFFECTING_FILE_NAMES = [
 	"Cargo.toml",
@@ -66,35 +66,33 @@ const TASK_COMMANDS = {
 			// The plus reporter flushes each classified result before native grace cleanup.
 			"--message-format=libtest-json-plus",
 			"--message-format-version=0.1",
-			"--workspace",
-			...VENDORED_FORK_EXCLUDES,
+			"-p",
+			"pi-wiki",
+			"-p",
+			"pi-natives",
+			"-E",
+			"package(pi-wiki) | (package(pi-natives) & (test(/^wiki::/) | test(/^python_symbols::/)))",
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		// nextest cannot run doctests (no stable libtest-json interface for
-		// them), so they need their own libtest pass. It runs every runnable
-		// doctest in the workspace's lib crates; today that is tree-sitter-go's
-		// one example, since pi-natives is a `cdylib`, which rustdoc refuses to
-		// collect doctests from, and pi-builtins' 16 examples are `ignore`d
-		// vendored uutils docs. `--doc` overrides a crate's own
-		// `doctest = false`, so a vendored crate whose examples do not compile
-		// (napi-rs's) has to be in VENDORED_FORK_EXCLUDES.
-		// Nightly libtest JSON reports per-case exec_time only with --report-time;
-		// Rust's existing -Zunstable-options also enables the JSON format.
-		[
-			"cargo",
-			"test",
-			"--doc",
-			"--workspace",
-			"--no-fail-fast",
-			...VENDORED_FORK_EXCLUDES,
-			"--",
-			"-Zunstable-options",
-			"--format=json",
-			"--report-time",
-		],
+		["cargo", "test", "-p", "pi-wiki", "--doc", "--no-fail-fast"],
 	],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
+const FULL_TEST_COMMANDS = [
+	[
+		"cargo",
+		"nextest",
+		"run",
+		"--workspace",
+		`--test-threads=${testConcurrencyLimit()}`,
+		"--no-fail-fast",
+		"--message-format=libtest-json-plus",
+		"--message-format-version=0.1",
+		"--status-level=fail",
+		"--final-status-level=fail",
+	],
+	["cargo", "test", "--workspace", "--doc", "--no-fail-fast"],
+] as const satisfies readonly (readonly string[])[];
 
 type RustTaskName = keyof typeof TASK_COMMANDS;
 
@@ -107,12 +105,8 @@ if (!isRustTaskName(taskName)) {
 	process.exit(1);
 }
 
-const testMode = process.argv[3] ?? "--affected";
-
-if (
-	process.argv.length > 4 ||
-	(process.argv.length === 4 && (taskName !== "test:rs" || (testMode !== "--collect" && testMode !== "--full")))
-) {
+const full = taskName === "test:rs" && process.argv.length === 4 && process.argv[3] === "--full";
+if (process.argv.length > 3 && !full) {
 	console.error(`Unknown Rust task argument: ${process.argv[3]}`);
 	process.exit(1);
 }
@@ -124,7 +118,10 @@ if (taskName !== "test:rs" && taskName !== "fmt:rs" && !(isCI() || (await hasRus
 
 Object.assign(process.env, windowsTestTempOverride());
 prepareWindowsRustEnvironment();
-await runCommands(TASK_COMMANDS[taskName], taskName === "test:rs" ? "rust-workspace" : undefined);
+await runCommands(
+	full ? FULL_TEST_COMMANDS : TASK_COMMANDS[taskName],
+	taskName === "test:rs" ? (full ? "rust-workspace" : "rust-fork-features") : undefined,
+);
 
 async function runCommands(commands: readonly (readonly string[])[], scope?: string): Promise<void> {
 	const run = scope ? await beginTestRun(scope) : undefined;
@@ -168,10 +165,7 @@ function cargoEnvironment(binary: string): Record<string, string> {
 	const toolchainBin = path.dirname(binary);
 	const pathSep = process.platform === "win32" ? ";" : ":";
 	const currentPath = env.PATH ?? env.Path ?? "";
-	const localTools = path.join(repoRoot, "target", "omp-tools", "bin");
-	const affected = path.join(localTools, process.platform === "win32" ? "cargo-affected.exe" : "cargo-affected");
-	const entries = [fs.existsSync(affected) ? localTools : undefined, toolchainBin, currentPath].filter(Boolean);
-	env.PATH = entries.join(pathSep);
+	env.PATH = [toolchainBin, currentPath].join(pathSep);
 	return env;
 }
 
@@ -302,75 +296,16 @@ function toolVersion(command: string[], env: Record<string, string>): string | u
 	}
 }
 
-async function shouldCollectCoverage(
-	executable: string,
-	env: Record<string, string>,
-	reportPath: string,
-	args: string[],
-	recover: boolean,
-): Promise<boolean> {
-	// Never anchor coverage to HEAD when the compiled source differs from it.
-	const git = Bun.spawnSync(["git", "status", "--porcelain", "--untracked-files=normal"], {
-		cwd: repoRoot,
-		env,
-		stdout: "pipe",
-		stderr: "ignore",
-	});
-	if (git.exitCode !== 0 || git.stdout.length !== 0) return false;
-	if (recover) return true;
-	const statusPath = `${reportPath}.status.json`;
-	try {
-		const status = Bun.spawnSync([executable, "affected", "status", "--report-json", statusPath, "--", ...args], {
-			cwd: repoRoot,
-			env,
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		if (status.exitCode !== 0) return false;
-		const report = (await Bun.file(statusPath).json()) as { schema_version?: number; cache?: { status?: string } };
-		return (
-			report.schema_version === 1 &&
-			["miss-no-coverage", "miss-fingerprint", "miss-no-reachable-sha"].includes(report.cache?.status ?? "")
-		);
-	} catch {
-		// A status/tool failure is not evidence of missing coverage. Let run report it.
-		return false;
-	} finally {
-		await fs.promises.rm(statusPath, { force: true }).catch(() => {});
-	}
-}
-
 async function runCommand(command: readonly string[], scope?: string): Promise<number> {
 	const [head, ...rest] = command;
 	const isCargo = head === "cargo";
 	const isNextest = isCargo && rest[0] === "nextest" && rest[1] === "run";
 	const isDoctest = isCargo && rest[0] === "test" && rest.includes("--doc");
 	const executable = isCargo ? await ensureCargoBinary() : head;
-	let argv = [executable, ...rest];
+	const argv = [executable, ...rest];
 	const env = isCargo ? cargoEnvironment(executable) : { ...(process.env as Record<string, string>) };
 	if (isNextest) env.NEXTEST_EXPERIMENTAL_LIBTEST_JSON = "1";
-	const reportPath =
-		scope && (isNextest || isDoctest) ? testReportPath(isNextest ? "rust-nextest" : "rust-doctests") : undefined;
-	const markerPath = path.join(repoRoot, "target", "affected", "omp-incomplete-run");
-	const recoveryRequired = isNextest && fs.existsSync(markerPath);
-	const collect =
-		isNextest &&
-		(testMode === "--collect" ||
-			(testMode === "--affected" &&
-				reportPath != null &&
-				(await shouldCollectCoverage(executable, env, reportPath, rest.slice(2), recoveryRequired))));
-	const selectionPath = isNextest && reportPath && !collect ? `${reportPath}.selection.json` : undefined;
-	if (isNextest) {
-		argv = [
-			executable,
-			"affected",
-			collect ? "collect" : "run",
-			...(testMode === "--full" || (recoveryRequired && !collect) ? ["--all"] : []),
-			...(selectionPath ? ["--report-json", selectionPath, "--report-detail", "full"] : []),
-			"--",
-			...rest.slice(2),
-		];
-	}
+	const reportPath = scope && isNextest ? testReportPath("rust-nextest") : undefined;
 	let nextestStore: string | undefined;
 	if (reportPath && isNextest) {
 		// Nextest's JUnit path is relative to store.dir/<profile>. A lower-priority
@@ -383,17 +318,12 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 	}
 	const startedAt = new Date().toISOString();
 	const startedMs = performance.now();
-	if (isNextest) {
-		await fs.promises.mkdir(path.dirname(markerPath), { recursive: true });
-		await Bun.write(markerPath, "Native Rust run incomplete or failed; a clean collection is required.\n");
-	}
-	const doctests = isDoctest && reportPath ? new DoctestResults() : undefined;
 	const exitCode = await withRustCompilerEvents(env, async compilerEnv => {
 		const proc = Bun.spawn(argv, {
 			cwd: repoRoot,
 			env: compilerEnv,
 			stdin: "inherit",
-			stdout: isNextest || doctests ? "pipe" : "inherit",
+			stdout: isNextest ? "pipe" : "inherit",
 			stderr: "inherit",
 		});
 		let reportedFailure = false;
@@ -406,59 +336,14 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 					reportedFailure = true;
 					reportGateFailure(error);
 				})
-			: doctests
-				? doctests.forward(proc.stdout as ReadableStream<Uint8Array>, writeOutput)
-				: Promise.resolve();
+			: Promise.resolve();
 		const [code] = await Promise.all([proc.exited, output]);
 		if (code !== 0 && !reportedFailure) reportGateFailure(new GateCommandError(`${command.join(" ")} failed`, code));
 		return code;
 	});
 	if (reportPath && scope) {
 		let partial = false;
-		let selection: TestSelection | undefined;
-		if (isNextest) {
-			if (selectionPath) {
-				try {
-					const native = (await Bun.file(selectionPath).json()) as {
-						schema_version?: number;
-						cache?: { status?: string };
-						selection?: { summary?: { mode?: string; selected?: number | null; skipped?: number | null } };
-					};
-					if (
-						native.schema_version !== 1 ||
-						typeof native.cache?.status !== "string" ||
-						!["selection", "full-suite-no-listing"].includes(native.selection?.summary?.mode ?? "")
-					)
-						throw new Error("Invalid cargo-affected selection report");
-					const summary = native.selection!.summary!;
-					if (
-						summary.mode === "selection" &&
-						(typeof summary.selected !== "number" ||
-							!Number.isSafeInteger(summary.selected) ||
-							summary.selected < 0 ||
-							typeof summary.skipped !== "number" ||
-							!Number.isSafeInteger(summary.skipped) ||
-							summary.skipped < 0)
-					)
-						throw new Error("Invalid cargo-affected selection counts");
-					selection = {
-						tool: "cargo-affected",
-						mode: summary.mode === "selection" ? "affected" : "full",
-						selected: summary.selected ?? undefined,
-						deselected: summary.skipped ?? undefined,
-						reason: native.cache.status,
-						reportPath: selectionPath,
-					};
-				} catch (error) {
-					partial = true;
-					console.warn(`Warning: cargo-affected selection evidence unavailable: ${String(error)}`);
-				}
-			} else {
-				selection = { tool: "cargo-affected", mode: "full", reason: "collect coverage baseline" };
-			}
-		}
-		const notSelected = exitCode === 0 && selection?.mode === "affected" && selection.selected === 0;
-		if (nextestStore && !notSelected) {
+		if (nextestStore) {
 			const profile = process.env.NEXTEST_PROFILE || "default";
 			const source = path.join(nextestStore, profile, "junit.xml");
 			try {
@@ -474,44 +359,26 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 					`Warning: nextest JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
-		} else if (doctests) {
-			partial = !doctests.complete;
-			if (doctests.suites > 0) {
-				try {
-					await Bun.write(reportPath, doctests.junitXml());
-				} catch (error) {
-					partial = true;
-					console.warn(
-						`Warning: rustdoc JUnit report unavailable: ${error instanceof Error ? error.message : String(error)}`,
-					);
-				}
-			} else console.warn("Warning: rustdoc emitted no structured libtest JSON suite; doctest timing is partial.");
-		}
-		if (isNextest && exitCode === 0 && !partial && (!recoveryRequired || collect)) {
-			// A failed/interrupted collection can have stored incomplete coverage.
-			// Only a successful clean collection can make that baseline trustworthy again.
-			await fs.promises.rm(markerPath, { force: true }).catch(error => {
-				console.warn(`Warning: unable to clear Rust recovery marker: ${String(error)}`);
-			});
 		}
 		try {
 			await recordTestProducer({
-				producer: isNextest ? `cargo affected ${collect ? "collect" : "run"}` : "cargo test --doc",
+				producer: "cargo nextest run",
 				command: argv,
 				scope,
 				startedAt,
 				durationSeconds: (performance.now() - startedMs) / 1000,
 				exitCode,
-				reportPath: notSelected ? undefined : reportPath,
-				status: partial ? "partial" : notSelected ? "not-selected" : undefined,
-				selection,
-				timingBasis: isNextest
-					? "nextest native JUnit case time"
-					: "rustdoc libtest JSON exec_time (--report-time)",
-				runnerVersion: toolVersion(
-					isNextest ? [executable, "affected", "--version"] : ["rustdoc", "--version"],
-					env,
-				),
+				reportPath,
+				status: partial ? "partial" : undefined,
+				selection: {
+					tool: "cargo-nextest",
+					mode: "full",
+					reason: full
+						? "all workspace packages and test namespaces"
+						: "full pi-wiki package and pi-natives wiki bindings and python_symbols namespaces",
+				},
+				timingBasis: "nextest native JUnit case time",
+				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
 			});
 		} catch (error) {
 			// Reporting must not replace the actual Rust test exit status.
@@ -520,116 +387,23 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 			);
 		}
 	}
-	return exitCode;
-}
-
-interface DoctestCase {
-	name: string;
-	suite: number;
-	source?: string;
-	event: "ok" | "failed" | "ignored";
-	seconds?: number;
-	output?: string;
-}
-
-/** Only libtest JSON events, never Rust's human-readable test output, become cases. */
-class DoctestResults {
-	readonly cases: DoctestCase[] = [];
-	suites = 0;
-	private finishedSuites = 0;
-	private incomplete = false;
-	private expectedCases = 0;
-
-	get complete(): boolean {
-		return (
-			!this.incomplete &&
-			this.suites > 0 &&
-			this.finishedSuites === this.suites &&
-			this.cases.length === this.expectedCases
-		);
-	}
-
-	async forward(stream: ReadableStream<Uint8Array>, writeOutput: (bytes: Uint8Array) => Promise<void>): Promise<void> {
-		const decoder = new TextDecoder();
-		const reader = stream.getReader();
-		let pending = "";
+	if (scope && isDoctest) {
 		try {
-			for (;;) {
-				const { value, done } = await reader.read();
-				if (done) break;
-				await writeOutput(value);
-				pending += decoder.decode(value, { stream: true });
-				let newline: number;
-				while ((newline = pending.indexOf("\n")) !== -1) {
-					this.observe(pending.slice(0, newline));
-					pending = pending.slice(newline + 1);
-				}
-			}
-			this.observe(pending + decoder.decode());
-		} finally {
-			reader.releaseLock();
-		}
-	}
-
-	private observe(line: string): void {
-		if (!line.trimStart().startsWith("{")) return;
-		let event: Record<string, unknown>;
-		try {
-			event = JSON.parse(line) as Record<string, unknown>;
-		} catch {
-			return;
-		}
-		if (event.type === "suite") {
-			if (event.event === "started") {
-				this.suites++;
-				if (typeof event.test_count === "number") this.expectedCases += event.test_count;
-				else this.incomplete = true;
-			} else if (event.event === "ok" || event.event === "failed") this.finishedSuites++;
-		} else if (event.type === "test") {
-			if (event.event === "timeout") this.incomplete = true;
-			if (event.event !== "ok" && event.event !== "failed" && event.event !== "ignored") return;
-			if (typeof event.name !== "string") {
-				this.incomplete = true;
-				return;
-			}
-			const seconds = event.exec_time;
-			if (event.event !== "ignored" && (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0))
-				this.incomplete = true;
-			const source = event.name.match(/^(.+\.rs) - /)?.[1];
-			if (!source) this.incomplete = true;
-			this.cases.push({
-				name: event.name,
-				suite: this.suites,
-				event: event.event,
-				...(typeof seconds === "number" && Number.isFinite(seconds) && seconds >= 0 ? { seconds } : {}),
-				...(typeof event.stdout === "string" ? { output: event.stdout } : {}),
-				...(source ? { source: source.replaceAll("\\", "/") } : {}),
+			await recordTestProducer({
+				producer: "cargo test --doc",
+				command: argv,
+				scope,
+				startedAt,
+				durationSeconds: (performance.now() - startedMs) / 1000,
+				exitCode,
+				status: exitCode === 0 ? "stage" : "failed",
+				timingBasis: "command wall time; Cargo doctests do not provide standard JUnit reports",
+				selection: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-wiki doctests" },
+				runnerVersion: toolVersion([executable, "--version"], env),
 			});
+		} catch (error) {
+			console.warn(`Warning: unable to record Rust doctest timing metadata: ${String(error)}`);
 		}
 	}
-
-	junitXml(): string {
-		const cases = this.cases.map(test => {
-			const suite = `rustdoc/${escapeXml(test.source ?? `unidentified-suite-${test.suite}`)}`;
-			const time = test.seconds === undefined ? "" : ` time="${test.seconds}"`;
-			const failure =
-				test.event === "failed"
-					? `<failure message="doctest failed">${escapeXml(test.output ?? "")}</failure>`
-					: "";
-			const skipped = test.event === "ignored" ? "<skipped/>" : "";
-			return `    <testcase classname="${suite}" name="${escapeXml(test.name)}"${time}>${failure}${skipped}</testcase>`;
-		});
-		const failures = this.cases.filter(test => test.event === "failed").length;
-		return `<?xml version="1.0" encoding="UTF-8"?>\n<testsuites tests="${this.cases.length}" failures="${failures}">\n  <testsuite name="rustdoc-doctests" tests="${this.cases.length}" failures="${failures}">\n${cases.join("\n")}\n  </testsuite>\n</testsuites>\n`;
-	}
-}
-
-function escapeXml(value: string): string {
-	return value
-		.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "")
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&apos;");
+	return exitCode;
 }

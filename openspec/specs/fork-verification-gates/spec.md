@@ -52,19 +52,24 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 | 入口 | 当前有效范围 | 非编译硬上限 | 总墙钟硬上限 |
 | --- | --- | --- | --- |
 | `bun run fastcheck` | 静态分析、类型/格式检查和编译；无任何测试，包括冒烟、自测 | 360 秒 | 沿用非编译预算 |
-| `bun run fulltest` | 全部 fastcheck 检查 + 本机 Bun workspace、仓库脚本、Cargo/Nextest/doctest、本平台适用的 Python 普通 pytest、native 构建和隔离 dev-TUI 公开入口 E2E；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
+| `bun run fulltest` | 全部 fastcheck 检查 + 本机 fork 功能的 Bun、Cargo/Nextest 和适用 doctest、变更对应的仓库脚本自测、native 构建及隔离 dev-TUI 公开入口 E2E；测试选择见下文，无跨 WSL | 1800 秒 | 1800 秒 |
 | `bun run slowtest` | 本机 fulltest 一次 + 项目所需且现有兼容 WSL 可用时的 Linux fulltest；无适用 WSL 时保留本机 fulltest | 3000 秒 | 3000 秒 |
 
 表中列出必需的独立工作与适用套件；原生增量选测只说明本轮实际覆盖，不能声称整套测试均新执行。
 
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
-- fulltest 的 Bun 使用 `--changed` 根据变更文件及依赖选测；缺少可信全量基线或工具不支持时回退全量。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。真实桌面输入保持单独授权，不计为已通过。
-- 普通 Python 测试使用 pytest-testmon 的用例覆盖数据增量选测；Windows 原生只运行 Python RPC SDK，Robomp 不支持 Windows 原生，MUST 明确报告平台跳过且不得记为通过；Linux 保留 Robomp 与 Python RPC SDK 两套。Robomp integration 仍单独显式启用、不随普通运行启用；Windows 原生调用 MUST 报告不支持并非零退出，不能记为通过。
-- `test:rs` 使用 Cargo、Nextest 和 cargo-affected 的逐测试 LLVM 覆盖映射，默认执行受影响用例；无有效覆盖数据时回退全量，干净工作树 collect 建立基线，`--collect` 显式采集，`--full` 强制全量。NEVER 对脏工作树 collect 使用 `--allow-dirty`。Cargo doctest 仍独立完整执行；保持既有第三方 workspace 排除与同平台构建配置，Windows sed 用例不再以手工过滤避开失败。
-- Rust 覆盖率工具 MUST 支持 workspace 内实际测试目标，包括 `cdylib`；不得通过排除 pi-natives、修改其发行 crate-type 或吞掉映射失败来规避工具缺陷。必要的固定版本兼容补丁及准备入口须可复现，门禁不自动安装或构建工具。
-- 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust；原生选择器无法证明这些依赖时须保守处理。Bun 的文件依赖及 testmon 的运行时覆盖均为近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
+- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能，静态检查与编译范围不缩减。保留 Dev/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、ZCode app-server 权限及模型配置、Wiki/Repo 索引与 Python symbols、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；Dev 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留；仅本次允许在完整消费者契约不变的条件下合并 Dev／ZCode 重复的正常进程场景，并由已有低层合同测试覆盖纯输入字段／命令参数排列，不赋予后续自动删测权限。真实 PTY 保留不同错误、状态和焦点边界；冷启动、准备失败／EOF、冷恢复、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等真实边界不得删减。Dev 四角色 × missing／malformed／unknown 材料失败矩阵及其现有平台条件保持，每例 provider／fixture 隔离不得共享。不得新增 skip、放宽时限或删减产品需求。
+- 默认 fulltest 的 Bun 仅在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
+- `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
+- 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
+- `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `pi-wiki` 全包、`pi-natives` 的 `wiki::` 绑定测试和 `python_symbols::`；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p pi-wiki --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`pi-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
+- 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust。Bun 文件依赖是近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
+- 通过子进程启动 CLI 的测试须在公共 harness 或独立启动器中静态声明真实运行依赖，让 Bun `--changed` 能识别间接消费者；Tools registry 可作为输入，不能导入并执行 CLI 主入口来构造依赖图。
+- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线及 Git 变更规划独立阶段：仅能证明 Rust 未受影响时才将 Nextest 和 doctest 均记为 not-selected；受影响或依赖边界未知时两者完整运行。独立 UI smoke 和仓库脚本同理，Repo、CLI、native、Team、TUI 等实际依赖变化须选入 UI；缺基线或依赖未知时保守执行。静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
+- Git 规划未选阶段记录有效基线 revision、相对变更路径、原因和零选择；不虚构 XML、用例或耗时。全未选可报告真实零执行，混合报告保留实际 XML 与失败，均不得当作完整新执行或完整基线。
 - 单个用例、文件或语言套件失败后继续执行独立的其余必需测试，Nextest 与 rustdoc 使用 `--no-fail-fast`，Bun 不添加 `--bail`，pytest 不添加 `-x`；只有总预算、取消或完整性阻断可终止剩余工作。
-- 独立 Go/Rust SDK、安装测试和另需授权的集成入口不自动纳入 fulltest。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
+- 默认 fulltest 不自动纳入独立 Go/Rust SDK；安装测试和另需授权的集成入口也不自动纳入 `--full`。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
 - native 安装从真实构建产物执行版本戳及宿主加载核验；最终版本戳后的 addon 字节与 bindings 内容均未变化、且已有文件可写时，保留安装文件及其修改时间。版本或内容变化时 MUST 按下文「原生安装替换与回滚」执行替换。
 
 - 三层均在一个单调累计时钟下计费，排除实际观测到的**纯编译区间之并集**；编译和非编译并行时重叠仍计费一次。发现、准备、原生选测、下载、同步、非编译等待、汇总和清理计费；不能把混合检查/测试命令整段排除，也不能将历史耗时计入本轮编译排除。fulltest/slowtest 另有包含编译及全部收尾的总墙钟硬上限，不因纯编译排除而延长；嵌套阶段共享外层剩余额度，并保持更严格的内层上限。`--limit-seconds` 同时下调本入口的非编译与总墙钟上限。
@@ -75,10 +80,10 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 - 构建脚本能力探针的预期非零编译退出作为探针答案原样返回，不单独触发门禁失败；Cargo 正式编译单元及 Go 工具的失败仍须即时上报并保留原退出码，不能依赖外层进程转发失败；外层收到后继续其余独立工作。
 - 门禁的进程监督须在命令仍运行时回收已退出的孤儿后代，不得截获由运行器持有的主命令退出码；宿主直接退出或 IPC 断开时，监督进程仍须停止并回收普通自有后代，含逃逸的独立 session。跨 Windows/WSL 的取消命令须在强退前独立发起，不等待其收尾。Windows 隔离临时目录的正常清理须能解除带拒绝读取 ACL 的目录 junction，且不得遍历或删除其目标；清理失败不得降级成通过。
 - 独立且安全的检查/测试/Windows与WSL两端必须并行；改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
-- native 生成后静态检查与普通测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成，TS 静态检查和普通测试可并行；spec-driven TUI 及 RPC goal 启动敏感测试须在这些工作全部结束后，以原有分块串行执行，避免资源争用制造启动超时，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
+- native 生成后静态检查与普通测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成，TS 静态检查和普通测试可并行；spec-driven TUI 及 RPC goal 启动敏感测试须在这些工作全部结束后运行，独立测试文件进程最多并行 `min(2, 现有 CPU 预算)`，文件内串行，并保持各自独立的 HOME、工作区、端口及清理，避免资源争用制造启动超时，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
 - 测试运行器按当前可用核心数动态限制并发，任务不足时进一步缩小。Windows 本机 TS 初始完整轮及无合格计时提示时最多 `min(14, 当前可用核心数)`；仅当前次真实 fulltest 已完整执行并成功、报告完整校验通过、在 7 天内且平台、架构及 post-native 完整源码指纹与当前一致时，fulltest 的 TS 短任务池 MAY 提升至最多 `min(20, 当前可用核心数)`。报告缺失、过期、失败、不完整或任何不一致均安全回退至 `min(14, 当前可用核心数)`。Windows Rust Nextest 始终最多 `min(14, 当前可用核心数)`；Linux 等其他平台维持 `min(28, 当前可用核心数)`。Bun 的 chunk 池与每个 chunk 的文件 worker 共同分配预算，不能相乘后越过上限；显式配置仍可降低并发。TS 与 Rust 并行时各自并发可能叠加、导致本机资源争用；是否提速和稳定须由后续完整门禁实测，不得预称通过。不固定启动上限数量的 worker，不改变静态检查并发、测试覆盖、隔离、超时、时间预算或计费。
-- fulltest MAY 使用合格的既有完整计时报告作为测试调度的排序和资源容量提示；报告缺失、不完整或无对应耗时不得阻止必需工作。历史耗时不得写成本轮新执行，亦不得改变分片、超时及结果合同。
-- 本地高成本 integration／E2E chunk 同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置。此子限制不改变既有测试分片、超时、断言、覆盖及结果合同。
+- fulltest MAY 使用合格的既有完整计时报告作为测试调度的排序和资源容量提示；报告 scope 须为 `fulltest: fork feature suites`，旧范围报告不能作为新范围基线。报告缺失、不完整或无对应耗时不得阻止必需工作。历史耗时不得写成本轮新执行，亦不得改变分片、超时及结果合同。
+- 本地高成本 integration／E2E chunk（包括按路径归入的 ZCode 真实 process 测试）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
 - fulltest 的全部脚本／静态／测试读取者必须绑定同一 post-native 源码快照；准备阶段及后续执行期间的源码或 HEAD 变化立即拒绝，原生选测不能绕过完整性核验。native 生成阶段仅允许两个已跟踪普通文件 `packages/natives/native/index.js`、`index.d.ts` 的内容更新，不能借此接受其他文件、类型、模式或 HEAD 变化；构建完成后重取快照，并在全部必需工作结束时再次核对。
 - Windows 测试子进程的 PATH 排除 WindowsApps 执行占位程序，复用已安装的真实 Python；Python 夹具的 UTF-8 标准流协议不依赖宿主 ANSI 代码页。环境覆盖遵循 Windows 变量名大小写不敏感语义，不修改系统 PATH 或宿主配置。测试使用隔离应用配置、HOME 和凭据，不读取用户真实配置。
 - Dev TUI E2E 保持现有场景、隔离、超时及断言；启动、Team／取消、Repo 三组独立 PTY 进程可在可用核心数约束下最多三组并行，Team 报告与取消保持组内依赖顺序，全部进程须完成并回收；缺失 `tui-test` 按缺工具失败。
@@ -88,8 +93,8 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 - WSL 通过 `scripts/slowtest-wsl-stage.ts` 在 slowtest 内执行，源码只能经 **Windows → Git 网络远端 → root 身份的原生 `/root` 工作区** 同步并测试完整固定 SHA。禁止本地快照、bundle、复制、rsync、patch、stdin 传源码、本地 remote 及 `/mnt/*` 工作区；stdin/stdout 仅承载调度计划/参数与日志。门禁没有 commit/push/stash 授权：源码未提交或未推送须立即报告为该端失败，不能测试旧提交代表当前改动。既有固定提交同步 helper 的 plan 保留远端身份、fetch/固定 SHA 可达性、快进、工作区与子模块保护、未跟踪残留隔离和测试后状态检查；流式执行计划并观测嵌套 fulltest 的纯编译事件，无法可靠计时则 UNVERIFIED，不能整段豁免混合命令。helper 的 7200 秒墙钟防挂另行报告，不得放宽外层 3000 秒总墙钟上限。记录两端 HEAD、本机源码指纹、工作树、Linux 工具路径与版本；不同提交不得合并 PASS。取消只处理本次拥有的资源，不关闭发行版、不删除用户改动、残留证据或有效编译缓存。
 - WSL 验证使用已就绪的本机依赖，不自动执行 `bun install` 或安装缺失工具；依赖不足按原始准备／执行失败报告，不降级为不可用跳过，也不运行旧源码冒充当前固定提交。
 - WSL 原生仓库发现受 slowtest 同一累计非编译与总墙钟额度约束，不另设 25/30 秒的提前截止；宿主与 Linux 的有限防挂不能延长外层时限。完整发现须保留嵌套工作区与多匹配拒绝语义，不通过缩小遍历范围规避超时。
-- 本地门禁报告本平台适用工作和实际测试选择范围，不能把 affected 范围写成完整新执行。保留现有 TS/Rust 静态检查、native 构建及 dev-TUI 集成边界，Python 普通测试按上述平台适用；独立 Go/Rust SDK、安装发布、真实桌面和实际模型集成仍按各自授权执行。不得将平台跳过或独立授权范围表述为通过。
-- 公开测试入口写入被 Git 忽略的 `runs/test-timing/<run-id>/`：本轮执行的 Bun、pytest、nextest 与可提供结构化结果的 rustdoc 各自输出独立 JUnit XML，CLI/PTY 场景按实际命令或场景计时；`run.json` 保存源码与环境、实际范围、原始退出码、每个 producer 的命令、报告路径及完成状态。原生选择元数据记录工具、`full`／`affected` 模式及可用的选中／排除数量、原因、基线和报告路径；区分实际执行、deselected、not-selected 与未运行，历史 testcase 和耗时不是本轮新执行。独立运行与重试不得覆盖前次报告；报告缺失、被取消、提前退出或仅有阶段耗时须标为部分覆盖，不能把阶段时间冒充单测时间。正常执行完所选用例但含失败的报告标为失败。Bun/nextest/rustdoc 的 testcase 时间与 pytest 包含 setup/call/teardown 的时间不直接比较；JUnit 用例时间之和不是并行挂钟时间。
+- 本地门禁报告本平台适用工作和实际测试选择范围，不能把 affected 范围写成完整新执行，不能称全仓全量通过。保留现有 TS/Rust 静态检查、native 构建及 dev-TUI 集成边界；独立 SDK、安装发布、真实桌面和实际模型集成仍按各自授权执行。不得将平台跳过或独立授权范围表述为通过。
+- 公开测试入口写入被 Git 忽略的 `runs/test-timing/<run-id>/`：本轮执行的 Bun、nextest 与可提供结构化结果的 rustdoc 各自输出独立 JUnit XML，CLI/PTY 场景按实际命令或场景计时；`run.json` 保存源码与环境、实际范围、原始退出码、每个 producer 的命令、报告路径及完成状态。默认 fulltest scope 为 `fulltest: fork feature suites`、控制台范围为 `fork-features`；`--full` 分别为 `fulltest: all test suites` 和 `all-tests`。原生选择元数据记录工具、`full`／`affected` 模式及可用的选中／排除数量、原因、基线和报告路径；区分实际执行、deselected、not-selected 与未运行，历史 testcase 和耗时不是本轮新执行。独立运行与重试不得覆盖前次报告；报告缺失、被取消、提前退出或仅有阶段耗时须标为部分覆盖，不能把阶段时间冒充单测时间。正常执行完所选用例但含失败的报告标为失败；JUnit 用例时间之和不是并行挂钟时间。
 - 正常报告收尾由门禁生命周期跟踪，计入同一预算与总墙钟时限；验证失败须在预算内完成全量失败汇总报告后退出，发生超时、中断或阻断时立即退出优先于报告补写，不能为生成完整 `run.json` 延迟结束。强退可能留下缺失、未完成或临时报告；报告须结合门禁最终输出及进程退出码判读，非零退出时任何暂存的 complete/0 元数据均不代表通过。
 - `slowtest` 的 Linux JUnit/XML 与元数据留在 WSL 原生仓库，宿主运行的 `run.json` 标注未汇总范围并保持部分报告状态；即使门禁在两端通过，也不能把宿主 XML 当成两端完整测试报告。WSL 不可用时以门禁原有跳过状态为准。
 - 环境/工具缺失、平台不适用和检查失败须分别说明，不把缺失或跳过当通过。失败须先区分业务缺陷与测试适配，平台 fixture 应验证实际平台合同，不用手工白名单绕过失败；未运行的实际模型质量、公司内网、独立发布和桌面输入不属于本地 PASS 的证明。
@@ -107,24 +112,27 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 - **WHEN** 出现用例失败、命令错误、缺工具、取消或超时
 - **THEN** 显示对应失败和必要诊断，继续独立必需工作，并按原有规则给出最外层最终状态、耗时及退出码
 
-### Requirement: 原生测试增量选择
+### Requirement: 原生测试选择
 
-fulltest 和 slowtest MUST 使用各语言原生选测能力，不将门禁或整个测试命令作为可跳过的缓存目标；fastcheck 保留原有编译和工具缓存且不运行测试。
+fulltest 和 slowtest MUST 使用 Bun 原生选测能力；Rust 受影响或边界未知时完整执行所选 fork 功能测试，可信基线下证明无影响时记录未选，不将门禁或整个测试命令作为可跳过的缓存目标；fastcheck 保留原有编译和工具缓存且不运行测试。
 
 #### Scenario: 受影响测试与回退
 
 - **WHEN** 运行本机或适用 WSL 的 fulltest
-- **THEN** Bun 依据合格基线使用 `--changed`，pytest 使用 testmon 用例覆盖数据，Rust 使用 cargo-affected 与 Nextest 的逐用例 LLVM 映射；不可建立有效选择时按工具合同回退全量，Cargo doctest 独立运行
-- **AND** 清洁工作树可采集 Rust 覆盖基线，`--collect` 显式采集，`--full` 强制全量；不得使用 `--allow-dirty` 在脏树采集
+- **THEN** Bun 在 fork 白名单内依据合格基线使用 `--changed`；不可建立有效选择时回退完整白名单。Rust 受影响或边界未知时完整执行所选 fork 范围 Nextest，并独立运行 `pi-wiki` 的 Cargo doctest；仅可信 clean 完整基线证明未受影响时两者均记为未选，native `cdylib` 无 doctest
 - **AND** 选择结果区分执行、排除和未选中，报告 full 或 affected；历史执行与平台跳过不算本轮通过，选择近似不证明完整新回归
-- **AND** 失败、取消或未完成的上次执行不得仅因已有覆盖数据库而被排除；原生工具可能在失败后保存覆盖数据，运行器仍须实际重跑并保留真实失败退出码
+- **AND** 失败、取消或未完成的上次执行不得仅因已有历史数据而被排除；运行器须实际重跑并保留真实失败退出码
 
-#### Scenario: 修改 A 只重跑依赖 A 的测试
+#### Scenario: Bun 白名单内受影响测试
 
-- **WHEN** 已有有效测试依赖基线，只有业务源码文件 A 变化，其他输入及环境保持有效
-- **THEN** MUST 重新执行直接或间接依赖 A 的测试，不得仅因属于同一语言、套件或门禁而重跑与 A 无依赖的测试；Bun 按原生测试文件依赖图选择，cargo-affected 与 pytest-testmon 按各自逐用例覆盖映射选择
-- **AND** 验收 MUST 使用真实独立 A／B 源码及对应测试：先建立有效基线，再仅修改 A，观察 A 的依赖测试实际执行且独立 B 测试未执行；不能以修改测试文件、整命令缓存命中或零用例未执行代替依赖选择证明
-- **AND** 新增或失效用例仍须实际执行；依赖数据缺失、失效或无法确定边界时沿用安全的全量回退，并明确报告回退原因，不得冒称已满足精准选测
+- **WHEN** Bun 已有有效测试依赖基线，只有业务源码文件 A 变化，其他输入及环境保持有效
+- **THEN** 按原生测试文件依赖图在白名单内选择直接或间接依赖 A 的测试；新增或失效用例仍须实际执行，无法确定边界时回退完整白名单并报告原因
+- **AND** 验收使用真实独立 A／B 源码及对应测试：先建立有效基线，再仅修改 A，观察 A 的依赖测试实际执行且独立 B 测试未执行；不能以修改测试文件、整命令缓存命中或零用例未执行代替依赖选择证明
+
+#### Scenario: Rust 修改 A 仍完整执行所选范围
+
+- **WHEN** 只有 Rust 业务源码文件 A 变化，其他输入及环境保持有效
+- **THEN** 所选 fork 范围的 Nextest 仍完整运行，包括独立 B 的所选测试；适用的 fork Cargo doctest 独立执行，保留正常增量编译缓存
 
 #### Scenario: 连续运行验收
 

@@ -3,6 +3,9 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
+// Declare the implementation loaded by the spawned CLI for Bun's native --changed graph.
+import "../src/tools";
+
 /** Real CLI and tool dispatch; only the model's Anthropic stream is scripted. */
 describe("wiki CLI without source files", () => {
 	let directory: string | undefined;

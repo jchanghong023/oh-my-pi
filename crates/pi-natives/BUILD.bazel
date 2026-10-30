@@ -198,6 +198,7 @@ rust_shared_library(
         "//crates/pi-vfs",
         "//crates/pi-voice",
         "//crates/pi-walker",
+        "//crates/pi-wiki",
         "//crates/vendor/napi",
     ],
 )

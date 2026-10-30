@@ -10,6 +10,7 @@ import {
 	ROW_TARGETING_COMMANDS,
 	v4ConversationRowsRangeResultSchema,
 } from "../../src/modes/zcode/schema";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 export type Frame = Record<string, unknown>;
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");

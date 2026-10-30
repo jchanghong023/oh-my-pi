@@ -121,6 +121,11 @@ describe("/dev six-entry boundary", () => {
 			}
 			expect(f.enter).not.toHaveBeenCalled();
 			expect(f.start).not.toHaveBeenCalled();
+			expect(f.next).not.toHaveBeenCalled();
+			expect(f.back).not.toHaveBeenCalled();
+			expect(f.drop).not.toHaveBeenCalled();
+			expect(f.setTeam).not.toHaveBeenCalled();
+			expect(f.select).not.toHaveBeenCalled();
 			await f.invoke("");
 			await f.invoke("");
 			expect(f.enter).toHaveBeenCalledTimes(1);
@@ -130,17 +135,39 @@ describe("/dev six-entry boundary", () => {
 		}
 	});
 
-	it("rejects unknown input and the removed start entry without compatibility dispatch", async () => {
+	it("rejects unknown and removed entries without compatibility dispatch", async () => {
 		const f = fixture();
 		try {
 			await f.invoke("");
-			for (const args of ["unknown", "start change request"]) {
+			for (const args of [
+				"help",
+				"start",
+				"start change request",
+				"status",
+				"answer",
+				"confirm-spec",
+				"choose",
+				"confirm-plan",
+				"revise-plan",
+				"accept",
+				"repair",
+				"amend",
+				"change-solution",
+				"cancel-message",
+				"pause",
+				"resume",
+				"cancel",
+				"unknown-review-command",
+			]) {
 				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
 			}
 			expect(f.start).not.toHaveBeenCalled();
 			expect(f.next).not.toHaveBeenCalled();
 			expect(f.back).not.toHaveBeenCalled();
 			expect(f.drop).not.toHaveBeenCalled();
+			expect(f.setTeam).not.toHaveBeenCalled();
+			expect(f.select).not.toHaveBeenCalled();
+			expect(f.exit).not.toHaveBeenCalled();
 		} finally {
 			await f.dispose();
 		}
@@ -150,7 +177,7 @@ describe("/dev six-entry boundary", () => {
 		const f = fixture();
 		try {
 			await f.invoke("");
-			for (const args of ["new", "new   ", "config extra", "back extra", "drop extra", "next one two"]) {
+			for (const args of ["new", "new   ", "config extra", "back extra", "drop extra", "next pure normalizer"]) {
 				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
 			}
 			expect(f.start).not.toHaveBeenCalled();
@@ -158,6 +185,8 @@ describe("/dev six-entry boundary", () => {
 			expect(f.setTeam).not.toHaveBeenCalled();
 			expect(f.back).not.toHaveBeenCalled();
 			expect(f.drop).not.toHaveBeenCalled();
+			expect(f.select).not.toHaveBeenCalled();
+			expect(f.exit).not.toHaveBeenCalled();
 		} finally {
 			await f.dispose();
 		}

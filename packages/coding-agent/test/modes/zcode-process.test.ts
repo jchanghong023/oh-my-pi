@@ -76,16 +76,6 @@ describe("ZCode actual public app-server process", () => {
 		expect(await cold.eof()).toBe(0);
 	}, 90_000);
 
-	test("unknown runtime shutdown leaves the public owner alive until EOF", async () => {
-		await using root = await TempDir.create("@zcode-owner-eof-");
-		await using config = await fixture(root);
-		await using peer = new ProcessPeer(config.cwdA, config.env);
-		await peer.ready();
-		expect((await peer.requestFrame("runtime/shutdown", {})).error).toMatchObject({ code: -32601 });
-		expect(await peer.request("runtime/capabilities", {})).toBeDefined();
-		expect(await peer.eof()).toBe(0);
-	}, 90_000);
-
 	test("workflow actor viewers retain the parent permission owner until the last real connection closes", async () => {
 		await using root = await TempDir.create("@zcode-actor-owner-");
 		await using config = await fixture(root);
@@ -226,7 +216,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(await normal.eof()).toBe(0);
 	}, 90_000);
 
-	test("preparation EOF and invalid acknowledgment fail closed, invalid command envelope never executes", async () => {
+	test("preparation failures and invalid envelopes fail closed; unknown shutdown leaves the owner alive", async () => {
 		await using root = await TempDir.create("@zcode-failure-");
 		await using config = await fixture(root);
 		for (const ack of [undefined, { method: "startup/storagePathReady", params: { reuse: true } }]) {
@@ -252,7 +242,10 @@ describe("ZCode actual public app-server process", () => {
 			payload: { text: "must never execute" },
 		});
 		expect(response.error).toMatchObject({ code: expect.any(Number) });
+		expect((await peer.requestFrame("runtime/shutdown", {})).error).toMatchObject({ code: -32601 });
+		expect(await peer.request("runtime/capabilities", {})).toBeDefined();
 		expect(config.requests).toHaveLength(0);
+		expect(await peer.eof()).toBe(0);
 	}, 90_000);
 
 	test("materialized native Memory policy stays frozen in ACK and live telemetry across cold restore", async () => {

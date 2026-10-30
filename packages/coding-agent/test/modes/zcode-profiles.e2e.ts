@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import { LegacyProtocol } from "../../src/modes/zcode/schema";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 type Frame = Record<string, unknown>;
 const model = { providerId: "profiles-local", modelId: "profile-chat" };

@@ -6,32 +6,40 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
-import { buildChildEnv, testTimeoutMs } from "./ci-test-ts";
+import { buildChildEnv, bunTestSelection, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
-import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
-import { beginTestRun, finalizeTestRun, type TestReportRun } from "./test-reporting";
+import {
+	captureChangedPaths,
+	captureSourceIdentity,
+	classifyFulltestChanges,
+	type SourceIdentity,
+} from "./test-gate-source";
+import { beginTestRun, finalizeTestRun, recordTestProducer, type TestReportRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
 import { runGateCommands, testConcurrencyLimit } from "./test-gate-scheduler";
 
 export interface FulltestOptions {
 	debug: boolean;
+	full?: boolean;
 	limitSeconds?: number;
 }
 
 export function parseFulltestArgs(args: readonly string[]): FulltestOptions | null {
 	let debug = false;
+	let full = false;
 	let limitSeconds: number | undefined;
 	for (const arg of args) {
 		if (arg === "--debug") debug = true;
+		else if (arg === "--full") full = true;
 		else if (arg.startsWith("--limit-seconds=") && limitSeconds === undefined) {
 			limitSeconds = Number(arg.slice("--limit-seconds=".length));
 			if (!Number.isFinite(limitSeconds) || limitSeconds <= 0 || limitSeconds > GATE_LIMIT_SECONDS.fulltest)
 				return null;
 		} else return null;
 	}
-	return limitSeconds === undefined ? { debug } : { debug, limitSeconds };
+	return { debug, ...(full ? { full } : {}), ...(limitSeconds === undefined ? {} : { limitSeconds }) };
 }
 
 /** Pool sizing assumes its cores are truly available to this scheduler. WSL2
@@ -93,44 +101,64 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 	};
 }
 
-/** Execute every project suite; only independently authorized integrations stay separate. */
+/** Execute the requested suites; independently authorized integrations stay separate. */
 export function fulltestCommands(options: FulltestOptions, home: string, sourceDigest?: string): GateCommand[] {
 	const env = localTestEnvironment(home);
 	return [
 		{
-			label: "test/TypeScript full suite",
-			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--defer-startup"],
+			label: "test/TypeScript fork feature suite",
+			argv: options.full
+				? ["bun", "scripts/ci-test-ts.ts", "all", "--exclude-desktop", "--unsharded", "--defer-startup"]
+				: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--defer-startup"],
 			cwd: gateRepoRoot,
 			env: {
 				...localTestEnvironment(path.join(home, "typescript")),
 				OMP_TEST_CONCURRENCY: "all",
-				OMP_FULLTEST_AFFECTED: "1",
+				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
 				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},
 		},
 		{
 			label: "test/TypeScript startup suite",
-			argv: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"],
+			argv: options.full
+				? ["bun", "scripts/ci-test-ts.ts", "all", "--exclude-desktop", "--unsharded", "--only-startup"]
+				: ["bun", "scripts/ci-test-ts.ts", "local-ts", "--exclude-desktop", "--only-startup"],
 			cwd: gateRepoRoot,
 			env: {
 				...localTestEnvironment(path.join(home, "typescript-startup")),
-				OMP_TEST_CONCURRENCY: "1",
-				OMP_FULLTEST_AFFECTED: "1",
+				OMP_TEST_CONCURRENCY: "2",
+				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
 				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
 			},
 		},
 		{
-			label: "test/Rust full workspace",
-			argv: ["bun", "scripts/run-rs-task.ts", "test:rs"],
+			label: options.full ? "test/Rust workspace" : "test/Rust fork features",
+			argv: ["bun", "scripts/run-rs-task.ts", "test:rs", ...(options.full ? ["--full"] : [])],
 			cwd: gateRepoRoot,
 			env,
 		},
-		{
-			label: process.platform === "win32" ? "test/Python RPC SDK" : "test/Python full suites",
-			argv: ["bun", "scripts/test-report-py.ts"],
-			cwd: gateRepoRoot,
-			env: localTestEnvironment(path.join(home, "python")),
-		},
+		...(options.full
+			? [
+					{
+						label: "test/Python suites",
+						argv: ["bun", "scripts/test-report-py.ts", "--full"],
+						cwd: gateRepoRoot,
+						env,
+					},
+					{
+						label: "test/Go SDK",
+						argv: ["bun", "scripts/sdk-test-go.ts", "--full"],
+						cwd: gateRepoRoot,
+						env,
+					},
+					{
+						label: "test/Rust SDK",
+						argv: ["bun", "scripts/sdk-test-rust.ts", "--full"],
+						cwd: gateRepoRoot,
+						env,
+					},
+				]
+			: []),
 		{
 			label: "smoke/isolated dev TUI PTY",
 			argv: ["bun", "scripts/test-report-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
@@ -192,14 +220,57 @@ function assertFulltestSourceStable(before: SourceIdentity, after: SourceIdentit
 	}
 }
 
+/** Select existing script tests for changed script modules, never for unrelated business changes. */
+export function selectChangedScriptTests(changed: readonly string[], files: readonly string[]): string[] {
+	const available = new Set(files);
+	const selected = new Set<string>();
+	const dependencies: Record<string, string[]> = {
+		fastcheck: ["fulltest"],
+		"test-gate-source": ["fulltest", "slowtest", "slowtest-wsl-stage", "ci-test-ts"],
+		"test-gate-scheduler": ["fulltest", "ci-test-ts", "run-rs-task"],
+		"test-gate-runtime": ["fulltest", "slowtest", "slowtest-wsl-stage", "test-gate-runtime", "test-gate-go"],
+		"test-gate-failure-events": [
+			"fulltest",
+			"slowtest",
+			"slowtest-wsl-stage",
+			"ci-test-ts",
+			"run-rs-task",
+			"test-gate-runtime",
+			"test-gate-bun-events",
+			"test-gate-rustdoc",
+		],
+		"test-gate-native-events": ["run-rs-task", "test-gate-runtime", "test-gate-rustdoc"],
+		"test-gate-watchdog": ["fulltest", "slowtest"],
+		"test-report-bun": ["ci-test-ts", "fulltest"],
+		"test-reporting": ["test-reporting", "ci-test-ts", "run-rs-task", "test-gate-runtime"],
+		"ci-test-ts": ["ci-test-ts", "fulltest"],
+		fulltest: ["fulltest", "ci-test-ts"],
+	};
+	for (const file of changed) {
+		if (!file.startsWith("scripts/")) continue;
+		if (available.has(file) && /\.(?:test|spec)\.[jt]sx?$/.test(file)) selected.add(file);
+		const match = /^scripts\/([^/]+)\.[jt]sx?$/.exec(file);
+		if (!match) continue;
+		const stem = match[1]!;
+		for (const name of [stem, ...(dependencies[stem] ?? [])]) {
+			const test = `scripts/${name}.test.ts`;
+			if (available.has(test)) selected.add(test);
+		}
+	}
+	return [...selected].sort();
+}
+
 interface FulltestInfrastructure {
 	captureSourceIdentity: typeof captureSourceIdentity;
+	captureChangedPaths: typeof captureChangedPaths;
 	runGateCommands: typeof runGateCommands;
 	fastcheckCommands: typeof fastcheckCommands;
+	bunTestSelection?: typeof bunTestSelection;
 }
 
 const fulltestInfrastructure: FulltestInfrastructure = {
 	captureSourceIdentity,
+	captureChangedPaths,
 	runGateCommands,
 	fastcheckCommands,
 };
@@ -218,7 +289,7 @@ export async function runFulltest(
 		result: "started",
 		platform: process.platform,
 		arch: process.arch,
-		scope: "full-project",
+		scope: options.full ? "all-tests" : "fork-features",
 	});
 	try {
 		await runFulltestObserved(gate, options, infrastructure, report);
@@ -295,15 +366,23 @@ async function runFulltestObserved(
 	});
 	console.log(`source: HEAD=${before.head} dirty=${before.dirty} digest=${before.digest}`);
 	if (before.dirty) console.log(`source: uncommitted summary\n${before.status.trimEnd()}`);
-	console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=full-project`);
-	console.log(
-		process.platform === "win32"
-			? "coverage: TypeScript, repository script, Rust workspace/Nextest/doctest and Python RPC SDK suites (native affected selection where available); native build; dev-TUI smoke; SKIPPED: Robomp tests are unsupported on native Windows"
-			: "coverage: TypeScript, repository script, Rust workspace/Nextest/doctest and Python suites (native affected selection where available); native build; dev-TUI smoke",
-	);
-	console.log(
-		"coverage outside gates: real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
-	);
+	if (options.full) {
+		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=all-tests`);
+		console.log(
+			"coverage: unfiltered TypeScript, Rust, Python and SDK suites; repository scripts; all static checks; native build; dev-TUI smoke",
+		);
+		console.log(
+			"excluded: real desktop input, separately authorized integrations, and platform-unsupported suites; test-defined skips still apply",
+		);
+	} else {
+		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-features`);
+		console.log(
+			"coverage: fork TypeScript and Rust feature suites; selected changed repository script tests; all static checks; native build; dev-TUI smoke",
+		);
+		console.log(
+			"outside-fork scope: Python SDK and Robomp suites; upstream-only suites; real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
+		);
+	}
 	await Promise.all(
 		[
 			{ label: "version/Git", argv: ["git", "--version"], cwd: gateRepoRoot },
@@ -356,24 +435,36 @@ async function runFulltestObserved(
 		console.log(
 			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
 		);
-		// Keep gate orchestration selftests isolated from the heavy suites.
-		// All script files run, irrespective of the Git diff or CI environment.
-		const scriptTests = new Set<string>();
-		await attempt("repository script selection", async () => {
-			const scriptConfig = Bun.TOML.parse(await Bun.file(path.join(gateRepoRoot, "bunfig.toml")).text()) as {
-				test?: { pathIgnorePatterns?: string[] };
-			};
-			const ignored = (scriptConfig.test?.pathIgnorePatterns ?? []).map(pattern => new Bun.Glob(pattern));
-			for (const pattern of ["**/*.{test,spec}.{js,jsx,ts,tsx}", "**/*_{test,spec}.{js,jsx,ts,tsx}"])
-				for await (const file of new Bun.Glob(pattern).scan({
-					cwd: path.join(gateRepoRoot, "scripts"),
-					onlyFiles: true,
-				})) {
-					const relative = `scripts/${file.replaceAll("\\", "/")}`;
-					if (!ignored.some(glob => glob.match(relative))) scriptTests.add(relative);
-				}
-		});
-		if (scriptTests.size) {
+		const baselineSelection =
+			options.full || process.env.OMP_FULLTEST_AFFECTED === "0"
+				? undefined
+				: await acquire("affected baseline", () =>
+						(infrastructure.bunTestSelection ?? bunTestSelection)(gateRepoRoot, true, null),
+					);
+		const baseline = baselineSelection?.mode === "affected" ? baselineSelection.baseline : undefined;
+		const changedPaths = await acquire("changed paths", () =>
+			infrastructure.captureChangedPaths(gate, gateRepoRoot, baseline ?? "HEAD"),
+		);
+		const affected = baseline ? classifyFulltestChanges(changedPaths) : undefined;
+		const recordNotSelected = async (producer: string, command: string[], scope: string, reason: string) => {
+			if (!report || !baseline) return;
+			await recordTestProducer({
+				producer,
+				command,
+				scope,
+				startedAt: new Date().toISOString(),
+				durationSeconds: 0,
+				exitCode: 0,
+				status: "not-selected",
+				selection: { tool: "git", mode: "affected", baseline, selected: 0, reason, changedPaths },
+			});
+		};
+		// A clean committed tree has no changed script modules, so runs no script selftests.
+		const files = afterBuild.files.map(file => file.path);
+		const scriptTests = options.full
+			? files.filter(file => file.startsWith("scripts/") && /\.(?:test|spec)\.[jt]sx?$/.test(file))
+			: selectChangedScriptTests(changedPaths, files);
+		if (scriptTests.length) {
 			// These fixture-only scripts use independent temporary or in-memory state.
 			// Keep every other script serial, including timing-sensitive gate selftests.
 			const parallelScripts = new Set([
@@ -389,7 +480,7 @@ async function runFulltestObserved(
 				cwd: gateRepoRoot,
 				env: {
 					...localTestEnvironment(path.join(home, "script-tests", String(index))),
-					OMP_FULLTEST_AFFECTED: "1",
+					OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
 					OMP_FULLTEST_SOURCE_DIGEST: afterBuild.digest,
 				},
 				kind: "charged" as const,
@@ -410,10 +501,51 @@ async function runFulltestObserved(
 					{ concurrency: 1 },
 				),
 			);
-		} else console.error("fulltest: NOT_RUN repository script tests");
+		} else {
+			console.log("fulltest: no changed repository script tests selected");
+			await attempt("script selection evidence", () =>
+				recordNotSelected(
+					"repository scripts",
+					["bun", "scripts/test-report-bun.ts"],
+					"repository scripts",
+					"no affected repository script tests",
+				),
+			);
+		}
 		let tests: GateCommand[] = [];
 		await attempt("test plan", async () => {
-			tests = fulltestCommands(options, home, afterBuild.digest);
+			tests = fulltestCommands(options, home, afterBuild.digest).map(command =>
+				command.label.startsWith("test/TypeScript")
+					? {
+							...command,
+							env: { ...command.env, OMP_FULLTEST_BASELINE: baseline && !affected?.bun ? baseline : "none" },
+						}
+					: command,
+			);
+			if (affected && !affected.rust) {
+				tests = tests.filter(command => !command.label.startsWith("test/Rust"));
+				await recordNotSelected(
+					"cargo nextest run",
+					["bun", "scripts/run-rs-task.ts", "test:rs"],
+					"rust-fork-features",
+					"no Rust or cross-language inputs changed",
+				);
+				await recordNotSelected(
+					"cargo test --doc",
+					["bun", "scripts/run-rs-task.ts", "test:rs"],
+					"rust-fork-features",
+					"no Rust or cross-language inputs changed",
+				);
+			}
+			if (affected && !affected.ui) {
+				tests = tests.filter(command => command.label !== "smoke/isolated dev TUI PTY");
+				await recordNotSelected(
+					"ui-smoke/runner-stage",
+					["bun", "scripts/test-report-ui-smoke.ts"],
+					"all scenarios",
+					"no UI smoke inputs changed",
+				);
+			}
 		});
 		logger.info("Fulltest command plan selected", {
 			component: "test-gate-fulltest",
@@ -422,7 +554,7 @@ async function runFulltestObserved(
 			result: "completed",
 			command_count: tests.length,
 			concurrent_fastcheck: true,
-			scope: "full-project",
+			scope: options.full ? "all-tests" : "fork-features",
 		});
 		await attempt("test homes", async () => {
 			for (const command of tests)
@@ -524,10 +656,12 @@ if (import.meta.main) {
 		async gate => {
 			if (!options)
 				throw new GateCommandError(
-					`Usage: bun run fulltest [--debug] [--limit-seconds=<seconds <= ${GATE_LIMIT_SECONDS.fulltest}>]`,
+					`Usage: bun run fulltest [--full] [--debug] [--limit-seconds=<seconds <= ${GATE_LIMIT_SECONDS.fulltest}>]`,
 					2,
 				);
-			const run = await gate.charged(() => beginTestRun("fulltest: full current-platform project suites"));
+			const run = await gate.charged(() =>
+				beginTestRun(options.full ? "fulltest: all test suites" : "fulltest: fork feature suites"),
+			);
 			finalizeTestRun(gate, run);
 			await runFulltest(gate, options, fulltestInfrastructure, run);
 		},

@@ -203,6 +203,8 @@ async function openConnectedTab(toolCallId: string, options: { page?: string; pr
 			"--use-mock-keychain",
 			`--user-data-dir=${root}`,
 			`--remote-debugging-port=${port}`,
+			// Avoid Chromium's default startup page racing the fixture navigation.
+			"about:blank",
 		],
 		{ stdin: "ignore", stdout: "ignore", stderr: "ignore" },
 	);

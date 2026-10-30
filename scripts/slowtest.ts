@@ -64,7 +64,7 @@ export async function runSlowtest(
 		stage: "orchestration",
 		result: "started",
 		platform: options.platform ?? process.platform,
-		scope: "full-project",
+		scope: "fork-features",
 	});
 	try {
 		await runSlowtestObserved(gate, options, injected);
@@ -242,7 +242,7 @@ async function runSlowtestObserved(
 				head: before.head,
 				source_fingerprint: before.digest,
 				platform_count: 2,
-				scope: "full-project",
+				scope: "fork-features",
 			});
 		}
 	} catch (error) {

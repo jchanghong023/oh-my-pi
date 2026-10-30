@@ -1,12 +1,9 @@
 //! Owner-scoped documentation storage, importing, and complete-ranking search.
 mod database;
 mod diagnostics;
-mod grep;
 mod import;
 mod importer;
-pub(crate) mod markdown;
 mod page;
-mod projection;
 pub(crate) mod query;
 mod storage;
 
@@ -19,7 +16,7 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use database::{DatabaseEngine, WikiError, WikiSearchOptions, WikiSearchOutput};
+use database::{DatabaseEngine, WikiError, WikiErrorNapi, WikiSearchOptions, WikiSearchOutput};
 use diagnostics::{DiagnosticFunction, DiagnosticQueue, WikiDiagnosticEvent};
 use importer::{ImportError, ProgressFunction, WikiImportOutput};
 use napi::{Env, Error, Result, Status, bindgen_prelude::*};
@@ -146,9 +143,9 @@ impl Owner {
 	fn search(
 		&self,
 		query: &str,
-		options: &WikiSearchOptions,
+		options: &pi_wiki::database::WikiSearchOptions,
 		cancel: &CancelToken,
-	) -> CoreResult<WikiSearchOutput> {
+	) -> CoreResult<pi_wiki::database::WikiSearchOutput> {
 		self.check(cancel)?;
 		// Storage owns schema preparation, including reopening a replaced
 		// database.
@@ -290,7 +287,9 @@ impl WikiSearchEngine {
 		}
 		diagnostics::enqueue(&self.owner.diagnostics, event);
 		diagnostics::flush_sync(&self.owner.diagnostics, diagnostic.as_ref())?;
-		result.map_err(|error| error.into_napi(env))
+		result
+			.map(|indexes| indexes.into_iter().map(Into::into).collect())
+			.map_err(|error| error.into_napi(env))
 	}
 
 	#[napi(ts_args_type = "name: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown")]
@@ -392,9 +391,11 @@ impl WikiSearchEngine {
 		options: WikiSearchOptions,
 		diagnostic: Option<DiagnosticFunction<'_>>,
 	) -> Result<WikiSearchOutput> {
-		let result = self.owner.search(&query, &options, &CancelToken::default());
+		let result = self
+			.owner
+			.search(&query, &options.into(), &CancelToken::default());
 		diagnostics::flush_sync(&self.owner.diagnostics, diagnostic.as_ref())?;
-		result.map_err(|error| error.into_napi(env))
+		result.map(Into::into).map_err(|error| error.into_napi(env))
 	}
 
 	#[napi(
@@ -414,6 +415,7 @@ impl WikiSearchEngine {
 			.transpose()?;
 		let owner = Arc::clone(&self.owner);
 		let cancel = CancelToken::new(None, signal);
+		let options = options.into();
 		Ok(task::blocking("wiki_search", cancel, move |cancel| {
 			let result = owner.search(&query, &options, &cancel);
 			diagnostics::flush_async(&owner.diagnostics, diagnostic.as_ref())?;
@@ -457,7 +459,7 @@ pub fn wiki_import_lease_path(env: Env, database_path: String) -> Result<String>
 pub struct WikiOutput {
 	owner:  Arc<Owner>,
 	cancel: CancelToken,
-	result: CoreResult<WikiSearchOutput>,
+	result: CoreResult<pi_wiki::database::WikiSearchOutput>,
 }
 impl TypeName for WikiOutput {
 	fn type_name() -> &'static str {
@@ -477,7 +479,10 @@ impl ToNapiValue for WikiOutput {
 		if let Some(reason) = value.cancel.abort_reason() {
 			return Err(task::abort_error(wrapper, reason));
 		}
-		let output = value.result.map_err(|error| error.into_napi(wrapper))?;
+		let output = value
+			.result
+			.map_err(|error| error.into_napi(wrapper))?
+			.into();
 		// SAFETY: N-API supplies the live env for this conversion; the owned
 		// output is converted only after the retained owner's
 		// closed/cancellation checks.

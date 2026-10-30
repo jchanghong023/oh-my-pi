@@ -36,6 +36,9 @@ mod canonicalize;
 mod dir;
 mod error;
 mod file;
+/// Cross-process advisory locks shared by native components.
+#[cfg(any(unix, windows))]
+pub mod file_lock;
 mod fs;
 mod metadata;
 mod native;

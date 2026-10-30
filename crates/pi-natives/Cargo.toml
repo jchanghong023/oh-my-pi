@@ -41,9 +41,6 @@ html-escape.workspace = true
 html-to-markdown-rs.workspace = true
 icy_sixel.workspace = true
 ignore.workspace = true
-# Match the existing pi-builtins ICU graph, with English default collation.
-icu_collator = { version = "=2.3.1", default-features = false, features = ["compiled_data"] }
-icu_locale_core = { version = "=2.3.0", default-features = false, features = ["alloc"] }
 image = { workspace = true, features = ["bmp"] }
 resvg.workspace = true
 # Feature activation only (see workspace manifest): zune-jpeg needs `log` to compile.
@@ -73,12 +70,11 @@ pi-shell.workspace = true
 pi-vfs.workspace = true
 pi-voice.workspace = true
 pi-walker.workspace = true
+pi-wiki.workspace = true
 portable-pty.workspace = true
 png.workspace = true
 rayon.workspace = true
 regex.workspace = true
-rusqlite.workspace = true
-ryu-js.workspace = true
 sha2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -128,6 +124,7 @@ winreg.workspace = true
 
 [dev-dependencies]
 fancy-regex.workspace = true # utok scanner differential oracle
+rusqlite.workspace = true
 shlex.workspace = true
 tiktoken-rs.workspace = true # utok openai differential oracle
 xkeysym = "=0.2.1"

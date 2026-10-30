@@ -18,7 +18,8 @@
 - `crates/vendor/brush-core/src/interp.rs`：前台子进程已启动后收到取消时，仍通过既有取消感知等待保留 TERM 清理宽限；不能因等待前的取消检查提前丢弃子进程并强制结束，导致清理或输出丢失。取消总时限与进程隔离规则不变。
 - `crates/pi-shell/src/process.rs`：取消时每一波信号在发送前冻结自有目标，同一进程／进程组不重复投递 TERM，避免重入清理 trap；跨组后代与 TERM 后新生进程仍由后续 KILL 波回收，保留既有进程身份保护和宽限时限。
 - `crates/pi-natives/src/memory.rs`：glibc Linux 保留原有堆修剪计数与释放通知，其他目标的平台空操作使用独立 `const fn` 定义，满足 Windows 严格静态门禁，不屏蔽 `missing_const_for_fn` 或改变运行时行为。
-- `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。Robomp 普通测试在 Linux 纳入本地门禁，Windows 原生不支持。
+- `python/robomp/src/tasks.py`：GitHub 元数据读取失败须向 delivery 执行器传播，保留重试机会，不能把未执行的 PR 审查、review 或 conversation 当作已成功处理；映射缺失或 branch 缺失时查询 PR 的失败同样不得吞掉。Robomp 测试保留手动入口，不纳入默认 fork 门禁；Windows 原生不支持。
+- `scripts/ci-release-build-binaries.ts`：上游基线 `b0756921` 的 Linux x64 musl baseline target 写成 `bun-linux-x64-musl-baseline`，不符合 Bun 的 `SIMD-Libc` 顺序；改为 `bun-linux-x64-baseline-musl`，保留 musl 与 baseline CPU 兼容目标，不改成 glibc 或 modern。
 - `.zcodeignore`：ZCode 客户端忽略清单（上半部从 `.gitignore` 同步，下半部为 ZCode 默认排除规则）；不改变 omp 行为，属开发环境配置。
 
 ## 使用与验证参考
@@ -28,29 +29,35 @@
 ### Fork 门禁与 Dev TUI 分片
 
 - 三层门禁直接运行既有 Bun／Cargo 原语，保留源码快照、预算和失败汇总；fastcheck 不运行测试，保留原有工具和增量编译缓存。slowtest 运行本机 fulltest 及适用的 WSL fulltest，各端独立选测并保留固定提交同步；不缓存门禁或完整命令结果，也不引入自建结果缓存框架。
-- fulltest 的 Bun 以 `--changed` 按变更文件及依赖选测，缺少合格完整基线或工具不支持时回退全量；`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变本地范围。Python 普通测试使用 pytest-testmon 的逐用例覆盖数据：Windows 原生只运行 Python RPC SDK，Robomp 平台跳过不记通过；Linux 保留 Robomp 和 Python RPC SDK。Robomp integration 仍需单独显式启用，Windows 原生调用报告不支持并非零退出。
-- `bun run test:rs` 使用 cargo-affected、Cargo 和 Nextest 的逐用例 LLVM 覆盖映射，默认受影响选测，无有效覆盖数据时全量回退；干净工作树 collect 建立基线，`--collect` 显式采集，`--full` 强制全量，不在脏树使用 `--allow-dirty` collect。Cargo doctest 仍完整运行，保留既有 workspace 第三方排除。非 Rust 构建、配置、清单、锁文件、工具链、生成输入与跨语言依赖可能影响 Rust，不能一律忽略；不确定时保守处理。
-- cargo-affected 0.4.1 的库目标解析遗漏 `cdylib`，本仓库保留最小固定补丁及显式离线准备入口：`bun scripts/setup-cargo-affected.ts <Cargo 缓存中的 cargo-affected-0.4.1 源目录>`。准备后的 `target/omp-tools/bin/cargo-affected` 报告 `0.4.1-omp-cdylib.1`，Rust 运行器仅在产物已存在时使用它；门禁不自动安装或构建工具，不排除 pi-natives 或改动其发行类型来绕过缺陷。采集仍需与 Rust LLVM 版本兼容的 `llvm-cov`／`llvm-profdata`。
-- 精准选测的目标是：建立有效基线后只修改源码 A，只重跑直接或间接依赖 A 的测试，独立 B 的测试不执行。Bun 的原生粒度为测试文件，cargo-affected／pytest-testmon 使用逐用例覆盖映射；必须以独立 A／B 源码的真实修改及执行记录验收，不能以修改测试文件或整个 fast／full 命令命中缓存代替。缺失或失效依赖数据时明确报告全量回退。
-- Bun 依赖图及 testmon 运行时覆盖是近似，动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。报告区分本轮实际执行、deselected、not-selected 与未运行，并记录 full／affected、工具及可用的选中数、排除数、基线、原因和报告路径；历史用例耗时不算本轮新执行。普通失败继续其他独立工作，保留首个实际失败退出码；取消、完整性破坏和原预算到限仍停止本次拥有的工作。
+- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测 fork 自有功能：Dev/OpenSpec 与原生编排、Team/Goal、ZCode 权限及模型配置、Wiki/Repo 与 Python symbols、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI、状态栏、审批/个人命令/默认值及分发消费者契约。真实 Dev E2E、持久化和取消等业务边界保留；`/wt` 策略由消费者测试覆盖，不展开完整上游 task/worktree 与 pi-vcs。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 与旁支包完整回归，以及纯上游继承或仅 bugfix 专项不随日常门禁运行，即使规格记载亦然；上游测试文件及已有显式手动入口保留。仅本次允许在完整消费者契约不变的条件下合并 Dev／ZCode 重复正常进程场景，将纯输入字段／命令参数排列交由已有低层合同测试覆盖，不扩大后续自动删测权限；真实 PTY 保留不同错误、状态和焦点边界。冷启动、准备失败／EOF、冷恢复、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等真实边界不删减；Dev 四角色 × missing／malformed／unknown 材料失败矩阵和现有平台条件不变，每例 provider／fixture 保持隔离。独立 Python SDK、Robomp、legacy 通用 SDK 只保留手动入口。静态检查和编译范围不缩减，不新增 skip 或放宽时限。
+- 默认 Bun 门禁只在 fork 白名单内以 `--changed` 按变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不回退上游全量。`CI` 与本地 TS 的 `OMP_TEST_SHARD` 不改变本地范围；仓库脚本自测仅对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 入口保留。
+- `bun run fulltest --full` 显式覆盖当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 与仓库脚本测试，不使用 fork 白名单、变更选测、testmon 或环境分片；默认范围不变。测试自身 skip、平台不支持、真实桌面输入与另需单独授权的集成仍受原边界约束。
+- `bun run test:rs` 用 Cargo 包和 Nextest namespace 筛选 `pi-wiki` 全包、`pi-natives` 的 `wiki::` 绑定测试和 `python_symbols::`，scope 为 `rust-fork-features`。独立 doctest 阶段运行 `cargo test -p pi-wiki --doc --no-fail-fast`，报告真实命令、退出码及命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。native `cdylib` 无 doctest，不生成虚构用例或 PASS，也不运行上游 tree-sitter-go 文档例子凑数。保留同平台配置和正常 Cargo 增量编译缓存。非 Rust 构建、配置、清单、锁文件、工具链、生成输入与跨语言依赖也可能影响 Rust。
+- 默认 fulltest 以同一真实 clean、完整成功 fork 基线及 Git 变更规划独立阶段：仅证明 Rust 未受影响时 Nextest 和 doctest 均记为 not-selected，受影响或边界未知则两者完整执行。独立 UI smoke 和仓库脚本亦仅在证明无影响时未选；Repo、CLI、native、Team、TUI 等实际依赖变化须运行 UI。缺基线或依赖未知时保守运行，静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial、失败报告不能作为完整基线；不提交报告 sidecar 或改写历史。
+- Git 未选证据包含有效基线 revision、相对变更路径、零选择及原因，不虚构 XML、用例或耗时。全未选报告真实零执行，混合报告保留实际用例和失败；均不代表完整新回归。
+- Bun 依赖图是近似，动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归。报告区分本轮实际执行、deselected、not-selected 与未运行；默认 fulltest scope 为 `fulltest: fork feature suites`，控制台范围为 `fork-features`，旧范围报告不能作为新范围基线。执行时的 Nextest producer 为 `cargo nextest run`，选择元数据的 `tool` 为 `cargo-nextest`、`mode` 为 `full`，只指 `pi-wiki` 全包及所选 native fork 功能，不代表整个 Workspace。历史用例耗时不算本轮新执行，也不能称全仓全量通过。普通失败继续其他独立工作，保留首个实际失败退出码；取消、完整性破坏和原预算到限仍停止本次拥有的工作。
+- CLI 子进程夹具在公共 harness 或独立启动器中静态导入真实使用的 Tools registry，补足 Bun 无法追踪的 spawn 路径字符串；不导入或执行 CLI 主入口，不仅为某两个实验源码添加特例依赖。双连接订阅的初始快照按各自游标对齐后再比较完整状态，不假定顺序订阅恰好处于同一版本。
 - fastcheck、fulltest、slowtest 默认隐藏成功用例、成功分块及成功命令输出，仅显示失败用例和错误诊断；最外层最终状态、耗时、退出码和报告路径保留。`--debug` 不恢复成功用例刷屏。静默只影响呈现，本轮实际执行的用例写入 JUnit／计时结果，平台跳过明确报告，首错通知、失败继续、取消与预算不变。真实桌面输入仍需单独授权。
 - 手动 CI 只执行构建、打包及其必要准备，不执行单元、集成、冒烟或安装测试，发布只依赖版本元数据、二进制和浏览器扩展构建成功。保留的 `ci:test:*` 名称是显式测试工具，不由工作流调用；本地 fulltest／slowtest 仍须用户明确授权。现有上游显式目标 Bazel 工具和产物保留，不恢复 fork 专用 Bazel 图或引入统一框架。
 - 测试运行器按可用核心数动态限制并发，任务不足时再缩小；Windows 本机 TS 初始完整轮及无合格计时提示时最多 `min(14, 可用核心数)`。只有前次真实 fulltest 完整执行并成功、报告完整校验通过、在 7 天内且平台、架构及 post-native 完整源码指纹一致时，fulltest 的 TS 短任务池才可提升至最多 `min(20, 可用核心数)`；报告缺失、过期、失败、不完整或任何不一致均回退到 14 的上限。Windows Rust Nextest 始终最多 `min(14, 可用核心数)`，Linux 等其他平台维持 `min(28, 可用核心数)`。Bun 的 chunk 池和文件 worker 共用预算，显式配置仍可降低并发。TS 与 Rust 并行时各自并发可能叠加，静态检查并发、测试覆盖、隔离、超时、时间预算及计费保持不变。
-- fulltest 可将合格的既有完整计时报告用于启动排序和资源容量提示；报告缺失、不完整或无对应耗时不妨碍必需工作执行，历史 PASS 和耗时不算本轮执行。本地高成本 integration／E2E chunk 同时最多 4 个，仍受 Bun 测试并发上限约束；达到子限制时空余并发继续运行其他可调度工作。最终验收要求同一最终源码连续两轮 fastcheck 和 fulltest 均通过，第二轮两条命令各自实际墙钟小于 100 秒；是否满足须以实测证据为准。
-- fulltest 的普通 TS／Python／隔离 TUI 套件可同时启动；Rust 测试只等待 Rust 静态检查结束。所有这些工作结束后，再以原分块串行运行 spec-driven TUI 和 RPC goal 启动敏感测试，不放宽超时或删除断言。真实 dev-TUI 的启动、Team／取消、Repo 三组最多并行三组，Team 与取消仍顺序执行并保留原等待断言。仓库脚本仍先于重型套件，保留门禁时钟自测隔离。
+- fulltest 可将同一新 scope 的合格完整计时报告用于启动排序和资源容量提示；旧范围报告、历史 PASS 和耗时不算本轮执行。本地高成本 integration／E2E chunk（含按路径归入的 ZCode 真实 process 测试）同时最多 4 个，仍受 Bun 测试并发上限约束，不增加普通全局并发；达到子限制时空余并发继续运行其他可调度工作。最终验收要求同一最终源码连续两轮 fastcheck 和 fulltest 均通过，第二轮两条命令各自实际墙钟小于 100 秒；是否满足须以实测证据为准。
+- fulltest 的普通 TS／隔离 TUI 套件可同时启动；Rust 测试只等待 Rust 静态检查结束。所有静态、普通及 Rust 工作结束后，再运行 spec-driven TUI 和 RPC goal 启动敏感测试，独立文件进程最多并行 `min(2, 现有 CPU 预算)`，文件内串行，各自保持独立 HOME、工作区、端口及清理，不放宽超时或删除断言。真实 dev-TUI 的启动、Team／取消、Repo 三组最多并行三组，Team 与取消仍顺序执行并保留原等待断言。选入的仓库脚本仍先于重型套件，保留门禁时钟自测隔离。
 - singleton／全局状态桶按最多 10 文件切成独立进程，每个进程仍以 `--parallel=1` 执行；UI 与 Windows runtime／native 的原有分块隔离不变。明确命名的 E2E／integration chunk 在分片选择后优先启动，减少长任务排队，不改变分片归属；本地入口不因继承 `CI` 而退回串行。
 - 功能回归夹具显式启用被测能力：idle maintenance 用例自行开启 recap，仍保留 fork 的默认关闭及显式关闭覆盖；顾问配置验证布局、选择、鼠标操作与工具授权差异，不绑定中英文提示文案。
 - Cursor TLS reset 子进程按退出码与结构化错误事件验证传输合同，stderr 保留为失败诊断，合法的运行时警告不当作协议错误。Rust CLI 选择夹具沿用既有用例／门禁时限，不另设提前终止子进程的 10 秒截止。
 - 受限目录审批夹具从当前选项解析一次允许／拒绝，未知回答仍拒绝执行；不再返回过时的英文标签。SDK 恢复夹具先关闭原 journal 所有者再重开，以模拟进程退出，不能只 flush 后让两个存活 manager 同时占用日志。
 - 首事件禁用回归验证超过 idle 预算后仍可成功收到正文，不再断言整个进程没有其他定时器；透明预览回归验证实际终端单元的显式前景色和透明背景，兼容 256 色及真彩编码，不绑定翻译文本。命令报告以输入／补全完成后的实际呈现边界核对恢复、主屏无污染和历史无重复，不将输入阶段的重排归因于报告。
 - Windows sed 文件截断夹具验证 Windows 流式读取与 Unix 打开时快照各自的既有合同，取消手工过滤；Python `export_html` 按 `Path` 比较跨平台结果，而非要求 Windows 路径呈现为 POSIX 字符串。
-- TS 全量入口覆盖原先遗漏的 `stats` 及 `metaharness`，后者包含包根目录下的 edit adapter 测试。历史费用回填用例使用独立的分时／分日期价格夹具，不假定实时模型目录中某个型号必然在固定日期换价；仍断言费用、缓存节省及重启后的回填结果。
+- 上游显式 TS 全量入口覆盖 `stats` 及 `metaharness`，后者包含包根目录下的 edit adapter 测试；这不意味着两者完整套件进入日常 fork 门禁。历史费用回填用例使用独立的分时／分日期价格夹具，不假定实时模型目录中某个型号必然在固定日期换价；仍断言费用、缓存节省及重启后的回填结果。
 - Dev TUI 场景分布在 `tui.e2e.test.ts`、`tui-materials.e2e.test.ts`、`tui-materials-later-roles.e2e.test.ts`、`tui-interactions.e2e.test.ts`、`tui-resources.e2e.test.ts` 和 `tui-resource-lifecycle.e2e.test.ts`；`tui-harness.ts` 维持隔离及超时。
-- 协同开发公开进程 E2E 的 18 个完整场景按两个测试文件分片；共享进程与 provider fixture 保持每个场景的独立目录、会话和超时。
+- 协同开发公开进程 E2E 按两个测试文件分片；共享进程与 provider fixture 保持每个场景的独立目录、会话和超时，重复正常场景可按上述消费者契约等价合并；材料失败矩阵的 provider／fixture 保持逐例隔离。
 - OpenSpec 资源授权 E2E 先确认多行草稿及光标已进入真实输入框，再单独发送 Enter；每轮关联独立输入和完成标记后检查原生读取结果，不用旧回复或画面 idle 代替当前工具轮完成。缺失完成报告的 E2E 检查状态区材料提示、`/session` 完整读取诊断及阶段／批准不变，不要求原始 `ENOENT` 直接出现在状态区。
-- ZCode 的 35 个真实 stdio 进程用例按会话、执行、投影及目录等职责分成五个文件，共用 `zcode-process-harness.ts`；workflow 的三个用例分成文件／预检和 sandbox 两个目标，共用 `zcode-workflow-process-helpers.ts`。每例仍使用独立目录和 app-server，保留原用例及超时；workflow 两个文件分别注册清理钩子。workflow fixture Host 对未实现的 `subagents/readRuntimeConfig` 及时返回协议错误 `-32601`，不靠等待生产端超时模拟不支持。
+- ZCode 真实 stdio 进程用例按会话、执行、投影及目录等职责分成五个文件，共用 `zcode-process-harness.ts`；workflow 的三个用例分成文件／预检和 sandbox 两个目标，共用 `zcode-workflow-process-helpers.ts`。每例仍使用独立目录和 app-server，保留独特消费者行为、失败断言及超时，重复正常场景可按上述契约等价合并；workflow 两个文件分别注册清理钩子。workflow fixture Host 对未实现的 `subagents/readRuntimeConfig` 及时返回协议错误 `-32601`，不靠等待生产端超时模拟不支持。
 - 递归 submodule 隔离用例中的独立只读 Git 查询并行执行；copy／rcopy 两条路径、父工作树不变、对象保留及分支合并断言与原 30 秒用例预算保持不变。
 - 验证时按授权运行对应局部测试及门禁，并核对场景、隔离、超时和实际报告；入口存在不代表已通过。
+
+本次范围调整和编排精简未运行测试、构建或门禁；性能收益及用例是否通过均待实测，不能用旧范围报告代表本次结果。
 
 ### Repo 索引验证入口
 

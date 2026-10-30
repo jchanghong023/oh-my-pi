@@ -13,15 +13,13 @@ use std::{
 	io::{self, Read},
 	path::Path,
 	sync::{
-		Arc, LazyLock,
+		Arc,
 		atomic::{AtomicBool, AtomicU64, Ordering},
 	},
 	time::Duration,
 };
 
 use grep_matcher::Matcher;
-use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
-use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{
 	BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkContextKind, SinkMatch,
 };
@@ -32,17 +30,13 @@ use napi::{
 };
 use napi_derive::napi;
 use parking_lot::{Condvar, Mutex};
-use pi_builtins::CompiledMatcher;
 use pi_vfs::{BlockingFs, File};
+use pi_walker::grep::{CompiledMatcher, build_pcre_matcher, build_regex_matcher};
 use smallvec::SmallVec;
 
 use crate::{glob_util, iofs, shell::vfs::ShellFilesystem, task};
 
 const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
-/// PCRE2 JIT toggle read once from the process environment; see
-/// [`pi_builtins::pcre2_jit_enabled`] for the `OMP_PCRE2_JIT` values.
-static PCRE2_JIT_ENABLED: LazyLock<bool> =
-	LazyLock::new(|| pi_builtins::pcre2_jit_enabled(std::env::var("OMP_PCRE2_JIT").ok().as_deref()));
 
 /// Upper bound on entries per streamed `onMatches` batch; a file with more
 /// content matches streams several batches while it is still being searched.
@@ -1243,55 +1237,6 @@ fn escape_unescaped_parentheses(pattern: &str) -> Cow<'_, str> {
 		Cow::Owned(result)
 	} else {
 		Cow::Borrowed(pattern)
-	}
-}
-
-fn build_regex_matcher(
-	pattern: &str,
-	ignore_case: bool,
-	multiline: bool,
-) -> std::result::Result<RegexMatcher, grep_regex::Error> {
-	let build = |line_terminated| {
-		let mut builder = RegexMatcherBuilder::new();
-		builder.case_insensitive(ignore_case).multi_line(multiline);
-		if line_terminated {
-			builder.line_terminator(Some(b'\n'));
-		}
-		builder.build(pattern)
-	};
-
-	if !multiline && let Ok(matcher) = build(true) {
-		return Ok(matcher);
-	}
-	build(false)
-}
-
-fn build_pcre_matcher(
-	pattern: &str,
-	ignore_case: bool,
-	multiline: bool,
-) -> std::result::Result<PcreMatcher, grep_pcre2::Error> {
-	let mut builder = PcreMatcherBuilder::new();
-	builder
-		.caseless(ignore_case)
-		.multi_line(multiline)
-		.utf(true)
-		.ucp(true)
-		.jit_if_available(*PCRE2_JIT_ENABLED);
-	builder.build(pattern)
-}
-
-/// Compile the expression unchanged, without filesystem grep's literal repairs.
-pub(crate) fn build_strict_matcher(pattern: &str, ignore_case: bool) -> Result<CompiledMatcher> {
-	match build_regex_matcher(pattern, ignore_case, false) {
-		Ok(matcher) => Ok(CompiledMatcher::Rust(matcher)),
-		Err(rust_error) => build_pcre_matcher(pattern, ignore_case, false)
-			.map(CompiledMatcher::Pcre)
-			.map_err(|pcre_error| {
-				Error::from_reason(format!(
-					"Invalid documentation grep regex: {rust_error}; PCRE2: {pcre_error}"
-				))
-			}),
 	}
 }
 

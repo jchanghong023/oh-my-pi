@@ -3,10 +3,13 @@ import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, readJsonl } from "@oh-my-pi/pi-utils";
+// The spawned CLI loads this registry; declare it for Bun's changed-test dependency graph.
+import "../../src/tools";
 import type { SubscribeAck } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/transport";
 import {
 	LegacyProtocol,
 	TopicWireFrameAssembler,
+	applyConversationDeltas,
 	commandsQueryResultSchema,
 	conversationTopicFrameSchema,
 	conversationTopicWireCandidateSchema,
@@ -349,7 +352,11 @@ async function subscription(
 				);
 				for (const event of assembler.accept(conversationTopicWireCandidateSchema.parse(notification.params))) {
 					if (event.kind === "fault") throw new Error(`Wire assembly: ${event.fault.reasonCode}`);
-					if (event.kind === "complete") return event.frame;
+					if (event.kind === "complete") {
+						expect(event.frame.topic).toBe(`conversation/${sessionId}`);
+						expect(event.frame.subscriptionId).toBe(ack.subscriptionId);
+						return event.frame;
+					}
 				}
 			}
 		},
@@ -414,9 +421,31 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		expect(desktop.subscriptionId).not.toBe(remote.subscriptionId);
 		const desktopInitial = await desktop.next("initial");
 		const remoteInitial = await remote.next("initial");
-		expect(desktopInitial.payload.kind).toBe("snapshot");
-		expect(remoteInitial.payload).toEqual(desktopInitial.payload);
-		expect(remoteInitial.toSeq).toBe(desktopInitial.toSeq);
+		if (desktopInitial.payload.kind !== "snapshot" || remoteInitial.payload.kind !== "snapshot")
+			throw new Error("Child routes did not receive snapshots");
+		expect(desktop.logEpoch).toBe(remote.logEpoch);
+		expect(desktopInitial.fromSeq).toBe(0);
+		expect(remoteInitial.fromSeq).toBe(0);
+		expect(desktopInitial.payload.snapshot.sessionId).toBe(child);
+		expect(remoteInitial.payload.snapshot.sessionId).toBe(child);
+		expect(desktopInitial.payload.snapshot.logEpoch).toBe(desktop.logEpoch);
+		expect(remoteInitial.payload.snapshot.logEpoch).toBe(remote.logEpoch);
+		expect(desktopInitial.payload.snapshot.seq).toBe(desktopInitial.toSeq);
+		expect(remoteInitial.payload.snapshot.seq).toBe(remoteInitial.toSeq);
+		expect(remoteInitial.toSeq).toBeGreaterThanOrEqual(desktopInitial.toSeq);
+		// Advance the desktop state to the remote snapshot's cursor, not to an assumed shared instant.
+		let desktopCursor = desktopInitial.toSeq;
+		let desktopState = desktopInitial.payload.snapshot;
+		while (desktopCursor < remoteInitial.toSeq) {
+			const frame = await desktop.next();
+			expect(frame.fromSeq).toBe(desktopCursor);
+			expect(frame.toSeq).toBeGreaterThan(frame.fromSeq);
+			expect(frame.toSeq).toBeLessThanOrEqual(remoteInitial.toSeq);
+			if (frame.payload.kind !== "deltas") throw new Error("Expected desktop deltas while aligning snapshots");
+			desktopState = { ...applyConversationDeltas(desktopState, frame.payload.deltas), seq: frame.toSeq };
+			desktopCursor = frame.toSeq;
+		}
+		expect(desktopState).toEqual(remoteInitial.payload.snapshot);
 		expect(config.requests).toHaveLength(count);
 		await peer.request("session/read", { sessionId: child });
 		await peer.request("session/subagents", { sessionId: child });
@@ -433,7 +462,10 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		});
 		expect(recovered).toMatchObject({ ack: { subscriptionId: remote.subscriptionId, mode: "snapshot" } });
 		const remoteRecovery = await remote.next("recovery");
-		expect(remoteRecovery.payload.kind).toBe("snapshot");
+		if (remoteRecovery.payload.kind !== "snapshot") throw new Error("Child gap recovery missed snapshot");
+		expect(remoteRecovery.fromSeq).toBe(0);
+		expect(remoteRecovery.payload.snapshot.sessionId).toBe(child);
+		expect(remoteRecovery.payload.snapshot.seq).toBe(remoteRecovery.toSeq);
 		expect(remoteRecovery.toSeq).toBeGreaterThanOrEqual(remoteInitial.toSeq);
 		expect(config.requests).toHaveLength(count);
 		const oldChildSubscription = remote.subscriptionId;
@@ -445,8 +477,11 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		remote = await subscription(peer, child, "remote-child", "web-remote-replayable");
 		expect(remote.subscriptionId).not.toBe(oldChildSubscription);
 		const remoteReattached = await remote.next("initial");
-		expect(remoteReattached.payload.kind).toBe("snapshot");
-		expect(remoteReattached.toSeq).toBe(remoteRecovery.toSeq);
+		if (remoteReattached.payload.kind !== "snapshot") throw new Error("Child reattach missed snapshot");
+		expect(remoteReattached.fromSeq).toBe(0);
+		expect(remoteReattached.payload.snapshot.sessionId).toBe(child);
+		expect(remoteReattached.payload.snapshot.seq).toBe(remoteReattached.toSeq);
+		expect(remoteReattached.toSeq).toBeGreaterThanOrEqual(remoteRecovery.toSeq);
 		expect(config.requests).toHaveLength(count);
 		const otherSub = await subscription(peer, other, "other-host", "desktop-continuous");
 		const otherInitial = await otherSub.next("initial");
@@ -457,7 +492,7 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		expect(await Bun.file(path.join(config.cwdA, "other-proof.txt")).exists()).toBe(false);
 		gate.finish();
 		await Promise.all([
-			markerFrame(desktop, "CORE_CHILD_DONE", desktopInitial.toSeq),
+			markerFrame(desktop, "CORE_CHILD_DONE", desktopCursor),
 			markerFrame(remote, "CORE_CHILD_DONE", remoteReattached.toSeq),
 		]);
 		const childRows = v4ConversationRowsRangeResultSchema.parse(
@@ -514,7 +549,7 @@ test("OMP-SA06/OMP-WF05/transport: native child and workflow delivery isolation,
 		expect(
 			wfRemoteSnapshot.payload.snapshot.workflowRuns?.runs.find(run => run.runId === workflowRunId)?.actors,
 		).toEqual(workflowRun?.actors);
-		expect(wfRemoteSnapshot.toSeq).toBe(wfDesktopSnapshot.toSeq);
+		expect(wfRemoteSnapshot.toSeq).toBeGreaterThanOrEqual(wfDesktopSnapshot.toSeq);
 		const wfResync = await peer.request("v4/conversation/resync", {
 			topic: wfRemote.topic,
 			connectionId: wfRemote.connectionId,

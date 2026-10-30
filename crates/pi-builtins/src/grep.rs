@@ -1,8 +1,7 @@
 //! `grep` builtin implemented on top of the ripgrep libraries.
 //!
 //! Matching uses `grep-regex`/`grep-searcher`; recursive walks use `pi-walker`.
-//! Also hosts the plumbing `rg` and pi-natives' grep binding share with it:
-//! [`CompiledMatcher`], the PCRE2 JIT toggle, exit status, and record layout.
+//! Shared grep/rg exit status and record layout live here.
 
 
 use std::{
@@ -16,76 +15,15 @@ use brush_core::{ShellExtensions, builtins::Registration};
 use clap::{ArgMatches, CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
 use globset::{Glob, GlobMatcher};
 use grep_matcher::{LineTerminator, Matcher};
-use grep_pcre2::{RegexMatcher as PcreMatcher, RegexMatcherBuilder as PcreMatcherBuilder};
+use grep_pcre2::RegexMatcherBuilder as PcreMatcherBuilder;
 use grep_regex::{RegexMatcher, RegexMatcherBuilder};
 use grep_searcher::{
 	BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkFinish, SinkMatch,
 };
+use pi_walker::grep::{CompiledMatcher, pcre2_jit_enabled};
 use crate::bre;
 use crate::host::{Host, Utility, util};
 
-/// PCRE2 JIT toggle for an `OMP_PCRE2_JIT` value: `1` forces JIT on,
-/// `0`/`false` forces it off. Unset or empty, JIT stays on everywhere except
-/// macOS, where PCRE2's SLJIT executable allocator can fault while compiling
-/// patterns (issue #7399). The caller reads the variable from its own
-/// environment: the builtins see the shell's exported variables, which the
-/// host process environment does not carry.
-pub fn pcre2_jit_enabled(setting: Option<&str>) -> bool {
-	match setting {
-		Some(value) if !value.is_empty() => value != "0" && !value.eq_ignore_ascii_case("false"),
-		_ => !cfg!(target_os = "macos"),
-	}
-}
-
-/// A pattern compiled by one of the two engines: Rust `regex`, or PCRE2 for
-/// syntax it lacks (look-around, back-references).
-///
-/// Hot search loops match on the variant and run monomorphized per engine;
-/// the [`Matcher`] impl serves one-shot callers that only need an answer.
-pub enum CompiledMatcher {
-	Rust(RegexMatcher),
-	Pcre(PcreMatcher),
-}
-
-/// Search error from either engine behind a [`CompiledMatcher`].
-#[derive(Debug)]
-pub enum CompiledMatcherError {
-	Rust(grep_matcher::NoError),
-	Pcre(grep_pcre2::Error),
-}
-
-impl fmt::Display for CompiledMatcherError {
-	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::Rust(err) => err.fmt(formatter),
-			Self::Pcre(err) => err.fmt(formatter),
-		}
-	}
-}
-
-impl Matcher for CompiledMatcher {
-	type Captures = grep_matcher::NoCaptures;
-	type Error = CompiledMatcherError;
-
-	fn find_at(
-		&self,
-		haystack: &[u8],
-		at: usize,
-	) -> Result<Option<grep_matcher::Match>, Self::Error> {
-		match self {
-			Self::Rust(matcher) => matcher
-				.find_at(haystack, at)
-				.map_err(CompiledMatcherError::Rust),
-			Self::Pcre(matcher) => matcher
-				.find_at(haystack, at)
-				.map_err(CompiledMatcherError::Pcre),
-		}
-	}
-
-	fn new_captures(&self) -> Result<Self::Captures, Self::Error> {
-		Ok(grep_matcher::NoCaptures::new())
-	}
-}
 
 /// Exit status of a `grep` or `rg` run: 0 when a line was selected, 1 when
 /// none was, 2 on any error, except that under `-q` a match outranks errors.

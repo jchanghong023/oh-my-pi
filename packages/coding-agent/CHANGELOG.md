@@ -18,6 +18,9 @@
 
 ### Added
 
+- Run only affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
+- Streamline Dev and ZCode process coverage and schedule startup-sensitive tests with bounded parallelism while preserving consumer and isolation boundaries.
+- Add `bun run fulltest --full` to run the current platform's full supported test suites without fork or changed-file selection.
 - Added workspace-owned `/dev` orchestration with one unfinished flow and one controller per existing workspace, four persistent native stage sessions and minimal recoverable business state. Git worktree subdirectories, aliases and branches share ownership; Dev neither creates nor requires worktrees.
 - Use native stage chat, streaming, tool events, attachments, queues, drafts, history, compaction and stopping without relaying or duplicating replies. A three-line Dev area shows role/runtime/Team, the main action and its consequence, and errors or progress; configuration and details are manual native interactions, without automatic dialogs or a separate decision panel.
 - Persist only the workspace solution-Team toggle, default off and editable in no-agent or requirements phases when runtime conditions allow. New flows inherit it; successful completion preserves it and drop clears it. Team starts only on solution entry, not follow-up turns. Goal remains a user-controlled native executor-session capability, with no Dev setting or per-turn recreation.
@@ -34,7 +37,7 @@
 ### Changed
 
 - Raise the shared Bun and Rust Nextest test concurrency ceiling to 28, bounded by available CPU cores and any lower Bun concurrency override.
-- Run independent fulltest suites concurrently and distribute singleton and E2E tests to avoid serial bottlenecks without reducing coverage.
+- Run independent selected fork feature fulltest suites concurrently and distribute singleton and E2E tests to avoid serial bottlenecks.
 - Avoid repeating background Bash failures in wait results and completion receipts when the original tool card already shows the same job outcome, including after session restoration.
 - Clarified required todo append parameters and added retry guidance for missing phase or items without resetting progress.
 - Restore the upstream `titanium` dark-theme default and palette; preserve explicit theme settings.
@@ -88,15 +91,19 @@
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
-- Use native Bun, pytest-testmon and cargo-affected testcase selection for local verification, retaining Rust doctests and reporting affected coverage separately from executed cases.
+- Limit daily local tests to fork feature suites while retaining full static checks and compilation; use Bun's native changed selection within the fork whitelist and run selected Rust features with Nextest and applicable independent doctests.
 - Continue independent tests after failures and retain complete failure reports instead of stopping at the first failing case or chunk.
 - Limit Bun test workers to the smaller of 15 and the available CPU count, sharing the budget across chunks and file workers instead of fixing fulltest to one chunk.
 - Show only failing cases and error diagnostics in the three verification gates, hiding successful cases, chunks and command output while retaining the final status, timings and complete test reports.
 
 ### Fixed
 
+- Correct the Linux x64 musl baseline release target passed to Bun.
+
+- Stabilize local verification by isolating mock task-label requests and waiting for completed terminal redraws without extending test timeouts.
+- Fix intermittent Windows verification failures when removing compiled changelog probe binaries.
 - Prevent full verification from timing out startup-sensitive TUI/RPC tests under heavy load, while overlapping independent real TUI smoke scenarios without reducing coverage.
-- Keep native Rust affected-test collection working for cdylib targets and reliably clean up owned Chromium upload fixtures on Windows.
+- Reliably clean up owned Chromium upload fixtures on Windows.
 - Require an explicit task or phase before todo completion, removal, or abandonment.
 - Reject unnamed Bash readiness checks and asynchronous PTY requests before executing commands; retain started service details if log retrieval fails.
 - Report files already changed when a multi-file edit fails partway.

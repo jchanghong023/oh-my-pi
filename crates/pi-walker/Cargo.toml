@@ -13,6 +13,9 @@ workspace = true
 [dependencies]
 pi-vfs.workspace = true
 globset.workspace = true
+grep-matcher.workspace = true
+grep-pcre2.workspace = true
+grep-regex.workspace = true
 ignore.workspace = true
 parking_lot.workspace = true
 rayon.workspace = true

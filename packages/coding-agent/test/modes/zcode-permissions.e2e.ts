@@ -14,6 +14,7 @@ import {
 	type ConversationSnapshot,
 } from "../../src/modes/zcode/schema";
 import type { PendingInteraction } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/snapshot";
+import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 type Frame = Record<string, unknown>;
 interface ModelRequest {
