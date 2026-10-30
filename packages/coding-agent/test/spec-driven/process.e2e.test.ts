@@ -87,7 +87,6 @@ describe("spec-driven actual OMP public entry", () => {
 				sessionId: stageId,
 				type: "sendText",
 				payload: { text: feedback },
-				baseRevision: (await read(stageId)).atRevision,
 				issuedAt: Date.now(),
 			};
 			expect(await peer.request("v4/command", nativeCommand)).toMatchObject({ status: "accepted" });
