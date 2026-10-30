@@ -1,6 +1,9 @@
 import { getComposerStyle } from "../components/composer/registry";
 import { Spacer } from "../components/spacer";
 import type { StatusLineComponent } from "../status-line/component";
+import { getKeybindings } from "../keybindings";
+import { isKeyRelease, matchesKey } from "../keys";
+import { parseSgrMouse } from "../mouse";
 import { compositeLineAt } from "../render/composite";
 import { type ExtensionLinkLabel, extensionLinkLabels, linkHintTags } from "../render/extension-links";
 import type { StatusLineSession } from "../status-line/host";
@@ -367,6 +370,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	#idleChromeTimer: RenderTimer | undefined;
 	/** Rows the chrome below each below-transcript root took in the last frame (see {@link rowsBelow}). */
 	#rowsBelow = new Map<Component, number>();
+	#transcriptViewport: { transcript: TranscriptContainer; start: number; end: number } | undefined;
 	#lastInterruptAt = 0;
 	/** Last described surface; its arrays are reused while their children are unchanged. */
 	#nativeSurface: NativeSurface = { main: [], dock: [] };
@@ -441,6 +445,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// A settle timer that fires while the TUI is stopped (external editor, suspend) is dropped;
 		// forget it on restart so the next frame re-arms instead of waiting on it forever.
 		this.ui.addStartListener(() => this.#resetIdleChrome());
+		this.ui.addInputListener(data => this.#handleTranscriptScroll(data));
 	}
 	/**
 	 * Rows the below-transcript chrome under `root` (editor, status line, …)
@@ -449,6 +454,45 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	 */
 	rowsBelow(root: Component): number | undefined {
 		return this.#rowsBelow.get(root);
+	}
+
+	#handleTranscriptScroll(data: string): { consume: true } | undefined {
+		const viewport = this.#transcriptViewport;
+		if (
+			!viewport ||
+			this.ui.nativeRendering ||
+			this.ui.hasOverlay() ||
+			this.ui.getFocused() !== this.editor ||
+			this.linkHintsActive ||
+			isKeyRelease(data)
+		)
+			return undefined;
+		const { transcript } = viewport;
+		if (data.startsWith("\x1b[<")) {
+			const event = parseSgrMouse(data);
+			if (event?.wheel == null) return undefined;
+			const row = event.row - this.ui.getMutableViewport().top;
+			if (row < viewport.start || row >= viewport.end || !transcript.scrollViewport(event.wheel * 3))
+				return undefined;
+			this.ui.requestRender();
+			return { consume: true };
+		}
+		const keys = getKeybindings();
+		const direction = keys.matches(data, "tui.editor.pageUp")
+			? -1
+			: keys.matches(data, "tui.editor.pageDown")
+				? 1
+				: 0;
+		if (!this.editor.getText() && direction && transcript.scrollViewport(direction, true)) {
+			this.ui.requestRender();
+			return { consume: true };
+		}
+		if (direction && !this.editor.getText()) return undefined;
+		if (transcript.resetViewportScroll()) {
+			this.ui.requestRender();
+			if (matchesKey(data, "escape")) return { consume: true };
+		}
+		return undefined;
 	}
 
 	/** Available terminal rows shared by input and status decorations. */
@@ -474,12 +518,14 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		const transcriptIndex = roots.findIndex(root => root instanceof TranscriptContainer);
 		if (transcriptIndex < 0) {
 			this.#lastClickSpans = [];
+			this.#transcriptViewport = undefined;
 			this.#lastViewportRows = [];
 			this.#syncLinkHints([], 0);
 			const viewport = this.#renderRoots(roots, width);
 			return { viewport: viewport.slice(-rows) };
 		}
 		const transcript = roots[transcriptIndex] as TranscriptContainer;
+		transcript.setViewportNavigationEnabled(!this.ui.nativeRendering);
 		const preRoots = this.#renderRoots(roots.slice(0, transcriptIndex), width);
 		const afterRoots = roots.slice(transcriptIndex + 1);
 		const after: string[] = [];
@@ -522,7 +568,12 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// Rows the chrome above its floor displaces are clipped from the top by
 		// the `drop` slice below; they stay live until the chrome shrinks.
 		// `completeScrollback` bills the actual chrome height instead.
-		const active = transcript.renderViewport(width, Math.max(0, rows - before.length - belowFloor), frame);
+		const active = transcript.renderViewport(
+			width,
+			Math.max(0, rows - before.length - (transcript.isViewportScrolled ? after.length : belowFloor)),
+			frame,
+			Math.max(0, rows - before.length - after.length),
+		);
 		const activeSpans: ViewportClickSpan[] = [];
 		for (const span of transcript.getLastViewportSpans()) {
 			const ids = (span.component as Partial<{ getClickFocusAgentIds(): string[] }>).getClickFocusAgentIds?.();
@@ -531,6 +582,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		}
 		const drop = Math.max(0, before.length + active.length + after.length - rows);
 		const mutable = [...before, ...active, ...after].slice(drop);
+		this.#transcriptViewport = {
+			transcript,
+			start: Math.max(0, before.length - drop),
+			end: Math.max(0, before.length + active.length - drop),
+		};
 		const filledHistoryRows =
 			history?.kind === "replay" || !(history !== undefined || this.ui.hasProviderHistory())
 				? undefined
@@ -1293,6 +1349,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 	/** Mount or replace session-aware root children while preserving the header and status hosts. */
 	setRuntimeChildren(children: readonly Component[], options: RuntimeChildrenOptions = {}): void {
 		if (this.#stopped) return;
+		this.#transcriptViewport = undefined;
 		this.#chromeFloor = undefined;
 		this.#chromeFloorPromoted = false;
 		this.#resetIdleChrome();

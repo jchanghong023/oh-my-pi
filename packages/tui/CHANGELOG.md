@@ -35,6 +35,7 @@
 
 ### Fixed
 
+- Keep the beginning of long streaming tables reachable with PageUp/PageDown or captured mouse-wheel scrolling; Escape returns to the live tail without cancelling generation, and completed content enters history once.
 - Compact transcript replay hides historical tool errors while keeping live failure feedback and detailed history available.
 - Keep both compact Bash error output rows visible on native terminals and for device-dispatched commands.
 - Preserve upstream input anchoring and Complete Scrollback behavior in compact mode; clean mode also hides live thinking titles and expandable native thoughts.

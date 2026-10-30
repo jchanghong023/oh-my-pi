@@ -2,6 +2,10 @@ import { beforeAll, describe, expect, it } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { type Component, Container, Text } from "@oh-my-pi/pi-tui";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
 import { COMPOSER_DEFAULTS, Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -232,6 +236,114 @@ describe("transcript rows under chrome that outlives the turn", () => {
 			expect(missing).toEqual([]);
 		} finally {
 			composer.stop();
+		}
+	});
+});
+
+describe("unarchived transcript navigation", () => {
+	async function openTable() {
+		const terminal = new VirtualTerminal(100, 28);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const transcript = new TranscriptContainer();
+		const message = new AssistantMessageComponent();
+		transcript.addChild(message);
+		const chrome = new TurnChrome();
+		composer.setRuntimeChildren([transcript, chrome, composer.editor]);
+		composer.start({ playWelcomeIntro: false });
+		await scheduler.settle(terminal);
+		chrome.rows = 2;
+		const source =
+			"| Item | Description |\n| --- | --- |\n" +
+			Array.from({ length: 30 }, (_, index) => `| MARK${String(index + 1).padStart(2, "0")} | payload |\n`).join("");
+		message.updateContent(reply(source), { transient: true });
+		composer.ui.requestRender();
+		await scheduler.settle(terminal);
+		const screen = () => Bun.stripANSI(terminal.getViewport().join("\n"));
+		const press = async (data: string) => {
+			terminal.sendInput(data);
+			await scheduler.settle(terminal);
+		};
+		return { terminal, scheduler, composer, transcript, message, source, screen, press };
+	}
+
+	it("keeps every streamed table row reachable before completion and archives it once after browsing", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const h = await openTable();
+		let escapes = 0;
+		h.composer.editor.onEscape = () => {
+			escapes++;
+		};
+		try {
+			const seen = new Set(h.screen().match(/MARK\d{2}/g));
+			expect(h.screen()).toContain("MARK30");
+			for (let page = 0; page < 12; page++) {
+				await h.press("\x1b[5~");
+				for (const marker of h.screen().match(/MARK\d{2}/g) ?? []) seen.add(marker);
+			}
+			expect([...seen].sort()).toEqual(
+				Array.from({ length: 30 }, (_, i) => `MARK${String(i + 1).padStart(2, "0")}`),
+			);
+			expect(h.screen()).toContain("MARK01");
+			expect(h.screen()).toContain("Item");
+
+			const complete =
+				h.source + "| MARK31 | 更长的正文 changes column widths while the reader stays at the head |\n";
+			h.message.updateContent(reply(complete), { transient: true });
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(h.screen()).toContain("MARK01");
+			expect(h.screen()).not.toContain("MARK31");
+			h.terminal.resize(70, 22);
+			await h.scheduler.advance(h.terminal, 300);
+			expect(h.screen()).toContain("MARK01");
+
+			h.message.updateContent(reply(complete));
+			h.message.markTranscriptBlockFinalized();
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			expect(h.screen()).toContain("MARK01");
+			await h.press("\x1b");
+			expect(escapes).toBe(0);
+			await h.scheduler.advance(h.terminal, 300);
+			expect(h.screen()).toContain("MARK31");
+			const archived: string[] = Bun.stripANSI(h.terminal.getScrollBuffer().join("\n")).match(/MARK\d{2}/g) ?? [];
+			expect(archived).toEqual(Array.from({ length: 31 }, (_, i) => `MARK${String(i + 1).padStart(2, "0")}`));
+		} finally {
+			h.composer.stop();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
+	it("scrolls live rows with the wheel without taking page keys from drafts or modal input", async () => {
+		const h = await openTable();
+		try {
+			h.composer.editor.setText("unsent draft");
+			await h.press("\x1b[5~");
+			expect(h.screen()).toContain("MARK30");
+			expect(h.composer.editor.getText()).toBe("unsent draft");
+			h.composer.editor.setText("");
+			const modal = new Text("MODAL_INPUT", 0, 0);
+			const overlay = h.composer.ui.showOverlay(modal, { fullscreen: true });
+			h.composer.ui.setFocus(modal);
+			await h.press("\x1b[5~");
+			expect(h.screen()).toContain("MODAL_INPUT");
+			overlay.hide();
+			h.composer.ui.setFocus(h.composer.editor);
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			for (let n = 0; n < 30; n++) await h.press("\x1b[<64;1;2M");
+			expect(h.screen()).toContain("MARK01");
+			await h.press("x");
+			expect(h.composer.editor.getText()).toBe("x");
+			expect(h.screen()).toContain("MARK30");
+		} finally {
+			h.composer.stop();
 		}
 	});
 });

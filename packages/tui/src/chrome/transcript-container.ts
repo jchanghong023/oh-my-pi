@@ -2,6 +2,8 @@ import { type Component, Container, type HistoryBatch } from "../tui";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { measureRender, renderForScrollback } from "../components/image";
+import { clampScrollOffset, maxScrollOffset, viewportRange } from "../components/scroll-viewport";
+import { editorKey } from "./keybinding-hints";
 import { col, text } from "../native/describe";
 import { styledSpans } from "../native/spans";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "../chat/display-preferences";
@@ -296,6 +298,12 @@ export class TranscriptContainer extends Container {
 	#pinnedFrontier: { index: number; since: number; logged: boolean } | undefined;
 	/** Block spans of the last `renderViewport` output, for click hit-testing. */
 	#lastViewportSpans: TranscriptViewportSpan[] = [];
+	#viewportWidth = 0;
+	#viewportRows = 0;
+	#viewportOverflow = false;
+	#viewportNavigationEnabled = false;
+	/** Leading live row selected by the reader; undefined follows the normal tail allocator. */
+	#viewportScrollOffset: number | undefined;
 	/**
 	 * The composed frame {@link beginFrame} opened; `undefined` outside one.
 	 * {@link renderViewport} closes it, so it never outlives the synchronous
@@ -516,6 +524,8 @@ export class TranscriptContainer extends Container {
 	}
 
 	override clear(): void {
+		this.resetViewportScroll();
+		this.#viewportOverflow = false;
 		super.clear();
 		this.#compactSelection.clear();
 		this.#entries = [];
@@ -550,6 +560,7 @@ export class TranscriptContainer extends Container {
 	 * rewrites them, so unpaired use would duplicate them on the next retirement.
 	 */
 	resetStableEmission(): void {
+		this.resetViewportScroll();
 		this.#syncEntries();
 		if (this.#offered?.kind === "append" || (this.#offered?.kind === "commit" && this.#offered.split)) {
 			this.#offered = undefined;
@@ -734,6 +745,95 @@ export class TranscriptContainer extends Container {
 		this.#frameRows.clear();
 	}
 
+	/** Enable controls only when a host routes keyboard or mouse navigation to this viewport. */
+	setViewportNavigationEnabled(enabled: boolean): void {
+		this.#viewportNavigationEnabled = enabled;
+		if (!enabled) this.resetViewportScroll();
+	}
+
+	get isViewportScrolled(): boolean {
+		return this.#viewportScrollOffset !== undefined;
+	}
+
+	/** Browse unarchived rows without publishing mutable Markdown into terminal history. */
+	scrollViewport(delta: number, page = false): boolean {
+		if (
+			!this.#viewportNavigationEnabled ||
+			this.#viewportRows < 2 ||
+			this.#viewportWidth === 0 ||
+			!Number.isFinite(delta) ||
+			delta === 0
+		)
+			return false;
+		if (!this.isViewportScrolled && (!this.#viewportOverflow || delta > 0)) return false;
+		const { rows } = this.#liveViewportRows(this.#viewportWidth);
+		const height = this.#viewportRows - 1;
+		const end = maxScrollOffset(rows.length, height);
+		if (end === 0) return this.resetViewportScroll();
+		const before = this.#viewportScrollOffset ?? end;
+		const step = page ? Math.max(1, height - 1) : 1;
+		const next = clampScrollOffset(before + Math.trunc(delta) * step, rows.length, height);
+		this.#viewportScrollOffset = next < end ? next : undefined;
+		return next !== before || this.isViewportScrolled;
+	}
+
+	/** Resume tail following and normal retirement. */
+	resetViewportScroll(): boolean {
+		const changed = this.isViewportScrolled;
+		this.#viewportScrollOffset = undefined;
+		return changed;
+	}
+
+	#liveViewportRows(width: number): { rows: string[]; owners: (Component | undefined)[] } {
+		this.#syncEntries();
+		const rows: string[] = [];
+		const owners: (Component | undefined)[] = [];
+		let previous: Component | undefined;
+		for (const { entry, index } of this.#liveEntries()) {
+			const measured = this.#liveBlock(entry, index, width);
+			const block = measured.images
+				? this.#renderEntry(entry, width).slice(this.#projectedEmittedRowCount(entry, index, width))
+				: measured.rows;
+			if (block.length === 0) continue;
+			if (rows.length > 0 && this.#blockGap(previous, entry.component)) {
+				rows.push("");
+				owners.push(undefined);
+			}
+			for (const row of block) {
+				rows.push(row);
+				owners.push(entry.component);
+			}
+			previous = entry.component;
+		}
+		return { rows, owners };
+	}
+
+	#renderScrolledViewport(width: number, capacity: number): readonly string[] | undefined {
+		const { rows, owners } = this.#liveViewportRows(width);
+		const height = Math.max(0, capacity - 1);
+		if (rows.length <= height) {
+			this.resetViewportScroll();
+			return undefined;
+		}
+		const range = viewportRange(rows.length, height, this.#viewportScrollOffset ?? 0);
+		this.#viewportScrollOffset = range.start;
+		const visible = rows.slice(range.start, range.end);
+		const hint = truncateToWidth(
+			theme.fg("dim", `↑ ${editorKey("tui.editor.pageUp")}/${editorKey("tui.editor.pageDown")} 翻页 · Esc 返回底部`),
+			width,
+		);
+		this.#commitViewportSpans([undefined, ...owners.slice(range.start, range.end)]);
+		return [hint, ...visible];
+	}
+
+	#markViewportOverflow(rows: string[], owners: (Component | undefined)[], width: number): void {
+		const visibleRows = Math.min(rows.length, this.#viewportRows);
+		if (!this.#viewportNavigationEnabled || !this.#viewportOverflow || visibleRows < 2) return;
+		const first = rows.length - visibleRows;
+		rows[first] = truncateToWidth(theme.fg("dim", `↑ ${editorKey("tui.editor.pageUp")} 查看前面的行`), width);
+		owners[first] = undefined;
+	}
+
 	/** Block spans of the last `renderViewport` output, in output coordinates. Empty when the tail is empty. */
 	getLastViewportSpans(): readonly TranscriptViewportSpan[] {
 		return this.#lastViewportSpans;
@@ -761,25 +861,35 @@ export class TranscriptContainer extends Container {
 	 * Render the live tail, constrained to the supplied transcript height.
 	 * Closes the frame {@link beginFrame} opened; a different `frame` discards
 	 * its measurements first.
+	 * `visibleRows` excludes caller-owned chrome that can cover the top of this allocation.
 	 */
-	renderViewport(width: number, rows: number, frame: AnimationFrame): readonly string[] {
+	renderViewport(width: number, rows: number, frame: AnimationFrame, visibleRows = rows): readonly string[] {
 		if (frame !== this.#openFrame) this.#closeFrame();
 		this.#lastFrame = frame;
 		try {
-			return this.#composeViewport(width, rows, frame);
+			return this.#composeViewport(width, rows, frame, visibleRows);
 		} finally {
 			this.#closeFrame();
 		}
 	}
 
-	#composeViewport(width: number, rows: number, frame: AnimationFrame): readonly string[] {
+	#composeViewport(width: number, rows: number, frame: AnimationFrame, visibleRows: number): readonly string[] {
 		this.#syncEntries();
 		this.#settleFinalized();
 		const live = this.#liveEntries();
+		const hasActive = live.some(({ entry }) => entry.state === "active");
+		this.#viewportWidth = width;
+		this.#viewportRows = Math.max(0, Math.trunc(Math.min(rows, visibleRows)));
+		this.#viewportOverflow = false;
 		const capacity = Math.max(0, Math.trunc(rows));
 		if (live.length === 0 || capacity === 0) {
 			this.#lastViewportSpans = [];
+			if (live.length === 0) this.resetViewportScroll();
 			return EMPTY_ROWS;
+		}
+		if (this.isViewportScrolled) {
+			const scrolled = this.#renderScrolledViewport(width, capacity);
+			if (scrolled !== undefined) return scrolled;
 		}
 
 		// Collect newest-first and stop one block past what the viewport can
@@ -810,6 +920,7 @@ export class TranscriptContainer extends Container {
 			return EMPTY_ROWS;
 		}
 		if (shown.length > capacity) {
+			this.#viewportOverflow = hasActive;
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
@@ -847,9 +958,12 @@ export class TranscriptContainer extends Container {
 					owners.push(component);
 				}
 			}
+			this.#viewportOverflow = hasActive && output.length > this.#viewportRows;
+			this.#markViewportOverflow(output, owners, width);
 			this.#commitViewportSpans(owners, output.length);
 			return output;
 		}
+		this.#viewportOverflow = hasActive;
 
 		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const allocation: number[] = new Array(shown.length).fill(1);
@@ -886,6 +1000,7 @@ export class TranscriptContainer extends Container {
 			}
 		}
 		const drop = Math.max(0, output.length - capacity);
+		this.#markViewportOverflow(output, owners, width);
 		this.#commitViewportSpans(owners.slice(drop), output.length - drop);
 		return drop > 0 ? output.slice(drop) : output;
 	}
@@ -971,6 +1086,7 @@ export class TranscriptContainer extends Container {
 		if (this.#offered !== undefined) return this.#offered.batch;
 		const replay = this.#peekReplayBatch(width);
 		if (replay !== undefined) return replay;
+		if (policy === "pressure" && this.isViewportScrolled) return undefined;
 
 		this.#completeFullyEmittedHeads(width);
 		const room = Math.max(0, Math.trunc(capacity));
