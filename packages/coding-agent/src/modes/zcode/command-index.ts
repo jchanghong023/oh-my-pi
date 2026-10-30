@@ -3,7 +3,7 @@ import * as path from "node:path";
 import * as timers from "node:timers/promises";
 import type { AgentStorage, CommandIndexRow } from "../../session/agent-storage";
 import type { SessionEntry } from "../../session/session-entries";
-import { loadSessionFile } from "../../session/session-loader";
+import { loadSessionFile, type SessionLoadResult } from "../../session/session-loader";
 import { BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE } from "../../session/messages";
 import type { CommandKey } from "./schema";
 
@@ -168,7 +168,7 @@ export class ZCodeCommandIndex {
 				signal?.throwIfAborted();
 				try {
 					const journal = await this.#source.withCommandJournalRead(file, async () => {
-						const before = await versionOf(file);
+						let before = await versionOf(file);
 						if (storage && !this.#dirty.has(file)) {
 							let cached: CommandJournal | undefined;
 							let covered = false;
@@ -192,10 +192,17 @@ export class ZCodeCommandIndex {
 							// 正常并发追加使缓存失效时只回源当前文件，不把它误判为坏 journal。
 							if ((covered || cached) && (await versionOf(file)) === before) return cached;
 						}
-						const loaded = await loadSessionFile(file, undefined, { throwIfMissing: true });
-						const header = loaded.entries.find(entry => entry.type === "session");
-						if (loaded.invalidHeader || loaded.malformedRecords || header?.type !== "session") {
-							throw new Error(`Cannot prove command journal coverage: ${file}`);
+						let loaded: SessionLoadResult;
+						let header: SessionLoadResult["entries"][number] | undefined;
+						for (;;) {
+							signal?.throwIfAborted();
+							loaded = await loadSessionFile(file, undefined, { throwIfMissing: true });
+							header = loaded.entries.find(entry => entry.type === "session");
+							if (!loaded.invalidHeader && !loaded.malformedRecords && header?.type === "session") break;
+							// A malformed observation proves corruption only if its file version remained stable.
+							const after = await versionOf(file);
+							if (after === before) throw new Error(`Cannot prove command journal coverage: ${file}`);
+							before = after;
 						}
 						const extracted = {
 							id: header.id,

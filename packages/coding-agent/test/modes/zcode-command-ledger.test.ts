@@ -3,6 +3,7 @@ import { Agent, type AgentUserMessage } from "@oh-my-pi/pi-agent-core";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -19,7 +20,7 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import type { SessionEntry } from "../../src/session/session-entries";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { convertToLlm } from "../../src/session/messages";
-import { loadEntriesFromFile } from "../../src/session/session-loader";
+import { loadEntriesFromFile, parseSessionContent } from "../../src/session/session-loader";
 import { SessionManager } from "../../src/session/session-manager";
 import { FileSessionStorage } from "../../src/session/session-storage";
 
@@ -312,6 +313,97 @@ describe("ZCode durable command facts", () => {
 				status: "accepted",
 				revisionAtDecision: 3,
 			});
+		} finally {
+			readSpy.mockRestore();
+		}
+	});
+
+	it("retries a transiently malformed real snapshot and recovers the appended receipt", async () => {
+		const { manager, adapter, indexedAdapter, cold } = await fixture();
+		const file = manager.getSessionFile()!;
+		const baseline = await fs.readFile(file);
+		const envelope: CommandEnvelope = {
+			...command(manager.getSessionId(), "partial-receipt"),
+			type: "renameSession",
+			payload: { title: "Persisted receipt" },
+		};
+		await new ZCodeCommandLedger(adapter).execute(envelope, async () => ({
+			commandId: envelope.commandId,
+			status: "accepted",
+			revisionAtDecision: 7,
+		}));
+		await manager.flush();
+		await manager.close();
+		cold();
+		const complete = await fs.readFile(file);
+		expect(complete.subarray(0, baseline.length).equals(baseline)).toBe(true);
+		const appended = complete.subarray(baseline.length);
+		const firstLineEnd = appended.indexOf(0x0a);
+		expect(firstLineEnd).toBeGreaterThan(1);
+		const split = Math.floor(firstLineEnd / 2);
+		await fs.truncate(file, baseline.length);
+
+		const original = FileSessionStorage.prototype.readText;
+		let reads = 0;
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			target: string,
+		) {
+			if (target !== file) return original.call(this, target);
+			reads++;
+			if (reads !== 1) return original.call(this, target);
+			await fs.appendFile(file, appended.subarray(0, split));
+			const partial = await original.call(this, target);
+			expect(parseSessionContent(partial).malformedRecords).toBeGreaterThan(0);
+			await fs.appendFile(file, appended.subarray(split));
+			return partial;
+		});
+		try {
+			const result = await new ZCodeCommandLedger(indexedAdapter).query([envelope]);
+			expect(result.results[0]?.result).toMatchObject({ status: "accepted", revisionAtDecision: 7 });
+			expect(reads).toBe(2);
+		} finally {
+			readSpy.mockRestore();
+		}
+	});
+
+	it("rejects a stable malformed journal without publishing complete coverage", async () => {
+		const { manager, indexedAdapter, owner, cold } = await fixture();
+		const file = manager.getSessionFile()!;
+		await manager.close();
+		cold();
+		await fs.appendFile(file, "{broken\n");
+		await expect(
+			new ZCodeCommandLedger(indexedAdapter).query([command(manager.getSessionId(), "missing")]),
+		).rejects.toThrow("Cannot prove command journal coverage");
+		expect((await owner.commandIndexStorage()).getCommandJournalCoverage(file)).toBeUndefined();
+	});
+
+	it.each(["abort", "read error"] as const)("propagates %s during an inconsistent journal retry", async mode => {
+		const { manager, indexedAdapter, owner } = await fixture();
+		const file = manager.getSessionFile()!;
+		await manager.close();
+		const failure = new Error(`retry ${mode}`);
+		const controller = new AbortController();
+		const original = FileSessionStorage.prototype.readText;
+		let reads = 0;
+		const readSpy = spyOn(FileSessionStorage.prototype, "readText").mockImplementation(async function (
+			this: FileSessionStorage,
+			target: string,
+		) {
+			if (target !== file) return original.call(this, target);
+			reads++;
+			if (reads > 1) throw failure;
+			await fs.appendFile(file, "{broken");
+			const partial = await original.call(this, target);
+			await fs.appendFile(file, "\n");
+			if (mode === "abort") controller.abort(failure);
+			return partial;
+		});
+		try {
+			await expect(new ZCodeCommandIndex(indexedAdapter).warm(controller.signal)).rejects.toBe(failure);
+			expect(reads).toBe(mode === "abort" ? 1 : 2);
+			expect((await owner.commandIndexStorage()).getCommandJournalCoverage(file)).toBeUndefined();
 		} finally {
 			readSpy.mockRestore();
 		}

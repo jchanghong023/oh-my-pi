@@ -98,6 +98,7 @@
 
 ### Fixed
 
+- Avoid spurious app-server command rejections when a session journal changes while being indexed.
 - Correct the Linux x64 musl baseline release target passed to Bun.
 
 - Stabilize local verification by isolating mock task-label requests and waiting for completed terminal redraws without extending test timeouts.
