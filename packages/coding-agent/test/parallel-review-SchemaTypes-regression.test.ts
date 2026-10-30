@@ -30,6 +30,28 @@ describe("JTD document constraint regressions", () => {
 		expect(validateJsonSchemaValue(converted, { extra: 1 }).success).toBe(false);
 	});
 
+	it("keeps JTD objects closed by default and honors explicit openness for optional properties", () => {
+		const closed = jtdToJsonSchema({ optionalProperties: { name: { type: "string" } } });
+		const open = jtdToJsonSchema({
+			optionalProperties: { name: { type: "string" } },
+			additionalProperties: true,
+		});
+		expect(validateJsonSchemaValue(closed, { extra: 1 }).success).toBe(false);
+		expect(validateJsonSchemaValue(open, { extra: 1 }).success).toBe(true);
+		expect(validateJsonSchemaValue(open, { name: 1 }).success).toBe(false);
+	});
+
+	it("keeps definitions available to nullable references", () => {
+		const converted = jtdToJsonSchema({
+			definitions: { entry: { type: "string" } },
+			ref: "entry",
+			nullable: true,
+		});
+		expect(validateJsonSchemaValue(converted, null).success).toBe(true);
+		expect(validateJsonSchemaValue(converted, "valid").success).toBe(true);
+		expect(validateJsonSchemaValue(converted, 1).success).toBe(false);
+	});
+
 	it("emits URI-fragment refs without confusing literal percent escapes with pointer separators", () => {
 		const converted = jtdToJsonSchema({
 			definitions: {

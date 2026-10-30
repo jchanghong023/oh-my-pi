@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { TERMINAL } from "@oh-my-pi/pi-tui/terminal-capabilities";
 import {
 	createProcessTerminalRenderHarness,
@@ -25,15 +25,6 @@ class ModalProbe implements Component {
 	}
 }
 
-function nextPaint(tui: TUI, alt: boolean): Promise<void> {
-	return new Promise(resolve => {
-		const unsubscribe = tui.addPaintListener(paint => {
-			if (paint.alt !== alt) return;
-			unsubscribe();
-			resolve();
-		});
-	});
-}
 const originalSshConnection = Bun.env.SSH_CONNECTION;
 const originalSshTty = Bun.env.SSH_TTY;
 const originalSshClient = Bun.env.SSH_CLIENT;
@@ -177,22 +168,27 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 		expect(harness.writes.join("")).toContain("\x1b[>4;2m");
 		harness.writes.length = 0;
 
-		const entered = nextPaint(harness.tui, true);
+		// Drive the harness's fake clock before checking the paint; awaiting the
+		// paint directly cannot advance the renderer's throttled timer.
+		const paints: boolean[] = [];
+		harness.tui.addPaintListener(paint => paints.push(paint.alt));
 		const overlay = harness.tui.showOverlay(new ModalProbe(), {
 			fullscreen: true,
 			width: "100%",
 			maxHeight: "100%",
 			margin: 0,
 		});
-		await entered;
+		await harness.settle();
+		expect(paints).toContain(true);
 
 		const enterOut = harness.writes.join("");
 		expect(enterOut).toContain("\x1b[?1049h\x1b[>4;2m");
 		harness.writes.length = 0;
 
-		const exited = nextPaint(harness.tui, false);
+		paints.length = 0;
 		overlay.hide();
-		await exited;
+		await harness.settle();
+		expect(paints).toContain(false);
 
 		const exitOut = harness.writes.join("");
 		// xterm modifyOtherKeys is a single global flag (no per-screen stack),
@@ -217,20 +213,23 @@ describe("ProcessTerminal kitty keyboard progressive-enhancement ordering", () =
 				expect(harness.terminal.kittyProtocolActive).toBe(true);
 				harness.writes.length = 0;
 
-				const entered = nextPaint(harness.tui, true);
+				const paints: boolean[] = [];
+				harness.tui.addPaintListener(paint => paints.push(paint.alt));
 				const overlay = harness.tui.showOverlay(new ModalProbe(), {
 					fullscreen: true,
 					width: "100%",
 					maxHeight: "100%",
 					margin: 0,
 				});
-				await entered;
+				await harness.settle();
+				expect(paints).toContain(true);
 				expect(harness.writes.join("")).toContain(`\x1b[?1049h\x1b[>${flags}u`);
 				harness.writes.length = 0;
 
-				const exited = nextPaint(harness.tui, false);
+				paints.length = 0;
 				overlay.hide();
-				await exited;
+				await harness.settle();
+				expect(paints).toContain(false);
 
 				const exitOut = harness.writes.join("");
 				// Kitty keyboard flags are per-screen, so the matching pop must precede

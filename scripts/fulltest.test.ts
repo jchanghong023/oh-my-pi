@@ -598,6 +598,7 @@ describe("fulltest lane scheduling", () => {
 				gate,
 				{ debug: false },
 				{
+					cpuBudget: 16,
 					captureSourceIdentity: async () => identity,
 					captureChangedPaths: async () => [],
 					fastcheckCommands: async () => [
@@ -679,6 +680,7 @@ describe("fulltest lane scheduling", () => {
 					if (sourceCaptures === 4) expect(startupHasStarted).toBe(true);
 					return identity;
 				},
+				cpuBudget: 16,
 				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 				runGateCommands: async (_runner, commands, options) => {
 					const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite");
@@ -747,6 +749,45 @@ describe("fulltest lane scheduling", () => {
 			finishStatic.resolve();
 			await run;
 		}
+	});
+	test("serializes CPU-heavy lanes on a small allocation without omitting suites", async () => {
+		const identity: SourceIdentity = { head: "head", digest: "digest", dirty: false, status: "", files: [] };
+		const seen: string[] = [];
+		const gate = {
+			signal: new AbortController().signal,
+			charged: async <T>(operation: () => T | Promise<T>) => operation(),
+			run: async () => {},
+			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+			record: (error: unknown) => error,
+			fail: (error: unknown) => error,
+		} as unknown as GateRun;
+		await runFulltest(
+			gate,
+			{ debug: false, full: true },
+			{
+				cpuBudget: 2,
+				captureSourceIdentity: async () => identity,
+				captureChangedPaths: async () => [],
+				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
+				runGateCommands: async (_runner, commands, options) => {
+					if (commands.some(command => command.label === "static/TS")) expect(options?.concurrency).toBe(1);
+					for (const command of commands) {
+						seen.push(command.label);
+						if (
+							command.label === "test/TypeScript fork feature suite" ||
+							command.label === "test/Rust workspace"
+						) {
+							expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+						}
+					}
+				},
+			},
+		);
+		expect(seen.indexOf("static/TS")).toBeLessThan(seen.indexOf("test/TypeScript fork feature suite"));
+		expect(seen.indexOf("test/TypeScript fork feature suite")).toBeLessThan(seen.indexOf("test/Rust workspace"));
+		expect(seen.indexOf("test/Rust workspace")).toBeLessThan(seen.indexOf("smoke/isolated dev TUI PTY"));
+		for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK", "test/TypeScript startup suite"])
+			expect(seen).toContain(label);
 	});
 });
 
@@ -853,6 +894,7 @@ describe("standard gate charged-budget parameters", () => {
 	});
 	test("WSL hosts halve the pool-sizing core budget; native hosts stay unchanged", () => {
 		expect(gateCpuBudget(26, "6.18.54.1-microsoft-standard-WSL2")).toBe(13);
+		expect(gateCpuBudget(2, "microsoft")).toBe(1);
 		expect(gateCpuBudget(8, "5.15.153.1-microsoft-standard-WSL2")).toBe(4);
 		expect(gateCpuBudget(26, "6.8.0-48-generic")).toBe(26);
 		expect(gateCpuBudget(32, "10.0.26100")).toBe(32);

@@ -112,7 +112,8 @@ OMP MUST 对本次用户明确选定的行为恢复审查基线 `95db18ef9936bff
 
 #### Scenario: JTD 转换与归档编码
 - **WHEN** 将 JTD 转为 JSON Schema，或调用归档编码
-- **THEN** 本次涉及的 JTD form、根 definitions、引用转义及附加属性语义 MUST 恢复该基线的上游转换行为；归档编码 MUST 不保留本次新增的 `AbortSignal` 编码取消接口和相应取消检查。
+- **THEN** JTD form 的其余转换保持该基线的上游行为；根 `definitions` MUST 转为 JSON Schema `$defs`，本地引用 MUST 使用正确转义的 URI fragment，属性形式 MUST 保留显式 `additionalProperties: true`，未显式开放时保持封闭。
+- **AND** 归档编码 MUST 不保留本次新增的 `AbortSignal` 编码取消接口和相应取消检查。
 - **AND** 恢复不得改变其他已批准的工具协议、归档读写功能或权限边界。
 
 #### Scenario: 上游对照变化或行为冲突

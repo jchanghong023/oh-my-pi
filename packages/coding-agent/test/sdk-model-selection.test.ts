@@ -190,9 +190,12 @@ describe("createAgentSession deferred model pattern resolution", () => {
 					fetchDynamicModels: fetchModels,
 				});
 			};
+			// --models accepts globs; --model and inherited task selectors require a
+			// concrete provider/model selector rather than scope-pattern syntax.
+			const selector = source === "scope" ? `${provider}/*` : `${provider}/cached-runtime-model`;
 			const cliOptions = await buildCliSessionOptions(
 				{
-					...parseArgs([source === "scope" ? "--models" : "--model", `${provider}/*`]),
+					...parseArgs([source === "scope" ? "--models" : "--model", selector]),
 					offline: true,
 				},
 				[],

@@ -1513,7 +1513,10 @@ impl<'e> Parser<'e> {
 				return Err(self.option_error("--insecure-links cannot be combined with --confine-root"));
 			} else {
 				let bytes = crate::rsync::paths::path_bytes(std::path::Path::new(&root));
-				let clean = crate::rsync::paths::clean_fname(&bytes, true);
+				let clean = crate::rsync::paths::clean_local_fname_flags(
+					&bytes,
+					crate::rsync::paths::CFN_COLLAPSE_DOT_DOT_DIRS,
+				).unwrap_or_else(|p| p);
 				self.o.confine_root = Some(vec_os_lossy(clean));
 			}
 		}
@@ -2136,9 +2139,9 @@ pub(crate) fn log_format_has(format: &[u8], esc: u8) -> bool {
 }
 
 /// A Windows drive-letter (`C:\x`, `C:/x`, `C:x`) or UNC (`\\server\share`) path,
-/// which is always local there.
+/// which is always local there. A double colon denotes a daemon host instead.
 fn is_windows_local_path(p: &[u8]) -> bool {
-	(p.len() >= 2 && p[0].is_ascii_alphabetic() && p[1] == b':') || p.starts_with(b"\\\\")
+	(p.len() >= 2 && p[0].is_ascii_alphabetic() && p[1] == b':' && p.get(2) != Some(&b':')) || p.starts_with(b"\\\\")
 }
 
 /// `--confine-root` absoluteness: a leading '/'; on Windows also a leading '\',

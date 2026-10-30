@@ -181,6 +181,7 @@ describe("browser init deadline carry-over", () => {
 	beforeAll(async () => {
 		if (!CHROMIUM_AVAILABLE) return;
 		sharedHeadless = await acquireBrowser({ kind: "headless", headless: true }, { cwd: process.cwd() });
+		holdBrowser(sharedHeadless);
 	});
 
 	afterAll(async () => {
@@ -635,7 +636,6 @@ describe("browser tabs whose renderer crashed", () => {
 				expect(getTab(name)).toBeUndefined();
 			} finally {
 				await releaseTab(name, { kill: true });
-				if ("browser" in browser && browser.browser.connected) await releaseBrowser(browser, { kill: true });
 				server.stop(true);
 			}
 		},

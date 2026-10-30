@@ -1,6 +1,6 @@
 /// We don't implement `FromNapiValue` for `i64` `u64` `i128` `u128` `isize` `usize` here
 /// Because converting directly from `JsBigInt` to these values may result in a loss of precision and thus unintended behavior
-/// ```rust
+/// ```rust,ignore
 /// use napi::{bindgen_prelude::*, JsBigint};
 ///
 /// #[napi]

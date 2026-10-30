@@ -5,8 +5,13 @@ import type { GateCommand, GateRun } from "./test-gate-runtime";
 export function testConcurrencyLimit(
 	cores: number = os.availableParallelism(),
 	_platform: NodeJS.Platform = process.platform,
+	budget: string | undefined = process.env.OMP_TEST_CPU_BUDGET,
 ): number {
-	return Math.min(28, Math.max(1, Math.floor(cores)));
+	const limit = Math.min(28, Math.max(1, Math.floor(cores)));
+	const requested = Number(budget);
+	return budget?.trim() && Number.isFinite(requested) && requested >= 1
+		? Math.min(limit, Math.floor(requested))
+		: limit;
 }
 
 /** Run independent commands with bounded concurrency, continuing after ordinary failures. */

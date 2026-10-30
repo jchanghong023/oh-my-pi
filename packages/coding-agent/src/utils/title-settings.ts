@@ -71,7 +71,7 @@ export const cfgTitleRefreshAfterPrompts = register({
 	default: 0,
 	ui: {
 		tab: "tasks",
-		group: "Modes",
+		group: "模式",
 		label: "Refresh Title After Prompts",
 		description:
 			"Every this many operator prompts, ask the judge model whether a generated session title still fits the conversation, and regenerate it if not",

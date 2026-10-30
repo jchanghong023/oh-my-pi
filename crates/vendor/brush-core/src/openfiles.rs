@@ -673,13 +673,18 @@ mod tests {
 			("/dev/stderr", Fd(2)),
 			("/dev/tty", Terminal),
 			("/dev/fd/63", Fd(63)),
-			("//dev/./fd/7", Fd(7)),
 			("/proc/self/fd/3", Fd(3)),
 			("/proc/thread-self/fd/4", Fd(4)),
 			(&format!("/proc/{own}/fd/5"), Fd(5)),
 		] {
 			assert_eq!(parse(path), Some(expected), "{path}");
 		}
+		// A double leading slash is a UNC prefix on Windows, not a POSIX root.
+		#[cfg(unix)]
+		assert_eq!(parse("//dev/./fd/7"), Some(Fd(7)));
+		#[cfg(windows)]
+		assert_eq!(parse("//dev/./fd/7"), None);
+		assert_eq!(parse("/dev/./fd/7"), Some(Fd(7)));
 
 		for path in [
 			"/dev/fd",

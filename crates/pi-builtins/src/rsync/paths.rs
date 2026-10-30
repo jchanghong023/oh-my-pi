@@ -513,14 +513,52 @@ pub(crate) fn rel_path_lossy(name: &[u8]) -> PathBuf {
 }
 
 /// The bytes of a local path with `/` separators (`\` also separates on
-/// Windows); ill-formed UTF-16 is replaced, which can only make a
-/// confinement check fail.
+/// Windows). Windows verbatim drive and UNC prefixes are converted to their
+/// ordinary forms before converting separators; forward slashes are not valid
+/// separators in verbatim paths. Ill-formed UTF-16 is replaced.
 pub(crate) fn path_bytes(path: &Path) -> Cow<'_, [u8]> {
 	let mut bytes = crate::host::os_bytes_lossy(path.as_os_str());
-	if cfg!(windows) && bytes.contains(&b'\\') {
-		forward_slashes(bytes.to_mut());
+	if cfg!(windows) {
+		if bytes.starts_with(b"\\\\?\\UNC\\") {
+			let mut normal = Vec::with_capacity(bytes.len() - 6);
+			normal.extend_from_slice(b"//");
+			normal.extend_from_slice(&bytes[8..]);
+			bytes = Cow::Owned(normal);
+		} else if bytes.starts_with(b"\\\\?\\")
+			&& bytes.get(4).is_some_and(u8::is_ascii_alphabetic)
+			&& bytes.get(5) == Some(&b':')
+		{
+			bytes = Cow::Owned(bytes[4..].to_vec());
+		}
+		if bytes.contains(&b'\\') {
+			forward_slashes(bytes.to_mut());
+		}
 	}
 	bytes
+}
+
+/// Clean a local path without losing a Windows drive or UNC root.
+pub(crate) fn clean_local_fname_flags(name: &[u8], flags: u32) -> Result<Vec<u8>, Vec<u8>> {
+	if cfg!(windows) && name.len() >= 3 && name[0].is_ascii_alphabetic() && &name[1..3] == b":/" {
+		let prepend_drive = |path: Vec<u8>| {
+			let mut result = Vec::with_capacity(path.len() + 2);
+			result.extend_from_slice(&name[..2]);
+			result.extend_from_slice(&path);
+			result
+		};
+		return clean_fname_flags(&name[2..], flags).map(prepend_drive).map_err(prepend_drive);
+	}
+	let unc = cfg!(windows) && name.starts_with(b"//") && name.get(2).is_some_and(|b| *b != b'/');
+	let cleaned = clean_fname_flags(name, flags);
+	if unc {
+		let prepend_slash = |mut path: Vec<u8>| {
+			path.insert(0, b'/');
+			path
+		};
+		cleaned.map(prepend_slash).map_err(prepend_slash)
+	} else {
+		cleaned
+	}
 }
 
 /// Rewrites the `\` separators of a local Windows name to `/` (a no-op elsewhere).
@@ -1249,6 +1287,10 @@ mod tests {
 		assert!(!within_confine(Path::new(r"C:\data\jailbreak"), root));
 		assert!(!within_confine(Path::new(r"C:\data"), root));
 		assert_eq!(&*path_bytes(Path::new(r"a\b/c")), b"a/b/c");
+		assert_eq!(&*path_bytes(Path::new(r"\\?\C:\data\jail")), b"C:/data/jail");
+		assert_eq!(&*path_bytes(Path::new(r"\\?\UNC\server\share\dir")), b"//server/share/dir");
+		assert!(within_confine(Path::new(r"\\?\C:\data\jail\x"), root));
+		assert_eq!(clean_local_fname_flags(b"//server/share/dir/.", CFN_DROP_TRAILING_DOT_DIR).unwrap(), b"//server/share/dir");
 	}
 
 	#[cfg(unix)]

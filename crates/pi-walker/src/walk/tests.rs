@@ -375,10 +375,32 @@ async fn collect_filter_rewrites_kept_entries() {
 #[tokio::test(flavor = "multi_thread")]
 async fn full_detail_reports_sizes_and_mtimes() {
 	let tmp = make_tree("full", &["dir/five=12345", "empty="]);
+	// Child creation can leave a delayed directory timestamp update on Windows.
+	// Set it after building the tree so the comparison covers stable metadata.
+	#[cfg(windows)]
+	{
+		use std::os::windows::fs::OpenOptionsExt;
+
+		use windows_sys::Win32::Storage::FileSystem::{
+			FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+		};
+
+		let dir = std::fs::OpenOptions::new()
+			.access_mode(FILE_WRITE_ATTRIBUTES)
+			.custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+			.open(tmp.path().join("dir"))
+			.expect("open directory");
+		dir.set_times(
+			std::fs::FileTimes::new()
+				.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+		)
+		.expect("set directory mtime");
+	}
 	let opts = Options { detail: Detail::Full, ..Default::default() };
 	let got = collect(&Fs::native(), tmp.path(), &opts, true, |_, _| Action::Continue)
 		.await
 		.expect("collect");
+	assert_eq!(got.len(), 3);
 	for entry in got.iter() {
 		let want_size = match entry.path {
 			b"dir" => None,
@@ -935,12 +957,9 @@ async fn tree_walks_trees_deeper_than_the_thread_stack() {
 	std::fs::write(deepest.join("leaf.txt"), "ok").expect("leaf");
 	let leaf = format!("{}leaf.txt", "d/".repeat(DEPTH));
 	for contents_first in [false, true] {
-		// Deep Windows paths exceed MAX_PATH without the verbatim prefix.
-		let root = if cfg!(windows) {
-			PathBuf::from(format!(r"\\?\{}", tmp.path().display()))
-		} else {
-			tmp.path().to_path_buf()
-		};
+		// TempDir is canonical, including the verbatim prefix needed for long
+		// Windows paths; adding another prefix would make the root invalid.
+		let root = tmp.path().to_path_buf();
 		let seen = on_small_stack(async move {
 			let opts = TreeOptions { contents_first, ..Default::default() };
 			tree_paths(&root, &opts).await

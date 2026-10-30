@@ -207,7 +207,10 @@ async function findWindowsPortHolder(port: number): Promise<PortHolder | null> {
 
 	const powershell = $which("powershell") ?? $which("pwsh");
 	if (!powershell) return { pid, image, commandLine: "" };
-	const command = `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`;
+	// Native Windows argument parsing removes double quotes from a -Command
+	// argument before PowerShell parses it. Single quotes preserve the WMI
+	// filter as one PowerShell string.
+	const command = `(Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}').CommandLine`;
 	const processInfo = await $`${powershell} -NoProfile -NonInteractive -Command ${command}`.quiet().nothrow();
 	return { pid, image, commandLine: processInfo.exitCode === 0 ? processInfo.text().trim() : "" };
 }

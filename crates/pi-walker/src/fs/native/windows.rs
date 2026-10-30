@@ -5,13 +5,13 @@
 //!   parsing, no DOS-to-NT path conversion, no per-component re-traversal from
 //!   the drive root, and no `MAX_PATH` limit. Files read through a directory
 //!   handle open the same way.
-//! - Listings use `NtQueryDirectoryFile` with `FileDirectoryInformation`, the
-//!   smallest class that carries attributes, size, and mtime, so Full detail
-//!   costs nothing extra and each call returns as many entries as possible.
+//! - Listings use `NtQueryDirectoryFile` with `FileDirectoryInformation`. Full
+//!   detail queries each entry's handle because NTFS can leave the directory
+//!   index's cached metadata stale after a child changes.
 //! - Names convert from UTF-16 straight into the listing arena as WTF-8, which
 //!   round-trips unpaired surrogates back to the exact on-disk name.
-//! - Following path stats use `NtQueryFullAttributesFile`, which answers
-//!   without the caller opening a handle.
+//! - Following path stats use `NtQueryFullAttributesFile` for ordinary paths,
+//!   opening a handle when Win32 path parsing or reparse resolution is needed.
 //!
 //! Reparse points (symlinks, junctions, mount points, cloud placeholders) are
 //! reported as symlinks and never descended.
@@ -226,12 +226,12 @@ const fn is_dot_or_dot_dot_utf16(name: &[u8]) -> bool {
 	matches!(name, [b'.', 0] | [b'.', 0, b'.', 0])
 }
 
-/// Reads every entry of `dir` into `out`. Sizes and mtimes are always filled
-/// because the listing returns them for free.
+/// Reads every entry of `dir` into `out`. Full detail refreshes the metadata
+/// from each entry rather than relying on the directory index's cached values.
 pub(crate) fn list(
 	s: &mut Scratch,
 	dir: &Handle,
-	_detail: Detail,
+	detail: Detail,
 	_children: u32,
 	out: &mut Listing,
 ) -> io::Result<()> {
@@ -257,13 +257,13 @@ pub(crate) fn list(
 		};
 		restart = false;
 		match status {
-			STATUS_NO_MORE_FILES | STATUS_NO_SUCH_FILE => return Ok(()),
+			STATUS_NO_MORE_FILES | STATUS_NO_SUCH_FILE => break,
 			..0 => return Err(nt_error(status)),
 			_ => {},
 		}
 		let n = iosb.Information;
 		if n == 0 {
-			return Ok(());
+			break;
 		}
 		if n > buf.len() {
 			return Err(win_error(ERROR_INVALID_DATA));
@@ -316,6 +316,42 @@ pub(crate) fn list(
 			off += next;
 		}
 	}
+	if detail == Detail::Full {
+		let mut error = None;
+		out.records.retain_mut(|record| {
+			if error.is_some() {
+				return true;
+			}
+			let start = record.name_off as usize;
+			let name = &out.names[start..start + record.name_len as usize];
+			let result =
+				nt_open(s, dir, name, FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN_REPARSE_POINT)
+					.and_then(|handle| stat_handle(&handle));
+			match result {
+				Ok(info) => {
+					record.size = (record.file_type == FileType::File).then_some(info.size);
+					record.mtime = Some(info.stamp.mtime);
+					true
+				},
+				Err(err)
+					if matches!(
+						err.kind(),
+						io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+					) =>
+				{
+					false
+				},
+				Err(err) => {
+					error = Some(err);
+					true
+				},
+			}
+		});
+		if let Some(err) = error {
+			return Err(err);
+		}
+	}
+	Ok(())
 }
 
 fn regular(h: Handle) -> io::Result<(Handle, FileInfo)> {
@@ -408,6 +444,16 @@ pub(crate) fn stat(s: &mut Scratch, path: &Path, follow: bool) -> io::Result<Fil
 			stamp:     Stamp { dev: 0, ino: meta.creation_time(), mtime, ctime: mtime },
 		});
 	}
+	// NT object names do not accept Win32's forward-slash separators or its
+	// dot-component normalization. Let the Win32 layer parse those paths.
+	let bytes = path.as_os_str().as_encoded_bytes();
+	if bytes.contains(&b'/')
+		|| bytes
+			.split(|&b| b == b'\\')
+			.any(|part| part == b"." || part == b"..")
+	{
+		return stat_handle(&open_path(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE)?);
+	}
 	let bytes = path.as_os_str().as_encoded_bytes();
 	s.wname.clear();
 	let rest = if let Some(rest) = bytes.strip_prefix(br"\\?\") {
@@ -444,6 +490,12 @@ pub(crate) fn stat(s: &mut Scratch, path: &Path, follow: bool) -> io::Result<Fil
 	let status = unsafe { NtQueryFullAttributesFile(&raw const oa, &raw mut info) };
 	if status < 0 {
 		return Err(nt_error(status));
+	}
+	// NtQueryFullAttributesFile returns the reparse point's own attributes,
+	// not its target's. An ordinary open follows it and also rejects dangling
+	// links.
+	if info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return stat_handle(&open_path(path, FILE_READ_ATTRIBUTES | SYNCHRONIZE)?);
 	}
 	Ok(info_of(&info))
 }

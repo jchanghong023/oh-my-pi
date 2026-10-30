@@ -63,10 +63,17 @@ describe("compact upstream tool feedback", () => {
 		expect(patch.isCompactActualFileWrite()).toBe(true);
 	});
 
-	it("shows invocation errors without a process failure or user action", () => {
+	it("retains invocation errors for expanded and detailed views", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const { component } = bash();
 		component.updateResult({ content: [{ type: "text", text: "permission denied" }], isError: true }, false);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).not.toContain("permission denied");
+		expect(nativeActivity(component)).not.toContain("permission denied");
+		component.setExpanded(true);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("permission denied");
+		expect(nativeActivity(component)).toContain("permission denied");
+		component.setExpanded(false);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("permission denied");
 		expect(nativeActivity(component)).toContain("permission denied");
 	});

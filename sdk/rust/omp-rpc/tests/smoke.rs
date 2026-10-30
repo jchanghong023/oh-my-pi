@@ -14,11 +14,13 @@ use std::{
 use omp_rpc::*;
 use serde_json::{Map, Value, json};
 
+#[cfg(unix)]
 fn group_alive(pgid: libc::pid_t) -> bool {
 	// SAFETY: signal 0 only probes for a live member.
 	unsafe { libc::kill(-pgid, 0) == 0 }
 }
 
+#[cfg(unix)]
 fn group_members(pgid: libc::pid_t) -> Vec<String> {
 	let output = Process::new("pgrep")
 		.args(["-g", &pgid.to_string()])
@@ -28,6 +30,47 @@ fn group_members(pgid: libc::pid_t) -> Vec<String> {
 		.split_whitespace()
 		.map(str::to_owned)
 		.collect()
+}
+
+#[cfg(windows)]
+mod windows_process {
+	use std::{ffi::c_void, io};
+
+	#[link(name = "kernel32")]
+	unsafe extern "system" {
+		#[link_name = "OpenProcess"]
+		fn open_process(access: u32, inherit_handle: i32, process_id: u32) -> *mut c_void;
+		#[link_name = "WaitForSingleObject"]
+		fn wait_for_single_object(handle: *mut c_void, milliseconds: u32) -> u32;
+		#[link_name = "CloseHandle"]
+		fn close_handle(handle: *mut c_void) -> i32;
+	}
+
+	pub struct ProcessHandle(*mut c_void);
+
+	impl ProcessHandle {
+		pub fn open(pid: u32) -> Self {
+			const SYNCHRONIZE: u32 = 0x0010_0000;
+			// SAFETY: OpenProcess takes a process ID and returns an owned handle.
+			let handle = unsafe { open_process(SYNCHRONIZE, 0, pid) };
+			assert!(!handle.is_null(), "OpenProcess failed: {}", io::Error::last_os_error());
+			Self(handle)
+		}
+
+		pub fn assert_exited(&self) {
+			const WAIT_OBJECT_0: u32 = 0;
+			// SAFETY: self owns a valid process handle until it is dropped.
+			let result = unsafe { wait_for_single_object(self.0, 3_000) };
+			assert_eq!(result, WAIT_OBJECT_0, "server process did not exit (wait result {result:#x})");
+		}
+	}
+
+	impl Drop for ProcessHandle {
+		fn drop(&mut self) {
+			// SAFETY: the handle is owned by self and is closed exactly once.
+			unsafe { close_handle(self.0) };
+		}
+	}
 }
 
 fn repo_root() -> PathBuf {
@@ -180,9 +223,12 @@ fn smoke_real_server() {
 	println!("bash: exit {:?} output {:?}", bash.exit_code, bash.output);
 	assert_eq!(bash.output.trim(), "hi");
 
-	// The server leads its own process group; dropping the client must empty it.
+	#[cfg(unix)]
 	let pgid = libc::pid_t::try_from(client.pid().unwrap()).unwrap();
+	#[cfg(unix)]
 	println!("server pgid {pgid}, members {:?}", group_members(pgid));
+	#[cfg(windows)]
+	let server = windows_process::ProcessHandle::open(client.pid().unwrap());
 
 	drain(&events, &mut seen, Duration::from_secs(1));
 	let types: Vec<String> = seen.iter().map(notification_type).collect();
@@ -190,13 +236,24 @@ fn smoke_real_server() {
 	assert_clean(&seen);
 	assert!(types.iter().any(|kind| kind == "available_commands_update"));
 	assert!(types.iter().filter(|kind| *kind == "goal_updated").count() >= 3);
+	#[cfg(unix)]
 	let dropped = Instant::now();
 	drop(client);
-	while group_alive(pgid) {
-		assert!(dropped.elapsed() < Duration::from_secs(3), "server group {pgid} survived the drop");
-		std::thread::sleep(Duration::from_millis(20));
+	#[cfg(unix)]
+	{
+		// The server leads its own process group; dropping the client must empty
+		// it.
+		while group_alive(pgid) {
+			assert!(
+				dropped.elapsed() < Duration::from_secs(3),
+				"server group {pgid} survived the drop"
+			);
+			std::thread::sleep(Duration::from_millis(20));
+		}
+		println!("server group gone {:?} after drop", dropped.elapsed());
 	}
-	println!("server group gone {:?} after drop", dropped.elapsed());
+	#[cfg(windows)]
+	server.assert_exited();
 	let _ = std::fs::remove_dir_all(&agent_dir);
 }
 

@@ -99,6 +99,26 @@ async fn native_listing_reports_names_and_types() {
 	)]);
 }
 
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn native_stat_accepts_win32_separators_and_dot_components() {
+	let tmp = TempDir::new("stat-paths");
+	tmp.write("sub/file", b"contents");
+	let root = tmp.0.to_string_lossy();
+	let root = root.strip_prefix(r"\\?\").unwrap_or(&root);
+	let fs = Fs::native();
+	let mut session = fs.session();
+	for path in [
+		format!("{root}\\sub\\.\\file"),
+		format!("{root}\\sub\\..\\sub\\file"),
+		format!("{}/sub/./file", root.replace('\\', "/")),
+	] {
+		let info = session.stat(Path::new(&path), true).await.unwrap();
+		assert_eq!(info.file_type, Some(FileType::File), "{path}");
+		assert_eq!(info.size, 8, "{path}");
+	}
+}
+
 /// Full listings carry regular-file sizes and every entry's mtime.
 #[tokio::test(flavor = "multi_thread")]
 async fn native_full_listing_has_sizes_and_mtimes() {
@@ -130,6 +150,57 @@ async fn native_full_listing_has_sizes_and_mtimes() {
 	let child = s.open_child(&dir, b"sub").await.unwrap();
 	let got = names(s.list(&child, Detail::Full, sub.children).await.unwrap());
 	assert_eq!(got, [("x".to_owned(), FileType::File), ("y".to_owned(), FileType::File)]);
+}
+
+/// The directory index can lag behind the metadata of an open child.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread")]
+async fn native_full_listing_reads_current_directory_metadata() {
+	use std::os::windows::fs::OpenOptionsExt;
+
+	use windows_sys::Win32::Storage::FileSystem::{
+		FILE_FLAG_BACKUP_SEMANTICS, FILE_READ_ATTRIBUTES, FILE_WRITE_ATTRIBUTES,
+	};
+
+	let tmp = TempDir::new("full-current");
+	let sub = tmp.0.join("sub");
+	std::fs::create_dir(&sub).unwrap();
+	let handle = std::fs::OpenOptions::new()
+		.access_mode(FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES)
+		.custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+		.open(&sub)
+		.unwrap();
+	let old = UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+	handle
+		.set_times(std::fs::FileTimes::new().set_modified(old))
+		.unwrap();
+	let file = tmp.write("sub/file", b"hello");
+	let expected = handle.metadata().unwrap().modified().unwrap();
+	assert_ne!(expected, old);
+
+	let fs = Fs::native();
+	let mut session = fs.session();
+	let root = session.open_dir(&tmp.0).await.unwrap();
+	let listing = session.list(&root, Detail::Full, 0).await.unwrap();
+	let sub_record = listing
+		.records()
+		.iter()
+		.find(|r| listing.name(r) == b"sub")
+		.unwrap();
+	assert_eq!(
+		sub_record.mtime,
+		Some(i64::try_from(expected.duration_since(UNIX_EPOCH).unwrap().as_nanos()).unwrap())
+	);
+
+	let child = session.open_child(&root, b"sub").await.unwrap();
+	let listing = session.list(&child, Detail::Full, 0).await.unwrap();
+	let record = listing
+		.records()
+		.iter()
+		.find(|r| listing.name(r) == b"file")
+		.unwrap();
+	assert_eq!(record.size, Some(5));
+	assert_eq!(record.mtime, Some(mtime_nanos(&file)));
 }
 
 /// Directories larger than one listing buffer need several listing calls;

@@ -386,7 +386,7 @@ fn conflicting_options_are_rejected_with_reference_text() {
 		(&["-M", "a"], "Remote option must start with a dash: a"),
 		(&["--compare-dest=a", "--link-dest=b"], "ERROR: the --link-dest option conflicts with the --compare-dest option"),
 		(&["--read-batch=x", "--remove-source-files"], "--read-batch cannot be used with --remove-source-files"),
-		(&["--files-from=h:-"], "Invalid --files-from remote filename"),
+		(&["--files-from=host:-"], "Invalid --files-from remote filename"),
 	];
 	for (args, text) in cases {
 		let mut full = args.to_vec();
@@ -455,7 +455,7 @@ fn environment_defaults() {
 		assert_eq!(get(&["a", "b"], &[("RSYNC_ICONV", "utf8")]).iconv_opt, Some("utf8".into()));
 		assert_eq!(get(&["--iconv=-", "a", "b"], &[]).iconv_opt, None);
 	}
-	assert!(get(&["--files-from=h:/l", "a", "b"], &[]).trust_sender_args);
+	assert!(get(&["--files-from=host:/l", "a", "b"], &[]).trust_sender_args);
 }
 
 #[test]
@@ -471,6 +471,12 @@ fn files_from_host_specs() {
 	assert_eq!(files_from_hostspec(b"C:\\list", true), None);
 	assert_eq!(files_from_hostspec(b"\\\\srv\\share\\list", true), None);
 	assert!(files_from_hostspec(b"C:\\list", false).is_some());
+	assert_eq!(files_from_hostspec(b"c:relative", true), None);
+	assert_eq!(files_from_hostspec(b"C:/list", true), None);
+	assert_eq!(files_from_hostspec(b"h::module/list", true), Some((b"h".to_vec(), &b"module/list"[..])));
+	assert_eq!(files_from_hostspec(b"h:/list", false), Some((b"h".to_vec(), &b"/list"[..])));
+	assert_eq!(files_from_hostspec(b"host:/list", true), Some((b"host".to_vec(), &b"/list"[..])));
+	assert_eq!(files_from_hostspec(b"user@h:/list", true), Some((b"user@h".to_vec(), &b"/list"[..])));
 	assert!(is_absolute_operator_path(b"C:\\x", true));
 	assert!(is_absolute_operator_path(b"\\\\srv\\x", true));
 	assert!(!is_absolute_operator_path(b"C:x", true));
@@ -538,7 +544,7 @@ fn server_args_pull_match_reference() {
 		),
 		(&["-a", "--info=progress2,name0", "-i"], &["-logDtpre.iLsfxCIvu", "--info=NAME0"]),
 		(&["-a", "--files-from=-", "--from0"], &["-logDtpRe.LsfxCIvu", "--files-from=-", "--from0"]),
-		(&["-a", "--files-from=h:/list"], &["-logDtpRe.LsfxCIvu", "--files-from", "/list"]),
+		(&["-a", "--files-from=host:/list"], &["-logDtpRe.LsfxCIvu", "--files-from", "/list"]),
 		(&["-R", "--no-implied-dirs"], &["-Re.LsfxCIvu", "--no-implied-dirs"]),
 		(&["-a", "--checksum-seed=7", "--size-only", "--super", "--force"], &["-logDtpre.iLsfxCIvu", "--checksum-seed=7"]),
 		(
@@ -619,7 +625,7 @@ fn server_args_push_match_reference() {
 			&["-logDtpre.iLsfxCIvu", "--ignore-existing", "--existing", "--temp-dir", "/t\\ mp", "--fsync"],
 		),
 		(&["-a", "--files-from=-", "--from0"], &["-logDtpRe.LsfxCIvu"]),
-		(&["-a", "--files-from=h:/list"], &["-logDtpRe.LsfxCIvu", "--files-from", "/list"]),
+		(&["-a", "--files-from=host:/list"], &["-logDtpRe.LsfxCIvu", "--files-from", "/list"]),
 		(&["-a", "--modify-window=2"], &["-logDtpre.iLsfxCIvu", "--modify-window=2"]),
 		(&["-a", "-@-1"], &["-logDtpre.iLsfxCIvu", "-@-1"]),
 		(
@@ -721,7 +727,7 @@ fn server_argv_round_trips() {
 	assert!(s.inc_recurse_allowed(&s.client_info()));
 	assert!(s.trust_sender_args && s.trust_sender_filter);
 
-	let client = run(&["-rtv", "--partial-dir=.pd", "--delay-updates", "-yy", "--copy-dest=c", "src", "h:dst"]);
+	let client = run(&["-rtv", "--partial-dir=.pd", "--delay-updates", "-yy", "--copy-dest=c", "src", "host:dst"]);
 	let mut server_argv = argv(&["--server"]);
 	server_argv.extend(server_args(&client, PUSH));
 	server_argv.extend(argv(&[".", "dst"]));
@@ -751,7 +757,7 @@ fn server_sender_side_and_server_only_rules() {
 		"rsync: on remote machine: --foo: unknown option"
 	);
 	assert_eq!(
-		msg(&["--server", "--files-from=h:x", ".", "d"]),
+		msg(&["--server", "--files-from=host:x", ".", "d"]),
 		"rsync: The --files-from sent to the server cannot specify a host."
 	);
 	// Unknown --info words are ignored by a server.

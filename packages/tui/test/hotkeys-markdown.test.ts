@@ -52,7 +52,7 @@ describe("buildHotkeysMarkdown", () => {
 		expect(markdown).toContain("| `Ctrl+L` | Start/stop live voice mode (/live) |");
 		expect(markdown).toContain("| `Alt+R` | Retry last failed assistant turn |");
 		expect(markdown).toContain("| `Alt+Shift+P` | Toggle plan mode |");
-		expect(markdown).toContain("| `Ctrl+Shift+O` | Toggle tool activity visibility |");
+		expect(markdown).toMatch(/\| `Ctrl\+Shift\+O` \| [^|\n]*cycle[^|\n]*display[^|\n]*\|/i);
 		expect(markdown).toContain("| `#<number>` | GitHub issue/PR reference");
 		expect(markdown).toContain("| `#` / `#<text>` | Prompt actions");
 		for (const line of lines) {

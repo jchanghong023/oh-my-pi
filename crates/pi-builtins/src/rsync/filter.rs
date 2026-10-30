@@ -501,6 +501,11 @@ impl Filters {
 	/// `curr_dir`). Anchored per-directory rules and `/`-modifier rules match against it.
 	pub(crate) fn set_curr_dir(&mut self, dir: &[u8]) {
 		let mut d = dir.to_vec();
+		// The filter engine uses a single synthetic leading slash even for a
+		// Windows UNC path; local file opens restore its UNC prefix.
+		if cfg!(windows) && d.starts_with(b"//") {
+			d.remove(0);
+		}
 		while d.len() > 1 && d.last() == Some(&b'/') {
 			d.pop();
 		}

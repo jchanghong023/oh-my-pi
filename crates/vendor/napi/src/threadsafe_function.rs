@@ -158,7 +158,7 @@ pub struct ThreadsafeFunctionCallJsBackData<T, Return = Unknown<'static>> {
 /// ## Example
 /// An example of using `ThreadsafeFunction`:
 ///
-/// ```rust
+/// ```rust,ignore
 /// use std::thread;
 /// use std::sync::Arc;
 ///

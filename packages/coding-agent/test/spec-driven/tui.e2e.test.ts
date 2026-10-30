@@ -487,8 +487,11 @@ test.skipIf(!tuiTest)(
 				await tui("submit", "/dev next");
 				const execution = (await stage("executing")).run!;
 				await tui("submit", "/goal set manual-executor-objective");
-				await tui("submit", "/goal pause");
+				// Wait until goal activation has reached the executor before pausing;
+				// PTY submission alone does not mean /goal set has completed.
 				await tui("expect", "text", `${MARKER}_EXECUTOR_DIALOGUE: manual-executor-objective`, "--timeout", "30000");
+				await tui("submit", "/goal pause");
+				await tui("expect", "text", "Goal mode paused.", "--timeout", "30000");
 				await idle();
 				const goalEntries = (await nativeTranscript(execution, "executor"))
 					.trim()

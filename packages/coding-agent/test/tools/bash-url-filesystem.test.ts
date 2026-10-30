@@ -173,11 +173,21 @@ describe("bash replies through out://", () => {
 	});
 
 	it("drops an oversize reply instead of showing a truncated one, and refuses reads", async () => {
-		const big = await new BashTool({ ...session, tuiTranscript: true }).execute("call", {
-			command: "head -c 70000 /dev/zero | tr '\\0' a > out://; echo status=$?",
-		});
-		expect(big.content.find(c => c.type === "text")?.text).toContain("File too large");
+		await fs.writeFile(path.join(tempDir, "oversize.txt"), "a".repeat(70_000));
+		const frames: unknown[] = [];
+		const big = await new BashTool({ ...session, tuiTranscript: true }).execute(
+			"call",
+			{ command: "cat oversize.txt > out://; echo status=$?" },
+			undefined,
+			update => frames.push(update.details),
+		);
+		const text = big.content.find(c => c.type === "text")?.text;
+		expect(text).toContain("EFBIG");
+		expect(text).toContain("out:// replies are capped at 65536 bytes");
+		expect(text).toContain("status=1");
+		expect(text).not.toContain("a".repeat(1024));
 		expect(big.details?.replies).toBeUndefined();
+		expect(frames.every(frame => !(frame as { replies?: unknown } | undefined)?.replies)).toBe(true);
 
 		const read = await run("cat out://; echo status=$?");
 		expect(read.text).toContain("status=1");

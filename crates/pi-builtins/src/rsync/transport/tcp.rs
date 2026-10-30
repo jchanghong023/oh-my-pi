@@ -857,11 +857,13 @@ mod tests {
 	}
 
 	#[test]
-	fn unresolvable_host_reports_getaddrinfo() {
+	fn invalid_host_reports_getaddrinfo() {
 		let (logger, _) = quiet_logger();
 		let env = |_: &str| -> Option<String> { None };
+		// An embedded NUL cannot be passed to getaddrinfo. Unlike a reserved
+		// DNS name, it cannot be resolved by a network's wildcard DNS server.
 		let cfg = TcpConfig {
-			host: "nonexistent.invalid",
+			host: "nonexistent.invalid\0",
 			port: 873,
 			bind_address: None,
 			af_hint: 0,
@@ -872,8 +874,9 @@ mod tests {
 		};
 		let (host, _) = crate::host::Host::for_test("rsync", "", std::env::temp_dir());
 		let e = connect_tcp(&cfg, &host.child_env(), Arc::new(AtomicBool::new(false))).err().unwrap();
+		assert_eq!((e.code, e.site), (RERR_SOCKETIO, Some(("clientserver.c", 165))));
 		assert!(
-			e.message.unwrap().starts_with("rsync: getaddrinfo: nonexistent.invalid 873: "),
+			e.message.unwrap().starts_with("rsync: getaddrinfo: nonexistent.invalid\0 873: "),
 			"resolver message"
 		);
 	}

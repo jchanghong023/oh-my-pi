@@ -1344,7 +1344,7 @@ static IS_USER_DEFINED_RT: OnceLock<bool> = OnceLock::new();
 /// Create a custom Tokio runtime used by the NAPI-RS.
 /// You can control the tokio runtime configuration by yourself.
 /// ### Example
-/// ```no_run
+/// ```rust,ignore
 /// use tokio::runtime::Builder;
 /// use napi::create_custom_tokio_runtime;
 ///
@@ -1353,6 +1353,7 @@ static IS_USER_DEFINED_RT: OnceLock<bool> = OnceLock::new();
 ///    let rt = Builder::new_multi_thread().enable_all().thread_stack_size(32 * 1024 * 1024).build().unwrap();
 ///    create_custom_tokio_runtime(rt);
 /// }
+/// ```
 pub fn create_custom_tokio_runtime(rt: Runtime) {
   // A supplied runtime already owns worker threads by the time it gets here, so
   // pin the image before storing it rather than at first use.

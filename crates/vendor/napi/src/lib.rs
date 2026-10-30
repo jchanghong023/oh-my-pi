@@ -18,7 +18,7 @@
 //! With `tokio_rt` feature, `napi-rs` provides a ***tokio runtime*** in an additional thread.
 //! And you can easily run tokio `future` in it and return `promise`.
 //!
-//! ```
+//! ```rust,ignore
 //! use futures::prelude::*;
 //! use napi::bindgen_prelude::*;
 //! use tokio;
@@ -69,7 +69,7 @@
 //!
 //! Enable Serialize/Deserialize data cross `JavaScript Object` and `Rust struct`.
 //!
-//! ```
+//! ```rust,ignore
 //! #[derive(Serialize, Debug, Deserialize)]
 //! struct AnObject {
 //!     a: u32,

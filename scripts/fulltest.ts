@@ -7,7 +7,7 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
 import { buildChildEnv, bunTestSelection, testTimeoutMs } from "./ci-test-ts";
-import { gateRepoRoot, gatePoolWidth, fastcheckCommands } from "./fastcheck";
+import { gateRepoRoot, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
 import {
@@ -43,12 +43,9 @@ export function parseFulltestArgs(args: readonly string[]): FulltestOptions | nu
 	return { debug, ...(full ? { full } : {}), ...(limitSeconds === undefined ? {} : { limitSeconds }) };
 }
 
-/** Pool sizing assumes its cores are truly available to this scheduler. WSL2
- * vCPUs share the host's physical cores with the Windows side, so native pool
- * widths starve latency-sensitive PTY/CLI tests there; halve the budget on
- * WSL hosts and leave native Windows/Linux widths unchanged. */
+/** WSL2 vCPUs share the host's physical cores with the Windows side. */
 export function gateCpuBudget(cores: number = os.availableParallelism(), release: string = os.release()): number {
-	return release.toLowerCase().includes("microsoft") ? Math.max(4, Math.floor(cores / 2)) : cores;
+	return release.toLowerCase().includes("microsoft") ? Math.max(1, Math.floor(cores / 2)) : cores;
 }
 
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
@@ -269,6 +266,7 @@ interface FulltestInfrastructure {
 	fastcheckCommands: typeof fastcheckCommands;
 	bunTestSelection?: typeof bunTestSelection;
 	selectRustPackages?: typeof selectRustPackages;
+	cpuBudget?: number;
 }
 
 const fulltestInfrastructure: FulltestInfrastructure = {
@@ -607,10 +605,21 @@ async function runFulltestObserved(
 			for (const command of tests)
 				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		});
+		// Reserve capacity for static checks and subprocesses spawned by the suites.
+		// Bun and nextest otherwise each independently claim the whole machine.
+		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget(), process.platform, "");
+		const testBudget = Math.max(1, Math.floor(Math.max(2, cpuBudget - 4) / 2));
+		const withBudget = (command: GateCommand): GateCommand => ({
+			...command,
+			env: {
+				...command.env,
+				OMP_TEST_CPU_BUDGET: String(testBudget),
+				CARGO_BUILD_JOBS: String(testBudget),
+				RUST_TEST_THREADS: String(testBudget),
+			},
+		});
 		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
 		const rustChecksFinished = Promise.withResolvers<void>();
-		const cpuBudget = gateCpuBudget();
-		const concurrency = gatePoolWidth(cpuBudget, 4, 4);
 		const staticRun = (async () => {
 			try {
 				await attempt("static checks", () =>
@@ -624,7 +633,7 @@ async function runFulltestObserved(
 						let remainingRustChecks = checks.filter(command => command.label.startsWith("static/Rust")).length;
 						if (!remainingRustChecks) rustChecksFinished.resolve();
 						await runGateCommands(child, checks, {
-							concurrency: 2,
+							concurrency: cpuBudget <= 4 ? 1 : 2,
 							onCommandSettled: command => {
 								if (command.label.startsWith("static/Rust") && --remainingRustChecks === 0)
 									rustChecksFinished.resolve();
@@ -639,17 +648,26 @@ async function runFulltestObserved(
 		})();
 		const startupTests = tests.filter(command => command.label === "test/TypeScript startup suite");
 		const otherTests = tests.filter(
-			command => !command.label.startsWith("test/Rust") && command.label !== "test/TypeScript startup suite",
+			command =>
+				command.label !== "test/TypeScript fork feature suite" &&
+				command.label !== "test/TypeScript startup suite" &&
+				!command.label.startsWith("test/Rust"),
 		);
-		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
-		const testRun = attempt("non-Rust tests", () =>
-			runGateCommands(gate, otherTests, { concurrency: concurrency - 1 }),
-		);
+		const ordinaryTests = tests
+			.filter(command => command.label === "test/TypeScript fork feature suite")
+			.map(withBudget);
+		const rustTests = tests.filter(command => command.label.startsWith("test/Rust")).map(withBudget);
+		const testRun = (async () => {
+			if (cpuBudget <= 4) await staticRun;
+			await attempt("non-Rust tests", () => runGateCommands(gate, ordinaryTests, { concurrency: 1 }));
+		})();
 		const rustRun = (async () => {
-			await rustChecksFinished.promise;
+			if (cpuBudget <= 4) await testRun;
+			else await rustChecksFinished.promise;
 			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
 		})();
 		await Promise.all([staticRun, testRun, rustRun]);
+		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
 		await attempt("TypeScript startup tests", () => runGateCommands(gate, startupTests, { concurrency: 1 }));
 		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		logger.info("Fulltest source stability resolved", {

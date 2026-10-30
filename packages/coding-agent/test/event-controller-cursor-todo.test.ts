@@ -434,7 +434,7 @@ describe("compact Todo failure feedback", () => {
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();
 	});
 
-	it("shows a new live failure after a replayed result", () => {
+	it("replaces a replayed failure with the new live result in detailed views", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const f = createPresentationFixture();
 		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
@@ -446,7 +446,16 @@ describe("compact Todo failure feedback", () => {
 		);
 		expect(Bun.stripANSI(component.render(180).join("\n"))).not.toContain("OLD_FAILURE");
 		component.updateResult({ content: [{ type: "text", text: "NEW_LIVE_FAILURE" }], isError: true });
-		expect(Bun.stripANSI(component.render(180).join("\n"))).toContain("NEW_LIVE_FAILURE");
+		expect(Bun.stripANSI(component.render(180).join("\n"))).not.toContain("NEW_LIVE_FAILURE");
+		component.setExpanded(true);
+		const expanded = Bun.stripANSI(component.render(180).join("\n"));
+		expect(expanded).toContain("NEW_LIVE_FAILURE");
+		expect(expanded).not.toContain("OLD_FAILURE");
+		component.setExpanded(false);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		const detailed = Bun.stripANSI(component.render(180).join("\n"));
+		expect(detailed).toContain("NEW_LIVE_FAILURE");
+		expect(detailed).not.toContain("OLD_FAILURE");
 	});
 
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {

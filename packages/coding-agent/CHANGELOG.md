@@ -36,6 +36,10 @@
 
 ### Changed
 
+- Fix JTD output schemas with open referenced objects and escaped definition names.
+- Fix Windows file searches through links and paths containing dot components.
+- Keep fulltest workloads within a shared CPU budget so startup-sensitive checks can complete.
+
 - Update to upstream 18.14.0 while retaining fork offline models and orchestration.
 - Restore upstream HTML export resource loading, extension-tool schema validation, service log failure propagation, Web Search failure receipts, and JTD conversion.
 - Save the clean, compact, and detailed tiers as `display.mode`; remove independent compact/hide switches while retaining image-setting precedence.

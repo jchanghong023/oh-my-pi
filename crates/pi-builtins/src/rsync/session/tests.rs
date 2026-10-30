@@ -134,7 +134,7 @@ fn local_server_setup_failure_is_reported_once() {
 		format!(
 			"rsync: [Receiver] mkdir \"{}/dst/new/deeper\" failed: No such file or directory (2)\n\
 			 rsync error: error in file IO (code 11) at main.c(821) [Receiver=3.5.1]\n",
-			dir.display()
+			String::from_utf8_lossy(&crate::rsync::paths::path_bytes(&dir))
 		)
 	);
 	let (code, _, err) = run(&["-ai", "--temp-dir=../nope", "src/", "dst2/"], &dir);
@@ -506,13 +506,29 @@ fn delete_removes_extraneous_files() {
 	let dir = tempfile::tempdir().unwrap();
 	let src = dir.path().join("src");
 	make_tree(&src);
+	// Directory entry creation/deletion changes its mtime. Keep the source in
+	// a different second so the resulting itemized time change is deterministic.
+	let tree = crate::rsync::tree::Tree::open(
+		&pi_vfs::BlockingFs::native(),
+		dir.path(),
+		&crate::rsync::tree::TreeOpts::default(),
+	)
+	.unwrap();
+	let old_time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000);
+	tree.set_times(Path::new("src"), None, Some(pi_vfs::FileTime::At(old_time)), false).unwrap();
 	assert_eq!(run(&["-a", "src/", "dst/"], dir.path()).0, 0);
 	fs::write(dir.path().join("dst/extra"), b"gone").unwrap();
 	fs::create_dir(dir.path().join("dst/olddir")).unwrap();
+	// Do not depend on when the filesystem updates a directory after creating entries.
+	let changed_time = old_time + std::time::Duration::from_secs(60);
+	tree.set_times(Path::new("dst"), None, Some(pi_vfs::FileTime::At(changed_time)), false).unwrap();
 	let (code, out, err) = run(&["-ai", "--delete", "src/", "dst/"], dir.path());
 	assert_eq!((code, err.as_str()), (0, ""));
-	assert_eq!(out, "*deleting   olddir/\n*deleting   extra\n");
+	assert_eq!(out, "*deleting   olddir/\n*deleting   extra\n.d..t...... ./\n");
 	assert_same_tree(&src, &dir.path().join("dst"));
+	assert_eq!(mtime(&dir.path().join("dst")), old_time);
+	let (code, out, err) = run(&["-ai", "--delete", "src/", "dst/"], dir.path());
+	assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""));
 }
 
 #[test]

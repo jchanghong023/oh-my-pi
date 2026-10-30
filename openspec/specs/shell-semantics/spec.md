@@ -44,6 +44,21 @@ Shell MUST 将非 UTF-8 的原生字节参数原样交给被启动的程序，�
 - **WHEN** `export` 收到非 UTF-8 操作数
 - **THEN** MUST 在 stderr 输出 `export: <操作数>: invalid variable name`，并以用法错误码 `2` 退出。
 
+### Requirement: Windows 内建 rsync 路径
+
+Windows 内建 rsync MUST 正确处理本地盘符、UNC 和 verbatim 路径，同时保留远端操作数及过滤文件的边界。
+
+#### Scenario: 本地和远端路径
+
+- **WHEN** rsync 在 Windows 解析本地盘符路径或远端操作数
+- **THEN** 盘符路径 MUST 按本地路径处理，daemon 形式的远端操作数仍按远端处理；本地扫描和过滤文件访问 MUST 能处理 UNC 及 verbatim 路径。
+
+#### Scenario: 受限根目录内的过滤文件
+
+- **WHEN** 使用 `--confine-root` 和逐目录 merge 过滤规则
+- **THEN** 根目录内的过滤文件 MUST 生效，根目录外的过滤文件 MUST NOT 被读取；该约束不改变传输根目录本身。
+
+
 ### Requirement: Windows 上 `rmdir` 的路径分量边界
 
 Windows 的 Win32 路径会静默折叠尾随点与空格、以及 `.`／`..` 分量；`rmdir` MUST 在解析前拒绝会因此删除另一个目录或删除操作数所指目录之外的调用。

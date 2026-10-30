@@ -51,7 +51,7 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 				name: "write",
 				arguments: { path: "xd://eval", content: JSON.stringify({ language: "js" }) },
 			},
-			{ name: "write", arguments: { path: "xd://eval", content: "help" } },
+			{ name: "write", arguments: { path: "xd://eval", content: "?" } },
 			{ name: "write", arguments: { path: "xd://repo", content: JSON.stringify({ action: "status" }) } },
 			{
 				name: "write",
@@ -237,6 +237,14 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 					await session.sendUserMessage(request);
 					const result = session.agent.state.messages.filter(message => message.role === "toolResult").at(-1);
 					expect(result?.isError, JSON.stringify(result)).toBe(isError);
+					if (request === "show eval help without running it") {
+						expect(result?.details).toMatchObject({ xdev: { tool: "eval", mode: "help" } });
+						expect(result?.content).toEqual(
+							expect.arrayContaining([
+								expect.objectContaining({ type: "text", text: expect.stringContaining("# eval") }),
+							]),
+						);
+					}
 					expect(await evalPanel.status()).toMatchObject({
 						generation: checked.generation,
 						unchecked: false,

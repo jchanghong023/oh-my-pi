@@ -59,8 +59,8 @@ pub enum Detail {
 	#[default]
 	Minimal,
 	/// Also modification times for every entry and sizes for regular files.
-	/// macOS and Windows return these from the bulk listing; Linux and
-	/// providers pay one metadata call per entry.
+	/// macOS returns these from the bulk listing; Linux, Windows and providers
+	/// query metadata per entry.
 	Full,
 }
 

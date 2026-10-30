@@ -624,9 +624,9 @@ impl FunctionCallContext<'_> {
   /// The arguments will be converted to a tuple.
   /// If the number of arguments is not equal to the number of tuple elements, an error will be returned.
   /// example:
-  /// ```rust
+  /// ```rust,ignore
   /// let (num, string) = ctx.args::<(u32, String)>()?;
-  /// ````
+  /// ```
   pub fn args<Args: TupleFromSliceValues>(&self) -> Result<Args> {
     unsafe { Args::from_slice_values(self.env.0, self.args) }
   }

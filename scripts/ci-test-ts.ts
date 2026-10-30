@@ -1338,11 +1338,7 @@ export async function runBoundedPool<T>(
 // at the end; `--full` streams every chunk's output inline as it completes.
 // Gate-owned runs also stream authenticated failure notifications, but keep
 // executing independent work until the shared deadline or cancellation.
-async function runTestCommandsInParallel(
-	commands: TestCommand[],
-	concurrency: number,
-	localMode: boolean,
-): Promise<void> {
+async function runTestCommandsInParallel(commands: TestCommand[], concurrency: number): Promise<void> {
 	const env = buildChildEnv();
 	const failures: ChunkOutcome[] = [];
 	let completed = 0;
@@ -1519,13 +1515,7 @@ async function runTestCommandsInParallel(
 	}
 
 	const runStartedAt = performance.now();
-	await runBoundedPool(
-		commands,
-		concurrency,
-		command => localMode && isLimitedIntegrationCommand(command),
-		4,
-		runChunk,
-	);
+	await runBoundedPool(commands, concurrency, command => isLimitedIntegrationCommand(command), 4, runChunk);
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
@@ -1746,7 +1736,7 @@ if (import.meta.main) {
 	let failed = false;
 	try {
 		if (pooled && !isDryRun) {
-			await runTestCommandsInParallel(testCommands, poolWidth, localMode);
+			await runTestCommandsInParallel(testCommands, poolWidth);
 		} else {
 			let firstFailure: GateCommandError | undefined;
 			for (const testCommand of testCommands) {

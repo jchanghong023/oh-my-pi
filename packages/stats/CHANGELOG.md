@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Recover an unresponsive stats dashboard on Windows without terminating unrelated listeners.
+
 ## [18.14.0] - 2026-10-29
 
 ### Changed

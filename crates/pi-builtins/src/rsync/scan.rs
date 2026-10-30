@@ -428,9 +428,8 @@ impl Scanner {
 		let o = &ctx.opts;
 		let mut srcs = Vec::with_capacity(sources.len());
 		for s in sources {
-			let mut b = os_bytes(s).map_err(|e| RsyncError::new(RERR_SYNTAX, format!("{e}")))?.to_vec();
-			forward_slashes(&mut b);
-			srcs.push(b);
+			os_bytes(s).map_err(|e| RsyncError::new(RERR_SYNTAX, format!("{e}")))?;
+			srcs.push(path_bytes(Path::new(s)).into_owned());
 		}
 		let follow = o.copy_links || o.copy_unsafe_links || o.copy_dirlinks || o.insecure_links;
 		let access = if follow {
@@ -580,7 +579,7 @@ impl Scanner {
 			b.extend_from_slice(name);
 			b
 		};
-		paths::clean_fname_flags(&joined, CFN_COLLAPSE_DOT_DOT_DIRS | CFN_DROP_TRAILING_DOT_DIR)
+		paths::clean_local_fname_flags(&joined, CFN_COLLAPSE_DOT_DOT_DIRS | CFN_DROP_TRAILING_DOT_DIR)
 			.unwrap_or_else(|p| p)
 	}
 
@@ -920,6 +919,20 @@ impl Scanner {
 		let insecure = self.ctx.opts.insecure_links;
 		let confine = self.ctx.opts.confine_root.as_ref().map(PathBuf::from);
 		move |p: &[u8]| -> io::Result<Option<Vec<u8>>> {
+			// Filter paths use a Unix-style leading slash, including before a
+			// Windows drive. Restore the native absolute path before opening it.
+			#[cfg(windows)]
+			let path = if p.len() >= 4 && p[0] == b'/' && p[1].is_ascii_alphabetic() && &p[2..4] == b":/" {
+				bytes_path(&p[1..])?.to_path_buf()
+			} else if p.starts_with(b"/") && path_bytes(&base).starts_with(b"//") {
+				let mut unc = Vec::with_capacity(p.len() + 1);
+				unc.push(b'/');
+				unc.extend_from_slice(p);
+				bytes_path(&unc)?.to_path_buf()
+			} else {
+				join_name(&base, p)?
+			};
+			#[cfg(not(windows))]
 			let path = join_name(&base, p)?;
 			let opts = paths::OperatorOpts { insecure, confine: confine.as_deref() };
 			let Ok(mut file) = paths::open_operator_file_with(&fs, &path, &opts) else {
@@ -1837,7 +1850,7 @@ impl Scanner {
 		} else {
 			match memchr::memmem::find(&fbuf, b"/./") {
 				Some(p) => {
-					dir = Some(if p == 0 { b"/".to_vec() } else { paths::clean_fname(&fbuf[..p], false) });
+					dir = Some(if p == 0 { b"/".to_vec() } else { paths::clean_local_fname_flags(&fbuf[..p], 0).unwrap_or_else(|p| p) });
 					fname = fbuf[p + 3..].iter().copied().skip_while(|&b| b == b'/').collect();
 				},
 				None => {
@@ -1848,7 +1861,7 @@ impl Scanner {
 			if fname.starts_with(b"./") && fname.len() > 2 && *implied_dot_dir == 0 {
 				*implied_dot_dir = -1;
 			}
-			fname = paths::clean_fname_flags(&fname, CFN_KEEP_TRAILING_SLASH | CFN_DROP_TRAILING_DOT_DIR)
+			fname = paths::clean_local_fname_flags(&fname, CFN_KEEP_TRAILING_SLASH | CFN_DROP_TRAILING_DOT_DIR)
 				.unwrap_or_else(|p| p);
 			if fname.len() == 1 {
 				if fname[0] == b'/' {

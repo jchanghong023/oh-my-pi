@@ -132,14 +132,23 @@ it("follows a session moved off a contended file to its new id", async () => {
 		sessionManager,
 	);
 	const originalId = session.sessionId;
-	// Another writer replaces the journal, so the next persisted entry moves the
-	// session to a sibling file under a new id.
-	await Bun.write(
-		sessionFile,
-		`${JSON.stringify({ type: "session", version: 3, id: crypto.randomUUID(), timestamp: new Date().toISOString(), cwd: dir })}\n`,
-	);
-	sessionManager.appendMessage({ role: "user", content: "claims the replaced journal", timestamp: Date.now() });
+	// A foreign journal replaces this one. A guarded rewrite detects the size
+	// conflict and moves the session rather than overwriting the foreign file.
+	const originalSize = (await fs.stat(sessionFile)).size;
+	const replacement = `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: crypto.randomUUID(),
+		timestamp: new Date().toISOString(),
+		cwd: dir,
+		padding: "x".repeat(originalSize + 1),
+	})}\n`;
+	await Bun.write(sessionFile, replacement);
+	await sessionManager.rewriteEntries();
+	sessionManager.appendMessage({ role: "user", content: "continues in the sibling", timestamp: Date.now() });
 	await sessionManager.flush();
+	expect(await fs.readFile(sessionFile, "utf8")).toBe(replacement);
+	expect(sessionManager.getSessionFile()).not.toBe(sessionFile);
 
 	await session.prompt("hello");
 

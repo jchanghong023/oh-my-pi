@@ -1,6 +1,10 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TUI } from "@oh-my-pi/pi-tui";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
@@ -10,6 +14,13 @@ beforeAll(async () => {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	await initTheme(false, undefined, undefined, "dark", "light");
 }, 15_000);
+
+let previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+beforeEach(() => {
+	previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+	setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+});
+afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
 
 const SKIP_TEXT = "Skipped due to a queued background completion (job or supervised process).";
 
@@ -44,6 +55,10 @@ describe("mid-turn steering skip rendering", () => {
 			expect(renderTool("wait", result)).toBe("");
 			expect(renderTool("wait", result, { expanded: true })).toBe("");
 			expect(renderTool("wait", result, { rows: 1 })).toBe("");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			expect(renderTool("wait", result)).toBe("");
+			expect(renderTool("wait", result, { expanded: true })).toBe("");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		}
 	});
 
@@ -53,7 +68,9 @@ describe("mid-turn steering skip rendering", () => {
 			details: { __synthetic: true, source: "interrupt_skipped", executed: false },
 			isError: true,
 		});
-		expect(skippedEdit).toContain("Edit");
+		expect(skippedEdit).toMatch(/\bedit\b/i);
+		expect(skippedEdit).toContain("hub/src/viewer/session.ts");
+		expect(skippedEdit).toContain(SKIP_TEXT);
 
 		const realWait = renderTool(
 			"wait",

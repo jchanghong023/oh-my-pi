@@ -171,6 +171,14 @@ test("shared test concurrency limit respects platform and available cores", () =
 	}
 });
 
+test("shared CPU budget cannot exceed available cores or the worker ceiling", () => {
+	expect(testConcurrencyLimit(16, "win32", "6")).toBe(6);
+	expect(testConcurrencyLimit(4, "win32", "6")).toBe(4);
+	expect(testConcurrencyLimit(64, "win32", "100")).toBe(28);
+	expect(testConcurrencyLimit(16, "win32", "0")).toBe(16);
+	expect(testConcurrencyLimit(16, "win32", "invalid")).toBe(16);
+});
+
 test("chunk pools respect CPU, command count and explicit concurrency limits", () => {
 	expect(testConcurrency(40, undefined, 1)).toBe(1);
 	expect(testConcurrency(40, undefined, 6)).toBe(6);

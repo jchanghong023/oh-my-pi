@@ -77,10 +77,19 @@ describe("Settings layer refresh", () => {
 	});
 
 	it("retries a reload snapshot overtaken by an explicit user save", async () => {
-		await writeConfig({ temperature: 0.1 });
+		await writeConfig({ temperature: 0.1, other: "keep" });
 		const settings = await Settings.init({ cwd: startProject, agentDir });
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
+		const savedRead = Promise.withResolvers<void>();
+		const readActiveRaw = UserSettingsStore.prototype.readActiveRaw;
+		const savedReading = spyOn(UserSettingsStore.prototype, "readActiveRaw").mockImplementation(
+			async function (this: UserSettingsStore) {
+				const raw = await readActiveRaw.call(this);
+				savedRead.resolve();
+				return raw;
+			},
+		);
 		const readFile = fs.promises.readFile;
 		let intercepted = false;
 		const reading = spyOn(fs.promises, "readFile").mockImplementation((async (
@@ -95,17 +104,28 @@ describe("Settings layer refresh", () => {
 			return value;
 		}) as typeof readFile);
 		const reloading = settings.reloadFromDisk();
+		let saving: Promise<unknown> | undefined;
 		try {
 			await entered.promise;
 			const snapshot = await settings.readUserSetting("temperature");
-			await settings.saveUserSetting("temperature", 0.7, snapshot.revision!);
+			saving = settings.saveUserSetting("temperature", 0.7, snapshot.revision!);
+			// The save has committed when its readback starts, but its peer notification
+			// waits for the in-flight reload. Release the reload before awaiting the save.
+			await Promise.race([
+				savedRead.promise,
+				saving.then(() => {
+					throw new Error("Save completed without reading back the committed settings");
+				}),
+			]);
 			release.resolve();
-			await reloading;
+			await Promise.all([reloading, saving]);
 			expect(cfgTemperature.get(settings)).toBe(0.7);
+			expect(YAML.parse(await Bun.file(configPath()).text())).toEqual({ temperature: 0.7, other: "keep" });
 		} finally {
 			release.resolve();
 			reading.mockRestore();
-			await reloading;
+			savedReading.mockRestore();
+			await Promise.all([reloading, saving]);
 		}
 	});
 

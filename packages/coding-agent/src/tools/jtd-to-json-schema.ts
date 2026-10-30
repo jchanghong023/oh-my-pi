@@ -8,6 +8,7 @@
  * @see https://datatracker.ietf.org/doc/html/rfc8927
  */
 
+import { formatLocalRefPointer } from "@oh-my-pi/omptype";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { JTDPrimitive } from "./jtd-utils.js";
 import {
@@ -93,7 +94,7 @@ function convertSchemaForm(schema: unknown): unknown {
 		const result: Record<string, unknown> = {
 			type: "object",
 			properties,
-			additionalProperties: false,
+			additionalProperties: "additionalProperties" in schema && schema.additionalProperties === true,
 		};
 
 		if (required.length > 0) {
@@ -130,7 +131,7 @@ function convertSchemaForm(schema: unknown): unknown {
 
 	// Ref form: { ref: "MyType" } → { $ref: "#/$defs/MyType" }
 	if (isJTDRef(schema)) {
-		return { $ref: `#/$defs/${schema.ref}` };
+		return { $ref: formatLocalRefPointer(["$defs", schema.ref]) };
 	}
 
 	// Empty form: {} → {} (accepts anything)
@@ -365,7 +366,13 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 export function jtdToJsonSchema(schema: unknown): unknown {
 	if (isJTDSchema(schema)) {
 		// convertSchema is recursive; re-walking its JSON Schema output caused #1345.
-		return convertSchema(schema);
+		const converted = convertSchema(schema) as Record<string, unknown>;
+		if (isRecord(schema) && isRecord(schema.definitions)) {
+			converted.$defs = Object.fromEntries(
+				Object.entries(schema.definitions).map(([name, definition]) => [name, convertSchema(definition)]),
+			);
+		}
+		return converted;
 	}
 	return normalizeJsonSchemaNode(schema);
 }

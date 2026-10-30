@@ -354,7 +354,7 @@ fn inc_recursion_segment_order_matches_reference() {
 		assert_eq!(parents, ["a", "a/b", "a/b/d", "a/e", "c", "c/g"]);
 		// The first list's parent is its "." entry; gap indices resolve to parents.
 		assert_eq!(fl.segment_parent(0), Some(1));
-		assert_eq!(fl.entry(6).unwrap().name(), b"a");
+		assert_eq!(fl.entry(fl.segment_start(1).unwrap() - 1).unwrap().name(), b"a");
 	}
 	let dir_names: Vec<String> = (0..got.dir_count())
 		.map(|i| String::from_utf8(got.dir_entry(i).unwrap().name()).unwrap())
@@ -590,6 +590,25 @@ fn dir_merge_files_outside_confine_root_are_not_read() {
 	let ctx = ctx_for(o, proto(33, false), false, true, &base);
 	let (_, fl, _) = scan_with(&ctx, &["root/"], None, filters());
 	assert_eq!(names(&fl), [".", "keep", "secretword", "sub"]);
+}
+
+#[test]
+fn dir_merge_files_inside_confine_root_are_read_and_inherited() {
+	let (_tmp, base) = canonical_tmp();
+	let root = base.join("root");
+	std::fs::create_dir_all(root.join("sub")).unwrap();
+	write_file(&root.join(".rules"), b"secretword\n");
+	write_file(&root.join("secretword"), b"X\n");
+	write_file(&root.join("keep"), b"X\n");
+	write_file(&root.join("sub/secretword"), b"X\n");
+	write_file(&root.join("sub/keep"), b"X\n");
+	let mut filters = Filters::new(FilterConfig::default());
+	filters.add(crate::rsync::filter::RuleArg::Filter(b":- .rules"), &|_| Ok(Vec::new())).unwrap();
+	let mut o = base_opts();
+	o.confine_root = Some(root.into_os_string());
+	let ctx = ctx_for(o, proto(33, false), false, true, &base);
+	let (_, fl, _) = scan_with(&ctx, &["root/"], None, filters);
+	assert_eq!(names(&fl), [".", ".rules", "keep", "sub", "sub/keep"]);
 }
 
 #[cfg(unix)]
