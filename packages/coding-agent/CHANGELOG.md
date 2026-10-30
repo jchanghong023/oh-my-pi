@@ -99,6 +99,7 @@
 
 ### Fixed
 
+- Avoid forcing full TypeScript tests or UI smoke for changes limited to root documentation and `AGENTS.md` when a valid baseline exists.
 - Avoid spurious app-server command rejections when a session journal changes while being indexed.
 - Correct the Linux x64 musl baseline release target passed to Bun.
 

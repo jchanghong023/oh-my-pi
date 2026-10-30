@@ -73,6 +73,15 @@ test("Bun traces only known static inputs; unknown and dynamic inputs fall back"
 	}
 });
 
+test("root documentation does not force full Bun selection or hide changed runtime inputs", () => {
+	const docs = ["docs/guide.md", "docs-zh-CN/guide.md", "AGENTS.md"];
+	expect(bunRequiresFullSelection(docs)).toBe(false);
+	expect(bunRequiresFullSelection([...docs, "packages/coding-agent/src/tools/wiki.ts"])).toBe(false);
+	expect(bunRequiresFullSelection([...docs, "Cargo.lock"])).toBe(true);
+	expect(bunRequiresFullSelection(["packages/coding-agent/src/prompts/system.md"])).toBe(true);
+	expect(bunRequiresFullSelection(["packages/coding-agent/docs/guide.md"])).toBe(true);
+});
+
 test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it for --full", async () => {
 	const baseline = "a".repeat(40);
 	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
@@ -231,6 +240,8 @@ test("changed paths include staged, deleted, rename sides and untracked paths", 
 		await fs.mkdir(path.join(root, "scripts"));
 		for (const name of ["old.ts", "deleted.ts", "staged.ts"])
 			await fs.writeFile(path.join(root, "scripts", name), "original\n");
+		await Bun.write(path.join(root, "docs", "guide.md"), "original\n");
+		await Bun.write(path.join(root, "AGENTS.md"), "original\n");
 		await git("add", ".");
 		await git("commit", "-qm", "baseline");
 		const baseline = (await git("rev-parse", "HEAD")).trim();
@@ -238,6 +249,10 @@ test("changed paths include staged, deleted, rename sides and untracked paths", 
 		await git("add", "scripts/committed.ts");
 		await git("commit", "-qm", "later unverified commit");
 		expect(await captureChangedPaths(gate, root)).toEqual([]);
+		await Bun.write(path.join(root, "docs", "guide.md"), "changed\n");
+		await Bun.write(path.join(root, "AGENTS.md"), "changed\n");
+		await git("add", "AGENTS.md");
+		await Bun.write(path.join(root, "docs-zh-CN", "guide.md"), "untracked\n");
 		await git("mv", "scripts/old.ts", "scripts/new.ts");
 		await fs.rm(path.join(root, "scripts", "deleted.ts"));
 		await fs.writeFile(path.join(root, "scripts", "staged.ts"), "staged\n");
