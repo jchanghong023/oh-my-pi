@@ -22,7 +22,7 @@ OMP MUST 提供 `always-ask`、`always-ask-cached`、`write`、`yolo`、`guarded
 
 ### Requirement: 授权模式的放行边界
 
-每种模式 MUST 按工具声明的能力级别（读取、写入、执行）放行，语义为：`always-ask` 仅自动授权不涉及具体目标的读取级别，写入与执行仍需确认；`always-ask-cached` 对带文件或目录目标的读取调用先询问，并 MAY 按文件或目录记住读取或写入授权（记住范围为本次会话或跨会话），无目标时的只读调用与 `always-ask` 相同自动授权，执行级别仍需确认；`write` 自动授权读取与写入级别，执行仍需确认；`yolo` 放行全部级别；`guarded` 同样放行全部级别，但 MUST 保留工具声明的危险操作覆盖（critical override）逐次确认。
+每种模式 MUST 按工具声明的能力级别（读取、写入、执行）放行：`always-ask` 自动授权读取级别，写入与执行仍需确认；`always-ask-cached` 对带文件或目录目标的读取调用先询问，并 MAY 按文件或目录记住读取或写入授权（本次会话或跨会话），无目标时的只读调用自动授权，执行级别仍需确认；`write` 自动授权读取与写入级别，执行仍需确认；`yolo` 放行全部级别；`guarded` 同样放行全部级别，但 MUST 保留工具声明的危险操作覆盖（critical override）逐次确认。用户策略及受限目录的独立约束仍然有效。
 
 #### Scenario: guarded 放行普通调用但危险操作仍确认
 
@@ -36,8 +36,8 @@ OMP MUST 提供 `always-ask`、`always-ask-cached`、`write`、`yolo`、`guarded
 
 #### Scenario: always-ask 与 always-ask-cached 的差别
 
-- **WHEN** 同一带文件目标的读取调用在 `always-ask` 与 `always-ask-cached` 下分别执行，且此前未记住任何授权
-- **THEN** `always-ask` MUST NOT 记住该授权，后续同类调用 MUST 继续逐次要求确认；`always-ask-cached` MUST 先要求确认，并可把该文件或目录的读取授权记住，供后续调用复用。
+- **WHEN** 同一带文件目标的读取调用在 `always-ask` 与 `always-ask-cached` 下分别执行，且此前未记住任何授权，亦无其他策略要求确认
+- **THEN** `always-ask` 按读取级别自动放行；`always-ask-cached` MUST 先要求确认，并可把该文件或目录的读取授权记住，供后续调用复用。
 
 #### Scenario: 执行级调用仍需确认
 

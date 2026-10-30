@@ -45,6 +45,17 @@ describe("RPC native input handlers", () => {
 		expect(userTexts(await client.getMessages())).toEqual(["  transformed by hook\n"]);
 	}, 30_000);
 
+	test("/delete reaches the agent without replacing the session", async () => {
+		await client.promptAndWait("before delete");
+		const sessionId = (await client.getState()).sessionId;
+
+		const events = await client.promptAndWait("/delete");
+
+		expect(events.some(event => event.type === "agent_start")).toBe(true);
+		expect((await client.getState()).sessionId).toBe(sessionId);
+		expect(userTexts(await client.getMessages())).toEqual(["before delete", "/delete"]);
+	}, 30_000);
+
 	test("a later prompt does not overtake an earlier one whose handler is still running", async () => {
 		const results = new Map<string, RpcPromptResultFrame>();
 		const bothSettled = Promise.withResolvers<void>();

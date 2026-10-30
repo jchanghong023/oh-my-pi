@@ -431,9 +431,14 @@ export class ChildProcess<In extends InMask = InMask> {
 	/** SIGTERM the child (its group when it leads one), then SIGKILL if it outlives `gracefulMs`. */
 	async #signalChild(gracefulMs: number): Promise<void> {
 		const signal = (name: NodeJS.Signals) => {
+			if (this.#terminateGroup && process.platform !== "win32") {
+				try {
+					process.kill(-this.proc.pid, name);
+					return;
+				} catch {}
+			}
 			try {
-				if (this.#terminateGroup && process.platform !== "win32") process.kill(-this.proc.pid, name);
-				else this.proc.kill(name);
+				this.proc.kill(name);
 			} catch {}
 		};
 		if (gracefulMs >= 0) {

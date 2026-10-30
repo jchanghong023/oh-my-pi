@@ -112,14 +112,14 @@ describe("artifact reads through session approval", () => {
 		expect(approve("artifact://55:raw:4-4")).toBe("prompt");
 	});
 
-	it("preserves the SSH authority port when checking a selected read's grant", () => {
+	it("does not reuse an SSH exec grant, even for the same authority and selector", () => {
 		const read = readTool();
 		const grants = new SessionApprovals();
 		grants.record(approvalGrantKey("exec", "ssh://example.test:2222/log.txt"));
 
 		expect(
 			resolveApproval(read, { path: "ssh://example.test:2222/log.txt:raw:4-4" }, "always-ask-cached", {}, grants),
-		).toMatchObject({ policy: "allow", tier: "exec" });
+		).toMatchObject({ policy: "prompt", tier: "exec" });
 		expect(
 			resolveApproval(read, { path: "ssh://example.test:2223/log.txt:raw:4-4" }, "always-ask-cached", {}, grants),
 		).toMatchObject({ policy: "prompt", tier: "exec" });

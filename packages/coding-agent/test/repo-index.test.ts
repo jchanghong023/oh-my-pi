@@ -53,6 +53,56 @@ afterEach(async () => {
 });
 
 describe("repository index with real SQLite and native Python parsing", () => {
+	it("rejects queries over 500 UTF-16 units before opening a query snapshot", async () => {
+		const { service } = await fixture();
+		for (const action of ["search", "symbol"] as const) {
+			expect((await service[action]("😀".repeat(250))).hits).toEqual([]);
+		}
+		const read = vi.spyOn(service.storage, "readAsync");
+		try {
+			for (const action of ["search", "symbol"] as const) {
+				for (const query of ["x".repeat(501), `${"😀".repeat(250)}x`]) {
+					await expect(service[action](query, { cursor: "invalid" })).rejects.toThrow(
+						"Repository query exceeds 500 characters; narrow it.",
+					);
+				}
+			}
+			expect(read).not.toHaveBeenCalled();
+		} finally {
+			read.mockRestore();
+		}
+	});
+
+	it("clamps pagination limits for text and symbol queries", async () => {
+		const { service } = await fixture(
+			Object.fromEntries(
+				Array.from({ length: 25 }, (_, index) => [
+					`file${String(index).padStart(2, "0")}.py`,
+					"def page_beacon(): pass\n",
+				]),
+			),
+		);
+		await service.build();
+		for (const action of ["search", "symbol"] as const) {
+			for (const [limit, expected] of [
+				[100, 20],
+				[20, 20],
+				[0, 1],
+				[-5, 1],
+				[2.9, 2],
+				[Number.NaN, 20],
+				[Number.POSITIVE_INFINITY, 20],
+				[Number.NEGATIVE_INFINITY, 20],
+			]) {
+				const page = await service[action]("page_beacon", { limit });
+				expect(page.hits).toHaveLength(expected);
+				expect(page.cursor).toBeDefined();
+				const next = await service[action]("page_beacon", { limit, cursor: page.cursor });
+				expect(next.hits.length).toBeLessThanOrEqual(expected);
+			}
+		}
+	});
+
 	it("uses a later whole-word occurrence for ranking and original-source snippets", async () => {
 		const { service } = await fixture({
 			"a.py": "# overtimeout first\n# timeout exact later\n",
@@ -376,7 +426,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		await expect(service.search("shared-pagination-needle", { cursor: first.cursor })).rejects.toThrow();
 	});
 
-	it("clamps page limits to the documented default of 20 and maximum of 50, flooring finite fractional values", async () => {
+	it("clamps page limits to the documented default and maximum of 20, flooring finite fractional values", async () => {
 		const files = Object.fromEntries(
 			Array.from({ length: 60 }, (_, i) => [
 				`src/cl${String(i).padStart(2, "0")}.py`,
@@ -390,7 +440,7 @@ describe("repository index with real SQLite and native Python parsing", () => {
 			(await service.search(query, options)).hits.length;
 		expect(await sizes(undefined)).toBe(20);
 		expect(await sizes({})).toBe(20);
-		expect(await sizes({ limit: 500 })).toBe(50);
+		expect(await sizes({ limit: 500 })).toBe(20);
 		expect(await sizes({ limit: 7.9 })).toBe(7);
 		// Non-finite limits fall back to the default page size.
 		expect(await sizes({ limit: Number.NaN })).toBe(20);

@@ -465,11 +465,11 @@ export class ExtensionToolWrapper<TParameters extends TSchema = TSchema, TDetail
 					reason: approvalCheck.reason,
 					appendix: safetyAppendix,
 					sessionSubject: sessionScope?.subject,
-					grants: cacheTargets,
+					grants: cacheTargets && resolved.tier !== "exec",
 				});
 				approved = answer !== "deny";
 				if (answer === "session" && sessionScope) this.runner.grantSessionApproval(sessionScope.key);
-				if (typeof answer === "object" && approvalGrants) {
+				if (typeof answer === "object" && approvalGrants && resolved.tier !== "exec") {
 					recordApprovalGrant(this.tool, resolvedArgs, approvalGrants, resolved.tier, answer);
 				}
 			} catch (err) {

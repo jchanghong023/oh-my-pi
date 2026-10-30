@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Avoid delivering duplicate termination signals to process-group members or newly spawned cleanup children.
+
 ## [18.14.0] - 2026-10-29
 
 ### Added

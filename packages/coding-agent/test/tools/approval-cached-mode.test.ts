@@ -97,6 +97,35 @@ function chooseAnswer(prompt: ExtensionApprovalPrompt, answer: ExtensionApproval
 }
 
 describe("always-ask-cached resolution", () => {
+	it("allows targeted reads in always-ask but asks in cached mode until granted", () => {
+		const agentDir = freshAgentDir();
+		const read = pathTool("read", "read", agentDir);
+		const args = { path: "notes.txt" };
+		const grants = getApprovalGrants(agentDir, "s1");
+		expect(resolveApproval(read, args, "always-ask", {}, grants)).toMatchObject({ policy: "allow", source: "mode" });
+		expect(resolveApproval(read, args, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "prompt",
+			source: "mode",
+		});
+		grants.record(approvalGrantKey("read", approvalTargetKey(agentDir, args.path)!), "read", "session");
+		expect(resolveApproval(read, args, "always-ask-cached", {}, grants).policy).toBe("allow");
+		expect(resolveApproval(read, args, "always-ask", { read: "prompt" }, grants).policy).toBe("prompt");
+		expect(resolveApproval(read, args, "always-ask", { read: "deny" }, grants).policy).toBe("deny");
+	});
+
+	it("does not allow exec-tier targets through remembered grants", () => {
+		const agentDir = freshAgentDir();
+		const exec = pathTool("exec_tool", "exec", agentDir);
+		const args = { path: "notes.txt" };
+		const grants = getApprovalGrants(agentDir, "s1");
+		grants.record(approvalGrantKey("exec", approvalTargetKey(agentDir, args.path)!), "exec", "session");
+		expect(resolveApproval(exec, args, "always-ask-cached", {}, grants)).toMatchObject({
+			policy: "prompt",
+			source: "mode",
+		});
+		expect(resolveApproval(exec, args, "always-ask-cached", { exec_tool: "allow" }, grants).policy).toBe("allow");
+	});
+
 	it("allows a call only once every target is granted at its tier or above", () => {
 		const agentDir = freshAgentDir();
 		const cwd = path.join(agentDir, "work");
@@ -485,6 +514,22 @@ describe("always-ask-cached wrapper cycle", () => {
 		);
 		await wrapper.execute("o3", { path: "a.txt" }, undefined, undefined, context(session));
 		expect(select).toHaveBeenCalledTimes(3);
+	});
+
+	it("asks for each targeted exec call without offering a target grant", async () => {
+		const cwd = path.join(agentDir, "work");
+		const session = SessionManager.inMemory(cwd);
+		const tool = pathTool("probe_exec", "exec", cwd);
+		const args = { path: "a.txt" };
+		const prompt = await promptFor(tool, args, { grants: false });
+		const select = vi.fn<ExtensionUIContext["select"]>(async (title, choices, options) => {
+			expect(choices).toEqual(["允许", "拒绝"]);
+			return chooseAnswer(prompt, "once")(title, choices, options);
+		});
+		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
+		await wrapper.execute("e1", args, undefined, undefined, context(session));
+		await wrapper.execute("e2", args, undefined, undefined, context(session));
+		expect(select).toHaveBeenCalledTimes(2);
 	});
 
 	it("offers an exec call without targets the session answer, not grants", async () => {

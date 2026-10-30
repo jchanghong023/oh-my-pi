@@ -80,6 +80,7 @@ function hasAppliedFileChange(details: unknown): boolean {
 	if (Array.isArray(details.perFileResults)) {
 		return details.perFileResults.some(file => isRecord(file) && file.isError !== true && hasAppliedFileChange(file));
 	}
+	if (Array.isArray(details.conflictChanges) && details.conflictChanges.some(hasAppliedFileChange)) return true;
 	return (
 		(typeof details.diff === "string" && details.diff.length > 0) ||
 		details.op === "create" ||
@@ -418,7 +419,6 @@ export class ToolExecutionComponent extends Container {
 	#compactIntent: string | undefined;
 	#showImages: boolean;
 	#isPartial = true;
-	#historicalResult = false;
 	// A background task whose call already returned; later async job frames are
 	// partial updates, but the block is ready to retire as history.
 	#parkedBackground = false;
@@ -431,6 +431,7 @@ export class ToolExecutionComponent extends Container {
 	#blockVersion = 0;
 	#lastDisplayKey: string | undefined;
 	#displayCompactToolActivity = false;
+	#displayImageTierCompact = false;
 	// Bumped whenever a render input that #rebuildDisplay consumes but the memo
 	// key cannot cheaply hash changes: streamed call args, native edit-diff
 	// previews, and Kitty PNG conversions. Folded into the dirty key so those
@@ -707,9 +708,7 @@ export class ToolExecutionComponent extends Container {
 		Object.defineProperty(this.#renderState, "settledBashJobs", { get: jobs, configurable: true });
 	}
 
-	// Replay only suppresses the generic error override; later live frames regain it.
-	// Renderer-specific critical feedback and input requests remain visible.
-	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string, historical = false): void {
+	updateResult(result: ToolResultFrame, isPartial = false, _toolCallId?: string, _historical = false): void {
 		const hadNoResult = this.#result === undefined;
 		const wasPartialResult = this.#result !== undefined && this.#isPartial;
 		const firstResultRepaintShapePainted = this.#firstResultViewportRepaintShapePainted;
@@ -720,7 +719,6 @@ export class ToolExecutionComponent extends Container {
 		// Renderers receive sanitized details for display; raw paths are available
 		// separately for links and media through the built-in render context.
 		const details = sanitizeTextDeep(result.details);
-		this.#historicalResult = historical;
 		this.#result = details === result.details ? result : { ...result, details };
 		this.#resultVersion++;
 		this.#blockVersion++;
@@ -978,13 +976,36 @@ export class ToolExecutionComponent extends Container {
 			return true;
 		}
 		if (!this.#result) return false;
-		if (this.#result.isError && !this.#historicalResult && !this.#isBenignSkip()) return true;
+		if (this.#lateDiagnostics?.some(file => file.messages.length > 0 || file.errored)) return true;
+		if (this.#result.isError && this.isCompactWriteCall() && hasAppliedFileChange(this.#result.details)) return true;
+		if (this.#toolName === "bash" && isRecord(this.#result.details)) {
+			const details = this.#result.details;
+			if (
+				(typeof details.exitCode === "number" && details.exitCode !== 0) ||
+				(isRecord(details.async) && details.async.state === "failed")
+			)
+				return true;
+		}
 		if (this.#renderer?.hasCompactCriticalFeedback?.(this.#result)) return true;
 		const details = this.#result.details;
 		const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
 		if (dispatch?.mode !== "execute" || typeof dispatch.tool !== "string") return false;
 		const innerRenderer = toolRenderers[dispatch.tool];
-		return innerRenderer?.hasCompactCriticalFeedback?.({ ...this.#result, details: dispatch.inner }) === true;
+		const innerResult = { ...this.#result, details: dispatch.inner };
+		if (
+			this.#result.isError &&
+			(dispatch.tool === "edit" || dispatch.tool === "apply_patch" || dispatch.tool === "write") &&
+			hasAppliedFileChange(dispatch.inner)
+		)
+			return true;
+		if (
+			dispatch.tool === "bash" &&
+			isRecord(dispatch.inner) &&
+			typeof dispatch.inner.exitCode === "number" &&
+			dispatch.inner.exitCode !== 0
+		)
+			return true;
+		return innerRenderer?.hasCompactCriticalFeedback?.(innerResult) === true;
 	}
 
 	isCompactWriteCall(): boolean {
@@ -1563,8 +1584,11 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#nativeView(host: NativeHostKinds): NativeToolView {
 		const status = this.#nativeStatus();
+		const showResultImages =
+			this.#showImages && !displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity;
 		const options: RenderResultContextOptions = {
 			...host,
+			media: host.media && showResultImages,
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
 			compactToolActivity: displayPreferences.compactToolActivity,
@@ -1589,7 +1613,13 @@ export class ToolExecutionComponent extends Container {
 			const merged = renderer.mergeCallAndResult === true;
 			const resultView = result
 				? renderer.describeResult?.(
-						{ content: result.content, details: result.details, isError: result.isError },
+						{
+							content: showResultImages
+								? result.content
+								: result.content.filter(block => block.type !== "image"),
+							details: result.details,
+							isError: result.isError,
+						},
 						options,
 						args,
 					)
@@ -1647,7 +1677,13 @@ export class ToolExecutionComponent extends Container {
 
 	/** Result images under the renderer's body, minus those the body already shows (as an `image` blob or a `media` file). */
 	#nativeResultImages(body: readonly NativeChild[] | undefined): NativeNode[] {
-		if (!this.#result || !this.#showImages) return [];
+		if (
+			!this.#result ||
+			!this.#showImages ||
+			displayPreferences.compactToolActivity ||
+			displayPreferences.hideToolActivity
+		)
+			return [];
 		const shown = shownMedia(body);
 		const mediaPath = readMediaPath(this.#rawDetails);
 		if (mediaPath && shown.paths.has(mediaPath)) return [];
@@ -1686,13 +1722,14 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${this.#compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
+		const key = `${displayPreferences.compactToolActivity}|${displayPreferences.hideToolActivity}|${this.#compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
 
 		this.#rebuildDisplay();
 		this.#displayBuilt = true;
 		this.#displayCompactToolActivity = this.#compactToolActivity;
+		this.#displayImageTierCompact = displayPreferences.compactToolActivity || displayPreferences.hideToolActivity;
 	}
 
 	#rendererFlag(name: "forceResultViewportRepaintOnSettle"): boolean {
@@ -1734,7 +1771,13 @@ export class ToolExecutionComponent extends Container {
 			return [];
 		}
 		if (this.#compactToolActivity) return this.#renderCompact(width, true);
-		if (this.#displayCompactToolActivity || this.#renderState.expanded !== this.#expanded) this.#updateDisplay();
+		if (
+			this.#displayCompactToolActivity ||
+			this.#renderState.expanded !== this.#expanded ||
+			this.#displayImageTierCompact !==
+				(displayPreferences.compactToolActivity || displayPreferences.hideToolActivity)
+		)
+			this.#updateDisplay();
 		let lines = super.render(width);
 		if (this.#allocation < 3) {
 			// A squeezed allocation degrades only blocks that genuinely overflow it.
@@ -1753,7 +1796,7 @@ export class ToolExecutionComponent extends Container {
 
 	#renderCompact(width: number, singleLine = false): readonly string[] {
 		if (singleLine) {
-			if (this.#result?.isError && !this.#isBenignSkip()) return [];
+			if (this.#result?.isError) return [];
 			const summary = this.#compactActivity();
 			const status = this.#nativeStatus();
 			const ms = this.#elapsedMs(status);
@@ -2133,7 +2176,14 @@ export class ToolExecutionComponent extends Container {
 
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
-				if (TERMINAL.imageProtocol && this.#showImages && img.data && img.mimeType) {
+				if (
+					TERMINAL.imageProtocol &&
+					this.#showImages &&
+					!displayPreferences.compactToolActivity &&
+					!displayPreferences.hideToolActivity &&
+					img.data &&
+					img.mimeType
+				) {
 					// Use converted PNG for Kitty protocol if available
 					const source: ImageContent = { type: "image", data: img.data, mimeType: img.mimeType };
 					const converted =

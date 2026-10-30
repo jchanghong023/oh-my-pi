@@ -10,6 +10,8 @@
 
 ### Changed
 
+- Compact tool-count summaries stay directly above the latest tool previews rather than above earlier failure output.
+- Compact mode hides ordinary tool invocation errors until expanded while retaining execution failures and actionable feedback.
 - Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.
 - Compact Bash failures use a neutral card with a highlighted failure status, keep diagnostics ahead of trailing Bun exit wrappers, and leave full output and technical details available when expanded.
 - In offline Unicode mode, use distinct basic symbols for clear, extension, guide, repair, quit, token-count, and Hook icons missing from older terminal fonts; preserve other icons, presets, and explicit theme overrides.

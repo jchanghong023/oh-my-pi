@@ -8,6 +8,7 @@ import { Settings } from "../../src/config/settings";
 import { ompSaveReceiptSchema, ompTeamConfigSchema } from "../../src/modes/zcode/schema/omp-config-extension";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigError, TeamConfigService } from "../../src/team/config";
+import { cfgTeamMembers } from "../../src/team/settings";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 // Real YAML, Settings CAS and catalog resolution; no provider requests or replacement storage implementation.
@@ -98,6 +99,118 @@ describe("TeamConfigService", () => {
 		expect(ompSaveReceiptSchema.parse(result)).toEqual(result);
 		expect(result.effectiveMatchesRequested).toBe(true);
 		expect(notifications).toEqual([{ type: "settings_changed", scope: "user" }]);
+	});
+
+	it("notifies after a committed write even if the initiating panel closes during the save", async () => {
+		const before = await service.getConfig();
+		let current = true;
+		service = new TeamConfigService({
+			getSettings: () => settings,
+			getModelRegistry: () => registry,
+			isCurrent: () => current,
+			emit: frame => notifications.push(frame),
+		});
+		const saving = service.setConfig({ scope: "user", expectedRevision: before.revision!, members: [] });
+		current = false;
+		const result = await saving;
+		expect(result.write.status).toBe("saved");
+		expect(notifications).toEqual([{ type: "settings_changed", scope: "user" }]);
+	});
+
+	it("refreshes consumers in the same user root across projects without disturbing their drafts", async () => {
+		const otherCwd = temporary.join("other-project");
+		const otherRoot = temporary.join("other-agent");
+		fs.mkdirSync(otherCwd, { recursive: true });
+		fs.mkdirSync(otherRoot, { recursive: true });
+		const independent = await Settings.loadIsolated({ agentDir, cwd: otherCwd });
+		const masked = independent.overlay({ "team.members": ["test/Qwen3.8-27B"] });
+		const unrelated = await Settings.loadIsolated({ agentDir: otherRoot, cwd });
+		const otherRegistry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings: masked });
+		const consumer = new TeamConfigService({ getSettings: () => masked, getModelRegistry: () => otherRegistry });
+		const draft = [{ provider: "test", modelId: "Qwen3.8-27B" }];
+		const reads: Promise<Awaited<ReturnType<TeamConfigService["getConfig"]>>>[] = [];
+		let unrelatedChanges = 0;
+		const unsubscribe = masked.onEffectiveChange(
+			[cfgTeamMembers],
+			() => reads.push(consumer.getConfig({ clientRevision: "draft", members: draft })),
+			{ includeUserChanges: true },
+		);
+		const unsubscribeUnrelated = unrelated.onEffectiveChange([cfgTeamMembers], () => unrelatedChanges++, {
+			includeUserChanges: true,
+		});
+		try {
+			const before = await service.getConfig();
+			const result = await service.setConfig({
+				scope: "user",
+				expectedRevision: before.revision!,
+				members: [{ provider: "test", modelId: "Qwen3.8-35B" }],
+			});
+			expect(result.write.status).toBe("saved");
+			expect(reads.length).toBeGreaterThan(0);
+			const snapshot = (await Promise.all(reads)).at(-1)!;
+			expect(snapshot.userMembers?.map(slot => slot.rawSelector)).toEqual(["test/Qwen3.8-35B"]);
+			expect(snapshot.preview?.clientRevision).toBe("draft");
+			expect(draft).toEqual([{ provider: "test", modelId: "Qwen3.8-27B" }]);
+			expect(cfgTeamMembers.get(independent)).toEqual(["test/Qwen3.8-35B"]);
+			expect(cfgTeamMembers.get(masked)).toEqual(["test/Qwen3.8-27B"]);
+			expect(unrelatedChanges).toBe(0);
+		} finally {
+			unsubscribe();
+			unsubscribeUnrelated();
+		}
+	});
+
+	it("refreshes a consumer whose user root is a directory alias", async () => {
+		const alias = temporary.join("agent-alias");
+		// TempDir accepts a relative prefix; symlink targets must not be relative to the link's parent.
+		fs.symlinkSync(path.resolve(agentDir), alias, process.platform === "win32" ? "junction" : "dir");
+		expect(fs.realpathSync(alias)).toBe(fs.realpathSync(agentDir));
+		const independent = await Settings.loadIsolated({ agentDir: alias, cwd });
+		let changes = 0;
+		const unsubscribe = independent.onEffectiveChange([cfgTeamMembers], () => changes++, {
+			includeUserChanges: true,
+		});
+		try {
+			const before = await service.getConfig();
+			await service.setConfig({
+				scope: "user",
+				expectedRevision: before.revision!,
+				members: [{ provider: "test", modelId: "Qwen3.8-35B" }],
+			});
+			expect(changes).toBeGreaterThan(0);
+			expect(cfgTeamMembers.get(independent)).toEqual(["test/Qwen3.8-35B"]);
+		} finally {
+			unsubscribe();
+		}
+	});
+
+	it("does not notify independent consumers for an unchanged save or a revision conflict", async () => {
+		const independent = await Settings.loadIsolated({ agentDir, cwd });
+		let changes = 0;
+		const unsubscribe = independent.onEffectiveChange([cfgTeamMembers], () => changes++, {
+			includeUserChanges: true,
+		});
+		try {
+			const before = await service.getConfig();
+			const unchanged = await service.setConfig({
+				scope: "user",
+				expectedRevision: before.revision!,
+				members: null,
+			});
+			// Establish a valid baseline, then save the same value again.
+			const current = await service.getConfig();
+			changes = 0;
+			const same = await service.setConfig({ scope: "user", expectedRevision: current.revision!, members: null });
+			expect(same.write.status).toBe("unchanged");
+			expect(changes).toBe(0);
+			await expect(
+				service.setConfig({ scope: "user", expectedRevision: before.revision!, members: [] }),
+			).rejects.toBeInstanceOf(TeamConfigError);
+			expect(unchanged.write.status).toBe("saved");
+			expect(changes).toBe(0);
+		} finally {
+			unsubscribe();
+		}
 	});
 
 	it("projects preserved invalid slots and defaults without changing file bytes or actual snapshot", async () => {

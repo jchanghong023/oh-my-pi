@@ -678,6 +678,26 @@ describe("ZCode session interactions", () => {
 		interactions.cancel();
 		await answer;
 	});
+	it("uses the selected presentation owner for command interactions", async () => {
+		const session = {
+			subscribe: () => () => {},
+			agent: { addBeforeQueuedMessageDequeueHook: () => () => {} },
+		} as unknown as AgentSession;
+		const updates: unknown[] = [];
+		let selected: ZCodeInteractions | undefined;
+		const host = new ZCodeCommandHost(session, ".", pending => updates.push(pending), {
+			createInteractions: (publish, output) => (selected = new ZCodeInteractions(publish, output)),
+		});
+		if (selected === undefined) {
+			throw new Error("Interaction factory was not called");
+		}
+		expect(host.interactions).toBe(selected);
+		const answer = host.interactions.ui.confirm("Confirm", "Continue?");
+		expect(updates).toHaveLength(1);
+		expect(host.resolveInteraction(host.interactions.pending[0]!.interactionId, { optionId: "yes" })).toBe(true);
+		expect(await answer).toBe(true);
+		expect(updates.at(-1)).toEqual([]);
+	});
 	it("reads cwd from the native session owner rather than the constructor snapshot", () => {
 		const processCwd = process.cwd();
 		let cwd = "/native/original";

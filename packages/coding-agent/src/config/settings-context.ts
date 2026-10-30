@@ -4,10 +4,27 @@ import type { Settings } from "./settings";
 
 /** Weak ownership lets scoped lookup and test reset reach isolated instances without retaining them. */
 const liveSettingsInstances = new Set<WeakRef<Settings>>();
+const collectedSettingsInstances = new FinalizationRegistry<WeakRef<Settings>>(ref => {
+	liveSettingsInstances.delete(ref);
+});
 const activeSettingsScope = new AsyncLocalStorage<Settings>();
 
 export function registerSettingsInstance(instance: Settings): void {
-	liveSettingsInstances.add(new WeakRef(instance));
+	const ref = new WeakRef(instance);
+	liveSettingsInstances.add(ref);
+	collectedSettingsInstances.register(instance, ref, ref);
+}
+
+/** Visit live instances without retaining them beyond the current operation. */
+export function forEachSettingsInstance(visit: (instance: Settings) => void): void {
+	for (const ref of liveSettingsInstances) {
+		const instance = ref.deref();
+		if (instance) visit(instance);
+		else {
+			liveSettingsInstances.delete(ref);
+			collectedSettingsInstances.unregister(ref);
+		}
+	}
 }
 
 /** The current async session's settings, without a process-global fallback. */
@@ -46,6 +63,7 @@ export function findSettingsContext(cwd?: string, agentDir?: string): Settings |
 export function resetSettingsInstancesForTest(): void {
 	for (const ref of liveSettingsInstances) {
 		ref.deref()?.cancelPendingSaves();
+		collectedSettingsInstances.unregister(ref);
 	}
 	liveSettingsInstances.clear();
 }

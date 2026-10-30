@@ -67,11 +67,17 @@ class TeamConfigPanel implements Component {
 	open(): void {
 		this.#handle = this.ctx.ui.showOverlay(this, { anchor: "center", width: "100%", maxHeight: "100%", margin: 0 });
 		this.ctx.ui.setFocus(this);
-		this.#unsubscribe = this.#settings.onEffectiveChange([cfgTeamMembers], () => {
-			if (!this.#current()) return;
-			this.#message = "检测到外部配置变化；保留草稿。R 重读并比较后才可基于新版本保存。";
-			void this.#read(false);
-		});
+		this.#unsubscribe = this.#settings.onEffectiveChange(
+			[cfgTeamMembers],
+			() => {
+				if (!this.#current()) return;
+				this.#message = this.#dirty()
+					? "检测到外部配置变化；保留草稿。R 重读并比较后才可基于新版本保存。"
+					: "检测到外部配置变化；正在重读。";
+				void this.#read(false);
+			},
+			{ includeUserChanges: true },
+		);
 		void this.#read(true);
 	}
 	#close(): void {
@@ -93,8 +99,14 @@ class TeamConfigPanel implements Component {
 			if (!this.#current() || generation !== this.#readGeneration || clientRevision !== String(this.#clientRevision))
 				return;
 			const first = !this.#snapshot;
+			const refreshDraft =
+				first ||
+				(snapshot.userMembers !== undefined &&
+					!this.#dirty() &&
+					!this.#saving &&
+					snapshot.revision !== this.#revision);
 			this.#snapshot = snapshot;
-			if (first) {
+			if (refreshDraft) {
 				this.#draft =
 					snapshot.userMembers?.map(slot =>
 						slot.model
@@ -102,12 +114,17 @@ class TeamConfigPanel implements Component {
 							: { rawSelector: slot.rawSelector },
 					) ?? null;
 				this.#baseline = JSON.stringify(this.#draft);
-				this.#message = "本地有序草稿；重复模型是独立代理槽位。主模型仅对齐与综合，不会改变。";
-			}
-			if (first || adoptRevision) this.#revision = snapshot.revision;
-			if (adoptRevision && !first)
+				this.#revision = snapshot.revision;
+				this.#message = first
+					? "本地有序草稿；重复模型是独立代理槽位。主模型仅对齐与综合，不会改变。"
+					: "已重读外部配置。";
+			} else if (adoptRevision) {
+				this.#revision = snapshot.revision;
 				this.#message = "已重读当前两端原值供比较；草稿保持不变。再次 S 将使用本次读取的版本。";
-			if (first) void this.#preview();
+			} else if (snapshot.revision !== this.#revision) {
+				this.#message = "外部版本已改变；草稿保留。R 重读比较后再保存。";
+			}
+			if (refreshDraft) void this.#preview();
 		} catch (error) {
 			if (this.#current() && generation === this.#readGeneration)
 				this.#message = `读取失败：${printable(error instanceof Error ? error.message : error)}`;

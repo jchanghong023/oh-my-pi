@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "bun:test";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
-import { cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgDisplayCompactToolActivity, cfgDisplayHideToolActivity } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import { cfgHideThinkingBlock } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 describe("InputController tool output expansion", () => {
 	it("expands children and forces a full repaint so every live block re-renders", () => {
@@ -52,62 +52,27 @@ describe("InputController tool output expansion", () => {
 });
 
 describe("InputController tool activity visibility", () => {
-	it("persists the toggle, preserves transient children, and reveals tools collapsed", () => {
-		const pendingUserMessage = { kind: "pending-user" };
-		const loadingIndicator = { kind: "loading" };
-		const assistant = new AssistantMessageComponent();
-		const setToolResultImagesVisible = vi.spyOn(assistant, "setToolResultImagesVisible");
-		const children = [pendingUserMessage, assistant, loadingIndicator];
-		const clear = vi.fn();
-		const addChild = vi.fn();
-		const rebuildChatFromMessages = vi.fn();
+	it("cycles the same clean, compact and detailed settings as /display", () => {
 		const settings = Settings.isolated();
-		const clearInlineImages = vi.fn();
-		const resetDisplay = vi.fn();
 		const showStatus = vi.fn();
-		const setToolActivityVisible = vi.fn();
-		const ctx = {
-			hideToolActivity: false,
-			toolOutputExpanded: true,
-			settings,
-			chatContainer: { children, clear, addChild, setToolActivityVisible },
-			rebuildChatFromMessages,
-			viewSession: { agent: { state: {} } },
-			showStatus,
-			ui: { clearInlineImages, resetDisplay },
-		};
-		const controller = new InputController(ctx as unknown as InteractiveModeContext) as unknown as InputController & {
-			toggleToolActivityVisibility(): void;
-		};
+		const controller = new InputController({ settings, showStatus } as unknown as InteractiveModeContext);
+		cfgDisplayHideToolActivity.set(settings, false);
+		cfgDisplayCompactToolActivity.set(settings, true);
 
 		controller.toggleToolActivityVisibility();
-
-		expect(ctx.hideToolActivity).toBe(true);
-		expect(cfgDisplayHideToolActivity.get(settings)).toBe(true);
-		expect(ctx.chatContainer.children).toEqual(children);
-		expect(clear).not.toHaveBeenCalled();
-		expect(addChild).not.toHaveBeenCalled();
-		expect(rebuildChatFromMessages).not.toHaveBeenCalled();
-		expect(clearInlineImages).toHaveBeenCalledTimes(1);
-		expect(resetDisplay).toHaveBeenCalledTimes(1);
-		expect(clearInlineImages.mock.invocationCallOrder[0]).toBeLessThan(resetDisplay.mock.invocationCallOrder[0]);
-		expect(showStatus).toHaveBeenLastCalledWith("Tool activity: hidden");
-		expect(setToolResultImagesVisible).toHaveBeenLastCalledWith(false);
-		expect(setToolActivityVisible).toHaveBeenLastCalledWith(false);
-
-		controller.toggleToolActivityVisibility();
-
-		expect(ctx.hideToolActivity).toBe(false);
-		expect(ctx.toolOutputExpanded).toBe(false);
 		expect(cfgDisplayHideToolActivity.get(settings)).toBe(false);
-		expect(ctx.chatContainer.children).toEqual(children);
-		expect(clear).not.toHaveBeenCalled();
-		expect(addChild).not.toHaveBeenCalled();
-		expect(rebuildChatFromMessages).not.toHaveBeenCalled();
-		expect(clearInlineImages).toHaveBeenCalledTimes(1);
-		expect(resetDisplay).toHaveBeenCalledTimes(2);
-		expect(showStatus).toHaveBeenLastCalledWith("Tool activity: visible");
-		expect(setToolResultImagesVisible).toHaveBeenLastCalledWith(true);
-		expect(setToolActivityVisible).toHaveBeenLastCalledWith(true);
+		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(false);
+		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
+		expect(showStatus).toHaveBeenLastCalledWith("Display: detailed");
+
+		controller.toggleToolActivityVisibility();
+		expect(cfgDisplayHideToolActivity.get(settings)).toBe(true);
+		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(true);
+		expect(cfgHideThinkingBlock.get(settings)).toBe(true);
+
+		controller.toggleToolActivityVisibility();
+		expect(cfgDisplayHideToolActivity.get(settings)).toBe(false);
+		expect(cfgDisplayCompactToolActivity.get(settings)).toBe(true);
+		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
 	});
 });

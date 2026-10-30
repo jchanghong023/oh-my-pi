@@ -37,6 +37,11 @@
 ### Changed
 
 - Update to upstream 18.14.0 while retaining fork offline models, orchestration, and self-contained HTML exports.
+- Limit Repo search and symbol queries and page sizes consistently across tools and ZCode.
+- Notify same-process Team settings and app-server clients when user configuration is saved; preserve unsaved TUI drafts during refresh.
+- Apply desktop presentation to app-server sessions and keep display shortcuts aligned with `/display`.
+- Keep completion thinking disabled for smol and default tiers, including fallback models.
+- Require confirmation for execution in ask-and-remember mode even when a target was previously approved.
 
 - Raise the Windows Bun and Rust Nextest test concurrency ceiling to 28, including startup-sensitive tests, bounded by available CPU cores, runnable tasks and any lower Bun concurrency override; preserve test isolation, timeouts and assertions.
 - Use cargo-delta to select affected Rust fork packages for fulltest, with conservative full-scope fallback and explicit selection reporting.

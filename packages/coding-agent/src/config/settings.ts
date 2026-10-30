@@ -64,6 +64,7 @@ import {
 } from "./user-settings";
 import {
 	findSettingsContext,
+	forEachSettingsInstance,
 	getActiveSettings as getContextActiveSettings,
 	registerSettingsInstance,
 	resetSettingsInstancesForTest,
@@ -158,7 +159,7 @@ type ProjectSettingsReadResult = {
 type PersistedReloadMode = "strict" | "keep-last-good";
 
 /** Layer refreshes serialized by `Settings.#exclusive`: disk reloads and cwd re-scopes. */
-type LayerRefreshKind = PersistedReloadMode | "rescope";
+type LayerRefreshKind = PersistedReloadMode | "rescope" | "user-setting";
 
 /** Quiet period after the last config-file event before the watcher reloads from disk. */
 const CONFIG_WATCH_DEBOUNCE_MS = 200;
@@ -490,14 +491,18 @@ export class ModelRoleConflictError extends Error {
 }
 
 /** Receives the setting whose effective value changed (see {@link Settings.onEffectiveChange}). */
-type SettingChangeListener = (setting: AnySetting) => void;
+type SettingChangeListener = (setting: AnySetting, userChange?: boolean) => void;
 
 /** Calls each listener with `setting`; a throwing listener is logged and never blocks the rest. */
-function runChangeListeners(listeners: ReadonlySet<SettingChangeListener>, setting: AnySetting): void {
+function runChangeListeners(
+	listeners: ReadonlySet<SettingChangeListener>,
+	setting: AnySetting,
+	userChange = false,
+): void {
 	// Snapshot: a listener may unsubscribe itself or others mid-dispatch.
 	for (const listener of Array.from(listeners)) {
 		try {
-			listener(setting);
+			listener(setting, userChange);
 		} catch (error) {
 			logger.warn("Settings: effective-change listener failed", { path: setting.id, error: String(error) });
 		}
@@ -804,13 +809,13 @@ export class Settings {
 		// The parent holds only a weak reference, so a discarded child is collected without an
 		// explicit dispose; its listener unsubscribes on the next parent change.
 		const ref = new WeakRef(child);
-		const forward: SettingChangeListener = setting => {
+		const forward: SettingChangeListener = (setting, userChange) => {
 			const target = ref.deref();
 			if (!target) {
 				this.#childForwarders.delete(forward);
 				return;
 			}
-			target.#applyParentChange(setting);
+			target.#applyParentChange(setting, userChange);
 		};
 		this.#childForwarders.add(forward);
 		return child;
@@ -835,11 +840,11 @@ export class Settings {
 	}
 
 	/** Re-merges after a parent change and forwards it unless the child's own layers pin the value. */
-	#applyParentChange(setting: AnySetting): void {
+	#applyParentChange(setting: AnySetting, userChange = false): void {
 		this.#syncParent();
 		const own = getByPath(this.#mergeOwnLayers(this.#ownLayers()), setting.segments);
-		if (own !== undefined && (typeof own !== "object" || own === null || Array.isArray(own))) return;
-		this.#notifyChange(setting);
+		if (!userChange && own !== undefined && (typeof own !== "object" || own === null || Array.isArray(own))) return;
+		this.#notifyChange(setting, userChange);
 	}
 
 	/** Re-merges an overlay whose parent changed since the last merge (every parent write bumps its revision). */
@@ -979,20 +984,84 @@ export class Settings {
 		});
 		this.#persistedMutationGeneration++;
 		let refresh = false;
+		let committed = false;
+		let receipt: UserSettingSaveResult | undefined;
 		try {
-			const result = await store.save([{ segments: setting.segments, value }], expectedRevision);
-			refresh = result.write.status === "saved" || result.write.status === "unchanged";
-			return result;
+			receipt = await store.save([{ segments: setting.segments, value }], expectedRevision);
+			refresh = receipt.write.status === "saved" || receipt.write.status === "unchanged";
+			committed = receipt.write.status === "saved";
+			return receipt;
 		} catch (error) {
 			refresh =
 				error instanceof UserSettingError &&
 				(error.data.write.status === "saved" || error.data.write.status === "unknown");
+			committed = error instanceof UserSettingError && error.data.write.status === "saved";
 			throw error;
 		} finally {
 			this.#persistedMutationGeneration++;
 			// Adopting only the active layer preserves unrelated pending writes and never flushes them.
-			if (refresh) await this.#refreshSavedGlobal(store);
+			try {
+				if (refresh) {
+					try {
+						await this.#refreshSavedGlobal(store);
+					} catch (error) {
+						if (receipt) {
+							throw new UserSettingError(
+								"execution_failed",
+								`Failed to read saved user settings: ${String(error)}`,
+								{ ...receipt, saveState: "failed" },
+							);
+						}
+						logger.warn("Settings: failed to read saved user settings", { error: String(error) });
+					}
+				}
+			} finally {
+				if (committed) await this.#notifyUserSettingSaved(setting);
+			}
 		}
+	}
+
+	/** Refresh peers sharing this user root, then notify user-layer observers even when overrides mask the value. */
+	async #notifyUserSettingSaved(setting: AnySetting): Promise<void> {
+		const peers: Promise<void>[] = [];
+		let root: string;
+		try {
+			root = await fs.promises.realpath(this.#agentDir);
+		} catch (error) {
+			if (!isEnoent(error)) {
+				logger.warn("Settings: failed to resolve committed user settings root", { error: String(error) });
+				return;
+			}
+			root = path.resolve(this.#agentDir);
+		}
+		const rootKey = process.platform === "win32" ? root.toLowerCase() : root;
+		forEachSettingsInstance(instance => {
+			if (instance.#parent || instance.#savesCancelled || !instance.#configPath) return;
+			peers.push(
+				(async () => {
+					const instanceRoot = await fs.promises.realpath(instance.#agentDir).catch(error => {
+						if (!isEnoent(error)) throw error;
+						return path.resolve(instance.#agentDir);
+					});
+					if ((process.platform === "win32" ? instanceRoot.toLowerCase() : instanceRoot) !== rootKey) return;
+					await instance.#exclusive("user-setting", async () => {
+						if (instance.#savesCancelled) return;
+						const store = new UserSettingsStore({
+							agentDir: root,
+							migrate: raw => instance.#migrateRawSettings(raw, false),
+						});
+						await instance.#refreshSavedGlobal(store);
+						if (!instance.#savesCancelled) instance.#notifyChange(setting, true);
+					});
+				})().catch(error => {
+					logger.warn("Settings: failed to refresh committed user setting", {
+						path: setting.id,
+						error: String(error),
+					});
+				}),
+			);
+		});
+		await Promise.all(peers);
 	}
 
 	/**
@@ -1173,21 +1242,29 @@ export class Settings {
 	}
 
 	/** Runs the listeners observing `setting`, then forwards the change to overlay children. */
-	#notifyChange(setting: AnySetting): void {
+	#notifyChange(setting: AnySetting, userChange = false): void {
 		const listeners = this.#changeListeners[setting.slot];
-		if (listeners) runChangeListeners(listeners, setting);
-		if (this.#childForwarders.size > 0) runChangeListeners(this.#childForwarders, setting);
+		if (listeners) runChangeListeners(listeners, setting, userChange);
+		if (this.#childForwarders.size > 0) runChangeListeners(this.#childForwarders, setting, userChange);
 	}
 
 	/**
 	 * Registry plumbing behind `Derived.listen` and `effect`: calls `listener` synchronously
-	 * whenever the effective value of one of `sources` changes in this instance. Returns the
-	 * unsubscribe. Consumers observe settings through handles instead.
+	 * whenever the effective value of one of `sources` changes in this instance. Consumers that
+	 * also read the user layer may opt into committed user-setting notifications, even when a
+	 * higher-priority layer masks the effective value. Returns the unsubscribe.
 	 */
-	onEffectiveChange(sources: readonly AnySetting[], listener: SettingChangeListener): () => void {
-		for (const source of sources) (this.#changeListeners[source.slot] ??= new Set()).add(listener);
+	onEffectiveChange(
+		sources: readonly AnySetting[],
+		listener: SettingChangeListener,
+		options?: { includeUserChanges?: boolean },
+	): () => void {
+		const wrapped: SettingChangeListener = (setting, userChange) => {
+			if (!userChange || options?.includeUserChanges) listener(setting, userChange);
+		};
+		for (const source of sources) (this.#changeListeners[source.slot] ??= new Set()).add(wrapped);
 		return () => {
-			for (const source of sources) this.#changeListeners[source.slot]?.delete(listener);
+			for (const source of sources) this.#changeListeners[source.slot]?.delete(wrapped);
 		};
 	}
 
@@ -3997,9 +4074,10 @@ export class Settings {
 	async #refreshSavedGlobal(store: UserSettingsStore): Promise<void> {
 		for (;;) {
 			const generation = this.#persistedMutationGeneration;
-			const raw = await store.readActiveRaw().catch(() => undefined);
+			const raw = await store.readActiveRaw();
+			if (this.#savesCancelled) return;
 			if (generation !== this.#persistedMutationGeneration) continue;
-			if (raw) this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir);
+			this.#adoptSavedGlobal(raw, this.#configPath ?? this.#agentDir);
 			return;
 		}
 	}

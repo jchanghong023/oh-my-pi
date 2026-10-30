@@ -413,12 +413,7 @@ export class TeamConfigService {
 			}
 		}
 		const committed = receipt.write.status === "saved";
-		if (
-			committed &&
-			this.deps.isCurrent?.() !== false &&
-			this.deps.getSettings() === this.#settings &&
-			this.deps.getModelRegistry() === this.#registry
-		) {
+		if (committed) {
 			try {
 				this.deps.emit?.({ type: "settings_changed", scope: "user" });
 			} catch (error) {

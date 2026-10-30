@@ -15,7 +15,6 @@ OMP MUST 将 ZCode 的模型目录、role 保存及临时模型操作适配到�
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-
 ZCode 提供完整 role 配置界面和持久保存能力，包括未配置项、自定义 role、保存结果、并发修改及配置来源的处理。
 
 ZCode 的 role 保存请求必须路由原生 Settings 服务并投影其回执与冲突，不在 Host 或 GUI 拼写配置；界面取消不派发保存。
@@ -29,9 +28,6 @@ ZCode 的 role 保存请求必须路由原生 Settings 服务并投影其回执�
 - 非空原生模型配置来源具有绝对优先级；来源缺失或选项为空时，仅沿当前已有机制显示真实空态或等待态，不回落 Host 注入目录，不调用账户同步、注入 provider 源或新增目录查询协议，不捏造模型或就绪状态。
 - 原生 registry／Settings 是模型、role 与认证事实的唯一 owner；app-server 只投影，Host 只路由／保留已接受投影，GUI 只消费和提交既有模型操作。桌面与手机向同一 owner 投递，分别保留 desktop-continuous 与 web-remote-replayable 的恢复语义。
 
-
-
-
 **多 profile、多 role 与临时模型界面**
 
 - 三者是 OMP 核心优势，均须在界面提供可发现入口；不能把 OMP 压缩为 ZCode CLI 的单套模型设置。页面显示实际执行端、当前原生 profile、配置来源及作用范围；无法支持的操作仍保留可见并明确原因。
@@ -43,7 +39,6 @@ ZCode 的 role 保存请求必须路由原生 Settings 服务并投影其回执�
 - GUI 临时模型选择请求绑定显式目标会话，显示该会话返回的实际生效值；取消不派发修改，目标会话或连接代际变化后不应用迟到结果。
 
 **Team 模型配置接口**
-
 
 **能力发现与通用约定**
 
@@ -214,3 +209,12 @@ ZCode 的 `session/configure` MUST 强制携带非空 `sessionId`，并支持 `g
 
 - **WHEN** 客户端向 `session/configure` 提交 `get_team_config`、`get_team_models` 或 `set_team_config`
 - **THEN** OMP MUST 在请求参数校验时拒绝，Team 配置 MUST 只经 `omp/team/configure` 完成，会话配置方法不得成为第二个入口。
+
+### Requirement: Team 配置保存通知桌面面板
+
+Team 配置成功保存后，OMP 与 ZCode MUST 复用现有 `settings_changed {scope:"user"}` 通知，使同进程中已打开的配置面板能够发现变化；不得新增另一套订阅总线。
+
+#### Scenario: 其他面板收到配置变化
+
+- **WHEN** Team 用户配置保存成功且其他 Team 配置面板已打开
+- **THEN** 面板收到通知后按需重读；存在未保存草稿时提示外部变化而不覆盖草稿。跨进程正确性依靠重新读取和版本检查，不依赖本进程广播。

@@ -128,9 +128,9 @@ describe("compact original-position continuous runs", () => {
 		write.write = write.actualWrite = true;
 		add(root, "THREE", "FOUR");
 		expect(view(root).split("\n")).toEqual([
-			"工具调用 3 次",
 			"FAILURE",
 			"",
+			"工具调用 3 次",
 			"ONE",
 			"TWO",
 			"",
@@ -139,6 +139,7 @@ describe("compact original-position continuous runs", () => {
 			"THREE",
 			"FOUR",
 		]);
+		expect(native(root)).toMatch(/FAILURE[^]*工具调用 3 次[^]*ONE[^]*TWO/);
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
 		expect(view(root).split("\n")).toEqual(["FAILURE", "", "ONE", "", "TWO", "", "WRITE", "", "THREE", "", "FOUR"]);
 	});
@@ -236,6 +237,7 @@ describe("compact original-position continuous runs", () => {
 		const root = transcript();
 		const calls = add(root, ...Array.from({ length: 8 }, (_, index) => `CALL_${index}`));
 		for (const call of calls) call.finalized = false;
+		calls[1]!.failed = true;
 		const failure = calls[6]!;
 		failure.failed = true;
 		failure.render = () => Array.from({ length: 20 }, (_, index) => `RAW_FAILURE_${index}`);
@@ -247,9 +249,15 @@ describe("compact original-position continuous runs", () => {
 			root.acknowledgeFinalizedBatch(batch.id);
 			expect(view(root).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次"]);
 		}
+		expect(Bun.stripANSI(archived.join("\n"))).toContain("CALL_1");
+		expect(Bun.stripANSI(archived.join("\n"))).not.toContain("工具调用");
+		expect(view(root)).toMatch(/CALL_1[^]*工具调用 8 次[^]*RAW_FAILURE_19[^]*CALL_7/);
+		calls[6]!.finalized = true;
+		calls[7]!.finalized = true;
+		const finalBatch = root.peekFlushBatch(80)!;
+		archived.push(...finalBatch.rows);
+		root.acknowledgeFinalizedBatch(finalBatch.id);
 		expect(Bun.stripANSI(archived.join("\n")).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次"]);
-		expect(view(root)).toContain("RAW_FAILURE_19");
-		expect(view(root)).toContain("CALL_7");
 		root.addChild(new Text("NEXT_SEGMENT", 0, 0));
 		add(root, "NEXT_OLD", "NEXT_ONE", "NEXT_TWO");
 		expect(view(root).match(/工具调用 \d+ 次/g)).toEqual(["工具调用 8 次", "工具调用 3 次"]);

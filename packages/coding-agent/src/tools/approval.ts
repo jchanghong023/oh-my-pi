@@ -187,9 +187,9 @@ function coveringGrantKeys(target: string, capability: ToolTier): string[] {
 }
 
 /**
- * Mode step for `always-ask-cached`, reached only when no tool or user policy decided. A call
- * whose cache targets are all granted runs; a read-tier call with no targets runs as in
- * `always-ask`; everything else prompts. Without `grants` nothing counts as remembered.
+ * Mode step for `always-ask-cached`, reached only when no tool or user policy decided. Read and
+ * write calls whose cache targets are all granted run; a read-tier call with no targets runs as in
+ * `always-ask`. Execution still prompts even when its target has a remembered grant.
  */
 function resolveCachedModeApproval(
 	tool: ApprovalSubject,
@@ -203,6 +203,9 @@ function resolveCachedModeApproval(
 		source: "mode" as const,
 		...(decision.policyKey ? { policyKey: decision.policyKey } : {}),
 	};
+	if (decision.tier === "exec") {
+		return { ...base, policy: "prompt", ...(decision.reason ? { reason: decision.reason } : {}) };
+	}
 	const targets = approvalCacheTargets(tool, args);
 	if (targets.length === 0) {
 		if (decision.tier === "read") return { ...base, policy: "allow" };
@@ -355,8 +358,8 @@ export function approvalRestrictions(
  *     the invoking tool's own policy as the fallback when the user set none for
  *     the keyed sub-tool, unless `fallbackToToolPolicy` is false.
  *  2. User per-tool override, if set and valid.
- *  3. Active mode tier comparison. In `always-ask-cached`, a call whose
- *     `approvalCacheTargets` are all granted in `grants` is allowed instead
+ *  3. Active mode tier comparison. In `always-ask-cached`, a read or write call
+ *     whose `approvalCacheTargets` are all granted in `grants` is allowed instead
  *     (see {@link resolveCachedModeApproval}).
  *  4. A call touching a folder in `restrictions` turns any non-deny result into
  *     a per-call prompt sourced `restriction` (see {@link restrictedFolderReason}).

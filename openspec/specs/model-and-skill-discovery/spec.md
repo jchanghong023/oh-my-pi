@@ -107,7 +107,7 @@ OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池�
 
 ### Requirement: 补全层级的模型角色解析
 
-`completion()` 的层级只有 `smol`、`default`、`slow`；候选 MUST 按对应层级的模型角色解析，且只有 `slow` 会发送思考档位。
+`completion()` 的层级只有 `smol`、`default`、`slow`；候选 MUST 按对应层级的模型角色解析，且只有 `slow` 会发送思考档位。回退思考设置遵循上游行为，不另要求继承主候选的有效档位。
 
 #### Scenario: 层级候选解析
 
@@ -115,7 +115,7 @@ OMP MUST 在会话或项目配置了 `enabledModels` 时，把 judge 候选池�
 - **THEN** `smol`、`slow` 分别按模型角色 `@smol`、`@slow` 解析候选；`default` 优先使用会话当前模型，会话无当前模型时回落到 `@default` 角色
 - **AND** `slow` 使用该角色配置的具体思考档位；配置为 `auto` 或未配置时，仅在支持推理的模型上请求其最高支持档
 - **AND** `smol` 与 `default` MUST NOT 发送思考档位，也 MUST NOT 因用户配置的档位改变行为
-- **AND** 启用模型回退时按既有重试回退链在层级主候选之后追加，回退项继承主候选的有效思考设置，不绕过层级角色语义。
+- **AND** 启用模型回退时按既有重试回退链在层级主候选之后追加，不绕过层级角色语义。
 
 ### Requirement: 自动角色别名的来源保留
 

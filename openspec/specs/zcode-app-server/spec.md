@@ -1028,3 +1028,12 @@ OMP MUST 明确标记未完成或未验收，不把局部协议成功视为整�
 
 - **WHEN** 必需接口、桌面消费或真实边界尚未验收
 - **THEN** 明确标记未完成或未验收，不把局部协议成功视为整体替换完成
+
+### Requirement: desktop surface 参数生效
+
+`app-server --surface desktop` MUST 为该适配器管理的全部会话选择桌面呈现上下文，不得只解析并丢弃参数。
+
+#### Scenario: 桌面会话呈现与交互
+
+- **WHEN** 使用 `--surface desktop` 启动 app-server 并运行会话
+- **THEN** 正文、工具过程、命令输出及通知映射为 ZCode 结构化帧，提问、确认及计划审批经已有交互往返；不进入 TUI、不等待进程 stdin，且不隐含自动批准或改变模型及队列策略。

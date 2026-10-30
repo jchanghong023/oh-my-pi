@@ -29,7 +29,7 @@ import type {
 } from "./types";
 
 const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 50;
+const MAX_LIMIT = 20;
 const MAX_CANDIDATES = 100_000;
 const MAX_QUERY_LENGTH = 500;
 
@@ -1178,6 +1178,7 @@ export class RepoService {
 	}
 
 	async search(query: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoTextHit>> {
+		if (query.length > MAX_QUERY_LENGTH) throw new Error("Repository query exceeds 500 characters; narrow it.");
 		return this.#diagnose(
 			"search",
 			async stage => {
@@ -1191,7 +1192,7 @@ export class RepoService {
 					const status = this.#statusSnapshot(db);
 					options = { ...options, path: queryPath(options.path, db, status.generation) };
 					if (!status.exists) return this.#page<RepoTextHit>("search", query, options, status, []);
-					const needle = query.slice(0, MAX_QUERY_LENGTH).trim();
+					const needle = query.trim();
 					if (!needle) return this.#page<RepoTextHit>("search", query, options, status, []);
 					const cacheKey = JSON.stringify([
 						this.storage.path,
@@ -1295,6 +1296,7 @@ export class RepoService {
 	}
 
 	async symbol(name: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoSymbolHit>> {
+		if (name.length > MAX_QUERY_LENGTH) throw new Error("Repository query exceeds 500 characters; narrow it.");
 		return this.#diagnose(
 			"symbol",
 			async stage => {

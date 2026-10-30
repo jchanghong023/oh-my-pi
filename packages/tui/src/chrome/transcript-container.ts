@@ -376,8 +376,10 @@ export class TranscriptContainer extends Container {
 				});
 			}
 			if (!writeRun && facts.length > 2) {
-				const first = this.#compactSelection.get(run[0]!)!;
-				first.count = facts.length;
+				const firstSelected = run.find(component =>
+					component.getCompactToolCalls().some(call => selected.has(call.id)),
+				);
+				if (firstSelected) this.#compactSelection.get(firstSelected)!.count = facts.length;
 			}
 			run = [];
 		};

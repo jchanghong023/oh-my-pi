@@ -172,6 +172,17 @@ describe("ZCode actual public app-server process", () => {
 		await command(peer, a, "sendText", { text: "ZCODE_TEST_TOOL_YOLO_A" });
 		await finishedOutput(peer, a, "ZCODE_TEST_TOOL_YOLO_A_DONE");
 		expect(await fs.readFile(path.join(config.cwdA, "proof.txt"), "utf8")).toBe("ZCODE_TEST_TOOL_YOLO_A");
+		const toolRows = v4ConversationRowsRangeResultSchema.parse(
+			await peer.request("v4/conversation/rowsRange", { sessionId: a, limit: 100 }),
+		);
+		expect(toolRows.rows).toContainEqual(
+			expect.objectContaining({
+				kind: "toolCall",
+				toolName: "Write",
+				input: expect.objectContaining({ path: "proof.txt", content: "ZCODE_TEST_TOOL_YOLO_A" }),
+				output: expect.objectContaining({ text: expect.any(String) }),
+			}),
+		);
 		await denyBuildWrite(b, config.cwdB, "ZCODE_TEST_TOOL_BUILD_B");
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
@@ -329,6 +340,71 @@ describe("ZCode actual public app-server process", () => {
 		expect(await peer.eof()).toBe(0);
 	}, 120_000);
 
+	test("desktop delivers native command notifications and confirmation through structured frames", async () => {
+		await using root = await TempDir.create("@zcode-desktop-command-");
+		await using config = await fixture(root);
+		const extensions = path.join(config.agentDir, "extensions");
+		await fs.mkdir(extensions, { recursive: true });
+		const extension = path.join(extensions, "desktop-command.ts");
+		await fs.writeFile(
+			extension,
+			`export default function(pi) {
+  pi.registerCommand("desktop-probe", {
+    description: "Exercise desktop command UI",
+    handler: async (_args, ctx) => {
+      ctx.ui.notify("DESKTOP_COMMAND_BEFORE");
+      const confirmed = await ctx.ui.confirm("Desktop confirmation", "Continue command?");
+      ctx.ui.notify(confirmed ? "DESKTOP_COMMAND_YES" : "DESKTOP_COMMAND_NO");
+    },
+  });
+}\n`,
+		);
+		await fs.appendFile(path.join(config.agentDir, "config.yml"), `extensions:\n  - ${JSON.stringify(extension)}\n`);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const sessionId = await create(peer, config.cwdA);
+		await subscribe(peer, sessionId);
+		expect(await command(peer, sessionId, "sendText", { text: "/skillful status" })).toMatchObject({
+			status: "accepted",
+		});
+		const status = await output(peer, sessionId, "Skill listing:");
+		expect(conversationTopicWireFrameSchema.safeParse(status.params).success).toBe(true);
+		const receipt = command(peer, sessionId, "sendText", { text: "/desktop-probe" });
+		const before = await output(peer, sessionId, "DESKTOP_COMMAND_BEFORE");
+		expect(conversationTopicWireFrameSchema.safeParse(before.params).success).toBe(true);
+		const matchesConfirm = (payload: Frame) =>
+			payload.kind === "userInput" && payload.prompt === "Desktop confirmation\n\nContinue command?";
+		// A projection delta can contain both the notification row and the pending
+		// interaction. output() consumes that frame, so inspect it before waiting
+		// for a separate interaction frame.
+		const waiting = findInteraction(before.params, matchesConfirm)
+			? before
+			: await peer.next(
+					frame =>
+						frame.method === "v4/conversation/frame" &&
+						isRecord(frame.params) &&
+						frame.params.topic === `conversation/${sessionId}` &&
+						findInteraction(frame.params, matchesConfirm) !== undefined,
+				);
+		expect(conversationTopicWireFrameSchema.safeParse(waiting.params).success).toBe(true);
+		const interaction = findInteraction(waiting.params, matchesConfirm)!;
+		expect(interaction.payload).toMatchObject({
+			kind: "userInput",
+			options: expect.arrayContaining([expect.objectContaining({ optionId: "yes" })]),
+		});
+		expect(
+			await command(peer, sessionId, "resolveInteraction", {
+				interactionId: interaction.interactionId,
+				answer: { optionId: "yes" },
+			}),
+		).toMatchObject({ status: "accepted" });
+		expect(await receipt).toMatchObject({ status: "accepted" });
+		const after = await output(peer, sessionId, "DESKTOP_COMMAND_YES");
+		expect(conversationTopicWireFrameSchema.safeParse(after.params).success).toBe(true);
+		expect(config.requests).toHaveLength(0);
+		expect(await peer.eof()).toBe(0);
+	}, 120_000);
+
 	test("one process streams two sessions, runs real cwd-bound tools, deduplicates command identity and stops only target", async () => {
 		await using root = await TempDir.create("@zcode-concurrent-");
 		await using config = await fixture(root);
@@ -413,6 +489,9 @@ describe("ZCode actual public app-server process", () => {
 					],
 				},
 			},
+		});
+		expect(await peer.next(frame => frame.method === "settings_changed")).toMatchObject({
+			params: { scope: "user" },
 		});
 		const persisted = await fs.readFile(path.join(config.agentDir, "config.yml"), "utf8");
 		const stale = await peer.requestFrame("omp/team/configure", {
@@ -519,6 +598,7 @@ describe("ZCode actual public app-server process", () => {
 		const waiting = await peer.next(
 			frame => frame.method === "v4/conversation/frame" && findInteraction(frame.params) !== undefined,
 		);
+		expect(conversationTopicWireFrameSchema.safeParse(waiting.params).success).toBe(true);
 		const interaction = findInteraction(waiting.params)!;
 		await command(peer, b, "sendText", { text: "ZCODE_TEST_WHILE_WAITING_B" });
 		await output(peer, b, "ZCODE_TEST_WHILE_WAITING_B_DONE");
@@ -543,6 +623,9 @@ describe("ZCode actual public app-server process", () => {
 			selection: { kind: "model", model: { provider: model.providerId, modelId: "chat-b" } },
 		});
 		expect(saved).toMatchObject({ operation: "set_model_role", data: { persisted: true } });
+		expect(await peer.next(frame => frame.method === "settings_changed")).toMatchObject({
+			params: { scope: "user" },
+		});
 		const team = ompTeamConfigureResultSchema.parse(
 			await peer.request("omp/team/configure", {
 				workspace: workspace(config.cwdA),
@@ -573,6 +656,9 @@ describe("ZCode actual public app-server process", () => {
 			},
 		});
 		expect(save).toMatchObject({ data: { saveState: "complete" } });
+		expect(await peer.next(frame => frame.method === "settings_changed")).toMatchObject({
+			params: { scope: "user" },
+		});
 		expect(
 			await peer.request("omp/team/configure", {
 				workspace: workspace(config.cwdA),

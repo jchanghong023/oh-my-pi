@@ -688,6 +688,32 @@ describe("ACP agent", () => {
 		await Bun.sleep(0);
 	});
 
+	it("passes /delete to the session without deleting its transcript", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId)!;
+		try {
+			session.sessionManager.appendMessage({ role: "user", content: "old transcript", timestamp: Date.now() });
+			await session.sessionManager.ensureOnDisk();
+			await session.sessionManager.flush();
+			const oldFile = session.sessionManager.getSessionFile()!;
+
+			const result = await harness.agent.prompt({
+				sessionId: created.sessionId,
+				prompt: [{ type: "text", text: "/delete" }],
+			});
+
+			expect(result.stopReason).toBe("end_turn");
+			expect(session.promptCalls).toEqual(["/delete"]);
+			expect(session.sessionId).toBe(created.sessionId);
+			expect(session.sessionManager.getSessionFile()).toBe(oldFile);
+			expect(await Bun.file(oldFile).exists()).toBe(true);
+		} finally {
+			harness.abortController.abort();
+			await Bun.sleep(0);
+		}
+	});
+
 	it("keeps the advertised ACP handle usable after deleting and replacing its transcript", async () => {
 		const harness = await createHarness();
 		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });

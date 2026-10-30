@@ -70,7 +70,7 @@ describe("native addon embedding", () => {
 			expect(embeddedAddon.platformTag).toBe("win32-arm64");
 			expect(embeddedAddon.version).toBe("18.1.1");
 			const cacheFilename = embeddedAddon.files[0].filename;
-			expect(cacheFilename).toMatch(/^pi_natives\.win32-arm64\.[a-f0-9]{64}\.node$/);
+			expect(cacheFilename).toBe("pi_natives.win32-arm64.node");
 			expect(embeddedAddon.files).toEqual([
 				{
 					variant: "default",
@@ -85,39 +85,11 @@ describe("native addon embedding", () => {
 			const beforeReuse = await fs.stat(cachedAddon);
 			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
 			expect((await fs.stat(cachedAddon)).mtimeMs).toBe(beforeReuse.mtimeMs);
-
-			// Same package version and size, different Rust bytes: keep the old
-			// session's file open while the next build populates the same cache.
-			const nextAddon = addon.replace("binary", "newbin");
-			await Bun.write(path.join(nativeDir, "pi_natives.win32-arm64.node"), nextAddon);
-			const nextFiles = await embeddedAddonFiles({
-				platform: "win32",
-				arch: "arm64",
-				nativeDir,
-				version: "18.1.1",
-			});
-			const nextOutDir = path.join(root, "next");
-			for (const filePath in nextFiles) {
-				await Bun.write(path.join(nextOutDir, path.basename(filePath)), nextFiles[filePath]);
-			}
-			// The second manifest is generated at runtime in a distinct temp directory.
-			const { embeddedAddon: nextEmbedded }: { embeddedAddon: EmbeddedAddon } = await import(
-				path.join(nextOutDir, "embedded-addon.js")
-			);
-			const nextCachedAddon = path.join(cacheDir, nextEmbedded.files[0].filename);
-			expect(nextEmbedded.files[0].size).toBe(embeddedAddon.files[0].size);
-			expect(nextCachedAddon).not.toBe(cachedAddon);
-			const oldSession = await fs.open(cachedAddon, "r");
-			try {
-				expect(extractEmbeddedAddons({ files: nextEmbedded.files, targetDir: cacheDir })).toEqual([
-					nextCachedAddon,
-				]);
-				expect(await oldSession.readFile("utf8")).toBe(addon);
-				expect(await Bun.file(nextCachedAddon).text()).toBe(nextAddon);
-				expect(extractEmbeddedAddons({ files: nextEmbedded.files, targetDir: cacheDir })).toEqual([]);
-			} finally {
-				await oldSession.close();
-			}
+			// The upstream cache uses the filename and size, not a content hash.
+			const sameSize = addon.replace("binary", "newbin");
+			await Bun.write(cachedAddon, sameSize);
+			expect(extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: cacheDir })).toEqual([]);
+			expect(await Bun.file(cachedAddon).text()).toBe(sameSize);
 		} finally {
 			await fs.rm(root, { recursive: true, force: true });
 		}
@@ -149,22 +121,8 @@ describe("native addon embedding", () => {
 				const entry = path.join(root, "entry.ts");
 				await Bun.write(
 					entry,
-					`import * as fs from "node:fs";
-import * as path from "node:path";
-import { loadNative, initLoaderContext, prepareNativeVersionDir, extractEmbeddedAddons } from ${JSON.stringify(path.join(manifestDir, "loader-state.js"))};
-import { embeddedAddon } from ${JSON.stringify(path.join(manifestDir, "embedded-addon.js"))};
+					`import { loadNative } from ${JSON.stringify(path.join(manifestDir, "loader-state.js"))};
 try {
-	if (process.argv.includes("--tamper")) {
-		const ctx = initLoaderContext();
-		prepareNativeVersionDir(ctx.versionedDir);
-		extractEmbeddedAddons({ files: embeddedAddon.files, targetDir: ctx.versionedDir });
-		for (const file of embeddedAddon.files) {
-			const target = path.join(ctx.versionedDir, file.filename);
-			const content = fs.readFileSync(target);
-			content[0] ^= 1;
-			fs.writeFileSync(target, content);
-		}
-	}
 	loadNative();
 } catch (error) {
 	process.stdout.write(JSON.stringify({ error: error.message }));
@@ -193,27 +151,18 @@ try {
 					const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
 						.filter(filename => filename.endsWith(".node"))
 						.sort();
-					expect(
-						extracted.map<string>(filename =>
-							filename.startsWith(`pi_natives.${tag}-modern.`) ? "modern" : "baseline",
-						),
-					).toEqual((variant === "modern" ? ["modern", "baseline"] : ["baseline"]).sort());
-					for (const filename of extracted) {
-						expect(filename).toMatch(new RegExp(`^pi_natives\\.${tag}-(modern|baseline)\\.[a-f0-9]{64}\\.node$`));
-					}
+					expect(extracted).toEqual(
+						(variant === "modern"
+							? [`pi_natives.${tag}-modern.node`, `pi_natives.${tag}-baseline.node`]
+							: [`pi_natives.${tag}-baseline.node`]
+						).sort(),
+					);
 
-					// A failed extraction must not load an older, version-only cache,
-					// including when the modern variant falls back to baseline.
+					// Extraction failure must still try the normal compiled-binary candidates.
 					const blockedCache = path.join(root, `${variant}-blocked`);
 					const blockedVersionDir = path.join(blockedCache, packageJson.version);
-					await fs.mkdir(blockedVersionDir, { recursive: true });
-					for (const filename of extracted) await fs.mkdir(path.join(blockedVersionDir, filename));
-					for (const oldVariant of ["modern", "baseline"]) {
-						await Bun.write(
-							path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`),
-							`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
-						);
-					}
+					await fs.mkdir(blockedCache, { recursive: true });
+					await Bun.write(blockedVersionDir, "not a directory");
 					const blocked = Bun.spawn([binary], {
 						env: {
 							...process.env,
@@ -231,15 +180,9 @@ try {
 					]);
 					expect(exitCode).toBe(0);
 					const { error }: { error: string } = JSON.parse(stdout);
-					expect(error).toContain("embedded addon extraction");
-					expect(stderr).not.toContain("native:require:");
-					for (const oldVariant of ["modern", "baseline"]) {
-						const oldCachePath = path.join(blockedVersionDir, `pi_natives.${tag}-${oldVariant}.node`);
-						expect(error).not.toContain(oldCachePath);
-						expect(await Bun.file(oldCachePath).text()).toBe(
-							`OLD! PI_NATIVES_VERSION_STAMP:${packageJson.version}\0`,
-						);
-					}
+					expect(error).toContain("embedded addon dir");
+					expect(stderr).toContain("native:require:");
+					expect(error).toContain(path.join(path.dirname(binary), `pi_natives.${tag}-${variant}.node`));
 				}
 			} finally {
 				await fs.rm(root, { recursive: true, force: true });

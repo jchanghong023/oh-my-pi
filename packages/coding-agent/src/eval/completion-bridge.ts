@@ -146,6 +146,7 @@ function reasoningForCandidate(
 	level?: ConfiguredThinkingLevel,
 	parent?: Pick<CompletionCandidate, "reasoning" | "disableReasoning">,
 ): Pick<CompletionCandidate, "reasoning" | "disableReasoning"> {
+	if (tier !== "slow") return { reasoning: undefined, disableReasoning: false };
 	// "auto" is a session-level selector; completion() has no per-prompt
 	// classifier, so it follows the tier default just like an omitted suffix.
 	const normalizedLevel = level === AUTO_THINKING ? undefined : level;
@@ -211,8 +212,7 @@ function appendFallbackCandidates(
 	expanded: Set<string>,
 	out: CompletionCandidate[],
 ): void {
-	// Explicit primary effort seeds root inheritance; nested calls fold in
-	// each candidate's inherited effort.
+	// Nested calls fold in each candidate's inherited effort.
 	const visit = parent ? `${selector}|${parent.disableReasoning ? "off" : (parent.reasoning ?? "inherit")}` : selector;
 	if (expanded.has(visit)) return;
 	expanded.add(visit);
@@ -229,7 +229,16 @@ function appendFallbackCandidates(
 		if (seen.has(identity)) continue;
 		seen.add(identity);
 		out.push({ selector: entry.raw, model: candidate, ...reasoning });
-		appendFallbackCandidates(deps, entry.raw, candidate, reasoning, undefined, seen, expanded, out);
+		appendFallbackCandidates(
+			deps,
+			deps.tier === "slow" ? entry.raw : formatModelStringWithRouting(candidate),
+			candidate,
+			reasoning,
+			undefined,
+			seen,
+			expanded,
+			out,
+		);
 	}
 }
 
@@ -268,7 +277,7 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 		// Keep routing pinned and the tier's provider-option semantics separate.
 		const chainSelector = formatModelSelectorValue(
 			formatModelStringWithRouting(resolved.model),
-			requestedEffort ?? configuredEffort,
+			tier === "slow" ? (requestedEffort ?? configuredEffort) : undefined,
 		);
 		return { model: resolved.model, selector: pattern, chainSelector, configuredEffort };
 	};
@@ -317,14 +326,14 @@ function resolveTierCandidates(tier: CompletionTier, session: ToolSession): Comp
 /**
  * Choose the reasoning effort for a tier. Only `slow` opts into thinking, and
  * only on reasoning-capable models — guarding against `requireSupportedEffort`
- * throwing downstream on models that cannot reason. Clamps to the highest
- * supported effort so a reasoning model without `high` does not 400.
+ * throwing downstream on models that cannot reason. Uses the highest
+ * supported effort.
  */
 function reasoningForTier(tier: CompletionTier, model: Model<Api>): Effort | undefined {
 	if (tier !== "slow" || !model.reasoning) return undefined;
 	const efforts = getSupportedEfforts(model);
 	if (efforts.length === 0) return undefined;
-	return efforts.includes(Effort.High) ? Effort.High : efforts[efforts.length - 1];
+	return efforts[efforts.length - 1];
 }
 
 async function executeCompletion(

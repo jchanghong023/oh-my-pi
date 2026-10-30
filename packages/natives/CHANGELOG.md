@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Restore upstream embedded native addon naming and fallback loading.
 - Use the existing Cargo host build for native development instead of the fork-only Bazel host cache; retain upstream explicit-target Bazel builds and native installation rollback.
 - Move the Wiki Rust core to the independent `pi-wiki` crate while retaining thin native bindings, existing TypeScript and database contracts, and single-addon distribution; `test:rs` selects the complete Wiki crate and native fork-feature tests, with a separate `pi-wiki` doctest stage.
 - Limit Nextest test threads to the smaller of available CPU cores and 14 on Windows or 28 on other platforms.

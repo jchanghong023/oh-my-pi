@@ -13,7 +13,8 @@ import { TeamConfigError, TeamConfigService } from "../../team/config";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
 import { peekSpecDrivenController } from "../../spec-driven/controller";
 import { assertDevCommandAllowed } from "../../slash-commands/builtin-spec-driven";
-import { ZCodeCommandHost, workspaceCatalog } from "./commands";
+import { ZCodeCommandHost, workspaceCatalog, type ZCodeCommandHostOptions } from "./commands";
+import { ZCodeInteractions } from "./interactions";
 import { ZCodeCatalogs, zcodeSkillsManageParamsSchema, type ZCodeCatalogOptions } from "./catalogs";
 import { ZCodeQueries } from "./queries";
 import { ZCodeAttachmentResources } from "./attachments";
@@ -121,6 +122,9 @@ interface HostedSession {
 	telemetry: ZCodeConversationTelemetry;
 	unsubscribeTelemetry: () => void;
 }
+
+const createDesktopInteractions: NonNullable<ZCodeCommandHostOptions["createInteractions"]> = (publish, output) =>
+	new ZCodeInteractions(publish, output);
 
 const COLD_PROJECTION_CACHE_MAX = 16;
 
@@ -525,6 +529,7 @@ export class ZCodeServer {
 			pendingInteractions => projection.setState({ pendingInteractions }),
 			{
 				run: record.run,
+				...(this.options.surface === "desktop" ? { createInteractions: createDesktopInteractions } : {}),
 				bindMainSession: async session => {
 					if (session === record.session) return;
 					const id = session.sessionManager.getSessionId();
@@ -550,6 +555,9 @@ export class ZCodeServer {
 					this.#inputAdmissionObservers.get(JSON.stringify([record.id, inputId]))?.();
 				},
 				settingsChanged: () => {
+					void this.writer
+						.write({ method: "settings_changed", params: { scope: "user" } })
+						.catch(error => process.stderr.write(`${String(error)}\n`));
 					void this.#refreshWorkspaceConfigs(record.cwd).catch(error =>
 						process.stderr.write(`${String(error)}\n`),
 					);
@@ -638,6 +646,23 @@ export class ZCodeServer {
 				void this.writer.write({ method: P.V4_NOTIFICATIONS.conversationTelemetryFact, params: fact });
 			},
 		});
+		const unsubscribeNotices =
+			this.options.surface === "desktop"
+				? record.session.subscribe(event => {
+						if (event.type !== "notice") return;
+						projection.applyEvent({
+							type: "message_end",
+							message: {
+								role: "custom",
+								customType: "zcode-notice",
+								content: `${event.level}: ${event.message}`,
+								display: true,
+								attribution: "agent",
+								timestamp: Date.now(),
+							},
+						});
+					})
+				: () => {};
 		const hosted: HostedSession = {
 			record,
 			projection,
@@ -703,6 +728,7 @@ export class ZCodeServer {
 		hosted.unsubscribe = () => {
 			unsubscribeProjection();
 			unsubscribeRegistry();
+			unsubscribeNotices();
 		};
 		await commands.initialize();
 		await this.workflows.reconcileParentOwnership(record.id);
@@ -2207,6 +2233,9 @@ export class ZCodeServer {
 						getModelRegistry: () => registry,
 						emit: () => {
 							committed = true;
+							void this.writer
+								.write({ method: "settings_changed", params: { scope: "user" } })
+								.catch(error => process.stderr.write(`${String(error)}\n`));
 						},
 					});
 					let data;

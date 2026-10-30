@@ -798,16 +798,6 @@ function configureGrammarDir(bindings, nativesDir) {
 
 
 function buildHelpMessage(ctx) {
-	if (ctx.isCompiledBinary && embeddedAddon) {
-		const expectedPaths = embeddedAddon.files
-			.map(file => `  ${path.join(ctx.versionedDir, file.filename)}`)
-			.join("\n");
-		return (
-			`The compiled binary should extract its content-addressed addons:\n${expectedPaths}\n\n` +
-			"Check that the native cache is writable, then re-run or reinstall this binary. " +
-			"An addon from another build cannot replace its embedded addons."
-		);
-	}
 	if (ctx.isCompiledBinary) {
 		const expectedPaths = ctx.addonFilenames.map(filename => `  ${path.join(ctx.versionedDir, filename)}`).join("\n");
 		const downloadHints = ctx.addonFilenames
@@ -919,27 +909,20 @@ export function loadNative() {
 	const require_ = createRequire(import.meta.url);
 
 	const errors = [];
-	// An embedded build may only load its own content-addressed files. Legacy
-	// version-only caches and adjacent addons can belong to a different fork
-	// build with the same package version, even when extraction fails.
-	const embeddedFiles =
-		ctx.isCompiledBinary && embeddedAddon
-			? [
-					selectEmbeddedAddonFile(ctx.selectedVariant),
-					...(ctx.selectedVariant === "modern"
-						? [embeddedAddon.files.find(file => file.variant === "baseline")]
-						: []),
-				].filter((file, index, files) => file && files.indexOf(file) === index)
+	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
+	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
+	const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
+	const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
+	const fallbackEmbeddedFile =
+		ctx.selectedVariant === "modern" && embeddedAddon
+			? embeddedAddon.files.find(file => file.variant === "baseline")
 			: null;
-	const stagedCandidate = embeddedFiles ? null : maybeStageNodeModulesAddon(ctx, errors);
-	const runtimeCandidates = embeddedFiles
-		? embeddedFiles.map(file => path.join(ctx.versionedDir, file.filename))
-		: stagedCandidate
-			? [stagedCandidate, ...ctx.candidates]
-			: ctx.candidates;
+	const fallbackEmbeddedPath = fallbackEmbeddedFile && path.join(ctx.versionedDir, fallbackEmbeddedFile.filename);
 
-	for (const [index, candidate] of runtimeCandidates.entries()) {
-		if (embeddedFiles && !maybeExtractEmbeddedAddon(ctx, errors, embeddedFiles[index])) continue;
+	for (const candidate of runtimeCandidates) {
+		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
+			maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile);
+		}
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);
 			const bindings = require_(candidate);

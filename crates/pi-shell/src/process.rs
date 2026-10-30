@@ -812,6 +812,23 @@ impl Process {
 			.collect()
 	}
 
+	fn signal_termination_wave(
+		&self,
+		descendants: &[Self],
+		group: Option<i32>,
+		signal: i32,
+		protected: &HashSet<i32>,
+	) {
+		let processes: Vec<_> = descendants
+			.iter()
+			.chain(std::iter::once(self))
+			.filter(|process| !protected.contains(&process.pid()))
+			.map(|process| (process, process.group_id()))
+			.collect();
+		let groups = group.into_iter().collect();
+		let _ = signal_snapshot(processes, groups, signal);
+	}
+
 	async fn terminate_tree_impl(
 		&self,
 		group: bool,
@@ -826,17 +843,9 @@ impl Process {
 		let process_group = if group { self.group_id() } else { None };
 		let protected = host_protected_pids();
 
-		// Polite wave: SIGTERM the group, every live descendant, then the root.
-		if let Some(pgid) = process_group {
-			let _ = kill_process_group(pgid, TERM_SIGNAL);
-		}
+		// Capture the entire wave and group membership before sending any signal.
 		let mut descendants = self.signalable_descendants(&protected);
-		for child in &descendants {
-			let _ = child.inner.kill(TERM_SIGNAL);
-		}
-		if !protected.contains(&self.pid()) {
-			let _ = self.inner.kill(TERM_SIGNAL);
-		}
+		self.signal_termination_wave(&descendants, process_group, TERM_SIGNAL, &protected);
 
 		// Optional grace wait. A negative `graceful_ms` skips the wait entirely
 		// (we still emit the polite signal so cleanup handlers can run before
@@ -854,18 +863,9 @@ impl Process {
 			}
 		}
 
-		// Hard wave. Re-walk the tree so any grandchild spawned during the grace
-		// period — or any process re-parented to the root — is signalled too.
-		if let Some(pgid) = process_group {
-			let _ = kill_process_group(pgid, KILL_SIGNAL);
-		}
+		// Each escalation is a new wave with a fresh snapshot.
 		descendants = self.signalable_descendants(&protected);
-		for child in &descendants {
-			let _ = child.inner.kill(KILL_SIGNAL);
-		}
-		if !protected.contains(&self.pid()) {
-			let _ = self.inner.kill(KILL_SIGNAL);
-		}
+		self.signal_termination_wave(&descendants, process_group, KILL_SIGNAL, &protected);
 
 		wait_for_exit(self, &descendants, Some(Duration::from_millis(u64::from(timeout_ms))), ct)
 			.await
@@ -1133,10 +1133,16 @@ fn signal_trees(roots: &[Process], pgids: &[i32], signal: i32, protected: &HashS
 		}
 	}
 
-	// A successful group signal already covered its snapshotted members.
-	// Sending to their pinned handles again can re-enter a TERM trap or kill
-	// the cleanup child it just spawned. Failed groups still need PID fallback;
-	// descendants in other groups/sessions always use their stable handles.
+	signal_snapshot(processes.iter().map(|(process, pgid)| (process, *pgid)), groups, signal)
+}
+
+/// Deliver a wave using only the process identities and groups captured before
+/// the first signal. Failed group deliveries fall back to individual handles.
+fn signal_snapshot<'a>(
+	processes: impl IntoIterator<Item = (&'a Process, Option<i32>)>,
+	mut groups: HashSet<i32>,
+	signal: i32,
+) -> u32 {
 	groups.retain(|&pgid| kill_process_group(pgid, signal));
 	let mut signaled = 0;
 	for (process, pgid) in processes {
@@ -1383,6 +1389,39 @@ mod tests {
 			HashSet::from([self_pid]),
 			"only the harness pid may be protected from cancellation sweeps",
 		);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn failed_group_signal_falls_back_to_snapshot_members() {
+		use std::{
+			process::Command,
+			thread,
+			time::{Duration, Instant},
+		};
+
+		let mut child = Command::new("sleep")
+			.arg("30")
+			.spawn()
+			.expect("spawn sleep");
+		let root = Process::from_pid(i32::try_from(child.id()).unwrap()).expect("pin child");
+		let group = root.group_id().expect("child inherits host group");
+		// The group guard rejects the host group; the pinned child still needs
+		// an individual signal.
+		root.signal_termination_wave(&[], Some(group), KILL_SIGNAL, &HashSet::new());
+		let deadline = Instant::now() + Duration::from_secs(2);
+		let status = loop {
+			if let Some(status) = child.try_wait().expect("wait for child") {
+				break Some(status);
+			}
+			if Instant::now() >= deadline {
+				let _ = child.kill();
+				let _ = child.wait();
+				break None;
+			}
+			thread::sleep(Duration::from_millis(10));
+		};
+		assert!(status.is_some_and(|status| !status.success()), "fallback must terminate the child");
 	}
 
 	/// Regression test for #7452: a cancellation sweep must never signal the

@@ -157,12 +157,12 @@ describe("compact tool component integration", () => {
 		});
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).toContain("MESSAGE_DELIVERY_FAILED");
+			expect(view).not.toContain("MESSAGE_DELIVERY_FAILED");
 			expect(view).toContain("latest-command");
 		}
 	});
 
-	it("keeps process controls and approvals in one run while displaying invocation errors", () => {
+	it("keeps process controls and approvals while hiding invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-process.ts" }));
@@ -190,14 +190,14 @@ describe("compact tool component integration", () => {
 		mode.setCompactNeedsUserInput("Confirm mode change");
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 5 次");
-			expect(view).toContain("PROCESS_INPUT_FAILED");
+			expect(view).not.toContain("PROCESS_INPUT_FAILED");
 			expect(view).toContain("mode-service");
 			expect(view).toContain("kill-job");
 			expect(view).toContain("after-process");
 		}
 	});
 
-	it("keeps configuration approvals in ordinary runs while displaying invocation errors", () => {
+	it("keeps configuration approvals while hiding invocation errors", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		root.addChild(tool("read", { path: "before-config.ts" }));
@@ -224,7 +224,7 @@ describe("compact tool component integration", () => {
 		config.updateResult({ content: [{ type: "text", text: "CONFIG_CHANGE_FAILED" }], isError: true });
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).toContain("CONFIG_CHANGE_FAILED");
+			expect(view).not.toContain("CONFIG_CHANGE_FAILED");
 			expect(view).toContain("latest-config");
 		}
 	});
@@ -272,11 +272,11 @@ describe("compact tool component integration", () => {
 		});
 		for (const view of [output(root), native(root)]) {
 			expect(view).toContain("工具调用 4 次");
-			expect(view).toContain("DEVICE_EXECUTION_FAILED");
+			expect(view).not.toContain("DEVICE_EXECUTION_FAILED");
 		}
 	});
 
-	it("retains invocation errors in compact and detailed history", () => {
+	it("hides ordinary invocation errors in compact until expanded or detailed", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
 		const root = new TranscriptContainer();
 		const read = tool("read", { path: "missing-source.ts" });
@@ -287,17 +287,21 @@ describe("compact tool component integration", () => {
 		const original = JSON.stringify(result);
 		root.addChild(read);
 		read.updateResult(result);
-		expect(output(root)).toContain("Path not found: missing-source.ts");
-		for (const view of [native(root, false), native(root)]) {
+		for (const view of [output(root), native(root, false), native(root)]) {
+			expect(view).not.toContain("Path not found: missing-source.ts");
+		}
+		read.setExpanded(true);
+		for (const view of [output(root), native(root, false), native(root)]) {
 			expect(view).toContain("Path not found: missing-source.ts");
 		}
+		read.setExpanded(false);
 		for (const path of ["latest-a.ts", "latest-b.ts"]) {
 			const later = tool("read", { path });
 			later.updateResult({ content: [] });
 			root.addChild(later);
 		}
 		for (const view of [output(root), native(root, false), native(root)]) {
-			expect(view).toContain("Path not found: missing-source.ts");
+			expect(view).not.toContain("Path not found: missing-source.ts");
 			expect(view).toContain("latest-a.ts");
 			expect(view).toContain("latest-b.ts");
 		}
@@ -306,6 +310,43 @@ describe("compact tool component integration", () => {
 			expect(view).toContain("Path not found: missing-source.ts");
 		}
 		expect(JSON.stringify(result)).toBe(original);
+	});
+
+	it("retains actual command failures and partially applied edits", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const root = new TranscriptContainer();
+		const bash = tool("bash", { command: "exit 7" });
+		bash.updateResult({
+			content: [{ type: "text", text: "COMMAND_FAILED" }],
+			details: { exitCode: 7 },
+			isError: true,
+		});
+		const edit = tool("edit", { path: "partial.ts" });
+		edit.updateResult({
+			content: [{ type: "text", text: "PARTIAL_EDIT" }],
+			details: { perFileResults: [{ diff: "-old\n+new" }] },
+			isError: true,
+		});
+		root.addChild(bash);
+		root.addChild(edit);
+		expect(bash.hasCompactCriticalFeedback()).toBe(true);
+		expect(edit.hasCompactCriticalFeedback()).toBe(true);
+		for (const view of [output(root), native(root)]) {
+			expect(view).toContain("COMMAND_FAILED");
+			expect(view).toContain("PARTIAL_EDIT");
+		}
+	});
+
+	it("hides result images in compact even when a read is expanded", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		const read = tool("read", { path: "image.png" });
+		read.setExpanded(true);
+		read.updateResult({ content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] });
+		expect(JSON.stringify(read.describe())).not.toContain("omp.tool.read.image");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		expect(JSON.stringify(read.describe())).toContain("omp.tool.read.image");
+		read.setShowImages(false);
+		expect(JSON.stringify(read.describe())).not.toContain("omp.tool.read.image");
 	});
 
 	it("retains input-wait feedback immediately when newer calls arrive", () => {

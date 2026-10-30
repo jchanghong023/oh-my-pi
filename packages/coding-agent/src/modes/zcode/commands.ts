@@ -38,6 +38,11 @@ export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "
 export interface ZCodeCommandHostOptions {
 	output?: (text: string) => void | Promise<void>;
 	settingsChanged?: (frame: object) => void;
+	/** Select the presentation owner for this session's interactive requests. */
+	createInteractions?: (
+		publish: (pending: PendingInteraction[]) => void,
+		output: (text: string) => void | Promise<void>,
+	) => ZCodeInteractions;
 	bindMainSession?: (session: AgentSession) => Promise<void>;
 	run?: <T>(operation: () => T) => T;
 	mcpManager?: MCPManager;
@@ -103,13 +108,18 @@ export class ZCodeCommandHost {
 	#initialized: Promise<void> | undefined;
 	#nativeCommands?: ZCodeCommandHost;
 	#devControlPending = false;
+	readonly #publishInteractions: (pending: PendingInteraction[]) => void;
 	constructor(
 		readonly session: AgentSession,
 		cwd: string,
 		publishInteractions: (pending: PendingInteraction[]) => void,
 		readonly options: ZCodeCommandHostOptions = {},
 	) {
-		this.interactions = new ZCodeInteractions(publishInteractions, text => this.#output(text));
+		this.#publishInteractions = publishInteractions;
+		const publish = () => this.#publishPending();
+		this.interactions = options.createInteractions
+			? options.createInteractions(publish, text => this.#output(text))
+			: new ZCodeInteractions(publish, text => this.#output(text));
 		this.#catalog = new CommandCatalogService({ cwd, getMcpManager: () => options.mcpManager });
 		this.#plan = new PlanHost(
 			session,
@@ -216,6 +226,9 @@ export class ZCodeCommandHost {
 	}
 	#run<T>(operation: () => T): T {
 		return this.options.run ? this.options.run(operation) : operation();
+	}
+	#publishPending(): void {
+		this.#publishInteractions([...this.interactions.pending, ...(this.#nativeCommands?.interactions.pending ?? [])]);
 	}
 	#output(text: string): void | Promise<void> {
 		if (!this.#disposed) return this.options.output?.(text);
@@ -418,23 +431,30 @@ export class ZCodeCommandHost {
 			if (stage !== this.session) {
 				if (this.#nativeCommands?.session !== stage) {
 					this.#nativeCommands?.dispose();
-					this.#nativeCommands = new ZCodeCommandHost(stage, stage.sessionManager.getCwd(), () => {}, {
-						run: this.options.run,
-						uiContext: this.options.uiContext,
-						submit: this.options.submit,
-						submitCustom: this.options.submitCustom,
-						recordInputAdmission: this.options.recordInputAdmission,
-						output: text =>
-							stage.appendCustomMessage(
-								{
-									customType: "zcode-command-output",
-									content: text,
-									display: true,
-									attribution: "agent",
-								},
-								{ waitForIdle: false },
-							),
-					});
+					this.#nativeCommands = new ZCodeCommandHost(
+						stage,
+						stage.sessionManager.getCwd(),
+						() => this.#publishPending(),
+						{
+							run: this.options.run,
+							uiContext: this.options.uiContext ?? this.interactions.ui,
+							createInteractions: this.options.createInteractions,
+							settingsChanged: this.options.settingsChanged,
+							submit: this.options.submit,
+							submitCustom: this.options.submitCustom,
+							recordInputAdmission: this.options.recordInputAdmission,
+							output: text =>
+								stage.appendCustomMessage(
+									{
+										customType: "zcode-command-output",
+										content: text,
+										display: true,
+										attribution: "agent",
+									},
+									{ waitForIdle: false },
+								),
+						},
+					);
 				}
 				return this.#nativeCommands.dispatch(text, options);
 			}
@@ -649,7 +669,11 @@ export class ZCodeCommandHost {
 		return { accepted: true, completion };
 	}
 	resolveInteraction(id: string, response: unknown): boolean {
-		return this.#run(() => this.interactions.resolve(id, response));
+		return this.#run(
+			() =>
+				this.interactions.resolve(id, response) ||
+				(this.#nativeCommands?.resolveInteraction(id, response) ?? false),
+		);
 	}
 	configure(operation: string, params: Record<string, unknown> = {}): Promise<unknown> {
 		return this.#run(() => this.#configure(operation, params));

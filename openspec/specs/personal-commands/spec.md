@@ -191,26 +191,6 @@ OMP MUST 在非 TUI 宿主原地重置上下文并保留会话身份，重置竞
 - **WHEN** 在 ACP/RPC 会话中执行 `/clear`，且当时正在压缩、正在流式或发生会话切换
 - **THEN** 按压缩等待、流式拒绝或竞态回执处理，成功时给出丢弃消息数的回执
 
-### Requirement: `/delete` 在非 TUI 宿主的会话删除
-
-OMP MUST 删除当前会话文件并切换到新会话，取消或失败时不得宣称已删除。
-
-#### Scenario: `/delete` 在非 TUI 宿主的会话删除的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 删除 MUST 经 `AgentSession.newSession({ drop: true })` 完成，使持久化写入器关闭、会话文件被删除，并重置为全新会话；MUST NOT 只删除文件而保留管理器指向该路径。
-- 流式响应进行中 MUST 拒绝删除并说明原因；无会话文件（内存会话）MUST 拒绝并说明原因。
-- 成功回执 MUST 包含被删除的会话文件路径，并 MUST 包含 `A new session is now active`。
-- 切换被会话钩子取消时 MUST 报 `nothing was deleted`，且 MUST NOT 删除任何文件。
-- 删除抛错且会话已切换时 MUST 在错误信息后追加 `A new session is now active.`；未切换时 MUST NOT 追加。
-
-#### Scenario: `/delete` 在非 TUI 宿主的会话删除的可观察行为
-
-- **WHEN** 在 ACP/RPC 会话中执行 `/delete`，或该操作被钩子取消、删除失败
-- **THEN** 成功时文件被删除并切到新会话，取消与失败时给出对应回执而不宣称删除
-
 ### Requirement: `/logout` 在非 TUI 宿主的凭据移除
 
 OMP MUST 按 provider 与账号移除存储凭据并刷新 provider 状态，其他凭据来源仍生效时明确警告。

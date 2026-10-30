@@ -24,12 +24,9 @@ import { isSettingsInitialized, settings } from "../../config/settings";
 import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
-import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { extractImagePathFromText } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
 import { HookEditorComponent } from "@oh-my-pi/pi-tui/overlays/hook-editor";
-import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TreeSelectorComponent } from "@oh-my-pi/pi-tui/overlays/tree-selector";
 import {
 	chipLabel,
@@ -87,6 +84,7 @@ import { cfgCycleOrder } from "../../config/model-settings";
 import {
 	cfgBareExitOnEmptySession,
 	cfgBareSlashCommands,
+	cfgDisplayCompactToolActivity,
 	cfgDisplayHideToolActivity,
 	cfgDoubleEscapeAction,
 	cfgEmojiAutocomplete,
@@ -3158,29 +3156,16 @@ export class InputController {
 	}
 
 	toggleToolActivityVisibility(): void {
-		this.ctx.hideToolActivity = !this.ctx.hideToolActivity;
-		cfgDisplayHideToolActivity.set(this.ctx.settings, this.ctx.hideToolActivity);
-
-		if (!this.ctx.hideToolActivity) {
-			this.ctx.toolOutputExpanded = false;
-		}
-
-		for (const child of this.ctx.chatContainer.children) {
-			if (
-				!this.ctx.hideToolActivity &&
-				(child instanceof ToolExecutionComponent || child instanceof ReadToolGroupComponent)
-			) {
-				child.setExpanded(false);
-			} else if (child instanceof AssistantMessageComponent) {
-				child.setToolResultImagesVisible(!this.ctx.hideToolActivity);
-			}
-		}
-		this.ctx.chatContainer.setToolActivityVisible(!this.ctx.hideToolActivity);
-
-		if (this.ctx.hideToolActivity) this.ctx.ui.clearInlineImages();
-		// A viewport-only repaint leaves tool rows already retired to terminal history unchanged.
-		this.ctx.ui.resetDisplay();
-		this.ctx.showStatus(`Tool activity: ${this.ctx.hideToolActivity ? "hidden" : "visible"}`);
+		const settings = this.ctx.settings;
+		const mode = cfgDisplayHideToolActivity.get(settings)
+			? "compact"
+			: cfgDisplayCompactToolActivity.get(settings)
+				? "detailed"
+				: "clean";
+		cfgHideThinkingBlock.set(settings, mode === "clean");
+		cfgDisplayHideToolActivity.set(settings, mode === "clean");
+		cfgDisplayCompactToolActivity.set(settings, mode !== "detailed");
+		this.ctx.showStatus(`Display: ${mode}`);
 	}
 
 	setToolsExpanded(expanded: boolean): void {
