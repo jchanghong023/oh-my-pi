@@ -1,10 +1,6 @@
 import { type AgentMessage, type AgentToolResult, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { CompactionOutcome } from "@oh-my-pi/pi-agent-core/compaction";
-import type { Model, PASTE_CODE_LOGIN_PROVIDERS as PasteCodeLoginProviders, UsageReport } from "@oh-my-pi/pi-ai";
-import type {
-	getOAuthCredentialProvider as GetOAuthCredentialProvider,
-	getOAuthProviders as GetOAuthProviders,
-} from "@oh-my-pi/pi-ai/oauth";
+import type { Model, UsageReport } from "@oh-my-pi/pi-ai";
 import type { OAuthProvider, OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { Component, OverlayHandle } from "@oh-my-pi/pi-tui";
@@ -120,13 +116,10 @@ import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extensi
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
 import { HistorySearchComponent } from "@oh-my-pi/pi-tui/overlays/history-search";
-import type { LoginDialogComponent as LoginDialogComponentType } from "@oh-my-pi/pi-tui/overlays/login-dialog";
-import type { LogoutAccountSelectorComponent as LogoutAccountSelectorComponentType } from "@oh-my-pi/pi-tui/overlays/logout-account-selector";
 import { ModelHubComponent, type ModelRoleSelectionScope } from "@oh-my-pi/pi-tui/overlays/model-hub";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatSessionContinuationNotice } from "../persistence-failure";
 import { ModelPickerComponent } from "@oh-my-pi/pi-tui/overlays/model-picker";
-import type { OAuthSelectorComponent as OAuthSelectorComponentType } from "@oh-my-pi/pi-tui/overlays/oauth-selector";
 import { PluginSelectorComponent } from "@oh-my-pi/pi-tui/overlays/plugin-selector";
 import { type ResetUsageAccount, ResetUsageSelectorComponent } from "@oh-my-pi/pi-tui/overlays/reset-usage-selector";
 import { type BranchVariantPath, RewindSelectorComponent } from "@oh-my-pi/pi-tui/overlays/rewind-selector";
@@ -159,25 +152,22 @@ import {
 } from "../settings";
 import { cfgTaskAgentModelOverrides } from "../../task/settings";
 
-interface ProviderAuthUiModules {
-	PASTE_CODE_LOGIN_PROVIDERS: typeof PasteCodeLoginProviders;
-	getOAuthProviders: typeof GetOAuthProviders;
-	getOAuthCredentialProvider: typeof GetOAuthCredentialProvider;
-	LoginDialogComponent: typeof LoginDialogComponentType;
-	LogoutAccountSelectorComponent: typeof LogoutAccountSelectorComponentType;
-	OAuthSelectorComponent: typeof OAuthSelectorComponentType;
-}
-
-/** Synchronous first-use boundary for provider auth catalog and dialog components. */
-function loadProviderAuthUi(): ProviderAuthUiModules {
+/** First-use boundary for provider auth catalog and dialog components. */
+async function loadProviderAuthUi() {
+	const [{ PASTE_CODE_LOGIN_PROVIDERS }, oauth, loginDialog, logoutSelector, oauthSelector] = await Promise.all([
+		import("@oh-my-pi/pi-ai"),
+		import("@oh-my-pi/pi-ai/oauth"),
+		import("@oh-my-pi/pi-tui/overlays/login-dialog"),
+		import("@oh-my-pi/pi-tui/overlays/logout-account-selector"),
+		import("@oh-my-pi/pi-tui/overlays/oauth-selector"),
+	]);
 	return {
-		PASTE_CODE_LOGIN_PROVIDERS: require("@oh-my-pi/pi-ai/index.js").PASTE_CODE_LOGIN_PROVIDERS,
-		getOAuthProviders: require("@oh-my-pi/pi-ai/registry/oauth/index.js").getOAuthProviders,
-		getOAuthCredentialProvider: require("@oh-my-pi/pi-ai/registry/oauth/index.js").getOAuthCredentialProvider,
-		LoginDialogComponent: require("@oh-my-pi/pi-tui/overlays/login-dialog.js").LoginDialogComponent,
-		LogoutAccountSelectorComponent: require("@oh-my-pi/pi-tui/overlays/logout-account-selector.js")
-			.LogoutAccountSelectorComponent,
-		OAuthSelectorComponent: require("@oh-my-pi/pi-tui/overlays/oauth-selector.js").OAuthSelectorComponent,
+		PASTE_CODE_LOGIN_PROVIDERS,
+		getOAuthProviders: oauth.getOAuthProviders,
+		getOAuthCredentialProvider: oauth.getOAuthCredentialProvider,
+		LoginDialogComponent: loginDialog.LoginDialogComponent,
+		LogoutAccountSelectorComponent: logoutSelector.LogoutAccountSelectorComponent,
+		OAuthSelectorComponent: oauthSelector.OAuthSelectorComponent,
 	};
 }
 
@@ -2175,7 +2165,8 @@ export class SelectorController {
 	 */
 	async #handleOAuthLogin(providerId: string): Promise<boolean> {
 		this.ctx.showStatus(`正在登录 ${providerId}…`);
-		const { getOAuthCredentialProvider, LoginDialogComponent, PASTE_CODE_LOGIN_PROVIDERS } = loadProviderAuthUi();
+		const { getOAuthCredentialProvider, LoginDialogComponent, PASTE_CODE_LOGIN_PROVIDERS } =
+			await loadProviderAuthUi();
 		const useManualInput = PASTE_CODE_LOGIN_PROVIDERS.has(providerId);
 		let restored = false;
 		const restoreEditor = () => {
@@ -2289,7 +2280,7 @@ export class SelectorController {
 			return;
 		}
 
-		const { OAuthSelectorComponent } = loadProviderAuthUi();
+		const { OAuthSelectorComponent } = await loadProviderAuthUi();
 
 		this.showSelector(done => {
 			const selector = new OAuthSelectorComponent(
@@ -2343,7 +2334,7 @@ export class SelectorController {
 			this.ctx.showStatus("请先选择模型，再固定 Provider 账户。");
 			return;
 		}
-		const { getOAuthProviders } = loadProviderAuthUi();
+		const { getOAuthProviders } = await loadProviderAuthUi();
 		const provider = getOAuthProviders().find(candidate => candidate.id === accountList.provider);
 		const providerName = provider?.name ?? accountList.provider;
 		const accounts = toSessionPinAccounts(accountList.accounts);
@@ -2574,8 +2565,8 @@ export class SelectorController {
 		}
 	}
 
-	#selectLogoutProvider(): Promise<string | undefined> {
-		const { OAuthSelectorComponent } = loadProviderAuthUi();
+	async #selectLogoutProvider(): Promise<string | undefined> {
+		const { OAuthSelectorComponent } = await loadProviderAuthUi();
 		const { promise, resolve } = Promise.withResolvers<string | undefined>();
 		this.showSelector(done => {
 			const selector = new OAuthSelectorComponent(
@@ -2606,8 +2597,8 @@ export class SelectorController {
 		return promise;
 	}
 
-	#selectLogoutAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined> {
-		const { LogoutAccountSelectorComponent } = loadProviderAuthUi();
+	async #selectLogoutAccount(provider: OAuthProviderInfo, accounts: LogoutAccount[]): Promise<number | undefined> {
+		const { LogoutAccountSelectorComponent } = await loadProviderAuthUi();
 		const { promise, resolve } = Promise.withResolvers<number | undefined>();
 		this.showSelector(done => {
 			const selector = new LogoutAccountSelectorComponent(

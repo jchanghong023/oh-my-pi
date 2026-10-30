@@ -96,10 +96,10 @@ export async function routeWriteThroughBridge(
 	} catch (error) {
 		throw new ToolError(error instanceof Error ? error.message : String(error));
 	}
+	invalidateFsScanAfterWrite(absolutePath);
 	if (session.enableLsp ?? true) {
 		await notifyWorkspaceWatchedFiles(session.cwd, [{ filePath: absolutePath, type: changeType }], signal);
 	}
-	invalidateFsScanAfterWrite(absolutePath);
 	session.bumpFileMutationVersion?.(absolutePath);
 
 	// Best-effort verification: the client already flushed the write (that's

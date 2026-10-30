@@ -302,8 +302,10 @@ export class ZCodeSessionManager {
 	/** Direct descendants and progress→session identity derive from the native journal and registry. */
 	async childIdentities(id: string): Promise<Record<string, string>> {
 		const file = this.#liveSession(id)?.sessionManager.getSessionFile() ?? (await this.#find(id)).path;
-		const children = await collectSubSessions(file, key => {
-			throw new Error(`Subagent history is unreadable: ${key}`);
+		const children = await collectSubSessions(file, {
+			onUnreadable: key => {
+				throw new Error(`Subagent history is unreadable: ${key}`);
+			},
 		});
 		const identities: Record<string, string> = {};
 		for (const child of Object.values(children)) {

@@ -1,4 +1,3 @@
-import { invalidateFsScanCache } from "@oh-my-pi/pi-natives";
 import { logger } from "@oh-my-pi/pi-utils";
 
 /** Post-commit changes, or possible partial writes explicitly marked uncertain. */
@@ -73,40 +72,25 @@ function notifyMutation(paths: readonly string[], uncertaintyReason?: string): v
 
 /** Also used by native AST edits after their deferred apply actually commits. */
 export function invalidateFsScanAfterWrites(paths: readonly string[]): void {
-	for (const path of paths) invalidateFsScanCache(path);
 	if (paths.length) notifyMutation(paths);
 }
 
 /** Failed multi-file writes may have committed only a subset of their candidates. */
 export function invalidateFsScanAfterUncertainWrites(paths: readonly string[], reason: string): void {
-	for (const path of paths) invalidateFsScanCache(path);
 	notifyMutation(paths, reason);
 }
 
-/**
- * Invalidate shared filesystem scan caches after a content write/update.
- */
+/** Notify subscribers after a content write/update. */
 export function invalidateFsScanAfterWrite(path: string): void {
-	invalidateFsScanCache(path);
 	notifyMutation([path]);
 }
 
-/**
- * Invalidate shared filesystem scan caches after deleting a file.
- */
+/** Notify subscribers after deleting a file. */
 export function invalidateFsScanAfterDelete(path: string): void {
-	invalidateFsScanCache(path);
 	notifyMutation([path]);
 }
 
-/**
- * Invalidate shared filesystem scan caches after a rename/move.
- *
- * Some watchers care about the disappearance at the old path; others about the
- * appearance at the new one. Bust both to keep callers honest.
- */
+/** Notify subscribers of both paths after a rename/move. */
 export function invalidateFsScanAfterRename(oldPath: string, newPath: string): void {
-	invalidateFsScanCache(oldPath);
-	if (newPath !== oldPath) invalidateFsScanCache(newPath);
 	notifyMutation(newPath === oldPath ? [oldPath] : [oldPath, newPath]);
 }

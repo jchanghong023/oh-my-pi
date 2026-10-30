@@ -471,14 +471,19 @@ export const cfgTuiRenderSvg = register({
 export const cfgTuiAutoGraph = register({
 	id: "tui.autoGraph",
 	type: "enum",
-	values: ["smart", "always", "off"] as const,
-	default: "always",
+	values: ["auto", "smart", "always", "off"] as const,
+	default: "auto",
 	ui: {
 		tab: "appearance",
 		group: "显示",
 		label: "表格自动绘图",
 		description: "在支持图形的终端中，使用主题颜色在 Agent 回答的数值表格下方绘制图表",
 		options: [
+			{
+				value: "auto",
+				label: "Auto",
+				description: "Smart when the judge role resolves to a native TypeSafe jev model, else Always",
+			},
 			{
 				value: "smart",
 				label: "智能",

@@ -148,7 +148,7 @@ export const cfgBashGitGuard = register({
 		group: "Bash",
 		label: "Git 防护",
 		description:
-			"在 bash 工具中拒绝丢弃或移动共享工作的 git 命令：stash、reset --hard 或重置到其它提交，以及非合并或变基冲突期间的 checkout/switch/restore",
+			"在仓库主工作区中拒绝丢弃或移动共享工作的 git 命令：stash、reset --hard 或重置到其它提交，以及非合并或变基冲突期间的 checkout/switch/restore；在关联工作树中允许执行，并先保存将被丢弃的未提交改动",
 	},
 });
 

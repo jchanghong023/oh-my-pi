@@ -38,7 +38,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				},
 			},
 			ui: { requestRender: vi.fn() },
-			sessionManager: { getSessionId: () => "follow-up-session" },
+			sessionManager: { getSessionId: () => "follow-up-session", getLeafId: () => null },
 			handleDevInput: async () => false,
 			skillCommands: new Map<string, string>(),
 			session: {
@@ -87,7 +87,7 @@ describe("InputController.handleFollowUp paste-marker expansion", () => {
 				},
 			},
 			ui: { requestRender: vi.fn() },
-			sessionManager: { getSessionId: () => "follow-up-session" },
+			sessionManager: { getSessionId: () => "follow-up-session", getLeafId: () => null },
 			handleDevInput: async () => false,
 			skillCommands: new Map<string, string>(),
 			session: {

@@ -273,10 +273,20 @@ function getLiteLLMThinkingBlocksDelta(delta: object): unknown[] | undefined {
 	return Array.isArray(mirrored) && mirrored.length > 0 ? mirrored : undefined;
 }
 
-/** Whether a thinking block's signature is a raw LiteLLM (Anthropic) one, not a reasoning field name. */
+/** `thinkingSignature` marking thinking decoded from Mistral typed content parts. */
+const MISTRAL_CONTENT_PARTS_SIGNATURE = "mistral-content-parts";
+
+/**
+ * Whether a thinking block's signature is a raw LiteLLM (Anthropic) one, not a
+ * reasoning field name or the Mistral content-parts marker.
+ */
 export function isLiteLLMThinkingSignature(signature: string | undefined): signature is string {
 	return (
-		!!signature && signature !== "reasoning_content" && signature !== "reasoning" && signature !== "reasoning_text"
+		!!signature &&
+		signature !== "reasoning_content" &&
+		signature !== "reasoning" &&
+		signature !== "reasoning_text" &&
+		signature !== MISTRAL_CONTENT_PARTS_SIGNATURE
 	);
 }
 
@@ -813,7 +823,6 @@ export const streamOpenAICompletionsOnce = (
 	(async () => {
 		const startTime = performance.now();
 		let firstTokenTime: number | undefined;
-		const policy = resolveOpenAICompatForRequest(model, options, Boolean(context.tools?.length));
 
 		const output: AssistantMessage = createInitialResponsesAssistantMessage(model.api, model.provider, model.id);
 		let rawRequestDump: RawHttpRequestDump | undefined;
@@ -855,6 +864,7 @@ export const streamOpenAICompletionsOnce = (
 		let finishOpenBlocksOnError: () => void = () => {};
 
 		try {
+			const policy = resolveOpenAICompatForRequest(model, options, Boolean(context.tools?.length));
 			const apiKey =
 				options?.requestAuth !== undefined
 					? (options.requestAuth.apiKey ?? "")
@@ -1519,7 +1529,7 @@ export const streamOpenAICompletionsOnce = (
 							if (part?.type === "thinking" && Array.isArray(part.thinking)) {
 								for (const inner of part.thinking as Array<{ type?: unknown; text?: unknown } | null>) {
 									if (inner?.type === "text" && typeof inner.text === "string" && inner.text.length > 0) {
-										appendThinkingDelta(inner.text, "mistral-content-parts");
+										appendThinkingDelta(inner.text, MISTRAL_CONTENT_PARTS_SIGNATURE);
 										suppressHealedThinking = true;
 									}
 								}
@@ -1867,7 +1877,10 @@ export const streamOpenAICompletionsOnce = (
 			const result = await AIError.finalize(safeError, {
 				api: model.api,
 				provider: model.provider,
-				abortTracker,
+				// Finalization otherwise prefers the caller's raw abort reason over safeError.
+				abortTracker: codeAgent
+					? { ...abortTracker, getCallerAbortReason: () => undefined, getLocalAbortReason: () => undefined }
+					: abortTracker,
 				rawRequestDump: codeAgent ? undefined : rawRequestDump,
 				capturedErrorResponse,
 			});

@@ -117,6 +117,7 @@ mod file_backup;
 #[cfg(any(feature = "util.ls", feature = "util.stat", feature = "util.find"))]
 mod fsmeta;
 mod host;
+mod stdio;
 /// The shell's locale categories, shared by the locale-aware utilities.
 #[cfg(any(
 	feature = "util.date",
@@ -136,6 +137,7 @@ mod quoting_style;
 	feature = "util.date",
 	feature = "util.du",
 	feature = "util.ls",
+	feature = "util.rsync",
 	feature = "util.touch",
 	feature = "util.uptime"
 ))]
@@ -149,6 +151,8 @@ mod withheld;
 // Ports of the standalone command-line utilities the shell ships in-process.
 // Each runs against the explicit `host::Host` view of the shell; see
 // `src/host.rs` for the contract.
+#[cfg(feature = "util.ast-grep")]
+mod ast_grep;
 #[cfg(feature = "util.b2sum")]
 mod b2sum;
 #[cfg(feature = "util.base32")]
@@ -282,6 +286,8 @@ mod rg;
 mod rm;
 #[cfg(feature = "util.rmdir")]
 mod rmdir;
+#[cfg(all(feature = "util.rsync", any(unix, windows)))]
+mod rsync;
 #[cfg(feature = "util.sed")]
 mod sed;
 #[cfg(feature = "util.seq")]

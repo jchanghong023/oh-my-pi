@@ -12,6 +12,7 @@ import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { getEditStore } from "../edit/store";
 import type { InternalWriteResult } from "../internal-urls/types";
 import { writethroughNoop } from "../lsp/writethrough";
+import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import {
 	expandContentTokens,
 	getConflictHistory,
@@ -21,7 +22,6 @@ import {
 	scanConflictLines,
 	spliceConflict,
 } from "./conflict-detect";
-import { invalidateFsScanAfterWrite } from "./fs-cache-invalidation";
 import type { ToolSession } from "./index";
 import { formatPathRelativeToCwd } from "./path-utils";
 import { maybeWriteSnapshotHeader, stripWriteContent } from "./write-content";

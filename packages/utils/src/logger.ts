@@ -7,11 +7,13 @@
  * transport so a process supervisor (pm2, journald, k8s) captures the logs.
  *
  * Each entry includes `process.pid` so concurrent omp instances stay
- * traceable. The file is created on the first record written. Records are
- * batched — one write per second or per 64 KiB — while `warn`/`error` records
- * are written at once together with everything buffered before them; exit,
- * fatal, and signal paths flush the rest. Offline processes emit errors only;
- * otherwise `OMP_LOG_LEVEL` limits file levels (default: all).
+ * traceable, and the fields of the enclosing {@link withContext} (a session's
+ * `sessionId`) so sessions sharing one process stay apart. The file is created
+ * on the first record written. Records are batched — one write per second or
+ * per 64 KiB — while `warn`/`error` records are written at once together with
+ * everything buffered before them; exit, fatal, and signal paths flush the
+ * rest. Offline processes emit errors only; otherwise `OMP_LOG_LEVEL` limits
+ * file levels (default: all).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -147,7 +149,7 @@ export function registerLogSink(sink: LogSink): () => void {
 
 function emitToSinks(level: LogLevel, message: string, context: Record<string, unknown> | undefined): void {
 	if (logSinks.size === 0) return;
-	const event: LogEvent = { level, message, context, timestamp: new Date() };
+	const event: LogEvent = { level, message, context: mergedLogContext(context), timestamp: new Date() };
 	for (const sink of logSinks) {
 		try {
 			sink(event);
@@ -359,6 +361,26 @@ function formatLocalTimestamp(date: Date): string {
 
 const FORMAT_TOKEN_PATTERN = /%[scdjifoO%]/;
 
+/**
+ * Run `fn` with `context`'s fields on every record logged while it runs,
+ * including from the promises, timers and callbacks it starts. A nested call
+ * replaces the enclosing context, as a subagent's session replaces its
+ * parent's; a field passed to the log call itself wins. Fields are read as each
+ * record is written, so a getter stays current.
+ */
+export function withContext<T>(context: Readonly<Record<string, unknown>>, fn: () => T): T {
+	return logContextStorage.run(context, fn);
+}
+
+/**
+ * Run `fn` outside any {@link withContext}: for process-wide work started on
+ * behalf of one caller, such as a shared server's read loop, whose later
+ * records belong to no single caller.
+ */
+export function withoutContext<T>(fn: () => T): T {
+	return logContextStorage.exit(fn);
+}
+
 /** Serialize one log record: timestamp, level, pid, message, then context fields. */
 function formatLogRecord(
 	level: LogLevel,
@@ -374,6 +396,12 @@ function formatLogRecord(
 		pid: process.pid,
 		message: metadata?.message ? `${message} ${metadata.message}` : message,
 	};
+	const scoped = logContextStorage.getStore();
+	if (scoped) {
+		for (const key of Object.keys(scoped)) {
+			if (key !== "level" && key !== "timestamp" && key !== "message") entry[key] = scoped[key];
+		}
+	}
 	if (metadata) {
 		for (const key of Object.keys(metadata)) {
 			if (key !== "level" && key !== "timestamp" && key !== "message") entry[key] = metadata[key];
@@ -622,7 +650,6 @@ export function setTransports(opts: { console?: boolean; file?: boolean | string
  * @param context - The context to log.
  */
 export function error(message: string, context?: Record<string, unknown>): void {
-	context = mergedLogContext(context);
 	try {
 		emitLocally("error", message, context);
 	} catch {
@@ -638,7 +665,6 @@ export function error(message: string, context?: Record<string, unknown>): void 
  */
 export function warn(message: string, context?: Record<string, unknown>): void {
 	if (isOfflineErrorOnly()) return;
-	context = mergedLogContext(context);
 	try {
 		emitLocally("warn", message, context);
 	} catch {
@@ -654,7 +680,6 @@ export function warn(message: string, context?: Record<string, unknown>): void {
  */
 export function info(message: string, context?: Record<string, unknown>): void {
 	if (isOfflineErrorOnly()) return;
-	context = mergedLogContext(context);
 	try {
 		emitLocally("info", message, context);
 	} catch {
@@ -670,7 +695,6 @@ export function info(message: string, context?: Record<string, unknown>): void {
  */
 export function debug(message: string, context?: Record<string, unknown>): void {
 	if (isOfflineErrorOnly()) return;
-	context = mergedLogContext(context);
 	try {
 		emitLocally("debug", message, context);
 	} catch {

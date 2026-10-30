@@ -7,11 +7,12 @@ import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
+import { resolvePrewalkTarget } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
-import { cfgPrewalkEnabled } from "@oh-my-pi/pi-coding-agent/session/settings";
+import { cfgPrewalkEnabled, cfgPrewalkInto } from "@oh-my-pi/pi-coding-agent/session/settings";
 
 // Regression for #6064: prewalk is an optional, off-by-default optimization.
 // A missing key (or unresolvable target) for the prewalk hand-off model must
@@ -67,6 +68,23 @@ describe("prewalk startup degradation", () => {
 		expect(options.prewalk?.target.id).toBe(model.id);
 	});
 
+	test("arms the configured prewalk.into target instead of @smol", async () => {
+		const smol = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const into = getBundledModel("openai", "gpt-4o");
+		if (!smol || !into) throw new Error("expected claude-sonnet-4-5 and gpt-4o to be bundled");
+		const settings = Settings.isolated();
+		cfgPrewalkEnabled.set(settings, true);
+		cfgPrewalkInto.set(settings, `${into.provider}/${into.id}`);
+		settings.setModelRole("smol", `${smol.provider}/${smol.id}`);
+		authStorage.keys.setRuntime(smol.provider, "test-key");
+		authStorage.keys.setRuntime(into.provider, "test-key");
+
+		const options = await buildSessionOptions(parseArgs([]), [], SessionManager.inMemory(), modelRegistry, settings);
+
+		expect(options.prewalk?.target.provider).toBe(into.provider);
+		expect(options.prewalk?.target.id).toBe(into.id);
+	});
+
 	test("skips a disabled provider and arms the next enabled prewalk candidate", async () => {
 		const disabled = getBundledModel("anthropic", "claude-sonnet-4-5");
 		const enabled = getBundledModel("openai", "gpt-4o");
@@ -85,6 +103,60 @@ describe("prewalk startup degradation", () => {
 
 		expect(options.prewalk?.target.provider).toBe(enabled.provider);
 		expect(options.prewalk?.target.id).toBe(enabled.id);
+	});
+
+	test("arms a later candidate of the configured prewalk.into role when the first is unavailable", async () => {
+		const disabled = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const enabled = getBundledModel("openai", "gpt-4o");
+		if (!disabled || !enabled) throw new Error("expected claude-sonnet-4-5 and gpt-4o to be bundled");
+		const settings = Settings.isolated({ disabledProviders: [disabled.provider] });
+		cfgPrewalkEnabled.set(settings, true);
+		settings.setModelRole("smol", `${disabled.provider}/${disabled.id},${enabled.provider}/${enabled.id}`);
+		authStorage.keys.setRuntime(disabled.provider, "test-key");
+		authStorage.keys.setRuntime(enabled.provider, "test-key");
+
+		const options = await buildSessionOptions(parseArgs([]), [], SessionManager.inMemory(), modelRegistry, settings);
+
+		expect(options.prewalk?.target.provider).toBe(enabled.provider);
+		expect(options.prewalk?.target.id).toBe(enabled.id);
+	});
+
+	test("continues past an unauthenticated automatic alias to an explicit role fallback", async () => {
+		const automatic = getBundledModel("anthropic", "claude-haiku-5-5");
+		const fallback = getBundledModel("openai", "gpt-4o");
+		if (!automatic || !fallback) throw new Error("expected bundled prewalk models");
+		const settings = Settings.isolated({ modelRoles: { smol: `@smol,${fallback.provider}/${fallback.id}` } });
+		const registry = {
+			getAll: () => [automatic, fallback],
+			getAvailable: () => [automatic, fallback],
+			hasConfiguredAuth: (model: typeof fallback) => model.provider === fallback.provider,
+			getDiscoveryProviderId: () => undefined,
+		} as unknown as ModelRegistry;
+
+		const result = await resolvePrewalkTarget(["@smol"], "@smol", registry, {}, new Set(), { settings });
+		expect(result.prewalk?.target.id).toBe(fallback.id);
+	});
+
+	test("discovers an earlier configured candidate before an automatic role fallback", async () => {
+		const automatic = getBundledModel("anthropic", "claude-haiku-5-5");
+		const discovered = getBundledModel("openai", "gpt-4o");
+		if (!automatic || !discovered) throw new Error("expected bundled prewalk models");
+		const settings = Settings.isolated({ modelRoles: { smol: `${discovered.provider}/${discovered.id},@smol` } });
+		let refreshed = false;
+		const registry = {
+			getAll: () => (refreshed ? [discovered, automatic] : [automatic]),
+			getAvailable: () => (refreshed ? [discovered, automatic] : [automatic]),
+			hasProvider: (provider: string) => provider === discovered.provider,
+			hasConfiguredAuth: () => true,
+			getDiscoveryProviderId: (provider: string) => provider,
+			refreshDiscoverableProviders: async () => {
+				refreshed = true;
+			},
+		} as unknown as ModelRegistry;
+
+		const result = await resolvePrewalkTarget(["@smol"], "@smol", registry, {}, new Set(), { settings });
+		expect(refreshed).toBe(true);
+		expect(result.prewalk?.target.id).toBe(discovered.id);
 	});
 
 	test("does not implicitly re-arm configured prewalk while restoring a session", async () => {

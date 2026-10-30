@@ -273,9 +273,7 @@ describe("AgentSession queued steer delivery", () => {
 			if (checked) return;
 			checked = true;
 			expect(session.isStreaming).toBe(true);
-			await expect(session.prompt(manualContinuePrompt, { synthetic: true, userInitiated: true })).rejects.toThrow(
-				AgentBusyError,
-			);
+			await expect(session.resume()).rejects.toThrow(AgentBusyError);
 			expect(session.agent.popLastSteer()).toBeUndefined();
 			expect(session.agent.popLastFollowUp()).toBeUndefined();
 		});

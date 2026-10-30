@@ -1818,6 +1818,7 @@ describe("ModelRegistry", () => {
 		let thinkingCustom: ModelRegistry;
 		let thinkingOverride: ModelRegistry;
 		let deepseekOverride: ModelRegistry;
+		let prefixBoundOverride: ModelRegistry;
 		beforeAll(() => {
 			thinkingCustom = readonlyRegistry({
 				providers: {
@@ -1852,6 +1853,21 @@ describe("ModelRegistry", () => {
 					},
 				},
 			});
+			prefixBoundOverride = readonlyRegistry({
+				providers: {
+					anthropic: {
+						modelOverrides: {
+							"claude-opus-5-5": {
+								thinking: {
+									mode: "anthropic-adaptive",
+									supportsDisplay: true,
+									efforts: [Effort.Low, Effort.High],
+								},
+							},
+						},
+					},
+				},
+			});
 		});
 
 		test("custom models preserve explicit thinking verbatim", () => {
@@ -1879,6 +1895,18 @@ describe("ModelRegistry", () => {
 				mode: "effort",
 				efforts: [Effort.Max, Effort.High, Effort.Low],
 				defaultLevel: Effort.High,
+			});
+		});
+
+		test("model overrides keep catalog prefix binding the override does not set", () => {
+			const model = getModelsForProvider(prefixBoundOverride, "anthropic").find(m => m.id === "claude-opus-5-5");
+			// Without prefixBinding, pruning/compaction stop preserving the bound prefix
+			// and prefix-mismatch 400s are not retried (#17276).
+			expect(model?.thinking).toEqual({
+				mode: "anthropic-adaptive",
+				supportsDisplay: true,
+				efforts: [Effort.Low, Effort.High],
+				prefixBinding: true,
 			});
 		});
 	});

@@ -722,7 +722,7 @@ impl DatabaseEngine {
 
 fn rank_grep(
 	connection: &Connection,
-	matcher: &pi_walker::grep::CompiledMatcher,
+	matcher: &pi_walker::grep::Engine,
 	index: Option<&str>,
 	check: Check<'_>,
 ) -> CoreResult<Ranking> {

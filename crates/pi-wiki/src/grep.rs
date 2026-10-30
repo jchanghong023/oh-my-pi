@@ -2,7 +2,7 @@
 use std::collections::VecDeque;
 
 use grep_matcher::Matcher;
-use pi_walker::grep::CompiledMatcher;
+use pi_walker::grep::Engine;
 use rusqlite::Connection;
 
 use super::{
@@ -90,7 +90,7 @@ impl Lines {
 		&mut self,
 		safe_end: i64,
 		finish: bool,
-		matcher: &CompiledMatcher,
+		matcher: &Engine,
 		check: Check<'_>,
 	) -> CoreResult<()> {
 		let mut consumed = 0;
@@ -127,7 +127,7 @@ impl Lines {
 		&mut self,
 		from: usize,
 		until: usize,
-		matcher: &CompiledMatcher,
+		matcher: &Engine,
 		check: Check<'_>,
 	) -> CoreResult<()> {
 		let line = &self.text[from..until];
@@ -196,7 +196,7 @@ impl Lines {
 /// Scan stored document slices for regex matches on original lines.
 pub(crate) fn scan(
 	connection: &Connection,
-	matcher: &CompiledMatcher,
+	matcher: &Engine,
 	index: Option<&str>,
 	check: Check<'_>,
 ) -> CoreResult<Vec<RankedSection>> {

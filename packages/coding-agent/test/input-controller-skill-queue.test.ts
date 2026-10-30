@@ -117,7 +117,7 @@ function createStubInputControllerContext(opts: {
 	const ctx = {
 		editor,
 		ui: { requestRender },
-		sessionManager: { getSessionId: () => sessionId },
+		sessionManager: { getSessionId: () => sessionId, getLeafId: () => null },
 		handleDevInput: async () => false,
 		isDevInputRoute: () => false,
 		skillCommands: opts.skillCommands,

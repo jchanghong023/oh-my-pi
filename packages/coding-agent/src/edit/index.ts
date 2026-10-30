@@ -757,6 +757,7 @@ export class EditTool implements AgentTool<TInput> {
 	async #writeLocked(request: EditWriteRequest, signal?: AbortSignal): Promise<EditWriteResponse> {
 		if (request.op === "delete") {
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
+			invalidateFsScanAfterDelete(request.path);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
@@ -764,7 +765,6 @@ export class EditTool implements AgentTool<TInput> {
 					signal,
 				);
 			}
-			invalidateFsScanAfterDelete(request.path);
 			this.session.bumpFileMutationVersion?.(request.path);
 			const diagnostics =
 				request.flushLsp && request.lspBatchId
@@ -789,6 +789,7 @@ export class EditTool implements AgentTool<TInput> {
 			await writeFileWithFallback(request.moveTo, request.content);
 			if (mode !== undefined) await chmodMovedFile(request.moveTo, mode);
 			await deleteFileWithFallback(request.path, Bun.file(request.path));
+			invalidateFsScanAfterRename(request.path, request.moveTo);
 			if ((this.session.enableLsp ?? true) && cfgLspEnabled.get(this.session.settings)) {
 				await notifyWorkspaceWatchedFiles(
 					this.session.cwd,
@@ -799,7 +800,6 @@ export class EditTool implements AgentTool<TInput> {
 					signal,
 				);
 			}
-			invalidateFsScanAfterRename(request.path, request.moveTo);
 			this.session.bumpFileMutationVersion?.(request.path);
 			this.session.bumpFileMutationVersion?.(request.moveTo);
 			const diagnostics =

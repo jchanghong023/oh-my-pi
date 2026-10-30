@@ -176,21 +176,23 @@ function createMode(options?: { pendingStart?: boolean; skillCommands?: Map<stri
 }
 
 describe("submitInteractiveInput", () => {
-	it("routes already-started synthetic continue submissions to a hidden developer prompt", async () => {
+	it("routes already-started continue shortcuts to session.resume instead of a prompt", async () => {
 		const mode = createMode({ pendingStart: false });
 		const session = {
 			model: undefined,
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
-		const input = createInput({ text: "resume now", started: true, synthetic: true });
+		const input = createInput({ text: ".", started: true, resume: true });
 
 		await submitInteractiveInput(mode, session, input);
 
 		expect(mode.markPendingSubmissionStarted).not.toHaveBeenCalled();
-		expect(session.prompt).toHaveBeenCalledWith("resume now", { synthetic: true, expandPromptTemplates: false });
+		expect(session.resume).toHaveBeenCalledTimes(1);
+		expect(session.prompt).not.toHaveBeenCalled();
 		expect(mode.finishPendingSubmission).toHaveBeenCalledWith(input);
 		expect(mode.showError).not.toHaveBeenCalled();
 	});
@@ -202,6 +204,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput();
@@ -221,6 +224,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "continue goal", customType: "goal-continuation" });
@@ -250,6 +254,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "loop prompt" });
@@ -267,6 +272,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: true,
 		};
 		const input = createInput({ text: "interrupt now", streamingBehavior: "steer" });
@@ -291,6 +297,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "/void-cmd" });
@@ -313,6 +320,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "repeat me" });
@@ -334,6 +342,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => false),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "/other-cmd" });
@@ -357,6 +366,7 @@ describe("submitInteractiveInput", () => {
 				throw new Error("attachment too large");
 			}),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "failing body" });
@@ -380,6 +390,7 @@ describe("submitInteractiveInput", () => {
 			...skillPromptBuilder,
 			prompt: vi.fn(async () => true),
 			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
 			isStreaming: false,
 		};
 		const input = createInput({ text: "/skill:recap what changed" });

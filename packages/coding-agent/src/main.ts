@@ -8,7 +8,6 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fsSync from "node:fs";
 import * as os from "node:os";
 import type { ThinkingLevel } from "@oh-my-pi/pi-agent-core/thinking";
-import { EventLoopKeepalive } from "@oh-my-pi/pi-agent-core/utils/yield";
 import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import { getModelPricingStatus } from "@oh-my-pi/pi-catalog/models";
 import { isEnoent, isEnotdir } from "@oh-my-pi/pi-utils";
@@ -69,7 +68,6 @@ import {
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
-	DEFAULT_PREWALK_TARGET,
 	disabledProviderIds,
 	getModelMatchPreferences,
 	resolveCliModel,
@@ -221,6 +219,7 @@ import {
 	cfgHideThinkingBlock,
 	cfgOmitThinking,
 	cfgPrewalkEnabled,
+	cfgPrewalkInto,
 	cfgSessionMaxCost,
 	cfgSessionWarnCost,
 	cfgSessionWorktreeScope,
@@ -294,6 +293,11 @@ async function loadReadlineInterface() {
 
 export function writeStartupNotice(parsedArgs: Pick<Args, "mode">, text: string): void {
 	(parsedArgs.mode === "json" ? process.stderr : process.stdout).write(text);
+}
+
+/** Print a non-fatal startup warning, for launches without a UI to show it in. */
+function writeStartupWarning(warning: string): void {
+	process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
 }
 
 async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
@@ -468,7 +472,10 @@ export async function submitInteractiveInput(
 		| "optimisticSkillMessagePending"
 	> &
 		Partial<Pick<InteractiveMode, "loopPrompt" | "pauseLoop">>,
-	session: Pick<AgentSession, "model" | "buildUserSkillPrompt" | "prompt" | "promptCustomMessage" | "isStreaming">,
+	session: Pick<
+		AgentSession,
+		"model" | "buildUserSkillPrompt" | "prompt" | "promptCustomMessage" | "resume" | "isStreaming"
+	>,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {
@@ -478,7 +485,6 @@ export async function submitInteractiveInput(
 	let customSubmissionFinished = false;
 
 	try {
-		using _keepalive = new EventLoopKeepalive();
 		// Honor the submission's queue intent, defaulting to followUp. Reading
 		// `session.isStreaming` to decide queue-vs-fresh is NOT atomic with the
 		// eventual `agent.prompt()` call inside `session.prompt()`: a background turn
@@ -490,10 +496,9 @@ export async function submitInteractiveInput(
 		// the message instead of erroring when a turn is already underway. Normal
 		// user Enter carries "steer" (interrupt, matching the streaming-branch Enter);
 		// background/continuation submits omit it and fall back to "followUp". The
-		// synthetic branch below opts out by design.
+		// resume branch below opts out by design.
 		const streamingBehavior = input.streamingBehavior ?? ("followUp" as const);
-		// Continue shortcuts submit an already-started synthetic developer prompt with
-		// no optimistic user message.
+		// Continue shortcuts arrive already started: they render no optimistic user message.
 		if (!input.started && !mode.markPendingSubmissionStarted(input)) {
 			return;
 		}
@@ -517,17 +522,14 @@ export async function submitInteractiveInput(
 			customDispatched = false;
 			input.dispatched = customDispatched = await session.promptCustomMessage(message, { streamingBehavior });
 		} else if (input.synthetic) {
-			// Synthetic continue shortcuts are hidden developer prompts. The streaming
-			// queue (#queueUserMessage) only carries user-attributed messages, so we do
-			// NOT pass streamingBehavior here: queueing would silently demote the
-			// developer directive to a visible user message. A synthetic submit while
-			// streaming keeps its prior behavior (rejected as busy) rather than changing
-			// its role.
 			await session.prompt(input.text, {
 				synthetic: true,
 				expandPromptTemplates: false,
 				userInitiated: input.userInitiated,
 			});
+		} else if (input.resume) {
+			// Resume cannot be queued as a user message.
+			await session.resume();
 		} else if (isKnownSkillCommand(skillHost, input.text)) {
 			// Resubmitted skill text must dispatch through the skill path, or the
 			// model receives a literal `/skill:` token.
@@ -876,7 +878,6 @@ async function runInteractiveMode(
 
 	if (startupRestore) {
 		try {
-			using _keepalive = new EventLoopKeepalive();
 			const { turn, subagents } = await startupRestore();
 			const agents = subagents.length === 1 ? "1 subagent" : `${subagents.length} subagents`;
 			mode.showStatus(
@@ -895,7 +896,6 @@ async function runInteractiveMode(
 
 	if (initialMessage !== undefined) {
 		try {
-			using _keepalive = new EventLoopKeepalive();
 			// `steer` covers the race where the user submits a prompt of their own
 			// before this dispatch runs (the composer accepts input as soon as the
 			// first turn starts): the CLI message queues into that turn instead of
@@ -909,7 +909,6 @@ async function runInteractiveMode(
 
 	for (const message of initialMessages) {
 		try {
-			using _keepalive = new EventLoopKeepalive();
 			await session.prompt(message, { streamingBehavior: "steer" });
 		} catch (error: unknown) {
 			const errorMessage = error instanceof Error ? error.message : "Unknown error occurred";
@@ -1101,12 +1100,17 @@ async function switchToResumedProject(
 	return { cwd };
 }
 
-function notifyResumeCwdFallback(parsedArgs: Args, resumedProject: ResumedProjectResult, cwd: string): void {
+/** `notifs` is the interactive UI's startup notices: an interactive launch writes nothing before its UI. */
+function notifyResumeCwdFallback(
+	parsedArgs: Args,
+	resumedProject: ResumedProjectResult,
+	cwd: string,
+	notifs: (InteractiveModeNotify | null)[] | undefined,
+): void {
 	if (!resumedProject.chdirFailed) return;
-	writeStartupNotice(
-		parsedArgs,
-		`${chalk.yellow(`Could not switch to resumed project ${resumedProject.chdirFailed}; staying in ${cwd}.`)}\n`,
-	);
+	const notice = `Could not switch to resumed project ${resumedProject.chdirFailed}; staying in ${cwd}.`;
+	if (notifs) notifs.push({ kind: "warn", message: notice });
+	else writeStartupNotice(parsedArgs, `${chalk.yellow(notice)}\n`);
 }
 
 /**
@@ -1497,13 +1501,17 @@ export function applyResolvedSystemPromptInputs(
 	}
 }
 
-/** Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage. */
+/**
+ * Builds startup session options from parsed CLI flags, scoped models, and resolved session lineage.
+ * Non-fatal warnings go to `warn`, which an interactive launch points at its UI's startup notices.
+ */
 export async function buildSessionOptions(
 	parsed: Args,
 	scopedModels: ScopedModel[],
 	sessionManager: SessionManager | undefined,
 	modelRegistry: ModelRegistry,
 	activeSettings: Settings,
+	warn: (warning: string) => void = writeStartupWarning,
 ): Promise<CreateAgentSessionOptions> {
 	const options: CreateAgentSessionOptions = {
 		cwd: parsed.cwd ?? getProjectDir(),
@@ -1603,9 +1611,7 @@ export async function buildSessionOptions(
 			settings: activeSettings,
 			preferences: modelMatchPreferences,
 		});
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-		}
+		if (resolved.warning) warn(resolved.warning);
 		if (resolved.disabledProvider !== undefined) {
 			// Deferring a disabled pin to post-extension resolution would let it
 			// through, so refuse here (issue #13079).
@@ -1619,7 +1625,21 @@ export async function buildSessionOptions(
 			// Extensions may register an earlier configured role candidate.
 			options.modelPattern = parsed.model;
 		} else if (resolved.error) {
-			if (!parsed.provider && ((resolved.configuredPatterns?.length ?? 0) > 0 || !parsed.model.includes(":"))) {
+			if (
+				parsed.provider &&
+				!parsed.model.includes(":") &&
+				// Provider-level knowledge: a discovery provider may hold no rows until refresh.
+				(modelRegistry.hasProvider(parsed.provider) || modelRegistry.hasProvider(parsed.provider.toLowerCase()))
+			) {
+				// Same deferral as `provider/id` for a known provider: extensions and account
+				// discovery may still add the id. An unknown `--provider` still fails here.
+				options.modelPattern = parsed.model.toLowerCase().startsWith(`${parsed.provider.toLowerCase()}/`)
+					? parsed.model
+					: `${parsed.provider}/${parsed.model}`;
+			} else if (
+				!parsed.provider &&
+				((resolved.configuredPatterns?.length ?? 0) > 0 || !parsed.model.includes(":"))
+			) {
 				// Model not found in built-in registry — defer resolution to after extensions load
 				// (extensions may register additional providers/models via registerProvider)
 				options.modelPattern = parsed.model;
@@ -1713,19 +1733,16 @@ export async function buildSessionOptions(
 			? true
 			: !restoringSession && cfgPrewalkEnabled.get(activeSettings);
 	if (prewalkEnabled) {
-		const target = parsed.prewalkInto ?? DEFAULT_PREWALK_TARGET;
-		// Explicit targets retain the default role from before `--model`; all
-		// other lookups stay live, including the implicit @smol target.
+		const target = parsed.prewalkInto ?? cfgPrewalkInto.get(activeSettings);
 		const roleLookup =
 			parsed.prewalkInto === undefined
-				? undefined
+				? activeSettings
 				: {
 						getModelRole: (role: string) =>
 							role === "default" ? preModelOverrideDefaultRole : activeSettings.getModelRole(role),
 					};
-		// Bare `default` is the historical prewalk role selector, not a model id.
 		const targetSelector = target.trim() === "default" ? "@default" : target;
-		const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, roleLookup ?? activeSettings, {
+		const configuredPatterns = resolveConfiguredModelPatterns(targetSelector, roleLookup, {
 			preserveAutomaticRoleAliases: true,
 		});
 		const targetPatterns = configuredPatterns.length > 0 ? configuredPatterns : [targetSelector];
@@ -1743,9 +1760,7 @@ export async function buildSessionOptions(
 			options.deferredPrewalk = { target, patterns: targetPatterns, roleLookup };
 		} else {
 			options.prewalk = selection.prewalk;
-			for (const warning of selection.warnings) {
-				process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
-			}
+			for (const warning of selection.warnings) warn(warning);
 		}
 	}
 
@@ -1760,9 +1775,7 @@ export async function buildSessionOptions(
 			settings: activeSettings,
 			preferences: modelMatchPreferences,
 		});
-		if (resolved.warning) {
-			process.stderr.write(`${chalk.yellow(`Warning: ${resolved.warning}`)}\n`);
-		}
+		if (resolved.warning) warn(resolved.warning);
 		if (resolved.error || !resolved.model) {
 			throw new Error(resolved.error ?? `Model "${parsed.planYoloInto ?? "@smol"}" not found`);
 		}
@@ -2397,7 +2410,7 @@ export async function runRootCommand(
 				sessionManager,
 			);
 			cwd = resumedProject.cwd;
-			notifyResumeCwdFallback(parsedArgs, resumedProject, cwd);
+			notifyResumeCwdFallback(parsedArgs, resumedProject, cwd, isInteractive ? notifs : undefined);
 			if (cwd !== previousCwd) {
 				// applyStartupCwd persists an explicit --cwd in parsedArgs; once resume
 				// switches projects, keep session construction on the destination too.
@@ -2489,7 +2502,7 @@ export async function runRootCommand(
 				sessionManager,
 			);
 			cwd = resumedProject.cwd;
-			notifyResumeCwdFallback(parsedArgs, resumedProject, cwd);
+			notifyResumeCwdFallback(parsedArgs, resumedProject, cwd, isInteractive ? notifs : undefined);
 			if (cwd !== previousCwd) {
 				parsedArgs.cwd = cwd;
 				scopedModels = await resolveScopedModels(parsedArgs, modelRegistry, settingsInstance);
@@ -2526,6 +2539,13 @@ export async function runRootCommand(
 
 		let startupTelemetry: CreateAgentSessionOptions["telemetry"];
 		let startupExtensions: CreateAgentSessionOptions["extensions"];
+		// An interactive launch writes nothing to the terminal before its UI: the
+		// first paint clears the screen, and in Tern the surface would open over
+		// (and briefly flash) any line printed ahead of it.
+		const startupWarning = (warning: string): void => {
+			if (isInteractive) notifs.push({ kind: "warn", message: warning });
+			else writeStartupWarning(warning);
+		};
 		const buildStartupSessionOptions = async (manager: SessionManager | undefined) => {
 			const options = await logger.time(
 				"buildSessionOptions",
@@ -2535,6 +2555,7 @@ export async function runRootCommand(
 				manager,
 				modelRegistry,
 				settingsInstance,
+				startupWarning,
 			);
 			options.authStorage = authStorage;
 			options.modelRegistry = modelRegistry;
@@ -2546,10 +2567,7 @@ export async function runRootCommand(
 			options.settings = settingsInstance;
 			options.telemetry = startupTelemetry;
 			options.extensions = startupExtensions;
-			options.onPrewalkWarning = warning => {
-				if (isInteractive) notifs.push({ kind: "warn", message: warning });
-				else process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
-			};
+			options.onPrewalkWarning = startupWarning;
 			return options;
 		};
 		let sessionOptions = await buildStartupSessionOptions(sessionManager);
@@ -2971,6 +2989,12 @@ export async function runRootCommand(
 
 			if (modelFallbackMessage) {
 				notifs.push({ kind: "warn", message: modelFallbackMessage });
+				// Non-interactive runs have no notification surface: a model that still
+				// started in place of the requested one is reported on stderr, keeping
+				// structured stdout clean. A run with no model reports it below.
+				if (!isInteractive && session.model) {
+					process.stderr.write(`${chalk.yellow(`Warning: ${modelFallbackMessage}`)}\n`);
+				}
 			}
 
 			const modelRegistryError = modelRegistry.getError();
@@ -3001,11 +3025,22 @@ export async function runRootCommand(
 				if (parsedArgs.model && availableModels.length > 0) {
 					// Credentials work; the requested selector is what failed. Point at
 					// the nearest usable models instead of an API-key checklist.
-					const suggestions = fuzzyFilter(
-						availableModels.map(model => `${model.provider}/${model.id}`),
-						parsedArgs.model,
-						selector => selector,
-					).slice(0, 5);
+					// A provider-qualified request names an exact id: its message carries
+					// that provider's near ids, if any. The cross-provider list is for bare ones.
+					const slashIndex = parsedArgs.model.indexOf("/");
+					const namedProvider =
+						slashIndex === -1 ? undefined : parsedArgs.model.slice(0, slashIndex).toLowerCase();
+					const qualified =
+						Boolean(parsedArgs.provider) ||
+						(namedProvider !== undefined &&
+							modelRegistry.getAll().some(model => model.provider.toLowerCase() === namedProvider));
+					const suggestions = qualified
+						? []
+						: fuzzyFilter(
+								availableModels.map(model => `${model.provider}/${model.id}`),
+								parsedArgs.model,
+								selector => selector,
+							).slice(0, 5);
 					if (suggestions.length > 0) {
 						process.stderr.write(`${chalk.yellow("\nDid you mean:")}\n`);
 						for (const selector of suggestions) process.stderr.write(`  ${selector}\n`);

@@ -438,7 +438,7 @@ agent 拿到的是结构化内容，而不是被剥光的 HTML。
 | ------------- | -------------------------------------------------------------------------------------- | -----: |
 | pi-shell      | 内嵌 bash 引擎 · 持久会话 · 进程内 coreutils 调度 · 输出 minimizer | 38,000 |
 | pi-natives    | N-API 接口层 —— 即下表所有模块                                    | 25,000 |
-| pi-walker     | 并行、识别 ignore 的遍历器 + 供 grep · glob · workspace · shell 共用的扫描缓存    |  5,200 |
+| pi-walker     | 并行遍历 · 目录列表缓存 · glob · 供 natives 与 shell rg/grep/fd 共用的正则搜索 | 11,400 |
 | pi-iso        | 工作区隔离 · apfs · btrfs · zfs · reflink · overlayfs · projfs · rcopy        |  3,300 |
 | pi-ast        | tree-sitter + ast-grep 匹配、代码块定位、结构化摘要                |  2,900 |
 | pi-voice      | 音频采集/播放 · Opus · 实时 WebRTC                                            |  1,000 |
@@ -654,7 +654,7 @@ bun dev -- --version
 | **[pi-ast](crates/pi-ast)**                        | 基于 tree-sitter 的代码摘要器与 AST 工具（50+ 语言语法） |
 | **[pi-iso](crates/pi-iso)**                        | 任务隔离后端解析器：APFS clones、btrfs/zfs reflinks、overlayfs、projfs、rcopy |
 | **[pi-voice](crates/pi-voice)**                    | 音频采集/播放、Opus 编解码与实时 WebRTC 流式原语 |
-| **[pi-walker](crates/pi-walker)**                  | 并行的忽略规则感知文件系统遍历器，其扫描缓存由 grep、glob 与 workspace 共享 |
+| **[pi-walker](crates/pi-walker)**                  | 供 natives 与 shell 共用的并行忽略规则感知遍历器、目录列表缓存、glob 与内容搜索 |
 | **[pi-edit](crates/pi-edit)**                      | `edit` 工具背后的编辑引擎：基于行的 patch/hashline 模式、流式预览、原子应用 |
 | **[brush-core](crates/vendor/brush-core)**         | 为内嵌 bash 执行而 vendor 的 [brush-shell](https://github.com/reubeno/brush) fork |
 | **[pi-builtins](crates/pi-builtins)**              | Bash builtins（cd、echo、test、printf、read、export、…）外加 67 个进程内命令行工具 |
@@ -669,7 +669,7 @@ Issues 与 pull requests 对所有人开放。目前的开放 PR 仍属**试行*
 
 OMP 基于 [MIT License](LICENSE) 授权。
 
-第三方与 vendor 代码（包括 `crates/vendor/brush-core` 以及 `crates/pi-builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。署名与附加条款见 `THIRD-PARTY-NOTICES.txt` 及各组件内的声明。
+第三方与 vendor 代码（包括 `crates/vendor/brush-core` 以及 `crates/pi-builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
 
 © 2025 Mario Zechner
 © 2025-2026 Can Bölük

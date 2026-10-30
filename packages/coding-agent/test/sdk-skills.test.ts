@@ -115,10 +115,24 @@ Loaded via symbolic link.
 		);
 	});
 
-	afterEach(cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome })));
+	// Every session binds process state (discovery toggles, effects, the shared-LSP mode) until disposed.
+	const sessions: AgentSession[] = [];
+	const createSession = async (options: Parameters<typeof createAgentSession>[0]) => {
+		const created = await createAgentSession(options);
+		sessions.push(created.session);
+		return created;
+	};
+	const removeTempHome = cleanupTempHome(() => ({ tempDir, tempHomeDir, originalHome }));
+
+	afterEach(async () => {
+		for (const session of sessions.splice(0)) {
+			if (!session.isDisposed) await session.dispose();
+		}
+		removeTempHome();
+	});
 
 	it("should discover skills by default and expose them on session.skills", async () => {
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -160,7 +174,7 @@ Loaded via symbolic link.
 		};
 		let session: AgentSession | undefined;
 		try {
-			({ session } = await createAgentSession({
+			({ session } = await createSession({
 				...baseSessionOptions,
 				sessionManager: SessionManager.inMemory(),
 				settings: createIsolatedSkillsSettings([settingsPackage]),
@@ -173,7 +187,7 @@ Loaded via symbolic link.
 
 			await session.dispose();
 			session = undefined;
-			({ session } = await createAgentSession({
+			({ session } = await createSession({
 				...baseSessionOptions,
 				sessionManager: SessionManager.inMemory(),
 				settings: createIsolatedSkillsSettings([settingsPackage]),
@@ -188,7 +202,7 @@ Loaded via symbolic link.
 	});
 
 	it("should discover skills when skill directory is a symlink", async () => {
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -204,7 +218,7 @@ Loaded via symbolic link.
 		removeSyncWithRetries(path.join(userAgentDir, "skills"));
 		fs.writeFileSync(path.join(userAgentDir, "placeholder.txt"), "placeholder");
 
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -216,7 +230,7 @@ Loaded via symbolic link.
 	});
 
 	it("refreshSkills reloads project skills on an existing session", async () => {
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -254,7 +268,7 @@ This skill is added after session creation.
 
 	it("a live skills.customDirectories edit exposes the directory's skills without restart", async () => {
 		const settings = createIsolatedSkillsSettings();
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -287,7 +301,7 @@ This skill is added after session creation.
 		setAgentDir(managedAgentDir);
 		const settings = createIsolatedSkillsSettings();
 		cfgAutolearnEnabled.set(settings, true);
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: managedAgentDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -352,7 +366,7 @@ This skill is added after session creation.
 			"autolearn.enabled": true,
 			"memory.backend": "local",
 		});
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: managedAgentDir,
 			sessionManager: SessionManager.inMemory(tempDir),
@@ -389,7 +403,7 @@ This skill is added after session creation.
 	});
 
 	it("should have empty skills when options.skills is empty array (--no-skills)", async () => {
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),
@@ -413,7 +427,7 @@ This skill is added after session creation.
 			source: "custom" as const,
 		};
 
-		const { session } = await createAgentSession({
+		const { session } = await createSession({
 			cwd: tempDir,
 			agentDir: tempDir,
 			sessionManager: SessionManager.inMemory(),

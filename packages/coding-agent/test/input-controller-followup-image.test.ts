@@ -71,7 +71,7 @@ function createContext(opts: {
 	const ctx = {
 		editor,
 		ui: { requestRender },
-		sessionManager: { getSessionId: () => "follow-up-session" },
+		sessionManager: { getSessionId: () => "follow-up-session", getLeafId: () => null },
 		handleDevInput: async () => false,
 		skillCommands: new Map<string, string>(),
 		session: {

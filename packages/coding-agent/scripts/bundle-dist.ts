@@ -12,11 +12,26 @@ import { withCompilerActivity } from "../../../scripts/test-gate-events";
 const packageDir = path.join(import.meta.dir, "..");
 const defaultOutDir = path.join(packageDir, "dist");
 const shebang = "#!/usr/bin/env bun\n";
-const htmlExportAssetPattern =
+// Remove old inline-viewer sidecars left in an existing output directory.
+const obsoleteHtmlExportAssetPattern =
 	/^(?:template-[^.]+\.(?:css|html|js)|tool-views\.generated-[^.]+\.js|(?:marked|highlight)\.min-[^.]+\.js)$/;
 
 // Native / optional / platform-specific deps are loaded from installed files.
 const ALWAYS_EXTERNAL = ["@oh-my-pi/pi-natives", "@huggingface/transformers", "fastembed", "onnxruntime-node"];
+
+/**
+ * Embeds `@oh-my-pi/pi-natives/THIRD-PARTY-NOTICES.txt` even though the natives package is external. An external
+ * text import would be hoisted to a top-level import of `dist/cli.js`, reading the installed addon's notices on every
+ * launch instead of only for `omp --license`.
+ */
+const inlineNativeNoticesPlugin: Bun.BunPlugin = {
+	name: "inline-native-notices",
+	setup(build) {
+		build.onResolve({ filter: /^@oh-my-pi\/pi-natives\/THIRD-PARTY-NOTICES\.txt$/ }, () => ({
+			path: path.join(packageDir, "../natives/THIRD-PARTY-NOTICES.txt"),
+		}));
+	},
+};
 
 // Heavy, lazily-used third-party leaf deps. Each is a declared `dependency`, so the
 // published package resolves it from node_modules at runtime; bundling only embeds a
@@ -71,7 +86,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry.endsWith(".js.map") ||
 					/\.json-[^/]+\.zst$/.test(entry) ||
 					(entry.startsWith("CHANGELOG-") && entry.endsWith(".md")) ||
-					htmlExportAssetPattern.test(entry),
+					obsoleteHtmlExportAssetPattern.test(entry),
 			)
 			.map(entry => fs.rm(path.join(outDir, entry), { force: true })),
 	);
@@ -104,6 +119,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				createJsonParsePlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(specDrivenArchive),
+				inlineNativeNoticesPlugin,
 			],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],
 			define: {

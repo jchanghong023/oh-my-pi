@@ -9,17 +9,15 @@ import { NO_AUTH_SENTINEL } from "@oh-my-pi/pi-ai/auth-retry";
 import {
 	applyClaudeToolPrefix,
 	buildAnthropicClientOptions,
-	buildAnthropicHeaders,
 	claudeCodeSystemInstruction,
 	claudeToolPrefix,
 	deriveClaudeDeviceId,
 	generateClaudeCloakingUserId,
 	isClaudeCloakingUserId,
-	mapStainlessArch,
-	mapStainlessOs,
 	streamAnthropic,
 	stripClaudeToolPrefix,
 } from "@oh-my-pi/pi-ai/providers/anthropic";
+import { buildAnthropicHeaders, mapStainlessArch, mapStainlessOs } from "@oh-my-pi/pi-ai/providers/anthropic-headers";
 import type { MessageCreateParams } from "@oh-my-pi/pi-ai/providers/anthropic-wire";
 import { getClaudeCodeVersion } from "@oh-my-pi/pi-ai/providers/claude-code-fingerprint";
 import { getEnvApiKey } from "@oh-my-pi/pi-ai/env-api-key";
@@ -955,6 +953,17 @@ describe("Anthropic request fingerprint alignment", () => {
 		// proxies reject the request. Same sentinel guard as the openai transports.
 		const headers = buildAnthropicHeaders({
 			apiKey: NO_AUTH_SENTINEL,
+			baseUrl: "https://proxy.example.com",
+			stream: true,
+		});
+
+		expect(headers.Authorization).toBeUndefined();
+		expect(headers["X-Api-Key"]).toBeUndefined();
+	});
+
+	it("sends no Authorization for empty credentials on non-official endpoints", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "",
 			baseUrl: "https://proxy.example.com",
 			stream: true,
 		});

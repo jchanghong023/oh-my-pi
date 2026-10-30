@@ -136,8 +136,10 @@ export class LegacySessionBridge {
 		const params = L.zcodeSessionSubagentsParamsSchema.parse(raw);
 		const read = await this.#options.manager.read(params.sessionId);
 		if (!read.info?.path) throw new Error("Subagent journal directory is unavailable");
-		const persisted = await collectSubSessions(read.info.path, key => {
-			throw new Error(`Subagent history is unreadable: ${key}`);
+		const persisted = await collectSubSessions(read.info.path, {
+			onUnreadable: key => {
+				throw new Error(`Subagent history is unreadable: ${key}`);
+			},
 		});
 		const native = await this.#options.manager.nativeChild(params.sessionId);
 		const owner = this.#options.getRecord?.(params.sessionId) ?? native?.root;

@@ -24,7 +24,7 @@ import { closeSessionIndex, listSessionRecaps } from "@oh-my-pi/pi-coding-agent/
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { setAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { driveTurn, elapse, flush, until, wait } from "../helpers/fake-clock";
+import { drive, driveTurn, elapse, flush, until, wait } from "../helpers/fake-clock";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "../helpers/settings-test-state";
 
 const RECAP = "Reworked the login flow; next: wire the focused token-refresh test.";
@@ -350,15 +350,18 @@ describe("InteractiveMode idle recap", () => {
 		const continuation = await wait(input);
 		expect(continuation.customType).toBe("goal-continuation");
 
-		// The session takes it, queued into a turn that has not ended yet: its `agent_end` is still to come.
-		vi.spyOn(session, "promptCustomMessage").mockImplementationOnce(() => Promise.resolve(true));
-		await wait(submitInteractiveInput(mode, session, continuation));
-		await flush();
+		// Dispatch the real continuation and hold its provider request before the turn ends.
+		const held = holdNext(models.main);
+		const submitted = submitInteractiveInput(mode, session, continuation);
+		await drive(held.started);
 		await elapse(3 * RECAP_DELAY_MS);
 		expect(models.side.calls).toHaveLength(0);
 
-		// That turn ends, and the stretch it closes is recapped.
-		await runTurn(session);
+		// The actual continuation finishes and opens the next idle stretch.
+		held.release({ content: ["Continuation finished."] });
+		await driveTurn(session, submitted);
+		await wait(session.waitForIdle());
+		await flush();
 		await elapse(RECAP_DELAY_MS);
 		await until(() => shown(mode, RECAP) > 0, "the recap on screen");
 		await elapse(3 * RECAP_DELAY_MS);

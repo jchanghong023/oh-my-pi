@@ -1,7 +1,14 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getProjectDir, isEnoent, parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
+import {
+	getProjectDir,
+	isEnoent,
+	normalizePathForComparison,
+	parseFrontmatter,
+	prompt,
+	relativePathWithinNormalizedRoot,
+} from "@oh-my-pi/pi-utils";
 import {
 	isValidManagedSkillName,
 	MANAGED_SKILLS_PROVIDER_ID,
@@ -768,7 +775,7 @@ export function findStaleSkillStandIn(
 	skills: readonly Skill[],
 ): Skill | undefined {
 	const staleRoot = registeredPluginRootOf(stale.filePath);
-	const staleRelativePath = staleRoot && path.relative(staleRoot.root, stale.filePath);
+	const staleRelativePath = staleRoot && pathInsidePluginRoot(staleRoot.root, stale.filePath);
 	const pinned = (skill: Partial<Pick<Skill, "source" | "_source">>) =>
 		skill.source?.startsWith("bundled-") === true || skill._source?.provider === "spec-driven";
 	let samePath: Skill | undefined;
@@ -781,11 +788,24 @@ export function findStaleSkillStandIn(
 		const candidateRoot = registeredPluginRootOf(candidate.filePath);
 		if (candidateRoot?.pluginId !== staleRoot?.pluginId) continue;
 		if (candidate.name === stale.name) return candidate;
-		if (candidateRoot && staleRelativePath === path.relative(candidateRoot.root, candidate.filePath)) {
+		if (
+			candidateRoot &&
+			typeof staleRelativePath === "string" &&
+			staleRelativePath === pathInsidePluginRoot(candidateRoot.root, candidate.filePath)
+		) {
 			samePath ??= candidate;
 		}
 	}
 	return samePath;
+}
+
+/**
+ * `filePath` relative to the registered plugin `root` holding it. A root is registered under its
+ * path and its real path, and either can match a file named through the other (`/var` vs
+ * `/private/var` on macOS), so both sides are compared in normalized form.
+ */
+function pathInsidePluginRoot(root: string, filePath: string): string | null {
+	return relativePathWithinNormalizedRoot(normalizePathForComparison(root), normalizePathForComparison(filePath));
 }
 
 /**
