@@ -304,6 +304,8 @@ const forkCodingAgentFiles = new Set([
 	"test/wiki-cli.test.ts",
 	"test/wiki-tool.test.ts",
 	"test/wiki-tool-availability.test.ts",
+	"test/wiki-models.test.ts",
+	"test/wiki-semantic.test.ts",
 	"test/repo-index.test.ts",
 	"test/repo-lifecycle.test.ts",
 	"test/repo-tool.test.ts",

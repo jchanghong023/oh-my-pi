@@ -10,6 +10,7 @@
 
 ### Changed
 
+- Compact Bash previews hide raw-output artifact labels; expanded and detailed views retain them.
 - Compact tool-count summaries stay directly above the latest tool previews rather than above earlier failure output.
 - Compact mode hides ordinary tool invocation errors until expanded while retaining execution failures and actionable feedback.
 - Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.

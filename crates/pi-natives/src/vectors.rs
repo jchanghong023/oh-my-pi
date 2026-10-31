@@ -136,8 +136,25 @@ pub fn vector_index_top_k(
 	if dims == 0 || !data.len().is_multiple_of(dims) {
 		return invalid("matrix length must be a positive multiple of dimensions");
 	}
+	let (scores, indices): (Vec<_>, Vec<_>) =
+		vector_index_top_k_slice(data, dims, &query, limit as usize)
+			.into_iter()
+			.unzip();
+	Ok(VectorTopK { indices: Uint32Array::new(indices), scores: Float64Array::new(scores) })
+}
+
+/// Shared exact vector ranking kernel for native callers with validated inputs.
+#[allow(
+	clippy::suboptimal_flops,
+	reason = "mul_add rounds differently; bit-exact with the TS loops is the contract"
+)]
+pub(crate) fn vector_index_top_k_slice(
+	data: &[f32],
+	dims: usize,
+	q: &[f64],
+	limit: usize,
+) -> Vec<(f64, u32)> {
 	let count = data.len() / dims;
-	let q: &[f64] = &query;
 	let mut norm_sq = 0.0f64;
 	for &value in q {
 		norm_sq += value * value;
@@ -169,10 +186,9 @@ pub fn vector_index_top_k(
 			a.1.cmp(&b.1)
 		}
 	});
-	let take = (limit as usize).min(order.len());
+	let take = limit.min(order.len());
 	order.truncate(take);
-	let (scores, indices): (Vec<f64>, Vec<u32>) = order.into_iter().unzip();
-	Ok(VectorTopK { indices: Uint32Array::new(indices), scores: Float64Array::new(scores) })
+	order
 }
 
 /// ECMA-262 `\s` (`WhiteSpace` ∪ `LineTerminator`), which differs from Rust's

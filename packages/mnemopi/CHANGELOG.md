@@ -4,6 +4,7 @@
 
 ### Added
 
+- Expose reusable reciprocal rank fusion and a cancellable API-only embedding entry point with optional strict response validation.
 - Added correlated embedding API configuration, authentication, HTTP, response-validation, and degradation diagnostics.
 
 ### Changed

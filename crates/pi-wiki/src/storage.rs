@@ -38,7 +38,8 @@ macro_rules! summary_sql {
 		)
 	};
 }
-const SCHEMA_SQL: &str = "
+const SCHEMA_SQL: &str =
+	"
 PRAGMA journal_mode=WAL;
 PRAGMA synchronous=NORMAL;
 PRAGMA foreign_keys=ON;
@@ -55,7 +56,7 @@ CREATE TABLE IF NOT EXISTS sections (
  id INTEGER PRIMARY KEY, index_id INTEGER NOT NULL REFERENCES doc_indexes(id) ON DELETE CASCADE,
  document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL,
  heading_path TEXT NOT NULL, heading_level INTEGER NOT NULL, line_start INTEGER NOT NULL, line_end \
-                          INTEGER NOT NULL,
+	 INTEGER NOT NULL,
  byte_start INTEGER NOT NULL, byte_end INTEGER NOT NULL, raw_markdown TEXT NOT NULL,
  UNIQUE(document_id, ordinal)
 );
@@ -90,8 +91,77 @@ CREATE TRIGGER IF NOT EXISTS wiki_projection_document_update BEFORE UPDATE OF id
  DELETE FROM wiki_document_projections WHERE document_id IN (OLD.id,NEW.id);
 END;
 CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(section_id UNINDEXED, index_id \
-                          UNINDEXED, relative_path, heading_path, body, content='', \
-                          contentless_delete=1);
+	 UNINDEXED, relative_path, heading_path, body, content='', contentless_delete=1);
+CREATE TABLE IF NOT EXISTS wiki_import_owners (
+ index_id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS wiki_vector_generations (
+ index_id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, model TEXT NOT NULL,
+ dimensions INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS wiki_section_vectors (
+ index_id INTEGER NOT NULL, section_id INTEGER NOT NULL, vector BLOB NOT NULL,
+ PRIMARY KEY(index_id,section_id)
+);
+CREATE TABLE IF NOT EXISTS wiki_vector_publications (
+ index_id INTEGER PRIMARY KEY
+);
+CREATE TRIGGER IF NOT EXISTS wiki_vector_index_delete BEFORE DELETE ON doc_indexes BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id=OLD.id;
+ DELETE FROM wiki_vector_generations WHERE index_id=OLD.id;
+ DELETE FROM wiki_import_owners WHERE index_id=OLD.id;
+ DELETE FROM wiki_vector_publications WHERE index_id=OLD.id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_index_replace BEFORE INSERT ON doc_indexes BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (SELECT id FROM doc_indexes WHERE id=NEW.id OR \
+	 name=NEW.name);
+ DELETE FROM wiki_vector_generations WHERE index_id IN (SELECT id FROM doc_indexes WHERE id=NEW.id \
+	 OR name=NEW.name);
+ DELETE FROM wiki_import_owners WHERE index_id IN (SELECT id FROM doc_indexes WHERE id=NEW.id OR \
+	 name=NEW.name);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_index_update BEFORE UPDATE ON doc_indexes
+WHEN NOT EXISTS(SELECT 1 FROM wiki_vector_publications WHERE index_id=OLD.id) BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (OLD.id,NEW.id);
+ DELETE FROM wiki_vector_generations WHERE index_id IN (OLD.id,NEW.id);
+ DELETE FROM wiki_import_owners WHERE index_id IN (OLD.id,NEW.id);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_section_insert BEFORE INSERT ON sections BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (NEW.index_id, (SELECT index_id FROM sections \
+	 WHERE id=NEW.id));
+ DELETE FROM wiki_vector_generations WHERE index_id IN (NEW.index_id, (SELECT index_id FROM \
+	 sections WHERE id=NEW.id));
+ DELETE FROM wiki_import_owners WHERE index_id IN (NEW.index_id, (SELECT index_id FROM sections \
+	 WHERE id=NEW.id));
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_section_delete BEFORE DELETE ON sections BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id=OLD.index_id;
+ DELETE FROM wiki_vector_generations WHERE index_id=OLD.index_id;
+ DELETE FROM wiki_import_owners WHERE index_id=OLD.index_id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_section_update BEFORE UPDATE ON sections BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (OLD.index_id,NEW.index_id);
+ DELETE FROM wiki_vector_generations WHERE index_id IN (OLD.index_id,NEW.index_id);
+ DELETE FROM wiki_import_owners WHERE index_id IN (OLD.index_id,NEW.index_id);
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_document_insert BEFORE INSERT ON documents BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (NEW.index_id, (SELECT index_id FROM documents \
+	 WHERE id=NEW.id OR (index_id=NEW.index_id AND relative_path=NEW.relative_path)));
+ DELETE FROM wiki_vector_generations WHERE index_id IN (NEW.index_id, (SELECT index_id FROM \
+	 documents WHERE id=NEW.id OR (index_id=NEW.index_id AND relative_path=NEW.relative_path)));
+ DELETE FROM wiki_import_owners WHERE index_id IN (NEW.index_id, (SELECT index_id FROM documents \
+	 WHERE id=NEW.id OR (index_id=NEW.index_id AND relative_path=NEW.relative_path)));
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_document_delete BEFORE DELETE ON documents BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id=OLD.index_id;
+ DELETE FROM wiki_vector_generations WHERE index_id=OLD.index_id;
+ DELETE FROM wiki_import_owners WHERE index_id=OLD.index_id;
+END;
+CREATE TRIGGER IF NOT EXISTS wiki_vector_document_update BEFORE UPDATE ON documents BEGIN
+ DELETE FROM wiki_section_vectors WHERE index_id IN (OLD.index_id,NEW.index_id);
+ DELETE FROM wiki_vector_generations WHERE index_id IN (OLD.index_id,NEW.index_id);
+ DELETE FROM wiki_import_owners WHERE index_id IN (OLD.index_id,NEW.index_id);
+END;
 ";
 
 /// Summary of a stored documentation index.
@@ -192,10 +262,10 @@ pub type StorageDiagnosticHook = Arc<dyn Fn(StorageDiagnostic, Option<&WikiError
 
 /// SQLite-backed documentation index storage.
 pub struct Storage {
-	connection:  Connection,
-	diagnostics: Option<StorageDiagnosticHook>,
-	path:        String,
-	identity:    String,
+	pub(crate) connection: Connection,
+	diagnostics:           Option<StorageDiagnosticHook>,
+	pub(crate) path:       String,
+	pub(crate) identity:   String,
 }
 
 /// A row id alone is not an import identity: replacement databases and deleted
@@ -204,6 +274,13 @@ pub struct BuildIdentity {
 	database: String,
 	id:       i64,
 	hidden:   String,
+}
+
+impl BuildIdentity {
+	/// Opaque proof binding a published build to its physical database.
+	pub fn token(&self) -> String {
+		serde_json::to_string(&(&self.database, &self.hidden)).expect("string serialization")
+	}
 }
 
 /// Bun binds non-8-bit strings as UTF-16, whose initial BOM SQLite consumes.
@@ -955,6 +1032,21 @@ impl Storage {
 		result
 	}
 
+	/// Retain a fully built index under its hidden name for optional
+	/// preparation.
+	pub fn prepare_deferred(&self, build: &BuildIdentity) -> CoreResult<WikiIndexSummary> {
+		self.transaction(|storage| {
+			storage.check_build(build)?;
+			storage.connection.execute(
+				"INSERT INTO wiki_import_owners(index_id,token) VALUES(?,?)",
+				params![build.id, build.hidden],
+			)?;
+			storage
+				.get_by_id(build.id)?
+				.ok_or_else(|| WikiError::message("Document index build was removed"))
+		})
+	}
+
 	/// Promote a completed build to a visible index.
 	pub fn promote(&self, build: &BuildIdentity, name: &str) -> CoreResult<WikiIndexSummary> {
 		let started = Instant::now();
@@ -975,6 +1067,12 @@ impl Storage {
 				"UPDATE doc_indexes SET name=? WHERE id=? AND name=?",
 				params![sqlite_text(name), id, build.hidden],
 			)?;
+			if changes > 0 {
+				storage.connection.execute(
+					"INSERT INTO wiki_import_owners(index_id,token) VALUES(?,?)",
+					params![id, build.hidden],
+				)?;
+			}
 			let published = if changes > 0 {
 				storage.get_by_id(id)?
 			} else {
@@ -1183,6 +1281,103 @@ mod tests {
 			mtime_ms:      0.0,
 			sections:      parsed.sections,
 		}
+	}
+
+	#[test]
+	fn deferred_vectors_publish_atomically_and_isolate_corrupt_generations() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let mut ids = Vec::new();
+		for name in ["a", "b"] {
+			let build = storage
+				.create(&format!("__building__{name}"), "/source")
+				.unwrap();
+			storage
+				.commit_document(&build, &document(), &|| Ok(()))
+				.unwrap();
+			storage.prepare_deferred(&build).unwrap();
+			let token = build.token();
+			assert_eq!(storage.list().unwrap().len(), ids.len());
+			let count = storage.begin_vector_import(&token, "model").unwrap();
+			let sources = storage.read_vector_import_batch(&token, 0, 100).unwrap();
+			assert_eq!(count as usize, sources.len());
+			assert!(storage.publish_vector_import(&token, &|| Ok(())).is_err());
+			let rows = sources
+				.iter()
+				.map(|source| crate::vectors::VectorRow {
+					section_id: source.section_id,
+					vector:     vec![3.0, 4.0],
+				})
+				.collect::<Vec<_>>();
+			storage.write_vector_import_batch(&token, &rows).unwrap();
+			storage.publish_vector_import(&token, &|| Ok(())).unwrap();
+			storage.publish_deferred_import(&token, name).unwrap();
+			ids.push(sources[0].section_id);
+		}
+		let matrix =
+			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
+				.unwrap();
+		assert!(ids.iter().all(|id| matrix.section_ids.contains(id)));
+		storage
+			.connection
+			.execute("UPDATE wiki_section_vectors SET vector=x'0000803f' WHERE section_id=?", [ids[1]])
+			.unwrap();
+		let matrix =
+			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
+				.unwrap();
+		assert!(matrix.section_ids.contains(&ids[0]));
+		assert!(!matrix.section_ids.contains(&ids[1]));
+		storage
+			.connection
+			.execute("UPDATE sections SET raw_markdown='changed' WHERE id=?", [ids[0]])
+			.unwrap();
+		let matrix =
+			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
+				.unwrap();
+		assert!(matrix.section_ids.is_empty());
+	}
+
+	#[test]
+	fn abandoned_deferred_import_never_becomes_visible_and_is_reclaimed() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let build = storage.create("__building__abandoned", "/source").unwrap();
+		storage
+			.commit_document(&build, &document(), &|| Ok(()))
+			.unwrap();
+		storage.prepare_deferred(&build).unwrap();
+		let token = build.token();
+		storage.begin_vector_import(&token, "model").unwrap();
+		assert!(storage.list().unwrap().is_empty());
+		storage.remove_abandoned().unwrap();
+		assert!(
+			storage
+				.publish_deferred_import(&token, "abandoned")
+				.is_err()
+		);
+		assert!(storage.list().unwrap().is_empty());
+	}
+
+	#[test]
+	fn old_import_token_cannot_rollback_a_recreated_index() {
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		let original = storage.create("__building__old", "/source").unwrap();
+		storage
+			.commit_document(&original, &document(), &|| Ok(()))
+			.unwrap();
+		storage.prepare_deferred(&original).unwrap();
+		let token = original.token();
+		storage.publish_deferred_import(&token, "name").unwrap();
+		assert!(storage.remove("name").unwrap());
+		let replacement = storage.create("__building__new", "/source").unwrap();
+		storage
+			.commit_document(&replacement, &document(), &|| Ok(()))
+			.unwrap();
+		storage.promote(&replacement, "name").unwrap();
+		storage.rollback_published_import(&token).unwrap();
+		assert!(storage.get("name").unwrap().is_some());
+		assert!(storage.begin_vector_import(&token, "model").is_err());
 	}
 
 	#[test]

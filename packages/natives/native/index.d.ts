@@ -881,6 +881,19 @@ export declare class VcsRepo {
 }
 
 export declare class WikiSearchEngine {
+  hasCachedHybridCandidates(query: string, options: WikiSearchOptions, signal?: AbortSignal): Promise<boolean>
+  lookupHybridSearch(query: string, options: WikiSearchOptions, configurationIdentity: string, signal?: AbortSignal): Promise<WikiSearchOutput | null>
+  prepareHybridSearch(query: string, options: WikiSearchOptions, modelIdentity?: string, signal?: AbortSignal): Promise<WikiHybridPrepared | WikiSearchOutput>
+  scoreHybridSearch(token: string, query: Float32Array, limit: number, signal?: AbortSignal): Promise<number[] | null>
+  readHybridCandidates(token: string, sectionIds: number[], signal?: AbortSignal): Promise<WikiHybridCandidate[]>
+  finishHybridSearch(token: string, finalSectionIds: number[], contextIdentity: string, configurationIdentity: string, signal?: AbortSignal): Promise<WikiSearchOutput>
+  initDeferred(rootPath: string, name: string, onProgress?: (progress: WikiBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiDeferredBuildResult>
+  beginVectorImport(token: string, modelIdentity: string, signal?: AbortSignal): Promise<WikiVectorImport>
+  readVectorImportBatch(token: string, afterSectionId: number, limit: number, signal?: AbortSignal): Promise<WikiVectorSourceBatch>
+  writeVectorImportBatch(token: string, rows: WikiVectorRow[], signal?: AbortSignal): Promise<void>
+  publishVectorImport(token: string, signal?: AbortSignal): Promise<void>
+  publishDeferredImport(token: string, signal?: AbortSignal): Promise<void>
+  rollbackImport(token: string): Promise<void>
   constructor(databasePath: string, cursorPath: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown)
   list(diagnostic?: (event: WikiDiagnosticEvent) => unknown): Array<WikiIndexSummary>
   remove(name: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown): void
@@ -4277,6 +4290,13 @@ export interface WikiCursorBase {
   p: number
 }
 
+export interface WikiDeferredBuildResult {
+  processed: number
+  failed: number
+  index: WikiIndexSummary
+  importToken: string
+}
+
 export interface WikiDiagnosticEvent {
   message: string
   level: string
@@ -4307,6 +4327,36 @@ export interface WikiDiagnosticEvent {
 }
 
 export declare function wikiEnumerateMarkdownFiles(root: string): Promise<string[]>
+
+export interface WikiHybridCandidate {
+  sectionId: number
+  index: string
+  documentHash: string
+  path: string
+  headingPath: string
+  lineStart: number
+  lineEnd: number
+  text: string
+  shape: 'content' | 'heading-only' | 'stub'
+  matchKind: 'exact-name' | 'related' | 'regex'
+  rank: number
+  sourceOrder: number
+}
+
+export interface WikiHybridPrepared {
+  token: string
+  effectiveQuery: string
+  fulltext: Array<WikiHybridRank>
+  vectorDimensions: Array<number>
+  vectorFailure: boolean
+}
+
+export interface WikiHybridRank {
+  sectionId: number
+  matchKind: 'exact-name' | 'related' | 'regex'
+  rank: number
+  sourceOrder: number
+}
 
 /**
  * File-system path of the exclusive lease guarding document-index imports of
@@ -4449,6 +4499,26 @@ export interface WikiToolPage {
 }
 
 export declare function wikiTruncateHeading(text: string, maxChars?: number | undefined | null): string
+
+export interface WikiVectorImport {
+  token: string
+  total: number
+}
+
+export interface WikiVectorRow {
+  sectionId: number
+  vector: Float32Array
+}
+
+export interface WikiVectorSource {
+  sectionId: number
+  text: string
+}
+
+export interface WikiVectorSourceBatch {
+  sections: Array<WikiVectorSource>
+  nextSectionId?: number
+}
 
 /**
  * Caller elapsed time includes startup, IPC queueing, query and page work.

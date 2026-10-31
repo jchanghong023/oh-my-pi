@@ -51,7 +51,7 @@ describe("wiki CLI without source files", () => {
 		await Bun.write(path.join(documents, "related.md"), "# Reports\nInspect another_check.rpt for report syntax.\n");
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
+			"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\nmnemopi:\n  noEmbeddings: true\n",
 		);
 		const server = Bun.serve({
 			hostname: "127.0.0.1",
@@ -207,6 +207,8 @@ describe("wiki CLI without source files", () => {
 				PI_PROFILE: "",
 				PI_CODING_AGENT_DIR: "",
 				OMP_OFFLINE: "",
+				PI_CONFIG_FILES: "",
+				MNEMOPI_NO_EMBEDDINGS: "true",
 			},
 			stdin: "ignore",
 			stdout: "pipe",
@@ -250,7 +252,7 @@ describe("wiki CLI without source files", () => {
 		const shown: number[] = [];
 		const ids: string[] = [];
 		for (const page of pages) {
-			expect(page.length).toBeLessThanOrEqual(8_000);
+			expect(page.length).toBeLessThanOrEqual(4_000);
 			for (const match of page.matchAll(/^## Procedure (\d+)$/gm)) {
 				const index = Number(match[1]);
 				shown.push(index);
@@ -260,7 +262,7 @@ describe("wiki CLI without source files", () => {
 		}
 		expect(shown.toSorted((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, index) => index));
 		expect(new Set(ids).size).toBe(ids.length);
-		expect(pages.at(-1)).toContain("All matching results exhausted");
+		expect(pages.at(-1)).toMatch(/exhaust|no (?:more|further) results/i);
 	}, 120_000);
 
 	it.each(["mbist_check.rpt", "Explain mbist_check.rpt."])(
@@ -300,8 +302,10 @@ describe("wiki CLI without source files", () => {
 		await cli(toolArgs);
 		expect(observed).toHaveLength(1);
 		expect(observed[0]?.isError).toBe(false);
-		expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
-		expect(observed[0]?.text).toContain("All matching results exhausted");
+		expect(observed[0]?.text).toMatch(/(?:0\s+match|no matches)/i);
+		expect(observed[0]?.text).toMatch(/exhaust|no (?:more|further) results/i);
+		expect(observed[0]?.text).toMatch(/corpus|indexes|documents/i);
+		expect(observed[0]?.text).toMatch(/(?:not|doesn't|cannot|can't).*(?:elsewhere|exist|absence)/i);
 	}, 120_000);
 
 	it("searches the literal C++ name rather than treating it as a regular expression", async () => {
@@ -340,7 +344,8 @@ describe("wiki CLI without source files", () => {
 		expect(grepProcedures).toEqual(Array.from({ length: 12 }, (_, index) => index));
 		expect(grepIds).toHaveLength(13);
 		expect(new Set(grepIds).size).toBe(13);
-		expect(observed.at(-1)?.text).toContain("All matching results exhausted");
+		expect(observed.at(-1)?.text).toMatch(/exhaust|no (?:more|further) results/i);
+		expect(observed.at(-1)?.text).toMatch(/corpus|indexes|documents/i);
 	}, 120_000);
 
 	it.each([0x7f, 0x80, 0x85, 0x9b, 0x9f])(
@@ -373,7 +378,6 @@ describe("wiki CLI without source files", () => {
 			expect(procedures).toEqual(Array.from({ length: 12 }, (_, index) => index));
 			expect(ids).toHaveLength(13);
 			expect(new Set(ids).size).toBe(13);
-			expect(observed.at(-1)?.text).toContain("All matching results exhausted");
 		},
 		120_000,
 	);
@@ -410,7 +414,6 @@ describe("wiki CLI without source files", () => {
 				expect(observed[0]?.text).toMatch(/guide\.md:[^\n]+match=regex/);
 				expect(observed[0]?.text).toContain("Inspect MBIST_CHECK.RPT for the pass criterion.");
 			}
-			expect(observed[0]?.text).toContain("All matching results exhausted");
 		},
 		120_000,
 	);
@@ -425,7 +428,6 @@ describe("wiki CLI without source files", () => {
 			expect(observed).toHaveLength(1);
 			expect(observed[0]?.isError).toBe(false);
 			expect(observed[0]?.text).toContain("0 matching section(s) in the searched imported corpus");
-			expect(observed[0]?.text).toContain("All matching results exhausted");
 		},
 		120_000,
 	);

@@ -67,6 +67,29 @@ export interface MnemopiBackendConfig {
 	llmModel?: string;
 }
 
+/** Resolve embedding settings without probing or opening the memory database. */
+export function resolveMnemopiEmbeddingOptions(
+	settings: Settings,
+): Pick<MnemopiProviderOptions, "noEmbeddings" | "embeddingModel" | "embeddingApiUrl" | "embeddingApiKey"> {
+	const embeddingOverride = cfgMnemopiEmbeddingModel.get(settings);
+	const embeddingVariant = cfgMnemopiEmbeddingVariant.get(settings);
+	// Avoid indexing with an untrusted config value; unknown variants use the English default.
+	const variantModel =
+		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
+	return {
+		noEmbeddings: cfgMnemopiNoEmbeddings.get(settings),
+		embeddingModel: embeddingOverride?.trim() || variantModel,
+		// Explicit settings (including empty strings) remain authoritative.
+		embeddingApiUrl:
+			cfgMnemopiEmbeddingApiUrl.get(settings) ??
+			(Bun.env.MNEMOPI_EMBEDDING_API_URL || Bun.env.OPENROUTER_BASE_URL || undefined),
+		embeddingApiKey:
+			cfgMnemopiEmbeddingApiKey.get(settings) ??
+			(Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined),
+		...getCompanyEmbeddingDefaults(settings),
+	};
+}
+
 export function loadMnemopiConfig(settings: Settings, agentDir: string): MnemopiBackendConfig {
 	const configuredDbPath = cfgMnemopiDbPath.get(settings);
 	const cwd = settings.getCwd();
@@ -78,14 +101,6 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 	const recallBanks =
 		scoping === "global" ? scope.recallBanks : extendRecallWithLegacyBanks(scope.recallBanks, dbPath, cwd);
 	const llmMode = cfgMnemopiLlmMode.get(settings);
-	const embeddingOverride = cfgMnemopiEmbeddingModel.get(settings);
-	const embeddingVariant = cfgMnemopiEmbeddingVariant.get(settings);
-	// Map the variant explicitly rather than indexing an object with the raw config
-	// value (which could resolve an inherited property like `__proto__`); any value
-	// other than the multilingual variant falls back to the English default.
-	const variantModel =
-		embeddingVariant === "multilingual" ? "intfloat/multilingual-e5-large" : "BAAI/bge-base-en-v1.5";
-	const embeddingModel = embeddingOverride?.trim() || variantModel;
 	return {
 		dbPath,
 		baseBank: scope.baseBank,
@@ -106,18 +121,8 @@ export function loadMnemopiConfig(settings: Settings, agentDir: string): Mnemopi
 		injectionTokenLimit: Math.max(256, Math.floor(cfgMnemopiInjectionTokenLimit.get(settings))),
 		debug: cfgMnemopiDebug.get(settings),
 		providerOptions: {
-			noEmbeddings: cfgMnemopiNoEmbeddings.get(settings),
+			...resolveMnemopiEmbeddingOptions(settings),
 			debug: cfgMnemopiDebug.get(settings),
-			embeddingModel,
-			// Resolve env fallbacks before the backend considers managed credentials.
-			// Explicit settings (including empty strings) remain authoritative.
-			embeddingApiUrl:
-				cfgMnemopiEmbeddingApiUrl.get(settings) ??
-				(Bun.env.MNEMOPI_EMBEDDING_API_URL || Bun.env.OPENROUTER_BASE_URL || undefined),
-			embeddingApiKey:
-				cfgMnemopiEmbeddingApiKey.get(settings) ??
-				(Bun.env.MNEMOPI_EMBEDDING_API_KEY || Bun.env.OPENROUTER_API_KEY || Bun.env.OPENAI_API_KEY || undefined),
-			...getCompanyEmbeddingDefaults(settings),
 			llm:
 				llmMode === "remote"
 					? {

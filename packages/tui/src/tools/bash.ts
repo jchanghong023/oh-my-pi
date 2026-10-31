@@ -338,6 +338,7 @@ function bashStatsParts(
 	artifactId: string | undefined,
 	isError: boolean,
 	compact: boolean,
+	hideArtifact: boolean,
 ): string[] {
 	const timeoutDisabled = details?.timeoutDisabled === true || contextTimeout === 0;
 	const timeoutSeconds = timeoutDisabled ? undefined : (details?.timeoutSeconds ?? contextTimeout);
@@ -366,7 +367,7 @@ function bashStatsParts(
 				: `Timeout: ${timeoutSeconds}s`,
 		);
 	}
-	if (artifactId) {
+	if (!hideArtifact && artifactId) {
 		statsParts.push(`Artifact: ${artifactId}`);
 	}
 	if (!compact && isError && typeof details?.exitCode === "number") {
@@ -412,6 +413,7 @@ function shellFootParts(
 	details: BashToolDetails | undefined,
 	artifactId: string | undefined,
 	compact = false,
+	hideArtifact = false,
 ): string[] {
 	const parts: string[] = [];
 	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
@@ -421,7 +423,7 @@ function shellFootParts(
 		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
 		if (!compact && service.pid !== undefined) parts.push(`PID ${service.pid}`);
 	}
-	if (artifactId) parts.push(`Artifact ${artifactId}`);
+	if (!hideArtifact && artifactId) parts.push(`Artifact ${artifactId}`);
 	return parts;
 }
 
@@ -537,6 +539,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cachedPreviewLines: number | undefined;
 			let cachedExpanded: boolean | undefined;
 			let cachedCompactError: boolean | undefined;
+			let cachedHideArtifact: boolean | undefined;
 			let cachedRawOutput: string | undefined;
 			let cachedIsPartial: boolean | undefined;
 			let cachedPreviewWindow: number | undefined;
@@ -567,6 +570,8 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 
 					const isPartial = options.isPartial === true;
+					const hideArtifact =
+						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true && !expanded;
 					const compactError =
 						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
 						!expanded &&
@@ -585,6 +590,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						cachedPreviewLines === previewLines &&
 						cachedExpanded === expanded &&
 						cachedCompactError === compactError &&
+						cachedHideArtifact === hideArtifact &&
 						cachedRawOutput === rawOutput &&
 						cachedIsPartial === isPartial &&
 						cachedPreviewWindow === previewWindow &&
@@ -603,6 +609,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						rawOutputArtifact.artifactId,
 						isError,
 						compactError,
+						hideArtifact,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
@@ -685,6 +692,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					cachedPreviewLines = previewLines;
 					cachedExpanded = expanded;
 					cachedCompactError = compactError;
+					cachedHideArtifact = hideArtifact;
 					cachedRawOutput = rawOutput;
 					cachedIsPartial = isPartial;
 					cachedPreviewWindow = previewWindow;
@@ -732,6 +740,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const stripped = stripBashNotices(rawOutput, details);
 			const output = stripped.text.trimEnd();
 			const expanded = renderContext?.expanded ?? options.expanded;
+			const hideArtifact = (renderContext?.compactToolActivity ?? options.compactToolActivity) === true && !expanded;
 			const compactError =
 				(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
 				!expanded &&
@@ -772,7 +781,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						state,
 						exitCode: details?.exitCode,
 						elapsedMs: compactError ? undefined : elapsedMs,
-						facts: shellFootParts(details, stripped.artifactId, compactError),
+						facts: shellFootParts(details, stripped.artifactId, compactError, hideArtifact),
 						meta: { ...meta, truncation: showingFullOutput ? undefined : meta?.truncation },
 					}),
 				],

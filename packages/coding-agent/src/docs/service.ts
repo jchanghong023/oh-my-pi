@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import {
 	wikiNormalizeSearchOptions,
+	wikiPrepareToolQuery,
 	wikiSelectPage,
 	wikiToolPage,
 	type WikiToolPage,
@@ -182,7 +183,7 @@ export class DocsService {
 				if (this.#closed) throw new Error("Document service is closed");
 				controller.signal.throwIfAborted();
 				const { limit, characterBudget } = wikiNormalizeSearchOptions(
-					renderWiki ? 200 : options.limit,
+					renderWiki ? 20 : options.limit,
 					options.characterBudget,
 				);
 				reply = await this.#request(
@@ -202,7 +203,13 @@ export class DocsService {
 				controller.signal.throwIfAborted();
 				const budgetStarted = performance.now();
 				const window = reply.value;
-				const page = renderWiki ? wikiToolPage(query, window, options.mode, options.case) : undefined;
+				const prepared =
+					renderWiki && options.mode !== "grep" && options.cursor === undefined
+						? wikiPrepareToolQuery(query, undefined, ["query"], false, undefined, undefined)
+						: undefined;
+				const page = renderWiki
+					? wikiToolPage(prepared?.query ?? query, window, options.mode, options.case)
+					: undefined;
 				const result = page
 					? page.result
 					: wikiSelectPage(
@@ -298,6 +305,12 @@ export class DocsService {
 				this.#active = undefined;
 				request.cleanup();
 				request.reject(cancelled());
+				// Cooperatively signal the operation before the hard process boundary.
+				try {
+					this.#worker?.handle.send({ type: "cancel", id: request.id, context: request.context });
+				} catch {
+					// The worker is already unavailable; discard still owns cleanup.
+				}
 				this.#discardWorker();
 				this.#pump();
 			} else {

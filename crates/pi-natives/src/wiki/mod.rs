@@ -1,11 +1,13 @@
 //! Owner-scoped documentation storage, importing, and complete-ranking search.
 mod database;
 mod diagnostics;
+mod hybrid;
 mod import;
 mod importer;
 mod page;
 pub(crate) mod query;
 mod storage;
+mod vectors;
 
 use std::{
 	path::Path,
@@ -37,6 +39,7 @@ struct Owner {
 	engine:        Mutex<DatabaseEngine>,
 	storage:       Mutex<StorageState>,
 	database_path: String,
+	deferred:      Mutex<std::collections::HashMap<String, vectors::DeferredImport>>,
 	diagnostics:   DiagnosticQueue,
 }
 struct ImportGuard(Arc<Owner>);
@@ -239,6 +242,7 @@ impl WikiSearchEngine {
 				storage: Mutex::new(StorageState { storage: Some(storage), identity }),
 				database_path,
 				diagnostics: queue,
+				deferred: Mutex::new(std::collections::HashMap::new()),
 			}),
 		})
 	}
@@ -426,6 +430,7 @@ impl WikiSearchEngine {
 	#[napi]
 	pub fn close(&self) {
 		self.owner.closed.store(true, Ordering::Release);
+		self.owner.deferred.lock().clear();
 		if let Some(mut engine) = self.owner.engine.try_lock() {
 			engine.close();
 		}

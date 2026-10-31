@@ -15,12 +15,16 @@ function safeLogContext(context: DocsWorkerLogContext): Record<string, string> {
 export function startDocsWorker(transport: DocsWorkerTransport): void {
 	let engine: DocsSearchEngine | undefined;
 	let busy = false;
+	let active: { id: string; controller: AbortController } | undefined;
 	const send: DocsWorkerTransport["send"] = message => {
 		// Owned workers are killed after replies; persist buffered diagnostics first.
 		logger.flush();
 		transport.send(message);
 	};
-	const handle = async (message: DocsWorkerInbound): Promise<void> => {
+	const handle = async (
+		message: Exclude<DocsWorkerInbound, { type: "cancel" }>,
+		signal: AbortSignal,
+	): Promise<void> => {
 		const started = performance.now();
 		try {
 			if (message.type === "configure") {
@@ -48,6 +52,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 					break;
 				case "init": {
 					const value = await engine.init(message.directory, message.name, {
+						signal,
 						onProgress: progress => send({ type: "progress", id: message.id, progress }),
 					});
 					send({
@@ -74,7 +79,7 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 						type: "result",
 						id: message.id,
 						command: "searchWindow",
-						value: await engine.searchWindowAsync(message.query, message.options),
+						value: await engine.searchWindowAsync(message.query, message.options, signal),
 						engine_ms: performance.now() - started,
 					});
 					break;
@@ -93,10 +98,15 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 				engine_ms: performance.now() - started,
 			});
 		} finally {
+			active = undefined;
 			busy = false;
 		}
 	};
 	transport.onMessage(message => {
+		if (message.type === "cancel") {
+			if (active?.id === message.id) active.controller.abort();
+			return;
+		}
 		if (busy) {
 			send({
 				type: "error",
@@ -107,6 +117,8 @@ export function startDocsWorker(transport: DocsWorkerTransport): void {
 			return;
 		}
 		busy = true;
-		void logger.withLogContext(safeLogContext(message.context), () => handle(message));
+		const controller = new AbortController();
+		active = { id: message.id, controller };
+		void logger.withLogContext(safeLogContext(message.context), () => handle(message, controller.signal));
 	});
 }

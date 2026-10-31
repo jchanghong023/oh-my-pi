@@ -68,11 +68,15 @@ pub struct WikiBuildProgress {
 /// Published import result.
 pub struct WikiBuildResult {
 	/// Number of processed documents.
-	pub processed: i64,
+	pub processed:      i64,
 	/// Number of failed documents.
-	pub failed:    i64,
+	pub failed:         i64,
 	/// Published index.
-	pub index:     WikiIndexSummary,
+	pub index:          WikiIndexSummary,
+	/// Opaque ownership proof for optional post-import work and cancellation.
+	pub import_token:   String,
+	/// Lease retained while an internal deferred import is being prepared.
+	pub deferred_lease: Option<FileLock>,
 }
 /// Runs one operation while holding access to identity-bound storage.
 pub type StorageAccess<'a> =
@@ -183,6 +187,7 @@ pub struct Build<'a, E> {
 	files:              i64,
 	cleanup:            &'static str,
 	reason:             Option<&'static str>,
+	deferred:           bool,
 	/// Whether publication completed.
 	pub published:      bool,
 	/// Whether lease acquisition encountered contention.
@@ -200,6 +205,7 @@ impl<'a, E> Build<'a, E> {
 			files: 0,
 			cleanup: "not_needed",
 			reason: None,
+			deferred: false,
 			published: false,
 			lock_contended: false,
 		}
@@ -318,9 +324,23 @@ impl<'a, E> Build<'a, E> {
 		self.emit(event)?;
 		self.check()?;
 		self.stage = "publish";
-		let index = self.with_import_storage(database, |storage| storage.promote(build, name))?;
-		self.published = true;
-		Ok(WikiBuildResult { processed: self.documents, failed: 0, index })
+		let mut index = if self.deferred {
+			self.with_import_storage(database, |storage| storage.prepare_deferred(build))?
+		} else {
+			self.with_import_storage(database, |storage| storage.promote(build, name))?
+		};
+		if self.deferred {
+			name.clone_into(&mut index.name);
+		} else {
+			self.published = true;
+		}
+		Ok(WikiBuildResult {
+			processed: self.documents,
+			failed: 0,
+			index,
+			import_token: build.token(),
+			deferred_lease: None,
+		})
 	}
 
 	fn rollback(
@@ -479,12 +499,18 @@ impl<'a, E> Build<'a, E> {
 		self.stage = "lock";
 		let started = Instant::now();
 		let mut lease = self.acquire_lease(started, &database)?;
-		let result = (|| {
+		let mut result = (|| {
 			let mut event = self.event("docs.init.lock.completed", self.stage, "completed");
 			event.elapsed_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
 			self.emit(event)?;
 			self.locked(&root, files, name, &database)
 		})();
+		if self.deferred
+			&& let Ok(ref mut value) = result
+		{
+			value.deferred_lease = Some(lease);
+			return result;
+		}
 		let operation_stage = self.stage;
 		let release_log = self.log("docs.init.lock.release.started", "lock_release", "started");
 		self.stage = "lock_release";
@@ -512,6 +538,24 @@ pub fn run<E>(
 	root: &str,
 	name: &str,
 ) -> std::result::Result<WikiBuildResult, ImportError<E>> {
+	run_internal(hooks, root, name, false)
+}
+
+/// Prepare a hidden import while retaining the exclusive lease for its owner.
+pub fn run_deferred<E>(
+	hooks: &ImportHooks<'_, E>,
+	root: &str,
+	name: &str,
+) -> std::result::Result<WikiBuildResult, ImportError<E>> {
+	run_internal(hooks, root, name, true)
+}
+
+fn run_internal<E>(
+	hooks: &ImportHooks<'_, E>,
+	root: &str,
+	name: &str,
+	deferred: bool,
+) -> std::result::Result<WikiBuildResult, ImportError<E>> {
 	let mut build = Build {
 		hooks,
 		started: Instant::now(),
@@ -521,6 +565,7 @@ pub fn run<E>(
 		files: 0,
 		cleanup: "not_needed",
 		reason: None,
+		deferred,
 		published: false,
 		lock_contended: false,
 	};

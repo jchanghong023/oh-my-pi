@@ -70,6 +70,9 @@ export interface ResolvedMnemopiEmbeddingRuntimeOptions {
 	apiKey?: ApiKey;
 	provider?: MnemopiEmbeddingProvider;
 	maxInputChars?: number;
+	/** Optional strict HTTP mode for derived indexes that require exact model and row identity. */
+	strictApi?: boolean;
+	signal?: AbortSignal;
 }
 
 export interface ResolvedMnemopiLlmRuntimeOptions {

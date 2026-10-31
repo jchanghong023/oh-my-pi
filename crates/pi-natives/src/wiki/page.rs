@@ -17,7 +17,9 @@ use crate::{
 
 const INVALID_PAGE: &str = "Invalid documentation search page size";
 const INVALID_COST: &str = "Invalid documentation search section cost";
-const TEXT_BUDGET: usize = 8_000;
+const TEXT_BUDGET: usize = 4_000;
+const PREVIEW_BUDGET: usize = 1_024;
+const PREVIEW_LIMIT: u32 = 10;
 
 #[napi(object, object_from_js = false)]
 pub struct WikiNormalizedSearchOptions {
@@ -514,6 +516,29 @@ fn section_header(index: usize, section: &Object<'_>) -> Result<Vec<u16>> {
 	Ok(sanitize_locator(&header))
 }
 
+fn section_preview(section: &Object<'_>) -> Result<Vec<u16>> {
+	let mut preview = Vec::new();
+	append(&mut preview, "\n- [hint] ");
+	for (name, limit) in [("index", 64), ("path", 160)] {
+		let value = crate::js::utf16(section.get_named_property::<napi::JsString>(name)?)?;
+		preview.extend(truncate_units(&sanitize_locator(&value), limit));
+		if name == "index" {
+			append(&mut preview, " · ");
+		}
+	}
+	append(
+		&mut preview,
+		&format!(
+			":{}-{} · ",
+			section.get_named_property::<i64>("lineStart")?,
+			section.get_named_property::<i64>("lineEnd")?
+		),
+	);
+	let heading = crate::js::utf16(section.get_named_property::<napi::JsString>("headingPath")?)?;
+	preview.extend(truncate_units(&sanitize_locator(&heading), 180));
+	Ok(preview)
+}
+
 #[napi(object, object_from_js = false)]
 pub struct WikiToolPage<'env> {
 	#[napi(ts_type = "WikiSearchResult")]
@@ -551,14 +576,27 @@ pub fn wiki_tool_page<'env>(
 			"\" · searched imported Markdown corpus"
 		},
 	);
-	let footer_allowance = 512 + continuation_json(&query, "", grep, case_sensitive).len();
-	let budget = TEXT_BUDGET.saturating_sub(header.len() + 2 + footer_allowance);
+	let base: WikiCursorBase = window.get_named_property("cursorBase")?;
+	let total: i64 = window.get_named_property("total")?;
+	// Reserve the actual largest cursor this window can emit, including its
+	// base64-encoded position. The JSON renderer also accounts for query
+	// escaping and the grep options.
+	let max_count = total.saturating_sub(base.p).saturating_sub(1).clamp(0, 10) as usize;
+	let max_cursor = continuation(&base, max_count, total)?;
+	let footer_allowance = 768
+		+ continuation_json(&query, max_cursor.as_deref().unwrap_or(""), grep, case_sensitive).len();
+	let preview_allowance = if total.saturating_sub(base.p) > 1 {
+		PREVIEW_BUDGET
+	} else {
+		0
+	};
+	let budget = TEXT_BUDGET.saturating_sub(header.len() + 2 + footer_allowance + preview_allowance);
 	let hits: Array = window.get_named_property("sections")?;
 	let mut selected = env.create_array(0)?;
 	let mut bodies = Vec::new();
 	let mut shown: HashMap<Vec<u16>, u32> = HashMap::new();
 	let mut cost = 0;
-	for index in 0..hits.len().min(200) {
+	for index in 0..hits.len().min(10) {
 		let hit: Object = hits
 			.get(index)?
 			.ok_or_else(|| Error::from_reason("Missing documentation search hit"))?;
@@ -591,11 +629,10 @@ pub fn wiki_tool_page<'env>(
 		bodies.push(body);
 		selected.insert(hit)?;
 	}
-	let base: WikiCursorBase = window.get_named_property("cursorBase")?;
-	let total: i64 = window.get_named_property("total")?;
+	let selected_count = selected.len();
 	let exact: i64 = window.get_named_property("exactNameMatches")?;
 	let technical: Option<Utf16String> = window.get_named_property("technicalName")?;
-	let cursor = continuation(&base, selected.len() as usize, total)?;
+	let cursor = continuation(&base, selected_count as usize, total)?;
 	let result = result_object(env, &window, selected, cursor.as_deref())?;
 	let pointer = b"\n(identical text to hit [";
 	let duplicates = bodies
@@ -611,6 +648,41 @@ pub fn wiki_tool_page<'env>(
 		append(&mut text, "\n\n");
 		text.extend_from_slice(body);
 	}
+	if cursor.is_some() {
+		let remaining = total.saturating_sub(base.p + i64::from(selected_count));
+		let count_allowance = format!(
+			"\n{remaining} unexpanded section(s): {PREVIEW_LIMIT} previewed; {remaining} not listed."
+		)
+		.len();
+		let available = TEXT_BUDGET
+			.saturating_sub(text.len() + footer_allowance + count_allowance)
+			.min(PREVIEW_BUDGET);
+		let mut previews = Vec::new();
+		append(&mut previews, "\n\nUnexpanded result hints (not full evidence):");
+		let header_len = previews.len();
+		let mut previewed = 0;
+		for index in selected_count..hits.len().min(selected_count + PREVIEW_LIMIT) {
+			let hit: Object = hits
+				.get(index)?
+				.ok_or_else(|| Error::from_reason("Missing documentation search hit"))?;
+			let preview = section_preview(&hit)?;
+			if previews.len() + preview.len() > available {
+				break;
+			}
+			previews.extend(preview);
+			previewed += 1;
+		}
+		if previews.len() > header_len {
+			text.extend(previews);
+		}
+		append(
+			&mut text,
+			&format!(
+				"\n{remaining} unexpanded section(s): {previewed} previewed; {} not listed.",
+				remaining.saturating_sub(previewed)
+			),
+		);
+	}
 	let oversized = !bodies.is_empty() && text.len() + footer_allowance > TEXT_BUDGET;
 	append(
 		&mut text,
@@ -619,6 +691,13 @@ pub fn wiki_tool_page<'env>(
 			bodies.len()
 		),
 	);
+	if !grep {
+		append(
+			&mut text,
+			"\nSearch results include all full-text matches and any selected semantic candidates; \
+			 they do not enumerate all possible semantic relevance.",
+		);
+	}
 	if !grep && technical.as_ref().is_some_and(|name| !name.is_empty()) {
 		if exact > 0 {
 			append(
@@ -653,14 +732,21 @@ pub fn wiki_tool_page<'env>(
 	if oversized {
 		append(
 			&mut text,
-			"\nThe first section exceeds the ~8000-character target and is carried whole.",
+			"\nThe first section exceeds the ~4000-character target and is carried whole.",
 		);
 	}
 	if let Some(cursor) = cursor {
+		append(
+			&mut text,
+			"\nMore results remain. Refine the query to fit the task; avoid blindly repeating the \
+			 same keywords. To traverse this result set, use the continuation below unchanged.",
+		);
 		append(&mut text, "\nMore results remain. Continue with the same query: ");
 		text.extend(continuation_json(&query, &cursor, grep, case_sensitive));
-	} else {
+	} else if grep {
 		append(&mut text, "\nAll matching results exhausted in the searched imported corpus.");
+	} else {
+		append(&mut text, "\nAll results in this search set exhausted.");
 	}
 	Ok(WikiToolPage {
 		result,

@@ -4,6 +4,9 @@
 
 ### Changed
 
+- Add optional Wiki vector generations and snapshot-bound ranking APIs for native SDK consumers.
+- Render compact Wiki pages with up to 10 complete sections and a 4,000-character target while retaining continuation cursors.
+- Include bounded unexpanded Wiki source hints and remaining counts without advancing the result cursor.
 - Restore upstream embedded native addon naming and fallback loading.
 - Use the existing Cargo host build for native development instead of the fork-only Bazel host cache; retain upstream explicit-target Bazel builds and native installation rollback.
 - Move the Wiki Rust core to the independent `pi-wiki` crate while retaining thin native bindings, existing TypeScript and database contracts, and single-addon distribution; `test:rs` selects the complete Wiki crate and native fork-feature tests, with a separate `pi-wiki` doctest stage.
@@ -11,6 +14,7 @@
 
 ### Fixed
 
+- Publish Wiki indexes under their validated names and keep ordinary result pages within their target when continuation cursors are present.
 - Attempt immediate cleanup of old native addons after successful replacement without failing installation when cleanup is denied.
 - Report invalid `local -p` operands with the correct command name and preserve Windows timeout cancellation fallback exit statuses.
 - Fixed native addon and grammar installation paths to share the effective configuration root and normalized profile, while honoring an explicit `PI_NATIVES_DIR`.

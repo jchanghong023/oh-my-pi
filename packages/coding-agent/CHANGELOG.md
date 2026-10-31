@@ -36,6 +36,9 @@
 
 ### Changed
 
+- Make default Wiki search combine full-text and semantic retrieval when configured vectors are available, with optional reranking and full-text fallback; grep and stored evidence remain unchanged.
+- Return smaller Wiki tool pages: up to 10 complete sections targeting 4,000 characters, with remaining results indicated at the end.
+- Preview bounded source headings and line ranges for remaining Wiki results without skipping them on continuation.
 - Fix JTD output schemas with open referenced objects and escaped definition names.
 - Keep fulltest workloads within a shared CPU budget so startup-sensitive checks can complete.
 
@@ -114,6 +117,8 @@
 
 ### Fixed
 
+- Keep Wiki search usable during concurrent index changes and reduce vector memory retained during model calls while preserving continuation and full-text fallback.
+- Honor the embedding-disable environment flag in Wiki and expose reranker settings through the standard configuration commands.
 - Honor runtime `PI_UPDATE_REPOSITORY` overrides in compiled binaries while defaulting to this fork's releases.
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
 - Restore CodeAgent commit-message and session-title retries and fallbacks, and normal speculative execution for recovered requests.

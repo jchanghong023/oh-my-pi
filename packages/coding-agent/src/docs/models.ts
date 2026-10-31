@@ -1,0 +1,181 @@
+import { rerank } from "@oh-my-pi/pi-ai/rerank";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import {
+	effectiveMaxInputChars,
+	embedConfiguredApi,
+	embeddingsDisabled,
+	isApiModel,
+} from "@oh-my-pi/pi-mnemopi/core/embeddings";
+import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
+import { logger } from "@oh-my-pi/pi-utils";
+import { getCompanyConfig } from "../config/company-provider";
+import { Settings } from "../config/settings";
+import { resolveMnemopiEmbeddingOptions } from "../mnemopi/config";
+import { cfgMnemopiDebug, cfgMnemopiEmbeddingModel, cfgMnemopiNoEmbeddings } from "../mnemopi/settings";
+import { cfgWikiRerankerApiKey, cfgWikiRerankerBaseUrl, cfgWikiRerankerModel } from "./settings";
+
+export interface WikiEmbedding {
+	readonly identity: string;
+	embed(texts: string[], signal?: AbortSignal): Promise<number[][]>;
+}
+export interface WikiReranker {
+	readonly identity: string;
+	rerank(query: string, docs: string[], signal?: AbortSignal): Promise<number[]>;
+}
+export interface WikiModels {
+	embedding?: WikiEmbedding;
+	reranker?: WikiReranker;
+}
+
+// Bound request size while keeping each existing per-input window intact.
+const EMBEDDING_REQUEST_CHAR_BUDGET = 8192;
+const EMBEDDING_REQUEST_MAX_INPUTS = 4;
+
+function endpoint(value: string | undefined): string | undefined {
+	if (!value) return undefined;
+	try {
+		const url = new URL(value);
+		if (
+			(url.protocol !== "http:" && url.protocol !== "https:") ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		)
+			return undefined;
+		return url.href.replace(/\/+$/, "");
+	} catch {
+		return undefined;
+	}
+}
+
+/** Resolve independent, optional model capabilities without opening the memory database. */
+export async function resolveWikiModels(
+	options: { agentDir?: string; cwd?: string; embedding?: boolean; reranker?: boolean } = {},
+): Promise<WikiModels> {
+	const settings = await Settings.loadReadOnly(options);
+	const debug = cfgMnemopiDebug.get(settings);
+	const result: WikiModels = {};
+	if (options.embedding !== false && !cfgMnemopiNoEmbeddings.get(settings) && !embeddingsDisabled()) {
+		const embeddingOptions = resolveMnemopiEmbeddingOptions(settings);
+		const configuredModel = cfgMnemopiEmbeddingModel.get(settings)?.trim();
+		const model = configuredModel || (embeddingOptions.embeddingApiUrl ? embeddingOptions.embeddingModel : undefined);
+		const apiKey = embeddingOptions.embeddingApiKey ?? "";
+		const useConfiguredApi =
+			model && apiKey && withMnemopiRuntimeOptions({ embeddings: { model } }, () => isApiModel(model));
+		const baseUrl = endpoint(
+			embeddingOptions.embeddingApiUrl ?? (useConfiguredApi ? "https://openrouter.ai/api/v1" : undefined),
+		);
+		if (model && baseUrl) {
+			const active = getMnemopiRuntimeOptions()?.embeddings;
+			const runtime = {
+				embeddings: {
+					model,
+					apiUrl: baseUrl,
+					apiKey,
+					strictApi: true,
+					disabled: active?.disabled,
+					maxInputChars: active?.maxInputChars,
+				},
+				debug,
+			};
+			const maxChars = withMnemopiRuntimeOptions(runtime, effectiveMaxInputChars);
+			const identity = JSON.stringify(["wiki-embedding-v1", baseUrl, model, "float32", "head-tail-v1", maxChars]);
+			result.embedding = {
+				identity,
+				async embed(texts, signal) {
+					signal?.throwIfAborted();
+					if (!texts.length) return [];
+					const vectors: number[][] = [];
+					let dimension: number | undefined;
+					for (let start = 0; start < texts.length;) {
+						signal?.throwIfAborted();
+						let end = start;
+						let chars = 0;
+						while (end < texts.length && end - start < EMBEDDING_REQUEST_MAX_INPUTS) {
+							const length = maxChars > 0 ? Math.min(texts[end].length, maxChars) : texts[end].length;
+							if (end > start && chars + length > EMBEDDING_REQUEST_CHAR_BUDGET) break;
+							chars += length;
+							end++;
+						}
+						const matrix = await withMnemopiRuntimeOptions(
+							{ ...runtime, embeddings: { ...runtime.embeddings, maxInputChars: maxChars, signal } },
+							() => embedConfiguredApi(texts.slice(start, end)),
+						);
+						signal?.throwIfAborted();
+						if (!matrix || matrix.length !== end - start)
+							throw new Error("Wiki embedding unavailable or invalid");
+						for (const row of matrix) {
+							if (
+								!row.length ||
+								(dimension !== undefined && row.length !== dimension) ||
+								row.some(v => !Number.isFinite(v)) ||
+								!row.some(v => v !== 0)
+							) {
+								throw new Error("Wiki embedding unavailable or invalid");
+							}
+							dimension = row.length;
+							vectors.push(Array.from(row));
+						}
+						start = end;
+					}
+					return vectors;
+				},
+			};
+		}
+	}
+	const rerankModel = options.reranker === false ? undefined : cfgWikiRerankerModel.get(settings)?.trim();
+	const rerankUrl = rerankModel ? endpoint(cfgWikiRerankerBaseUrl.get(settings)) : undefined;
+	if (rerankModel && rerankUrl) {
+		const explicitKey = cfgWikiRerankerApiKey.get(settings);
+		const company = explicitKey === undefined ? getCompanyConfig() : undefined;
+		const apiKey =
+			explicitKey ?? (endpoint(company?.embeddingBaseUrl) === rerankUrl ? company?.token : undefined) ?? "";
+		const model = buildModel({
+			id: rerankModel,
+			name: rerankModel,
+			api: "openrouter-rerank",
+			provider: "wiki",
+			baseUrl: rerankUrl,
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: null,
+			maxTokens: null,
+		});
+		result.reranker = {
+			identity: JSON.stringify(["wiki-reranker-v1", rerankUrl, rerankModel]),
+			async rerank(query, docs, signal) {
+				signal?.throwIfAborted();
+				if (!docs.length) return [];
+				try {
+					const requestSignal = signal
+						? AbortSignal.any([signal, AbortSignal.timeout(30000)])
+						: AbortSignal.timeout(30000);
+					const response = await rerank(model, { query, documents: docs }, { apiKey, signal: requestSignal });
+					signal?.throwIfAborted();
+					if (response.model !== rerankModel || response.results.length !== docs.length)
+						throw new Error("Invalid rerank response");
+					const scores = new Array<number>(docs.length);
+					for (const item of response.results) {
+						if (
+							!Number.isInteger(item.index) ||
+							item.index < 0 ||
+							item.index >= docs.length ||
+							scores[item.index] !== undefined ||
+							!Number.isFinite(item.relevanceScore)
+						)
+							throw new Error("Invalid rerank response");
+						scores[item.index] = item.relevanceScore;
+					}
+					return scores;
+				} catch {
+					signal?.throwIfAborted();
+					logger[debug ? "warn" : "debug"]("wiki: optional reranker unavailable");
+					throw new Error("Wiki reranker unavailable or invalid");
+				}
+			},
+		};
+	}
+	return result;
+}

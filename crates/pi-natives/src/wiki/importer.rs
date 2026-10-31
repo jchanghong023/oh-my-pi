@@ -36,6 +36,14 @@ pub struct WikiBuildResult {
 	pub failed:    i64,
 	pub index:     WikiIndexSummary,
 }
+
+#[napi(object, object_from_js = false)]
+pub struct WikiDeferredBuildResult {
+	pub processed:    i64,
+	pub failed:       i64,
+	pub index:        WikiIndexSummary,
+	pub import_token: String,
+}
 pub(super) type ProgressFunction<'a> = Function<'a, WikiBuildProgress, UnknownReturnValue>;
 pub(super) type ProgressCallback = ThreadsafeFunction<
 	WikiBuildProgress,
@@ -101,6 +109,38 @@ impl ToNapiValue for WikiImportOutput {
 		// result is converted only after the retained owner's
 		// import/cancellation check.
 		unsafe { WikiBuildResult::to_napi_value(env, value.result) }
+	}
+}
+
+pub struct WikiDeferredImportOutput {
+	pub(super) owner:  Arc<Owner>,
+	pub(super) cancel: CancelToken,
+	pub(super) result: WikiDeferredBuildResult,
+}
+impl TypeName for WikiDeferredImportOutput {
+	fn type_name() -> &'static str {
+		WikiDeferredBuildResult::type_name()
+	}
+
+	fn value_type() -> napi::ValueType {
+		WikiDeferredBuildResult::value_type()
+	}
+}
+impl ToNapiValue for WikiDeferredImportOutput {
+	unsafe fn to_napi_value(env: napi::sys::napi_env, value: Self) -> Result<napi::sys::napi_value> {
+		let wrapper = Env::from_raw(env);
+		if let Err(error) = value.owner.check_import(&value.cancel) {
+			// The unpublished build remains hidden for the next init to reclaim.
+			value
+				.owner
+				.deferred
+				.lock()
+				.remove(&value.result.import_token);
+			return Err(error.into_napi(wrapper));
+		}
+		// SAFETY: N-API supplies the live environment and consumes this value
+		// once.
+		unsafe { WikiDeferredBuildResult::to_napi_value(env, value.result) }
 	}
 }
 fn callback_failure(value: diagnostics::CallbackFailure) -> core::CallbackFailure<Error> {
@@ -227,6 +267,32 @@ pub(super) fn run(
 	})
 }
 
+pub(super) fn run_deferred(
+	owner: &Owner,
+	root: &str,
+	name: &str,
+	cancel: &CancelToken,
+	progress: Option<&ProgressCallback>,
+	diagnostic: Option<&DiagnosticCallback>,
+) -> std::result::Result<WikiDeferredBuildResult, ImportError> {
+	with_hooks(owner, cancel, progress, diagnostic, None, |hooks| {
+		let mut value = core::run_deferred(hooks, root, name).map_err(import_error)?;
+		let lease = value.deferred_lease.take().expect("deferred import lease");
+		let mut deferred = owner.deferred.lock();
+		owner.check_import(cancel)?;
+		deferred.insert(value.import_token.clone(), super::vectors::DeferredImport {
+			lease,
+			name: value.index.name.clone(),
+		});
+		Ok(WikiDeferredBuildResult {
+			processed:    value.processed,
+			failed:       value.failed,
+			index:        value.index.into(),
+			import_token: value.import_token,
+		})
+	})
+}
+
 #[cfg(test)]
 struct Build<'a> {
 	owner:          &'a Owner,
@@ -318,6 +384,7 @@ mod tests {
 					storage:       Mutex::new(StorageState { storage: None, identity: String::new() }),
 					database_path: path,
 					diagnostics:   Arc::new(Mutex::new(Vec::new())),
+					deferred:      Mutex::new(std::collections::HashMap::new()),
 				},
 			}
 		}

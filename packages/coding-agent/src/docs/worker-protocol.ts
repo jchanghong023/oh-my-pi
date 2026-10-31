@@ -21,7 +21,9 @@ export type DocsWorkerCommand =
 	| { type: "remove"; name: string }
 	| { type: "searchWindow"; query: string; options: DocsSearchWindowOptions };
 
-export type DocsWorkerInbound = DocsWorkerCommand & { id: string; context: DocsWorkerLogContext };
+export type DocsWorkerInbound =
+	| (DocsWorkerCommand & { id: string; context: DocsWorkerLogContext })
+	| { type: "cancel"; id: string; context: DocsWorkerLogContext };
 
 export interface DocsWorkerResults {
 	configure: undefined;

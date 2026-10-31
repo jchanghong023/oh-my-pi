@@ -28,6 +28,32 @@ describe("bashToolRenderer", () => {
 		terminal.imageProtocol = originalProtocol;
 	});
 
+	it("hides raw output artifact labels in compact Bash previews while preserving expanded and detailed views", () => {
+		for (const exitCode of [0, 1]) {
+			const result = {
+				content: [{ type: "text", text: "diagnostic\n[raw output: artifact://195]" }],
+				details: { exitCode },
+				isError: exitCode !== 0,
+			};
+			for (const [compactToolActivity, expanded, visible] of [
+				[true, false, false],
+				[true, true, true],
+				[false, false, true],
+			] as const) {
+				const options = { expanded, isPartial: false, compactToolActivity };
+				const args = { command: "test-command" };
+				const rendered = sanitizeText(
+					bashToolRenderer.renderResult(result, options, uiTheme, args).render(120).join("\n"),
+				);
+				expect(rendered.includes("Artifact: 195")).toBe(visible);
+				expect(rendered).toContain("diagnostic");
+				const native = JSON.stringify(bashToolRenderer.describeResult(result, options, args));
+				expect(native.includes("Artifact 195")).toBe(visible);
+				expect(native).toContain("diagnostic");
+			}
+		}
+	});
+
 	it("shows rendered env assignments in the command preview", async () => {
 		const component = bashToolRenderer.renderCall(
 			{ command: "printf '%s' \"$MERMAID\"", env: { MERMAID: 'line "one"\ntwo' } },

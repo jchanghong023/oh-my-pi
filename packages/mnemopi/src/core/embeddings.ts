@@ -170,7 +170,7 @@ export function embeddingsDisabled(): boolean {
  * `MNEMOPI_EMBEDDING_MAX_INPUT_CHARS`, then the bundled `8192` default. `0`
  * disables the cap entirely.
  */
-function effectiveMaxInputChars(): number {
+export function effectiveMaxInputChars(): number {
 	const override = activeEmbeddingOptions()?.maxInputChars;
 	if (override !== undefined) return Math.max(0, Math.trunc(override));
 	const envValue = Number.parseInt($env.MNEMOPI_EMBEDDING_MAX_INPUT_CHARS ?? "", 10);
@@ -361,6 +361,13 @@ async function getLocalModel(): Promise<LocalEmbeddingModel | null> {
 	}
 }
 
+/** API-only entry point: never starts or downloads a local model. */
+export async function embedConfiguredApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
+	if (texts.length === 0 || embeddingsDisabled()) return null;
+	activeEmbeddingOptions()?.signal?.throwIfAborted();
+	return embedApi(capInputs(texts));
+}
+
 async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
 	const inherited = logger.getLogContext();
 	return logger.withLogContext(
@@ -370,24 +377,31 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 		},
 		async () => {
 			const startedAt = performance.now();
+			const strict = activeEmbeddingOptions()?.strictApi === true;
+			const callerSignal = activeEmbeddingOptions()?.signal;
+			callerSignal?.throwIfAborted();
 			const baseUrl = embeddingBaseUrl();
 			const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
 			const model = defaultModel();
 			const fields = {
 				component: "mnemopi.embeddings",
 				item_count: texts.length,
-				model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model) ? model : "[custom]",
+				...(strict ? {} : { model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model) ? model : "[custom]" }),
 				...logger.diagnosticUrl(url),
 				timeout_ms: 30000,
 			};
 			let stage = "configuration";
 			let authAttempt = 0;
 			let status: number | undefined;
-			let requestSignal: AbortSignal | undefined;
+			let requestSignal: AbortSignal | undefined = strict
+				? callerSignal
+					? AbortSignal.any([callerSignal, AbortSignal.timeout(30000)])
+					: AbortSignal.timeout(30000)
+				: undefined;
 			const degraded = (reason: string, error?: unknown): null => {
-				logger.warn("Embedding API degraded to null", {
+				logger[strict && !mnemopiDebugEnabled() ? "debug" : "warn"]("Embedding API degraded to null", {
 					...fields,
-					...(error === undefined ? {} : logger.diagnosticError(error)),
+					...(strict || error === undefined ? {} : logger.diagnosticError(error)),
 					event: "embedding_api_degraded",
 					stage,
 					result: "degraded",
@@ -415,72 +429,110 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 			try {
 				// Auth refresh remains outside the existing per-request HTTP retry loop.
 				stage = "auth";
-				const response = await withAuth(apiKey, async key => {
-					authAttempt++;
-					logger.info("Embedding API auth attempt started", {
-						...fields,
-						event: "embedding_api_attempt_started",
-						stage: "fetch",
-						result: "started",
-						auth_attempt: authAttempt,
-						elapsed_ms: performance.now() - startedAt,
-					});
-					const headers: Record<string, string> = {
-						"Content-Type": "application/json",
-						...getOpenRouterHeaders(),
-					};
-					if (key !== "") {
-						headers.Authorization = `Bearer ${key}`;
-					}
-					stage = "fetch";
-					requestSignal = AbortSignal.timeout(30000);
-					const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
-						fetchWithRetry(url, {
-							method: "POST",
-							headers,
-							body,
-							signal: requestSignal,
-							maxAttempts: 3,
-							defaultDelayMs: attempt => 2 ** attempt * 1000,
-						}),
-					);
-					status = res.status;
-					stage = "headers";
-					logger.info("Embedding API headers received", {
-						...fields,
-						event: "embedding_api_headers",
-						stage,
-						result: res.ok ? "success" : "http_error",
-						auth_attempt: authAttempt,
-						status,
-						elapsed_ms: performance.now() - startedAt,
-					});
-					if (res.status === 401) {
-						logger.warn("Embedding API auth refresh requested", {
+				const response = await withAuth(
+					apiKey,
+					async key => {
+						authAttempt++;
+						logger.info("Embedding API auth attempt started", {
 							...fields,
-							event: "embedding_api_auth_rejected",
+							event: "embedding_api_attempt_started",
+							stage: "fetch",
+							result: "started",
+							auth_attempt: authAttempt,
+							elapsed_ms: performance.now() - startedAt,
+						});
+						const headers: Record<string, string> = {
+							"Content-Type": "application/json",
+							...getOpenRouterHeaders(),
+						};
+						if (key !== "") {
+							headers.Authorization = `Bearer ${key}`;
+						}
+						stage = "fetch";
+						if (!strict) {
+							const timeout = AbortSignal.timeout(30000);
+							requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
+						}
+						const init = { method: "POST", headers, body, signal: requestSignal };
+						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
+							strict
+								? fetch(url, init)
+								: fetchWithRetry(url, {
+										...init,
+										maxAttempts: 3,
+										defaultDelayMs: attempt => 2 ** attempt * 1000,
+									}),
+						);
+						status = res.status;
+						stage = "headers";
+						logger.info("Embedding API headers received", {
+							...fields,
+							event: "embedding_api_headers",
 							stage,
-							result: "rejected",
+							result: res.ok ? "success" : "http_error",
 							auth_attempt: authAttempt,
 							status,
 							elapsed_ms: performance.now() - startedAt,
 						});
-						throw new ProviderHttpError("mnemopi embedding request unauthorized (401)", 401, {
-							headers: res.headers,
-						});
-					}
-					return res;
-				});
+						if (res.status === 401) {
+							logger.warn("Embedding API auth refresh requested", {
+								...fields,
+								event: "embedding_api_auth_rejected",
+								stage,
+								result: "rejected",
+								auth_attempt: authAttempt,
+								status,
+								elapsed_ms: performance.now() - startedAt,
+							});
+							throw new ProviderHttpError("mnemopi embedding request unauthorized (401)", 401, {
+								headers: res.headers,
+							});
+						}
+						return res;
+					},
+					{ signal: requestSignal ?? callerSignal },
+				);
 				if (!response.ok) {
 					return degraded("http_error");
 				}
 				stage = "response_decode";
-				const data = (await response.json()) as { data?: Array<{ embedding: number[] }> };
+				const data = (await response.json()) as {
+					model?: unknown;
+					data?: Array<{ index?: unknown; embedding: number[] }>;
+				};
 				return withLoopPhase("mnemopi.embed", () => {
 					const { data: rows } = data;
 					stage = "response_schema";
 					if (rows === undefined) {
 						return degraded("missing_data");
+					}
+					if (strict) {
+						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
+						if (!Array.isArray(rows) || rows.length !== texts.length) return degraded("row_count");
+						const indexed = new Array<(typeof rows)[number]>(rows.length);
+						for (const row of rows) {
+							if (
+								!row ||
+								!Number.isInteger(row.index) ||
+								(row.index as number) < 0 ||
+								(row.index as number) >= rows.length ||
+								indexed[row.index as number] ||
+								!Array.isArray(row.embedding) ||
+								row.embedding.length === 0 ||
+								row.embedding.some(value => typeof value !== "number" || !Number.isFinite(value))
+							) {
+								return degraded("invalid_row");
+							}
+							indexed[row.index as number] = row;
+						}
+						const dimension = indexed[0].embedding.length;
+						if (
+							indexed.some(
+								row => row.embedding.length !== dimension || !row.embedding.some(value => value !== 0),
+							)
+						)
+							return degraded("invalid_vector");
+						rows.splice(0, rows.length, ...indexed);
 					}
 					logger.info("Embedding API schema received", {
 						...fields,
@@ -507,6 +559,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 					return matrix;
 				});
 			} catch (error) {
+				callerSignal?.throwIfAborted();
 				status = extractHttpStatusFromError(error) ?? status;
 				return degraded("exception", error);
 			}

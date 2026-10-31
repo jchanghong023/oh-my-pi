@@ -72,6 +72,7 @@ mod owner_cleanup_tests {
 				}),
 				database_path: path,
 				diagnostics:   Arc::new(parking_lot::Mutex::new(Vec::new())),
+				deferred:      parking_lot::Mutex::new(std::collections::HashMap::new()),
 			});
 			let guard = ImportGuard(Arc::clone(&owner));
 			let mut cancel = CancelToken::default();

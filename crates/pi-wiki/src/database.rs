@@ -17,6 +17,9 @@ use super::{
 	query::{self, Candidate, LiteralMatcher, MatchKind, RankedSection, SectionContext},
 };
 
+#[path = "hybrid.rs"]
+mod hybrid;
+
 const INVALID_CURSOR: &str = "Invalid documentation search cursor";
 const INDEX_ROWS: &str = "SELECT i.id,i.name,i.root_path,d.id \
                           document_id,d.relative_path,d.title,d.source_kind,d.sha256,d.size_bytes,\
@@ -378,20 +381,85 @@ struct Ranking {
 	exact_name_matches: usize,
 }
 
+/// Internal metadata for one ranked section, without its Markdown body.
+pub struct HybridRank {
+	pub section_id:   i64,
+	pub match_kind:   MatchKind,
+	pub rank:         f64,
+	pub source_order: i64,
+}
+
+/// Snapshot-bound input for host-side fusion and optional reranking.
+pub struct HybridPrepared {
+	pub token:             String,
+	pub effective_query:   String,
+	pub fulltext:          Vec<HybridRank>,
+	pub vector_dimensions: Vec<usize>,
+	/// Optional derived-vector reading failed; the fulltext result remains
+	/// valid.
+	pub vector_failure:    bool,
+}
+
+/// Either a stable hybrid snapshot or a plain search after concurrent changes.
+pub enum HybridPreparation {
+	Ready(HybridPrepared),
+	Fulltext(WikiSearchOutput),
+}
+
+#[cfg(test)]
+impl HybridPreparation {
+	fn expect_ready(self) -> HybridPrepared {
+		match self {
+			Self::Ready(prepared) => prepared,
+			Self::Fulltext(_) => panic!("expected a stable hybrid snapshot"),
+		}
+	}
+}
+
+struct HybridContext {
+	token:              String,
+	key:                String,
+	guard:              String,
+	query:              String,
+	index:              Option<String>,
+	model:              Option<String>,
+	vector_dimensions:  Vec<usize>,
+	limit:              Option<f64>,
+	baseline:           Arc<Ranking>,
+	baseline_positions: HashMap<i64, usize>,
+	source_order:       HashMap<i64, i64>,
+	allowed:            std::collections::HashSet<i64>,
+}
+
+/// A bounded candidate and its stable source order.
+pub struct HybridCandidate {
+	pub hit:          WikiSearchHit,
+	pub source_order: i64,
+}
+
+struct HybridCompleted {
+	key:           String,
+	configuration: String,
+	cache_key:     String,
+}
+
 /// SQLite-backed ranked search engine.
 pub struct DatabaseEngine {
-	path:            String,
-	cursor_path:     String,
-	connection:      Option<Connection>,
-	identity:        String,
-	generation:      u64,
-	cache_guard:     Option<String>,
-	cache:           VecDeque<(String, Arc<Ranking>)>,
-	cached_sections: usize,
+	path:             String,
+	cursor_path:      String,
+	connection:       Option<Connection>,
+	identity:         String,
+	generation:       u64,
+	cache_guard:      Option<String>,
+	cache:            VecDeque<(String, Arc<Ranking>)>,
+	cached_sections:  usize,
+	hybrid:           VecDeque<Arc<HybridContext>>,
+	hybrid_sequence:  u64,
+	hybrid_completed: VecDeque<HybridCompleted>,
 	#[cfg(test)]
-	rank_builds:     usize,
+	rank_builds:      usize,
 	#[cfg(test)]
-	after_snapshot:  Option<Box<dyn FnMut() -> CoreResult<()> + Send>>,
+	after_snapshot:   Option<Box<dyn FnMut() -> CoreResult<()> + Send>>,
 }
 impl DatabaseEngine {
 	/// Create a search engine for the database and cursor identity paths.
@@ -405,6 +473,9 @@ impl DatabaseEngine {
 			cache_guard: None,
 			cache: VecDeque::new(),
 			cached_sections: 0,
+			hybrid: VecDeque::new(),
+			hybrid_sequence: 0,
+			hybrid_completed: VecDeque::new(),
 			#[cfg(test)]
 			rank_builds: 0,
 			#[cfg(test)]
@@ -421,6 +492,8 @@ impl DatabaseEngine {
 	fn clear_cache(&mut self) {
 		self.cache.clear();
 		self.cached_sections = 0;
+		self.hybrid.clear();
+		self.hybrid_completed.clear();
 		self.cache_guard = None;
 	}
 
@@ -559,6 +632,7 @@ impl DatabaseEngine {
 		loop {
 			check()?;
 			let mut cache_hit = false;
+			let mut cache_key = None;
 			let mut built = None;
 			let result = (|| -> CoreResult<(String, WikiSearchWindow)> {
 				let progress_check = check.clone();
@@ -598,11 +672,14 @@ impl DatabaseEngine {
 				}
 				let snapshot_guard = self.guard()?;
 				let ranking = if snapshot_guard == before {
-					self
+					let external_key = cursor.as_ref().map(|cursor| format!("{key}:{}", cursor.s));
+					let found = self
 						.cache
 						.iter()
-						.find(|(stored, _)| stored == &key)
-						.map(|(_, ranking)| Arc::clone(ranking))
+						.find(|(stored, _)| external_key.as_ref() == Some(stored))
+						.or_else(|| self.cache.iter().find(|(stored, _)| stored == &key));
+					cache_key = found.map(|(stored, _)| stored.clone());
+					found.map(|(_, ranking)| Arc::clone(ranking))
 				} else {
 					None
 				};
@@ -711,7 +788,11 @@ impl DatabaseEngine {
 				}
 			} else if let Some(ranking) = built {
 				self.publish(key, ranking, before);
-			} else if let Some(position) = self.cache.iter().position(|(stored, _)| stored == &key) {
+			} else if let Some(position) = self
+				.cache
+				.iter()
+				.position(|(stored, _)| Some(stored) == cache_key.as_ref())
+			{
 				let entry = self.cache.remove(position).expect("cache hit");
 				self.cache.push_back(entry);
 			}
@@ -1460,6 +1541,290 @@ mod tests {
 		cursor["p"] = serde_json::json!(position);
 		URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).unwrap())
 	}
+
+	#[test]
+	fn hybrid_cursor_keeps_final_order_and_expires_after_reopen() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let options = WikiSearchOptions { limit: Some(1.0), ..Default::default() };
+		let prepared = engine
+			.prepare_hybrid("needle", &options, None, &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		let mut ids = prepared
+			.fulltext
+			.iter()
+			.map(|item| item.section_id)
+			.collect::<Vec<_>>();
+		assert_eq!(ids.len(), 3);
+		ids.swap(0, 1);
+		let result = engine
+			.finish_hybrid(&prepared.token, &ids, "reranked-model", "configuration", &|| Ok(()))
+			.unwrap();
+		assert!(
+			engine
+				.has_cached_hybrid_candidates("needle", &options)
+				.unwrap()
+		);
+		assert_eq!(
+			engine
+				.lookup_hybrid("needle", &options, "configuration", &|| Ok(()))
+				.unwrap()
+				.unwrap()
+				.result
+				.sections[0]
+				.section_id,
+			ids[0]
+		);
+		assert!(
+			engine
+				.lookup_hybrid("needle", &options, "other-model", &|| Ok(()))
+				.unwrap()
+				.is_none()
+		);
+		assert_eq!(result.result.sections[0].section_id, ids[0]);
+		let encoded = cursor(&serde_json::to_value(&result).unwrap(), 1);
+		let resume = WikiSearchOptions {
+			cursor: Some(encoded.clone()),
+			limit: Some(1.0),
+			..Default::default()
+		};
+		assert_eq!(
+			engine
+				.search("needle", &resume, &|| Ok(()))
+				.unwrap()
+				.result
+				.sections[0]
+				.section_id,
+			ids[1]
+		);
+		engine.close();
+		assert!(engine.search("needle", &resume, &|| Ok(())).is_err());
+	}
+
+	#[test]
+	fn hybrid_cache_access_refreshes_external_ranking_lru() {
+		for continuation in [false, true] {
+			let fixture = Fixture::new();
+			let mut engine = fixture.engine();
+			let options = WikiSearchOptions { limit: Some(1.0), ..Default::default() };
+			let prepared = engine
+				.prepare_hybrid("needle", &options, None, &|| Ok(()))
+				.unwrap()
+				.expect_ready();
+			let mut ids: Vec<_> = prepared
+				.fulltext
+				.iter()
+				.map(|item| item.section_id)
+				.collect();
+			ids.swap(0, 1);
+			let result = engine
+				.finish_hybrid(&prepared.token, &ids, "reranked", "config", &|| Ok(()))
+				.unwrap();
+			let resume = WikiSearchOptions {
+				cursor: Some(cursor(&serde_json::to_value(&result).unwrap(), 1)),
+				limit: Some(1.0),
+				..Default::default()
+			};
+			for number in 0..6 {
+				search(&mut engine, &format!("other{number}"), WikiSearchOptions::default());
+			}
+			if continuation {
+				assert_eq!(
+					engine
+						.search("needle", &resume, &|| Ok(()))
+						.unwrap()
+						.result
+						.sections[0]
+						.section_id,
+					ids[1]
+				);
+			} else {
+				assert_eq!(
+					engine
+						.lookup_hybrid("needle", &options, "config", &|| Ok(()))
+						.unwrap()
+						.unwrap()
+						.result
+						.sections[0]
+						.section_id,
+					ids[0]
+				);
+			}
+			search(&mut engine, "one more query", WikiSearchOptions::default());
+			search(&mut engine, "another more query", WikiSearchOptions::default());
+			assert_eq!(
+				engine
+					.search("needle", &resume, &|| Ok(()))
+					.unwrap()
+					.result
+					.sections[0]
+					.section_id,
+				ids[1]
+			);
+		}
+	}
+
+	#[test]
+	fn hybrid_lookup_race_is_a_cache_miss_not_a_cursor_error() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let options = WikiSearchOptions::default();
+		let prepared = engine
+			.prepare_hybrid("needle", &options, None, &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		let ids: Vec<_> = prepared
+			.fulltext
+			.iter()
+			.map(|item| item.section_id)
+			.collect();
+		engine
+			.finish_hybrid(&prepared.token, &ids, "ranked", "config", &|| Ok(()))
+			.unwrap();
+		let written = AtomicBool::new(false);
+		let connection = Connection::open(&fixture.path).unwrap();
+		let result = engine
+			.lookup_hybrid("needle", &options, "config", &|| {
+				if !written.swap(true, Ordering::Relaxed) {
+					connection
+						.execute("UPDATE sections SET raw_markdown='changed' WHERE id=1", [])
+						.unwrap();
+				}
+				Ok(())
+			})
+			.unwrap();
+		assert!(written.load(Ordering::Relaxed));
+		assert!(result.is_none());
+	}
+
+	#[test]
+	fn hybrid_finish_rejects_snapshot_changes_and_missing_fulltext_tail() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let prepared = engine
+			.prepare_hybrid("needle", &WikiSearchOptions::default(), None, &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		let ids = prepared
+			.fulltext
+			.iter()
+			.map(|item| item.section_id)
+			.collect::<Vec<_>>();
+		assert!(
+			engine
+				.finish_hybrid(&prepared.token, &ids[..1], "reranked", "", &|| Ok(()))
+				.is_err()
+		);
+		Connection::open(&fixture.path)
+			.unwrap()
+			.execute("UPDATE sections SET raw_markdown='changed' WHERE id=1", [])
+			.unwrap();
+		assert!(
+			engine
+				.finish_hybrid(&prepared.token, &ids, "", "", &|| Ok(()))
+				.is_err()
+		);
+	}
+
+	#[test]
+	fn semantic_only_candidates_are_related_and_keep_stored_evidence() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute_batch(
+				"
+			CREATE TABLE wiki_vector_generations(index_id INTEGER, token TEXT, model TEXT, dimensions \
+				 INTEGER, complete INTEGER);
+			CREATE TABLE wiki_section_vectors(index_id INTEGER, section_id INTEGER, vector BLOB);
+			INSERT INTO wiki_vector_generations VALUES(1,'generation','model',2,1);
+			INSERT INTO wiki_section_vectors VALUES(1,1,x'0000803f00000000');
+			INSERT INTO wiki_section_vectors VALUES(1,2,x'0000803f00000000');
+			INSERT INTO wiki_section_vectors VALUES(1,3,x'0000803f00000000');
+		",
+			)
+			.unwrap();
+		let mut engine = fixture.engine();
+		let prepared = engine
+			.prepare_hybrid("unrelated", &WikiSearchOptions::default(), Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert!(prepared.fulltext.is_empty());
+		assert_eq!(prepared.vector_dimensions, vec![2]);
+		assert!(
+			engine
+				.score_hybrid(&prepared.token, 3, &|| Ok(()), |_, _| vec![0])
+				.unwrap()
+				.is_none()
+		);
+		let ids = engine
+			.score_hybrid(&prepared.token, 2, &|| Ok(()), |_, _| vec![0])
+			.unwrap()
+			.unwrap();
+		let id = ids[0];
+		let hits = engine
+			.read_hybrid_candidates(&prepared.token, &[id], &|| Ok(()))
+			.unwrap();
+		assert_eq!(hits[0].hit.match_kind, MatchKind::Related);
+		assert!(hits[0].hit.text.contains("needle evidence old"));
+		assert_eq!(hits[0].hit.document_hash, "old-hash");
+		let output = engine
+			.finish_hybrid(&prepared.token, &[id], "semantic", "config", &|| Ok(()))
+			.unwrap();
+		assert_eq!(output.result.sections[0].section_id, id);
+		connection
+			.execute("UPDATE sections SET raw_markdown='changed' WHERE id=1", [])
+			.unwrap();
+		assert!(
+			engine
+				.score_hybrid(&prepared.token, 2, &|| Ok(()), |_, _| vec![0])
+				.is_err()
+		);
+	}
+	#[test]
+	fn hybrid_dimensions_and_scoring_exclude_only_bad_generations() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE wiki_vector_generations(index_id INTEGER, token TEXT, model TEXT, \
+				 dimensions INTEGER, complete INTEGER);
+			 CREATE TABLE wiki_section_vectors(index_id INTEGER, section_id INTEGER, vector BLOB);
+			 INSERT INTO wiki_vector_generations VALUES(1,'bad','model',2,1);
+			 INSERT INTO wiki_section_vectors VALUES(1,1,x'0000803f00000000');
+			 INSERT INTO wiki_section_vectors VALUES(1,2,x'0000803f00000000');
+			 INSERT INTO wiki_section_vectors VALUES(1,3,x'00');
+			 INSERT INTO doc_indexes VALUES(2,'valid','/never-read');
+			 INSERT INTO documents VALUES(2,2,'valid.md','Valid','markdown','valid-hash',100,1.0);
+			 INSERT INTO sections VALUES(4,2,2,0,'Valid',1,1,2,0,10,'valid evidence');
+			 INSERT INTO wiki_vector_generations VALUES(2,'good','model',2,1);
+			 INSERT INTO wiki_section_vectors VALUES(2,4,x'0000803f00000000');",
+			)
+			.unwrap();
+		let mut engine = fixture.engine();
+		let prepared = engine
+			.prepare_hybrid("unrelated", &WikiSearchOptions::default(), Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(prepared.vector_dimensions, vec![2]);
+		let ids = engine
+			.score_hybrid(&prepared.token, 2, &|| Ok(()), |matrix, _| {
+				assert_eq!(matrix.len(), 2);
+				vec![0]
+			})
+			.unwrap()
+			.unwrap();
+		assert_eq!(ids, vec![4]);
+		connection
+			.execute("UPDATE wiki_section_vectors SET vector=x'00' WHERE section_id=4", [])
+			.unwrap();
+		let prepared = engine
+			.prepare_hybrid("unrelated", &WikiSearchOptions::default(), Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert!(prepared.vector_dimensions.is_empty());
+	}
+
 	fn install_swap(engine: &mut DatabaseEngine, path: String) -> thread::JoinHandle<()> {
 		let (start_tx, start_rx) = mpsc::channel();
 		let (done_tx, done_rx) = mpsc::channel();
@@ -1486,6 +1851,71 @@ mod tests {
 			Ok(())
 		}));
 		writer
+	}
+
+	#[test]
+	fn hybrid_prepare_retries_on_the_new_snapshot() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let writer = install_swap(&mut engine, fixture.path.clone());
+		let prepared = engine
+			.prepare_hybrid("needle evidence", &WikiSearchOptions::default(), None, &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		writer.join().unwrap();
+		let ids: Vec<_> = prepared
+			.fulltext
+			.iter()
+			.map(|item| item.section_id)
+			.collect();
+		let output = engine
+			.finish_hybrid(&prepared.token, &ids, "", "", &|| Ok(()))
+			.unwrap();
+		assert!(
+			output
+				.result
+				.sections
+				.iter()
+				.all(|hit| hit.document_hash == "new-hash")
+		);
+	}
+
+	#[test]
+	fn hybrid_prepare_falls_back_to_plain_search_after_repeated_snapshot_changes() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let writer = Connection::open(&fixture.path).unwrap();
+		writer
+			.execute_batch(
+				"CREATE TABLE search_race_probe(revision INTEGER); INSERT INTO search_race_probe \
+				 VALUES(0)",
+			)
+			.unwrap();
+		let attempts = Arc::new(AtomicU64::new(0));
+		let observed = Arc::clone(&attempts);
+		engine.after_snapshot = Some(Box::new(move || {
+			if observed.fetch_add(1, Ordering::Relaxed) < 2 {
+				writer
+					.execute("UPDATE search_race_probe SET revision=revision+1", [])
+					.unwrap();
+			}
+			Ok(())
+		}));
+		let result = engine
+			.prepare_hybrid("needle evidence", &WikiSearchOptions::default(), None, &|| Ok(()))
+			.unwrap();
+		let HybridPreparation::Fulltext(output) = result else {
+			panic!("expected a plain search after two raced snapshots");
+		};
+		assert_eq!(attempts.load(Ordering::Relaxed), 3);
+		assert_eq!(output.result.total, 3);
+		assert!(
+			output
+				.result
+				.sections
+				.iter()
+				.all(|hit| hit.document_hash == "old-hash")
+		);
 	}
 
 	#[test]

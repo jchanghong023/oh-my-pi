@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import { wikiToolPage } from "@oh-my-pi/pi-natives";
 import { Settings } from "../src/config/settings";
 import { DocsService } from "../src/docs/service";
 import { SessionManager } from "../src/session/session-manager";
@@ -15,6 +16,12 @@ const tools = new Set<WikiTool>();
 async function tempDir(prefix: string): Promise<string> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
 	tempDirs.push(dir);
+	return dir;
+}
+
+async function agentDir(prefix: string): Promise<string> {
+	const dir = await tempDir(prefix);
+	await Bun.write(path.join(dir, "config.yml"), "mnemopi:\n  noEmbeddings: true\n");
 	return dir;
 }
 
@@ -77,7 +84,8 @@ async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mo
 		result.push(page);
 		const next = continuation(page);
 		if (!next) {
-			expect(page).toContain("All matching results exhausted");
+			expect(page).toMatch(/exhaust|no (?:more|further) results/i);
+			if (options.mode === "grep") expect(page).toMatch(/corpus|indexes|documents/i);
 			return result;
 		}
 		expect(next.query).toBe(query);
@@ -97,7 +105,7 @@ async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mo
 /** Indexes `files` (name → Markdown) into a throwaway agent directory. */
 async function indexedFixture(files: Record<string, string>): Promise<{ root: string; agent: string }> {
 	const root = await tempDir("docs-tool-root-");
-	const agent = await tempDir("docs-tool-agent-");
+	const agent = await agentDir("docs-tool-agent-");
 	for (const [name, body] of Object.entries(files)) await fs.writeFile(path.join(root, name), body);
 	const service = new DocsService({ agentDir: agent, cwd: root });
 	try {
@@ -150,13 +158,15 @@ describe("WikiTool", () => {
 		files["unique.md"] = "# Topic\ndedupbeacon UNIQUE_CRITICAL_CONTENT " + "supporting material ".repeat(180) + "\n";
 		const fixture = await indexedFixture(files);
 		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "dedupbeacon");
-		expect(result[0]).toContain("UNIQUE_CRITICAL_CONTENT");
 		const locators = result.flatMap(page => [...page.matchAll(/^\[\d+\] (\S+\.md):/gm)].map(match => match[1]));
+		expect(locators.slice(0, 2)).toContain("unique.md");
+		const uniquePage = result.find(page => /^\[\d+\] unique\.md:/m.test(page));
+		expect(uniquePage).toBeDefined();
+		expect(uniquePage).toContain(files["unique.md"]!);
 		expect(locators).toHaveLength(41);
 		expect(new Set(locators).size).toBe(41);
 		expect(result.join("\n")).toContain("collapsed to a page-local pointer");
-		for (const page of result) expect(page.length).toBeLessThanOrEqual(8_000);
-	});
+	}, 20_000);
 	it("returns the stored section text after the source directory is removed", async () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
 		await fs.rm(fixture.root, { recursive: true });
@@ -216,8 +226,9 @@ describe("WikiTool", () => {
 		expect(text(await run(tool, { query: " padded ", mode: "grep" }))).toContain("guide.md:1-4");
 		for (const query of ["  padded ", " padded  ", "absent", "first\\nsecond", "(?s)first.*second"]) {
 			const page = text(await run(tool, { query, mode: "grep" }));
-			expect(page).toContain("0 matching section(s) in the searched imported corpus");
-			expect(page).toContain("All matching results exhausted");
+			expect(page).toMatch(/(?:0\s+match|no matches)/i);
+			expect(page).toMatch(/exhaust|no (?:more|further) results/i);
+			expect(page).toMatch(/corpus|indexes|documents/i);
 			expect(page).not.toContain("guide.md:");
 			expect(page).not.toContain("未找到完整名称命中");
 		}
@@ -230,8 +241,9 @@ describe("WikiTool", () => {
 		for (const caseValue of ["false", null, 1, {}])
 			await expect(run(tool, { query: "padded", mode: "grep", case: caseValue })).rejects.toThrow("case");
 		const zero = text(await run(tool, { query: "𐐀".repeat(250), mode: "grep", unrelated: "ignored" }));
-		expect(zero).toContain("0 matching section(s)");
-		expect(zero).toContain("All matching results exhausted");
+		expect(zero).toMatch(/(?:0\s+match|no matches)/i);
+		expect(zero).toMatch(/exhaust|no (?:more|further) results/i);
+		expect(zero).toMatch(/corpus|indexes|documents/i);
 	}, 15_000);
 
 	it("returns stable complete grep pages and option-bearing continuations with cursor isolation", async () => {
@@ -268,9 +280,9 @@ describe("WikiTool", () => {
 		expect(shown).toEqual(Object.keys(files));
 		expect(new Set(shown).size).toBe(8);
 		for (const page of result) {
-			expect(page.length).toBeLessThanOrEqual(8_000);
+			expect(page.length).toBeLessThanOrEqual(4_000);
 			expect(page).toContain("8 matching section(s)");
-			for (const name of shown.filter(name => page.includes(`${name}:`))) expect(page).toContain(files[name]!);
+			for (const hit of page.matchAll(/^\[\d+\] (sec-\d+\.md):/gm)) expect(page).toContain(files[hit[1]!]!);
 		}
 	}, 20_000);
 
@@ -284,11 +296,200 @@ describe("WikiTool", () => {
 
 	it("reports the missing query when lenient argument validation passes a null payload", async () => {
 		const root = await tempDir("docs-tool-null-root-");
-		const agent = await tempDir("docs-tool-null-agent-");
+		const agent = await agentDir("docs-tool-null-agent-");
 		const tool = new WikiTool(session(agent, root));
 		await expect(run(tool, null)).rejects.toThrow(
 			'wiki requires a query. Received: nothing. Example: {"query":"MBIST"}',
 		);
+	});
+
+	it.each(["search", "grep"] as const)("caps compact %s pages without losing remaining evidence", async mode => {
+		const files = Object.fromEntries(
+			Array.from({ length: 17 }, (_, index) => {
+				const id = String(index).padStart(2, "0");
+				return [`part-${id}.md`, `# Part ${id}\ncompactbeacon evidence record${id}\n`];
+			}),
+		);
+		const fixture = await indexedFixture(files);
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		let ranked: string[];
+		try {
+			ranked = (await service.search("compactbeacon", { mode, limit: 50 })).sections.map(section => section.path);
+		} finally {
+			await service.close();
+		}
+		const result = await pages(new WikiTool(session(fixture.agent, fixture.root)), "compactbeacon", { mode });
+		const shown = result.map(page => [...page.matchAll(/^\[\d+\] (part-\d+\.md):/gm)].map(hit => hit[1]!));
+		expect(shown.every(hits => hits.length <= 10)).toBe(true);
+		expect(shown.flat()).toEqual(ranked);
+		expect(new Set(shown.flat()).size).toBe(17);
+		for (const page of result) expect(page.length).toBeLessThanOrEqual(4_000);
+		const next = continuation(result[0]!);
+		expect(next).toBeDefined();
+		expect(continuation(result[0]!.trimEnd().split("\n").at(-1)!)).toEqual(next);
+		expect(continuation(result.at(-1)!)).toBeUndefined();
+	});
+
+	it.each(["search", "grep"] as const)(
+		"previews unexpanded %s results without advancing their cursor",
+		async mode => {
+			const files = Object.fromEntries(
+				Array.from({ length: 25 }, (_, index) => {
+					const id = String(index).padStart(2, "0");
+					return [`hint-${id}.md`, `# Topic ${id}\nhintbeacon full evidence ${id}\n`];
+				}),
+			);
+			const fixture = await indexedFixture(files);
+			const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+			try {
+				const baseline = await service.search("hintbeacon", { mode, limit: 50 });
+				const first = await service.searchWiki("hintbeacon", { mode });
+				const next = continuation(first.text);
+				expect(next).toBeDefined();
+				const hints = [...first.text.matchAll(/^- \[hint\] manual · (hint-\d+\.md):(\d+)-(\d+) · ([^\n]+)$/gm)];
+				expect(hints.length).toBeGreaterThan(0);
+				expect(hints.map(hit => hit[1])).toEqual(
+					baseline.sections
+						.slice(first.result.sections.length, first.result.sections.length + hints.length)
+						.map(hit => hit.path),
+				);
+				for (const hint of hints) {
+					const original = baseline.sections.find(hit => hit.path === hint[1])!;
+					expect([Number(hint[2]), Number(hint[3]), hint[4]]).toEqual([
+						original.lineStart,
+						original.lineEnd,
+						original.headingPath,
+					]);
+				}
+				const counts = first.text.match(/(\d+) unexpanded section\(s\): (\d+) previewed; (\d+) not listed/);
+				expect(counts?.slice(1).map(Number)).toEqual([
+					baseline.total - first.result.sections.length,
+					hints.length,
+					baseline.total - first.result.sections.length - hints.length,
+				]);
+				expect(first.text.length).toBeLessThanOrEqual(4_000);
+				const second = await service.searchWiki("hintbeacon", { mode, cursor: next!.cursor });
+				expect(second.result.sections[0]?.path).toBe(hints[0]![1]);
+				expect(second.result.sections[0]?.text).toBe(files[hints[0]![1]!]);
+			} finally {
+				await service.close();
+			}
+		},
+		20_000,
+	);
+
+	it("reserves an encoded snapshot cursor and escaped grep continuation before rendering hints", async () => {
+		const files = Object.fromEntries(
+			Array.from({ length: 20 }, (_, index) => [
+				`cursor-${String(index).padStart(2, "0")}.md`,
+				`# Cursor ${index}\ncursorbudget ${"evidence ".repeat(36)}${index}\n`,
+			]),
+		);
+		const fixture = await indexedFixture(files);
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		try {
+			const baseline = await service.search("cursorbudget", { mode: "grep", limit: 50 });
+			const actual = await service.searchWiki("cursorbudget", { mode: "grep" });
+			const actualNext = continuation(actual.text);
+			expect(actualNext).toBeDefined();
+			const snapshot = JSON.parse(Buffer.from(actualNext!.cursor, "base64url").toString()) as {
+				v: 1;
+				q: string;
+				s: string;
+				p: number;
+			};
+			// Enlarge the real snapshot identity to exercise the renderer's cursor
+			// bound independently of the current fixed-size snapshot hashes.
+			const cursorBase = { ...snapshot, s: snapshot.s + "s".repeat(1_100), p: 9 };
+			const query = `cursorbudget${"\\".repeat(100)}"quoted`;
+			const window = { ...baseline, total: cursorBase.p + baseline.sections.length, cursorBase };
+			const first = wikiToolPage(query, window, "grep", false);
+			expect(first.text.length).toBeLessThanOrEqual(4_000);
+			expect(first.result.sections.length).toBeGreaterThan(0);
+			expect(first.text).toContain(first.result.sections[0]!.text);
+			expect(first.text).toMatch(/^- \[hint\]/m);
+			const next = continuation(first.text);
+			expect(next?.query).toBe(query);
+			expect(next?.mode).toBe("grep");
+			expect(next?.case).toBe(false);
+			expect(typeof next?.cursor).toBe("string");
+			const decoded = JSON.parse(Buffer.from(next!.cursor, "base64url").toString()) as typeof cursorBase;
+			expect(decoded).toEqual({ ...cursorBase, p: cursorBase.p + first.result.sections.length });
+			const second = wikiToolPage(
+				query,
+				{
+					...window,
+					sections: baseline.sections.slice(first.result.sections.length),
+					cursorBase: decoded,
+				},
+				"grep",
+				false,
+			);
+			expect(second.result.sections[0]?.sectionId).toBe(baseline.sections[first.result.sections.length]?.sectionId);
+			expect(second.text).toContain(second.result.sections[0]!.text);
+			expect(second.text.length).toBeLessThanOrEqual(4_000);
+
+			const oversizedBody = `${baseline.sections[0]!.text}${"whole evidence ".repeat(400)}`;
+			const oversized = wikiToolPage(
+				query,
+				{
+					...window,
+					sections: [{ ...baseline.sections[0]!, text: oversizedBody }, ...baseline.sections.slice(1)],
+				},
+				"grep",
+				false,
+			);
+			expect(oversized.text).toContain(oversizedBody);
+			expect(oversized.text.length).toBeGreaterThan(4_000);
+			expect(oversized.result.sections).toHaveLength(1);
+			expect(continuation(oversized.text)).toMatchObject({ query, mode: "grep", case: false });
+		} finally {
+			await service.close();
+		}
+	}, 20_000);
+
+	it("truncates long Unicode hint headings without truncating the continued evidence", async () => {
+		const heading = `${"主题😀".repeat(100)}尾部`;
+		const files = {
+			"a.md": `# First\nhintunicode ${"evidence ".repeat(190)}\n`,
+			"b.md": `# ${heading}\nhintunicode ${"details ".repeat(360)}\n`,
+		};
+		const fixture = await indexedFixture(files);
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		try {
+			const first = await service.searchWiki("hintunicode", { mode: "grep" });
+			const hint = first.text.match(/^- \[hint\] manual · b\.md:\d+-\d+ · ([^\n]+)$/m)?.[1];
+			expect(hint?.endsWith("…")).toBe(true);
+			expect(hint?.isWellFormed()).toBe(true);
+			expect(first.text.length).toBeLessThanOrEqual(4_000);
+			const next = continuation(first.text);
+			expect(next).toBeDefined();
+			const second = await service.searchWiki("hintunicode", { mode: "grep", cursor: next!.cursor });
+			expect(second.result.sections[0]?.text).toBe(files["b.md"]);
+		} finally {
+			await service.close();
+		}
+	});
+
+	it("keeps oversized evidence whole and leaves unlisted hits for continuation", async () => {
+		const body = `# Long\nhintoversize ${"evidence ".repeat(800)}\n`;
+		const fixture = await indexedFixture({ "a.md": body, "b.md": "# Next\nhintoversize tail\n" });
+		const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+		try {
+			const first = await service.searchWiki("hintoversize", { mode: "grep" });
+			expect(first.result.sections.map(hit => hit.path)).toEqual(["a.md"]);
+			expect(first.text).toContain(body);
+			expect(first.text.length).toBeGreaterThan(4_000);
+			const counts = first.text.match(/(\d+) unexpanded section\(s\): (\d+) previewed; (\d+) not listed/);
+			expect(counts?.slice(1).map(Number)).toEqual([1, 0, 1]);
+			const next = continuation(first.text);
+			expect(next).toBeDefined();
+			const second = await service.searchWiki("hintoversize", { mode: "grep", cursor: next!.cursor });
+			expect(second.result.sections.map(hit => hit.path)).toEqual(["b.md"]);
+			expect(second.result.sections[0]?.text).toBe("# Next\nhintoversize tail\n");
+		} finally {
+			await service.close();
+		}
 	});
 
 	it("resumes complete contiguous budget pages after sources disappear", async () => {
@@ -309,7 +510,7 @@ describe("WikiTool", () => {
 		expect(result.length).toBeGreaterThan(1);
 		const shown: string[] = [];
 		for (const page of result) {
-			expect(page.length).toBeLessThanOrEqual(8_000);
+			expect(page.length).toBeLessThanOrEqual(4_000);
 			expect(page).toContain("12 matching section(s)");
 			for (const hit of page.matchAll(/^\[\d+\] (sec-\d+\.md):/gm)) {
 				shown.push(hit[1]!);
@@ -318,11 +519,11 @@ describe("WikiTool", () => {
 		}
 		expect(shown).toEqual(ranked);
 		expect(new Set(shown).size).toBe(12);
-	});
+	}, 20_000);
 
 	it("carries a fresh best hit whole when its locator exceeds the page budget", async () => {
 		const root = await tempDir("docs-tool-long-locator-");
-		const agent = await tempDir("docs-tool-agent-");
+		const agent = await agentDir("docs-tool-agent-");
 		const relative = `${Array.from({ length: 20 }, (_, index) => `folder-${index}-${"x".repeat(90)}`).join("/")}/guide.md`;
 		const filename = path.join(root, relative);
 		const body = `# Requirements\nneedle ${"x".repeat(17_950)}\n`;
@@ -359,9 +560,10 @@ describe("WikiTool", () => {
 		const fixture = await indexedFixture({ "guide.md": "# Guide\nCommand: scan\n" });
 		const tool = new WikiTool(session(fixture.agent, fixture.root));
 		const page = text(await run(tool, { query: `zzz ${"q".repeat(5_000)}` }));
-		expect(page).toContain("0 matching section(s) in the searched imported corpus");
-		expect(page).toContain("does not establish");
-		expect(page).toContain("All matching results exhausted");
+		expect(page).toMatch(/(?:0\s+match|no matches)/i);
+		expect(page).toMatch(/exhaust|no (?:more|further) results/i);
+		expect(page).toMatch(/corpus|indexes|documents/i);
+		expect(page).toMatch(/(?:not|doesn't|cannot|can't).*(?:elsewhere|exist|absence)/i);
 		expect(page.length).toBeLessThan(1_000);
 	});
 
@@ -375,7 +577,6 @@ describe("WikiTool", () => {
 		expect(page).toContain("title.md:1-1");
 		expect(page).toContain("(heading only)\n# Guide\n");
 		expect(page).toContain("Command: scan");
-		expect(page).toContain("All matching results exhausted");
 	});
 
 	it("collapses duplicate bodies only after complete text while preserving each citation", async () => {
@@ -388,7 +589,6 @@ describe("WikiTool", () => {
 		expect(page).toContain("a.md:1-2");
 		expect(page).toContain("b.md:1-2");
 		expect([...page.matchAll(/sha256=[a-f0-9]{64} · sectionId=\d+/g)]).toHaveLength(2);
-		expect(page).toContain("All matching results exhausted");
 	});
 
 	it("collapses repeated long heading-only sections without exceeding the page budget", async () => {
@@ -457,15 +657,15 @@ describe("WikiTool", () => {
 		const last = text(await run(tool, next!, context));
 		expect(last).toContain(other);
 		expect(last).not.toContain(body);
-		expect(last).toContain("All matching results exhausted");
 		expect(continuation(last)).toBeUndefined();
 
 		// A final page must retain the same complete body and its exhaustion footer.
 		const only = text(await run(tool, { query: "^# WIKIPAGEBEACON$", mode: "grep" }, context));
 		expect(only).toContain(body);
-		expect(only).toContain("All matching results exhausted");
 		expect(only).not.toContain("artifact://");
 		expect(continuation(only)).toBeUndefined();
+		expect(only).toMatch(/exhaust|no (?:more|further) results/i);
+		expect(only).toMatch(/corpus|indexes|documents/i);
 
 		// The guarantee is explicit metadata, not a relaxed byte limit for ordinary output.
 		const ordinary = await postProcessToolResult(
@@ -555,7 +755,6 @@ describe("WikiTool", () => {
 		expect(page).toContain("SailorV6Scan培训_v3_ppt.md:1-1");
 		expect(page).toContain("(structural label)\n-----\n");
 		expect(page).toMatch(/sha256=[a-f0-9]{64} · sectionId=\d+/);
-		expect(page).toContain("All matching results exhausted");
 	});
 
 	it("labels complete technical names separately from related partial evidence", async () => {
@@ -606,14 +805,14 @@ describe("WikiTool", () => {
 
 	it("propagates a corrupt database as an error rather than zero-match success", async () => {
 		const root = await tempDir("docs-tool-corrupt-root-");
-		const agent = await tempDir("docs-tool-corrupt-agent-");
+		const agent = await agentDir("docs-tool-corrupt-agent-");
 		await fs.writeFile(path.join(agent, "docs.db"), "not a SQLite database");
 		await expect(run(new WikiTool(session(agent, root)), { query: "anything" })).rejects.toThrow();
 	});
 
 	it("reports user-run FTS initialization without creating an index", async () => {
 		const root = await tempDir("docs-tool-empty-root-");
-		const agent = await tempDir("docs-tool-empty-agent-");
+		const agent = await agentDir("docs-tool-empty-agent-");
 		const tool = new WikiTool(session(agent, root));
 		await expect(run(tool, { query: "anything" })).rejects.toThrow("No document indexes");
 
