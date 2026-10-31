@@ -4453,6 +4453,7 @@ export interface WikiSearchHit {
 
 export interface WikiSearchOptions {
   index?: string
+  path?: string
   cursor?: string
   limit?: number
   mode?: string
@@ -4481,13 +4482,15 @@ export interface WikiSearchWindow {
   exactNameMatches: number
   technicalName?: string
   cursorBase: WikiCursorBase
+  retrieval?: string
+  reranked?: boolean
 }
 
 export declare function wikiSectionShape(markdown: string): 'content' | 'heading-only' | 'stub'
 
 export declare function wikiSelectPage(window: WikiSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: WikiSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): WikiSearchResult
 
-export declare function wikiToolPage(query: string, window: WikiSearchWindow, mode?: string | undefined | null, caseSensitive?: boolean | undefined | null): WikiToolPage
+export declare function wikiToolPage(query: string, window: WikiSearchWindow, mode?: string | undefined | null, caseSensitive?: boolean | undefined | null, path?: string | undefined | null): WikiToolPage
 
 export interface WikiToolPage {
   result: WikiSearchResult

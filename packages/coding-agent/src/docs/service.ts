@@ -154,7 +154,7 @@ export class DocsService {
 
 	searchWiki(
 		query: string,
-		options: Pick<DocsSearchOptions, "index" | "cursor" | "mode" | "case" | "signal"> = {},
+		options: Pick<DocsSearchOptions, "index" | "path" | "cursor" | "mode" | "case" | "signal"> = {},
 	): Promise<WikiToolPage> {
 		return this.#search(query, options, true);
 	}
@@ -192,6 +192,7 @@ export class DocsService {
 						query,
 						options: {
 							index: options.index,
+							path: options.path,
 							limit,
 							cursor: options.cursor,
 							mode: options.mode,
@@ -208,7 +209,7 @@ export class DocsService {
 						? wikiPrepareToolQuery(query, undefined, ["query"], false, undefined, undefined)
 						: undefined;
 				const page = renderWiki
-					? wikiToolPage(prepared?.query ?? query, window, options.mode, options.case)
+					? wikiToolPage(prepared?.query ?? query, window, options.mode, options.case, options.path)
 					: undefined;
 				const result = page
 					? page.result

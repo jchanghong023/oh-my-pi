@@ -236,6 +236,9 @@ const fn sqlite_code(code: i32) -> &'static str {
 pub struct WikiSearchOptions {
 	/// Restrict results to this index.
 	pub index:  Option<String>,
+	/// Restrict results to a literal index-relative file or slash-ended
+	/// directory.
+	pub path:   Option<String>,
 	/// Resume a previous search window.
 	pub cursor: Option<String>,
 	/// Maximum number of returned sections.
@@ -359,6 +362,11 @@ pub struct WikiSearchWindow {
 	/// Detected technical name, when present.
 	#[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
 	pub technical_name:     Option<String>,
+	/// Retrieval method actually used for this ranking.
+	pub retrieval:          String,
+	/// Whether reranking was adopted, or unknown for an opaque legacy identity.
+	#[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
+	pub reranked:           Option<bool>,
 	/// Cursor components for pagination.
 	pub cursor_base:        WikiCursorBase,
 }
@@ -379,6 +387,8 @@ struct Ranking {
 	ranked:             Vec<RankedSection>,
 	version:            String,
 	exact_name_matches: usize,
+	retrieval:          &'static str,
+	reranked:           Option<bool>,
 }
 
 /// Internal metadata for one ranked section, without its Markdown body.
@@ -422,6 +432,7 @@ struct HybridContext {
 	guard:              String,
 	query:              String,
 	index:              Option<String>,
+	path:               Option<String>,
 	model:              Option<String>,
 	vector_dimensions:  Vec<usize>,
 	limit:              Option<f64>,
@@ -441,6 +452,88 @@ struct HybridCompleted {
 	key:           String,
 	configuration: String,
 	cache_key:     String,
+}
+
+/// Validated literal index-relative path. Directory prefixes include their
+/// slash.
+#[derive(Clone, Copy)]
+pub(crate) struct PathScope<'a>(&'a str);
+
+impl<'a> PathScope<'a> {
+	pub(crate) fn validate(path: Option<&'a str>) -> CoreResult<Option<Self>> {
+		let Some(path) = path else { return Ok(None) };
+		let bytes = path.as_bytes();
+		if path.is_empty()
+			|| path.starts_with(['/', '\\'])
+			|| (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+			|| path.split(['/', '\\']).any(|component| component == "..")
+		{
+			return Err(WikiError::message("Invalid documentation search path"));
+		}
+		Ok(Some(Self(path)))
+	}
+
+	pub(crate) fn matches(self, path: &[u8]) -> bool {
+		let scope = self.0.as_bytes();
+		if scope.ends_with(b"/") {
+			path.starts_with(scope)
+		} else {
+			path == scope
+		}
+	}
+}
+
+fn search_key(text: &str, options: &WikiSearchOptions, cursor_path: &str, grep: bool) -> String {
+	let json = match (grep, options.path.as_ref()) {
+		(true, None) => serde_json::to_string(&(
+			text,
+			"grep",
+			options.r#case.unwrap_or(true),
+			&options.index,
+			cursor_path,
+		)),
+		(true, Some(path)) => serde_json::to_string(&(
+			text,
+			"grep",
+			options.r#case.unwrap_or(true),
+			&options.index,
+			cursor_path,
+			path,
+		)),
+		(false, None) => {
+			serde_json::to_string(&(query::normalize_search_text(text), &options.index, cursor_path))
+		},
+		(false, Some(path)) => serde_json::to_string(&(
+			query::normalize_search_text(text),
+			&options.index,
+			cursor_path,
+			path,
+		)),
+	}
+	.expect("JSON strings");
+	digest(json.as_bytes())
+}
+
+fn retrieval_status(identity: &str) -> (&'static str, Option<bool>) {
+	if identity.is_empty() {
+		return ("fulltext", Some(false));
+	}
+	let Ok(serde_json::Value::Object(object)) = serde_json::from_str(identity) else {
+		return ("unknown", None);
+	};
+	// Only the host's actual ranking identity is recoverable. Arbitrary legacy
+	// JSON objects do not establish which operations were adopted.
+	if !object.contains_key("embedding") && !object.contains_key("reranker") {
+		return ("unknown", None);
+	}
+	(
+		if object.contains_key("embedding") {
+			"hybrid"
+		} else {
+			"fulltext"
+		},
+		Some(object.contains_key("reranker")),
+	)
 }
 
 /// SQLite-backed ranked search engine.
@@ -570,6 +663,7 @@ impl DatabaseEngine {
 		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
 	{
 		check()?;
+		let path = PathScope::validate(options.path.as_deref())?;
 		self.ensure_database()?;
 		let limit = options.limit.unwrap_or(10.0).floor();
 		if limit.is_nan() {
@@ -605,25 +699,7 @@ impl DatabaseEngine {
 			query::analyze_query(query_text)
 		};
 		let cursor = options.cursor.as_deref().map(decode_cursor).transpose()?;
-		let key_json = if grep.is_some() {
-			serde_json::to_string(&(
-				query_text,
-				"grep",
-				options.r#case.unwrap_or(true),
-				&options.index,
-				&self.cursor_path,
-			))
-		} else {
-			// Preserve the original search cursor identity, including ignored
-			// case.
-			serde_json::to_string(&(
-				query::normalize_search_text(query_text),
-				&options.index,
-				&self.cursor_path,
-			))
-		}
-		.expect("JSON strings");
-		let key = digest(key_json.as_bytes());
+		let key = search_key(query_text, options, &self.cursor_path, grep.is_some());
 		if cursor.as_ref().is_some_and(|cursor| cursor.q != key) {
 			return Err(WikiError::message(
 				"Documentation search cursor does not match query or index",
@@ -693,9 +769,9 @@ impl DatabaseEngine {
 					}
 					let connection = self.connection.as_ref().expect("connection");
 					let ranking = Arc::new(if let Some(matcher) = grep.as_ref() {
-						rank_grep(connection, matcher, options.index.as_deref(), &check)?
+						rank_grep(connection, matcher, options.index.as_deref(), path, &check)?
 					} else {
-						rank(connection, query_text, &plan, options.index.as_deref(), &check)?
+						rank(connection, query_text, &plan, options.index.as_deref(), path, &check)?
 					});
 					built = Some(Arc::clone(&ranking));
 					ranking
@@ -750,6 +826,8 @@ impl DatabaseEngine {
 					total: ranking.ranked.len() as i64,
 					exact_name_matches: ranking.exact_name_matches as i64,
 					technical_name: plan.technical_name.clone(),
+					retrieval: ranking.retrieval.to_owned(),
+					reranked: ranking.reranked,
 					cursor_base: WikiCursorBase {
 						v: 1,
 						q: key.clone(),
@@ -805,6 +883,7 @@ fn rank_grep(
 	connection: &Connection,
 	matcher: &pi_walker::grep::Engine,
 	index: Option<&str>,
+	path: Option<PathScope<'_>>,
 	check: Check<'_>,
 ) -> CoreResult<Ranking> {
 	let mut snapshot = Sha256::new();
@@ -846,8 +925,14 @@ fn rank_grep(
 			}
 		}
 	}
-	let ranked = super::grep::scan(connection, matcher, index, check)?;
-	Ok(Ranking { ranked, version: format!("{:x}", snapshot.finalize()), exact_name_matches: 0 })
+	let ranked = super::grep::scan(connection, matcher, index, path, check)?;
+	Ok(Ranking {
+		ranked,
+		version: format!("{:x}", snapshot.finalize()),
+		exact_name_matches: 0,
+		retrieval: "grep",
+		reranked: Some(false),
+	})
 }
 
 fn rank(
@@ -855,6 +940,7 @@ fn rank(
 	query_text: &str,
 	plan: &query::QueryPlan,
 	index: Option<&str>,
+	path: Option<PathScope<'_>>,
 	check: Check<'_>,
 ) -> CoreResult<Ranking> {
 	let mut ranks = HashMap::new();
@@ -866,9 +952,10 @@ fn rank(
 			""
 		};
 		let sql = format!(
-			"SELECT f.rowid section_id,bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank FROM sections_fts \
-			 f JOIN sections s ON s.id=f.rowid JOIN doc_indexes i ON i.id=s.index_id WHERE \
-			 sections_fts MATCH ? AND i.name NOT GLOB '__building__*'{filter} ORDER BY f.rowid"
+			"SELECT f.rowid section_id,bm25(sections_fts,0.0,0.0,0.5,2.0,1.0) rank,d.relative_path \
+			 FROM sections_fts f JOIN sections s ON s.id=f.rowid LEFT JOIN documents d ON \
+			 d.id=s.document_id JOIN doc_indexes i ON i.id=s.index_id WHERE sections_fts MATCH ? AND \
+			 i.name NOT GLOB '__building__*'{filter} ORDER BY f.rowid"
 		);
 		let mut statement = connection.prepare_cached(&sql)?;
 		let mut rows = if filter.is_empty() {
@@ -878,6 +965,11 @@ fn rank(
 		};
 		while let Some(row) = rows.next()? {
 			check()?;
+			if let Some(path) = path
+				&& !matches!(row.get_ref(2)?, ValueRef::Text(value) if path.matches(value))
+			{
+				continue;
+			}
 			let id: i64 = row.get(0)?;
 			let value: f64 = row.get(1)?;
 			ranks.insert(id, value);
@@ -909,6 +1001,11 @@ fn rank(
 		hash_row(&mut snapshot, row, &mut buffer)?;
 		if let Some(index) = index
 			&& !matches!(row.get_ref(7)?, ValueRef::Text(name) if name == index.as_bytes())
+		{
+			continue;
+		}
+		if let Some(path) = path
+			&& !matches!(row.get_ref(8)?, ValueRef::Text(value) if path.matches(value))
 		{
 			continue;
 		}
@@ -997,7 +1094,13 @@ fn rank(
 		.iter()
 		.filter(|entry| entry.match_kind == MatchKind::ExactName)
 		.count();
-	Ok(Ranking { ranked, version: format!("{:x}", snapshot.finalize()), exact_name_matches })
+	Ok(Ranking {
+		ranked,
+		version: format!("{:x}", snapshot.finalize()),
+		exact_name_matches,
+		retrieval: "fulltext",
+		reranked: Some(false),
+	})
 }
 
 struct DocumentContexts {
@@ -1540,6 +1643,220 @@ mod tests {
 		let mut cursor = window["result"]["cursorBase"].clone();
 		cursor["p"] = serde_json::json!(position);
 		URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).unwrap())
+	}
+
+	#[test]
+	fn scoped_search_and_grep_keep_literal_paths_and_cursor_identity() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute("INSERT INTO doc_indexes VALUES(2,'other','/never-read')", [])
+			.unwrap();
+		for (id, index, path) in [
+			(2, 1, "dir %_/item.md"),
+			(3, 1, "dir %_/nested/item.md"),
+			(4, 1, "dir %_other/item.md"),
+			(5, 2, "dir %_/item.md"),
+			(6, 1, "资料/ 文档.md"),
+		] {
+			let body = "# Title\nneedle evidence\n";
+			connection
+				.execute(
+					"INSERT INTO documents VALUES(?,?,?,'Title','markdown','hash',100,1.0)",
+					rusqlite::params![id, index, path],
+				)
+				.unwrap();
+			connection
+				.execute("INSERT INTO sections VALUES(?,?,?,0,'Title',1,1,2,0,?,?)", rusqlite::params![
+					id + 10,
+					index,
+					id,
+					body.len() as i64,
+					body
+				])
+				.unwrap();
+			connection
+				.execute(
+					"INSERT INTO \
+					 sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) \
+					 VALUES(?,?,?,?,'Title',?)",
+					rusqlite::params![id + 10, id + 10, index, path, body],
+				)
+				.unwrap();
+		}
+		drop(connection);
+		let mut engine = fixture.engine();
+		for mode in ["search", "grep"] {
+			let options = WikiSearchOptions {
+				path: Some("dir %_/item.md".into()),
+				mode: Some(mode.into()),
+				limit: Some(1.0),
+				..Default::default()
+			};
+			let first = search(&mut engine, "needle", options);
+			assert_eq!(first["result"]["total"], 2);
+			assert_eq!(first["result"]["retrieval"], if mode == "grep" { "grep" } else { "fulltext" });
+			assert_eq!(first["result"]["reranked"], false);
+			let next = cursor(&first, 1);
+			let continuation = search(&mut engine, "needle", WikiSearchOptions {
+				path: Some("dir %_/item.md".into()),
+				mode: Some(mode.into()),
+				cursor: Some(next.clone()),
+				..Default::default()
+			});
+			assert_eq!(continuation["result"]["sections"][0]["path"], "dir %_/item.md");
+			assert!(
+				engine
+					.search(
+						"needle",
+						&WikiSearchOptions {
+							path: Some("dir %_/".into()),
+							mode: Some(mode.into()),
+							cursor: Some(next),
+							..Default::default()
+						},
+						&|| Ok(())
+					)
+					.is_err()
+			);
+			let directory = search(&mut engine, "needle", WikiSearchOptions {
+				path: Some("dir %_/".into()),
+				mode: Some(mode.into()),
+				..Default::default()
+			});
+			assert_eq!(directory["result"]["total"], 3);
+			let intersection = search(&mut engine, "needle", WikiSearchOptions {
+				index: Some("other".into()),
+				path: Some("dir %_/".into()),
+				mode: Some(mode.into()),
+				..Default::default()
+			});
+			assert_eq!(intersection["result"]["total"], 1);
+			let unicode = search(&mut engine, "needle", WikiSearchOptions {
+				path: Some("资料/ 文档.md".into()),
+				mode: Some(mode.into()),
+				..Default::default()
+			});
+			assert_eq!(unicode["result"]["total"], 1);
+			let empty = search(&mut engine, "needle", WikiSearchOptions {
+				path: Some("DIR %_/".into()),
+				mode: Some(mode.into()),
+				..Default::default()
+			});
+			assert_eq!(empty["result"]["total"], 0);
+			assert_eq!(empty["result"]["retrieval"], if mode == "grep" { "grep" } else { "fulltext" });
+		}
+		for invalid in
+			["", "/absolute", "\\absolute", "C:/absolute", "C:relative", "a/../b", "a\\..\\b"]
+		{
+			assert!(
+				engine
+					.search(
+						"needle",
+						&WikiSearchOptions { path: Some(invalid.into()), ..Default::default() },
+						&|| Ok(())
+					)
+					.is_err(),
+				"{invalid}"
+			);
+		}
+	}
+
+	#[test]
+	fn hybrid_status_survives_cache_and_cursor() {
+		for (identity, retrieval, reranked) in [
+			("", "fulltext", Some(false)),
+			(r#"{"embedding":"secret","reranker":"secret"}"#, "hybrid", Some(true)),
+			(r#"{"reranker":"secret"}"#, "fulltext", Some(true)),
+			("opaque-legacy", "unknown", None),
+		] {
+			let fixture = Fixture::new();
+			let mut engine = fixture.engine();
+			let options = WikiSearchOptions {
+				limit: Some(1.0),
+				path: Some("old.md".into()),
+				..Default::default()
+			};
+			let prepared = engine
+				.prepare_hybrid("needle", &options, None, &|| Ok(()))
+				.unwrap()
+				.expect_ready();
+			let ids: Vec<_> = prepared
+				.fulltext
+				.iter()
+				.map(|rank| rank.section_id)
+				.collect();
+			let result = engine
+				.finish_hybrid(&prepared.token, &ids, identity, "configuration", &|| Ok(()))
+				.unwrap();
+			assert_eq!(result.result.retrieval, retrieval);
+			assert_eq!(result.result.reranked, reranked);
+			let cached = engine
+				.lookup_hybrid("needle", &options, "configuration", &|| Ok(()))
+				.unwrap()
+				.unwrap();
+			assert_eq!(
+				(cached.result.retrieval.as_str(), cached.result.reranked),
+				(retrieval, reranked)
+			);
+			let next = cursor(&serde_json::to_value(&result).unwrap(), 1);
+			let resumed = engine
+				.search(
+					"needle",
+					&WikiSearchOptions {
+						path: Some("old.md".into()),
+						cursor: Some(next),
+						..Default::default()
+					},
+					&|| Ok(()),
+				)
+				.unwrap();
+			assert_eq!(
+				(resumed.result.retrieval.as_str(), resumed.result.reranked),
+				(retrieval, reranked)
+			);
+		}
+	}
+
+	#[test]
+	fn hybrid_scores_only_scoped_vectors() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions \
+				 INTEGER,complete INTEGER);
+			 CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
+			 INSERT INTO documents VALUES(2,1,'outside.md','Other','markdown','other',10,1.0);
+			 INSERT INTO sections VALUES(4,1,2,0,'Other',1,1,1,0,5,'other');
+			 INSERT INTO wiki_vector_generations VALUES(1,'model',2,1);
+			 INSERT INTO wiki_section_vectors VALUES
+			 (1,1,x'0000803f00000000'),(1,2,x'0000803f00000000'),
+			 (1,3,x'0000803f00000000'),(1,4,x'000000000000803f');",
+			)
+			.unwrap();
+		drop(connection);
+		let mut engine = fixture.engine();
+		let options = WikiSearchOptions { path: Some("old.md".into()), ..Default::default() };
+		let prepared = engine
+			.prepare_hybrid("needle", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(prepared.vector_dimensions, vec![2]);
+		let scored = engine
+			.score_hybrid(&prepared.token, 2, &|| Ok(()), |matrix, dimensions| {
+				assert_eq!(dimensions, 2);
+				assert_eq!(matrix.len(), 6);
+				vec![0, 1, 2]
+			})
+			.unwrap()
+			.unwrap();
+		assert_eq!(scored, vec![1, 2, 3]);
+		assert!(
+			engine
+				.read_hybrid_candidates(&prepared.token, &[4], &|| Ok(()))
+				.is_err()
+		);
 	}
 
 	#[test]
@@ -2175,6 +2492,8 @@ mod tests {
 					.collect(),
 				version:            "version".to_owned(),
 				exact_name_matches: 0,
+				retrieval:          "fulltext",
+				reranked:           Some(false),
 			})
 		};
 		engine.publish("old".to_owned(), ranking(1), "guard".to_owned());

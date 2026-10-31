@@ -46,6 +46,7 @@ impl WikiErrorNapi for WikiError {
 #[napi(object, object_to_js = false)]
 pub struct WikiSearchOptions {
 	pub index:  Option<String>,
+	pub path:   Option<String>,
 	pub cursor: Option<String>,
 	pub limit:  Option<f64>,
 	pub mode:   Option<String>,
@@ -95,6 +96,9 @@ pub struct WikiSearchWindow {
 	#[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
 	pub technical_name:     Option<String>,
 	pub cursor_base:        WikiCursorBase,
+	pub retrieval:          Option<String>,
+	#[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
+	pub reranked:           Option<bool>,
 }
 
 impl ToNapiValue for WikiSearchWindow {
@@ -121,21 +125,25 @@ impl ToNapiValue for WikiSearchWindow {
 			let total = i64::to_napi_value(env, value.total)?;
 			let exact_name_matches = i64::to_napi_value(env, value.exact_name_matches)?;
 			let cursor_base = WikiCursorBase::to_napi_value(env, value.cursor_base)?;
+			let retrieval = Option::<String>::to_napi_value(env, value.retrieval)?;
 			let mut properties = [
 				property(c"sections", sections),
 				property(c"total", total),
 				property(c"exactNameMatches", exact_name_matches),
 				property(c"cursorBase", cursor_base),
-				property(c"cursorBase", cursor_base),
+				property(c"retrieval", retrieval),
+				property(c"retrieval", retrieval),
+				property(c"retrieval", retrieval),
 			];
-			// napi's object derive appends optional fields after all required
-			// ones. Batch the original order while omitting absent technicalName.
-			let count = if let Some(name) = value.technical_name {
-				properties[3] = property(c"technicalName", String::to_napi_value(env, name)?);
-				5
-			} else {
-				4
-			};
+			let mut count = 5;
+			if let Some(name) = value.technical_name {
+				properties[count] = property(c"technicalName", String::to_napi_value(env, name)?);
+				count += 1;
+			}
+			if let Some(reranked) = value.reranked {
+				properties[count] = property(c"reranked", bool::to_napi_value(env, reranked)?);
+				count += 1;
+			}
 			create_object_with_properties(env, &properties[..count])
 		}
 	}
@@ -155,6 +163,7 @@ impl From<WikiSearchOptions> for pi_wiki::database::WikiSearchOptions {
 	fn from(value: WikiSearchOptions) -> Self {
 		Self {
 			index:  value.index,
+			path:   value.path,
 			cursor: value.cursor,
 			limit:  value.limit,
 			mode:   value.mode,
@@ -192,6 +201,8 @@ impl From<pi_wiki::database::WikiSearchWindow> for WikiSearchWindow {
 			exact_name_matches: value.exact_name_matches,
 			technical_name:     value.technical_name,
 			cursor_base:        value.cursor_base.into(),
+			retrieval:          Some(value.retrieval),
+			reranked:           value.reranked,
 		}
 	}
 }

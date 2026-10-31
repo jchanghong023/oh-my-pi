@@ -270,7 +270,18 @@ pub fn read_vector_matrix(
 	index: Option<&str>,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<VectorMatrix> {
-	read_vector_data(connection, model, dimensions, index, check, true)
+	read_vector_data(connection, model, dimensions, index, None, check, true)
+}
+
+pub(crate) fn read_scoped_vector_matrix(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<crate::database::PathScope<'_>>,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<VectorMatrix> {
+	read_vector_data(connection, model, dimensions, index, path, check, true)
 }
 
 /// Validate generations and collect section IDs without materializing vectors.
@@ -279,9 +290,10 @@ pub(crate) fn read_vector_ids(
 	model: &str,
 	dimensions: usize,
 	index: Option<&str>,
+	path: Option<crate::database::PathScope<'_>>,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<Vec<i64>> {
-	Ok(read_vector_data(connection, model, dimensions, index, check, false)?.section_ids)
+	Ok(read_vector_data(connection, model, dimensions, index, path, check, false)?.section_ids)
 }
 
 fn read_vector_data(
@@ -289,6 +301,7 @@ fn read_vector_data(
 	model: &str,
 	dimensions: usize,
 	index: Option<&str>,
+	path: Option<crate::database::PathScope<'_>>,
 	check: &dyn Fn() -> CoreResult<()>,
 	include_matrix: bool,
 ) -> CoreResult<VectorMatrix> {
@@ -307,16 +320,24 @@ fn read_vector_data(
 		check()?;
 		let id = id?;
 		let mut statement = connection.prepare(
-			"SELECT s.id,v.vector FROM sections s LEFT JOIN wiki_section_vectors v ON \
-			 v.index_id=s.index_id AND v.section_id=s.id WHERE s.index_id=? ORDER BY \
-			 s.document_id,s.ordinal,s.id",
+			"SELECT s.id,v.vector,d.relative_path FROM sections s LEFT JOIN documents d ON \
+			 d.id=s.document_id LEFT JOIN wiki_section_vectors v ON v.index_id=s.index_id AND \
+			 v.section_id=s.id WHERE s.index_id=? ORDER BY s.document_id,s.ordinal,s.id",
 		)?;
 		let mut rows = statement.query([id])?;
 		let start = result.section_ids.len();
 		let mut valid = true;
+		let mut section_count = 0usize;
 		while let Some(row) = rows.next()? {
 			check()?;
 			let section_id: i64 = row.get(0)?;
+			section_count += 1;
+			let selected = match path {
+				None => true,
+				Some(path) => {
+					matches!(row.get_ref(2)?, rusqlite::types::ValueRef::Text(value) if path.matches(value))
+				},
+			};
 			let rusqlite::types::ValueRef::Blob(bytes) = row.get_ref(1)? else {
 				valid = false;
 				break;
@@ -333,7 +354,7 @@ fn read_vector_data(
 					break;
 				}
 				norm += f64::from(value).powi(2);
-				if include_matrix {
+				if include_matrix && selected {
 					result.matrix.push(value);
 				}
 			}
@@ -341,24 +362,69 @@ fn read_vector_data(
 				valid = false;
 				break;
 			}
-			if include_matrix {
+			if include_matrix && selected {
 				let scale = norm.sqrt();
 				let begin = result.matrix.len() - dimensions;
 				for value in &mut result.matrix[begin..] {
 					*value = (f64::from(*value) / scale) as f32;
 				}
 			}
-			result.section_ids.push(section_id);
+			if selected {
+				result.section_ids.push(section_id);
+			}
 		}
 		let vector_count: i64 = connection.query_row(
 			"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
 			[id],
 			|row| row.get(0),
 		)?;
-		if !valid || vector_count as usize != result.section_ids.len() - start {
+		if !valid || vector_count as usize != section_count {
 			result.section_ids.truncate(start);
 			result.matrix.truncate(start * dimensions);
 		}
 	}
 	Ok(result)
+}
+
+#[cfg(test)]
+mod scoped_tests {
+	use super::*;
+	use crate::database::PathScope;
+
+	#[test]
+	fn scoped_vectors_validate_whole_generation_before_selecting() {
+		let connection = Connection::open_in_memory().unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT);
+			 CREATE TABLE documents(id INTEGER PRIMARY KEY,relative_path TEXT);
+			 CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER,document_id INTEGER,ordinal \
+				 INTEGER);
+			 CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions INTEGER,complete \
+				 INTEGER);
+			 CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
+			 INSERT INTO doc_indexes VALUES(1,'one'),(2,'two');
+			 INSERT INTO documents VALUES(1,'scope/a.md'),(2,'outside.md'),(3,'scope/b.md');
+			 INSERT INTO sections VALUES(1,1,1,0),(2,1,2,0),(3,2,3,0);
+			 INSERT INTO wiki_vector_generations VALUES(1,'model',2,1),(2,'model',2,1);
+			 INSERT INTO wiki_section_vectors VALUES
+			 (1,1,x'0000404000008040'),(1,2,x'0000803f00000000'),(2,3,x'000000000000803f');",
+			)
+			.unwrap();
+		let scope = PathScope::validate(Some("scope/")).unwrap();
+		let matrix =
+			read_scoped_vector_matrix(&connection, "model", 2, None, scope, &|| Ok(())).unwrap();
+		assert_eq!(matrix.section_ids, vec![1, 3]);
+		assert_eq!(matrix.matrix.len(), 4);
+		assert_eq!(read_vector_ids(&connection, "model", 2, None, scope, &|| Ok(())).unwrap(), vec![
+			1, 3
+		]);
+		connection
+			.execute("UPDATE wiki_section_vectors SET vector=x'00' WHERE section_id=2", [])
+			.unwrap();
+		let matrix =
+			read_scoped_vector_matrix(&connection, "model", 2, None, scope, &|| Ok(())).unwrap();
+		assert_eq!(matrix.section_ids, vec![3]);
+		assert_eq!(matrix.matrix.len(), 2);
+	}
 }

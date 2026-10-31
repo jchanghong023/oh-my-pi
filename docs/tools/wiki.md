@@ -26,13 +26,16 @@ New imports preserve code-fence context inside lists, including nested lists and
 | `query` | `string` | Yes | Keywords or a whole question in default search mode; a regular expression in explicit grep mode. |
 | `mode` | `"search" \| "grep"` | No | Defaults to `"search"`; regex-looking input never selects grep automatically. |
 | `case` | `boolean` | No | Grep only: defaults to `true` (case-sensitive); `false` ignores case. Has no effect in search mode. |
-| `cursor` | `string` | No | Opaque continuation returned by the previous page; reuse unchanged with the same effective query, mode and effective grep case. Omit it to start a new search. |
+| `path` | `string` | No | Case-sensitive indexed relative path: exact file, or a directory and descendants when ending in `/`. |
+| `cursor` | `string` | No | Opaque continuation returned by the previous page; reuse unchanged with the same effective query, mode, grep case and path. Omit it to start a new search. |
 
 Extra keys are ignored by execution's lenient argument validation; recognized fields must have valid values. Missing, non-string, empty or whitespace-only `query` fails with an error naming the received keys and showing a usage example. A supplied cursor must be a nonempty string.
 
 In default search, queries are trimmed; a query longer than 500 characters is truncated with an ellipsis before search and echo. Continuation JSON carries that effective query. Search has no Boolean, quote or wildcard syntax: `AND`/`OR`, quotes and `*` are plain characters.
 
 In grep, leading and trailing expression spaces are preserved exactly. Empty or whitespace-only expressions fail; expressions longer than 500 UTF-16 units fail rather than being truncated. The same rules apply to the tool and core API.
+
+Path scope is literal and applies before full-text, semantic, grep and reranking candidate limits. It covers matching paths across imported indexes, uses stored paths only and never accesses source files. Absolute paths and paths escaping the index root are invalid.
 
 Examples:
 
@@ -69,6 +72,7 @@ Examples:
 - `content[0].text` contains one Markdown page; calls do not stream updates.
 - Each hit renders `[n] <relative path>:<start>-<end> · <heading path> · index=<name> · sha256=<document fingerprint> · sectionId=<id> · match=<exact-name|related|regex>` followed by its complete indexed text. Cite index + path + lines; the fingerprint identifies the imported document version, while section IDs may be reused after re-import.
 - The page identifies the searched imported corpus. Its footer reports the result-set section count and the number carried on this page, and ends with either an explicit next-call JSON object for more results or result-set exhaustion. For hybrid search the set is all full-text matches plus this search's semantic candidates, deduplicated; exhaustion does not mean all semantically related sections have been found.
+- Each page reports the actual full-text, hybrid or grep retrieval and whether reranking was applied; an unrecoverable legacy state is marked unknown. Cached pages and continuations retain the original result's status.
 - Normal pages target ~4,000 characters including headers, locators, bodies and continuation information, with at most 10 sections. Every page carries its first section whole even if it exceeds the target, with an oversized-section notice.
 - When results remain, the footer lists up to 10 unexpanded source hints (index, path, line range and heading) in result order, plus counts of remaining, previewed and unlisted sections. Hints are not full evidence and do not advance the cursor; retrieve the full section before citing it. Hint locators may be truncated, and hints may be omitted when the page budget is exhausted, including by an oversized first section.
 - Successive pages follow one fixed, contiguous order: the final ranking in search, source order in grep. The first section that does not fit is deferred, not skipped; every section in the actual result set and its source locator is reachable exactly once when following valid cursors to exhaustion.
@@ -79,7 +83,7 @@ Examples:
 ## Flow
 1. Lazily retains an owner-scoped `DocsService` using the agent directory and session cwd; creating the service does not open the database. Session disposal or a profile/database change releases its owned resources. Missing indexes fail with the `omp docs init` usage hint.
 2. Searches stored database text asynchronously, without blocking interactive input or rendering, and forwards the caller's cancellation signal through database scanning and page completion. An unchanged query reuses its retained complete result set, keyed by effective query (the exact expression in grep), mode, effective grep case, scope and validated database snapshot; bounded retention evicts whole queries, not evidence tails. Retention does not use a time TTL in place of real database-version validation. Import/remove, SQL or FTS changes, external commits, database replacement and service reopen trigger snapshot revalidation rather than stale or mixed evidence reuse. Builds the page under the character target and 10-section ceiling; version, matches, counts, text and provenance come from the same validated read snapshot.
-3. Returns evidence and either exhaustion or continuation JSON. If more results remain, refine the query for the task instead of blindly repeating keywords; omit the cursor for a new query. When the existing result set must be traversed, follow the exact continuation JSON with unchanged query, mode and effective case. Grep continuation carries `query`, `mode:"grep"`, the effective Boolean `case` and `cursor`; default search retains its existing query/cursor output shape.
+3. Returns evidence and either exhaustion or continuation JSON. If more results remain, refine the query or path for the task instead of blindly repeating keywords; omit the cursor for a new query. To traverse the existing set, follow the continuation JSON with unchanged query, mode, effective case and path.
 4. The cursor binds the effective query, mode, effective grep case, index scope/path and logical database version. Changing grep mode or case cannot resume an existing cursor; search ignores `case` and preserves valid old full-text cursor identity. Full-text and grep cursors survive cache eviction and service close/reopen when the snapshot is unchanged. Hybrid or reranked continuation must reuse or legally reproduce its original ranking context; if that context is lost, restart the query without the cursor. Malformed, mismatched or stale cursors fail rather than mixing rankings or index generations. Continuations revalidate the snapshot; pages do not keep a read transaction open between calls.
 5. Evidence and citations come from the database only: no source-file access, source freshness checks or automatic synchronization. Default search may call configured optional models; grep never does.
 6. Every successful outward search in either mode, including continuation and zero matches, takes **at least 500ms (≥500ms, not a 500ms upper bound)**. Any remaining time after query and page-budget work is an abortable asynchronous wait, without a held database transaction. Diagnostic timing distinguishes execution work, minimum-duration wait and total outward time; errors and cancellation are not padded.
@@ -93,7 +97,7 @@ Examples:
 - Indexed sections are capped at 18,000 characters at ingestion. Each page's first oversized section still returns whole; later nonfitting sections become the next page's first section.
 - Long lines use a 500-character overlap without splitting Unicode scalars; overlapping sections retain original byte and line ranges. Code punctuation remains searchable in code spans and fenced blocks, including blocks split across sections.
 - Query connections request memory-mapped reads of up to 500 MiB per database file, subject to SQLite/platform limits. Processes reading the same file can reuse operating-system file pages without enlarging their private SQLite page caches. Ranking/parsed objects remain owner-local; the mapping range is not a process or machine-wide RAM limit, and shutdown releases the mapping handles.
-- Default search has no query operators, filters or field restrictions. Explicit grep adds regex syntax, not Boolean or cross-line syntax. Optional inputs are `mode`, `case` and the returned continuation `cursor`.
+- Default search has no Boolean query operators or field restrictions. The optional `path` limits the stored corpus; explicit grep adds regex syntax, not Boolean or cross-line syntax.
 
 ## Errors
 - Missing or invalid `query`: `wiki requires a query. Received: <keys>. Example: {"query":"MBIST"}`.

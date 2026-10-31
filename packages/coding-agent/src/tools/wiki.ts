@@ -15,8 +15,11 @@ const wikiSchema = type({
 		"default search ranks by relevance; grep matches original Markdown lines",
 	),
 	"case?": type("boolean").describe("grep only: case-sensitive by default (true); false ignores case"),
+	"path?": type("string").describe(
+		"case-sensitive index-relative file path, or directory path ending in / to search descendants",
+	),
 	"cursor?": type("string").describe(
-		"continuation from the previous page; keep query, mode and effective case unchanged",
+		"continuation from the previous page; keep query, mode, effective case and path unchanged",
 	),
 	"+": "reject",
 });
@@ -150,10 +153,15 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 						expectedResult = prepared.errorKind;
 						throw new ToolError(prepared.error);
 					}
+					if (raw.path !== undefined && (typeof raw.path !== "string" || raw.path.length === 0)) {
+						expectedResult = "invalid_path";
+						throw new ToolError("Wiki path must be a non-empty index-relative path");
+					}
 					const query = prepared.query!;
 					const cursor = prepared.cursor;
 					const mode = prepared.mode as WikiToolParams["mode"];
 					const caseSensitive = prepared.case;
+					const path = raw.path as string | undefined;
 					logger.info("wiki.query.validated", {
 						...fields,
 						stage,
@@ -182,6 +190,7 @@ export class WikiTool implements AgentTool<typeof wikiSchema> {
 							cursor,
 							mode,
 							case: caseSensitive,
+							path,
 						});
 						this.#assertCurrent(service, operationSignal);
 						stage = "render";

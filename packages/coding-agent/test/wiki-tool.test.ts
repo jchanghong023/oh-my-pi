@@ -68,6 +68,7 @@ interface WikiQuery {
 	query: string;
 	mode?: "search" | "grep";
 	case?: boolean;
+	path?: string;
 	cursor?: string;
 }
 
@@ -76,7 +77,11 @@ function continuation(page: string): (WikiQuery & { cursor: string }) | undefine
 	return json ? (JSON.parse(json) as WikiQuery & { cursor: string }) : undefined;
 }
 
-async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mode" | "case"> = {}): Promise<string[]> {
+async function pages(
+	tool: WikiTool,
+	query: string,
+	options: Pick<WikiQuery, "mode" | "case" | "path"> = {},
+): Promise<string[]> {
 	const result: string[] = [];
 	let params: WikiQuery = { query, ...options };
 	for (let count = 0; count < 100; count += 1) {
@@ -90,6 +95,7 @@ async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mo
 		}
 		expect(next.query).toBe(query);
 		expect(next.cursor).toBeTruthy();
+		expect(next.path).toBe(options.path);
 		if (options.mode === "grep") {
 			expect(next.mode).toBe("grep");
 			expect(next.case).toBe(options.case ?? true);
@@ -106,7 +112,7 @@ async function pages(tool: WikiTool, query: string, options: Pick<WikiQuery, "mo
 async function indexedFixture(files: Record<string, string>): Promise<{ root: string; agent: string }> {
 	const root = await tempDir("docs-tool-root-");
 	const agent = await agentDir("docs-tool-agent-");
-	for (const [name, body] of Object.entries(files)) await fs.writeFile(path.join(root, name), body);
+	for (const [name, body] of Object.entries(files)) await Bun.write(path.join(root, name), body);
 	const service = new DocsService({ agentDir: agent, cwd: root });
 	try {
 		await service.init(".", "manual");
@@ -115,6 +121,52 @@ async function indexedFixture(files: Record<string, string>): Promise<{ root: st
 	}
 	return { root, agent };
 }
+
+it("restricts file and directory searches to stored paths across indexes and binds continuation", async () => {
+	const files: Record<string, string> = Object.fromEntries(
+		Array.from({ length: 12 }, (_, i) => [
+			`scope/doc-${i}.md`,
+			`# Evidence ${i}\nscopebeacon ${"complete ".repeat(50)}${i}\n`,
+		]),
+	);
+	files["scope/a%_.md"] = "# Special\nscopebeacon literal punctuation\n";
+	files["scope-other/no.md"] = "# Outside\nscopebeacon outside\n";
+	const fixture = await indexedFixture(files);
+	const other = await tempDir("wiki-scope-second-");
+	await Bun.write(path.join(other, "scope/a%_.md"), "# Other index\nscopebeacon second source\n");
+	const service = new DocsService({ agentDir: fixture.agent, cwd: fixture.root });
+	try {
+		await service.init(other, "second");
+	} finally {
+		await service.close();
+	}
+	await fs.rm(fixture.root, { recursive: true });
+	await fs.rm(other, { recursive: true });
+	const tool = new WikiTool(session(fixture.agent, fixture.root));
+	for (const mode of ["search", "grep"] as const) {
+		const exact = text(await run(tool, { query: "scopebeacon", mode, path: "scope/a%_.md" }));
+		expect(exact).toContain("literal punctuation");
+		expect(exact).toContain("second source");
+		expect(exact).not.toContain("outside");
+		expect(exact).not.toContain("doc-");
+		const first = text(await run(tool, { query: "scopebeacon", mode, path: "scope/" }));
+		const next = continuation(first);
+		expect(next?.path).toBe("scope/");
+		await expect(run(tool, { ...next, path: "scope-other/" })).rejects.toThrow();
+		await expect(run(tool, { ...next, path: undefined })).rejects.toThrow();
+		const all = await pages(tool, "scopebeacon", { mode, path: "scope/" });
+		const hits = all.flatMap(page => [...page.matchAll(/^\[\d+\] (\S+\.md):/gm)].map(match => match[1]));
+		expect(hits).toHaveLength(14);
+		expect(hits.every(name => name!.startsWith("scope/"))).toBe(true);
+		expect(all.every(page => page.length <= 4_000)).toBe(true);
+		const zero = text(await run(tool, { query: "scopebeacon", mode, path: "missing.md" }));
+		expect(zero).toMatch(/0 matching section/i);
+		expect(zero).toMatch(mode === "grep" ? /retrieval:\s*grep/i : /retrieval:\s*fulltext/i);
+		expect(zero).toMatch(/reranked:\s*no/i);
+	}
+	for (const path of ["", "../outside.md", "/absolute.md", "C:/absolute.md"])
+		await expect(run(tool, { query: "scopebeacon", path })).rejects.toThrow();
+}, 30_000);
 
 describe("WikiTool", () => {
 	it("awaits explicit disposal after the real session callback starts teardown", async () => {

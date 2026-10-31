@@ -136,6 +136,7 @@ pub fn wiki_prepare_tool_query(
 					&& !ascii_units_equal(key, b"cursor")
 					&& !ascii_units_equal(key, b"mode")
 					&& !ascii_units_equal(key, b"case")
+					&& !ascii_units_equal(key, b"path")
 			})
 			.count() as u32,
 		error:                  None,
@@ -425,13 +426,29 @@ fn json_unicode_escape(output: &mut Vec<u16>, unit: u16) {
 	]);
 }
 
-fn continuation_json(query: &[u16], cursor: &str, grep: bool, case_sensitive: bool) -> Vec<u16> {
-	let mut output = Vec::with_capacity(query.len() + cursor.len() + 24 + if grep { 27 } else { 0 });
+fn continuation_json(
+	query: &[u16],
+	cursor: &str,
+	grep: bool,
+	case_sensitive: bool,
+	path: Option<&[u16]>,
+) -> Vec<u16> {
+	let mut output = Vec::with_capacity(
+		query.len()
+			+ cursor.len()
+			+ path.map_or(0, |value| value.len() + 8)
+			+ 24
+			+ if grep { 27 } else { 0 },
+	);
 	append(&mut output, "{\"query\":");
 	json_string(&mut output, query);
 	if grep {
 		append(&mut output, ",\"mode\":\"grep\",\"case\":");
 		append(&mut output, if case_sensitive { "true" } else { "false" });
+	}
+	if let Some(path) = path {
+		append(&mut output, ",\"path\":");
+		json_string(&mut output, path);
 	}
 	append(&mut output, ",\"cursor\":\"");
 	// Only the empty allowance cursor or a generated base64url cursor enters
@@ -558,6 +575,7 @@ pub fn wiki_tool_page<'env>(
 	#[napi(ts_arg_type = "WikiSearchWindow")] window: Object<'env>,
 	mode: Option<String>,
 	case_sensitive: Option<bool>,
+	path: Option<Utf16String>,
 ) -> Result<WikiToolPage<'env>> {
 	let grep = match mode.as_deref() {
 		None | Some("search") => false,
@@ -576,15 +594,48 @@ pub fn wiki_tool_page<'env>(
 			"\" · searched imported Markdown corpus"
 		},
 	);
+	let (retrieval, reranked) = if grep {
+		("grep", "no")
+	} else {
+		let retrieval: Unknown = window.get_named_property("retrieval")?;
+		let retrieval = if retrieval.get_type()? == ValueType::String {
+			match String::from_unknown(retrieval)?.as_str() {
+				"fulltext" => "fulltext",
+				"hybrid" => "hybrid",
+				"grep" => "grep",
+				_ => "unknown",
+			}
+		} else {
+			"unknown"
+		};
+		let reranked: Unknown = window.get_named_property("reranked")?;
+		let reranked = if reranked.get_type()? == ValueType::Boolean {
+			if bool::from_unknown(reranked)? {
+				"yes"
+			} else {
+				"no"
+			}
+		} else {
+			"unknown"
+		};
+		(retrieval, reranked)
+	};
+	append(&mut header, &format!("\nRetrieval: {retrieval}; reranked: {reranked}."));
 	let base: WikiCursorBase = window.get_named_property("cursorBase")?;
 	let total: i64 = window.get_named_property("total")?;
-	// Reserve the actual largest cursor this window can emit, including its
-	// base64-encoded position. The JSON renderer also accounts for query
-	// escaping and the grep options.
+	// Reserve the actual largest cursor and escaped continuation JSON this
+	// window can emit, including the optional path and grep options.
 	let max_count = total.saturating_sub(base.p).saturating_sub(1).clamp(0, 10) as usize;
 	let max_cursor = continuation(&base, max_count, total)?;
 	let footer_allowance = 768
-		+ continuation_json(&query, max_cursor.as_deref().unwrap_or(""), grep, case_sensitive).len();
+		+ continuation_json(
+			&query,
+			max_cursor.as_deref().unwrap_or(""),
+			grep,
+			case_sensitive,
+			path.as_deref(),
+		)
+		.len();
 	let preview_allowance = if total.saturating_sub(base.p) > 1 {
 		PREVIEW_BUDGET
 	} else {
@@ -683,7 +734,6 @@ pub fn wiki_tool_page<'env>(
 			),
 		);
 	}
-	let oversized = !bodies.is_empty() && text.len() + footer_allowance > TEXT_BUDGET;
 	append(
 		&mut text,
 		&format!(
@@ -729,25 +779,37 @@ pub fn wiki_tool_page<'env>(
 			),
 		);
 	}
-	if oversized {
-		append(
-			&mut text,
-			"\nThe first section exceeds the ~4000-character target and is carried whole.",
-		);
-	}
+	let mut continuation_text = Vec::new();
 	if let Some(cursor) = cursor {
 		append(
-			&mut text,
+			&mut continuation_text,
 			"\nMore results remain. Refine the query to fit the task; avoid blindly repeating the \
 			 same keywords. To traverse this result set, use the continuation below unchanged.",
 		);
-		append(&mut text, "\nMore results remain. Continue with the same query: ");
-		text.extend(continuation_json(&query, &cursor, grep, case_sensitive));
+		append(&mut continuation_text, "\nMore results remain. Continue with the same query: ");
+		continuation_text.extend(continuation_json(
+			&query,
+			&cursor,
+			grep,
+			case_sensitive,
+			path.as_deref(),
+		));
 	} else if grep {
-		append(&mut text, "\nAll matching results exhausted in the searched imported corpus.");
+		append(
+			&mut continuation_text,
+			"\nAll matching results exhausted in the searched imported corpus.",
+		);
 	} else {
-		append(&mut text, "\nAll results in this search set exhausted.");
+		append(&mut continuation_text, "\nAll results in this search set exhausted.");
 	}
+	let oversized = !bodies.is_empty() && text.len() + continuation_text.len() > TEXT_BUDGET;
+	if oversized {
+		append(
+			&mut text,
+			"\nThe first section is carried whole and this page exceeds the ~4000-character target.",
+		);
+	}
+	text.extend(continuation_text);
 	Ok(WikiToolPage {
 		result,
 		rendered_section_count: bodies.len() as u32,

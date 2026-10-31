@@ -1825,7 +1825,7 @@ mod tests {
 		}
 		let matcher = pi_walker::grep::build_strict_matcher("needle", false).unwrap();
 		let matches =
-			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+			super::super::grep::scan(&storage.connection, &matcher, None, None, &|| Ok(())).unwrap();
 		assert_eq!(matches.len(), 2);
 	}
 
@@ -1855,13 +1855,13 @@ mod tests {
 			.unwrap();
 		let matcher = pi_walker::grep::build_strict_matcher("needle", false).unwrap();
 		let matches =
-			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+			super::super::grep::scan(&storage.connection, &matcher, None, None, &|| Ok(())).unwrap();
 		assert_eq!(matches.len(), 2);
 		// Restoring the BOM also preserves original-line regex semantics,
 		// rather than just ignoring the declared/stored length mismatch.
 		let matcher = pi_walker::grep::build_strict_matcher("^\u{feff}# Lifetime$", false).unwrap();
 		let matches =
-			super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap();
+			super::super::grep::scan(&storage.connection, &matcher, None, None, &|| Ok(())).unwrap();
 		assert_eq!(matches.len(), 1);
 	}
 
@@ -1884,7 +1884,8 @@ mod tests {
 				)
 				.unwrap();
 			let error =
-				super::super::grep::scan(&storage.connection, &matcher, None, &|| Ok(())).unwrap_err();
+				super::super::grep::scan(&storage.connection, &matcher, None, None, &|| Ok(()))
+					.unwrap_err();
 			assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
 		}
 	}

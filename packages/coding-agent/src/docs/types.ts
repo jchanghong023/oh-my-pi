@@ -14,6 +14,8 @@ export interface DocsSearchOptions {
 	/** Grep only: true is case-sensitive (default); false ignores case. */
 	case?: boolean;
 	index?: string;
+	/** Stored index-relative file, or directory prefix when ending in `/`. */
+	path?: string;
 	limit?: number;
 	cursor?: string;
 	characterBudget?: number;
@@ -26,6 +28,8 @@ export interface DocsSearchWindowOptions {
 	/** Grep only; defaults to case-sensitive matching. */
 	case?: boolean;
 	index?: string;
+	/** Stored index-relative file, or directory prefix when ending in `/`. */
+	path?: string;
 	limit?: number;
 	cursor?: string;
 }
@@ -42,6 +46,8 @@ export interface DocsSearchWindow {
 	total: number;
 	exactNameMatches: number;
 	technicalName?: string;
+	retrieval?: string;
+	reranked?: boolean;
 	/** Start of this window, not the position after its prefetched sections. */
 	cursorBase: DocsSearchCursor;
 }

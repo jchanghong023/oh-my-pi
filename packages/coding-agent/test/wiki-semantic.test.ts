@@ -202,6 +202,45 @@ const lexicalFiles = {
 	"c.md": "# Third\nalpha beta third complete evidence.\n",
 };
 
+it("scopes semantic candidates before top-k and reports the ranking actually used across pages", async () => {
+	const f = await fixture();
+	await f.configure({ embedding: "test-embedding", reranker: true });
+	const files: Record<string, string> = Object.fromEntries(
+		Array.from({ length: 70 }, (_, i) => [`outside/${i}.md`, `# Outside ${i}\nunrelated evidence ${i}\n`]),
+	);
+	for (let i = 0; i < 4; i++)
+		files[`selected/${i}.md`] = `# Selected ${i}\ndistractor scopecontent ${"complete ".repeat(160)}${i}\n`;
+	await f.add("manual", files);
+	const first = await f.service.searchWiki("如何恢复任务", { path: "selected/" });
+	expect(first.result.sections.every(hit => hit.path.startsWith("selected/"))).toBe(true);
+	expect(first.result.total).toBe(4);
+	expect(first.text).toMatch(/retrieval:\s*hybrid/i);
+	expect(first.text).toMatch(/reranked:\s*yes/i);
+	expect(first.result.cursor).toBeTruthy();
+	const rerank = f.server.requests.find(request => request.route.endsWith("/rerank"));
+	expect(rerank?.body.documents?.every(document => document.includes("scopecontent"))).toBe(true);
+	const count = f.server.requests.length;
+	f.server.setEmbedding("http");
+	f.server.setRerank("http");
+	const next = await f.service.searchWiki("如何恢复任务", { path: "selected/", cursor: first.result.cursor });
+	expect(next.text).toMatch(/retrieval:\s*hybrid/i);
+	expect(next.text).toMatch(/reranked:\s*yes/i);
+	expect(next.result.sections[0]?.sectionId).not.toBe(first.result.sections[0]?.sectionId);
+	expect(f.server.requests).toHaveLength(count);
+	f.server.setRerank("reverse");
+	const fallback = await f.service.searchWiki("scopecontent", { path: "selected/" });
+	expect(fallback.text).toMatch(/retrieval:\s*fulltext/i);
+	expect(fallback.text).toMatch(/reranked:\s*yes/i);
+	f.server.setRerank("http");
+	const failedRerank = await f.service.searchWiki("scopecontent changed", { path: "selected/" });
+	expect(failedRerank.text).toMatch(/retrieval:\s*fulltext/i);
+	expect(failedRerank.text).toMatch(/reranked:\s*no/i);
+	const beforeGrep = f.server.requests.length;
+	const grep = await f.service.searchWiki("scopecontent", { mode: "grep", path: "selected/" });
+	expect(grep.text).toMatch(/retrieval:\s*grep/i);
+	expect(grep.text).toMatch(/reranked:\s*no/i);
+	expect(f.server.requests).toHaveLength(beforeGrep);
+}, 60_000);
 describe("Wiki semantic and rerank public contracts", () => {
 	it("imports and searches full text with no model configuration and no model requests", async () => {
 		const f = await fixture();

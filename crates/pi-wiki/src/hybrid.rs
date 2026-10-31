@@ -9,8 +9,8 @@ use rusqlite::{Connection, params};
 use super::{
 	Check, CoreResult, DatabaseEngine, DocumentContexts, HYDRATE, HybridCandidate, HybridCompleted,
 	HybridContext, HybridPreparation, HybridPrepared, HybridRank, LiteralMatcher, MatchKind,
-	RankedSection, Ranking, WikiCursorBase, WikiError, WikiSearchHit, WikiSearchOptions,
-	WikiSearchOutput, WikiSearchWindow, digest, load_contexts, query,
+	PathScope, RankedSection, Ranking, WikiCursorBase, WikiError, WikiSearchHit, WikiSearchOptions,
+	WikiSearchOutput, WikiSearchWindow, digest, load_contexts, query, retrieval_status, search_key,
 };
 
 const SNAPSHOT_STALE: &str = "WIKI_SNAPSHOT_STALE";
@@ -64,15 +64,8 @@ impl DatabaseEngine {
 		if options.cursor.is_some() || options.mode.as_deref().unwrap_or("search") != "search" {
 			return Err(WikiError::message("Invalid documentation hybrid search options"));
 		}
-		Ok(digest(
-			serde_json::to_string(&(
-				query::normalize_search_text(text),
-				&options.index,
-				&self.cursor_path,
-			))
-			.expect("query serialization")
-			.as_bytes(),
-		))
+		PathScope::validate(options.path.as_deref())?;
+		Ok(search_key(text, options, &self.cursor_path, false))
 	}
 
 	/// Inspect whether a reusable nonempty ranking exists, without resolving
@@ -170,6 +163,8 @@ impl DatabaseEngine {
 				total: ranking.ranked.len() as i64,
 				exact_name_matches: ranking.exact_name_matches as i64,
 				technical_name: plan.technical_name,
+				retrieval: ranking.retrieval.to_owned(),
+				reranked: ranking.reranked,
 				cursor_base: WikiCursorBase { v: 1, q: key, s: ranking.version.clone(), p: 0 },
 			},
 			cache_hit:  true,
@@ -267,6 +262,7 @@ impl DatabaseEngine {
 							model,
 							dimension,
 							options.index.as_deref(),
+							options.path.as_deref().map(PathScope),
 							&check,
 						)?;
 						if !section_ids.is_empty() {
@@ -328,6 +324,7 @@ impl DatabaseEngine {
 			guard,
 			query: text.to_owned(),
 			index: options.index.clone(),
+			path: options.path.clone(),
 			model: model.map(str::to_owned),
 			vector_dimensions: vectors.clone(),
 			limit: options.limit,
@@ -363,11 +360,12 @@ impl DatabaseEngine {
 		}
 		let model = context.model.as_deref().ok_or_else(stale)?;
 		self.hybrid_snapshot(&context.guard, |connection| {
-			let matrix = crate::vectors::read_vector_matrix(
+			let matrix = crate::vectors::read_scoped_vector_matrix(
 				connection,
 				model,
 				dimensions,
 				context.index.as_deref(),
+				context.path.as_deref().map(PathScope),
 				check,
 			)?;
 			check()?;
@@ -485,7 +483,11 @@ impl DatabaseEngine {
 				check()?;
 				sections.push(hydrate(connection, entry)?);
 			}
-			Ok((Arc::new(Ranking { ranked, version, exact_name_matches }), sections))
+			let (retrieval, reranked) = retrieval_status(identity);
+			Ok((
+				Arc::new(Ranking { ranked, version, exact_name_matches, retrieval, reranked }),
+				sections,
+			))
 		})?;
 		let plan = query::analyze_query(&context.query);
 		let cursor_base =
@@ -495,6 +497,8 @@ impl DatabaseEngine {
 			total: ranking.ranked.len() as i64,
 			exact_name_matches: ranking.exact_name_matches as i64,
 			technical_name: plan.technical_name,
+			retrieval: ranking.retrieval.to_owned(),
+			reranked: ranking.reranked,
 			cursor_base,
 		};
 		let cache_key = if identity.is_empty() {
