@@ -18,6 +18,7 @@
 
 ### Added
 
+- Add built-in `omp openwiki` repository generation, incremental updates, workspace linking and offline visualization/static export, with read-only AI query tools. Generation uses the current OMP profile's default role or a per-run `--modelId`; it still requires a reachable tool-capable model. OpenWiki user data follows the OMP configuration root and profile without migrating standalone workspaces.
 - Run only affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
 - Streamline Dev and ZCode process coverage and schedule startup-sensitive tests with bounded parallelism while preserving consumer and isolation boundaries.
 - Add `bun run fulltest --full` to run the current platform's full supported test suites without fork or changed-file selection.
@@ -114,6 +115,7 @@
 
 ### Fixed
 
+- Find Chinese OpenWiki sections inside continuous text and prioritize exact phrases when source-path hints tie.
 - Honor runtime `PI_UPDATE_REPOSITORY` overrides in compiled binaries while defaulting to this fork's releases.
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
 - Restore CodeAgent commit-message and session-title retries and fallbacks, and normal speculative execution for recovered requests.

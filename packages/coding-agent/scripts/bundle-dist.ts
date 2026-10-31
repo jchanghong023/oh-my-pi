@@ -6,6 +6,8 @@ import { isEnoent } from "@oh-my-pi/pi-utils";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { buildOpenWikiResources, writeOpenWikiResource } from "./openwiki-resources";
+import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
@@ -17,7 +19,13 @@ const obsoleteHtmlExportAssetPattern =
 	/^(?:template-[^.]+\.(?:css|html|js)|tool-views\.generated-[^.]+\.js|(?:marked|highlight)\.min-[^.]+\.js)$/;
 
 // Native / optional / platform-specific deps are loaded from installed files.
-const ALWAYS_EXTERNAL = ["@oh-my-pi/pi-natives", "@huggingface/transformers", "fastembed", "onnxruntime-node"];
+const ALWAYS_EXTERNAL = [
+	"@oh-my-pi/pi-natives",
+	"@huggingface/transformers",
+	"fastembed",
+	"onnxruntime-node",
+	"react-devtools-core",
+];
 
 /**
  * Embeds `@oh-my-pi/pi-natives/THIRD-PARTY-NOTICES.txt` even though the natives package is external. An external
@@ -40,7 +48,9 @@ const inlineNativeNoticesPlugin: Bun.BunPlugin = {
 // import would load the unpatched npm package in users' installs (currently
 // @ark/schema is patched, so it — and arktype, which pulls @ark/schema — stay
 // bundled).
-const RUNTIME_EXTERNAL = ["puppeteer-core", "@babel/parser"];
+// Keep Ink outside the npm bundles: bundling hoists its optional devtools import
+// out of Ink's guarded load. React must share Ink's installed instance.
+const RUNTIME_EXTERNAL = ["puppeteer-core", "@babel/parser", "ink", "react", "react/*"];
 
 async function runCommand(command: string[]): Promise<void> {
 	const proc = Bun.spawn(command, {
@@ -106,6 +116,33 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	// SDK consumers importing `@oh-my-pi/pi-coding-agent/*` (TypeScript source, no
 	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 	try {
+		const openWikiResources = await buildOpenWikiResources();
+		const vendorBundle = await withCompilerActivity(() =>
+			Bun.build({
+				entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
+				outdir: outDir,
+				naming: "openwiki-vendor.js",
+				target: "bun",
+				external: [
+					...ALWAYS_EXTERNAL,
+					...RUNTIME_EXTERNAL,
+					"@langchain/core",
+					"@langchain/core/*",
+					"@langchain/openai",
+					"@langchain/openai/*",
+					"deepagents",
+					"deepagents/*",
+					"langchain",
+					"langchain/*",
+					"zod",
+					"zod/*",
+				],
+				throw: false,
+			}),
+		);
+		if (!vendorBundle.success) {
+			throw new Error(`OpenWiki vendor bundle failed:\n${vendorBundle.logs.map(log => log.message).join("\n")}`);
+		}
 		const specDrivenArchive = await buildSpecDrivenArchive();
 		const docsPayload = await buildDocsIndexPayload();
 		// Build in-process: the docs embed payload is far larger than Linux's
@@ -117,6 +154,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			target: "bun",
 			plugins: [
 				createJsonParsePlugin(),
+				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(specDrivenArchive),
 				inlineNativeNoticesPlugin,
@@ -125,6 +163,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			define: {
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify(docsPayload.payload),
+				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
+				"process.env.PI_OPENWIKI_VISUAL_ASSETS": JSON.stringify(JSON.stringify(openWikiResources.visual)),
 			},
 			minify: {
 				whitespace: true,
@@ -141,6 +181,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 		await ensureShebang(cliPath);
 		await Bun.write(path.join(outDir, "docs-index.generated.txt"), docsPayload.payload);
 		await Bun.write(path.join(outDir, "spec-driven-resources.tar.gz"), specDrivenArchive);
+		await writeOpenWikiResource(path.join(outDir, "openwiki-resources/visual-assets.json"), openWikiResources.visual);
+		await writeOpenWikiResource(path.join(outDir, "openwiki-resources/skills.json"), openWikiResources.skills);
 	} finally {
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
 	}

@@ -261,7 +261,12 @@ export function resolveXdevTool(state: XdevState, name: string): Tool | undefine
 /** Index queries retain native read-only policy and scheduling through the write transport. */
 export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string): boolean {
 	return (
-		(name === "wiki" || name === "repo") &&
+		(name === "wiki" ||
+			name === "repo" ||
+			name === "openwiki_search" ||
+			name === "openwiki_read" ||
+			name === "openwiki_list_workspaces" ||
+			name === "openwiki_list_wikis") &&
 		state?.builtInNames.has(name) === true &&
 		resolveXdevTool(state, name)?.approval === "read"
 	);

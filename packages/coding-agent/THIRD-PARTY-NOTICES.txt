@@ -9,6 +9,11 @@ executable. Each license below governs only the material it names.
 The native addon has its own notices in @oh-my-pi/pi-natives
 (packages/natives/THIRD-PARTY-NOTICES.txt). `omp --license` prints both.
 
+OpenWiki and the third-party packages used by its native runtime and offline
+visualizer are distributed with their license and notice texts. `omp --license`
+prints those texts after the notices in this file; the static visualizer export
+also includes them under its licenses directory.
+
 VENDORED SOURCE AND DATA
 ========================
 

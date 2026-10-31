@@ -38,7 +38,7 @@ import * as openaiChat from "../providers/openai-chat-server";
 import * as openaiResponses from "../providers/openai-responses-server";
 import * as piNative from "../providers/pi-native-server";
 import { completeSimple, streamSimple } from "../stream";
-import type { Api, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
+import type { Api, AssistantMessage, AssistantMessageEventStream, Context, Model, SimpleStreamOptions } from "../types";
 import { deterministicUuid } from "../utils/deterministic-id";
 import { parseBind } from "../utils/parse-bind";
 import { resolvePeer } from "../utils/resolve-peer";
@@ -304,6 +304,68 @@ function chatRouteRejection(model: Model<Api>): string | undefined {
 }
 
 // (handlePassthrough removed — see note above.)
+/**
+ * A foreign chat wire cannot express provider-native signatures and payloads.
+ * An embedded caller can retain the exact assistant tool turns and replay them
+ * when the same conversation returns the corresponding tool results.
+ */
+class EmbeddedToolTurns {
+	// A conversation may resend its entire history, so consuming a turn on the
+	// first replay loses signatures on later rounds. Keep recent turns instead,
+	// bounded both by count and by the approximate UTF-16 size of their payloads.
+	static readonly maxTurns = 2048;
+	static readonly maxBytes = 16 * 1024 * 1024;
+	#turns = new Map<string, { message: AssistantMessage; bytes: number }>();
+	#bytes = 0;
+	#closed = false;
+
+	#key(sessionId: string, message: AssistantMessage): string | undefined {
+		const calls = message.content.filter(part => part.type === "toolCall");
+		return calls.length > 0 && calls.every(call => call.id)
+			? JSON.stringify([sessionId, calls.map(call => [call.id, call.name, call.arguments])])
+			: undefined;
+	}
+
+	remember(sessionId: string, message: AssistantMessage): void {
+		if (this.#closed) return;
+		const key = this.#key(sessionId, message);
+		if (!key) return;
+		const previous = this.#turns.get(key);
+		if (previous) {
+			this.#bytes -= previous.bytes;
+			this.#turns.delete(key);
+		}
+		const bytes = (key.length + JSON.stringify(message).length) * 2;
+		if (bytes > EmbeddedToolTurns.maxBytes) return;
+		this.#turns.set(key, { message, bytes });
+		this.#bytes += bytes;
+		while (this.#turns.size > EmbeddedToolTurns.maxTurns || this.#bytes > EmbeddedToolTurns.maxBytes) {
+			const oldest = this.#turns.keys().next().value;
+			if (oldest === undefined) break;
+			this.#bytes -= this.#turns.get(oldest)!.bytes;
+			this.#turns.delete(oldest);
+		}
+	}
+
+	restore(sessionId: string, context: Context): void {
+		context.messages = context.messages.map(message => {
+			if (message.role !== "assistant") return message;
+			const key = this.#key(sessionId, message);
+			if (!key) return message;
+			const turn = this.#turns.get(key);
+			if (!turn) return message;
+			this.#turns.delete(key);
+			this.#turns.set(key, turn);
+			return turn.message;
+		});
+	}
+
+	clear(): void {
+		this.#turns.clear();
+		this.#closed = true;
+		this.#bytes = 0;
+	}
+}
 
 async function handleFormatEndpoint(
 	route: FormatRoute,
@@ -311,6 +373,7 @@ async function handleFormatEndpoint(
 	req: Request,
 	peer: string,
 	sessionStates: AuthGatewaySessionStateStore,
+	toolTurns?: EmbeddedToolTurns,
 ): Promise<Response> {
 	const startedAt = performance.now();
 	const requestId = crypto.randomUUID();
@@ -398,7 +461,15 @@ async function handleFormatEndpoint(
 	const clientKey = normalizeClientSessionKey(parsed.options.promptCacheKey);
 	const toolsJson = clientKey === undefined ? serializeTools(parsed.context) : undefined;
 	const sessionId = clientKey ?? deriveSessionId(parsed.modelId, parsed.context, toolsJson);
+	// Tool declarations can change between turns, unlike the conversation seed.
+	const toolTurnSessionId = toolTurns
+		? JSON.stringify([
+				bootOpts.client?.name ?? null,
+				deriveSessionId(parsed.modelId, { messages: parsed.context.messages.slice(0, 1) }),
+			])
+		: sessionId;
 	parsed.options.promptCacheKey = sessionId;
+	toolTurns?.restore(toolTurnSessionId, parsed.context);
 
 	// pi-ai's stream() does NOT consult AuthStorage — the caller (us) is
 	// expected to resolve the credential and pass it as `options.apiKey`.
@@ -451,6 +522,8 @@ async function handleFormatEndpoint(
 		try {
 			if (controller.signal.aborted) return clientClosedResponse(route);
 			const message = await completeSimple(model, parsed.context, streamOpts);
+			if (message.stopReason !== "error" && message.stopReason !== "aborted")
+				toolTurns?.remember(toolTurnSessionId, message);
 			recordGatewayUsage(bootOpts.storage, model, client, message.usage, message.timestamp || undefined);
 			if (message.stopReason === "aborted" || message.stopReason === "error") {
 				const errorMessage =
@@ -519,6 +592,28 @@ async function handleFormatEndpoint(
 			.finally(settle);
 		streamOwnsLease = true;
 
+		// Remember before exposing the terminal event: the client may immediately
+		// send tool results on another concurrent request when it sees that event.
+		if (toolTurns) {
+			const iterate = events[Symbol.asyncIterator].bind(events);
+			let terminalSeen = false;
+			events[Symbol.asyncIterator] = async function* () {
+				for await (const event of { [Symbol.asyncIterator]: iterate }) {
+					if (event.type === "done") {
+						terminalSeen = true;
+						toolTurns.remember(toolTurnSessionId, event.message);
+					} else if (event.type === "error") {
+						terminalSeen = true;
+					}
+					yield event;
+				}
+				// Some providers end with a result but no terminal event.
+				const message = terminalSeen ? undefined : await events.result().catch(() => undefined);
+				if (message && message.stopReason !== "error" && message.stopReason !== "aborted") {
+					toolTurns.remember(toolTurnSessionId, message);
+				}
+			};
+		}
 		const sseStream = route.module.encodeStream(events, parsed.modelId, parsed.options, {
 			signal: controller.signal,
 			onCancel: reason => {
@@ -915,6 +1010,7 @@ function scopeRouteOptions(opts: AuthGatewayRouteOptions, client: AuthGatewayCli
  */
 export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): AuthGatewayRouter {
 	const sessionStates = new AuthGatewaySessionStateStore();
+	const toolTurns = hostOpts.preserveAssistantToolTurns ? new EmbeddedToolTurns() : undefined;
 	const route = async (req: Request, peer: string, client?: AuthGatewayClientScope): Promise<Response> => {
 		const pathname = new URL(req.url).pathname;
 		const opts = client ? scopeRouteOptions(hostOpts, client) : hostOpts;
@@ -938,7 +1034,7 @@ export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): Auth
 			// Provider-format dispatch.
 			const formatRoute = FORMAT_ROUTES[pathname];
 			if (formatRoute && req.method === "POST") {
-				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates);
+				return await handleFormatEndpoint(formatRoute, opts, req, peer, sessionStates, toolTurns);
 			}
 
 			// Pi-native fast path. Same auth + provider plumbing as the
@@ -1014,7 +1110,13 @@ export function createAuthGatewayRouter(hostOpts: AuthGatewayRouteOptions): Auth
 			return json(500, { error: "internal error" });
 		}
 	};
-	return { route, close: () => sessionStates.close() };
+	return {
+		route,
+		close: () => {
+			toolTurns?.clear();
+			sessionStates.close();
+		},
+	};
 }
 
 export function startAuthGateway(opts: AuthGatewayBootOptions): AuthGatewayServerHandle {

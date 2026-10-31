@@ -30,6 +30,11 @@ Source exports inline the generated checkout viewer; bundled and compiled export
 load the version-pinned viewer remotely. All exports load Markdown and Highlight.js
 remotely. Binary and package builds generate the viewer without install hooks.
 
+OpenWiki's TypeScript boundary is `scripts/openwiki-vendor-types.d.ts`; the
+checkout entry is excluded from project typechecks so they do not check the
+vendor submodule. Keep the declaration in sync with host usage. Runtime and
+bundler resolution still load the real fork through `#openwiki-vendor`.
+
 Scope fake timers to the deadline a test exercises, then restore real timers
 before real socket listeners are started. Bun's mocked clock can defer
 `server.listen` callbacks, leaving registry publication and teardown waiting.

@@ -4,6 +4,7 @@
 		"module": "ESNext",
 		"lib": ["ES2024", "DOM.AsyncIterable"],
 		"moduleResolution": "Bundler",
+		"jsx": "react-jsx",
 		"moduleDetection": "force",
 		"strict": true,
 		"noImplicitOverride": true,

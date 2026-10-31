@@ -73,3 +73,12 @@ declare module "axe-core/axe.min.js" {
 	const content: string;
 	export default content;
 }
+
+// The OpenWiki Mermaid shim only needs this runtime subset; jsdom's full
+// ambient types pull browser DOM globals into the host TypeScript graph.
+declare module "jsdom" {
+	export class JSDOM {
+		constructor(html: string);
+		readonly window: { readonly document: unknown };
+	}
+}

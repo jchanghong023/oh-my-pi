@@ -55,6 +55,17 @@ export interface AuthGatewayRouteOptions {
 	/** Upstream transport for every provider call; defaults to global `fetch`. Test seam. */
 	fetch?: FetchImpl;
 	/**
+	 * Host-owned credential selection and retry policy, for an in-process router.
+	 * Scoped clients always use storage instead: the host resolver has no client
+	 * scope and cannot enforce their account restrictions.
+	 */
+	credentials?: {
+		resolve(model: Model<Api>, sessionId: string, signal: AbortSignal): Promise<ResolvedApiKey | undefined>;
+		resolver(model: Model<Api>, sessionId: string): ApiKeyResolver;
+	};
+	/** Retain provider-native assistant tool turns for this in-process router. */
+	preserveAssistantToolTurns?: boolean;
+	/**
 	 * The scoped client that sent this request, set per request by the HTTP
 	 * server: it narrows `resolveModel` / `listModels`, and every credential
 	 * lookup below resolves under its {@link AuthGatewayClientScope.credentialSessionId}.
@@ -63,7 +74,7 @@ export interface AuthGatewayRouteOptions {
 }
 
 /** The route options a request's credential lookups read. */
-export type AuthGatewayCredentialOptions = Pick<AuthGatewayRouteOptions, "storage" | "client">;
+export type AuthGatewayCredentialOptions = Pick<AuthGatewayRouteOptions, "storage" | "client" | "credentials">;
 
 /** The HTTP server's options: the routes' plus its listener and inbound auth. */
 export interface AuthGatewayBootOptions extends AuthGatewayServerOptions, AuthGatewayRouteOptions {}
@@ -125,11 +136,14 @@ export async function resolveGatewayApiKey(
 ): Promise<ResolvedApiKey | GatewayErrorClassification> {
 	let apiKey: ResolvedApiKey | undefined;
 	try {
-		apiKey = await opts.storage.keys.getWithCredential(
-			model.provider,
-			gatewayCredentialSessionId(opts, model, sessionId),
-			modelKeyOptions(model, signal),
-		);
+		apiKey =
+			opts.credentials && !opts.client
+				? await opts.credentials.resolve(model, sessionId, signal)
+				: await opts.storage.keys.getWithCredential(
+						model.provider,
+						gatewayCredentialSessionId(opts, model, sessionId),
+						modelKeyOptions(model, signal),
+					);
 	} catch (error) {
 		const classified = classifyGatewayError(error);
 		logger.warn("auth-gateway getApiKey threw", { provider: model.provider, peer, error: classified.message });
@@ -247,6 +261,16 @@ export function buildGatewayApiKeyResolver(
 	peer: string,
 	onResolvedKey?: (resolved: ResolvedApiKey) => void,
 ): ApiKeyResolver {
+	if (opts.credentials && !opts.client) {
+		const resolver = opts.credentials.resolver(model, sessionId);
+		return async context => {
+			if (context.error === undefined) return initialKey;
+			const value = await resolver({ ...context, signal: context.signal ?? requestSignal });
+			const resolved = typeof value === "string" ? { apiKey: value } : value;
+			if (resolved) onResolvedKey?.(resolved);
+			return resolved;
+		};
+	}
 	const { storage } = opts;
 	let lastKey = initialKey.apiKey;
 	// One resolver serves many requests, and they fail out of order, so the

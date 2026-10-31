@@ -1,0 +1,3 @@
+[submodule "vendor/openwiki"]
+	path = vendor/openwiki
+	url = https://github.com/jchanghong023/openwiki.git

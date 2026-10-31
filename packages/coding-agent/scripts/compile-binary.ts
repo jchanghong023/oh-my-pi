@@ -5,11 +5,21 @@ import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/script
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
+import { buildOpenWikiResources } from "./openwiki-resources";
+import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
-/** Native runtime dependencies always resolved from the on-demand install instead of embedded into compiled binaries. */
-export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze(["fastembed", "onnxruntime-node"]);
+/**
+ * Optional packages resolved at runtime rather than embedded. Ink loads
+ * react-devtools-core only when DEV is enabled and handles its absence; the
+ * interactive UI itself remains bundled and does not require devtools.
+ */
+export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze([
+	"fastembed",
+	"onnxruntime-node",
+	"react-devtools-core",
+]);
 
 /** Inputs shared by local and release coding-agent binary builds. */
 export interface CodingAgentCompileOptions {
@@ -50,6 +60,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	try {
+		const openWikiResources = await buildOpenWikiResources();
 		const buildOptions: Bun.BuildConfig = {
 			entrypoints: [options.entrypoint],
 			root: options.repoRoot,
@@ -58,6 +69,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
+				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
+				"process.env.PI_OPENWIKI_VISUAL_ASSETS": JSON.stringify(JSON.stringify(openWikiResources.visual)),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository
@@ -78,6 +91,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			},
 			plugins: [
 				createJsonParsePlugin(),
+				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
 			],

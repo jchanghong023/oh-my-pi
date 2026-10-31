@@ -39,10 +39,13 @@
 		"dist/cli.js",
 		"dist/docs-index.generated.txt",
 		"dist/spec-driven-resources*.gz",
+		"dist/openwiki-vendor.js",
+		"dist/openwiki-resources",
 		"dist/CHANGELOG-*.md",
 		"dist/*.node",
 		"dist/*.json-*.zst",
 		"scripts",
+		"!scripts/openwiki-vendor-entry.ts",
 		"examples",
 		"README.md",
 		"CHANGELOG.md",
@@ -51,10 +54,20 @@
 	"type": "module",
 	"main": "./src/index.ts",
 	"types": "./src/index.ts",
+	"imports": {
+		"#openwiki-vendor": {
+			"types": "./scripts/openwiki-vendor-types.d.ts",
+			"default": "./scripts/openwiki-vendor-selector.js"
+		}
+	},
 	"exports": {
 		".": {
 			"types": "./src/index.ts",
 			"import": "./src/index.ts"
+		},
+		"./openwiki-vendor-runtime": {
+			"types": "./scripts/openwiki-vendor-types.d.ts",
+			"import": "./scripts/openwiki-vendor-selector.js"
 		},
 		"./*": {
 			"types": "./src/*.ts",
@@ -548,6 +561,8 @@
 	},
 	"dependencies": {
 		"@babel/parser": "catalog:",
+		"@langchain/core": "^1.2.9",
+		"@langchain/openai": "^1.5.11",
 		"@oh-my-pi/omp-stats": "catalog:",
 		"@oh-my-pi/omptype": "catalog:",
 		"@oh-my-pi/pi-agent-core": "catalog:",
@@ -571,12 +586,25 @@
 		"@opentelemetry/sdk-trace-base": "catalog:",
 		"@opentelemetry/sdk-trace-node": "catalog:",
 		"axe-core": "4.13.0",
+		"deepagents": "1.13.2",
+		"dompurify": "3.4.12",
+		"force-graph": "1.49.5",
+		"ink": "~6.8.0",
+		"jsdom": "^30.0.1",
+		"langchain": "^1.5.10",
+		"marked": "^18.0.11",
+		"mermaid": "11.16.0",
+		"openwiki-marked": "npm:marked@12.0.2",
+		"posthog-node": "^5.51.4",
 		"puppeteer-core": "catalog:",
+		"react": "catalog:",
 		"zcode-workflow-typescript": "npm:typescript@5.9.3",
-		"zod": "4.6.5"
+		"yaml": "^2.9.0",
+		"zod": "^4.6.7"
 	},
 	"devDependencies": {
-		"@types/bun": "catalog:"
+		"@types/bun": "catalog:",
+		"@types/react": "catalog:"
 	},
 	"optionalDependencies": {
 		"@huggingface/transformers": "catalog:",

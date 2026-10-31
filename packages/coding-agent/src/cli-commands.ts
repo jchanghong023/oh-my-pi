@@ -186,6 +186,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.modelsHelp,
 	},
 	{
+		name: "openwiki",
+		load: () => import("./commands/openwiki").then(m => m.default),
+		help: commandHelp.openwikiHelp,
+	},
+	{
 		name: "plugin",
 		load: () => import("./commands/plugin").then(m => m.default),
 		aliases: ["plugins"],
@@ -323,7 +328,11 @@ for (const command of commands) {
 export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
 
 /** Commands whose trailing profile flags must be applied before their modules load. */
-export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = { ...LAUNCH_FLAG_COMMANDS, "app-server": true };
+export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = {
+	...LAUNCH_FLAG_COMMANDS,
+	"app-server": true,
+	openwiki: true,
+};
 
 /** Whether a token names a registered top-level command or alias. */
 export function isSubcommand(first: string | undefined): boolean {
