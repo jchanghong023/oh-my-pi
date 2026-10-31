@@ -557,7 +557,7 @@ describe("ZCode actual public app-server process", () => {
 			Date.now(),
 			[cached],
 			true,
-			fingerprintStaticModels(getBundledModels("cursor"), true),
+			fingerprintStaticModels(getBundledModels("cursor"), { authoritative: true }),
 			getModelDbPath(config.agentDir),
 		);
 		// 冷入口必须像 SDK 一样离线恢复账号缓存；读取模型不能靠创建会话或联网刷新补齐。

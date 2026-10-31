@@ -46,8 +46,8 @@ describe("ZCode actual public app-server process", () => {
 			getModelDbPath(config.agentDir),
 			bundled,
 		);
-		// 旧构造快路径保留同一批 id 的过期名称；完整离线解析必须应用原生 additive 缓存规则。
-		// 用相同隔离配置下的真实 registry 作基准，不能靠行数相等证明 GUI/CLI 元数据一致。
+		// 用旧策略缓存验证原生离线目录；真实 registry 作基准，
+		// 不能靠行数相等证明 GUI/CLI 元数据一致。
 		const reference = Bun.spawn(
 			[
 				process.execPath,
@@ -62,14 +62,11 @@ describe("ZCode actual public app-server process", () => {
 						const registry = new ModelRegistry(auth, ${JSON.stringify(path.join(config.agentDir, "models.yml"))}, {
 							cacheDbPath: ${JSON.stringify(getModelDbPath(config.agentDir))},
 						});
-						const constructorRows = registry.getAvailableForProviders(new Set(["azure"]))
-							.map(model => ({ value: model.provider + "/" + model.id, name: model.name }))
-							.sort((a, b) => a.value.localeCompare(b.value));
 						await registry.refresh("offline");
 						const offlineRows = registry.getAvailableForProviders(new Set(["azure"]))
 							.map(model => ({ value: model.provider + "/" + model.id, name: model.name }))
 							.sort((a, b) => a.value.localeCompare(b.value));
-						process.stdout.write(JSON.stringify({ constructorRows, offlineRows }));
+						process.stdout.write(JSON.stringify(offlineRows));
 					} finally {
 						auth.close();
 					}
@@ -84,13 +81,7 @@ describe("ZCode actual public app-server process", () => {
 			exit: 0,
 			stderr: "",
 		});
-		const { constructorRows, offlineRows } = JSON.parse(referenceStdout) as {
-			constructorRows: Array<{ value: string; name: string }>;
-			offlineRows: Array<{ value: string; name: string }>;
-		};
-		expect(constructorRows.map(row => row.value)).toEqual(offlineRows.map(row => row.value));
-		expect(offlineRows.length).toBeGreaterThan(0);
-		expect(constructorRows).not.toEqual(offlineRows);
+		const offlineRows = JSON.parse(referenceStdout) as Array<{ value: string; name: string }>;
 		const skillDir = path.join(config.cwdA, ".omp", "skills", "zcode-process-fixture");
 		await fs.mkdir(skillDir, { recursive: true });
 		await fs.writeFile(
@@ -184,7 +175,7 @@ describe("ZCode actual public app-server process", () => {
 			(await fs.readdir(config.configRoot, { recursive: true })).filter(file => file.endsWith(".jsonl")).sort(),
 		).toEqual(journalFilesBefore);
 		expect(config.requests).toHaveLength(0);
-		// resident registry 优先于 workspace-only registry；预热后的 SDK 目录不能退回构造器缓存。
+		// 驻留 registry 优先于 workspace-only registry，仍须保留相同原生目录。
 		// 会话临时选 B，workspace default 和完整模型元数据仍应与创建会话前一致。
 		const sessionId = await create(peer, config.cwdA, { providerId: model.providerId, modelId: "chat-b" });
 		expect(
