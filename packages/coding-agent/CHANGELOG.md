@@ -120,6 +120,7 @@
 
 ### Fixed
 
+- Allow fulltest to snapshot Git submodules while still detecting revision and dirty-source changes.
 - Keep project role edits from granting per-call models, and prevent foreground submission or execution recovery from silently replacing an exact per-call model.
 - Keep Wiki search usable during concurrent index changes and reduce vector memory retained during model calls while preserving continuation and full-text fallback.
 - Honor the embedding-disable environment flag in Wiki and expose reranker settings through the standard configuration commands.

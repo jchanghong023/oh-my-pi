@@ -13,7 +13,12 @@ import {
 	selectChangedScriptTests,
 } from "./fulltest";
 import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
-import { bunRequiresFullSelection, captureChangedPaths, type SourceIdentity } from "./test-gate-source";
+import {
+	bunRequiresFullSelection,
+	captureChangedPaths,
+	captureSourceIdentity,
+	type SourceIdentity,
+} from "./test-gate-source";
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
 
@@ -285,6 +290,76 @@ test("changed paths include staged, deleted, rename sides and untracked paths", 
 		]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 20_000);
+
+test("source snapshots include submodule revisions and dirty contents instead of rejecting directories", async () => {
+	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-submodule-"));
+	const root = path.join(directory, "parent");
+	const upstream = path.join(directory, "upstream");
+	const git = async (cwd: string, ...args: string[]) => {
+		const child = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(code, stderr).toBe(0);
+		return stdout;
+	};
+	const gate = {
+		signal: new AbortController().signal,
+		charged: async <T>(operation: () => T | Promise<T>) => operation(),
+		capture: async ({ argv, cwd }: { argv: string[]; cwd: string }) => ({
+			stdout: await git(cwd, ...argv.slice(1)),
+		}),
+	} as unknown as GateRun;
+	try {
+		for (const cwd of [root, upstream]) {
+			await fs.mkdir(cwd);
+			await git(cwd, "init", "-q");
+			await git(cwd, "config", "user.email", "fixture@example.invalid");
+			await git(cwd, "config", "user.name", "Fixture");
+		}
+		await Bun.write(path.join(upstream, "source.ts"), "original\n");
+		await git(upstream, "add", ".");
+		await git(upstream, "commit", "-qm", "source");
+		await git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "vendor/library");
+		await git(root, "commit", "-qm", "submodule");
+		const submodule = path.join(root, "vendor", "library");
+		const clean = await captureSourceIdentity(gate, root);
+		expect(clean.dirty).toBe(false);
+		expect(clean.files.find(file => file.path === "vendor/library")?.kind).toBe("submodule");
+		await Bun.write(path.join(submodule, "source.ts"), "dirty\n");
+		const dirty = await captureSourceIdentity(gate, root);
+		expect(dirty.dirty).toBe(true);
+		expect(dirty.digest).not.toBe(clean.digest);
+		await Bun.write(path.join(submodule, "source.ts"), "another dirty edit\n");
+		const edited = await captureSourceIdentity(gate, root);
+		expect(edited.digest).not.toBe(dirty.digest);
+		await Bun.write(path.join(submodule, "new.ts"), "addition\n");
+		const added = await captureSourceIdentity(gate, root);
+		expect(added.digest).not.toBe(edited.digest);
+		await fs.rm(path.join(submodule, "source.ts"));
+		expect((await captureSourceIdentity(gate, root)).digest).not.toBe(added.digest);
+		await git(submodule, "reset", "--hard", "-q", "HEAD");
+		await fs.rm(path.join(submodule, "new.ts"));
+		await git(
+			submodule,
+			"-c",
+			"user.email=fixture@example.invalid",
+			"-c",
+			"user.name=Fixture",
+			"commit",
+			"--allow-empty",
+			"-qm",
+			"new revision",
+		);
+		expect((await captureSourceIdentity(gate, root)).digest).not.toBe(clean.digest);
+		await fs.rm(path.join(submodule, ".git"));
+		await expect(captureSourceIdentity(gate, root)).rejects.toMatchObject({ code: "ENOENT" });
+	} finally {
+		await fs.rm(directory, { recursive: true, force: true });
 	}
 }, 20_000);
 

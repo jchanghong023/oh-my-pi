@@ -6,7 +6,7 @@ import type { GateRun } from "./test-gate-runtime";
 const repoRoot = path.resolve(import.meta.dir, "..");
 export interface SourceFile {
 	path: string;
-	kind: "file" | "symlink";
+	kind: "file" | "symlink" | "submodule";
 	sha256: string;
 	executable: boolean;
 	link?: string;
@@ -88,7 +88,12 @@ export async function captureSourceIdentity(gate: GateRun, root = repoRoot): Pro
 		const capture = async (label: string, args: string[]) =>
 			(await gate.capture({ label, argv: ["git", ...args], cwd: root })).stdout;
 		const head = (await capture("source/HEAD", ["rev-parse", "HEAD"])).trim();
-		const status = await capture("source/dirty", ["status", "--porcelain=v1", "--untracked-files=all"]);
+		const status = await capture("source/dirty", [
+			"status",
+			"--porcelain=v1",
+			"--untracked-files=all",
+			"--ignore-submodules=none",
+		]);
 		const names = (
 			await capture("source/inventory", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"])
 		)
@@ -100,6 +105,12 @@ export async function captureSourceIdentity(gate: GateRun, root = repoRoot): Pro
 				.split("\0")
 				.filter(row => row.startsWith("100755 "))
 				.map(row => row.slice(row.indexOf("\t") + 1)),
+		);
+		const submodules = new Map(
+			stages
+				.split("\0")
+				.filter(row => row.startsWith("160000 "))
+				.map(row => [row.slice(row.indexOf("\t") + 1), row.split(" ")[1]!] as const),
 		);
 		const files: SourceFile[] = [];
 		for (const name of [...new Set(names)]
@@ -132,6 +143,16 @@ export async function captureSourceIdentity(gate: GateRun, root = repoRoot): Pro
 					kind: "file",
 					sha256: hash(contents),
 					executable: process.platform === "win32" ? executable.has(name) : (stat.mode & 0o111) !== 0,
+				});
+			} else if (stat.isDirectory() && submodules.has(name)) {
+				// Require the submodule's own Git metadata; never recurse into the parent repository.
+				await fs.lstat(path.join(file, ".git"));
+				const submodule = await captureSourceIdentity(gate, file);
+				files.push({
+					path: name,
+					kind: "submodule",
+					sha256: hash(JSON.stringify([submodules.get(name), submodule.head, submodule.digest])),
+					executable: false,
 				});
 			} else throw new Error(`unsupported source entry: ${name}`);
 		}
