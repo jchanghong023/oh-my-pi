@@ -25,6 +25,8 @@ pathIgnorePatterns = [
   "**/.git/**",
   "**/target/**",
   "**/dist/**",
+  # The embedded fork is exercised through OMP consumer tests, not its own suite.
+  "**/vendor/openwiki/**",
   "python/**",
   "sdk/**",
   "docs/**",

@@ -165,6 +165,16 @@ jobs:
          contents: read
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+           with:
+              submodules: recursive
+         - name: Require OpenWiki gitlink checkout
+           shell: bash
+           run: |
+              set -euo pipefail
+              expected="$(git rev-parse HEAD:vendor/openwiki)"
+              actual="$(git -C vendor/openwiki rev-parse HEAD)"
+              test "$actual" = "$expected" || { echo "::error::OpenWiki submodule does not match the parent gitlink"; exit 1; }
+              test -f vendor/openwiki/src/agent/repository-runner.ts || { echo "::error::OpenWiki submodule is missing"; exit 1; }
          - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
            with:
               bun-version: 1.4.4
@@ -177,6 +187,15 @@ jobs:
               restore-keys: |
                  bun-${{ runner.os }}-
          - run: bun install --frozen-lockfile
+         - name: Require OpenWiki host bridge
+           working-directory: packages/coding-agent
+           run: |
+              bun -e '
+                import * as vendor from "#openwiki-vendor";
+                for (const name of ["getActiveOpenWikiHomeDir", "setEmbeddedOpenWikiHomeDir", "startEmbeddedVisualizeServer"]) {
+                  if (typeof vendor[name] !== "function") throw new Error(`Missing OpenWiki embedding export: ${name}`);
+                }
+              '
          - name: Install prebuilt native addon(s)
            uses: ./.github/actions/native-artifacts
            with:

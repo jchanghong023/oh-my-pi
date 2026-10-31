@@ -16,6 +16,35 @@ import { latestLocalTestProducers, type TestProducerRecord } from "./test-report
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 
+test("Bun discovery excludes the OpenWiki fork but keeps OMP consumer tests", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-discovery-"));
+	try {
+		await fs.copyFile(path.join(import.meta.dir, "..", "bunfig.toml"), path.join(root, "bunfig.toml"));
+		const vendor = path.join(root, "vendor", "openwiki");
+		const consumer = path.join(root, "packages", "coding-agent", "test", "openwiki");
+		await Promise.all([fs.mkdir(vendor, { recursive: true }), fs.mkdir(consumer, { recursive: true })]);
+		await fs.writeFile(
+			path.join(vendor, "vendor.test.ts"),
+			'import { test } from "bun:test"; test("vendor should not run", () => { throw new Error("VENDOR_TEST_RAN"); });\n',
+		);
+		await fs.writeFile(
+			path.join(consumer, "consumer.test.ts"),
+			'import { test } from "bun:test"; test("consumer runs", () => { console.log("OMP_CONSUMER_RAN"); });\n',
+		);
+		const child = Bun.spawn([process.execPath, "test"], { cwd: root, stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(code, stdout + stderr).toBe(0);
+		expect(stdout + stderr).toContain("OMP_CONSUMER_RAN");
+		expect(stdout + stderr).not.toContain("VENDOR_TEST_RAN");
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 20_000);
+
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
 	const previous = process.env.OMP_FULLTEST_AFFECTED;

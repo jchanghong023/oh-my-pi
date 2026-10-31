@@ -70,6 +70,7 @@ import { MemoryEditTool } from "./memory-edit";
 import { MemoryRecallTool } from "./memory-recall";
 import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
+import { OpenWikiListWikisTool, OpenWikiListWorkspacesTool, OpenWikiReadTool, OpenWikiSearchTool } from "./openwiki";
 import { wrapToolWithMetaNotice } from "./output-meta";
 import { RepoTool } from "./repo";
 import { ReadTool } from "./read";
@@ -151,6 +152,7 @@ export * from "./memory-edit";
 export * from "./memory-recall";
 export * from "./memory-reflect";
 export * from "./memory-retain";
+export * from "./openwiki";
 export * from "./read";
 export * from "./repo";
 export * from "./wiki";
@@ -609,6 +611,10 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	lsp: LspTool.createIf,
 	wiki: s => new WikiTool(s),
 	repo: s => new RepoTool(s),
+	openwiki_search: s => new OpenWikiSearchTool(s),
+	openwiki_read: s => new OpenWikiReadTool(s),
+	openwiki_list_workspaces: s => new OpenWikiListWorkspacesTool(s),
+	openwiki_list_wikis: s => new OpenWikiListWikisTool(s),
 	checkpoint: CheckpointTool.createIf,
 	rewind: RewindTool.createIf,
 	context_notes: ContextNotesTool.createIf,
@@ -643,6 +649,13 @@ export const SETTINGS_GATED_BUILTIN_TOOL_NAMES: readonly BuiltinToolName[] = (
 	Object.keys(BUILTIN_TOOLS) as BuiltinToolName[]
 ).filter(name => name === "learn" || !(MEMORY_BACKEND_TOOL_NAMES as readonly string[]).includes(name));
 
+const OPENWIKI_QUERY_TOOL_NAMES = [
+	"openwiki_search",
+	"openwiki_read",
+	"openwiki_list_workspaces",
+	"openwiki_list_wikis",
+];
+
 /** Built-in tool selection {@link createTools} constructs for a session under its current settings. */
 export interface BuiltinToolPlan {
 	/** Explicit request after auto-includes; undefined selects every allowed built-in. */
@@ -670,6 +683,11 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	if (!restrictToolNames && !session.toolRestrictions?.hasAllowlist && requestedTools?.includes("read")) {
 		if (!requestedTools.includes("wiki")) requestedTools.push("wiki");
 		if (!requestedTools.includes("repo")) requestedTools.push("repo");
+		if ((session.taskDepth ?? 0) === 0) {
+			for (const name of OPENWIKI_QUERY_TOOL_NAMES) {
+				if (!requestedTools.includes(name)) requestedTools.push(name);
+			}
+		}
 	}
 	const goalEnabled = cfgGoalEnabled.get(session.settings);
 	const goalModeActive = !restrictToolNames && goalEnabled && session.getGoalModeState?.()?.enabled === true;
@@ -777,6 +795,11 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	}
 	const isToolAllowed = (name: string) => {
 		if (session.toolRestrictions?.allows(name) === false) return false;
+		// Default child tool sets must not silently gain OpenWiki access. Explicit
+		// grants remain available, as for other child-gated built-ins.
+		if (OPENWIKI_QUERY_TOOL_NAMES.includes(name)) {
+			return (session.taskDepth ?? 0) === 0 || requestedTools?.includes(name) === true;
+		}
 		// Never in the default set. Explicitly activatable while goal.enabled and
 		// no goal record exists yet — /guided-goal enables it so the agent can
 		// finish the interview with `goal create`, which turns goal mode on. Once

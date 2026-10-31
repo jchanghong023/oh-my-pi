@@ -246,6 +246,54 @@ Git 项目索引当前 worktree 的根目录；即使从子目录启动，也会
 
 **命中只是定位线索**。编辑前必须读当前源码；找全部出现位置用 `grep`，按文件名找文件用 `glob`。调查调用方或影响范围，需结合当前源码和可用 LSP。索引不提供调用图、依赖分析或测试覆盖判断，无命中不能证明代码不存在。详细约定见[代码定位索引需求](../openspec/specs/repo-index/spec.md)。
 
+### OpenWiki：生成和查询代码仓库 Wiki
+
+OpenWiki 为代码仓库生成可浏览的 Wiki，与上面的公司资料 `/wiki`、代码定位 `/repo` 及其数据库相互独立。进入目标仓库，在**系统终端**显式执行：
+
+```tcsh
+omp openwiki code --init
+omp openwiki code --update
+```
+
+首次使用 `--init`；源码变化后需要时手动执行 `--update` 增量更新，不会因源码变化自动重跑。已有 Wiki 可直接更新；对已有 Wiki 再次执行 `--init` 是重新生成，并非无损增量更新，会保留用户维护的 `openwiki/INSTRUCTIONS.md`。生成被中断后，可在同一持久检出目录再次执行对应命令，利用已有进度恢复。页面失败或跳过会返回非零；若全部页面成功但生成期间源码发生变化，命令会提示再次更新。
+
+执行前可用 `omp openwiki code --init --dry-run` 或 `omp openwiki code --update --dry-run` 预览。它显示所选模型选择器、源码快照候选路径、可比较的变更路径及已有 Wiki 页面，不调用模型、不生成或修改 Wiki 文件，也不写入 `--telemetry-file`。预览不会验证模型可用性；实际页面由后续模型规划决定，候选路径不是完整读取清单或最终页面清单。OMP 首次启动仍可能释放自身的原生组件缓存。
+
+生成和更新默认使用当前 OMP profile 的 `default` role，规划和各页面共用同一模型。也可仅为本次运行指定 OMP 模型，不改变保存的角色设置：
+
+```tcsh
+omp openwiki code --update --modelId company/GLM-5.3-public
+```
+
+`--model-id` 也是可用写法；模型须支持工具调用且服务可达，认证和内网模型配置沿用 OMP，无需另配 OpenWiki 凭据。`OMP_OFFLINE` 不代表本地模型推理：内网生成仍需要可访问的模型服务。无需单独安装 OpenWiki、Node／Bun 或启动 OpenWiki MCP 服务。
+
+页面并发默认是 1，可在终端设置 `setenv OPENWIKI_PAGE_CONCURRENCY 2`，允许整数 1–8；并发过高可能受模型服务限流。一次运行内的页面任务去重不等于跨进程互斥：不要同时在多个 OMP 进程中对同一仓库生成或更新。
+
+可选的 `--telemetry-file reports/run.json` 仅写入本地禁用状态，不发送 OpenWiki 遥测；无法写入时会提示警告，生成仍继续。
+
+**让 AI 查已有 Wiki：** 在相同数据根、profile 和仓库上下文启动 OMP，在输入框例如输入“查询当前仓库 OpenWiki，说明配置加载流程并引用相关章节”。AI 可按需使用 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces` 和 `openwiki_list_wikis`；它们是只读 AI 工具，不是终端的 `search`／`read` 子命令，不会生成或更新 Wiki。工具检索本身不调用模型，但 AI 对话仍需要可用模型；普通任务不会预加载 Wiki。工具遵循 `tools.xdev` 的挂载规则，受限子代理不会因此自动获得权限。
+
+**关联多个已有仓库 Wiki：** 在交互终端执行 `omp openwiki link [directory]`，按界面创建或管理命名工作区并选择仓库。然后可在当前仓库用以下命令选择、查看或清除活动工作区；将示例名称换成已有工作区名称或 ID：
+
+```tcsh
+omp openwiki workspace use "my-workspace"
+omp openwiki workspace current
+omp openwiki workspace clear
+```
+
+查询会按工作区解析关联仓库；存在多个候选时应按提示选择，而不是假定会自动选中。关联仓库被移动或不可访问时需修复链接，不会自动生成替代内容。
+
+**浏览与导出：** 在仓库内执行以下命令，实时服务默认只监听本机回环；`--no-open` 不自动打开浏览器，结束命令即可停止服务。静态导出是另一种模式，不能与 `--port` 或 `--no-open` 同用：
+
+```tcsh
+omp openwiki visualize openwiki --no-open
+omp openwiki visualize openwiki --export /path/to/export
+```
+
+实时关系图、阅读器及导出所需资源随 OMP 提供，不依赖公网 CDN。将导出目录交给静态 HTTP 服务承载（可放在子路径），不承诺直接通过 `file://` 打开；浏览和只读检索已有内容不需要模型凭据。
+
+仓库页面、Claims 和生成进度保留在项目的 `openwiki/` 中；工作区注册表、缓存等用户级状态跟随有效的 `OMP_CONFIG_ROOT` 和当前 profile，`OMP_OFFLINE` 本身不改变数据根。不同 profile 的工作区相互隔离，旧独立 OpenWiki 工作区不会自动迁移或接管，独立 OpenWiki 仍使用自己的目录规则。
+
 ### 4.3 `/team 需求`：多代理调查、交叉审查与方案汇总
 
 适合需求还不清晰、实现方向存在取舍，或需要核对公司规范与现有代码的任务。**只做分析和规划，不自动实施。**

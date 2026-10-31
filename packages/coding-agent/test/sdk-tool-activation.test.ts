@@ -67,6 +67,8 @@ const sdkCustomTool = {
 	},
 } satisfies CustomTool;
 
+const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
+
 describe("createAgentSession defaultInactive tool activation", () => {
 	const tempDirs: string[] = [];
 
@@ -1760,10 +1762,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("activates the repo tool force-included next to an explicit read list", async () => {
-		// `createTools` force-includes wiki and repo when an unrestricted explicit
-		// list contains read; the session-managed activation mirror must surface
-		// both so the model can call what the registry constructed for it.
+	it("activates the read-only tools force-included next to an explicit read list", async () => {
 		const tempDir = makeTempDir();
 
 		const { session } = await createAgentSession({
@@ -1775,6 +1774,72 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(session.getToolByName("repo")).toBeDefined();
 			expect(session.getActiveToolNames()).toContain("wiki");
 			expect(session.getActiveToolNames()).toContain("repo");
+			for (const name of openwikiQueryTools) {
+				expect(session.getToolByName(name)).toBeDefined();
+				expect(session.getActiveToolNames()).toContain(name);
+			}
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it.each([0, 1])("preserves OpenWiki child boundaries through settings reconcile at depth %s", async taskDepth => {
+		const tempDir = makeTempDir();
+		const settings = Settings.isolated({ "tools.xdev": false });
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			settings,
+			taskDepth,
+			toolNames: ["read"],
+		});
+		try {
+			for (const enabled of [false, true, false]) {
+				cfgToolsXdev.set(settings, enabled);
+				await session.reconcileBuiltinTools();
+				for (const name of openwikiQueryTools) {
+					expect(session.getActiveToolNames().includes(name)).toBe(taskDepth === 0);
+					expect(session.getToolByName(name) !== undefined).toBe(taskDepth === 0);
+				}
+			}
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("keeps explicitly granted OpenWiki queries available to a restricted child during reconcile", async () => {
+		const tempDir = makeTempDir();
+		const settings = Settings.isolated({ "tools.xdev": false });
+		const { session } = await createAgentSession({
+			...baseOptions(tempDir),
+			settings,
+			taskDepth: 1,
+			restrictToolNames: true,
+			toolNames: ["read", "openwiki_search"],
+		});
+		try {
+			await session.reconcileBuiltinTools();
+			expect(session.getActiveToolNames()).toContain("openwiki_search");
+			for (const name of openwikiQueryTools.slice(1)) {
+				expect(session.getToolByName(name)).toBeUndefined();
+			}
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	it("keeps default child sessions from gaining OpenWiki queries during reconcile", async () => {
+		const tempDir = makeTempDir();
+		const settings = Settings.isolated({ "tools.xdev": false });
+		const { session } = await createAgentSession({ ...baseOptions(tempDir), settings, taskDepth: 1 });
+		try {
+			for (const enabled of [false, true, false]) {
+				cfgToolsXdev.set(settings, enabled);
+				await session.reconcileBuiltinTools();
+				for (const name of openwikiQueryTools) {
+					expect(session.getToolByName(name)).toBeUndefined();
+					expect(session.getXdevToolEntries().map(entry => entry.name)).not.toContain(name);
+				}
+			}
 		} finally {
 			await session.dispose();
 		}

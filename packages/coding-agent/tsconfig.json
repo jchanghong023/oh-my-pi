@@ -8,6 +8,7 @@
 	"exclude": [
 		"node_modules",
 		"dist",
-		"src/spec-driven/vendor"
+		"src/spec-driven/vendor",
+		"scripts/openwiki-vendor-entry.ts"
 	]
 }

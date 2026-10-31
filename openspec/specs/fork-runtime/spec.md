@@ -297,3 +297,74 @@ OMP MUST 对本地二进制构建产生的 ZCode 产物执行与已批准产物�
 
 - **WHEN** Windows 统计面板的目标端口被无法正常响应的进程占用
 - **THEN** 仅在能够确认监听进程属于 OMP Stats 时 MAY 回收并重新使用端口；无法确认身份时 MUST NOT 终止该进程，继续使用安全的端口回退行为。
+
+### Requirement: OpenWiki 随 OMP 合并构建和发行
+
+OMP MUST 在现有 Windows x64 与 Linux glibc x64 二进制中合并提供所纳入的 OpenWiki 代码、实际运行依赖、资源及许可证，并通过 OMP 安装和更新。运行 MUST 在 OMP 进程内完成，不要求独立 OpenWiki 包、CLI、MCP 服务、模型网关服务或用户另装 Node／Bun。本要求不增加发布平台、发布渠道或自动发布权限。
+
+#### Scenario: 正式发行使用固定子模块提交
+- **WHEN** 构建包含 OpenWiki 的 OMP 正式发行二进制
+- **THEN** 构建显式初始化并使用父仓库 gitlink 指定的 OpenWiki fork 提交，纳入与该提交对应的代码、所需依赖和资源，不从浮动分支或独立 OpenWiki 已发布包替代源码
+- **AND** 子模块提交不可取得或所需构建输入缺失时明确失败，不将缺少功能的产物报告为完整发行物
+
+#### Scenario: 本地开发构建使用工作区
+- **WHEN** 开发者在本地构建包含 OpenWiki 的 OMP 二进制
+- **THEN** 可使用 `vendor/openwiki` 当前工作区，包括未提交修改；构建不得为匹配父仓库 gitlink 而强制重置这些修改
+- **AND** 此类本地产物不冒充以固定提交构建的可复现正式发行物
+
+#### Scenario: 干净环境直接使用
+- **WHEN** 用户在支持的平台安装 OMP 发行物，环境未安装 OpenWiki、Node、Bun 或其他 JavaScript 包管理器，所选模型及必要 Git 工具已就绪
+- **THEN** 用户可从 `omp openwiki` 使用所纳入功能，并由 OMP 内置 AI 工具查询已有 Wiki，无需额外包安装、源码目录或开发机 `node_modules`
+- **AND** 不在运行时下载缺失的 OpenWiki 依赖或要求用户安装独立 OpenWiki／JavaScript 运行时来绕过依赖缺失
+
+#### Scenario: 运行进程与辅助工具边界
+- **WHEN** 执行 OpenWiki 的生成、查询、链接或可视化
+- **THEN** 不启动独立 OpenWiki CLI、Agent、Node 或 MCP 服务进程，也不要求用户先运行一个模型网关服务
+- **AND** 允许必要的 Git、浏览器等辅助进程，不把“内置”扩大解释为 OMP 进程树绝无子进程
+
+#### Scenario: 依赖与许可证随包完整
+- **WHEN** 从最终 OMP 发行物使用生成、检索、可视化和导出能力，并查看随包许可说明
+- **THEN** 实际使用的 Agent、工具调用、SQLite／FTS5、生成 Agent 的内置 Skill／提示及浏览器资源调用面不依赖发行物之外的 OpenWiki 安装、旧 OpenWiki home 或开发源码；许可说明包含 OpenWiki 及实际纳入第三方资源所需的版权和许可证
+- **AND** 保留原生 Agent 所需的运行依赖和 Skill 资源是允许的，不以“无需单独安装”为由错误排除生成执行所需代码或资源
+
+#### Scenario: 不改变既有发布授权
+- **WHEN** 将 OpenWiki 纳入现有构建与发布链路
+- **THEN** 继续遵循现有手动 CI、发布授权、平台和附件范围，不新增独立 OpenWiki 包或发行渠道，不恢复 npm／Nix 发布，不向发布工作流加入测试作业
+- **AND** 真实功能和发行物验收在单独授权的验证中进行，构建成功不能替代功能验收
+
+### Requirement: OpenWiki 离线资源与模型服务边界
+
+OMP MUST 随发行提供关系图、Markdown 阅读器、Mermaid 等自身可视化功能所需的浏览器资源，使实时浏览和静态导出不依赖公网 CDN 或运行时下载。OpenWiki MUST 遵循 OMP 已有 offline 和模型访问规则；无公网不等于无需可达的模型服务。
+
+#### Scenario: 无公网实时浏览和静态导出
+- **WHEN** 用户在无公网环境使用实时可视化，或通过静态 HTTP 服务访问导出目录
+- **THEN** 图、Markdown 阅读器和 Mermaid 显示使用本地完整资源，不访问 jsDelivr、Google Fonts 等外部资源源站，也不因开发机缓存存在而掩盖资源缺失
+- **AND** 静态导出携带其自身所需资源，不依赖正在运行的 OMP、OpenWiki Agent 或 MCP 服务
+
+#### Scenario: 内网生成与无模型查询
+- **WHEN** `OMP_OFFLINE` 启用且 OMP 已配置的内网模型服务可达
+- **THEN** OpenWiki 可按 OMP 现有 offline 模型与认证规则生成，不启动 OpenWiki 专用在线模型发现、认证向导或外部连接器
+- **AND** 只读查询和浏览已有 Wiki 不要求模型凭据；生成所需模型服务不可达时如实失败，不以离线可视化能力冒充离线模型推理
+
+#### Scenario: 内置路径禁用独立公网遥测
+- **WHEN** 用户在离线或非离线环境通过 OMP 内置路径执行 OpenWiki
+- **THEN** 不发送 OpenWiki 自己的公网遥测，不改变 OMP 自身遥测规则或 OpenWiki fork 独立运行的原有行为
+- **AND** 用户显式使用 `--telemetry-file` 时，仍按上游遥测禁用语义写出本地状态，记录 `disabled: true` 和 `sent: false`，不因此发送公网事件
+
+### Requirement: OpenWiki 数据根与工作区隔离
+
+OpenWiki 仓库内容 MUST 保持在项目的 `openwiki/` 下；OMP 管理的工作区注册表、缓存及仓库数据以外的用户级运行状态 MUST 在离线与非离线环境均遵循既有有效配置根和 profile 规则，不新增平行活动数据根。无需迁移或接管旧独立 OpenWiki 工作区；读取失败 MUST NOT 被当作空注册表静默覆盖。
+
+#### Scenario: 环境变量与 profile 切换
+- **WHEN** 用户设置有效 `OMP_CONFIG_ROOT` 或切换 OMP profile 后使用 OpenWiki，无论是否启用 `OMP_OFFLINE`
+- **THEN** OMP 管理的 OpenWiki 用户级状态跟随该有效数据根和 profile；未设置有效 `OMP_CONFIG_ROOT` 时沿用 OMP 既有默认目录解析，`OMP_OFFLINE` 本身不改变数据根
+- **AND** OMP 内置路径不使用 OpenWiki 独立安装的默认 home 或 `OPENWIKI_CONFIG_DIR` 作为平行活动数据根；独立运行的 OpenWiki fork 保留自身原有目录规则
+
+#### Scenario: 仓库数据保持项目内布局
+- **WHEN** 用户改变 `OMP_CONFIG_ROOT`、profile 或 `OMP_OFFLINE` 后生成、更新或查询仓库 Wiki
+- **THEN** 仓库内既有 `openwiki/`、Claims、manifest 和 checkpoint 仍保持项目内布局，不随用户级数据根搬迁，也不影响已有仓库 Wiki 的格式兼容
+
+#### Scenario: 不接管旧独立工作区
+- **WHEN** 用户首次使用 OMP 内置 OpenWiki 工作区
+- **THEN** 工作区按当前 OMP profile 的状态运行；本次不要求读取、迁移或接管独立 OpenWiki 已有工作区注册表，不修改或删除旧注册表
+- **AND** 只读查询不写工作区注册表，也不导入个人知识库、连接器或独立 OpenWiki 凭据

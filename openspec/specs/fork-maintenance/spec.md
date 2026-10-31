@@ -119,3 +119,37 @@ OMP MUST 对本次用户明确选定的行为恢复审查基线 `95db18ef9936bff
 #### Scenario: 上游对照变化或行为冲突
 - **WHEN** 实施前上游基线已经变化，或恢复指定差异会与其他已批准 fork 契约冲突
 - **THEN** MUST 明确核对原审查基线与受影响契约，不得静默扩大回滚；无法同时满足时 MUST 报告冲突并在改变已确认范围前获得用户决定。
+
+### Requirement: OpenWiki fork 子模块与源码归属
+
+OMP MUST 通过 `vendor/openwiki` git submodule 引用 `https://github.com/jchanghong023/openwiki.git`，由父仓库 gitlink 固定正式发行所用提交。OpenWiki 业务源码及必要接入修改 MUST 继续归属该 fork；OMP MUST NOT 复制第二份 Wiki、Claims 或页面编排实现，也不得将构建生成物作为另一份可维护源码。
+
+#### Scenario: 已有子模块声明继续使用
+- **WHEN** 仓库已经具有该路径和 fork URL 的子模块声明
+- **THEN** 接入沿用现有子模块，不重复添加、不替换为普通源码目录，也不因功能尚未接入而视为需要重新安装一个独立项目
+
+#### Scenario: 修改 OpenWiki 实现
+- **WHEN** 内置接入需要调整 OpenWiki 的宿主初始化、资源、生命周期或已有知识行为
+- **THEN** 这些修改在 OpenWiki fork 源码中维护，OMP 仓库只保留必要的宿主接线、构建规则及对子模块提交的引用
+- **AND** 正式更新父仓库引用时，所需修改必须包含在 fork 可取得的对应提交中，不依赖仅存在于开发机的子模块未提交内容
+
+#### Scenario: 固定版本与引用更新
+- **WHEN** 获取或更新正式发行所依赖的 OpenWiki 版本
+- **THEN** 以父仓库记录的 gitlink 提交为准，不以 `.gitmodules` URL、浮动分支或独立 OpenWiki 已发布包版本代替；本地开发构建可使用子模块当前工作区及未提交修改，不得为此强制重置工作区
+- **AND** 本变更不授权提交、推送、更新远端或发布，相关实际操作仍遵循用户单独授权
+
+### Requirement: OpenWiki 最小接入维护边界
+
+OMP MUST 优先复用 OpenWiki fork 已有的生成、页面工作池、Claims、检索和可视化模块，仅为模型接入、内置工具、宿主生命周期、合并发行及定向修复已确认的并行 verification 跨页修改缺陷增加必要修改。允许直接维护 OpenWiki fork，不以上游兼容或持续同步为前提；本约定不改变 OMP 自身的上游同步与基线要求。
+
+#### Scenario: 保留原有 Agent 与编排
+- **WHEN** 接入 OpenWiki 的仓库生成和更新能力
+- **THEN** 保留其原有规划 Agent 与页面工作池，允许必要 Agent 源码和 DeepAgents／LangChain 等运行依赖进入 OMP 产物，不要求改写为 OMP 通用 Task 编排或先完成无 Agent 核心拆分
+
+#### Scenario: 保留 OpenWiki fork 独立功能
+- **WHEN** 为 OMP 内置路径调整 OpenWiki 的初始化、资源、认证或遥测行为
+- **THEN** fork 原有独立 CLI、MCP、个人模式和其他既有功能仍可独立使用；OMP 不纳入这些能力不意味着删除或全局禁用它们
+
+#### Scenario: 不维护平行实现或无关抽象
+- **WHEN** 为 OMP 适配模型、查询工具、命令和发行
+- **THEN** OMP 仅维护宿主集成，不另建同功能知识核心、通用存储后端、独立模型策略或新的 Wiki 安装器；OpenWiki 上游同步不是本次交付步骤

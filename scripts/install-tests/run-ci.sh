@@ -223,6 +223,69 @@ mkdir -p "$TARBALL_APP_DIR"
       echo "Collab web tarball did not install built dist/index.html"
       exit 1
    }
+   # Import both published entrypoints from the isolated install, not the checkout.
+   # In particular, missing OpenWiki sources must not be masked by repo-relative paths.
+   env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$WORK_DIR/import-home" \
+      OMP_CONFIG_ROOT="$WORK_DIR/import-config" bun -e '
+      import { strict as assert } from "node:assert";
+      import { realpathSync } from "node:fs";
+      import path from "node:path";
+      import { fileURLToPath } from "node:url";
+      import * as root from "@oh-my-pi/pi-coding-agent";
+      import * as tools from "@oh-my-pi/pi-coding-agent/tools";
+      const installed = realpathSync("node_modules/@oh-my-pi/pi-coding-agent");
+      const relative = path.relative(realpathSync(process.cwd()), installed);
+      assert(relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative),
+         `Package is outside the isolated install: ${installed}`);
+      for (const specifier of ["@oh-my-pi/pi-coding-agent", "@oh-my-pi/pi-coding-agent/tools"]) {
+         const resolved = realpathSync(fileURLToPath(import.meta.resolve(specifier)));
+         const withinPackage = path.relative(installed, resolved);
+         assert(withinPackage && withinPackage !== ".." && !withinPackage.startsWith(`..${path.sep}`) && !path.isAbsolute(withinPackage),
+            `${specifier} did not resolve inside the installed package: ${resolved}`);
+      }
+      assert.equal(typeof root.createAgentSession, "function");
+      for (const name of ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"]) {
+         assert.equal(typeof root.BUILTIN_TOOLS[name], "function", `Missing root entry tool: ${name}`);
+         assert.equal(typeof tools.BUILTIN_TOOLS[name], "function", `Missing tools entry tool: ${name}`);
+      }
+   '
+
+   # Exercise the installed CLI and its bundled OpenWiki resources outside the repo.
+   wiki_fixture="$WORK_DIR/openwiki-fixture"
+   mkdir -p "$wiki_fixture/openwiki" "$wiki_fixture/home"
+   printf '%s\n' '---' 'title: Quickstart' 'type: Guide' '---' '# Quickstart' '' 'See [Overview](overview.md).' > "$wiki_fixture/openwiki/quickstart.md"
+   printf '%s\n' '---' 'title: Overview' 'type: Guide' '---' '# Overview' '' 'INSTALLED_OPENWIKI_CONTENT' > "$wiki_fixture/openwiki/overview.md"
+   (
+      cd "$wiki_fixture"
+      env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
+         OMP_OFFLINE=1 NO_COLOR=1 "$TARBALL_APP_DIR/node_modules/.bin/omp" openwiki visualize openwiki --export site
+      env -u PI_OPENWIKI_VISUAL_ASSETS HOME="$wiki_fixture/home" OMP_CONFIG_ROOT="$wiki_fixture/config" \
+         OMP_OFFLINE=1 NO_COLOR=1 "$TARBALL_APP_DIR/node_modules/.bin/omp" --license > license.txt
+      bun -e '
+         import { strict as assert } from "node:assert";
+         import { readFileSync, readdirSync } from "node:fs";
+         import path from "node:path";
+         const graphText = readFileSync("site/graph.json", "utf8");
+         const graph = JSON.parse(graphText);
+         assert.deepEqual(graph.nodes.map(node => node.id).sort(), ["overview", "quickstart"]);
+         assert(graph.edges.some(edge => edge.source === "quickstart" && edge.target === "overview"));
+         assert(graphText.includes("INSTALLED_OPENWIKI_CONTENT"));
+         const html = readFileSync("site/index.html", "utf8");
+         assert(html.includes("data-static-export=\"true\""), "Export is not configured for static use");
+         assert(!/(?:cdn\.jsdelivr\.net|fonts\.googleapis\.com|fonts\.gstatic\.com|unpkg\.com)/i.test(html),
+            "Static export depends on a remote asset provider");
+         const openwikiLicense = readFileSync("site/licenses/openwiki.txt", "utf8");
+         assert(openwikiLicense.includes("Permission is hereby granted"));
+         const licenses = readdirSync("site/licenses");
+         const forceGraphFile = licenses.find(file => file.startsWith("force-graph@"));
+         assert(forceGraphFile, "Missing force-graph license notice");
+         const forceGraphNotice = readFileSync(path.join("site/licenses", forceGraphFile), "utf8").trim();
+         assert(/License:\s*\S/.test(forceGraphNotice), "Missing force-graph license terms");
+         const license = readFileSync("license.txt", "utf8");
+         assert(license.includes("OpenWiki License") && license.includes(openwikiLicense.trim()) && license.includes(forceGraphNotice),
+            "Installed CLI is missing OpenWiki license notices");
+      '
+   )
    smoke_cli ./node_modules/.bin/omp tarball
 )
 
