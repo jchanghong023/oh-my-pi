@@ -161,11 +161,14 @@ export async function connectToServer(
 	options?.signal?.throwIfAborted();
 	const timeoutMs = resolveMCPTimeoutMs(config.timeout);
 	const timeoutError = new MCPConnectionTimeoutError(name, timeoutMs);
-	// Own cancellation of the entire handshake, including asynchronous transport creation.
-	// A timeout must not leave a late stdio spawn or initialize request running.
 	const controller = new AbortController();
 	const signal = options?.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
 	let transport: MCPTransport | undefined;
+	let closePromise: Promise<void> | undefined;
+	const closeTransport = () => {
+		if (transport) closePromise ??= transport.close();
+		return closePromise;
+	};
 
 	const connect = async (): Promise<MCPServerConnection> => {
 		transport = await createTransport(config, signal);
@@ -200,7 +203,7 @@ export async function connectToServer(
 				instructions: initResult.instructions,
 			};
 		} catch (error) {
-			await transport.close();
+			await closeTransport();
 			throw error;
 		}
 	};
@@ -214,11 +217,8 @@ export async function connectToServer(
 		return await withTimeout(connect(), timeoutMs, timeoutError, options?.signal);
 	} catch (error) {
 		controller.abort(error);
-		// Closing an already-created transport also terminates initialization.
-		// Creation still in progress observes the aborted signal before spawning.
-		if (transport) {
-			void transport.close().catch(() => {});
-		}
+		// Close an existing transport; in-flight creation observes the aborted signal.
+		void closeTransport()?.catch(() => {});
 		throw error instanceof LegacySseConnectionTimeoutError ? timeoutError : error;
 	}
 }

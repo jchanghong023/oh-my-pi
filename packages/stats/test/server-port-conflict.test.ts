@@ -76,6 +76,8 @@ async function startBunHolder(
 	if (options?.statsOwned) args.push("omp-stats");
 	if (options?.extraArg) args.push(options.extraArg);
 	const child = Bun.spawn(args, {
+		// The isolated environment, passed explicitly: a child must never resolve the user's stats database.
+		env: { ...process.env },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",

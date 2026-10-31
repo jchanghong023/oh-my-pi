@@ -461,18 +461,7 @@ export class LoginDialogComponent extends OverlayPanel {
 			[
 				node("icon", { name: "link" }, undefined, "icon"),
 				keyed(shown, "url"),
-				node(
-					"row",
-					{
-						role: "omp.btn",
-						align: "center",
-						actions: { click: "copy" },
-						href: url,
-						title: "复制登录链接",
-					},
-					[text("复制")],
-					"copyLink",
-				),
+				actionButton("复制", "copy", { key: "copyLink", href: url, title: "复制登录链接" }),
 			],
 			"link",
 		);
@@ -480,20 +469,13 @@ export class LoginDialogComponent extends OverlayPanel {
 
 	/** Open sign-in page (Tern opens the link itself): the primary action while nothing waits for an answer. */
 	#describeOpen(url: string, primary: boolean): NativeNode {
-		return node(
-			"row",
-			{
-				role: "omp.btn",
-				gap: "xs",
-				align: "center",
-				actions: { click: "open" },
-				href: url,
-				title: `在浏览器中打开 ${urlPlace(url)}`,
-				...(primary ? { tone: "accent" as const } : {}),
-			},
-			[text("打开登录页面"), node("icon", { name: "open" }, undefined, "icon")],
-			"openLink",
-		);
+		return actionButton("打开登录页面", "open", {
+			key: "openLink",
+			href: url,
+			title: `在浏览器中打开 ${urlPlace(url)}`,
+			icon: "open",
+			tone: primary ? "accent" : undefined,
+		});
 	}
 
 	/** The stage running now: a spinner and what it waits for. */

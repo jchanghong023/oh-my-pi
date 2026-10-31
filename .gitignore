@@ -54,6 +54,11 @@ packages/ai/test/.temp-images/
 # Cached Bun baseline runtimes downloaded by local builds (96 MiB+).
 /.bun-cache/
 
+# SQLite databases a run leaves in its agent dir (auth.db, models.db, ...)
+*.db
+*.db-shm
+*.db-wal
+
 # Project specific
 !.omp/
 .omp/plugins/

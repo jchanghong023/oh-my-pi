@@ -8,6 +8,7 @@ import {
 	validateAgentCompactionThresholdOverrides,
 } from "../config/compaction-threshold";
 import { effect, register } from "../config/registry";
+import type { Settings } from "../config/settings";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
 import { isRecord, logger, setWorktreesDir } from "@oh-my-pi/pi-utils";
@@ -286,6 +287,73 @@ export const cfgTaskEnableEffort = register({
 	},
 });
 
+export const cfgTaskPerCallModel = register({
+	id: "task.perCallModel",
+	type: "enum",
+	values: ["off", "eval", "on"] as const,
+	default: "off",
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Per-Call Model",
+		description:
+			"Whether a subagent call may pick its model with one exact provider/model-id[@upstream][:level] selector. An @upstream pin is part of the model identity and is supported only by aggregators. Only models the configuration already routes to are accepted. Project settings can turn it off but not on, and never approve a model.",
+		options: [
+			{ value: "off", label: "Off", description: "Reject `model` on task items and eval agent()/workpool()" },
+			{ value: "eval", label: "Eval only", description: "Accept `model` in eval agent() and workpool() only" },
+			{ value: "on", label: "On", description: "Accept `model` on task items and in eval agent()/workpool()" },
+		],
+	},
+});
+
+/**
+ * Whether `task.perCallModel` accepts a per-call `model` for this invocation kind. The operator's
+ * layers ({@link Settings.grantAuthority}) must enable it; project and subagent-injected settings,
+ * which the live merged value includes, can only turn it off.
+ */
+export function perCallModelEnabled(settings: Settings, invocationKind: "task" | "eval"): boolean {
+	return [settings.grantAuthority(), settings].every(layers => {
+		const mode = cfgTaskPerCallModel.get(layers);
+		return mode === "on" || (mode === "eval" && invocationKind === "eval");
+	});
+}
+
+/**
+ * Validates `task.perCallModelAllow`: a list of exact `provider/model-id` strings. A non-string
+ * entry fails load and writes instead of reaching approval as an entry that matches nothing.
+ */
+function validatePerCallModelAllow(value: unknown): void {
+	if (value === undefined || value === null) return;
+	if (!Array.isArray(value)) {
+		throw new Error(
+			`Invalid task.perCallModelAllow: expected a list of provider/model-id strings, got ${Bun.inspect(value)}.`,
+		);
+	}
+	for (const [index, entry] of value.entries()) {
+		if (typeof entry === "string") continue;
+		throw new Error(
+			`Invalid task.perCallModelAllow[${index}]: expected a provider/model-id string, got ${Bun.inspect(entry)}.`,
+		);
+	}
+}
+
+export const cfgTaskPerCallModelAllow = register({
+	id: "task.perCallModelAllow",
+	type: "array",
+	default: [] as string[],
+	validate: validatePerCallModelAllow,
+	ui: {
+		tab: "tasks",
+		group: "Subagents",
+		label: "Per-Call Model Allowlist",
+		editor: "json",
+		// The editor writes the global layer; hide a project-supplied list so the repository cannot promote it.
+		condition: "perCallModelAllowNotProject",
+		description:
+			"Exact selectors: `provider/model-id`, including `@upstream` only for a pinned OpenRouter/Vercel route (e.g. `openrouter/x@y`). When set, a per-call model must also be listed here. Empty: every model the configuration grants. A project list can only narrow this one.",
+	},
+});
+
 export const cfgTaskMaxConcurrency = register({
 	id: "task.maxConcurrency",
 	protocolDefault: ["rpc", "acp"],
@@ -456,7 +524,7 @@ export const cfgTaskMaxEffort = register({
 		group: "Subagents",
 		label: "单次生成的最大思考强度",
 		description:
-			"task 工具逐次生成 effort 提示允许的最大推理强度。较低的值可防止调用方将 Subagent 提升到此上限以上；默认值保留模型的完整范围。",
+			"task 工具逐次生成的 effort 提示或逐次指定的模型允许的最大推理强度。显式 `:level` 限制在不超过此上限的最高受支持档位；省略 `:level` 时继承代理思考强度并受此上限约束，冷恢复时重新应用。未设置、`:inherit` 和 `:off` 保持原有含义。逐次指定的模型必须支持不超过此上限的档位；默认值保留模型的完整范围。",
 		options: THINKING_EFFORTS.map(getThinkingLevelMetadata),
 	},
 });

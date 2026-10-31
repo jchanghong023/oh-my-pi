@@ -311,10 +311,13 @@ describe("session-owned supervised services", () => {
 			vi.spyOn(brokerClients, "daemonClientForProject").mockResolvedValue(client);
 			const result = await new BashTool(session).execute("svc-env", {
 				command:
-					"console.log(`env=${process.env.PI_SESSION_ID}|${process.env.PI_SESSION_FILE}`); await Bun.stdin.stream().getReader().read();",
+					"console.log(`env=${process.env.PI_SESSION_ID}|${process.env.PI_SESSION_FILE}|${process.env.PI_TOOL_CALL_ID}`); await Bun.stdin.stream().getReader().read();",
 				name: "env-service",
 				pty: false,
-				ready: { log: `env=session-svc\\|${sessionFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, timeout: 5 },
+				ready: {
+					log: `env=session-svc\\|${sessionFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\|svc-env`,
+					timeout: 5,
+				},
 			});
 			expect(result.details?.service).toMatchObject({ name: "env-service", ready: true, timedOut: false });
 		} finally {

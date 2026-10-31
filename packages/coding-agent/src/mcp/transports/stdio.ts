@@ -602,8 +602,7 @@ export class StdioTransport implements MCPTransport {
 			hostHasInheritableConsole: hostHasInheritableConsole(),
 			signal,
 		});
-		// Resolution can outlast the handshake deadline (notably PATH on Windows).
-		// Never spawn after the caller has already cancelled this creation.
+		// Resolution may outlast the connection deadline, especially on Windows PATHs.
 		signal?.throwIfAborted();
 
 		// Platform-derived session and console-window handling come from

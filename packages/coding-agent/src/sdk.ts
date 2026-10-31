@@ -270,6 +270,7 @@ import {
 } from "./system-prompt";
 import type { AgentDefinition, NativeSubagentHooks } from "./task/types";
 import { AgentOutputManager } from "./task/output-manager";
+import { parentModelGrantPattern } from "./task/model-approval";
 import { wrapStreamFnWithProviderConcurrency } from "./task/provider-concurrency";
 import { sessionDelegationBias } from "./task/prompt-policy";
 import { isScoutSpawnable } from "./task/spawn-policy";
@@ -670,6 +671,20 @@ export interface CreateAgentSessionOptions {
 	 * selecting a model does not suppress its actual inference requests.
 	 */
 	offline?: boolean;
+	/**
+	 * Called with the model of every main-loop request before it is sent; throw to
+	 * refuse it. Per-call `model` subagents use it so no switch reaches a model the
+	 * operator did not approve.
+	 */
+	assertDispatchModel?: (model: Model) => void;
+	/**
+	 * Disable retry fallback, context promotion and usage-aware fallback: the turn retries on, or fails
+	 * with, its own model instead. Startup model selection, and the return to the primary after a
+	 * startup fallback, are not affected. Per-call `model` subagents set it.
+	 */
+	disableModelFallback?: boolean;
+	/** Never opt requests into a provider's optional server-side model fallback. Per-call `model` subagents set it. */
+	disableServerSideFallback?: boolean;
 	/** Thinking selector. Default: from settings, else unset */
 	thinkingLevel?: ConfiguredThinkingLevel;
 	/** Hard ceiling on the session's thinking effort (e.g. a task spawn's `task.maxEffort`-capped hint); retry-fallback recovery re-clamps to it. */
@@ -1988,11 +2003,20 @@ export type NativeChildCapabilities = Pick<
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
 	const execution = currentExecutionModel();
 	if (options.parentTaskPrefix && execution?.policies?.subagents?.foregroundModel === "submission") {
-		options = {
-			...options,
-			model: execution.model,
-			thinkingLevel: execution.thinkingLevel,
-		};
+		if (options.disableModelFallback && options.assertDispatchModel) {
+			const requested = options.model && parentModelGrantPattern(options.model);
+			const submission = parentModelGrantPattern(execution.model);
+			if (!requested || !submission || requested !== submission) {
+				throw new Error("The per-call model conflicts with the foreground submission model.");
+			}
+			// Keep the exact per-call model and its capped effort rather than replacing either.
+		} else {
+			options = {
+				...options,
+				model: execution.model,
+				thinkingLevel: execution.thinkingLevel,
+			};
+		}
 	}
 	// CLI offline mode applies to every session constructed in this process,
 	// including task spawns and revived sessions that omit the SDK option.
@@ -4992,6 +5016,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 							anthropicSlowModeHasNoSiblingHeadroom(modelRegistry.authStorage, streamModel, session?.sessionId),
 						notify: (level, message) => session?.emitNotice(level, message, "anthropic-slow-mode"),
 						onLane: lane => session?.noteAnthropicSlowModeLane(lane),
+						disableServerSideFallback: options.disableServerSideFallback,
 					}),
 					currentCostGate,
 				),
@@ -5069,7 +5094,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				if (context.tools) context = { ...context, tools: options.toolRestrictions.filter(context.tools) };
 			}
 			const execution = currentExecutionModel();
-			if (execution?.recoverModelRequest) {
+			if (execution?.recoverModelRequest && !options.disableModelFallback) {
 				return streamWithExecutionRecovery(
 					dispatchExecutionRequest,
 					streamModel,
@@ -5167,6 +5192,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			getToolContext: tc => toolContextStore.getContext(tc),
 			getApiKey: effectiveGetApiKey,
 			streamFn: (streamModel, context, streamOptions) => {
+				options.assertDispatchModel?.(streamModel);
 				// The loop checks the cap before each request, but a side request can finish
 				// in between: refuse here, as this run's refusal, before announcing a dispatch.
 				const refusal = currentCostGate()?.check();
@@ -5410,6 +5436,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 			subagentEventBus,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,
 			thinkingLevelCeiling: options.thinkingLevelCeiling,
+			disableModelFallback: options.disableModelFallback,
 			initialRetryFallback,
 			deferRetryFallbackValidation: options.deferRetryFallbackValidation,
 			prewalk,
