@@ -274,6 +274,7 @@ export async function requestCompactionV2Streaming(
 		providerSessionState?: Map<string, ProviderSessionState>;
 		codexCompaction?: CodexCompactionContext;
 		preferWebsockets?: boolean;
+		codexAccessPrograms?: boolean;
 	},
 ): Promise<CompactionV2Response> {
 	const compactionId = logger.getLogContext().compaction_id ?? `compact-${crypto.randomUUID()}`;
@@ -363,6 +364,7 @@ export async function requestCompactionV2Streaming(
 								providerSessionState: options?.providerSessionState,
 								codexCompaction: options?.codexCompaction,
 								preferWebsockets: options?.preferWebsockets,
+								codexAccessPrograms: options?.codexAccessPrograms,
 							},
 						);
 						logger.info("V2 compaction request completed", {
@@ -449,6 +451,7 @@ async function attemptCompactionV2Streaming(
 		providerSessionState?: Map<string, ProviderSessionState>;
 		codexCompaction?: CodexCompactionContext;
 		preferWebsockets?: boolean;
+		codexAccessPrograms?: boolean;
 	},
 ): Promise<CompactionV2Response> {
 	// Faithful to Codex: append the compaction trigger as the final input item
@@ -474,6 +477,7 @@ async function attemptCompactionV2Streaming(
 			sessionId: request.sessionId,
 			providerSessionState: options.providerSessionState,
 			preferWebsockets: options.preferWebsockets,
+			codexAccessPrograms: options.codexAccessPrograms,
 			responsesLite: model.useResponsesLite,
 			codexCompaction: createOpenAICodexCompactionRequestContext({
 				context: options.codexCompaction,
