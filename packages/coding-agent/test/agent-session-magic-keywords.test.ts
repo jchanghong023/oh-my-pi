@@ -12,7 +12,6 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { COLLAB_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-wire";
 import { AUTO_THINKING } from "@oh-my-pi/pi-tui/thinking";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -311,44 +310,5 @@ describe("AgentSession magic keyword settings", () => {
 		expect(noticeIdx).toBeGreaterThanOrEqual(0);
 		expect(userIdx).toBeGreaterThanOrEqual(0);
 		expect(noticeIdx).toBeLessThan(userIdx);
-	});
-
-	it("injects the ultrathink notice for collab-forwarded guest prompts", async () => {
-		const created = await createMagicKeywordSession(modelRegistry, []);
-		session = created.session;
-		const promptSpy = vi.spyOn(session.agent, "prompt").mockResolvedValue(undefined);
-
-		await session.promptCustomMessage({
-			customType: COLLAB_PROMPT_MESSAGE_TYPE,
-			content: "ultrathink 帮我完成这个任务",
-			display: true,
-			attribution: "user",
-		});
-
-		const promptMessages = promptSpy.mock.calls[0]![0] as unknown as Array<{
-			role?: string;
-			customType?: string;
-			content?: string | Array<{ type: string; text?: string }>;
-		}>;
-		const noticeIdx = promptMessages.findIndex(message => message.customType === "ultrathink-notice");
-		const collabIdx = promptMessages.findIndex(message => message.customType === COLLAB_PROMPT_MESSAGE_TYPE);
-		const notice = promptMessages[noticeIdx];
-		expect(notice).toMatchObject({
-			role: "custom",
-			customType: "ultrathink-notice",
-			display: false,
-			attribution: "user",
-		});
-		expect(collabIdx).toBeGreaterThanOrEqual(0);
-		expect(noticeIdx).toBeLessThan(collabIdx);
-
-		await session.promptCustomMessage({
-			customType: COLLAB_PROMPT_MESSAGE_TYPE,
-			content: "普通的一条转发消息，没有任何关键词",
-			display: true,
-			attribution: "user",
-		});
-		const followUpMessages = promptSpy.mock.calls[1]![0] as unknown as Array<{ customType?: string }>;
-		expect(followUpMessages.map(message => message.customType).filter(Boolean)).toEqual(["collab-prompt"]);
 	});
 });

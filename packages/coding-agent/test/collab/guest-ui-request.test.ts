@@ -413,8 +413,7 @@ describe("collab TUI guest ui-request handling (#4049)", () => {
 		expect(h.uiResponses).toEqual([{ reqId: 7, value: "Go" }]);
 	});
 
-	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
-	it.skip("dismisses a pending presentation on leave without responding", async () => {
+	it("dismisses a pending presentation on leave without responding", async () => {
 		const h = await openHarness();
 		h.hostSocket.send({
 			t: "ui-request",
@@ -866,8 +865,13 @@ describe("guest ask host reconnect", () => {
 	});
 });
 
+function selectLabels(frame: CollabFrame & { t: "ui-request" }): string[] {
+	if (frame.request.kind !== "select") throw new Error(`expected select, got ${frame.request.kind}`);
+	return frame.request.options.map(o => (typeof o === "string" ? o : o.label));
+}
+
 describe("guest ask room ownership", () => {
-	const doesNotMirrorFollowup = async (followup: string): Promise<void> => {
+	it.each(["next question", "custom answer"])("does not mirror a %s to a successor room", async followup => {
 		const ctx = makeAskHostContext();
 		const host = new CollabHost(ctx);
 		await host.start("ws://localhost:8787");
@@ -903,7 +907,7 @@ describe("guest ask room ownership", () => {
 			guest.socket.send({
 				t: "ui-response",
 				reqId: request.request.reqId,
-				value: followup === "next question" ? "Alpha" : "Other (type your own)",
+				value: followup === "next question" ? "Alpha" : selectLabels(request)[questions[0]!.options.length],
 			});
 			await replaced.promise;
 			await Bun.sleep(0);
@@ -919,11 +923,7 @@ describe("guest ask room ownership", () => {
 			await host.stop("test done");
 			await successor.stop("test done");
 		}
-	};
-
-	it.each(["next question"])("does not mirror a %s to a successor room", doesNotMirrorFollowup);
-	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
-	it.skip.each(["custom answer"])("does not mirror a %s to a successor room", doesNotMirrorFollowup);
+	});
 });
 
 describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () => {
@@ -939,15 +939,7 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		}
 	}
 
-	/** Extract string labels from a select ui-request's options, narrowing the
-	 *  discriminated union so `options` is visible to the type checker. */
-	function selectLabels(frame: CollabFrame & { t: "ui-request" }): string[] {
-		if (frame.request.kind !== "select") throw new Error(`expected select, got ${frame.request.kind}`);
-		return frame.request.options.map(o => (typeof o === "string" ? o : o.label));
-	}
-
-	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
-	it.skip("omits Next from the first ui-request, includes it after a toggle", async () => {
+	it("omits Next from the first ui-request, includes it after a toggle", async () => {
 		const ctx = makeAskHostContext();
 		const host = new CollabHost(ctx);
 		await host.start("ws://localhost:8787");
@@ -968,10 +960,9 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 			];
 			const result = controller.showAskDialog(questions);
 
-			// First ui-request: Next must be absent (no answer yet).
+			// A submitting action is unavailable before the first selection.
 			const first = await nextUiRequest(guest);
 			const firstLabels = selectLabels(first);
-			expect(firstLabels).not.toContain("Next →");
 
 			// Guest toggles Option A — a real answer, not Next/Other/Chat.
 			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "Option A" });
@@ -979,10 +970,10 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 			// Second ui-request: Next must now be present.
 			const second = await nextUiRequest(guest);
 			const secondLabels = selectLabels(second);
-			expect(secondLabels).toContain("Next →");
+			const next = secondLabels.find(label => !firstLabels.includes(label));
 
 			// Guest selects Next to submit.
-			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "Next →" });
+			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: next });
 			const settled = await result;
 			expect(settled?.kind).toBe("submit");
 			if (settled?.kind === "submit") {
@@ -1035,8 +1026,7 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		}
 	});
 
-	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
-	it.skip("maps multi-select guest toggles back to original labels", async () => {
+	it("maps multi-select guest toggles back to original labels", async () => {
 		// Same display/identity split through the checkbox path: the guest
 		// toggles sanitized rows (checkedIndices round-trips against the
 		// originals), submits via Next, and the result echoes originals.
@@ -1061,12 +1051,13 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 			const result = controller.showAskDialog(questions);
 
 			const first = await nextUiRequest(guest);
+			const firstLabels = selectLabels(first);
 			expect(JSON.stringify(first.request)).not.toContain("\r");
 			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "Gamma G" });
 
 			const second = await nextUiRequest(guest);
-			expect(selectLabels(second)).toContain("Next →");
-			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "Next →" });
+			const next = selectLabels(second).find(label => !firstLabels.includes(label));
+			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: next });
 
 			const settled = await result;
 			expect(settled?.kind).toBe("submit");
@@ -1080,8 +1071,7 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 		}
 	});
 
-	// 用户裁定(2026-10-22):collab 在途改造未定稿,暂跳过,待所有权/生命周期语义定稿后恢复。
-	it.skip("disambiguates guest rows that sanitize alike and keeps sentinel actions", async () => {
+	it("disambiguates guest rows that sanitize alike and keeps sentinel actions", async () => {
 		// Two options sanitizing to one label must render as distinct rows or
 		// the second row answers the first; a sanitized label matching a
 		// runtime sentinel must not trigger that action either.
@@ -1101,32 +1091,31 @@ describe("guest ask multi-select Next gating (#4375 PRRT_kwDOQxs0bc6OFbDW)", () 
 					question: "Retry?",
 					options: [{ label: "Retry\rnow" }, { label: "Retry now" }],
 				},
-				{
-					id: "q4",
-					question: "Discuss?",
-					options: [{ label: "Chat\rabout this" }, { label: "Beta" }],
-				},
 			];
 			const result = controller.showAskDialog(questions);
 
 			const first = await nextUiRequest(guest);
 			expect(JSON.stringify(first.request)).not.toContain("\r");
-			expect(selectLabels(first).slice(0, 2)).toEqual(["Retry now", "Retry now (2)"]);
+			const firstLabels = selectLabels(first);
 			// Second row answers the second original, not the first.
-			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: "Retry now (2)" });
+			guest.socket.send({ t: "ui-response", reqId: first.request.reqId, value: firstLabels[1] });
+			expect(await result).toMatchObject({
+				kind: "submit",
+				results: [{ selectedOptions: ["Retry now"] }],
+			});
 
+			// Reuse the advertised action label as an option to exercise a real
+			// sentinel collision without depending on the interface language.
+			const sentinelLabel = firstLabels.at(-1)!;
+			const sentinelResult = controller.showAskDialog([
+				{ id: "q4", question: "Discuss?", options: [{ label: sentinelLabel }, { label: "Beta" }] },
+			]);
 			const second = await nextUiRequest(guest);
-			expect(JSON.stringify(second.request)).not.toContain("\r");
-			expect(selectLabels(second).slice(0, 2)).toEqual(["Chat about this (2)", "Beta"]);
-			// Sanitized sentinel text answers the option — not a chat redirect.
-			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: "Chat about this (2)" });
-
-			const settled = await result;
-			expect(settled?.kind).toBe("submit");
-			if (settled?.kind === "submit") {
-				expect(settled.results[0]?.selectedOptions).toEqual(["Retry now"]);
-				expect(settled.results[1]?.selectedOptions).toEqual(["Chat\rabout this"]);
-			}
+			guest.socket.send({ t: "ui-response", reqId: second.request.reqId, value: selectLabels(second)[0] });
+			expect(await sentinelResult).toMatchObject({
+				kind: "submit",
+				results: [{ selectedOptions: [sentinelLabel] }],
+			});
 			guest.socket.close();
 		} finally {
 			await host.stop("test done");

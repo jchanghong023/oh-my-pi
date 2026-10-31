@@ -57,11 +57,7 @@ if (
 }
 const transformersVersion = transformersManifest.version;
 
-// Self-update target baked into local binaries (same role as the CI
-// UPDATE_REPOSITORY env in ci-release-build-binaries.ts): without it the
-// compile-time PI_UPDATE_REPOSITORY stays undefined and `omp update` falls
-// back to the upstream can1357/oh-my-pi + npm channel, which would replace a
-// fork install with an official upstream build.
+// Embed the same fork update target as CI; the runtime environment can override it.
 const updateRepository = "jchanghong023/oh-my-pi";
 
 async function runCommand(command: string[]): Promise<void> {

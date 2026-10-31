@@ -104,12 +104,8 @@ export async function generateCommitMessage(
 	const userMessage = `<diff>\n${truncatedDiff}\n</diff>`;
 
 	for (const candidate of candidates) {
-		const terminalFailure = candidate.model.provider === "codeagent";
 		const apiKey = await registry.getApiKey(candidate.model, sessionId);
-		if (!apiKey) {
-			if (terminalFailure) return null;
-			continue;
-		}
+		if (!apiKey) continue;
 
 		try {
 			const maxTokens = COMMIT_MAX_TOKENS;
@@ -129,13 +125,11 @@ export async function generateCommitMessage(
 							reasoning: toReasoningEffort(candidate.thinkingLevel),
 						},
 					),
-				{ provider: candidate.model.provider, maxAttempts: terminalFailure ? 1 : undefined },
+				{ provider: candidate.model.provider },
 			);
-			if (terminalFailure && response.stopReason === "aborted") return null;
 
 			if (response.stopReason === "error") {
 				logger.debug("commit-msg-generator: error", { model: candidate.model.id, error: response.errorMessage });
-				if (terminalFailure) return null;
 				continue;
 			}
 
@@ -144,10 +138,7 @@ export async function generateCommitMessage(
 				if (content.type === "text") msg += content.text;
 			}
 			msg = msg.trim();
-			if (!msg) {
-				if (terminalFailure) return null;
-				continue;
-			}
+			if (!msg) continue;
 
 			// Clean up: remove wrapping quotes, backticks, trailing period
 			msg = msg.replace(/^[`"']|[`"']$/g, "").replace(/\.$/, "");
@@ -159,7 +150,6 @@ export async function generateCommitMessage(
 				model: candidate.model.id,
 				error: err instanceof Error ? err.message : String(err),
 			});
-			if (terminalFailure) return null;
 		}
 	}
 

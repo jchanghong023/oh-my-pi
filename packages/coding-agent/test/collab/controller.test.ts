@@ -279,10 +279,7 @@ afterEach(async () => {
 	await fs.rm(tmp, { recursive: true, force: true });
 });
 
-// 用户裁定(2026-10-22):collab 启动族测试暂跳过——runtimeOwnership 会话宿主
-// claim 的同进程 host/guest 双持行为在在途改造中未定稿,/join 族 10 例确定性
-// 失败;恢复时间随 collab 所有权语义定稿后另行排期,不阻塞 fulltest。
-describe.skip("interactive collaboration startup", () => {
+describe("interactive collaboration startup", () => {
 	let activeSettings: Settings;
 	let testSession: TestSessionContext;
 	let mode: InteractiveMode | undefined;
@@ -419,7 +416,9 @@ describe.skip("interactive collaboration startup", () => {
 		const write = new CfgProtocolHandler().write(parseInternalUrl("cfg://advisor/enabled"), "true", { session });
 		const { request } = await asked.promise;
 		expect(request.title).toContain("advisor.enabled");
-		guest.send({ t: "ui-response", reqId: request.reqId, value: "Allow once" });
+		if (request.kind !== "select") throw new Error(`expected select, got ${request.kind}`);
+		const choice = request.options[request.initialIndex ?? 0];
+		guest.send({ t: "ui-response", reqId: request.reqId, value: typeof choice === "string" ? choice : choice?.label });
 
 		expect((await write).details?.cfg?.outcome).toBe("applied");
 		expect(cfgAdvisorEnabled.get(settings)).toBe(true);
@@ -485,9 +484,6 @@ describe.skip("interactive collaboration startup", () => {
 						return {
 							session: testSession.session,
 							setToolUIContext: () => {},
-							getToolContext: () => {
-								throw new Error("Native tool context is unavailable in this fixture");
-							},
 							extensionsResult: options.preloadedExtensions,
 							eventBus: options.eventBus,
 						};
@@ -829,9 +825,6 @@ describe.skip("interactive collaboration startup", () => {
 							return {
 								session: testSession.session,
 								setToolUIContext: () => {},
-								getToolContext: () => {
-									throw new Error("Native tool context is unavailable in this fixture");
-								},
 								extensionsResult: options.preloadedExtensions,
 								eventBus: options.eventBus,
 							};

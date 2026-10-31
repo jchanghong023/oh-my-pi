@@ -197,10 +197,6 @@ export async function executeBuiltinSlashCommand(
 			reloadPlugins: () => reloadTuiPluginState(ctx),
 		};
 		const result = await command.handle(parsed, adapted);
-		if (ctx.collabGuest?.readOnly && result && typeof result === "object" && "prompt" in result) {
-			ctx.showStatus("This collab link is read-only — prompting is disabled");
-			return true;
-		}
 		clearSubmittedText(runtime);
 		if (result && typeof result === "object" && "prompt" in result) return result.prompt;
 		return true;

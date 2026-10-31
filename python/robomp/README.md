@@ -184,11 +184,12 @@ bun run test:py                         # complete ordinary SDK and robomp suite
 bun run robomp:test:integration         # explicit full integration smoke test
 ```
 
-Every ordinary run executes both complete suites, including inside `fulltest`.
-There is no changed-test selection or reuse of prior test results; the manual CI
-workflow builds and packages without running tests. The integration test is never
-enabled by the ordinary runner; it spawns a real `omp --mode rpc` against an
-`httpx.MockTransport` GitHub and a local bare repo, so it needs `omp` on `PATH`.
+`bun run test:py` runs both ordinary suites on supported platforms. Python suites
+are excluded from default `bun run fulltest`; `bun run fulltest --full` includes the
+current platform's supported Python suites. The manual CI workflow builds and
+packages without running tests. The integration test is never enabled by the
+ordinary runner; it spawns a real `omp --mode rpc` against an `httpx.MockTransport`
+GitHub and a local bare repo, so it needs `omp` on `PATH`.
 
 ## Security posture
 

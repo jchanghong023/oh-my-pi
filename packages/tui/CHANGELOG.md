@@ -10,7 +10,6 @@
 
 ### Changed
 
-- ANSI Bash output cards omit the exit-code footer while retaining failure indicators and command results.
 - Compact tool-count summaries stay directly above the latest tool previews rather than above earlier failure output.
 - Compact mode hides ordinary tool invocation errors until expanded while retaining execution failures and actionable feedback.
 - Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.
@@ -34,6 +33,7 @@
 
 ### Fixed
 
+- Restore Bash exit codes in expanded and detailed ANSI output while keeping collapsed compact errors concise.
 - Show the tail of failed background Bash output and available artifact references in wait previews instead of misleading truncated beginnings.
 - Keep the beginning of long streaming tables reachable with PageUp/PageDown or captured mouse-wheel scrolling; Escape returns to the live tail without cancelling generation, and completed content enters history once.
 - Compact transcript replay hides historical tool errors while keeping live failure feedback and detailed history available.

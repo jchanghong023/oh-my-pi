@@ -81,6 +81,65 @@ describe("role thinking helper propagation", () => {
 		});
 	});
 
+	it.each(["missing key", "error", "throw", "empty", "aborted"] as const)(
+		"continues to another commit candidate after CodeAgent %s",
+		async failure => {
+			const fallback = getModelOrThrow("claude-sonnet-4-5");
+			const codeagent: Model<Api> = { ...fallback, provider: "codeagent", id: "commit-test" };
+			const settings = createSettings({ smol: "codeagent/commit-test" });
+			const registry = {
+				...createRegistry(fallback),
+				getAvailable: () => [codeagent, fallback],
+				getApiKey: async (model: Model<Api>) =>
+					model.provider === "codeagent" && failure === "missing key" ? undefined : "test-key",
+			};
+			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
+				if (model.provider === "codeagent") {
+					if (failure === "throw") throw new Error("request failed");
+					if (failure === "error") return { stopReason: "error", errorMessage: "request failed" } as never;
+					return { stopReason: failure === "aborted" ? "aborted" : "end_turn", content: [] } as never;
+				}
+				return { stopReason: "end_turn", content: [{ type: "text", text: "fallback message" }] } as never;
+			});
+
+			const message = await generateCommitMessage(
+				"diff --git a/x b/x\n+change\n",
+				registry as never,
+				settings,
+				import.meta.dir,
+			);
+
+			expect(message).toBe("fallback message");
+			expect(complete.mock.calls.map(call => call[0].provider)).toEqual(
+				failure === "missing key" ? ["anthropic"] : ["codeagent", "anthropic"],
+			);
+		},
+	);
+
+	it("retries a transient CodeAgent commit failure before moving to another candidate", async () => {
+		const fallback = getModelOrThrow("claude-sonnet-4-5");
+		const codeagent: Model<Api> = { ...fallback, provider: "codeagent", id: "commit-test" };
+		const registry = { ...createRegistry(fallback), getAvailable: () => [codeagent, fallback] };
+		const settings = createSettings({ smol: "codeagent/commit-test" });
+		const complete = vi
+			.spyOn(ai, "completeSimple")
+			.mockResolvedValueOnce({ stopReason: "error", errorStatus: 503, errorMessage: "service unavailable" } as never)
+			.mockResolvedValueOnce({
+				stopReason: "end_turn",
+				content: [{ type: "text", text: "retried message" }],
+			} as never);
+
+		const message = await generateCommitMessage(
+			"diff --git a/x b/x\n+change\n",
+			registry as never,
+			settings,
+			import.meta.dir,
+		);
+
+		expect(message).toBe("retried message");
+		expect(complete.mock.calls.map(call => call[0].provider)).toEqual(["codeagent", "codeagent"]);
+	});
+
 	it("disables reasoning for title generation even when smol role has thinking", async () => {
 		const model = getModelOrThrow("claude-sonnet-4-5");
 		const settings = createSettings({

@@ -22,11 +22,12 @@ provides:
 ## Tests in this repository
 
 From the repository root, `bun run robomp:install` installs the SDK and robomp
-development dependencies. `bun run test:py` and `bun run fulltest` run both
-projects' complete ordinary pytest suites on every invocation, without testmon
-or changed-test selection. The manual CI workflow builds and packages without
-running tests. Robomp integration tests remain a separate opt-in
-`bun run robomp:test:integration` and are not enabled by ordinary test runs.
+development dependencies. `bun run test:py` runs their ordinary pytest suites
+on supported platforms. Python suites are excluded from default `bun run fulltest`;
+`bun run fulltest --full` includes the current platform's supported Python suites.
+The manual CI workflow builds and packages without running tests. Robomp integration
+tests remain a separate opt-in `bun run robomp:test:integration` and are not enabled
+by ordinary test runs.
 
 ## Generated from the wire schema
 

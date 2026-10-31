@@ -231,11 +231,11 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("[raw output: artifact://13]");
 		expect(rendered).not.toContain("artifact://13");
 	});
-	it("hides the footer exit code and strips the textual exit notice for failed commands", async () => {
+	it("shows the footer exit code and strips the textual exit notice for failed commands", async () => {
 		const component = bashToolRenderer.renderResult(
 			{
-				content: [{ type: "text", text: "boom\n\nWall time: 0.02 seconds\n\nCommand exited with code 1" }],
-				details: { timeoutSeconds: 300, wallTimeMs: 20, exitCode: 1 },
+				content: [{ type: "text", text: "boom\n\nWall time: 0.02 seconds\n\nCommand exited with code 23" }],
+				details: { timeoutSeconds: 300, wallTimeMs: 20, exitCode: 23 },
 				isError: true,
 			},
 			{ expanded: false, isPartial: false },
@@ -243,12 +243,12 @@ describe("bashToolRenderer", () => {
 			{ command: "false" },
 		);
 		const rendered = sanitizeText(component.render(120).join("\n"));
-		// Other command statistics remain visible without the exit-code footer.
+		// Command statistics include the exit code.
 		expect(rendered).toContain("Wall: 0.02s");
 		expect(rendered).toContain("Timeout: 300s");
-		expect(rendered).not.toContain("Exit: 1");
+		expect(rendered).toContain("Exit: 23");
 		// The generated notices are not echoed in the output region.
-		expect(rendered).not.toContain("Command exited with code 1");
+		expect(rendered).not.toContain("Command exited with code 23");
 		expect(rendered).not.toContain("Wall time: 0.02 seconds");
 		// The command's own output still shows.
 		expect(rendered).toContain("boom");
@@ -259,7 +259,7 @@ describe("bashToolRenderer", () => {
 			'diagnostic one\ndiagnostic two\nerror: script "test" exited with code 1\nerror: script "check" exited with code 1';
 		const result = {
 			content: [{ type: "text", text: output }],
-			details: { exitCode: 1, wallTimeMs: 500, timeoutSeconds: 300 },
+			details: { exitCode: 23, wallTimeMs: 500, timeoutSeconds: 300 },
 			isError: true,
 		};
 		const args = { command: "bun run check" };
@@ -273,7 +273,7 @@ describe("bashToolRenderer", () => {
 		expect(compact).toContain("diagnostic two");
 		expect(compact).not.toContain("exited with code");
 		expect(compact).not.toContain("Failed");
-		expect(compact).not.toContain("Exit: 1");
+		expect(compact).not.toContain("Exit: 23");
 		expect(compact).not.toContain("Timeout:");
 		expect(compact).not.toContain("Wall:");
 		const expanded = sanitizeText(
@@ -284,6 +284,7 @@ describe("bashToolRenderer", () => {
 		);
 		expect(expanded).toContain('error: script "test" exited with code 1');
 		expect(expanded).toContain("Timeout: 300s");
+		expect(expanded).toContain("Exit: 23");
 	});
 
 	it("renders a timed-out command with a warning border instead of an error border", async () => {

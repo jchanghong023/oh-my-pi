@@ -44,7 +44,7 @@ import {
 
 import { cfgUpdateChannel } from "../modes/settings";
 
-const UPDATE_REPOSITORY = process.env.PI_UPDATE_REPOSITORY;
+const UPDATE_REPOSITORY = Bun.env.PI_UPDATE_REPOSITORY ?? process.env.PI_UPDATE_REPOSITORY ?? "jchanghong023/oh-my-pi";
 const GITHUB_API = "https://api.github.com";
 const REPO = UPDATE_REPOSITORY ?? "can1357/oh-my-pi";
 export function isForkUpdateRepository(): boolean {

@@ -336,6 +336,7 @@ function bashStatsParts(
 	details: BashToolDetails | undefined,
 	contextTimeout: number | undefined,
 	artifactId: string | undefined,
+	isError: boolean,
 	compact: boolean,
 ): string[] {
 	const timeoutDisabled = details?.timeoutDisabled === true || contextTimeout === 0;
@@ -367,6 +368,9 @@ function bashStatsParts(
 	}
 	if (artifactId) {
 		statsParts.push(`Artifact: ${artifactId}`);
+	}
+	if (!compact && isError && typeof details?.exitCode === "number") {
+		statsParts.push(`Exit: ${details.exitCode}`);
 	}
 	return statsParts;
 }
@@ -597,6 +601,7 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						details,
 						renderContext?.timeout,
 						rawOutputArtifact.artifactId,
+						isError,
 						compactError,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {

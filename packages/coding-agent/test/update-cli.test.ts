@@ -89,18 +89,6 @@ function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
 	}
 }
 
-/** Async {@link withPlatform}: keeps the override until the returned promise settles. */
-async function withPlatformAsync<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
-	const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-	if (!platformDescriptor) throw new Error("process.platform descriptor missing");
-	Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
-	try {
-		return await fn();
-	} finally {
-		Object.defineProperty(process, "platform", platformDescriptor);
-	}
-}
-
 /** A checked build service answer offering `content` as `version`, without a patch unless overridden. */
 function buildAnswer(version: string, content: string | Uint8Array, overrides: Partial<BuildAnswer> = {}): BuildAnswer {
 	return {
@@ -136,6 +124,71 @@ const TEST_CONFIG: CliConfig = {
 	version: "0.0.0-test",
 	commands: new Map(),
 };
+
+describe("bundled update repository", () => {
+	it("prefers the runtime repository over the embedded build default", async () => {
+		const dir = await makeTempDir();
+		const updaterPath = path.resolve(import.meta.dir, "../src/cli/update-cli.ts");
+		const result = await Bun.build({
+			entrypoints: [updaterPath],
+			outdir: dir,
+			target: "bun",
+			define: { "process.env.PI_UPDATE_REPOSITORY": JSON.stringify("jchanghong023/oh-my-pi") },
+			packages: "external",
+			plugins: [
+				{
+					name: "external-updater-dependencies",
+					setup(build) {
+						build.onResolve({ filter: /.*/ }, args => {
+							if (args.path === updaterPath || args.path === "bun" || args.path.startsWith("node:")) return;
+							return { path: Bun.resolveSync(args.path, args.resolveDir), external: true };
+						});
+					},
+				},
+			],
+		});
+		if (!result.success) throw new AggregateError(result.logs, "Updater bundle failed");
+		const bundle = result.outputs.find(output => output.kind === "entry-point");
+		if (!bundle) throw new Error("Updater bundle entry missing");
+		const tag = "v1.2.3+fork.1";
+		const binaryName = "omp-windows-x64.exe";
+		const script = `
+			import { resolveReleaseBinaryAsset } from ${JSON.stringify(bundle.path)};
+			const url = "https://github.com/" + process.env.EXPECTED_UPDATE_REPOSITORY
+				+ "/releases/download/${tag}/${binaryName}";
+			const asset = resolveReleaseBinaryAsset({
+				tag_name: ${JSON.stringify(tag)},
+				draft: false,
+				prerelease: false,
+				assets: [{
+					name: ${JSON.stringify(binaryName)},
+					state: "uploaded",
+					size: 1,
+					digest: "sha256:" + "0".repeat(64),
+					browser_download_url: url,
+				}],
+			}, ${JSON.stringify(tag)}, ${JSON.stringify(binaryName)});
+			console.log(asset.url);
+		`;
+		for (const repository of [undefined, "other/repo"]) {
+			const expectedRepository = repository ?? "jchanghong023/oh-my-pi";
+			const env: Record<string, string | undefined> = {
+				...process.env,
+				EXPECTED_UPDATE_REPOSITORY: expectedRepository,
+			};
+			if (repository === undefined) delete env.PI_UPDATE_REPOSITORY;
+			else env.PI_UPDATE_REPOSITORY = repository;
+			const child = Bun.spawn([process.execPath, "-e", script], { env, stdout: "pipe", stderr: "pipe" });
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+			expect(stdout.trim()).toBe(`https://github.com/${expectedRepository}/releases/download/${tag}/${binaryName}`);
+		}
+	});
+});
 
 describe("update command plugin dispatch", () => {
 	it("routes -l to plugin upgrade instead of the app updater", async () => {
@@ -571,13 +624,17 @@ describe("update-cli package manager commands", () => {
 	});
 
 	it("targets the mise GitHub backend and overrides release-age settings for attended updates", () => {
-		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump", "--before", "0s"]);
-		expect(buildMiseUpgradeArgs(false)).toEqual(["upgrade", "github:can1357/oh-my-pi", "--bump"]);
+		expect(buildMiseUpgradeArgs()).toEqual(["upgrade", "github:jchanghong023/oh-my-pi", "--bump", "--before", "0s"]);
+		expect(buildMiseUpgradeArgs(false)).toEqual(["upgrade", "github:jchanghong023/oh-my-pi", "--bump"]);
 		expect(buildMiseUpdateEnv({ PATH: "/bin", MISE_MINIMUM_RELEASE_AGE: "24h" })).toEqual({
 			PATH: "/bin",
 			MISE_MINIMUM_RELEASE_AGE: "0s",
 		});
-		expect(buildMiseForceInstallArgs("15.10.5")).toEqual(["install", "--force", "github:can1357/oh-my-pi@15.10.5"]);
+		expect(buildMiseForceInstallArgs("15.10.5")).toEqual([
+			"install",
+			"--force",
+			"github:jchanghong023/oh-my-pi@15.10.5",
+		]);
 	});
 
 	it.skipIf(!miseBinary)("overrides per-tool release age during actual mise upgrade resolution", async () => {
@@ -601,7 +658,7 @@ describe("update-cli package manager commands", () => {
 			await Bun.write(
 				path.join(root, "mise.toml"),
 				`[tools]
-"github:can1357/oh-my-pi" = { version = "1", minimum_release_age = "999y", api_url = "${server.url}" }
+"github:jchanghong023/oh-my-pi" = { version = "1", minimum_release_age = "999y", api_url = "${server.url}" }
 `,
 			);
 			const env = {
@@ -632,11 +689,11 @@ describe("update-cli package manager commands", () => {
 				return stdout + stderr;
 			};
 
-			const blocked = await run(["upgrade", "github:can1357/oh-my-pi", "--bump", "--dry-run"]);
-			expect(blocked).not.toContain("Would install github:can1357/oh-my-pi@2.0.0");
+			const blocked = await run(["upgrade", "github:jchanghong023/oh-my-pi", "--bump", "--dry-run"]);
+			expect(blocked).not.toContain("Would install github:jchanghong023/oh-my-pi@2.0.0");
 
 			const allowed = await run([...buildMiseUpgradeArgs(), "--dry-run"]);
-			expect(allowed).toContain("Would install github:can1357/oh-my-pi@2.0.0");
+			expect(allowed).toContain("Would install github:jchanghong023/oh-my-pi@2.0.0");
 		} finally {
 			server.stop(true);
 		}
@@ -892,25 +949,10 @@ describe("migrateRenamedInstall transaction", () => {
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		const { steps, calls } = scriptedSteps({ install: [0, 0], verify: [false, false] });
 
-		await withPlatformAsync("linux", async () => {
-			await expect(migrateRenamedInstall(release, steps)).rejects.toThrow("curl -fsSL https://omp.sh/install");
-		});
+		await expect(migrateRenamedInstall(release, steps)).rejects.toThrow(
+			"reinstall with: https://github.com/jchanghong023/oh-my-pi/releases/latest",
+		);
 		expect(calls).toEqual(["install", "removeOld", "verify", "install", "verify"]);
-	});
-
-	it("uses the platform-aware PowerShell reinstall hint on Windows", async () => {
-		vi.spyOn(console, "log").mockImplementation(() => {});
-		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-		if (!platformDescriptor) throw new Error("process.platform descriptor missing");
-		Object.defineProperty(process, "platform", { ...platformDescriptor, value: "win32" });
-		try {
-			const { steps } = scriptedSteps({ install: [0, 0], verify: [false, false] });
-			const promise = migrateRenamedInstall(release, steps);
-			await expect(promise).rejects.toThrow("irm https://omp.sh/install.ps1");
-			await expect(promise).rejects.not.toThrow("| sh");
-		} finally {
-			Object.defineProperty(process, "platform", platformDescriptor);
-		}
 	});
 });
 
@@ -1089,7 +1131,7 @@ describe("update-cli bun cache pruning", () => {
 describe("update-cli release binary integrity", () => {
 	const tag = "v17.1.2";
 	const binaryName = "omp-linux-x64";
-	const url = `https://github.com/can1357/oh-my-pi/releases/download/${tag}/${binaryName}`;
+	const url = `https://github.com/jchanghong023/oh-my-pi/releases/download/${tag}/${binaryName}`;
 	const content = "verified binary";
 	const digest = `sha256:${Bun.SHA256.hash(content, "hex")}`;
 
@@ -1134,7 +1176,7 @@ describe("update-cli release binary integrity", () => {
 			),
 		).toEqual({
 			version: "18.0.9+fork.137",
-			url: `https://github.com/can1357/oh-my-pi/releases/download/${forkTag}/${binaryName}`,
+			url: `https://github.com/jchanghong023/oh-my-pi/releases/download/${forkTag}/${binaryName}`,
 			size: Buffer.byteLength(content),
 			digest,
 		});
@@ -1396,7 +1438,7 @@ describe("update-cli release binary integrity", () => {
 					state: "uploaded",
 					size: Buffer.byteLength(body),
 					digest: `sha256:${Bun.SHA256.hash(body, "hex")}`,
-					browser_download_url: `https://github.com/can1357/oh-my-pi/releases/download/v${version}/${binaryName}`,
+					browser_download_url: `https://github.com/jchanghong023/oh-my-pi/releases/download/v${version}/${binaryName}`,
 				},
 			],
 			...overrides,

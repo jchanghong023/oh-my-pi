@@ -111,9 +111,11 @@
 - Continue independent tests after failures and retain complete failure reports instead of stopping at the first failing case or chunk.
 - Limit Bun test workers to the smaller of 15 and the available CPU count, sharing the budget across chunks and file workers instead of fixing fulltest to one chunk.
 - Show only failing cases and error diagnostics in the three verification gates, hiding successful cases, chunks and command output while retaining the final status, timings and complete test reports.
+- Restore upstream Collab behavior, removing fork-specific guest command and lifecycle overrides.
 
 ### Fixed
 
+- Honor runtime `PI_UPDATE_REPOSITORY` overrides in compiled binaries while defaulting to this fork's releases.
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
 - Restore CodeAgent commit-message and session-title retries and fallbacks, and normal speculative execution for recovered requests.
 - Report unapplied LSP code actions as failures instead of successful applications.

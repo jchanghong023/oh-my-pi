@@ -31,10 +31,8 @@ export interface AvailableCommandsSession {
 
 export interface AvailableCommandsOptions {
 	/**
-	 * Advertise builtins that only implement a TUI handler. ACP omits them
-	 * because nothing there can run them; the collab host advertises exactly
-	 * what its guest dispatcher accepts, and that dispatcher falls back to the
-	 * TUI handler, which runs on the host screen.
+	 * Advertise builtins that only implement a TUI handler; ACP omits them
+	 * because nothing there can run them.
 	 */
 	includeTuiOnlyBuiltins?: boolean;
 	/** Include RPC host adapters without changing the ACP command surface. */

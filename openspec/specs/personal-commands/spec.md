@@ -94,48 +94,26 @@ OMP MUST 提供魔法关键词对应的内置命令，并允许命令后直接�
 - **THEN** 以下具体约束适用：
 
 - fork 为三个关键词新增对应的内置命令 `/ultrathink`、`/orchestrate`、`/workflowz`，方便输入，并允许命令后直接携带任务文本。
-- collab guest 的本地命令白名单额外放行 fork 新增的 `ultrathink`、`orchestrate`、`workflowz` 与 `display`；白名单只决定 guest 可本地执行哪些命令，不扩大主机端权限，也不替代主机对参数的校验。
-- guest 只镜像宿主的运行事实：进入、结束与逐条消息/工具事件按 state-only 应用，`isStreaming` 等状态取自宿主快照；离开或恢复本地会话时以一次 state-only `agent_end` 结束镜像，不重放模型回合、不改写历史条目、不新增消息系统。`message_end` 之后重置本地流式去重标记，避免同一条助手消息计两次。
 
 #### Scenario: 魔法关键词的内置命令的可观察行为
 
 - **WHEN** 用户调用 `/ultrathink`、`/orchestrate` 或 `/workflowz` 并携带任务文本
 - **THEN** 对应命令接受任务文本并触发相应关键词行为
 
-### Requirement: collab 只读链接的命令拒绝
+### Requirement: 共享命令目录与会话迁移
 
-OMP MUST 在只读 collab 会话中拒绝会产生提示词的命令，并且不得提交或转发内容。
+OMP MUST 让命令目录与相应宿主的派发能力一致，并在共享进程宿主中以会话级方式切换目录。
 
-#### Scenario: collab 只读链接的命令拒绝的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 只读链接上调用远端任务类命令（`remoteTask`）时 MUST 显示 `This collab link is read-only — prompting is disabled`，MUST NOT 提交提示词、MUST NOT 转发给宿主。
-- 命令自身返回待发送提示词时同样 MUST 只显示该提示且 MUST NOT 提交，不得因命令已进入本地执行路径而放行。
-- 拒绝时 MUST 保留用户草稿内容（含图片与图片链接），不静默丢弃或提交。
-- 只读之外的可写 guest 会话中，已放行的远端命令 MUST 连同图片一起转发给宿主执行。
-
-#### Scenario: collab 只读链接的命令拒绝的可观察行为
-
-- **WHEN** 只读 collab 链接上执行远端任务命令或返回提示词的命令
-- **THEN** 显示只读提示且不提交、不转发，草稿保留
-
-### Requirement: collab 命令目录与共享进程会话迁移
-
-OMP MUST 让 guest 命令目录与派发能力一致，并在共享进程宿主中以会话级方式切换目录。
-
-#### Scenario: collab 命令目录与共享进程会话迁移的详细边界
+#### Scenario: 共享命令目录与会话迁移的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
 - 命令目录 MUST 支持 `includeTuiOnlyBuiltins` 与 `includeRpcBuiltins`：省略时 MUST NOT 广告仅 TUI 命令，声明时 MUST 同时广告可用处理器对应的命令。
-- 声明仅 TUI 命令的宿主 MUST 将其派发回落到宿主端 TUI 处理器执行，作为 guest 可运行能力的唯一依据，不扩大主机权限。
 - 共享进程宿主的会话迁移 MUST 通过 `rebindCwd` 建立会话级目录绑定；MUST NOT 修改进程级项目目录，以免影响同进程中的兄弟会话。
 - `/wt` 解析出的目标路径与当前会话目录相同时 MUST 跳过重定位，并且 MUST NOT 清理源工作树或其中的未提交内容。
 
-#### Scenario: collab 命令目录与共享进程会话迁移的可观察行为
+#### Scenario: 共享命令目录与会话迁移的可观察行为
 
 - **WHEN** 宿主广告命令，或在共享进程中执行 `/move`、`/wt`
 - **THEN** 目录与派发能力一致，目录切换只作用于当前会话，同路径目标不触发清理
