@@ -957,8 +957,8 @@ async fn tree_walks_trees_deeper_than_the_thread_stack() {
 	std::fs::write(deepest.join("leaf.txt"), "ok").expect("leaf");
 	let leaf = format!("{}leaf.txt", "d/".repeat(DEPTH));
 	for contents_first in [false, true] {
-		// TempDir is canonical, including the verbatim prefix needed for long
-		// Windows paths; adding another prefix would make the root invalid.
+		// Deep Windows paths exceed MAX_PATH without the verbatim prefix, which
+		// the canonical temp dir already carries there.
 		let root = tmp.path().to_path_buf();
 		let seen = on_small_stack(async move {
 			let opts = TreeOptions { contents_first, ..Default::default() };

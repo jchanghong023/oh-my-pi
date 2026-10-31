@@ -291,12 +291,7 @@ OMP MUST 对本地二进制构建产生的 ZCode 产物执行与已批准产物�
 - **WHEN** 设置 `ZCODE_ARTIFACT_ROOT` 且提供有效 `RELEASE_VERSION`
 - **THEN** 生成的 ZCode 产物版本 MUST 使用该值，并继续满足源码、目标格式、目录和清理的既有产物契约；未启用产物输出的普通本地构建保持原有版本行为。
 
-### Requirement: Windows 文件搜索与统计端口恢复
-
-#### Scenario: 文件搜索读取路径与元数据
-
-- **WHEN** Windows 文件搜索使用含 `.` 分量的路径或匹配指向文件的链接
-- **THEN** MUST 正确解析路径，并在需要目标大小及修改时间时读取目标元数据；目录遍历的链接边界保持不变。
+### Requirement: Windows 统计端口恢复
 
 #### Scenario: 已占用的统计面板端口
 

@@ -12,6 +12,7 @@ import { resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { approvalGrantKey, SessionApprovals } from "@oh-my-pi/pi-coding-agent/tools/approval-cache";
 import { approvalTargetKey } from "@oh-my-pi/pi-coding-agent/tools/approval-targets";
 import { ReadTool } from "@oh-my-pi/pi-coding-agent/tools/read";
+import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 function textOf(result: { content: ReadonlyArray<{ type: string; text?: string }> }): string {
 	return result.content.flatMap(block => (block.type === "text" ? [block.text ?? ""] : [])).join("\n");
@@ -34,7 +35,7 @@ describe("artifact reads through session approval", () => {
 		session = undefined;
 		sessionManager = undefined;
 		authStorage = undefined;
-		await fs.rm(root, { recursive: true, force: true });
+		await removeWithRetries(root);
 	});
 
 	it.each([

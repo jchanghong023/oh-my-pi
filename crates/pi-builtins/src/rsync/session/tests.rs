@@ -65,6 +65,12 @@ fn mtime(p: &Path) -> std::time::SystemTime {
 	fs::metadata(p).unwrap().modified().unwrap()
 }
 
+/// The physical path of `dir`, resolved like `realpath`: `fs::canonicalize`
+/// spells Windows paths `\\?\…`, where `/` is not a separator.
+fn physical(dir: &Path) -> PathBuf {
+	pi_vfs::BlockingFs::native().canonicalize_with(dir, &pi_vfs::CanonicalizeOptions::default()).unwrap()
+}
+
 #[test]
 fn version_and_help_go_to_stdout() {
 	let dir = tempfile::tempdir().unwrap();
@@ -118,7 +124,7 @@ fn too_old_protocol_is_a_mismatch() {
 #[test]
 fn local_server_setup_failure_is_reported_once() {
 	let tmp = tempfile::tempdir().unwrap();
-	let dir = fs::canonicalize(tmp.path()).unwrap();
+	let dir = physical(tmp.path());
 	fs::create_dir_all(dir.join("src")).unwrap();
 	fs::write(dir.join("src/a"), b"a\n").unwrap();
 	// A file list far larger than the in-process pipe, so the client is still
@@ -205,7 +211,7 @@ fn confine_root_leaves_roots_and_list_file_alone() {
 	let tmp = tempfile::tempdir().unwrap();
 	// Physical paths: the confine check (like the reference's) refuses a path
 	// that only reaches the root through an alias such as macOS's /var symlink.
-	let dir = fs::canonicalize(tmp.path()).unwrap();
+	let dir = physical(tmp.path());
 	let root = dir.join("X/root");
 	fs::create_dir_all(&root).unwrap();
 	fs::write(root.join("keep"), b"k\n").unwrap();

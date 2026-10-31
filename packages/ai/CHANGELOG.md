@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Restore upstream provider error-code extraction and reporting.
+
+### Fixed
+
+- Guide agents to correct and retry tool calls rejected by argument validation.
+- Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
+- Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+- Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
+- Fixed Cursor models losing omp's system prompt (context files, skills, rules) from the second turn on, or whenever earlier messages precede the active one ([#17059](https://github.com/can1357/oh-my-pi/issues/17059), [#17325](https://github.com/can1357/oh-my-pi/pull/17325) by [@robfeldmann](https://github.com/robfeldmann))
+
+## [18.14.1] - 2026-10-31
+
 ### Added
 
 - Added the `codexAccessPrograms` stream option and `configureCodexAccessPrograms()` process default to turn off the automatic Daybreak Blue `access_programs` request on Codex ([#17508](https://github.com/can1357/oh-my-pi/pull/17508) by [@H4vC](https://github.com/H4vC))
@@ -9,19 +23,10 @@
 
 ### Changed
 
-- Restore upstream provider error-code extraction and reporting.
 - Cursor runs served through `omp auth-gateway` are limited to the client's own tools, all advertised as MCP; Cursor's built-in tools (file, shell, edit, todo, web fetch, SCM) are no longer offered on that path ([#17382](https://github.com/can1357/oh-my-pi/pull/17382) by [@eggpeat](https://github.com/eggpeat))
 
 ### Fixed
 
-- Guide agents to correct and retry tool calls rejected by argument validation.
-- Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
-
-### Fixed
-
-- Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
-- Fixed requests that joined an OAuth refresh started by an already-cancelled request failing with that request's cancellation instead of getting the refreshed credential ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))
-- Fixed Cursor models losing omp's system prompt (context files, skills, rules) from the second turn on, or whenever earlier messages precede the active one ([#17059](https://github.com/can1357/oh-my-pi/issues/17059), [#17325](https://github.com/can1357/oh-my-pi/pull/17325) by [@robfeldmann](https://github.com/robfeldmann))
 - Fixed native judgment requests (TypeSafe, OpenRouter Decisions, OpenAI Decisions, Workers AI) sending credentials in their state unredacted while credential redaction was on ([#17443](https://github.com/can1357/oh-my-pi/pull/17443))
 - Fixed every new Codex session, including each subagent, losing a response and retrying when the native turn lane refuses live steering; once refused, later sessions on the same account, endpoint, and model queue follow-ups for four hours ([#14158](https://github.com/can1357/oh-my-pi/issues/14158), [#17438](https://github.com/can1357/oh-my-pi/pull/17438) by [@wolfiesch](https://github.com/wolfiesch))
 - Fixed Cursor models served through `omp auth-gateway` being told their file and shell tools were unavailable while the client ran the calls anyway, in Cursor's own argument shape (edits failed validation); each call now reaches the client as one of its own tools and the turn stops with `toolUse` until the result comes back ([#17382](https://github.com/can1357/oh-my-pi/pull/17382) by [@eggpeat](https://github.com/eggpeat))
@@ -2348,27 +2353,4 @@
 - Enabled freeform tool patch support for Azure OpenAI and Codex models.
 - Fixed an issue where the `/usage show` command returned "No usage data available" when using a custom proxy base URL for Codex.
 
-## [16.2.2] - 2026-06-27
-
-### Added
-
-- Added a comprehensive, public-facing error module exported via the "./error" path, featuring structured error classification, provider-specific HTTP error classes (e.g., Anthropic, OpenAI, Gemini), OAuth/Auth-specific errors, rate-limit utilities, and retryability predicates.
-
-### Changed
-
-- Updated OpenAI Codex defaults to increase default text verbosity to medium, enable detailed reasoning summaries by default, and include all turns in the reasoning context by default.
-- Updated the OpenAI Codex WebSocket transport to resolve its configuration (via PI_CODEX_WEBSOCKET_* environment variables) once at startup rather than re-parsing on every request.
-- Enhanced cross-model reasoning recovery and preservation to render demoted reasoning in the target model's canonical inline thinking dialect (such as Gemini's thinking fence or standard think tags) to prevent leaking inert context or control tokens into history.
-- Broadened the leaked-thinking stream healer to recover reasoning emitted in any dialect's canonical idiom (including Gemini, Gemma, Harmony, and scratchpads) and route them to thinking events instead of raw markup.
-- Implemented automatic retry logic for detected thinking-loop stalls to improve response reliability.
-- Hardened stateful delta chaining to ignore transient streaming bookkeeping symbols during structural equality checks, preventing unnecessary full-transcript replays.
-
-### Fixed
-
-- Fixed preservation of OpenAI Responses assistant message phase values across auth-gateway parsing, streaming, and history replay, ensuring GPT-5.4/GPT-5.5 intermediate updates and final answers retain their original phase labels.
-
-### Removed
-
-- Removed Pi dialect support and related serialization/parsing logic.
-
-Older entries are archived in [packages/ai/CHANGELOG.md@ef4bc35e85d8](https://github.com/can1357/oh-my-pi/blob/ef4bc35e85d88932d92b01ae7121c9f47208cf40/packages/ai/CHANGELOG.md).
+Older entries are archived in [packages/ai/CHANGELOG.md@cef4a452836c](https://github.com/can1357/oh-my-pi/blob/cef4a452836c7a8d547dd14470c34c9ed2dbb5f8/packages/ai/CHANGELOG.md).

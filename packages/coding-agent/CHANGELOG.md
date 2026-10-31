@@ -37,10 +37,9 @@
 ### Changed
 
 - Fix JTD output schemas with open referenced objects and escaped definition names.
-- Fix Windows file searches through links and paths containing dot components.
 - Keep fulltest workloads within a shared CPU budget so startup-sensitive checks can complete.
 
-- Update to upstream 18.14.0 while retaining fork offline models and orchestration.
+- Update to upstream 18.14.1 while retaining fork offline models and orchestration.
 - Restore upstream HTML export resource loading, extension-tool schema validation, service log failure propagation, Web Search failure receipts, and JTD conversion.
 - Save the clean, compact, and detailed tiers as `display.mode`; remove independent compact/hide switches while retaining image-setting precedence.
 - Require `?` to request `xd://` device documentation; empty content and `help` follow the device's normal input rules.
@@ -207,6 +206,8 @@
 - Let Windows compiled `--smoke-test` wait for the daemon broker to exit before removing its loaded native cache.
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.
 - Avoid synchronous per-skill existence probes and duplicate shared/custom directory scans on Linux offline launches.
+
+## [18.14.1] - 2026-10-31
 
 ### Added
 

@@ -78,6 +78,8 @@
 - Composer paths reclaim available width when other status segments overflow instead of staying shortened beside a long context gauge.
 - Kept the Rounded Box default consistent during uncached startup, shape previews, and setup selection.
 
+## [18.14.1] - 2026-10-31
+
 ### Added
 
 - Added file-backed task previews and optional `taskFile` and `taskFileSha256` provenance on `AgentProgress` and `SingleResult` ([#17133](https://github.com/can1357/oh-my-pi/pull/17133) by [@iliaal](https://github.com/iliaal)).

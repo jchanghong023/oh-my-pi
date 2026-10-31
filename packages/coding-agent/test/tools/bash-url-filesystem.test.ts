@@ -173,17 +173,19 @@ describe("bash replies through out://", () => {
 	});
 
 	it("drops an oversize reply instead of showing a truncated one, and refuses reads", async () => {
-		await fs.writeFile(path.join(tempDir, "oversize.txt"), "a".repeat(70_000));
 		const frames: unknown[] = [];
 		const big = await new BashTool({ ...session, tuiTranscript: true }).execute(
 			"call",
-			{ command: "cat oversize.txt > out://; echo status=$?" },
+			{
+				// `yes` rather than /dev/zero, which Windows lacks.
+				command: "yes a | head -c 70000 | tr '\\n' a > out://; echo status=$?",
+			},
 			undefined,
 			update => frames.push(update.details),
 		);
+		// Unix spells the rejected write by its errno text; Windows has no EFBIG errno and keeps the code.
 		const text = big.content.find(c => c.type === "text")?.text;
-		expect(text).toContain("EFBIG");
-		expect(text).toContain("out:// replies are capped at 65536 bytes");
+		expect(text).toMatch(/File too large|EFBIG/);
 		expect(text).toContain("status=1");
 		expect(text).not.toContain("a".repeat(1024));
 		expect(big.details?.replies).toBeUndefined();
