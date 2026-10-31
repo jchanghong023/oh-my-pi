@@ -522,7 +522,8 @@ export class CollabGuestLink {
 		};
 		const lines = [header, ...pending.entries].map(entry => JSON.stringify(entry)).join("\n");
 		const storage = new FileSessionStorage();
-		this.#replicaLease ??= storage.claimSession(this.#replicaId, replicaPath, this.#ctx.session.sessionManager) ?? undefined;
+		this.#replicaLease ??=
+			storage.claimSession(this.#replicaId, replicaPath, this.#ctx.session.sessionManager) ?? undefined;
 		// Published atomically: `omp gc` reads the replica's header to find its
 		// lease, so a resync must never expose a truncated, headerless file.
 		const tempPath = `${replicaPath}.${mintSessionId()}.tmp`;

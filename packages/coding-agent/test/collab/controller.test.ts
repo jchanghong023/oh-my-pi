@@ -418,7 +418,11 @@ describe("interactive collaboration startup", () => {
 		expect(request.title).toContain("advisor.enabled");
 		if (request.kind !== "select") throw new Error(`expected select, got ${request.kind}`);
 		const choice = request.options[request.initialIndex ?? 0];
-		guest.send({ t: "ui-response", reqId: request.reqId, value: typeof choice === "string" ? choice : choice?.label });
+		guest.send({
+			t: "ui-response",
+			reqId: request.reqId,
+			value: typeof choice === "string" ? choice : choice?.label,
+		});
 
 		expect((await write).details?.cfg?.outcome).toBe("applied");
 		expect(cfgAdvisorEnabled.get(settings)).toBe(true);
@@ -484,6 +488,9 @@ describe("interactive collaboration startup", () => {
 						return {
 							session: testSession.session,
 							setToolUIContext: () => {},
+							getToolContext: () => {
+								throw new Error("Native tool context is unavailable in this fixture");
+							},
 							extensionsResult: options.preloadedExtensions,
 							eventBus: options.eventBus,
 						};
@@ -825,6 +832,9 @@ describe("interactive collaboration startup", () => {
 							return {
 								session: testSession.session,
 								setToolUIContext: () => {},
+								getToolContext: () => {
+									throw new Error("Native tool context is unavailable in this fixture");
+								},
 								extensionsResult: options.preloadedExtensions,
 								eventBus: options.eventBus,
 							};
