@@ -191,7 +191,6 @@ rust_shared_library(
         "//crates/pi-builtins",
         "//crates/pi-diff",
         "//crates/pi-edit",
-        "//crates/pi-walker",
         "//crates/pi-iso",
         "//crates/pi-predict",
         "//crates/pi-shell",
