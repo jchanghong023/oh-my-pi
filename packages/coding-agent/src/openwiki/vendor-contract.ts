@@ -47,6 +47,18 @@ export interface OpenWikiVendor {
 	resolveRepositoryRoot(candidate: string): Promise<string>;
 	resolvePageConcurrency(): number;
 	parseCommand(argv: string[]): Command;
+	previewRepositoryFiles(
+		root: string,
+		mode: "init" | "update",
+	): Promise<{
+		sourcePaths: string[];
+		existingWikiPages: string[];
+		update?: {
+			baselineGitHead?: string;
+			changedPaths?: string[];
+			pageBaselines: { page: string; gitHead?: string; changedPaths?: string[] }[];
+		};
+	}>;
 	runLinkCommand(command: LinkCommand, options?: StorageOptions): Promise<void>;
 	runWorkspaceCommand(command: WorkspaceCommand, options?: StorageOptions): Promise<void>;
 	SearchInput: Schema<Search>;

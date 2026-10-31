@@ -17,6 +17,49 @@ import {
 import { Settings } from "../config/settings";
 import { discoverAuthStorage, initializeOfflineModelCommand, loadCliExtensionProviders } from "../sdk";
 
+export interface OpenWikiModelPreview {
+	/** Origin of the selector, or automatic runtime selection when none is configured. */
+	source: "selector" | "default-role" | "automatic";
+	/** The requested selector or configured default role, not a verified model ID. */
+	selector?: string;
+	/** A concrete model ID, only when it can be resolved without runtime discovery or credentials. */
+	modelId?: string;
+	/** Why the runtime model cannot be determined by this read-only preview. */
+	reason: string;
+}
+
+/**
+ * Preview the model selection without initializing the model registry or credentials.
+ * Runtime discovery, availability and selector aliases can change the actual model,
+ * so even a provider-qualified selector is reported as unverified rather than a model ID.
+ */
+export async function previewOpenWikiModel(selector?: string): Promise<OpenWikiModelPreview> {
+	if (selector !== undefined) {
+		if (!selector.trim()) throw new Error("OpenWiki model selector cannot be empty");
+		return {
+			source: "selector",
+			selector,
+			reason: "Unverified selector; the model is resolved at runtime using the model registry and availability.",
+		};
+	}
+
+	const settings = await Settings.loadReadOnly({ cwd: getProjectDir() });
+	const defaultRole = settings.getModelRole("default");
+	if (defaultRole) {
+		return {
+			source: "default-role",
+			selector: defaultRole,
+			reason: "Unverified default role; the model is resolved at runtime using the model registry and availability.",
+		};
+	}
+
+	return {
+		source: "automatic",
+		reason:
+			"No default role is configured; the model is selected automatically at runtime based on availability and runtime defaults.",
+	};
+}
+
 /** Select one OMP model for both the OpenWiki planner and every page worker. */
 export async function createOpenWikiModel(selector?: string): Promise<{
 	model: BaseChatModel;

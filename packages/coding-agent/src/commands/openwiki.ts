@@ -11,6 +11,7 @@ export default class OpenWiki extends Command {
 	static flags = {
 		init: Flags.boolean({ description: "Generate the repository wiki" }),
 		update: Flags.boolean({ description: "Incrementally update the repository wiki" }),
+		"dry-run": Flags.boolean({ description: "Preview model and candidate files without model calls or Wiki writes" }),
 		language: Flags.string({ char: "l", description: "Output language (BCP-47 locale)" }),
 		modelId: Flags.string({ description: "OMP model selector (also --model-id)" }),
 		print: Flags.boolean({ char: "p", description: "Print output instead of interactive display" }),
@@ -22,6 +23,7 @@ export default class OpenWiki extends Command {
 	};
 	static examples = [
 		"omp openwiki code --init",
+		"omp openwiki code --update --dry-run",
 		"omp openwiki --update --modelId provider/model",
 		"omp openwiki link [directory]",
 		"omp openwiki workspace use <workspace> | current | clear",

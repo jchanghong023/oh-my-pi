@@ -3,7 +3,7 @@ import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
-import { createOpenWikiModel } from "../openwiki/model";
+import { createOpenWikiModel, previewOpenWikiModel } from "../openwiki/model";
 import { materializeOpenWikiSkills } from "../openwiki/resources";
 import { getOpenWikiVisualAssets } from "../openwiki/visual-assets";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
@@ -19,7 +19,9 @@ const HELP = `Usage: omp openwiki <command> [options]
   visualize [path] --export <directory>
 
 Repository options: --language <locale>, --modelId <model> (or --model-id),
-  --print, --debug, --telemetry-file <path>. The code word may be omitted.
+  --dry-run, --print, --debug, --telemetry-file <path>. The code word may be omitted.
+  --dry-run previews the model and candidate paths without model calls or Wiki writes.
+  The model determines the actual Wiki pages during generation.
 Page concurrency is controlled by OPENWIKI_PAGE_CONCURRENCY (1–8, default 1).
 `;
 
@@ -40,13 +42,16 @@ const UNSUPPORTED = new Set([
 ]);
 
 /** OpenWiki's parser validates against its own model list. OMP selectors must bypass it. */
-function extractModelAndDebug(argv: string[]): { argv: string[]; model?: string; debug: boolean } {
+function extractModelAndDebug(argv: string[]): { argv: string[]; model?: string; debug: boolean; dryRun: boolean } {
 	const result: string[] = [];
 	let model: string | undefined;
 	let debug = false;
+	let dryRun = false;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--debug") {
+		if (arg === "--dry-run") {
+			dryRun = true;
+		} else if (arg === "--debug") {
 			debug = true;
 		} else if (arg === "--modelId" || arg === "--model-id") {
 			const value = argv[++i];
@@ -59,7 +64,7 @@ function extractModelAndDebug(argv: string[]): { argv: string[]; model?: string;
 			result.push(arg);
 		}
 	}
-	return { argv: result, model, debug };
+	return { argv: result, model, debug, dryRun };
 }
 
 async function writeDisabledTelemetry(file: string): Promise<void> {
@@ -98,6 +103,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			runWorkspaceCommand,
 			resolvePageConcurrency,
 			resolveRepositoryRoot,
+			previewRepositoryFiles,
 			startEmbeddedVisualizeServer,
 			exportStaticVisualizer,
 			runNativeRepositoryGeneration,
@@ -108,7 +114,8 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		}
 		if (UNSUPPORTED.has(argv[0])) throw new Error(`OpenWiki ${argv[0]} is not supported by OMP.`);
 		const management = argv[0] === "link" || argv[0] === "workspace" || argv[0] === "visualize";
-		const parsed = management ? { argv, model: undefined, debug: false } : extractModelAndDebug(argv);
+		if (management && argv.includes("--dry-run")) throw new Error("--dry-run requires --init or --update.");
+		const parsed = management ? { argv, model: undefined, debug: false, dryRun: false } : extractModelAndDebug(argv);
 		debug = parsed.debug;
 		const command = parseCommand(parsed.argv);
 		if (command.kind === "help") {
@@ -116,6 +123,9 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			return 0;
 		}
 		if (command.kind === "error") throw new Error(command.message);
+		if (parsed.dryRun && (command.kind !== "run" || command.command === "chat")) {
+			throw new Error("--dry-run requires --init or --update.");
+		}
 		if (command.kind === "link" || command.kind === "workspace") {
 			const options = { configDirectory: getOpenWikiConfigDirectory() };
 			if (command.kind === "link") await runLinkCommand(command, options);
@@ -163,6 +173,51 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				return 0;
 			}
 			throw new Error("OpenWiki chat is not supported by OMP; specify --init or --update.");
+		}
+		if (parsed.dryRun) {
+			const root = await resolveRepositoryRoot(process.cwd());
+			const [model, files] = await Promise.all([
+				previewOpenWikiModel(parsed.model),
+				previewRepositoryFiles(root, command.command),
+			]);
+			const printPaths = (paths: string[]) => {
+				for (const item of paths) process.stdout.write(`  ${JSON.stringify(item)}\n`);
+				if (paths.length === 0) process.stdout.write("  (none)\n");
+			};
+			process.stdout.write(`OpenWiki dry run: ${command.command}\nRepository: ${root}\n`);
+			process.stdout.write(
+				`Model selection (${model.source}): ${model.modelId ?? model.selector ?? "(automatic)"}\n${model.reason}\n`,
+			);
+			process.stdout.write(`Source snapshot candidates (${files.sourcePaths.length}):\n`);
+			printPaths(files.sourcePaths);
+			process.stdout.write("Snapshot candidates are not a complete list of files the model may read.\n");
+			if (files.update) {
+				if (files.update.changedPaths) {
+					process.stdout.write(`Changed paths since completed run ${files.update.baselineGitHead}:\n`);
+					printPaths(files.update.changedPaths);
+				} else {
+					process.stdout.write("Changed paths since completed run: unavailable (no comparable baseline).\n");
+				}
+				const pages = files.update.pageBaselines;
+				if (pages.length > 0) {
+					const changes = [...new Set(pages.flatMap(page => page.changedPaths ?? []))].sort();
+					const unknown = pages.filter(page => !page.changedPaths).length;
+					process.stdout.write(
+						`Changed paths across page baselines${unknown ? ` (${unknown} unavailable)` : ""}:\n`,
+					);
+					printPaths(changes);
+				}
+			}
+			process.stdout.write(`Wiki output scope: ${path.join(root, "openwiki")}\n`);
+			if (command.command === "init") {
+				process.stdout.write("A real init replaces an existing Wiki except openwiki/INSTRUCTIONS.md.\n");
+			}
+			process.stdout.write(`Existing factual Wiki pages (${files.existingWikiPages.length}):\n`);
+			printPaths(files.existingWikiPages);
+			process.stdout.write(
+				"Actual pages are determined by the model during generation. No model calls, Wiki or telemetry writes.\n",
+			);
+			return 0;
 		}
 		if (command.telemetryFile) await writeDisabledTelemetry(command.telemetryFile);
 		const pageConcurrency = resolvePageConcurrency();
