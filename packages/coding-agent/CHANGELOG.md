@@ -126,6 +126,7 @@
 
 ### Fixed
 
+- Open OpenWiki section directory links in the reader instead of showing a 404 page.
 - Honor OpenWiki reasoning levels from explicit model selectors and default/plan roles, including independent planner levels and explicit reasoning off.
 - Allow fulltest to snapshot Git submodules while still detecting revision and dirty-source changes.
 - Keep project role edits from granting per-call models, and prevent foreground submission or execution recovery from silently replacing an exact per-call model.
