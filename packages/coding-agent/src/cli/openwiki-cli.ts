@@ -228,6 +228,13 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		try {
 			if (controller.signal.aborted) return 130;
 			await updateOpenWikiAgentInstructions(root);
+			const wikiDir = path.join(root, "openwiki");
+			await mkdir(wikiDir, { recursive: true });
+			try {
+				await writeFile(path.join(wikiDir, "INSTRUCTIONS.md"), "", { flag: "wx" });
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			}
 			if (debug)
 				process.stderr.write(`OpenWiki debug: model=${selected.modelId} pageConcurrency=${pageConcurrency}\n`);
 			const result = await runNativeRepositoryGeneration({
