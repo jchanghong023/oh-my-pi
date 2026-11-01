@@ -118,6 +118,7 @@
 
 ### Fixed
 
+- Avoid regenerating OpenWiki pages when its unchanged repository instruction files are committed.
 - Find Chinese OpenWiki sections inside continuous text and prioritize exact phrases when source-path hints tie.
 - Honor runtime `PI_UPDATE_REPOSITORY` overrides in compiled binaries while defaulting to this fork's releases.
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.

@@ -77,6 +77,9 @@ OMP MUST 复用 OpenWiki 原有的规划 Agent、页面工作池、Claims、增�
 #### Scenario: 增量更新与无变化运行
 - **WHEN** 用户在已有 Wiki 上执行更新
 - **THEN** OpenWiki 按原有源码变化、Claims 和逐页覆盖状态决定更新范围；仅在原有完整条件满足时报告无需生成，不以 Git clean 单独掩盖未完成或失效证据
+- **AND** 仅跟踪仓库根目录 `AGENTS.md` 和 `openwiki/INSTRUCTIONS.md` 的内容；已覆盖的指令内容未变时，不因其提交或空文件创建而重复生成
+- **AND** 存在已记录的指令基线时，两个指令文件的有效内容变化须触发更新；无基线时，非空 `INSTRUCTIONS.md` 或未忽略的 Git 可见 `AGENTS.md` 变化触发更新，无法检测此前非空指令变为空的情况
+- **AND** 其他源码继续按原有 Git 增量和 Claims 机制处理，不新增全仓逐文件基线
 
 #### Scenario: 中断后恢复
 - **WHEN** 同一持久检出目录中的生成被中断，用户再次执行对应命令
