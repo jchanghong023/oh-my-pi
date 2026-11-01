@@ -1128,7 +1128,7 @@ export type ToolApprovalDecision =
 			 *  Defaults to true; false preserves an independently authorized device's native policy. */
 			fallbackToToolPolicy?: boolean;
 	  };
-export type ToolApproval = ToolApprovalDecision | ((args: unknown) => ToolApprovalDecision);
+export type ToolApproval = ToolApprovalDecision | ((args: unknown, context?: AgentToolContext) => ToolApprovalDecision);
 
 /**
  * Context passed to tool execution.

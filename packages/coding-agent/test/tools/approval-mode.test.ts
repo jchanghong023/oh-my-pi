@@ -3,13 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
-import { closeModelCache } from "@oh-my-pi/pi-catalog";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
-import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { HistoryStorage } from "@oh-my-pi/pi-coding-agent/session/history-storage";
 import { closeSessionIndex } from "@oh-my-pi/pi-coding-agent/session/session-index";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -75,6 +76,7 @@ describe("tools.approvalMode setting", () => {
 	afterAll(async () => {
 		await session.dispose();
 		authStorage.close();
+		AgentStorage.close();
 		HistoryStorage.close();
 		closeSessionIndex();
 		closeModelCache();

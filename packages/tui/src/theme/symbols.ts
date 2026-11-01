@@ -212,6 +212,8 @@ export type SymbolKey =
 	| "advisor.rail"
 	// Skill callout rail (user turn that opened with a skill chip)
 	| "skill.rail"
+	// /btw steering-prompt rail (the <inject> block a side answer drafted)
+	| "btw.rail"
 	// Language/file type icons
 	| "lang.default"
 	| "lang.typescript"
@@ -610,6 +612,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Advisor note rail (heavier than md.quoteBorder so notes read as a distinct voice)
 	"advisor.rail": "▎",
 	"skill.rail": "▎",
+	"btw.rail": "▎",
 	// Language/file icons (emoji-centric, no Nerd Font required)
 	"lang.default": "⌘",
 	"lang.typescript": "🟦",
@@ -1084,6 +1087,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	// pick: ▎ | alt: ┃ │
 	"advisor.rail": "▎",
 	"skill.rail": "▎",
+	"btw.rail": "▎",
 	// Language icons (nerd font devicons)
 	"lang.default": "",
 	"lang.typescript": "\u{E628}",
@@ -1398,6 +1402,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"md.colorSwatch": "[]",
 	"advisor.rail": "|",
 	"skill.rail": "|",
+	"btw.rail": "|",
 	// Language icons (ASCII uses abbreviations)
 	"lang.default": "code",
 	"lang.typescript": "ts",

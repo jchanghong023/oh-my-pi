@@ -18,6 +18,8 @@ import type { OutputArtifactError } from "../tools/streaming-output";
 import { formatStyledPath, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { ToolActivityContainer } from "../chrome/tool-activity";
+import { CustomMessageComponent } from "./custom-message";
+import type { MessageRenderer } from "./extension-types";
 import { type TranscriptBlock } from "../chrome/transcript-container";
 import { TranscriptStatusBlock, type TranscriptStatusRow } from "../chrome/transcript-status";
 import { theme } from "../theme";
@@ -26,10 +28,7 @@ type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 /** Render diagnostics from upstream completion receipts without repeating their status. */
-export function buildAsyncResultBlock(
-	message: CustomOrHookMessage,
-	_settledBashJobs?: ReadonlyMap<string, string>,
-): ToolActivityContainer {
+export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	type JobDetails = {
 		jobId?: string;
 		meta?: OutputMeta;
@@ -54,6 +53,26 @@ export function buildAsyncResultBlock(
 	}
 	const block = rows.length > 0 ? new TranscriptStatusBlock(rows) : undefined;
 	return new ToolActivityContainer(block ?? []);
+}
+
+/**
+ * The `async-result` card for both transcript surfaces: a registered renderer owns it (#14131);
+ * the built-in block covers no renderer, a declining renderer, and a throwing one.
+ */
+export function buildAsyncResultComponent(
+	message: CustomOrHookMessage,
+	renderer: MessageRenderer | undefined,
+): ToolActivityContainer {
+	const block = buildAsyncResultBlock(message);
+	if (!renderer) return block;
+	const card = new CustomMessageComponent(message as CustomMessage<unknown>, (delegate, options, rendererTheme) => {
+		try {
+			return renderer(delegate, options, rendererTheme) ?? block;
+		} catch {
+			return block;
+		}
+	});
+	return new ToolActivityContainer(card);
 }
 
 /** The warning row under a background job whose output artifact could not be saved. */

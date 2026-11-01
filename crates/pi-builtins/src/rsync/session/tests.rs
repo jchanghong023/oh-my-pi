@@ -758,6 +758,11 @@ fn batch_write_then_read_round_trip() {
 #[test]
 fn batch_read_by_reference_rsync() {
 	let Some(rsync) = reference() else { return };
+	// The batch file carries our protocol (33); an older reference refuses it.
+	let version = Command::new(&rsync).arg("--version").output().unwrap();
+	if !String::from_utf8_lossy(&version.stdout).contains("protocol version 33") {
+		return;
+	}
 	let dir = tempfile::tempdir().unwrap();
 	let src = dir.path().join("src");
 	make_tree(&src);

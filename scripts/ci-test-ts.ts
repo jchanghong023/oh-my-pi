@@ -487,8 +487,8 @@ function workspaceTestCommand(pkg: string, parallel: number, options: { extraArg
 	};
 }
 
-// Root `bun run test` reports the full Rust suite under the same progress
-// stream and failure report as TypeScript.
+// Root `bun run test` reports the selected fork Rust suite and applicable
+// doctests under the same progress stream and failure report as TypeScript.
 function rustTestCommand(): TestCommand {
 	return {
 		label: "rust (selected fork features and applicable doctests)",
@@ -936,7 +936,9 @@ export async function runTestCommand(testCommand: TestCommand): Promise<void> {
 
 // Child env shared by every spawned test process: the parent env with the
 // private test-runtime marker set, all CI credential / cloud-config variables
-// scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared.
+// scrubbed (see SCRUBBED_ENV_* above), and GITHUB_ACTIONS cleared. Clearing it
+// would also clear run-rs-task.ts's "always run in GitHub Actions" rule for the
+// Rust child, so under GitHub Actions OMP_FORCE_RUST_TASKS carries it instead.
 //
 // GC knobs (both needed — they gate different JSC mechanisms):
 // - `BUN_JSC_useConcurrentGC=0` stops the collector from marking concurrently
@@ -964,6 +966,7 @@ export function buildChildEnv(): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...Bun.env,
 		GITHUB_ACTIONS: "",
+		...(Bun.env.GITHUB_ACTIONS === "true" ? { OMP_FORCE_RUST_TASKS: "1" } : {}),
 		PI_TEST_RUNTIME: "1",
 		BUN_JSC_useConcurrentGC: "0",
 		BUN_JSC_numberOfGCMarkers: "1",

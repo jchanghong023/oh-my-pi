@@ -25,6 +25,8 @@ const RUST_AFFECTING_FILE_NAMES = [
 	"rustfmt.toml",
 	".rustfmt.toml",
 ] as const satisfies readonly string[];
+// Remote-tracking trunks the branch is diffed against (a local `main` can carry the commits being checked).
+const TRUNKS = ["upstream/main", "origin/main"] as const satisfies readonly string[];
 // Vendored path-patched crates are workspace members for Bazel hermeticity
 // (path-patch rendering is machine-local), but cargo dev tasks keep their
 // historical scope: the forks are not held to workspace format/lint/test gates.
@@ -104,9 +106,10 @@ if (process.argv.length > 3 && !full) {
 	process.exit(1);
 }
 
-if (taskName !== "test:rs" && taskName !== "fmt:rs" && !(isCI() || (await hasRustAffectingChanges()))) {
-	console.log(`Skipping ${taskName} (not in CI and no Rust-affecting changes were found).`);
-	process.exit(0);
+if (taskName !== "test:rs" && taskName !== "fmt:rs") {
+	const decision = await decideWhetherToRun();
+	console.log(`${decision.run ? "Running" : "Skipping"} ${taskName}: ${decision.reason}`);
+	if (!decision.run) process.exit(0);
 }
 
 const selection = taskName === "test:rs" && !full ? readDeltaSelection() : undefined;
@@ -319,26 +322,77 @@ function isRustTaskName(value: string | undefined): value is RustTaskName {
 	return value != null && value in TASK_COMMANDS;
 }
 
-function isCI(): boolean {
-	const value = Bun.env.CI;
+interface RunDecision {
+	run: boolean;
+	/** Printed as one line, so a skipped Rust gate is never silent. */
+	reason: string;
+}
+
+type GitResult = { ok: true; text: string } | { ok: false; error: string };
+
+/**
+ * Runs unless the branch provably changed nothing Rust builds from since its merge base with a trunk.
+ * Preserve the fork's existing CI override.
+ */
+async function decideWhetherToRun(): Promise<RunDecision> {
+	if (isEnabled(Bun.env.CI)) return { run: true, reason: "CI is set." };
+	const changed = await changedPathsSinceTrunk();
+	if (typeof changed === "string")
+		return { run: true, reason: `cannot tell what this checkout changed (${changed}).` };
+	const rust = changed.filter(isRustAffectingPath);
+	if (rust.length === 0) {
+		return {
+			run: false,
+			reason: "no Rust-affecting change since the merge base with main.",
+		};
+	}
+	return {
+		run: true,
+		reason: `${JSON.stringify(rust[0])}${rust.length > 1 ? ` and ${rust.length - 1} more` : ""} changed.`,
+	};
+}
+
+function isEnabled(value: string | undefined): boolean {
 	if (!value) return false;
 	const normalized = value.trim().toLowerCase();
 	return normalized !== "" && normalized !== "0" && normalized !== "false";
 }
 
-async function hasRustAffectingChanges(): Promise<boolean> {
-	const result = await $`git status --porcelain -z`.cwd(repoRoot).quiet().nothrow();
-	if (result.exitCode !== 0) {
-		const stderr = result.stderr.toString().trim();
-		const suffix = stderr === "" ? `exit ${result.exitCode}` : stderr;
-		console.warn(`Warning: failed to inspect git status: ${suffix}. Running ${taskName} conservatively.`);
-		return true;
+/**
+ * Paths changed since the merge base with each fetched trunk (three-dot, so the trunk's newer commits
+ * do not count), plus uncommitted and untracked files; a string says why that cannot be known.
+ */
+async function changedPathsSinceTrunk(): Promise<string[] | string> {
+	const shallow = await git("rev-parse", "--is-shallow-repository");
+	if (!shallow.ok) return shallow.error;
+	// A shallow clone can report a stale merge base.
+	if (shallow.text.trim() === "true") return "shallow clone; run git fetch --unshallow";
+	// `--untracked-files=all` lists a new crate's files instead of one `crates/new/` entry.
+	const status = await git("status", "--porcelain", "-z", "--untracked-files=all");
+	if (!status.ok) return status.error;
+	const paths = getChangedPathsFromPorcelain(status.text);
+	let diffed = false;
+	for (const trunk of TRUNKS) {
+		const base = await git("merge-base", "HEAD", `refs/remotes/${trunk}`);
+		if (!base.ok) continue;
+		diffed = true;
+		// `--no-renames` reports both sides, so moving a file out of a crate still counts.
+		const committed = await git("diff", "--no-renames", "--name-only", "-z", base.text.trim(), "HEAD");
+		if (!committed.ok) return committed.error;
+		paths.push(...committed.text.split("\0").filter(Boolean));
 	}
-	return getChangedPathsFromPorcelain(result.stdout).some(isRustAffectingPath);
+	return diffed ? paths : `no fetched ${TRUNKS.join(" or ")}`;
 }
 
-function getChangedPathsFromPorcelain(buf: Uint8Array): string[] {
-	const entries = new TextDecoder().decode(buf).split("\0").filter(Boolean);
+async function git(...args: string[]): Promise<GitResult> {
+	const result = await $`git ${args}`.cwd(repoRoot).quiet().nothrow();
+	if (result.exitCode === 0) return { ok: true, text: result.text() };
+	const firstLine = result.stderr.toString().trim().split("\n")[0];
+	return { ok: false, error: `git ${args[0]}: ${firstLine || `exit ${result.exitCode}`}` };
+}
+
+function getChangedPathsFromPorcelain(porcelain: string): string[] {
+	const entries = porcelain.split("\0").filter(Boolean);
 	const changedPaths: string[] = [];
 
 	for (let index = 0; index < entries.length; index += 1) {
@@ -368,6 +422,8 @@ function isRustAffectingPath(changedPath: string): boolean {
 	const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
 	return (
 		normalized.endsWith(".rs") ||
+		// Crate fixtures, included data, and build inputs can affect Rust.
+		normalized.startsWith("crates/") ||
 		normalized.startsWith(".cargo/") ||
 		normalized === ".config/nextest.toml" ||
 		isOneOf(fileName, RUST_AFFECTING_FILE_NAMES)
