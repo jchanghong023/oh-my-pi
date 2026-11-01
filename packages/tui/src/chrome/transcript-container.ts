@@ -935,10 +935,12 @@ export class TranscriptContainer extends Container {
 			);
 		}
 		let total = 0;
-		for (let index = 0; index < blocks.length; index++)
-			total +=
-				blocks[index]!.length +
-				(index > 0 ? this.#blockGap(shown[index - 1]!.entry.component, shown[index]!.entry.component) : 0);
+		let gaps = 0;
+		for (let index = 0; index < blocks.length; index++) {
+			gaps += index > 0 ? this.#blockGap(shown[index - 1]!.entry.component, shown[index]!.entry.component) : 0;
+			total += blocks[index]!.length;
+		}
+		total += gaps;
 		if (total <= capacity) {
 			const output: string[] = [];
 			const owners: (Component | undefined)[] = [];
@@ -961,10 +963,14 @@ export class TranscriptContainer extends Container {
 			return output;
 		}
 		this.#viewportOverflow = hasActive;
+		if (shown.length + gaps > capacity) {
+			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
+		}
 
+		// Boundaries consume viewport rows even when content must be compressed.
 		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const allocation: number[] = new Array(shown.length).fill(1);
-		let surplus = capacity - shown.length;
+		let surplus = capacity - shown.length - gaps;
 		// Keep compact summaries with their preview and retained critical
 		// feedback readable before ordinary prose consumes the spare rows.
 		for (let index = shown.length - 1; index >= 0 && surplus > 0; index--) {
@@ -1003,6 +1009,10 @@ export class TranscriptContainer extends Container {
 				this.#projectedEmittedRowCount(candidate.entry, candidate.index, width),
 			);
 			const visible = rendered.length <= allocated ? rendered : rendered.slice(rendered.length - allocated);
+			if (output.length > 0 && this.#blockGap(shown[index - 1]!.entry.component, candidate.entry.component)) {
+				output.push("");
+				owners.push(undefined);
+			}
 			for (const line of visible) {
 				output.push(line);
 				owners.push(candidate.entry.component);

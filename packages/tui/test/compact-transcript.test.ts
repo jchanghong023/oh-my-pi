@@ -119,6 +119,22 @@ describe("compact original-position continuous runs", () => {
 		expect(root.peekReplayBatch(80)!.rows.map(row => Bun.stripANSI(row).trimEnd())).toEqual([...expected, ""]);
 	});
 
+	it("keeps user and reply boundaries when viewport pressure compresses a tool run", () => {
+		const root = transcript();
+		root.addChild(new Text("USER_FIRST\nUSER_LAST", 0, 0));
+		const calls = add(root, "OLD", "ONE", "TWO");
+		for (const call of calls) call.finalized = false;
+		root.addChild(new Text("REPLY_FIRST\nREPLY_LAST", 0, 0));
+		const frame = { tick: 0, now: 0 };
+		const compressed = ["USER_LAST", "", "工具调用 3 次", "ONE", "TWO", "", "REPLY_FIRST", "REPLY_LAST"];
+		expect(root.renderViewport(80, 8, frame).map(row => Bun.stripANSI(row).trimEnd())).toEqual(compressed);
+		expect(root.renderViewport(80, 9, frame).map(row => Bun.stripANSI(row).trimEnd())).toEqual([
+			"USER_FIRST",
+			...compressed,
+		]);
+		expect(root.renderViewport(80, 8, frame).map(row => Bun.stripANSI(row).trimEnd())).toEqual(compressed);
+	});
+
 	it("preserves gaps around critical feedback, writes, and detailed calls", () => {
 		const root = transcript();
 		const failure = add(root, "FAILURE")[0]!;

@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Keep message-to-tool spacing stable when transcript content is compressed or the terminal is resized, while compact summaries and tool previews remain adjacent.
 - Keep live compact content within the visible height, retire the welcome before it crowds replies, and preserve failure diagnostics without replacing content with a PageUp hint.
 - Restore Bash exit codes in expanded and detailed ANSI output while keeping collapsed compact errors concise.
 - Show the tail of failed background Bash output and available artifact references in wait previews instead of misleading truncated beginnings.

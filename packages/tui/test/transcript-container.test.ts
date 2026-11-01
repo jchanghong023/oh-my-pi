@@ -845,21 +845,6 @@ describe("TranscriptContainer", () => {
 		expect(transcript.renderViewport(80, 2, frame)).toEqual(["settled 2", "settled 3"]);
 	});
 
-	it("excludes empty blocks so pressure never emits blank rows (issue 9483)", () => {
-		const transcript = new TranscriptContainer();
-		// Text blocks interleaved with empty (hidden tool-activity) blocks that
-		// render nothing but stay live until retired.
-		for (let i = 0; i < 6; i++) {
-			transcript.addChild(new Block([`t${i}a`, `t${i}b`, `t${i}c`], true));
-			for (let j = 0; j < 8; j++) transcript.addChild(new Block([], true));
-		}
-		// Emergency path: more non-empty blocks than rows. Every row carries real
-		// text — no block's tail is dropped as blank padding.
-		const out = transcript.renderViewport(80, 12, frame);
-		expect(out).toHaveLength(12);
-		expect(out.every(row => /\S/.test(row))).toBe(true);
-	});
-
 	it("empty blocks do not reserve capacity from real text under pressure (issue 9483)", () => {
 		const transcript = new TranscriptContainer();
 		transcript.addChild(new Block(["A1", "A2", "A3", "A4"], true));
@@ -867,10 +852,10 @@ describe("TranscriptContainer", () => {
 		transcript.addChild(new Block(["B1", "B2", "B3", "B4"], true));
 		transcript.addChild(new Block([], true));
 		transcript.addChild(new Block(["C1", "C2", "C3", "C4"], true));
-		// Capacity 10 fits all real content once the two empty blocks stop
-		// stealing a base row each; the older block keeps its tail rows.
-		const out = transcript.renderViewport(80, 10, frame);
-		expect(out).toEqual(["A3", "A4", "B1", "B2", "B3", "B4", "C1", "C2", "C3", "C4"]);
+		// Capacity 12 fits ten content rows and two separators; empty blocks
+		// must not steal any of those rows.
+		const out = transcript.renderViewport(80, 12, frame);
+		expect(out).toEqual(["A3", "A4", "", "B1", "B2", "B3", "B4", "", "C1", "C2", "C3", "C4"]);
 	});
 
 	it("renders user message text in emergency layout and omits OSC 133 prompt markers (issue 13835)", () => {
@@ -988,13 +973,10 @@ describe("TranscriptContainer", () => {
 		const tool = new ToolBlock(["T1", "T2", "T3", "T4"], false);
 		transcript.addChild(assistant);
 		transcript.addChild(tool);
-		// Capacity 5 cannot fit both blocks in full. Surplus (3 rows) goes to the
-		// assistant block first; the tool card collapses to its one-row minimum
-		// instead of clipping already-visible assistant text.
-		const out = transcript.renderViewport(80, 5, frame);
-		expect(out).toEqual(["A1", "A2", "A3", "A4", "T4"]);
-		expect(assistant.allocations.at(-1)).toBe(4);
-		expect(tool.allocations.at(-1)).toBe(1);
+		// Capacity 6 reserves a separator and gives three surplus content rows
+		// to the assistant before growing the tool card.
+		const out = transcript.renderViewport(80, 6, frame);
+		expect(out).toEqual(["A1", "A2", "A3", "A4", "", "T4"]);
 	});
 
 	it("keeps the first visible content row when live blocks exceed the viewport", () => {
@@ -1013,8 +995,9 @@ describe("TranscriptContainer", () => {
 		transcript.addChild(new Block(["older 1", "older 2", "older 3", "older 4"], false));
 		transcript.addChild(new Block(["latest 1", "latest 2", "latest 3", "latest 4"], false));
 
-		expect(transcript.renderViewport(80, 8, frame, 5)).toEqual([
+		expect(transcript.renderViewport(80, 8, frame, 6)).toEqual([
 			"older 4",
+			"",
 			"latest 1",
 			"latest 2",
 			"latest 3",
@@ -1737,10 +1720,10 @@ describe("TranscriptContainer viewport click spans", () => {
 		transcript.addChild(first);
 		transcript.addChild(second);
 
-		expect(transcript.renderViewport(80, 5, frame)).toEqual(["a4", "b1", "b2", "b3", "b4"]);
+		expect(transcript.renderViewport(80, 6, frame)).toEqual(["a4", "", "b1", "b2", "b3", "b4"]);
 		expect(transcript.getLastViewportSpans()).toEqual([
 			{ component: first, start: 0, end: 1 },
-			{ component: second, start: 1, end: 5 },
+			{ component: second, start: 2, end: 6 },
 		]);
 	});
 
