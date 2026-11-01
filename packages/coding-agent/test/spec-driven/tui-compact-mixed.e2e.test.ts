@@ -547,12 +547,18 @@ test("compact mixed long session preserves input, tool effects and peer messages
 					expect(new Set(visible).size).toBe(visible.length);
 					expect(visible).toEqual([...visible].sort((a, b) => a - b));
 				});
+				// The 80-row table exceeds the 36-row viewport; expand it before
+				// checking every rendered row rather than relying on terminal scrollback.
+				await tui("resize", "120", "200");
+				await screen.waitForVisualHandoff();
 				const afterMarkers = tableMarkers.map(marker => marker.replace("MIXED_ROW_", "MIXED_AFTER_ROW_"));
 				const completed = await eventually(
 					() => tui("text", "--full"),
 					text => text.match(/MIXED_AFTER_ROW_\d{3}/gu)?.length === afterMarkers.length,
 				);
 				expect(Array.from(completed.match(/MIXED_AFTER_ROW_\d{3}/gu) ?? [])).toEqual(afterMarkers);
+				await tui("resize", "120", "36");
+				await screen.waitForVisualHandoff();
 				const firstFollowup = observed.findIndex(item => item.intent === "Validating changes after compaction");
 				const secondFollowup = observed.findIndex(item => item.intent === "Checking second post-compaction call");
 				expect(firstFollowup).toBeGreaterThanOrEqual(0);
@@ -623,6 +629,8 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				await tui("submit", "/display compact");
 				await tui("expect", "text", "compact", "--timeout", "30000");
 				await screen.checkpoint("post-compaction compact rebuild", frame => expectVisibleDraft(frame, "", 120, 36));
+				await tui("resize", "120", "200");
+				await screen.waitForVisualHandoff();
 				const rebuilt = await eventually(
 					() => tui("text", "--full"),
 					text => text.match(/MIXED_AFTER_ROW_\d{3}/gu)?.length === afterMarkers.length,

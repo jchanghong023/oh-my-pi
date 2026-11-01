@@ -528,7 +528,7 @@ test.skipIf(!tuiTest)(
 					}
 				},
 			},
-			[100, 28],
+			[100, 40],
 			async ({ provider, tui, state, idle }) => {
 				await tui("submit", "held-ordinary-work");
 				await eventually(async () => held, Boolean);
