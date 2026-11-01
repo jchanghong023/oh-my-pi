@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:8f374b1036996a593674dc9fce472c4ddf65313869848325c7496cf22b1a34bc",
+  "pageVersion": "sha256:4bd792425298db9f6525b995a5317d90b1494bf38df323cc3505679cbf297798",
   "claims": [
     {
       "id": "claim_fa15f492c4ae4619a3ea8ff41942831f",
@@ -229,10 +229,138 @@
           "version": "repo-lines-v1:sha256:61a02b131185fd16b04c68e4b0d917d2c7f6f667063f00bb763ec8787e568fbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzYjc3MTg2MjQ0OTIyMThkNjYzYWZkNWJiNzNhNGRkZmZkMmFhNWMzYjVmNjk0NjZlYjYzNTJlNzE2MDdlMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOTMzMTJlMzJlYjJiOTgzMWMxZDRmYTRiYjI0Y2RhYTZmYjJkMjkyMjc5OTI5ZDZlODAzZTYxNGMxOGY2NDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OTUyMDdlZjNhMTUzYzc4YWU4MzUxYzY1YjI4MTI1MWE1ZDhlMTE3YTgxNGJiMzQ1ZGNhMzUyNDY1ZGZhMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3NTg4ZWE1NmM2ZDcwMjBhOWNkODExMDAzNDkzY2FmM2QzYWEyY2ZhNGRjNDJkYWVhYzI3ODdjMDE2MDJmMmEifQ"
         }
       ]
+    },
+    {
+      "id": "claim_b654eb9fb61b436c81be79ada1f34211",
+      "statement": "vendored 生成器以可提交的 .page-manifest.json 按事实页面记录源码检查点、Markdown 版本和可选完成来源；只有 Markdown 与已验证 Claims sidecar 持久一致才能推进覆盖，损坏账本会报错而非静默丢弃。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts#L11-L69",
+          "version": "repo-lines-v1:sha256:345fa70ccdf311186c74cdc4d77f13751f895448e22ae76d207b03b301bd1036:eyJzZWxlY3RlZExpbmVDb3VudCI6NTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ2ZWNkNDIzMTc1NDFmNzc5MDdmZWI0N2IwZDhiNGFjMjcxNzg4ZmJlOTU5NjQ3ZmEyZGM3MGY5MmRhM2ZmZDYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNlZDEwMDY1Y2Y0OGRjMDYzMWYyN2QzMDQ0MDY5OTEyMTBmYWVmMGEzNDY1MmU0MjFhZWM1MzE3NmJiZGYxMjUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMwMzA3NjBiMTA3N2EzYzA0ZjdjMzZiMGVkNTU1MDZlNWQzZjE5NGQ3NTQ4YTIzNzQ1ZTJmMTg0Nzk1MjM4MzcifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts#L115-L173",
+          "version": "repo-lines-v1:sha256:4aac5fbdcc4fbdba587651dc5c5a20f9ad4587abd9655c88fb7784335828d765:eyJzZWxlY3RlZExpbmVDb3VudCI6NTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE5MjIzNWI1N2NlYzc0ZTI2MTkwNDNhMjRlODQ1MTBhODJmNzg1OGM0ODlkMjA2M2U0ZTllNDhkOGYyZDZkYmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjliMGJmYjA0MTE0MzdlODk3MTg5NGNmYWY5ZmJkN2FkZTYxODBiNzA5NTEzODJlNTBiYzFkMDZjMDgxNWE0ZDQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImExZGE1MjIyNjYwOGRjZDA2NzAyNDBjYjM3YTMxNDhhZjg0MDcxNzc5MjFiYjAyZTg2NGM4NjNhZTRhZjM0N2UifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts#L389-L435",
+          "version": "repo-lines-v1:sha256:18a3c8721830a003762a56cae14f5a0e13b4596d934deb7812a6972f0e2bb2aa:eyJzZWxlY3RlZExpbmVDb3VudCI6NDcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmZTUxMDc2NjA0YWE2MDEzNGY0MjcyZjAwNWE1MmQyMjk1ZjIzOWZiNzE4Y2NkNTA0OWEwNzk5ZGUwZGNhZDciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZkYWEwNWJhN2I3NzczNjM0NmViNWEzZmFmNTRjNjJiNDEyZGI2NjhlMTExOTBmNTZkZmJiZTc2MGZhNjJjZjkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAxMDBhYjVhMjZhYjQzZjY5YjBkMTRjY2JiZjcyM2U4YThjYzQxZWU3N2YyYWQwYTBmNTYyOGMwMDMzMzQ0MzEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ac8d3eba1fbd4f3585cc5b8a60917cab",
+      "statement": "页面覆盖账本不同于保存活动计划和任务进度的 .run.json、上次完整成功基线的 .last-update.json，以及记录页面主张与验证状态的 Claims；运行级进度不能证明每页已覆盖当前源码。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts",
+          "version": "repo-file-v1:sha256:bec5f2764468ba2dc28793af6e8b04ec7fb1010e129232eff6f56212c6355724"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-preview.ts#L67-L107",
+          "version": "repo-lines-v1:sha256:c7c62778793fb2b04b2ca68cef4a367b7d746496ca05d4efe85ed847df060ea5:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQyMjRmYzczMjU2NWY0MjlkNzBkY2QxMGU1ODMzYmVkMmU1Y2I5OGRlMDk1ODI1NjY2M2E5MzRhOTI0Mzk5ZTkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBjNzQ2ZmM5MGJlNTBlZmM5MzFhMmNjY2UwZTI2MDkxYTc0Y2Y1YWJkNDRhNGE1YTM0ODdiMWRkNDczMmUzNDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdjODg5MTBjNzAyOTMyODdhOTQ3OGM1OThjMmQ3ZDA2OGM2NjcxNWU4OGNjYjk2YWFiMDgyZWFhMTBlMGNjY2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE0ZWUxNDY2NGZkZmI3YmViZDEyZWNkYjc1ZDU4MjQxMDNkMDU4ZWU0NTEyZjAyY2VhZjhkY2YwM2MzMTM0OGIifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/run-state.ts",
+          "version": "repo-file-v1:sha256:e529bbc567e8e1218d6bb1aa049c755c17d98ee36b4319a0304b26c4bf1a71de"
+        }
+      ]
+    },
+    {
+      "id": "claim_5e11c081b6864532a3123d2d8b68ac64",
+      "statement": "部分页面完成并连同 Claims 和覆盖账本提交后，即使新 checkout 没有原运行 checkpoint，更新规划仍按页面各自的 Git 基线计算变更窗口，保留已更新和未更新页面的混合基线；没有基线的页面需要完整审查。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-run.ts#L869-L941",
+          "version": "repo-lines-v1:sha256:a9ea9d5cc39d6c1008df87559e87d027e121d7f02a9254c019661b20a419cde7:eyJzZWxlY3RlZExpbmVDb3VudCI6NzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhkOGE5YzZkOTk2MTBlNzM4MjgzMmRhNzMxNjRhOGYxYzBkODg3YTY5YmY4YWIwMmY1YzEwMTNjNWJmNTM0MWMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVjYWFmM2E1ODg1OThhNDYyMDNjNWI1M2E2M2ZiZjYxMDVlNWFhN2M1YmRkMzY1ZjA3ZjAwMmJmMGQ3MTlhZDIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk2YTE2NTQyN2ZjZjZjMTU3YWY0N2NkMDVhMWU2NzIyY2E5ODc0NzY3Mjc2MDNmZDE1YzgyNjE1MzU3NTkxMGQifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/test/generation/repository-run.test.ts#L1033-L1135",
+          "version": "repo-lines-v1:sha256:7bd97b3e10ca2659ca448816ec698722aaf86adf491a6defb97e01b9cae4e582:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAzLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJmYjFjZTIwZWE3NTg1OGEwNWY4ZmU4MWQ4ODI3ZjEyMTdhN2RlNDc1MWMwYTMzOTM1YWMxMWFjOTA2OWZhZTk1IiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJmMDhiNjliMTIzMWU3NTAzMzVkOWRkMWY3OWQ3ODZlYzhkMzIxM2U0NjA0ZjM0YTBhMTJkY2U0YzAzNGUwZWExIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiIyNGNhOWEyMzFlYzFhM2U5MWM1NzM4ZjlkYjE4MDY1MTg2Y2Y0NDUxZjE5OTNmYWI3NmFjOGE2YjFkNTVmZjZjIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI5NGI3MzY0MzMwNmNmZjEwZWMyNmQ1ZmM1MWFhNzYyMjE3MTE4ZDk1Njc2MjZlNWY2OTcxOThjNjExZDQzMzMwIn0"
+        }
+      ]
+    },
+    {
+      "id": "claim_1546b6b94b1e498991c3009c0d1c6cdd",
+      "statement": "仅生成 Wiki 文件变化时，生成器可在重新验证页面和 Claims 后快进该页面的覆盖；迁移旧基线仅补种可验证的缺失页面，保留已有较新条目。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts#L207-L240",
+          "version": "repo-lines-v1:sha256:1d2e0d3dddab3704f885420884db83efe936f903e1abd137bed122ac1dce826a:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk5MDg2ZGY3MWRiY2ZlNjJiOGE3YmE2MGFlODQyNjdhZjg1NDg4YzY2N2I1OTE2ODE1ZThmOGY5ZDE1NDBmZGMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc2NzdkNWEyMzEzZTNiZmE1NjBiNzAwOGM5ZmEyZWQ5NTNlNThkOGViNzBhMjBkOGEwY2JiZjkwMjcxNDM3MjUifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-run.ts#L943-L979",
+          "version": "repo-lines-v1:sha256:2856493812c1878ef02ed1841665d2f87af0f2c2e99edec39e02abf553454c1c:eyJzZWxlY3RlZExpbmVDb3VudCI6MzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU5Nzk3ZmU3NzA1NmQ2YmNkYTliZDhjMjAyNmViMDVmMGY0ZjFhYmQzY2U4MDFiMjBkM2I5NGVlOWVmNmIwYWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdjOTgyMjU0YTBjNjhhMTEzOTdlZmE3NWM5ODhmOTc5Mzc5NmJkYjk5MGFiZDM3ODkxMjUwYTY2MjgzMmZlNDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ed526448827040729b6f1eeaf06e34ac",
+      "statement": "恢复运行时跳过任务重置为待处理；源码指纹、Wiki 目标或指令变化使原计划失效，未变化时依据页面覆盖、页面与 Claims 一致性及运行 ID 协调完成任务。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/page-manifest.ts#L350-L375",
+          "version": "repo-lines-v1:sha256:84e0c21dc7e641076d75565b343fbcc1539caa9417ef354ce5c1549ba806816c:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhiYjBlNGNhMmZkMWI4NTlmZmY4MzAzYjA1NDA4NGM5ZjU1NTU2Nzk5MjgzZDg0Y2U5ZDg0YThiZjM3MzFhMTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcxMzQ1MTgwMTA1YjBjNjZhNzdkYWQ1MWJiMzc5MDFhMzczMmM5NjU0YmE0ZGUzOTgxZjgxZTE4MTc1MjQ4YmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjExNDJiNjRjMTNmN2FkNjI3ZDdhOWZiOWFhODcyOTZiNjk5NGJjMmI4OTg1NTdlZWRlMWViOTI5NTRjN2EzYjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg2MzYzYjkzODlkNGM2OTQ1NTU2YjdjMGU0Y2YxNjljN2ZhYjFlZGU5OTNlZmJlMTZlMjNiZGM5ZTExY2NhODYifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-run.ts#L653-L730",
+          "version": "repo-lines-v1:sha256:11ec8ee79665fd0c7a47ca2c0a7c7627ce9cd1523d0d8ef0c49dc98fc5d5f752:eyJzZWxlY3RlZExpbmVDb3VudCI6NzgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFhNzFkOWZiODgwZWVjZGNiYTUzMjc1MmRhMjM3YTZlOGI2MzJlMWNlY2ZlNTM2ZDhmZTkyYjhmZDA5NzJiYzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZhZjc3NDBkODcwOGUxZDI2MGRjNTliMDI2YjkzYzlmNjk1MWY4ZWM0NWFjZWQxYTU3MmNiYjI3M2U0ZTExNjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExYTk4MjdiMzk4NDY0NzQzOWM0YmIxMWY2ZmE5NGJmYjkxNzk4OGFmOWFjM2U1MzBkMmNjZDI0OWQzYTdjZDEifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-run.ts#L769-L837",
+          "version": "repo-lines-v1:sha256:78f8809230c8cff846a1fdce054e252c3c6cbd1611d9c28168da81632c5c5518:eyJzZWxlY3RlZExpbmVDb3VudCI6NjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMGQ3ZmRlOTFkMGQyZjRmZDZlMmEwODBmMTdiNzIxZjU0ODFhMmM2NDdiYWY1MGMzN2FiMzk0NGY5NGI4MTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFmZDE0NjE4MTZjM2M0MjcwNjNlM2Y4YWRjZjM0ODdiOWMzMzc4ZjdmNTU0MTc1YmIzNDMzYzliMmQyYTVhMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg2MzYzYjkzODlkNGM2OTQ1NTU2YjdjMGU0Y2YxNjljN2ZhYjFlZGU5OTNlZmJlMTZlMjNiZGM5ZTExY2NhODYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f86067ebdb34471f8a9385f1a6752e7c",
+      "statement": "update 只读预览提供页面各自基线和可比较的变更，基线无效或 Git 历史无法读取时省略变更而不是报告空列表。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-preview.ts#L24-L45",
+          "version": "repo-lines-v1:sha256:77e2ea698c06e765c72c30b9c378b641fe2d0241c348c8240d90efd74d7cff30:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE2NTA4ODlhYjM2NDg1NzkyMTg5OTU1MGE4YzllZmFjMzcwZDIzYjU1YzJlODIxNDU1MjJiNTc1ZDUxMjUxNzMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRkODZmMTEwODZjOGI3ODllMTdlMDc0YzMyYjVjOWM1MGEwMTgwNDAxMTI1ZDY4MjRmZjMwZTVkNjUzZjBmNzYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQwMjZkZDZjYWRmODcwNThkZDZmZDA4MTU4NGQ0ODI0Y2U4ODdkZWQxNjkyMTJiOWY0NmMyZmFjZTIwZDI5YmIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZlMWM3MWVhY2EwMTJiODczNGI0NmE5M2MzMmQ2YThlMmFhOTdlMmM5MzEwZjNjNmM4MDRmODNhZDZiMjU3ZGUifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-preview.ts#L67-L109",
+          "version": "repo-lines-v1:sha256:1e9157c0853a8094ab777d5de48dc369af021657788a6d9179d7ce4cd90699cc:eyJzZWxlY3RlZExpbmVDb3VudCI6NDMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQyMjRmYzczMjU2NWY0MjlkNzBkY2QxMGU1ODMzYmVkMmU1Y2I5OGRlMDk1ODI1NjY2M2E5MzRhOTI0Mzk5ZTkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhY2ZjMTZhNmI1Zjc3YTdlZDNhMTBiMjM2NDg4YmMxODA2ZDE3M2Q3NzU4NGY5OTE1OTVjMTQwY2IwMmE4MGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdjODg5MTBjNzAyOTMyODdhOTQ3OGM1OThjMmQ3ZDA2OGM2NjcxNWU4OGNjYjk2YWFiMDgyZWFhMTBlMGNjY2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUyMmZhYTUzNWJkMmVhM2Q1MmU3NDFlZDQ1NDQzNWI3ZmU0OWU4MzU4NmU5NDNkOThkODJiYmZiMjRkMWY1YzUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_eac66ed5421a461e932347b049a5b012",
+      "statement": "页面工作可并发执行，但同一活动运行对象中的共享 Claims 会话、页面账本和运行 checkpoint 读改写在进程内串行化，不能作为跨进程仓库锁。",
+      "evidence": [
+        {
+          "resource": "repo://vendor/openwiki/src/agent/repository-runner.ts",
+          "version": "repo-file-v1:sha256:926064fa937474a9ebde2ba139776d4a477217a7f927cc50222d47410405b80b"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/generation/repository-run.ts#L305-L349",
+          "version": "repo-lines-v1:sha256:0a16544d62de044285eb0f53281f3c40ffd3de41217ee875b5c1d1503d567734:eyJzZWxlY3RlZExpbmVDb3VudCI6NDUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZiNGIwNmZjNDViNTJhMDUyYmEzY2MwNWE4OThmYTRjODcxNjhhMjNmMjE1MjcyZTVlNjc3YjViNTc0NTYzNzgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVhNmY1ZjU3MDk3MjVkN2IxM2M1YmNjYjliNDdlMDQyMjNhNjg4NzQyZmY2NzAxNGE5NGYwOWY0YWIzN2E0YTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZlZWY2NjI4Zjc2ZDg1OTAzMDljZWM4ZTM4ZGQ5YTJjN2IwYzZhZjNjZjliM2YwYzMyMDlmOWYzNDMzMzQ5MTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0c0fdfad104045718ddf24a722e3731e",
+      "statement": "OPENWIKI_PAGE_CONCURRENCY 接受 1 至 8 的整数，默认 1，非法值报错；csh/tcsh 的 setenv 作用于当前会话，PowerShell 用户级持久变量需新终端读取。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/commands/openwiki.ts#L8-L34",
+          "version": "repo-lines-v1:sha256:77b8700669e92dfd503f5e580f9e98d5e94b9a2f1570d9fdcdc3e6dac61aee49:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyNmViOGFhNDQ2MmY1OTFhNGNhNDUzYzFiZmUzMzlhOTY1YjBjNzFmMGI3ZTYwZGVjOGNhNTRmYmY0NWVmMzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg5ZmJkNzlhMzFkNjA5OTIwZTE2ZTU0ZTZjOGQ4N2EzOTk5ODJjNmI4MzdkYzljZTQ2ZTBhOWI0MTU1Njk2OTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZjODViOTc5NzU3NDdhZjIyMjNhN2U4NDA0YjQ1NjRiY2RhMzM1YmVmYjhlNjRlNTBlMDczOWQ5MDlhOWNjNzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVkNTY0ZjFiNGU0MTFjYWM3ZGFjYjI1YTM3YzE3ZDAwODMyYmU0ZmI1OWUwMzkzOTdmMWYxZjU5ZGRkMGI1MzMifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/src/config/constants.ts#L1130-L1148",
+          "version": "repo-lines-v1:sha256:a841ed6f5955366563f9f4058f7191c3758fb8de5f2e5d5a141dddb08d20a849:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1ZDVhYmFjYTIyNjgwYWU5NTMzNjcwMGRmNzY2MzYxOTdhN2NiNmMwMDRmNGNkNzlhYzFiMWZkMmYwYWM0YTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhhM2EyMDUxNDc4ZjQwYTkwMDM4MmY0ZjU2MzM5NTlhMjgzZmQzMzJmMWQ1ZGEyYjBjZGY3MjZmZjYwMDk2ODYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjUwZGIyOGU3NzM5MzQyNjViZGU2NmJlMzFiMWIzOTFmNWI3OWUyMzZiZDdiOTQ1ODhiMDU2OWI4NmJkZGNkNzUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY2ODQ3MDM2M2Y2YTMwOGVhOGU5ZWYxOGYyMTI0MjYyM2UyY2RhODAyYTVhODg0NzIwNTliMGUxNjdiZGQ3MmYifQ"
+        },
+        {
+          "resource": "repo://vendor/openwiki/test/config/constants.test.ts#L310-L340",
+          "version": "repo-lines-v1:sha256:a532bee3c0e5bedae56369e1202843be4f4fd33dc6f7bfb16a63f44cab30671f:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExZTBjNjg4MDM0MGVmZWJjMDNlYTFkMTNlNmY0YWYwYmJhNGI2NDNiZjA0YWQzYmViNTgyZjBjNWNjMDVlYzAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkMjhiZGViOTE1OGU1MTcyMDM2OGE4ZTE3OGJmMjVlNjA5ODU1ZjFhZWYwZWZiNzA4YWUxZTg1NGVlMTUyMmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAyNTJmODFkMDA5Y2I0M2ExZjhhMDZkNmFmYTRjYWZlN2NjYWM5M2VjMzcwODU1NWQ4ZmRhOTkxYWQ3YjY3ODUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRmNmRjZmQ3YWQzMjBjZjRhNWFmMTcyOWM5NjYwNDg4M2FmZDdkMDRlMzcyODUwZjU0NDMwNmEwNWYzODkzNDIifQ"
+        }
+      ]
     }
   ],
   "verification": {
     "by": "openwiki/0.0.0-unknown",
-    "at": "2026-11-01T04:03:23.095Z"
+    "at": "2026-11-01T04:34:57.379Z"
   }
 }

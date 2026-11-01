@@ -5,7 +5,7 @@ description: 说明 omp openwiki 如何将 vendored 仓库生成器接入 OMP �
 tags: [openwiki, generation, resources, models, offline]
 verified:
   - by: openwiki/0.0.0-unknown
-    at: 2026-11-01T04:03:23.095Z
+    at: 2026-11-01T04:34:57.379Z
 sources:
   - id: openwiki-source-bc6d2633cde154d381c79c1f
     resource: repo://openspec/specs/openwiki/spec.md
@@ -19,6 +19,8 @@ sources:
     resource: repo://packages/coding-agent/scripts/openwiki-resources.ts
   - id: openwiki-source-8d4917ff92eb0a6d4411ede9
     resource: repo://packages/coding-agent/src/cli/openwiki-cli.ts
+  - id: openwiki-source-e8604ccdc21d467ed68ed91a
+    resource: repo://packages/coding-agent/src/commands/openwiki.ts
   - id: openwiki-source-97a406a5d549b3706c4f6997
     resource: repo://packages/coding-agent/src/openwiki/agents-instructions.ts
   - id: openwiki-source-927b41921f02f670a3c86404
@@ -33,7 +35,23 @@ sources:
     resource: repo://packages/coding-agent/src/openwiki/vendor-loader.ts
   - id: openwiki-source-acf50746c2a0f532b10679c5
     resource: repo://packages/coding-agent/src/openwiki/visual-assets.ts
-generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
+  - id: openwiki-source-849187decfd40c5202f4fe32
+    resource: repo://vendor/openwiki/src/agent/repository-runner.ts
+  - id: openwiki-source-05e1e777ab7c33390013551a
+    resource: repo://vendor/openwiki/src/config/constants.ts
+  - id: openwiki-source-ad85d5a563850d91f72908c1
+    resource: repo://vendor/openwiki/src/generation/page-manifest.ts
+  - id: openwiki-source-a6e6c2f2f5e6765eff534038
+    resource: repo://vendor/openwiki/src/generation/repository-preview.ts
+  - id: openwiki-source-c786fd51f488fac724933c1d
+    resource: repo://vendor/openwiki/src/generation/repository-run.ts
+  - id: openwiki-source-119e568a3e6154a9d82c3e5e
+    resource: repo://vendor/openwiki/src/generation/run-state.ts
+  - id: openwiki-source-2a35f2acd3ac683f377f3464
+    resource: repo://vendor/openwiki/test/config/constants.test.ts
+  - id: openwiki-source-c4b3d535d00f90ec1bab037f
+    resource: repo://vendor/openwiki/test/generation/repository-run.test.ts
+generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:34:57.379Z" }
 ---
 
 # OpenWiki 生成与内置资源集成
@@ -77,6 +95,39 @@ flowchart TD
 `--dry-run` 只预览模型选择器、源码快照候选、可比较的变更和已有页面，不调用模型、不写 Wiki 或遥测；候选既不是完整读取清单，也不是最终页面列表。模型实际规划页面。真正运行时，部分页面失败返回 1 并提示 update 重试；中断返回 130；全部页面成功但期间源码变化时警告再次更新。恢复和增量判断使用已有页面、Claims 与进度，不能仅凭 Git clean 或 Agent 的文字宣称认定完成。
 
 OMP 只暴露仓库生成、link、workspace 和 visualize 等入口；个人模式、连接器、MCP 安装及 CLI `search`/`read` 不在内置范围。普通对话通过 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`、`openwiki_list_wikis` 按需只读查询已有 Wiki，不调用生成器。链接和活动工作区状态位于有效 OMP profile 的 `openwiki` 配置目录，不自动接管旧独立 OpenWiki home。
+
+## 逐页覆盖、更新窗口与恢复
+
+生成引擎维护几种互补的状态，不能把其中任一个当成整个 Wiki 已正确更新的证明：
+
+- `openwiki/.page-manifest.json` 是可提交的事实页面覆盖账本，以规范页面路径记录页面字节的 `pageVersion`、所覆盖的 `gitHead` 和 `sourceFingerprint`，以及可选的完成者和运行 ID。页面 Markdown 和已验证的 Claims sidecar 持久化且版本一致后，才能推进该页；账本按完整内容原子替换。文件不存在时视为空账本，格式或路径无效时则报错，避免丢弃已有覆盖。
+- Claims 保存页面中的可核查主张及其证据、验证状态和页面版本；它们与实际 Markdown 的哈希必须一致。账本记录的是页面覆盖的源码检查点，不替代逐条 Claims 的核查。
+- `openwiki/.run.json` 是活动运行的计划、页面任务和恢复 checkpoint，不是可提交的逐页正确性账本；`.last-update.json` 记录上次完整成功的运行基线，也不能证明部分运行中的所有页面都已推进。
+
+```mermaid
+flowchart TD
+    Start["开始或恢复 update"] --> Windows["按页面覆盖基线分组"]
+    Windows --> Plan["规划页面任务"]
+    Plan --> Work["页面与 Claims 持久化"]
+    Work --> Ledger["记录该页覆盖"]
+    Ledger --> Checkpoint["更新运行 checkpoint"]
+    Checkpoint --> Result{"任务全部完成"}
+    Result -->|是| Finish["最终化并更新完整运行基线"]
+    Result -->|否| Resume["保留已完成页面并等待重试"]
+    Resume --> Start
+```
+
+图：页面覆盖可在整个运行完成前独立持久化，运行 checkpoint 和完整基线各有不同职责。
+
+例如，旧基线为 A，源码变更后只完成页面 P，再把页面、Claims 和账本一起提交；在没有原 `.run.json` 的新 checkout 中，下一次 update 是新运行，但仍能从账本看到 P 的较新基线和未完成页面 Q 的 A 基线。规划器按各页 `gitHead` 分组，分别计算到当前工作树的可见变更，再取并集提供整体变更视图；没有基线的组需要完整审查。若从某页基线以来只有生成的 Wiki 文件变化，引擎可在重新验证页面和 Claims 后将该页覆盖快进，而不会因此把其他仍有源码变化的页面一并推进。`--dry-run` 展示各页基线和可比较的变更；历史不可比较时省略变更列表，并不等于没有变化。
+
+旧版本迁移时，只有可验证的页面才从上次完整成功基线补种缺失条目，已有较新条目优先；无法验证的页面保持未覆盖。恢复同一运行时，跳过的任务重新待处理；若源码指纹、Wiki 目标或相关指令变化，原计划失效并重新规划。源码不变时，引擎用账本、页面和 Claims 的一致性及运行 ID 协调 checkpoint：已持久完成但 checkpoint 仍待处理的页面可以恢复为完成，不能验证的状态不会仅凭 checkpoint 获得覆盖。部分失败或中断因此可能留下不同页面的不同基线；应重试并核对结果，而不是将一次运行的退出状态解释为所有页面同步。
+
+## 页面并发操作
+
+`OPENWIKI_PAGE_CONCURRENCY` 控制单次生成或更新中的页面工作者数量，接受 1–8 的整数，未设置时为 1，非法值报错。页面模型工作可以并发；同一活动运行对象内，对共享 Claims 会话、页面账本和运行 checkpoint 的读改写串行化，任务认领也是进程内的。这不提供跨进程仓库锁，不应同时对同一仓库启动多个生成进程。
+
+在 csh/tcsh 中，`setenv OPENWIKI_PAGE_CONCURRENCY 4` 只设置当前会话及其子进程；在 PowerShell 中，`[Environment]::SetEnvironmentVariable("OPENWIKI_PAGE_CONCURRENCY", "4", "User")` 设置用户级持久变量，需要打开新终端后再运行 `omp openwiki code --update`，不会修改当前进程的环境。
 
 ## 模型与认证转接
 
