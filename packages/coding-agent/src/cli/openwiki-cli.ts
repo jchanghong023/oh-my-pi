@@ -25,7 +25,17 @@ Repository options: --language <locale> (default: zh-CN), --modelId <model> (or 
   Without explicit model selectors, the planner uses the plan role, falling back to default only if unconfigured.
   --dry-run previews both model selections and candidate paths without model calls or Wiki writes.
   The model determines the actual Wiki pages during generation.
-Page concurrency is controlled by OPENWIKI_PAGE_CONCURRENCY (1–8, default 1).
+Page concurrency: set OPENWIKI_PAGE_CONCURRENCY to 1–8 (default: 1) before generation or updates.
+csh/tcsh sets the current session; PowerShell saves a user-level variable for new terminal sessions.
+
+  csh / tcsh:
+    setenv OPENWIKI_PAGE_CONCURRENCY 4
+    omp openwiki code --init
+
+  PowerShell (persistent, current user):
+    [Environment]::SetEnvironmentVariable("OPENWIKI_PAGE_CONCURRENCY", "4", "User")
+    # Open a new terminal session before running:
+    omp openwiki code --init
 `;
 
 const UNSUPPORTED = new Set([

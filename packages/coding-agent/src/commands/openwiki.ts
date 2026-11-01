@@ -3,7 +3,10 @@ import { openwikiHelp } from "../cli/command-help";
 import { runOpenWikiCommand } from "../cli/openwiki-cli";
 
 export default class OpenWiki extends Command {
-	static description = openwikiHelp.description;
+	static description = `${openwikiHelp.description}
+
+Page concurrency: set OPENWIKI_PAGE_CONCURRENCY to 1–8 (default: 1) before generation or updates.
+csh/tcsh sets the current session; PowerShell saves a user-level variable for new terminal sessions.`;
 	static strict = false;
 	static args = {
 		command: Args.string({ description: "code, link, workspace, or visualize", required: false }),
@@ -27,6 +30,8 @@ export default class OpenWiki extends Command {
 		"omp openwiki code --update --dry-run",
 		"omp openwiki --update --modelId provider/model",
 		"omp openwiki --init --modelId provider/page-model --planner-model provider/plan-model",
+		"# csh / tcsh: generate with 4 concurrent page agents\nsetenv OPENWIKI_PAGE_CONCURRENCY 4\nomp openwiki code --init",
+		'# PowerShell: persist 4 concurrent page agents for the current user\n[Environment]::SetEnvironmentVariable("OPENWIKI_PAGE_CONCURRENCY", "4", "User")\n# Open a new terminal session before running:\nomp openwiki code --init',
 		"omp openwiki link [directory]",
 		"omp openwiki workspace use <workspace> | current | clear",
 		"omp openwiki visualize [path] [--port <port>] [--no-open]",

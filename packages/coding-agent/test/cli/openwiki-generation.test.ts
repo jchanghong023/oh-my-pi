@@ -6,7 +6,13 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
 type Message = { role: string; content?: unknown; tool_call_id?: string };
-type Request = { model: string; stream?: boolean; messages: Message[]; tools?: Array<{ function?: { name: string } }> };
+type Request = {
+	model: string;
+	stream?: boolean;
+	reasoning_effort?: string;
+	messages: Message[];
+	tools?: Array<{ function?: { name: string } }>;
+};
 type Reply = { name: string; args: object } | { text: string };
 
 function submittedPage(message: Message): boolean {
@@ -170,7 +176,9 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 						models: ["fixture-model", "planner-model"].map(id => ({
 							id,
 							name: id,
-							reasoning: false,
+							reasoning: true,
+							thinking: { mode: "effort", efforts: ["low", "medium", "high", "xhigh"] },
+							compat: { supportsReasoningEffort: true, reasoningDisableMode: "none-effort" },
 							input: ["text"],
 							contextWindow: 100000,
 							maxTokens: 4096,
@@ -191,10 +199,16 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 						? "fixture/fixture-model"
 						: "fixture/planner-model";
 		}
+		if (mode === "plan-role") {
+			modelRoles.default += ":high";
+			modelRoles.plan += ":medium";
+		}
 		const config = Bun.YAML.stringify({ modelRoles, startup: { setupWizard: false, checkUpdate: false } });
 		await writeFile(path.join(agentDir, "config.yml"), config);
-		const selector = explicitModel ? ["--model-id", "fixture/fixture-model"] : [];
-		if (mode === "split" || mode === "planner-only") selector.push("--planner-model", "fixture/planner-model");
+		const selector = explicitModel ? ["--model-id", "fixture/fixture-model:xhigh"] : [];
+		if (mode === "split" || mode === "planner-only") {
+			selector.push("--planner-model", mode === "split" ? "fixture/planner-model:off" : "fixture/planner-model");
+		}
 		if (mode === "planner-only") selector.push("--debug");
 		const telemetry = mode === "drift" ? "README.md/telemetry.json" : "nested/telemetry/record.json";
 		const proc = Bun.spawn(
@@ -267,6 +281,14 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 			new Set([mode === "partial" || mode === "drift" ? "fixture-model" : "planner-model"]),
 		);
 		expect(new Set(pageRequests.map(req => req.model)), output).toEqual(new Set(["fixture-model"]));
+		if (mode === "partial" || mode === "split" || mode === "plan-role") {
+			expect(new Set(pageRequests.map(req => req.reasoning_effort)), output).toEqual(
+				new Set([mode === "plan-role" ? "high" : "xhigh"]),
+			);
+			expect(new Set(plannerRequests.map(req => req.reasoning_effort)), output).toEqual(
+				new Set([mode === "split" ? "none" : mode === "plan-role" ? "medium" : "xhigh"]),
+			);
+		}
 		expect(
 			requests.some(req =>
 				req.messages.some(message => message.role === "tool" && message.tool_call_id === "call_submit_plan"),

@@ -3,6 +3,13 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import type { Api, Model } from "@oh-my-pi/pi-ai";
 import { ChatOpenAI } from "@langchain/openai";
 import { type AuthGatewayRouter, createAuthGatewayRouter } from "@oh-my-pi/pi-ai/auth-gateway";
+import {
+	type ConfiguredThinkingLevel,
+	concreteThinkingLevel,
+	resolveThinkingLevelForModel,
+	shouldDisableReasoning,
+	toReasoningEffort,
+} from "@oh-my-pi/pi-tui/thinking";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
 import { getCompanyConfigError } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
@@ -87,15 +94,19 @@ export async function createOpenWikiModel(selector?: string): Promise<{
 
 		const defaultRole = settings.getModelRole("default");
 		let selected: Model<Api> | undefined;
+		let thinkingLevel: ConfiguredThinkingLevel | undefined;
 		if (selector !== undefined) {
 			if (!selector.trim()) throw new Error("OpenWiki model selector cannot be empty");
 			const resolved = resolveCliModel({ cliModel: selector, modelRegistry: registry, settings });
 			if (resolved.error || !resolved.model) throw new Error(resolved.error ?? `No model matches "${selector}"`);
 			selected = resolved.model;
+			thinkingLevel = resolved.thinkingLevel;
 		} else {
 			const allowed = await resolveAllowedModels(registry, settings, getModelMatchPreferences(settings));
 			if (defaultRole) {
-				selected = resolveModelRoleValue(defaultRole, allowed, { settings }).model;
+				const resolved = resolveModelRoleValue(defaultRole, allowed, { settings });
+				selected = resolved.model;
+				thinkingLevel = resolved.thinkingLevel;
 				if (!selected) {
 					const resolved = resolveCliModel({ cliModel: "@default", modelRegistry: registry, settings });
 					throw new Error(resolved.error ?? `Default model ${defaultRole} is unavailable`);
@@ -137,12 +148,16 @@ export async function createOpenWikiModel(selector?: string): Promise<{
 			const signal = AbortSignal.any([request.signal, lifetime.signal]);
 			return activeRouter.route(new Request(request, { signal }), "openwiki");
 		};
+		const resolvedThinking = resolveThinkingLevelForModel(selectedModel, concreteThinkingLevel(thinkingLevel));
+		const reasoningEffort = shouldDisableReasoning(resolvedThinking) ? "none" : toReasoningEffort(resolvedThinking);
 		const model = new ChatOpenAI({
 			model: modelId,
 			apiKey: "embedded",
 			configuration: { baseURL: "http://openwiki.internal/v1", fetch: inProcessFetch },
 			streaming: true,
 			supportsStrictToolCalling: false,
+			// OMP IDs are provider-qualified; bypass LangChain's model-name-based reasoning detection.
+			modelKwargs: reasoningEffort !== undefined ? { reasoning_effort: reasoningEffort } : undefined,
 			maxRetries: 0,
 		});
 		let disposed = false;

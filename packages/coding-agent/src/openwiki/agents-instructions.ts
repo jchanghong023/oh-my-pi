@@ -19,7 +19,8 @@ export async function updateOpenWikiAgentInstructions(root: string): Promise<voi
 	const end = content.indexOf(END);
 	let updated: string;
 	if (start === -1 && end === -1) {
-		const separator = content.length === 0 ? "" : content.endsWith("\n\n") ? "" : content.endsWith("\n") ? "\n" : "\n\n";
+		const separator =
+			content.length === 0 ? "" : content.endsWith("\n\n") ? "" : content.endsWith("\n") ? "\n" : "\n\n";
 		updated = content + separator + instructions;
 	} else {
 		if (start === -1 || end <= start || start !== content.lastIndexOf(START) || end !== content.lastIndexOf(END)) {

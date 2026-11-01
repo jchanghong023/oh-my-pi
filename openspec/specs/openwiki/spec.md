@@ -56,6 +56,11 @@ OpenWiki 生成 MUST 使用 OMP 已有的模型选择、认证和请求策略：
 - **AND** 两阶段有效选择器相同时复用同一模型实例；不同选择器复用既有模型工厂，所有页面共用页面模型实例，失败或取消后释放已创建的模型资源，不静默回退
 - **AND** `--dry-run` 分别展示两阶段的模型选择且不调用模型、不写 Wiki；`--debug` 分别展示实际模型 ID，现有持久化模型字段继续记录公共／页面模型，不改变 checkpoint 格式
 
+#### Scenario: 保留模型选择器的推理档位
+- **WHEN** 显式公共模型、`--planner-model` 或 `default`／`plan` role 的模型选择器包含具体推理档位
+- **THEN** OpenWiki 保留 OMP 解析并按模型能力归一化后的档位，传递到对应阶段的实际模型请求；公共显式选择器未被规划覆盖时，两阶段使用相同档位，独立规划选择器不改变页面档位
+- **AND** 显式 `off` 传递关闭推理的请求语义，未指定具体档位时不新增强制档位，也不将会话级 `auto` 字符串发送给 provider；不修改已保存的角色配置
+
 #### Scenario: 公司模型和免认证模型
 - **WHEN** OMP 当前有效配置提供公司内网模型或受支持的免认证模型
 - **THEN** OpenWiki 使用与 OMP 相同的凭据或免认证解析、端点与 provider 限制，不因只读取通用凭据存储而拒绝 OMP 已可使用的模型
@@ -77,6 +82,7 @@ OMP MUST 复用 OpenWiki 原有的规划 Agent、页面工作池、Claims、增�
 - **THEN** 默认并发为 `1`，允许 `1–8`；原生页面工作池按该上限执行，任务在同一次运行内不重复分派，每个页面任务只能写其负责页面，quickstart 在其他页面任务结束后生成
 - **AND** 页面提交不得修改其他仍在处理的页面或其 verification 状态；针对已确认的 verification 跨页修改缺陷做必要的定向修复，不重写工作池
 - **AND** 保留原有页面失败处理：普通未提交退出最多尝试两次，限流页面不立即重试且后续并发逐步降低至不小于 `1`，致命提交错误停止领取新任务
+- **AND** `omp openwiki --help` 和无参数帮助均说明 `OPENWIKI_PAGE_CONCURRENCY` 的范围及默认值，并提供 csh／tcsh 的 `setenv` 会话级设置及运行示例、PowerShell 的 `[Environment]::SetEnvironmentVariable` 用户级持久设置及运行示例，明确 PowerShell 设置后须新开终端会话
 
 #### Scenario: 同仓库跨进程边界
 - **WHEN** 不同 OMP 进程同时对同一仓库启动生成或更新

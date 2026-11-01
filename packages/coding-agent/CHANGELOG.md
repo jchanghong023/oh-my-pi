@@ -41,6 +41,7 @@
 
 ### Changed
 
+- Show OpenWiki page concurrency configuration with csh/tcsh session-level and PowerShell persistent user-level environment variable examples in CLI help.
 - Use the configured OMP `plan` role for OpenWiki planning unless a model is explicitly selected; fall back to `default` only when `plan` is unconfigured.
 - Default OpenWiki generation and updates to Simplified Chinese (`zh-CN`); explicit `--language` still overrides it.
 - Scope Wiki searches to an indexed file or directory and show actual retrieval and reranking status.
@@ -125,6 +126,7 @@
 
 ### Fixed
 
+- Honor OpenWiki reasoning levels from explicit model selectors and default/plan roles, including independent planner levels and explicit reasoning off.
 - Allow fulltest to snapshot Git submodules while still detecting revision and dirty-source changes.
 - Keep project role edits from granting per-call models, and prevent foreground submission or execution recovery from silently replacing an exact per-call model.
 - Keep Wiki search usable during concurrent index changes and reduce vector memory retained during model calls while preserving continuation and full-text fallback.
