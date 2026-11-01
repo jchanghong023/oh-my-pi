@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
 
@@ -319,6 +319,8 @@ async function scenario(interrupt: boolean): Promise<void> {
 			}
 		}
 		const first = await finish(initial);
+		const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
+		expect(await readFile(instructions, "utf8")).toBe("");
 		if (interrupt) {
 			releaseBlocked();
 			expect(first.code, first.output).not.toBe(0);
@@ -330,9 +332,11 @@ async function scenario(interrupt: boolean): Promise<void> {
 			expect(JSON.parse(await readFile(sidecar(alpha), "utf8")).claims).toMatchObject([claim(alpha)]);
 			const committedEntry = (await manifest()).pages[alpha];
 			expect((await manifest()).pages[beta]).toBeUndefined();
+			await writeFile(instructions, "Keep my instructions.\n");
 			phase = "resume";
 			const resumed = await finish(launch("--init"));
 			expect(resumed.code, resumed.output).toBe(0);
+			expect(await readFile(instructions, "utf8")).toBe("Keep my instructions.\n");
 			expect(await readFile(pageFile(alpha), "utf8")).toContain("Original alpha documentation.");
 			expect(JSON.parse(await readFile(sidecar(alpha), "utf8")).claims).toMatchObject([claim(alpha)]);
 			expect((await manifest()).pages[alpha].completedRunId).toBe(committedEntry.completedRunId);
@@ -375,9 +379,11 @@ async function scenario(interrupt: boolean): Promise<void> {
 			await git("add", "alpha.txt");
 			await git("commit", "--quiet", "-m", "change alpha");
 			const secondHead = await git("rev-parse", "HEAD");
+			await unlink(instructions);
 			phase = "update";
 			const updated = await finish(launch("--update"));
 			expect(updated.code, updated.output).toBe(0);
+			expect(await readFile(instructions, "utf8")).toBe("");
 			expect(starts.filter(event => event.phase === "update").map(event => event.page)).toEqual([alpha]);
 			expect(submissions.filter(event => event.phase === "update").map(event => event.page)).toEqual([alpha]);
 			expect(await readFile(pageFile(alpha), "utf8")).toContain("Updated Alpha source.");
