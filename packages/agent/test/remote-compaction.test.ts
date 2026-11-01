@@ -4,13 +4,13 @@ import {
 	type CompactionPreparation,
 	compact,
 	createCustomMessage,
-	createFileOps,
 	DEFAULT_COMPACTION_SETTINGS,
 	generateSummary,
 	NativeCompactionError,
 	prepareCompaction,
 	type SessionEntry,
 } from "@oh-my-pi/pi-agent-core/compaction";
+import * as snapcompact from "@oh-my-pi/snapcompact";
 import {
 	buildCompactionV2Request,
 	buildOpenAiNativeHistory,
@@ -1858,7 +1858,7 @@ describe("Responses Lite remote compaction", () => {
 				recentMessages: [messages[1]],
 				isSplitTurn: false,
 				tokensBefore: 100_000,
-				fileOps: createFileOps(),
+				fileOps: snapcompact.createFileOps(),
 				settings: {
 					...DEFAULT_COMPACTION_SETTINGS,
 					remoteStreamingV2Enabled: true,
@@ -1901,7 +1901,7 @@ describe("Responses Lite remote compaction", () => {
 				recentMessages: [{ role: "user", content: "kept user request ".repeat(8_000), timestamp: 2 }],
 				isSplitTurn: false,
 				tokensBefore: 100_000,
-				fileOps: createFileOps(),
+				fileOps: snapcompact.createFileOps(),
 				settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteStreamingV2Enabled: true },
 			};
 			const requests: CapturedLiteExchange[] = [];
@@ -2215,7 +2215,7 @@ describe("Responses Lite remote compaction", () => {
 			recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
 			isSplitTurn: false,
 			tokensBefore: 100_000,
-			fileOps: createFileOps(),
+			fileOps: snapcompact.createFileOps(),
 			settings: {
 				...DEFAULT_COMPACTION_SETTINGS,
 				remoteEnabled: false,
@@ -2324,7 +2324,7 @@ describe("Responses Lite remote compaction", () => {
 				recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
 				isSplitTurn: false,
 				tokensBefore: 100_000,
-				fileOps: createFileOps(),
+				fileOps: snapcompact.createFileOps(),
 				settings: {
 					...DEFAULT_COMPACTION_SETTINGS,
 					remoteEnabled: false,
@@ -2841,7 +2841,7 @@ describe("compact() remote compaction failure handling", () => {
 			recentMessages: [{ role: "user", content: "recent", timestamp: 2 }],
 			isSplitTurn: false,
 			tokensBefore: 100_000,
-			fileOps: createFileOps(),
+			fileOps: snapcompact.createFileOps(),
 			settings: { ...DEFAULT_COMPACTION_SETTINGS, remoteStreamingV2Enabled: false },
 		};
 	}

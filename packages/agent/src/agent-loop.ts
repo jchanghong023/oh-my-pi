@@ -54,7 +54,7 @@ import {
 	signalListLabel,
 } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import { isDsmlLeakRecoveryTarget, removeDsmlToolMarkupLeak } from "@oh-my-pi/pi-ai/utils/dsml-leak";
-import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON } from "@oh-my-pi/pi-utils";
+import { cloneJsonTree, logger, sanitizeText, structuredCloneJSON, toError } from "@oh-my-pi/pi-utils";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import { LiveSteeringChannel } from "./live-steering";
 import { countPerCallContextTokens, countPerCallContextTokensBySource } from "./output-budget";
@@ -1191,7 +1191,7 @@ function resolveAsides(entries: AsideMessage[] | undefined): AgentMessage[] {
 			if (message) out.push(message);
 		}
 	} catch (error) {
-		discardAsides(out, error instanceof Error ? error : new Error(String(error)));
+		discardAsides(out, toError(error));
 		throw error;
 	}
 	return out;

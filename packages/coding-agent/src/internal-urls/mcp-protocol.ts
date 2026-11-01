@@ -26,10 +26,6 @@ export async function resolveMcpManager(context?: ResolveContext): Promise<MCPMa
 	return context?.session?.mcpManager ?? MCPManager.load();
 }
 
-function escapeRegex(text: string): string {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function getUriTemplateMatchScore(
 	uri: string,
 	uriTemplate: string,
@@ -37,7 +33,7 @@ function getUriTemplateMatchScore(
 	const expressionPattern = /\{[^}]+\}/g;
 	const literalSegments = uriTemplate.split(expressionPattern);
 	const expressionCount = (uriTemplate.match(expressionPattern) ?? []).length;
-	const pattern = literalSegments.map(escapeRegex).join("(.*?)");
+	const pattern = literalSegments.map(segment => RegExp.escape(segment)).join("(.*?)");
 	const regex = new RegExp(`^${pattern}$`);
 	if (!regex.test(uri)) return undefined;
 	const literalChars = literalSegments.reduce((total, segment) => total + segment.length, 0);
