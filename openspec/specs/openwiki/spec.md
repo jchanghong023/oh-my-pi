@@ -13,6 +13,7 @@ OMP MUST 通过 `omp openwiki` 提供代码仓库 Wiki 的生成、更新、链�
 - **WHEN** 用户在仓库内执行 `omp openwiki code --init` 或 `omp openwiki code --update`
 - **THEN** OMP 对该仓库执行对应的 OpenWiki 初始化或增量更新，并保留原有语言、用户消息、一次性输出及参数互斥语义
 - **AND** 原有省略 `code` 的 `--init`／`--update` 仓库用法继续可用，模型选择参数按 OMP 模型要求解释
+- **AND** 未指定 `--language` 时生成和更新默认使用 `zh-CN`，显式指定其他语言时以该参数为准
 - **AND** 若 `openwiki/INSTRUCTIONS.md` 不存在，创建空文件；若已存在，保留原有内容
 
 #### Scenario: 只读预览生成和更新

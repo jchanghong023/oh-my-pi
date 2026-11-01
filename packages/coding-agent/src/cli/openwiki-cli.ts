@@ -19,7 +19,7 @@ const HELP = `Usage: omp openwiki <command> [options]
   visualize [path] [--port <port>] [--no-open]
   visualize [path] --export <directory>
 
-Repository options: --language <locale>, --modelId <model> (or --model-id),
+Repository options: --language <locale> (default: zh-CN), --modelId <model> (or --model-id),
   --dry-run, --print, --debug, --telemetry-file <path>. The code word may be omitted.
   --dry-run previews the model and candidate paths without model calls or Wiki writes.
   The model determines the actual Wiki pages during generation.
@@ -240,7 +240,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			const result = await runNativeRepositoryGeneration({
 				root,
 				mode: command.command,
-				language: command.language,
+				language: command.language ?? "zh-CN",
 				force: Boolean(command.userMessage?.trim()),
 				planningContext: command.userMessage,
 				modelId: selected.modelId,

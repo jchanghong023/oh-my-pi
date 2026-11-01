@@ -12,7 +12,7 @@ export default class OpenWiki extends Command {
 		init: Flags.boolean({ description: "Generate the repository wiki" }),
 		update: Flags.boolean({ description: "Incrementally update the repository wiki" }),
 		"dry-run": Flags.boolean({ description: "Preview model and candidate files without model calls or Wiki writes" }),
-		language: Flags.string({ char: "l", description: "Output language (BCP-47 locale)" }),
+		language: Flags.string({ char: "l", description: "Output language (BCP-47 locale; default: zh-CN)" }),
 		modelId: Flags.string({ description: "OMP model selector (also --model-id)" }),
 		print: Flags.boolean({ char: "p", description: "Print output instead of interactive display" }),
 		debug: Flags.boolean({ description: "Show debug diagnostics" }),

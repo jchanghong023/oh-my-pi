@@ -40,6 +40,7 @@
 
 ### Changed
 
+- Default OpenWiki generation and updates to Simplified Chinese (`zh-CN`); explicit `--language` still overrides it.
 - Scope Wiki searches to an indexed file or directory and show actual retrieval and reranking status.
 - Make default Wiki search combine full-text and semantic retrieval when configured vectors are available, with optional reranking and full-text fallback; grep and stored evidence remain unchanged.
 - Return smaller Wiki tool pages: up to 10 complete sections targeting 4,000 characters, with remaining results indicated at the end.
