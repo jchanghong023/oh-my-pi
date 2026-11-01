@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:2f1b3af5473c898cc5021fa945f1cbb64f92756f07fa7dc2665ea349c3ef423d",
+  "claims": [
+    {
+      "id": "claim_462e102c4f054399b9242e15bd236bde",
+      "statement": "createAgentSession 组装会话运行依赖，AgentSession 负责提交、事件与维护，Agent 核心负责模型和工具循环，SessionManager 负责历史和持久化。",
+      "evidence": [
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts",
+          "version": "repo-file-v1:sha256:7b1e10c8d8cbdc731bd6d51a62282cd5def191017d8a3cc2f00bd6734bccb6b7"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/sdk.ts",
+          "version": "repo-file-v1:sha256:6f2a5a9d0075cf32e88f0cf7a0ecf49b33a3a54d943796782a8fcddbef0212f9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts",
+          "version": "repo-file-v1:sha256:316e0bbb41bcaa0ddf6c6562d152e50e2d2c35099b837c437cb598db0ae429ed"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-manager.ts",
+          "version": "repo-file-v1:sha256:838cc8a9848585664739d52ba2e06b99e84e8c3e3b05380e94c4cf16b010ddf2"
+        }
+      ]
+    },
+    {
+      "id": "claim_f781a35a2de4498681e59bb7247370a9",
+      "statement": "prompt 为输入分配标识并经过准入，普通提交等待维护清理，queueOnly 先准入队列，扩展命令可在流式期间立即处理。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L8374-L8377",
+          "version": "repo-lines-v1:sha256:f0c99e67dbd386acadf5e972c1982329be44daa3c2e3ba8527da76b57c6dc908:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTk0NmU3MWYyNzRkYWZjZThkNTQyNzVkMzY2N2I4YjYxZTg0NzQxMDE5M2I0ZGE2NWQyZDhlOWUzZWVjOGQ0NiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTA5NjM3M2YwMTc0Mzc1NjQzM2U0MDFmZTBhYWNiNWJkZjgzNjg3NTJkODQ3M2Y1ZjdmNjQ5ODg3MDdjMzllMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNjUzZjA0NDNkM2NkYzQxMjRiOGUxZTBlZjkyMjA1MDQ1NTNkZmViMmZhNDY2MmY1YTg4NGUwZTk4MWI2M2RmZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOThlMjI3ZWMzNTk3MTIxOWYwZGEzOTE1MTE1ZDk1ZmNiYWQ1ZmFhNDMwNDAyNDc4ZjhkYjYyNzkxNjZiZDlhNyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L8502-L8568",
+          "version": "repo-lines-v1:sha256:dac35fb464be99246596d3e067e3aee928c62db8732ac39e041443cad8c3a1a1:eyJzZWxlY3RlZExpbmVDb3VudCI6NjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZTEzMzM5MTJkODQ2ZGNmZTQyMGEwNzE3MTMwNTE0Mzk5YmQ2NTA0ZGIzM2Y2NzZjNGY5YjlmOTMxMTZmYjQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhNDRkMjkxNmY5ZjlhMzc3M2EyOWM5OWIyZjY1YzU1MWFhMDY3ZTZkMmQ1OWMxNDlmZDdhZmZiNDhkYWQ3MTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdiNjM0ZDcwODU4NzExY2FhMzgyZjNmZGI0OGI5MDE2ODY1Y2FmNmU5MGI4YTE1MDk2ODY5MWRhNGI5ZGY5MzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ1ZDQ1MjA0ZTNlNzQ2Yjc3YjZhNmE3MzE4OTBiZjNkZDhmNDVlZjAyMWVmMDUxMzc3OWY3NDM1MTkxNjNjMjMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_139c776226024b5fa3f72a75a84b7962",
+      "statement": "模型循环流式发出消息事件，执行工具并把结果加入上下文继续调用；内层处理工具和 steering，外层处理 follow-up。",
+      "evidence": [
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts",
+          "version": "repo-file-v1:sha256:7b1e10c8d8cbdc731bd6d51a62282cd5def191017d8a3cc2f00bd6734bccb6b7"
+        },
+        {
+          "resource": "repo://packages/agent/src/agent.ts",
+          "version": "repo-file-v1:sha256:32d00a546d25c4b063cbe1eaeade50cb927f462e68fa6047a2e4043d950aebb4"
+        }
+      ]
+    },
+    {
+      "id": "claim_0fef9b033ca24e21bfee743440870bfb",
+      "statement": "AgentSession 的核心事件处理有异步投递，影响后续回合的部分状态必须在首次等待前更新；流式事件本身不是持久化确认。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L4514-L4556",
+          "version": "repo-lines-v1:sha256:b112678f2819dc7d3ed1319a273e3198be1d2a78aa91d22d90309739eecb3736:eyJzZWxlY3RlZExpbmVDb3VudCI6NDMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE5NGI5MDRlNTljOTQ5YTRkOGE0ZTE1NDdkYmVmYTJiNDg2YWY5YWExYjI0OTA5NzViMmQxZmMxNGEwMGNjN2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhMmY5M2E1MTZlMzkyYWQ0NWViMDgzZTQ3MzMyNWQ2YjQ5MmZkN2Q0ZGY3ODZlMzA0NTZmODNhZWY4MjYzMGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI0ZjQ3YTk5ZDk3ZDdjMGU2MmJiZTU5NDdkZDQxN2I0ZjcwMTM5NThlNzIzM2JjMWQ1ZDAzNTJiYTliZTQ2NWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE1NjFjMzQ4NGUzM2Q3OWNiYjc2NWUyYmQwMTg2OWE1YmMwMzkwNDIwMDAyMzgwNjE0NWM1ZWQyNDQ4MzEwMmMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L4619-L4631",
+          "version": "repo-lines-v1:sha256:25c22cd9b60aa30ac2b93d3701b2aa302c7859865329b40776b4f4d8367c4743:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyMzlhOWVlMmQ0YzdlYTEwMGRkZGU4MDIyYTI2YTM2YzYzZjcyZDBjODNiOGZmZTgxMDVjZmNkODhlNmY1MWMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkMGFmMjczZDdhY2U4YTRmMGVhMjJkOGY1OTIyYzFmNTVkNzQ4MzY5ODNiYWUyYzMwMWNmZTJhMzAwZDczODAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczZTU3OWFlZDMyNTcxNDJhNTRmMTM5YmY1MDY2YmVlNzA5ZmRhZWQ1MThjNjFmMmRlMDIzMjgzZDA4MzA2NjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI5NTgxZTk5ZDhjNzc3MjNmZGZjOGVkNzEyNjMyOTk2ODI2M2JlNjAzZDMyNzEzMGQ3NDJjNzFiM2MwNGMzYzIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ee996e37c0fe482cb31082b94896f9e4",
+      "statement": "已中止运行不取走起始 steering，恢复未配对工具调用时推迟 steering 以保持工具调用与结果配对；暂停可被中止解除，deadline 使用中止信号。",
+      "evidence": [
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts#L1222-L1257",
+          "version": "repo-lines-v1:sha256:623729487e87f66c68d916c8b0be4585e9c06b13046b6473c9fcd635bcf09d97:eyJzZWxlY3RlZExpbmVDb3VudCI6MzYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg5Njg1Y2VkNzc0OTk2Yzk3OGNiMDczY2IyNzAwMmYxYTgyOWUzOWJjODVjNTMxMmE0MThlMTUyMTA2MGFhNGUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIxYWZhZGVlOTNjOWQ1YWQwNTFkZjVhNGE0MjFiNjI1NDY0YWZhNmY0ZGYwNDFmYTY3NmRiNjQyNmUzZWIxZmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjIwODRhNDcwNTdhYzMwNjQxYmE1NTM4YjhiMGZjMTBiYjhlZDY3NmM3M2ZjNDA1ZDI3NDBjY2E1MmUyZTUxZDIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJmNjFiZmE4YzM4Y2JiNzdiZDYyMDFjNmU2MTM4MmQ4NWZkMDcyYTgzMjI0NTM3ODU3MTc1MTExN2U5MjUwMzMifQ"
+        },
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts#L1278-L1295",
+          "version": "repo-lines-v1:sha256:a9ef165da0a8c9527da102ec9da74a1a5748a3db0d1f58f149545156de02ab2a:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhOTBmOWNlNWMzYmRkMzU4ZTVmYjljYmNkZWUyYjk3MTBmYWZlMThlZmJhMWY0ODMxZTMzNTQ0NDA4ZThmNDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY2NTAyNjJhOWZiOWYxYWVhMWZkN2Y0NGU2NjA1YTlkZDY4ZjE5ZTIyYTA5ZmJlNGU2MzM1Mjg1MjI4MjIzODkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZhNjIzMDU4MTI5OWM2MjhlMzcwOTMxMmYwZDM3MDdmNjVkY2UxNWZiZGFjYzZkNjM3YzRkZDdlYzlhYjEzMzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ3ZTkwM2FiMTA1OTIzM2Y2ZDM2YTczMzYxNzFiOTQzYzkxMzc2MTYzMWZhOTE2YTEyZGIzNjU0NGU2ZjM4N2IifQ"
+        },
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts#L1324-L1338",
+          "version": "repo-lines-v1:sha256:2ad0aad27da9a64704720817ca08a8175ac65b288eb38a92ff55d8536c7394ff:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJjYzg5YmE1YzI3OTU5ZjZmNWFkOTdkYzFhMDM3NTIxM2ZhMTU5ZmFhZDVlZjQ2MjZlZDNlNTUxNGUyZGY1NzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE2MDcwZWRjODQwZGM0NzU2ZmEyMTI4ZDY3YzQ2YTQyZjYzNWM3N2MzNjBiYzhmYzg5NmY5NDA1ZjFkYTA4OGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjMjYxYjNjMmNmMWNiNjYxNGEyZDhjMjkzOTc4YjY0MGQ3YzE3YWFkNjMxYjEzNzRhZTgzYzk1NDNhNzMwM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmMDk0MjA1OWM3YmQ0N2E0ZTkzNTg1ZTJmYTcyYWJiOGVmYmY5NWM2YTdkNjVhNWJjYmZjZDQxM2FlYTcxNjkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1a97d7362794490a9faef64cfe552908",
+      "statement": "手动重试未配对工具尾部可能重新执行调用，取消或恢复不保证回滚外部副作用或提供全局 exactly-once。",
+      "evidence": [
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts#L1278-L1304",
+          "version": "repo-lines-v1:sha256:714f411991f9fa2311efd3a86d2215c7032fa1d3fdb0702c97953a4a589a84d5:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhOTBmOWNlNWMzYmRkMzU4ZTVmYjljYmNkZWUyYjk3MTBmYWZlMThlZmJhMWY0ODMxZTMzNTQ0NDA4ZThmNDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2ODA2ZjE1NWM1YWMxYWUyNzIyY2EwNmYyYWM5Y2FkY2I4ODFiOTEyM2NiNjI0YTNjMTA0NzViNDQ0OWRjMmUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZhNjIzMDU4MTI5OWM2MjhlMzcwOTMxMmYwZDM3MDdmNjVkY2UxNWZiZGFjYzZkNjM3YzRkZDdlYzlhYjEzMzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQwY2E4ZTM4ZmM0ZWVlNWI3YzNiODNlMjZmMjJhMmQ2Nzg5NWU5NTkwYTM4YjkxZmVmZmY5YzJiMjIyN2Y1ZjAifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/turn-recovery.ts",
+          "version": "repo-file-v1:sha256:3d6a71e19e412125ce884b5c1837c7210b279a0792b577be93a255215af35b69"
+        }
+      ]
+    },
+    {
+      "id": "claim_9019e424c2df4326b1ce68ef3b5f14d6",
+      "statement": "原生会话历史按带 id 和 parentId 的条目构成分支，文件模式使用 JSONL，存储接口还支持内存及其他后端；运行内存、侧状态和派生上下文不可等同于原生历史。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-storage.ts",
+          "version": "repo-file-v1:sha256:aa43ced0028a6114d5a761ddaf3bd266e9bc9355a229f52b6c2c61aeca23c4fb"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-entries.ts",
+          "version": "repo-file-v1:sha256:dc354a7a4d1788060bd472049eaaa7bef57dd22922003b70f442988b8807ac4f"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-manager.ts",
+          "version": "repo-file-v1:sha256:838cc8a9848585664739d52ba2e06b99e84e8c3e3b05380e94c4cf16b010ddf2"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-storage.ts",
+          "version": "repo-file-v1:sha256:29f16779f30fa689b94de126b0742f92ce5de5f38cc92b5aa8a76e81f9f3ab49"
+        }
+      ]
+    },
+    {
+      "id": "claim_ce9fa767dd5645d0927de5ea3098e077",
+      "statement": "buildSessionContext 沿 leaf 的父链重建路径和设置，限制父链循环，空 leaf 表示无活动分支；压缩后以摘要、保留段及后续消息构建上下文。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-context.ts#L240-L363",
+          "version": "repo-lines-v1:sha256:645b60116bc801a755af9ec7b4e20c63f789a7b23d9c154462998f24b713244a:eyJzZWxlY3RlZExpbmVDb3VudCI6MTI0LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiI5ZGJlMjEzM2RhYzNmMjdkOTFjZmYxMzU0NDUyOWJmZDVmYTZiZTYwMWVhYmNjYThjMmRmNmFlMGMxMDg0YWQzIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiIwNzZjZTA3NGIwMmY1Yzc2YTRiNjc1Zjk3NGQwODg5ZDIzMDY1ZjY2YzViOTM1ZWY1YTYyMDQzYjU5MGFiZTU3IiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJlZDkwZTM1MzBjYTA3YmY2YjhhOGZkMzdiYjg1M2E2ODcwYTU2Yjc2MThjZWZlZmFlYzk3NTdlNzdkNWVjMzk4IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiJlNWEzYjNhYTQ0MWYzZTFhNjg4OGIwNWUyODg4MjcwMzQzZGJmZDdmYThlMDRiNjA3NGIwMTZlYTdmZmFhZjQ1In0"
+        }
+      ]
+    },
+    {
+      "id": "claim_425b0cd7edd74663a49c17c66b73032b",
+      "statement": "编辑历史输入时预检和分支切换受准入协调，未准入则恢复原 leaf，已提交的压缩记录保留旁支。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L8384-L8460",
+          "version": "repo-lines-v1:sha256:9dbd35288021337473e6ca5f7bd65d2296cc717d349f3f6519db31e4b16e3fa5:eyJzZWxlY3RlZExpbmVDb3VudCI6NzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYxYjRhOTg2NTc4ZjU3ZWUzYjA3ZTRmZDkzY2RmZjBmNWU3ZDA5ZjczNmNjZTg0MmVlNThmNTM3OTk4MjdiNDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkYzc2MDIwYmFlNzA1NzdlNjRiMzMwZGNhODNmZGYyNGYzZDc1OTNhMDE1NGQ4YWJlYzZkYzYzZjU4OTdmZDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUwODVhMzA1OWE3NGM3MGQzZGIxNjgxNTNjMmUxMTBjMjA5ZjIzMDc1NzgzNzY4MjcxYWVkZDAwMWVmMGZmZmMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI2ZjEzNDBiNDdhMGI5MDc4NDgxZDcwZTNlN2ZmZmIyNGYyOWYyYzNkNjBmNjEzZGU0MWYyZGZkOWIyMWY4NTYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_2142a0aa9503446f816261ac3c51befc",
+      "statement": "文件写入需要等待 flush 或 close，首次 assistant 条目触发初次落盘；关闭中的 writer 避免同步热写，并发追加改走重写路径。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/session/session-manager.ts",
+          "version": "repo-file-v1:sha256:838cc8a9848585664739d52ba2e06b99e84e8c3e3b05380e94c4cf16b010ddf2"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/session-manager-close-race.test.ts#L1-L23",
+          "version": "repo-lines-v1:sha256:d0f2be865c3eb820a6542f4f4bad0543b7f23167c958937d2df25a57b717854b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIzZGNjZmM5ODkxNWRkMzNkNDMzOWE5M2EyZWRhNjY0ODM4MGM4NDY2NmNhN2VmN2Q0MGI5ZTk1NDQ0MjUxZjUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFkNDBjZDRmNTAyM2QxOGI4YmYwODQxYjUxY2MxZTU0M2FjNjBlOGU4NDU5YzE1N2U5NTNjMDQwNTVjY2IxOTgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/session-manager-close-race.test.ts#L150-L235",
+          "version": "repo-lines-v1:sha256:37065b95deee75f5398fd22507768a9de6fe2fd46dfc75e0c8fc2085dc0a8e38:eyJzZWxlY3RlZExpbmVDb3VudCI6ODYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM4MmFmM2VlZWYyNWVkMWRhYWVmMmU0OTBjYTk1YmE4Y2Q5YzFmOTg3YTVjMDllNzdjMTQwODUyOWQ4MDk1OWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhNGFkNzU4ZTUyM2YxMjRhYWIyMmNiNTg4MmU5NTIyNmYyY2MyMmViZDYxOTUxZDQ2YmRiZmY5ZTRkOGQ4MWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRiMDVhNDMyZWE2Yjg1OTE0MDc0NDkyOGYxZTRlYjRlZWZiNDVmY2EyMWY2MGVlMTQyZTI1NjQ2NjllOGFhMDgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMzMWExNDMyMDk0YzllODliMzZjZWY3MzE0NThjMDIzNWNkZmE3MjgwNDE0NjU2NDJjZjcyN2E5Y2Q4ZjQyNTQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_351e2df5c5aa46769fba91a3289790e6",
+      "statement": "终止错误持久化测试覆盖工具失败后的空错误回合、关闭重试时无虚假重试事件和含文本错误回合不重复记录，但未证明断电或外部副作用事务性。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/agent-session-terminal-error-persistence.test.ts#L40-L47",
+          "version": "repo-lines-v1:sha256:f4343c48222d4c09a650ed7b1bd091256c866f1e2d7ea2bdbf44a0a746072281:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMzAxMjA0NjFhYzAxZDQzZDI1NWZiMjQ4ZTFlZmM5NmFiYmY3ZDVkZmI3NWM3NDUzYTc3Y2RhNWFiNTJiYmY2MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTkyZGM0NWI2MGM5MGY4NGIwZWU5MzAyNDE5OGEyMTk2OTVjNTkzYWIwZWI0ODFmMjU4NGI2NDZhZWU3NjIwOCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjhkNmVjZDdmZTQ1MTUwZDRiOGFkOGU4YTI3YjE1NzM1NjQ0OGI5YTI3ZmYzYjMxMWU5NjdiOWNiYjYzN2NlYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiN2UwNzMzZDIxNDc4ZTk2ODc5MTYyZjkyNjYwNDE0YzliMjBhZDRhZmYxNDA2N2QxN2ZiNmVmMjMwNTU4MjNhNCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/agent-session-terminal-error-persistence.test.ts#L86-L141",
+          "version": "repo-lines-v1:sha256:a75fe7d1e57527e166c4289fdf6df48e18714953649d49b035d5aa7e6961277d:eyJzZWxlY3RlZExpbmVDb3VudCI6NTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJjZDJhNzc2MTk0ZTFkMjI0Mjc2YmI2NWU5MTU1NTEzYjkzYjNmZGEwNmEyZmUwYWIwMmQyOGI1OGM3ZmM1NGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBhNzM0OTJkODk0NmIxZDBmOWQ5YzA0YjcwNGE5MjBmMjRmODllZjdjN2Y3MzExYTg1OTlkMTBjN2Y2MzU4ZDAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE5NGExOGFjYzYxYzI1ZWEwM2JiZTY2N2JmZDliZTc4ZDVmNWVkNjVjM2U5MjY5ZjA1MmQ2ZTVlOTc0NDdkYTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b2d68033ebf04bb0b09ee12e9ccc0429",
+      "statement": "关闭竞争测试使用受控内存存储暂停 writer close，验证并发追加及后续 flush，而非模拟断电。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/session-manager-close-race.test.ts#L17-L24",
+          "version": "repo-lines-v1:sha256:6d307e8714f781935d7ae5f9e9743a76083f9521bc195d6b55a6e5375ffc6992:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiODUwNWI0NGZhNTY2NTE2MzRiNzM2N2ViYzQ0MGQ3ZTQ2NDA3MDkyZmY0MjUzZWRlN2VmODZkZTc1MmFlOWM0YyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTcyYTQyOTM4MmIyZTE0NzE4ZTBlMzdiMDU3MGE4YTE3MDI5OTFmY2Q4NDk4Y2Q4NDA2MGE4YmY0ZjA1MDE3YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYmU0NTA3Y2I4YjU5YWY5MTEzZjVmNDlkNDY2MjFmY2FlZmMxNzM5YmIxMmViMDJkMzQzZmFkMDlhMmVjZDcyMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzA5YzJlMzMxMTFjMmM0NjYxMTE2ZmFiMDQyOGM0ODg1YmNjNjZlN2UxZjZiNjYyNGQxYTgxMjg3NTQwZTE2NSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/session-manager-close-race.test.ts#L194-L235",
+          "version": "repo-lines-v1:sha256:fe645963b4e00aeb8b108b8ac9ef3ca49c456fb859c3bb56d6271c2e3fdf0265:eyJzZWxlY3RlZExpbmVDb3VudCI6NDIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiNDljYjdjOGRjNDk0NWYwMjlkM2QxYWNlN2Y1ODdhY2VkMTgxMWM1YjkyYjc0MmJkZDY1Mzg4MDE1YjAyZjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhNGFkNzU4ZTUyM2YxMjRhYWIyMmNiNTg4MmU5NTIyNmYyY2MyMmViZDYxOTUxZDQ2YmRiZmY5ZTRkOGQ4MWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY4ODkzOWYzMDk4NTY3OGZkOTJjN2MzMmM0M2UxNDVjYjQwYjcyMTgwMzliMmE1MjBkYzFlZDM0MjZmOTRhYzQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMzMWExNDMyMDk0YzllODliMzZjZWY3MzE0NThjMDIzNWNkZmE3MjgwNDE0NjU2NDJjZjcyN2E5Y2Q4ZjQyNTQifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

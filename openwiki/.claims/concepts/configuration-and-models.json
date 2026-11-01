@@ -1,0 +1,244 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:d6b92c0540792b26c147bec383ec54f7d7fb2c99ae22133aa0b24526b28cfa7b",
+  "claims": [
+    {
+      "id": "claim_12d89c8416894f7a9f9b3aaf849198e7",
+      "statement": "CLI 在加载依赖档案环境的模块前选择 profile，档案隔离设置、认证、会话及缓存；SDK 宿主可使用独立设置实例。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts",
+          "version": "repo-file-v1:sha256:0bce44ec878f6a02ef17d274cb2d84a5f416dfb44bfdeb46e4fc8b4e475c6aff"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/commands/launch-help.ts",
+          "version": "repo-file-v1:sha256:4bbc7ff568fd42a7cf72d8a391dc2bab1e1857c87dda319ab75e87fde05aa727"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/settings.ts#L770-L796",
+          "version": "repo-lines-v1:sha256:5e79213dc5997245f7f49ce7e5e712a50ef9de703055f81bc8ebaf745ed5ac33:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVkOWQ4Y2EyYmNhNmJiZDE2YjU5Y2JmNTJiNDM1ZDNlNzY3NjA3MTk4NjQ1Njc0YTdjN2ZiOGMyZTA1NjA2YTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU5NGFlNzdhMWUyNDMwODY4NWQ4YTcyMjJmZmI0ZTk5MzI2MTg3NGE0NWJiNWMwZjYwNzJhZjk1YzE4ZDljZDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjExZmRjYWU4NGM0YTkxYzljZGVlYWVjMTg4NDUyYjAyZjA5NGRjYmRkYTlhYzRiYmVjM2ViZGNiODZlYzUzOGYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk4ZTIyN2VjMzU5NzEyMTlmMGRhMzkxNTExNWQ5NWZjYmFkNWZhYTQzMDQwMjQ3OGY4ZGI2Mjc5MTY2YmQ5YTcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_aea43b46c5304ebf98385b609117fbfa",
+      "statement": "普通设置按运行时覆盖、配置 overlay、项目、全局、父 overlay 和 schema 默认值解析；额外配置文件缺失或无效时加载失败，角色 null tombstone 有独立语义。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/settings.ts#L701-L710",
+          "version": "repo-lines-v1:sha256:fad41adc0432b605631f794773f7aec8c9818d5ec390289922ad3a2c56aafdcc:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4YzA3ZDZkMGU1YTNkMzI3ZDc2ZmU1ZmQzNzQ1MjA0Y2NhZWFkNGZmZjY0ZjY4ZDc0N2E4OWE1NjdjYzVkYzMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3Y2U5YjkyZTE4OTYyNzQzNThlMjNmMGFjNjlkOGU2MzUzMTE1ZjdlN2E0NGQwNmEzNWZmNGI4ZDliZjA0YzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjlmZmRlOWUwMzViMzZkZTJmMzFkYzIwZTJiMDJmMWJiYTE4ODY3MGEwZGMzYjAzYWFkMmQ1YTA0MzMxZTRiMDkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk4ZTIyN2VjMzU5NzEyMTlmMGRhMzkxNTExNWQ5NWZjYmFkNWZhYTQzMDQwMjQ3OGY4ZGI2Mjc5MTY2YmQ5YTcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/settings.ts#L916-L952",
+          "version": "repo-lines-v1:sha256:02bc67e20ef5b36901c980251fe5e03ba9073e7982f96532efda8055ad2ee9f4:eyJzZWxlY3RlZExpbmVDb3VudCI6MzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVkOWQ4Y2EyYmNhNmJiZDE2YjU5Y2JmNTJiNDM1ZDNlNzY3NjA3MTk4NjQ1Njc0YTdjN2ZiOGMyZTA1NjA2YTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0Nzk5OWM3OGM2ZmQ4MTZkMjcyN2YzMTNlZDI2YjRmYjQwZGIyMGI2ZTljODhiYmM4NDc3M2M0OTQwYmIzOGEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM4NTJkN2I1YTg2MGMxOTRlNjA0YmMxZTY0Y2FiZjEwNDUwNTRmYWY2ZGE2ZDA0OTZmZDk4MDVlNzhiODY5Y2YiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFiY2U0YWVhYzc0N2U5NzdlMDFmNzRjNjkzZWJjYWI3YjA4YmQ2Mjg2MmRmYjU3ZDdjNTc0NjU2YjU4Yjk5MTQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/settings-reload-cwd.test.ts#L147-L198",
+          "version": "repo-lines-v1:sha256:6e0713a1391fe725b1086e2f7ca1384ea4e13b9d526a1b8909361e0c552ce4d0:eyJzZWxlY3RlZExpbmVDb3VudCI6NTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkNThmNjhhZDhhYTVkZGM2NTNiMDI2ZDE5MjM5OWQ2ZWI5NGFkNTZhNWE2YTU3NmYxNDM0YWUzNTBhZWE4MTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhmYWQxMjFmZGRlZGRmNGU0NzJmYzUyZDgxNDU3Y2VmMThjYmU2ZDg0MzNiMjQ0Y2NmMmYxMjYyNmRmNjc5YzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjUyNzdmZmQ2M2M2NTg3MjhiZjk3YWIzMGU1MDA3MWI5MWNkZWIzYTMwYTRiYTdkNDM0MjY3ZjA1NjE0ZTFmYWQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNhZjM3ZWE1NjQ4NjBhNTZhYTczMDU1MjMxZGNkNWFkNTdjNzdhNTg3MjliYmU3YzVjYWU2NTE4ZmM5MDdkMGEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/settings-reload-cwd.test.ts#L65-L95",
+          "version": "repo-lines-v1:sha256:91f9fd4b0abc3e2045421ea7fcda345e698a1f87f9fa4ce8a654d70e516955e9:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI4Y2YxOTZhNTVlZWU4MjRlYmViYTUwZGYxMWRiYzg1YzI1ZDhkZWM4NzdhMzQ2ODFmZmZhZWQxMTlmMDg0OGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjEyODY3NTRhZjBlNjhlYjVlNzdhZTM1NzhmZmU2MzNiMzg2MWFlYjgzYmNjNzU2NDVjMTU2ZWIzNTYyMjZhN2EiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzYmJjMGQ5ZDI4NzkyMTJjYTU5YTJkY2QwMDk4YTNmZmFjOTY3MGQ4MGY1MmM1YmJmOGNjMTkxZmRjNzY1MWEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_de8aebe971694c108a78ab0dc869ebb5",
+      "statement": "Settings 支持单例、只读、独立和内存实例；overlay 继承父值且不写回，模型授权视图排除项目层。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/settings.ts#L742-L857",
+          "version": "repo-lines-v1:sha256:303a38781621fdc52d95b7467989c97fb5492f8e5645a120162b0c0dcc61f6f1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTE2LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJlZDlkOGNhMmJjYTZiYmQxNmI1OWNiZjUyYjQzNWQzZTc2NzYwNzE5ODY0NTY3NGE3YzdmYjhjMmUwNTYwNmEzIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI2N2NkYTgyZGE2MDYyMzhlMDVlNjIzOTk1NjljNWVlMDM5OTM0MTk2NDhhZTVkNDNhMmJmOGNkNjM0N2Y4MjYzIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJmN2FkYjgwZmU5MjFhYTVlMTVhNGE0OGJlMjc0ZmU2YjU2M2I2N2VlNDU0MzgwYWNmMjk4ZjAxZTU3NWE3NWFhIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI1MTE5ZGU2OTEzZjllZDQ3YjAzZGM5N2QyNjZlM2YzNjEyMTY2ZTBmMzRhN2M0Mjc3NjU4MjkyZjYyNzRjYTUxIn0"
+        }
+      ]
+    },
+    {
+      "id": "claim_1fddadab2548468582438a6344052a71",
+      "statement": "切换 cwd 会重新解析项目及路径作用域设置，同时保留非作用域运行时覆盖；设置监听不意味着所有消费者均热更新。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/settings.ts#L636-L696",
+          "version": "repo-lines-v1:sha256:7edf3fbe8d1cb64f560e2c12488d4124f4d01b8e9f8cc2f513dfcb689e76a08d:eyJzZWxlY3RlZExpbmVDb3VudCI6NjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUwMzk0MDdhZTcxYzI5NjlmNWEwOTJjMGM1ZTU2N2EyYWI3N2E1MjIyMmVjNWUyZTY0NGYyZTA0NDZmYTcwNmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNjZTYxODVjZTBkODAwZGFlMzY2Njg5MmQwY2NlYTMxZjI2NzkzNmYyYmYzMzQ3MjIwMDBiYTg1MjA1Yjg2MDUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjlmZDUxZTM0ZDUwYjA0MTc5YTYwMDU3YWUzZDJmMTBjMzAyY2U3MjZlNTZhNTA4OTU4YTFmZjE5N2Q0Njc5MWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYwMGY3MjU2YzQzZDUxODI2MGI1ZTRkMDdhNzBmZDMxMDZjN2VmZjdkNDM5MDBiOTFjOTA3YzMxZTFiMmZiMzQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/settings-reload-cwd.test.ts#L98-L132",
+          "version": "repo-lines-v1:sha256:c8314df00f5141033d8c5ac830aff5387c62fe34d5ce5b6355d908abfc707a05:eyJzZWxlY3RlZExpbmVDb3VudCI6MzUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZjMDU0ZmZhOTE3ZjlkZGU2ZmYxZTdmYmY0ZjM2ZDRiMmZiNDgyMGJhNzc4OTkyNGM0M2UwYmFiOWRhNzAzZDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBhNzM0OTJkODk0NmIxZDBmOWQ5YzA0YjcwNGE5MjBmMjRmODllZjdjN2Y3MzExYTg1OTlkMTBjN2Y2MzU4ZDAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM5MzllMjVhYWI5MGI4OWIzOWY3MDZhY2M3NmMwZGFkMmQ1ZmU5ZjUxOWNjYzFjMjdiOWQzODBkZWZlMDk0OTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU1ODI3YTRmZTZiMTM5NDI1ZTEzNDQ3MzczOTAxMWE4M2I5YzQ2YWRhOGFjMTVlMWIzMjk2ZWNjNzZhZTNhNWUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b98b2ef9f4c448dfb9a45298c3e6bc02",
+      "statement": "用户设置存储校验路径安全和文件所有权，以文件锁、revision 检查、原子替换及回读处理并发和持久化失败。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/user-settings.ts#L104-L154",
+          "version": "repo-lines-v1:sha256:10b8793d61ae298903b007f88ec941b1fc1fa3acc9abe9fea861e9d66fd57e86:eyJzZWxlY3RlZExpbmVDb3VudCI6NTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiNDI5MjQ3YzRmZTZhYzAyYmUzNjM3MDc2NzBlY2NiZTdhNjU2MmJjMTIxNDJlNjI5ZWY5ZjllYjdiN2RmM2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg0Y2EyNDI0MDkwZTJkNjc4Mjg1YzZlYmNlNTMwZjI5N2FlZjU5Zjk0ZTRmZTg2MDBmMWQzZDRmYjM0YWNiNjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ4MDM3YTI1YzEzMjgyYzBjZTg1NjVmMTE1NTFhYzE2NjMwMzJjYTc1MTZiOTg1NjQxNGY0MWJhMWJjNjQ5YjUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/user-settings.ts#L296-L400",
+          "version": "repo-lines-v1:sha256:aae5da02489b51641064c7531e0ec6549b54b3681758b44dd556c39cfcd80a2f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTA1LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJiOTc5YjU5Nzg1Y2EyNjU3M2E0ZmVlMTcyZjg0NzhlYWI3NGRhZDJlOTUwZmZiNTEzMmUxNWQzNmY1NGQxYWU3IiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiIzNWUxMmU0YWFlNGE0MjFmYWE5ZTVkZWY4MDkzNjVmYmM2NGQxZTczNjQ0YjdiMzAxMjRiYjdmNzM4ODgwNjM1IiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJkMWMwM2QxYzM0MGRmMDRkOWQwZTgxZDRlZDM1MDZmYzVmODI4YWNhZWYyMjJhMDVhZjc1ZDlhZjI5NGViMTJmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiIzOGZjNTZlMzlkZTY0NGVjNDQ3YWQzNjVmMTEyNWEzOTUwZjEwNTEzNzc2ZDA1OTVjNzhhZDMxMzQ3N2RiMjI5In0"
+        }
+      ]
+    },
+    {
+      "id": "claim_8acde9515ca9423991d5d58251769233",
+      "statement": "modelRoleStorage 默认 global，项目模式将角色保存到项目配置；模型及 provider 过滤默认空数组，cycleOrder 默认为 smol、default、slow。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-settings.ts#L133-L135",
+          "version": "repo-lines-v1:sha256:4215f3515a19db03aa10c92e21998c3b0791c2f31f66a3e625c5b52b7ed45593:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2EzNDkzM2JjZjE0OGQ0NmE2MDdiNWYyN2UwYzRiYzg5ZDEwMzAxNjVhOWExYWQxNDQ1N2U5ZTdkOTUwZjIxZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOWE4Y2E5ZDdmOTEwNDM3YTYxNWY4ZjY0YzllMDVmMTlhYzAwM2YxNTZlZjMxMmYxODllMzMxYWMzNWUxZjY1NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzRiNTI1MDRhNzRiOTgxODg1ZjI4ZDA0NDBkM2RhNDQwNDM0Zjg3NTgwNmYxOTNlNzY4ZGQ2YzdlM2NhZTY5MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjAsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-settings.ts#L30-L33",
+          "version": "repo-lines-v1:sha256:431ab9c0f69fcc7534459cb4d965c526ea1e69536c826301175d65758159590e:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2YxYmYzZmZlYzE3ZjAwMGVjYzgwNWU2NjRlZTIyOTMzODVkMjhkMWJkMThjN2ZkYTMwNzMxMThhNjI0Nzg3ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2I0ODA3NmRiMjAwMWQ3ZjA1ODQyNTU3NDE0ODc1M2E3NDQ5MDM5YWU3NzY5ZmVjNWU3MzFlOTAxNzBmYzgwNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYTYxMDlmNmZkNTZhYjAxYWJiY2E0NjgxZDk3NDRiMmM1ODk5N2M3ZWJiNjA1Y2I4ZDVkOWEwYTgyNjk0NWExNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiY2MyODU0NmEyYmFhMjViMWFjNzY5NGQxOWEzNDljNzVkMDE2ZmYxYzRkZjRhNmQ0OGYyNDU3OGNhNGQ3OThjNiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-settings.ts#L63-L109",
+          "version": "repo-lines-v1:sha256:75e3ca52b39e88403e3cf467856f9e2c4e5038296db5fbd6dd224d63240d2fb8:eyJzZWxlY3RlZExpbmVDb3VudCI6NDcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNmZGZhYWYwMDFkOThkMmY2MDZlZDM4YmJkMDM4MWZkYmYxODFjOGU3NWI3NWE2N2I0Yjc3MDExNmNjZjUyOWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY2ZWMxNDkyNDdlNzk0OWY0NWQzZjYxMTk2Y2QyM2JjYWVmM2U2ZjczYjc0YzIxNDdiOThhMGVmMDQxOTEyMzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjkyM2Q0NTRhZDk3NGI5ZGNiM2M4OThmYzA0YWJhMjAxZTJkNGI4NTQxMWNlNzE5NTQ3YjdjZTkyN2RmY2ZhZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgzYmVmYTA4ZjllZGNhNzhjODM1YWNiZjdlNWE1NmVjY2VlNjUyZmQ1MTEwNzQzODdjMjJlYWU1NDEwNDBiMmUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b0551d553f464be69bc50514aa29047c",
+      "statement": "认证 broker URL 和 token 默认未设置，环境变量优先，连接发现只使用环境和全局配置而非项目配置。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-settings.ts#L37-L55",
+          "version": "repo-lines-v1:sha256:27b113f66d97a20fe6e66ecbf4d86bd3fbcd19357bbe3ddf816732fd8e25174b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxNjJkYjYwMzRkYTFkZDgxNjMyMDhmNDlkMTc5NGM0ZDliMDNjZTM2OWY3MmY3NDJhNjJhN2Y3YmMwZjhiY2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjMjg1NDZhMmJhYTI1YjFhYzc2OTRkMTlhMzQ5Yzc1ZDAxNmZmMWM0ZGY0YTZkNDhmMjQ1NzhjYTRkNzk4YzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYwNGIwMDZhMjkyYzhiZTA5OGFmYjRmNWNjNzVkZDM0ZGRhZDU4NmE2OWM1YjQ4ZWZmZDhhZmViMTc0YjM1M2YifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3f1545474e9b4ad4afe261848c0a3429",
+      "statement": "个人运行默认规格规定 LSP 和 JavaScript Eval 关闭、输入预测开启，终端程序状态在 offline 默认关闭而普通模式开启，显式配置优先。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L18-L40",
+          "version": "repo-lines-v1:sha256:bf5aca32d3aa323d289c6d0f2a7b2ace03a3531bdf83e6a057f615614019297f:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU4ZmFiNDU4MjlhYTJkOThmYjdjZTdkMGI0Mzk1MTNlYjIyYjQ4NzY0NWNhNDRjYWRiNWI0ZDY1MzNhMGZhNmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk5OTE3ODlmYTA1MjEzNjgxNTFlYjcxNDA5NGU4MmIyMTAyNzI3NjUxM2Q5NTg3NWM2MDhhYTQ3OTlkYWIxM2YiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRiZTNiOGJlOWQ1YjE4NDJkOGMyMzgzNzNiN2FhZDJjOGI4OGFmYjc2NDA1MzBlNjM1ZDdjZWZkMDgzZmVjMzkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQxY2U2N2ZiYzQ5NzEzMGMxYTc2YzliNDg5NWI1NjQ4NTExNTk0NjBhY2ZjNDE0ZGZkYjEzZjQxNWI4MWJlMjgifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L49-L61",
+          "version": "repo-lines-v1:sha256:65bec099886f54cb8ab8c3c18276ca594084bbf5d233a24eaaaf7095809c44f4:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZTU4NWIyNjAxMjkyYmNkYWNkMWY4YTcxMzc5NjA2MzAyYjcxMjA0OTU5ZTZiYTg1ZjIwOThlOTU5M2IwMGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYxN2YzNDA0ODI2OTNmYjllMzM4MmU3MTllNzcxNjgyYmM1OGRkYmU5ZDM1NWJhNjI2MWM1YmFjOTgzOGMzYjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgxMWVkYjU5ZmE0OTk3YTk5NGViZThkYWI2MDQ3YmNmNmIzMjZhYWRmZDQxNjU3M2MxNDA3MmMyNjY2MjEzYzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_922d80f9f9984005aa318f7ff9fed011",
+      "statement": "ModelRegistry 汇集内置、缓存、发现与自定义模型及扩展注册，运行时扩展覆盖跨刷新保留，隐式本地 provider 排在显式配置之后。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-registry.ts#L303-L315",
+          "version": "repo-lines-v1:sha256:bee3d76779cacb4af76bd67db5417de7422819e46ab219dd531327b023d5abcc:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUxZDZmYWE1ZTJmYmRmMTU3MDE4MWQxMzBkMDdhOTM0NDZiYzk5OWM5ZTNhYjQyZjFjMTJiMGM4MjdiZTBiNzIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM2NmJhNDQ0MWNhYjIzNjFhMDY3MzQ1ZmEzOTYwMWI4YzdhZGMzMmU2ZDRlNDFiNjJlZDFlOGEwNjkzNTVhZWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU0YTk2ZjI5MTE0YTEwN2NhZTMwNzQyMGUyMTRhOWM2YTU5YTRiMGEwN2I5MmUwYzU2ZGNhZDBjNjZhZWU1M2MifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-registry.ts#L397-L421",
+          "version": "repo-lines-v1:sha256:652224ed1a356e33d8cfbcb35b9d964a3edd2b75eddcc78fa450c6f1070d1a9a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIzNjVjNDE0YjIxYzZlMzVmYzcxNDFlY2MyZDdkMDI2OWNhZGE4MGIzYzMwZjcwMjRlNzE0ZjI0N2E3YzUxNDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjY2MGUzOGRmNGQ3Njk3MTk1Yjk1MmU2YjQ2YzhhZDExZDVkNTJlNWQ3YTk2ZjdmYjMwOGJjMjU1ZWMzMzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRhMDc2NTBiNDdlNWFhNmUwMWU0NDg4NWRmZjJjZmMwNmE4MjJjMzI3ZWMwZTI3Y2YwMjQwZTFlNzAwMDNmYjgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIxZmNmZTI1NWYwOGNkOWRjMjhlY2RlYjdlNzMzMjYxNmJkZGY4YjVhOWViMmExM2JiOGJiY2QzNzZkZjdkMjcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-registry.ts#L437-L462",
+          "version": "repo-lines-v1:sha256:18d97eeabb040e9c4ee6e5249e4e653a5f08793bd0101ebb390aedd9a029bcc0:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU3NzRiNjAwMmEyMmRkNGIwZDNhNGE3ZWUzOWZmYzZmNWQzNGVkMmY2ZmJmODYxMTU4MTA5ZDk3ZTgxYjFlZWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM5ODg0NzNiMGU2MmM3ZWFiNDI3MjcxYTMxZTIyMTIyMGVkZTBiZmNlNWIzNDc4ODU1OTMzZGFkZGM3OTNjNjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZlYTQ5MGQyOTcxMjA3NDNjNjFlNGU3OGI1ZmQ0YTRmYzcwYzFhODZjMjEzZTlhMWY3Zjc2Y2VmYWRhMTViZTciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk4ZTIyN2VjMzU5NzEyMTlmMGRhMzkxNTExNWQ5NWZjYmFkNWZhYTQzMDQwMjQ3OGY4ZGI2Mjc5MTY2YmQ5YTcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d8f4b469c4e14634a72fde66c9c10e84",
+      "statement": "模型角色选择支持 @、旧 pi/ 前缀和默认角色简写 *，不同角色约束可接受的模型类型并支持自定义元数据。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-roles.ts#L109-L154",
+          "version": "repo-lines-v1:sha256:beeee04e35e6563c0aa88e6477d12717bee1853d29801634a56a75125577d2f6:eyJzZWxlY3RlZExpbmVDb3VudCI6NDYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRmM2I2NmYxZDY2NzM0MWY4OTg3MjNkZmVmZWQ4ODU5ZmUzMjQ4MmYwMGZmZDQ0ZTVlMzlkODRiZmI0NzkzMmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjEyNDYxNGRjZjNjNDI1ODFlNWViOTkwZTcxMDk3YzliYjQwY2E4M2Y0YmY0ZDVmZDA1NjY1NTEzYTAwNzM0M2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-roles.ts#L18-L25",
+          "version": "repo-lines-v1:sha256:dfdacdc0518f69dcfc9ef1490ea103eed6a6a03080a565ed6e56467fd5bb2215:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTk3MzkwMDVkYWRhNzk3MzdkZmNjZTEyOWMxOGVlZTQ1OTllYWQxMWZkNDI1NTY3OThhZTVhMTdhMGIwY2RlMiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMmUyYmM5ZDFjZGIzYjY2NjMwMmQwYTNiZGQwNjBmMzEwYWE5OTQwZTA5OWE1MDY1MTU2N2Q3NjQyYTM3YWRjMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWExYjc4MzVlMmVkNTc1YTk1NTgxMWVkOWU1MjA4ZDBhOWEzNDQxOGEzZmM0NTRlOTVmMDQyMDE0YWU5YjJkNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMjVmOTkwYTUwMDE1ZmEwMDI1YTkwOGQ4ODM0ZTFjNGRlNDU4MTUwMGQ5Mjg3MmEwY2I3MjY3ZGFiMGQzZGEyNCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-roles.ts#L37-L90",
+          "version": "repo-lines-v1:sha256:7c371de48dfae100d9ef3ccda44916ab3137c26ddab2e1a66b7f1dddf2098452:eyJzZWxlY3RlZExpbmVDb3VudCI6NTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE0ZGY0YWEyZWRkYzc5ODhiNzg0MGFkYTJiYzI4ODEwYThhZjVjODAwYzU2ZDhhZGU1MjNlYTdlNjcwYmUwN2UiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA3ODY5YTgxZGJhNTgwNzNiMmNmYzg4ZjE1MDUzNGJkODExODlkNTJmOTQ1MGU5NjQ2ZWIzZTdlNDE3ODRmMDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZhNjQwZjA0Zjk5Njg1ODE2OWVlZTgxMTA2N2E0MzQyZjA2YTk1ZGZlMWNiOTk0ZGQzNzRkMWFhNzA1YTAxNzEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI5ZTI2NjEyMGYzZWY3OGZiNzYyYzI0MDQ3YzMxMTBjNmFjMmJhNzNmOTdhNjdhMGVmODliNGM5YjY2ZGEyMmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_fa4627934bcc452d913a0afdc4ae6ef7",
+      "statement": "completion 的 smol 和 slow 使用对应角色，default 优先会话模型，只有 slow 发送思考档位；judge 的候选与 fallback 受会话或项目 enabledModels 限制，会话模型 fallback 例外。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/model-and-skill-discovery/spec.md#L108-L118",
+          "version": "repo-lines-v1:sha256:2137b74f91c8d12fd8d95fef882ee09213cd1ff53bc305b5ac871662d7b58cbc:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNmMTZlNTI0MGRkMmNiOTJhNGZjNGM2MWRlODNlYWY1M2E5YWQ0ZWNkYjI1YmMxYWE0NWI5YzkxNmYyY2E4YjQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxNjY2MWUxMDExOWVlNjc3ZDk3NmEyZmQwYTFkZTg3Nzg2ZDJjMGEyMmE2MDM3NTVlYjgwNjE0OTA5ZDUzOWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjEyMGI4MWZiMGQwMWI3MjM1ODViMWQ2OTljNzFhNmJkZjM4Yjg1MTgxMGFlNWY3Nzc0N2U0NmJiODI5MTg1OTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAyYzJiNjM3N2MxMjg2ZWZjZWUxMTM4MjQyYWU0M2E2YjNlYzBmZWM5NzNiODYxMGVjOTA3NTE5NDQyMjBlNDAifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/model-and-skill-discovery/spec.md#L79-L95",
+          "version": "repo-lines-v1:sha256:5681c9bd97573cb9de30a6cdfd7e0957bbe54826c6201ecf5c8b2617bd30c95f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE0MTFlOGI0ZGNiMGE5ODI5YjhhOWZiZDllZmQ4ZGJkNjU2ZmZhZDFmMWQ0MzRjYzcwYmI3ZTRjMDFkN2M5NGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE5NmRhZTMzZmViMWJhY2E2ZTUwNjEwZjI4OGFmZmM0N2FhZDI4MTBkYjY4Yjc3NmUzYmI1ZDIzYTgxMWExZjgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNkMDU5OTBlNTFhMTFjYTkwNGNlM2QzMmZhNDc1ZmU4MmQzYTBkN2M4MDIxYjQwNGIwZGYzYWZlNzlmZmNhOWQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIyOWEzN2YyMTM2OGMyZWJiYjNhYWQwZmE5OTQzZTA4NjU0NDE2Zjk2OGUyZTI2ZDJmMDg1M2UzZWYyOGNkN2MifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/model-resolver.ts",
+          "version": "repo-file-v1:sha256:d3ff119b4cdd522ed55c283dd1212b3bf08f9d686a080ebbcb1d1dec38c90e54"
+        }
+      ]
+    },
+    {
+      "id": "claim_85cf736c276a4aeda75a44c0479142ea",
+      "statement": "SDK 将显式模型模式解析延迟至扩展 provider 注册之后；offline 自动子代理启动或恢复不会为冷发现主动请求未缓存模型，显式选择的策略不同。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/sdk-model-selection.test.ts#L165-L229",
+          "version": "repo-lines-v1:sha256:7dd2f6e9f8e04d3546dfc357ab6b79a67efe7da76d006b267bdcd6f7ac3193e0:eyJzZWxlY3RlZExpbmVDb3VudCI6NjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwYTUzODFlOTRiZThlZjMyODRkZjFhMDdkMWEwNTMyMTRmMjkwNDEyNjc3ODQ4NTQ5YTc4NDA0MmU1M2I1MGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYwZDllOWNjYzYzMWIzNWVlN2NhMzhiNzNjODIzZDFiYjhhYzBhN2UyMjk5MzJmZjE5ZWM3MzYyMjdmYzBkZTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjUzM2ZhM2JjZTdjNzdiNTM2ZjA0YmExZWQxZGRiMjMyYTE1YTEzODQ0ODIzOTZlZGE3Mjc1MTU4ZWY2MzU3MWQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/sdk-model-selection.test.ts#L232-L290",
+          "version": "repo-lines-v1:sha256:bc7b74a64f6f5d1fa5ad773a941874bba8f6178a23adf15fdd3ef0ad3aa5a26d:eyJzZWxlY3RlZExpbmVDb3VudCI6NTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNiNzYzZTg5OTFlZTVhMTE4ZjFlYmNiYWE0ZjAwMzhkNmFkNDZlZDFkNDBjM2Q1YTdhYjYwZGJhMjYwNzY4ZTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRmZmE4ZDEyMzkzZDdkY2ZjYjkzNDdjZGY2MjNkMmYwMTEwNWNhNTgzM2E0NjlmZjVkMmZjMmYzZmRhMDVlOTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVlMTc0ZTkwYTgxNmEyY2U5ODNmYjEwOTUyNzliN2I2MTI0ODU4NmNjZjYwMmY3MTViMzliMzhkNzNjODE0NjUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/sdk-model-selection.test.ts#L293-L388",
+          "version": "repo-lines-v1:sha256:1bda30c47de8e053037b6f885482e925177b4140b2be71f3f42208547e670aae:eyJzZWxlY3RlZExpbmVDb3VudCI6OTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE3OWRlNjNmNDBiOTE2ZmU0YTAwNmIyZWZlNjU3NmY4MjJhOGY3ZTZkMTEzZWI3YjM5NTU2Y2RiNjlkZmE5YmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBlMTA5YmYwNWRlOWVlNDJlYzE0NWI1MDJiYTNjNGRkN2NkYjY2MzAzNWExNzg0NDY0YzlkMmVhMjZmYTk2YzQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRmZmE4ZDEyMzkzZDdkY2ZjYjkzNDdjZGY2MjNkMmYwMTEwNWNhNTgzM2E0NjlmZjVkMmZjMmYzZmRhMDVlOTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU3YzY3ZWM2YmE2YzA2YTZjNWMwNjFjYjQyN2ZlNTQ3YzhiMDNiYWM1YTc2ZjEyZGE2NDhkNDNjMmZjMzcwMTIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_007cadd85c0244099e6b3c9c8f324310",
+      "statement": "AuthStorage 由 pi-ai 拥有，负责凭据、OAuth、多账户、会话绑定与限流，其 key 级联不同于普通设置层级。",
+      "evidence": [
+        {
+          "resource": "repo://packages/ai/src/auth-storage.ts#L1-L19",
+          "version": "repo-lines-v1:sha256:5cec67e868e2ee2dfaaef849d2a1ba13ac4eaa4a79002a1042eef5009d1fce60:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJjZTljYTg0ZTdkMmVjNTNiYzUwMmY0NjczNDUwOGZlNjVkYTEzNDUwNjYwY2E4Yjc3ZGZlMTI5MzUwOWZjYzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVhNTFkNTczYTc5OGE1Mzc3NDNiMmVlM2RhY2UxMDRmY2FjZmJmZWI2MTJhNGY5YjE1Y2RhZDljOGEzYWE1OWIifQ"
+        },
+        {
+          "resource": "repo://packages/ai/src/auth-storage.ts#L80-L138",
+          "version": "repo-lines-v1:sha256:88f5e70883c857c115afbed1d80eeb6893a8a561fb2ba96c62abac493e334c9c:eyJzZWxlY3RlZExpbmVDb3VudCI6NTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE3OGY0ZWYxZWU2YzFhNTk5MjUwODcwMGRmMTYwNzlmMDA1M2YxZTYxMDQ1N2JiYzM4NjNlM2Q0MDA0MzhiMjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyMDJkNjE3YmZjYzZkY2IyZWYzYmU5YmRjNTgzNDgwOGVjODdjZjc1ZTI1ZjAwMTE5YTIwYzZkNjdiZjU1NzQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/auth-storage.ts#L1-L23",
+          "version": "repo-lines-v1:sha256:6cb7f1a82c6396ffeb1ec97aae66e71b0e8c502de6bcbbb2468a026b6ec73cde:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3MzljYWJjNzIyMDk2ZmEyNWU5YWMwYThhNThjYzVjODI1Mjk0YTYzYzRhNGUyMDU4NDc4MzU0YWRlNmI0NGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjNmNGY1N2ViOGMwY2QwMjc5NGJhZTljNWY3YjgzZjZlN2MwMjJlMmJiYTQzYmU3NGJjNDBlZTYzNGRlZDhkMTIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b03eb98ed7934c03bec48c21ae26f0b5",
+      "statement": "账户策略可实时替换，非法或歧义策略不改变当前策略；替换凭据 store 时先加载新 store，失败保留旧 store，成功后重建 store 绑定状态。",
+      "evidence": [
+        {
+          "resource": "repo://packages/ai/src/auth-storage.ts#L140-L176",
+          "version": "repo-lines-v1:sha256:5cb5b68dae0753cc2128172725893c4e519d9a80ce4005fb89af8ffb8b6b9dcd:eyJzZWxlY3RlZExpbmVDb3VudCI6MzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVkOWQ4Y2EyYmNhNmJiZDE2YjU5Y2JmNTJiNDM1ZDNlNzY3NjA3MTk4NjQ1Njc0YTdjN2ZiOGMyZTA1NjA2YTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY4MDYxYmIzYzYzOWMzYjVjNjBjNTA3NmYxMWY2NTU1MGZiNTZkNWFiNTI3NjdlMmI1NDgyMmRkODRkNzg5NDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJiZWJlNjVjYmIzZmY4ODU2M2NjYzA4YWZkYmVmZjIxZmJlNWI3NzAyY2I0YTRkNjlhYTUyZjc5NTRlZTVmZjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE4YmE0YWNlYzM3YTcwNDBjNDg2MmE3MDM4YTA4ZWI4NTJmY2Q1YTdiYTIzNDM2MWEyZjJmNWJmNzg3ZjI5YzcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0beb518f954447db86dcf7b687f33d2d",
+      "statement": "公司 provider 仅在 offline lane 启用，读取并校验 Claude settings 中的 URL 和 token，主线程缓存启动快照并供 worker 复用，修复或修改需重启。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/config/company-provider.ts#L142-L240",
+          "version": "repo-lines-v1:sha256:6e94951f504c5d98d7555146de1a567c33407252d210879cbb2984b2284917a3:eyJzZWxlY3RlZExpbmVDb3VudCI6OTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVjYjhmMzRmM2IyZDhmN2U3NWI0M2IyMzgxMjk5ZWVhYjIwODkzMDdlODYwZGE2NjAwZmNlZDljMjZlOGYzYTAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkOTI1MGQxNDRmYTUyZDFkMjAyMzcxODNhMzQyNjVkODcxOTRlOTRiODFiZWU3MjE3MDMzMWIxNmE4ZDA1NjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFiOGMwYmEyMGY1Y2E4YjhmZmM0NGZiZjMyYTZhNTUyYTI5NTBkZjVmNTljYzQ4ODhjNjkxZTE5MWRkMGYwODUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/config/company-provider.ts#L21-L139",
+          "version": "repo-lines-v1:sha256:088d03bf3310c850477bf4002160eefc42edfd71203780caba7715d6858dc440:eyJzZWxlY3RlZExpbmVDb3VudCI6MTE5LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiIzMWZjNTVjYzFiZWI1NGNjZTJiNTRlNzA4ZGQ3YTUyYzE4MDUwNjBkZmE0MDJkNDU1OWI3Y2NkYjhiZjEzOTMwIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI2N2NkYTgyZGE2MDYyMzhlMDVlNjIzOTk1NjljNWVlMDM5OTM0MTk2NDhhZTVkNDNhMmJmOGNkNjM0N2Y4MjYzIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiIzZWFhNDhiZTU1MzJjNmYzODk1NzJlZmU2ZjY1NmIwOTFkNGY3OWM4ZjZkNzZiZGVkOGVkN2Y0MjZlYWM5OTE2IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiJmMjg1OTJjNWFjY2U4MjMxYTBiOTJmOGY5NjY2OWVhNzkyYjcxYjdmNWEyYzdlYzQxZDRhMWE0ZjJlMTU2ZjY1In0"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

@@ -1,4 +1,6 @@
 # 文件
 
-- [模型供应商、发现与内网模式](models-offline.md) - 说明 OMP 如何组合内置、配置及发现的模型，解析凭据并选择请求目标；重点介绍 OMP_OFFLINE 下的公司内网模型、缓存快照与失败边界。
-- [ZCode app-server 协议与运行所有权](zcode.md) - 说明 OMP 如何通过独立 stdio 入口兼容 ZCode 协议、准备存储并在同一进程托管多会话，以及命令幂等、历史投影恢复、权限和扩展边界。
+- [SDK、RPC、ACP 与扩展边界](headless-and-extension-surfaces.md) - 对比原生会话的嵌入式和无头接入契约，说明协议卫生、权限、工具桥接与生命周期所有权。
+- [OpenWiki 生成与内置资源集成](openwiki-generation.md) - 说明 omp openwiki 如何将 vendored 仓库生成器接入 OMP 模型与认证，以及技能、可视化资源和生成状态的交付边界。
+- [技能发现、OpenSpec 与 Superpowers 资源](skills-and-spec-resources.md) - 说明固定打包的需求维护资源如何被发现、覆盖、授权和执行，以及 Dev 阶段如何使用不同的资源与 schema。
+- [ZCode 桌面与 app-server 边界](zcode-app-server.md) - 说明 ZCode Host 通过 stdio 接入 OMP 原生会话的协议、投影、状态所有权及桌面能力扩展，并区分执行端和外部 GUI 的职责。

@@ -1,10 +1,80 @@
 {
   "schemaVersion": 1,
-  "pageVersion": "sha256:c615e866f921abd4a68662fa1dee719c6a2f1045fbfb42312bfe55a569a256ba",
+  "pageVersion": "sha256:448c5aaa240e17151cebbbd31a148ee2e739b44460c15a0a0c726d6c925fb379",
   "claims": [
     {
-      "id": "claim_2cbe465a47a44635a47429645a6bc2d7",
-      "statement": "fork 的产品范围包含两个真实使用入口：终端使用 OMP 原生 TUI，ZCode 桌面使用其界面框架并通过 fork 自有 app-server 接入本 fork OMP 作为 Agent 核心；两者共享 OMP 执行能力但有各自的入口和验收契约。",
+      "id": "claim_44224e842f4b41ac86c92d2d8d64fbcd",
+      "statement": "本 fork 的主要入口为原生终端 TUI 和由 ZCode 宿主启动的 app-server，两者使用本 fork OMP 核心；零配置文件仍要求模型服务和必要认证。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",
+          "version": "repo-lines-v1:sha256:6164bafe7027876666ec1d4489c9a06c1233e0d440fdc77218f3fc12a13d1669:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhZjE2MWM2YTFiNmRhNDBiNGEwMjA3ZWIyOTJkNzAzMGM1N2QwMzg2NjBiNjBlNjE5M2ZhZDM3ODViM2Y0YmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhlY2FlMjViODUzOTgwMGU5MGJlMDRmYTdhNzYyNGJiN2IxOTc2YzE5NDkxMDllYmFjYWI4ZmFlMjEyMWU5NzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyMWNmNzg4ZmM0MWRiNTBjYjk1MTkwODBmNDJjYWYzZWNhY2IxM2FhYmMxZmI3YWYwY2NkM2YyMThmMjgwZTcifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/zcode-app-server/spec.md#L9-L16",
+          "version": "repo-lines-v1:sha256:85be3a5697cb1b0cbdedc805a1660f0bc0362280c44372c16e35abf7bb7a9b00:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTdhODNjNjMxMTI1NWNhMTQ0M2VmZjE0NTQ3MGNiZjY0OGRmZGI2OGU1N2NhZGI1ZWIyYzhhM2FlYzgxNGRkNSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjMyN2RhY2YyOGMwMzk3NWZiM2Q2NTlkNjdjMzdlZjhiYjVjYzYzNDMxYzBhYTI4YzA4MmRlYmZkMTI4OTY1ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzMzYmEwMGZmMmY1ZjczZjkwMmYzNmI2MDQ3OTM2MzVlMzdhNDc3NTdhNWU2ODE3Yjg0ZTljMDkwYzVjYzFkZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiN2VmOTNmYTMzNTUwZmU0NjY3YzIzNTI5ZGMxMjc5NDlmNTc3YmRiMjAwNzhkMDA0ZTI0Y2JjYjlkOWNjZWMwOSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_04a33439a03849dfb8bcbc8b25b82e98",
+      "statement": "ZCode 使用 ZCODE_AGENT_SERVER_COMMAND=omp 启动 omp app-server --stdio，提供专用协议和同进程多会话，不等同独立 RPC。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/zcode-app-server/spec.md#L9-L20",
+          "version": "repo-lines-v1:sha256:94975a0aa254a5cf8964e11133989352ff195953a5055cdfd8da12d2497fa94b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3YTgzYzYzMTEyNTVjYTE0NDNlZmYxNDU0NzBjYmY2NDhkZmRiNjhlNTdjYWRiNWViMmM4YTNhZWM4MTRkZDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3MjVhNDdkOWNlN2JmNWU0NWFlYmJiNDYyYTVkNTMyZjcxNDEwZThkMzQ0MTBhNmJkZWQwNDc0NTU0ZTg5YzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImMzM2JhMDBmZjJmNWY3M2Y5MDJmMzZiNjA0NzkzNjM1ZTM3YTQ3NzU3YTVlNjgxN2I4NGU5YzA5MGM1Y2MxZGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI3ZmU2N2JjNmZiMGViYmJlYWQwM2EzM2Y2MjM1MTVmNDE3ODE2MjU3MGQ0ZjM2N2Y3MWYwMmE2YzA2ODkyN2MifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c9fa7557ea5844639320e156a7792540",
+      "statement": "终端可用 omp -c 恢复当前项目最近会话，-P 选择独立 profile，其聊天记录、设置和 Wiki／Repo 数据库隔离。",
+      "evidence": [
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L34-L45",
+          "version": "repo-lines-v1:sha256:92443b741258c424bcfc5313b78f3203a53c0716f29a9d1a66ee2ab8f0dbf903:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZlZWFmZjY0ZDFkNDdkZjVhYTgxMTM2NDNmOTM4OGJlMTk2NzM4YThmNDMwYWU4NTQzNDFiODM5ODE0MDc4ZGUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2MDE3OTliZjYwMGUyMzI2YjRiNDkwMzUxZDM2MmQxZjZiOTIwNzY1MzJkOGQ2ZDQzNWNmYzVlZDMzZjVmYTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYzNjQyNjMwYmE2OTYzMWQ2NDUyN2NjZmUxZTIxZTI1YzBiZjlhZDE2MDM2OGVjYWIyMmViMTBmN2QyMzYyMzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE2MWQ5ZDFmZWEyZmUxMWEzNzUwODQyMmIxNjlkNjZhNTI2ODk1NmZlMWFkNWZmMjcxZjliOTQzN2JkNjZmYzgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ae6b09adb63c40d795a738402d2e7422",
+      "statement": "本 fork 安装器针对自身 Release 预编译二进制，新 Release 仅提供 Linux glibc x64 和 Windows x64，而上游 README 的公共安装方式不能直接视作 fork 发布渠道。",
+      "evidence": [
+        {
+          "resource": "repo://README.zh-CN.md#L36-L97",
+          "version": "repo-lines-v1:sha256:0702977479a169123293e4bdb10babca85a6ad9cc54f124d6eaa3de27a98575e:eyJzZWxlY3RlZExpbmVDb3VudCI6NjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhMmQ3ZDNjOTA5NzNjY2RlNGM5MGFmZjZhZDYzM2MwYzQ2ODVhMzk5MTQyNTMxOWUwYzhlYTBhMTdlYWE2OGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3MjBiMGFmMzk0Y2FmMDRlNjY2OWNlZDFkYTNmZTZhZjFkZmYyN2QyMzhjMDljOTE5ZjgyNTIyZTE3YThmN2UiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRiMGEzNTI0YTdlY2RiNjE4NmVhZWY0NzI1YzdmZWQ5MDE0MDA3NWMxMzQxY2M2M2U4NjA3YjcwMjFjNTllNmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY5MTM0MTIzMWYwMThhYjBiMTA0N2FkYzIyOWZlY2ViOTg0YWU3N2YzMjg0Nzk5ODk1MjVmZGU3OWE5ZTBkNDMifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L63-L79",
+          "version": "repo-lines-v1:sha256:ed96f1e27f9eb59cbb478c6b2db84cbd2239dcf646470b068fb3c6166afd6fe7:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOWUzYTRmMWYxNjY0MGNmYzFjNGVkMDdhYzc1NTlmZGUzZmM1MmEwZDg2MmZhMTE0MTUwZDhmOWEzZTk1MjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRlY2JiYzYyZTNjNzM0YTdmMjdiODNhOTA1OGY1NWZlZjM5ZmM4MmMwMDgwZWIzMmI5MDJmNzcyOGY2ZjM5MjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2Y2I3NjM0YTEzMzA2YzA2ZmYzYTMzN2JhMGJkYjY5Mzc0OWEyM2NkNzE3OTgxMzUxYWMzYTE1YzM3ZjAzNmIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE0MTQ5NjI5ZGVlNTQwMzZiZjM2Mjg3ZTIyODY2OTM2Yjg3ODJiMTJhMWUwMmZjNGQwODUzNzExYTgwMmYwZTIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f7725bcef8ce4851b206a5d6f30f9132",
+      "statement": "源码 setup 顺序执行依赖安装、native 构建和链接，失败时停止，默认采用 Cargo/N-API；dev 脚本在 coding-agent 目录运行其 CLI，CLI 检查 Bun 最低版本。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L74-L78",
+          "version": "repo-lines-v1:sha256:fc2df4b47e1c1d29aa91297fae6cd23cce3e3e84ec4aeeb15429bc6e12422ea5:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMzIxZGVjN2VhOTU0YzFhNzNlNzIwOWEzZTEzZjFiZjA0YjllNWU1MTA3NDRiNmEwMjk4NzllMjlkMjk2NjA2MiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzFmZTkwYjU5OWIwMmFjODFjYzMzZGI0MTJmZWIxMTQ4M2Y3YjA3NGFmOGJkMjBjMGI1MDZjNTRjM2M2NmI1YSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZGIyMTYxOTgzOGFiYjY0MDY1MGE2MDMxMTZkYmUzZjlhOGM3NWYyZDA0YzQ0OTc0MjY2MzNlZjNkODMwZmE1ZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTlmZjJjNDE3ZmJhMDBlM2YxYjkzYzdkNDlkODVkMjc4YTU3YjBhNWFiYTU1OTA1YjYwNGIwYjg0NDUwZGU3ZiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L52-L57",
+          "version": "repo-lines-v1:sha256:9aa0adf4b681f0a7f4956d5e7030384f53f7e2eddf46f31712c8ce39a6e42fc6:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTdjZjFlNTA5NTFkOGU2YzQ0YTI2ZmEwNTg4OTZkNjBkOTBkYjc0YWMxZjRlOThhZmY2NGViYjg5ZTJmMzQ3ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODJiMWFiYjVjYmNjMjhiYjVkZGVjMjU3ZWJmMDg3NWYxYzE1NDZjNDJmNDdlZjRmMmVkZmUwMDlkMGZiZDk4YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTI1MWM3MTgwYjI1MTkzNmUxNmFhYjQzMzkxZWNlYzUyZjU5YmUyM2UxZDRiOGEyMjliZTJlMjRlYTc0YTc2OSJ9"
+        },
+        {
+          "resource": "repo://scripts/setup.ts#L1-L7",
+          "version": "repo-lines-v1:sha256:dcbb7f2dac55f5eb0b1ab062b150bb1fbe72122d37ccba43a63e43b6b7476066:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMWFmOWY3MjRkODZhNjI2OGFhNzJjOGExODcyNDhjMWQwNjkzNzUwMTc4NGRhNDAwYjVhMzE5OTI3MGJjM2M0MSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYjY2OTlmYmQ1Nzc2NjcwYWEwZTYzNTA5ZGY0ZGVlMWI0OTg0M2ZhMjQ5NDZlOWMyMmQxNTRiMzlmNzAzMzNjZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjAsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjhjZmZmYjM5ODI1OWUxZTEwZjhiNDcwM2YxMGQ3MTA5MGQ4OTA0OTM3MDdlZjY3YjViNGIzZTJiMjBjYWE0MCJ9"
+        },
+        {
+          "resource": "repo://scripts/setup.ts#L83-L109",
+          "version": "repo-lines-v1:sha256:5a22583d36420946bfc8787c52579af0de11fceb0de88b2984566316bb88c691:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZTI2MTVkY2M4ZWY3NzdmMzhhNzNiY2Y3ZWY3ZDlmNzU3MWI0ZTJlYzI1YTNmYjUxZTVkODZhZGNlNjQ2ODEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRmYzI5MWZjMmE4MzI0OTEwMmUxNmJlYzE1YzM2ZTNjZjdlZmIzZDVjYzk3MjU0MDU2Y2MwMGZiMmQ5YWMzMDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQwMzk5NDVmNzEzY2VjY2MyYTJiZTk4MWFiNWM1ZWVhMzdmOTVmOTc2OWU1NzVjZDhlZDlhOWZjYmFmZGYwNmEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3fbca6c00cfc4385820b25cec6b41551",
+      "statement": "终端和 ZCode 应分别在真实入口验证消息、模型响应和工具执行，服务及认证就绪是共同验收前提。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",
@@ -13,46 +83,98 @@
       ]
     },
     {
-      "id": "claim_a5eabded4d9f44b8a90133ce0e8d9edd",
-      "statement": "fork 的零配置目标不等同于无运行前提：模型服务可达及必要认证仍须就绪；公司内网终端场景通过 OMP_OFFLINE=1 使用本地资源和内部模型服务。",
+      "id": "claim_9bee6d3b33bf42f8be62115e1cb7d40d",
+      "statement": "公司内网指南要求按环境先启动 IDE 和模型代理，offline 模式复用已配置的 Claude Code 公司地址及凭据；所需 company 配置缺失或无效时明确失败而非隐式回退。",
       "evidence": [
         {
-          "resource": "repo://openspec/specs/fork-product-scope/spec.md#L22-L27",
-          "version": "repo-lines-v1:sha256:0296b6bb5a349d8741fb328ddddb8ff630ef335de2c1eb45720e6045210d77be:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTM4OTRiNmEyZTdhMDhhNjkxNjQ3ZTEyNTMxYTRlNmEwYTNlOGQzY2FiMWY0YzBhY2ZjYThiNjQzOGY0MTU1NyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGVjYWUyNWI4NTM5ODAwZTkwYmUwNGZhN2E3NjI0YmI3YjE5NzZjMTk0OTEwOWViYWNhYjhmYWUyMTIxZTk3MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNGI5OTFhNDVlM2FjZDg5ZGNlMGNhMzFlZDM0NWI3NDU0ZmJiNjRkZWM0MWI2MzczYzk4OTU0ODU1Yjg4YmNlZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTIxY2Y3ODhmYzQxZGI1MGNiOTUxOTA4MGY0MmNhZjNlY2FjYjEzYWFiYzFmYjdhZjBjY2QzZjIxOGYyODBlNyJ9"
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L25-L47",
+          "version": "repo-lines-v1:sha256:a336fbb8adb7c49be78d197103ea4f985efe100c8d92ca7831301a1f55dd8af9:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYzZDg3Y2FjOTQzOWJlNDk3NGY3ZDVhNzM3OGE0ODNlZTllZTFmYjM1ZDU1MzdiYjY4ZjE1OWYwYjg1MzgwOTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI5OGQ2NDljNGZiOTg4MjEzMTM0ZWM4NzVkMzA3MGM3OTZhOWNhMmExOTY3NDE0MDZiOTFhMmYxNWYxYjAxNTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYxOTU4M2M3MDU1MTNjN2E3MmViM2FlOTI0ZmRlYmNkOGNmZjVmOGMzNzNjNzU3OWYwNDgyNTY0OTVlNTI5ZWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ2M2Q1NzYwYzZlOGM0OTM0YmNjOWY0MzJmMTNjYTBiNTU2NGY0Yzk5ZGUxYTExYTVmNWVlMzllOTkyOGQ5ZjIifQ"
+        },
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L55-L67",
+          "version": "repo-lines-v1:sha256:bb8ab75c593f5fff5deade3086c61f6d2d6dfc796aa9fb28bb5344f4bfcf2dec:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgyZWE2OTBiZDk2ZmNkODBmNjA5N2E4MTkxZjA3YmJlYjA2YTBmMDdhOWRiMTFmYzkxZjhlNTYyODdkNjY2MzMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc2NWI3Yzg4MDZmNzEwOGU3Y2RmZDBhYTRmMTM2MDI1MWJmNzA3MzQwOTYwMTAzZmI5YmExMzAyZjQ5MmY5NjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVlODM1OWUxMzc1MTgzM2M2ZDc5M2UxMTA3MzA1NzExNzg1ZTg5NzhmNDFjNTRkNjlkY2E5ZGUyNjNkZTUzOGYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJmYWUzZTFjYTEwOTFkY2IxNzE0OTUxOGI1MDQyYWMyZTljNDEwODczOGZmNWZiYjVjY2EzZmI0ZTk3MjJkZjcifQ"
         }
       ]
     },
     {
-      "id": "claim_fca3eb89b73d410fab5bb57918c1e8aa",
-      "statement": "fork 与上游能力的比较基准是规格记录的 can1357/oh-my-pi@main 提交 62f4f7cccfd38adde9a2ae203d69b27bc187a84f（版本 v18.14.2）；该基线描述集成状态，不代表集成功能已验收。",
+      "id": "claim_3c3892f92c1c4be49d2a24e1c674d16f",
+      "statement": "OMP_CONFIG_ROOT 可选且要求有效绝对路径，用于统一数据根，不自动迁移旧数据；OMP_SKILLS_DIR 可选用于共享技能。",
       "evidence": [
         {
-          "resource": "repo://openspec/specs/fork-upstream-baseline/spec.md#L18-L23",
-          "version": "repo-lines-v1:sha256:d7a5107d59e8522efe9aee2c4b693f883a102e77f46f55e31f96888946301984:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiM2MxMTYxNGYxMTMwMWIwYTU3YzU2NGJhNjllMGRhMTcyZmE3Y2Y5YWQzYjI1ZGNlODUxM2RmMTkzOTNkZTU4NSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNzhmN2E5ZDgxZmNjOGZjNTNkYjFkZmNlOWRmNDEzMTQ3ZDBhMjZkYWE2YjdhOGJhNWFlMjgxZjUyOWYxNWMwMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDU3NTU4NTA4ZDRkMjhkM2Q3YThlOWZmZTBjZGE5ODQ0MjI2Y2U4YzQzNDAzM2NjMzE5ZjZhOWZiZGYzYTA3MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjAsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSJ9"
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L3-L23",
+          "version": "repo-lines-v1:sha256:8c9823fb99427b80998fbf0239ae9890e988ab0c5d89c74c1d6768333de410de:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3MTRhNzliMjIzZTIwYWFkM2ZmNjM4YWFlMTBkN2M2ODMwNDY2NzcyNTYwYmMwZDlkMmIwMzY2MzQyMGRjZDYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRkY2M0Y2RkYzJiNmYxNzUwMDI5NWQ0ZWY3OTYxODVkYzAyNDUzNTYyYjU3Y2IzZmMxYjE1ODYxZTcwMDhlOGMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoyLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczYjJjOGY3NmY5ZWEzNGIzZWU2ZjczZjNjMTcyNjgwM2IwYzc5MzEyYjNmMjAxOWQ0NzMwYzhhMjc1N2M4MTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk2Y2E5NmZkMjVmYzk0NmRmMTVjMzljY2EyZTIzMmEzYWJjMjYzYWUxMzIyZDQzYTJiZTk4ZTEyM2E1ODI5ZDUifQ"
         },
         {
-          "resource": "repo://openspec/specs/fork-upstream-baseline/spec.md#L5-L5",
-          "version": "repo-lines-v1:sha256:061a53cbd2e44c0e54fe59483e1b215a2456dd078ca0c608be9cd7975f79c39e:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDYxYTUzY2JkMmU0NGMwZTU0ZmU1OTQ4M2UxYjIxNWEyNDU2ZGQwNzhjYTBjNjA4YmU5Y2Q3OTc1Zjc5YzM5ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDYxYTUzY2JkMmU0NGMwZTU0ZmU1OTQ4M2UxYjIxNWEyNDU2ZGQwNzhjYTBjNjA4YmU5Y2Q3OTc1Zjc5YzM5ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODJmZjEyMDkyZWI0NzU4ZDZiYjk3Y2RlYzBmNGRiYzlmNTZjNTBkNjc2NDNhY2I0ZTc4NzZlNmZhZWI0MjhhNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYmIxMzQ4NmM1NGMwZjdiMGVjOGMxNzdjOWY0NzdhNmE3Y2YyYzJmZDBmNzU0MmViYmFjNmEzNzMwZGRjNDc2ZCJ9"
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L48-L52",
+          "version": "repo-lines-v1:sha256:3b8e12a09bf0dd798d34a04934504d7bd4c54eab9a1d8ff13f460bb262b30084:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTQ5YzRlMzYzNjY2OTBkNTk5OGJhZWI5NjkyNGZlMGM1NTM2NzJmMjZjNzBjYzUwMDJjNjE0M2U0MzA3YTk0ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWE1ZTFiMWUzNmFlZTc4NTljODllOWJhMzMwYzNkY2Y1YTY2NzFiNGEwMmU1NjNiOTYyYWYzYTU3YTA1ZWVhZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDA1YTdiMThiZTEzNzM5N2ZjYWZiMmUzNTkyM2IyODIxMWZmYmFlZjA2ZGM3MjMxMjc1OTc5NTViMDlmZmRiMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjQwOTBkZWI2YzRhNDViNWNhNjRmYmJlZjlhMWEzMTM4NmZiMmE4MmNiNTJkYzA1Y2E3MzU3ZDg2NDJlYmJiZSJ9"
         }
       ]
     },
     {
-      "id": "claim_858c731e23724d3ba7c5eec59ab0b0fa",
-      "statement": "根目录 Bun workspace 提供开发 CLI、workspace build、独立 native build、TS 与 Rust 检查及测试脚本；dev 脚本运行 packages/coding-agent/src/cli.ts，check 并行执行 check:ts 与 check:rs。",
+      "id": "claim_5e1f2782166c4e98ba7984924f1afb57",
+      "statement": "OMP_OFFLINE 限制公网功能和在线模型目录发现，但不禁止公司模型 API 等实际请求，本地工具和内部服务仍可用。",
       "evidence": [
         {
-          "resource": "repo://package.json#L10-L14",
-          "version": "repo-lines-v1:sha256:da6a46067efdd1755b34ba275f8d66c3015d1f2999b1814dc499205384ca3640:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWZlYmM3ZWU1OTEyYzRmYjU5ZDFjNWE2MTdkZTc3MmNjYTQxYjQxZjFiN2MwZDllMDk2NTM2ODBjMThjNTYxNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTIxMGVmODMzM2Y2OGRhM2IzZDlmNDJlYWJlNTUxYzBkZjM5MDEzY2EzNGE3ZGIzNTliMzJhNDc5ZWU3ODNjOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWU4OWYxZTgxNmUzZTVkN2IzNGM4NTNkMzQwYzZjY2JkMzE1NzRkOTE5MGExNGM1YmQzZTllZTgzZjQzNTk5MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDUwN2QyNWQyNjNiMzRlZDU5MmJlMzUwODQ4NmRmN2RmYTZhODMyZDllYmZkM2I5YjlmYTZmNGIxMjRhMzM1NyJ9"
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L67-L69",
+          "version": "repo-lines-v1:sha256:11354abd1adc783dbf59dcfb55288396c3cb69aac531a8eb040d957cabea000d:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzY1YjdjODgwNmY3MTA4ZTdjZGZkMGFhNGYxMzYwMjUxYmY3MDczNDA5NjAxMDNmYjliYTEzMDJmNDkyZjk2MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjEwMmMzMjY0MDA0NTBhYWVlYjJjNzYxMWU3MGM5ZDk0NDgyZDlkNWJhNjdkNmIxYTI1NzQyYTdmNjNkMWM5NyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYTBjNDE4OWVhZjUwZjY1ZjhiMTY1MjNiNmQxODdlZmI0MmUwY2I0OGIwNzg2NjcyZDhmMDE4NmIxYTczNjk4OCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOGQ3ZTYwYzgzZDA3ZTYyYWEyY2E1OTgwYTAzZWIyMzZmM2FhZmU5ZjMyYjA0Nzk2NzM3ZGUxYWQ0ZjU0NDRkNiJ9"
         },
         {
-          "resource": "repo://package.json#L75-L100",
-          "version": "repo-lines-v1:sha256:2f3e9341dcdb8227b070100a656a8d1bc8b1be55447d46edd058b60b977cad63:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3M2NhMGRkN2QzYTM4OWJiODNhMzhhMWIzYzQ5MzhlZjA5ZDFmZjhiYTYxYzA3NTM4YTE1NTNkNDkyYmEyZjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3N2M5YzI1NjE3NjBjN2ZmY2M1YTIxY2MyNjQyOTZhZmZmNDU0YTFlY2RhN2ZmZGJkMjAzYzAyZTcyMDE5MDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI3ZDJmY2I4N2FiODg2ODk5NjMyZjM1ZWQxMmNkMWE4MmZlNDEzNjk1OTg5MzA1N2I4YjA3ZmZlMGVmMDlmM2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmNTc1OTVjN2FlZTA1ZjdlNTViNDllYWI2ZGU4MTdlODA5MjlhZTFkYTBlZjc5MjRiNGU4Y2ViMDdiMTc4NzIifQ"
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L58-L61",
+          "version": "repo-lines-v1:sha256:3cae7db2118b26e8467f3840cfd1cde6c6f1f1db43cfa62207d113285ed2e7fc:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTc0NTdhNGRiZDdkNTAyYjhkNjM2ZjllMDk0ZDRmMWI5MDlhZmYzZDljYzA1ZjlmMTI2ODQ4ODk5MmQ0ZDU5MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYjUxYTkxZjdiYzFlMDgxOTJjYWY5YmY3ZjA1NWY5ZmE5Mzc0NmIwMDZjY2YzYzY4MmIzYWM3MWVjZjEyNThmNCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTZhOTczMjM3OTBmOTJjOWU4MDc3OWQwMTIwYWYxYzI3MDAwMzA1OTYyMjQ5NDhkYWY3NTFhYTNmMGVhODJjYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDQwZTZmOTAxYTAzYTY1Y2EyMmJiMTA3ZjMwOTRiM2IxMjM4MDk2MmI4NmU3MDI3MWI0MDRjODBiNWMzYjdjZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_9d2b998fdddc42b69f88dca3c03cbfbc",
+      "statement": "本 fork 主进程默认放宽 fetch 和 Git TLS 证书验证，显式环境值可恢复严格校验；放宽时存在端点身份及凭据截获风险。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L82-L83",
+          "version": "repo-lines-v1:sha256:24f0d38fdbcee1ad5e637d25c47c250cae02d3b356774337d1e96943625fef9e:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTZjYzdiODNlNWMxNWRmNDQ4YTU5NjU0MjkwZTVjMzNjZDllNTlhZjMxZWJmYjNkMjdlOGI4ZGY3Nzc3MGVhYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWYyMzA1ZmFlMWJiYjRhNjM2MjM3ZTdhMzhhZTBhNzQyODVlZmZjOTU2ZDY5ZWFjZWIzMjlkOWMxMGM4NDFhOCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWRjZWMzOTUyMDgzYjZjNGNkMjVkNTdlMDMxMzNkMDNiZTIwZjIzYThlNzQwNDFiNTkzY2Y5ODIyZWUzYTFkMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMDZhOWYzZmVkYWIyOTBkM2JhZGM0MzNjNjIyM2VkYmJhYjM2MWI4ZTdiMzc4MDI0ZDJmNDc2ZjM1MjM4MDc1ZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_24f869fd12c3484baf7ea8a948ea88dc",
+      "statement": "Wiki 需要先导入 Markdown，终端导入与会话应使用一致数据根和 profile；基础全文检索无需模型或向量服务，索引保存导入时快照且不会自动刷新。",
+      "evidence": [
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L137-L153",
+          "version": "repo-lines-v1:sha256:7bea7a6a71794a09da5679b9a2a9ab1b68cae3e840812bb21b6be41cfab55258:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhMDVkYTRjY2RjN2E2NTc4NWRjM2NhM2UyN2ZlMDQxMDFjMDUzNzk1YTFiOWE3YjM3ZWY3MjA4NmVmMjdjZDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhOTRkZDM2MDdmMjExMDgxNGFlN2E5ODhhY2MzNmM3NjQ5YjU2YmRhNWI5MWYyNjNkZGY0ZWJhMDVmYmYxOTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZmNzE1YTdlMjFjZmYwZWFhYzJkM2NhZGNkNTEzNDRhMzY0YmIwNmQ2ZGRiOTFkYWRkOTQ5NjNmY2UzZTgyMzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZjEzMjY0NTFlNGFjOWE4NmVlMTZlMjA3OGI2MWY4YWM0YWE3OWQzMGVkMTlhMWYwMjY1NzI4NDA4MjQ0ZjYifQ"
+        },
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L188-L201",
+          "version": "repo-lines-v1:sha256:ad985be10d516c5330a62ee7c83973b4d64bf343251661824d483196d5a0de08:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRiZGVlMDJhODdjMDM4NzVhYTIwZWFjZWExZjEyODBlMmQ5Njg0YzQ0NmIzNjUxZjlhNzM0Y2U2YWEyZTAyNmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQzNTRiMTkyZGRlZDg1YzQ0YTc2M2IxNTgyZjQ3YzhiMDczOWM2NTA0YzQ1YTJjM2QzOTNiMjUzMGQxNzkxYzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OGEyY2M4NzNiMTMwNTY5ZGJkZTM2NTkxMmMwMjVlN2JkNTUwNjNkOGE2N2NmNjJhYWY2NDA1ODgyNjNmNjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5NzM5NjdiYWU0ZDJhYWI2Y2M5MGUxOGQ2ZDg4OWY2Y2UxM2E3MjhjZWViZTlkMTFhMDNmMjdhNDFiMzNmOGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3df2d358d9ac4970ab216356227add47",
+      "statement": "Repo 索引由用户在面板显式确认建立，代码命中是定位线索；外部编辑或切分支后需完整更新，修改前应读取当前源码。",
+      "evidence": [
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L203-L221",
+          "version": "repo-lines-v1:sha256:bb45622a946794bf810bca294f74bfed87bf953d470e2f175a48fac582883d34:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEyYmZhNWYzMjYwNjVmZGM0OTcwZThjOWQxMjJlZDZlZWQ4YTUzYWM1NWQwNjIyMWU1Y2IzMTMxMTYzNjdhZmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4YzQyNWFiNzFiMzViYmIxM2VkYmI1ZDAyY2JlYzc1MjBmMzMwNDA4YzM5M2ZiOGE4ODAxMGFiZjlkYzBkNDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgyMjVkY2FjOWRjNTY1ZTIyYWIzZDYzNWRjYjRiMTI4NThmYWVlMDFkZjliNzIyM2E1NjllYWNiZjIwYzEyM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImIyN2U0NzU3ZDI2MDliMDNjNTk1YmUwZGJjNDk0Y2QyYzM3MDdjMWQzYTBkMDQyNDhjOWM0YWExOTQ4YzliODIifQ"
+        },
+        {
+          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L239-L247",
+          "version": "repo-lines-v1:sha256:07af203a333c0d1fa03fcd5d564104d90f9773043dc4c45441da0dd33892e7a3:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzRjNzFiMjVlMGQwZmViYTAxMzIzYWJiOGJkMWZkNjI4MjA1MTBiNWY4N2U2MWYxNGY3M2U2ZTY3MDMwNGY2YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2UyMjQwZDFmM2JkNDlkNzgxZDNjNTcwMzAxZTg1YzZhZjYwOTUyNzlkZDI5MDQzMjVjNTljNDY0Y2Y4Y2JlZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWY3NTM4MDE0OTQwNmYxMmRjYTQxMDYzNWM5MTQyYjdiYWMzZWM0YTZhNTEwZWI3ZmY3YTg0NGEwNzlhYzY5NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDYxZDJmZDY0MGE3MGE2YmY5OWY2NWM2NzkxMmZlYjY0M2MzMjY0MjdjMTA2NmY5OGY5YTdlODY1N2M2YjhlMyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_70b834eff11944cfac92edde66e2abfe",
+      "statement": "仓库提供 fastcheck、fulltest 和 slowtest 作为独立验证脚本。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L95-L100",
+          "version": "repo-lines-v1:sha256:8252f81f12d2b17a50fc543bbe96e280f1c0d2535b8f3468eab3d0e58e00deef:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYWI1MGE1ZWQwMmM2NjliM2Q1Y2VjZjZlYjFkMWFjYTk0OGU1YWJjMWRjZDM2ZTJhZWQzMzdjZjY3OTY3YjEzOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNzc3YzljMjU2MTc2MGM3ZmZjYzVhMjFjYzI2NDI5NmFmZmY0NTRhMWVjZGE3ZmZkYmQyMDNjMDJlNzIwMTkwNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMGY1ZmFkMzM5OTY1YzFmZDA5YTEwY2ZjNzI4ZDMwMzRkNzg4MzI2NTcxMzE1YjdjN2RlNmFlZjU0NmQwMzVjOCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOGY1NzU5NWM3YWVlMDVmN2U1NWI0OWVhYjZkZTgxN2U4MDkyOWFlMWRhMGVmNzkyNGI0ZThjZWIwN2IxNzg3MiJ9"
         }
       ]
     }
   ],
   "verification": {
     "by": "openwiki/0.0.0-unknown",
-    "at": "2026-11-01T02:46:50.031Z"
+    "at": "2026-11-01T04:03:23.095Z"
   }
 }

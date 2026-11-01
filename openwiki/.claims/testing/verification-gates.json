@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:4b613e92baf5089999f5b8ba7e64868add57cbb66df5d4cf7e44c7c14c2545ed",
+  "claims": [
+    {
+      "id": "claim_592f6372ad0b42a7bafa80aab188318b",
+      "statement": "fastcheck 只执行 TS 与 Rust 静态检查及必要编译，不执行测试；fulltest 和 slowtest 需要本次明确运行授权。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L83-L91",
+          "version": "repo-lines-v1:sha256:67932037ffec4058810e909ceb527e316658772e86e872b731389ae3d229c2ed:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2I3Y2Y4MjYzODVkZWNiNzAyMjdiOGMwZjc5ODRiYjgxMTJiOWQwN2EyMzk1YWE0MjdmNzhlMGExYzBhNjA1NyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGVhYjY0NTc2ODBiNmZiYTY4ZWVjNGU4YWQ5ZTJkYmIyNGQ4N2JiMDBmMTM3MTQxZDk5NTVjN2Q0NWRjYmZhMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZWNkYjQ1YzhmMzBkYjY3OTVjM2RjZGE2YmZlOGJhZjVmODg1YzJlMzJkYTdmNzhhYzNmMDMwNDhlZjNlOGE4MiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYWU1ZTJiNzk1NDY4YzAwNDQxOWMzM2MyZjlkNDdiMTk2NzM0NjcxYmY2MzU4ZWQwZTRiNGRmNjU5M2FiOTlhZiJ9"
+        },
+        {
+          "resource": "repo://scripts/fastcheck.ts",
+          "version": "repo-file-v1:sha256:0cd324f646b3a787e7b785a357ff6ef7de7b5458219d7ba81ca41c10365635f8"
+        }
+      ]
+    },
+    {
+      "id": "claim_373584221b554966bacf3d1f41284a10",
+      "statement": "默认 fulltest 在当前平台执行静态检查、native 准备、fork 测试和隔离 TUI 冒烟；--full 扩展到当前平台支持的完整套件但仍排除独立授权边界和 vendor/openwiki 自身测试。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L51-L65",
+          "version": "repo-lines-v1:sha256:5ca4942a34749768b9e9c1888e18639d09862708e4355bb7657148b188191f65:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc4NTQyYTgyNGJiNzVmYTMzOTk0NTdmNjU0M2NhYTlmZmM5NzhmNWIzODk5OGNjZjJmYWNiYmE2MjBlYjI0MDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUzODkwYzY1MGI2MGZlNDkzYTI3YjE4Njc5NzNmOTViMDBiZGFhZjRjNGQyNDU4ZTFiZGM2MTkyMTg4ZDU5NjIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRiZTNiOGJlOWQ1YjE4NDJkOGMyMzgzNzNiN2FhZDJjOGI4OGFmYjc2NDA1MzBlNjM1ZDdjZWZkMDgzZmVjMzkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImEyNDQ2NzE3MjdlZWNjM2M2NWIzNWQ5OTg2YzU4NmZlNmFiZGZkNDI0OGI5ODhhNjUxZGM0NGJhMTRmYjFmNTMifQ"
+        },
+        {
+          "resource": "repo://scripts/fulltest.ts",
+          "version": "repo-file-v1:sha256:1f652fb907ce32c8071b6eab6624d5783fc7d4f32328b491638eb36aa7838d8d"
+        }
+      ]
+    },
+    {
+      "id": "claim_716ec858b91540a587d6b78ad1bd1415",
+      "statement": "默认 Bun 选测限于 fork 白名单和合格基线；无法安全选择时回退白名单，根文档排除于选测输入但不排除于源码快照。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L62-L64",
+          "version": "repo-lines-v1:sha256:99067ea324688fa4d3bac04720665af7cf62d712cb29314ec92cf1bbb468c8ca:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTgxZGJjOWFjY2UwNjA0ZDZhZGM2MThkYTE4MTRhYWRhMTA3MTVkYWI5OTNjYjM5YjhiMTYxYWE2OWJmNmNhYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTE5OWUzNzgxZDRiOTVlMmZiYmEwOTg0ODA5OWRkYzhhMDI1NjFiYTUzMGUxNTE3ZWZhY2E1ZDE5NjhiZmJkOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTMxOTExY2VmYzEyZWRiMTNiMWIyOWIyZmJhOTQyZDVmMjEzODljMTI3N2I5MTgyYjNkYmFjNmFiYzQ1YmIyZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYmUyNWQzZjAwYmI0ZTk3ZTFmODIwZGRjYzJmNDM4Mzc5YTg2YmNhOTlmMzkyZjc0M2ExYTRiZDUwZjhiODE4MiJ9"
+        },
+        {
+          "resource": "repo://scripts/ci-test-ts.ts",
+          "version": "repo-file-v1:sha256:07714de71d38cd161490b7a3018e564fa043bf29f47aa48c5bae30c2ee369f47"
+        },
+        {
+          "resource": "repo://scripts/test-gate-source.ts",
+          "version": "repo-file-v1:sha256:c1cc510c6d8cb42d85e6c09d46fe843018adb8af57065a93e332f943d7543abb"
+        }
+      ]
+    },
+    {
+      "id": "claim_56bc15c86b724917966f5fbc41ce8f65",
+      "statement": "默认 Rust 选测使用 cargo-delta 0.5.0 和合格基线，受影响包与 fork 范围取交集，不确定时回退完整 fork 范围；仅选中 pi-wiki 时执行其 doctest。",
+      "evidence": [
+        {
+          "resource": "repo://scripts/fulltest.ts",
+          "version": "repo-file-v1:sha256:1f652fb907ce32c8071b6eab6624d5783fc7d4f32328b491638eb36aa7838d8d"
+        },
+        {
+          "resource": "repo://scripts/run-rs-task.ts",
+          "version": "repo-file-v1:sha256:fe82c16765b461f13b4dc060218250f88e6ac5d3e1bfed914996cd33d1ca70b1"
+        },
+        {
+          "resource": "repo://scripts/test-gate-delta.ts",
+          "version": "repo-file-v1:sha256:c8e830bf0e80f453b29710c8f3ff1490f9aa7421f50c6e4d4bb32e94d12d6dc6"
+        }
+      ]
+    },
+    {
+      "id": "claim_49122a55abee456f84a414d5e2564125",
+      "statement": "测试选择和历史耗时不是测试结果缓存；动态依赖与外部输入可能遗漏，affected 结果不证明完整新回归。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L59-L70",
+          "version": "repo-lines-v1:sha256:5b6d6baafd8eb9aa737a0afa693899999d72d9e620577d9dae8f92bfe21e1031:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzODEwMTA4YjZjMmNkMmJkOTZjN2ZlMjlhMDk2M2Y5NzBkNzg5MDJhZmNjMGNjZDAxMzcwODVmM2Q0YzM0OWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkzODRkM2ZlZTdiMGQ4Y2QzN2E2ZjY2YTI0NWIyNDM4NTI3MzZmZDM4ZjU1M2UzZjUzYTA3NDI4MTljY2EwMmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBhMjQ3NmU1NTNjOGQ1Y2NkMzJjZjg3MDdmMmJkZTkyZmUyMTg4MTM2ODdiZTE0ZTY1YTgzMzQ5OGQ5YjEzMDgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUxMzQ3ZmIwM2RkOWJiYzk3NTMxMTQwOWUzMThiODY5NjNkZjFjOWE5NGVjYTc5NzMwY2EyNDc5ZTJkNWJkNTkifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L84-L85",
+          "version": "repo-lines-v1:sha256:5bbca03a74acdad687bae16ed7baa8cb1c7b26aa87053625a8e276474559ca0c:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMzEyMDE0ZmYyNzc0YzE0YzQ4MTc4ODAwYzExNzY3YzZlYjI1YzU3ZmVmZDhjOTA4YWUyMWY0MTRjNzdmYjA4ZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTYwYjFmYjZlMzQ2MGNkOWExMmViOTNkNWU3ZjhmMmZjNzI3YjJiMWJkODg3OWYzMDc1OGVlZTBkNTNiNzQxYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmRiNjM3MDViZjI3MDZkYTE4Y2Q3NDFhZTY0OGViNzc4YjI2MTBlOGU4NjViMGU2OTFiZjQyOWMxMmY0OGQ1MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTVhMTk1MTM4MTBkYThlNzIzYjI5MTA2ZTZhNjJiZjgyODUyMmQ2YTFiZWI0MDZjNWE1NmE5MjUxOTlhNjlmMiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_b0096d18e7734cc2aa573cd008c2cde0",
+      "statement": "fulltest 以 HEAD、文件内容和类型以及递归子模块身份核验同一源码快照；native 阶段只允许两个 bindings 文件内容变化。",
+      "evidence": [
+        {
+          "resource": "repo://scripts/fulltest.ts#L192-L219",
+          "version": "repo-lines-v1:sha256:a3c972b3d83d9e5cfde5c21734581e9117fff59f28c8cbbed2f719566f55f8d5:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI4MGQzYzc5ODgyOTA1ZDQyYmY1NDdiMzBkOWZhOTJjMTBjMzFiM2FjNDkzNjk0Y2RhZGU1MDRmZGZhZGNlYzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjIzYmIwZDk5YTBhYjhjNGYxYjMxMmQ2NjU3M2ViNzZhYzRmMjM2MDkwMjY3YjQ2ZDMxMmY0YTk4OGFmYzQ4MzkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVlZDY4NGEzMzZlN2U5NWIxZmIyMWYxMTI1NTdhM2FjNGQ1MDYwZDk3YTViZmNiYjI4N2FhMDUzODg3Y2E0YjQifQ"
+        },
+        {
+          "resource": "repo://scripts/test-gate-source.ts",
+          "version": "repo-file-v1:sha256:c1cc510c6d8cb42d85e6c09d46fe843018adb8af57065a93e332f943d7543abb"
+        }
+      ]
+    },
+    {
+      "id": "claim_e82b4764f498412ca17ce0a005521f2c",
+      "statement": "门禁按依赖关系调度检查和测试，测试并发受核心数与任务数约束，高成本集成任务另有限额；普通失败继续独立工作并保留首个实际失败码。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L71-L86",
+          "version": "repo-lines-v1:sha256:5c9028a2b1da31e1ff97773d914c2ce4ca361c2f64e489d03c6ca90228f609ac:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQyZmY2MmFjZGEyODMwOTY3MTU5ZTMyMWQ1OGRlZTYzMDA1MjJmMzk4ZDZiY2IxNzRkMDE5NTIxNDM5NTNmODQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg1NzQ3MzQ4NDFiY2FiOTM4ZDQzYmI4Njg2ZjFkYTMwZGVhNzc1NmVmNGFhNTM2OGM1YzIzMDI4NWZhYTJkZjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU5MDBiYWMzZDQwMjk0OWJiNTY1NzYzMjJkODM2ZmE1YjA1M2QzNjA3ZjkwOTNhNDlkYTliZjFiYWRkNWI5YWMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhjZWU3MjhhMzU4NmU2Y2Y5Y2RkODhiNWE0ZGM4NmU0NmMwY2JhNjk5MTIxNmQwZDA5MWY2NWU3Njk1YjZmYTgifQ"
+        },
+        {
+          "resource": "repo://scripts/fulltest.ts",
+          "version": "repo-file-v1:sha256:1f652fb907ce32c8071b6eab6624d5783fc7d4f32328b491638eb36aa7838d8d"
+        },
+        {
+          "resource": "repo://scripts/test-gate-scheduler.ts",
+          "version": "repo-file-v1:sha256:1b22035fe9f03b1b4ee1e351345917078c8ae18cf2efbf83e9795d63a9e22643"
+        }
+      ]
+    },
+    {
+      "id": "claim_76ce72dca9704b959215be70381ca135",
+      "statement": "门禁使用累计预算扣除纯编译区间，fulltest 和 slowtest 另有总墙钟上限；超时、中断或完整性破坏可终止自有进程树。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L75-L81",
+          "version": "repo-lines-v1:sha256:d8b3a5ca5925d8657da30b15286f8e5909ebcd419e930301ade3d3733825a375:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTI5YmM1MjZiNzQ3YzRiM2EzOTMxN2M1OGQ0NmM4MDFjNGQ4NzFlMGU2ZjU5MmQ4OGMyN2Q0MDFhZmNjN2YwMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDdiYmM1MTc3ZWYxYWI5MDgzNDUyNGY4YTExZDQyOWIyY2JiYWU3OGQyOTRjMTg3NzBiZWQ1NjY0NGYzMjU2MCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMDdlNDE1ZjUzMDIxOTNhYTkyNGEyZDYyNjg1MzAwZWQ1YTUxY2EyNjI4YjQ3NDYyMGU0NTdiNTE4NDM0ZTc3NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZGExNWQ3NGJlZGZiMWUwZjliOWFhNzk5ODU1NGFmZTBjNTA3NWJiNDYwY2Q5ZDc0MTJmMjdlYTJiYzU4Y2M3NCJ9"
+        },
+        {
+          "resource": "repo://scripts/test-gate-runtime.ts",
+          "version": "repo-file-v1:sha256:2f00ed6728a93075896b68f881f08c476c95b3055e77de33409dff0c34885b9a"
+        },
+        {
+          "resource": "repo://scripts/test-gate-watchdog.ts",
+          "version": "repo-file-v1:sha256:3e5303dba70677b100e3d48e042cbd51dd90326c6250e3476fddd5e38313f278"
+        }
+      ]
+    },
+    {
+      "id": "claim_5c9a8751a1724b409414091cf4dac78d",
+      "statement": "测试报告记录实际范围、选择与 producer 结果，区分未选和未运行；强退可能留下不完整报告，应结合最终退出码判读。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L97-L99",
+          "version": "repo-lines-v1:sha256:24b65db12b0f86446a14bd927e570d5e7d2082ec63352d4e84e308e43e413d36:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTE4MWVkOWI0ZGIzMmQ3Y2MxZDUxNDdiZWJjMTlkZmRhYjY4ODdlMzM3ZTMwN2YwZGM3NDFiZmRiNTQ2MWY4NSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWJlZjlhZmQzMTZlZjNkYTE1YTBhZjQ2NjYxMTNiZjdlMzUxNzZlZmM2NDc2ZjQxZmIxOThiZDE5MWIzMjBmNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNWJjMTIyNTc2ZDgwYmUzNDA1ZjlkMzM3NDkxM2JhYjhhMjcyNzg0ZGVmYjcxYzY5ODBiOWYyODZhYzliODliZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDI0ZjJjZTQ2MTFkOTk4OTJjMGZkYzczNjQxZTdhNmYyNzA0Y2VkM2E3ZjdhOWRkMGM4ZTk4OWYwYTk3MWY0ZCJ9"
+        },
+        {
+          "resource": "repo://scripts/test-reporting.ts",
+          "version": "repo-file-v1:sha256:e54637e6ea69700cf78beb5df5cbce6c275036c49aabd5a11ae1f020f1d79ce0"
+        }
+      ]
+    },
+    {
+      "id": "claim_303449c6050f47f1b4915a713b2633e7",
+      "statement": "slowtest 执行本机默认 fulltest 并按适用性运行 Ubuntu-24.04 WSL2；WSL 必须从网络 Git 远端在原生 root 工作区验证相同固定提交，未提交或同步失败不是通过。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L91-L95",
+          "version": "repo-lines-v1:sha256:b775eba53fa4335373b566b573ff0ed2e0d47206e4d5cdf7d27c5c23dfed218f:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOGVhYjY0NTc2ODBiNmZiYTY4ZWVjNGU4YWQ5ZTJkYmIyNGQ4N2JiMDBmMTM3MTQxZDk5NTVjN2Q0NWRjYmZhMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMmE0MmRkMGNkMjA2YTI1NzM5NjY2ZDUyMDljY2Y3MTc1NDY3MzU2Yjc5ZjkzNmQwZDkwYzk3YTVlY2U3MzI3YSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTdmZDQ0MmYyZWM0Njc2M2M0NTIzZDZmN2YyMjk3YzQ3NzdiMzY4NmEwZTQwNWQ4MWVlYmNlY2ZhZTljMmI2NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZWU0NGRmMmUzZDRkNWM0Mjc3ODBhZGRkMWZiZjcwNDZhMzQ0M2M5NWMyMDk5MDk3NGU3YWVjMzE4YjBlMzYzYiJ9"
+        },
+        {
+          "resource": "repo://scripts/slowtest-wsl-stage.ts",
+          "version": "repo-file-v1:sha256:03b6ac07693346f51b6593078af5a036573ce874828fd6d5d3e5dd4e4392377d"
+        },
+        {
+          "resource": "repo://scripts/slowtest.ts",
+          "version": "repo-file-v1:sha256:ece89e2a3189c81a2071b65f2a350615d456caafb491e401236c4dd268435d38"
+        }
+      ]
+    },
+    {
+      "id": "claim_d3b248525675447ca74f5b6c7155c8ca",
+      "statement": "运行时测试使用隔离 HOME 和本地 fixture，清除宿主配置与凭据，保留正常工具链缓存；Windows 子进程排除 WindowsApps 占位程序并启用 Python UTF-8。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/tui-harness.ts",
+          "version": "repo-file-v1:sha256:934cc687626a469ee40d169fd5de4d5f6a45575ac441671765621356cb02e514"
+        },
+        {
+          "resource": "repo://scripts/fulltest.ts#L51-L100",
+          "version": "repo-lines-v1:sha256:f5a56c3ca6cb1bca9a39185053a1a6c728dafa0b1d8e02d3ab54aa307b5566c8:eyJzZWxlY3RlZExpbmVDb3VudCI6NTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVlNzRjYTJiZjM5MzI3YmEwMzE4NDY4OTNlNGUyMDlmM2E0MTkzZWEzNWQ0OTYyYTBjZDA4NGVhNjIxMTUzYjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImY1Y2FlM2I2YzUzNzQ4Y2RmY2NiODUxNzY0ZDk4MTE0NGU1MTdiZGJhZDdjYTM3YTkyYzUzNDM0ZTIzOWE1ZTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMwMmU1MjUwZTBjMmVjZWI1YTk4YWM4MDNhZmU0YzY0Nzg0NWRlMzQxNTljN2Y1NTI0OWMxZGRhODMyYTNmYWQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3319dc5c466c47888cd93e0f8a220477",
+      "statement": "UT、进程、虚拟终端和真实 PTY 分别证明不同边界，不能替代真实桌面输入、真实提供者认证或模型质量；这些边界需要独立授权和证据。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L89-L100",
+          "version": "repo-lines-v1:sha256:9b1205dfa138748b89978c960c96b3ec2a7566de7157df8687cb005dbe79c1de:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYzZWJhZTlmNDJmYzkzMGJkMDE1OWE5NTlhNzkxMDdlYjIzMjA4NTVkMGIwMGEwZmY4YzczNmVlNTVmN2EzZDgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM2MjUxYTYzZTAxZjMzMzg4MGI5ODBjNmNmMWEzMDU5NmJmNjZjZDkwNDlhNDJiYjQxNzMyNmIyZjlhMWJhNDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk1YTE5NTEzODEwZGE4ZTcyM2IyOTEwNmU2YTYyYmY4Mjg1MjJkNmExYmViNDA2YzVhNTZhOTI1MTk5YTY5ZjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ0MjIyM2JjZjBkNzIyMzc3NGUwNTUwNDBmOGRkNmUyODhiNDAwMjA4Nzg4ODYwODhjOTZkMWIzNDA0MWRiNGIifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L9-L40",
+          "version": "repo-lines-v1:sha256:050ff69dc1a036d8d54af96bde21127dd36c1c6cccaed5651e40f01d8c74b5c1:eyJzZWxlY3RlZExpbmVDb3VudCI6MzIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFmYjYxNTk3OTczMTEwNjQxZDRiYTI3NDllMzllYmQzN2Q4ZWE3M2QwZjRmZTk0ZDczNmQzOTNlNzQ0NzlkMDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM3MjU1M2ZhMDhjN2I2NWZlYWIwZjY1NWM5YWI1NDJhMGUzYWQyZTFkYTQzZWU5YjU2NjZhMjViNTZiNjNmZWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJiMTM0ODZjNTRjMGY3YjBlYzhjMTc3YzlmNDc3YTZhN2NmMmMyZmQwZjc1NDJlYmJhYzZhMzczMGRkYzQ3NmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI2OThmMDVlNTk3NzVkM2ExNDUyYzU0ZmIxOWM4N2YzNjNiNjRhN2YyOGRlN2I2YTVmNjRkNjY1ZmMwMDE4NzQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_91f668e3a17047d596e50529945e94f9",
+      "statement": "临时 TUI 验证使用源码入口和 tui-test 的隔离 session、明确尺寸及业务断言，需要模型时使用本地模拟模型且不回退真实模型。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L27-L40",
+          "version": "repo-lines-v1:sha256:4c84513918eeeffb2a5a455354f4a6375bb037dfd51a2cfb7ce939c41b527842:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkNGI0NDdhMWY0MWZhODE3M2MxZTI5NjY1ZDVjNDJjMzFjYjkwOTUxYTk2YzAwYTAwYjQ2MWFhZDI1MjBlNjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM3MjU1M2ZhMDhjN2I2NWZlYWIwZjY1NWM5YWI1NDJhMGUzYWQyZTFkYTQzZWU5YjU2NjZhMjViNTZiNjNmZWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI5YjFmNzI4ODllYjIyMWQ2ZDdjMTdjZGUyODc4OWZhODFjOGE2MWUxN2M2YjZjZDgyMWM1ZjU0MGQ2NTc4MDIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI2OThmMDVlNTk3NzVkM2ExNDUyYzU0ZmIxOWM4N2YzNjNiNjRhN2YyOGRlN2I2YTVmNjRkNjY1ZmMwMDE4NzQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_19b41ae3814f4ce1ab4a5cbd77a2397f",
+      "statement": "公开底层 test 和 test:ts 分别调用 local 和 local-ts，test:rs 运行 fork Rust 范围，test:scripts 是独立脚本测试；它们不等价于完整门禁。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L60-L70",
+          "version": "repo-lines-v1:sha256:2bf5f83ab161fb3f497327907024f2dc363dc0efe6c65fc75d238ac33b049f0b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNlNmE5MzRiYjMwMGFmYmZlMDUxYzBjYmU0MDVhMmU2Mjg2NmQ0ZWUzY2JiMDM0NzNlNTg5NTk4NjRhZGE4MjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkzODRkM2ZlZTdiMGQ4Y2QzN2E2ZjY2YTI0NWIyNDM4NTI3MzZmZDM4ZjU1M2UzZjUzYTA3NDI4MTljY2EwMmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBkYTIwNDhkMTQ5NDZjN2QxMDI2NTRiMjRmNDM3YzllMjAzNWE0Mjk4ZGVkMGQ1M2Q3NjcyMDgxNDk0NzA2MjUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUxMzQ3ZmIwM2RkOWJiYzk3NTMxMTQwOWUzMThiODY5NjNkZjFjOWE5NGVjYTc5NzMwY2EyNDc5ZTJkNWJkNTkifQ"
+        },
+        {
+          "resource": "repo://package.json#L86-L100",
+          "version": "repo-lines-v1:sha256:c631cbb8e6b98bb4e5b9d6c3919168953593c6fcac039b9eaf20f66fa605869c:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc2MzU5N2M4MjY2ZjJkYjE1Nzg2ZmYzZGRhMzNkMmFkODBjZmVjMjgyMGFmZjUwNzgyZjVkOTQ5Nzc4ZWRjNWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3N2M5YzI1NjE3NjBjN2ZmY2M1YTIxY2MyNjQyOTZhZmZmNDU0YTFlY2RhN2ZmZGJkMjAzYzAyZTcyMDE5MDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI3NmY3OTRmYzU5MWRmZDFlZmIyYzExMDJlZGEzMjE0NjdjYjM0YzBmNzQ2MDUyN2EwYThiYTliZTQ2OWVjYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmNTc1OTVjN2FlZTA1ZjdlNTViNDllYWI2ZGU4MTdlODA5MjlhZTFkYTBlZjc5MjRiNGU4Y2ViMDdiMTc4NzIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d55ea814b1594fff9594f41ab5a8b8a7",
+      "statement": "Dev 的控制器、资源、进程和 TUI 测试与 ZCode 的协议、配置、进程及权限测试提供按改动域分层选择的焦点回归入口。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-permissions.e2e.ts",
+          "version": "repo-file-v1:sha256:ee8b57028d21b231ac02143c7274c9975b69ace42916f73cb86adab9f2742c56"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-provider-config.test.ts",
+          "version": "repo-file-v1:sha256:035d70361928e0b813e979c647bc539649aaa6e99e99bfed34d31bbe51494cbd"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/controller.test.ts",
+          "version": "repo-file-v1:sha256:6e766a5eb84e197e00cd3e28f13f98078af15fb49c7e2948e1c322a6608f45c6"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/process.e2e.test.ts",
+          "version": "repo-file-v1:sha256:c1f44dc9e3535f36d50c5ed4dc07b4a23de0e740c075da4d1e4c290f6186763e"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/tui-interactions.e2e.test.ts",
+          "version": "repo-file-v1:sha256:b345ce2343e4aa87722fe5e8e053fc8edd9fc604a7d9328d30f889faddc37961"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

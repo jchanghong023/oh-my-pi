@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:02c3430ec2c9c0b319bf745408b626a0666a411410ac6e3d27d9a393eb547c8c",
+  "claims": [
+    {
+      "id": "claim_aaaf6a1ace0c44e9921e285c8a30db8f",
+      "statement": "Dev 使用四个独立原生角色会话，只有显式阶段决定才推进，普通对话不构成批准。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:2b24f677566015f93d4bae027201702eb5590ec59807b0bebc227de3238f68a7"
+        }
+      ]
+    },
+    {
+      "id": "claim_79540b08df0d435dafd5a26bc8aff4da",
+      "statement": "进入 Dev 与新建需求分离；next 按阶段记录需求接受、方案选择、计划批准和执行验收，back 逐阶段撤销批准。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/controller.ts",
+          "version": "repo-file-v1:sha256:1e16f7d3323f81a00cb7eac13ff35d6327ecd7479989b20432513396c6d750e4"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        }
+      ]
+    },
+    {
+      "id": "claim_8c3dadacdf89411fad10d06ef3ca0095",
+      "statement": "Team 仅在配置启用时进入方案阶段运行，其可采用候选的身份和完整提案必须有原生历史来源，Goal 不因 Dev 自动启动。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts",
+          "version": "repo-file-v1:sha256:ac4ee76eb512c72c9fd79454f3e7882d3fc00f678794390e1bd33db016fc0006"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts",
+          "version": "repo-file-v1:sha256:461d0d808f198f53cc3f905a3c8ab923398b14a2b268f8f998ded0864258ce20"
+        }
+      ]
+    },
+    {
+      "id": "claim_613cc54582ef484da33b8176e97896f3",
+      "statement": "需求、方案、计划和完成报告由相应阶段产出，推进时读取真实文件并分别执行 OpenSpec 严格验证、候选 JSON、非空计划及报告结构检查。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/artifacts.ts",
+          "version": "repo-file-v1:sha256:6456e5da35c2343e54f1ae12f5f23b39b95038b5fddefa44aec188caa867d8b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        }
+      ]
+    },
+    {
+      "id": "claim_7a82fac70e7e4720bebcb7ed4c96b50d",
+      "statement": "交接携带完整文件和用户原始决定，批准绑定文件 SHA-256 版本，文件变更、缺失或新增需求材料使批准失效并阻止推进或写入。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts",
+          "version": "repo-file-v1:sha256:ac4ee76eb512c72c9fd79454f3e7882d3fc00f678794390e1bd33db016fc0006"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/artifacts.ts",
+          "version": "repo-file-v1:sha256:6456e5da35c2343e54f1ae12f5f23b39b95038b5fddefa44aec188caa867d8b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        }
+      ]
+    },
+    {
+      "id": "claim_331bbecbe1b94f508ba7247c3e1a4f05",
+      "statement": "Dev 要求 omp-spec 解析为随包 schema 并拒绝外部遮蔽，资源摘要及正式路径包含关系受到检查。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/artifacts.ts",
+          "version": "repo-file-v1:sha256:6456e5da35c2343e54f1ae12f5f23b39b95038b5fddefa44aec188caa867d8b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts",
+          "version": "repo-file-v1:sha256:0f86da9c90daa833e375351c1a444d14526b389583d442d5b43a706e8ec3e36d"
+        }
+      ]
+    },
+    {
+      "id": "claim_4d2ad42c526e4461b9a51ac86f08c038",
+      "statement": "执行前角色使用受限工具白名单，只能写各自阶段产物并派只读 scout；执行者继承宿主允许的能力，但 Dev 禁止协作创建 worktree。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts",
+          "version": "repo-file-v1:sha256:ac4ee76eb512c72c9fd79454f3e7882d3fc00f678794390e1bd33db016fc0006"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts",
+          "version": "repo-file-v1:sha256:461d0d808f198f53cc3f905a3c8ab923398b14a2b268f8f998ded0864258ce20"
+        }
+      ]
+    },
+    {
+      "id": "claim_0b12969eb3f14f8284249271b5ba91d9",
+      "statement": "控制切换等待原生会话和异步任务结清，忙时对话采用原生 follow-up 队列，阶段持久化先于目标角色模型调用。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts",
+          "version": "repo-file-v1:sha256:ac4ee76eb512c72c9fd79454f3e7882d3fc00f678794390e1bd33db016fc0006"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/controller.ts",
+          "version": "repo-file-v1:sha256:1e16f7d3323f81a00cb7eac13ff35d6327ecd7479989b20432513396c6d750e4"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        }
+      ]
+    },
+    {
+      "id": "claim_f8e5a77d7fd74263910bcf824b6497e3",
+      "statement": "完成报告改变后等待验收并暂停 Goal；明确业务修复会使旧报告失效，须实际更新报告后才能再次验收。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/actors.ts",
+          "version": "repo-file-v1:sha256:ac4ee76eb512c72c9fd79454f3e7882d3fc00f678794390e1bd33db016fc0006"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:2b24f677566015f93d4bae027201702eb5590ec59807b0bebc227de3238f68a7"
+        }
+      ]
+    },
+    {
+      "id": "claim_f62082a42a494e6b839512b569dd5088",
+      "statement": "工作区持独占租约并原子保存 Dev 状态，会话历史和正式文件分别属于原生会话与工作区；退出等待取消结清，重新进入恢复阶段及批准而不自动运行模型。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/controller.ts",
+          "version": "repo-file-v1:sha256:1e16f7d3323f81a00cb7eac13ff35d6327ecd7479989b20432513396c6d750e4"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/workspace.ts",
+          "version": "repo-file-v1:sha256:97dd1f8fd9aca32ad6ff415aa00ec896da80bf8fa6208af4d74024c79281779d"
+        }
+      ]
+    },
+    {
+      "id": "claim_37b681b41afb4432a4ee3c913c07c7c4",
+      "statement": "原生历史不可用时恢复仅提供当前正式文件和已保存批准并明确缺失对话，结构门禁仍在 next。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts",
+          "version": "repo-file-v1:sha256:461d0d808f198f53cc3f905a3c8ab923398b14a2b268f8f998ded0864258ce20"
+        }
+      ]
+    },
+    {
+      "id": "claim_b4a6f99774e648989b432f1564cd740a",
+      "statement": "验收先持久化版本与决定，再通过原生 OpenSpec 同步归档；收尾记录实际进度与副作用以重试，副作用发生后禁止回退。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/artifacts.ts",
+          "version": "repo-file-v1:sha256:6456e5da35c2343e54f1ae12f5f23b39b95038b5fddefa44aec188caa867d8b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/orchestrator.ts",
+          "version": "repo-file-v1:sha256:7a70a8a09d98e5898ff30155db11d73060f8b75c2c75726910ec0ec5b9ee6ec5"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:2b24f677566015f93d4bae027201702eb5590ec59807b0bebc227de3238f68a7"
+        }
+      ]
+    },
+    {
+      "id": "claim_700f06c1f54541eca66edd74cf5f6901",
+      "statement": "ZCode Dev 桥接只维护观察索引，不拥有正文；冷查询只读且不恢复控制器，实时操作使用运行、阶段、generation 和文件版本绑定。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/spec-driven.ts",
+          "version": "repo-file-v1:sha256:eef4661e823135c73a561c3067a836680bb57154d237202b82328d5cfeb4c4a5"
+        }
+      ]
+    },
+    {
+      "id": "claim_c09bc50473874137918a775fcdcf7817",
+      "statement": "Dev 模式进入、需求接受、计划批准、软件验收与 Git 或发布授权互不等价，结构通过不证明软件正确。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/prompts/spec-driven-communication.md",
+          "version": "repo-file-v1:sha256:5acf62da5981944acc4bb412009ceccb584514a1513056f1355cfe308e95790c"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:2b24f677566015f93d4bae027201702eb5590ec59807b0bebc227de3238f68a7"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

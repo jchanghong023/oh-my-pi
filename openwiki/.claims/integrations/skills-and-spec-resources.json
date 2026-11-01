@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:c7fa801c214a141bbfbedfd9a563da0e4d2aa58b16e05922e0a1952aefe36348",
+  "claims": [
+    {
+      "id": "claim_d6df72d07ce04f398c3f049890032589",
+      "statement": "包内 OpenSpec、Superpowers 和 JCH 来源由版本或 revision 清单固定；源码树和发行归档产生的资源缓存经锁定、SHA-256 校验及规范路径包含检查后发布。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resource-inventory.ts",
+          "version": "repo-file-v1:sha256:6be0e491706ea89617ecb9d50ea9d56c6d14b8ca9249553c629569a1f00f2ae8"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L40-L182",
+          "version": "repo-lines-v1:sha256:36f14a8d0bd2630ff87431588314c335d1e46416d3ab49e9e10bf44b27eda0ee:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQzLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJhNjc4MjRhYTk4Y2UwOTAwY2Y5YWQzYmRjY2MzM2RhN2Q5MGM1ZDMxYTU4OWY1Nzk4ZGEzZTg1YzA0NGRiMjdmIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJjYzNhMjA3NzRkNWMyYmI0Yzc5MGMxODg5MGE5YzQ5NGNjYjUxMGZjOGU4YzA5ZWM3NDUxOWJjMTY0ZmM3ODRiIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiI4Y2QwYTE3MDlhMTZjZTY1ZjFlMmIzZDcyOTgzZWE1ZGUyZWFkZjZlMDYwN2EzMjE4MjJhMWVhMWUyMzM0OWY1IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI2MDNmZmQyZmFkZmZkYzgwNDhiNmE4OTdlZmI5ZjA1MGI3ZGE4ZWIyYTFiMmU1YzE5ZDQyMzk3NWYwZGFlYzMxIn0"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/vendor/inventory.json",
+          "version": "repo-file-v1:sha256:0047d887f3388a1abafac8928ea64f0d37d76516ce07f4cb06c732fe898a5e03"
+        }
+      ]
+    },
+    {
+      "id": "claim_03ab145ad9ab42de9e016ecbb64e7fbe",
+      "statement": "低优先级 spec-driven 提供者按清单发现 Superpowers 和 JCH 技能，并将普通 OpenSpec 发现限制为五项核心技能和五项 opsx 命令。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/discovery/spec-driven.ts#L10-L91",
+          "version": "repo-lines-v1:sha256:f6ea261d82567978f5174e3db48060171bf6047e95740f2e06325eef75b1bd52:eyJzZWxlY3RlZExpbmVDb3VudCI6ODIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUyNzFlMjViNTg5NmVmYTJhMzczMzRlYjA0MGYzYWVlNTdmODVkZDQ5NDZhZjQ1N2I4ODA5OWJlZmI5NDBiNmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM2NDQ2NjkwM2M4NGUzMmUxM2I1MThmNjkxN2RjMmM5N2U2MzM3ZjU2NWRhNDllZTA3YjBkNThlYWY2MDBmOWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_a3624531ad30406cbed8558191dfb6e1",
+      "statement": "技能 catalog 使用同名优先级和命名空间解决冲突，自定义目录可取得裸名；OMP_SKILLS_DIR 提供优先的共享技能目录，Codex 用户技能默认启用。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/model-and-skill-discovery/spec.md#L9-L42",
+          "version": "repo-lines-v1:sha256:312f49f550eef532b9cfb21d95202ff417697e3f5f53d249608af1541a43c805:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUxOGY2NjEzNmM0NTI2ZWExZDQyNzZlYzBiMTUzYWZkNjA3M2ZjNTFmNjgwOGIyZWY5YzRlNDFhYWI4YTE2MmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ4MTU5NzQxODUyOTNlMTFmMTk4YTU3NzAzY2VhZTNhOTgyMzZkMDE3ZDM5MTVkMTUzNGJjNWRmMDgxOTIwMjUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImMzM2JhMDBmZjJmNWY3M2Y5MDJmMzZiNjA0NzkzNjM1ZTM3YTQ3NzU3YTVlNjgxN2I4NGU5YzA5MGM1Y2MxZGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRlZTA1YzJmMzZjMmQ3ZGIxZjNlMmViN2M1MGI1NGZiNTRiNGQyYjMwZTJjMzU1ZmQ3YmRlNDU2NjAwMzE3YTgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/extensibility/skills.ts#L151-L170",
+          "version": "repo-lines-v1:sha256:5ee1c86ad07d36668045e9a3d0e0a023c5cee89c5d9de7ef957bf234a131bf8d:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgyMmM0YTk4YzU5ZmIyY2FlMjc3MDk4M2FkYTdhNTc5MTNjM2ZlYjZkNzcwNTk5NzkxYmM4YjczZWFlY2Q5YjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjhmY2EyNWVjNWM0NTRhODQxYTU5NzUyNjYxY2FkNTFhYTA1YzkxOGM5ZDQ3NWIxODk2ZTY4NmFiNWNkOGI1YTAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVmOTJhMmNkMzI0M2Q3ZWMxMTRhMjA2ZDE0YWEyYzc3NGRkOTVmYTNjMTY3MmE1YWMzYjJlMTVmNjZmYzk1OWIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/extensibility/skills.ts#L343-L355",
+          "version": "repo-lines-v1:sha256:7eb71a3e50ab4bf6db70a4d3c13de5d027f76690bc506c0f598c558321d8749c:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM4OWJlMzNjMzhjMjM2OWQ1ZTRhZDBmNzA3MGJlZWIxMzA4YWI3NzA2OTc2M2U1ZDY4YjNlMGE3MWViMWQ0ZjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhNmYyZGExNjI4NzlhMDlmMzA4ZjBhOWM2OWYwNWY4YWY3ZWQ3MmI4NDQ2MWQ1NzU5ODlhMTU1ODliYjZlNjkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE2NmUzNTdjYWRiMmY0NTVjYjc1NzIyNzBlY2UzYTMxNmJmMGNkZDM0MzAzOTM4NWVhMGUyYWI4ZDAyNjYwYWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc5MjYyNWNiNDNkNjFlYzE0MjY0MzRkMWYxZjg5ZjU4ZTY5NWI1ODMxYWNiODE2YjA0ZGM1NjQ2YjFkNzhmMmMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/extensibility/skills.ts#L534-L561",
+          "version": "repo-lines-v1:sha256:90d67a6cb4a51539aa547649f0eefdd8ebba6d69c10ed366563acd5ae985161b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiYzg4MGU2ZTZhMWIzYTMzZDBiYTJmMGZlMzMwNDE0MmRmY2UyZjI0MWFkZjEyZjk5YzcwYTEzMDMwMDU3MjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFiYTNiOGE3MzliZTBmN2U0MWFlNjFiOTQyYWJlY2JjMjhhOTlkNzQ0OTBkYTY0MzQ0MDA0OTMwMzFjZWU3ZTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZlOWU3ZTkwNzM5MWMxYjQ4MzJkMTIwMjQ2MmUxNzQ2OGRhNDllODc5Y2VlMzA5Y2ExMzRiMjdiNDNkYTBhMGQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZjM2YyNGM4ZTBkNGE2ODQxMjIwN2M3NGNhM2M2MDRiMWFiNTMzODczNjE0MWYwYzE5NWJhM2FhNDBhZDFlMTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b3e7578618a34996b439d403a388c1a5",
+      "statement": "固定隐藏技能的读取要求当前分支的精确调用记录或精确授权；Dev 阶段另检查允许名称，并对多数固定 Superpowers 技能要求原生精确授权，三项指定技能保留阶段访问例外。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/skill-policy.ts#L135-L177",
+          "version": "repo-lines-v1:sha256:62be7af8686faa973c617eddfab1c7254ab75585d251fc868e5abbaac7a40146:eyJzZWxlY3RlZExpbmVDb3VudCI6NDMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE2Yzc5NDBmYTI2M2JlN2E0Y2I2MTEyNGMwMTQyYmVjYmJmZWNhMzRmN2FlZWU3MTA4MWQ2MjAzZjdmZjlmYzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/skill-policy.ts#L8-L32",
+          "version": "repo-lines-v1:sha256:912721e183d91ab0c4e89fae1865a1d785f5b98950c8210d54538545a70eed65:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjMyMzlhN2Y5MjNjZGUxNGY0NjU0MjRkNTU3ZGEzZTkyMjQ1NWY1YmI4MjQwYmM1MzAwZjQ5YmEzZTkxYWM4MGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM1ZDRlOGI1ZDE1YThhMjFjNWMwYTA3ZGFmNDA1MDgxN2ZlYjRjN2U1ZjM4YjkxYzQ3OTY5NWU5MWU1YzRjMjgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgzY2I3M2Y4NGM0MjQ3OTQxODVlNWJiOTM1MGJhMWQyNmE1YTU0ODA4MDNjZjE0ZjJlZTU1MWRiNTNjM2I3MWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY2MDAwZDUwYWIyN2UzOWJjY2IzZWVlZmY2NzcxYjllMDBiZGJkZDcxMzkyYjc5YTYwYTcxZDRkMmU4MjE1NTQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/skill-policy.ts#L93-L115",
+          "version": "repo-lines-v1:sha256:62c21bb94395cf16d33af28d4229a924a118ea2dcf1a2a29b2c32bd0f2e0c3d3:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFhYzY1ZjBkNzgwNDQ0NTNlZmI2ODgxMmRlNTM5YmUzODllNmM4Y2M0NWI1NWNiNTI2YmFhZWZkZjVlYzE4ZmMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUwNWU4ZWU1NGIyZTQ1NjA3MGYwYzQzMmQ0YzlmN2JlMzU2M2QyNWMwOTlhZmQ2MDk2YTAyNjU4MjQ0NDUwNDgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5N2E5Yzg0MjJjNDBhYTgwMmUyZmE4ZTgwMjZhMmQ1NTFlNWQ5YTM5MjliZGI0YmMwNzI4MGEzOTY3MjU2MWEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_dff1c5ec7dd847219366daa41b5c5864",
+      "statement": "独立 omp openspec 运行包内 CLI；新项目默认 mini，init 不安装重复工具，不改已有配置，显式 schema 和已有配置优先。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L518-L535",
+          "version": "repo-lines-v1:sha256:72caa4b2766d3be7a579ab071865952739a4f80af660407294053c17ca64bac1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMyMzA0MTM5ZGVlYzg0ZDVlNjUwNDRkODdmZWI2N2ZkNmJhYWRjNjc1M2NiYzI0OWJhOTczMzdjNDA0ZjJkMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU4NjFmZWZkMTM2ODcyM2YzOTI5MmMyZTBlMTQ1YTFhZTQzYjMwZTUyZmY3ZjNkYjY1MjA0MmE0Nzc0YTgyODMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBhOTQ4MTkwZTI3MDA1MWM0MjZjYjNlZTViOGJkNWEzOTdlZTVlZGU0OWY4MDYwOGY5NTFhZmYxNzYxM2U4MGIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L208-L307",
+          "version": "repo-lines-v1:sha256:5cf54ef5cbb8fc388ef61181a0afc7576f2f2b1b9e8946bb7a71244229f06550:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAwLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJhYWQ5NjljOTlmYzVkZWE5ZGI0OGM2YzQ0NDkxYWQxNDM3YzllZjg1OGNjMDhjYmU1OTViODg4ZGRmZTc1MzFmIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI4N2MyMjc4YWU1MzVmNzE2MjYwNjE1OTZkMTFjMGYyZGEwMjhmNjMzMTZkZTZjOGE4ZWMwYzBmYjg2ZGZjOGIzIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJlYTY0MTRkN2JiYTdjMGNmNTcyYTYzYjRiZWUwMjIxNTAyZDkwNTg1MGU0Y2FjMDE3NDE3YzBlODI0ZTIxN2E0IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI2ZjNjMzY0MjhiNmQ2Zjc3OWFlZmRkYWFiZjg3M2JlNzkzMzQ4MGQxYjk1MjVmYjQ5MzZmNDNlODk2YTllNTI5In0"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts#L147-L202",
+          "version": "repo-lines-v1:sha256:f9a5d31d6888248389bd8a29f43255f2546172355304c4bea542606be55756a9:eyJzZWxlY3RlZExpbmVDb3VudCI6NTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmZDM2MGEwODFmNzRlZDk3NTBlMTM3NzIwOTlmMjRhOTQyYzUzYzI4MDhmNTFjZTc4NGU4M2QxZDUwMzkwMTAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhMGM4YmQ0ODAzMTUxNDE0ZDI3YTBkNjA2MDE3NzgzMDRmZWVmZjYwM2VmMWUzMWNhMmE0YTQyMDJhODIwYTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ4MDM2NTdlYjQ0YmE4Y2YzZTg4ZTA4OWViYmI2MmM3YzU2ZTMxNTY1ZjhmM2VkOTViZTNkNGU4MmViMjE1NTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImViZGM2ZmNiZDY4MzgyMjNlMjY3ZGQxZDMyNTliNjdiZTY0Njk5MDUzNGZmNzExYWJlNzUyOTM4NGI3OGE4N2QifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_734862d6aa644b6bbd51be4bd4406716",
+      "statement": "mini 维护 proposal 和 specs，原生 spec-driven 还包括 design 和 tasks；独立需求维护不依赖 Dev 阶段或承担实施和软件验收。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/spec-driven-orchestration/spec.md",
+          "version": "repo-file-v1:sha256:64aa1a46c1d8344d0fc79812a85469b343dfffa376d49bb4e56631c3a3630efa"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts#L245-L307",
+          "version": "repo-lines-v1:sha256:0ec204aa1014cf26005527b0d49a8fa80ed4f4400d1cde8f2b0458ead57ae0e7:eyJzZWxlY3RlZExpbmVDb3VudCI6NjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE1YjllOTg5MDM0MDFmY2ExYzFjMzAzMzU0ZjhlZWY1YTEwZjJkMDY1OWUyODdiNTkzMGE3ODE3MjQ3ZGZmZDMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMzNjQ2Y2ViNTg5M2EyMjBkMjIzYWZmYjdkYjIyMDU4YmU2OGZiNDM5MjYwZTM5MTkzOGE4NGUyODc4YzhiOWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRlODA2ZDY0MWNkYmQ5NDM1OWFlODZjODVmZGIyMTBhMTI2ZGFmZDkwMzNhYjM5ZTY2MzcwODgzNWFiYjdhYjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY0M2EyNWQ4YzUwNTE3ZmIyODZmNzRlMjM0NWI2NGE0YTIyNjc1NmQwOTg5MjI5NjNlZjBjNTE2NThlYjA1NDAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_aa8ee801eb264f318307791049f5ade8",
+      "statement": "Dev 要求 omp-spec 从包内 schema 目录解析，外部同名覆盖导致失败；需求阶段使用该 schema 的 proposal 和 specs 指令。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L310-L335",
+          "version": "repo-lines-v1:sha256:b857a05da3e5970b78905937a68816ff7695c1d98896c14afb55f431e106f1b0:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiMzEwNGMzNTliMjhlNDRhMzg2ZGE2Y2YyYWYxODI3OWY2MjQwZGYwMmZjZjAwOWQ3YTA3OTA5Y2MwMDliNTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNhOTYwM2Y4MjAzM2EzNzdhMWFjOTI3Nzc4ZjE3NzE0NmRiZjRmM2M3OTU2YzY0MzM5NGY3ZGE0YzIxMTg4NWQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE3ZjQ1MmMxMzI3MDc4NmIyMWY2YWZiYWU2ZGQ0OWQ2NzA1NDU1MTJmODExZjMwOGU0OGUzMjFmNjQwZWUxNjcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts#L222-L248",
+          "version": "repo-lines-v1:sha256:6797b31943fd8af3925ba94525bd00eb7c233f4f5c274f87c2247b657ecd58f6:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNjYWQ4Nzk4NzE4NzYzMzcxY2M5M2I0NTRhOTUzMWI0OWYwYzgwNjVmOTE5MWNlMWFjMGQ1YWNjM2NjYjcwNDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhOTUwYWY0MjMwN2I4NzIwOWExY2MyOTU4NTIyZDYyZjU1Nzg2NTIwZDhmNTczZWYyZjM0YjNhNWZmMGNlNmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI4NjE2ZWYwNmZlZjQyMGMzY2M5YWFjMTJjYzVhZjczYzY0MTI4ODlkNGZiYjU2YTlhOWJmYWFjMDY2MjBhMzMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY4ZWI1YTBlYWRmYTg4YmY1NTc4MTg5YmYxMzFiMzU4MDgzZmZlYmVmNmE1Mjc4MjFmZDdkMTIzNGRjYjNmMGUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_dc58289be6254856a085a9ffe7aea1d4",
+      "statement": "Dev 分别为需求、规划和执行角色注入固定技能；规划剔除 execution handoff，执行会话暴露并精确授权全部固定 Superpowers 技能，同名用户资源保留裸名。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts#L128-L153",
+          "version": "repo-lines-v1:sha256:9bcf725fea671ef09cbf2c240ed9fc5235dc95c27ca2298f7b8c2bfecf2f7287:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI1NGM5NmI0MDc0OTUxYzlkNDJmODkzNTEzOWZjYjQ0NGRjMjMyMDhhNjEyMGZmMzQ4NjA4MWM3NDVjMGY5ODAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhmYWQxMjFmZGRlZGRmNGU0NzJmYzUyZDgxNDU3Y2VmMThjYmU2ZDg0MzNiMjQ0Y2NmMmYxMjYyNmRmNjc5YzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQzY2FiNDkxMWJiMDU4YTNjNTBhNGZiYjg5NjA5ZjZjYTFiZDkxMjllODkyZjYzZmVmY2YzOTlkZDU0M2UzOGIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzZDFlOTE4Y2ViNTRlZGMzNmQ0ODdkMGY3NzM3NzdjZmI4ZGE1NjAwZDY2YmYxZjE3MTEwZmJhNDcxZDEyMWUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts#L170-L207",
+          "version": "repo-lines-v1:sha256:b16bbf28785e98ff9aa65ef898e6203c882c01cc7f771439f18c08bb7741a397:eyJzZWxlY3RlZExpbmVDb3VudCI6MzgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkOWQ2NzMyOTZjNjM5ZWUwMDgyMGUwMmM2NzhiOWYzZjQzZTU1NmNhMmE4M2QyNGUyZWI0YjEwZGE5YmMxMzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI4ZWY5MDE2ZWZiYmRlZDQ3ZTJmZmVmNDkyYjE3ODg1ZTdhYWVmYzk0NzEyMmM4N2NjMmZmMTRlNWYyMDEyNTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdmZTRhNmUxODk4MzcxOGQ4NTk3YWM3OTk0ZGVmMTNkOTcyMDRhMjM3NmNlNTk3YjVmOGE0Njg4NDhiOWQ4ZjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIxMTZjNGQ1NTk1MjdkZjkyNDIyMDU2NmMxZmUyMTU3YTIyMWI4ZGMxZmQ0NTM4Y2Y5ZGVlNjI4YTUzOWE0NjkifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/skill-policy.ts#L64-L80",
+          "version": "repo-lines-v1:sha256:80b1d1c3f39a408bba48b9cf295b5d8e20e6506f4e7ed79ed83925d92ee065ae:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRiNjBmZGU0NTMzZTljNTQ5YTM0MGI1YWNjZTBkM2U1MWFlMjJhNjc4NTg3MmI1ZDhjY2YyMzgxYzUzMjhmNzEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImIyMzA0ZjI0ZDI2OTZlOTFjYjEyOGRiYTgxOGZiODNjNGExOWM3YjM0ZTBmYzAwZjg5ZWU4NTJjZWRhMGExZmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE2YzMxZjBlZTZlNDg0MzY5NzM5ODAwOTEyOTNhY2FhYzgwNTcxYjRlMDBjMWViZDEwMjZmYzMwZDhmMzBmNWUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f0e07ad0c2ba4e4ba563dac0647d2d72",
+      "statement": "omp superpowers 仅运行清单中 skills 目录下且路径受限的资源；JavaScript 使用 Bun，shell 需要 bash 或 sh shebang 和 Bash，Windows 使用 Git Bash。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L536-L568",
+          "version": "repo-lines-v1:sha256:76af170e85e33253ab5af8efb4370b23ee43840d8cabf5e982fbf64a9c0e10b1:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2NjliZGIzMDhiNjI0Nzc1NmEwZDViNjVhOWI5MGJiMWUwYTdhYzA0NTU2NTJiMmYzNDMzYzkxNGNjMGEwYWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2YTI5YWQ3MWI0MGNiYWU5ZjhjZDMzZDdiZDNkNzM5Yjk0ZTNmMjk3NjM4YzllMDljNzJhZjVhYjJhMmUzMGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZlYmVmY2NlOWY4YTlmMDI1Y2Y4N2M1YWU3YjZlNjMzZDY2MjE5NzczY2IzY2QzNmVlOTQzMzc0OTkyYjQ1MDIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L337-L390",
+          "version": "repo-lines-v1:sha256:1729a701754cfb49349ccebd06019a0c858650f25e1762f0cf7aeb499737bb00:eyJzZWxlY3RlZExpbmVDb3VudCI6NTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjczMTMwYjRmNTVmODM2MmI0MGUzMDVmOTU5MmI4MjQ2NjAzNmRkYjBjZTk3YThhYzIzMjc4ZGU4YjJkYjI5N2MiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhNGQ5YzYzM2NhMzExNjZlNTZkNTg0ZTUwN2Y2MzIzMTQwMDEyN2NmMWYzNzQzZjUzMTU4NGYzY2EyNDA4M2YiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4b30044028ed43489aad97a5e9276bba",
+      "statement": "资源进程禁用遥测，使用调用目录和固定 brainstorm 目录，支持中止并返回 stdout、stderr 和子进程退出码；脚本入口缺参数返回 2、帮助返回 0、入口错误返回 1。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L536-L568",
+          "version": "repo-lines-v1:sha256:76af170e85e33253ab5af8efb4370b23ee43840d8cabf5e982fbf64a9c0e10b1:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2NjliZGIzMDhiNjI0Nzc1NmEwZDViNjVhOWI5MGJiMWUwYTdhYzA0NTU2NTJiMmYzNDMzYzkxNGNjMGEwYWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc2YTI5YWQ3MWI0MGNiYWU5ZjhjZDMzZDdiZDNkNzM5Yjk0ZTNmMjk3NjM4YzllMDljNzJhZjVhYjJhMmUzMGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZlYmVmY2NlOWY4YTlmMDI1Y2Y4N2M1YWU3YjZlNjMzZDY2MjE5NzczY2IzY2QzNmVlOTQzMzc0OTkyYjQ1MDIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L185-L205",
+          "version": "repo-lines-v1:sha256:b26b6e48970388f3ddf66edf8227e14c5bc69106153776116e7740187a761460:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJiZDVmOGE0M2U3ZDEyZTlhMTRhNDI0MDgwZjg1MjZjZjhkNmJiODU5ZDU1NWFmMTM2N2I2OGE1NDJhMzcwNGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEyNGM3NjVhMmYxYWEzZDg1OTIyYTZiZmMyYjkyZjc5ODhhYWNmMDJjNTljZjBiOGZiZTE2ZjdjMWU3ODYzNjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE5ZmFlM2I2YTQ1YjNiMzA4YmJhMzU3NzY5N2Q4OGE4ZTNlY2JjMDkwZDNjMzJjMDJkMzViMzAzZDI4YWU3ZDAifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/resources.ts#L359-L390",
+          "version": "repo-lines-v1:sha256:9e377eef11c3f38bbda1b98650d54c3911f6327178689ab60733b96311c9e8a7:eyJzZWxlY3RlZExpbmVDb3VudCI6MzIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3MTE0MmVkNTg0ZGZlZGM4ZTc4OTNiMWUyMWJhNGRkMjViMmYxNWZmMWI0NGIyNDFjNWM5ZWQyMzk1OTU2MTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhNGQ5YzYzM2NhMzExNjZlNTZkNTg0ZTUwN2Y2MzIzMTQwMDEyN2NmMWYzNzQzZjUzMTU4NGYzY2EyNDA4M2YiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ3MTZkNGMxNmNiNzQzZTgxYTc3NTY2NjE2Zjg1ZjRmMDM0MDU5NzU5ZmNiMmJmOGIyNjQ4ODIwOWMxMzQ3MzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4aa858240f114978babd60bd9542754d",
+      "statement": "公开进程测试覆盖打包 OpenSpec 命令参数、初始化、默认及显式 schema、验证和归档。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts#L113-L309",
+          "version": "repo-lines-v1:sha256:79e104b1b087aa9c77dafae87f98b9a24e963e3523fe5a8d0b59c9258bf13a5f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTk3LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiI0ZmQzNjBhMDgxZjc0ZWQ5NzUwZTEzNzcyMDk5ZjI0YTk0MmM1M2MyODA4ZjUxY2U3ODRlODNkMWQ1MDM5MDEwIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI1YmFkN2NjMmRmYWZjMjE3NWZhMmQ5NzA0ZTAyMDJmOTQwODNhOWRhNjlhNTg1YjBiMThjNDhiZWEyMzYyNzVlIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJhN2E4ODJkYzNkYTgxY2FlNGYzMDQyMWRlYzQ1ZDQ5NDYxNzYzYTE3M2Y4NmNiZDU2M2MyZjE1MmMwMmJkYmU3IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiJmMjcwN2Q5Y2ZlYjJjM2Y0MjViNjZjODQ0OTk1NzAyNjAwOGI2NWEyZDI4NDg5N2NkMWIyZjBkYWYyNjQ4MTA5In0"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

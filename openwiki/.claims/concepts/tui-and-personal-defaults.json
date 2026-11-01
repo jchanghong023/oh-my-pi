@@ -1,0 +1,366 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:e3279a623d8c7f3502b8602dbba3fadced433c9a913d4cd2b52d27b1ba951e5c",
+  "claims": [
+    {
+      "id": "claim_4b9b68112d094b90ab6e04522365a549",
+      "statement": "TUI 输入控制器按命令、技能、Bash、Python 与普通输入分流，并在流式或压缩期间使用会话 steer 或队列；事件控制器把消息和工具生命周期事件映射为界面更新。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/event-controller.ts#L382-L471",
+          "version": "repo-lines-v1:sha256:78fe901a3fccb341fa92d147d5fd566a4184898dd7699f1d8588e4a8b08ad11d:eyJzZWxlY3RlZExpbmVDb3VudCI6OTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzNjU4N2E3ZGEyNzEzMTg3YmNmZTU2NzllNmRlNjZiYzhkMDIyODUxNDA3NzEyMmU2ZjY4ZDgwMzhjN2FmMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhjZTJhZjg0M2ZiZDc4ZmIwZjdiMjYyMjFlNzQ0NTk2ZjgwOGQxN2JkYjBjOTg5Zjc5MDMyNjg5OGYxNGQwYzAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM2MWZhNDM0YzNhYTA3OTFjZDljMzc5OGY1N2U4ZDI3N2I1Y2IzYWY2NTk0NzFjZWU1MWEwODc3ZGNjZTEzNmUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUyNDhhMmRhOTBmMjJlY2IwNzAwYTc4NDcyMjIyYWNhYjM1ODdhOThlMjQ5MDdkZjBlMThjZTE0MGEwNjUwYzUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/input-controller.ts",
+          "version": "repo-file-v1:sha256:3d8ebee573bae4e4defae3d58ba4072950ad16106dbada505794704ee79b2b1c"
+        }
+      ]
+    },
+    {
+      "id": "claim_aab7debebf6a49169a9ab3d8f01113c3",
+      "statement": "fork 的 display.mode 默认 compact；/display 接受 clean、compact、detailed 并可循环，偏好被高优先级设置遮蔽时提示来源。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L9-L24",
+          "version": "repo-lines-v1:sha256:5cce18a55200dca82458abc888bdb08682de555c64cdbac2a38b23152c2f0c1a:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2MmZhMDg5OWI2MThjMGEyZTViZjAzYjZmYzM0ODQ1OWExNjc1ODY3NjljYjk0OGQwMWQ2MzBmM2Y0MWEzOGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3ODk4YjA1MGQ3NDVhNDYwYWU0Njg2NDllNWI1ZmJmNjI2YTNjMmQ0M2Q4ODk2OGRlNzgwYzEyOGUwZTdkNDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJiMTM0ODZjNTRjMGY3YjBlYzhjMTc3YzlmNDc3YTZhN2NmMmMyZmQwZjc1NDJlYmJhYzZhMzczMGRkYzQ3NmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZkMGFjOGQ5OTg0OWVlOTBhYjkwZWEzZjkyODliMGM0MzRiYzQxODU5NGU4NDJiMWZiYjk2MzQ0NmFmZjQ4YTQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/settings.ts#L665-L670",
+          "version": "repo-lines-v1:sha256:afc9e5e8638963fae608cdf427300f0575d109012ebb93adb7e7715a993ea2e2:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNWI4YjgxYTAwZmU1ODhmZmVmNTc0ZmQzZDQzYzllODg2MGJmODEyOWJjNTk5ZDI3Y2Y0YjE1ODhiZWQwNjY2NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjZmNWI0MGIxNTg0NTdkMTc4NjRmMjE3OTA3ODZkZDVhMmVjZGI2NGI2NmE2NTFmNzg4ZDRlMjVjZDMzMDNkMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2UxNGM3M2MyNjVlMTkxODgyNjQ4MTBiNDhkNDAzYzg0ZTRlYjY5NzQ4NjkzZmZjYzNkZjNlM2E4MWFiMjU4MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGFmYzk3MGZmMzkwN2NhM2YyMjc4ZWU0YTU2MjA5YzUxNTI2ZDdkOWE0NmI4ZDI1Njk1ZjU4OTI1N2I0YWQ3NyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/slash-commands/builtin-modes.ts#L295-L355",
+          "version": "repo-lines-v1:sha256:7d1a07b916719cb57829089057b5dab2fd4f80056362ccc7cbf5039e7395eee0:eyJzZWxlY3RlZExpbmVDb3VudCI6NjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZDY1ZjAzODY3NWQ5NmEzNWZhNjYwY2JjMGIxYWIzYmU0NjVmODk4ZjZjYjlmYmI3YmI5MGNhODliNWMzMTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM0ZWIzMmYwMGYwODcwZjNiMTJmOTAyMDQxMjliZDYzYWZkZjE5OWRiMGQyZjI4ZTQ3MDhmYjVjNjFhMGUzNzAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZkYzhlYTlkNjVmMTM0OTA4YjZlMGY1N2RmMmY3OTRkZmQ5NTA3ZjVhMGIyOGMzMzhmODZhZDA5ODY0ZDYyNjMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f94c65c556a541b9970fb0c612d1794c",
+      "statement": "显示模式只改变消息和工具的投影：clean 隐藏工具和思考，compact 局部分段裁剪，detailed 保留完整组件；图片设置独立生效，原始消息、模型上下文和执行不因此改写。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L378-L411",
+          "version": "repo-lines-v1:sha256:a086aabf3a244204c6efa72cdd603192529423890fa820a23a3574ed366a7ab3:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFlY2NkNDQ4ODE5MmY5NjdkMzMwNTI1ODQ3ZGJhZDY5ZWVmY2Q1NDg3YzdkY2QxMTBkOTQxZmM1ZTE0NzU0NTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ0MDk4NTc4NDhkMTM0NzgxYWJmOTcxNWJiOGE3MmVmYmU0MjIxMDY0ZmI2ZmUwZmQ2YTIzZDRjMmUzNGE5ZTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjUzYzMwYzRmZTc2YmI1NWQ5MDk4MDE0NTQxZWQ4Y2YwYzUwOTQ1ZTEyMzkzMzE1MjQyZTNiNTgzMzk5ZGZkZjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJjNzZhOWQxNzc2ZmUxNTQwOWFlMzlhNmYyZTNiMmIwODM3MDg1ZmQyMGQzNWI3ZmZiNzA0NzZmODVlYjE1OTcifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L9-L37",
+          "version": "repo-lines-v1:sha256:06090aef854bf4e280e74fb4433c7f999a49e4ebf271be5aad5f7db3dd40443c:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2MmZhMDg5OWI2MThjMGEyZTViZjAzYjZmYzM0ODQ1OWExNjc1ODY3NjljYjk0OGQwMWQ2MzBmM2Y0MWEzOGIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNiYjFlN2VkYTQzZmNjZWRlMGNhNTU3NWJhMzRmYWIxYzE5ZjdiYjEzMzRiODM2YjVkOTQwM2U1YmJkZjljYTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJiMTM0ODZjNTRjMGY3YjBlYzhjMTc3YzlmNDc3YTZhN2NmMmMyZmQwZjc1NDJlYmJhYzZhMzczMGRkYzQ3NmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYxYjdiODEyODU4YjBmYzFjYTRmZDc1MmY1YjE0MDBkODI0NzY5YTBkMmFiOWU4M2RkZjZlNmMxOGJiMmZmMWUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/settings.ts#L727-L738",
+          "version": "repo-lines-v1:sha256:8f173fedececcdc0b7eacb83e7d13fca5b30ecb51fbef6f29bd1c607aa1ff7ca:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRkMDFiN2ZkNTRlNjg3MDc3YzgyYWU3OGU5Y2MzMDJiZmZiOGQ4NjQ0OWY4NmVlMDYxYzg4N2Y0ODFhNmQwMDEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE5MDk0MjhjN2E5YTk0Njk2MGZhZmQ0N2JmZjQ5ODYxYzZkMWMxMGUwNTI5YTM0MzQ2ZjZiOTAzMWU2YWY5ZTIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ0YzI1N2NiYTdmNmYyNjY3YjIxZTMyNGRiMjU1NmQxMjI5MmQ4YmY0ZmVhMjgzZmVkNjZhMGQ1N2UwZWI2YWMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjA1NGI1Mzc1YzgyZjM1NjM1ZDc1MWYxYTczNWQ2ZmI3NzExMmQ4YmJmOGYxY2U3ZTUyMjFmYzQ1NzE2OGI5YmYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_150172c129e242d4b2d3c3f43bec09b4",
+      "statement": "compact 按连续普通工具段选择最后两次调用并对超过两次的段统计，实际文件写入段保留最后三个组件；真实执行失败、部分修改、诊断及用户交互不受普通预览额度限制。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L110-L124",
+          "version": "repo-lines-v1:sha256:0a9466e3694bd55867a0d301ba9cca4569ef6f057f3aa01594e5e4da4856aa4f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI2M2MzMTJiYmRkODgzOTA1ZDcwNzgzOTFkNzA3Zjg3MTRkOWQwYTE4YTBiMzdjNjhlNGU1MmFhNDQ4YzdlNjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3ODgzZDQ4OWFlZjIzZDdiOWFmZjBkOGE3MWM2MGU4MzRjMjFiNmI5YWRmOGMwYWEyZTRiMTY5MjE4MjgxOTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM1ZGM0MDQ3ODM1MmFhOWFiMzk5NDAwYWIzYjJlYjBiYjEwYWY0NTg2OWY1ODM4YTU4M2Q1YmQzYzlmMDg0YTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjZlNzJjOWEyODlmMzZlNzM1YWNiMTc5MzM4ZmMyNDA5NjUyZWNmZWVhM2YxMTc0MzI3NGZkYTQzNjhmZDJiOGQifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L53-L93",
+          "version": "repo-lines-v1:sha256:013780688ca980b1fae44b40d03f3561eede5574245f283086cbdc7308155a7f:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIzNzA3NWUyMmZkODc5ZjZlZGM5NjkzM2U3NzBkZTg2ZTJlYzc3NzY5MzQ1OGQ4MDdiMWY3ZWUyMTllYTg1NTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY4MmM0Yzc2MzJmNWMyOGRiZTMwNzQwMTY2M2Q3ZTI4MTcwNjQzYjcwOWY2NDQ1YjM3MjNiMDc4NmM4ODc0MjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRmMWI0MTY2MDJiMmFhMmI3MTVkNzkwNDJjNTUwMWZmODU1N2RjMThiYTE4OWI2YWE4YjBiYWZjNzQzYzk4ZGEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk0ODFjNmExN2YzYTRkM2U5YThkOTVmNjhlMzlmYWFjZDMwMmE4OGRmMTE0MmYzNzI1MzA3MjRjYWRkYjFiMWIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/slash-commands/builtin-modes.ts#L301-L308",
+          "version": "repo-lines-v1:sha256:3b82ed286c9e90ae00c2e2433834dcb6205a0307379805fed331a2465ac309b6:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMWRkZWQwOGM0ZmVmZDQwZjAzNjIyOGE4YThhMTMzZDMxYWRjZWExMjYzMzI5MTk2NjYwOGJjNjA4YTZmMjdjYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjkyNmQ2YmJjNDQ4M2MwYTA3OGQ4NmVjNjUyZDZmOTk5ZmJmNDNmNmU4N2NkYjc5NjA3MzdkYWZkMWNmNzgyMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjBkMDZiMmMxYzllMzljMTQzYjcyOGE3ZDZkMmMyMjJkNzc2MGY3YWQ3MmRjOGI5NjEzNDQyNDc4MTcxMzg2NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZmFjN2UwYjU3NjJjZTllZTFmMGQzZDBkYTk3M2MyYjBmYmZhNjI2MzdkODQ5YmEyMmZkMWJiNzEyNzkxOTJmZCJ9"
+        },
+        {
+          "resource": "repo://packages/tui/src/chat/tool-execution.ts",
+          "version": "repo-file-v1:sha256:253b6c5b92c95f931ac6741df3e9e13f2bf49c3ab6b2408b2edb69d4368dab9b"
+        }
+      ]
+    },
+    {
+      "id": "claim_a3aafb27acc940b39804b650dd98367b",
+      "statement": "compact 输入区上方的固定单行优先展示活跃思考最新非空行，无可显示思考时可回退到当前实时工具输出；结束或切换会话不回放旧活动。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L126-L140",
+          "version": "repo-lines-v1:sha256:16136675ab88c80f5d33dbd5ce954db5dcabba3fcdcab77de5069bc77a8030ac:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzMjQxZWIyNTRmZWMzZTQ3YzJhYmI3NjFmODM2ZWFhZGNjMmU1MTQ5MmI3YjBkNWQ1NGViNDdhNDgwODY1NzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2MDYyMmY1OThiZWZiYjkwYjM3MDI3MmI5MWU2MjExY2RlNzdkNTkxMWQ0MTQ3MzI0YzE5YTY4MWQwNTkzMDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYwNmMyNWRhNjIxNjc2OGNlMjhkZTg0YTUxMTBkMmNkZGJhNjJiZjkyZTVmOWMzNTk2NDJhM2U5OTUzZjgxMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjNlN2QyMDNjYmUyYmNjZmEwZjUyYjNkYzhmNTMxN2Q2MzdiNzgzNzEzMDI1MjEwYjkzYzFhYWI0N2FjN2FmNzYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/compact-thinking-preview.ts",
+          "version": "repo-file-v1:sha256:fbdcbdbdc035d8ee6263f056adbdbff3c81c84593886803638a677fa70401bc8"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/event-controller-thinking-preview.test.ts",
+          "version": "repo-file-v1:sha256:615940fdde956c8fe9b48ec6d4996709fcdc41bcf2a1377f6e75d828aefb7528"
+        }
+      ]
+    },
+    {
+      "id": "claim_43e32320bbdd4f07b12a60de8c47dc06",
+      "statement": "compact 将超过六个屏幕行的已发送用户消息显示为前五行和折叠提示，但保存、复制和模型接收保留全文。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L338-L350",
+          "version": "repo-lines-v1:sha256:5d2bc07a73bc2a25e12ab2a39a59b13c5c139bc5c22d0cd70033b9bb3fb4a847:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwYjk3MWRiZmYyNjQ4YjBjN2RiMzViMDhjYWJjNGMzODU5MjE5NTk2NWNmYTM3ODU3YzUzYmJhMWViMDg2ODAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFiNjA5OTBhNWRjMmE2MTczMjNiMzk4M2U1MDllNjBmNjY4YmIwOWRjZDZjMzM1NDdkMDY3YmJjZWQ5YjZkMzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImU2MTEzOWE0ZDM2OTlkOTBhYzQ1NGQwYTBlOTUzMjRhNDc3ODE1YzNiZGE2Mzc1Y2U1M2RmOGIxZmU3ZGFkNTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzYzBiYWM0M2FkOWJlYzI3ZDZlNjBkNzE2MzFiMTdlM2E1OGU2OWRlOWMzYWJiOWZmMWIyOTQ2NWQzYzQyMzcifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/chat/user-message.ts",
+          "version": "repo-file-v1:sha256:a2d9f3ad50a075ea261ced66dcd96b0581a014625377ef0b4116856fbc0063ee"
+        }
+      ]
+    },
+    {
+      "id": "claim_946053a00c5f4d5e9d93861c93752a23",
+      "statement": "思考块显隐与当前会话 thinking level 是不同控制：Alt+P 切换显示偏好，Shift+F1 循环模型支持的级别；没有可显示思考且级别为 off 时显示切换会被拒绝。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L469-L482",
+          "version": "repo-lines-v1:sha256:9c27f5fba1bd01c4025309d002fbdadfb06397a3ae5ac2b9e30fa2cfbf7464e6:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkZTYyNWUyM2Y2OTIzMmU4ZDUyODY2N2UyZjY4MzMxZTUwMmY4Zjg3ZDJkZDE3ZDhhYTQ0NzAyMWIyMWYwYjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQyN2ViYzg4NjZhYWY1ZjcyMzk3MzE1ZmNlNDRlOWE4NDUxODQ2OTU3Zjc5MDY4MjQ4MGJkZmNlZDdkZWQ4Y2UiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVlMTZjNDA3OTNkOGY1ZTNhYjc2M2EzMzBmMWQ5MjRjOTZmMDYzOGVhNWU2YmZhYjkwYzkyODY2MDZhNzA2NWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFiMjY5OTg0NmQ5N2M3YTkyMjE2NjZhOTU3MzZhNTA3MzI5NjhlY2NjM2EyMTA0M2VjNWI0YWFkNDQ0OWJlODMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/input-controller.ts#L3111-L3119",
+          "version": "repo-lines-v1:sha256:3bd553165c888c2a7c33ebcf1ca3ee3cc3633a233d9a9f05aa8b0b8a48af28fe:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjU5NDE5ZDZiYmMwNTNjNzU4OWM2N2ZmOGYyMmM1M2RlZDliNjE2MTA5Y2M1MGFiMjIyOTI4OTdlOTA1MzgxYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjdjZGE4MmRhNjA2MjM4ZTA1ZTYyMzk5NTY5YzVlZTAzOTkzNDE5NjQ4YWU1ZDQzYTJiZjhjZDYzNDdmODI2MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjJmMmZmNWZlZWM2MGY1ODdjOGZhZTRlODdmODA5YTY2MWNmZmVkNmI0N2FhZTVmNmQ2YTI2NTNhYTg5NTJlZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzljZTdmNGE0NzM4MTNhNDdjZDM0MTkxNjU5YWM2M2U5OTQyOGJhZmRiM2Y1ZmFiNmY2NDZlNzdmNmI2ZWIzYyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/input-controller.ts#L3179-L3201",
+          "version": "repo-lines-v1:sha256:461e3ecc3d94b04286caa108a8c80854c676a07e37eba873082da071e3f7eb4c:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZjMmJhZGU0YmRmYmFkYjJkODM5ZmQ3NmQxYzg5MzljN2MxNTQ3YmExOTMyMTJhM2JjY2UzMGZmNjY0OTRlYWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA5ZWEwYTNiNmY1ODFkZDhlNTg0NjZiNjM1YWQ2ODczNzRmMTllM2Q1YWI0M2Y3MDMwZDZmMjExZDNkNmQ1OWMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzNmM0M2NiNWE2OGE3NDc1NGYyYmUxZjgyZjdhMjk1YzliYzhlMGZhNzI5MTAxN2E0MWJlN2EzNzNjNmYzZTcifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/app-keybindings.ts#L115-L121",
+          "version": "repo-lines-v1:sha256:32b8a090c83d53b6ad72ad597a3f44f5c7e03d4b9bef2e4a997ebb90aa18fab1:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNGI4OWQxMzUzMWMyZDNkM2QwNTkyYzhiNjdjMGVjNThlOTY0NzRiMTliMWEwNzMxNDY5NGU3MDIwZmRlMTZlYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNThkMTNjNzU4OTNlY2NmZWVjYzBlMjgxNzZhNDM3MjQ1NTc4YTc4NjQzZjM1ODkxYmNmZTdiOWRlZThlMzIyMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzliZWQ3ODQ3NmVjNTc2MjM5Y2NjMzRmNWEwZDk2ZjQyNzExMjkzYTZhNjQxYTdhYTcwMTA4MzA3YjA5ZWFhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMWVhYWEzNGU2NTc1ZjZmZWI4MzEyZGY0MTc4NDZjMmNmMmQ2YzFmNDEwNWJjY2UxMzI0MGNlZGU1OWIwOGM4ZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_e34777155e7f426c8053cb7be4151a01",
+      "statement": "默认按键包括 Shift+Tab 计划模式、Ctrl+T 临时模型、Ctrl+O 工具展开及 Ctrl+Q 后续消息；工具隐藏时展开会提示先切换显示。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L469-L483",
+          "version": "repo-lines-v1:sha256:25eb5292e09cfc6654ec6ef9935be720452764a6f46e8d7a60e3ab93926d5a2b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkZTYyNWUyM2Y2OTIzMmU4ZDUyODY2N2UyZjY4MzMxZTUwMmY4Zjg3ZDJkZDE3ZDhhYTQ0NzAyMWIyMWYwYjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhlZDA5NTk5MTBlZTMyYzNmYjFjOWM2NDI4YjRjODUyZTQxNmI0NzEyMzUzMTI1NmRmNWNlMDg3YmEzY2ZjYzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVlMTZjNDA3OTNkOGY1ZTNhYjc2M2EzMzBmMWQ5MjRjOTZmMDYzOGVhNWU2YmZhYjkwYzkyODY2MDZhNzA2NWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRjMDRlYmNkOTBlNzY5ODdjZDEyY2E0MDA3NzE2MzY2MmI5MzIwN2I5ZTYwZDQ0ZjQwOWY1ODNlNThlZTJiMmYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/input-controller.ts#L3146-L3165",
+          "version": "repo-lines-v1:sha256:a26f33dbe14bd6762bd6cdd6d1c9dfcd229862344116630a1780713a8bed70a0:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgzOTgwZmQ5OTIzMDZiZjA3MjQyNGFmMGIyOWRmY2ZmMWM3N2IyMDU4YzRjZDYxYzg4MTViYzFkMjU4NjU4Y2QiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjIyZjJmZjVmZWVjNjBmNTg3YzhmYWU0ZTg3ZjgwOWE2NjFjZmZlZDZiNDdhYWU1ZjZkNmEyNjUzYWE4OTUyZWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg3NTI3MDFlZTRkMzNiMDZjY2E1NDZiNGY5MDlhOTQzZGU3NzZjYTQ3ZGU4YWY0N2JiOGEwMzhiMjcwYjllNWMifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/app-keybindings.ts#L131-L145",
+          "version": "repo-lines-v1:sha256:aa1d883aa65a58ed3b76166151796b55f2a228ad8805fa1e0d3ae30f01840aff:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkOWE4ZjQwZTZhODAzNTk4ODA0ZWY0YWY5MGMwYzIxMjRiNGM4YThkZDBmZWE1Njc5NTdlOTYxMzk1YjE5ODgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk5NWY4Y2JjMGFkMDk1NWZmMmJmY2UwMWU0MDIyZWEyZDM1Yjg2YTdlOGFlNzI3ZDE5ZTYwMmE1OTk5ZjJkZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUwN2U4MTYwZjYwZWU5MTkzMzE1OTA0MDU3OWMxYzAzNDE2YWM4ZmJiZDllM2NmMGM4YTc1OTYyMzEwZDA0NzAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg1Y2E4M2EzZjc2ZDVlOGUzMWE4OTkyN2RjMTYxYzM3MWI0Njg0ZmY1YjdhZmYzM2Q1ZjkyNmFhMTJhYmI4NTcifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/app-keybindings.ts#L165-L170",
+          "version": "repo-lines-v1:sha256:2cfd8d22ab6da3a0740e7eb8c97f2f0bea511e2025a3dc4a27573e3038098345:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTc5ZDhjMTIyZTlmMzM1Mzg4ZWE1NTRiNmM2NmNiZDhiMDA5NmZkNDk1YzNkNmI4N2NhMjU3NDg1MjZmZGU0OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2Q3OThjNTBjMTkwY2NmOTRjYmE1ZGViODkxOGRkZjQ5YTgwMWIyYWQyMjM0YzA0NWM4NGYwMDU1OTdiOTBkMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2Y5OTQ3ZWMxN2M5YzkyMzRmNTY4ZTMyNmRlZmIyMjhlZDczNWMzNmVhMDQzNjYzNGEwNGNiMGZjYzIxMTQ1ZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiODdhMzYxYmY5NGZjYTdkM2JkZTIxZTM5ODNkNDNmMzA2OTRhN2ViOWNiYmEwMzYwMGNlMjJjMDlmOGYzYzQxMSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_013f4d94f54a4c71b1201dffd7853e08",
+      "statement": "compact 工作状态依据当前查看代理的实际事件区分思考、回复、参数生成和工具执行等，无法确定时不推测后台阶段；查看子代理并不等于汇总所有代理状态。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L258-L273",
+          "version": "repo-lines-v1:sha256:55513f4f19b8591f46a6b51dedebce06cf2ef7351e7b16313c4cab6899efc5f2:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhOWFkNTM1ZWVhYTI1OTRlNWM2YzlhNGFhMzlmMjhiZDc0MjI2ZTZhNjg0NmMyN2E2YWViZTUyYWNiZWI3ZTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4MTJjMWNlMGRhYWIwYzU3ZDMwYzllYmQxNWZjYzMxZjQ5NjZmYjc0MGViNTVjZWU0MWNmYmI3YzlmZjE1YzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk1MGUxZDI0YTczZGExNGIyODY3MzZiZTBmZmYwNWE3YWUwMGQyZDYyNzU0ODI5ZWJkMzcwOTNiZjQ2OTk1MTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQwMzBlZGZjMDVhYTlkODk0YTlmNDVkZmU5OWJkZjk0YjY5ZjJiMzVmMDFkMDk1MTFjZWI2MDE4NGQwMDNiMjkifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/event-controller.ts",
+          "version": "repo-file-v1:sha256:9c510313001992269fe058e44e80c38875721020dba78da7187651563deba76c"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/session-focus-controller.ts",
+          "version": "repo-file-v1:sha256:bc243cda60545087668e4473a1b6fe8a193a282ab607a1a47937442826905f35"
+        }
+      ]
+    },
+    {
+      "id": "claim_5b9a7335ff4b4542bb1da3d7bcb9d2e6",
+      "statement": "fork 的默认状态栏左组在 git 后排列 subagents、token_rate、cache_hit、context_pct、time_spent，右组为空；Git 改动数按启用类别的文件并集统计，窄屏允许状态栏与帮助换行。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L469-L489",
+          "version": "repo-lines-v1:sha256:e9f006b61dd34c5a8306cc40376d4907a9e3b8133f6abeda78d6e24b3da38d04:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJkZTYyNWUyM2Y2OTIzMmU4ZDUyODY2N2UyZjY4MzMxZTUwMmY4Zjg3ZDJkZDE3ZDhhYTQ0NzAyMWIyMWYwYjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQwZDJhZGZhZmYyYzk1NTc2MjU5YzExZjFlYmNlMDMxNzNkNTg1MTlmNDdlNmRmNmMzN2QwM2UzOTE1ZjMyMGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVlMTZjNDA3OTNkOGY1ZTNhYjc2M2EzMzBmMWQ5MjRjOTZmMDYzOGVhNWU2YmZhYjkwYzkyODY2MDZhNzA2NWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVkZDQwYTdhYTE0Y2QyNDIzZWZkZDhjYjA3M2E1MmUzY2VhNDI5NWIwOGVkY2FlYTYxYWRkNjdlMWEzN2IxNmEifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/status-line/presets.ts#L4-L26",
+          "version": "repo-lines-v1:sha256:8eb8324443757c3bc9818290e864fa6b9e75a183ba8e4d33db86446f9806e5b8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIwNmJlODRmMmU3YjNiZTJhNDExMjhkMTQwYzgzNWI3ZjYyN2U1NzM0ZDFjYzFmNWJhNGU3YzY5MmY1NDVjZmMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImJjYzhiZDdiY2JiOWEwYTkwODMwYWIwZGI0MGJjNTljZDM1OWI3NzM0ZjY4YzA2ZjMxZGRmYmZlYWQwNjE1MzMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjllMmE0YWZmZDQxNDJmZTI2ZTNmYmJhMzZmNjM5OGE5YmI3OTNhODYzMGJiMWE1YzNiYzI2ZmZmZWYyYmFhMWYifQ"
+        },
+        {
+          "resource": "repo://packages/tui/src/status-line/segments.ts",
+          "version": "repo-file-v1:sha256:c0d987ae1cabff5f3a6bc10cc857eed935d789904fd8e7803b794b6ab69d3fc4"
+        }
+      ]
+    },
+    {
+      "id": "claim_8c4225b3563641d0b2bf4a962511e9a9",
+      "statement": "fork 默认启用 composer 预测、box 输入区和轮次耗时显示；预测可被显式关闭，使用既有模型建议并可能产生额外用量。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L18-L32",
+          "version": "repo-lines-v1:sha256:ea9fcd351e4d9a212ee2fced7f75c16bd40cb695ff14b4a05406d6f75e080306:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU4ZmFiNDU4MjlhYTJkOThmYjdjZTdkMGI0Mzk1MTNlYjIyYjQ4NzY0NWNhNDRjYWRiNWI0ZDY1MzNhMGZhNmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQyZGMxMTY5NTc1N2I3Y2UxZTU3MzIyNDVlOGNjYjRkNzUzMTJkOTU5ZjI5MmRjODdhZjRmZGNhOTcwNjZkMDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRiZTNiOGJlOWQ1YjE4NDJkOGMyMzgzNzNiN2FhZDJjOGI4OGFmYjc2NDA1MzBlNjM1ZDdjZWZkMDgzZmVjMzkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVkMjkwNzllZjRhNDY1NTA0ZDM2YWRjOTBjNTIxNzA5MzI4Y2E0OWY1NzFiMzljNDM2MWY1MTI2MDE2NWEwMWUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/composer-prediction-controller.ts",
+          "version": "repo-file-v1:sha256:e4b6e7bdcf18a5e23245e48607823d692e1c71fda39e7b9d971b98771dadcc04"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/settings.ts#L684-L694",
+          "version": "repo-lines-v1:sha256:729141c5b66baa04930a641e8c49bef1610ddf001bd81b85b92e05ed6d84ce29:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJmZjhkNTRjYWM2YTlmYmQzMDJiY2ExNmUyMDU2YTA2YzQxZjEwN2JjYmYyZDcxNmYzZTA2YWIyZjEwZGRlZjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY2ZjViNDBiMTU4NDU3ZDE3ODY0ZjIxNzkwNzg2ZGQ1YTJlY2RiNjRiNjZhNjUxZjc4OGQ0ZTI1Y2QzMzAzZDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdlMTRjNzNjMjY1ZTE5MTg4MjY0ODEwYjQ4ZDQwM2M4NGU0ZWI2OTc0ODY5M2ZmY2MzZGYzZTNhODFhYjI1ODMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRjMWZkMWIwODJlMzgzNDdlY2YwZTBiOGU0NWJiMzM3OGFlYjk3NjZlMGY5NGRiODQ3Zjg4NmU4NGE2ZGEyOGIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4ac0f877999742e59b3e95ee5388556a",
+      "statement": "默认深色主题为 titanium，可选 dark-terminal 局部柔化颜色；offline 默认关闭 terminal.programStatus，显式配置仍优先。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L24-L32",
+          "version": "repo-lines-v1:sha256:6051dc114e558bb094f0d17a30bbf51e4c70d996fbdea687aeaea4e4603e640c:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYmFmOTI1Yzc4YzM4YTU0ZWI1NzY4MjgzNTViMTQzYWEzNjI0YTlhMmVhMjNkN2FkZTg5MWI4OGM1ZDBmY2VjYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZDJkYzExNjk1NzU3YjdjZTFlNTczMjI0NWU4Y2NiNGQ3NTMxMmQ5NTlmMjkyZGM4N2FmNGZkY2E5NzA2NmQwMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWRiMGM2M2RjMWUyNzlmMGVjYjcwY2I0ZWEwYjEyMGJlMmQ5N2VkODFjMWZmNGI3YjgxZTRmZDkwNTQ0NTQyZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNWQyOTA3OWVmNGE0NjU1MDRkMzZhZGM5MGM1MjE3MDkzMjhjYTQ5ZjU3MWIzOWM0MzYxZjUxMjYwMTY1YTAxZSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L39-L51",
+          "version": "repo-lines-v1:sha256:740256285e0e9745f0acd5ac72a2a173ad6c7ffff4745a8cbee1cc9c375ae860:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEzMjJhZmMyZDlmYzIxODc3NDY4NTgyNWY2YTNjNzI3NmVkM2JiMTlmZTZmMDgxYWQyMzkyZTg3ZmE4MjNjNWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxNDMyNzEyYmFlMzQ1ZGQ1YTQzNWEzNmZmMzExZWVmOWJmZTAzNjBjNDAwNWYzODJjYzc1ODVjZDM3ZGM4OTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ3MmU2NGQwZWE4ZGUwYTkxMTA2NDI1NjkwZTU3NDE3MDQ1MWVjMzBkYjhhOTEwODYzNDdlNDczNmRlZTBmYWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM0ZTM4NjYwNjU5ZmVkMTg1MjFlODI1NWNmMDhjNmY0ZDMxYTc5MzY2MGJiYTFiYWEyYjZkMmFlYmY4NDAyZmYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/settings.ts",
+          "version": "repo-file-v1:sha256:79e66f2919b6b8d5d8e787acbbd8564459c15f3a0c4e35b5ace67cc2218ca990"
+        }
+      ]
+    },
+    {
+      "id": "claim_77de10dfd4f2441dbe80a4c276a2f1cf",
+      "statement": "主要 TUI 导航与说明采用简体中文，但命令、模型标识、路径和机器字段不因汉化改变。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L447-L467",
+          "version": "repo-lines-v1:sha256:9bdf3ae1f3be4585de311f1d5f5d8a7a1d4ee59c83c0b251bd4bd8d1c0583ee7:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwM2Q3ZTRiM2ZkMTg3ZWI1OWM5N2FjNGQ3MzdhZWZhMWZhYTZhMWZiMzUwZjgxMmIzNTJkZTBiZDRjZTE5YzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MDJlZGU2YTc4MDNjZWQ4Y2UwMDJmOTEwMTJiZjEzODExNmZjM2FhZjFkM2Y0NTY3YWVmYWZlZjdjMWIxZmMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjhlNmQxYzVmZjM3Y2JiZmNkZjYwOTM0ZTg5YmRkZDYzOThmNWQ1NGU0OWZjZDk4N2ViOGYzOTdkNTVjOTc2ZjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVkMDJjMTQzNGE4M2YyM2U5MjhlOGZjNmJhOWI1NTMzMzA5ZDFjZTE4ODQ4YTM5N2JkNThhYTE4NjU1MzAxYTgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/settings.ts#L641-L650",
+          "version": "repo-lines-v1:sha256:4926746c6c074fd7ab407ed05362a93dd94ded6da34bb306b5c2f8c47151a1c3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwODBmNDUyOTEwMDMxYjkxNDkzNzk3ODcyZjA5Njg3ZDkxZDVmYjdjM2EwYWZlYTM4NGExODZmZDlhY2ZjNmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZlNTAzMjQ5NjI1NjU2ODVhNTljMzk3NWUxYTU0MjRhODE3NWJhNDBmN2RmYTNhMDk2NTc5MTliMjFjZDkyNmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdlMTRjNzNjMjY1ZTE5MTg4MjY0ODEwYjQ4ZDQwM2M4NGU0ZWI2OTc0ODY5M2ZmY2MzZGYzZTNhODFhYjI1ODMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMwYzg0NzYzZjRhMzQ4MTlhN2Q0NjE3OWIzYjRiNTI1MDhkZmJlZGZhOTY3NjY2ODBkMDE2NTQ4NzRmMWE3NzUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/slash-commands/builtin-modes.ts#L295-L308",
+          "version": "repo-lines-v1:sha256:97ed97f72396da51c6a5293917d5ad19c8ed5105f5ffad5e0134ecdc85ed2777:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3ZDY1ZjAzODY3NWQ5NmEzNWZhNjYwY2JjMGIxYWIzYmU0NjVmODk4ZjZjYjlmYmI3YmI5MGNhODliNWMzMTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY5MjZkNmJiYzQ0ODNjMGEwNzhkODZlYzY1MmQ2Zjk5OWZiZjQzZjZlODdjZGI3OTYwNzM3ZGFmZDFjZjc4MjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM0ZWIzMmYwMGYwODcwZjNiMTJmOTAyMDQxMjliZDYzYWZkZjE5OWRiMGQyZjI4ZTQ3MDhmYjVjNjFhMGUzNzAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZhYzdlMGI1NzYyY2U5ZWUxZjBkM2QwZGE5NzNjMmIwZmJmYTYyNjM3ZDg0OWJhMjJmZDFiYjcxMjc5MTkyZmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_57d563ccc1544aae872f417f0814d126",
+      "statement": "/jobs 使用当前查看会话的交互任务树，任务详情和取消遵循原有权限；/jobs full 提供完整命令折行报告。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L228-L256",
+          "version": "repo-lines-v1:sha256:1859dabf631fc6bc09076bf4876d9b5d0277a6a2588b99a89a8981398aeb7763:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMxZDIwMzk0MDliNWFjYjE4NDg0ZTk3ZGIxNDMxYWJjZjRjNmM1M2U5ZDA2ODU1MWUxMWE1OGM4ZjZjYWRjZTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVjY2RjZDIzMzQzMTNiMzJmZDExOTJmM2NmNzM1YzgxYTVkNGU2MTllY2YzMmVlYWM5MDQzZjQ2MGM5MTVmMmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA2ZjhhMzFjMTlhYWI1M2MzOTdkZjVlNGZjOGFkODg0ODg3M2U1NGI3ZWRiZDRiNjczNTkwNTJhZDYzNTkyNTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVjNTY3MWJhM2IwMTZiMzM1ZGZkYzAzNzkxYjNjMDIyZjlkNWYzOGZmOThmM2Q3MjQxYTc2NzkyYzUyODg2NmYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/command-controller.ts",
+          "version": "repo-file-v1:sha256:f632db937297c8d389db1a8b416439bb94503eef1ccc10b644355917d6bda246"
+        }
+      ]
+    },
+    {
+      "id": "claim_98620ff1190d47ff930401827f13425a",
+      "statement": "/jchime 是为当前显示会话 IBus 故障展开的受限恢复提示词，而不是无模型本地修复；真实中文输入恢复需要用户在故障窗口确认。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/personal-commands/spec.md#L130-L136",
+          "version": "repo-lines-v1:sha256:92968d5bec3891ed2f0e58d023e2ab6b88a5d62c5ed938f1f076cdeb3006c625:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNGE3NjFjOGFjOGI2NzUxMWM5YzkyMjI3N2RhOWUwM2JhYTM2NGM4NmU2NDgwMTZiY2I2M2VmYWMxYTEzNGY0NiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjVhNjA1MzA3N2U3ZmQ1ODhjMWFhMDVhNmUzMDJkYmI0NmRiN2QyYWU1MWFkZTY0NDg0MmY5ZjdhODA3NWY1YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDUxZTE1ZWFjYzUzNGFiZjk0NWM0YWIxM2Y2MWYzOGZkMmQ1YWUzMDEwODNiYzE4YjQ5NjU1M2U4MjQxODcwZCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/jch-commands/workflow.ts#L30-L35",
+          "version": "repo-lines-v1:sha256:5ecdf16ca3343a5f6ca8c2da098c15530cd27631a1eb1c1de575c61ddaaccc1b:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjZmYmI0ZjAwM2ZhZWI5NGUxNDQyNDYzOTkyNmYwMWMxMDVhNTk3YjlhZWUyYTJmNWQzYjM1NDNhNTIxNzhmNSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNTQxZWZhYmRmZTQ4MzdhN2UyYThkMTA3ZjIyN2E4MTQ3MGU0N2VmN2JiNWNmMmU0NDhiMjAyMDk4ZjhlZWY4YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYTE1OGRiOGE5NGNmNjNkOGMyNGEyYjk3MTVkY2QwZTRmYTAwMWQxMDlkMmQyM2FhZGUxZjJiZThlOTIwMmFmNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjEsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYjAyZDJjMGQ2ZGM1ZTc0ZDkyZmExNGI5MWRiZWEyNjQwOTBiZWIzNWZkYjkxODhkOWIzNDExODFkY2U5ZjRjZSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/prompts/jch-ime.md",
+          "version": "repo-file-v1:sha256:ca8f94662f6d390c310af575c6a8e8d2b8bcee418a6cc4bc365d2d8b5409ab3c"
+        }
+      ]
+    },
+    {
+      "id": "claim_1fb7bb1c83cf4121930569f49f12111f",
+      "statement": "/jch-workflowzbatch 校验两个正安全整数和非空正文，合法输入展开为 workflowz 提示词；任务块为软目标、并发上限为模型指令而非新程序级调度限制，展开成功不保证模型服从。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/personal-commands/spec.md#L137-L145",
+          "version": "repo-lines-v1:sha256:81fe0c0c445ab49c6af41aa37f95ad99b92deb6df484de44f8c3c056ebf7e83b:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNmM2YjFiNjNhMzk1ZmM3YmVmOGQwNjI1MThiZDVlYTgyMzVhNDJiYWQ0Nzg4ZDFmMTNmMWE5NmZhYzA5MWY5ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjIyYjA0OWYxYTY2ODU1M2Q2MWJiM2U2YjBmMzI3ZWY3NTA5NjJjZGFjMmIzMDU5Y2VjNzY5ODgwYTFjYjBiNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOTU4YjhkMjM4NDI0ZDU1OTIyZWRkOThlZTdlYTNhNjFiMDRlMjA4YmY4NzBhOGRlMzZiM2Y4MmU0MTA5NGY5YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzQ4MmE2YWY1ZGMzNzBlYjI5OWM3ZGY0MTNmMzVmZGIxNTkzYTU5ZmYxOTcwYWFjMTkxZDNlZjQyZTg2MWZlNSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/jch-commands/workflow.ts#L8-L28",
+          "version": "repo-lines-v1:sha256:f5b11f14b2cfe61bcc55fa0dd5ea48e70dec07d8fc8b29533aa01ecd4088bfb9:eyJzZWxlY3RlZExpbmVDb3VudCI6MjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxMzgzMDE5NGFkM2VjODQ4OGExMzY5MGNlNmI5Yzk0OGVlMzFjNzBhMzE3Mjk5NWYyZThiZDdlZWVhOTI0MTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVkYzkyNTYxZDBjMzA1Yjc3N2ZiODFjNjI1ZWZiMmFkM2Y1NWQ3MzI4ZjNmOTA5YTQzOTc1MmEzMmIyNjMzMTkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIyNzhkMGIxZWRkYmU4OTk3OWJkMzA3ZDI1NTUyMDg1MDVlNDViOWQ3MWQ2M2E5MmIwNzUyMWU4NWQ0MjIzMGQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/prompts/jch-workflowzbatch.md",
+          "version": "repo-file-v1:sha256:0f6ddbc6ce4e11a0a56a96b24068036a8cae76f706f050283144eadcf05daf0f"
+        }
+      ]
+    },
+    {
+      "id": "claim_1cad852836d34390867947769b56af9e",
+      "statement": "/team 的空问题只给用法，configure 打开配置而不发起讨论，TUI 派发失败时恢复草稿和附件；正常问题交给团队讨论控制器。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/team-discussion/spec.md",
+          "version": "repo-file-v1:sha256:9c28fba2edd0f4fa016f6d769c79d2ce61f95bdfaca3a6831c7286f7a83220be"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/jch-commands/team.ts#L38-L115",
+          "version": "repo-lines-v1:sha256:71045b6ccfd90c29b7231bb4193dbdd98c00213e921c0db6a6b640d19e9a88fe:eyJzZWxlY3RlZExpbmVDb3VudCI6NzgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIzODk1OWJmMjE1MjQwY2U2NDYwODVkM2UxZDI4ZWI2YjNiOTc5ZGQ0MDQ5NzAzYWZiNzlhZjcxY2E3ODEzODQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjViYWQ3Y2MyZGZhZmMyMTc1ZmEyZDk3MDRlMDIwMmY5NDA4M2E5ZGE2OWE1ODViMGIxOGM0OGJlYTIzNjI3NWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI4MzEyZmMxMTJhOThkYjNjZGMzNGNkNTE2ZjU5NDYwZTBkNDA5MjJkNzNmZTE3OTVjNmFkMzIyNDdhODE5N2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI2YzZjYjJmY2EzODUxNGEyYjIzZDI5ZDdmNmY0Mjc2ZjI0NTY3M2UzNDdjMmYzMTg4N2U4MjU2YmZkMGNhMjAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_8e90f9fe92c946d7a62f0a51fa92a6ce",
+      "statement": "/loop 首轮立即执行，指定间隔用于后续轮次；间隔上限为 2147483647 毫秒，超限不启动，未知单位 token 保留为正文，暂停或切换后旧定时器不得继续提交。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/personal-commands/spec.md#L49-L85",
+          "version": "repo-lines-v1:sha256:2ee1bc13e49effb4d3e6769a6dd027b20a75282e49594e5e3f1cc01190979c4e:eyJzZWxlY3RlZExpbmVDb3VudCI6MzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZkYzQ1YjI2NmRjNzczYmU2ZDdiYmRhZDZlMjdkY2I1NDQwOTQxMjEwNTA5NTVjYTE4M2E5OTg0ZGM1MjE2ZDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZiMjIxNmExYmRlZmIyYWM3Yzk2NzQxMWIzYmYxOWVlZmFhZjlkMGQxODQ1M2E2YTdiMjFiMGE2YjQyYTA1YjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJlNGVkYTE0ZDc4ZWJkZWZhNmQzMDUyZDI5YzJhMDMzNTdiMDRjYjVjYmE1ZDM4ZDhjM2NjZmM3MDA3OGY1ZmUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImEwMmI5MWEzZDEyMmYxZTQ3N2QyNjQzZjE1NmU3ZTY5ZGZkNjgwNWYwN2NlMDE3ZGE2ZTUzN2MxNGU1MWI0NjgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/input-controller.ts",
+          "version": "repo-file-v1:sha256:3d8ebee573bae4e4defae3d58ba4072950ad16106dbada505794704ee79b2b1c"
+        }
+      ]
+    },
+    {
+      "id": "claim_b7d9d738d82b4c1cb6a10867bcf5a0c5",
+      "statement": "ACP 与 RPC 对内置命令参数和仅 TUI 命令的派发规则不同；共享进程中的会话目录迁移不应更改兄弟会话，/wt 同路径不清理源工作树。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/personal-commands/spec.md#L103-L119",
+          "version": "repo-lines-v1:sha256:504908bc6cdf11c4962d8d0d6e3d2afca20e78b37fc2bf9ab340c9ef0a9847c8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBjMzQ4ZTA2ZmZhYzRmZWM2OGM0NGZkNDRlNzEzZWQ3Yzc4Mzc4YzZiOTIwYjNmMzljODUzM2YyZjcxNjU5NTYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYyNmE2MjI0MmZkMjQyM2UwZDc0ZTIxOGM1ZTVmNmU3NzNiYmQ2OTdlZjgzNzAzNmEwZTgyNjczYzA5NDE4NDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI3Mzc3MDU4NTZiNTYxYmY4M2MyYjI3MzIzMTQwYjQ5NzlmOGFkODA3YTE3YjkzNjdlY2UwNmQ5ZTg2M2QyMjUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZhMWIzNWYyYjg5ZjkyNDE0MWVmNDMyZTc4ZTRmNjliNjc5NGNhMTNiYTQ4ZTg4YmY0MzhhYzkyNWU3ZGU2ZjEifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/personal-commands/spec.md#L30-L47",
+          "version": "repo-lines-v1:sha256:2cb5368c2ce033c73b0b4cdf186b45c2ce0f43abb5b42c6f939f85138dbc7053:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhNWI4ZWQ5NDZmNTBmNWM4NWQ3NjU4MTg3MDRkYjQ0MWZlMmViNzY1ZWM2NjA3NmNlYjVlMGEzNjRkY2M0ZmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcxNGUzYjE4ODU2MjkxODRjOTI2NTYwYTg3YjkwMzc1ZTAyMTM5NzU4OTMwNDAxZjk0MTkzNzViYzUwMTVkYmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRmZDY4ODJiNTc4Y2U4ODU1YjBlZTU0OGRmZmJhOGQyYWQ5NjcwYzFiNWUzNWZlMmIzNTY1NmE2MmNjMWMwNDEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdhNjk3ODczM2Q3Y2Q1NDYzNDA0N2IwYjM5MzlkNWNjNTJhODgyMzU0ZDFkMzY4MjBlNDI2ZDkwYWUyNGUxNmMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/controllers/command-controller.ts",
+          "version": "repo-file-v1:sha256:f632db937297c8d389db1a8b416439bb94503eef1ccc10b644355917d6bda246"
+        }
+      ]
+    },
+    {
+      "id": "claim_cce8a99b84d04702bdd137eb0c20d7a8",
+      "statement": "思考预览和输入控制器测试使用会话桩或模拟输入，交互终端测试覆盖参考环境，不能单凭这些测试宣称所有真实终端和输入法均已验收。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L608-L618",
+          "version": "repo-lines-v1:sha256:619ec6938bc6652dad2b480ea50a73f20a43fae3ce90f59b874f739507022d2d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc4OGRjMzk4ZjUyNzg3NTRkOTc1ZGE1MmRiZjc5MGJiOGRhOTE3ODgyYzlmOTQwZGE2ODU4ODQ3NmM0NGNmNGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlYjE4YmExM2JhNmZjZTBlNDJjNTA4MDQzMDQzZTk5MjU4M2QyOWI1N2IwOTEwNDI3NzJmMjQ1ZmZjMGE1NDYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjdmMjFkODc5ZWFiM2M0ZWNmZWEwODFmOWRhY2NjYmNmNTMwOGVlZWViYWI5MjRmYTMzYzEzMmE0MGNiZTNiYjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI0NWRkMDE0NzQxZTEzM2JiOWJmYTBjNzRjNzY5ZDdjNzQ5ODJjNDg4ODM3NmJjOTJmM2NhMTE1NjRmMjNmYzUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/event-controller-thinking-preview.test.ts#L56-L110",
+          "version": "repo-lines-v1:sha256:db45682693b5fa26fdc306e2797e59c426bba6233883aa9387aabcc80488807c:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU0ZjMyZTM3MzA5YmMyMTM0MmE2ZmU1ZDE1NGJjZGI2M2NhODEyZjg3MGVjZjc5ZWQ5ZDg5Zjg2M2E5N2JhNTkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwMDAyNjUyMjUxOTEyNTJkZGZkNTBhZmZiNGRjMDQxMGNiZjA2ZGU5ZDI1ZDRmY2JhZDViOGE4MWU1MWY0NzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY5MjJiYzkyYTViMGRhYmJlOTE5NzZmNGU1OGJhMjA4YjBjZjg3MDY5N2VhN2I0YTRmZTlmOWNkYTI3OWQzMjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/input-controller-keybindings.test.ts#L59-L113",
+          "version": "repo-lines-v1:sha256:dd3837ec55889aaa5d8f314b66e079465a2d68872e9f48cb79d89178e83be337:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU4ZTU2ZWExNjRlNmEyMjY1ZmM0MDc3OTAyYzhkNDUyNDI0YmQ4NmEyMGRkMjYwMDE2YjJlNjU2NDlmYTU1N2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJhYmNiNmY4NjMxZmI1Y2I1MTNhYmE1ZTcwMWQxMTA1M2NjOTkyY2NkMGMwMjQ1MGNkZDZkOTg4ODRhYmNiYWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJiYzRjMjIyOTZlZDY0NTBlNjc2NmJhNmQ1MGM3NmI2OTA1ZDkwYmY0NjkzNDkzODBlNDczNjQ3ZWNhOGUyNjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImIxYzdkNjQ3YTFhYTJkM2NiNDE3YzM1NzFiMjI4N2ZkNWE1YTgxYzVlYWRjZmQxNjc3YzgwMWU2YjI4Yjk2NWMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/interactive-terminal-e2e.test.ts",
+          "version": "repo-file-v1:sha256:fd5503faf5978d96fc3fb21c22c45ff3d18427667b3bd1edfbff768e4fef55d4"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

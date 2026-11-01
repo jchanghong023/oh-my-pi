@@ -1,0 +1,248 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:3d07e9ceffddae33d097729be471e583c4b3cc3419428488d48c062f75bb361c",
+  "claims": [
+    {
+      "id": "claim_cc3dcb5da3de4183bf685647cf8e833f",
+      "statement": "Team 配置保存和预览不会启动讨论，独立运行由 /team 显式触发，方案选择不授权实施。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/config.ts",
+          "version": "repo-file-v1:sha256:cd196a108f1207ea78932eb510d50c578744838b092e76456ec4f2a29041bfe7"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts",
+          "version": "repo-file-v1:sha256:a6d6a3e804bb7e80fc9f686008f03985445242b99580296271e8b96c986e3311"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/report.ts#L14-L17",
+          "version": "repo-lines-v1:sha256:1df8b5b5e96a92f04657f894bd4e066745262a2012dfde807c3ae4f7c14fde30:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZDJjM2UzMDJjZmE0NTQ4MDI5MzllZTY0N2NjNTZiOTQwYTA2NTk0NDk0ZWU4YTBjNDcyNDIxZTc3ZWY5ZmQwNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNTQ3YzI4NTU5Yzc0YTYyNDkzYzEyYjYyZGVlZWZmYzRiYWJhYjVlNGQ1OTA5OTg2ZWQzZTgzOGJiOWU1M2VmMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTliZjY3Mjc2NjJiZjRlMTkzMGUwMjM4ZjkzNzQwN2U0YjRkNTYxOWQ2YzIxMmQyMzQ3ODgyNmE2NDlkNGE3NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNGIyOTQ0MWQ4OWU3YzQwODQ3ZjIwYWFjM2UxNGM1ZDk5Mjk2YWMyZjFmNTMyNTBmNTRlMjc0OWNiMGY3MjhmOCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_db85cd93de88442c825eaf6ec9b9a2d2",
+      "statement": "有序 team.members 保留重复，空名单使用会话模型，按 max(3, M) 循环产生独立槽位；成员和用于对齐综合的会话模型均需可用并支持工具，显式名单不会自动追加会话模型。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts#L182-L196",
+          "version": "repo-lines-v1:sha256:d996749b76d12bb8f9dc575b961c09dad77029aa12863ce80129a277b0d66202:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwMjI4ZGVlMDYzZWY0MDVmZGEwNWQwZmQ2YTMwMTMyNmE4Zjg2MDE3YjY1ZjJmNThjNTMyNWYxM2NlNDgxNDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRiNTZiZTdmZWFjOTY3YzIzYjA4ZDQzM2I1MzUyZGRkZTc4MDllZDFmODU3NDljYjdmMGJjZTc2YzRmNzdhZmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjczM2I0ZDczODg3NWZhYzQzZWU2MTA5NTdhMWQ0OTYzYmJmMTJjYTUyY2JiMTZmNWE3YmY0NWU0NzMzZTQxMTIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/members.ts",
+          "version": "repo-file-v1:sha256:ae19cf551d1c910e0c2cd4526a5a3e8a3bfe7de12a3f2356543a6b4e851a200b"
+        }
+      ]
+    },
+    {
+      "id": "claim_d87a487cc4b84a2f96f069b228c1061e",
+      "statement": "配置服务区分用户值、有效投影及问题，预览可诊断原始选择器；保存仅允许 user scope 和目录中的具体身份，使用 expectedRevision 并重新读取报告覆盖或持久化结果。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/config.ts",
+          "version": "repo-file-v1:sha256:cd196a108f1207ea78932eb510d50c578744838b092e76456ec4f2a29041bfe7"
+        }
+      ]
+    },
+    {
+      "id": "claim_c3209f41ad744b42957341bf757289e8",
+      "statement": "独立 Team 由会话 async job manager 持有，注册前预检模型和成员，进度走 job 和状态界面，切换会话取消任务并隔离迟到事件。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts",
+          "version": "repo-file-v1:sha256:a6d6a3e804bb7e80fc9f686008f03985445242b99580296271e8b96c986e3311"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L104-L119",
+          "version": "repo-lines-v1:sha256:e099c4b6851ca29a6722a1fa96bbd0de62b66d43e82007bddb7bc9aaea546336:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU4MjIzMTk1MTkyMzZjNzNmNThiOGZmODQ1ZDUwMDY1ZTZiODgzMjMxNGE2OTRjNjRkMzc0YjJkYmUzNDhmZDIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE4MDNhZmY0NDE5ZTQ5NGI1YmQ0OTg2NGUwYzdjYTM3MzEyZDc4NWQwNGVjYWM2Nzk0ZjI0YmE0NGU0MmY2YjkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI1YmIxYWY1MjFiZWNkNTVkNzA1NmE4YTlhMGRkMWViY2RhMWZjNzlmZjIzZjc0NTc3NmY0OTk1ODMzNTI5MjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjA2ZDJlZDMwMTQ1OGZjNWY1MDFiYmYyMzUxN2MzOTA0NTZlZWQwYmI4OGI0YTRmYjNhMjg5Y2Y2ZTQzY2JiYzcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c2df7350742a49949bef73746e729680",
+      "statement": "Team 依次并行独立调查、对齐、交叉审查、修订复核和综合，使用 task.maxConcurrency 限制并发；审查轮换至下一个不同模型或使用同模型新子会话。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L426-L580",
+          "version": "repo-lines-v1:sha256:648919df9852051398c6114ada59a5d3d943f1f57d265e46f5f0b34f88a12d80:eyJzZWxlY3RlZExpbmVDb3VudCI6MTU1LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJmMmVhMDk5ZmU1YTQ0OTk5ZjkwMWIyMmM2Yjc5YTAxOWM5ZWY0OTk2NGFkNmJiZDhhMGE4Y2NiNWQzODIwYjhjIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJiZmExMjEwYmNhNTg4NTc0MzUyNDEzYWZjNmI4YmVlZWJlMWNkZjhmODlkOTJiNWVmZjE3YzhhZTc3MWVmM2NjIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJkNDRkMGI3YThiMjdlMjE3YmU5OGNlNTllNTllMjQ0MzI5ZDdhN2QyOTc1ZDc4NGJiODJjN2UyZTUzODNhNGQxIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI0NzcxNWEwNWI3MzZiMjYwYmJlY2Q5MGM5OGQ1YmVkNzZhYmVhOTE1N2ViNTQ4N2RlM2JlZTFjMjAxOWYxMGY0In0"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L58-L95",
+          "version": "repo-lines-v1:sha256:153d59e8fc91497ed145aae681719decf3ce6e97350260a4745b60be41371648:eyJzZWxlY3RlZExpbmVDb3VudCI6MzgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZhZmZhMDQ3OTdmZjllMjI3MTRhNDY1ZjQzMTYwMjkxNmRlYzU1NmFmYzRmMWI1MGE5NGRlNmUxOTFkN2Y2YzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNmNDg5ZjhhNGQ1MDhmM2E3NDc3NTBiNGNkZDczZWUxNWMwNzgwYzgxZjZhZGY2MTA2NDBjMzQyODJkYTdmNzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjA4YjUyYzE1YmZkZWVmYWM2NDY3Mjk3YWE4YTg0YjNhN2Q1NTk4NDQ0NjA0MTY4ZDAzMDZhMWU4YWM4OWRkNGIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L642-L660",
+          "version": "repo-lines-v1:sha256:2020df85ed90ff090e118a52d8b7a87a6f31f557b53261aa47de5d814229327e:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY3ZmQ5ZDA5MDFjOWMyYWVmM2MzZjZmZjI3MzJhMmE5ZTcwNmFkMmEwODJlYWM0ZjJhMmU5NzFkMzVhYjhiY2QiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU5NWE2OWI4NzliZWJlYTRkZTczZjUwZTkzOTgyMWYwYzFkZTAzOTg2OTkyNmY0YmIwMmIzMTdhZTJhODg3Y2EiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjIyZjJmZjVmZWVjNjBmNTg3YzhmYWU0ZTg3ZjgwOWE2NjFjZmZlZDZiNDdhYWU1ZjZkNmEyNjUzYWE4OTUyZWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhhODBlNDI2YTNmMWU5NTM5MDUxODY3Yjc1ZmZlNTkyZmQ0YjY2NDI3ZTlhZTZlODczNjRjYjM3N2ViZTNkMDAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_725a9090402b4ce291f610a75b0bc589",
+      "statement": "单个提案、审查或修订失败可保留其他参与者；必要调查受阻、全部提案或必要审查失败以及对齐、综合或报告合同失败导致整体失败。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L465-L550",
+          "version": "repo-lines-v1:sha256:f4696cdfd19063493025ab4b212b8e4d03b2c6cacb60e05e4293859fac0476f9:eyJzZWxlY3RlZExpbmVDb3VudCI6ODYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFhODRlMDJiYTlhOTQ2ZTgzYzE1NDFmNmRkYWRjMTY4YzZlYWNhOWZmZWVmYThjZThmZDhhZGEwNDIxNTdhYTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM2MGI4OGEwNWQ1YjUzODQ3NjAyMjliZTYwNTcyZmU2MmIxYzI5Y2RjNTdlZGI1ZTY5NTFkYWE0ZmQ0NmM4MDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBiNjJlMzgxYjQ3MWU2NDUyYTE3ZjdjMDQ0NzNhYTA5MmFkNjVhMzhkMjUxMDNkYTVlZDMzOWVhMGQ5Nzk0MmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVjYzVjNTBhNWE5NDc0MThlOTkzY2U3OWU3OWRhYjcyYzNlMmNkMjdkODIzYTA4NmY2OTM4MGVlYTcwOTBmNDEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L600-L640",
+          "version": "repo-lines-v1:sha256:c181a52d353e53c16c733bbc90c99d20766aca2ce82fcaaf002946a7918d01c2:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQwMjc0YWI5MDYxNTJlYTc3MzA0NzZkYTExM2U2YzRiZmM3NWI0MmYzZWZkZTI2ODUxNjU2MzlhOGM1YTFmZjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjMzOGYxMjJhMGYyODc2Y2UwZTc4Y2NjZWYzYzcyZjFlZWMxNzc1MjMwOGZiMWFiMzkwZGI5ZmE2NWI0Y2Y5YmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkxODE0MzY2OWY2ZThkMjY1N2FjNGJkOTEzNzIwYTIwY2QwZTQ0YzRkOGE5OTQwZjE2OTA3NzRlMzgwMjRmMTEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L849-L944",
+          "version": "repo-lines-v1:sha256:b4b3c43617510468b71dab60e845144b8796c951469a034bd177c9051c937a2a:eyJzZWxlY3RlZExpbmVDb3VudCI6OTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjlhNDZhYjJhZWJmZTZlYTJkYTJjNzZmNDJhZjViMzA4YzQ2Y2RiYzg5Y2ZkMTg0ZmI5NTRjYTc0MDBhNTY5ZDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmZTk0NDNlYTU4OTRkMmU3NmMyMTFjNzFjNzhlM2JlOWFiMzU5Y2Y0MWFjMjRhNjYyNGExZjY4MmUzYmFhNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7edbf8ac65fb4e06b3a68402231d2ecc",
+      "statement": "每个方案最多两轮修订，结构化标志触发复核；阻断问题按稳定 ID 跟踪，只有完整有依据的审查决议能关闭，必需复核未完成的版本不可采用。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L642-L824",
+          "version": "repo-lines-v1:sha256:9e992545cd73c3fa7cbee70e523f5c6d444ea747a7a435ec3383dd57208c71d5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgzLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJmN2ZkOWQwOTAxYzljMmFlZjNjM2Y2ZmYyNzMyYTJhOWU3MDZhZDJhMDgyZWFjNGYyYTJlOTcxZDM1YWI4YmNkIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI1YTE0MDdmMmYyMjE4ZmIwMjBkZDIxMDM2YmE1NGRhYTY1NDQwMTUwNWJjNzdhZDdlNDMwN2JjOTg1MTQwN2JhIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiIyMmYyZmY1ZmVlYzYwZjU4N2M4ZmFlNGU4N2Y4MDlhNjYxY2ZmZWQ2YjQ3YWFlNWY2ZDZhMjY1M2FhODk1MmVmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiJiYTBjZjE3N2QwYTc5MzA3MDA2ZTFiZWY0MjBiMDBkOGI4MGJlNzg1M2Y4MWZkMGQxMWUwZGZmNDAzZjVhNTI0In0"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L97-L157",
+          "version": "repo-lines-v1:sha256:35b56986144e38fa877358a6026139b6a93d535e12a51c3e3489d8f89f71d33e:eyJzZWxlY3RlZExpbmVDb3VudCI6NjEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEyMmQxYzM3ZGYzNjRkMWM4NDRhYWNkNTQxNmI2MzAyMTMwZmQ0ZDk1NmI4ZjEwNWM1Y2E3OWIzOWNiOTU1M2MiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc0ZjgyZDE1ZGYxM2M0OWNiMzQ4N2Q4NmI5NjJiZjhhZjI1MzdmZGQ3MmRkYjU4YzZmMThjNzU3YjIyNTNlZTciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjAxOTk5ODc2N2VlMDg1MjYyMGU1NjA2YTEwMjM3ZTIwNDY2NGNmMmYyYmRkM2I0Zjc0ZWMzYjhhYWQxMTQ2ZTgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_da75758be8944d3c99c506f2f181df11",
+      "statement": "报告采用资格由程序依据审查和阻断状态决定，综合不能覆盖不可采用状态，无效推荐被丢弃而冲突正文使报告失败；候选包含版本、证据和资格。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L179-L217",
+          "version": "repo-lines-v1:sha256:f576f7064228fd474e9fe7cb332447888e42e7928abed958535a2f30ffa0f86f:eyJzZWxlY3RlZExpbmVDb3VudCI6MzksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhYTU3ZjFjNzk4YzI3M2I5ZDUxZDQyMjY1M2RjODY1ZDBmYzExZjBlNTJkYzgxNDhhMmI4NjhjZjg1NTg5ZDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBhNzM0OTJkODk0NmIxZDBmOWQ5YzA0YjcwNGE5MjBmMjRmODllZjdjN2Y3MzExYTg1OTlkMTBjN2Y2MzU4ZDAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjIwODAyNjUxMTVkMDVmOWM3YTQyZjZmMDdjMGJhOGQ4MGQxMWU3ZWM4YzhmZDczYjNhYTk1MTYxZTE5ZjIwYTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI2YWZhM2UzZmQwZGY1Nzg2NzdkNzIyNjNjMTE5YTY1MDU4NDhlMmI4Mzk0OWE0NmU4NjMxYWQ4ODJmOTUxNWMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/orchestrator.ts#L878-L944",
+          "version": "repo-lines-v1:sha256:d568b2afb110a9d9104b7e1d2553880b87a8170bdfa89d2b09c9d91a0dfbee50:eyJzZWxlY3RlZExpbmVDb3VudCI6NjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM2OTBiYWMyZGQ2MDI2MmM2ZjFkMzc0MDAxNTAzOTAyMDIxNmQyNDQ1MTQ0NTQwYTZiZDQ5NDFiYTg2MjBiYTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmZTk0NDNlYTU4OTRkMmU3NmMyMTFjNzFjNzhlM2JlOWFiMzU5Y2Y0MWFjMjRhNjYyNGExZjY4MmUzYmFhNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImY0Njg3MDE0Mzk0YTRmOGQxZTA0NDViYzhhNDZhNWU3ZGU2NGRlMDgzMzllMWYxNTJiNzVhN2RiY2Y3MzIyZDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/report.ts",
+          "version": "repo-file-v1:sha256:8f1ceeba5a8e7fe6395292c179337ee05008e6a55d3b6d714c59c410468e1b41"
+        }
+      ]
+    },
+    {
+      "id": "claim_1308bbee5e6e46d18ebd56cd6493b86b",
+      "statement": "Team runner 直接调用 runSubprocess 而非主 Agent 的 task 工具，以 modelOverride 和结果身份校验绑定模型，并要求严格结构化输出。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L221-L263",
+          "version": "repo-lines-v1:sha256:75378c4742544737f621ad0e6c4de8528f964ee8156e8e866b9c1158ace41e4d:eyJzZWxlY3RlZExpbmVDb3VudCI6NDMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk1OWU3ZDU1OWNmNjFlOWQ4MGI2N2RlYTcxMDg1NjdmOTdhZmQyYzgzN2JlYjU0ZTg4OTBkZTI3MzFhNTkzMjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM5NDNkMWI1OWRlNzAwMDJhZmQ2NzliOTEwMjRhOTY4OTg5MDliMWM3NzJhNzQ1MzA0ZGQ4M2M1YThmNDRkZTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA4OTI1MjczMzUwYTAzNzc3YTcwMTNlNjRjNjFiZjY2Zjk4NTc2ODRjMTUxZjYxZjQwNmJkODBjYTUyMGU1YWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdlYjRkZDE2MmI3NDYzNzBhNDZjNWNkMTNhMmM3YzkzZDA3Nzg2MTBkYjcwZjFhNGU2OTE5ODJiYjQ5YTg5YzEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L357-L397",
+          "version": "repo-lines-v1:sha256:acbefa89084b0eb38ef21fc511d1d169e8007ef17415d41972a0d5327ae0b3ee:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRjNTQyOWFjYTE5YzQ2YTdiMjY3N2FiOWQxMTJjNTU5OTk3ZDg1OTAwMTM1ZmQxMDhmNGYyZjE5MjFjODc5YzkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUwMjM1N2JlODhhYTVjMjkyYjFjNjNiNzI5M2RmNDkyMmFjMGJhN2Y4YmVlMmY5YjlmNTU4MmE2MTBlZDU1YmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ2NjMxNDI3ZDgwYmJiYjY2YzlkMWE1MDQ2YzM1ZTIyMjNiMjBlOTdmMTg0ZTY2NmVjNTMyNTk0MGFlNDUzODAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImEwZjA3MGZiY2UzY2ZmZWM2ODBmYmU1NzRlOGJmNDlkMjNhYjMwMTAxMDJhNTllZGQxZTJiNmExODJjMjQ0OTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_563b0b64d82f4d4a9ec7c29f9d9d6528",
+      "statement": "只读通过显式工具白名单、restrictToolNames 和关闭 LSP、IRC、MCP 及跨代理读取实现，额外授权目录仍传递，工件根受到读取隔离。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts#L198-L224",
+          "version": "repo-lines-v1:sha256:cf9310477b4d00b8f86a83cc488bbdd9f16eb18db6a97f987c70e725a95fd402:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE5Mjk0N2I5NmNhN2EyODA1OWI2MjRkMDZkYzRjZDFiMTgwNzQ0ZjUyNTNhOGRiZDg4ODkxODVhN2IxMmEyNDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNjM2EyMDc3NGQ1YzJiYjRjNzkwYzE4ODkwYTljNDk0Y2NiNTEwZmM4ZThjMDllYzc0NTE5YmMxNjRmYzc4NGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjZmNDE3MmIyODhjZWExMWEzOWIxZDJlMTcyOTc0NDRhNTQ0MDBlOTRkYmIzYmFlODQxMDI2ZWRiYTc0MTJiNTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU4ZTJmNDMzOWZhYTRjODUyYmUxMzg4MDRiZTcyYjE2YmQwMzgxZjVmNDg3Yjk1MzE4MzlhNjMzZjk1ZjIzNDMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L241-L286",
+          "version": "repo-lines-v1:sha256:c5d85fa13042c0522b20c1a22b48f358f14096d20eb6733aa6c5514ecb1af3f6:eyJzZWxlY3RlZExpbmVDb3VudCI6NDYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM0Y2MwNTVkZDNjZjA5MTBjODZkOTg5N2RmMzMwYjBlZmY5MzI0ZGUxYjkzNWVjOWNlYjUzYTIyOTVhNDRmYjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0N2E2MDg1NDU5NjAyYTExMzFmOWUyNDk5Njc3ODIyZTdkNGYzNTc3NTg2MWYyYjkxN2IwZGY1OGQ5N2EzOGEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjkyM2FiZGZmNTFlOGE4ZTMyZWNjNTNiMWIzMzE5YTMyOGVhMjQ4ZTNhYzBiMzFkMzM1NWUwOTAzM2JiMmVlYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU3NGI2MzA3NDliMzJiZmIwMjJmZmEwNGY1NDI3M2ViZjc2YWUwNjQyYjY2NzNmNWY3OTljM2YwZGM1N2U1YzgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L31-L37",
+          "version": "repo-lines-v1:sha256:3ef4d26ef3be9a2533e18a015e6b2c7a3af73192affe11b4222dd485113d35bb:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWFmMjJjZjA3MzI1OTJjMjQ3MTQxY2JlNjFlZmExMTAxMjYxMmY1YTMxMjJiOWFmOWJiYWY1MmY1NzI0ZDE5NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTViN2Y1ZmI5MDI2MWU2NzhjZDk0ZWY5ZWQ5ZDUyYWRlNzQ4MDNkZDEyNThlMmE2ZTQyMTdjM2I4YmRmMGNhNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMTM1NGEwODU1MTlmMzNjN2YwMjE2ZmQ5YzczMWJjMmM3NGNmMGJmYWQzMzBlYjkwMjdiOTQxMzQ4NjYyNDYwMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMmU3YjFjODNiM2Q3YzU5ZmI2MTJiNzJhYzYwNmQ3ZmRjOWEzODk5ZmU2MmNiMzg3ZjkyNDczNjg1ZWJhYzdiZiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_397120ad8df744e9b9688c48f2249027",
+      "statement": "子调用使用会话关联工件目录留存审计，否则租用临时目录；子会话清理延后时临时目录删除等待清理完成。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L198-L201",
+          "version": "repo-lines-v1:sha256:18a00ec112d8f46b34b7a91cd512cdec26d5cbf935d31c7404a84746d500a40c:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmQwMmU4ZjBmYzc5YmE0NTU1Mzc0ZmE4OGRmZjU2YzIzMmZlZjEwNzMzZmExZGE4MTZkZDJjMzU2MmM5ODYyYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWIwNTg4OGM2ZjIwMzgzZTUyNjVkYWJmZTEyZjk0OTg0NGQzNTZlZDYzM2M0ZmU0ZTUwNzNlNzRiYzI0OTQwYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjNlYjYwYTg2OWJkYjJiMDdlMzg2NDIyNWEzYTJkMWY3NTVmNmIwMTgxYzA2MWZjOGNkYzE4MGUzYmEzNjg5NiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOWZhZDYyMTk2NDRmMGUxZjIwYzcwNjQxMWQzNGIzODEyODkxNmQzNWZjYzQyNmRjNWY3OWM0ZjhkMDNlYzFhMyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L419-L454",
+          "version": "repo-lines-v1:sha256:014ba8d97f7522b9fb83a6f2c316d5cf4fc93d999df01286bc8053da3ce64276:eyJzZWxlY3RlZExpbmVDb3VudCI6MzYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ5MzQzYTBjN2VjOTY4N2VmZjM4NjAwZjdhZGM3NDk4OGQ0N2EwZDEzY2E3ZDgxZjIxNDczYzIzZmI3MjQ0NGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEwZGY4MWIwNDZmNTgwNjU5MzhkNDk0ZWFlMTJlNTdjMDQwMmRlZTU1NjYwZjYwZDM2MDk0NjA2OGVlYzIzYzUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA1OTU3ODcwNjQwZjlhNGZhZDdhZmU1YzZkMWNmZWJkOTIyYWQ2MWE3OTIzOGViYTBhMDI4MzUyNGZiM2MxYzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc3NTg3NWRhYzA0NGQ3Yzc2OWU2ZDU5N2I2ZWRlY2UzZGE5NTFlMDc4OTc4YThhZTkwZTBlZDVkNTVlNmE5NWUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/runner.ts#L69-L87",
+          "version": "repo-lines-v1:sha256:a596219f1a73c6883575e9e27f0c7131bfb41def9b4b34704dcd08e9cc885f71:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ1YmM1ZDA5MmMzZmVkZTE2ZWYyODRhNzRlYzkwMTg1YTZmNDMzNGZkYWUxZjE2ZWE4ZThiNjQ5M2VmZGMyZWQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg1NzI5YjEyMGFlOTc3N2JkMDFiMzNmZDRhNWJkMjQ3MzNiMjY0NTlhZDg2ZDc2NWZhZWViNGEyMmJhYzgzODAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzMDlkN2I4YTAyOGNiNGNmNjA1NTFhNWY2NzFhNGVhOWQ3NGViMzM3NjliNjM2ZjhmNGMzMjY3YTgyMzllMjUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ab33087191f349638be5aca051f61bee",
+      "statement": "独立报告等待会话空闲后作为可见 team-result 持久消息交付，不触发模型轮次；聚合结果保存在 job 中供 proc:// 恢复，持久化后的 UI 回调失败不撤销报告。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts#L416-L505",
+          "version": "repo-lines-v1:sha256:1fae530a056e74997a1360a8145fae1aecabd6861c05f3fc48d746d4e784689c:eyJzZWxlY3RlZExpbmVDb3VudCI6OTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY5NzI2NjViZGUyMTI2ZDNhNDkzMGFlMzYyNzkzNWExZTFlYjU5NDdlNTY0N2M3ZGYzNDQxNWNhODdlZmEwNjQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhMTc4MDFhNzdhZjc0ZDAwM2M5ZmVjNmQ1ODU4MjNiYTExNzhkMzQ2ZGY1MTMwNTc1ZDFmMTFhNTliOGQ1OGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ1ZDZkNWFkYWQ2YmFlNzYyYWU4NTQxY2UyZTE0YmEwM2VmNGNjNGM5YTNkNTRhZTk3NjIxYTFiMzZjMjMxYzEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjNlYTMxYWZmMzUyMTc0NGQ0MzMxZjFhNGUzNjU4Yjg0NjIyZjU2MzIwYjg3ODYwOTNiM2M5M2MzZDQ2N2FmOTcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/team/controller.ts#L56-L173",
+          "version": "repo-lines-v1:sha256:af613c715cb6a9c1fb13070cef3de29a0692a4829bf84d736db6d90beb1a0c96:eyJzZWxlY3RlZExpbmVDb3VudCI6MTE4LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJlYWYyMmNmMDczMjU5MmMyNDcxNDFjYmU2MWVmYTExMDEyNjEyZjVhMzEyMmI5YWY5YmJhZjUyZjU3MjRkMTk0IiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiIwYTczNDkyZDg5NDZiMWQwZjlkOWMwNGI3MDRhOTIwZjI0Zjg5ZWY3YzdmNzMxMWE4NTk5ZDEwYzdmNjM1OGQwIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiJjYTRkMjA2YWNmODUwZmM2NWNkZDlkYWRiNjQ0ODY5ZjQxMDI1OGRjZWFjYjczMTc3ZjRkNzE2YjU3NjI4OWZmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI2Y2E5MWVhMDhiMGM4NTE3MWU5YjBiYzg1MzUxOGZkZGZhNzhiOWE5OGY3ZDI1MzRkZWEzYjViMTFjMjliNWJhIn0"
+        }
+      ]
+    },
+    {
+      "id": "claim_d141e95df6a84060a15da8e04f514189",
+      "statement": "ZCode omp/team 对会话提供 list、read、stop 并投影原生 job、子调用及 journal；只构造有调用标签证据的审查修订复核边，冷历史无 live owner 的运行状态为 unavailable。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L376-L399",
+          "version": "repo-lines-v1:sha256:e615fd240db363d2128b3eef470434e8b55131d7fd9346c7d45b59ce7e5b80b8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQxNmM4MDFkZGJmM2EyZWJjMzZkZGNjM2UwZjkzN2UzMzAxNGI4OGViODg1NmEyZmRlZjI5NjdjZTUzMzkzZTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU0YmZmN2U0NTc0ODg0ODI2NmExNTE5M2JmMmFmYmZlYzhiMjhmNTI5ODEyYTZmZjRhNWY2OGFmZmU0MjkzNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjlkODY1Y2RlMzUwNjM4NzlkYTE0NmExMTMyZTVmZDkxMzRmN2M4M2MyMDdhZmUyYTY5ZWI3MzU4OTVkNTJjMWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFhMmQzYTE3ZWE2MTFkY2U4YWMxNGQwZWJjMjc0ZGQ4MzdhOWJhMDNlYjNiZDUzZjYwMDQzNWU3YWMzMDJiNTMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L478-L517",
+          "version": "repo-lines-v1:sha256:d2b0302ea0359f72ac41396d5bb7d7d49cabe5fbc79132d288b3e3d71d85b258:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY3MzQ4ZjM1YTcyNTJlZGM3NjEwNjQ0NzliZDRjZmVjMTc4Zjk0YzM3NzAzN2NhNTQ1ZjhkMTI5Y2JiZjM4MzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY3NDdjOGE0NmU1ODg3Mjg1NTFmODgyNTcyYmJkYjA5NzVjZGZmNTJhYTg5OThhMDYxZjY1MjRiYTgxYzhmOTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3Y2Q2MWRmOTUwNmY0ZmI5NWE0YjRkMGZlMmEwMWM4YWVjZDRmNWNhN2ZhYTBiZjU2Y2NlYzM3N2U4YTEzYWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhiMzgyNmM0MzBhNTk1Yjg1NDQ3NjAxZGE3NDYwN2QwMjJmYzJhZWIxOWU2NjA4ZjBiMmZkYzk2MTYwNzIxMzkifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L79-L199",
+          "version": "repo-lines-v1:sha256:5973f61d84aca22dc9008128cd0bcb9eb987a46eee7cf7d56d3d08f2cd5ceb9d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIxLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJiZTFmN2E0ODMzNmUzODNlZjVhY2YxYjM3ZWFlNTQzYmFmMjYyNjczMTJhMThiNDY2MGQ5NjMzYTkyZjE0Y2JmIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJjMWE4MGI4ODU4ODkwNzBjZTE2ZTU2NTJlNDQ0MzQ0NDIyZWE2MDZkNDgzZTk2YmRmMmFkZjUxNTM1ZTIxOWJmIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiI3N2FmNjZiNzk1MTMzZWU1Mjk2NDNkMzc3NzZhYWQ2NjYyMjU3ZjA1ZWRmMjFmNDNjZDc2OWE4NTBhZGYzZWE1IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI1NGZkODZkYjNkYmU4ODY5NGVjMjUwZDBjOGJjOWUwNzIyNzkyYjJjZDkwNmNkOTk0NGJiZGYyYmJhOTI2NzE3In0"
+        }
+      ]
+    },
+    {
+      "id": "claim_7697881560d7432d9de545bd00610ce2",
+      "statement": "Dev 方案入口显式启用 Team 时由 Dev 阶段上下文拥有讨论，检查批准版本并复用成员解析、runner 和编排器，只有完成且有可采用候选才交给方案角色。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/spec-driven/runtime.ts#L388-L442",
+          "version": "repo-lines-v1:sha256:1c9ef43cdbdb844bf781c1c92e04dc9dbef21a6d31d6e0f9981149715b82a488:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFmYjE1ZTk5OGUzMzhlMDA4NmFlNzYyMDlmOTMzNDI2MzFhOTg0YzNjNmQyMGU5NTFiOTZlZTEwMGU5NTY3YjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA1YmE5YjhlZTRhMWNjMDYxZWZlNjRmNmRmMzk2NDI5MmY0NjNjNmYwYTdhZGZmMTJlYmYwYWZhZjk1ZjY0MmYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM5NzM1ZTcwM2M0MzU3OTY5NDVhN2NjM2ViNDgwMWEwMWFlY2M4MjVmYjQ3YTYxMzcwM2RkM2RmODEyODYwZjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExODk4ZDM4MWI4MTIzMTc1ZjJjM2MwMzE5MzA3OTg2NzU1ODRmMTE5ZDNjY2EyMzMwZjgyYzEwMDljNTE5ODEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_fb62d693598c40aeb0a895f41e074909",
+      "statement": "Team 相关测试覆盖配置、成员、编排、runner、隔离及控制器，运行视图规范明确完整 UI 验收尚待完成。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/team-run-view/spec.md#L19-L32",
+          "version": "repo-lines-v1:sha256:e68cb3b9a7ce4342c1469cd216fe6244dfea509edb1a10a6261558cf05d17995:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA1MTY1NmVjODYyNGM1MjljZmQ0ODUyMTE4YzRiMDZiODQ0ZGY0ZTQ4MzllYWQzZGRiNTQyYWMxNmRiNzI5NWIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4YzI5NDQzYTA3MWVjYzQwYjg4MTRjMGE1MDRjNjQ4ZjM0MjViNzkzMmJjNmNkZmIyOGY3MTljYzdmMjhkOGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVhMGQ1NzhkOTJkNTY2YTA4MTVmNmQ1YjU2MWZkZjdlNmNkYmVhNDQ1ZThiYjQ4NGEyYWViOTA3NmQ3NzY1ZDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQzNGFjODhkY2FlN2ZlMzA0OTczNTVmYTJmYWZiNTdiZmUzZDA1MjNkOGJkNGQ0YjZiOWE1M2U3NWZlYTM2YTYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/team/config.test.ts",
+          "version": "repo-file-v1:sha256:3570e7069089db48f185c4c10ae1864d96446bcde0dd5311f580df0d68c71a70"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/team/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:79b1440614357a601d246f82e2f2fa01d7b0fb35a4024f90803851a1b1287b75"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/team/read-isolation.test.ts",
+          "version": "repo-file-v1:sha256:77c5d3b6d60e7a1f6ced989c7c4f822a8981b5830174238caa90b04bfd6e2154"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

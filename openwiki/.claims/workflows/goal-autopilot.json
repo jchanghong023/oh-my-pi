@@ -1,0 +1,282 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:135ab77a659d9d4aa2db468cc4d9f63d3428753a96a76ca7d1d4e7fe0d6f1930",
+  "claims": [
+    {
+      "id": "claim_0d9751e85e304c568d78b52d44591e3a",
+      "statement": "Goal 的持久生命周期由会话级 GoalRuntime 管理，各宿主负责命令、工具集合和续跑调度。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts",
+          "version": "repo-file-v1:sha256:5d4dc77e0f7141069996855357d4c2e391ab44cf8ce521daa5dd87b6014a25cb"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L2-L12",
+          "version": "repo-lines-v1:sha256:a9bee72a579025b3c0cbbd271531eb583a41c273ba418f19635522de140dd481:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNTA3ZWQxMmM5NGNjOWFhM2RhOGQ3OGI3MDk3MWIzYWVkZmNmMGU5ZTMwMDY1OGY2ZDRkYTRiNTAzYjJiODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYyZTA4YmYyNzc5NGU0MzlhMjg3NjliODNlMTAwYWU5YzYzYTdlNTkyNjhhMzY2YzViMzZkNjFkMjg5NTJmMTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoxLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjYzU5YTMwNTA4YWQzNDdkYjM5OTBkYTczMDlkNzU3OTRkZWIwODk3MTkyNDA2ODYxODViZDI1ZWE5ZDNlNGIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIzMGI5MzAyYTM3YWZkMmE4ZjU4ZDliODcyNzhkYjM1NGU4YTQ4MTA4Zjg4ZDFhZTU1ZDU3MGY3ZWE1NDdhNDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b2727eae5a904029bf6c2a5bf0c1378c",
+      "statement": "普通 Goal 与 goal-autopilot 共享管理命令，创建时的 autoOrchestrate 标记由后续管理操作保留，恢复普通目标不会转换模式。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L18-L39",
+          "version": "repo-lines-v1:sha256:ac3a5631f70c7841eefd01c8a2bfb0c3461ce56177fbf13d82400ec1ed7e82da:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA5ZjFmNWVmMmVhZGYwMjhhNTRiMWRkOGJiYzk4OTAyYjkxZWE3MmRlOTAxNzJjNGNiNGVjZmM1ZTkyMWE4ODIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiZDNlMWUwNDBhODk2MjM3Y2E4MDE0ZjM1NGU2MTAxZjdlMjlmOGI5OTY2N2ZiYmIyOTcwODM0OThkODYxMjIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY2ZWI1Y2IxNTQ2ZWU1N2E1ODAwNmI5ZjYwMWYzNTE1ODZjY2M0NzU1M2MwODNlZDE0YzU2YzU4NGZlNTQ4MzcifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L55-L69",
+          "version": "repo-lines-v1:sha256:3f2feaa772e845cc1bc88ced2585acdc17ece576b5061e5c53694ed9cfbe8fd5:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3YjllYjk3ZWMyY2JiNWIyOTMxYzVjMGY4Y2YwYjQ2MzNjOTRjMzFiYzJmNTZhODYzYjFjZWFhZmU0NWExNzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNjMGZmY2FjMjY3NWZlMTNkYzhlN2MxNGEzZGFmYWJmZTcyMjYwNDVmMmIzNTIyMjE2MTlkOGE5OTdiOWI3YWYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImExMjExZjQwZjM2ZWM3N2ZiZDMyMDAzNjc0OTExMTNmYzU3MjE1Y2FjZmIzNTVkYTA0N2EyMmQ2YjBkZTFjYTIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L473-L565",
+          "version": "repo-lines-v1:sha256:e2c2b6978b6864cb8f31bb0566db83fd0c68c9384c0348e96d8c1b646a95498e:eyJzZWxlY3RlZExpbmVDb3VudCI6OTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIwODE2MjUyOTNiYThlNTYyZGEyNGFjMzVkYTRiNjUwM2IzYmQ0ZjliN2UwMGY0MzI1NTg0NTJjZTQ1Mzk0YzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZjODA3MTJhMjkzM2U1N2I3MmM5YjRhYjZmYWMwMjYzZTEzNzdkNjY1ZTUyMTlkNzc1YmQzNTg1MzllMGFiMTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjgwNDRkMDE4MjJmOWY2NDJlZDMzNzcyZDFlODE2ZWMwYzMwOGRkYzhiNDQ1MzA1ZTMzZjg2MmM4YTA1NjZiOWYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_1eb39939d646413984a203b7b3050c02",
+      "statement": "Goal 功能和底栏默认开启，自动续跑默认只允许 interactive，ZCode headless 使用 rpc 配置值；配置本身不创建目标。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/settings.ts",
+          "version": "repo-file-v1:sha256:1f35c3b0ee0c27a5ef8de60798dbbcf2ff2bef0eb321cb0f7a3624bff252c31b"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L35-L36",
+          "version": "repo-lines-v1:sha256:be0318d1927ad873eca726840b0be4e8255aa8020835e0e8a68ea2c574d4fc4a:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYmUxZjA4MjlhOTYzYzM0NDJjOWI2MjY1MTdmNmE2MjdkMTMyYjhmMjA1NmYzY2Q4Yjk2MGY4OTFmOTg0MmMwZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYzk3ZmE1NGQ3YTA3N2Q4OGQ4NDEzYTFkYmQ0MDAzZWY4ZWYxOGQ4YWVlYjc4NGYwYmRiMTUzOTJiNGM0ZGJiZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOTZmZDJjMmE4N2JiZWVjMDBlYTA0ZmFmNmE3YTRmOTg1ZDY4NTQ3ZDcyZTJiZDE0MmIzOWM5ZjdlZTg5YWFkMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGNmNWEyMjhjOTIxNWI3Mzc1OTMxZmQ3ZTk2NTg0YTlkYjFkNmI0YzI4MTBlMzBhM2UyYTlmNTFiMmI0MDMxNSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_8465adee50904663a3d2998eb0bd9538",
+      "statement": "目标创建验证非空正文和正整数预算，已有未结束目标阻止创建，替换需要启用的计量状态并重置目标及用量。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L473-L529",
+          "version": "repo-lines-v1:sha256:38d40819845891a9a2b86d874fe1171a9ce6fc0472a902e9f44041685501ffb9:eyJzZWxlY3RlZExpbmVDb3VudCI6NTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIwODE2MjUyOTNiYThlNTYyZGEyNGFjMzVkYTRiNjUwM2IzYmQ0ZjliN2UwMGY0MzI1NTg0NTJjZTQ1Mzk0YzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZjODA3MTJhMjkzM2U1N2I3MmM5YjRhYjZmYWMwMjYzZTEzNzdkNjY1ZTUyMTlkNzc1YmQzNTg1MzllMGFiMTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYzNmExYjE3ZGU3ZTJjNjRlMzY0ZjU5ZWM5OGVjNzBmOTdlMzNhYWNhNDA4MTdmMjljNGZlZGIyMGNiOTAzNTcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_57551561ac3b4bc48167c37a51c79a6b",
+      "statement": "goal 工具支持创建、读取、完成、恢复和删除，读取按读权限分类，其余操作按写权限分类。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/tools/goal-tool.ts#L21-L25",
+          "version": "repo-lines-v1:sha256:bf0e1a69c9bb9bcddfcc802bf433dc4941e61252bb9da48b49289183be5f45a6:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYjM3OGQ5YjI1ZDJlN2FlODYxZTg1MWVlOGJlY2E0NDBkOTJhODNkZTM4YWVkODQ4N2I4NjI1ZTU1MDE0MGNjMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjZmNWI0MGIxNTg0NTdkMTc4NjRmMjE3OTA3ODZkZDVhMmVjZGI2NGI2NmE2NTFmNzg4ZDRlMjVjZDMzMDNkMiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDU2MDJkODMwODk3MmUxNTkzNzdhOTFhNzkwMzJlMTdjYmMyMjE3ZGI2MDY0OGFhNWUyZmNkMjVmYWVjMGRlZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDRmN2Q3NmU3YjhmYjNlZDc4MmYwNmNjOGRlNmQwYmU5YzAwY2NiMzc2Mjg0NGIzOGViYTE0NTUyZjczZWRkMCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/tools/goal-tool.ts#L62-L106",
+          "version": "repo-lines-v1:sha256:7267e628449e917db3631c0fc91c758b4ac5a76174dee07a61ad3d1166c6899d:eyJzZWxlY3RlZExpbmVDb3VudCI6NDUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA5NTliNzVhMzBmZmU3ZDk3MWUzY2ZhZDViNTAyMzg2YTIzN2UzZWY1ZGRmODUwMTdkMjg2ZmZiYjczZTRiZTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0ZWZjNDk0MThkMjZkY2YxMjliMjJhNmFhMjExMDhjZWVjMzc2NzdhMzJkMDhlOWQ1ZmVlMzVkZGE2NmJiOWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAyNDI4N2JjMmViMTI0MDUwMzcwZDA4ODdiOWI4MjNiNzllMWVjOTU1ZmY1YWQwZGNhNTVjOWZiMDhkY2I0NzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk3MWE2YTRhY2FkMzNhNTFlNDk4OWEwZjA2MjFjMzc3MmI3YzExODFmOGNiMzA0ZjVhZWI3MzA5OGYyNmFjOGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ee1c553e6a6340d8b3f97c03e14c1948",
+      "statement": "目标状态包含启用标志、模式、可选无人值守标记及目标的预算、累计用量和时间；完成由工具显式标记并进入退出模式，删除发出 dropped 更新后清除状态。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L567-L632",
+          "version": "repo-lines-v1:sha256:1e30e9d6f718102f95deada5833699a07c3bfc58d41af740e815456ea453fba4:eyJzZWxlY3RlZExpbmVDb3VudCI6NjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU3MmQwYWM4NTVkZjZkZmFhYjY4YTAyYmFiODY5ZmMxZGY3ZjQ0Yjk3OWY2YTMxOGU2YzQzYjNhOTU3NjczYjUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZhMmEzYjc2ZTEyY2UxNTM3OWQwNWYyODY5ZGM0ODMyZGU3NTg5MDUzYjQ5YmZmMjM3ZTQyNWM3MjM3ODAxNTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE4ZTBmODA5ZjhjOGQxMTkwNjhjOTFlN2VkZDI1MzgwOTFkMzJhZmM3ZTFlZjM4Zjk4YzFiMTQ4NGMzYzBhNzAifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/state.ts#L6-L12",
+          "version": "repo-lines-v1:sha256:06cb3d3312a932b898edca33deaecbb3ef198068c970140bcf91de1d804195a5:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDJlZTM3NThhMDU4YmRhZDNkM2Q2YWZlZWU4YjYzNmIwZWY5ZmFiN2U1MWZmZTIzODU4ZWNmOTMzNWIzNjExMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmE1NjBjYWU2NzZkM2Y1M2M0MWVkMGZlOWQ3MzIyYWQ4NGQ3NmUxMDk3NzMwYmExOTNhZjAxMGQ4NWQ4MmQyMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTAzNjUzODEzNDRmNTFiNTVjMjE2MzM4NGEyZGEzZTk4ZTRmMTE1OWE1ZjcxYmVjZjc2MmY4Y2I1NmE3MWNiNyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_ec0fc4d99cb6425eac90f40fff2d4faf",
+      "statement": "用户中断结算并暂停活动目标；普通线程恢复将活动目标转为暂停，特定内部恢复可以保留活动状态并重置计量锚点。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L297-L356",
+          "version": "repo-lines-v1:sha256:768a3de1ff685cecfa799d6f970f2addcf5b3a85d6e418188010c3874f014313:eyJzZWxlY3RlZExpbmVDb3VudCI6NjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRjZTMyZTFhNzcyNWRmMjhiN2I0YTJlYmNlYWM1ODRhYmEzMTU4MGY4NmE4YTdlZDYwNmU1NDFkYTRlMDc0NDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA2NDYwM2EwYmJlNmRhNzk5MDdmMTE1MjllZDdlMTgxMmE2YTI4NDk0ZDFlNTBhMTU1MGEyNGZiYTdkZWVlNTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkxMjBjMTY2MzIyMDE4YjU3MTI3ZWZjZGY1NmViODk5OTQwYjc5MWYyZThlNWM3YTczNmJhOWQ1OWJmNWFiYjgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_40a0aea0658d4acc9234c4265dd1604c",
+      "statement": "会话 mode_change 数据用于恢复目标，缺少必要字段的记录不能构造目标；会话切换的宿主重协调避免沿用其他会话状态。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/state.ts#L42-L68",
+          "version": "repo-lines-v1:sha256:dc9970eb77e990ca1fa4948deb30f58cea3626efcb80fe161593326a295bb726:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwMjZmMjM4ZDljNjQ2MDhmMWY3ODM4MjI0OGMxNTA5ZThiNzMzNjM4ZjY1MzUzNTYzMDRiZTE1ZThiOWNjNWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE3NWZmN2NlOGU2NDFmNjg4ODYyNzU5OGJjMjg3NTIzMTRmYjczNThkZGI2ODYwMzNlNDdjMGViMjVkZGJiYmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMwMjllNjFmYmM5Y2NlMTE4N2RlNmEwYTc4MmJjZTcxNjdiODUwZWU2MzA5NmMxYjhiYzc1YTY2MDZjNTFiZmMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L94-L113",
+          "version": "repo-lines-v1:sha256:8a715d776af7bd0a311e87fdd2ec2bd1b37e6aad24bbf8beca23143a6f798119:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVhNWQ2YTE4OTQ5YzZkNjg2NTU3ZTc4ZDY1NzRmZTIxZWU2ZDdjM2FmNDgwYzUwZDVlY2UyNzc0ODNiNjU4YzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4OWIzYzExMWY5NjUzYWMxNTU5MDljZDU3NjJjMTJiOGI5ZjcyMTUzYWUxMTJjYTQ4OWU0ZTdjNTVmNzFiMDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQzNzMzMDA1NTcxNzk5YjIyOWQ2MTJiOTc4MDdiZTIxMjY3MmI3YzQxNTkyYTdhOGQwOGMxZDBiZTZjNDI4NTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVmMmI2N2Q2NzQ2YTVkMzk1MWZjZDhjZmNiYmQ4YTA0YWMzZmI4OTNkZWI5NGQzM2Q0NjdiMTE3NzQ2YTM2NWIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d3022ae91c8d4b3cb56f642e0c9cad3a",
+      "statement": "交互宿主仅在活动 Goal、模式配置、空闲和输入等门禁允许时延迟提交隐藏续跑，并在计时器触发后重新检查会话与目标；ZCode 使用生命周期驱动并在中止时阻止续跑。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/interactive-mode.ts#L3631-L3707",
+          "version": "repo-lines-v1:sha256:d3937dea84660c34eb4589ad467d3262178a1e85269729ae303ef98950a81529:eyJzZWxlY3RlZExpbmVDb3VudCI6NzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzMjc3MjZlYjFlMDU4ZjAyMTJhMDJlYWFhMjFlYzU0NmRmNTUwMDgxMWM3MmIwM2YzYTY1MGQ1ZTdiYjFmMmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNlYmE1ODJjZmVmMjNlNDY1MGY3YWZkNmFhZTNmNWY4YzdlMWU2YjU0ZjA0NGIzNmVlYjIwZjk1ODg1MzE4MGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyOWZlYzVjMzkwZmY4Mjg4MDI4YWY1ZTEwMjU5ZGQ4MjEzNjlhNDk3NGViODU4ZmFlOGNhZGRhYjc4NzY3MjEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L2-L12",
+          "version": "repo-lines-v1:sha256:a9bee72a579025b3c0cbbd271531eb583a41c273ba418f19635522de140dd481:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNTA3ZWQxMmM5NGNjOWFhM2RhOGQ3OGI3MDk3MWIzYWVkZmNmMGU5ZTMwMDY1OGY2ZDRkYTRiNTAzYjJiODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYyZTA4YmYyNzc5NGU0MzlhMjg3NjliODNlMTAwYWU5YzYzYTdlNTkyNjhhMzY2YzViMzZkNjFkMjg5NTJmMTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoxLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjYzU5YTMwNTA4YWQzNDdkYjM5OTBkYTczMDlkNzU3OTRkZWIwODk3MTkyNDA2ODYxODViZDI1ZWE5ZDNlNGIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIzMGI5MzAyYTM3YWZkMmE4ZjU4ZDliODcyNzhkYjM1NGU4YTQ4MTA4Zjg4ZDFhZTU1ZDU3MGY3ZWE1NDdhNDIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L203-L215",
+          "version": "repo-lines-v1:sha256:d34e3f4e89d141e602f7deb8a4b54c114a7dadf8187eb895020fcf9a045b8f80:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVkOWQ4Y2EyYmNhNmJiZDE2YjU5Y2JmNTJiNDM1ZDNlNzY3NjA3MTk4NjQ1Njc0YTdjN2ZiOGMyZTA1NjA2YTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQzYWY2ZTA3NmYxZTQwODFhODUyYmE2ODA4MDJiMjMyOGFmN2ViMWViYTY3Y2QyMGExZTZhOTk2MTBhYWY1MjkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg0NDc5MDBiOGNmMDI2ZTU1YTI5MjIyZWEyZGE2OTJkYzQ3ZTM2MjZiMWNmNjIyZTBiZTlkYjVhYzg5MDcyYzkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f2ba7016398d4f2b8319251605e74b2e",
+      "statement": "续跑守卫通过工具调用和结果摘要检测重复活动；成功非空但无工具活动时每段至多一次强制工具纠偏，失败则停止并提示未完成。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L179-L182",
+          "version": "repo-lines-v1:sha256:aab7c424134bcffd86611dda249fc25846cbd00ff24f10db18a9e2093f9166f6:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZjk2Y2Q3MjMyNTQ1ODk3Njg0YTM5YmFhMmMxMDI3YTAyNjdkYWE2YjFmNDhhY2Y1MTM5MDNmYzQ3ZDUxNjE1OCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2MyMDg4MmVlNGEzZTMyODMxYzQ5YTY3Zjg1ZjI1YjhmMmU2YWY4ZDYxMDAzMzM3MmY1MzMwNzE4MDc5M2Y1MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDMzYzJhM2JmYThiYWE2ZWViNDJkZDdiYjk1NTQzNTdkM2ExMmI0ZjM4MmYxN2ZiMDM2ZWZhYWIxNzcyY2EyOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDMyNjk0MDk5YzAwY2Y4Y2NiYTJmOTIyYTE1ZWNmMjgyYTMyM2YzMmZhYTc3ZGJlNzE5YzhhMjRmMzdhNGIxNyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/state.ts#L70-L165",
+          "version": "repo-lines-v1:sha256:01c361881483f7a68604216bb9cb99e12b6805fdd4803c3bdfe7c80bd2481b40:eyJzZWxlY3RlZExpbmVDb3VudCI6OTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_6ddfe5dff2114d5fb77bdfc5f8132733",
+      "statement": "活动 Goal 的用户 follow-up 在当前完整工具批次结束后可按队列提升，不中断当前工具批次。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L175-L182",
+          "version": "repo-lines-v1:sha256:37505ca877db9df80a6833860623437e845410c7d533fdbecdd6221eb431c443:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2EwZTdlYzEyYzA1M2MzZDgwMjZkMGY2NGY3MGNmZjliZDEyZjE3MGYxMmNkYTE4NTAzZGQ3NTBkZDJhNzdlMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2MyMDg4MmVlNGEzZTMyODMxYzQ5YTY3Zjg1ZjI1YjhmMmU2YWY4ZDYxMDAzMzM3MmY1MzMwNzE4MDc5M2Y1MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDMyNjk0MDk5YzAwY2Y4Y2NiYTJmOTIyYTE1ZWNmMjgyYTMyM2YzMmZhYTc3ZGJlNzE5YzhhMjRmMzdhNGIxNyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_1ad802bd8c2b4ebf9d059d786887ae75",
+      "statement": "无人值守目标在首次提交和成功压缩重写后持久化用户权限层级的完整目标及固定指令，并在 task 可用时复用共享 Orchestrate 规则和当前能力快照。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L89-L106",
+          "version": "repo-lines-v1:sha256:c4ba5a1531b18b838d500192474f3320ffb7dbfcad1d69b03f35ca69f11813a7:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEyMzE2MWIxMzcyNzExZTdhNDNlNjQzNzdiYjkwMWVlNTlkMTk0ZWYzZjc3NDJjMmNhYWVlNWE5NzYzOTNiYzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY1ZWU0ZDJlOTk3MmU5YzdmODhjZmJkYzAyNjM0OTA1ZDkwMjU0MGE3MzYyNzk4MjA2NTc0N2UxNmFkZGQ1MDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYxODY0NGNjZjA5YTYwMDdmZWQ4MGNkYmI5NGFkMmJjY2EyMjVjNGY5ODdmZTYyYjk1ZDcwNzAzZDMyYjZlNmEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/request-context.ts#L11-L38",
+          "version": "repo-lines-v1:sha256:d057932e5811c1d5841007ca8b816d1f963cb328d61d66dbb30269a2a9261d59:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNjM2EyMDc3NGQ1YzJiYjRjNzkwYzE4ODkwYTljNDk0Y2NiNTEwZmM4ZThjMDllYzc0NTE5YmMxNjRmYzc4NGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ4OGQ5MjgxNDE0ZDNmNjRjMGI3ODA0MWQ1MzE3M2RhMjVlMTQ2NTVlYTA0MzZhNjBlZGQ5NGM0Y2E3NGM4YTciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L8125-L8179",
+          "version": "repo-lines-v1:sha256:0a8f3ffecba3d7109484e45a8f0d9c5bd3c06a9f8af57c9cd15a9028be6c7cda:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3ZDRiYzM3MDA3MGE4MTJjMmIxMTJiZjA3YjJmMTYyNmEwNTg3NTQ0ZWRmNGNmZDllNzdkNDU5MWVlNDA5MDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRkOTdiZTNmYmUwNDhhOTE3NWVjZTgwYTJmZTU4MGUzYzdlYmU0NGI2OTAyNzNjMWE5ZTNiODE2OTIwZTIyMGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYwZDllOWNjYzYzMWIzNWVlN2NhMzhiNzNjODIzZDFiYjhhYzBhN2UyMjk5MzJmZjE5ZWM3MzYyMjdmYzBkZTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxM2Y5ZjNiYmE4NTBhNzYzMDE1ZDA5MjEzYTc3NzI0ZWViMTU4YjMwZWI2MzY3MDNjNDQ4ODQ2NmY0Nzk4NGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_44a34759735c494896755334267e76d3",
+      "statement": "无人值守通知按目标和压缩事件去重，普通续跑、状态恢复及失败或未提交压缩不重建，旧历史不会因停止模式而被追溯移除，也不构成重新启动的授权。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L99-L112",
+          "version": "repo-lines-v1:sha256:60ff5f81d9931c67c8cd113719ce9fcc2b51597f300af34a6e2e18345e2ac1f8:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAyMTE1MjEwMTdlNWM2NmJiYWQwYTFkMTRiOWY3YWQwM2QzMmMyMjI1ZGU4OTRhNzZkNjZhNjlkNzUzZGVjYTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3MjMwZmNjYjhmZGU5Mzk4OTdlNmIzMjZkNzBmN2Q0YTMzNmYwY2Y5ODg2YTA0OGEzMDAxZjQ1N2M2YTc3ODEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUwZDdiYTA5YjgwMDNiMTk2NTI3YmY4ZWJkZDIyZjIzMTJhMTRkOTljZThlZGRiYTJhYWZjNTViNTRjYzA4MWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU5MjliMDc2NGJjMjdiODg1ZDAzYWZjYmFhZTYwOTZkZmZhZDE3ODNhNTllZDRkNDk5Yjg5ZGIzNWQ1NTQzMTkifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/session/agent-session.ts#L8125-L8179",
+          "version": "repo-lines-v1:sha256:0a8f3ffecba3d7109484e45a8f0d9c5bd3c06a9f8af57c9cd15a9028be6c7cda:eyJzZWxlY3RlZExpbmVDb3VudCI6NTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3ZDRiYzM3MDA3MGE4MTJjMmIxMTJiZjA3YjJmMTYyNmEwNTg3NTQ0ZWRmNGNmZDllNzdkNDU5MWVlNDA5MDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRkOTdiZTNmYmUwNDhhOTE3NWVjZTgwYTJmZTU4MGUzYzdlYmU0NGI2OTAyNzNjMWE5ZTNiODE2OTIwZTIyMGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYwZDllOWNjYzYzMWIzNWVlN2NhMzhiNzNjODIzZDFiYjhhYzBhN2UyMjk5MzJmZjE5ZWM3MzYyMjdmYzBkZTYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxM2Y5ZjNiYmE4NTBhNzYzMDE1ZDA5MjEzYTc3NzI0ZWViMTU4YjMwZWI2MzY3MDNjNDQ4ODQ2NmY0Nzk4NGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3b412cf3ef8d4db08c14da8696f70a92",
+      "statement": "Goal token 增量按 input、cacheWrite、output 各自的非负差之和计算，不计 cacheRead；达到预算进入 budget-limited，预算检查可能允许超额。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L389-L432",
+          "version": "repo-lines-v1:sha256:80dd99cf1957401a4eab345c78a273bbb8d667f4b7f8a47c4dc1a07a5e856a08:eyJzZWxlY3RlZExpbmVDb3VudCI6NDQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBiZWEzNDdhNTMyNWRmMzdmNzYyN2JkNzBlNTkxNDVjMWI2MTZlM2UxMzMyYTJjNmJhY2U3YzhlYmMzMTk4ZjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIzNjlmM2FiMGY5ZDc2NDYxOWZlM2U1YjE0NWM5NThjYzcyN2Q0NGNhN2FjZjU3OGY1YWE2NmVjNzVlNmU4ZTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyYTdiYjcxNzFkNTlhNjVmNTIzZjZmN2NlOWQ5YmQ5N2Y4MzA4N2MxNjk3MDU0OTUzYWY0ZmNmMzg3YThhN2YifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L57-L78",
+          "version": "repo-lines-v1:sha256:7d65ae373fb955577f2ca95dd0880ce81ba921177959eca2595de09b95cfa3a4:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQxMTM5ZmFhODJlZDQwMWM3M2NlNDg5NTk4ZjljMWFjZDRiYzg2MTEzYWIxMDZmM2RkMzIzMjE4NzYyYzY5MTAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQwZGE1ZTI4ZmNlMGUyNzAwN2YxMTc2YTE0MDMyNjUxMzc3ZDNiZGFhYTA2MGFhYTI4NmE3YzhiMDA0OTg2MTkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjUwY2FlZTFmY2NlMDVkMmVmOGU2NjE4YjQ5N2Y4MzgyZTk2MTA4NGEzMDA3YWQ2MDU2OWZkMTlhN2NhOTA1NjAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_2fa62dd2712f496a96fd8d4d2e12f992",
+      "statement": "预算修改在结算后可使活动目标受限，或在提高至已用量以上及关闭时令受限目标活动；超限提示仅在允许的 steering 边界发送。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L358-L386",
+          "version": "repo-lines-v1:sha256:819d123cc7b2fef823f52720ef68f0734faaf4d96f594a148fddef52cc7e78fe:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ2OTljZTg3Y2NjYmNlYWUzMDllMDJiNTQ0MzAzNWNjYjg1NmJhMjI1MzcxYjAzNjM3NzMwZDJkODhlZTQwYjEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZhMmEzYjc2ZTEyY2UxNTM3OWQwNWYyODY5ZGM0ODMyZGU3NTg5MDUzYjQ5YmZmMjM3ZTQyNWM3MjM3ODAxNTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRkZGFiMjFiYTlmMDZjMDY4YTAwN2FkODFlMGM4OGIxMWViYWI0OTI5ZjdiMzlhYWYyZGNlNDZhOGJlMGY2MzciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI0OTVmMDhiOTkzYTgyOWMzZjk5NDQxYjNkZTY3Zjk5MmE3Yzc4YTQ4ZWI4YzVhODhkYjAxMjFiNWEyZDFkYTcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L450-L466",
+          "version": "repo-lines-v1:sha256:91eeea0fa6068c86f2e464b7619c332bb187dc4778f51efb74eb0de6b84da69f:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA4MDVjOTU4MzBiNDY2ZjZiNjNiODU3YzQ1ZDgxOTY2MDhjNGJjY2YwOTk0OWM0M2VmNTUxZTg4NTljYjQ3NmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0ZWZjNDk0MThkMjZkY2YxMjliMjJhNmFhMjExMDhjZWVjMzc2NzdhMzJkMDhlOWQ1ZmVlMzVkZGE2NmJiOWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFmYjlmMWUwNDA2MTVmNWZmZTNjMGI5YzM2Mjc2NDVkMjUzNDU4MTMzOTUzYzU5Njg3N2QyMDhiOGI5NTI3MmMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI5YTg1MGRlMjMzZTY0ZmY2N2Y1NDU2MmMwZTI2ZjkxMThkNWU4ZmE3YmFkZDlmZTlkYTExODJmOTBiZGJhOGYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_05a1e43fe80842da9db442de6d7246a1",
+      "statement": "墙钟时间按启用且活动或预算受限期间的整秒增量计量，累计值属于目标持久状态，而轮次基线、墙钟锚点及提示去重标记是暂态；通常纯时间更新不立即持久化，内部切换前可强制持久化。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L115-L128",
+          "version": "repo-lines-v1:sha256:d3129348d5b3fc86a5a363922cd3719dedb2b9fb8cf629910e15fa4b0e6c2c9a:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIxOTgzNjAyZTA4YzA3NjYzOTE0YzE3Zjg4MDVmMjM1MWJkMTQ5NDJhZTZmZmZmNzA4MjNlZTE0Y2Q0NDU5MzAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhmNTQ4ZWM3YjQ4YWQzMjUyYzU2YWMxNzVkMmI2NzFiYmI3N2I2NWRjYTZiZGQ5N2Q0YTBhYzlhNzZkOWVhNjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImIxNDY3YTU0NjQ1ODU2ZTgxMDVhZWEwNmRlMTQ3NmQ5MzMyMmVkNTc4ZGI0MDZjYTk4MTdkMDU2MDU0MDIyYWIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L22-L37",
+          "version": "repo-lines-v1:sha256:e7ab695656dad54575c97538888e03133551d97f451f0abf93eb07900f17b9fb:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg1MGVmMGZhNjUxNjkwMDJlMmUxN2UwOGVmMmExZDFmM2IxZDFjODlhOTk3OGYzOGMzZWI4OWIyZjFjZGJiMGUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImExODYwYTQzNmUyZmIzZGQ2YWU1NjgyY2YwMGFjMTEyNTY1ZmUxNjU1ZjAxODczYzk4NTRlYTUzMzExZjEyNjgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYzYzBmMjYzY2RkODgxMjg1NTA3ZWIwZTRiNmMxYzcwZTA3NTc2NmU4MTkwMGE1YTdkM2VkYTU1NzU0MTFhOGIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L297-L319",
+          "version": "repo-lines-v1:sha256:afc27debab0845571c1cba971b7f32181c42b86cd40e08effde2e6ce87cfa8a5:eyJzZWxlY3RlZExpbmVDb3VudCI6MjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRjZTMyZTFhNzcyNWRmMjhiN2I0YTJlYmNlYWM1ODRhYmEzMTU4MGY4NmE4YTdlZDYwNmU1NDFkYTRlMDc0NDAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkwMmU2MmE4Mzg1ZDMwNDU0ZmMzYTE1MDRmNGU5NmFlNjA3NzU2MTc0ZGJmODYzN2MyNjk1NzgzYTQ2YzI2OGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA2NDYwM2EwYmJlNmRhNzk5MDdmMTE1MjllZDdlMTgxMmE2YTI4NDk0ZDFlNTBhMTU1MGEyNGZiYTdkZWVlNTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE1ZWRmMmYwZDgxZjY5Mzg1NzMwNTY0ZjMyMTlmMThiNjViY2YwMGFlMDM0ZDM1ZTQyMDU1NDcxYTg5NmM0YTcifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/goals/runtime.ts#L389-L432",
+          "version": "repo-lines-v1:sha256:80dd99cf1957401a4eab345c78a273bbb8d667f4b7f8a47c4dc1a07a5e856a08:eyJzZWxlY3RlZExpbmVDb3VudCI6NDQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBiZWEzNDdhNTMyNWRmMzdmNzYyN2JkNzBlNTkxNDVjMWI2MTZlM2UxMzMyYTJjNmJhY2U3YzhlYmMzMTk4ZjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIzNjlmM2FiMGY5ZDc2NDYxOWZlM2U1YjE0NWM5NThjYzcyN2Q0NGNhN2FjZjU3OGY1YWE2NmVjNzVlNmU4ZTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyYTdiYjcxNzFkNTlhNjVmNTIzZjZmN2NlOWQ5YmQ5N2Y4MzA4N2MxNjk3MDU0OTUzYWY0ZmNmMzg3YThhN2YifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_5a9a4c9b78a44ee7b660fef667a8e72b",
+      "statement": "Dev 当前执行会话中只有用户手动启用原生 Goal 才使用该持续执行方式；已保存状态不能恢复失效的 Dev 批准，Goal 不增加阶段或绕过现有权限与停止边界。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L173-L184",
+          "version": "repo-lines-v1:sha256:50c1d4aadbb189051f628ad2dcecb0f0921a35eed0942e490a76484d5ee00249:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRmN2VkNDg1NWM5M2EyNzk3NjZkODFlM2JlMTJkMDk3MmQyZDIyNzk0NjQyMjU5ZDNiYjU4MDg4ZDA5MWI1YjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0MGQxYmRlYWNhNDg4NjY3NTg0MGRhM2RjYTMyYjhmMzI2ZmIyYjNhYThhY2U4NGNjZGUzNDhkYmVhZDY2OTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVhNGE2Yzk3MDU0YTExMjQ1NDI2OGM2ZDMyNjhkOTY4NGI3YTA2MjQ4MmZkMDczNmFkMGU4ZTZlOGQwZTdjY2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI1NWExNDY5MTQwN2E2NGVhMmUxZThjNDhkZGRhZmYyNTJlNDRjMzliOWRiYjVhZGRkYTE1NTE0ZmEyZjY3ZGQifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L69-L73",
+          "version": "repo-lines-v1:sha256:f2f8a95a22da0ba82edbe9c4174965c51cc2e1006926d4e661f7fcd6b8a55a0c:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2MwZmZjYWMyNjc1ZmUxM2RjOGU3YzE0YTNkYWZhYmZlNzIyNjA0NWYyYjM1MjIyMTYxOWQ4YTk5N2I5YjdhZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTg5MmVlNjQyZmY1ZDk0ZDk5ZGUzNDk5ZjYxNjA1MTc3YzI5N2QyNDNjZDE4NWY0Zjg4YzQxNTAwYTY2NTQ5NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjBjZTUxNjY3YTUzY2ZkZWJiZTE4NTk1MGI0NzBlMDBlNTU4N2QzZWM2YWM0ZWQ3MjA2ZWMyYTc2YjA0ZTI3MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDMzMWVmMTYzOGZiMjlhN2I1NTk2NDI5ZDM0NDE1ZDM0ODQ2NzFkYTg5Y2JiODQ1N2M3NGQyZmU2NWNiYWUwMiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_c367c43c39e9412fb6bfeb790cf97d76",
+      "statement": "局部回归测试覆盖 Goal 计量、续跑保护、运行中压缩和 ZCode 宿主；规格要求的真实入口与协议验收不等同于局部测试证明模型质量或费用节省。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/goal-autopilot/spec.md#L191-L219",
+          "version": "repo-lines-v1:sha256:f060dee90195e8b3e2241a2bfe936d35ec1a9a81ae1e537f8bfb76276ad0126f:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNmNWM0MDcwNTI1MWEyMWE2MTk4YjcxMzRiYTEwMDVjMDkwYzAyOWYwODhkNDUzYWQwMDM1MTE4Y2E5MGU1ZjUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4NWM4YmJkOWY1Mjg4ZDNkOTM3YjNhMmVlYjEyZmY2MDhkYTY1YTUwYTllMDhmZmJjOWE0ZmNlNzNkOTAxNTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImVhOWRhZDIwOTk4OTAxZWJjZDJhNTI3MzM2ODg1NGNhNTY4YzA2YzRkM2M2OTMyYWI4ZmY3N2JlMDlhZDI0NmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI1OWU1ZTlmN2QwYTY5YTY2OGZhOGNhMDM0YmM2MmRiYjQ4NjBmMmM5ZTk3ZTMxNWY3ZDQ0M2Q3MGYxMGQyMTIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/agent-session-goal-midrun-compaction.test.ts",
+          "version": "repo-file-v1:sha256:72ea5366dfdb46ed82a732588e02ff22bd7e2045b0d04b2ebb3a4fc41fd278e6"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/goals/goal-continuation-guard.test.ts",
+          "version": "repo-file-v1:sha256:51b5a890eb7f90af096a541ddeff3d942a191a1939d5741b4f1ef32a8b4c37d1"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/goals/goal-runtime.test.ts",
+          "version": "repo-file-v1:sha256:bed27f72a8b691260f06082ea0b3285df1c812989f06c5df8ebf3cf3186280c2"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-hosts-goal.test.ts",
+          "version": "repo-file-v1:sha256:c81500d0e55cafc80a9a60f80e685bec1a07050b182a1b6ccad3dbc8a48233f9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

@@ -1,0 +1,222 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:3561215744cb7c2186839988cc5d3cc3afcba23bb5e734ce4979d5bc050ab489",
+  "claims": [
+    {
+      "id": "claim_26940e84fd0441c8ab975eb695d1f5a7",
+      "statement": "终端启动路径和 ZCode app-server 都通过 createAgentSession 汇合到共享的 coding-agent 会话，而 app-server 是独立的宿主命令路径。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/main.ts#L2614-L2635",
+          "version": "repo-lines-v1:sha256:4345a07e4aabb835ac8ed81127255dd59907f7bf3109cc36ded26657f366af7b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJlNGNmYmJhNjA2MmE3NDk5Mjg1ZjIyNWMzNmUzNDE2Y2UwYTdlMWVlMDI0NWRiM2RlMjBkZDZmMWEyY2E5MDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEwNzMwMmZlZWEyZWRhZGY3NTc2NzUzNmUxYmNkNTAwZjkyMmQzZTdkNDEyYjQ3ZDJjY2M3ODAyMmU3NzQyZDYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjMjYxYjNjMmNmMWNiNjYxNGEyZDhjMjkzOTc4YjY0MGQ3YzE3YWFkNjMxYjEzNzRhZTgzYzk1NDNhNzMwM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI3MWMxNWFiNThjMjJjMWIxMWQ1OGZiYmVlMzYxYzRmYmZiMzAwMDFiMDkyZDhiNmY4MmUyMzJmYjU1NWZiZDIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L74",
+          "version": "repo-lines-v1:sha256:e767d1778173875cbe83f36fb5a26b7125e00af9fd3100835b6e4650591bed53:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzYTRmMDU4YTkyMzE0ZTAwYjY0NTkxMjVmNTA5MzE1YjgyNjM0ZGZiYTVjMTMxMmQ4ODRjNzJmNTk5MjRmNDUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk1YWU0ODhhNzllMjI0MDFhZmM2NmU0MDRiOGU1NWZmN2Q1Y2MzNTVjZGI2NmM1ZTk5OWE5N2JjNjI1ZjdlY2QifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L686-L718",
+          "version": "repo-lines-v1:sha256:859fc0a848bee630687b588d6c974de4d77232582036773b4012d9940069d40b:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZDMwM2I0MWJiNGU2NDQ4NTJjM2VkYjYwZTYzODNlZmQ2MGUzNzAzNTMyOGMxMGNlYzZlMDc4MmYxNDA2NGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMzYyMWU2NzIzMGFmZTc1NjYxN2YzMzAxNGEyOGUyNTY3ZjE5YjViYWUxMGY3ZWEwOTM3ZDUzYjZlOWQwMjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBjNzE4M2UzODI0MWQxMTVhNTNhN2ZiNmNjN2E4MzM3NDVhODEyNWYzMmQ5NjVkZGQ3MWUyNGFlZDVhYjlmYWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcyZDIzZDMxYzQzNDg2YzViNjQzNzM0ZDU2MzIwYjg3NzQzYzE0ZGFhODk5OTc5ZWUwNzMxZDEwZmRhNmJlNmIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3eefe2cbd4454f23a47e750480e5d72b",
+      "statement": "coding-agent 公共入口导出 SDK、会话、模型配置、工具及扩展接口，供程序化宿主使用。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/index.ts#L12-L41",
+          "version": "repo-lines-v1:sha256:744b69fabbea6cf6bbd371dbf336bf1cd92d2b5594d9b363384fc1f87478cab8:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ4ODkwZGQxYzBkYWRlM2Q2MGI2NzJlMmMwYzNmMmJhZjY1ODJjNDM5YTg0MDJjNjc5YTU2MTFkNGQxM2VhM2IiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3MDFlNjY0MzUyOTI4YjZiZDM4YmNkYzkzYTY2ZmQyMDY2Njc5ZjdlZDQ0Njg0OWNlN2ZiNjIyZWViYzAyYWMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU4ZDU3M2MyYTMzNmFlYWY5ZmU1N2QyODE4ZWJjNDc2ZTQ2M2QxYTEzOGE4MGI2M2E4M2Q1NTYzZjY2ZTA4OGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImM4ZTRlMGYxNWQ5ODYzOTE3MmY3Nzc1YTJiNTA3NWIzNmM5MjcwZWY4YTkzN2FiNTM3ODE4MzJjODAzYWY5NWQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/index.ts#L42-L75",
+          "version": "repo-lines-v1:sha256:b1106c6b17ab2971d9edb385643504d8e857dd088f4be7d7544bd436cf5ce25f:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI2NTFmNzY0MTEyZTE5NWJlMTQyYWU3ZDkxN2YwNWYxZjIxZDE1YmEwOWFjOTAyNDYxZmQxOGIzYWQwM2UwMTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUxN2JjMTczY2RjNmY5YjViNGVmNjI3N2E4MGEwNmUzMDAyOTA0ZDNiYmYyYmZmZThmMWM2MDY2ZWE2ZTg5ZjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQzY2RjNDVmMmU5NmRjODA1MjE0MGU4MGQyZDM0ZTU2OGI5YWZiYzcxMTlkZDc1Nzg0OTIxZWE0N2NjMGVjMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImRhYjNiMWE5ZjRjNmQ3MDZhYWFhNjEwZmFiNDQxZGY3MTgxZWM4YWFjZjBjYjUwNjdjODI4MDZkMDg2MDliZGEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f5bf1fb640a443b4b388628e6512a33e",
+      "statement": "Agent 核心负责通用 Agent 和工具循环，内部使用 AgentMessage 并在模型调用边界转换为模型消息；模型协议和 provider 抽象由 pi-ai 提供。",
+      "evidence": [
+        {
+          "resource": "repo://packages/agent/src/agent-loop.ts#L1-L26",
+          "version": "repo-lines-v1:sha256:b6cc2c953bc2308b075b1824cb242eb9278be7b2e1ef00a09bbc889c92683a8b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY1ZDljMDJmMDA1MjA3NDYxNmZiYWFjODQ4NDk4ZGE0NzgyN2E4MDQwYTkzMGI5NzMyOWFhMDE5NDBlMjA0ZGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJjZTEyNTI3MjQ0NjM3YTA4ZWE2ZGUzYmU1MzM0MjkxZWVkZGExM2JlNDZhYjdmYWQyODIzZjBhZGEwYzk0ZGIifQ"
+        },
+        {
+          "resource": "repo://packages/agent/src/index.ts",
+          "version": "repo-file-v1:sha256:440aff400bb3c245a9baffcdae38f17de6a0ad48024f649265f804ee4f543ba6"
+        },
+        {
+          "resource": "repo://packages/ai/src/index.ts#L17-L48",
+          "version": "repo-lines-v1:sha256:7508a6485180c71fe759329121a9a989036ad35891a96c47fb2fea5f83f9ce3f:eyJzZWxlY3RlZExpbmVDb3VudCI6MzIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg2NTA4OTUwZTc4MzdhODE3ODU3MzE1N2VkYmJiNWFkYTNhZTc3MTg3YzA5N2E0OTk3ZjU3MDUyMzM0OTg1ZmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ1MTQ4NWI4MmIyOWQwNzAxNmU5ZDMzNTlmMjcxNjIyOTY2YWNhOGVkZmM1OTY0OGExZDIzNjllNjQwNDEyM2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZlMmY5YTY5NDZlN2VhYmIyY2NkOWFhYTAxZGMwNjk2ZmEwNmJjY2M1N2VmNWFjYjY0MzNhYTllMjgwNGFhZTAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjliN2Q0MmNkYjY5NDkxOTZmMzY0Y2ZiZmI2OTBhZWIwMjIyODJlY2U3MjQwMTg0ZDUzNjE1YTkxNmMxMWI3ZWMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_29cf49cb90504976af9708ae703a73d1",
+      "statement": "JS workspace 包含 packages/* 和 robomp web，Cargo workspace 则显式列出 Rust crates 和 vendored patch，构建及测试由不同脚本驱动。",
+      "evidence": [
+        {
+          "resource": "repo://Cargo.toml#L1-L54",
+          "version": "repo-lines-v1:sha256:0900e465d461347dcba40a70ba293214cb1e82ca638628c3b6bd624df4b44763:eyJzZWxlY3RlZExpbmVDb3VudCI6NTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQzNGUxMDJjODYxZjk5NGQyYWFjZTkxMTRkMzkyZGJjMTYyMTkwZTAwYmU4ZmUzNTdkNDcyMTUwY2E0Mzk2MTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3YWQ0ZWJjMzRmNGY1OWExZDQ0OTE3MDZkOTMyMjU4MDYzMTgyNmI2NWFjMmM3NmFhMTFkMWQ2NDZhZjg3N2IiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFkNjUxMGE4NjliNmRjYWM5ZTk1M2QyNDY2MGI5ZjA1NWM5NGI4NGFiNjM2YjIxY2Y2ZmE1NTNlNTAzMDNmOGQifQ"
+        },
+        {
+          "resource": "repo://package.json#L10-L14",
+          "version": "repo-lines-v1:sha256:da6a46067efdd1755b34ba275f8d66c3015d1f2999b1814dc499205384ca3640:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWZlYmM3ZWU1OTEyYzRmYjU5ZDFjNWE2MTdkZTc3MmNjYTQxYjQxZjFiN2MwZDllMDk2NTM2ODBjMThjNTYxNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTIxMGVmODMzM2Y2OGRhM2IzZDlmNDJlYWJlNTUxYzBkZjM5MDEzY2EzNGE3ZGIzNTliMzJhNDc5ZWU3ODNjOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWU4OWYxZTgxNmUzZTVkN2IzNGM4NTNkMzQwYzZjY2JkMzE1NzRkOTE5MGExNGM1YmQzZTllZTgzZjQzNTk5MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDUwN2QyNWQyNjNiMzRlZDU5MmJlMzUwODQ4NmRmN2RmYTZhODMyZDllYmZkM2I5YjlmYTZmNGIxMjRhMzM1NyJ9"
+        },
+        {
+          "resource": "repo://package.json#L75-L101",
+          "version": "repo-lines-v1:sha256:b52f6a419eb0d05cab8d2a9ba04f73eaeb5f0d49ca3bb7775f9384a3fb272699:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3M2NhMGRkN2QzYTM4OWJiODNhMzhhMWIzYzQ5MzhlZjA5ZDFmZjhiYTYxYzA3NTM4YTE1NTNkNDkyYmEyZjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM5ZTQ4N2RhZTdhNDc2NjRmNzc3Mjc1NTNkOTJhN2M0MmMxZDUyNWI5MDY5ODliODM2Nzg4MjEyZmE1ZDliNzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI3ZDJmY2I4N2FiODg2ODk5NjMyZjM1ZWQxMmNkMWE4MmZlNDEzNjk1OTg5MzA1N2I4YjA3ZmZlMGVmMDlmM2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU2YTZmZWE1ZDRjZTRjNThiZWE5M2QzZGY4MzVkZGRkMDMyYmEwYWQzNWY0MzliNzlmNjg0ZjI1M2Q3N2FiOWMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_9adffb4ca1af47868db88dfa4ff918ed",
+      "statement": "CLI 检查最低 Bun 版本，先完成 profile bootstrap 再加载可能急切读取环境的模块，并在 provider 请求之前初始化网络；worker 可通过隐藏 selector 重入入口。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L110-L122",
+          "version": "repo-lines-v1:sha256:22c4233b8b873cf3e9dc07250a877d49d175b0227048c6a3557d28e2a5370ae1:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjIyZjFkNmY0MGYxY2IwZmM3NDdkMjlmMDM1ZmZlM2NjM2RlYTA0ZjVkYjZiZDZmMmVjODgxZWZjN2FjZmJjYTciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxYWVkZGUzMDcwMjE1NTdmYTg0OWFmYjBjNjhjZTMzNzVlYWY0MzQzYWExMzI1NTJhNGNmMDhmMjUzNjJhN2YiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZjNjI1YzkxNWJiYWNlMmVkYWYyN2VhYzM3YjNkMzRmNDg5MjVjZjMxYWY4ZTg1M2NmY2U4MjhhYmZkNTYwZDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc1ZTI5NjVmYTMxMDdmMTZhYzk5NGQ2MGY5MWYwYzdjMDcxNzgzNzIxYTdlZDcwMTNiZmU5OGQxZDA4MDczYmIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli.ts#L52-L57",
+          "version": "repo-lines-v1:sha256:9aa0adf4b681f0a7f4956d5e7030384f53f7e2eddf46f31712c8ce39a6e42fc6:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTdjZjFlNTA5NTFkOGU2YzQ0YTI2ZmEwNTg4OTZkNjBkOTBkYjc0YWMxZjRlOThhZmY2NGViYjg5ZTJmMzQ3ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODJiMWFiYjVjYmNjMjhiYjVkZGVjMjU3ZWJmMDg3NWYxYzE1NDZjNDJmNDdlZjRmMmVkZmUwMDlkMGZiZDk4YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTI1MWM3MTgwYjI1MTkzNmUxNmFhYjQzMzkxZWNlYzUyZjU5YmUyM2UxZDRiOGEyMjliZTJlMjRlYTc0YTc2OSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_984767f428ce422a9246913699f41aeb",
+      "statement": "app-server 要求 stdio，指定 cwd 必须为已有目录的绝对路径，启动时将诊断 console 输出重定向到 stderr 以保护协议通道。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L93",
+          "version": "repo-lines-v1:sha256:cf28c3e694a101626db1cd182d7fc460942b793685ce3ddbab14fe4777d910f4:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZDI1NmJmMWY4NjI1N2NjZTUzNjg5NTRjOWVmZmE4MWI2MTZhYTdhNDc0OTUwMzUyNTM0MmZhNTE4YjU3YTYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_be8a4cc3b9c64df1b112d4ca9dc450f5",
+      "statement": "ZCode 宿主创建持久会话前先准备 journal 和可用 MCP 工具，受限制会话不能启用指定 MCP servers，并向 SDK 传入会话管理器、独立 registry 和工具限制而不绑定进程状态。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L663-L719",
+          "version": "repo-lines-v1:sha256:9f1e50e0962ea2bae3d150f6818227b13973582f44b84012578320e340041a74:eyJzZWxlY3RlZExpbmVDb3VudCI6NTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ1NjBiNDlkN2I0ZWQxZjgwMDU5Yjc1OTRkYTc1ZjhiZjY4YzIyZmM0YmMxMzBiN2Y2MmQ1MGIzY2UxMmUwNmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA0MGI4ODk4NDA2NWE0OTI2NTRlMTRkMWRiNTQzZGNlYzAyNGU4ZjNjNjIwNGJkNDcxYjAwZmRmNzA4MjkwZDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc0OGNiMDRlZWRmMTI4YTA1NmM5NDU3NWZkOWUzOTRkMDFiOGJmZDU2NjJlNGY5MmE4OTE2NzNmYzQyMmYzZTQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVjNDQ4ZGFjNDQxYWRiNGZmNDFjNDRkZWFkOTIzYjA0MDI3YjZlY2I5ZWVkYTg5ZmVmMjE4Yjg4MzkxYmJkOGUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_6102662facce47cfa5b23b197bab819e",
+      "statement": "ZCode 宿主负责协议投影、交互和会话记录，复用 coding-agent 会话而不是另建 Agent 引擎。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/server.ts#L116-L124",
+          "version": "repo-lines-v1:sha256:75a0da0b6952b628db4303b8e0898970d802af2f646735438411945674cba8ea:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTY0OTAwOTdkZGQ0MDkxYTAxOTY4OWMzNzZmYzFiMmZlNzFlMmJlNmMxNmM4OGMyYjJiNGIzMWJkZTQ5M2FiMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjI5NjQwNzljM2M1YzgxNTIwZWYzM2EyYjlkMmUxNWExYjg0ZDcyODBkYjg1OTBkY2Q2NTc0N2UzZTAxMmE0MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiODQxMjVmNDAzODQ4NjM1NzI4YWExOGQ1YTRlZDMxZjMyMzliMzllNGY2NWI2MmU5YmVlM2RkMGU4MzRjZDcxZSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/server.ts#L16-L33",
+          "version": "repo-lines-v1:sha256:7b34ab72ab9ad28411c80b5ae086b5bf98269e1298ca6d28657b8fa0e8f0860d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0NDZhODdlNjE5YTlkN2M0ODk4YzQ5ZTMzOWM5YzQzNDY4MzVkNDg4N2EyMjJlODJjNjdhZWRkNGEwMTUxMjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZjMmI5N2VkY2EzMmRlYWRkNGM3NjFlMzFhYWQ0NDkzZGFkNjhkOTMzOGZlYjE0MDAxZGIyYmEwODU1MDc3MjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA5NTc4ZjZhZTM1YTRjYjAxMGY3NGUxMGQzMmUzNDY0N2FkNmFjNWI0OTVkN2M4OTg3MGM1MWMzYjY5NDU5NTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEwYWEzOTlkNGQ4OGMxZTU2NjUzODk2M2FiMzhiY2U0NzcyYzE0YjhlNjY1ZWE0ZWJmOWFhNjc4YjA1Mjc0NmEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L686-L718",
+          "version": "repo-lines-v1:sha256:859fc0a848bee630687b588d6c974de4d77232582036773b4012d9940069d40b:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZDMwM2I0MWJiNGU2NDQ4NTJjM2VkYjYwZTYzODNlZmQ2MGUzNzAzNTMyOGMxMGNlYzZlMDc4MmYxNDA2NGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMzYyMWU2NzIzMGFmZTc1NjYxN2YzMzAxNGEyOGUyNTY3ZjE5YjViYWUxMGY3ZWEwOTM3ZDUzYjZlOWQwMjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBjNzE4M2UzODI0MWQxMTVhNTNhN2ZiNmNjN2E4MzM3NDVhODEyNWYzMmQ5NjVkZGQ3MWUyNGFlZDVhYjlmYWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcyZDIzZDMxYzQzNDg2YzViNjQzNzM0ZDU2MzIwYjg3NzQzYzE0ZGFhODk5OTc5ZWUwNzMxZDEwZmRhNmJlNmIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d79b6444d9ad4b5b8e3dc025d5774582",
+      "statement": "外部 Go RPC SDK 使用 omp --mode rpc 的 stdio JSON lines，绑定由 coding-agent RPC schema 生成；客户端须消费帧并关闭连接。",
+      "evidence": [
+        {
+          "resource": "repo://sdk/go/omp-rpc/README.md#L1-L20",
+          "version": "repo-lines-v1:sha256:1f93dc930b29ca3a04c014d71c6d7f835f0636b561330c5595daaaf155d8f503:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3ODdkOTQ2MDI3ZjVlMTM3OTQ1YTRjMTM5ZTljZDdhNzc3ZDk4MzA1ODY3NGQzNjI3YjRlMjFmNTJhYzY5YzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ3YzA2YzU2MWQ1YzMyNzM0MzY4NTI2OGE0NmIzMzkxZjM5OThlZWU4OTBkMmJlNTFmMGQyMWNjNGE1M2FlNmQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzNWNiYjlkOWI3YmU1MGE0YjkxMjMyYWZmYjU2OTM3MTViMDJlNDhhZGM3YzQ5MjU0YWI2NDA4MjI0M2E1MzQifQ"
+        },
+        {
+          "resource": "repo://sdk/go/omp-rpc/README.md#L92-L98",
+          "version": "repo-lines-v1:sha256:623d2a6606fdd85acb4efe6fd27c9cc7c6c5320882451a4e7dd7694c5d6f6b49:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTc5YjU1Yzk3YjI2YThkOWQ0OTNmNGE5MDFiMTllYjkwOTU2NWYzNDQ2ZDhjZjM5ZTkxODJmMDFhMGFlOTA2ZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWI1M2Y4ZGVkMWI5NDljYmVhNGVmZmZiOGNiZmI4NDcyMTQ1NDgzMjNiODZlZjEwZDE2OTJmMzQ1NTlhMTk4NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMDM1YjFjMWE1N2RhYTgxNmE2OGNhOTNjNWQzZWQ0ODA1OTZhNzM4Yzc4ODMxNGYwNGFkYzIzMWVlYWFmNmRmOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZmU1NWIyNDdiYmU1NzQ2NGQ5NDUzNzFmMTU4ODMzNTBkMzIyN2Q4OTQ1NmQxNGM3MjYwNjMwMDE1MGQ3YTFjOCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_34b113a4b9df49bebd76208bcbf9b7ff",
+      "statement": "robomp 在 issue worktree 中启动 RPC 子进程并恢复持久化会话，GitHub 写入通过持有凭据的独立代理进行。",
+      "evidence": [
+        {
+          "resource": "repo://python/robomp/README.md#L20-L22",
+          "version": "repo-lines-v1:sha256:2b3c511aa1aaa38c4090f6b7b076ce2bc86099d6190804c0115929b667dd80f7:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjQzYTkwZGE5Y2YxZTlkZjhhZWNjMTg5MGM0ZWNlNjZhMmQ4YWU0MjBmZTM4ZWQ1ODhmYjQ0ODBlZjkxOTdlMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMmJkZWE2MGFlOGVlNzQ2OWU5MDMyNTU1YWQ1Y2E4OTA5OTZiZjg5MWNiNmZhNmIzYjZhOWQ4MDk3YjA0YjMzNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzBhODE0MTM5OTk1NDdhMmNkNzZlYTIxYjU2YjdlMzVlMTRiMWE5MWJiZDAxMDdmNTgzMjRhNzJiNmE1YzNlMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNGM2ZWZkM2Q0OWU1ZDJlOTk0YzJjZTdjMjA0ZGQ4YTExNjJkYjc2ODEyODFlMWU0ODdjMjg0NjE0Mzk2ODVjMyJ9"
+        },
+        {
+          "resource": "repo://python/robomp/README.md#L29-L53",
+          "version": "repo-lines-v1:sha256:e00954f12ad9d6d29693924047b32cb14fe715dfc5fefb6a46a7e3232fa45f9b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMDUxYmRlMmNjMjNjMDdiZDQ5NTFiMGZhM2I3Y2UzOGEyOWRhMTI5NDM3NjA2YzJkNWUwNTYzNTQ2MTVmNTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk1MmJkM2RkNWI1MmE3YTNmOTdlOGNkZWEwNTk5OWU5NDBhOTNmOGJjZWU0ZTEzYzljNmVkM2RjMmQ5NzA5MzIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjllN2Y3ZWZhYzdiNGVjZTA1MGUwNTA2MDY0ZjU3YTk1MDQ1NTczOGFlNGNiYTIzNzdiMzgyY2I2MGRhMmQ3NzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU2ODE3MzI2NGExYjg2YzJlMWVmY2ZiMTZhNTk2OTRiNGI4OWUxNWJhOGJkODhmOTI0NmMzZTU1ZTdmNTM5ZGYifQ"
+        },
+        {
+          "resource": "repo://python/robomp/README.md#L3-L5",
+          "version": "repo-lines-v1:sha256:052ea6abb6073eb5836ab80bb297f7641298c4aee8405a04d5f95f04515dae66:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTIwMmJlNmJhNTAxMTI0ZWQ4MDkyYzViYjk4OTBkNmM4MDlmMzQ3OGI3NmJkYTZjMDYxZTEyZTU5Y2FiNTMwMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOWE1Y2U1NzI1YzYxMzhjNTBkODFkZjY2YWZjN2UzMTI1MmQ3ZDAwOWUyYTYzMzFlZDYwZGI0MjFhMzFjNjBjMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjIsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDdhMTkwNDc0OTNiNTdiZWRkNDU0OWUxZDQ2M2NiMzllMGMzZmIyOTljN2Y5NTMyNTE4ODI4ZmFjMDg5MmRjYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTBlZmU4NWRlZDg5ZjFlOWU0M2EyZjRhYTE4YTZmZjUwNTA2YjNiY2EwNGE3MTk2M2M1YjE0NGViMDY4NDhiMCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_a22104e796024dbaa568425497daf88c",
+      "statement": "pi-wire 是 CLI 协作宿主与浏览器共享的 JSON 安全协议形状和常量，不负责编码、验证、加密或路由。",
+      "evidence": [
+        {
+          "resource": "repo://packages/wire/README.md#L1-L29",
+          "version": "repo-lines-v1:sha256:9e954d8557bc9bb58fbbe7893b3b568d6331b8c545bfbbd002699d21f4bed69d:eyJzZWxlY3RlZExpbmVDb3VudCI6MjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA2MDBiMDI0NjJhZWU0NmIzZDQxYzhlZDRiNGRmNWFhNDEwMzI4YzM5NjYwZjUzODc2YTlmNTVmMTA3MmVkOWMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImExZjE5NzE3MjgyNWY3NjI0MWNmOWYzNTM4ZDM1MGU2Y2EwODliNDgzZTdjMTAzMmRkYjMyZGU3MjZhNWU1NzYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoyLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEwMDE0YWI0MGUxMjU5MDQxMTZmMTZlODlkMWUxMTdhZmM4MDIzMGRlZDhmNTdjNTY1M2VmZWFhMzBmOWY0ODAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_365129655aea4e57acf6e42ed98ac47f",
+      "statement": "pi-natives 通过 N-API 向 JS 提供 Rust 原生功能，发布使用平台可选依赖，x64 加载器选择 baseline 或 modern 变体。",
+      "evidence": [
+        {
+          "resource": "repo://packages/natives/README.md#L1-L15",
+          "version": "repo-lines-v1:sha256:086321258ba7d426311ad953d53ac68881b6acd9de03ef520c809ad04b0fbdc3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ3ZmQyMDIwN2VkNGZkYzMyMDc2MmEyNWY0YmE1YjcyNWRkMmY3N2YzZTNhOTM1Y2UxYjYzNDA2M2JhMmRhMGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZmN2FhOWVmMTFhYjY1YWQ1OTU2NzhmMDY4ZjM5MGMyY2Q3MGYzMGNhOGNiYjU1OTEzMDhlZWFjMzQzNjlhNzQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjowLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY0NjAyMWRlYzA1MDBhZmMyZDI0YWU2MGQxODE5ZjFhMmViODc4NTRiOTFiNGFjZTljOWM4ZjFjYmQ0YjQ1MTUifQ"
+        },
+        {
+          "resource": "repo://packages/natives/README.md#L86-L113",
+          "version": "repo-lines-v1:sha256:5aef908a831fbb879df304620c95c444cbabbcf06eb6de9847e882c109734261:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMDUxYmRlMmNjMjNjMDdiZDQ5NTFiMGZhM2I3Y2UzOGEyOWRhMTI5NDM3NjA2YzJkNWUwNTYzNTQ2MTVmNTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI4YjIyNDMyM2FhMGVmMzdiZmFlOWYzZGQxYjM5ZWNiZDNhNzc0NzU5ZGI1MmMzZmIzOWI0ZjgyMmM5MjY2Y2EiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImY2MTViMmQzMDhlMWE0NThmMzdhY2E0ZjFlN2ZjOWIzZjIzYTYxNjZkZTMxMDZiZTU4M2FmNmVlN2ZmMjk1NjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_5ff5532ebac4452f8288e43424d18d6f",
+      "statement": "Rust release profile 使用 unwind，以便受保护的原生异步任务 panic 转为 JS Promise 拒绝而不是跨 FFI 强制终止进程。",
+      "evidence": [
+        {
+          "resource": "repo://Cargo.toml#L56-L73",
+          "version": "repo-lines-v1:sha256:4fdebe1f5f98e64011aaf6995a6898289639d582940884949c567224007ff432:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU2MWI5OTBhZDhmNDI4NGMzNTRjZDhmOWI2YjFiMGQwMTU2NTAyYWJiMDhhYjI5YWI1MDgyNDk0ZDdhMDc2MGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJlNDBkNjVlNDcwMzkyMTczNWFiNDQzM2EzMTdhMjI5Y2FmNDdlZmRhOTI3ZTRmYTI4OWQ5ODhkM2ZiMjE3MGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjllODkwNjc4ZDE1Zjc2MmNiMzFkMzZjNzMyMzA5NTU4MmQwMTg2ZGRiYTUxZjgxYTA3NWM1ZTk2NzI0Mzc1MTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjRlOWJiNjFhZDExMzk0ZDdhMzA1ZDc4NjcyYTk2NjgzMjI0ZDJiMDMyOTI5YTIwYjA2ZDBkZDBmNDdkODYyNjEifQ"
+        },
+        {
+          "resource": "repo://crates/pi-natives/src/task.rs",
+          "version": "repo-file-v1:sha256:a8fb5dffaeef4815b1cbe1f0fecabcc6083b53e292d2d957f5f2f4218871d9e8"
+        }
+      ]
+    },
+    {
+      "id": "claim_1a98b039f02f492aaeb203d96f89f040",
+      "statement": "app-server 的进程、会话和核心协议有对应聚焦测试，根脚本还提供 Go 和 Rust SDK 测试入口。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L92-L94",
+          "version": "repo-lines-v1:sha256:0f5fad339965c1fd09a10cfc728d3034d788326571315b7c7de6aef546d035c8:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDU0NmFlNjI4NmRhYjQxNmI2YTZhOGYwOWNkNzZiZTQyZWQ2Yzk3MzFhYjEyYWQzZTQ1YTA0N2NiOTQyMmNkZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWUxN2M2NmViNWU2YjU5MGYzMDdhMTRlNTJlYjVlMDgyYThiMjJhYjQwNDlhYjNkYmE5NzhmOTBkMDExY2M0YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzNiZTNkMTc2NTY0Y2JiNzNkY2RlZmQ1Mzk2Zjc1MzdhZTMzYmIyY2NkMjNjODFkN2E5MmQ2M2ViYTAzOGY2MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZWRiOTgwYTVjMzY0YjMyNmRlNTE0MTRiMmY5MTc4MzQ2MjMyMDc1NzBkNTkxYmFkMDg0OTFiN2YxZmZjYTVhOCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-core-protocol.e2e.ts",
+          "version": "repo-file-v1:sha256:1c028ba25be10e430bd81fcd18f19b8dc2907d5910f9d5f7407244a43380e8c1"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-process.test.ts",
+          "version": "repo-file-v1:sha256:e9c09e3324bab4c04f2a506a57d7bb16170fd1769bf5c062f86a6cc88ed2f0f1"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/zcode-sessions.test.ts",
+          "version": "repo-file-v1:sha256:4770689d91228adf13ba378d5499bfa68779e022f882d3a9288c3dfd13cf587d"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

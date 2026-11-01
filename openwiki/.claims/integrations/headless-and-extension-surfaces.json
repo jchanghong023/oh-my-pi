@@ -1,0 +1,170 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:033aa1db75550007ef5c33b6675cd8c1df91db887f8bcce720077e75ca64ccce",
+  "claims": [
+    {
+      "id": "claim_f5044b72ef98428f877253e52b580af3",
+      "statement": "TypeScript SDK 通过 createAgentSession 创建原生会话，调用方拥有会话生命周期；会话隔离不排除共享认证和模型 registry 等进程资源。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/sdk.ts",
+          "version": "repo-file-v1:sha256:6f2a5a9d0075cf32e88f0cf7a0ecf49b33a3a54d943796782a8fcddbef0212f9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/sdk-session-isolation.test.ts",
+          "version": "repo-file-v1:sha256:f900bd6523c135cfcb6909b0fba7480f0f008ad4c0d978156fa79cb704eaff2d"
+        }
+      ]
+    },
+    {
+      "id": "claim_7bff9a4957fe471dac984ca23ddcbd7f",
+      "statement": "print 是无 UI 的单次会话执行，JSON 输出 session header 和裁剪后的事件，串行等待 stdout 写入并在完成或信号时释放会话。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/print-mode.ts",
+          "version": "repo-file-v1:sha256:fd3588f3139c2ad18e8593952461bc64edccb9615a050717f64b4d08993912f3"
+        }
+      ]
+    },
+    {
+      "id": "claim_8609078cecb64941b7e6e75630f8a203",
+      "statement": "print 忽略新会话的 plan.defaultOnStartup，因为没有交互审核界面；支持使用 --plan-yolo 实现无头规划。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/print-mode.ts#L187-L205",
+          "version": "repo-lines-v1:sha256:55c0dd7d53d2507de65889188007d815c5e215018d191baefa80718a34b21525:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjYxMmI2NDdhM2MyN2JjMzI3MWY2NzQzODU1MGMwMzc5NzgxNjQxOWRmMGY0NGM5YmRjZmM5NDRlMWU2MTdiM2MiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVjY2Q5M2M1NWIwN2FkZjFlYzk2NGQ4Y2YzMTlhYTFhYTRlODRkZTc3OWI3YWIwYzBiM2RmMGZkZDJlMmM5OTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjYyNWMyOGJlM2Q5MGIxZWIwMGU3YWZiNjU0MDY2YzQ2MWRiZTViY2NlYTlmYmZlYjlhOWRkODMyZWVhYzFlN2MifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_e91c6979c8f947d39e5f7bda3dcc6795",
+      "statement": "RPC 使用逐行 JSON 输入，提前占用 stdin，解析错误不会阻止后续帧，版本协商接受版本 2；prompt 应答是接纳而非回合完成。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/rpc/rpc-input.ts",
+          "version": "repo-file-v1:sha256:de20cd9b52302798d5816019ca5fff24b009cfbdb478d204d41cf902336b16c3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/rpc/rpc-mode.ts#L2013-L2049",
+          "version": "repo-lines-v1:sha256:79301ce26f97084f0973dcd429127ff48c0efa130a2e0a4f1aa533d098848d22:eyJzZWxlY3RlZExpbmVDb3VudCI6MzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA5MmI0YjQyZjRlZmI4ZWYxOWU2YTc3ZDc4NDFhYzYyZTNmM2QxNjJiZTczMzE1ZTJlNTIyOWU1NGIwMzZjMzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRkYzc2MDIwYmFlNzA1NzdlNjRiMzMwZGNhODNmZGYyNGYzZDc1OTNhMDE1NGQ4YWJlYzZkYzYzZjU4OTdmZDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE4NzJkNTM1ZjI0MzVhYWVmNzQyM2I5ZmUzZWIxNjVlNmMxNjc2ODBmMGY1OThiYzE2NTI3ZGVjZjhiYmM1NmMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJiNTNkYTA3ODE3MzYyZDYzMTAzYjVmMDE2YzUxNzk2YWRkMDM4Y2FlNmY4YWNlMzY1NDNlYjIzMGIwOWFlMWQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_3b08b8edf26a4872b63c3eec838a1689",
+      "statement": "RPC set_host_tools 将宿主定义转换为代理并刷新会话工具；桥按 id 跟踪调用、更新和结果，取消发送 host_tool_cancel，断连拒绝待处理和后续调用。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/rpc/host-tools.ts",
+          "version": "repo-file-v1:sha256:085f4dfb053853c7db3d0d469845de0db922e7f5b5523ec75fbe3975c3109fce"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/rpc/rpc-mode.ts#L2366-L2371",
+          "version": "repo-lines-v1:sha256:218975be51d00a0f3ab6cf95bd977a044e6152957a27e024290ef88c5712ff5d:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWJhMTQyYzJlODQ2ODdiYTc4MWI1MjU1YjA5ZjMxNmIwZmI5MDVlNzI5MDRmMjIxZjk0MWYxNWJmZjk5ZDFmNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTY4MDZmMTU1YzVhYzFhZTI3MjJjYTA2ZjJhYzljYWRjYjg4MWI5MTIzY2I2MjRhM2MxMDQ3NWI0NDQ5ZGMyZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2Q0NDg0MzEwNjdjYzRhYmRlYmZlYTc4ZjllYTg2OTU5MjYyYTQ2YjViNDVkMjJmYWJkOTk4Mzc3NDdhNDY5ZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMmE4NzIxNWQ1YzJiNDM4OWQyNTcxYmMwNjhmNWNkOWU0ZmQ1MmE5OTkxZDA4MDQzNWMxMTU3ZWNhMzAzZDUyOCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/rpc-host-tools.test.ts",
+          "version": "repo-file-v1:sha256:22c281a6ced1cbe29a0199b4333f238b5054e5c98050ab3de1320534fa3ed92f"
+        }
+      ]
+    },
+    {
+      "id": "claim_010ae326dee94f829e32cf8bb172760c",
+      "statement": "RPC abort_and_restore_queue 在中止会话之前撤回队列输入，避免这些输入在中断后继续执行。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/rpc/rpc-mode.ts#L2079-L2095",
+          "version": "repo-lines-v1:sha256:69e33898352b3e8775a0629e19d1b8b42356de5de9c1a741b643b61549907970:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZkNWUzNjM4ODIzNTA0MWRlOTYwYzQzOTM0YjBkZjAzY2RjYmEyYTFlMWYzNTIzZDUzN2ExNzM5MDYzMjcyYzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2ODA2ZjE1NWM1YWMxYWUyNzIyY2EwNmYyYWM5Y2FkY2I4ODFiOTEyM2NiNjI0YTNjMTA0NzViNDQ0OWRjMmUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU1YjljNmY2OTJjZTNlMzRhM2M3MjE3NDYzZmVmZjg2MjM1NDUyNWZjNDViMDRmMDRkMTkyN2QwNmRiNjY3YTkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU2ZmQxYTc1OTViYzVlODQ4YWVkYjdiNWYxZGM1YzFkNjg2NzYzZWY0ZTQ1MWIyNjlhYWQzZjk4NTJkNjZiNTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_f8c7aa916f7d4378b3c7bbd17214fcbf",
+      "statement": "ACP 在 CLI 分支延迟加载运行器并按客户端请求创建和绑定会话；新会话确保落盘，恢复检查 cwd，准备失败释放临时会话，客户端 MCP manager 属于会话记录。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/main.ts#L2686-L2718",
+          "version": "repo-lines-v1:sha256:b643ec72713677151ac49a1fb7882b1498983d7e33ecb518288b6d32d2ccd22e:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQxY2M4NTc3MGFkNDc0YzU3ZTU2ZjkwNWQyY2Q4ODI0M2U1ZmY0MGNiZWE4MTFhYWVmZTY5YjExZTU2YTM5MDgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNiNWEyODI2ZWU5MTFhNzc1YTg0ODQxNjg1ZmQzYWI5M2QxOGZkOTBjZGM2MzdhYjUwOTEwZTVjNzIwODY1MzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk5MjUwYjJhYzZmYWZhYjc3YmMyNGQ1YmQ2NzEzYzZiZjVhNDkwN2RjOGMyMWM1MzRkMjY1OTc1NTlmZGEyMDEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJiZGI1MWMzZWRmMjQ0ZTcxNDkyNTRiY2YyNDk2ZGY5NzhmZGVlNDM1MTljNTNiZTgzZDQyZDE3NTk1Y2VjMTEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/acp/acp-agent.ts#L1634-L1760",
+          "version": "repo-lines-v1:sha256:2c94243f05ecc8ba4692dcb69b595121515a03eadf5dad70f8bd0c79db86869c:eyJzZWxlY3RlZExpbmVDb3VudCI6MTI3LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiI2Mzg5ODlkYzdhYjZlYWQyZTU4Nzc1MDFkNjVjZjkzM2Q0NWVlYzAzM2ViNzYxMTBkZTc4ZTFiMTAwNGZiMTcyIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJlYTMyNmVjOTEzODVhOWI2N2YwYWZkZDIzOTAzYWMzNTAxMjNmYmNlOWQzZGUzMmQ2NTNiY2IxMDk3MDZiOTE2IiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiIxMWZkY2FlODRjNGE5MWM5Y2RlZWFlYzE4ODQ1MmIwMmYwOTRkY2JkZGE5YWM0YmJlYzNlYmRjYjg2ZWM1MzhmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI0MjE3MWE2YTViOThmM2FjZTkwMjQ2NGJhYjVlNzgzZWY2NjM1NzZhNDNmM2FhOWIzYjE5NmFkNzhmMzc0Nzg5In0"
+        }
+      ]
+    },
+    {
+      "id": "claim_4150eab687e54c49930ae7b118284db4",
+      "statement": "ACP 使用 stdio NDJSON，保留原 stdout 给协议并将普通 stdout 和 console.log 重定向 stderr；连接关闭时触发清理。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/acp/acp-agent.ts#L1620-L1631",
+          "version": "repo-lines-v1:sha256:13f89186272a0f6e322001ef57fdddd395c0a069e5c0ece4b06c81846508c25d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU4OGI5NGE1MGRmNTdlYzVlNWIzM2JmNDQ5MGRjNjNkYWQ4NDQ4NTQwZTY1M2JiMDJiNTM0YjUwZTVlMWY2MjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY5N2M1MDBjOTRlOTc2Yzk4MjNiMDU3NDcwNGVlOWRiNDc2Y2VkNGRmYzdiMDJkNjdlMzY2ZjNlZWE2NmE2ZTUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQ3YTk0OWYxN2E5YjVmODNhNjk0YmEyYjNhNWIxYTM1YjMwMWJiNmJmOTJjYWQ3OGFiYjYxZGRjYmY3N2VmZTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk1MTNkY2E4MDhmNzk4YmUwNGNiZjEyNzI3YjVjNTE1YzMxNWZhN2EyNDcyNTNjMzI0YjhlNGQzYjI2MmI1ZGYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/acp/acp-mode.ts",
+          "version": "repo-file-v1:sha256:848c421cf300af24d45913bc7ce3b16cf3e2be036c3b0bfda6790c48b5b3df17"
+        }
+      ]
+    },
+    {
+      "id": "claim_16eb81fca81c40a19a14600932fcb05b",
+      "statement": "ACP ClientBridge 依据客户端能力启用文件和终端转发，权限请求由会话策略决定；steering 可取消待处理权限线路请求。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/acp/acp-client-bridge.ts",
+          "version": "repo-file-v1:sha256:22a3975794b2c2bb032ddcd8eaebc659713128707be5170a89e8d44d25d1fd06"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/acp-session-effects.test.ts",
+          "version": "repo-file-v1:sha256:23b8a87c3f50500982dd71644f0dbdb776a84285f77a4b562b7f7954d0b11b31"
+        }
+      ]
+    },
+    {
+      "id": "claim_8a32a16e665a496f86f01c252a3dd7e8",
+      "statement": "MCP loader 从配置发现服务，创建生命周期 manager 并将工具转换为自定义工具；支持缓存、认证和非阻塞启动窗口，整体发现失败返回空工具和错误。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/mcp/loader.ts",
+          "version": "repo-file-v1:sha256:0631490545a9fad4b56ee5e51de87638f6c95acabb6f16051500634ded3175b0"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/mcp-stdio-cancellation.test.ts",
+          "version": "repo-file-v1:sha256:c9544662ed4298d506351c9f986a84bc4f1f2ff59f342804e7b0416f5bf7df32"
+        }
+      ]
+    },
+    {
+      "id": "claim_f7c448fa105a417a9d761f99bbcc523a",
+      "statement": "ZCode app-server 是要求 --stdio 的独立命令边界，并非原生 RPC 或 ACP 模式；其控制台诊断被重定向以保护协议。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L93",
+          "version": "repo-lines-v1:sha256:cf28c3e694a101626db1cd182d7fc460942b793685ce3ddbab14fe4777d910f4:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZDI1NmJmMWY4NjI1N2NjZTUzNjg5NTRjOWVmZmE4MWI2MTZhYTdhNDc0OTUwMzUyNTM0MmZhNTE4YjU3YTYifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_d8bc81530b9449cbbec3be7e17c3fe9a",
+      "statement": "仓库的 Python、Go 和 Rust 辅助 SDK 位于各自的 omp-rpc 目录，是 RPC 接入而非进程内 TypeScript SDK。",
+      "evidence": [
+        {
+          "resource": "repo://sdk/go/omp-rpc/README.md",
+          "version": "repo-file-v1:sha256:bf62a0ab45d22cecdd55f4755d5bd5d3445c829696377a98e543468dad8a6dd1"
+        },
+        {
+          "resource": "repo://sdk/python/omp-rpc/README.md",
+          "version": "repo-file-v1:sha256:463d46caf83da81d71761ca160b5c02d9c41a07bd4fffe5ff10afcc2453e39f3"
+        },
+        {
+          "resource": "repo://sdk/rust/omp-rpc/README.md",
+          "version": "repo-file-v1:sha256:855b33b774825fa7d650244e82801dd0c7c4fc635bc5ce59f10cef500bc9fbd9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

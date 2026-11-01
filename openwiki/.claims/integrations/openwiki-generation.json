@@ -1,0 +1,238 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:8f374b1036996a593674dc9fce472c4ddf65313869848325c7496cf22b1a34bc",
+  "claims": [
+    {
+      "id": "claim_fa15f492c4ae4619a3ea8ff41942831f",
+      "statement": "OMP 内置 OpenWiki 是 vendored fork 的进程内仓库 Wiki 适配，而生成页面、fork 引擎和既有 wiki/repo 索引各有边界。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L139-L149",
+          "version": "repo-lines-v1:sha256:61a02b131185fd16b04c68e4b0d917d2c7f6f667063f00bb763ec8787e568fbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzYjc3MTg2MjQ0OTIyMThkNjYzYWZkNWJiNzNhNGRkZmZkMmFhNWMzYjVmNjk0NjZlYjYzNTJlNzE2MDdlMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOTMzMTJlMzJlYjJiOTgzMWMxZDRmYTRiYjI0Y2RhYTZmYjJkMjkyMjc5OTI5ZDZlODAzZTYxNGMxOGY2NDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OTUyMDdlZjNhMTUzYzc4YWU4MzUxYzY1YjI4MTI1MWE1ZDhlMTE3YTgxNGJiMzQ1ZGNhMzUyNDY1ZGZhMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3NTg4ZWE1NmM2ZDcwMjBhOWNkODExMDAzNDkzY2FmM2QzYWEyY2ZhNGRjNDJkYWVhYzI3ODdjMDE2MDJmMmEifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L3-L10",
+          "version": "repo-lines-v1:sha256:b26a7f897c0dd0b83efd59766c9c054111dd612c9fb48bcec903559fc7125b14:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTk0NDEzMjk3YTNlOTVhOWI3MmY1ZTRjMDRhYTljMzA2ZjkwMDlhZDg4ZmEwZjk5NDUzZDE5NjM4MzU2NjhiOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZGY5MWIyMmViYmRiMjZhOTk1N2U4ZTRhNjkyNjY3ODQ3YjRkMTE4MmI0MDRiNjJiNzcyYjA0MDA3OWE2ZTNlZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjIsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjY2YmY5NDY3ZTMzYzQxOWNlZTQwNTIwNzU3N2EyN2FmYWNkZjNiNWUzMDQ1MDc1MGQzOGNiYjNhNjAwY2NhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTlkMWViOGEwMDZkODVmOTVmZGEyYzc0ZjNlNmIxNTc0N2E2NjViZDJmNTcyYzE1Yjc2Y2U4Yzk3MGFmMjI0MSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/vendor-loader.ts",
+          "version": "repo-file-v1:sha256:2e24cbc290eaaf447a40f7c2ecf746f52b13693273518b8073937c8c8f12982b"
+        }
+      ]
+    },
+    {
+      "id": "claim_e4d984f4babe448ab28db9b40a6d55dc",
+      "statement": "CLI 支持仓库 init、update、链接、工作区和可视化，默认 zh-CN，排除个人模式、连接器及 CLI 查询等功能。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L12-L55",
+          "version": "repo-lines-v1:sha256:e6f0aca7bd64ff9cfd47cb0f3d636369cd2fba553cbed0675e4e1513fd76c929:eyJzZWxlY3RlZExpbmVDb3VudCI6NDQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM3N2NkZDc0NTQzZGMxNTUxNDQ4ZGVjYzI2YjgwZTg5YTJhODIzNmViMGZjZGU2MGVkZGE5MjBhNjFkZjFkZWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU1ZTI2Y2Q5MjM2NmY2MGQ4ZWQ5MmQwMjM5ZjA3ZmVmNzRjYWMxNGFhNjlhZGRmOWMyY2MwZDExZWIwMGE0NjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYxYzcxMTIxNmNhMjgwZDA3YzhlY2FjYmJkNGU0NWMyNDM0MjRiN2YyYzdlYzhjMTY0ZDUyNGQzNmQwYzQzYzMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhiMmUwMDQ1NzI3ZDhhMTQ1Y2YwOWY2ZTc2NTZmNjM1OWMxM2U3NTE5NGUxZjRiYWY4NjQ5MjIwNTkwNGYyYjgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L138-L200",
+          "version": "repo-lines-v1:sha256:d5c8b84bca6df0509579e8dc77427bca7e92fdd54bd73f42ff43691fe3c3bc40:eyJzZWxlY3RlZExpbmVDb3VudCI6NjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE0ZmNmOTZhNDJmYTAxNGNkN2IwZmVkYTgyZjc0MmRkYzljMmY0MWY1NTVkOWM1MzNlMGIzNGIxYTVlMGY1M2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3Yjk5OTQzODM4NWU2YTg3MmM3Y2FjOGRkNWMyNGNkYzMzNTRhZWQxNDMzMTMxNDRjZjFhNGNlODNiY2JlNDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI2MWExNmJkNWE3MzM5MDY2MmFkYzA1MDdiNjNlNTM1ZTk5Mjg5ZTgwODI0MGRjMjYxYTk3YTgzNDVhODBiMmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY1M2I4NjJmNjUyYzc4ZmUyNmExYjFlOGViYWViOWM0YmU2OTFmNGJlM2QxY2EyNWE1MGVhZWNkYWI0MmQxOTkifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L277-L289",
+          "version": "repo-lines-v1:sha256:ae72925a77256b2f310b01e84cb52a8b1c06ee84cd2fcddd1786d20f0154b95c:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI5ZWE2ZjE3Mzc3MmE4MTE4NmJhMTk1ODlhMDIxMmYwM2ZjYzA2OGViODY1MTYwMDgwZDE4YmRmMTIxZGI5ZWQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE0NDU1N2YxYmJhNTljZjExZDg4YmRjNmYxYWNmNmVlMjMwYjU4OTczYWRkYWY3NWQzYjk1MDM4MWQwNGY2NDIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3NjVjODdkMmEyMWZlZjhmNzllMTFhZmE4NTllMzA0YmMzMDY5MGFiMmIzZmRiMThjYjA3NmQxNGNiMGE4ZjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjdlMTViNWU5YWJiMzQyZmYwNjVlYzdmZmE4MDAyNTQ2MzEwOTkwMThlZjA0MTM2NzRjMTAzYzE0MzUwYjczYzQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7ef8cbf4d8de47028a878eb4a063796e",
+      "statement": "init 重新生成但保留 INSTRUCTIONS.md；实际生成刷新根目录 AGENTS.md 管理区，缺失指令文件时创建空文件。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L163-L173",
+          "version": "repo-lines-v1:sha256:85223ad2d2f5c521e4d8098e522e9d2a3a809a88225d192edb5570c70ea44f5a:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEyOTkyMjM5ZjhiYzU1ZmZlNWJkYjBmZDMyMDEwM2NjZGY5ZGM3YTYwMWY1NzNiY2Y2ZWQzYWNmOWNhOWVjZDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZkNjNmMTIwMGNlMjM4MWEwZDFhYjkwZDA3Mzc4ZTY4ZmU1MzYyZDUwNjUzMDdhNzQwYzhiYzhhOTA3Yjc2MjYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjUyMmI4MjU2MjBlZGJkNTI1YWYyMDEyNDEzMDllMThiMGVmMTdiNThhYWJhNGQ3NmY2YjVmYjkyMDIzNzA3ZDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImEzYzY1NzQxZWFiMWI1YzI5MDRhM2YwOTBmMzY4ZWFlNjFiYjc5OGFjN2FlYjJmZDhjYzdmNGU3ZDA5ZGZlYjUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L265-L272",
+          "version": "repo-lines-v1:sha256:1d5470b317c9f6c9b7cb65b107cbb72c4dd14091e0feed0f2272dcf712988c88:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTc0ZGUyMTdlZTZmN2M0ZTU2MTI1MDkwZWMxYjNjNjc5ZTE3NjAzNzdmYTkyZDU1NGRiYWRmNDQ1OTI3YjE1YiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTY4MDZmMTU1YzVhYzFhZTI3MjJjYTA2ZjJhYzljYWRjYjg4MWI5MTIzY2I2MjRhM2MxMDQ3NWI0NDQ5ZGMyZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZTMwMTNmNzg4NjIyNzk5ZThmNTFhM2MwZmMwN2FlZWQ1NTBiNjg0OTViMTNjMDUwZDA2YmZiOThmZDIxMTlhZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNmExMjEwNWZkM2E3YjlkN2VmMmNlMjljODdkNTZiNDE0ZDkyOTk5YmE5MWE4NjNmODllY2Q5ZjMyODMxN2ExNyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/agents-instructions.ts",
+          "version": "repo-file-v1:sha256:e0e390838060efc76944e6ba0209f4cb29224b5647e8157d8a994febbee23c73"
+        }
+      ]
+    },
+    {
+      "id": "claim_2a5b59c8b53a4560bcd124bbd6e2517d",
+      "statement": "宿主通过 vendor 契约注入模型、技能、并发和取消信号，复用 fork 的原生规划、页面任务、Claims 和恢复流程；页面并发不提供跨进程互斥。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L72-L89",
+          "version": "repo-lines-v1:sha256:ac9e08be4bc902fee7e956b400a921d530a2a5dc5ec838e1b46fa9736f9fc431:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNDc2NWQ0M2JiM2MyOTBjNTIxOWM4MjM0MTI3ZjFkZTI1M2IwMGJmYzRhOTYxODE5YjA3MGFlNjVmOTVjZTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY5NDgxMjdjMTBmYmRmYmU1MGVkZmYwMzI1YTkzMjVlYzQzYTVlYzY5MzE4NTgxZDcyYzBhZGYxYmM5NTExNjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYxZmY0NTljOGFhYmRiMWVhOGNjMzA2ZmE5OWJmODgxZTE4ODJhOGE3MWU5NDQ5ODBlNjUwYTkzNGE1MGVkZTciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY5MjJhODA1NmU5NjdlYjM3ODAyOTlmZDY3YjZlZWQ2NzZiNzAzMDcxZWVlNGJiY2FmNzczMDg0YjQyODcwNjIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L253-L306",
+          "version": "repo-lines-v1:sha256:e55edb9d6a733baac053c8ee06c81b6f7fd8fbdda0bc904e3949244e506750d6:eyJzZWxlY3RlZExpbmVDb3VudCI6NTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE5MDg5NzgzOTYyYmI5MGJmNGVmNzkyYzUzOTc0N2U2NjhmYTY5MWI2YmFlMDRkMmVlMTNiYjYxMjE5ZjliYzYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI4ZWY5MDE2ZWZiYmRlZDQ3ZTJmZmVmNDkyYjE3ODg1ZTdhYWVmYzk0NzEyMmM4N2NjMmZmMTRlNWYyMDEyNTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM3OGI5NDFiNjNlZmM3ZGNkNjUyMDQzM2Y3NTFjYTg3YzE2YjM2YTNmYjYxZTAxYjI4YmU5MTVlZjUzZjYzNWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg3NWMyMTBmZDU1OTZkYTgzZGFkMjVlYzQxMTJkNjZkODFlNjUyNDhiMzhlZGUwN2RlM2ZmZGY4MDI5MzBlNWEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/vendor-contract.ts#L83-L97",
+          "version": "repo-lines-v1:sha256:8a8ce6601cff3f194698afd5b5f19ecb5712d99e1fc69c946573541f0338c04b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjUzYTBmMGVjYWU1ZDQ2NmI0MjAxMTJlMGJhZDNmYzkyZTg1NzMyOWY5NTlkNDY5OGE1YTgyMzhhYjA0MDc1NWYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk2OGNhYjQ4NzA1MThiM2Y4NjMzNzgwOGZiZWFmMWIwMWI0NWYyZGRiNDY3ODg0ZGQzMjQyMzkyYmExNGRkYmEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAwZjIxMTk1NTk1NTM2NDE0YmNkMjllMWY2ZWZhMjAxOGFmNjRiNzEwM2I3ZmU0Y2ZmZWRjZGRmZmFjMmUyN2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_8d185650ba3647df80eb446b647657ae",
+      "statement": "dry-run 预览未验证模型选择和候选路径，不调用模型或写 Wiki 与遥测，最终页面由模型规划。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L202-L252",
+          "version": "repo-lines-v1:sha256:d2fef5eb5211473523233f051b5921a68c3f983dda23e76446394da0993a0def:eyJzZWxlY3RlZExpbmVDb3VudCI6NTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3NmEwZTA1OTRmM2JlZWJiOTRkMGUzYzcyODVkNjRjZTNjOWFmNjIwOTMzZmViOTZlMzYzODNjNGM4YTdiM2YiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0ZWZjNDk0MThkMjZkY2YxMjliMjJhNmFhMjExMDhjZWVjMzc2NzdhMzJkMDhlOWQ1ZmVlMzVkZGE2NmJiOWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczZmEyNzZlOGExMzEzM2FhY2E0OTY4MDczNGZkZGFlYzZmOTEyNjA5Zjc4YmE5MzQwMTA5YTRiMDE1ZDk5N2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBhYTMwMjVlZjViNmJiZGM2MmUzYTRmOTIzZmEyMmZjZmFiYjM3M2EyNmMyMGY2NTBmNTVhMzEzMWUwNDQxNDgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/model.ts#L45-L75",
+          "version": "repo-lines-v1:sha256:b9ee44dcd2241a69aaaf1e4608cfe2f1d746119e6740e23700ab0aaef74cc3d0:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVhZjIyY2YwNzMyNTkyYzI0NzE0MWNiZTYxZWZhMTEwMTI2MTJmNWEzMTIyYjlhZjliYmFmNTJmNTcyNGQxOTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjRlMmJiNjk3YWIzMWI0ODE5ZGY0ZGFjNDliYjIzNGM0YzhmODM3ZTVhYzk1ZjEyMGU1ZDMwOTFiODE5MGI2NzEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFiN2ZkNTQ3NmI5YTcwZjExMDBmODc2ZjhmYzZmODY1ZjgwZGI3M2U2M2E1MWRhNGFiMzJkMDM4ZTVmZjEwMDgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_fef6b60b49f1428098c299a0b89f705f",
+      "statement": "部分页面失败返回非零，中断返回 130，生成期间源码变化则警告；增量和恢复依赖持久状态而非单独依赖 Git clean。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L91-L109",
+          "version": "repo-lines-v1:sha256:8ce076ccea0acfcbbcf89ac4ede253b0d6562a69222158ef8f43cd843bcd87bc:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM5Y2UxM2U3N2E2MzFlZWExMjAxZTMwZWQ0ZGE0NmVmNThjNDRmZGE0OTQyYWY4MzM0ZjUyOWYyNTk2MGJjMzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFjNWVhY2RlZThhNjE4NDE4MjM4NjBhM2U4YThhOWNjNGRlYzBmYTQwZGFiNzY4ODgxYTRiMGNiODMxOTNjNWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImRhMDYyYTZkNzE3MmYxMWM1NDVjZTM1MmQ5ZjMzMDc3OGMxM2ZlNmZiMzliMTk2ZDg5NTc2N2IwMDZmZTZhMDQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJkMWYyMjE2YzA4YmY2ZTVjYjJhNmU2YmNjNjgwNjM4YTcyMjk2YjIzM2IyYTIzY2VkNTkxZjc5YWYzMDY0NzYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L307-L325",
+          "version": "repo-lines-v1:sha256:3c75d6668b471ff3b419d6cbe915a3d96204d218800ba8ba308951dd43cfda32:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkyOTdjYTViZWYwZTJmYjNiYThmZGY1ZjczMDM4ZjIyNzkyMmY1NTg2ZGM4MDY2NzBmZDJhMDVkZDM3NmJlNTYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjBjZmU1NmRiMjRjYjcxYmE1YmQzMjE1NDdhNjgzZTJkMDcwM2NhZjA2N2Y1MTc5ZWMyOTRhZTNkY2QxNzVlYjIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU1MWEzYzUzY2EzZTBmYTA2ZGJlNDU5YzIxYzNkY2M0YWJhNGMwZmVmMjIyODY3MjY1MWQ5MjBkMjc3MzI3NmQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFlYWE1MjI5MzI2YmY3ZDliZmU3YjA1MGM0NWFlYjMwOGE1NmMyNWM2MjYxYTUzYmUzM2QzNTY0Yzg4NDFhY2UifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_03f2ce4857ea4b86b18c2bf7d28fa179",
+      "statement": "普通对话通过四个只读 OpenWiki 工具按需查询，工作区状态属于当前 OMP profile，不自动接管旧独立 home。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L111-L132",
+          "version": "repo-lines-v1:sha256:83c92c851ff8be66bd613e21fcc329e21a6879720576cda288b0a0d69134c7ee:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU5OTk5YTBmZTY0NGRiMmM2MzI3MTcyODNjYjc5MzRiMjZhNDQzZTYxNGE5NjVmOWIzMjJjMmU3YWRlNGYyMmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU4ZjI5MTJmYzZkZTY0OWQ1MjNmNjU1ZTM1YjU4MTI0YWU4NjQzYmYyMzIyNWZmM2M4ZWY5NzUyNDYwOThhZTMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJkOGE1NDgxMmIwNmU0OTM3MmYwZjMwMWY5Mzg2YmVlZjRmYWViMjQxODJjMTJkYTJhNTFmODlkZTk1YjhiYmIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg1ZjYwMmI3YjcyZmU4MzIxZjYwODkzZGM1ZDhjNDUwOTQ5ZWY4NWFmNzZlZjQwM2Q0OTNiYTZhMjU1MzBjZGYifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L163-L165",
+          "version": "repo-lines-v1:sha256:da056f39bd7c46a80659a7e9cce1b24ca9092a22eb09bba695e6629653f27a03:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTI5OTIyMzlmOGJjNTVmZmU1YmRiMGZkMzIwMTAzY2NkZjlkYzdhNjAxZjU3M2JjZjZlZDNhY2Y5Y2E5ZWNkNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYWRkNDExODZjNzRkYWQyNWNmNTgyMjExYjJjYzg1YjZkNjM3YzVjYjU0MGJlZmM5MDNhMWMyZDAzN2M2OTFmOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTIyYjgyNTYyMGVkYmQ1MjVhZjIwMTI0MTMwOWUxOGIwZWYxN2I1OGFhYmE0ZDc2ZjZiNWZiOTIwMjM3MDdkNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzEwNDNlNDY3ODYwMDY3ZjJmODBhMWJiYWI1ZTJmOTc0NGZhM2QyYjkwMTg2ZjZjNmMxMTc2MTI2NTI1YmYzOSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/home.ts",
+          "version": "repo-file-v1:sha256:fe8bac316f2843eafcd6c8e7216d67873e676dc313943e3132dec9e43c099eca"
+        }
+      ]
+    },
+    {
+      "id": "claim_73dc569b17d94ccf9570512ff6149e4e",
+      "statement": "页面模型采用公共显式选择器或 OMP 默认模型；规划模型按独立选择器、公共选择器、plan role、页面模型的顺序选择，失败不静默回退。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L38-L57",
+          "version": "repo-lines-v1:sha256:4c1f3468fd5ce51851e41b8e981adaa2bae164f04d3237d39db19f818b552c9a:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE1MGM0Y2Q3OTc1NWFkZGIyZTM3NTVhYThjOTFjN2JlNzQxNDhiODFkZGJjNzIzMzg3NDI4ODMyYmI3ZDQ4MTIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMDk1MjA4OGJkNWMxNzY0YzQxYjY4ZGQ2MzdhODM0M2IwNGNlZjg3MWU2MzRmZTY1NWE0ODlmN2Q3ZGYwYTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE5NTBjOGE3Y2ZhYzQ0NGIxZDVlMGUzMTdkOTJjMTkxYjhkNzdlYjYwNDk0MjdjZWYyMjkwNDRkYzc0ZWM4YTAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI5Y2E3NTcyNGJhNTUwZTM2ZWM5ZDMyZWE1ZjYyZGNlZmY1ZDRlNWZkM2RmY2M1Y2NkZTYwMzk2ZTlhN2NiZDgifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L202-L212",
+          "version": "repo-lines-v1:sha256:45a3323810422feae06fe616943cea57af6f43289e490b1314af882755c5bbbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3NmEwZTA1OTRmM2JlZWJiOTRkMGUzYzcyODVkNjRjZTNjOWFmNjIwOTMzZmViOTZlMzYzODNjNGM4YTdiM2YiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhhZWUyYzdjZTE3NzY4Njg3NTMwNTZlOGNhMDNiNTE5NDVhNmYzMWM3NGM4MDBiNzNhNTI5N2RjZmU4YjFmNDUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczZmEyNzZlOGExMzEzM2FhY2E0OTY4MDczNGZkZGFlYzZmOTEyNjA5Zjc4YmE5MzQwMTA5YTRiMDE1ZDk5N2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMwNDQxYTdmNDAyOWFkYjRkYmE5NTZmOGEzMGQyMTZjYTdmZGE2ZWJkZThkYmEzYTkwODUzMzJmYzEzOTQ1NjMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L257-L263",
+          "version": "repo-lines-v1:sha256:4457fc6af369f4d364af6ba740d16d824374742cb502781794c10bed415b9920:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMGRhN2IyZDA5Y2U4YWVkOTYwYjQ1NzQxOGQ4MDNkNWU2NzE2ZDFiNDQ0ZjE1ODRjZmJjZmQ0NThiNzYwODA3OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTY4MDZmMTU1YzVhYzFhZTI3MjJjYTA2ZjJhYzljYWRjYjg4MWI5MTIzY2I2MjRhM2MxMDQ3NWI0NDQ5ZGMyZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDI2MmZjYmVmMGY5OGMwNmU3YzM5NmQ5ZTQ1MmU3MDY0ZGUzNjI2ZjIxNWMyOGUyNGFkMzY2NTc4NDk3NDA0ZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjM4YWE4MmUzZjk3MzM1YjAzOThjODczYjgxNmIyYmEzNjI5ODA4NjgzMTY4YjZlZDQyZWI2YmE4YmYyOTJkYiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/model.ts#L38-L43",
+          "version": "repo-lines-v1:sha256:856293ae49a3718b5f33d8465900bbaa80f7cd8c484971a7094ac7a8a3034f56:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzQ5ZTI5NzQ3NzA4NTU3YTYwYjU4YTRjYTMzYWE1MWNmNjhkNmIwMjkyYjg2NmY3NzBiYjNmYTlkNmM4MmFhMSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTY4NGUzNmNkZTM2YzFlN2I5ZjU3MzEwY2JjZWRlN2U2ZTRmNTBjNDEzNjM0NGUwMDU0YmM3OTMyODNjMzZhNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTExNzY1YjYzZThlZjQ4MDc2NDk2MGY3NjQzM2M3NmNhM2JkODBmYWU0MzY3NDdkOGMwYTQyNDNmNTgxNzhhZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_2eab0994c00c4f578e567ac819c25d24",
+      "statement": "模型工厂使用 OMP 设置、模型注册表、扩展 provider 和凭据，将 ChatOpenAI 请求经进程内 auth gateway 转发，支持工具轮次及推理档位并在结束时释放资源。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/model.ts#L77-L180",
+          "version": "repo-lines-v1:sha256:abf941d102175f1a62ade02a7c5c7f4f3d5ac6005f744b1e434a373bed942ce3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTA0LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiI0MDlmMzZlYjM3OTgzMzU5YTZhZDUwNDIxNzBjZGE0MjRkZDM4YTgwN2FiNTNmOThmNzgwNGNiOTlkMmYwNTUwIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI2N2NkYTgyZGE2MDYyMzhlMDVlNjIzOTk1NjljNWVlMDM5OTM0MTk2NDhhZTVkNDNhMmJmOGNkNjM0N2Y4MjYzIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiI1NGJhNzI2M2MxMDg3MDJhNTVjYzlkY2Y1ODFmMTEzMzM3ODI5NzZkZTdlNjA0ZDEyMTVlNmQ4Y2Y1MWEwOGZmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MSwiZm9sbG93aW5nQ29udGV4dEhhc2giOiI0MTJjYTM0NWNjZjc1YmY5YzA4MDZiY2U2OTViZThkZTgwOGI3OTk4NDI1MWE3YTU0ZDIwMmNmNjEwMWRkNDUxIn0"
+        }
+      ]
+    },
+    {
+      "id": "claim_96eebc13dcce46088a0d5bfcf74b2568",
+      "statement": "postinstall 从 fork 和依赖构建带许可证的视觉资源 JSON，校验输入指纹并原子发布；子模块缺失时删除旧视觉 map 并警告。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L171-L173",
+          "version": "repo-lines-v1:sha256:699daebbcbbfa9cac339ae77ac246075533774d2ade5d13447bad3c2b5488969:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTEwNzlhMjZhZmRkZDM5OGYzZjljNWI3YzVmNTg5NWUyMDY2OTU0MDIzMWIwYmE1MmEwYWJhOTg0ZTlkNzk0OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOWEzY2RhM2Q4Njk1NDNiZTg1NmJlOWJjOWNhNDBiOTVhYmY0Mjk3MTY1YzdkMDhkMmM0MzcyMmM2ZWMzYjZjZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNjczOGMxZDlkMzU5NGFmMGQ2YzM1YzE3MmYxZWQ1MjdhOWViYmJiMjAxZTVmMmJlNzI4MWVkYjg1MzQzYzViMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjJmMWFhN2IwMjQ5M2QwNjgxYWYzYmRhZDIwYjA0NmQ4Y2Q5MmE1ZGIzZDRjODExZTFkZjA5NjY5ZTc2MDA2ZiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/scripts/openwiki-resources.ts#L60-L123",
+          "version": "repo-lines-v1:sha256:4e350a1adf5f66db7fc07bf61d0d85da2af5269fb9e0b84993f7f7f9c925851e:eyJzZWxlY3RlZExpbmVDb3VudCI6NjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY4NDgwNWM5MmMxZGM3YzFhMjNiYTdlZTgwNzAwNzA2YTM2MTYwOWUwNTNjZDI3NDA2YWFmNzg3YzcwOTU2YWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU4YTdhM2Y0NGE1NDgyYjkxYTBhNjg0NGYzMWFjOTAwMjgyMDRhOWQ3Y2FjNTFmOGUwYTY2NjRhOTFkZjY5ZWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b9c894d916874b2f8506a69650a3c916",
+      "statement": "技能在源码检出中直接定位 vendor skills，交付时从内嵌映射或 skills.json 加载并以摘要目录原子物化，验证资源路径；bundle 和二进制构建内嵌技能映射。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/scripts/bundle-dist.ts",
+          "version": "repo-file-v1:sha256:50e5fbbf8c2338f4f3e8141c72b20b738ec798bbbe5ef9f078f1747db19827ec"
+        },
+        {
+          "resource": "repo://packages/coding-agent/scripts/compile-binary.ts",
+          "version": "repo-file-v1:sha256:925eb63cc5a68776c7bef5c8d53ee40778cd05267696f959162b996cbe794583"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resources.ts",
+          "version": "repo-file-v1:sha256:46b1e1d1e2074a498a2240c23ab4f615cec3d6cd435edae4c36dfe7aee87e79e"
+        }
+      ]
+    },
+    {
+      "id": "claim_7ed78c04356745deb29e69338c9b2e68",
+      "statement": "视觉资源从内嵌映射或预构建 JSON 加载并验证，源码 checkout 检查指纹；可视化可启动服务或导出静态 HTTP 内容。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L175-L186",
+          "version": "repo-lines-v1:sha256:fc0ca95b1164669fe93f6fc367c91fef4532146af078f6c55523b0e4ff1e58be:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkxNzlkNTE1YTY0Nzk0Y2UzOTg0OWIwN2M4NDE0OTYwOTA1ODhkZmZhZDY4OTllN2U3MWU2NTFiNmQ0OTAxOGQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ0MDgxYTE3YTIwOGE4NDM2ZmViMTlhMDNlZWViZDNkMGJkNWUzOTFkNDJmMTNhNmZhNmQxMjE2NjA2OTAyNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjM2NTYzN2I3Y2UzNDdhODYxNmVkZTY2OWE2OWZlOWUwMjViNjlhNTAxZDhiMGMxOTFjZTA3YWE5ZWI1OWFkNTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVhMmI0ZjhmY2U5NjFlZGFmMjE4ODY1ZmM0MzA2ZDYyZDQ0YWIwZTIwNGM2YzhmYWUwYmFmZjRlYmQ0YjA5MDUifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L160-L190",
+          "version": "repo-lines-v1:sha256:c967189bd011ec489eb54f1862e165f30803a638dfa2014c9c5f57afc9cc9506:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0M2E1ZjAzYjZhOTQ3YmY5MzcwOWY0MDIxMmIzYjZjMWMxNDNlNGRmYjcyM2E4NGIzNzNmMWU4NDg2YzNlODYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYwMGNlY2MyNjQ0NjVhMmJkNzNiMmIyMDgwM2JhNjg0NTA2OTJhYjA3YTUzNzk5NTJiMjAzY2QyYzcyNjUzYjgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjJjNDc1NmNmNGQ3YzQ0MDE1MDBlZDJiNzI2NDM3Y2IwYmQzZGNkMzE0YzdiYmUyMzM3OGI4MDUxYTA1ZDY1ZWMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY1ZjhiNzhhNTIxYzc1OWJiMzMxZTFjY2M0ZmM1N2JlYjVkNmIwYjJiN2M5M2YzODhlNWE3NjI3ODI2NzE4M2QifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/visual-assets.ts",
+          "version": "repo-file-v1:sha256:dc979fd928e9c4d1d7118abf5efaf13f91b96b8b2fddd242b124f800b0785ac7"
+        }
+      ]
+    },
+    {
+      "id": "claim_4c9f22f40c3c44c7b6406b06a302da84",
+      "statement": "离线生成仍需资源和可用模型及认证，内置遥测禁用，显式遥测文件只记录本地禁用状态。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L33-L36",
+          "version": "repo-lines-v1:sha256:1da47ad1672fd7f3859c39f010bbceee760ffbd5aadcebd4d9cb49968705d999:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTA3MmUyZTNmN2RjZGJiZTg1NjA0Zjc4OWM5ZWVjNDQ4MjhjMTNlODZkM2UzMDZlMDZkZmUyNmJmNzQxMWQ0OSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTE3YTZiZGRjMDU0ZGEwMTA0MzE2ZWQ2NWQ4ZmY2NjE3ZDE5OTA3ZGRkM2ZmZDFlYjU0NGRkYjA2MzI0MGI0NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMTljZWEwOTk4ZGZjYTBjZDU3NDRiMTI4ZDlmMDVlMDdmYTcyNGZiZjVjZjMxNjgyNzhiYmY1MTMwYmJlYzJjYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOTc3ZjRjOThlNjFlMDQ0ZGFmNjM1OTUxOTZiNzRlZjkzM2IwYzYwY2RmZDRjZGI1ODFjODdjN2FkNTFmZGU2ZSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/openwiki-cli.ts#L93-L107",
+          "version": "repo-lines-v1:sha256:5e50a38caa5a8810cf2c6163812bbd7e8b14780833381ae6b6efcabefa09ac26:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZmZWRjYTA2MjQ2YWY5YmJiZDgxNzRjODQzMzA3NWJmN2VmZWE0ZTMyZmJlMmQ3OGUyNTk2ZjY4MWRhZmFiYTEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA5MjIxMTI2NmM5MDk0ZDY1OGRlZmM0M2M5N2I1NjRkNTNmNzJiNzIyOTRlNTQ5ZTczNTJmMzBmYjFiMDQ3MDUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijc3YzYzOTYxYzNlZDJiZDhmZWQ5MWI5MmM0YjQwOWE2NjYzOTk5NjA1ODllMWVjYTYyYTJmYjFmZDA5ZDg1ODIifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/model.ts#L83-L129",
+          "version": "repo-lines-v1:sha256:048f49fd9d980e06603c4854e1e099d58ed86380791f8d2128d6c7dbc5c9366b:eyJzZWxlY3RlZExpbmVDb3VudCI6NDcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkwYTc3MTk5MTNkODJjNDg0OWFlN2NlMjI5OWZjNmQ3MDRkMTFkMDVjMjUwOTc2MjM3YTVlYzU2N2YyN2FjMTAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhZjA5NmZjNGYwNTI0YjY0Y2UxYThmNzk1ZjEzNmQyZjdmMDVlZjAyYWNhNjMwZmQ3MTM1MmU0YzgzZDM2NTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNkOGZkOGI2NDRkOTI5ZjQ2M2M0NzZiODA0Mzc0ZGY2ZWQ2MjgyM2ExMmEyODBhMzgyZmM1MGE3NDJiNTI1MTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUyMWYxYWJkMjExNDBkMGFhYjJlYTFmNzAwMTQ2ZDNjYTNkNGJjYmM3MzE1ODg5YjU2NDI5YWU5NjU5NDZiNzgifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_df1e3cf8b14a4baaa65fa678af8933b7",
+      "statement": "OpenWiki 与现有文档和代码索引独立，普通任务不会自动预加载 Wiki。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/openwiki/spec.md#L139-L149",
+          "version": "repo-lines-v1:sha256:61a02b131185fd16b04c68e4b0d917d2c7f6f667063f00bb763ec8787e568fbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzYjc3MTg2MjQ0OTIyMThkNjYzYWZkNWJiNzNhNGRkZmZkMmFhNWMzYjVmNjk0NjZlYjYzNTJlNzE2MDdlMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOTMzMTJlMzJlYjJiOTgzMWMxZDRmYTRiYjI0Y2RhYTZmYjJkMjkyMjc5OTI5ZDZlODAzZTYxNGMxOGY2NDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OTUyMDdlZjNhMTUzYzc4YWU4MzUxYzY1YjI4MTI1MWE1ZDhlMTE3YTgxNGJiMzQ1ZGNhMzUyNDY1ZGZhMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3NTg4ZWE1NmM2ZDcwMjBhOWNkODExMDAzNDkzY2FmM2QzYWEyY2ZhNGRjNDJkYWVhYzI3ODdjMDE2MDJmMmEifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

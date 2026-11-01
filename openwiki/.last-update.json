@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-11-01T02:50:22.533Z",
+  "updatedAt": "2026-11-01T04:23:55.346Z",
   "command": "init",
-  "gitHead": "56e432dac2021a4c0a310c14278c9c8ef788c697",
-  "model": "openai-codex/gpt-6-luna",
+  "gitHead": "04db75f6cbeec4f581c6c666f149602ca6ba6c75",
+  "model": "openai-codex/gpt-6.1-terra",
   "status": "complete",
   "language": "zh-CN",
   "instructionBaseline": {
     "agents": "67a815a3529c08af8f01b7c3417195a0c4cd4132403bbba18923545c2437e109",
-    "wiki": "4e4e5f9a23b14090089358874f8b0eb91082226825f526fc69afaac8329cc65e",
-    "sourceFingerprint": "sha256:1a52cde1b5c1cfd630e8e98c237dc435191a72f0d07d6a56df99071a7819f023"
+    "wiki": "7eb8b846b38568e59059d905c9d713bded285694e9477b0ddb2c95c121765f8c",
+    "sourceFingerprint": "sha256:4a9e1fbe4636c502f9057356ecf74b09faba18871ac9255e51871c01b44646ae"
   }
 }
