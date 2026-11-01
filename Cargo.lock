@@ -7025,6 +7025,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "pi-knowledge"
+version = "18.14.2"
+dependencies = [
+ "base64 0.23.1",
+ "grep-matcher",
+ "icu_collator",
+ "icu_locale_core",
+ "libc",
+ "pi-vfs",
+ "pi-walker",
+ "regex",
+ "rusqlite",
+ "ryu-js",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "unicode-normalization",
+ "windows 0.62.2",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "pi-natives"
 version = "18.14.2"
 dependencies = [
@@ -7085,13 +7107,13 @@ dependencies = [
  "pi-diff",
  "pi-edit",
  "pi-iso",
+ "pi-knowledge",
  "pi-predict",
  "pi-shell",
  "pi-vcs",
  "pi-vfs",
  "pi-voice",
  "pi-walker",
- "pi-wiki",
  "pipewire",
  "png",
  "portable-pty",
@@ -7241,28 +7263,6 @@ dependencies = [
  "pi-vfs",
  "regex",
  "tokio",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "pi-wiki"
-version = "18.14.2"
-dependencies = [
- "base64 0.23.1",
- "grep-matcher",
- "icu_collator",
- "icu_locale_core",
- "libc",
- "pi-vfs",
- "pi-walker",
- "regex",
- "rusqlite",
- "ryu-js",
- "serde",
- "serde_json",
- "sha2 0.10.9",
- "unicode-normalization",
- "windows 0.62.2",
  "windows-sys 0.61.2",
 ]
 

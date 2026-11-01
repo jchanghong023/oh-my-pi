@@ -131,7 +131,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(workspaceRows).toEqual(offlineRows);
 		const names = physical.frame.payload.snapshot.config.slashCommands.map(item => item.name.replace(/^\//, ""));
 		for (const name of [
-			"wiki",
+			"knowledge",
 			"repo",
 			"team",
 			"goal-autopilot",

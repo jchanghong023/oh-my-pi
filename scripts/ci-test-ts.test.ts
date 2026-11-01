@@ -569,6 +569,9 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
 			"packages/coding-agent/test/modes/zcode-permissions.e2e.ts",
 			"packages/coding-agent/test/modes/zcode-process-session.test.ts",
+			"packages/coding-agent/test/knowledge-index.test.ts",
+			"packages/coding-agent/test/knowledge-models.test.ts",
+			"packages/coding-agent/test/knowledge-semantic.test.ts",
 			"packages/coding-agent/test/repo-index.test.ts",
 			"packages/coding-agent/test/repo-review-regressions.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
@@ -586,12 +589,12 @@ test("local suites select fork consumers and drain failures without widening to 
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
 		await put(
-			"packages/coding-agent/test/wiki-tool.test.ts",
+			"packages/coding-agent/test/knowledge-search-tool.test.ts",
 			'import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; test("failure", () => { appendFileSync(process.env.MARKER!, "failure\\n"); expect(Boolean(process.env.FAIL_FIXTURE)).toBe(false); }); test("after failure", () => appendFileSync(process.env.MARKER!, "after-failure\\n"));\n',
 		);
 		const fullMarkers = [...selected, "failure", "after-failure"].sort();
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
-		expect(dry).toContain("scope=fork-features selected-files=13");
+		expect(dry).toContain("scope=fork-features selected-files=16");
 		expect(await executed()).toEqual([]);
 		expect(dry).toContain("./test/modes/zcode-permissions.e2e.ts");
 		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));

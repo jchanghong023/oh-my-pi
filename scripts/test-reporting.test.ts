@@ -208,8 +208,8 @@ test("cargo-delta reports empty and executed package selections without fabricat
 	expect(mixed.producers[0].selection.packages).toEqual(["pi-natives"]);
 
 	const withDoctest = await fixture([
-		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["pi-wiki"] } },
-		{ status: "stage", selection: { ...affectedDelta, packages: ["pi-wiki"] } },
+		{ xml: oneCase, status: "passed", selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
+		{ status: "stage", selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
 	]);
 	expect(withDoctest.completion).toBe("complete");
 	expect(withDoctest.reconciliation).toMatchObject({ cases: 1, executed: 1, failures: 0 });
@@ -221,7 +221,7 @@ test("cargo-delta reports empty and executed package selections without fabricat
 		{ xml: failedXml, status: "passed", exitCode: 0, selection: affectedDelta },
 		{ xml: oneCase, status: "partial", selection: affectedDelta },
 		{ status: "failed", exitCode: 1, selection: affectedDelta },
-		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["pi-wiki"] } },
+		{ status: "failed", exitCode: 1, selection: { ...affectedDelta, packages: ["pi-knowledge"] } },
 	]) {
 		const report = await fixture([record, emptyDelta]);
 		expect(report.completion).toBe("partial");
@@ -234,7 +234,7 @@ test("cargo-delta rejects incomplete or fabricated empty selection evidence", as
 		{ ...emptyDelta, selection: { ...selection, baseline: undefined } },
 		{ ...emptyDelta, selection: { ...selection, baseline: "bad" } },
 		{ ...emptyDelta, selection: { ...selection, packages: undefined } },
-		{ ...emptyDelta, selection: { ...selection, packages: ["pi-wiki"] } },
+		{ ...emptyDelta, selection: { ...selection, packages: ["pi-knowledge"] } },
 		{ ...emptyDelta, selection: { ...selection, selected: 1 } },
 		{ ...emptyDelta, selection: { ...selection, mode: "full" } },
 		{ ...emptyDelta, selection: { ...selection, changedPaths: ["../outside"] } },

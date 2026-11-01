@@ -3,9 +3,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getAgentDir, getLogsDir } from "@oh-my-pi/pi-utils";
 import { Settings } from "../../src/config/settings";
-import { DocsSearchEngine } from "../../src/docs/engine";
-import { DocsService } from "../../src/docs/service";
-import { WikiTool } from "../../src/tools/wiki";
+import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
+import { KnowledgeService } from "../../src/knowledge/service";
+import { KnowledgeSearchTool } from "../../src/tools/knowledge-search";
 
 const [mode, root, canary] = process.argv.slice(2);
 if (!root || !canary || !process.env.OMP_CONFIG_ROOT) throw new Error("Expected an isolated diagnostic fixture");
@@ -14,12 +14,12 @@ async function docsProbe() {
 	// The interrupted-build fixture observes raw SQL at an exact FTS commit boundary.
 	const service =
 		mode === "wiki"
-			? new DocsService({ agentDir: getAgentDir(), cwd: root })
-			: new DocsSearchEngine({ agentDir: getAgentDir(), cwd: root });
+			? new KnowledgeService({ agentDir: getAgentDir(), cwd: root })
+			: new KnowledgeIndexEngine({ agentDir: getAgentDir(), cwd: root });
 	try {
 		if (mode === "wiki") {
 			const cleanups: Array<() => void | Promise<void>> = [];
-			const tool = new WikiTool({
+			const tool = new KnowledgeSearchTool({
 				cwd: root,
 				hasUI: false,
 				settings: Settings.isolated(),
@@ -53,7 +53,7 @@ async function docsProbe() {
 				signal: controller.signal,
 				onProgress(progress) {
 					if (progress.phase !== "fts" || progress.completed !== 1) return;
-					visibleDuringBuild = (service as DocsSearchEngine).list();
+					visibleDuringBuild = (service as KnowledgeIndexEngine).list();
 					if (mode === "cancel") controller.abort();
 					else {
 						// Remove only the unread file, after one real FTS commit, without relying on scan order.
@@ -74,13 +74,13 @@ async function docsProbe() {
 			db.close();
 		}
 	} finally {
-		if (service instanceof DocsService) await service.close();
+		if (service instanceof KnowledgeService) await service.close();
 		else service.close();
 	}
 }
 
 async function boundariesProbe() {
-	const service = new DocsService({ agentDir: getAgentDir(), cwd: root });
+	const service = new KnowledgeService({ agentDir: getAgentDir(), cwd: root });
 	let listFailure: string | undefined;
 	try {
 		await service.list();

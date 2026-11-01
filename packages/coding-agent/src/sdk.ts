@@ -1570,7 +1570,7 @@ const TOOL_DEFINITION_MARKER = Symbol("__isToolDefinition");
 const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
 const SESSION_MANAGED_BUILTIN_TOOL_NAMES = [
-	"wiki",
+	"knowledge_search",
 	"repo",
 	"openwiki_search",
 	"openwiki_read",
@@ -4702,7 +4702,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			const readToolRequested = explicitlyRequestedToolNames.includes("read");
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
-				if ((name === "wiki" || name === "repo" || name.startsWith("openwiki_")) && !readToolRequested) continue;
+				if ((name === "knowledge_search" || name === "repo" || name.startsWith("openwiki_")) && !readToolRequested)
+					continue;
 				if (builtInRegistryToolNames.has(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}

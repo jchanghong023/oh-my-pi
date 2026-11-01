@@ -63,7 +63,7 @@ describe("createAgentSession force-included tool activation", () => {
 
 	it("activates wiki when an unrestricted explicit tool set includes read", async () => {
 		const names = await activeToolNames(Settings.isolated({}));
-		expect(names).toContain("wiki");
+		expect(names).toContain("knowledge_search");
 	});
 
 	it("activates force-included manage_skill in a restricted top-level session", async () => {

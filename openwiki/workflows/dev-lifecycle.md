@@ -89,7 +89,7 @@ Team 仅在**进入方案阶段**且配置启用时实际运行；讨论须完�
 
 每个角色是独立的 SDK `AgentSession` 和原生历史，继承项目硬约束；阶段进入用隐藏的 `dev-stage-context` 传完整交接，平时用户文本进入当前会话。忙时输入使用原生 follow-up 队列及随输入携带的只读限制，不另建 Dev 队列。阶段控制操作必须等待会话、已接收输入和异步任务结清；准备下一会话或持久化失败时不应发布未提交的切换，模型调用在提交后失败则保留已保存的目标阶段以便恢复。
 
-执行前的角色工具白名单是 `read`、`grep`、`glob`、`write`、`edit`、`task`，需求和方案额外有 `wiki`。写入仅限各自指定正式输出；`task` 只能派无额外工具、无 worktree 的只读 `scout`。前置角色禁用环境扩展发现、MCP、LSP 和 IRC。执行者可继承宿主允许的执行能力与技能，但 Dev 协作仍禁止创建 worktree，且宿主工具限制仍生效。参见 [会话运行时](../architecture/session-runtime.md) 和 [工具与执行](../architecture/tools-and-execution.md)。
+执行前的角色工具白名单是 `read`、`grep`、`glob`、`write`、`edit`、`task`，需求和方案额外有 `knowledge_search`。写入仅限各自指定正式输出；`task` 只能派无额外工具、无 worktree 的只读 `scout`。前置角色禁用环境扩展发现、MCP、LSP 和 IRC。执行者可继承宿主允许的执行能力与技能，但 Dev 协作仍禁止创建 worktree，且宿主工具限制仍生效。参见 [会话运行时](../architecture/session-runtime.md) 和 [工具与执行](../architecture/tools-and-execution.md)。
 
 完成报告实际发生变化后进入待验收并暂停运行中的 Goal；一般讨论保持只读。只有可识别的明确修复或继续实施已批准计划的请求才打开范围内修复；提问、解释请求、普通同意或禁止修改不构成授权。修复开始使旧报告失效，执行者必须实际更新报告才能再次验收。已验收后的收尾修复不能改动已验收材料或派发业务任务；工具执行后仍复查版本。
 

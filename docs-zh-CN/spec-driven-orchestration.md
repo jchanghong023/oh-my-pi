@@ -38,7 +38,7 @@
 
 ### 1. 需求：先把目标写进真实文件
 
-需求 Agent 阅读项目、通过只读 `wiki` 查询已入库的企业资料、澄清目标、范围、不做什么、约束与验收行为，不提前编写方案、计划或业务代码。Wiki 使用当前 profile 的既有索引，不自动建库，不扩大需求文件写入白名单。
+需求 Agent 阅读项目、通过只读 `knowledge_search` 查询已入库的企业资料、澄清目标、范围、不做什么、约束与验收行为，不提前编写方案、计划或业务代码。知识库使用当前 profile 的既有索引，不自动建库，不扩大需求文件写入白名单。
 
 原生 OpenSpec 项目的本次材料为：
 
@@ -53,7 +53,7 @@ openspec/changes/<change-id>/specs/<capability>/spec.md
 
 ### 2. 方案：比较真实方向，不硬凑三案
 
-方案 Agent 直接收到已确认需求原文件和用户原始确认回复，不自动注入 Brainstorming／Grill-me，也不重新开展强制需求访谈。它可直接调用只读 `wiki` 核实企业规范及技术约束，无需开启 Team 才能检索；直接依据确认需求调查、比较可行方向，将完整候选写到：
+方案 Agent 直接收到已确认需求原文件和用户原始确认回复，不自动注入 Brainstorming／Grill-me，也不重新开展强制需求访谈。它可直接调用只读 `knowledge_search` 核实企业规范及技术约束，无需开启 Team 才能检索；直接依据确认需求调查、比较可行方向，将完整候选写到：
 
 ```text
 docs/superpowers/plans/YYYY-MM-DD-<change>-solutions.json

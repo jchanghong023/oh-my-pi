@@ -608,7 +608,7 @@ export interface InteractiveModeContext {
 	showHistorySearch(): void;
 	showExtensionsDashboard(): void;
 	showAgentsDashboard(): void;
-	showDocsDashboard(): void;
+	showKnowledgeDashboard(): void;
 	showRepoDashboard(): void;
 	/** Open the fullscreen git UI, optionally pinned to a revision (`/git <rev>`). */
 	showGitUi(revision?: string): void;

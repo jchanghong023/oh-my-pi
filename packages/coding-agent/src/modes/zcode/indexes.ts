@@ -2,8 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { z } from "zod";
-import { DocsService } from "../../docs/service";
-import type { DocsProgress } from "../../docs/types";
+import { KnowledgeService } from "../../knowledge/service";
+import type { KnowledgeProgress } from "../../knowledge/types";
 import { REPO_EXCLUSIONS } from "../../repo/files";
 import { normalizeRepoQueryPath, RepoService, resolveRepoRoot } from "../../repo/service";
 import { repoIndexPath } from "../../repo/storage";
@@ -13,7 +13,7 @@ import { LegacyProtocol as L } from "./schema";
 const text = z.string().min(1);
 const workspaceSchema = L.zcodeWorkflowsListParamsSchema.shape.workspace;
 const base = { workspace: workspaceSchema, operationId: text };
-const wikiQuery = {
+const knowledgeQuery = {
 	...base,
 	query: text,
 	index: text.optional(),
@@ -21,12 +21,12 @@ const wikiQuery = {
 	cursor: text.optional(),
 	characterBudget: z.number().int().min(1).max(1_000_000).optional(),
 };
-export const ompWikiParamsSchema = z.discriminatedUnion("action", [
+export const ompKnowledgeParamsSchema = z.discriminatedUnion("action", [
 	z.object({ ...base, action: z.literal("list") }).strict(),
 	z.object({ ...base, action: z.literal("init"), directory: text, name: text, confirmedDirectory: text }).strict(),
 	z.object({ ...base, action: z.literal("remove"), name: text }).strict(),
-	z.object({ ...wikiQuery, action: z.literal("search") }).strict(),
-	z.object({ ...wikiQuery, action: z.literal("grep"), case: z.boolean().optional() }).strict(),
+	z.object({ ...knowledgeQuery, action: z.literal("search") }).strict(),
+	z.object({ ...knowledgeQuery, action: z.literal("grep"), case: z.boolean().optional() }).strict(),
 	z.object({ ...base, action: z.literal("cancel") }).strict(),
 ]);
 const repoQuery = {
@@ -59,7 +59,7 @@ export interface OmpIndexesBridgeOptions {
 		params: {
 			operationId: string;
 			workspace: z.infer<typeof workspaceSchema>;
-			progress: DocsProgress | RepoProgress;
+			progress: KnowledgeProgress | RepoProgress;
 		},
 	): void;
 }
@@ -126,7 +126,7 @@ function missingRepoQuery(root: string, cursor: string | undefined): RepoQueryRe
 export class OmpIndexesBridge {
 	readonly #options: OmpIndexesBridgeOptions;
 	readonly #agentDir: string;
-	readonly #docs = new Map<string, DocsService>();
+	readonly #knowledge = new Map<string, KnowledgeService>();
 	readonly #repos = new Map<string, RepoService>();
 	readonly #operations = new Map<string, Operation>();
 	readonly #mutations = new Set<string>();
@@ -158,10 +158,14 @@ export class OmpIndexesBridge {
 	}
 
 	async #run<T>(
-		kind: "wiki" | "repo",
+		kind: "knowledge" | "repo",
 		params: Scope,
 		signal: AbortSignal | undefined,
-		work: (cwd: string, signal: AbortSignal, progress: (value: DocsProgress | RepoProgress) => void) => Promise<T>,
+		work: (
+			cwd: string,
+			signal: AbortSignal,
+			progress: (value: KnowledgeProgress | RepoProgress) => void,
+		) => Promise<T>,
 	): Promise<T | { cancelled: boolean }> {
 		if (this.#disposed) throw new Error("Index bridge is disposed");
 		signal?.throwIfAborted();
@@ -184,7 +188,7 @@ export class OmpIndexesBridge {
 		try {
 			const result = await work(cwd, controller.signal, progress => {
 				if (this.#disposed || controller.signal.aborted || this.#operations.get(key) !== operation) return;
-				this.#options.notify(`omp/${kind}/progress`, {
+				this.#options.notify(kind === "knowledge" ? "omp/wiki/progress" : "omp/repo/progress", {
 					operationId: params.operationId,
 					workspace: params.workspace,
 					progress,
@@ -199,17 +203,17 @@ export class OmpIndexesBridge {
 		}
 	}
 
-	handleWiki(action: string, raw: unknown, signal?: AbortSignal) {
-		const schema = ompWikiParamsSchema.options.find(option => option.shape.action.value === action);
-		if (!schema) throw new Error(`Unknown Wiki method: ${action}`);
+	handleKnowledge(action: string, raw: unknown, signal?: AbortSignal) {
+		const schema = ompKnowledgeParamsSchema.options.find(option => option.shape.action.value === action);
+		if (!schema) throw new Error(`Unknown Knowledge method: ${action}`);
 		const { action: methodSchema, ...shape } = schema.shape;
 		const payload = z.object(shape).strict().parse(raw);
-		const params = ompWikiParamsSchema.parse({ ...payload, action: methodSchema.value });
-		return this.#run("wiki", params, signal, async (cwd, inner, onProgress) => {
-			let service = this.#docs.get(cwd);
+		const params = ompKnowledgeParamsSchema.parse({ ...payload, action: methodSchema.value });
+		return this.#run("knowledge", params, signal, async (cwd, inner, onProgress) => {
+			let service = this.#knowledge.get(cwd);
 			if (!service) {
-				service = new DocsService({ agentDir: this.#agentDir, cwd });
-				this.#docs.set(cwd, service);
+				service = new KnowledgeService({ agentDir: this.#agentDir, cwd });
+				this.#knowledge.set(cwd, service);
 			}
 			switch (params.action) {
 				case "list":
@@ -327,12 +331,12 @@ export class OmpIndexesBridge {
 		for (const operation of this.#operations.values())
 			operation.controller.abort(new DOMException("Index bridge closed", "AbortError"));
 		for (const service of this.#repos.values()) service.close();
-		const closing = [...this.#docs.values()].map(service => service.close());
+		const closing = [...this.#knowledge.values()].map(service => service.close());
 		this.#disposing = Promise.all([
 			...closing,
 			...[...this.#operations.values()].map(operation => operation.done),
 		]).then(() => {
-			this.#docs.clear();
+			this.#knowledge.clear();
 			this.#repos.clear();
 		});
 		return this.#disposing;

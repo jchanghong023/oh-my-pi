@@ -41,7 +41,7 @@ cd /path/to/project
 omp
 ```
 
-在输入框发送任务，`/` 补全命令，`@` 选择文件。`omp -c` 可继续当前项目最近会话；`omp -P work` 使用独立 profile，`omp -P work -c` 在该 profile 中继续。配置、聊天记录与 Wiki／Repo 数据库按 profile 隔离。终端操作见 [TUI 交互与个人默认行为](concepts/tui-and-personal-defaults.md)。
+在输入框发送任务，`/` 补全命令，`@` 选择文件。`omp -c` 可继续当前项目最近会话；`omp -P work` 使用独立 profile，`omp -P work -c` 在该 profile 中继续。配置、聊天记录与 Knowledge／Repo 数据库按 profile 隔离。终端操作见 [TUI 交互与个人默认行为](concepts/tui-and-personal-defaults.md)。
 
 不要把上游 README 中的公共 npm、Homebrew 或安装脚本命令当作本 fork 的发布渠道：本 fork 的安装器面向其自身 Release 二进制，当前新 Release 目标为 Linux glibc x64 和 Windows x64；macOS、musl 和其他 Linux 架构没有对应的新预编译资产。安装方式和更新安全边界见 [Fork 上游同步与资源交付](operations/fork-maintenance.md) 及[运行契约](../openspec/specs/fork-runtime/spec.md)。
 
@@ -85,9 +85,9 @@ omp
 | --- | --- |
 | 理解终端、桌面和核心的责任边界 | [系统分层](architecture/system-map.md) → [会话与持久化恢复](architecture/session-runtime.md)；非交互宿主看 [SDK、RPC、ACP 与扩展](integrations/headless-and-extension-surfaces.md) |
 | 规划并实现一个受控开发任务 | [Dev 四阶段、批准与恢复](workflows/dev-lifecycle.md)；多代理只读讨论看 [Team](workflows/team-discussion.md)，持续目标与预算看 [Goal](workflows/goal-autopilot.md)。三者不是同一开关。 |
-| 查询公司资料 | 先在 `/wiki` 导入 Markdown，或在系统终端运行 `omp docs init "/path/to/company-markdown" --name "company-docs"`；终端和会话使用相同数据根及 profile。[Wiki 文档证据索引](concepts/wiki-document-index.md)解释快照、检索与引用。 |
+| 查询公司资料 | 先在 `/knowledge` 导入 Markdown，或在系统终端运行 `omp knowledge init "/path/to/company-markdown" --name "company-docs"`；终端和会话使用相同数据根及 profile。[Knowledge 文档证据索引](concepts/knowledge-document-index.md)解释快照、检索与引用。 |
 | 定位当前项目代码 | 在 `/repo` 面板确认根目录并建立索引；它不自动建库。索引命中只是线索，修改前读取当前源码；外部编辑或切分支后应更新索引。详见 [Repo 代码索引](concepts/repo-code-index.md)。 |
-| 生成仓库知识页而非导入资料 | 查看 [OpenWiki 生成与内置资源集成](integrations/openwiki-generation.md)；生成的页面与 `/wiki` 的文档数据库是不同流程。 |
+| 生成仓库知识页而非导入资料 | 查看 [OpenWiki 生成与内置资源集成](integrations/openwiki-generation.md)；生成的页面与 `/knowledge` 的文档数据库是不同流程。 |
 | 使用或修改技能、规范资源 | 查看 [技能发现、OpenSpec 与 Superpowers](integrations/skills-and-spec-resources.md)；扩展宿主或工具还应检查[扩展边界](integrations/headless-and-extension-surfaces.md)。 |
 | 安全修改执行、权限或同步上游 | 先看[工具权限、任务与原生执行](architecture/tools-and-execution.md)及 [Fork 维护](operations/fork-maintenance.md)，再按[验证门禁](testing/verification-gates.md)选择 `bun run fastcheck`、`bun run fulltest` 或 `bun run slowtest`，并补充对应真实入口验收。 |
 

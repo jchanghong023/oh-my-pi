@@ -261,7 +261,7 @@ export function resolveXdevTool(state: XdevState, name: string): Tool | undefine
 /** Index queries retain native read-only policy and scheduling through the write transport. */
 export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string): boolean {
 	return (
-		(name === "wiki" ||
+		(name === "knowledge_search" ||
 			name === "repo" ||
 			name === "openwiki_search" ||
 			name === "openwiki_read" ||

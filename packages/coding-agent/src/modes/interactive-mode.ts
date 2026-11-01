@@ -9744,8 +9744,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	showAgentsDashboard(): void {
 		void this.#selectorController.showAgentsDashboard();
 	}
-	showDocsDashboard(): void {
-		void this.#selectorController.showDocsDashboard();
+	showKnowledgeDashboard(): void {
+		void this.#selectorController.showKnowledgeDashboard();
 	}
 	showRepoDashboard(): void {
 		void this.#selectorController.showRepoDashboard();

@@ -27,7 +27,7 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 - 离线 models/bench 的 cache-only 日志仅描述目录发现/刷新，不代表模型请求离线；初始化及后续 selector-miss 刷新保留起止关联。WSL helper 预检拒绝记录有界原因码，不复制 helper 输出正文。
 - 凭据、Authorization/Cookie、URL 认证与敏感查询参数、用户输入、提示词、源码、文档/响应正文 MUST NOT 直接入日志。仅记录有界、脱敏的类型、代码、状态、计数、长度和必要栈帧；不得无限复制 stdout/stderr 或大对象。
 - 日志目录不可写时 MUST 尝试合理的用户级目录回退；仍失败则向 stderr 有界报告日志初始化故障；日志失败不能递归、掩盖业务结果或使业务崩溃。启动/退出须可追踪并刷新关键记录。
-- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、docs/wiki、repo/AST 通知、company 与向量请求、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
+- 本契约覆盖已保留的 fork 功能及其公共边界：team、Goal、knowledge、repo/AST 通知、company 与向量请求、门禁和安装/更新；补日志不改变业务控制流、权限、重试次数或超时。验收包含真实入口的成功/失败、适用的网络与 IPC/子进程异常、关联重建及生成日志的敏感信息检查。
 
 #### Scenario: 运行诊断日志的可观察行为
 
@@ -47,9 +47,9 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 - fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定。
 - fork 新增 `-P <name>` 作为 `--profile <name>` 的短参数，无需 shell alias。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 数据根：agent 数据、Wiki／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 数据根：agent 数据、Knowledge／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
 - native addon 与 grammar 安装器 MUST 使用同一有效数据根及 profile 解析；显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录。此规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
-- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Wiki 等子目录沿用 profile 内布局，不再单独指定活动目录。
+- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Knowledge 等子目录沿用 profile 内布局，不再单独指定活动目录。
 - **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；宿主不要求永久保留其临时叶，也不通过 `client.close()` 关闭共享 scope。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。

@@ -1,0 +1,362 @@
+//! DB slice reconstruction for original-line regex matching.
+use std::collections::VecDeque;
+
+use grep_matcher::Matcher;
+use pi_walker::grep::Engine;
+use rusqlite::Connection;
+
+use super::{
+	database::{KnowledgeError, PathScope},
+	markdown::{ContextSection, ContextSectionRef, SectionContextScanner},
+	query::{MatchKind, RankedSection},
+};
+
+type CoreResult<T> = Result<T, KnowledgeError>;
+type Check<'a> = &'a dyn Fn() -> CoreResult<()>;
+
+struct PendingSection {
+	start:   i64,
+	end:     i64,
+	ranked:  RankedSection,
+	matched: bool,
+}
+
+#[derive(Default)]
+struct Lines {
+	text:     String,
+	start:    i64,
+	end:      i64,
+	newlines: VecDeque<i64>,
+	sections: VecDeque<PendingSection>,
+	ranked:   Vec<RankedSection>,
+}
+
+impl Lines {
+	fn append(&mut self, section: &ContextSection, shape: super::query::Shape) -> CoreResult<()> {
+		let length = section.byte_end - section.byte_start;
+		if length < 0 || length as usize != section.raw_markdown.len() {
+			return Err(KnowledgeError::message("Documentation search snapshot is inconsistent"));
+		}
+		if self.text.is_empty() && self.sections.is_empty() {
+			self.start = section.byte_start;
+			self.end = section.byte_start;
+		}
+		if section.byte_start > self.end {
+			return Err(KnowledgeError::message(
+				"Documentation search snapshot has a missing line slice",
+			));
+		}
+		// Compare every shared byte before discarding the repeated prefix,
+		// including slices that add no suffix at all. Neither stored copy is
+		// authoritative when overlapping rows disagree.
+		let overlap_end = section.byte_end.min(self.end);
+		if section.byte_start < self.start {
+			return Err(KnowledgeError::message("Documentation search snapshot is inconsistent"));
+		}
+		let offset = (section.byte_start - self.start) as usize;
+		let overlap = (overlap_end - section.byte_start) as usize;
+		if self.text.as_bytes().get(offset..offset + overlap)
+			!= section.raw_markdown.as_bytes().get(..overlap)
+		{
+			return Err(KnowledgeError::message("Documentation search snapshot is inconsistent"));
+		}
+		self.sections.push_back(PendingSection {
+			start:   section.byte_start,
+			end:     section.byte_end,
+			ranked:  RankedSection {
+				section_id: section.section_id,
+				shape,
+				match_kind: MatchKind::Regex,
+				rank: 0.0,
+			},
+			matched: false,
+		});
+		if section.byte_end > self.end {
+			let offset = (self.end - section.byte_start) as usize;
+			let suffix = section.raw_markdown.get(offset..).ok_or_else(|| {
+				KnowledgeError::message("Documentation search snapshot is inconsistent")
+			})?;
+			for (position, byte) in suffix.bytes().enumerate() {
+				if byte == b'\n' {
+					self.newlines.push_back(self.end + position as i64 + 1);
+				}
+			}
+			self.text.push_str(suffix);
+			self.end = section.byte_end;
+		}
+		Ok(())
+	}
+
+	fn flush(
+		&mut self,
+		safe_end: i64,
+		finish: bool,
+		matcher: &Engine,
+		check: Check<'_>,
+	) -> CoreResult<()> {
+		let mut consumed = 0;
+		while let Some(end) = self
+			.newlines
+			.front()
+			.copied()
+			.filter(|end| finish || *end <= safe_end)
+		{
+			check()?;
+			self.newlines.pop_front();
+			let until = (end - self.start) as usize;
+			// Existing line grep uses LF terminators, retaining CR in CRLF lines.
+			self.match_line(consumed, until - 1, matcher, check)?;
+			consumed = until;
+			self.retire(end);
+		}
+		if finish && consumed < self.text.len() {
+			check()?;
+			self.match_line(consumed, self.text.len(), matcher, check)?;
+			consumed = self.text.len();
+		}
+		if consumed != 0 {
+			self.text.drain(..consumed);
+			self.start += consumed as i64;
+		}
+		if finish {
+			self.retire(i64::MAX);
+		}
+		Ok(())
+	}
+
+	fn match_line(
+		&mut self,
+		from: usize,
+		until: usize,
+		matcher: &Engine,
+		check: Check<'_>,
+	) -> CoreResult<()> {
+		let line = &self.text[from..until];
+		let mut at = 0;
+		let mut previous_end = None;
+		let mut section_at = 0;
+		loop {
+			check()?;
+			let found = matcher.find_at(line.as_bytes(), at).map_err(|error| {
+				KnowledgeError::message(format!("Documentation grep regex error: {error}"))
+			})?;
+			let Some(found) = found else { break };
+			// Suppress an empty match immediately following the previous match.
+			// Advance on UTF-8 boundaries so PCRE2 never sees a bad UTF offset.
+			if found.is_empty() && previous_end == Some(found.end()) {
+				if found.end() == line.len() {
+					break;
+				}
+				at = line.ceil_char_boundary(found.end() + 1);
+				continue;
+			}
+			let start = self.start + from as i64 + found.start() as i64;
+			let end = self.start + from as i64 + found.end() as i64;
+			// Matches and section starts are ordered. Advance past matched or
+			// expired sections, leaving only the first future section for the
+			// next match. Reset this cursor per line: an unmatched section may
+			// still contain a match on a later line.
+			while let Some(section) = self.sections.get_mut(section_at) {
+				check()?;
+				if section.start > end || (start != end && section.start == end) {
+					break;
+				}
+				// Empty matches include both endpoints, including shared edges.
+				if section.end > start || (start == end && section.end == start) {
+					section.matched = true;
+				}
+				section_at += 1;
+			}
+			previous_end = Some(found.end());
+			if found.is_empty() {
+				if found.end() == line.len() {
+					break;
+				}
+				at = line.ceil_char_boundary(found.end() + 1);
+			} else {
+				at = found.end();
+			}
+		}
+		Ok(())
+	}
+
+	fn retire(&mut self, end: i64) {
+		while self
+			.sections
+			.front()
+			.is_some_and(|section| section.end <= end)
+		{
+			let section = self.sections.pop_front().expect("pending section");
+			if section.matched {
+				self.ranked.push(section.ranked);
+			}
+		}
+	}
+}
+
+/// Scan stored document slices for regex matches on original lines.
+pub(crate) fn scan(
+	connection: &Connection,
+	matcher: &Engine,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	check: Check<'_>,
+) -> CoreResult<Vec<RankedSection>> {
+	let mut statement = connection.prepare_cached(
+		"SELECT s.id,s.document_id,s.byte_start,s.byte_end,s.raw_markdown,d.relative_path FROM \
+		 sections s LEFT JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON \
+		 i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (? IS NULL OR i.name=?) ORDER BY \
+		 s.index_id,s.document_id,s.ordinal,s.id",
+	)?;
+	let index = index.map(super::storage::sqlite_text);
+	let mut rows = statement.query(rusqlite::params![index, index])?;
+	let mut lines = Lines::default();
+	let mut previous: Option<ContextSection> = None;
+	let mut scanner = SectionContextScanner::default();
+	while let Some(row) = rows.next()? {
+		check()?;
+		if let Some(path) = path
+			&& !matches!(row.get_ref(5)?, rusqlite::types::ValueRef::Text(value) if path.matches(value))
+		{
+			continue;
+		}
+		let mut section: ContextSection = ContextSection {
+			section_id:   row.get(0)?,
+			document_id:  row.get(1)?,
+			byte_start:   row.get(2)?,
+			byte_end:     row.get(3)?,
+			raw_markdown: row.get(4)?,
+		};
+		// Legacy writers projected away the document-leading UTF-8 BOM but
+		// kept its byte range. Restore only that first-section three-byte
+		// deficit; all other range mismatches still fail in Lines::append.
+		if section.byte_start == 0
+			&& section.byte_end == section.raw_markdown.len() as i64 + 3
+			&& !section.raw_markdown.starts_with('\u{feff}')
+		{
+			section.raw_markdown.insert(0, '\u{feff}');
+		}
+		// Converter-only headings are intentionally absent from both new and
+		// existing indexes. Finish each stored run independently: omitted bytes
+		// are neither evidence nor a bridge between original lines.
+		let same_run = previous.as_ref().is_some_and(|previous| {
+			let overlaps_stored_bytes = section.byte_start <= previous.byte_end;
+			previous.document_id == section.document_id && overlaps_stored_bytes
+		});
+		lines.flush(section.byte_start, !same_run, matcher, check)?;
+		if !same_run {
+			previous = None;
+		}
+		let context = scanner.lex_context(
+			previous.as_ref().map(ContextSectionRef::from),
+			ContextSectionRef::from(&section),
+		);
+		let shape = if context.fence_prefix.is_none() && !context.continues_line {
+			super::markdown::section_shape(&section.raw_markdown)
+		} else {
+			context.shape
+		};
+		lines.append(&section, shape)?;
+		previous = Some(section);
+	}
+	lines.flush(i64::MAX, true, matcher, check)?;
+	check()?;
+	Ok(lines.ranked)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn slice_connection(source: &str, slices: &[(usize, usize)]) -> Connection {
+		let connection = Connection::open_in_memory().unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT NOT NULL);
+				 CREATE TABLE documents(id INTEGER PRIMARY KEY,relative_path TEXT NOT NULL);
+				 CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER NOT NULL,
+				 document_id INTEGER NOT NULL,ordinal INTEGER NOT NULL,byte_start INTEGER NOT NULL,
+				 byte_end INTEGER NOT NULL,raw_markdown TEXT NOT NULL);
+				 INSERT INTO doc_indexes VALUES(1,'manual');
+				 INSERT INTO documents VALUES(1,'source.md');",
+			)
+			.unwrap();
+		for (ordinal, &(start, end)) in slices.iter().enumerate() {
+			connection
+				.execute("INSERT INTO sections VALUES(?,1,1,?,?,?,?)", rusqlite::params![
+					(slices.len() - ordinal) as i64,
+					ordinal as i64,
+					start as i64,
+					end as i64,
+					&source[start..end]
+				])
+				.unwrap();
+		}
+		connection
+	}
+
+	fn matched_ids(connection: &Connection, expression: &str) -> CoreResult<Vec<i64>> {
+		let matcher = pi_walker::grep::build_strict_matcher(expression, false).unwrap();
+		Ok(scan(connection, &matcher, None, None, &|| Ok(()))?
+			.into_iter()
+			.map(|section| section.section_id)
+			.collect())
+	}
+
+	#[test]
+	fn sqlite_scan_preserves_long_unicode_crlf_lines_with_500_byte_overlap() {
+		let source = format!("α{}needle{}界\r\n\r\nlast\r\n", "a".repeat(600), "b".repeat(600));
+		let connection = slice_connection(&source, &[(0, 1000), (500, source.len())]);
+		assert_eq!(matched_ids(&connection, "^αa+needleb+界\\r$").unwrap(), [2, 1]);
+		assert_eq!(matched_ids(&connection, "^last\\r$").unwrap(), [1]);
+		assert_eq!(matched_ids(&connection, "^\\r$").unwrap(), [1]);
+		assert!(
+			matched_ids(&connection, "^αa+needleb+界$")
+				.unwrap()
+				.is_empty()
+		);
+	}
+
+	#[test]
+	fn sqlite_scan_rejects_same_length_conflicting_overlap_in_either_copy() {
+		let source = format!("α{}needle{}界\r\nlast\r\n", "a".repeat(600), "b".repeat(600));
+		for ordinal in [0, 1] {
+			let connection = slice_connection(&source, &[(0, 1000), (500, source.len())]);
+			assert_eq!(matched_ids(&connection, "needle").unwrap(), [2, 1]);
+			connection
+				.execute(
+					"UPDATE sections SET raw_markdown=replace(raw_markdown,'needle','xxxxxx') WHERE \
+					 ordinal=?",
+					[ordinal],
+				)
+				.unwrap();
+			for expression in ["needle", "xxxxxx", "not_present"] {
+				let error = matched_ids(&connection, expression).unwrap_err();
+				assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
+			}
+		}
+	}
+
+	#[test]
+	fn sqlite_scan_validates_contained_and_duplicate_slices_without_a_new_suffix() {
+		let source = format!("α{}needle{}界", "a".repeat(600), "b".repeat(600));
+		for slices in [[(0, source.len()), (500, 1000)], [(0, source.len()), (0, source.len())], [
+			(0, 1000),
+			(0, source.len()),
+		]] {
+			let connection = slice_connection(&source, &slices);
+			assert_eq!(matched_ids(&connection, "needle").unwrap(), [2, 1]);
+			connection
+				.execute(
+					"UPDATE sections SET raw_markdown=replace(raw_markdown,'needle','xxxxxx') WHERE \
+					 ordinal=1",
+					[],
+				)
+				.unwrap();
+			for expression in ["needle", "xxxxxx"] {
+				let error = matched_ids(&connection, expression).unwrap_err();
+				assert_eq!(error.error_message(), "Documentation search snapshot is inconsistent");
+			}
+		}
+	}
+}

@@ -63,10 +63,10 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源，也不移除这些文档的源码快照完整性核验；缺少合格基线和显式 `--full` 的行为不变。
 - `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
-- `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `pi-wiki` 全包、`pi-natives` 的 `wiki::` 绑定测试和 `python_symbols::`；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p pi-wiki --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`pi-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
+- `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `pi-knowledge` 全包、`pi-natives` 的 `knowledge::` 绑定测试和 `python_symbols::`；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p pi-knowledge --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`pi-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
 - 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust。Bun 文件依赖是近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
 - 通过子进程启动 CLI 的测试须在公共 harness 或独立启动器中静态声明真实运行依赖，让 Bun `--changed` 能识别间接消费者；Tools registry 可作为输入，不能导入并执行 CLI 主入口来构造依赖图。
-- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`pi-wiki` 被选时才独立运行 doctest；`pi-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
+- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`pi-knowledge` 被选时才独立运行 doctest；`pi-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
 - cargo-delta 须预先安装 `cargo install cargo-delta --version 0.5.0 --locked`，门禁不自动安装；其标准分析缓存不是测试结果缓存。直接 `test:rs` 始终运行完整 fork 范围，`--full` 始终运行完整 workspace，不使用 delta。Git／cargo-delta 未选阶段记录有效基线 revision、相对变更路径、原因和零选择，cargo-delta 另记录空包列表；不虚构 XML、用例或耗时。实际受影响包的 Nextest 保留真实 JUnit、包列表和基线，doctest 按实际阶段状态报告；全未选可报告真实零执行，混合报告保留实际 XML 与失败，均不得当作完整新执行或完整基线。
 - 单个用例、文件或语言套件失败后继续执行独立的其余必需测试，Nextest 与 rustdoc 使用 `--no-fail-fast`，Bun 不添加 `--bail`，pytest 不添加 `-x`；只有总预算、取消或完整性阻断可终止剩余工作。
 - 默认 fulltest 不自动纳入独立 Go/Rust SDK；安装测试和另需授权的集成入口也不自动纳入 `--full`。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
@@ -119,7 +119,7 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 #### Scenario: 受影响测试与回退
 
 - **WHEN** 运行本机或适用 WSL 的 fulltest
-- **THEN** Bun 在 fork 白名单内依据合格基线使用 `--changed`；不可建立有效选择时回退完整白名单。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `pi-wiki` 才运行其 Cargo doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
+- **THEN** Bun 在 fork 白名单内依据合格基线使用 `--changed`；不可建立有效选择时回退完整白名单。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `pi-knowledge` 才运行其 Cargo doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
 - **AND** 选择结果区分执行、排除和未选中，报告 full 或 affected；历史执行与平台跳过不算本轮通过，选择近似不证明完整新回归
 - **AND** 失败、取消或未完成的上次执行不得仅因已有历史数据而被排除；运行器须实际重跑并保留真实失败退出码
 
@@ -132,7 +132,7 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 #### Scenario: Rust 修改 A 选择受影响 crate
 
 - **WHEN** Rust 源码 A 变化且存在合格基线，cargo-delta 能确定受影响包
-- **THEN** 以 Cargo metadata 逆向依赖与 Git 变更分析选出受影响 crate，在 fork 范围内只对交集执行 Nextest；`pi-wiki` 被选才执行其 doctest。空交集不启动 Cargo，保留正常增量编译缓存；动态或未知输入不能被假定为已完整追踪，仍须适时完整回归
+- **THEN** 以 Cargo metadata 逆向依赖与 Git 变更分析选出受影响 crate，在 fork 范围内只对交集执行 Nextest；`pi-knowledge` 被选才执行其 doctest。空交集不启动 Cargo，保留正常增量编译缓存；动态或未知输入不能被假定为已完整追踪，仍须适时完整回归
 
 #### Scenario: 连续运行验收
 

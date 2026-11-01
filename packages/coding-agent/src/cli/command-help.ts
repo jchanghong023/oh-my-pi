@@ -63,8 +63,8 @@ export const compressHelp = {
 } satisfies CommandMetadata;
 
 export const configHelp = { description: "Manage configuration settings" } satisfies CommandMetadata;
-export const docsHelp = {
-	description: "Manage persistent external Markdown document indexes",
+export const knowledgeHelp = {
+	description: "Manage persistent knowledge indexes of external Markdown documents",
 } satisfies CommandMetadata;
 
 export const dryBalanceHelp = {

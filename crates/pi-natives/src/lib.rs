@@ -50,6 +50,7 @@ pub mod html;
 pub mod ipc;
 pub mod js;
 pub mod keys;
+pub mod knowledge;
 pub mod line_match;
 pub mod live;
 pub mod memory;
@@ -83,7 +84,6 @@ pub mod tokens;
 pub mod tty_writer;
 pub(crate) mod utils;
 pub mod vectors;
-pub mod wiki;
 pub mod workspace;
 
 #[cfg(target_os = "windows")]

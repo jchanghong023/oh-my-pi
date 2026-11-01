@@ -110,7 +110,7 @@ import { AgentHubOverlayComponent } from "@oh-my-pi/pi-tui/overlays/agent-hub";
 import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
-import { DocsHubComponent } from "../components/docs-hub";
+import { KnowledgeHubComponent } from "../components/knowledge-hub";
 import { RepoHubComponent } from "../components/repo-hub";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
@@ -178,7 +178,7 @@ type MenuKind =
 	| "model-picker-select"
 	| "model-hub"
 	| "agents-dashboard"
-	| "docs-dashboard"
+	| "knowledge-dashboard"
 	| "repo-dashboard"
 	| "agent-hub"
 	| "usage-dashboard";
@@ -686,29 +686,29 @@ export class SelectorController {
 		this.#mountMenu(menu, hub, () => this.#showFullscreenMenu(hub));
 	}
 
-	async showDocsDashboard(): Promise<void> {
-		if (this.#focusOpenMenu("docs-dashboard")) return;
-		const menu = this.#claimMenu("docs-dashboard");
+	async showKnowledgeDashboard(): Promise<void> {
+		if (this.#focusOpenMenu("knowledge-dashboard")) return;
+		const menu = this.#claimMenu("knowledge-dashboard");
 		let closed = false;
-		let hub: DocsHubComponent | undefined;
+		let hub: KnowledgeHubComponent | undefined;
 		const done = () => {
 			if (closed) return;
 			closed = true;
 			hub?.dispose();
 			menu.handle?.hide();
-			this.#releaseMenu("docs-dashboard", menu);
+			this.#releaseMenu("knowledge-dashboard", menu);
 			this.focusActiveEditorArea();
 			this.ctx.ui.requestRender();
 		};
 		try {
-			hub = await DocsHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
+			hub = await KnowledgeHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
 			const component = hub;
 			this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
 		} catch (error) {
 			// A failed open (unsupported index database, missing FTS5, unreadable
 			// path) surfaces in the status line instead of silently dying.
 			hub?.dispose();
-			this.#releaseMenu("docs-dashboard", menu);
+			this.#releaseMenu("knowledge-dashboard", menu);
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
 	}

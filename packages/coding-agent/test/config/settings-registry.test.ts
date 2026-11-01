@@ -399,25 +399,25 @@ describe("settings registry", () => {
 	});
 
 	it("registers Wiki reranker settings for isolated and loaded configuration", async () => {
-		const model = lookup("wiki.reranker.model");
-		const url = lookup("wiki.reranker.baseUrl");
-		const key = lookup("wiki.reranker.apiKey");
+		const model = lookup("knowledge.reranker.model");
+		const url = lookup("knowledge.reranker.baseUrl");
+		const key = lookup("knowledge.reranker.apiKey");
 		expect(key?.isCredential).toBe(true);
-		const isolated = Settings.isolated({ "wiki.reranker.model": "isolated" });
+		const isolated = Settings.isolated({ "knowledge.reranker.model": "isolated" });
 		expect(model?.get(isolated)).toBe("isolated");
 		url?.set(isolated, "https://example.test/v1");
 		key?.set(isolated, "secret");
 		expect(url?.get(isolated)).toBe("https://example.test/v1");
 		expect(key?.get(isolated)).toBe("secret");
 
-		const temp = TempDir.createSync("@pi-wiki-settings-");
+		const temp = TempDir.createSync("@pi-knowledge-settings-");
 		try {
 			const agentDir = temp.join("agent");
 			fs.mkdirSync(agentDir, { recursive: true });
 			fs.writeFileSync(
 				path.join(agentDir, "config.yml"),
 				YAML.stringify({
-					wiki: { reranker: { model: "loaded", baseUrl: "https://loaded.test", apiKey: "loaded-secret" } },
+					knowledge: { reranker: { model: "loaded", baseUrl: "https://loaded.test", apiKey: "loaded-secret" } },
 				}),
 			);
 			const loaded = await Settings.loadReadOnly({ agentDir, cwd: agentDir });

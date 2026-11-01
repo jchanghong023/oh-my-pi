@@ -2198,7 +2198,7 @@ export class ZCodeServer {
 			case "omp/wiki/grep":
 			case "omp/wiki/cancel":
 				this.#registerIndexWorkspace(raw);
-				return this.indexes.handleWiki(method.slice("omp/wiki/".length), raw, this.#lifetime.signal);
+				return this.indexes.handleKnowledge(method.slice("omp/wiki/".length), raw, this.#lifetime.signal);
 			case "omp/repo/status":
 			case "omp/repo/init":
 			case "omp/repo/update":

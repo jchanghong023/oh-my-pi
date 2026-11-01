@@ -11,7 +11,7 @@ export interface RustDeltaSelection {
 	reason: string;
 }
 
-const FORK_PACKAGES = ["pi-wiki", "pi-natives"];
+const FORK_PACKAGES = ["pi-knowledge", "pi-natives"];
 const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 const PACKAGE = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 

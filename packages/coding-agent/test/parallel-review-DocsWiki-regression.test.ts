@@ -4,8 +4,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Settings } from "../src/config/settings";
-import { DocsSearchEngine } from "../src/docs/engine";
-import { WikiTool } from "../src/tools/wiki";
+import { KnowledgeIndexEngine } from "../src/knowledge/engine";
+import { KnowledgeSearchTool } from "../src/tools/knowledge-search";
 
 const tempDirs: string[] = [];
 
@@ -25,7 +25,7 @@ describe("Document fence indexing regressions", () => {
 		const agentDir = await tempDir("docs-unicode-fence-agent-");
 		const source = "# Notes\n```python\u2028metadata\ncounter*factor*next\n```\n";
 		await Bun.write(path.join(root, "notes.md"), source);
-		const writer = new DocsSearchEngine({ agentDir });
+		const writer = new KnowledgeIndexEngine({ agentDir });
 		let sectionId: number;
 		try {
 			await writer.init(root, "manual");
@@ -48,7 +48,7 @@ describe("Document fence indexing regressions", () => {
 			writer.close();
 		}
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsSearchEngine({ agentDir });
+		const reader = new KnowledgeIndexEngine({ agentDir });
 		try {
 			expect(reader.search("counter*factor*next").sections[0]).toMatchObject({ sectionId, text: source });
 			expect(reader.search("counterfactornext").sections).toEqual([]);
@@ -64,7 +64,7 @@ describe("Document fence indexing regressions", () => {
 		await Bun.write(path.join(root, "code.md"), source);
 		const overlapSource = `\`\`\`python\n${"z".repeat(35_000)}\`\`\`${" ".repeat(600)}\nmask*value*tail\n\`\`\`\n`;
 		await Bun.write(path.join(root, "overlap.md"), overlapSource);
-		const writer = new DocsSearchEngine({ agentDir });
+		const writer = new KnowledgeIndexEngine({ agentDir });
 		try {
 			await writer.init(root, "manual");
 			const hit = writer.search("Row").sections[0];
@@ -80,7 +80,7 @@ describe("Document fence indexing regressions", () => {
 			writer.close();
 		}
 		await fs.rm(root, { recursive: true });
-		const reader = new DocsSearchEngine({ agentDir });
+		const reader = new KnowledgeIndexEngine({ agentDir });
 		try {
 			expect(reader.search("Row").sections[0].text).toBe("# Row\n");
 			expect(reader.search("Cell").sections).toEqual([]);
@@ -88,7 +88,7 @@ describe("Document fence indexing regressions", () => {
 			expect(reader.search("counterfactornext").sections).toEqual([]);
 			expect(reader.search("mask*value*tail").sections[0].text).toContain("mask*value*tail");
 			expect(reader.search("maskvaluetail").sections).toEqual([]);
-			const tool = new WikiTool({
+			const tool = new KnowledgeSearchTool({
 				cwd: root,
 				hasUI: false,
 				settings: { getAgentDir: () => agentDir } as unknown as Settings,
@@ -126,7 +126,7 @@ describe("Document literal boundary regressions", () => {
 		for (const [name, source] of Object.entries(sources)) {
 			await Bun.write(path.join(root, name), source);
 		}
-		const engine = new DocsSearchEngine({ agentDir });
+		const engine = new KnowledgeIndexEngine({ agentDir });
 		try {
 			await engine.init(root, "manual");
 			await fs.rm(root, { recursive: true });

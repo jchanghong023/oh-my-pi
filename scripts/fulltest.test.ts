@@ -73,7 +73,7 @@ test("script selection uses changed modules and existing tests, not business fil
 
 test("Bun traces only known static inputs; unknown and dynamic inputs fall back", () => {
 	expect(bunRequiresFullSelection([])).toBe(false);
-	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/wiki.ts"])).toBe(false);
+	expect(bunRequiresFullSelection(["packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
 	for (const file of [
 		"Cargo.lock",
 		"packages/natives/src/lib.rs",
@@ -90,7 +90,7 @@ test("Bun traces only known static inputs; unknown and dynamic inputs fall back"
 test("root documentation does not force full Bun selection or hide changed runtime inputs", () => {
 	const docs = ["docs/guide.md", "docs-zh-CN/guide.md", "AGENTS.md"];
 	expect(bunRequiresFullSelection(docs)).toBe(false);
-	expect(bunRequiresFullSelection([...docs, "packages/coding-agent/src/tools/wiki.ts"])).toBe(false);
+	expect(bunRequiresFullSelection([...docs, "packages/coding-agent/src/tools/knowledge-search.ts"])).toBe(false);
 	expect(bunRequiresFullSelection([...docs, "Cargo.lock"])).toBe(true);
 	expect(bunRequiresFullSelection(["packages/coding-agent/src/prompts/system.md"])).toBe(true);
 	expect(bunRequiresFullSelection(["packages/coding-agent/docs/guide.md"])).toBe(true);
@@ -108,17 +108,22 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		fail: (error: unknown) => error,
 	} as unknown as GateRun;
 	const cases = [
-		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: [], full: false, bunFull: false },
+		{ changed: ["packages/coding-agent/src/tools/knowledge-search.ts"], packages: [], full: false, bunFull: false },
 		{ changed: ["Cargo.lock"], packages: [], full: false, bunFull: true },
 		{
-			changed: ["packages/coding-agent/src/tools/wiki.ts"],
-			packages: ["pi-wiki", "other-crate"],
+			changed: ["packages/coding-agent/src/tools/knowledge-search.ts"],
+			packages: ["pi-knowledge", "other-crate"],
 			full: false,
 			bunFull: false,
 		},
-		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: ["other-crate"], full: false, bunFull: false },
+		{
+			changed: ["packages/coding-agent/src/tools/knowledge-search.ts"],
+			packages: ["other-crate"],
+			full: false,
+			bunFull: false,
+		},
 		{ changed: ["Cargo.lock"], packages: ["pi-natives"], full: false, bunFull: true },
-		{ changed: ["packages/coding-agent/src/tools/wiki.ts"], packages: [], full: true, bunFull: true },
+		{ changed: ["packages/coding-agent/src/tools/knowledge-search.ts"], packages: [], full: true, bunFull: true },
 	] as const;
 	for (const scenario of cases) {
 		const commands: { label: string; argv: readonly string[]; env?: Record<string, string | undefined> }[] = [];
@@ -158,7 +163,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		const rust = commands.filter(
 			command => command.label === (scenario.full ? "test/Rust workspace" : "test/Rust fork features"),
 		);
-		const forkAffected = scenario.packages.some(pkg => pkg === "pi-wiki" || pkg === "pi-natives");
+		const forkAffected = scenario.packages.some(pkg => pkg === "pi-knowledge" || pkg === "pi-natives");
 		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
 		if (rust.length) {
 			expect(rust[0]!.argv).toEqual([
@@ -226,7 +231,7 @@ test("delta failure and absence of a qualified baseline retain the full Rust for
 		expect(JSON.parse(rust[0]!.env!.OMP_RUST_DELTA_SELECTION!)).toMatchObject({
 			tool: "cargo-delta",
 			mode: "full",
-			packages: ["pi-wiki", "pi-natives"],
+			packages: ["pi-knowledge", "pi-natives"],
 		});
 	}
 });

@@ -34,7 +34,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 Repo 是本地、离线的代码定位索引：它保存纳入范围的文本和 Python 定义候选，减少反复扫描源码的成本。它不是当前文件系统的实时镜像，也不推断调用图、依赖或影响范围。索引命中的行号和片段属于发布该代次时的文本；编辑前应使用 `read` 核对当前文件，需要当前或穷尽的检索时使用 `grep` 等文件工具。
 
-它与手动维护的 [Wiki 文档索引](wiki-document-index.md) 是不同的数据库和查询链路，也不等同于 [OpenWiki 页面生成](../integrations/openwiki-generation.md)。工具的调度和执行背景见[工具与执行](../architecture/tools-and-execution.md)。
+它与手动维护的 [Knowledge 文档索引](knowledge-document-index.md) 是不同的数据库和查询链路，也不等同于 [OpenWiki 页面生成](../integrations/openwiki-generation.md)。工具的调度和执行背景见[工具与执行](../architecture/tools-and-execution.md)。
 
 ## 入口与身份
 

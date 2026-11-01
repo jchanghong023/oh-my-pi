@@ -1772,7 +1772,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 
 		try {
 			expect(session.getToolByName("repo")).toBeDefined();
-			expect(session.getActiveToolNames()).toContain("wiki");
+			expect(session.getActiveToolNames()).toContain("knowledge_search");
 			expect(session.getActiveToolNames()).toContain("repo");
 			for (const name of openwikiQueryTools) {
 				expect(session.getToolByName(name)).toBeDefined();
@@ -2280,7 +2280,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			expect(activeToolNames).toEqual(
 				expect.arrayContaining(["read", "yield", "generate_image", "learn", "manage_skill", "write"]),
 			);
-			expect(activeToolNames).toContain("wiki");
+			expect(activeToolNames).toContain("knowledge_search");
 			expect(activeToolNames).toContain("repo");
 			// Explicit and force-included tools stay top-level. Ambient custom and
 			// extension capabilities mount through the device-only write transport.
@@ -2317,7 +2317,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		try {
 			const activeToolNames = session.getActiveToolNames();
 			expect(activeToolNames).toContain("bash");
-			expect(activeToolNames).not.toContain("wiki");
+			expect(activeToolNames).not.toContain("knowledge_search");
 			expect(activeToolNames).not.toContain("repo");
 		} finally {
 			await session.dispose();

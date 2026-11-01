@@ -1,0 +1,324 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:e5bd1bd6178fff64c93c8d79154ca70a87911f924ddcdfdacd585953dbb812c2",
+  "claims": [
+    {
+      "id": "claim_2a3bfe9808334cc297d20b6a13c22e2f",
+      "statement": "Knowledge 管理仅有 init 和 remove；同名拒绝，刷新须先 remove 再 init，删除不影响源文件，名称受长度、控制字符和保留前缀约束。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L20-L22",
+          "version": "repo-lines-v1:sha256:ddf441c752e9002c3addbd9c3c675bbdd9dd292e2058e8e8a6dda695de4adddf:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTJhOGI1MmI1ZTk2ZjM0YmNlMjY0ZDcxZjk0NDFkNThiYmM4NGMzY2JlNTQ5NjU2YWFlZThhZDc0MTliZDA4MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTRhNjcwZTk1MDg0ZjJhNjJhNmYwYmU4NTY3NjVjOTZlYzNjNWEzZGIzYzE0ZThlYTY3MTZiZWYyNDgwZWY2NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmVhNGQ5YWZhMzUyYzgwODM1ZTg2MzIyYzdkYTEyZmQyMDk3MWVkOWVlZTU4NzFlODkxOGE0OWQzM2EzNzczYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjdkNjY1MjFjMTY0OGRmMDI2Mzc1YjgxM2QwMTQ3ZTg5NTJiYTZiOGJlODI5YjU5Nzk0NmMyYjliNmYwNDM5MSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L90-L104",
+          "version": "repo-lines-v1:sha256:cca06e02b2c7a45a0bcc92c97ba1fc93b94e0ccd044849290f26d443f9d99195:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzYjkxYTJiMzAwZTg2NjQ4YWVkMjcwMDZmYmNlMTNkNDFkMzRmNzk3MTk4OThjM2NjZjEyZjNhOTAxMmU0MjgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImZmNDYzZjQ5MDRmMTRmODNiZjM1MGU3OWFiMmRiNTNmYTdkNTk5OGFiOWUxNzEzZjg0ZTI5ODZjM2EyYjgxZWYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg2ZThmYTQzMmYwNTIzNTMwZGM1MTlmOTU0OGE1MjA5YzJlNTVjNDUxZWQyMDQ2OGRjZWE2ZTEzOGZkZmNhMDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFjOTI4ZjY1Y2I0MWFlNGY2NGQ0MWUzMmY4MDIzOGYwNDdjNjg4NjYzYTA5YmU1NTVlNmQ0Y2NiN2MyMGEyZWQifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/cli/knowledge-cli.ts",
+          "version": "repo-file-v1:sha256:85f7d7865095e349f83e3caba8efc38c4a49ac908056455f2575c1736fbd4051"
+        }
+      ]
+    },
+    {
+      "id": "claim_9eb7591cab70460bbbfa7c78622c6fcf",
+      "statement": "Rust pi-knowledge 拥有 Markdown、存储、全文、grep 与快照内核；N-API 适配原生能力及渲染，TypeScript engine 编排模型，KnowledgeService 使用按 owner 创建的子进程隔离数据库工作。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L18-L19",
+          "version": "repo-lines-v1:sha256:5498423c14dacd83d8cf3afae30f9e10e47782c260f88826bfcdc6ff0fed6fe2:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzZhNmQ0MzliODQ3MjM5ODZmNzEwYTMyYjYxN2U4Y2EzN2RlY2VkNTcwYzg5NDNlYWQ5ZjAwZDFmNDhjYjFlYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZGVmZTZiMDUzYjg2ZmIyYzUwN2FkYmI3YTBlYzYyNzNkNDU5MDVmMGYyYWM0NzcxNTQxZTBjOWQxNzczNjQzNCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZGRmNDQxYzc1MmU5MDAyYzNhZGRiZDljM2M2NzViYmRkOWRkMjkyZTIwNThlOGU4YTZkZGE2OTVkZTRhZGRkZiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L90-L105",
+          "version": "repo-lines-v1:sha256:2204d8da216d3d6afe94672a5743345210a58457129093e6a446e4a6dd096d98:eyJzZWxlY3RlZExpbmVDb3VudCI6MTYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhkYzg1YjkwZmZkZDU4YmJiNmI2ZDVhMGU1YTQzMzI5OWFjY2ZmN2Q0MmJlOTQ0OThiMWZmMGI4NjUxZWQ2NDkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc2M2E3ODEzODFhODEyMGI3MDRiYjkwZmM3MTUwM2U4NzgwNmM2MDI5YjY4ZDhlY2NhNjZiNGVjMDk0Y2I4MTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVkYjBjZmFjMWEyYzhhZmJkMGRkNmZjMmRhNmM2MzMwODgwYjA2YzFkOGUxZTRmYzk5OTZjZWExNzgwZGNkZjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZmRjYWU4NGM0YTkxYzljZGVlYWVjMTg4NDUyYjAyZjA5NGRjYmRkYTlhYzRiYmVjM2ViZGNiODZlYzUzOGYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/service.ts#L93-L137",
+          "version": "repo-lines-v1:sha256:8a9e772106bbb7be3d7500d008d10450b11ba4205ed04594644fad0ce2742e83:eyJzZWxlY3RlZExpbmVDb3VudCI6NDUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiZWNlN2Y1Njk0YjRjZGMyYTRiMjkyZGI1ZjJlMDc2MTVhNTYwNGRkMWNhMDkyZGZlNjgzNzFkOGI0MWMyMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYzMGU2MDAxMjIxZDZkZTA5MTM3NGE3ODBmODliOTAxOWEwNDhmYmQ2MzUyZjliMDkwMWRiYmY2NmEyZjVmMjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNhYzc1MDJlMDU4ZDk0NTk3NGY0YWQyZDkzN2E0OWEwZWUzODY2NGQ4MjIzMjUwNDZjMGNiYjE0YmIyZDI1Y2EifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_ef1c082fc989483ba4a57d1bf4ad759d",
+      "statement": "导入发现隐藏目录中的 Markdown 普通文件而不遵循忽略规则或符号链接，稳定排序，并保存保留代码语境和行号的分节原文。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/importer.rs",
+          "version": "repo-file-v1:sha256:9cfc79e09e621402713a0a7eabeab7854e5685fde0b5f734cc982969db80c4cf"
+        },
+        {
+          "resource": "repo://crates/pi-knowledge/src/markdown.rs",
+          "version": "repo-file-v1:sha256:e44755869c063b6928aa0e628a90b00d3f8871bc8866e9390afb0be346baeb70"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L44-L46",
+          "version": "repo-lines-v1:sha256:004349bd7c055ad2c5b1e26cb92d81960bf62a04d3d9ab87dbafe8e6f0b79f8b:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjRiYTNiMTQxMGFhY2NmY2I2YjU3ODFkZWIzZDYwZGU2NDgxZTVjNWU2NGI2OTMyZmNhZWZiM2Q3YWEwM2E1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiY2RlMDc1MGRhNThmZWU1NmEwNzgxM2U4NjNhZjE3OTNiNDE5Yzc5MjRhZGU1NGMyNTE5MThlMWM2MDg5OTA3NiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjg5NmFjMmFlZDYyOTk0YmFjMmVkN2JhOGQ2ODZiZTZhMGYxNWFlNzhkMTFjZTM1NDg4NDlkZjE1OGZhMTc3NiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzlmMWY3MjY1NTZiMzEyZGJmZmRjOTliMDQ1NDc1ODM4OWI5Y2E1ZTY5M2ExN2NkMDFkMTA0MDM3YzVhYmQyNCJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L70-L83",
+          "version": "repo-lines-v1:sha256:bfbcb7ac38083ef0a6a99b53b787c6a379cd1fbead35ef7e0569a894022b68f7:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJiYTM1NTY3N2U4NmRmOTVlOGRmMjQyM2Y0YWEzZTFiYzczMGIyOWJlM2QyYTZhNjljNDlkNjU2NmZjNTNlYzMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU3YjBiYTYyYTFlYzZkYzBmN2QxMjU2Mjk2YjljY2JhYjU4YTRiZjcyZWI2ZjczY2YyYzk3YjdmM2NhNjZlOGYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg1NGU0MGNmZjFkNzAzNTY4YWQwMTY0MDU0NzBlMTkxNzMzMGJiN2VhNzMzY2U4MjhmZTBmODNhOGU4NDdhNjIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhlODM3MGQzOGUyZTA0YzgwOWU3M2E0N2NmZTI1ZjVhNDkyNjM5YmE0YTE5NjRmZThkYTQxMDM0MGU1MGNhYTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c1e49027919b4f98812b05323ce96944",
+      "statement": "全文隐藏构建成功后才发布；完整可选向量代际在导入中准备，模型故障不阻断全文，取消或全文失败回滚，数据库和构建身份防止替换库被错误修改。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L180-L206",
+          "version": "repo-lines-v1:sha256:3d3877d54d7caec93a4e8c88043951dfb042d167594675e584a180dc7fe4d0c8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ2ZmUzMjYxNzY2YTM1YzcwNDA5OTUzNjIyZTMzZjgzZmMwNGI1MmEyMGJiNzMzMTkwM2QzMTVlNzdjYTFkZWQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk3MWE2OTc2NWMzYWExMDkzZTVkM2RlZmU3YTVlOTBjMzA1YjRlNThjZTY2YWJhZjQxMjE0NjdkMGQ0Y2ZkYjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU2Yzg3NTY3NDExYWUzYWY5ODYwYWU1NzVlODUwNzUzMzk0ZTBmZDliOWE1NGY5YzI1NTg5Mzc5ZjhkZTRhMjAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVhOTdiZDJhNDE4NzcxNDAzMzFjMzRlMDNiY2QzOTFiMjhjZDExOTg5ODYyOTU5M2MwZWM4ZWVjNGFjMzNiMGIifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L20-L22",
+          "version": "repo-lines-v1:sha256:ddf441c752e9002c3addbd9c3c675bbdd9dd292e2058e8e8a6dda695de4adddf:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTJhOGI1MmI1ZTk2ZjM0YmNlMjY0ZDcxZjk0NDFkNThiYmM4NGMzY2JlNTQ5NjU2YWFlZThhZDc0MTliZDA4MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTRhNjcwZTk1MDg0ZjJhNjJhNmYwYmU4NTY3NjVjOTZlYzNjNWEzZGIzYzE0ZThlYTY3MTZiZWYyNDgwZWY2NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZmVhNGQ5YWZhMzUyYzgwODM1ZTg2MzIyYzdkYTEyZmQyMDk3MWVkOWVlZTU4NzFlODkxOGE0OWQzM2EzNzczYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjdkNjY1MjFjMTY0OGRmMDI2Mzc1YjgxM2QwMTQ3ZTg5NTJiYTZiOGJlODI5YjU5Nzk0NmMyYjliNmYwNDM5MSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L125-L239",
+          "version": "repo-lines-v1:sha256:5a7e9907e00f9288bc25d40e901a582b44edd3f064b9f98246a98cd182431807:eyJzZWxlY3RlZExpbmVDb3VudCI6MTE1LCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJiYjRmNzJhZDJhYzNmYzU1N2ZjZmI0ZDQ0Mzk5ZjViZDk3NjExZTc0MDIzNDRiNTBmOTc5YTljMjJhMmY1M2UyIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiI0ZGM3NjAyMGJhZTcwNTc3ZTY0YjMzMGRjYTgzZmRmMjRmM2Q3NTkzYTAxNTRkOGFiZWM2ZGM2M2Y1ODk3ZmQ5IiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiIxMWZkY2FlODRjNGE5MWM5Y2RlZWFlYzE4ODQ1MmIwMmYwOTRkY2JkZGE5YWM0YmJlYzNlYmRjYjg2ZWM1MzhmIiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI3MWUxZGJiNmEzNjI0NzJhZGRkNmFlMmJmMjVhY2E1YTUzODYwZTYyN2IwODZjZmVhMjA5OGEwMDc4NDJlNDlhIn0"
+        }
+      ]
+    },
+    {
+      "id": "claim_cdd2995b5b6e4a5188ecca98c566784d",
+      "statement": "缺失数据库打开时创建空 WAL 库但查询仍报告无索引，Unix 文件权限为 0600；不支持的较高 schema 版本被拒绝，旧库可从保存原文迁移投影。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/database.rs",
+          "version": "repo-file-v1:sha256:4625887f550905c00d207ca80ef1348103937c35865ae7c0777d1aa4cbc634c4"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L116-L137",
+          "version": "repo-lines-v1:sha256:7944224f7736de1c159df18543929f2224b9aeda67c0c417aaa0a7fee9be0f86:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE1MzAzYWU3NzExM2FiZjZjNDgwZGVhZTIzZDI2M2UwZDgyNzI3NGFlZGNlMDZkNGU0MWZmMzQ0NjM3ZDhmM2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzNDhiNjc2NGFjOWNjMGYzNzRlMDhhMjNkNGYwZDlhY2FiMzhhN2I4ZTBlYzY1YTY5YmRiMjcyY2Q4YzFhZjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNmMGJmMTRjMTE4MmY1MTg5NjUzZjI1OTRmOTM0YzI1NzViMWVkZjg5NDcwYzQ2Njc0ZDlhNTgwMmM3ZWE5YTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU0YTE5NjNkOTc3ZmFhMWQ5YThjYjc5MTk0MGMxNmM4NmRiYWE1YmVmZmMxM2UxNDM2NGZkMWVkNmRhNzExNjkifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L35-L37",
+          "version": "repo-lines-v1:sha256:c680040078fd0adab3bd9c0fa6c6504e76a235e2b881de6119d79e86b9ca0b35:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTFhM2ZlMWZkODdlMmU1ZDI5MDc5MzNiNGQ1N2IwZTkwMGMxZmJkOTg2Nzg5NDEzOWRhNDRjY2ZhZDg4YzViZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDk3ZmRhYzQ3ZTI3ZWRkNzE3NmFmY2U3MTcwZTFiOWQ3OTAzOTlkZjQzZjA3NzMwOTNlN2I5ZjhiYzg5YzE0ZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDI3MWU4ZGYxNGEzOGU1OGYzYjNiMGY2NzhjMTdhMDY2NTAyMjgxNzE0ODIwMGU0OGEzYTM5OWVjYmMwN2ExNiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTk0NDJkYWFjZDE1ZDFjZDM2OWNkYzc5YjIwZGYwNDkwOTUxNmM1YzNlYzVkM2ViZDhlNTNlMzIwMjg5N2MyMSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_dbaea547739e4f51a4cf7f93380475e5",
+      "statement": "默认搜索使用 FTS5 全文排名；有效向量可与全部全文命中通过 RRF 融合，语义候选有限但不截断全文结果，结果并不代表全部可能语义相关章节。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L254-L277",
+          "version": "repo-lines-v1:sha256:78d1f9a531dfe55a3e1e091742174898228e85125eba5bd2635317c3e9c6d161:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3MGM4YWZhYTVhMzk0YzNjM2FhMGJiN2MyYjRjODllMjc5NmJlYjc5YzY5ZWVhYjY3N2VhZWE4ZDg5YmU4MzUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdmNzdjZGU5M2IxOWZiMmMxMjBkNGJhMWQyNGJlMWYzNjYwZDYzOGFkMjQ0YjFhODg3ZTZjNDdjODJhZDE5OTIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImIzMTYzNzljY2JjY2M1NjE5OTAxNjViNWZkNTc0ZWVhZjdiMmVmMjljMzUyYjg2YzhmNmM1NTRlNzMzMGJlNTMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY2MmJjYzlhNzZkMmI1OWRkNzM1NjNkNjNmOTFlMjI1NTg0ZmQzNDNjNmI5MjZkODE1Y2ZhN2ExYjg3Yjc2MTYifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L27-L29",
+          "version": "repo-lines-v1:sha256:342f112c4d5b4f10bcd5db9cca416c5154e1fbd391f128d6528ad6b82c73615a:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTUzMThkZThhODE1ZmI3YTFiYmE0ZDlmODg5OWQ2Y2VkYTEyMWM5MWE4ZjUzMmU0NzdjZmE0YzI4NzNiMzNiNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGZjYTdjM2E0MmFiNWUwZmIxMmM0NmIzZjg1ZTU5MTg4MGIwZDE5OTJkNTY5NjRmOWQ4NzY1ZDU2OTMxOWVjMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTdiZWExMjBmOWMzOWNlMjZkYjc0NDVjYTQwZGNhYjA1OTkxNGYwY2FlMjQ3NzE3NjI0MTVjM2NlZjNjOGFjNyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMjliOGE4NGVmMTQ0NzA4YjIwOTE4YTg1YWM2YmZmYTk0YmQ5Y2NjZmNjMzQ0YjFjYjc1ZjMwNWY4Mzc5NjAxYSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L381-L429",
+          "version": "repo-lines-v1:sha256:0787c7e3589fa89288cb8f276a841b2cab1e7b169ddb08f8a9298bf96ad7b3e9:eyJzZWxlY3RlZExpbmVDb3VudCI6NDksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY4YmE2NTY3NWVlZGVhNDJhMTgyOGU2ZTMyOGQ0YmE0N2U0ZmM0NjJkM2JjYjY1NDM4Y2RjNDlkZjVhMTg2YzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImIxMzViYTAzNzI3Mjg4ZmU5NzllZjYxYmMzYTlkMWIyNDYxOTZmNTU4ODVmZjg2NzhlZDIxZTkxOGM4MjQ1NDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQ0NWI4MzhjZGE5N2M5MzMzN2JjZWE2ZWUzZmE3NTU2OTUwNjgxOTYyMmE0YTcwZjliYTk5MDFmNjhlYTA5ODEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhiM2ViYjI0MzAyZTlhZWU0OTg4MTYwYzY5YTkwNWJjMjhiNDljMjVjYzNiMjY5Mjg1MjEzNWZkMzNlZTRiMTAifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b343a7baa1fb4d018c1c1b7185f7d12a",
+      "statement": "向量按模型、端点、维度、编码及语料身份隔离；无效查询向量整体回退全文，不兼容的存储代际单独排除，其他有效代际和所有全文证据仍可用。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/vectors.rs",
+          "version": "repo-file-v1:sha256:6ee4dea9110e594aebbb7c3aaff03e475daf4d6fa7dead9ec11b24ffce90cfc2"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L139-L169",
+          "version": "repo-lines-v1:sha256:4cb9d5eefa365343d7d163e6e789dd111a0f435bec7f2d55f535cf3a2a644f7d:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJhYzJkZjc3MWFiMDI4NWNiN2ZiMDE1NmNkNjc5ZmYxZjU1YjJmMjZmMGRjZjAzY2JhNzIwNjYzZGYyODdlN2EiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI1YWQ0ZDA1ZTA1OGFlZDI3ODc2NzQ4NmJiMmI3MDI5NzA0MDZlNTc4OTg5YWFlNWQ5NWE2MTUyMTgyMmIwZjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBlMmE5MWM5N2ZhM2ZlOTgyOTQ3YjZiMmE1NGFlYmJlZmM2ZWIzYzliNDhhYjBjZDJmZDJjMjZiMTk3YmJlNTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJlNWIzMmUxMmM2M2MyMTAyZjU4ZjA4YzMzNGRiY2Q2YmFmYjQxMWRkN2YzNDVhMDg2ZjNkYmRkOWU0ZWJmMGMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L391-L409",
+          "version": "repo-lines-v1:sha256:4ef79694d97b97a4af580cb56a0bffe5ddd425f262900cc01e413bb44f5876b7:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNiNTBmZmMxMmFkNTMzMDhlNjNhNDI1MWMxNzdjNGViMTdhZjQwNzFiYmRjMGIwYTM4ZDY2YzYwYWZkNTQyOTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRiMjlhNmUyZmI4NTk1MzBmYjdlOGYzMWNlNWE2MGM5MmEyNDlkNzhjMDM2Yzg1YzNmMjg2MGFhZDE0YjRkMzAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk0N2MzZDNiNzI1YzQ1ODI1NTljYTUzMWRlZjg0Yjk0YWE2MzEwZDdiZTBiODY5NzdmMmVhMzFhODIzMTRhOWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjBmOWRhOTU5MzRiYTNjNWM4NjEyZTZhNTU4MGY2MGMzZTJiZWY5NDFhNjRjN2U5Mzc5ODAyMjMwMDkzN2NmZjcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_b783ac9a4dc745b2bc0fdd6139e70c9f",
+      "statement": "独立可选 Reranker 对基础排名的有限窗口进行同类别内排序，失败或无效响应保留基础顺序，不改变证据集合；工具报告实际使用状态。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L327-L357",
+          "version": "repo-lines-v1:sha256:70c74868734317de8cda38c8bcc701039ff04dfe9b1e95a21fa39953394aa0cc:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkNjIyOTlhZDgxNzE5MmVjOTYzY2RhMTAxMzBmNDg4ZmNiMzc1MTljMzU4MjIwZTYwMmMxZGY5ZDE1NTBmNDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFkZjJhZmM1NTAxYzc1YTVjMzZmMDhhODlhMDkyOThiOGQ5MzVmMTRiZTlkOWUyMjU2ZjQ0NWQzODNhZTMyYjgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczMjBmYzA4YzE0OWJhYjY3MGI3NzYzMTJhOTM1ZDRlNDRiMDRkODEyYjFmMTEwYzIzMDkxNTYxNWMxOTQ1NzMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImE3NGRkMjg2OGJjM2RjODA0YTA5YzEyZDkzYTU4NGNlNTkzN2ZiMGM4MTcxYTZjMDAwYmNlZGNkMWU2MTg1ZWEifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L401-L426",
+          "version": "repo-lines-v1:sha256:bb9ea4e1f30bc096868e32c8f7791713135a12bd897c452d2c8df025dd397993:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiNGIwYTM4NmNlMjc2ZWMwMzFmNGYzNjIyMDk5ZjdhMGNlYjM0NDZjZjdlMzI5NTg0ZWFhOGEyZTBlN2QwNzEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc2ZjdjNjIzY2FiNzQzMTgyZmMzODAwNmVmMDMyYzc4NTgxZTQ1MTQ4N2Q2OWY5MzkzMTlkYWZmYWRiODE4OWYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijk2ZmVlM2RkYWQ2MmY2NmNlZWZkMDIwNjE0ZjEzNWRlNTE5YzkzNjQ3Yjk2MzI5YTc4MzFjYWI0MDRjM2FjNzYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkzNGZlNzc2YTAwNTE5ZTUxOTczZDlhN2E3N2MzYjE2NmJjZDdmNDZlODE0YTMxMzY2YzU4YTg5MmRkNTI2NzMifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L434-L496",
+          "version": "repo-lines-v1:sha256:702ed956d3818742d1438cbf63c48361dd37003680e944c2e82a89af4f1620d6:eyJzZWxlY3RlZExpbmVDb3VudCI6NjMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjNlYzU2ZjU3YTM3MTBkMzgzZDg5OTc5MTQzNWVmYmI1ZDY4ODIwMjY4YTljZTA1Yjg5MjhiZTMxNTFlNTg4ODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY5N2M1MDBjOTRlOTc2Yzk4MjNiMDU3NDcwNGVlOWRiNDc2Y2VkNGRmYzdiMDJkNjdlMzY2ZjNlZWE2NmE2ZTUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjMjYxYjNjMmNmMWNiNjYxNGEyZDhjMjkzOTc4YjY0MGQ3YzE3YWFkNjMxYjEzNzRhZTgzYzk1NDNhNzMwM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImZlYWU4YTQ0YWRmYTdmOWRlOTdlYThjM2Y1YzYzMzY2ZjU5ZWJkNzE2NjhmN2ViMTRkMjgyZmM1NWMzM2ExNmQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_7b8f265798ad41628f6e8cb5c97323c6",
+      "statement": "完整技术名称保留内部标点并按真实名称边界判定，完整名称命中始终排在相关命中之前，语义与精排不能改变该事实。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/query.rs",
+          "version": "repo-file-v1:sha256:5ea7ca3500d74cd5aafc5a734205365525b5a147c2dce0dc5b6d9c6fe7528641"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L24-L25",
+          "version": "repo-lines-v1:sha256:4083e6c6ebfadf1e3dfecd67d79d6be8751dce15e9a9b776e96365e46f98b903:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiODM1MWVlY2ZlMGQxMWQyMWM2MTEyYWU4YjI0MDg2ZjYzOGY4ZTMxNDc5MTdhNWI5ZThmNWU0ODNlMzVhY2VlYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzA3NmNhMGE0N2IwMjFhN2NiYzU2NTZlOTUzMGVkMzg4Y2UwYjQzZWZjN2Y5M2FmMDQ3Zjc5ZGVlOGYwOTdmZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYmMxNTI4YjZiMzI3ZDQyNWIyM2I1N2E1ZGRkNzA0MzE0YTMxNmIxNzA1M2UxMjkwYjRkOTY5M2IyNTY0ZjczOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiY2NhMTkxOTU4NTM3YTM2MjFhNjI3MmRiMGJiNTdmZDM1YmU1N2RiN2QwYmRhODNmZTZkM2VhMDc3NWE1YzBmYiJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L419-L428",
+          "version": "repo-lines-v1:sha256:03750309b1524ac9069d1111ac9c059d0505ec6e6bfe3bab2577cb2fce0afda3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4N2NkZGQzOTM5ODE2OTc1ZDNlN2JiN2ZjZTU3MzYyNTc5OThkMWZiNDkzODA0MGE0NWUzOTM3NDg2ZGExODMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjliNDdmYTc1NzJkZjdhYTY3ZDViZjA4OWIyOGVkNmIxMzkxMzYxN2EzZjM2ZTEzMjQyMDQyZTczODljYmY3MGIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImI1NDM1NWM2NTkxYjI4NThmOThkNTgwNTRjM2RmNDkyODNiZDQ3YmU1MzJlYzEyYTA4MzllZjNkZmExNjkzOWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjliMWQxMWQ5NDFlZWQ5ZWEwYzRmNjAyNGRjNzMxNjA0NWRjMDhhN2ExMmVhZjM0MTM4ZGJjNzgxOWMxNGViODcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_bcbe03b964e14a6cb6b0b3155c30ebea",
+      "statement": "显式 grep 逐数据库原始行使用 Rust 正则或 PCRE2，保留有效表达式空格，按来源顺序返回正则命中，并完全绕开模型和融合。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/grep.rs",
+          "version": "repo-file-v1:sha256:63dd267b833230f91a6e18c1f41bbdf1eade1376a8bfc5a737310e4a7b643b15"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L26-L28",
+          "version": "repo-lines-v1:sha256:cca191958537a3621a6272db0bb57fd35be57db7d0bda83fe6d3ea0775a5c0fb:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmM4YWQ1OGQ4NWUyY2YxYzUyOWVjZTZkZGU1MGE2ODJlMzM0MmY3NjRkN2IzYmQzMzcxNTcyYjA3MzRmZDA0MiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDgwYzhmMjdlZjBlMGNiYWZjNjg0Yjc0MDYzMmE4YzdjYzJlYTljYTRlZTEwOWNiM2NlNzEzYmQ3NTU3YjI3NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjdkNjY1MjFjMTY0OGRmMDI2Mzc1YjgxM2QwMTQ3ZTg5NTJiYTZiOGJlODI5YjU5Nzk0NmMyYjliNmYwNDM5MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzE1YjM2N2ZmNzMyYTIyYzgwODFkNWQ4OTYwMWQ0ZjljYTdmNjhiYmQyODY3YjcyNmM1NjVkZmMyNjE5YWY5ZSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/engine.ts#L273-L283",
+          "version": "repo-lines-v1:sha256:3796b83946554d5c8876dfa15997fc31283792c8ec62691a6ff6c9dd5b264150:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxZGUxM2M4ZDA4ZTI4ODEzZjViYjFjN2E5YjBkNTdmYzliZDhjNGNhZTgwMzI3ODg3NDIxZWUzM2U4ZDc5ZDYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0ZWZjNDk0MThkMjZkY2YxMjliMjJhNmFhMjExMDhjZWVjMzc2NzdhMzJkMDhlOWQ1ZmVlMzVkZGE2NmJiOWQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjExZmRjYWU4NGM0YTkxYzljZGVlYWVjMTg4NDUyYjAyZjA5NGRjYmRkYTlhYzRiYmVjM2ViZGNiODZlYzUzOGYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJhNTlmMDdhMmE4YzZmMDNlMmZiMDM2ZjIyMWQ4MjJlMzVjMTQ1NjBlNmU3NGM0MGYxZDVkN2VkNmU2MWJjOTMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_506560db9750429eb2d7e203877d67f5",
+      "statement": "`knowledge_search` 工具可用字面相对路径限定文件或目录，范围在全文、语义和 grep 候选计算之前生效并绑定游标；默认查询截断与 grep 长度校验不同。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L29-L30",
+          "version": "repo-lines-v1:sha256:c6855b6f3206f5268a35c0e82be5a045305f31ff460371f77398c0a87550174a:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWY0YzNkMmYyNDQ4NTY0YjE3YTMwMTIwOTdiNmMxMDg0ZmM2N2NmZmY0ODJkNTgxYjczN2E0ZmRjNzRlYTZjZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZmY4MjA5YmZkYWU3NmM1NTVjZWYxZGNkZGI2ZjAyYjdiZTJjMTA0Yzc5MDIzOGZlMDYyYTllYWQ3YTUwY2QzMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiY2NhMTkxOTU4NTM3YTM2MjFhNjI3MmRiMGJiNTdmZDM1YmU1N2RiN2QwYmRhODNmZTZkM2VhMDc3NWE1YzBmYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNmU1YzNiYzE0MGI5NjdkODAzODk3NjMxMTdmOWU1ZWE5NDY3OGViYjg3YjM5YzZmNjdmOTA2ZTI4NzJiOWQ5YiJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L369-L399",
+          "version": "repo-lines-v1:sha256:c8c53d87a45b79bdb76b639cf477e2850cb925b1b2ef57fe6998bb9558c3a5fd:eyJzZWxlY3RlZExpbmVDb3VudCI6MzEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxY2FlZjdjMTE4MDRiMzY3M2FmMGYxZTA0NTUwZDUyMjJkNDQ5MTE4NWE4ZWI5MmY5Nzk1ODY3MjRlMTg3M2MiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImRhOTY1ZjdhYjI5ZjAxNjYwMmE2MTJlMjZiNTlhZTQ3MjFlYzkwMjhjNDdkYjg1Y2JhYmNkNWJmNzE3ZWZhMjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVhMDg5YTllNTNiYmE0YTRhYTMzYzg0YzNmODdmYTg5YzBhNzNjNTEzMDhmZTI4YWRiMWZhNTkyZTgwYzliYjciLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImNlM2JjN2MzZDgxODlhMDRlNmZlYjkzNDVkMzhjOGMwZTMzNDc4NDhkNTgwMDNlODY1ZGIzOTYxYTliZjIxNGQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_c0d879b649d64906a9860e24ec2fdda3",
+      "statement": "导入后的查询和引用仅依赖数据库存储原文及来源，引用以索引名、相对路径、行号和文档哈希识别版本，sectionId 可在重新导入后复用。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L171-L174",
+          "version": "repo-lines-v1:sha256:c0b8c777293c2431547ee94976d4d33cbb7cd80b6abb34a5a762d9165824e6ce:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiM2IyZjIyZjMyZDgyYzhlMzRhZWRlODNkZDY4MzgzZWNlNDFmZDQ4OTZkZjMwOTg5N2RjMGIxMDJhZjFjZTcwNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjk0OTY4ZDQ2NWU5OGYxNDc2ZmJiN2I2OWMzYmE5MmQ3YzBmNTY2YjYxMWZiYzYwMzJkMjNhNjhhZmVkMGRhZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWU4ZDk2N2NiNDk4NzA5NDlhNzcwMjFiM2RmNTZhNjAzNzU4NDk1NjgyMTBhOGY5ZWUwODU4Yjg5NzJmMTc3MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNGQ2ZmZlNjkzMDk2MzZhNjM2ZjgxNDQ4YzI4NWJkMDMzZDM3YjQ5ZWY4MWJiZGFmODVjYjlhYzU5YjVhOGUxNCJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L44-L47",
+          "version": "repo-lines-v1:sha256:6015b6c7c94297da041b512fc2ee3077fde743951b19366e75ccc5709d34ed89:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjRiYTNiMTQxMGFhY2NmY2I2YjU3ODFkZWIzZDYwZGU2NDgxZTVjNWU2NGI2OTMyZmNhZWZiM2Q3YWEwM2E1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzQ4MGNjYTQ2ZmEwMmVjODYwMWE0MGFmMGZkYWFlMzUwZjkzODFlZGM1M2ViNzE3M2JjMGM4YmYwOGRiNzdlNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjg5NmFjMmFlZDYyOTk0YmFjMmVkN2JhOGQ2ODZiZTZhMGYxNWFlNzhkMTFjZTM1NDg4NDlkZjE1OGZhMTc3NiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzZiNTBmMmM3NmY1ZDVlZDA0YmY1MmNlNTRkZjFhZTA4NmU3NzQ3ODA3OTQ1ZmU2M2FmZDIyMGI0YWM5ZTVhOSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_3b46e873ef3e422abc1489851372a612",
+      "statement": "页内证据、版本与计数来自同一读快照；完整排名缓存和游标绑定查询范围及版本，混合或精排续页复用原顺序，不能恢复时明确失效。",
+      "evidence": [
+        {
+          "resource": "repo://crates/pi-knowledge/src/storage.rs",
+          "version": "repo-file-v1:sha256:8bc0051a98a1b0308781f6de920312072eb6b3a0b89fb4934192b6d3e731aa9b"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L280-L294",
+          "version": "repo-lines-v1:sha256:1cd20cea5bb7231224de2116f31764c2d606141dff18b8ff5399d6be295fda98:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM3Mzc2OWJjMzllNjM3MWM2ZWRjOTZhNGFlZDVhYWUxMjY1YTNkMWQzMzQ5MGMzZDYwMWM1OTJkYTM5ZmRmYjMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU3YmFiYThlZDJlYmRlOGYxMTg0ZDZiNjFlMzk5YWFiODQ5YmRmMTFlMzhlYWIwOTNjZTgyYTI1NzIxNzUyOTkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjMxZjFjNTJmYmIwOTgxYzBjNzcxOGZiNWY2OWVlMmYxMmZiMzczYzcyYTlhZDNkM2Y4MWFmMWVlNjRkMjFmNTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ1NmMxNmZhMjAwNDc0MTI3NTNiOTllNTI0ZmJmN2UzOTNiMjdhZTU1YjY5OThiMDRkZjBmNDQ3NDhlNWI3M2UifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L29-L34",
+          "version": "repo-lines-v1:sha256:7c0e5cd1ed60e44512ebc52c44475419cf9a8ca697f82ca92f709d513cfda4df:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZWY0YzNkMmYyNDQ4NTY0YjE3YTMwMTIwOTdiNmMxMDg0ZmM2N2NmZmY0ODJkNTgxYjczN2E0ZmRjNzRlYTZjZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiODE3OGQwYzJkNWM3Njk3YWE0MmY5MTIyOTUzOWY0NGJlYTlmMTExOGQwMTYzNmQ5N2I5M2Q2ZmM0ZjIyNzVjNyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiY2NhMTkxOTU4NTM3YTM2MjFhNjI3MmRiMGJiNTdmZDM1YmU1N2RiN2QwYmRhODNmZTZkM2VhMDc3NWE1YzBmYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzY4MDA0MDA3OGZkMGFkYWIzYmQ5YzBmYTZjNjUwNGU3NmEyMzVlMmI4ODFkZTYxMTlkNzllODZiOWNhMGIzNSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_4ec162fdf8a548c8beb3ffee159e0ae8",
+      "statement": "工具分页以约 4000 字符及最多 10 节为目标，首节超预算仍完整交付，未展开预览不推进游标，同页重复正文可去重但来源不可丢。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L30-L32",
+          "version": "repo-lines-v1:sha256:532958dcebd3a3f7c1f0d0d0bd76e9306378bd16ec8bdfe34cbb26ea01dafe7a:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmY4MjA5YmZkYWU3NmM1NTVjZWYxZGNkZGI2ZjAyYjdiZTJjMTA0Yzc5MDIzOGZlMDYyYTllYWQ3YTUwY2QzMCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjIxYWVhYTEwZWU4YjlhZWUyNTlkNjQ0NzZhOTgzODI1ZTFmZTMzNjI1MDNhMjJlM2U2ZjhkZjYzMmQ3MTc0NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOGUwY2RmZjY1YjkwNmQ5MWY1MjhmNTZjMTc3M2U5MjI2NjllNjJjYTQwNDY1ZDc5NzMxOWVlNmQxMjQ0OTQwNiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNTUwNTk3YjMwNzk1MTMwN2NlOWVjMDU4NmJjNjQwNTE2ZWZhNGJiMjJmYWEwMjgzNjI2ODU1OWFlODNiMjE2NyJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/knowledge-search-tool.test.ts",
+          "version": "repo-file-v1:sha256:ad852e2f7ca2c42ce74b1db5078899e864e568ecc1b22b994d02c9644e31e5dc"
+        }
+      ]
+    },
+    {
+      "id": "claim_bd72497aca884ea98d8d189dc75b1bf4",
+      "statement": "正常零命中仅说明所选已导入语料未匹配；无索引、基础数据库错误、非法正则及无效或过期游标仍是错误。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L38-L39",
+          "version": "repo-lines-v1:sha256:03fbb3284bd9002ab50b3ea2c656aee9ddf13254046061c980e4db5b91d28fc7:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmI3OThhNWQ0MTI1ZTVlM2FkMDFlM2ViNTMzZDI1Y2ZiMWQ0NzllZTgwYjFmZTY1OWM1MzM4YTkzZjQ1NTBiNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTMxNWEzNWQzYTE2NzVhYTVmZGMyMzcwMTY4NGE4YjM4N2E4MGY4ZjY1YjQ4NDkzZGZkZGU0MjljNWEwMmMyOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzY4MDA0MDA3OGZkMGFkYWIzYmQ5YzBmYTZjNjUwNGU3NmEyMzVlMmI4ODFkZTYxMTlkNzllODZiOWNhMGIzNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTM1Y2NhZjBjYTlhNjQ2ZTE3YTE5NzFlMzk0MzUxOGU5ZmEwZjAyM2UwYzQzMGI0NTAwOGMwODRjZWMwZTJkMCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_9690d24e0ac54282bcc188b965d086ca",
+      "statement": "TUI、`knowledge_search` 工具与 ZCode 复用执行端服务和 profile 数据库；远端目录须在执行端有效，生命周期结束或请求换代时取消并丢弃迟到结果。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L54-L63",
+          "version": "repo-lines-v1:sha256:871e6d35c349fc6b52fb6b86102e2ba2af36970db4bb0d11e9abe5160918c1a3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJkOGYyNzRiMDllYTdiNzRmM2JiMmY0YmZjZWNiYWE3MmQ0OTMzY2FkNzc4Nzc5Nzc1ODc5M2VjZWI3YmIyNDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVjYzkzZGFkNTJjZDdjZjcwZDljNzBhMmU5ODRmMzI1YmI4ZDYxMDE2ODNiOWM3OTk1NzY5ZTIwNDlmYmRmNTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3NzFmNTIyYzA1N2NkMGVlMzlhNjUyZDg1M2I1YmI2MzhkODczMmQ0OWE0YTZhYjY3Zjc4ZjhjZGY5YmZmNjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkxMWJlNmY1Nzk5NjZhZDk5NzJkMDE3ODA3MmEwYjdhODIyNGUwOWEzNWYzZjA4YjliNzVmYTMwODM1NGMxY2UifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/service.ts",
+          "version": "repo-file-v1:sha256:bdfdc4656db33d66f9ec82654476e712ad9bb4fa108abd4e5ed1f4a37c7db3f4"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/modes/zcode/indexes.ts#L125-L175",
+          "version": "repo-lines-v1:sha256:f3c50b8da77d7ee8c4a21f362927953294eca0937cde72820c54371be728ca7d:eyJzZWxlY3RlZExpbmVDb3VudCI6NTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjllZTczM2Q2M2YwOTI4ZmJhZWI2MDIwNTY2MDMxODJhZTY1NGZmMWM3NjY3MDQ1YzBjODY3M2FmOTA4NjRmYjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFjZTkwNTYxZDVhZWQyNDAzYjMwNmQ1ZWU5MGJmYjY2Y2Q1YjgzODA1MjcwNzBiMzVlMzg0ODc5ZWEyZWVlNjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjczOTc3MDNmMTQ2MmRjMDYzN2NiZjc4OWFkOTgzYzA3MWU1NzdiYTljZTdjNjY1ZjZhZTJjZWI0ZDJhN2NmYjkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_57cecad6e6c2442e981f525fa7b0ad8d",
+      "statement": "可选模型故障可以回退但用户取消不能变为成功结果；成功搜索对外至少 500ms，剩余时间异步可取消等待，错误和取消不补足。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L244-L247",
+          "version": "repo-lines-v1:sha256:e1a7492fc2d2f5f5b66aa649b417bfa5fff88c4633f945a4580cdaf8f5b76884:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmFkMzVhMzU3MTM1NWM2YWMxMTRmNDNkNTQ3MmU3ZTU4OTNmMzc3ODQzMzdiMWRmMjJmMjFiM2ExMzBmNjNiOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYmMyNDFhMWMzODQxZjI0MjMzMTZlMGE4NjljMjI0NmNhMmNhNThmMGViNWFjNmVlMjc0MDJhYmFiOWRkMWM3YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2FhYjg1N2QwZWU2NTJmMzRmYjQwMjkyYjg3OTM1ZmMwYmJmZmFjMjFjNTliMjU4YTRkNTc4ZTkyZDgyYTFhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDU1MjRkYmFiODA3NGRjNGE5MTc5YjZhNTk5MmRkZDA3MjA4ZDgwZmM5YmI2MWRlYTBmNWQyMzdlOWZjZGVkMCJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L33-L39",
+          "version": "repo-lines-v1:sha256:c30da6b683a0d3a5c3307338191d2ac7a22397c84c415248a361f7a2e9a0e6f2:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTMyZjE5MGQ0MGM2OTRhZjUyZWQxN2Q5NjZhYjA4MTQ1ZjhkZDc3ZDQ4Yjg2NjNhZTFiOThjM2VjNDc2Mjc3MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTMxNWEzNWQzYTE2NzVhYTVmZGMyMzcwMTY4NGE4YjM4N2E4MGY4ZjY1YjQ4NDkzZGZkZGU0MjljNWEwMmMyOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTMyOTU4ZGNlYmQzYTNmN2MxZjBkMGQwYmQ3NmU5MzA2Mzc4YmQxNmVjOGJkZmUzNGNiYjI2ZWEwMWRhZmU3YSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTM1Y2NhZjBjYTlhNjQ2ZTE3YTE5NzFlMzk0MzUxOGU5ZmEwZjAyM2UwYzQzMGI0NTAwOGMwODRjZWMwZTJkMCJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/knowledge/service.ts#L162-L180",
+          "version": "repo-lines-v1:sha256:03df3c4030f54da5d72d59e26f602b5cfd2cb39ea21e28b2a15b0545879ee3c9:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjlkZmJiZTMwMmNhMzhlN2NmYzBhNzk1MTZlMjVmYWY2ZjYxNmI2ODllY2I4YTJlZGZmNTgzZjI2Mjg3NzMyZTUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFiOGM4MmJlZGUzZjlhZjY3MzNmMjU3ODgyM2NhMGE2NDhiMjQ4ODA0MTMwNzI3OTYzZmNjOTYzZWE4Mjc1MzYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgyNGNkNjEwNmIwZGVhZGI0NmM1ZGExZTVlNjAyMTY3NWM3ZTE2N2E1MjQ2NGMyNmY0MzMyNDQ5ZTlkMzg3MWUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFhNjlkYmEzMTYxM2I4MGRjYzc2OTRmNjhjYmQwMmZhZjgwYjMzOWNiNGMyZWMwN2VkNWY3NjkxYzM0MjQ1MjkifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_744ea7431cd94327b90f7d90b7ac50cd",
+      "statement": "确定性 stub 测试用于验证融合、回退和取消等合同，真实语义或精排质量需要真实服务与代表性语料，不能用 stub 冒充质量验收。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L296-L325",
+          "version": "repo-lines-v1:sha256:c49504c466d754b901a6f9cd7ef4df383f17f1530227f4278f324ae5779b6a36:eyJzZWxlY3RlZExpbmVDb3VudCI6MzAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMwZjY4MDk0NWY5YTZiZjQxYjI3NzE2YzBiZjQ0ZTkzNjVlNDRmOTlkN2UyNzQ2MjQ5MzU4NzZmYmJjYjZkYmMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhmZTg1OWJjYjFiOWVjOWZlMDdjZTVhYTU2YWFhNTM2NjA1NjVmNDkyMjJjYTQwY2Y4NzQ2MDE2NzM0ZmNmNDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImFlYjE0OWE5NGY0Y2I5NDAyMWQwMWVhN2FhZTFhMjhmODE3YTM1ZjQ0NzExOTFjNjY1MzZjNjdhZGM0NmRkMjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjMxZGVkNTAwOWE0Nzk5OTQxOTg4NGEwZmUyNWQwNjJlNTA2OGRiOWQ4MDk3ZDc2ZWRlYWI5MWI1ZTA3NmUxYjEifQ"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/knowledge-semantic.test.ts",
+          "version": "repo-file-v1:sha256:0ff2ade0da78c81e5887c8b05a9baf9556bcaf31ef6fa7c36381cc239b2cd1e4"
+        }
+      ]
+    },
+    {
+      "id": "claim_d6212d3379dc47af85627a9787c03c15",
+      "statement": "非受限默认会话可通过 xd://knowledge_search 按需访问只读 Knowledge，仍使用 Knowledge 自身审批与调度规则。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/knowledge-index/spec.md#L40-L42",
+          "version": "repo-lines-v1:sha256:e35ccaf0ca9a646e17a1971e3943518e9fa0f023e0c430b45008c084cec0e2d0:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzI1NGE2OWQ1YWRlNGEyNTU2NDY2MDYzMDZlZWRiNWIxZjRkMmE1MWY4NmIwNmFhZGM3Y2NmNGFiZDU5MmJhNiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjhhN2E0MDliMmYxNTA0YjVkMmU3YjNiODY3NThkMTc3OTQ5NjdlNzIyNDNhZGZmM2Y0YmQ5ODk4MWU4MTk0OSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODU5MjJkNmU0MWMzMGI5MWE2Y2I5MDc4YWQ3MjkzYzk2YzkxMzY0ZGEzMzgzYmQ3ZjYxNDNhZjMwNDYyNTdkMCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTEyMDgwYmUzOGU3MjMxNzUzMzMyMjU2YmUzZGNjZDIzMWMwNGI4NGEyZTU3NDk4OTI4OGFmN2U5OTdlZGJmNiJ9"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T04:03:23.095Z"
+  }
+}

@@ -38,8 +38,9 @@ describe("RPC builtin dispatch", () => {
 			prompt: "ultrathink inspect",
 		});
 		expect(await executeRpcBuiltinSlashCommand("/missing command", runtime)).toBe(false);
+		expect(await executeRpcBuiltinSlashCommand("/wiki", runtime)).toBe(false);
 		await expect(executeRpcBuiltinSlashCommand("/git", runtime)).rejects.toThrow("interactive TUI");
-		await expect(executeRpcBuiltinSlashCommand("/wiki accidental argument", runtime)).rejects.toThrow(
+		await expect(executeRpcBuiltinSlashCommand("/knowledge accidental argument", runtime)).rejects.toThrow(
 			"does not accept arguments",
 		);
 	});
@@ -53,9 +54,10 @@ describe("RPC builtin dispatch", () => {
 		};
 		const acp = await buildAvailableSlashCommands(session, async () => []);
 		const rpc = await buildAvailableSlashCommands(session, async () => [], { includeRpcBuiltins: true });
-		for (const name of ["wiki", "repo", "plan", "loop", "goal"]) {
+		for (const name of ["knowledge", "repo", "plan", "loop", "goal"]) {
 			expect(acp.some(command => command.name === name)).toBe(false);
 			expect(rpc.some(command => command.name === name)).toBe(true);
 		}
+		expect(rpc.some(command => command.name === "wiki")).toBe(false);
 	});
 });

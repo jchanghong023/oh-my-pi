@@ -13,7 +13,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"grep",
 	"find",
 	"lsp",
-	"wiki",
+	"knowledge_search",
 	"repo",
 	"openwiki_search",
 	"openwiki_read",

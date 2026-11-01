@@ -50,7 +50,7 @@
     },
     {
       "id": "claim_56bc15c86b724917966f5fbc41ce8f65",
-      "statement": "默认 Rust 选测使用 cargo-delta 0.5.0 和合格基线，受影响包与 fork 范围取交集，不确定时回退完整 fork 范围；仅选中 pi-wiki 时执行其 doctest。",
+      "statement": "默认 Rust 选测使用 cargo-delta 0.5.0 和合格基线，受影响包与 fork 范围取交集，不确定时回退完整 fork 范围；仅选中 pi-knowledge 时执行其 doctest。",
       "evidence": [
         {
           "resource": "repo://scripts/fulltest.ts",

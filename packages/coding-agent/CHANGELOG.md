@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is now `knowledge.db`: when only `docs.db` exists, a SQLite snapshot including WAL is published without overwriting the new database and the old file is retained as a recovery backup. If both exist, `knowledge.db` is authoritative; they are not merged or deleted, and migration failures are reported. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
 - Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
 - Removed ZCode Host account and provider configuration compatibility; app-server uses native OMP providers and credentials.
 - Removed MCP OAuth `client_credentials` support. To recover a closed ZCode session using this grant, resume it with an explicit replacement `mcpServers` array; `[]` explicitly removes all MCP servers. The replacement is saved for subsequent cold resumes.
@@ -29,9 +30,9 @@
 - Added workspace-owned `/dev` orchestration with one unfinished flow and one controller per existing workspace, four persistent native stage sessions and minimal recoverable business state. Git worktree subdirectories, aliases and branches share ownership; Dev neither creates nor requires worktrees.
 - Use native stage chat, streaming, tool events, attachments, queues, drafts, history, compaction and stopping without relaying or duplicating replies. A three-line Dev area shows role/runtime/Team, the main action and its consequence, and errors or progress; configuration and details are manual native interactions, without automatic dialogs or a separate decision panel.
 - Persist only the workspace solution-Team toggle, default off and editable in no-agent or requirements phases when runtime conditions allow. New flows inherit it; successful completion preserves it and drop clears it. Team starts only on solution entry, not follow-up turns. Goal remains a user-controlled native executor-session capability, with no Dev setting or per-turn recreation.
-- Let `/dev` requirements and solution agents query existing Wiki indexes directly while retaining their stage-specific file write restrictions.
+- Let `/dev` requirements and solution agents query existing Knowledge indexes directly while retaining their stage-specific file write restrictions.
 - Let `/dev` requirements, solution and planning agents delegate investigation to read-only Scout subagents without expanding stage write access.
-- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Wiki/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
+- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Knowledge/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
 - Expose native `/dev` through opt-in ZCode queries and subscriptions using the same workspace controller, five role states, Team configuration, native messages, approvals and recovery rules. Cold history remains read-only and never acquires control or starts models; unrelated dynamic workflows and desktop UI integration remain separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
@@ -40,6 +41,10 @@
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
 
 ### Changed
+
+- Prefer available OpenWiki tools for project overviews, read source first for code changes, and fall back to source when Wiki is unavailable.
+- Clarify OpenWiki search/read parameters and reference examples; query errors now include field constraints, missing page paths, and available section anchors.
+- Name `openwiki_search` and `openwiki_read` explicitly in exploration guidance, show read arguments before first use, and stop unnecessary browsing once their results are sufficient.
 
 - Show OpenWiki page concurrency configuration with csh/tcsh session-level and PowerShell persistent user-level environment variable examples in CLI help.
 - Use the configured OMP `plan` role for OpenWiki planning unless a model is explicitly selected; fall back to `default` only when `plan` is unconfigured.

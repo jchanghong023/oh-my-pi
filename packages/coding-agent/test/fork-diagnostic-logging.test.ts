@@ -132,19 +132,19 @@ async function sandbox(level = "debug", offline = false) {
 }
 
 function terminal(record: RecordLine) {
-	return /^(?:docs\.init\.(?:completed|finished)|docs\.database\.(?:completed|failed)|docs\.cli\.command\.(?:completed|failed|cancelled|rejected)|wiki\.query\.(?:completed|finished)|docs\.storage\.migration\.(?:completed|failed))$/.test(
+	return /^(?:knowledge\.init\.(?:completed|finished)|knowledge\.database\.(?:completed|failed)|knowledge\.cli\.command\.(?:completed|failed|cancelled|rejected)|knowledge\.query\.(?:completed|finished)|knowledge\.storage\.migration\.(?:completed|failed))$/.test(
 		record.message,
 	);
 }
 
 function expectClosedOperations(records: RecordLine[]) {
-	const business = records.filter(record => /^(?:docs(?:\.cli|\.storage)?|wiki)$/.test(record.component ?? ""));
+	const business = records.filter(record => /^knowledge(?:\.cli|\.storage)?$/.test(record.component ?? ""));
 	for (const record of business.filter(record => record.event && record.stage)) {
 		expect(typeof record.operation_id).toBe("string");
 		expect(record.operation_id?.length).toBeGreaterThan(0);
 	}
 	const starts = business.filter(record =>
-		/^(?:docs\.init|docs\.database|docs\.cli\.command|wiki\.query|docs\.storage\.migration)\.started$/.test(
+		/^(?:knowledge\.init|knowledge\.database|knowledge\.cli\.command|knowledge\.query|knowledge\.storage\.migration)\.started$/.test(
 			record.message,
 		),
 	);
@@ -191,7 +191,7 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				await fs.writeFile(fallback, "unavailable fallback");
 				await fs.mkdir(documents);
 				await fs.writeFile(path.join(documents, "guide.md"), "# Evidence\nPrimary logging remains usable.\n");
-				const imported = await box.cli(["docs", "init", documents, "--name", "primary-logs", "--json"]);
+				const imported = await box.cli(["knowledge", "init", documents, "--name", "primary-logs", "--json"]);
 				expect(imported.code, imported.stderr).toBe(0);
 				expect(JSON.parse(imported.stdout).index).toMatchObject({ name: "primary-logs", documentCount: 1 });
 				const failed = await box.cli([
@@ -228,23 +228,23 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				path.join(documents, "guide.md"),
 				`# Evidence\n${canary}QUERY requires exactly seven cycles. ${canary}BODY\n`,
 			);
-			const imported = await box.cli(["docs", "init", documents, "--name", name, "--json"]);
+			const imported = await box.cli(["knowledge", "init", documents, "--name", name, "--json"]);
 			expect(imported.code).toBe(0);
 			expect(JSON.parse(imported.stdout).index).toMatchObject({ name, documentCount: 1 });
 			const initial = await box.logs();
-			const published = event(initial.records, "docs.init.completed");
+			const published = event(initial.records, "knowledge.init.completed");
 			expect(published).toMatchObject({ stage: "publish", result: "completed", file_count: 1, document_count: 1 });
 			expect(published.section_count as number).toBeGreaterThan(0);
 			const operation = sameOperation(initial.records, published);
-			expect(operation.map(record => record.message)).toContain("docs.cli.command.started");
-			expect(operation.map(record => record.message)).toContain("docs.init.fts.completed");
-			expect(operation.map(record => record.message)).toContain("docs.cli.command.completed");
+			expect(operation.map(record => record.message)).toContain("knowledge.cli.command.started");
+			expect(operation.map(record => record.message)).toContain("knowledge.init.fts.completed");
+			expect(operation.map(record => record.message)).toContain("knowledge.cli.command.completed");
 
-			const duplicate = await box.cli(["docs", "init", documents, "--name", name, "--json"]);
+			const duplicate = await box.cli(["knowledge", "init", documents, "--name", name, "--json"]);
 			expect(duplicate.code).toBe(1);
 			expect(duplicate.stderr).toContain("Document index already exists");
 			const missing = await box.cli([
-				"docs",
+				"knowledge",
 				"init",
 				path.join(box.directory, "missing"),
 				"--name",
@@ -274,13 +274,13 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			expect(raw).not.toContain(canary);
 			expectClosedOperations(records);
 			const rejected = records.find(
-				record => record.message === "docs.init.finished" && record.reason === "duplicate_name",
+				record => record.message === "knowledge.init.finished" && record.reason === "duplicate_name",
 			);
 			expect(rejected).toMatchObject({ stage: "validate", result: "rejected", cleanup: "not_needed" });
 			const duplicateOperation = sameOperation(records, rejected as RecordLine);
-			expect(duplicateOperation.some(record => record.message === "docs.database.completed")).toBe(true);
-			expect(duplicateOperation.some(record => record.message === "docs.init.scan.started")).toBe(false);
-			const absent = records.find(record => record.message === "docs.init.finished" && record.stage === "scan");
+			expect(duplicateOperation.some(record => record.message === "knowledge.database.completed")).toBe(true);
+			expect(duplicateOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(false);
+			const absent = records.find(record => record.message === "knowledge.init.finished" && record.stage === "scan");
 			expect(absent).toMatchObject({
 				result: "rejected",
 				reason: "source_not_directory",
@@ -288,33 +288,37 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				cleanup: "not_needed",
 			});
 			const absentOperation = sameOperation(records, absent as RecordLine);
-			expect(absentOperation.some(record => record.message === "docs.init.scan.started")).toBe(true);
+			expect(absentOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(true);
 			expect(
-				absentOperation.some(record => record.message === "docs.init.scan.completed" || record.stage === "publish"),
+				absentOperation.some(
+					record => record.message === "knowledge.init.scan.completed" || record.stage === "publish",
+				),
 			).toBe(false);
 			const rollback = records.find(
 				record =>
-					record.message === "docs.init.finished" && record.cleanup === "completed" && record.result === "failed",
+					record.message === "knowledge.init.finished" &&
+					record.cleanup === "completed" &&
+					record.result === "failed",
 			);
 			expect(rollback).toMatchObject({ stage: "read", document_count: 1 });
 			const rollbackOperation = sameOperation(records, rollback as RecordLine);
-			expect(rollbackOperation.some(record => record.message === "docs.init.lock.completed")).toBe(true);
+			expect(rollbackOperation.some(record => record.message === "knowledge.init.lock.completed")).toBe(true);
 			expect(
 				rollbackOperation.some(
-					record => record.message === "docs.init.rollback.completed" && record.failed_stage === "read",
+					record => record.message === "knowledge.init.rollback.completed" && record.failed_stage === "read",
 				),
 			).toBe(true);
 			expect(rollbackOperation.some(record => record.stage === "publish")).toBe(false);
 			const cancelled = records.find(
-				record => record.message === "docs.init.finished" && record.result === "cancelled",
+				record => record.message === "knowledge.init.finished" && record.result === "cancelled",
 			);
 			expect(cancelled).toMatchObject({ cleanup: "completed", document_count: 1 });
 			expect(sameOperation(records, cancelled as RecordLine).some(record => record.level === "error")).toBe(false);
-			const queried = event(records, "wiki.query.completed");
+			const queried = event(records, "knowledge.query.completed");
 			expect(queried).toMatchObject({ result: "completed", tool_call_id: "diagnostic-wiki" });
 			expect(queried.rendered_section_count as number).toBeGreaterThan(0);
 			expect(queried.match_count as number).toBeGreaterThan(0);
-			const builds = records.filter(record => record.message === "docs.init.started");
+			const builds = records.filter(record => record.message === "knowledge.init.started");
 			expect(new Set(builds.map(record => record.operation_id)).size).toBe(builds.length);
 		} finally {
 			await box.cleanup();
@@ -329,7 +333,7 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			expect(value.listFailure).toBe("SQLiteError");
 			const { raw, records } = await box.logs();
 			expect(raw).not.toContain(canary);
-			const lists = records.filter(record => record.event === "docs.list");
+			const lists = records.filter(record => record.event === "knowledge.list");
 			const listStarts = lists.filter(record => record.result === "started");
 			expect(listStarts).toHaveLength(2);
 			for (const start of listStarts) {

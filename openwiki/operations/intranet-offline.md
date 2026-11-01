@@ -74,7 +74,7 @@ flowchart TD
 
 ## 资源交付与可选能力
 
-无公网部署须预先交付适合平台的 OMP 二进制、所需 native 组件、配置和本地资源，不能假定首次运行能下载缺失文件。OMP 内置 OpenWiki 的图、Markdown 和 Mermaid 浏览资源及静态导出资源旨在随发行提供，不依赖公网 CDN；已有 Wiki 的只读查询和浏览不需要模型凭据，而生成仍需要可达的模型服务。参见 [Wiki 文档索引](../concepts/wiki-document-index.md) 和 [代码索引](../concepts/repo-code-index.md)。
+无公网部署须预先交付适合平台的 OMP 二进制、所需 native 组件、配置和本地资源，不能假定首次运行能下载缺失文件。OMP 内置 OpenWiki 的图、Markdown 和 Mermaid 浏览资源及静态导出资源旨在随发行提供，不依赖公网 CDN；已有 Wiki 的只读查询和浏览不需要模型凭据，而生成仍需要可达的模型服务。参见 [Knowledge 文档索引](../concepts/knowledge-document-index.md) 和 [代码索引](../concepts/repo-code-index.md)。
 
 本地 tiny 模型是可选能力，不等同于 company 网关。其 MLX 下载实现会访问配置的 Hugging Face endpoint 列出仓库文件并下载权重，甚至检查完整标记之前也先列目录；不要假定 `OMP_OFFLINE` 会阻断此路径或已有缓存一定消除网络访问。缺资源时应按组织允许的方式提前准备或禁用该能力，而不是在内网临时尝试公网下载。
 

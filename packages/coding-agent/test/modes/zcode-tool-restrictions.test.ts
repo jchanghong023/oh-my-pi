@@ -199,7 +199,7 @@ describe("caller tool admission restrictions", () => {
 	it("does not grant tools outside explicit allowlists including MCP names", async () => {
 		let calls = 0;
 		const policy = new ToolRestrictions({ allowlist: ["read", "mcp__local_lookup"] });
-		expect(policy.allows("wiki")).toBe(false);
+		expect(policy.allows("knowledge_search")).toBe(false);
 		expect(policy.allows("repo")).toBe(false);
 		expect(policy.allows("write")).toBe(false);
 		expect(new ToolRestrictions({ allowlist: [] }).allows("read")).toBe(false);

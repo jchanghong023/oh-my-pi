@@ -5,10 +5,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import { WikiSearchEngine } from "@oh-my-pi/pi-natives";
+import { KnowledgeSearchEngine } from "@oh-my-pi/pi-natives";
 import type { Settings } from "../src/config/settings";
-import { DocsSearchEngine } from "../src/docs/engine";
-import { WikiTool } from "../src/tools/wiki";
+import { KnowledgeIndexEngine } from "../src/knowledge/engine";
+import { KnowledgeSearchTool } from "../src/tools/knowledge-search";
 
 it("returns indented code followed by a rule instead of discarding it as a converter heading", async () => {
 	const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "docs-indented-setext-"));
@@ -17,14 +17,14 @@ it("returns indented code followed by a rule instead of discarding it as a conve
 	const source = "# Notes\n\n    Cell\n----\n";
 	try {
 		await Bun.write(path.join(root, "guide.md"), source);
-		const service = new DocsSearchEngine({ agentDir, cwd: root });
+		const service = new KnowledgeIndexEngine({ agentDir, cwd: root });
 		try {
 			await service.init(".", "manual");
 		} finally {
 			service.close();
 		}
 		await fs.rm(root, { recursive: true });
-		const tool = new WikiTool({
+		const tool = new KnowledgeSearchTool({
 			cwd: root,
 			hasUI: false,
 			settings: { getAgentDir: () => agentDir } as unknown as Settings,
@@ -52,7 +52,7 @@ it("does not recover an active replacement database after the import lease callb
 	const replacementDir = path.join(temporary, "replacement");
 	const alias = path.join(temporary, "agent");
 	const gate = new Int32Array(new SharedArrayBuffer(4));
-	let service: WikiSearchEngine | undefined;
+	let service: KnowledgeSearchEngine | undefined;
 	let worker: Worker | undefined;
 	try {
 		await fs.mkdir(originalDir);
@@ -61,14 +61,14 @@ it("does not recover an active replacement database after the import lease callb
 		await Bun.write(path.join(root, "b.md"), "# Second\nleasesecondbeacon\n");
 		const aliasType = process.platform === "win32" ? "junction" : "dir";
 		symlinkSync(originalDir, alias, aliasType);
-		const databasePath = path.join(alias, "docs.db");
-		service = new WikiSearchEngine(databasePath, databasePath);
-		const replacementPath = path.join(replacementDir, "docs.db");
+		const databasePath = path.join(alias, "knowledge.db");
+		service = new KnowledgeSearchEngine(databasePath, databasePath);
+		const replacementPath = path.join(replacementDir, "knowledge.db");
 		worker = new Worker(
 			`
 			import { parentPort, workerData } from "node:worker_threads";
-			import { WikiSearchEngine } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives"))};
-			const service = new WikiSearchEngine(workerData.databasePath, workerData.databasePath);
+			import { KnowledgeSearchEngine } from ${JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives"))};
+			const service = new KnowledgeSearchEngine(workerData.databasePath, workerData.databasePath);
 			const gate = new Int32Array(workerData.gate);
 			service.init(workerData.root, "active", progress => {
 				if (progress.phase !== "fts" || progress.completed !== 1) return;
@@ -87,7 +87,7 @@ it("does not recover an active replacement database after the import lease callb
 		let swapped = false;
 		await expect(
 			service.init(root, "intruder", undefined, undefined, event => {
-				if (event.message !== "docs.init.lock.completed") return;
+				if (event.message !== "knowledge.init.lock.completed") return;
 				if (process.platform === "win32") rmdirSync(alias);
 				else unlinkSync(alias);
 				symlinkSync(replacementDir, alias, aliasType);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
-import { DocsService } from "../../docs/service";
+import { KnowledgeService } from "../../knowledge/service";
 import { RepoService } from "../../repo/service";
 import type { RepoProgress } from "../../repo/types";
 import { formatRepoStatusLines } from "../../tools/repo";
@@ -27,7 +27,7 @@ function runIndexDashboard(
 	const manager = session.sessionManager;
 	const controller = new AbortController();
 	const signal = runtime.signal ? AbortSignal.any([runtime.signal, controller.signal]) : controller.signal;
-	const command = name === "/wiki" || name === "/repo" ? name : "unknown";
+	const command = name === "/knowledge" || name === "/repo" ? name : "unknown";
 	const started = performance.now();
 	let stage = "dashboard";
 	let cancelled = false;
@@ -148,79 +148,79 @@ function line(value: string): string {
 		.replace(/[\r\n]+/g, " ");
 }
 
-/** RPC dialogs replace the terminal dashboard; all indexing remains in DocsService. */
-export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCommandResult {
-	return runIndexDashboard("/wiki", runtime, async scope => {
-		scope.stage("docs_service_create");
-		const service = new DocsService({ agentDir: runtime.settings.getAgentDir(), cwd: runtime.cwd });
+/** RPC dialogs replace the terminal dashboard; all indexing remains in KnowledgeService. */
+export function handleRpcKnowledgeDashboard(runtime: RpcSlashCommandRuntime): SlashCommandResult {
+	return runIndexDashboard("/knowledge", runtime, async scope => {
+		scope.stage("knowledge_service_create");
+		const service = new KnowledgeService({ agentDir: runtime.settings.getAgentDir(), cwd: runtime.cwd });
 		try {
-			scope.stage("docs_list");
+			scope.stage("knowledge_list");
 			const indexes = await service.list({ signal: scope.signal });
 			if (!scope.current()) return;
 			scope.stage("index_output");
 			await scope.output(
 				indexes.length
 					? [
-							"Document indexes:",
+							"Knowledge indexes:",
 							...indexes.map(
 								index =>
 									`${line(index.name)}: ${index.documentCount} documents, ${index.sectionCount} sections · ${line(index.rootPath)}`,
 							),
 						].join("\n")
-					: "No document indexes.",
+					: "No knowledge indexes.",
 			);
 			if (!scope.current()) return;
 			scope.stage("action_select");
 			const action = await runtime.ui.select(
-				"Document indexes",
+				"Knowledge indexes",
 				[
-					...(indexes.length ? ["Search document indexes", "Grep document indexes"] : []),
-					"New document index",
-					...(indexes.length ? ["Delete document index"] : []),
+					...(indexes.length ? ["Search knowledge indexes", "Grep knowledge indexes"] : []),
+					"New knowledge index",
+					...(indexes.length ? ["Delete knowledge index"] : []),
 				],
 				{ signal: scope.signal },
 			);
 			if (!scope.current() || !action) return scope.cancel();
-			if (action === "New document index") {
+			if (action === "New knowledge index") {
 				scope.stage("directory_input");
 				const directory = (
 					await runtime.ui.input("Markdown directory", runtime.cwd, { signal: scope.signal })
 				)?.trim();
 				if (!scope.current() || !directory) return scope.cancel();
 				scope.stage("index_name_input");
-				const name = (await runtime.ui.input("Document index name", undefined, { signal: scope.signal }))?.trim();
+				const name = (await runtime.ui.input("Knowledge index name", undefined, { signal: scope.signal }))?.trim();
 				if (!scope.current() || !name) return scope.cancel();
-				scope.stage("docs_init");
+				scope.stage("knowledge_init");
 				const result = await service.init(directory, name, {
 					signal: scope.signal,
 					onProgress: value => scope.progress(value.phase, value.completed, value.total),
 				});
 				if (!scope.current()) return;
 				scope.stage("index_output");
-				await scope.output(`Created document index ${line(result.index.name)}: ${result.processed} documents.`);
+				await scope.output(`Created knowledge index ${line(result.index.name)}: ${result.processed} documents.`);
 				if (!scope.current()) return;
-			} else if (action === "Delete document index") {
+			} else if (action === "Delete knowledge index") {
 				const labels = indexes.map((index, position) => `${position + 1}. ${line(index.name)}`);
 				scope.stage("index_select");
-				const selected = await runtime.ui.select("Delete document index", labels, { signal: scope.signal });
+				const selected = await runtime.ui.select("Delete knowledge index", labels, { signal: scope.signal });
 				if (!scope.current() || selected === undefined) return scope.cancel();
 				const index = indexes[labels.indexOf(selected)];
 				if (!index) return;
 				scope.stage("delete_confirm");
 				const confirmed = await runtime.ui.confirm(
-					"Delete document index?",
+					"Delete knowledge index?",
 					`${line(index.name)}\nSource files are preserved.`,
 					{ signal: scope.signal },
 				);
 				if (!scope.current() || !confirmed) return scope.cancel();
-				scope.stage("docs_remove");
+				scope.stage("knowledge_remove");
 				await service.remove(index.name, { signal: scope.signal });
 				if (!scope.current()) return;
 				scope.stage("index_output");
-				await scope.output(`Deleted document index ${line(index.name)}. Source files are preserved.`);
+				await scope.output(`Deleted knowledge index ${line(index.name)}. Source files are preserved.`);
 				if (!scope.current()) return;
-			} else if (action === "Search document indexes" || action === "Grep document indexes") {
-				const mode = action === "Grep document indexes" ? "grep" : "search";
+			} else if (action === "Search knowledge indexes" || action === "Grep knowledge indexes") {
+				const mode = action === "Grep knowledge indexes" ? "grep" : "search";
 				scope.stage("query_input");
 				const input = await runtime.ui.input(action, undefined, { signal: scope.signal });
 				const query = mode === "grep" ? input : input?.trim();
@@ -228,7 +228,7 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 				let cursor: string | undefined;
 				let pageStart = 0;
 				while (scope.current()) {
-					scope.stage("docs_search");
+					scope.stage("knowledge_search");
 					const result = await service.search(query, {
 						limit: 20,
 						cursor,
@@ -258,7 +258,7 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 					while (scope.current()) {
 						scope.stage("section_select");
 						const selected = await runtime.ui.select(
-							"Document sections",
+							"Knowledge sections",
 							[...labels, ...(result.cursor ? ["Next page"] : []), "Done browsing"],
 							{ signal: scope.signal },
 						);
@@ -280,7 +280,7 @@ export function handleRpcWikiDashboard(runtime: RpcSlashCommandRuntime): SlashCo
 				}
 			}
 		} finally {
-			const previous = scope.stage("docs_close");
+			const previous = scope.stage("knowledge_close");
 			await service.close();
 			scope.stage(previous);
 		}

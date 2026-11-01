@@ -39,7 +39,7 @@ else { process.stdout.write(${JSON.stringify(output)}); process.stderr.write(${J
 	}
 }
 
-it.each([[[]], [["pi-natives", "pi-wiki", "other"]]])(
+it.each([[[]], [["pi-natives", "pi-knowledge", "other"]]])(
 	"passes cargo-delta affected output through: %j",
 	async packages => {
 		const { selection, calls, gateResult, root } = await fixture(JSON.stringify({ Affected: packages }));
@@ -71,20 +71,20 @@ it("recognizes the pinned CLI's explicit clean-tree diagnostic, not an ambiguous
 	);
 	expect(clean.selection).toMatchObject({ mode: "affected", packages: [], baseline });
 	const ambiguous = await fixture("");
-	expect(ambiguous.selection).toMatchObject({ mode: "full", packages: ["pi-wiki", "pi-natives"] });
+	expect(ambiguous.selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
 });
 
 it.each([
 	["not json", 0],
 	["{}", 0],
 	['{"Affected":["bad package"]}', 0],
-	['{"Affected":["pi-wiki","pi-wiki"]}', 0],
+	['{"Affected":["pi-knowledge","pi-knowledge"]}', 0],
 	['{"Affected":[],"Unknown":[]}', 0],
 	['{"Affected":[]}', 2],
 ])("falls back when impact fails or output is unsafe", async (output, exitCode) => {
 	const { selection, gateResult } = await fixture(output, exitCode);
 	expect(gateResult.exitCode).toBe(0);
-	expect(selection).toMatchObject({ mode: "full", packages: ["pi-wiki", "pi-natives"] });
+	expect(selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
 	expect(selection.reason.length).toBeGreaterThan(0);
 });
 
@@ -104,5 +104,5 @@ it("does not invoke delta without a qualified baseline", async () => {
 		{ print: () => {} },
 	);
 	expect(gateResult.exitCode).toBe(0);
-	expect(selection).toMatchObject({ mode: "full", packages: ["pi-wiki", "pi-natives"] });
+	expect(selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
 });

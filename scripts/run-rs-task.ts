@@ -10,7 +10,7 @@ import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath } from "./test-reporting";
 import type { RustDeltaSelection } from "./test-gate-delta";
 
-const forkPackages = ["pi-wiki", "pi-natives"] as const;
+const forkPackages = ["pi-knowledge", "pi-natives"] as const;
 const packageNamePattern = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 const baselinePattern = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i;
 
@@ -169,11 +169,11 @@ function validChangedPaths(): string[] | undefined {
 
 function forkTestCommands(packages: readonly string[]): readonly (readonly string[])[] {
 	if (!packages.length) return [];
-	const wiki = packages.includes("pi-wiki");
+	const knowledge = packages.includes("pi-knowledge");
 	const native = packages.includes("pi-natives");
 	const expression = [
-		wiki && "package(pi-wiki)",
-		native && "(package(pi-natives) & (test(/^wiki::/) | test(/^python_symbols::/)))",
+		knowledge && "package(pi-knowledge)",
+		native && "(package(pi-natives) & (test(/^knowledge::/) | test(/^python_symbols::/)))",
 	]
 		.filter(Boolean)
 		.join(" | ");
@@ -192,7 +192,7 @@ function forkTestCommands(packages: readonly string[]): readonly (readonly strin
 			"--status-level=fail",
 			"--final-status-level=fail",
 		],
-		...(wiki ? [["cargo", "test", "-p", "pi-wiki", "--doc", "--no-fail-fast"]] : []),
+		...(knowledge ? [["cargo", "test", "-p", "pi-knowledge", "--doc", "--no-fail-fast"]] : []),
 	];
 }
 
@@ -206,8 +206,8 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 						["cargo nextest run", ["cargo", "nextest", "run"]],
 						["cargo test --doc", ["cargo", "test", "--doc"]],
 					] as const)
-				: !selectedPackages.includes("pi-wiki")
-					? ([["cargo test --doc", ["cargo", "test", "-p", "pi-wiki", "--doc"]]] as const)
+				: !selectedPackages.includes("pi-knowledge")
+					? ([["cargo test --doc", ["cargo", "test", "-p", "pi-knowledge", "--doc"]]] as const)
 					: [];
 			for (const [producer, command] of skipped) {
 				await recordTestProducer({
@@ -225,7 +225,8 @@ async function runCommands(commands: readonly (readonly string[])[], scope?: str
 						packages: [],
 						selected: 0,
 						changedPaths: validChangedPaths()!,
-						reason: producer === "cargo test --doc" ? "pi-wiki is not affected" : "no fork packages are affected",
+						reason:
+							producer === "cargo test --doc" ? "pi-knowledge is not affected" : "no fork packages are affected",
 					},
 				});
 			}
@@ -487,7 +488,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 								mode: "full",
 								reason: full
 									? "all workspace packages and test namespaces"
-									: "full pi-wiki package and pi-natives wiki bindings and python_symbols namespaces",
+									: "full pi-knowledge package and pi-natives knowledge bindings and python_symbols namespaces",
 							},
 				timingBasis: "nextest native JUnit case time",
 				runnerVersion: toolVersion([executable, "nextest", "--version"], env),
@@ -516,10 +517,10 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 								tool: "cargo-delta",
 								mode: "affected",
 								baseline: selection.baseline,
-								packages: ["pi-wiki"],
+								packages: ["pi-knowledge"],
 								reason: selection.reason,
 							}
-						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-wiki doctests" },
+						: { tool: "cargo", mode: "full", reason: full ? "workspace doctests" : "pi-knowledge doctests" },
 				runnerVersion: toolVersion([executable, "--version"], env),
 			});
 		} catch (error) {

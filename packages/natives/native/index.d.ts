@@ -363,6 +363,29 @@ export declare class IpcServer {
   unref(): void
 }
 
+export declare class KnowledgeSearchEngine {
+  hasCachedHybridCandidates(query: string, options: KnowledgeSearchOptions, signal?: AbortSignal): Promise<boolean>
+  lookupHybridSearch(query: string, options: KnowledgeSearchOptions, configurationIdentity: string, signal?: AbortSignal): Promise<KnowledgeSearchOutput | null>
+  prepareHybridSearch(query: string, options: KnowledgeSearchOptions, modelIdentity?: string, signal?: AbortSignal): Promise<KnowledgeHybridPrepared | KnowledgeSearchOutput>
+  scoreHybridSearch(token: string, query: Float32Array, limit: number, signal?: AbortSignal): Promise<number[] | null>
+  readHybridCandidates(token: string, sectionIds: number[], signal?: AbortSignal): Promise<KnowledgeHybridCandidate[]>
+  finishHybridSearch(token: string, finalSectionIds: number[], contextIdentity: string, configurationIdentity: string, signal?: AbortSignal): Promise<KnowledgeSearchOutput>
+  initDeferred(rootPath: string, name: string, onProgress?: (progress: KnowledgeBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Promise<KnowledgeDeferredBuildResult>
+  beginVectorImport(token: string, modelIdentity: string, signal?: AbortSignal): Promise<KnowledgeVectorImport>
+  readVectorImportBatch(token: string, afterSectionId: number, limit: number, signal?: AbortSignal): Promise<KnowledgeVectorSourceBatch>
+  writeVectorImportBatch(token: string, rows: KnowledgeVectorRow[], signal?: AbortSignal): Promise<void>
+  publishVectorImport(token: string, signal?: AbortSignal): Promise<void>
+  publishDeferredImport(token: string, signal?: AbortSignal): Promise<void>
+  rollbackImport(token: string): Promise<void>
+  constructor(databasePath: string, cursorPath: string, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown)
+  list(diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Array<KnowledgeIndexSummary>
+  remove(name: string, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): void
+  init(rootPath: string, name: string, onProgress?: (progress: KnowledgeBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Promise<KnowledgeBuildResult>
+  searchWindow(query: string, options: KnowledgeSearchOptions, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): KnowledgeSearchOutput
+  searchWindowAsync(query: string, options: KnowledgeSearchOptions, signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Promise<KnowledgeSearchOutput>
+  close(): void
+}
+
 /** Native multi-pattern line matcher returning named captures per line. */
 export declare class LineMatcher {
   /**
@@ -878,29 +901,6 @@ export declare class VcsRepo {
   commitDetails(rev: string, signal?: unknown | undefined | null): Promise<VcsCommitDetails>
   /** List tracked or untracked paths. */
   lsFiles(others: boolean, excludeStandard: boolean, signal?: unknown | undefined | null): Promise<Array<string>>
-}
-
-export declare class WikiSearchEngine {
-  hasCachedHybridCandidates(query: string, options: WikiSearchOptions, signal?: AbortSignal): Promise<boolean>
-  lookupHybridSearch(query: string, options: WikiSearchOptions, configurationIdentity: string, signal?: AbortSignal): Promise<WikiSearchOutput | null>
-  prepareHybridSearch(query: string, options: WikiSearchOptions, modelIdentity?: string, signal?: AbortSignal): Promise<WikiHybridPrepared | WikiSearchOutput>
-  scoreHybridSearch(token: string, query: Float32Array, limit: number, signal?: AbortSignal): Promise<number[] | null>
-  readHybridCandidates(token: string, sectionIds: number[], signal?: AbortSignal): Promise<WikiHybridCandidate[]>
-  finishHybridSearch(token: string, finalSectionIds: number[], contextIdentity: string, configurationIdentity: string, signal?: AbortSignal): Promise<WikiSearchOutput>
-  initDeferred(rootPath: string, name: string, onProgress?: (progress: WikiBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiDeferredBuildResult>
-  beginVectorImport(token: string, modelIdentity: string, signal?: AbortSignal): Promise<WikiVectorImport>
-  readVectorImportBatch(token: string, afterSectionId: number, limit: number, signal?: AbortSignal): Promise<WikiVectorSourceBatch>
-  writeVectorImportBatch(token: string, rows: WikiVectorRow[], signal?: AbortSignal): Promise<void>
-  publishVectorImport(token: string, signal?: AbortSignal): Promise<void>
-  publishDeferredImport(token: string, signal?: AbortSignal): Promise<void>
-  rollbackImport(token: string): Promise<void>
-  constructor(databasePath: string, cursorPath: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown)
-  list(diagnostic?: (event: WikiDiagnosticEvent) => unknown): Array<WikiIndexSummary>
-  remove(name: string, diagnostic?: (event: WikiDiagnosticEvent) => unknown): void
-  init(rootPath: string, name: string, onProgress?: (progress: WikiBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiBuildResult>
-  searchWindow(query: string, options: WikiSearchOptions, diagnostic?: (event: WikiDiagnosticEvent) => unknown): WikiSearchOutput
-  searchWindowAsync(query: string, options: WikiSearchOptions, signal?: AbortSignal, diagnostic?: (event: WikiDiagnosticEvent) => unknown): Promise<WikiSearchOutput>
-  close(): void
 }
 
 /**
@@ -2650,6 +2650,270 @@ export declare enum KeyEventType {
   Release = 3
 }
 
+export interface KnowledgeBuildProgress {
+  phase: string
+  total: number
+  completed: number
+  failed: number
+  currentPath?: string
+}
+
+export interface KnowledgeBuildResult {
+  processed: number
+  failed: number
+  index: KnowledgeIndexSummary
+}
+
+export declare function knowledgeCheckIndexingCancellation(signal?: AbortSignal | undefined | null): void
+
+/** Output positions are JS numbers; the decoded cursor retains its u64. */
+export interface KnowledgeCursorBase {
+  v: 1
+  q: string
+  s: string
+  p: number
+}
+
+export interface KnowledgeDeferredBuildResult {
+  processed: number
+  failed: number
+  index: KnowledgeIndexSummary
+  importToken: string
+}
+
+export interface KnowledgeDiagnosticEvent {
+  message: string
+  level: string
+  component: string
+  event: string
+  stage: string
+  result: string
+  elapsedMs?: number
+  fileCount?: number
+  documentCount?: number
+  sectionCount?: number
+  indexCount?: number
+  abandonedIndexCount?: number
+  retryLimit?: number
+  schemaVersion?: number
+  supportedVersion?: number
+  fromVersion?: number
+  toVersion?: number
+  indexId?: number
+  indexHash?: string
+  cleanup?: string
+  rollback?: string
+  failedStage?: string
+  reason?: string
+  errorType?: string
+  errorCode?: string
+  errorErrno?: number
+}
+
+export declare function knowledgeEnumerateMarkdownFiles(root: string): Promise<string[]>
+
+export interface KnowledgeHybridCandidate {
+  sectionId: number
+  index: string
+  documentHash: string
+  path: string
+  headingPath: string
+  lineStart: number
+  lineEnd: number
+  text: string
+  shape: 'content' | 'heading-only' | 'stub'
+  matchKind: 'exact-name' | 'related' | 'regex'
+  rank: number
+  sourceOrder: number
+}
+
+export interface KnowledgeHybridPrepared {
+  token: string
+  effectiveQuery: string
+  fulltext: Array<KnowledgeHybridRank>
+  vectorDimensions: Array<number>
+  vectorFailure: boolean
+}
+
+export interface KnowledgeHybridRank {
+  sectionId: number
+  matchKind: 'exact-name' | 'related' | 'regex'
+  rank: number
+  sourceOrder: number
+}
+
+/**
+ * File-system path of the exclusive lease guarding document-index imports of
+ * `database_path`.
+ *
+ * Holding this path (from this process or another) contends
+ * with any in-flight import of the same physical database.
+ */
+export declare function knowledgeImportLeasePath(databasePath: string): string
+
+export interface KnowledgeIndexSummary {
+  id: number
+  name: string
+  rootPath: string
+  documentCount: number
+  sectionCount: number
+}
+
+export interface KnowledgeMarkdownDocument {
+  relativePath: string
+  title: string
+  sourceKind: string
+  sha256: string
+  sizeBytes: number
+  mtimeMs: number
+  sections: Array<KnowledgeMarkdownSection>
+}
+
+export interface KnowledgeMarkdownSection {
+  ordinal: number
+  headingPath: Array<string>
+  headingLevel: number
+  lineStart: number
+  lineEnd: number
+  byteStart: number
+  byteEnd: number
+  rawMarkdown: string
+  plainText: string
+}
+
+export interface KnowledgeNormalizedSearchOptions {
+  limit: number
+  characterBudget: number
+}
+
+export declare function knowledgeNormalizeFts(text: string): string
+
+export declare function knowledgeNormalizePlainText(markdown: string, fencePrefix?: string | undefined | null, continuesLine?: boolean | undefined | null): string
+
+/** Math.floor, then the historical [1,500] clamp, including infinities. */
+export declare function knowledgeNormalizeSearchOptions(limit?: number | undefined | null, characterBudget?: number | undefined | null): KnowledgeNormalizedSearchOptions
+
+export interface KnowledgeParsedMarkdown {
+  title?: string
+  sections: Array<KnowledgeMarkdownSection>
+}
+
+export declare function knowledgeParseMarkdown(bytes: Uint8Array): KnowledgeParsedMarkdown
+
+export interface KnowledgePreparedToolQuery {
+  query?: string
+  cursor?: string
+  mode?: string
+  case?: boolean
+  queryTruncated: boolean
+  ignoredArgumentCount: number
+  error?: string
+  errorKind?: string
+}
+
+/**
+ * Validation returns domain text for the host's `ToolError`, not a native
+ * error pretending to be the host class. Host-provided cursor presence
+ * preserves the old `in` check, including inherited and explicitly undefined
+ * values.
+ */
+export declare function knowledgePrepareToolQuery(query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: boolean | undefined | null, mode?: unknown, caseSensitive?: unknown): KnowledgePreparedToolQuery
+
+export declare function knowledgeReadMarkdownDocument(root: string, relative: string): Promise<KnowledgeMarkdownDocument>
+
+export interface KnowledgeSearchHit {
+  sectionId: number
+  index: string
+  documentHash: string
+  path: string
+  headingPath: string
+  lineStart: number
+  lineEnd: number
+  text: string
+  shape: 'content' | 'heading-only' | 'stub'
+  matchKind: 'exact-name' | 'related' | 'regex'
+  rank: number
+}
+
+export interface KnowledgeSearchOptions {
+  index?: string
+  path?: string
+  cursor?: string
+  limit?: number
+  mode?: string
+  case?: boolean
+}
+
+export interface KnowledgeSearchOutput {
+  result: KnowledgeSearchWindow
+  cacheHit: boolean
+  termCount: number
+}
+
+/** Public shape for both the native renderer and caller-local selection. */
+export interface KnowledgeSearchResult {
+  sections: Array<KnowledgeSearchHit>
+  total: number
+  exactNameMatches: number
+  technicalName?: string
+  hasMore: boolean
+  cursor?: string
+}
+
+export interface KnowledgeSearchWindow {
+  sections: Array<KnowledgeSearchHit>
+  total: number
+  exactNameMatches: number
+  technicalName?: string
+  cursorBase: KnowledgeCursorBase
+  retrieval?: string
+  reranked?: boolean
+}
+
+export declare function knowledgeSectionShape(markdown: string): 'content' | 'heading-only' | 'stub'
+
+export declare function knowledgeSelectPage(window: KnowledgeSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: KnowledgeSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): KnowledgeSearchResult
+
+export declare function knowledgeToolPage(query: string, window: KnowledgeSearchWindow, mode?: string | undefined | null, caseSensitive?: boolean | undefined | null, path?: string | undefined | null): KnowledgeToolPage
+
+export interface KnowledgeToolPage {
+  result: KnowledgeSearchResult
+  text: string
+  renderedSectionCount: number
+  renderedCharacters: number
+  duplicateCount: number
+  oversizeCount: number
+}
+
+export declare function knowledgeTruncateHeading(text: string, maxChars?: number | undefined | null): string
+
+export interface KnowledgeVectorImport {
+  token: string
+  total: number
+}
+
+export interface KnowledgeVectorRow {
+  sectionId: number
+  vector: Float32Array
+}
+
+export interface KnowledgeVectorSource {
+  sectionId: number
+  text: string
+}
+
+export interface KnowledgeVectorSourceBatch {
+  sections: Array<KnowledgeVectorSource>
+  nextSectionId?: number
+}
+
+/**
+ * Caller elapsed time includes startup, IPC queueing, query and page work.
+ * A Tokio monotonic deadline is rechecked after every wake; no DB/owner lock
+ * or worker-thread sleep is involved. Settlement also rejects late aborts.
+ */
+export declare function knowledgeWaitMinimum(elapsedMilliseconds: number, signal?: AbortSignal | undefined | null): Promise<void>
+
 /**
  * Matches of one [`LineMatcher::match_lines`] call, column-wise.
  *
@@ -4272,270 +4536,6 @@ export interface WasmGrammarQuery {
   /** File whose extension selects the language. */
   path?: string
 }
-
-export interface WikiBuildProgress {
-  phase: string
-  total: number
-  completed: number
-  failed: number
-  currentPath?: string
-}
-
-export interface WikiBuildResult {
-  processed: number
-  failed: number
-  index: WikiIndexSummary
-}
-
-export declare function wikiCheckIndexingCancellation(signal?: AbortSignal | undefined | null): void
-
-/** Output positions are JS numbers; the decoded cursor retains its u64. */
-export interface WikiCursorBase {
-  v: 1
-  q: string
-  s: string
-  p: number
-}
-
-export interface WikiDeferredBuildResult {
-  processed: number
-  failed: number
-  index: WikiIndexSummary
-  importToken: string
-}
-
-export interface WikiDiagnosticEvent {
-  message: string
-  level: string
-  component: string
-  event: string
-  stage: string
-  result: string
-  elapsedMs?: number
-  fileCount?: number
-  documentCount?: number
-  sectionCount?: number
-  indexCount?: number
-  abandonedIndexCount?: number
-  retryLimit?: number
-  schemaVersion?: number
-  supportedVersion?: number
-  fromVersion?: number
-  toVersion?: number
-  indexId?: number
-  indexHash?: string
-  cleanup?: string
-  rollback?: string
-  failedStage?: string
-  reason?: string
-  errorType?: string
-  errorCode?: string
-  errorErrno?: number
-}
-
-export declare function wikiEnumerateMarkdownFiles(root: string): Promise<string[]>
-
-export interface WikiHybridCandidate {
-  sectionId: number
-  index: string
-  documentHash: string
-  path: string
-  headingPath: string
-  lineStart: number
-  lineEnd: number
-  text: string
-  shape: 'content' | 'heading-only' | 'stub'
-  matchKind: 'exact-name' | 'related' | 'regex'
-  rank: number
-  sourceOrder: number
-}
-
-export interface WikiHybridPrepared {
-  token: string
-  effectiveQuery: string
-  fulltext: Array<WikiHybridRank>
-  vectorDimensions: Array<number>
-  vectorFailure: boolean
-}
-
-export interface WikiHybridRank {
-  sectionId: number
-  matchKind: 'exact-name' | 'related' | 'regex'
-  rank: number
-  sourceOrder: number
-}
-
-/**
- * File-system path of the exclusive lease guarding document-index imports of
- * `database_path`.
- *
- * Holding this path (from this process or another) contends
- * with any in-flight import of the same physical database.
- */
-export declare function wikiImportLeasePath(databasePath: string): string
-
-export interface WikiIndexSummary {
-  id: number
-  name: string
-  rootPath: string
-  documentCount: number
-  sectionCount: number
-}
-
-export interface WikiMarkdownDocument {
-  relativePath: string
-  title: string
-  sourceKind: string
-  sha256: string
-  sizeBytes: number
-  mtimeMs: number
-  sections: Array<WikiMarkdownSection>
-}
-
-export interface WikiMarkdownSection {
-  ordinal: number
-  headingPath: Array<string>
-  headingLevel: number
-  lineStart: number
-  lineEnd: number
-  byteStart: number
-  byteEnd: number
-  rawMarkdown: string
-  plainText: string
-}
-
-export interface WikiNormalizedSearchOptions {
-  limit: number
-  characterBudget: number
-}
-
-export declare function wikiNormalizeFts(text: string): string
-
-export declare function wikiNormalizePlainText(markdown: string, fencePrefix?: string | undefined | null, continuesLine?: boolean | undefined | null): string
-
-/** Math.floor, then the historical [1,500] clamp, including infinities. */
-export declare function wikiNormalizeSearchOptions(limit?: number | undefined | null, characterBudget?: number | undefined | null): WikiNormalizedSearchOptions
-
-export interface WikiParsedMarkdown {
-  title?: string
-  sections: Array<WikiMarkdownSection>
-}
-
-export declare function wikiParseMarkdown(bytes: Uint8Array): WikiParsedMarkdown
-
-export interface WikiPreparedToolQuery {
-  query?: string
-  cursor?: string
-  mode?: string
-  case?: boolean
-  queryTruncated: boolean
-  ignoredArgumentCount: number
-  error?: string
-  errorKind?: string
-}
-
-/**
- * Validation returns domain text for the host's `ToolError`, not a native
- * error pretending to be the host class. Host-provided cursor presence
- * preserves the old `in` check, including inherited and explicitly undefined
- * values.
- */
-export declare function wikiPrepareToolQuery(query: unknown, cursor: unknown, receivedKeys: string[], cursorPresent?: boolean | undefined | null, mode?: unknown, caseSensitive?: unknown): WikiPreparedToolQuery
-
-export declare function wikiReadMarkdownDocument(root: string, relative: string): Promise<WikiMarkdownDocument>
-
-export interface WikiSearchHit {
-  sectionId: number
-  index: string
-  documentHash: string
-  path: string
-  headingPath: string
-  lineStart: number
-  lineEnd: number
-  text: string
-  shape: 'content' | 'heading-only' | 'stub'
-  matchKind: 'exact-name' | 'related' | 'regex'
-  rank: number
-}
-
-export interface WikiSearchOptions {
-  index?: string
-  path?: string
-  cursor?: string
-  limit?: number
-  mode?: string
-  case?: boolean
-}
-
-export interface WikiSearchOutput {
-  result: WikiSearchWindow
-  cacheHit: boolean
-  termCount: number
-}
-
-/** Public shape for both the native renderer and caller-local selection. */
-export interface WikiSearchResult {
-  sections: Array<WikiSearchHit>
-  total: number
-  exactNameMatches: number
-  technicalName?: string
-  hasMore: boolean
-  cursor?: string
-}
-
-export interface WikiSearchWindow {
-  sections: Array<WikiSearchHit>
-  total: number
-  exactNameMatches: number
-  technicalName?: string
-  cursorBase: WikiCursorBase
-  retrieval?: string
-  reranked?: boolean
-}
-
-export declare function wikiSectionShape(markdown: string): 'content' | 'heading-only' | 'stub'
-
-export declare function wikiSelectPage(window: WikiSearchWindow, characterBudget?: number | undefined | null, sectionCost?: ((hit: WikiSearchHit, position: number) => number | undefined | null) | undefined | null, signal?: AbortSignal | undefined | null, indexingCancellation?: boolean | undefined | null): WikiSearchResult
-
-export declare function wikiToolPage(query: string, window: WikiSearchWindow, mode?: string | undefined | null, caseSensitive?: boolean | undefined | null, path?: string | undefined | null): WikiToolPage
-
-export interface WikiToolPage {
-  result: WikiSearchResult
-  text: string
-  renderedSectionCount: number
-  renderedCharacters: number
-  duplicateCount: number
-  oversizeCount: number
-}
-
-export declare function wikiTruncateHeading(text: string, maxChars?: number | undefined | null): string
-
-export interface WikiVectorImport {
-  token: string
-  total: number
-}
-
-export interface WikiVectorRow {
-  sectionId: number
-  vector: Float32Array
-}
-
-export interface WikiVectorSource {
-  sectionId: number
-  text: string
-}
-
-export interface WikiVectorSourceBatch {
-  sections: Array<WikiVectorSource>
-  nextSectionId?: number
-}
-
-/**
- * Caller elapsed time includes startup, IPC queueing, query and page work.
- * A Tokio monotonic deadline is rechecked after every wake; no DB/owner lock
- * or worker-thread sleep is involved. Settlement also rejects late aborts.
- */
-export declare function wikiWaitMinimum(elapsedMilliseconds: number, signal?: AbortSignal | undefined | null): Promise<void>
 
 /** Profiling results returned to JavaScript. */
 export interface WorkProfile {

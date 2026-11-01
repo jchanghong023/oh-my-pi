@@ -117,6 +117,18 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 - **THEN** 内置工具返回已有 Wiki 的搜索结果和对应完整章节，不需要用户安装或启动 OpenWiki MCP 服务
 - **AND** 正常零命中保持零命中，无 Wiki 或参数错误如实返回，不通过生成内容填补结果
 
+#### Scenario: 查询参数与章节引用说明
+- **WHEN** AI 查看 `openwiki_search` 或 `openwiki_read` 的参数和工具说明
+- **THEN** 搜索参数明确非空查询、整数结果数量范围、路径提示的数量及相对路径限制；路径提示仍只影响排序，不过滤结果
+- **AND** 读取说明明确 `results[].ref` 为字符串数组，每个引用按 `#` 拆成不含锚点的 `page` 和非空 `sections` 数组；同页同 Wiki 的锚点可以合并，其他页面或 Wiki 分开调用，返回的 `wiki` ID 必须保留，没有则省略
+- **AND** 提供完整搜索结果到读取参数的 JSON 示例，不改变已有参数名、查询结果格式及通用参数归一化行为
+
+#### Scenario: 查询失败可据提示纠正
+- **WHEN** 查询参数不符合既有约束，或读取页面、章节引用错误
+- **THEN** 参数错误标明字段位置和对应合法约束，不只返回原始验证器 JSON；页面不存在时保留请求页面路径并提示重新搜索引用
+- **AND** 页面与锚点混传时说明 `#` 前后部分应分别放入 `page` 和 `sections`；未知章节错误指出所选页面、错误锚点，并列出该页最多 20 个可用锚点，截断时明确标记
+- **AND** 纠错信息不生成 Wiki、不自动改读其他页面或章节，沿用原有只读权限和错误分类
+
 #### Scenario: 中文与混合标识符查询
 - **WHEN** 用户用中文词组、自然语言或中英文标识符检索已有 Wiki
 - **THEN** 连续汉字中的相邻词组可以命中；一个双字词不能仅因两个汉字分别出现在不同位置而命中，多词查询允许部分词命中
@@ -138,14 +150,30 @@ OMP MUST 内置 `openwiki_search`、`openwiki_read`、`openwiki_list_workspaces`
 
 ### Requirement: 按需检索与既有索引隔离
 
-OpenWiki MUST 作为独立于现有 Markdown `wiki` 和代码 `repo` 索引的能力，保留它们的名称、命令和数据语义。OMP MUST 仅在用户要求或任务确需相关证据时按需检索 OpenWiki，普通任务开始时 MUST NOT 自动枚举、读取或预加载仓库及关联 Wiki 内容。
+OpenWiki MUST 作为独立于现有 Markdown `knowledge_search` 和代码 `repo` 索引的能力，保留它们的名称、命令和数据语义。OMP MUST 仅在用户要求或任务确需相关证据时按需检索 OpenWiki；架构、功能概览和跨模块关系调研 MUST 优先复用本会话已获取的相关 Wiki 章节或调用可用的 OpenWiki 搜索工具，明确文件、符号、错误、代码修改及当前实现问题 MUST 先读取相关源码。与 Wiki 无关的普通任务开始时 MUST NOT 自动枚举、读取或预加载仓库及关联 Wiki 内容。
 
 #### Scenario: 普通任务不预加载
 - **WHEN** 用户开始与 Wiki 无关的普通任务
 - **THEN** OMP 不自动调用 OpenWiki 查询、工作区枚举或内容读取，也不启动 Wiki 生成和可视化服务
 
+#### Scenario: 概览调研优先使用已有 Wiki
+- **WHEN** 任务需要架构、功能概览或跨模块关系背景，不属于上述源码优先情形，且 OpenWiki 搜索工具可用、Wiki 未被排除也未确认缺失
+- **THEN** OMP 在回答、探索项目文件或委派前复用本会话已获取的相关 Wiki 章节；尚无相关证据时先调用 `openwiki_search`，不先枚举工作区
+- **AND** 需要完整章节且 `openwiki_read` 可用时，使用搜索返回的页面和章节引用读取，不猜测页面或将 quickstart 当作工具操作
+- **AND** 已有证据充分时不委派子代理重复检索同一 Wiki 内容；其余工作的委派仍遵循当前委派策略
+
+#### Scenario: 修改代码与核验当前实现
+- **WHEN** 任务指定文件、符号、错误、代码修改或当前实现，或 Wiki 中的重要结论需要验证
+- **THEN** OMP 直接读取相关源码，代码修改和当前实现以源码为准，不强制先查询或遍历 Wiki
+- **AND** Wiki 的重要结论须在源码中核实；过时或冲突内容不得覆盖源码证据
+
+#### Scenario: 工具受限或 Wiki 不可用
+- **WHEN** 会话未开放 OpenWiki 搜索工具，或 Wiki 已排除、已知缺失，或查询返回 `invalid_state`、空结果、过时或冲突内容
+- **THEN** OMP 继续使用源码完成任务；工具不可用时默认系统提示词不要求调用该工具，工具引用遵循顶层或 `xd://` 的实际挂载形式
+- **AND** 不因 Wiki 不可用而阻塞普通任务，也不隐式生成 Wiki
+
 #### Scenario: 现有 Wiki 与 Repo 保持原行为
-- **WHEN** 用户使用 `wiki`、`repo`、`omp docs`、`/wiki` 或 `/repo`
+- **WHEN** 用户使用 `knowledge_search`、`repo`、`omp knowledge`、`/knowledge` 或 `/repo`
 - **THEN** 继续访问其原有能力和数据，OpenWiki 不占用这些名称、不替换数据库、不新增原文档索引的更新命令
 
 ### Requirement: 保留跨仓库工作区链接

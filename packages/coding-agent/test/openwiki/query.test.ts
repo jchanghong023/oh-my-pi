@@ -201,6 +201,68 @@ describe("OMP OpenWiki read-only tools", () => {
 		expect(await readFile(registry, "utf8")).toBe(invalid);
 	}, 30_000);
 
+	it("reports invalid search and read fields with the bounds needed to correct them", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-invalid-input-");
+		const root = dir.join("repo");
+		await repository(root, "VALIDATION_BEACON");
+		const context = session(root, dir.join("agent"));
+		const search = new OpenWikiSearchTool(context);
+		await expect(search.execute("fractional-limit", { query: "VALIDATION_BEACON", limit: 1.5 })).rejects.toThrow(
+			/invalid_input:[\s\S]*limit:[\s\S]*[Ii]nteger[\s\S]*1[\s\S]*20/,
+		);
+		await expect(search.execute("blank-query", { query: "  " })).rejects.toThrow(
+			/invalid_input:[\s\S]*query:[\s\S]*non-empty/,
+		);
+		await expect(
+			new OpenWikiReadTool(context).execute("empty-sections", {
+				page: "openwiki/architecture/service.md",
+				sections: [],
+			}),
+		).rejects.toThrow(/invalid_input:[\s\S]*sections:[\s\S]*1–20/);
+		const found = json<WikiSearchResults>(
+			await search.execute("corrected", { query: "VALIDATION_BEACON", limit: 1 }),
+		);
+		expect(found.results[0].ref).toContain("openwiki/architecture/service.md#operation");
+	}, 30_000);
+
+	it("returns usable anchors from the selected page when a section is unknown", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-anchor-recovery-");
+		const root = dir.join("repo");
+		await repository(root, "ANCHOR_RECOVERY_BEACON");
+		const reader = new OpenWikiReadTool(session(root, dir.join("agent")));
+		const page = "openwiki/architecture/service.md";
+		const failure = await reader
+			.execute("wrong-title", { page, sections: ["Operation"] })
+			.catch((error: Error) => error);
+		if (!(failure instanceof Error)) throw new Error("Unknown heading title unexpectedly succeeded");
+		expect(failure.message).toContain(page);
+		expect(failure.message).toContain("Operation");
+		const anchorList = failure.message.match(/\[[^\n]*?\]/)?.[0];
+		if (!anchorList) throw new Error("Missing available anchor list");
+		const anchors: string[] = JSON.parse(anchorList);
+		const recovered = json<WikiReadResponse>(await reader.execute("retry", { page, sections: anchors }));
+		expect(recovered.sections.some(section => section.content.includes("ANCHOR_RECOVERY_BEACON"))).toBe(true);
+	}, 30_000);
+
+	it("identifies missing pages and distinguishes page paths from section anchors", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-ref-errors-");
+		const root = dir.join("repo");
+		await repository(root, "REF_RECOVERY_BEACON");
+		const reader = new OpenWikiReadTool(session(root, dir.join("agent")));
+		const page = "openwiki/architecture/service.md";
+		await expect(
+			reader.execute("missing-page", { page: "openwiki/architecture/missing.md", sections: ["operation"] }),
+		).rejects.toThrow(/invalid_input:[\s\S]*openwiki\/architecture\/missing\.md[\s\S]*openwiki_search/);
+		await expect(
+			reader.execute("ref-as-page", { page: `${page}#operation`, sections: ["operation"] }),
+		).rejects.toThrow(/invalid_input:[\s\S]*page[\s\S]*before '#'/);
+		await expect(reader.execute("ref-as-anchor", { page, sections: [`${page}#operation`] })).rejects.toThrow(
+			/invalid_input:[\s\S]*sections[\s\S]*anchors after "#"/,
+		);
+		const recovered = json<WikiReadResponse>(await reader.execute("split-ref", { page, sections: ["operation"] }));
+		expect(recovered.sections[0].content).toContain("REF_RECOVERY_BEACON");
+	}, 30_000);
+
 	it("explains how to generate a missing local wiki", async () => {
 		using dir = TempDir.createSync("@omp-openwiki-missing-");
 		await repository(dir.join("repo"), "MISSING_BEACON");

@@ -2,7 +2,7 @@
 # across the whole workspace, so anything that relied on `cargo test`'s
 # one-binary-at-a-time execution has to declare that here.
 #
-# Nextest cannot run doctests; the Rust task runs pi-wiki doctests separately
+# Nextest cannot run doctests; the Rust task runs pi-knowledge doctests separately
 # using cargo test --doc and records command timing without a JUnit report.
 
 [profile.default]

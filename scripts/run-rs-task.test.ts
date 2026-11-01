@@ -37,7 +37,7 @@ async function runWorkspace(
 		fs.copyFileSync(path.join(import.meta.dir, "..", "rust-toolchain.toml"), path.join(root, "rust-toolchain.toml"));
 		fs.mkdirSync(path.join(root, ".config"));
 		fs.writeFileSync(path.join(root, ".config", "nextest.toml"), '[profile.default.junit]\npath = "junit.xml"\n');
-		const names = ["pi-wiki", "pi-natives", "other"];
+		const names = ["pi-knowledge", "pi-natives", "other"];
 		fs.writeFileSync(
 			path.join(root, "Cargo.toml"),
 			`[workspace]\nresolver = "2"\nmembers = ${JSON.stringify(names)}\n`,
@@ -51,19 +51,19 @@ async function runWorkspace(
 			);
 			fs.writeFileSync(
 				path.join(crate, "src", "lib.rs"),
-				name === "pi-wiki"
-					? `/// Wiki doctest.
+				name === "pi-knowledge"
+					? `/// Knowledge doctest.
 /// \`\`\`
 /// assert!(${options.failDoc ? "false" : "true"});
 /// \`\`\`
 pub fn documented() {}
-mod wiki { #[test] fn wiki_case() { assert!(${options.fail ? "false" : "true"}); } }
-mod another_module { #[test] fn wiki_other_module_case() {} }`
+mod knowledge { #[test] fn knowledge_case() { assert!(${options.fail ? "false" : "true"}); } }
+mod another_module { #[test] fn knowledge_other_module_case() {} }`
 					: name === "pi-natives"
-						? `mod wiki { #[test] fn native_wiki_binding_case() {} }
+						? `mod knowledge { #[test] fn native_knowledge_binding_case() {} }
 mod python_symbols { #[test] fn symbols_case() {} }
 mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be filtered");'} } }`
-						: `mod wiki { #[test] fn other_crate_case() { ${options.full ? "" : 'panic!("must be excluded");'} } }`,
+						: `mod knowledge { #[test] fn other_crate_case() { ${options.full ? "" : 'panic!("must be excluded");'} } }`,
 			);
 		}
 		const env = { ...process.env };
@@ -123,7 +123,7 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 
 describe("Rust fork feature CLI", () => {
 	it(
-		"runs the full Wiki package and native Wiki bindings and Python symbols regardless of unrelated changes",
+		"runs the full Knowledge package and native Knowledge bindings and Python symbols regardless of unrelated changes",
 		async () => {
 			const { result, repeated } = await runWorkspace({ repeat: true });
 			for (const run of [result, repeated!]) {
@@ -135,11 +135,11 @@ describe("Rust fork feature CLI", () => {
 					mode: "full",
 				});
 				const xml = run.reports[run.producers.indexOf(nextest)];
-				expect(xml).toContain("wiki_case");
-				expect(xml).toContain("wiki_other_module_case");
+				expect(xml).toContain("knowledge_case");
+				expect(xml).toContain("knowledge_other_module_case");
 				expect(xml).toContain("symbols_case");
 				expect(xml).not.toContain("excluded_case");
-				expect(xml).toContain("native_wiki_binding_case");
+				expect(xml).toContain("native_knowledge_binding_case");
 				expect(xml).not.toContain("other_crate_case");
 				const doctest = run.producers.find(producer => producer.producer === "cargo test --doc")!;
 				expect(doctest.scope).toBe("rust-fork-features");
@@ -166,9 +166,9 @@ describe("Rust fork feature CLI", () => {
 			expect(doctest.exitCode).toBe(0);
 			expect(doctest.report).toBe("not-supported");
 			const xml = result.reports[result.producers.indexOf(nextest)];
-			expect(xml).toContain("wiki_case");
-			expect(xml).toContain("wiki_other_module_case");
-			expect(xml).toContain("native_wiki_binding_case");
+			expect(xml).toContain("knowledge_case");
+			expect(xml).toContain("knowledge_other_module_case");
+			expect(xml).toContain("native_knowledge_binding_case");
 			expect(xml).toContain("symbols_case");
 			expect(xml).toContain("failure");
 			expect(xml).not.toContain("excluded_case");
@@ -204,7 +204,7 @@ const affected = (packages: string[]) => ({
 });
 
 describe("Rust delta selection", () => {
-	for (const packages of [["pi-wiki"], ["pi-natives"], ["pi-wiki", "pi-natives"]]) {
+	for (const packages of [["pi-knowledge"], ["pi-natives"], ["pi-knowledge", "pi-natives"]]) {
 		it(
 			`executes only selected fork packages ${packages.join(", ")}`,
 			async () => {
@@ -212,15 +212,15 @@ describe("Rust delta selection", () => {
 				expect(result.exitCode, result.stderr).toBe(0);
 				const nextest = result.producers.find(producer => producer.producer === "cargo nextest run")!;
 				expect(nextest.selection).toMatchObject({ tool: "cargo-delta", mode: "affected", packages, baseline });
-				for (const name of ["pi-wiki", "pi-natives"])
+				for (const name of ["pi-knowledge", "pi-natives"])
 					expect(nextest.command.includes(name)).toBe(packages.includes(name));
 				const xml = result.reports[result.producers.indexOf(nextest)];
-				expect(xml.includes("wiki_other_module_case")).toBe(packages.includes("pi-wiki"));
+				expect(xml.includes("knowledge_other_module_case")).toBe(packages.includes("pi-knowledge"));
 				expect(xml.includes("symbols_case")).toBe(packages.includes("pi-natives"));
 				expect(xml).not.toContain("excluded_case");
 				const doc = result.producers.find(producer => producer.producer === "cargo test --doc")!;
-				expect(doc.status).toBe(packages.includes("pi-wiki") ? "stage" : "not-selected");
-				if (!packages.includes("pi-wiki"))
+				expect(doc.status).toBe(packages.includes("pi-knowledge") ? "stage" : "not-selected");
+				if (!packages.includes("pi-knowledge"))
 					expect(doc.selection).toMatchObject({
 						tool: "cargo-delta",
 						mode: "affected",

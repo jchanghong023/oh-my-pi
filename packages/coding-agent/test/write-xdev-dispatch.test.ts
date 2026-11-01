@@ -249,7 +249,7 @@ describe("read and write route xd:// device URLs", () => {
 		const session = xdevSession(process.cwd(), { skipPythonPreflight: true });
 		const tools = await createTools(session);
 		const write = tools.find(tool => tool.name === "write")!;
-		for (const name of ["wiki", "repo"]) {
+		for (const name of ["knowledge_search", "repo"]) {
 			const args = { path: `xd://${name}`, content: JSON.stringify({ query: "probe" }) };
 			expect(requiresApproval(write, args, "always-ask", { write: "deny" }).required).toBe(false);
 			expect(requiresApproval(write, args, "always-ask", { write: "prompt" }).required).toBe(false);

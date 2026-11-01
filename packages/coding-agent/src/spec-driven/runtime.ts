@@ -312,7 +312,7 @@ export async function createSpecDrivenRuntime(args: {
 									"write",
 									"edit",
 									"task",
-									...(role === "requirements" || role === "solution" ? ["wiki"] : []),
+									...(role === "requirements" || role === "solution" ? ["knowledge_search"] : []),
 								],
 								restrictToolNames: true,
 								enableMCP: false,

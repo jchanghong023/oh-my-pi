@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { Writable } from "node:stream";
 import { __resetDirsFromEnvForTests, getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { ZCodeServer } from "../../src/modes/zcode/server";
-import type { DocsBuildResult, DocsSearchResult } from "../../src/docs/types";
+import type { KnowledgeBuildResult, KnowledgeSearchResult } from "../../src/knowledge/types";
 import type { RepoStatus } from "../../src/repo/types";
 import { SessionManager } from "../../src/session/session-manager";
 
@@ -64,7 +64,7 @@ test("public optional methods preserve workspace routing, native index results a
 			directory: canonical,
 			confirmedDirectory: canonical,
 			name: "dispatch-docs",
-		})) as DocsBuildResult;
+		})) as KnowledgeBuildResult;
 		expect(build.processed).toBeGreaterThan(0);
 		await server.writer.flush();
 		expect(frames).toContainEqual(
@@ -78,7 +78,7 @@ test("public optional methods preserve workspace routing, native index results a
 			workspace,
 			operationId: "wiki-search",
 			query: "DispatchSignal",
-		})) as DocsSearchResult;
+		})) as KnowledgeSearchResult;
 		expect(search.sections.some(section => section.text.includes("Native dispatch documentation"))).toBe(true);
 		const status = (await server.dispatch("omp/repo/status", {
 			workspace,

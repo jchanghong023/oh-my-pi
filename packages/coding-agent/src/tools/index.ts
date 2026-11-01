@@ -79,7 +79,7 @@ import { SecurityScanTool } from "./security-scan";
 import { supportsExternalThinking, ThinkTool } from "./think";
 import { type TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { TodoTool } from "./todo";
-import { WikiTool } from "./wiki";
+import { KnowledgeSearchTool } from "./knowledge-search";
 import { WriteTool } from "./write";
 import { WaitTool } from "./wait";
 import { isMountableUnderXdev, resolveXdevTool, type XdevState } from "./xdev";
@@ -155,7 +155,7 @@ export * from "./memory-retain";
 export * from "./openwiki";
 export * from "./read";
 export * from "./repo";
-export * from "./wiki";
+export * from "./knowledge-search";
 export * from "./report-tool-issue";
 export * from "./resolve";
 export type {
@@ -609,7 +609,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	grep: s => new GrepTool(s),
 	find: s => new FindTool(s),
 	lsp: LspTool.createIf,
-	wiki: s => new WikiTool(s),
+	knowledge_search: s => new KnowledgeSearchTool(s),
 	repo: s => new RepoTool(s),
 	openwiki_search: s => new OpenWikiSearchTool(s),
 	openwiki_read: s => new OpenWikiReadTool(s),
@@ -681,7 +681,7 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			? normalizeToolNames(toolNames)
 			: undefined;
 	if (!restrictToolNames && !session.toolRestrictions?.hasAllowlist && requestedTools?.includes("read")) {
-		if (!requestedTools.includes("wiki")) requestedTools.push("wiki");
+		if (!requestedTools.includes("knowledge_search")) requestedTools.push("knowledge_search");
 		if (!requestedTools.includes("repo")) requestedTools.push("repo");
 		if ((session.taskDepth ?? 0) === 0) {
 			for (const name of OPENWIKI_QUERY_TOOL_NAMES) {

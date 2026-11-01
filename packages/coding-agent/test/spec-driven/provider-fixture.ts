@@ -405,9 +405,9 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 	if (
 		options.wikiQuery &&
 		(role === "requirements" || role === "solution") &&
-		!executed.some(call => call.name === "wiki")
+		!executed.some(call => call.name === "knowledge_search")
 	)
-		return tool(request, "wiki", { query: options.wikiQuery, mode: "grep" });
+		return tool(request, "knowledge_search", { query: options.wikiQuery, mode: "grep" });
 	const inputs = Array.isArray(input.files) ? input.files : [];
 	for (const file of inputs)
 		if (

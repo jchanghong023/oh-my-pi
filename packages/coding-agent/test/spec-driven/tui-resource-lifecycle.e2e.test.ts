@@ -232,7 +232,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 );
 
 test.skipIf(!tuiTest)(
-	"requirements native wiki remains read-only and an authorized document hardlink cannot mutate a business alias",
+	"requirements native knowledge_search remains read-only and an authorized document hardlink cannot mutate a business alias",
 	async () => {
 		let proposal = "";
 		let blockedCall = "";
@@ -272,7 +272,7 @@ test.skipIf(!tuiTest)(
 				const run = (await stage("requirements")).run!;
 				const originalTranscript = await nativeTranscript(run, "requirements");
 				expect(originalTranscript).toContain("deterministic-greeting-contract");
-				expect(originalTranscript).toContain('"toolName":"wiki"');
+				expect(originalTranscript).toContain('"toolName":"knowledge_search"');
 				proposal = (entry(provider, "requirements").outputPaths as string[])[0]!;
 				const original = await Bun.file(path.join(cwd, proposal)).text();
 				const business = path.join(cwd, "business-note.txt");

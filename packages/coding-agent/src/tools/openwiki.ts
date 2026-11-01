@@ -4,6 +4,7 @@ import { type } from "@oh-my-pi/omptype";
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import { prettifyError, type ZodError } from "zod";
 import { getOpenWikiConfigDirectory } from "../openwiki/home";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
 import searchDescription from "../prompts/tools/openwiki-search.md" with { type: "text" };
@@ -13,16 +14,26 @@ import wikisDescription from "../prompts/tools/openwiki-list-wikis.md" with { ty
 import type { ToolSession } from ".";
 
 const searchSchema = type({
-	query: type("string").describe("Repository question or concept to find"),
-	"paths?": type("string[]").describe("Repository-relative source paths used as ranking hints"),
-	"limit?": type("number").describe("Maximum ranked results, from 1 to 20; default 5"),
-	"workspace?": type("string").describe("Workspace ID or unique name overriding automatic selection"),
+	query: type("string").describe("Repository question or concept; non-empty after trimming, at most 2000 characters"),
+	"paths?": type("string[]").describe(
+		"Up to 20 repository-relative source paths, at most 500 characters each; no globs or '..'. Ranking hints only, not filters",
+	),
+	"limit?": type("number").describe("Integer from 1 to 20; maximum ranked results, default 5"),
+	"workspace?": type("string").describe(
+		"Workspace ID or unique name, non-empty and at most 80 characters; omit for automatic selection. Use a returned choice when status is workspace_required",
+	),
 	"+": "reject",
 });
 const readSchema = type({
-	page: type("string").describe("Wiki page path from a search ref"),
-	sections: type("string[]").describe("Exact heading anchors from search refs"),
-	"wiki?": type("string").describe("Linked wiki ID from the search result"),
+	page: type("string").describe(
+		"Markdown path before '#' in one results[].ref[] string, e.g. openwiki/architecture/jobs.md; no anchor, at most 1000 characters",
+	),
+	sections: type("string[]").describe(
+		"Array of 1–20 exact anchors after '#' in refs for the same page, e.g. ['retry-control']; no page paths or heading titles, at most 500 characters each",
+	),
+	"wiki?": type("string").describe(
+		"Copy the selected search result's wiki ID when present; omit when absent (current repository). Not a page path or workspace ID; at most 64 characters",
+	),
 	"+": "reject",
 });
 const workspacesSchema = type({
@@ -96,11 +107,24 @@ async function executeQuery(session: ToolSession, query: Query, signal?: AbortSi
 		return await runQuery(session, query, signal);
 	} catch (error) {
 		if (signal?.aborted || !(error instanceof Error) || error instanceof ToolError) throw error;
+		if (error.name === "ZodError" && (query.kind === "search" || query.kind === "read")) {
+			const validationError = error as ZodError;
+			const schema = query.kind === "search" ? searchSchema : readSchema;
+			let message = prettifyError(validationError);
+			for (const property of schema.props) {
+				if (validationError.issues.some(issue => issue.path[0] === property.key)) {
+					message += `\n${String(property.key)}: ${property.value.description}`;
+				}
+			}
+			throw new ToolError(`invalid_input: ${message}`);
+		}
 		if (error.name === "ZodError" || error.name === "WikiRetrievalError") {
 			throw new ToolError(`invalid_input: ${error.message}`);
 		}
 		if (error.name === "ClaimsPageMissingError") {
-			throw new ToolError("invalid_input: The requested OpenWiki page does not exist.");
+			throw new ToolError(
+				`invalid_input: ${error.message}. Search again with openwiki_search; use the page before '#' in a returned ref and preserve its wiki ID when present.`,
+			);
 		}
 		if (error.name === "WikiWorkspaceError" || error.name.startsWith("Claims")) {
 			throw new ToolError(`invalid_state: ${error.message}`);

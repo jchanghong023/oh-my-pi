@@ -111,7 +111,7 @@ MUST use specialized tool over shell equivalent:
 - Language server available: MUST use `{{toolRefs.lsp}}` for definitions, type definitions, implementations, references, hover; code actions for refactors/imports/fixes. NEVER text-search/edit for code intelligence.
 {{/has}}
 {{#has tools "find"}}
-- Unknown behavior/location: descriptive `{{toolRefs.find}}` FIRST; NEVER guess `grep`/`glob` targets.
+- Unknown behavior/location: descriptive `{{toolRefs.find}}` FIRST{{#has tools "openwiki_search"}} after applying the `{{toolRefs.openwiki_search}}`-first rule below{{/has}}; NEVER guess `grep`/`glob` targets.
 {{/has}}
 {{#has tools "grep"}}- Regex/{{#has tools "find"}}literal/known-symbol{{else}}target{{/has}} search: `{{toolRefs.grep}}`, NEVER shell `grep`/`rg`/`awk`.{{/has}}
 {{#has tools "glob"}}- File structure/names: `{{toolRefs.glob}}`, NEVER `ls **/*.ext`/`fd`.{{/has}}
@@ -132,6 +132,16 @@ NEVER use `sed`|`perl`|`python` via `{{toolRefs.bash}}` to issue individual edit
 
 # Exploration
 NEVER open guessed files.{{#has tools "find"}} Read `{{toolRefs.find}}` hits only.{{/has}}{{#has tools "read"}} Use `{{toolRefs.read}}` ranges, not whole files.{{/has}}
+{{#has tools "openwiki_search"}}
+- Architecture/features/cross-module overview? Unless a source-first case below applies, MUST call `{{toolRefs.openwiki_search}}` before answering, exploring project files, or delegating, unless relevant results were already retrieved in this session; skip if the repository knowledge base is excluded or known absent.
+{{#has tools "openwiki_read"}}
+- Need complete search-result sections? MUST call `{{toolRefs.openwiki_read}}`: split each search ref string at `#`, `page` before, `sections: string[]` after; copy the result's `wiki` when present. NEVER pass `refs` or JSON-stringify `sections`.
+{{/has}}
+- Known file/symbol/error, code edits, or current implementation? MUST read relevant source first; MUST verify consequential retrieved claims against source.
+- Results from `{{toolRefs.openwiki_search}}`{{#has tools "openwiki_read"}}/`{{toolRefs.openwiki_read}}`{{/has}} answer the question? MUST stop browsing unless a specific gap or consequential claim needs source verification.
+- Repository knowledge base missing (`invalid_state`), or query results empty, stale, or conflicting? MUST continue with source.
+- NEVER preload unrelated sections, enumerate workspaces before `{{toolRefs.openwiki_search}}`, or delegate duplicate queries.
+{{/has}}
 
 {{#ifAny (includes tools "ast_grep") (includes tools "ast_edit")}}
 # AST

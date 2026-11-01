@@ -428,6 +428,8 @@ describe("team in-process integration", () => {
 				expect(call.outputSchemaMode).toBe("strict");
 				// The executor appends required yield separately; no writable tools leak in.
 				expect([...(call.toolNames ?? [])].sort()).toEqual([...TEAM_READ_ONLY_TOOLS].sort());
+				expect(call.toolNames).toContain("knowledge_search");
+				expect(call.toolNames).not.toContain("wiki");
 			}
 		});
 	}

@@ -56,7 +56,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:34:57.379Z" }
 
 # OpenWiki 生成与内置资源集成
 
-`omp openwiki` 是 OMP 对 `vendor/openwiki` fork 的**进程内仓库 Wiki 适配层**，不是独立 OpenWiki 安装器。本仓库的 `openwiki/` 是针对本仓库生成的知识页及其状态；`vendor/openwiki` 是生成和查询引擎源码；OMP 原有 `wiki` 文档索引及 `repo` 代码索引则是另一套能力和数据。不要把这些页面或 fork 当成 `docs.db`，也不要假设生成 Wiki 会更新既有索引。
+`omp openwiki` 是 OMP 对 `vendor/openwiki` fork 的**进程内仓库 Wiki 适配层**，不是独立 OpenWiki 安装器。本仓库的 `openwiki/` 是针对本仓库生成的知识页及其状态；`vendor/openwiki` 是生成和查询引擎源码；OMP 原有 `knowledge_search` 文档索引及 `repo` 代码索引则是另一套能力和数据。不要把这些页面或 fork 当成 `knowledge.db`，也不要假设生成 Wiki 会更新既有索引。
 
 ## 入口与执行边界
 
@@ -147,6 +147,6 @@ flowchart TD
 
 ## 检索与验证
 
-已有的 [代码索引](../concepts/repo-code-index.md) 和 [文档索引](../concepts/wiki-document-index.md) 保留各自命令和存储语义；OpenWiki 查询不替代它们，也不在普通任务开始时预加载全部页面。知识页是可过时的派生材料，排障时应回到源码和测试。
+已有的 [代码索引](../concepts/repo-code-index.md) 和 [文档索引](../concepts/knowledge-document-index.md) 保留各自命令和存储语义；OpenWiki 查询不替代它们，也不在普通任务开始时预加载全部页面。知识页是可过时的派生材料，排障时应回到源码和测试。
 
 修改集成时，可重点检查 `packages/coding-agent/test/cli/openwiki-generation.test.ts` 的生成与模型路径、`openwiki-dry-run.test.ts` 的只读预览、`openwiki-recovery.test.ts` 的恢复，以及 `test/openwiki/query.test.ts` 和 `agents-instructions.test.ts` 的查询与指令边界；fork 自身的生成测试覆盖原生页面编排。资源或子模块变化后应重新生成并检查指纹，而不是沿用旧视觉产物。

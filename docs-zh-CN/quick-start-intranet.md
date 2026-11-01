@@ -16,11 +16,13 @@ setenv ASCEND_API_KEY "<你的密钥>"
 ```
 
 - `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
-- `OMP_CONFIG_ROOT`：统一的数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Wiki／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。
+- `OMP_CONFIG_ROOT`：统一的数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Knowledge／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
 - `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](../openspec/specs/model-providers/spec.md)。不要将真实密钥提交到仓库或共享文档。
 
-上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。Wiki 没有独立目录设置：CLI、TUI 与 AI 的 `wiki` 工具始终使用当前 profile 数据目录下的同一个 `docs.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
+上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。知识库没有独立目录设置：CLI、TUI 与 AI 的 `knowledge_search` 工具始终使用当前 profile 数据目录下的同一个 `knowledge.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
+
+旧 profile 若只有 `docs.db`，首次打开知识库时会通过 SQLite 一致快照（包含 WAL）发布 `knowledge.db`，并保留 `docs.db` 作为恢复备份；新库已存在时以新库为准，不合并或删除旧库。迁移失败会报错，不会静默使用空库。旧的 `wiki.reranker.*` 配置不再生效，需改为 `knowledge.reranker.*`。
 
 ## 2. 启动
 
@@ -40,7 +42,7 @@ omp
 
 用 `omp -c` 继续当前项目的最近会话；没有可恢复会话时会新建。
 
-用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录、设置及 Wiki／Repo 数据库隔离，无需配置 shell alias。
+用 `omp -P work` 启动独立 profile（等同 `omp --profile work`）；`omp -P work -c` 继续该 profile 下当前项目的最近会话。不同 profile 的聊天记录、设置及 Knowledge／Repo 数据库隔离，无需配置 shell alias。
 
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
 
@@ -95,7 +97,7 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 | `/new`                         | 新建会话                                             |
 | `/resume`                      | 恢复历史会话                                         |
 | `/context` / `/compact`        | 查看上下文占用 / 压缩上下文                          |
-| `/wiki`                        | 查询已导入的公司资料                                 |
+| `/knowledge`                        | 查询已导入的公司资料                                 |
 | `/repo`                        | 建立、更新代码定位索引                               |
 | `/team 需求`                   | 多代理独立调查、交叉审查并汇总方案，只读             |
 | `/goal-autopilot 目标`         | 持久目标、自动编排与无人值守要求，见第 4.7 节        |
@@ -134,18 +136,18 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 
 ## 4. 企业核心功能（本 fork）
 
-### 4.1 `/wiki`：把公司资料变成可查询的知识库
+### 4.1 `/knowledge`：把公司资料变成可查询的知识库
 
 用来查内部规范、接口约定、历史方案和业务术语。**先导入资料，再查询**。它不做联网搜索，也不会自动抓取公司知识库。
 
 **首次导入：**
 
 1. 准备已导出的 Markdown 目录。导入会递归读取 `.md` 文件，跳过符号链接。PDF、Word 等需先转成 Markdown；图片、附件和链接目标不会随正文入库。
-2. 在 OMP 输入框输入 `/wiki`，按 `n` 新建，填写索引名和目录，确认后等待导入完成。面板会列出索引名、文档数、章节数和源目录。
+2. 在 OMP 输入框输入 `/knowledge`，按 `n` 新建，填写索引名和目录，确认后等待导入完成。面板会列出索引名、文档数、章节数和源目录。
 3. 也可在**系统终端**执行以下命令，替换目录和索引名。终端与 OMP 会话须使用一致的 `OMP_CONFIG_ROOT`、profile 和 `OMP_OFFLINE` 环境；会话使用 `-P work` 时，导入与删除命令也须加上 `-P work`：
 
 ```tcsh
-omp docs init "/path/to/company-markdown" --name "company-docs"
+omp knowledge init "/path/to/company-markdown" --name "company-docs"
 ```
 
 索引名必须唯一，同名不会覆盖。基础全文导入和检索不需要模型或向量服务；如已有可用 Embedding 配置，导入时可准备向量，普通搜索可调用该模型。可选的独立精排模型也可参与普通搜索；显式 grep 不调用模型。
@@ -154,11 +156,11 @@ omp docs init "/path/to/company-markdown" --name "company-docs"
 
 导入时会同时准备可复用的 Markdown／名称检索投影，以减少搜索时的重复解析，数据库占用会增加。旧索引首次打开会自动从库内原文升级并准备这些投影，可能等待一段时间；不需要找回源目录或重新导入。该一次性准备与后续搜索耗时不同，界面加载期间仍可取消。具体空间和耗时取决于资料规模。
 
-Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `wiki.reranker.model`、`wiki.reranker.baseUrl`、`wiki.reranker.apiKey`。不猜测公司精排接口或公网地址，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，须在 Embedding 可用时显式执行下方的 remove → init，查询不会自动补算向量。
+Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `knowledge.reranker.model`、`knowledge.reranker.baseUrl`、`knowledge.reranker.apiKey`。不猜测公司精排接口或公网地址，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，须在 Embedding 可用时显式执行下方的 remove → init，查询不会自动补算向量。
 
 **自己查资料：**
 
-1. 在 `/wiki` 面板用 `↑/↓` 选择索引，按 `/` 输入关键词或问题，按 `Enter` 搜索。面板只搜索当前选中的索引；查询与续页会显示加载状态，不阻塞输入或渲染，等待时可按 `c` 或 `Esc` 取消，关闭面板也会取消未完成操作。
+1. 在 `/knowledge` 面板用 `↑/↓` 选择索引，按 `/` 输入关键词或问题，按 `Enter` 搜索。面板只搜索当前选中的索引；查询与续页会显示加载状态，不阻塞输入或渲染，等待时可按 `c` 或 `Esc` 取消，关闭面板也会取消未完成操作。
 2. 用 `↑/↓` 选中结果，按 `Enter` 查看正文，按 `b` 回到当前页结果。提示还有结果时，按 `n` 取下一页；直到显示结果已耗尽。按 `Esc` 返回索引列表或关闭面板。
 
 续页失败或取消会保留当前结果页及所选正文，不必丢弃已有依据。同一数据库快照中的查询与续页复用完整排名，不会每页重新扫描／排序全部资料；融合或精排结果只能在原排名上下文可合法复用或重现时续页，上下文丢失须不带游标重新查询。原全文游标在快照不变时即使服务重开仍可续页，数据库变化后仍须遵守下方的游标失效规则。每次成功搜索（含续页和零命中）对外总时长不少于 500ms；实际工作不足此下限时异步等待补足，仍可取消，不表示数据库工作本身用了 500ms，也不是 500ms 响应上限。
@@ -168,10 +170,10 @@ Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`m
 **让 AI 查资料并解释：** 退出面板，在普通对话中输入：
 
 ```text
-用 wiki 查询 MBIST 仿真日志的检查项和判据，按索引名、文件路径和行号标注依据；区分资料明确规定与推断，缺少依据时说明。
+用 knowledge_search 查询 MBIST 仿真日志的检查项和判据，按索引名、文件路径和行号标注依据；区分资料明确规定与推断，缺少依据时说明。
 ```
 
-AI 的 `wiki` 工具搜索全部已导入索引，返回完整章节正文和来源。工具本身只读，不代为新建或删除索引；查询、续页和引用都来自当前 Wiki 数据库，源目录移走后仍能使用。
+AI 的 `knowledge_search` 工具搜索全部已导入索引，返回完整章节正文和来源。工具本身只读，不代为新建或删除索引；查询、续页和引用都来自当前知识库数据库，源目录移走后仍能使用。
 
 可要求 AI 用 `path` 限定已入库的相对路径：文件路径精确匹配；以 `/` 结尾的目录路径包含其后代。路径区分大小写，不支持通配符，适用于所有已导入索引；源目录不在时仍可使用。
 
@@ -190,19 +192,19 @@ AI 的 `wiki` 工具搜索全部已导入索引，返回完整章节正文和来
 **资料更新：** 索引保存导入时的 Markdown 快照。源目录移走后仍可查，源文件修改却不会自动刷新。重新导出后，先删除旧索引，再重新导入：
 
 ```tcsh
-omp docs remove "company-docs" --force
-omp docs init "/path/to/company-markdown" --name "company-docs"
+omp knowledge remove "company-docs" --force
+omp knowledge init "/path/to/company-markdown" --name "company-docs"
 ```
 
 删除只移除当前 profile 数据库中的索引，不删除源资料，也不影响其他 profile。也可在面板按 `d`，再按 `y` 确认删除。
 
-刷新前先确认新导出目录可读。删除后若重新导入失败，旧索引不会自动恢复。没有 `omp docs update`、`list` 或 `status` 命令；查看已有索引用 `/wiki`。
+刷新前先确认新导出目录可读。删除后若重新导入失败，旧索引不会自动恢复。没有 `omp knowledge update`、`list` 或 `status` 命令；查看已有索引用 `/knowledge`。
 
-引用的路径、行号对应导入时的版本，不一定是源文件现状。查不到不等于公司没有相关规定，历史资料也不自动代表现行规范。详细约定见[文档索引需求](../openspec/specs/wiki-index/spec.md)。
+引用的路径、行号对应导入时的版本，不一定是源文件现状。查不到不等于公司没有相关规定，历史资料也不自动代表现行规范。详细约定见[文档索引需求](../openspec/specs/knowledge-index/spec.md)。
 
 ### 4.2 `/repo`：为当前项目建立代码定位索引
 
-用来反复查实现、错误信息、配置键和 Python 定义。代码索引与公司资料的 `wiki` 索引分开维护；建库、查询不调用模型，也不需要安装语言服务器。
+用来反复查实现、错误信息、配置键和 Python 定义。代码索引与公司资料的 `knowledge_search` 索引分开维护；建库、查询不调用模型，也不需要安装语言服务器。
 
 **首次建立：** 进入目标项目启动 OMP，输入 `/repo`，核对面板的 `Root:`，按 `b`，再按 `y` 确认建立。
 
@@ -248,7 +250,7 @@ Git 项目索引当前 worktree 的根目录；即使从子目录启动，也会
 
 ### OpenWiki：生成和查询代码仓库 Wiki
 
-OpenWiki 为代码仓库生成可浏览的 Wiki，与上面的公司资料 `/wiki`、代码定位 `/repo` 及其数据库相互独立。进入目标仓库，在**系统终端**显式执行：
+OpenWiki 为代码仓库生成可浏览的 Wiki，与上面的公司资料 `/knowledge`、代码定位 `/repo` 及其数据库相互独立。进入目标仓库，在**系统终端**显式执行：
 
 ```tcsh
 omp openwiki code --init
@@ -322,9 +324,9 @@ omp openwiki visualize openwiki --export /path/to/export
 
 阶段与参与代理状态看启动后的提示，子代理明细可用 `/hub` 查看。取消时，按启动提示使用后台任务取消入口；主会话中按普通 `Esc` 不代表整个讨论已取消。
 
-子代理通过工具白名单保持只读：可以读文件、搜索代码和查 `wiki`，不能写项目文件、运行 bash/eval、安装依赖、构建测试、更新索引、提交或推送。“修订”只改方案内容，正常会话记录仍会保存。
+子代理通过工具白名单保持只读：可以读文件、搜索代码和查 `knowledge_search`，不能写项目文件、运行 bash/eval、安装依赖、构建测试、更新索引、提交或推送。“修订”只改方案内容，正常会话记录仍会保存。
 
-当前 `/team` 子代理开放只读 `repo` 查询，已有代码索引可用于优先定位定义和相关代码；不提供创建、重建或删除索引等管理操作，查询仍可能按既有规则增量刷新已知变化。公司资料应提前通过 `/wiki` 导入。
+当前 `/team` 子代理开放只读 `repo` 查询，已有代码索引可用于优先定位定义和相关代码；不提供创建、重建或删除索引等管理操作，查询仍可能按既有规则增量刷新已知变化。公司资料应提前通过 `/knowledge` 导入。
 
 结果会回到当前会话，包括共同需求与验收标准、方案、证据、取舍、风险和待核实前提，不会自动生成项目中的方案文件。
 

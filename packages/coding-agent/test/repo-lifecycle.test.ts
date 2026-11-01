@@ -588,7 +588,7 @@ describe("repository lifecycle coverage across session and background execution 
 				enableMCP: false,
 				enableLsp: false,
 				skipPythonPreflight: true,
-				toolNames: ["read", "repo", "wiki"],
+				toolNames: ["read", "repo", "knowledge_search"],
 			};
 			const { session: restricted } = await createAgentSession({
 				...options,
@@ -603,7 +603,7 @@ describe("repository lifecycle coverage across session and background execution 
 				expect(restricted.getEnabledToolNames()).toContain("yield");
 				expect(restricted.getToolByName("yield")?.approval).toBe("read");
 				const repo = restricted.getToolByName("repo");
-				const wiki = restricted.getToolByName("wiki");
+				const wiki = restricted.getToolByName("knowledge_search");
 				if (!repo || !wiki) throw new Error("Restricted session lost its read-only query tools");
 				expect(repo.approval).toBe("read");
 				expect(wiki.approval).toBe("read");

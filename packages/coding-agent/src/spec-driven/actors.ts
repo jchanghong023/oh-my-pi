@@ -316,7 +316,7 @@ export async function createSpecActor(args: {
 				if (["read", "find", "grep", "glob", "web_search", "yield"].includes(event.toolName)) return undefined;
 				return { block: true, reason: "scout 只允许使用只读调查工具。" };
 			}
-			if (["read", "grep", "glob", "wiki"].includes(event.toolName)) return undefined;
+			if (["read", "grep", "glob", "knowledge_search"].includes(event.toolName)) return undefined;
 			try {
 				const approval = await args.checkApproved?.();
 				if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
@@ -679,7 +679,7 @@ export async function createSpecActor(args: {
 			// Queue restrictions travel with the native input, never mutate the running turn.
 			const toolDenylist = input.readOnly
 				? [...new Set([...(args.options.toolNames ?? []), "write", "edit", "bash", "task", "goal"])].filter(
-						name => !["read", "grep", "glob", "wiki"].includes(name),
+						name => !["read", "grep", "glob", "knowledge_search"].includes(name),
 					)
 				: [];
 			if (input.entry || !stageOutputPaths) stageOutputPaths = input.outputPaths;

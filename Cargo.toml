@@ -9,6 +9,7 @@ members = [
    "crates/pi-diff",
    "crates/pi-edit",
    "crates/pi-iso",
+   "crates/pi-knowledge",
    "crates/pi-natives",
    "crates/pi-predict",
    "crates/pi-shell",
@@ -16,7 +17,6 @@ members = [
    "crates/pi-vfs",
    "crates/pi-voice",
    "crates/pi-walker",
-   "crates/pi-wiki",
    "crates/vendor/brush-core",
    "crates/vendor/brush-parser",
    "crates/vendor/cfg_aliases",
@@ -252,11 +252,11 @@ pi-ast = { path = "crates/pi-ast", default-features = false }
 pi-diff = { path = "crates/pi-diff" }
 pi-edit = { path = "crates/pi-edit" }
 pi-iso = { path = "crates/pi-iso" }
+pi-knowledge = { path = "crates/pi-knowledge" }
 pi-shell = { path = "crates/pi-shell" }
 pi-predict = { path = "crates/pi-predict" }
 pi-voice = { path = "crates/pi-voice" }
 pi-walker = { path = "crates/pi-walker" }
-pi-wiki = { path = "crates/pi-wiki" }
 pi-vcs = { path = "crates/pi-vcs" }
 pi-vfs = { path = "crates/pi-vfs" }
 brush-core = { path = "crates/vendor/brush-core" }

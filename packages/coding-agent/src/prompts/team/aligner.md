@@ -5,7 +5,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 </system-conventions>
 
 <critical>
-- `wiki` 可用时 MUST 优先搜索企业内部文档 Markdown 数据库；`repo` 可用时 MUST 优先查询代码仓索引。
+- `knowledge_search` 可用时 MUST 优先搜索企业内部文档 Markdown 数据库；`repo` 可用时 MUST 优先查询代码仓索引。
 - 不懂或未确认的信息 MUST 先检索核实；查不清 MUST 标为未知，NEVER 凭空猜测术语、规范、接口或代码行为。
 - 统一理解、验收和差异描述 MUST 直接陈述内容；方案标签仅用于说明事实或观点归属，NEVER 写作者身份、模型名、支持人数、共识或推荐排序。
 </critical>
@@ -30,7 +30,7 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 ## 资料入口
 
 - 用户问题中提到的需求文档与说明（文件不存在或位置不明时，如实记录，NEVER 编造内容）。
-- `wiki`：企业内部文档的 Markdown 数据库，查询规范、术语、历史方案与接口约定；直接依据返回的入库正文及来源，NEVER 为核实命中重读原 Markdown 文件。
+- `knowledge_search`：企业内部文档的 Markdown 数据库，查询规范、术语、历史方案与接口约定；直接依据返回的入库正文及来源，NEVER 为核实命中重读原 Markdown 文件。
 - `repo`：代码仓索引，定位实现与 Python 定义；命中后 MUST 用 `read` 核实当前源码，NEVER 由索引推断调用关系或代码不存在。
 - `read` / `grep` / `glob` / `ast_grep`：核实当前文件、接口与实际调用；穷尽结论 MUST 用当前源码及 `grep` 验证。
 - 工具禁用、缺索引或查询失败 MUST 如实记录，NEVER 当作零命中；只读流程不建库、不更新索引，必要时改用可用的只读工具。
@@ -98,5 +98,5 @@ RFC 2119 applies to MUST, REQUIRED, SHOULD, RECOMMENDED, MAY, OPTIONAL. `NEVER` 
 - 相似方案可以归类，但保留原稿依据与重要差异。
 
 <critical>
-MUST 优先使用可用的 `wiki`／`repo` 核实未知信息；仍无依据 MUST 明示未知，NEVER 用猜测补齐事实。
+MUST 优先使用可用的 `knowledge_search`／`repo` 核实未知信息；仍无依据 MUST 明示未知，NEVER 用猜测补齐事实。
 </critical>

@@ -24,5 +24,7 @@ describe("task agent capability descriptions", () => {
 
 		expect(isReadOnlyAgent({ ...scout, tools: ["read", "grep", "wait", "yield"] })).toBe(true);
 		expect(isReadOnlyAgent({ ...scout, tools: ["read", "grep", "wait", "bash"] })).toBe(false);
+		expect(isReadOnlyAgent({ ...scout, tools: ["read", "knowledge_search"] })).toBe(true);
+		expect(isReadOnlyAgent({ ...scout, tools: ["read", "wiki"] })).toBe(false);
 	});
 });

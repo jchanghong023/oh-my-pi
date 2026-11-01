@@ -5,16 +5,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Database } from "bun:sqlite";
 import { z } from "zod";
-import { DOCS_WORKER_ARG } from "../../src/cli/worker-selectors";
-import { DocsService } from "../../src/docs/service";
-import type { DocsBuildResult, DocsSearchResult } from "../../src/docs/types";
-import type { DocsWorkerInbound } from "../../src/docs/worker-protocol";
+import { KNOWLEDGE_WORKER_ARG } from "../../src/cli/worker-selectors";
+import { KnowledgeService } from "../../src/knowledge/service";
+import type { KnowledgeBuildResult, KnowledgeSearchResult } from "../../src/knowledge/types";
+import type { KnowledgeWorkerInbound } from "../../src/knowledge/worker-protocol";
 import { OmpIndexesBridge, type OmpIndexesBridgeOptions } from "../../src/modes/zcode/indexes";
 import { RepoService } from "../../src/repo/service";
 import { repoIndexPath } from "../../src/repo/storage";
 import type { RepoQueryResult, RepoStatus, RepoSymbolHit, RepoTextHit } from "../../src/repo/types";
 
-const wikiListResultSchema = z
+const knowledgeListResultSchema = z
 	.object({
 		indexes: z.array(
 			z
@@ -65,7 +65,7 @@ async function fixture() {
 			listener = callback;
 		},
 		wiki<T = Record<string, unknown>>(action: string, fields: Record<string, unknown> = {}, signal?: AbortSignal) {
-			return bridge.handleWiki(
+			return bridge.handleKnowledge(
 				action,
 				{ workspace, operationId: `wiki-${++sequence}`, ...fields },
 				signal,
@@ -88,11 +88,11 @@ function observeSearches(agentDir: string) {
 	const spy = vi.spyOn(Bun, "spawn").mockImplementation(((...args: unknown[]) => {
 		const proc = Reflect.apply(spawn, Bun, args) as Bun.Subprocess;
 		const options = args[0] as { cmd?: string[] };
-		if (!Array.isArray(options) && options.cmd?.includes(DOCS_WORKER_ARG)) {
+		if (!Array.isArray(options) && options.cmd?.includes(KNOWLEDGE_WORKER_ARG)) {
 			const send = proc.send.bind(proc);
 			let owned = false;
 			const sendSpy = vi.spyOn(proc, "send").mockImplementation((message: unknown) => {
-				const request = message as DocsWorkerInbound;
+				const request = message as KnowledgeWorkerInbound;
 				if (request.type === "configure" && request.options.agentDir === agentDir) owned = true;
 				send(message);
 				if (owned && request.type === "searchWindow") waiters.shift()?.(proc);
@@ -119,31 +119,31 @@ describe("ZCode optional index bridge with real native services", () => {
 				path.join(documents, `${name}.md`),
 				`# Guide ${name}\nraw.Token[42] full stored final ${name}.\n`,
 			);
-		expect(wikiListResultSchema.parse(await f.wiki("list"))).toEqual({ indexes: [] });
+		expect(knowledgeListResultSchema.parse(await f.wiki("list"))).toEqual({ indexes: [] });
 		// 保留未折叠的 /./，Windows 上同时覆盖 / 与 realpath 的反斜杠规范化。
 		const equivalentConfirmation = `${documents.replaceAll("\\", "/")}/./`;
-		const built = await f.wiki<DocsBuildResult>("init", {
+		const built = await f.wiki<KnowledgeBuildResult>("init", {
 			directory: documents,
 			confirmedDirectory: equivalentConfirmation,
 			name: "manual",
 		});
 		expect(built.index.documentCount).toBe(3);
 		expect(built.failed).toBe(0);
-		const observer = new DocsService({ agentDir: f.agentDir, cwd: f.root });
+		const observer = new KnowledgeService({ agentDir: f.agentDir, cwd: f.root });
 		cleanups.push(() => observer.close());
-		expect(observer.databasePath).toBe(path.join(f.agentDir, "docs.db"));
+		expect(observer.databasePath).toBe(path.join(f.agentDir, "knowledge.db"));
 		expect((await observer.list())[0]?.name).toBe("manual");
 		expect(f.notifications.find(event => event.method === "omp/wiki/progress")?.params.workspace).toEqual(
 			f.workspace,
 		);
 		const started = performance.now();
-		const found = await f.wiki<DocsSearchResult>("search", { query: "Guide", index: "manual", limit: 1 });
+		const found = await f.wiki<KnowledgeSearchResult>("search", { query: "Guide", index: "manual", limit: 1 });
 		expect(performance.now() - started).toBeGreaterThanOrEqual(490);
 		expect(found.total).toBeGreaterThan(0);
 		const sections = [];
 		let cursor: string | undefined;
 		do {
-			const page = await f.wiki<DocsSearchResult>("grep", {
+			const page = await f.wiki<KnowledgeSearchResult>("grep", {
 				query: "raw\\.Token\\[42\\]",
 				index: "manual",
 				limit: 1,
@@ -160,7 +160,9 @@ describe("ZCode optional index bridge with real native services", () => {
 		expect(await fs.readFile(path.join(documents, "a.md"), "utf8")).toContain("full stored final a");
 		await f.wiki("init", { directory: documents, confirmedDirectory: documents, name: "manual" });
 		await fs.rm(documents, { recursive: true });
-		expect((await f.wiki<DocsSearchResult>("grep", { query: "full stored final", index: "manual" })).total).toBe(3);
+		expect((await f.wiki<KnowledgeSearchResult>("grep", { query: "full stored final", index: "manual" })).total).toBe(
+			3,
+		);
 		await f.wiki("remove", { name: "manual" });
 		expect(await observer.list()).toEqual([]);
 		await expect(f.wiki("remove", { name: "missing" })).rejects.toThrow();
@@ -336,7 +338,7 @@ describe("ZCode optional index bridge with real native services", () => {
 		const nextSearch = observeSearches(f.agentDir);
 		await f.wiki("init", { name: "manual", directory: f.root, confirmedDirectory: f.root });
 		const admitted = nextSearch();
-		const pending = f.bridge.handleWiki("search", {
+		const pending = f.bridge.handleKnowledge("search", {
 			workspace: f.workspace,
 			operationId: "searching",
 			query: "evidence",
@@ -346,12 +348,12 @@ describe("ZCode optional index bridge with real native services", () => {
 		// 真实 IPC 发出证明 bridge 已登记操作且 service 已准入，不能靠固定 sleep 猜测启动时间。
 		const worker = await admitted;
 		expect(
-			await f.bridge.handleWiki("cancel", {
+			await f.bridge.handleKnowledge("cancel", {
 				workspace: { ...f.workspace, workspaceIdentity: "other-workspace" },
 				operationId: "searching",
 			}),
 		).toEqual({ cancelled: false });
-		expect(await f.bridge.handleWiki("cancel", { workspace: f.workspace, operationId: "searching" })).toEqual({
+		expect(await f.bridge.handleKnowledge("cancel", { workspace: f.workspace, operationId: "searching" })).toEqual({
 			cancelled: true,
 		});
 		expect((await rejected)[0]).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
@@ -369,7 +371,7 @@ describe("ZCode optional index bridge with real native services", () => {
 	it("rejects unknown fields, action envelopes and unconfirmed document roots before mutation", async () => {
 		const f = await fixture();
 		expect(() =>
-			f.bridge.handleWiki("list", { workspace: f.workspace, operationId: "bad", action: "remove" }),
+			f.bridge.handleKnowledge("list", { workspace: f.workspace, operationId: "bad", action: "remove" }),
 		).toThrow();
 		expect(() =>
 			f.bridge.handleRepo("status", { workspace: f.workspace, operationId: "bad", extra: true }),
@@ -377,6 +379,6 @@ describe("ZCode optional index bridge with real native services", () => {
 		await expect(
 			f.wiki("init", { directory: f.root, confirmedDirectory: path.dirname(f.root), name: "manual" }),
 		).rejects.toThrow("Confirm document directory");
-		expect(wikiListResultSchema.parse(await f.wiki("list"))).toEqual({ indexes: [] });
+		expect(knowledgeListResultSchema.parse(await f.wiki("list"))).toEqual({ indexes: [] });
 	});
 });

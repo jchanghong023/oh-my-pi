@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { DocsSearchEngine } from "../../src/docs/engine";
+import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import {
@@ -263,8 +263,8 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 		);
 		const superpowers = manifest.skills.filter(skill => skill.source === "superpowers").map(skill => skill.name);
 		const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
-		const wikiToken = "OMP_CAPABILITY_WIKI_EVIDENCE";
-		const wikiFact = `${wikiToken}: preserve internal whitespace in Ada  Lovelace; trim outer whitespace only.`;
+		const knowledgeToken = "OMP_CAPABILITY_WIKI_EVIDENCE";
+		const knowledgeFact = `${knowledgeToken}: preserve internal whitespace in Ada  Lovelace; trim outer whitespace only.`;
 		const sentinel = "export const untouched = 'business bytes remain unchanged';\n";
 		let worktrees = "";
 		await withTui(
@@ -279,8 +279,14 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 					await git(cwd, "worktree", "add", "--detach", path.join(path.dirname(cwd), "existing-worktree"));
 					worktrees = await git(cwd, "worktree", "list", "--porcelain");
 					const documents = path.join(path.dirname(cwd), "wiki-source");
-					await Bun.write(path.join(documents, "greeting-contract.md"), `# Greeting contract\n\n${wikiFact}\n`);
-					const engine = new DocsSearchEngine({ cwd, agentDir: path.join(path.dirname(cwd), "config", "agent") });
+					await Bun.write(
+						path.join(documents, "greeting-contract.md"),
+						`# Greeting contract\n\n${knowledgeFact}\n`,
+					);
+					const engine = new KnowledgeIndexEngine({
+						cwd,
+						agentDir: path.join(path.dirname(cwd), "config", "agent"),
+					});
 					try {
 						await engine.init(documents, "capability-contract");
 					} finally {
@@ -313,8 +319,8 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 							return invoke(request, "read", { i: "Probing actual stage resource grant", path: target });
 					}
 					if (payload.specDrivenRole === "requirements") {
-						if (!executed.some(call => call.name === "wiki"))
-							return invoke(request, "wiki", { query: wikiToken, mode: "grep" });
+						if (!executed.some(call => call.name === "knowledge_search"))
+							return invoke(request, "knowledge_search", { query: knowledgeToken, mode: "grep" });
 						if (!executed.some(call => call.name === "write" && call.args.path === "src/untouched.ts"))
 							return invoke(request, "write", {
 								i: "Probing unauthorized business mutation",
@@ -328,9 +334,9 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 							typeof reply.tool.args.content === "string" &&
 							String(reply.tool.args.path).endsWith("proposal.md")
 						) {
-							const evidence = result(request, "wiki");
-							expect(evidence).toContain(wikiFact);
-							reply.tool.args.content += `\n## Indexed evidence\n${wikiFact}\n`;
+							const evidence = result(request, "knowledge_search");
+							expect(evidence).toContain(knowledgeFact);
+							reply.tool.args.content += `\n## Indexed evidence\n${knowledgeFact}\n`;
 						}
 						return reply;
 					}
@@ -346,14 +352,14 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				const requirementsRequest = provider.requests
 					.filter(request => rolePayload(request)?.specDrivenRole === "requirements")
 					.at(-1)!;
-				expect(result(requirementsRequest, "wiki")).toContain(wikiFact);
+				expect(result(requirementsRequest, "knowledge_search")).toContain(knowledgeFact);
 				expect(result(requirementsRequest, "write", "src/untouched.ts")).toContain("未授权的阶段文件写入");
 				expect(await Bun.file(path.join(cwd, "src/untouched.ts")).text()).toBe(sentinel);
 				await tui("submit", "/dev next");
 				await stage("solution");
 				expect(
 					(entry(provider, "solution").files as Array<{ content: string }>).some(file =>
-						file.content.includes(wikiFact),
+						file.content.includes(knowledgeFact),
 					),
 				).toBe(true);
 				await tui("submit", "/dev next pure");

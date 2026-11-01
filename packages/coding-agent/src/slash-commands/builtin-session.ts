@@ -40,7 +40,7 @@ import {
 import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
-import { handleRpcRepoDashboard, handleRpcWikiDashboard } from "./helpers/index-dashboard";
+import { handleRpcKnowledgeDashboard, handleRpcRepoDashboard } from "./helpers/index-dashboard";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 async function handleUsageResetCommand(
@@ -597,12 +597,12 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		},
 	},
 	{
-		name: "wiki",
+		name: "knowledge",
 		icon: "tree",
-		description: "Open the document index hub",
-		handleRpc: (_command, runtime) => handleRpcWikiDashboard(runtime),
+		description: "Open the knowledge index hub",
+		handleRpc: (_command, runtime) => handleRpcKnowledgeDashboard(runtime),
 		handleTui: (_command, runtime) => {
-			runtime.ctx.showDocsDashboard();
+			runtime.ctx.showKnowledgeDashboard();
 			clearSubmittedText(runtime);
 		},
 	},

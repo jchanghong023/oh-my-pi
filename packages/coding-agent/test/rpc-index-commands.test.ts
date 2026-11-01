@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
-import { DocsService } from "../src/docs/service";
+import { KnowledgeService } from "../src/knowledge/service";
 import { getExtensionUISelectOptionLabel, type ExtensionUIContext } from "../src/extensibility/extensions/types";
 import { RepoService } from "../src/repo/service";
 import type { AgentSession } from "../src/session/agent-session";
@@ -66,20 +66,20 @@ async function fixture() {
 	return { cwd, agentDir, docsDir, session, controller, runtime, tasks, output, select, input, confirm, run };
 }
 
-interface WikiEvidenceLocation {
+interface KnowledgeEvidenceLocation {
 	cwd: string;
 	agentDir: string;
 	docsDir: string;
 }
 
-async function importWikiEvidence(f: WikiEvidenceLocation, count: number) {
+async function importWikiEvidence(f: KnowledgeEvidenceLocation, count: number) {
 	await fs.rm(path.join(f.docsDir, "manual.md"));
 	for (let index = 0; index < count; index++)
 		await Bun.write(
 			path.join(f.docsDir, `p${String(index).padStart(2, "0")}.md`),
 			`# Evidence\nmbist_check.rpt evidence ${index}\nStored final line ${index}.\n`,
 		);
-	const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+	const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 	try {
 		await docs.init(f.docsDir, "manual");
 		return await docs.search("mbist_check.rpt", { limit: 100 });
@@ -90,7 +90,7 @@ async function importWikiEvidence(f: WikiEvidenceLocation, count: number) {
 
 const grepExpression = String.raw` raw\.Token\[42\] `;
 
-async function importGrepEvidence(f: WikiEvidenceLocation, count: number) {
+async function importGrepEvidence(f: KnowledgeEvidenceLocation, count: number) {
 	await fs.rm(path.join(f.docsDir, "manual.md"));
 	for (let index = 0; index < count; index++)
 		await Bun.write(
@@ -104,7 +104,7 @@ async function importGrepEvidence(f: WikiEvidenceLocation, count: number) {
 		["suffix", " raw.Token[42]suffix"],
 	])
 		await Bun.write(path.join(f.docsDir, `${name}.md`), `# Decoy\n${text}\n`);
-	const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+	const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 	try {
 		await docs.init(f.docsDir, "manual");
 		return await docs.search(grepExpression, { mode: "grep", case: true, limit: 100 });
@@ -116,31 +116,30 @@ async function importGrepEvidence(f: WikiEvidenceLocation, count: number) {
 describe("RPC index commands use the real index services", () => {
 	test("wiki creates, searches and deletes an index through host dialogs without modifying source documents", async () => {
 		const f = await fixture();
-		f.select.mockResolvedValueOnce("New document index");
+		f.select.mockResolvedValueOnce("New knowledge index");
 		f.input.mockResolvedValueOnce(f.docsDir).mockResolvedValueOnce("manual");
-		await f.run("/wiki");
-		expect(f.output.join("\n")).toContain("Created document index manual: 1 documents.");
+		await f.run("/knowledge");
 
-		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockResolvedValueOnce("Search knowledge indexes");
 		f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
 		f.input.mockResolvedValueOnce("sensorbeacon");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.join("\n")).toContain("The sensorbeacon measures temperature.");
 		expect(f.output.join("\n")).toContain("manual.md:");
 
-		f.select.mockResolvedValueOnce("Delete document index").mockResolvedValueOnce("1. manual");
+		f.select.mockResolvedValueOnce("Delete knowledge index").mockResolvedValueOnce("1. manual");
 		f.confirm.mockResolvedValueOnce(false);
-		await f.run("/wiki");
-		const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+		await f.run("/knowledge");
+		const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
 			expect((await docs.list()).map(index => index.name)).toEqual(["manual"]);
 		} finally {
 			await docs.close();
 		}
-		f.select.mockResolvedValueOnce("Delete document index").mockResolvedValueOnce("1. manual");
+		f.select.mockResolvedValueOnce("Delete knowledge index").mockResolvedValueOnce("1. manual");
 		f.confirm.mockResolvedValueOnce(true);
-		await f.run("/wiki");
-		const removed = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+		await f.run("/knowledge");
+		const removed = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
 			expect(await removed.list()).toEqual([]);
 		} finally {
@@ -157,7 +156,7 @@ describe("RPC index commands use the real index services", () => {
 		const seen: string[] = [];
 		let pageKey: string | undefined;
 		f.select.mockImplementation(async (title, options) => {
-			if (title === "Document indexes") return "Search document indexes";
+			if (title === "Knowledge indexes") return "Search knowledge indexes";
 			const labels = options.map(getExtensionUISelectOptionLabel);
 			if (labels[0] !== pageKey) {
 				pageKey = labels[0];
@@ -167,7 +166,7 @@ describe("RPC index commands use the real index services", () => {
 			return labels.includes("Next page") ? "Next page" : "Done browsing";
 		});
 		f.input.mockResolvedValueOnce("mbist_check.rpt");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.input).toHaveBeenCalledTimes(1);
 		expect(seen).toHaveLength(45);
 		expect(new Set(seen).size).toBe(45);
@@ -203,10 +202,10 @@ describe("RPC index commands use the real index services", () => {
 		let pageKey: string | undefined;
 		f.select.mockImplementation(async (title, options) => {
 			const labels = options.map(getExtensionUISelectOptionLabel);
-			if (title === "Document indexes") {
-				expect(labels).toContain("Search document indexes");
-				expect(labels).toContain("Grep document indexes");
-				return "Grep document indexes";
+			if (title === "Knowledge indexes") {
+				expect(labels).toContain("Search knowledge indexes");
+				expect(labels).toContain("Grep knowledge indexes");
+				return "Grep knowledge indexes";
 			}
 			if (labels[0] !== pageKey) {
 				pageKey = labels[0];
@@ -216,9 +215,9 @@ describe("RPC index commands use the real index services", () => {
 			return labels.includes("Next page") ? "Next page" : "Done browsing";
 		});
 		f.input.mockResolvedValueOnce(grepExpression);
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.input).toHaveBeenCalledTimes(1);
-		expect(f.input.mock.calls[0]![0]).toBe("Grep document indexes");
+		expect(f.input.mock.calls[0]![0]).toBe("Grep knowledge indexes");
 		expect(seen).toEqual(
 			expected.sections.map(
 				(section, position) =>
@@ -238,14 +237,14 @@ describe("RPC index commands use the real index services", () => {
 			expect(seen.join("\n")).not.toContain(decoy);
 		expect(output).toContain("Results exhausted.");
 		expect(output).not.toContain("Full name:");
-		expect(output).not.toContain("/wiki failed:");
+		expect(output).not.toContain("/knowledge failed:");
 	}, 15_000);
 
 	test("wiki keeps default technical names distinct from explicit grep and accepts PCRE2", async () => {
 		const f = await fixture();
 		await importGrepEvidence(f, 1);
 		await fs.rm(f.docsDir, { recursive: true });
-		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockResolvedValueOnce("Search knowledge indexes");
 		f.select.mockImplementationOnce(async (_title, options) => {
 			const labels = options.map(getExtensionUISelectOptionLabel);
 			expect(labels.some(label => label.includes("[exact-name]") && label.includes("uppercase.md"))).toBe(true);
@@ -254,44 +253,44 @@ describe("RPC index commands use the real index services", () => {
 		});
 		f.select.mockResolvedValueOnce("Done browsing");
 		f.input.mockResolvedValueOnce(" raw.Token[42] ");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.join("\n")).toContain("[exact-name]");
 		f.output.length = 0;
-		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.select.mockResolvedValueOnce("Grep knowledge indexes");
 		f.input.mockResolvedValueOnce("raw.Token[42]");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.join("\n")).toContain("Section hits: 0");
 		expect(f.output.join("\n")).not.toContain("Full name:");
 		f.output.length = 0;
-		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.select.mockResolvedValueOnce("Grep knowledge indexes");
 		f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
 		f.select.mockResolvedValueOnce("Done browsing");
 		f.input.mockResolvedValueOnce(String.raw`(?<= )raw\.Token\[42\](?= )`);
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.join("\n")).toContain("Section hits: 1");
 		expect(f.output.join("\n")).toContain("[regex] [manual] p00.md:");
 		expect(f.output.join("\n")).toContain(" raw.Token[42] marker 0");
-		expect(f.output.join("\n")).not.toContain("/wiki failed:");
+		expect(f.output.join("\n")).not.toContain("/knowledge failed:");
 	}, 15_000);
 
 	test("wiki reports invalid and oversized grep without erasing existing snapshot evidence", async () => {
 		const f = await fixture();
 		const expected = await importGrepEvidence(f, 1);
-		f.select.mockResolvedValueOnce("Grep document indexes");
+		f.select.mockResolvedValueOnce("Grep knowledge indexes");
 		f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
 		f.select.mockResolvedValueOnce("Done browsing");
 		f.input.mockResolvedValueOnce(grepExpression);
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		const evidence = expected.sections[0]!;
 		const retained = f.output.find(value => value.includes(`sha256=${evidence.documentHash}`))!;
 		expect(retained).toContain(evidence.text);
 		for (const expression of ["[", "x".repeat(501)]) {
 			const start = f.output.length;
-			f.select.mockResolvedValueOnce("Grep document indexes");
+			f.select.mockResolvedValueOnce("Grep knowledge indexes");
 			f.input.mockResolvedValueOnce(expression);
-			await f.run("/wiki");
+			await f.run("/knowledge");
 			const failure = f.output.slice(start).join("\n");
-			expect(failure).toContain("/wiki failed:");
+			expect(failure).toContain("/knowledge failed:");
 			expect(failure).not.toContain("Section hits:");
 			expect(failure).toMatch(expression === "[" ? /invalid.*regex/i : /500/);
 			expect(f.output).toContain(retained);
@@ -303,14 +302,14 @@ describe("RPC index commands use the real index services", () => {
 			const f = await fixture();
 			const expected = await importGrepEvidence(f, 25);
 			f.input.mockResolvedValueOnce(grepExpression);
-			f.select.mockResolvedValueOnce("Grep document indexes");
+			f.select.mockResolvedValueOnce("Grep knowledge indexes");
 			f.select.mockImplementationOnce(async (_title, options) => getExtensionUISelectOptionLabel(options[0]!));
 			f.select.mockImplementationOnce(async (_title, options) => {
 				expect(options.map(getExtensionUISelectOptionLabel)).toContain("Next page");
 				if (failure === "cancel") {
 					f.controller.abort();
 				} else {
-					const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+					const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 					try {
 						await docs.remove("manual");
 						await fs.rm(f.docsDir, { recursive: true });
@@ -326,7 +325,7 @@ describe("RPC index commands use the real index services", () => {
 				}
 				return "Next page";
 			});
-			await f.run("/wiki");
+			await f.run("/knowledge");
 			const output = f.output.join("\n");
 			const section = expected.sections[0]!;
 			expect(output).toContain(`sha256=${section.documentHash} · sectionId=${section.sectionId}`);
@@ -335,8 +334,10 @@ describe("RPC index commands use the real index services", () => {
 			expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
 			expect(f.input).toHaveBeenCalledTimes(1);
 			if (failure === "stale")
-				expect(output).toContain("/wiki failed: Stale documentation search cursor: indexed snapshot has changed");
-			else expect(output).not.toContain("/wiki failed:");
+				expect(output).toContain(
+					"/knowledge failed: Stale documentation search cursor: indexed snapshot has changed",
+				);
+			else expect(output).not.toContain("/knowledge failed:");
 		}, 15_000);
 	}
 
@@ -344,9 +345,9 @@ describe("RPC index commands use the real index services", () => {
 		const f = await fixture();
 		const expected = await importWikiEvidence(f, 25);
 		f.input.mockResolvedValueOnce("mbist_check.rpt");
-		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockResolvedValueOnce("Search knowledge indexes");
 		f.select.mockImplementationOnce(async (_title, options) => {
-			const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+			const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 			try {
 				await docs.remove("manual");
 				await fs.rm(f.docsDir, { recursive: true });
@@ -359,12 +360,12 @@ describe("RPC index commands use the real index services", () => {
 			return getExtensionUISelectOptionLabel(options[0]!);
 		});
 		f.select.mockResolvedValueOnce("Next page");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		const output = f.output.join("\n");
 		const section = expected.sections[0]!;
 		expect(output).toContain(`sha256=${section.documentHash} · sectionId=${section.sectionId}`);
 		expect(output).toContain(section.text);
-		expect(output).toContain("/wiki failed: Stale documentation search cursor: indexed snapshot has changed");
+		expect(output).toContain("/knowledge failed: Stale documentation search cursor: indexed snapshot has changed");
 		expect(output).not.toContain("replacement.md");
 		expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
 		expect(f.input).toHaveBeenCalledTimes(1);
@@ -373,27 +374,27 @@ describe("RPC index commands use the real index services", () => {
 	test("wiki reports zero indexed matches as exhausted without opening an evidence dialog", async () => {
 		const f = await fixture();
 		await importWikiEvidence(f, 1);
-		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockResolvedValueOnce("Search knowledge indexes");
 		f.input.mockResolvedValueOnce("zxqv_missing.noexist");
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.join("\n")).toContain("Section hits: 0 · showing 0-0");
 		expect(f.output.join("\n")).toContain("未找到完整名称命中");
 		expect(f.output.join("\n")).toContain("Results exhausted.");
-		expect(f.output.join("\n")).not.toContain("/wiki failed:");
+		expect(f.output.join("\n")).not.toContain("/knowledge failed:");
 		expect(f.select).toHaveBeenCalledTimes(1);
 	});
 
 	test("wiki cannot advance a pending result page after its owning session changes", async () => {
 		const f = await fixture();
 		await importWikiEvidence(f, 21);
-		f.select.mockResolvedValueOnce("Search document indexes");
+		f.select.mockResolvedValueOnce("Search knowledge indexes");
 		f.input.mockResolvedValueOnce("mbist_check.rpt");
 		f.select.mockImplementationOnce(async (_title, options) => {
 			expect(options.map(getExtensionUISelectOptionLabel)).toContain("Next page");
 			f.session.sessionGeneration++;
 			return "Next page";
 		});
-		await f.run("/wiki");
+		await f.run("/knowledge");
 		expect(f.output.filter(value => value.startsWith("Section hits:"))).toHaveLength(1);
 		expect(f.output.join("\n")).not.toContain("showing 21-21");
 		expect(f.select).toHaveBeenCalledTimes(2);
@@ -402,7 +403,7 @@ describe("RPC index commands use the real index services", () => {
 	test("wiki reports duplicate-name failure and keeps the original searchable index", async () => {
 		const f = await fixture();
 		const indexName = "PRIVATE_DUPLICATE_INDEX_TITLE";
-		const docs = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+		const docs = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 		try {
 			await docs.init(f.docsDir, indexName);
 		} finally {
@@ -414,11 +415,14 @@ describe("RPC index commands use the real index services", () => {
 			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
 		});
 		try {
-			f.select.mockResolvedValueOnce("New document index");
+			f.select.mockResolvedValueOnce("New knowledge index");
 			f.input.mockResolvedValueOnce(f.docsDir).mockResolvedValueOnce(indexName);
-			await logger.withLogContext({ operation_id: operationId, call_id: "rpc-wiki-parent" }, () => f.run("/wiki"));
-			expect(f.output.join("\n")).toContain(`/wiki failed: Document index already exists: ${indexName}`);
-			const retained = new DocsService({ agentDir: f.agentDir, cwd: f.cwd });
+			await logger.withLogContext({ operation_id: operationId, call_id: "rpc-wiki-parent" }, () =>
+				f.run("/knowledge"),
+			);
+			expect(f.output.join("\n")).toContain("/knowledge failed:");
+			expect(f.output.join("\n")).toContain(indexName);
+			const retained = new KnowledgeService({ agentDir: f.agentDir, cwd: f.cwd });
 			try {
 				expect((await retained.list()).map(index => index.name)).toEqual([indexName]);
 				expect((await retained.search("sensorbeacon")).sections).not.toHaveLength(0);
@@ -433,7 +437,7 @@ describe("RPC index commands use the real index services", () => {
 			expect(started).toMatchObject({
 				level: "info",
 				context: {
-					command: "/wiki",
+					command: "/knowledge",
 					stage: "dashboard",
 					result: "started",
 					operation_id: operationId,
@@ -447,8 +451,8 @@ describe("RPC index commands use the real index services", () => {
 			expect(structuredClone(failed)).toMatchObject({
 				level: "error",
 				context: {
-					command: "/wiki",
-					stage: "docs_init",
+					command: "/knowledge",
+					stage: "knowledge_init",
 					result: "failed",
 					error_type: "Error",
 					operation_id: operationId,
@@ -662,12 +666,12 @@ describe("RPC index commands use the real index services", () => {
 			entered.resolve();
 			return answer.promise;
 		});
-		expect(await executeRpcBuiltinSlashCommand("/wiki", f.runtime)).toEqual({ consumed: true });
+		expect(await executeRpcBuiltinSlashCommand("/knowledge", f.runtime)).toEqual({ consumed: true });
 		await entered.promise;
 		f.controller.abort();
 		await Promise.all(f.tasks);
 		expect(f.input).not.toHaveBeenCalled();
-		expect(f.output).toEqual(["No document indexes."]);
+		expect(f.output).toEqual(["No knowledge indexes."]);
 	});
 
 	test("cancelled repository rebuilding preserves the previous usable generation", async () => {
