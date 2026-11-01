@@ -305,7 +305,7 @@ const forkCodingAgentFiles = new Set([
 	"test/slash-commands/tan.test.ts",
 	"test/slash-commands/shared-business.test.ts",
 	"test/knowledge-index.test.ts",
-	"test/knowledge-search-cli.test.ts",
+	"test/knowledge-search-cli.e2e.test.ts",
 	"test/knowledge-search-tool.test.ts",
 	"test/knowledge-search-tool-availability.test.ts",
 	"test/knowledge-models.test.ts",
