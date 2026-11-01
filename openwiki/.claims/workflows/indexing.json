@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:582001b98315e6369500a3bf9025a36170f7fe01255be4908335a6b1b03bcfb6",
+  "claims": [
+    {
+      "id": "claim_808da9e09d72493587f92c427afa90df",
+      "statement": "Repo、Wiki 文档索引与 OpenWiki 页面资源工作流是职责分离的子系统：Repo 面向可更新代码定位，Wiki 面向显式导入并从 docs.db 查询的 Markdown 证据，OpenWiki 资源依赖/指纹管理不等同于 Repo 索引更新。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L134-L167",
+          "version": "repo-lines-v1:sha256:55143bb4da6fe8ceb3f77a2337065e7eb664f421922e60de38e2c6ec64cad3bf:eyJzZWxlY3RlZExpbmVDb3VudCI6MzQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3NmZjZTYxMDU1YjBhYjE4MzZhMzQxM2EyMjg1MzEyZmI5OTcyODFhMmQyMjM2ZDc2NWJmNjY4YTc4NDUwYmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNjY1OWY0YWMyNDEyNjBkYjNkZGE1MWJkOWFlNzU3ODA3YjUwNmIyNmZmMzMxODYxNTc2MmYzYTc3NmFjOGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE2NjljOTg5MzMxNDBiYjAyNzg4NjAwOTA5MGYwYTI3MWZlZGZmZmYwMGFiNjNmYzA4MmRhZjE5NmRhOWZhNjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmYTA5OTA0ZTdkNmE5OWRlYmQwNzE2N2U1NTkxOWJlZmIxNTdhMWM2YmMzYWNmNjViMzBmYTJjNWE2OTcwNjcifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L18-L22",
+          "version": "repo-lines-v1:sha256:112c416d4aac506956e26d90484c62960cd89594b9c817ce8489c232e2f61037:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzZhNmQ0MzliODQ3MjM5ODZmNzEwYTMyYjYxN2U4Y2EzN2RlY2VkNTcwYzg5NDNlYWQ5ZjAwZDFmNDhjYjFlYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTRhNjcwZTk1MDg0ZjJhNjJhNmYwYmU4NTY3NjVjOTZlYzNjNWEzZGIzYzE0ZThlYTY3MTZiZWYyNDgwZWY2NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjdkNjY1MjFjMTY0OGRmMDI2Mzc1YjgxM2QwMTQ3ZTg5NTJiYTZiOGJlODI5YjU5Nzk0NmMyYjliNmYwNDM5MSJ9"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resource-dependencies.ts",
+          "version": "repo-file-v1:sha256:0392a6e6be173e5f3583a70b4efb700ada883a625d298ef48862203d88a811b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resource-fingerprint.ts",
+          "version": "repo-file-v1:sha256:e55da2442d33b276134132b4380a1fb737b728a13ac938fd72b18ad45628b867"
+        }
+      ]
+    },
+    {
+      "id": "claim_86209f486a3c4962be21de8a6d4fd924",
+      "statement": "Repo 首次建立须用户确认；成功的受控文件写入通知路径以供查询前增量维护，可能影响范围的 shell/eval 或外部变化标记未核对，完整更新按内容指纹读取并核对文件，失败或取消保留已发布旧代次且不发布半成品。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L167-L170",
+          "version": "repo-lines-v1:sha256:206793e6d93bd338ae27aae7f1a9517a51c214c5407930581bca80e07c363092:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYWQ2NjU5ZjRhYzI0MTI2MGRiM2RkYTUxYmQ5YWU3NTc4MDdiNTA2YjI2ZmYzMzE4NjE1NzYyZjNhNzc2YWM4ZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiM2U4Yzg2YzI1YjI0MWIzNzJmYTk4MzAzZGJjNzJiN2U3Y2UzMGQwNDhiODI5ZDBiNjAxZGYwOWMzODdlZDYwZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODkwMzI0MmMzMTVmMjhhY2M3NGNkZjc4NzY4YmE3MGE1YzM1YjFhZDc2ZDc1NjQyNGQwYmE0ZDY4YzlmM2FmNCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTZiYzIxMDdjYWE0ZGQ1YTE2YjQyZTQ0ZTljMGIyMTUwYjY3YjY4Y2I0NjZmOTM0NmEyMDBjM2NkODQ2YTA0YiJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L204-L215",
+          "version": "repo-lines-v1:sha256:4d6580b1bf4c114dfaea7d5cbef19c7846208c836332f964af3d8fc198f3c6cf:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdiNjU3NDVmODI3MDdmOTc1YmUzZTYxZTgxZTI4NjM1ZmQyMzM1NDZhYmI0MTlkMDNkMWEzZjE4OWM0NTU0MjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgyYWIzODYzMGM1OGM5NTNiODdlNDA0YzQzNjY0YjlmMjQyNmMzNzk1ZjgzZjRhOWIxNjA5YjA3NWZmNjkzYjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVmNTM1ZmRiYTU1ZTcxNDFlNGU2N2JlYjZjMGQ4MjE5NjU4YjMxMTJhOTIzNzFkMTZlOTUzODVlN2Q5NzQzY2YifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L41-L52",
+          "version": "repo-lines-v1:sha256:b08db35c8354317ffa5dbc750949436086a96c2fef329ef0f94e61a673e45f62:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQzNjM1MTk1MDkxOGM2YmNmMWI2OTg2MTc4M2MxZjhkOTI5NzZiNDU1MWM1NzQ5YTg0NzdhMTZhMjZhMmRhOTgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYzMjhlOWI1M2RlMzkxMjgyZmE2YTcxYzY3MDIzNzE1ZDIyNzBkZDI3YzJjZDc1NTQ0MmEzMDcwM2Q2MWU1OGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjI3N2I3YjY4OGY0YjM4NzVkMDIxZjdjNjI4OTZiMTI1OGEwNTk5OWI2NDJlY2I0OGFiMTJiZDQ1NGY2NWI3YzEifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_eabe08bdbb4741e99c1fcfcc5bafd912",
+      "statement": "Repo 对不可读目录采取严格枚举失败语义；查询可读取维护期间的已发布代次而不暴露构建中数据，重建/恢复失败保留旧索引。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L164-L170",
+          "version": "repo-lines-v1:sha256:e6d03ae38ea1336895537bb2eb0a3166c4839dac1b07eeffe0fa021b34f8381d:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDI0YjZlYmQ3MjFiMmE0ZTQzYzk5YmEwOGJiNmMxMzk4ZTM1Y2IyYTUwOTAyN2YxMDU3NDhiOTVkOWYxZDkxOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiM2U4Yzg2YzI1YjI0MWIzNzJmYTk4MzAzZGJjNzJiN2U3Y2UzMGQwNDhiODI5ZDBiNjAxZGYwOWMzODdlZDYwZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTc3MTc1MGRlYTZkZmQzZDE3MGNjNGM4MmE2ODMyMjA2Y2EwMzE2ZWMwN2IyNDRhMzBlNmNjNWQzOGU4MTVmZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTZiYzIxMDdjYWE0ZGQ1YTE2YjQyZTQ0ZTljMGIyMTUwYjY3YjY4Y2I0NjZmOTM0NmEyMDBjM2NkODQ2YTA0YiJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L177-L193",
+          "version": "repo-lines-v1:sha256:9dfbf8c5d504e5efb3d463b31af85019170278676a2e1bfea5eb8e1e7f519c0b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg0ZDdlNmUzYTY0Njg4N2VkMDcyYTQzZTM5NTIyZWU5YjVlZGRjNTdjNmM3Y2Y3ZGE0NDhjNzAzMDhiZGIzNzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2MDk5OThjNzFkYTIwZjEwYjk5Y2Q3YzYxZWJjYzMwMjU5ZGVmYzVjZTA1MzNiYjhiZjY5YzZkNTZiZmVhZjEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgzM2RiN2UzYzljYjc2ZDQ4OTg3YTRiYmZjMDE2MDUwOWQ4MzY2NzU4MTFlOGE3NzllYjE0YTYwNDU3MzRjMGMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjJhMTNkNjQ0NzZmZGM5YjI3YmZkZDViYzlkYjVmOWQyNzdkNzJhNDg2MmQyMDBlYTEwYzkzYTNlODZiYjZkYjUifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L43-L50",
+          "version": "repo-lines-v1:sha256:900ba81d7b2df3139688c32b112ad39775b44a9fe4ae5d1fa717d412e5e193dc:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzk1MzUyODljMDFjZGM4MGQ3ZGNjNTM0OTUwODVlYTczMTdlODA1NWUzOWRjZWFmNzgyZmI1OWYwNDM1YzZlNiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNjY3MGVmZmUwYWNiYmI5MzUyNmRkMzgxOTgwYjFlNDBmMTU2YjMyZDI0Yzc0NmM1ZDA4ZjE5ODIzNmQ0Njc3NCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjhiYmQ3NmM5NmMzN2UxNzBkOTRjMzg0MGQxMzRjZjQ1NDNhZWE0MDA0MThmNTdkYjYwYTI5MjBiODEyZWQyNyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiODIwNDY2ZTQyMGI4ZDQ3MTZhNjQ1ODc4YTNlM2JjOTIxYWQzNzQxNDZmNDY5NmVkYWM2ODBhMTkwMzM0ZTE2ZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_6f47a3d15f494a2aa2fbf9b4b666de4d",
+      "statement": "Wiki 通过显式 init 导入 Markdown 至 docs.db，remove 删除库内索引而不删源文件；刷新采用 remove 后 init，查询从存储正文与来源读取而不依赖源目录。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L21-L22",
+          "version": "repo-lines-v1:sha256:d657b0376735ecc742f016b02f4144bd40fa7bc23652e990025923ec61b989bd:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2YwNTllYjdjMjQ4N2NkNzAwNWI1NjczMTUxZDMzMDMyZjc1NTk3MDE3ZGFkZWMwNmY4MzFjZTFkMDQzMjFiMiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTRhNjcwZTk1MDg0ZjJhNjJhNmYwYmU4NTY3NjVjOTZlYzNjNWEzZGIzYzE0ZThlYTY3MTZiZWYyNDgwZWY2NSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMjk0MTA0YTY4MmViZTg3NjM2NDhhNGFlMDFjYzMwNThhNDQxZjY3OTdlNTNjMjhjMDdkNWRmOWYxZGZkYTc3NSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZjdkNjY1MjFjMTY0OGRmMDI2Mzc1YjgxM2QwMTQ3ZTg5NTJiYTZiOGJlODI5YjU5Nzk0NmMyYjliNmYwNDM5MSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L44-L47",
+          "version": "repo-lines-v1:sha256:6015b6c7c94297da041b512fc2ee3077fde743951b19366e75ccc5709d34ed89:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMjRiYTNiMTQxMGFhY2NmY2I2YjU3ODFkZWIzZDYwZGU2NDgxZTVjNWU2NGI2OTMyZmNhZWZiM2Q3YWEwM2E1YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMzQ4MGNjYTQ2ZmEwMmVjODYwMWE0MGFmMGZkYWFlMzUwZjkzODFlZGM1M2ViNzE3M2JjMGM4YmYwOGRiNzdlNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjg5NmFjMmFlZDYyOTk0YmFjMmVkN2JhOGQ2ODZiZTZhMGYxNWFlNzhkMTFjZTM1NDg4NDlkZjE1OGZhMTc3NiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzZiNTBmMmM3NmY1ZDVlZDA0YmY1MmNlNTRkZjFhZTA4NmU3NzQ3ODA3OTQ1ZmU2M2FmZDIyMGI0YWM5ZTVhOSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_4acca457bdb84da09a1574ee357f00b2",
+      "statement": "Wiki 普通搜索在有效向量能力下融合全文和语义召回并可接受独立精排，缺少/失败的可选能力回退基础全文；grep 不调用模型；调用取消不应降级为成功全文结果。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L23-L27",
+          "version": "repo-lines-v1:sha256:db0137384563c60f844cd443d44da865170809a1e2861e55abce0a2f3bbcd05f:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNmUyNDdhMWJhMDQ5NWMxMGQxMjczODIyMTE4ZGQzODAyNmZiZjk5Y2RlOGNmOWNkMjAwNzM3Y2U3NzgxYzRjZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYzgzNDgxOTk5NWFlNDM4NjkyMmQ4MWY4NGJkOTc3YWRkMjNhYzM0Y2Y2Mzc5OGQxN2EwZGZhOWE1NWE0MzIxNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZGRmNDQxYzc1MmU5MDAyYzNhZGRiZDljM2M2NzViYmRkOWRkMjkyZTIwNThlOGU4YTZkZGE2OTVkZTRhZGRkZiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzA2NDM3OWZjMTk0ZjYwMDM0NGU1ZTg4Mzg5ZjY3OGEwNmFmZDdjNGUzMGYzNDBlN2ZhNzM0ODI3YjkyYmRmMiJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L244-L252",
+          "version": "repo-lines-v1:sha256:b8a397c0314a8a9adeca4f2ef67e15eafd81a37ef7e619595a9b6682940ffe4a:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZmFkMzVhMzU3MTM1NWM2YWMxMTRmNDNkNTQ3MmU3ZTU4OTNmMzc3ODQzMzdiMWRmMjJmMjFiM2ExMzBmNjNiOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYjQxNzVhMjdhMWRhZGQwYTBiOWMwYTllOTYyYWUyMzZlMzkzYjlhZGM0ZGZlNmM5NTkxMmJlNGE3ZWI3ZDE0YyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2FhYjg1N2QwZWU2NTJmMzRmYjQwMjkyYjg3OTM1ZmMwYmJmZmFjMjFjNTliMjU4YTRkNTc4ZTkyZDgyYTFhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMDQ5ZjQ4ODg4ZGVjMWQ3YjZhMmI0ODI4MzFmMzdiOWQwM2E4OTI2NjU5NTZjYzQ0NGNmZDc0OWExMTMxYjc2MiJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L327-L362",
+          "version": "repo-lines-v1:sha256:6b6e91797fb540f7d6228902827df6f4ef65479fdc5fb62c1ffe323b7d8955f3:eyJzZWxlY3RlZExpbmVDb3VudCI6MzYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkNjIyOTlhZDgxNzE5MmVjOTYzY2RhMTAxMzBmNDg4ZmNiMzc1MTljMzU4MjIwZTYwMmMxZGY5ZDE1NTBmNDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjgxZTgyMTFjMjEyYzViYmMwODJmZWRiNTFhMzczZGJlZWZjZTFmZWIxMDVlZDNjNTA2NDg4ODI0NWUyYTNlZDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjczMjBmYzA4YzE0OWJhYjY3MGI3NzYzMTJhOTM1ZDRlNDRiMDRkODEyYjFmMTEwYzIzMDkxNTYxNWMxOTQ1NzMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjY4YThmM2UzOThiMjUwYTViNWFjNzgyMThhMmM2YTIxMzlkYWE4MzgzYjBhODMzOGI4NGU0NWQxZTIzNTg2MDIifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_5475e519bd9e462e8dc713888a884f03",
+      "statement": "ZCode Repo/Wiki 专页复用 OMP 的原生服务与 profile 数据库，不应建立第二套索引；切换执行端或页面上下文时取消自有请求并丢弃迟到结果，Repo 与 Wiki 维持各自操作语义。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/repo-index/spec.md#L68-L75",
+          "version": "repo-lines-v1:sha256:9e22b747079ac96dd3849a970bf3e6196db83c5459680ca130426d8568b764f3:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiN2IzYzE4YzBlMzhhZDc5OWRlNWYzYmMzMzU2NDNhZDRkZTRiMjhjYWI1NDdjYzJjYzNjZDc5MzIxMWEyOWJmNCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYWZhYWZmMzJmOGYwZWNmMjQ5NzhlNTkzZTFiYTIwNzI1ZTMwZjgxMTg0NWIwYmQ0YzVkZmIwMDUzYzBhOGY4MiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiM2NjMThhZTRhZDZmYWFmYmZkNThiMDg3YTNiMzI5ZGJmOTE0NmJjNWY0Yzk3ZDk2YjFiNjAxMDk1Y2FkNGJhMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTk4NmQ4NTBmMDM4ODhmNTRlOWY0ZmI2NWQzMmI1MDBlZjI3ZjljMzdjODMyNTFlYWUwODk1YmFmN2ZlY2MwOSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/wiki-index/spec.md#L54-L63",
+          "version": "repo-lines-v1:sha256:871e6d35c349fc6b52fb6b86102e2ba2af36970db4bb0d11e9abe5160918c1a3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJkOGYyNzRiMDllYTdiNzRmM2JiMmY0YmZjZWNiYWE3MmQ0OTMzY2FkNzc4Nzc5Nzc1ODc5M2VjZWI3YmIyNDQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVjYzkzZGFkNTJjZDdjZjcwZDljNzBhMmU5ODRmMzI1YmI4ZDYxMDE2ODNiOWM3OTk1NzY5ZTIwNDlmYmRmNTYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3NzFmNTIyYzA1N2NkMGVlMzlhNjUyZDg1M2I1YmI2MzhkODczMmQ0OWE0YTZhYjY3Zjc4ZjhjZGY5YmZmNjMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjkxMWJlNmY1Nzk5NjZhZDk5NzJkMDE3ODA3MmEwYjdhODIyNGUwOWEzNWYzZjA4YjliNzVmYTMwODM1NGMxY2UifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_60cb34a0270f45e5b30205ca77376f30",
+      "statement": "OpenWiki 资源层包含独立的资源依赖与指纹机制，不能据此将 OpenWiki 页资源工作流等同于 Repo 源码索引或 Wiki 文档库的刷新。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resource-dependencies.ts",
+          "version": "repo-file-v1:sha256:0392a6e6be173e5f3583a70b4efb700ada883a625d298ef48862203d88a811b3"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resource-fingerprint.ts",
+          "version": "repo-file-v1:sha256:e55da2442d33b276134132b4380a1fb737b728a13ac938fd72b18ad45628b867"
+        },
+        {
+          "resource": "repo://packages/coding-agent/src/openwiki/resources.ts",
+          "version": "repo-file-v1:sha256:46b1e1d1e2074a498a2240c23ab4f615cec3d6cd435edae4c36dfe7aee87e79e"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T02:46:50.031Z"
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:c615e866f921abd4a68662fa1dee719c6a2f1045fbfb42312bfe55a569a256ba",
+  "claims": [
+    {
+      "id": "claim_2cbe465a47a44635a47429645a6bc2d7",
+      "statement": "fork 的产品范围包含两个真实使用入口：终端使用 OMP 原生 TUI，ZCode 桌面使用其界面框架并通过 fork 自有 app-server 接入本 fork OMP 作为 Agent 核心；两者共享 OMP 执行能力但有各自的入口和验收契约。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",
+          "version": "repo-lines-v1:sha256:6164bafe7027876666ec1d4489c9a06c1233e0d440fdc77218f3fc12a13d1669:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhZjE2MWM2YTFiNmRhNDBiNGEwMjA3ZWIyOTJkNzAzMGM1N2QwMzg2NjBiNjBlNjE5M2ZhZDM3ODViM2Y0YmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhlY2FlMjViODUzOTgwMGU5MGJlMDRmYTdhNzYyNGJiN2IxOTc2YzE5NDkxMDllYmFjYWI4ZmFlMjEyMWU5NzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyMWNmNzg4ZmM0MWRiNTBjYjk1MTkwODBmNDJjYWYzZWNhY2IxM2FhYmMxZmI3YWYwY2NkM2YyMThmMjgwZTcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_a5eabded4d9f44b8a90133ce0e8d9edd",
+      "statement": "fork 的零配置目标不等同于无运行前提：模型服务可达及必要认证仍须就绪；公司内网终端场景通过 OMP_OFFLINE=1 使用本地资源和内部模型服务。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-product-scope/spec.md#L22-L27",
+          "version": "repo-lines-v1:sha256:0296b6bb5a349d8741fb328ddddb8ff630ef335de2c1eb45720e6045210d77be:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNTM4OTRiNmEyZTdhMDhhNjkxNjQ3ZTEyNTMxYTRlNmEwYTNlOGQzY2FiMWY0YzBhY2ZjYThiNjQzOGY0MTU1NyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOGVjYWUyNWI4NTM5ODAwZTkwYmUwNGZhN2E3NjI0YmI3YjE5NzZjMTk0OTEwOWViYWNhYjhmYWUyMTIxZTk3MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNGI5OTFhNDVlM2FjZDg5ZGNlMGNhMzFlZDM0NWI3NDU0ZmJiNjRkZWM0MWI2MzczYzk4OTU0ODU1Yjg4YmNlZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTIxY2Y3ODhmYzQxZGI1MGNiOTUxOTA4MGY0MmNhZjNlY2FjYjEzYWFiYzFmYjdhZjBjY2QzZjIxOGYyODBlNyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_fca3eb89b73d410fab5bb57918c1e8aa",
+      "statement": "fork 与上游能力的比较基准是规格记录的 can1357/oh-my-pi@main 提交 62f4f7cccfd38adde9a2ae203d69b27bc187a84f（版本 v18.14.2）；该基线描述集成状态，不代表集成功能已验收。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-upstream-baseline/spec.md#L18-L23",
+          "version": "repo-lines-v1:sha256:d7a5107d59e8522efe9aee2c4b693f883a102e77f46f55e31f96888946301984:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiM2MxMTYxNGYxMTMwMWIwYTU3YzU2NGJhNjllMGRhMTcyZmE3Y2Y5YWQzYjI1ZGNlODUxM2RmMTkzOTNkZTU4NSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNzhmN2E5ZDgxZmNjOGZjNTNkYjFkZmNlOWRmNDEzMTQ3ZDBhMjZkYWE2YjdhOGJhNWFlMjgxZjUyOWYxNWMwMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNDU3NTU4NTA4ZDRkMjhkM2Q3YThlOWZmZTBjZGE5ODQ0MjI2Y2U4YzQzNDAzM2NjMzE5ZjZhOWZiZGYzYTA3MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjAsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTNiMGM0NDI5OGZjMWMxNDlhZmJmNGM4OTk2ZmI5MjQyN2FlNDFlNDY0OWI5MzRjYTQ5NTk5MWI3ODUyYjg1NSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-upstream-baseline/spec.md#L5-L5",
+          "version": "repo-lines-v1:sha256:061a53cbd2e44c0e54fe59483e1b215a2456dd078ca0c608be9cd7975f79c39e:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDYxYTUzY2JkMmU0NGMwZTU0ZmU1OTQ4M2UxYjIxNWEyNDU2ZGQwNzhjYTBjNjA4YmU5Y2Q3OTc1Zjc5YzM5ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMDYxYTUzY2JkMmU0NGMwZTU0ZmU1OTQ4M2UxYjIxNWEyNDU2ZGQwNzhjYTBjNjA4YmU5Y2Q3OTc1Zjc5YzM5ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODJmZjEyMDkyZWI0NzU4ZDZiYjk3Y2RlYzBmNGRiYzlmNTZjNTBkNjc2NDNhY2I0ZTc4NzZlNmZhZWI0MjhhNSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYmIxMzQ4NmM1NGMwZjdiMGVjOGMxNzdjOWY0NzdhNmE3Y2YyYzJmZDBmNzU0MmViYmFjNmEzNzMwZGRjNDc2ZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_858c731e23724d3ba7c5eec59ab0b0fa",
+      "statement": "根目录 Bun workspace 提供开发 CLI、workspace build、独立 native build、TS 与 Rust 检查及测试脚本；dev 脚本运行 packages/coding-agent/src/cli.ts，check 并行执行 check:ts 与 check:rs。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L10-L14",
+          "version": "repo-lines-v1:sha256:da6a46067efdd1755b34ba275f8d66c3015d1f2999b1814dc499205384ca3640:eyJzZWxlY3RlZExpbmVDb3VudCI6NSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWZlYmM3ZWU1OTEyYzRmYjU5ZDFjNWE2MTdkZTc3MmNjYTQxYjQxZjFiN2MwZDllMDk2NTM2ODBjMThjNTYxNyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTIxMGVmODMzM2Y2OGRhM2IzZDlmNDJlYWJlNTUxYzBkZjM5MDEzY2EzNGE3ZGIzNTliMzJhNDc5ZWU3ODNjOSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWU4OWYxZTgxNmUzZTVkN2IzNGM4NTNkMzQwYzZjY2JkMzE1NzRkOTE5MGExNGM1YmQzZTllZTgzZjQzNTk5MyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDUwN2QyNWQyNjNiMzRlZDU5MmJlMzUwODQ4NmRmN2RmYTZhODMyZDllYmZkM2I5YjlmYTZmNGIxMjRhMzM1NyJ9"
+        },
+        {
+          "resource": "repo://package.json#L75-L100",
+          "version": "repo-lines-v1:sha256:2f3e9341dcdb8227b070100a656a8d1bc8b1be55447d46edd058b60b977cad63:eyJzZWxlY3RlZExpbmVDb3VudCI6MjYsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImI3M2NhMGRkN2QzYTM4OWJiODNhMzhhMWIzYzQ5MzhlZjA5ZDFmZjhiYTYxYzA3NTM4YTE1NTNkNDkyYmEyZjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijc3N2M5YzI1NjE3NjBjN2ZmY2M1YTIxY2MyNjQyOTZhZmZmNDU0YTFlY2RhN2ZmZGJkMjAzYzAyZTcyMDE5MDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI3ZDJmY2I4N2FiODg2ODk5NjMyZjM1ZWQxMmNkMWE4MmZlNDEzNjk1OTg5MzA1N2I4YjA3ZmZlMGVmMDlmM2MiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhmNTc1OTVjN2FlZTA1ZjdlNTViNDllYWI2ZGU4MTdlODA5MjlhZTFkYTBlZjc5MjRiNGU4Y2ViMDdiMTc4NzIifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T02:46:50.031Z"
+  }
+}

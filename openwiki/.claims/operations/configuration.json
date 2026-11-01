@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:ce1643d8c6158441604dc5f4ad2ca27049a922dd58b697c7a91f045d04c6d37b",
+  "claims": [
+    {
+      "id": "claim_76439b219eb04aa9a8675873e568fab3",
+      "statement": "OMP_OFFLINE 仅由环境变量真值（1、true、yes、on，忽略大小写及空白）触发并对进程及其子进程生效；它不是命令行开关。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L48-L50",
+          "version": "repo-lines-v1:sha256:ef87b95c23ea432e3097746fe980860a72931d215afe3e2f9d7c7eb3c40b52fb:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTQ5YzRlMzYzNjY2OTBkNTk5OGJhZWI5NjkyNGZlMGM1NTM2NzJmMjZjNzBjYzUwMDJjNjE0M2U0MzA3YTk0ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjhkODNhZWJmNTU0NzMzZmM1MTAzZDk1OGRiMmNmMzQwNmQyZmRmNjRhZmQxYjJkZDE5NmU1ZmZlOGI5YjMwNiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDA1YTdiMThiZTEzNzM5N2ZjYWZiMmUzNTkyM2IyODIxMWZmYmFlZjA2ZGM3MjMxMjc1OTc5NTViMDlmZmRiMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiOWVkMWM5Y2MyZmI1Mjg1YjVkNTQxMzY2YmZkZGI2Y2U5MWJhYWEzOTQzYzc2MmIwMmVjYTlkYzRmMWZlYWQxMyJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_3ab1829c3cad4a639f5534e67f289d62",
+      "statement": "有效 OMP_CONFIG_ROOT 必须是绝对路径，统一改变 OMP 数据根而不改变项目级 .omp；OMP_CONFIG_ROOT 优先于 PI_CONFIG_DIR，Wiki 不支持独立 OMP_WIKI_DIR。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L49-L52",
+          "version": "repo-lines-v1:sha256:247c429b6316a61b66ea4ada03a904983c415cadbbeb3778fd6affab41bd68a2:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNDkyMTgxMTFjNDlkNjQ2YmJkMTVkN2FhNjVlZTM0ZTRmYWUxZDBmODdmNDMzNzEyOGJjMTdmYTIxMTAwNDEwYiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWE1ZTFiMWUzNmFlZTc4NTljODllOWJhMzMwYzNkY2Y1YTY2NzFiNGEwMmU1NjNiOTYyYWYzYTU3YTA1ZWVhZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOWVlYzhhZWY0MTc5MjY4MGNkMzkyNmE4MjNiYTFkMWUyNjhkNTFkZjZkNDVlZmZkMTBhOTMxNjY5MmY4NTFhOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNjQwOTBkZWI2YzRhNDViNWNhNjRmYmJlZjlhMWEzMTM4NmZiMmE4MmNiNTJkYzA1Y2E3MzU3ZDg2NDJlYmJiZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_88c48ad96a064e829ebe17dfb5d0b232",
+      "statement": "-P <name> 是 --profile <name> 的短参数，native 与 grammar 安装器采用同一数据根和 profile 解析；有效 PI_NATIVES_DIR 显式配置优先。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L48-L51",
+          "version": "repo-lines-v1:sha256:7571b62b2996664790678d230bc5fe1a0e9d7e3d7ff2b3dbb22c7b6a6ca3b3be:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTQ5YzRlMzYzNjY2OTBkNTk5OGJhZWI5NjkyNGZlMGM1NTM2NzJmMjZjNzBjYzUwMDJjNjE0M2U0MzA3YTk0ZSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTdkZmM4YmMzMmRkNjFlMzY4MDE2MzhiMGZiYTBmZmM5YzU3ODMwY2QyMzE0MWI0NTRlMjBhYjk0MTlmNzY1ZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDA1YTdiMThiZTEzNzM5N2ZjYWZiMmUzNTkyM2IyODIxMWZmYmFlZjA2ZGM3MjMxMjc1OTc5NTViMDlmZmRiMSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDA2YzllZjFlNGRmZTYyYmZlZGZhNTIwMTBiOTJmNWY1NWVhZTY5Y2QxN2NmZTFjMzM2MWM4Mjk4OTc0YTVkMiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_aaa115ade7a3458db33d2a486f5aeff6",
+      "statement": "offline 对联网发现和 Web 能力施加进程内启动覆盖并使用模型本地缓存，但仍允许实际模型请求及内部服务；它不是无需模型服务和认证的离线模式。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L58-L61",
+          "version": "repo-lines-v1:sha256:3cae7db2118b26e8467f3840cfd1cde6c6f1f1db43cfa62207d113285ed2e7fc:eyJzZWxlY3RlZExpbmVDb3VudCI6NCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTc0NTdhNGRiZDdkNTAyYjhkNjM2ZjllMDk0ZDRmMWI5MDlhZmYzZDljYzA1ZjlmMTI2ODQ4ODk5MmQ0ZDU5MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYjUxYTkxZjdiYzFlMDgxOTJjYWY5YmY3ZjA1NWY5ZmE5Mzc0NmIwMDZjY2YzYzY4MmIzYWM3MWVjZjEyNThmNCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTZhOTczMjM3OTBmOTJjOWU4MDc3OWQwMTIwYWYxYzI3MDAwMzA1OTYyMjQ5NDhkYWY3NTFhYTNmMGVhODJjYyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDQwZTZmOTAxYTAzYTY1Y2EyMmJiMTA3ZjMwOTRiM2IxMjM4MDk2MmI4NmU3MDI3MWI0MDRjODBiNWMzYjdjZCJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_698ee67ef7f642338507444038f93c2e",
+      "statement": "fork 将 LSP 与 JavaScript Eval 默认关闭，显式设置可开启；关闭 Eval 时拒绝 JavaScript 执行，关闭 LSP 时也约束主会话、task 子代理及相关自动格式化和诊断。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L20-L22",
+          "version": "repo-lines-v1:sha256:7281a3f1aa4429ce75dcbe4580bbaecd0d5f4064eb1d7ad53974c16dd4702d05:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMzNjNmJkNmFjOGU2MWY3Yjc5YTA3MDUyMTQ4MDgxMjM3N2FhNWJlMDBhN2JlYzJmNjU5OGEzMWI4NWE0YmY2MSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiODZhZDVhODU5YjQ5ODc1ZjJmZGJhMTZkMGE0NDMxNzAwNzNiZTkxMDVkOWRiYzIxNGYyZmRkMzZmY2M1MTRmZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiN2U0NDE4MTZjMmMzZjY3YmFjNWNmZDIzM2JjM2IwYzY1NTkxYmJkODczYTg2MGE5NTAzYWQyNzZmYTI4MWMzYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYzQ0M2M2YzJiNGYyYjRmZTY1Zjg5ODliOWU2NTczYWY3NTE2ZDI1OGMzOGJkY2QzMjIxZTgwMTgzZjViOGQ0OCJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L33-L33",
+          "version": "repo-lines-v1:sha256:10f146cd34746a8086d3fab9f3bd0f58dbc6780d327d56586f457452d98bfbaa:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTBmMTQ2Y2QzNDc0NmE4MDg2ZDNmYWI5ZjNiZDBmNThkYmM2NzgwZDMyN2Q1NjU4NmY0NTc0NTJkOThiZmJhYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMTBmMTQ2Y2QzNDc0NmE4MDg2ZDNmYWI5ZjNiZDBmNThkYmM2NzgwZDMyN2Q1NjU4NmY0NTc0NTJkOThiZmJhYSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzI2YjMwYzE1ZWU5NjNlMjU2MTlmMDJlODYxMDhlOTYzMzE2M2UzMjFkY2VlZGQwZjYxNDIwNjFhZTRmNmRhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDU2OTQ1OTM5ZTg1YjlmYzJhNDk3NDc4MWJiOWFhNjJkZThmOWI3NTVjZDBhNzYwNzhkZDQ1YzQwMTdiZjM0YiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_6b7ca34fd2aa4b35892c45d253163a30",
+      "statement": "fork 的输入区预测默认开启并沿用上游建议生成、插入但不发送及额外用量计入统计的行为，用户显式关闭优先；暗色主题 titanium 与上游相同且不覆盖已保存主题。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L28-L29",
+          "version": "repo-lines-v1:sha256:993be592246603fcee0dc080e9a24707d02700627ba84f616d45baf134709563:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzQzYWI5NDVkMTIxY2YyZmJlMWVkM2VhNDkyOTFjZWZjZDdjYTExMmUwNWQ2ZmY3YmI3ZTExYmE4ZmVkNmY3NiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2IwMWVhYWJhYjYyZDI4ZmMzYWFmZTIyODU0OTM0ZDhiYjFkNzZhODgyYTFiNzkzZjcyNTc2ZmUwZGE0ZGVmZiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNzZmOTkyYTllZDM2OThkN2MwYmQwZTIyMTc4ZWRmMjcxYzU0OTczYTY1NDQ3N2EwNjhjZDk0YzNjYmI0NDMzMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMzI2YjMwYzE1ZWU5NjNlMjU2MTlmMDJlODYxMDhlOTYzMzE2M2UzMjFkY2VlZGQwZjYxNDIwNjFhZTRmNmRhYSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L42-L47",
+          "version": "repo-lines-v1:sha256:09d0c945639f50107ce476b538f7ec46d8c7661e81dcccb297651b49c95caea3:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNjU0MWRjMGUwZDNiMjExNmI2OWYzMDEwYzY5MmE0NTI5ZGJjY2E4NWRhZTM2YTliZTBkMzE2NzI4MmYxM2NkNiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMjhjY2MwYWExNmNlM2I4YzQzNDNjNjYwZmI2Y2EzNDlmODczODE3NzE5NzM5MWM3ZTZkNTIzMzY3Zjc4ZTNkNSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZGNiMGVhZGE3N2YwNDVjNjNkMDM0ZTBjNTZiYjBmZTE0M2RmZjMwOWRjOGY2ODRmZGMyOTAyZGEwZWZlMDk1YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNzc3MjA4NWIxNWVmNjMxZmNmN2Q0ZmY5OWIyYzRlMDU4OTMyZTMwZmRiNzljN2MwNjJiZjQ5YWI3YmNiMTJhMiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_3708e0cf54e44b999fae117ebd367285",
+      "statement": "offline 模式下 terminal.programStatus 默认关闭以避免不兼容终端显示 OSC 7501 文本，普通模式默认开启，显式配置仍优先。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L31-L31",
+          "version": "repo-lines-v1:sha256:a99bb24b7cc53aac7d5970bc5cef99bc90c6de3f5beffb038245eab088782a43:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTk5YmIyNGI3Y2M1M2FhYzdkNTk3MGJjNWNlZjk5YmM5MGM2ZGUzZjViZWZmYjAzODI0NWVhYjA4ODc4MmE0MyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTk5YmIyNGI3Y2M1M2FhYzdkNTk3MGJjNWNlZjk5YmM5MGM2ZGUzZjViZWZmYjAzODI0NWVhYjA4ODc4MmE0MyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZDMwNGJmMGNhNjBkZDVmMDhjZDNjMzQ0OWZmY2Y1YzU1NWJkOGZhMWE3ZWEwMzZiNzkxNWYwOTNhYWYwYjRkYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNGY3OGFiZmJlNjkwZWM2ZmFhYmQxNjk3NGY0YTBiMjIzNWE2Mzk5ZGQyMDdlZTcxOGQ4OTUyMWM5NzRhMDY3OSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L49-L61",
+          "version": "repo-lines-v1:sha256:65bec099886f54cb8ab8c3c18276ca594084bbf5d233a24eaaaf7095809c44f4:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZTU4NWIyNjAxMjkyYmNkYWNkMWY4YTcxMzc5NjA2MzAyYjcxMjA0OTU5ZTZiYTg1ZjIwOThlOTU5M2IwMGMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYxN2YzNDA0ODI2OTNmYjllMzM4MmU3MTllNzcxNjgyYmM1OGRkYmU5ZDM1NWJhNjI2MWM1YmFjOTgzOGMzYjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgxMWVkYjU5ZmE0OTk3YTk5NGViZThkYWI2MDQ3YmNmNmIzMjZhYWRmZDQxNjU3M2MxNDA3MmMyNjY2MjEzYzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_4742e7f6c856473797de38c67d73c900",
+      "statement": "运行时默认放宽主进程 fetch 与 git 子进程的 TLS 证书校验；显式 NODE_TLS_REJECT_UNAUTHORIZED=1 或 GIT_SSL_NO_VERIFY=false 可分别恢复严格验证，放宽会使可劫持网络中的凭据存在截获风险。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L83-L83",
+          "version": "repo-lines-v1:sha256:1f2305fae1bbb4a636237e7a38ae0a74285effc956d69eaceb329d9c10c841a8:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMWYyMzA1ZmFlMWJiYjRhNjM2MjM3ZTdhMzhhZTBhNzQyODVlZmZjOTU2ZDY5ZWFjZWIzMjlkOWMxMGM4NDFhOCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiMWYyMzA1ZmFlMWJiYjRhNjM2MjM3ZTdhMzhhZTBhNzQyODVlZmZjOTU2ZDY5ZWFjZWIzMjlkOWMxMGM4NDFhOCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMTQxNDk2MjlkZWU1NDAzNmJmMzYyODdlMjI4NjY5MzZiODc4MmIxMmExZTAyZmM0ZDA4NTM3MTFhODAyZjBlMiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMDZhOWYzZmVkYWIyOTBkM2JhZGM0MzNjNjIyM2VkYmJhYjM2MWI4ZTdiMzc4MDI0ZDJmNDc2ZjM1MjM4MDc1ZSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_0fb12b6deff640798a2b34e5a7536f46",
+      "statement": "安装器下载到临时文件并验证可执行及版本后才替换现有安装，验证失败保留旧安装。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L81-L81",
+          "version": "repo-lines-v1:sha256:e90bb335e67b8c998e9699196969503b84168c846afa581e23262556c51c97c3:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTkwYmIzMzVlNjdiOGM5OThlOTY5OTE5Njk2OTUwM2I4NDE2OGM4NDZhZmE1ODFlMjMyNjI1NTZjNTFjOTdjMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZTkwYmIzMzVlNjdiOGM5OThlOTY5OTE5Njk2OTUwM2I4NDE2OGM4NDZhZmE1ODFlMjMyNjI1NTZjNTFjOTdjMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYjU3NTEzZmM5MzJiNTVlNDgxOWM2NTUwNDc4MDU4YTlkODgxNmZmOGQwZDYxYmY4MWQ5YzAyODg3MmZlMTc5YiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYWYwNTdkNDRkODYwZDlhOTA1OTVkZjc0Y2QwMDk2MTg1YmY3NWIzOGViZjI3ZjE0YjM4N2JkNDVmNGNhMjNkYiJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_22271e93f63040c59d1db5c9ba2931d8",
+      "statement": "Windows 主进程代理顺序为显式请求代理、标准代理环境变量、当前用户静态系统代理、直连；NO_PROXY 和内网绕行规则约束相应代理路径，系统代理不支持 PAC/WPAD。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L82-L82",
+          "version": "repo-lines-v1:sha256:a6cc7b83e5c15df448a59654290e5c33cd9e59af31ebfb3d27e8b8df77770eac:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYTZjYzdiODNlNWMxNWRmNDQ4YTU5NjU0MjkwZTVjMzNjZDllNTlhZjMxZWJmYjNkMjdlOGI4ZGY3Nzc3MGVhYyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYTZjYzdiODNlNWMxNWRmNDQ4YTU5NjU0MjkwZTVjMzNjZDllNTlhZjMxZWJmYjNkMjdlOGI4ZGY3Nzc3MGVhYyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWRjZWMzOTUyMDgzYjZjNGNkMjVkNTdlMDMxMzNkMDNiZTIwZjIzYThlNzQwNDFiNTkzY2Y5ODIyZWUzYTFkMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZDgyNmQxN2QxZTEyOTg0YzM2M2UzZDUyNTM3OTM4ZGQwMmYwNDcxOWQyMzhiZTNiN2IyMDNlMWU0MzM4YTg5NSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_b749f6822d104de9a47b1d3d38aa9c58",
+      "statement": "TUI 默认使用 compact 显示模式和 box composer，offline 对部分渲染行为施加进程内覆盖而不写配置；简体中文用于欢迎提示及字体提醒等界面文本。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-runtime-defaults/spec.md#L24-L32",
+          "version": "repo-lines-v1:sha256:6051dc114e558bb094f0d17a30bbf51e4c70d996fbdea687aeaea4e4603e640c:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYmFmOTI1Yzc4YzM4YTU0ZWI1NzY4MjgzNTViMTQzYWEzNjI0YTlhMmVhMjNkN2FkZTg5MWI4OGM1ZDBmY2VjYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZDJkYzExNjk1NzU3YjdjZTFlNTczMjI0NWU4Y2NiNGQ3NTMxMmQ5NTlmMjkyZGM4N2FmNGZkY2E5NzA2NmQwMSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMWRiMGM2M2RjMWUyNzlmMGVjYjcwY2I0ZWEwYjEyMGJlMmQ5N2VkODFjMWZmNGI3YjgxZTRmZDkwNTQ0NTQyZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNWQyOTA3OWVmNGE0NjU1MDRkMzZhZGM5MGM1MjE3MDkzMjhjYTQ5ZjU3MWIzOWM0MzYxZjUxMjYwMTY1YTAxZSJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-runtime/spec.md#L57-L57",
+          "version": "repo-lines-v1:sha256:cb8afdaa87886d3c942bc6504537705d3b550c8d6770f52baf1235e947d75b90:eyJzZWxlY3RlZExpbmVDb3VudCI6MSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiY2I4YWZkYWE4Nzg4NmQzYzk0MmJjNjUwNDUzNzcwNWQzYjU1MGM4ZDY3NzBmNTJiYWYxMjM1ZTk0N2Q3NWI5MCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiY2I4YWZkYWE4Nzg4NmQzYzk0MmJjNjUwNDUzNzcwNWQzYjU1MGM4ZDY3NzBmNTJiYWYxMjM1ZTk0N2Q3NWI5MCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzdhNmJiMjJhZjlmZjRkZTYwYTM5YzhkOWM5OWVmOTdhZGE2YzQ1MjcyY2Y2MGQzOTE0MzY4NTFiMTU4YWExYiIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTVkMTc0ZDU2NjBmMTgxYTdiYzA0MWYxMTE0MjRjNjllYmY1YjUwMzg3YjVhMWRlMWVjNjdlNWNiNDRiZjkwMyJ9"
+        },
+        {
+          "resource": "repo://openspec/specs/tui-presentation/spec.md#L1-L220",
+          "version": "repo-lines-v1:sha256:41b7e359c7b7f30f36b3bcc5410145d878c5f0065f00b1bf31b266bc71cd40f2:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIwLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiI3MGJiMjdmN2E3YjdiMjAxYTU5NGM2YWRmNThhNmQwMGIxYzY2Y2JkYjMyY2ZhNDdhMTc1NjJkZGJkMWZhZGY5IiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiIyNjk3NzA5NjUyMmEwYjc3ZjhjMDk0MzQ0YWQ3YTAxZmFkOGQwZGFkZGQ1NzdhYmQ2MGQ3MDczZmU1MDVhZDljIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MCwicHJlY2VkaW5nQ29udGV4dEhhc2giOiJlM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiJjMjQ3MThiZTE5N2QxOTA2YTE1M2RjN2Q4NDI1MTg1Mjg1YWI1NThmM2MwZDA5ZDAyYTQzOGQ3NmNlNWE1MjliIn0"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T02:46:50.031Z"
+  }
+}

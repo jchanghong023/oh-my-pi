@@ -1,0 +1,108 @@
+{
+  "schemaVersion": 1,
+  "pageVersion": "sha256:0df643025ba5af9e7bc6a6e069b109b0663dba24c06b8c883d24cec65c28244e",
+  "claims": [
+    {
+      "id": "claim_5436c5ce8f644e5f90fa35454dbc46d8",
+      "statement": "根 package.json 将 test、test:ts、test:rs 分别连接到本地 TS 门禁、本地 TS 选择和 Rust fork 测试入口，并提供 fastcheck、fulltest、slowtest 与全量 CI TS 入口；入口名称本身不表示已运行或覆盖全仓。",
+      "evidence": [
+        {
+          "resource": "repo://package.json#L118-L127",
+          "version": "repo-lines-v1:sha256:396c7868fde32816d3528e3a632f1b68bf2554024369da649d79e9413968afd3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY5ZThjYmY2Y2Y5YjRiY2IyNWFkYTVhMjNhZmFlOGIyMTYyMzg4ZjJkOTY5ODY0MWU4OTk2MzJlYWFhODE3ZmQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRiNGM4YWY1YWZlZjBjYzEzZjEzOWM2MTQwNTA5YmJiMDE0OTM3MDUwNTgwYjNmOWY0MmNiMmU0MTAzMjE3MDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImM1MTFjMGY3NDQyNTc3NjgzNGE5MmQ1ZWZiODMxYjAyMjYzNGM5YzNiZThjNmVkNWNhZmJjYWE2NzhlMTFhN2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU3ZjFhMDM3ZjA4MjM0OTFiZGY5ZTBjMzM2MzFkY2UyYmUyOTkyNzA0Y2YxNWYwMjFhZjVkZDIyMThlNWVkYzkifQ"
+        },
+        {
+          "resource": "repo://package.json#L88-L101",
+          "version": "repo-lines-v1:sha256:32d2df615954cc0daa32b448bf21f90a7efaf0ea32800b7707670e99d24d6168:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhjNDBlNjNiOTFkZmM4YmJlODM3YzdlOTgyMWQwOTAyNDdiZjU0NmRhZmRlNjk2NWQxZjljZjk1YzI5MGE4YzgiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM5ZTQ4N2RhZTdhNDc2NjRmNzc3Mjc1NTNkOTJhN2M0MmMxZDUyNWI5MDY5ODliODM2Nzg4MjEyZmE1ZDliNzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImUyZWQ5Y2RhZjhlNzc2ZThlNjM0ZDNjNjgzYmEyMzMwMWY3MmZkZTA5YjkxMDFlZGExODdjMGU0NGFlY2I0YzIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjU2YTZmZWE1ZDRjZTRjNThiZWE5M2QzZGY4MzVkZGRkMDMyYmEwYWQzNWY0MzliNzlmNjg0ZjI1M2Q3N2FiOWMifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_0c1133fab49a43a4ad71fad2f211a03d",
+      "statement": "TS 测试门禁提供 all、local、local-ts、workspace、native 和 coding-agent 分区模式；其 Bun affected 选择依赖合格的完整 fork fulltest 基线、版本支持及可追踪变更，条件不满足时退回 full。",
+      "evidence": [
+        {
+          "resource": "repo://scripts/ci-test-ts.ts#L22-L33",
+          "version": "repo-lines-v1:sha256:58c822c85741f1e269531345f6cf335face98288c8e28731e2af6a4c3fc4e2fe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijk5MzI0NzUyNTVhM2UyOGE5Yjk1MWY4MGE4NjZjNjVjYTQyNzQ3ODUwNTk1ZGI4NDY5MWM2YjVlZjMyODMxN2QiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxYmE0NzE5YzgwYjZmZTkxMWIwOTFhN2MwNTEyNGI2NGVlZWNlOTY0ZTA5YzA1OGVmOGY5ODA1ZGFjYTU0NmIiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImZhMGEzNDJiNGMzMzczZmMyZTI4YjNlMDJlYmNkZWNhZDBhZmVjMzNmNjY0ZmIzMTdmNWRkYWVhY2VjZDI5ZDMiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImJiY2FmNjlkNTM3Y2ZlYjUwZWM2MWZlNmIwNDNiZTM3YzFjM2QwZTFmODRmMTIwYzQ1Y2NjN2JlZDhhNmIwMjEifQ"
+        },
+        {
+          "resource": "repo://scripts/ci-test-ts.ts#L60-L74",
+          "version": "repo-lines-v1:sha256:f322d3d2f824821421cde347282f97fbb66183d1907fae8ea9bf73478927e7e6:eyJzZWxlY3RlZExpbmVDb3VudCI6MTUsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjcxMzJkYWUzMmVkNzc5MzlmMmZhZjMyMmRiNDRjZDUyNjYxYzllNTQzZDBmNGU1MWVjZTNlYjQ5NmU2MTU3YWIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI4Yjc1ZWI2NzYzZDkzZWVhN2Y2N2UwN2ExMDA3MGU5NDFlMDMzOGU1YmJkNTY4ZDFkZWM5Y2RlYjNkM2U2OGEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgzMDQ2MWMzOTE5NTJhMjc4MDdlMDdiMDQyZDJjOTNhYjk1MGY5ZDg2MWZjMGE4YTE1MDZkZTZhZTQzMTdjNDQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImY3ZWJiOWZlMjZkZTA2NzhiODQ2OTVhM2Q4ZDRjOTljOTUxNDA3MTIyYTIzNDY1ZmEyMjBhZmQ2NWE4NzU0ZDgifQ"
+        },
+        {
+          "resource": "repo://scripts/ci-test-ts.ts#L81-L149",
+          "version": "repo-lines-v1:sha256:de44c018b2ebf31a4931264b33b8242d0439ee710b99001f597fb28834425797:eyJzZWxlY3RlZExpbmVDb3VudCI6NjksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4NjJiNzUyYTFhYWQyZTg3ZTM4ZTAxMmIyY2NkMDE1MjdjMWRlNmY1ZGIxNmJkMWYxOGUzMWRkMTViYzkxYTkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI1NjJiYzhlOTExMWVjNDljZjcyMGZiMWVkOTkwNWYwZGFlNjA5Zjc3MWEzZDk0NzFkNWEzMWQ3Zjk1MDRiZGEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjAwOGQ1YTdjNGIxZGMxZTViMjMxNjAyMGI1YjNlODU1ZGMxZDQ1NmNhMmU1ZTE1NzNhZjA5MzBjOTgyZWI0NjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQwMzM5ZDA5ODBlZTFkMjI0MjNhYzdlOTM2MTQzMjFlM2ZhZDY0NDdjMTJhMmMzMDRkYjQyOTdlMTUyZmM2NzcifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_80d4279530c4404fa49c91c84db7efb7",
+      "statement": "fork 验证规格将 fastcheck 定义为不运行测试的静态检查/编译层，将 fulltest 定义为本机 fork 多类测试及隔离入口验证，将 slowtest 定义为本机 fulltest 加适用 WSL 验证；这些是要求而非执行结果。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L51-L57",
+          "version": "repo-lines-v1:sha256:04a892df238444259fc01890a2860be4b2d942e0d88dc7d7b6e35ca5a4cd72f4:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiNzg1NDJhODI0YmI3NWZhMzM5OTQ1N2Y2NTQzY2FhOWZmYzk3OGY1YjM4OTk4Y2NmMmZhY2JiYTYyMGViMjQwMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNTU1OTMxMzgwNWVkZmFlODI1YmQyOTliMWU3NzQ1YzRlY2Y2OGZiNGNkM2ViNDZhY2RmMWYwYWJmM2NlMDAxMCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZGJlM2I4YmU5ZDViMTg0MmQ4YzIzODM3M2I3YWFkMmM4Yjg4YWZiNzY0MDUzMGU2MzVkN2NlZmQwODNmZWMzOSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZGQ1ZTY4N2ZiMGM2OTY5NTNjNDM4YThmZGE3N2MyMTU4NWY1MDBkYTBlODNhOWIyOTA4YWRlOWY2YjQwNDhhYSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_a84f1878151b457e8417e802514ffdbe",
+      "statement": "fork 验证规格要求报告区分实际执行、排除和未运行范围；默认 Bun 与 Rust 选测并非完整回归证明，Rust 受影响 crate 选择异常或边界不明时回退完整 fork 范围。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L117-L135",
+          "version": "repo-lines-v1:sha256:bc8e152f011ff96ebe6ed18826c7ccd9f3a2cef481a360191131a548768a28b3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZkYmIxNzVjZjVlY2E3OWY0YTk5Y2NiYTQ0Zjg1ZGM5MjExYmRiOGJhYTBhNzNkNmFkNmQ1ZmZiMzY1YmMwYzQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA0YWNmYjQ5OGUwMzkwN2I2NzBkOWNlNzNhYWI2YzkxMDJkYWNiZGIwY2MyYTgwNDhlMmQyZWFmYzRiZWVmNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjY2YzgyZjVjNmI0ODAzOTcwYmFhZDg3NzhjMjdjY2I2MDM0NDU0ZjFmYjBiOTNhYjM5MjY1MTE5ZmYwMjAxOGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQ2YWEyNTJmNWFhYTYwMmVlNzExZTdlMGNkZDBhMzY1MDYyODhjMWQ5NGI3ODc1ZDRiNjI0OWVkZTliNjEzMDYifQ"
+        },
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L62-L70",
+          "version": "repo-lines-v1:sha256:402ececb32c538a1f336a9cde670570f96f5e0d2ec4d190a2a4377c66041293d:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTgxZGJjOWFjY2UwNjA0ZDZhZGM2MThkYTE4MTRhYWRhMTA3MTVkYWI5OTNjYjM5YjhiMTYxYWE2OWJmNmNhYSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiOTM4NGQzZmVlN2IwZDhjZDM3YTZmNjZhMjQ1YjI0Mzg1MjczNmZkMzhmNTUzZTNmNTNhMDc0MjgxOWNjYTAyYiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiNTMxOTExY2VmYzEyZWRiMTNiMWIyOWIyZmJhOTQyZDVmMjEzODljMTI3N2I5MTgyYjNkYmFjNmFiYzQ1YmIyZCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZTEzNDdmYjAzZGQ5YmJjOTc1MzExNDA5ZTMxOGI4Njk2M2RmMWM5YTk0ZWNhNzk3MzBjYTI0NzllMmQ1YmQ1OSJ9"
+        }
+      ]
+    },
+    {
+      "id": "claim_8bc12d574157499ca835046f877bdeb4",
+      "statement": "coding-agent 测试目录分别包含 company-provider、repo-lifecycle、modes 和 spec-driven 用例，支持按配置/provider、仓库生命周期、交互模式和 spec-driven 工作流定位回归；目录存在不等于测试已执行或真实外部服务已验收。",
+      "evidence": [
+        {
+          "resource": "repo://packages/coding-agent/test/company-provider.test.ts",
+          "version": "repo-file-v1:sha256:dea348cd73ba0637a23c64011a57b5c166b71defaf110d6d4b9ce555aba42486"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/modes/print-persistence-failure.test.ts",
+          "version": "repo-file-v1:sha256:12da7da16778417d94f36ae9a9f84108a825fab2d800c56eddbb78bb2a5abea6"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/repo-lifecycle.test.ts",
+          "version": "repo-file-v1:sha256:705bdab3d11f1e7b157e1334e14242f6022d7d0dd5232089b96157a644bacf05"
+        },
+        {
+          "resource": "repo://packages/coding-agent/test/spec-driven/orchestrator.test.ts",
+          "version": "repo-file-v1:sha256:2b24f677566015f93d4bae027201702eb5590ec59807b0bebc227de3238f68a7"
+        }
+      ]
+    },
+    {
+      "id": "claim_8d5f90dac26543b8ac46faf11d80a109",
+      "statement": "fork 验证规格要求临时 TUI 验证使用源码公开入口和隔离 tui-test session，并以业务断言判断完成；模型相关验证须使用本地模拟，模拟响应不能作为真实 provider 验收证据。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L27-L40",
+          "version": "repo-lines-v1:sha256:4c84513918eeeffb2a5a455354f4a6375bb037dfd51a2cfb7ce939c41b527842:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNkNGI0NDdhMWY0MWZhODE3M2MxZTI5NjY1ZDVjNDJjMzFjYjkwOTUxYTk2YzAwYTAwYjQ2MWFhZDI1MjBlNjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM3MjU1M2ZhMDhjN2I2NWZlYWIwZjY1NWM5YWI1NDJhMGUzYWQyZTFkYTQzZWU5YjU2NjZhMjViNTZiNjNmZWUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjI5YjFmNzI4ODllYjIyMWQ2ZDdjMTdjZGUyODc4OWZhODFjOGE2MWUxN2M2YjZjZDgyMWM1ZjU0MGQ2NTc4MDIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI2OThmMDVlNTk3NzVkM2ExNDUyYzU0ZmIxOWM4N2YzNjNiNjRhN2YyOGRlN2I2YTVmNjRkNjY1ZmMwMDE4NzQifQ"
+        }
+      ]
+    },
+    {
+      "id": "claim_61c6b93c4358418ca3a4bdef5455a475",
+      "statement": "fork 验证规格规定门禁证据需绑定源码快照、实际 producer 与报告状态，并区分 affected、未选择、失败和未运行；WSL 原生报告不能被宿主报告冒充为两端完整覆盖。",
+      "evidence": [
+        {
+          "resource": "repo://openspec/specs/fork-verification-gates/spec.md#L87-L100",
+          "version": "repo-lines-v1:sha256:a5e354f02468907b20bd5d8256caa7926091d4433336fb1dae6538b7a9ae6eed:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ1MmMzMmE0MTBhYzcwZGZiNGYwZmUwYTM1ZDgxYjYxMGVkNTdmMjNmZDU3Y2EyNTAyOTI5NjY1NjVjYWYwYzciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImM2MjUxYTYzZTAxZjMzMzg4MGI5ODBjNmNmMWEzMDU5NmJmNjZjZDkwNDlhNDJiYjQxNzMyNmIyZjlhMWJhNDMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3N2ExYzgwYmNmZmU3NzkxZWUyNGUzNTgwNTk2NGYyYTVlZTU5ODlkOTFjNDJhYTU0NzVjNzkwMjAzNzNmMjUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQ0MjIyM2JjZjBkNzIyMzc3NGUwNTUwNDBmOGRkNmUyODhiNDAwMjA4Nzg4ODYwODhjOTZkMWIzNDA0MWRiNGIifQ"
+        }
+      ]
+    }
+  ],
+  "verification": {
+    "by": "openwiki/0.0.0-unknown",
+    "at": "2026-11-01T02:46:50.031Z"
+  }
+}
