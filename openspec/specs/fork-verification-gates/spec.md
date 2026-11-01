@@ -58,15 +58,18 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 Dev/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、ZCode app-server 权限及模型配置、Wiki/Repo 索引与 Python symbols、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；Dev 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
-- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留；仅本次允许在完整消费者契约不变的条件下合并 Dev／ZCode 重复的正常进程场景，并由已有低层合同测试覆盖纯输入字段／命令参数排列，不赋予后续自动删测权限。真实 PTY 保留不同错误、状态和焦点边界；冷启动、准备失败／EOF、冷恢复、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等真实边界不得删减。Dev 四角色 × missing／malformed／unknown 材料失败矩阵及其现有平台条件保持，每例 provider／fixture 隔离不得共享。不得新增 skip、放宽时限或删减产品需求。
-- 默认 fulltest 的 Bun 仅在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留；仅本次允许在完整消费者契约不变的条件下合并 Dev／ZCode 重复的正常进程场景，并由已有低层合同测试覆盖纯输入字段／命令参数排列，不赋予后续自动删测权限。真实 PTY 保留不同错误、状态和焦点边界；冷启动、准备失败／EOF、冷恢复、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等真实边界不得删减。Dev 四角色 × missing／malformed／unknown 材料失败矩阵及其现有平台条件保持，每例 provider／fixture 隔离不得共享。不得新增 skip、放宽时限或删减产品需求。 本次仅允许按 tui-presentation 的简化需求移除旧 compact 专属测试、fixture 和断言；仍保护上游、clean、detailed、共享布局或其他 fork 功能的内容不在清退范围。
+- 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
+- 显示验证 MUST 围绕 clean 基线、按文件目标筛选且与上游 detailed 一致的 write／edit 原组件显示、固定两行活动区及隐藏独立模型处理忙碌提示的消费者契约，复用既有普通测试入口和必要的共享布局、渲染、恢复验证；不按文件名收集 compact 大套件。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
+- 旧 `compact_display` 命令、独立清单、执行通道、排除参数、专属报告和基线要求 MUST 移除，不保留兼容别名或用新名称重建同类通道。仍适用的显示消费者测试由普通选测机制发现，只执行一次，不再从普通组排除后另行执行。
+- 旧 compact 专属完成帧矩阵、随机旅程、截图回归与真实 CLI 场景仅为旧行为存在的部分 MUST 清退，不以改写预期保留旧套件。新需求优先复用现有消费者验证，以显示差异的实际可观察结果和必要状态切换为边界；共享上游布局与其他 fork 场景不因此删减。实际执行、采样、平台条件和未覆盖部分须如实区分，不新增 skip 或放宽时限掩盖失败。
 - 根目录 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为 Git 测试选择输入，不触发 Bun 全量回退或独立 UI smoke；混合变更仍按其余运行输入判断。排除不扩大到包内 Markdown/prompt 等运行资源，也不移除这些文档的源码快照完整性核验；缺少合格基线和显式 `--full` 的行为不变。
 - `bun run fulltest --full` 显式运行当前平台支持的完整 Bun、Rust workspace、Python 普通套件、Go/Rust SDK 和仓库脚本测试，但不发现或运行 `vendor/openwiki` 子模块自身的测试；OMP OpenWiki 消费者测试仍在范围内。不使用 fork 白名单、变更选测、pytest-testmon 或环境分片；默认 fulltest 及 slowtest 不变。保留测试自身的 skip、平台不支持、真实桌面输入及另需单独授权的集成边界；不因全量模式放宽门禁时限。
 - 独立 Python SDK、Robomp 和 legacy 通用 SDK 不纳入默认 fork 门禁，手动入口保留；Robomp integration 仍须单独显式启用，Windows 原生调用报告不支持并非零退出。
 - `bun run test:rs` 用 Cargo 包及 Nextest namespace 标准筛选 `pi-knowledge` 全包、`pi-natives` 的 `knowledge::` 绑定测试和 `python_symbols::`；scope 为 `rust-fork-features`。独立 doctest 阶段实际运行 `cargo test -p pi-knowledge --doc --no-fail-fast`，报告真实命令、退出码和命令墙钟时间；Cargo doctest 无标准 JUnit 报告，记 `report=not-supported`。`pi-natives` 是 `cdylib`，无 doctest，不生成虚构用例或 PASS，不运行上游 tree-sitter-go 文档例子凑数。保留同平台构建配置及正常 Cargo 增量编译缓存。
 - 非 Rust 变更不能一律视为与 Rust 无关：构建脚本、配置、清单、锁文件、工具链、生成输入及跨语言依赖等可能影响 Rust。Bun 文件依赖是近似，动态依赖、环境和外部输入可能漏检；受影响选测不是全新完整回归的证明。
 - 通过子进程启动 CLI 的测试须在公共 harness 或独立启动器中静态声明真实运行依赖，让 Bun `--changed` 能识别间接消费者；Tools registry 可作为输入，不能导入并执行 CLI 主入口来构造依赖图。
-- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`pi-knowledge` 被选时才独立运行 doctest；`pi-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
+- 默认 fulltest 使用同一个真实 clean、完整成功的 fork 基线；Bun 完整基线包含当前普通和启动敏感组所需工作，不再要求已移除的 `compact-display` producer；旧范围报告不能充当新范围完整基线。Rust 用 cargo-delta 0.5.0 对 Git 变更和 Cargo metadata 分析受影响 crate 及逆向依赖，与 fork 包范围取交集后以标准 Cargo 包选择执行 Nextest。配置 tripwire 覆盖全局或无法安全归属的输入；动态依赖、构建脚本、环境及外部输入仍可能超出分析，无法确定时回退完整 fork 范围，仍须适时完整回归。工具缺失、失败或输出无效亦回退完整 fork 范围；无合格基线同样回退。空交集不启动 Cargo，`pi-knowledge` 被选时才独立运行 doctest；`pi-natives` 无 doctest。独立 UI smoke 和仓库脚本仍按 Git 变更规划，缺基线或依赖未知时保守执行；静态检查、必要 native 准备及源码快照核验始终全局执行。affected、partial 或失败报告不能作为完整基线，不以提交 sidecar 或改写历史建立基线。
 - cargo-delta 须预先安装 `cargo install cargo-delta --version 0.5.0 --locked`，门禁不自动安装；其标准分析缓存不是测试结果缓存。直接 `test:rs` 始终运行完整 fork 范围，`--full` 始终运行完整 workspace，不使用 delta。Git／cargo-delta 未选阶段记录有效基线 revision、相对变更路径、原因和零选择，cargo-delta 另记录空包列表；不虚构 XML、用例或耗时。实际受影响包的 Nextest 保留真实 JUnit、包列表和基线，doctest 按实际阶段状态报告；全未选可报告真实零执行，混合报告保留实际 XML 与失败，均不得当作完整新执行或完整基线。
 - 单个用例、文件或语言套件失败后继续执行独立的其余必需测试，Nextest 与 rustdoc 使用 `--no-fail-fast`，Bun 不添加 `--bail`，pytest 不添加 `-x`；只有总预算、取消或完整性阻断可终止剩余工作。
 - 默认 fulltest 不自动纳入独立 Go/Rust SDK；安装测试和另需授权的集成入口也不自动纳入 `--full`。手动构建发布 CI 不运行任何测试，也不以测试作业为发布依赖；保留的 `ci:test:*` 脚本只是显式测试工具，不由 CI 工作流调用。发布仍依赖版本元数据、二进制与浏览器扩展构建成功，不增加自动触发。
@@ -80,7 +83,7 @@ OMP MUST 按各入口规定范围、预算、源码快照与失败汇总执行�
 - 构建脚本能力探针的预期非零编译退出作为探针答案原样返回，不单独触发门禁失败；Cargo 正式编译单元及 Go 工具的失败仍须即时上报并保留原退出码，不能依赖外层进程转发失败；外层收到后继续其余独立工作。
 - 门禁的进程监督须在命令仍运行时回收已退出的孤儿后代，不得截获由运行器持有的主命令退出码；宿主直接退出或 IPC 断开时，监督进程仍须停止并回收普通自有后代，含逃逸的独立 session。跨 Windows/WSL 的取消命令须在强退前独立发起，不等待其收尾。Windows 隔离临时目录的正常清理须能解除带拒绝读取 ACL 的目录 junction，且不得遍历或删除其目标；清理失败不得降级成通过。
 - 独立且安全的检查/测试/Windows与WSL两端应并行；本机资源不足时可按共享预算调度重负载。改写共享生成文件的构建、打包或代码生成须先于其静态/测试读取者，避免共享文件竞争。编译项目必须保留正常增量缓存、固定同平台配置与路径；NEVER 在连续 fastcheck 之间清缓存、切换 target/profile/flags 或制造冷样本。Windows 与 WSL 使用各自稳定的原生缓存。
-- native 生成后静态检查与普通测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成，TS 静态检查和普通测试可并行；spec-driven TUI 及 RPC goal 启动敏感测试须在这些工作全部结束后运行，其独立测试文件进程并发受下述 28、可用核心数及任务数量限制，文件内串行，并保持各自独立的 HOME、工作区、端口及清理，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
+- native 生成后静态检查与普通测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成，TS 静态检查和普通测试可并行。移除独立 `test/compact_display` 调度及其专属环境／资源分配；仍适用的显示消费者测试随普通组或已有启动敏感组执行，共享原有 CPU 预算。spec-driven TUI、RPC goal 及其他高成本启动敏感测试仍按现有策略在重负载工作结束后运行，其独立测试文件进程并发受下述 28、可用核心数及任务数量限制，文件内串行，保持各自独立的 HOME、工作区、端口及清理，不扩大用例时限或弱化仍有效的业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
 - 测试运行器按当前可用核心数动态限制并发，任务不足时进一步缩小。Windows 本机 TS（包括初始完整轮、无合格计时提示及 fulltest 短任务池）、启动敏感测试和 Rust Nextest 均最多 `min(28, 当前可用核心数, 可运行任务数)`；Linux 等其他平台维持同一上限。Bun 的 chunk 池与每个 chunk 的文件 worker 共同分配预算，不能相乘后越过上限；显式配置仍可降低并发。fulltest 为静态检查和子进程预留容量，Bun 与 Rust 测试池共享剩余 CPU 预算，小核数环境可串行运行重负载。`--full` 同样受高成本 integration／E2E 子限制约束；调度不改变测试覆盖、隔离、超时、时间预算或计费。
 - fulltest MAY 使用合格的既有完整计时报告作为测试调度的排序和资源容量提示；报告 scope 须为 `fulltest: fork feature suites`，旧范围报告不能作为新范围基线。报告缺失、不完整或无对应耗时不得阻止必需工作。历史耗时不得写成本轮新执行，亦不得改变分片、超时及结果合同。
 - 本地高成本 integration／E2E chunk（包括按路径归入的 ZCode 真实 process 测试）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
@@ -119,15 +122,23 @@ fulltest 和 slowtest MUST 使用 Bun 原生选测能力和 cargo-delta 受影�
 #### Scenario: 受影响测试与回退
 
 - **WHEN** 运行本机或适用 WSL 的 fulltest
-- **THEN** Bun 在 fork 白名单内依据合格基线使用 `--changed`；不可建立有效选择时回退完整白名单。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `pi-knowledge` 才运行其 Cargo doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
+- **THEN** Bun 测试在 fork 白名单内依据合格基线使用 `--changed`，新 compact 消费者与其他功能使用同一选择规则；不可建立有效选择时回退完整白名单，不再存在完整执行 compact 专属清单的例外。Rust 基于 cargo-delta 受影响 crate 与 fork 范围的交集执行 Nextest，空交集记为未选；选中 `pi-knowledge` 才运行其 doctest，native `cdylib` 无 doctest。缺基线、工具缺失或失败、输出无效及无法确定边界时回退完整 fork 范围
 - **AND** 选择结果区分执行、排除和未选中，报告 full 或 affected；历史执行与平台跳过不算本轮通过，选择近似不证明完整新回归
 - **AND** 失败、取消或未完成的上次执行不得仅因已有历史数据而被排除；运行器须实际重跑并保留真实失败退出码
 
 #### Scenario: Bun 白名单内受影响测试
 
 - **WHEN** Bun 已有有效测试依赖基线，只有业务源码文件 A 变化，其他输入及环境保持有效
-- **THEN** 按原生测试文件依赖图在白名单内选择直接或间接依赖 A 的测试；新增或失效用例仍须实际执行，无法确定边界时回退完整白名单并报告原因
+- **THEN** 按原生测试文件依赖图在白名单内选择直接或间接依赖 A 的测试；新增或失效用例仍须实际执行，无法确定边界时回退完整白名单并报告原因；compact 不另设独立清单或全量执行豁免
 - **AND** 验收使用真实独立 A／B 源码及对应测试：先建立有效基线，再仅修改 A，观察 A 的依赖测试实际执行且独立 B 测试未执行；不能以修改测试文件、整命令缓存命中或零用例未执行代替依赖选择证明
+
+#### Scenario: 紧凑 TUI 关键回归进入默认范围
+
+- **WHEN** 日常 `test`、`test:ts`、默认 fulltest 或 slowtest 发现 fork 功能测试
+- **THEN** 新 compact 的文件型 write／edit 上游原组件显示、两行活动区、隐藏独立模型处理忙碌提示及其必要的模式切换消费者纳入既有普通白名单；不再强制列入旧 Bash 错误预览、工具段投影、stdout 回退或旧混合截图矩阵的指定文件。
+- **AND** 现有 clean、detailed、共享布局、输入、恢复、原 diff 及其他 fork 功能的有效测试按原职责保留，纯旧 compact 专属部分删除，不按测试文件名称整块删减。
+- **AND** 保留原有有效消费者对流式表格、Composer 布局及历史重建、Web Search 完整答案、压缩期间子代理消息投递和压缩后继续收取结果的业务断言；这些能力不因原测试曾位于旧显示清单而被删除，也不因名称含 compact 把纯压缩算法套件强制纳入显示验证。
+- **AND** 使用既有 affected 选择、失败继续、隔离、报告和预算规则，fastcheck 仍不运行测试；不为新 compact 新建独立执行通道或大型替代套件。
 
 #### Scenario: Rust 修改 A 选择受影响 crate
 
@@ -207,3 +218,39 @@ OMP MUST 在 native 产物成功替换后立即尝试清理该次让位的旧文
 - **WHEN** 旧 addon 因占用而先改名为 `<目标>.old.<PID>`，新产物已成功换入目标
 - **THEN** MUST 尝试删除该次让位文件；删除失败 MUST NOT 撤销成功换入或将安装判失败。
 - **AND** 换入失败时继续按既有回滚及恢复文件保留要求处理，不能先删除恢复所需的文件。
+
+### Requirement: 旧 compact 专属验证设施彻底清退
+
+本次简化 MUST 删除只服务旧 compact 的命令、测试清单、调度、报告分组、基线条件及自测，保留普通门禁与仍有效的共享消费者验证，不保留兼容层。
+
+#### Scenario: 移除旧专属入口及配套约束
+
+- **WHEN** 新 compact 需求替换旧行为
+- **THEN** 根命令 `compact_display`、`scripts/compact-display-tests.ts`、`ci-test-ts` 的 `compact-display` 模式、`--exclude-compact-display` 参数和 fulltest 中的 `test/compact_display` 通道 MUST 移除，不保留同义入口、空成功命令或改名后的替代通道。
+- **AND** 只服务该通道的 fixture、自测、选测分流、隔离配置、专属报告 producer 与基线完整性条件同时清退；旧报告可作为历史事实保留，但不能作为新需求已验证的证据。
+- **AND** 普通测试发现、选测、文件隔离、并发预算、失败传播、报告和源码完整性机制不得因删除旧分支失效。
+
+#### Scenario: 只删除失效契约，不清空共享测试
+
+- **WHEN** 旧 compact 专属测试或断言不再对应本次两个显示差异
+- **THEN** MUST 删除该部分，而不是改名、固定新的偶然输出或增加 skip 保留旧套件。
+- **AND** 上游原有测试和仍保护 clean、detailed、原 diff、共享 TUI 或其他已批准 fork 功能的用例保持；混合文件仅清退旧 compact 专属内容。
+
+### Requirement: 新 compact 的最小必要验证边界
+
+新 compact MUST 复用现有普通测试入口、原组件及消费者验证，只为按文件目标筛选的 write／edit 上游原展示和两行活动区的具体行为缺口增加必要用例，不重建专属测试框架、截图矩阵或全工具组合套件。
+
+#### Scenario: 两项差异具有行为证据
+
+- **WHEN** 后续另获授权实施并验证本变更
+- **THEN** 验证文件型 write／edit 原组件与上游 detailed 一致，包括目标已明确的参数流、执行中、成功、无变化、失败、取消、部分完成、跨轮历史及文件协议／设备包装；不以改动证明、diff、成功与否或快照字段作为额外显示门槛，没有最近次数淘汰。参数从未知目标转为文件目标时不因提前退休而漏显；消息、配置、进程控制、帮助及非文件设备调用保持隐藏，即使结果包含文件差异字段也不恢复卡片；其他工具不增加文件监控或合成 diff。
+- **AND** 验证两行活动区的思考优先、最近两次实际派发调用（包含已返回）各占一行、意图优先及原始命令回退、不按同名去重、参数／输出／返回更新不改派发顺序、不显示工具输出、固定占用，以及结束／取消／跨轮的静态保留、逻辑会话快照隔离与思考显隐；保留工具行直接从工具名开始，不显示“上次活动 ·”前缀或替代历史标题，保留思考仍沿用原标识。取消本轮不作为工具已取消的证据，已返回及历史保留工具行不继续动画或计时；文件型 write／edit 原组件独立保留，非文件目标及其他普通工具和错误卡片不在聊天历史恢复。
+- **AND** 验证工具行末耗时按每次调用独立计算，运行期间无输出及关闭颜色动画时仍递增，实际返回后冻结；轮次取消不伪造结束，后台继续工作不延长已返回调用的耗时，静态历史不递增，视图切回不重新起算，长命令下仍保持单行和有效宽度。
+- **AND** 活跃思考的可观察配色为灰色基底与主题绿色扫光，而非彩虹或整段固定绿色；复用现有动画开关，历史保留内容静态，工具行配色、耗时与布局不因本次思考配色变更而变化，ANSI 与 native 采用一致的思考配色语义。
+- **AND** 优先复用既有 ANSI／native、模式切换和真实入口设施，只针对消费者可观察缺陷验证，不检查源文本、内部接线、默认常量或快照长度增长。
+
+#### Scenario: 最小上游差异与执行授权
+
+- **WHEN** 选择验证范围或清理旧测试
+- **THEN** 不因实现简化重建上游行为、重跑无关矩阵、补齐测试类别或扩大门禁；相关输入未变且已有有效证据足够时复用原结果。
+- **AND** 非显示门禁的预算、失败继续、源码快照、平台与独立授权要求保持不变；新增需求产物本身不授予构建、测试、真实模型、发布或部署权限。

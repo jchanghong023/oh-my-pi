@@ -273,7 +273,7 @@ describe("unarchived transcript navigation", () => {
 
 	it("keeps every streamed table row reachable before completion and archives it once after browsing", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const h = await openTable();
 		let escapes = 0;
 		h.composer.editor.onEscape = () => {

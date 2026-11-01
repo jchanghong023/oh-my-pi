@@ -100,7 +100,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		cfgDisplayMode.override(session.settings, "compact");
 		await mode.init();
 		// Isolated settings do not own the host's process-wide display effect.
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const toolCallId = "todo-rebuild-failure";
 		const toolCall = {
 			...assistantMsg(""),
@@ -133,11 +133,8 @@ describe("InteractiveMode todo HUD persistence", () => {
 		});
 		mode.addMessageToChat(final);
 		const compact = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
-		// Live failures keep the original execution detail and independent warning inline.
-		expect(compact).toContain("REBUILD_FAILURE_CAUSE");
-		expect(compact).toContain("FULL_REBUILD_FAILURE_DETAIL");
-		expect(compact.match(/Warning:/g)).toHaveLength(1);
-		expect(compact.indexOf("REBUILD_FAILURE_CAUSE")).toBeLessThan(compact.indexOf("FINAL_ANSWER_AFTER_FAILED_TODO"));
+		expect(compact).not.toContain("REBUILD_FAILURE_CAUSE");
+		expect(compact).not.toContain("FULL_REBUILD_FAILURE_DETAIL");
 		mode.rebuildChatFromMessages();
 		const compactRebuilt = Bun.stripANSI(mode.chatContainer.render(180).join("\n"));
 		expect(compactRebuilt).not.toContain("REBUILD_FAILURE_CAUSE");
@@ -146,7 +143,7 @@ describe("InteractiveMode todo HUD persistence", () => {
 		cfgDisplayMode.override(session.settings, presentation);
 		await Promise.resolve();
 		setChatTranscriptDisplayPreferences({
-			compactToolActivity: presentation === "clean",
+			compactToolActivity: false,
 			hideToolActivity: presentation === "clean",
 		});
 		mode.hideToolActivity = presentation === "clean";

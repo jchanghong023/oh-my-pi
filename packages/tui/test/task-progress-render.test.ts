@@ -843,6 +843,46 @@ describe("task progress rendering", () => {
 	});
 });
 
+describe("native task duration", () => {
+	it("uses each owner's duration without retaining a same-named historical run", () => {
+		const describe = (details: TaskToolDetails, nowMs: number) =>
+			taskToolRenderer
+				.describeResult({ content: [], details }, { expanded: false, isPartial: true, renderContext: { nowMs } })
+				?.body?.find(item => "k" in item && item.k === "agent");
+		const old = detailsFor(runningProgress({ id: "Shared", durationMs: 1000 }));
+		expect(describe(old, 2000)).toMatchObject({ p: { stats: { age: 1000 } } });
+		expect(describe(detailsFor(runningProgress({ id: "Shared", durationMs: 2000 })), 3000)).toMatchObject({
+			p: { stats: { age: 2000 } },
+		});
+		const completed: TaskToolDetails = {
+			projectAgentsDir: null,
+			results: [finishedResult({ id: "Shared", durationMs: 2000 })],
+			totalDurationMs: 2000,
+		};
+		expect(describe(completed, 3000)).toMatchObject({ p: { stats: { took: 2000 } } });
+		const current = detailsFor(runningProgress({ id: "Shared", durationMs: 100 }));
+		expect(describe(current, 92_000)).toMatchObject({ p: { stats: { age: 100 } } });
+		expect(describe(old, 92_000)).toMatchObject({ p: { stats: { age: 1000 } } });
+		expect(describe(current, 92_100)).toMatchObject({ p: { stats: { age: 100 } } });
+		expect(describe(detailsFor(runningProgress({ id: "Shared", durationMs: 0 })), 92_200)).toMatchObject({
+			p: { stats: { age: 0 } },
+		});
+	});
+
+	it("uses the nested snapshot's own duration even when its name matches its parent", () => {
+		const child = detailsFor(runningProgress({ id: "Shared", durationMs: 100 }));
+		const parent = detailsFor(runningProgress({ id: "Shared", durationMs: 1000, inflightTaskDetails: child }));
+		const view = taskToolRenderer.describeResult(
+			{ content: [], details: parent },
+			{ expanded: false, isPartial: true, renderContext: { nowMs: 92_000 } },
+		);
+		const root = view?.body?.find(item => "k" in item && item.k === "agent");
+		expect(root).toMatchObject({ p: { stats: { age: 1000 } } });
+		const nested = root && "k" in root ? root.c?.find(item => "k" in item && item.k === "agent") : undefined;
+		expect(nested).toMatchObject({ p: { stats: { age: 100 } } });
+	});
+});
+
 describe("task result detail-less state", () => {
 	beforeEach(async () => {
 		setFeedModelBadgeEnabled(false);

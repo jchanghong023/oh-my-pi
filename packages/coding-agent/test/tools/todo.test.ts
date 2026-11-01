@@ -1065,8 +1065,8 @@ describe("todoToolRenderer.renderCall preview sanitization", () => {
 	});
 });
 
-describe("todo presentation across display modes", () => {
-	it("keeps the upstream ANSI and native todo views in compact mode", () => {
+describe("todo presentation", () => {
+	it("renders upstream ANSI and native todo statuses without mutating them", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		const phases: TodoPhase[] = [
 			{
@@ -1088,11 +1088,10 @@ describe("todo presentation across display modes", () => {
 			const component = todoToolRenderer.renderResult(result, options, theme);
 			const detailed = component.render(160).join("\n");
 			const detailedNative = todoToolRenderer.describeResult(result, options);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-			const compact = component.render(160).join("\n");
-			expect(compact).toBe(detailed);
-			const compactNative = todoToolRenderer.describeResult(result, options);
-			expect(compactNative).toEqual(detailedNative);
+			for (const label of ["queued work", "running work", "waiting work", "finished work", "cancelled work"]) {
+				expect(Bun.stripANSI(detailed)).toContain(label);
+				expect(JSON.stringify(detailedNative)).toContain(label);
+			}
 			expect(todoChecklistPhases(phases, () => false)[0].items.map(item => item.status)).toEqual([
 				"pending",
 				"active",
@@ -1100,65 +1099,7 @@ describe("todo presentation across display modes", () => {
 				"done",
 				"dropped",
 			]);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-			expect(component.render(160).join("\n")).toBe(detailed);
-			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
-			expect(component.render(160).join("\n")).toBe(detailed);
-			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
 			expect(phases).toEqual(snapshot);
-		} finally {
-			setChatTranscriptDisplayPreferences(previous);
-		}
-	});
-
-	it("ignores compact-only styling options while preserving todo statuses", () => {
-		const previous = { ...chatTranscriptDisplayPreferences };
-		const phases: TodoPhase[] = [
-			{
-				name: "Work",
-				tasks: [
-					{ content: "queued work", status: "pending" },
-					{ content: "running work", status: "in_progress" },
-					{ content: "waiting work", status: "blocked", blocker: "external input" },
-					{ content: "finished work", status: "completed" },
-					{ content: "cancelled work", status: "abandoned" },
-				],
-			},
-		];
-		const result = { content: [], details: { phases, storage: "session" as const } };
-		const original = structuredClone(result);
-		const options = { expanded: true, isPartial: false, compactToolActivity: false };
-		try {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-			const component = todoToolRenderer.renderResult(result, options, theme);
-			const detailed = component.render(160).join("\n");
-			const detailedNative = todoToolRenderer.describeResult(result, options);
-			expect(detailed).toContain(theme.fg("dim", `${theme.checkbox.unchecked} queued work`));
-			expect(detailed).toContain(theme.fg("accent", `${theme.checkbox.unchecked} running work`));
-			expect(detailed).toContain(
-				theme.fg("warning", `${theme.checkbox.unchecked} waiting work (blocked: external input)`),
-			);
-			expect(detailed).toContain(theme.fg("success", `${theme.checkbox.checked} \x1b[9mfinished work\x1b[29m`));
-			expect(detailed).toContain(theme.fg("error", `${theme.checkbox.unchecked} \x1b[9mcancelled work\x1b[29m`));
-			for (const hideToolActivity of [false, true]) {
-				setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity });
-				expect(component.render(160).join("\n")).toBe(detailed);
-				expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
-				for (const view of [Bun.stripANSI(detailed), JSON.stringify(detailedNative)]) {
-					expect(view).not.toMatch(/\[(active|blocked|abandoned)\]/);
-				}
-				expect(options).toEqual({ expanded: true, isPartial: false, compactToolActivity: false });
-			}
-			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
-			options.compactToolActivity = true;
-			expect(component.render(160).join("\n")).toBe(detailed);
-			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
-			options.compactToolActivity = false;
-			expect(component.render(160).join("\n")).toBe(detailed);
-			expect(todoToolRenderer.describeResult(result, options)).toEqual(detailedNative);
-			expect(result).toEqual(original);
-			expect(options).toEqual({ expanded: true, isPartial: false, compactToolActivity: false });
 		} finally {
 			setChatTranscriptDisplayPreferences(previous);
 		}
@@ -1175,7 +1116,7 @@ describe("todo presentation across display modes", () => {
 		];
 		const snapshot = structuredClone(tasks);
 		try {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 			setActiveTodoDescriptionsProvider(() => ["first worker", "second worker"]);
 			const result = { content: [], details: { phases: [{ name: "Work", tasks }], storage: "session" as const } };
 			const rendered = Bun.stripANSI(

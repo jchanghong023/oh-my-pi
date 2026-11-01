@@ -19,6 +19,19 @@ The Eval `browser` facade opens, reuses, scripts, and closes named Chromium, Ele
 The prelude exists only while Eval and `browser.enabled` are enabled (`browser.enabled` defaults to `true`). It is not an AgentTool.
 All browser host operations request exec-tier approval, including inspection helpers.
 
+## Save pages with `/crawl`
+
+In the TUI or GUI, `/crawl <URL>` saves one page as Markdown through the connected Browser Relay, without invoking a model. Start the relay and connect its Chrome extension first; the command creates its own background tabs and uses the browser's available login state.
+
+```text
+/crawl https://example.com/ --recursive --max-pages 10 --max-depth 1 --output .tmp
+/crawl stop
+```
+
+`--recursive` follows same-origin navigation links; the entry page is depth 0. `--max-pages`, `--max-depth`, and `--concurrency` bound traversal; by default recursive crawling uses two tabs and has no page or depth limit. `--output` selects the destination directory, defaulting to `tmp/` under the current working directory. Each successful page gets a separate file with its source URL; existing files are not overwritten, and linked attachments are not downloaded.
+
+Progress and failures are reported as the command runs. `/crawl stop` cancels the current session's task and retains completed files. Links in the Markdown point to the original site, and extracted content may be incomplete; this is not a lossless offline backup. Browser and write authorization still apply, and `OMP_OFFLINE` disables the browser.
+
 ## JavaScript API
 
 ```js

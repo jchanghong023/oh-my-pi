@@ -1,9 +1,11 @@
 import { expect } from "bun:test";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
+import { CompactScreenRecording } from "../helpers/compact-screen-recording";
 import {
 	contentText,
 	createProviderFixture,
@@ -21,8 +23,11 @@ if (!tuiTest) console.warn("SKIP native Dev public smoke: tui-test is not instal
 type State = { team: boolean; run?: SpecSavedRun };
 type Scenario = ProviderScenario & {
 	dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
-	reply?: (request: ModelRequest) => Reply | Promise<Reply>;
-	setup?: (cwd: string) => Promise<void>;
+	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
+	setup?: (cwd: string, agentDir: string) => Promise<void>;
+	configuration?: Record<string, unknown>;
+	screenDiagnostics?: boolean;
+	onScreenFailureEvidence?: (directory: string) => void;
 };
 
 async function eventually<T>(read: () => Promise<T>, predicate: (value: T) => boolean): Promise<T> {
@@ -169,8 +174,10 @@ async function withTui(
 	size: [number, number],
 	run: (h: {
 		cwd: string;
+		agentDir: string;
 		provider: ProviderFixture;
 		tui: (...args: string[]) => Promise<string>;
+		screen: CompactScreenRecording;
 		state: () => Promise<State>;
 		idle: () => Promise<void>;
 		stage: (phase: string) => Promise<State>;
@@ -185,7 +192,6 @@ async function withTui(
 	const agentDir = root.join("config", "agent");
 	const temp = root.join("tmp");
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
-	await scenario.setup?.(cwd);
 	// Empty inherited credentials explicitly: tui-test's PTY server may also
 	// inherit them, so merely omitting them from --env would not isolate it.
 	const env = {
@@ -221,13 +227,38 @@ async function withTui(
 	);
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ncomposer:\n  predictions: false\nstartup:\n  setupWizard: false\n  checkUpdate: false\nasync:\n  enabled: false\n",
+		JSON.stringify({
+			composer: { predictions: false },
+			startup: { setupWizard: false, checkUpdate: false },
+			async: { enabled: false },
+			...scenario.configuration,
+			modelRoles: {
+				default: "spec-fixture/chat-a",
+				smol: "spec-fixture/chat-a",
+				...(isRecord(scenario.configuration?.modelRoles) ? scenario.configuration.modelRoles : {}),
+			},
+		}),
 	);
+	await scenario.setup?.(cwd, agentDir);
 	const session = `dev-native-${crypto.randomUUID()}`;
+	const nativeArtifacts = root.join("tui-failures");
+	const explicitCast = root.join("mixed-session.cast");
+	let recordingStarted = false;
 	const commandStderr: Array<{ args: string[]; code: number; stderr: string }> = [];
 	async function invoke(target: string, ...args: string[]): Promise<string> {
 		if (!tuiTest) throw new Error("tui-test is required");
-		const child = Bun.spawn([tuiTest, "--session", target, ...args], {
+		const diagnosticFlags = scenario.screenDiagnostics
+			? [
+					"--failure-artifacts",
+					nativeArtifacts,
+					"--failure-artifact-mode",
+					"text",
+					"--failure-artifact-recording",
+					"--diagnostic-context",
+					"journey=compact-mixed",
+				]
+			: [];
+		const child = Bun.spawn([tuiTest, "--session", target, ...diagnosticFlags, ...args], {
 			cwd: repo,
 			env,
 			stdin: "ignore",
@@ -240,10 +271,21 @@ async function withTui(
 			child.exited,
 		]);
 		if (stderr || code !== 0) commandStderr.push({ args, code, stderr });
-		if (code !== 0) throw new Error(`tui-test ${args.join(" ")} exited ${code}:\n${stdout}\n${stderr}`);
+		if (code !== 0) {
+			if (scenario.screenDiagnostics) throw new Error(`tui-test ${args[0] ?? "command"} exited ${code}`);
+			throw new Error(`tui-test ${args.join(" ")} exited ${code}:\n${stdout}\n${stderr}`);
+		}
 		return stdout;
 	}
-	const tui = (...args: string[]) => invoke(session, ...args);
+	const rawTui = (...args: string[]) => invoke(session, ...args);
+	const screen = new CompactScreenRecording(rawTui, nativeDraftSnapshot, size[0], size[1]);
+	const tui = (...args: string[]) => {
+		if (scenario.screenDiagnostics) screen.mark(`tui ${args[0] ?? "unknown"}`);
+		if (scenario.screenDiagnostics && args[0] === "resize") {
+			return screen.resize(Number(args[1]), Number(args[2]), () => rawTui(...args));
+		}
+		return rawTui(...args);
+	};
 	const peers = new Set<string>();
 	async function start(target: string, directory: string): Promise<void> {
 		await invoke(
@@ -272,6 +314,10 @@ async function withTui(
 			"--",
 			"ordinary-root-beacon",
 		);
+		if (scenario.screenDiagnostics && target === session) {
+			await invoke(target, "record", "start", explicitCast);
+			recordingStarted = true;
+		}
 		await invoke(target, "expect", "text", `${MARKER}_CHAT_READY`, "--timeout", "30000");
 	}
 	async function restart(): Promise<void> {
@@ -316,9 +362,96 @@ async function withTui(
 		).toHaveLength(1);
 		expect(provider.requests.at(-1)?.model).toBe("chat-a");
 		expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
-		await run({ cwd, provider, tui, state, idle, stage, restart, open });
+		await Promise.race([
+			run({ cwd, agentDir, provider, tui, screen, state, idle, stage, restart, open }),
+			provider.failure,
+		]);
 		expect(provider.failures).toEqual([]);
 	} catch (error) {
+		if (scenario.screenDiagnostics) {
+			// tui-test's automatic cast is ANSI output from the real PTY, not a
+			// stream of emulator-completed frames. Preserve it for replay only.
+			try {
+				await screen.stop();
+			} catch {
+				// Retain the triggering error, including a sampled transient.
+			}
+			screen.mark("assertion or command failure");
+			await screen.captureFailure();
+			let recordingStopError: unknown;
+			if (recordingStarted) {
+				try {
+					await rawTui("record", "stop");
+					recordingStarted = false;
+				} catch (stopError) {
+					recordingStopError = stopError;
+				}
+			}
+			const destination = path.join(os.tmpdir(), `omp-compact-screen-failure-${crypto.randomUUID()}`);
+			try {
+				await fs.mkdir(destination, { recursive: true });
+				scenario.onScreenFailureEvidence?.(destination);
+				const secrets = Object.entries(process.env)
+					.filter(
+						([key, value]) =>
+							/(?:key|token|secret|password|credential|authorization|(?:^|_)auth(?:_|$))/i.test(key) &&
+							value &&
+							value.length >= 4,
+					)
+					.map(([, value]) => value!);
+				const redact = (text: string) => {
+					for (const secret of secrets) {
+						text = text
+							.replaceAll(secret, "[REDACTED]")
+							.replaceAll(JSON.stringify(secret).slice(1, -1), "[REDACTED]");
+					}
+					return text;
+				};
+				await fs.writeFile(path.join(destination, "viewport-timeline.txt"), redact(screen.evidence()));
+				const recordingIssues: string[] = [];
+				try {
+					await fs.writeFile(path.join(destination, "automatic.cast"), redact(await rawTui("get-recording")));
+				} catch (recordingError) {
+					recordingIssues.push(`automatic recording: ${String(recordingError)}`);
+				}
+				try {
+					await fs.writeFile(
+						path.join(destination, "explicit.cast"),
+						redact(await fs.readFile(explicitCast, "utf8")),
+					);
+				} catch (recordingError) {
+					recordingIssues.push(`explicit recording: ${String(recordingError)}`);
+				}
+				if (recordingStopError) recordingIssues.push(`record stop: ${String(recordingStopError)}`);
+				for (const failure of commandStderr) {
+					if (failure.code !== 0 && (failure.args[0] === "record" || failure.args[0] === "get-recording"))
+						recordingIssues.push(`${failure.args.slice(0, 2).join(" ")} (${failure.code}): ${failure.stderr}`);
+				}
+				if (recordingIssues.length)
+					await fs.writeFile(path.join(destination, "recording-errors.txt"), redact(recordingIssues.join("\n")));
+				const copyText = async (source: string, target: string): Promise<void> => {
+					for (const entry of await fs.readdir(source, { withFileTypes: true })) {
+						const from = path.join(source, entry.name);
+						const to = path.join(target, entry.name);
+						if (entry.isDirectory()) {
+							await fs.mkdir(to, { recursive: true });
+							await copyText(from, to);
+						} else if (entry.isFile()) {
+							await fs.writeFile(to, redact(await fs.readFile(from, "utf8")));
+						}
+					}
+				};
+				try {
+					await copyText(nativeArtifacts, destination);
+				} catch (copyError) {
+					if ((copyError as NodeJS.ErrnoException).code !== "ENOENT") throw copyError;
+				}
+				console.error(`Compact mixed PTY failure evidence: ${destination}`);
+			} catch (diagnosticError) {
+				console.error("Unable to preserve compact mixed PTY evidence:", diagnosticError);
+			}
+			throw error;
+		}
 		// Preserve existing out-of-band program logs before TempDir cleanup.
 		try {
 			const logsDir = root.join("config", "logs");
@@ -346,6 +479,13 @@ async function withTui(
 		console.error("tui-test command stderr:", commandStderr);
 		throw error;
 	} finally {
+		if (recordingStarted) {
+			try {
+				await rawTui("record", "stop");
+			} catch {
+				// The process may already have exited; do not hide the original failure.
+			}
+		}
 		for (const target of peers) await invoke(target, "close");
 		await tui("close");
 	}

@@ -18,6 +18,7 @@ import {
 import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
@@ -276,6 +277,8 @@ const LEFT_DOUBLE_TAP_MIN_GAP_MS = 40;
 const LEFT_DOUBLE_TAP_MAX_GAP_MS = 500;
 
 export class InputController {
+	#compactDiffExpanded = false;
+
 	constructor(
 		private ctx: InteractiveModeContext,
 		/** Injectable clipboard reads so tests can drive paste flows without a real clipboard. */
@@ -3144,6 +3147,13 @@ export class InputController {
 	}
 
 	toggleToolOutputExpansion(): void {
+		if (this.ctx.hideToolActivity && cfgDisplayMode.get(this.ctx.settings) === "compact") {
+			this.#compactDiffExpanded = !this.#compactDiffExpanded;
+			this.restoreCompactDiffExpansion();
+			this.ctx.ui.requestRender(true);
+			this.ctx.showStatus(`Tool output expansion: ${this.#compactDiffExpanded ? "enabled" : "disabled"}`);
+			return;
+		}
 		if (this.ctx.hideToolActivity) {
 			const visibilityKey = appKey(this.ctx.keybindings, "app.tools.toggleVisibility");
 			const visibilityHint = visibilityKey ? `${visibilityKey} or /display` : "/display";
@@ -3162,6 +3172,19 @@ export class InputController {
 		cfgHideThinkingBlock.set(settings, mode === "clean");
 		cfgDisplayMode.set(settings, mode);
 		this.ctx.showStatus(`Display: ${mode}`);
+	}
+
+	/** Restore compact diff expansion after replay without expanding unrelated transcript blocks. */
+	restoreCompactDiffExpansion(): void {
+		if (cfgDisplayMode.get(this.ctx.settings) !== "compact") {
+			this.#compactDiffExpanded = false;
+			return;
+		}
+		for (const child of this.ctx.chatContainer.children) {
+			if (child instanceof ToolExecutionComponent && child.isCompactFileOperation()) {
+				child.setExpanded(this.#compactDiffExpanded);
+			}
+		}
 	}
 
 	setToolsExpanded(expanded: boolean): void {

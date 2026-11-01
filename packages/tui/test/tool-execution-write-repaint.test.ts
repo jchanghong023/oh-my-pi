@@ -78,4 +78,31 @@ describe("ToolExecutionComponent write repaint seam", () => {
 
 		expect(requestRender).not.toHaveBeenCalled();
 	});
+
+	it("preserves write collapse and expansion controls", () => {
+		const { component } = makeComponent(writeArgs(80));
+		component.updateResult({ content: [{ type: "text", text: "Wrote notes.txt" }] }, false);
+		const collapsed = component.render(100).length;
+		const collapsedNative = JSON.stringify(component.describe());
+		component.setExpanded(true);
+		expect(component.render(100).length).toBeGreaterThan(collapsed);
+		expect(JSON.stringify(component.describe())).not.toBe(collapsedNative);
+		component.setExpanded(false);
+		expect(component.render(100)).toHaveLength(collapsed);
+		expect(JSON.stringify(component.describe())).toBe(collapsedNative);
+	});
+
+	it("retains the complete multi-line command and result through the detailed expand control", () => {
+		const command = `bun test ${"x".repeat(600)}\necho finished`;
+		const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} } as unknown as TUI;
+		const component = new ToolExecutionComponent("bash", { command }, {}, undefined, ui);
+		components.push(component);
+		component.setExpanded(true);
+		expect(JSON.stringify(component.describe())).toContain("echo finished");
+		expect(JSON.stringify(component.describe())).toContain("x".repeat(600));
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("echo finished");
+		component.updateResult({ content: [{ type: "text", text: "raw process output" }] }, false);
+		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("raw process output");
+		expect(JSON.stringify(component.describe())).toContain("raw process output");
+	});
 });

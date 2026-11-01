@@ -68,6 +68,7 @@ function createFixture(streamingMessage: AssistantMessage, tool?: AgentTool) {
 	});
 
 	return {
+		ctx,
 		controller: new EventController(ctx),
 		pendingTools,
 		getApprovalWaiter: () => approvalWaiter,
@@ -232,6 +233,7 @@ describe("EventController paces streamed tool args", () => {
 		vi.advanceTimersByTime(STREAMING_REVEAL_FRAME_MS * 5);
 		expect(Bun.stripANSI(component.render(80).join("\n"))).toContain("/tmp/exec.ts");
 	});
+
 	it("holds approval until the native final edit preview is ready", async () => {
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
 		const args = {

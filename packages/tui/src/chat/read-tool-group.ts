@@ -17,13 +17,13 @@ import {
 import { FILE_NAME_COLOR, formatStyledPath, PREVIEW_LIMITS, shortenPath } from "../render/render-utils";
 import { fileHyperlink, renderCodeCell, renderMarkdownCell } from "../render";
 import { wrapTreeLine } from "../render/hanging-wrap";
-import { truncateToWidth, wrapTextWithAnsi } from "../utils";
+import { wrapTextWithAnsi } from "../utils";
 import { canonicalizeMessage } from "./thinking-display";
 import { internalUrlSchemeSpec, splitUrlScheme } from "../tools/url-scheme-host";
 import type { ToolExecutionHandle } from "./tool-execution";
 import { formatUsageRow } from "../overlays/usage-row";
-import { formatCount, isRecord, isUrlLikePath, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
-import { INTENT_FIELD, type TspCardStatus, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
+import { formatCount, isUrlLikePath, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
+import { type TspCardStatus, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
 import type { NativeToolHead } from "../tools/renderer";
 import { card, code, keyed, md, node, span, text, withHidden } from "../native/describe";
 import {
@@ -36,8 +36,6 @@ import {
 import { plainText } from "../native/spans";
 import { Memo } from "../native/memo";
 import { fileHref, fileRow, inlineErrorView } from "../tools/native-view";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { COMPACT_STATUS_LABEL, type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
 
 /**
  * Extract the read call's target path. `path` is the canonical arg; `file_path`
@@ -121,10 +119,11 @@ type ReadDisplayPathSpec = { path: string; linkPath?: string };
 type ReadEntry = {
 	toolCallId: string;
 	path: string;
-	intent?: string;
 	displayPaths?: ReadDisplayPathSpec[];
 	linkPath?: string;
 	status: "pending" | "success" | "warning" | "error";
+	startedAt?: number;
+	endedAt?: number;
 	correctedFrom?: string;
 	contentText?: string;
 	/** The result's `details.contentType`; see {@link previewsMarkdown}. */
@@ -134,8 +133,6 @@ type ReadEntry = {
 	conflictCount?: number;
 	codeStartLine?: number;
 	codeLineNumbers?: Array<number | null>;
-	executionStartedAtNow?: number;
-	executionEndedAtNow?: number;
 };
 
 /**
@@ -387,9 +384,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	#text: Text;
 	#expanded = false;
 	#toolActivityVisible = true;
-	#compactToolResultListener: (() => void) | undefined;
 	#showContentPreview: boolean;
-	#compactSelection: ReadonlySet<string | object> | undefined;
 	// A read group accretes entries across multiple assistant completions for as
 	// long as the run of reads is uninterrupted. It remains active while its
 	// header can change from `Read <path>` to `Read (N)` plus a tree. The
@@ -405,7 +400,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	// width-epoch resolution and committed-render bypass must observe it.
 	#blockVersion = 0;
 	#displayVersion = 0;
-	#displayCompact = false;
 	readonly #native = new Memo();
 	/** Content previews toggled in the terminal, by tool call id. */
 	#previewCollapsed = new Map<string, boolean>();
@@ -420,59 +414,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	override render(width: number): readonly string[] {
 		if (!this.#toolActivityVisible) return [];
-		if (this.#compactToolActivity) {
-			this.#displayCompact = true;
-			return this.renderCompactActivityRows(width);
-		}
-		if (this.#displayCompact) this.#updateDisplay();
 		return super.render(width);
-	}
-
-	isCompactToolActivity(): boolean {
-		return !this.#expanded;
-	}
-
-	get #compactToolActivity(): boolean {
-		return !this.#expanded && displayPreferences.compactToolActivity;
-	}
-
-	getCompactToolCount(): number {
-		let count = 0;
-		for (const entry of this.#entries.values()) {
-			if (entry.status === "success") count++;
-		}
-		return count;
-	}
-
-	getCompactToolCalls(): readonly CompactToolCall[] {
-		return [...this.#entries.values()].map(entry => ({ id: entry }));
-	}
-
-	setCompactToolSelection(ids: ReadonlySet<string | object> | undefined): void {
-		const previous = this.#compactSelection;
-		if (previous === ids || (previous && ids && previous.size === ids.size && [...ids].every(id => previous.has(id))))
-			return;
-		this.#compactSelection = ids;
-		this.#displayVersion++;
-	}
-
-	setCompactToolResultListener(listener: (() => void) | undefined): void {
-		this.#compactToolResultListener = listener;
-	}
-
-	/** Each visible grouped call keeps its insertion position; invocation errors stay in detailed mode. */
-	renderCompactActivityRows(width: number): readonly string[] {
-		const rows: string[] = [];
-		for (const entry of this.#compactEntries()) {
-			rows.push(this.#renderCompactEntry(entry, width));
-		}
-		return rows;
-	}
-
-	*#compactEntries(): IterableIterator<ReadEntry> {
-		for (const entry of this.#entries.values()) {
-			if (entry.status !== "error" && (!this.#compactSelection || this.#compactSelection.has(entry))) yield entry;
-		}
 	}
 
 	override invalidate(): void {
@@ -487,6 +429,10 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		// breaks the run) before a read's `tool_execution_end` lands. Keep the block
 		// active so the late result updates the pending preview.
 		return !this.#hasPendingEntries();
+	}
+
+	hasActiveTranscriptContent(): boolean {
+		return !this.#sealed && this.#hasPendingEntries();
 	}
 
 	#hasPendingEntries(): boolean {
@@ -505,9 +451,17 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 * turn aborted or ended), allowing the container to retire it as history.
 	 */
 	seal(): void {
-		if (!this.#sealed) this.#blockVersion++;
+		if (!this.#sealed) {
+			this.#blockVersion++;
+			let now: number | undefined;
+			for (const entry of this.#entries.values()) {
+				if (entry.startedAt !== undefined && entry.endedAt === undefined) {
+					now ??= performance.now();
+					entry.endedAt = now;
+				}
+			}
+		}
 		this.#sealed = true;
-		for (const entry of this.#entries.values()) entry.executionEndedAtNow ??= performance.now();
 		this.#updateDisplay();
 	}
 
@@ -515,7 +469,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	parkAsBackground(): void {}
 
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
+		return this.#blockVersion;
 	}
 
 	updateArgs(args: ReadRenderArgs, toolCallId?: string): void {
@@ -530,9 +484,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		};
 		entry.path = displayPath;
 		entry.linkPath = path.isAbsolute(rawPath) ? rawPath : undefined;
-		// Validated execution args omit intent metadata; keep the streamed intent for this call.
-		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
-		if (typeof intent === "string") entry.intent = sanitizeText(intent);
 		entry.raw = args.raw === true;
 		this.#entries.set(toolCallId, entry);
 		this.#updateDisplay();
@@ -573,8 +524,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		const entry = this.#entries.get(toolCallId);
 		if (!entry) return;
 		if (isPartial) return;
+		if (entry.startedAt !== undefined) entry.endedAt ??= performance.now();
 		this.#blockVersion++;
-		entry.executionEndedAtNow ??= performance.now();
 		// `details` can contain raw file text and filesystem paths. Keep the
 		// latter for links while only the sanitized copy supplies display labels.
 		const rawDetails = result.details as ReadToolDetails | undefined;
@@ -605,7 +556,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 			entry.codeLineNumbers = displayContent?.lineNumbers;
 		}
 		this.#updateDisplay();
-		this.#compactToolResultListener?.();
 	}
 
 	/**
@@ -647,9 +597,14 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		this.#updateDisplay();
 	}
 
-	setExecutionStarted(toolCallId?: string): void {
-		const entry = toolCallId ? this.#entries.get(toolCallId) : undefined;
-		if (entry && entry.executionStartedAtNow === undefined) entry.executionStartedAtNow = performance.now();
+	setExecutionStarted(toolCallId?: string, startedAt?: number): void {
+		if (!toolCallId) return;
+		const entry = this.#entries.get(toolCallId);
+		if (!entry || entry.endedAt !== undefined) return;
+		if (entry.startedAt !== undefined && startedAt === undefined) return;
+		const now = performance.now();
+		const origin = startedAt === undefined ? now : now - Math.max(0, Date.now() - startedAt);
+		entry.startedAt = Math.min(entry.startedAt ?? origin, origin);
 		this.#updateDisplay();
 	}
 
@@ -696,115 +651,19 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		const dataFirst = cx?.supports("tool") === true;
+		const timing = dataFirst ? this.#nativeTiming() : undefined;
 		const key = [
 			dataFirst,
 			this.#displayVersion,
 			this.#toolActivityVisible,
 			this.#sealed,
-			this.#compactToolActivity,
 			cx?.cols,
+			timing?.age,
+			timing?.took,
 		];
 		return this.#native.get(key, () =>
-			withHidden(
-				this.#compactToolActivity
-					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
-					: dataFirst
-						? this.#describeTool()
-						: this.#describeGroup(),
-				!this.#toolActivityVisible,
-			),
+			withHidden(dataFirst ? this.#describeTool(timing) : this.#describeGroup(), !this.#toolActivityVisible),
 		);
-	}
-
-	#compactStatus(entry: ReadEntry): TspCardStatus {
-		if (entry.status === "error") return "error";
-		if (entry.status !== "pending") return "done";
-		if (this.#sealed) return "cancelled";
-		return entry.executionStartedAtNow === undefined ? "pending" : "running";
-	}
-
-	#compactSummary(entry: ReadEntry): string {
-		const intent = plainText(entry.intent ?? "")
-			.replace(/\s+/g, " ")
-			.trim();
-		const path = plainText(entry.path).replace(/\s+/g, " ").trim();
-		const target = (entry.status === "warning" ? path : compactToolPath(path)) || "…";
-		let summary = entry.status === "warning" ? target : intent || target;
-		if (entry.correctedFrom) summary += ` · corrected from ${plainText(entry.correctedFrom).replace(/\s+/g, " ")}`;
-		if (entry.conflictCount) summary += ` · ${entry.conflictCount} conflict${entry.conflictCount === 1 ? "" : "s"}`;
-		if (entry.status === "warning" && intent) summary += ` · ${intent}`;
-		return summary;
-	}
-
-	#compactElapsed(entry: ReadEntry): number | undefined {
-		if (entry.executionStartedAtNow === undefined) return undefined;
-		return Math.max(0, Math.round((entry.executionEndedAtNow ?? performance.now()) - entry.executionStartedAtNow));
-	}
-
-	#renderCompactEntry(entry: ReadEntry, width: number): string {
-		const status = this.#compactStatus(entry);
-		const ms = this.#compactElapsed(entry);
-		const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
-		const warning = entry.status === "warning";
-		const state = theme.fg(
-			warning ? "warning" : status === "error" ? "error" : "dim",
-			`${warning ? "警告" : COMPACT_STATUS_LABEL[status]} · `,
-		);
-		const line = truncateToWidth(
-			`${state}${theme.fg("dim", "Read")} ${theme.fg("text", this.#compactSummary(entry))}`,
-			Math.max(1, width - Bun.stringWidth(elapsed)),
-		);
-		return truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width);
-	}
-
-	#describeCompact(dataFirst: boolean, width: number): NativeNode {
-		const calls: NativeChild[] = [];
-		for (const entry of this.#compactEntries()) {
-			const status = this.#compactStatus(entry);
-			const ms = this.#compactElapsed(entry);
-			const live = status === "running" || status === "pending";
-			const summary = this.#compactSummary(entry);
-			calls.push(
-				dataFirst
-					? node(
-							"tool",
-							{
-								role: "omp.tool.read",
-								name: "read",
-								title: "Read",
-								target: [span(truncateToWidth(summary, Math.max(1, width - 16)), "text")],
-								targetKind: "text",
-								status,
-								tone: READ_STATUS_TONE[entry.status],
-								age: live ? ms : undefined,
-								took: live ? undefined : ms,
-								frame: "inline",
-								collapsible: false,
-							},
-							undefined,
-							entry.toolCallId,
-						)
-					: node(
-							"row",
-							{ role: "omp.tool.read", gap: "sm", align: "baseline" },
-							[
-								text(
-									[
-										span(
-											`${entry.status === "warning" ? "警告" : COMPACT_STATUS_LABEL[status]} · Read `,
-											entry.status === "warning" ? "warning" : "dim",
-										),
-										span(summary, "text"),
-									],
-									{ lines: 1, wrap: "none", truncate: "end", grow: 1 },
-								),
-								...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
-							],
-							entry.toolCallId,
-						),
-			);
-		}
-		return node("col", { gap: "none" }, calls);
 	}
 
 	/**
@@ -814,7 +673,8 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 	 * (glyph, dim dir, strong name, range). Each content preview is numbered
 	 * code or rendered Markdown, clamped per file while collapsed.
 	 */
-	#describeTool(entries = [...this.#entries.values()]): NativeNode {
+	#describeTool(timing: { age?: number; took?: number } | undefined): NativeNode {
+		const entries = [...this.#entries.values()];
 		const rows = this.#buildSummaryRows(this.#displayTargetsForEntries(entries));
 		const status = this.#groupStatus(entries);
 		const previews = entries.filter(entry => entry.status !== "error" && this.#shouldRenderPreview(entry));
@@ -870,6 +730,7 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 				name: "read",
 				title: "Read",
 				status,
+				...timing,
 				tone: status === "error" ? "error" : undefined,
 				frame: "inline",
 				collapsible,
@@ -1053,6 +914,22 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 		);
 	}
 
+	/** A group's timer spans its earliest started read through its latest completion. */
+	#nativeTiming(): { age?: number; took?: number } | undefined {
+		let start: number | undefined;
+		let end: number | undefined;
+		for (const entry of this.#entries.values()) {
+			if (entry.startedAt === undefined) continue;
+			start = Math.min(start ?? entry.startedAt, entry.startedAt);
+			if (entry.endedAt !== undefined) end = Math.max(end ?? entry.endedAt, entry.endedAt);
+		}
+		if (start === undefined) return undefined;
+		if (!this.#sealed && this.#hasPendingEntries()) {
+			return { age: Math.max(0, Math.round(performance.now() - start)) };
+		}
+		return { took: Math.max(0, Math.round((end ?? start) - start)) };
+	}
+
 	#groupStatus(entries: readonly ReadEntry[]): TspCardStatus {
 		let rank = 0;
 		for (const entry of entries) rank = Math.max(rank, READ_STATUS_RANK[entry.status]);
@@ -1088,8 +965,6 @@ export class ReadToolGroupComponent extends Container implements ToolExecutionHa
 
 	#updateDisplay(originalEntries?: ReadEntry[]): void {
 		this.#displayVersion++;
-		this.#displayCompact = originalEntries === undefined && this.#compactToolActivity;
-		if (this.#displayCompact) return;
 		const entries = originalEntries ?? [...this.#entries.values()];
 		const displayTargets = this.#displayTargetsForEntries(entries);
 		const displayRows = this.#buildSummaryRows(displayTargets);

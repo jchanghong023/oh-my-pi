@@ -160,16 +160,6 @@ export interface CoordinationDetails {
 	interrupted?: boolean;
 }
 
-function hasJobFeedback(job: JobSnapshot): boolean {
-	return (
-		job.status === "failed" ||
-		job.status === "cancelled" ||
-		(job.exitCode !== undefined && job.exitCode !== 0) ||
-		Boolean(job.meta?.artifactError ?? job.artifactError) ||
-		(job.structured !== undefined && job.structured.status !== "valid")
-	);
-}
-
 /** Keep independent diagnostics even when the original Bash card owns the outcome. */
 function duplicatesBashCard(job: JobSnapshot, jobs: ReadonlyMap<string, string> | undefined): boolean {
 	return (
@@ -984,10 +974,6 @@ const waitResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const waitToolRenderer = {
 	inline: true,
 	mergeCallAndResult: true,
-	hasCompactCriticalFeedback(result: ToolRenderResult<CoordinationDetails>): boolean {
-		const details = result.details;
-		return Boolean(details?.waited || details?.meta?.artifactError || details?.jobs?.some(hasJobFeedback));
-	},
 	activitySummary(_args: object, context: ToolActivityContext<CoordinationDetails>): ToolActivitySummary {
 		const jobs = context.result?.details?.jobs;
 		if (!Array.isArray(jobs) || jobs.length === 0)

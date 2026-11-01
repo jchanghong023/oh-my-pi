@@ -1838,7 +1838,6 @@ interface AgentDescribeState {
 	readonly nowMs: number;
 	readonly expanded: boolean;
 	readonly background: boolean;
-	readonly criticalPreview?: boolean;
 	/** The host draws the `json` kind. */
 	readonly json: boolean;
 }
@@ -1868,17 +1867,6 @@ function describeNestedTasks(
 		state.seen.delete(details);
 	}
 	return out;
-}
-
-/** Earliest start seen per running subagent (`nowMs - durationMs`), so a snapshot with a stale or zero `durationMs` can't restart its timer. */
-const runStartMs = new Map<string, number>();
-
-function runningAge(progress: { id: string; durationMs: number }, nowMs: number): number {
-	const start = nowMs - Math.max(0, progress.durationMs);
-	const known = runStartMs.get(progress.id);
-	const anchor = known === undefined ? start : Math.min(known, start);
-	runStartMs.set(progress.id, anchor);
-	return Math.max(0, nowMs - anchor);
 }
 
 /** An `agent` node; its row's hover card shows the whole `assignment` the row only summarizes. */
@@ -1938,7 +1926,7 @@ function describeProgressAgent(progress: AgentProgress, state: AgentDescribeStat
 				...contextStats(progress.contextTokens, progress.contextWindow),
 				done: running && progress.completionPercent !== undefined ? progress.completionPercent / 100 : undefined,
 				cost: progress.cost > 0 ? progress.cost : undefined,
-				...(running ? { age: runningAge(progress, nowMs) } : { took: progress.durationMs }),
+				...(running ? { age: Math.max(0, progress.durationMs) } : { took: progress.durationMs }),
 			},
 			retry,
 			badges: agentBadges(state.background, undefined),
@@ -2003,7 +1991,7 @@ function describeResultAgent(result: SingleResult, state: AgentDescribeState, de
 			badges: badges.length > 0 ? badges : undefined,
 			depth: depth > 0 ? depth : undefined,
 			collapsible: true,
-			collapsed: !state.expanded && !(state.criticalPreview && (aborted || !success)),
+			collapsed: !state.expanded,
 		},
 		assignment,
 		[
@@ -2130,7 +2118,6 @@ function describeTaskResult(
 			nowMs: options.renderContext?.nowMs ?? Date.now(),
 			expanded: options.expanded,
 			background,
-			criticalPreview: options.compactToolActivity,
 			json: options.json === true,
 		},
 		0,
@@ -2179,10 +2166,7 @@ function describeTaskResult(
 			badges: background ? [{ text: "background" }] : undefined,
 		},
 		tone: aborted + failed > 0 ? "error" : undefined,
-		preview:
-			options.compactToolActivity && details.results?.some(item => item.aborted || item.exitCode !== 0 || item.error)
-				? "children"
-				: "none",
+		preview: "none",
 		body: compact([
 			context,
 			...agents,
@@ -2199,9 +2183,6 @@ const taskResultMemo = new OwnerMemo<NativeToolView | undefined>();
 export const taskToolRenderer = {
 	renderCall,
 	renderResult,
-	hasCompactCriticalFeedback(result: ToolRenderResult<TaskToolDetails>): boolean {
-		return result.details?.results?.some(item => item.aborted || item.exitCode !== 0 || Boolean(item.error)) === true;
-	},
 	describeCall(args: TaskParams, options: RenderResultOptions): NativeToolView | undefined {
 		return taskCallMemo.get(args, [options.argsComplete], () => describeTaskCall(args));
 	},
@@ -2210,10 +2191,8 @@ export const taskToolRenderer = {
 		options: TaskRenderOptions,
 		args?: TaskParams,
 	): NativeToolView | undefined {
-		return taskResultMemo.get(
-			result,
-			[options.renderContext?.nowMs, options.expanded, options.json, options.compactToolActivity],
-			() => describeTaskResult(result, options, args),
+		return taskResultMemo.get(result, [options.renderContext?.nowMs, options.expanded, options.json], () =>
+			describeTaskResult(result, options, args),
 		);
 	},
 	mergeCallAndResult: true,

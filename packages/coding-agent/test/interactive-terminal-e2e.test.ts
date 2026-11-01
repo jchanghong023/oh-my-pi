@@ -355,6 +355,77 @@ describe("libkitty end-to-end", () => {
 		expect(plainRows(term.getViewport()).filter(row => row.includes("hi there omp"))).toHaveLength(1);
 	});
 
+	it("preserves the complete unsent draft, caret and attachments across display rebuilds", async () => {
+		const usage: Usage = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		session.sessionManager.appendMessage({ role: "user", content: "DRAFT_HISTORY_MARKER", timestamp: 1 });
+		session.sessionManager.appendMessage({
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "draft-tool", name: "bash", arguments: { command: "echo DRAFT_TOOL_MARKER" } },
+			],
+			api: "anthropic-messages",
+			provider: "anthropic",
+			model: "claude-sonnet",
+			usage,
+			stopReason: "toolUse",
+			timestamp: 2,
+		});
+		session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "draft-tool",
+			toolName: "bash",
+			content: [{ type: "text", text: "DRAFT_TOOL_RESULT" }],
+			isError: false,
+			timestamp: 3,
+		});
+		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
+		cfgDisplayMode.set(session.settings, "detailed");
+		releaseSessionEffects = bindEffects(session.settings);
+		await mode.init({ suppressWelcomeIntro: true });
+		void mode.getUserInput();
+		await term.waitForRender();
+		const prompt = vi.spyOn(session, "prompt");
+		const rebuild = vi.spyOn(mode, "rebuildChatFromMessages");
+		const draft = `First line of unsent input\n${"full long draft content ".repeat(16)}\nFINAL_DRAFT_SUFFIX`;
+		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
+		mode.editor.setText(draft);
+		mode.editor.pendingImages.push(image);
+		mode.editor.pendingImageLinks.push("local://draft-image.png");
+		mode.editor.handleInput("\x1b[D");
+		mode.editor.handleInput("\x1b[D");
+		const cursor = mode.editor.getCursor();
+		expect(cursor.col).toBeLessThan("FINAL_DRAFT_SUFFIX".length);
+		const messages = structuredClone(session.messages);
+		for (const display of ["compact", "clean", "detailed"] as const) {
+			cfgDisplayMode.set(session.settings, display);
+			await Promise.resolve();
+			await term.waitForRender();
+			expect(mode.editor.getText()).toBe(draft);
+			expect(mode.editor.getExpandedText()).toBe(draft);
+			expect(mode.editor.getCursor()).toEqual(cursor);
+			expect(mode.editor.pendingImages).toEqual([image]);
+			expect(mode.editor.pendingImageLinks).toEqual(["local://draft-image.png"]);
+			expect(session.messages).toEqual(messages);
+			const transcript = Bun.stripANSI(mode.chatContainer.render(120).join("\n"));
+			expect(transcript.match(/DRAFT_HISTORY_MARKER/g)).toHaveLength(1);
+			if (display === "detailed") {
+				expect(transcript.match(/DRAFT_TOOL_MARKER/g)).toHaveLength(1);
+			} else {
+				expect(transcript).not.toContain("DRAFT_TOOL_MARKER");
+				expect(transcript).not.toContain("DRAFT_TOOL_RESULT");
+			}
+		}
+		expect(rebuild).toHaveBeenCalledTimes(3);
+		expect(prompt).not.toHaveBeenCalled();
+	});
+
 	it("keeps the whole buffer clean across non-overflowing width resizes", async () => {
 		term.resize(140, 40);
 		await mode.init({ suppressWelcomeIntro: true });
@@ -570,6 +641,7 @@ describe("libkitty end-to-end", () => {
 		});
 
 		// This shortcut test inspects detailed tool output, not compact summaries.
+		cfgDisplayMode.set(Settings.instance, "clean");
 		cfgDisplayMode.set(session.settings, "detailed");
 		// Direct AgentSession construction bypasses the SDK's process-wide settings binding.
 		releaseSessionEffects = bindEffects(session.settings);
@@ -578,6 +650,7 @@ describe("libkitty end-to-end", () => {
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });
 		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		expect(mode.hideToolActivity).toBe(false);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.waitForRender();
@@ -613,6 +686,7 @@ describe("libkitty end-to-end", () => {
 		// Alt+O is the configured app.tools.toggleVisibility binding from this test's keybinding manager.
 		term.sendInput("\x1bo");
 		await term.waitForRender(() => !plainRows(term.getScrollBuffer()).some(row => row.includes(TOOL_MARKER)));
+		expect(cfgDisplayMode.get(session.settings)).toBe("clean");
 		expect(mode.hideToolActivity).toBe(true);
 		expect(plainRows(term.getScrollBuffer()).some(row => row.includes(TOOL_MARKER))).toBe(false);
 		expect(plainRows(term.getViewport()).some(row => row.includes("LIVE_EDITOR_DRAFT"))).toBe(true);

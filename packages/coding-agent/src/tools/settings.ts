@@ -974,7 +974,7 @@ export const cfgAsyncMaxJobs = register({
 	id: "async.maxJobs",
 	protocolDefault: ["rpc"],
 	type: "number",
-	default: 100,
+	default: 32,
 });
 
 // Print mode is single-shot by default: it disposes after the last prompt, cancelling the

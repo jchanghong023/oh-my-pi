@@ -12,6 +12,8 @@
 - Removed Linux offline `/dev/shm` runtime storage and its automatic backups; existing data is not migrated.
 - Removed the `fullsend` keyword, `/fullsend` command, and associated setting.
 - Removed JCH review, repair, CI, catchup, Git and DFT explanation commands; `/jchime` and `/jch-workflowzbatch` remain available.
+- Replaced compact display with the clean view plus upstream file-targeted write/edit cards and a fixed two-line activity area; other tool and error cards are hidden. File cards retain detailed-mode history and controls; activity prioritizes live thinking or the latest two dispatched calls, one intent or command per row with per-call elapsed time, and retains static last activity per viewed session.
+- Removed the `compact_display` command and its dedicated test lane; display consumer tests use the ordinary test selection.
 
 ### Removed
 
@@ -19,12 +21,13 @@
 
 ### Added
 
+- Save authenticated pages as Markdown with `/crawl` through Browser Relay, without invoking a model.
 - Select a separate OpenWiki planning model with `--planner-model` while page agents keep using `--modelId` or the default role.
 - Create an empty `openwiki/INSTRUCTIONS.md` when initializing or updating a Wiki if the file does not already exist.
 - Automatically maintain an OpenWiki guidance section in the repository's `AGENTS.md` during initialization and updates.
 - Preview OpenWiki initialization and updates with `--dry-run`, showing model selection and candidate paths without invoking a model or writing Wiki files.
 - Add built-in `omp openwiki` repository generation, incremental updates, workspace linking and offline visualization/static export, with read-only AI query tools. Generation uses the current OMP profile's default role or a per-run `--modelId`; it still requires a reachable tool-capable model. OpenWiki user data follows the OMP configuration root and profile without migrating standalone workspaces.
-- Run only affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
+- Run eligible affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
 - Streamline Dev and ZCode process coverage and schedule startup-sensitive tests with bounded parallelism while preserving consumer and isolation boundaries.
 - Add `bun run fulltest --full` to run the current platform's full supported test suites without fork or changed-file selection.
 - Added workspace-owned `/dev` orchestration with one unfinished flow and one controller per existing workspace, four persistent native stage sessions and minimal recoverable business state. Git worktree subdirectories, aliases and branches share ownership; Dev neither creates nor requires worktrees.
@@ -42,6 +45,14 @@
 
 ### Changed
 
+- Show live compact thinking as a green shimmer sweep over gray text instead of rainbow gradients, using the existing animation switch in ANSI and native views; retained activity stays static, and tool colors, elapsed times, alignment and spacing are unchanged.
+- Hide the standalone model-processing indicator in compact mode while keeping live activity, other status messages, and interruption available.
+- Compact activity keeps one blank row below its two content rows, separating live, retained and empty activity from the input area without state-dependent layout jumps.
+- Align compact thinking, tool intents and retained activity with chat text, reserving the left inset before wrapping and preserving empty spacer rows.
+- Show the latest two dispatched tools, including returned calls, as one intent or raw-command row each with independent elapsed times that advance without output and freeze on return; tool output no longer replaces the description.
+- Omit the “上次活动” prefix from retained compact tool rows, keeping the tool name, intent or command and frozen elapsed time without an extra heading.
+- Keep file-targeted write/edit cards visible while streaming and after unchanged or failed operations, using the original detailed-mode components; message, configuration, process-control and non-file device calls remain hidden.
+- Limit each root session to 32 concurrent background jobs by default and at most 32 even with a higher `async.maxJobs` setting; lower configured limits still apply.
 - Prefer available OpenWiki tools for project overviews, read source first for code changes, and fall back to source when Wiki is unavailable.
 - Clarify OpenWiki search/read parameters and reference examples; query errors now include field constraints, missing page paths, and available section anchors.
 - Name `openwiki_search` and `openwiki_read` explicitly in exploration guidance, show read arguments before first use, and stop unnecessary browsing once their results are sufficient.
@@ -102,8 +113,6 @@
 - Clarify write tool arguments and guide models to retry missing content without treating the intent field as file contents.
 - Explain unavailable tool calls, list the request's tools and guide models toward available alternatives without changing tool permissions.
 - In `/dev`, direct all stage agents to use only available tools and never commit or push, and direct planners to omit Git submission steps and stray control tokens.
-- Compact working status now distinguishes the viewed agent's model waiting, thinking, replies, tool-call generation, tool execution and user/background waits without aggregating other agents or changing execution.
-- Show the latest live tool-output line in the compact thinking row when no thinking text is visible, without duplicating tool names or changing its style.
 - Keep `/dev` user-facing stage and descendant communication in Chinese while preserving code, commands, paths, protocol fields and original output.
 - Automatically inject the original stage skills in `/dev`: Grill-me for requirements, writing-plans for planning, and using-superpowers plus subagent-driven-development for execution. Requirements do not automatically inject Brainstorming; solutions receive no interview skill. Stage authorization boundaries remain unchanged.
 - Limit Dev to `/dev`, `/dev config`, `/dev new <requirements>`, `/dev next [solution-id]`, `/dev back` and `/dev drop`, without legacy aliases. New flows receive an automatic unique change ID; next checks actual artifacts and records each of the four explicit user decisions, while back returns one phase without automatically starting work or reverting files.
@@ -113,13 +122,11 @@
 - Keep OpenSpec proposal/specs templates and the original Superpowers plan format unchanged. A single-capability run needs five formal files: proposal, spec, solutions JSON, plan and completion report. The last three share `docs/superpowers/plans/`; no handoff, confirmation or task-state files are generated. Reports require the fixed Chinese title and completion, validation and unfinished-items sections; requirements archive does not relocate execution materials.
 - Remove the `/dev` task/evidence execution engine, fixed reviewer seats and repair quotas, forced commits and output-JSON chat protocol. The executor uses ordinary native engineering tools and reports actual checks honestly; file validity is not proof of software correctness.
 - Enable composer predictions by default; explicit `composer.predictions=false` still disables the additional model requests.
-- Compact display folds continuous tool runs in place to their last two calls with run-local counts and retains the last three actual-write cards per write run without forcing expansion. All inline thinking is hidden; active real thinking uses a permanently reserved single row with an ultrathink-style static gradient and a fixed gap above the input, clearing text without collapsing when idle or hidden. Bash feedback and history follow upstream behavior; clean and detailed modes preserve their existing contracts without changing model context or execution.
 - Disable JavaScript Eval by default while keeping Python Eval enabled; preserve explicit configuration and `PI_JS` overrides, and advertise only enabled runtimes.
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 
 - Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
 - ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
-- Keep upstream compaction summaries and collapsed-history display in compact mode without reopening content the upstream view omits.
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
@@ -131,6 +138,7 @@
 
 ### Fixed
 
+- Preserve child-agent messages arriving during manual context compaction for the resumed conversation.
 - Open OpenWiki section directory links in the reader instead of showing a 404 page.
 - Honor OpenWiki reasoning levels from explicit model selectors and default/plan roles, including independent planner levels and explicit reasoning off.
 - Allow fulltest to snapshot Git submodules while still detecting revision and dirty-source changes.
@@ -173,28 +181,23 @@
 - Let users accept completion reports that honestly disclose incomplete work without a separate persisted worker/reviewer-success gate, while retaining report structure, version checks and read-only acceptance boundaries.
 - Preserve arrival order between custom messages and user prompts held by idle compaction without adding an unnecessary asynchronous generation check.
 - Exclude vendored dependency test files from fork test dispatch.
-- Keep the permanent compact thinking area from obscuring sent messages when idle or between turns.
 - Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
 - Keep Dev command failures visible outside Dev, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.
 - Preserve ZCode stage row controls and ordinary mutations after Dev; closing a worker view or resuming a live root no longer stops its Dev flow, and malformed historical observations are skipped.
 - Reject formal materials changed between approval checks and handoff or acceptance, and stop executor work and collaboration when accepted materials become invalid.
 - Restore the pre-Goal tool set on completion and pause even when native Goal events have already disabled the mode, preventing the Goal tool from reappearing after completion.
 - Re-enter Dev using the root session's current workspace after native directory changes, preserve native subscription initialization while rebinding stage sessions, and keep ZCode candidate selection and unapproved material revisions aligned with the same native controller.
-- Keep Markdown code-fence decoration from replacing the live code-body line in the compact thinking preview, without changing stored reasoning or detailed rendering.
 - Let `/team` finish valid discussions that explicitly exclude an unavailable proposal, while still rejecting a later endorsement of it.
 - Preserve current `/dev` file revisions and original user replies across visible file/save failures without reusing stale model replies or generating model handoff summaries.
 - Prevent a new `/dev` run from replacing one whose cancellation or runtime cleanup has not settled, and expose actionable native model/provider failure details.
 - Reject missing or malformed `/dev` stage artifacts using their actual on-disk contents, and keep complete solution files and raw user confirmations available to the planner.
-- Keep compact background tool rows running on their original clock instead of restarting or settling the display at the foreground handoff.
 - Prevent repeated company-configuration warnings from corrupting the TUI during session and subagent initialization, while retaining startup notifications and standalone CLI diagnostics.
 - Keep native Dev stopping, workspace ownership and actual archive locations observable without reviving completed acceptance, repeating completed closing steps or permitting Loop/desktop rewind bypasses.
 - Interrupt the current Dev solution's in-flight Team discussion on ordinary Escape or ZCode stop, await owned work settling, and retain the flow without replaying the discussion, clearing native queued input or releasing stop ownership held by an in-progress exit/drop.
 
-- Keep the running status visible in compact mode on short ANSI and native terminals.
-
 - Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
 - Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.
-- Preserve original read-call order and segment boundaries when rebuilding or switching display modes, even when results arrive out of order; clean rebuilds continue to hide reasoning.
+- Preserve original read-call order when rebuilding or switching display modes, even when results arrive out of order; clean rebuilds continue to hide reasoning.
 - Avoid false local-gate failures when a bounded discovery probe times out before its child publishes a PID, while retaining timeout, cancellation and cleanup checks.
 - Preserve quoted Windows verification commands and external edits during failed specification publication.
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.

@@ -2,9 +2,10 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { fetch as nativeFetch } from "bun";
 import { withProxyInit } from "@oh-my-pi/pi-ai/utils/proxy";
-import { resolveExtraCa, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
+import { logger, resolveExtraCa, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { Command } from "@oh-my-pi/pi-utils/cli";
 import { appServerHelp } from "../../cli/command-help";
+import { closeDaemonClients } from "../../launch/client";
 import { ZCodeFrameWriter, runZCodeAppServer } from "./server";
 import {
 	ZCODE_AGENT_CA_CERT_ENV_KEY,
@@ -80,17 +81,45 @@ export async function runAppServerCommand(argv: string[]): Promise<void> {
 	console.log = console.error;
 	console.info = console.error;
 	console.debug = console.error;
+	let serverFailed = false;
+	let serverError: unknown;
+	let cleanupFailed = false;
+	let cleanupError: unknown;
 	try {
-		if (prepareStorage) {
-			const writer = new ZCodeFrameWriter(process.stdout);
-			await prepareZCodeStorage(process.stdin, frame => writer.write(frame));
-			await writer.flush();
-		} else await runZCodeAppServer({ cwd, surface });
+		try {
+			if (prepareStorage) {
+				const writer = new ZCodeFrameWriter(process.stdout);
+				await prepareZCodeStorage(process.stdin, frame => writer.write(frame));
+				await writer.flush();
+			} else await runZCodeAppServer({ cwd, surface });
+		} catch (error) {
+			serverFailed = true;
+			serverError = error;
+		}
+		try {
+			// The relay and other services hold process-wide broker leases. Release
+			// them only after the server has disposed every hosted session.
+			await closeDaemonClients();
+		} catch (error) {
+			cleanupFailed = true;
+			cleanupError = error;
+			if (serverFailed) {
+				try {
+					logger.warn("Failed to close daemon broker clients during app-server shutdown", {
+						error: String(error),
+					});
+				} catch {
+					// Logging must not replace the original server failure.
+				}
+			}
+		}
 	} finally {
 		console.log = originalLog;
 		console.info = originalInfo;
 		console.debug = originalDebug;
 	}
+	if (serverFailed) throw serverError;
+	if (cleanupFailed) throw cleanupError;
 }
 export { runZCodeAppServer, ZCodeServer, ZCodeFrameWriter, ZCodeProtocolError } from "./server";
 

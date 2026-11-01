@@ -41,6 +41,7 @@ export interface ModelRequest {
 export interface Reply {
 	text?: string;
 	tool?: { name: string; args: Record<string, unknown> };
+	tools?: Array<{ name: string; args: Record<string, unknown> }>;
 }
 export type FixtureRole = "requirements" | "solution" | "planner" | "executor";
 export interface ProviderScenario {
@@ -510,6 +511,7 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 export interface ProviderFixture {
 	requests: ModelRequest[];
 	failures: string[];
+	failure: Promise<never>;
 	baseUrl: string;
 	[Symbol.asyncDispose](): Promise<void>;
 }
@@ -518,11 +520,13 @@ export function createProviderFixture(
 	options: ProviderScenario & {
 		dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
 		observe?: (request: ModelRequest) => void | Promise<void>;
-		reply?: (request: ModelRequest) => Reply | Promise<Reply>;
+		reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	} = {},
 ): ProviderFixture {
 	const requests: ModelRequest[] = [];
 	const failures: string[] = [];
+	const failed = Promise.withResolvers<never>();
+	void failed.promise.catch(() => {});
 	let authenticationRejected = false;
 	const server = Bun.serve({
 		hostname: "127.0.0.1",
@@ -531,6 +535,7 @@ export function createProviderFixture(
 			const url = new URL(request.url);
 			if (url.pathname !== "/v1/chat/completions") {
 				failures.push(`Unexpected provider request: ${request.method} ${url.pathname}`);
+				failed.reject(new Error(failures.at(-1)!));
 				return new Response("Unexpected model/catalog access", { status: 500 });
 			}
 			try {
@@ -554,22 +559,26 @@ export function createProviderFixture(
 					: payload && (payload.input.readOnly || continuationText(body) !== undefined) && options.dialogue
 						? await options.dialogue(body, payload.input, request.signal)
 						: respond(body, options);
-				const delta = reply.tool
-					? {
-							tool_calls: [
-								{
-									index: 0,
-									id: `fixture-${requests.length}`,
+				// Selected journeys may supply a real, gated SSE response.
+				if (reply instanceof Response) return reply;
+				const tools = reply.tools ?? (reply.tool ? [reply.tool] : []);
+				const delta = {
+					...(reply.text === undefined ? {} : { content: reply.text }),
+					...(tools.length
+						? {
+								tool_calls: tools.map((tool, index) => ({
+									index,
+									id: `fixture-${requests.length}-${index}`,
 									type: "function",
-									function: { name: reply.tool.name, arguments: JSON.stringify(reply.tool.args) },
-								},
-							],
-						}
-					: { content: reply.text ?? "" };
+									function: { name: tool.name, arguments: JSON.stringify(tool.args) },
+								})),
+							}
+						: {}),
+				};
 				const chunks = [
 					{ choices: [{ index: 0, delta: { role: "assistant", ...delta }, finish_reason: null }] },
 					{
-						choices: [{ index: 0, delta: {}, finish_reason: reply.tool ? "tool_calls" : "stop" }],
+						choices: [{ index: 0, delta: {}, finish_reason: tools.length ? "tool_calls" : "stop" }],
 						usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
 					},
 				];
@@ -582,6 +591,7 @@ export function createProviderFixture(
 				// provider malfunction and must not obscure subsequent failure evidence.
 				if (request.signal.aborted) return new Response(null, { status: 499 });
 				failures.push(String(error));
+				failed.reject(error);
 				return Response.json({ error: { message: String(error), type: "fixture_error" } }, { status: 400 });
 			}
 		},
@@ -589,6 +599,7 @@ export function createProviderFixture(
 	return {
 		requests,
 		failures,
+		failure: failed.promise,
 		baseUrl: `http://127.0.0.1:${server.port}/v1`,
 		[Symbol.asyncDispose]: async () => {
 			server.stop(true);

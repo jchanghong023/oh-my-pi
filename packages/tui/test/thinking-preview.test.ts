@@ -5,8 +5,7 @@ import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
-import { Markdown } from "@oh-my-pi/pi-tui/components/markdown";
-import { getMarkdownTheme, initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
 beforeAll(async () => {
 	await initTheme(false);
@@ -44,7 +43,7 @@ function message(content: AssistantMessage["content"]): AssistantMessage {
 }
 
 function assistant(compact: boolean, hide = false): AssistantMessageComponent {
-	setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: false });
+	setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
 	const component = new AssistantMessageComponent(undefined, hide, undefined, [], undefined, true, undefined, false);
 	components.push(component);
 	return component;
@@ -69,52 +68,7 @@ describe("compact transient thinking preview", () => {
 			expectNoInlineThinking(component);
 			component.markTranscriptBlockFinalized();
 			expectNoInlineThinking(component);
-			expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 		}
-	});
-
-	it("lays out formatted Markdown at the current width before selecting the latest physical row", () => {
-		const source = "alpha **beta** gamma delta epsilon zeta eta theta iota kappa";
-		const component = assistant(true);
-		component.updateContent(thinking(source), { transient: true });
-		const markdown = new Markdown(source, 1, 0, getMarkdownTheme(), {
-			color: value => theme.fg("thinkingText", value),
-			italic: true,
-		});
-		markdown.transientRenderCache = true;
-		for (const width of [18, 32, 12]) {
-			const rows = component.renderCompactThinkingPreview(width);
-			expect(plain(rows)).toEqual(plain(markdown.render(width).slice(-1)));
-		}
-	});
-
-	it("keeps non-BMP characters intact while coloring the live thinking row", () => {
-		const component = assistant(true);
-		component.updateContent(thinking("abcdefghij😀"), { transient: true });
-		const [row] = component.renderCompactThinkingPreview(40);
-		expect(row).toContain("😀");
-		expect(Bun.stripANSI(row!)).toContain("abcdefghij😀");
-	});
-
-	it("keeps short thinking and multiline thinking within a single row", () => {
-		const component = assistant(true);
-		component.updateContent(thinking("reasoning"), { transient: true });
-		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["reasoning"]);
-		component.updateContent(thinking("first\n\nlatest"), { transient: true });
-		const rows = plain(component.renderCompactThinkingPreview(40));
-		expect(rows).toHaveLength(1);
-		expect(rows[0]).toContain("latest");
-	});
-
-	it("skips trailing styled blank rows without losing the latest visible thinking during streaming", () => {
-		const component = assistant(true);
-		const source = "older\n\n**latest 最新**\n\n<!-- pending -->";
-		component.updateContent(thinking(source), { transient: true });
-		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["latest 最新"]);
-		component.updateContent(thinking(`${source}\n\nnewest`), { transient: true });
-		expect(plain(component.renderCompactThinkingPreview(40)).map(row => row.trim())).toEqual(["newest"]);
-		component.updateContent(thinking("<!-- no visible text -->"), { transient: true });
-		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 	});
 
 	it("does not treat thinking between answer blocks as a visible transcript boundary", () => {
@@ -137,54 +91,6 @@ describe("compact transient thinking preview", () => {
 		);
 		expect(component.render(40)).toEqual(textOnly.render(40));
 		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
-		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
-	});
-
-	it("clears on answer text, tool activity, empty content, and the non-transient final update", () => {
-		const component = assistant(true);
-		const transitions: AssistantMessage["content"][] = [
-			[
-				{ type: "thinking", thinking: "reasoning" },
-				{ type: "text", text: "answer" },
-			],
-			[
-				{ type: "thinking", thinking: "reasoning" },
-				{ type: "toolCall", id: "call", name: "read", arguments: {} },
-			],
-			[
-				{ type: "toolCall", id: "call", name: "read", arguments: {} },
-				{ type: "thinking", thinking: "reasoning" },
-			],
-			[{ type: "thinking", thinking: "   " }],
-			[],
-		];
-		for (const content of transitions) {
-			component.updateContent(thinking("reasoning"), { transient: true });
-			expect(component.renderCompactThinkingPreview(40)).toHaveLength(1);
-			component.updateContent(message(content), { transient: true });
-			expect(component.renderCompactThinkingPreview(40)).toEqual([]);
-		}
-		component.updateContent(thinking("reasoning"), { transient: true });
-		component.updateContent(thinking("reasoning"));
-		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
-	});
-
-	it("clears on cancellation, failure, hiding, and finalization without leaving an old tail for a later stream", () => {
-		const component = assistant(true);
-		for (const stopReason of ["aborted", "error"] as const) {
-			component.updateContent({ ...thinking("reasoning"), stopReason }, { transient: true });
-			expect(component.renderCompactThinkingPreview(40)).toEqual([]);
-		}
-		component.updateContent(thinking("old reasoning"), { transient: true });
-		expect(component.renderCompactThinkingPreview(40)).toHaveLength(1);
-		component.setHideThinkingBlock(true);
-		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
-		component.updateContent(thinking("new reasoning"), { transient: true });
-		component.setHideThinkingBlock(false);
-		expect(plain(component.renderCompactThinkingPreview(40)).join("\n")).toContain("new reasoning");
-		expect(plain(component.renderCompactThinkingPreview(40)).join("\n")).not.toContain("old reasoning");
-		component.markTranscriptBlockFinalized();
-		expect(component.renderCompactThinkingPreview(40)).toEqual([]);
 	});
 
 	it("projects cached live and historical thinking away in clean while retaining ordinary answer text", () => {
@@ -207,12 +113,11 @@ describe("compact transient thinking preview", () => {
 			expect(ansi).not.toContain("private reasoning");
 			expect(native).not.toContain("private reasoning");
 			expect(native).not.toContain("omp.thinking");
-			expect(component.renderCompactThinkingPreview(80)).toEqual([]);
 		}
-		setChatTranscriptDisplayPreferences({ hideToolActivity: false, compactToolActivity: true });
+		setChatTranscriptDisplayPreferences({ hideToolActivity: true, compactToolActivity: true });
 		expect(plain(component.render(80)).join("\n")).not.toContain("private reasoning");
 		expect(JSON.stringify(component.describe())).not.toContain("private reasoning");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		expect(plain(component.render(80)).join("\n")).toContain("private reasoning");
 		expect(JSON.stringify(component.describe())).toContain("private reasoning");
 	});
@@ -237,10 +142,9 @@ describe("compact transient thinking preview", () => {
 			expect(plain(detailed.render(40)).join("\n")).toContain(word);
 			expect(JSON.stringify(detailed.describe())).toContain(word);
 		}
-		expect(detailed.renderCompactThinkingPreview(40)).toEqual([]);
-		const clean = assistant(true, true);
+		const clean = assistant(false, true);
 		setChatTranscriptDisplayPreferences({ hideToolActivity: true });
 		clean.updateContent(thinking(source), { transient: true });
-		expect(clean.renderCompactThinkingPreview(40)).toEqual([]);
+		expectNoInlineThinking(clean);
 	});
 });

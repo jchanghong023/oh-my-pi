@@ -108,6 +108,45 @@ describe("mid-turn transcript rebuild keeps in-flight tool calls", () => {
 		expect(ctx.pendingTools.size).toBe(0);
 	});
 
+	it("routes a late failed Bash result exactly once after a compact rebuild", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		const { ctx, helpers, controller, chatContainer } = createFixture({ isStreaming: true });
+		ctx.hideToolActivity = true;
+		chatContainer.setToolActivityVisible(false);
+		try {
+			helpers.renderSessionContext({ messages: [danglingAssistant] } as SessionContext);
+			const [component] = pendingComponents(chatContainer);
+			expect(component).toBeDefined();
+			created.push(component);
+			expect(ctx.pendingTools.get("call-1")).toBe(component);
+			const completion = {
+				type: "tool_execution_end" as const,
+				toolCallId: "call-1",
+				toolName: "bash",
+				result: {
+					content: [{ type: "text" as const, text: "LATE_FAILURE_MARKER\nCommand exited with code 1" }],
+					details: { exitCode: 1 },
+				},
+				isError: true,
+			};
+			await controller.handleEvent(completion);
+			await controller.handleEvent(completion);
+			expect(ctx.pendingTools.size).toBe(0);
+			expect(pendingComponents(chatContainer)).toEqual([component]);
+			expect(component.isTranscriptBlockFinalized()).toBe(true);
+			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
+			expect(rendered).not.toContain("LATE_FAILURE_MARKER");
+			expect(rendered).not.toContain("sleep 60");
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+			chatContainer.setToolActivityVisible(true);
+			const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
+			expect(detailed.match(/LATE_FAILURE_MARKER/g)).toHaveLength(1);
+		} finally {
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	for (const arrival of ["buffered", "live", "persisted", "during-replay"] as const) {
 		it(`keeps replayed read images visible after ${arrival} completion`, async () => {
 			const protocol = Object.getOwnPropertyDescriptor(TERMINAL, "imageProtocol")!;

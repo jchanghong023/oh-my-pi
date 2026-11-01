@@ -726,8 +726,8 @@ export const cfgDisplayAdvisorCollapsedLines = register({
 });
 effect(
 	combine({
-		hideToolActivity: cfgDisplayMode.map(mode => mode === "clean"),
-		compactToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
+		hideToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
+		compactToolActivity: cfgDisplayMode.map(mode => mode === "compact"),
 		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,
 		cacheMissMarker: cfgDisplayCacheMissMarker,

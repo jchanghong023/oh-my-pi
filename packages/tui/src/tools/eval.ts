@@ -139,6 +139,19 @@ export interface EvalToolDetails {
 	};
 }
 
+/** Keep a real call-level diagnostic when no cell produced output. */
+function cellsWithFailureOutput(details: EvalToolDetails | undefined, output: string): EvalCellResult[] | undefined {
+	const cells = details?.cells;
+	if (!cells?.length || !output || cells.some(cell => cell.output)) return cells;
+	const index = cells.findLastIndex(
+		cell =>
+			cell.status === "error" ||
+			(cell.exitCode !== undefined && cell.exitCode !== 0) ||
+			(cell.status === "running" && details?.async?.state === "cancelled"),
+	);
+	return index < 0 ? cells : cells.map((cell, i) => (i === index ? { ...cell, output } : cell));
+}
+
 /** Default collapsed eval output preview height; kept as a named alias (consumed by chat/tool-execution). */
 export const EVAL_DEFAULT_PREVIEW_LINES: number = DEFAULT_TERMINAL_PREVIEW_LINES;
 
@@ -1042,7 +1055,7 @@ export const evalToolRenderer = {
 				? uiTheme.fg("dim", wrapBrackets(`Backgrounded: ${details.async.jobId}`, uiTheme))
 				: undefined;
 
-		const cellResults = details?.cells;
+		const cellResults = cellsWithFailureOutput(details, output);
 		if (cellResults && cellResults.length > 0) {
 			const displayCells = cellResults.map(cell => {
 				const language = cell.language ?? details?.language ?? "python";
@@ -1300,15 +1313,18 @@ export const evalToolRenderer = {
 	): NativeToolView {
 		const details = result.details;
 		const isPartial = options.isPartial === true;
-		const cancelled = options.cancelled === true;
+		const cancelled = options.cancelled === true || details?.async?.state === "cancelled";
 		const expanded = options.renderContext?.expanded ?? options.expanded;
 		const previewLines = options.renderContext?.previewLines ?? EVAL_DEFAULT_PREVIEW_LINES;
 		// The call's notice and truncation join the last run's foot facts (a background job is a head badge).
 		const callFacts = { facts: compact([details?.notice]), meta: details?.meta };
-		const cellResults = details?.cells;
+		const rawOutput = options.renderContext?.output ?? resultText(result).trimEnd();
+		const cellResults = cellsWithFailureOutput(details, stripOutputNotice(rawOutput, details?.meta).trimEnd());
 		if (cellResults && cellResults.length > 0) {
 			const languages = cellResults.map(cell => cell.language ?? details?.language ?? "python");
-			const states = cellResults.map(cell => evalCellState(cell.status, cancelled));
+			const states = cellResults.map(cell =>
+				cell.exitCode !== undefined && cell.exitCode !== 0 ? "failed" : evalCellState(cell.status, cancelled),
+			);
 			// A cell that never started has no foot to carry the call's facts: the last one that ran does.
 			const factsIndex = states.findLastIndex(state => state !== undefined);
 			let earlierMs = 0;
@@ -1350,7 +1366,6 @@ export const evalToolRenderer = {
 		// No per-cell results (older details): the call's cells, the whole output and foot under the last.
 		const argCells = getRenderCells(args);
 		const languages = details?.languages ?? (details?.language ? [details.language] : []);
-		const rawOutput = options.renderContext?.output ?? resultText(result).trimEnd();
 		const state: RunState = cancelled ? "cancelled" : isPartial ? "running" : result.isError ? "failed" : "done";
 		const last: Omit<EvalCellRun, "language" | "code" | "title"> = {
 			outputs: evalOutputNodes(

@@ -312,6 +312,7 @@ describe("terminal frame plans", () => {
 		provider.plan = {
 			history: { id: 1, rows: ["history one", "history two"], kind: "replay" },
 			viewport: ["", "", "live", "editor"],
+			replayViewportPaddingRows: 2,
 		};
 		tui.requestRender(true);
 
@@ -322,6 +323,21 @@ describe("terminal frame plans", () => {
 			"editor",
 		]);
 		expect(tui.getMutableViewport()).toEqual({ top: 0, length: 2 });
+		tui.stop();
+	});
+
+	it("preserves a semantic leading blank when replaying history", () => {
+		const terminal = new CountingTerminal(20, 3);
+		const provider = new Provider({ viewport: ["", "live", "editor"] });
+		const tui = new TUI(terminal, undefined, { renderScheduler: scheduler });
+		tui.setFrameProvider(provider);
+		provider.plan = {
+			history: { id: 1, rows: ["history one"], kind: "replay" },
+			viewport: ["", "live", "editor"],
+		};
+		tui.requestRender(true);
+		expect(terminal.getViewport().map(row => row.trimEnd())).toEqual(["", "live", "editor"]);
+		expect(plainBuffer(terminal)).toEqual(["history one", "", "live", "editor"]);
 		tui.stop();
 	});
 

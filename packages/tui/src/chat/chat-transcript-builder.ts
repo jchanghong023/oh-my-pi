@@ -123,6 +123,7 @@ export class ChatTranscriptBuilder {
 	/** Discard all components and rebuild the whole transcript from `entries`. */
 	rebuild(entries: TranscriptEntry[]): void {
 		this.reset();
+		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
 		for (const entry of entries) this.#appendEntry(entry);
 		// Flush the trailing turn's usage row once its pending tool results have
 		// arrived, keeping it below the tool blocks reserved during call traversal.
@@ -131,6 +132,7 @@ export class ChatTranscriptBuilder {
 
 	/** Append newly persisted entries without rebuilding already rendered rows. */
 	append(entries: TranscriptEntry[]): void {
+		this.container.setToolActivityVisible(!displayPreferences.hideToolActivity);
 		for (const entry of entries) this.#appendEntry(entry);
 		if (this.#pendingTools.size === 0) this.#flushPendingUsage();
 	}
@@ -329,7 +331,7 @@ export class ChatTranscriptBuilder {
 					// update` replay dumps — can be hundreds of KiB of Markdown each.
 					// Rendering their full body on cold open blocked the TUI (issue #6308);
 					// collapse them behind a compact summary that builds Markdown only on
-					// ctrl+o expand. Real user prompts use the selected display mode.
+					// ctrl+o expand. Real user prompts stay fully rendered.
 					if (isSynthetic) {
 						const collapsed = new CollapsedSyntheticMessageComponent(userText);
 						this.#trackExpandable(collapsed);

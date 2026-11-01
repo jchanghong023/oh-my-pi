@@ -2651,7 +2651,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const asyncJobManager = !options.parentTaskPrefix
 		? new AsyncJobManager({
 				// Re-read per capacity check so `async.maxJobs` resizes the cap live.
-				maxRunningJobs: () => Math.min(100, cfgAsyncMaxJobs.get(settings)),
+				maxRunningJobs: () => Math.min(32, cfgAsyncMaxJobs.get(settings)),
 			})
 		: undefined;
 	if (asyncJobManager) {

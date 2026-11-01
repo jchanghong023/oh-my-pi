@@ -82,6 +82,8 @@ export interface WriteToolDetails {
 	resolvedPath?: string;
 	/** Filesystem checkpoint only; absent for devices, archive members and database rows. */
 	op?: "create" | "update";
+	/** Whether the actual filesystem contents changed, when both states could be verified. */
+	fileChanged?: boolean;
 	/** Filesystem destination; canonical when the checkpoint owner could resolve it. */
 	path?: string;
 	/** Exact UTF-8 before/after bytes as text, jointly bounded to 32,768 characters.

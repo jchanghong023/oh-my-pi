@@ -26,8 +26,11 @@ function toolNode(component: ToolExecutionComponent): NativeNode {
 	return node;
 }
 
-function headTarget(component: ToolExecutionComponent): unknown {
-	return (toolNode(component).p as Record<string, unknown>).target;
+function headTargetText(component: ToolExecutionComponent): string | undefined {
+	const target = (toolNode(component).p as Record<string, unknown>).target;
+	if (typeof target === "string") return target;
+	if (!Array.isArray(target)) return undefined;
+	return target.map(part => (typeof part?.t === "string" ? part.t : "")).join("");
 }
 
 describe("EventController tool intent", () => {
@@ -38,7 +41,7 @@ describe("EventController tool intent", () => {
 		resetSettingsForTest();
 		await Settings.init({ inMemory: true });
 		await initTheme();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 	});
 
 	afterEach(() => {
@@ -70,7 +73,7 @@ describe("EventController tool intent", () => {
 		await controller.handleEvent(start("Listing the working tree"));
 		const card = pendingTools.get("tc-bash");
 		if (!card) throw new Error("no card for the call");
-		expect(headTarget(card)).toEqual([{ t: "Listing the working tree", s: "text" }]);
+		expect(headTargetText(card)).toBe("Listing the working tree");
 	});
 
 	it("keeps the intent when tool_execution_start refreshes a streamed card", async () => {
@@ -86,6 +89,6 @@ describe("EventController tool intent", () => {
 		);
 		pendingTools.set("tc-bash", streamed);
 		await controller.handleEvent(start("Listing the working tree"));
-		expect(headTarget(streamed)).toEqual([{ t: "Listing the working tree", s: "text" }]);
+		expect(headTargetText(streamed)).toBe("Listing the working tree");
 	});
 });

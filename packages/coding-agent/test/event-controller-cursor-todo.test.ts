@@ -407,35 +407,9 @@ describe("EventController + Cursor todo bridge", () => {
 	});
 });
 
-describe("compact Todo failure feedback", () => {
-	it("keeps the failed execution and original diagnostics inline", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const f = createPresentationFixture();
-		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
-		await f.controller.handleEvent(todoFailure("PROVIDER_FAILURE_REASON\nFULL_DETAIL_LINE"));
-		expect(f.ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent)).toHaveLength(1);
-		expect(renderTranscript(f.ctx)).toContain("PROVIDER_FAILURE_REASON");
-		expect(renderTranscript(f.ctx)).toContain("FULL_DETAIL_LINE");
-		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
-		expect(renderTranscript(f.ctx)).toContain("FULL_DETAIL_LINE");
-	});
-
-	it("does not hide earlier failures when newer tool calls complete", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
-		const f = createPresentationFixture();
-		const ids = ["todo-1", "todo-2", "todo-3"];
-		for (const [index, id] of ids.entries()) {
-			await f.controller.handleEvent(streamedTodoBlock(id, ids.slice(0, index)));
-			await f.controller.handleEvent(todoFailure(`FAILURE_${id}`, id));
-		}
-		const rendered = renderTranscript(f.ctx);
-		for (const id of ids) expect(rendered).toContain(`FAILURE_${id}`);
-		expect(f.ctx.setTodos).not.toHaveBeenCalled();
-	});
-
+describe("Todo failure replay", () => {
 	it("replaces a replayed failure with the new live result in detailed views", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const f = createPresentationFixture();
 		const component = new ToolExecutionComponent("todo", { todos: [] }, {}, undefined, f.ctx.ui);
 		component.updateResult(
@@ -444,9 +418,7 @@ describe("compact Todo failure feedback", () => {
 			"todo-1",
 			true,
 		);
-		expect(Bun.stripANSI(component.render(180).join("\n"))).not.toContain("OLD_FAILURE");
 		component.updateResult({ content: [{ type: "text", text: "NEW_LIVE_FAILURE" }], isError: true });
-		expect(Bun.stripANSI(component.render(180).join("\n"))).not.toContain("NEW_LIVE_FAILURE");
 		component.setExpanded(true);
 		const expanded = Bun.stripANSI(component.render(180).join("\n"));
 		expect(expanded).toContain("NEW_LIVE_FAILURE");
@@ -459,8 +431,10 @@ describe("compact Todo failure feedback", () => {
 	});
 
 	it.each(["detailed", "clean"] as const)("drops stale warnings on %s replay", async presentation => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const f = createPresentationFixture();
+		f.ctx.hideToolActivity = true;
+		f.ctx.chatContainer.setToolActivityVisible(false);
 		f.ctx.addMessageToChat = f.helpers.addMessageToChat.bind(f.helpers);
 		const failure = todoFailure("HISTORY_FAILURE_REASON\nPRESERVED_DETAIL_LINE");
 		await f.controller.handleEvent(streamedTodoBlock("todo-1"));
@@ -517,11 +491,20 @@ describe("compact Todo failure feedback", () => {
 		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
 		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		setChatTranscriptDisplayPreferences({
-			compactToolActivity: presentation === "clean",
+			compactToolActivity: false,
 			hideToolActivity: presentation === "clean",
 		});
 		f.ctx.hideToolActivity = presentation === "clean";
 		f.ctx.chatContainer.setToolActivityVisible(!f.ctx.hideToolActivity);
+		builder.container.setToolActivityVisible(!f.ctx.hideToolActivity);
+		const builderRebuilt = Bun.stripANSI(builder.container.render(180).join("\n"));
+		expect(builderRebuilt).toContain("FINAL_ANSWER_AFTER_FAILURE");
+		if (presentation === "clean") {
+			expect(builderRebuilt).not.toContain("HISTORY_FAILURE_REASON");
+		} else {
+			expect(builderRebuilt).toContain("HISTORY_FAILURE_REASON");
+			expect(builderRebuilt).toContain("PRESERVED_DETAIL_LINE");
+		}
 		await f.helpers.renderInitialMessages();
 		const rebuilt = renderTranscript(f.ctx);
 		expect(rebuilt).toContain("FINAL_ANSWER_AFTER_FAILURE");
@@ -531,6 +514,7 @@ describe("compact Todo failure feedback", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		f.ctx.hideToolActivity = false;
 		f.ctx.chatContainer.setToolActivityVisible(true);
+		builder.container.setToolActivityVisible(true);
 		const builderDetailed = Bun.stripANSI(builder.container.render(180).join("\n"));
 		expect(builderDetailed).toContain("HISTORY_FAILURE_REASON");
 		expect(builderDetailed).toContain("PRESERVED_DETAIL_LINE");
@@ -541,7 +525,10 @@ describe("compact Todo failure feedback", () => {
 		expect(detailed).not.toContain("Warning:");
 		await f.helpers.renderInitialMessages();
 		expect(renderTranscript(f.ctx)).not.toContain("Warning:");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		f.ctx.chatContainer.setToolActivityVisible(false);
+		builder.container.setToolActivityVisible(false);
+		expect(Bun.stripANSI(builder.container.render(180).join("\n"))).not.toContain("HISTORY_FAILURE_REASON");
 		expect(renderTranscript(f.ctx)).not.toContain("HISTORY_FAILURE_REASON");
 		expect(JSON.stringify(context.messages[1])).toBe(storedResult);
 		expect(f.ctx.setTodos).not.toHaveBeenCalled();

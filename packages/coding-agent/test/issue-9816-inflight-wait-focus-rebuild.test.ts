@@ -21,6 +21,7 @@ import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
@@ -64,6 +65,7 @@ const completedWait = {
 				status: "completed",
 				label: "Sleeper1",
 				durationMs: 11_300,
+				resultText: "completion payload marker",
 			},
 		],
 	},
@@ -362,6 +364,92 @@ describe("#9816 focus blackout across an in-flight wait", () => {
 		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
 		expect(rendered).toContain("Sleeper1 done");
 		expect(ctx.pendingTools.has("wait-1")).toBe(false);
+	});
+});
+
+describe("compact focus blackout across an in-flight wait", () => {
+	let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
+	beforeEach(() => {
+		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+	});
+	afterEach(() => setChatTranscriptDisplayPreferences(previousDisplayPreferences));
+
+	function expectCompletedCard(card: ToolExecutionComponent): void {
+		expect(card.isTranscriptBlockFinalized()).toBe(true);
+		expect(
+			card.describe({
+				cols: 120,
+				dark: true,
+				reduceMotion: false,
+				supports: () => true,
+				feature: () => true,
+			}).p,
+		).toMatchObject({ name: "wait", status: "done" });
+	}
+
+	it("rebuilds the completed wait once when persistence finishes during unfocus", async () => {
+		const { ctx, focus, main } = createFixture();
+		ctx.hideToolActivity = true;
+		ctx.chatContainer.setToolActivityVisible(false);
+		await ctx.renderInitialMessages();
+		expect(ctx.pendingTools.has("wait-1")).toBe(true);
+		await focus.focusAgent("Worker");
+		expect(main.hasListener()).toBe(false);
+		const finishPersistence = main.stagePersistedCompletion();
+		const returning = focus.unfocus();
+		queueMicrotask(finishPersistence);
+		await returning;
+		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		expect(rendered).not.toContain("Sleeper1");
+		expect(rendered).not.toContain("completion payload marker");
+		expect(ctx.pendingTools.has("wait-1")).toBe(false);
+		const cards = ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent);
+		expect(cards).toHaveLength(1);
+		expectCompletedCard(cards[0]!);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		ctx.chatContainer.setToolActivityVisible(true);
+		cards[0]!.setExpanded(true);
+		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		expect(expanded.match(/Sleeper1/g) ?? []).toHaveLength(1);
+		expect(expanded.match(/completion payload marker/g) ?? []).toHaveLength(1);
+	});
+
+	it("routes a later completion once into the rebuilt pending wait", async () => {
+		const { ctx, focus, main } = createFixture();
+		ctx.hideToolActivity = true;
+		ctx.chatContainer.setToolActivityVisible(false);
+		await ctx.renderInitialMessages();
+		await focus.focusAgent("Worker");
+		await focus.unfocus();
+		expect(main.hasListener()).toBe(true);
+		const pending = ctx.pendingTools.get("wait-1");
+		expect(pending).toBeInstanceOf(ToolExecutionComponent);
+
+		const completion = {
+			type: "tool_execution_end" as const,
+			toolCallId: "wait-1",
+			toolName: "wait",
+			result: { content: completedWait.content, details: completedWait.details },
+			isError: false,
+		};
+		await main.emit(completion);
+		await main.emit(completion);
+
+		expect(ctx.pendingTools.has("wait-1")).toBe(false);
+		const cards = ctx.chatContainer.children.filter(child => child instanceof ToolExecutionComponent);
+		expect(cards).toHaveLength(1);
+		expect(cards[0] === pending).toBe(true);
+		expectCompletedCard(cards[0]!);
+		const rendered = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		expect(rendered).not.toContain("Sleeper1");
+		expect(rendered).not.toContain("completion payload marker");
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		ctx.chatContainer.setToolActivityVisible(true);
+		cards[0]!.setExpanded(true);
+		const expanded = Bun.stripANSI(ctx.chatContainer.render(120).join("\n"));
+		expect(expanded.match(/Sleeper1/g) ?? []).toHaveLength(1);
+		expect(expanded.match(/completion payload marker/g) ?? []).toHaveLength(1);
 	});
 });
 

@@ -5,24 +5,15 @@
 ### Added
 
 - Selection-only model pickers can use a complete caller-provided catalog and shared search without changing the session model or refreshing providers.
-- Compact user messages longer than six screen rows show the first five rows and a folded-line hint; existing full-view and copy actions retain complete originals without changing input, model context, or session data.
 - `Input.verbatimText` preserves Unicode spelling and tabs on paste, dictation and native edits, with safe terminal rendering and mapped caret positions; ordinary inputs retain their existing normalization.
 
 ### Changed
 
-- Compact Bash previews hide raw-output artifact labels; expanded and detailed views retain them.
-- Compact tool-count summaries stay directly above the latest tool previews rather than above earlier failure output.
-- Compact mode hides ordinary tool invocation errors until expanded while retaining execution failures and actionable feedback.
+- Compact display follows clean except for file-targeted write/edit cards and a fixed two-line activity area. File cards retain upstream detailed-mode previews, errors, unchanged results, controls and history without requiring a proven mutation; activity prioritizes live thinking or two recent tool intent/command rows with independent live or frozen elapsed time, retaining static last activity per viewed session without persisting it.
 - Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.
-- Compact Bash failures use a neutral card without a redundant failure footer, keep diagnostics ahead of trailing Bun exit wrappers, and leave full output and technical details available when expanded.
 - In offline Unicode mode, use distinct basic symbols for clear, extension, guide, repair, quit, token-count, and Hook icons missing from older terminal fonts; preserve other icons, presets, and explicit theme overrides.
 - Linux offline mode reduces background repaints and status animations, preserves input-priority rendering, and refreshes Git counts at most once per minute unless explicitly invalidated.
-- Compact tools retain the last two calls per continuous run at their original positions, with a dim call-total summary only above two calls; internal invocation errors stay hidden until explicitly expanded, while execution failures, approvals, and input requests keep original feedback.
 - Soften the default `dark-terminal` theme's semantic red, green, and accent using the existing `dark` palette without changing its other colors.
-- Compact `bash` summaries without an explicit intent skip leading assignments and context-only builtins (`cd`, `export`, `set`, …) and keep the remaining command text on one line, collapsed and truncated to the row width; leading assignment values stay hidden.
-- Compact layout keeps tool feedback and subsequent replies in transcript order on ANSI and native terminals. The actual busy loader shows tool intent without duplicating it.
-- Each continuous write/edit run retains the last three actual-write cards with upstream expansion and scrolling behavior; tool history is not cleared on the next input.
-- Compact thinking shows only the latest nonempty physical line above the input, skipping trailing whitespace and ANSI-only rows, with the host reserving its row even when thinking is empty or hidden to prevent layout jumps; detailed mode retains original thinking, and Bash output, timing, and background feedback use upstream rendering.
 - Restore the shared Spinner frame interval to 80 ms while preserving offline display throttling.
 - Display the main TUI settings, common selectors, approval dialogs and input hints in Simplified Chinese while retaining technical names, existing actions and stable native settings section IDs.
 - Welcome tips, font reminders, and tip/new-feature labels now display in Chinese.
@@ -34,43 +25,30 @@
 
 ### Fixed
 
-- Keep message-to-tool spacing stable when transcript content is compressed or the terminal is resized, while compact summaries and tool previews remain adjacent.
-- Keep live compact content within the visible height, retire the welcome before it crowds replies, and preserve failure diagnostics without replacing content with a PageUp hint.
-- Restore Bash exit codes in expanded and detailed ANSI output while keeping collapsed compact errors concise.
+- Defer hidden tool-image conversion until detailed display and keep hidden images from delaying transcript archival.
+- Keep native subagent elapsed times independent across separate runs with the same agent ID.
+- Keep paragraph spacing and committed text intact during resize replay, without joining unrelated history to the visible reply.
+- Keep consecutive status-notice spacing stable when a narrow viewport switches to an emergency layout.
+- Write cards keep their file path visible when transcript height pressure clips the content preview.
+- Preserve message spacing, visible live content and shared layout during resizing and transcript updates.
 - Show the tail of failed background Bash output and available artifact references in wait previews instead of misleading truncated beginnings.
 - Keep the beginning of long streaming tables reachable with PageUp/PageDown or captured mouse-wheel scrolling; Escape returns to the live tail without cancelling generation, and completed content enters history once.
-- Compact transcript replay hides historical tool errors while keeping live failure feedback and detailed history available.
-- Keep both compact Bash error output rows visible on native terminals and for device-dispatched commands.
-- Preserve upstream input anchoring and Complete Scrollback behavior in compact mode; clean mode also hides live thinking titles and expandable native thoughts.
-- Keep failed or cancelled task results, consumed peer messages, and supervised-process failure receipts visible outside compact preview limits.
-- Retain original cards for file-URL writes, classify nested device operations by their real targets, and safely display incomplete or malformed Eval titles.
-- Show corrected read targets and conflict warnings consistently across ANSI and native views, including calls with explicit intent.
+- Preserve upstream input anchoring and Complete Scrollback behavior; clean mode also hides live thinking titles and expandable native thoughts.
+- Retain original diff cards for actual file-URL writes, classify nested device operations by their real targets, and safely display incomplete or malformed activity titles.
+- Show corrected read targets and conflict warnings in detailed views, including calls with explicit intent.
 - Keep selected `/jobs` rows and their details reachable in tall task trees, and keep autocomplete selection visible in short terminals without accepting hidden candidates.
 - Offer one canonical logout entry per stored credential while retaining distinct providers and login methods.
-- Fold successful conflict-resolution writes with other file changes and retain their diffs and error feedback.
+- Retain actual diffs for successful conflict-resolution writes.
 - Keep tree guides aligned on wrapped `/session` detail lines.
-- Keep UI status notices in place without splitting surrounding compact tool runs or consuming preview slots.
-- Keep Agent `Message` calls in the surrounding compact tool run instead of treating them as file-write boundaries.
-- Keep `Process` input, mode changes, and cancellation in the surrounding compact tool run without changing process behavior or critical feedback.
-- Keep `Config`, non-file device calls, and device help in compact ordinary tool runs while preserving file-write boundaries and critical feedback.
-- Keep compact tool-run summaries and ordinary preview rows adjacent, without blank lines between them; surrounding messages, write cards, and critical feedback retain their spacing.
-- Preserve cumulative elapsed time on compact foreground-to-background tool rows, including rebuilt background rows and measured Bash completion times.
-- Keep one compact tool-run summary when its calls retire into history in separate batches.
-- Keep working, retry, and compaction status visible when compact previews run out of screen space.
 
 - Detailed agent history keeps original Todo styling even when the main transcript uses compact mode.
-- Keep full Bash command previews in detailed mode under viewport pressure while retaining executable-only summaries for compact calls and device dispatches.
-- Keep hashline-wrapped internal device calls compact while retaining full originals in explicit detail views.
+- Keep full Bash command previews in detailed mode under viewport pressure.
 - Keep the input and cursor visible when below-editor widgets and status lines exceed short terminal heights.
 - Preserve IME-safe cursor tails in boxed prompts while retaining the empty row below input.
 - Count each Git path once across the selected change categories, including staged deletions that remain as untracked files.
 - Preserve compact prose across execution completion and native archival, without partial Markdown documents, dropped or duplicate body text, or clearing external shell history.
 - Preserve independent approvals and execution-affecting errors while retaining full warning and failure records in detailed history.
 - Preserve raw batch-command submissions while retaining ordinary editor trimming behavior.
-- Compact Eval rows, including `xd://eval`, show the supplied intent or title instead of a bare tool name and redundant running hint.
-- Compact search rows show the search pattern or query before the search directory.
-- Compact Wait rows, including device dispatches, show the background job's type, ID, and command instead of a generic waiting message.
-- Compact display keeps LSP and other `xd://` device calls on one line instead of showing file-write previews.
 - Explicit agent transcript viewers retain tool details independently of the main chat's hidden or compact display mode.
 - Retransmit retained Kitty images in the same destructive history-replay frame without repeating image data on ordinary paints.
 - Kept detailed tool spinner repaints from rebuilding unchanged output while restoring updated content when leaving compact mode.

@@ -10,9 +10,6 @@ import { type Component } from "../tui";
 import { formatBytes, formatCount, formatDuration } from "@oh-my-pi/pi-utils";
 import { span } from "../native/describe";
 import type { StructuredSubagentOutput } from "../tools/task";
-import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import { col } from "../native/describe";
-import type { NativeNode } from "../native/node";
 import type { DaemonSnapshot } from "../tools/daemon";
 import { type CustomMessage, type FileMentionMessage, resolveAbortLabel, shouldRenderAbortReason } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
@@ -27,36 +24,6 @@ import { theme } from "../theme";
 
 type CustomOrHookMessage = Extract<AgentMessage, { role: "custom" | "hookMessage" }>;
 type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
-
-/** Keep the detailed and compact receipt projections under the same visibility control. */
-class AsyncResultBlock extends ToolActivityContainer {
-	readonly #compactRows: readonly Component[];
-	#visible = true;
-
-	constructor(original: Component | Component[], compactRows: readonly Component[]) {
-		super(original);
-		this.#compactRows = compactRows;
-	}
-
-	isCompactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity;
-	}
-
-	override setToolActivityVisible(visible: boolean): void {
-		this.#visible = visible;
-		super.setToolActivityVisible(visible);
-	}
-
-	override render(width: number): readonly string[] {
-		if (!this.isCompactToolActivity()) return super.render(width);
-		return this.#visible ? this.#compactRows.flatMap(row => row.render(width)) : [];
-	}
-
-	override describe(): NativeNode {
-		if (!this.isCompactToolActivity()) return super.describe();
-		return col(this.#compactRows, this.#visible ? { role: "omp.activity" } : { role: "omp.activity", hidden: true });
-	}
-}
 
 /** Render diagnostics from upstream completion receipts without repeating their status. */
 export function buildAsyncResultBlock(
@@ -86,7 +53,7 @@ export function buildAsyncResultBlock(
 		rows.push(artifactErrorRow(details.meta.artifactError));
 	}
 	const block = rows.length > 0 ? new TranscriptStatusBlock(rows) : undefined;
-	return new AsyncResultBlock(block ?? [], block ? [block] : []);
+	return new ToolActivityContainer(block ?? []);
 }
 
 /** The warning row under a background job whose output artifact could not be saved. */
@@ -103,14 +70,10 @@ function facts(values: readonly (string | undefined)[]): TspSpan[] {
 	return values.flatMap(value => (value ? [span(" · ", "dim"), span(value, "dim")] : []));
 }
 
-/**
- * Render terminal supervised-process exits from the launch broker, retaining
- * failed exits in compact mode.
- */
+/** Render terminal supervised-process exits from the launch broker. */
 export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolActivityContainer {
 	const details = (message as CustomMessage<{ daemons?: DaemonSnapshot[] }>).details;
 	const rows: TranscriptStatusRow[] = [];
-	const compactRows: TranscriptStatusRow[] = [];
 	const daemons = details?.daemons ?? [];
 	if (daemons.length === 0 && typeof message.content === "string") {
 		const row: TranscriptStatusRow = {
@@ -118,7 +81,6 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			native: { tone: "info", message: [span(message.content)] },
 		};
 		rows.push(row);
-		compactRows.push(row);
 	}
 	for (const daemon of daemons) {
 		const failed = daemon.state === "failed" || (daemon.exitCode !== undefined && daemon.exitCode !== 0);
@@ -149,9 +111,8 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 			},
 		};
 		rows.push(row);
-		if (failed || daemon.exitCode !== 0) compactRows.push(row);
 	}
-	return new AsyncResultBlock(new TranscriptStatusBlock(rows), [new TranscriptStatusBlock(compactRows)]);
+	return new ToolActivityContainer(new TranscriptStatusBlock(rows));
 }
 
 /**

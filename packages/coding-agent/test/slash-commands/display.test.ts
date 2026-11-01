@@ -16,14 +16,14 @@ import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } f
 function displayPreferences(settings: Settings) {
 	return {
 		hideThinkingBlock: cfgHideThinkingBlock.get(settings),
-		hideToolActivity: cfgDisplayMode.get(settings) === "clean",
-		compactToolActivity: cfgDisplayMode.get(settings) !== "detailed",
+		hideToolActivity: cfgDisplayMode.get(settings) !== "detailed",
+		compactToolActivity: cfgDisplayMode.get(settings) === "compact",
 	};
 }
 
 const presets = {
-	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: true },
-	compact: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: true },
+	clean: { hideThinkingBlock: true, hideToolActivity: true, compactToolActivity: false },
+	compact: { hideThinkingBlock: false, hideToolActivity: true, compactToolActivity: true },
 	detailed: { hideThinkingBlock: false, hideToolActivity: false, compactToolActivity: false },
 };
 
@@ -147,7 +147,7 @@ describe("/display slash command", () => {
 			expect(displayPreferences(h.settings)).toEqual({
 				hideThinkingBlock: true,
 				hideToolActivity: true,
-				compactToolActivity: true,
+				compactToolActivity: false,
 			});
 			expect(h.settings.getGlobalSettings()).toMatchObject({
 				hideThinkingBlock: false,
@@ -175,7 +175,7 @@ describe("/display slash command", () => {
 		await executeBuiltinSlashCommand("/display compact", h.runtime);
 		expect(displayPreferences(settings)).toEqual({
 			hideThinkingBlock: true,
-			hideToolActivity: false,
+			hideToolActivity: true,
 			compactToolActivity: true,
 		});
 		expect(settings.getGlobalSettings()).toMatchObject({

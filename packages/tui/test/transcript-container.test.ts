@@ -1,9 +1,13 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, spyOn } from "bun:test";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
+import { stopSharedSpinnerTicker, ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { TspDocument } from "@oh-my-pi/pi-tui/native/apply";
+import { Reconciler } from "@oh-my-pi/pi-tui/native/reconcile";
 import { setSvgFigureRendering, svgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
 import { setTableCharts, tableChartMode } from "@oh-my-pi/pi-tui/chat/table-chart";
+import type { TspNode } from "@oh-my-pi/pi-wire";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
@@ -934,8 +938,8 @@ describe("TranscriptContainer", () => {
 	});
 
 	it("keeps compact prose complete when a blocking active prefix finally settles", () => {
-		const compactToolActivity = chatTranscriptDisplayPreferences.compactToolActivity;
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		try {
 			const transcript = new TranscriptContainer();
 			const active = new Block(["active prefix"], false);
@@ -963,7 +967,7 @@ describe("TranscriptContainer", () => {
 				"ARTICLE_LAST",
 			]);
 		} finally {
-			setChatTranscriptDisplayPreferences({ compactToolActivity });
+			setChatTranscriptDisplayPreferences(previous);
 		}
 	});
 
@@ -1207,7 +1211,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	function compactTranscript(run: () => void): () => void {
 		return () => {
 			const previous = { ...chatTranscriptDisplayPreferences };
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 			try {
 				run();
 			} finally {
@@ -1264,11 +1268,11 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 
 	for (const shape of ["SVG", "numeric chart"] as const) {
 		it(`lifts a ${shape} that arrives after compact plain prose was cached`, async () => {
-			const compact = chatTranscriptDisplayPreferences.compactToolActivity;
+			const previous = { ...chatTranscriptDisplayPreferences };
 			const protocol = TERMINAL.imageProtocol;
 			const svg = svgFigureRendering();
 			const charts = tableChartMode();
-			setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 			setTerminalImageProtocol(ImageProtocol.Kitty);
 			setSvgFigureRendering(true);
 			setTableCharts("always");
@@ -1295,7 +1299,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 				expect(image).toBeGreaterThanOrEqual(0);
 				expect(rows.findIndex(row => row.includes("Following prose."))).toBeGreaterThan(image);
 			} finally {
-				setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+				setChatTranscriptDisplayPreferences(previous);
 				setTerminalImageProtocol(protocol);
 				setSvgFigureRendering(svg);
 				setTableCharts(charts);
@@ -1327,9 +1331,9 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 	);
 
 	it("refreshes cached compact prose after a theme invalidation", async () => {
-		const compact = chatTranscriptDisplayPreferences.compactToolActivity;
+		const previous = { ...chatTranscriptDisplayPreferences };
 		const originalTheme = theme;
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		try {
 			const dark = await getThemeByName("dark");
 			const light = await getThemeByName("light");
@@ -1349,7 +1353,7 @@ describe("TranscriptContainer progressive assistant retirement", () => {
 			expect(fresh.render(80)).not.toEqual(before);
 			expect(component.render(80)).toEqual(fresh.render(80));
 		} finally {
-			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+			setChatTranscriptDisplayPreferences(previous);
 			setThemeInstance(originalTheme);
 		}
 	});
@@ -1828,5 +1832,308 @@ describe("TranscriptContainer insertChildAt", () => {
 		expect(transcript.children).toEqual([first, insertedB, insertedA, last]);
 		expect(transcript.canRemoveBlock(insertedA)).toBe(true);
 		expect(transcript.canRemoveBlock(insertedB)).toBe(true);
+	});
+});
+
+describe("TranscriptContainer file changes", () => {
+	const components: ToolExecutionComponent[] = [];
+	const preferences = { ...chatTranscriptDisplayPreferences };
+	const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
+
+	beforeAll(async () => {
+		await initTheme(false);
+	});
+
+	function call(root: TranscriptContainer, name: string, args: unknown): ToolExecutionComponent {
+		const component = new ToolExecutionComponent(name, args, {}, undefined, ui);
+		components.push(component);
+		root.addChild(component);
+		return component;
+	}
+
+	// The reference terminal keeps hidden nodes mounted in its document, but they
+	// are not laid out. Inspect only nodes reachable through visible ancestors.
+	function visibleNativeProps(node: TspNode): string {
+		if (node.p?.hidden) return "";
+		return [JSON.stringify(node.p ?? {}), ...(node.c ?? []).map(visibleNativeProps)].join("\n");
+	}
+
+	function views(root: TranscriptContainer): string[] {
+		const ansi = Bun.stripANSI(root.render(120).join("\n"));
+		const native = [false, true].map(dataFirst => {
+			const document = new TspDocument("s:file-changes");
+			const ops = new Reconciler("s:file-changes").reconcile(
+				{ main: root.nativeBlocks(), dock: [], layer: [] },
+				{
+					cols: 120,
+					dark: true,
+					reduceMotion: false,
+					supports: kind => dataFirst || kind !== "tool",
+					feature: () => true,
+				},
+			);
+			expect(document.applyFrame({ sf: "s:file-changes", s: 1, ops })).toEqual([]);
+			return visibleNativeProps(document.snapshot());
+		});
+		return [ansi, ...native];
+	}
+
+	function mode(root: TranscriptContainer, compact: boolean): void {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
+		root.setToolActivityVisible(!compact);
+	}
+
+	it("excludes descendants of hidden native nodes while retaining visible siblings", () => {
+		const document: TspNode = {
+			id: "root",
+			k: "col",
+			c: [
+				{ id: "hidden", k: "col", p: { hidden: true }, c: [{ id: "child", k: "text", p: { text: "hidden" } }] },
+				{ id: "shown", k: "text", p: { text: "shown" } },
+			],
+		};
+		expect(visibleNativeProps(document)).not.toContain("hidden");
+		expect(visibleNativeProps(document)).toContain("shown");
+	});
+
+	it("keeps all applied file diffs in detailed order and the original component on both surfaces", () => {
+		const root = new TranscriptContainer();
+		try {
+			mode(root, false);
+			for (const name of ["one", "two", "three", "four"]) {
+				const edit = call(root, "edit", { path: `${name}.ts` });
+				edit.updateResult(
+					{
+						content: [{ type: "text", text: `edited ${name}` }],
+						details: { path: `${name}.ts`, diff: `-1 old_${name}\n+1 new_${name}` },
+					},
+					false,
+				);
+			}
+			const detailed = views(root);
+			for (const view of detailed) {
+				let last = -1;
+				for (const name of ["one", "two", "three", "four"]) {
+					const position = view.indexOf(`new_${name}`);
+					expect(position).toBeGreaterThan(last);
+					last = position;
+				}
+			}
+			mode(root, true);
+			expect(views(root)).toEqual(detailed);
+			for (const component of components) component.setExpanded(true);
+			const expandedCompact = views(root);
+			mode(root, false);
+			expect(views(root)).toEqual(expandedCompact);
+		} finally {
+			for (const component of components.splice(0)) component.dispose();
+			stopSharedSpinnerTicker();
+			setChatTranscriptDisplayPreferences(preferences);
+		}
+	});
+
+	it("retains file-targeted URL and device calls while hiding non-file activity", () => {
+		const root = new TranscriptContainer();
+		try {
+			mode(root, true);
+			call(root, "write", { path: "file:///tmp/url-file.txt", content: "URL_FILE_BODY" }).updateResult(
+				{
+					content: [{ type: "text", text: "written" }],
+					details: { op: "create", resolvedPath: "/tmp/url-file.txt", newText: "URL_FILE_BODY" },
+				},
+				false,
+			);
+			call(root, "write", { path: "xd://edit", content: JSON.stringify({ path: "device.ts" }) }).updateResult(
+				{
+					content: [{ type: "text", text: "edited" }],
+					details: {
+						xdev: {
+							tool: "edit",
+							mode: "execute",
+							args: { path: "device.ts" },
+							inner: {
+								path: "device.ts",
+								diff: "-1 DEVICE_OLD\n+1 DEVICE_NEW",
+							},
+						},
+					},
+				},
+				false,
+			);
+			call(root, "edit", { path: "partial.ts" }).updateResult(
+				{
+					content: [{ type: "text", text: "partial failure" }],
+					details: {
+						perFileResults: [
+							{ path: "partial.ts", diff: "-1 PARTIAL_OLD\n+1 PARTIAL_NEW" },
+							{ path: "unchanged.ts", diff: "", isError: true, errorText: "not applied" },
+						],
+					},
+					isError: true,
+				},
+				false,
+			);
+			for (const [target, text] of [
+				["agent://peer", "MESSAGE_NOT_A_DIFF"],
+				["cfg://display/test", "CONFIG_NOT_A_DIFF"],
+				["proc://job", "PROCESS_NOT_A_DIFF"],
+			]) {
+				call(root, "write", { path: target, content: text }).updateResult(
+					{
+						content: [{ type: "text", text }],
+						details: { op: "create", newText: text },
+					},
+					false,
+				);
+			}
+			call(root, "write", { path: "xd://edit", content: "help" }).updateResult(
+				{
+					content: [{ type: "text", text: "DEVICE_HELP_NOT_A_DIFF" }],
+					details: {
+						xdev: {
+							tool: "edit",
+							mode: "help",
+							args: {},
+							inner: {
+								path: "help.ts",
+								diff: "-1 HELP_OLD\n+1 HELP_NEW",
+							},
+						},
+					},
+				},
+				false,
+			);
+			call(root, "edit", { path: "pending.ts" }).updateResult(
+				{
+					content: [{ type: "text", text: "PENDING_PREVIEW" }],
+					details: { path: "pending.ts", diff: "-1 PENDING_OLD\n+1 PENDING_NEW" },
+				},
+				true,
+			);
+			call(root, "read", { path: "preview.ts" }).updateResult(
+				{
+					content: [{ type: "text", text: "- PREVIEW_OLD\n+ PREVIEW_NEW" }],
+				},
+				false,
+			);
+			call(root, "edit", { path: "suggestion.ts" }).updateResult(
+				{
+					content: [{ type: "text", text: "- SUGGESTED_OLD\n+ SUGGESTED_NEW" }],
+					details: { path: "suggestion.ts", diff: "" },
+					isError: true,
+				},
+				false,
+			);
+			call(root, "write", { path: "unchanged.txt", content: "SAME_CONTENT" }).updateResult(
+				{
+					content: [{ type: "text", text: "unchanged" }],
+					details: { op: "update", oldText: "SAME_CONTENT", newText: "SAME_CONTENT" },
+				},
+				false,
+			);
+			call(root, "bash", { command: "FAIL_COMMAND" }).updateResult(
+				{
+					content: [{ type: "text", text: "FAIL_DIAGNOSTIC" }],
+					details: { exitCode: 7 },
+					isError: true,
+				},
+				false,
+			);
+			for (const view of views(root)) {
+				for (const marker of ["URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) expect(view).toContain(marker);
+				for (const marker of [
+					"peer",
+					"display.test",
+					"exit 7",
+					"MESSAGE_NOT_A_DIFF",
+					"CONFIG_NOT_A_DIFF",
+					"PROCESS_NOT_A_DIFF",
+					"PREVIEW_NEW",
+					"DEVICE_HELP_NOT_A_DIFF",
+					"HELP_NEW",
+					"FAIL_COMMAND",
+					"FAIL_DIAGNOSTIC",
+				])
+					expect(view).not.toContain(marker);
+			}
+			// Switching back to detailed mode exposes ordinary activity again; it
+			// was hidden, not discarded from either consumer's transcript.
+			mode(root, false);
+			for (const view of views(root)) {
+				for (const marker of ["peer", "display.test", "job"]) expect(view).toContain(marker);
+				for (const marker of ["URL_FILE_BODY", "DEVICE_NEW", "PARTIAL_NEW"]) expect(view).toContain(marker);
+			}
+			mode(root, true);
+			const fileComponents = components.slice(0, 3);
+			const componentViews = () =>
+				fileComponents.map(component => [component.render(120).join("\n"), JSON.stringify(component.describe())]);
+			const compactFiles = componentViews();
+			mode(root, false);
+			expect(componentViews()).toEqual(compactFiles);
+		} finally {
+			for (const component of components.splice(0)) component.dispose();
+			stopSharedSpinnerTicker();
+			setChatTranscriptDisplayPreferences(preferences);
+		}
+	});
+
+	it("keeps the original ANSI and native file cards throughout their lifecycle", () => {
+		const clock = spyOn(performance, "now").mockReturnValue(1000);
+		const root = new TranscriptContainer();
+		try {
+			mode(root, true);
+			const file = call(root, "write", {});
+			expect(file.render(120).join("")).toBe("");
+			expect(file.isTranscriptBlockFinalized()).toBe(false);
+			const later = new Block(["later settled"], true);
+			root.addChild(later);
+			expect(root.peekFinalizedBatch(120, 0)).toBeUndefined();
+			root.removeChild(later);
+
+			file.updateArgs({ path: "lifecycle.txt", content: "lifecycle body" });
+			file.setExecutionStarted();
+			expect(file.isTranscriptBlockFinalized()).toBe(false);
+			const wrapped = call(root, "write", {
+				path: "xd://write",
+				content: JSON.stringify({ path: "wrapped.txt", content: "wrapped body" }),
+			});
+			wrapped.setExecutionStarted();
+			const wrappedEdit = call(root, "write", {
+				path: "xd://edit",
+				content: JSON.stringify({ path: "wrapped-edit.txt" }),
+			});
+			const wrappedPatch = call(root, "write", {
+				path: "xd://apply_patch",
+				content: JSON.stringify({
+					input: "*** Begin Patch\n*** Update File: wrapped-patch.txt\n@@\n-old\n+new\n*** End Patch",
+				}),
+			});
+			wrappedEdit.setExecutionStarted();
+			wrappedPatch.setExecutionStarted();
+			expect(wrappedEdit.render(120).join("")).not.toBe("");
+			expect(wrappedPatch.render(120).join("")).not.toBe("");
+
+			const expectOriginalCards = () => {
+				const compactAnsi = root.render(120);
+				const compact = views(root);
+				for (const view of compact) expect(view).toContain("lifecycle.txt");
+				mode(root, false);
+				expect(root.render(120)).toEqual(compactAnsi);
+				expect(views(root)).toEqual(compact);
+				mode(root, true);
+			};
+
+			for (const view of views(root)) expect(view).toContain("wrapped.txt");
+			expectOriginalCards();
+			file.updateResult({ content: [{ type: "text", text: "unchanged" }], details: { fileChanged: false } }, false);
+			wrapped.updateResult({ content: [{ type: "text", text: "write failed" }], isError: true }, false);
+			expect(wrapped.render(120).join("")).not.toBe("");
+			expectOriginalCards();
+		} finally {
+			clock.mockRestore();
+			for (const component of components.splice(0)) component.dispose();
+			stopSharedSpinnerTicker();
+			setChatTranscriptDisplayPreferences(preferences);
+		}
 	});
 });

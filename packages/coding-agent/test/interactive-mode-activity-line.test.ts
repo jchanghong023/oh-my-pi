@@ -104,18 +104,6 @@ describe("InteractiveMode native dock activity line", () => {
 		expect(nodes(fallback).some(n => n.k === "tree")).toBe(true);
 	});
 
-	it("puts the working row before the todo while a turn runs, and the status alone without a plan", () => {
-		mode.ensureLoadingAnimation();
-		const statusOnly = activity();
-		expect(keys(statusOnly)).toEqual(["status"]);
-		const status = (statusOnly.c ?? []).filter(isNode)[0]!;
-		expect(role(status)).toBe("omp.hud.status");
-		expect(status.c).toEqual([mode.loadingAnimation!]);
-
-		mode.setTodos(PLAN);
-		expect(keys(activity())).toEqual(["status", "todo"]);
-	});
-
 	it("shows tok/s in the composer bar only with the setting on and a reading", () => {
 		const rate = () => nodes(mode.editor.describe(cx)).find(n => role(n) === "omp.composer.rate");
 		session.tokenRate.seed(1_000, 10_000);

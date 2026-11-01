@@ -2,10 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:te
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { agentLoop } from "@oh-my-pi/pi-agent-core/agent-loop";
+import type { AgentEvent, AgentMessage } from "@oh-my-pi/pi-agent-core/types";
+import type { Message } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { Settings, resetSettingsForTest } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { BashTool } from "@oh-my-pi/pi-coding-agent/tools/bash";
+import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import type { XdevState } from "@oh-my-pi/pi-coding-agent/tools/xdev";
 import { loadSpecDrivenSkill } from "@oh-my-pi/pi-coding-agent/spec-driven/resources";
 import { Shell } from "@oh-my-pi/pi-natives";
 import { getThemeByName } from "@oh-my-pi/pi-tui/theme";
@@ -130,6 +136,70 @@ describe("BashTool execution results", () => {
 		const message = (error as Error).message;
 		expect(message.match(/\[Command cancelled\]/gu)).toHaveLength(1);
 		expect(message).not.toContain("Command aborted");
+	});
+
+	it.each([false, true])("retains a real Bash cancellation through the agent (xd=%s)", async wrapped => {
+		const dispatched = Promise.withResolvers<void>();
+		const shellFinished = Promise.withResolvers<void>();
+		const realRun = Shell.prototype.run;
+		spyOn(Shell.prototype, "run").mockImplementation(async function (this: Shell, options, onChunk) {
+			dispatched.resolve();
+			try {
+				return await realRun.call(this, options, onChunk);
+			} finally {
+				shellFinished.resolve();
+			}
+		});
+		const session = makeSession();
+		const bash = new BashTool(session);
+		const xdev: XdevState = {
+			tools: new Map([["bash", bash]]),
+			mountedNames: new Set(["bash"]),
+			builtInNames: new Set(["bash"]),
+			isActive: () => false,
+			resolve: name => (name === "bash" ? bash : undefined),
+		};
+		const write = new WriteTool({ ...session, xdev });
+		const toolName = wrapped ? "write" : "bash";
+		const args = wrapped
+			? { path: "xd://bash", content: JSON.stringify({ command: "sleep 3" }) }
+			: { command: "sleep 3" };
+		const model = createMockModel({
+			responses: [
+				{ content: [{ type: "toolCall", id: "cancel-call", name: toolName, arguments: args }] },
+				{ content: ["done"] },
+			],
+		});
+		const controller = new AbortController();
+		const stream = agentLoop(
+			[{ role: "user", content: [{ type: "text", text: "run" }], timestamp: Date.now() }],
+			{ systemPrompt: [""], messages: [], tools: wrapped ? [write] : [bash] },
+			{
+				model: model.model,
+				convertToLlm: (messages: AgentMessage[]) =>
+					messages.filter(
+						message => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+					) as Message[],
+			},
+			controller.signal,
+			model.stream,
+		);
+		const events: AgentEvent[] = [];
+		const draining = (async () => {
+			for await (const event of stream) events.push(event);
+		})();
+		await dispatched.promise;
+		controller.abort(new Error("EXECUTION_CANCELLED"));
+		await draining;
+		await shellFinished.promise;
+		const end = events.find(event => event.type === "tool_execution_end" && event.toolCallId === "cancel-call");
+		if (!end || end.type !== "tool_execution_end") throw new Error("Expected Bash execution result");
+		expect(end.isError).toBe(true);
+		const diagnostic = wrapped ? "EXECUTION_CANCELLED" : "[Command cancelled]";
+		const block = end.result.content[0];
+		expect(block.type).toBe("text");
+		expect(typeof block.text).toBe("string");
+		expect(block.text).toContain(diagnostic);
 	});
 
 	it("returns a success result with no exit-code detail for a zero exit", async () => {

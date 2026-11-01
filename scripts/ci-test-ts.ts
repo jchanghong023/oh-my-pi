@@ -55,6 +55,8 @@ export interface BunSelection {
 	reason?: string;
 	selected?: number;
 	group?: "ordinary" | "startup";
+	/** Distinguishes the current fork test scope from older, narrower reports. */
+	suiteRevision?: 2;
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
@@ -107,7 +109,8 @@ export async function bunTestSelection(
 						producer.exitCode === 0 &&
 						producer.status === "passed" &&
 						producer.report === "available" &&
-						producer.selection?.mode === "full",
+						producer.selection?.mode === "full" &&
+						(producer.selection as BunSelection).suiteRevision === 2,
 				) ||
 				!["ordinary", "startup"].every(group =>
 					producers.some(
@@ -297,6 +300,7 @@ const forkCodingAgentFiles = new Set([
 	"test/slash-commands/team-command.test.ts",
 	"test/slash-commands/guided-goal.test.ts",
 	"test/slash-commands/compact.test.ts",
+	"test/slash-commands/display.test.ts",
 	"test/slash-commands/jch-ime.test.ts",
 	"test/slash-commands/tan.test.ts",
 	"test/slash-commands/shared-business.test.ts",
@@ -343,6 +347,9 @@ const forkCodingAgentFiles = new Set([
 	"test/compact-modes.test.ts",
 	"test/compaction.test.ts",
 	"test/snapcompact-inline.test.ts",
+	"test/event-controller-thinking-preview.test.ts",
+	"test/interactive-terminal-e2e.test.ts",
+	"test/modes/utils/render-initial-messages.test.ts",
 	"test/status-line-usage.test.ts",
 	"test/status-line-time-spent.test.ts",
 	"test/status-line-transparent.test.ts",
@@ -353,8 +360,11 @@ const forkPackageFiles: Record<string, string[]> = {
 	"packages/ai": ["test/proxy.test.ts"],
 	"packages/natives": ["test/python-symbols.test.ts"],
 	"packages/tui": [
-		"test/compact-transcript.test.ts",
-		"test/compact-tool-projection-regression.test.ts",
+		"test/composer-inline-shrink.test.ts",
+		"test/composer-welcome-scrollback.test.ts",
+		"test/transcript-container.test.ts",
+		"test/transcript-seam-loss.test.ts",
+		"test/thinking-preview.test.ts",
 		"test/status-line-profile.test.ts",
 	],
 	"packages/snapcompact": ["test/snapcompact.test.ts"],
@@ -1631,6 +1641,9 @@ if (import.meta.main) {
 	if (deferStartup && onlyStartup) throw new Error("--defer-startup and --only-startup are mutually exclusive");
 	if ((deferStartup || onlyStartup) && requestedMode !== "local-ts" && requestedMode !== "all")
 		throw new Error("--defer-startup and --only-startup require local-ts or all mode");
+	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
+	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
+		throw new Error("Expected at most one --changed or --changed=<ref> option");
 	const commands = await commandsForMode(requestedMode as Mode);
 	// Explicit upstream native mode may require the desktop authorization boundary.
 	if (args.includes("--exclude-desktop") && requestedMode !== "local" && requestedMode !== "local-ts") {
@@ -1659,9 +1672,6 @@ if (import.meta.main) {
 	const group = onlyStartup ? "startup" : deferStartup ? "ordinary" : "all";
 	if (deferStartup || onlyStartup)
 		console.log(`test-command-group=${group} chunks=${requestedCommands.length}; partial ${requestedMode} plan`);
-	const changedArgs = args.filter(arg => arg === "--changed" || arg.startsWith("--changed="));
-	if (changedArgs.length > 1 || changedArgs.some(arg => arg === "--changed="))
-		throw new Error("Expected at most one --changed or --changed=<ref> option");
 	let selection: BunSelection = changedArgs.length
 		? {
 				tool: "bun",
@@ -1681,6 +1691,7 @@ if (import.meta.main) {
 		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
+	if (requestedMode === "local-ts") selection.suiteRevision = 2;
 	if (
 		requestedCommands.length &&
 		requestedMode === "local-ts" &&

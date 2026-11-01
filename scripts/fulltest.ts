@@ -608,7 +608,7 @@ async function runFulltestObserved(
 		// Reserve capacity for static checks and subprocesses spawned by the suites.
 		// Bun and nextest otherwise each independently claim the whole machine.
 		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget(), process.platform, "");
-		const testBudget = Math.max(1, Math.floor(Math.max(2, cpuBudget - 4) / 2));
+		const testBudget = Math.max(1, Math.floor((cpuBudget - 4) / 2));
 		const withBudget = (command: GateCommand): GateCommand => ({
 			...command,
 			env: {

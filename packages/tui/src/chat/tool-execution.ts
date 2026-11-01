@@ -8,7 +8,6 @@ import { Text } from "../components/text";
 import { getImageDimensions, ImageProtocol, imageFallback, TERMINAL } from "../terminal-capabilities";
 import { type Component, Container, type TUI } from "../tui";
 import { truncateToWidth } from "../utils";
-import { COMPACT_STATUS_LABEL, type CompactToolCall, compactToolPath } from "../chrome/tool-activity";
 import { getProjectDir, isRecord, logger, sanitizeText, sanitizeTextDeep } from "@oh-my-pi/pi-utils";
 import type { Theme } from "../theme/theme";
 import { ensureThemeSync, getThemeEpoch, theme } from "../theme/theme";
@@ -37,7 +36,7 @@ import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
 import { Memo } from "../native/memo";
-import { type EditMode, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
+import { type EditMode, getEditInputPaths, type PerFileDiffPreview, renderStreamingFallback } from "../tools/edit";
 import { taskCardAgentIds } from "../tools/task";
 import { TODO_STRIKE_TOTAL_FRAMES, type TodoToolDetails } from "../tools/todo";
 import { isNativeRendering } from "../native/state";
@@ -58,7 +57,7 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
 import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-container";
 import { isXdHelpContent, parseXdUrl } from "../tools/xd-url";
 import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
-import { splitUrlScheme } from "../tools/url-scheme-host";
+import { internalUrlSchemeSpec, internalUrlSchemeSpecs, splitUrlScheme } from "../tools/url-scheme-host";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -75,21 +74,78 @@ function isTodoToolDetails(details: unknown): details is TodoToolDetails {
 	);
 }
 
-function hasAppliedFileChange(details: unknown): boolean {
-	if (!isRecord(details) || details.applied === false) return false;
-	if (Array.isArray(details.perFileResults)) {
-		return details.perFileResults.some(file => isRecord(file) && file.isError !== true && hasAppliedFileChange(file));
+type FileTarget = "file" | "other" | "unknown";
+
+/** Classify the destination, not the result of attempting the operation. */
+function fileTarget(path: unknown, complete: boolean): FileTarget {
+	if (typeof path !== "string" || !path.trim()) return complete ? "other" : "unknown";
+	const target = unwrapHashlineHeaderPath(path);
+	const url = splitUrlScheme(target);
+	if (!url) {
+		// A streamed prefix such as `agent:` is not yet a filesystem path.
+		if (!complete) {
+			const prefix = target.toLowerCase();
+			if ("file://".startsWith(prefix) || "xd://".startsWith(prefix)) return "unknown";
+			for (const scheme of internalUrlSchemeSpecs().keys()) {
+				if (`${scheme}://`.startsWith(prefix)) return "unknown";
+			}
+		}
+		return "file";
 	}
-	if (Array.isArray(details.conflictChanges) && details.conflictChanges.some(hasAppliedFileChange)) return true;
-	return (
-		(typeof details.diff === "string" && details.diff.length > 0) ||
-		details.op === "create" ||
-		details.op === "delete" ||
-		(typeof details.move === "string" && details.move.length > 0) ||
-		(typeof details.oldText === "string" &&
-			typeof details.newText === "string" &&
-			details.oldText !== details.newText)
-	);
+	if (url.scheme === "file") return "file";
+	const write = internalUrlSchemeSpec(url.scheme)?.write;
+	return write?.via === "file" || write?.fileOperation === true ? "file" : "other";
+}
+
+function compactFileTarget(toolName: string, args: unknown, complete: boolean, editMode?: EditMode): FileTarget {
+	if (toolName !== "write" && !isEditLikeToolName(toolName)) return "other";
+	if (!isRecord(args)) return complete ? "other" : "unknown";
+	if (toolName === "write") {
+		const path = args.path ?? args.file_path;
+		if (typeof path === "string") {
+			const device = parseXdUrl(unwrapHashlineHeaderPath(path));
+			if (device) {
+				if (typeof args.content === "string" && isXdHelpContent(args.content)) {
+					return complete ? "other" : "unknown";
+				}
+				if (!device.name) return complete ? "other" : "unknown";
+				if (
+					!complete &&
+					!["write", "edit", "apply_patch"].includes(device.name) &&
+					["write", "edit", "apply_patch"].some(name => name.startsWith(device.name!))
+				)
+					return "unknown";
+				if (device.name !== "write" && device.name !== "edit" && device.name !== "apply_patch") return "other";
+				if (typeof args.content !== "string") return complete ? "other" : "unknown";
+				try {
+					const inner: unknown = JSON.parse(args.content);
+					return compactFileTarget(
+						device.name,
+						inner,
+						true,
+						device.name === "apply_patch" ? "apply_patch" : undefined,
+					);
+				} catch {
+					return complete ? "other" : "unknown";
+				}
+			}
+		}
+		return fileTarget(path, complete);
+	}
+	const paths: unknown[] = [args.path, args.file_path, args.rename, args.move];
+	if (Array.isArray(args.edits)) {
+		for (const entry of args.edits) {
+			if (isRecord(entry)) paths.push(entry.path, entry.rename, entry.move);
+		}
+	}
+	const input = args.input ?? args._input;
+	if (typeof input === "string") paths.push(...getEditInputPaths(input, editMode));
+	for (const path of paths) {
+		if (path === undefined) continue;
+		const target = fileTarget(path, complete);
+		if (target === "file") return "file";
+	}
+	return complete ? "other" : "unknown";
 }
 
 interface ToolImageBlock {
@@ -272,14 +328,12 @@ const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", ba
  * Whether a call that returned with `details.async.state === "running"` stays
  * parked ({@link ToolExecutionHandle.parkAsBackground}) so its job's later
  * frames keep filling the card until a `completed`/`failed` frame settles it.
- * Detached `task` spawns always do; compact Bash/Eval rows also retain the
- * call's clock on ANSI terminals. Detailed ANSI cards keep upstream snapshots.
+ * Detached `task` spawns always do; Bash/Eval use parked cards on native terminals.
  * Shared by the live event controller and the transcript rebuild.
  */
 export function parksAsBackground(toolName: string, details: unknown): boolean {
 	const mode = JOB_CARD_TOOLS[toolName];
-	if (mode === undefined || (mode === "native" && !isNativeRendering() && !displayPreferences.compactToolActivity))
-		return false;
+	if (mode === undefined || (mode === "native" && !isNativeRendering())) return false;
 	return asyncJobState(details) === "running";
 }
 
@@ -341,7 +395,7 @@ export function sharedSpinnerFrame(frameCount: number, now: number = performance
  * live/streaming blocks — e.g. parallel `task` subagents — cost one shared timer
  * and one coalesced render frame per tick instead of N unsynchronized timers
  * each independently waking the render scheduler (issue #8731). */
-const liveSpinnerBlocks = new Set<ToolExecutionComponent>();
+const liveSpinnerBlocks = new Set<{ tickSpinner(frame: number): void }>();
 
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
 
@@ -362,13 +416,13 @@ function ensureSharedSpinnerTicker(): void {
 }
 
 /** Register a live block with the shared ticker, starting it on first use. */
-function registerSpinnerBlock(block: ToolExecutionComponent): void {
+export function registerSpinnerBlock(block: { tickSpinner(frame: number): void }): void {
 	liveSpinnerBlocks.add(block);
 	ensureSharedSpinnerTicker();
 }
 
 /** Drop a block; stop the ticker once no live block remains. */
-function unregisterSpinnerBlock(block: ToolExecutionComponent): void {
+export function unregisterSpinnerBlock(block: { tickSpinner(frame: number): void }): void {
 	if (!liveSpinnerBlocks.delete(block)) return;
 	if (liveSpinnerBlocks.size === 0 && sharedSpinnerTimer) {
 		clearInterval(sharedSpinnerTimer);
@@ -415,8 +469,6 @@ export class ToolExecutionComponent extends Container {
 	#allocation = Number.POSITIVE_INFINITY;
 	#presentationFrame: AnimationFrame = { tick: 0, now: 0 };
 	#toolActivityVisible = true;
-	#compactToolResultListener: (() => void) | undefined;
-	#compactIntent: string | undefined;
 	#showImages: boolean;
 	#isPartial = true;
 	// A background task whose call already returned; later async job frames are
@@ -430,8 +482,7 @@ export class ToolExecutionComponent extends Container {
 	// committed-render bypass must observe those mutations.
 	#blockVersion = 0;
 	#lastDisplayKey: string | undefined;
-	#displayCompactToolActivity = false;
-	#displayImageTierCompact = false;
+	#displayImagesHidden = false;
 	// Bumped whenever a render input that #rebuildDisplay consumes but the memo
 	// key cannot cheaply hash changes: streamed call args, native edit-diff
 	// previews, and Kitty PNG conversions. Folded into the dirty key so those
@@ -468,7 +519,6 @@ export class ToolExecutionComponent extends Container {
 	#editMode?: EditMode;
 	#editDiffPreview?: PerFileDiffPreview[];
 	#previewReady?: PromiseWithResolvers<void>;
-	#compactNeedsUserInput: string | undefined;
 	// Payload keys whose Kitty PNG conversion is already awaited; the converted
 	// images themselves live in the process-wide cache behind
 	// `convertImageToPngShared`, so rebuilt components reuse them.
@@ -552,8 +602,6 @@ export class ToolExecutionComponent extends Container {
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#args = args;
-		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
-		if (typeof intent === "string") this.#compactIntent = intent;
 		this.#editMode = resolveEditModeForTool(toolName, tool);
 		if (this.#editMode) this.#previewReady = Promise.withResolvers<void>();
 
@@ -595,9 +643,7 @@ export class ToolExecutionComponent extends Container {
 		// signals "nothing meaningful changed" and the renderer can skip.
 		if (args === this.#args) return;
 		this.#args = args;
-		// Execution events carry validated tool arguments, which omit the model's intent metadata.
-		const intent = isRecord(args) ? args[INTENT_FIELD] : undefined;
-		if (typeof intent === "string") this.#compactIntent = intent;
+		this.#blockVersion++;
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
@@ -612,6 +658,7 @@ export class ToolExecutionComponent extends Container {
 		this.#argsComplete = true;
 		this.#updateSpinnerAnimation();
 		if (alreadyComplete) return;
+		this.#blockVersion++;
 		this.#displayInputVersion++;
 		this.#updateDisplay();
 	}
@@ -628,6 +675,7 @@ export class ToolExecutionComponent extends Container {
 		this.#executionStartedAtNow = Math.min(this.#executionStartedAtNow ?? origin, origin);
 		this.#executionStarted = true;
 		this.#argsComplete = true;
+		this.#blockVersion++;
 		this.#updateSpinnerAnimation();
 		this.#displayInputVersion++;
 		this.#updateDisplay();
@@ -699,7 +747,6 @@ export class ToolExecutionComponent extends Container {
 		const { jobId, state } = this.#rawDetails.async;
 		if (typeof jobId !== "string" || !jobId || !isSettledJobFrame(this.#rawDetails)) return;
 		if (this.#isPartial && !this.#sealed) return;
-		if (displayPreferences.compactToolActivity && !this.hasCompactCriticalFeedback()) return;
 		if (!this.#result?.content.some(part => part.type === "text" && part.text?.trim())) return;
 		return { id: jobId, state: state as string };
 	}
@@ -733,14 +780,11 @@ export class ToolExecutionComponent extends Container {
 		this.#updateSpinnerAnimation();
 		this.#updateTodoStrikeAnimation();
 		this.#updateDisplay();
-		this.#compactToolResultListener?.();
 		this.#resetDisplayForResultTopologyChange(
 			hadNoResult && firstResultRepaintShapePainted,
 			wasPartialResult && partialResultPainted,
 			isPartial,
 		);
-		// Convert non-PNG images to PNG for Kitty protocol (async)
-		this.#maybeConvertImagesForKitty();
 	}
 
 	/**
@@ -764,8 +808,13 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#maybeConvertImagesForKitty(): void {
 		// Only needed for Kitty protocol
-		if (TERMINAL.imageProtocol !== ImageProtocol.Kitty) return;
-		if (!this.#result) return;
+		if (
+			TERMINAL.imageProtocol !== ImageProtocol.Kitty ||
+			!this.#result ||
+			!this.#showImages ||
+			this.#toolImagesHidden()
+		)
+			return;
 
 		for (const img of this.#getAllImageBlocks()) {
 			if (!img.data || !img.mimeType) continue;
@@ -868,7 +917,7 @@ export class ToolExecutionComponent extends Container {
 			this.#executionStarted &&
 			this.#isPartial &&
 			!this.#sealed &&
-			(!isBackgroundAsyncRunning || this.#compactToolActivity) &&
+			!isBackgroundAsyncRunning &&
 			!isNativeRendering();
 		if (needsTicker && !this.#elapsedTicker) {
 			this.#elapsedTicker = setInterval(() => this.#ui.requestComponentRender(this), 1000);
@@ -937,18 +986,30 @@ export class ToolExecutionComponent extends Container {
 	/** Hold visible results until their figures and Kitty images are ready for immutable scrollback. */
 	isTranscriptBlockPending(): boolean {
 		return (
-			this.#toolActivityVisible &&
-			((this.#showImages && this.#kittyConversionsAwaited.size > 0) || this.#figure?.pending === true)
+			this.#isToolActivityVisible() &&
+			((this.#showImages && !this.#toolImagesHidden() && this.#kittyConversionsAwaited.size > 0) ||
+				this.#figure?.pending === true)
 		);
 	}
 
 	/**
-	 * Whether this block is ready to retire as immutable history. Partial
-	 * results, including detached background tasks, remain active and mutable
-	 * until they settle. Hidden blocks render no rows and cannot gate history.
+	 * Partial results remain active until they settle. Hidden blocks normally
+	 * cannot gate history, except an unresolved compact file mutation.
 	 */
 	isTranscriptBlockFinalized(): boolean {
-		if (!this.#toolActivityVisible) return true;
+		if (!this.#isToolActivityVisible()) {
+			// An unresolved streamed target can still become a visible file operation.
+			if (
+				displayPreferences.compactToolActivity &&
+				!this.#sealed &&
+				this.#isPartial &&
+				this.#renderer &&
+				compactFileTarget(this.#toolName, this.#args, this.#argsComplete, this.#editMode) === "unknown"
+			) {
+				return false;
+			}
+			return true;
+		}
 		if (this.#sealed) return true;
 		if (this.#result === undefined) return false;
 		// A parked background task's call already returned; job frames that land
@@ -957,129 +1018,23 @@ export class ToolExecutionComponent extends Container {
 		return !this.#isPartial;
 	}
 
-	isCompactToolActivity(): boolean {
-		return !this.#expanded || this.isCompactWriteCall();
+	/** File-targeted operations retain their detailed card throughout their lifecycle. */
+	isCompactFileOperation(): boolean {
+		return (
+			!!this.#renderer &&
+			compactFileTarget(this.#toolName, this.#args, this.#argsComplete, this.#editMode) === "file"
+		);
 	}
 
-	/** UI-only marker from the existing blocked prompt decision. */
-	setCompactNeedsUserInput(reason?: string): void {
-		if (this.#compactNeedsUserInput === reason) return;
-		this.#compactNeedsUserInput = reason;
-		this.#blockVersion++;
-		this.#compactToolResultListener?.();
-		this.#ui.requestComponentRender(this);
+	#isToolActivityVisible(): boolean {
+		return this.#toolActivityVisible || (displayPreferences.compactToolActivity && this.isCompactFileOperation());
 	}
 
-	/** Critical upstream feedback bypasses ordinary compact previews. */
-	hasCompactCriticalFeedback(): boolean {
-		if (this.#compactNeedsUserInput !== undefined || this.#compactOutcome() === "待确认") {
-			return true;
-		}
-		if (!this.#result) return false;
-		if (this.#lateDiagnostics?.some(file => file.messages.length > 0 || file.errored)) return true;
-		if (this.#result.isError && this.isCompactWriteCall() && hasAppliedFileChange(this.#result.details)) return true;
-		if (this.#toolName === "bash" && isRecord(this.#result.details)) {
-			const details = this.#result.details;
-			if (
-				(typeof details.exitCode === "number" && details.exitCode !== 0) ||
-				(isRecord(details.async) && details.async.state === "failed")
-			)
-				return true;
-		}
-		if (this.#renderer?.hasCompactCriticalFeedback?.(this.#result)) return true;
-		const details = this.#result.details;
-		const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
-		if (dispatch?.mode !== "execute" || typeof dispatch.tool !== "string") return false;
-		const innerRenderer = toolRenderers[dispatch.tool];
-		const innerResult = { ...this.#result, details: dispatch.inner };
-		if (
-			this.#result.isError &&
-			(dispatch.tool === "edit" || dispatch.tool === "apply_patch" || dispatch.tool === "write") &&
-			hasAppliedFileChange(dispatch.inner)
-		)
-			return true;
-		if (
-			dispatch.tool === "bash" &&
-			isRecord(dispatch.inner) &&
-			typeof dispatch.inner.exitCode === "number" &&
-			dispatch.inner.exitCode !== 0
-		)
-			return true;
-		return innerRenderer?.hasCompactCriticalFeedback?.(innerResult) === true;
-	}
-
-	isCompactWriteCall(): boolean {
-		if (this.#toolName === "write") {
-			const args = isRecord(this.#args) ? this.#args : undefined;
-			const path = args?.path ?? args?.file_path;
-			if (typeof path !== "string") return true;
-			const normalized = unwrapHashlineHeaderPath(path);
-			const scheme = splitUrlScheme(normalized)?.scheme;
-			if (scheme === "xd") {
-				const details = this.#result?.details;
-				const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
-				if (dispatch?.mode === "help" || (typeof args?.content === "string" && isXdHelpContent(args.content)))
-					return false;
-				const name = typeof dispatch?.tool === "string" ? dispatch.tool : parseXdUrl(normalized)?.name;
-				if (name !== "write") return !name || name === "edit" || name === "apply_patch";
-				let innerArgs: unknown = dispatch?.args;
-				if (!isRecord(innerArgs) && typeof args?.content === "string") {
-					try {
-						innerArgs = JSON.parse(args.content);
-					} catch {
-						// Streaming or invalid parameters keep the pending write presentation.
-					}
-				}
-				const innerPath = isRecord(innerArgs) ? (innerArgs.path ?? innerArgs.file_path) : undefined;
-				const innerScheme =
-					typeof innerPath === "string" ? splitUrlScheme(unwrapHashlineHeaderPath(innerPath))?.scheme : undefined;
-				return innerScheme !== "agent" && innerScheme !== "proc" && innerScheme !== "cfg";
-			}
-			return scheme !== "agent" && scheme !== "proc" && scheme !== "cfg";
-		}
-		return this.#toolName === "edit" || this.#toolName === "apply_patch";
-	}
-
-	/** Successful write/edit executions retain their upstream card in the compact live run. */
-	isCompactActualFileWrite(): boolean {
-		if (this.#result === undefined || this.#isPartial || this.#result.isError || this.#compactOutcome() === "待确认")
-			return false;
-		if (this.#toolName === "edit" || this.#toolName === "apply_patch")
-			return hasAppliedFileChange(this.#result.details);
-		if (this.#toolName !== "write") return false;
-		const details = this.#result.details;
-		if (isRecord(details) && Array.isArray(details.conflictChanges)) return details.conflictChanges.length > 0;
-		if (isRecord(details) && isRecord(details.xdev)) {
-			if (details.xdev.mode !== "execute") return false;
-			if (details.xdev.tool === "write") {
-				const inner = details.xdev.inner;
-				if (isRecord(inner) && Array.isArray(inner.conflictChanges)) return inner.conflictChanges.length > 0;
-				const innerArgs = details.xdev.args;
-				const innerPath = isRecord(innerArgs) ? (innerArgs.path ?? innerArgs.file_path) : undefined;
-				if (typeof innerPath !== "string") return false;
-				const scheme = splitUrlScheme(unwrapHashlineHeaderPath(innerPath))?.scheme;
-				return scheme === undefined || scheme === "local" || scheme === "ssh";
-			}
-			return (
-				(details.xdev.tool === "edit" || details.xdev.tool === "apply_patch") &&
-				hasAppliedFileChange(details.xdev.inner)
-			);
-		}
-		const args = this.#args;
-		const path = isRecord(args) ? (args.path ?? args.file_path) : undefined;
-		if (typeof path !== "string") return true;
-		const scheme = splitUrlScheme(unwrapHashlineHeaderPath(path))?.scheme;
-		return scheme === undefined || scheme === "local" || scheme === "ssh";
-	}
-
-	/** Stable actual-call identity survives provider tool-call ID corrections. */
-	getCompactToolCalls(): readonly CompactToolCall[] {
-		if (this.#toolName === "wait" && this.#isBenignSkip()) return [];
-		return [{ id: this }];
-	}
-
-	setCompactToolResultListener(listener: (() => void) | undefined): void {
-		this.#compactToolResultListener = listener;
+	#toolImagesHidden(): boolean {
+		return (
+			displayPreferences.hideToolActivity &&
+			!(displayPreferences.compactToolActivity && this.isCompactFileOperation())
+		);
 	}
 
 	/** Presentation identity remains available while a streamed call is still pending. */
@@ -1097,18 +1052,8 @@ export class ToolExecutionComponent extends Container {
 		return taskCardAgentIds(this.#result?.details);
 	}
 
-	get #compactToolActivity(): boolean {
-		return (
-			!this.#expanded &&
-			!this.hasCompactCriticalFeedback() &&
-			!this.isCompactActualFileWrite() &&
-			displayPreferences.compactToolActivity &&
-			this.isCompactToolActivity()
-		);
-	}
-
 	getTranscriptBlockVersion(): number {
-		return this.#blockVersion * 2 + Number(this.#compactToolActivity);
+		return this.#blockVersion;
 	}
 	/** Mark the call parked: it returned, but stays tracked for async job frames. */
 	parkAsBackground(): void {
@@ -1256,9 +1201,8 @@ export class ToolExecutionComponent extends Container {
 			this.#parkedBackground,
 			this.#showImages,
 			this.#displayInputVersion,
-			this.#toolActivityVisible,
-			this.#compactToolActivity,
-			displayPreferences.compactToolActivity,
+			this.#isToolActivityVisible(),
+			this.#toolImagesHidden(),
 			this.#renderState.settledBashJobs ? JSON.stringify([...this.#renderState.settledBashJobs]) : undefined,
 			cx?.cols,
 			host.media,
@@ -1266,14 +1210,7 @@ export class ToolExecutionComponent extends Container {
 			getThemeEpoch(),
 		];
 		return this.#native.get(key, () =>
-			withHidden(
-				this.#compactToolActivity
-					? this.#describeCompact(dataFirst, cx?.cols ?? 80)
-					: dataFirst
-						? this.#describeTool(host)
-						: this.#describeCard(host),
-				!this.#toolActivityVisible,
-			),
+			withHidden(dataFirst ? this.#describeTool(host) : this.#describeCard(host), !this.#isToolActivityVisible()),
 		);
 	}
 
@@ -1289,138 +1226,6 @@ export class ToolExecutionComponent extends Container {
 		if (started === undefined) return undefined;
 		const ended = status === "running" ? undefined : this.#executionEndedAtNow;
 		return Math.max(0, Math.round((ended ?? performance.now()) - started));
-	}
-
-	/** Ordinary compact preview; expansion and critical feedback use the original renderer. */
-	#describeCompact(dataFirst: boolean, width: number): NativeNode {
-		if (this.#result?.isError) return EMPTY_NODE;
-		const summary = this.#compactActivity();
-		const outcome = this.#compactOutcome();
-		const title = `${this.#compactNeedsUserInput === undefined ? "" : "等待用户输入 · "}${summary.label}${outcome ? ` · ${outcome}` : ""}`;
-		const status = outcome === "待确认" ? "pending" : this.#nativeStatus();
-		const ms = this.#elapsedMs(this.#nativeStatus());
-		const live = this.#isRunning();
-		const call = dataFirst
-			? node("tool", {
-					role: `omp.tool.${this.#toolName}`,
-					key: this.#toolCallId,
-					name: this.#toolName,
-					title: truncateToWidth(title, Math.max(1, width - 16)),
-					target: summary.detail
-						? [span(truncateToWidth(summary.detail, Math.max(1, width - Bun.stringWidth(title) - 16)), "text")]
-						: undefined,
-					targetKind: "text",
-					status,
-					tone:
-						status === "error"
-							? "error"
-							: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
-								? "warning"
-								: undefined,
-					age: live ? ms : undefined,
-					took: live ? undefined : ms,
-					frame: "inline",
-					collapsible: this.#toolName === "bash",
-					collapsed: this.#toolName === "bash" ? !this.#expanded : undefined,
-				})
-			: node("row", { role: `omp.tool.${this.#toolName}`, key: this.#toolCallId, gap: "sm", align: "baseline" }, [
-					text(
-						[
-							span(
-								`${this.#compactNeedsUserInput === undefined ? (outcome ?? COMPACT_STATUS_LABEL[status]) : "等待用户输入"} · `,
-								status === "error"
-									? "error"
-									: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
-										? "warning"
-										: "dim",
-							),
-							span(summary.label, summary.detail ? "dim" : "text"),
-							...(summary.detail ? [span(" · ", "dim"), span(summary.detail, "text")] : []),
-						],
-						{
-							lines: 1,
-							wrap: "none",
-							truncate: "end",
-							grow: 1,
-						},
-					),
-					...(ms === undefined ? [] : [node("elapsed", live ? { age: ms } : { age: ms, stopped: ms })]),
-				]);
-		return call;
-	}
-
-	#compactActivity(): ToolActivitySummary {
-		let args = this.#args;
-		if (this.#toolName === "write" && isRecord(args)) {
-			const key = args.file_path !== undefined ? "file_path" : "path";
-			const path = args[key];
-			if (typeof path === "string") {
-				const normalized = unwrapHashlineHeaderPath(path);
-				if (normalized !== path) args = { ...args, [key]: normalized };
-			}
-		}
-		const summary = this.#activitySummary(args, true);
-		const label = plainText(summary.label).replace(/\s+/g, " ").trim();
-		let detail = summary.detail ? plainText(summary.detail).replace(/\s+/g, " ").trim() : "";
-		if (isRecord(args)) {
-			const intent = this.#compactIntent;
-			let activityTool = this.#toolName;
-			if (activityTool === "write") {
-				const details = this.#result?.details;
-				const dispatch = isRecord(details) && isRecord(details.xdev) ? details.xdev : undefined;
-				const path = args.file_path ?? args.path;
-				activityTool =
-					typeof dispatch?.tool === "string"
-						? dispatch.tool
-						: typeof path === "string"
-							? (parseXdUrl(path)?.name ?? activityTool)
-							: activityTool;
-			}
-			if (activityTool !== "wait" && typeof intent === "string" && intent.trim()) {
-				detail = plainText(intent).replace(/\s+/g, " ").trim();
-			} else if (["read", "write", "glob"].includes(this.#toolName)) {
-				const path = args.path ?? args.file_path;
-				if (typeof path === "string" && !/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) detail = compactToolPath(path);
-			}
-		}
-		const details = this.#result?.details;
-		if (this.#toolName === "read" && isRecord(details)) {
-			const suffix = details.suffixResolution;
-			if (isRecord(suffix) && typeof suffix.from === "string" && typeof suffix.to === "string") {
-				detail += ` · corrected from ${plainText(suffix.from).replace(/\s+/g, " ")}`;
-			}
-			if (typeof details.conflictCount === "number" && details.conflictCount > 0) {
-				detail += ` · ${details.conflictCount} conflict${details.conflictCount === 1 ? "" : "s"}`;
-			}
-		}
-		return { label, detail: plainText(detail).replace(/\s+/g, " ").trim() };
-	}
-
-	#hasCompactReadWarning(): boolean {
-		const details = this.#result?.details;
-		if (this.#toolName !== "read" || !isRecord(details)) return false;
-		const suffix = details.suffixResolution;
-		return (
-			(typeof details.conflictCount === "number" && details.conflictCount > 0) ||
-			(isRecord(suffix) && typeof suffix.from === "string" && typeof suffix.to === "string")
-		);
-	}
-
-	/** The proposal and its later resolution are separate receipts, not successful writes. */
-	#compactOutcome(): "待确认" | "已应用" | undefined {
-		if (!this.#result || this.#result.isError || this.#isPartial) return undefined;
-		let details = this.#result.details;
-		let toolName = this.#toolName;
-		if (isRecord(details) && isRecord(details.xdev)) {
-			toolName = typeof details.xdev.tool === "string" ? details.xdev.tool : toolName;
-			details = details.xdev.inner;
-		}
-		if (!isRecord(details)) return undefined;
-		if (toolName === "ast_edit" && details.applied === false && Number(details.totalReplacements) > 0)
-			return "待确认";
-		if (details.applied === true || (details.action === "apply" && details.sourceToolName === "ast_edit"))
-			return "已应用";
-		return undefined;
 	}
 
 	/**
@@ -1584,14 +1389,12 @@ export class ToolExecutionComponent extends Container {
 	 */
 	#nativeView(host: NativeHostKinds): NativeToolView {
 		const status = this.#nativeStatus();
-		const showResultImages =
-			this.#showImages && !displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity;
+		const showResultImages = this.#showImages && !this.#toolImagesHidden();
 		const options: RenderResultContextOptions = {
 			...host,
 			media: host.media && showResultImages,
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
-			compactToolActivity: displayPreferences.compactToolActivity,
 			settledBashJobs: this.#renderState.settledBashJobs,
 			argsComplete: this.#argsComplete,
 			executionStarted: this.#executionStarted,
@@ -1668,8 +1471,7 @@ export class ToolExecutionComponent extends Container {
 		const indicators = this.#getAllImageBlocks()
 			.map(image => {
 				const mimeType = String(image.mimeType);
-				const dims = image.data ? (getImageDimensions(image.data, mimeType) ?? undefined) : undefined;
-				return imageFallback(mimeType, dims);
+				return imageFallback(mimeType);
 			})
 			.join("\n");
 		return indicators ? (output ? `${output}\n${indicators}` : indicators) : output;
@@ -1677,13 +1479,7 @@ export class ToolExecutionComponent extends Container {
 
 	/** Result images under the renderer's body, minus those the body already shows (as an `image` blob or a `media` file). */
 	#nativeResultImages(body: readonly NativeChild[] | undefined): NativeNode[] {
-		if (
-			!this.#result ||
-			!this.#showImages ||
-			displayPreferences.compactToolActivity ||
-			displayPreferences.hideToolActivity
-		)
-			return [];
+		if (!this.#result || !this.#showImages || this.#toolImagesHidden()) return [];
 		const shown = shownMedia(body);
 		const mediaPath = readMediaPath(this.#rawDetails);
 		if (mediaPath && shown.paths.has(mediaPath)) return [];
@@ -1703,6 +1499,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	setToolActivityVisible(visible: boolean): void {
+		if (this.#toolActivityVisible !== visible) this.#blockVersion++;
 		this.#toolActivityVisible = visible;
 		super.invalidate();
 	}
@@ -1722,14 +1519,14 @@ export class ToolExecutionComponent extends Container {
 		// TUI startup, so a result rendered before it lands must re-shape once it
 		// does (it gates Image children vs text fallback in #rebuildDisplay); keyed
 		// here for the same reason markdown.ts keys its render cache on it.
-		const key = `${displayPreferences.compactToolActivity}|${displayPreferences.hideToolActivity}|${this.#compactToolActivity}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
+		const key = `${this.#toolImagesHidden()}|${this.#resultVersion}|${this.#expanded}|${this.#isPartial}|${this.#argsComplete ? "1" : "0"}|${this.#executionStarted ? "1" : "0"}|${this.#spinnerFrame ?? "-"}|${this.#showImages}|${getThemeEpoch()}|${this.#displayInputVersion}|${TERMINAL.imageProtocol ?? "-"}|${this.#imageSizeKey()}|${imageLinksEnabled()}`;
 		if (key === this.#lastDisplayKey && this.#displayBuilt) return;
 		this.#lastDisplayKey = key;
+		this.#maybeConvertImagesForKitty();
 
 		this.#rebuildDisplay();
 		this.#displayBuilt = true;
-		this.#displayCompactToolActivity = this.#compactToolActivity;
-		this.#displayImageTierCompact = displayPreferences.compactToolActivity || displayPreferences.hideToolActivity;
+		this.#displayImagesHidden = this.#toolImagesHidden();
 	}
 
 	#rendererFlag(name: "forceResultViewportRepaintOnSettle"): boolean {
@@ -1767,55 +1564,41 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): readonly string[] {
-		if (!this.#toolActivityVisible || this.#allocation === 0 || (this.#toolName === "wait" && this.#isBenignSkip())) {
+		if (
+			!this.#isToolActivityVisible() ||
+			this.#allocation === 0 ||
+			(this.#toolName === "wait" && this.#isBenignSkip())
+		) {
 			return [];
 		}
-		if (this.#compactToolActivity) return this.#renderCompact(width, true);
-		if (
-			this.#displayCompactToolActivity ||
-			this.#renderState.expanded !== this.#expanded ||
-			this.#displayImageTierCompact !==
-				(displayPreferences.compactToolActivity || displayPreferences.hideToolActivity)
-		)
+		if (this.#renderState.expanded !== this.#expanded || this.#displayImagesHidden !== this.#toolImagesHidden())
 			this.#updateDisplay();
 		let lines = super.render(width);
-		if (this.#allocation < 3) {
-			// A squeezed allocation degrades only blocks that genuinely overflow it.
-			// The allocator measures blocks by trimmed height and never squeezes one
-			// below that, so inline tools whose real content is 1-2 rows (wait
-			// results, one-line receipts) keep that content instead of an equally
-			// tall but contentless frame.
+		const preserveWriteHeader =
+			this.#toolName === "write" &&
+			this.#contentBox.children.length === 1 &&
+			isFramedBlockComponent(this.#contentBox.children[0]!);
+		if (this.#allocation < 3 || (preserveWriteHeader && lines.length > this.#allocation)) {
+			// Inline tools keep their real 1-2 rows; larger cards fall back to a
+			// compact target row when even a frame cannot fit.
 			const trimmed = trimBlankEdges(lines);
-			if (trimmed.length > this.#allocation) return this.#renderCompact(width);
-			lines = trimmed;
+			if (trimmed.length > this.#allocation) {
+				if (this.#allocation < 3) return this.#renderCompact(width);
+				// Keep the target with the visible preview instead of letting the
+				// transcript's tail clipping discard the write card's header.
+				const clipped = trimmed.slice(-this.#allocation);
+				clipped[0] = trimmed[0]!;
+				lines = clipped;
+			} else {
+				lines = trimmed;
+			}
 		}
 		this.#firstResultViewportRepaintShapePainted = this.#needsFirstResultViewportRepaintAtRender();
 		this.#partialResultShapePainted = this.#result !== undefined && this.#isPartial;
 		return lines;
 	}
 
-	#renderCompact(width: number, singleLine = false): readonly string[] {
-		if (singleLine) {
-			if (this.#result?.isError) return [];
-			const summary = this.#compactActivity();
-			const status = this.#nativeStatus();
-			const ms = this.#elapsedMs(status);
-			const elapsed = ms === undefined ? "" : ` ${Math.floor(ms / 1000)}s`;
-			const state = theme.fg(
-				status === "error"
-					? "error"
-					: this.#compactNeedsUserInput !== undefined || this.#hasCompactReadWarning()
-						? "warning"
-						: "dim",
-				`${this.#compactNeedsUserInput === undefined ? (this.#compactOutcome() ?? COMPACT_STATUS_LABEL[status]) : "等待用户输入"} · `,
-			);
-			const detail = summary.detail ? `${theme.fg("dim", " · ")}${theme.fg("text", summary.detail)}` : "";
-			const line = truncateToWidth(
-				`${state}${theme.fg(summary.detail ? "dim" : "text", summary.label)}${detail}`,
-				Math.max(1, width - Bun.stringWidth(elapsed)),
-			);
-			return [truncateToWidth(`${line}${theme.fg("dim", elapsed)}`, width)];
-		}
+	#renderCompact(width: number): readonly string[] {
 		const summary = this.#activitySummary();
 		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";
 		// Elapsed ticks only while the call is genuinely running; a settled
@@ -1839,12 +1622,11 @@ export class ToolExecutionComponent extends Container {
 		return [truncateToWidth(`${theme.fg("dim", "╭─")} ${text}`, width), theme.fg("dim", "╰")];
 	}
 
-	#activitySummary(args = this.#args, compactToolActivity = false): ToolActivitySummary {
+	#activitySummary(args = this.#args): ToolActivitySummary {
 		this.#renderState.renderContext ??= this.#buildRenderContext();
 		const summary = this.#renderer?.activitySummary?.(args, {
 			expanded: this.#expanded,
 			isPartial: this.#isPartial,
-			compactToolActivity,
 			spinnerFrame: this.#spinnerFrame,
 			result: this.#result,
 			renderContext: this.#renderState.renderContext,
@@ -1880,10 +1662,6 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	#rebuildDisplay(): void {
-		if (this.#compactToolActivity) {
-			this.#renderState.renderContext = this.#buildRenderContext();
-			return;
-		}
 		// Sync shared mutable render state for component closures
 		this.#renderState.expanded = this.#expanded;
 		this.#renderState.isPartial = this.#isPartial;
@@ -2176,14 +1954,7 @@ export class ToolExecutionComponent extends Container {
 
 			for (let i = 0; i < imageBlocks.length; i++) {
 				const img = imageBlocks[i];
-				if (
-					TERMINAL.imageProtocol &&
-					this.#showImages &&
-					!displayPreferences.compactToolActivity &&
-					!displayPreferences.hideToolActivity &&
-					img.data &&
-					img.mimeType
-				) {
+				if (TERMINAL.imageProtocol && this.#showImages && !this.#toolImagesHidden() && img.data && img.mimeType) {
 					// Use converted PNG for Kitty protocol if available
 					const source: ImageContent = { type: "image", data: img.data, mimeType: img.mimeType };
 					const converted =
@@ -2290,10 +2061,6 @@ export class ToolExecutionComponent extends Container {
 			context.rawDetails = this.#rawDetails;
 		}
 		if (this.#toolName === "bash") {
-			Object.defineProperty(context, "compactToolActivity", {
-				get: () => displayPreferences.compactToolActivity,
-				enumerable: true,
-			});
 			// Bash needs render context even before a result exists. The renderer uses the pending-call args
 			// plus this context to keep the inline command preview visible while tool-call JSON is still streaming.
 			if (this.#result) {
@@ -2337,12 +2104,6 @@ export class ToolExecutionComponent extends Container {
 			}
 			context.renderDiff = renderDiff;
 		} else if (this.#toolName === "write") {
-			// Delegated renderers such as Bash read this preference at paint time,
-			// including after the display mode changes without a result rebuild.
-			Object.defineProperty(context, "compactToolActivity", {
-				get: () => displayPreferences.compactToolActivity,
-				enumerable: true,
-			});
 			// Device-dispatch previews render through the host's canonical resolver,
 			// which covers mounted devices and active top-level tools (the `write`
 			// transport accepts both). Deciding the predicate here instead would
@@ -2360,7 +2121,7 @@ export class ToolExecutionComponent extends Container {
 	#getTextOutput(): string {
 		if (!this.#result) return "";
 		// Image placeholders embed a link only under an enabled hyperlink policy.
-		const key = `${this.#resultVersion}|${this.#showImages}|${TERMINAL.imageProtocol ?? "-"}|${imageLinksEnabled()}`;
+		const key = `${this.#resultVersion}|${this.#showImages}|${displayPreferences.hideToolActivity}|${TERMINAL.imageProtocol ?? "-"}|${imageLinksEnabled()}`;
 		if (key === this.#textOutputKey) return this.#textOutput;
 
 		const textBlocks = this.#result.content.filter(c => c.type === "text");
@@ -2376,7 +2137,10 @@ export class ToolExecutionComponent extends Container {
 			const imageIndicators = imageBlocks
 				.map(img => {
 					const mimeType = String(img.mimeType);
-					const dims = img.data ? (getImageDimensions(img.data, mimeType) ?? undefined) : undefined;
+					const dims =
+						img.data && this.#showImages && !displayPreferences.hideToolActivity
+							? (getImageDimensions(img.data, mimeType) ?? undefined)
+							: undefined;
 					const placeholder = imageFallback(mimeType, dims);
 					return img.data
 						? linkedImageText(placeholder, { data: img.data, mimeType }, readMediaPath(this.#rawDetails))

@@ -79,6 +79,8 @@ export interface SchemeWritePolicy {
 	 *   hosts, devices); file-editing tools refuse the URL even when it locates a backing file.
 	 */
 	via: "file" | "handler";
+	/** Handler-owned write operates on files rather than messages or controls. */
+	fileOperation?: true;
 	/**
 	 * `text`: model-authored text; `write` strips copied hashline display prefixes and, unless the
 	 * scheme is a `device`, rejects content that ends with a read-truncation notice.

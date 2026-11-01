@@ -1,6 +1,6 @@
 /**
  * Regression coverage for per-turn usage placement across transcript rebuilds.
- * Read-only turns keep their metrics inside the compact read group; other
+ * Read-only turns keep their metrics inside the read group; other
  * assistant turns retain a standalone row below their visible content/tools.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";

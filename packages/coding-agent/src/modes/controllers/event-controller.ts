@@ -1125,6 +1125,12 @@ export class EventController {
 			await this.ctx.init();
 		}
 		if (generation !== this.#dispatchGeneration) return;
+		(
+			this.ctx as InteractiveModeContext & { compactThinkingPreview?: { observe(event: AgentSessionEvent): void } }
+		).compactThinkingPreview?.observe(event);
+		if (event.type === "agent_end" || event.type === "session_abort") {
+			this.ctx.ui.requestRender();
+		}
 
 		// Each handler explicitly requests a render (or leaves it out, when it
 		// changed nothing visible). A blanket pre-render fired on every event —
@@ -1135,6 +1141,17 @@ export class EventController {
 		// state changes rather than event volume (issue #4353).
 		const run = this.#handlers[event.type] as (e: AgentSessionEvent) => Promise<void>;
 		await run(event);
+		// Some hidden or already-settled tool cards return without requesting a
+		// frame, but the compact dock still follows the authoritative lifecycle.
+		if (
+			chatTranscriptDisplayPreferences.compactToolActivity &&
+			(event.type === "tool_execution_start" ||
+				event.type === "tool_execution_update" ||
+				event.type === "tool_execution_end" ||
+				event.type === "message_end")
+		) {
+			this.ctx.ui.requestRender();
+		}
 	}
 
 	#setTerminalProgress(active: boolean): void {
@@ -2094,10 +2111,6 @@ export class EventController {
 				this.ctx.ui.requestRender();
 			}
 		}
-		const activeComponent = this.ctx.pendingTools.get(event.toolCallId);
-		if (activeComponent instanceof ToolExecutionComponent) {
-			activeComponent.setCompactNeedsUserInput(blocked ? (blocked.msg ?? "需要确认") : undefined);
-		}
 		this.#startToolApprovalPreview(event.toolCallId);
 	}
 
@@ -2218,7 +2231,6 @@ export class EventController {
 		if (event.toolName === "wait" && component instanceof ToolExecutionComponent) {
 			component.setSettledBashJobs(() => settledBashCards(this.ctx.chatContainer.children));
 		}
-		if (component instanceof ToolExecutionComponent) component.setCompactNeedsUserInput(undefined);
 		const settled = this.#settledBeforeReturn.get(event.toolCallId)?.partialResult;
 		this.#settledBeforeReturn.delete(event.toolCallId);
 		const parks = parksAsBackground(event.toolName, event.result.details);

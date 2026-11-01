@@ -156,13 +156,12 @@ function makeRenderCtx(
 	hideToolActivity = false,
 	compactToolActivity = false,
 ): { ctx: InteractiveModeContext; chatContainer: TranscriptContainer } {
-	cfgDisplayMode.override(
-		Settings.instance,
-		hideToolActivity ? "clean" : compactToolActivity ? "compact" : "detailed",
-	);
-	setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity });
+	const mode = compactToolActivity ? "compact" : hideToolActivity ? "clean" : "detailed";
+	const hidden = hideToolActivity || compactToolActivity;
+	cfgDisplayMode.override(Settings.instance, mode);
+	setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: hidden });
 	const chatContainer = new TranscriptContainer();
-	chatContainer.setToolActivityVisible(!hideToolActivity);
+	chatContainer.setToolActivityVisible(!hidden);
 	const ctx = {
 		chatContainer,
 		pendingShellContainer: new Container(),
@@ -190,11 +189,11 @@ function makeRenderCtx(
 		// keep it on so the image-replay contracts below stay meaningful.
 		settings: Settings.isolated({
 			"terminal.showImages": showImages,
-			"display.mode": hideToolActivity ? "clean" : compactToolActivity ? "compact" : "detailed",
+			"display.mode": mode,
 			"composer.recallClearedDrafts": false,
 		}),
 		toolOutputExpanded: false,
-		hideToolActivity,
+		hideToolActivity: hidden,
 		hideThinkingBlock: false,
 		assistantImagesVisible: showImages,
 		tableChartsVisible: true,
@@ -349,8 +348,6 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 			const rendered = Bun.stripANSI(chatContainer.render(120).join("\n"));
 			expect(rendered).toContain("KEPT_USER_REQUEST");
 			expect(rendered).toContain("compacted · Ctrl+O");
-			expect(rendered).toContain("recent.txt");
-			expect(rendered).toContain("RECENT_FILE_BODY");
 			for (const text of [
 				"ORIGINAL_USER_REQUEST",
 				"OLD_PROSE_BEFORE_TOOL",
@@ -377,7 +374,9 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 
 		cfgDisplayCollapseCompacted.override(Settings.instance, false);
 		cfgDisplayMode.override(Settings.instance, "detailed");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		ctx.hideToolActivity = false;
+		chatContainer.setToolActivityVisible(true);
 		await helpers.renderInitialMessages();
 		const detailed = Bun.stripANSI(chatContainer.render(120).join("\n"));
 		expect(detailed).toContain("OLD_TOOL_PATH");
@@ -387,7 +386,9 @@ describe("UiHelpers.renderInitialMessages — compacted conversation", () => {
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
 
 		cfgDisplayMode.override(Settings.instance, "compact");
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		ctx.hideToolActivity = true;
+		chatContainer.setToolActivityVisible(false);
 		await helpers.renderInitialMessages();
 		expect(Bun.stripANSI(chatContainer.render(120).join("\n"))).toContain("ORIGINAL_USER_REQUEST");
 		expect(JSON.stringify(session.buildSessionContext())).toBe(modelContextBefore);
@@ -615,7 +616,7 @@ describe("UiHelpers.renderInitialMessages — responsiveness", () => {
 });
 
 describe("UiHelpers.renderInitialMessages — read segment replay", () => {
-	it("keeps read slots and per-segment compact statistics across display rebuilds with reversed results", async () => {
+	it("keeps detailed read slots across display rebuilds with reversed results", async () => {
 		const readCall = (id: string): AssistantMessage["content"][number] => ({
 			type: "toolCall",
 			id,
@@ -644,40 +645,45 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 		}));
 		const transcript = transcriptWith([mixed, ...results]);
 		const original = structuredClone(transcript.messages);
-		const { ctx, chatContainer } = makeRenderCtx(transcript, false, false, true);
+		const { ctx, chatContainer } = makeRenderCtx(transcript, false);
 		const helpers = new UiHelpers(ctx);
-		let firstCompact: string | undefined;
-		for (const compact of [true, false, true]) {
-			cfgDisplayMode.override(Settings.instance, compact ? "compact" : "detailed");
-			cfgDisplayMode.override(ctx.settings, compact ? "compact" : "detailed");
-			setChatTranscriptDisplayPreferences({ compactToolActivity: compact });
+		for (const mode of ["detailed", "clean", "detailed"] as const) {
+			cfgDisplayMode.override(Settings.instance, mode);
+			cfgDisplayMode.override(ctx.settings, mode);
+			setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: mode === "clean" });
+			ctx.hideToolActivity = mode === "clean";
+			chatContainer.setToolActivityVisible(mode !== "clean");
 			await helpers.renderInitialMessages();
 			const groups = chatContainer.children.filter(
 				(child): child is ReadToolGroupComponent => child instanceof ReadToolGroupComponent,
 			);
 			expect(groups).toHaveLength(2);
 			const rendered = Bun.stripANSI(chatContainer.render(160).join("\n"));
-			const expectedOrder = [
-				"BEFORE_READS",
-				...(compact ? ["A1.txt"] : ["A0.txt", "A1.txt", "A2.txt"]),
-				"BETWEEN_READ_AND_WRITE",
-				"W0.txt",
-				"BETWEEN_WRITE_AND_READ",
-				...(compact ? ["B1.txt"] : ["B0.txt", "B1.txt", "B2.txt"]),
-				"AFTER_READS",
-			];
+			const expectedOrder =
+				mode === "clean"
+					? ["BEFORE_READS", "BETWEEN_READ_AND_WRITE", "BETWEEN_WRITE_AND_READ", "AFTER_READS"]
+					: [
+							"BEFORE_READS",
+							"A0.txt",
+							"A1.txt",
+							"A2.txt",
+							"BETWEEN_READ_AND_WRITE",
+							"W0.txt",
+							"BETWEEN_WRITE_AND_READ",
+							"B0.txt",
+							"B1.txt",
+							"B2.txt",
+							"AFTER_READS",
+						];
 			let previous = -1;
 			for (const marker of expectedOrder) {
 				const position = rendered.indexOf(marker);
 				expect(position).toBeGreaterThan(previous);
 				previous = position;
 			}
-			if (compact) {
-				expect(rendered).not.toContain("失败 1 次");
+			if (mode === "clean") {
 				expect(rendered).not.toContain("A0.txt");
 				expect(rendered).not.toContain("B0.txt");
-				if (firstCompact !== undefined) expect(rendered).toBe(firstCompact);
-				firstCompact = rendered;
 			}
 			expect(transcript.messages).toEqual(original);
 		}
@@ -686,7 +692,7 @@ describe("UiHelpers.renderInitialMessages — read segment replay", () => {
 });
 
 describe("UiHelpers.renderInitialMessages — image replay", () => {
-	it("retains inline compact image reads and restores detailed images without changing history", async () => {
+	it("hides compact image reads and restores detailed images without changing history", async () => {
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
 			assistantToolCall("legacy-image", "read", { path: "legacy.png" }),
@@ -701,8 +707,8 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		]);
 		const original = structuredClone(transcript.messages);
 		for (const display of ["compact", "detailed", "clean"] as const) {
-			const hidden = display === "clean";
-			const { ctx, chatContainer } = makeRenderCtx(transcript, true, hidden, display !== "detailed");
+			const hidden = display !== "detailed";
+			const { ctx, chatContainer } = makeRenderCtx(transcript, true, display === "clean", display === "compact");
 			await new UiHelpers(ctx).renderInitialMessages();
 			const ansi = Bun.stripANSI(chatContainer.render(100).join("\n"));
 			const native = chatContainer
@@ -719,14 +725,8 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 					),
 				)
 				.join("\n");
-			if (display === "compact") {
-				expect(ansi).toContain("legacy.png");
-				expect(native).toContain("legacy.png");
-				const group = chatContainer.children.find(child => child instanceof ReadToolGroupComponent);
-				expect(group?.getCompactToolCount()).toBe(1);
-				expect(hasImageComponent(chatContainer)).toBe(false);
+			if (hidden) {
 				expect(native).not.toContain('"k":"image"');
-			} else if (hidden) {
 				expect(ansi).not.toContain("legacy.png");
 				expect(hasImageComponent(chatContainer)).toBe(false);
 			} else {
@@ -814,7 +814,7 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 		expect(hasImageComponent(chatContainer)).toBe(true);
 	});
 
-	it("preserves tool-result images while tool activity is hidden so revealing it can replay the image", async () => {
+	it("preserves hidden tool-result images for replay after switching to detailed mode", async () => {
 		await Settings.init({ inMemory: true, overrides: { "terminal.showImages": true } });
 		setTerminalImageProtocol(ImageProtocol.Sixel);
 		const transcript = transcriptWith([
@@ -837,6 +837,8 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			(child): child is AssistantMessageComponent => child instanceof AssistantMessageComponent,
 		);
 		expect(assistant).toBeDefined();
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		chatContainer.setToolActivityVisible(true);
 		assistant?.setToolResultImagesVisible(true);
 		expect(hasImageComponent(chatContainer)).toBe(true);
 	});

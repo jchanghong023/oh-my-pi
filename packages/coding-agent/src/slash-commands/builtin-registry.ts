@@ -5,6 +5,7 @@ import { JCH_SLASH_COMMANDS } from "../jch-commands";
 import { BUILTIN_COLLABORATION_SLASH_COMMANDS } from "./builtin-collaboration";
 import {
 	buildArgumentCompletions,
+	buildCrawlArgumentCompletions,
 	buildDirectoryArgumentCompletions,
 	buildEffortArgumentCompletions,
 	buildEffortInlineHint,
@@ -15,6 +16,7 @@ import {
 	buildSubcommandInlineHint,
 } from "./builtin-completions";
 import { BUILTIN_CONTROL_SLASH_COMMANDS } from "./builtin-control";
+import { BUILTIN_CRAWL_SLASH_COMMANDS } from "./builtin-crawl";
 import { BUILTIN_LIFECYCLE_SLASH_COMMANDS } from "./builtin-lifecycle";
 import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "./builtin-magic-keywords";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
@@ -45,6 +47,7 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MODE_SLASH_COMMANDS,
+	...BUILTIN_CRAWL_SLASH_COMMANDS,
 	...BUILTIN_COLLABORATION_SLASH_COMMANDS,
 	...BUILTIN_SESSION_SLASH_COMMANDS,
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,
@@ -104,6 +107,9 @@ function materializeTuiBuiltinSlashCommand(
 			materialized.getArgumentCompletions = buildArgumentCompletions(subcommands, options);
 			materialized.getInlineHint = buildSubcommandInlineHint(subcommands, options);
 		}
+	} else if (cmd.name === "crawl") {
+		materialized.getArgumentCompletions = buildCrawlArgumentCompletions(runtime?.ctx.sessionManager.getCwd());
+		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);
 	} else if (cmd.name === "move") {
 		materialized.getArgumentCompletions = buildDirectoryArgumentCompletions();
 		if (cmd.inlineHint) materialized.getInlineHint = buildStaticInlineHint(cmd.inlineHint);

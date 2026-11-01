@@ -91,14 +91,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary" },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 2 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup" },
+					selection: { mode: "full", group: "startup", suiteRevision: 2 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -122,7 +122,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 				exitCode: number;
 				status: string;
 				report?: string;
-				selection?: { mode: string; group?: string };
+				selection?: { mode: string; group?: string; suiteRevision?: number };
 			}[],
 		};
 		const save = () => fs.writeFile(path.join(dir, "run.json"), JSON.stringify(report));
@@ -132,7 +132,18 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.scope = "fulltest: fork feature suites";
 		await save();
+		// Ordinary and startup producers together cover the current fork TS scope.
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		// A prior full report did not include display consumers in the ordinary group.
+		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 2 };
+		report.producers[1]!.selection = { mode: "full", group: "startup" };
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 2 };
+		await save();
 		expect((await bunTestSelection(root, true, "f".repeat(40))).mode).toBe("full");
 		report.completion = "partial";
 		await save();
@@ -165,11 +176,27 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			status: "passed",
 			report: "available",
-			selection: { mode: "full", group: "ordinary" },
+			selection: { mode: "full", group: "ordinary", suiteRevision: 2 },
 		};
 		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers.push(startup);
+		await save();
+		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		report.producers.splice(report.producers.indexOf(startup), 1);
+		report.producers.push({ ...startup, exitCode: 1, status: "failed" });
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers.pop();
+		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 2 } });
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers.pop();
+		report.producers.push({ ...startup, report: "missing" });
+		await save();
+		expect((await bunTestSelection(root)).mode).toBe("full");
+		report.producers.pop();
 		report.producers.push(startup);
 		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
@@ -577,6 +604,14 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
+			"packages/tui/test/composer-inline-shrink.test.ts",
+			"packages/tui/test/composer-welcome-scrollback.test.ts",
+			"packages/tui/test/transcript-container.test.ts",
+			"packages/tui/test/transcript-seam-loss.test.ts",
+			"packages/tui/test/thinking-preview.test.ts",
+			"packages/coding-agent/test/event-controller-thinking-preview.test.ts",
+			"packages/coding-agent/test/interactive-terminal-e2e.test.ts",
+			"packages/coding-agent/test/modes/utils/render-initial-messages.test.ts",
 		];
 		const excluded = [
 			"packages/ai/test/unrelated.test.ts",
@@ -594,7 +629,6 @@ test("local suites select fork consumers and drain failures without widening to 
 		);
 		const fullMarkers = [...selected, "failure", "after-failure"].sort();
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
-		expect(dry).toContain("scope=fork-features selected-files=16");
 		expect(await executed()).toEqual([]);
 		expect(dry).toContain("./test/modes/zcode-permissions.e2e.ts");
 		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));

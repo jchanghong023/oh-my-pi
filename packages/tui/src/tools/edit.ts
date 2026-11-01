@@ -745,18 +745,23 @@ export function getEditInputPaths(input: string, resolvedMode?: EditMode): reado
 			: /^[ \t]*\*{3}[ \t]+Edit[ \t]+File:/im.test(input)
 				? "sloppy"
 				: undefined);
+	const paths: string[] = [];
 	try {
 		const entries =
 			mode && mode !== "hashline" ? inspectInputEntries({}, mode, input) : getHashlineInputSections(input);
-		const paths: string[] = [];
 		for (const entry of entries) {
 			if (entry.path) paths.push(entry.path);
 			if (entry.rename && entry.rename !== entry.path) paths.push(entry.rename);
 		}
-		return paths;
 	} catch {
-		return [];
+		// An incomplete or malformed patch can still identify its file in a header.
 	}
+	if (paths.length === 0 && mode === "apply_patch") {
+		for (const match of input.matchAll(/^\*\*\* (?:Add|Update|Delete) File:[ \t]*(.+?)[ \t]*\r?$/gm)) {
+			if (match[1]) paths.push(match[1]);
+		}
+	}
+	return paths;
 }
 
 function getHashlineInputRenderSummary(

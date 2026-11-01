@@ -28,27 +28,23 @@ describe("bashToolRenderer", () => {
 		terminal.imageProtocol = originalProtocol;
 	});
 
-	it("hides raw output artifact labels in compact Bash previews while preserving expanded and detailed views", () => {
+	it("preserves raw output artifact labels in detailed views", () => {
 		for (const exitCode of [0, 1]) {
 			const result = {
 				content: [{ type: "text", text: "diagnostic\n[raw output: artifact://195]" }],
 				details: { exitCode },
 				isError: exitCode !== 0,
 			};
-			for (const [compactToolActivity, expanded, visible] of [
-				[true, false, false],
-				[true, true, true],
-				[false, false, true],
-			] as const) {
-				const options = { expanded, isPartial: false, compactToolActivity };
+			for (const expanded of [false, true]) {
+				const options = { expanded, isPartial: false };
 				const args = { command: "test-command" };
 				const rendered = sanitizeText(
 					bashToolRenderer.renderResult(result, options, uiTheme, args).render(120).join("\n"),
 				);
-				expect(rendered.includes("Artifact: 195")).toBe(visible);
+				expect(rendered).toContain("Artifact: 195");
 				expect(rendered).toContain("diagnostic");
 				const native = JSON.stringify(bashToolRenderer.describeResult(result, options, args));
-				expect(native.includes("Artifact 195")).toBe(visible);
+				expect(native).toContain("Artifact 195");
 				expect(native).toContain("diagnostic");
 			}
 		}
@@ -278,39 +274,6 @@ describe("bashToolRenderer", () => {
 		expect(rendered).not.toContain("Wall time: 0.02 seconds");
 		// The command's own output still shows.
 		expect(rendered).toContain("boom");
-	});
-
-	it("shows diagnostics instead of trailing Bun wrappers in compact failures", () => {
-		const output =
-			'diagnostic one\ndiagnostic two\nerror: script "test" exited with code 1\nerror: script "check" exited with code 1';
-		const result = {
-			content: [{ type: "text", text: output }],
-			details: { exitCode: 23, wallTimeMs: 500, timeoutSeconds: 300 },
-			isError: true,
-		};
-		const args = { command: "bun run check" };
-		const compact = sanitizeText(
-			bashToolRenderer
-				.renderResult(result, { expanded: false, isPartial: false, compactToolActivity: true }, uiTheme, args)
-				.render(120)
-				.join("\n"),
-		);
-		expect(compact).toContain("diagnostic one");
-		expect(compact).toContain("diagnostic two");
-		expect(compact).not.toContain("exited with code");
-		expect(compact).not.toContain("Failed");
-		expect(compact).not.toContain("Exit: 23");
-		expect(compact).not.toContain("Timeout:");
-		expect(compact).not.toContain("Wall:");
-		const expanded = sanitizeText(
-			bashToolRenderer
-				.renderResult(result, { expanded: true, isPartial: false, compactToolActivity: true }, uiTheme, args)
-				.render(120)
-				.join("\n"),
-		);
-		expect(expanded).toContain('error: script "test" exited with code 1');
-		expect(expanded).toContain("Timeout: 300s");
-		expect(expanded).toContain("Exit: 23");
 	});
 
 	it("renders a timed-out command with a warning border instead of an error border", async () => {

@@ -15,7 +15,7 @@ import {
 } from "../components/markdown";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
-import { formatDuration, formatNumber, logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, formatNumber, logger } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { LRUCache } from "@oh-my-pi/pi-utils/lru";
 import type { AssistantTextRenderer, AssistantTextRendering, AssistantThinkingRenderer } from "./extension-types";
@@ -54,7 +54,7 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
  */
 const MAX_TRANSCRIPT_ERROR_ROWS = 8;
 const EMPTY_STABLE_RENDER: readonly string[] = [];
-export const paintCompactThinking = createGradientHighlighter({
+export const paintCompactToolActivity = createGradientHighlighter({
 	probe: "",
 	highlight: /[^\n]+/gu,
 	stops: 14,
@@ -361,9 +361,6 @@ export class AssistantMessageComponent extends Container {
 	// Fast-path state: reuse Markdown children when message shape is stable during streaming.
 	#fastPathKey: string | undefined;
 	#fastPathItems: FastPathItem[] | undefined;
-	#compactThinkingPreview?: Markdown;
-	#compactThinkingPreviewSourceRows?: readonly string[];
-	#compactThinkingPreviewRows: readonly string[] = EMPTY_STABLE_RENDER;
 	/**
 	 * Text blocks whose ```svg fences are lifted into figures, by content index.
 	 * Kept across slow-path rebuilds so a figure keeps its raster (and its
@@ -697,9 +694,6 @@ export class AssistantMessageComponent extends Container {
 		// rebuild with the current theme. Streaming updates call updateContent()
 		// directly and keep the fast path.
 		this.#markdownTheme = undefined;
-		this.#compactThinkingPreview = undefined;
-		this.#compactThinkingPreviewSourceRows = undefined;
-		this.#compactThinkingPreviewRows = EMPTY_STABLE_RENDER;
 		this.#fastPathKey = undefined;
 		this.#fastPathItems = undefined;
 		for (const block of this.#figureBlocks.values()) block.restyle();
@@ -711,7 +705,6 @@ export class AssistantMessageComponent extends Container {
 	override releaseRenderCaches(): void {
 		super.releaseRenderCaches();
 		this.#dropStableRenders();
-		this.#compactThinkingPreview?.releaseRenderCaches();
 		this.#emergencyText?.releaseRenderCaches();
 	}
 
@@ -893,54 +886,18 @@ export class AssistantMessageComponent extends Container {
 
 	/** Hold image and figure rendering until the completed block can enter immutable scrollback. */
 	isTranscriptBlockPending(): boolean {
-		if (this.#showImages && this.#kittyConversionsAwaited.size > 0) return true;
-		for (const block of this.#figureBlocks.values()) if (block.pending) return true;
-		return false;
-	}
-
-	/** Transient dock content only; compact thinking never renders in the transcript. */
-	renderCompactThinkingPreview(width: number): readonly string[] {
-		const message = this.#displayedMessage;
-		if (
-			!this.#compactToolActivity ||
-			this.#hideThinkingBlock ||
-			!this.#lastUpdateTransient ||
-			!message ||
-			message.stopReason === "aborted" ||
-			message.stopReason === "error"
-		) {
-			return EMPTY_STABLE_RENDER;
-		}
-		const index = this.#thinkingTailIndex(message);
-		if (index === undefined) return EMPTY_STABLE_RENDER;
-		const content = message.content[index];
-		if (content?.type !== "thinking") return EMPTY_STABLE_RENDER;
-		const display = resolveThinkingDisplay(content, this.#proseOnlyThinking);
-		if (!display.visible) return EMPTY_STABLE_RENDER;
-		if (!this.#compactThinkingPreview) {
-			this.#compactThinkingPreview = new Markdown(
-				display.text,
-				1,
-				0,
-				{ ...getMarkdownTheme(), codeBlockBorder: () => "" },
-				{ color: value => theme.fg("thinkingText", value), italic: true },
-			);
-			this.#compactThinkingPreview.transientRenderCache = true;
-		} else {
-			this.#compactThinkingPreview.setText(display.text);
-		}
-		const rows = this.#compactThinkingPreview.render(width);
-		if (rows !== this.#compactThinkingPreviewSourceRows) {
-			this.#compactThinkingPreviewSourceRows = rows;
-			this.#compactThinkingPreviewRows = EMPTY_STABLE_RENDER;
-			for (let index = rows.length - 1; index >= 0; index--) {
-				const row = sanitizeText(rows[index]!);
-				if (!row.trim()) continue;
-				this.#compactThinkingPreviewRows = [paintCompactThinking(row)];
-				break;
+		if (this.#showImages && this.#kittyConversionsAwaited.size > 0) {
+			for (const content of this.#lastMessage?.content ?? []) {
+				if (content.type === "image" && this.#kittyConversionsAwaited.has(imagePayloadKey(content))) return true;
+			}
+			if (this.#toolImagesVisible()) {
+				for (const images of this.#toolImagesByCallId.values()) {
+					if (images.some(image => this.#kittyConversionsAwaited.has(imagePayloadKey(image)))) return true;
+				}
 			}
 		}
-		return this.#compactThinkingPreviewRows;
+		for (const block of this.#figureBlocks.values()) if (block.pending) return true;
+		return false;
 	}
 
 	override render(width: number): readonly string[] {
@@ -1141,7 +1098,7 @@ export class AssistantMessageComponent extends Container {
 					children.push(this.#nativeImages.get(`i${index}`, content.data, content.mimeType));
 				}
 			}
-			if (this.#showImages && this.#showToolResultImages && !this.#compactToolActivity) {
+			if (this.#toolImagesVisible()) {
 				// Reads of files Tern's media viewer shows: the host loads each file once by path, no bytes uploaded.
 				const shownPaths = new Set<string>();
 				if (media) {
@@ -1638,7 +1595,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	get #compactToolActivity(): boolean {
-		return displayPreferences.compactToolActivity && !displayPreferences.hideToolActivity;
+		return displayPreferences.compactToolActivity;
 	}
 
 	getTranscriptBlockVersion(): number {
@@ -1776,7 +1733,9 @@ export class AssistantMessageComponent extends Container {
 			this.#toolImagesByCallId.delete(toolCallId);
 		} else {
 			this.#toolImagesByCallId.set(toolCallId, validImages);
-			this.#convertImagesForKitty(validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}` })));
+			if (this.#toolImagesVisible()) {
+				this.#convertImagesForKitty(validImages.map((image, index) => ({ image, key: `${toolCallId}:${index}` })));
+			}
 		}
 		if (this.#lastMessage) {
 			this.updateContent(this.#lastMessage, { transient: this.#lastUpdateTransient });
@@ -1850,8 +1809,17 @@ export class AssistantMessageComponent extends Container {
 		}
 	}
 
+	#toolImagesVisible(): boolean {
+		return (
+			this.#showImages &&
+			this.#showToolResultImages &&
+			!this.#compactToolActivity &&
+			!displayPreferences.hideToolActivity
+		);
+	}
+
 	#renderToolImages(): void {
-		if (!this.#showToolResultImages || this.#compactToolActivity) return;
+		if (!this.#toolImagesVisible()) return;
 		const entries = Array.from(this.#toolImagesByCallId.entries()).flatMap(([toolCallId, images]) => {
 			const sourcePath = this.#toolMediaPathByCallId.get(toolCallId);
 			return images.map((image, index) => ({ image, key: `${toolCallId}:${index}`, sourcePath }));
@@ -1913,7 +1881,7 @@ export class AssistantMessageComponent extends Container {
 		for (const content of message.content) {
 			if (content.type === "toolCall" || content.type === "image") return false;
 		}
-		if (this.#toolImagesByCallId.size > 0) return false;
+		if (this.#toolImagesVisible() && this.#toolImagesByCallId.size > 0) return false;
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		if (errorPresentation.kind === "compact-recovered") return false;
 		if (

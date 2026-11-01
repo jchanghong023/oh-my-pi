@@ -155,6 +155,11 @@ describe("CopySelectorComponent", () => {
 	beforeEach(async () => {
 		previousPreferences = { ...chatTranscriptDisplayPreferences };
 		await Settings.init({ inMemory: true, cwd: process.cwd() });
+		setChatTranscriptDisplayPreferences({
+			compactToolActivity: false,
+			hideToolActivity: false,
+			readToolResultPreview: false,
+		});
 		setKeybindings(KeybindingsManager.inMemory());
 	});
 	afterEach(() => {
@@ -224,7 +229,7 @@ describe("CopySelectorComponent", () => {
 	});
 
 	it("folds lazily created grouped reads into the assistant turn so Enter copies the yield", () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const picks: Array<{ content: string; label: string }> = [];
 		const selector = makeSelector(picks, () => {}, undefined, makeGroupedReadEntries());
 		const lines = selector.render(100).map(line => Bun.stripANSI(line));
@@ -234,8 +239,9 @@ describe("CopySelectorComponent", () => {
 		// leaving the Read card below the outline.
 		const boxed = lines.filter(line => line.startsWith("┆")).join("\n");
 		expect(boxed).toContain(GROUPED_READ_YIELD);
-		expect(boxed).toContain("Read a.ts");
-		expect(boxed).toContain("Read b.ts");
+		expect(boxed).toContain("Read (2)");
+		expect(boxed).toContain("a.ts");
+		expect(boxed).toContain("b.ts");
 
 		selector.handleInput(ENTER);
 		selector.dispose();
@@ -556,8 +562,7 @@ describe("CopySelectorComponent", () => {
 			expect(Bun.stripANSI(selector.render(100).join("\n"))).not.toContain("a earlier turns");
 
 			selector.handleInput(ENTER);
-			expect(picks).toHaveLength(1);
-			expect(picks[0]!.content).toContain("output 699");
+			expect(picks).toEqual([{ content: "step 699\n\noutput 699", label: "turn content" }]);
 		} finally {
 			selector.dispose();
 		}

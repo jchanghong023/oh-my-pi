@@ -25,6 +25,7 @@ import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { VirtualRenderScheduler } from "./virtual-render-scheduler";
 import { VirtualTerminal } from "./virtual-terminal";
 import { withoutTerminalMultiplexer } from "./helpers/terminal-multiplexer";
+import { DisplayContract } from "./helpers/display-contract";
 
 withoutTerminalMultiplexer();
 
@@ -179,7 +180,7 @@ describe("composer inline shrink (#11007)", () => {
 			for (const completeScrollback of [false, true]) {
 				let upstreamGrowth: string[] | undefined;
 				for (const compactToolActivity of [false, true]) {
-					setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: false });
+					setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
 					const h = makeHarness(100, 28, 0);
 					h.composer.setPreferences({ completeScrollback });
 					h.hud.rows = 2;
@@ -229,7 +230,7 @@ describe("composer inline shrink (#11007)", () => {
 
 	it("keeps finalized compact prose available and input visible after self-clearing chrome changes", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const h = makeHarness(60, 18, 0, ["SHELL_BEFORE_COMPACT_REPLY"]);
 		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
 			selfClearingChrome: [h.hud],
@@ -272,7 +273,7 @@ describe("composer inline shrink (#11007)", () => {
 			// Full semantic rendering is the existing export/full-content boundary,
 			// independent of how much unfinished Markdown reached native scrollback.
 			for (const compactToolActivity of [true, false]) {
-				setChatTranscriptDisplayPreferences({ compactToolActivity });
+				setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
 				const full = Bun.stripANSI(h.transcript.render(60).join("\n"));
 				expect(Array.from(full.match(/PARA\d{2}/g) ?? [])).toEqual(paragraphs);
 				expect(full).toContain("active");
@@ -286,9 +287,89 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
+	it("keeps normal-follow prose and table history ordered when a draft and self-clearing HUD coexist", async () => {
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		try {
+			for (const [columns, rows] of [
+				[100, 28],
+				[120, 36],
+			] as const) {
+				for (const completeScrollback of [false, true]) {
+					const terminal = new VirtualTerminal(columns, rows);
+					const scheduler = new VirtualRenderScheduler();
+					const composer = new Composer({
+						terminal,
+						tuiOptions: { renderScheduler: scheduler },
+						preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback },
+					});
+					const transcript = new TranscriptContainer();
+					const message = new AssistantMessageComponent();
+					const hud = new InlineWidget();
+					const draft = "UNSUBMITTED_DRAFT first line\nsecond line remains\nDRAFT_END";
+					composer.editor.setText(draft);
+					transcript.addChild(message);
+					composer.setRuntimeChildren([transcript, hud, composer.editor], {
+						selfClearingChrome: [hud],
+						transientChrome: [composer.editor],
+					});
+					composer.start({ playWelcomeIntro: false });
+					const paragraphs = Array.from({ length: 24 }, (_, i) => `PROSE${String(i).padStart(2, "0")}`);
+					const tableRows = Array.from({ length: 24 }, (_, i) => `TABLE${String(i).padStart(2, "0")}`);
+					const lines = [
+						...paragraphs.flatMap(paragraph => [paragraph, ""]),
+						"| Item | Result |",
+						"| --- | --- |",
+						...tableRows.map(row => `| ${row} | complete |`),
+						"",
+						"ANSWER_END",
+					];
+					const assertDraft = () => {
+						expect(composer.editor.getText()).toBe(draft);
+						expect(terminal.getViewport().join("\n")).toContain("DRAFT_END");
+					};
+					try {
+						hud.rows = 3;
+						let source = "";
+						for (let i = 0; i < lines.length; i++) {
+							source += `${lines[i]}\n`;
+							if (i === paragraphs.length) hud.rows = 0;
+							if (i === paragraphs.length * 2) hud.rows = 3;
+							message.updateContent(reply(source), { transient: true });
+							composer.ui.requestRender();
+							await scheduler.settle(terminal);
+							assertDraft();
+						}
+						message.updateContent(reply(source));
+						message.markTranscriptBlockFinalized();
+						composer.ui.requestRender();
+						await scheduler.settle(terminal);
+						assertDraft();
+						hud.rows = 0;
+						composer.ui.requestRender();
+						await scheduler.settle(terminal);
+						assertDraft();
+						const history = Bun.stripANSI(terminal.getScrollBuffer().join("\n"));
+						expect(Array.from(history.matchAll(/PROSE\d{2}|TABLE\d{2}|ANSWER_END/g), match => match[0])).toEqual([
+							...paragraphs,
+							...tableRows,
+							"ANSWER_END",
+						]);
+						expect(terminal.getViewport().join("\n")).toContain("ANSWER_END");
+					} finally {
+						message.dispose();
+						composer.stop();
+					}
+				}
+			}
+		} finally {
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	it("keeps finalized table content available and the draft visible beside narrow activity and status chrome", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const terminal = new VirtualTerminal(100, 24);
 		const scheduler = new VirtualRenderScheduler();
 		const composer = new Composer({
@@ -618,6 +699,97 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
+	for (const [columns, rows] of [
+		[100, 28],
+		[120, 36],
+	] as const) {
+		it(`keeps every default compact frame stable through transient growth and refill at ${columns}x${rows}`, async () => {
+			const previous = { ...chatTranscriptDisplayPreferences };
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			const h = makeHarness(columns, rows);
+			const contract = new DisplayContract(columns * 100 + rows);
+			let event = "initial";
+			let unchanged: readonly string[] | undefined;
+			let observed = 0;
+			let unsubscribe: (() => void) | undefined;
+			const reachable = (): number[] =>
+				h.terminal
+					.getScrollBuffer()
+					.map(row => Bun.stripANSI(row).trimEnd())
+					.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
+					.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
+			try {
+				expect(COMPOSER_DEFAULTS.completeScrollback).toBe(false);
+				await h.scheduler.settle(h.terminal);
+				const initial = contract.observe(event, h.terminal);
+				unsubscribe = contract.watch(
+					h.composer.ui,
+					h.terminal,
+					() => event,
+					frame => {
+						observed++;
+						const view = frame.viewport.map(row => Bun.stripANSI(row).trimEnd());
+						const editor = view.findIndex(row => row === "EDITOR");
+						expect(editor).toBe(rows - 1);
+						const first = view.findIndex(row => row.startsWith(TRANSCRIPT_PREFIX));
+						expect(first).toBeGreaterThanOrEqual(0);
+						// The fixture has one-row transcript blocks with one separator,
+						// and a contiguous widget; extra empty rows here are not content.
+						let empty = 0;
+						for (const row of view.slice(first, editor)) {
+							empty = row === "" ? empty + 1 : 0;
+							expect(empty).toBeLessThanOrEqual(1);
+						}
+						if (unchanged) expect(frame.viewport).toEqual(unchanged);
+					},
+				);
+				unchanged = initial.viewport;
+				event = "unchanged incremental render";
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				event = "unchanged full repaint";
+				h.composer.ui.requestRender(true);
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				expect(observed).toBeGreaterThan(0);
+
+				unchanged = undefined;
+				event = "grow transient widget";
+				h.widget.rows = 9;
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				event = "shrink transient widget";
+				h.widget.rows = 0;
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS }, (_, i) => i));
+				for (let i = TRANSCRIPT_ROWS; i < TRANSCRIPT_ROWS + 4; i++) {
+					event = `refill ${i}`;
+					h.transcript.addChild({ render: () => [`${TRANSCRIPT_PREFIX}${i}`] });
+					h.composer.ui.requestRender();
+					await h.scheduler.settle(h.terminal);
+					contract.assertHealthy();
+					expect(reachable()).toEqual(Array.from({ length: i + 1 }, (_, index) => index));
+				}
+				const incremental = contract.observe("refill settled", h.terminal);
+				unchanged = incremental.viewport;
+				event = "refill full repaint";
+				h.composer.ui.requestRender(true);
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				expect(contract.observe("repaint settled", h.terminal).viewport).toEqual(incremental.viewport);
+				expect(reachable()).toEqual(Array.from({ length: TRANSCRIPT_ROWS + 4 }, (_, index) => index));
+			} finally {
+				unsubscribe?.();
+				h.composer.stop();
+				setChatTranscriptDisplayPreferences(previous);
+			}
+		});
+	}
+
 	it("keeps the editor pinned to the bottom after transient below-transcript chrome shrinks", async () => {
 		const h = makeHarness();
 		await h.scheduler.settle(h.terminal);
@@ -709,7 +881,11 @@ describe("composer inline shrink (#11007)", () => {
 		const newest = `${TRANSCRIPT_PREFIX}${TRANSCRIPT_ROWS + STREAMED - 1}`;
 		const shrunk = view();
 		expect(shrunk[ROWS - 1]).toBe("EDITOR");
-		expect(shrunk.slice(shrunk.indexOf(newest) + 1, ROWS - 1).every(row => row === "")).toBe(true);
+		const newestRow = shrunk.indexOf(newest);
+		expect(newestRow).toBeGreaterThanOrEqual(0);
+		const compensation = shrunk.slice(newestRow + 1, ROWS - 1);
+		expect(compensation.length).toBeGreaterThan(0);
+		expect(compensation.every(row => row === "")).toBe(true);
 		h.transcript.addChild({ render: () => [`${TRANSCRIPT_PREFIX}${TRANSCRIPT_ROWS + STREAMED}`] });
 		h.composer.ui.requestRender();
 		await h.scheduler.settle(h.terminal);
@@ -833,6 +1009,103 @@ describe("composer inline shrink (#11007)", () => {
 		expect(words.length).toBe(text.split(/\s+/).filter(Boolean).length);
 		h.composer.stop();
 	});
+
+	for (const resizeTiming of ["before finalization", "after finalization"] as const) {
+		it(`keeps default compact streaming frames coherent when resized ${resizeTiming}`, async () => {
+			const previous = { ...chatTranscriptDisplayPreferences };
+			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+			const h = makeHarness(100, 28, 0);
+			const contract = new DisplayContract(resizeTiming === "before finalization" ? 2101 : 2102);
+			const message = new AssistantMessageComponent();
+			const paragraphs = Array.from({ length: 50 }, (_, i) => `streamline${i}`);
+			let event = "start";
+			let stable: readonly string[] | undefined;
+			let frames = 0;
+			let unsubscribe: (() => void) | undefined;
+			try {
+				h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
+					selfClearingChrome: [h.hud],
+					transientChrome: [h.editor],
+				});
+				h.composer.setRunActive(true);
+				h.hud.rows = 5;
+				h.transcript.addChild(message);
+				await h.scheduler.settle(h.terminal);
+				unsubscribe = contract.watch(
+					h.composer.ui,
+					h.terminal,
+					() => event,
+					frame => {
+						frames++;
+						const view = frame.viewport.map(row => Bun.stripANSI(row).trimEnd());
+						const editor = view.findIndex(row => row === "EDITOR");
+						expect(editor).toBeGreaterThanOrEqual(0);
+						// Each source paragraph is one row, with one Markdown separator.
+						// Check only between visible paragraphs: rows after the last one
+						// may be legitimate anchoring compensation for already-retired
+						// history, including history retired before a terminal grew.
+						let prior: { index: number; row: number } | undefined;
+						for (let row = 0; row < editor; row++) {
+							const match = /^streamline(\d+)$/.exec(view[row]!.trim());
+							if (!match) continue;
+							const index = Number(match[1]);
+							if (prior) {
+								expect(index).toBe(prior.index + 1);
+								expect(row - prior.row).toBe(2);
+								expect(view[row - 1]).toBe("");
+							}
+							prior = { index, row };
+						}
+						if (stable) expect(frame.viewport).toEqual(stable);
+					},
+				);
+				for (let n = 1; n <= paragraphs.length; n++) {
+					event = `stream ${n}`;
+					message.updateContent(reply(paragraphs.slice(0, n).join("\n\n")), { transient: true });
+					h.composer.ui.requestRender();
+					await h.scheduler.settle(h.terminal);
+					contract.assertHealthy();
+				}
+				const resize = async (): Promise<void> => {
+					event = `resize ${resizeTiming}`;
+					h.terminal.resize(120, 36);
+					await h.scheduler.advance(h.terminal, 300);
+					contract.assertHealthy();
+				};
+				if (resizeTiming === "before finalization") await resize();
+				event = "finalize stream";
+				message.updateContent(reply(paragraphs.join("\n\n")));
+				message.markTranscriptBlockFinalized();
+				h.composer.ui.requestRender();
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				if (resizeTiming === "after finalization") await resize();
+				event = "close loader";
+				h.hud.rows = 0;
+				h.composer.setRunActive(false);
+				h.composer.ui.requestRender();
+				await h.scheduler.advance(h.terminal, 300);
+				contract.assertHealthy();
+				expect(frames).toBeGreaterThan(0);
+				const history = h.terminal
+					.getScrollBuffer()
+					.map(row => Bun.stripANSI(row).trim())
+					.filter(row => /^streamline\d+$/.test(row));
+				expect(history).toEqual(paragraphs);
+				const incremental = contract.observe("settled after resize", h.terminal);
+				stable = incremental.viewport;
+				event = "unchanged full repaint after resize";
+				h.composer.ui.requestRender(true);
+				await h.scheduler.settle(h.terminal);
+				contract.assertHealthy();
+				expect(contract.observe("repaint after resize", h.terminal).viewport).toEqual(incremental.viewport);
+			} finally {
+				unsubscribe?.();
+				h.composer.stop();
+				setChatTranscriptDisplayPreferences(previous);
+			}
+		});
+	}
 
 	it("refills the screen when a tall HUD closes a frame after the answer finalizes", async () => {
 		const rows = 30;
@@ -1197,7 +1470,7 @@ describe("composer inline shrink (#11007)", () => {
 					[120, 36],
 				] as const) {
 					const run = async (compact: boolean) => {
-						setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: false });
+						setChatTranscriptDisplayPreferences({ compactToolActivity: compact, hideToolActivity: compact });
 						const h = makeHarness(columns, rows);
 						h.composer.setPreferences({ completeScrollback });
 						let toolRows = 12;

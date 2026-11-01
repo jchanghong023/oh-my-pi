@@ -21,6 +21,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `debug.enabled=false`、`ida.enabled=false`、`archive.enabled=false`（普通与 offline 启动均默认关闭；已有配置和用户显式开启仍优先，不改写配置文件）。
 - `eval.js=false`：所有平台、普通与 offline 启动均默认关闭 JavaScript Eval。默认工具 schema 和对应运行时说明只声明 Python；显式开启 JavaScript 后恢复该后端。未开启时拒绝 JavaScript 执行，显式开启后可实际执行。
 - `ask.timeout=60` 秒；Goal 自动编排的超时答复见 [Goal 自动编排](../goal-autopilot/spec.md)。
+- `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
 - 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。
 - `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行设置向导。
 - `statusLine.compactThinkingLevel=false`
@@ -59,3 +60,20 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - **THEN** 按既有行为发送程序状态通知，默认值不覆盖该选择。
 - **WHEN** 用户显式设置 `terminal.programStatus=false`
 - **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。
+
+### Requirement: 后台任务并发上限
+
+每个根会话共享的后台任务管理器 MUST 将运行中任务的并发硬上限从 100 降为 32；`async.maxJobs` 可进一步降低上限，但显式配置高于 32 时 MUST NOT 突破 32。该限制适用于普通与 offline 启动，覆盖同一管理器承载的 eval `agent()` 及其他后台任务，不按工具入口分别分配名额。
+
+#### Scenario: 默认限制与显式配置
+
+- **WHEN** 用户未配置 `async.maxJobs`
+- **THEN** 后台任务并发上限为 32。
+- **WHEN** 用户显式配置 `async.maxJobs`
+- **THEN** 沿用既有配置解析与优先级，并将后台任务并发上限限制在 32 以内；不改写已有配置文件。
+
+#### Scenario: 达到后台任务上限
+
+- **WHEN** 同一后台任务管理器中计入并发的运行中任务已达到有效上限
+- **THEN** 沿用既有拒绝注册及错误反馈行为，不启动超限任务；排队任务不占运行名额，已完成、失败或取消的任务不占运行名额。
+- **AND** 不改变 `task.maxConcurrency` 的独立子代理调度语义，也不新增排队机制。

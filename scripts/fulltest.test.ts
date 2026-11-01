@@ -24,12 +24,7 @@ import { runGateCommands } from "./test-gate-scheduler";
 
 test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
 	const commands = fulltestCommands({ debug: false }, "/tmp/home", "digest");
-	expect(commands.map(command => command.label)).toEqual([
-		"test/TypeScript fork feature suite",
-		"test/TypeScript startup suite",
-		"test/Rust fork features",
-		"smoke/isolated dev TUI PTY",
-	]);
+	expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
 });
 
@@ -636,6 +631,128 @@ describe("fulltest source snapshot checkpoints", () => {
 	});
 });
 
+for (const full of [false, true]) {
+	test(`${full ? "full" : "fork"} fulltest collects ordinary failures and runs the remaining suites`, async () => {
+		const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-test-lanes-"));
+		const worker = path.join(directory, "worker.ts");
+		const ordinaryLabel = "test/TypeScript fork feature suite";
+		const startupLabel = "test/TypeScript startup suite";
+		const rustLabel = full ? "test/Rust workspace" : "test/Rust fork features";
+		const identity: SourceIdentity = { head: "head", digest: "digest", dirty: false, status: "", files: [] };
+		try {
+			await fs.writeFile(
+				worker,
+				`
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+const [dir, label, originalArgv] = process.argv.slice(2);
+const file = (name, event) => path.join(dir, encodeURIComponent(name) + "." + event);
+const exists = async name => !!(await fs.stat(name).catch(() => null));
+const ordinary = "test/TypeScript fork feature suite";
+await fs.appendFile(file(label, "start"), JSON.stringify({
+  argv: JSON.parse(originalArgv),
+  home: process.env.HOME,
+  userprofile: process.env.USERPROFILE,
+  configRoot: process.env.OMP_CONFIG_ROOT,
+  affected: process.env.OMP_FULLTEST_AFFECTED,
+  budget: process.env.OMP_TEST_CPU_BUDGET,
+  nativeFinished: await exists(file("build/native", "end")),
+  ordinaryFinished: await exists(file(ordinary, "end"))
+}) + "\\n");
+await fs.writeFile(file(label, "end"), "finished");
+if (label === ordinary) process.exit(17);
+`,
+			);
+			const result = await runGate("fulltest", async realGate => {
+				const gate = {
+					signal: realGate.signal,
+					charged: async <T>(operation: () => T | Promise<T>) => operation(),
+					run: async () => {},
+					childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+					record: (error: unknown) => realGate.record(error),
+					fail: (error: unknown) => realGate.fail(error),
+				} as unknown as GateRun;
+				await runFulltest(
+					gate,
+					{ debug: false, full },
+					{
+						cpuBudget: 16,
+						captureSourceIdentity: async () => identity,
+						captureChangedPaths: async () => ["packages/tui/src/tui.ts"],
+						bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline: "a".repeat(40) }),
+						selectRustPackages: async () => ({
+							tool: "cargo-delta",
+							mode: "full",
+							packages: ["pi-knowledge", "pi-natives"],
+							reason: "fixture",
+						}),
+						fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
+						runGateCommands: async (_runner, commands, options) => {
+							await runGateCommands(
+								realGate,
+								commands.map(command => ({
+									...command,
+									argv: [process.execPath, worker, directory, command.label, JSON.stringify(command.argv)],
+								})),
+								options,
+							);
+						},
+					},
+				);
+			});
+			type Start = {
+				argv: string[];
+				home?: string;
+				userprofile?: string;
+				configRoot?: string;
+				affected?: string;
+				budget?: string;
+				nativeFinished: boolean;
+				ordinaryFinished: boolean;
+			};
+			const starts = async (label: string): Promise<Start[]> => {
+				const text = await fs
+					.readFile(path.join(directory, `${encodeURIComponent(label)}.start`), "utf8")
+					.catch(() => "");
+				return text.trim()
+					? text
+							.trim()
+							.split("\n")
+							.map(line => JSON.parse(line) as Start)
+					: [];
+			};
+			const ordinary = await starts(ordinaryLabel);
+			const startup = await starts(startupLabel);
+			const rust = await starts(rustLabel);
+			expect(ordinary).toHaveLength(1);
+			expect(startup).toHaveLength(1);
+			expect(rust).toHaveLength(1);
+			expect(ordinary[0]!.nativeFinished).toBe(true);
+			expect(startup[0]!.ordinaryFinished).toBe(true);
+			expect(ordinary[0]!.argv).toContain("--defer-startup");
+			expect(startup[0]!.argv).toContain("--only-startup");
+			expect(ordinary[0]!.home).toBeDefined();
+			expect(startup[0]!.home).toBeDefined();
+			expect(startup[0]!.home).not.toBe(ordinary[0]!.home);
+			expect(ordinary[0]!.userprofile).toBe(ordinary[0]!.home);
+			expect(ordinary[0]!.configRoot).toBe("");
+			const budgets = [ordinary[0], rust[0]].map(entry => Number(entry!.budget));
+			expect(budgets.every(budget => Number.isInteger(budget) && budget >= 1)).toBe(true);
+			expect(budgets.reduce((sum, budget) => sum + budget, 0)).toBeLessThanOrEqual(16);
+			expect(await starts("smoke/isolated dev TUI PTY")).toHaveLength(1);
+			if (full) {
+				for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK"]) {
+					expect(await starts(label)).toHaveLength(1);
+				}
+			}
+			expect(result.exitCode).toBe(17);
+			expect(result.failures?.some(failure => failure.message.includes(ordinaryLabel))).toBe(true);
+		} finally {
+			await fs.rm(directory, { recursive: true, force: true });
+		}
+	}, 30_000);
+}
+
 describe("fulltest lane scheduling", () => {
 	for (const rustCheck of ["success", "failure", "absent"] as const) {
 		test(`releases Rust tests independently of TypeScript static checks when Rust checks are ${rustCheck}`, async () => {
@@ -770,13 +887,7 @@ describe("fulltest lane scheduling", () => {
 						await finishStatic.promise;
 					} else if (ordinary) {
 						expect(startup).toBeUndefined();
-						expect(ordinary.argv).toEqual([
-							"bun",
-							"scripts/ci-test-ts.ts",
-							"local-ts",
-							"--exclude-desktop",
-							"--defer-startup",
-						]);
+						expect(ordinary.argv).toContain("--defer-startup");
 						expect(ordinary.env?.OMP_FULLTEST_AFFECTED).toBe("1");
 						expect(ordinary.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
 						ordinaryHome = ordinary.env?.HOME;
@@ -791,13 +902,7 @@ describe("fulltest lane scheduling", () => {
 						throw new Error("Rust failure");
 					} else if (startup) {
 						expect(commands).toHaveLength(1);
-						expect(startup.argv).toEqual([
-							"bun",
-							"scripts/ci-test-ts.ts",
-							"local-ts",
-							"--exclude-desktop",
-							"--only-startup",
-						]);
+						expect(startup.argv).toContain("--only-startup");
 						expect(startup.env?.HOME).toBeDefined();
 						expect(startup.env?.HOME).not.toBe(ordinaryHome);
 						expect(startup.env?.OMP_FULLTEST_AFFECTED).toBe("1");

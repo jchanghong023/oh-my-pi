@@ -24,7 +24,12 @@ export interface InternalUrlSchemeSpec {
 	/** Read cards collapse into the compact read group like plain files instead of expanding. */
 	readonly compactTranscript?: boolean;
 	/** Write policy; absent on read-only schemes. Transcripts draw `reply`-scoped writes as assistant prose. */
-	readonly write?: { readonly scope: SchemeWriteScope };
+	readonly write?: {
+		readonly scope: SchemeWriteScope;
+		readonly via: "file" | "handler";
+		/** Handler-owned writes that operate on files (for example remote or conflict-resolution writes). */
+		readonly fileOperation?: true;
+	};
 }
 
 /** Scheme registry capabilities installed by the internal URL host. */

@@ -98,7 +98,7 @@ describe("EventController aborted-turn working messages", () => {
 	});
 
 	it("shows a blocked tool's user-input state until its completion", async () => {
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: false });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
 		const { ctx } = createContext();
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
@@ -110,7 +110,6 @@ describe("EventController aborted-turn working messages", () => {
 		} as AgentSessionEvent);
 		const component = ctx.pendingTools.get("question-1");
 		expect(component).toBeInstanceOf(ToolExecutionComponent);
-		expect((component as ToolExecutionComponent).hasCompactCriticalFeedback()).toBe(true);
 		expect(ctx.chatContainer.render(100).length).toBeGreaterThan(0);
 
 		await controller.handleEvent({
@@ -120,7 +119,6 @@ describe("EventController aborted-turn working messages", () => {
 			result: { content: [{ type: "text", text: "confirmed" }] },
 			isError: false,
 		} as AgentSessionEvent);
-		expect((component as ToolExecutionComponent).hasCompactCriticalFeedback()).toBe(false);
 		(component as ToolExecutionComponent).setExpanded(true);
 		expect(Bun.stripANSI(ctx.chatContainer.render(100).join("\n"))).toContain("confirmed");
 	});
@@ -138,7 +136,7 @@ describe("EventController aborted-turn working messages", () => {
 
 	it("keeps tool intent out of the clean working line", async () => {
 		const { ctx, setWorkingMessage } = createContext();
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: true });
 		const controller = new EventController(ctx);
 		await controller.handleEvent(AGENT_START);
 		setWorkingMessage.mockClear();

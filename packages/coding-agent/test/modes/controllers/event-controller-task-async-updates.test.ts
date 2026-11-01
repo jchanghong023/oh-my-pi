@@ -26,10 +26,6 @@ import type { TaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { type BashToolDetails, formatBackgroundNotice } from "@oh-my-pi/pi-tui/tools/bash";
 import type { CoordinationDetails } from "@oh-my-pi/pi-tui/tools/wait";
 import { createInteractiveModeContext } from "../../helpers/interactive-mode-context";
-import {
-	chatTranscriptDisplayPreferences,
-	setChatTranscriptDisplayPreferences,
-} from "@oh-my-pi/pi-tui/chat/display-preferences";
 
 function taskResult(asyncState: "running" | "completed" | "failed" | undefined, text: string) {
 	const details: TaskToolDetails = {
@@ -225,47 +221,6 @@ describe("EventController async update finalization", () => {
 			});
 		}
 	}
-
-	it("keeps the compact Bash elapsed time advancing across the foreground-background handoff", async () => {
-		const preferences = { ...chatTranscriptDisplayPreferences };
-		let now = 1_000;
-		vi.spyOn(performance, "now").mockImplementation(() => now);
-		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
-		try {
-			const { controller, pendingTools } = createFixture();
-			await controller.handleEvent({
-				type: "tool_execution_start",
-				toolCallId: "tc-bash",
-				toolName: "bash",
-				args: { command: "long-running-command" },
-			});
-			const component = pendingTools.get("tc-bash")!;
-			sealed.push(component);
-			now = 61_000;
-			await controller.handleEvent({
-				type: "tool_execution_end",
-				toolCallId: "tc-bash",
-				toolName: "bash",
-				result: bashResult(formatBackgroundNotice("bash-1", 300)),
-				isError: false,
-			});
-			now = 62_000;
-			expect(Bun.stripANSI(component.render(120).join("\n"))).toMatch(/执行中.*61s/);
-			await controller.handleEvent({
-				type: "tool_execution_update",
-				toolCallId: "tc-bash",
-				toolName: "bash",
-				args: {},
-				partialResult: {
-					...bashResult("COMMAND_FINISHED", "completed"),
-					details: { ...bashResult("", "completed").details, wallTimeMs: 63_000 },
-				},
-			});
-			expect(Bun.stripANSI(component.render(120).join("\n"))).toMatch(/完成.*63s/);
-		} finally {
-			setChatTranscriptDisplayPreferences(preferences);
-		}
-	});
 
 	describe("native rendering", () => {
 		let wasNative = false;

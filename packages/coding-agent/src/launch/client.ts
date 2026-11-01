@@ -143,6 +143,8 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		if (this.#closed) throw new Error("Daemon broker client is closed");
 		if (signal?.aborted) throw new Error("Daemon broker request aborted");
 		await this.#connect();
+		if (this.#closed) throw new Error("Daemon broker client is closed");
+		if (signal?.aborted) throw new Error("Daemon broker request aborted");
 		const socket = this.#socket;
 		if (!socket || socket.closed) throw new Error("Daemon broker socket is unavailable");
 
@@ -277,10 +279,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		// replacement broker may have started from a different file, or a deleted
 		// runtime dir may need a fresh one before any broker can start.
 		this.#token = await readOrCreateToken(this.#runtimeDir);
+		if (this.#closed) throw new Error("Daemon broker client is closed");
 		try {
 			this.#bindSocket(await IpcConnection.connect(this.#endpoint, { framing: "lines", timeoutMs: 250 }));
 			return;
 		} catch {
+			if (this.#closed) throw new Error("Daemon broker client is closed");
 			// No live broker. Multiple clients may race to spawn; the broker's
 			// process-owned lease selects one winner before any candidate touches
 			// the socket.
@@ -289,10 +293,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		const deadline = Date.now() + CONNECT_TIMEOUT_MS;
 		let lastError: Error | undefined;
 		while (Date.now() < deadline) {
+			if (this.#closed) throw new Error("Daemon broker client is closed");
 			try {
 				this.#bindSocket(await IpcConnection.connect(this.#endpoint, { framing: "lines", timeoutMs: 250 }));
 				return;
 			} catch (error) {
+				if (this.#closed) throw new Error("Daemon broker client is closed");
 				lastError = error instanceof Error ? error : new Error(String(error));
 				await Bun.sleep(CONNECT_RETRY_MS);
 			}
@@ -326,6 +332,12 @@ class SocketDaemonClient implements DaemonBrokerClient {
 	}
 
 	#bindSocket(socket: IpcConnection): void {
+		// A connect may finish after process shutdown closed this client.
+		// Never publish a new event-loop reference or send through that socket.
+		if (this.#closed) {
+			socket.destroy();
+			throw new Error("Daemon broker client is closed");
+		}
 		this.#socket = socket;
 		socket.start(
 			line => this.#onLine(line),

@@ -406,6 +406,55 @@ export function buildDirectoryArgumentCompletions(
 	};
 }
 
+/** Complete crawl flags and local output directories without consulting browser history. */
+export function buildCrawlArgumentCompletions(
+	projectCwd?: string,
+): (prefix: string) => Promise<AutocompleteItem[] | null> {
+	const directories = buildDirectoryArgumentCompletions(projectCwd);
+	const flags = ["--recursive", "--output", "--concurrency", "--max-pages", "--max-depth"];
+	return async argumentPrefix => {
+		const output = argumentPrefix.match(/^(.*(?:^|\s)--output\s+)(.*)$/);
+		if (output) {
+			const raw = output[2]!;
+			const quoted = raw.startsWith('"') || raw.startsWith("'");
+			const quote = raw[0];
+			if ((!quoted && !/\s/.test(raw)) || (quoted && !raw.slice(1).includes(quote!))) {
+				const prefix = quoted ? raw.slice(1) : raw;
+				const items = await directories(prefix);
+				return (
+					items?.map(item => ({
+						...item,
+						value: output[1] + (quoted || /[\s"'\\]/.test(item.value) ? JSON.stringify(item.value) : item.value),
+					})) ?? null
+				);
+			}
+		}
+		const lastSpace = Math.max(argumentPrefix.lastIndexOf(" "), argumentPrefix.lastIndexOf("\t"));
+		const before = argumentPrefix.slice(0, lastSpace + 1);
+		const prefix = argumentPrefix.slice(lastSpace + 1);
+		if (lastSpace === -1) {
+			return "stop".startsWith(prefix) ? [{ value: "stop", label: "stop" }] : null;
+		}
+		if (
+			before
+				.trim()
+				.split(/\s+/)
+				.at(-1)
+				?.match(/^--(?:output|concurrency|max-pages|max-depth)$/)
+		)
+			return null;
+		if (prefix && !prefix.startsWith("-")) return null;
+		const used = new Set(before.trim().split(/\s+/));
+		const items = flags
+			.filter(flag => !used.has(flag) && flag.startsWith(prefix))
+			.map(flag => ({
+				value: `${before}${flag} `,
+				label: flag,
+			}));
+		return items.length ? items : null;
+	};
+}
+
 /** `/local` argument: session local:// file names (accepts a `local://` / `local:/` prefix). */
 export function buildLocalFileArgumentCompletions(
 	runtime: TuiSlashCommandRuntime,

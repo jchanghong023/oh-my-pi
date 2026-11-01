@@ -3,16 +3,14 @@ import { getProjectDir, jsonContainerEnd } from "@oh-my-pi/pi-utils";
 import { highlightCode, type Theme } from "../theme/theme";
 import { renderStatusLine } from "../render/status-line";
 import { framedToolCard, type ToolCardSnapshot } from "../render/tool-card";
-import { formatOutputPaneLines, nonEmptyTailLines } from "../render/output-pane";
+import { formatOutputPaneLines } from "../render/output-pane";
 import {
 	capPreviewLines,
 	DEFAULT_TERMINAL_PREVIEW_LINES,
 	formatDuration,
 	formatToolWorkingDirectory,
 	previewWindowRows,
-	PREVIEW_LIMITS,
 	replaceTabs,
-	truncateToWidth,
 } from "../render/render-utils";
 import {
 	formatStyledTruncationWarning,
@@ -29,8 +27,7 @@ import type {
 	ToolRenderer,
 } from "./renderer";
 import { INTENT_FIELD, type TspTone } from "@oh-my-pi/pi-wire";
-import { node, text } from "../native/describe";
-import { plainText, styledSpans } from "../native/spans";
+import { plainText } from "../native/spans";
 import { resultText, runBox, runFoot, runInput, runOutput, type RunState } from "./native-view";
 
 /** Default collapsed shell output preview height. */
@@ -72,6 +69,8 @@ export interface BashToolDetails {
 	exitCode?: number;
 	/** True when the command was killed by its timeout deadline (not a failure). */
 	timedOut?: boolean;
+	/** True when an executing command was cancelled before completion. */
+	cancelled?: boolean;
 	/** Text the command wrote to `out://`, oldest first; transcripts draw each as a reply after the call. */
 	replies?: string[];
 	/** Live ACP update only; completed results refer to released terminals. */
@@ -224,8 +223,6 @@ export interface BashRenderArgs {
 
 /** Mutable transcript viewport state for shell output. */
 export interface BashRenderContext {
-	/** Current compact preference, read reactively for existing cards. */
-	compactToolActivity?: boolean;
 	/** Raw output text */
 	output?: string;
 	/** Whether output came from artifact storage */
@@ -320,25 +317,12 @@ function stripBashNotices(
 	return stripRawOutputArtifactNotice(withoutWall);
 }
 
-/** Prefer command diagnostics over Bun's trailing script-exit wrappers in compact previews. */
-function compactBashOutputLines(output: string): string[] {
-	const lines = nonEmptyTailLines(output, Number.MAX_SAFE_INTEGER);
-	let end = lines.length;
-	while (end > 0 && /^error: script .+ exited with code \d+\s*$/u.test(Bun.stripANSI(lines[end - 1]).trim())) {
-		end--;
-	}
-	// A wrapper may be the only available explanation; never discard it in that case.
-	if (end === 0) end = lines.length;
-	return lines.slice(Math.max(0, end - PREVIEW_LIMITS.ERROR_OUTPUT_COLLAPSED), end);
-}
 /** `Wall: 1.20s`, `Timeout: 30s`, … metadata parts shown under bash output. */
 function bashStatsParts(
 	details: BashToolDetails | undefined,
 	contextTimeout: number | undefined,
 	artifactId: string | undefined,
 	isError: boolean,
-	compact: boolean,
-	hideArtifact: boolean,
 ): string[] {
 	const timeoutDisabled = details?.timeoutDisabled === true || contextTimeout === 0;
 	const timeoutSeconds = timeoutDisabled ? undefined : (details?.timeoutSeconds ?? contextTimeout);
@@ -352,25 +336,25 @@ function bashStatsParts(
 		const service = details.service;
 		statsParts.push(`Service: ${service.name}`, `State: ${service.state}`);
 		statsParts.push(`Ready: ${service.ready ? "yes" : service.timedOut ? "timed out" : "no"}`);
-		if (!compact && service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
+		if (service.pid !== undefined) statsParts.push(`PID: ${service.pid}`);
 	}
-	if (!compact && wallTimeMs !== undefined) {
+	if (wallTimeMs !== undefined) {
 		statsParts.push(`Wall: ${formatWallTimeSeconds(wallTimeMs)}s`);
 	}
-	if (!compact && timeoutDisabled) {
+	if (timeoutDisabled) {
 		statsParts.push("Timeout: disabled");
 	}
-	if (!compact && typeof timeoutSeconds === "number") {
+	if (typeof timeoutSeconds === "number") {
 		statsParts.push(
 			requestedTimeoutSeconds !== undefined && requestedTimeoutSeconds !== timeoutSeconds
 				? `Timeout: ${timeoutSeconds}s (requested ${requestedTimeoutSeconds}s clamped)`
 				: `Timeout: ${timeoutSeconds}s`,
 		);
 	}
-	if (!hideArtifact && artifactId) {
+	if (artifactId) {
 		statsParts.push(`Artifact: ${artifactId}`);
 	}
-	if (!compact && isError && typeof details?.exitCode === "number") {
+	if (isError && typeof details?.exitCode === "number") {
 		statsParts.push(`Exit: ${details.exitCode}`);
 	}
 	return statsParts;
@@ -409,21 +393,16 @@ function callIntent(args: unknown): string | undefined {
 }
 
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
-function shellFootParts(
-	details: BashToolDetails | undefined,
-	artifactId: string | undefined,
-	compact = false,
-	hideArtifact = false,
-): string[] {
+function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
 	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
 	const service = details?.service;
 	if (service) {
 		parts.push(`Service ${service.name}`, service.state);
 		parts.push(service.ready ? "ready" : service.timedOut ? "ready timed out" : "not ready");
-		if (!compact && service.pid !== undefined) parts.push(`PID ${service.pid}`);
+		if (service.pid !== undefined) parts.push(`PID ${service.pid}`);
 	}
-	if (!hideArtifact && artifactId) parts.push(`Artifact ${artifactId}`);
+	if (artifactId) parts.push(`Artifact ${artifactId}`);
 	return parts;
 }
 
@@ -440,11 +419,12 @@ function shellRunState(
 	isPartial: boolean,
 	cancelled: boolean,
 ): RunState {
-	if (cancelled) return "cancelled";
+	if (cancelled || details?.cancelled || details?.async?.state === "cancelled") return "cancelled";
 	if (details?.async?.state === "running") return "background";
 	if (isPartial) return "running";
 	if (details?.timedOut === true) return "timed-out";
-	if (isError || (details?.exitCode !== undefined && details.exitCode !== 0)) return "failed";
+	if (isError || details?.async?.state === "failed" || (details?.exitCode !== undefined && details.exitCode !== 0))
+		return "failed";
 	return "done";
 }
 
@@ -507,8 +487,15 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const isError = result.isError === true;
 			const isPartial = options.isPartial === true;
 			const details = result.details;
-			const success = !isPartial && !isError && (details?.exitCode === undefined || details.exitCode === 0);
 			const isTimeout = details?.timedOut === true;
+			const failed =
+				isError ||
+				isTimeout ||
+				details?.cancelled === true ||
+				details?.async?.state === "failed" ||
+				details?.async?.state === "cancelled" ||
+				(details?.exitCode !== undefined && details.exitCode !== 0);
+			const success = !isPartial && !failed;
 			const header =
 				config.showHeader === false
 					? undefined
@@ -538,8 +525,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			let cachedWidth: number | undefined;
 			let cachedPreviewLines: number | undefined;
 			let cachedExpanded: boolean | undefined;
-			let cachedCompactError: boolean | undefined;
-			let cachedHideArtifact: boolean | undefined;
 			let cachedRawOutput: string | undefined;
 			let cachedIsPartial: boolean | undefined;
 			let cachedPreviewWindow: number | undefined;
@@ -570,13 +555,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const rawOutput = renderContext?.output ?? result.content?.find(c => c.type === "text")?.text ?? "";
 
 					const isPartial = options.isPartial === true;
-					const hideArtifact =
-						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true && !expanded;
-					const compactError =
-						(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
-						!expanded &&
-						!isPartial &&
-						(isError || (details?.exitCode !== undefined && details.exitCode !== 0));
 					const previewWindow = previewWindowRows();
 					// A running command shows its live elapsed time in the bottom
 					// border; key the cache on whole seconds so it advances once a
@@ -589,8 +567,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						cachedWidth === width &&
 						cachedPreviewLines === previewLines &&
 						cachedExpanded === expanded &&
-						cachedCompactError === compactError &&
-						cachedHideArtifact === hideArtifact &&
 						cachedRawOutput === rawOutput &&
 						cachedIsPartial === isPartial &&
 						cachedPreviewWindow === previewWindow &&
@@ -608,25 +584,12 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 						renderContext?.timeout,
 						rawOutputArtifact.artifactId,
 						isError,
-						compactError,
-						hideArtifact,
 					);
 					if (elapsedSecond !== undefined && elapsedSecond > 0) {
 						statsParts.unshift(`elapsed ${formatDuration(elapsedSecond * 1000)}`);
 					}
-					if (compactError && isTimeout) {
-						statsParts.push("Timed out");
-					}
 					const footerMeta =
-						statsParts.length > 0
-							? compactError && isTimeout
-								? statsParts
-										.map((part, index) =>
-											uiTheme.fg(index === statsParts.length - 1 ? "warning" : "dim", part),
-										)
-										.join(uiTheme.fg("dim", uiTheme.sep.dot))
-								: uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot))
-							: undefined;
+						statsParts.length > 0 ? uiTheme.fg("dim", statsParts.join(uiTheme.sep.dot)) : undefined;
 					let warningLine: string | undefined;
 					if (details?.meta?.artifactError || (details?.meta?.truncation && !showingFullOutput)) {
 						warningLine = formatStyledTruncationWarning(details.meta, uiTheme) ?? undefined;
@@ -642,22 +605,13 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const hasOutput = displayOutput.trim().length > 0;
 					const formatted = formatOutputPaneLines(
 						{
-							lines: compactError
-								? compactBashOutputLines(displayOutput)
-								: hasOutput
-									? displayOutput.split("\n")
-									: [],
+							lines: hasOutput ? displayOutput.split("\n") : [],
 							expanded,
 							collapsedMaxLines: Math.min(previewLines, previewWindow),
 							edge: "tail",
 							visual: true,
 							width: contentWidth,
-							styleLine: line =>
-								uiTheme.fg(
-									"toolOutput",
-									compactError ? truncateToWidth(replaceTabs(line), contentWidth) : replaceTabs(line),
-								),
-							showHiddenMarker: !compactError,
+							styleLine: line => uiTheme.fg("toolOutput", replaceTabs(line)),
 							uncapSixel: true,
 						},
 						uiTheme,
@@ -668,21 +622,14 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					const snapshot: ToolCardSnapshot = {
 						header,
 						phase: isPartial ? "partial" : !success ? (isTimeout ? "warning" : "error") : "success",
-						borderColor: compactError ? "borderMuted" : undefined,
-						applyBg: compactError ? false : undefined,
 						footerMeta,
 						sections: [
 							{
-								// Compact failures keep a single command row; ctrl+o uncaps.
-								content: compactError
-									? (args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [])
-											.slice(0, PREVIEW_LIMITS.ERROR_COMMAND_COLLAPSED)
-											.map(line => truncateToWidth(line, contentWidth))
-									: capPreviewLines(
-											args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
-											uiTheme,
-											{ expanded },
-										),
+								content: capPreviewLines(
+									args ? (cmdLines ??= formatBashCommandLines(renderArgs, uiTheme)) : [],
+									uiTheme,
+									{ expanded },
+								),
 							},
 							{ label: uiTheme.fg("toolTitle", "Output"), content: outputLines },
 						],
@@ -691,8 +638,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 					cachedWidth = width;
 					cachedPreviewLines = previewLines;
 					cachedExpanded = expanded;
-					cachedCompactError = compactError;
-					cachedHideArtifact = hideArtifact;
 					cachedRawOutput = rawOutput;
 					cachedIsPartial = isPartial;
 					cachedPreviewWindow = previewWindow;
@@ -740,12 +685,6 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const stripped = stripBashNotices(rawOutput, details);
 			const output = stripped.text.trimEnd();
 			const expanded = renderContext?.expanded ?? options.expanded;
-			const hideArtifact = (renderContext?.compactToolActivity ?? options.compactToolActivity) === true && !expanded;
-			const compactError =
-				(renderContext?.compactToolActivity ?? options.compactToolActivity) === true &&
-				!expanded &&
-				!isPartial &&
-				(isError || (details?.exitCode !== undefined && details.exitCode !== 0));
 			const showingFullOutput = expanded && renderContext?.isFullOutput === true;
 			const command = formatBashCommandText(toBashRenderArgs(args, config));
 			const previewLines = renderContext?.previewLines ?? BASH_DEFAULT_PREVIEW_LINES;
@@ -760,32 +699,17 @@ export function createShellRenderer<TArgs>(config: ShellRendererConfig<TArgs>) {
 			const meta = details?.meta;
 			const box = runBox(
 				[
-					runInput(
-						command,
-						compactError
-							? { ...SHELL_INPUT, wrap: false, previewLines: PREVIEW_LIMITS.ERROR_COMMAND_COLLAPSED }
-							: SHELL_INPUT,
-					),
-					output.trim().length > 0 &&
-						(compactError
-							? node(
-									"col",
-									{ role: "omp.tool.bash.output", gap: "none" },
-									compactBashOutputLines(output).map(line =>
-										text(styledSpans(line), { wrap: "none", truncate: "end" }),
-									),
-									"output",
-								)
-							: runOutput(output, { role: "omp.tool.bash.output", previewLines })),
+					runInput(command, SHELL_INPUT),
+					output.trim().length > 0 && runOutput(output, { role: "omp.tool.bash.output", previewLines }),
 					runFoot({
 						state,
 						exitCode: details?.exitCode,
-						elapsedMs: compactError ? undefined : elapsedMs,
-						facts: shellFootParts(details, stripped.artifactId, compactError, hideArtifact),
+						elapsedMs,
+						facts: shellFootParts(details, stripped.artifactId),
 						meta: { ...meta, truncation: showingFullOutput ? undefined : meta?.truncation },
 					}),
 				],
-				{ key: "run", tone: compactError && state === "failed" ? undefined : RUN_BOX_TONE[state] },
+				{ key: "run", tone: RUN_BOX_TONE[state] },
 			);
 			return {
 				tool: shellToolHead(config.resolveTitle(args, options), command, callIntent(args), details, !isPartial),

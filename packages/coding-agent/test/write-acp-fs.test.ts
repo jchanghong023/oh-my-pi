@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +10,12 @@ import type { PlanModeState } from "@oh-my-pi/pi-coding-agent/plan-mode/state";
 import type { ClientBridge } from "@oh-my-pi/pi-coding-agent/session/client-bridge";
 import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { WriteTool } from "@oh-my-pi/pi-coding-agent/tools/write";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
 const FILE_CONTENT = "bridge write content\n";
@@ -46,8 +52,34 @@ function resultText(result: AgentToolResult): string {
 	return text.join("\n");
 }
 
+function expectWriteCard(args: { path: string; content: string }, result: AgentToolResult, changed: boolean): void {
+	const previous = { ...chatTranscriptDisplayPreferences };
+	const ui = { requestRender() {}, requestComponentRender() {}, resetDisplay() {} };
+	const card = new ToolExecutionComponent("write", args, {}, undefined, ui);
+	try {
+		card.updateResult(result, false);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false, hideToolActivity: false });
+		card.setToolActivityVisible(true);
+		const detailed = Bun.stripANSI(card.render(120).join("\n"));
+		expect(detailed).toContain(args.content.split("\n")[0]);
+
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		card.setToolActivityVisible(false);
+		const compact = Bun.stripANSI(card.render(120).join("\n"));
+		if (changed) expect(compact).toBe(detailed);
+		else expect(compact).toBe("");
+	} finally {
+		card.dispose();
+		setChatTranscriptDisplayPreferences(previous);
+	}
+}
+
 describe("write tool ACP fs routing", () => {
 	let tmpDir: string;
+
+	beforeAll(async () => {
+		await initTheme(false);
+	});
 
 	beforeEach(async () => {
 		tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-acp-fs-test-"));
@@ -102,6 +134,78 @@ describe("write tool ACP fs routing", () => {
 		expect(await Bun.file(filePath).text()).toBe(persisted);
 		expect(text).toContain(`[formatted.ts#${hashlineFileHash(persisted)}]`);
 		expect(text).not.toContain(`[formatted.ts#${hashlineFileHash(requested)}]`);
+	});
+
+	it("shows bridge writes only when the formatted disk content actually changes", async () => {
+		const filePath = path.join(tmpDir, "formatted-existing.ts");
+		const original = "function f() {\n\treturn 1;\n}\n";
+		await fs.writeFile(filePath, original);
+		const bridge: ClientBridge = {
+			capabilities: { writeTextFile: true },
+			writeTextFile: async ({ path: target, content }) => {
+				await fs.writeFile(target, content.replace(/^ {4}/gm, "\t"));
+			},
+		};
+		const tool = new WriteTool(createSession(tmpDir, { bridge }));
+		const same = { path: filePath, content: "function f() {\n    return 1;\n}\n" };
+		const unchanged = await tool.execute("bridge-unchanged", same);
+		expect(await fs.readFile(filePath, "utf8")).toBe(original);
+		expect(unchanged.details?.fileChanged).toBe(false);
+		expect(unchanged.details?.snapshotsPruned).toBe(true);
+		expect(unchanged.details?.oldText).toBeUndefined();
+		expect(unchanged.details?.newText).toBeUndefined();
+		expectWriteCard(same, unchanged, false);
+
+		const changedArgs = { path: filePath, content: "function f() {\n    return 2;\n}\n" };
+		const changed = await tool.execute("bridge-changed", changedArgs);
+		expect(await fs.readFile(filePath, "utf8")).toBe("function f() {\n\treturn 2;\n}\n");
+		expect(changed.details?.fileChanged).toBe(true);
+		expect(changed.details?.snapshotsPruned).toBe(true);
+		expectWriteCard(changedArgs, changed, true);
+	});
+
+	it("retains the original detailed card for oversized and file URL changes only", async () => {
+		const filePath = path.join(tmpDir, "large.txt");
+		const original = `before marker\n${`${"a".repeat(64)}\n`.repeat(510)}`;
+		await fs.writeFile(filePath, original);
+		const session = createSession(tmpDir);
+		const tool = new WriteTool(session);
+		const same = { path: filePath, content: original };
+		const unchanged = await tool.execute("large-unchanged", same);
+		expect(await fs.readFile(filePath, "utf8")).toBe(original);
+		expect(unchanged.details?.snapshotsPruned).toBe(true);
+		expect(unchanged.details?.fileChanged).toBe(false);
+		expect(unchanged.details?.oldText).toBeUndefined();
+		expect(unchanged.details?.newText).toBeUndefined();
+		expectWriteCard(same, unchanged, false);
+
+		const changedArgs = { path: filePath, content: `after_ marker\n${`${"b".repeat(64)}\n`.repeat(510)}` };
+		const changed = await tool.execute("large-changed", changedArgs);
+		expect(await fs.readFile(filePath, "utf8")).toBe(changedArgs.content);
+		expect(changed.details?.snapshotsPruned).toBe(true);
+		expect(changed.details?.fileChanged).toBe(true);
+		expect(changed.details?.oldText).toBeUndefined();
+		expect(changed.details?.newText).toBeUndefined();
+		expectWriteCard(changedArgs, changed, true);
+
+		const urlArgs = { path: "local://url.txt", content: "URL write marker\n" };
+		const urlPath = resolveLocalUrlToPath(urlArgs.path, {
+			getArtifactsDir: session.getArtifactsDir,
+			getSessionId: session.getSessionId,
+		});
+		const created = await tool.execute("url-created", urlArgs);
+		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
+		expect(created.details?.fileChanged).toBe(true);
+		expectWriteCard(urlArgs, created, true);
+		const sameUrl = await tool.execute("url-unchanged", urlArgs);
+		expect(await fs.readFile(urlPath, "utf8")).toBe(urlArgs.content);
+		expect(sameUrl.details?.fileChanged).toBe(false);
+		expectWriteCard(urlArgs, sameUrl, false);
+		const updatedArgs = { ...urlArgs, content: "Updated URL write marker\n" };
+		const updated = await tool.execute("url-updated", updatedArgs);
+		expect(await fs.readFile(urlPath, "utf8")).toBe(updatedArgs.content);
+		expect(updated.details?.fileChanged).toBe(true);
+		expectWriteCard(updatedArgs, updated, true);
 	});
 
 	it("emits a progress snapshot before filesystem writes complete", async () => {

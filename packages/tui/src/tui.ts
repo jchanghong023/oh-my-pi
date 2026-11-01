@@ -191,6 +191,10 @@ export interface HistoryBatch {
 export interface TerminalFramePlan {
 	readonly history?: HistoryBatch;
 	readonly viewport: readonly string[];
+	/** False when clipped or browsed live content separates replay history from the viewport. */
+	readonly replayHistoryAdjacent?: boolean;
+	/** Leading viewport rows explicitly reserved as replaceable physical replay padding. */
+	readonly replayViewportPaddingRows?: number;
 }
 
 /** Produces bounded terminal frames and retires acknowledged history batches. */
@@ -2642,7 +2646,15 @@ export class TUI extends Container {
 			} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
 			if (plan.history === undefined) return;
 			const acceptedBefore = this.#acceptedHistoryBatchId;
-			this.#emitPlanFrame(width, height, viewport, plan.history, provider);
+			this.#emitPlanFrame(
+				width,
+				height,
+				viewport,
+				plan.history,
+				provider,
+				plan.replayHistoryAdjacent,
+				plan.replayViewportPaddingRows,
+			);
 			if (plan.history.id > acceptedBefore && this.#acceptedHistoryBatchId === acceptedBefore) {
 				throw new Error("History flush did not accept the offered batch");
 			}
@@ -3497,7 +3509,15 @@ export class TUI extends Container {
 			viewport = this.#compositeVisibleOverlays(viewport, width, height);
 		} while (this.#imageBudget.endPass() || this.#prepareHistoryReset(plan.history));
 		if (this.#maybeDeferGhosttyInitialImagePaint()) return;
-		this.#emitPlanFrame(width, height, viewport, plan.history, provider);
+		this.#emitPlanFrame(
+			width,
+			height,
+			viewport,
+			plan.history,
+			provider,
+			plan.replayHistoryAdjacent,
+			plan.replayViewportPaddingRows,
+		);
 	}
 	/**
 	 * Re-offer finalized history once after a settled resize.
@@ -3628,6 +3648,8 @@ export class TUI extends Container {
 		viewportRows: string[],
 		offered: HistoryBatch | undefined,
 		provider: TerminalFrameProvider | undefined,
+		replayHistoryAdjacent = true,
+		replayViewportPaddingRows = 0,
 	): void {
 		// Callers composite their overlays inside the budget pass, so `viewportRows`
 		// is already the complete frame. Bound the store here rather than at
@@ -3642,15 +3664,23 @@ export class TUI extends Container {
 		let replayViewportRows = 0;
 		let replayPrependedBlanks = 0;
 		if (history?.kind === "replay") {
-			// Providers may omit unused leading rows from a short viewport. Make
-			// that logical space explicit before the bottom-first replay split.
+			// The provider may explicitly identify its own physical padding;
+			// other blank rows can be meaningful paragraph separators. Never
+			// replace content, even if an overlay covers a declared pad.
+			let providerPadding = 0;
+			while (
+				providerPadding < replayViewportPaddingRows &&
+				providerPadding < viewportRows.length &&
+				!/\S/.test(viewportRows[providerPadding]!)
+			)
+				providerPadding++;
+			// Providers may omit unused leading rows from a short viewport.
 			replayPrependedBlanks = Math.max(0, height - viewport.length);
 			while (viewport.length < height) viewport.unshift("");
-			let leadingBlankRows = 0;
-			while (leadingBlankRows < viewport.length && !/\S/.test(viewport[leadingBlankRows]!)) {
-				leadingBlankRows++;
-			}
-			const moved = Math.min(historyRows.length, leadingBlankRows);
+			// A clipped live prefix makes history and the viewport disjoint.
+			const moved = replayHistoryAdjacent
+				? Math.min(historyRows.length, replayPrependedBlanks + providerPadding)
+				: 0;
 			if (moved > 0) {
 				viewport = [...historyRows.slice(historyRows.length - moved), ...viewport.slice(moved)];
 				historyRows = historyRows.slice(0, historyRows.length - moved);

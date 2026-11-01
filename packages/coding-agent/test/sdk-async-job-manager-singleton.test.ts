@@ -62,6 +62,42 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		return session;
 	}
 
+	it.each([
+		{ label: "default", settings: undefined, limit: 32 },
+		{ label: "above the hard ceiling", settings: { "async.maxJobs": 100 }, limit: 32 },
+		{ label: "a lower configured limit", settings: { "async.maxJobs": 2 }, limit: 2 },
+	])(
+		"rejects excess background work with $label settings",
+		async ({ settings, limit }) => {
+			const session = await spawnTopLevelSession(settings);
+			const release = Promise.withResolvers<string>();
+			let started = 0;
+			try {
+				const manager = session.asyncJobManager;
+				if (!manager) throw new Error("Expected the root session's async job manager");
+				const run = async () => {
+					started++;
+					return release.promise;
+				};
+				for (let index = 0; index < limit; index++) {
+					manager.register(index % 2 === 0 ? "bash" : "task", "capacity probe", run, {
+						ownerId: "CapacityProbe",
+						suppressDelivery: true,
+					});
+				}
+				expect(() =>
+					manager.register("task", "excess work", run, { ownerId: "CapacityProbe", suppressDelivery: true }),
+				).toThrow(/Background job limit reached/);
+				expect(started).toBe(limit);
+			} finally {
+				release.resolve("done");
+				await session.asyncJobManager?.waitForAll();
+				await session.dispose();
+			}
+		},
+		60000,
+	);
+
 	it("does not cancel the primary session's running jobs when a secondary session disposes", async () => {
 		const primary = await spawnTopLevelSession();
 		try {

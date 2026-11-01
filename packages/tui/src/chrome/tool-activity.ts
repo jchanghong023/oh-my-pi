@@ -1,40 +1,13 @@
-import type { TspCardStatus } from "@oh-my-pi/pi-wire";
 import { type Component, Container } from "../tui";
 import { col } from "../native/describe";
 import type { NativeNode } from "../native/node";
 
-export const COMPACT_STATUS_LABEL: Record<TspCardStatus, string> = {
-	pending: "待执行",
-	running: "执行中",
-	done: "完成",
-	error: "失败",
-	cancelled: "已取消",
-};
-
-export interface CompactToolCall {
-	id: string | object;
-}
-
 export interface ToolActivityComponent {
 	setToolActivityVisible(visible: boolean): void;
-	/** Whether this activity uses compact rows rather than the upstream detail renderer. */
-	isCompactToolActivity?(): boolean;
-	/** Notify the owning transcript when a terminal tool result arrives. */
-	setCompactToolResultListener?(listener: (() => void) | undefined): void;
 }
 
 export function isToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
 	return typeof (component as Partial<ToolActivityComponent>).setToolActivityVisible === "function";
-}
-
-export function isCompactToolActivityComponent(component: Component): component is Component & ToolActivityComponent {
-	return isToolActivityComponent(component) && component.isCompactToolActivity?.() !== false;
-}
-
-/** Keep the file identity visible before narrow rows truncate their right edge. */
-export function compactToolPath(value: string): string {
-	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
-	return value.replace(/\\/g, "/").replace(/\/$/, "").split("/").pop() || value;
 }
 
 export class ToolActivityContainer extends Container implements ToolActivityComponent {

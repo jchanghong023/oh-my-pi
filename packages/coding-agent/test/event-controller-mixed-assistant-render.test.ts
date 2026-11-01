@@ -94,8 +94,7 @@ describe("EventController mixed assistant text/tool rendering", () => {
 	beforeEach(async () => {
 		previousDisplayPreferences = { ...chatTranscriptDisplayPreferences };
 		resetSettingsForTest();
-		// These contracts exercise full upstream results, custom cards and images,
-		// not the compact mode's intentional one-line tool previews.
+		// These contracts exercise full upstream results, custom cards and images.
 		await Settings.init({
 			inMemory: true,
 			overrides: { "display.smoothStreaming": false, "display.mode": "detailed" },

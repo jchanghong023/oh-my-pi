@@ -135,7 +135,6 @@ import guidedGoalInterviewPrompt from "../prompts/goals/guided-goal-interview.md
 import planFilenamePrompt from "../prompts/system/plan-filename.md" with { type: "text" };
 import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compact-instructions.md" with { type: "text" };
 import type { AgentHubRegistry } from "@oh-my-pi/pi-tui/overlays/agent-hub-types";
-import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AgentRegistry, MAIN_AGENT_ID } from "../registry/agent-registry";
 import { registerPersistedSubagents } from "../registry/persisted-agents";
 import type { AgentCostSnapshot } from "@oh-my-pi/pi-tui/overlays/agent-hub-projection";
@@ -1349,7 +1348,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** Judge-batch and automatic-download progress rows above the working line. */
 	progressHudContainer: Container;
 	statusContainer: Container;
-	/** Current compact thinking only; this self-clearing dock never enters the transcript. */
+	/** Compact activity dock; its per-session display memory never enters the transcript. */
 	readonly compactThinkingPreview = new CompactThinkingPreview(this);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
@@ -1529,48 +1528,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	/** Message the working row shows; mirrors what the loader was last given. */
 	#workingMessage: string | (() => string) = DEFAULT_WORKING_MESSAGE;
-	#workingLabel = () =>
-		this.hideToolActivity || cfgDisplayMode.get(this.settings) !== "compact"
-			? typeof this.#workingMessage === "function"
-				? this.#workingMessage()
-				: this.#workingMessage
-			: this.#compactWorkingLabel();
-	/** Display-only projection of the viewed agent; never aggregate other agents' activity. */
-	#compactWorkingLabel = this.#oneRowWorkingLabel(() => {
-		const message = typeof this.#workingMessage === "function" ? this.#workingMessage() : this.#workingMessage;
-		const session = this.viewSession;
-		if (session.isAborting) return "正在停止…";
-		if (session === this.session) {
-			if (this.approvalOwnsComposer) return "等待授权确认…";
-			if (
-				this.hookSelector ||
-				this.hookInput ||
-				this.hookEditor ||
-				this.editorContainer.children.some(child => child instanceof AskDialogComponent)
-			) {
-				return "等待用户回答…";
-			}
-		}
-		if (!session.isStreaming && session.hasPendingAsyncWork()) return "等待后台任务…";
-		if (message !== DEFAULT_WORKING_MESSAGE) return message;
-		const state = session.agent.state;
-		if (state.activeThinkingIndex !== undefined) return "模型思考中…";
-		if (state.streamMessage?.role === "assistant") {
-			const block = state.streamMessage.content.at(-1);
-			if (block?.type === "toolCall") return "生成工具调用…";
-			if (block?.type === "text") return "模型回复中…";
-		}
-		const count = state.pendingToolCalls.size;
-		if (count > 1) return `工具执行中 · ${count} 项`;
-		if (count === 1) {
-			const id = state.pendingToolCalls.values().next().value;
-			const call = session
-				.getLastAssistantMessage()
-				?.content.find(block => block.type === "toolCall" && block.id === id);
-			return call?.type === "toolCall" ? `工具执行中 · ${sanitizeStatusText(call.name)}` : "工具执行中…";
-		}
-		return session.isStreaming ? "等待模型响应…" : message;
-	});
+	#workingLabel = () => (typeof this.#workingMessage === "function" ? this.#workingMessage() : this.#workingMessage);
 	/**
 	 * The native row's `elapsed` origin: the viewed session's run start, so a
 	 * loader recreated by a focus switch keeps the real elapsed time.
@@ -2014,6 +1972,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// A view switch leaves the main session, and the input queued for it, in place. A session reset
 		// hands a queued `/compact` and the input in the compaction queue back to the editor.
 		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
+		this.compactThinkingPreview.clear();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2249,7 +2208,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			aggregateVibeWorkerTokensPerSecond(this.session.getAgentId() ?? MAIN_AGENT_ID),
 		);
 
-		this.hideToolActivity = cfgDisplayMode.get(settings) === "clean";
+		this.hideToolActivity = cfgDisplayMode.get(this.settings) !== "detailed";
 		this.chatContainer.setToolActivityVisible(!this.hideToolActivity);
 		this.hideThinkingBlock = cfgHideThinkingBlock.get(settings);
 		this.proseOnlyThinking = cfgProseOnlyThinking.get(settings);
@@ -4626,8 +4585,8 @@ export class InteractiveMode implements InteractiveModeContext {
 
 		// Field comparisons skip effects the keybinding toggles already applied.
 		const displayMode = cfgDisplayMode.get(this.settings);
-		const hideToolActivity = displayMode === "clean";
-		const compactToolActivity = displayMode !== "detailed";
+		const hideToolActivity = displayMode !== "detailed";
+		const compactToolActivity = displayMode === "compact";
 		if (any("display.mode")) {
 			this.hideToolActivity = hideToolActivity;
 			if (!hideToolActivity) this.toolOutputExpanded = false;
@@ -4642,6 +4601,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				}
 			}
 			this.chatContainer.setToolActivityVisible(!hideToolActivity);
+			this.#syncWorkingLoaderVisibility();
 			this.#renderTodoList();
 			if (hideToolActivity || compactToolActivity) this.ui.clearInlineImages();
 			// Recreate settled blocks and replace retired rows using the new presentation.
@@ -5194,6 +5154,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		for (const child of liveComponents) {
 			this.chatContainer.addChild(child);
 		}
+		if (liveComponents.length > 0) this.#inputController.restoreCompactDiffExpansion();
 		// `renderSessionContext` clears `pendingTools` at start AND end so the
 		// reconstructed historical tool components don't leak into live tracking.
 		// Restore the in-flight entries afterwards so the next streamed tool-call
@@ -9148,13 +9109,30 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#workingMessage = DEFAULT_WORKING_MESSAGE;
 			this.#workingStartedAt = this.viewSession.runStartedAt ?? Date.now();
 			this.statusContainer.addChild(this.loadingAnimation);
-		} else if (!this.statusContainer.children.includes(this.loadingAnimation)) {
-			this.statusContainer.disposeChildren();
-			this.loadingAnimation.start();
-			this.statusContainer.addChild(this.loadingAnimation);
-			this.ui.requestRender();
 		}
 		this.applyPendingWorkingMessage();
+		this.#syncWorkingLoaderVisibility();
+	}
+
+	/** Keep the loader as the turn's interrupt state even when its ordinary row is hidden. */
+	#syncWorkingLoaderVisibility(): void {
+		const loader = this.loadingAnimation;
+		if (!loader) return;
+		const attached = this.statusContainer.children.includes(loader);
+		const hidden =
+			cfgDisplayMode.get(this.settings) === "compact" && this.#workingMessage === DEFAULT_WORKING_MESSAGE;
+		if (hidden) {
+			if (attached) {
+				this.statusContainer.removeChild(loader);
+				loader.stop();
+				this.ui.requestRender();
+			}
+		} else if (!attached && !this.autoCompactionLoader && !this.retryLoader) {
+			this.statusContainer.disposeChildren();
+			loader.start();
+			this.statusContainer.addChild(loader);
+			this.ui.requestRender();
+		}
 	}
 
 	#stopLoadingAnimation(clearStatusContainer: boolean): void {
@@ -9177,6 +9155,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			if (this.loadingAnimation) {
 				this.#workingMessage = DEFAULT_WORKING_MESSAGE;
 				this.loadingAnimation.setMessage(() => this.#workingLabel());
+				this.#syncWorkingLoaderVisibility();
 			}
 			return;
 		}
@@ -9184,6 +9163,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.loadingAnimation) {
 			this.#workingMessage = typeof message === "function" ? this.#oneRowWorkingLabel(message) : message;
 			this.loadingAnimation.setMessage(() => this.#workingLabel());
+			this.#syncWorkingLoaderVisibility();
 			return;
 		}
 
@@ -9267,6 +9247,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		this.#uiHelpers.renderSessionContext(sessionContext, options);
+		this.#inputController.restoreCompactDiffExpansion();
 	}
 
 	/** Build a session context in bounded chunks so terminal input runs between event-loop turns. */
@@ -9279,6 +9260,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.noteDisplayableThinkingContent(message);
 		}
 		await this.#uiHelpers.renderSessionContextIncrementally(sessionContext, options, renderChunk);
+		this.#inputController.restoreCompactDiffExpansion();
 	}
 
 	async renderInitialMessages(options?: {

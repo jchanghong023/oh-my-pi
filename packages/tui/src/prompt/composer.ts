@@ -626,7 +626,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			const visibleHeaderRows = Math.max(0, rows - (mutable.length + drop));
 			this.#retiredHeaderStart = Math.max(0, history.rows.length - visibleHeaderRows);
 		}
-		return { history, viewport: this.#paintLinkHints(this.#paintHoverBand(mutable, spans), width) };
+		return {
+			history,
+			viewport: this.#paintLinkHints(this.#paintHoverBand(mutable, spans), width),
+			replayHistoryAdjacent: drop === 0 && transcript.isViewportHistoryAdjacent,
+		};
 	}
 
 	/**

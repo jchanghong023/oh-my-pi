@@ -107,6 +107,8 @@ type WriteCheckpointState = {
 	op: "create" | "update";
 	text?: string;
 	identity?: Stats;
+	digest?: string;
+	verified?: boolean;
 };
 
 function sameWriteIdentity(a: Stats, b: Stats): boolean {
@@ -124,34 +126,63 @@ async function canonicalWritePath(file: string): Promise<string> {
 	}
 }
 
-async function captureWriteCheckpoint(file: string, textBudget: number): Promise<WriteCheckpointState | undefined> {
+async function captureWriteCheckpoint(
+	file: string,
+	compareBefore?: WriteCheckpointState,
+	requireText = true,
+): Promise<WriteCheckpointState | undefined> {
 	try {
 		const canonical = await canonicalWritePath(file);
 		const handle = await fs.open(file, "r").catch(async error => {
 			if (!isEnoent(error) || (await fs.lstat(file).catch(() => undefined))) throw error;
 			return undefined;
 		});
-		if (!handle) return { path: canonical, op: "create", text: "" };
+		if (!handle) return { path: canonical, op: "create", text: "", verified: true };
 		try {
 			const identity = await handle.stat();
 			const state: WriteCheckpointState = { path: canonical, op: "update", identity };
-			if (!identity.isFile() || identity.size > MAX_WRITE_SNAPSHOT_BYTES || textBudget < 0) return state;
-			// Never read a growing file without a bound, or decode invalid UTF-8 lossily.
-			const bytes = Buffer.allocUnsafe(identity.size + 1);
-			let count = 0;
-			while (count < bytes.length) {
-				const read = await handle.read(bytes, count, bytes.length - count, count);
-				if (read.bytesRead === 0) break;
-				count += read.bytesRead;
+			if (!identity.isFile()) return state;
+			let text: string | undefined;
+			let digest: string | undefined;
+			// A creation or a size change needs no content comparison when no journal text is needed.
+			const identityOnly =
+				!requireText &&
+				compareBefore?.verified &&
+				(compareBefore.op === "create" || compareBefore.identity?.size !== identity.size);
+			if (!identityOnly && identity.size <= MAX_WRITE_SNAPSHOT_BYTES) {
+				const bytes = Buffer.allocUnsafe(identity.size);
+				let count = 0;
+				while (count < bytes.length) {
+					const read = await handle.read(bytes, count, bytes.length - count, count);
+					if (read.bytesRead === 0) break;
+					count += read.bytesRead;
+				}
+				if (count !== identity.size) return state;
+				try {
+					const decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+					if (decoded.length <= MAX_WRITE_SNAPSHOT_TEXT_CHARS && !decoded.includes("\0")) text = decoded;
+				} catch {
+					// Invalid UTF-8 cannot be restored as text.
+				}
+				if (text === undefined) digest = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+			} else if (!identityOnly) {
+				const chunk = Buffer.allocUnsafe(64 * 1024);
+				const hash = new Bun.CryptoHasher("sha256");
+				let count = 0;
+				while (count < identity.size) {
+					const read = await handle.read(chunk, 0, Math.min(chunk.length, identity.size - count), count);
+					if (read.bytesRead === 0) break;
+					hash.update(chunk.subarray(0, read.bytesRead));
+					count += read.bytesRead;
+				}
+				if (count !== identity.size) return state;
+				digest = hash.digest("hex");
 			}
-			if (count !== identity.size || !sameWriteIdentity(identity, await handle.stat())) return state;
+			if (!sameWriteIdentity(identity, await handle.stat())) return state;
 			if (!sameWriteIdentity(identity, await fs.stat(file)) || (await fs.realpath(file)) !== canonical) return state;
-			try {
-				const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, count));
-				if (text.length <= textBudget && !text.includes("\0")) state.text = text;
-			} catch {
-				// Invalid UTF-8 remains a known update, but cannot be restored as text.
-			}
+			state.text = text;
+			state.digest = digest;
+			state.verified = true;
 			return state;
 		} finally {
 			await handle.close();
@@ -161,19 +192,69 @@ async function captureWriteCheckpoint(file: string, textBudget: number): Promise
 		return undefined;
 	}
 }
+async function validateWriteCheckpoint(file: string, before: WriteCheckpointState | undefined): Promise<void> {
+	if (!before?.verified) return;
+	try {
+		if ((await canonicalWritePath(file)) !== before.path) throw new Error("Write target changed");
+		if (before.identity) {
+			const current = await fs.stat(file);
+			if (!sameWriteIdentity(before.identity, current)) throw new Error("Write target changed");
+		} else {
+			// A failed lookup other than ENOENT is not proof that a file is absent.
+			try {
+				await fs.lstat(file);
+				throw new Error("Write target appeared");
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
+		}
+	} catch {
+		before.text = undefined;
+		before.verified = false;
+	}
+}
+
+function confirmedWriteChange(
+	before: WriteCheckpointState | undefined,
+	after: WriteCheckpointState | undefined,
+): boolean | undefined {
+	if (!before?.verified || !after?.verified || after.op !== "update" || after.path !== before.path) return undefined;
+	if (before.op === "create") return true;
+	if (before.identity?.size !== after.identity?.size) return true;
+	if (before.text !== undefined && after.text !== undefined) return before.text !== after.text;
+	const beforeDigest =
+		before.digest ??
+		(before.text === undefined ? undefined : new Bun.CryptoHasher("sha256").update(before.text).digest("hex"));
+	const afterDigest =
+		after.digest ??
+		(after.text === undefined ? undefined : new Bun.CryptoHasher("sha256").update(after.text).digest("hex"));
+	return beforeDigest === undefined || afterDigest === undefined ? undefined : beforeDigest !== afterDigest;
+}
 
 async function writeCheckpointDetails(
 	file: string,
 	before: WriteCheckpointState | undefined,
 	finalContent: string,
-): Promise<Pick<WriteToolDetails, "path" | "op" | "oldText" | "newText" | "snapshotsPruned">> {
-	const unavailable = { path: before?.path ?? file, op: before?.op, snapshotsPruned: true as const };
-	if (before?.text === undefined || before.text.length + finalContent.length > MAX_WRITE_SNAPSHOT_TEXT_CHARS) {
+): Promise<Pick<WriteToolDetails, "path" | "op" | "oldText" | "newText" | "snapshotsPruned" | "fileChanged">> {
+	const fits = before?.text !== undefined && before.text.length + finalContent.length <= MAX_WRITE_SNAPSHOT_TEXT_CHARS;
+	const after = await captureWriteCheckpoint(file, before, fits);
+	const fileChanged = confirmedWriteChange(before, after);
+	const unavailable = {
+		path: before?.path ?? file,
+		op: before?.op,
+		snapshotsPruned: true as const,
+		...(fileChanged === undefined ? {} : { fileChanged }),
+	};
+	if (!fits || !before || after?.op !== "update" || after.path !== before.path || after.text !== finalContent) {
 		return unavailable;
 	}
-	const after = await captureWriteCheckpoint(file, MAX_WRITE_SNAPSHOT_TEXT_CHARS - before.text.length);
-	if (after?.op !== "update" || after.path !== before.path || after.text !== finalContent) return unavailable;
-	return { path: before.path, op: before.op, oldText: before.text, newText: after.text };
+	return {
+		path: before.path,
+		op: before.op,
+		oldText: before.text,
+		newText: after.text,
+		...(fileChanged === undefined ? {} : { fileChanged }),
+	};
 }
 
 /** True when `typo` is exactly one insertion, deletion, substitution, or adjacent swap away from `word`. */
@@ -1058,7 +1139,7 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				}),
 			);
 		}
-		return untilAborted(signal, async () => {
+		return untilAborted<AgentToolResult<WriteToolDetails>>(signal, async () => {
 			// Text payloads get hashline display prefixes ([PATH#HASH] + LINE:) stripped if the model
 			// copied them from read output. Verbatim payloads (messages, process stdin, setting
 			// values, conflict directives) reach their handler exactly as the model wrote them.
@@ -1219,6 +1300,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 				batchRequest?.flush ? batchRequest.id : undefined,
 				async (): Promise<AgentToolResult<WriteToolDetails>> => {
 					signal?.throwIfAborted();
+					const bridgeBefore = editorOwnsFile ? await captureWriteCheckpoint(absolutePath) : undefined;
+					await validateWriteCheckpoint(absolutePath, bridgeBefore);
 					// Try ACP bridge first for editor-visible filesystem paths. Internal
 					// artifacts such as local:// plans are owned by OMP, not the editor.
 					const bridgeWrite = await routeWriteThroughBridge(
@@ -1235,6 +1318,8 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 						// use it so a drifted write (e.g. client format-on-save) still
 						// hands back a tag that matches what's actually on disk.
 						const madeExecutable = await maybeMarkExecutableForShebang(absolutePath, bridgeWrite.text);
+						const bridgeAfter = await captureWriteCheckpoint(absolutePath, bridgeBefore, false);
+						const fileChanged = confirmedWriteChange(bridgeBefore, bridgeAfter);
 						const header = maybeWriteSnapshotHeader(this.session, absolutePath, bridgeWrite.text, displayPath);
 						const writeLine = `Successfully wrote ${cleanBytes} bytes to ${displayPath}`;
 						let resultText = header ? `${header}\n${writeLine}` : writeLine;
@@ -1250,20 +1335,14 @@ export class WriteTool implements AgentTool<typeof writeSchema, WriteToolDetails
 								resolvedPath: absolutePath,
 								path: absolutePath,
 								snapshotsPruned: true,
+								...(fileChanged === undefined ? {} : { fileChanged }),
 								madeExecutable: madeExecutable || undefined,
 							},
 						};
 					}
 
-					const before = await captureWriteCheckpoint(
-						absolutePath,
-						MAX_WRITE_SNAPSHOT_TEXT_CHARS - writeContent.length,
-					);
-					// Detect path replacement or mutation between the bounded read and commit.
-					if (before?.identity) {
-						const current = await fs.stat(absolutePath).catch(() => undefined);
-						if (!current || !sameWriteIdentity(before.identity, current)) before.text = undefined;
-					}
+					const before = await captureWriteCheckpoint(absolutePath);
+					await validateWriteCheckpoint(absolutePath, before);
 					const { writethrough, deferred } = this.#lspWritethrough();
 					const diagnostics = await writethrough(
 						absolutePath,

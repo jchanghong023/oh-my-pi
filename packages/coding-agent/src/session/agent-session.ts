@@ -245,6 +245,7 @@ import {
 import { isAttachmentOnlyTitleInput, isLowSignalTitleInput } from "../tiny/text";
 import type { ImageAttachmentEntry, ToolSession } from "../tools";
 import { resolveApproval } from "../tools/approval";
+import { invokeCrawlBrowserWithSession, writeCrawlMarkdownWithSession } from "../tools/browser/crawl-access";
 import { type AskToolDetails } from "@oh-my-pi/pi-tui/tools/ask";
 import { type AskToolInput, recoverAskQuestions } from "../tools/ask";
 import {
@@ -1634,6 +1635,12 @@ export class AgentSession implements SettingsScope {
 				.finally(() => {
 					this.#ircWakesAwaitingIdleCompaction--;
 				});
+			return;
+		}
+		// Manual compaction replaces context from its earlier snapshot. Keep IRC
+		// out of that snapshot until its completion drain can deliver it.
+		if (this.isCompacting) {
+			this.#irc.queueAside(wakeRecords);
 			return;
 		}
 		// While a driven run holds wakes, its monitor would take this turn's answer
@@ -7195,6 +7202,23 @@ export class AgentSession implements SettingsScope {
 	get loadedProjectContext(): Readonly<Pick<ToolSession, "contextFiles" | "activeRules">> | undefined {
 		const context = this.#evalToolSession;
 		return context ? { contextFiles: context.contextFiles, activeRules: context.activeRules } : undefined;
+	}
+
+	/** Use the owning live tool session without exposing its credentials to command hosts. */
+	async invokeCrawlBrowser(parameters: unknown, signal?: AbortSignal): Promise<AgentToolResult<unknown>> {
+		if (!this.#evalToolSession) throw new Error("Browser crawl requires a live tool session.");
+		return invokeCrawlBrowserWithSession(this.#evalToolSession, parameters, signal);
+	}
+
+	/** Authorize and create a non-overwriting crawl output using the owning tool session. */
+	async writeCrawlMarkdown(
+		directory: string,
+		basename: string,
+		content: string,
+		signal?: AbortSignal,
+	): Promise<string> {
+		if (!this.#evalToolSession) throw new Error("Crawl output requires a live tool session.");
+		return writeCrawlMarkdownWithSession(this.#evalToolSession, directory, basename, content, signal);
 	}
 
 	/** Looks up a registered tool by name. */
