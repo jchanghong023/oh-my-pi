@@ -1,11 +1,10 @@
 import type { ToolCall } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { type Component, visibleWidth } from "@oh-my-pi/pi-tui";
-import { paintCompactToolActivity } from "@oh-my-pi/pi-tui/chat/assistant-message";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { formatThinkingForDisplay, hasDisplayableThinking } from "@oh-my-pi/pi-tui/chat/thinking-display";
 import { registerSpinnerBlock, unregisterSpinnerBlock } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import { col, elapsed, node, row, text } from "@oh-my-pi/pi-tui/native/describe";
+import { col, elapsed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
@@ -101,12 +100,12 @@ export class CompactThinkingPreview implements Component {
 	#sessionId?: string;
 	#memory?: SessionMemory;
 	#nativeRows: { body: string; suffix: string; duration?: number; running: boolean }[] = [];
-	#thinkingActive = false;
+	#workingActive = false;
 
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "loadingAnimation"
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 	) {}
@@ -275,7 +274,7 @@ export class CompactThinkingPreview implements Component {
 
 	#renderRows(width: number, paint: boolean): readonly string[] {
 		this.#nativeRows = [];
-		this.#thinkingActive = false;
+		this.#workingActive = false;
 		if (!displayPreferences.compactToolActivity) {
 			this.clear();
 			return [];
@@ -284,6 +283,7 @@ export class CompactThinkingPreview implements Component {
 		if (width < 1) return EMPTY_ROWS;
 		const session = this.ctx.viewSession;
 		const state = session.agent.state;
+		this.#workingActive = this.ctx.loadingAnimation !== undefined;
 		const stream = state.streamMessage;
 		const memory = this.#memory!;
 		let thinking: string | undefined;
@@ -307,17 +307,13 @@ export class CompactThinkingPreview implements Component {
 				: undefined;
 		};
 		const activeCalls = memory.calls.some(running);
-		let preparing = false;
 		let rows: string[];
-		let animate: boolean[] = [];
 		if (thinking) {
 			// Thinking retains its original line breaks; only tool descriptions are flattened.
 			rows = wrapTextWithAnsi(replaceTabs(sanitizeText(plainText(thinking))), width).slice(-2);
 			while (rows.length < 2) rows.push("");
 			memory.snapshot = { kind: "thinking", rows: [...rows] };
 			memory.undisplayedDispatch = false;
-			this.#thinkingActive = true;
-			animate = [true, true];
 		} else if (activeCalls) {
 			const items = memory.calls.map(call => ({
 				id: call.id,
@@ -333,7 +329,6 @@ export class CompactThinkingPreview implements Component {
 				running: running(memory.calls[index]!),
 			}));
 			rows = this.#nativeRows.map(item => item.body + item.suffix);
-			animate = this.#nativeRows.map(item => item.running);
 		} else if (
 			!memory.turnDispatched &&
 			session.isStreaming &&
@@ -352,8 +347,6 @@ export class CompactThinkingPreview implements Component {
 			memory.snapshot = { kind: "tool", rows: [{ ...item }] };
 			this.#nativeRows = [{ ...toolLine(item, width, false), running: true }];
 			rows = [this.#nativeRows[0]!.body, ""];
-			animate = [true, false];
-			preparing = true;
 		} else {
 			if (memory.undisplayedDispatch) {
 				memory.snapshot = {
@@ -370,10 +363,7 @@ export class CompactThinkingPreview implements Component {
 			const snapshot = memory.snapshot;
 			if (!snapshot || (snapshot.kind === "thinking" && this.ctx.effectiveHideThinkingBlock)) rows = [...EMPTY_ROWS];
 			else if (snapshot.kind === "thinking")
-				rows = [
-					truncateToWidth(`上次活动 · ${snapshot.rows[0] ?? ""}`, width),
-					truncateToWidth(snapshot.rows[1] ?? "", width),
-				];
+				rows = [truncateToWidth(snapshot.rows[0] ?? "", width), truncateToWidth(snapshot.rows[1] ?? "", width)];
 			else {
 				for (const item of snapshot.rows) {
 					const call = memory.calls.find(candidate => candidate.id === item.id && candidate.endedAt !== undefined);
@@ -391,18 +381,13 @@ export class CompactThinkingPreview implements Component {
 		const needsTick =
 			!isNativeRendering() &&
 			!!this.ctx.ui &&
-			(activeCalls || ((this.#thinkingActive || preparing) && shimmerEnabled()));
+			(activeCalls || (this.#workingActive && rows.some(Boolean) && shimmerEnabled()));
 		if (needsTick) registerSpinnerBlock(this);
 		else unregisterSpinnerBlock(this);
-		if (!paint || !shimmerEnabled()) return rows;
-		const phase = (now % 2000) / 2000;
-		return rows.map((value, index) =>
-			!animate[index]
-				? value
-				: this.#thinkingActive
-					? shimmerText(value, theme, THINKING_SHIMMER_PALETTE)
-					: paintCompactToolActivity(value, undefined, phase),
-		);
+		if (!paint) return rows;
+		if (!this.#workingActive) return rows.map(value => (value ? theme.fg("dim", value) : value));
+		if (!shimmerEnabled()) return rows;
+		return rows.map(value => (value ? shimmerText(value, theme, THINKING_SHIMMER_PALETTE) : value));
 	}
 
 	describe(cx: DescribeContext): NativeNode {
@@ -412,16 +397,26 @@ export class CompactThinkingPreview implements Component {
 			const children = this.#nativeRows.map(item => {
 				const body = inset + item.body;
 				const label =
-					item.running && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer")
-						? describeShimmer([{ text: body }])
-						: text(body);
+					this.#workingActive && shimmerEnabled() && !cx.reduceMotion && cx.supports("shimmer")
+						? describeShimmer([{ text: body, palette: THINKING_SHIMMER_PALETTE }])
+						: this.#workingActive
+							? text(body)
+							: text([span(body, "dim")]);
 				if (!item.suffix || item.duration === undefined) return label;
-				return row([label, text(" · "), elapsed(item.duration, !item.running)]);
+				const timer = elapsed(item.duration, !item.running);
+				return this.#workingActive
+					? row([label, text(" · "), timer])
+					: row([label, text([span(" · ", "dim")]), node(timer.k, { ...timer.p, tone: "muted" }, timer.c)]);
 			});
 			while (children.length < 3) children.push(node("rows", { cols: cx.cols, lines: [""] }));
 			return col(children);
 		}
-		if (!this.#thinkingActive || !shimmerEnabled() || cx.reduceMotion || !cx.supports("shimmer")) {
+		if (!this.#workingActive) {
+			return col(
+				rows.map(value => (value ? text([span(value, "dim")]) : node("rows", { cols: cx.cols, lines: [""] }))),
+			);
+		}
+		if (!shimmerEnabled() || cx.reduceMotion || !cx.supports("shimmer")) {
 			return { k: "rows", p: { cols: cx.cols, lines: rows } };
 		}
 		return col(

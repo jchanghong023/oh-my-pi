@@ -15,7 +15,7 @@ import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import {
 	chatTranscriptDisplayPreferences,
@@ -129,7 +129,7 @@ describe("InteractiveMode live working label", () => {
 		expect(Bun.stringWidth(rows[0] ?? "")).toBeLessThanOrEqual(COLUMNS);
 	});
 
-	it("hides the normal working row only in compact, including after live display changes", async () => {
+	it("replaces the hidden working row and follows its lifetime independently of status-bar activity", async () => {
 		const terminal = new VirtualTerminal(100, 29);
 		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: new VirtualRenderScheduler() } });
 		const current = new AgentSession({
@@ -143,6 +143,24 @@ describe("InteractiveMode live working label", () => {
 		try {
 			await live.init({ suppressWelcomeIntro: true });
 			live.ensureLoadingAnimation();
+			const thought = createAssistantMessage("");
+			thought.content = [{ type: "thinking", thinking: "WORKING_LIFETIME_THOUGHT" }];
+			live.noteDisplayableThinkingContent(thought);
+			current.agent.state.streamMessage = thought;
+			current.agent.state.activeThinkingIndex = 0;
+			const activity = () => live.compactThinkingPreview.render(COLUMNS);
+			const shimmering = () =>
+				live.compactThinkingPreview
+					.describe(nativeContext)
+					.c?.some(child => "k" in child && child.k === "shimmer") ?? false;
+			expect(current.isStreaming).toBe(false);
+			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
+			expect(shimmering()).toBe(true);
+			setSystemTime(10_000);
+			const running = activity();
+			setSystemTime(10_500);
+			expect(activity().map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
+			expect(activity()).not.toEqual(running);
 			const ansi = () => Bun.stripANSI(live.statusContainer.render(COLUMNS).join("\n"));
 			const roles = () => nativeRoles(live.statusContainer.describe(nativeContext)!);
 
@@ -158,8 +176,30 @@ describe("InteractiveMode live working label", () => {
 			await Promise.resolve();
 			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 			expect(roles()).not.toContain("omp.working");
+
+			// The error path removes the original loader without closing the status-bar window.
+			current.agent.state.isStreaming = true;
+			live.statusLine.markActivityStart();
+			live.showError("WORKING_LIFETIME_ERROR");
+			expect(current.isStreaming).toBe(true);
+			expect(live.statusLine.getTurnElapsedMs()).not.toBeNull();
+			expect(shimmering()).toBe(false);
+			const stopped = activity();
+			expect(stopped[0]).toContain(theme.getFgAnsi("dim"));
+			const retained = live.compactThinkingPreview.describe(nativeContext).c?.[0];
+			if (!retained || !("k" in retained) || retained.k !== "text") throw new Error("Expected gray thinking text");
+			expect(retained.p?.spans).toEqual([{ t: " WORKING_LIFETIME_THOUGHT", s: "dim" }]);
+			setSystemTime(11_000);
+			expect(activity()).toEqual(stopped);
+
+			live.ensureLoadingAnimation();
+			live.statusLine.markActivityEnd();
+			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
+			expect(shimmering()).toBe(true);
+			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 		} finally {
 			live.stop();
+			setSystemTime();
 			await current.dispose();
 		}
 	});

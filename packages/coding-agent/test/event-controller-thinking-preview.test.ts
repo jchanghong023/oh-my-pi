@@ -10,13 +10,14 @@ import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { Loader } from "@oh-my-pi/pi-tui";
 import {
 	chatTranscriptDisplayPreferences,
 	setChatTranscriptDisplayPreferences,
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { formatDuration } from "@oh-my-pi/pi-utils";
 import { createInteractiveModeContext, createSessionStub } from "./helpers/interactive-mode-context";
@@ -158,6 +159,20 @@ let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 function focusFixture() {
 	const main = liveSession();
 	const ctx = createInteractiveModeContext({ session: main.session });
+	ctx.ensureLoadingAnimation = () => {
+		if (ctx.loadingAnimation) return;
+		const loader = new Loader(
+			ctx.ui,
+			value => value,
+			value => value,
+		);
+		loader.stop();
+		ctx.loadingAnimation = loader;
+	};
+	ctx.clearTransientSessionUi = () => {
+		ctx.loadingAnimation?.stop();
+		ctx.loadingAnimation = undefined;
+	};
 	ctx.hideToolActivity = true;
 	ctx.chatContainer.setToolActivityVisible(false);
 	const controller = new EventController(ctx);
@@ -241,7 +256,6 @@ describe("compact thinking dock focus restoration", () => {
 
 		live.session.agent.state.activeThinkingIndex = undefined;
 		await live.emit(update(message, "thinking_end"));
-		expect(h.rendered()).toContain("上次活动");
 		expect(h.rendered()).toContain("latest");
 		live.session.agent.state.activeThinkingIndex = 0;
 		await live.emit(update(message, "thinking_delta"));
@@ -298,7 +312,6 @@ describe("compact thinking dock focus restoration", () => {
 		live.session.agent.state.streamMessage = null;
 		await live.emit({ type: "message_end", message });
 		await live.emit({ type: "agent_end", messages: [] });
-		expect(h.rendered()).toContain("上次活动");
 		expect(h.rendered()).toContain("VISIBLE_THOUGHT");
 		expect(h.rendered()).not.toContain("UNSEEN_FINAL_THOUGHT");
 		h.ctx.hideThinkingBlock = true;
@@ -380,7 +393,7 @@ describe("compact thinking dock focus restoration", () => {
 			throw new Error("Expected two native tool rows");
 		}
 		expect(hasNativeKind(firstRow, "shimmer")).toBe(true);
-		expect(hasNativeKind(secondRow, "shimmer")).toBe(false);
+		expect(hasNativeKind(secondRow, "shimmer")).toBe(true);
 		const preparing = { type: "toolCall" as const, id: "c", name: "preparing", arguments: { title: "PREPARING" } };
 		message.content.push(preparing);
 		await live.emit({
@@ -680,7 +693,6 @@ describe("compact thinking dock focus restoration", () => {
 		await old.emit(update(message, "thinking_delta"));
 		expect(h.rows()).toEqual(["", "", ""]);
 		await h.focus.focusAgent("Restored");
-		expect(h.rendered()).toContain("上次活动");
 		expect(h.nativeRendered()).toContain("OLD_LOGICAL_SESSION");
 		const reconstructed = new CompactThinkingPreview(h.ctx);
 		expect(Bun.stripANSI(reconstructed.render(60).join("\n"))).toContain("OLD_LOGICAL_SESSION");
@@ -688,7 +700,7 @@ describe("compact thinking dock focus restoration", () => {
 		expect(h.rows()).toEqual(["", "", ""]);
 	});
 
-	it("animates live thinking with the existing switch and keeps retained thinking static", async () => {
+	it("keeps thinking animated through the loop and freezes it only after the loop ends", async () => {
 		const h = focusFixture();
 		const live = liveSession(thinkingMessage("older\nfirst original line\nlatest original line"), 0);
 		h.register("Worker", live);
@@ -714,12 +726,15 @@ describe("compact thinking dock focus restoration", () => {
 		expect(h.rows()).toEqual(disabled);
 		setShimmerMode("classic");
 		live.session.agent.state.activeThinkingIndex = undefined;
+		const retainedDuringLoop = h.rows();
+		setSystemTime(1250);
+		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(retainedDuringLoop.map(row => Bun.stripANSI(row)));
+		expect(h.rows()).not.toEqual(retainedDuringLoop);
 		live.session.agent.state.streamMessage = null;
 		await live.emit({ type: "agent_end", messages: [] });
 		const retained = h.rows();
 		setSystemTime(1500);
 		expect(h.rows()).toEqual(retained);
-		expect(h.rendered()).toContain("上次活动");
 		expect(h.rendered()).toContain("latest original line");
 	});
 
@@ -741,10 +756,9 @@ describe("compact thinking dock focus restoration", () => {
 		live.session.agent.state.activeThinkingIndex = undefined;
 		live.session.agent.state.streamMessage = null;
 		await live.emit({ type: "agent_end", messages: [] });
-		const retained = h.dock.render(60).map(row => Bun.stripANSI(row));
-		expect(retained[0]).toStartWith(" 上次活动");
-		expect(retained[1]).toBe(" jklmnopqr");
-		expect(retained[2]).toBe("");
+		for (const rows of [h.dock.render(60), nativeRows(h.dock.describe({ ...cx, cols: 60 }))]) {
+			expect(rows.map(row => Bun.stripANSI(row))).toEqual([" abcdefghi", " jklmnopqr", ""]);
+		}
 		for (const width of [0, 1]) {
 			for (const rows of [h.dock.render(width), nativeRows(h.dock.describe({ ...cx, cols: width }))]) {
 				expect(rows.every(row => Bun.stringWidth(row) <= width)).toBe(true);
@@ -752,7 +766,7 @@ describe("compact thinking dock focus restoration", () => {
 		}
 	});
 
-	it("animates active tool rows only when shimmer is enabled, never retained rows", async () => {
+	it("keeps returned tool text animated until loop end without advancing its frozen elapsed time", async () => {
 		const h = focusFixture();
 		const live = liveSession(thinkingMessage(""));
 		h.register("Worker", live);
@@ -790,11 +804,78 @@ describe("compact thinking dock focus restoration", () => {
 			result: { content: [] },
 			isError: false,
 		});
+		const returned = h.rows();
+		setSystemTime(82_500);
+		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(returned.map(row => Bun.stripANSI(row)));
+		expect(h.rows()).not.toEqual(returned);
+		const native = h.dock.describe(cx);
+		expect(hasNativeKind(native, "shimmer")).toBe(true);
+		expect(nativeElapsed(native)).toEqual([{ age: 72_000, stopped: 72_000 }]);
+		const firstRow = native.c?.[0];
+		if (!firstRow || !("k" in firstRow)) throw new Error("Expected native tool row");
+		const label = firstRow.c?.[0];
+		if (!label || !("k" in label) || label.k !== "shimmer") throw new Error("Expected tool shimmer");
+		expect(label.p?.palette).toEqual({ low: "dim", mid: "muted", high: "success" });
 		await live.emit({ type: "agent_end", messages: [] });
 		const history = h.rows();
-		setSystemTime(82_500);
+		expect(history[0]).toContain(theme.getFgAnsi("dim"));
+		const retainedRow = h.dock.describe(cx).c?.[0];
+		if (!retainedRow || !("k" in retainedRow)) throw new Error("Expected retained tool row");
+		const retainedLabel = retainedRow.c?.[0];
+		if (!retainedLabel || !("k" in retainedLabel) || retainedLabel.k !== "text") {
+			throw new Error("Expected gray tool text");
+		}
+		expect(retainedLabel.p?.spans?.[0]?.s).toBe("dim");
+		setSystemTime(83_000);
 		expect(h.rows()).toEqual(history);
 		expect(h.nativeRendered()).toContain("animated tool");
+	});
+
+	it("does not reactivate retained activity on late async results, but does on a new loop in that session", async () => {
+		const h = focusFixture();
+		const worker = liveSession(thinkingMessage("ASYNC_WORKER_THOUGHT"), 0);
+		const idle = liveSession(thinkingMessage("IDLE_SESSION_THOUGHT"), 0);
+		h.register("Worker", worker);
+		h.register("Idle", idle);
+		const cx: DescribeContext = {
+			cols: 60,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
+		await h.focus.focusAgent("Idle");
+		h.rows();
+		await idle.emit({ type: "agent_end", messages: [] });
+		await h.focus.focusAgent("Worker");
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
+		await h.focus.focusAgent("Idle");
+		const retained = h.rows();
+		setSystemTime(Date.now() + 500);
+		expect(h.rows()).toEqual(retained);
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
+
+		const lateResult: AgentSessionEvent = {
+			type: "tool_execution_end",
+			toolCallId: "late-async-result",
+			toolName: "task",
+			result: { content: [{ type: "text", text: "ASYNC_RESULT" }] },
+			isError: false,
+		};
+		await idle.emit(lateResult);
+		expect(h.rows()).toEqual(retained);
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
+		await idle.emit({ type: "agent_start" });
+		const restarted = h.rows();
+		setSystemTime(Date.now() + 500);
+		expect(h.rows().map(row => Bun.stripANSI(row))).toEqual(restarted.map(row => Bun.stripANSI(row)));
+		expect(h.rows()).not.toEqual(restarted);
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
+		await idle.emit({ type: "agent_end", messages: [] });
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(false);
+		await h.focus.focusAgent("Worker");
+		expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(true);
+		expect(h.rendered()).toContain("ASYNC_WORKER_THOUGHT");
 	});
 
 	it("shows raw streamed targets immediately and preserves preparation ordering", async () => {

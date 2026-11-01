@@ -45,12 +45,12 @@
 
 ### Changed
 
-- Show live compact thinking as a green shimmer sweep over gray text instead of rainbow gradients, using the existing animation switch in ANSI and native views; retained activity stays static, and tool colors, elapsed times, alignment and spacing are unchanged.
+- Let compact tool and thinking text replace the hidden standalone working indicator using its existing lifetime: gray-and-green shimmer while active, static gray when inactive, including async waits; status-bar indicators and per-tool timers remain unchanged.
 - Hide the standalone model-processing indicator in compact mode while keeping live activity, other status messages, and interruption available.
 - Compact activity keeps one blank row below its two content rows, separating live, retained and empty activity from the input area without state-dependent layout jumps.
 - Align compact thinking, tool intents and retained activity with chat text, reserving the left inset before wrapping and preserving empty spacer rows.
 - Show the latest two dispatched tools, including returned calls, as one intent or raw-command row each with independent elapsed times that advance without output and freeze on return; tool output no longer replaces the description.
-- Omit the “上次活动” prefix from retained compact tool rows, keeping the tool name, intent or command and frozen elapsed time without an extra heading.
+- Omit the “上次活动” prefix from retained compact thinking and tool rows, preserving both thought lines, tool descriptions and frozen elapsed time without an extra heading.
 - Keep file-targeted write/edit cards visible while streaming and after unchanged or failed operations, using the original detailed-mode components; message, configuration, process-control and non-file device calls remain hidden.
 - Limit each root session to 32 concurrent background jobs by default and at most 32 even with a higher `async.maxJobs` setting; lower configured limits still apply.
 - Prefer available OpenWiki tools for project overviews, read source first for code changes, and fall back to source when Wiki is unavailable.
