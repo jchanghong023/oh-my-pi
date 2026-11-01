@@ -1,13 +1,13 @@
 {
-  "updatedAt": "2026-11-01T04:37:39.018Z",
+  "updatedAt": "2026-11-01T04:41:30.202Z",
   "command": "update",
-  "gitHead": "419fd117424d029fb4c59c077db415960fefdc1f",
+  "gitHead": "2d80773f938bc23dd00e3638202da365e961c7df",
   "model": "openai-codex/gpt-6.1-terra",
   "status": "complete",
   "language": "zh-CN",
   "instructionBaseline": {
     "agents": "67a815a3529c08af8f01b7c3417195a0c4cd4132403bbba18923545c2437e109",
     "wiki": "7eb8b846b38568e59059d905c9d713bded285694e9477b0ddb2c95c121765f8c",
-    "sourceFingerprint": "sha256:32bc7e2d0b2fba72c42681ef246c1f75e02afe9aceb38405ea03e5ac0c4df713"
+    "sourceFingerprint": "sha256:41059dbf087fa36d580de7a4d8bac81f76466568cf46f98248539b2fcc7a27cd"
   }
 }
