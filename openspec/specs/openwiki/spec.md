@@ -169,15 +169,15 @@ OMP MUST 保留 OpenWiki 的关系图、Markdown 阅读器、实时刷新和静�
 
 ### Requirement: 默认接入不安装外部 OpenWiki 链路
 
-OMP 的仓库 Wiki 入口 MUST NOT 隐式创建安装并运行独立 OpenWiki 的 workflow、拉取外部知识连接器或改写仓库级 Agent 指令文件；也 MUST NOT 自动删除或覆盖用户已有的相关文件。此约束不改变显式生成对 `openwiki/` 的预期写入。
+OMP 的仓库 Wiki 入口 MUST NOT 隐式创建安装并运行独立 OpenWiki 的 workflow、拉取外部知识连接器或改写 `CLAUDE.md`。执行仓库 `--init`／`--update` 时，OMP MUST 在仓库根目录的 `AGENTS.md` 创建或刷新 OpenWiki 标记区块，告知 Agent Wiki 位置及只读查询方式，保留区块之外的内容；标记损坏或重复时 MUST 报错且不修改文件。此约束不改变显式生成对 `openwiki/` 的预期写入；`--dry-run` 不修改 Agent 指令。
 
 #### Scenario: 新仓库首次生成
 - **WHEN** 用户首次通过 OMP 生成仓库 Wiki
-- **THEN** 不创建依赖独立 OpenWiki 安装的自动更新 workflow，不执行连接器拉取，不自动创建或刷新 `AGENTS.md`／`CLAUDE.md` 管理片段
+- **THEN** 不创建依赖独立 OpenWiki 安装的自动更新 workflow，不执行连接器拉取，不创建或刷新 `CLAUDE.md`；创建或刷新 `AGENTS.md` 的 OpenWiki 管理片段
 
 #### Scenario: 仓库已有独立 OpenWiki 设置
 - **WHEN** 仓库已经存在用户维护的 OpenWiki workflow 或 Agent 指令
-- **THEN** OMP 不擅自删除、覆盖或运行它们；这些文件不作为 OMP 内置功能的安装、认证或执行前提
+- **THEN** OMP 不擅自删除、覆盖或运行已有 workflow，不修改 `CLAUDE.md`，只刷新 `AGENTS.md` 中的 OpenWiki 管理片段；这些文件不作为 OMP 内置功能的安装、认证或执行前提
 
 #### Scenario: 保留 fork 独立入口
 - **WHEN** OpenWiki fork 通过其独立 CLI、MCP、个人模式或其他既有入口运行
