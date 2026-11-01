@@ -18,7 +18,7 @@ OMP MUST 通过 `omp openwiki` 提供代码仓库 Wiki 的生成、更新、链�
 
 #### Scenario: 只读预览生成和更新
 - **WHEN** 用户对 `--init` 或 `--update` 指定 `--dry-run`
-- **THEN** OMP 打印仓库、当前配置的默认角色或显式模型选择器、源码快照候选路径、可比较的变更路径及已有 Wiki 页面范围，不调用模型、不写入 Wiki 或 OpenWiki 运行状态，也不写出遥测文件
+- **THEN** OMP 打印仓库、页面与规划阶段各自的默认角色或显式模型选择器、源码快照候选路径、可比较的变更路径及已有 Wiki 页面范围，不调用模型、不写入 Wiki 或 OpenWiki 运行状态，也不写出遥测文件
 - **AND** 对需要运行时发现或认证才能确定的模型，预览明确标注选择器未验证；说明最终 Wiki 页面需由模型规划决定，候选路径并非完整的模型读取清单
 - **AND** `--dry-run` 未配合 `--init`／`--update` 时不得执行链接、可视化或其他有副作用的操作
 
@@ -37,17 +37,24 @@ OMP MUST 通过 `omp openwiki` 提供代码仓库 Wiki 的生成、更新、链�
 
 ### Requirement: 使用 OMP 模型与认证
 
-OpenWiki 生成 MUST 使用 OMP 已有的模型选择、认证和请求策略：未显式指定模型时使用当前 profile 的 `default` role，显式选择优先；规划 Agent 和所有页面 Agent MUST 共用本次选择的同一个模型，不分别选择 `plan`／`task` role。MUST 支持所选工具调用聊天模型的完整模型—工具—模型往返。用户 MUST NOT 被要求配置 OpenWiki 专用 provider、凭据、登录流程或独立模型网关。
+OpenWiki 生成 MUST 使用 OMP 已有的模型选择、认证和请求策略：未显式指定模型时，页面 Agent 使用当前 profile 的 `default` role，规划 Agent 优先使用已配置的 `plan` role，仅在未配置 `plan` 时回退到 `default`。`--modelId`／`--model-id` 覆盖两阶段的公共模型，`--planner-model` MAY 再单独覆盖规划模型；规划模型优先级 MUST 为 `--planner-model`、公共显式模型、`plan` role、`default` role，不自动选择 `task` role。MUST 支持各阶段所选工具调用聊天模型的完整模型—工具—模型往返。用户 MUST NOT 被要求配置 OpenWiki 专用 provider、凭据、登录流程或独立模型网关。
 
 #### Scenario: 使用默认模型
 - **WHEN** 用户未显式指定模型并执行 Wiki 生成或更新
-- **THEN** 按 OMP 当前 profile 和运行环境解析 `default` role，规划 Agent 与所有页面 Agent 共用该模型；不单独解析 `plan` 或 `task` role
+- **THEN** 按 OMP 当前 profile 和运行环境解析页面 Agent 的 `default` role；规划 Agent 使用已配置的 `plan` role，未配置 `plan` 时复用页面模型，不单独解析 `task` role
 - **AND** 用户无需重复填写 OpenWiki 模型配置，生成期间的工具调用和后续模型响应可以完成
+- **AND** `plan` 已配置但所选模型不可用时如实报错，不因解析、认证或调用失败而静默回退到 `default`
 
 #### Scenario: 显式选择模型
 - **WHEN** 用户通过 `--modelId`／`--model-id` 为 Wiki 生成或更新显式选择模型
-- **THEN** 该模型由 OMP 解析并优先于 `default` role，供规划 Agent 和所有页面 Agent 共用；该选择仅作用于本次运行，不修改已保存的 role 配置
+- **THEN** 该公共模型由 OMP 解析并优先于 `plan`／`default` role，供所有页面 Agent 及未通过 `--planner-model` 单独覆盖的规划 Agent 使用；该选择仅作用于本次运行，不修改已保存的 role 配置
 - **AND** 所选模型不受另一套 OpenWiki 模型列表限制
+
+#### Scenario: 单独指定规划模型
+- **WHEN** 用户通过 `--planner-model` 为 Wiki 生成或更新指定规划模型
+- **THEN** 仅规划 Agent 使用该 OMP 模型，页面 Agent 继续使用 `--modelId`／`--model-id` 指定的公共模型或当前 profile 的 `default` role；不修改已保存的 role 配置
+- **AND** 两阶段有效选择器相同时复用同一模型实例；不同选择器复用既有模型工厂，所有页面共用页面模型实例，失败或取消后释放已创建的模型资源，不静默回退
+- **AND** `--dry-run` 分别展示两阶段的模型选择且不调用模型、不写 Wiki；`--debug` 分别展示实际模型 ID，现有持久化模型字段继续记录公共／页面模型，不改变 checkpoint 格式
 
 #### Scenario: 公司模型和免认证模型
 - **WHEN** OMP 当前有效配置提供公司内网模型或受支持的免认证模型

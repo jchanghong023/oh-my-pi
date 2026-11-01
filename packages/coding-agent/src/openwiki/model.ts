@@ -28,6 +28,13 @@ export interface OpenWikiModelPreview {
 	reason: string;
 }
 
+/** Keep explicit selectors; otherwise use the plan role only when configured. */
+export async function resolveOpenWikiPlannerSelector(selector?: string): Promise<string | undefined> {
+	if (selector !== undefined) return selector;
+	const settings = await Settings.loadReadOnly({ cwd: getProjectDir() });
+	return settings.getModelRole("plan") !== undefined ? "@plan" : undefined;
+}
+
 /**
  * Preview the model selection without initializing the model registry or credentials.
  * Runtime discovery, availability and selector aliases can change the actual model,
@@ -60,7 +67,7 @@ export async function previewOpenWikiModel(selector?: string): Promise<OpenWikiM
 	};
 }
 
-/** Select one OMP model for both the OpenWiki planner and every page worker. */
+/** Create an OMP-backed OpenWiki model with its own request lifetime. */
 export async function createOpenWikiModel(selector?: string): Promise<{
 	model: BaseChatModel;
 	modelId: string;

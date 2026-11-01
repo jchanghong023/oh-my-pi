@@ -88,6 +88,7 @@ export interface OpenWikiVendor {
 		planningContext: string | null;
 		modelId: string;
 		model: BaseChatModel;
+		plannerModel?: BaseChatModel;
 		pageConcurrency: number;
 		embedded: boolean;
 		skillsDir: string;

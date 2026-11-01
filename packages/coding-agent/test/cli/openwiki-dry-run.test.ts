@@ -124,7 +124,6 @@ describe("omp openwiki dry run", () => {
 					},
 				}),
 			);
-			const before = await snapshot(dir.path());
 			const env = {
 				PATH: process.env.PATH,
 				SystemRoot: process.env.SystemRoot,
@@ -140,10 +139,31 @@ describe("omp openwiki dry run", () => {
 				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
 				AWS_EC2_METADATA_DISABLED: "true",
 			};
-			for (const [args, model] of [
+			for (const [args, model, plannerModel = model, planRole] of [
 				[["code", "--init", "--dry-run", "--telemetry-file", "nested/telemetry.json"], "fixture/fixture-model"],
-				[["--update", "--dry-run", "--modelId", "fixture/override"], "fixture/override"],
-			] satisfies [string[], string][]) {
+				[
+					["--update", "--dry-run", "--modelId", "fixture/override"],
+					"fixture/override",
+					undefined,
+					"fixture/role-model",
+				],
+				[
+					["--init", "--dry-run", "--planner-model", "fixture/planner"],
+					"fixture/fixture-model",
+					"fixture/planner",
+					"fixture/role-model",
+				],
+				[
+					["--update", "--dry-run", "--model-id=fixture/page", "--planner-model=fixture/planner"],
+					"fixture/page",
+					"fixture/planner",
+				],
+				[["--init", "--dry-run"], "fixture/fixture-model", "@plan", "fixture/planner"],
+			] satisfies [string[], string, string?, string?][]) {
+				const modelRoles: Record<string, string> = { default: "fixture/fixture-model" };
+				if (planRole !== undefined) modelRoles.plan = planRole;
+				await writeFile(path.join(agent, "config.yml"), Bun.YAML.stringify({ modelRoles }));
+				const before = await snapshot(dir.path());
 				const child = Bun.spawn([process.execPath, cli, "--profile", "fixture", "openwiki", ...args], {
 					cwd: root,
 					env,
@@ -157,7 +177,8 @@ describe("omp openwiki dry run", () => {
 					new Response(child.stderr).text(),
 				]);
 				expect(code, stdout + stderr).toBe(0);
-				expect(stdout).toContain(model);
+				expect(stdout.match(/^Page model selection \([^)]+\): (.*)$/m)?.[1]).toBe(model);
+				expect(stdout.match(/^Planner model selection \([^)]+\): (.*)$/m)?.[1]).toBe(plannerModel);
 				expect(stdout).toContain("README.md");
 				expect(stdout).toContain("src/new.ts");
 				expect(stdout).not.toContain("secret.txt");
@@ -171,9 +192,12 @@ describe("omp openwiki dry run", () => {
 				}
 				expect(await snapshot(dir.path())).toEqual(before);
 			}
+			const before = await snapshot(dir.path());
 			for (const args of [
 				["--dry-run", "link"],
 				["--init", "--update", "--dry-run"],
+				["--init", "--dry-run", "--planner-model"],
+				["--init", "--dry-run", "--planner-model="],
 			]) {
 				const child = Bun.spawn([process.execPath, cli, "--profile", "fixture", "openwiki", ...args], {
 					cwd: root,

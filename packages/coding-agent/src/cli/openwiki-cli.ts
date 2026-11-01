@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
 import { updateOpenWikiAgentInstructions } from "../openwiki/agents-instructions";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
-import { createOpenWikiModel, previewOpenWikiModel } from "../openwiki/model";
+import { createOpenWikiModel, previewOpenWikiModel, resolveOpenWikiPlannerSelector } from "../openwiki/model";
 import { materializeOpenWikiSkills } from "../openwiki/resources";
 import { getOpenWikiVisualAssets } from "../openwiki/visual-assets";
 import { loadOpenWikiVendor } from "../openwiki/vendor-loader";
@@ -20,8 +20,10 @@ const HELP = `Usage: omp openwiki <command> [options]
   visualize [path] --export <directory>
 
 Repository options: --language <locale> (default: zh-CN), --modelId <model> (or --model-id),
-  --dry-run, --print, --debug, --telemetry-file <path>. The code word may be omitted.
-  --dry-run previews the model and candidate paths without model calls or Wiki writes.
+  --planner-model <model>, --dry-run, --print, --debug, --telemetry-file <path>. The code word may be omitted.
+  --planner-model overrides only the planner; page agents use --modelId or the default role.
+  Without explicit model selectors, the planner uses the plan role, falling back to default only if unconfigured.
+  --dry-run previews both model selections and candidate paths without model calls or Wiki writes.
   The model determines the actual Wiki pages during generation.
 Page concurrency is controlled by OPENWIKI_PAGE_CONCURRENCY (1–8, default 1).
 `;
@@ -43,9 +45,16 @@ const UNSUPPORTED = new Set([
 ]);
 
 /** OpenWiki's parser validates against its own model list. OMP selectors must bypass it. */
-function extractModelAndDebug(argv: string[]): { argv: string[]; model?: string; debug: boolean; dryRun: boolean } {
+function extractModelAndDebug(argv: string[]): {
+	argv: string[];
+	model?: string;
+	plannerModel?: string;
+	debug: boolean;
+	dryRun: boolean;
+} {
 	const result: string[] = [];
 	let model: string | undefined;
+	let plannerModel: string | undefined;
 	let debug = false;
 	let dryRun = false;
 	for (let i = 0; i < argv.length; i++) {
@@ -54,18 +63,21 @@ function extractModelAndDebug(argv: string[]): { argv: string[]; model?: string;
 			dryRun = true;
 		} else if (arg === "--debug") {
 			debug = true;
-		} else if (arg === "--modelId" || arg === "--model-id") {
+		} else if (arg === "--modelId" || arg === "--model-id" || arg === "--planner-model") {
 			const value = argv[++i];
 			if (!value || value.startsWith("-")) throw new Error(`${arg} requires a model ID.`);
-			model = value;
-		} else if (arg.startsWith("--modelId=") || arg.startsWith("--model-id=")) {
-			model = arg.slice(arg.indexOf("=") + 1);
-			if (!model) throw new Error(`${arg.split("=")[0]} requires a model ID.`);
+			if (arg === "--planner-model") plannerModel = value;
+			else model = value;
+		} else if (arg.startsWith("--modelId=") || arg.startsWith("--model-id=") || arg.startsWith("--planner-model=")) {
+			const value = arg.slice(arg.indexOf("=") + 1);
+			if (!value) throw new Error(`${arg.split("=")[0]} requires a model ID.`);
+			if (arg.startsWith("--planner-model=")) plannerModel = value;
+			else model = value;
 		} else {
 			result.push(arg);
 		}
 	}
-	return { argv: result, model, debug, dryRun };
+	return { argv: result, model, plannerModel, debug, dryRun };
 }
 
 async function writeDisabledTelemetry(file: string): Promise<void> {
@@ -116,7 +128,9 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		if (UNSUPPORTED.has(argv[0])) throw new Error(`OpenWiki ${argv[0]} is not supported by OMP.`);
 		const management = argv[0] === "link" || argv[0] === "workspace" || argv[0] === "visualize";
 		if (management && argv.includes("--dry-run")) throw new Error("--dry-run requires --init or --update.");
-		const parsed = management ? { argv, model: undefined, debug: false, dryRun: false } : extractModelAndDebug(argv);
+		const parsed = management
+			? { argv, model: undefined, plannerModel: undefined, debug: false, dryRun: false }
+			: extractModelAndDebug(argv);
 		debug = parsed.debug;
 		const command = parseCommand(parsed.argv);
 		if (command.kind === "help") {
@@ -175,19 +189,25 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			}
 			throw new Error("OpenWiki chat is not supported by OMP; specify --init or --update.");
 		}
+		const plannerSelector = await resolveOpenWikiPlannerSelector(parsed.plannerModel ?? parsed.model);
 		if (parsed.dryRun) {
 			const root = await resolveRepositoryRoot(process.cwd());
 			const [model, files] = await Promise.all([
 				previewOpenWikiModel(parsed.model),
 				previewRepositoryFiles(root, command.command),
 			]);
+			const planner =
+				plannerSelector !== undefined && plannerSelector !== parsed.model
+					? await previewOpenWikiModel(plannerSelector)
+					: model;
 			const printPaths = (paths: string[]) => {
 				for (const item of paths) process.stdout.write(`  ${JSON.stringify(item)}\n`);
 				if (paths.length === 0) process.stdout.write("  (none)\n");
 			};
 			process.stdout.write(`OpenWiki dry run: ${command.command}\nRepository: ${root}\n`);
 			process.stdout.write(
-				`Model selection (${model.source}): ${model.modelId ?? model.selector ?? "(automatic)"}\n${model.reason}\n`,
+				`Page model selection (${model.source}): ${model.modelId ?? model.selector ?? "(automatic)"}\n${model.reason}\n` +
+					`Planner model selection (${planner.source}): ${planner.modelId ?? planner.selector ?? "(automatic)"}\n${planner.reason}\n`,
 			);
 			process.stdout.write(`Source snapshot candidates (${files.sourcePaths.length}):\n`);
 			printPaths(files.sourcePaths);
@@ -225,7 +245,12 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		const root = await resolveRepositoryRoot(process.cwd());
 		const skillsDir = await materializeOpenWikiSkills(getAgentDir());
 		const selected = await createOpenWikiModel(parsed.model);
+		let planner = selected;
 		try {
+			if (controller.signal.aborted) return 130;
+			if (plannerSelector !== undefined && plannerSelector !== parsed.model) {
+				planner = await createOpenWikiModel(plannerSelector);
+			}
 			if (controller.signal.aborted) return 130;
 			await updateOpenWikiAgentInstructions(root);
 			const wikiDir = path.join(root, "openwiki");
@@ -236,7 +261,9 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 			}
 			if (debug)
-				process.stderr.write(`OpenWiki debug: model=${selected.modelId} pageConcurrency=${pageConcurrency}\n`);
+				process.stderr.write(
+					`OpenWiki debug: model=${selected.modelId} plannerModel=${planner.modelId} pageConcurrency=${pageConcurrency}\n`,
+				);
 			const result = await runNativeRepositoryGeneration({
 				root,
 				mode: command.command,
@@ -245,6 +272,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 				planningContext: command.userMessage,
 				modelId: selected.modelId,
 				model: selected.model,
+				plannerModel: planner.model,
 				pageConcurrency,
 				embedded: true,
 				skillsDir,
@@ -278,6 +306,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 			if (result.skipped) process.stdout.write("OpenWiki is up to date.\n");
 			return 0;
 		} finally {
+			if (planner !== selected) planner.dispose();
 			selected.dispose();
 		}
 	} catch (error) {

@@ -83,7 +83,7 @@ async function git(cwd: string, ...args: string[]) {
 	if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
 }
 
-async function scenario(mode: "partial" | "drift") {
+async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "missing-plan" | "planner-only") {
 	using dir = TempDir.createSync("@omp-openwiki-generation-");
 	const root = dir.join("repo");
 	const home = dir.join("home");
@@ -105,7 +105,7 @@ async function scenario(mode: "partial" | "drift") {
 			if (new URL(request.url).pathname.endsWith("/models"))
 				return Response.json({
 					object: "list",
-					data: [{ id: "fixture-model", object: "model", owned_by: "fixture" }],
+					data: ["fixture-model", "planner-model"].map(id => ({ id, object: "model", owned_by: "fixture" })),
 				});
 			const body = (await request.json()) as Request;
 			requests.push(body);
@@ -128,7 +128,7 @@ async function scenario(mode: "partial" | "drift") {
 						],
 					},
 				};
-			} else if (offered.has("submit_page") && mode === "drift") {
+			} else if (offered.has("submit_page") && mode !== "partial") {
 				if (!results.has("call_write_file")) {
 					reply = {
 						name: "write_file",
@@ -150,7 +150,7 @@ async function scenario(mode: "partial" | "drift") {
 							],
 						},
 					};
-				} else if (!changed && body.messages.some(submittedPage)) {
+				} else if (mode === "drift" && !changed && body.messages.some(submittedPage)) {
 					await writeFile(path.join(root, "README.md"), "# Fixture\n\nSource changed during generation.\n");
 					changed = true;
 				}
@@ -167,24 +167,36 @@ async function scenario(mode: "partial" | "drift") {
 						baseUrl: `http://127.0.0.1:${server.port}/v1`,
 						api: "openai-completions",
 						auth: "none",
-						models: [
-							{
-								id: "fixture-model",
-								name: "Fixture",
-								reasoning: false,
-								input: ["text"],
-								contextWindow: 100000,
-								maxTokens: 4096,
-							},
-						],
+						models: ["fixture-model", "planner-model"].map(id => ({
+							id,
+							name: id,
+							reasoning: false,
+							input: ["text"],
+							contextWindow: 100000,
+							maxTokens: 4096,
+						})),
 					},
 				},
 			}),
 		);
-		const config = `modelRoles:\n  default: ${mode === "partial" ? "fixture/not-the-selected-model" : "fixture/fixture-model"}\nstartup:\n  setupWizard: false\n  checkUpdate: false\n`;
+		const explicitModel = mode === "partial" || mode === "split";
+		const modelRoles: Record<string, string> = {
+			default: explicitModel ? "fixture/not-the-selected-model" : "fixture/fixture-model",
+		};
+		if (mode !== "drift") {
+			modelRoles.plan =
+				mode === "missing-plan"
+					? "fixture/unavailable-planner"
+					: mode === "split" || mode === "planner-only"
+						? "fixture/fixture-model"
+						: "fixture/planner-model";
+		}
+		const config = Bun.YAML.stringify({ modelRoles, startup: { setupWizard: false, checkUpdate: false } });
 		await writeFile(path.join(agentDir, "config.yml"), config);
-		const selector = mode === "partial" ? ["--model-id", "fixture/fixture-model"] : [];
-		const telemetry = mode === "partial" ? "nested/telemetry/record.json" : "README.md/telemetry.json";
+		const selector = explicitModel ? ["--model-id", "fixture/fixture-model"] : [];
+		if (mode === "split" || mode === "planner-only") selector.push("--planner-model", "fixture/planner-model");
+		if (mode === "planner-only") selector.push("--debug");
+		const telemetry = mode === "drift" ? "README.md/telemetry.json" : "nested/telemetry/record.json";
 		const proc = Bun.spawn(
 			[
 				process.execPath,
@@ -236,18 +248,34 @@ async function scenario(mode: "partial" | "drift") {
 			clearTimeout(timer);
 		}
 		const output = stdout + stderr;
-		expect(requests.length, output).toBeGreaterThan(1);
-		expect(requests.every(req => req.model === "fixture-model")).toBe(true);
+		expect(await readFile(path.join(agentDir, "config.yml"), "utf8")).toBe(config);
+		if (mode === "missing-plan") {
+			expect(code, output).toBe(1);
+			expect(stderr).toMatch(/@plan|unavailable-planner/);
+			expect(requests, output).toEqual([]);
+			expect(existsSync(path.join(root, "openwiki"))).toBe(false);
+			return;
+		}
+		if (mode === "planner-only") {
+			const debugLine = stderr.split("\n").find(line => line.startsWith("OpenWiki debug: model="));
+			expect(debugLine).toMatch(/\bmodel=fixture\/fixture-model\b/);
+			expect(debugLine).toMatch(/\bplannerModel=fixture\/planner-model\b/);
+		}
+		const plannerRequests = requests.filter(req => req.tools?.some(tool => tool.function?.name === "submit_plan"));
+		const pageRequests = requests.filter(req => req.tools?.some(tool => tool.function?.name === "submit_page"));
+		expect(new Set(plannerRequests.map(req => req.model)), output).toEqual(
+			new Set([mode === "partial" || mode === "drift" ? "fixture-model" : "planner-model"]),
+		);
+		expect(new Set(pageRequests.map(req => req.model)), output).toEqual(new Set(["fixture-model"]));
 		expect(
 			requests.some(req =>
 				req.messages.some(message => message.role === "tool" && message.tool_call_id === "call_submit_plan"),
 			),
 		).toBe(true);
 		expect(existsSync(path.join(root, ".github", "workflows"))).toBe(false);
-		expect(existsSync(path.join(root, "AGENTS.md"))).toBe(false);
 		expect(existsSync(path.join(root, "CLAUDE.md"))).toBe(false);
 		expect(existsSync(dir.join("standalone"))).toBe(false);
-		if (mode === "partial") {
+		if (mode !== "drift") {
 			expect(JSON.parse(await readFile(path.join(root, telemetry), "utf8"))).toMatchObject({
 				disabled: true,
 				sent: false,
@@ -255,7 +283,6 @@ async function scenario(mode: "partial" | "drift") {
 		} else {
 			expect(output).toMatch(/telemetry.*(?:error|fail|could not)|(?:error|fail|could not).*telemetry/i);
 		}
-		expect(await readFile(path.join(agentDir, "config.yml"), "utf8")).toBe(config);
 		if (mode === "partial") {
 			expect(
 				requests.some(req => req.tools?.some(tool => tool.function?.name === "submit_page")),
@@ -269,17 +296,25 @@ async function scenario(mode: "partial" | "drift") {
 			const toolResults = requests.flatMap(req => req.messages.filter(message => message.role === "tool"));
 			const diagnostic = `${output}\nModel tool results: ${JSON.stringify(toolResults, null, 2)}`;
 			expect(toolResults.some(submittedPage), diagnostic).toBe(true);
-			expect(changed, diagnostic).toBe(true);
 			expect(code, diagnostic).toBe(0);
-			expect(output, diagnostic).toMatch(/source changed|source.*change/i);
-			expect(output, diagnostic).toMatch(/update/i);
-			expect(
-				JSON.parse(await readFile(path.join(root, "openwiki", ".last-update.json"), "utf8")).status,
-				diagnostic,
-			).not.toBe("complete");
 			expect(await readFile(path.join(root, "openwiki", "quickstart.md"), "utf8"), diagnostic).toContain(
 				"Fixture documentation",
 			);
+			if (mode === "drift") {
+				expect(changed, diagnostic).toBe(true);
+				expect(output, diagnostic).toMatch(/source changed|source.*change/i);
+				expect(output, diagnostic).toMatch(/update/i);
+				expect(
+					JSON.parse(await readFile(path.join(root, "openwiki", ".last-update.json"), "utf8")).status,
+					diagnostic,
+				).not.toBe("complete");
+			}
+		}
+		if (mode === "split" || mode === "plan-role" || mode === "planner-only") {
+			expect(JSON.parse(await readFile(path.join(root, "openwiki", ".last-update.json"), "utf8"))).toMatchObject({
+				status: "complete",
+				model: "fixture/fixture-model",
+			});
 		}
 	} finally {
 		server.stop(true);
@@ -293,4 +328,20 @@ describe("omp openwiki generation with a local scripted model", () => {
 		120_000,
 	);
 	it("warns but succeeds when source changes after a committed page", async () => scenario("drift"), 120_000);
+	it(
+		"uses separate planner and page models through tool round trips and commits the wiki",
+		async () => scenario("split"),
+		120_000,
+	);
+	it("uses the configured plan role while pages use the default role", async () => scenario("plan-role"), 120_000);
+	it(
+		"fails without generation instead of falling back from an unavailable plan role",
+		async () => scenario("missing-plan"),
+		120_000,
+	);
+	it(
+		"overrides only the planner and reports both actual model IDs while pages use default",
+		async () => scenario("planner-only"),
+		120_000,
+	);
 });

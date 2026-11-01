@@ -18,6 +18,7 @@
 
 ### Added
 
+- Select a separate OpenWiki planning model with `--planner-model` while page agents keep using `--modelId` or the default role.
 - Create an empty `openwiki/INSTRUCTIONS.md` when initializing or updating a Wiki if the file does not already exist.
 - Automatically maintain an OpenWiki guidance section in the repository's `AGENTS.md` during initialization and updates.
 - Preview OpenWiki initialization and updates with `--dry-run`, showing model selection and candidate paths without invoking a model or writing Wiki files.
@@ -40,6 +41,7 @@
 
 ### Changed
 
+- Use the configured OMP `plan` role for OpenWiki planning unless a model is explicitly selected; fall back to `default` only when `plan` is unconfigured.
 - Default OpenWiki generation and updates to Simplified Chinese (`zh-CN`); explicit `--language` still overrides it.
 - Scope Wiki searches to an indexed file or directory and show actual retrieval and reranking status.
 - Make default Wiki search combine full-text and semantic retrieval when configured vectors are available, with optional reranking and full-text fallback; grep and stored evidence remain unchanged.

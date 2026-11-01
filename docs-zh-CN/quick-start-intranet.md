@@ -257,13 +257,21 @@ omp openwiki code --update
 
 首次使用 `--init`；源码变化后需要时手动执行 `--update` 增量更新，不会因源码变化自动重跑。已有 Wiki 可直接更新；对已有 Wiki 再次执行 `--init` 是重新生成，并非无损增量更新，会保留用户维护的 `openwiki/INSTRUCTIONS.md`。生成被中断后，可在同一持久检出目录再次执行对应命令，利用已有进度恢复。页面失败或跳过会返回非零；若全部页面成功但生成期间源码发生变化，命令会提示再次更新。
 
-执行前可用 `omp openwiki code --init --dry-run` 或 `omp openwiki code --update --dry-run` 预览。它显示所选模型选择器、源码快照候选路径、可比较的变更路径及已有 Wiki 页面，不调用模型、不生成或修改 Wiki 文件，也不写入 `--telemetry-file`。预览不会验证模型可用性；实际页面由后续模型规划决定，候选路径不是完整读取清单或最终页面清单。OMP 首次启动仍可能释放自身的原生组件缓存。
+执行前可用 `omp openwiki code --init --dry-run` 或 `omp openwiki code --update --dry-run` 预览。它分别显示页面和规划阶段的模型选择器、源码快照候选路径、可比较的变更路径及已有 Wiki 页面，不调用模型、不生成或修改 Wiki 文件，也不写入 `--telemetry-file`。预览不会验证模型可用性；实际页面由后续模型规划决定，候选路径不是完整读取清单或最终页面清单。OMP 首次启动仍可能释放自身的原生组件缓存。
 
-生成和更新默认使用当前 OMP profile 的 `default` role，规划和各页面共用同一模型。也可仅为本次运行指定 OMP 模型，不改变保存的角色设置：
+不传模型参数时，页面使用当前 OMP profile 的 `default` role，规划优先使用已配置的 `plan` role，未配置才回退到 `default`。未额外指定 `--planner-model` 时，显式指定公共模型仍会同时覆盖两个阶段，不改变保存的角色设置：
 
 ```tcsh
 omp openwiki code --update --modelId company/GLM-5.3-public
 ```
+
+需要仅为本次运行覆盖规划模型时，增加 `--planner-model`；将下列选择器替换为已配置的 OMP 模型：
+
+```tcsh
+omp openwiki code --update --modelId provider/page-model --planner-model provider/plan-model
+```
+
+规划模型优先级为 `--planner-model` → `--modelId`／`--model-id` → `plan` role → `default` role。仅在未配置 `plan` 时回退；已配置但不可用会报错，不静默降级。页面仍使用公共模型或 `default` role，不自动选用 `task` role。
 
 `--model-id` 也是可用写法；模型须支持工具调用且服务可达，认证和内网模型配置沿用 OMP，无需另配 OpenWiki 凭据。`OMP_OFFLINE` 不代表本地模型推理：内网生成仍需要可访问的模型服务。无需单独安装 OpenWiki、Node／Bun 或启动 OpenWiki MCP 服务。
 
