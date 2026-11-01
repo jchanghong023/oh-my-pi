@@ -45,7 +45,7 @@
 
 ### Changed
 
-- Let compact tool and thinking text replace the hidden standalone working indicator using its existing lifetime: gray-and-green shimmer while active, static gray when inactive, including async waits; status-bar indicators and per-tool timers remain unchanged.
+- Synchronize compact tool and thinking text with the status-bar running marker: gray-and-green shimmer while running and static gray when stopped, including retained activity and async waits; the standalone working indicator stays hidden and per-tool timers remain unchanged.
 - Hide the standalone model-processing indicator in compact mode while keeping live activity, other status messages, and interruption available.
 - Compact activity keeps one blank row below its two content rows, separating live, retained and empty activity from the input area without state-dependent layout jumps.
 - Align compact thinking, tool intents and retained activity with chat text, reserving the left inset before wrapping and preserving empty spacer rows.
@@ -138,6 +138,7 @@
 
 ### Fixed
 
+- Keep the last two nonblank wrapped thinking lines visible in compact mode, preserving displayed thinking or tool activity through empty updates, waits and loop completion.
 - Preserve child-agent messages arriving during manual context compaction for the resumed conversation.
 - Open OpenWiki section directory links in the reader instead of showing a 404 page.
 - Honor OpenWiki reasoning levels from explicit model selectors and default/plan roles, including independent planner levels and explicit reasoning off.

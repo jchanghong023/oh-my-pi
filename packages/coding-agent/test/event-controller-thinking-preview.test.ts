@@ -6,9 +6,10 @@ import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-ag
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
+import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import type { AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Loader } from "@oh-my-pi/pi-tui";
 import {
@@ -17,6 +18,7 @@ import {
 } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
+import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line/component";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { formatDuration } from "@oh-my-pi/pi-utils";
@@ -108,6 +110,9 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 	agent.state.activeThinkingIndex = activeThinkingIndex;
 	const session = createSessionStub(SessionManager.inMemory(process.cwd()), settings, {
 		isStreaming: message !== null,
+		get state() {
+			return agent.state;
+		},
 		subscribe(listener) {
 			listeners.push(listener);
 			return () => {};
@@ -154,11 +159,14 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 
 const eventControllers: EventController[] = [];
 const focusControllers: SessionFocusController[] = [];
+const statusLines: StatusLineComponent<AgentSession>[] = [];
 let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
 function focusFixture() {
 	const main = liveSession();
-	const ctx = createInteractiveModeContext({ session: main.session });
+	const statusLine = new StatusLineComponent<AgentSession>(main.session, statusLineHost);
+	statusLines.push(statusLine);
+	const ctx = createInteractiveModeContext({ session: main.session, statusLine });
 	ctx.ensureLoadingAnimation = () => {
 		if (ctx.loadingAnimation) return;
 		const loader = new Loader(
@@ -232,6 +240,7 @@ beforeEach(async () => {
 afterEach(() => {
 	for (const controller of focusControllers.splice(0)) controller.dispose();
 	for (const controller of eventControllers.splice(0)) controller.dispose();
+	for (const statusLine of statusLines.splice(0)) statusLine.dispose();
 	vi.useRealTimers();
 	setSystemTime();
 	vi.restoreAllMocks();
@@ -736,6 +745,88 @@ describe("compact thinking dock focus restoration", () => {
 		setSystemTime(1500);
 		expect(h.rows()).toEqual(retained);
 		expect(h.rendered()).toContain("latest original line");
+	});
+
+	it("keeps the last two nonblank wrapped thinking rows through whitespace updates and completion", async () => {
+		const h = focusFixture();
+		const message = thinkingMessage("older\n\nfirst\n \t \nlatest\n\n");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const check = (expected: string[], cols = 60) => {
+			const cx: DescribeContext = {
+				cols,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			};
+			for (const rows of [h.dock.render(cols), nativeRows(h.dock.describe(cx))]) {
+				expect(rows.map(row => Bun.stripANSI(row))).toEqual(expected);
+			}
+		};
+		check([" first", " latest", ""]);
+
+		message.content = [{ type: "thinking", thinking: "older\n\nfirst\n \t \nlatest\n\n \t \n" }];
+		await live.emit(update(message, "thinking_delta"));
+		check([" first", " latest", ""]);
+
+		message.content = [{ type: "thinking", thinking: "older\n\nabcdefghijklmnopqr\n \t \n\n" }];
+		await live.emit(update(message, "thinking_delta"));
+		check([" abcdefghi", " jklmnopqr", ""], 10);
+
+		message.content = [{ type: "thinking", thinking: "only\n \t \n\n" }];
+		await live.emit(update(message, "thinking_delta"));
+		check([" only", "", ""]);
+		live.session.agent.state.activeThinkingIndex = undefined;
+		live.session.agent.state.streamMessage = null;
+		await live.emit({ type: "agent_end", messages: [] });
+		check([" only", "", ""]);
+	});
+
+	it("never clears displayed activity on empty thinking, tool transitions, or loop completion", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("PERSIST_THOUGHT");
+		const live = liveSession(message, 0);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const cx: DescribeContext = {
+			cols: 60,
+			reduceMotion: false,
+			dark: true,
+			supports: () => true,
+			feature: () => true,
+		};
+		const check = (content: string, running = true) => {
+			expect(h.rendered()).toContain(content);
+			expect(h.nativeRendered()).toContain(content);
+			expect(hasNativeKind(h.dock.describe(cx), "shimmer")).toBe(running);
+		};
+		check("PERSIST_THOUGHT");
+		message.content = [{ type: "thinking", thinking: "\x1b[31m\x1b[0m" }];
+		await live.emit(update(message, "thinking_delta"));
+		check("PERSIST_THOUGHT");
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "persistent",
+			toolName: "read",
+			args: { i: "PERSIST_TOOL", path: "source.ts" },
+		});
+		check("read · PERSIST_TOOL");
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "persistent",
+			toolName: "read",
+			result: { content: [] },
+			isError: false,
+		});
+		check("read · PERSIST_TOOL");
+		await live.emit({ type: "message_start", message: thinkingMessage("", 2) });
+		check("read · PERSIST_TOOL");
+		await live.emit({ type: "agent_end", messages: [] });
+		check("read · PERSIST_TOOL", false);
+		expect(h.rows()[0]).toContain(theme.getFgAnsi("dim"));
 	});
 
 	it("reserves the left inset before wrapping and does not duplicate it on retained content", async () => {

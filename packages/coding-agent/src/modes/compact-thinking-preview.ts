@@ -105,7 +105,7 @@ export class CompactThinkingPreview implements Component {
 	constructor(
 		private readonly ctx: Pick<
 			InteractiveModeContext,
-			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "loadingAnimation"
+			"viewSession" | "effectiveHideThinkingBlock" | "proseOnlyThinking" | "statusLine"
 		> &
 			Partial<Pick<InteractiveModeContext, "ui">>,
 	) {}
@@ -283,10 +283,10 @@ export class CompactThinkingPreview implements Component {
 		if (width < 1) return EMPTY_ROWS;
 		const session = this.ctx.viewSession;
 		const state = session.agent.state;
-		this.#workingActive = this.ctx.loadingAnimation !== undefined;
+		this.#workingActive = this.ctx.statusLine.getTurnElapsedMs() !== null;
 		const stream = state.streamMessage;
 		const memory = this.#memory!;
-		let thinking: string | undefined;
+		let thinkingRows: string[] | undefined;
 		if (
 			!this.ctx.effectiveHideThinkingBlock &&
 			stream?.role === "assistant" &&
@@ -295,7 +295,13 @@ export class CompactThinkingPreview implements Component {
 			const block = stream.content[state.activeThinkingIndex];
 			if (block?.type === "thinking") {
 				const formatted = formatThinkingForDisplay(block.thinking, this.ctx.proseOnlyThinking);
-				if (hasDisplayableThinking(block.thinking, formatted)) thinking = formatted;
+				if (hasDisplayableThinking(block.thinking, formatted)) {
+					// Only visible, nonblank display rows may replace previously displayed activity.
+					const rows = wrapTextWithAnsi(replaceTabs(sanitizeText(plainText(formatted))), width)
+						.filter(row => row.trim().length > 0)
+						.slice(-2);
+					if (rows.length > 0) thinkingRows = rows;
+				}
 			}
 		}
 		const now = Date.now();
@@ -308,9 +314,8 @@ export class CompactThinkingPreview implements Component {
 		};
 		const activeCalls = memory.calls.some(running);
 		let rows: string[];
-		if (thinking) {
-			// Thinking retains its original line breaks; only tool descriptions are flattened.
-			rows = wrapTextWithAnsi(replaceTabs(sanitizeText(plainText(thinking))), width).slice(-2);
+		if (thinkingRows) {
+			rows = thinkingRows;
 			while (rows.length < 2) rows.push("");
 			memory.snapshot = { kind: "thinking", rows: [...rows] };
 			memory.undisplayedDispatch = false;

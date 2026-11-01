@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
+import type { AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { ExtensionToolWrapper } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/wrapper";
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
@@ -292,10 +293,30 @@ describe("tools.approvalMode setting", () => {
 
 	it("ACP-approved arguments do not bypass provider safety checks", async () => {
 		const settings = approvalSettings({ "tools.approvalMode": "always-ask" });
+		const runner = session.extensionRunner;
+		if (!runner) throw new Error("Expected extension runner");
+		let executions = 0;
+		const computer: AgentTool = {
+			name: "computer",
+			label: "Computer",
+			description: "Provider-native computer approval probe",
+			parameters: {} as never,
+			approval: "exec",
+			execute: async () => {
+				executions++;
+				return { content: [] };
+			},
+		};
 		await expect(
-			bashTool().execute("acp-safety", { command: "echo blocked" }, undefined, undefined, {
+			new ExtensionToolWrapper(computer, runner).execute("acp-safety", {}, undefined, undefined, {
 				settings,
-				acpApprovedArgs: { command: "echo blocked" },
+				sessionManager: session.sessionManager,
+				modelRegistry: session.modelRegistry,
+				model: session.model,
+				isIdle: () => !session.isStreaming,
+				hasQueuedMessages: () => session.queuedMessageCount > 0,
+				abort: () => session.agent.abort(),
+				acpApprovedArgs: {},
 				toolCall: {
 					batchId: "safety-batch",
 					index: 0,
@@ -308,7 +329,8 @@ describe("tools.approvalMode setting", () => {
 						pendingSafetyChecks: [{ id: "safety-check" }],
 					},
 				},
-			} as never),
-		).rejects.toThrow(/pending provider safety checks but no interactive UI/);
+			} satisfies AgentToolContext),
+		).rejects.toThrow(/pending provider safety checks/);
+		expect(executions).toBe(0);
 	});
 });

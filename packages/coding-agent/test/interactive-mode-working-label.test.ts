@@ -129,7 +129,7 @@ describe("InteractiveMode live working label", () => {
 		expect(Bun.stringWidth(rows[0] ?? "")).toBeLessThanOrEqual(COLUMNS);
 	});
 
-	it("replaces the hidden working row and follows its lifetime independently of status-bar activity", async () => {
+	it("keeps compact activity synchronized with the status-bar running marker, not the hidden loader", async () => {
 		const terminal = new VirtualTerminal(100, 29);
 		const composer = new Composer({ terminal, tuiOptions: { renderScheduler: new VirtualRenderScheduler() } });
 		const current = new AgentSession({
@@ -155,8 +155,12 @@ describe("InteractiveMode live working label", () => {
 					.c?.some(child => "k" in child && child.k === "shimmer") ?? false;
 			expect(current.isStreaming).toBe(false);
 			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(true);
+			expect(shimmering()).toBe(false);
+			expect(activity()[0]).toContain(theme.getFgAnsi("dim"));
 			setSystemTime(10_000);
+			live.statusLine.markActivityStart();
+			expect(live.statusLine.getTurnElapsedMs()).toBe(0);
+			expect(shimmering()).toBe(true);
 			const running = activity();
 			setSystemTime(10_500);
 			expect(activity().map(line => Bun.stripANSI(line))).toEqual(running.map(line => Bun.stripANSI(line)));
@@ -179,23 +183,30 @@ describe("InteractiveMode live working label", () => {
 
 			// The error path removes the original loader without closing the status-bar window.
 			current.agent.state.isStreaming = true;
-			live.statusLine.markActivityStart();
+			expect(live.statusLine.getTurnElapsedMs()).not.toBeNull();
 			live.showError("WORKING_LIFETIME_ERROR");
 			expect(current.isStreaming).toBe(true);
 			expect(live.statusLine.getTurnElapsedMs()).not.toBeNull();
+			expect(live.loadingAnimation).toBeUndefined();
+			expect(shimmering()).toBe(true);
+			const withoutLoader = activity();
+			setSystemTime(11_000);
+			expect(activity().map(line => Bun.stripANSI(line))).toEqual(withoutLoader.map(line => Bun.stripANSI(line)));
+			expect(activity()).not.toEqual(withoutLoader);
+
+			live.ensureLoadingAnimation();
+			live.statusLine.markActivityEnd();
+			expect(live.loadingAnimation).toBeDefined();
+			expect(current.isStreaming).toBe(true);
+			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
 			expect(shimmering()).toBe(false);
 			const stopped = activity();
 			expect(stopped[0]).toContain(theme.getFgAnsi("dim"));
 			const retained = live.compactThinkingPreview.describe(nativeContext).c?.[0];
 			if (!retained || !("k" in retained) || retained.k !== "text") throw new Error("Expected gray thinking text");
 			expect(retained.p?.spans).toEqual([{ t: " WORKING_LIFETIME_THOUGHT", s: "dim" }]);
-			setSystemTime(11_000);
+			setSystemTime(11_500);
 			expect(activity()).toEqual(stopped);
-
-			live.ensureLoadingAnimation();
-			live.statusLine.markActivityEnd();
-			expect(live.statusLine.getTurnElapsedMs()).toBeNull();
-			expect(shimmering()).toBe(true);
 			expect(live.statusContainer.render(COLUMNS)).toEqual([]);
 		} finally {
 			live.stop();

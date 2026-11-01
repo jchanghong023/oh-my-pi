@@ -502,6 +502,8 @@ test.skipIf(!tuiTest || process.platform !== "win32")(
 			for (const file of entry(provider, "requirements").outputPaths as string[])
 				expect(await Bun.file(path.join(cwd, file.replace(/\*+/, "greeting"))).exists()).toBe(true);
 			await tui("submit", "/dev drop");
+			// The state is already empty; wait for this drop's completion notice, not the stale idle HUD.
+			await tui("expect", "text", "没有 Dev 状态，无需清除。", "--timeout", "30000");
 			await eventually(state, value => !value.run && !value.team);
 			await idle();
 			await tui("submit", `/dev new ${REQUIREMENT}`);
