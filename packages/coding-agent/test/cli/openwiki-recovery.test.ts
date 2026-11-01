@@ -145,7 +145,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 		evidence: [{ resource: `repo://${source(page)}.txt` }],
 	});
 
-	let phase: "initial" | "resume" | "update" = "initial";
+	let phase: "initial" | "resume" | "update" | "instructions" | "agents" = "initial";
 	const requests: Array<{ phase: string; page?: string; body: Request }> = [];
 	const starts: Array<{ phase: string; page: string }> = [];
 	const submissions: Array<{ phase: string; page: string }> = [];
@@ -173,7 +173,10 @@ async function scenario(interrupt: boolean): Promise<void> {
 			requests.push({ phase, page, body });
 			let reply: Reply = { text: "Finished." };
 			if (tools.has("submit_plan") && !resultIds.has("call_submit_plan")) {
-				const planPages = phase === "update" ? [alpha] : [quickstart, alpha, beta];
+				const planPages =
+					phase === "update" || phase === "instructions" || phase === "agents"
+						? [alpha]
+						: [quickstart, alpha, beta];
 				reply = {
 					name: "submit_plan",
 					args: {
@@ -194,15 +197,25 @@ async function scenario(interrupt: boolean): Promise<void> {
 						quickstartCoverage = existsSync(manifestPath) ? Object.keys((await manifest()).pages) : [];
 					const title = path.basename(page, ".md");
 					const original = `Original ${title} documentation. ${claim(page).statement}`;
-					const text = phase === "update" ? `Updated Alpha source. ${claim(page, true).statement}` : original;
+					const instructed = `Instruction-guided alpha. ${claim(page).statement}`;
+					const text =
+						phase === "update"
+							? `Updated Alpha source. ${claim(page, true).statement}`
+							: phase === "instructions"
+								? instructed
+								: phase === "agents"
+									? `Agent-guided alpha. ${claim(page).statement}`
+									: original;
 					if (existsSync(pageFile(page))) {
 						reply = {
 							name: "edit_file",
 							args: {
 								file_path: page,
-								old_string: original,
+								old_string: phase === "agents" ? instructed : original,
 								new_string:
-									phase === "update" ? text : `Recovered ${title} documentation. ${claim(page).statement}`,
+									phase === "update" || phase === "instructions" || phase === "agents"
+										? text
+										: `Recovered ${title} documentation. ${claim(page).statement}`,
 							},
 						};
 					} else {
@@ -222,7 +235,9 @@ async function scenario(interrupt: boolean): Promise<void> {
 					}
 					submissions.push({ phase, page });
 					const id =
-						phase === "update" ? JSON.parse(await readFile(sidecar(page), "utf8")).claims[0].id : undefined;
+						phase === "update" || phase === "instructions" || phase === "agents"
+							? JSON.parse(await readFile(sidecar(page), "utf8")).claims[0].id
+							: undefined;
 					reply = {
 						name: "submit_page",
 						args: { claims: [{ ...claim(page, phase === "update"), ...(id && { id }) }] },
@@ -281,6 +296,10 @@ async function scenario(interrupt: boolean): Promise<void> {
 				clearTimeout(timer);
 			}
 		}
+		if (interrupt) {
+			await mkdir(path.join(root, "openwiki"), { recursive: true });
+			await writeFile(path.join(root, "openwiki", "INSTRUCTIONS.md"), "Keep my instructions.\n");
+		}
 		const initial = launch("--init");
 		if (interrupt) {
 			try {
@@ -320,11 +339,13 @@ async function scenario(interrupt: boolean): Promise<void> {
 		}
 		const first = await finish(initial);
 		const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
-		expect(await readFile(instructions, "utf8")).toBe("");
+		expect(await readFile(instructions, "utf8")).toBe(interrupt ? "Keep my instructions.\n" : "");
 		if (interrupt) {
 			releaseBlocked();
 			expect(first.code, first.output).not.toBe(0);
 			const interrupted = JSON.parse(await readFile(statePath, "utf8"));
+			delete interrupted.instructionHashes;
+			await writeFile(statePath, JSON.stringify(interrupted));
 			expect(interrupted.plan.pages.find((job: { path: string }) => job.path === alpha).status).toBe("complete");
 			expect(interrupted.plan.pages.find((job: { path: string }) => job.path === beta).status).not.toBe("complete");
 			expect(JSON.parse(await readFile(metadataPath, "utf8")).status).toBe("interrupted");
@@ -332,7 +353,6 @@ async function scenario(interrupt: boolean): Promise<void> {
 			expect(JSON.parse(await readFile(sidecar(alpha), "utf8")).claims).toMatchObject([claim(alpha)]);
 			const committedEntry = (await manifest()).pages[alpha];
 			expect((await manifest()).pages[beta]).toBeUndefined();
-			await writeFile(instructions, "Keep my instructions.\n");
 			phase = "resume";
 			const resumed = await finish(launch("--init"));
 			expect(resumed.code, resumed.output).toBe(0);
@@ -371,6 +391,63 @@ async function scenario(interrupt: boolean): Promise<void> {
 		expect(requests.every(({ body }) => body.model === "fixture-model")).toBe(true);
 		expect(await readFile(path.join(agentDir, "config.yml"), "utf8")).toBe(config);
 		expect(existsSync(dir.join("standalone"))).toBe(false);
+		if (!interrupt) {
+			await unlink(instructions);
+			await git("add", "AGENTS.md", "openwiki");
+			await git("commit", "--quiet", "-m", "save generated wiki");
+			const committedHead = await git("rev-parse", "HEAD");
+			const requestCount = requests.length;
+			const unchanged = await finish(launch("--update"));
+			expect(unchanged.code, unchanged.output).toBe(0);
+			expect(unchanged.output).toContain("OpenWiki is up to date.");
+			expect(requests).toHaveLength(requestCount);
+			expect(await readFile(instructions, "utf8")).toBe("");
+			const lastUpdate = JSON.parse(await readFile(metadataPath, "utf8"));
+			expect(lastUpdate).toMatchObject({
+				gitHead: committedHead,
+				instructionBaseline: {
+					agents: expect.any(String),
+					wiki: expect.any(String),
+					sourceFingerprint: expect.any(String),
+				},
+			});
+			delete lastUpdate.instructionBaseline;
+			await writeFile(metadataPath, JSON.stringify(lastUpdate));
+			const legacyNoop = await finish(launch("--update"));
+			expect(legacyNoop.code, legacyNoop.output).toBe(0);
+			expect(legacyNoop.output).toContain("OpenWiki is up to date.");
+			expect(requests).toHaveLength(requestCount);
+			expect(JSON.parse(await readFile(metadataPath, "utf8"))).toHaveProperty("instructionBaseline");
+
+			await writeFile(instructions, "Prioritize the alpha documentation.\n");
+			phase = "instructions";
+			const instructed = await finish(launch("--update"));
+			expect(instructed.code, instructed.output).toBe(0);
+			expect(await readFile(pageFile(alpha), "utf8")).toContain("Instruction-guided alpha.");
+			expect(
+				requests.some(
+					({ phase: requestPhase, body }) =>
+						requestPhase === "instructions" &&
+						JSON.stringify(body.messages).includes("Prioritize the alpha documentation."),
+				),
+			).toBe(true);
+
+			await git("add", "openwiki");
+			await git("commit", "--quiet", "-m", "save instruction update");
+			const agents = path.join(root, "AGENTS.md");
+			const originalAgents = await readFile(agents, "utf8");
+			await writeFile(agents, `${originalAgents}\nAdditional repository instructions.\n`);
+			phase = "agents";
+			const agentsUpdated = await finish(launch("--update"));
+			expect(agentsUpdated.code, agentsUpdated.output).toBe(0);
+			expect(await readFile(pageFile(alpha), "utf8")).toContain("Agent-guided alpha.");
+			expect(
+				requests.some(
+					({ phase: requestPhase, body }) =>
+						requestPhase === "agents" && JSON.stringify(body.messages).includes("AGENTS.md"),
+				),
+			).toBe(true);
+		}
 
 		if (interrupt) {
 			const before = await manifest();

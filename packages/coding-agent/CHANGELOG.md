@@ -129,6 +129,7 @@
 - Keep project role edits from granting per-call models, and prevent foreground submission or execution recovery from silently replacing an exact per-call model.
 - Keep Wiki search usable during concurrent index changes and reduce vector memory retained during model calls while preserving continuation and full-text fallback.
 - Honor the embedding-disable environment flag in Wiki and expose reranker settings through the standard configuration commands.
+- Avoid regenerating OpenWiki pages when its unchanged repository instruction files are committed.
 - Find Chinese OpenWiki sections inside continuous text and prioritize exact phrases when source-path hints tie.
 - Honor runtime `PI_UPDATE_REPOSITORY` overrides in compiled binaries while defaulting to this fork's releases.
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
