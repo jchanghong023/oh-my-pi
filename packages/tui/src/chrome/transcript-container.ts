@@ -828,14 +828,6 @@ export class TranscriptContainer extends Container {
 		return [hint, ...visible];
 	}
 
-	#markViewportOverflow(rows: string[], owners: (Component | undefined)[], width: number): void {
-		const visibleRows = Math.min(rows.length, this.#viewportRows);
-		if (!this.#viewportNavigationEnabled || !this.#viewportOverflow || visibleRows < 2) return;
-		const first = rows.length - visibleRows;
-		rows[first] = truncateToWidth(theme.fg("dim", `↑ ${editorKey("tui.editor.pageUp")} 查看前面的行`), width);
-		owners[first] = undefined;
-	}
-
 	/** Block spans of the last `renderViewport` output, in output coordinates. Empty when the tail is empty. */
 	getLastViewportSpans(): readonly TranscriptViewportSpan[] {
 		return this.#lastViewportSpans;
@@ -883,7 +875,11 @@ export class TranscriptContainer extends Container {
 		this.#viewportWidth = width;
 		this.#viewportRows = Math.max(0, Math.trunc(Math.min(rows, visibleRows)));
 		this.#viewportOverflow = false;
-		const capacity = Math.max(0, Math.trunc(rows));
+		// Active blocks cannot necessarily retire. Allocate against the rows the
+		// reader can actually see, rather than letting caller chrome cut off
+		// their already-budgeted content. Settled tails retain baseline layout
+		// and Complete Scrollback's existing retirement policy.
+		const capacity = hasActive ? this.#viewportRows : Math.max(0, Math.trunc(rows));
 		if (live.length === 0 || capacity === 0) {
 			this.#lastViewportSpans = [];
 			if (live.length === 0) this.resetViewportScroll();
@@ -961,7 +957,6 @@ export class TranscriptContainer extends Container {
 				}
 			}
 			this.#viewportOverflow = hasActive && output.length > this.#viewportRows;
-			this.#markViewportOverflow(output, owners, width);
 			this.#commitViewportSpans(owners, output.length);
 			return output;
 		}
@@ -970,6 +965,18 @@ export class TranscriptContainer extends Container {
 		// oxlint-disable-next-line unicorn/no-new-array -- length preallocation
 		const allocation: number[] = new Array(shown.length).fill(1);
 		let surplus = capacity - shown.length;
+		// Keep compact summaries with their preview and retained critical
+		// feedback readable before ordinary prose consumes the spare rows.
+		for (let index = shown.length - 1; index >= 0 && surplus > 0; index--) {
+			const component = shown[index]!.entry.component;
+			const decision = this.#compactDecision(component);
+			if (!decision) continue;
+			const critical = (component as CompactRunComponent).hasCompactCriticalFeedback?.();
+			const minimum = critical ? blocks[index]!.length : decision.count ? 2 : 1;
+			const extra = Math.min(Math.max(0, minimum - 1), surplus);
+			allocation[index] += extra;
+			surplus -= extra;
+		}
 		// Surplus rows favor ordinary transcript blocks over dynamic tool-activity
 		// cards (newest-first within each class), so a growing tool card collapses to
 		// its compact form instead of clipping already-visible assistant text (#9718).
@@ -982,7 +989,7 @@ export class TranscriptContainer extends Container {
 		}
 		for (const index of order) {
 			if (surplus <= 0) break;
-			const extra = Math.min(Math.max(0, blocks[index]!.length - 1), surplus);
+			const extra = Math.min(Math.max(0, blocks[index]!.length - allocation[index]!), surplus);
 			allocation[index] += extra;
 			surplus -= extra;
 		}
@@ -1002,7 +1009,6 @@ export class TranscriptContainer extends Container {
 			}
 		}
 		const drop = Math.max(0, output.length - capacity);
-		this.#markViewportOverflow(output, owners, width);
 		this.#commitViewportSpans(owners.slice(drop), output.length - drop);
 		return drop > 0 ? output.slice(drop) : output;
 	}

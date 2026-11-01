@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- Keep live compact content within the visible height, retire the welcome before it crowds replies, and preserve failure diagnostics without replacing content with a PageUp hint.
 - Restore Bash exit codes in expanded and detailed ANSI output while keeping collapsed compact errors concise.
 - Show the tail of failed background Bash output and available artifact references in wait previews instead of misleading truncated beginnings.
 - Keep the beginning of long streaming tables reachable with PageUp/PageDown or captured mouse-wheel scrolling; Escape returns to the live tail without cancelling generation, and completed content enters history once.

@@ -559,16 +559,19 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		// Retirement measures the same live blocks the viewport lays out below;
 		// one open frame renders each of them once for both.
 		transcript.beginFrame(frame);
-		const history = this.#offerHistory(transcript, width, rows, preRoots.length + belowFloor);
+		const history = this.#offerHistory(
+			transcript,
+			width,
+			rows,
+			preRoots.length + belowFloor,
+			preRoots.length + after.length,
+		);
 		const headerVisible = !this.#headerRetired && this.#offeredHistory?.source !== "header";
 		const headerRows = headerVisible ? this.#header.render(width) : [];
 		const before = [...headerRows, ...preRoots];
-		// The live tail is laid out against the same baseline retirement is
-		// billed against, so its compaction allocator (one row per block, no
-		// inter-block blanks) engages only when a block genuinely cannot retire.
-		// Rows the chrome above its floor displaces are clipped from the top by
-		// the `drop` slice below; they stay live until the chrome shrinks.
-		// `completeScrollback` bills the actual chrome height instead.
+		// Settled tails retain the retirement baseline and Complete Scrollback
+		// policy. Active blocks must fit the actual visible budget: chrome must
+		// not clip their content after the transcript allocates it.
 		const active = transcript.renderViewport(
 			width,
 			Math.max(0, rows - before.length - (transcript.isViewportScrolled ? after.length : belowFloor)),
@@ -1043,6 +1046,7 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 		width: number,
 		rows: number,
 		chromeRows: number,
+		headerChromeRows: number,
 	): HistoryBatch | undefined {
 		if (this.#offeredHistory !== undefined) {
 			this.#rerenderOfferedHistory(width);
@@ -1065,8 +1069,11 @@ export class Composer implements TerminalFrameProvider, NativeSurfaceProvider {
 			if (renderedHeader.length > 0) {
 				// Only the comparison below reads the height, so the walk stops at
 				// the budget instead of rendering every replayed block (#12933).
-				const liveRows = transcript.liveRowCount(width, Math.max(0, rows - renderedHeader.length - chromeRows));
-				if (!this.#historyFlush && renderedHeader.length + chromeRows + liveRows <= rows) return undefined;
+				const liveRows = transcript.liveRowCount(
+					width,
+					Math.max(0, rows - renderedHeader.length - headerChromeRows),
+				);
+				if (!this.#historyFlush && renderedHeader.length + headerChromeRows + liveRows <= rows) return undefined;
 				this.#offeredHistory = {
 					id: this.#nextHistoryId++,
 					rows: [...renderedHeader, ""],

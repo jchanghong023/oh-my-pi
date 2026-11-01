@@ -137,6 +137,34 @@ describe("compact upstream tool feedback", () => {
 		expect(component.render(80).map(Bun.stripANSI)).toEqual(rows);
 	});
 
+	it("keeps a failed command and both diagnostics visible beside a pinned active message", () => {
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const transcript = new TranscriptContainer();
+		transcript.setViewportNavigationEnabled(true);
+		const active = {
+			isTranscriptBlockFinalized: () => false,
+			render: () => Array.from({ length: 20 }, (_, index) => `PROSE_${index}`),
+		};
+		transcript.addChild(active);
+		const { component } = bash("failed", "diagnostic-command");
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "diagnostic first\ndiagnostic second" }],
+				isError: true,
+				details: { exitCode: 1 },
+			},
+			false,
+		);
+		transcript.addChild(component);
+		const rows = transcript.renderViewport(80, 12, { tick: 0, now: 0 }, 10);
+		const screen = Bun.stripANSI(rows.join("\n"));
+		expect(screen).toContain("PROSE_19");
+		expect(screen).toContain("diagnostic-command");
+		expect(screen).toContain("diagnostic first");
+		expect(screen).toContain("diagnostic second");
+		expect(rows.length).toBeLessThanOrEqual(10);
+	});
+
 	it("applies compact error previews to Bash dispatched through write across mode and expansion changes", () => {
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const command = "python3 - <<'EOF'\nprint('script body')\nEOF";

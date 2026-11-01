@@ -997,6 +997,31 @@ describe("TranscriptContainer", () => {
 		expect(tool.allocations.at(-1)).toBe(1);
 	});
 
+	it("keeps the first visible content row when live blocks exceed the viewport", () => {
+		const transcript = new TranscriptContainer();
+		transcript.setViewportNavigationEnabled(true);
+		const block = new Block(["older", "visible first", "visible last"], false);
+		transcript.addChild(block);
+
+		expect(transcript.renderViewport(80, 2, frame)).toEqual(["visible first", "visible last"]);
+		expect(transcript.getLastViewportSpans()).toEqual([{ component: block, start: 0, end: 2 }]);
+	});
+
+	it("allocates live blocks inside the visible height instead of clipping their allocated rows afterward", () => {
+		const transcript = new TranscriptContainer();
+		transcript.setViewportNavigationEnabled(true);
+		transcript.addChild(new Block(["older 1", "older 2", "older 3", "older 4"], false));
+		transcript.addChild(new Block(["latest 1", "latest 2", "latest 3", "latest 4"], false));
+
+		expect(transcript.renderViewport(80, 8, frame, 5)).toEqual([
+			"older 4",
+			"latest 1",
+			"latest 2",
+			"latest 3",
+			"latest 4",
+		]);
+	});
+
 	it("permits removing settled blocks until they are offered or committed", () => {
 		const transcript = new TranscriptContainer();
 		const settled = new Block(["settled snapshot"], true);

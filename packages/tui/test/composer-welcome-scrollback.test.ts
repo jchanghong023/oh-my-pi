@@ -45,3 +45,40 @@ it("makes an oversized startup changelog available in scrollback after the intro
 		composer.stop();
 	}
 });
+
+it("retires the welcome before growing chrome displaces a live reply", async () => {
+	const terminal = new VirtualTerminal(100, 28);
+	const scheduler = new VirtualRenderScheduler();
+	const composer = new Composer({
+		terminal,
+		tuiOptions: { renderScheduler: scheduler },
+		preferences: { completeScrollback: false },
+	});
+	composer.setHeaderExtras([], [new Text("WELCOME_MARKER", 0, 0)]);
+	const transcript = new TranscriptContainer();
+	const active = { render: () => ["ACTIVE_CONTENT"], isTranscriptBlockFinalized: () => false };
+	transcript.addChild(active);
+	let chromeRows = 0;
+	const chrome = { render: () => Array.from({ length: chromeRows }, (_, index) => `HUD_${index}`) };
+	composer.setRuntimeChildren([transcript, chrome, new Text("EDITOR", 0, 0)], {
+		selfClearingChrome: [chrome],
+	});
+	composer.start({ playWelcomeIntro: false });
+	try {
+		await scheduler.settle(terminal);
+		chromeRows = 24;
+		composer.ui.requestRender();
+		await scheduler.settle(terminal);
+		const screen = terminal.getViewport().join("\n");
+		expect(screen).toContain("ACTIVE_CONTENT");
+		expect(screen).toContain("EDITOR");
+		expect(
+			terminal
+				.getScrollBuffer()
+				.join("\n")
+				.match(/WELCOME_MARKER/g),
+		).toHaveLength(1);
+	} finally {
+		composer.stop();
+	}
+});
