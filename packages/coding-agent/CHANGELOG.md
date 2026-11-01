@@ -18,6 +18,7 @@
 
 ### Added
 
+- Automatically maintain an OpenWiki guidance section in the repository's `AGENTS.md` during initialization and updates.
 - Preview OpenWiki initialization and updates with `--dry-run`, showing model selection and candidate paths without invoking a model or writing Wiki files.
 - Add built-in `omp openwiki` repository generation, incremental updates, workspace linking and offline visualization/static export, with read-only AI query tools. Generation uses the current OMP profile's default role or a per-run `--modelId`; it still requires a reachable tool-capable model. OpenWiki user data follows the OMP configuration root and profile without migrating standalone workspaces.
 - Run only affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.

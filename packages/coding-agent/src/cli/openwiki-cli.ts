@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
+import { updateOpenWikiAgentInstructions } from "../openwiki/agents-instructions";
 import { configureOpenWikiHome, getOpenWikiConfigDirectory } from "../openwiki/home";
 import { createOpenWikiModel, previewOpenWikiModel } from "../openwiki/model";
 import { materializeOpenWikiSkills } from "../openwiki/resources";
@@ -226,6 +227,7 @@ export async function runOpenWikiCommand(argv: string[]): Promise<number> {
 		const selected = await createOpenWikiModel(parsed.model);
 		try {
 			if (controller.signal.aborted) return 130;
+			await updateOpenWikiAgentInstructions(root);
 			if (debug)
 				process.stderr.write(`OpenWiki debug: model=${selected.modelId} pageConcurrency=${pageConcurrency}\n`);
 			const result = await runNativeRepositoryGeneration({
