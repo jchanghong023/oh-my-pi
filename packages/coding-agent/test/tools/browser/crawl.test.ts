@@ -105,7 +105,7 @@ function scriptedPage({
 	loadDelayMs?: number;
 	requestUrl?: string;
 	html?: string;
-	scrolling?: { container?: boolean; endless?: boolean; onScroll?: () => void };
+	scrolling?: { container?: boolean; endless?: boolean; stalled?: boolean; onScroll?: () => void };
 	fullArticle?: { label?: string; url?: string; form?: boolean; noop?: boolean; onClick?: () => void };
 } = {}) {
 	let elapsed = 0;
@@ -246,7 +246,9 @@ function scriptedPage({
 			}
 		},
 		scroll: async (_dx: number, dy: number) => {
-			scrollArea.scrollTop = Math.min(scrollArea.scrollHeight - scrollArea.clientHeight, scrollArea.scrollTop + dy);
+			if (!scrolling?.stalled) {
+				scrollArea.scrollTop = Math.min(scrollArea.scrollHeight - scrollArea.clientHeight, scrollArea.scrollTop + dy);
+			}
 			if (
 				scrollArea.scrollTop + scrollArea.clientHeight >= scrollArea.scrollHeight &&
 				(batches < 3 || scrolling?.endless) &&
@@ -322,6 +324,45 @@ describe("crawl engine", () => {
 		expect(f.closed.sort()).toEqual(f.opened.sort());
 		expect(f.output.at(-1)).toContain("2 saved, 1 failed");
 		expect(f.output.at(-1)).toContain("https://example.test/: no readable content");
+	});
+
+	it("navigates to a hash route with its full query and saves the routed page's source", async () => {
+		const url = "https://example.test/#/docs/article?id=123&next=a%3Fb%26c&tag=x&tag=y";
+		const browser = scriptedPage();
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written.map(file => file.content)).toEqual([
+			`Source: ${url}\n\n# Article title\n\nThe complete article body.\n`,
+		]);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("recurses into distinct hash routes and query variants without revisiting the same route", async () => {
+		const entry = "https://example.test/#/docs/list?project=1";
+		const first = "https://example.test/#/docs/article?id=1&lang=zh";
+		const second = "https://example.test/#/docs/article?id=2&lang=zh";
+		const other = "https://example.test/#/docs/other?id=1&lang=zh";
+		const f = fixture({
+			[entry]: {
+				links: [
+					"#/docs/article?id=1&lang=zh",
+					"#/docs/article?id=2&lang=zh",
+					"#/docs/other?id=1&lang=zh",
+					first,
+					entry,
+					"https://else.test/#/docs/article?id=3&lang=zh",
+				],
+			},
+			[first]: { links: [entry] },
+			[second]: {},
+			[other]: {},
+		});
+		await runCrawl(f.runtime, { ...options, url: entry }, new AbortController().signal);
+		expect(f.written.map(file => file.content)).toEqual(
+			[entry, first, second, other].map(url => `Source: ${url}\n\nReadable content\n`),
+		);
+		expect(f.opened).toHaveLength(4);
+		expect(f.closed.sort()).toEqual(f.opened.sort());
 	});
 
 	it("follows cross-origin redirects while still rejecting HTTP errors and login pages", async () => {
@@ -471,6 +512,18 @@ describe("crawl engine", () => {
 		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
 		expect(f.written).toEqual([]);
 		expect(f.output.join("\n")).toContain("stable scroll end");
+		expect(browser.detachmentCount()).toBe(1);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("reports a scroll that cannot advance instead of repeatedly scrolling until the page deadline", async () => {
+		const url = "https://example.test/feed";
+		const browser = scriptedPage({ scrolling: { container: true, stalled: true } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([]);
+		expect(f.output.join("\n")).toContain("Scrolling made no progress");
+		expect(browser.extractionCount()).toBe(0);
 		expect(browser.detachmentCount()).toBe(1);
 		expect(f.closed).toEqual(f.opened);
 	});

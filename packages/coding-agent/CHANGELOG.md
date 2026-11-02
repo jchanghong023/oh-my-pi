@@ -139,6 +139,8 @@
 
 ### Fixed
 
+- Stop `/crawl` with a clear error when scrolling cannot advance, instead of repeatedly scrolling until the page timeout.
+- Keep `/crawl` hash-router paths and their query parameters intact when navigating, following links, and recording source URLs.
 - Follow browser-native HTTP and JavaScript redirects in `/crawl`, retaining the browser session and recording final URLs while keeping recursion within the final entry site.
 - Save JavaScript-rendered enterprise pages with `/crawl --wait`, waiting for cross-origin data and retaining business tables and lists outside article content.
 - Make `/crawl` and explicit Browser Relay requests fail when Relay is disabled instead of silently using a different browser session.

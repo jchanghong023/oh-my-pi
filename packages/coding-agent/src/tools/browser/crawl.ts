@@ -43,7 +43,8 @@ function normalizedUrl(value: string, base?: string): string | undefined {
 	try {
 		const url = new URL(value, base);
 		if (url.protocol !== "http:" && url.protocol !== "https:") return undefined;
-		url.hash = "";
+		// Hash-router paths (including their queries) identify pages, not in-page anchors.
+		if (!url.hash.startsWith("#/")) url.hash = "";
 		return url.href;
 	} catch {
 		return undefined;
@@ -187,6 +188,7 @@ try {
   let ready = await waitForReady(minimumWait);
   const attribute = ${JSON.stringify(`data-omp-crawl-${crypto.randomUUID()}`)};
   let bottomState;
+  let scrollState;
   let followReadingLinks = true;
   for (;;) {
     if (Date.now() >= deadline) throw timeoutError();
@@ -209,15 +211,19 @@ try {
       }
       followReadingLinks = false;
       bottomState = undefined;
+      scrollState = undefined;
       continue;
     }
     if (!${scroll}) break;
     const target = await page.evaluate(${SCROLL_TARGET}, attribute);
+    const state = JSON.stringify([target.state, ready.url, ready.text]);
     if (target.selector) {
+      if (state === scrollState) throw new Error("Scrolling made no progress; content was not saved");
+      scrollState = state;
       bottomState = undefined;
       await tab.scroll(0, target.delta, { selector: target.selector });
     } else {
-      const state = JSON.stringify([target.state, ready.url, ready.text]);
+      scrollState = undefined;
       if (state === bottomState) break;
       bottomState = state;
     }
