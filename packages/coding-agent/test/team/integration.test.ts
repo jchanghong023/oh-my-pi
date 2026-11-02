@@ -33,9 +33,9 @@ import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createSessionDefaults } from "../helpers/session-defaults";
 
-const MODEL_SESSION = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-const MODEL_OTHER = getBundledModel("anthropic", "claude-opus-4-6")!;
-const MODEL_THIRD = getBundledModel("openai", "gpt-5")!;
+const MODEL_SESSION = getBundledModel("ascend", "qwen3.8-flash-next")!;
+const MODEL_OTHER = getBundledModel("ascend", "qwen3.8-27b")!;
+const MODEL_THIRD = getBundledModel("opencode-go", "glm-5.3-flash")!;
 const PATTERN_SESSION = `${MODEL_SESSION.provider}/${MODEL_SESSION.id}`;
 const PATTERN_OTHER = `${MODEL_OTHER.provider}/${MODEL_OTHER.id}`;
 const PATTERN_THIRD = `${MODEL_THIRD.provider}/${MODEL_THIRD.id}`;
@@ -170,8 +170,8 @@ describe("team in-process integration", () => {
 	beforeAll(async () => {
 		tempDir = TempDir.createSync("@pi-team-integration-");
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
-		authStorage.keys.setRuntime("anthropic", "anthropic-test-key");
-		authStorage.keys.setRuntime("openai", "openai-test-key");
+		authStorage.keys.setRuntime("ascend", "ascend-test-key");
+		authStorage.keys.setRuntime("opencode-go", "opencode-go-test-key");
 		modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		settings = Settings.isolated({ "task.maxConcurrency": 4 });
 

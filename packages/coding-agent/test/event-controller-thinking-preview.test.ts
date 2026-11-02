@@ -482,7 +482,7 @@ describe("compact thinking dock focus restoration", () => {
 		expect(h.rendered()).toContain("VISIBLE_TARGET");
 	});
 
-	it("uses intent before command before target and never displays output", async () => {
+	it("shows intent before the raw command without letting long intent hide the command or showing output", async () => {
 		const h = focusFixture();
 		const live = liveSession();
 		h.register("Worker", live);
@@ -495,7 +495,7 @@ describe("compact thinking dock focus restoration", () => {
 		});
 		for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
 			expect(Bun.stripANSI(rows[0]!)).toContain("bash");
-			expect(Bun.stripANSI(rows[0]!)).toContain("THE_INTENT");
+			expect(Bun.stripANSI(rows[0]!)).toContain("THE_INTENT · THE_COMMAND");
 			expect(rows[1] ?? "").toBe("");
 		}
 		await live.emit({
@@ -505,7 +505,43 @@ describe("compact thinking dock focus restoration", () => {
 			args: { i: "THE_INTENT", command: "THE_COMMAND", path: "THE_TARGET" },
 			partialResult: { content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }] },
 		});
-		expect(h.rendered()).not.toMatch(/THE_COMMAND|THE_TARGET|OUTPUT_MUST_NOT_APPEAR/);
+		expect(h.rendered()).toContain("THE_INTENT · THE_COMMAND");
+		expect(h.rendered()).not.toMatch(/THE_TARGET|OUTPUT_MUST_NOT_APPEAR/);
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "a",
+			toolName: "bash",
+			args: { i: `核对${"很长的说明".repeat(20)}`, command: "echo begin; git diff --stat" },
+			partialResult: { content: [] },
+		});
+		for (const text of [h.rendered(), h.nativeRendered()]) {
+			expect(text.indexOf("核对")).toBeLessThan(text.indexOf("echo begin"));
+			expect(text).toContain("echo begin ; …");
+			expect(text).not.toContain("git diff");
+		}
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "a",
+			toolName: "bash",
+			args: { i: "检查", command: `printf 'a;b' 2>&1 && echo hidden` },
+			partialResult: { content: [] },
+		});
+		for (const text of [h.rendered(), h.nativeRendered()]) {
+			expect(text).toContain("printf 'a;b' 2>&1 && …");
+			expect(text).not.toContain("echo hidden");
+		}
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "a",
+			toolName: "bash",
+			args: { i: "检查", command: `find /${"long-directory/".repeat(8)}target` },
+			partialResult: { content: [] },
+		});
+		for (const text of [h.rendered(), h.nativeRendered()]) {
+			expect(text).toContain("find /long-directory/");
+			expect(text).toContain("…");
+			expect(text).not.toContain("target");
+		}
 		await live.emit({
 			type: "tool_execution_start",
 			toolCallId: "b",
@@ -539,6 +575,63 @@ describe("compact thinking dock focus restoration", () => {
 		});
 		expect(h.rendered()).toContain("identity_only");
 		expect(h.nativeRendered()).toContain("identity_only");
+	});
+
+	it("links wait to the running job and distinguishes frozen submission time from waiting time", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		setSystemTime(10_000);
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "shell",
+			toolName: "bash",
+			args: { i: "检查", command: "bun run fulltest" },
+		});
+		h.rows();
+		setSystemTime(10_002);
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "shell",
+			toolName: "bash",
+			result: { content: [], details: { async: { state: "running", jobId: "bg_1", type: "bash" } } },
+		});
+		for (const text of [h.rendered(), h.nativeRendered()]) {
+			expect(text).toContain("bun run fulltest");
+			expect(text).toContain(`bg_1 · 提交 ${formatDuration(2)}`);
+		}
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "waiting",
+			toolName: "wait",
+			args: { i: "等待检查" },
+		});
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "waiting",
+			toolName: "wait",
+			args: { i: "等待检查" },
+			partialResult: {
+				content: [{ type: "text", text: "OUTPUT_MUST_NOT_APPEAR" }],
+				details: {
+					op: "wait",
+					jobs: [
+						{ id: "old", type: "bash", status: "completed", label: "OLD_COMMAND", durationMs: 1 },
+						{ id: "bg_1", type: "bash", status: "running", label: "bun run fulltest", durationMs: 0 },
+					],
+				},
+			},
+		});
+		setSystemTime(15_002);
+		for (const rows of [h.rows(), h.nativeRendered().split("\n")]) {
+			expect(Bun.stripANSI(rows[0]!)).toContain(`bg_1 · 提交 ${formatDuration(2)}`);
+			const waiting = Bun.stripANSI(rows[1]!);
+			expect(waiting).toContain("wait · 等待检查 · [bash] bg_1 bun run fulltest");
+			expect(waiting).toContain(" · 等待 ");
+			expect(waiting).toEndWith(formatDuration(5000));
+			expect(waiting).not.toMatch(/OLD_COMMAND|OUTPUT_MUST_NOT_APPEAR/);
+		}
 	});
 
 	it("keeps wide multiline tool details and elapsed within their own ANSI and native rows", async () => {

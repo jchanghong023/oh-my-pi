@@ -2,12 +2,16 @@ import { expect, test } from "bun:test";
 import type { Subprocess } from "bun";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
+import { getModelDbPath, isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
 import { LegacyProtocol } from "../../src/modes/zcode/schema";
+import { discoverAuthStorage } from "../../src/sdk";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 type Frame = Record<string, unknown>;
-const model = { providerId: "profiles-local", modelId: "profile-chat" };
+const model = { providerId: "deepseek", modelId: "profile-chat" };
 async function bounded<T>(promise: Promise<T>): Promise<T> {
 	const deadline = Promise.withResolvers<never>();
 	const timer = setTimeout(() => deadline.reject(new Error("Profile CLI timed out")), 30_000);
@@ -151,6 +155,13 @@ async function fixture(root: TempDir) {
 		hostname: "127.0.0.1",
 		port: 0,
 		async fetch(request) {
+			const pathname = new URL(request.url).pathname;
+			if (request.method === "GET" && pathname === "/v1/models") {
+				return Response.json({ data: [{ id: "profile-chat" }, { id: "profile-other" }] });
+			}
+			if (request.method !== "POST" || pathname !== "/v1/chat/completions") {
+				return new Response(null, { status: 404 });
+			}
 			const body = (await request.json()) as { model: string; messages: unknown[] };
 			requests.push(body.model);
 			authorizations.push(request.headers.get("authorization"));
@@ -171,11 +182,11 @@ async function fixture(root: TempDir) {
 		await fs.mkdir(agent, { recursive: true });
 		await fs.writeFile(
 			path.join(agent, "models.yml"),
-			`providers:\n  profiles-local:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: apiKey\n    apiKey: fixture-${name}-local-only\n    api: openai-completions\n    models:\n      - id: profile-chat\n        reasoning: false\n      - id: profile-other\n        reasoning: false\n`,
+			`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: apiKey\n    apiKey: fixture-${name}-local-only\n    api: openai-completions\n    models:\n      - id: profile-chat\n        reasoning: false\n      - id: profile-other\n        reasoning: false\n`,
 		);
 		await fs.writeFile(
 			path.join(agent, "config.yml"),
-			"modelRoles:\n  default: profiles-local/profile-chat\n  smol: profiles-local/profile-chat\ntools:\n  xdev: false\n",
+			"modelRoles:\n  default: deepseek/profile-chat\n  smol: deepseek/profile-chat\ntools:\n  xdev: false\n",
 		);
 	}
 	return {
@@ -245,6 +256,69 @@ async function profileIdentity(peer: ProfilePeer, workspace: object) {
 		throw new Error("Missing native profile storage identity");
 	return { configRoot: value.configRoot, storageScope: value.storageScope, activeProfile: value.activeProfile };
 }
+
+test("session snapshots omit unknown model capacities without losing known limits", async () => {
+	await using root = await TempDir.create("@zcode-profiles-model-capacities-");
+	await using fx = await fixture(root);
+	const agentDir = path.join(fx.configRoot, "profiles", "alpha", "agent");
+	const token = "isolated-capacity-cache-key";
+	const auth = await discoverAuthStorage(agentDir, { cwd: fx.cwd });
+	try {
+		await auth.credentials.set("opencode-go", { type: "api_key", key: token });
+	} finally {
+		auth.close();
+	}
+	const cached = (id: string, contextWindow: number | null, maxTokens: number | null) =>
+		buildModel({
+			id,
+			name: id,
+			provider: "opencode-go",
+			api: "openai-completions",
+			baseUrl: "https://opencode.ai/inference/go/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow,
+			maxTokens,
+		});
+	writeModelCache(
+		resolveModelCacheProviderId("opencode-go", { apiKey: token }),
+		Date.now(),
+		[
+			cached("capacity-unknown", null, null),
+			cached("capacity-context-only", 200000, null),
+			cached("capacity-output-only", null, 4096),
+		],
+		true,
+		"",
+		getModelDbPath(agentDir),
+	);
+	await using peer = new ProfilePeer(fx.cwd, { ...fx.env, OMP_OFFLINE: "1" }, "alpha");
+	await peer.ready();
+	const created = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
+		await peer.request("session/create", { workspace: fx.workspace, model, titleGenerationEnabled: false }),
+	);
+	const sessionId = created.session.sessionId;
+	for (const snapshot of [
+		created,
+		LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(await peer.request("session/read", { sessionId })),
+	]) {
+		const option = (id: string) =>
+			snapshot.settings.model.available.find(
+				candidate => candidate.ref.providerId === "opencode-go" && candidate.ref.modelId === id,
+			);
+		const unknown = option("capacity-unknown");
+		const contextOnly = option("capacity-context-only");
+		const outputOnly = option("capacity-output-only");
+		expect(unknown).toBeDefined();
+		expect(unknown).not.toHaveProperty("contextWindow");
+		expect(unknown).not.toHaveProperty("maxOutputTokens");
+		expect(contextOnly?.contextWindow).toBe(200000);
+		expect(contextOnly).not.toHaveProperty("maxOutputTokens");
+		expect(outputOnly?.maxOutputTokens).toBe(4096);
+		expect(outputOnly).not.toHaveProperty("contextWindow");
+	}
+}, 90_000);
 
 test("native CLI profile precedence, read-only discovery and strict canonical validation", async () => {
 	await using root = await TempDir.create("@zcode-profiles-list-");
@@ -356,10 +430,10 @@ test("two real profile processes isolate role persistence and session discovery 
 			roleId: "default",
 			scope: "user",
 			expectedRevision: role.revision,
-			selection: { kind: "model", model: { provider: "profiles-local", modelId: "profile-other" } },
+			selection: { kind: "model", model: { provider: "deepseek", modelId: "profile-other" } },
 		});
 		expect((await roles(alpha, alphaId)).find(value => value.roleId === "default")?.userValue).toBe(
-			"profiles-local/profile-other",
+			"deepseek/profile-other",
 		);
 		await alpha.request("session/send", { sessionId: alphaId, content: "PROFILE_PERSISTED_ALPHA" });
 		await idle(alpha, alphaId);
@@ -373,7 +447,7 @@ test("two real profile processes isolate role persistence and session discovery 
 		expect(identity.storageScope).not.toBe(alphaScope);
 		const betaId = await create(beta, fx.workspace);
 		expect((await roles(beta, betaId)).find(value => value.roleId === "default")?.userValue).toBe(
-			"profiles-local/profile-chat",
+			"deepseek/profile-chat",
 		);
 		expect((await beta.reply("session/read", { sessionId: alphaId })).error).toBeDefined();
 		await beta.request("session/send", { sessionId: betaId, content: "PROFILE_PERSISTED_BETA" });
@@ -388,7 +462,7 @@ test("two real profile processes isolate role persistence and session discovery 
 		expect(identity.storageScope).toBe(alphaScope);
 		const id = await create(alpha, fx.workspace);
 		expect((await roles(alpha, id)).find(value => value.roleId === "default")?.userValue).toBe(
-			"profiles-local/profile-other",
+			"deepseek/profile-other",
 		);
 		expect((await alpha.reply("session/read", { sessionId: alphaId })).error).toBeUndefined();
 	}

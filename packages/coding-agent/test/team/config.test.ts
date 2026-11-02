@@ -32,12 +32,12 @@ describe("TeamConfigService", () => {
 		fs.mkdirSync(cwd, { recursive: true });
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			'team:\n  members: ["test/Qwen3.8-27B", "retired old selector", "test/Qwen3.8-27B"]\n',
+			'team:\n  members: ["deepseek/Qwen3.8-27B", "retired old selector", "deepseek/Qwen3.8-27B"]\n',
 		);
 		await Bun.write(
 			path.join(agentDir, "models.yml"),
 			`providers:
-  test:
+  deepseek:
     baseUrl: https://example.invalid/v1
     api: openai-completions
     auth: none
@@ -76,9 +76,9 @@ describe("TeamConfigService", () => {
 		expect(before.storage).toEqual({ readState: "present" });
 		expect(ompTeamConfigSchema.parse(before)).toEqual(before);
 		expect(before.userMembers?.map(slot => slot.rawSelector)).toEqual([
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 			"retired old selector",
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 		]);
 		expect(before.issues).toContainEqual(
 			expect.objectContaining({ target: "member", list: "userMembers", index: 1, selector: "retired old selector" }),
@@ -88,8 +88,8 @@ describe("TeamConfigService", () => {
 			scope: "user",
 			expectedRevision: before.revision!,
 			members: [
-				{ provider: "test", modelId: "Qwen3.8-27B" },
-				{ provider: "test", modelId: "Qwen3.8-27B" },
+				{ provider: "deepseek", modelId: "Qwen3.8-27B" },
+				{ provider: "deepseek", modelId: "Qwen3.8-27B" },
 			],
 		});
 		expect(result.saveState).toBe("complete");
@@ -123,11 +123,11 @@ describe("TeamConfigService", () => {
 		fs.mkdirSync(otherCwd, { recursive: true });
 		fs.mkdirSync(otherRoot, { recursive: true });
 		const independent = await Settings.loadIsolated({ agentDir, cwd: otherCwd });
-		const masked = independent.overlay({ "team.members": ["test/Qwen3.8-27B"] });
+		const masked = independent.overlay({ "team.members": ["deepseek/Qwen3.8-27B"] });
 		const unrelated = await Settings.loadIsolated({ agentDir: otherRoot, cwd });
 		const otherRegistry = new ModelRegistry(auth, path.join(agentDir, "models.yml"), { settings: masked });
 		const consumer = new TeamConfigService({ getSettings: () => masked, getModelRegistry: () => otherRegistry });
-		const draft = [{ provider: "test", modelId: "Qwen3.8-27B" }];
+		const draft = [{ provider: "deepseek", modelId: "Qwen3.8-27B" }];
 		const reads: Promise<Awaited<ReturnType<TeamConfigService["getConfig"]>>>[] = [];
 		let unrelatedChanges = 0;
 		const unsubscribe = masked.onEffectiveChange(
@@ -143,16 +143,16 @@ describe("TeamConfigService", () => {
 			const result = await service.setConfig({
 				scope: "user",
 				expectedRevision: before.revision!,
-				members: [{ provider: "test", modelId: "Qwen3.8-35B" }],
+				members: [{ provider: "deepseek", modelId: "Qwen3.8-35B" }],
 			});
 			expect(result.write.status).toBe("saved");
 			expect(reads.length).toBeGreaterThan(0);
 			const snapshot = (await Promise.all(reads)).at(-1)!;
-			expect(snapshot.userMembers?.map(slot => slot.rawSelector)).toEqual(["test/Qwen3.8-35B"]);
+			expect(snapshot.userMembers?.map(slot => slot.rawSelector)).toEqual(["deepseek/Qwen3.8-35B"]);
 			expect(snapshot.preview?.clientRevision).toBe("draft");
-			expect(draft).toEqual([{ provider: "test", modelId: "Qwen3.8-27B" }]);
-			expect(cfgTeamMembers.get(independent)).toEqual(["test/Qwen3.8-35B"]);
-			expect(cfgTeamMembers.get(masked)).toEqual(["test/Qwen3.8-27B"]);
+			expect(draft).toEqual([{ provider: "deepseek", modelId: "Qwen3.8-27B" }]);
+			expect(cfgTeamMembers.get(independent)).toEqual(["deepseek/Qwen3.8-35B"]);
+			expect(cfgTeamMembers.get(masked)).toEqual(["deepseek/Qwen3.8-27B"]);
 			expect(unrelatedChanges).toBe(0);
 		} finally {
 			unsubscribe();
@@ -175,10 +175,10 @@ describe("TeamConfigService", () => {
 			await service.setConfig({
 				scope: "user",
 				expectedRevision: before.revision!,
-				members: [{ provider: "test", modelId: "Qwen3.8-35B" }],
+				members: [{ provider: "deepseek", modelId: "Qwen3.8-35B" }],
 			});
 			expect(changes).toBeGreaterThan(0);
-			expect(cfgTeamMembers.get(independent)).toEqual(["test/Qwen3.8-35B"]);
+			expect(cfgTeamMembers.get(independent)).toEqual(["deepseek/Qwen3.8-35B"]);
 		} finally {
 			unsubscribe();
 		}
@@ -235,14 +235,14 @@ describe("TeamConfigService", () => {
 	});
 
 	it("returns every ambiguous real Chinese-name match without network discovery", () => {
-		const candidates = service.getModels("千问3.8 test").models;
+		const candidates = service.getModels("千问3.8 deepseek").models;
 		expect(candidates.map(candidate => candidate.model.modelId).sort()).toEqual(["Qwen3.8-27B", "Qwen3.8-35B"]);
 		expect(candidates.every(candidate => candidate.selectable)).toBe(true);
 		expect(service.getModels("不存在的模型").models).toEqual([]);
 	});
 
 	it("keeps higher-priority participants when the user draft contains unavailable slots", async () => {
-		settings = settings.overlay({ "team.members": ["test/Qwen3.8-35B"] });
+		settings = settings.overlay({ "team.members": ["deepseek/Qwen3.8-35B"] });
 		service = new TeamConfigService({
 			getSettings: () => settings,
 			getModelRegistry: () => registry,
@@ -257,9 +257,9 @@ describe("TeamConfigService", () => {
 			expect.objectContaining({ list: "preview.userMembers", code: "unresolved_model" }),
 		);
 		expect(config.preview?.participants.map(participant => participant.model)).toEqual([
-			{ provider: "test", modelId: "Qwen3.8-35B" },
-			{ provider: "test", modelId: "Qwen3.8-35B" },
-			{ provider: "test", modelId: "Qwen3.8-35B" },
+			{ provider: "deepseek", modelId: "Qwen3.8-35B" },
+			{ provider: "deepseek", modelId: "Qwen3.8-35B" },
+			{ provider: "deepseek", modelId: "Qwen3.8-35B" },
 		]);
 	});
 
@@ -273,9 +273,9 @@ describe("TeamConfigService", () => {
 		expect(config.revision).toBeString();
 		expect(config.source).toBe("global");
 		expect(config.effectiveMembers?.map(slot => slot.rawSelector)).toEqual([
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 			"retired old selector",
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 		]);
 		expect(config.participants).toEqual([]);
 		expect(config.issues).toContainEqual(
@@ -285,8 +285,8 @@ describe("TeamConfigService", () => {
 			config.issues.some(issue => issue.target === "session_model" || issue.code === "participants_unavailable"),
 		).toBe(false);
 
-		const first = { provider: "test", modelId: "Qwen3.8-27B" };
-		const second = { provider: "test", modelId: "Qwen3.8-35B" };
+		const first = { provider: "deepseek", modelId: "Qwen3.8-27B" };
+		const second = { provider: "deepseek", modelId: "Qwen3.8-35B" };
 		const preview = await service.getConfig({
 			clientRevision: "ordered",
 			members: [second, first],
@@ -304,9 +304,9 @@ describe("TeamConfigService", () => {
 			members: [first, { rawSelector: "retired old selector" }, first],
 		});
 		expect(invalid.preview?.effectiveMembers?.map(slot => slot.rawSelector)).toEqual([
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 			"retired old selector",
-			"test/Qwen3.8-27B",
+			"deepseek/Qwen3.8-27B",
 		]);
 		expect(invalid.preview?.issues).toContainEqual(
 			expect.objectContaining({ list: "preview.effectiveMembers", index: 1, selector: "retired old selector" }),
@@ -381,7 +381,7 @@ describe("TeamConfigService", () => {
 			await service.setConfig({
 				scope: "user",
 				expectedRevision: config.revision!,
-				members: [{ provider: "test", modelId: "Qwen3.8-27B" }],
+				members: [{ provider: "deepseek", modelId: "Qwen3.8-27B" }],
 			});
 			throw new Error("Expected a revision conflict");
 		} catch (error) {

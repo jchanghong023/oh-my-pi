@@ -22,7 +22,7 @@ interface ModelRequest {
 	messages: Array<{ role: string; content?: unknown }>;
 	tools?: Array<{ function: { name: string; parameters?: unknown } }>;
 }
-const model = { providerId: "permission-local", modelId: "permission-chat" };
+const model = { providerId: "deepseek", modelId: "deepseek-v4-flash" };
 async function bounded<T>(promise: Promise<T>): Promise<T> {
 	const timeout = Promise.withResolvers<never>();
 	const timer = setTimeout(() => timeout.reject(new Error("Permission CLI timed out")), 30_000);
@@ -212,12 +212,12 @@ async function fixture(root: TempDir) {
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  permission-local:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: permission-chat\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: deepseek-v4-flash\n        reasoning: false\n`,
 	);
 	// 显式 prompt 覆盖 read/write/bash，保证走原生策略，不借 GUI 模式伪造审批。
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: permission-local/permission-chat\n  smol: permission-local/permission-chat\n  task: permission-local/permission-chat\nasync:\n  enabled: false\ntask:\n  batch: true\ntools:\n  xdev: false\n  approval:\n    read: prompt\n    write: prompt\n    bash: prompt\n",
+		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\n  task: deepseek/deepseek-v4-flash\nasync:\n  enabled: false\ntask:\n  batch: true\ntools:\n  xdev: false\n  approval:\n    read: prompt\n    write: prompt\n    bash: prompt\n",
 	);
 	return {
 		cwd,

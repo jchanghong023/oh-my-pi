@@ -134,12 +134,12 @@ async function fixture(
 	const models = path.join(agentDir, "models.yml");
 	await fs.writeFile(
 		models,
-		`providers:\n  workflow-local:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: selected\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: selected\n        reasoning: false\n`,
 	);
 	const authStorage = await AuthStorage.create(":memory:");
 	cleanup.push(async () => authStorage.close());
 	const registry = new ModelRegistry(authStorage, models);
-	const model = registry.find("workflow-local", "selected");
+	const model = registry.find("deepseek", "selected");
 	if (!model) throw new Error("Local workflow model was not loaded");
 	const sessions = new ZCodeSessionManager({
 		cwd,

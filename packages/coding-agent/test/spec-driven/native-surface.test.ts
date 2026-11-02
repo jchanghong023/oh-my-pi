@@ -36,7 +36,7 @@ describe("Dev native TSP surface", () => {
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
 		provider = createProviderFixture({ requirementsQuestion: "TSP_STAGE_QUESTION" });
-		modelRegistry.registerProvider("dev-tsp-fixture", {
+		modelRegistry.registerProvider("deepseek", {
 			api: "openai-completions",
 			baseUrl: provider.baseUrl,
 			apiKey: "local-test-only",
@@ -52,7 +52,7 @@ describe("Dev native TSP surface", () => {
 				},
 			],
 		});
-		const model = modelRegistry.find("dev-tsp-fixture", "chat");
+		const model = modelRegistry.find("deepseek", "chat");
 		if (!model) throw new Error("Expected local TSP fixture model");
 		({ session } = await createAgentSession({
 			cwd: tempDir.path(),

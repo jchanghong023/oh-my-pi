@@ -11,7 +11,6 @@ import type {
 } from "@oh-my-pi/pi-ai";
 import { transformMessages } from "@oh-my-pi/pi-ai/providers/transform-messages";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import toolResultNote from "../src/prompts/system/snapcompact-toolresult-note.md" with { type: "text" };
 import {
 	estimateInlineSavings,
@@ -119,7 +118,19 @@ describe("SnapcompactInlineTransformer", () => {
 	it("is a no-op for models whose wire strips image input", async () => {
 		// Declares image input, but the Chat Completions guard replaces every
 		// image with a placeholder, so imaged tool results would reach it empty.
-		const model = getBundledModel("venice", "deepseek-v4-1-flash");
+		const model = buildModel({
+			id: "deepseek-v4-1-flash",
+			name: "DeepSeek V4.1 Flash",
+			api: "openai-completions",
+			provider: "venice",
+			baseUrl: "https://api.venice.ai/api/v1",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 200_000,
+			maxTokens: 8_192,
+			compat: { stripImageInput: true },
+		});
 		const options = withTestShape({ renderSystemPrompt: "all", renderToolResults: true });
 		const context = makeContext();
 		expect(await new SnapcompactInlineTransformer(options).transform(context, model)).toBe(context);

@@ -34,7 +34,7 @@ if (process.argv[2] === "receive") {
 	await Settings.init({ inMemory: true, cwd: process.cwd() });
 	const authStorage = await AuthStorage.create(path.join(process.cwd(), "auth.db"));
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+	const model = modelRegistry.find("ascend", "minimax2.7");
 	if (!model) throw new Error("expected bundled model");
 	const sessionManager = SessionManager.create(process.cwd());
 	sessionManager.appendMessage({ role: "user", content: "profile restart marker", timestamp: Date.now() });

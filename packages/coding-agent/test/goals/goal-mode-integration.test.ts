@@ -66,11 +66,11 @@ async function createSharedFixture(): Promise<SharedFixture> {
 	const baseDir = TempDir.createSync("@pi-goal-mode-shared-");
 	const authStorage = await AuthStorage.create(path.join(baseDir.path(), "testauth.db"));
 	// The real prompt path gates on a resolvable key; never rely on ambient env.
-	authStorage.keys.setRuntime("anthropic", "test-key");
+	authStorage.keys.setRuntime("ascend", "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+	const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
 	if (!model) {
-		throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		throw new Error("Expected ascend/qwen3.8-flash-next to exist in registry");
 	}
 	return { authStorage, modelRegistry, model, baseDir };
 }
@@ -1277,8 +1277,8 @@ describe("InteractiveMode goal mode integration", () => {
 					? [{ type: "toolCall" as const, id: toolCallId, name: "todo", arguments: { op: "view" } }]
 					: [{ type: "text" as const, text: "Verification remains complete." }],
 				api: "anthropic-messages" as const,
-				provider: "anthropic" as const,
-				model: "claude-sonnet-4-5",
+				provider: "ascend" as const,
+				model: "qwen3.8-flash-next",
 				usage: {
 					input: 1,
 					output: 1,

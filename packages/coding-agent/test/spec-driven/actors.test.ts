@@ -109,7 +109,7 @@ async function consumer(
 		},
 	});
 	const settings = Settings.isolated({
-		modelRoles: { default: "actor-fixture/chat-a", smol: "actor-fixture/chat-a" },
+		modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
 		"compaction.enabled": false,
 		"compaction.methodOrder": ["soft"],
 		"compaction.keepRecentTokens": 1,
@@ -121,11 +121,11 @@ async function consumer(
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  actor-fixture:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
 	);
 	const authStorage = await AuthStorage.create(":memory:");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
-	const model = modelRegistry.find("actor-fixture", "chat-a");
+	const model = modelRegistry.find("deepseek", "chat-a");
 	if (!model) throw new Error("Local actor fixture model unavailable");
 	const asyncJobManager = new AsyncJobManager({});
 	const parent = hooks.inheritedToolRestrictions

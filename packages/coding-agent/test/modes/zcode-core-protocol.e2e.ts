@@ -31,7 +31,7 @@ interface CoreSubscription extends SubscribeAck {
 	next(kind?: "initial" | "online" | "recovery"): Promise<LogicalFrame>;
 }
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
-const model = { providerId: "core-local", modelId: "core-chat" };
+const model = { providerId: "deepseek", modelId: "deepseek-v4-flash" };
 
 async function bounded<T>(promise: Promise<T>, label: string, ms = 30_000): Promise<T> {
 	const timeout = Promise.withResolvers<never>();
@@ -260,11 +260,11 @@ async function fixture(root: string) {
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  core-local:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: core-chat\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: deepseek-v4-flash\n        reasoning: false\n`,
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: core-local/core-chat\n  smol: core-local/core-chat\ntools:\n  xdev: false\n",
+		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\ntools:\n  xdev: false\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,

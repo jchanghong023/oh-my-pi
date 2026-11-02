@@ -223,7 +223,7 @@ async function withTui(
 	};
 	await Bun.write(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        input: [text, image]\n        contextWindow: 200000\n`,
+		`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        input: [text, image]\n        contextWindow: 200000\n`,
 	);
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
@@ -233,8 +233,8 @@ async function withTui(
 			async: { enabled: false },
 			...scenario.configuration,
 			modelRoles: {
-				default: "spec-fixture/chat-a",
-				smol: "spec-fixture/chat-a",
+				default: "deepseek/chat-a",
+				smol: "deepseek/chat-a",
 				...(isRecord(scenario.configuration?.modelRoles) ? scenario.configuration.modelRoles : {}),
 			},
 		}),
@@ -310,7 +310,7 @@ async function withTui(
 			"--no-rules",
 			"--no-title",
 			"--model",
-			"spec-fixture/chat-a",
+			"deepseek/chat-a",
 			"--",
 			"ordinary-root-beacon",
 		);

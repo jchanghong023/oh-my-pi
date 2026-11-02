@@ -18,7 +18,7 @@ const explicitExecutable = Bun.env.OMP_ZCODE_TEST_EXECUTABLE?.trim();
 if (explicitExecutable && !path.isAbsolute(explicitExecutable)) {
 	throw new Error("OMP_ZCODE_TEST_EXECUTABLE must be an absolute executable path");
 }
-export const model = { providerId: "zcode-fixture", modelId: "chat-a" };
+export const model = { providerId: "deepseek", modelId: "chat-a" };
 
 export async function deadline<T>(promise: Promise<T>, milliseconds = 30_000): Promise<T> {
 	// Real child-process IO cannot use the parent test's fake clock.
@@ -260,12 +260,12 @@ export async function fixture(root: TempDir, skillsEnabled = false) {
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  zcode-fixture:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n      - id: chat-b\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n      - id: chat-b\n        reasoning: false\n`,
 	);
 	// 非技能场景不启动描述压缩推理；真正验证资源的用例显式启用，保留其原生发现与读取链路。
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		`modelRoles:\n  default: zcode-fixture/chat-a\n  smol: zcode-fixture/chat-a\ntools:\n  xdev: false\nskills:\n  enabled: ${skillsEnabled}\nteam:\n  members:\n    - zcode-fixture/chat-a\n    - stale-provider/removed-model\n`,
+		`modelRoles:\n  default: deepseek/chat-a\n  smol: deepseek/chat-a\ntools:\n  xdev: false\nskills:\n  enabled: ${skillsEnabled}\nteam:\n  members:\n    - deepseek/chat-a\n    - stale-provider/removed-model\n`,
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,

@@ -250,7 +250,7 @@ class PublicPeer {
 		const snapshot = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
 			await this.request("session/create", {
 				workspace: workspace(cwd),
-				model: { providerId: "spec-fixture", modelId: "chat-a" },
+				model: { providerId: "deepseek", modelId: "deepseek-v4-flash" },
 				titleGenerationEnabled: false,
 			}),
 		);
@@ -377,11 +377,11 @@ async function fixture(root: TempDir, baseUrl: string) {
 	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  spec-fixture:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 200000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 200000\n`,
+		`providers:\n  deepseek:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: deepseek-v4-flash\n        reasoning: false\n        contextWindow: 200000\n      - id: deepseek-v4-pro\n        reasoning: false\n        contextWindow: 200000\n`,
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: spec-fixture/chat-a\n  smol: spec-fixture/chat-a\ntools:\n  xdev: false\nasync:\n  enabled: false\n",
+		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\ntools:\n  xdev: false\nasync:\n  enabled: false\n",
 	);
 	const env: NodeJS.ProcessEnv = {
 		PATH: Bun.env.PATH,

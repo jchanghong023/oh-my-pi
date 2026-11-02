@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AssistantMessage, Message, Model, ModelSpec, Usage } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import * as snapcompact from "../src";
@@ -9,6 +8,51 @@ import * as snapcompact from "../src";
 // Small frames keep render time negligible. Legacy 5x8 shape: 320px → 64 cols
 // x 40 rows = 2560 chars. Default (anthropic 8x8r-bw): 40 cols x 20 rows = 800.
 const TEST_FRAME_SIZE = 320;
+
+// These models exercise catalog policies without depending on the bundled chat roster.
+function testModel(spec: Pick<ModelSpec, "id" | "api" | "provider" | "baseUrl"> & { contextWindow?: number }): Model {
+	return buildModel({
+		name: spec.id,
+		reasoning: true,
+		input: ["text", "image"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 1_000_000,
+		maxTokens: 64_000,
+		...spec,
+	});
+}
+
+const opus = testModel({
+	id: "claude-opus-5-5",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+});
+const haiku = testModel({
+	id: "claude-haiku-4-5",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	contextWindow: 200_000,
+});
+const sol = testModel({
+	id: "gpt-6.1-sol",
+	api: "openai-codex-responses",
+	provider: "openai-codex",
+	baseUrl: "https://chatgpt.com/backend-api",
+});
+const openRouterOpus = testModel({
+	id: "anthropic/claude-opus-5.5",
+	api: "openrouter",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+});
+const openRouterDeepSeek = testModel({
+	id: "deepseek/deepseek-v4.1-flash-1017",
+	api: "openrouter",
+	provider: "openrouter",
+	baseUrl: "https://openrouter.ai/api/v1",
+});
 
 function createUserMessage(content: string): Message {
 	return { role: "user", content, timestamp: 0 };
@@ -550,11 +594,7 @@ describe("shape resolution", () => {
 			),
 		).toBe(2442);
 		// DeepSeek V4.1 Flash via OpenRouter: its own verified rule, not the Anthropic-wire fallback's 3,136.
-		expect(
-			snapcompact.plannedFrameTokens(
-				snapcompact.resolveShape(getBundledModel("openrouter", "deepseek/deepseek-v4.1-flash-1017")),
-			),
-		).toBe(994);
+		expect(snapcompact.plannedFrameTokens(snapcompact.resolveShape(openRouterDeepSeek))).toBe(994);
 		expect(
 			snapcompact.plannedFrameTokens(snapcompact.resolveShape({ api: "anthropic-messages", id: "claude-opus-4-6" })),
 		).toBe(snapcompact.FRAME_TOKEN_ESTIMATE);
@@ -1439,15 +1479,13 @@ describe("frame data budget", () => {
 	});
 
 	it("gives frames half the deployment's inline-image budget, and the default elsewhere", () => {
-		const opus = getBundledModel("anthropic", "claude-opus-5-5");
-		const sol = getBundledModel("openai-codex", "gpt-6.1-sol");
 		const throughProxy = (model: Model) => buildModel({ ...toModelSpec(model), baseUrl: "https://proxy.example/v1" });
 		expect(snapcompact.frameDataBytesBudget(opus)).toBe(60_000_000);
 		expect(snapcompact.frameDataBytesBudget(sol)).toBe(12_000_000);
 		// A rerouted baseUrl has its own body limit; so does a host without a budget rule.
 		expect(snapcompact.frameDataBytesBudget(throughProxy(opus))).toBe(budget);
 		expect(snapcompact.frameDataBytesBudget(throughProxy(sol))).toBe(budget);
-		expect(snapcompact.frameDataBytesBudget(getBundledModel("openrouter", "anthropic/claude-opus-5.5"))).toBe(budget);
+		expect(snapcompact.frameDataBytesBudget(openRouterOpus)).toBe(budget);
 		expect(snapcompact.frameDataBytesBudget(undefined)).toBe(budget);
 		// Factory Droid's own hosts carry a smaller budget; a custom gateway in front of Factory keeps the default.
 		const factory = (baseUrl: string) => {
@@ -1482,8 +1520,6 @@ describe("frame data budget", () => {
 	] as const)(
 		"an official Anthropic model rerouted by %s gets the proxy's 3 MB frame budget and 90 images",
 		(_, reroute) => {
-			const opus = getBundledModel("anthropic", "claude-opus-5-5");
-			const sol = getBundledModel("openai-codex", "gpt-6.1-sol");
 			const official = {
 				ANTHROPIC_BASE_URL: undefined,
 				CLAUDE_CODE_USE_FOUNDRY: undefined,
@@ -1821,18 +1857,15 @@ describe("archive helpers", () => {
 	});
 
 	it("caps images at the deployment's budget and unknown hosts at the safe floor", () => {
-		const ramp = buildModel({ ...toModelSpec(getBundledModel("anthropic", "claude-opus-5-5")), provider: "ramp" });
+		const ramp = buildModel({ ...toModelSpec(opus), provider: "ramp" });
 		expect(snapcompact.providerImageBudget(ramp)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerImageBudget(undefined)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		expect(snapcompact.providerFrameBudget(ramp)).toBe(snapcompact.DEFAULT_PROVIDER_IMAGE_BUDGET);
 		// The frame cap never exceeds the default frame count, even under a 600-image budget.
-		const opus = getBundledModel("anthropic", "claude-opus-5-5");
 		expect(snapcompact.providerImageBudget(opus)).toBe(600);
 		expect(snapcompact.providerFrameBudget(opus)).toBe(snapcompact.MAX_FRAMES_DEFAULT);
 		// The strictest Anthropic budget (200k-window models) still holds a full default archive.
-		expect(snapcompact.MAX_FRAMES_DEFAULT).toBeLessThanOrEqual(
-			snapcompact.providerImageBudget(getBundledModel("anthropic", "claude-haiku-4-5")),
-		);
+		expect(snapcompact.MAX_FRAMES_DEFAULT).toBeLessThanOrEqual(snapcompact.providerImageBudget(haiku));
 	});
 });
 

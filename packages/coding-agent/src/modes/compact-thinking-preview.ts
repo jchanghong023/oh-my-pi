@@ -8,20 +8,41 @@ import { col, elapsed, node, row, span, text } from "@oh-my-pi/pi-tui/native/des
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
 import { plainText } from "@oh-my-pi/pi-tui/native/spans";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
+import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
+import type { BashToolDetails } from "@oh-my-pi/pi-tui/tools/bash";
+import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
+import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
 import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
+import { lexShellCommand } from "../tools/shell-tokenize";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
 const EMPTY_ROWS: readonly string[] = ["", ""];
 const THINKING_SHIMMER_PALETTE: ShimmerPalette = { low: "dim", mid: "muted", high: "success", bold: true };
-type Call = { id: string; name: string; detail: string; intent?: string; startedAt?: number; endedAt?: number };
-type ToolRow = { id: string; name: string; detail: string; duration?: number; preparing?: boolean };
+type Call = {
+	id: string;
+	name: string;
+	detail: string;
+	command?: string;
+	intent?: string;
+	startedAt?: number;
+	endedAt?: number;
+	backgroundJobId?: string;
+};
+type ToolRow = {
+	id: string;
+	name: string;
+	detail: string;
+	command?: string;
+	duration?: number;
+	preparing?: boolean;
+	backgroundJobId?: string;
+};
 type Snapshot = { kind: "thinking"; rows: readonly string[] } | { kind: "tool"; rows: ToolRow[] };
 type SessionMemory = {
 	calls: Call[];
@@ -38,34 +59,57 @@ function clean(value: string): string {
 	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
 }
 
-function summary(args: unknown, intent?: unknown): string {
+/** Keep shell spelling intact; only shorten flat command lists with an unambiguous boundary. */
+function shellPreview(command: string): string {
+	if (/[()`]/u.test(command) || /(?:^|\s)(?:for|while|until|if|case|select|function)\s/u.test(command)) return command;
+	let offset = 0;
+	for (const token of lexShellCommand(command)) {
+		if (token.kind === "separator") {
+			const operator = /&&|\|\||[;|&\n]/u.exec(token.raw);
+			if (operator) {
+				const index = offset + operator.index;
+				if (command[index] === "&" && /[<>]/u.test(command[index - 1] ?? "")) {
+					offset += token.raw.length;
+					continue;
+				}
+				const first = command.slice(0, index).trimEnd();
+				if (first && command.slice(index + operator[0].length).trim()) return `${first} ${operator[0]} …`;
+			}
+		}
+		offset += token.raw.length;
+	}
+	return command;
+}
+
+function summary(args: unknown, intent?: unknown, operation?: string): { detail: string; command?: string } {
 	const fields = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-	const choices = [
-		intent,
-		fields.i,
-		fields.intent,
-		fields.title,
-		fields.command,
-		fields.path,
-		fields.target,
-		fields.url,
-		fields.query,
-		fields.pattern,
-	];
+	const descriptions = [intent, fields.i, fields.intent, fields.title];
+	const commands: unknown[] = [operation, fields.command];
+	const targets = [fields.path, fields.target, fields.url, fields.query, fields.pattern];
 	if (typeof fields.path === "string" && fields.path.startsWith("xd://") && typeof fields.content === "string") {
 		try {
 			const inner: unknown = JSON.parse(fields.content);
 			if (inner && typeof inner === "object" && !Array.isArray(inner)) {
 				const payload = inner as Record<string, unknown>;
-				choices.splice(4, 0, payload.i, payload.intent, payload.title, payload.command);
-				choices.push(payload.path, payload.target, payload.url, payload.query);
+				descriptions.push(payload.i, payload.intent, payload.title);
+				commands.push(payload.command);
+				targets.push(payload.path, payload.target, payload.url, payload.query);
 			}
 		} catch {
 			// Partial arguments may not yet contain a complete device payload.
 		}
 	}
-	const value = choices.find(item => typeof item === "string" && item.trim());
-	return typeof value === "string" ? value : "";
+	const description = descriptions.find((item): item is string => typeof item === "string" && !!item.trim());
+	const command = commands.find((item): item is string => typeof item === "string" && !!item.trim());
+	if (command) return { detail: description && clean(description) !== clean(command) ? description : "", command };
+	return {
+		detail: description ?? targets.find((item): item is string => typeof item === "string" && !!item.trim()) ?? "",
+	};
+}
+
+function waitTarget(name: string, result?: ToolRenderResult<CoordinationDetails>): string | undefined {
+	if (name !== "wait" || !result?.details?.jobs?.length) return undefined;
+	return waitToolRenderer.activitySummary({}, { expanded: false, isPartial: true, result }).detail;
 }
 
 function streamedArgs(block: ToolCall): unknown {
@@ -80,18 +124,34 @@ function duration(call: Call, now: number): number | undefined {
 }
 
 /** Fit one call independently, reserving the duration before truncating its description. */
-function toolLine(item: ToolRow, width: number, historical: boolean): { body: string; suffix: string } {
+function toolLine(
+	item: ToolRow,
+	width: number,
+	historical: boolean,
+): { body: string; suffix: string; timerPrefix?: string } {
 	const identity = clean(item.name);
 	const prefix = !historical && item.preparing ? `${identity} · 准备中` : identity;
-	const suffix = item.duration === undefined ? "" : ` · ${formatDuration(item.duration)}`;
+	const timerPrefix = item.backgroundJobId
+		? ` · ${clean(item.backgroundJobId)} · 提交 `
+		: item.name === "wait"
+			? " · 等待 "
+			: " · ";
+	const suffix = item.duration === undefined ? "" : `${timerPrefix}${formatDuration(item.duration)}`;
 	if (visibleWidth(prefix) + visibleWidth(suffix) >= width) {
 		if (visibleWidth(suffix) >= width) return { body: truncateToWidth(prefix + suffix, width), suffix: "" };
-		return { body: truncateToWidth(prefix, width - visibleWidth(suffix)), suffix };
+		return { body: truncateToWidth(prefix, width - visibleWidth(suffix)), suffix, timerPrefix };
 	}
-	const detail = clean(item.detail).trim();
 	const available = width - visibleWidth(prefix) - visibleWidth(suffix);
+	let detail = clean(item.detail).trim();
+	if (item.command) {
+		const shell = item.name === "bash" || (item.name === "wait" && item.command.startsWith("[bash] "));
+		const raw = clean(shell ? shellPreview(item.command) : item.command).trim();
+		const command = shell ? truncateToWidth(raw, TRUNCATE_LENGTHS.SHORT) : raw;
+		const intentWidth = Math.min(TRUNCATE_LENGTHS.SHORT, Math.floor((available - 6) / 3));
+		detail = detail && intentWidth > 0 ? `${truncateToWidth(detail, intentWidth)} · ${command}` : command;
+	}
 	const body = detail && available > 3 ? `${prefix} · ${truncateToWidth(detail, available - 3)}` : prefix;
-	return { body, suffix };
+	return { body, suffix, timerPrefix };
 }
 
 /** Composer-only projection of actual dispatches and the last displayed content. */
@@ -99,7 +159,7 @@ export class CompactThinkingPreview implements Component {
 	#session?: InteractiveModeContext["viewSession"];
 	#sessionId?: string;
 	#memory?: SessionMemory;
-	#nativeRows: { body: string; suffix: string; duration?: number; running: boolean }[] = [];
+	#nativeRows: { body: string; suffix: string; timerPrefix?: string; duration?: number; running: boolean }[] = [];
 	#workingActive = false;
 
 	constructor(
@@ -194,7 +254,13 @@ export class CompactThinkingPreview implements Component {
 			if (!name) continue;
 			const args = block ? streamedArgs(block) : (diagnostic?.args ?? marker?.args ?? update?.args);
 			const intent = diagnostic?.intent ?? (typeof marker?.intent === "string" ? marker.intent : undefined);
-			this.#appendCall({ id, name, detail: summary(args, intent), intent, startedAt });
+			this.#appendCall({
+				id,
+				name,
+				...summary(args, intent, waitTarget(name, update?.partialResult)),
+				intent,
+				startedAt,
+			});
 		}
 	}
 
@@ -223,13 +289,13 @@ export class CompactThinkingPreview implements Component {
 			if (call) {
 				call.name = event.toolName;
 				call.intent = event.intent;
-				call.detail = summary(event.args, event.intent);
+				Object.assign(call, summary(event.args, event.intent));
 				call.startedAt ??= now;
 			} else {
 				this.#appendCall({
 					id: event.toolCallId,
 					name: event.toolName,
-					detail: summary(event.args, event.intent),
+					...summary(event.args, event.intent),
 					intent: event.intent,
 					startedAt: now,
 				});
@@ -237,12 +303,18 @@ export class CompactThinkingPreview implements Component {
 			memory.undisplayedDispatch = true;
 		} else if (event.type === "tool_execution_end") {
 			const call = calls.find(item => item.id === event.toolCallId);
-			if (call && call.endedAt === undefined) call.endedAt = now;
+			if (call && call.endedAt === undefined) {
+				call.endedAt = now;
+				if (call.name === "bash") {
+					const result: ToolRenderResult<BashToolDetails> = event.result;
+					if (result.details?.async?.state === "running") call.backgroundJobId = result.details.async.jobId;
+				}
+			}
 		} else if (event.type === "tool_execution_update") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call && call.endedAt === undefined) {
-				const detail = summary(event.args, call.intent);
-				if (detail) call.detail = detail;
+				const detail = summary(event.args, call.intent, waitTarget(call.name, event.partialResult));
+				if (detail.detail || detail.command) Object.assign(call, detail);
 			}
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			for (const block of event.message.content) {
@@ -250,7 +322,7 @@ export class CompactThinkingPreview implements Component {
 				const call = calls.find(item => item.id === block.id && item.endedAt === undefined);
 				if (!call) continue;
 				const detail = summary(streamedArgs(block), call.intent);
-				if (detail) call.detail = detail;
+				if (detail.detail || detail.command) Object.assign(call, detail);
 			}
 		}
 	}
@@ -324,7 +396,9 @@ export class CompactThinkingPreview implements Component {
 				id: call.id,
 				name: call.name,
 				detail: call.detail,
+				command: call.command,
 				duration: displayDuration(call),
+				backgroundJobId: call.backgroundJobId,
 			}));
 			memory.snapshot = { kind: "tool", rows: items.map(item => ({ ...item })) };
 			memory.undisplayedDispatch = false;
@@ -346,7 +420,7 @@ export class CompactThinkingPreview implements Component {
 			const item: ToolRow = {
 				id: block.id,
 				name: block.name,
-				detail: summary(streamedArgs(block)),
+				...summary(streamedArgs(block)),
 				preparing: true,
 			};
 			memory.snapshot = { kind: "tool", rows: [{ ...item }] };
@@ -360,7 +434,9 @@ export class CompactThinkingPreview implements Component {
 						id: call.id,
 						name: call.name,
 						detail: call.detail,
+						command: call.command,
 						duration: displayDuration(call),
+						backgroundJobId: call.backgroundJobId,
 					})),
 				};
 				memory.undisplayedDispatch = false;
@@ -372,7 +448,10 @@ export class CompactThinkingPreview implements Component {
 			else {
 				for (const item of snapshot.rows) {
 					const call = memory.calls.find(candidate => candidate.id === item.id && candidate.endedAt !== undefined);
-					if (call) item.duration = duration(call, now);
+					if (call) {
+						item.duration = duration(call, now);
+						item.backgroundJobId = call.backgroundJobId;
+					}
 				}
 				this.#nativeRows = snapshot.rows.map(item => ({
 					...toolLine(item, width, true),
@@ -410,8 +489,12 @@ export class CompactThinkingPreview implements Component {
 				if (!item.suffix || item.duration === undefined) return label;
 				const timer = elapsed(item.duration, !item.running);
 				return this.#workingActive
-					? row([label, text(" · "), timer])
-					: row([label, text([span(" · ", "dim")]), node(timer.k, { ...timer.p, tone: "muted" }, timer.c)]);
+					? row([label, text(item.timerPrefix ?? " · "), timer])
+					: row([
+							label,
+							text([span(item.timerPrefix ?? " · ", "dim")]),
+							node(timer.k, { ...timer.p, tone: "muted" }, timer.c),
+						]);
 			});
 			while (children.length < 3) children.push(node("rows", { cols: cx.cols, lines: [""] }));
 			return col(children);

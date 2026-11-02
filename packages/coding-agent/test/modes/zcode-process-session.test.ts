@@ -3,9 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { writeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
-import { fingerprintStaticModels } from "@oh-my-pi/pi-catalog/model-manager";
-import { getBundledModel, getBundledModels } from "@oh-my-pi/pi-catalog/models";
-import { cursorModelManagerOptions } from "@oh-my-pi/pi-catalog/provider-models";
+import { resolveModelCacheProviderId } from "@oh-my-pi/pi-catalog/provider-models";
 import { getModelDbPath, isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import {
 	LegacyProtocol,
@@ -456,7 +454,11 @@ describe("ZCode actual public app-server process", () => {
 			await peer.request("omp/team/configure", { ...target, request: { operation: "get_team_models" } }),
 		);
 		if (models.operation !== "get_team_models") throw new Error("Expected Team models");
-		expect(models.data.models.filter(item => item.model.provider === model.providerId)).toEqual(
+		expect(
+			models.data.models.filter(
+				item => item.model.provider === model.providerId && ["chat-a", "chat-b"].includes(item.model.modelId),
+			),
+		).toEqual(
 			["chat-a", "chat-b"].map(modelId => ({
 				model: { provider: model.providerId, modelId },
 				name: modelId,
@@ -528,38 +530,27 @@ describe("ZCode actual public app-server process", () => {
 	test("cold global Team restores authenticated credential-scoped cached models without a session or inference", async () => {
 		await using root = await TempDir.create("@zcode-global-team-cache-");
 		await using config = await fixture(root);
-		const bundled = getBundledModel("cursor", "claude-opus-5-5");
-		if (!bundled) throw new Error("Expected bundled Cursor model for credential-scoped cache fixture");
+		const token = "isolated-team-cache-key";
 		const cached = buildModel({
-			...bundled,
-			id: "claude-opus-5-5-1m",
-			name: "Team cached Cursor model",
+			id: "team-cached-model",
+			name: "Team cached OpenCode Go model",
+			provider: "opencode-go",
+			api: "openai-completions",
+			baseUrl: "https://opencode.ai/inference/go/v1",
+			reasoning: false,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 			contextWindow: 1_000_000,
+			maxTokens: 4096,
 		});
-		const token = `${Buffer.from('{"alg":"HS256"}').toString("base64url")}.${Buffer.from(
-			JSON.stringify({ sub: "auth0|team-cache-fixture", iat: 1_800_000_000, exp: 4_000_000_000 }),
-		).toString("base64url")}.sig`;
 		const auth = await discoverAuthStorage(config.agentDir, { cwd: config.cwdA });
 		try {
-			await auth.credentials.set("cursor", {
-				type: "oauth",
-				access: token,
-				refresh: "isolated-team-cache-refresh",
-				expires: 4_000_000_000_000,
-			});
+			await auth.credentials.set("opencode-go", { type: "api_key", key: token });
 		} finally {
 			auth.close();
 		}
-		const cacheProviderId = cursorModelManagerOptions({ apiKey: token }).cacheProviderId;
-		if (!cacheProviderId) throw new Error("Expected credential-scoped Cursor cache namespace");
-		writeModelCache(
-			cacheProviderId,
-			Date.now(),
-			[cached],
-			true,
-			fingerprintStaticModels(getBundledModels("cursor"), { authoritative: true }),
-			getModelDbPath(config.agentDir),
-		);
+		const cacheProviderId = resolveModelCacheProviderId("opencode-go", { apiKey: token });
+		writeModelCache(cacheProviderId, Date.now(), [cached], true, "", getModelDbPath(config.agentDir));
 		// 冷入口必须像 SDK 一样离线恢复账号缓存；读取模型不能靠创建会话或联网刷新补齐。
 		await using peer = new ProcessPeer(config.cwdA, { ...config.env, OMP_OFFLINE: "1" });
 		await peer.ready();
@@ -575,7 +566,7 @@ describe("ZCode actual public app-server process", () => {
 		);
 		if (models.operation !== "get_team_models") throw new Error("Expected Team models");
 		expect(models.data.models).toContainEqual({
-			model: { provider: "cursor", modelId: cached.id },
+			model: { provider: "opencode-go", modelId: cached.id },
 			name: cached.name,
 			selectable: true,
 		});

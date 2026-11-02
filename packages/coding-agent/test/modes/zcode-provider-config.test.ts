@@ -20,7 +20,7 @@ async function fixture(baseUrl = "http://localhost:1234/v1") {
 	const modelsPath = join(dir, "models.yml");
 	await writeFile(
 		modelsPath,
-		`providers:\n  local-test:\n    baseUrl: ${baseUrl}\n    apiKey: secret-one\n    api: openai-completions\n    models:\n      - id: model-a\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: ${baseUrl}\n    apiKey: secret-one\n    api: openai-completions\n    models:\n      - id: model-a\n        reasoning: false\n`,
 	);
 	const settings = Settings.isolated();
 	const auth = await AuthStorage.create(":memory:");
@@ -90,17 +90,17 @@ describe("ZCode provider configuration consumer", () => {
 		try {
 			const config = new ZCodeProviderConfiguration({ records: () => [other, f] });
 			const before = await readFile(f.modelsPath, "utf8");
-			const model = f.modelRegistry.find("local-test", "model-a");
+			const model = f.modelRegistry.find("deepseek", "model-a");
 			const role = f.settings.getModelRole("default");
 			expect(model).toBeDefined();
 			expect(
 				await config.testModelConnectivity({
 					workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
-					selection: { providerId: "local-test", modelId: "model-a" },
+					selection: { providerId: "deepseek", modelId: "model-a" },
 				}),
 			).toEqual({ success: true });
 			expect(endpoint.authorization).toBe("Bearer secret-one");
-			expect(f.modelRegistry.find("local-test", "model-a")).toBe(model);
+			expect(f.modelRegistry.find("deepseek", "model-a")).toBe(model);
 			expect(f.settings.getModelRole("default")).toBe(role);
 			expect(await readFile(f.modelsPath, "utf8")).toBe(before);
 			expect(await f.modelRegistry.getApiKey(model!)).toBe("secret-one");
@@ -118,7 +118,7 @@ describe("ZCode provider configuration consumer", () => {
 				await expect(
 					config.testModelConnectivity({
 						workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
-						selection: { providerId: "local-test", modelId: "model-a" },
+						selection: { providerId: "deepseek", modelId: "model-a" },
 					}),
 				).rejects.toThrow(mode === "empty" ? "no completion text" : "Invalid test API key");
 			} finally {
@@ -134,7 +134,7 @@ describe("ZCode provider configuration consumer", () => {
 			const config = new ZCodeProviderConfiguration({ records: () => [f] });
 			const params = {
 				workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
-				selection: { providerId: "local-test", modelId: "missing" },
+				selection: { providerId: "deepseek", modelId: "missing" },
 			};
 			await expect(config.testModelConnectivity(params)).rejects.toThrow("Unknown model");
 			await expect(config.testModelConnectivity({ ...params, extra: true })).rejects.toThrow();
@@ -152,10 +152,11 @@ describe("ZCode provider configuration consumer", () => {
 		await endpoint.server.stop(true);
 		const f = await fixture(endpoint.baseUrl);
 		const config = new ZCodeProviderConfiguration({ records: () => [f] });
+		expect(f.modelRegistry.find("deepseek", "model-a")).toBeDefined();
 		await expect(
 			config.testModelConnectivity({
 				workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
-				selection: { providerId: "local-test", modelId: "model-a" },
+				selection: { providerId: "deepseek", modelId: "model-a" },
 			}),
 		).rejects.toThrow();
 	});
@@ -179,7 +180,7 @@ describe("ZCode provider configuration consumer", () => {
 			const result = config.testModelConnectivity(
 				{
 					workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
-					selection: { providerId: "local-test", modelId: "model-a" },
+					selection: { providerId: "deepseek", modelId: "model-a" },
 				},
 				controller.signal,
 			);

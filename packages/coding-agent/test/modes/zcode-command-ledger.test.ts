@@ -693,7 +693,7 @@ describe("ZCode durable command facts", () => {
 	])("admits a native custom command exactly once: $name", async ({ name, result, known }) => {
 		const { manager, adapter } = await fixture();
 		const auth = await AuthStorage.create(":memory:");
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		auth.keys.setRuntime(model.provider, "isolated-native-command-test");
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		const registry = new ModelRegistry(auth, path.join(manager.getCwd(), "models.yml"), {
@@ -795,7 +795,7 @@ describe("ZCode durable command facts", () => {
 			payload: { text },
 		};
 		const auth = await AuthStorage.create(":memory:");
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		auth.keys.setRuntime(model.provider, "isolated-ledger-test");
 		const settings = Settings.isolated({ "compaction.enabled": false });
 		const registry = new ModelRegistry(auth, path.join(manager.getCwd(), "models.yml"), {

@@ -32,7 +32,7 @@ type Job = {
 	output?: string;
 	error?: string;
 };
-const model = { providerId: "tan-local", modelId: "tan-chat" };
+const model = { providerId: "deepseek", modelId: "deepseek-v4-flash" };
 function textContent(content: unknown): string {
 	if (typeof content === "string") return content;
 	return Array.isArray(content)
@@ -297,11 +297,11 @@ async function fixture(root: TempDir) {
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  tan-local:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: tan-chat\n        reasoning: false\n      - id: tan-other\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: deepseek-v4-flash\n        reasoning: false\n      - id: deepseek-v4-pro\n        reasoning: false\n`,
 	);
 	await fs.writeFile(
 		path.join(agentDir, "config.yml"),
-		"modelRoles:\n  default: tan-local/tan-chat\n  smol: tan-local/tan-chat\nasync:\n  enabled: true\ncompaction:\n  enabled: false\n  keepRecentTokens: 1\n  experimentalContextManagement: false\ntools:\n  xdev: false\n  approval:\n    write: allow\n    bash: allow\n",
+		"modelRoles:\n  default: deepseek/deepseek-v4-flash\n  smol: deepseek/deepseek-v4-flash\nasync:\n  enabled: true\ncompaction:\n  enabled: false\n  keepRecentTokens: 1\n  experimentalContextManagement: false\ntools:\n  xdev: false\n  approval:\n    write: allow\n    bash: allow\n",
 	);
 	const profileDir = path.join(configRoot, "profiles", "beta", "agent");
 	await fs.mkdir(profileDir, { recursive: true });
@@ -810,7 +810,7 @@ for (const phase of ["busy", "compacting", "held"] as const) {
 			// 冒号是原生命令分隔符；通用入口必须先识别 Tan，不能先抢占父轮次、改模型或要求处置 held queue。
 			const reply = await prompt(peer, parent, "/tan:TAN_CHILD_COLON", {
 				requestedDelivery: "startNow",
-				modelSelection: { providerId: "tan-local", modelId: "tan-other" },
+				modelSelection: { providerId: "deepseek", modelId: "deepseek-v4-pro" },
 			});
 			expect(reply).toMatchObject({ status: "accepted" });
 			const dispatched = await until(
@@ -823,7 +823,7 @@ for (const phase of ["busy", "compacting", "held"] as const) {
 			expect(await fs.readFile(path.join(f.cwd, "TAN_CHILD_COLON.txt"), "utf8")).toBe("TAN_CHILD_COLON");
 			const after = await recover(peer, parent, "desktop-continuous");
 			expect(after.config.modelSelection).toEqual(original.config.modelSelection);
-			expect(f.requests.every(request => request.model === "tan-chat")).toBe(true);
+			expect(f.requests.every(request => request.model === "deepseek-v4-flash")).toBe(true);
 			if (phase === "busy") {
 				expect(f.aborted.has("TAN_PARENT_BUSY")).toBe(false);
 				expect((await state(peer, parent)).projection.status).not.toBe("idle");

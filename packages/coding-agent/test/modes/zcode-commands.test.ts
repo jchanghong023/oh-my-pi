@@ -752,12 +752,12 @@ describe("ZCode session interactions", () => {
 	it("runs native extensions, enforces Loop/Dev exclusion and controls Goal without model fallback", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-native-command-"));
 		const authStorage = await AuthStorage.create(":memory:");
-		authStorage.keys.setRuntime("anthropic", "native-command-test-key");
+		authStorage.keys.setRuntime("ascend", "native-command-test-key");
 		const mock = createMockModel({ responses: [{ content: ["first answer"] }, { content: ["second answer"] }] });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: {
-				model: getBundledModel("anthropic", "claude-sonnet-4-5")!,
+				model: getBundledModel("ascend", "qwen3.8-flash-next")!,
 				systemPrompt: ["Test"],
 				tools: [],
 			},
@@ -908,7 +908,7 @@ describe("ZCode session interactions", () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-goal-control-"));
 			const authStorage = await AuthStorage.create(":memory:");
 			// AgentSession 在 prompt admission 时也校验 registry auth；不能只给 Agent.getApiKey。
-			authStorage.keys.setRuntime("anthropic", "zcode-goal-test-key");
+			authStorage.keys.setRuntime("ascend", "zcode-goal-test-key");
 			const started = Promise.withResolvers<void>();
 			const release = Promise.withResolvers<void>();
 			const providerStopped = Promise.withResolvers<void>();
@@ -938,7 +938,7 @@ describe("ZCode session interactions", () => {
 			const agent = new Agent({
 				getApiKey: () => "test-key",
 				initialState: {
-					model: getBundledModel("anthropic", "claude-sonnet-4-5")!,
+					model: getBundledModel("ascend", "qwen3.8-flash-next")!,
 					systemPrompt: ["Test"],
 					tools: [],
 				},

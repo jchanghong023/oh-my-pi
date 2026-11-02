@@ -47,8 +47,8 @@ describe("libkitty end-to-end", () => {
 		cfgStartupQuiet.set(Settings.instance, false);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
+		if (!model) throw new Error("Expected ascend/qwen3.8-flash-next to exist in registry");
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
@@ -371,8 +371,8 @@ describe("libkitty end-to-end", () => {
 				{ type: "toolCall", id: "draft-tool", name: "bash", arguments: { command: "echo DRAFT_TOOL_MARKER" } },
 			],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "toolUse",
 			timestamp: 2,
@@ -538,8 +538,8 @@ describe("libkitty end-to-end", () => {
 			role: "assistant",
 			content: [{ type: "text", text }],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "stop",
 			timestamp: 1,
@@ -552,8 +552,8 @@ describe("libkitty end-to-end", () => {
 				{ type: "text", text: "First visible answer." },
 			],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "stop",
 			timestamp: 1,
@@ -615,8 +615,8 @@ describe("libkitty end-to-end", () => {
 			role: "assistant",
 			content: [{ type: "toolCall", id: callId, name: "bash", arguments: { command: `printf ${TOOL_MARKER}` } }],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "toolUse",
 			timestamp: 1,
@@ -633,8 +633,8 @@ describe("libkitty end-to-end", () => {
 			role: "assistant",
 			content: [{ type: "text", text }],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "stop",
 			timestamp: 3,
@@ -708,8 +708,8 @@ describe("libkitty end-to-end", () => {
 				{ type: "text", text: answer.join("\n") },
 			],
 			api: "anthropic-messages",
-			provider: "anthropic",
-			model: "claude-sonnet",
+			provider: "ascend",
+			model: "qwen3.8-flash-next",
 			usage,
 			stopReason: "stop",
 			timestamp: 1,

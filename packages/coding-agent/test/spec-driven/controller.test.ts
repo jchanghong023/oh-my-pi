@@ -1013,7 +1013,7 @@ test("cancelled native jobs block control and new work until actual owner-tree s
 	await f.owner.new("request");
 	const manager = new AsyncJobManager({ maxRunningJobs: 100 });
 	const auth = createInMemoryAuthStorage();
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+	const model = getBundledModel("deepseek", "deepseek-v4-flash");
 	if (!model) throw new Error("expected bundled model");
 	const rootId = `settlement-${crypto.randomUUID()}`;
 	const native = new AgentSession({

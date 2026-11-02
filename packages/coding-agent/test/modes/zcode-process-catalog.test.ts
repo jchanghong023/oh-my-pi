@@ -33,12 +33,15 @@ describe("ZCode actual public app-server process", () => {
 		await using root = await TempDir.create("@zcode-workspace-catalog-");
 		await using config = await fixture(root, true);
 		const env = { ...config.env, OMP_OFFLINE: "1" };
-		await fs.appendFile(path.join(config.agentDir, "models.yml"), "  azure:\n    apiKey: isolated-catalog-key\n");
-		const bundled = getBundledModels("azure");
+		await fs.appendFile(
+			path.join(config.agentDir, "models.yml"),
+			"  opencode-go:\n    apiKey: isolated-catalog-key\n",
+		);
+		const bundled = getBundledModels("opencode-go");
 		expect(bundled.length).toBeGreaterThan(0);
 		const staleModels = bundled.map(candidate => buildModel({ ...candidate, name: `Stale cache: ${candidate.id}` }));
 		writeModelCache(
-			"azure",
+			"opencode-go",
 			1,
 			staleModels,
 			false,
@@ -63,7 +66,7 @@ describe("ZCode actual public app-server process", () => {
 							cacheDbPath: ${JSON.stringify(getModelDbPath(config.agentDir))},
 						});
 						await registry.refresh("offline");
-						const offlineRows = registry.getAvailableForProviders(new Set(["azure"]))
+						const offlineRows = registry.getAvailableForProviders(new Set(["opencode-go"]))
 							.map(model => ({ value: model.provider + "/" + model.id, name: model.name }))
 							.sort((a, b) => a.value.localeCompare(b.value));
 						process.stdout.write(JSON.stringify(offlineRows));
@@ -82,6 +85,7 @@ describe("ZCode actual public app-server process", () => {
 			stderr: "",
 		});
 		const offlineRows = JSON.parse(referenceStdout) as Array<{ value: string; name: string }>;
+		expect(offlineRows.length).toBeGreaterThan(0);
 		const skillDir = path.join(config.cwdA, ".omp", "skills", "zcode-process-fixture");
 		await fs.mkdir(skillDir, { recursive: true });
 		await fs.writeFile(
@@ -111,21 +115,21 @@ describe("ZCode actual public app-server process", () => {
 			throw new Error("Isolated workspace catalog did not produce a complete initial snapshot");
 		}
 		const modelOption = physical.frame.payload.snapshot.config.configOptions.find(option => option.id === "model");
-		expect(modelOption?.currentValue).toBe("zcode-fixture/chat-a");
+		expect(modelOption?.currentValue).toBe("deepseek/chat-a");
 		expect(modelOption?.options).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
-					value: "zcode-fixture/chat-a",
-					modelProviderId: "zcode-fixture",
-					modelProviderName: "zcode-fixture",
+					value: "deepseek/chat-a",
+					modelProviderId: "deepseek",
+					modelProviderName: "deepseek",
 					origin: "native",
 					modelThoughtLevels: ["disabled"],
 				}),
-				expect.objectContaining({ value: "zcode-fixture/chat-b" }),
+				expect.objectContaining({ value: "deepseek/chat-b" }),
 			]),
 		);
 		const workspaceRows = (modelOption?.options ?? [])
-			.filter(option => option.modelProviderId === "azure")
+			.filter(option => option.modelProviderId === "opencode-go")
 			.map(option => ({ value: option.value, name: option.name }))
 			.sort((a, b) => a.value.localeCompare(b.value));
 		expect(workspaceRows).toEqual(offlineRows);
@@ -199,10 +203,10 @@ describe("ZCode actual public app-server process", () => {
 		const residentModelOption = resident.frame.payload.snapshot.config.configOptions.find(
 			option => option.id === "model",
 		);
-		expect(residentModelOption?.currentValue).toBe("zcode-fixture/chat-a");
+		expect(residentModelOption?.currentValue).toBe("deepseek/chat-a");
 		expect(residentModelOption?.options).toEqual(modelOption?.options);
 		const residentRows = (residentModelOption?.options ?? [])
-			.filter(option => option.modelProviderId === "azure")
+			.filter(option => option.modelProviderId === "opencode-go")
 			.map(option => ({ value: option.value, name: option.name }))
 			.sort((a, b) => a.value.localeCompare(b.value));
 		expect(residentRows).toEqual(offlineRows);
@@ -393,7 +397,7 @@ describe("ZCode actual public app-server process", () => {
 		}
 		const options =
 			wire.frame.payload.snapshot.config.configOptions.find(option => option.id === "model")?.options ?? [];
-		expect(options).toContainEqual(expect.objectContaining({ value: "zcode-fixture/chat-a", origin: "native" }));
+		expect(options).toContainEqual(expect.objectContaining({ value: "deepseek/chat-a", origin: "native" }));
 		expect(
 			options.some(
 				option => option.modelProviderId === "host-injected" || option.modelProviderId === "host-personal",

@@ -32,6 +32,7 @@ interface CompanyProbe {
 	ignoredPolicyWarnings: string[];
 	gatewayResolverKey: string;
 	gatewayCustomId: string;
+	gatewayRejectedId: unknown;
 	requests: number;
 }
 
@@ -130,13 +131,16 @@ function runCompanyProbe(): CompanyProbe {
 				result.gatewayModelKey = await gateway.getApiKey(model);
 				result.gatewayProviderKey = await gateway.getApiKeyForProvider("company");
 				result.gatewayResolverKey = await resolveApiKeyOnce(gateway.resolver(model));
-				gateway.registerProvider("custom-gateway", {
+				const gatewayConfig = {
 					api: "anthropic-messages", baseUrl: "https://broker.invalid", apiKey: "broker-custom-token",
 					models: [{ id: "broker-custom-model", name: "Broker model", reasoning: false,
 						input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 						contextWindow: 1000, maxTokens: 100 }],
-				}, "broker://fixture");
-				result.gatewayCustomId = gateway.find("custom-gateway", "broker-custom-model")?.id;
+				};
+				gateway.registerProvider("deepseek", gatewayConfig, "broker://fixture");
+				result.gatewayCustomId = gateway.find("deepseek", "broker-custom-model")?.id;
+				gateway.registerProvider("custom-gateway", gatewayConfig, "broker://unsupported");
+				result.gatewayRejectedId = gateway.find("custom-gateway", "broker-custom-model")?.id;
 				const { rmSync, writeFileSync } = await import("node:fs");
 				const ignoredFile = ${JSON.stringify(path.join(home, "ignored-models.json"))};
 				writeFileSync(ignoredFile, JSON.stringify({ providers: {
@@ -232,6 +236,7 @@ describe("company runtime catalog and request auth", () => {
 		expect(result.gatewayProviderKey).toBe(result.gatewayModelKey);
 		expect(result.gatewayResolverKey).toBe(result.gatewayModelKey);
 		expect(result.gatewayCustomId).toBe("broker-custom-model");
+		expect(result.gatewayRejectedId).toBeUndefined();
 		expect(result.ignoredPolicyError).toBeUndefined();
 		expect(result.ignoredPolicyWarnings).toHaveLength(1);
 	}, 30_000);

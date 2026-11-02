@@ -81,7 +81,7 @@ async function runModels(
 			extensionFile,
 			`
 			export default function (pi) {
-				pi.registerProvider("offline-extension", {
+				pi.registerProvider("opencode-go", {
 					api: "anthropic-messages", baseUrl: "https://extension.invalid", apiKey: "extension-fixture-key",
 					fetchDynamicModels: async () => {
 						process.stderr.write("UNEXPECTED_EXTENSION_DISCOVERY\\n");
@@ -101,8 +101,8 @@ async function runModels(
 				// Absolute imports keep the cache writer isolated from the working directory.
 				const { buildModel } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/build.ts"))});
 				const { writeModelCache, closeModelCache } = await import(${JSON.stringify(path.join(import.meta.dir, "../../catalog/src/model-cache.ts"))});
-				writeModelCache("offline-extension", Date.now() - 48 * 60 * 60 * 1000, [buildModel({
-					provider: "offline-extension", id: "cached-model", name: "Cached model",
+				writeModelCache("opencode-go", Date.now() - 48 * 60 * 60 * 1000, [buildModel({
+					provider: "opencode-go", id: "cached-model", name: "Cached model",
 					api: "anthropic-messages", baseUrl: "https://extension.invalid", reasoning: false,
 					input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 					contextWindow: 10000, maxTokens: 1000,
@@ -222,14 +222,15 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 					extensionCache,
 					offline: true,
 				});
-				expect(providers.has("offline-extension")).toBe(extensionCache === "warm");
-				expect(selectors.includes("offline-extension/cached-model")).toBe(extensionCache === "warm");
+				expect(providers.has("company")).toBe(true);
+				if (extensionCache === "warm") expect(providers.has("opencode-go")).toBe(true);
+				expect(selectors.includes("opencode-go/cached-model")).toBe(extensionCache === "warm");
 			}, 30_000);
 		}
 	}
 
 	it("keeps an extension selector miss cache-only", async () => {
-		const { selectors } = await runModels(["find", "offline-extension/missing", "--json"], {
+		const { selectors } = await runModels(["find", "opencode-go/missing", "--json"], {
 			companyConfig: true,
 			extensionCache: "warm",
 			offline: true,

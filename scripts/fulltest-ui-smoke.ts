@@ -8,7 +8,7 @@
 // final phase of `bun run fulltest`.
 //
 // A second PTY case exercises `/team` end to end: the TUI starts against the
-// fixture's `smoke` provider configured with a local Anthropic Messages server
+// fixture's `deepseek` provider configured with a local Anthropic Messages server
 // that answers every stage marker with a schema-valid `yield` tool call, and
 // the run must reach the observable final report in the transcript.
 // A separate PTY case runs /repo against a temporary Python project and a
@@ -396,6 +396,7 @@ if (process.argv.includes("--startup-only")) {
 // stage data, so the full five-stage orchestrator runs for real and the final
 // report must land in the transcript.
 const TEAM_PROFILE = "localci-ui-team";
+const TEAM_MODEL = "deepseek/glm-5.2";
 const teamConfigRoot = await fs.mkdtemp(path.join(os.homedir(), ".omp-fulltest-team-smoke-"));
 stubServerCleanup.run = () => removeFixture(teamConfigRoot);
 const TEAM_CONFIG_DIR_NAME = path.basename(teamConfigRoot);
@@ -795,8 +796,8 @@ try {
 		[
 			"team:",
 			"  members:",
-			"    - smoke/glm-5.2",
-			"    - smoke/glm-4.6",
+			"    - deepseek/glm-5.2",
+			"    - deepseek/glm-4.6",
 			"tools:",
 			"  approval:",
 			"    write: allow",
@@ -810,7 +811,7 @@ try {
 		path.join(profileAgentDir, "models.yml"),
 		Bun.YAML.stringify({
 			providers: {
-				smoke: {
+				deepseek: {
 					api: "anthropic-messages",
 					baseUrl: `http://127.0.0.1:${stubServer.port}`,
 					apiKey: "smoke-fixture-key",
@@ -835,7 +836,7 @@ try {
 	);
 
 	console.log("ui-smoke: starting /team TUI case…");
-	const team = startTui(["--profile", TEAM_PROFILE, "--model", "smoke/glm-5.2"], {
+	const team = startTui(["--profile", TEAM_PROFILE, "--model", TEAM_MODEL], {
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
 		// Keep host offline defaults out of this fixture.
 		OMP_OFFLINE: "",
@@ -990,7 +991,7 @@ try {
 	console.log("ui-smoke: starting /team cancellation case…");
 	slowTeamStagesMs = 6_000;
 	const requestsBeforeCancel = stubRequests.length;
-	const cancelTui = startTui(["--profile", TEAM_PROFILE, "--model", "smoke/glm-5.2"], {
+	const cancelTui = startTui(["--profile", TEAM_PROFILE, "--model", TEAM_MODEL], {
 		PI_CONFIG_DIR: TEAM_CONFIG_DIR_NAME,
 		OMP_OFFLINE: "",
 		OMP_PROFILE: TEAM_PROFILE,

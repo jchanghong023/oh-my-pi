@@ -7,7 +7,7 @@ import { LegacyProtocol as L, ompTeamConfigureResultSchema } from "../../src/mod
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 
 type Frame = Record<string, unknown>;
-const selection = { providerId: "workspace-local", modelId: "helper" };
+const selection = { providerId: "deepseek", modelId: "helper" };
 async function bounded<T>(promise: Promise<T>): Promise<T> {
 	const deadline = Promise.withResolvers<never>();
 	const timer = setTimeout(() => deadline.reject(new Error("Workspace CLI timed out")), 30_000);
@@ -196,12 +196,12 @@ async function fixture(root: TempDir) {
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  workspace-local:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: apiKey\n    apiKey: fixture-local-only\n    api: openai-completions\n    models:\n      - id: helper\n        reasoning: false\n`,
+		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: apiKey\n    apiKey: fixture-local-only\n    api: openai-completions\n    models:\n      - id: helper\n        reasoning: false\n`,
 	);
 	const configFile = path.join(agentDir, "config.yml");
 	await fs.writeFile(
 		configFile,
-		"modelRoles:\n  default: workspace-local/helper\n  smol: workspace-local/helper\ntools:\n  xdev: false\n",
+		"modelRoles:\n  default: deepseek/helper\n  smol: deepseek/helper\ntools:\n  xdev: false\n",
 	);
 	return {
 		cwd,

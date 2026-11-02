@@ -32,7 +32,7 @@ afterEach(() => {
 	vi.restoreAllMocks();
 });
 
-const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+const MODEL: Model = getBundledModel("ascend", "minimax2.7")!;
 const MODEL_PATTERN = `${MODEL.provider}/${MODEL.id}`;
 
 interface JobManagerStub {

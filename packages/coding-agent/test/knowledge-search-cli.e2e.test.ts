@@ -30,7 +30,7 @@ describe("knowledge_search CLI without source files", () => {
 		"--print",
 		"--no-session",
 		"--model",
-		"smoke/glm-5.2",
+		"deepseek/glm-5.2",
 		"--tools",
 		"knowledge_search",
 		"Retrieve all matching evidence from knowledge_search, continuing until exhausted.",
@@ -148,7 +148,7 @@ describe("knowledge_search CLI without source files", () => {
 			path.join(agentDir, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
-					smoke: {
+					deepseek: {
 						api: "anthropic-messages",
 						baseUrl: `http://127.0.0.1:${server.port}`,
 						apiKey: "smoke-fixture-key",

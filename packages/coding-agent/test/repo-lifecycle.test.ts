@@ -140,6 +140,7 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			},
 		});
 		const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
+		auth.keys.setRuntime("ollama", "repo-fixture-key");
 		const registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"));
 		const { session } = await createAgentSession({
 			cwd,
@@ -378,6 +379,7 @@ describe("repository lifecycle coverage across session and background execution 
 			await fs.writeFile(file, "def legacy_decoder(): return 'RETIRED_CIPHER'\n");
 			const service = new RepoService({ cwd, agentDir });
 			const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
+			auth.keys.setRuntime("ollama", "repo-fixture-key");
 			try {
 				await service.build();
 				const mutation =
@@ -938,6 +940,7 @@ describe("repository lifecycle coverage across session and background execution 
 			},
 		});
 		const auth = await AuthStorage.create(path.join(agentDir, "auth.db"));
+		auth.keys.setRuntime("ollama", "repo-fixture-key");
 		const registry = new ModelRegistry(auth, path.join(agentDir, "models.yml"));
 		const { session } = await createAgentSession({
 			cwd,

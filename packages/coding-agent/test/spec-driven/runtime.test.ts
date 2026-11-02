@@ -59,10 +59,10 @@ async function consumer(
 		await setup?.(cwd);
 		await fs.writeFile(
 			path.join(agentDir, "models.yml"),
-			`providers:\n  spec-fixture:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 1000000\n`,
+			`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 1000000\n`,
 		);
 		const settings = Settings.isolated({
-			modelRoles: { default: "spec-fixture/chat-a", smol: "spec-fixture/chat-a" },
+			modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
 			"compaction.enabled": false,
 			"prewalk.enabled": false,
 			"tools.xdev": false,
@@ -72,7 +72,7 @@ async function consumer(
 			"mcp.startupTimeoutMs": 0,
 		});
 		const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
-		const model = registry.find("spec-fixture", "chat-a");
+		const model = registry.find("deepseek", "chat-a");
 		if (!model) throw new Error("Local runtime fixture model unavailable");
 		({ session } = await createAgentSession({
 			cwd,
@@ -366,7 +366,7 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 	await using fixture = await consumer({ reply: () => ({ text: "方案讨论完成。" }) });
 	cfgTeamMembers.set(
 		fixture.settings,
-		Array.from({ length: 4 }, () => "spec-fixture/chat-a"),
+		Array.from({ length: 4 }, () => "deepseek/chat-a"),
 	);
 	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
 	const paths = await fixture.runtime.ports.artifacts.initialize("team-entry-native", context);
@@ -470,7 +470,7 @@ test("solution Team uses the visible session model for participant slots and syn
 	await fixture.runtime.ports.artifacts.initialize("team-model-owner", context);
 	await fixture.runtime.ports.agents.prepare("solution", context);
 	const solution = fixture.runtime.nativeSession("solution")!;
-	const selected = fixture.registry.find("spec-fixture", "chat-b");
+	const selected = fixture.registry.find("deepseek", "chat-b");
 	if (!selected) throw new Error("Solution fixture model unavailable");
 	await solution.setModelTemporary(selected);
 	expect(fixture.session.model?.id).toBe("chat-a");
@@ -563,7 +563,7 @@ test("solution Team uses the visible session model for participant slots and syn
 		expect(calls.filter(call => call.role === "proposer")).toHaveLength(3);
 		expect(calls.some(call => call.role === "aligner")).toBe(true);
 		expect(calls.some(call => call.role === "synthesizer")).toBe(true);
-		expect(calls.every(call => call.modelPattern === "spec-fixture/chat-b")).toBe(true);
+		expect(calls.every(call => call.modelPattern === "deepseek/chat-b")).toBe(true);
 		await fixture.runtime.ports.agents.run({ ...input, entry: false, feedback: "解释风险" }, context);
 		expect(fixture.runtime.nativeSession("solution")).toBe(solution);
 		expect(discussion).toHaveBeenCalledTimes(1);
@@ -615,7 +615,7 @@ test("stage model selection survives native history restoration", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "澄清需求。" }) });
 	await fixture.orchestrator.start("恢复阶段模型", "restore-stage-model");
 	const stage = fixture.runtime.nativeSession("requirements")!;
-	const selected = fixture.registry.find("spec-fixture", "chat-b");
+	const selected = fixture.registry.find("deepseek", "chat-b");
 	if (!selected) throw new Error("Fixture model unavailable");
 	await stage.setModel(selected);
 	await stage.sessionManager.flush();
@@ -1261,7 +1261,7 @@ test("executor seance discovers and reads all bundled Superpowers without changi
 										task: parent,
 										solutionSpace: "inspect historical context",
 										sourceSession: sourceFile,
-										model: ["spec-fixture/chat-a"],
+										model: ["deepseek/chat-a"],
 									},
 								],
 							},

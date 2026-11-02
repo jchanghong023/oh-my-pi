@@ -571,9 +571,9 @@ describe("ZCode actual public app-server process", () => {
 			const state = payload.kind === "snapshot" ? payload.snapshot.config : payload.deltas.at(-1)!.config;
 			return state.configOptions.find(option => option.id === "model")!;
 		};
-		const initial = await readModelOption("zcode-fixture/chat-a", true);
+		const initial = await readModelOption("deepseek/chat-a", true);
 		if (!initial.options) throw new Error("Native model selector did not expose its catalog options");
-		expect(initial.options.map(option => option.value)).toContain("zcode-fixture/chat-b");
+		expect(initial.options.map(option => option.value)).toContain("deepseek/chat-b");
 		// 临时会话选 B 不能覆盖 workspace 持久 default=A。
 		const sessionId = await create(peer, config.cwdA, { providerId: model.providerId, modelId: "chat-b" });
 		expect((await peer.requestFrame("provider/refreshRegistry", { reason: "native-catalog" })).error).toMatchObject({
@@ -590,9 +590,9 @@ describe("ZCode actual public app-server process", () => {
 		// 外部原生配置写入必须推送 config.updated，不依赖重连或切换会话。
 		await fs.writeFile(
 			path.join(config.agentDir, "config.yml"),
-			"modelRoles:\n  default: zcode-fixture/chat-b\ntools:\n  xdev: false\nskills:\n  enabled: false\n",
+			"modelRoles:\n  default: deepseek/chat-b\ntools:\n  xdev: false\nskills:\n  enabled: false\n",
 		);
-		expect((await readModelOption("zcode-fixture/chat-b")).currentValue).toBe("zcode-fixture/chat-b");
+		expect((await readModelOption("deepseek/chat-b")).currentValue).toBe("deepseek/chat-b");
 		const modelsPath = path.join(config.agentDir, "models.yml");
 		await fs.appendFile(modelsPath, "      - id: chat-hot\n        reasoning: false\n");
 		const changed = await peer.next(
@@ -600,7 +600,7 @@ describe("ZCode actual public app-server process", () => {
 				item.method === "v4/conversation/frame" &&
 				isRecord(item.params) &&
 				item.params.topic === topic &&
-				JSON.stringify(item.params).includes("zcode-fixture/chat-hot"),
+				JSON.stringify(item.params).includes("deepseek/chat-hot"),
 		);
 		const wire = workspaceConfigTopicWireFrameSchema.parse(changed.params);
 		expect(wire.kind).toBe("complete");

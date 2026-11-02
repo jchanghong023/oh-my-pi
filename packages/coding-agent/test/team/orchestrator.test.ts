@@ -36,9 +36,9 @@ function participantOf(model: Model, index: number, isSessionModel = false): Tea
 	return { index, modelPattern: `${model.provider}/${model.id}`, model, isSessionModel };
 }
 
-const MODEL_A = getBundledModel("anthropic", "claude-sonnet-4-5")!;
-const MODEL_B = getBundledModel("anthropic", "claude-opus-4-6")!;
-const MODEL_C = getBundledModel("openai", "gpt-5")!;
+const MODEL_A = getBundledModel("ascend", "qwen3.8-27b")!;
+const MODEL_B = getBundledModel("ascend", "qwen3.8-flash-next")!;
+const MODEL_C = getBundledModel("openai-codex", "gpt-6.1-sol")!;
 const PATTERN_A = `${MODEL_A.provider}/${MODEL_A.id}`;
 const PATTERN_B = `${MODEL_B.provider}/${MODEL_B.id}`;
 const PATTERN_C = `${MODEL_C.provider}/${MODEL_C.id}`;

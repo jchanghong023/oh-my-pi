@@ -64,7 +64,7 @@ describe("ModelRegistry", () => {
 	test("warns once for unknown compat keys without disabling models or corrupting JSON output", async () => {
 		const modelsPath = path.join(tmpDir, "models.yaml");
 		const content = `providers:
-  custom:
+  deepseek:
     baseUrl: https://example.test/v1
     auth: none
     api: openai-completions
@@ -86,7 +86,7 @@ describe("ModelRegistry", () => {
 		await registry.refresh("offline");
 		const listing = await listModels();
 		expect(registry.getError()).toBeUndefined();
-		expect(registry.find("custom", "custom-model")?.compatConfig).toMatchObject({
+		expect(registry.find("deepseek", "custom-model")?.compatConfig).toMatchObject({
 			supportsStore: false,
 			supportsStroe: false,
 		});
@@ -94,7 +94,7 @@ describe("ModelRegistry", () => {
 		expect(listing.stderr.trim().split("\n")).toEqual(
 			["compat", "models.0.compat", "modelOverrides.custom-model.compat"].map(
 				location =>
-					`Warning: Unknown compat key in ${modelsPath}: providers.custom.${location}.supportsStroe (configuration still loaded).`,
+					`Warning: Unknown compat key in ${modelsPath}: providers.deepseek.${location}.supportsStroe (configuration still loaded).`,
 			),
 		);
 
@@ -110,7 +110,7 @@ describe("ModelRegistry", () => {
 		await Bun.write(modelsPath, content.replace("supportsStroe", "supportsStorre"));
 		await registry.refresh("offline", { refreshCommandCredentials: true });
 		expect((await listModels()).stderr).toBe(
-			`Warning: Unknown compat key in ${modelsPath}: providers.custom.compat.supportsStorre (configuration still loaded).\n`,
+			`Warning: Unknown compat key in ${modelsPath}: providers.deepseek.compat.supportsStorre (configuration still loaded).\n`,
 		);
 	});
 

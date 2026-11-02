@@ -20,7 +20,7 @@ import {
 	type TeamTrackedFinding,
 } from "@oh-my-pi/pi-coding-agent/team";
 
-const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+const MODEL: Model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 
 const MARKERS = {
 	risk: "RISK-MARKER-7f3a",

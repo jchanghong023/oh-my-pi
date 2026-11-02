@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai/types";
+import type { AssistantMessage } from "@oh-my-pi/pi-ai/types";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ZCodeModelIoRetention } from "../../src/modes/zcode/model-io";
 import { ArtifactManager } from "../../src/session/artifacts";
@@ -87,11 +87,11 @@ describe("ZCode model IO retention", () => {
 		cleanup.push(async () => {
 			server.stop(true);
 		});
+		const bundled = getBundledModel("deepseek", "deepseek-v4-flash");
+		if (!bundled) throw new Error("Expected bundled DeepSeek fixture model");
 		const model = {
-			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
+			...bundled,
 			api: "openai-completions" as const,
-			provider: "local",
-			id: "mock",
 			baseUrl: `http://127.0.0.1:${server.port}/v1`,
 		};
 		const authStorage = await AuthStorage.create(":memory:");
@@ -179,11 +179,8 @@ describe("ZCode model IO retention", () => {
 
 	it("ignores an old request terminal event after a new request is admitted for the same model", async () => {
 		const f = await fixture();
-		const model = {
-			...(getBundledModel("openai", "gpt-4o-mini") as Model<"openai-completions">),
-			provider: "local",
-			id: "mock",
-		};
+		const model = getBundledModel("deepseek", "deepseek-v4-flash");
+		if (!model) throw new Error("Expected bundled DeepSeek fixture model");
 		const oldSignal = new AbortController().signal;
 		const currentSignal = new AbortController().signal;
 		f.capture.setEnabled(true);

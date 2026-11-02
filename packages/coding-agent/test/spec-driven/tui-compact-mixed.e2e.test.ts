@@ -121,7 +121,11 @@ test("compact mixed long session preserves input, tool effects and peer messages
 		await withTui(
 			{
 				screenDiagnostics: true,
-				configuration: { ...workspace.configuration, async: { enabled: true } },
+				configuration: {
+					...workspace.configuration,
+					async: { enabled: true },
+					edit: { modelVariants: { "deepseek/chat-a": "hashline" } },
+				},
 				setup: async (cwd, agentDir) => {
 					await workspace.setup(cwd, agentDir);
 					const contains = (marker: string) => (text: string) => expect(text).toContain(marker);
@@ -803,7 +807,11 @@ test("retained real edit does not move when the next assistant stream is empty o
 		await withTui(
 			{
 				screenDiagnostics: true,
-				configuration: { display: { mode: "compact" }, hideThinkingBlock: true },
+				configuration: {
+					display: { mode: "compact" },
+					hideThinkingBlock: true,
+					edit: { modelVariants: { "deepseek/chat-a": "hashline" } },
+				},
 				setup: async cwd => {
 					await Promise.all([
 						Bun.write(path.join(cwd, "retained-edit.ts"), "const original = 0;\n"),

@@ -56,6 +56,7 @@
 
 ### Changed
 
+- Show short intents and bounded first-command previews in compact shell rows, link waits to their existing job identities and commands, and distinguish background submission from waiting time.
 - Read offline company credentials asynchronously alongside independent startup work while preserving one cached snapshot for workers and subprocesses.
 - Skip Claude plugin registry and cache discovery by default on every platform; explicit source opt-in, native OMP plugins, and `--plugin-dir` remain available.
 - Load shared and custom skills alongside other sources and avoid blocking per-skill existence checks on every platform, preserving skill precedence and refresh behavior.
@@ -158,6 +159,8 @@
 - Restore upstream Collab behavior, removing fork-specific guest command and lifecycle overrides.
 
 ### Fixed
+
+- Fix ZCode session creation and reads when a model's context or output limit is unknown.
 
 - Preserve offline company embedding and reranker configuration in knowledge workers so indexes created from the knowledge panel include available semantic vectors.
 

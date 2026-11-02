@@ -926,8 +926,8 @@ export class ZCodeServer {
 			ref: { providerId: candidate.provider, modelId: candidate.id },
 			label: candidate.name,
 			providerLabel: candidate.provider,
-			contextWindow: candidate.contextWindow,
-			maxOutputTokens: candidate.maxTokens,
+			...(candidate.contextWindow !== null ? { contextWindow: candidate.contextWindow } : {}),
+			...(candidate.maxTokens !== null ? { maxOutputTokens: candidate.maxTokens } : {}),
 			properties: {
 				inputFormat: {
 					supportsText: candidate.input.includes("text"),

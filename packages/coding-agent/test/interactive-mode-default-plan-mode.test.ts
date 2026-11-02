@@ -71,7 +71,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		cfgStartupQuiet.set(Settings.instance, true);
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("ascend", "test-key");
 	});
 
 	afterEach(async () => {
@@ -88,8 +88,8 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	});
 
 	function modelOrThrow(registry: ModelRegistry, id: string): Model<Api> {
-		const model = registry.find("anthropic", id);
-		if (!model) throw new Error(`Expected anthropic model ${id} to exist`);
+		const model = registry.find("ascend", id);
+		if (!model) throw new Error(`Expected ascend model ${id} to exist`);
 		return model;
 	}
 
@@ -100,7 +100,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 	 *  entries still have built-in provenance after extension shadowing. */
 	function createHarness(settings: Settings, options: HarnessOptions = {}): InteractiveMode {
 		const registry = new ModelRegistry(authStorage, path.join(tempDir.path(), `models-${Bun.nanoseconds()}.yml`));
-		const initialModel = modelOrThrow(registry, "claude-sonnet-4-5");
+		const initialModel = modelOrThrow(registry, "qwen3.8-flash-next");
 		const readTool = makeTool("read");
 		// AgentSession requires a Map-typed tool registry; `read` is the initial
 		// active tool. Plan approval is a `write` to xd://propose, so plan-mode
@@ -386,7 +386,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 
 	it("restores plan tool presentation when prior-model restoration fails", async () => {
 		const settings = Settings.isolated({ "plan.defaultOnStartup": true, "compaction.enabled": false });
-		settings.setModelRole("plan", "anthropic/claude-haiku-4-5:high");
+		settings.setModelRole("plan", "ascend/qwen3.8-27b:high");
 		const writeTool = makeTool("write");
 		const planSelectedTool = makeTool("plan_selected");
 		const mountedTool = makeMcpTool();
@@ -409,7 +409,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		const planTools = session!.getEnabledToolNames();
 		const planActiveTools = session!.getActiveToolNames();
 		const planMountedTools = session!.getMountedXdevToolNames();
-		expect(planModel?.id).toBe("claude-haiku-4-5");
+		expect(planModel?.id).toBe("qwen3.8-27b");
 		expect(session?.configuredThinkingLevel()).toBe(Effort.High);
 		expect(planActiveTools).toEqual(["read", "write", planSelectedTool.name]);
 		expect(planMountedTools).toEqual([mountedTool.name]);
@@ -482,13 +482,13 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			Settings.isolated({
 				"plan.defaultOnStartup": true,
 				"compaction.enabled": false,
-				modelRoles: { plan: "anthropic/claude-sonnet-4-6" },
+				modelRoles: { plan: "ascend/qwen3.8-27b" },
 			}),
 			{ extraRegistryTools: [writeTool], builtInToolNames: ["read", "write"] },
 		);
 		await created.init({ suppressWelcomeIntro: true });
 		expect(created.planModeEnabled).toBe(true);
-		expect(session?.model?.id).toBe("claude-sonnet-4-6");
+		expect(session?.model?.id).toBe("qwen3.8-27b");
 		const previousSessionFile = session?.sessionFile;
 
 		await created.handleClearCommand();
@@ -500,7 +500,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.getPlanModeState()).toBeUndefined();
 		expect(session?.peekPlanProposalHandler()).toBeUndefined();
 		expect(session?.getActiveToolNames()).toEqual(["read"]);
-		expect(session?.model?.id).toBe("claude-sonnet-4-5");
+		expect(session?.model?.id).toBe("qwen3.8-flash-next");
 	});
 
 	it("re-enters plan mode in the session /new starts when plan.defaultOnStartup is on (issue #15627)", async () => {
@@ -508,7 +508,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			Settings.isolated({
 				"plan.defaultOnStartup": true,
 				"compaction.enabled": false,
-				modelRoles: { plan: "anthropic/claude-sonnet-4-6" },
+				modelRoles: { plan: "ascend/qwen3.8-27b" },
 			}),
 		);
 		await created.init({ suppressWelcomeIntro: true });
@@ -521,7 +521,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		expect(session?.sessionManager.buildSessionContext().mode).toBe("plan");
 		expect(session?.getPlanModeState()?.enabled).toBe(true);
 		expect(session?.peekPlanProposalHandler()).toBeDefined();
-		expect(session?.model?.id).toBe("claude-sonnet-4-6");
+		expect(session?.model?.id).toBe("qwen3.8-27b");
 	});
 
 	it("enters only when enabled and the session has no conversation or explicit mode", () => {
@@ -547,7 +547,7 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 			path.join(tempDir.path(), `startup-decision-${Bun.nanoseconds()}`),
 		);
 		try {
-			manager.appendModelChange("anthropic/claude-sonnet-4-5");
+			manager.appendModelChange("ascend/qwen3.8-flash-next");
 			manager.appendThinkingLevelChange("medium");
 			manager.appendCustomEntry("my-extension-state", { foo: "bar" });
 			expect(shouldEnterPlanModeOnStartup(manager, enabled)).toBe(true);
@@ -567,16 +567,16 @@ describe("InteractiveMode plan.defaultOnStartup", () => {
 		const created = createHarness(
 			Settings.isolated({
 				"compaction.enabled": false,
-				modelRoles: { plan: "anthropic/claude-sonnet-4-6" },
+				modelRoles: { plan: "ascend/qwen3.8-27b" },
 			}),
 		);
-		created.sessionManager.appendModelChange("anthropic/claude-sonnet-4-5");
+		created.sessionManager.appendModelChange("ascend/qwen3.8-flash-next");
 		created.sessionManager.appendModeChange("plan", { planFilePath: "local://PLAN.md" });
 		created.sessionManager.appendMessage({ role: "user", content: "prior plan turn", timestamp: Date.now() });
 
 		await created.init({ suppressWelcomeIntro: true });
 
 		expect(created.planModeEnabled).toBe(true);
-		expect(session?.model?.id).toBe("claude-sonnet-4-5");
+		expect(session?.model?.id).toBe("qwen3.8-flash-next");
 	});
 });

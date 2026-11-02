@@ -1944,7 +1944,6 @@ describe("Settings", () => {
 			"google-gemini-cli/gemini-2.5-flash",
 			"google-antigravity/gemini-2.5-flash",
 			"google/gemini-2.5-flash",
-			"anthropic/claude-haiku-4-5",
 			"openai-codex/gpt-6-luna",
 			"xai/grok-4.5",
 			"web/exa",
@@ -1956,7 +1955,6 @@ describe("Settings", () => {
 		];
 		const webExcludedCandidates = MODEL_PRIO.web.filter(selector => selector !== "web/public");
 		const imageOrderedHead = [
-			"openai/gpt-image-2",
 			"openai-codex/gpt-image-2",
 			"google-antigravity/gemini-3-pro-image",
 			"xai/grok-imagine-image",

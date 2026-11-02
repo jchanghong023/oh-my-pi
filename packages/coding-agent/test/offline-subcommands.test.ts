@@ -51,7 +51,7 @@ async function fixture(
 		extension,
 		`
 		export default function (pi) {
-			pi.registerProvider("offline-subcommand-extension", {
+			pi.registerProvider("opencode-go", {
 				api: "anthropic-messages", baseUrl: "http://discovery.invalid", apiKey: "fixture-key",
 				fetchDynamicModels: async () => {
 					process.stderr.write("UNEXPECTED_EXTENSION_DISCOVERY\\n");
@@ -71,7 +71,7 @@ async function fixture(
 	const modelsPath = path.join(agentDir, "models.yml");
 	const modelsText = JSON.stringify({
 		providers: {
-			"review-local": {
+			ascend: {
 				api: "anthropic-messages",
 				baseUrl: options.visionUrl,
 				apiKey: "local-vision-key",
@@ -227,7 +227,7 @@ function anthropicCommitResponse(body: {
 
 describe("offline model-dependent subcommands", () => {
 	it("keeps shared SDK initialization off terminal streams when company configuration is invalid", async () => {
-		const f = await fixture({ modelRoles: { default: "review-local/vision" } });
+		const f = await fixture({ modelRoles: { default: "ascend/vision" } });
 		await fs.writeFile(f.companyPath, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "fixture-token" } }));
 		const sourceUrl = (file: string) =>
 			JSON.stringify(pathToFileURL(path.join(import.meta.dir, "../src", file)).href);
@@ -260,7 +260,7 @@ describe("offline model-dependent subcommands", () => {
 		expect(JSON.parse(result.stdout)).toEqual({
 			companyAvailable: false,
 			configError: true,
-			defaultRole: "review-local/vision",
+			defaultRole: "ascend/vision",
 		});
 		expect(result.stderr).toBe("");
 	}, 30_000);
@@ -431,7 +431,7 @@ describe("offline model-dependent subcommands", () => {
 			expect(requests).toBe(0);
 			const explicit = await fixture({
 				visionUrl: server.url.origin,
-				modelRoles: { commit: "review-local/vision" },
+				modelRoles: { commit: "ascend/vision" },
 			});
 			await stageCommitFixture(explicit.home, explicit.env);
 			const chosen = await explicit.run(["commit", "--dry-run", "--no-changelog"]);
@@ -439,7 +439,7 @@ describe("offline model-dependent subcommands", () => {
 			expect(chosen.stdout).toContain("vision");
 			expect(chosen.stdout).toContain("feat: added offline fixture");
 			expect(requests).toBe(2);
-			const override = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "review-local/vision"]);
+			const override = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"]);
 			expect(override.exitCode, `${override.stdout}\n${override.stderr}`).toBe(0);
 			expect(override.stdout).toContain("vision");
 			expect(override.stdout).toContain("feat: added offline fixture");
@@ -463,11 +463,7 @@ describe("offline model-dependent subcommands", () => {
 		try {
 			const f = await fixture({ offline: false, visionUrl: server.url.origin });
 			await stageCommitFixture(f.home, f.env);
-			const result = await f.run(
-				["commit", "--dry-run", "--no-changelog", "--model", "review-local/vision"],
-				CLI,
-				true,
-			);
+			const result = await f.run(["commit", "--dry-run", "--no-changelog", "--model", "ascend/vision"], CLI, true);
 			expect(result.exitCode, `${result.stdout}\n${result.stderr}`).toBe(0);
 			expect(result.stdout).toContain("vision");
 			expect(result.stdout).toContain("Generated commit message:");
@@ -573,9 +569,7 @@ describe("offline model-dependent subcommands", () => {
 				const f = await fixture({
 					visionUrl: server.url.origin,
 					modelRoles:
-						role === "vision"
-							? { vision: "review-local/vision" }
-							: { default: "@local", local: "review-local/vision" },
+						role === "vision" ? { vision: "ascend/vision" } : { default: "@local", local: "ascend/vision" },
 				});
 				const companyText = role === "default" ? "{ invalid JSON" : undefined;
 				if (companyText) await fs.writeFile(f.companyPath, companyText);
@@ -616,7 +610,7 @@ describe("offline model-dependent subcommands", () => {
 								modelRoles: {
 									vision: "@companyVision",
 									companyVision: "company/Qwen3.8-27B",
-									default: "review-local/vision",
+									default: "ascend/vision",
 								},
 							}
 						: {}),
@@ -732,7 +726,7 @@ describe("offline model-dependent subcommands", () => {
 			expect(summary.model).toBe(args.length ? "company/GLM-5.2-public" : "company/GLM-5.3-public");
 			expect(summary.failure.reasons[0].reason).toBe("no OAuth access resolved");
 		}
-		const miss = await f.run(["dry-balance", "offline-subcommand-extension/missing", "--count", "1", "--json"]);
+		const miss = await f.run(["dry-balance", "opencode-go/missing", "--count", "1", "--json"]);
 		expect(miss.exitCode).not.toBe(0);
 		expect(miss.stderr).toContain("missing");
 		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);

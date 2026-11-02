@@ -46,9 +46,9 @@ async function createHarness(options?: { goalEnabled?: boolean }): Promise<Guide
 	});
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
+	const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
 	if (!model) {
-		throw new Error("Expected claude-sonnet-4-5 to exist in registry");
+		throw new Error("Expected ascend/qwen3.8-flash-next to exist in registry");
 	}
 	const initialTools = await createTools(createToolSession(tempDir.path(), settings), ["read"]);
 	const toolRegistry = new Map<string, Tool>(initialTools.map(tool => [tool.name, tool] as const));
@@ -100,8 +100,8 @@ function assistantTurn(content: AssistantMessage["content"]): AgentMessage {
 		role: "assistant",
 		content,
 		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "claude-sonnet-4-5",
+		provider: "ascend",
+		model: "qwen3.8-flash-next",
 		usage: {
 			input: 1,
 			output: 1,

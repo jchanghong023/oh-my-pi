@@ -16,7 +16,8 @@ import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Context, Message, Model } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -31,16 +32,34 @@ const REASONING = "PRIVATE-REASONING";
 const PLAIN_LEGEND = "`¶user:`, `¶ai:`, `¶call:`: user, assistant reply, tool call.";
 const FRAME_LEGEND = "Some middle sections: images, not text.";
 
-function bundled(provider: GeneratedProvider, modelId: string): Model {
-	const model = getBundledModel(provider, modelId);
-	if (!model) throw new Error(`Expected bundled ${provider}/${modelId}`);
-	return model;
-}
-
-const gpt = bundled("openai", "gpt-5.4");
-const claude = bundled("anthropic", "claude-opus-5-5");
+// Protocol fixtures are local: the fork does not bundle OpenAI or Anthropic.
+const gpt = buildModel({
+	id: "gpt-5.4",
+	name: "GPT-5.4",
+	api: "openai-responses",
+	provider: "openai",
+	baseUrl: "https://api.openai.com/v1",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_000_000,
+	maxTokens: 128_000,
+});
+const claude = buildModel({
+	id: "claude-opus-5-5",
+	name: "Claude Opus 5.5",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 1_000_000,
+	maxTokens: 128_000,
+});
 // Takes no image input.
-const deepseek = bundled("deepseek", "deepseek-v4-flash");
+const deepseek = getBundledModel("deepseek", "deepseek-v4-flash");
+if (!deepseek) throw new Error("Expected bundled deepseek/deepseek-v4-flash");
 
 function assistant(model: Model, content: AssistantMessage["content"]): AssistantMessage {
 	return {

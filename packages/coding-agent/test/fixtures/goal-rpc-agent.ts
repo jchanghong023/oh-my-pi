@@ -20,8 +20,10 @@ import { cfgAsyncEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
 // GOAL_RPC_PLAN="1": the session starts in plan mode.
 const cwd = process.cwd();
 const authStorage = await AuthStorage.create(path.join(cwd, "auth.db"));
-authStorage.keys.setRuntime("anthropic", "test-key");
+authStorage.keys.setRuntime("ascend", "test-key");
 const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+const model = getBundledModel("ascend", "qwen3.8-flash-next");
+if (!model) throw new Error("Goal RPC fixture requires the bundled ascend/qwen3.8-flash-next model");
 const settings = await Settings.init({ inMemory: true, cwd });
 cfgAsyncEnabled.set(settings, false);
 cfgGoalContinuationModes.set(settings, Bun.env.GOAL_RPC_CONTINUATION === "1" ? ["rpc"] : ["interactive"]);
@@ -34,7 +36,7 @@ const { session } = await createAgentSession({
 	authStorage,
 	modelRegistry,
 	settings,
-	model: getBundledModel("anthropic", "claude-sonnet-4-5"),
+	model,
 	disableExtensionDiscovery: true,
 	skills: [],
 	contextFiles: [],

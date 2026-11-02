@@ -14,7 +14,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { SlashCommandRuntime, TuiSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 
 const command = TEAM_SLASH_COMMANDS[0]!;
-const MODEL: Model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+const MODEL: Model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 
 function stubSession(overrides: Partial<Record<string, unknown>> = {}): AgentSession {
 	return {

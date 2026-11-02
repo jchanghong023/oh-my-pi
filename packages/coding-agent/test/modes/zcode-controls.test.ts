@@ -71,6 +71,7 @@ describe("ZCode direct session runtime controls", () => {
 	it("uses the selected session mode at actual SDK write execution and fails closed without a UI", async () => {
 		const directory = TempDir.createSync("zcode-native-mode-write-");
 		const auth = createInMemoryAuthStorage();
+		auth.keys.setRuntime("ascend", "fixture-control-key");
 		const create = (name: string) =>
 			createAgentSession({
 				cwd: directory.path(),
@@ -79,7 +80,7 @@ describe("ZCode direct session runtime controls", () => {
 				settings: Settings.isolated({ "tools.approvalMode": "always-ask", "compaction.enabled": false }),
 				authStorage: auth,
 				modelRegistry: new ModelRegistry(auth, directory.join(`${name}-models.yml`)),
-				model: getBundledModel("openai", "gpt-4o-mini"),
+				model: getBundledModel("ascend", "qwen3.8-flash-next")!,
 				agentRegistry: new AgentRegistry(),
 				bindProcessState: false,
 				disableExtensionDiscovery: true,
@@ -175,7 +176,7 @@ describe("ZCode direct session runtime controls", () => {
 	});
 	it("executes canonical Goal objectives through the shared set handler without losing input identity", async () => {
 		const directory = TempDir.createSync("zcode-canonical-goal-");
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		const mock = createMockModel({ handler: { content: ["done"] } });
 		const auth = createInMemoryAuthStorage();
 		auth.keys.setRuntime(model.provider, "fixture-control-key");
@@ -245,7 +246,7 @@ describe("ZCode direct session runtime controls", () => {
 				return { content: [{ type: "text", text: "cancelled" }] };
 			},
 		};
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		const mock = createMockModel({
 			responses: [{ content: [{ type: "toolCall", id: "wait", name: "wait", arguments: {} }] }],
 			handler: { content: ["done"] },

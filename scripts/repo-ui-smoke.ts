@@ -253,7 +253,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 			path.join(agentDir, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
-					smoke: {
+					deepseek: {
 						api: "anthropic-messages",
 						baseUrl: `http://127.0.0.1:${port}`,
 						apiKey: "smoke-fixture-key",
@@ -276,7 +276,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 			"utf8",
 		);
 		tui = startTui(
-			["--profile", "localci-ui-repo", "--model", "smoke/glm-5.2"],
+			["--profile", "localci-ui-repo", "--model", "deepseek/glm-5.2"],
 			{
 				PI_CONFIG_DIR: configName,
 				OMP_OFFLINE: "",

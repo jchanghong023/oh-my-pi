@@ -32,8 +32,8 @@ async function advance(ms: number): Promise<void> {
 }
 
 function createHost(cwd: string) {
-	const original = getBundledModel("anthropic", "claude-sonnet-4-5");
-	const planModel = getBundledModel("anthropic", "claude-opus-4-5");
+	const original = getBundledModel("ascend", "qwen3.8-27b")!;
+	const planModel = getBundledModel("ascend", "qwen3.8-flash-next")!;
 	let model = original;
 	let thinking: ConfiguredThinkingLevel | undefined = ThinkingLevel.Low;
 	let state: PlanModeState | undefined;

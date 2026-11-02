@@ -151,8 +151,8 @@ describe("skill description failure caching and shutdown", () => {
 	function modelCompressor(stopReason: AssistantMessage["stopReason"]): SkillDescriptionCompressor {
 		const authStorage = createInMemoryAuthStorage();
 		authStorages.push(authStorage);
-		authStorage.keys.setRuntime("anthropic", "test-key");
-		const settings = Settings.isolated({ modelRoles: { smol: "anthropic/claude-sonnet-4-5" } });
+		authStorage.keys.setRuntime("ascend", "test-key");
+		const settings = Settings.isolated({ modelRoles: { smol: "ascend/qwen3.8-flash-next" } });
 		const registry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"), { settings });
 		vi.spyOn(agentCore, "instrumentedCompleteSimple").mockResolvedValue({
 			...createAssistantMessage(compressed),
@@ -365,7 +365,7 @@ describe("skill description compressor model selection", () => {
 	function fixture(modelRoles: Record<string, string>) {
 		const authStorage = createInMemoryAuthStorage();
 		authStorages.push(authStorage);
-		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("ascend", "test-key");
 		const settings = Settings.isolated({ modelRoles });
 		const registry = new ModelRegistry(
 			authStorage,
@@ -383,20 +383,20 @@ describe("skill description compressor model selection", () => {
 	}
 
 	it("does not materialize unrelated catalogs for the first exact role selection", () => {
-		const { registry, compressor } = fixture({ default: "anthropic/claude-opus-4-5" });
+		const { registry, compressor } = fixture({ default: "ascend/qwen3.8-flash-next" });
 		const all = spyOn(registry, "getAvailable").mockImplementation(() => {
 			throw new Error("Unrelated catalogs must stay lazy");
 		});
 		const scoped = spyOn(registry, "getAvailableForProviders");
-		expect(compressor.modelKey()).toBe("anthropic/claude-opus-4-5");
-		expect(compressor.modelKey()).toBe("anthropic/claude-opus-4-5");
-		expect(scoped).toHaveBeenCalledWith(new Set(["anthropic"]));
+		expect(compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
+		expect(compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
+		expect(scoped).toHaveBeenCalledWith(new Set(["ascend"]));
 		expect(all).not.toHaveBeenCalled();
 	});
 
 	it("keeps complete selector and fallback precedence when a scoped exact match misses", () => {
 		const { registry, settings, compressor } = fixture({});
-		registry.registerProvider("skill-custom", {
+		registry.registerProvider("opencode-go", {
 			baseUrl: "https://example.invalid/v1",
 			api: "openai-completions",
 			apiKey: "test-key",
@@ -414,9 +414,9 @@ describe("skill description compressor model selection", () => {
 		});
 		for (const selector of [
 			"anthropic/claude-opus-4-5:high",
-			"missing-provider/missing,anthropic/claude-haiku-4-5",
-			"claude-haiku-4-5",
-			"skill-custom/anthropic/claude-opus-4-5:high",
+			"missing-provider/missing,ascend/qwen-aw-35b",
+			"qwen-aw-35b",
+			"opencode-go/anthropic/claude-opus-4-5:high",
 			"missing-provider/missing",
 		]) {
 			settings.setModelRole("smol", selector);
@@ -427,26 +427,26 @@ describe("skill description compressor model selection", () => {
 			expect(compressor.modelKey()).toBe(expected ? `${expected.provider}/${expected.id}` : undefined);
 		}
 		settings.setModelRole("smol", "anthropic/claude-opus-4-5:high");
-		expect(compressor.modelKey()).toBe("skill-custom/anthropic/claude-opus-4-5:high");
+		expect(compressor.modelKey()).toBe("opencode-go/anthropic/claude-opus-4-5:high");
 	});
 
 	it("observes live role, disabled-provider and runtime catalog changes after a scoped lookup", () => {
-		const { registry, settings, compressor } = fixture({ smol: "anthropic/claude-haiku-4-5" });
-		expect(compressor.modelKey()).toBe("anthropic/claude-haiku-4-5");
-		settings.setModelRole("smol", "anthropic/claude-opus-4-5");
-		expect(compressor.modelKey()).toBe("anthropic/claude-opus-4-5");
-		cfgDisabledProviders.set(settings, ["anthropic"]);
+		const { registry, settings, compressor } = fixture({ smol: "ascend/qwen-aw-35b" });
+		expect(compressor.modelKey()).toBe("ascend/qwen-aw-35b");
+		settings.setModelRole("smol", "ascend/qwen3.8-flash-next");
+		expect(compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
+		cfgDisabledProviders.set(settings, ["ascend"]);
 		const available = registry.getAvailable();
 		const expected =
 			resolveRoleChain("smol", settings, available)[0]?.model ??
 			resolveRoleSelection(["tiny"], settings, available)?.model;
 		expect(compressor.modelKey()).toBe(expected ? `${expected.provider}/${expected.id}` : undefined);
 		cfgDisabledProviders.set(settings, []);
-		expect(compressor.modelKey()).toBe("anthropic/claude-opus-4-5");
+		expect(compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
 
-		settings.setModelRole("smol", "skill-runtime/first");
+		settings.setModelRole("smol", "deepseek/first");
 		const register = (id: string) =>
-			registry.registerProvider("skill-runtime", {
+			registry.registerProvider("deepseek", {
 				baseUrl: "https://example.invalid/v1",
 				api: "openai-completions",
 				apiKey: "test-key",
@@ -463,19 +463,19 @@ describe("skill description compressor model selection", () => {
 				],
 			});
 		register("first");
-		expect(compressor.modelKey()).toBe("skill-runtime/first");
+		expect(compressor.modelKey()).toBe("deepseek/first");
 		register("second");
-		settings.setModelRole("smol", "skill-runtime/second");
-		expect(compressor.modelKey()).toBe("skill-runtime/second");
+		settings.setModelRole("smol", "deepseek/second");
+		expect(compressor.modelKey()).toBe("deepseek/second");
 	});
 
 	it("uses the configured default for an unset smol role instead of the built-in smol chain", () => {
-		expect(fixture({ default: "anthropic/claude-opus-4-5" }).compressor.modelKey()).toBe("anthropic/claude-opus-4-5");
+		expect(fixture({ default: "ascend/qwen3.8-flash-next" }).compressor.modelKey()).toBe("ascend/qwen3.8-flash-next");
 	});
 
 	it("prefers a configured smol role over the configured default", () => {
-		expect(
-			fixture({ default: "anthropic/claude-opus-4-5", smol: "anthropic/claude-haiku-4-5" }).compressor.modelKey(),
-		).toBe("anthropic/claude-haiku-4-5");
+		expect(fixture({ default: "ascend/qwen3.8-flash-next", smol: "ascend/qwen-aw-35b" }).compressor.modelKey()).toBe(
+			"ascend/qwen-aw-35b",
+		);
 	});
 });
