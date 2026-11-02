@@ -1,7 +1,7 @@
 import { untilAborted } from "@oh-my-pi/pi-utils";
 import * as AIError from "../error";
 import { getProviderDefinition, PASTE_CODE_LOGIN_PROVIDERS } from "../registry";
-import { getOAuthProvider } from "../registry/oauth";
+import { getOAuthProvider, isOAuthLoginSupported } from "../registry/oauth";
 import type { OAuthProviderId } from "../registry/oauth/types";
 import { providerTypeKey } from "./blocks";
 import type { SessionAffinity } from "./affinity";
@@ -58,6 +58,9 @@ export class OAuthAccounts implements OAuthApi {
 	 * login registered.
 	 */
 	async login(provider: OAuthProviderId, ctrl: OAuthLoginController): Promise<OAuthLoginIdentity | undefined> {
+		if (!isOAuthLoginSupported(provider)) {
+			throw new AIError.ConfigurationError(`OAuth login provider is not supported: ${provider}`);
+		}
 		// Only paste-code providers (fixed non-loopback redirect, e.g. GitLab Duo
 		// Agent's vscode:// URI) get a default manual-code prompt. For loopback OAuth
 		// providers an eager paste prompt adds noise to a flow that normally completes

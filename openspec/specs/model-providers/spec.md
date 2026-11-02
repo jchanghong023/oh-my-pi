@@ -2,9 +2,32 @@
 
 ## Purpose
 
-规定 fork 的 CodeAgent、Ascend 和公司内网模型接入、发现、认证与请求边界。不同运行环境和显式模型选择的条件必须分别遵守，不推断公网可用。
+规定 fork 保留的聊天 Provider 范围，以及 CodeAgent、Ascend 和公司内网模型接入、发现、认证与请求边界。不同运行环境和显式模型选择的条件必须分别遵守，不推断公网可用。
 
 ## Requirements
+
+### Requirement: 精简内置聊天 Provider
+
+OMP MUST 仅提供 `company`、`openai-codex`、`codeagent`、`ascend`、`opencode-go`、`deepseek` 六个聊天 Provider；名单在现有 KDL 策略中统一维护，不新增用户开关或发行变体。
+
+#### Scenario: 生成目录和运行时准入一致
+
+- **WHEN** 生成内置目录、合并旧缓存、发现模型或注册扩展与运行时模型
+- **THEN** 不得构造或恢复名单外的聊天模型；生成过程仍可使用跨 Provider 参考数据，但输出目录须遵守同一范围。
+- **AND** `opencode-zen` 完全退出本 fork 的模型与登录目录，包括其原有 judge 模型，不由旧缓存或发现恢复。
+- **AND** `company`、CodeAgent 和 Ascend 仍遵守下述 offline、平台和认证条件；保留名单不等于所有环境下均可用。
+
+#### Scenario: 保留共用协议和非聊天能力
+
+- **WHEN** 裁剪聊天目录
+- **THEN** 保留现有共用协议、向量／重排、其他非聊天模型及内部 `local-inference`；不因聊天名单删除这些能力或其必要认证。
+- **AND** 同名远端 `local` 聊天 Provider 不能借内部本地推理例外绕过准入。
+- **AND** 旧凭据仍可管理和登出，不删除凭据、配置或会话历史。
+
+#### Scenario: 已有引用和数据
+
+- **WHEN** 旧配置或会话引用已裁剪模型
+- **THEN** 沿用既有的模型缺失处理，不增加选择器语法、SDK 拦截层或迁移机制，不删除用户数据。
 
 ### Requirement: CodeAgent 内置模型
 
@@ -131,7 +154,7 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 #### Scenario: 注册其他 Provider
 
 - **WHEN** 扩展或运行时注册其他 ID 的 Provider
-- **THEN** 沿用既有注册、校验与凭据解析行为，不受保留 ID 限制影响。
+- **THEN** 注册的聊天模型仍须符合本节六个 Provider 的范围；非聊天能力沿用既有注册、校验与凭据解析行为，不受上述保留 ID 限制影响。
 
 ### Requirement: 重试回退链的路由剥离
 

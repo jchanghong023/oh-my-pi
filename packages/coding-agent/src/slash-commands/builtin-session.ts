@@ -1,5 +1,5 @@
 import { clearSubmittedText } from "./helpers/draft";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthProviders, isOAuthLoginSupported } from "@oh-my-pi/pi-ai/oauth";
 import { journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import type { AgentSession } from "../session/agent-session";
 import type { SessionOAuthAccountList } from "../session/agent-session-types";
@@ -727,6 +727,11 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			const manualInput = runtime.ctx.oauthManualInput;
 			const args = command.args.trim();
 			if (args.length > 0) {
+				if (!manualInput.hasPending() && !isOAuthLoginSupported(args)) {
+					runtime.ctx.showWarning(`OAuth login provider is not supported: ${args}`);
+					clearSubmittedText(runtime);
+					return;
+				}
 				const matchedProvider = getOAuthProviders().find(provider => provider.id === args);
 				if (matchedProvider) {
 					if (manualInput.hasPending()) {

@@ -1,9 +1,22 @@
 import { describe, expect, test } from "bun:test";
 import { resolveOpenAIRequestSetup } from "@oh-my-pi/pi-ai/providers/openai-shared";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
+import { getAllOAuthProviders } from "@oh-my-pi/pi-ai/registry/oauth";
 import type { OAuthController } from "@oh-my-pi/pi-ai/oauth/types";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+
+const model = buildModel({
+	id: "qwen3.7-plus",
+	name: "QwenCloud protocol fixture",
+	provider: "alibaba-token-plan",
+	api: "openai-completions",
+	baseUrl: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 8192,
+	maxTokens: 1024,
+});
 
 function registeredLogin(options: OAuthController) {
 	const login = getProviderDefinition("alibaba-token-plan")?.login;
@@ -74,8 +87,6 @@ describe("QwenCloud Token Plan login", () => {
 			baseUrl: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
 		});
 
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.7-plus");
-		if (!model) throw new Error("expected bundled QwenCloud Token Plan model");
 		const setup = resolveOpenAIRequestSetup(model, { apiKey: credential, messages: [] });
 		expect(setup.baseUrl).toBe("https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
 		expect(setup.headers.Authorization).toBe("Bearer sk-sp-beijing");
@@ -119,8 +130,6 @@ describe("QwenCloud Token Plan login", () => {
 			cookie: "session_id=test; login_aliyunid_csrf=csrf-token",
 		});
 
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.7-plus");
-		if (!model) throw new Error("expected bundled QwenCloud Token Plan model");
 		const setup = resolveOpenAIRequestSetup(model, {
 			apiKey: credential,
 			messages: [],
@@ -141,9 +150,6 @@ describe("QwenCloud Token Plan login", () => {
 	});
 
 	test("rejects malformed compound credentials before inference setup", () => {
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.7-plus");
-		if (!model) throw new Error("expected bundled QwenCloud Token Plan model");
-
 		for (const apiKey of [
 			'  {"token":"sk-sp-test","cookie":"session=secret"',
 			'"token":"sk-sp-test","cookie":"session=secret"}',
@@ -155,9 +161,6 @@ describe("QwenCloud Token Plan login", () => {
 	});
 
 	test("never falls back to the generic OPENAI_API_KEY as the QwenCloud bearer", () => {
-		const model = getBundledModel<"openai-completions">("alibaba-token-plan", "qwen3.7-plus");
-		if (!model) throw new Error("expected bundled QwenCloud Token Plan model");
-
 		const previous = Bun.env.OPENAI_API_KEY;
 		Bun.env.OPENAI_API_KEY = "sk-generic-openai-secret";
 		try {
@@ -171,7 +174,7 @@ describe("QwenCloud Token Plan login", () => {
 	});
 
 	test("registers Token Plan separately from the legacy Alibaba Coding Plan", () => {
-		const providers = getOAuthProviders();
+		const providers = getAllOAuthProviders();
 		expect(providers.find(provider => provider.id === "alibaba-token-plan")).toMatchObject({
 			name: "QwenCloud Token Plan",
 			available: true,

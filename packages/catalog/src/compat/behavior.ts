@@ -10,6 +10,17 @@ import rules from "./rules.json";
 import type { CompiledMatchList } from "./types";
 
 const behavior = rules.behavior;
+const supportedChatProviders = new Set(behavior.supportedChatProviders);
+
+/** Whether OMP retains this chat provider; protocol and non-chat support are separate. */
+export function isSupportedChatProvider(provider: string): boolean {
+	return supportedChatProviders.has(provider);
+}
+
+/** Whether the model-policy cascade declares this provider, including runtime-only catalogs. */
+export function hasProviderModelRules(provider: string): boolean {
+	return rules.cascade.rules.some(rule => rule.providers?.includes(provider));
+}
 
 function matchesList(match: CompiledMatchList, model: string, modelLower: string): boolean {
 	if (match.exact?.some(candidate => candidate === model)) return true;

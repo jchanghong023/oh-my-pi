@@ -350,6 +350,8 @@ export interface CompiledBehavior {
 	planRequirements: CompiledPlanRequirement[];
 	pricingPeers: CompiledPricingPeer[];
 	retryResetTimezones: CompiledRetryResetTimezone[];
+	/** Providers retained for OMP chat models; non-chat runners are unaffected. */
+	supportedChatProviders: string[];
 	retiredProviders: string[];
 	/** Hosts whose prefix caches benefit from a stable append-only conversation. */
 	appendOnlyContextProviders: string[];

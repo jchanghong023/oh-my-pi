@@ -1,5 +1,5 @@
 import type { CredentialsApi, KeysApi } from "@oh-my-pi/pi-ai";
-import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getAllOAuthProviders, getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth/types";
 import {
 	Container,
@@ -173,7 +173,7 @@ export class OAuthSelectorComponent extends OverlayPanel {
 	}
 
 	#loadProviders(disabledProviders: readonly string[] = []): void {
-		const providers = getOAuthProviders();
+		const providers = this.#mode === "logout" ? getAllOAuthProviders() : getOAuthProviders();
 		if (this.#mode === "logout") {
 			// Logout stays unfiltered by `disabledProviders`: a now-disabled
 			// provider may still hold stored credentials worth removing.

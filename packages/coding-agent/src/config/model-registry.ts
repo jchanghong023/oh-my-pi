@@ -20,12 +20,14 @@ import type {
 } from "@oh-my-pi/pi-ai/types";
 import type { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { buildDiscoveredModel, buildModel, nextBuildPriceChange } from "@oh-my-pi/pi-catalog/build";
+import { isRetiredProvider, isSupportedChatProvider } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { collapseBuiltVariants } from "@oh-my-pi/pi-catalog/compat/collapse";
 import {
 	clampCodexContextWindow,
 	clampsContextOverride,
 	resolveMaxContextWindow,
 } from "@oh-my-pi/pi-catalog/compat/context-window";
+import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { applyCatalogMetrics, CatalogMetricsIndex } from "@oh-my-pi/pi-catalog/identity/metrics";
 import { getModelCacheWriteStats, readModelCache, retainModelCacheConnection } from "@oh-my-pi/pi-catalog/model-cache";
 import {
@@ -47,7 +49,7 @@ import {
 	resolveOllamaModelCacheProviderId,
 } from "@oh-my-pi/pi-catalog/provider-models";
 import { toModelSpec } from "@oh-my-pi/pi-catalog/provider-models/bundled-references";
-import { apiServesKind, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
+import { apiServesKind, modelKind, runnerApiKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import { isOfficialCodexApiUrl } from "@oh-my-pi/pi-catalog/wire/codex";
 import { getAgentDir, isBunTestRuntime, logger, wrapFetchForExtraCa } from "@oh-my-pi/pi-utils";
 import { resolveProviderModelReference } from "../config/model-resolver";
@@ -180,6 +182,18 @@ const ADDITIVE_MODELS_DEV_CATALOG_PROVIDER_ID_LOOKUP: Readonly<Record<string, tr
 		).map(providerId => [providerId, true as const]),
 	),
 );
+
+const bundledProviders = new Set<string>(getBundledProviders());
+
+/** Chat is restricted by provider, except for the built-in on-device runner. */
+function isAdmittedModel(model: { provider: string; api: Api; kind?: ModelKind; baseUrl?: string }): boolean {
+	return (
+		!isRetiredProvider(model.provider) &&
+		((model.kind ?? runnerApiKind(model.api) ?? "chat") !== "chat" ||
+			isSupportedChatProvider(model.provider) ||
+			(model.provider === "local" && model.api === "local-inference" && model.baseUrl === "local://inference"))
+	);
+}
 
 /**
  * Bedrock provider-scoped fields to spread onto a model spec, dropping keys
@@ -436,7 +450,9 @@ export class ModelRegistry {
 
 	/** Final pass over every published model list: catalog metrics, then implicit local providers last. */
 	#finalizeModels(models: Model<Api>[]): Model<Api>[] {
-		return this.#orderImplicitProvidersLast(applyCatalogMetrics(models, this.#catalogMetrics));
+		return this.#orderImplicitProvidersLast(
+			applyCatalogMetrics(models.filter(isAdmittedModel), this.#catalogMetrics),
+		);
 	}
 
 	/**
@@ -609,7 +625,11 @@ export class ModelRegistry {
 		if (!this.#credentialScopedCacheHydration) {
 			const providerIds = new Set<string>();
 			for (const providerId of STARTUP_MODEL_CACHE_PROVIDER_IDS) {
-				if (isCredentialScopedModelCacheProvider(providerId)) providerIds.add(providerId);
+				if (
+					isCredentialScopedModelCacheProvider(providerId) &&
+					(isSupportedChatProvider(providerId) || Boolean(providerEntry(providerId)?.kindApis))
+				)
+					providerIds.add(providerId);
 			}
 			this.#credentialScopedCacheHydration = this.#refreshRuntimeDiscoveries("offline", providerIds).catch(error => {
 				logger.debug("credential-scoped model cache hydration failed", {
@@ -1097,11 +1117,19 @@ export class ModelRegistry {
 		this.#modelOverrides = modelOverrides;
 
 		this.#addImplicitDiscoverableProviders(configuredProviders);
+		this.#discoverableProviders = this.#discoverableProviders.filter(
+			provider =>
+				isSupportedChatProvider(provider.provider) ||
+				runnerApiKind(provider.api) !== undefined ||
+				provider.discovery.type === "proxy",
+		);
 		const configuredDiscoveryProviders = new Set(this.#discoverableProviders.map(provider => provider.provider));
 		this.#pendingStandardCacheProviders = new Set(
 			STARTUP_MODEL_CACHE_PROVIDER_IDS.filter(
 				providerId =>
-					!configuredDiscoveryProviders.has(providerId) && !isCredentialScopedModelCacheProvider(providerId),
+					(isSupportedChatProvider(providerId) || bundledProviders.has(providerId)) &&
+					!configuredDiscoveryProviders.has(providerId) &&
+					!isCredentialScopedModelCacheProvider(providerId),
 			),
 		);
 		this.#cachedDiscoverableModels = logger.time("modelRegistry:loadDiscoverableModels", () =>
@@ -1214,27 +1242,29 @@ export class ModelRegistry {
 				// reader crashes, or an identity left over from a different id.
 				// Rows of other providers pass through untouched; rebuilding a
 				// full catalog on every projection costs more than it can fix.
-				projected = modifyModels(snapshot, credential).map(model => {
-					const withHeaders =
-						model.resolveHeaders && model.headers
-							? {
-									...model,
-									headers: undefined,
-									resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
-								}
-							: model;
-					if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
-					// `identity` exists only on built rows. Without it the hook
-					// authored a spec, where `compat` already is the sparse
-					// override `toModelSpec` would drop while reading the absent
-					// `compatConfig`; built rows keep resolving from that field
-					// instead of feeding the resolved view back in as an override.
-					return buildModel(
-						withHeaders.identity === undefined
-							? (withHeaders as ModelSpec<Api>)
-							: toModelSpec(withHeaders as Model<Api>),
-					);
-				});
+				projected = modifyModels(snapshot, credential)
+					.filter(isAdmittedModel)
+					.map(model => {
+						const withHeaders =
+							model.resolveHeaders && model.headers
+								? {
+										...model,
+										headers: undefined,
+										resolveHeaders: createConfigHeaderResolver([model.resolveHeaders, model.headers]),
+									}
+								: model;
+						if (withHeaders.provider !== providerName) return withHeaders as Model<Api>;
+						// `identity` exists only on built rows. Without it the hook
+						// authored a spec, where `compat` already is the sparse
+						// override `toModelSpec` would drop while reading the absent
+						// `compatConfig`; built rows keep resolving from that field
+						// instead of feeding the resolved view back in as an override.
+						return buildModel(
+							withHeaders.identity === undefined
+								? (withHeaders as ModelSpec<Api>)
+								: toModelSpec(withHeaders as Model<Api>),
+						);
+					});
 			} catch (error) {
 				this.#warnModelModifierFailure(providerName, error instanceof Error ? error.message : String(error));
 			}
@@ -1404,7 +1434,7 @@ export class ModelRegistry {
 			const models = getBundledModels(provider as Parameters<typeof getBundledModels>[0]) as Model<Api>[];
 			const providerOverride = overrides.get(provider);
 
-			return models.map(m => {
+			return models.filter(isAdmittedModel).map(m => {
 				if (!providerOverride) return m;
 				const withTransportOverride = this.#applyProviderTransportOverride(toModelSpec(m), providerOverride);
 				return buildModel({
@@ -1566,6 +1596,12 @@ export class ModelRegistry {
 				: undefined;
 			const models: Model<Api>[] = [];
 			for (const cachedModel of cache.models) {
+				if (
+					!isAdmittedModel(
+						cachedModel.provider === providerId ? cachedModel : { ...cachedModel, provider: providerId },
+					)
+				)
+					continue;
 				// Shared catalog rows can be projected under another provider id.
 				// That changes policy inputs, so only this projection is rebuilt;
 				// same-provider materialized cache rows stay on the zero-build path.
@@ -1700,10 +1736,11 @@ export class ModelRegistry {
 			const canRestoreHeaders = this.#canRestoreConfiguredDiscoveryHeaders(providerConfig.provider);
 			const omittedHeaderIds = new Set(cache.headerOmittedModelIds);
 			const hasUnrestoredHeaders = omittedHeaderIds.size > 0 && !canRestoreHeaders;
-			const usableCacheModels =
-				omittedHeaderIds.size === 0 || canRestoreHeaders
-					? cache.models
-					: cache.models.filter(model => !omittedHeaderIds.has(model.id));
+			const usableCacheModels = cache.models.filter(
+				model =>
+					isAdmittedModel(model) &&
+					(omittedHeaderIds.size === 0 || canRestoreHeaders || !omittedHeaderIds.has(model.id)),
+			);
 			const providerOverride = this.#providerOverrides.get(providerConfig.provider);
 			const restoredCacheModels = providerOverride
 				? usableCacheModels.map(model => this.#applyProviderTransportOverrideToModel(model, providerOverride))
@@ -1741,6 +1778,7 @@ export class ModelRegistry {
 	}
 
 	#normalizeDiscoverableModels(providerConfig: DiscoveryProviderConfig, models: Model<Api>[]): Model<Api>[] {
+		models = models.filter(isAdmittedModel);
 		const withDecoderMetadata =
 			providerConfig.discovery.type === "ollama" ||
 			providerConfig.discovery.type === "llama.cpp" ||
@@ -1803,7 +1841,7 @@ export class ModelRegistry {
 			: Bun.env.OLLAMA_HOST?.trim()
 				? "OLLAMA_HOST"
 				: undefined;
-		if (!configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
+		if (isSupportedChatProvider("ollama") && !configuredProviders.has("ollama") && !disabledProviders.has("ollama")) {
 			this.#discoverableProviders.push({
 				provider: "ollama",
 				api: "openai-responses",
@@ -1815,7 +1853,11 @@ export class ModelRegistry {
 			this.#implicitLocalProviders.add("ollama");
 			if (ollamaEndpointEnv) this.#implicitProviderEndpointEnv.set("ollama", ollamaEndpointEnv);
 		}
-		if (!configuredProviders.has("llama.cpp") && !disabledProviders.has("llama.cpp")) {
+		if (
+			isSupportedChatProvider("llama.cpp") &&
+			!configuredProviders.has("llama.cpp") &&
+			!disabledProviders.has("llama.cpp")
+		) {
 			this.#discoverableProviders.push({
 				provider: "llama.cpp",
 				api: "openai-responses",
@@ -1832,6 +1874,7 @@ export class ModelRegistry {
 			if (Bun.env.LLAMA_CPP_BASE_URL) this.#implicitProviderEndpointEnv.set("llama.cpp", "LLAMA_CPP_BASE_URL");
 		}
 		if (
+			isSupportedChatProvider("apple") &&
 			process.platform === "darwin" &&
 			process.arch === "arm64" &&
 			!configuredProviders.has("apple") &&
@@ -1847,7 +1890,11 @@ export class ModelRegistry {
 			this.#keylessProviders.add("apple");
 			this.#implicitLocalProviders.add("apple");
 		}
-		if (!configuredProviders.has("lm-studio") && !disabledProviders.has("lm-studio")) {
+		if (
+			isSupportedChatProvider("lm-studio") &&
+			!configuredProviders.has("lm-studio") &&
+			!disabledProviders.has("lm-studio")
+		) {
 			this.#discoverableProviders.push({
 				provider: "lm-studio",
 				api: "openai-completions",
@@ -2081,7 +2128,7 @@ export class ModelRegistry {
 		const replacedConfiguredProviders = currentConfiguredDiscoveryResults.flatMap(result =>
 			result.replaceRuntimeModels ? [result.provider.provider] : [],
 		);
-		const discovered = [...configuredDiscovered, ...builtInDiscovery.models];
+		const discovered = [...configuredDiscovered, ...builtInDiscovery.models].filter(isAdmittedModel);
 		if (
 			discovered.length === 0 &&
 			builtInDiscovery.authoritativeProviders.size === 0 &&
@@ -2608,12 +2655,15 @@ export class ModelRegistry {
 		];
 		const disabledProviders = getDisabledProviderIdsFromSettings(this.#settings);
 		const standardProviderDescriptors = PROVIDER_DESCRIPTORS.filter(descriptor => {
+			if (!isSupportedChatProvider(descriptor.providerId) && !providerEntry(descriptor.providerId)?.kindApis)
+				return false;
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
 			if (this.#runtimeModelManagers.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
 		});
 		const enabledSpecialProviderDescriptors = specialProviderDescriptors.filter(descriptor => {
+			if (!isSupportedChatProvider(descriptor.providerId)) return false;
 			if (disabledProviders.has(descriptor.providerId)) return false;
 			if (configuredDiscoveryProviders.has(descriptor.providerId)) return false;
 			return providerFilter ? providerFilter.has(descriptor.providerId) : true;
@@ -2696,6 +2746,7 @@ export class ModelRegistry {
 		const bundledProviderIds: Record<string, true> = Object.create(null);
 		for (const providerId of getBundledProviders()) bundledProviderIds[providerId] = true;
 		for (const providerId of MODELS_DEV_CATALOG_PROVIDER_IDS) {
+			if (!isSupportedChatProvider(providerId) && !providerEntry(providerId)?.kindApis) continue;
 			if (BUILT_IN_MODEL_MANAGER_PROVIDER_IDS[providerId] === true) continue;
 			if (bundledProviderIds[providerId] !== true) continue;
 			if (disabledProviders.has(providerId) || configuredDiscoveryProviders.has(providerId)) continue;
@@ -2733,9 +2784,9 @@ export class ModelRegistry {
 			const result = await withModelDiscoveryTimeout(RUNTIME_DYNAMIC_MODEL_FETCH_TIMEOUT_MS, () =>
 				manager.refresh(strategy),
 			);
-			const models = result.models.map(model =>
-				model.provider === options.providerId ? model : { ...model, provider: options.providerId },
-			);
+			const models = result.models
+				.map(model => (model.provider === options.providerId ? model : { ...model, provider: options.providerId }))
+				.filter(isAdmittedModel);
 			const status =
 				result.source === "cache"
 					? "cached"
@@ -2850,6 +2901,8 @@ export class ModelRegistry {
 			"baseUrl" | "baseUrlApis" | "headers" | "authHeader" | "apiKey" | "remoteCompaction" | "transport"
 		>,
 	): T {
+		// A remote provider named "local" must not redirect the on-device runner.
+		if (entry.api === "local-inference" && entry.baseUrl === "local://inference") return entry;
 		const changesHeaders =
 			override.headers !== undefined || (override.authHeader === true && override.apiKey !== undefined);
 		const resolveHeaders = changesHeaders
@@ -3191,7 +3244,7 @@ export class ModelRegistry {
 					providerConfig.remoteCompaction,
 					modelDef as CustomModelDefinitionLike,
 				);
-				if (!model) continue;
+				if (!model || !isAdmittedModel(model)) continue;
 				models.push(model);
 			}
 		}
@@ -3847,7 +3900,7 @@ export class ModelRegistry {
 				if (!overlay) {
 					throw new Error(`Provider ${providerName}, model ${modelDef.id}: no "api" specified.`);
 				}
-				newOverlays.push(overlay);
+				if (isAdmittedModel(overlay)) newOverlays.push(overlay);
 			}
 			// Store as runtime overlays so they survive #reloadStaticModels()
 			this.#runtimeModelOverlays = this.#runtimeModelOverlays.filter(m => m.provider !== providerName);
@@ -3881,8 +3934,12 @@ export class ModelRegistry {
 			// projection exactly once. Incremental projection is not safe because one
 			// provider's hook may inspect or suppress another provider's models.
 			// Refresh projections re-add this provider's runtime overlays to the base.
-			this.#baseModels = this.#baseModels.filter(model => model.provider !== providerName);
-			const nextModels = this.#unprojectedModels.filter(model => model.provider !== providerName);
+			this.#baseModels = this.#baseModels.filter(
+				model => model.provider !== providerName || newOverlays.length === 0,
+			);
+			const nextModels = this.#unprojectedModels.filter(
+				model => model.provider !== providerName || newOverlays.length === 0,
+			);
 			for (const overlay of newOverlays) {
 				nextModels.push(finalizeCustomModel(overlay, { useDefaults: true }));
 			}
@@ -3902,7 +3959,17 @@ export class ModelRegistry {
 			if (!config.fetchDynamicModels) return;
 		}
 
-		if (config.fetchDynamicModels) {
+		if (
+			config.fetchDynamicModels &&
+			(isSupportedChatProvider(providerName) ||
+				config.api === undefined ||
+				runnerApiKind(config.api) !== undefined ||
+				Boolean(providerEntry(providerName)?.kindApis) ||
+				config.models?.some(model => {
+					const kind = model.kind ?? (model.api ? runnerApiKind(model.api) : undefined);
+					return kind !== undefined && kind !== "chat";
+				}))
+		) {
 			const fetcher = config.fetchDynamicModels;
 			const providerBaseUrl = config.baseUrl ?? "";
 			const providerApi = config.api;
@@ -3950,7 +4017,7 @@ export class ModelRegistry {
 							});
 							continue;
 						}
-						results.push(finalizeCustomModel(overlay, { useDefaults: true }));
+						if (isAdmittedModel(overlay)) results.push(finalizeCustomModel(overlay, { useDefaults: true }));
 					}
 					return results.map(toModelSpec);
 				},

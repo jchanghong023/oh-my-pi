@@ -18,7 +18,7 @@ import { getGitLabDuoModels } from "@oh-my-pi/pi-ai/providers/gitlab-duo";
 import { getProviderDefinition } from "@oh-my-pi/pi-ai/registry";
 import { $env } from "@oh-my-pi/pi-utils";
 import { buildModel } from "../src/build";
-import { isRetiredProvider } from "../src/compat/behavior";
+import { isRetiredProvider, isSupportedChatProvider } from "../src/compat/behavior";
 import { collapseVariants } from "../src/compat/collapse";
 import { providerEntries, providerEntry, seedModels } from "../src/compat/providers";
 import type { CompiledProvider } from "../src/compat/types";
@@ -48,7 +48,7 @@ import {
 	stripFireworksDeepSeekThinkingToggle,
 } from "../src/provider-models/openai-compat";
 import { type OpenAICodexAccount, openaiCodexModelManagerOptions } from "../src/provider-models/special";
-import type { Api, Model, ModelSpec } from "../src/types";
+import { type Api, type Model, modelKind, type ModelSpec } from "../src/types";
 import { cleanModelName } from "../src/utils";
 import { mergeCopilotApiHeaders } from "../src/wire/github-copilot";
 import {
@@ -755,12 +755,22 @@ async function generateModels(selectedProvider?: string) {
 		);
 	}
 
-	// Generate JSON file
+	// Trim only the output; cross-provider reference inputs above remain intact.
+	for (const [provider, models] of Object.entries(MODELS)) {
+		for (const [id, model] of Object.entries(models)) {
+			if (
+				isRetiredProvider(provider) ||
+				(modelKind(model) === "chat" && model.api !== "local-inference" && !isSupportedChatProvider(provider))
+			)
+				delete models[id];
+		}
+		if (Object.keys(models).length === 0) delete MODELS[provider];
+	}
 	await Bun.write(path.join(packageRoot, "src/models.json"), encodeModelCatalog(sortObj(MODELS)));
 	console.log("Generated src/models.json");
 
 	// Print statistics for the rows this run regenerated.
-	const writtenModels = selectedProvider === undefined ? allModels : Object.values(MODELS[selectedProvider] ?? {});
+	const writtenModels = Object.values(MODELS).flatMap(models => Object.values(models));
 	const totalModels = writtenModels.length;
 	const reasoningModels = writtenModels.filter(m => m.reasoning).length;
 

@@ -15,7 +15,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
-import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import { getOAuthProviders, isOAuthLoginSupported } from "@oh-my-pi/pi-ai/oauth";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { toolWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
 import { modelsAreEqual } from "@oh-my-pi/pi-catalog/models";
@@ -2747,6 +2747,9 @@ export async function runRpcMode(session: AgentSession, options: RpcModeOptions 
 			}
 
 			case "login": {
+				if (!isOAuthLoginSupported(command.providerId)) {
+					return error(id, "login", `OAuth login provider is not supported: ${command.providerId}`);
+				}
 				const knownProvider = getOAuthProviders().find(p => p.id === command.providerId);
 				if (!knownProvider) {
 					return error(id, "login", `Unknown OAuth provider: ${command.providerId}`);

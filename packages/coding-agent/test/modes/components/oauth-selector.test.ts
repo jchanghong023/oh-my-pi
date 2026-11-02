@@ -17,13 +17,9 @@ const authStorage = {
 } as unknown as AuthStorage;
 
 describe("OAuthSelectorComponent", () => {
-	it("fuzzy-filters overflowing provider lists from typed input", () => {
+	it("fuzzy-filters provider lists from typed input", () => {
 		const providers = getOAuthProviders();
-		expect(providers.length).toBeGreaterThan(10);
-		const target =
-			providers.find(provider => provider.available && provider.id === "vllm") ??
-			providers.find(provider => provider.available) ??
-			providers[0];
+		const target = providers.find(provider => provider.available && provider.id === "openai-codex");
 		expect(target).toBeDefined();
 		if (!target) return;
 
@@ -79,17 +75,17 @@ describe("OAuthSelectorComponent", () => {
 		const component = new OAuthSelectorComponent(
 			"logout",
 			{
-				credentials: { has: (providerId: string) => providerId === "opencode-go" },
+				credentials: { has: (providerId: string) => providerId === "anthropic" },
 				keys: {
 					source: (providerId: string) =>
-						providerId === "opencode-go" ? { kind: "api_key", concrete: true } : undefined,
+						providerId === "anthropic" ? { kind: "api_key", concrete: true } : undefined,
 				},
 			} as unknown as AuthStorage,
 			providerId => selected.push(providerId),
 			() => {},
 		);
 
-		for (const char of "opencode-go") {
+		for (const char of "anthropic") {
 			component.handleInput(char);
 		}
 
@@ -97,10 +93,10 @@ describe("OAuthSelectorComponent", () => {
 			.render(80)
 			.map(line => Bun.stripANSI(line))
 			.join("\n");
-		expect(rendered).toContain("OpenCode Go");
+		expect(rendered).toContain("Anthropic");
 
 		component.handleInput("\n");
-		expect(selected).toEqual(["opencode-go"]);
+		expect(selected).toEqual(["anthropic"]);
 	});
 
 	describe("disabledProviders", () => {

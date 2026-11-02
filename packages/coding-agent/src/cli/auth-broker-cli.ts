@@ -32,7 +32,7 @@ import {
 	SqliteAuthCredentialStore,
 } from "@oh-my-pi/pi-ai";
 import { AuthBrokerClient, DEFAULT_AUTH_BROKER_BIND, startAuthBroker } from "@oh-my-pi/pi-ai/auth-broker";
-import { refreshOAuthToken } from "@oh-my-pi/pi-ai/oauth";
+import { isOAuthLoginSupported, refreshOAuthToken } from "@oh-my-pi/pi-ai/oauth";
 import type { OAuthCredentials } from "@oh-my-pi/pi-ai/oauth/types";
 import { $which, APP_NAME, getAgentDbPath, getConfigRootDir, logger, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
@@ -201,6 +201,9 @@ async function runLogin(flags: AuthBrokerCommandArgs["flags"]): Promise<void> {
 	let providerArg: string;
 	try {
 		providerArg = flags.provider ?? (await pickOAuthProvider(rl, providers));
+		if (!isOAuthLoginSupported(providerArg)) {
+			throw new Error(`OAuth login provider is not supported: ${providerArg}`);
+		}
 		if (!providers.some(p => p.id === providerArg)) {
 			throw new Error(
 				`Unknown OAuth provider '${providerArg}'. Known: ${providers

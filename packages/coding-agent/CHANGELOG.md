@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
 - Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is now `knowledge.db`: when only `docs.db` exists, a SQLite snapshot including WAL is published without overwriting the new database and the old file is retained as a recovery backup. If both exist, `knowledge.db` is authoritative; they are not merged or deleted, and migration failures are reported. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
 - Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
 - Removed ZCode Host account and provider configuration compatibility; app-server uses native OMP providers and credentials.

@@ -8,6 +8,7 @@
  */
 import * as readline from "node:readline";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai";
+import { isOAuthLoginSupported } from "@oh-my-pi/pi-ai/oauth";
 import { APP_NAME, getAgentDbPath, getProjectDir } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { isCompanyLaneActive } from "../config/company-provider";
@@ -35,6 +36,9 @@ export async function runLoginCommand(provider: string | undefined): Promise<voi
 
 		const providers = getOAuthProviders().filter(p => p.available);
 		const providerId = provider ?? (await pickOAuthProvider(rl, providers));
+		if (!isOAuthLoginSupported(providerId)) {
+			throw new Error(`OAuth login provider is not supported: ${providerId}`);
+		}
 		const info = providers.find(p => p.id === providerId);
 		if (!info) {
 			throw new Error(`Unknown OAuth provider '${providerId}'. Run \`${APP_NAME} login\` to pick one.`);

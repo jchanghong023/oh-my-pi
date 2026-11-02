@@ -1,4 +1,4 @@
-import { getOAuthCredentialProvider, getOAuthProviders, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
+import { getAllOAuthProviders, getOAuthCredentialProvider, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
 import type { ModelRegistry } from "../../config/model-registry";
 import type { AgentSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
@@ -124,7 +124,7 @@ export async function logoutProviderForCommand(
 	ui: LogoutCommandUI,
 	signal?: AbortSignal,
 ): Promise<LogoutCommandResult> {
-	const providers = getOAuthProviders();
+	const providers = getAllOAuthProviders();
 	let provider = providerId ? providers.find(candidate => candidate.id === providerId) : undefined;
 	if (providerId && !provider) {
 		return { status: "skipped", level: "warning", message: `Unknown OAuth provider: ${providerId}` };
