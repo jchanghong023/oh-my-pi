@@ -21,6 +21,7 @@ import {
 	DEFAULT_CONFIG_DIR_NAME,
 	normalizeProfileName,
 	resolveAbsoluteDir,
+	resolveCacheRoot,
 	resolvePersistentRoot,
 	resolveXdgRoot,
 } from "@oh-my-pi/pi-natives/offline-root";
@@ -331,6 +332,7 @@ type XdgCategory = "data" | "state" | "cache";
 class DirResolver {
 	readonly configRoot: string;
 	readonly agentDir: string;
+	readonly cacheRoot: string | undefined;
 
 	// Per-category base dirs. Without XDG, all three equal configRoot / agentDir.
 	// With XDG on Linux, they point to $XDG_*_HOME/omp/.
@@ -344,6 +346,7 @@ class DirResolver {
 	constructor(options: { agentDirOverride?: string; profile?: string } = {}) {
 		const profile = normalizeProfileName(options.profile);
 		this.configRoot = getProfileConfigRoot(profile);
+		this.cacheRoot = resolveCacheRoot(profile);
 
 		const defaultAgent = path.join(this.configRoot, "agent");
 		const agentDirOverride = profile ? undefined : options.agentDirOverride;
@@ -395,13 +398,13 @@ class DirResolver {
 		this.#rootDirs = {
 			data: xdgData ?? this.configRoot,
 			state: xdgState ?? this.configRoot,
-			cache: xdgCache ?? this.configRoot,
+			cache: this.cacheRoot ?? xdgCache ?? this.configRoot,
 		};
 		// XDG flattens the agent/ prefix: ~/.omp/agent/sessions → $XDG_DATA_HOME/omp/sessions
 		this.#agentDirs = {
 			data: xdgData ?? this.agentDir,
 			state: xdgState ?? this.agentDir,
-			cache: xdgCache ?? this.agentDir,
+			cache: this.cacheRoot ? path.join(this.cacheRoot, "agent") : (xdgCache ?? this.agentDir),
 		};
 		const baseRoot = getBaseConfigRoot();
 		this.#baseRootDirs = {
@@ -436,7 +439,7 @@ class DirResolver {
 			this.#agentCache.set(subdir, result);
 			return result;
 		}
-		return path.join(userAgentDir, subdir);
+		return path.join(xdg === "cache" && this.cacheRoot ? this.#agentDirs.cache : userAgentDir, subdir);
 	}
 
 	/**
@@ -643,6 +646,7 @@ export function getReportsDir(): string {
  * keeps users of a shared `/tmp` from owning each other's directory.
  */
 export function getLogsDir(): string {
+	if (dirs.cacheRoot) return path.join(dirs.cacheRoot, "logs");
 	if (isBunTestRuntime() && !resolveAbsoluteDir(process.env.OMP_CONFIG_ROOT)) {
 		const uid = typeof process.getuid === "function" ? process.getuid() : os.userInfo().username;
 		return path.join(os.tmpdir(), `omp-test-logs-${uid}`);
@@ -682,6 +686,11 @@ export function getPluginsDir(home?: string): string {
 		return path.join(home, getConfigDirName(), "plugins");
 	}
 	return dirs.rootSubdir("plugins", "data");
+}
+
+/** Cache for marketplace downloads, separate from installed plugins. */
+export function getPluginCacheRoot(): string {
+	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "plugins", "cache") : path.join(getPluginsDir(), "cache");
 }
 
 /** Where npm installs packages (~/.omp/plugins/node_modules). */
@@ -872,7 +881,7 @@ export function getNativesDir(): string {
 
 /** Get the stats database path (~/.omp/stats.db). */
 export function getStatsDbPath(): string {
-	return dirs.rootSubdir("stats.db", "data");
+	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "stats.db") : dirs.rootSubdir("stats.db", "data");
 }
 
 /** Get the autoresearch state directory (~/.omp/autoresearch). */
@@ -927,6 +936,11 @@ export function getHistoryDbPath(agentDir?: string): string {
 /** Get the path to models.db (model cache database). */
 export function getModelDbPath(agentDir?: string): string {
 	return dirs.agentSubdir(agentDir, "models.db", "data");
+}
+
+/** Cache directory for direct agent cache consumers. */
+export function getAgentCacheDir(agentDir?: string): string {
+	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "agent", "cache") : path.join(agentDir ?? dirs.agentDir, "cache");
 }
 
 /** Get the tiny title model cache directory (~/.omp/agent/cache/tiny-models). */

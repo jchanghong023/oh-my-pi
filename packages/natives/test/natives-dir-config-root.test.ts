@@ -10,6 +10,8 @@ const ENV_KEYS = [
 	"HOME",
 	"USERPROFILE",
 	"OMP_CONFIG_ROOT",
+	"OMP_CACHE_DIR",
+	"OMP_OFFLINE",
 	"PI_NATIVES_DIR",
 	"PI_CONFIG_DIR",
 	"OMP_PROFILE",
@@ -94,6 +96,7 @@ describe("native addon directory config root", () => {
 	it("keeps loader and installer grammar directories aligned in isolated environments", async () => {
 		const root = path.join(tempRoot, "root");
 		const cache = path.join(tempRoot, "cache");
+		const selectedCache = process.platform === "linux" ? path.join(cache, String(process.getuid!())) : cache;
 		const data = path.join(tempRoot, "data");
 		const shared = path.join(tempRoot, "shared");
 		await fs.mkdir(path.join(cache, "omp"), { recursive: true });
@@ -110,6 +113,17 @@ describe("native addon directory config root", () => {
 		`;
 		const xdgEnabled = process.platform === "linux" || process.platform === "darwin";
 		const cases: Array<[Record<string, string>, string, string?]> = [
+			[{ OMP_CONFIG_ROOT: root, OMP_CACHE_DIR: cache }, path.join(selectedCache, "natives")],
+			[
+				{ OMP_CONFIG_ROOT: root, OMP_CACHE_DIR: cache, OMP_PROFILE: "audit" },
+				path.join(selectedCache, "profiles", "audit", "natives"),
+			],
+			[{ OMP_CACHE_DIR: cache, OMP_PROFILE: "audit", PI_NATIVES_DIR: shared }, shared],
+			[
+				{ OMP_CACHE_DIR: cache, TEST_SET_PROFILE: "audit" },
+				path.join(selectedCache, "natives"),
+				path.join(selectedCache, "profiles", "audit", "natives"),
+			],
 			[
 				{ OMP_CONFIG_ROOT: root, OMP_PROFILE: "audit", XDG_CACHE_HOME: cache },
 				path.join(root, "profiles", "audit", "natives"),

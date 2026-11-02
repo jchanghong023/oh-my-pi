@@ -17,7 +17,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { getPluginsDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
+import { getPluginCacheRoot, getPluginsDir, isEnoent, logger, tryParseJson } from "@oh-my-pi/pi-utils";
 
 export { getMarketplacesRegistryPath } from "@oh-my-pi/pi-utils";
 
@@ -34,11 +34,11 @@ export function getInstalledPluginsRegistryPath(): string {
 }
 
 export function getMarketplacesCacheDir(): string {
-	return path.join(getPluginsDir(), "cache", "marketplaces");
+	return path.join(getPluginCacheRoot(), "marketplaces");
 }
 
 export function getPluginsCacheDir(): string {
-	return path.join(getPluginsDir(), "cache", "plugins");
+	return path.join(getPluginCacheRoot(), "plugins");
 }
 
 // ── Atomic write ─────────────────────────────────────────────────────

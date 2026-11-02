@@ -17,10 +17,10 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 
 - fork 新增边界诊断覆盖写入统一 logger，不建立平行日志系统或新增必填配置。
 - 异常、超时、重试、降级与部分提交等分支 MUST 留下可识别的阶段和结果；关键调用 MUST 记录安全的结果摘要及耗时。可能阻塞的调用、网络请求、IPC 和子进程 MUST 有开始与成功/失败/取消终态，不能仅依赖 UI、stdout/stderr、协议回包或会话 JSONL。
-- fork 的业务边界诊断补充稳定事件、组件、阶段及 `elapsed_ms`，并随本地新增数据根路由到对应运行目录。
-- 一个日志文件 MUST 仅属于一次进程运行；重启／重跑（包括 PID 被复用）MUST 创建新文件，NEVER 追加已有日志。遇到同名旧日志时沿用数字后缀选择未占用文件；目录、级别、日期／大小轮转、保留与刷新规则不变。
+- fork 的业务边界诊断补充稳定事件、组件、阶段及 `elapsed_ms`；选择性能数据根时按「可选性能数据根」使用相应日志位置，否则沿用既有路由。
+- 一个日志文件 MUST 仅属于一次进程运行；重启／重跑（包括 PID 被复用）MUST 创建新文件，NEVER 追加已有日志。遇到同名旧日志时沿用数字后缀选择未占用文件；除本次双目录调整日志位置外，级别、日期／大小轮转、保留与刷新规则不变。
 - fork 新增诊断不得将正常取消、服务缺席或协议预期拒绝冒充故障；必要诊断不得全部藏在可关闭的 DEBUG 中。
-- 内网日志例外：`OMP_OFFLINE` 启用时仅记录 ERROR，优先于 `OMP_LOG_LEVEL`；WARN／INFO／DEBUG 在统一 logger 入口直接丢弃，不合并或序列化其上下文、不写本地日志，也不投递日志接收器。正常启动／退出不另写 INFO，日志回退不插入 WARN；真实 ERROR 仍沿用原目录、轮转与刷新。此项适用于全部 offline 平台，不改变界面提示、工具结果或协议输出；非 offline 保留原有级别与诊断覆盖。内网不再要求上文的正常阶段与成功起止日志，接受相应诊断缺口。
+- 内网日志例外：`OMP_OFFLINE` 启用时仅记录 ERROR，优先于 `OMP_LOG_LEVEL`；WARN／INFO／DEBUG 在统一 logger 入口直接丢弃，不合并或序列化其上下文、不写本地日志，也不投递日志接收器。正常启动／退出不另写 INFO，日志回退不插入 WARN；真实 ERROR 使用相应日志目录，轮转与刷新规则不变。此项适用于全部 offline 平台，不改变界面提示、工具结果或协议输出；非 offline 保留原有级别与诊断覆盖。内网不再要求上文的正常阶段与成功起止日志，接受相应诊断缺口。
 - 同一操作 MUST 通过 `operation_id` 及现有 request/job/goal/session/tool-call 标识关联起止和阶段；异步分支继承关联上下文，内部跨进程调用尽可能透传现有标识，不为日志改变外部协议。
 - 对话终态须区分用户取消、本地/宿主超时、abort、断连和失败，独立响应仍继承发起操作的标识；后台面板吞掉的异常、已保存但 reload 降级、Goal 工具激活/恢复失败与无效持久状态不得被完成/协议成功日志遮盖。
 - 会话删除须区分主文件删除、备份清理和附件清理，明确已提交、部分清理及未知状态；team 通知发送与后续 UI 更新分别定位，内部终止仅记录安全原因分类；repo 整代读取失败使用文件指纹定位，不记录原路径或源码。
@@ -36,20 +36,20 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 
 ### Requirement: 安装与运行
 
-OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告。
+OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告。
 
 #### Scenario: 安装与运行的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR`，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
+- 维护面向公司内网 Linux/tcsh 使用者的简洁[新手快速指南](../../../docs-zh-CN/quick-start-intranet.md)：最前面说明 `OMP_OFFLINE`、`OMP_CONFIG_ROOT`、`OMP_CACHE_DIR` 与 `OMP_SKILLS_DIR`，说明持久和性能数据、Linux offline 的 `/dev/shm/omp-<UID>` 缺省与缓存易失性，随后说明先执行 `ma dmas_ide`、`ide agent` 启动 IDE 和模型代理，再覆盖常用终端命令、内置命令、快捷键及可复制的任务示例（含 `/loop`、`/goal`、`/team`、代码定位索引 `/repo`、`/advisor`，以及可直接携带任务文本的 `/ultrathink`、`/orchestrate`、`/workflowz`）。内容依据当前实现，明确循环/目标的停止方式及内网限制，不扩展为上游文档翻译或站点。
 - fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定。
 - fork 新增 `-P <name>` 作为 `--profile <name>` 的短参数，无需 shell alias。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 数据根：agent 数据、Knowledge／Repo 数据库、会话、日志、缓存、运行状态及 profiles 等目录沿用根下相对布局，项目级 `.omp/` 不受影响。未设置有效值时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定根位置。
-- native addon 与 grammar 安装器 MUST 使用同一有效数据根及 profile 解析；显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录。此规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
-- **统一数据根**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均只通过 `OMP_CONFIG_ROOT` 统一调整 OMP 数据根，Knowledge 等子目录沿用 profile 内布局，不再单独指定活动目录。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、Knowledge／Repo 数据库及索引、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。全部既有 Cache、统计、日志和默认 native 按「可选性能数据根」使用所选性能根；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
+- native addon 加载器与 grammar 安装器 MUST 使用同一有效目录及 profile 解析；默认 native 和 grammar 缓存按「可选性能数据根」选择位置。显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录，其既有语义不变；本规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
+- **统一持久数据根与独立性能目录**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均通过 `OMP_CONFIG_ROOT` 统一调整持久数据根，`OMP_CACHE_DIR` 只接管规定的性能数据；Knowledge 等持久子目录沿用 profile 内布局，不再单独指定活动目录。
 - **Broker native 生命周期**：broker 自有 native 缓存位于既有 scope runtime 的 `natives/` 下，随现有 profile／config root／项目（含 global service scope）身份隔离和 runtime 回收机制管理，不以创建者进程为所有者。一个 core 的显式 `PI_NATIVES_DIR` 仍用于该 core 及普通子 worker，但不约束可供其他 core 合法共享的 detached broker；宿主不要求永久保留其临时叶，也不通过 `client.close()` 关闭共享 scope。验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存；两个独立 worker 同时冷提取／加载完整 DLL，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
@@ -87,7 +87,7 @@ OMP MUST 按有效配置根、网络与安装边界运行；失败保留旧安�
 #### Scenario: 安装与运行的可观察行为
 
 - **WHEN** 用户在普通或 offline 场景安装、启动或更新
-- **THEN** 按有效配置根、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告
+- **THEN** 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告
 
 ### Requirement: 发布 CI 的触发、并发与权限
 
@@ -119,7 +119,7 @@ OMP MUST 将安装诊断写入按运行唯一命名的日志文件，字段脱�
 
 - 日志文件名 MUST 为 `omp.install.<UTC 日期>.<epoch 毫秒>.<PID>.log`：日期为 UTC 的 `YYYY-MM-DD`，其余两段使同一进程的不同次安装也各自独立。
 - 每条记录 MUST 含 `operation_id`、`stage`、`elapsed_ms`、`platform`、`target_version`，以及级别、事件名与有界的结果字段；`target_version` MUST 只接受可选的 `v` 前缀加 `<数字>.<数字>.<数字>`、可再带 `+fork.<数字>` 的形式，其他输入 MUST 记为 `redacted`。
-- 目录选择 MUST 依次尝试：绝对有效的 `OMP_CONFIG_ROOT`（含 profile 子目录）下的 `logs/`，否则用户数据根（`PI_CONFIG_DIR` 或 `.omp`）的 `logs/`；未显式指定根且 `<XDG_STATE_HOME>/omp` 已存在时改用该目录；仍不可写时回退到 `~/.local/state/omp`。Windows 上首选同一数据根，回退到 `%LOCALAPPDATA%\omp`。回退（而非首选目录）生效时 MUST 留下一条 WARN。
+- 选择性能数据根时，安装器日志使用该根下的 `logs/`，保留原有回退规则。未选择性能数据根时，目录选择 MUST 依次尝试：绝对有效的 `OMP_CONFIG_ROOT`（含 profile 子目录）下的 `logs/`，否则用户数据根（`PI_CONFIG_DIR` 或 `.omp`）的 `logs/`；未显式指定根且 `<XDG_STATE_HOME>/omp` 已存在时改用该目录；仍不可写时回退到 `~/.local/state/omp`。Windows 上首选同一数据根，回退到 `%LOCALAPPDATA%\omp`。回退（而非首选目录）生效时 MUST 留下一条 WARN。
 - 保留策略 MUST 只清理本安装器模式的日志：保留最近 20 次尝试、最近 5 天，且 MUST 跳过 PID 仍存活的文件；不得删除应用日志或无关文件。
 - 日志写入失败 MUST 只在 stderr 输出一行提示并继续安装，MUST NOT 使安装失败或改变退出码。
 
@@ -293,6 +293,8 @@ OMP MUST 对本地二进制构建产生的 ZCode 产物执行与已批准产物�
 
 ### Requirement: Windows 统计端口恢复
 
+OMP MUST 在恢复 Windows 统计端口时保留进程身份保护和安全回退行为。
+
 #### Scenario: 已占用的统计面板端口
 
 - **WHEN** Windows 统计面板的目标端口被无法正常响应的进程占用
@@ -368,3 +370,35 @@ OpenWiki 仓库内容 MUST 保持在项目的 `openwiki/` 下；OMP 管理的工
 - **WHEN** 用户首次使用 OMP 内置 OpenWiki 工作区
 - **THEN** 工作区按当前 OMP profile 的状态运行；本次不要求读取、迁移或接管独立 OpenWiki 已有工作区注册表，不修改或删除旧注册表
 - **AND** 只读查询不写工作区注册表，也不导入个人知识库、连接器或独立 OpenWiki 凭据
+
+### Requirement: 可选性能数据根
+
+OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、日志和默认 native；配置、会话、Knowledge 向量、Repo 索引及其他持久数据保持原有位置。
+
+#### Scenario: 显式选择性能根
+- **WHEN** `OMP_CACHE_DIR` 经首尾空白处理和 `~` 展开后为绝对路径
+- **THEN** OMP MUST 在 Linux 下以 `<OMP_CACHE_DIR>/<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID；Windows 直接以该路径作为性能数据根；保留既有相对布局及命名 profile 的 `profiles/<name>/` 布局，不额外添加哈希、持久根或 SDK 身份目录
+- **AND** 此选择在 offline 和普通模式均生效；已有专用路径覆盖（如 `PI_NATIVES_DIR`）保留原有优先级与行为
+
+#### Scenario: Linux offline 默认性能根
+- **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且 Linux 进程按既有 `OMP_OFFLINE` 真值规则启用 offline
+- **THEN** OMP MUST 使用 `/dev/shm/omp-<UID>` 作为性能数据根，`<UID>` 为当前用户的数字 UID，不再追加 UID，并保留既有 profile 布局
+
+#### Scenario: 未选择性能根
+- **WHEN** 没有有效显式 `OMP_CACHE_DIR`，且不是 Linux offline
+- **THEN** OMP MUST 保留原有目录及适用的 XDG 路由，不新增默认目录；空值或相对值不作为显式性能根，也不相对当前工作目录解析
+
+#### Scenario: 性能与持久数据归属
+- **WHEN** 选择了性能数据根
+- **THEN** 原有 Cache 的全部内容（包括模型与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存 MUST 使用所选根下既有相对布局
+- **AND** 配置、认证、会话、Knowledge 数据库与已生成向量、Repo 数据库及索引、其他未迁移的用户状态和项目数据 MUST 保持原有位置
+- **AND** 原有日志级别、错误处理、回退和专用覆盖规则不因目录选择而改变
+
+#### Scenario: 性能数据丢失或切换
+- **WHEN** 性能目录被清空或切换
+- **THEN** 统计、日志和缓存允许丢失；非内嵌资源的缺失和下载遵循原有规则，持久数据不随之删除或重置
+- **AND** 不自动搬迁、合并或删除旧目录，也不新增双写或恢复服务
+
+#### Scenario: 轻量目录选择
+- **WHEN** OMP 启动或运行并选择性能目录
+- **THEN** 目录选择 MUST NOT 增加预检查、目录测速或后台服务；本功能旨在减少相关 NFS 访问，不承诺未经测量的性能收益

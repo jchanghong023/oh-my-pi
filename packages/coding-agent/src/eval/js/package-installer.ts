@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getAgentDir, isEnoent, ptree, withFileLock, writeRuntimeManifest } from "@oh-my-pi/pi-utils";
+import { getAgentCacheDir, isEnoent, ptree, withFileLock, writeRuntimeManifest } from "@oh-my-pi/pi-utils";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { trackDownload } from "../../downloads/activity";
 import { resolveExecutablePath } from "../../subprocess/worker-client";
@@ -48,7 +48,7 @@ function projectRoot(cwd: string): string {
 
 function projectLockPath(cwd: string): string {
 	const projectKey = Bun.hash(path.resolve(cwd)).toString(16).padStart(16, "0");
-	return path.join(getAgentDir(), "cache", "eval-js", "project-locks", projectKey);
+	return path.join(getAgentCacheDir(), "eval-js", "project-locks", projectKey);
 }
 
 /** Resolve the shared project package root without creating files. */
@@ -61,7 +61,7 @@ export function resolveJsPackageEnvironment(
 		return { mode, root: project, packageRoot: project, description: `project environment at ${project}` };
 	}
 	const key = Bun.hash(project).toString(16).padStart(16, "0");
-	const root = path.join(getAgentDir(), "cache", "eval-js", "environments", key);
+	const root = path.join(getAgentCacheDir(), "eval-js", "environments", key);
 	return { mode, root, packageRoot: root, description: `OMP-managed environment at ${root}` };
 }
 

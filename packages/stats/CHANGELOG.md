@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Create relocated statistics databases in their selected cache directory, including new parent directories.
 - Recover an unresponsive stats dashboard on Windows without terminating unrelated listeners.
 
 ## [18.14.2] - 2026-10-31

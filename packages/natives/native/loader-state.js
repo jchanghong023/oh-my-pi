@@ -6,7 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
 import { embeddedAddon } from "./embedded-addon.js";
-import { normalizeProfileName, resolveAbsoluteDir, resolvePersistentRoot, resolveXdgRoot } from "./offline-root.js";
+import { normalizeProfileName, resolveAbsoluteDir, resolveCacheRoot, resolvePersistentRoot, resolveXdgRoot } from "./offline-root.js";
 import { bindingsHaveReleaseIdentity, bindingsReleaseVersion, containsVersionStamp } from "./version-sentinel.js";
 
 /**
@@ -69,6 +69,8 @@ function getNativesDir() {
 		}
 	};
 	const profile = safeProfile(process.env.OMP_PROFILE ?? process.env.PI_PROFILE);
+	const selectedCacheRoot = resolveCacheRoot(profile);
+	if (selectedCacheRoot) return path.join(selectedCacheRoot, "natives");
 	const baseRoot = resolvePersistentRoot();
 	const configRoot = profile ? path.join(baseRoot, "profiles", profile) : baseRoot;
 	// A propagated profile agent directory is not a default-profile override.

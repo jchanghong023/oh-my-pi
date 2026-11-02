@@ -82,9 +82,34 @@ install_log_init() {
     if [ "$explicit_root" = false ] && [ -n "${XDG_STATE_HOME:-}" ] && [ -d "${XDG_STATE_HOME}/omp${profile_suffix}" ]; then
         log_root="${XDG_STATE_HOME}/omp"
     fi
+    cache_root="$(printf '%s' "${OMP_CACHE_DIR:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    case "$cache_root" in
+        "~") cache_root="$HOME" ;;
+        "~/"*) cache_root="$HOME/${cache_root#??}" ;;
+        "~\\"*) cache_root="$HOME${cache_root#?}" ;;
+    esac
+    case "$cache_root" in /*) ;; *) cache_root="" ;; esac
+    if [ -z "$cache_root" ]; then
+        offline_value="$(printf '%s' "${OMP_OFFLINE:-}" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+        case "$offline_value" in
+            1|true|yes|on)
+                if [ "$(uname -s 2>/dev/null)" = Linux ]; then
+                    cache_root="/dev/shm/omp-$(id -u)"
+                    mkdir -m 700 "$cache_root" 2>/dev/null || :
+                fi
+                ;;
+        esac
+    elif [ "$(uname -s 2>/dev/null)" = Linux ]; then
+        cache_root="${cache_root%/}/$(id -u)"
+    fi
     log_name="omp.install.$(date -u +%Y-%m-%d 2>/dev/null).${INSTALL_STARTED_MS}.$$.log"
     log_fallback=false
-    for log_dir in "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"; do
+    if [ -n "$cache_root" ]; then
+        set -- "$cache_root$profile_suffix/logs" "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
+    else
+        set -- "$log_root$profile_suffix/logs" "$HOME/.local/state/omp$profile_suffix/logs"
+    fi
+    for log_dir; do
         if { mkdir -p "$log_dir" && (umask 077; : >> "$log_dir/$log_name"); } 2>/dev/null; then
             INSTALL_LOG="$log_dir/$log_name"
             break

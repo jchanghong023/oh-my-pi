@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Load default native addons and grammars from `OMP_CACHE_DIR` when set, or the per-user Linux offline cache root.
 - Rename the native Wiki API and Rust core to Knowledge, including `pi-knowledge` and Knowledge test selection.
 - Add optional Wiki vector generations and snapshot-bound ranking APIs for native SDK consumers.
 - Render compact Wiki pages with up to 10 complete sections and a 4,000-character target while retaining continuation cursors.

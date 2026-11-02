@@ -21,6 +21,7 @@
 
 ### Added
 
+- Support optional `OMP_CACHE_DIR` for caches, statistics, logs and default native files, with a per-user Linux offline default while keeping sessions and knowledge persistent.
 - Prepare knowledge embeddings with up to four concurrent requests of 16 sections each, with bounded input windows and cancellable overload retries.
 
 - Default offline memory and knowledge embeddings to company `Qwen3-Embedding-8B` (4096 dimensions), enable `Qwen3-Reranker-8B` for knowledge search unless explicitly configured, and retry transient embedding overloads with bounded backoff.

@@ -73,9 +73,16 @@ function Initialize-InstallLog {
             $profileSuffix = "profiles\$profile\logs"
         } else { $profileSuffix = "logs" }
         $fallbackRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "omp" } else { Join-Path $homeDir ".omp" }
+        $cacheRoot = $env:OMP_CACHE_DIR
+        if ($cacheRoot) { $cacheRoot = $cacheRoot.Trim() }
+        if ($cacheRoot -eq "~") { $cacheRoot = $homeDir }
+        elseif ($cacheRoot -match '^~[/\\]') { $cacheRoot = Join-Path $homeDir $cacheRoot.Substring(2) }
+        if ($cacheRoot -notmatch '^(?:[A-Za-z]:[/\\]|[/\\]{2}[^/\\]+[/\\][^/\\]+)') { $cacheRoot = $null }
         $name = "omp.install.{0}.{1}.{2}.log" -f $script:InstallStarted.ToString("yyyy-MM-dd"), $script:InstallStarted.ToUnixTimeMilliseconds(), $PID
         $fallback = $false
-        foreach ($directory in @((Join-Path $root "logs"), (Join-Path $fallbackRoot $profileSuffix))) {
+        $directories = @((Join-Path $root "logs"), (Join-Path $fallbackRoot $profileSuffix))
+        if ($cacheRoot) { $directories = @((Join-Path $cacheRoot $profileSuffix)) + $directories }
+        foreach ($directory in $directories) {
             try {
                 [IO.Directory]::CreateDirectory($directory) | Out-Null
                 $logPath = Join-Path $directory $name

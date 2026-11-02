@@ -116,6 +116,8 @@ esac
 			PATH: `${binDir}:/usr/bin:/bin`,
 			HOME: dir,
 			OMP_CONFIG_ROOT: path.join(dir, "config"),
+			OMP_CACHE_DIR: "",
+			OMP_OFFLINE: "",
 			OMP_PROFILE: "",
 			PI_INSTALL_DIR: installDir,
 			TEST_LOG: log,
@@ -148,9 +150,26 @@ async function runInstaller(
 	return runInstallerWithFixture(args, await createFixture());
 }
 
+async function installerLog(directory: string): Promise<string> {
+	const names = (await fs.readdir(directory)).filter(name => /^omp\.install\..*\.log$/.test(name));
+	expect(names).toHaveLength(1);
+	return Bun.file(path.join(directory, names[0])).text();
+}
+
 // These fixtures require POSIX sh and a colon-separated PATH. The glibc route
 // cannot be simulated on Alpine, whose distro marker independently selects musl.
 describe.skipIf(process.platform === "win32")("fork installer routing", () => {
+	test.skipIf(hostIsAlpine)("routes named-profile logs to the user cache root", async () => {
+		const fixture = await createFixture();
+		const root = path.join(fixture.env.HOME!, "cache-root");
+		fixture.env.OMP_CACHE_DIR = `  ${root}  `;
+		fixture.env.OMP_PROFILE = "work";
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode, result.stderr).toBe(0);
+		const log = await installerLog(path.join(root, String(process.getuid!()), "profiles", "work", "logs"));
+		expect(log).toContain("event=install_completed");
+	});
+
 	test.skipIf(hostIsAlpine).each([
 		["x86_64", "x64"],
 		["aarch64", "arm64"],
@@ -357,6 +376,57 @@ const metadataPowerShellHosts = [windowsPowerShell, process.platform === "win32"
 );
 
 for (const powerShell of metadataPowerShellHosts) {
+	test(`Windows installer uses the cache root for profile logs (${path.basename(powerShell)})`, async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-ps-storage-"));
+		tempDirs.push(dir);
+		const root = path.join(dir, "cache-root");
+		const installDir = path.join(dir, "install");
+		await fs.mkdir(path.join(installDir, "omp.exe"), { recursive: true });
+		const child = Bun.spawn(
+			[
+				powerShell,
+				"-NoProfile",
+				"-NonInteractive",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				path.join(repoRoot, "scripts", "install.ps1"),
+				"-Binary",
+			],
+			{
+				cwd: repoRoot,
+				env: {
+					...process.env,
+					OMP_CONFIG_ROOT: path.join(dir, "config"),
+					OMP_CACHE_DIR: root,
+					OMP_OFFLINE: "",
+					OMP_PROFILE: "work",
+					PI_PROFILE: "",
+					PI_INSTALL_DIR: installDir,
+					LOCALAPPDATA: path.join(dir, "local"),
+					PROCESSOR_ARCHITECTURE: "AMD64",
+					PROCESSOR_ARCHITEW6432: "",
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(exitCode, `${stdout}\n${stderr}`).not.toBe(0);
+		const raw = await installerLog(path.join(root, "profiles", "work", "logs"));
+		const records = raw
+			.trim()
+			.split(/\r?\n/)
+			.map(line => JSON.parse(line));
+		expect(records.some(record => record.event === "install_failed")).toBe(true);
+	});
+}
+
+for (const powerShell of metadataPowerShellHosts) {
 	describe(`Windows installer metadata failures (${path.basename(powerShell)})`, () => {
 		test.each([
 			["missing tag", 404],
@@ -439,6 +509,8 @@ Write-Output ("RESULT " + ($result | ConvertTo-Json -Compress))
 							env: {
 								...process.env,
 								OMP_CONFIG_ROOT: configRoot,
+								OMP_CACHE_DIR: "",
+								OMP_OFFLINE: "",
 								OMP_PROFILE: "default",
 								PI_PROFILE: "default",
 								PI_INSTALL_DIR: installDir,
@@ -651,6 +723,8 @@ try {
 				...process.env,
 				PI_INSTALL_DIR: path.join(dir, "install 'quoted"),
 				OMP_CONFIG_ROOT: path.join(dir, "config"),
+				OMP_CACHE_DIR: "",
+				OMP_OFFLINE: "",
 				OMP_PROFILE: "default",
 				PI_PROFILE: "default",
 				TEST_ROOT: dir,
@@ -704,6 +778,8 @@ try {
 					USERPROFILE: dir,
 					LOCALAPPDATA: path.join(dir, "local"),
 					OMP_CONFIG_ROOT: configRoot,
+					OMP_CACHE_DIR: "",
+					OMP_OFFLINE: "",
 					OMP_PROFILE: "default",
 					PI_PROFILE: "default",
 					PI_INSTALL_DIR: installDir,
@@ -922,6 +998,8 @@ try {
 						env: {
 							...process.env,
 							OMP_CONFIG_ROOT: path.join(dir, "config"),
+							OMP_CACHE_DIR: "",
+							OMP_OFFLINE: "",
 							OMP_PROFILE: "default",
 							PI_PROFILE: "default",
 							PI_INSTALL_DIR: path.join(dir, "install"),
@@ -1021,6 +1099,8 @@ Save-InstallBinary -Uri "http://omp-download.invalid/omp.exe" -OutFile $env:TEST
 						env: {
 							...process.env,
 							OMP_CONFIG_ROOT: path.join(dir, "config"),
+							OMP_CACHE_DIR: "",
+							OMP_OFFLINE: "",
 							OMP_PROFILE: "default",
 							PI_PROFILE: "default",
 							CURL_HOME: dir,
@@ -1133,6 +1213,8 @@ Save-InstallBinary -Uri "https://127.0.0.1:$env:TEST_PORT/omp.exe" -OutFile "$en
 							env: {
 								...process.env,
 								OMP_CONFIG_ROOT: path.join(dir, "config"),
+								OMP_CACHE_DIR: "",
+								OMP_OFFLINE: "",
 								OMP_PROFILE: "default",
 								PI_PROFILE: "default",
 								CURL_HOME: dir,

@@ -62,3 +62,13 @@ export function resolvePersistentRoot(env = process.env) {
 	if (override && path.isAbsolute(override)) return normalizePersistentRoot(override);
 	return normalizePersistentRoot(path.join(home, env.PI_CONFIG_DIR || DEFAULT_CONFIG_DIR_NAME));
 }
+
+/** Resolve the optional cache root, keeping named profiles in their usual layout. */
+export function resolveCacheRoot(profile) {
+	let root = resolveAbsoluteDir(process.env.OMP_CACHE_DIR);
+	if (root && process.platform === "linux") root = path.join(root, String(process.getuid()));
+	else if (!root && process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
+		root = path.join("/dev/shm", `omp-${process.getuid()}`);
+	}
+	return root && profile ? path.join(root, "profiles", profile) : root;
+}

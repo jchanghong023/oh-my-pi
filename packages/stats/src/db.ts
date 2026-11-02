@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { ServiceTier, Usage } from "@oh-my-pi/pi-ai";
 import { pricingPeerFor } from "@oh-my-pi/pi-catalog/compat/behavior";
 import {
@@ -10,7 +11,7 @@ import {
 	hasRecurringTariff,
 } from "@oh-my-pi/pi-catalog/models";
 import type { ModelCost } from "@oh-my-pi/pi-catalog/types";
-import { getConfigRootDir, getStatsDbPath, VERSION } from "@oh-my-pi/pi-utils";
+import { getStatsDbPath, VERSION } from "@oh-my-pi/pi-utils";
 import { ChunkedInsert } from "./chunked-insert";
 import { classifyAgentType, type ParseSessionResult, type SessionParserState } from "./parser";
 import { ensureRollupSchema, getDailyActivityFromRollup } from "./rollup";
@@ -129,10 +130,10 @@ function shouldResetBackfill(value: string | undefined): boolean {
 export async function initDb(): Promise<Database> {
 	if (db) return db;
 
-	// Ensure directory exists
-	await fs.mkdir(getConfigRootDir(), { recursive: true });
+	const dbPath = getStatsDbPath();
+	await fs.mkdir(path.dirname(dbPath), { recursive: true });
 
-	db = new Database(getStatsDbPath());
+	db = new Database(dbPath);
 	// Install the busy handler BEFORE any lock-taking statement. See
 	// https://github.com/can1357/oh-my-pi/issues/2421.
 	db.run("PRAGMA busy_timeout = 5000");

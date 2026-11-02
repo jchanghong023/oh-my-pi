@@ -8,6 +8,9 @@
 setenv OMP_OFFLINE 1
 setenv OMP_CONFIG_ROOT "$HOME/omp-data"
 
+# 可选：自定义性能数据根目录（绝对路径）：
+# setenv OMP_CACHE_DIR "$HOME/omp-cache"
+
 # 使用团队共享资源时，替换为实际网络文件系统路径：
 setenv OMP_SKILLS_DIR "/path/to/shared/skills"
 
@@ -16,11 +19,25 @@ setenv ASCEND_API_KEY "<你的密钥>"
 ```
 
 - `OMP_OFFLINE`：启用公司内网模式；`1`、`true`、`yes`、`on` 均有效，忽略大小写和首尾空白。
-- `OMP_CONFIG_ROOT`：统一的数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。配置、会话、Knowledge／Repo 数据库、日志与缓存均从该根派生，保留 profile 内布局；旧数据不会自动搬迁。
+- `OMP_CONFIG_ROOT`：持久数据根，可换成有写权限的绝对路径，支持 `~` 展开；未设置、留空或值无效时使用上游默认目录规则。保留 profile 内布局，旧数据不会自动搬迁。
+- `OMP_CACHE_DIR`：可选的性能数据根目录，支持绝对路径和 `~` 展开；留空或相对路径不作为显式设置。Linux 在有效值后追加当前用户的数字 UID，例如命名 profile 使用 `<OMP_CACHE_DIR>/<UID>/profiles/<name>/`；不追加哈希或 SDK 身份目录。Windows 直接使用有效值。此设置在 offline 与普通模式均生效；已有专用路径覆盖（如 `PI_NATIVES_DIR`）仍按原优先级生效。
 - `OMP_SKILLS_DIR`：可选的共享技能根目录，加载其中 `<技能名>/SKILL.md`；同名时共享版本取得裸名，内容不同的其他版本按既有 namespace 名称保留。执行与管理沿用相同命名与优先级；面板设置以当前宿主会话为准，关闭来源及其诊断只留在管理侧。在 `/extensions` 查看 `Shared` 来源和实际名称，禁用项仍保留，可直接启用／禁用并等待异步刷新后从 `/skill:` 补全调用。启停不修改共享 NFS 技能文件；目录不存在时不影响原有技能加载，不下载或同步文件。
 - `ASCEND_API_KEY`：可选，使用内置 Ascend 模型时设置；无需 `models.yml` 或登录，不依赖 `OMP_OFFLINE`，不改变现有默认模型。用 `omp models ascend` 查看模型，用 `omp --model ascend/qwen3.8-flash-next` 启动；参数与 HTTP 明文传输边界见 [Ascend 内置模型](../openspec/specs/model-providers/spec.md)。不要将真实密钥提交到仓库或共享文档。
 
-上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。知识库没有独立目录设置：CLI、TUI 与 AI 的 `knowledge_search` 工具始终使用当前 profile 数据目录下的同一个 `knowledge.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
+上述设置可按需放进 `~/.tcshrc`，以后新开的 tcsh 终端自动生效。`OMP_CONFIG_ROOT`、`OMP_CACHE_DIR` 与 `OMP_SKILLS_DIR` 不依赖 `OMP_OFFLINE`，也不需要配置文件；路径示例需替换为实际可访问目录。
+
+| 目录 | 内容 | 保留与丢失 |
+| --- | --- | --- |
+| 持久目录 | 配置、认证凭据、profile、会话和历史、会话附件与 blob、个人 Skill／工具／命令／提示词／主题 | 不随性能目录切换或清空迁移、删除或重置 |
+| 持久目录 | Knowledge 数据库、文档记录、分块、已生成向量、索引和元数据；Repo 数据库及代码索引 | 完整持久保存；向量不能因为可重建而当作缓存清理 |
+| 持久目录 | 其他未列为性能数据的用户状态，包括内置 OpenWiki 工作区注册表；项目 `.omp/`、项目 `openwiki/`、Claims、manifest、checkpoint 仍在项目内 | 位置及既有作用域不变 |
+| 性能目录 | 原有 `cache/`、`agent/cache/` 和既有缓存类别目录的**全部内容**，包括 webcache、模型权重、推理运行依赖、认证快照、头像、推断结果和文档转换缓存 | 都属于可丢失的性能数据，不因模型或运行依赖较大／难以下载而排除 |
+| 性能目录 | 统计数据库及 SQLite 配套文件；运行、错误、启动和安装／更新诊断日志 | 允许丢失，不定期回写或备份；日志级别和保留规则不变 |
+| 性能目录 | 默认自动解压的 native、版本缓存及对应 grammar 缓存 | 二进制内嵌的 native 丢失后可重新解压；额外下载的 grammar 等资源不保证离线可恢复 |
+
+Linux 内网模式未设置有效 `OMP_CACHE_DIR` 时，性能数据默认放在 `/dev/shm/omp-<UID>`，其中 `<UID>` 是当前用户的数字 UID，不再重复追加；命名 profile 使用 `/dev/shm/omp-<UID>/profiles/<name>/`。其他环境未设置有效 `OMP_CACHE_DIR` 时不新增默认目录，继续使用原有目录及适用的 XDG 规则。
+
+`/dev/shm` 是易失性内存文件系统，重启或清理后缓存、统计、日志及模型／运行依赖文件可能丢失；非内嵌资源的缺失或下载仍遵循原有 offline 规则。先结束使用中的进程再清理性能目录；更换路径不会自动搬迁旧数据。知识库没有独立目录设置：CLI、TUI 与 AI 的 `knowledge_search` 工具使用当前 profile 数据目录下的 `knowledge.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 
 旧 profile 若只有 `docs.db`，首次打开知识库时会通过 SQLite 一致快照（包含 WAL）发布 `knowledge.db`，并保留 `docs.db` 作为恢复备份；新库已存在时以新库为准，不合并或删除旧库。迁移失败会报错，不会静默使用空库。旧的 `wiki.reranker.*` 配置不再生效，需改为 `knowledge.reranker.*`。
 
