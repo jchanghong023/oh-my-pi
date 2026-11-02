@@ -183,7 +183,7 @@ describe("SessionSelectorComponent current session marker", () => {
 			{
 				getTerminalRows: () => 100,
 				currentSessionPath: () => currentPath,
-				allSessions: [alpha, live, other],
+				allSessions: { sessions: [alpha, live, other] },
 				onDelete: async () => {
 					currentPath = "/work/fresh.jsonl";
 					return true;

@@ -578,10 +578,7 @@ describe("OpenCode provider discovery", () => {
 				contextWindow: 128_000,
 				maxTokens: 16_384,
 			});
-			await resolveProviderModels(
-				{ ...managerOptions, fetchDynamicModels: async () => [retired] },
-				"online",
-			);
+			await resolveProviderModels({ ...managerOptions, fetchDynamicModels: async () => [retired] }, "online");
 
 			const refreshed = await resolveProviderModels(managerOptions, "online");
 			expect(refreshed.stale).toBe(false);

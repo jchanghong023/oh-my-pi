@@ -13,7 +13,12 @@ import type { StructuredSubagentOutput } from "../tools/task";
 import type { DaemonSnapshot } from "../tools/daemon";
 import { type CustomMessage, type FileMentionMessage, resolveAbortLabel, shouldRenderAbortReason } from "./messages";
 import { createIrcMessageCard } from "../tools/wait";
-import { formatArtifactErrorNotice, type OutputMeta } from "../tools/output-meta";
+import {
+	formatArtifactErrorNotice,
+	formatMinimizedMeta,
+	type MinimizedMeta,
+	type OutputMeta,
+} from "../tools/output-meta";
 import type { OutputArtifactError } from "../tools/streaming-output";
 import { formatStyledPath, replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render-utils";
 import { canonicalizeMessage } from "./thinking-display";
@@ -47,6 +52,7 @@ export function buildAsyncResultBlock(message: CustomOrHookMessage): ToolActivit
 				native: { tone: "warning", message: [span(notice)] },
 			});
 		}
+		if (job.meta?.minimized) rows.push(minimizedRow(job.meta.minimized));
 	}
 	if (details?.jobs && details.jobs.length > 0 && details.meta?.artifactError) {
 		rows.push(artifactErrorRow(details.meta.artifactError));
@@ -79,6 +85,12 @@ export function buildAsyncResultComponent(
 function artifactErrorRow(error: OutputArtifactError): TranscriptStatusRow {
 	const notice = formatArtifactErrorNotice(error);
 	return { parts: [{ text: notice, color: "warning" }], native: { tone: "warning", message: [span(notice)] } };
+}
+
+/** The dim row under a background job whose output the minimizer shortened. */
+function minimizedRow(minimized: MinimizedMeta): TranscriptStatusRow {
+	const fact = `Minimized: ${formatMinimizedMeta(minimized)}`;
+	return { parts: [{ text: fact, color: "dim" }], native: { tone: "info", message: [span(fact, "dim")] } };
 }
 
 /**
