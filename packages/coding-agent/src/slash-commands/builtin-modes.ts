@@ -302,8 +302,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			{ name: "clean", description: "隐藏思考与工具活动" },
 			{
 				name: "compact",
-				description:
-					"连续工具段末两条预览，写入段末三次修改；输入区上方固定单行显示最新非空思考，用户消息超六行显示前五行与折叠提示",
+				description: "隐藏普通工具卡片，保留文件写入／编辑组件及输入区上方两行活动内容",
 			},
 			{ name: "detailed", description: "沿用上游完整思考与工具显示" },
 		],
@@ -340,7 +339,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					.map(([setting]) => `${setting.id}（${sources[setting.provenance(settings)]}）`)
 					.join("、");
 				const thinking = cfgHideThinkingBlock.get(settings) ? "隐藏" : "显示";
-				const tools = { clean: "隐藏", compact: "连续工具段末两条预览（写入段保留末三次修改）", detailed: "详细" }[
+				const tools = { clean: "隐藏", compact: "仅显示文件写入／编辑组件及两行活动内容", detailed: "详细" }[
 					cfgDisplayMode.get(settings)
 				];
 				runtime.ctx.showWarning(
