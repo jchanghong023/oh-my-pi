@@ -1,4 +1,5 @@
 import { logger } from "@oh-my-pi/pi-utils";
+import { inheritCompanyProcessSnapshot } from "../config/company-provider";
 import { KnowledgeIndexEngine } from "./engine";
 import type { KnowledgeWorkerInbound, KnowledgeWorkerLogContext, KnowledgeWorkerTransport } from "./worker-protocol";
 
@@ -29,6 +30,7 @@ export function startKnowledgeWorker(transport: KnowledgeWorkerTransport): void 
 		try {
 			if (message.type === "configure") {
 				if (engine) throw new Error("Document worker is already configured");
+				inheritCompanyProcessSnapshot(message.company ?? { enabled: false });
 				engine = new KnowledgeIndexEngine({ ...message.options, cursorPath: message.cursorPath });
 				send({
 					type: "result",

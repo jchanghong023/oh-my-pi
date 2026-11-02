@@ -252,3 +252,39 @@ export function getCompanyConfig(): Readonly<CompanyConfig> | undefined {
 export function getCompanyConfigError(): string | undefined {
 	return companyLaneActive() ? ensureStartupSnapshot().error : undefined;
 }
+
+/** Private IPC payload for owned subprocesses; never log or persist this snapshot. */
+export interface CompanyProcessSnapshot {
+	enabled: boolean;
+	snapshot?: CompanySnapshot;
+}
+
+export function companySnapshotForSubprocess(): CompanyProcessSnapshot {
+	if (!companyLaneActive()) return { enabled: false };
+	const snapshot = ensureStartupSnapshot();
+	return {
+		enabled: true,
+		snapshot: snapshot.config
+			? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } }
+			: snapshot,
+	};
+}
+
+/** Install the parent's cached startup state without rereading mutable credential files. */
+export function inheritCompanyProcessSnapshot(state: CompanyProcessSnapshot): void {
+	if (!isMainThread) throw new Error("Company subprocess snapshot requires a process main thread");
+	if (state.enabled) {
+		if (!state.snapshot) throw new Error("Missing company subprocess snapshot");
+		const snapshot = state.snapshot;
+		if (snapshot.config) {
+			Object.defineProperty(snapshot.config, "token", { enumerable: false });
+			Object.freeze(snapshot.config);
+		}
+		mainSnapshot = snapshot;
+		setEnvironmentData(
+			snapshotKey,
+			snapshot.config ? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } } : snapshot,
+		);
+	}
+	setCompanyOfflineEnabled(state.enabled);
+}

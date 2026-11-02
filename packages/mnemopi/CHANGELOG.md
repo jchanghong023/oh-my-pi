@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Retry transient overloads for strict API embedding requests with bounded backoff and shared cancellation and timeout limits.
+
 - Fixed custom embedding gateways containing `openrouter.ai` in their path or hostname being mistaken for the official OpenRouter endpoint.
 - Restored the exact `www.openrouter.ai` embedding alias without treating arbitrary subdomains as official endpoints.
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.

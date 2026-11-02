@@ -9,6 +9,7 @@ import {
 } from "@oh-my-pi/pi-natives";
 import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
+import { companySnapshotForSubprocess } from "../config/company-provider";
 import { KNOWLEDGE_WORKER_ARG } from "../cli/worker-selectors";
 import {
 	createWorkerHandle,
@@ -358,6 +359,7 @@ export class KnowledgeService {
 					type: "configure",
 					id: worker.configureId,
 					options: this.#options,
+					company: companySnapshotForSubprocess(),
 					cursorPath: this.#cursorPath,
 					context: request.context,
 				});

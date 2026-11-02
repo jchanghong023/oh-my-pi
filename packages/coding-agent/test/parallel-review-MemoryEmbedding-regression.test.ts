@@ -128,7 +128,7 @@ test("embedding gateways and explicit environment credentials survive managed pr
 			{
 				path: "/company/v1/embeddings",
 				authorization: "Bearer company-fixture-key",
-				model: "Qwen3-VL-Embedding-2B",
+				model: "Qwen3-Embedding-8B",
 				input: ["company-default"],
 			},
 			{

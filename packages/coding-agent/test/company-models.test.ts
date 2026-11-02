@@ -76,7 +76,7 @@ function runCompanyProbe(): CompanyProbe {
 				// Dynamic loading must follow the guard so no import-time request can escape the fixture.
 				const { setCompanyOfflineEnabled } = await import(${source("config/company-provider")});
 				const { getCompanyChatModels, setCompanyChatContextWindow, COMPANY_OFFLINE_CONTEXT_WINDOW,
-					COMPANY_OFFLINE_ROLE_DEFAULTS } = await import(${source("config/company-models")});
+					COMPANY_OFFLINE_ROLE_DEFAULTS, COMPANY_RETRIEVAL_MODELS } = await import(${source("config/company-models")});
 				const { ModelRegistry } = await import(${source("config/model-registry")});
 				const { Settings } = await import(${source("config/settings")});
 				const { resolveSessionModelSelector, resolveModelRoleValue } = await import(${source("config/model-resolver")});
@@ -106,8 +106,7 @@ function runCompanyProbe(): CompanyProbe {
 					headers: buildAnthropicClientOptions({ model, apiKey: companyKey }).defaultHeaders,
 					ignoredCompanyKeySource: authStorage.keys.source("company") !== undefined,
 					warnings: registry.getReservedProviderWarnings(),
-					retrievalVisible: registry.find("company", "Qwen3-VL-Embedding-2B") !== undefined ||
-						registry.find("company", "Qwen3-VL-Reranker-2B") !== undefined,
+					retrievalVisible: COMPANY_RETRIEVAL_MODELS.some(model => registry.find("company", model.id) !== undefined),
 					serializedSecret: JSON.stringify(registry.getAll()).includes("company-fixture-token"),
 				};
 				const disabled = new ModelRegistry(authStorage, ${JSON.stringify(modelsFile)}, {

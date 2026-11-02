@@ -34,6 +34,144 @@ function resolveKnowledgeModels(options: Parameters<typeof resolveKnowledgeModel
 }
 
 describe("Knowledge model adapters", () => {
+	test("offline defaults send 8B embedding and rerank requests only to the company gateway", async () => {
+		const requests: Array<{ route: string; model: string; auth: string | null }> = [];
+		const baseUrl = server(async req => {
+			const body = (await req.json()) as { model: string; input?: string[]; documents?: string[] };
+			const route = new URL(req.url).pathname;
+			requests.push({ route, model: body.model, auth: req.headers.get("authorization") });
+			return Response.json(
+				route.endsWith("/embeddings")
+					? {
+							model: body.model,
+							data: body.input!.map((_, index) => ({ index, embedding: Array(4096).fill(0.5) })),
+						}
+					: {
+							model: body.model,
+							results: body
+								.documents!.map((_, index) => ({ index, relevance_score: index === 0 ? 0.9 : 0.2 }))
+								.reverse(),
+						},
+			);
+		});
+		const options = await config({});
+		const disabled = await config({ knowledge: { reranker: { model: "" } } });
+		const partial = await config({ knowledge: { reranker: { baseUrl: "http://other.invalid/v1" } } });
+		const explicit = await config({
+			knowledge: { reranker: { model: "custom-rank", baseUrl, apiKey: "custom-key" } },
+		});
+		const claudeDir = path.join(options.cwd, "claude");
+		await Bun.write(
+			path.join(claudeDir, "settings.json"),
+			JSON.stringify({
+				env: { ANTHROPIC_BASE_URL: baseUrl, ANTHROPIC_AUTH_TOKEN: "company-key" },
+			}),
+		);
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"--eval",
+				`
+			import { setCompanyOfflineEnabled } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/config/company-provider.ts"))};
+			import { KnowledgeService } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/knowledge/service.ts"))};
+			import { resolveKnowledgeModels } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/knowledge/models.ts"))};
+			const options = ${JSON.stringify(options)};
+			setCompanyOfflineEnabled(false);
+			const online = await resolveKnowledgeModels(options);
+			if (online.embedding || online.reranker) throw new Error("company defaults leaked online");
+			setCompanyOfflineEnabled(true);
+			const models = await resolveKnowledgeModels(options);
+			await Bun.write(${JSON.stringify(path.join(claudeDir, "settings.json"))}, "{}");
+			const source = ${JSON.stringify(path.join(options.cwd, "source"))};
+			await Bun.write(source + "/guide.md", "# MBIST\n\nMBIST repair uses redundant columns.\n");
+			const service = new KnowledgeService(options);
+			try {
+				await service.init(source, "mbist");
+				const result = await service.searchKnowledge("MBIST");
+				if (!/retrieval:\\s*hybrid/.test(result.text) || !/reranked:\\s*yes/.test(result.text)) throw new Error(result.text);
+			} finally { await service.close(); }
+			const vectors = await models.embedding.embed(["MBIST repair", "lunch"]);
+			const scores = await models.reranker.rerank("MBIST", ["repair", "lunch"]);
+			for (const options of ${JSON.stringify([disabled, partial])}) {
+				if ((await resolveKnowledgeModels(options)).reranker) throw new Error("explicit setup overridden");
+			}
+			if ((await resolveKnowledgeModels({ ...options, reranker: false })).reranker) throw new Error("disabled reranker enabled");
+			const custom = await resolveKnowledgeModels(${JSON.stringify(explicit)});
+			await custom.reranker.rerank("MBIST", ["repair", "lunch"]);
+			console.log(JSON.stringify({ dimensions: vectors.map(row => row.length), scores }));
+		`,
+			],
+			{
+				cwd: options.cwd,
+				env: {
+					...process.env,
+					CLAUDE_CONFIG_DIR: claudeDir,
+					PI_CONFIG_FILES: "",
+					MNEMOPI_EMBEDDING_MODEL: "",
+					MNEMOPI_EMBEDDING_API_URL: "",
+					MNEMOPI_EMBEDDING_API_KEY: "",
+					MNEMOPI_EMBEDDINGS_VIA_API: "",
+					MNEMOPI_NO_EMBEDDINGS: "",
+					OPENROUTER_BASE_URL: "",
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect({ exitCode, stderr: exitCode === 0 ? "" : stderr }).toEqual({ exitCode: 0, stderr: "" });
+		expect(
+			requests
+				.slice(0, -3)
+				.some(
+					request =>
+						request.route === "/v1/embeddings" &&
+						request.model === "Qwen3-Embedding-8B" &&
+						request.auth === "Bearer company-key",
+				),
+		).toBe(true);
+		expect(
+			requests
+				.slice(0, -3)
+				.some(
+					request =>
+						request.route === "/v1/rerank" &&
+						request.model === "Qwen3-Reranker-8B" &&
+						request.auth === "Bearer company-key",
+				),
+		).toBe(true);
+		expect(JSON.parse(stdout)).toEqual({ dimensions: [4096, 4096], scores: [0.9, 0.2] });
+		expect(requests.slice(-3)).toEqual([
+			{ route: "/v1/embeddings", model: "Qwen3-Embedding-8B", auth: "Bearer company-key" },
+			{ route: "/v1/rerank", model: "Qwen3-Reranker-8B", auth: "Bearer company-key" },
+			{ route: "/v1/rerank", model: "custom-rank", auth: "Bearer custom-key" },
+		]);
+	});
+
+	test("knowledge embedding retries a temporary overload and stops after three attempts", async () => {
+		let calls = 0;
+		let fail = false;
+		const baseUrl = server(async req => {
+			calls++;
+			if (fail || calls === 1) return new Response("overloaded", { status: 503, headers: { "Retry-After": "0" } });
+			const body = (await req.json()) as { model: string };
+			return Response.json({ model: body.model, data: [{ index: 0, embedding: [1, 2] }] });
+		});
+		const options = await config({
+			mnemopi: { embeddingModel: "local", embeddingApiUrl: baseUrl, embeddingApiKey: "" },
+		});
+		const { embedding } = await resolveKnowledgeModels(options);
+		expect(await embedding!.embed(["MBIST repair"])).toEqual([[1, 2]]);
+		expect(calls).toBe(2);
+		fail = true;
+		await expect(embedding!.embed(["MBIST repair"])).rejects.toThrow();
+		expect(calls).toBe(5);
+	});
+
 	test("explicit embedding configuration sends only its own credentials and orders indexed rows", async () => {
 		const requests: Array<{ auth: string | null; body: { model: string; input: string[] } }> = [];
 		const baseUrl = server(async req => {

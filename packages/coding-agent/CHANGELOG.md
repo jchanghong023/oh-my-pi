@@ -21,6 +21,8 @@
 
 ### Added
 
+- Default offline memory and knowledge embeddings to company `Qwen3-Embedding-8B` (4096 dimensions), enable `Qwen3-Reranker-8B` for knowledge search unless explicitly configured, and retry transient embedding overloads with bounded backoff.
+
 - Automatically scroll `/crawl` pages and open clearly labelled full-article controls, including recursive children and nested scroll panels; use `--no-scroll` to opt out of progressive scrolling.
 - Save authenticated pages as Markdown with `/crawl` through Browser Relay, without invoking a model.
 - Select a separate OpenWiki planning model with `--planner-model` while page agents keep using `--modelId` or the default role.
@@ -138,6 +140,8 @@
 - Restore upstream Collab behavior, removing fork-specific guest command and lifecycle overrides.
 
 ### Fixed
+
+- Preserve offline company embedding and reranker configuration in knowledge workers so indexes created from the knowledge panel include available semantic vectors.
 
 - Stop `/crawl` with a clear error when scrolling cannot advance, instead of repeatedly scrolling until the page timeout.
 - Keep `/crawl` hash-router paths and their query parameters intact when navigating, following links, and recording source URLs.

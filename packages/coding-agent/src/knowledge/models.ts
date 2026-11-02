@@ -8,6 +8,7 @@ import {
 } from "@oh-my-pi/pi-mnemopi/core/embeddings";
 import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 import { logger } from "@oh-my-pi/pi-utils";
+import { COMPANY_RETRIEVAL_MODELS } from "../config/company-models";
 import { getCompanyConfig } from "../config/company-provider";
 import { Settings } from "../config/settings";
 import { resolveMnemopiEmbeddingOptions } from "../mnemopi/config";
@@ -124,8 +125,22 @@ export async function resolveKnowledgeModels(
 			};
 		}
 	}
-	const rerankModel = options.reranker === false ? undefined : cfgKnowledgeRerankerModel.get(settings)?.trim();
-	const rerankUrl = rerankModel ? endpoint(cfgKnowledgeRerankerBaseUrl.get(settings)) : undefined;
+	// A partial or empty explicit setup remains authoritative, including disabling reranking.
+	const companyDefaults =
+		options.reranker !== false &&
+		![cfgKnowledgeRerankerModel, cfgKnowledgeRerankerBaseUrl, cfgKnowledgeRerankerApiKey].some(setting =>
+			settings.isConfigured(setting),
+		)
+			? getCompanyConfig()
+			: undefined;
+	const rerankModel =
+		options.reranker === false
+			? undefined
+			: (cfgKnowledgeRerankerModel.get(settings)?.trim() ??
+				(companyDefaults ? COMPANY_RETRIEVAL_MODELS[1].id : undefined));
+	const rerankUrl = rerankModel
+		? endpoint(cfgKnowledgeRerankerBaseUrl.get(settings) ?? companyDefaults?.embeddingBaseUrl)
+		: undefined;
 	if (rerankModel && rerankUrl) {
 		const explicitKey = cfgKnowledgeRerankerApiKey.get(settings);
 		const company = explicitKey === undefined ? getCompanyConfig() : undefined;

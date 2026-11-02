@@ -6,6 +6,8 @@ import { COMPANY_PROVIDER_ID, getCompanyConfig } from "./company-provider";
 
 // These are retrieval models, not Anthropic Messages models or tool-calling agents.
 export const COMPANY_RETRIEVAL_MODELS = [
+	{ id: "Qwen3-Embedding-8B", type: "embedding", input: ["text"], contextWindow: 32768, dimensions: 4096 },
+	{ id: "Qwen3-Reranker-8B", type: "reranker", input: ["text"], contextWindow: 32768 },
 	{ id: "Qwen3-VL-Embedding-2B", type: "embedding", input: ["text", "image"], contextWindow: 32768, dimensions: 2048 },
 	{ id: "Qwen3-VL-Reranker-2B", type: "reranker", input: ["text", "image"], contextWindow: 32768 },
 ] as const;

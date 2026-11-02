@@ -455,13 +455,11 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 						}
 						const init = { method: "POST", headers, body, signal: requestSignal };
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
-							strict
-								? fetch(url, init)
-								: fetchWithRetry(url, {
-										...init,
-										maxAttempts: 3,
-										defaultDelayMs: attempt => 2 ** attempt * 1000,
-									}),
+							fetchWithRetry(url, {
+								...init,
+								maxAttempts: 3,
+								defaultDelayMs: attempt => 2 ** attempt * 1000,
+							}),
 						);
 						status = res.status;
 						stage = "headers";

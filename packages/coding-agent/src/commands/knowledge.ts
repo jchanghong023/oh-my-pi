@@ -5,6 +5,7 @@ import { reportCliUsageError } from "../cli/args";
 import { knowledgeHelp as commandHelp } from "../cli/command-help";
 import { type KnowledgeAction, runKnowledgeCommand } from "../cli/knowledge-cli";
 import { CliUsageError } from "../cli/usage-error";
+import { initializeOfflineModelCommand } from "../sdk";
 
 const ACTIONS: KnowledgeAction[] = ["init", "remove"];
 
@@ -47,6 +48,9 @@ export default class Knowledge extends Command {
 			}
 			throw error;
 		}
+		initializeOfflineModelCommand(undefined, undefined, message => {
+			process.stderr.write(`${message}\n`);
+		});
 		const controller = new AbortController();
 		const onSigint = () => controller.abort();
 		process.once("SIGINT", onSigint);

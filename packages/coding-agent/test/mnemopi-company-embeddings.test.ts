@@ -295,7 +295,7 @@ describe("company embedding defaults priority", () => {
 		expect(result.noCompanyLane).toBeUndefined();
 
 		// Default: company retrieval model at the company gateway, company token.
-		expect(result.defaultsModel).toBe("Qwen3-VL-Embedding-2B");
+		expect(result.defaultsModel).toBe("Qwen3-Embedding-8B");
 		expect(result.defaultsUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.defaultsToken).toBe("fixture-secret");
 
@@ -309,7 +309,7 @@ describe("company embedding defaults priority", () => {
 		expect(result.genericKeysWithoutApiRoute).not.toBeUndefined();
 		expect(result.forcedApiRouting).toBeUndefined();
 		// The existing www alias is not a custom gateway and must not displace the company lane.
-		expect(result.wwwGenericModel).toBe("Qwen3-VL-Embedding-2B");
+		expect(result.wwwGenericModel).toBe("Qwen3-Embedding-8B");
 		expect(result.wwwGenericUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.wwwGenericToken).toBe("fixture-secret");
 		expect(result.genericEnvDefaults).toBeUndefined();
@@ -331,7 +331,7 @@ describe("company embedding defaults priority", () => {
 
 		// Wiring: the resolved mnemonic config carries the company defaults, and
 		// an explicit URL keeps the explicit value with no company credentials.
-		expect(result.wiredModel).toBe("Qwen3-VL-Embedding-2B");
+		expect(result.wiredModel).toBe("Qwen3-Embedding-8B");
 		expect(result.wiredUrl).toBe(`${result.endpoint}/gateway/v1`);
 		expect(result.wiredToken).toBe("fixture-secret");
 		expect(result.wiredExplicitUrl).toBe("http://other.invalid/embed");
@@ -342,7 +342,7 @@ describe("company embedding defaults priority", () => {
 			{
 				url: `${result.endpoint}/gateway/v1/embeddings`,
 				authorization: "Bearer fixture-secret",
-				model: "Qwen3-VL-Embedding-2B",
+				model: "Qwen3-Embedding-8B",
 				input: ["company embedding fixture"],
 			},
 			{

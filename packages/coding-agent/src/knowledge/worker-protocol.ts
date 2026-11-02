@@ -1,3 +1,4 @@
+import type { CompanyProcessSnapshot } from "../config/company-provider";
 import type {
 	KnowledgeBuildResult,
 	KnowledgeIndexSummary,
@@ -15,7 +16,7 @@ export type KnowledgeWorkerLogContext = {
 };
 
 export type KnowledgeWorkerCommand =
-	| { type: "configure"; options: KnowledgeServiceOptions; cursorPath: string }
+	| { type: "configure"; options: KnowledgeServiceOptions; cursorPath: string; company?: CompanyProcessSnapshot }
 	| { type: "list" }
 	| { type: "init"; directory: string; name: string }
 	| { type: "remove"; name: string }
