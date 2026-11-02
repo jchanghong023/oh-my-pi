@@ -247,7 +247,10 @@ function scriptedPage({
 		},
 		scroll: async (_dx: number, dy: number) => {
 			if (!scrolling?.stalled) {
-				scrollArea.scrollTop = Math.min(scrollArea.scrollHeight - scrollArea.clientHeight, scrollArea.scrollTop + dy);
+				scrollArea.scrollTop = Math.min(
+					scrollArea.scrollHeight - scrollArea.clientHeight,
+					scrollArea.scrollTop + dy,
+				);
 			}
 			if (
 				scrollArea.scrollTop + scrollArea.clientHeight >= scrollArea.scrollHeight &&

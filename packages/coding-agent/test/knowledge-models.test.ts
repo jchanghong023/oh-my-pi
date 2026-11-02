@@ -83,12 +83,12 @@ describe("Knowledge model adapters", () => {
 			const models = await resolveKnowledgeModels(options);
 			await Bun.write(${JSON.stringify(path.join(claudeDir, "settings.json"))}, "{}");
 			const source = ${JSON.stringify(path.join(options.cwd, "source"))};
-			await Bun.write(source + "/guide.md", "# MBIST\n\nMBIST repair uses redundant columns.\n");
+			await Bun.write(source + "/guide.md", ${JSON.stringify("# MBIST\n\nMBIST repair uses redundant columns.\n")});
 			const service = new KnowledgeService(options);
 			try {
 				await service.init(source, "mbist");
 				const result = await service.searchKnowledge("MBIST");
-				if (!/retrieval:\\s*hybrid/.test(result.text) || !/reranked:\\s*yes/.test(result.text)) throw new Error(result.text);
+				if (!/retrieval:\\s*hybrid/i.test(result.text) || !/reranked:\\s*yes/i.test(result.text)) throw new Error(result.text);
 			} finally { await service.close(); }
 			const vectors = await models.embedding.embed(["MBIST repair", "lunch"]);
 			const scores = await models.reranker.rerank("MBIST", ["repair", "lunch"]);

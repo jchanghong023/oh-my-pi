@@ -168,7 +168,7 @@ omp knowledge init "/path/to/company-markdown" --name "company-docs"
 
 导入时会同时准备可复用的 Markdown／名称检索投影，以减少搜索时的重复解析，数据库占用会增加。旧索引首次打开会自动从库内原文升级并准备这些投影，可能等待一段时间；不需要找回源目录或重新导入。该一次性准备与后续搜索耗时不同，界面加载期间仍可取消。具体空间和耗时取决于资料规模。
 
-Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `knowledge.reranker.model`、`knowledge.reranker.baseUrl`、`knowledge.reranker.apiKey`。不猜测公司精排接口或公网地址，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，须在 Embedding 可用时显式执行下方的 remove → init，查询不会自动补算向量。
+Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `knowledge.reranker.model`、`knowledge.reranker.baseUrl`、`knowledge.reranker.apiKey`。`OMP_OFFLINE=1` 且公司配置可用、没有显式覆盖时，默认使用 `Qwen3-Embedding-8B`（4096 维）和公司 `/v1/rerank` 的 `Qwen3-Reranker-8B`；显式精排配置（包括空值）优先。不探测其他路由或回退公网，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，须在 Embedding 可用时显式执行下方的 remove → init，查询不会自动补算向量。
 
 **自己查资料：**
 
