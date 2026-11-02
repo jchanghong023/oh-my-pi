@@ -45,6 +45,18 @@ describe("resolveRelayKind", () => {
 	});
 });
 
+describe("explicit browser relay", () => {
+	it("rejects a disabled relay instead of falling through to another browser session", () => {
+		const session = {
+			cwd: process.cwd(),
+			settings: Settings.isolated({ "browser.cdpUrl": "http://127.0.0.1:9333" }),
+		} as ToolSession;
+		expect(() =>
+			resolveBrowserKind({ action: "open", app: { relay: true } }, session, { PI_BROWSER_RELAY: "0" }),
+		).toThrow(/relay.*disabled.*PI_BROWSER_RELAY/i);
+	});
+});
+
 describe("browser prelude relay guidance", () => {
 	const ENV_KEYS = [
 		"PI_BROWSER_RELAY",

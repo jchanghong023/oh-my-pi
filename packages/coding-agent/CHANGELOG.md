@@ -21,6 +21,7 @@
 
 ### Added
 
+- Automatically scroll `/crawl` pages and open clearly labelled full-article controls, including recursive children and nested scroll panels; use `--no-scroll` to opt out of progressive scrolling.
 - Save authenticated pages as Markdown with `/crawl` through Browser Relay, without invoking a model.
 - Select a separate OpenWiki planning model with `--planner-model` while page agents keep using `--modelId` or the default role.
 - Create an empty `openwiki/INSTRUCTIONS.md` when initializing or updating a Wiki if the file does not already exist.
@@ -138,6 +139,9 @@
 
 ### Fixed
 
+- Follow browser-native HTTP and JavaScript redirects in `/crawl`, retaining the browser session and recording final URLs while keeping recursion within the final entry site.
+- Save JavaScript-rendered enterprise pages with `/crawl --wait`, waiting for cross-origin data and retaining business tables and lists outside article content.
+- Make `/crawl` and explicit Browser Relay requests fail when Relay is disabled instead of silently using a different browser session.
 - Correct `/display compact` help and override warnings to describe the current file cards and two-line activity area.
 - Keep HTML export viewer asset integrity metadata in sync with the fork's generated viewer.
 - Keep Knowledge search CLI end-to-end checks within fulltest's existing integration concurrency limit.

@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
 import type { SlashCommandRuntime } from "../../../src/slash-commands/types";
 import * as access from "../../../src/tools/browser/crawl-access";
 import { type CrawlOptions, runCrawl } from "../../../src/tools/browser/crawl";
+import {
+	extractReadableFromHtml,
+	type ReadableExtractOptions,
+	type ReadableFormat,
+} from "../../../src/tools/browser/readable";
 
 interface FixturePage {
 	links?: string[];
@@ -43,7 +48,7 @@ function fixture(
 		}
 		if (args.action === "run") {
 			codes.push(args.code ?? "");
-			const match = /page\.goto\(("(?:[^"\\]|\\.)*")/.exec(args.code ?? "");
+			const match = /navigate\(("(?:[^"\\]|\\.)*")/.exec(args.code ?? "");
 			if (!match) throw new Error("missing navigation URL");
 			const url = JSON.parse(match[1]!) as string;
 			tabs.set(args.name, url);
@@ -84,19 +89,84 @@ function fixture(
 }
 
 /** Execute the browser script against a page whose DOM and URL change on a virtual clock. */
-function scriptedPage(redirectUrl?: string, onWait?: () => void, persistentIndicator = false) {
+function scriptedPage({
+	redirectUrl,
+	onWait,
+	persistentIndicator = false,
+	loadDelayMs = 1000,
+	requestUrl,
+	html,
+	scrolling,
+	fullArticle,
+}: {
+	redirectUrl?: string;
+	onWait?: () => void;
+	persistentIndicator?: boolean;
+	loadDelayMs?: number;
+	requestUrl?: string;
+	html?: string;
+	scrolling?: { container?: boolean; endless?: boolean; onScroll?: () => void };
+	fullArticle?: { label?: string; url?: string; form?: boolean; noop?: boolean; onClick?: () => void };
+} = {}) {
 	let elapsed = 0;
 	let requestedUrl = "";
 	let extractions = 0;
 	let detachments = 0;
 	const currentUrl = () => (redirectUrl && elapsed >= 500 ? redirectUrl : requestedUrl);
-	const loaded = () => persistentIndicator || elapsed >= 1000;
+	const loaded = () => persistentIndicator || elapsed >= loadDelayMs;
 	const article = persistentIndicator
 		? `Article title\n${"A substantive paragraph with useful article content. ".repeat(12)}`
 		: "Article title\nThe complete article body.";
+	const listeners = new Map<string, (event: Record<string, unknown>) => void>();
+	let requestPending = false;
+	let batches = 1;
+	let nextBatchAt: number | undefined;
+	let expanded = false;
+	let expansionAt: number | undefined;
+	const controlMarkers = new Set<string>();
+	const control = {
+		tagName: fullArticle?.url ? "A" : "BUTTON",
+		get innerText() {
+			return expanded ? "收起全文" : (fullArticle?.label ?? "查看全文");
+		},
+		type: fullArticle?.form ? "submit" : "button",
+		form: fullArticle?.form ? {} : null,
+		disabled: false,
+		getClientRects: () => [{}],
+		getBoundingClientRect: () => ({ top: 0, bottom: 30, left: 0, right: 100 }),
+		clientHeight: 30,
+		clientWidth: 100,
+		scrollHeight: 30,
+		scrollTop: 0,
+		closest: (selector: string): Element | null =>
+			selector === "a[href]" && !fullArticle?.url ? null : (control as unknown as Element),
+		getAttribute: (name: string) => (name === "href" ? (fullArticle?.url ?? null) : null),
+		hasAttribute: (name: string) => controlMarkers.has(name),
+		setAttribute: (name: string) => controlMarkers.add(name),
+		removeAttribute: (name: string) => controlMarkers.delete(name),
+	};
+	const markers = new Set<string>();
+	const scrollArea = {
+		scrollTop: 0,
+		clientHeight: 100,
+		clientWidth: 100,
+		get scrollHeight() {
+			return scrolling ? (batches + 1) * 100 : 100;
+		},
+		getAttribute: () => null,
+		getBoundingClientRect: () => ({ top: 0, bottom: 100, left: 0, right: 100 }),
+		setAttribute: (name: string) => markers.add(name),
+		removeAttribute: (name: string) => markers.delete(name),
+	};
+	const renderedText = () => {
+		if (fullArticle && !expanded) return `Article title\nPreview only\n${fullArticle.label ?? "查看全文"}`;
+		return scrolling
+			? `${article}\n${Array.from({ length: batches }, (_, index) => `Lazy section ${index + 1}`).join("\n")}`
+			: article;
+	};
 	const client = {
-		on: () => {},
-		off: () => {},
+		on: (event: string, listener: (event: Record<string, unknown>) => void) => listeners.set(event, listener),
+		off: (event: string) => listeners.delete(event),
 		detach: async () => {
 			detachments++;
 		},
@@ -106,31 +176,95 @@ function scriptedPage(redirectUrl?: string, onWait?: () => void, persistentIndic
 		createCDPSession: async () => client,
 		goto: async (url: string) => {
 			requestedUrl = url;
+			if (url === fullArticle?.url) expanded = true;
+			if (requestUrl) {
+				requestPending = true;
+				listeners.get("Network.requestWillBeSent")?.({
+					type: "Fetch",
+					requestId: "data",
+					request: { url: requestUrl },
+				});
+			}
 			return { status: () => 200, headers: () => ({ "content-type": "text/html" }) };
 		},
 		url: currentUrl,
-		evaluate: async (script: string) => {
+		evaluate: async (script: string | ((...args: unknown[]) => unknown), ...args: unknown[]) => {
 			const document = {
-				body: { innerText: loaded() ? article : "Article title\nLoading..." },
+				body: { innerText: loaded() ? renderedText() : "Article title\nLoading..." },
 				contentType: "text/html",
+				readyState: "complete",
+				scrollingElement: scrolling?.container
+					? { scrollTop: 0, clientHeight: 100, clientWidth: 100, scrollHeight: 100 }
+					: scrollArea,
 				querySelectorAll: (selector: string) =>
-					(persistentIndicator || !loaded()) && selector.split(",").some(part => part.trim() === ".loading")
-						? [
-								{
-									getClientRects: () => [{ width: 5, height: 5 }],
-									getBoundingClientRect: () => ({ width: 5, height: 5 }),
-								},
-							]
-						: [],
+					selector === "body *"
+						? [...(scrolling?.container ? [scrollArea] : []), ...(fullArticle ? [control] : [])]
+						: selector.startsWith("[data-omp-crawl-")
+							? [
+									...(markers.has(selector.slice(1, -1)) ? [scrollArea] : []),
+									...(controlMarkers.has(selector.slice(1, -1)) ? [control] : []),
+								]
+							: (persistentIndicator || !loaded()) &&
+								  selector.split(",").some(part => part.trim() === ".loading")
+								? [
+										{
+											getClientRects: () => [{ width: 5, height: 5 }],
+											getBoundingClientRect: () => ({ width: 5, height: 5 }),
+										},
+									]
+								: [],
 			};
-			const evaluate = new Function("document", "location", "getComputedStyle", `return ${script}`);
-			return evaluate(document, { href: currentUrl() }, () => ({ display: "block", visibility: "visible" }));
+			const evaluate = new Function(
+				"document",
+				"location",
+				"getComputedStyle",
+				"innerHeight",
+				"innerWidth",
+				"args",
+				typeof script === "string" ? `return ${script}` : `return (${script.toString()})(...args)`,
+			);
+			return evaluate(
+				document,
+				{ href: currentUrl() },
+				() => ({ display: "block", visibility: "visible", overflowY: "auto", cursor: "pointer" }),
+				100,
+				100,
+				args,
+			);
 		},
 	};
 	const tab = {
-		extract: async () => {
+		click: async () => {
+			fullArticle?.onClick?.();
+			if (!fullArticle?.noop) {
+				expansionAt = elapsed + 2000;
+				listeners.get("Network.requestWillBeSent")?.({
+					type: "Fetch",
+					requestId: "full-article",
+					request: { url: "https://api.example.test/full" },
+				});
+			}
+		},
+		scroll: async (_dx: number, dy: number) => {
+			scrollArea.scrollTop = Math.min(scrollArea.scrollHeight - scrollArea.clientHeight, scrollArea.scrollTop + dy);
+			if (
+				scrollArea.scrollTop + scrollArea.clientHeight >= scrollArea.scrollHeight &&
+				(batches < 3 || scrolling?.endless) &&
+				nextBatchAt === undefined
+			) {
+				nextBatchAt = elapsed + 2000;
+				listeners.get("Network.requestWillBeSent")?.({
+					type: "Fetch",
+					requestId: "scroll-data",
+					request: { url: "https://api.example.test/next" },
+				});
+			}
+			scrolling?.onScroll?.();
+		},
+		extract: async (format: ReadableFormat, opts?: ReadableExtractOptions) => {
 			extractions++;
-			return loaded() ? `# ${article.replace("\n", "\n\n")}` : "# Article title\n\nLoading...";
+			if (html) return (await extractReadableFromHtml(html, currentUrl(), format, opts))?.markdown;
+			return loaded() ? `# ${renderedText().replace("\n", "\n\n")}` : "# Article title\n\nLoading...";
 		},
 	};
 	const run = async (code: string) => {
@@ -140,6 +274,20 @@ function scriptedPage(redirectUrl?: string, onWait?: () => void, persistentIndic
 			tab,
 			async (ms: number) => {
 				elapsed += ms;
+				if (expansionAt !== undefined && elapsed >= expansionAt) {
+					expanded = true;
+					expansionAt = undefined;
+					listeners.get("Network.loadingFinished")?.({ requestId: "full-article" });
+				}
+				if (nextBatchAt !== undefined && elapsed >= nextBatchAt) {
+					batches++;
+					nextBatchAt = undefined;
+					listeners.get("Network.loadingFinished")?.({ requestId: "scroll-data" });
+				}
+				if (requestPending && loaded()) {
+					requestPending = false;
+					listeners.get("Network.loadingFinished")?.({ requestId: "data" });
+				}
 				onWait?.();
 			},
 			{ now: () => 10_000 + elapsed },
@@ -176,7 +324,7 @@ describe("crawl engine", () => {
 		expect(f.output.at(-1)).toContain("https://example.test/: no readable content");
 	});
 
-	it("does not archive cross-origin redirects, HTTP errors or login pages", async () => {
+	it("follows cross-origin redirects while still rejecting HTTP errors and login pages", async () => {
 		const f = fixture({
 			"https://example.test/": {
 				links: ["https://example.test/redirect", "https://example.test/error", "https://example.test/private"],
@@ -186,15 +334,34 @@ describe("crawl engine", () => {
 			"https://example.test/private": { login: true },
 		});
 		await runCrawl(f.runtime, options, new AbortController().signal);
-		expect(f.written).toHaveLength(1);
-		expect(f.output.join("\n")).toContain("outside the entry origin");
+		expect(f.written).toHaveLength(2);
+		expect(f.written.map(file => file.content)).toContain("Source: https://else.test/\n\nReadable content\n");
 		expect(f.output.join("\n")).toContain("HTTP 403");
 		expect(f.output.join("\n")).toContain("requires login");
 	});
 
+	it("uses the redirected entry origin for recursion without following other sites' navigation links", async () => {
+		const f = fixture({
+			"https://example.test/": {
+				finalUrl: "https://blog.test/entry",
+				links: ["https://blog.test/child", "https://example.test/old", "https://external.test/other"],
+			},
+			"https://blog.test/child": {
+				finalUrl: "https://docs.test/article",
+				links: ["https://docs.test/next"],
+			},
+		});
+		await runCrawl(f.runtime, options, new AbortController().signal);
+		expect(f.written.map(file => file.content)).toEqual([
+			"Source: https://blog.test/entry\n\nReadable content\n",
+			"Source: https://docs.test/article\n\nReadable content\n",
+		]);
+		expect(f.output.at(-1)).toContain("2 saved, 0 failed");
+	});
+
 	it("reports a client-side redirect to an error route instead of saving it", async () => {
 		const url = "https://example.test/article";
-		const browser = scriptedPage("https://example.test/404?reason=unavailable");
+		const browser = scriptedPage({ redirectUrl: "https://example.test/404?reason=unavailable" });
 		const f = fixture({ [url]: {} }, undefined, browser.run);
 		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
 		expect(f.written).toEqual([]);
@@ -224,9 +391,148 @@ describe("crawl engine", () => {
 		expect(f.output.join("\n")).toContain("1 saved, 0 failed");
 	});
 
+	it("waits for slow cross-origin application data instead of saving the shell", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({ loadDelayMs: 20000, requestUrl: "https://api.example.test/data" });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([
+			{ name: "article.md", content: `Source: ${url}\n\n# Article title\n\nThe complete article body.\n` },
+		]);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("reports a loading timeout instead of archiving a shell whose data never arrives", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({
+			loadDelayMs: Number.POSITIVE_INFINITY,
+			requestUrl: "https://api.example.test/data",
+		});
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([]);
+		expect(f.output.join("\n")).toContain("Page did not finish loading");
+		expect(browser.extractionCount()).toBe(0);
+		expect(browser.detachmentCount()).toBe(1);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("honors an explicit wait for application rendering that starts after network idle", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({ loadDelayMs: 8000 });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false, wait: 10 }, new AbortController().signal);
+		expect(f.written).toEqual([
+			{ name: "article.md", content: `Source: ${url}\n\n# Article title\n\nThe complete article body.\n` },
+		]);
+	});
+
+	it("retains enterprise tables and business sections outside an article", async () => {
+		const url = "https://example.test/dashboard";
+		const browser = scriptedPage({
+			html: `<html><body><article><h1>Company news</h1><p>${"General company announcement. ".repeat(30)}</p></article>
+				<section><h2>Project status</h2><table><thead><tr><th>Project</th><th>Status</th></tr></thead>
+				<tbody><tr><td>Chip Alpha</td><td>Verification complete</td></tr></tbody></table></section>
+				<section><h2>Release approvals</h2><ul><li>Chip Beta: awaiting sign-off</li></ul></section></body></html>`,
+		});
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written[0]?.content).toContain("Chip Alpha");
+		expect(f.written[0]?.content).toContain("Verification complete");
+		expect(f.written[0]?.content).toContain("Chip Beta: awaiting sign-off");
+	});
+
+	for (const container of [false, true]) {
+		it(`loads appended content by scrolling the ${container ? "nested panel" : "document"}`, async () => {
+			const url = "https://example.test/feed";
+			const browser = scriptedPage({ scrolling: { container } });
+			const f = fixture({ [url]: {} }, undefined, browser.run);
+			await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+			expect(f.written[0]?.content).toContain("Lazy section 1");
+			expect(f.written[0]?.content).toContain("Lazy section 3");
+			expect(f.output.at(-1)).toContain("1 saved, 0 failed");
+			expect(f.closed).toEqual(f.opened);
+		});
+	}
+
+	it("honors an explicit scroll opt-out", async () => {
+		const url = "https://example.test/feed";
+		const browser = scriptedPage({ scrolling: {} });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false, scroll: false }, new AbortController().signal);
+		expect(f.written[0]?.content).toContain("Lazy section 1");
+		expect(f.written[0]?.content).not.toContain("Lazy section 2");
+	});
+
+	it("reports an endless feed instead of saving a falsely complete archive", async () => {
+		const url = "https://example.test/feed";
+		const browser = scriptedPage({ scrolling: { endless: true } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([]);
+		expect(f.output.join("\n")).toContain("stable scroll end");
+		expect(browser.detachmentCount()).toBe(1);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("cancels and releases the owned tab while scrolling", async () => {
+		const controller = new AbortController();
+		const browser = scriptedPage({
+			scrolling: {
+				onScroll: () => {
+					controller.abort();
+					controller.signal.throwIfAborted();
+				},
+			},
+		});
+		const f = fixture({ "https://example.test/": {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, recursive: false }, controller.signal);
+		expect(f.written).toEqual([]);
+		expect(f.output.at(-1)).toContain("Crawl cancelled");
+		expect(browser.detachmentCount()).toBe(1);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("expands a similar reading control and waits for the complete article by default", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({ fullArticle: { label: " 展开全文 » " } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written[0]?.content).toContain("The complete article body.");
+		expect(f.written[0]?.content).not.toContain("Preview only");
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it("does not save a preview when a full-article control fails to reveal content", async () => {
+		const url = "https://example.test/article";
+		const browser = scriptedPage({ fullArticle: { noop: true } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([]);
+		expect(f.output.join("\n")).toContain("did not reveal");
+	});
+
+	it("refuses a form submission even when its button is labelled as a full-article control", async () => {
+		const url = "https://example.test/article";
+		let submissions = 0;
+		const browser = scriptedPage({
+			fullArticle: {
+				form: true,
+				onClick: () => {
+					submissions++;
+				},
+			},
+		});
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written).toEqual([]);
+		expect(submissions).toBe(0);
+		expect(f.output.join("\n")).toContain("form");
+	});
+
 	it("saves substantive content despite a persistent visible decorative loading icon", async () => {
 		const url = "https://example.test/article";
-		const browser = scriptedPage(undefined, undefined, true);
+		const browser = scriptedPage({ persistentIndicator: true });
 		const f = fixture({ [url]: {} }, undefined, browser.run);
 		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
 		expect(f.written).toHaveLength(1);
@@ -239,9 +545,11 @@ describe("crawl engine", () => {
 
 	it("closes the tab and detaches the browser session when readiness is cancelled", async () => {
 		const controller = new AbortController();
-		const browser = scriptedPage(undefined, () => {
-			controller.abort();
-			controller.signal.throwIfAborted();
+		const browser = scriptedPage({
+			onWait: () => {
+				controller.abort();
+				controller.signal.throwIfAborted();
+			},
 		});
 		const f = fixture({ "https://example.test/": {} }, undefined, browser.run);
 		await runCrawl(f.runtime, { ...options, recursive: false }, controller.signal);
@@ -271,7 +579,7 @@ describe("crawl engine", () => {
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
 		expect(f.opened).toHaveLength(2);
 	});
-	it("blocks cross-origin main navigations and attachment responses before Chromium handles them", async () => {
+	it("allows redirect responses but blocks attachment responses before Chromium handles them", async () => {
 		const f = fixture({ "https://example.test/": {} });
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
 		const code = f.codes[0]!;
@@ -304,13 +612,10 @@ describe("crawl engine", () => {
 			},
 		};
 		const execute = new Function("page", "tab", `return (async () => { ${code} })();`);
-		await expect(execute(page, {})).rejects.toThrow("outside the entry origin");
+		await expect(execute(page, {})).rejects.toThrow("net::ERR_ABORTED");
 		expect(commands).toContainEqual({ method: "Fetch.continueRequest", params: { requestId: "asset-frame" } });
 		expect(commands).toContainEqual({ method: "Fetch.continueRequest", params: { requestId: "redirect" } });
-		expect(commands).toContainEqual({
-			method: "Fetch.failRequest",
-			params: { requestId: "outside", errorReason: "Aborted" },
-		});
+		expect(commands).toContainEqual({ method: "Fetch.continueRequest", params: { requestId: "outside" } });
 		expect(commands).toContainEqual({ method: "Fetch.disable", params: undefined });
 
 		commands.length = 0;

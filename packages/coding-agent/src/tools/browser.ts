@@ -187,11 +187,11 @@ export function resolveBrowserKind(
 		return { kind: "spawned", path: exe, args };
 	}
 	const relayUrl = cfgBrowserRelayUrl.get(session.settings);
-	// Explicit app.relay wins over every setting; PI_BROWSER_RELAY stays the
-	// final kill switch (a relay that is down would otherwise brick the tool).
+	// An explicit relay request must never fall through to a different browser session.
 	if (app?.relay) {
 		const relayKind = resolveRelayKind({ settingEnabled: true, url: relayUrl }, env);
-		if (relayKind) return relayKind;
+		if (!relayKind) throw new ToolError("Browser relay is disabled by PI_BROWSER_RELAY; cannot use app.relay:true.");
+		return relayKind;
 	}
 	if (app?.tern === true) {
 		const ternKind = resolveTernKind({ settingEnabled: true }, env);

@@ -68,6 +68,8 @@ describe("/crawl", () => {
 			"/crawl https://example.com --concurrency 0",
 			"/crawl https://example.com --concurrency 1.5",
 			"/crawl https://example.com --max-pages 9007199254740992",
+			"/crawl https://example.com --wait -1",
+			"/crawl https://example.com --wait 240.1",
 		];
 		for (const input of invalid) {
 			expect(await executeAcpBuiltinSlashCommand(input, h.runtime)).toEqual({ consumed: true, failed: true });
@@ -191,6 +193,9 @@ describe("/crawl", () => {
 				"--max-pages",
 				"--max-depth",
 			]);
+			expect((await complete("https://example.com --wa"))?.map(item => item.label)).toEqual(["--wait"]);
+			expect((await complete("https://example.com --no"))?.map(item => item.label)).toEqual(["--no-scroll"]);
+			expect(await complete("https://example.com --wait ")).toBeNull();
 			expect((await complete("https://example.com --output my"))?.map(item => item.value)).toEqual([
 				'https://example.com --output "my folder/"',
 			]);

@@ -411,7 +411,7 @@ export function buildCrawlArgumentCompletions(
 	projectCwd?: string,
 ): (prefix: string) => Promise<AutocompleteItem[] | null> {
 	const directories = buildDirectoryArgumentCompletions(projectCwd);
-	const flags = ["--recursive", "--output", "--concurrency", "--max-pages", "--max-depth"];
+	const flags = ["--recursive", "--no-scroll", "--output", "--concurrency", "--max-pages", "--max-depth", "--wait"];
 	return async argumentPrefix => {
 		const output = argumentPrefix.match(/^(.*(?:^|\s)--output\s+)(.*)$/);
 		if (output) {
@@ -440,7 +440,7 @@ export function buildCrawlArgumentCompletions(
 				.trim()
 				.split(/\s+/)
 				.at(-1)
-				?.match(/^--(?:output|concurrency|max-pages|max-depth)$/)
+				?.match(/^--(?:output|concurrency|max-pages|max-depth|wait)$/)
 		)
 			return null;
 		if (prefix && !prefix.startsWith("-")) return null;

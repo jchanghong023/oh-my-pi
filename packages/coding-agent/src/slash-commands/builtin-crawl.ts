@@ -1,10 +1,10 @@
-import { runCrawl, type CrawlOptions } from "../tools/browser/crawl";
+import { MAX_CRAWL_WAIT_SECONDS, runCrawl, type CrawlOptions } from "../tools/browser/crawl";
 import { parseCommandArgs } from "../utils/command-args";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 const CRAWL_USAGE =
-	"Usage: /crawl <URL> [--recursive] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] | /crawl stop";
+	"Usage: /crawl <URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | /crawl stop";
 
 function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 	// Windows paths commonly contain literal backslashes rather than shell escapes.
@@ -27,13 +27,21 @@ function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 	const seen = new Set<string>();
 	for (let i = 1; i < tokens.length; i++) {
 		const flag = tokens[i]!;
-		if (!["--recursive", "--output", "--concurrency", "--max-pages", "--max-depth"].includes(flag)) {
+		if (
+			!["--recursive", "--no-scroll", "--output", "--concurrency", "--max-pages", "--max-depth", "--wait"].includes(
+				flag,
+			)
+		) {
 			throw new Error(`Unknown crawl argument: ${flag}. ${CRAWL_USAGE}`);
 		}
 		if (seen.has(flag)) throw new Error(`Duplicate crawl argument: ${flag}.`);
 		seen.add(flag);
 		if (flag === "--recursive") {
 			options.recursive = true;
+			continue;
+		}
+		if (flag === "--no-scroll") {
+			options.scroll = false;
 			continue;
 		}
 		const value = tokens[++i];
@@ -43,6 +51,13 @@ function parseCrawlOptions(args: string): CrawlOptions | "stop" {
 			continue;
 		}
 		const number = Number(value);
+		if (flag === "--wait") {
+			if (!/^\d+(?:\.\d+)?$/.test(value) || !Number.isFinite(number) || number > MAX_CRAWL_WAIT_SECONDS) {
+				throw new Error(`Invalid value for --wait: ${value}; expected 0–${MAX_CRAWL_WAIT_SECONDS} seconds.`);
+			}
+			options.wait = number;
+			continue;
+		}
 		if (!/^\d+$/.test(value) || !Number.isSafeInteger(number) || number < (flag === "--max-depth" ? 0 : 1)) {
 			throw new Error(`Invalid value for ${flag}: ${value}.`);
 		}
@@ -97,7 +112,7 @@ export const BUILTIN_CRAWL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Save a webpage or recursively save same-origin pages via Browser Relay",
 		allowArgs: true,
 		inlineHint:
-			"<URL> [--recursive] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] | stop",
+			"<URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | stop",
 		handle: async (command, runtime) => {
 			let options: CrawlOptions | "stop";
 			try {

@@ -1,4 +1,5 @@
 import type { SlashCommandRuntime } from "../../slash-commands/types";
+import { TOOL_TIMEOUTS } from "../tool-timeouts";
 import { crawlBrowserRequest, writeCrawlMarkdown } from "./crawl-access";
 
 export interface CrawlOptions {
@@ -8,7 +9,12 @@ export interface CrawlOptions {
 	concurrency: number;
 	maxPages?: number;
 	maxDepth?: number;
+	wait?: number;
+	scroll?: boolean;
 }
+
+/** Leave room for navigation and extraction inside the browser's per-call ceiling. */
+export const MAX_CRAWL_WAIT_SECONDS = TOOL_TIMEOUTS.browser.max - 60;
 
 interface PageInfo {
 	url: string;
@@ -65,23 +71,16 @@ function basename(url: string): string {
 	}.md`;
 }
 
-/** Restrict main-frame redirects and reject document downloads before Chrome handles them. */
-function navigationCode(url: string): string {
+/** Use browser-native navigation and reject document downloads before Chrome handles them. */
+function navigationCode(url: string, waitSeconds: number, scroll: boolean): string {
 	return `const client = await page.createCDPSession();
 let mainFrameId;
 let attachment = false;
-let outsideOrigin = "";
 let documentError;
 const pending = new Set();
 let lastNetworkActivity = Date.now();
 const onRequest = event => {
   if (!["Document", "Fetch", "XHR"].includes(event.type)) return;
-  try {
-    if (new URL(event.request.url).origin !== ${JSON.stringify(new URL(url).origin)}) {
-      if (pending.delete(event.requestId)) lastNetworkActivity = Date.now();
-      return;
-    }
-  } catch { return; }
   pending.add(event.requestId);
   lastNetworkActivity = Date.now();
 };
@@ -116,11 +115,6 @@ const onPaused = event => {
   const isMain = event.frameId === mainFrameId;
   const responseStage = event.responseStatusCode !== undefined || event.responseErrorReason !== undefined;
   let blocked = false;
-  if (!responseStage && isMain) {
-    try { blocked = new URL(event.request.url).origin !== ${JSON.stringify(new URL(url).origin)}; }
-    catch { blocked = true; }
-    if (blocked) outsideOrigin = event.request.url;
-  }
   if (responseStage) {
     const headers = event.responseHeaders || [];
     const disposition = headers.find(h => h.name.toLowerCase() === "content-disposition")?.value || "";
@@ -144,46 +138,90 @@ try {
   await client.send("Network.enable");
   client.on("Fetch.requestPaused", onPaused);
   await client.send("Fetch.enable", { patterns: [
-    { urlPattern: "*", resourceType: "Document", requestStage: "Request" },
     { urlPattern: "*", resourceType: "Document", requestStage: "Response" }
   ] });
-  let response;
-  try { response = await page.goto(${JSON.stringify(url)}, { waitUntil: "domcontentloaded" }); }
-  catch (error) {
-    if (outsideOrigin) throw new Error("Navigation redirected outside the entry origin: " + outsideOrigin);
+  const navigate = async destination => {
+    let response;
+    try { response = await page.goto(destination, { waitUntil: "domcontentloaded" }); }
+    catch (error) {
+      if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
+      throw error;
+    }
     if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
-    throw error;
-  }
-  if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
-  const status = response?.status() ?? null;
-  const contentType = response?.headers()["content-type"] ?? "";
+    return response;
+  };
+  const response = await navigate(${JSON.stringify(url)});
+  let status = response?.status() ?? null;
+  let contentType = response?.headers()["content-type"] ?? "";
   if (!status || status >= 400) return { url: page.url(), status, contentType, attachment };
   const started = Date.now();
-  const deadline = started + 12000;
-  let previous;
-  let unchangedSince = started;
+  const minimumWait = ${JSON.stringify(waitSeconds * 1000)};
+  const readinessTimeout = ${scroll ? (TOOL_TIMEOUTS.browser.max - 45) * 1000 : "Math.max(60000, minimumWait + 15000)"};
+  const deadline = started + readinessTimeout;
+  const timeoutError = () => new Error(
+    ${JSON.stringify(scroll ? "Page did not finish loading or reach a stable scroll end" : "Page did not finish loading")} +
+    " within " + readinessTimeout + "ms; content was not saved"
+  );
+  const waitForReady = async minimum => {
+    const waitStarted = Date.now();
+    let previous;
+    let unchangedSince = waitStarted;
+    for (;;) {
+      if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
+      rejectDocumentError();
+      rejectErrorRoute(page.url());
+      const snapshot = await page.evaluate(${JSON.stringify(READINESS_SNAPSHOT)});
+      const now = Date.now();
+      const state = JSON.stringify([snapshot.url, snapshot.text]);
+      if (state !== previous) {
+        previous = state;
+        unchangedSince = now;
+      }
+      if (snapshot.readyState === "complete" && snapshot.text.trim() && pending.size === 0 &&
+          now - waitStarted >= minimum && now - unchangedSince >= 1500 &&
+          now - lastNetworkActivity >= 1500) return snapshot;
+      if (now >= deadline) throw timeoutError();
+      await wait(250);
+    }
+  };
+  let ready = await waitForReady(minimumWait);
+  const attribute = ${JSON.stringify(`data-omp-crawl-${crypto.randomUUID()}`)};
+  let bottomState;
+  let followReadingLinks = true;
   for (;;) {
-    if (outsideOrigin) throw new Error("Navigation redirected outside the entry origin: " + outsideOrigin);
-    if (attachment) throw new Error("Navigation returned an attachment or non-HTML document");
-    rejectDocumentError();
-    rejectErrorRoute(page.url());
-    const snapshot = await page.evaluate(${JSON.stringify(READINESS_SNAPSHOT)});
-    const now = Date.now();
-    const state = JSON.stringify([snapshot.url, snapshot.text]);
-    if (state !== previous) {
-      previous = state;
-      unchangedSince = now;
+    if (Date.now() >= deadline) throw timeoutError();
+    const reading = await page.evaluate(${FULL_ARTICLE_TARGET}, attribute, followReadingLinks);
+    if (reading.error) throw new Error(reading.error);
+    if (reading.selector) {
+      const before = ready;
+      if (reading.url) {
+        const nextResponse = await navigate(reading.url);
+        if (nextResponse) {
+          status = nextResponse.status();
+          contentType = nextResponse.headers()["content-type"] ?? "";
+        }
+      } else {
+        await tab.click(reading.selector);
+      }
+      ready = await waitForReady(minimumWait);
+      if (ready.url === before.url && ready.text === before.text) {
+        throw new Error("The full-article control did not reveal content; preview was not saved");
+      }
+      followReadingLinks = false;
+      bottomState = undefined;
+      continue;
     }
-    // Short or empty shells get extra time for delayed SPA rendering.
-    const grace = snapshot.text.trim().length >= 80 ? 3000 : 4000;
-    if (pending.size === 0 && now - started >= grace &&
-        now - unchangedSince >= 1500 && now - lastNetworkActivity >= 1500) break;
-    // Long-lived requests and constantly changing text must not block a usable page.
-    if (now >= deadline) {
-      if (snapshot.text.trim()) break;
-      throw new Error("Page did not produce visible content within 12000ms");
+    if (!${scroll}) break;
+    const target = await page.evaluate(${SCROLL_TARGET}, attribute);
+    if (target.selector) {
+      bottomState = undefined;
+      await tab.scroll(0, target.delta, { selector: target.selector });
+    } else {
+      const state = JSON.stringify([target.state, ready.url, ready.text]);
+      if (state === bottomState) break;
+      bottomState = state;
     }
-    await wait(250);
+    ready = await waitForReady(0);
   }
   const result = { url: page.url(), status, contentType, attachment };
   rejectDocumentError();
@@ -191,11 +229,10 @@ try {
   const info = await page.evaluate(${JSON.stringify(PAGE_INFO)});
   let markdown;
   let extractError;
-  try { markdown = await tab.extract("markdown"); }
+  try { markdown = await tab.extract("markdown", { selector: "body" }); }
   catch (error) { extractError = error instanceof Error ? error.message : String(error); }
   rejectErrorRoute(page.url());
   rejectDocumentError();
-  if (outsideOrigin) throw new Error("Navigation redirected outside the entry origin: " + outsideOrigin);
   return { ...result, info, markdown, extractError, endUrl: page.url() };
 } finally {
   client.off("Network.requestWillBeSent", onRequest);
@@ -209,11 +246,84 @@ try {
 }`;
 }
 
-// A stable visible document and settled same-origin requests are heuristics, not
-// proof that every application has finished rendering.
+// Network idle and stable rendered text are heuristics; --wait handles delayed application startup.
 const READINESS_SNAPSHOT = `(() => {
-  return { url: location.href, text: (document.body?.innerText || "").slice(0, 16000) };
+  return { url: location.href, readyState: document.readyState, text: document.body?.innerText || "" };
 })()`;
+
+// Only explicitly labelled reading controls may be activated; never submit forms or follow downloads.
+const FULL_ARTICLE_TARGET = `(attribute, followLinks) => {
+  const done = attribute + "-expanded";
+  let navigation;
+  const select = (control, url) => {
+    for (const marked of document.querySelectorAll("[" + attribute + "]")) marked.removeAttribute(attribute);
+    control.setAttribute(attribute, "");
+    control.setAttribute(done, "");
+    return { selector: "[" + attribute + "]", url };
+  };
+  for (const element of Array.from(document.querySelectorAll("body *")).reverse()) {
+    const label = (element.getAttribute("aria-label") || element.innerText || element.textContent || "")
+      .replace(/[\\s\\u200b]/g, "").replace(/[›»→>…]+$/, "").toLowerCase();
+    if (!/^(?:查看全文|阅读全文|展开全文|显示全文|查看完整(?:文章|内容)|阅读完整(?:文章|内容)|继续阅读|阅读更多|readmore|read(?:the)?full(?:article|post)|continuereading)$/.test(label)) continue;
+    const control = element.closest("a,button,[role='button'],summary,[onclick]") || element;
+    const style = getComputedStyle(control);
+    if (control.hasAttribute(done) || style.display === "none" || style.visibility === "hidden" ||
+        !control.getClientRects().length || control.getAttribute("aria-hidden") === "true") continue;
+    if (!/^(?:A|BUTTON|SUMMARY)$/.test(control.tagName) && control.getAttribute("role") !== "button" &&
+        !control.hasAttribute("onclick") && style.cursor !== "pointer") continue;
+    if (control.disabled || control.getAttribute("aria-disabled") === "true") {
+      return { error: "The full-article control is disabled; preview was not saved" };
+    }
+    if (control.form && control.type === "submit") {
+      return { error: "Refusing to submit a form to open the full article" };
+    }
+    if (control.tagName === "SUMMARY" && control.parentElement?.open) continue;
+    const link = control.closest("a[href]");
+    if (link?.hasAttribute("download")) return { error: "The full-article link is a download, not a webpage" };
+    const href = link?.getAttribute("href")?.trim();
+    if (href && !href.startsWith("#") && !/^javascript:\\s*(?:void\\s*\\(\\s*0\\s*\\)|;)\\s*;?$/i.test(href)) {
+      const target = new URL(href, location.href);
+      if (target.protocol !== "http:" && target.protocol !== "https:") {
+        return { error: "The full-article link is not an HTTP or HTTPS webpage" };
+      }
+      if (!followLinks) continue;
+      navigation ??= { control, url: target.href };
+      continue;
+    }
+    return select(control);
+  }
+  return navigation ? select(navigation.control, navigation.url) : {};
+}`;
+
+// Pick an on-screen nested scroll panel before moving the document, so its lazy loaders stay visible.
+// The actual scroll goes through tab.scroll and its existing cancellation/action handling.
+const SCROLL_TARGET = `attribute => {
+  const root = document.scrollingElement;
+  const candidates = Array.from(document.querySelectorAll("body *")).reverse();
+  if (root) candidates.push(root);
+  const dimensions = [];
+  let next;
+  for (const element of candidates) {
+    if (element.clientHeight <= 0 || element.clientWidth <= 0) continue;
+    if (element !== root) {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      if (!/^(?:auto|scroll|overlay)$/.test(style.overflowY) ||
+          style.visibility === "hidden" || style.display === "none" ||
+          rect.bottom <= 0 || rect.top >= innerHeight || rect.right <= 0 || rect.left >= innerWidth) continue;
+    }
+    dimensions.push([element.scrollTop, element.clientHeight, element.scrollHeight]);
+    if (!next && element.scrollTop + element.clientHeight < element.scrollHeight - 1) next = element;
+  }
+  if (!next) return { state: JSON.stringify(dimensions) };
+  for (const element of document.querySelectorAll("[" + attribute + "]")) element.removeAttribute(attribute);
+  next.setAttribute(attribute, "");
+  return {
+    state: JSON.stringify(dimensions),
+    selector: "[" + attribute + "]",
+    delta: Math.max(1, Math.floor(next.clientHeight * 0.8))
+  };
+}`;
 
 // Resolve attributes in the disposable crawl tab before browser.extract serializes the DOM.
 // The browser's URL resolution honors <base>, fragments, and escaped characters.
@@ -241,7 +351,7 @@ export async function runCrawl(
 ): Promise<void> {
 	const entry = normalizedUrl(options.url);
 	if (!entry) throw new Error("Crawl requires an HTTP or HTTPS URL");
-	const origin = new URL(entry).origin;
+	let origin = new URL(entry).origin;
 	const seen = new Set([entry]);
 	const completed = new Set<string>();
 	const failures: Array<{ url: string; reason: string }> = [];
@@ -266,7 +376,12 @@ export async function runCrawl(
 			opened = true;
 			const navResult = await crawlBrowserRequest(
 				runtime.session,
-				{ action: "run", name, code: navigationCode(item.url) },
+				{
+					action: "run",
+					name,
+					code: navigationCode(item.url, options.wait ?? 5, options.scroll ?? true),
+					timeout: TOOL_TIMEOUTS.browser.max,
+				},
 				signal,
 			);
 			await crawlBrowserRequest(runtime.session, { action: "close", name });
@@ -275,8 +390,8 @@ export async function runCrawl(
 			if (!navigation || typeof navigation.url !== "string")
 				throw new Error("Browser returned no navigation result");
 			const finalUrl = normalizedUrl(navigation.url);
-			if (!finalUrl || new URL(finalUrl).origin !== origin)
-				throw new Error(`Navigation redirected outside the entry origin: ${navigation.url}`);
+			if (!finalUrl) throw new Error(`Navigation did not end on an HTTP or HTTPS webpage: ${navigation.url}`);
+			if (item.depth === 0) origin = new URL(finalUrl).origin;
 			if (navigation.attachment) throw new Error("Navigation returned an attachment, not a web page");
 			if (typeof navigation.status !== "number" || navigation.status === 0)
 				throw new Error("Navigation returned no HTTP response");
