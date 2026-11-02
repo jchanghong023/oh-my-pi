@@ -91,7 +91,7 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 - Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-Embedding-8B`（4096 维），知识库同样采用此默认值；两者复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址、凭据，以及显式设置的 `mnemopi.embeddingVariant` 仍优先（只有它的 schema 默认值会让位给公司模型）；不会将公司 Token 发送给显式配置的其他地址。
 - company 嵌入默认值同样让位于通用 API 路由：company lane 激活时，若 `OPENROUTER_BASE_URL` 指向非 openrouter 主机（自定义通用网关），或 `MNEMOPI_EMBEDDINGS_VIA_API` 为真值（显式要求向量走 API），向量改按通用 API 配置解析（模型、地址、密钥），不注入公司 URL 与 Token；仅有共享的通用 API 密钥而无自定义网关地址时不构成让位条件。官方嵌入地址判定仅认可 `openrouter.ai` 和既有 `www.openrouter.ai` 别名，不因路径、相似域名或任意子域包含该字符串就信任它。
 - 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
-- 检索模型目录包含 `Qwen3-Embedding-8B`（文本、32768 token、4096 维）、`Qwen3-Reranker-8B`（文本、32768 token），以及 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，四种检索模型不作为聊天模型展示。offline 且公司配置可用、未显式配置任何 `knowledge.reranker.*` 时，知识库默认通过公司 `/v1/rerank` 使用 `Qwen3-Reranker-8B`，复用启动缓存 URL 和 Token；显式配置（包括空值）优先。记忆仍使用现有多样性排序，不接入远端重排。向量请求遇到可重试的临时过载时复用公共重试机制，最多三次、指数退避并受请求超时及取消约束；不自动混用或覆盖旧模型向量。知识库建库及检索的独立子进程 MUST 继承父进程的 offline 开关与缓存启动快照（包含不可用状态），不重新读取可变凭据文件；凭据只经私有 IPC 传递，不记日志或落盘。
+- 检索模型目录包含 `Qwen3-Embedding-8B`（文本、32768 token、4096 维）、`Qwen3-Reranker-8B`（文本、32768 token），以及 `Qwen3-VL-Embedding-2B` 和 `Qwen3-VL-Reranker-2B`，四种检索模型不作为聊天模型展示。offline 且公司配置可用、未显式配置任何 `knowledge.reranker.*` 时，知识库默认通过公司 `/v1/rerank` 使用 `Qwen3-Reranker-8B`，复用启动缓存 URL 和 Token；显式配置（包括空值）优先。记忆仍使用现有多样性排序，不接入远端重排。向量请求遇到可重试的临时过载时复用公共重试机制，最多四次请求（首次加三次重试），默认按 1s → 2s → 4s 指数退避，尊重服务端重试提示并受请求超时及取消约束；不自动混用或覆盖旧模型向量。知识库建库及检索的独立子进程 MUST 继承父进程的 offline 开关与缓存启动快照（包含不可用状态），不重新读取可变凭据文件；凭据只经私有 IPC 传递，不记日志或落盘。
 
 #### Scenario: 公司内网模型（仅 `OMP_OFFLINE`）的可观察行为
 

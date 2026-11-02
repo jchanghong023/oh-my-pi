@@ -457,8 +457,8 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
 							fetchWithRetry(url, {
 								...init,
-								maxAttempts: 3,
-								defaultDelayMs: attempt => 2 ** attempt * 1000,
+								maxAttempts: 4,
+								defaultDelayMs: [1000, 2000, 4000],
 							}),
 						);
 						status = res.status;

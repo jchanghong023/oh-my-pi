@@ -25,9 +25,17 @@ import type {
 	KnowledgeSearchWindowOptions,
 	KnowledgeServiceOptions,
 } from "./types";
-import { resolveKnowledgeModels, type KnowledgeEmbedding, type KnowledgeReranker } from "./models";
+import {
+	KNOWLEDGE_EMBEDDING_BATCH_SIZE,
+	KNOWLEDGE_EMBEDDING_CHAR_BUDGET,
+	KNOWLEDGE_EMBEDDING_CONCURRENCY,
+	resolveKnowledgeModels,
+	type KnowledgeEmbedding,
+	type KnowledgeReranker,
+} from "./models";
 
-const VECTOR_BATCH_SIZE = 32;
+// Keep only one request window in memory while feeding every HTTP worker.
+const VECTOR_BATCH_SIZE = KNOWLEDGE_EMBEDDING_BATCH_SIZE * KNOWLEDGE_EMBEDDING_CONCURRENCY;
 const SEMANTIC_LIMIT = 64;
 const RERANK_LIMIT = 40;
 
@@ -217,6 +225,15 @@ export class KnowledgeIndexEngine {
 						let progressFailed = false;
 						try {
 							const generation = await this.#native.beginVectorImport(token, embedding.identity, options.signal);
+							logger.info("knowledge.vector-import.started", {
+								component: "knowledge",
+								event: "knowledge.vector-import.started",
+								section_count: generation.total,
+								request_concurrency: KNOWLEDGE_EMBEDDING_CONCURRENCY,
+								max_request_inputs: KNOWLEDGE_EMBEDDING_BATCH_SIZE,
+								request_char_budget: KNOWLEDGE_EMBEDDING_CHAR_BUDGET,
+								read_batch_size: VECTOR_BATCH_SIZE,
+							});
 							let completed = 0;
 							const reportProgress = (): void => {
 								try {

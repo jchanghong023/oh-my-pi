@@ -13,6 +13,7 @@ import { getCompanyConfig } from "../config/company-provider";
 import { Settings } from "../config/settings";
 import { resolveMnemopiEmbeddingOptions } from "../mnemopi/config";
 import { cfgMnemopiDebug, cfgMnemopiEmbeddingModel, cfgMnemopiNoEmbeddings } from "../mnemopi/settings";
+import { mapWithConcurrencyLimit } from "../task/parallel";
 import { cfgKnowledgeRerankerApiKey, cfgKnowledgeRerankerBaseUrl, cfgKnowledgeRerankerModel } from "./settings";
 
 export interface KnowledgeEmbedding {
@@ -29,8 +30,9 @@ export interface KnowledgeModels {
 }
 
 // Bound request size while keeping each existing per-input window intact.
-const EMBEDDING_REQUEST_CHAR_BUDGET = 8192;
-const EMBEDDING_REQUEST_MAX_INPUTS = 4;
+export const KNOWLEDGE_EMBEDDING_CONCURRENCY = 4;
+export const KNOWLEDGE_EMBEDDING_BATCH_SIZE = 16;
+export const KNOWLEDGE_EMBEDDING_CHAR_BUDGET = 32768;
 
 function endpoint(value: string | undefined): string | undefined {
 	if (!value) return undefined;
@@ -87,40 +89,57 @@ export async function resolveKnowledgeModels(
 				async embed(texts, signal) {
 					signal?.throwIfAborted();
 					if (!texts.length) return [];
-					const vectors: number[][] = [];
-					let dimension: number | undefined;
+					const batches: Array<{ start: number; end: number }> = [];
 					for (let start = 0; start < texts.length;) {
-						signal?.throwIfAborted();
 						let end = start;
 						let chars = 0;
-						while (end < texts.length && end - start < EMBEDDING_REQUEST_MAX_INPUTS) {
+						while (end < texts.length && end - start < KNOWLEDGE_EMBEDDING_BATCH_SIZE) {
 							const length = maxChars > 0 ? Math.min(texts[end].length, maxChars) : texts[end].length;
-							if (end > start && chars + length > EMBEDDING_REQUEST_CHAR_BUDGET) break;
+							if (end > start && chars + length > KNOWLEDGE_EMBEDDING_CHAR_BUDGET) break;
 							chars += length;
 							end++;
 						}
-						const matrix = await withMnemopiRuntimeOptions(
-							{ ...runtime, embeddings: { ...runtime.embeddings, maxInputChars: maxChars, signal } },
-							() => embedConfiguredApi(texts.slice(start, end)),
-						);
-						signal?.throwIfAborted();
-						if (!matrix || matrix.length !== end - start)
-							throw new Error("Knowledge embedding unavailable or invalid");
-						for (const row of matrix) {
-							if (
-								!row.length ||
-								(dimension !== undefined && row.length !== dimension) ||
-								row.some(v => !Number.isFinite(v)) ||
-								!row.some(v => v !== 0)
-							) {
-								throw new Error("Knowledge embedding unavailable or invalid");
-							}
-							dimension = row.length;
-							vectors.push(Array.from(row));
-						}
+						batches.push({ start, end });
 						start = end;
 					}
-					return vectors;
+					let dimension: number | undefined;
+					const { results, aborted } = await mapWithConcurrencyLimit(
+						batches,
+						KNOWLEDGE_EMBEDDING_CONCURRENCY,
+						async ({ start, end }, _index, workerSignal) => {
+							workerSignal.throwIfAborted();
+							const matrix = await withMnemopiRuntimeOptions(
+								{
+									...runtime,
+									embeddings: { ...runtime.embeddings, maxInputChars: maxChars, signal: workerSignal },
+								},
+								() => embedConfiguredApi(texts.slice(start, end)),
+							);
+							workerSignal.throwIfAborted();
+							if (!matrix || matrix.length !== end - start)
+								throw new Error("Knowledge embedding unavailable or invalid");
+							for (const row of matrix) {
+								if (
+									!row.length ||
+									(dimension !== undefined && row.length !== dimension) ||
+									row.some(v => !Number.isFinite(v)) ||
+									!row.some(v => v !== 0)
+								) {
+									throw new Error("Knowledge embedding unavailable or invalid");
+								}
+								dimension = row.length;
+							}
+							return matrix.map(row => Array.from(row));
+						},
+						signal,
+					);
+					signal?.throwIfAborted();
+					if (aborted) throw new Error("Knowledge embedding cancelled");
+					// The shared pool drains failures and preserves input order despite out-of-order replies.
+					return results.flatMap(matrix => {
+						if (!matrix) throw new Error("Knowledge embedding unavailable or invalid");
+						return matrix;
+					});
 				},
 			};
 		}

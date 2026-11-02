@@ -42,7 +42,7 @@ function modelServer() {
 				}
 			}
 			if (route.endsWith("/embeddings")) {
-				if (embedding === "http") return new Response("offline", { status: 503 });
+				if (embedding === "http") return new Response("offline", { status: 503, headers: { "Retry-After": "0" } });
 				const inputs = Array.isArray(body.input) ? body.input : [body.input ?? ""];
 				if (embedding === "nonfinite") {
 					return new Response(

@@ -9,6 +9,8 @@
 
 ### Changed
 
+- Retry transient embedding overloads up to three times after the initial request, using 1s, 2s and 4s fallback delays.
+
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
 ### Fixed
