@@ -138,6 +138,7 @@
 
 ### Fixed
 
+- Keep HTML export viewer asset integrity metadata in sync with the fork's generated viewer.
 - Keep Knowledge search CLI end-to-end checks within fulltest's existing integration concurrency limit.
 - Keep the last two nonblank wrapped thinking lines visible in compact mode, preserving displayed thinking or tool activity through empty updates, waits and loop completion.
 - Preserve child-agent messages arriving during manual context compaction for the resumed conversation.
