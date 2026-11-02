@@ -350,7 +350,7 @@ describe("KnowledgeHub list viewport", () => {
 			const busyFrames = renderedFrames
 				.slice(start)
 				.filter(rendered => rendered.includes("Indexing knowledge index"));
-			expect(busyFrames.some(rendered => /(?:section|fts|complete) \d+\/\d+/.test(rendered))).toBe(true);
+			expect(busyFrames.some(rendered => /\d+\/\d+ \(\d+%\)/.test(rendered))).toBe(true);
 			for (const rendered of busyFrames) {
 				const lines = rendered.split("\n").map(line => Bun.stripANSI(line));
 				expect(lines.length).toBeLessThanOrEqual(terminal.rows);
@@ -672,9 +672,7 @@ describe.skipIf(process.platform === "win32")("KnowledgeHub terminal text safety
 			hub.handleInput("n");
 			for (const input of ["new", "\r", ".", "\r", "\r"]) hub.handleInput(input);
 			await waitFor(rendered => rendered.includes("new  docs=1 sections=1"));
-			const progressFrames = renderedFrames.filter(rendered =>
-				/(?:section|fts|complete) \d+\/\d+/.test(Bun.stripANSI(rendered)),
-			);
+			const progressFrames = renderedFrames.filter(rendered => /\d+\/\d+ \(\d+%\)/.test(Bun.stripANSI(rendered)));
 			expect(progressFrames.length).toBeGreaterThan(0);
 			expect(progressFrames.some(rendered => rendered.includes("guide-") && rendered.includes("FORGED"))).toBe(true);
 			for (const progress of progressFrames) {

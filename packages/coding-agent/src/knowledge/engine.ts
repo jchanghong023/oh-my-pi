@@ -243,7 +243,7 @@ export class KnowledgeIndexEngine {
 											total: generation.total,
 											completed,
 											failed: 0,
-											message: "Preparing optional embedding vectors",
+											message: "Embedding sections (counted after each batch is saved)",
 										}),
 									);
 								} catch (error) {

@@ -8,7 +8,7 @@ import {
 	truncateToWidth,
 	wrapLiteralLine,
 } from "@oh-my-pi/pi-tui";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../../config/settings";
 import { KnowledgeService } from "../../knowledge/service";
 import type { KnowledgeIndexSummary, KnowledgeProgress, KnowledgeSectionHit } from "../../knowledge/types";
@@ -80,6 +80,8 @@ export class KnowledgeHubComponent implements Component {
 	#disposed = false;
 	#disposePromise?: Promise<void>;
 	#busy?: string;
+	#build?: { name: string; startedAt: number; lastProgressAt: number };
+	#buildTicker?: NodeJS.Timeout;
 
 	private constructor(
 		private readonly tui: TUI,
@@ -136,6 +138,9 @@ export class KnowledgeHubComponent implements Component {
 		this.#abort = undefined;
 		this.#busy = undefined;
 		this.#progress = undefined;
+		this.#build = undefined;
+		clearInterval(this.#buildTicker);
+		this.#buildTicker = undefined;
 	}
 
 	#start(busy: string, work: (signal: AbortSignal, current: () => boolean) => Promise<unknown>): void {
@@ -160,12 +165,20 @@ export class KnowledgeHubComponent implements Component {
 				this.#abort = undefined;
 				this.#busy = undefined;
 				this.#progress = undefined;
+				this.#build = undefined;
+				clearInterval(this.#buildTicker);
+				this.#buildTicker = undefined;
 				if (!this.#disposed) this.tui.requestRender();
 			});
 		this.tui.requestRender();
 	}
 
 	#create(result: KnowledgeAddWizardResult): void {
+		if (this.#disposed || this.#abort) return;
+		const now = performance.now();
+		this.#build = { name: result.name, startedAt: now, lastProgressAt: now };
+		this.#buildTicker = setInterval(() => this.tui.requestRender(), 1000);
+		this.#buildTicker.unref();
 		this.#wizard = undefined;
 		this.#start("Indexing knowledge index…", async (signal, current) => {
 			await this.service.init(result.directory, result.name, {
@@ -173,6 +186,7 @@ export class KnowledgeHubComponent implements Component {
 				onProgress: progress => {
 					if (!current()) return;
 					this.#progress = progress;
+					if (this.#build) this.#build.lastProgressAt = performance.now();
 					this.tui.requestRender();
 				},
 			});
@@ -376,15 +390,32 @@ export class KnowledgeHubComponent implements Component {
 		} else if (!this.#listed) {
 			if (!this.#busy) body.push("Knowledge indexes have not been loaded.");
 		} else if (this.#indexes.length === 0) body.push("No knowledge indexes. Press n to add one.");
-		if (this.#busy) status.push(theme.fg("dim", `${this.#busy}  c cancel`));
-		if (this.#progress)
+		if (this.#busy) {
+			status.push(theme.fg("dim", `${this.#busy}  c cancel`));
+			if (this.#build) {
+				const elapsed = Math.floor((performance.now() - this.#build.startedAt) / 1000) * 1000;
+				status.push(sanitizeTerminalLine(`${this.#build.name} · elapsed ${formatDuration(elapsed)}`));
+			}
+		}
+		if (this.#progress) {
+			const progress = this.#progress;
+			const label =
+				progress.message ?? (progress.phase === "scan" ? "Scanning Markdown files" : "Indexing Markdown files");
+			const percent = progress.total > 0 ? ` (${Math.floor((progress.completed / progress.total) * 100)}%)` : "";
 			status.push(
-				"",
-				sanitizeTerminalLine(
-					`${this.#progress.phase} ${this.#progress.completed}/${this.#progress.total} failed=${this.#progress.failed} ${this.#progress.currentPath ?? ""}`,
-				),
-				sanitizeTerminalLine(this.#progress.message ?? ""),
+				sanitizeTerminalLine(label),
+				`${progress.completed}/${progress.total}${percent} · failed=${progress.failed}`,
 			);
+			if (progress.currentPath) status.push(sanitizeTerminalLine(progress.currentPath));
+		} else if (this.#build) {
+			status.push("Discovering Markdown files…");
+		}
+		if (this.#build) {
+			const sinceProgress = Math.floor((performance.now() - this.#build.lastProgressAt) / 1000) * 1000;
+			status.push(
+				theme.fg("dim", `Waiting for next progress update · last update ${formatDuration(sinceProgress)} ago`),
+			);
+		}
 		if (this.#latestError) status.push(theme.fg("error", sanitizeTerminalLine(this.#latestError)));
 
 		// Reserve an actionable row before fitting chrome, including on very short terminals.

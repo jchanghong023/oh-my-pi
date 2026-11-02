@@ -50,6 +50,8 @@
 
 ### Changed
 
+- Show the current index, import stage, stage percentage, elapsed time and time since the last progress update while adding a knowledge index; embedding counts remain tied to saved batches.
+
 - Synchronize compact tool and thinking text with the status-bar running marker: gray-and-green shimmer while running and static gray when stopped, including retained activity and async waits; the standalone working indicator stays hidden and per-tool timers remain unchanged.
 - Hide the standalone model-processing indicator in compact mode while keeping live activity, other status messages, and interruption available.
 - Compact activity keeps one blank row below its two content rows, separating live, retained and empty activity from the input area without state-dependent layout jumps.
