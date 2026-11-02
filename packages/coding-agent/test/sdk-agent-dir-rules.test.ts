@@ -65,7 +65,6 @@ async function createScopedSession(agentDir: string) {
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 	});
 	return { session, authStorage };
 }

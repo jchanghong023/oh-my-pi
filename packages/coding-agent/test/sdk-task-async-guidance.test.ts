@@ -135,7 +135,6 @@ async function harness(options: Partial<CreateAgentSessionOptions> = {}, inline 
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 		toolNames: ["task", "wait"],
 		...options,
 	});

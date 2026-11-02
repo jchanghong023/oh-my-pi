@@ -367,7 +367,6 @@ describe("learn tool (local backend)", () => {
 		return {
 			cwd: projCwd,
 			hasUI: false,
-			skipPythonPreflight: true,
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 			settings,

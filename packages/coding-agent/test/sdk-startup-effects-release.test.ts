@@ -67,7 +67,6 @@ describe("createAgentSession process-state holds", () => {
 				rules: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 			});
 			cleanups.push(async () => {
 				if (!session.isDisposed) await session.dispose();

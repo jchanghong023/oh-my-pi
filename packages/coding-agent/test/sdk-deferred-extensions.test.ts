@@ -107,7 +107,6 @@ describe("startup-deferred extensions", () => {
 			deferredExtensionPaths: [deferredPath],
 			enableLsp: false,
 			enableMCP: false,
-			skipPythonPreflight: true,
 			skills: [],
 			rules: [],
 			preloadedCustomToolPaths: [],

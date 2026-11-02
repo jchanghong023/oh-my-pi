@@ -157,7 +157,6 @@ describe("repository lifecycle via the real SDK agent and filesystem tools", () 
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			toolNames: ["write", "edit", "repo", "bash", "eval"],
 		});
 		try {
@@ -473,7 +472,6 @@ describe("repository lifecycle coverage across session and background execution 
 					slashCommands: [],
 					enableMCP: false,
 					enableLsp: false,
-					skipPythonPreflight: true,
 					restrictToolNames: true,
 					toolNames: ["read", kind, "repo"],
 				});
@@ -587,7 +585,6 @@ describe("repository lifecycle coverage across session and background execution 
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				toolNames: ["read", "repo", "knowledge_search"],
 			};
 			const { session: restricted } = await createAgentSession({
@@ -958,7 +955,6 @@ describe("repository lifecycle coverage across session and background execution 
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			toolNames: ["bash", "repo", "write", "eval"],
 		});
 		try {

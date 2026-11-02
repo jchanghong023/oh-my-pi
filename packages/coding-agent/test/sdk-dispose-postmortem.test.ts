@@ -75,7 +75,6 @@ describe("createAgentSession dispose releases postmortem registrations", () => {
 				promptTemplates: [],
 				slashCommands: [],
 				enableLsp: false,
-				skipPythonPreflight: true,
 				rules: [],
 				preloadedCustomToolPaths: [],
 			});

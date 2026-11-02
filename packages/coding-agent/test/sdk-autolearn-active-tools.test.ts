@@ -29,7 +29,6 @@ describe("createAgentSession force-included tool activation", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		};
 	}
 

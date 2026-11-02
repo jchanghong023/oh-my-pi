@@ -74,7 +74,6 @@ describe("primary-agent provider settings changed mid-session", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			taskDepth: 1,
 			agentId: "SubAgent",
 		});

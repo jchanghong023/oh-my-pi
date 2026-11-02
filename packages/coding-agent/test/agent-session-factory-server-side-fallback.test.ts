@@ -45,7 +45,6 @@ describe("createAgentSession Factory server-side fallback", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		try {
 			await session.prompt("hello");

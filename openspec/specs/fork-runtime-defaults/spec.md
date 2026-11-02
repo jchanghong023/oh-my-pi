@@ -61,6 +61,17 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - **WHEN** 用户显式设置 `terminal.programStatus=false`
 - **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。
 
+### Requirement: 启动不检查 Python
+
+OMP MUST NOT 在启动或创建、恢复会话时检查 Python 可用性，包括首次启动提示、工具注册预检及后台探测。是否注册 Eval MUST 仅依据已有后端启用设置；不新增跳过预检的选项。
+
+#### Scenario: Python 缺失或解释器无法启动
+
+- **WHEN** 启动 OMP 或创建、恢复主会话及子代理会话，且已启用 Python Eval
+- **THEN** 不启动 Python 探测或预热，不等待解释器检查，也不因缺少 Python 隐藏 Eval 或弹出启动警告；普通与 offline、交互及非交互模式均适用。
+- **WHEN** 实际执行 Python Eval
+- **THEN** 才按既有规则检查解释器并按需启动内核；不可用时返回明确错误，不取消执行时校验。显式 `omp setup python --check` 仍可手动诊断。
+
 ### Requirement: 后台任务并发上限
 
 每个根会话共享的后台任务管理器 MUST 将运行中任务的并发硬上限从 100 降为 32；`async.maxJobs` 可进一步降低上限，但显式配置高于 32 时 MUST NOT 突破 32。该限制适用于普通与 offline 启动，覆盖同一管理器承载的 eval `agent()` 及其他后台任务，不按工具入口分别分配名额。

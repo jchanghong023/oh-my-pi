@@ -148,7 +148,6 @@ describe("restricted sessions sharing extension providers", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
 			toolNames: ["read"],

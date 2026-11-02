@@ -140,7 +140,6 @@ async function createDeferredSession() {
 		promptTemplates: [],
 		slashCommands: [],
 		enableLsp: false,
-		skipPythonPreflight: true,
 		enableMCP: true,
 		hasUI: true,
 		extensions: [

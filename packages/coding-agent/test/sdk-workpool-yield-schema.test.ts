@@ -92,7 +92,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {
@@ -147,7 +146,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {
@@ -187,7 +185,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {
@@ -231,7 +228,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {
@@ -277,7 +273,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {
@@ -332,7 +327,6 @@ describe("SDK workpool yield schema", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				requireYieldTool: true,
 				toolNames: ["yield"],
 				outputSchema: {

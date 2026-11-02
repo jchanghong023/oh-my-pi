@@ -70,7 +70,6 @@ async function harness(
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 		requireYieldTool: true,
 		toolNames: ["yield"],
 		parentTaskPrefix: "report-child",

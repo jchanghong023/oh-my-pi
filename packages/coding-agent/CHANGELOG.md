@@ -14,6 +14,7 @@
 - Removed JCH review, repair, CI, catchup, Git and DFT explanation commands; `/jchime` and `/jch-workflowzbatch` remain available.
 - Replaced compact display with the clean view plus upstream file-targeted write/edit cards and a fixed two-line activity area; other tool and error cards are hidden. File cards retain detailed-mode history and controls; activity prioritizes live thinking or the latest two dispatched calls, one intent or command per row with per-call elapsed time, and retains static last activity per viewed session.
 - Removed the `compact_display` command and its dedicated test lane; display consumer tests use the ordinary test selection.
+- Removed the SDK's `skipPythonPreflight` option; session initialization no longer performs Python preflight checks.
 
 ### Removed
 
@@ -50,6 +51,8 @@
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
 
 ### Changed
+
+- Start without checking or warming Python, including on first launch and with Python-only Eval; check the interpreter when Python Eval runs or `omp setup python --check` is requested.
 
 - Show the current index, import stage, stage percentage, elapsed time and time since the last progress update while adding a knowledge index; embedding counts remain tied to saved batches.
 

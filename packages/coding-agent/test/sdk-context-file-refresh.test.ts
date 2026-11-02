@@ -46,7 +46,6 @@ async function createContextSession(
 		enableLsp: false,
 		toolNames: [],
 		restrictToolNames: true,
-		skipPythonPreflight: true,
 	});
 	return { session, authStorage, sessionManager };
 }

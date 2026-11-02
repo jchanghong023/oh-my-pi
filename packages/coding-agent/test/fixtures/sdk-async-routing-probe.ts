@@ -115,7 +115,6 @@ const create = async (
 		enableMCP: false,
 		enableLsp: false,
 		enableIrc: true,
-		skipPythonPreflight: true,
 		cacheWarming: false,
 		toolNames: tools,
 		restrictToolNames: true,

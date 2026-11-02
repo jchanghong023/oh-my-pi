@@ -35,7 +35,7 @@ Current tool input:
 }
 ```
 
-The session-scoped wire schema advertises only enabled runtimes ("py" and "js"). Python and JavaScript default on. The tool is `concurrency = "exclusive"` for foreground scheduling. Auto-backgrounding can return while a cell is still running, and kernel-defined tool requests have their own dispatch path; exclusive tool scheduling is not a global kernel lock. State persists across calls in `session` mode.
+The session-scoped wire schema advertises only enabled runtimes ("py" and "js"). Python defaults on; JavaScript defaults off in this fork. OMP startup and session creation/resume do not probe or warm Python, including on first launch and when Python is the only enabled backend. Availability is checked when Python Eval is actually executed; an unavailable interpreter fails that call rather than blocking startup. Use `omp setup python --check` for explicit diagnostics. The tool is `concurrency = "exclusive"` for foreground scheduling. Auto-backgrounding can return while a cell is still running, and kernel-defined tool requests have their own dispatch path; exclusive tool scheduling is not a global kernel lock. State persists across calls in `session` mode.
 
 ## Kernel lifecycle
 

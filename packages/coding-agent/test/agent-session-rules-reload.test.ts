@@ -69,7 +69,6 @@ async function createReloadSession(tempDir: TempDir): Promise<{ session: AgentSe
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 	});
 	return { session, authStorage };
 }

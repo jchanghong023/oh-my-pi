@@ -36,7 +36,6 @@ async function fixture(files: Record<string, string> = {}) {
 	const session = {
 		cwd,
 		hasUI: false,
-		skipPythonPreflight: true,
 		settings: Object.assign(settings, { getAgentDir: () => agentDir }),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",

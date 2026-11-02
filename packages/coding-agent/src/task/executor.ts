@@ -4523,7 +4523,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 				: agent.spawns.join(",");
 
 	const lspEnabled = enableLsp ?? true;
-	const skipPythonPreflight = Array.isArray(toolNames) && !toolNames.includes("eval");
 
 	const completionProbe = isCompletionProbeEnabled(settings, parentDepth);
 	const monitor = createSubagentRunMonitor({
@@ -4954,7 +4953,6 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 					agentName: agent.name,
 					enableLsp: lspEnabled,
 					enableIrc: options.enableIrc,
-					skipPythonPreflight,
 					enableMCP,
 					mcpManager,
 					// MCP proxies are minted per build as `mcpTools` in buildSubagentSessionOptions.

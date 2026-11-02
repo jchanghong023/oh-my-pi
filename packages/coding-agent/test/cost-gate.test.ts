@@ -328,7 +328,6 @@ describe("cost gate in a running session", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			...extra,
 		});
 		sessions.push(session);

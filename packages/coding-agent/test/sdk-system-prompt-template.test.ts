@@ -41,7 +41,6 @@ async function withSession<T>(
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			systemPrompt,
 			...explicitSystemPromptOptions,
 		});

@@ -82,7 +82,6 @@ describe("subagent session MCP tools follow the shared manager", () => {
 			promptTemplates: [],
 			slashCommands: [],
 			enableLsp: false,
-			skipPythonPreflight: true,
 		};
 	}
 

@@ -35,7 +35,6 @@ async function createSession(settings: Record<string, unknown> = {}): Promise<Cr
 		restrictToolNames: false,
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 	});
 	return created;
 }

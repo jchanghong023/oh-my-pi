@@ -246,7 +246,7 @@ describe("read and write route xd:// device URLs", () => {
 	});
 
 	it("keeps index query policies independent of the write transport", async () => {
-		const session = xdevSession(process.cwd(), { skipPythonPreflight: true });
+		const session = xdevSession(process.cwd(), {});
 		const tools = await createTools(session);
 		const write = tools.find(tool => tool.name === "write")!;
 		for (const name of ["knowledge_search", "repo"]) {
@@ -267,7 +267,7 @@ describe("read and write route xd:// device URLs", () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-index-scheduling-"));
 		try {
 			const settings = Object.assign(Settings.isolated({}), { getAgentDir: () => path.join(tempDir, "agent") });
-			const session = xdevSession(tempDir, { settings, skipPythonPreflight: true, enableLsp: false });
+			const session = xdevSession(tempDir, { settings, enableLsp: false });
 			const tools = await createTools(session);
 			const write = tools.find(tool => tool.name === "write")!;
 			const runBatch = async (args: Array<{ path: string; content: string }>) => {

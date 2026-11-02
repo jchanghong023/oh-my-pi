@@ -571,7 +571,6 @@ describe("team in-process integration", () => {
 						cwd: tempDir.path(),
 						hasUI: false,
 						settings,
-						skipPythonPreflight: true,
 						restrictToolNames: true,
 						getSessionFile: () => options.sessionManager?.getSessionFile() ?? null,
 						getSessionSpawns: () => "*",

@@ -379,7 +379,6 @@ async function createHeadlessSession(cwd: string, config: Config, agentId: strin
 		enableLsp: false,
 		enableIrc: false,
 		disableExtensionDiscovery: true,
-		skipPythonPreflight: true,
 		cacheWarming: false,
 		agentId,
 	});

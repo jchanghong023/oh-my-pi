@@ -92,7 +92,6 @@ describe("issue #3569 fresh launch default role from extension provider", () => 
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
 			toolNames: ["read"],

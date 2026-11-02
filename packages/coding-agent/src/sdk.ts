@@ -890,8 +890,6 @@ export interface CreateAgentSessionOptions {
 	lspReadOnly?: boolean;
 	/** Whether this invocation may expose IRC. `false` removes it even for subagents. */
 	enableIrc?: boolean;
-	/** Skip subprocess-kernel availability checks and prelude warmup */
-	skipPythonPreflight?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
 	/** Names from `toolNames` that a fork inherits as `xd://` devices rather than explicit top-level tools. */
@@ -2921,7 +2919,6 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 					? requestedToolNames?.includes("edit") === true
 					: !requestedToolNames || requestedToolNames.includes("edit");
 			},
-			skipPythonPreflight: options.skipPythonPreflight,
 			contextFiles,
 			noContextFiles: options.noContextFiles,
 			get workspaceTree() {

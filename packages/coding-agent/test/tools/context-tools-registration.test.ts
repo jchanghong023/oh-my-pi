@@ -25,7 +25,6 @@ function createSession(enabled: boolean, restricted = false): ToolSession {
 		getSessionId: () => sessionManager.getSessionId(),
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,
-		skipPythonPreflight: true,
 		restrictToolNames: restricted,
 	};
 }
@@ -80,7 +79,6 @@ describe("experimental context tool registration", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 			});
 			try {
 				expect(session.getEnabledToolNames()).toEqual(expect.arrayContaining(["context_notes", "new_context"]));

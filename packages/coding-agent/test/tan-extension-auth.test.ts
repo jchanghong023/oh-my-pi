@@ -76,7 +76,6 @@ function baseOptions(cwd: string) {
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true as const,
 	};
 }
 

@@ -100,7 +100,7 @@ export default function (api) {
 						preloadedExtensionPaths: [], preloadedCustomToolPaths: [],
 						skills: [], rules: [], contextFiles: [], promptTemplates: [], slashCommands: [],
 						enableMCP: false, enableLsp: false, enableIrc: false,
-						skipPythonPreflight: true, toolNames: ["task"], autoApprove: true,
+						toolNames: ["task"], autoApprove: true,
 						extensions: [registerFixtureProvider, childApi => childApi.registerCommand("probe", {
 							handler: async (_args, childCtx) => {
 								try {

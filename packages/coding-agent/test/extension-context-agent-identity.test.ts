@@ -54,7 +54,6 @@ describe("ExtensionContext.agent", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
 			toolNames: ["read"],

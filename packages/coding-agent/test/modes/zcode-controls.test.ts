@@ -91,7 +91,6 @@ describe("ZCode direct session runtime controls", () => {
 				restrictToolNames: true,
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 			});
 		const a = await create("a");
 		let b: CreateAgentSessionResult | undefined;

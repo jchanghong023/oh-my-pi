@@ -104,7 +104,6 @@ describe("createAgentSession deferred role alias on discoverable provider (#8863
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				taskDepth: 1,
 				agentId: "SubAgent",
 			});

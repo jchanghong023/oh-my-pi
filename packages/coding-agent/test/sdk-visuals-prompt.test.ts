@@ -29,7 +29,6 @@ async function promptFor(options: CreateAgentSessionOptions): Promise<string> {
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 		...options,
 	});
 	try {

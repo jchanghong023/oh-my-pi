@@ -60,7 +60,6 @@ describe("env-redirected implicit provider discovery warning", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		try {
 			const changed = Promise.withResolvers<void>();

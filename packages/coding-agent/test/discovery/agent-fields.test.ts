@@ -118,7 +118,6 @@ describe("parseAgentFields", () => {
 			taskDepth: 1,
 			requireYieldTool: true,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		};
 
 		const plan = await resolveBuiltinToolPlan(session, fields.tools);

@@ -108,7 +108,6 @@ describe("createAgentSession cwd after /move", () => {
 					slashCommands: [],
 					enableMCP: false,
 					enableLsp: false,
-					skipPythonPreflight: true,
 					rules: [],
 					preloadedCustomToolPaths: [],
 				}));
@@ -173,7 +172,6 @@ describe("createAgentSession cwd after /move", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
 			toolNames: ["read"],
@@ -235,7 +233,6 @@ describe("createAgentSession cwd after /move", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			rules: [],
 			preloadedCustomToolPaths: [],
 		});

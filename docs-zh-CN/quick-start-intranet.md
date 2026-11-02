@@ -87,6 +87,8 @@ omp usage
 
 OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpreter` 优先；未显式设置时，Linux 内网模式优先尝试 `/software/public/python/3.11.4/bin/python3.11`，缺失或不适合则继续检查原有候选及 PATH 中的版本化 `python3.11`～`python3.15`、`python3`、`python`。内网模式的 `1`／`true`／`yes`／`on` 均生效，忽略大小写和首尾空白；Linux 内网 Eval 要求 Python ≥3.11，遇到默认 Python 3.6 会继续查找，全部候选不满足时明确报错，不降级。显式解释器不满足要求时也会报错，不会自动换解释器。其他平台或非内网模式仍要求 Python 3.8+。OMP 不修改当前终端／主进程 PATH、项目虚拟环境或业务 Python，也不扫描软件目录或安装包；用 bash 执行业务脚本仍应使用项目自己的解释器。
 
+OMP 启动及主会话／子代理会话创建、恢复时不检查或预热 Python，也不显示首次启动的 Python 缺失警告。实际执行 Python Eval 时才按上述规则检查解释器，不可用时返回明确错误；需要提前诊断可手动运行 `omp setup python --check`。
+
 ### 中文输入法突然失效
 
 在发生故障的 OMP 输入框输入 `/jchime` 并发送；也可输入 `/jchime 只有当前窗口不能输入中文` 补充现象。内置指令已包含供较小模型执行的完整恢复块，无需另找脚本或填写总线地址。

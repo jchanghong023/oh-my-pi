@@ -62,7 +62,6 @@ async function withGuardedSession(run: (session: AgentSession, settings: Setting
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,
-		skipPythonPreflight: true,
 	});
 	try {
 		await run(session, settings);

@@ -97,7 +97,6 @@ describe("caller tool admission restrictions", () => {
 			cwd: process.cwd(),
 			hasUI: false,
 			settings: Settings.isolated({ "checkpoint.enabled": true }),
-			skipPythonPreflight: true,
 			toolRestrictions: policy,
 		} as ToolSession;
 		const plan = await resolveBuiltinToolPlan(session, ["read", "checkpoint"]);

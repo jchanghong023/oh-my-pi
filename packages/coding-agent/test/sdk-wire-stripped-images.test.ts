@@ -71,7 +71,6 @@ describe("session image replacement on a wire that strips images", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			taskDepth: 1,
 			agentId: "SubAgent",
 		});

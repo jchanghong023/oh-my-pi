@@ -241,7 +241,6 @@ describe("Host-owned native automation tools", () => {
 				allowRestrictedCustomTools: true,
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				taskDepth: 1,
 				agentId: "SubAgent",
 			});

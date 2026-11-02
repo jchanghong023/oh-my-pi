@@ -55,7 +55,6 @@ describe("AgentSession eval preludes", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		sessions.push(session);
 
@@ -109,7 +108,6 @@ describe("AgentSession eval preludes", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		sessions.push(session);
 		const mock = createMockModel({ handler: { content: ["ok"] } });
@@ -179,7 +177,6 @@ describe("AgentSession eval preludes", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		sessions.push(session);
 
@@ -210,7 +207,6 @@ describe("AgentSession eval preludes", () => {
 			slashCommands: [],
 			mcpManager: manager,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		sessions.push(session);
 
@@ -252,7 +248,6 @@ describe("AgentSession eval preludes", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			restrictToolNames: true,
 			toolNames: ["eval"],
 		});

@@ -269,7 +269,6 @@ async function createDefaultSecuritySession(input: SecurityScanSessionFactoryInp
 		lspReadOnly: true,
 		hasUI: false,
 		autoApprove: true,
-		skipPythonPreflight: true,
 		agentId: `Security-${input.scanId.slice(-12)}`,
 		agentDisplayName: "security",
 		// A helper for the host session: the host keeps the process-wide effects and provider toggles.

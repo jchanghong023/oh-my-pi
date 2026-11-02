@@ -83,7 +83,6 @@ describe("SDK session dialogs and the computer display hold", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			toolNames: ["ask", "bash"],
 		});
 		session = created.session;

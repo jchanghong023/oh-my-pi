@@ -387,7 +387,6 @@ describe("native skill management bridge", () => {
 			restrictToolNames: true,
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			taskDepth: 1,
 			agentId: "SubAgent",
 		});

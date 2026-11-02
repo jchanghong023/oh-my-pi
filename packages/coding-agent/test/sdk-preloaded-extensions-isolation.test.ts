@@ -64,7 +64,6 @@ describe("createAgentSession preloadedExtensions isolation (issue #2190)", () =>
 			// Disable everything that would touch the network / FS scans.
 			enableLsp: false,
 			enableMCP: false,
-			skipPythonPreflight: true,
 			skills: [],
 			rules: [],
 			preloadedCustomToolPaths: [],

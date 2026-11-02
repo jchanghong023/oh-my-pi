@@ -40,7 +40,6 @@ async function fixture(files: Record<string, string> = {}) {
 	const session = {
 		cwd,
 		hasUI: false,
-		skipPythonPreflight: true,
 		settings,
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",

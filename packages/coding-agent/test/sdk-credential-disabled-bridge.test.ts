@@ -120,7 +120,6 @@ describe("createAgentSession credential_disabled subscription", () => {
 		// Avoid rebuilding the full built-in/custom-tool surface for every session.
 		toolNames: ["read"],
 		preloadedCustomToolPaths: [],
-		skipPythonPreflight: true,
 		slashCommands: [],
 		enableMCP: false,
 		enableLsp: false,

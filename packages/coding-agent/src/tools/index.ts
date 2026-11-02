@@ -10,7 +10,6 @@ import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { NativeSubagentHooks } from "../task/types";
 import { EditTool } from "../edit";
-import { checkPythonKernelAvailability } from "../eval/py/kernel";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type {
 	BeforeSubagentSpawnEvent,
@@ -105,7 +104,6 @@ import {
 import { cfgAutolearnEnabled } from "../autolearn/settings";
 import { cfgBashEnabled } from "../exec/settings";
 import { cfgCompactionExperimentalContextManagement } from "../session/context-settings";
-import { cfgPythonInterpreter } from "../eval/settings";
 import { cfgExternalThinking } from "../session/settings";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgLspEnabled } from "../lsp/settings";
@@ -264,8 +262,6 @@ export interface ToolSession {
 	getApiKey?: AgentOptions["getApiKey"];
 	/** Current session whose stored credential affinities should seed a child session. */
 	getCredentialSourceSessionId?: () => string | undefined;
-	/** Skip subprocess-kernel availability checks and warmup */
-	skipPythonPreflight?: boolean;
 	/** Pre-loaded context files (AGENTS.md, etc) */
 	contextFiles?: ContextFileEntry[];
 	/** No context files beyond `contextFiles`, not even for additional workspace roots (forwarded to subagents) */
@@ -701,34 +697,9 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 	) {
 		requestedTools.push("goal");
 	}
+	// Register enabled backends without probing Python; availability is checked on execution.
 	const backends = resolveEvalBackends(session);
-	const allowPython = backends.python;
-	const allowJs = backends.js;
-	const skipEvalPreflight = session.skipPythonPreflight === true;
-	// Eval tool is enabled if ANY backend is reachable. JS needs no preflight, so
-	// we only probe Python when JS is disabled — otherwise allowEval is
-	// already true and per-backend availability is checked at first invocation.
-	let pythonAvailable = true;
-	const evalRequested = requestedTools === undefined || requestedTools.includes("eval");
-	if (!skipEvalPreflight && !allowJs && evalRequested) {
-		if (allowPython) {
-			const availability = await logger.time(
-				"createTools:pythonCheck",
-				checkPythonKernelAvailability,
-				session.cwd,
-				cfgPythonInterpreter.get(session.settings)?.trim() || undefined,
-			);
-			pythonAvailable = availability.ok;
-			if (!availability.ok) {
-				logger.warn("Python kernel unavailable and JS backend disabled", { reason: availability.reason });
-			}
-		}
-	}
-
-	const effectivePythonAllowed = allowPython && pythonAvailable;
-	// Eval is exposed whenever any backend is reachable. A backend may be
-	// unreachable, in which case eval dispatches exclusively to the others.
-	const allowEval = effectivePythonAllowed || allowJs;
+	const allowEval = backends.python || backends.js;
 
 	// Convenience pairing cannot widen an explicit caller allowlist.
 	if (requestedTools && !session.toolRestrictions?.hasAllowlist && cfgCheckpointEnabled.get(session.settings)) {

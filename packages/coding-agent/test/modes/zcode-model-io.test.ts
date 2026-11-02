@@ -117,7 +117,6 @@ describe("ZCode model IO retention", () => {
 			restrictToolNames: true,
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			taskDepth: 1,
 			agentId: "SubAgent",
 			onPayload: async (payload, observedModel, signal) => {

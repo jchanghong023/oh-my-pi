@@ -61,7 +61,6 @@ describe("inline tool descriptors across model switches", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				toolNames: ["read"],
 			});
 			sessions.push(session);
@@ -98,7 +97,6 @@ describe("inline tool descriptors across model switches", () => {
 				slashCommands: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				toolNames: ["read"],
 			});
 			sessions.push(session);
@@ -140,7 +138,6 @@ describe("inline tool descriptors across model switches", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			toolNames: ["read"],
 		});
 		sessions.push(session);

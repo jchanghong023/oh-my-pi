@@ -81,7 +81,6 @@ describe("session runtime boundary regressions", () => {
 			toolNames: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		session = result.session;
 		expect(fetches).toBe(0);

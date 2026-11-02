@@ -147,7 +147,6 @@ describe("AgentSession Anthropic native compaction", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		// A reminder change is what a date rollover or a cwd move produces; the cwd is the deterministic one.
 		const moveCwd = () => vi.spyOn(sessionManager, "getCwd").mockReturnValue(tempDir.join("moved"));

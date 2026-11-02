@@ -53,7 +53,6 @@ describe("Team filesystem read isolation", () => {
 			cwd,
 			hasUI: false,
 			settings: Settings.isolated({ "astGrep.enabled": true }),
-			skipPythonPreflight: true,
 			restrictToolNames: true,
 			getSessionFile: () => `${own}.jsonl`,
 			getSessionSpawns: () => "*",

@@ -95,7 +95,6 @@ describe("--no-context-files", () => {
 			settings,
 			model: getBundledModel("openai", "gpt-4o-mini"),
 			enableLsp: false,
-			skipPythonPreflight: true,
 		});
 		return session;
 	}

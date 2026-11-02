@@ -8,7 +8,6 @@ function toolSession(settings: Settings): ToolSession {
 	return {
 		cwd: process.cwd(),
 		hasUI: false,
-		skipPythonPreflight: true,
 		restrictToolNames: true,
 		getSessionFile: () => null,
 		getSessionSpawns: () => null,

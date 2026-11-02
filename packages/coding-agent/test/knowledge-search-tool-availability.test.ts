@@ -7,7 +7,6 @@ function makeSession(restrictToolNames = false): ToolSession {
 		cwd: process.cwd(),
 		hasUI: false,
 		restrictToolNames,
-		skipPythonPreflight: true,
 		settings: Settings.isolated({}),
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",

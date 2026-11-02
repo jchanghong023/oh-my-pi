@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 import { ToolRestrictions } from "@oh-my-pi/pi-coding-agent/session/tool-restrictions";
 import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
-
-Bun.env.PI_PYTHON_SKIP_CHECK = "1";
 
 const openwikiQueryTools = ["openwiki_search", "openwiki_read", "openwiki_list_workspaces", "openwiki_list_wikis"];
 
@@ -74,21 +73,15 @@ describe("createTools", () => {
 		expect(names).toContain("eval");
 	});
 
-	it("still exposes eval when python kernel is unavailable (dispatches to js)", async () => {
-		// JS eval is off by default; opting in is what makes the js fallback
-		// reachable when the python kernel probe reports no interpreter.
-		const session = createTestSession({ settings: createSettingsWithOverrides({ "eval.js": true }) });
-		vi.spyOn(
-			await import("@oh-my-pi/pi-coding-agent/eval/py/kernel"),
-			"checkPythonKernelAvailability",
-		).mockResolvedValue({
-			ok: false,
-			reason: "missing python",
+	it("registers Python-only eval without checking the interpreter", async () => {
+		const session = createTestSession({
+			settings: createSettingsWithOverrides({ "eval.py": true, "eval.js": false }),
 		});
+		const probe = vi.spyOn(pyKernel, "checkPythonKernelAvailability").mockRejectedValue(new Error("missing python"));
 		const tools = await createTools(session, ["eval"]);
-		const names = tools.map(t => t.name);
 
-		expect(names).toContain("eval");
+		expect(tools.map(tool => tool.name)).toEqual(["eval"]);
+		expect(probe).not.toHaveBeenCalled();
 	});
 
 	it("excludes lsp tool when session disables LSP", async () => {

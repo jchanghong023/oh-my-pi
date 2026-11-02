@@ -79,7 +79,6 @@ describe("concurrent ACP sessions", () => {
 				slashCommands: [],
 				rules: [],
 				enableLsp: false,
-				skipPythonPreflight: true,
 			},
 			settings: launchSettings,
 			sessionDir: launchDir.join("sessions"),

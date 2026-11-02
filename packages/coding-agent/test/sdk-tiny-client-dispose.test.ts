@@ -109,7 +109,6 @@ describe("tiny-model client shutdown on session dispose", () => {
 				rules: [],
 				enableMCP: false,
 				enableLsp: false,
-				skipPythonPreflight: true,
 				...extra,
 			});
 			sessions.push(session);
