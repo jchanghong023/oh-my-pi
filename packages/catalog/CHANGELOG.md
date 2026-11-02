@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [18.16.0] - 2026-11-02
+
 ### Added
 
 - Added `company/GLM-5.3-public` to the built-in offline intranet model catalog.

@@ -205,7 +205,7 @@ const PREVIEW_LINE_WIDTH = 80;
 function statusToIcon(status: JobSnapshot["status"]): ToolUIStatus {
 	switch (status) {
 		case "completed":
-			return "done";
+			return "success";
 		case "failed":
 			return "error";
 		case "cancelled":
@@ -457,7 +457,7 @@ function jobsRenderResult(
 		const lines: string[] = [];
 		const represented = options.settledBashJobs;
 		const visibleSettledJobs = settledJobs.filter(job => !duplicatesBashCard(job, represented));
-		const indent = " ".repeat(visibleWidth(formatStatusIcon("done", uiTheme)) + 1);
+		const indent = " ".repeat(visibleWidth(formatStatusIcon("success", uiTheme)) + 1);
 		// Failures sort first, so the cap never hides one behind successes;
 		// Ctrl+O lists the rest.
 		for (const job of visibleSettledJobs.slice(0, PREVIEW_LIMITS.COLLAPSED_ITEMS)) {

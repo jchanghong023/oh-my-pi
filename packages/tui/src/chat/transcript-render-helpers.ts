@@ -130,7 +130,7 @@ export function buildLaunchCompletionBlock(message: CustomOrHookMessage): ToolAc
 				failed
 					? { text: `${theme.status.error} ${label}`, color: "error" }
 					: daemon.exitCode === 0
-						? { text: `${theme.status.done} ${label}`, color: "success" }
+						? { text: `${theme.status.success} ${label}`, color: "success" }
 						: { text: label, color: "dim" },
 				{ text: daemon.name, color: "accent" },
 				exit ? { text: `(${exit})`, color: "dim" } : undefined,

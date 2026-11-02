@@ -31,6 +31,7 @@ import {
 } from "@oh-my-pi/pi-utils/dirs";
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
+import { installSqliteLockShim } from "@oh-my-pi/pi-natives/sqlite-locks";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
 	BLOB_BROKER_WORKER_ARG,
@@ -601,6 +602,18 @@ export async function runCli(argv: string[]): Promise<void> {
 		process.stdout.write(formatLicenseOutput());
 		return;
 	}
+	const helpOrVersion =
+		resolvedArgv[0] === "--help" ||
+		resolvedArgv[0] === "-h" ||
+		resolvedArgv[0] === "--version" ||
+		resolvedArgv[0] === "-v" ||
+		resolvedArgv[0] === "help";
+	// Before any store opens (the prepaint composer's cache included): SQLite's POSIX
+	// locks would be released by any other close of the same file in this process
+	// (issue #15586); OFD locks are not. Help and version open no store and load no addon.
+	// A failed install is reported once the launch has a warning sink (`main.ts`,
+	// `ensureSqliteLockShim`); this module stays free of pi-utils' env snapshot.
+	if (isProcessEntry && !helpOrVersion) installSqliteLockShim();
 	let stopStartupComposer: (() => void) | undefined;
 	if (
 		!process.env.PI_TIMING &&
@@ -619,12 +632,6 @@ export async function runCli(argv: string[]): Promise<void> {
 	// The speculative composer owns stdin before either loader yields, so input
 	// typed during initialization stays buffered. Neither graph is needed to
 	// produce that frame.
-	const helpOrVersion =
-		resolvedArgv[0] === "--help" ||
-		resolvedArgv[0] === "-h" ||
-		resolvedArgv[0] === "--version" ||
-		resolvedArgv[0] === "-v" ||
-		resolvedArgv[0] === "help";
 	if (!helpOrVersion) {
 		// Static import cannot work: it would load the default profile's dotenv
 		// before setProfile. Explicit dotenv values must also precede fork network

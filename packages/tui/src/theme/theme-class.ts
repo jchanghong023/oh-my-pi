@@ -249,6 +249,8 @@ export class Theme {
 				logger.debug("Invalid symbol key in override", { key, availableKeys: Object.keys(this.#symbols) });
 			}
 		}
+		// `status.done` aliases `status.success` unless a theme overrides it explicitly.
+		if (!("status.done" in symbolOverrides)) this.#symbols["status.done"] = this.#symbols["status.success"];
 		this.#spinnerFramesOverrides = spinnerFramesOverrides;
 	}
 
@@ -534,6 +536,7 @@ export class Theme {
 			running: this.#symbols["status.running"],
 			shadowed: this.#symbols["status.shadowed"],
 			aborted: this.#symbols["status.aborted"],
+			/** @deprecated Alias of `success`. */
 			done: this.#symbols["status.done"],
 		};
 	}

@@ -155,6 +155,7 @@ export interface SlashCommandRuntime {
 	 */
 	mcpManager?: MCPManager | undefined;
 	notifyTitleChanged?: () => Promise<void> | void;
+	notifySessionPinChanged?: (sessionId: string, pinned: boolean) => Promise<void> | void;
 	/**
 	 * Push the host's view of the session config (model, thinking level, mode).
 	 *

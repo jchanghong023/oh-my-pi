@@ -17,7 +17,7 @@ import { type Component, type TUI } from "../tui";
 import type { AdvisorMessageDetails } from "./messages";
 import { COLLAB_PROMPT_MESSAGE_TYPE, type CollabPromptDetails } from "./messages";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
-import type { MessageRenderer } from "./extension-types";
+import type { AssistantTextRenderer, MessageRenderer } from "./extension-types";
 import { LAUNCH_COMPLETION_MESSAGE_TYPE } from "./messages";
 import {
 	BACKGROUND_TAN_DISPATCH_MESSAGE_TYPE,
@@ -85,6 +85,8 @@ export interface ChatTranscriptBuilderDeps {
 	linkTargets?: ReadonlyMap<string, string>;
 	/** Draw charts under numeric tables; false for transcripts that are not the main session's. Default: true. */
 	tableCharts?: boolean;
+	/** Extension assistant text renderers the replayed replies draw with, as the live transcript does. */
+	textRenderers?: readonly AssistantTextRenderer[];
 	requestRender: () => void;
 }
 
@@ -425,6 +427,7 @@ export class ChatTranscriptBuilder {
 			proseOnlyThinking,
 			this.#deps.linkTargets,
 			expandThinkingBlocks,
+			{ renderers: this.#deps.textRenderers ?? [], contentOffset: 0 },
 		);
 		assistantComponent.pickReactionTarget(this.container.children);
 		this.#mountProse(assistantComponent);
@@ -449,7 +452,10 @@ export class ChatTranscriptBuilder {
 		const errorPresentation = resolveAssistantErrorPresentation(message);
 		const hasErrorStop = errorPresentation.kind === "full";
 		const errorMessage = hasErrorStop ? errorPresentation.text : null;
-		const appendAssistantSegment = (segment: Extract<AgentMessage, { role: "assistant" }> | undefined) => {
+		const appendAssistantSegment = (
+			toolCallId: string,
+			segment: Extract<AgentMessage, { role: "assistant" }> | undefined,
+		) => {
 			if (!segment || !assistantHasVisibleContent(segment)) return;
 			this.#readGroup?.seal();
 			this.#readGroup = null;
@@ -462,6 +468,7 @@ export class ChatTranscriptBuilder {
 				proseOnlyThinking,
 				this.#deps.linkTargets,
 				expandThinkingBlocks,
+				{ renderers: this.#deps.textRenderers ?? [], contentOffset: timeline.contentOffsets.get(toolCallId) ?? 0 },
 			);
 			this.#mountProse(component);
 			lastAssistantComponent = component;
@@ -484,7 +491,7 @@ export class ChatTranscriptBuilder {
 				} else {
 					this.#pendingTools.set(content.id, group);
 				}
-				appendAssistantSegment(afterToolSegment);
+				appendAssistantSegment(content.id, afterToolSegment);
 				continue;
 			}
 
@@ -532,7 +539,7 @@ export class ChatTranscriptBuilder {
 			} else {
 				this.#pendingTools.set(content.id, component);
 			}
-			appendAssistantSegment(afterToolSegment);
+			appendAssistantSegment(content.id, afterToolSegment);
 		}
 		const turnUsage = this.#turnUsage.add(message, this.#turnStartedAt);
 		if (turnUsage) lastAssistantComponent.setTurnUsage(turnUsage);
