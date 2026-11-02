@@ -27,7 +27,7 @@ describe("/tan prompt-cache tool presentation", () => {
 		it(`preserves the parent's request tools with xd:// ${xdev ? "enabled" : "disabled"}`, async () => {
 			using dir = TempDir.createSync("@omp-tan-tools-");
 			const cwd = dir.path();
-			const settings = Settings.isolated({ "tools.xdev": xdev, "marketplace.autoUpdate": "off" });
+			const settings = Settings.isolated({ "tools.xdev": xdev });
 			const auth = createInMemoryAuthStorage();
 			auth.keys.setRuntime("openai", "test-key");
 			const base = {

@@ -14,7 +14,7 @@ import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, un
 import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, AsyncJobError, AsyncJobManager, type AsyncJobRunResult } from "../async";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
-import { isCompanyLaneActive } from "../config/company-provider";
+import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
 import {
@@ -4632,9 +4632,11 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 			checkAbort();
 			// Pin authStorage to modelRegistry.authStorage — mirrors the createAgentSession invariant.
 			const registryFromParent = options.modelRegistry !== undefined;
-			const modelRegistry =
-				options.modelRegistry ??
-				new ModelRegistry(options.authStorage ?? (await awaitAbortable(discoverAuthStorage())));
+			const registryAuth = registryFromParent
+				? undefined
+				: (options.authStorage ?? (await awaitAbortable(discoverAuthStorage())));
+			if (isCompanyLaneActive()) await awaitAbortable(setCompanyOfflineEnabled(true));
+			const modelRegistry = options.modelRegistry ?? new ModelRegistry(registryAuth!);
 			const authStorage = modelRegistry.authStorage;
 			if (options.authStorage && options.authStorage !== authStorage) {
 				throw new Error(

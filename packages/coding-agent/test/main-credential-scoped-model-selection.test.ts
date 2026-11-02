@@ -89,7 +89,7 @@ it("--model resolves a cached-only Copilot model exactly instead of its bundled 
 	try {
 		await runRootCommand(parsed, rawArgs, {
 			discoverAuthStorage: async () => authStorage,
-			settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+			settings: Settings.isolated(),
 			createAgentSession: async options => {
 				observedOptions = options;
 				throw new Error("stop after session options");

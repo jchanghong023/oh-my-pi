@@ -9,7 +9,11 @@ import {
 } from "@oh-my-pi/pi-natives";
 import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
-import { companySnapshotForSubprocess } from "../config/company-provider";
+import {
+	companySnapshotForSubprocess,
+	isCompanyLaneActive,
+	setCompanyOfflineEnabled,
+} from "../config/company-provider";
 import { KNOWLEDGE_WORKER_ARG } from "../cli/worker-selectors";
 import {
 	createWorkerHandle,
@@ -314,7 +318,7 @@ export class KnowledgeService {
 					// The worker is already unavailable; discard still owns cleanup.
 				}
 				this.#discardWorker();
-				this.#pump();
+				void this.#pump();
 			} else {
 				const index = this.#queue.indexOf(request);
 				if (index < 0) return;
@@ -325,11 +329,11 @@ export class KnowledgeService {
 		};
 		signal?.addEventListener("abort", onAbort, { once: true });
 		this.#queue.push(request);
-		this.#pump();
+		void this.#pump();
 		return promise;
 	}
 
-	#pump(): void {
+	async #pump(): Promise<void> {
 		if (this.#closed || this.#active || this.#retiring) return;
 		const request = this.#queue.shift();
 		if (!request) {
@@ -339,6 +343,8 @@ export class KnowledgeService {
 		this.#active = request;
 		request.activeAt = performance.now();
 		try {
+			if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
+			if (this.#active !== request || this.#closed) return;
 			let worker = this.#worker;
 			if (!worker) {
 				const { spawned, handle } = spawnKnowledgeWorker(error => {
@@ -367,7 +373,7 @@ export class KnowledgeService {
 				worker.handle.send({ ...request.command, id: request.id, context: request.context });
 			}
 		} catch (error) {
-			this.#failAll(error);
+			if (this.#active === request) this.#failAll(error);
 		}
 	}
 
@@ -405,7 +411,7 @@ export class KnowledgeService {
 				request.cleanup();
 				request.reject(error);
 				this.#discardWorker();
-				this.#pump();
+				void this.#pump();
 			}
 			return;
 		}
@@ -426,7 +432,7 @@ export class KnowledgeService {
 				queue_ms: request.activeAt - request.enqueuedAt,
 			});
 		}
-		this.#pump();
+		void this.#pump();
 	}
 
 	#remoteError(message: Extract<KnowledgeWorkerOutbound, { type: "error" }>): Error {
@@ -460,7 +466,7 @@ export class KnowledgeService {
 		this.#retiring = retiring;
 		void retiring.then(() => {
 			if (this.#retiring === retiring && !this.#closed) this.#retiring = undefined;
-			this.#pump();
+			void this.#pump();
 		});
 	}
 }

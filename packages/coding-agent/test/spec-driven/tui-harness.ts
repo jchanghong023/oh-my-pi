@@ -229,7 +229,7 @@ async function withTui(
 		path.join(agentDir, "config.yml"),
 		JSON.stringify({
 			composer: { predictions: false },
-			startup: { setupWizard: false, checkUpdate: false },
+			startup: { setupWizard: false },
 			async: { enabled: false },
 			...scenario.configuration,
 			modelRoles: {

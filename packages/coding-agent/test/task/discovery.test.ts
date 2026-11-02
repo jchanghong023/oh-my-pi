@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { disableProvider, enableProvider } from "@oh-my-pi/pi-coding-agent/capability";
+import { disableProvider, enableProvider, initializeWithSettings } from "@oh-my-pi/pi-coding-agent/capability";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import { clearAgentPluginRootCache } from "@oh-my-pi/pi-coding-agent/discovery/agent-plugin-format";
 import {
@@ -246,12 +248,32 @@ describe("discoverAgents", () => {
 				"\n",
 			),
 		);
-		await injectPluginDirRoots(tempHome, [pluginDir], projectDir);
-
-		const { agents } = await discoverAgents(projectDir, tempHome);
-		const names = agents.map(agent => agent.name);
-
-		expect(names).toContain("plugin-dir-agent");
+		const registry = path.join(tempHome, ".claude", "plugins", "installed_plugins.json");
+		await fs.mkdir(path.dirname(registry), { recursive: true });
+		await fs.writeFile(registry, "malformed");
+		const releaseSettings = initializeWithSettings(Settings.isolated());
+		const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+		delete process.env.CLAUDE_CONFIG_DIR;
+		delete Bun.env.CLAUDE_CONFIG_DIR;
+		const statSpy = vi.spyOn(nodeFs.promises, "stat");
+		try {
+			await injectPluginDirRoots(tempHome, [pluginDir], projectDir);
+			const { agents } = await discoverAgents(projectDir, tempHome);
+			expect(agents.map(agent => agent.name)).toContain("plugin-dir-agent");
+			expect(statSpy.mock.calls.some(([file]) => typeof file === "string" && path.resolve(file) === registry)).toBe(
+				false,
+			);
+		} finally {
+			statSpy.mockRestore();
+			releaseSettings();
+			if (originalClaudeConfigDir === undefined) {
+				delete process.env.CLAUDE_CONFIG_DIR;
+				delete Bun.env.CLAUDE_CONFIG_DIR;
+			} else {
+				process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+				Bun.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+			}
+		}
 	});
 
 	test("honors model frontmatter of OMP-native omp-installed marketplace plugin agents (#12028)", async () => {

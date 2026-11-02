@@ -63,7 +63,6 @@ async function createMinimalSession(
 		model: shouldSupplyModel ? (options.model ?? OPENAI_TEST_MODEL) : options.model,
 		settings: Settings.isolated({
 			"async.enabled": false,
-			"marketplace.autoUpdate": "off",
 		}),
 		disableExtensionDiscovery: true,
 		preloadedExtensions: undefined,
@@ -221,7 +220,7 @@ describe("provider prompt-cache key session affinity", () => {
 				scopedModels,
 				forkedManager,
 				modelRegistry,
-				Settings.isolated({ "marketplace.autoUpdate": "off" }),
+				Settings.isolated(),
 			);
 
 			expect(options.model).toBe(OPENAI_TEST_MODEL);

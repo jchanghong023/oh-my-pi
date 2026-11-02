@@ -1,4 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
+import type { BunFile } from "bun";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { importRoomKey } from "@oh-my-pi/pi-coding-agent/collab/crypto";
@@ -9,6 +12,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { getCompanyConfig } from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { clearOmpExtensionCliRoots } from "@oh-my-pi/pi-coding-agent/discovery/omp-extension-roots";
 import { runRootCommand } from "@oh-my-pi/pi-coding-agent/main";
@@ -34,13 +38,12 @@ import { createTestSession } from "./utilities";
 import {
 	cfgAutocompleteMaxVisible,
 	cfgComposerShape,
-	cfgMarketplaceAutoUpdate,
+	cfgSetupVersion,
 	cfgShowHardwareCursor,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
 	cfgStartupChangelogMode,
-	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
@@ -101,10 +104,197 @@ afterEach(() => {
 	clearOmpExtensionCliRoots();
 });
 
+it("overlaps real startup settings and plugin preload with the company snapshot barrier", async () => {
+	const probe = process.env.OMP_COMPANY_STARTUP_BARRIER_PROBE;
+	if (!probe) {
+		const home = await fs.mkdtemp(path.join(os.tmpdir(), "company-startup-"));
+		const configDir = path.join(home, ".claude");
+		await Bun.write(
+			path.join(configDir, "settings.json"),
+			JSON.stringify({
+				env: { ANTHROPIC_BASE_URL: "http://internal.invalid", ANTHROPIC_AUTH_TOKEN: "fixture-secret" },
+			}),
+		);
+		try {
+			const child = Bun.spawn(
+				[
+					process.execPath,
+					"test",
+					import.meta.path,
+					"--test-name-pattern",
+					"overlaps real startup settings and plugin preload",
+				],
+				{
+					env: {
+						...process.env,
+						HOME: home,
+						USERPROFILE: home,
+						CLAUDE_CONFIG_DIR: configDir,
+						OMP_OFFLINE: "1",
+						OMP_CONFIG_ROOT: path.join(home, ".omp"),
+						PI_CODING_AGENT_DIR: path.join(home, ".omp", "agent"),
+						PI_PROFILE: "",
+						PI_CONFIG_FILES: "",
+						PI_TIMING: "",
+						XDG_CONFIG_HOME: path.join(home, ".config"),
+						XDG_CACHE_HOME: path.join(home, ".cache"),
+						XDG_DATA_HOME: path.join(home, ".local", "share"),
+						OMP_COMPANY_STARTUP_BARRIER_PROBE: home,
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect(code, stdout + stderr).toBe(0);
+			expect(stdout + stderr).toMatch(/1 pass/);
+		} finally {
+			await fs.rm(home, { recursive: true, force: true });
+		}
+		return;
+	}
+
+	const originalProject = getProjectDir();
+	const originalIsTTY = process.stdin.isTTY;
+	Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+	setProjectDir(probe);
+	resetSettingsForTest();
+	const authStorage = await AuthStorage.create(path.join(probe, "startup-auth.db"));
+	const gate = Promise.withResolvers<void>();
+	const settingsDone = Promise.withResolvers<void>();
+	const pluginsDone = Promise.withResolvers<void>();
+	const settingsInit = Settings.init;
+	const preload = pluginHelpers.preloadPluginRoots;
+	const originalFile = Bun.file.bind(Bun);
+	const companyFile = path.join(probe, ".claude", "settings.json");
+	let reads = 0;
+	let authStarted = false;
+	let registryStarted = false;
+	let sessionStarted = false;
+	const finished = new Error("finished observing startup");
+	vi.spyOn(Bun, "file").mockImplementation(((target: string, options?: BlobPropertyBag) => {
+		const file = originalFile(target, options);
+		// Settings discovery also reads this path; hold only the earlier auth read.
+		if (target !== companyFile || reads !== 0) return file;
+		reads++;
+		return {
+			text: async () => {
+				await gate.promise;
+				return file.text();
+			},
+		} as BunFile;
+	}) as typeof Bun.file);
+	vi.spyOn(Settings, "init").mockImplementation(async options => {
+		const settings = await settingsInit({ ...options, inMemory: true });
+		settingsDone.resolve();
+		return settings;
+	});
+	vi.spyOn(pluginHelpers, "preloadPluginRoots").mockImplementation(async (...args) => {
+		const result = await preload(...args);
+		pluginsDone.resolve();
+		return result;
+	});
+	const warnings = ModelRegistry.prototype.getReservedProviderWarnings;
+	vi.spyOn(ModelRegistry.prototype, "getReservedProviderWarnings").mockImplementation(function (this: ModelRegistry) {
+		registryStarted = true;
+		expect(getCompanyConfig()?.token).toBe("fixture-secret");
+		return warnings.call(this);
+	});
+	const args = [
+		"-p",
+		"--model",
+		"company/GLM-5.3-public",
+		"--no-session",
+		"--no-skills",
+		"--no-rules",
+		"--no-tools",
+		"probe",
+	];
+	const running = runRootCommand(parseArgs(args), args, {
+		discoverAuthStorage: async () => {
+			authStarted = true;
+			expect(getCompanyConfig()?.token).toBe("fixture-secret");
+			return authStorage;
+		},
+		createAgentSession: async options => {
+			sessionStarted = true;
+			expect(options?.model?.provider).toBe("company");
+			expect(options?.model?.id).toBe("GLM-5.3-public");
+			throw finished;
+		},
+	}).then(
+		() => undefined,
+		error => error,
+	);
+	try {
+		await Promise.race([
+			Promise.all([settingsDone.promise, pluginsDone.promise]),
+			running.then(error => {
+				throw error ?? new Error("startup exited before independent work completed");
+			}),
+		]);
+		expect(reads).toBe(1);
+		expect(authStarted).toBe(false);
+		expect(registryStarted).toBe(false);
+		expect(sessionStarted).toBe(false);
+		expect(() => getCompanyConfig()).toThrow("not ready");
+		gate.resolve();
+		expect(await running).toBe(finished);
+		expect(authStarted).toBe(true);
+		expect(registryStarted).toBe(true);
+		expect(sessionStarted).toBe(true);
+	} finally {
+		gate.resolve();
+		vi.restoreAllMocks();
+		Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+		setProjectDir(originalProject);
+	}
+}, 60_000);
+
+// Isolate the module registry: other tests may have already opened the wizard.
+it.each(["online", "offline", "splash"] as const)(
+	"keeps %s startup free of automatic updates and setup graph",
+	async mode => {
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"test",
+				import.meta.path,
+				"--test-name-pattern",
+				"keeps guest mutations gated until outer startup completes",
+			],
+			{
+				env: {
+					...process.env,
+					PI_TIMING: "",
+					OMP_OFFLINE: mode === "offline" ? "1" : "",
+					OMP_STARTUP_REGRESSION_PROBE: mode,
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(exitCode, stdout + stderr).toBe(0);
+		expect(stdout + stderr).toMatch(/1 pass/);
+	},
+	60_000,
+);
+
 describe("outer startup collaboration gate", () => {
 	it.each(["completes", "fails"] as const)("keeps guest mutations gated until outer startup %s", async result => {
+		const probe = process.env.OMP_STARTUP_REGRESSION_PROBE;
 		const originalProject = getProjectDir();
 		const originalIsTTY = process.stdin.isTTY;
+		const originalStdoutIsTTY = process.stdout.isTTY;
 		resetSettingsForTest();
 		await initTheme();
 		const testSession = await createTestSession({
@@ -116,12 +306,20 @@ describe("outer startup collaboration gate", () => {
 			},
 		});
 		setProjectDir(testSession.tempDir);
-		const activeSettings = await Settings.init({ inMemory: true, cwd: testSession.tempDir });
-		cfgStartupCheckUpdate.override(activeSettings, false);
+		const legacyConfig = path.join(testSession.tempDir, "legacy-startup.yml");
+		if (probe) {
+			await Bun.write(legacyConfig, "startup:\n  checkUpdate: true\nmarketplace:\n  autoUpdate: auto\n");
+		}
+		const activeSettings = await Settings.init({
+			inMemory: true,
+			cwd: testSession.tempDir,
+			configFiles: probe ? [legacyConfig] : undefined,
+		});
 		cfgStartupChangelogMode.override(activeSettings, "hidden");
 		cfgStartupSetupWizard.override(activeSettings, false);
-		cfgStartupShowSplash.override(activeSettings, false);
-		cfgMarketplaceAutoUpdate.override(activeSettings, "off");
+		cfgSetupVersion.override(activeSettings, 0);
+		cfgStartupShowSplash.override(activeSettings, probe === "splash");
+		if (probe === "splash") cfgStartupQuiet.override(activeSettings, false);
 		installInMemoryRelay();
 		const publish = registry.publishCollabHost;
 		vi.spyOn(registry, "publishCollabHost").mockImplementation((source, options) =>
@@ -129,8 +327,19 @@ describe("outer startup collaboration gate", () => {
 		);
 		vi.spyOn(ModelRegistry.prototype, "refreshInBackground").mockImplementation(() => {});
 		vi.spyOn(pluginHelpers, "preloadPluginRoots").mockResolvedValue(undefined);
+		const network = probe
+			? vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected startup request"))
+			: undefined;
+		let splashOverlays = 0;
 		const init = InteractiveMode.prototype.init;
 		vi.spyOn(InteractiveMode.prototype, "init").mockImplementation(function (this: InteractiveMode, options) {
+			if (probe === "splash") {
+				const showOverlay = this.ui.showOverlay.bind(this.ui);
+				vi.spyOn(this.ui, "showOverlay").mockImplementation((component, options) => {
+					splashOverlays += 1;
+					return showOverlay(component, options);
+				});
+			}
 			vi.spyOn(this.statusLine, "watchBranch").mockImplementation(() => {});
 			return init.call(this, options);
 		});
@@ -165,13 +374,15 @@ describe("outer startup collaboration gate", () => {
 			return testSession.session;
 		});
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		if (probe === "splash") Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
 		const authStorage = await AuthStorage.create(path.join(testSession.tempDir, "startup-auth.db"));
+		const terminal = new WriteTrackingTerminal();
 		beginStartupComposer({
-			terminal: new VirtualTerminal(),
+			terminal,
 			version: "test",
 			cache: false,
 		});
-		const rawArgs = ["--no-session", "--no-extensions", "--no-skills", "--no-rules", "--no-tools", "--no-lsp"];
+		const rawArgs = ["--no-session", "--no-skills", "--no-rules", "--no-tools"];
 		const running = runRootCommand(parseArgs(rawArgs), rawArgs, {
 			settings: activeSettings,
 			discoverAuthStorage: async () => authStorage,
@@ -263,6 +474,24 @@ describe("outer startup collaboration gate", () => {
 				expect(await registry.listCollabHosts({ dir: testSession.tempDir })).toEqual([]);
 			} else {
 				expect(await running).toBe(finished);
+				if (probe) {
+					// Drain queued startup work before asserting the negative contract.
+					await Bun.sleep(0);
+					expect(network).not.toHaveBeenCalled();
+					expect(terminal.written).not.toMatch(/new version|update available|omp update/i);
+					const loaded = Object.keys(require.cache).map(file => file.replaceAll("\\", "/"));
+					expect(
+						loaded.filter(file =>
+							/\/(?:coding-agent\/src\/modes\/setup|tui\/src\/setup\/wizard|coding-agent\/src\/cli\/(?:update-cli|build-service)|coding-agent\/src\/extensibility\/plugins\/marketplace-auto-update)\.ts$/.test(
+								file,
+							),
+						),
+					).toEqual([]);
+					if (probe === "splash") {
+						expect(splashOverlays).toBeGreaterThan(0);
+						expect(loaded.some(file => file.endsWith("/tui/src/setup/startup-splash.ts"))).toBe(true);
+					}
+				}
 				outcome = Promise.withResolvers<GuestOutcome>();
 				guest.send({ t: "prompt", text: "after startup" });
 				expect(await outcome.promise).toBe("prompt");
@@ -287,6 +516,7 @@ describe("outer startup collaboration gate", () => {
 			await testSession.cleanup();
 			resetSettingsForTest();
 			Object.defineProperty(process.stdin, "isTTY", { value: originalIsTTY, configurable: true });
+			Object.defineProperty(process.stdout, "isTTY", { value: originalStdoutIsTTY, configurable: true });
 		}
 	});
 });

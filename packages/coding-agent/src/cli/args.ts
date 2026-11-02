@@ -267,6 +267,9 @@ export function parseArgs(inputArgs: string[], extensionFlags?: Map<string, { ty
 		invalidFlagValues: [],
 		sessionDir: $env.PI_CODING_AGENT_SESSION_DIR || undefined,
 		offline: offlineFromEnv() || undefined,
+		// Fork launches skip automatic LSP and extension discovery on every platform.
+		noLsp: true,
+		noExtensions: true,
 	};
 
 	// `--` ends option parsing (POSIX end-of-options). Everything after it is

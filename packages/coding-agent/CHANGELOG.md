@@ -15,6 +15,8 @@
 - Replaced compact display with the clean view plus upstream file-targeted write/edit cards and a fixed two-line activity area; other tool and error cards are hidden. File cards retain detailed-mode history and controls; activity prioritizes live thinking or the latest two dispatched calls, one intent or command per row with per-call elapsed time, and retains static last activity per viewed session.
 - Removed the `compact_display` command and its dedicated test lane; display consumer tests use the ordinary test selection.
 - Removed the SDK's `skipPythonPreflight` option; session initialization no longer performs Python preflight checks.
+- Removed `startup.checkUpdate` and `marketplace.autoUpdate`; startup never checks for OMP or plugin updates. Use explicit update commands instead.
+- Company/offline initialization helpers now return Promises; await them before accessing company models or credentials.
 
 ### Removed
 
@@ -52,6 +54,12 @@
 
 ### Changed
 
+- Read offline company credentials asynchronously alongside independent startup work while preserving one cached snapshot for workers and subprocesses.
+- Skip Claude plugin registry and cache discovery by default on every platform; explicit source opt-in, native OMP plugins, and `--plugin-dir` remain available.
+- Load shared and custom skills alongside other sources and avoid blocking per-skill existence checks on every platform, preserving skill precedence and refresh behavior.
+- Launch CLI sessions with `--no-lsp` and `--no-extensions` behavior by default on every platform; explicit extension paths still load.
+- Skip loading the setup wizard when disabled, even on first launch, and load startup animations independently.
+- Keep marketplace updates manual-only, including catalogs older than 24 hours; ignore legacy automatic-update settings and preserve explicit refresh and upgrade commands.
 - Start without checking or warming Python, including on first launch and with Python-only Eval; check the interpreter when Python Eval runs or `omp setup python --check` is requested.
 
 - Show the current index, import stage, stage percentage, elapsed time and time since the last progress update while adding a knowledge index; embedding counts remain tied to saved batches.

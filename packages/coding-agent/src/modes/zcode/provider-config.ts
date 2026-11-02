@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { completeSimple, type Api, type Model } from "@oh-my-pi/pi-ai";
 import { concreteThinkingLevel, parseConfiguredThinkingLevel, toReasoningEffort } from "@oh-my-pi/pi-tui/thinking";
+import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../../config/company-provider";
 import { ModelRegistry } from "../../config/model-registry";
 import { Settings } from "../../config/settings";
 import { discoverAuthStorage } from "../../sdk";
@@ -63,6 +64,7 @@ export class ZCodeProviderConfiguration {
 		const auth = await (this.#options.createCatalogAuthStorage?.(cwd, settings) ??
 			discoverAuthStorage(undefined, { cwd, settings }));
 		try {
+			if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
 			const registry = new ModelRegistry(auth, undefined, { settings });
 			await registry.hydrateCredentialScopedModelCaches();
 			return registry.getAvailable();
@@ -80,14 +82,13 @@ export class ZCodeProviderConfiguration {
 		const settings = live?.settings ?? (await Settings.loadReadOnly({ cwd }));
 		let auth: AuthStorage | undefined;
 		try {
-			const registry =
-				live?.modelRegistry ??
-				new ModelRegistry(
-					(auth = await (this.#options.createCatalogAuthStorage?.(cwd, settings) ??
-						discoverAuthStorage(undefined, { cwd, settings }))),
-					undefined,
-					{ settings },
-				);
+			let registry = live?.modelRegistry;
+			if (!registry) {
+				auth = await (this.#options.createCatalogAuthStorage?.(cwd, settings) ??
+					discoverAuthStorage(undefined, { cwd, settings }));
+			}
+			if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
+			registry ??= new ModelRegistry(auth!, undefined, { settings });
 			const model = registry.find(selection.providerId, selection.modelId);
 			if (!model) throw new Error(`Unknown model: ${selection.providerId}/${selection.modelId}`);
 			const level = selection.options?.reasoningLevel;

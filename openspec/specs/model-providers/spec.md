@@ -72,7 +72,7 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
   - `usage` 复用现有账号与 usage provider 流程，只将模型目录发现限制为 cache-only；不禁用真实 usage／公司模型 API 请求，不虚构 company usage 接口或额度数据。实际需要初始化 company 的路径须让配置错误可见且不泄露凭据。
   - 上述 lane、角色默认值与发现策略仅在当前 offline 进程生效，不持久化；非 offline 行为不变，不注册公司 provider，也不把 cache-only 扩展为所有网络请求的禁令。
 - `omp compress`、`omp commit` 与 Git AI 提交等独立模型消费者同样在注册／解析前启用 company lane、进程角色默认值及 cache-only 目录发现；未显式传递 offline 选项也不能绕过进程 offline 策略。实际模型／OAuth 请求仍按用户选择执行，不将目录发现限制扩大成网络请求总禁令。
-- 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；成功和失败均缓存，运行期间不重读、不监听文件，同进程 Worker 继承内存快照，修改配置须重启 OMP。
+- 内置 `company` provider，无需登录、填写凭据或创建 `models.yml`。OMP 启动时异步读取一次 Claude Code 配置目录（默认 `~/.claude`，可用 `CLAUDE_CONFIG_DIR` 覆盖，与其它 Claude 发现路径同一入口）下 `settings.json` 的 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`；并发初始化共享同一进行中读取，成功和失败均缓存，运行期间不重读、不监听文件。同进程 Worker 及受管子进程继承已就绪的内存快照，不自行读取凭据文件，修改配置须重启 OMP。
 - URL 和 Token 仅保存在内存，不复制到 OMP 配置；配置缺失、字段错误或 JSON 无效时 provider 不可用，启动提示不包含凭据。
 - 公司配置诊断由入口负责呈现：交互式启动使用现有 TUI 警告通知，独立模型命令使用 stderr；共享 SDK 初始化、认证发现、会话及子代理创建不得直接写终端流，同一命令内重复初始化不得重复输出启动警告。不可用状态与具体配置错误仍可查询，显式选择不可用公司模型仍按原规则失败。
 - 聊天使用 Anthropic Messages 协议和 Bearer 认证，仅请求上述 Claude Code 配置中的地址，不做公司模型发现，也不自动发现或回退到对应厂商的公网 API。内置参数固定如下（token 数）：
@@ -97,6 +97,20 @@ OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损�
 
 - **WHEN** OMP_OFFLINE 开启且有效 Claude Code 配置可用
 - **THEN** 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据
+
+#### Scenario: 认证读取与独立启动步骤并行
+
+- **WHEN** offline 启动或 SDK、独立命令初始化 company 认证快照
+- **THEN** 使用真正的异步文件读取，不用同步读取外包 Promise；在等待快照前推进配置加载、插件预加载等无认证依赖的现有启动步骤，不阻塞主线程处理独立工作。
+- **AND** 构建或刷新公司模型注册表、解析公司模型与默认角色、返回依赖公司配置的认证结果、启动依赖快照的 Worker 或受管子进程之前，必须等待快照读取、校验及内存发布完成。
+- **AND** 所有异步初始化入口及其调用方显式等待同一就绪边界；同步查询仅消费已就绪或已继承快照，不隐式发起文件读取，不将尚在读取的状态误报为配置缺失。
+
+#### Scenario: 并发初始化与终态缓存
+
+- **WHEN** 多个入口同时初始化，或快照就绪后重复初始化
+- **THEN** 同一进程只执行一次认证文件读取；所有并发调用等待同一结果，文件缺失、损坏及字段错误同样终态缓存，不因异步改造增加重读、重试或回退。
+- **AND** 普通非 offline 入口不发起该读取；worker 和受管子进程在原文件被替换或删除后仍使用父进程传入的成功或不可用快照，凭据不进入日志或持久配置。
+
 
 #### Scenario: offline 选择 GLM-5.3-public
 

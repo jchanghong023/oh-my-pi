@@ -237,9 +237,12 @@ describe("offline model-dependent subcommands", () => {
 			`import { Settings } from ${sourceUrl("config/settings.ts")};
 			import { ModelRegistry } from ${sourceUrl("config/model-registry.ts")};
 			import { getCompanyConfigError } from ${sourceUrl("config/company-provider.ts")};
-			import { discoverAuthStorage, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
+			import { discoverAuthStorage, initializeCompanyModelLane, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
 			const settings = await Settings.init({ cwd: process.cwd() });
-			const auth = await discoverAuthStorage(undefined, { settings });
+			const [laneError, auth] = await Promise.all([
+				initializeCompanyModelLane(true),
+				discoverAuthStorage(undefined, { settings }),
+			]);
 			try {
 				const registry = new ModelRegistry(auth, undefined, { settings });
 				await loadCliExtensionProviders(registry, settings, process.cwd(), { discoverModels: false });
@@ -247,7 +250,7 @@ describe("offline model-dependent subcommands", () => {
 				nested.close();
 				process.stdout.write(JSON.stringify({
 					companyAvailable: registry.hasProvider("company"),
-					configError: Boolean(getCompanyConfigError()),
+					configError: Boolean(getCompanyConfigError()) && laneError === getCompanyConfigError(),
 					defaultRole: settings.getModelRole("default"),
 				}));
 			} finally { auth.close(); }`,
@@ -273,14 +276,15 @@ describe("offline model-dependent subcommands", () => {
 			import { AuthStorage, SqliteAuthCredentialStore } from ${sourceUrl("session/auth-storage.ts")};
 			import { ModelRegistry } from ${sourceUrl("config/model-registry.ts")};
 			import { Settings } from ${sourceUrl("config/settings.ts")};
-			import { discoverAuthStorage, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
+			import { discoverAuthStorage, initializeCompanyModelLane, loadCliExtensionProviders } from ${sourceUrl("sdk.ts")};
 			import { resolvePrimaryModel } from ${sourceUrl("commit/model-selection.ts")};
 			const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 			try {
 				const registry = new ModelRegistry(authStorage);
 				registry.getAll();
 				await registry.refresh("online");
-				const discovered = await discoverAuthStorage();
+				const [laneError, discovered] = await Promise.all([initializeCompanyModelLane(true), discoverAuthStorage()]);
+				if (laneError) throw new Error(laneError);
 				discovered.close();
 				const settings = await Settings.init({ cwd: process.cwd() });
 				await loadCliExtensionProviders(registry, settings, process.cwd());

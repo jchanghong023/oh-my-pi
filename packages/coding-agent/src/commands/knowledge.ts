@@ -48,7 +48,7 @@ export default class Knowledge extends Command {
 			}
 			throw error;
 		}
-		initializeOfflineModelCommand(undefined, undefined, message => {
+		await initializeOfflineModelCommand(undefined, undefined, message => {
 			process.stderr.write(`${message}\n`);
 		});
 		const controller = new AbortController();

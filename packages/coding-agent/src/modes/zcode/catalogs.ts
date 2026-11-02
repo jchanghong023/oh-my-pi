@@ -305,7 +305,7 @@ export class ZCodeCatalogs {
 		const diagnostics: L.ZCodePluginDiagnostic[] = [];
 		const report = (code: string, message: string, pluginId?: string) =>
 			diagnostics.push({ code, message, severity: "warning", ...(pluginId ? { pluginId } : {}) });
-		const registry = await listClaudePluginRoots(context.home, cwd, { includeDisabled: true });
+		const registry = await listClaudePluginRoots(context.home, cwd, { includeDisabled: true, includeClaude: true });
 		for (const _warning of registry.warnings)
 			report("registry_invalid", "Native plugin registry contains an invalid or unreadable entry");
 		const roots: Root[] = registry.roots.map(root => ({ ...root }));

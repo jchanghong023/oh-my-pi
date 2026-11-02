@@ -21,7 +21,7 @@ import {
 	setProjectDir,
 	VERSION,
 } from "@oh-my-pi/pi-utils/dirs";
-import { $env, isBunTestRuntime, isCompiledBinary, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
+import { $env, isBunTestRuntime, setInteractiveHost } from "@oh-my-pi/pi-utils/env";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { fuzzyFilter } from "@oh-my-pi/pi-tui/fuzzy";
@@ -42,16 +42,8 @@ import { processFileArguments } from "./cli/file-processor";
 import { buildInitialMessage } from "./cli/initial-message";
 import { formatKeyHint, KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker";
-import { fetchBuild } from "./cli/build-service";
 import { applyStartupCwd } from "./cli/startup-cwd";
-import {
-	CanaryChannelUnavailableError,
-	compareUpdateVersions,
-	getLatestRelease,
-	isForkUpdateRepository,
-	isSourceCheckout,
-	managedInstallName,
-} from "./cli/update-cli";
+import { isUserSourceEnabled } from "./capability";
 import { findConfigFile } from "./config";
 import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
 import {
@@ -81,21 +73,12 @@ import { serviceTierSettingToTier } from "./config/service-tier";
 import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/registry";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
-import {
-	clearPluginRootsAndCaches,
-	injectPluginDirRoots,
-	preloadPluginRoots,
-	resolveActiveProjectRegistryPath,
-} from "./discovery/helpers";
+import { clearPluginRootsAndCaches, injectPluginDirRoots, preloadPluginRoots } from "./discovery/helpers";
 import { injectOmpExtensionCliRoots } from "./discovery/omp-extension-roots";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { loadExtensions } from "./extensibility/extensions/loader";
 import { ExtensionRunner } from "./extensibility/extensions/runner";
 import type { ExtensionUIContext } from "./extensibility/extensions/types";
-import {
-	scheduleMarketplaceAutoUpdate,
-	type MarketplaceAutoUpdateOptions,
-} from "./extensibility/plugins/marketplace-auto-update";
 import { registerDaemonProjectPresence } from "./launch/presence";
 import type { MCPManager } from "./mcp";
 import type { InteractiveMode } from "./modes/interactive-mode";
@@ -185,14 +168,12 @@ import {
 	cfgColorBlindMode,
 	cfgComposerShape,
 	cfgImagesAutoResize,
-	cfgMarketplaceAutoUpdate,
 	cfgSetupVersion,
 	cfgShowHardwareCursor,
 	cfgSpellingAutocomplete,
 	cfgSpellingAutocorrect,
 	cfgSpellingTypoDetection,
 	cfgStartupChangelogMode,
-	cfgStartupCheckUpdate,
 	cfgStartupQuiet,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
@@ -205,7 +186,6 @@ import {
 	cfgTuiMaxInlineImages,
 	cfgTuiResizeScrollback,
 	cfgTuiTitleState,
-	cfgUpdateChannel,
 } from "./modes/settings";
 import {
 	cfgDefaultThinkingLevel,
@@ -292,34 +272,6 @@ export function writeStartupNotice(parsedArgs: Pick<Args, "mode">, text: string)
 /** Print a non-fatal startup warning, for launches without a UI to show it in. */
 function writeStartupWarning(warning: string): void {
 	process.stderr.write(`${chalk.yellow(`Warning: ${warning}`)}\n`);
-}
-
-async function checkForNewVersion(currentVersion: string): Promise<string | undefined> {
-	if (!cfgStartupCheckUpdate.get(settings)) {
-		return;
-	}
-	try {
-		// Checkouts update through git and a manager (Tern) updates its omp itself:
-		// "run omp update" would be wrong advice for both.
-		if (isSourceCheckout() || (await managedInstallName(process.execPath))) return;
-		const channel = cfgUpdateChannel.get(settings);
-		// Fork installs check their configured GitHub release channel; other compiled
-		// binaries use the build service so `omp update` can prepare the matching patch.
-		const { version } = isForkUpdateRepository()
-			? await getLatestRelease({ timeoutMs: 5_000, channel })
-			: isCompiledBinary()
-				? await fetchBuild({ channel }, { timeoutMs: 5_000, fromVersion: currentVersion })
-				: await getLatestRelease({ timeoutMs: 5_000, channel });
-		// SemVer precedence alone ignores build metadata, so a newer fork build of
-		// the same base (`18.1.18+fork.189` vs `+fork.188`) must still be announced.
-		return compareUpdateVersions(version, currentVersion) > 0 ? version : undefined;
-	} catch (error) {
-		// The canary misconfiguration is deterministic and actionable; let it
-		// reach the startup notification path instead of vanishing like a
-		// transient network failure.
-		if (error instanceof CanaryChannelUnavailableError) throw error;
-		return undefined;
-	}
 }
 
 // Protocol hosts inherit OMP's neutral defaults for settings declaring `protocolDefault`
@@ -702,7 +654,6 @@ async function runInteractiveMode(
 	version: string,
 	startupChangelog: StartupChangelogSelection | undefined,
 	notifs: (InteractiveModeNotify | null)[],
-	versionCheckPromise: Promise<string | undefined>,
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
 	lspServers: LspStartupServerInfo[] | undefined,
@@ -747,21 +698,18 @@ async function runInteractiveMode(
 	let setupScenes: SetupScene[] = [];
 	let playStartupSplash = false;
 	try {
-		// Cold-launch gate: the full setup wizard (every scene + the overlay and
-		// their TUI/OAuth/search/theme deps) is heavy, yet the common case only needs
-		// to know whether the stored setup version is current. Lazy-load the wizard
-		// barrel only when setup is stale, forced, or the explicit startup splash
-		// setting needs the shared setup splash renderer.
+		// Load the scene graph only when a forced or eligible automatic wizard can run.
 		const storedSetupVersion = cfgSetupVersion.get(settings);
+		const setupWizardEnabled = cfgStartupSetupWizard.get(settings);
 		setupWizard =
-			forceSetupWizard || (!offline && (storedSetupVersion < CURRENT_SETUP_VERSION || showStartupSplash))
+			forceSetupWizard || (!offline && setupWizardEnabled && storedSetupVersion < CURRENT_SETUP_VERSION)
 				? await import("./modes/setup")
 				: undefined;
 		setupScenes = setupWizard
 			? await setupWizard.selectSetupScenes(storedSetupVersion, setupWizard.ALL_SCENES, mode, {
 					resuming,
 					isTTY: process.stdin.isTTY && process.stdout.isTTY,
-					setupWizardEnabled: cfgStartupSetupWizard.get(settings),
+					setupWizardEnabled,
 					force: forceSetupWizard,
 				})
 			: [];
@@ -787,11 +735,6 @@ async function runInteractiveMode(
 			await setupWizard.runSetupWizard(mode, setupScenes);
 		}
 
-		// Consume failures immediately, but defer any banner until the transcript is stable.
-		const checkedVersionPromise = versionCheckPromise.catch(error =>
-			error instanceof CanaryChannelUnavailableError ? error : undefined,
-		);
-
 		// `init` already cleared native history before painting the startup frame.
 		// Replaying resumed transcript rows and repainting the viewport is enough;
 		// another clear would only archive the startup frame. In-process session
@@ -799,19 +742,6 @@ async function runInteractiveMode(
 		await logger.time("InteractiveMode.renderInitialMessages", () =>
 			mode.renderInitialMessages({ preserveExistingChat: true }),
 		);
-		// A resolved version check must not insert its banner into a partial transcript.
-		checkedVersionPromise.then(newVersion => {
-			if (newVersion instanceof CanaryChannelUnavailableError) {
-				mode.showWarning(newVersion.message);
-				return;
-			}
-			if (!cfgStartupCheckUpdate.get(settings)) {
-				return;
-			}
-			if (newVersion) {
-				mode.showNewVersionNotification(newVersion);
-			}
-		});
 
 		const advisorConfigWarnings = session.getAdvisorConfigWarnings();
 		if (advisorConfigWarnings.length > 0) {
@@ -1058,15 +988,14 @@ async function switchToResumedProject(
 		sessionManager.setCwdWithoutRelocation(launchCwd);
 		return { cwd: launchCwd, chdirFailed: resumedCwd };
 	}
-	clearPluginRootsAndCaches();
-	resetCapabilities();
 	const cwd = getProjectDir();
-	// clearPluginRootsAndCaches only kicks off an unawaited re-warm; await a fresh
-	// destination preload so sync consumers (plugin-provided LSP/DAP config) never
-	// read the launch project's stale/empty roots during session creation.
+	// Rescope settings first so both the cache re-warm and the awaited preload
+	// use the destination project's provider opt-ins.
 	try {
-		await preloadPluginRoots(os.homedir(), cwd);
 		await activeSettings.reloadForCwd(cwd);
+		clearPluginRootsAndCaches();
+		resetCapabilities();
+		await preloadPluginRoots(os.homedir(), cwd);
 		if (normalizePathForComparison(sessionManager.getCwd()) !== normalizePathForComparison(cwd)) {
 			sessionManager.adoptRecordedCwd();
 		}
@@ -1078,12 +1007,10 @@ async function switchToResumedProject(
 		try {
 			setProjectDir(launchCwd);
 			sessionManager.setCwdWithoutRelocation(launchCwd);
-			clearPluginRootsAndCaches();
-			await preloadPluginRoots(os.homedir(), launchCwd);
-			// Settings.#cwd was already assigned the destination; re-scope it
-			// back so path-derived values and project saves target the launch
-			// project, not the failed resume target.
 			await activeSettings.reloadForCwd(launchCwd);
+			clearPluginRootsAndCaches();
+			resetCapabilities();
+			await preloadPluginRoots(os.homedir(), launchCwd);
 		} catch (rollbackError) {
 			throw new SessionResolutionError(
 				`Could not switch to resumed project ${resumedCwd} (${error instanceof Error ? error.message : String(error)}); failed to restore launch directory ${launchCwd}: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
@@ -1972,13 +1899,22 @@ export async function runRootCommand(
 		// RPC owns stdin. Claim its singleton stream before plugin/extension discovery can load an in-process consumer.
 		const rpcInput = mode === "rpc" || mode === "rpc-ui" ? claimRpcInput() : undefined;
 
+		// Start credential I/O before independent preload, stdin and settings work.
+		const companyLaneOperationId = logger.getLogContext().operation_id ?? `startup-lanes-${randomUUID()}`;
+		const companySnapshotPromise = logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
+			setCompanyOfflineEnabled(parsedArgs.offline === true),
+		);
+		companySnapshotPromise.catch(() => {});
+
 		// Kick off plugin-root preload in parallel with the remaining startup work.
 		// Awaited later (before extension/skill discovery in createAgentSession needs it).
 		const home = os.homedir();
 		const pluginPreloadPromise =
 			parsedArgs.pluginDirs && parsedArgs.pluginDirs.length > 0
-				? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir())
-				: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir());
+				? logger.time("injectPluginDirRoots", injectPluginDirRoots, home, parsedArgs.pluginDirs, getProjectDir(), {
+						includeClaude: false,
+					})
+				: logger.time("preloadPluginRoots", preloadPluginRoots, home, getProjectDir(), { includeClaude: false });
 		// Mark the promise as handled so a synchronous failure does not surface as an unhandled-rejection
 		// warning before we reach the await site below.
 		pluginPreloadPromise.catch(() => {});
@@ -2013,15 +1949,15 @@ export async function runRootCommand(
 		const autoPrint =
 			(pipedInput !== undefined || !stdinIsTerminal) && !parsedArgs.print && parsedArgs.mode === undefined;
 		const isInteractive = !parsedArgs.print && !autoPrint && parsedArgs.mode === undefined;
-		// The company lane exists only in OMP_OFFLINE processes; flip it before any
-		// consumer (startup error check, model registry) reads company state.
-		const companyLaneOperationId = logger.getLogContext().operation_id ?? `startup-lanes-${randomUUID()}`;
-		logger.withLogContext({ operation_id: companyLaneOperationId }, () =>
-			setCompanyOfflineEnabled(parsedArgs.offline === true),
-		);
 		const companyExplicitlyRequested =
 			parsedArgs.provider === COMPANY_PROVIDER_ID ||
 			parsedArgs.model?.startsWith(`${COMPANY_PROVIDER_ID}/`) === true;
+		// Begin settings independently; auth discovery and model consumers must wait for the snapshot.
+		const settingsPromise = deps.settings
+			? Promise.resolve(deps.settings)
+			: logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config });
+		settingsPromise.catch(() => {});
+		await companySnapshotPromise;
 		const companyProviderError = getCompanyConfigError();
 		if (companyProviderError) {
 			if (companyExplicitlyRequested) {
@@ -2078,13 +2014,6 @@ export async function runRootCommand(
 		if (!isInteractive) {
 			stopPendingStartupComposer();
 		}
-		// Account routing must use the effective settings, including `--config` and
-		// `PI_CONFIG_FILES` overlays, rather than independently re-reading only the
-		// main config file during auth discovery.
-		const settingsPromise = deps.settings
-			? Promise.resolve(deps.settings)
-			: logger.time("settings:init", Settings.init, { cwd, configFiles: parsedArgs.config });
-		settingsPromise.catch(() => {});
 		const authStoragePromise = logger.time("discoverAuthStorage", async () =>
 			(deps.discoverAuthStorage ?? discoverAuthStorage)(undefined, { settings: await settingsPromise }),
 		);
@@ -2127,8 +2056,6 @@ export async function runRootCommand(
 			cfgAstEditEnabled.override(settingsInstance, false);
 			cfgFetchEnabled.override(settingsInstance, false);
 			cfgStartupSetupWizard.override(settingsInstance, false);
-			cfgStartupCheckUpdate.override(settingsInstance, false);
-			cfgMarketplaceAutoUpdate.override(settingsInstance, "off");
 			cfgTuiAutoGraph.override(settingsInstance, "off");
 			cfgTuiTitleState.override(settingsInstance, false);
 			cfgTitleRefreshOnReplan.override(settingsInstance, false);
@@ -2523,6 +2450,9 @@ export async function runRootCommand(
 			}
 		}
 		await pluginPreloadPromise;
+		// The startup preload deliberately excludes Claude before settings bind.
+		// Only an opt-in needs another preload for synchronous LSP/DAP consumers.
+		if (isUserSourceEnabled("claude-plugins")) await preloadPluginRoots(home, cwd);
 		// Pure file I/O: overlap it with session-option building, but land it before
 		// extensions load or the session can start project daemons.
 		const daemonPresencePromise =
@@ -2565,11 +2495,6 @@ export async function runRootCommand(
 			return options;
 		};
 		let sessionOptions = await buildStartupSessionOptions(sessionManager);
-		const marketplaceAutoUpdateOptions: MarketplaceAutoUpdateOptions = {
-			autoUpdate: cfgMarketplaceAutoUpdate.get(settingsInstance),
-			resolveActiveProjectRegistryPath,
-			clearPluginRootsCache: clearPluginRootsAndCaches,
-		};
 
 		// OTEL: unless `telemetry.otlpExportEnabled` is off, register global OTLP
 		// exporters when an endpoint is configured via env, then switch on the agent
@@ -2703,7 +2628,6 @@ export async function runRootCommand(
 			});
 			// Branch-only protocol runner: keep ACP server code out of normal interactive startup.
 			const runAcpMode = deps.runAcpMode ?? (await import("./modes/acp/acp-mode")).runAcpMode;
-			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 			stopStartupWatchdog();
 			// Startup is over: stop recording spans, or every later session and subagent
 			// appends to the timing tree for the life of the server.
@@ -2882,7 +2806,6 @@ export async function runRootCommand(
 				await session.dispose();
 				throw error;
 			}
-			scheduleMarketplaceAutoUpdate(marketplaceAutoUpdateOptions);
 
 			// Cold-revive support: a `parked` subagent ref restored from disk (Agent Hub
 			// scan, collab mirror, resumed process) has a sessionFile but no in-memory
@@ -3045,12 +2968,6 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				// Offline startup must not reach the network at all; the runtime
-				// `startup.checkUpdate` override only suppresses the banner.
-				const versionCheckPromise = parsedArgs.offline ? Promise.resolve(undefined) : checkForNewVersion(VERSION);
-				// Consume rejection now; the interactive host renders actionable errors
-				// after transcript replay, even when this check settles after startup.
-				void versionCheckPromise.catch(() => undefined);
 				const startupChangelog = await startupChangelogPromise;
 
 				const modelScopeNotification = buildModelScopeNotification(
@@ -3079,7 +2996,6 @@ export async function runRootCommand(
 						VERSION,
 						startupChangelog,
 						notifs,
-						versionCheckPromise,
 						initialArgs.messages,
 						setToolUIContext,
 						lspServers,

@@ -69,7 +69,7 @@ function baseOptions(cwd: string) {
 	return {
 		cwd,
 		agentDir: cwd,
-		settings: Settings.isolated({ "marketplace.autoUpdate": "off", "compaction.enabled": false }),
+		settings: Settings.isolated({ "compaction.enabled": false }),
 		skills: [],
 		contextFiles: [],
 		promptTemplates: [],

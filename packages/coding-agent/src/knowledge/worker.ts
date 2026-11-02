@@ -30,7 +30,7 @@ export function startKnowledgeWorker(transport: KnowledgeWorkerTransport): void 
 		try {
 			if (message.type === "configure") {
 				if (engine) throw new Error("Document worker is already configured");
-				inheritCompanyProcessSnapshot(message.company ?? { enabled: false });
+				await inheritCompanyProcessSnapshot(message.company ?? { enabled: false });
 				engine = new KnowledgeIndexEngine({ ...message.options, cursorPath: message.cursorPath });
 				send({
 					type: "result",

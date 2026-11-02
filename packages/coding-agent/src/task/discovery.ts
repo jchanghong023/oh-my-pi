@@ -21,7 +21,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { logger } from "@oh-my-pi/pi-utils";
-import { isProviderEnabled, isUserSourceEnabled } from "../capability";
+import { isProviderEnabled } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
 import { findAllNearestProjectConfigDirs, getConfigDirs } from "../config";
 import { pluginUsesClaudeModelDialect } from "../discovery/agent-plugin-format";
@@ -119,19 +119,12 @@ export async function discoverAgents(
 		orderedDirs.push({ dir: path.join(root.path, "agents"), source: root.level });
 	}
 
-	// Load agents from Claude Code marketplace plugins (respects disabledProviders and opt-in).
-	// User-scope roots whose origin is not the foreign ~/.claude/plugins tree (omp's own
-	// installs and `--plugin-dir` roots) survive the claude-plugins opt-in gate, mirroring
-	// isSourceEnabled in extensibility/skills.ts (#10743). Without this, `--plugin-dir` and
-	// omp-installed agents are dropped at user scope whenever the Claude source is disabled.
-	const claudePluginsUserEnabled = isUserSourceEnabled("claude-plugins") || isUserSourceEnabled("claude");
+	// The shared registry gate excludes foreign Claude roots unless opted in,
+	// while OMP installs and `--plugin-dir` roots remain available.
 	const { roots: pluginRoots } = isProviderEnabled("claude-plugins")
 		? await listClaudePluginRoots(home, resolvedCwd)
 		: { roots: [] };
-	const filteredPluginRoots = pluginRoots.filter(
-		r => r.scope === "project" || claudePluginsUserEnabled || r.origin !== "claude",
-	);
-	const sortedPluginRoots = [...filteredPluginRoots].sort((a, b) => {
+	const sortedPluginRoots = [...pluginRoots].sort((a, b) => {
 		if (a.scope === b.scope) return 0;
 		return a.scope === "project" ? -1 : 1;
 	});

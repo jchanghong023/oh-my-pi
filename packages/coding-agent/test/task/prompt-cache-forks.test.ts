@@ -72,7 +72,6 @@ async function fixture() {
 	);
 	const settings = Settings.isolated({
 		"async.enabled": true,
-		"marketplace.autoUpdate": "off",
 		"compaction.enabled": false,
 		"task.enableLsp": false,
 	});

@@ -82,7 +82,7 @@ export async function createOpenWikiModel(selector?: string): Promise<{
 }> {
 	const cwd = getProjectDir();
 	const settings = await Settings.init({ cwd });
-	const offline = initializeOfflineModelCommand(settings);
+	const offline = await initializeOfflineModelCommand(settings);
 	const storage = await discoverAuthStorage(settings.getAgentDir(), { settings, offline });
 	let router: AuthGatewayRouter | undefined;
 	const lifetime = new AbortController();

@@ -63,7 +63,7 @@ async function launchInteractive(rawArgs: string[]): Promise<{ thrown: unknown; 
 	vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 	try {
 		await runRootCommand(parsed, rawArgs, {
-			settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+			settings: Settings.isolated(),
 			discoverAuthStorage: async () => authStorage,
 			selectSession: async () => {
 				touched.push("picker");

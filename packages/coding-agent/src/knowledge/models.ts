@@ -9,7 +9,7 @@ import {
 import { getMnemopiRuntimeOptions, withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 import { logger } from "@oh-my-pi/pi-utils";
 import { COMPANY_RETRIEVAL_MODELS } from "../config/company-models";
-import { getCompanyConfig } from "../config/company-provider";
+import { getCompanyConfig, isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
 import { Settings } from "../config/settings";
 import { resolveMnemopiEmbeddingOptions } from "../mnemopi/config";
 import { cfgMnemopiDebug, cfgMnemopiEmbeddingModel, cfgMnemopiNoEmbeddings } from "../mnemopi/settings";
@@ -57,6 +57,7 @@ export async function resolveKnowledgeModels(
 	options: { agentDir?: string; cwd?: string; embedding?: boolean; reranker?: boolean } = {},
 ): Promise<KnowledgeModels> {
 	const settings = await Settings.loadReadOnly(options);
+	if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
 	const debug = cfgMnemopiDebug.get(settings);
 	const result: KnowledgeModels = {};
 	if (options.embedding !== false && !cfgMnemopiNoEmbeddings.get(settings) && !embeddingsDisabled()) {

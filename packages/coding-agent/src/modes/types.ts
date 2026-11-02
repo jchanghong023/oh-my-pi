@@ -428,7 +428,6 @@ export interface InteractiveModeContext {
 			hideWithToolActivity?: boolean;
 		},
 	): void;
-	showNewVersionNotification(newVersion: string): void;
 	clearEditor(): void;
 	updatePendingMessagesDisplay(): void;
 	queueCompactionMessage(

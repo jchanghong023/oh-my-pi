@@ -33,7 +33,7 @@ export default class Compress extends Command {
 		if (flags.rounds <= 0) throw new CliUsageError("--rounds must be a positive integer");
 		if (flags.agents <= 0) throw new CliUsageError("--agents must be a positive integer");
 		if (flags.inPlace && flags.out) throw new CliUsageError("--in-place and --out are mutually exclusive");
-		initializeOfflineModelCommand(undefined, undefined, message => {
+		await initializeOfflineModelCommand(undefined, undefined, message => {
 			process.stderr.write(`${message}\n`);
 		});
 		const result = await runCompressCommand({

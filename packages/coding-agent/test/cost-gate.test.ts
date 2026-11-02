@@ -252,7 +252,6 @@ describe("--warn-cost / --max-cost", () => {
 		using tempDir = TempDir.createSync("@omp-cost-gate-");
 		const authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const settings = Settings.isolated({
-			"marketplace.autoUpdate": "off",
 			"session.warnCost": 1,
 			"session.maxCost": 2,
 		});

@@ -270,8 +270,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 				},
 			}),
 		);
-		const config =
-			"modelRoles:\n  default: fixture/fixture-model\nstartup:\n  setupWizard: false\n  checkUpdate: false\n";
+		const config = "modelRoles:\n  default: fixture/fixture-model\nstartup:\n  setupWizard: false\n";
 		await writeFile(path.join(agentDir, "config.yml"), config);
 		function launch(command: "--init" | "--update") {
 			const proc = Bun.spawn(

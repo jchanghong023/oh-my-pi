@@ -59,7 +59,6 @@ it("sends the parent's recalled system prompt unchanged from a /tan clone", asyn
 	});
 	const settings = Settings.isolated({
 		"async.enabled": true,
-		"marketplace.autoUpdate": "off",
 		"compaction.enabled": false,
 		"task.enableLsp": false,
 		"memory.backend": "mnemopi",

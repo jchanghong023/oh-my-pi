@@ -329,7 +329,7 @@ if (!process.argv.includes("--team-group-only")) {
 	await fs.mkdir(baseAgentDir, { recursive: true, mode: 0o700 });
 	await fs.writeFile(
 		path.join(baseAgentDir, "config.yml"),
-		"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
+		"composer:\n  shape: pi\nstartup:\n  setupWizard: false\n",
 	);
 	const main = startTui(["--profile", "localci-ui"], baseEnv);
 	const rendered = await waitFor(() => {
@@ -800,11 +800,8 @@ try {
 			"tools:",
 			"  approval:",
 			"    write: allow",
-			"marketplace:",
-			'  autoUpdate: "off"',
 			"startup:",
 			"  setupWizard: false",
-			"  checkUpdate: false",
 			"",
 		].join("\n"),
 		"utf8",

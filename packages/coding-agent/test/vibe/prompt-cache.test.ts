@@ -41,7 +41,6 @@ it("shares Vibe sibling cache routing by worker type while keeping conversations
 		modelRoles: { default: `muse-code/${modelId}`, task: `muse-code/${modelId}`, smol: `muse-code/${modelId}` },
 		"task.structured": true,
 		"task.enableLsp": false,
-		"marketplace.autoUpdate": "off",
 		"compaction.enabled": false,
 	});
 	const manager = new AsyncJobManager({ onJobComplete: () => {} });

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
+import { enableUserSource, initializeWithSettings, loadCapability } from "@oh-my-pi/pi-coding-agent/capability";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { clearCache as clearFsCache } from "@oh-my-pi/pi-coding-agent/capability/fs";
 import {
 	AGENT_PLUGIN_MANIFEST_SCHEMA,
@@ -250,8 +251,10 @@ describe("agent-plugins discovery", () => {
 	let tempDir: string;
 	let pluginPath: string;
 	let originalClaudeConfigDir: string | undefined;
+	let releaseSettings: () => void;
 
 	const writeRegistry = async (installPath: string, id = "std-plugin@market") => {
+		enableUserSource("claude-plugins");
 		const pluginsDir = path.join(tempDir, ".claude", "plugins");
 		await fs.mkdir(pluginsDir, { recursive: true });
 		await fs.writeFile(
@@ -287,6 +290,7 @@ describe("agent-plugins discovery", () => {
 	};
 
 	beforeEach(async () => {
+		releaseSettings = initializeWithSettings(Settings.isolated());
 		clearClaudePluginRootsCache();
 		clearAgentPluginRootCache();
 		clearFsCache();
@@ -305,6 +309,7 @@ describe("agent-plugins discovery", () => {
 		clearFsCache();
 		vi.restoreAllMocks();
 		restoreEnvValue("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
+		releaseSettings();
 		await removeWithRetries(tempDir);
 	});
 
@@ -627,6 +632,7 @@ describe("agent-plugins discovery", () => {
 	});
 
 	test("gives same-name installs distinct, stable persistent data directories", async () => {
+		enableUserSource("claude-plugins");
 		const otherPath = path.join(tempDir, "plugins", "std-plugin-b");
 		await fs.mkdir(otherPath, { recursive: true });
 		await writeManifest();
@@ -682,6 +688,7 @@ describe("agent-plugins discovery", () => {
 	});
 
 	test("namespaces colliding plugin skills by manifest name, stable across version bumps (#12151)", async () => {
+		enableUserSource("claude-plugins");
 		const cacheRoot = path.join(tempDir, ".claude", "plugins", "cache", "market");
 		const install = async (plugin: string, version: string) => {
 			const root = path.join(cacheRoot, plugin, version);

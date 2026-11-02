@@ -9,9 +9,7 @@ import { parseInternalUrl } from "@oh-my-pi/pi-coding-agent/internal-urls/parse"
 import { ExtensionUiController } from "@oh-my-pi/pi-coding-agent/modes/controllers/extension-ui-controller";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import {
-	cfgMarketplaceAutoUpdate,
 	cfgStartupChangelogMode,
-	cfgStartupCheckUpdate,
 	cfgStartupSetupWizard,
 	cfgStartupShowSplash,
 } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -68,11 +66,9 @@ describe("cfg:// approval prompt wiring", () => {
 		testSession = await createTestSession(
 			askTimeout === undefined ? {} : { settingsOverrides: { "ask.timeout": askTimeout } },
 		);
-		cfgStartupCheckUpdate.override(testSession.session.settings, false);
 		cfgStartupChangelogMode.override(testSession.session.settings, "hidden");
 		cfgStartupSetupWizard.override(testSession.session.settings, false);
 		cfgStartupShowSplash.override(testSession.session.settings, false);
-		cfgMarketplaceAutoUpdate.override(testSession.session.settings, "off");
 		mode = new InteractiveMode(
 			testSession.session,
 			"test",

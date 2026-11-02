@@ -58,7 +58,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - `OMP_OFFLINE=1` 以无公网模式启动本次进程：临时把 `web_search.enabled`、`browser.enabled`、`astEdit.enabled`、`fetch.enabled` 关为 `false`，所有 `company` 聊天模型的 `contextWindow` 设为 `200000`（不改 `maxTokens`）。这些启动覆盖优先于已保存配置，不写配置文件，退出即消失，普通启动保持原值。Python Eval 的解释器优先级为显式 `python.interpreter` → Linux offline 固定候选 `/software/public/python/3.11.4/bin/python3.11` → 原有自动候选，并补查 PATH 中的版本化 `python3.15` 至 `python3.11`、`python3` 和 `python`；同一路径不重复探测。Linux offline 复用统一的 `OMP_OFFLINE` 真值判断（`1`、`true`、`yes`、`on`，忽略大小写及首尾空白），所有候选均实际检查 Python ≥3.11，旧业务 Python 3.6 或 3.10 不可成为 Eval 解释器；找不到合适版本时明确失败，不降级。显式解释器不可用或不兼容时不 fallback；固定候选缺失或不适合时继续查找，不因 PATH 中已有旧 `python` 而停止。其他平台或非 offline 进程保留原有候选和 Python 3.8+ 门槛。新发现的系统解释器只用于 OMP Eval 子进程，清除其继承的业务 venv／Conda／PYTHONPATH，不修改主进程 PATH、项目虚拟环境或业务 Python，不扫描软件目录找版本、不安装包。系统提示词仍追加“当前处于 offline 模式，环境无公网。不要尝试访问公网；使用本地资源和公司内部服务。”。公司内部模型 API、bash/eval、本地文件、LSP、本地 Git、Computer Use 等能力仍可用。
 - offline 且 company provider 可用时，仅为未配置的 model role 补充当前进程默认值：`default`、`plan`、`slow` → `company/GLM-5.3-public`；`task`、`vision`、`advisor` → `company/Qwen3.8-27B`；`smol`、`tiny`、`commit` → `company/Qwen3.6-35B-A3B`；`memory` 未配置时继续按既有规则自动解析，不新增固定赋值。已有角色配置（包括显式 `null` 清除项）和显式 CLI 模型参数仍优先，不写配置文件，不限制 `/model`、`Ctrl+T` 或角色切换，也不锁定 company。保存、活动匹配与切换冲突比较统一排除这些隐式默认角色，不误报刚保存的 preset 与公司默认值冲突；用户显式配置或 CLI 选择的角色仍按原规则保存和比较，包括显式选择的 company 模型。普通启动不受影响。
 - offline 当前进程将 `startup.setupWizard` 覆盖为 `false`，不自动弹出或导入首次启动的全屏配置向导；显式启用的启动动画按需独立加载，手动设置入口保持原有行为。
-- offline 启动不检查 OMP 新版本、不自动检查或更新插件市场、不读取或展示启动更新日志，也不触发在线模型目录发现——含交互界面就绪后的后台发现，以及会话恢复、默认角色解析、prewalk 目标解析和 `enabledModels`/`--models` scope 预解析里的 discovery fallback（这些路径只用本地缓存，缓存缺失时按既有链路降级，不发目录发现请求）。同进程 task 子代理的新建与恢复也继承该限制；遗漏调用方即使请求 online 目录刷新也须受进程 offline 策略约束。已安装插件、内置和缓存模型照常加载；显式 `--model` 仍可选择模型，手动模型刷新同样只用缓存，实际模型／OAuth 请求及显式更新命令、`/changelog` 的其他行为不变。上述覆盖只在当前进程生效，不写配置文件，非 offline 启动不受影响。
+- offline 启动不读取或展示启动更新日志，也不触发在线模型目录发现——含交互界面就绪后的后台发现，以及会话恢复、默认角色解析、prewalk 目标解析和 `enabledModels`/`--models` scope 预解析里的 discovery fallback（这些路径只用本地缓存，缓存缺失时按既有链路降级，不发目录发现请求）。同进程 task 子代理的新建与恢复也继承该限制；遗漏调用方即使请求 online 目录刷新也须受进程 offline 策略约束。已启用来源的已安装插件、内置和缓存模型照常加载；显式 `--model` 仍可选择模型，手动模型刷新同样只用缓存，实际模型／OAuth 请求及显式更新命令、`/changelog` 的其他行为不变。上述覆盖只在当前进程生效，不写配置文件，非 offline 启动不受影响。OMP 与插件市场的自动更新检查在全部平台、全部启动模式下均取消，见「全平台轻量启动」；Claude 插件来源默认不扫描，见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
 
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
@@ -72,7 +72,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名、生成文件恢复及可选 ZCode 产物阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
 - `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
-- `update.channel=canary` 在 fork 二进制上不可用：启动版本检查会提示该配置并指向 `omp update --stable`；其余更新检查失败仍静默。
+- `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`，不在启动时检查或提示更新渠道。
 - `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`）且无法自愈，只能用安装器重装后再交给 `omp update`。
 - 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。CI 只构建 Linux glibc x64 和 Windows x64 二进制，Release 上传的附件仅为 `omp-linux-x64`、`omp-windows-x64.exe` 和 `omp-browser-relay-extension.zip`；GitHub 自动提供的源码归档不属于上传附件。更新器使用 GitHub 资产元数据的 SHA-256。CI 不生成 ZCode 产物，其他平台不再提供新的预编译版本。
 - 安装器只安装 fork Release 的预编译二进制；当前 Release 仅提供 Linux glibc x64 和 Windows x64，其他 Linux 架构及 musl 无对应新版本资产。`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
@@ -88,6 +88,45 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 
 - **WHEN** 用户在普通或 offline 场景安装、启动或更新
 - **THEN** 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告
+
+### Requirement: 全平台轻量启动
+
+OMP MUST 在所有运行平台的普通与 offline 启动中省去自动更新检查及未启用的设置向导初始化，offline 认证读取异步并行；不依赖用户新增配置文件，也不改变显式操作入口。
+
+#### Scenario: 启动不检查更新
+
+- **WHEN** 启动终端交互、print、RPC、ACP 或 ZCode app-server，或创建、恢复会话
+- **THEN** 不自动查询 OMP 新版本，不自动刷新、检查或升级插件市场，不创建相应后台任务或展示新版通知。
+- **AND** 删除 `startup.checkUpdate`、`marketplace.autoUpdate` 设置与对应 UI；遗留配置值不能重新启用这些行为，不改写用户配置。
+- **AND** 普通启动不加载仅供更新命令使用的实现；显式 `omp update`（含检查模式）及插件市场刷新、升级仍沿用原有入口和行为，已启用来源的已安装插件照常加载；Claude 插件来源默认不扫描，具体边界见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
+
+#### Scenario: 未启用的设置向导不参与启动
+
+- **WHEN** `startup.setupWizard=false` 且未强制运行向导，即使已保存的 setupVersion 落后
+- **THEN** 不加载完整设置向导及其场景、认证或浏览器辅助依赖，不执行向导场景选择。
+- **AND** 仅启用启动动画时按需加载独立动画，不为动画初始化完整向导；显式强制设置与用户启用的版本化向导仍按原有条件运行。
+
+#### Scenario: offline 认证读取不串行阻塞启动
+
+- **WHEN** offline 启动需要 company 认证配置
+- **THEN** 提前发起异步快照读取，与配置加载和插件预加载等无认证依赖的步骤并行推进；依赖公司配置的模型注册与 Worker 启动仍等待快照就绪。
+- **AND** 单次读取、终态缓存、错误呈现与凭据继承边界遵循[公司内网模型](../model-providers/spec.md#requirement-公司内网模型仅-omp_offline)，不新增同步读取回退、重试或额外配置。
+
+### Requirement: 插件市场仅手动更新
+
+OMP MUST 关闭 marketplace 自动更新，不提供自动刷新、检查或升级的设置和后台任务；目录是否超过 24 小时不触发刷新。
+
+#### Scenario: 读取过期市场缓存
+
+- **WHEN** 启动、创建或恢复会话，或列出、浏览插件市场，即使目录缓存已超过 24 小时
+- **THEN** 使用已有目录缓存和已安装插件，不自动拉取市场源、不改写目录缓存或更新时间，也不自动检查或升级插件。
+- **AND** 遗留 `marketplace.autoUpdate` 的 `notify` 或 `auto` 值不能恢复自动更新，用户配置保持原样。
+
+#### Scenario: 显式刷新和升级
+
+- **WHEN** 用户执行 `/marketplace update [name]` 或 `omp plugin marketplace update [name]`
+- **THEN** 仅刷新指定或全部市场目录，不自动重装或升级已安装插件；遗留克隆临时目录清理只在显式添加或更新市场时进行。
+- **AND** `/marketplace upgrade` 和 `omp plugin upgrade` 继续作为显式插件升级入口，保留原有作用域和状态保留规则。
 
 ### Requirement: 发布 CI 的触发、并发与权限
 

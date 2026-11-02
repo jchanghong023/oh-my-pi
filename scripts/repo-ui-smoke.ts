@@ -172,17 +172,7 @@ export async function runRepoSmoke({ startTui, waitFor, normalizePtyOutput, slee
 		await fs.mkdir(agentDir, { recursive: true });
 		await fs.writeFile(
 			path.join(agentDir, "config.yml"),
-			[
-				"tools:",
-				"  approval:",
-				"    write: allow",
-				"marketplace:",
-				'  autoUpdate: "off"',
-				"startup:",
-				"  setupWizard: false",
-				"  checkUpdate: false",
-				"",
-			].join("\n"),
+			["tools:", "  approval:", "    write: allow", "startup:", "  setupWizard: false", ""].join("\n"),
 		);
 		server = Bun.serve({
 			hostname: "127.0.0.1",

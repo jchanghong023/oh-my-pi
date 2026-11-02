@@ -52,7 +52,6 @@ async function startInProcess(argv: string[]): Promise<FsTuningEnv> {
 	using tempDir = TempDir.createSync("@omp-fs-tuning-");
 	const authStorage = await AuthStorage.create(":memory:");
 	const settings = Settings.isolated({
-		"marketplace.autoUpdate": "off",
 		"tui.autoGraph": "smart",
 		"tui.titleState": true,
 		"title.refreshOnReplan": true,

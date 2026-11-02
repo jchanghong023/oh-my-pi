@@ -30,10 +30,7 @@ async function sandbox(level = "debug", offline = false) {
 	const profileRoot = path.join(configRoot, "profiles", profile);
 	const agent = path.join(profileRoot, "agent");
 	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
-	await fs.writeFile(
-		path.join(agent, "config.yml"),
-		"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\n",
-	);
+	await fs.writeFile(path.join(agent, "config.yml"), "startup:\n  setupWizard: false\n");
 	// Do not inherit credentials, provider URLs, profiles, package/config overrides,
 	// or another test's logger controls. Keep only OS executable-loading necessities.
 	const env: Record<string, string> = {};

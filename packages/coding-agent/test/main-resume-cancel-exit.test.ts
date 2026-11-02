@@ -57,7 +57,7 @@ describe("runRootCommand — startup --resume picker cancellation", () => {
 		);
 
 		const authStorage = await AuthStorage.create(path.join(sessionDir, "auth.db"));
-		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+		const settings = Settings.isolated();
 
 		// --print keeps initTheme non-interactive so no global appearance/SIGWINCH
 		// listeners leak into the rest of the suite; the picker branch is gated on

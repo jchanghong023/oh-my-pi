@@ -12,6 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { enableUserSource, initializeWithSettings } from "@oh-my-pi/pi-coding-agent/capability";
+import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	clearClaudePluginRootsCache,
 	listClaudePluginRoots,
@@ -398,5 +400,43 @@ describe("listClaudePluginRoots — project shadows user", () => {
 		expect(matching).toHaveLength(1);
 		expect(matching[0]?.path).toBe("/project/install/shared-plugin");
 		expect(matching[0]?.scope).toBe("project");
+	});
+
+	it("project OMP registry shadows an opted-in Claude user registry entry", async () => {
+		const releaseSettings = initializeWithSettings(Settings.isolated());
+		const originalClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+		delete process.env.CLAUDE_CONFIG_DIR;
+		delete Bun.env.CLAUDE_CONFIG_DIR;
+		try {
+			enableUserSource("claude-plugins");
+			const pluginId = buildPluginId("shared-plugin", "test-mkt");
+			const claudeRegistry = path.join(tmpHome, ".claude", "plugins", "installed_plugins.json");
+			fs.mkdirSync(path.dirname(claudeRegistry), { recursive: true });
+			fs.writeFileSync(
+				claudeRegistry,
+				JSON.stringify({ version: 2, plugins: { [pluginId]: [makeEntry("/claude/install/shared-plugin")] } }),
+			);
+			const projectRegistry = addInstalledPlugin(
+				await readInstalledPluginsRegistry(projectRegPath),
+				pluginId,
+				makeEntry("/project/install/shared-plugin", "project"),
+			);
+			await writeInstalledPluginsRegistry(projectRegPath, projectRegistry);
+
+			const { roots } = await listClaudePluginRoots(tmpHome, tmpProject);
+			const matching = roots.filter(root => root.id === pluginId);
+			expect(matching).toHaveLength(1);
+			expect(matching[0]?.path).toBe("/project/install/shared-plugin");
+			expect(matching[0]?.origin).toBe("omp");
+		} finally {
+			if (originalClaudeConfigDir === undefined) {
+				delete process.env.CLAUDE_CONFIG_DIR;
+				delete Bun.env.CLAUDE_CONFIG_DIR;
+			} else {
+				process.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+				Bun.env.CLAUDE_CONFIG_DIR = originalClaudeConfigDir;
+			}
+			releaseSettings();
+		}
 	});
 });

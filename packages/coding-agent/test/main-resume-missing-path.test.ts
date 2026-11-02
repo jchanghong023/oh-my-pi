@@ -87,7 +87,7 @@ describe("--resume <path> — missing path (#13928)", () => {
 		try {
 			await runRootCommand(parsed, rawArgs, {
 				discoverAuthStorage: async () => authStorage,
-				settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+				settings: Settings.isolated(),
 			});
 		} catch (err) {
 			thrown = err;
@@ -123,7 +123,7 @@ describe("--resume <path> — existing path (#13928)", () => {
 				invalidFlagValues: [],
 			},
 			sessionDir,
-			Settings.isolated({ "marketplace.autoUpdate": "off" }),
+			Settings.isolated(),
 		);
 
 		if (!manager) throw new Error("Expected a resumed session manager");

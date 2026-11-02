@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { AgentToolResult, RenderResultOptions } from "@oh-my-pi/pi-agent-core";
 import { arkToWireSchema } from "@oh-my-pi/pi-ai/utils/schema";
+import { enableUserSource, initializeWithSettings } from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { preloadPluginRoots } from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import { rejectionOf, trackUnhandled } from "../helpers/rejection";
@@ -3231,6 +3232,8 @@ describe("lsp regressions", () => {
 			.spyOn(piUtils, "$which")
 			.mockImplementation(command => (command === "csharp-ls" ? resolvedCsharpLs : null));
 
+		const releaseSettings = initializeWithSettings(Settings.isolated());
+		enableUserSource("claude-plugins");
 		try {
 			await preloadPluginRoots(home, cwd);
 
@@ -3244,6 +3247,7 @@ describe("lsp regressions", () => {
 			try {
 				await preloadPluginRoots(path.join(tempDir.path(), "empty-home"), cwd);
 			} finally {
+				releaseSettings();
 				restoreEnvValue("CLAUDE_CONFIG_DIR", originalClaudeConfigDir);
 				tempDir.removeSync();
 			}

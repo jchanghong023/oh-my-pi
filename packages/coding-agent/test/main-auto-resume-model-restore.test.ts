@@ -90,7 +90,7 @@ async function runScenario(scenario: Scenario): Promise<Observation> {
 		const settings = Settings.isolated({
 			autoResume: true, modelRoles: { default: "resume-fixture/fresh" },
 			retry: { enabled: false, modelFallback: false }, compaction: { enabled: false },
-			marketplace: { autoUpdate: "off" }, telemetry: { otlpExportEnabled: false }
+			telemetry: { otlpExportEnabled: false }
 		});
 		const authStorage = await AuthStorage.create(":memory:");
 		const stop = new Error("fixture captured session before the mode runner");
@@ -250,8 +250,7 @@ describe("implicit auto-resume model restoration", () => {
 					modelRoles: { default: "warning-fixture/fresh" },
 					retry: { enabled: false, modelFallback: false },
 					compaction: { enabled: false },
-					startup: { showSplash: false, setupWizard: false, changelogMode: "hidden", checkUpdate: false },
-					marketplace: { autoUpdate: "off" },
+					startup: { showSplash: false, setupWizard: false, changelogMode: "hidden" },
 					telemetry: { otlpExportEnabled: false },
 				}),
 			);

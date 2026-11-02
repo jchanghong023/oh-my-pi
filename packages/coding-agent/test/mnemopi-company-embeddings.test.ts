@@ -117,7 +117,7 @@ function runEmbeddingProbe(): ProbeResult {
 				// Lane off: the company provider must not surface defaults at all.
 				const noCompanyLane = getCompanyEmbeddingDefaults(Settings.isolated({}));
 
-				setCompanyOfflineEnabled(true);
+				await setCompanyOfflineEnabled(true);
 				const defaults = getCompanyEmbeddingDefaults(Settings.isolated({}));
 
 				// An explicit embedding URL must yield undefined: company credentials

@@ -214,7 +214,7 @@ async function scenario(xdev: boolean) {
 		);
 		await writeFile(
 			path.join(agent, "config.yml"),
-			`modelRoles:\n  default: fixture/fixture-model\n  smol: fixture/fixture-model\nstartup:\n  setupWizard: false\n  checkUpdate: false\nmarketplace:\n  autoUpdate: off\ntools:\n  xdev: ${xdev}\n`,
+			`modelRoles:\n  default: fixture/fixture-model\n  smol: fixture/fixture-model\nstartup:\n  setupWizard: false\ntools:\n  xdev: ${xdev}\n`,
 		);
 		const child = Bun.spawn(
 			[

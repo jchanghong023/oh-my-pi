@@ -76,10 +76,10 @@ describe("Knowledge model adapters", () => {
 			import { KnowledgeService } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/knowledge/service.ts"))};
 			import { resolveKnowledgeModels } from ${JSON.stringify(path.resolve(import.meta.dir, "../src/knowledge/models.ts"))};
 			const options = ${JSON.stringify(options)};
-			setCompanyOfflineEnabled(false);
+			await setCompanyOfflineEnabled(false);
 			const online = await resolveKnowledgeModels(options);
 			if (online.embedding || online.reranker) throw new Error("company defaults leaked online");
-			setCompanyOfflineEnabled(true);
+			await setCompanyOfflineEnabled(true);
 			const models = await resolveKnowledgeModels(options);
 			await Bun.write(${JSON.stringify(path.join(claudeDir, "settings.json"))}, "{}");
 			const source = ${JSON.stringify(path.join(options.cwd, "source"))};

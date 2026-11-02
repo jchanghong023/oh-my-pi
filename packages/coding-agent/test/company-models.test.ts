@@ -83,7 +83,7 @@ function runCompanyProbe(): CompanyProbe {
 				const { createInMemoryAuthStorage } = await import(${JSON.stringify(path.join(import.meta.dir, "helpers/agent-session-setup.ts"))});
 				const { resolveApiKeyOnce } = await import(${JSON.stringify(path.join(import.meta.dir, "../../ai/src/auth-retry.ts"))});
 				const { buildAnthropicClientOptions } = await import(${JSON.stringify(path.join(import.meta.dir, "../../ai/src/providers/anthropic.ts"))});
-				setCompanyOfflineEnabled(true);
+				await setCompanyOfflineEnabled(true);
 				const models = getCompanyChatModels();
 				setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 				const authStorage = createInMemoryAuthStorage();

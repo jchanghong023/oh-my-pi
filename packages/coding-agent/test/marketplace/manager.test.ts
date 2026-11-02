@@ -1219,9 +1219,9 @@ describe("MarketplaceManager", () => {
 		expect(userSummary!.shadowedBy).toBe("project");
 	});
 
-	// ── auto-update ──────────────────────────────────────────────────────────
+	// ── Manual updates ───────────────────────────────────────────────────────
 
-	describe("auto-update", () => {
+	describe("manual updates", () => {
 		// Writable per-test copy of the shared fixture: these tests mutate plugin manifests.
 		let mktDir: string;
 		beforeEach(() => {
@@ -1448,7 +1448,7 @@ describe("MarketplaceManager", () => {
 			expect(results).toEqual([]);
 		});
 
-		it("reaps abandoned clone checkouts but leaves active clones and marketplace caches intact", async () => {
+		it("adding a marketplace reaps abandoned clones but leaves active clones and marketplace caches intact", async () => {
 			const cacheDir = path.join(ctx.tmpDir, "cache", "marketplaces");
 			const abandoned = path.join(cacheDir, `.tmp-clone-${Date.now() - 31 * 60 * 1000}`);
 			const active = path.join(cacheDir, `.tmp-clone-${Date.now()}-inflight`);
@@ -1458,43 +1458,35 @@ describe("MarketplaceManager", () => {
 				fs.writeFileSync(path.join(dir, "catalog"), "preserve if active");
 			}
 
-			await ctx.manager.refreshStaleMarketplaces();
+			await ctx.manager.addMarketplace(mktDir);
 
 			expect(fs.existsSync(abandoned)).toBe(false);
 			expect(fs.readFileSync(path.join(active, "catalog"), "utf8")).toBe("preserve if active");
 			expect(fs.readFileSync(path.join(marketplace, "catalog"), "utf8")).toBe("preserve if active");
 		});
 
-		it("refreshStaleMarketplaces skips fresh marketplaces", async () => {
-			await ctx.manager.addMarketplace(mktDir);
-			// updatedAt is just now — not past the 24-hour threshold.
-			await setCatalogEntryVersion("2.0.0");
+		it("keeps stale catalogs and installed plugins unchanged until an explicit update", async () => {
+			const added = await ctx.manager.addMarketplace(mktDir);
+			await ctx.manager.installPlugin("hello-plugin", "test-marketplace");
+			const sourcePath = path.join(mktDir, ".claude-plugin", "marketplace.json");
+			const source = (await Bun.file(sourcePath).json()) as { plugins: Array<{ version?: string }> };
+			source.plugins[0].version = "2.0.0";
+			await Bun.write(sourcePath, JSON.stringify(source));
+			await setPluginJsonVersion("2.0.0");
+			setMarketplaceUpdatedAt(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString());
 
-			await ctx.manager.refreshStaleMarketplaces();
+			const registryPath = path.join(ctx.tmpDir, "marketplaces.json");
+			const registryBefore = await Bun.file(registryPath).text();
+			const catalogBefore = await Bun.file(added.catalogPath).text();
+			const manager = createOutsideProjectManager(ctx.tmpDir);
+			expect(await manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "1.0.0" }]);
+			expect(await manager.listInstalledPlugins()).toMatchObject([{ entries: [{ version: "1.0.0" }] }]);
+			expect(await Bun.file(registryPath).text()).toBe(registryBefore);
+			expect(await Bun.file(added.catalogPath).text()).toBe(catalogBefore);
 
-			// Catalog should remain at 2.0.0 — the marketplace was not re-fetched.
-			const catalogPath = await getCatalogPath();
-			const content = await Bun.file(catalogPath).text();
-			const catalog = JSON.parse(content) as { plugins: Array<{ version?: string }> };
-			expect(catalog.plugins[0].version).toBe("2.0.0");
-		});
-
-		it("refreshStaleMarketplaces re-fetches stale marketplaces", async () => {
-			await ctx.manager.addMarketplace(mktDir);
-			// Tamper with catalog to simulate drift from the real source.
-			await setCatalogEntryVersion("2.0.0");
-
-			// Force updatedAt to 25 hours ago — past the 24-hour staleness threshold.
-			const staleDate = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
-			setMarketplaceUpdatedAt(staleDate);
-
-			await ctx.manager.refreshStaleMarketplaces();
-
-			// updateMarketplace re-fetches from mktDir which has version 1.0.0.
-			const catalogPath = await getCatalogPath();
-			const content = await Bun.file(catalogPath).text();
-			const catalog = JSON.parse(content) as { plugins: Array<{ version?: string }> };
-			expect(catalog.plugins[0].version).toBe("1.0.0");
+			await manager.updateAllMarketplaces();
+			expect(await manager.listAvailablePlugins("test-marketplace")).toMatchObject([{ version: "2.0.0" }]);
+			expect(await manager.listInstalledPlugins()).toMatchObject([{ entries: [{ version: "1.0.0" }] }]);
 		});
 
 		it("upgradePluginAcrossScopes upgrades in all scopes, returns both entries", async () => {

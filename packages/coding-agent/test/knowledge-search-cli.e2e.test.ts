@@ -51,7 +51,7 @@ describe("knowledge_search CLI without source files", () => {
 		await Bun.write(path.join(documents, "related.md"), "# Reports\nInspect another_check.rpt for report syntax.\n");
 		await Bun.write(
 			path.join(agentDir, "config.yml"),
-			"marketplace:\n  autoUpdate: off\nstartup:\n  setupWizard: false\n  checkUpdate: false\nmnemopi:\n  noEmbeddings: true\n",
+			"startup:\n  setupWizard: false\nmnemopi:\n  noEmbeddings: true\n",
 		);
 		const server = Bun.serve({
 			hostname: "127.0.0.1",

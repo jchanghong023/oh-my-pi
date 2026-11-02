@@ -19,6 +19,7 @@ import type { Terminal, TerminalAppearance, TerminalAppearanceRequestToken } fro
 import type { RenderScheduler } from "@oh-my-pi/pi-tui/tui";
 import { formatBytes, getProjectDir, logger, TempDir } from "@oh-my-pi/pi-utils";
 import { VERSION } from "@oh-my-pi/pi-utils/dirs";
+import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../config/company-provider";
 import { ModelRegistry } from "../config/model-registry";
 import { Settings } from "../config/settings";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
@@ -165,6 +166,7 @@ export async function runRenderCommand(args: RenderCommandArgs): Promise<number>
 		});
 		const openMs = performance.now() - openStart;
 
+		if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
 		const authStorage = new AuthStorage(new SqliteAuthCredentialStore(new Database(":memory:")));
 		// Offline rendering needs only bundled UI models, not the user's model
 		// configuration or company credentials. Keep normal render semantics intact.

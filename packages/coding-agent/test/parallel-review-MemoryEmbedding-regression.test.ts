@@ -54,7 +54,7 @@ test("embedding gateways and explicit environment credentials survive managed pr
 				fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, "settings.json"), JSON.stringify({
 					env: { ANTHROPIC_BASE_URL: endpoint + "/company/v1", ANTHROPIC_AUTH_TOKEN: "company-fixture-key" },
 				}));
-				setCompanyOfflineEnabled(true);
+				await setCompanyOfflineEnabled(true);
 				const registryLookups = [];
 				const modelRegistry = {
 					getApiKeyForProvider: async provider => { registryLookups.push(provider); return "registry-fixture-key"; },

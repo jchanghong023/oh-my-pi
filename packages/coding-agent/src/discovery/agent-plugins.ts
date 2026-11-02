@@ -18,7 +18,7 @@ import type { Dirent, Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getPluginsDir, isEnoent, normalizeFrontmatterKeys, parseFrontmatter } from "@oh-my-pi/pi-utils";
-import { registerProvider } from "../capability";
+import { isUserSourceEnabled, registerProvider } from "../capability";
 import { readFile } from "../capability/fs";
 import { type MCPServer, mcpCapability } from "../capability/mcp";
 import { type Skill, type SkillFrontmatter, skillCapability } from "../capability/skill";
@@ -59,7 +59,7 @@ interface CandidateRoot {
  */
 async function listCandidateRoots(ctx: LoadContext): Promise<CandidateRoot[]> {
 	const [marketplace, extensionRoots] = await Promise.all([
-		listClaudePluginRoots(ctx.home, ctx.cwd),
+		listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
 		listOmpExtensionRoots(ctx),
 	]);
 	const seen = new Set<string>();

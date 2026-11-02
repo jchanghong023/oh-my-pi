@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { __resetDirsFromEnvForTests, getAgentDir, getPluginsDir } from "@oh-my-pi/pi-utils";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { initializeWithSettings } from "@oh-my-pi/pi-coding-agent/capability";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { clearPluginRootsAndCaches } from "../../src/discovery/helpers";
@@ -21,6 +22,7 @@ import { SessionManager } from "../../src/session/session-manager";
 
 const roots: string[] = [];
 const envKeys = [
+	"CLAUDE_CONFIG_DIR",
 	"OMP_CONFIG_ROOT",
 	"PI_CODING_AGENT_DIR",
 	"OMP_PROFILE",
@@ -87,6 +89,27 @@ async function fixture(scope: "project" | "user" = "project") {
 }
 
 describe("native profile catalog settings", () => {
+	it("includes Claude registry entries in the explicit management catalog even when runtime discovery is opted out", async () => {
+		const f = await fixture();
+		const claudeDir = path.join(f.cwd, "claude-config");
+		const registry = path.join(claudeDir, "plugins", "installed_plugins.json");
+		await fs.mkdir(path.dirname(registry), { recursive: true });
+		await fs.writeFile(
+			registry,
+			JSON.stringify({
+				version: 2,
+				plugins: { "foreign@test-market": [{ installPath: f.plugin, version: "1.0.0", scope: "user" }] },
+			}),
+		);
+		process.env.CLAUDE_CONFIG_DIR = claudeDir;
+		const releaseSettings = initializeWithSettings(Settings.isolated());
+		try {
+			const result = await f.catalogs.plugins(f.cwd, { settings: f.settings, configScope: "user" });
+			expect(result.plugins.find(item => item.id === "foreign@test-market")).toMatchObject({ source: "claude" });
+		} finally {
+			releaseSettings();
+		}
+	});
 	it("reads the active profile registry without creating workspace runtime state", async () => {
 		const f = await fixture("user");
 		const registryBefore = await fs.readFile(f.registry, "utf8");

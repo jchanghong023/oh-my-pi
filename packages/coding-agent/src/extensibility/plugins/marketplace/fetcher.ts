@@ -19,7 +19,7 @@ import {
 
 const GIT_CLONE_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Remove abandoned clone checkouts on a later startup without touching in-flight clones. */
+/** Remove abandoned clone checkouts during explicit add/update operations without touching in-flight clones. */
 export async function pruneAbandonedMarketplaceClones(cacheDir: string): Promise<void> {
 	const entries = await fs.readdir(cacheDir, { withFileTypes: true }).catch(err => {
 		if (isEnoent(err)) return [];

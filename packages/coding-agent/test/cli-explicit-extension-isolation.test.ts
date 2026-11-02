@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { realpathSync } from "node:fs";
 import { symlink, unlink } from "node:fs/promises";
+import * as path from "node:path";
 import type { AuthStorage } from "@oh-my-pi/pi-ai";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSessionOptions } from "@oh-my-pi/pi-coding-agent/main";
-import { loadSessionExtensions } from "@oh-my-pi/pi-coding-agent/sdk";
+import { createAgentSession, loadSessionExtensions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
@@ -25,17 +26,50 @@ afterAll(async () => {
 	await tempDir.remove();
 });
 
-test("buildSessionOptions retains explicit extensions and hooks under --no-extensions", async () => {
-	const extensionPath = tempDir.join("extension-package");
-	const hookPath = tempDir.join("hook.ts");
-	const parsed = parseArgs(["--no-extensions", "--extension", extensionPath, "--hook", hookPath]);
-	const settings = Settings.isolated();
-	const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
-
-	const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(), modelRegistry, settings);
-
-	expect(options.disableExtensionDiscovery).toBe(true);
-	expect(options.additionalExtensionPaths).toEqual([extensionPath, hookPath]);
+test("default CLI startup skips ambient extensions and configured LSP but loads explicit extensions", async () => {
+	const cwd = tempDir.join("default-startup");
+	const extensionPath = path.join(cwd, "explicit.ts");
+	await Bun.write(
+		path.join(cwd, ".omp", "extensions", "ambient.ts"),
+		'throw new Error("Ambient extension must not run during default CLI startup");',
+	);
+	await Bun.write(
+		extensionPath,
+		'export default function (pi) { pi.registerCommand("startup-fixture", { handler: async () => {} }); }',
+	);
+	const parsed = parseArgs(["-e", extensionPath]);
+	const settings = Settings.isolated({ "lsp.enabled": true, "lsp.lazy": false });
+	const modelRegistry = new ModelRegistry(authStorage, path.join(cwd, "models.yml"));
+	const options = await buildSessionOptions(parsed, [], SessionManager.inMemory(cwd), modelRegistry, settings);
+	const extensions = await loadSessionExtensions(options, cwd, settings, new EventBus());
+	expect(extensions.errors).toEqual([]);
+	expect(extensions.extensions.map(extension => extension.resolvedPath)).toEqual([extensionPath]);
+	const { session, lspServers } = await createAgentSession({
+		...options,
+		cwd,
+		agentDir: cwd,
+		modelRegistry,
+		authStorage,
+		settings,
+		preloadedExtensions: extensions,
+		hasUI: true,
+		bindProcessState: false,
+		enableMCP: false,
+		skills: [],
+		rules: [],
+		contextFiles: [],
+		promptTemplates: [],
+		slashCommands: [],
+	});
+	try {
+		expect(session.getAllToolNames()).not.toContain("lsp");
+		expect(lspServers).toBeUndefined();
+		expect(session.extensionRunner?.getRegisteredCommands().some(command => command.name === "startup-fixture")).toBe(
+			true,
+		);
+	} finally {
+		await session.dispose();
+	}
 });
 
 // File symlinks require Developer Mode on Windows; the retargeting fixture cannot be built.

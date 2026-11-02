@@ -74,7 +74,7 @@ describe("startup timing after a headless runner starts", () => {
 		try {
 			await runRootCommand(headlessArgs(["--print", "hello"], dir.path()), ["--print", "hello"], {
 				discoverAuthStorage: async () => authStorage,
-				settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+				settings: Settings.isolated(),
 				createAgentSession: async () => ({ session }) as unknown as CreateAgentSessionResult,
 			});
 		} finally {
@@ -97,7 +97,7 @@ describe("startup timing after a headless runner starts", () => {
 		try {
 			await runRootCommand(headlessArgs(["--mode", "acp"], dir.path()), ["--mode", "acp"], {
 				discoverAuthStorage: async () => authStorage,
-				settings: Settings.isolated({ "marketplace.autoUpdate": "off" }),
+				settings: Settings.isolated(),
 				runAcpMode: async () => {
 					recordedWhileServing = spanRecorded();
 					throw stopServing;

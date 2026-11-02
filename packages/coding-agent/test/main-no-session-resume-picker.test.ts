@@ -38,7 +38,7 @@ describe("runRootCommand — --no-session --resume", () => {
 		);
 
 		const authStorage = await AuthStorage.create(path.join(sessionDir, "auth.db"));
-		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+		const settings = Settings.isolated();
 
 		const rawArgs = ["--no-session", "--resume", "--print"];
 		const parsed = parseArgs(rawArgs);

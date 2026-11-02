@@ -77,7 +77,7 @@ export const launchHelp = {
 		"no-session": Flags.boolean({ description: "Don't save session (ephemeral)" }),
 		models: Flags.string({ description: `Comma-separated model patterns for ${formatKeyHint("ctrl+p")} cycling` }),
 		"no-tools": Flags.boolean({ description: "Disable all built-in tools" }),
-		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics" }),
+		"no-lsp": Flags.boolean({ description: "Disable LSP tools, formatting, and diagnostics (default)" }),
 		"no-pty": Flags.boolean({ description: "Disable PTY-based interactive bash execution" }),
 		tools: Flags.string({ description: "Comma-separated list of tools to enable (default: all)" }),
 		thinking: Flags.string({
@@ -109,7 +109,7 @@ export const launchHelp = {
 			multiple: true,
 		}),
 		"no-extensions": Flags.boolean({
-			description: "Disable extension discovery (explicit -e paths still work)",
+			description: "Disable extension discovery (default; explicit -e paths still work)",
 		}),
 		"no-skills": Flags.boolean({ description: "Disable skills discovery and loading" }),
 		skills: Flags.string({ description: "Comma-separated glob patterns to filter skills (e.g., git-*,docker)" }),

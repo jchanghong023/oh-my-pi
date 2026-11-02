@@ -455,7 +455,7 @@ export async function runModelsCommand(command: ModelsCommandArgs): Promise<void
 					result: "started",
 					offline,
 				});
-				const companyError = initializeCompanyModelLane(offline);
+				const companyError = await initializeCompanyModelLane(offline);
 				let companyConfigError = false;
 				if (offline) {
 					companyConfigError = Boolean(companyError);

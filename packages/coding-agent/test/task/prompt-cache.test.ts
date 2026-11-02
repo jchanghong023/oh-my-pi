@@ -300,7 +300,6 @@ describe("task sibling prompt-cache routing", () => {
 					settings: Settings.isolated({
 						"async.enabled": false,
 						"task.structured": true,
-						"marketplace.autoUpdate": "off",
 						"compaction.enabled": false,
 					}),
 					toolNames: ["task"],
@@ -499,7 +498,6 @@ describe("task sibling prompt-cache routing", () => {
 					settings: Settings.isolated({
 						"async.enabled": false,
 						"task.structured": true,
-						"marketplace.autoUpdate": "off",
 						"compaction.enabled": false,
 					}),
 					toolNames: ["task"],
@@ -558,7 +556,6 @@ describe("task sibling prompt-cache routing", () => {
 		const sessionSettings = Settings.isolated({
 			"async.enabled": false,
 			"task.structured": true,
-			"marketplace.autoUpdate": "off",
 			"compaction.enabled": false,
 		});
 		const requests: Array<{
@@ -783,7 +780,6 @@ describe("task sibling prompt-cache routing", () => {
 					sessionManager: SessionManager.inMemory(directory.path()),
 					settings: Settings.isolated({
 						"async.enabled": false,
-						"marketplace.autoUpdate": "off",
 						"compaction.enabled": false,
 					}),
 					toolNames: [],
@@ -865,7 +861,6 @@ describe("task sibling prompt-cache routing", () => {
 				sessionManager: SessionManager.inMemory(directory.path()),
 				settings: Settings.isolated({
 					"async.enabled": false,
-					"marketplace.autoUpdate": "off",
 					"compaction.enabled": false,
 				}),
 				toolNames: [],

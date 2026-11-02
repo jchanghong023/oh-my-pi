@@ -1156,20 +1156,20 @@ export {
 // Discovery Functions
 
 /** Flip the company lane before registry construction; return its credential-free diagnostic. */
-export function initializeCompanyModelLane(offline: boolean): string | undefined {
-	if (isCompanyLaneActive() !== offline) setCompanyOfflineEnabled(offline);
+export async function initializeCompanyModelLane(offline: boolean): Promise<string | undefined> {
+	await setCompanyOfflineEnabled(offline);
 	if (!offline) return undefined;
 	setCompanyChatContextWindow(COMPANY_OFFLINE_CONTEXT_WINDOW);
 	return getCompanyConfigError();
 }
 
 /** Apply company defaults; hosts own diagnostic output (shared SDK paths never write terminal streams). */
-export function initializeOfflineModelCommand(
+export async function initializeOfflineModelCommand(
 	settings?: Settings,
 	offline: boolean = offlineFromEnv() || isCompanyLaneActive(),
 	onWarning?: (message: string) => void,
-): boolean {
-	const companyError = initializeCompanyModelLane(offline);
+): Promise<boolean> {
+	const companyError = await initializeCompanyModelLane(offline);
 	if (!offline) return false;
 	if (companyError) {
 		onWarning?.(companyError);
@@ -1204,8 +1204,10 @@ export async function discoverAuthStorage(
 		Omit<EffectiveSettingsScope, "agentDir"> & { offline?: boolean } = {},
 ): Promise<AuthStorage> {
 	const { settings, cwd, offline, ...discoveryOptions } = options;
-	initializeOfflineModelCommand(settings, offline);
-	const policy = await loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir });
+	const [, policy] = await Promise.all([
+		initializeOfflineModelCommand(settings, offline),
+		loadEffectiveAuthAccountPolicyConfig({ settings, cwd, agentDir }),
+	]);
 	return discoverAuthStorageFromConfig(agentDir, {
 		...discoveryOptions,
 		accountPolicies: discoveryOptions.accountPolicies ?? policy.accountPolicies,
@@ -1314,7 +1316,7 @@ export async function loadCliExtensionProviders(
 	cwd: string,
 	options: CliExtensionProviderOptions = {},
 ): Promise<void> {
-	initializeOfflineModelCommand(settings, options.offline);
+	await initializeOfflineModelCommand(settings, options.offline);
 	// A prebuilt registry may still project the lane that preceded this command.
 	const companyEnabled =
 		isCompanyLaneActive() && !getCompanyConfigError() && !disabledProviderIds(settings).has(COMPANY_PROVIDER_ID);
@@ -2159,8 +2161,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	}
 	// CLI offline mode applies to every session constructed in this process,
 	// including task spawns and revived sessions that omit the SDK option.
+	let companyLane: Promise<string | undefined> | undefined;
 	if (offlineFromEnv() || isCompanyLaneActive()) {
-		initializeCompanyModelLane(true);
+		companyLane = initializeCompanyModelLane(true);
+		// Runtime identity or settings may fail before the lane barrier is reached.
+		void companyLane.catch(() => {});
 		options = { ...options, offline: true };
 	}
 	registerLocalInferenceApi();
@@ -2168,7 +2173,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
-	const result = await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options));
+	const result = await withOmpExtensionRootScope(explicit, mode, () => createAgentSessionScoped(options, companyLane));
 	result.session.nativeChildCapabilities = {
 		customTools: options.customTools,
 		disableExtensionDiscovery: options.disableExtensionDiscovery,
@@ -2185,7 +2190,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	return result;
 }
 
-async function createAgentSessionScoped(options: CreateAgentSessionOptions): Promise<CreateAgentSessionResult> {
+async function createAgentSessionScoped(
+	options: CreateAgentSessionOptions,
+	companyLane?: Promise<string | undefined>,
+): Promise<CreateAgentSessionResult> {
 	if (options.systemPromptTemplate !== undefined && options.customSystemPrompt !== undefined) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
@@ -2200,7 +2208,8 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 	const settings = await (options.settings ??
 		options.settingsManager ??
 		logger.time("settings", resolveSessionSettings, cwd, agentDir));
-	initializeOfflineModelCommand(settings);
+	await companyLane;
+	await initializeOfflineModelCommand(settings);
 	// Discovery provider toggles and process-wide setting effects (theme, request limits, …)
 	// follow the newest holder: each top-level session holds both on its settings until disposed,
 	// then hands them back to the previous holder. Subagents and helper sessions never take them,

@@ -20,6 +20,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger, MAIN_CONFIG_FILENAMES, tryParseJson } from "@oh-my-pi/pi-utils";
 import { YAML } from "bun";
+import { isUserSourceEnabled } from "../capability";
 import { readDirEntries, readFile } from "../capability/fs";
 import type { EffectiveExtensionRoots, ExtensionRootMode, LoadContext } from "../capability/types";
 import { getEnabledPlugins } from "../extensibility/plugins/loader";
@@ -374,7 +375,7 @@ async function listInstalledPluginRoots(ctx: LoadContext): Promise<InjectedRoot[
 	try {
 		const [plugins, marketplaceRoots] = await Promise.all([
 			getEnabledPlugins(ctx.cwd, { home: ctx.home }),
-			listClaudePluginRoots(ctx.home, ctx.cwd),
+			listClaudePluginRoots(ctx.home, ctx.cwd, { includeClaude: isUserSourceEnabled("claude-plugins", ctx) }),
 		]);
 		const marketplaceRealpaths = new Set(
 			await Promise.all(marketplaceRoots.roots.map(root => realpathOrResolved(root.path))),

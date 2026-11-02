@@ -10,6 +10,7 @@ import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallb
 import type { Api, AuthStorage, Model } from "@oh-my-pi/pi-ai";
 import { modelKind } from "@oh-my-pi/pi-catalog/types";
 import { formatAge, formatCount, prompt, truncate } from "@oh-my-pi/pi-utils";
+import { isCompanyLaneActive, setCompanyOfflineEnabled } from "../../config/company-provider";
 import { ModelRegistry } from "../../config/model-registry";
 import { type RoleChainCandidate, resolveModelRoleValue, resolveRoleChain } from "../../config/model-resolver";
 import { roleCandidatePool } from "../../config/model-roles";
@@ -196,6 +197,7 @@ async function executeSearch(
 	options: ExecuteSearchOptions,
 ): Promise<SearchToolResult> {
 	const { authStorage, sessionId, signal } = options;
+	if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
 	const modelRegistry = options.modelRegistry ?? new ModelRegistry(authStorage, undefined, { settings });
 	const pool = roleCandidatePool("web", settings, modelRegistry);
 	const candidates = params.model

@@ -23,7 +23,7 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `ask.timeout=60` 秒；Goal 自动编排的超时答复见 [Goal 自动编排](../goal-autopilot/spec.md)。
 - `async.maxJobs=32`；后台任务的硬上限及计数边界见下文。
 - 欢迎界面的使用提示、字体提醒与提示／新功能标签采用简体中文，展示边界见[简体中文用户界面](../tui-presentation/spec.md)。
-- `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行设置向导。
+- `startup.setupWizard=false`：不因 setupVersion 落后于当前版本而自动运行或加载完整设置向导；全平台启动减负与取消自动更新检查的边界见[全平台轻量启动](../fork-runtime/spec.md#requirement-全平台轻量启动)。
 - `statusLine.compactThinkingLevel=false`
 - `composer.shape=box`（Rounded Box）
 - `composer.predictions=true`：所有平台、普通与 offline 启动均默认启用上游输入区预测；沿用当前模型生成下一条消息建议、Tab／右方向键插入但不发送及额外用量计入 `/stats` 的行为。用户显式配置 `false` 时保持关闭，不改写已有配置。
@@ -31,7 +31,9 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - `display.showTurnTime=true`
 - `terminal.programStatus`：所有平台的 offline（`OMP_OFFLINE`）进程默认 `false`，避免不兼容终端把 OSC 7501 程序状态序列显示为文本；普通模式仍默认 `true`。用户显式配置优先，不改写已有配置文件。
 - 界面显示默认采用 `compact`，完整行为与验收见[界面显示模式](../tui-presentation/spec.md)。
-- **LSP 默认关闭**：将 `lsp.enabled` 的缺省值改为 `false`。所有平台、普通与 offline 启动，在用户未显式启用时，主会话及其 task 子代理均不启用 LSP；文件写入、编辑、移动和删除的自动格式化、诊断及 LSP 文件通知同样受关闭状态约束。
+- **CLI 默认 `--no-lsp`**：所有平台、普通与 offline 的 CLI 启动均按 `--no-lsp` 语义执行，即使已保存 `lsp.enabled=true`，本次会话仍禁用 LSP 工具、自动格式化、诊断、文件通知及启动预热，不改写配置文件。`lsp.enabled` 的缺省值仍为 `false`；SDK 等非 CLI 宿主的显式 LSP 控制保持原有语义，不新增开关或别名。
+- **CLI 默认 `--no-extensions`**：所有平台、普通与 offline 的 CLI 启动均跳过扩展自动发现，不加载用户、项目或插件中自动发现的扩展。显式 `-e`／`--extension`、`--hook` 和可信扩展白名单仍按现有规则加载；Skills、规则、上下文文件和 MCP 不因本默认值被一并关闭，不改写用户配置。
+- **默认不扫描 Claude 插件**：所有平台、普通与 offline 启动默认跳过 Claude 插件注册表及插件缓存发现，不为插件发现读取 `enabledPlugins`；沿用现有来源启用机制显式恢复，OMP 原生插件和明确指定的插件目录不受影响，完整边界见下文。
 - `mnemopi.embeddingVariant=multilingual`
 - `stt.language=zh-CN`；本地 Whisper 与云端转录的区域标签归一化为基语言，如 `zh-CN`→`zh`。
 
@@ -60,6 +62,43 @@ OMP MUST 列明的 JavaScript Eval、LSP 与其他默认值生效；显式配置
 - **THEN** 按既有行为发送程序状态通知，默认值不覆盖该选择。
 - **WHEN** 用户显式设置 `terminal.programStatus=false`
 - **THEN** 普通与 offline 模式均保持关闭，默认值变化不改写已保存配置。
+
+### Requirement: CLI 默认轻量启动参数
+
+OMP CLI MUST 在首次参数解析和扩展参数重新解析中默认应用 `--no-lsp`、`--no-extensions`，不要求 shell alias、配置文件或用户手动补参数；交互、print、RPC 与 ACP 启动使用同一默认值。
+
+#### Scenario: 默认参数覆盖已保存的 LSP 启用配置
+
+- **WHEN** CLI 不携带 `--no-lsp` 启动，且用户配置 `lsp.enabled=true`
+- **THEN** 本次会话仍不注册 LSP 工具、不发现或预热语言服务器，不执行自动格式化、诊断及 LSP 文件通知；保留已保存配置，非 CLI 宿主不被强制关闭。
+
+#### Scenario: 默认跳过自动扩展并保留显式扩展
+
+- **WHEN** CLI 不携带 `--no-extensions` 启动，存在用户或项目自动扩展，并显式指定 `-e <path>`
+- **THEN** 不扫描或执行自动扩展，仅加载明确指定的扩展；扩展参数重新解析、工具和命令注册沿用现有行为，不丢失显式路径。
+
+### Requirement: Claude 插件发现默认关闭
+
+OMP MUST 默认跳过 Claude 插件来源的文件系统发现，而非扫描后再隐藏结果；不新增用户配置项、环境开关或 CLI 参数。
+
+#### Scenario: 默认启动不访问 Claude 插件来源
+
+- **WHEN** 任一平台普通或 offline 启动、创建或恢复会话，且未显式启用 Claude 插件来源
+- **THEN** 不读取或探测 Claude 配置目录中的 `plugins/installed_plugins.json`，不遍历其插件缓存，不为解析插件启停状态读取用户或项目 `enabledPlugins` 配置层。
+- **AND** 启动预加载、Skills、MCP、规则、命令、工具及子代理等共享发现路径均遵守该边界；Claude 注册表损坏、缺失或不可读时不产生插件发现警告。
+- **AND** `CLAUDE_CONFIG_DIR` 仅指定路径，不能单独启用插件发现；本要求不关闭普通 `.claude` 目录来源或公司模型配置的既有读取。
+
+#### Scenario: 保留原生与明确指定的插件
+
+- **WHEN** OMP 用户或项目插件注册表中已有插件，或用户显式传入 `--plugin-dir <path>`
+- **THEN** 沿用原有加载、项目优先级和去重行为；明确指定目录可以包含 Claude 格式 manifest，但不得顺带扫描 Claude 插件注册表及缓存。
+- **AND** 显式 `-e`、`--hook`、可信扩展及非插件 Skills 来源保持各自规则，不因 Claude 插件默认关闭而被一并关闭。
+
+#### Scenario: 显式启用与作用域隔离
+
+- **WHEN** 用户通过现有 `enabledProviders` 启用 `claude-plugins`、其既有 `claude` 别名或通配来源，或显式请求该发现提供者
+- **THEN** 按既有规则读取 Claude 插件及启停配置，`disabledProviders` 的显式禁用仍优先；显式管理目录请求可沿用原有的关闭来源查看能力。
+- **AND** 按当前会话或发现作用域解析来源授权；同一目录由关闭切换到开启或反向切换时，不复用另一状态的插件根缓存。
 
 ### Requirement: 启动不检查 Python
 

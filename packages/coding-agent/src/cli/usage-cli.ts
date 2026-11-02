@@ -1117,7 +1117,7 @@ async function loadUsageSources(
 	settings: Settings,
 	authStorage: AuthStorage,
 ): Promise<ModelRegistry> {
-	const offline = initializeOfflineModelCommand(settings, undefined, message => {
+	const offline = await initializeOfflineModelCommand(settings, undefined, message => {
 		process.stderr.write(`${message}\n`);
 	});
 	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings });

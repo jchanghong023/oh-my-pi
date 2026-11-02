@@ -203,7 +203,7 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 			modelRoles.default += ":high";
 			modelRoles.plan += ":medium";
 		}
-		const config = Bun.YAML.stringify({ modelRoles, startup: { setupWizard: false, checkUpdate: false } });
+		const config = Bun.YAML.stringify({ modelRoles, startup: { setupWizard: false } });
 		await writeFile(path.join(agentDir, "config.yml"), config);
 		const selector = explicitModel ? ["--model-id", "fixture/fixture-model:xhigh"] : [];
 		if (mode === "split" || mode === "planner-only") {

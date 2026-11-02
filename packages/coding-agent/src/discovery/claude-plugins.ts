@@ -43,11 +43,11 @@ async function allowedRoots(
 	ctx: LoadContext,
 	surface: "skills" | "mcp" | "other",
 ): Promise<{ roots: ClaudePluginRoot[]; warnings: string[] }> {
-	const { roots, warnings } = await listClaudePluginRoots(ctx.home, ctx.cwd);
-	const userEnabled = isUserSourceEnabled("claude-plugins", ctx) || isUserSourceEnabled("claude", ctx);
-	const scopedRoots = userEnabled ? roots : roots.filter(root => root.scope === "project" || root.origin !== "claude");
-	const flags = await Promise.all(scopedRoots.map(root => legacyProviderAllowed(root.path, surface)));
-	return { roots: scopedRoots.filter((_, i) => flags[i]), warnings };
+	const { roots, warnings } = await listClaudePluginRoots(ctx.home, ctx.cwd, {
+		includeClaude: isUserSourceEnabled("claude-plugins", ctx),
+	});
+	const flags = await Promise.all(roots.map(root => legacyProviderAllowed(root.path, surface)));
+	return { roots: roots.filter((_, i) => flags[i]), warnings };
 }
 
 interface ClaudePluginManifest {

@@ -101,7 +101,7 @@ export async function createDefaultBenchRuntime(options: { offline?: boolean } =
 				});
 			}
 			try {
-				const companyError = initializeCompanyModelLane(offline);
+				const companyError = await initializeCompanyModelLane(offline);
 				if (offline) {
 					if (companyError) {
 						logger.warn("offline_model_refresh.degraded", {

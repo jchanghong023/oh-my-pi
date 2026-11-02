@@ -1138,18 +1138,6 @@ export const cfgStartupSetupWizard = register({
 	},
 });
 
-export const cfgStartupCheckUpdate = register({
-	id: "startup.checkUpdate",
-	type: "boolean",
-	default: true,
-	ui: {
-		tab: "interaction",
-		group: "启动与更新",
-		label: "检查更新",
-		description: "启动时检查 omp 更新",
-	},
-});
-
 export const cfgUpdateChannel = register({
 	id: "update.channel",
 	type: "enum",
@@ -1159,28 +1147,10 @@ export const cfgUpdateChannel = register({
 		tab: "interaction",
 		group: "启动与更新",
 		label: "更新渠道",
-		description: "omp update 和启动更新检查使用的更新渠道",
+		description: "omp update 使用的更新渠道",
 		options: [
 			{ value: "stable", label: "稳定版" },
 			{ value: "canary", label: "预览版" },
-		],
-	},
-});
-
-export const cfgMarketplaceAutoUpdate = register({
-	id: "marketplace.autoUpdate",
-	type: "enum",
-	values: ["off", "notify", "auto"] as const,
-	default: "notify",
-	ui: {
-		tab: "interaction",
-		group: "启动与更新",
-		label: "插件市场自动更新",
-		description: "启动时检查插件更新",
-		options: [
-			{ value: "off", label: "关闭", description: "不检查插件更新" },
-			{ value: "notify", label: "通知", description: "启动时检查，有可用更新时通知" },
-			{ value: "auto", label: "自动", description: "启动时检查并自动安装更新" },
 		],
 	},
 });

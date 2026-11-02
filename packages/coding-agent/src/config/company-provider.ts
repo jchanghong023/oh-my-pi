@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import { logger } from "@oh-my-pi/pi-utils";
@@ -18,7 +17,7 @@ type CompanySnapshot = ({ config: Readonly<CompanyConfig>; error?: never } | { c
 	failureCategory?: string;
 };
 
-function readStartupConfig(): CompanySnapshot {
+async function readStartupConfig(): Promise<CompanySnapshot> {
 	const startedAt = performance.now();
 	const operationId = String(logger.getLogContext().operation_id ?? `company-snapshot-${randomUUID()}`);
 	const fields = { component: "company-provider", operation_id: operationId, restart_required: true };
@@ -46,7 +45,7 @@ function readStartupConfig(): CompanySnapshot {
 	const settingsPath = join(resolveClaudePaths().configDir, "settings.json");
 	let text: string;
 	try {
-		text = readFileSync(settingsPath, "utf8");
+		text = await Bun.file(settingsPath).text();
 	} catch (error) {
 		return unavailable(
 			`Company provider unavailable: cannot read ${settingsPath}. Restart OMP after fixing it.`,
@@ -145,15 +144,15 @@ function readStartupConfig(): CompanySnapshot {
 // holds the token in memory or hands it to workers.
 const snapshotKey = "omp.company-provider.startup";
 let mainSnapshot: CompanySnapshot | undefined;
+let mainSnapshotPromise: Promise<CompanySnapshot> | undefined;
 let workerSnapshot: CompanySnapshot | undefined;
 let mainReuseLogged = false;
 
 function ensureStartupSnapshot(): CompanySnapshot {
 	if (!isMainThread) {
 		if (!workerSnapshot) {
-			const snapshot = (getEnvironmentData(snapshotKey) as CompanySnapshot | undefined) ?? {
-				error: "Company provider unavailable: no startup configuration snapshot in this worker.",
-			};
+			const snapshot = getEnvironmentData(snapshotKey) as CompanySnapshot | undefined;
+			if (!snapshot) throw new Error("Company worker startup snapshot is not ready or was not inherited");
 			if (snapshot.config) {
 				Object.defineProperty(snapshot.config, "token", { enumerable: false });
 				Object.freeze(snapshot.config);
@@ -174,26 +173,9 @@ function ensureStartupSnapshot(): CompanySnapshot {
 		return workerSnapshot;
 	}
 	if (!mainSnapshot) {
-		const operationId = logger.getLogContext().operation_id ?? `company-snapshot-${randomUUID()}`;
-		const snapshot = logger.withLogContext({ operation_id: operationId }, readStartupConfig);
-		try {
-			setEnvironmentData(
-				snapshotKey,
-				snapshot.config ? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } } : snapshot,
-			);
-		} catch (error) {
-			logger.error("Company startup snapshot publication failed", {
-				component: "company-provider",
-				event: "company_snapshot_publication_failed",
-				stage: "worker_publish",
-				result: "failed",
-				operation_id: operationId,
-				...logger.diagnosticError(error),
-			});
-			throw error;
-		}
-		mainSnapshot = snapshot;
-	} else if (!mainReuseLogged) {
+		throw new Error("Company startup snapshot is not ready; await company lane initialization before consuming it");
+	}
+	if (!mainReuseLogged) {
 		mainReuseLogged = true;
 		logger.info("Company cached startup snapshot reused", {
 			component: "company-provider",
@@ -220,8 +202,8 @@ function companyLaneActive(): boolean {
 	return isMainThread ? offlineEnabled : getEnvironmentData(offlineKey) === true;
 }
 
-/** Enables or disables the company lane for this process; call before any consumer reads it. */
-export function setCompanyOfflineEnabled(enabled: boolean): void {
+/** Enables or disables the company lane; await before starting dependent consumers or workers. */
+export async function setCompanyOfflineEnabled(enabled: boolean): Promise<void> {
 	if (!isMainThread) return;
 	const operationId = logger.getLogContext().operation_id ?? `company-lane-${randomUUID()}`;
 	offlineEnabled = enabled;
@@ -235,9 +217,34 @@ export function setCompanyOfflineEnabled(enabled: boolean): void {
 		snapshot_read_allowed: enabled,
 		operation_id: operationId,
 	});
-	// Publish the snapshot (and only then hand it to workers) before any worker
-	// can spawn; normal startups skip the Claude settings read entirely.
-	if (enabled) logger.withLogContext({ operation_id: operationId }, ensureStartupSnapshot);
+	if (enabled) {
+		if (!mainSnapshotPromise && !mainSnapshot) {
+			mainSnapshotPromise = logger.withLogContext({ operation_id: operationId }, async () => {
+				const snapshot = await readStartupConfig();
+				try {
+					setEnvironmentData(
+						snapshotKey,
+						snapshot.config
+							? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } }
+							: snapshot,
+					);
+				} catch (error) {
+					logger.error("Company startup snapshot publication failed", {
+						component: "company-provider",
+						event: "company_snapshot_publication_failed",
+						stage: "worker_publish",
+						result: "failed",
+						operation_id: operationId,
+						...logger.diagnosticError(error),
+					});
+					throw error;
+				}
+				mainSnapshot = snapshot;
+				return snapshot;
+			});
+		}
+		await mainSnapshotPromise;
+	}
 }
 
 /** Whether the company lane is active in this process (regardless of configuration validity). */
@@ -271,8 +278,11 @@ export function companySnapshotForSubprocess(): CompanyProcessSnapshot {
 }
 
 /** Install the parent's cached startup state without rereading mutable credential files. */
-export function inheritCompanyProcessSnapshot(state: CompanyProcessSnapshot): void {
+export async function inheritCompanyProcessSnapshot(state: CompanyProcessSnapshot): Promise<void> {
 	if (!isMainThread) throw new Error("Company subprocess snapshot requires a process main thread");
+	if (mainSnapshotPromise && !mainSnapshot) {
+		throw new Error("Cannot inherit a company subprocess snapshot while initialization is in progress");
+	}
 	if (state.enabled) {
 		if (!state.snapshot) throw new Error("Missing company subprocess snapshot");
 		const snapshot = state.snapshot;
@@ -286,5 +296,5 @@ export function inheritCompanyProcessSnapshot(state: CompanyProcessSnapshot): vo
 			snapshot.config ? { ...snapshot, config: { ...snapshot.config, token: snapshot.config.token } } : snapshot,
 		);
 	}
-	setCompanyOfflineEnabled(state.enabled);
+	await setCompanyOfflineEnabled(state.enabled);
 }

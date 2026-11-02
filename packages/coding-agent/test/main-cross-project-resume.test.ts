@@ -251,7 +251,7 @@ describe("runRootCommand — cross-project --resume", () => {
 	it("uses the destination cwd after access returns during resume", async () => {
 		const match = buildGlobalMatch(resumedProject);
 		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(match);
-		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+		const settings = Settings.isolated();
 		const reloadForCwd = vi.spyOn(settings, "reloadForCwd");
 		const preloadedCwds: (string | undefined)[] = [];
 		vi.spyOn(pluginHelpers, "preloadPluginRoots").mockImplementation(async (_home, cwd) => {
@@ -316,7 +316,7 @@ describe("runRootCommand — cross-project --resume", () => {
 	it("re-scopes Settings back to the launch project when destination rescope fails", async () => {
 		const match = buildGlobalMatch(resumedProject);
 		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(match);
-		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+		const settings = Settings.isolated();
 		const reloadForCwd = vi.spyOn(settings, "reloadForCwd").mockImplementation(async cwd => {
 			if (normalizePathForComparison(cwd) === normalizePathForComparison(resumedProject)) {
 				throw new Error("destination config unreadable");
@@ -361,7 +361,7 @@ describe("runRootCommand — cross-project --resume", () => {
 	it("rolls back the session manager when the resumed cwd is denied", async () => {
 		const match = buildGlobalMatch(resumedProject);
 		vi.spyOn(sessionListingModule, "resolveResumableSession").mockResolvedValue(match);
-		const settings = Settings.isolated({ "marketplace.autoUpdate": "off" });
+		const settings = Settings.isolated();
 		const authStorage = await AuthStorage.create(path.join(root, "auth.db"));
 		const originalChdir = process.chdir.bind(process);
 		const chdir = vi.spyOn(process, "chdir").mockImplementation(dir => {
@@ -407,7 +407,6 @@ describe("runRootCommand — cross-project --resume", () => {
 		// yields no patterns, so any resolveModelScope call proves the recompute
 		// ran against the destination settings rather than the launch directory.
 		const settings = Settings.isolated({
-			"marketplace.autoUpdate": "off",
 			enabledModels: [{ paths: [resumedProject], models: ["model-resumed"] }],
 		});
 		const resolveModelScope = vi

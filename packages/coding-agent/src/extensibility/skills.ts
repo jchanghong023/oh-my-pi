@@ -383,16 +383,46 @@ export async function loadSkillCatalog(
 		return true;
 	}
 
-	// Use capability API to load all skills
-	const result = await loadCapability<CapabilitySkill>(skillCapability.id, {
-		cwd,
-		agentDir,
-		// Item disables are applied after catalog name resolution, not by capability dedup.
-		disabledExtensions: scope === "active" ? [] : disabledExtensions,
-		extensionRoots,
-		includeDisabled: scope === "inventory",
-		skillSourceFilter: scope === "active" ? isSourceEnabled : undefined,
-	});
+	// Start shared/custom scans alongside providers; admission below still follows
+	// the original precedence, regardless of which source finishes reading first.
+	const sharedSkillsDir = process.env.OMP_SKILLS_DIR?.trim();
+	let directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
+	if (process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
+		// Deduplicate within this load only; refreshes must still read current files.
+		const seen = new Set<string>();
+		directories = directories.filter(dir => {
+			const resolved = path.resolve(expandTilde(dir));
+			if (seen.has(resolved)) return false;
+			seen.add(resolved);
+			return true;
+		});
+	}
+	const [result, customDirectoryResults] = await Promise.all([
+		loadCapability<CapabilitySkill>(skillCapability.id, {
+			cwd,
+			agentDir,
+			// Item disables are applied after catalog name resolution, not by capability dedup.
+			disabledExtensions: scope === "active" ? [] : disabledExtensions,
+			extensionRoots,
+			includeDisabled: scope === "inventory",
+			skillSourceFilter: scope === "active" ? isSourceEnabled : undefined,
+		}),
+		Promise.all(
+			directories.map(async dir => {
+				const expandedDir = expandTilde(dir);
+				const scanResult = await scanSkillsFromDir(
+					{ cwd, home: os.homedir(), repoRoot: null },
+					{
+						dir: expandedDir,
+						providerId: CUSTOM_DIR_PROVIDER_ID,
+						level: "user",
+						requireDescription: true,
+					},
+				);
+				return { expandedDir, scanResult, shared: dir === sharedSkillsDir };
+			}),
+		),
+	]);
 
 	const skillMap = new Map<string, SkillCatalogEntry>();
 	const realPathSet = new Set<string>();
@@ -530,37 +560,6 @@ export async function loadSkillCatalog(
 		const skill = toCatalogEntry(capSkill);
 		admit(skill, capSkill.content, capSkill.frontmatter, skillNamespace(capSkill), resolvedPath);
 	}
-
-	// Shared skills use the existing custom-directory override and take precedence within it.
-	const sharedSkillsDir = process.env.OMP_SKILLS_DIR?.trim();
-	let directories = sharedSkillsDir ? [sharedSkillsDir, ...customDirectories] : customDirectories;
-	if (process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "")) {
-		// Deduplicate before starting reads, not in a process-wide result cache:
-		// Shared stays first, and every refresh/configuration gets a fresh scan.
-		const seen = new Set<string>();
-		directories = directories.filter(dir => {
-			const resolved = path.resolve(expandTilde(dir));
-			if (seen.has(resolved)) return false;
-			seen.add(resolved);
-			return true;
-		});
-	}
-
-	const customDirectoryResults = await Promise.all(
-		directories.map(async dir => {
-			const expandedDir = expandTilde(dir);
-			const scanResult = await scanSkillsFromDir(
-				{ cwd, home: os.homedir(), repoRoot: null },
-				{
-					dir: expandedDir,
-					providerId: CUSTOM_DIR_PROVIDER_ID,
-					level: "user",
-					requireDescription: true,
-				},
-			);
-			return { expandedDir, scanResult, shared: dir === sharedSkillsDir };
-		}),
-	);
 
 	const allCustomSkills: Array<{
 		skill: SkillCatalogEntry;

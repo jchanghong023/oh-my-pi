@@ -88,7 +88,6 @@ it.each([
 			sessionManager: SessionManager.inMemory(dir.path()),
 			settings: Settings.isolated({
 				"async.enabled": false,
-				"marketplace.autoUpdate": "off",
 				"compaction.enabled": false,
 				"compaction.keepRecentTokens": 1,
 			}),

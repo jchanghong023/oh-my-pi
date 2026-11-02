@@ -425,7 +425,7 @@ describe("CodeAgent hot credential refresh", () => {
 			initializeCodeAgentProvider(new CodeAgentTokenCache(() => undefined));
 			try {
 				Object.defineProperty(process, "platform", { ...descriptor, value: platform });
-				setCompanyOfflineEnabled(false);
+				await setCompanyOfflineEnabled(false);
 				const modelId = getCodeAgentModels()[0]!.id;
 				const registry = new ModelRegistry(auth, path.join(home, "models.yml"), {
 					settings: Settings.isolated({}),
@@ -444,7 +444,7 @@ describe("CodeAgent hot credential refresh", () => {
 				});
 				expect(disabled.getAvailable().some(model => model.provider === "codeagent")).toBe(false);
 				expect(disabled.find("codeagent", modelId)).toBeUndefined();
-				setCompanyOfflineEnabled(true);
+				await setCompanyOfflineEnabled(true);
 				await registry.refresh("offline");
 				assertVisible(false);
 				const intranet = new ModelRegistry(auth, path.join(home, "models.yml"), {
@@ -455,7 +455,7 @@ describe("CodeAgent hot credential refresh", () => {
 				expect(intranet.find("codeagent", modelId)).toBeUndefined();
 			} finally {
 				Object.defineProperty(process, "platform", descriptor);
-				setCompanyOfflineEnabled(offline);
+				await setCompanyOfflineEnabled(offline);
 				initializeCodeAgentProvider(new CodeAgentTokenCache(() => undefined));
 				auth.close();
 				fs.rmSync(home, { recursive: true, force: true });
