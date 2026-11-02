@@ -9,6 +9,7 @@ import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelKind } from "@oh-my-pi/pi-catalog/types";
+import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
@@ -1604,15 +1605,15 @@ describe("ModelHub", () => {
 
 	describe("provider scopes and search", () => {
 		test("search inside a provider scope keeps that provider's model (#4522)", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const providerGlm = makeModel("z-provider", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
-			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			const { hub } = createHub({ models: [providerGlm, customGlm] });
 			installTestTheme();
 
-			// Scope-hop: All models → custom-provider → openrouter.
+			// Scope-hop: All models → custom-provider → z-provider.
 			hub.handleInput(DOWN);
 			hub.handleInput(DOWN);
-			expect(normalize(hub.render(220))).toContain("openrouter ·");
+			expect(normalize(hub.render(220))).toContain("z-provider ·");
 
 			for (const ch of "glm-5.2") hub.handleInput(ch);
 			hub.handleInput("\n");
@@ -1635,30 +1636,30 @@ describe("ModelHub", () => {
 		});
 
 		test("a provider scope that loses every match falls back to All models", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const providerGlm = makeModel("z-provider", "z-ai/glm-5.2");
 			const customGlm = makeModel("custom-provider", "glm-5.2");
-			const { hub } = createHub({ models: [openrouterGlm, customGlm] });
+			const { hub } = createHub({ models: [providerGlm, customGlm] });
 			installTestTheme();
 
 			hub.handleInput(DOWN);
-			hub.handleInput(DOWN); // openrouter scope
+			hub.handleInput(DOWN); // z-provider scope
 			for (const ch of "does-not-exist") hub.handleInput(ch);
 
 			const rendered = normalize(hub.render(220));
 			expect(rendered).toContain("⬢");
-			expect(rendered).not.toContain("openrouter/z-ai/glm-5.2");
+			expect(rendered).not.toContain("z-provider/z-ai/glm-5.2");
 		});
 
 		test("scope hop skips providers without matches while searching", () => {
-			const openrouterGlm = makeModel("openrouter", "z-ai/glm-5.2");
+			const providerGlm = makeModel("z-provider", "z-ai/glm-5.2");
 			const customOther = makeModel("custom-provider", "different-model");
-			const { hub } = createHub({ models: [openrouterGlm, customOther] });
+			const { hub } = createHub({ models: [providerGlm, customOther] });
 			installTestTheme();
 
 			for (const ch of "z-ai") hub.handleInput(ch);
 			hub.handleInput(LEFT); // switch focus to sidebar
-			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on openrouter
-			expect(normalize(hub.render(220))).toContain("openrouter ·");
+			hub.handleInput(DOWN); // skips custom-provider (0 matches), lands on z-provider
+			expect(normalize(hub.render(220))).toContain("z-provider ·");
 		});
 		test("providers with matches float to the top of the sidebar while searching", () => {
 			const noMatch = makeModel("aaa-provider", "different-model");
@@ -1834,6 +1835,35 @@ describe("ModelHub", () => {
 	});
 
 	describe("locked providers", () => {
+		test("hides requested provider scopes without removing their available models", () => {
+			const local = makeModel("local", "local-model", 128_000, undefined, "tiny");
+			const commandcode = makeModel("commandcode", "judge-model", 128_000, undefined, "judge");
+			const web = makeModel("web", "web-model", 128_000, undefined, "search");
+			const google = makeModel("google", "image-model", 128_000, undefined, "image");
+			const available = [local, commandcode, web];
+			const { hub } = createHub({
+				models: [...available, google],
+				registry: { getAvailable: () => available },
+			});
+			const root = hub.describe({
+				cols: 120,
+				reduceMotion: false,
+				dark: true,
+				supports: () => true,
+				feature: () => true,
+			});
+			if (root.k !== "picker" || !root.p) throw new Error("Expected model picker");
+			const props = root.p as TspPickerProps;
+			const scopes = props.scopes?.map(scope => scope.id) ?? [];
+			expect(scopes).toContain("provider:web");
+			expect(scopes).not.toContain("provider:local");
+			expect(scopes).not.toContain("provider:commandcode");
+			expect(scopes).not.toContain("provider:google");
+			const rendered = normalize(hub.render(220));
+			expect(rendered).toContain("local-model");
+			expect(rendered).toContain("judge-model");
+		});
+
 		test("catalog providers without credentials appear locked and forward to login", () => {
 			const anthropicModel = makeModel("anthropic", "claude-locked-test");
 			const { hub, onLoginRequest } = createHub({

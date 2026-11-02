@@ -328,6 +328,7 @@ behavior {
     }
     model-operations provider="openai" { exact "o3"; prefix "gpt-"; operation "generate_image" }
     append-only-context-providers "deepseek" "ollama" "google-antigravity" "google" "google-vertex"
+    model-hub-hidden-providers "local" "commandcode"
     cursor-effort family-marker="gpt-" { tier "minimal" "low" "medium" "high" "xhigh" "max" }
     cursor-model-parameter model="composer-2.5" id="fast" value="false"
     quota-tiers provider="openai-codex" {
@@ -357,6 +358,8 @@ behavior {
 `exclude-discovery-modes` takes one or more exact, case-sensitive upstream mode strings plus `provider=`; discovery mappers preserve missing, malformed, and unknown modes unless the provider policy explicitly lists them. Matcher properties on `route` / `exclude-models` / `tier` nodes are `exact=` / `prefix=` / `substring=` / `glob=`, repeatable. `strip-prefix=#true` on a prefix route strips the matched prefix off the wire id. Values are copied verbatim from the TS constants they replaced; runtime accessors live in `src/compat/behavior.ts`.
 
 `append-only-context-providers` names hosts whose prefix caches benefit from append-only message history. The coding agent uses this list for `provider.appendOnlyContext: auto`; user `on`/`off` always takes precedence, and URL/explicit stored-request signals remain separate.
+
+`model-hub-hidden-providers` hides the listed provider scopes in the model hub only; it does not remove models, disable roles, or change authentication.
 
 `role-defaults "<role>"` declares one agent role's built-in default model selector chain, one `model "<selector>"` child per entry, most preferred first. Selectors are copied verbatim (`provider/id`, bare ids, fuzzy fragments such as `-mini`, and `@role` references); duplicates within a role and repeated roles are compile errors. `roleDefaultModels()` returns every chain keyed by role in declaration order.
 

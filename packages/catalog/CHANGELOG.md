@@ -11,6 +11,10 @@
 
 - Use `GLM-5.3-public` as the offline company provider's default model.
 
+### Fixed
+
+- Fixed retired OpenCode Go models remaining selectable after catalog refresh failed with an expired API key.
+
 ### Removed
 
 - Removed the fork's `zcode-api` local proxy authentication and compatibility rules.

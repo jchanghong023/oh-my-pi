@@ -9,6 +9,7 @@
 
 ### Changed
 
+- Hide selected provider scopes in the model hub sidebar while keeping their models available.
 - Compact display follows clean except for file-targeted write/edit cards and a fixed two-line activity area. File cards retain upstream detailed-mode previews, errors, unchanged results, controls and history without requiring a proven mutation; activity prioritizes live thinking or two recent tool intent/command rows with independent live or frozen elapsed time, retaining static last activity per viewed session without persisting it.
 - Background job completion receipts no longer add status rows; original tool results and independent diagnostics remain available.
 - In offline Unicode mode, use distinct basic symbols for clear, extension, guide, repair, quit, token-count, and Hook icons missing from older terminal fonts; preserve other icons, presets, and explicit theme overrides.

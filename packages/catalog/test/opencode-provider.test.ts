@@ -549,6 +549,64 @@ describe("Shared models.dev catalog fallback", () => {
 });
 
 describe("OpenCode provider discovery", () => {
+	test("prunes retired Go models even when the configured credential is expired", async () => {
+		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-catalog-opencode-go-expired-key-"));
+		try {
+			const options = opencodeGoModelManagerOptions({
+				apiKey: "expired-key",
+				fetch: async (_input, init) => {
+					if (new Headers(init?.headers).has("authorization")) {
+						return new Response("Invalid credential", { status: 401 });
+					}
+					return modelListResponse(["longcat-2.0"]);
+				},
+			});
+			const managerOptions = {
+				...options,
+				cacheDbPath: path.join(tempDir, "models.db"),
+				modelsDev: undefined,
+			};
+			const retired = buildModel({
+				id: "longcat-2.5-preview-free",
+				name: "LongCat 2.5 Preview Free",
+				provider: "opencode-go",
+				api: "openai-completions",
+				baseUrl: "https://opencode.ai/inference/go/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				contextWindow: 128_000,
+				maxTokens: 16_384,
+			});
+			await resolveProviderModels(
+				{ ...managerOptions, fetchDynamicModels: async () => [retired] },
+				"online",
+			);
+
+			const refreshed = await resolveProviderModels(managerOptions, "online");
+			expect(refreshed.stale).toBe(false);
+			expect(refreshed.models.map(model => model.id)).toEqual(["longcat-2.0"]);
+
+			const cached = await resolveProviderModels(managerOptions, "offline");
+			expect(cached.models.map(model => model.id)).toEqual(["longcat-2.0"]);
+		} finally {
+			await fs.rm(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	test("still authenticates Go discovery through a custom proxy", async () => {
+		const options = opencodeGoModelManagerOptions({
+			apiKey: "proxy-key",
+			baseUrl: "https://proxy.example/go/v1",
+			fetch: async (_input, init) =>
+				new Headers(init?.headers).get("authorization") === "Bearer proxy-key"
+					? modelListResponse(["longcat-2.0"])
+					: new Response("Unauthorized", { status: 401 }),
+		});
+		const models = await options.fetchDynamicModels?.();
+		expect(models?.map(model => model.id)).toEqual(["longcat-2.0"]);
+	});
+
 	test("discovers the Zen Jev judge seed beside the served roster", async () => {
 		const fetchMock: FetchImpl = async () =>
 			Response.json({ data: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", context_length: 400_000 }] });

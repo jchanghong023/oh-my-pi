@@ -3365,7 +3365,9 @@ function openCodeModelManagerOptions(
 					api: "openai-completions",
 					provider: providerId,
 					baseUrl: discoveryBaseUrl,
-					apiKey,
+					// Go's official catalog is public, but rejects expired credentials.
+					// Keep authentication for Zen and custom discovery endpoints.
+					apiKey: providerId === "opencode-go" && basePath === defaultBasePath ? undefined : apiKey,
 					// Live discovery hits the OpenCode gateway outside any
 					// conversation: attribute with the stable install id
 					// (x-opencode-session required from 09/06) and omp's UA

@@ -4,6 +4,10 @@ behavior {
 	// OMP's built-in chat surface; non-chat runners and local inference remain available.
 	supported-chat-providers "company" "openai-codex" "codeagent" "ascend" "opencode-go" "deepseek"
 
+	// Hide these provider scopes in the model hub without disabling their models or credentials.
+	model-hub-hidden-providers "cloudflare-workers-ai" "deepinfra" "google" "google-antigravity" \
+		"openai" "openrouter" "typesafe" "xai" "xai-oauth" "local" "commandcode"
+
 	// LiteLLM may discover ids absent from the bundled catalog. This conservative
 	// heuristic routes likely OpenAI text/reasoning ids to Responses while
 	// excluding other OpenAI product surfaces.

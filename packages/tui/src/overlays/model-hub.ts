@@ -23,6 +23,7 @@ import type {
 import type { KeysApi, Model } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
 import { getSupportedEfforts } from "@oh-my-pi/pi-catalog/model-thinking";
+import { isModelHubHiddenProvider } from "@oh-my-pi/pi-catalog/compat/behavior";
 import { providerEntry } from "@oh-my-pi/pi-catalog/compat/providers";
 import { MODEL_KINDS, modelKind, type ModelKind } from "@oh-my-pi/pi-catalog/types";
 import type { Component, TUI } from "../tui";
@@ -732,9 +733,11 @@ export class ModelHubComponent implements Component {
 
 		this.#fixedEntries = fixed;
 		this.#unlockedProviderEntries = [...unlocked]
+			.filter(provider => !isModelHubHiddenProvider(provider))
 			.sort((a, b) => a.localeCompare(b))
 			.map(provider => providerEntry(provider, false));
 		this.#lockedProviderEntries = [...locked]
+			.filter(provider => !isModelHubHiddenProvider(provider))
 			.sort((a, b) => a.localeCompare(b))
 			.map(provider => providerEntry(provider, true));
 		this.#composeEntries();
