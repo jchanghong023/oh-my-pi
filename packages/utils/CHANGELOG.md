@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Retain warnings and errors by default in offline mode, and honor `OMP_LOG_LEVEL` overrides for troubleshooting without serializing filtered records.
+
 ## [18.16.0] - 2026-11-02
 
 - Restore upstream archive encoding without the additional `AbortSignal` cancellation interface.

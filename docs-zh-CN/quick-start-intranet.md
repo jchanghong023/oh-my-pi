@@ -37,6 +37,8 @@ setenv ASCEND_API_KEY "<你的密钥>"
 
 Linux 内网模式未设置有效 `OMP_CACHE_DIR` 时，性能数据默认放在 `/dev/shm/omp-<UID>`，其中 `<UID>` 是当前用户的数字 UID，不再重复追加；命名 profile 使用 `/dev/shm/omp-<UID>/profiles/<name>/`。其他环境未设置有效 `OMP_CACHE_DIR` 时不新增默认目录，继续使用原有目录及适用的 XDG 规则。
 
+offline 日志默认保留 WARN／ERROR，并立即写入当前 `logs/` 目录；正常运行时日志仍可能为空，空日志不代表所有功能均已验证。排查时可在启动前执行 `setenv OMP_LOG_LEVEL debug`，临时记录 INFO／DEBUG、阶段与启动／退出诊断；结束排查后执行 `unsetenv OMP_LOG_LEVEL` 并重启 OMP，恢复低开销默认值。已有守护进程也需重启才能继承新的环境变量；仍可显式选择 `error`、`warn` 或 `info`。
+
 `/dev/shm` 是易失性内存文件系统，重启或清理后缓存、统计、日志及模型／运行依赖文件可能丢失；非内嵌资源的缺失或下载仍遵循原有 offline 规则。先结束使用中的进程再清理性能目录；更换路径不会自动搬迁旧数据。知识库没有独立目录设置：CLI、TUI 与 AI 的 `knowledge_search` 工具使用当前 profile 数据目录下的 `knowledge.db`，不同 profile 的数据库互相隔离，不提供 NFS 多机共写活动库的保证。
 
 旧 profile 若只有 `docs.db`，首次打开知识库时会通过 SQLite 一致快照（包含 WAL）发布 `knowledge.db`，并保留 `docs.db` 作为恢复备份；新库已存在时以新库为准，不合并或删除旧库。迁移失败会报错，不会静默使用空库。旧的 `wiki.reranker.*` 配置不再生效，需改为 `knowledge.reranker.*`。

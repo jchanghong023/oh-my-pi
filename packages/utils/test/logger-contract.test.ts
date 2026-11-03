@@ -248,26 +248,27 @@ describe("central logger file level and batching", () => {
 		]);
 	});
 
-	test("offline logging drops non-errors before context evaluation and sink delivery", async () => {
+	test("offline logging retains warnings and errors without evaluating filtered contexts or delivering them to sinks", async () => {
 		const result = await runDiagnosticConsumer(
 			`
-			process.env.OMP_LOG_LEVEL = "debug";
+			delete process.env.OMP_LOG_LEVEL;
+			const logDir = path.join(root, "offline-logs");
+			logger.setTransports({ console: true, file: logDir });
 			logger.initializeDiagnosticLogging("cli");
 			const seen = [];
 			const dispose = logger.registerLogSink(event => seen.push(event.message));
 			let evaluated = 0;
 			const context = { get expensive() { evaluated++; return "not-for-logging"; } };
-			logger.setTransports({ console: true, file: true });
 			try {
 				logger.debug("filtered_debug", context);
 				logger.info("filtered_info", context);
-				logger.warn("filtered_warn", context);
-				const createdBeforeError = fs.existsSync(getLogPath());
+				const createdBeforeWarning = fs.existsSync(logDir) && fs.readdirSync(logDir).some(name => name.endsWith(".log"));
+				logger.warn("persisted_warn", { code: "W_OFFLINE" });
 				logger.error("persisted_error", { code: "E_OFFLINE" });
 				logger.shutdownDiagnosticLogging();
 				logger.flush();
 				const entries = fs.readFileSync(logger.getCurrentLogPath(), "utf8").trim().split(/\\r?\\n/).map(JSON.parse);
-				fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ seen, evaluated, createdBeforeError, entries }));
+				fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ seen, evaluated, createdBeforeWarning, entries }));
 			} finally {
 				dispose();
 				logger.setTransports({ console: false, file: false });
@@ -277,18 +278,52 @@ describe("central logger file level and batching", () => {
 		);
 		const payload = JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"));
 		expect(payload).toMatchObject({
-			seen: ["persisted_error"],
+			seen: ["persisted_warn", "persisted_error"],
 			evaluated: 0,
-			createdBeforeError: false,
-			entries: [{ level: "error", message: "persisted_error", code: "E_OFFLINE" }],
+			createdBeforeWarning: false,
+			entries: [
+				{ level: "warn", message: "persisted_warn", code: "W_OFFLINE" },
+				{ level: "error", message: "persisted_error", code: "E_OFFLINE" },
+			],
 		});
 		expect(
 			result.stdout
 				.trim()
 				.split(/\r?\n/)
 				.map(line => JSON.parse(line).message),
-		).toEqual(["persisted_error"]);
+		).toEqual(["persisted_warn", "persisted_error"]);
 		expect(result.stderr).toBe("");
+	});
+
+	test.each(["error", "debug"])("offline logging honors an explicit %s level", async level => {
+		const result = await runDiagnosticConsumer(
+			`
+			process.env.OMP_LOG_LEVEL = ${JSON.stringify(level)};
+			logger.setTransports({ file: path.join(root, "offline-logs") });
+			logger.initializeDiagnosticLogging("cli");
+			logger.debug("offline_debug");
+			logger.info("offline_info");
+			logger.warn("offline_warn");
+			logger.error("offline_error");
+			logger.shutdownDiagnosticLogging();
+			logger.flush();
+		`,
+			{ offline: "1" },
+		);
+		const messages = (await readLogEntries(path.join(result.root, "offline-logs"))).map(entry => entry.message);
+		expect(messages).toEqual(
+			level === "error"
+				? ["offline_error"]
+				: [
+						"application_started",
+						"offline_debug",
+						"offline_info",
+						"offline_warn",
+						"offline_error",
+						"application_stopping",
+						"application_stopped",
+					],
+		);
 	});
 
 	test("the fatal record lands after the buffered records that preceded it", async () => {

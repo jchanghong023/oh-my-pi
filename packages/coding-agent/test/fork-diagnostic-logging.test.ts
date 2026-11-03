@@ -180,7 +180,7 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 	it.skipIf(process.platform !== "linux")(
 		"P2-40 writes offline CLI errors to primary logs when fallback-logs is a regular file",
 		async () => {
-			const box = await sandbox("info", true);
+			const box = await sandbox("error", true);
 			const fallback = path.join(path.dirname(box.logsDir), "fallback-logs");
 			const documents = path.join(box.directory, "documents");
 			try {
@@ -349,7 +349,7 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 	}, 35_000);
 
 	it("closes offline CLI initialization without leaking rejected configuration paths", async () => {
-		const box = await sandbox("info", true);
+		const box = await sandbox("error", true);
 		const canary = "FORKDIAGNOSTICCATALOGPRIVATE";
 		try {
 			const success = await box.cli(["models", "refresh", "--json", "--no-extensions"]);
