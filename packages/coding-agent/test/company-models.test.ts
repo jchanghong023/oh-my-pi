@@ -176,7 +176,7 @@ function runCompanyProbe(): CompanyProbe {
 describe("company runtime catalog and request auth", () => {
 	test("resolves the fixed chat lane and roles without discovery or YAML routing overrides", () => {
 		const result = runCompanyProbe();
-		expect(result.capped).toHaveLength(7);
+		expect(result.capped).toHaveLength(8);
 		expect(result.selectedModel).toBe("GLM-5.3-public");
 		expect(result.retrievalVisible).toBe(false);
 		expect(result.requests).toBe(0);
