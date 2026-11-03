@@ -101,10 +101,34 @@ async function main(): Promise<void> {
 		await probeVersion(candidate, probeEnv);
 		await run([candidate, "--smoke-test"], probeEnv);
 		await checkExistingTarget(target, probeEnv);
-		// On Windows rename replaces the destination in one operation, or fails
-		// without first moving the old executable. In-use files may block it.
-		await fs.rename(candidate, target);
+		const previous = path.join(path.dirname(target), `.omp.old.${randomUUID()}.exe`);
+		let renamedAside = false;
+		try {
+			await fs.rename(target, previous);
+			renamedAside = true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		try {
+			await fs.rename(candidate, target);
+		} catch (error) {
+			if (renamedAside) {
+				try {
+					await fs.rename(previous, target);
+				} catch (rollbackError) {
+					candidateCreated = false;
+					throw new Error(
+						`Failed to install ${target} and restore the previous executable: ${rollbackError}. Recovery files retained at ${previous} and ${candidate}.`,
+						{ cause: error },
+					);
+				}
+			}
+			throw error;
+		}
 		candidateCreated = false;
+		if (renamedAside) {
+			await fs.unlink(previous).catch(error => console.warn(`Could not remove previous executable ${previous}: ${error}`));
+		}
 		console.log(`Installed omp to ${target}`);
 	} finally {
 		if (candidateCreated) {

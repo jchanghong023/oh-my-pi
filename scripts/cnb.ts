@@ -418,8 +418,12 @@ async function main(): Promise<void> {
 			}
 		}
 		console.log(`Publishing ${repo} tag ${tag}, source commit ${commit}, snapshot ${identity}`);
-		await upload(repo, current, winOut, windowsName, winSize, approved.has(windowsName));
-		await upload(repo, current, linuxOut, linuxName, linuxSize, approved.has(linuxName));
+		const uploads = await Promise.allSettled([
+			upload(repo, current, winOut, windowsName, winSize, approved.has(windowsName)),
+			upload(repo, current, linuxOut, linuxName, linuxSize, approved.has(linuxName)),
+		]);
+		const uploadFailure = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
+		if (uploadFailure) throw uploadFailure.reason;
 		const confirmed = await getRelease(repo, tag);
 		for (const [name, size] of [[windowsName, winSize], [linuxName, linuxSize]] as const) {
 			if (!confirmed.assets.some(asset => asset.name === name && asset.size === size)) throw new Error(`CNB did not report the expected confirmed attachment ${name}.`);

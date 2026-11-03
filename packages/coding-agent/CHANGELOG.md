@@ -25,7 +25,7 @@
 
 ### Added
 
-- Build and install the local Windows executable with `bun run local`, or build Windows and WSL Linux binaries in parallel and upload them to a CNB release with `bun run cnb`.
+- Build and replace the local Windows executable without stopping running sessions with `bun run local`, or build and upload Windows and WSL Linux binaries in parallel to a CNB release with `bun run cnb`, without packaging or publishing source code.
 - Use `/minimal` to request minimal changes and directly relevant verification, optionally alongside a task.
 - Support optional `OMP_CACHE_DIR` for caches, statistics, logs and default native files, with a per-user Linux offline default while keeping sessions and knowledge persistent.
 - Prepare knowledge embeddings with up to four concurrent requests of 16 sections each, with bounded input windows and cancellable overload retries.
