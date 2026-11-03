@@ -1094,6 +1094,7 @@ describe("InputController Dev native shortcut admission", () => {
 					run: async () => ({ text: "requirements" }),
 				},
 				artifacts: {
+					readBusiness: async () => ({ path: "business.md", version: "1", content: "business" }),
 					initialize: async () => ({
 						requirements: ["proposal.md"],
 						solution: "solution.md",

@@ -237,7 +237,13 @@ export async function formalMaterialPaths(
 			if (!isEnoent(error) && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
 		}
 	}
-	return [...new Set(requirements), paths.solution, paths.plan, paths.report];
+	return [
+		...(paths.business ? [paths.business] : []),
+		...new Set(requirements),
+		paths.solution,
+		paths.plan,
+		paths.report,
+	];
 }
 
 export class SpecArtifactStore {
@@ -261,11 +267,45 @@ export class SpecArtifactStore {
 		this.requirementsDir = options.requirementsDir ?? "openspec/specs";
 		this.native = this.requirementsDir === "openspec/specs";
 	}
-	async initialize(): Promise<SpecArtifactPaths> {
+	async initialize(businessPath?: string): Promise<SpecArtifactPaths> {
+		if (businessPath !== undefined) {
+			if (!/\.md$/i.test(businessPath)) throw new Error("业务文档必须是 Markdown 文件");
+			const normalized = path
+				.relative(this.cwd, path.resolve(this.cwd, businessPath))
+				.replaceAll("\\", "/")
+				.toLowerCase();
+			if (
+				normalized.startsWith("openspec/") ||
+				[this.planPath, this.planPath.replace(/\.md$/, "-completion.md")].some(
+					file => file.toLowerCase() === normalized,
+				)
+			)
+				throw new Error("业务文档不能使用开发规格、计划或完成报告路径");
+			await assertSpecWritePath(this.cwd, businessPath);
+			return {
+				business: businessPath.replaceAll("\\", "/"),
+				requirements: [`${this.changeDir}/proposal.md`, `${this.changeDir}/specs/**/spec.md`],
+				solution: this.planPath.replace(/\.md$/, "-solutions.json"),
+				plan: this.planPath,
+				report: this.planPath.replace(/\.md$/, "-completion.md"),
+			};
+		}
 		if (this.paths) {
-			for (const file of [...this.paths.requirements, this.paths.solution, this.paths.plan, this.paths.report])
+			for (const file of [
+				...(this.paths.business ? [this.paths.business] : []),
+				...this.paths.requirements,
+				this.paths.solution,
+				this.paths.plan,
+				this.paths.report,
+			])
 				await containedSpecPath(this.cwd, file);
-			return structuredClone(this.paths);
+			if (!this.paths.business) return structuredClone(this.paths);
+			try {
+				await fs.access(await containedSpecPath(this.cwd, `${this.changeDir}/.openspec.yaml`));
+				return structuredClone(this.paths);
+			} catch (error) {
+				if (!isEnoent(error)) throw error;
+			}
 		}
 		await assertDevSpecSchema(this.cwd);
 		// Native `new change` also creates a project config when one is absent.
@@ -273,12 +313,13 @@ export class SpecArtifactStore {
 		const changesDir = await containedSpecPath(this.cwd, "openspec/changes");
 		await fs.mkdir(changesDir, { recursive: true });
 		const changeDir = await containedSpecPath(this.cwd, this.changeDir);
-		await fs.mkdir(changeDir);
+		await fs.mkdir(changeDir, { recursive: !!this.paths?.business });
 		const now = new Date();
 		const created = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 		await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, {
 			flag: "wx",
 		});
+		if (this.paths) return structuredClone(this.paths);
 		return {
 			requirements: [
 				`${this.changeDir}/proposal.md`,
@@ -289,6 +330,30 @@ export class SpecArtifactStore {
 			plan: this.planPath,
 			report: this.planPath.replace(/\.md$/, "-completion.md"),
 		};
+	}
+	async readBusiness(file = this.paths?.business): Promise<SpecDocument> {
+		if (!file) throw new Error("尚未指定业务文档路径");
+		await assertSpecWritePath(this.cwd, file);
+		const document = await this.#read(file);
+		if (!/^#\s+\S+/m.test(document.content)) throw new Error(`业务文档缺少需求名称：${file}`);
+		for (const heading of [
+			"基本信息",
+			"业务背景与目标",
+			"实际使用场景与现状",
+			"期望结果",
+			"业务规则与边界",
+			"典型例子",
+			"业务验收预期",
+			"待确认事项",
+			"资料来源",
+			"业务确认与交接",
+		]) {
+			const section = new RegExp(`^##\\s+${heading}\\s*\\r?\\n([\\s\\S]*?)(?=^##\\s|$(?![\\s\\S]))`, "m").exec(
+				document.content,
+			);
+			if (!section?.[1].trim()) throw new Error(`业务文档缺少非空章节「${heading}」：${file}`);
+		}
+		return document;
 	}
 	async #assertOwnSchema(signal?: AbortSignal): Promise<void> {
 		let metadata: string;

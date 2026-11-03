@@ -97,6 +97,8 @@ function validState(value: unknown): value is WorkspaceState {
 					"runId",
 					"phase",
 					"changeId",
+					"entryPhase",
+					"businessCompleted",
 					"paths",
 					"approvals",
 					"sessions",
@@ -132,7 +134,17 @@ function validState(value: unknown): value is WorkspaceState {
 		const cleanup = run.closing.archiveCleanup;
 		if (!object(cleanup) || !text(cleanup.path) || !text(cleanup.diagnostic)) return false;
 	}
-	const roles = ["requirements", "solution", "planner", "executor"];
+	if (run.entryPhase !== undefined && !["business", "requirements"].includes(String(run.entryPhase))) return false;
+	if (run.businessCompleted !== undefined && typeof run.businessCompleted !== "boolean") return false;
+	const businessEntry = run.entryPhase === "business";
+	if (
+		(run.phase === "business" || run.businessCompleted || run.sessions.business || run.approvals.business) &&
+		!businessEntry
+	)
+		return false;
+	const roles = businessEntry
+		? ["business", "requirements", "solution", "planner", "executor"]
+		: ["requirements", "solution", "planner", "executor"];
 	for (const [role, ref] of Object.entries(run.sessions))
 		if (
 			!roles.includes(role) ||
@@ -165,11 +177,25 @@ function validState(value: unknown): value is WorkspaceState {
 			!["solution", "plan", "report"].every(key => text(paths[key])))
 	)
 		return false;
+	if (businessEntry && (!object(paths) || !text(paths.business))) return false;
+	if (run.businessCompleted && (run.phase !== "idle" || !object(run.approvals.business))) return false;
 	if (run.phase !== "idle") {
-		const stage = SPEC_PHASES.indexOf(run.phase as SpecDrivenStatus["phase"]) - 1;
+		const phaseRoles: Record<string, string> = {
+			business: "business",
+			requirements: "requirements",
+			solution: "solution",
+			planning: "planner",
+			executing: "executor",
+		};
+		const stage = roles.indexOf(phaseRoles[String(run.phase)]);
 		if (!run.sessions[roles[stage]]) return false;
 		// Advancing commits the original decision and exact formal-file versions before model work.
-		const requiredFiles = [paths!.requirements as string[], [paths!.solution], [paths!.plan]];
+		const requiredFiles = [
+			...(businessEntry ? [[paths!.business]] : []),
+			paths!.requirements as string[],
+			[paths!.solution],
+			[paths!.plan],
+		];
 		for (let index = 0; index < stage; index++) {
 			const approval = run.approvals[roles[index]];
 			if (!object(approval) || !Array.isArray(approval.files)) return false;
@@ -177,7 +203,9 @@ function validState(value: unknown): value is WorkspaceState {
 			if (
 				!requiredFiles[index].every(required => {
 					const pattern =
-						index === 0 && typeof required === "string" && required.includes("*") ? required : undefined;
+						roles[index] === "requirements" && typeof required === "string" && required.includes("*")
+							? required
+							: undefined;
 					return files.some(
 						file =>
 							object(file) &&
@@ -297,6 +325,8 @@ export class SpecDrivenController {
 				generation: 0,
 				useTeam: this.#state.team,
 				changeId: this.#state.run?.changeId,
+				entryPhase: this.#state.run?.entryPhase,
+				businessCompleted: this.#state.run?.businessCompleted,
 				paths: this.#state.run?.paths,
 				closing: this.#state.run?.closing,
 				archivedChangePath: this.#state.run?.archivedChangePath,
@@ -306,7 +336,10 @@ export class SpecDrivenController {
 	}
 	#teamMutable(): boolean {
 		return (
-			["idle", "requirements"].includes(this.status().phase) && !this.#control && !this.#stopping && !this.#halted
+			["idle", "business", "requirements"].includes(this.status().phase) &&
+			!this.#control &&
+			!this.#stopping &&
+			!this.#halted
 		);
 	}
 	#busy(): boolean {
@@ -334,12 +367,29 @@ export class SpecDrivenController {
 		const closing = hasSpecCloseSideEffects(state.closing);
 		return [
 			{ id: "new", label: "新需求", command: "/dev new", requiresInput: true, allowed: state.phase === "idle" },
+			{
+				id: "business",
+				label: "从业务访谈开始",
+				command: "/dev business",
+				requiresInput: true,
+				allowed: state.phase === "idle",
+			},
+			{
+				id: "finish-business",
+				label: "交付业务文档并结束",
+				command: "/dev finish-business",
+				allowed: state.phase === "business" && !!this.#native,
+			},
 			{ id: "next", label: "确认并继续", command: "/dev next", allowed: state.phase !== "idle" && !!this.#native },
 			{
 				id: "back",
 				label: "返回上一阶段",
 				command: "/dev back",
-				allowed: !closing && ["solution", "planning", "executing"].includes(state.phase) && !!this.#native,
+				allowed:
+					!closing &&
+					(["solution", "planning", "executing"].includes(state.phase) ||
+						(state.phase === "requirements" && state.entryPhase === "business")) &&
+					!!this.#native,
 			},
 			{ id: "config", label: "配置 Team", command: "/dev config", allowed: this.#teamMutable() },
 			{ id: "drop", label: "丢弃跟踪（已发生的同步和归档不会撤销）", command: "/dev drop", allowed: true },
@@ -494,19 +544,35 @@ export class SpecDrivenController {
 			}
 		}, true);
 	}
-	async new(request: string, images?: ImageContent[], imageLinks?: (string | undefined)[]): Promise<void> {
+	async new(
+		request: string,
+		images?: ImageContent[],
+		imageLinks?: (string | undefined)[],
+		business = false,
+	): Promise<void> {
 		if (this.#mode !== "dev") throw new SpecAdmissionError("请先 /dev 进入开发模式");
 		return this.#operation(async () => {
 			if (!request.trim()) throw new SpecAdmissionError("需求不能为空");
-			if (this.status().phase !== "idle" || (this.#state.run && !this.#state.run.archivedChangePath))
+			if (
+				this.status().phase !== "idle" ||
+				(this.#state.run && !this.#state.run.archivedChangePath && !this.#state.run.businessCompleted)
+			)
 				throw new SpecAdmissionError("已有流程，请先丢弃");
 			if (this.#native) await this.#disposeNative();
 			try {
 				await this.#initialize();
 				const changeId = `dev-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-				await this.#core!.start(request, changeId, images, imageLinks);
+				if (business)
+					await this.#core!.startBusiness(
+						request,
+						changeId,
+						`docs/business-requirements/${changeId}.md`,
+						images,
+						imageLinks,
+					);
+				else await this.#core!.start(request, changeId, images, imageLinks);
 			} catch (error) {
-				if (!this.#state.run || this.#state.run.archivedChangePath) {
+				if (!this.#state.run || this.#state.run.archivedChangePath || this.#state.run.businessCompleted) {
 					await this.#stopNative();
 					await this.#disposeNative();
 					await this.#save(undefined);
@@ -514,6 +580,14 @@ export class SpecDrivenController {
 				}
 				throw error;
 			}
+		});
+	}
+	async finishBusiness(raw = "/dev finish-business"): Promise<void> {
+		return this.#operation(async () => {
+			if (!this.#core || !this.#native) throw new SpecAdmissionError("请先建立或恢复业务会话");
+			await this.#core.finishBusiness(raw);
+			await this.#bind();
+			this.#notice = "业务需求已交付，流程已结束；未启动开发、软件验收或需求归档。";
 		});
 	}
 	async next(candidateId?: string, raw?: string): Promise<void> {
@@ -536,7 +610,7 @@ export class SpecDrivenController {
 	}
 	async setTeam(team: boolean): Promise<void> {
 		return this.#operation(async () => {
-			if (!["idle", "requirements"].includes(this.status().phase))
+			if (!["idle", "business", "requirements"].includes(this.status().phase))
 				throw new SpecAdmissionError("方案阶段起 Team 配置冻结");
 			if (!this.#workspace) throw new SpecAdmissionError("请先进入 Dev");
 			await this.#save(this.#state.run, team);

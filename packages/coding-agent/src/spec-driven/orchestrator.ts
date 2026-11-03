@@ -20,8 +20,9 @@ export class StaleRun extends Error {}
 export class SpecAdmissionError extends Error {
 	readonly code = "invalid_params";
 }
-const ROLES: SpecStageRole[] = ["requirements", "solution", "planner", "executor"];
+const ROLES: SpecStageRole[] = ["business", "requirements", "solution", "planner", "executor"];
 const PHASE = {
+	business: "business",
 	requirements: "requirements",
 	solution: "solution",
 	planner: "planning",
@@ -98,6 +99,8 @@ export class SpecDrivenOrchestrator {
 		return structuredClone({
 			runId: this.runId,
 			phase: this.#state.phase,
+			entryPhase: this.#state.entryPhase,
+			businessCompleted: this.#state.businessCompleted,
 			changeId: this.#state.changeId,
 			paths: this.#state.paths,
 			approvals: this.#approvals,
@@ -161,9 +164,11 @@ export class SpecDrivenOrchestrator {
 			request: entry ? this.#request || this.#ports.agents.originalRequest() : "",
 			files,
 			outputPaths:
-				role === "requirements"
-					? paths.requirements
-					: [role === "solution" ? paths.solution : role === "planner" ? paths.plan : paths.report],
+				role === "business"
+					? [paths.business!]
+					: role === "requirements"
+						? paths.requirements
+						: [role === "solution" ? paths.solution : role === "planner" ? paths.plan : paths.report],
 			userReply: entry ? this.#approvals[ROLES[ROLES.indexOf(role) - 1]]?.userReply : undefined,
 			decisions: entry
 				? Object.fromEntries(Object.entries(this.#approvals).map(([role, approval]) => [role, approval.userReply]))
@@ -191,7 +196,10 @@ export class SpecDrivenOrchestrator {
 		imageLinks?: (string | undefined)[],
 	): Promise<SpecDrivenStatus> {
 		return this.#control(async context => {
-			if (this.#state.phase !== "idle" || (this.#state.changeId && !this.#state.archivedChangePath))
+			if (
+				this.#state.phase !== "idle" ||
+				(this.#state.changeId && !this.#state.archivedChangePath && !this.#state.businessCompleted)
+			)
 				throw new SpecAdmissionError("已有流程，请先退出或丢弃");
 			if (!request.trim() || !changeId.trim()) throw new SpecAdmissionError("需求与变更 ID 不能为空");
 			const paths = await this.#ports.artifacts.initialize(changeId, context);
@@ -199,6 +207,7 @@ export class SpecDrivenOrchestrator {
 			await this.#commit(
 				{
 					phase: "requirements",
+					entryPhase: "requirements",
 					generation: this.#state.generation,
 					useTeam: this.#options.getUseTeam(),
 					changeId,
@@ -208,6 +217,49 @@ export class SpecDrivenOrchestrator {
 			);
 			this.#request = request;
 			await this.#run("requirements", context, [], images, imageLinks);
+		});
+	}
+	async startBusiness(
+		request: string,
+		changeId: string,
+		businessPath: string,
+		images?: ImageContent[],
+		imageLinks?: (string | undefined)[],
+	): Promise<SpecDrivenStatus> {
+		return this.#control(async context => {
+			if (
+				this.#state.phase !== "idle" ||
+				(this.#state.changeId && !this.#state.archivedChangePath && !this.#state.businessCompleted)
+			)
+				throw new SpecAdmissionError("已有流程，请先退出或丢弃");
+			if (!request.trim() || !changeId.trim() || !businessPath.trim())
+				throw new SpecAdmissionError("业务描述、文档路径与变更 ID 不能为空");
+			const paths = await this.#ports.artifacts.initialize(changeId, context, businessPath);
+			await this.#prepare("business", context);
+			await this.#commit(
+				{
+					phase: "business",
+					entryPhase: "business",
+					generation: this.#state.generation,
+					useTeam: this.#options.getUseTeam(),
+					changeId,
+					paths,
+				},
+				{},
+			);
+			this.#request = request;
+			await this.#run("business", context, [], images, imageLinks);
+		});
+	}
+	async finishBusiness(rawDecision = "/dev finish-business"): Promise<SpecDrivenStatus> {
+		return this.#control(async context => {
+			if (this.#state.phase !== "business") throw new SpecAdmissionError("仅业务阶段可以交付业务文档并结束");
+			const business = await this.#ports.artifacts.readBusiness(context);
+			this.#guard(context);
+			await this.#commit(
+				{ ...this.#state, phase: "idle", business, businessCompleted: true },
+				{ business: { files: [version(business)], userReply: rawDecision } },
+			);
 		});
 	}
 	async checkApproved(): Promise<SpecVersionCheck> {
@@ -248,11 +300,28 @@ export class SpecDrivenOrchestrator {
 				await this.#close(context, rawDecision);
 				return;
 			}
+			if (role === "business") {
+				const business = await this.#ports.artifacts.readBusiness(context);
+				const paths = await this.#ports.artifacts.initialize(this.#state.changeId!, context);
+				await this.#prepare("requirements", context);
+				this.#guard(context);
+				await this.#commit(
+					{ ...this.#state, phase: "requirements", paths: { ...paths, business: business.path }, business },
+					{ business: { files: [version(business)], userReply: rawDecision } },
+				);
+				await this.#run("requirements", context, [business]);
+				return;
+			}
 			const specification = await this.#ports.artifacts.readRequirements(context);
 			this.#requireApprovedDocuments("requirements", specification.files);
 			const files = [...specification.files];
+			if (this.#approvals.business) {
+				const business = await this.#ports.artifacts.readBusiness(context);
+				this.#requireApprovedDocuments("business", [business]);
+				files.unshift(business);
+			}
 			let state = { ...this.#state, specification };
-			let approval: SpecApproval = { files: files.map(version), userReply: rawDecision };
+			let approval: SpecApproval = { files: specification.files.map(version), userReply: rawDecision };
 			if (role === "solution" || role === "planner") {
 				const solution = await this.#ports.artifacts.readSolution(context);
 				this.#requireApprovedDocuments("solution", [solution]);
@@ -296,7 +365,9 @@ export class SpecDrivenOrchestrator {
 			const report = await this.#ports.artifacts.readReport(context);
 			this.#guard(context);
 			const accepted = {
-				files: [...specification.files, solution, plan, report].map(version),
+				files: [...(this.#approvals.business?.files ?? []), ...specification.files, solution, plan, report].map(
+					version,
+				),
 				userReply: rawDecision,
 			};
 			await this.#commit(
@@ -328,7 +399,8 @@ export class SpecDrivenOrchestrator {
 	async back(): Promise<SpecDrivenStatus> {
 		return this.#control(async context => {
 			const role = this.currentRole();
-			if (!role || role === "requirements") throw new SpecAdmissionError("当前阶段不能回退");
+			if (!role || role === "business" || (role === "requirements" && this.#state.entryPhase !== "business"))
+				throw new SpecAdmissionError("当前阶段不能回退");
 			if (hasSpecCloseSideEffects(this.#state.closing)) throw new SpecAdmissionError("收尾已产生实际结果，不能回退");
 			const target = ROLES[ROLES.indexOf(role) - 1];
 			const approvals = { ...this.#approvals };
@@ -341,7 +413,9 @@ export class SpecDrivenOrchestrator {
 					{
 						...this.#state,
 						phase: PHASE[target],
-						selection: target === "requirements" || target === "solution" ? undefined : this.#state.selection,
+						selection: ["business", "requirements", "solution"].includes(target)
+							? undefined
+							: this.#state.selection,
 						accepted: undefined,
 						closing: undefined,
 						report: undefined,
@@ -424,6 +498,8 @@ export class SpecDrivenOrchestrator {
 			this.#reportNeedsUpdate = saved.reportNeedsUpdate;
 			this.#state = {
 				phase: saved.phase,
+				entryPhase: saved.entryPhase ?? "requirements",
+				businessCompleted: saved.businessCompleted,
 				generation: 0,
 				changeId: saved.changeId,
 				paths: saved.paths,

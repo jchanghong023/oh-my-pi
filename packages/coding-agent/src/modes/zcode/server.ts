@@ -56,7 +56,7 @@ import type { AuthStorage } from "../../session/auth-storage";
 import { logger } from "@oh-my-pi/pi-utils";
 import { offlineFromEnv } from "../../cli/args";
 import { localTtftNow } from "./schema/vendor/localTtft";
-import { OmpSpecActionRejection, OmpSpecDrivenBridge } from "./spec-driven";
+import { legacySpecDetails, legacySpecInteraction, OmpSpecActionRejection, OmpSpecDrivenBridge } from "./spec-driven";
 import * as BaselineV4 from "./schema/vendor/zcode-protocol-v4/index";
 
 export interface ZCodeServerOptions {
@@ -1385,7 +1385,7 @@ export class ZCodeServer {
 					const record = envelope.sessionId ? this.manager.get(envelope.sessionId) : undefined;
 					const owner = record && peekSpecDrivenController(record.session.sessionManager);
 					const before = owner?.observation();
-					const controls = /^(?:new|next|back)(?:\s|$)/.test(command.args);
+					const controls = /^(?:new|business|finish-business|next|back)(?:\s|$)/.test(command.args);
 					const guard = controls
 						? () => {
 								const current = record && peekSpecDrivenController(record.session.sessionManager);
@@ -2313,7 +2313,12 @@ export class ZCodeServer {
 						params.workspace.workspaceIdentity,
 						params.workspace.remoteSessionId,
 					)
-				).filter(row => !params.name || row.spec.changeId === params.name);
+				)
+					.filter(row => !params.name || row.spec.changeId === params.name)
+					.flatMap(row => {
+						const spec = params.includeSpecBusiness ? row.spec : legacySpecDetails(row.spec);
+						return spec ? [{ ...row, spec }] : [];
+					});
 				return P.zcodeWorkflowsRunsResultSchema.parse({
 					...result,
 					runs: [
@@ -2346,9 +2351,20 @@ export class ZCodeServer {
 			case "v4/conversation/workflowRuns": {
 				const params = P.v4ConversationWorkflowRunsParamsSchema.parse(raw);
 				const result = await this.workflows.listRuns(params.sessionId, params);
-				const native = params.includeSpecDriven ? await this.specDriven.runs(params.sessionId) : [];
+				const native = params.includeSpecDriven
+					? (await this.specDriven.runs(params.sessionId)).flatMap(row => {
+							const spec = params.includeSpecBusiness ? row.spec : legacySpecDetails(row.spec);
+							return spec ? [{ ...row, spec }] : [];
+						})
+					: [];
 				return P.v4ConversationWorkflowRunsResultSchema.parse({
-					...(params.includeSpecDriven ? { dev: this.specDriven.interaction(params.sessionId) } : {}),
+					...(params.includeSpecDriven
+						? {
+								dev: params.includeSpecBusiness
+									? this.specDriven.interaction(params.sessionId)
+									: legacySpecInteraction(this.specDriven.interaction(params.sessionId)),
+							}
+						: {}),
 					runs: [
 						...result.runs,
 						...native.map(row => ({

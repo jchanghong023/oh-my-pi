@@ -69,6 +69,8 @@ function fixture(cwd: string) {
 		status: {
 			changeId: "materials",
 			phase: "executing",
+			entryPhase: "requirements",
+			businessCompleted: false,
 			awaitingAcceptance: true,
 			useTeam: true,
 			generation: 0,
@@ -107,6 +109,87 @@ function fixture(cwd: string) {
 }
 
 describe("desktop real file materials", () => {
+	it("retains a completed business-only delivery and its real file on a cold query", async () => {
+		await using root = await TempDir.create("@omp-spec-business-history-");
+		const f = fixture(root.path());
+		const business = document("business-requirements.md", "# 业务需求\n经业务人员确认的交付内容。\n");
+		f.observation.approvals = { business: { files: [business], userReply: "/dev finish-business" } };
+		f.observation.status.phase = "idle";
+		f.observation.status.entryPhase = "business";
+		f.observation.status.businessCompleted = true;
+		f.observation.status.business = business;
+		f.observation.status.awaitingAcceptance = false;
+		f.observation.status.specification = undefined;
+		f.observation.status.solution = undefined;
+		f.observation.status.selection = undefined;
+		f.observation.status.plan = undefined;
+		f.observation.status.report = undefined;
+		f.observation.status.paths = { ...f.observation.status.paths!, business: business.path };
+		f.observation.interaction = { mode: "dev", actions: [] };
+		await f.write(business.path, business.content);
+		try {
+			const live = await f.capture();
+			expect(live).toMatchObject({ status: "completed", spec: { state: "terminal" } });
+			await f.bridge.dispose();
+			const indexPath = root.join(".omp/spec-sessions/material-run/zcode.json");
+			const indexBefore = await fs.readFile(indexPath, "utf8");
+			const cold = new OmpSpecDrivenBridge(f.manager);
+			try {
+				const history = (await cold.runs("session"))[0]!;
+				expect(history).toMatchObject({
+					runId: "material-run",
+					status: "completed",
+					spec: {
+						phase: "idle",
+						state: "terminal",
+						entryPhase: "business",
+						businessCompleted: true,
+						live: false,
+						readOnly: true,
+						actions: [],
+					},
+				});
+				expect(history).not.toHaveProperty("stopReason");
+				expect(history.spec).not.toHaveProperty("interaction");
+				const material = history.spec.materials.find(item => item.id === "business")!;
+				expect(material).toMatchObject({
+					readiness: "present",
+					sourceVersion: business.version,
+					artifactId: "business",
+					version: 1,
+				});
+				const result = await cold.artifactRead({
+					sessionId: "session",
+					runId: history.runId,
+					artifactId: material.artifactId!,
+					version: material.version!,
+					offset: 0,
+					limit: 8192,
+				});
+				expect(Buffer.from(result!.dataBase64, "base64").toString()).toBe(business.content);
+				expect((await cold.artifacts("session", history.runId))!.artifacts.map(item => item.id)).toEqual([
+					"business",
+				]);
+				expect(indexBefore).not.toContain("经业务人员确认的交付内容");
+				expect(await Bun.file(root.join(`${change}/proposal.md`)).exists()).toBe(false);
+				expect(await Bun.file(root.join(`${stem}-completion.md`)).exists()).toBe(false);
+				expect(await fs.readFile(indexPath, "utf8")).toBe(indexBefore);
+				await f.write(business.path, `${business.content}未经确认的修改\n`);
+				expect(
+					(await cold.runs("session"))[0]!.spec.materials.find(item => item.id === "business")?.readiness,
+				).toBe("unknown");
+				await fs.unlink(root.join(business.path));
+				expect(
+					(await cold.runs("session"))[0]!.spec.materials.find(item => item.id === "business")?.readiness,
+				).toBe("missing");
+			} finally {
+				await cold.dispose();
+			}
+		} finally {
+			await f.bridge.dispose();
+		}
+	});
+
 	it.each([
 		{
 			name: "sync side effects",

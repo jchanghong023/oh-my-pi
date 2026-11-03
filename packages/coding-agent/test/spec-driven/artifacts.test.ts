@@ -56,6 +56,37 @@ async function fixture(native = false, changeId = "sample-change"): Promise<Fixt
 	return { cwd, store, paths, write };
 }
 
+test("business document admission rejects incomplete drafts without creating development artifacts", async () => {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-artifacts-"));
+	roots.push(cwd);
+	const store = new SpecArtifactStore({ cwd, changeId: "business-only" });
+	const paths = await store.initialize("business-requirements.md");
+	expect(await Bun.file(path.join(cwd, "openspec/changes/business-only/.openspec.yaml")).exists()).toBe(false);
+	await expect(store.readBusiness(paths.business)).rejects.toThrow();
+	await Bun.write(path.join(cwd, paths.business!), "# 业务需求：订单\n\n## 基本信息\n订单业务。\n");
+	await expect(store.readBusiness(paths.business)).rejects.toThrow("业务背景与目标");
+	const content =
+		"# 业务需求：订单\n\n" +
+		[
+			"基本信息",
+			"业务背景与目标",
+			"实际使用场景与现状",
+			"期望结果",
+			"业务规则与边界",
+			"典型例子",
+			"业务验收预期",
+			"待确认事项",
+			"资料来源",
+			"业务确认与交接",
+		]
+			.map(heading => `## ${heading}\n已确认的业务事实。\n`)
+			.join("\n");
+	await Bun.write(path.join(cwd, paths.business!), content);
+	const document = await store.readBusiness(paths.business);
+	expect(document.content).toBe(content);
+	expect(document.version).toBe(artifactVersion(new TextEncoder().encode(content)));
+});
+
 async function acceptance(context: Fixture) {
 	const { store, paths, write } = context;
 	await write(

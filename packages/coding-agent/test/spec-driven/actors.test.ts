@@ -412,6 +412,51 @@ test("restricted requirements actor writes only its allowed native proposal and 
 	}
 }, 120_000);
 
+test("business native session writes only its designated document and rejects device and development writes", async () => {
+	await using fixture = await consumer(undefined, "business");
+	const outputPaths = ["docs/business.md"];
+	fixture.setNativeTool("write", { path: outputPaths[0], content: "业务草稿" });
+	await fixture.request({ outputPaths });
+	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务草稿");
+	for (const name of ["bash", "eval", "task", "goal", "repo", "lsp", "grep", "glob"]) {
+		expect(fixture.advertisedTools).not.toContain(name);
+	}
+	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md", "xd://repo", "local://other.md"]) {
+		fixture.setNativeTool("write", { path: file, content: "越权" });
+		await fixture.request({ entry: false, feedback: "继续", outputPaths });
+		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	}
+	fixture.setNativeTool("edit", { path: outputPaths[0], old_string: "业务草稿", new_string: "业务更新" });
+	await fixture.request({ entry: false, feedback: "更新", outputPaths });
+	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务更新");
+	fixture.setNativeTool("write", { path: outputPaths[0], content: "只读越权" });
+	await fixture.request({ entry: false, feedback: "只读", outputPaths, readOnly: true });
+	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务更新");
+}, 120_000);
+
+test("business native writes reject linked parents, hard links and nonregular targets", async () => {
+	await using fixture = await consumer(undefined, "business");
+	const original = path.join(fixture.cwd, "original.md");
+	await fs.writeFile(original, "原始内容");
+	const targetDir = path.join(fixture.cwd, "target");
+	await fs.mkdir(targetDir);
+	await fs.writeFile(path.join(targetDir, "business.md"), "目录原始内容");
+	await fs.symlink(targetDir, path.join(fixture.cwd, "linked"), process.platform === "win32" ? "junction" : "dir");
+	await fs.link(original, path.join(fixture.cwd, "hard.md"));
+	await fs.mkdir(path.join(fixture.cwd, "directory.md"));
+	for (const file of ["linked/business.md", "hard.md", "directory.md"]) {
+		fixture.setNativeTool("write", { path: file, content: "越权" });
+		await fixture.request({ outputPaths: [file] });
+		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+			isError: true,
+		});
+	}
+	expect(await fs.readFile(original, "utf8")).toBe("原始内容");
+	expect(await fs.readFile(path.join(targetDir, "business.md"), "utf8")).toBe("目录原始内容");
+}, 120_000);
+
 test("requirements actor preserves an existing mixed-case native capability while rejecting unsafe paths", async () => {
 	await using fixture = await consumer();
 	const main = "openspec/specs/area/My_API/spec.md";

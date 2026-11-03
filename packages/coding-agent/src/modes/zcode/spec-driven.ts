@@ -17,6 +17,7 @@ import type { ZCodeSessionManager, ZCodeSessionRecord } from "./sessions";
 import {
 	ompSpecRunSchema,
 	type OmpSpecDetails,
+	type OmpSpecInteraction,
 	type OmpSpecMaterial,
 	type OmpSpecRun,
 	type OmpSpecRunBinding,
@@ -58,6 +59,8 @@ type Saved = {
 	cwd: string;
 	changeId: string;
 	phase: SpecDrivenStatus["phase"];
+	entryPhase?: "business" | "requirements";
+	businessCompleted?: boolean;
 	createdAt: number;
 	updatedAt: number;
 	generation: number;
@@ -77,6 +80,32 @@ type Owner = {
 	onChange: () => void;
 };
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+/** Old Dev observers cannot represent a business run or its controls. */
+export function legacySpecInteraction(interaction: OmpSpecInteraction | undefined): OmpSpecInteraction | undefined {
+	if (!interaction || interaction.recipient?.role === "business") return undefined;
+	return {
+		...interaction,
+		actions: interaction.actions.filter(
+			action => !/^\/dev (?:business|finish-business)(?:\s|$)/.test(action.command),
+		),
+	};
+}
+
+export function legacySpecDetails(details: OmpSpecDetails): OmpSpecDetails | undefined {
+	if (details.entryPhase === "business" || details.phase === "business" || details.stage === "business")
+		return undefined;
+	const { entryPhase: _entryPhase, businessCompleted: _businessCompleted, ...rest } = details;
+	const { business: _business, ...versions } = rest.versions;
+	return {
+		...rest,
+		versions,
+		actions: rest.actions.filter(
+			action => !/^\/dev (?:business|finish-business)(?:\s|$)/.test(action.command ?? action.commandPrefix ?? ""),
+		),
+		interaction: legacySpecInteraction(rest.interaction),
+	};
+}
 
 /** Observes the native workspace controller; cold queries never create or restore one. */
 export class OmpSpecDrivenBridge {
@@ -150,10 +179,16 @@ export class OmpSpecDrivenBridge {
 				: [];
 		const requirements =
 			observation.approvals.requirements?.files ??
-			formalPaths.slice(0, -3).map(file => ({ path: file, version: "" }));
+			formalPaths
+				.slice(0, -3)
+				.filter(file => file !== status.paths?.business)
+				.map(file => ({ path: file, version: "" }));
 		const requirementIdentity = (file: string) =>
 			archive && file.startsWith(`${archive}/`) ? `${original}${file.slice(archive.length + 1)}` : file;
+		const business =
+			status.business ?? (status.paths?.business ? { path: status.paths.business, version: "" } : undefined);
 		const documents = [
+			...(business ? [{ id: "business", title: "业务需求文档", file: business }] : []),
 			...requirements.map(file => {
 				const identity = requirementIdentity(file.path);
 				return { id: `requirement:${identity}`, title: identity, file };
@@ -215,6 +250,8 @@ export class OmpSpecDrivenBridge {
 			cwd: observation.cwd,
 			changeId: status.changeId,
 			phase: status.phase,
+			entryPhase: status.entryPhase ?? previous?.entryPhase ?? "requirements",
+			businessCompleted: status.businessCompleted ?? previous?.businessCompleted,
 			createdAt: observation.createdAt,
 			updatedAt: observation.updatedAt,
 			generation: status.generation,
@@ -303,7 +340,9 @@ export class OmpSpecDrivenBridge {
 			closing?.sideEffects?.diagnostic ??
 			closing?.archiveCleanup?.diagnostic ??
 			closing?.retirementCleanup?.diagnostic;
-		const terminal = saved.phase === "idle" && !!saved.archivedChangePath && !recoveryDiagnostic;
+		const terminal =
+			(saved.businessCompleted === true || (saved.phase === "idle" && !!saved.archivedChangePath)) &&
+			!recoveryDiagnostic;
 		const state: OmpSpecDetails["state"] = terminal
 			? "terminal"
 			: !live || status?.blockedReason || owner?.current?.error || recoveryDiagnostic
@@ -314,7 +353,9 @@ export class OmpSpecDrivenBridge {
 		const versions = Object.fromEntries(
 			saved.artifacts.flatMap(artifact => {
 				const last = artifact.versions.at(-1);
-				return last && ["solution", "plan", "report"].includes(artifact.id) ? [[artifact.id, last.digest]] : [];
+				return last && ["business", "solution", "plan", "report"].includes(artifact.id)
+					? [[artifact.id, last.digest]]
+					: [];
 			}),
 		);
 		return ompSpecRunSchema.parse({
@@ -326,6 +367,8 @@ export class OmpSpecDrivenBridge {
 			nodes: [],
 			spec: {
 				changeId: saved.changeId,
+				entryPhase: status?.entryPhase ?? saved.entryPhase ?? "requirements",
+				businessCompleted: status?.businessCompleted ?? saved.businessCompleted ?? false,
 				phase: status?.phase ?? saved.phase,
 				stage: (status?.phase ?? saved.phase) === "idle" ? null : stageForPhase(status?.phase ?? saved.phase),
 				state,

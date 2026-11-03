@@ -48,7 +48,7 @@ export const ompSpecActionSchema = z
 	});
 const recipientSchema = z
 	.object({
-		role: z.enum(["requirements", "solution", "planner", "executor"]),
+		role: z.enum(["business", "requirements", "solution", "planner", "executor"]),
 		actorId: id,
 		sessionId: id,
 		sessionFile: id.optional(),
@@ -86,6 +86,8 @@ export const ompSpecMaterialSchema = z
 export const ompSpecDetailsSchema = z
 	.object({
 		changeId: id,
+		entryPhase: z.enum(["business", "requirements"]).optional(),
+		businessCompleted: z.boolean().optional(),
 		phase: ompSpecPhaseSchema,
 		stage: ompSpecStageSchema.nullable(),
 		state: z.enum(["active", "waiting", "blocked", "terminal"]),
@@ -120,6 +122,7 @@ export const ompSpecDetailsSchema = z
 		updatedAt: timestamp,
 		versions: z
 			.object({
+				business: id.optional(),
 				specification: id.optional(),
 				solution: id.optional(),
 				plan: id.optional(),
@@ -362,14 +365,17 @@ export const routedTopicWireFrameSchema = z.union([
 export type RoutedTopicWireFrame = z.infer<typeof routedTopicWireFrameSchema>;
 export const subscribeParamsSchema = baseline.subscribeParamsSchema.extend({
 	includeSpecDriven: z.literal(true).optional(),
+	includeSpecBusiness: z.literal(true).optional(),
 });
 export type SubscribeParams = z.infer<typeof subscribeParamsSchema>;
 export const v4ConversationSubscribeParamsSchema = baseline.v4ConversationSubscribeParamsSchema.extend({
 	includeSpecDriven: z.literal(true).optional(),
+	includeSpecBusiness: z.literal(true).optional(),
 });
 export type V4ConversationSubscribeParams = z.infer<typeof v4ConversationSubscribeParamsSchema>;
 export const v4ConversationWorkflowRunsParamsSchema = baseline.v4ConversationWorkflowRunsParamsSchema.extend({
 	includeSpecDriven: z.literal(true).optional(),
+	includeSpecBusiness: z.literal(true).optional(),
 	runId: id.optional(),
 });
 export type V4ConversationWorkflowRunsParams = z.infer<typeof v4ConversationWorkflowRunsParamsSchema>;
@@ -384,6 +390,7 @@ export const v4ConversationWorkflowRunsResultSchema = baseline.v4ConversationWor
 export type V4ConversationWorkflowRunsResult = z.infer<typeof v4ConversationWorkflowRunsResultSchema>;
 export const zcodeWorkflowsRunsParamsSchema = legacy.zcodeWorkflowsRunsParamsSchema.extend({
 	includeSpecDriven: z.literal(true).optional(),
+	includeSpecBusiness: z.literal(true).optional(),
 });
 export type ZCodeWorkflowsRunsParams = z.infer<typeof zcodeWorkflowsRunsParamsSchema>;
 const nativeSavedRunSchema = legacy.zcodeSavedWorkflowRunSchema

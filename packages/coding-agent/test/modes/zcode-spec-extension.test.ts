@@ -94,6 +94,16 @@ describe("local opt-in /dev protocol", () => {
 		expect(
 			v4ConversationWorkflowRunsParamsSchema.parse({ ...query, includeSpecDriven: true, runId: "native-run" }),
 		).toEqual({ ...query, includeSpecDriven: true, runId: "native-run" });
+		const businessQuery = {
+			...query,
+			includeSpecDriven: true as const,
+			includeSpecBusiness: true as const,
+			runId: "native-run",
+		};
+		expect(v4ConversationWorkflowRunsParamsSchema.parse(businessQuery)).toEqual(businessQuery);
+		expect(v4ConversationWorkflowRunsParamsSchema.safeParse({ ...query, includeSpecBusiness: false }).success).toBe(
+			false,
+		);
 		expect(v4ConversationWorkflowRunsParamsSchema.safeParse({ ...query, includeSpecDriven: false }).success).toBe(
 			false,
 		);
@@ -111,6 +121,13 @@ describe("local opt-in /dev protocol", () => {
 			...workspaceQuery,
 			includeSpecDriven: true,
 		});
+		expect(
+			zcodeWorkflowsRunsParamsSchema.parse({
+				...workspaceQuery,
+				includeSpecDriven: true,
+				includeSpecBusiness: true,
+			}),
+		).toEqual({ ...workspaceQuery, includeSpecDriven: true, includeSpecBusiness: true });
 		expect(zcodeWorkflowsRunsParamsSchema.safeParse({ ...workspaceQuery, includeSpecDriven: "true" }).success).toBe(
 			false,
 		);
@@ -368,6 +385,101 @@ describe("local opt-in /dev protocol", () => {
 				const schema = includeSpecDriven ? routedTopicWireFrameSchema : baseline.routedTopicWireFrameSchema;
 				expect(schema.parse(frames[0])).toEqual(frames[0]);
 			}
+			topics.dispose();
+		},
+	);
+
+	it.each(["desktop-continuous", "web-remote-replayable"] as const)(
+		"isolates business-entry facts from old Dev capability in %s snapshots, updates and replay",
+		clientMode => {
+			const businessRun: OmpSpecRun = {
+				...run(),
+				runId: "business-run",
+				status: "running",
+				spec: {
+					...details(),
+					phase: "business",
+					stage: "business",
+					state: "active",
+					entryPhase: "business",
+					businessCompleted: false,
+					actions: [],
+					interaction: {
+						mode: "dev",
+						recipient: { role: "business", actorId: "business-actor", sessionId: "business-session" },
+						actions: [],
+					},
+					materials: [
+						{
+							id: "business",
+							title: "业务需求",
+							readiness: "present",
+							sourceVersion: "business-digest",
+							artifactId: "business",
+							version: 1,
+						},
+					],
+				},
+			};
+			const snapshot = new ZCodeProjection({ sessionId: "s", cwd: "/work" }).snapshot();
+			snapshot.workflowRuns = { revision: 1, runs: [run(), businessRun] };
+			snapshot.dev = businessRun.spec.interaction;
+			const topics = new ZCodeTopics();
+			topics.register("conversation/s", { snapshot: () => structuredClone(snapshot) });
+			const legacyFrames: RoutedTopicWireFrame[] = [];
+			const businessFrames: RoutedTopicWireFrame[] = [];
+			const legacy = topics.subscribe(
+				{ topic: "conversation/s", connectionId: "legacy-dev", clientMode, includeSpecDriven: true },
+				wire => legacyFrames.push(wire),
+			);
+			const opted = topics.subscribe(
+				{
+					topic: "conversation/s",
+					connectionId: "business-dev",
+					clientMode,
+					includeSpecDriven: true,
+					includeSpecBusiness: true,
+				},
+				wire => businessFrames.push(wire),
+			);
+			legacy.flush();
+			opted.flush();
+			expect(complete(legacyFrames[0])).toMatchObject({
+				payload: { kind: "snapshot", snapshot: { workflowRuns: { runs: [run()] } } },
+			});
+			expect(complete(businessFrames[0])).toMatchObject({
+				payload: {
+					kind: "snapshot",
+					snapshot: { workflowRuns: { runs: [run(), businessRun] }, dev: businessRun.spec.interaction },
+				},
+			});
+			const delta: ConversationDelta = {
+				op: "workflowRun.updated",
+				runId: businessRun.runId,
+				revision: 2,
+				run: { spec: { ...businessRun.spec, explanation: "Business interview continues" } },
+			};
+			topics.publish("conversation/s", [delta]);
+			expect(complete(legacyFrames[1])).toMatchObject({ payload: { kind: "deltas", deltas: [] } });
+			expect(complete(businessFrames[1])).toMatchObject({ payload: { kind: "deltas", deltas: [delta] } });
+			for (const subscription of [legacy, opted]) {
+				const recovery = topics.recover({
+					subscriptionId: subscription.ack.subscriptionId,
+					base: { logEpoch: snapshot.logEpoch, seq: 0 },
+				});
+				expect(recovery.ack.mode).toBe("resume");
+				recovery.flush();
+			}
+			expect(complete(legacyFrames[2])).toMatchObject({ payload: { kind: "deltas", deltas: [] } });
+			expect(complete(businessFrames[2])).toMatchObject({ payload: { kind: "deltas", deltas: [delta] } });
+			for (const wire of legacyFrames) {
+				const encoded = JSON.stringify(wire);
+				expect(encoded).not.toContain("business-run");
+				expect(encoded).not.toContain("businessCompleted");
+				expect(encoded).not.toContain("entryPhase");
+				expect(encoded).not.toContain("business-session");
+			}
+			for (const wire of businessFrames) expect(routedTopicWireFrameSchema.parse(wire)).toEqual(wire);
 			topics.dispose();
 		},
 	);

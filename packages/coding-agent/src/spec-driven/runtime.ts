@@ -96,12 +96,17 @@ export async function createSpecDrivenRuntime(args: {
 		const materials: Array<{ path: string; content?: string; version?: string; error?: string }> = [];
 		if (saved?.paths && saved.changeId) {
 			try {
-				const paths = await formalMaterialPaths(
-					cwd,
-					saved.paths,
-					saved.changeId,
-					saved.closing?.archivedChangePath ?? saved.archivedChangePath,
-				);
+				const paths =
+					saved.phase === "business"
+						? saved.paths.business
+							? [saved.paths.business]
+							: []
+						: await formalMaterialPaths(
+								cwd,
+								saved.paths,
+								saved.changeId,
+								saved.closing?.archivedChangePath ?? saved.archivedChangePath,
+							);
 				for (const file of paths) {
 					try {
 						const bytes = await fs.readFile(await containedSpecPath(cwd, file));
@@ -132,7 +137,7 @@ export async function createSpecDrivenRuntime(args: {
 		if (pending) return pending;
 		const operation = (async () => {
 			const skills =
-				role === "requirements"
+				role === "business" || role === "requirements"
 					? [await loadSpecDrivenSkill("jch", "jch-grill-me")]
 					: role === "planner"
 						? [await loadSpecDrivenSkill("superpowers", "writing-plans")]
@@ -253,7 +258,9 @@ export async function createSpecDrivenRuntime(args: {
 				observeReport: args.observeReport,
 				beginRepair: args.beginRepair,
 				recoverContext: missingHistory ? () => recoveryContext(role, saved?.sessionFile) : undefined,
-				reportPath: args.saved?.paths?.report ?? requireStore().planPath.replace(/\.md$/, "-completion.md"),
+				reportPath: executor
+					? (args.saved?.paths?.report ?? requireStore().planPath.replace(/\.md$/, "-completion.md"))
+					: undefined,
 				options: {
 					cwd,
 					settings: settings.overlay(),
@@ -300,7 +307,7 @@ export async function createSpecDrivenRuntime(args: {
 								...skills.filter(skill => !session.skills.some(existing => existing.name === skill.name)),
 							],
 					promptTemplates: [],
-					spawns: executor ? "*" : "scout",
+					spawns: executor ? "*" : role === "business" ? "" : "scout",
 					hasUI: false,
 					...(executor
 						? {}
@@ -358,7 +365,9 @@ export async function createSpecDrivenRuntime(args: {
 			: undefined;
 	};
 	const originalRequest = () => {
-		const history = actors.get("requirements")?.session.sessionManager.getEntries() ?? [];
+		const entryPhase = args.getStatus?.()?.entryPhase ?? args.getSavedRun?.()?.entryPhase ?? args.saved?.entryPhase;
+		const role = entryPhase === "business" || (!entryPhase && actors.has("business")) ? "business" : "requirements";
+		const history = actors.get(role)?.session.sessionManager.getEntries() ?? [];
 		// A recovery continuation is not the lost original request, including after reopening.
 		if (history.some(entry => entry.type === "custom_message" && entry.customType === "dev-history-recovery"))
 			return "";
@@ -450,11 +459,22 @@ export async function createSpecDrivenRuntime(args: {
 			},
 		},
 		artifacts: {
-			async initialize(changeId, context) {
+			async initialize(changeId, context, businessPath) {
 				contextFor(context);
-				if (store) throw new Error("Dev artifacts already initialized");
-				store = new SpecArtifactStore({ cwd, changeId, requirementsDir: await requirementsAuthority(cwd) });
+				if (store && (businessPath || store.changeId !== changeId))
+					throw new Error("Dev artifacts already initialized");
+				if (!store) {
+					const requirementsDir = await requirementsAuthority(cwd);
+					store = new SpecArtifactStore({ cwd, changeId, requirementsDir });
+					const paths = await store.initialize(businessPath);
+					if (businessPath) store = new SpecArtifactStore({ cwd, changeId, requirementsDir, paths });
+					return paths;
+				}
 				return store.initialize();
+			},
+			async readBusiness(context) {
+				contextFor(context);
+				return requireStore().readBusiness();
 			},
 			async readRequirements(context) {
 				return requireStore().readRequirements(contextFor(context).signal);

@@ -3196,29 +3196,41 @@ export class InteractiveMode implements InteractiveModeContext {
 				dev?.hasPendingTeam(this.session);
 			const consequences: Record<string, string> = {
 				next:
-					status.phase === "requirements"
-						? "确认需求，进入方案阶段"
-						: status.phase === "solution"
-							? "批准指定候选方案，进入计划阶段"
-							: status.phase === "planning"
-								? "批准计划，开始执行"
-								: status.phase === "executing"
-									? "验收完成报告，同步正式需求并归档"
-									: "先用 /dev new 创建流程",
+					status.phase === "business"
+						? "确认业务文档进入需求"
+						: status.phase === "requirements"
+							? "确认需求，进入方案阶段"
+							: status.phase === "solution"
+								? "批准指定候选方案，进入计划阶段"
+								: status.phase === "planning"
+									? "批准计划，开始执行"
+									: status.phase === "executing"
+										? "验收完成报告，同步正式需求并归档"
+										: "先用 /dev new 创建流程",
 				back: "返回上一阶段，不调用模型",
 				exit: "停止并保存流程，恢复普通会话",
 				new: "创建新流程，启动需求 Agent",
+				business: "创建业务流程，启动业务 Agent",
+				"finish-business": "交付业务文档并结束流程",
 				config: "仅修改后续方案 Team 开关",
 			};
+			const businessActions =
+				status.phase === "business"
+					? interaction.actions
+							.filter(action => action.available && (action.id === "next" || action.id === "finish-business"))
+							.map(action => `${action.command} · ${consequences[action.id]}`)
+							.join(" | ")
+					: "";
 			const lines = [
-				`Dev · ${role} · ${observation.active ? "运行中" : "等待输入"} · Team ${status.useTeam ? "开" : "关"}`,
+				`Dev · ${status.businessCompleted ? "业务需求已交付 · 流程已结束" : role} · ${observation.active ? "运行中" : "等待输入"} · Team ${status.useTeam ? "开" : "关"}`,
 				observation.active
 					? interruptible
 						? `${this.keybindings.getKeys("app.interrupt")[0] === "escape" ? "Esc" : appKey(this.keybindings, "app.interrupt") || "Esc"} · 停止当前操作，保留流程`
 						: "正在处理，等待当前操作结清"
-					: action
-						? `${action.id === "new" ? "/dev new <需求>" : action.id === "next" && status.phase === "solution" ? "/dev next [方案ID]" : action.command} · ${consequences[action.id] ?? action.label}`
-						: "/dev new <需求> · 新建流程，随后才调用需求 Agent",
+					: businessActions ||
+						(action
+							? `${action.id === "new" ? "/dev new <需求>" : action.id === "next" && status.phase === "solution" ? "/dev next [方案ID]" : action.command} · ${consequences[action.id] ?? action.label}`
+							: "/dev new <需求> · 新建流程，随后才调用需求 Agent"),
 				`/session 完整详情 · ${
 					this.#devError ??
 					observation.error ??
@@ -3228,7 +3240,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.#devNotice ??
 					(recipient
 						? "输入发送当前会话；/dev 停止保存并返回普通会话"
-						: "当前无接收者；输入和附件保留，请使用 /dev new")
+						: "当前无接收者；输入和附件保留，请使用 /dev new 或 /dev business")
 				}`,
 			].map(line => replaceTabs(sanitizeText(line)).replace(/[\r\n]+/g, " "));
 			this.setHookWidget("native-dev-input", () => ({
@@ -3432,6 +3444,8 @@ export class InteractiveMode implements InteractiveModeContext {
 								state.archivedChangePath ?? state.closing?.archivedChangePath,
 							)
 						: [];
+					const businessPath = paths?.business ?? state.business?.path;
+					if (businessPath && !materialPaths.includes(businessPath)) materialPaths.unshift(businessPath);
 					const materials = await Promise.all(
 						materialPaths.map(async file => {
 							try {
@@ -3465,6 +3479,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					const details = [
 						`Dev: ${observation.interaction.recipient ? roleLabel(observation.interaction.recipient.role) : "空阶段"}`,
 						`阶段: ${state.phase} · Team ${state.useTeam ? "开" : "关"}`,
+						...(state.businessCompleted ? ["业务需求已交付，流程已结束；未执行软件验收、需求同步或归档。"] : []),
 						...[
 							...new Set(
 								[
@@ -3476,9 +3491,11 @@ export class InteractiveMode implements InteractiveModeContext {
 							),
 						].map(error => `错误/阻塞: ${error}`),
 						`提示: ${observation.notice ?? (this.#devNotice?.startsWith("协同开发操作失败：") ? undefined : this.#devNotice) ?? "查看不会调用模型、发送草稿或批准材料；Esc 关闭，方向键滚动。"}`,
-						"入口: /dev 停止保存并返回普通会话；再次进入恢复原流程",
-						"入口: /dev new <需求> 创建新流程（已有流程需先 drop）",
-						"入口: /dev next 确认需求；方案阶段 /dev next <候选ID> 批准指定方案；计划阶段批准计划开始执行；执行阶段验收、同步并归档",
+						"入口: /dev 停止保存并返回普通会话；再次进入恢复未结束流程",
+						"入口: /dev new <需求> 创建新流程（已有未结束流程需先 drop）",
+						"入口: /dev business <业务描述> 从业务阶段起步，自动保存文档",
+						"入口: /dev next 业务阶段确认业务文档并进入需求；需求阶段确认需求；方案阶段 /dev next <候选ID> 批准指定方案；计划阶段批准计划开始执行；执行阶段验收、同步并归档",
+						"入口: /dev finish-business 交付业务文档并结束流程，不启动开发",
 						"入口: /dev back 返回上一阶段，不调用模型",
 						"入口: /dev drop 删除流程状态，保留材料与原生会话",
 						"入口: /dev config 修改后续方案 Team 开关",
@@ -3523,7 +3540,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!command) {
 			restore();
-			this.#devError = "当前无阶段 Agent；输入和附件已保留，请使用 /dev new <需求>。";
+			this.#devError = "当前无阶段 Agent；输入和附件已保留，请使用 /dev new <需求> 或 /dev business <业务描述>。";
 			controller?.publishObservation();
 			return true;
 		}
@@ -3531,7 +3548,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		try {
 			if (
 				!command.args.trim() ||
-				["new", "next", "back", "drop"].includes(command.args.trim().split(/\s+/, 1)[0] ?? "")
+				["new", "business", "finish-business", "next", "back", "drop"].includes(
+					command.args.trim().split(/\s+/, 1)[0] ?? "",
+				)
 			) {
 				this.#devError = undefined;
 				this.#devNotice = undefined;

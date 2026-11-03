@@ -47,6 +47,7 @@ export interface SpecSolution extends SpecDocument {
 	recommendedCandidateId: string;
 }
 export interface SpecArtifactPaths {
+	business?: string;
 	requirements: string[];
 	solution: string;
 	plan: string;
@@ -83,6 +84,9 @@ export interface SpecApproval {
 }
 export interface SpecDrivenStatus {
 	phase: SpecDrivenPhase;
+	entryPhase?: "business" | "requirements";
+	businessCompleted?: boolean;
+	business?: SpecDocument;
 	generation: number;
 	changeId?: string;
 	blockedReason?: string;
@@ -102,6 +106,8 @@ export interface SpecDrivenStatus {
 export interface SpecSavedRun {
 	runId: string;
 	phase: SpecDrivenPhase;
+	entryPhase?: "business" | "requirements";
+	businessCompleted?: boolean;
 	changeId?: string;
 	paths?: SpecArtifactPaths;
 	approvals: Partial<Record<SpecStageRole, SpecApproval>>;
@@ -119,7 +125,8 @@ export interface SpecDrivenPorts {
 		run(input: SpecAgentInput, context: SpecRunContext): Promise<SpecConversationReply>;
 	};
 	artifacts: {
-		initialize(changeId: string, context: SpecRunContext): Promise<SpecArtifactPaths>;
+		initialize(changeId: string, context: SpecRunContext, businessPath?: string): Promise<SpecArtifactPaths>;
+		readBusiness(context: SpecRunContext): Promise<SpecDocument>;
 		readRequirements(context: SpecRunContext): Promise<SpecRequirements>;
 		readSolution(context: SpecRunContext): Promise<SpecSolution>;
 		readPlan(context: SpecRunContext): Promise<SpecDocument>;

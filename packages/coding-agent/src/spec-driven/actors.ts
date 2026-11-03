@@ -246,8 +246,9 @@ export async function createSpecActor(args: {
 		args.options.toolRestrictions?.clone() ??
 		cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
 		new ToolRestrictions();
-	const scout = args.role === "executor" ? undefined : getBundledAgent("scout");
-	if (args.role !== "executor" && !scout) throw new Error("Bundled scout agent is unavailable");
+	const business = args.role === "business";
+	const scout = args.role === "executor" || business ? undefined : getBundledAgent("scout");
+	if (args.role !== "executor" && !business && !scout) throw new Error("Bundled scout agent is unavailable");
 	const scoutHooks: NativeSubagentHooks = {
 		async beforeSpawn(request) {
 			await checkScoutAdmission();
@@ -312,6 +313,14 @@ export async function createSpecActor(args: {
 			return { message: { customType: "dev-history-recovery", display: false, content } };
 		});
 		pi.on("tool_call", async (event, ctx) => {
+			if (business) {
+				if (ctx.sessionManager.getSessionId() !== session.sessionId)
+					return { block: true, reason: "业务阶段不得派发子代理。" };
+				if (["read", "knowledge_search", "openwiki_search", "openwiki_read", "ask"].includes(event.toolName))
+					return undefined;
+				if (event.toolName !== "write" && event.toolName !== "edit")
+					return { block: true, reason: "业务阶段只允许读取资料和写入指定业务文档。" };
+			}
 			if (args.role !== "executor" && ctx.sessionManager.getSessionId() !== session.sessionId) {
 				if (["read", "find", "grep", "glob", "web_search", "yield"].includes(event.toolName)) return undefined;
 				return { block: true, reason: "scout 只允许使用只读调查工具。" };
@@ -372,13 +381,17 @@ export async function createSpecActor(args: {
 			const outputPaths =
 				stageOutputPaths ??
 				(paths
-					? args.role === "requirements"
-						? paths.requirements
-						: [args.role === "solution" ? paths.solution : paths.plan]
+					? args.role === "business"
+						? paths.business
+							? [paths.business]
+							: []
+						: args.role === "requirements"
+							? paths.requirements
+							: [args.role === "solution" ? paths.solution : paths.plan]
 					: []);
 			let allowed = outputPaths.some(output => output === relative);
 			try {
-				if (!allowed) {
+				if (!allowed && !business) {
 					for (const output of outputPaths) {
 						if (!matchesNativeSpecPattern(output, relative)) continue;
 						const prefix = output.slice(0, output.indexOf("*"));
@@ -470,6 +483,7 @@ export async function createSpecActor(args: {
 			}
 		});
 		pi.on("before_subagent_spawn", async event => {
+			if (business) return { block: true, reason: "业务阶段不得派发子代理。" };
 			if (args.role !== "executor" && (event.invocationKind !== "task" || event.agent !== "scout"))
 				return { block: true, reason: "执行确认前只能派发 scout 调查子代理。" };
 			try {
@@ -492,6 +506,20 @@ export async function createSpecActor(args: {
 		...args.options,
 		settings,
 		toolRestrictions: restrictions,
+		...(business
+			? {
+					toolNames: ["read", "knowledge_search", "openwiki_search", "openwiki_read", "ask", "write", "edit"],
+					restrictToolNames: true,
+					disableExtensionDiscovery: true,
+					allowRestrictedCustomTools: false,
+					customTools: [],
+					enableMCP: false,
+					enableLsp: false,
+					enableIrc: false,
+					spawns: "",
+					subagentHooks: undefined,
+				}
+			: {}),
 		...(scout
 			? {
 					restrictToolNames: true,
@@ -527,10 +555,10 @@ export async function createSpecActor(args: {
 		requireYieldTool: false,
 		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
 		// factories without admitting ambient tools or extension discovery.
-		...(args.options.restrictToolNames || scout
+		...(args.options.restrictToolNames || scout || business
 			? {
 					preloadedPreparedExtensions: [
-						...(scout ? [] : (args.options.preloadedPreparedExtensions ?? [])),
+						...(scout || business ? [] : (args.options.preloadedPreparedExtensions ?? [])),
 						{
 							path: "<spec-stage-write-guard>",
 							resolvedPath: "<spec-stage-write-guard>",
@@ -679,7 +707,10 @@ export async function createSpecActor(args: {
 			// Queue restrictions travel with the native input, never mutate the running turn.
 			const toolDenylist = input.readOnly
 				? [...new Set([...(args.options.toolNames ?? []), "write", "edit", "bash", "task", "goal"])].filter(
-						name => !["read", "grep", "glob", "knowledge_search"].includes(name),
+						name =>
+							!["read", "grep", "glob", "knowledge_search", "openwiki_search", "openwiki_read", "ask"].includes(
+								name,
+							),
 					)
 				: [];
 			if (input.entry || !stageOutputPaths) stageOutputPaths = input.outputPaths;

@@ -17,7 +17,12 @@ import {
 	type SpecDrivenController,
 	type SpecRuntimeFactory,
 } from "../../src/spec-driven/controller";
-import type { SpecAgentInput, SpecConversationRecipient, SpecStageRole } from "../../src/spec-driven/types";
+import type {
+	SpecAgentInput,
+	SpecArtifactPaths,
+	SpecConversationRecipient,
+	SpecStageRole,
+} from "../../src/spec-driven/types";
 import { DevWorkspace } from "../../src/spec-driven/workspace";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 const roots: string[] = [];
@@ -70,7 +75,12 @@ async function fixture(cwd?: string) {
 	let runGate: Promise<void> | undefined;
 	let modelStarted = Promise.withResolvers<void>();
 	let pendingTeam: { owner: AgentSession; interrupt: () => Promise<boolean> } | undefined;
-	const paths = { requirements: ["proposal.md"], solution: "solution.md", plan: "plan.md", report: "report.md" };
+	const paths: SpecArtifactPaths = {
+		requirements: ["proposal.md"],
+		solution: "solution.md",
+		plan: "plan.md",
+		report: "report.md",
+	};
 	const doc = (file: string) => ({ path: file, version: "bytes-1", content: "material" });
 	const factory: SpecRuntimeFactory = async args => ({
 		options: { runId: args.saved?.runId ?? crypto.randomUUID() },
@@ -134,9 +144,13 @@ async function fixture(cwd?: string) {
 				},
 			},
 			artifacts: {
-				async initialize() {
+				async readBusiness() {
+					return doc(paths.business ?? args.saved!.paths!.business!);
+				},
+				async initialize(_changeId, _context, businessPath) {
 					calls.push("initialize");
 					if (failInitialize) throw new Error("initialize failed");
+					if (businessPath) paths.business = businessPath;
 					return paths;
 				},
 				async readRequirements() {
@@ -223,6 +237,29 @@ async function fixture(cwd?: string) {
 	};
 }
 describe("Dev workspace controller", () => {
+	test("business recovery keeps optional back and business-only completion permits another flow", async () => {
+		const f = await fixture();
+		await f.owner.enter();
+		await f.owner.new("业务需求", undefined, undefined, true);
+		await f.owner.exit();
+		const restored = await fixture(f.root);
+		await restored.owner.enter();
+		expect(restored.owner.status().phase).toBe("business");
+		await restored.owner.next();
+		expect(restored.owner.actions().find(action => action.id === "back")?.available).toBe(true);
+		await restored.owner.back();
+		await restored.owner.finishBusiness();
+		const run = (await restored.state()).run;
+		expect(run.businessCompleted).toBe(true);
+		expect(run.phase).toBe("idle");
+		await restored.owner.exit();
+		const completed = await fixture(f.root);
+		await completed.owner.enter();
+		expect(completed.owner.status().businessCompleted).toBe(true);
+		expect(completed.calls).not.toContain("prepare:requirements");
+		await completed.owner.new("直接开发");
+		expect(completed.owner.status().phase).toBe("requirements");
+	});
 	test("publishes ready actions after a direct native prompt releases admission and idle barriers", async () => {
 		const f = await fixture();
 		await f.owner.enter();

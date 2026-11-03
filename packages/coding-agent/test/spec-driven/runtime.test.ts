@@ -226,6 +226,66 @@ test("original request remains in native requirements history, not saved workspa
 	expect(saved.sessions.requirements?.sessionFile).toBe(fixture.runtime.nativeSession("requirements")?.sessionFile);
 }, 120_000);
 
+test("business entry restores its native conversation and hands the complete confirmed document to requirements", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "继续澄清。" }) });
+	const request = "  描述订单审批业务\n保留原始空格  ";
+	const businessPath = "docs/business-requirements.md";
+	await fixture.orchestrator.startBusiness(request, "business-native", businessPath);
+	expect(fixture.runtime.originalRequest()).toBe(request);
+	await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toThrow();
+	const document = [
+		"# 订单审批",
+		...[
+			"基本信息",
+			"业务背景与目标",
+			"实际使用场景与现状",
+			"期望结果",
+			"业务规则与边界",
+			"典型例子",
+			"业务验收预期",
+			"待确认事项",
+			"资料来源",
+			"业务确认与交接",
+		].flatMap(heading => [`## ${heading}`, `${heading}：已讨论的完整业务内容。`]),
+		"",
+	].join("\n");
+	await fs.mkdir(path.join(fixture.cwd, "docs"), { recursive: true });
+	await fs.writeFile(path.join(fixture.cwd, businessPath), document);
+	const saved = fixture.orchestrator.save();
+	const businessSessionFile = fixture.runtime.nativeSession("business")?.sessionFile;
+	await fixture.runtime.dispose();
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		const core = new SpecDrivenOrchestrator(restored.ports, {
+			...restored.options,
+			getUseTeam: () => false,
+			persist: async () => {},
+		});
+		await core.restore(saved);
+		expect(restored.nativeSession("business")?.sessionFile).toBe(businessSessionFile);
+		expect(restored.originalRequest()).toBe(request);
+		await core.converse("补充审批条件");
+		expect(restored.originalRequest()).toBe(request);
+		await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toThrow();
+		await core.next(undefined, "/dev next 确认业务");
+		expect(core.status().phase).toBe("requirements");
+		expect(restored.originalRequest()).toBe(request);
+		const requirements = fixture.provider.requests
+			.map(rolePayload)
+			.findLast(payload => payload?.specDrivenRole === "requirements" && payload.input.entry === true);
+		expect(requirements?.input.request).toBe(request);
+		expect(requirements?.input.files).toEqual([expect.objectContaining({ path: businessPath, content: document })]);
+		expect(requirements?.input.userReply).toBe("/dev next 确认业务");
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
 test("ordinary solution follow-up never reruns Team or validates missing solution files", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "仍在澄清。" }) });
 	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };

@@ -228,6 +228,117 @@ describe("libkitty end-to-end", () => {
 		expect(session.messages).toEqual([]);
 	});
 
+	it("shows both business decisions in the three-line Dev area without changing direct requirements", async () => {
+		const controller = await emptyDev();
+		const snapshot = controller.observation();
+		const observation = vi.spyOn(controller, "observation");
+		const widget = vi.spyOn(mode, "setHookWidget");
+		const recipient = { role: "business" as const, actorId: "business", sessionId: "business-session" };
+		const next = { id: "next", command: "/dev next", label: "确认并继续", available: true };
+		const finish = { id: "finish-business", command: "/dev finish-business", label: "仅业务结束", available: true };
+		observation.mockReturnValue({
+			...snapshot,
+			status: { ...snapshot.status, phase: "business", entryPhase: "business" },
+			interaction: { ...snapshot.interaction, recipient, actions: [next, finish] },
+		});
+		const render = (width: number) => {
+			controller.publishObservation();
+			const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
+			if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
+			return call[1](mode.ui, {} as never).render(width);
+		};
+		for (const width of [100, 120]) {
+			const lines = render(width);
+			expect(lines).toHaveLength(3);
+			expect(lines[0]).toContain("业务 Agent");
+			expect(lines[1]).toContain("/dev next · 确认业务文档进入需求");
+			expect(lines[1]).toContain("/dev finish-business · 交付业务文档并结束流程");
+			expect(lines[2]).toContain("/session");
+		}
+		observation.mockReturnValue({
+			...snapshot,
+			status: { ...snapshot.status, phase: "business", entryPhase: "business" },
+			interaction: { ...snapshot.interaction, recipient, actions: [next, { ...finish, available: false }] },
+		});
+		expect(render(120)[1]).not.toContain("/dev finish-business");
+		observation.mockReturnValue({
+			...snapshot,
+			status: { ...snapshot.status, phase: "requirements", entryPhase: "requirements" },
+			interaction: { ...snapshot.interaction, recipient: { ...recipient, role: "requirements" }, actions: [next] },
+		});
+		const requirements = render(120);
+		expect(requirements[1]).toContain("/dev next · 确认需求，进入方案阶段");
+		expect(requirements[1]).not.toContain("finish-business");
+	});
+
+	it("shows completed business delivery and reads the real document in native details without side effects", async () => {
+		const controller = await emptyDev();
+		const snapshot = controller.observation();
+		const businessPath = "business-requirements.md";
+		await Bun.write(path.join(tempDir.path(), businessPath), "# Real business document\n\nCURRENT_BUSINESS_BYTES");
+		vi.spyOn(controller, "observation").mockReturnValue({
+			...snapshot,
+			status: {
+				...snapshot.status,
+				phase: "idle",
+				entryPhase: "business",
+				businessCompleted: true,
+				business: { path: businessPath, content: "STALE_BUSINESS_CONTENT", version: "old" },
+				paths: {
+					business: businessPath,
+					requirements: [],
+					solution: "solution.json",
+					plan: "plan.md",
+					report: "report.md",
+				},
+			},
+		});
+		const widget = vi.spyOn(mode, "setHookWidget");
+		controller.publishObservation();
+		const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
+		if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
+		const lines = call[1](mode.ui, {} as never).render(120);
+		expect(lines).toHaveLength(3);
+		expect(lines[0]).toContain("业务需求已交付 · 流程已结束");
+		expect(lines[0]).not.toContain("软件");
+		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
+		const next = vi.spyOn(controller, "next");
+		mode.editor.setText("BUSINESS_VIEWER_DRAFT");
+		expect(await mode.handleDevInput("/session")).toBe(true);
+		const overlay = mode.ui.overlayStack.at(-1)?.component;
+		if (!overlay?.describe) throw new Error("Expected native session info viewer");
+		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
+		expect(content).toContain("业务需求已交付，流程已结束");
+		expect(content).toContain(businessPath);
+		expect(content).toContain("CURRENT_BUSINESS_BYTES");
+		expect(content).not.toContain("STALE_BUSINESS_CONTENT");
+		expect(mode.editor.getExpandedText()).toBe("BUSINESS_VIEWER_DRAFT");
+		expect(next).not.toHaveBeenCalled();
+		expect(prompt).not.toHaveBeenCalled();
+		expect(session.messages).toEqual([]);
+	});
+
+	it("reports a missing business document from its real path instead of displaying cached content", async () => {
+		const controller = await emptyDev();
+		const snapshot = controller.observation();
+		vi.spyOn(controller, "observation").mockReturnValue({
+			...snapshot,
+			status: {
+				...snapshot.status,
+				phase: "business",
+				entryPhase: "business",
+				business: { path: "missing-business.md", content: "STALE_CACHED_TEXT", version: "old" },
+			},
+		});
+		expect(await mode.handleDevInput("/session")).toBe(true);
+		const overlay = mode.ui.overlayStack.at(-1)?.component;
+		if (!overlay?.describe) throw new Error("Expected native session info viewer");
+		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
+		expect(content).toContain("missing-business.md");
+		expect(content).toContain("读取错误");
+		expect(content).not.toContain("STALE_CACHED_TEXT");
+	});
+
 	it("keeps empty Dev input and attachments without calling a model or opening a panel", async () => {
 		const controller = await emptyDev();
 		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);

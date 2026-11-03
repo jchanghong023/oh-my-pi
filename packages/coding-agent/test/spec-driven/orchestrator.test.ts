@@ -39,6 +39,7 @@ describe("explicit repair intent", () => {
 function fixture(saved?: SpecSavedRun) {
 	const document = (path: string): SpecDocument => ({ path, version: `${path}-v1`, content: `完整原文 ${path} Ω` });
 	const docs = {
+		business: document("business-requirements.md"),
 		proposal: document("proposal.md"),
 		spec: document("spec.md"),
 		solution: document("solutions.json"),
@@ -95,13 +96,17 @@ function fixture(saved?: SpecSavedRun) {
 			},
 		},
 		artifacts: {
-			async initialize() {
+			async initialize(_changeId, _context, businessPath) {
 				return {
+					...(businessPath ? { business: businessPath } : {}),
 					requirements: [docs.proposal.path, docs.spec.path],
 					solution: docs.solution.path,
 					plan: docs.plan.path,
 					report: docs.report.path,
 				};
+			},
+			async readBusiness() {
+				return read("business");
 			},
 			async readRequirements() {
 				return { files: [read("proposal"), read("spec")], version: "requirements-v1" };
@@ -163,6 +168,45 @@ function fixture(saved?: SpecSavedRun) {
 		},
 	};
 }
+
+describe("optional business delivery", () => {
+	it("hands off confirmed business bytes, invalidates changed approval and returns only on the chosen path", async () => {
+		const f = fixture();
+		await f.core.startBusiness("业务目标", "change", f.docs.business.path);
+		expect(f.core.status().phase).toBe("business");
+		await f.core.next(undefined, "/dev next");
+		expect(f.inputs.at(-1)?.files).toEqual([f.docs.business]);
+		expect(f.core.save().approvals.business?.userReply).toBe("/dev next");
+		f.docs.business.version = "changed";
+		await expect(f.core.next()).rejects.toThrow("已批准材料发生变化");
+		await f.core.back();
+		expect(f.core.status().phase).toBe("business");
+		expect(f.core.save().approvals.business).toBeUndefined();
+		const direct = fixture();
+		await direct.core.start("开发目标", "direct");
+		await expect(direct.core.back()).rejects.toThrow("不能回退");
+	});
+
+	it("finishes business without development or archive and permits another flow", async () => {
+		const f = fixture();
+		await f.core.startBusiness("仅交付文档", "change", f.docs.business.path);
+		f.settings.bad = "business";
+		await expect(f.core.finishBusiness()).rejects.toThrow("invalid structure");
+		expect(f.core.status().phase).toBe("business");
+		f.settings.bad = "";
+		f.settings.saveFailure = true;
+		await expect(f.core.finishBusiness()).rejects.toThrow("disk full");
+		expect(f.core.status().businessCompleted).toBeUndefined();
+		f.settings.saveFailure = false;
+		await f.core.finishBusiness();
+		expect(f.core.status().phase).toBe("idle");
+		expect(f.core.status().businessCompleted).toBe(true);
+		expect(f.events).not.toContain("prepare:requirements");
+		expect(f.settings.closeCalls).toBe(0);
+		await f.core.start("后续开发", "next-change");
+		expect(f.core.status().phase).toBe("requirements");
+	});
+});
 async function execution(f: { core: SpecDrivenOrchestrator }) {
 	await f.core.start("原始需求 Ω", "change");
 	await f.core.next();

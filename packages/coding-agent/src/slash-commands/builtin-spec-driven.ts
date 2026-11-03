@@ -125,10 +125,12 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 		const action = match?.[1];
 		const text = match?.[2] ?? "";
 		// Parse completely before acquiring a workspace, showing UI, or starting any work.
-		if (action && !["config", "new", "next", "back", "drop"].includes(action))
+		if (action && !["config", "new", "business", "finish-business", "next", "back", "drop"].includes(action))
 			throw invalidDevInput(`未知 /dev 子命令：${action}。`);
 		if (action === "new" && !text.trim()) throw invalidDevInput("用法：/dev new <完整需求>");
-		if (action && action !== "new" && action !== "next" && text.trim()) throw invalidDevInput(`用法：/dev ${action}`);
+		if (action === "business" && !text.trim()) throw invalidDevInput("用法：/dev business <业务描述>");
+		if (action && !["new", "business", "next"].includes(action) && text.trim())
+			throw invalidDevInput(`用法：/dev ${action}`);
 		const ids = action === "next" ? text.trim().split(/\s+/).filter(Boolean) : [];
 		if (ids.length > 1) throw invalidDevInput("用法：/dev next [candidate-id]");
 		const existing = peekSpecDrivenController(host.sessionManager);
@@ -170,6 +172,12 @@ async function handleDev(command: ParsedSlashCommand, host: SlashCommandRuntime)
 			case "new":
 				await controller.new(text, host.input?.images, host.input?.imageLinks);
 				break;
+			case "business":
+				await controller.new(text, host.input?.images, host.input?.imageLinks, true);
+				break;
+			case "finish-business":
+				await controller.finishBusiness(command.text);
+				break;
 			case "next":
 				if (ids.length && controller.status().phase !== "solution")
 					throw invalidDevInput("只有方案阶段允许 candidate-id。");
@@ -205,6 +213,8 @@ export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 		subcommands: [
 			{ name: "config", description: "配置方案 Team" },
 			{ name: "new", usage: "<完整需求>", description: "开始新需求" },
+			{ name: "business", usage: "<业务描述>", description: "从可选业务访谈开始，自动保存文档" },
+			{ name: "finish-business", description: "确认交付业务文档并结束，不启动开发" },
 			{ name: "next", usage: "[candidate-id]", description: "明确批准当前材料并推进" },
 			{ name: "back", description: "返回上一阶段" },
 			{ name: "drop", description: "停止并丢弃流程状态，保留已有文件" },
