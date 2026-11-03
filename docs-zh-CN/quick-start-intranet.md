@@ -42,7 +42,7 @@ offline 日志默认保留 WARN／ERROR，并立即写入当前 `logs/` 目录�
 
 `/dev/shm` 是易失性内存文件系统，重启或清理后知识库、缓存、统计、日志及模型／运行依赖文件可能丢失；非内嵌资源的缺失或下载仍遵循原有 offline 规则。先结束使用中的进程再清理性能目录；更换路径不会自动搬迁旧数据。知识库没有独立目录设置：CLI、TUI 与 AI 的 `knowledge_search` 工具共用当前 profile 性能根目录下的 `knowledge.db` 及其 WAL／SHM 文件，不再追加知识库子目录；未选择性能根时保持原路径，不提供 NFS 多机共写活动库的保证。
 
-不再读取或迁移旧 `docs.db`，也不迁移旧位置的知识库数据；需要时重新导入材料。旧的 `wiki.reranker.*` 配置不再生效，需改为 `knowledge.reranker.*`。
+不再读取或迁移旧名称的数据库，也不迁移旧位置的知识库数据；需要时重新导入材料。旧的 `wiki.reranker.*` 配置不再生效，需改为 `knowledge.reranker.*`。
 
 ## 2. 启动
 
