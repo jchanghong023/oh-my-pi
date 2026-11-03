@@ -6,6 +6,16 @@
 
 ## Requirements
 
+### Requirement: 终端退出恢复
+
+OMP MUST 在终端停止完成后清除待恢复状态，避免后续进程退出清理重复发送盲复位序列，使旧终端将不支持的键盘协议序列打印到 shell 提示符前。
+
+#### Scenario: 正常停止后执行退出清理
+
+- **WHEN** 终端已完成正常停止，且没有仍需退出的备用屏幕
+- **THEN** 后续 emergency／postmortem 清理 MUST 不再输出终端复位序列；正常停止仍按本次实际启用的键盘模式发送匹配的关闭序列。
+- **AND** 终端仍活动、停止未完成或备用屏幕仍活动时保留既有异常恢复路径；备用屏幕退出仍受实际活动状态约束。
+
 ### Requirement: 1. 三种显示模式
 
 OMP MUST 按 `/display` 选择的 `clean`、`compact` 或 `detailed` 呈现同一份原始会话，默认使用 `compact`。compact MUST 以现有 clean 为基线，保留文件型 write／edit 与上游 detailed 相同的原组件显示，增加固定两行活动区，并隐藏独立的模型处理忙碌提示；三档不得改变原始消息、执行和模型上下文。

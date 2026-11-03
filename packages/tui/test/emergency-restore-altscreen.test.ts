@@ -20,8 +20,7 @@ const stdoutIsTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "i
 const stdinSetRawModeDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "setRawMode");
 // This suite asserts the real emergencyTerminalRestore() write path, so it opts
 // out of the test-default headless suppression. Restored in afterEach (not the
-// helper) so the blind restore branch — gated on !isTerminalHeadless() — still
-// runs while the test drives emergencyTerminalRestore() after terminal.stop().
+// helper) so the tests exercise emergency cleanup after terminal.stop() too.
 let previousHeadless = false;
 
 function restoreProperty(target: object, key: string, descriptor: PropertyDescriptor | undefined): void {
@@ -69,20 +68,14 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		restoreProperty(process.stdin, "setRawMode", stdinSetRawModeDescriptor);
 	});
 
-	it("does not emit DECRST 1049 on the post-stop (graceful exit) path when the alt screen was never entered", () => {
+	it("does not emit reset sequences after graceful shutdown has restored the terminal", () => {
 		const { terminal, writes } = startCapturedTerminal();
-		terminal.stop(); // graceful shutdown shape: activeTerminal cleared, terminalEverStarted sticky
+		terminal.stop();
 
 		writes.length = 0;
 		emergencyTerminalRestore();
 
-		const restored = writes.join("");
-		expect(restored).not.toContain("\x1b[?1049l");
-		expect(restored).toContain("\x1b[?1006l");
-		expect(restored).toContain("\x1b[?1003l");
-		expect(restored).toContain("\x1b[?1000l");
-		// Still performs the blind restore itself (cursor visibility proves the branch ran).
-		expect(restored).toContain("\x1b[?25h");
+		expect(writes).toEqual([]);
 	});
 
 	it("emits DECRST 1049 on the post-stop path while the alt screen is tracked active, then resets the state", () => {

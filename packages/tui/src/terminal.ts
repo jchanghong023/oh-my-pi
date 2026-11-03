@@ -350,8 +350,8 @@ export class StdoutStallWatchdog {
  * Minimal terminal interface for TUI
  */
 
-// Track if a terminal was ever started (for emergency restore logic)
-let terminalEverStarted = false;
+// Track a started terminal until its teardown completes (for emergency restore).
+let terminalRestorePending = false;
 // Whether the alternate screen buffer is currently active (mirrors the TUI's
 // overlay enter/leave writes). Consulted by emergencyTerminalRestore: DECRST
 // 1049 must never be written blindly, because Windows' shared VT dispatcher
@@ -471,7 +471,7 @@ export function emergencyTerminalRestore(): void {
 			}
 			terminal.stop();
 			terminal.showCursor(true);
-		} else if (terminalEverStarted && !isTerminalHeadless()) {
+		} else if ((terminalRestorePending || altScreenActive) && !isTerminalHeadless()) {
 			// Blind restore only if we know a terminal was started but lost track of it
 			// This avoids writing escape sequences for non-TUI commands (grep, commit, etc.)
 			process.stdout.write(
@@ -498,6 +498,7 @@ export function emergencyTerminalRestore(): void {
 			if (process.stdin.setRawMode) {
 				process.stdin.setRawMode(false);
 			}
+			terminalRestorePending = false;
 		}
 	} catch {
 		// Terminal may already be dead during crash cleanup - ignore errors
@@ -1131,7 +1132,7 @@ export class ProcessTerminal implements Terminal {
 		setActiveTerminal(this);
 		// RGB belongs to this ownership session, including deferred-input prepaint.
 		setTerminalBackgroundColor(undefined);
-		terminalEverStarted = true;
+		terminalRestorePending = true;
 		// Own the blocking write(2) on a pump thread (unix TTYs only). A stale
 		// prebuilt natives module without the export falls back to direct writes.
 		// Test suites spy on `process.stdout.write` with a faked isTTY, so the
@@ -2523,6 +2524,8 @@ export class ProcessTerminal implements Terminal {
 		// After stop() the terminal is shared with other writers; visibility
 		// tracking is only meaningful while this instance owns the TTY.
 		this.#cursorVisible = undefined;
+		// A later postmortem pass must not blindly reset keyboard modes again.
+		terminalRestorePending = false;
 	}
 
 	#ensureStdoutErrorHandler(): void {

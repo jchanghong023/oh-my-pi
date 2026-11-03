@@ -44,6 +44,7 @@
 
 ### Fixed
 
+- Avoid printing unsupported keyboard reset sequences at the shell prompt by skipping emergency resets after terminal teardown has completed.
 - Defer hidden tool-image conversion until detailed display and keep hidden images from delaying transcript archival.
 - Keep native subagent elapsed times independent across separate runs with the same agent ID.
 - Keep paragraph spacing and committed text intact during resize replay, without joining unrelated history to the visible reply.
