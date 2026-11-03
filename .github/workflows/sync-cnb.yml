@@ -94,7 +94,16 @@ jobs:
 
                 # Upload LFS content before publishing refs that depend on it.
                 echo "::group::Upload missing LFS objects to CNB"
-                git lfs push --all cnb "${changed_refs[@]}"
+                # Fetch above guarantees completeness; upload cached OIDs without rescanning each ref.
+                shopt -s nullglob
+                for object in lfs/objects/??/??/*; do
+                  oid="${object##*/}"
+                  if [[ -f "$object" && "$oid" =~ ^[0-9a-f]{64}$ ]]; then
+                    printf '%s\n' "$oid"
+                  fi
+                done | LC_ALL=C sort -u > "$RUNNER_TEMP/cnb-lfs-oids"
+                echo "Cached LFS objects: $(wc -l < "$RUNNER_TEMP/cnb-lfs-oids")"
+                git lfs push --object-id cnb --stdin < "$RUNNER_TEMP/cnb-lfs-oids"
                 echo "::endgroup::"
 
                 # Preserve CNB-only refs and exclude GitHub's internal refs/pull/*.
