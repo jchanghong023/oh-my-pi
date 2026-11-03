@@ -15,7 +15,7 @@ provider "company" {
 		model "Deepseek-v4.1-Flash" name="Deepseek-v4.1-Flash" {
 			reasoning #true
 			supports-tools #true
-			input "text"
+			input "text" "image"
 			cost input=0 output=0 cache-read=0 cache-write=0
 			limits context=1000000 max-tokens=81920
 			thinking-mode "budget"
@@ -80,4 +80,10 @@ provider "company" {
 	supports-output-effort #false
 	disable-strict-tools #true
 	disable-adaptive-thinking #true
+	// residue: this exact company SKU retains its 256K window after the offline default override.
+	models "Qwen3.8-27B" {
+		limits-patch {
+			context-window 262144
+		}
+	}
 }

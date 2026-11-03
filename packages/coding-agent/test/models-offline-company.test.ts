@@ -37,7 +37,7 @@ async function runModels(
 ): Promise<{
 	providers: Set<string>;
 	selectors: string[];
-	companyContextWindows: number[];
+	companyContextWindows: Record<string, number>;
 	companyMaxTokens: number[];
 	stderr: string;
 }> {
@@ -135,9 +135,9 @@ async function runModels(
 	return {
 		providers: new Set(payload.models.map(model => model.provider)),
 		selectors: payload.models.map(model => model.selector),
-		companyContextWindows: payload.models
-			.filter(model => model.provider === "company")
-			.map(model => model.contextWindow),
+		companyContextWindows: Object.fromEntries(
+			payload.models.filter(model => model.provider === "company").map(model => [model.selector, model.contextWindow]),
+		),
 		companyMaxTokens: payload.models.filter(model => model.provider === "company").map(model => model.maxTokens),
 		stderr,
 	};
@@ -153,7 +153,12 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 		expect(providers.has("company")).toBe(true);
 		expect(selectors).toContain("company/GLM-5.3-public");
 		expect(selectors).toContain("company/Deepseek-v4.1-Flash");
-		expect(companyContextWindows.every(window => window === 204_800)).toBe(true);
+		expect(companyContextWindows["company/Qwen3.8-27B"]).toBe(262_144);
+		expect(
+			Object.entries(companyContextWindows)
+				.filter(([selector]) => selector !== "company/Qwen3.8-27B")
+				.every(([, window]) => window === 204_800),
+		).toBe(true);
 		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);

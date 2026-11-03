@@ -56,7 +56,8 @@
 
 ### Changed
 
-- Set offline company chat models' context window to 204,800 tokens without changing their maximum output limits.
+- Recognize image input for the company gateway's `Deepseek-v4.1-Flash` model.
+- Keep the offline `company/Qwen3.8-27B` context window at 262,144 tokens while other company chat models use 204,800 tokens.
 - Reuse the host's shared native cache for Linux daemon brokers and their workers instead of extracting a separate copy per runtime scope.
 - Show short intents and bounded first-command previews in compact shell rows, link waits to their existing job identities and commands, and distinguish background submission from waiting time.
 - Read offline company credentials asynchronously alongside independent startup work while preserving one cached snapshot for workers and subprocesses.

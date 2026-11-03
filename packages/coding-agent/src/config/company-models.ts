@@ -12,7 +12,7 @@ export const COMPANY_RETRIEVAL_MODELS = [
 	{ id: "Qwen3-VL-Reranker-2B", type: "reranker", input: ["text", "image"], contextWindow: 32768 },
 ] as const;
 
-/** OMP_OFFLINE sets every company chat model's context to 204,800 tokens
+/** OMP_OFFLINE defaults company chat context to 204,800 tokens; KDL retains model-specific limits
  * (process-only; `maxTokens` untouched) — fork contract. */
 export const COMPANY_OFFLINE_CONTEXT_WINDOW = 204_800;
 

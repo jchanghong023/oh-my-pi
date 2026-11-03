@@ -193,10 +193,11 @@ describe("company runtime catalog and request auth", () => {
 		});
 		for (const model of result.capped) {
 			expect(model.baseUrl).toBe("http://127.0.0.1:8081/gateway");
-			expect(model.contextWindow).toBe(204_800);
+			expect(model.contextWindow).toBe(model.id === "Qwen3.8-27B" ? 262_144 : 204_800);
 			expect(model.maxTokens).toBe(81_920);
 			expect(model.compat).toMatchObject({ supportsOutputEffort: false, disableAdaptiveThinking: true });
 		}
+		expect(result.capped.find(model => model.id === "Deepseek-v4.1-Flash")?.input).toEqual(["text", "image"]);
 		const byId = new Map(result.models.map(model => [model.id, model]));
 		expect(byId.get("DeepSeek-V4-Flash-public")).toMatchObject({
 			contextWindow: 1_000_000,
