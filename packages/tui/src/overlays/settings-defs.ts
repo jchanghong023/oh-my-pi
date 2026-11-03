@@ -72,6 +72,7 @@ export const TAB_GROUPS: Record<SettingTab, readonly string[]> = {
 		"通知",
 		"语音",
 		"协作",
+		"Collab",
 		"直播",
 		"魔法关键词",
 		"启动与更新",

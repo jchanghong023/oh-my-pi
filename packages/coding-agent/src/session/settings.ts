@@ -1196,7 +1196,7 @@ export const cfgProvidersOpenaiCodexDaybreak = register({
 	default: true,
 	ui: {
 		tab: "providers",
-		group: "Protocol",
+		group: "协议",
 		label: "Codex Daybreak Blue",
 		description:
 			"Automatically request the Daybreak Blue cyber access program on ChatGPT accounts eligible for it. OpenAI may use content from Daybreak Blue sessions to improve its models. Does not cover dedicated Daybreak Blue models (gpt-daybreak-blue-*), which may still run as Daybreak sessions.",

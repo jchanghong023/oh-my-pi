@@ -740,7 +740,9 @@ export class SettingsSelectorComponent implements Component {
 		const tabLines = this.#tabBar.render(innerWidth);
 		const searching = this.#searchList !== null;
 		const showPreview = !searching && this.#currentTabId === "appearance";
-		const previewLines = showPreview ? ["", theme.fg("muted", "预览："), this.#getStatusPreviewString()] : [];
+		const previewLines = showPreview
+			? ["", theme.fg("muted", "预览："), ...this.#getStatusPreviewString().split("\n")]
+			: [];
 
 		// Fixed chrome: top border, tabs, divider, [search row], divider, hint, bottom border.
 		const fixedRows = 1 + tabLines.length + 1 + (searching ? 1 : 0) + 1 + 1 + 1;

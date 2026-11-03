@@ -160,6 +160,7 @@
 
 ### Fixed
 
+- Keep input, Collab and provider protocol settings in their intended settings groups, preserving the upstream Collab section name.
 - Fix ZCode session creation and reads when a model's context or output limit is unknown.
 
 - Preserve offline company embedding and reranker configuration in knowledge workers so indexes created from the knowledge panel include available semantic vectors.

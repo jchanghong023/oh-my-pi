@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Keep multiline status previews inside the settings panel on narrow terminals.
 - Closing an overlay that others were opened over no longer leaves them returning focus to it once they close ([#16476](https://github.com/can1357/oh-my-pi/pull/16476))
 
 ## [18.16.0] - 2026-11-02

@@ -825,7 +825,7 @@ export const cfgBtwInject = register({
 	default: false,
 	ui: {
 		tab: "interaction",
-		group: "Input",
+		group: "输入",
 		label: "/btw Steering Inject",
 		description:
 			"When you ask /btw for a steering prompt, it drafts one in <inject> tags, highlighted in the answer; Alt+I (app.btw.inject) sends it to the main session",
@@ -1062,7 +1062,7 @@ export const cfgComposerPredictionAlternatives = register({
 	default: false,
 	ui: {
 		tab: "interaction",
-		group: "Input",
+		group: "输入",
 		label: "Prediction Alternatives",
 		get description() {
 			return `Ask for up to four distinct predictions instead of one, most likely first. The ghost text shows the first one your draft matches; after inserting one, press ${formatKeyHint("tab")} again to pick another. The same single request returns a few more output tokens`;

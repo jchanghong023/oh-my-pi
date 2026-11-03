@@ -96,6 +96,31 @@ describe("settings layout", () => {
 		expect(defs[2]?.condition?.()).toBe(true);
 	});
 
+	it("keeps each wrapped status preview line inside the settings panel", () => {
+		const selector = new SettingsSelectorComponent(
+			{
+				availableThinkingLevels: [],
+				thinkingLevel: undefined,
+				availableThemes: ["dark", "light"],
+				providers: [],
+				settings: createSettingsHost(),
+				plugins: createPluginSettingsHost(process.cwd()),
+			},
+			{
+				onChange: () => {},
+				onCancel: () => {},
+				getStatusLinePreview: () => "preview first line\npreview second line",
+			},
+		);
+		const lines = selector.render(80).map(line => Bun.stripANSI(line));
+		for (const text of ["preview first line", "preview second line"]) {
+			const line = lines.find(candidate => candidate.includes(text));
+			expect(line?.startsWith("│")).toBe(true);
+			expect(line?.endsWith("│")).toBe(true);
+			expect(line?.includes("\n")).toBe(false);
+		}
+	});
+
 	it("renders preview inside SettingsSelectorComponent submenu without crashing", async () => {
 		await setTheme("dark");
 		const selector = new SettingsSelectorComponent(
