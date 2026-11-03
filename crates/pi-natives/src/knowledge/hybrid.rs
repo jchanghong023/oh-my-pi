@@ -13,6 +13,7 @@ use super::{
 	database::{
 		KnowledgeErrorNapi, KnowledgeSearchHit, KnowledgeSearchOptions, KnowledgeSearchOutput,
 	},
+	diagnostics::{self, DiagnosticFunction},
 	query::MatchKind,
 };
 use crate::task::{self, CancelToken};
@@ -222,7 +223,8 @@ impl KnowledgeSearchEngine {
 	#[napi(
 		ts_return_type = "Promise<KnowledgeHybridPrepared | KnowledgeSearchOutput>",
 		ts_args_type = "query: string, options: KnowledgeSearchOptions, modelIdentity?: string, \
-		                signal?: AbortSignal"
+		                signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => \
+		                unknown"
 	)]
 	pub fn prepare_hybrid_search(
 		&self,
@@ -230,34 +232,46 @@ impl KnowledgeSearchEngine {
 		options: KnowledgeSearchOptions,
 		model_identity: Option<String>,
 		signal: Option<Unknown<'_>>,
-	) -> task::MappedPromise<
-		Guarded<Either<KnowledgeHybridPrepared, KnowledgeSearchOutput>>,
-		KnowledgeError,
+		diagnostic: Option<DiagnosticFunction<'_>>,
+	) -> napi::Result<
+		task::MappedPromise<
+			Guarded<Either<KnowledgeHybridPrepared, KnowledgeSearchOutput>>,
+			KnowledgeError,
+		>,
 	> {
+		let diagnostic = diagnostic
+			.map(|callback| callback.build_threadsafe_function().build())
+			.transpose()?;
 		let owner = Arc::clone(&self.owner);
 		let cancel = CancelToken::new(None, signal);
 		let options = options.into();
-		task::blocking_mapped(
+		Ok(task::blocking_mapped(
 			"knowledge_hybrid_prepare",
 			cancel,
 			reject,
 			task::abort_error,
 			move |cancel| {
+				let self_owner = Arc::clone(&owner);
 				let value = owner.with_engine(&cancel, |engine| {
+					engine.set_search_diagnostics(diagnostic.is_some());
 					let owner = Arc::clone(&owner);
 					let cancellation = cancel.clone();
-					engine
-						.prepare_hybrid(&query, &options, model_identity.as_deref(), move || {
+					let result =
+						engine.prepare_hybrid(&query, &options, model_identity.as_deref(), move || {
 							owner.check_hybrid(&cancellation)
-						})
-						.map(|value| match value {
-							HybridPreparation::Ready(prepared) => Either::A(prepared.into()),
-							HybridPreparation::Fulltext(output) => Either::B(output.into()),
-						})
-				})?;
+						});
+					self_owner.record_search_diagnostics(engine);
+					result.map(|value| match value {
+						HybridPreparation::Ready(prepared) => Either::A(prepared.into()),
+						HybridPreparation::Fulltext(output) => Either::B(output.into()),
+					})
+				});
+				diagnostics::flush_async(&owner.diagnostics, diagnostic.as_ref())
+					.map_err(|error| KnowledgeError::message(error.reason))?;
+				let value = value?;
 				Ok(Guarded { owner, cancel, value })
 			},
-		)
+		))
 	}
 
 	#[napi(
@@ -287,16 +301,14 @@ impl KnowledgeSearchEngine {
 					{
 						return Err(KnowledgeError::message("Invalid documentation query vector"));
 					}
+					let score_owner = Arc::clone(&owner);
+					let score_cancel = cancel.clone();
 					engine.score_hybrid(
 						&token,
 						query.len(),
-						&|| owner.check_hybrid(&cancel),
-						|matrix, dims| {
-							crate::vectors::vector_index_top_k_slice(matrix, dims, &query, limit as usize)
-								.into_iter()
-								.map(|(_, row)| row)
-								.collect()
-						},
+						move || score_owner.check_hybrid(&score_cancel),
+						&query,
+						limit as usize,
 					)
 				})?;
 				Ok(Guarded { owner, cancel, value })

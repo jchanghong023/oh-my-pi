@@ -78,6 +78,32 @@ pub(super) type DiagnosticQueue = Arc<Mutex<Vec<(ThreadId, KnowledgeDiagnosticEv
 pub(super) fn enqueue(queue: &DiagnosticQueue, event: KnowledgeDiagnosticEvent) {
 	queue.lock().push((thread::current().id(), event));
 }
+pub(super) fn search_profile(
+	queue: &DiagnosticQueue,
+	profile: pi_knowledge::database::SearchDiagnostics,
+) {
+	for (stage, elapsed, sections, documents) in [
+		("snapshot", profile.snapshot, None, None),
+		("fts", profile.fts, Some(profile.fts_matches), None),
+		("section_sqlite", profile.section_sqlite, Some(profile.section_rows), None),
+		("projection", profile.projection, None, Some(profile.documents)),
+		("scoring", profile.scoring, Some(profile.candidates), None),
+		("finalize", profile.finalize, Some(profile.candidates), None),
+	] {
+		enqueue(queue, KnowledgeDiagnosticEvent {
+			message: "knowledge.search.core.completed".into(),
+			level: "info".into(),
+			component: "knowledge".into(),
+			event: "knowledge.search.core".into(),
+			stage: stage.into(),
+			result: "completed".into(),
+			elapsed_ms: Some(elapsed.as_secs_f64() * 1000.0),
+			section_count: sections.map(|count| count as i64),
+			document_count: documents.map(|count| count as i64),
+			..KnowledgeDiagnosticEvent::default()
+		});
+	}
+}
 fn take_current(queue: &DiagnosticQueue) -> Vec<KnowledgeDiagnosticEvent> {
 	let current = thread::current().id();
 	queue

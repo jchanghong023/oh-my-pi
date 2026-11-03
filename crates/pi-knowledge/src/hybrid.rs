@@ -18,10 +18,10 @@ use super::{
 const SNAPSHOT_STALE: &str = "KNOWLEDGE_SNAPSHOT_STALE";
 
 // This is a retained-data budget, shared by vectors and hydrated sections.
-// Oversized matrices use the existing IDs-only preparation and on-demand read.
+// Oversized matrices are scored a row at a time after the model call.
 const HYBRID_DATA_BUDGET: usize = 16 * 1024 * 1024;
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 struct VectorKey {
 	guard:      String,
 	model:      String,
@@ -36,16 +36,31 @@ struct CachedMatrix {
 	bytes:  usize,
 }
 
+struct CachedVectorIds {
+	key:   VectorKey,
+	ids:   Arc<Vec<i64>>,
+	bytes: usize,
+}
+
 struct CachedHit {
 	guard: String,
 	hit:   KnowledgeSearchHit,
 	bytes: usize,
 }
 
+struct CachedCandidate {
+	guard: String,
+	query: String,
+	entry: RankedSection,
+	bytes: usize,
+}
+
 struct HybridData {
-	matrices: VecDeque<CachedMatrix>,
-	hits:     VecDeque<CachedHit>,
-	bytes:    usize,
+	matrices:   VecDeque<CachedMatrix>,
+	vector_ids: VecDeque<CachedVectorIds>,
+	hits:       VecDeque<CachedHit>,
+	candidates: VecDeque<CachedCandidate>,
+	bytes:      usize,
 }
 
 pub(super) struct HybridDataCache(RefCell<HybridData>, usize);
@@ -54,9 +69,11 @@ impl HybridDataCache {
 	pub(super) const fn new() -> Self {
 		Self(
 			RefCell::new(HybridData {
-				matrices: VecDeque::new(),
-				hits:     VecDeque::new(),
-				bytes:    0,
+				matrices:   VecDeque::new(),
+				vector_ids: VecDeque::new(),
+				hits:       VecDeque::new(),
+				candidates: VecDeque::new(),
+				bytes:      0,
 			}),
 			HYBRID_DATA_BUDGET,
 		)
@@ -65,7 +82,9 @@ impl HybridDataCache {
 	pub(super) fn clear(&self) {
 		let mut data = self.0.borrow_mut();
 		data.matrices.clear();
+		data.vector_ids.clear();
 		data.hits.clear();
+		data.candidates.clear();
 		data.bytes = 0;
 	}
 
@@ -75,6 +94,10 @@ impl HybridDataCache {
 		}
 		while data.bytes > self.1 - bytes {
 			if let Some(old) = data.hits.pop_front() {
+				data.bytes -= old.bytes;
+			} else if let Some(old) = data.candidates.pop_front() {
+				data.bytes -= old.bytes;
+			} else if let Some(old) = data.vector_ids.pop_front() {
 				data.bytes -= old.bytes;
 			} else if let Some(old) = data.matrices.pop_front() {
 				data.bytes -= old.bytes;
@@ -123,6 +146,70 @@ impl HybridDataCache {
 				.push_back(CachedMatrix { key, matrix: Arc::clone(&matrix), bytes });
 		}
 		matrix
+	}
+
+	fn vector_ids(&self, key: &VectorKey) -> Option<Arc<Vec<i64>>> {
+		let mut data = self.0.borrow_mut();
+		let position = data.vector_ids.iter().position(|item| item.key == *key)?;
+		let item = data
+			.vector_ids
+			.remove(position)
+			.expect("vector IDs cache entry");
+		let ids = Arc::clone(&item.ids);
+		data.vector_ids.push_back(item);
+		Some(ids)
+	}
+
+	fn insert_vector_ids(&self, key: VectorKey, ids: Vec<i64>) -> Arc<Vec<i64>> {
+		let bytes = ids
+			.capacity()
+			.saturating_mul(std::mem::size_of::<i64>())
+			.saturating_add(key.guard.capacity())
+			.saturating_add(key.model.capacity())
+			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
+			.saturating_add(key.path.as_ref().map_or(0, String::capacity))
+			.saturating_add(256);
+		let ids = Arc::new(ids);
+		let mut data = self.0.borrow_mut();
+		if self.reserve(&mut data, bytes) {
+			data.bytes += bytes;
+			data
+				.vector_ids
+				.push_back(CachedVectorIds { key, ids: Arc::clone(&ids), bytes });
+		}
+		ids
+	}
+
+	fn candidate(&self, guard: &str, query: &str, id: i64) -> Option<RankedSection> {
+		let mut data = self.0.borrow_mut();
+		let position = data.candidates.iter().position(|item| {
+			item.guard == guard && item.query == query && item.entry.section_id == id
+		})?;
+		let item = data
+			.candidates
+			.remove(position)
+			.expect("candidate cache entry");
+		let result = item.entry.clone();
+		data.candidates.push_back(item);
+		Some(result)
+	}
+
+	fn insert_candidate(&self, guard: &str, query: &str, entry: &RankedSection) {
+		let bytes = guard.len().saturating_add(query.len()).saturating_add(256);
+		let mut data = self.0.borrow_mut();
+		if data.candidates.iter().any(|item| {
+			item.guard == guard && item.query == query && item.entry.section_id == entry.section_id
+		}) || !self.reserve(&mut data, bytes)
+		{
+			return;
+		}
+		data.bytes += bytes;
+		data.candidates.push_back(CachedCandidate {
+			guard: guard.to_owned(),
+			query: query.to_owned(),
+			entry: entry.clone(),
+			bytes,
+		});
 	}
 
 	fn hit(&self, guard: &str, entry: &RankedSection) -> Option<KnowledgeSearchHit> {
@@ -240,6 +327,51 @@ impl DatabaseEngine {
 		let finish = connection.execute_batch(if result.is_ok() { "COMMIT" } else { "ROLLBACK" });
 		finish?;
 		let value = result?;
+		if self.guard()? != guard {
+			return Err(stale());
+		}
+		Ok(value)
+	}
+
+	fn hybrid_snapshot_checked<T, F>(
+		&self,
+		guard: &str,
+		check: F,
+		work: impl FnOnce(&Connection) -> CoreResult<T>,
+	) -> CoreResult<T>
+	where
+		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+	{
+		check()?;
+		if self.guard()? != guard {
+			return Err(stale());
+		}
+		let connection = self.connection.as_ref().expect("opened search connection");
+		let progress = check.clone();
+		connection.progress_handler(1000, Some(move || progress().is_err()))?;
+		let result = (|| {
+			connection.execute_batch("BEGIN DEFERRED")?;
+			work(connection)
+		})();
+		// Remove the interrupt callback before COMMIT or ROLLBACK, even when
+		// SQLite aborted the statement or BEGIN itself failed.
+		let clear = connection.progress_handler(0, None::<fn() -> bool>);
+		let finish = if connection.is_autocommit() {
+			Ok(())
+		} else {
+			connection.execute_batch(if result.is_ok() && clear.is_ok() {
+				"COMMIT"
+			} else {
+				"ROLLBACK"
+			})
+		};
+		clear?;
+		finish?;
+		if result.is_err() {
+			check()?;
+		}
+		let value = result?;
+		check()?;
 		if self.guard()? != guard {
 			return Err(stale());
 		}
@@ -413,110 +545,116 @@ impl DatabaseEngine {
 		for hit in &output.result.sections {
 			self.hybrid_data.insert_hit(&guard, hit);
 		}
-		let (source_order, vectors, vector_failure) = self.hybrid_snapshot(&guard, |connection| {
-			let mut wanted: HashSet<i64> = baseline
-				.ranked
-				.iter()
-				.map(|entry| entry.section_id)
-				.collect();
-			let mut vector_dimensions = Vec::new();
-			{
-				let has_generations: bool = if model.is_some() {
-					connection.query_row(
-						"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND \
-						 name='wiki_vector_generations')",
-						[],
-						|row| row.get(0),
-					)?
-				} else {
-					false
-				};
-				if let Some(model) = model.filter(|_| has_generations) {
-					let mut dimensions = connection.prepare(
-						"SELECT DISTINCT g.dimensions FROM wiki_vector_generations g JOIN doc_indexes i \
-						 ON i.id=g.index_id WHERE g.complete=1 AND g.model=? AND \
-						 typeof(g.dimensions)='integer' AND g.dimensions>0 AND g.dimensions<=4294967295 \
-						 AND i.name NOT GLOB '__building__*' AND (? IS NULL OR i.name=?) ORDER BY \
-						 g.dimensions",
-					)?;
-					let dims = dimensions
-						.query_map(params![model, options.index, options.index], |row| {
-							row.get::<_, i64>(0)
-						})?;
-					for dimension in dims {
-						check()?;
-						let dimension = usize::try_from(dimension?).map_err(|_| stale())?;
-						let key = vector_key(
-							&guard,
-							model,
-							dimension,
-							options.index.as_deref(),
-							options.path.as_deref(),
-						);
-						let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
-							Some(matrix)
-						} else if crate::vectors::matrix_fits(
-							connection,
-							model,
-							dimension,
-							options.index.as_deref(),
-							self.hybrid_data.1 / 2,
-						)? {
-							let matrix = crate::vectors::read_scoped_vector_matrix(
+		let (source_order, vectors, vector_failure) =
+			self.hybrid_snapshot_checked(&guard, check.clone(), |connection| {
+				let mut wanted: HashSet<i64> = baseline
+					.ranked
+					.iter()
+					.map(|entry| entry.section_id)
+					.collect();
+				let mut vector_dimensions = Vec::new();
+				{
+					let has_generations: bool = if model.is_some() {
+						connection.query_row(
+							"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND \
+							 name='wiki_vector_generations')",
+							[],
+							|row| row.get(0),
+						)?
+					} else {
+						false
+					};
+					if let Some(model) = model.filter(|_| has_generations) {
+						let mut dimensions = connection.prepare(
+							"SELECT DISTINCT g.dimensions FROM wiki_vector_generations g JOIN \
+							 doc_indexes i ON i.id=g.index_id WHERE g.complete=1 AND g.model=? AND \
+							 typeof(g.dimensions)='integer' AND g.dimensions>0 AND \
+							 g.dimensions<=4294967295 AND i.name NOT GLOB '__building__*' AND (? IS NULL \
+							 OR i.name=?) ORDER BY g.dimensions",
+						)?;
+						let dims = dimensions
+							.query_map(params![model, options.index, options.index], |row| {
+								row.get::<_, i64>(0)
+							})?;
+						for dimension in dims {
+							check()?;
+							let dimension = usize::try_from(dimension?).map_err(|_| stale())?;
+							let key = vector_key(
+								&guard,
+								model,
+								dimension,
+								options.index.as_deref(),
+								options.path.as_deref(),
+							);
+							let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
+								Some(matrix)
+							} else if self.hybrid_data.vector_ids(&key).is_some() {
+								None
+							} else if crate::vectors::matrix_fits(
 								connection,
 								model,
 								dimension,
 								options.index.as_deref(),
-								options.path.as_deref().map(PathScope),
-								&check,
-							)?;
-							Some(self.hybrid_data.insert_matrix(key, matrix))
-						} else {
-							None
-						};
-						let section_ids = if let Some(matrix) = matrix.as_ref() {
-							&matrix.section_ids
-						} else {
-							// An over-budget generation must still be validated in its
-							// entirety.
-							let ids = crate::vectors::read_vector_ids(
-								connection,
-								model,
-								dimension,
-								options.index.as_deref(),
-								options.path.as_deref().map(PathScope),
-								&check,
-							)?;
-							if !ids.is_empty() {
-								wanted.extend(ids);
+								self.hybrid_data.1 / 2,
+							)? {
+								let matrix = crate::vectors::read_scoped_vector_matrix(
+									connection,
+									model,
+									dimension,
+									options.index.as_deref(),
+									options.path.as_deref().map(PathScope),
+									&check,
+								)?;
+								Some(self.hybrid_data.insert_matrix(key.clone(), matrix))
+							} else {
+								None
+							};
+							let section_ids = if let Some(matrix) = matrix.as_ref() {
+								&matrix.section_ids
+							} else {
+								let ids = if let Some(ids) = self.hybrid_data.vector_ids(&key) {
+									ids
+								} else {
+									let ids = crate::vectors::read_vector_ids(
+										connection,
+										model,
+										dimension,
+										options.index.as_deref(),
+										options.path.as_deref().map(PathScope),
+										&check,
+									)?;
+									self.hybrid_data.insert_vector_ids(key, ids)
+								};
+								if !ids.is_empty() {
+									wanted.extend(ids.iter().copied());
+									vector_dimensions.push(dimension);
+								}
+								continue;
+							};
+							if !section_ids.is_empty() {
+								wanted.extend(section_ids.iter().copied());
 								vector_dimensions.push(dimension);
 							}
-							continue;
-						};
-						if !section_ids.is_empty() {
-							wanted.extend(section_ids.iter().copied());
-							vector_dimensions.push(dimension);
 						}
 					}
 				}
-			}
-			let mut source_order = HashMap::with_capacity(wanted.len());
-			let mut statement = connection.prepare(
-				"SELECT s.id FROM sections s JOIN documents d ON d.id=s.document_id JOIN doc_indexes \
-				 i ON i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (? IS NULL OR \
-				 i.name=?) ORDER BY i.id,d.id,s.ordinal,s.id",
-			)?;
-			let ids = statement
-				.query_map(params![options.index, options.index], |row| row.get::<_, i64>(0))?;
-			for (position, id) in ids.enumerate() {
-				check()?;
-				let id = id?;
-				if wanted.contains(&id) {
-					source_order.insert(id, position as i64);
+				let mut source_order = HashMap::with_capacity(wanted.len());
+				let mut statement = connection.prepare(
+					"SELECT s.id FROM sections s JOIN documents d ON d.id=s.document_id JOIN \
+					 doc_indexes i ON i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (? IS \
+					 NULL OR i.name=?) ORDER BY i.id,d.id,s.ordinal,s.id",
+				)?;
+				let ids = statement
+					.query_map(params![options.index, options.index], |row| row.get::<_, i64>(0))?;
+				for (position, id) in ids.enumerate() {
+					check()?;
+					let id = id?;
+					if wanted.contains(&id) {
+						source_order.insert(id, position as i64);
+					}
 				}
-			}
-			Ok((source_order, vector_dimensions, false))
-		})?;
+				Ok((source_order, vector_dimensions, false))
+			})?;
 		let fulltext = baseline
 			.ranked
 			.iter()
@@ -574,20 +712,24 @@ impl DatabaseEngine {
 	}
 
 	/// Score a compatible generation inside the prepared snapshot, after model
-	/// I/O.
-	pub fn score_hybrid(
+	/// I/O. Finite nonzero queries are required.
+	pub fn score_hybrid<F>(
 		&self,
 		token: &str,
 		dimensions: usize,
-		check: &dyn Fn() -> CoreResult<()>,
-		score: impl FnOnce(&[f32], usize) -> Vec<u32>,
-	) -> CoreResult<Option<Vec<i64>>> {
+		check: F,
+		query: &[f64],
+		limit: usize,
+	) -> CoreResult<Option<Vec<i64>>>
+	where
+		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+	{
 		let context = self.hybrid_context(token)?;
 		if !context.vector_dimensions.contains(&dimensions) {
 			return Ok(None);
 		}
 		let model = context.model.as_deref().ok_or_else(stale)?;
-		self.hybrid_snapshot(&context.guard, |connection| {
+		self.hybrid_snapshot_checked(&context.guard, check.clone(), |connection| {
 			let key = vector_key(
 				&context.guard,
 				model,
@@ -595,32 +737,23 @@ impl DatabaseEngine {
 				context.index.as_deref(),
 				context.path.as_deref(),
 			);
-			let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
-				matrix
+			check()?;
+			let result = if let Some(matrix) = self.hybrid_data.matrix(&key) {
+				crate::vectors::score_matrix(&matrix, query, limit, &check)
 			} else {
-				Arc::new(crate::vectors::read_scoped_vector_matrix(
+				crate::vectors::score_stream(
 					connection,
 					model,
 					dimensions,
 					context.index.as_deref(),
 					context.path.as_deref().map(PathScope),
-					check,
-				)?)
-			};
+					query,
+					limit,
+					&check,
+				)
+			}?;
 			check()?;
-			let rows = score(&matrix.matrix, dimensions);
-			check()?;
-			rows
-				.into_iter()
-				.map(|row| {
-					matrix
-						.section_ids
-						.get(row as usize)
-						.copied()
-						.ok_or_else(stale)
-				})
-				.collect::<CoreResult<Vec<_>>>()
-				.map(Some)
+			Ok(Some(result))
 		})
 	}
 
@@ -635,7 +768,7 @@ impl DatabaseEngine {
 		self.hybrid_snapshot(&context.guard, |connection| {
 			let mut unique = HashSet::new();
 			let mut hits = Vec::with_capacity(ids.len());
-			let mut resolver = CandidateResolver::new(&context.query);
+			let mut resolver = CandidateResolver::new(&context.query, &self.hybrid_data);
 			for &id in ids {
 				check()?;
 				if !context.allowed.contains(&id) || !unique.insert(id) {
@@ -688,7 +821,7 @@ impl DatabaseEngine {
 		let (ranking, sections) = self.hybrid_snapshot(&context.guard, |connection| {
 			let mut ranked = Vec::with_capacity(ids.len());
 			let mut saw_related = false;
-			let mut resolver = CandidateResolver::new(&context.query);
+			let mut resolver = CandidateResolver::new(&context.query, &self.hybrid_data);
 			for &id in ids {
 				check()?;
 				let entry = resolver.candidate(connection, &context, id, check)?;
@@ -779,13 +912,14 @@ impl DatabaseEngine {
 	}
 }
 
-struct CandidateResolver {
-	name:      Option<LiteralMatcher>,
-	documents: HashMap<i64, DocumentContexts>,
+struct CandidateResolver<'a> {
+	name:     Option<LiteralMatcher>,
+	document: Option<(i64, DocumentContexts)>,
+	cache:    &'a HybridDataCache,
 }
 
-impl CandidateResolver {
-	fn new(text: &str) -> Self {
+impl<'a> CandidateResolver<'a> {
+	fn new(text: &str, cache: &'a HybridDataCache) -> Self {
 		let plan = query::analyze_query(text);
 		let name = plan.technical_name.as_deref().map(|name| {
 			LiteralMatcher::new(
@@ -793,7 +927,7 @@ impl CandidateResolver {
 				!name.contains(['/', '\\']) && !name.contains("::"),
 			)
 		});
-		Self { name, documents: HashMap::new() }
+		Self { name, document: None, cache }
 	}
 
 	fn candidate(
@@ -806,6 +940,9 @@ impl CandidateResolver {
 		if let Some(&position) = context.baseline_positions.get(&id) {
 			return Ok(context.baseline.ranked[position].clone());
 		}
+		if let Some(entry) = self.cache.candidate(&context.guard, &context.query, id) {
+			return Ok(entry);
+		}
 		let (document_id, text): (i64, String) = connection.query_row(
 			"SELECT s.document_id,s.raw_markdown FROM sections s JOIN doc_indexes i ON \
 			 i.id=s.index_id WHERE s.id=? AND i.name NOT GLOB '__building__*' AND (? IS NULL OR \
@@ -813,13 +950,15 @@ impl CandidateResolver {
 			params![id, context.index, context.index],
 			|row| Ok((row.get(0)?, row.get(1)?)),
 		)?;
-		if let std::collections::hash_map::Entry::Vacant(entry) = self.documents.entry(document_id) {
-			entry.insert(load_contexts(connection, document_id, self.name.as_ref(), check)?);
+		if self
+			.document
+			.as_ref()
+			.is_none_or(|(id, _)| *id != document_id)
+		{
+			self.document =
+				Some((document_id, load_contexts(connection, document_id, self.name.as_ref(), check)?));
 		}
-		let contexts = self
-			.documents
-			.get(&document_id)
-			.expect("loaded document contexts");
+		let contexts = &self.document.as_ref().expect("loaded document contexts").1;
 		let projection = contexts.projections.get(&id);
 		let section = contexts.sections.get(&id);
 		let exact = if let Some(exact) = contexts.exact_names.get(&id) {
@@ -837,7 +976,7 @@ impl CandidateResolver {
 			.map(|projection| projection.shape)
 			.or_else(|| section.map(|section| section.shape))
 			.ok_or_else(stale)?;
-		Ok(RankedSection {
+		let entry = RankedSection {
 			section_id: id,
 			shape,
 			match_kind: if exact {
@@ -846,7 +985,11 @@ impl CandidateResolver {
 				MatchKind::Related
 			},
 			rank: 0.0,
-		})
+		};
+		self
+			.cache
+			.insert_candidate(&context.guard, &context.query, &entry);
+		Ok(entry)
 	}
 }
 
@@ -953,10 +1096,7 @@ mod tests {
 			.unwrap()
 			.expect_ready();
 		let ids = engine
-			.score_hybrid(&prepared.token, 2, &|| Ok(()), |values, _| {
-				assert_eq!(values, &[0.6, 0.8, 0.0, 1.0]);
-				vec![0, 1]
-			})
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 2)
 			.unwrap()
 			.unwrap();
 		let candidates = engine
@@ -969,7 +1109,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(
 			engine
-				.score_hybrid(&second.token, 2, &|| Ok(()), |_, _| vec![0, 1])
+				.score_hybrid(&second.token, 2, || Ok(()), &[1.0, 0.0], 2)
 				.unwrap()
 				.unwrap(),
 			ids
@@ -977,7 +1117,7 @@ mod tests {
 		let cancelled = || Err(KnowledgeError::message("cancelled"));
 		assert!(
 			engine
-				.score_hybrid(&second.token, 2, &cancelled, |_, _| panic!("cancelled score"))
+				.score_hybrid(&second.token, 2, cancelled, &[1.0, 0.0], 2)
 				.is_err()
 		);
 		assert!(
@@ -996,10 +1136,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(
 			engine
-				.score_hybrid(&other.token, 2, &|| Ok(()), |matrix, _| {
-					assert_eq!(matrix, &[0.0, 1.0]);
-					vec![0]
-				})
+				.score_hybrid(&other.token, 2, || Ok(()), &[1.0, 0.0], 1)
 				.unwrap()
 				.unwrap(),
 			vec![3]
@@ -1022,7 +1159,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(
 			engine
-				.score_hybrid(&third.token, 2, &|| Ok(()), |_, _| vec![0])
+				.score_hybrid(&third.token, 2, || Ok(()), &[1.0, 0.0], 1)
 				.unwrap()
 				.unwrap(),
 			vec![3]
@@ -1038,7 +1175,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(
 			engine
-				.score_hybrid(&reopened.token, 2, &|| Ok(()), |_, _| vec![0])
+				.score_hybrid(&reopened.token, 2, || Ok(()), &[1.0, 0.0], 1)
 				.unwrap()
 				.unwrap(),
 			vec![3]
@@ -1063,7 +1200,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(
 			engine
-				.score_hybrid(&local.token, 2, &|| Ok(()), |_, _| vec![0, 1])
+				.score_hybrid(&local.token, 2, || Ok(()), &[1.0, 0.0], 2)
 				.unwrap()
 				.unwrap(),
 			vec![1, 3]
@@ -1095,16 +1232,12 @@ mod tests {
 			.unwrap()
 			.expect_ready();
 		assert_eq!(left.vector_dimensions, right.vector_dimensions);
-		let score = |matrix: &[f32], _: usize| {
-			assert_eq!(matrix, &[0.6, 0.8, 0.0, 1.0]);
-			vec![1, 0]
-		};
 		let left_ids = cached
-			.score_hybrid(&left.token, 2, &|| Ok(()), score)
+			.score_hybrid(&left.token, 2, || Ok(()), &[0.0, 1.0], 2)
 			.unwrap()
 			.unwrap();
 		let right_ids = uncached
-			.score_hybrid(&right.token, 2, &|| Ok(()), score)
+			.score_hybrid(&right.token, 2, || Ok(()), &[0.0, 1.0], 2)
 			.unwrap()
 			.unwrap();
 		assert_eq!(left_ids, right_ids);
@@ -1146,5 +1279,115 @@ mod tests {
 		assert_eq!(empty.bytes, 0);
 		assert!(empty.matrices.is_empty());
 		assert!(empty.hits.is_empty());
+	}
+
+	#[test]
+	fn oversized_validated_ids_are_reused_within_guard() {
+		let fixture = Fixture::new();
+		let writer = Connection::open(&fixture.path).unwrap();
+		writer.execute_batch(
+			"WITH RECURSIVE n(x) AS (VALUES(4) UNION ALL SELECT x+1 FROM n WHERE x<203)
+			 INSERT INTO sections SELECT x,1,1,x,'A',1,1,2,0,1,'extra' FROM n;
+			 INSERT INTO wiki_section_vectors SELECT 1,id,x'0000803f00000000' FROM sections WHERE id>=4;"
+		).unwrap();
+		let mut engine = fixture.engine();
+		engine.hybrid_data.1 = 4096;
+		let options = KnowledgeSearchOptions::default();
+		let first = engine
+			.prepare_hybrid("needle", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		let guard = engine.hybrid_context(&first.token).unwrap().guard.clone();
+		let key = vector_key(&guard, "model", 2, None, None);
+		assert!(engine.hybrid_data.matrix(&key).is_none());
+		let ids = engine.hybrid_data.vector_ids(&key).unwrap();
+		assert_eq!(ids.len(), 203);
+		let second = engine
+			.prepare_hybrid("evidence", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(second.vector_dimensions, first.vector_dimensions);
+		let reused = engine.hybrid_data.vector_ids(&key).unwrap();
+		assert!(Arc::ptr_eq(&ids, &reused));
+	}
+
+	#[test]
+	fn semantic_candidate_classification_is_reused_for_finish() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let options = KnowledgeSearchOptions::default();
+		let prepared = engine
+			.prepare_hybrid("needle", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		let candidate = engine
+			.read_hybrid_candidates(&prepared.token, &[2], &|| Ok(()))
+			.unwrap()
+			.remove(0);
+		let context = engine.hybrid_context(&prepared.token).unwrap();
+		let cached = engine
+			.hybrid_data
+			.candidate(&context.guard, &context.query, 2)
+			.unwrap();
+		assert_eq!(cached.match_kind, candidate.hit.match_kind);
+		assert_eq!(cached.shape, candidate.hit.shape);
+		let mut ids: Vec<_> = prepared
+			.fulltext
+			.iter()
+			.map(|rank| rank.section_id)
+			.collect();
+		ids.push(2);
+		let result = engine
+			.finish_hybrid(&prepared.token, &ids, "semantic", "", &|| Ok(()))
+			.unwrap();
+		let hit = result
+			.result
+			.sections
+			.iter()
+			.find(|hit| hit.section_id == 2)
+			.unwrap();
+		assert_eq!(hit.match_kind, candidate.hit.match_kind);
+		assert_eq!(hit.text, candidate.hit.text);
+	}
+
+	#[test]
+	fn sqlite_progress_cancellation_is_cleared_before_rollback() {
+		use std::sync::atomic::AtomicUsize;
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		engine.ensure_database().unwrap();
+		let guard = engine.guard().unwrap();
+		let calls = Arc::new(AtomicUsize::new(0));
+		let count = Arc::clone(&calls);
+		let check = move || {
+			if count.fetch_add(1, Ordering::Relaxed) >= 4 {
+				Err(KnowledgeError::message("cancelled"))
+			} else {
+				Ok(())
+			}
+		};
+		let result = engine.hybrid_snapshot_checked(&guard, check, |connection| {
+			connection
+				.query_row(
+					"WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<100000) \
+					 SELECT sum(x) FROM n",
+					[],
+					|row| row.get::<_, i64>(0),
+				)
+				.map_err(Into::into)
+		});
+		assert!(result.is_err());
+		assert!(calls.load(Ordering::Relaxed) >= 5);
+		let connection = engine.connection.as_ref().unwrap();
+		assert!(connection.is_autocommit());
+		let value: i64 = connection
+			.query_row(
+				"WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL SELECT x+1 FROM n WHERE x<10000) SELECT \
+				 max(x) FROM n",
+				[],
+				|row| row.get(0),
+			)
+			.unwrap();
+		assert_eq!(value, 10000);
 	}
 }

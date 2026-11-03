@@ -3,7 +3,7 @@ use std::{
 	fs,
 	path::Path,
 	sync::Arc,
-	time::Duration,
+	time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -391,6 +391,31 @@ struct Ranking {
 	reranked:           Option<bool>,
 }
 
+/// Optional timings for the most recent uncached full-text search.
+#[derive(Default, Debug)]
+pub struct SearchDiagnostics {
+	/// Time spent producing the corpus identity when it was not cached.
+	pub snapshot:       Duration,
+	/// Time spent retrieving FTS ranks.
+	pub fts:            Duration,
+	/// Number of full-text hits retained within the requested scope.
+	pub fts_matches:    usize,
+	/// Time advancing the scoped section query, excluding row processing.
+	pub section_sqlite: Duration,
+	/// Time loading, decoding, validating, and matching document projections.
+	pub projection:     Duration,
+	/// Time preparing and scoring matched candidates.
+	pub scoring:        Duration,
+	/// Time computing global weights, sorting, and grouping results.
+	pub finalize:       Duration,
+	/// Number of section rows visited.
+	pub section_rows:   usize,
+	/// Number of document projections or legacy contexts loaded.
+	pub documents:      usize,
+	/// Number of matched candidates scored.
+	pub candidates:     usize,
+}
+
 /// Internal metadata for one ranked section, without its Markdown body.
 pub struct HybridRank {
 	pub section_id:   i64,
@@ -543,23 +568,25 @@ fn retrieval_status(identity: &str) -> (&'static str, Option<bool>) {
 
 /// SQLite-backed ranked search engine.
 pub struct DatabaseEngine {
-	path:             String,
-	cursor_path:      String,
-	connection:       Option<Connection>,
-	identity:         String,
-	generation:       u64,
-	cache_guard:      Option<String>,
-	corpus_snapshot:  Option<Sha256>,
-	hybrid_data:      hybrid::HybridDataCache,
-	cache:            VecDeque<(String, Arc<Ranking>)>,
-	cached_sections:  usize,
-	hybrid:           VecDeque<Arc<HybridContext>>,
-	hybrid_sequence:  u64,
-	hybrid_completed: VecDeque<HybridCompleted>,
+	path:                String,
+	cursor_path:         String,
+	connection:          Option<Connection>,
+	identity:            String,
+	generation:          u64,
+	cache_guard:         Option<String>,
+	corpus_snapshot:     Option<Sha256>,
+	hybrid_data:         hybrid::HybridDataCache,
+	cache:               VecDeque<(String, Arc<Ranking>)>,
+	cached_sections:     usize,
+	hybrid:              VecDeque<Arc<HybridContext>>,
+	hybrid_sequence:     u64,
+	hybrid_completed:    VecDeque<HybridCompleted>,
+	diagnostics_enabled: bool,
+	search_diagnostics:  Option<SearchDiagnostics>,
 	#[cfg(test)]
-	rank_builds:      usize,
+	rank_builds:         usize,
 	#[cfg(test)]
-	after_snapshot:   Option<Box<dyn FnMut() -> CoreResult<()> + Send>>,
+	after_snapshot:      Option<Box<dyn FnMut() -> CoreResult<()> + Send>>,
 }
 impl DatabaseEngine {
 	/// Create a search engine for the database and cursor identity paths.
@@ -578,11 +605,26 @@ impl DatabaseEngine {
 			hybrid: VecDeque::new(),
 			hybrid_sequence: 0,
 			hybrid_completed: VecDeque::new(),
+			diagnostics_enabled: false,
+			search_diagnostics: None,
 			#[cfg(test)]
 			rank_builds: 0,
 			#[cfg(test)]
 			after_snapshot: None,
 		}
+	}
+
+	/// Enable opt-in per-search timing collection.
+	pub const fn set_search_diagnostics(&mut self, enabled: bool) {
+		self.diagnostics_enabled = enabled;
+		if !enabled {
+			self.search_diagnostics = None;
+		}
+	}
+
+	/// Take timings for the latest uncached full-text search, if collected.
+	pub const fn take_search_diagnostics(&mut self) -> Option<SearchDiagnostics> {
+		self.search_diagnostics.take()
 	}
 
 	/// Close the active connection and clear cached rankings.
@@ -673,6 +715,7 @@ impl DatabaseEngine {
 	where
 		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
 	{
+		self.search_diagnostics = None;
 		check()?;
 		let path = PathScope::validate(options.path.as_deref())?;
 		self.ensure_database()?;
@@ -782,6 +825,7 @@ impl DatabaseEngine {
 						self.rank_builds += 1;
 					}
 					let connection = self.connection.as_ref().expect("connection");
+					let snapshot_started = self.diagnostics_enabled.then(Instant::now);
 					let snapshot = match (snapshot_guard == before)
 						.then(|| self.corpus_snapshot.clone())
 						.flatten()
@@ -789,6 +833,7 @@ impl DatabaseEngine {
 						Some(snapshot) => snapshot,
 						None => corpus_snapshot(connection, &check)?,
 					};
+					let snapshot_time = snapshot_started.map_or(Duration::ZERO, |start| start.elapsed());
 					let ranking = Arc::new(if let Some(matcher) = grep.as_ref() {
 						rank_grep(
 							connection,
@@ -799,6 +844,11 @@ impl DatabaseEngine {
 							snapshot.clone(),
 						)?
 					} else {
+						self.search_diagnostics =
+							self.diagnostics_enabled.then(SearchDiagnostics::default);
+						if let Some(diagnostics) = &mut self.search_diagnostics {
+							diagnostics.snapshot = snapshot_time;
+						}
 						rank(
 							connection,
 							query_text,
@@ -807,6 +857,7 @@ impl DatabaseEngine {
 							path,
 							&check,
 							snapshot.clone(),
+							&mut self.search_diagnostics,
 						)?
 					});
 					built = Some(Arc::clone(&ranking));
@@ -991,7 +1042,9 @@ fn rank(
 	path: Option<PathScope<'_>>,
 	check: Check<'_>,
 	mut snapshot: Sha256,
+	diagnostics: &mut Option<SearchDiagnostics>,
 ) -> CoreResult<Ranking> {
+	let fts_started = diagnostics.as_ref().map(|_| Instant::now());
 	let mut ranks = HashMap::new();
 	let mut ordered_ranks = Vec::new();
 	if !plan.terms.is_empty() {
@@ -1025,6 +1078,10 @@ fn rank(
 			ordered_ranks.push((id, value));
 		}
 	}
+	if let Some(diagnostics) = diagnostics.as_mut() {
+		diagnostics.fts = fts_started.expect("enabled diagnostics").elapsed();
+		diagnostics.fts_matches = ranks.len();
+	}
 	let name = plan.technical_name.as_deref().map(|name| {
 		LiteralMatcher::new(
 			&query::normalize_search_text(name),
@@ -1033,7 +1090,7 @@ fn rank(
 	});
 	let mut buffer = String::new();
 	let mut document_contexts: HashMap<i64, DocumentContexts> = HashMap::new();
-	let mut candidates = Vec::new();
+	let mut ranker = query::CandidateRanker::new(query_text, &plan.terms);
 	// Normal text needs only FTS candidates; technical names must additionally
 	// examine every in-scope section to preserve punctuation-aware recall.
 	let scope = " WHERE (?1 IS NULL OR (typeof(index_name)='text' AND index_name=?1)) AND (?2 IS \
@@ -1056,7 +1113,16 @@ fn rank(
 	} else {
 		statement.query(rusqlite::params![index, scope_bytes, scope_length, directory])?
 	};
-	while let Some(row) = rows.next()? {
+	loop {
+		let row_started = diagnostics.as_ref().map(|_| Instant::now());
+		let row = rows.next()?;
+		if let Some(diagnostics) = diagnostics.as_mut() {
+			diagnostics.section_sqlite += row_started.expect("enabled diagnostics").elapsed();
+		}
+		let Some(row) = row else { break };
+		if let Some(diagnostics) = diagnostics.as_mut() {
+			diagnostics.section_rows += 1;
+		}
 		check()?;
 		let id: i64 = row.get(0)?;
 		let bm25 = ranks.get(&id).copied();
@@ -1066,7 +1132,12 @@ fn rank(
 		let document_id: i64 = row.get(1)?;
 		if let std::collections::hash_map::Entry::Vacant(entry) = document_contexts.entry(document_id)
 		{
+			let started = diagnostics.as_ref().map(|_| Instant::now());
 			entry.insert(load_contexts(connection, document_id, name.as_ref(), check)?);
+			if let Some(diagnostics) = diagnostics.as_mut() {
+				diagnostics.projection += started.expect("enabled diagnostics").elapsed();
+				diagnostics.documents += 1;
+			}
 		}
 		let contexts = document_contexts
 			.get_mut(&document_id)
@@ -1074,8 +1145,10 @@ fn rank(
 		// Source-aware name matching has already decided these rows. Avoid
 		// copying and projecting their bodies when neither recall path matched.
 		if bm25.is_none() && contexts.exact_names.get(&id) == Some(&false) {
+			contexts.projections.remove(&id);
 			continue;
 		}
+		let score_started = diagnostics.as_ref().map(|_| Instant::now());
 		let projection = contexts.projections.remove(&id);
 		let context = contexts.sections.get(&id);
 		if projection.is_none() && context.is_none() {
@@ -1109,7 +1182,7 @@ fn rank(
 				context.shape,
 			)
 		};
-		candidates.push(Candidate {
+		ranker.push(Candidate {
 			section_id: id,
 			raw_markdown: markdown,
 			raw,
@@ -1119,6 +1192,10 @@ fn rank(
 			exact,
 			rank: bm25.unwrap_or(0.0),
 		});
+		if let Some(diagnostics) = diagnostics.as_mut() {
+			diagnostics.scoring += score_started.expect("enabled diagnostics").elapsed();
+			diagnostics.candidates += 1;
+		}
 	}
 	// JSON.stringify([...ranks]) uses JS's float formatter, not serde_json's.
 	buffer.clear();
@@ -1139,7 +1216,11 @@ fn rank(
 	}
 	buffer.push(']');
 	snapshot.update(buffer.as_bytes());
-	let ranked = query::rank_candidates_with_check(query_text, &plan.terms, candidates, check)?;
+	let finalize_started = diagnostics.as_ref().map(|_| Instant::now());
+	let ranked = ranker.finish(check)?;
+	if let Some(diagnostics) = diagnostics.as_mut() {
+		diagnostics.finalize = finalize_started.expect("enabled diagnostics").elapsed();
+	}
 	let exact_name_matches = ranked
 		.iter()
 		.filter(|entry| entry.match_kind == MatchKind::ExactName)
@@ -1701,6 +1782,80 @@ mod tests {
 	}
 
 	#[test]
+	fn broad_fulltext_pages_keep_all_exact_hits_and_cancel_without_partial_cache() {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute(
+				"INSERT INTO documents VALUES(2,1,'broad.md','Broad','markdown','broad',3000,1.0)",
+				[],
+			)
+			.unwrap();
+		for ordinal in 0..600i64 {
+			let id = ordinal + 10;
+			connection
+				.execute(
+					"INSERT INTO sections VALUES(?,1,2,?,'Evidence',1,1,1,?,?,'scan\n')",
+					rusqlite::params![id, ordinal, ordinal * 5, (ordinal + 1) * 5],
+				)
+				.unwrap();
+			connection
+				.execute(
+					"INSERT INTO \
+					 sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) \
+					 VALUES(?,?,1,'broad.md','Evidence','scan')",
+					rusqlite::params![id, id],
+				)
+				.unwrap();
+		}
+		drop(connection);
+		let mut engine = fixture.engine();
+		let options = KnowledgeSearchOptions {
+			path: Some("broad.md".into()),
+			limit: Some(500.0),
+			..Default::default()
+		};
+		// Populate only the guarded corpus snapshot, not the scan ranking.
+		search(&mut engine, "absent", KnowledgeSearchOptions::default());
+		let calls = Arc::new(AtomicU64::new(0));
+		let cancel_calls = Arc::clone(&calls);
+		let error = engine
+			.search("scan", &options, move || {
+				if cancel_calls.fetch_add(1, Ordering::Relaxed) > 900 {
+					Err(KnowledgeError::message("cancelled broad scan"))
+				} else {
+					Ok(())
+				}
+			})
+			.unwrap_err();
+		assert_eq!(error.message, "cancelled broad scan");
+		assert!(engine.connection.as_ref().unwrap().is_autocommit());
+		let first = search(&mut engine, "scan", KnowledgeSearchOptions {
+			path: Some("broad.md".into()),
+			limit: Some(500.0),
+			..Default::default()
+		});
+		assert_eq!(first["cacheHit"], false);
+		assert_eq!(first["result"]["total"], 600);
+		assert_eq!(first["result"]["exactNameMatches"], 600);
+		let next = cursor(&first, 500);
+		let second = search(&mut engine, "scan", KnowledgeSearchOptions {
+			path: Some("broad.md".into()),
+			limit: Some(500.0),
+			cursor: Some(next),
+			..Default::default()
+		});
+		let ids: Vec<i64> = first["result"]["sections"]
+			.as_array()
+			.unwrap()
+			.iter()
+			.chain(second["result"]["sections"].as_array().unwrap())
+			.map(|hit| hit["sectionId"].as_i64().unwrap())
+			.collect();
+		assert_eq!(ids, (10..610).collect::<Vec<_>>());
+	}
+
+	#[test]
 	fn scoped_search_and_grep_keep_literal_paths_and_cursor_identity() {
 		let fixture = Fixture::new();
 		let connection = Connection::open(&fixture.path).unwrap();
@@ -1954,11 +2109,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(prepared.vector_dimensions, vec![2]);
 		let scored = engine
-			.score_hybrid(&prepared.token, 2, &|| Ok(()), |matrix, dimensions| {
-				assert_eq!(dimensions, 2);
-				assert_eq!(matrix.len(), 6);
-				vec![0, 1, 2]
-			})
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 3)
 			.unwrap()
 			.unwrap();
 		assert_eq!(scored, vec![1, 2, 3]);
@@ -2180,12 +2331,12 @@ mod tests {
 		assert_eq!(prepared.vector_dimensions, vec![2]);
 		assert!(
 			engine
-				.score_hybrid(&prepared.token, 3, &|| Ok(()), |_, _| vec![0])
+				.score_hybrid(&prepared.token, 3, || Ok(()), &[1.0, 0.0, 0.0], 1)
 				.unwrap()
 				.is_none()
 		);
 		let ids = engine
-			.score_hybrid(&prepared.token, 2, &|| Ok(()), |_, _| vec![0])
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 1)
 			.unwrap()
 			.unwrap();
 		let id = ids[0];
@@ -2204,7 +2355,7 @@ mod tests {
 			.unwrap();
 		assert!(
 			engine
-				.score_hybrid(&prepared.token, 2, &|| Ok(()), |_, _| vec![0])
+				.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 1)
 				.is_err()
 		);
 	}
@@ -2235,10 +2386,7 @@ mod tests {
 			.expect_ready();
 		assert_eq!(prepared.vector_dimensions, vec![2]);
 		let ids = engine
-			.score_hybrid(&prepared.token, 2, &|| Ok(()), |matrix, _| {
-				assert_eq!(matrix.len(), 2);
-				vec![0]
-			})
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 1)
 			.unwrap()
 			.unwrap();
 		assert_eq!(ids, vec![4]);

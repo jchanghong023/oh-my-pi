@@ -68,6 +68,35 @@ function optionalModelFailure(stage: string, error?: unknown): void {
 	});
 }
 
+/** Content-free stage timings separate native work, model waits and JS fusion. */
+async function searchPhase<T>(
+	stage: string,
+	operation: () => Promise<T>,
+	counts?: (value: T) => Record<string, number>,
+): Promise<T> {
+	const started = performance.now();
+	const fields = { component: "knowledge", event: "knowledge.search.phase", stage };
+	logger.info("knowledge.search.phase.started", { ...fields, result: "started" });
+	try {
+		const value = await operation();
+		logger.info("knowledge.search.phase.completed", {
+			...fields,
+			result: "completed",
+			elapsed_ms: performance.now() - started,
+			...counts?.(value),
+		});
+		return value;
+	} catch (error) {
+		logger.info("knowledge.search.phase.finished", {
+			...fields,
+			result: error instanceof Error && error.name === "AbortError" ? "cancelled" : "failed",
+			elapsed_ms: performance.now() - started,
+			...logger.diagnosticError(error),
+		});
+		throw error;
+	}
+}
+
 /** Native callbacks must retain their originating operation's logger context. */
 function nativeDiagnostics(): (event: KnowledgeDiagnosticEvent) => void {
 	const context = logger.getLogContext();
@@ -522,8 +551,11 @@ export class KnowledgeIndexEngine {
 			if (rerankerResolved) return;
 			rerankerResolved = true;
 			try {
-				reranker = (await resolveKnowledgeModels({ agentDir: this.#agentDir, cwd: this.cwd, embedding: false }))
-					.reranker;
+				reranker = (
+					await searchPhase("reranker_config", () =>
+						resolveKnowledgeModels({ agentDir: this.#agentDir, cwd: this.cwd, embedding: false }),
+					)
+				).reranker;
 			} catch {
 				signal?.throwIfAborted();
 				cacheable = false;
@@ -540,8 +572,11 @@ export class KnowledgeIndexEngine {
 			});
 		let embedding: KnowledgeEmbedding | undefined;
 		try {
-			embedding = (await resolveKnowledgeModels({ agentDir: this.#agentDir, cwd: this.cwd, reranker: false }))
-				.embedding;
+			embedding = (
+				await searchPhase("embedding_config", () =>
+					resolveKnowledgeModels({ agentDir: this.#agentDir, cwd: this.cwd, reranker: false }),
+				)
+			).embedding;
 		} catch {
 			signal?.throwIfAborted();
 			cacheable = false;
@@ -549,7 +584,11 @@ export class KnowledgeIndexEngine {
 		}
 		signal?.throwIfAborted();
 		if (!embedding) {
-			const baseline = await this.#native.searchWindowAsync(query, options, signal, diagnostic);
+			const baseline = await searchPhase(
+				"fulltext",
+				() => this.#native.searchWindowAsync(query, options, signal, diagnostic),
+				output => ({ fulltext_count: output.result.total }),
+			);
 			if (!baseline.result.total) return baseline;
 			await resolveReranker();
 			if (!reranker) return baseline;
@@ -562,7 +601,14 @@ export class KnowledgeIndexEngine {
 			const cached = await this.#native.lookupHybridSearch(query, options, configurationIdentity(), signal);
 			if (cached) return cached;
 		}
-		const snapshot = await this.#native.prepareHybridSearch(query, options, embedding?.identity, signal);
+		const snapshot = await searchPhase(
+			"prepare",
+			() => this.#native.prepareHybridSearch(query, options, embedding?.identity, signal, diagnostic),
+			(output): Record<string, number> =>
+				"result" in output
+					? { fulltext_count: output.result.total }
+					: { fulltext_count: output.fulltext.length, vector_dimension_count: output.vectorDimensions.length },
+		);
 		if ("result" in snapshot) return snapshot;
 		if (snapshot.vectorFailure) {
 			cacheable = false;
@@ -573,9 +619,12 @@ export class KnowledgeIndexEngine {
 		let ranked = fulltext.slice();
 		let embeddingUsed = false;
 		if (embedding && snapshot.vectorDimensions.length) {
+			const activeEmbedding = embedding;
 			let vector: Float32Array | undefined;
 			try {
-				const response = await embedding.embed([snapshot.effectiveQuery], signal);
+				const response = await searchPhase("embedding_request", () =>
+					activeEmbedding.embed([snapshot.effectiveQuery], signal),
+				);
 				if (response.length === 1) vector = vector32(response[0] ?? []);
 				if (!vector) {
 					cacheable = false;
@@ -590,15 +639,26 @@ export class KnowledgeIndexEngine {
 			const compatible = vector && snapshot.vectorDimensions.includes(vector.length);
 			if (vector && !compatible) cacheable = false;
 			if (compatible && vector) {
-				const ids = (await this.#native.scoreHybridSearch(snapshot.token, vector, SEMANTIC_LIMIT, signal)) ?? [];
+				const queryVector = vector;
+				const ids =
+					(await searchPhase(
+						"vector_search",
+						() => this.#native.scoreHybridSearch(snapshot.token, queryVector, SEMANTIC_LIMIT, signal),
+						hits => ({ semantic_count: hits?.length ?? 0 }),
+					)) ?? [];
 				if (ids.length) {
-					const hits = await this.#native.readHybridCandidates(snapshot.token, ids, signal);
+					const hits = await searchPhase(
+						"semantic_evidence",
+						() => this.#native.readHybridCandidates(snapshot.token, ids, signal),
+						values => ({ candidate_count: values.length }),
+					);
 					const metadata = new Map(hits.map(hit => [hit.sectionId, hit as typeof hit & { sourceOrder: number }]));
 					const semantic: Ranked[] = ids.map(id => {
 						const hit = metadata.get(id);
 						if (!hit) throw new Error("Missing documentation semantic candidate");
 						return { sectionId: id, matchKind: hit.matchKind, sourceOrder: hit.sourceOrder };
 					});
+					const fusionStarted = performance.now();
 					const sources = new Map([...fulltext, ...semantic].map(item => [item.sectionId, item.sourceOrder]));
 					ranked = fuseRanked(
 						[fulltext, semantic],
@@ -611,6 +671,16 @@ export class KnowledgeIndexEngine {
 						...ranked.filter(item => item.matchKind !== "exact-name"),
 					];
 					embeddingUsed = true;
+					logger.info("knowledge.search.phase.completed", {
+						component: "knowledge",
+						event: "knowledge.search.phase",
+						stage: "fusion",
+						result: "completed",
+						elapsed_ms: performance.now() - fusionStarted,
+						fulltext_count: fulltext.length,
+						semantic_count: semantic.length,
+						fused_count: ranked.length,
+					});
 				}
 			}
 		}
@@ -619,11 +689,17 @@ export class KnowledgeIndexEngine {
 		if (ranked.length) {
 			await resolveReranker();
 			if (reranker) {
+				const activeReranker = reranker;
 				const window = ranked.slice(0, RERANK_LIMIT);
-				const hits = await this.#native.readHybridCandidates(
-					snapshot.token,
-					window.map(item => item.sectionId),
-					signal,
+				const hits = await searchPhase(
+					"rerank_evidence",
+					() =>
+						this.#native.readHybridCandidates(
+							snapshot.token,
+							window.map(item => item.sectionId),
+							signal,
+						),
+					values => ({ candidate_count: values.length }),
 				);
 				const byId = new Map(hits.map(hit => [hit.sectionId, hit]));
 				const texts = window.map(item => {
@@ -633,7 +709,11 @@ export class KnowledgeIndexEngine {
 				});
 				let scores: number[] | undefined;
 				try {
-					scores = await reranker.rerank(snapshot.effectiveQuery, texts, signal);
+					scores = await searchPhase(
+						"rerank_request",
+						() => activeReranker.rerank(snapshot.effectiveQuery, texts, signal),
+						values => ({ rerank_count: values.length }),
+					);
 					if (scores.length !== window.length || scores.some(score => !Number.isFinite(score))) {
 						scores = undefined;
 						cacheable = false;
@@ -671,12 +751,17 @@ export class KnowledgeIndexEngine {
 						rrf: 60,
 					})
 				: "";
-		return this.#native.finishHybridSearch(
-			snapshot.token,
-			ranked.map(item => item.sectionId),
-			identity,
-			cacheable ? configurationIdentity() : "",
-			signal,
+		return searchPhase(
+			"finish",
+			() =>
+				this.#native.finishHybridSearch(
+					snapshot.token,
+					ranked.map(item => item.sectionId),
+					identity,
+					cacheable ? configurationIdentity() : "",
+					signal,
+				),
+			output => ({ total_matches: output.result.total, returned_count: output.result.sections.length }),
 		);
 	}
 

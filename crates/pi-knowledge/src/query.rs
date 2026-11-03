@@ -1210,87 +1210,88 @@ fn compare_scored(a: &ScoredSection, b: &ScoredSection) -> Ordering {
 		.then_with(|| a.section.section_id.cmp(&b.section.section_id))
 }
 
-#[expect(
-	clippy::suboptimal_flops,
-	reason = "Keep separate TypeScript multiplication and addition; mul_add changes rounding."
-)]
-pub(crate) fn rank_candidates_with_check<F, E>(
-	query: &str,
-	terms: &[String],
-	candidates: Vec<Candidate>,
-	mut check: F,
-) -> Result<Vec<RankedSection>, E>
-where
-	F: FnMut() -> Result<(), E>,
-{
-	check()?;
-	let patterns: Vec<_> = terms
-		.iter()
-		.map(|term| LiteralMatcher::new(term, false))
-		.collect();
-	let phrase = LiteralMatcher::new(&normalize_search_text(query), false);
-	let mut frequencies = vec![0usize; terms.len()];
-	for (position, candidate) in candidates.iter().enumerate() {
-		if position % 256 == 0 {
-			check()?;
-		}
-		for (frequency, pattern) in frequencies.iter_mut().zip(&patterns) {
-			*frequency +=
-				usize::from(pattern.is_match(&candidate.raw) || pattern.is_match(&candidate.plain));
+/// Scores candidates as they are read, retaining only term flags and ranking
+/// metadata until corpus-wide frequencies are known.
+pub(crate) struct CandidateRanker<'a> {
+	terms:       &'a [String],
+	patterns:    Vec<LiteralMatcher>,
+	phrase:      LiteralMatcher,
+	phrase_term: Option<usize>,
+	topics:      Vec<bool>,
+	frequencies: Vec<usize>,
+	flags:       Vec<u8>,
+	scored:      Vec<ScoredSection>,
+}
+
+impl<'a> CandidateRanker<'a> {
+	pub(crate) fn new(query: &str, terms: &'a [String]) -> Self {
+		let patterns = terms
+			.iter()
+			.map(|term| LiteralMatcher::new(term, false))
+			.collect();
+		let normalized = normalize_search_text(query);
+		let phrase_term = terms.iter().position(|term| *term == normalized);
+		let phrase = LiteralMatcher::new(&normalized, false);
+		let nfkc: String = query.nfkc().collect();
+		let han_topics: HashSet<_> = nfkc
+			.split(|character| !is_query_han(character))
+			.filter(|part| !part.is_empty())
+			.collect();
+		let topics = terms
+			.iter()
+			.map(|term| {
+				!generic_term(term)
+					&& (term.chars().any(ascii_case_letter) || han_topics.contains(term.as_str()))
+			})
+			.collect();
+		Self {
+			terms,
+			patterns,
+			phrase,
+			phrase_term,
+			topics,
+			frequencies: vec![0; terms.len()],
+			flags: Vec::new(),
+			scored: Vec::new(),
 		}
 	}
-	#[expect(
-		clippy::imprecise_flops,
-		reason = "Keep the TypeScript ln(1 + x) operation order; ln_1p changes ranking weights."
-	)]
-	let weights: Vec<_> = terms
-		.iter()
-		.zip(frequencies)
-		.map(|(term, frequency)| {
-			(if generic_term(term) { 0.2 } else { 1.0 })
-				* (1.0 + (1.0 + candidates.len() as f64 / (1.0 + frequency as f64)).ln())
-		})
-		.collect();
-	let nfkc: String = query.nfkc().collect();
-	let han_topics: HashSet<_> = nfkc
-		.split(|character| !is_query_han(character))
-		.filter(|part| !part.is_empty())
-		.collect();
-	let topics: Vec<_> = terms
-		.iter()
-		.map(|term| {
-			!generic_term(term)
-				&& (term.chars().any(ascii_case_letter) || han_topics.contains(term.as_str()))
-		})
-		.collect();
-	let mut scored = Vec::with_capacity(candidates.len());
-	for (position, candidate) in candidates.into_iter().enumerate() {
-		if position % 256 == 0 {
-			check()?;
-		}
-		let mut relevance = 0.0;
+
+	pub(crate) fn push(&mut self, candidate: Candidate) {
 		let mut topic_title = 0;
 		let mut topic_body = 0;
-		for ((pattern, &weight), &topic) in patterns.iter().zip(&weights).zip(&topics) {
+		let mut phrase_flags = None;
+		for (position, ((pattern, frequency), topic)) in self
+			.patterns
+			.iter()
+			.zip(&mut self.frequencies)
+			.zip(&self.topics)
+			.enumerate()
+		{
 			let in_title = pattern.is_match(&candidate.title);
 			let in_body = pattern.is_match(&candidate.raw) || pattern.is_match(&candidate.plain);
-			if in_body {
-				relevance += weight;
-			}
-			if in_title {
-				relevance += weight * 3.0;
-			}
-			if topic {
+			*frequency += usize::from(in_body);
+			if *topic {
 				topic_body += usize::from(in_body);
 				topic_title += usize::from(in_title);
 			}
+			let flags = u8::from(in_body) | (u8::from(in_title) << 1);
+			self.flags.push(flags);
+			if self.phrase_term == Some(position) {
+				phrase_flags = Some(flags);
+			}
 		}
+		let title_phrase = phrase_flags
+			.map_or_else(|| self.phrase.is_match(&candidate.title), |flags| flags & 2 != 0);
+		let phrase = phrase_flags.map_or_else(
+			|| self.phrase.is_match(&candidate.raw) || self.phrase.is_match(&candidate.plain),
+			|flags| flags & 1 != 0,
+		);
 		let body_hash = if candidate.raw_markdown.encode_utf16().nth(200).is_some() {
 			Some(Sha256::digest(candidate.raw_markdown.as_bytes()).into())
 		} else {
 			None
 		};
-		scored.push(ScoredSection {
+		self.scored.push(ScoredSection {
 			section: RankedSection {
 				section_id: candidate.section_id,
 				shape:      candidate.shape,
@@ -1301,25 +1302,69 @@ where
 				},
 				rank:       candidate.rank,
 			},
-			title_phrase: phrase.is_match(&candidate.title),
-			phrase: phrase.is_match(&candidate.raw) || phrase.is_match(&candidate.plain),
+			title_phrase,
+			phrase,
 			topic_title,
 			topic_body,
-			relevance,
+			relevance: 0.0,
 			body_hash,
 		});
 	}
-	check()?;
-	scored.sort_by(compare_scored);
-	check()?;
-	let mut seen = HashSet::new();
-	let mut groups: [Vec<RankedSection>; 5] = std::array::from_fn(|_| Vec::new());
-	for (position, entry) in scored.into_iter().enumerate() {
-		if position % 256 == 0 {
-			check()?;
+
+	#[expect(
+		clippy::suboptimal_flops,
+		reason = "Keep separate TypeScript multiplication and addition; mul_add changes rounding."
+	)]
+	pub(crate) fn finish<F, E>(mut self, mut check: F) -> Result<Vec<RankedSection>, E>
+	where
+		F: FnMut() -> Result<(), E>,
+	{
+		check()?;
+		#[expect(
+			clippy::imprecise_flops,
+			reason = "Keep the TypeScript ln(1 + x) operation order; ln_1p changes ranking weights."
+		)]
+		let weights: Vec<_> = self
+			.terms
+			.iter()
+			.zip(self.frequencies)
+			.map(|(term, frequency)| {
+				(if generic_term(term) { 0.2 } else { 1.0 })
+					* (1.0 + (1.0 + self.scored.len() as f64 / (1.0 + frequency as f64)).ln())
+			})
+			.collect();
+		for (position, entry) in self.scored.iter_mut().enumerate() {
+			if position % 256 == 0 {
+				check()?;
+			}
+			let mut relevance = 0.0;
+			let start = position * self.terms.len();
+			for (&flags, &weight) in self.flags[start..start + self.terms.len()]
+				.iter()
+				.zip(&weights)
+			{
+				if flags & 1 != 0 {
+					relevance += weight;
+				}
+				if flags & 2 != 0 {
+					relevance += weight * 3.0;
+				}
+			}
+			entry.relevance = relevance;
 		}
-		let group =
-			if entry.section.shape == Shape::Stub && entry.section.match_kind == MatchKind::Related {
+		let mut scored = self.scored;
+		check()?;
+		scored.sort_by(compare_scored);
+		check()?;
+		let mut seen = HashSet::new();
+		let mut groups: [Vec<RankedSection>; 5] = std::array::from_fn(|_| Vec::new());
+		for (position, entry) in scored.into_iter().enumerate() {
+			if position % 256 == 0 {
+				check()?;
+			}
+			let group = if entry.section.shape == Shape::Stub
+				&& entry.section.match_kind == MatchKind::Related
+			{
 				4
 			} else {
 				let repeated = entry.body_hash.is_some_and(|hash| !seen.insert(hash));
@@ -1329,13 +1374,32 @@ where
 					2 + usize::from(repeated)
 				}
 			};
-		groups[group].push(entry.section);
+			groups[group].push(entry.section);
+		}
+		let mut ranked = Vec::with_capacity(groups.iter().map(Vec::len).sum());
+		for group in groups {
+			ranked.extend(group);
+		}
+		Ok(ranked)
 	}
-	let mut ranked = Vec::with_capacity(groups.iter().map(Vec::len).sum());
-	for group in groups {
-		ranked.extend(group);
+}
+
+#[cfg(test)]
+fn rank_candidates_with_check<F, E>(
+	query: &str,
+	terms: &[String],
+	candidates: Vec<Candidate>,
+	mut check: F,
+) -> Result<Vec<RankedSection>, E>
+where
+	F: FnMut() -> Result<(), E>,
+{
+	let mut ranker = CandidateRanker::new(query, terms);
+	for candidate in candidates {
+		check()?;
+		ranker.push(candidate);
 	}
-	Ok(ranked)
+	ranker.finish(check)
 }
 
 #[cfg(test)]

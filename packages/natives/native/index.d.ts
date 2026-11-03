@@ -366,7 +366,7 @@ export declare class IpcServer {
 export declare class KnowledgeSearchEngine {
   hasCachedHybridCandidates(query: string, options: KnowledgeSearchOptions, signal?: AbortSignal): Promise<boolean>
   lookupHybridSearch(query: string, options: KnowledgeSearchOptions, configurationIdentity: string, signal?: AbortSignal): Promise<KnowledgeSearchOutput | null>
-  prepareHybridSearch(query: string, options: KnowledgeSearchOptions, modelIdentity?: string, signal?: AbortSignal): Promise<KnowledgeHybridPrepared | KnowledgeSearchOutput>
+  prepareHybridSearch(query: string, options: KnowledgeSearchOptions, modelIdentity?: string, signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Promise<KnowledgeHybridPrepared | KnowledgeSearchOutput>
   scoreHybridSearch(token: string, query: Float32Array, limit: number, signal?: AbortSignal): Promise<number[] | null>
   readHybridCandidates(token: string, sectionIds: number[], signal?: AbortSignal): Promise<KnowledgeHybridCandidate[]>
   finishHybridSearch(token: string, finalSectionIds: number[], contextIdentity: string, configurationIdentity: string, signal?: AbortSignal): Promise<KnowledgeSearchOutput>

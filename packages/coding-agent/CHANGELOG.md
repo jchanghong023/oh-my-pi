@@ -59,7 +59,8 @@
 
 ### Changed
 
-- Speed up Knowledge searches without changing recall, ranking, reranker inputs or continuation cursors.
+- Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
+- Report separate Knowledge search timings for native full-text work, vector search, model requests, fusion and evidence loading.
 - Report full-text publication and vector-build status separately, with visible CLI and TUI warnings when vector generation fails.
 - Default `bun run cnb` to the existing `omp` release in `jchanghong/bin`, overwriting its two binary attachments without interactive prompts.
 - Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.

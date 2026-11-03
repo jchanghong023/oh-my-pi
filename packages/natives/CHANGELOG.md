@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Reduce Knowledge search scans and repeated vector/evidence reads with bounded snapshot reuse and exact top-k selection, preserving scores and result order.
+- Avoid sorting Knowledge vector BLOBs and allocating over-budget vector matrices; stream exact scoring and reuse validated IDs and evidence without changing scores or result order.
 - Keep incomplete Knowledge vector batches for explicit resumption while only complete generations participate in search.
 - Load default native addons and grammars from `OMP_CACHE_DIR` when set, or the per-user Linux offline cache root.
 - Rename the native Wiki API and Rust core to Knowledge, including `pi-knowledge` and Knowledge test selection.

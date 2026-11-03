@@ -2,7 +2,7 @@
 //!
 //! Import ownership and generation state are deliberately kept in the same
 //! database as the source. No transaction is held while a model is called.
-use std::path::Path;
+use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -10,6 +10,14 @@ use crate::{
 	database::{CoreResult, KnowledgeError, check_file_identity},
 	storage::Storage,
 };
+
+// Defer BLOB reads until the source keys have been sorted. OFFSET 0 prevents
+// flattening this ordered coroutine; LIMIT -1 retains every section.
+const SCOPED_VECTOR_ROWS: &str =
+	"SELECT ordered.id,(SELECT v.vector FROM wiki_section_vectors v WHERE \
+	 v.index_id=ordered.index_id AND v.section_id=ordered.id),ordered.relative_path FROM (SELECT \
+	 s.id,s.index_id,d.relative_path FROM sections s LEFT JOIN documents d ON d.id=s.document_id \
+	 WHERE s.index_id=? ORDER BY s.document_id,s.ordinal,s.id LIMIT -1 OFFSET 0) ordered";
 
 /// A stored section for a bounded embedding request.
 pub struct VectorSource {
@@ -471,7 +479,8 @@ pub(crate) fn matrix_fits(
 		.is_some_and(|bytes| bytes <= budget))
 }
 
-/// Validate generations and collect section IDs without materializing vectors.
+/// Validate complete generations and collect scoped IDs without retaining
+/// their vector matrices.
 pub(crate) fn read_vector_ids(
 	connection: &Connection,
 	model: &str,
@@ -481,6 +490,228 @@ pub(crate) fn read_vector_ids(
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<Vec<i64>> {
 	Ok(read_vector_data(connection, model, dimensions, index, path, check, false)?.section_ids)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ScoredRow {
+	score: f64,
+	order: usize,
+	id:    i64,
+}
+
+impl PartialEq for ScoredRow {
+	fn eq(&self, other: &Self) -> bool {
+		self.score == other.score && self.order == other.order
+	}
+}
+impl Eq for ScoredRow {}
+impl PartialOrd for ScoredRow {
+	fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+		Some(self.cmp(other))
+	}
+}
+impl Ord for ScoredRow {
+	fn cmp(&self, other: &Self) -> Ordering {
+		// The heap root is the worst retained row.
+		other
+			.score
+			.partial_cmp(&self.score)
+			.unwrap_or(Ordering::Equal)
+			.then_with(|| self.order.cmp(&other.order))
+	}
+}
+
+struct ExactTopK {
+	query: Vec<f64>,
+	limit: usize,
+	rows:  BinaryHeap<ScoredRow>,
+}
+
+impl ExactTopK {
+	#[expect(
+		clippy::suboptimal_flops,
+		reason = "Separate multiplication and addition preserve the public score's rounding."
+	)]
+	fn new(query: &[f64], dimensions: usize, limit: usize) -> Self {
+		let mut norm = 0.0f64;
+		for &value in query {
+			norm += value * value;
+		}
+		let norm = norm.sqrt();
+		Self {
+			query: query[..query.len().min(dimensions)]
+				.iter()
+				.map(|value| value / norm)
+				.collect(),
+			limit,
+			rows: BinaryHeap::new(),
+		}
+	}
+
+	#[expect(
+		clippy::suboptimal_flops,
+		reason = "Separate multiplication and addition preserve the public score's rounding."
+	)]
+	fn score(&self, row: &[f32], check: &dyn Fn() -> CoreResult<()>) -> CoreResult<f64> {
+		let mut score = 0.0f64;
+		for (column, (&value, &query)) in row.iter().zip(&self.query).enumerate() {
+			if column != 0 && column % 1024 == 0 {
+				check()?;
+			}
+			score += f64::from(value) * query;
+		}
+		Ok(score)
+	}
+
+	fn add(
+		&mut self,
+		id: i64,
+		order: usize,
+		row: &[f32],
+		check: &dyn Fn() -> CoreResult<()>,
+	) -> CoreResult<()> {
+		let score = self.score(row, check)?;
+		insert_top_k(&mut self.rows, self.limit, ScoredRow { score, order, id });
+		Ok(())
+	}
+
+	fn finish(self) -> Vec<ScoredRow> {
+		self.rows.into_sorted_vec()
+	}
+}
+
+fn insert_top_k(rows: &mut BinaryHeap<ScoredRow>, limit: usize, row: ScoredRow) {
+	if limit == 0 {
+		return;
+	}
+	if rows.len() < limit {
+		rows.push(row);
+	} else if rows.peek().is_some_and(|worst| row < *worst) {
+		rows.pop();
+		rows.push(row);
+	}
+}
+
+/// Score cached normalized vectors in stable source order.
+pub(crate) fn score_matrix(
+	matrix: &VectorMatrix,
+	query: &[f64],
+	limit: usize,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<Vec<i64>> {
+	let mut best = ExactTopK::new(query, matrix.dimensions, limit);
+	for (order, (&id, row)) in matrix
+		.section_ids
+		.iter()
+		.zip(matrix.matrix.chunks_exact(matrix.dimensions))
+		.enumerate()
+	{
+		check()?;
+		best.add(id, order, row, check)?;
+	}
+	Ok(best.finish().into_iter().map(|row| row.id).collect())
+}
+
+/// Read and score one row at a time. A generation has its own bounded top-k,
+/// which is committed only after every row (including out-of-scope rows) and
+/// its vector count have been validated.
+pub(crate) fn score_stream(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<crate::database::PathScope<'_>>,
+	query: &[f64],
+	limit: usize,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<Vec<i64>> {
+	if dimensions == 0 {
+		return Ok(Vec::new());
+	}
+	let mut best = ExactTopK::new(query, dimensions, limit);
+	let mut generation_best = BinaryHeap::new();
+	let mut order = 0usize;
+	let mut normalized = Vec::new();
+	let mut generations = connection.prepare(
+		"SELECT g.index_id FROM wiki_vector_generations g JOIN doc_indexes i ON i.id=g.index_id \
+		 WHERE g.complete=1 AND g.model=? AND g.dimensions=? AND i.name NOT GLOB '__building__*' \
+		 AND (? IS NULL OR i.name=?) ORDER BY i.id",
+	)?;
+	let ids = generations
+		.query_map(params![model, dimensions as i64, index, index], |row| row.get::<_, i64>(0))?;
+	for id in ids {
+		check()?;
+		let id = id?;
+		generation_best.clear();
+		let mut statement = connection.prepare(SCOPED_VECTOR_ROWS)?;
+		let mut rows = statement.query([id])?;
+		let mut valid = true;
+		let mut count = 0usize;
+		while let Some(row) = rows.next()? {
+			check()?;
+			count += 1;
+			let selected = match path {
+				None => true,
+				Some(path) => {
+					matches!(row.get_ref(2)?, rusqlite::types::ValueRef::Text(value) if path.matches(value))
+				},
+			};
+			let rusqlite::types::ValueRef::Blob(bytes) = row.get_ref(1)? else {
+				valid = false;
+				break;
+			};
+			if Some(bytes.len()) != dimensions.checked_mul(4) {
+				valid = false;
+				break;
+			}
+			normalized.clear();
+			if selected {
+				normalized.reserve(dimensions);
+			}
+			let mut norm = 0.0f64;
+			for (column, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+				if column != 0 && column % 1024 == 0 {
+					check()?;
+				}
+				let value = f32::from_le_bytes(*chunk);
+				if !value.is_finite() {
+					valid = false;
+					break;
+				}
+				norm += f64::from(value).powi(2);
+				if selected {
+					normalized.push(value);
+				}
+			}
+			if !valid || !norm.is_finite() || norm == 0.0 {
+				valid = false;
+				break;
+			}
+			if selected {
+				let scale = norm.sqrt();
+				for (column, value) in normalized.iter_mut().enumerate() {
+					if column != 0 && column % 1024 == 0 {
+						check()?;
+					}
+					*value = (f64::from(*value) / scale) as f32;
+				}
+				let score = best.score(&normalized, check)?;
+				insert_top_k(&mut generation_best, limit, ScoredRow { score, order, id: row.get(0)? });
+				order += 1;
+			}
+		}
+		let vector_count: i64 = connection.query_row(
+			"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
+			[id],
+			|row| row.get(0),
+		)?;
+		if valid && usize::try_from(vector_count).ok() == Some(count) {
+			for row in generation_best.drain() {
+				insert_top_k(&mut best.rows, limit, row);
+			}
+		}
+	}
+	Ok(best.finish().into_iter().map(|row| row.id).collect())
 }
 
 fn read_vector_data(
@@ -506,11 +737,7 @@ fn read_vector_data(
 	for id in ids {
 		check()?;
 		let id = id?;
-		let mut statement = connection.prepare(
-			"SELECT s.id,v.vector,d.relative_path FROM sections s LEFT JOIN documents d ON \
-			 d.id=s.document_id LEFT JOIN wiki_section_vectors v ON v.index_id=s.index_id AND \
-			 v.section_id=s.id WHERE s.index_id=? ORDER BY s.document_id,s.ordinal,s.id",
-		)?;
+		let mut statement = connection.prepare(SCOPED_VECTOR_ROWS)?;
 		let mut rows = statement.query([id])?;
 		let start = result.section_ids.len();
 		let mut valid = true;
@@ -534,7 +761,10 @@ fn read_vector_data(
 				break;
 			}
 			let mut norm = 0.0f64;
-			for chunk in bytes.as_chunks::<4>().0 {
+			for (column, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+				if column != 0 && column % 1024 == 0 {
+					check()?;
+				}
 				let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
 				if !value.is_finite() {
 					valid = false;
@@ -552,7 +782,10 @@ fn read_vector_data(
 			if include_matrix && selected {
 				let scale = norm.sqrt();
 				let begin = result.matrix.len() - dimensions;
-				for value in &mut result.matrix[begin..] {
+				for (column, value) in result.matrix[begin..].iter_mut().enumerate() {
+					if column != 0 && column % 1024 == 0 {
+						check()?;
+					}
 					*value = (f64::from(*value) / scale) as f32;
 				}
 			}
@@ -608,6 +841,10 @@ mod scoped_tests {
 		assert_eq!(read_vector_ids(&connection, "model", 2, None, scope, &|| Ok(())).unwrap(), vec![
 			1, 3
 		]);
+		assert_eq!(
+			score_stream(&connection, "model", 2, None, scope, &[1.0, 0.0], 10, &|| Ok(())).unwrap(),
+			vec![1, 3]
+		);
 		connection
 			.execute("UPDATE wiki_section_vectors SET vector=x'00' WHERE section_id=2", [])
 			.unwrap();
@@ -615,5 +852,142 @@ mod scoped_tests {
 			read_scoped_vector_matrix(&connection, "model", 2, None, scope, &|| Ok(())).unwrap();
 		assert_eq!(matrix.section_ids, vec![3]);
 		assert_eq!(matrix.matrix.len(), 2);
+		assert_eq!(
+			score_stream(&connection, "model", 2, None, scope, &[1.0, 0.0], 10, &|| Ok(())).unwrap(),
+			vec![3]
+		);
+		assert_eq!(read_vector_ids(&connection, "model", 2, None, scope, &|| Ok(())).unwrap(), vec![
+			3
+		]);
+	}
+
+	#[test]
+	fn streamed_scores_match_matrix_bits_and_source_order() {
+		let connection = Connection::open_in_memory().unwrap();
+		connection.execute_batch(
+			"CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT);
+			 CREATE TABLE documents(id INTEGER PRIMARY KEY,relative_path TEXT);
+			 CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER,document_id INTEGER,ordinal INTEGER);
+			 CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions INTEGER,complete INTEGER);
+			 CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
+			 INSERT INTO doc_indexes VALUES(1,'one'),(2,'bad'),(3,'three');
+			 INSERT INTO documents VALUES(1,'scope/a'),(2,'scope2/not-a-child'),(3,'scope/b'),(4,'scope/c');
+			 INSERT INTO wiki_vector_generations VALUES(1,'model',3,1),(2,'model',3,1),(3,'model',3,1);"
+		).unwrap();
+		for i in 0..1500i64 {
+			let generation = if i < 500 {
+				1
+			} else if i < 1000 {
+				2
+			} else {
+				3
+			};
+			let document = if i == 999 {
+				2
+			} else if generation == 1 {
+				1
+			} else if generation == 2 {
+				3
+			} else {
+				4
+			};
+			let values = if i % 7 == 0 {
+				[3.0f32, 4.0, -2.0]
+			} else {
+				[1.0f32, 2.0, 3.0]
+			};
+			let bytes: Vec<u8> = values.into_iter().flat_map(f32::to_le_bytes).collect();
+			connection
+				.execute("INSERT INTO sections VALUES(?,?,?,?)", params![
+					i + 1,
+					generation,
+					document,
+					499 - (i % 500)
+				])
+				.unwrap();
+			connection
+				.execute("INSERT INTO wiki_section_vectors VALUES(?,?,?)", params![
+					generation,
+					i + 1,
+					bytes
+				])
+				.unwrap();
+		}
+		connection
+			.execute("UPDATE wiki_section_vectors SET vector=x'00' WHERE section_id=1000", [])
+			.unwrap();
+		let scope = PathScope::validate(Some("scope/")).unwrap();
+		let matrix =
+			read_scoped_vector_matrix(&connection, "model", 3, None, scope, &|| Ok(())).unwrap();
+		assert_eq!(
+			matrix.section_ids,
+			(1..=500i64)
+				.rev()
+				.chain((1001..=1500).rev())
+				.collect::<Vec<_>>(),
+		);
+		let query = [0.123456789012345, -0.75, 1.25];
+		for (&id, row) in matrix.section_ids.iter().zip(matrix.matrix.chunks_exact(3)) {
+			let raw = if (id - 1) % 7 == 0 {
+				[3.0f32, 4.0, -2.0]
+			} else {
+				[1.0f32, 2.0, 3.0]
+			};
+			let mut squared = 0.0f64;
+			for value in raw {
+				squared += f64::from(value).powi(2);
+			}
+			let norm = squared.sqrt();
+			for (value, raw) in row.iter().zip(raw) {
+				assert_eq!(value.to_bits(), ((f64::from(raw) / norm) as f32).to_bits());
+			}
+		}
+		for limit in [0, 1, 37, 999, 1200] {
+			let stream =
+				score_stream(&connection, "model", 3, None, scope, &query, limit, &|| Ok(())).unwrap();
+			assert_eq!(stream, score_matrix(&matrix, &query, limit, &|| Ok(())).unwrap());
+			let mut actual = ExactTopK::new(&query, 3, limit);
+			for (order, (&id, row)) in matrix
+				.section_ids
+				.iter()
+				.zip(matrix.matrix.chunks_exact(3))
+				.enumerate()
+			{
+				actual.add(id, order, row, &|| Ok(())).unwrap();
+			}
+			let mut expected = Vec::new();
+			let norm = query.iter().map(|v| v * v).sum::<f64>().sqrt();
+			for (order, (&id, row)) in matrix
+				.section_ids
+				.iter()
+				.zip(matrix.matrix.chunks_exact(3))
+				.enumerate()
+			{
+				let mut score = 0.0;
+				for (value, query) in row.iter().zip(query) {
+					score += f64::from(*value) * (query / norm);
+				}
+				expected.push((score, order, id));
+			}
+			expected.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| a.1.cmp(&b.1)));
+			expected.truncate(limit);
+			let actual = actual.finish();
+			assert_eq!(actual.len(), expected.len());
+			for (actual, expected) in actual.iter().zip(expected) {
+				assert_eq!(actual.id, expected.2);
+				assert_eq!(actual.score.to_bits(), expected.0.to_bits());
+			}
+		}
+		let checks = std::cell::Cell::new(0);
+		let cancelled = || {
+			checks.set(checks.get() + 1);
+			if checks.get() > 80 {
+				Err(KnowledgeError::message("cancelled"))
+			} else {
+				Ok(())
+			}
+		};
+		assert!(score_stream(&connection, "model", 3, None, scope, &query, 10, &cancelled).is_err());
+		assert!(checks.get() > 80);
 	}
 }

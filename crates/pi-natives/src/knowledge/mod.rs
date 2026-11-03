@@ -153,6 +153,7 @@ impl Owner {
 		query: &str,
 		options: &pi_knowledge::database::KnowledgeSearchOptions,
 		cancel: &CancelToken,
+		diagnostics_enabled: bool,
 	) -> CoreResult<pi_knowledge::database::KnowledgeSearchOutput> {
 		self.check(cancel)?;
 		// Storage owns schema preparation, including reopening a replaced
@@ -164,6 +165,7 @@ impl Owner {
 				break engine;
 			}
 		};
+		engine.set_search_diagnostics(diagnostics_enabled);
 		let closed = Arc::clone(&self.closed);
 		let cancellation = cancel.clone();
 		let result = engine.search(query, options, move || {
@@ -174,11 +176,18 @@ impl Owner {
 				.heartbeat()
 				.map_err(|error| KnowledgeError::message(error.reason))
 		});
+		self.record_search_diagnostics(&mut engine);
 		if self.closed.load(Ordering::Acquire) {
 			engine.close();
 		}
 		self.check(cancel)?;
 		result
+	}
+
+	fn record_search_diagnostics(&self, engine: &mut DatabaseEngine) {
+		if let Some(profile) = engine.take_search_diagnostics() {
+			diagnostics::search_profile(&self.diagnostics, profile);
+		}
 	}
 }
 fn open_storage(path: &str, queue: &DiagnosticQueue) -> CoreResult<Storage> {
@@ -405,9 +414,10 @@ impl KnowledgeSearchEngine {
 		options: KnowledgeSearchOptions,
 		diagnostic: Option<DiagnosticFunction<'_>>,
 	) -> Result<KnowledgeSearchOutput> {
-		let result = self
-			.owner
-			.search(&query, &options.into(), &CancelToken::default());
+		let result =
+			self
+				.owner
+				.search(&query, &options.into(), &CancelToken::default(), diagnostic.is_some());
 		diagnostics::flush_sync(&self.owner.diagnostics, diagnostic.as_ref())?;
 		result.map(Into::into).map_err(|error| error.into_napi(env))
 	}
@@ -431,7 +441,7 @@ impl KnowledgeSearchEngine {
 		let cancel = CancelToken::new(None, signal);
 		let options = options.into();
 		Ok(task::blocking("knowledge_search", cancel, move |cancel| {
-			let result = owner.search(&query, &options, &cancel);
+			let result = owner.search(&query, &options, &cancel, diagnostic.is_some());
 			diagnostics::flush_async(&owner.diagnostics, diagnostic.as_ref())?;
 			Ok(KnowledgeOutput { owner, cancel, result })
 		}))
