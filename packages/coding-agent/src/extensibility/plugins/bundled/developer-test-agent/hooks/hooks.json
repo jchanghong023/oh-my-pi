@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NODE_BIN=\"${CLI_INSTALL_DIR}/node/node\"; [ -x \"$NODE_BIN\" ] && \"$NODE_BIN\" \"${CODEAGENT3_PLUGIN_ROOT}/scripts/dtagent-plugin-install.js\" || true",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NODE_BIN=\"${CLI_INSTALL_DIR}/node/node\"; [ -x \"$NODE_BIN\" ] && \"$NODE_BIN\" \"${CODEAGENT3_PLUGIN_ROOT}/scripts/inject-ut-routing.js\" || true",
+            "timeout": 15,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "NODE_BIN=\"${CLI_INSTALL_DIR}/node/node\"; [ -x \"$NODE_BIN\" ] && \"$NODE_BIN\" \"${CODEAGENT3_PLUGIN_ROOT}/scripts/user-prompt-hint.js\" || true",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
