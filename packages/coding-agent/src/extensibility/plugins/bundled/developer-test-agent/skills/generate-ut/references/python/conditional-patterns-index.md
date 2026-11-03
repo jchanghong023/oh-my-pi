@@ -63,5 +63,4 @@ Detailed guidance for conditional test-planning patterns. Consult only when the 
 - **weakref.proxy + MagicMock incompatibility**: MagicMock auto-attributes conflict with proxy attribute interception. Use real objects
 - **Warning message precision**: verify ALL substrings (name, version, alternative) with exact count == N, not >= 1
 - **Large SKILL.md token cost**: only read reference files matching detected patterns - skip irrelevant ones
-- **Do not use todowrite or task tracking tools** — they add overhead without improving output quality
 - **Run scripts directly from their original location** — do not copy them to the task directory

@@ -15,7 +15,7 @@
 > **Windows 路径处理（重要）**：`{SKILL_DIR}` 替换为 skill 加载时提供的 "Base directory" 路径。在 Windows 上该路径含反斜杠（如 `C:\Users\...\skills\fix-ut`）。**在 Bash 命令中必须将反斜杠替换为正斜杠**（如 `C:/Users/.../skills/fix-ut/scripts/java/extract-maven-config.js`），否则反斜杠被 Bash 转义导致 `Cannot find module` 错误。
 
 ```bash
-node {SKILL_DIR}/scripts/java/extract-maven-config.js <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
 ```
 
 - **有配置时**：`mvn test -q -Dtest={ClassName} -s "{settingsPath}" {mavenProperties}`
@@ -67,7 +67,7 @@ Java 修复流程由**阶段 1（编译/运行时错误修复）**和**阶段 2�
 1. **安装检查**：读取 [codecheck-check.md](codecheck-check.md)，确保 codecheckcli 已安装
 2. **执行检查**：
    ```bash
-   node skills/fix-ut/scripts/java/run-codecheck.js <projectDir> <testFileRelativePath>
+   node "{SKILL_DIR}/scripts/java/run-codecheck.js" <projectDir> <testFileRelativePath>
    ```
 3. **读取结果**：从脚本 stdout JSON 读取结果
    - `success: false` → codecheck 执行失败，跳过，结束
@@ -80,7 +80,7 @@ Java 修复流程由**阶段 1（编译/运行时错误修复）**和**阶段 2�
    - 执行 Maven 测试确认无报错：
      - 有报错 → 读取 route-runtime.md → fix-strategies-runtime.md 对应章节修复（不计入 3 轮），继续验证 Maven 测试
      - 无报错 → 继续
-   - 执行 codecheck 再次检查：`node skills/fix-ut/scripts/java/run-codecheck.js <projectDir> <testFileRelativePath>`
+   - 执行 codecheck 再次检查：`node "{SKILL_DIR}/scripts/java/run-codecheck.js" <projectDir> <testFileRelativePath>`
    - `success: false` → 输出 "Codecheck 执行失败，跳过验证"，结束
    - `alarmCount == 0` → 输出 "Codecheck 验证通过，告警已清零"，结束
    - `currentRound < 3` → `currentRound++`，继续循环

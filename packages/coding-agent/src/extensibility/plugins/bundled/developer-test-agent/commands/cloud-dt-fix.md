@@ -5,6 +5,8 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 基于链接自动修复云端 UT 问题。支持三种链接类型：MR 链接、codecov 报告链接和版本testcodecheck检查任务链接。根据链接类型自动路由到对应处理流程。
 
 ## 参数
+命令输入原文：{{{rawArguments}}}
+
 
 - `{url}` - 链接（必填），支持以下三种格式：
   - **MR 链接**：如 `https://codehub-g.huawei.com/GDDRDTools/LightIDE/CodeCovService/merge_requests/5`
@@ -15,13 +17,13 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 
 ```
 # MR 链接
-/developer-test-agent:cloud-dt-fix https://codehub-g.huawei.com/GDDRDTools/LightIDE/CodeCovService/merge_requests/5
+/cloud-dt-fix https://codehub-g.huawei.com/GDDRDTools/LightIDE/CodeCovService/merge_requests/5
 
 # codecov 报告链接
-/developer-test-agent:cloud-dt-fix https://codecov.rnd.huawei.com/code-cov-web/dtReport/CodeCCP20-157f9fa53c1245e08220657a06cc5d47
+/cloud-dt-fix https://codecov.rnd.huawei.com/code-cov-web/dtReport/CodeCCP20-157f9fa53c1245e08220657a06cc5d47
 
 # 版本testcodecheck检查任务链接
-/developer-test-agent:cloud-dt-fix https://clouddragon.huawei.com/codecheck/project/project_id/codecheck/task/13e05c8092fa4763834ee1f01a9652c3/detail
+/cloud-dt-fix https://clouddragon.huawei.com/codecheck/project/project_id/codecheck/task/13e05c8092fa4763834ee1f01a9652c3/detail
 ```
 
 链接跟随命令直接传入；若命令未传入链接，则通过交互让用户输入。
@@ -30,20 +32,21 @@ description: '获取云端UT问题（MR门禁级/codecov报告/版本级）进�
 
 ### 1. 获取链接
 
-若命令参数中已包含 `{url}`，直接使用。若未传入，**必须使用 AskUserQuestion 工具让用户输入链接**：
+若命令参数中已包含 `{url}`，直接使用。若未传入，**必须使用 `ask` 工具让用户输入链接**：
 
-```
-AskUserQuestion({
-  questions: [{
-    question: "请输入需要修复的链接（MR 链接、codecov 报告链接或版本testcodecheck检查任务链接）：",
-    header: "链接",
-    multiSelect: false,
-    options: [
-      { label: "手动输入", description: "在 Other 中输入链接（MR 链接如 https://codehub-g.huawei.com/xxx/merge_requests/5，codecov 报告链接如 https://codecov.rnd.huawei.com/code-cov-web/dtReport/xxx，任务链接如 https://clouddragon.huawei.com/codecheck/project/xxx/codecheck/task/xxx/detail）" }
+```json
+{
+  "questions": [{
+    "id": "url",
+    "question": "请输入需要修复的链接（MR 链接、codecov 报告链接或版本testcodecheck检查任务链接）：",
+    "header": "链接",
+    "options": [
+      { "label": "手动输入", "description": "在 Other 中输入 MR、codecov 报告或版本testcodecheck任务链接" }
     ]
   }]
-})
+}
 ```
+使用返回的自定义输入作为链接。
 
 ### 2. 判断链接类型并路由
 
@@ -59,7 +62,7 @@ AskUserQuestion({
 
 ### Step 0: 检查 codecovcli 是否已安装及版本更新
 
-加载安装文档进行检查：使用 `Read` 工具读取 `skills/fix-ut/references/java/codecovcli-check.md`，按文档检查 codecovcli 安装状态及版本更新。
+加载安装文档进行检查：使用 `read` 工具读取 `{{pluginRoot}}/skills/fix-ut/references/java/codecovcli-check.md`，按文档检查 codecovcli 安装状态及版本更新。
 
 ### Step 1: 获取分析数据
 
@@ -214,37 +217,25 @@ Job ID: {jobId}
 
 以业务类为粒度合并任务：若同一业务类同时存在覆盖率不足和用例失败问题，合并为一个任务。
 
-**任务创建模板**：
+**任务创建模板**：保留各任务标题和详情；使用 `todo` 的 `op: "init"` 将所有标题作为 `items` 建立队列，并保存每个标题对应的完整任务内容：
 
 **仅覆盖率不足**：
 
-```
-TaskCreate({
-  subject: "补充 {ClassName} 的增量覆盖率",
-  description: "【门禁修复-覆盖率补充】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n当前覆盖率: {currentCoverage}%\n分支覆盖率: {branchCoverage}%\n未覆盖行: {uncoveredLines}\n目标阈值: {threshold}%\n覆盖率模式: incremental\n\n目标：针对未覆盖行 {uncoveredLines} 补充测试用例，使增量覆盖率达到{threshold}%，并且断言有效性检查无问题。\n\n使用developer-test-agent:developer-test-agent完成上面的测试任务",
-  activeForm: "正在补充 {ClassName} 的增量覆盖率"
-})
-```
+标题：`补充 {ClassName} 的增量覆盖率`
+
+任务内容：`【门禁修复-覆盖率补充】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n当前覆盖率: {currentCoverage}%\n分支覆盖率: {branchCoverage}%\n未覆盖行: {uncoveredLines}\n目标阈值: {threshold}%\n覆盖率模式: incremental\n\n目标：针对未覆盖行 {uncoveredLines} 补充测试用例，使增量覆盖率达到{threshold}%，并且断言有效性检查无问题。`
 
 **仅用例失败**：
 
-```
-TaskCreate({
-  subject: "修复 {ClassName} 的失败用例",
-  description: "【门禁修复-用例修复】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n覆盖率模式: incremental\n\n目标：修复失败的测试用例，确保所有用例通过，覆盖率达到{threshold}%，并且断言有效性检查无问题。\n\n使用developer-test-agent:developer-test-agent完成上面的测试任务",
-  activeForm: "正在修复 {ClassName} 的失败用例"
-})
-```
+标题：`修复 {ClassName} 的失败用例`
+
+任务内容：`【门禁修复-用例修复】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n覆盖率模式: incremental\n\n目标：修复失败的测试用例，确保所有用例通过，覆盖率达到{threshold}%，并且断言有效性检查无问题。`
 
 **覆盖率不足 + 用例失败（合并）**：
 
-```
-TaskCreate({
-  subject: "修复 {ClassName} 的失败用例并补充增量覆盖率",
-  description: "【门禁修复-用例修复+覆盖率补充】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n当前覆盖率: {currentCoverage}%\n分支覆盖率: {branchCoverage}%\n未覆盖行: {uncoveredLines}\n目标阈值: {threshold}%\n覆盖率模式: incremental\n\n目标：先修复失败的测试用例，再针对未覆盖行 {uncoveredLines} 补充测试用例使增量覆盖率达到{threshold}%，确保所有用例通过，并且断言有效性检查无问题。\n\n使用developer-test-agent:developer-test-agent完成上面的测试任务",
-  activeForm: "正在修复 {ClassName} 的失败用例并补充增量覆盖率"
-})
-```
+标题：`修复 {ClassName} 的失败用例并补充增量覆盖率`
+
+任务内容：`【门禁修复-用例修复+覆盖率补充】\n\n链接: {url}\n业务类: {sourceClass}\n测试类: {testClass}\n失败用例: {failedMethods}\n源分支: {sourceBranch}\n目标分支: {targetBranch}\n当前覆盖率: {currentCoverage}%\n分支覆盖率: {branchCoverage}%\n未覆盖行: {uncoveredLines}\n目标阈值: {threshold}%\n覆盖率模式: incremental\n\n目标：先修复失败的测试用例，再针对未覆盖行 {uncoveredLines} 补充测试用例使增量覆盖率达到{threshold}%，确保所有用例通过，并且断言有效性检查无问题。`
 
 **prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
 
@@ -254,16 +245,22 @@ TaskCreate({
 
 按任务创建顺序，逐一执行：
 
-```
-1. TaskUpdate({ taskId: "{id}", status: "in_progress" })
+1. 用 `todo` 的 `op: "start"` 和逐字标题 `task` 标记开始。
+2. 调用一次 `task`，仅传入当前文件完整任务内容：
 
-2. Agent({
-     subagent_type: "developer-test-agent:developer-test-agent",
-     prompt: "<该任务的完整 prompt>"
-   })
-
-3. TaskUpdate({ taskId: "{id}", status: "completed" })
+```json
+{
+  "context": "按当前文件的门禁问题执行修复",
+  "tasks": [{
+    "agent": "developer-test-agent",
+    "task": "<当前文件完整任务内容>",
+    "solutionSpace": "按门禁问题修复测试并满足指定阈值"
+  }]
+}
 ```
+
+3. 等待该子代理完成；若返回缺失信息和待询问题，用 `ask` 收集答案并交回或附上任务内容重新委托，不得猜测或声称已完成。
+4. 用 `todo` 的 `op: "done"` 和同一逐字标题 `task` 标记完成，再启动下一个任务。
 
 #### 错误处理
 
@@ -282,10 +279,10 @@ TaskCreate({
 
 检查本地分支与源分支是否一致，并获取远端跟踪分支信息。
 
-执行 `scripts/local-gitbranch.js`，传入参数 `{sourceBranch}` `{targetBranch}` `{gitPath}`，解析输出中的检查结果：
+执行 `node "{{pluginRoot}}/scripts/local-gitbranch.js" "{sourceBranch}" "{targetBranch}" "{gitPath}"`，解析输出中的检查结果：
 
 - 如果输出 `ok: true`，记录 `remoteTracking` 字段用于 Step 5.3 的 `--targetbranch` 参数，继续执行
-- 如果输出 `ok: false`，根据 `reason` 使用 `AskUserQuestion` 提醒用户操作，用户处理完后重新执行脚本，循环直到 `ok: true`
+- 如果输出 `ok: false`，根据 `reason` 使用 `ask` 提醒用户操作，用户处理完后重新执行脚本，循环直到 `ok: true`
 
 | reason | 含义 | 提醒用户操作 |
 |--------|------|-------------|
@@ -304,7 +301,7 @@ TaskCreate({
 #### Step 5.3: 执行增量覆盖率分析
 
 **Maven 配置提取**：
-- 执行 `skills/fix-ut/scripts/java/extract-maven-config.js <projectDir>` 获取 Maven 配置
+- 执行 `node "{{pluginRoot}}/skills/fix-ut/scripts/java/extract-maven-config.js" <projectDir>` 获取 Maven 配置
 - 脚本无输出时从 AGENTS.md/DT_AGENTS.md 读取，都没有则使用默认配置
 
 **有 Maven 配置时**：
@@ -385,7 +382,7 @@ MR/CodeCov 门禁修复报告
 
 ### Step 1: 检查 codecheck 是否已安装及版本更新
 
-加载安装文档进行检查：使用 `Read` 工具读取 `skills/fix-ut/references/java/codecheck-check.md`，按文档检查 codecheck 安装状态及版本更新。
+加载安装文档进行检查：使用 `read` 工具读取 `{{pluginRoot}}/skills/fix-ut/references/java/codecheck-check.md`，按文档检查 codecheck 安装状态及版本更新。
 
 ### Step 2: 下载告警数据文件，获取告警数据
 
@@ -420,15 +417,11 @@ codecheck version-defect --taskUrl {url}
 
 ### Step 3: 按类分组并创建任务队列
 
-为 Step 2 分组后的每个测试类创建一个独立任务：
+为 Step 2 分组后的每个测试类创建一个独立任务：用 `todo` 的 `op: "init"` 将所有标题作为 `items` 建立队列，并保存标题对应的完整任务内容。
 
-```
-TaskCreate({
-  subject: "修复 {ClassName} 中的无效断言",
-  description: "测试文件: {filePath}\n告警数: {alertCount}\n告警详情:\n{alerts}\nMaven配置: {mavenConfig}",
-  activeForm: "正在修复 {ClassName} 中的无效断言"
-})
-```
+标题：`修复 {ClassName} 中的无效断言`
+
+任务内容：`测试文件: {filePath}\n告警数: {alertCount}\n告警详情:\n{alerts}\nMaven配置: {mavenConfig}`
 
 **prompt 中只传入当前测试类的告警详情，不允许传入多个类的告警信息。**
 
@@ -438,16 +431,22 @@ TaskCreate({
 
 按任务创建顺序，逐一执行：
 
-```
-1. TaskUpdate({ taskId: "{id}", status: "in_progress" })
+1. 用 `todo` 的 `op: "start"` 和逐字标题 `task` 标记开始。
+2. 调用一次 `task`，仅传入当前测试类完整任务内容：
 
-2. Agent({
-     subagent_type: "developer-test-agent:developer-test-agent",
-     prompt: "<该任务的完整 prompt>"
-   })
-
-3. TaskUpdate({ taskId: "{id}", status: "completed" })
+```json
+{
+  "context": "按当前测试类告警执行修复",
+  "tasks": [{
+    "agent": "developer-test-agent",
+    "task": "<当前测试类完整任务内容>",
+    "solutionSpace": "按告警修复测试断言"
+  }]
+}
 ```
+
+3. 等待该子代理完成；若返回缺失信息和待询问题，用 `ask` 收集答案并交回或附上任务内容重新委托，不得猜测或声称已完成。
+4. 用 `todo` 的 `op: "done"` 和同一逐字标题 `task` 标记完成，再启动下一个任务。
 
 #### 错误处理
 
@@ -498,11 +497,11 @@ taskUrl: {url}
 2. MR 链接场景覆盖率阈值缺失时必须询问用户；codecov 报告场景无阈值字段时默认使用 80%
 3. 每个任务的 prompt 仅包含当前文件信息，严禁跨文件混入
 4. 串行执行中，单个任务失败不阻塞后续任务执行
-5. 所有 DT 工作必须通过 Agent 工具委托给 `developer-test-agent:developer-test-agent`，不得由主 Agent 直接操作
+5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
 7. 循环验证最多 3 轮，避免无限循环
 8. 增量覆盖率验证时，必须通过 `local-gitbranch.js` 脚本检查本地分支状态，循环调用直到 `ok: true`
 9. Maven 配置获取优先级：extract-maven-config.js 脚本 → 目标项目 AGENTS.md → 默认命令
 10. codecovcli 命令执行超时设为 20 分钟（1200000ms）
 11. codecovcli 如果失败禁止使用jacoco执行代码覆盖率，如果codecovcli执行失败了要引导用户去处理
-12. **禁止使用 Team 模式**：不得使用 `TeamCreate` 创建团队，不得在 Agent 调用中传入 `team_name` 参数，任务执行必须且只能通过 `TaskCreate` 创建独立任务 + `Agent`（无 `team_name`）串行调度
+12. **禁止使用 Team 模式**：任务必须按队列顺序每次只启动一个 `task` 并等待完成

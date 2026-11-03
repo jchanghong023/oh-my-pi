@@ -15,7 +15,7 @@
 > **Windows 路径处理（重要）**：`{SKILL_DIR}` 替换为 skill 加载时提供的 "Base directory" 路径。在 Windows 上该路径含反斜杠（如 `C:\Users\...\skills\improve-coverage`）。**在 Bash 命令中必须将反斜杠替换为正斜杠**（如 `C:/Users/.../skills/improve-coverage/scripts/java/extract-maven-config.js`），否则反斜杠被 Bash 转义导致 `Cannot find module` 错误。
 
 ```bash
-node {SKILL_DIR}/scripts/java/extract-maven-config.js <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
 ```
 
 - **有配置时**：`mvn test -q -Dtest={ClassName} -s "{settingsPath}" {mavenProperties}`
@@ -43,7 +43,7 @@ codecovcli 执行失败后使用。Maven 配置提取逻辑与 codecovcli 一致
 **Step 1 — 提取 Maven 配置**：
 
 ```bash
-node {SKILL_DIR}/scripts/java/extract-maven-config.js <projectDir>
+node "{SKILL_DIR}/scripts/java/extract-maven-config.js" <projectDir>
 ```
 
 **Step 2 — 执行 JaCoCo 测试命令**：
@@ -54,7 +54,7 @@ node {SKILL_DIR}/scripts/java/extract-maven-config.js <projectDir>
 **Step 3 — 提取覆盖率数据**：
 
 ```bash
-node {SKILL_DIR}/scripts/java/extract-jacoco-coverage.js {className} {module}/target/site/jacoco/jacoco.xml
+node "{SKILL_DIR}/scripts/java/extract-jacoco-coverage.js" {className} {module}/target/site/jacoco/jacoco.xml
 ```
 
 脚本从 `jacoco.xml` 中提取指定类的覆盖率信息，生成 `.codecovcli/cache/java_{className}.json`，格式与 codecovcli 输出一致。

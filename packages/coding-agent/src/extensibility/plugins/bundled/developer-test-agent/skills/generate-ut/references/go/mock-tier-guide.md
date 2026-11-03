@@ -57,7 +57,7 @@
 
 ### Windows特殊说明
 
-无需CGO/MinGW即可完成基本Mock场景。使用 `-gcflags=all=-l` 即可（已验证 gomonkey v2.14.0 + Go 1.24, Windows/amd64）。特定场景（如CGO交互）可能需要 `CGO_ENABLED=1` + gcc，详见 [gomonkey构建标志兼容性](../../fix-ut/references/go/gomonkey-errors.md#gomonkey构建标志兼容性)。
+无需CGO/MinGW即可完成基本Mock场景。使用 `-gcflags=all=-l` 即可（已验证 gomonkey v2.14.0 + Go 1.24, Windows/amd64）。特定场景（如CGO交互）可能需要 `CGO_ENABLED=1` + gcc，详见 `skill://fix-ut/references/go/gomonkey-errors.md` 的 gomonkey 构建标志兼容性章节。
 
 ### 探针测试（仅用于歧义依赖）
 

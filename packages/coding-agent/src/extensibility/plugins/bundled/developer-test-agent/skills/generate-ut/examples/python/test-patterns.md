@@ -362,7 +362,7 @@ def test_timestamp_boundary(mock_now):
 
 **Primary approach** (bypasses .coveragerc issues):
 
-> `$PYTHON` is the interpreter resolved in Environment Setup (SKILL.md).
+> `$PYTHON` is the interpreter resolved in Environment Setup (SKILL.md); replace `{SKILL_DIR}` with the baseDir returned when loading `generate-ut`.
 
 ```bash
 # Step 1: Run tests with coverage
@@ -372,7 +372,7 @@ $PYTHON -m coverage run --rcfile=NUL -m pytest <test_file> -v
 $PYTHON -m coverage json -o coverage.json --rcfile=NUL
 
 # Step 3: Parse with function-specific script
-$PYTHON scripts/parse_coverage.py coverage.json <func> <start> <end> <source_path>
+$PYTHON "{SKILL_DIR}/scripts/python/parse_coverage.py" coverage.json <func> <start> <end> <source_path>
 ```
 
 **Fallback** (if primary fails):

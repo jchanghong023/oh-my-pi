@@ -91,6 +91,8 @@ Windows下bash命令使用正斜杠（/），不使用反斜杠。
 
 覆盖率产物统一输出到临时目录，避免污染项目目录。
 
+`{SKILL_DIR}` 替换为加载 `generate-ut` 时返回的 baseDir，脚本路径加引号。
+
 ```powershell
 # Windows (PowerShell) - 创建临时目录
 $COV_DIR="$env:TEMP\ut-python"; New-Item -ItemType Directory -Force -Path $COV_DIR | Out-Null
@@ -102,7 +104,7 @@ $COV_DIR="$env:TEMP\ut-python"; New-Item -ItemType Directory -Force -Path $COV_D
 .venv/Scripts/python.exe -m coverage json -o "$COV_DIR\coverage.json" --rcfile=NUL
 
 # 解析函数级覆盖率
-.venv/Scripts/python.exe scripts/python/parse_coverage.py "$COV_DIR\coverage.json" <function_name> <start_line> <end_line> <source_file_path>
+.venv/Scripts/python.exe "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR\coverage.json" <function_name> <start_line> <end_line> <source_file_path>
 ```
 
 ```bash
@@ -116,7 +118,7 @@ COV_DIR="/tmp/ut-python"; mkdir -p "$COV_DIR"
 .venv/bin/python -m coverage json -o "$COV_DIR/coverage.json" --rcfile=NUL
 
 # 解析函数级覆盖率
-.venv/bin/python scripts/python/parse_coverage.py "$COV_DIR/coverage.json" <function_name> <start_line> <end_line> <source_file_path>
+.venv/bin/python "{SKILL_DIR}/scripts/python/parse_coverage.py" "$COV_DIR/coverage.json" <function_name> <start_line> <end_line> <source_file_path>
 ```
 
 ### 环境清理

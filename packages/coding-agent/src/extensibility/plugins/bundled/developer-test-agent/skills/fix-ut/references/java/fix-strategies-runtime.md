@@ -16,7 +16,7 @@
 3. 问题参数可能为 null → 改用 `nullable(X.class)` 或 `any()`
 4. 有具体值 → 用 `eq(value)` 精确匹配；不确定参数范围 → 用 `any()`
 5. 添加 `verify(mock, times(1)).method(...)` 确认 Mock 被调用
-6. 参考 `grep -r "targetMethod" --include="*Test.java"` 中同类成功测试
+6. 使用 `grep` 工具搜索 `targetMethod`，并在 `*Test.java` 文件中参考同类成功测试
 
 **常见匹配器 null 支持表**：`anyString()` ❌ / `any()` ✅ / `anyOrNull()` ✅ / `nullable(X.class)` ✅ / `eq(value)` 仅精确值
 

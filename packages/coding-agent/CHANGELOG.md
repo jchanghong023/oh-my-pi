@@ -26,6 +26,7 @@
 
 ### Added
 
+- Use the bundled Developer Test Agent with `/dt`, `/generate-dt-files`, `/generate-dt-dir`, `/incremental-dt` and `/cloud-dt-fix`, including its Python, Java, C/C++ and Go unit-test skills.
 - Start an optional business interview with `/dev business <description>` and an automatically assigned document path, then confirm its complete document with `/dev next` or deliver business requirements only with `/dev finish-business`; `/dev new` still starts directly with development requirements.
 - Build and replace the local Windows executable without stopping running sessions with `bun run local`, or build and upload Windows and WSL Linux binaries in parallel to a CNB release with `bun run cnb`, without packaging or publishing source code.
 - Use `/minimal` to request minimal changes and directly relevant verification, optionally alongside a task.

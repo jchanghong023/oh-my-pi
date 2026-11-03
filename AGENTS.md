@@ -349,6 +349,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
+- Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
 - [OpenWiki](openspec/specs/openwiki/spec.md) 通过 `vendor/openwiki` 子模块维护；`omp openwiki` 默认使用 OMP 的 `default` 模型，内置 `openwiki_*` 查询工具只读。修改子模块源码、技能或资源依赖后运行 `bun run gen:openwiki-resources`；资源指纹不匹配时不得使用旧资源。
 - 父仓静态检查与测试发现 MUST 排除 `vendor/openwiki` 子模块；OMP 宿主集成测试不受此限制。
 - [python/robomp/AGENTS.md](python/robomp/AGENTS.md) 是 GitHub triage/fix bot 子树的架构、命令、开发约定及验证规则。

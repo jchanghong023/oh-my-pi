@@ -141,7 +141,12 @@ export function renderFileSlashCommand(command: FileSlashCommand, argsString: st
 	const argsText = args.join(" ");
 	const usesInlineArgPlaceholders = templateUsesInlineArgPlaceholders(command.content);
 	const substituted = substituteArgs(command.content, args);
-	const rendered = prompt.render(substituted, { args, ARGUMENTS: argsText, arguments: argsText });
+	const rendered = prompt.render(substituted, {
+		args,
+		ARGUMENTS: argsText,
+		arguments: argsText,
+		rawArguments: argsString,
+	});
 	return appendInlineArgsFallback(rendered, argsText, usesInlineArgPlaceholders);
 }
 

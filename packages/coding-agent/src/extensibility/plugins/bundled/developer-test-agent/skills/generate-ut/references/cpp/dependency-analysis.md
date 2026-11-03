@@ -13,7 +13,7 @@
 1. 查找函数定义位置 (文件:行号)
   │
   ▼
-2. 调用 scripts/extract-function-callees.py 提取直接 callees
+2. 调用 {SKILL_DIR}/scripts/cpp/extract-function-callees.py 提取直接 callees
   │
   ▼
 3. 对每个内部依赖函数:
@@ -28,8 +28,8 @@
 
 如果环境中可用libclang，使用脚本自动提取函数调用链：
 
-1. 使用grep/语义搜索定位被测函数定义位置（文件路径+行号）
-2. 调用脚本：`python scripts/cpp/extract-function-callees.py <source_file> -l <line> -c <compile_commands.json>`
+1. 使用 `grep` 或 `repo` 索引搜索定位被测函数定义位置（文件路径+行号）
+2. 调用脚本：`python "{SKILL_DIR}/scripts/cpp/extract-function-callees.py" <source_file> -l <line> -c <compile_commands.json>`，其中 `{SKILL_DIR}` 为加载 generate-ut 时返回的 baseDir
 3. 解析输出，区分内部依赖和外部依赖
 4. 对内部依赖递归调用脚本，直到所有外部依赖被识别
 
@@ -43,10 +43,8 @@
 
 **调用示例**:
 
-```
-bash tool:
-- command: python {skill-path}/scripts/extract-function-callees.py /path/to/file.cpp -l 232 -c /path/to/compile_commands.json
-- workdir: 当前工作目录
+```bash
+python "{SKILL_DIR}/scripts/cpp/extract-function-callees.py" /path/to/file.cpp -l 232 -c /path/to/compile_commands.json
 ```
 
 #### 脚本输出说明
@@ -93,7 +91,7 @@ libclang不可用时，通过阅读源代码人工分析调用关系。标注：
 
 ### 上下文提取脚本
 
-使用 `node {SKILL_DIR}/scripts/cpp/ut_code_analysis.js` 提取上下文到临时工作目录（Windows 下路径反斜杠须改为正斜杠）。脚本不可用时手动读取，但必须遵循探索范围约束。
+使用 `node "{SKILL_DIR}/scripts/cpp/ut_code_analysis.js"` 提取上下文到临时工作目录（Windows 下路径反斜杠须改为正斜杠）。脚本不可用时手动读取，但必须遵循探索范围约束。
 
 ## 传递依赖分析
 

@@ -2,23 +2,28 @@
 description: '使用developer-test-agent完成DT任务，比如生成单元测试、修复测试问题、提升覆盖率或审查断言质量'
 ---
 
-你必须将用户的请求委托给 `developer-test-agent:developer-test-agent`，通过以下方式之一：
+将用户的完整原始请求委托给 `developer-test-agent`。
 
-1. **Agent 工具**（推荐）：调用 Agent 工具，设置 `subagent_type: "developer-test-agent:developer-test-agent"`，将用户原始请求原样传入 prompt。
-2. **Task 工具**：通过 TaskCreate 创建任务，然后启动 Agent 并设置 `subagent_type: "developer-test-agent:developer-test-agent"`，将任务分配给它。
+用户请求原文：
+
+{{{rawArguments}}}
 
 ## 规则
 
-- **禁止**自行执行单元测试工作（读取源码、编写测试、修复测试等），必须委托给 `developer-test-agent:developer-test-agent`。
-- 使用 Agent 工具时，设置 `subagent_type: "developer-test-agent:developer-test-agent"`，将用户完整原始请求作为 prompt 传入，不得改写、解释或预处理。
-- Agent 完成后，向用户简要总结结果。
-- **禁止使用 Team 模式**：不得使用 `TeamCreate` 创建团队，不得在 Agent 调用中传入 `team_name` 参数，任务执行必须且只能通过 `TaskCreate` 创建独立任务 + `Agent`（无 `team_name`）串行调度。
+- **禁止**自行执行单元测试工作（读取源码、编写测试、修复测试等），必须委托给 `developer-test-agent`。
+- 调用 `task` 时，将用户完整原始请求原样放入 `task` 字段，不得改写、解释或预处理。
+- 只启动一个任务，等待其完成后向用户简要总结结果；不得创建团队。
+- 子代理返回缺失信息和待询问题时，用 `ask` 向用户收集答案，交回子代理或附上原请求重新委托；不得猜测或声称任务已完成。
 
 ## 调用示例
 
-```
-Agent(
-  subagent_type: "developer-test-agent:developer-test-agent",
-  prompt: "<用户原始请求原文>"
-)
+```json
+{
+  "context": "按用户请求执行单元测试任务",
+  "tasks": [{
+    "agent": "developer-test-agent",
+    "task": "<用户原始请求原文>",
+    "solutionSpace": "按用户原始请求执行单元测试任务"
+  }]
+}
 ```

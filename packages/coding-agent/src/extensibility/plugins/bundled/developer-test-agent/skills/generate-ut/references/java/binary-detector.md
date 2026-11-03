@@ -14,7 +14,7 @@
 
 ```bash
 # 使用 node -e 调用 main 函数
-node -e "const { main } = require('./scripts/java/decompile.js'); main({packages: ['com.huawei.*'], m2Repo: '~/.m2/repository', settings: '~/.m2/settings.xml', projectDir: '/path/to/project', depsDir: '/path/to/project/.dtagent/deps', m2Params: '-Dpackage.type=vm'}).then(() => console.log('Done')).catch(e => console.error(e));"
+node -e "const { main } = require(process.argv[1]); main({packages: ['com.huawei.*'], m2Repo: '~/.m2/repository', settings: '~/.m2/settings.xml', projectDir: '/path/to/project', depsDir: '/path/to/project/.dtagent/deps', m2Params: '-Dpackage.type=vm'}).then(() => console.log('Done')).catch(e => console.error(e));" "{SKILL_DIR}/scripts/java/decompile.js"
 ```
 
 ### 参数说明
@@ -30,7 +30,7 @@ node -e "const { main } = require('./scripts/java/decompile.js'); main({packages
 
 ### 反编译前参数确认
 
-执行反编译前，必须确认以下参数（用户未提供时必须询问）：
+执行反编译前，必须确认以下参数（用户未提供时，向主代理返回缺失信息及待询问题，由主代理询问后再继续）：
 
 - Maven settings.xml 路径（默认 `~/.m2/settings.xml`）
 - Maven 本地仓库路径（默认 `~/.m2/repository`）
@@ -45,13 +45,13 @@ node -e "const { main } = require('./scripts/java/decompile.js'); main({packages
 
 ```bash
 # 查找单个类的源码路径
-node {SKILL_DIR}/scripts/java/binary-detector.js find-binary-source "RestfulResponse"
+node "{SKILL_DIR}/scripts/java/binary-detector.js" find-binary-source "RestfulResponse"
 
 # 批量查找多个类的源码路径
-node {SKILL_DIR}/scripts/java/binary-detector.js batch-find-source "RestfulResponse,UserService"
+node "{SKILL_DIR}/scripts/java/binary-detector.js" batch-find-source "RestfulResponse,UserService"
 
 # 列出所有已反编译的类
-node {SKILL_DIR}/scripts/java/binary-detector.js list-binary-classes "com.huawei" 100
+node "{SKILL_DIR}/scripts/java/binary-detector.js" list-binary-classes "com.huawei" 100
 ```
 
 ### 查询命令说明

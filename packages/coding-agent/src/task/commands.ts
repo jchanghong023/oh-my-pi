@@ -117,11 +117,11 @@ export function getCommand(commands: WorkflowCommand[], name: string): WorkflowC
 
 /**
  * Expand command instructions with task input.
- * Replaces $@ with the provided input.
+ * Replaces $@ or the raw-argument template token with the unparsed input.
  */
 export function expandCommand(command: WorkflowCommand, input: string): string {
 	// Function replacement so `$`-patterns in user input ($$, $&, ...) stay literal.
-	return command.instructions.replace(/\$@/g, () => input);
+	return command.instructions.replace(/\$@|\{\{\{rawArguments\}\}\}/g, () => input);
 }
 
 /**

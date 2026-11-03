@@ -2,9 +2,11 @@
 description: '指定目录全量生成单元测试，串行调度 developer-test-agent 逐文件执行，最终输出执行报告。'
 ---
 
-指定源码目录（支持 Java、C/C++、Go 和 Python），扫描目录下所有业务类/源文件，全量为每个类/函数生成单元测试，自动创建 DT 任务队列并串行调度 `developer-test-agent:developer-test-agent` 逐个执行，最终输出执行报告。
+指定源码目录（支持 Java、C/C++、Go 和 Python），扫描目录下所有业务类/源文件，全量为每个类/函数生成单元测试，自动创建 DT 任务队列并串行调度 `developer-test-agent` 逐个执行，最终输出执行报告。
 
 ## 参数
+
+命令输入：`{{{rawArguments}}}`
 
 - `{dir}` - 源码目录路径（必填，支持绝对路径和相对路径），如：
   - Java 绝对路径：`D:\workspaceGree\codecov\CodeCovService\src\main\java\com\huawei\codecov\freeresolver\service\reportconfig`
@@ -19,10 +21,10 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 ## 调用方式
 
 ```
-/developer-test-agent:generate-dt-dir D:\workspaceGree\codecov\CodeCovService\src\main\java\com\huawei\codecov\freeresolver\service\reportconfig
-/developer-test-agent:generate-dt-dir src/core/service
-/developer-test-agent:generate-dt-dir internal/service
-/developer-test-agent:generate-dt-dir app/services
+/generate-dt-dir D:\workspaceGree\codecov\CodeCovService\src\main\java\com\huawei\codecov\freeresolver\service\reportconfig
+/generate-dt-dir src/core/service
+/generate-dt-dir internal/service
+/generate-dt-dir app/services
 ```
 
 目录路径跟随命令直接传入；若命令未传入目录，则通过交互让用户手动输入。系统根据扫描到的文件扩展名自动检测目标语言并应用对应规则。
@@ -31,19 +33,10 @@ description: '指定目录全量生成单元测试，串行调度 developer-test
 
 ### 1. 确定目录路径
 
-若命令参数中已包含 `{dir}`，直接使用。若未传入，**必须使用 AskUserQuestion 工具让用户输入目录路径**：
+将上述命令输入作为 `{dir}`，路径外围的配对引号不属于路径。若未传入，必须使用 `ask` 让用户通过自动提供的 Other 输入目录路径；取消则终止，未得到路径则继续询问：
 
-```
-AskUserQuestion({
-  questions: [{
-    question: "请输入需要生成测试的源码目录路径（支持绝对路径和相对路径，Java、C/C++、Go 或 Python 均可）：",
-    header: "目录路径",
-    multiSelect: false,
-    options: [
-      { label: "手动输入", description: "在 Other 中输入目录路径，如 D:\\project\\src\\main\\java\\com\\huawei\\service 或 src/core/service 或 internal/service 或 app/services" }
-    ]
-  }]
-})
+```json
+{"questions":[{"id":"directory","question":"请输入需要生成测试的源码目录路径，使用 Other 输入绝对或相对路径。","header":"目录路径","options":[{"label":"输入路径","description":"通过 Other 输入目录路径"},{"label":"取消","description":"终止执行"}]}]}
 ```
 
 确定后续步骤的执行参数：
@@ -57,20 +50,7 @@ AskUserQuestion({
 
 ### 2. 扫描目录文件
 
-根据用户提供的 `{dir}`，扫描该目录下所有源码文件，同时扫描 Java、C/C++、Go 和 Python 文件，自动检测目标语言：
-
-```
-Glob({ pattern: "{dir}/**/*.java" })
-Glob({ pattern: "{dir}/**/*.cpp" })
-Glob({ pattern: "{dir}/**/*.c" })
-Glob({ pattern: "{dir}/**/*.cc" })
-Glob({ pattern: "{dir}/**/*.cxx" })
-Glob({ pattern: "{dir}/**/*.h" })
-Glob({ pattern: "{dir}/**/*.hpp" })
-Glob({ pattern: "{dir}/**/*.hxx" })
-Glob({ pattern: "{dir}/**/*.go" })
-Glob({ pattern: "{dir}/**/*.py" })
-```
+根据用户提供的 `{dir}`，使用 `read` 读取目录并递归读取所有子目录，收集 `.java`、`.cpp`、`.c`、`.cc`、`.cxx`、`.h`、`.hpp`、`.hxx`、`.go` 和 `.py` 文件，自动检测目标语言。目录列表被截断时按 `read` 提示分页，确保扫描完整。
 
 **语言检测规则**：
 - 若扫描到 `.java` 文件 → 目标语言为 Java
@@ -193,7 +173,7 @@ Glob({ pattern: "{dir}/**/*.py" })
 
 **通用判断流程**：
 1. 从文件路径提取类名，检查是否符合跳过规则的命名特征
-2. 若符合命名特征，读取文件内容进一步检查内容特征
+2. 若符合命名特征，使用 `read` 读取文件内容进一步检查内容特征
 3. 若确认无业务逻辑，将该文件从列表中移除，记入跳过列表
 
 **过滤输出**：
@@ -215,19 +195,13 @@ Glob({ pattern: "{dir}/**/*.py" })
 
 ### 4. 创建任务队列
 
-为步骤 3 过滤后的每个文件创建一个独立任务：
+按文件顺序建立本地队列，保存每个文件的路径、语言及下方完整 prompt。为每个文件生成唯一待办文本 `为 {filename} 全量生成单元测试`，使用 `todo` 的 `init` 和 `items` 一次初始化；列表为空时不创建待办。
 
-```
-TaskCreate({
-  subject: "为 {filename} 全量生成单元测试",
-  description: "目录: {dir}\n业务类: {filename}\n生成类型: 全量生成\n覆盖率模式: class-level\n覆盖率阈值: 80%",
-  activeForm: "正在为 {filename} 全量生成单元测试"
-})
+```json
+{"op":"init","items":["为 src/core/OrderService.cpp 全量生成单元测试"]}
 ```
 
-**prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
-
-> 注意：任务由步骤5按创建顺序串行调度，无需设置 blockedBy 依赖链。
+实际调用时将 `items` 替换为全部待办文本，并逐字保留以供后续 `todo` 操作使用。**prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
 
 #### 任务 Prompt 模板
 
@@ -242,7 +216,7 @@ TaskCreate({
 
 目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
 
-使用developer-test-agent:developer-test-agent完成上面的测试任务
+使用 developer-test-agent 完成上面的测试任务。
 ```
 
 #### Prompt 变量说明
@@ -255,38 +229,25 @@ TaskCreate({
 
 ### 5. 串行执行任务
 
-按任务创建顺序，逐一执行：
+按队列顺序逐个执行，每次只启动一个 `task`；若工具异步返回，等待该子 Agent 完成并接收结果后，才可启动下一个。不得并行或使用 Team 模式。
 
-```
-1. TaskUpdate({ taskId: "{id}", status: "in_progress" })
+对当前文件，将下例中的路径、待办文本和 `task` 内容替换为实际值，`task` 内容使用上面的完整 prompt，包含该文件的目标语言：
 
-2. Agent({
-     subagent_type: "developer-test-agent:developer-test-agent",
-     prompt: "<该任务的完整 prompt>"
-   })
-
-3. TaskUpdate({ taskId: "{id}", status: "completed" })
+```json
+{"op":"start","task":"为 src/core/OrderService.cpp 全量生成单元测试"}
 ```
 
-#### 串行调度伪代码
-
-```
-tasks = TaskList()
-sorted_tasks = tasks.sortBy(id)
-
-for task in sorted_tasks:
-    TaskUpdate({ taskId: task.id, status: "in_progress" })
-
-    result = Agent({
-        name: "dt-worker-" + task.id,
-        subagent_type: "developer-test-agent:developer-test-agent",
-        prompt: task.description
-    })
-
-    TaskUpdate({ taskId: task.id, status: "completed" })
+```json
+{"context":"按当前文件与用户约束串行执行目录单元测试任务，保持原有语言路由和覆盖率规则。","tasks":[{"agent":"developer-test-agent","task":"【目录测试生成】\n目录: src/core\n业务类: src/core/OrderService.cpp\n目标语言: C/C++\n生成类型: 全量生成\n覆盖率模式: class-level\n覆盖率阈值: 80%\n目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。","solutionSpace":"按指定文件和覆盖率规则生成单元测试"}]}
 ```
 
-> 主 Agent 按顺序逐一启动子 Agent，天然串行，无需依赖链控制。
+若子 Agent 返回缺失信息和待询问题，主 Agent 必须使用 `ask` 向用户收集答案，再将答案和当前文件任务重新委托给 `developer-test-agent`；不得猜测或将澄清请求视为完成。继续等待该文件处理结束后再执行下一个文件。
+
+记录结果后，用相同的待办文本标记完成（失败也标记完成，失败状态另行记录用于报告）：
+
+```json
+{"op":"done","task":"为 src/core/OrderService.cpp 全量生成单元测试"}
+```
 
 #### 错误处理
 
@@ -365,9 +326,9 @@ for task in sorted_tasks:
 2. 每个任务的 prompt 仅包含当前文件信息，严禁跨文件混入
 3. 串行执行中，单个任务失败不阻塞后续任务执行
 4. 前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤6执行报告中体现
-5. 所有 DT 工作必须通过 Agent 工具委托给 `developer-test-agent:developer-test-agent`，不得由主 Agent 直接操作
+5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
-7. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
+7. 任务由主 Agent 按创建顺序串行调度
 8. 已存在测试文件时，优先使用 improve-coverage 分析覆盖率，若已达标则跳过测试生成
 9. 本命令为全量生成模式，所有文件均为全量生成，无需解析变更方法，覆盖率模式固定为 class-level
-10. **禁止使用 Team 模式**：不得使用 `TeamCreate` 创建团队，不得在 Agent 调用中传入 `team_name` 参数，任务执行必须且只能通过 `TaskCreate` 创建独立任务 + `Agent`（无 `team_name`）串行调度
+10. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

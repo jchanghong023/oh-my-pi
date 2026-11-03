@@ -50,7 +50,8 @@ prompt.registerHelper("renderYieldSchema", (schema: unknown): string => {
 });
 
 const INLINE_ARG_SHELL_PATTERN = /\$(?:ARGUMENTS|@(?:\[\d+(?::\d*)?\])?|\d+)/;
-const INLINE_ARG_TEMPLATE_PATTERN = /\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;
+const INLINE_ARG_TEMPLATE_PATTERN =
+	/\{\{[\s\S]*?(?:\b(?:arguments|ARGUMENTS|args|rawArguments)\b|\barg\s+[^}]+)[\s\S]*?\}\}/;
 
 /**
  * Keep the check source-level and cheap: if the template text contains any explicit

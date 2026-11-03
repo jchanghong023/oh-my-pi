@@ -29,7 +29,7 @@ go tool cover "-html=$COV_DIR\cov.txt" -o "$COV_DIR\coverage.html"
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/go_{className}.json）
 # {className} 为被测 Go 源文件名（不含 .go 扩展名，如 string_utils）
 # 注意：在 Bash 中运行 node 时，脚本路径必须使用正斜杠
-node {SKILL_DIR}/scripts/go/extract-go-coverage.js {className} "$COV_DIR\cov.txt" "$COV_DIR\test-output.txt"
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" {className} "$COV_DIR\cov.txt" "$COV_DIR\test-output.txt"
 ```
 
 #### Unix (bash)
@@ -49,7 +49,7 @@ go tool cover -func="$COV_DIR/cov.txt" | grep -E "FuncName$"
 
 # 步骤3：生成覆盖率上报缓存 JSON（写入 .codecovcli/cache/go_{className}.json）
 # {className} 为被测 Go 源文件名（不含 .go 扩展名，如 string_utils）
-node {SKILL_DIR}/scripts/go/extract-go-coverage.js {className} "$COV_DIR/cov.txt" "$COV_DIR/test-output.txt"
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" {className} "$COV_DIR/cov.txt" "$COV_DIR/test-output.txt"
 ```
 
 ### Windows注意事项
@@ -60,14 +60,14 @@ node {SKILL_DIR}/scripts/go/extract-go-coverage.js {className} "$COV_DIR/cov.txt
 
 ### 覆盖率上报集成（强制）
 
-> **此步骤为强制要求，不可跳过。** 覆盖率数据必须写入 `.codecovcli/cache/go_{className}.json`，供 DTAgent-Plugin 在子代理执行结束后自动扫描并通过 OTel 上报。在 improve-coverage 的 Step 1（首次获取覆盖率）和 Step 4（校验覆盖率提升结果）中**均需执行**。
+> **此步骤为强制要求，不可跳过。** 覆盖率数据必须写入 `.codecovcli/cache/go_{className}.json`，供外部 DTAgent-Plugin 在子代理执行结束后扫描并通过 OTel 上报；OMP 内置运行时不提供此自动上报。在 improve-coverage 的 Step 1（首次获取覆盖率）和 Step 4（校验覆盖率提升结果）中**均需执行**。
 
 #### 转换脚本
 
 通过 `extract-go-coverage.js` 脚本完成从 Go 原生覆盖率报告到上报 JSON 的转换：
 
 ```bash
-node {SKILL_DIR}/scripts/go/extract-go-coverage.js <类名/模块名> <coverprofile路径> [go-test-v输出路径]
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" <类名/模块名> <coverprofile路径> [go-test-v输出路径]
 ```
 
 > **Windows 注意**：`{SKILL_DIR}` 替换为 skill 的 "Base directory" 路径，**反斜杠须改为正斜杠**。
@@ -84,24 +84,24 @@ node {SKILL_DIR}/scripts/go/extract-go-coverage.js <类名/模块名> <coverprof
 
 ```bash
 # 仅覆盖率数据（测试结果字段填0）
-node {SKILL_DIR}/scripts/go/extract-go-coverage.js string_utils /tmp/ut-go/cov.txt
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov.txt
 
 # 覆盖率数据 + 测试执行结果
-node {SKILL_DIR}/scripts/go/extract-go-coverage.js string_utils /tmp/ut-go/cov.txt /tmp/ut-go/test-output.txt
+node "{SKILL_DIR}/scripts/go/extract-go-coverage.js" string_utils /tmp/ut-go/cov.txt /tmp/ut-go/test-output.txt
 ```
 
 #### 输出文件
 
 - **路径**：`<项目根目录>/.codecovcli/cache/go_{className}.json`
 - **写入前清除历史缓存**：脚本在写入前会删除 `.codecovcli/cache/` 目录下的所有历史缓存文件，避免脏数据
-- **异常兜底**：当 coverprofile 文件不存在（如 `go test` 编译失败未生成覆盖率文件）、目标文件未在 coverprofile 中找到（className 不匹配）、或覆盖率数据校验失败时，脚本**仍会写入 JSON 文件**（含 `errorDetail` 字段和 0 覆盖率数据），确保 DTAgent-Plugin 能上报测试执行结果（含编译失败场景）。若提供了 `go-test-v` 输出路径，编译错误和测试结果会正常解析并写入 `metrics` 字段。
+- **异常兜底**：当 coverprofile 文件不存在（如 `go test` 编译失败未生成覆盖率文件）、目标文件未在 coverprofile 中找到（className 不匹配）、或覆盖率数据校验失败时，脚本**仍会写入 JSON 文件**（含 `errorDetail` 字段和 0 覆盖率数据），供外部 DTAgent-Plugin 上报测试执行结果（含编译失败场景）。若提供了 `go-test-v` 输出路径，编译错误和测试结果会正常解析并写入 `metrics` 字段。
 
 #### JSON 格式
 
 生成的 JSON 符合覆盖率上报规范：
 
 - `scenario`：固定 `"class-level"`（DTAgent-Plugin 仅上报 class-level 场景，其他值会被跳过）
-- `metrics`：10 个字段，全部透传到 OTel attributes
+- `metrics`：10 个字段，供外部 DTAgent-Plugin 透传到 OTel attributes
   - `compiled_testcase_num`：编译通过的测试用例数（= 总测试数 - 编译错误数）
   - `passed_testcase_num`：运行通过的测试用例数
   - `covered_line_num`：已覆盖行数

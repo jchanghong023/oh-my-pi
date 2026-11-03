@@ -2,19 +2,21 @@
 description: '指定文件列表生成单元测试，串行调度 developer-test-agent 逐文件执行，最终输出执行报告。'
 ---
 
-指定源码文件列表（支持 Java、C/C++、Go 和 Python），为每个业务类/函数生成单元测试，自动创建 DT 任务队列并串行调度 `developer-test-agent:developer-test-agent` 逐个执行，最终输出执行报告。
+指定源码文件列表（支持 Java、C/C++、Go 和 Python），为每个业务类/函数生成单元测试，自动创建 DT 任务队列并串行调度 `developer-test-agent` 逐个执行，最终输出执行报告。
 
 ## 参数
+
+命令输入：`{{{rawArguments}}}`
 
 - `{files}` - 被测文件路径，多个文件通过空格分割（必需）
 
 ## 调用方式
 
 ```
-/developer-test-agent:generate-dt-files src/main/java/com/foo/OrderService.java src/main/java/com/foo/PaymentService.java
-/developer-test-agent:generate-dt-files src/core/OrderService.cpp include/core/OrderService.h
-/developer-test-agent:generate-dt-files internal/service/OrderService.go internal/service/PaymentService.go
-/developer-test-agent:generate-dt-files app/services/order_service.py app/services/payment_service.py
+/generate-dt-files src/main/java/com/foo/OrderService.java src/main/java/com/foo/PaymentService.java
+/generate-dt-files src/core/OrderService.cpp include/core/OrderService.h
+/generate-dt-files internal/service/OrderService.go internal/service/PaymentService.go
+/generate-dt-files app/services/order_service.py app/services/payment_service.py
 ```
 
 文件路径跟随命令直接传入，支持绝对路径和相对路径。系统根据文件扩展名自动检测目标语言（`.java` → Java；`.c`/`.cpp`/`.cc`/`.cxx`/`.h`/`.hpp`/`.hxx` → C/C++；`.go` → Go；`.py` → Python），并应用对应语言的扫描、过滤和生成规则。
@@ -23,7 +25,7 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 
 ### 1. 获取文件列表
 
-将 `{files}` 参数中空格分割的文件路径解析为文件列表。
+将上述命令输入按空格解析为 `{files}` 文件列表，配对引号内的空格属于同一个文件路径。
 
 **文件列表概览输出**：
 
@@ -58,11 +60,7 @@ description: '指定文件列表生成单元测试，串行调度 developer-test
 
 ### 2. 验证文件存在性
 
-对文件列表中的每个路径，验证文件是否存在：
-
-```
-Glob({ pattern: "{filepath}" })
-```
+对文件列表中的每个路径，使用 `read` 验证文件是否存在且为文件；读取失败或路径不是文件时记入无效文件列表。
 
 过滤规则：
 - Java: 排除 `*Test.java` 和 `*Tests.java` 测试文件
@@ -180,7 +178,7 @@ Glob({ pattern: "{filepath}" })
 
 **通用判断流程**：
 1. 从文件路径提取类名，检查是否符合跳过规则的命名特征
-2. 若符合命名特征，读取文件内容进一步检查内容特征
+2. 若符合命名特征，使用 `read` 读取文件内容进一步检查内容特征
 3. 若确认无业务逻辑，将该文件从列表中移除，记入跳过列表
 
 **过滤输出**：
@@ -202,19 +200,13 @@ Glob({ pattern: "{filepath}" })
 
 ### 4. 创建任务队列
 
-为步骤 3 过滤后的每个文件创建一个独立任务：
+按文件顺序建立本地队列，保存每个文件的路径、语言及下方完整 prompt。为每个文件生成唯一待办文本 `为 {filename} 生成单元测试`，使用 `todo` 的 `init` 和 `items` 一次初始化；列表为空时不创建待办。
 
-```
-TaskCreate({
-  subject: "为 {filename} 生成单元测试",
-  description: "业务类: {filename}\n生成类型: 全量生成\n覆盖率模式: class-level\n覆盖率阈值: 80%",
-  activeForm: "正在为 {filename} 生成单元测试"
-})
+```json
+{"op":"init","items":["为 src/core/OrderService.cpp 生成单元测试"]}
 ```
 
-**prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
-
-> 注意：任务由步骤5按创建顺序串行调度，无需设置 blockedBy 依赖链。
+实际调用时将 `items` 替换为全部待办文本，并逐字保留以供后续 `todo` 操作使用。**prompt 中只传入当前文件的详情，不允许传入多个文件的详情信息。**
 
 #### 任务 Prompt 模板
 
@@ -228,7 +220,7 @@ TaskCreate({
 
 目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
 
-使用developer-test-agent:developer-test-agent完成上面的测试任务
+使用 developer-test-agent 完成上面的测试任务。
 ```
 
 #### Prompt 变量说明
@@ -240,38 +232,25 @@ TaskCreate({
 
 ### 5. 串行执行任务
 
-按任务创建顺序，逐一执行：
+按队列顺序逐个执行，每次只启动一个 `task`；若工具异步返回，等待该子 Agent 完成并接收结果后，才可启动下一个。不得并行或使用 Team 模式。
 
-```
-1. TaskUpdate({ taskId: "{id}", status: "in_progress" })
+对当前文件，将下例中的路径、待办文本和 `task` 内容替换为实际值，`task` 内容使用上面的完整 prompt，包含该文件的目标语言：
 
-2. Agent({
-     subagent_type: "developer-test-agent:developer-test-agent",
-     prompt: "<该任务的完整 prompt>"
-   })
-
-3. TaskUpdate({ taskId: "{id}", status: "completed" })
+```json
+{"op":"start","task":"为 src/core/OrderService.cpp 生成单元测试"}
 ```
 
-#### 串行调度伪代码
-
-```
-tasks = TaskList()
-sorted_tasks = tasks.sortBy(id)
-
-for task in sorted_tasks:
-    TaskUpdate({ taskId: task.id, status: "in_progress" })
-
-    result = Agent({
-        name: "dt-worker-" + task.id,
-        subagent_type: "developer-test-agent:developer-test-agent",
-        prompt: task.description
-    })
-
-    TaskUpdate({ taskId: task.id, status: "completed" })
+```json
+{"context":"按当前文件与用户约束串行执行文件单元测试任务，保持原有语言路由和覆盖率规则。","tasks":[{"agent":"developer-test-agent","task":"【文件测试生成】\n业务类: src/core/OrderService.cpp\n目标语言: C/C++\n生成类型: 全量生成\n覆盖率模式: class-level\n覆盖率阈值: 80%\n目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。","solutionSpace":"按指定文件和覆盖率规则生成单元测试"}]}
 ```
 
-> 主 Agent 按顺序逐一启动子 Agent，天然串行，无需依赖链控制。
+若子 Agent 返回缺失信息和待询问题，主 Agent 必须使用 `ask` 向用户收集答案，再将答案和当前文件任务重新委托给 `developer-test-agent`；不得猜测或将澄清请求视为完成。继续等待该文件处理结束后再执行下一个文件。
+
+记录结果后，用相同的待办文本标记完成（失败也标记完成，失败状态另行记录用于报告）：
+
+```json
+{"op":"done","task":"为 src/core/OrderService.cpp 生成单元测试"}
+```
 
 #### 错误处理
 
@@ -362,9 +341,9 @@ for task in sorted_tasks:
 3. 串行执行中，单个任务失败不阻塞后续任务执行
 4. 前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤6执行报告中体现
 5. 无效文件（不存在或测试文件）不创建任务，但仍需在步骤6执行报告中体现
-6. 所有 DT 工作必须通过 Agent 工具委托给 `developer-test-agent:developer-test-agent`，不得由主 Agent 直接操作
+6. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 7. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
-8. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
+8. 任务由主 Agent 按创建顺序串行调度
 9. 已存在测试文件时，优先使用 improve-coverage 分析覆盖率，若已达标则跳过测试生成
 10. 本命令为全量生成模式，所有文件均为全量生成，覆盖率模式固定为 class-level
-11. **禁止使用 Team 模式**：不得使用 `TeamCreate` 创建团队，不得在 Agent 调用中传入 `team_name` 参数，任务执行必须且只能通过 `TaskCreate` 创建独立任务 + `Agent`（无 `team_name`）串行调度
+11. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

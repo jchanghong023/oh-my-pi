@@ -3,6 +3,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
+import { buildDeveloperTestAgentResources } from "./developer-test-agent-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -165,6 +166,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				"process.env.PI_DOCS_EMBED": JSON.stringify(docsPayload.payload),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
 				"process.env.PI_OPENWIKI_VISUAL_ASSETS": JSON.stringify(JSON.stringify(openWikiResources.visual)),
+				"process.env.PI_DEVELOPER_TEST_AGENT_RESOURCES": JSON.stringify(await buildDeveloperTestAgentResources()),
 			},
 			minify: {
 				whitespace: true,

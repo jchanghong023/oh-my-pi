@@ -109,12 +109,12 @@ When the function has 2+ sequential guard clauses with short-circuit behavior:
 When method calls follow a setup/execute/teardown pattern:
 
 1. Add a row to the matrix with Verify Approach = `dedicated`
-2. The dedicated test uses a shared call tracker (see `examples/test-patterns.md` Pattern 2)
+2. The dedicated test uses a shared call tracker (see `skill://generate-ut/examples/python/test-patterns.md` Pattern 2)
 3. The ordering test MUST include ALL method calls in the pipeline — do not omit intermediate calls
 4. **Include super() calls**: `super().stop()`, `super().__init__()`, etc. are method calls that participate in the execution sequence. Add them to the ordering test pipeline. Use `patch.object(ParentClass, 'method')` to mock and verify.
 5. **Exclude logging calls**: `_log.debug`, `_log.warning`, `_log.error` are observational side effects. Exclude them from ordering tests unless they have causal ordering dependencies.
 6. Use side_effect callbacks to record call order, then assert the exact sequence
-7. For state-at-call-time verification, see `references/sequential-workflow-testing.md` Section 1
+7. For state-at-call-time verification, see `skill://generate-ut/references/python/sequential-workflow-testing.md` Section 1
 
 ## Constructor Verification
 

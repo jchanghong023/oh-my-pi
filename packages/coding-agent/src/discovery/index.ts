@@ -38,6 +38,7 @@ import "./github";
 import "./mcp-json";
 import "./omp-plugins";
 import "./skillshare";
+import "./developer-test-agent";
 import "./spec-driven";
 import "./ssh";
 import "./vscode";

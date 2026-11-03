@@ -15,8 +15,8 @@ agent 探查项目的构建配置文件（pom.xml / Gradle）以识别编写单�
 
 ## 2.0 总体原则：高效获取上下文
 
-- 多个上下文项来自同一文件 → 优先用 Read 一次性读取。
-- 未找到标识符定义 → 用 Grep 定位再 Read 检查。
+- 多个上下文项来自同一文件 → 优先用 `read` 一次性读取。
+- 未找到标识符定义 → 用 `grep` 定位再用 `read` 检查。
 - 难以构造或缺少 setter 的参数/字段 → 考虑 mocking/reflection 构造。
 
 ---
@@ -83,11 +83,11 @@ agent 探查项目的构建配置文件（pom.xml / Gradle）以识别编写单�
 - 知名第三方库（`com.alibaba.*` / `com.fasterxml.*` / `org.springframework.*` / `org.apache.*` / `io.netty.*`）→ 跳过
 - 公司内部包名（如 `com.huawei.*`）→ **二方件**，需查询源码
 
-**执行步骤**：读取被测类 import 语句提取全限定名；按识别规则过滤出二方件类名列表；若为空则跳过后续步骤；检查项目目录下 `.dtagent/deps/index.json` 是否存在（不存在则记录提示并跳过，不中断流程）；执行 `node {SKILL_DIR}/scripts/java/binary-detector.js batch-find-source "类名1,类名2,..."` 查询路径；从返回 JSON 中提取每个类的 `absolutePath`；用 Read 读取源码，提取方法签名、返回值类型、参数类型补充到上下文；若 missing 列表非空记录缺失类名（不中断流程）。
+**执行步骤**：读取被测类 import 语句提取全限定名；按识别规则过滤出二方件类名列表；若为空则跳过后续步骤；检查项目目录下 `.dtagent/deps/index.json` 是否存在（不存在则记录提示并跳过，不中断流程）；执行 `node "{SKILL_DIR}/scripts/java/binary-detector.js" batch-find-source "类名1,类名2,..."` 查询路径；从返回 JSON 中提取每个类的 `absolutePath`；用 `read` 读取源码，提取方法签名、返回值类型、参数类型补充到上下文；若 missing 列表非空记录缺失类名（不中断流程）。
 
 **脚本调用示例**（Windows 下路径反斜杠须改为正斜杠）：
 ```bash
-node {SKILL_DIR}/scripts/java/binary-detector.js batch-find-source "com.huawei.xxx.Yyy,com.huawei.aaa.Bbb"
+node "{SKILL_DIR}/scripts/java/binary-detector.js" batch-find-source "com.huawei.xxx.Yyy,com.huawei.aaa.Bbb"
 ```
 
 **范围限制**：仅收集被测类 import 直接引用的二方件类；不递归查询传递依赖。

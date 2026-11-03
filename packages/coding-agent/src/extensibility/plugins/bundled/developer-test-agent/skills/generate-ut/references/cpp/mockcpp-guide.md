@@ -500,7 +500,7 @@ MOCKER_CPP(&DataService::ProcessData)
 
 ## 11. 调试经验
 
-遇到 mockcpp 编译/运行问题时，**必须优先查询** [mockcpp-debug-experience.md](../../../fix-ut/references/cpp/mockcpp-debug-experience.md) 中的解决方案。常见问题摘要：
+遇到 mockcpp 编译/运行问题时，**必须优先查询** `skill://fix-ut/references/cpp/mockcpp-debug-experience.md` 中的解决方案。常见问题摘要：
 
 | # | 问题 | 根因 | 解决方案 |
 |---|------|------|----------|

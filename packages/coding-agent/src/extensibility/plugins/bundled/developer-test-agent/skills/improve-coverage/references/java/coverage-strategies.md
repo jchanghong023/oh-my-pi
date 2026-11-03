@@ -72,21 +72,21 @@
 ### 6.1 codecovcli 流程（首选）
 
 - Step 0：检查 `codecovcli --version`；未安装时配置华为 npm 仓库后 `npm install -g @baize/codecovcli@latest`
-- Step 1：从 `scripts/java/extract-maven-config.js` 输出获取 settingsPath 和 mavenProperties，无输出用默认参数
+- Step 1：从加载 `improve-coverage` 时返回的 baseDir 下 `scripts/java/extract-maven-config.js` 输出获取 settingsPath 和 mavenProperties，无输出用默认参数
 - Step 2：按 scenario 构建命令；incremental 场景必须加 `--targetbranch "{targetBranch}"`，路径用引号包裹，mavenProperties 不带引号
-- Step 3：bash 工具执行，timeout: 1200000（20 分钟）
+- Step 3：`bash` 工具执行，timeout: 1200（20 分钟）
 - Step 4：解析输出返回行覆盖率、分支覆盖率、被测类列表、测试结果
 
 ### 6.2 JaCoCo fallback 流程（备选）
 
 codecovcli 执行失败（未安装、命令报错、超时等）后自动执行以下步骤，无需询问用户：
 
-- Step 1：复用 `scripts/java/extract-maven-config.js` 提取 Maven 配置（settingsPath + mavenProperties），与 codecovcli 逻辑一致
+- Step 1：复用 baseDir 下 `scripts/java/extract-maven-config.js` 提取 Maven 配置（settingsPath + mavenProperties），与 codecovcli 逻辑一致
 - Step 2：构建 JaCoCo 命令
   - 有配置：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false -s "{settingsPath}" {mavenProperties}`
   - 无配置：`mvn clean test jacoco:report -pl {module} -Dtest={testClass} -DfailIfNoTests=false`
-- Step 3：bash 工具执行，timeout: 1200000（20 分钟）
-- Step 4：执行 `node {SKILL_DIR}/scripts/java/extract-jacoco-coverage.js {className} {module}/target/site/jacoco/jacoco.xml` 提取覆盖率数据（Windows 下路径反斜杠须改为正斜杠）
+- Step 3：`bash` 工具执行，timeout: 1200（20 分钟）
+- Step 4：执行 `node "{SKILL_DIR}/scripts/java/extract-jacoco-coverage.js" {className} {module}/target/site/jacoco/jacoco.xml` 提取覆盖率数据（`{SKILL_DIR}` 为 `improve-coverage` 加载时返回的 baseDir，Windows 下路径反斜杠须改为正斜杠）
   - 脚本从 `jacoco.xml` 中解析指定类的覆盖率，生成 `.codecovcli/cache/java_{className}.json`
   - 输出格式与 codecovcli 一致，后续分析流程无需区分数据来源
 

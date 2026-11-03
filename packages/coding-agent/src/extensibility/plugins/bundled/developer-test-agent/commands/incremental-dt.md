@@ -2,33 +2,27 @@
 description: '基于本地 Git 变更（本地变更或分支对比），自动创建 DT 任务队列并串行执行，最终输出执行报告。'
 ---
 
-基于本地 Git 代码变更，自动创建 DT 任务队列并串行调度 `developer-test-agent:developer-test-agent` 逐个执行，最终输出执行报告。
+基于本地 Git 代码变更，自动创建 DT 任务队列并串行调度 `developer-test-agent` 逐个执行，最终输出执行报告。
 
 ## 参数
 
-- `--base BRANCH` - 基准分支（仅本地分支对比模式需要，默认推荐 `origin/当前分支名`）
+命令输入：`{{{rawArguments}}}`
+
+- `--base BRANCH` - 从上述命令输入解析基准分支（仅本地分支对比模式需要；未传入时使用 `origin/当前分支名`）
 
 ## 执行流程
 
 ### 1. 选择分析模式
 
-**必须使用 AskUserQuestion 工具询问用户选择分析模式，禁止跳过交互或自行决定模式。**
+**必须使用 `ask` 工具询问用户选择分析模式，禁止跳过交互或自行决定模式。**
 
 调用方式：
 
+```json
+{"questions":[{"id":"analysis-mode","question":"请选择增量分析模式：","header":"分析模式","options":[{"label":"本地变更分析","description":"未 commit 的修改（git diff HEAD），使用 class-level 覆盖率"},{"label":"本地分支对比","description":"已 commit 的变更（git diff {base}...HEAD），使用 incremental 覆盖率；base 默认 origin/当前分支名"}]}]}
 ```
-AskUserQuestion({
-  questions: [{
-    question: "请选择增量分析模式：",
-    header: "分析模式",
-    multiSelect: false,
-    options: [
-      { label: "本地变更分析", description: "未 commit 的修改（git diff HEAD），使用 class-level 覆盖率" },
-      { label: "本地分支对比", description: "已 commit 的变更（git diff {base}...HEAD），使用 incremental 覆盖率。base 默认推荐 origin/当前分支名" }
-    ]
-  }]
-})
-```
+
+选择本地分支对比时，从上述命令输入使用 `--base` 指定值；未指定时获取当前 Git 分支名并使用 `origin/当前分支名`。未选择有效模式或取消时不执行分析。
 
 用户选择后，确定后续步骤的执行参数：
 
@@ -153,7 +147,7 @@ git diff {base}...HEAD -- "{filename}"
 
 **判断流程**：
 1. 从文件路径提取类名，检查是否符合跳过规则的命名特征
-2. 若符合命名特征，读取文件内容进一步检查内容特征
+2. 若符合命名特征，使用 `read` 读取文件内容进一步检查内容特征
 3. 若确认无业务逻辑，将该文件从变更列表中移除，记入跳过列表
 
 **过滤输出**：
@@ -175,19 +169,13 @@ git diff {base}...HEAD -- "{filename}"
 
 ### 5. 创建任务队列
 
-为步骤 4 过滤后的每个文件创建一个独立任务：
+按文件顺序建立本地队列，保存每个文件的变更详情及下方对应模式的完整 prompt。为每个文件生成唯一待办文本 `为 {filename} 生成增量测试`，使用 `todo` 的 `init` 和 `items` 一次初始化；列表为空时不创建待办。
 
-```
-TaskCreate({
-  subject: "为 {filename} 生成增量测试",
-  description: "变更类型: {changeType}\n变更方法: {methods}\n覆盖率模式: {coverageMode}\n覆盖率阈值: 80%",
-  activeForm: "正在为 {filename} 生成增量测试"
-})
+```json
+{"op":"init","items":["为 src/OrderService.java 生成增量测试"]}
 ```
 
-**prompt 中只传入当前变更文件的变更详情，不允许传入多个变更文件的详情信息。**
-
-> 注意：任务由步骤6按创建顺序串行调度，无需设置 blockedBy 依赖链。
+实际调用时将 `items` 替换为全部待办文本，并逐字保留以供后续 `todo` 操作使用。**prompt 中只传入当前变更文件的变更详情，不允许传入多个变更文件的详情信息。**
 
 #### 任务 Prompt 模板
 
@@ -204,7 +192,7 @@ TaskCreate({
 
 目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
 
-使用developer-test-agent:developer-test-agent完成上面的测试任务
+使用 developer-test-agent 完成上面的测试任务。
 ```
 
 ##### 本地分支对比模式（传 --base）
@@ -221,7 +209,7 @@ TaskCreate({
 
 目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。
 
-使用developer-test-agent:developer-test-agent完成上面的测试任务
+使用 developer-test-agent 完成上面的测试任务。
 ```
 
 #### Prompt 变量说明
@@ -249,37 +237,25 @@ TaskCreate({
 
 ### 6. 串行执行任务
 
-按任务创建顺序，逐一执行：
+按队列顺序逐个执行，每次只启动一个 `task`；若工具异步返回，等待该子 Agent 完成并接收结果后，才可启动下一个。不得并行或使用 Team 模式。
 
-```
-1. TaskUpdate({ taskId: "{id}", status: "in_progress" })
+对当前文件，将下例中的路径、待办文本和 `task` 内容替换为实际值，`task` 内容使用上面对应模式的完整 prompt：
 
-2. Agent({
-     subagent_type: "developer-test-agent:developer-test-agent",
-     prompt: "<该任务的完整 prompt>"
-   })
-
-3. TaskUpdate({ taskId: "{id}", status: "completed" })
+```json
+{"op":"start","task":"为 src/OrderService.java 生成增量测试"}
 ```
 
-#### 串行调度伪代码
-
-```
-tasks = TaskList()
-sorted_tasks = tasks.sortBy(id)
-
-for task in sorted_tasks:
-    TaskUpdate({ taskId: task.id, status: "in_progress" })
-
-    result = Agent({
-        subagent_type: "developer-test-agent:developer-test-agent",
-        prompt: task.description
-    })
-
-    TaskUpdate({ taskId: task.id, status: "completed" })
+```json
+{"context":"按当前文件变更与用户约束串行执行增量单元测试任务，保持原有语言路由和覆盖率规则。","tasks":[{"agent":"developer-test-agent","task":"【变更测试生成】\n业务类: src/OrderService.java\n变更类型: M\n变更方法: +createOrder\n覆盖率模式: class-level\n覆盖率阈值: 80%\n目标：测试设计场景完整，覆盖率达到80%，并且断言有效性检查无问题。","solutionSpace":"按指定变更和覆盖率规则生成单元测试"}]}
 ```
 
-> 主 Agent 按顺序逐一启动子 Agent，天然串行，无需依赖链控制。
+若子 Agent 返回缺失信息和待询问题，主 Agent 必须使用 `ask` 向用户收集答案，再将答案和当前文件任务重新委托给 `developer-test-agent`；不得猜测或将澄清请求视为完成。继续等待该文件处理结束后再执行下一个文件。
+
+记录结果后，用相同的待办文本标记完成（失败也标记完成，失败状态另行记录用于报告）：
+
+```json
+{"op":"done","task":"为 src/OrderService.java 生成增量测试"}
+```
 
 #### 错误处理
 
@@ -362,10 +338,10 @@ for task in sorted_tasks:
 2. 每个任务的 prompt 仅包含当前变更文件信息，严禁跨文件混入
 3. 串行执行中，单个任务失败不阻塞后续任务执行
 4. 步骤4前置过滤跳过的文件（DTO/Config/Enum 等无业务逻辑类）不创建任务，但仍需在步骤7执行报告中体现
-5. 所有 DT 工作必须通过 Agent 工具委托给 `developer-test-agent:developer-test-agent`，不得由主 Agent 直接操作
+5. 所有 DT 工作必须通过 `task` 委托给 `developer-test-agent`，不得由主 Agent 直接操作
 6. 覆盖率阈值默认 80%，未达标时 Agent 内部循环补充测试
-7. 任务由主 Agent 按创建顺序串行调度，无需设置 blockedBy 依赖链
+7. 任务由主 Agent 按创建顺序串行调度
 8. 已存在测试文件时，优先使用 improve-coverage 分析覆盖率，若已达标则跳过测试生成
 9. 执行时必须询问用户选择分析模式（本地变更 / 本地分支对比），不得跳过交互
 10. 本地变更模式下，必须同时检查 `git diff HEAD` 和 `git ls-files --others`，向用户展示未提交变更和未跟踪的新文件，提示添加遗漏的新文件
-11. **禁止使用 Team 模式**：不得使用 `TeamCreate` 创建团队，不得在 Agent 调用中传入 `team_name` 参数，任务执行必须且只能通过 `TaskCreate` 创建独立任务 + `Agent`（无 `team_name`）串行调度
+11. **禁止使用 Team 模式**：仅使用 `todo` 跟踪任务，使用 `task` 逐个串行调度

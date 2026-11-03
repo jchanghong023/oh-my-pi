@@ -14,7 +14,7 @@
    ```
    - **存在** → 继续执行，将搜索到的gcda路径记为 `TARGET_GCDA_PATH`
    - **不存在** → 说明编译时未添加覆盖率插桩标志，必须**回退重新编译**：
-     1. 使用 `-fprofile-arcs -ftest-coverage` 重新编译被测源文件和测试文件，使用 `--coverage -lgcov` 重新链接（构建策略详见 `generate-ut/references/cpp/compile-and-coverage.md`）
+     1. 使用 `-fprofile-arcs -ftest-coverage` 重新编译被测源文件和测试文件，使用 `--coverage -lgcov` 重新链接（构建策略详见 `skill://generate-ut/references/cpp/compile-and-coverage.md`）
      2. 重新运行测试可执行文件，生成 `.gcda` 文件
      3. 重新执行本步骤检查 gcda 是否存在
      4. 仍不存在则说明环境配置问题，输出错误详情并结束
@@ -105,15 +105,15 @@ grep "#####:" "$COV_DIR/gcov_output/{sourceFile}.gcov"
 
 ## Step 3: 写入覆盖率缓存 JSON（强制执行）
 
-> **⚠️ 本步骤为强制步骤，即使覆盖率为 100%（无未覆盖行）也必须执行。** 缓存 JSON 是 DTAgent-Plugin 通过 OTel 上报的唯一数据源，不写入则本次覆盖率数据不会被上报。
+> **⚠️ 本步骤为强制步骤，即使覆盖率为 100%（无未覆盖行）也必须执行。** 缓存 JSON 是外部 DTAgent-Plugin 通过 OTel 上报的数据源，不写入则该插件无法上报本次覆盖率数据。
 
-覆盖率数据需写入 `.codecovcli/cache/cpp_{className}.json`，供 DTAgent-Plugin 在子代理执行结束后自动扫描并通过 OTel 上报。
+覆盖率数据需写入 `.codecovcli/cache/cpp_{className}.json`，供外部 DTAgent-Plugin 在子代理执行结束后扫描并通过 OTel 上报；OMP 内置运行时不提供此自动上报。
 
 > **写入前清除历史缓存**：写入前先删除 `.codecovcli/cache/` 目录下的所有历史缓存文件（避免脏数据），再写入新文件。
 
 #### JSON 直接生成（推荐方式）
 
-AI agent 在执行完步骤1（运行测试）和步骤2（gcov）后，已持有 gtest stdout 和 gcov stdout 的全部数据，**直接组装 JSON 并使用 Write 工具写入**。
+AI agent 在执行完步骤1（运行测试）和步骤2（gcov）后，已持有 gtest stdout 和 gcov stdout 的全部数据，**直接组装 JSON 并使用 `write` 工具写入**。
 
 #### JSON 格式与字段计算规则
 
@@ -192,7 +192,7 @@ Lines executed:100.00% of 14
 
 **测试文件代码行数统计规则**：
 
-使用 Read 工具读取测试文件后，手动统计代码行数。排除以下行：
+使用 `read` 工具读取测试文件后，手动统计代码行数。排除以下行：
 - 空行
 - 单行注释（`//` 开头）
 - 多行注释块（`/* ... */` 之间的行，含 `/*` 行和 `*/` 行）

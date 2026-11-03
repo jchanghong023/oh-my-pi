@@ -19,6 +19,8 @@ description: 单元测试断言有效性评审与修复专家。为测试提供�
 
 检测测试代码语言后，**必须读取对应语言的专属reference**获取语言特定的断言规范、检查清单和修复策略：
 
+本 skill 的 `references/` 路径相对于加载时返回的 baseDir；用 `read` 读取资源时可用 `skill://improve-validity/<路径>`。reference 中的相对链接以该 reference 所在目录为基准，不依赖项目工作目录。
+
 | 语言 | 触发条件 | 必读reference |
 |------|----------|---------------|
 | **Java** | 测试文件以 `.java` 结尾 | `references/java/review-checklist.md` |
@@ -88,7 +90,7 @@ description: 单元测试断言有效性评审与修复专家。为测试提供�
 - 三个评审步骤不得重排：先规范条款（评审1），再静态特征（评审2），最后断言目标与步骤（评审3，依赖被测源码）
 - 如果评审3中无法在工作区定位被测源码，仍可基于测试代码和评审1/2规范进行修改，并在总结中注明"未读取被测源码；未进行基于值变更的深度补全"
 - 被测代码（业务类、服务、仓库及所有非测试源文件）严格只读，仅修改测试代码，不修改生产代码、构建配置文件、第三方库
-- 路径使用正斜杠；从本skill目录的references/读取语言专属规范，避免Windows反斜杠问题
+- 路径使用正斜杠；从本 skill 的 baseDir 或 `skill://improve-validity/references/` 读取语言专属规范
 
 ## Bundled Resources
 

@@ -1,5 +1,6 @@
 {
   "name": "developer-test-agent",
   "version": "2.0.3",
+  "type": "commonjs",
   "description": "2.0.3版本：1、支持python语言UT生成 2、修复批量生成任务创建失败问题"
 }

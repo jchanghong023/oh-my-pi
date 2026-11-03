@@ -6,6 +6,18 @@
 
 ## Requirements
 
+### Requirement: 内置 Developer Test Agent
+
+OMP MUST 内置 Developer Test Agent 的专属子代理、五个技能及 `/dt`、`/generate-dt-files`、`/generate-dt-dir`、`/incremental-dt`、`/cloud-dt-fix` 命令，复用现有发现、命令展开、task、todo、ask 和 `skill://` 链路，不建立旧宿主 API 兼容层。
+
+#### Scenario: 使用内置单元测试流程
+
+- **WHEN** 用户调用上述命令或委托 `developer-test-agent`
+- **THEN** 保留原插件的 Python、Java、C/C++ 和 Go 语言路由，按原有意图执行生成、修复、覆盖率、断言审查和报告流程，保持原有覆盖率门禁及批量任务串行规则
+- **AND** 无需额外安装插件或配置资源目录；源码与发行产物均包含技能引用文档、脚本、示例和二进制资源，资源路径不依赖当前项目目录
+- **AND** 单元测试意图提示沿用原插件的识别和排除规则，用户指定的 skill 或 agent 优先；子代理需澄清时将问题交回主代理询问，不在 headless 子代理内调用交互工具
+- **AND** 保留 `.codecovcli/cache` 的本地覆盖率报告契约；原宿主的 `@baize/dtagent-plugin` 自动遥测上报是外部依赖，不因内置而宣称已提供，也不自动修改旧宿主的配置或历史记忆
+
 ### Requirement: 工具参数自纠正提示
 
 OMP MUST 反馈本次工具未执行并要求模型修正重调，不重复已成功的调用。

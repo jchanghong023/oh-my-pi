@@ -58,4 +58,4 @@ gomonkey不稳定回退：
 正确：patches := gomonkey.ApplyPrivateMethod(reflect.TypeOf(&BaseType{}), "inheritedMethod", ...)
 错误：patches := gomonkey.ApplyPrivateMethod(reflect.TypeOf(&DerivedType{}), "inheritedMethod", ...)
 
-通过grep查找方法定义识别base类型：grep -r "func (c *BaseType) inheritedMethod"
+使用 `grep` 工具搜索 `func \(c \*BaseType\) inheritedMethod`，查找方法定义并识别 base 类型。

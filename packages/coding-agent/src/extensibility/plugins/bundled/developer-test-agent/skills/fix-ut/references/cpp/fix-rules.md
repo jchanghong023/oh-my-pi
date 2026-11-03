@@ -4,7 +4,7 @@
 
 ### 构建策略（按优先级）
 
-> **覆盖率标志（强制默认）**：全链路流水线中 `improve-coverage` 为强制门禁阶段，所有构建策略的编译命令**必须默认包含** `-fprofile-arcs -ftest-coverage`，链接命令**必须默认包含** `--coverage -lgcov`。详细构建策略命令示例见 [compile-and-coverage.md](../../generate-ut/references/cpp/compile-and-coverage.md)。
+> **覆盖率标志（强制默认）**：全链路流水线中 `improve-coverage` 为强制门禁阶段，所有构建策略的编译命令**必须默认包含** `-fprofile-arcs -ftest-coverage`，链接命令**必须默认包含** `--coverage -lgcov`。详细构建策略命令示例见 `skill://generate-ut/references/cpp/compile-and-coverage.md`。
 
 - **策略D**（最高）：用户提供的编译命令（未包含覆盖率标志时必须主动补充）
 - **策略A**：CMake构建特定目标（`cmake --build build --target gtest gtest_main gmock gmock_main`），配置时通过 `-DCMAKE_C_FLAGS`/`-DCMAKE_CXX_FLAGS`/`-DCMAKE_EXE_LINKER_FLAGS` 传入覆盖率标志

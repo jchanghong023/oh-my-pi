@@ -6,6 +6,7 @@
 import { Effort } from "@oh-my-pi/pi-ai";
 import { parseFrontmatter, prompt } from "@oh-my-pi/pi-utils";
 import { parseAgentFields } from "../discovery/helpers";
+import developerTestAgentMd from "../extensibility/plugins/bundled/developer-test-agent/agents/developer-test-agent.md" with { type: "text" };
 // Embed agent markdown files at build time
 import agentFrontmatterTemplate from "../prompts/agents/frontmatter.md" with { type: "text" };
 import reviewerMd from "../prompts/agents/reviewer.md" with { type: "text" };
@@ -48,6 +49,7 @@ const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
 	{ fileName: "reviewer.md", template: reviewerMd },
 	{ fileName: "security-reviewer.md", template: securityReviewerMd },
 	{ fileName: "seance.md", template: seanceMd },
+	{ fileName: "developer-test-agent.md", template: developerTestAgentMd },
 	{
 		fileName: "spec-requirements.md",
 		frontmatter: {

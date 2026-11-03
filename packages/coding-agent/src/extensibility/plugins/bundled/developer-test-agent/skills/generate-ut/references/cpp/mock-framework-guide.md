@@ -286,4 +286,4 @@ protected:
 
 mockcpp 的特殊场景（遍历函数Mock、单例Mock）和常见问题详见 [mockcpp-guide.md](./mockcpp-guide.md) 的第10章和第11章。
 
-遇到 mockcpp 编译/运行问题时，**必须优先**查询 [mockcpp-debug-experience.md](../../../fix-ut/references/cpp/mockcpp-debug-experience.md) 中的解决方案，避免重复解决问题。
+遇到 mockcpp 编译/运行问题时，**必须优先**查询 `skill://fix-ut/references/cpp/mockcpp-debug-experience.md` 中的解决方案，避免重复解决问题。
