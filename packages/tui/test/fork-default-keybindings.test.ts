@@ -9,7 +9,7 @@ beforeAll(async () => {
 });
 
 describe("fork editor shortcut dispatch", () => {
-	test("plan, thinking visibility, thinking effort and temporary model chords remain independent", () => {
+	test.each(["\x1be", "\x1b[101;3u"])("effort chord %j stays independent of other actions", effortKey => {
 		const previous = getKeybindings();
 		const manager = new KeybindingsManager();
 		setKeybindings(manager);
@@ -25,7 +25,7 @@ describe("fork editor shortcut dispatch", () => {
 			editor.setText("unfinished task");
 			editor.handleInput("\x1b[Z");
 			editor.handleInput("\x1bp");
-			editor.handleInput("\x1b[1;2P");
+			editor.handleInput(effortKey);
 			editor.handleInput("\x14");
 			expect(actions).toEqual(["plan", "visibility", "effort", "model"]);
 			expect(editor.getText()).toBe("unfinished task");
@@ -45,7 +45,8 @@ describe("fork editor shortcut dispatch", () => {
 			editor.onSelectModelTemporary = () => actions.push("model");
 			editor.setActionKeys("app.thinking.cycle", manager.getKeys("app.thinking.cycle"));
 			editor.setActionKeys("app.model.selectTemporary", manager.getKeys("app.model.selectTemporary"));
-			editor.handleInput("\x1b[1;2P");
+			editor.handleInput("\x1be");
+			editor.handleInput("\x1b[101;3u");
 			editor.handleInput("\x14");
 			expect(actions).toEqual([]);
 			editor.handleInput("\x1bOQ");

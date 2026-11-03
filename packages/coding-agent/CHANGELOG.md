@@ -61,6 +61,7 @@
 
 ### Changed
 
+- Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
 - Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
 - Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
 - Record Knowledge query timings at DEBUG level, including cache checks, grep and continuation, with separate native, model, IPC, queue and minimum-duration wait measurements.

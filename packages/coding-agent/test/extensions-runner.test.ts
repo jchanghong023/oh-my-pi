@@ -208,10 +208,10 @@ describe("ExtensionRunner", () => {
 	});
 
 	describe("shortcut conflicts", () => {
-		it("warns when extension shortcut conflicts with built-in", async () => {
+		it.each(["ctrl+c", "alt+e"])("warns when extension shortcut %s conflicts with built-in", async key => {
 			const extCode = `
 				export default function(pi) {
-					pi.registerShortcut("ctrl+c", {
+					pi.registerShortcut("${key}", {
 						description: "Conflicts with built-in",
 						handler: async () => {},
 					});
@@ -232,7 +232,7 @@ describe("ExtensionRunner", () => {
 			const shortcuts = runner.getShortcuts();
 
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("conflicts with built-in"), expect.any(Object));
-			expect(shortcuts.has("ctrl+c")).toBe(false);
+			expect(shortcuts.has(key)).toBe(false);
 
 			warnSpy.mockRestore();
 		});

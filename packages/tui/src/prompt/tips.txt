@@ -28,7 +28,7 @@ Codex 达到限额？用 `/usage reset` 消耗已保存的重置额度，立即�
 不支持原生工具调用，或推理提供商解析有问题？用 `PI_DIALECT=glm|kimi|anthropic…` 在本地处理工具调用！
 开启 `/advisor`，接入第二个模型，每轮审阅并自动注入建议。
 试试以 -> 开头输入任务，并列出步骤（1. 做 X，2. 做 Y）。
-按 {key:shift+f1} 切换思考级别，按 {key:alt+p} 隐藏思考内容，按 {key:shift+tab} 切换计划模式。
+按 {key:alt+e} 切换思考级别，按 {key:alt+p} 隐藏思考内容，按 {key:shift+tab} 切换计划模式。
 OMP 可以调整配置并扩展自身，有使用问题直接问！
 Lint 或类型错误越积越多？用 `omp cleanse`（或在这里输入 /cleanse）查找项目诊断，并通过并行子代理修复；按 {key:escape} 取消。
 [NO-TERN] 悄悄告诉你，OMP 有它的自然栖息地：[tern](https://scl.so/tern)

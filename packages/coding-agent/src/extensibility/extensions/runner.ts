@@ -1364,7 +1364,7 @@ export class ExtensionRunner {
 		"shift+tab": true,
 		"shift+ctrl+p": true,
 		// Fork default chord for `app.thinking.cycle`.
-		"shift+f1": true,
+		"alt+e": true,
 		"alt+enter": true,
 		escape: true,
 		enter: true,

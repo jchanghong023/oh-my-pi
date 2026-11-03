@@ -114,7 +114,7 @@ export const KEYBINDINGS = {
 		description: "Reset terminal display",
 	},
 	"app.thinking.cycle": {
-		defaultKeys: "shift+f1",
+		defaultKeys: "alt+e",
 		description: "Cycle thinking level",
 	},
 	"app.thinking.toggle": {
