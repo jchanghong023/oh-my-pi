@@ -71,14 +71,14 @@ function optionalModelFailure(stage: string, error?: unknown): void {
 async function searchPhase<T>(
 	stage: string,
 	operation: () => Promise<T>,
-	counts?: (value: T) => Record<string, number>,
+	counts?: (value: T) => Record<string, number | boolean>,
 ): Promise<T> {
 	const started = performance.now();
 	const fields = { component: "knowledge", event: "knowledge.search.phase", stage };
-	logger.info("knowledge.search.phase.started", { ...fields, result: "started" });
+	logger.debug("knowledge.search.phase.started", { ...fields, result: "started" });
 	try {
 		const value = await operation();
-		logger.info("knowledge.search.phase.completed", {
+		logger.debug("knowledge.search.phase.completed", {
 			...fields,
 			result: "completed",
 			elapsed_ms: performance.now() - started,
@@ -86,7 +86,7 @@ async function searchPhase<T>(
 		});
 		return value;
 	} catch (error) {
-		logger.info("knowledge.search.phase.finished", {
+		logger.debug("knowledge.search.phase.finished", {
 			...fields,
 			result: error instanceof Error && error.name === "AbortError" ? "cancelled" : "failed",
 			elapsed_ms: performance.now() - started,
@@ -106,7 +106,7 @@ function nativeDiagnostics(): (event: KnowledgeDiagnosticEvent) => void {
 					? logger.error
 					: event.level === "warn"
 						? logger.warn
-						: event.level === "debug"
+						: event.level === "debug" || event.event === "knowledge.search.core"
 							? logger.debug
 							: logger.info;
 			log(event.message, {
@@ -441,7 +441,7 @@ export class KnowledgeIndexEngine {
 		knowledgeCheckIndexingCancellation(signal);
 		if (options.mode === "grep") {
 			return this.#runSearchWindow(query, options, (nativeOptions, diagnostic) =>
-				this.#native.searchWindowAsync(query, nativeOptions, signal, diagnostic),
+				searchPhase("grep", () => this.#native.searchWindowAsync(query, nativeOptions, signal, diagnostic)),
 			);
 		}
 		const prepared = knowledgePrepareToolQuery(query, undefined, ["query"], false, undefined, undefined);
@@ -449,19 +449,21 @@ export class KnowledgeIndexEngine {
 		const effectiveQuery = prepared.query ?? query;
 		return this.#runSearchWindow(effectiveQuery, options, (nativeOptions, diagnostic) => {
 			if (options.cursor !== undefined) {
-				return this.#native.searchWindowAsync(effectiveQuery, nativeOptions, signal, diagnostic).catch(error => {
-					// A pre-upgrade direct caller could create a cursor from an
-					// untruncated query; only retry the precise identity mismatch.
-					signal?.throwIfAborted();
-					if (
-						query !== effectiveQuery &&
-						error instanceof Error &&
-						error.message.includes("Documentation search cursor does not match query or index")
-					) {
-						return this.#native.searchWindowAsync(query, nativeOptions, signal, diagnostic);
-					}
-					throw error;
-				});
+				return searchPhase("continuation", () =>
+					this.#native.searchWindowAsync(effectiveQuery, nativeOptions, signal, diagnostic).catch(error => {
+						// A pre-upgrade direct caller could create a cursor from an
+						// untruncated query; only retry the precise identity mismatch.
+						signal?.throwIfAborted();
+						if (
+							query !== effectiveQuery &&
+							error instanceof Error &&
+							error.message.includes("Documentation search cursor does not match query or index")
+						) {
+							return this.#native.searchWindowAsync(query, nativeOptions, signal, diagnostic);
+						}
+						throw error;
+					}),
+				);
 			}
 			return this.#adaptiveSearch(effectiveQuery, nativeOptions, diagnostic, signal);
 		});
@@ -543,13 +545,23 @@ export class KnowledgeIndexEngine {
 			if (!baseline.result.total) return baseline;
 			await resolveReranker();
 			if (!reranker) return baseline;
-		} else if (await this.#native.hasCachedHybridCandidates(query, options, signal)) {
+		} else if (
+			await searchPhase(
+				"candidate_cache",
+				() => this.#native.hasCachedHybridCandidates(query, options, signal),
+				hit => ({ rank_cache_hit: hit }),
+			)
+		) {
 			// Only resolve reranking before preparation when a cached result proves
 			// there are candidates; empty searches must not resolve it.
 			await resolveReranker();
 		}
 		if (cacheable) {
-			const cached = await this.#native.lookupHybridSearch(query, options, configurationIdentity(), signal);
+			const cached = await searchPhase(
+				"hybrid_cache",
+				() => this.#native.lookupHybridSearch(query, options, configurationIdentity(), signal),
+				output => ({ rank_cache_hit: output !== null }),
+			);
 			if (cached) return cached;
 		}
 		const snapshot = await searchPhase(
@@ -622,7 +634,7 @@ export class KnowledgeIndexEngine {
 						...ranked.filter(item => item.matchKind !== "exact-name"),
 					];
 					embeddingUsed = true;
-					logger.info("knowledge.search.phase.completed", {
+					logger.debug("knowledge.search.phase.completed", {
 						component: "knowledge",
 						event: "knowledge.search.phase",
 						stage: "fusion",
@@ -743,6 +755,9 @@ export class KnowledgeIndexEngine {
 		return logger.withLogContext(
 			{
 				operation_id: logger.getLogContext().operation_id ?? `knowledge-search-${crypto.randomUUID()}`,
+				mode: options.mode ?? "search",
+				continuation: options.cursor !== undefined,
+				path_scoped: options.path !== undefined,
 				...(options.index === undefined
 					? {}
 					: { index_hash: new Bun.CryptoHasher("sha256").update(options.index).digest("hex") }),
@@ -750,9 +765,9 @@ export class KnowledgeIndexEngine {
 			() => {
 				const started = performance.now();
 				const fields = { component: "knowledge", event: "knowledge.search", stage: "query" };
-				logger.info("knowledge.search.started", { ...fields, result: "started", query_length: query.length });
+				logger.debug("knowledge.search.started", { ...fields, result: "started", query_length: query.length });
 				const completed = ({ result, cacheHit, termCount }: KnowledgeSearchOutput): KnowledgeSearchWindow => {
-					logger.info("knowledge.search.completed", {
+					logger.debug("knowledge.search.completed", {
 						...fields,
 						result: result.sections.length ? "completed" : "no_match",
 						elapsed_ms: performance.now() - started,
@@ -760,6 +775,8 @@ export class KnowledgeIndexEngine {
 						section_count: result.sections.length,
 						match_count: result.total,
 						rank_cache_hit: cacheHit,
+						retrieval: result.retrieval,
+						reranked: result.reranked,
 					});
 					return result;
 				};

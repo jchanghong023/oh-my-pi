@@ -184,11 +184,18 @@ export class KnowledgeService {
 			options.signal?.addEventListener("abort", onAbort, { once: true });
 			if (options.signal?.aborted) onAbort();
 			this.#searches.add(controller);
-			const fields = { component: "knowledge", event: "knowledge.search.outward", query_length: query.length };
+			const fields = {
+				component: "knowledge",
+				event: "knowledge.search.outward",
+				query_length: query.length,
+				mode: options.mode ?? "search",
+				continuation: options.cursor !== undefined,
+				path_scoped: options.path !== undefined,
+			};
 			let reply: Reply<KnowledgeSearchWindow> | undefined;
 			let floorWaitMs = 0;
 			let budgetMs = 0;
-			logger.info("knowledge.search.outward.started", { ...fields, stage: "worker", result: "started" });
+			logger.debug("knowledge.search.outward.started", { ...fields, stage: "worker", result: "started" });
 			try {
 				if (this.#closed) throw new Error("Document service is closed");
 				controller.signal.throwIfAborted();
@@ -238,7 +245,7 @@ export class KnowledgeService {
 					floorWaitMs = performance.now() - floorStarted;
 				}
 				controller.signal.throwIfAborted();
-				logger.info("knowledge.search.outward.completed", {
+				logger.debug("knowledge.search.outward.completed", {
 					...fields,
 					stage: "complete",
 					result: "completed",
@@ -246,6 +253,8 @@ export class KnowledgeService {
 					total_matches: result.total,
 					exact_name_matches: result.exactNameMatches,
 					has_more: result.hasMore,
+					retrieval: window.retrieval,
+					reranked: window.reranked,
 					engine_ms: reply.engine_ms,
 					startup_engine_ms: reply.startup_engine_ms,
 					ipc_ms: reply.ipc_ms,
@@ -258,7 +267,7 @@ export class KnowledgeService {
 			} catch (error) {
 				// Native waits use their own AbortError; preserve our cancellation/close reason.
 				const failure = controller.signal.aborted ? controller.signal.reason : error;
-				logger.info("knowledge.search.outward.finished", {
+				logger.debug("knowledge.search.outward.finished", {
 					...fields,
 					stage: "complete",
 					result: failure instanceof Error && failure.name === "AbortError" ? "cancelled" : "failed",

@@ -63,7 +63,7 @@
 
 - Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
 - Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
-- Report separate Knowledge search timings for native full-text work, vector search, model requests, fusion and evidence loading.
+- Record Knowledge query timings at DEBUG level, including cache checks, grep and continuation, with separate native, model, IPC, queue and minimum-duration wait measurements.
 - Report full-text publication and vector-build status separately, with visible CLI and TUI warnings when vector generation fails.
 - Default `bun run cnb` to the existing `omp` release in `jchanghong/bin`, overwriting its two binary attachments without interactive prompts.
 - Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.

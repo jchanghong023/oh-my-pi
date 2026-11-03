@@ -90,6 +90,15 @@ Examples:
 5. Evidence and citations come from the database only: no source-file access, source freshness checks or automatic synchronization. Default search may call configured optional models; grep never does.
 6. Every successful outward search in either mode, including continuation and zero matches, takes **at least 500ms (≥500ms, not a 500ms upper bound)**. Any remaining time after query and page-budget work is an abortable asynchronous wait, without a held database transaction. Diagnostic timing distinguishes execution work, minimum-duration wait and total outward time; errors and cancellation are not padded.
 
+## Query Timing Diagnostics
+
+- Set `OMP_LOG_LEVEL=debug` before starting OMP to capture query timings, including in offline mode where DEBUG is otherwise filtered. Records use the existing JSONL logs; the worker has its own process log. Correlate parent and worker records by `operation_id`.
+- `knowledge.search.phase` reports model configuration, candidate/ranking cache checks (`rank_cache_hit`), preparation, Embedding requests, vector search, evidence loading, RRF fusion, reranking, final ranking publication, grep and continuation. Durations are in `elapsed_ms`; only executed phases are emitted.
+- `knowledge.search.core` breaks uncached full-text work into `snapshot`, `fts`, `section_sqlite`, `projection`, `scoring` and `finalize`. These are nested within the enclosing query/preparation phase, not additional end-to-end time.
+- `knowledge.search.outward` reports `engine_ms`, `startup_engine_ms`, `ipc_ms`, `queue_ms`, `budget_ms`, `floor_wait_ms` and `total_ms`. Compare actual execution with the explicit minimum-duration wait instead of attributing the entire outward duration to retrieval.
+- Timing records include mode, continuation/path-scope flags, counts and available retrieval/rerank status, but never query text, evidence bodies, raw paths or credentials. Operational errors retain their existing error-level diagnostics.
+
+
 ## Side Effects
 - Does not import or remove indexes, modify source documents, or change session state (`approval: "read"`). Opening the local database may create its storage or migrate older searchable text from stored Markdown; queries also write bounded diagnostic logs.
 
