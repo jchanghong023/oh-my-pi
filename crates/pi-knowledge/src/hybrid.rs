@@ -1,6 +1,7 @@
 //! Internal snapshot-bound ranking exchange with the host model clients.
 use std::{
-	collections::{HashMap, HashSet},
+	cell::RefCell,
+	collections::{HashMap, HashSet, VecDeque},
 	sync::Arc,
 };
 
@@ -15,6 +16,190 @@ use super::{
 };
 
 const SNAPSHOT_STALE: &str = "KNOWLEDGE_SNAPSHOT_STALE";
+
+// This is a retained-data budget, shared by vectors and hydrated sections.
+// Oversized matrices use the existing IDs-only preparation and on-demand read.
+const HYBRID_DATA_BUDGET: usize = 16 * 1024 * 1024;
+
+#[derive(PartialEq, Eq)]
+struct VectorKey {
+	guard:      String,
+	model:      String,
+	dimensions: usize,
+	index:      Option<String>,
+	path:       Option<String>,
+}
+
+struct CachedMatrix {
+	key:    VectorKey,
+	matrix: Arc<crate::vectors::VectorMatrix>,
+	bytes:  usize,
+}
+
+struct CachedHit {
+	guard: String,
+	hit:   KnowledgeSearchHit,
+	bytes: usize,
+}
+
+struct HybridData {
+	matrices: VecDeque<CachedMatrix>,
+	hits:     VecDeque<CachedHit>,
+	bytes:    usize,
+}
+
+pub(super) struct HybridDataCache(RefCell<HybridData>, usize);
+
+impl HybridDataCache {
+	pub(super) const fn new() -> Self {
+		Self(
+			RefCell::new(HybridData {
+				matrices: VecDeque::new(),
+				hits:     VecDeque::new(),
+				bytes:    0,
+			}),
+			HYBRID_DATA_BUDGET,
+		)
+	}
+
+	pub(super) fn clear(&self) {
+		let mut data = self.0.borrow_mut();
+		data.matrices.clear();
+		data.hits.clear();
+		data.bytes = 0;
+	}
+
+	fn reserve(&self, data: &mut HybridData, bytes: usize) -> bool {
+		if bytes > self.1 {
+			return false;
+		}
+		while data.bytes > self.1 - bytes {
+			if let Some(old) = data.hits.pop_front() {
+				data.bytes -= old.bytes;
+			} else if let Some(old) = data.matrices.pop_front() {
+				data.bytes -= old.bytes;
+			} else {
+				break;
+			}
+		}
+		true
+	}
+
+	fn matrix(&self, key: &VectorKey) -> Option<Arc<crate::vectors::VectorMatrix>> {
+		let mut data = self.0.borrow_mut();
+		let position = data.matrices.iter().position(|entry| entry.key == *key)?;
+		let entry = data.matrices.remove(position).expect("matrix cache entry");
+		let matrix = Arc::clone(&entry.matrix);
+		data.matrices.push_back(entry);
+		Some(matrix)
+	}
+
+	fn insert_matrix(
+		&self,
+		key: VectorKey,
+		matrix: crate::vectors::VectorMatrix,
+	) -> Arc<crate::vectors::VectorMatrix> {
+		let bytes = matrix
+			.matrix
+			.capacity()
+			.saturating_mul(std::mem::size_of::<f32>())
+			.saturating_add(
+				matrix
+					.section_ids
+					.capacity()
+					.saturating_mul(std::mem::size_of::<i64>()),
+			)
+			.saturating_add(key.guard.capacity())
+			.saturating_add(key.model.capacity())
+			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
+			.saturating_add(key.path.as_ref().map_or(0, String::capacity))
+			.saturating_add(256);
+		let matrix = Arc::new(matrix);
+		let mut data = self.0.borrow_mut();
+		if self.reserve(&mut data, bytes) {
+			data.bytes += bytes;
+			data
+				.matrices
+				.push_back(CachedMatrix { key, matrix: Arc::clone(&matrix), bytes });
+		}
+		matrix
+	}
+
+	fn hit(&self, guard: &str, entry: &RankedSection) -> Option<KnowledgeSearchHit> {
+		let mut data = self.0.borrow_mut();
+		let position = data
+			.hits
+			.iter()
+			.position(|hit| hit.guard == guard && hit.hit.section_id == entry.section_id)?;
+		let cached = data.hits.remove(position).expect("hit cache entry");
+		let hit = copy_hit(&cached.hit, entry);
+		data.hits.push_back(cached);
+		Some(hit)
+	}
+
+	fn insert_hit(&self, guard: &str, hit: &KnowledgeSearchHit) {
+		let bytes = hit
+			.index
+			.len()
+			.saturating_add(hit.document_hash.len())
+			.saturating_add(hit.path.len())
+			.saturating_add(hit.heading_path.len())
+			.saturating_add(hit.text.len())
+			.saturating_add(guard.len())
+			.saturating_add(256);
+		let mut data = self.0.borrow_mut();
+		if data
+			.hits
+			.iter()
+			.any(|cached| cached.guard == guard && cached.hit.section_id == hit.section_id)
+			|| !self.reserve(&mut data, bytes)
+		{
+			return;
+		}
+		let entry = RankedSection {
+			section_id: hit.section_id,
+			shape:      hit.shape,
+			match_kind: hit.match_kind,
+			rank:       hit.rank,
+		};
+		data.bytes += bytes;
+		data
+			.hits
+			.push_back(CachedHit { guard: guard.to_owned(), hit: copy_hit(hit, &entry), bytes });
+	}
+}
+
+fn copy_hit(hit: &KnowledgeSearchHit, entry: &RankedSection) -> KnowledgeSearchHit {
+	KnowledgeSearchHit {
+		section_id:    hit.section_id,
+		index:         hit.index.clone(),
+		document_hash: hit.document_hash.clone(),
+		path:          hit.path.clone(),
+		heading_path:  hit.heading_path.clone(),
+		line_start:    hit.line_start,
+		line_end:      hit.line_end,
+		text:          hit.text.clone(),
+		shape:         entry.shape,
+		match_kind:    entry.match_kind,
+		rank:          entry.rank,
+	}
+}
+
+fn vector_key(
+	guard: &str,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<&str>,
+) -> VectorKey {
+	VectorKey {
+		guard: guard.to_owned(),
+		model: model.to_owned(),
+		dimensions,
+		index: index.map(str::to_owned),
+		path: path.map(str::to_owned),
+	}
+}
 
 fn stale() -> KnowledgeError {
 	let mut error =
@@ -136,7 +321,7 @@ impl DatabaseEngine {
 			let mut sections = Vec::with_capacity(limit.min(ranking.ranked.len()));
 			for entry in ranking.ranked.iter().take(limit) {
 				check()?;
-				sections.push(hydrate(connection, entry)?);
+				sections.push(self.hydrate_cached(connection, &guard, entry)?);
 			}
 			Ok(sections)
 		}) {
@@ -225,6 +410,9 @@ impl DatabaseEngine {
 		{
 			return Err(stale());
 		}
+		for hit in &output.result.sections {
+			self.hybrid_data.insert_hit(&guard, hit);
+		}
 		let (source_order, vectors, vector_failure) = self.hybrid_snapshot(&guard, |connection| {
 			let mut wanted: HashSet<i64> = baseline
 				.ranked
@@ -258,16 +446,55 @@ impl DatabaseEngine {
 					for dimension in dims {
 						check()?;
 						let dimension = usize::try_from(dimension?).map_err(|_| stale())?;
-						let section_ids = crate::vectors::read_vector_ids(
+						let key = vector_key(
+							&guard,
+							model,
+							dimension,
+							options.index.as_deref(),
+							options.path.as_deref(),
+						);
+						let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
+							Some(matrix)
+						} else if crate::vectors::matrix_fits(
 							connection,
 							model,
 							dimension,
 							options.index.as_deref(),
-							options.path.as_deref().map(PathScope),
-							&check,
-						)?;
+							self.hybrid_data.1 / 2,
+						)? {
+							let matrix = crate::vectors::read_scoped_vector_matrix(
+								connection,
+								model,
+								dimension,
+								options.index.as_deref(),
+								options.path.as_deref().map(PathScope),
+								&check,
+							)?;
+							Some(self.hybrid_data.insert_matrix(key, matrix))
+						} else {
+							None
+						};
+						let section_ids = if let Some(matrix) = matrix.as_ref() {
+							&matrix.section_ids
+						} else {
+							// An over-budget generation must still be validated in its
+							// entirety.
+							let ids = crate::vectors::read_vector_ids(
+								connection,
+								model,
+								dimension,
+								options.index.as_deref(),
+								options.path.as_deref().map(PathScope),
+								&check,
+							)?;
+							if !ids.is_empty() {
+								wanted.extend(ids);
+								vector_dimensions.push(dimension);
+							}
+							continue;
+						};
 						if !section_ids.is_empty() {
-							wanted.extend(section_ids);
+							wanted.extend(section_ids.iter().copied());
 							vector_dimensions.push(dimension);
 						}
 					}
@@ -361,14 +588,25 @@ impl DatabaseEngine {
 		}
 		let model = context.model.as_deref().ok_or_else(stale)?;
 		self.hybrid_snapshot(&context.guard, |connection| {
-			let matrix = crate::vectors::read_scoped_vector_matrix(
-				connection,
+			let key = vector_key(
+				&context.guard,
 				model,
 				dimensions,
 				context.index.as_deref(),
-				context.path.as_deref().map(PathScope),
-				check,
-			)?;
+				context.path.as_deref(),
+			);
+			let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
+				matrix
+			} else {
+				Arc::new(crate::vectors::read_scoped_vector_matrix(
+					connection,
+					model,
+					dimensions,
+					context.index.as_deref(),
+					context.path.as_deref().map(PathScope),
+					check,
+				)?)
+			};
 			check()?;
 			let rows = score(&matrix.matrix, dimensions);
 			check()?;
@@ -404,7 +642,7 @@ impl DatabaseEngine {
 					return Err(stale());
 				}
 				let entry = resolver.candidate(connection, &context, id, check)?;
-				let hit = hydrate(connection, &entry)?;
+				let hit = self.hydrate_cached(connection, &context.guard, &entry)?;
 				hits.push(HybridCandidate {
 					hit,
 					source_order: *context.source_order.get(&id).ok_or_else(stale)?,
@@ -482,7 +720,7 @@ impl DatabaseEngine {
 			let mut sections = Vec::with_capacity(limit.min(ranked.len()));
 			for entry in ranked.iter().take(limit) {
 				check()?;
-				sections.push(hydrate(connection, entry)?);
+				sections.push(self.hydrate_cached(connection, &context.guard, entry)?);
 			}
 			let (retrieval, reranked) = retrieval_status(identity);
 			Ok((
@@ -522,6 +760,22 @@ impl DatabaseEngine {
 			}
 		}
 		Ok(KnowledgeSearchOutput { result, cache_hit: false, term_count: plan.terms.len() as i64 })
+	}
+}
+
+impl DatabaseEngine {
+	fn hydrate_cached(
+		&self,
+		connection: &Connection,
+		guard: &str,
+		entry: &RankedSection,
+	) -> CoreResult<KnowledgeSearchHit> {
+		if let Some(hit) = self.hybrid_data.hit(guard, entry) {
+			return Ok(hit);
+		}
+		let hit = hydrate(connection, entry)?;
+		self.hybrid_data.insert_hit(guard, &hit);
+		Ok(hit)
 	}
 }
 
@@ -612,4 +866,285 @@ fn hydrate(connection: &Connection, entry: &RankedSection) -> CoreResult<Knowled
 			rank:          entry.rank,
 		})
 	})?)
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::atomic::{AtomicU64, Ordering};
+
+	use super::*;
+
+	static NEXT: AtomicU64 = AtomicU64::new(0);
+
+	struct Fixture {
+		dir:  std::path::PathBuf,
+		path: String,
+	}
+
+	impl Fixture {
+		fn new() -> Self {
+			let dir = std::env::temp_dir().join(format!(
+				"omp-hybrid-data-{}-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos(),
+				NEXT.fetch_add(1, Ordering::Relaxed)
+			));
+			std::fs::create_dir_all(&dir).unwrap();
+			let path = dir.join("knowledge.db").to_string_lossy().into_owned();
+			let connection = Connection::open(&path).unwrap();
+			connection
+				.execute_batch(
+					"PRAGMA journal_mode=WAL;
+				CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT NOT NULL,root_path TEXT NOT NULL);
+				CREATE TABLE documents(id INTEGER PRIMARY KEY,index_id INTEGER NOT NULL,relative_path TEXT NOT \
+					 NULL,title TEXT NOT NULL,source_kind TEXT NOT NULL,sha256 TEXT NOT \
+					 NULL,size_bytes INTEGER NOT NULL,mtime_ms REAL NOT NULL);
+				CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER NOT NULL,document_id INTEGER NOT \
+					 NULL,ordinal INTEGER NOT NULL,heading_path TEXT NOT NULL,heading_level INTEGER \
+					 NOT NULL,line_start INTEGER NOT NULL,line_end INTEGER NOT NULL,byte_start INTEGER \
+					 NOT NULL,byte_end INTEGER NOT NULL,raw_markdown TEXT NOT NULL);
+				CREATE TABLE wiki_document_projections(document_id INTEGER PRIMARY KEY,payload BLOB NOT NULL);
+				CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED,index_id \
+					 UNINDEXED,relative_path,heading_path,body,content='',contentless_delete=1);
+				CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions INTEGER,complete \
+					 INTEGER);
+				CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
+				INSERT INTO doc_indexes VALUES(1,'one','/unused'),(2,'two','/unused');
+				INSERT INTO documents \
+					 VALUES(1,1,'scope/a.md','A','markdown','a',100,1.0),(2,1,'outside.md','B','\
+					 markdown','b',100,1.0),(3,2,'scope/c.md','C','markdown','c',100,1.0);
+				INSERT INTO sections VALUES(1,1,1,0,'A',1,1,2,0,22,'# A\nneedle evidence \
+					 one'),(2,1,2,0,'B',1,1,2,0,22,'# B\noutside evidence'),(3,2,3,0,'C',1,1,2,0,22,'# \
+					 C\nneedle evidence two');
+				INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body) \
+					 VALUES(1,1,1,'scope/a.md','A','# A needle evidence \
+					 one'),(2,2,1,'outside.md','B','# B outside evidence'),(3,3,2,'scope/c.md','C','# \
+					 C needle evidence two');
+				INSERT INTO wiki_vector_generations VALUES(1,'model',2,1),(2,'model',2,1);
+				INSERT INTO wiki_section_vectors \
+					 VALUES(1,1,x'0000404000008040'),(1,2,x'0000803f00000000'),(2,3,x'000000000000803f'\
+					 );",
+				)
+				.unwrap();
+			Self { dir, path }
+		}
+
+		fn engine(&self) -> DatabaseEngine {
+			DatabaseEngine::new(self.path.clone(), self.path.clone())
+		}
+	}
+
+	impl Drop for Fixture {
+		fn drop(&mut self) {
+			let _ = std::fs::remove_dir_all(&self.dir);
+		}
+	}
+
+	#[test]
+	fn hybrid_reuses_snapshot_data_and_invalidates_external_changes() {
+		let fixture = Fixture::new();
+		let mut engine = fixture.engine();
+		let options = KnowledgeSearchOptions { path: Some("scope/".into()), ..Default::default() };
+		let prepared = engine
+			.prepare_hybrid("needle", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		let ids = engine
+			.score_hybrid(&prepared.token, 2, &|| Ok(()), |values, _| {
+				assert_eq!(values, &[0.6, 0.8, 0.0, 1.0]);
+				vec![0, 1]
+			})
+			.unwrap()
+			.unwrap();
+		let candidates = engine
+			.read_hybrid_candidates(&prepared.token, &ids, &|| Ok(()))
+			.unwrap();
+		assert!(candidates[0].hit.text.contains("needle evidence one"));
+		let second = engine
+			.prepare_hybrid("evidence", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(
+			engine
+				.score_hybrid(&second.token, 2, &|| Ok(()), |_, _| vec![0, 1])
+				.unwrap()
+				.unwrap(),
+			ids
+		);
+		let cancelled = || Err(KnowledgeError::message("cancelled"));
+		assert!(
+			engine
+				.score_hybrid(&second.token, 2, &cancelled, |_, _| panic!("cancelled score"))
+				.is_err()
+		);
+		assert!(
+			engine
+				.read_hybrid_candidates(&second.token, &ids, &cancelled)
+				.is_err()
+		);
+		let scoped = KnowledgeSearchOptions {
+			index: Some("two".into()),
+			path: Some("scope/".into()),
+			..Default::default()
+		};
+		let other = engine
+			.prepare_hybrid("needle", &scoped, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(
+			engine
+				.score_hybrid(&other.token, 2, &|| Ok(()), |matrix, _| {
+					assert_eq!(matrix, &[0.0, 1.0]);
+					vec![0]
+				})
+				.unwrap()
+				.unwrap(),
+			vec![3]
+		);
+		let writer = Connection::open(&fixture.path).unwrap();
+		writer
+			.execute_batch(
+				"UPDATE sections SET raw_markdown='# A\nnew body' WHERE id=1; UPDATE \
+				 wiki_section_vectors SET vector=x'00' WHERE section_id=2;",
+			)
+			.unwrap();
+		assert!(
+			engine
+				.read_hybrid_candidates(&second.token, &ids, &|| Ok(()))
+				.is_err()
+		);
+		let third = engine
+			.prepare_hybrid("evidence", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(
+			engine
+				.score_hybrid(&third.token, 2, &|| Ok(()), |_, _| vec![0])
+				.unwrap()
+				.unwrap(),
+			vec![3]
+		);
+		let refreshed = engine
+			.read_hybrid_candidates(&third.token, &[1], &|| Ok(()))
+			.unwrap();
+		assert_eq!(refreshed[0].hit.text, "# A\nnew body");
+		engine.close();
+		let reopened = engine
+			.prepare_hybrid("evidence", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(
+			engine
+				.score_hybrid(&reopened.token, 2, &|| Ok(()), |_, _| vec![0])
+				.unwrap()
+				.unwrap(),
+			vec![3]
+		);
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.execute_batch(
+				"UPDATE wiki_section_vectors SET vector=x'0000803f00000000' WHERE section_id=2;
+			 UPDATE sections SET raw_markdown='# A\nlocal body' WHERE id=1;",
+			)
+			.unwrap();
+		assert!(
+			engine
+				.read_hybrid_candidates(&reopened.token, &[1], &|| Ok(()))
+				.is_err()
+		);
+		let local = engine
+			.prepare_hybrid("evidence", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(
+			engine
+				.score_hybrid(&local.token, 2, &|| Ok(()), |_, _| vec![0, 1])
+				.unwrap()
+				.unwrap(),
+			vec![1, 3]
+		);
+		assert_eq!(
+			engine
+				.read_hybrid_candidates(&local.token, &[1], &|| Ok(()))
+				.unwrap()[0]
+				.hit
+				.text,
+			"# A\nlocal body"
+		);
+	}
+
+	#[test]
+	fn budget_fallback_and_eviction_preserve_hybrid_results() {
+		let fixture = Fixture::new();
+		let options = KnowledgeSearchOptions { path: Some("scope/".into()), ..Default::default() };
+		let mut cached = fixture.engine();
+		cached.hybrid_data.1 = 900;
+		let mut uncached = fixture.engine();
+		uncached.hybrid_data.1 = 0;
+		let left = cached
+			.prepare_hybrid("needle", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		let right = uncached
+			.prepare_hybrid("needle", &options, Some("model"), &|| Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert_eq!(left.vector_dimensions, right.vector_dimensions);
+		let score = |matrix: &[f32], _: usize| {
+			assert_eq!(matrix, &[0.6, 0.8, 0.0, 1.0]);
+			vec![1, 0]
+		};
+		let left_ids = cached
+			.score_hybrid(&left.token, 2, &|| Ok(()), score)
+			.unwrap()
+			.unwrap();
+		let right_ids = uncached
+			.score_hybrid(&right.token, 2, &|| Ok(()), score)
+			.unwrap()
+			.unwrap();
+		assert_eq!(left_ids, right_ids);
+		let left_hits = cached
+			.read_hybrid_candidates(&left.token, &left_ids, &|| Ok(()))
+			.unwrap();
+		let right_hits = uncached
+			.read_hybrid_candidates(&right.token, &right_ids, &|| Ok(()))
+			.unwrap();
+		for (left, right) in left_hits.iter().zip(&right_hits) {
+			assert_eq!(
+				serde_json::to_value(&left.hit).unwrap(),
+				serde_json::to_value(&right.hit).unwrap()
+			);
+			assert_eq!(left.source_order, right.source_order);
+		}
+		let ids: Vec<_> = left.fulltext.iter().map(|item| item.section_id).collect();
+		assert_eq!(
+			ids,
+			right
+				.fulltext
+				.iter()
+				.map(|item| item.section_id)
+				.collect::<Vec<_>>()
+		);
+		let left_output = cached
+			.finish_hybrid(&left.token, &ids, "", "", &|| Ok(()))
+			.unwrap();
+		let right_output = uncached
+			.finish_hybrid(&right.token, &ids, "", "", &|| Ok(()))
+			.unwrap();
+		assert_eq!(
+			serde_json::to_value(left_output).unwrap(),
+			serde_json::to_value(right_output).unwrap()
+		);
+		let cache = cached.hybrid_data.0.borrow();
+		assert!(cache.bytes <= 900);
+		let empty = uncached.hybrid_data.0.borrow();
+		assert_eq!(empty.bytes, 0);
+		assert!(empty.matrices.is_empty());
+		assert!(empty.hits.is_empty());
+	}
 }

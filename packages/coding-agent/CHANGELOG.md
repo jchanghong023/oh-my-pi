@@ -59,6 +59,7 @@
 
 ### Changed
 
+- Speed up Knowledge searches without changing recall, ranking, reranker inputs or continuation cursors.
 - Report full-text publication and vector-build status separately, with visible CLI and TUI warnings when vector generation fails.
 - Default `bun run cnb` to the existing `omp` release in `jchanghong/bin`, overwriting its two binary attachments without interactive prompts.
 - Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.
@@ -170,6 +171,7 @@
 
 ### Fixed
 
+- Accept company rerank responses without a model while rejecting explicit mismatches, and expose sanitized HTTP, timeout and response-validation failures as offline-visible warnings.
 - Avoid CNB release failures from mismatched Windows/WSL Bun versions and dirty generated files, with WSL build scripts synchronized only through Git.
 - Keep input, Collab and provider protocol settings in their intended settings groups, preserving the upstream Collab section name.
 - Fix ZCode session creation and reads when a model's context or output limit is unknown.

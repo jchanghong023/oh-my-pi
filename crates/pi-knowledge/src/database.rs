@@ -549,6 +549,8 @@ pub struct DatabaseEngine {
 	identity:         String,
 	generation:       u64,
 	cache_guard:      Option<String>,
+	corpus_snapshot:  Option<Sha256>,
+	hybrid_data:      hybrid::HybridDataCache,
 	cache:            VecDeque<(String, Arc<Ranking>)>,
 	cached_sections:  usize,
 	hybrid:           VecDeque<Arc<HybridContext>>,
@@ -569,6 +571,8 @@ impl DatabaseEngine {
 			identity: String::new(),
 			generation: 0,
 			cache_guard: None,
+			corpus_snapshot: None,
+			hybrid_data: hybrid::HybridDataCache::new(),
 			cache: VecDeque::new(),
 			cached_sections: 0,
 			hybrid: VecDeque::new(),
@@ -589,6 +593,8 @@ impl DatabaseEngine {
 
 	fn clear_cache(&mut self) {
 		self.cache.clear();
+		self.corpus_snapshot = None;
+		self.hybrid_data.clear();
 		self.cached_sections = 0;
 		self.hybrid.clear();
 		self.hybrid_completed.clear();
@@ -717,6 +723,7 @@ impl DatabaseEngine {
 			let mut cache_hit = false;
 			let mut cache_key = None;
 			let mut built = None;
+			let mut built_snapshot = None;
 			let result = (|| -> CoreResult<(String, KnowledgeSearchWindow)> {
 				let progress_check = check.clone();
 				self
@@ -775,12 +782,35 @@ impl DatabaseEngine {
 						self.rank_builds += 1;
 					}
 					let connection = self.connection.as_ref().expect("connection");
+					let snapshot = match (snapshot_guard == before)
+						.then(|| self.corpus_snapshot.clone())
+						.flatten()
+					{
+						Some(snapshot) => snapshot,
+						None => corpus_snapshot(connection, &check)?,
+					};
 					let ranking = Arc::new(if let Some(matcher) = grep.as_ref() {
-						rank_grep(connection, matcher, options.index.as_deref(), path, &check)?
+						rank_grep(
+							connection,
+							matcher,
+							options.index.as_deref(),
+							path,
+							&check,
+							snapshot.clone(),
+						)?
 					} else {
-						rank(connection, query_text, &plan, options.index.as_deref(), path, &check)?
+						rank(
+							connection,
+							query_text,
+							&plan,
+							options.index.as_deref(),
+							path,
+							&check,
+							snapshot.clone(),
+						)?
 					});
 					built = Some(Arc::clone(&ranking));
+					built_snapshot = Some(snapshot);
 					ranking
 				};
 				if cursor
@@ -873,6 +903,7 @@ impl DatabaseEngine {
 				}
 			} else if let Some(ranking) = built {
 				self.publish(key, ranking, before);
+				self.corpus_snapshot = built_snapshot;
 			} else if let Some(position) = self
 				.cache
 				.iter()
@@ -890,13 +921,8 @@ impl DatabaseEngine {
 	}
 }
 
-fn rank_grep(
-	connection: &Connection,
-	matcher: &pi_walker::grep::Engine,
-	index: Option<&str>,
-	path: Option<PathScope<'_>>,
-	check: Check<'_>,
-) -> CoreResult<Ranking> {
+/// Preserve the legacy cursor's exact byte stream independently of the query.
+fn corpus_snapshot(connection: &Connection, check: Check<'_>) -> CoreResult<Sha256> {
 	let mut snapshot = Sha256::new();
 	let mut buffer = String::new();
 	for sql in [INDEX_ROWS, SECTION_ROWS] {
@@ -907,6 +933,17 @@ fn rank_grep(
 			hash_row(&mut snapshot, row, &mut buffer)?;
 		}
 	}
+	Ok(snapshot)
+}
+
+fn rank_grep(
+	connection: &Connection,
+	matcher: &pi_walker::grep::Engine,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	check: Check<'_>,
+	mut snapshot: Sha256,
+) -> CoreResult<Ranking> {
 	// FTS changes still invalidate the database snapshot, although FTS never
 	// supplies grep candidates. Stream shadow payloads without any schema work.
 	for sql in [
@@ -953,6 +990,7 @@ fn rank(
 	index: Option<&str>,
 	path: Option<PathScope<'_>>,
 	check: Check<'_>,
+	mut snapshot: Sha256,
 ) -> CoreResult<Ranking> {
 	let mut ranks = HashMap::new();
 	let mut ordered_ranks = Vec::new();
@@ -993,33 +1031,33 @@ fn rank(
 			!name.contains(['/', '\\']) && !name.contains("::"),
 		)
 	});
-	let mut snapshot = Sha256::new();
 	let mut buffer = String::new();
-	{
-		let mut statement = connection.prepare_cached(INDEX_ROWS)?;
-		let mut rows = statement.query([])?;
-		while let Some(row) = rows.next()? {
-			check()?;
-			hash_row(&mut snapshot, row, &mut buffer)?;
-		}
-	}
 	let mut document_contexts: HashMap<i64, DocumentContexts> = HashMap::new();
 	let mut candidates = Vec::new();
-	let mut statement = connection.prepare_cached(SECTION_ROWS)?;
-	let mut rows = statement.query([])?;
+	// Normal text needs only FTS candidates; technical names must additionally
+	// examine every in-scope section to preserve punctuation-aware recall.
+	let scope = " WHERE (?1 IS NULL OR (typeof(index_name)='text' AND index_name=?1)) AND (?2 IS \
+	             NULL OR (typeof(relative_path)='text' AND substr(CAST(relative_path AS \
+	             BLOB),1,?3)=?2 AND (?4 OR length(CAST(relative_path AS BLOB))=?3)))";
+	let mut sql = format!("SELECT * FROM ({SECTION_ROWS}){scope}");
+	if name.is_none() && !plan.terms.is_empty() {
+		sql.push_str(
+			" AND section_id IN (SELECT rowid FROM sections_fts WHERE sections_fts MATCH ?5)",
+		);
+	}
+	sql.push_str(" ORDER BY section_id");
+	let mut statement = connection.prepare_cached(&sql)?;
+	let scope_bytes = path.map(|path| path.0.as_bytes());
+	let scope_length = scope_bytes.map_or(0, <[u8]>::len) as i64;
+	let directory = scope_bytes.is_some_and(|path| path.ends_with(b"/"));
+	let index = index.map(super::storage::sqlite_text);
+	let mut rows = if name.is_none() && !plan.terms.is_empty() {
+		statement.query(rusqlite::params![index, scope_bytes, scope_length, directory, plan.fts])?
+	} else {
+		statement.query(rusqlite::params![index, scope_bytes, scope_length, directory])?
+	};
 	while let Some(row) = rows.next()? {
 		check()?;
-		hash_row(&mut snapshot, row, &mut buffer)?;
-		if let Some(index) = index
-			&& !matches!(row.get_ref(7)?, ValueRef::Text(name) if name == index.as_bytes())
-		{
-			continue;
-		}
-		if let Some(path) = path
-			&& !matches!(row.get_ref(8)?, ValueRef::Text(value) if path.matches(value))
-		{
-			continue;
-		}
 		let id: i64 = row.get(0)?;
 		let bm25 = ranks.get(&id).copied();
 		if bm25.is_none() && name.is_none() {
@@ -1703,19 +1741,20 @@ mod tests {
 		}
 		drop(connection);
 		let mut engine = fixture.engine();
-		for mode in ["search", "grep"] {
+		for (mode, text) in [("search", "needle"), ("search", "needle evidence"), ("grep", "needle")]
+		{
 			let options = KnowledgeSearchOptions {
 				path: Some("dir %_/item.md".into()),
 				mode: Some(mode.into()),
 				limit: Some(1.0),
 				..Default::default()
 			};
-			let first = search(&mut engine, "needle", options);
+			let first = search(&mut engine, text, options);
 			assert_eq!(first["result"]["total"], 2);
 			assert_eq!(first["result"]["retrieval"], if mode == "grep" { "grep" } else { "fulltext" });
 			assert_eq!(first["result"]["reranked"], false);
 			let next = cursor(&first, 1);
-			let continuation = search(&mut engine, "needle", KnowledgeSearchOptions {
+			let continuation = search(&mut engine, text, KnowledgeSearchOptions {
 				path: Some("dir %_/item.md".into()),
 				mode: Some(mode.into()),
 				cursor: Some(next.clone()),
@@ -1725,7 +1764,7 @@ mod tests {
 			assert!(
 				engine
 					.search(
-						"needle",
+						text,
 						&KnowledgeSearchOptions {
 							path: Some("dir %_/".into()),
 							mode: Some(mode.into()),
@@ -1736,26 +1775,26 @@ mod tests {
 					)
 					.is_err()
 			);
-			let directory = search(&mut engine, "needle", KnowledgeSearchOptions {
+			let directory = search(&mut engine, text, KnowledgeSearchOptions {
 				path: Some("dir %_/".into()),
 				mode: Some(mode.into()),
 				..Default::default()
 			});
 			assert_eq!(directory["result"]["total"], 3);
-			let intersection = search(&mut engine, "needle", KnowledgeSearchOptions {
+			let intersection = search(&mut engine, text, KnowledgeSearchOptions {
 				index: Some("other".into()),
 				path: Some("dir %_/".into()),
 				mode: Some(mode.into()),
 				..Default::default()
 			});
 			assert_eq!(intersection["result"]["total"], 1);
-			let unicode = search(&mut engine, "needle", KnowledgeSearchOptions {
+			let unicode = search(&mut engine, text, KnowledgeSearchOptions {
 				path: Some("资料/ 文档.md".into()),
 				mode: Some(mode.into()),
 				..Default::default()
 			});
 			assert_eq!(unicode["result"]["total"], 1);
-			let empty = search(&mut engine, "needle", KnowledgeSearchOptions {
+			let empty = search(&mut engine, text, KnowledgeSearchOptions {
 				path: Some("DIR %_/".into()),
 				mode: Some(mode.into()),
 				..Default::default()
@@ -1775,6 +1814,60 @@ mod tests {
 					)
 					.is_err(),
 				"{invalid}"
+			);
+		}
+	}
+
+	#[test]
+	fn shared_corpus_snapshot_keeps_new_query_cursors_and_tracks_metadata_writes() {
+		let fixture = Fixture::new();
+		Connection::open(&fixture.path)
+			.unwrap()
+			.execute(
+				"UPDATE sections SET byte_start=ordinal*1000, \
+				 byte_end=ordinal*1000+length(CAST(raw_markdown AS BLOB))",
+				[],
+			)
+			.unwrap();
+		let mut engine = fixture.engine();
+		search(&mut engine, "evidence old", KnowledgeSearchOptions::default());
+		for mode in ["search", "grep"] {
+			let options = || KnowledgeSearchOptions {
+				mode: Some(mode.into()),
+				limit: Some(1.0),
+				..Default::default()
+			};
+			let first = search(&mut engine, "needle evidence", options());
+			let fresh = search(&mut fixture.engine(), "needle evidence", options());
+			assert_eq!(first["result"], fresh["result"]);
+			let continuation = cursor(&first, 1);
+			let rest = search(&mut engine, "needle evidence", KnowledgeSearchOptions {
+				cursor: Some(continuation.clone()),
+				..options()
+			});
+			let reopened = search(&mut fixture.engine(), "needle evidence", KnowledgeSearchOptions {
+				cursor: Some(continuation.clone()),
+				..options()
+			});
+			assert_eq!(rest["result"], reopened["result"]);
+			Connection::open(&fixture.path)
+				.unwrap()
+				.execute("UPDATE documents SET title=title || ' changed'", [])
+				.unwrap();
+			let changed = search(&mut engine, "needle evidence", options());
+			let fresh = search(&mut fixture.engine(), "needle evidence", options());
+			assert_eq!(changed["result"], fresh["result"]);
+			assert_ne!(first["result"]["cursorBase"]["s"], changed["result"]["cursorBase"]["s"]);
+			let stale = engine
+				.search(
+					"needle evidence",
+					&KnowledgeSearchOptions { cursor: Some(continuation), ..options() },
+					&|| Ok(()),
+				)
+				.unwrap_err();
+			assert_eq!(
+				stale.error_message(),
+				"Stale documentation search cursor: indexed snapshot has changed"
 			);
 		}
 	}

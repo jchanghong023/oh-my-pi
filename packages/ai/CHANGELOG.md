@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Accept rerank gateway responses without a model field and fill it from the requested model.
 - Guide agents to correct and retry tool calls rejected by argument validation.
 - Preserve Anthropic's explicit context-window exhaustion detail without discarding streamed content or confusing it with an output-token cap.
 - Fixed a cancelled request whose OAuth credential was mid-refresh killing the whole session with `[Unhandled Rejection] AbortError: OAuth refresh ownership aborted by caller` ([#17290](https://github.com/can1357/oh-my-pi/pull/17290) by [@H4vC](https://github.com/H4vC))

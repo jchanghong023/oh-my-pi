@@ -1,3 +1,4 @@
+import { ProviderHttpError, ProviderResponseError } from "@oh-my-pi/pi-ai/error";
 import { rerank } from "@oh-my-pi/pi-ai/rerank";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
@@ -199,31 +200,45 @@ export async function resolveKnowledgeModels(
 			async rerank(query, docs, signal) {
 				signal?.throwIfAborted();
 				if (!docs.length) return [];
+				const requestSignal = signal
+					? AbortSignal.any([signal, AbortSignal.timeout(30000)])
+					: AbortSignal.timeout(30000);
+				let validationReason: string | undefined;
 				try {
-					const requestSignal = signal
-						? AbortSignal.any([signal, AbortSignal.timeout(30000)])
-						: AbortSignal.timeout(30000);
 					const response = await rerank(model, { query, documents: docs }, { apiKey, signal: requestSignal });
 					signal?.throwIfAborted();
-					if (response.model !== rerankModel || response.results.length !== docs.length)
-						throw new Error("Invalid rerank response");
+					if (response.model !== rerankModel) validationReason = "model_mismatch";
+					else if (response.results.length !== docs.length) validationReason = "result_count";
+					if (validationReason) throw new Error(`Invalid rerank response: ${validationReason}`);
 					const scores = new Array<number>(docs.length);
 					for (const item of response.results) {
-						if (
-							!Number.isInteger(item.index) ||
-							item.index < 0 ||
-							item.index >= docs.length ||
-							scores[item.index] !== undefined ||
-							!Number.isFinite(item.relevanceScore)
-						)
-							throw new Error("Invalid rerank response");
+						if (!Number.isInteger(item.index) || item.index < 0 || item.index >= docs.length)
+							validationReason = "invalid_index";
+						else if (scores[item.index] !== undefined) validationReason = "duplicate_index";
+						else if (!Number.isFinite(item.relevanceScore)) validationReason = "nonfinite_score";
+						if (validationReason) throw new Error(`Invalid rerank response: ${validationReason}`);
 						scores[item.index] = item.relevanceScore;
 					}
 					return scores;
-				} catch {
+				} catch (error) {
 					signal?.throwIfAborted();
-					logger[debug ? "warn" : "debug"]("knowledge: optional reranker unavailable");
-					throw new Error("Knowledge reranker unavailable or invalid");
+					logger.warn("knowledge: optional reranker unavailable", {
+						component: "knowledge",
+						event: "knowledge.model",
+						stage: "rerank.request",
+						result: "unavailable",
+						reason: requestSignal.aborted
+							? "timeout"
+							: error instanceof ProviderHttpError
+								? "http_error"
+								: error instanceof ProviderResponseError
+									? "response_schema"
+									: error instanceof SyntaxError
+										? "response_json"
+										: (validationReason ?? "request_failed"),
+						...logger.diagnosticError(requestSignal.aborted ? requestSignal.reason : error),
+					});
+					throw error;
 				}
 			},
 		};

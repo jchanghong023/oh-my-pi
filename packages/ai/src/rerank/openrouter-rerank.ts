@@ -17,7 +17,7 @@ export class RerankApiError extends AIError.ProviderHttpError {
 }
 
 const upstreamResponseSchema = type({
-	model: "string",
+	"model?": "string",
 	results: type({
 		index: "number",
 		relevance_score: "number",
@@ -122,7 +122,7 @@ export async function rerankOpenRouter(
 		);
 	}
 	return {
-		model: parsed.model,
+		model: parsed.model ?? model.id,
 		results: parsed.results.map(result => {
 			const document = documentText(result.document);
 			return {

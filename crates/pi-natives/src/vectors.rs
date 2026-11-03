@@ -166,17 +166,18 @@ pub(crate) fn vector_index_top_k_slice(
 	let normalized: Vec<f64> = q[..query_dims].iter().map(|&v| v / norm).collect();
 
 	let mut order: Vec<(f64, u32)> = Vec::with_capacity(count);
+	let mut has_nan = false;
 	for row in 0..count {
 		let base = row * dims;
 		let mut score = 0.0f64;
 		for (col, &qv) in normalized.iter().enumerate() {
 			score += f64::from(data[base + col]) * qv;
 		}
+		has_nan |= score.is_nan();
 		order.push((score, row as u32));
 	}
-	// JS comparator `(a, b) => b.score - a.score` under a stable sort: strict
-	// score ordering, otherwise (equal, including ±0.0) original row order.
-	order.sort_by(|a, b| {
+	// Keep the original comparator, including its NaN and infinity behavior.
+	let compare = |a: &(f64, u32), b: &(f64, u32)| {
 		let diff = b.0 - a.0;
 		if diff > 0.0 {
 			core::cmp::Ordering::Greater
@@ -185,8 +186,19 @@ pub(crate) fn vector_index_top_k_slice(
 		} else {
 			a.1.cmp(&b.1)
 		}
-	});
+	};
 	let take = limit.min(order.len());
+	// NaNs make the existing comparator non-transitive. Also, after a u32
+	// row-index wrap, equal scores can compare equal despite distinct rows.
+	// In both cases retain the original stable full-sort behavior.
+	if has_nan || count.saturating_sub(1) > u32::MAX as usize {
+		order.sort_by(compare);
+	} else {
+		if take > 0 && take < count {
+			order.select_nth_unstable_by(take, compare);
+		}
+		order[..take].sort_unstable_by(compare);
+	}
 	order.truncate(take);
 	order
 }

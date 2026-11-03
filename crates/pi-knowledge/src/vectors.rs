@@ -441,6 +441,36 @@ pub(crate) fn read_scoped_vector_matrix(
 	read_vector_data(connection, model, dimensions, index, path, check, true)
 }
 
+// Bound the temporary matrix as well as its retained allocation. Count all
+// sections, including out-of-scope and corrupt generations, so no path filter
+// can underestimate what the validator may examine.
+pub(crate) fn matrix_fits(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	budget: usize,
+) -> CoreResult<bool> {
+	let count: i64 = connection.query_row(
+		"SELECT count(*) FROM sections s JOIN wiki_vector_generations g ON g.index_id=s.index_id \
+		 JOIN doc_indexes i ON i.id=s.index_id WHERE g.complete=1 AND g.model=? AND g.dimensions=? \
+		 AND i.name NOT GLOB '__building__*' AND (? IS NULL OR i.name=?)",
+		params![model, dimensions as i64, index, index],
+		|row| row.get(0),
+	)?;
+	// Vec growth can reserve nearly twice its length.
+	Ok(usize::try_from(count)
+		.ok()
+		.and_then(|count| {
+			dimensions
+				.checked_mul(4)?
+				.checked_add(8)?
+				.checked_mul(count)?
+				.checked_mul(2)
+		})
+		.is_some_and(|bytes| bytes <= budget))
+}
+
 /// Validate generations and collect section IDs without materializing vectors.
 pub(crate) fn read_vector_ids(
 	connection: &Connection,
@@ -569,6 +599,8 @@ mod scoped_tests {
 			)
 			.unwrap();
 		let scope = PathScope::validate(Some("scope/")).unwrap();
+		assert!(!matrix_fits(&connection, "model", 2, None, 95).unwrap());
+		assert!(matrix_fits(&connection, "model", 2, None, 96).unwrap());
 		let matrix =
 			read_scoped_vector_matrix(&connection, "model", 2, None, scope, &|| Ok(())).unwrap();
 		assert_eq!(matrix.section_ids, vec![1, 3]);

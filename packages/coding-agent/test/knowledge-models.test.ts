@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -47,10 +47,10 @@ describe("Knowledge model adapters", () => {
 							data: body.input!.map((_, index) => ({ index, embedding: Array(4096).fill(0.5) })),
 						}
 					: {
-							model: body.model,
 							results: body
 								.documents!.map((_, index) => ({ index, relevance_score: index === 0 ? 0.9 : 0.2 }))
 								.reverse(),
+							usage: { total_tokens: 12 },
 						},
 			);
 		});
@@ -432,6 +432,115 @@ describe("Knowledge model adapters", () => {
 		expect(models.embedding).toBeUndefined();
 		expect(await models.reranker!.rerank("question", ["a", "b"])).toEqual([0.1, 0.9]);
 		expect(calls).toBe(1);
+	});
+
+	test("rerank failures warn with safe HTTP, decode and validation reasons", async () => {
+		let payload: unknown = {};
+		let status = 200;
+		let rawJson: string | undefined;
+		const baseUrl = server(() =>
+			rawJson === undefined ? Response.json(payload, { status }) : new Response(rawJson),
+		);
+		const options = await config({
+			mnemopi: { noEmbeddings: true },
+			knowledge: { reranker: { model: "rank", baseUrl, apiKey: "credential-secret" } },
+		});
+		const { reranker } = await resolveKnowledgeModels(options);
+		const events: logger.LogEvent[] = [];
+		const dispose = logger.registerLogSink(event => {
+			if (event.level === "warn" && event.context?.stage === "rerank.request") events.push(event);
+		});
+		const cases = [
+			{ payload: { error: { message: "response-body-secret" } }, status: 503, reason: "http_error" },
+			{ payload: {}, reason: "response_schema" },
+			{ payload: { model: 123, results: [] }, reason: "response_schema" },
+			{ payload: { results: [{ index: 0, relevance_score: "response-body-secret" }] }, reason: "response_schema" },
+			{ payload: { model: "response-model-secret", results: [] }, reason: "model_mismatch" },
+			{ payload: { results: [] }, reason: "result_count" },
+			{ payload: { results: [{ index: 1, relevance_score: 1 }] }, reason: "invalid_index" },
+			{ payload: { results: [{ index: 0.5, relevance_score: 1 }] }, reason: "invalid_index" },
+			{
+				payload: {},
+				rawJson: '{"results":[{"index":0,"relevance_score":1e999}]}',
+				reason: "response_schema",
+			},
+		];
+		try {
+			for (const failure of cases) {
+				payload = failure.payload;
+				status = failure.status ?? 200;
+				rawJson = "rawJson" in failure ? failure.rawJson : undefined;
+				await expect(reranker!.rerank("private-query", ["private-document"])).rejects.toThrow();
+				expect(events.at(-1)?.context).toMatchObject({ reason: failure.reason });
+				if (status !== 200) expect(events.at(-1)?.context?.status).toBe(status);
+			}
+			rawJson = undefined;
+			payload = {
+				results: [
+					{ index: 0, relevance_score: 1 },
+					{ index: 0, relevance_score: 2 },
+				],
+			};
+			await expect(reranker!.rerank("private-query", ["private-document", "second-document"])).rejects.toThrow();
+			expect(events.at(-1)?.context?.reason).toBe("duplicate_index");
+			rawJson = "response-body-secret";
+			await expect(reranker!.rerank("private-query", ["private-document"])).rejects.toThrow();
+			expect(events.at(-1)?.context).toMatchObject({ reason: "response_json", error_type: "SyntaxError" });
+			expect(events).toHaveLength(cases.length + 2);
+			const output = JSON.stringify(events);
+			for (const secret of [
+				"private-query",
+				"private-document",
+				"second-document",
+				"credential-secret",
+				"response-body-secret",
+				"response-model-secret",
+			]) {
+				expect(output).not.toContain(secret);
+			}
+		} finally {
+			dispose();
+		}
+	});
+
+	test("rerank timeouts warn but caller cancellation stays a cancellation", async () => {
+		const started = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<Response>();
+		const baseUrl = server(() => {
+			started.resolve();
+			return release.promise;
+		});
+		const options = await config({
+			mnemopi: { noEmbeddings: true },
+			knowledge: { reranker: { model: "rank", baseUrl, apiKey: "" } },
+		});
+		const { reranker } = await resolveKnowledgeModels(options);
+		const timeout = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockImplementation(() => AbortSignal.abort(new DOMException("timeout-secret", "TimeoutError")));
+		const events: logger.LogEvent[] = [];
+		const dispose = logger.registerLogSink(event => {
+			if (event.level === "warn" && event.context?.stage === "rerank.request") events.push(event);
+		});
+		try {
+			await expect(reranker!.rerank("private-query", ["private-document"])).rejects.toMatchObject({
+				name: "TimeoutError",
+			});
+			expect(events).toHaveLength(1);
+			expect(events[0]?.context).toMatchObject({ reason: "timeout", error_type: "TimeoutError" });
+			expect(JSON.stringify(events)).not.toContain("timeout-secret");
+			timeout.mockImplementation(() => new AbortController().signal);
+			const controller = new AbortController();
+			const pending = reranker!.rerank("q", ["a"], controller.signal);
+			await started.promise;
+			controller.abort(new Error("caller-cancellation"));
+			await expect(pending).rejects.toThrow("caller-cancellation");
+			expect(events).toHaveLength(1);
+		} finally {
+			timeout.mockRestore();
+			dispose();
+			release.resolve(Response.json({ results: [{ index: 0, relevance_score: 1 }] }));
+		}
 	});
 
 	test("environment-disabled embeddings skip import and query requests", async () => {

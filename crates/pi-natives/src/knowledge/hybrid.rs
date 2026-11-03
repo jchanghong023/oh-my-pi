@@ -369,3 +369,96 @@ impl KnowledgeSearchEngine {
 		)
 	}
 }
+
+#[cfg(test)]
+mod vector_tests {
+	use crate::vectors::vector_index_top_k_slice;
+	// Pre-selection implementation: score in TS loop order, then stable-sort
+	// every row using the original subtraction comparator.
+	fn full_sort_top_k(data: &[f32], dims: usize, query: &[f64], limit: usize) -> Vec<(f64, u32)> {
+		let mut norm_sq = 0.0;
+		for &value in query {
+			norm_sq += value * value;
+		}
+		let norm = f64::sqrt(norm_sq);
+		let mut order = Vec::new();
+		for row in 0..data.len() / dims {
+			let mut score = 0.0;
+			for col in 0..query.len().min(dims) {
+				score += f64::from(data[row * dims + col]) * (query[col] / norm);
+			}
+			order.push((score, row as u32));
+		}
+		order.sort_by(|a, b| {
+			let diff = b.0 - a.0;
+			if diff > 0.0 {
+				core::cmp::Ordering::Greater
+			} else if diff < 0.0 {
+				core::cmp::Ordering::Less
+			} else {
+				a.1.cmp(&b.1)
+			}
+		});
+		order.truncate(limit);
+		order
+	}
+
+	fn assert_top_k_matches_full_sort(data: &[f32], dims: usize, query: &[f64]) {
+		let count = data.len() / dims;
+		for limit in 0..=count + 1 {
+			let actual = vector_index_top_k_slice(data, dims, query, limit);
+			let expected = full_sort_top_k(data, dims, query, limit);
+			assert_eq!(actual.len(), expected.len(), "limit {limit}");
+			for (actual, expected) in actual.iter().zip(&expected) {
+				assert_eq!(actual.1, expected.1, "row at limit {limit}");
+				assert_eq!(actual.0.to_bits(), expected.0.to_bits(), "score at limit {limit}");
+			}
+		}
+	}
+
+	#[test]
+	fn vector_top_k_preserves_ties_and_score_bits_across_all_cutoffs() {
+		// Many equal scores straddle the cutoff, interspersed with better and
+		// worse rows so selecting ties by row is required before truncation.
+		let ties: Vec<f32> = (0..97)
+			.map(|row| match row % 7 {
+				0 => 2.0,
+				1 => -1.0,
+				_ => 1.0,
+			})
+			.collect();
+		assert_eq!(
+			vector_index_top_k_slice(&ties, 1, &[1.0], 16)
+				.into_iter()
+				.map(|(_, row)| row)
+				.collect::<Vec<_>>(),
+			vec![0, 7, 14, 21, 28, 35, 42, 49, 56, 63, 70, 77, 84, 91, 2, 3]
+		);
+		assert_top_k_matches_full_sort(&ties, 1, &[1.0]);
+
+		// Mismatched lengths exercise full-query normalization and the exact
+		// f32-to-f64 multiplication/accumulation order.
+		let data: Vec<f32> = (0..111)
+			.map(|i| ((i * 37 % 101) as f32 - 50.0) / 13.0)
+			.collect();
+		assert_top_k_matches_full_sort(&data, 3, &[1.0e-20, -2.0, 3.0, 11.0]);
+		assert_top_k_matches_full_sort(&data, 3, &[0.123456789012345, -0.75]);
+		assert_top_k_matches_full_sort(&data, 3, &[]);
+	}
+
+	#[test]
+	fn vector_top_k_retains_non_finite_and_signed_zero_behavior() {
+		assert_top_k_matches_full_sort(
+			&[0.0, -0.0, f32::INFINITY, -1.0, f32::NEG_INFINITY, 1.0],
+			1,
+			&[1.0],
+		);
+		assert_top_k_matches_full_sort(&[1.0, f32::NAN, -1.0, 2.0, f32::NAN, 0.0], 1, &[1.0]);
+		assert_top_k_matches_full_sort(&[1.0, -0.0, f32::INFINITY, 0.0, -1.0, 1.0], 2, &[
+			f64::MAX,
+			-f64::MAX,
+		]);
+		assert_top_k_matches_full_sort(&[1.0, -1.0, 0.0, 2.0], 1, &[f64::NAN]);
+		assert_top_k_matches_full_sort(&[1.0, -1.0, 0.0, 2.0], 1, &[0.0]);
+	}
+}
