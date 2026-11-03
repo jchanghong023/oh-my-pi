@@ -33,6 +33,7 @@ import type {
 	KnowledgeSearchResult,
 	KnowledgeSearchWindow,
 	KnowledgeServiceOptions,
+	KnowledgeVectorRetryResult,
 } from "./types";
 import type {
 	KnowledgeWorkerCommand,
@@ -147,6 +148,10 @@ export class KnowledgeService {
 
 	async init(directory: string, name: string, options: KnowledgeBuildOptions = {}): Promise<KnowledgeBuildResult> {
 		return (await this.#request({ type: "init", directory, name }, options.signal, options.onProgress)).value;
+	}
+
+	async retryVectors(options: KnowledgeBuildOptions = {}): Promise<KnowledgeVectorRetryResult> {
+		return (await this.#request({ type: "retryVectors" }, options.signal, options.onProgress)).value;
 	}
 
 	async remove(name: string, options: { signal?: AbortSignal } = {}): Promise<void> {

@@ -17,7 +17,7 @@ type RerankMode = "reverse" | "tie" | "http" | "duplicate" | "range" | "missing"
 /** A deterministic wire-compatible test server, not a claim about model quality. */
 function modelServer() {
 	const requests: Array<{ route: string; body: ModelRequest }> = [];
-	let embedding: "ok" | "http" | "zero" | "short" | "nonfinite" | "partial" | "hold" = "ok";
+	let embedding: "ok" | "http" | "rejected" | "zero" | "short" | "nonfinite" | "partial" | "hold" = "ok";
 	let rerank: RerankMode = "reverse";
 	let held = Promise.withResolvers<void>();
 	const releases = new Set<() => void>();
@@ -43,6 +43,7 @@ function modelServer() {
 			}
 			if (route.endsWith("/embeddings")) {
 				if (embedding === "http") return new Response("offline", { status: 503, headers: { "Retry-After": "0" } });
+				if (embedding === "rejected") return new Response("bad request", { status: 400 });
 				const inputs = Array.isArray(body.input) ? body.input : [body.input ?? ""];
 				if (embedding === "nonfinite") {
 					return new Response(
@@ -355,7 +356,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 		30_000,
 	);
 
-	it.each(["http", "partial"] as const)(
+	it.each(["rejected", "partial"] as const)(
 		"keeps full text available when embedding preparation is %s and never exposes its partial generation",
 		async failure => {
 			const f = await fixture();

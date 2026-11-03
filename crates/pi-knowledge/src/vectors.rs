@@ -23,6 +23,15 @@ pub struct VectorRow {
 	pub vector:     Vec<f32>,
 }
 
+/// A published index's durable vector checkpoint, with a fresh writer token.
+pub struct VectorRetry {
+	pub token:      Option<String>,
+	pub total:      i64,
+	pub completed:  i64,
+	pub dimensions: i64,
+	pub complete:   bool,
+}
+
 /// Complete compatible generations, in stable source order.
 pub struct VectorMatrix {
 	pub section_ids: Vec<i64>,
@@ -81,6 +90,112 @@ impl Storage {
 		})
 	}
 
+	/// Resume only compatible checkpoints belonging to unchanged published
+	/// sections. The caller holds the physical database's import lease
+	/// throughout the retry.
+	pub fn begin_vector_retry(&self, id: i64, model: Option<&str>) -> CoreResult<VectorRetry> {
+		self.transaction(|storage| {
+			let visible: bool = storage.connection.query_row(
+				"SELECT EXISTS(SELECT 1 FROM doc_indexes WHERE id=? AND name NOT GLOB '__building__*')",
+				[id],
+				|row| row.get(0),
+			)?;
+			if !visible || model.is_some_and(str::is_empty) {
+				return Err(invalid());
+			}
+			let total: i64 = storage.connection.query_row(
+				"SELECT count(*) FROM sections WHERE index_id=?",
+				[id],
+				|row| row.get(0),
+			)?;
+			let generation: Option<(String, i64, bool)> = storage
+				.connection
+				.query_row(
+					"SELECT model,dimensions,complete FROM wiki_vector_generations WHERE index_id=?",
+					[id],
+					|row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+				)
+				.optional()?;
+			let mut completed: i64 = storage.connection.query_row(
+				"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
+				[id],
+				|row| row.get(0),
+			)?;
+			let compatible = generation
+				.as_ref()
+				.is_some_and(|(stored, ..)| model.is_none_or(|model| stored == model));
+			let mut dimensions = generation
+				.as_ref()
+				.map_or(0, |(_, dimensions, _)| *dimensions);
+			if compatible
+				&& generation
+					.as_ref()
+					.is_some_and(|(_, _, complete)| *complete)
+				&& completed == total
+				&& (total == 0 || dimensions > 0)
+			{
+				check_file_identity(Path::new(&storage.path), &storage.identity)?;
+				return Ok(VectorRetry { token: None, total, completed, dimensions, complete: true });
+			}
+			let model = model.ok_or_else(|| {
+				KnowledgeError::message(
+					"No embedding model configured; cannot continue building knowledge vectors",
+				)
+			})?;
+			// Source mutations already invalidate generations via the storage
+			// triggers. Never mix model spaces or reuse a broken
+			// completed generation.
+			if !compatible
+				|| generation
+					.as_ref()
+					.is_some_and(|(_, _, complete)| *complete)
+				|| completed > total
+				|| dimensions < 0
+				|| (completed > 0 && dimensions == 0)
+			{
+				storage
+					.connection
+					.execute("DELETE FROM wiki_section_vectors WHERE index_id=?", [id])?;
+				storage
+					.connection
+					.execute("DELETE FROM wiki_vector_generations WHERE index_id=?", [id])?;
+				completed = 0;
+				dimensions = 0;
+			}
+			let owner: String =
+				storage
+					.connection
+					.query_row("SELECT lower(hex(randomblob(16)))", [], |row| row.get(0))?;
+			let token = serde_json::to_string(&(&storage.identity, &owner)).map_err(|_| invalid())?;
+			storage.connection.execute(
+				"INSERT INTO wiki_import_owners(index_id,token) VALUES(?,?) ON CONFLICT(index_id) DO \
+				 UPDATE SET token=excluded.token",
+				params![id, owner],
+			)?;
+			storage.connection.execute(
+				"INSERT INTO wiki_vector_generations(index_id,token,model,dimensions) VALUES(?,?,?,?) \
+				 ON CONFLICT(index_id) DO UPDATE SET token=excluded.token,complete=0",
+				params![id, token, model, dimensions],
+			)?;
+			check_file_identity(Path::new(&storage.path), &storage.identity)?;
+			Ok(VectorRetry { token: Some(token), total, completed, dimensions, complete: false })
+		})
+	}
+
+	/// Retire the writer, preserving saved batches even after failure or
+	/// cancellation.
+	pub fn finish_vector_retry(&self, token: &str) -> CoreResult<()> {
+		self.transaction(|storage| {
+			if let Ok(id) = storage.vector_owner(token) {
+				storage
+					.connection
+					.execute("DELETE FROM wiki_import_owners WHERE index_id=?", [id])?;
+				check_file_identity(Path::new(&storage.path), &storage.identity)?;
+			}
+			Ok(())
+		})
+	}
+
 	fn active_vector_import(&self, token: &str) -> CoreResult<i64> {
 		let id = self.vector_owner(token)?;
 		let active: bool = self.connection.query_row(
@@ -105,7 +220,9 @@ impl Storage {
 		self.transaction(|storage| {
 			let id = storage.active_vector_import(token)?;
 			let mut stmt = storage.connection.prepare(
-				"SELECT id,raw_markdown FROM sections WHERE index_id=? AND id>? ORDER BY id LIMIT ?",
+				"SELECT s.id,s.raw_markdown FROM sections s WHERE s.index_id=? AND s.id>? AND NOT \
+				 EXISTS(SELECT 1 FROM wiki_section_vectors v WHERE v.index_id=s.index_id AND \
+				 v.section_id=s.id) ORDER BY s.id LIMIT ?",
 			)?;
 			let rows = stmt.query_map(params![id, after, limit.clamp(1, 1000) as i64], |row| {
 				Ok(VectorSource { section_id: row.get(0)?, text: row.get(1)? })
@@ -222,14 +339,8 @@ impl Storage {
 	pub fn publish_deferred_import(&self, token: &str, name: &str) -> CoreResult<()> {
 		self.transaction(|storage| {
 			let id = storage.vector_owner(token)?;
-			storage.connection.execute(
-				"DELETE FROM wiki_section_vectors WHERE index_id=? AND EXISTS(SELECT 1 FROM \
-				 wiki_vector_generations WHERE index_id=? AND complete=0)",
-				params![id, id],
-			)?;
-			storage
-				.connection
-				.execute("DELETE FROM wiki_vector_generations WHERE index_id=? AND complete=0", [id])?;
+			// Incomplete vectors remain durable checkpoints, excluded from all
+			// searches.
 			let (_, hidden): (String, String) = serde_json::from_str(token).map_err(|_| invalid())?;
 			storage
 				.connection

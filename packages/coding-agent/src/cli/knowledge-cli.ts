@@ -93,10 +93,16 @@ export async function runKnowledgeCommand(
 					const exitCode = 0;
 					switch (input.action) {
 						case "init": {
-							value = await service.init(input.target as string, input.name as string, {
+							const result = await service.init(input.target as string, input.name as string, {
 								signal: input.signal,
 								onProgress,
 							});
+							value = result;
+							if (result.vectorStatus === "failed") {
+								stderr(
+									"Warning: Full-text index saved, but vector generation failed; search will use full-text retrieval.\n",
+								);
+							}
 							break;
 						}
 						case "remove":

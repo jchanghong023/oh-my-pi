@@ -29,7 +29,8 @@
 - Build and replace the local Windows executable without stopping running sessions with `bun run local`, or build and upload Windows and WSL Linux binaries in parallel to a CNB release with `bun run cnb`, without packaging or publishing source code.
 - Use `/minimal` to request minimal changes and directly relevant verification, optionally alongside a task.
 - Support optional `OMP_CACHE_DIR` for caches, statistics, logs and default native files, with a per-user Linux offline default while keeping sessions and knowledge persistent.
-- Prepare knowledge embeddings with up to four concurrent requests of 16 sections each, with bounded input windows and cancellable overload retries.
+- Prepare knowledge embeddings with up to eight concurrent requests of 16 sections each, 90-second attempt deadlines and up to ten attempts separated by fixed ten-second waits.
+- Press `r retry` in `/knowledge` to resume missing vectors from saved sections across the current profile, keeping saved batches after failure or cancellation and skipping completed indexes.
 
 - Default offline memory and knowledge embeddings to company `Qwen3-Embedding-8B` (4096 dimensions), enable `Qwen3-Reranker-8B` for knowledge search unless explicitly configured, and retry transient embedding overloads with bounded backoff.
 
@@ -58,6 +59,7 @@
 
 ### Changed
 
+- Report full-text publication and vector-build status separately, with visible CLI and TUI warnings when vector generation fails.
 - Default `bun run cnb` to the existing `omp` release in `jchanghong/bin`, overwriting its two binary attachments without interactive prompts.
 - Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.
 - Default the offline company `smol` role to `Qwen3.8-27B` while preserving explicit role assignments.

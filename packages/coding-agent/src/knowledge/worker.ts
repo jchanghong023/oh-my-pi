@@ -66,6 +66,20 @@ export function startKnowledgeWorker(transport: KnowledgeWorkerTransport): void 
 					});
 					break;
 				}
+				case "retryVectors": {
+					const value = await engine.retryVectors({
+						signal,
+						onProgress: progress => send({ type: "progress", id: message.id, progress }),
+					});
+					send({
+						type: "result",
+						id: message.id,
+						command: "retryVectors",
+						value,
+						engine_ms: performance.now() - started,
+					});
+					break;
+				}
 				case "remove":
 					engine.remove(message.name);
 					send({

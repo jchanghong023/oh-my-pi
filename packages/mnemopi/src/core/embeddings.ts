@@ -379,6 +379,10 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 			const startedAt = performance.now();
 			const strict = activeEmbeddingOptions()?.strictApi === true;
 			const callerSignal = activeEmbeddingOptions()?.signal;
+			const timeoutMs = activeEmbeddingOptions()?.requestTimeoutMs ?? 30_000;
+			const maxAttempts = activeEmbeddingOptions()?.requestMaxAttempts ?? 4;
+			const fixedDelayMs = activeEmbeddingOptions()?.requestRetryDelayMs;
+			const retryTimeouts = activeEmbeddingOptions()?.retryTimeouts === true;
 			callerSignal?.throwIfAborted();
 			const baseUrl = embeddingBaseUrl();
 			const url = `${baseUrl.replace(/\/+$/, "")}/embeddings`;
@@ -388,16 +392,19 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 				item_count: texts.length,
 				...(strict ? {} : { model: /^[A-Za-z0-9_./:[\]-]{1,160}$/.test(model) ? model : "[custom]" }),
 				...logger.diagnosticUrl(url),
-				timeout_ms: 30000,
+				timeout_ms: timeoutMs,
+				max_attempts: maxAttempts,
+				retry_delay_ms: fixedDelayMs,
 			};
 			let stage = "configuration";
 			let authAttempt = 0;
 			let status: number | undefined;
-			let requestSignal: AbortSignal | undefined = strict
-				? callerSignal
-					? AbortSignal.any([callerSignal, AbortSignal.timeout(30000)])
-					: AbortSignal.timeout(30000)
-				: undefined;
+			let requestSignal: AbortSignal | undefined =
+				strict && !retryTimeouts
+					? callerSignal
+						? AbortSignal.any([callerSignal, AbortSignal.timeout(timeoutMs)])
+						: AbortSignal.timeout(timeoutMs)
+					: undefined;
 			const degraded = (reason: string, error?: unknown): null => {
 				logger[strict && !mnemopiDebugEnabled() ? "debug" : "warn"]("Embedding API degraded to null", {
 					...fields,
@@ -449,16 +456,38 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 							headers.Authorization = `Bearer ${key}`;
 						}
 						stage = "fetch";
-						if (!strict) {
-							const timeout = AbortSignal.timeout(30000);
+						if (!strict && !retryTimeouts) {
+							const timeout = AbortSignal.timeout(timeoutMs);
 							requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
 						}
-						const init = { method: "POST", headers, body, signal: requestSignal };
+						const init = { method: "POST", headers, body, signal: retryTimeouts ? callerSignal : requestSignal };
 						const res = await logger.withLogContext({ auth_attempt: authAttempt }, () =>
 							fetchWithRetry(url, {
 								...init,
-								maxAttempts: 4,
+								maxAttempts,
 								defaultDelayMs: [1000, 2000, 4000],
+								fixedDelayMs,
+								prepareInit: retryTimeouts
+									? () => {
+											const timeout = AbortSignal.timeout(timeoutMs);
+											requestSignal = callerSignal ? AbortSignal.any([callerSignal, timeout]) : timeout;
+											return { signal: requestSignal };
+										}
+									: undefined,
+								fetch: retryTimeouts
+									? async (input, requestInit) => {
+											const response = await fetch(input, requestInit);
+											if (!response.ok || response.status === 204 || response.status === 205)
+												return response;
+											// Read the complete body inside the shared retry boundary. Invalid
+											// JSON/schema is still rejected below without replaying the request.
+											return new Response(await response.arrayBuffer(), {
+												status: response.status,
+												statusText: response.statusText,
+												headers: response.headers,
+											});
+										}
+									: undefined,
 							}),
 						);
 						status = res.status;
@@ -488,7 +517,7 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 						}
 						return res;
 					},
-					{ signal: requestSignal ?? callerSignal },
+					{ signal: retryTimeouts ? callerSignal : (requestSignal ?? callerSignal) },
 				);
 				if (!response.ok) {
 					return degraded("http_error");

@@ -372,6 +372,8 @@ export declare class KnowledgeSearchEngine {
   finishHybridSearch(token: string, finalSectionIds: number[], contextIdentity: string, configurationIdentity: string, signal?: AbortSignal): Promise<KnowledgeSearchOutput>
   initDeferred(rootPath: string, name: string, onProgress?: (progress: KnowledgeBuildProgress) => unknown, signal?: AbortSignal, diagnostic?: (event: KnowledgeDiagnosticEvent) => unknown): Promise<KnowledgeDeferredBuildResult>
   beginVectorImport(token: string, modelIdentity: string, signal?: AbortSignal): Promise<KnowledgeVectorImport>
+  beginVectorRetry(indexId: number, leasePath: string, modelIdentity?: string, signal?: AbortSignal): Promise<KnowledgeVectorRetry>
+  finishVectorRetry(token: string): Promise<void>
   readVectorImportBatch(token: string, afterSectionId: number, limit: number, signal?: AbortSignal): Promise<KnowledgeVectorSourceBatch>
   writeVectorImportBatch(token: string, rows: KnowledgeVectorRow[], signal?: AbortSignal): Promise<void>
   publishVectorImport(token: string, signal?: AbortSignal): Promise<void>
@@ -2936,6 +2938,14 @@ export declare function knowledgeTruncateHeading(text: string, maxChars?: number
 export interface KnowledgeVectorImport {
   token: string
   total: number
+}
+
+export interface KnowledgeVectorRetry {
+  token?: string
+  total: number
+  completed: number
+  dimensions: number
+  complete: boolean
 }
 
 export interface KnowledgeVectorRow {

@@ -30,9 +30,12 @@ export interface KnowledgeModels {
 }
 
 // Bound request size while keeping each existing per-input window intact.
-export const KNOWLEDGE_EMBEDDING_CONCURRENCY = 4;
+export const KNOWLEDGE_EMBEDDING_CONCURRENCY = 8;
 export const KNOWLEDGE_EMBEDDING_BATCH_SIZE = 16;
 export const KNOWLEDGE_EMBEDDING_CHAR_BUDGET = 32768;
+export const KNOWLEDGE_EMBEDDING_IMPORT_TIMEOUT_MS = 90_000;
+export const KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS = 10;
+export const KNOWLEDGE_EMBEDDING_IMPORT_RETRY_DELAY_MS = 10_000;
 
 function endpoint(value: string | undefined): string | undefined {
 	if (!value) return undefined;
@@ -54,7 +57,13 @@ function endpoint(value: string | undefined): string | undefined {
 
 /** Resolve independent, optional model capabilities without opening the memory database. */
 export async function resolveKnowledgeModels(
-	options: { agentDir?: string; cwd?: string; embedding?: boolean; reranker?: boolean } = {},
+	options: {
+		agentDir?: string;
+		cwd?: string;
+		embedding?: boolean;
+		reranker?: boolean;
+		embeddingPurpose?: "import" | "search";
+	} = {},
 ): Promise<KnowledgeModels> {
 	const settings = await Settings.loadReadOnly(options);
 	if (isCompanyLaneActive()) await setCompanyOfflineEnabled(true);
@@ -78,6 +87,13 @@ export async function resolveKnowledgeModels(
 					apiUrl: baseUrl,
 					apiKey,
 					strictApi: true,
+					requestTimeoutMs:
+						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_TIMEOUT_MS : undefined,
+					requestMaxAttempts:
+						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS : undefined,
+					requestRetryDelayMs:
+						options.embeddingPurpose === "import" ? KNOWLEDGE_EMBEDDING_IMPORT_RETRY_DELAY_MS : undefined,
+					retryTimeouts: options.embeddingPurpose === "import",
 					disabled: active?.disabled,
 					maxInputChars: active?.maxInputChars,
 				},

@@ -83,6 +83,8 @@ OMP MUST 普通或 offline 场景使用内置模型目录与固定服务，不�
 
 OMP MUST 注册固定 company 模型与未配置角色默认值；缺失或损坏配置明确报错且不泄露凭据。
 
+Knowledge 向量建库的并发、单次超时与固定重试策略采用[Knowledge 建库合同](../knowledge-index/spec.md#scenario-批量向量导入的并发与过载恢复)，覆盖本节的通用向量请求重试默认值；其他向量消费者保持原有策略。
+
 #### Scenario: 公司内网模型（仅 `OMP_OFFLINE`）的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行

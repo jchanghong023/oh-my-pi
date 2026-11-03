@@ -184,7 +184,7 @@ omp knowledge init "/path/to/company-markdown" --name "company-docs"
 
 索引名必须唯一，同名不会覆盖。基础全文导入和检索不需要模型或向量服务；如已有可用 Embedding 配置，导入时可准备向量，普通搜索可调用该模型。可选的独立精排模型也可参与普通搜索；显式 grep 不调用模型。
 
-向量建库内置最多 4 个并发请求，每请求最多 16 个章节；长章节按字符预算拆成更小批次。503 等临时过载默认按 1s、2s、4s 退避重试（首次请求后最多重试 3 次，服务端提示与请求超时仍生效），无需额外并发参数。日志事件 `knowledge.vector-import.started` 会记录本次采用的并发、批量及字符预算；实际吞吐仍取决于章节长度与网关负载。
+向量建库最多 8 路并发，每请求最多 16 个章节；长章节按字符预算拆成更小批次。单次尝试最多 90 秒，暂时性网络故障、超时或限流时最多尝试 10 次（含首次），两次尝试间固定等 10 秒，随时可取消。连续耗尽超时时，单批最长约 16 分 30 秒；此策略不延长普通检索的超时。日志事件 `knowledge.vector-import.started` 会记录并发、批量、已保存章节数及重试策略；实际吞吐取决于章节长度和网关负载。
 
 `/knowledge` 按 `n` 建库时，面板显示当前索引名、阶段、实际完成数／总数、阶段百分比和失败数，并每秒刷新已耗时及距最近一次进度更新的时间。向量阶段以章节计数，只有整批验证并写入后才增加；等待网关时计数暂时不变不代表卡死。百分比只针对当前阶段，不是整个建库流程的估时；可随时按 `c` 或 `Esc` 取消。
 
@@ -192,7 +192,9 @@ omp knowledge init "/path/to/company-markdown" --name "company-docs"
 
 导入时会同时准备可复用的 Markdown／名称检索投影，以减少搜索时的重复解析，数据库占用会增加。旧索引首次打开会自动从库内原文升级并准备这些投影，可能等待一段时间；不需要找回源目录或重新导入。该一次性准备与后续搜索耗时不同，界面加载期间仍可取消。具体空间和耗时取决于资料规模。
 
-Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `knowledge.reranker.model`、`knowledge.reranker.baseUrl`、`knowledge.reranker.apiKey`。`OMP_OFFLINE=1` 且公司配置可用、没有显式覆盖时，默认使用 `Qwen3-Embedding-8B`（4096 维）和公司 `/v1/rerank` 的 `Qwen3-Reranker-8B`；显式精排配置（包括空值）优先。不探测其他路由或回退公网，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，须在 Embedding 可用时显式执行下方的 remove → init，查询不会自动补算向量。
+Embedding 复用现有 `mnemopi.embeddingModel`、`mnemopi.embeddingApiUrl`、`mnemopi.embeddingApiKey` 配置及其环境变量／公司配置优先级，无需启用记忆系统；精排独立使用可选的 `knowledge.reranker.model`、`knowledge.reranker.baseUrl`、`knowledge.reranker.apiKey`。`OMP_OFFLINE=1` 且公司配置可用、没有显式覆盖时，默认使用 `Qwen3-Embedding-8B`（4096 维）和公司 `/v1/rerank` 的 `Qwen3-Reranker-8B`；显式精排配置（包括空值）优先。不探测其他路由或回退公网，显式其他地址不会使用公司专用 token。已有纯全文索引无需重建即可继续检索；如需为其准备向量，可在 Embedding 可用时按 `r retry`，查询不会自动补算向量。
+
+在 `/knowledge` 索引列表按 **`r retry`**，会检查当前 profile 的全部知识库，补建缺失或未完成的向量，跳过已完整的库；全部完整时直接提示，无需请求模型。续建使用数据库里的章节，不需要原始目录。失败或按 `c` 取消后，已保存的向量批次会保留，下次按 `r` 继续；全文检索始终可用，未完成的向量不参与搜索。更新源文档仍使用 remove → init。
 
 **自己查资料：**
 

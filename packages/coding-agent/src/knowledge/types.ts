@@ -106,4 +106,14 @@ export interface KnowledgeBuildResult {
 	index: KnowledgeIndexSummary;
 	processed: number;
 	failed: number;
+	/** Independent from successful full-text publication; absent on older workers. */
+	vectorStatus?: "ready" | "unavailable" | "failed";
+}
+
+export interface KnowledgeVectorRetryResult {
+	total: number;
+	/** Indexes completed by this retry. */
+	completed: number;
+	/** Indexes already complete for the current model; no embedding request made. */
+	skipped: number;
 }

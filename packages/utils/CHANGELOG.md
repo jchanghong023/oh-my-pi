@@ -4,6 +4,7 @@
 
 ### Changed
 
+- Allow HTTP callers to choose a fixed retry delay instead of server hints or exponential backoff.
 - Retain warnings and errors by default in offline mode, and honor `OMP_LOG_LEVEL` overrides for troubleshooting without serializing filtered records.
 
 ## [18.16.0] - 2026-11-02

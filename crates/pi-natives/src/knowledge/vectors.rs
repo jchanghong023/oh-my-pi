@@ -1,5 +1,8 @@
 //! Internal asynchronous bindings for deferred knowledge imports and vectors.
-use std::sync::{Arc, atomic::Ordering};
+use std::{
+	path::PathBuf,
+	sync::{Arc, atomic::Ordering},
+};
 
 use napi::{Env, Error, Result, bindgen_prelude::*};
 use napi_derive::napi;
@@ -23,6 +26,14 @@ pub(super) struct DeferredImport {
 pub struct KnowledgeVectorImport {
 	pub token: String,
 	pub total: i64,
+}
+#[napi(object, object_from_js = false)]
+pub struct KnowledgeVectorRetry {
+	pub token:      Option<String>,
+	pub total:      i64,
+	pub completed:  i64,
+	pub dimensions: i64,
+	pub complete:   bool,
 }
 #[napi(object, object_from_js = false)]
 pub struct KnowledgeVectorSource {
@@ -112,6 +123,64 @@ impl KnowledgeSearchEngine {
 					storage.begin_vector_import(&token, &model_identity)
 				})?;
 				Ok(KnowledgeVectorImport { token, total })
+			},
+		)
+	}
+
+	#[napi(
+		ts_return_type = "Promise<KnowledgeVectorRetry>",
+		ts_args_type = "indexId: number, leasePath: string, modelIdentity?: string, signal?: \
+		                AbortSignal"
+	)]
+	pub fn begin_vector_retry(
+		&self,
+		index_id: i64,
+		lease_path: String,
+		model_identity: Option<String>,
+		signal: Option<Unknown<'_>>,
+	) -> task::MappedPromise<KnowledgeVectorRetry, KnowledgeError> {
+		let owner = Arc::clone(&self.owner);
+		let cancel = CancelToken::new(None, signal);
+		task::blocking_mapped(
+			"knowledge_vector_retry_begin",
+			cancel,
+			reject,
+			task::abort_error,
+			move |cancel| {
+				let checkpoint = owner.with_storage(&cancel, |storage| {
+					// A replacement between lease lookup and this call is not ours
+					// to modify.
+					if pi_knowledge::importer::lease_path(storage.identity())
+						!= PathBuf::from(&lease_path)
+					{
+						return Err(KnowledgeError::message(
+							"Knowledge database changed while acquiring vector retry lease",
+						));
+					}
+					storage.begin_vector_retry(index_id, model_identity.as_deref())
+				})?;
+				Ok(KnowledgeVectorRetry {
+					token:      checkpoint.token,
+					total:      checkpoint.total,
+					completed:  checkpoint.completed,
+					dimensions: checkpoint.dimensions,
+					complete:   checkpoint.complete,
+				})
+			},
+		)
+	}
+
+	#[napi(ts_return_type = "Promise<void>")]
+	pub fn finish_vector_retry(&self, token: String) -> task::MappedPromise<(), KnowledgeError> {
+		let owner = Arc::clone(&self.owner);
+		task::blocking_mapped(
+			"knowledge_vector_retry_finish",
+			(),
+			reject,
+			task::abort_error,
+			move |_| {
+				owner
+					.with_storage(&CancelToken::default(), |storage| storage.finish_vector_retry(&token))
 			},
 		)
 	}

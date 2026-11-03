@@ -2,8 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fuseRanked } from "@oh-my-pi/pi-mnemopi/core/rank-fusion";
 import {
+	FileLock,
 	KnowledgeSearchEngine,
 	knowledgeCheckIndexingCancellation,
+	knowledgeImportLeasePath,
 	knowledgeNormalizeSearchOptions,
 	knowledgePrepareToolQuery,
 	knowledgeSelectPage,
@@ -24,11 +26,15 @@ import type {
 	KnowledgeSearchWindow,
 	KnowledgeSearchWindowOptions,
 	KnowledgeServiceOptions,
+	KnowledgeVectorRetryResult,
 } from "./types";
 import {
 	KNOWLEDGE_EMBEDDING_BATCH_SIZE,
 	KNOWLEDGE_EMBEDDING_CHAR_BUDGET,
 	KNOWLEDGE_EMBEDDING_CONCURRENCY,
+	KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS,
+	KNOWLEDGE_EMBEDDING_IMPORT_RETRY_DELAY_MS,
+	KNOWLEDGE_EMBEDDING_IMPORT_TIMEOUT_MS,
 	resolveKnowledgeModels,
 	type KnowledgeEmbedding,
 	type KnowledgeReranker,
@@ -51,12 +57,14 @@ function vector32(values: readonly number[], dimensions?: number): Float32Array 
 	return Number.isFinite(norm) && norm > 0 ? vector : undefined;
 }
 
-function optionalModelFailure(stage: string): void {
-	logger.debug("knowledge.model.unavailable", {
+function optionalModelFailure(stage: string, error?: unknown): void {
+	const log = stage.startsWith("import.") ? logger.warn : logger.debug;
+	log("knowledge.model.unavailable", {
 		component: "knowledge",
 		event: "knowledge.model",
 		stage,
-		result: "offline",
+		result: "unavailable",
+		...(error === undefined ? {} : logger.diagnosticError(error)),
 	});
 }
 
@@ -213,106 +221,204 @@ export class KnowledgeIndexEngine {
 				try {
 					options.signal?.throwIfAborted();
 					let embedding: KnowledgeEmbedding | undefined;
+					let vectorStatus: KnowledgeBuildResult["vectorStatus"] = "unavailable";
 					try {
 						embedding = (
-							await resolveKnowledgeModels({ agentDir: this.#agentDir, cwd: this.cwd, reranker: false })
+							await resolveKnowledgeModels({
+								agentDir: this.#agentDir,
+								cwd: this.cwd,
+								reranker: false,
+								embeddingPurpose: "import",
+							})
 						).embedding;
-					} catch {
+					} catch (error) {
 						options.signal?.throwIfAborted();
-						optionalModelFailure("import.resolve");
+						vectorStatus = "failed";
+						optionalModelFailure("import.resolve", error);
 					}
 					if (embedding) {
+						vectorStatus = "failed";
 						let progressFailed = false;
 						try {
 							const generation = await this.#native.beginVectorImport(token, embedding.identity, options.signal);
-							logger.info("knowledge.vector-import.started", {
-								component: "knowledge",
-								event: "knowledge.vector-import.started",
-								section_count: generation.total,
-								request_concurrency: KNOWLEDGE_EMBEDDING_CONCURRENCY,
-								max_request_inputs: KNOWLEDGE_EMBEDDING_BATCH_SIZE,
-								request_char_budget: KNOWLEDGE_EMBEDDING_CHAR_BUDGET,
-								read_batch_size: VECTOR_BATCH_SIZE,
-							});
-							let completed = 0;
-							const reportProgress = (): void => {
-								try {
-									logger.withLogContext(context, () =>
-										options.onProgress?.({
-											phase: "fts",
-											total: generation.total,
-											completed,
-											failed: 0,
-											message: "Embedding sections (counted after each batch is saved)",
-										}),
-									);
-								} catch (error) {
-									progressFailed = true;
-									throw error;
-								}
-							};
-							reportProgress();
-							let after = 0;
-							let dimensions: number | undefined;
-							let complete = true;
-							for (;;) {
-								const batch = await this.#native.readVectorImportBatch(
-									token,
-									after,
-									VECTOR_BATCH_SIZE,
-									options.signal,
-								);
-								if (!batch.sections.length) break;
-								let vectors: number[][];
-								try {
-									vectors = await embedding.embed(
-										batch.sections.map(section => section.text),
-										options.signal,
-									);
-								} catch {
-									options.signal?.throwIfAborted();
-									optionalModelFailure("import.embedding");
-									complete = false;
-									break;
-								}
-								options.signal?.throwIfAborted();
-								const rows: { sectionId: number; vector: Float32Array }[] = [];
-								if (vectors.length !== batch.sections.length) complete = false;
-								for (let i = 0; complete && i < batch.sections.length; i++) {
-									const vector = vector32(vectors[i] ?? [], dimensions);
-									if (!vector) {
-										complete = false;
-										break;
-									}
-									dimensions ??= vector.length;
-									rows.push({ sectionId: batch.sections[i].sectionId, vector });
-								}
-								if (!complete) {
-									optionalModelFailure("import.vector");
-									break;
-								}
-								await this.#native.writeVectorImportBatch(token, rows, options.signal);
-								completed += rows.length;
-								reportProgress();
-								if (batch.nextSectionId === undefined) break;
-								after = batch.nextSectionId;
-							}
-							if (complete) await this.#native.publishVectorImport(token, options.signal);
+							await this.#fillVectors(
+								token,
+								embedding,
+								{ total: generation.total, completed: 0 },
+								{
+									...options,
+									onProgress: progress => {
+										try {
+											logger.withLogContext(context, () => options.onProgress?.(progress));
+										} catch (error) {
+											progressFailed = true;
+											throw error;
+										}
+									},
+								},
+							);
+							vectorStatus = "ready";
 						} catch (error) {
 							if (progressFailed) throw error;
 							options.signal?.throwIfAborted();
 							if (error instanceof Error && error.name === "AbortError") throw error;
-							// The final publication independently verifies database/build
-							// identity and removes any incomplete vector generation.
-							optionalModelFailure("import.vector-storage");
+							// Fulltext publication preserves partial vectors for an explicit retry.
+							optionalModelFailure("import.vectors", error);
 						}
 					}
 					options.signal?.throwIfAborted();
 					await this.#native.publishDeferredImport(token, options.signal);
 					published = true;
-					return { index: build.index, processed: build.processed, failed: build.failed };
+					const log = vectorStatus === "failed" ? logger.warn : logger.info;
+					log("knowledge.import.completed", {
+						component: "knowledge",
+						event: "knowledge.import.completed",
+						fulltext_status: "ready",
+						vector_status: vectorStatus,
+						section_count: build.index.sectionCount,
+					});
+					return { index: build.index, processed: build.processed, failed: build.failed, vectorStatus };
 				} finally {
 					if (!published) await this.#native.rollbackImport(token);
+				}
+			},
+		);
+	}
+
+	async #fillVectors(
+		token: string,
+		embedding: KnowledgeEmbedding,
+		checkpoint: { total: number; completed: number; dimensions?: number },
+		options: KnowledgeBuildOptions,
+	): Promise<void> {
+		logger.info("knowledge.vector-import.started", {
+			component: "knowledge",
+			event: "knowledge.vector-import.started",
+			section_count: checkpoint.total,
+			completed_section_count: checkpoint.completed,
+			request_concurrency: KNOWLEDGE_EMBEDDING_CONCURRENCY,
+			max_request_inputs: KNOWLEDGE_EMBEDDING_BATCH_SIZE,
+			request_char_budget: KNOWLEDGE_EMBEDDING_CHAR_BUDGET,
+			request_timeout_ms: KNOWLEDGE_EMBEDDING_IMPORT_TIMEOUT_MS,
+			max_attempts: KNOWLEDGE_EMBEDDING_IMPORT_MAX_ATTEMPTS,
+			retry_delay_ms: KNOWLEDGE_EMBEDDING_IMPORT_RETRY_DELAY_MS,
+			read_batch_size: VECTOR_BATCH_SIZE,
+		});
+		let completed = checkpoint.completed;
+		let dimensions = checkpoint.dimensions;
+		const reportProgress = (): void =>
+			options.onProgress?.({
+				phase: "fts",
+				total: checkpoint.total,
+				completed,
+				failed: 0,
+				message: "Embedding sections (counted after each batch is saved)",
+			});
+		reportProgress();
+		let after = 0;
+		for (;;) {
+			options.signal?.throwIfAborted();
+			const batch = await this.#native.readVectorImportBatch(token, after, VECTOR_BATCH_SIZE, options.signal);
+			if (!batch.sections.length) break;
+			const vectors = await embedding.embed(
+				batch.sections.map(section => section.text),
+				options.signal,
+			);
+			options.signal?.throwIfAborted();
+			if (vectors.length !== batch.sections.length)
+				throw new Error("Knowledge embedding returned incomplete vectors");
+			const rows: { sectionId: number; vector: Float32Array }[] = [];
+			for (let i = 0; i < batch.sections.length; i++) {
+				const vector = vector32(vectors[i] ?? [], dimensions);
+				if (!vector) throw new Error("Knowledge embedding returned invalid or incompatible vectors");
+				dimensions ??= vector.length;
+				rows.push({ sectionId: batch.sections[i].sectionId, vector });
+			}
+			await this.#native.writeVectorImportBatch(token, rows, options.signal);
+			completed += rows.length;
+			reportProgress();
+			if (batch.nextSectionId === undefined) break;
+			after = batch.nextSectionId;
+		}
+		await this.#native.publishVectorImport(token, options.signal);
+	}
+
+	/** Explicitly fill missing vectors for this profile's stored, published corpus. */
+	async retryVectors(options: KnowledgeBuildOptions = {}): Promise<KnowledgeVectorRetryResult> {
+		return logger.withLogContext(
+			{
+				operation_id: logger.getLogContext().operation_id ?? `knowledge-retry-${crypto.randomUUID()}`,
+			},
+			async () => {
+				options.signal?.throwIfAborted();
+				const leasePath = knowledgeImportLeasePath(this.databasePath);
+				const lease = FileLock.tryAcquire(leasePath);
+				try {
+					if (!lease.acquired) throw new Error("Another knowledge import or vector retry is already in progress");
+					const indexes = this.list();
+					const result: KnowledgeVectorRetryResult = { total: indexes.length, completed: 0, skipped: 0 };
+					if (!indexes.length) return result;
+					let embedding: KnowledgeEmbedding | undefined;
+					try {
+						embedding = (
+							await resolveKnowledgeModels({
+								agentDir: this.#agentDir,
+								cwd: this.cwd,
+								reranker: false,
+								embeddingPurpose: "import",
+							})
+						).embedding;
+					} catch (error) {
+						options.signal?.throwIfAborted();
+						optionalModelFailure("import.retry-resolve", error);
+					}
+					for (const [position, index] of indexes.entries()) {
+						options.signal?.throwIfAborted();
+						const generation = await this.#native.beginVectorRetry(
+							index.id,
+							leasePath,
+							embedding?.identity,
+							options.signal,
+						);
+						if (generation.complete) {
+							result.skipped++;
+							continue;
+						}
+						const token = generation.token;
+						if (!token) throw new Error("Knowledge vector retry did not return a writer token");
+						try {
+							if (!embedding)
+								throw new Error("No embedding model configured; cannot continue building knowledge vectors");
+							await this.#fillVectors(
+								token,
+								embedding,
+								{
+									total: generation.total,
+									completed: generation.completed,
+									dimensions: generation.dimensions || undefined,
+								},
+								{
+									...options,
+									onProgress: progress =>
+										options.onProgress?.({
+											...progress,
+											message: `Embedding index ${position + 1}/${indexes.length}: ${index.name}`,
+										}),
+								},
+							);
+							result.completed++;
+						} finally {
+							// Never roll back published fulltext or committed batches on cancellation.
+							await this.#native.finishVectorRetry(token);
+						}
+					}
+					logger.info("knowledge.vector-retry.completed", { component: "knowledge", ...result });
+					return result;
+				} catch (error) {
+					if (!options.signal?.aborted) optionalModelFailure("import.retry", error);
+					throw error;
+				} finally {
+					lease.release();
 				}
 			},
 		);

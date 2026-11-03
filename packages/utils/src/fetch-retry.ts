@@ -290,6 +290,8 @@ export interface FetchWithRetryOptions extends RequestInit {
 	 * `500ms * 2 ** attempt` capped at `maxDelayMs`.
 	 */
 	defaultDelayMs?: number | readonly number[] | ((attempt: number) => number);
+	/** Fixed retry delay instead of server hints or exponential backoff, capped by `maxDelayMs`. */
+	fixedDelayMs?: number;
 	/**
 	 * Optional per-attempt overlay merged into the base `RequestInit` each try.
 	 * Headers from the overlay shallow-merge over the base. Useful for auth
@@ -324,9 +326,9 @@ const DEFAULT_MAX_ATTEMPTS = 5;
 /**
  * Fetch with bounded retries and sensible defaults. Retries on any
  * `isRetryableStatus` (5xx, 408, 429) and on transient network errors. Server
- * `Retry-After`/quota hints are honoured up to `maxDelayMs`; a hint that exceeds
- * the cap returns the current response so the caller can fail fast. Aborts on
- * `init.signal` propagate as `"Request was aborted"`.
+ * `Retry-After`/quota hints are honoured up to `maxDelayMs` unless `fixedDelayMs`
+ * is set; a hint that exceeds the cap returns the current response so the caller
+ * can fail fast. Aborts on `init.signal` propagate as `"Request was aborted"`.
  *
  * The caller is responsible for inspecting `!response.ok` once the call returns.
  */
@@ -357,6 +359,7 @@ export async function fetchWithRetry(
 				maxAttempts = DEFAULT_MAX_ATTEMPTS,
 				maxDelayMs = DEFAULT_MAX_DELAY_MS,
 				defaultDelayMs,
+				fixedDelayMs,
 				prepareInit,
 				shouldRetryResponse,
 				fetch: fetchImpl = fetch,
@@ -417,7 +420,7 @@ export async function fetchWithRetry(
 						if (signal?.aborted) throw new Error("Request was aborted");
 						const wrapped = wrapNetworkError(error);
 						if (attempt + 1 >= maxAttempts) throw wrapped;
-						const delayMs = resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs);
+						const delayMs = resolveDefaultDelay(fixedDelayMs ?? defaultDelayMs, attempt, maxDelayMs);
 						logger.warn("HTTP network retry scheduled", {
 							...logFields(),
 							event: "http_request_retrying",
@@ -454,20 +457,28 @@ export async function fetchWithRetry(
 					if (attempt + 1 >= maxAttempts) return finish("attempts_exhausted");
 
 					stage = "retry_response";
-					const retryBody = await response.clone().text();
+					const retryBody = fixedDelayMs === undefined || shouldRetryResponse ? await response.clone().text() : "";
 					if (shouldRetryResponse && !(await shouldRetryResponse(response, retryBody, attempt)))
 						return finish("retry_gate");
 
-					const hint = extractRetryHint(response, retryBody);
+					const hint = fixedDelayMs === undefined ? extractRetryHint(response, retryBody) : undefined;
 					if (hint !== undefined && hint > maxDelayMs) return finish("delay_cap");
 
-					const delayMs = Math.min(hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs), maxDelayMs);
+					const delayMs = Math.min(
+						fixedDelayMs ?? hint ?? resolveDefaultDelay(defaultDelayMs, attempt, maxDelayMs),
+						maxDelayMs,
+					);
 					logger.warn("HTTP response retry scheduled", {
 						...logFields(),
 						event: "http_request_retrying",
 						result: "retrying",
 						status: response.status,
-						retry_reason: hint === undefined ? "retryable_status" : "server_hint",
+						retry_reason:
+							fixedDelayMs !== undefined
+								? "fixed_delay"
+								: hint === undefined
+									? "retryable_status"
+									: "server_hint",
 						backoff_ms: delayMs,
 						next_attempt: currentAttempt + 1,
 					});

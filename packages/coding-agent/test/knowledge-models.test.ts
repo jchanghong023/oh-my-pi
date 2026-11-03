@@ -245,7 +245,7 @@ describe("Knowledge model adapters", () => {
 		await expect(embedding!.embed(texts)).rejects.toThrow();
 	});
 
-	test("runs at most four batches and returns vectors in input order when the first batch finishes late", async () => {
+	test("runs at most eight batches and returns vectors in input order when the first batch finishes late", async () => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const releaseFirst = Promise.withResolvers<void>();
@@ -253,14 +253,14 @@ describe("Knowledge model adapters", () => {
 		const requests: string[][] = [];
 		let active = 0;
 		let peak = 0;
-		const texts = Array.from({ length: 96 }, (_, index) => `section-${index}`);
+		const texts = Array.from({ length: 160 }, (_, index) => `section-${index}`);
 		const baseUrl = server(async req => {
 			const body = (await req.json()) as { model: string; input: string[] };
 			requests.push(body.input);
 			active++;
 			peak = Math.max(peak, active);
-			if (requests.length === 4) entered.resolve();
-			if (requests.length === 6) lastStarted.resolve();
+			if (requests.length === 8) entered.resolve();
+			if (requests.length === 10) lastStarted.resolve();
 			try {
 				await release.promise;
 				if (body.input[0] === texts[0]) await releaseFirst.promise;
@@ -279,13 +279,13 @@ describe("Knowledge model adapters", () => {
 		const pending = embedding!.embed(texts);
 		try {
 			await entered.promise;
-			expect(requests).toHaveLength(4);
+			expect(requests).toHaveLength(8);
 			release.resolve();
 			await lastStarted.promise;
 			releaseFirst.resolve();
 			expect(await pending).toEqual(texts.map((_, index) => [index, 1]));
-			expect(peak).toBe(4);
-			expect(requests.map(batch => batch.length)).toEqual([16, 16, 16, 16, 16, 16]);
+			expect(peak).toBe(8);
+			expect(requests.map(batch => batch.length)).toEqual(Array(10).fill(16));
 		} finally {
 			release.resolve();
 			releaseFirst.resolve();
@@ -300,7 +300,7 @@ describe("Knowledge model adapters", () => {
 		const baseUrl = server(async req => {
 			const body = (await req.json()) as { model: string; input: string[] };
 			calls++;
-			if (calls === 4) entered.resolve();
+			if (calls === 8) entered.resolve();
 			await entered.promise;
 			if (body.input[0] === "section-0") return Response.json({ model: body.model, data: [] });
 			await release.promise;
@@ -317,7 +317,7 @@ describe("Knowledge model adapters", () => {
 			await expect(embedding!.embed(Array.from({ length: 160 }, (_, index) => `section-${index}`))).rejects.toThrow(
 				"Knowledge embedding unavailable or invalid",
 			);
-			expect(calls).toBe(4);
+			expect(calls).toBe(8);
 		} finally {
 			release.resolve();
 		}
@@ -342,7 +342,7 @@ describe("Knowledge model adapters", () => {
 		const texts = Array.from({ length: 160 }, (_, index) => `short-${index}`);
 		await expect(embedding!.embed(texts, controller.signal)).rejects.toThrow("cancelled between batches");
 		expect(calls).toBeGreaterThan(0);
-		expect(calls).toBeLessThanOrEqual(4);
+		expect(calls).toBeLessThanOrEqual(8);
 	});
 
 	test("blank model follows the existing environment fallback when an API URL is configured", async () => {

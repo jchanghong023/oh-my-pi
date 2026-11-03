@@ -77,10 +77,11 @@ export class KnowledgeHubComponent implements Component {
 	#abort?: AbortController;
 	#progress?: KnowledgeProgress;
 	#latestError?: string;
+	#notice?: string;
 	#disposed = false;
 	#disposePromise?: Promise<void>;
 	#busy?: string;
-	#build?: { name: string; startedAt: number; lastProgressAt: number };
+	#build?: { name: string; startedAt: number; lastProgressAt: number; retry?: boolean };
 	#buildTicker?: NodeJS.Timeout;
 
 	private constructor(
@@ -134,6 +135,7 @@ export class KnowledgeHubComponent implements Component {
 	}
 
 	#cancel(): void {
+		if (this.#build?.retry) this.#notice = "向量续建已取消，已保存的进度可按 r 继续。";
 		this.#abort?.abort();
 		this.#abort = undefined;
 		this.#busy = undefined;
@@ -150,6 +152,7 @@ export class KnowledgeHubComponent implements Component {
 		this.#abort = controller;
 		this.#busy = busy;
 		this.#latestError = undefined;
+		this.#notice = undefined;
 		void Promise.resolve()
 			.then(() => {
 				if (current()) return work(controller.signal, current);
@@ -181,7 +184,7 @@ export class KnowledgeHubComponent implements Component {
 		this.#buildTicker.unref();
 		this.#wizard = undefined;
 		this.#start("Indexing knowledge index…", async (signal, current) => {
-			await this.service.init(result.directory, result.name, {
+			const build = await this.service.init(result.directory, result.name, {
 				signal,
 				onProgress: progress => {
 					if (!current()) return;
@@ -191,6 +194,38 @@ export class KnowledgeHubComponent implements Component {
 				},
 			});
 			if (current()) await this.#refresh(signal, current);
+			if (current() && build.vectorStatus === "failed") {
+				this.#latestError = "全文索引已保存；向量构建失败，按 r 继续。当前仅可全文检索。";
+			}
+		});
+	}
+
+	#retry(): void {
+		if (this.#disposed || this.#abort) return;
+		const now = performance.now();
+		this.#build = { name: "向量续建", startedAt: now, lastProgressAt: now, retry: true };
+		this.#buildTicker = setInterval(() => this.tui.requestRender(), 1000);
+		this.#buildTicker.unref();
+		this.#start("Retrying knowledge vectors…", async (signal, current) => {
+			try {
+				const result = await this.service.retryVectors({
+					signal,
+					onProgress: progress => {
+						if (!current()) return;
+						this.#progress = progress;
+						if (this.#build) this.#build.lastProgressAt = performance.now();
+						this.tui.requestRender();
+					},
+				});
+				if (!current()) return;
+				this.#notice = !result.total
+					? "当前没有知识库，按 n 新建。"
+					: !result.completed
+						? "所有知识库的向量均已初始化完成，无需重试。"
+						: `向量续建完成：补齐 ${result.completed} 个库，跳过 ${result.skipped} 个已完成的库。`;
+			} catch (error) {
+				if (current()) this.#latestError = `向量续建未完成，已保存的进度可按 r 继续。${errorLine(error)}`;
+			}
 		});
 	}
 
@@ -337,7 +372,8 @@ export class KnowledgeHubComponent implements Component {
 						this.#wizard = undefined;
 					},
 				);
-		} else if ((data === "/" || data === "g") && this.#selectedIndex()) {
+		} else if (data === "r" && this.#mode === "list") this.#retry();
+		else if ((data === "/" || data === "g") && this.#selectedIndex()) {
 			// A continuation belongs to the old view, not the newly opened input.
 			this.#cancel();
 			this.#searchOrigin = this.#mode === "detail" ? "detail" : "list";
@@ -362,7 +398,7 @@ export class KnowledgeHubComponent implements Component {
 				"dim",
 				this.#mode === "detail"
 					? `${this.#showingHit ? "↑↓ PgUp/PgDn Home/End scroll  b back to results" : "↑↓ select  Enter open"}${this.#nextCursor ? "  n next page" : ""}  c cancel  Esc indexes`
-					: "n new  / search  g grep  d delete  c cancel  Esc close",
+					: "n new  / search  g grep  r retry  d delete  c cancel  Esc close",
 			),
 		];
 		const body: string[] = [];
@@ -408,7 +444,7 @@ export class KnowledgeHubComponent implements Component {
 			);
 			if (progress.currentPath) status.push(sanitizeTerminalLine(progress.currentPath));
 		} else if (this.#build) {
-			status.push("Discovering Markdown files…");
+			status.push(this.#build.retry ? "Checking knowledge vectors…" : "Discovering Markdown files…");
 		}
 		if (this.#build) {
 			const sinceProgress = Math.floor((performance.now() - this.#build.lastProgressAt) / 1000) * 1000;
@@ -417,6 +453,7 @@ export class KnowledgeHubComponent implements Component {
 			);
 		}
 		if (this.#latestError) status.push(theme.fg("error", sanitizeTerminalLine(this.#latestError)));
+		if (this.#notice) status.push(theme.fg("dim", sanitizeTerminalLine(this.#notice)));
 
 		// Reserve an actionable row before fitting chrome, including on very short terminals.
 		const minimumBody = indexList || hitList || hitDetail || body.length > 0 ? 1 : 0;

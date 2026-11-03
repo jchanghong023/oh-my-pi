@@ -6,6 +6,7 @@ import type {
 	KnowledgeSearchWindow,
 	KnowledgeSearchWindowOptions,
 	KnowledgeServiceOptions,
+	KnowledgeVectorRetryResult,
 } from "./types";
 
 /** Only correlation identifiers cross the process boundary, never arbitrary logger fields. */
@@ -19,6 +20,7 @@ export type KnowledgeWorkerCommand =
 	| { type: "configure"; options: KnowledgeServiceOptions; cursorPath: string; company?: CompanyProcessSnapshot }
 	| { type: "list" }
 	| { type: "init"; directory: string; name: string }
+	| { type: "retryVectors" }
 	| { type: "remove"; name: string }
 	| { type: "searchWindow"; query: string; options: KnowledgeSearchWindowOptions };
 
@@ -30,6 +32,7 @@ export interface KnowledgeWorkerResults {
 	configure: undefined;
 	list: KnowledgeIndexSummary[];
 	init: KnowledgeBuildResult;
+	retryVectors: KnowledgeVectorRetryResult;
 	remove: undefined;
 	searchWindow: KnowledgeSearchWindow;
 }
