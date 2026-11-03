@@ -63,6 +63,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
 - 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
+- 本地开发分发额外提供 `bun run local`（Windows 本机编译并安装）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行安全的 `git pull --ff-only`，再并行编译并上传二进制到用户指定的已有 CNB Release）；构建复用各平台本地缓存，不向 CNB 推送源码，覆盖已有同名附件须明确授权。CNB 本地分发不替代上述 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
 - 仓库只启用 `.github/workflows/ci.yml`；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
 - 构建发布 CI 使用上游 Bazel cache 配置 action；没有集群远程缓存凭据时仍执行构建，不依赖 fork 专用的 GitHub Bazel 磁盘或依赖缓存。

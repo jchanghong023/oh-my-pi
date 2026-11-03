@@ -26,6 +26,12 @@
 
 以下材料仅供查找实现和验证入口，不构成需求基线，也不表示本次已运行或通过。
 
+### 本地构建与 CNB 分发
+
+- Windows 执行 `bun run local` 构建并安装到 `%LOCALAPPDATA%\omp`，可用 `PI_INSTALL_DIR` 指定安装目录。
+- Windows 执行 `bun run cnb`，按提示输入 CNB 仓库和已有 Release 标签；脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行 `git pull --ff-only`，再并行构建并上传二进制，复用本机依赖及编译缓存。两端工作区须干净且源码版本一致；不向 CNB 推送源码，同名附件覆盖前需要确认。
+- CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装 Bun、Rust、Bazel 及项目构建依赖。该分发不改变 `omp update` 或安装器的 GitHub 来源。
+
 ### Fork 门禁与 Dev TUI 分片
 
 - 三层门禁直接运行既有 Bun／Cargo 原语，保留源码快照、预算和失败汇总；fastcheck 不运行测试，保留原有工具和增量编译缓存。slowtest 运行本机 fulltest 及适用的 WSL fulltest，各端独立选测并保留固定提交同步；不缓存门禁或完整命令结果，也不引入自建结果缓存框架。
