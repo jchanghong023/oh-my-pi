@@ -15,6 +15,7 @@ concurrency:
 jobs:
    sync:
       if: github.repository == 'jchanghong023/oh-my-pi'
+      environment: CNB_TOKEN
       runs-on: ubuntu-24.04
       timeout-minutes: 20
       steps:
@@ -29,7 +30,7 @@ jobs:
               set -euo pipefail
 
               if [[ -z "$CNB_TOKEN" ]]; then
-                echo "::error::Add the CNB_TOKEN repository secret with code read/write access to jchanghong/oh-my-pi."
+                echo "::error::Set the CNB_TOKEN secret in the CNB_TOKEN environment with code read/write access to jchanghong/oh-my-pi."
                 exit 1
               fi
 

@@ -163,7 +163,7 @@ OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做�
 #### Scenario: 认证和失败
 
 - **WHEN** 访问源仓库及 CNB 目标
-- **THEN** GitHub 令牌仅授予 `contents: read`，CNB 使用用户名 `cnb` 与仓库 Secret `CNB_TOKEN`；令牌须具有目标仓库代码读写权限，不写入仓库、远程 URL 或日志
+- **THEN** GitHub 令牌仅授予 `contents: read`，CNB 使用用户名 `cnb` 与 GitHub 环境 `CNB_TOKEN` 中的同名 Secret；同步 job MUST 显式绑定此环境并遵守其保护规则；令牌须具有目标仓库代码读写权限，不写入仓库、远程 URL 或日志
 - **AND** 缺少令牌、LFS 传输失败或 Git 推送失败时工作流失败并保留错误，不将未同步报告为成功；CNB 分支保护仍须允许所需强制更新
 
 ### Requirement: 安装器诊断日志
