@@ -1348,6 +1348,120 @@ mod tests {
 	}
 
 	#[test]
+	fn vector_retry_repairs_corrupt_complete_and_partial_checkpoints() {
+		for complete in [true, false] {
+			let fixture = Fixture::new();
+			let storage = fixture.open();
+			let build = storage.create("__building__retry", "/source").unwrap();
+			storage
+				.commit_document(&build, &document(), &|| Ok(()))
+				.unwrap();
+			let mut second = document();
+			second.relative_path = "second.md".into();
+			storage
+				.commit_document(&build, &second, &|| Ok(()))
+				.unwrap();
+			storage.prepare_deferred(&build).unwrap();
+			let token = build.token();
+			storage.begin_vector_import(&token, "model").unwrap();
+			let sources = storage.read_vector_import_batch(&token, 0, 100).unwrap();
+			assert_eq!(sources.len(), 2);
+			let rows = sources
+				.iter()
+				.map(|source| crate::vectors::VectorRow {
+					section_id: source.section_id,
+					vector:     vec![3.0, 4.0],
+				})
+				.collect::<Vec<_>>();
+			storage.write_vector_import_batch(&token, &rows).unwrap();
+			if complete {
+				storage.publish_vector_import(&token, &|| Ok(())).unwrap();
+			}
+			storage.publish_deferred_import(&token, "retry").unwrap();
+			storage
+				.connection
+				.execute("UPDATE wiki_section_vectors SET vector=x'0000803f' WHERE section_id=?", [
+					sources[0].section_id,
+				])
+				.unwrap();
+
+			let id = storage.get("retry").unwrap().unwrap().id;
+			let checks = std::cell::Cell::new(0);
+			assert!(
+				storage
+					.begin_vector_retry(id, Some("model"), &|| {
+						checks.set(checks.get() + 1);
+						if checks.get() == 4 {
+							return Err(KnowledgeError::message("cancelled"));
+						}
+						Ok(())
+					})
+					.is_err()
+			);
+			let count: i64 = storage
+				.connection
+				.query_row("SELECT count(*) FROM wiki_section_vectors WHERE index_id=?", [id], |row| {
+					row.get(0)
+				})
+				.unwrap();
+			assert_eq!(count, 2);
+			let retry = storage
+				.begin_vector_retry(id, Some("model"), &|| Ok(()))
+				.unwrap();
+			assert!(!retry.complete);
+			assert_eq!(retry.completed, 1);
+			let token = retry.token.unwrap();
+			let missing = storage.read_vector_import_batch(&token, 0, 100).unwrap();
+			assert_eq!(missing.len(), 1);
+			assert_eq!(missing[0].section_id, sources[0].section_id);
+			storage
+				.write_vector_import_batch(&token, &rows[..1])
+				.unwrap();
+			storage.publish_vector_import(&token, &|| Ok(())).unwrap();
+			storage.finish_vector_retry(&token).unwrap();
+			let matrix = crate::vectors::read_vector_matrix(
+				&storage.connection,
+				"model",
+				2,
+				Some("retry"),
+				&|| Ok(()),
+			)
+			.unwrap();
+			assert_eq!(matrix.section_ids.len(), 2);
+			if complete {
+				storage
+					.connection
+					.execute("UPDATE wiki_vector_generations SET dimensions=3 WHERE index_id=?", [id])
+					.unwrap();
+				let retry = storage
+					.begin_vector_retry(id, Some("model"), &|| Ok(()))
+					.unwrap();
+				assert_eq!(retry.completed, 0);
+				assert_eq!(retry.dimensions, 0);
+				let token = retry.token.unwrap();
+				storage.write_vector_import_batch(&token, &rows).unwrap();
+				storage.publish_vector_import(&token, &|| Ok(())).unwrap();
+				storage.finish_vector_retry(&token).unwrap();
+				let matrix = crate::vectors::read_vector_matrix(
+					&storage.connection,
+					"model",
+					2,
+					Some("retry"),
+					&|| Ok(()),
+				)
+				.unwrap();
+				assert_eq!(
+					matrix.section_ids,
+					sources
+						.iter()
+						.map(|source| source.section_id)
+						.collect::<Vec<_>>(),
+				);
+			}
+		}
+	}
+
+	#[test]
 	fn abandoned_deferred_import_never_becomes_visible_and_is_reclaimed() {
 		let fixture = Fixture::new();
 		let storage = fixture.open();

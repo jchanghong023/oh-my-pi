@@ -43,6 +43,21 @@ fn invalid() -> KnowledgeError {
 	KnowledgeError::message("Documentation vector generation is no longer current")
 }
 
+fn valid_vector(bytes: &[u8], dimensions: usize) -> bool {
+	if dimensions == 0 || Some(bytes.len()) != dimensions.checked_mul(4) {
+		return false;
+	}
+	let mut norm = 0.0f64;
+	for chunk in bytes.as_chunks::<4>().0 {
+		let value = f32::from_le_bytes(*chunk);
+		if !value.is_finite() {
+			return false;
+		}
+		norm += f64::from(value).powi(2);
+	}
+	norm.is_finite() && norm != 0.0
+}
+
 impl Storage {
 	fn vector_owner(&self, token: &str) -> CoreResult<i64> {
 		let (database, owner): (String, String) =
@@ -93,7 +108,12 @@ impl Storage {
 	/// Resume only compatible checkpoints belonging to unchanged published
 	/// sections. The caller holds the physical database's import lease
 	/// throughout the retry.
-	pub fn begin_vector_retry(&self, id: i64, model: Option<&str>) -> CoreResult<VectorRetry> {
+	pub fn begin_vector_retry(
+		&self,
+		id: i64,
+		model: Option<&str>,
+		check: &dyn Fn() -> CoreResult<()>,
+	) -> CoreResult<VectorRetry> {
 		self.transaction(|storage| {
 			let visible: bool = storage.connection.query_row(
 				"SELECT EXISTS(SELECT 1 FROM doc_indexes WHERE id=? AND name NOT GLOB '__building__*')",
@@ -127,13 +147,39 @@ impl Storage {
 			let mut dimensions = generation
 				.as_ref()
 				.map_or(0, |(_, dimensions, _)| *dimensions);
+			// A stored row may have been damaged independently of the source
+			// triggers. Keep valid checkpoint rows, but never skip a damaged
+			// complete generation or repeatedly attempt to publish a bad row.
+			let mut invalid_rows = Vec::new();
+			if compatible && dimensions > 0 {
+				let mut statement = storage.connection.prepare(
+					"SELECT v.section_id,v.vector,s.id FROM wiki_section_vectors v LEFT JOIN sections \
+					 s ON s.id=v.section_id AND s.index_id=v.index_id WHERE v.index_id=?",
+				)?;
+				let mut rows = statement.query([id])?;
+				while let Some(row) = rows.next()? {
+					check()?;
+					let section_id: i64 = row.get(0)?;
+					let belongs = !matches!(row.get_ref(2)?, rusqlite::types::ValueRef::Null);
+					let valid = match row.get_ref(1)? {
+						rusqlite::types::ValueRef::Blob(bytes) => usize::try_from(dimensions)
+							.is_ok_and(|dimensions| valid_vector(bytes, dimensions)),
+						_ => false,
+					};
+					if !belongs || !valid {
+						invalid_rows.push(section_id);
+					}
+				}
+			}
 			if compatible
 				&& generation
 					.as_ref()
 					.is_some_and(|(_, _, complete)| *complete)
 				&& completed == total
+				&& invalid_rows.is_empty()
 				&& (total == 0 || dimensions > 0)
 			{
+				check()?;
 				check_file_identity(Path::new(&storage.path), &storage.identity)?;
 				return Ok(VectorRetry { token: None, total, completed, dimensions, complete: true });
 			}
@@ -143,13 +189,9 @@ impl Storage {
 				)
 			})?;
 			// Source mutations already invalidate generations via the storage
-			// triggers. Never mix model spaces or reuse a broken
-			// completed generation.
+			// triggers. Never mix incompatible model spaces.
 			if !compatible
-				|| generation
-					.as_ref()
-					.is_some_and(|(_, _, complete)| *complete)
-				|| completed > total
+				|| (completed > total && invalid_rows.is_empty())
 				|| dimensions < 0
 				|| (completed > 0 && dimensions == 0)
 			{
@@ -160,6 +202,18 @@ impl Storage {
 					.connection
 					.execute("DELETE FROM wiki_vector_generations WHERE index_id=?", [id])?;
 				completed = 0;
+				dimensions = 0;
+			} else {
+				for section_id in invalid_rows {
+					check()?;
+					storage.connection.execute(
+						"DELETE FROM wiki_section_vectors WHERE index_id=? AND section_id=?",
+						params![id, section_id],
+					)?;
+					completed -= 1;
+				}
+			}
+			if completed == 0 {
 				dimensions = 0;
 			}
 			let owner: String =
@@ -174,9 +228,11 @@ impl Storage {
 			)?;
 			storage.connection.execute(
 				"INSERT INTO wiki_vector_generations(index_id,token,model,dimensions) VALUES(?,?,?,?) \
-				 ON CONFLICT(index_id) DO UPDATE SET token=excluded.token,complete=0",
+				 ON CONFLICT(index_id) DO UPDATE SET \
+				 token=excluded.token,dimensions=excluded.dimensions,complete=0",
 				params![id, token, model, dimensions],
 			)?;
+			check()?;
 			check_file_identity(Path::new(&storage.path), &storage.identity)?;
 			Ok(VectorRetry { token: Some(token), total, completed, dimensions, complete: false })
 		})
@@ -311,18 +367,8 @@ impl Storage {
 				check()?;
 				let bytes: Option<Vec<u8>> = row.get(1).map_err(|_| invalid())?;
 				let bytes = bytes.ok_or_else(invalid)?;
-				if bytes.len() != (dimensions as usize).checked_mul(4).ok_or_else(invalid)? {
-					return Err(invalid());
-				}
-				let mut norm = 0.0f64;
-				for chunk in bytes.as_chunks::<4>().0 {
-					let value = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-					if !value.is_finite() {
-						return Err(invalid());
-					}
-					norm += f64::from(value).powi(2);
-				}
-				if !norm.is_finite() || norm == 0.0 {
+				if !usize::try_from(dimensions).is_ok_and(|dimensions| valid_vector(&bytes, dimensions))
+				{
 					return Err(invalid());
 				}
 			}

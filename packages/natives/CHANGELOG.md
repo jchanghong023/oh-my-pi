@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- Repair malformed Knowledge vector checkpoints during explicit retry instead of skipping them or repeatedly failing publication; valid saved vectors remain reusable.
 - Publish Wiki indexes under their validated names and keep ordinary result pages within their target when continuation cursors are present.
 - Attempt immediate cleanup of old native addons after successful replacement without failing installation when cleanup is denied.
 - Report invalid `local -p` operands with the correct command name and preserve Windows timeout cancellation fallback exit statuses.

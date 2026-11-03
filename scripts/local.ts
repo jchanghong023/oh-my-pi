@@ -26,7 +26,8 @@ async function checkExistingTarget(target: string): Promise<void> {
 
 async function main(): Promise<void> {
 	if (process.platform !== "win32") throw new Error("Local installation is supported only on Windows.");
-	const installDir = process.env.PI_INSTALL_DIR || (process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "omp"));
+	const installDir =
+		process.env.PI_INSTALL_DIR || (process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, "omp"));
 	if (!installDir) throw new Error("Set PI_INSTALL_DIR or LOCALAPPDATA to choose an install directory.");
 	const target = path.resolve(installDir, "omp.exe");
 	const candidate = path.join(path.dirname(target), `.omp.local.${randomUUID()}.exe`);
@@ -60,7 +61,17 @@ async function main(): Promise<void> {
 		delete buildEnv.BUN_COMPILE_EXECUTABLE_PATH;
 		delete buildEnv.ZCODE_ARTIFACT_ROOT;
 		console.log("Building the native addon and local executable...");
-		await run([process.execPath, "scripts/bazel-natives.ts", "host", "--dest", "packages/natives/native", "--skip-load-probe"], buildEnv);
+		await run(
+			[
+				process.execPath,
+				"scripts/bazel-natives.ts",
+				"host",
+				"--dest",
+				"packages/natives/native",
+				"--skip-load-probe",
+			],
+			buildEnv,
+		);
 		await run([process.execPath, "packages/coding-agent/scripts/build-binary.ts"], buildEnv);
 
 		await fs.mkdir(path.dirname(target), { recursive: true });
@@ -94,7 +105,9 @@ async function main(): Promise<void> {
 		}
 		candidateCreated = false;
 		if (renamedAside) {
-			await fs.unlink(previous).catch(error => console.warn(`Could not remove previous executable ${previous}: ${error}`));
+			await fs
+				.unlink(previous)
+				.catch(error => console.warn(`Could not remove previous executable ${previous}: ${error}`));
 		}
 		console.log(`Installed omp to ${target}`);
 	} finally {

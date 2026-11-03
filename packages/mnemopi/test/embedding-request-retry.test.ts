@@ -3,7 +3,20 @@ import { scheduler } from "node:timers/promises";
 import { embedConfiguredApi } from "@oh-my-pi/pi-mnemopi/core/embeddings";
 import { withMnemopiRuntimeOptions } from "@oh-my-pi/pi-mnemopi/core/runtime-options";
 
-afterEach(() => vi.restoreAllMocks());
+const spies: Array<{ mockRestore(): void }> = [];
+afterEach(() => {
+	for (const spy of spies.splice(0).reverse()) spy.mockRestore();
+});
+
+function track<T extends { mockRestore(): void }>(spy: T): T {
+	spies.push(spy);
+	return spy;
+}
+
+function mockFetch(implementation: (...args: Parameters<typeof fetch>) => Promise<Response>) {
+	const preconnect = globalThis.fetch.preconnect;
+	return track(vi.spyOn(globalThis, "fetch")).mockImplementation(Object.assign(implementation, { preconnect }));
+}
 
 function embed(signal: AbortSignal) {
 	return withMnemopiRuntimeOptions(
@@ -31,12 +44,12 @@ function reply(): Response {
 
 function captureTimeouts(): AbortController[] {
 	const timers: AbortController[] = [];
-	vi.spyOn(AbortSignal, "timeout").mockImplementation(() => {
+	track(vi.spyOn(AbortSignal, "timeout")).mockImplementation(() => {
 		const controller = new AbortController();
 		timers.push(controller);
 		return controller.signal;
 	});
-	vi.spyOn(scheduler, "wait").mockImplementation(async () => {});
+	track(vi.spyOn(scheduler, "wait")).mockImplementation(async () => {});
 	return timers;
 }
 
@@ -45,7 +58,7 @@ describe("embedding request timeout recovery", () => {
 		const timers = captureTimeouts();
 		const caller = new AbortController();
 		let calls = 0;
-		vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		mockFetch(async () => {
 			if (++calls === 1) {
 				timers[0]!.abort(new DOMException("request deadline", "TimeoutError"));
 				throw timers[0]!.signal.reason;
@@ -63,14 +76,15 @@ describe("embedding request timeout recovery", () => {
 	it("retries a timeout while reading the body after successful response headers", async () => {
 		const timers = captureTimeouts();
 		let calls = 0;
-		vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		mockFetch(async (_input, init) => {
 			if (++calls !== 1) return reply();
+			const signal = init?.signal;
+			expect(signal).toBeDefined();
 			return new Response(
 				new ReadableStream({
 					start(controller) {
-						const error = new DOMException("response deadline", "TimeoutError");
-						timers[0]!.abort(error);
-						controller.error(error);
+						signal!.addEventListener("abort", () => controller.error(signal!.reason), { once: true });
+						timers[0]!.abort(new DOMException("response deadline", "TimeoutError"));
 					},
 				}),
 			);
@@ -80,10 +94,50 @@ describe("embedding request timeout recovery", () => {
 		expect(calls).toBe(2);
 	});
 
+	it("retries a stalled HTTP response body after the per-attempt deadline", async () => {
+		let calls = 0;
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				if (++calls > 1) return reply();
+				return new Response(
+					new ReadableStream({
+						start(controller) {
+							controller.enqueue(new TextEncoder().encode("{"));
+						},
+					}),
+				);
+			},
+		});
+		try {
+			const result = await withMnemopiRuntimeOptions(
+				{
+					embeddings: {
+						disabled: false,
+						model: "fixture-embedding",
+						apiUrl: server.url.toString(),
+						apiKey: "",
+						strictApi: true,
+						requestTimeoutMs: 500,
+						requestMaxAttempts: 2,
+						requestRetryDelayMs: 0,
+						retryTimeouts: true,
+					},
+				},
+				() => embedConfiguredApi(["section"]),
+			);
+			expect(result).toEqual([new Float32Array([1, 2])]);
+			expect(calls).toBe(2);
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	it("stops repeated timeouts at ten attempts with fixed ten-second waits", async () => {
 		const timers = captureTimeouts();
 		const caller = new AbortController();
-		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		const fetch = mockFetch(async () => {
 			const timer = timers.at(-1)!;
 			timer.abort(new DOMException("request deadline", "TimeoutError"));
 			throw timer.signal.reason;
@@ -99,7 +153,7 @@ describe("embedding request timeout recovery", () => {
 	it("uses the fixed delay for a rate limit even when the server suggests a longer wait", async () => {
 		captureTimeouts();
 		const caller = new AbortController();
-		const fetch = vi.spyOn(globalThis, "fetch")
+		const fetch = track(vi.spyOn(globalThis, "fetch"))
 			.mockResolvedValueOnce(new Response("busy", { status: 429, headers: { "Retry-After": "120" } }))
 			.mockResolvedValue(reply());
 
@@ -112,7 +166,7 @@ describe("embedding request timeout recovery", () => {
 	it("does not turn caller cancellation into a retry", async () => {
 		captureTimeouts();
 		const caller = new AbortController();
-		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+		const fetch = mockFetch(async () => {
 			caller.abort(new DOMException("cancelled", "AbortError"));
 			throw caller.signal.reason;
 		});
@@ -122,9 +176,22 @@ describe("embedding request timeout recovery", () => {
 		expect(scheduler.wait).not.toHaveBeenCalled();
 	});
 
+	it("stops immediately when cancelled during a retry wait", async () => {
+		const caller = new AbortController();
+		const wait = scheduler.wait.bind(scheduler);
+		track(vi.spyOn(scheduler, "wait")).mockImplementation((delay, options) => {
+			caller.abort(new DOMException("cancelled", "AbortError"));
+			return wait(delay, options);
+		});
+		const fetch = track(vi.spyOn(globalThis, "fetch")).mockResolvedValue(new Response("busy", { status: 503 }));
+
+		await expect(embed(caller.signal)).rejects.toMatchObject({ name: "AbortError" });
+		expect(fetch).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not retry a successful HTTP response with invalid vectors", async () => {
 		captureTimeouts();
-		const fetch = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+		const fetch = mockFetch(async () =>
 			Response.json({ model: "fixture-embedding", data: [{ index: 0, embedding: [0, 0] }] }),
 		);
 

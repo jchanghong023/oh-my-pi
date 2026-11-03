@@ -1,6 +1,6 @@
 //! Internal asynchronous bindings for deferred knowledge imports and vectors.
 use std::{
-	path::PathBuf,
+	path::Path,
 	sync::{Arc, atomic::Ordering},
 };
 
@@ -150,14 +150,14 @@ impl KnowledgeSearchEngine {
 				let checkpoint = owner.with_storage(&cancel, |storage| {
 					// A replacement between lease lookup and this call is not ours
 					// to modify.
-					if pi_knowledge::importer::lease_path(storage.identity())
-						!= PathBuf::from(&lease_path)
-					{
+					if pi_knowledge::importer::lease_path(storage.identity()) != Path::new(&lease_path) {
 						return Err(KnowledgeError::message(
 							"Knowledge database changed while acquiring vector retry lease",
 						));
 					}
-					storage.begin_vector_retry(index_id, model_identity.as_deref())
+					storage.begin_vector_retry(index_id, model_identity.as_deref(), &|| {
+						owner.check_import(&cancel)
+					})
 				})?;
 				Ok(KnowledgeVectorRetry {
 					token:      checkpoint.token,
