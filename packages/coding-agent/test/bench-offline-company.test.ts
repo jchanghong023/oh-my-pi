@@ -223,20 +223,20 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 		const env = await isolatedEnv(true, true);
 		const configDir = path.join(env.HOME!, ".omp");
 		await fs.mkdir(configDir, { recursive: true });
-		const config = "modelRoles:\n  smol: company/GLM-5.2-public\n  tiny: openai/gpt-4o-mini\n";
+		const config = "modelRoles:\n  smol: company/GLM-5.2-public\n  tiny: deepseek/deepseek-v4-flash\n";
 		const configPath = path.join(configDir, "config.yml");
 		await fs.writeFile(configPath, config);
 		env.PI_CONFIG_FILES = configPath;
 		const probe = await probeBenchRuntime(env, true);
 		expect(probe.smolSelector).toBe("company/GLM-5.2-public");
 		expect(probe.inheritedSmolSelector).toBe("company/GLM-5.2-public");
-		expect(probe.tinySelector).toBe("openai/gpt-4o-mini");
+		expect(probe.tinySelector).toBe("deepseek/deepseek-v4-flash");
 		for (const roles of [probe.subsequentRoles, probe.ordinaryInheritedRoles]) {
 			expect(roles).toEqual({
 				smolRole: "company/GLM-5.2-public",
-				tinyRole: "openai/gpt-4o-mini",
+				tinyRole: "deepseek/deepseek-v4-flash",
 				smolSelector: null,
-				tinySelector: "openai/gpt-4o-mini",
+				tinySelector: "deepseek/deepseek-v4-flash",
 			});
 		}
 		expect(await fs.readFile(configPath, "utf8")).toBe(config);
@@ -244,7 +244,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 
 	it("preserves host role defaults outside each offline runtime", async () => {
 		const env = await isolatedEnv(true, true);
-		const publicModel = "openai/gpt-4o-mini";
+		const publicModel = "deepseek/deepseek-v4-flash";
 		const probe = await probeBenchRuntime(env, true, { smol: publicModel, tiny: publicModel });
 		expect(probe.smolSelector).toBe("company/Qwen3.8-27B");
 		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");
