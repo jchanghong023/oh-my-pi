@@ -65,7 +65,7 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
 - 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端 Git 提交一致，再并行编译两平台二进制，并行上传到已有 CNB Release；默认目标为 `jchanghong/bin` 仓库的 `omp` 标签，可用 `--repo`、`--tag` 显式覆盖，无需交互输入）；构建复用各平台本地缓存。执行 `bun run cnb` 即直接覆盖 `omp-windows-x64.exe` 和 `omp-linux-x64` 两个同名附件，不另行确认，也不修改其他附件；移除冗余的 `--overwrite` 参数。`bun run cnb` 分发命令只上传这两个二进制，不打包、上传或推送源码。该分发不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
 - `local` 和 `cnb` 的目标是最快构建交付、便于手动验证：MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验。Bazel 使用已提交的模块锁且不得在发布构建中改写它，过期锁文件通过生成命令更新后提交同步；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
-- 仓库启用 `.github/workflows/ci.yml`（手动构建发布）与 `.github/workflows/sync-cnb.yml`（按用户授权每 5 分钟及手动同步源码，见「CNB 源码同步」）；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
+- 仓库仅启用 `.github/workflows/ci.yml`（手动构建发布），不提供 CNB 源码同步工作流；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
 - 构建发布 CI 及 `bun run local`、`bun run cnb` 安装 native 产物时显式跳过宿主 addon 加载探测（`--skip-load-probe`），仍写入构建所需的版本戳；普通 `bun run build:native` 的默认加载探测行为不变。
 - 构建发布 CI 使用上游 Bazel cache 配置 action；没有集群远程缓存凭据时仍执行构建，不依赖 fork 专用的 GitHub Bazel 磁盘或依赖缓存。
 - 二进制必须携带 fork 版本和更新仓库信息。
@@ -148,32 +148,6 @@ OMP MUST 只允许手动触发发布工作流，并对并发与令牌权限做�
 
 - **WHEN** 查看工作流定义或以非手动方式尝试触发发布
 - **THEN** 只有手动派发会启动，并发组按 `<工作流名>-<ref>` 排队且不取消运行，写权限仅存在于发布 job
-
-### Requirement: CNB 源码同步
-
-仓库 MUST 通过独立的 `.github/workflows/sync-cnb.yml` 将 `jchanghong023/oh-my-pi` 的 Git 分支、标签及 Git LFS 对象单向同步到 `https://cnb.cool/jchanghong/oh-my-pi`。
-
-#### Scenario: 定时和手动触发
-
-- **WHEN** GitHub Actions 调度 `*/5 * * * *`，或用户执行 `workflow_dispatch`
-- **THEN** 同步全部 GitHub 分支与标签，以 GitHub 为准强制更新 CNB 同名引用，并先上传所需 Git LFS 对象；不推送 `refs/pull/*`，不删除 CNB 独有分支或标签
-- **AND** 使用固定并发组串行执行，不取消进行中的同步；定时触发受 GitHub 调度延迟和停用规则约束，不承诺严格五分钟内完成
-- **AND** 该工作流仅在 `jchanghong023/oh-my-pi` 启用，不构建、不测试、不创建 Release，不改变现有发布 CI 的手动触发约束
-
-#### Scenario: 增量同步与进度
-
-- **WHEN** 执行源码同步
-- **THEN** 复用 Git 裸仓库与 LFS 对象缓存，增量获取缺少的对象；缓存缺失时恢复为完整历史同步，不裁剪分支、标签或历史 LFS 对象；清理源端已删除的本地缓存引用，但保留 CNB 独有引用
-- **AND** 以 CNB 实际引用比较结果确定变化，仅对变化分支和标签获取完整 LFS 历史；无变化时跳过 LFS 扫描、传输及正式 Git 推送
-- **AND** LFS 获取成功后，从对象缓存枚举并去重有效 OID，通过 `git lfs push --object-id --stdin` 上传，不再为每个引用重复遍历历史；没有 LFS 对象时允许空清单，获取失败不得继续发布 Git 引用
-- **AND** 仅在镜像变化或存在待同步引用时保存新缓存；LFS 或 Git 推送失败仍可保存已获取对象，后续执行重新比较 CNB 并重试，不因缓存引用已更新而漏同步；缓存不包含令牌值
-- **AND** Git fetch/push 启用 `--verbose --progress`，LFS 强制输出传输进度，准备、获取、比较和上传阶段分别标记；不启用可能暴露认证信息的 trace
-
-#### Scenario: 认证和失败
-
-- **WHEN** 访问源仓库及 CNB 目标
-- **THEN** GitHub 令牌仅授予 `contents: read`，CNB 使用用户名 `cnb` 与 GitHub 环境 `CNB_TOKEN` 中的同名 Secret；同步 job MUST 显式绑定此环境并遵守其保护规则；令牌须具有目标仓库代码读写权限，不写入仓库、远程 URL 或日志
-- **AND** 缺少令牌、LFS 传输失败或 Git 推送失败时工作流失败并保留错误，不将未同步报告为成功；CNB 分支保护仍须允许所需强制更新
 
 ### Requirement: 安装器诊断日志
 
