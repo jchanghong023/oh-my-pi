@@ -2,7 +2,15 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { IpcConnection, Process } from "@oh-my-pi/pi-natives";
-import { getGlobalDaemonRuntimeDir, isEexist, isEnoent, logger, postmortem, toError } from "@oh-my-pi/pi-utils";
+import {
+	getGlobalDaemonRuntimeDir,
+	getNativesDir,
+	isEexist,
+	isEnoent,
+	logger,
+	postmortem,
+	toError,
+} from "@oh-my-pi/pi-utils";
 import { resolveWorkerSpawnCmd, workerEnvFromParent } from "../subprocess/worker-client";
 import { canonicalProjectDir, daemonBrokerEndpoint, daemonRuntimeDir } from "./paths";
 import { readLiveDaemonBrokerPid } from "./presence";
@@ -315,9 +323,9 @@ class SocketDaemonClient implements DaemonBrokerClient {
 		const overlay: Record<string, string> = {
 			[DAEMON_PROJECT_DIR_ENV]: this.projectDir,
 			[DAEMON_RUNTIME_DIR_ENV]: this.#runtimeDir,
-			// Detached brokers belong to the scope, not the spawning core. Its
-			// private native leaf may be removed while other clients still use us.
-			PI_NATIVES_DIR: path.join(this.#runtimeDir, "natives"),
+			// Linux brokers and their workers reuse the host's shared native cache.
+			// Other platforms keep scope ownership so the creator's leaf can be removed.
+			PI_NATIVES_DIR: process.platform === "linux" ? getNativesDir() : path.join(this.#runtimeDir, "natives"),
 		};
 		if (this.#idleGraceMs !== undefined) overlay[DAEMON_IDLE_GRACE_ENV] = String(this.#idleGraceMs);
 		const child = Bun.spawn(spawn.cmd, {

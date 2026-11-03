@@ -174,7 +174,7 @@ describe("broker native cache ownership", () => {
 			if (brokerExit) expect(await brokerExit).toBe(true);
 		}
 		// Returning from broker.run() does not unmap its DLL: only OS exit does.
-		await fs.rm(path.join(runtime, "natives"), { recursive: true });
+		await fs.rm(path.join(runtime, "natives"), { recursive: true, force: true });
 	}, 30_000);
 
 	it("loads two simultaneous cold native images without changing a published DLL", async () => {

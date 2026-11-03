@@ -56,6 +56,7 @@
 
 ### Changed
 
+- Reuse the host's shared native cache for Linux daemon brokers and their workers instead of extracting a separate copy per runtime scope.
 - Show short intents and bounded first-command previews in compact shell rows, link waits to their existing job identities and commands, and distinguish background submission from waiting time.
 - Read offline company credentials asynchronously alongside independent startup work while preserving one cached snapshot for workers and subprocesses.
 - Skip Claude plugin registry and cache discovery by default on every platform; explicit source opt-in, native OMP plugins, and `--plugin-dir` remain available.
