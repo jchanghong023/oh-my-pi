@@ -165,6 +165,7 @@
 
 ### Fixed
 
+- Avoid CNB release failures from mismatched Windows/WSL Bun versions and dirty generated files, with WSL build scripts synchronized only through Git.
 - Keep input, Collab and provider protocol settings in their intended settings groups, preserving the upstream Collab section name.
 - Fix ZCode session creation and reads when a model's context or output limit is unknown.
 

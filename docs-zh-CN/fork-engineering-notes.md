@@ -29,8 +29,8 @@
 ### 本地构建与 CNB 分发
 
 - Windows 执行 `bun run local` 构建并安装到 `%LOCALAPPDATA%\omp`，可用 `PI_INSTALL_DIR` 指定安装目录。
-- Windows 执行 `bun run cnb`，按提示输入 CNB 仓库和已有 Release 标签；脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行 `git pull --ff-only`，再并行构建并上传二进制，复用本机依赖及编译缓存。两端工作区须干净且源码版本一致；不向 CNB 推送源码，同名附件覆盖前需要确认。
-- CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装 Bun、Rust、Bazel 及项目构建依赖。该分发不改变 `omp update` 或安装器的 GitHub 来源。
+- Windows 执行 `bun run cnb`，按提示输入 CNB 仓库和已有 Release 标签；脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行 `git pull --ff-only`，再并行构建并上传二进制，复用本机依赖及编译缓存。WSL 源码及 `scripts/cnb-wsl.sh` 只能通过 Git 远端同步，不通过复制、移动或补丁绕过脏工作区检查。两端工作区须干净且源码版本一致；不打包或向 CNB 推送源码，同名附件覆盖可用 `--overwrite` 授权。
+- CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装与 Windows 完全相同版本的 Bun，以及 Rust、Bazel 和项目构建依赖；Bun 版本不一致会在编译前拒绝。Bazel 构建使用已提交的 `MODULE.bazel.lock`，锁文件过期时运行 `bun run gen:bazel-lock` 并通过 Git 提交同步，不由发布构建改写。遗留的 `tool-views.generated.js` 作为生成产物忽略，不移动或删除用户文件。该分发不改变 `omp update` 或安装器的 GitHub 来源。
 
 ### Fork 门禁与 Dev TUI 分片
 
