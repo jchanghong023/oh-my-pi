@@ -6,19 +6,60 @@ main:
         cpus: 64
       docker:
         image: rust:1.86-bookworm
+      services:
+        - docker
       stages:
-        - name: Prepare dependencies
+        - name: Define dependency cache
+          script: |
+            cat > .cnb-fastcheck-cache.Dockerfile <<'EOF'
+            FROM rust:1.86-bookworm
+            RUN apt-get update && apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev unzip && rm -rf /var/lib/apt/lists/*
+            ENV BUN_INSTALL=/opt/bun
+            ENV PATH=/opt/bun/bin:/usr/local/cargo/bin:$PATH
+            RUN curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"
+            COPY rust-toolchain.toml /opt/fastcheck/rust-toolchain.toml
+            RUN cd /opt/fastcheck && rustup show
+            EOF
+        - name: Build or reuse dependency cache
+          type: docker:cache
+          options:
+            dockerfile: .cnb-fastcheck-cache.Dockerfile
+            by:
+              - rust-toolchain.toml
+            sync: true
+          exports:
+            name: FASTCHECK_CACHE_IMAGE
+        - name: Define Bun dependency cache
           script: |
             set -eu
-            apt-get update
-            apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev unzip
-            curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"
-            export PATH="$HOME/.bun/bin:$PATH"
+            mkdir -p .cnb-bun-cache-input
+            cp --parents package.json bun.lock bunfig.toml patches/*.patch tsconfig.base.json tsconfig.json Cargo.toml Cargo.lock rust-toolchain.toml packages/*/package.json packages/tsconfig.workspace.json python/robomp/web/package.json crates/*/Cargo.toml .cnb-bun-cache-input/
+            cat > .cnb-bun-cache.Dockerfile <<'EOF'
+            ARG BASE_IMAGE
+            FROM ${BASE_IMAGE}
+            WORKDIR /opt/bun-cache-input
+            COPY .cnb-bun-cache-input/ ./
+            RUN bun install --frozen-lockfile --ignore-scripts
+            EOF
+        - name: Build or reuse Bun dependency cache
+          type: docker:cache
+          options:
+            dockerfile: .cnb-bun-cache.Dockerfile
+            by:
+              - .cnb-bun-cache-input
+            buildArgs:
+              BASE_IMAGE: $FASTCHECK_CACHE_IMAGE
+            sync: true
+          exports:
+            name: FASTCHECK_BUN_CACHE_IMAGE
+        - name: Install project dependencies
+          image: $FASTCHECK_BUN_CACHE_IMAGE
+          script: |
+            set -eu
             bun install --frozen-lockfile
-            rustup show
         - name: Run fastcheck
+          image: $FASTCHECK_BUN_CACHE_IMAGE
           script: |
             set -eu
-            export PATH="$HOME/.bun/bin:$PATH"
             echo "available_cpus=$(nproc)"
-            time bun run fastcheck
+            bun run fastcheck

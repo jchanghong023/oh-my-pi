@@ -32,6 +32,7 @@
 - Windows 执行 `bun run cnb`，默认发布到 `jchanghong/bin` 仓库已创建的 `omp` Release，无需交互输入；可用 `--repo` 和 `--tag` 显式覆盖目标。脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行 `git pull --ff-only`，再并行构建、并行上传 `omp-windows-x64.exe` 和 `omp-linux-x64`，复用本机依赖及编译缓存。每次直接覆盖这两个同名附件，不再需要 `--overwrite`，不修改其他附件；不打包、上传或向 CNB 推送源码。WSL 源码及 `scripts/cnb-wsl.sh` 只能通过 Git 远端同步，不复制、移动或打补丁绕过脏工作区检查。
 - 两个命令只负责构建交付，便于手动验证，不运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不做全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查及发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。
 - CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装与 Windows 完全相同版本的 Bun，以及 Rust、Bazel 和项目构建依赖；Bun 版本不一致会在编译前拒绝。Bazel 构建使用已提交的 `MODULE.bazel.lock`，锁文件过期时运行 `bun run gen:bazel-lock` 并通过 Git 提交同步，不由发布构建改写。遗留的 `tool-views.generated.js` 作为生成产物忽略，不移动或删除用户文件。该分发不改变 `omp update` 或安装器的 GitHub 来源。
+- 仓库根目录 `.cnb.yml` 提供单独的 `main`／`api_trigger` fastcheck 流水线，使用 64 核 amd64 节点，不发布产物；CNB `docker:cache` 分别缓存系统依赖、Bun／Rust 工具链和项目 Bun 依赖包，版本键包含对应 Dockerfile、工具链或依赖清单及锁文件。每轮仍执行 `bun install --frozen-lockfile` 及安装脚本，不缓存检查结果。手动触发需要 `repo-cnb-trigger:rw`；配置须提交到目标分支，或通过触发接口的 `config` 参数传入。
 
 ### Fork 门禁与 Dev TUI 分片
 
