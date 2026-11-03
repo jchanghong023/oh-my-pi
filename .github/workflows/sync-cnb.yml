@@ -19,13 +19,23 @@ jobs:
       runs-on: ubuntu-24.04
       timeout-minutes: 20
       steps:
-         - name: Force-sync branches, tags, and Git LFS objects
+         - name: Restore Git and LFS mirror
+           id: mirror-cache
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: source.git
+              key: sync-cnb-v1-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+              restore-keys: |
+                 sync-cnb-v1-${{ runner.os }}-
+         - name: Incrementally sync branches, tags, and Git LFS objects
+           id: sync
            shell: bash
            env:
               GH_TOKEN: ${{ github.token }}
               CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
               CNB_URL: https://cnb.cool/jchanghong/oh-my-pi
               GIT_TERMINAL_PROMPT: "0"
+              GIT_LFS_FORCE_PROGRESS: "1"
            run: |
               set -euo pipefail
 
@@ -34,6 +44,10 @@ jobs:
                 exit 1
               fi
 
+              echo "::group::Prepare cached mirror"
+              if [[ ! -f source.git/HEAD ]]; then
+                echo "cache-dirty=true" >> "$GITHUB_OUTPUT"
+              fi
               git init --bare source.git
               cd source.git
               git config core.hooksPath /dev/null
@@ -43,16 +57,59 @@ jobs:
               git config credential.https://cnb.cool.helper \
                 '!f() { if [ "$1" = get ]; then printf "username=cnb\npassword=%s\n" "$CNB_TOKEN"; fi; }; f'
 
-              git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
-              git remote add cnb "$CNB_URL"
-              git fetch --force --no-tags origin \
+              git config remote.origin.url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+              git config remote.cnb.url "$CNB_URL"
+              git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags > "$RUNNER_TEMP/cnb-cached-refs"
+              echo "::endgroup::"
+
+              echo "::group::Fetch incremental Git objects from GitHub"
+              git fetch --prune --force --no-tags --verbose --progress origin \
                 '+refs/heads/*:refs/heads/*' \
                 '+refs/tags/*:refs/tags/*'
+              git for-each-ref --format='%(objectname) %(refname)' refs/heads refs/tags > "$RUNNER_TEMP/cnb-source-refs"
+              if ! cmp -s "$RUNNER_TEMP/cnb-cached-refs" "$RUNNER_TEMP/cnb-source-refs"; then
+                echo "cache-dirty=true" >> "$GITHUB_OUTPUT"
+              fi
+              echo "::endgroup::"
 
-              # Upload LFS content before publishing refs that depend on it.
-              git lfs fetch --all origin
-              git lfs push --all cnb
-              # Preserve CNB-only refs and exclude GitHub's internal refs/pull/*.
-              git push --force cnb \
+              echo "::group::Compare branches and tags with CNB"
+              git push --dry-run --porcelain --force --verbose --progress cnb \
                 'refs/heads/*:refs/heads/*' \
-                'refs/tags/*:refs/tags/*'
+                'refs/tags/*:refs/tags/*' | tee "$RUNNER_TEMP/cnb-push-plan"
+              changed_refs=()
+              while IFS=$'\t' read -r status refspec summary; do
+                if [[ "$status" != "=" && ( "$refspec" == refs/heads/*:refs/heads/* || "$refspec" == refs/tags/*:refs/tags/* ) ]]; then
+                  changed_refs+=("${refspec%%:*}")
+                fi
+              done < "$RUNNER_TEMP/cnb-push-plan"
+              echo "Changed refs: ${#changed_refs[@]}"
+              echo "::endgroup::"
+
+              if (( ${#changed_refs[@]} > 0 )); then
+                echo "cache-dirty=true" >> "$GITHUB_OUTPUT"
+                # Keep full LFS history for changed refs; cached objects are not downloaded again.
+                echo "::group::Fetch missing LFS objects for changed refs"
+                git lfs fetch --all origin "${changed_refs[@]}"
+                echo "::endgroup::"
+
+                # Upload LFS content before publishing refs that depend on it.
+                echo "::group::Upload missing LFS objects to CNB"
+                git lfs push --all cnb "${changed_refs[@]}"
+                echo "::endgroup::"
+
+                # Preserve CNB-only refs and exclude GitHub's internal refs/pull/*.
+                echo "::group::Push changed Git refs to CNB"
+                git push --force --verbose --progress cnb \
+                  'refs/heads/*:refs/heads/*' \
+                  'refs/tags/*:refs/tags/*'
+                echo "::endgroup::"
+              else
+                echo "CNB is up to date; skipping LFS transfers and Git push."
+              fi
+         - name: Save Git and LFS mirror
+           if: always() && steps.sync.outputs.cache-dirty == 'true'
+           continue-on-error: true
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: source.git
+              key: ${{ steps.mirror-cache.outputs.cache-primary-key }}
