@@ -13,9 +13,8 @@ import {
 	type KnowledgeSearchOptions as NativeKnowledgeSearchOptions,
 	type KnowledgeSearchOutput,
 } from "@oh-my-pi/pi-natives";
-import { isEexist, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { getKnowledgeDbPath, logger } from "@oh-my-pi/pi-utils";
 import { withFileLockSync } from "@oh-my-pi/pi-utils/file-lock";
-import { Database } from "bun:sqlite";
 import type {
 	KnowledgeBuildOptions,
 	KnowledgeBuildResult,
@@ -140,53 +139,6 @@ function nativeDiagnostics(): (event: KnowledgeDiagnosticEvent) => void {
 		});
 }
 
-/**
- * Adopt a consistent SQLite snapshot, including committed WAL frames. Both files
- * may coexist: knowledge.db is authoritative, while docs.db remains a backup.
- * A same-directory hard link publishes only a complete snapshot and cannot
- * replace a database created by another process.
- */
-function adoptLegacyDatabase(databasePath: string): void {
-	const legacyPath = path.join(path.dirname(databasePath), "docs.db");
-	const exists = (file: string): boolean => {
-		try {
-			fs.statSync(file);
-			return true;
-		} catch (error) {
-			if (isEnoent(error)) return false;
-			throw error;
-		}
-	};
-	if (exists(databasePath)) {
-		if (exists(legacyPath)) {
-			logger.warn("knowledge.database.legacy_retained", {
-				component: "knowledge",
-				event: "knowledge.database.legacy_retained",
-				database_path: databasePath,
-				legacy_path: legacyPath,
-			});
-		}
-		return;
-	}
-	if (!exists(legacyPath)) return;
-	const staging = `${databasePath}.adopt-${crypto.randomUUID()}`;
-	try {
-		const legacy = new Database(legacyPath, { readonly: true });
-		try {
-			legacy.run("VACUUM INTO ?", [staging]);
-		} finally {
-			legacy.close();
-		}
-		try {
-			fs.linkSync(staging, databasePath);
-		} catch (error) {
-			if (!isEexist(error)) throw error;
-		}
-	} finally {
-		fs.rmSync(staging, { force: true });
-	}
-}
-
 /** OMP path, callback and telemetry adapter for the native documentation owner. */
 export class KnowledgeIndexEngine {
 	readonly cwd: string;
@@ -197,12 +149,11 @@ export class KnowledgeIndexEngine {
 	constructor(options: KnowledgeServiceOptions & { cursorPath?: string }) {
 		this.cwd = path.resolve(options.cwd ?? process.cwd());
 		this.#agentDir = path.resolve(options.agentDir);
-		const databasePath = path.join(options.agentDir, "knowledge.db");
+		const databasePath = getKnowledgeDbPath(options.agentDir);
 		this.databasePath = path.resolve(databasePath);
 		// Opening uses an absolute path; cursor identity retains caller spelling.
 		fs.mkdirSync(path.dirname(this.databasePath), { recursive: true, mode: 0o700 });
 		this.#native = withFileLockSync(this.databasePath, () => {
-			adoptLegacyDatabase(this.databasePath);
 			return logger.withLogContext(
 				{ operation_id: logger.getLogContext().operation_id ?? `knowledge-open-${crypto.randomUUID()}` },
 				() => new KnowledgeSearchEngine(this.databasePath, options.cursorPath ?? databasePath, nativeDiagnostics()),

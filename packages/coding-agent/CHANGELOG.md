@@ -5,7 +5,7 @@
 ### Breaking Changes
 
 - Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
-- Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is now `knowledge.db`: when only `docs.db` exists, a SQLite snapshot including WAL is published without overwriting the new database and the old file is retained as a recovery backup. If both exist, `knowledge.db` is authoritative; they are not merged or deleted, and migration failures are reported. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
+- Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; legacy `docs.db` is no longer adopted. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
 - Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
 - Removed ZCode Host account and provider configuration compatibility; app-server uses native OMP providers and credentials.
 - Removed MCP OAuth `client_credentials` support. To recover a closed ZCode session using this grant, resume it with an explicit replacement `mcpServers` array; `[]` explicitly removes all MCP servers. The replacement is saved for subsequent cold resumes.
@@ -59,6 +59,7 @@
 
 ### Changed
 
+- Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
 - Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
 - Report separate Knowledge search timings for native full-text work, vector search, model requests, fusion and evidence loading.
 - Report full-text publication and vector-build status separately, with visible CLI and TUI warnings when vector generation fails.

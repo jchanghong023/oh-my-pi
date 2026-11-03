@@ -47,9 +47,9 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - fork 的日志目录与诊断覆盖遵循上文「运行诊断日志」，数据根遵循下述约定。
 - fork 新增 `-P <name>` 作为 `--profile <name>` 的短参数，无需 shell alias。
 - offline 模式只由环境变量 `OMP_OFFLINE` 触发（取值 `1`/`true`/`yes`/`on`，忽略大小写；未设置、空串、`0`/`false` 等其余值不触发），不存在 offline 命令行参数：环境变量对所有 omp 进程及其子进程一致生效，这是把触发入口统一到环境变量的原因（多进程数据根与 lane 状态不能因 spawn 透传遗漏而分裂）。
-- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、Knowledge／Repo 数据库及索引、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。全部既有 Cache、统计、日志和默认 native 按「可选性能数据根」使用所选性能根；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
+- `OMP_CONFIG_ROOT`（绝对路径，支持 `~` 展开；相对值被忽略）统一调整 OMP 持久数据根：agent 配置与认证、Repo 数据库及索引、会话、用户资源和未列入性能目录的运行状态及 profiles 沿用根下相对布局，项目级 `.omp/` 不受影响。Knowledge 数据库及向量、全部既有 Cache、统计、日志和默认 native 按「可选性能数据根」使用所选性能根；未启用分离时维持原路径。未设置有效 `OMP_CONFIG_ROOT` 时复用上游默认目录解析和目录名规则，不硬编码 `.omp`；与 `PI_CONFIG_DIR` 同时设置时由 `OMP_CONFIG_ROOT` 决定持久根位置。
 - native addon 加载器与 grammar 安装器 MUST 使用同一有效目录及 profile 解析；默认 native 和 grammar 缓存按「可选性能数据根」选择位置。显式有效 `PI_NATIVES_DIR` 优先于默认 native 目录，其既有语义不变；本规则不改变 `OMP_CONFIG_ROOT` 或 profile 的既有语义。
-- **统一持久数据根与独立性能目录**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均通过 `OMP_CONFIG_ROOT` 统一调整持久数据根，`OMP_CACHE_DIR` 只接管规定的性能数据；Knowledge 等持久子目录沿用 profile 内布局，不再单独指定活动目录。
+- **统一持久数据根与独立性能目录**：删除 `OMP_WIKI_DIR` 环境变量的读取、路径优先级和专用透传，不保留兼容别名或专用 Wiki 目录配置项；环境中遗留该变量也不得影响路径。所有平台及 offline／非 offline 模式均通过 `OMP_CONFIG_ROOT` 统一调整持久数据根；Knowledge 文件归入 `OMP_CACHE_DIR` 对应的性能根，复用既有 UID／profile 解析，不增加目录层级或独立目录配置。
 - **Broker native 生命周期**：Linux broker 及其子 worker MUST 复用宿主已解析的 native 缓存目录（包括有效 `PI_NATIVES_DIR`；Linux offline 默认 `/dev/shm/omp-<UID>/natives`，保留 profile 布局），不在 scope runtime 下另建 native 副本，不随单个会话退出删除共享缓存。其他平台的 broker 自有 native 缓存仍位于既有 scope runtime 的 `natives/` 下，不以创建者进程为所有者，core 的显式 `PI_NATIVES_DIR` 不约束 detached broker；验收须实际加载 native、关闭 creator 并立即删除其独占叶（Windows 不出现 EPERM），另一已连接 client 仍能访问 broker，最后 client 关闭后通过 broker 正常退出释放自有缓存。各平台均不通过 `client.close()` 关闭共享 scope；两个独立 worker 同时冷提取／加载完整 native，发布后内容不变且无 staging 残留。
 
 - `OMP_OFFLINE` 进程中若未设置 `FS_SCAN_CACHE_TTL_MS`，进程内设为 `30000` 毫秒；该变量只影响 `@` 文件补全的目录重扫间隔，非 offline 进程完全不变，用户显式设置的值（含 `0`）优先。
@@ -414,7 +414,7 @@ OpenWiki 仓库内容 MUST 保持在项目的 `openwiki/` 下；OMP 管理的工
 
 ### Requirement: 可选性能数据根
 
-OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、日志和默认 native；配置、会话、Knowledge 向量、Repo 索引及其他持久数据保持原有位置。
+OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离 Knowledge 数据库及向量、既有 Cache、统计、日志和默认 native；配置、会话、Repo 索引及其他持久数据保持原有位置。
 
 #### Scenario: 显式选择性能根
 - **WHEN** `OMP_CACHE_DIR` 经首尾空白处理和 `~` 展开后为绝对路径
@@ -431,14 +431,14 @@ OMP MUST 提供可选的 `OMP_CACHE_DIR`，用于分离既有 Cache、统计、�
 
 #### Scenario: 性能与持久数据归属
 - **WHEN** 选择了性能数据根
-- **THEN** 原有 Cache 的全部内容（包括模型与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存 MUST 使用所选根下既有相对布局
-- **AND** 配置、认证、会话、Knowledge 数据库与已生成向量、Repo 数据库及索引、其他未迁移的用户状态和项目数据 MUST 保持原有位置
+- **THEN** Knowledge 数据库（含全文、向量）及 WAL／SHM 文件 MUST 直接放在所选性能根，复用日志的根目录解析，不新增目录层级；原有 Cache 的全部内容（包括模型与运行依赖）、统计数据库及配套文件、运行和安装日志、默认 native 及其缓存使用所选根下既有相对布局
+- **AND** 配置、认证、会话、Repo 数据库及索引、其他未迁移的用户状态和项目数据 MUST 保持原有位置
 - **AND** 原有日志级别、错误处理、回退和专用覆盖规则不因目录选择而改变
 
 #### Scenario: 性能数据丢失或切换
 - **WHEN** 性能目录被清空或切换
-- **THEN** 统计、日志和缓存允许丢失；非内嵌资源的缺失和下载遵循原有规则，持久数据不随之删除或重置
-- **AND** 不自动搬迁、合并或删除旧目录，也不新增双写或恢复服务
+- **THEN** Knowledge 数据、统计、日志和缓存允许丢失；Knowledge 丢失后按既有空库／无索引行为处理，由用户重新导入。非内嵌资源的缺失和下载遵循原有规则，其他持久数据不随之删除或重置
+- **AND** 不迁移或恢复旧 Knowledge 数据，不自动搬迁、合并或删除旧目录，也不新增配置、目录层级、后台进程、双写或备份恢复机制
 
 #### Scenario: 轻量目录选择
 - **WHEN** OMP 启动或运行并选择性能目录

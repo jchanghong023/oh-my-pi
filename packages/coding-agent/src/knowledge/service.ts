@@ -7,7 +7,7 @@ import {
 	type KnowledgeToolPage,
 	knowledgeWaitMinimum,
 } from "@oh-my-pi/pi-natives";
-import { isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
+import { getKnowledgeDbPath, isBunTestRuntime, logger } from "@oh-my-pi/pi-utils";
 import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import {
 	companySnapshotForSubprocess,
@@ -135,10 +135,10 @@ export class KnowledgeService {
 	constructor(options: KnowledgeServiceOptions) {
 		this.cwd = path.resolve(options.cwd ?? process.cwd());
 		// Cursor identity must match direct engine callers before resolving the worker's open path.
-		this.#cursorPath = path.join(options.agentDir, "knowledge.db");
+		this.#cursorPath = getKnowledgeDbPath(options.agentDir);
 		// The helper's SDK/test fallback has its own cwd; resolve the DB in the caller's cwd.
 		const agentDir = path.resolve(options.agentDir);
-		this.databasePath = path.join(agentDir, "knowledge.db");
+		this.databasePath = getKnowledgeDbPath(agentDir);
 		this.#options = { agentDir, cwd: this.cwd };
 	}
 

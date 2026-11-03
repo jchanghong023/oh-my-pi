@@ -1,0 +1,24 @@
+main:
+  api_trigger:
+    - name: fastcheck
+      runner:
+        tags: cnb:arch:amd64
+        cpus: 64
+      docker:
+        image: rust:1.86-bookworm
+      stages:
+        - name: Prepare dependencies
+          script: |
+            set -eu
+            apt-get update
+            apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev unzip
+            curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.4"
+            export PATH="$HOME/.bun/bin:$PATH"
+            bun install --frozen-lockfile
+            rustup show
+        - name: Run fastcheck
+          script: |
+            set -eu
+            export PATH="$HOME/.bun/bin:$PATH"
+            echo "available_cpus=$(nproc)"
+            time bun run fastcheck

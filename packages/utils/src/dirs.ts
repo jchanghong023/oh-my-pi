@@ -884,6 +884,11 @@ export function getStatsDbPath(): string {
 	return dirs.cacheRoot ? path.join(dirs.cacheRoot, "stats.db") : dirs.rootSubdir("stats.db", "data");
 }
 
+/** Knowledge uses the same performance root as logs, without a subdirectory. */
+export function getKnowledgeDbPath(agentDir?: string): string {
+	return path.join(dirs.cacheRoot ?? agentDir ?? dirs.agentDir, "knowledge.db");
+}
+
 /** Get the autoresearch state directory (~/.omp/autoresearch). */
 export function getAutoresearchDir(): string {
 	return dirs.rootSubdir("autoresearch", "state");
