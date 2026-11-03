@@ -83,11 +83,13 @@ const isolateHomedir = () => spyOn(os, "homedir").mockReturnValue(isolatedHome);
 beforeAll(async () => {
 	isolatedHome = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "pi-skills-home-")));
 	// Bundled skills do not live under HOME or obey foreign CLI source toggles.
-	const bundled = getCapability<CapabilitySkill>(skillCapability.id)?.providers.find(p => p.id === "spec-driven");
-	if (bundled) {
-		const loader = spyOn(bundled, "load").mockResolvedValue({ items: [] });
-		restoreBundledSkills = () => loader.mockRestore();
-	}
+	const bundled = getCapability<CapabilitySkill>(skillCapability.id)?.providers.filter(
+		provider => provider.id === "spec-driven" || provider.id === "developer-test-agent",
+	);
+	const loaders = bundled?.map(provider => spyOn(provider, "load").mockResolvedValue({ items: [] })) ?? [];
+	restoreBundledSkills = () => {
+		for (const loader of loaders) loader.mockRestore();
+	};
 	isolateHomedir();
 	for (const key of ["HOME", "USERPROFILE"] as const) {
 		process.env[key] = isolatedHome;

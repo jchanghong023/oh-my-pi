@@ -175,6 +175,7 @@
 
 ### Fixed
 
+- Fixed session startup errors when an extension imports host API types without using them at runtime.
 - Accept company rerank responses without a model while rejecting explicit mismatches, and expose sanitized HTTP, timeout and response-validation failures as offline-visible warnings.
 - Avoid CNB release failures from mismatched Windows/WSL Bun versions and dirty generated files, with WSL build scripts synchronized only through Git.
 - Keep input, Collab and provider protocol settings in their intended settings groups, preserving the upstream Collab section name.

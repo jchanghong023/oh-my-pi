@@ -369,7 +369,10 @@ describe("offline model-dependent subcommands", () => {
 			},
 		});
 		try {
-			const f = await fixture({ companyUrl: server.url.origin });
+			const f = await fixture({
+				companyUrl: server.url.origin,
+				modelRoles: { commit: "company/Qwen3.6-35B-A3B", smol: "company/GLM-5.3-public" },
+			});
 			await stageCommitFixture(f.home, f.env);
 			const agentic = await f.run(["commit", "--dry-run", "--no-changelog"]);
 			expect(agentic.exitCode, `${agentic.stdout}\n${agentic.stderr}`).toBe(0);
@@ -383,7 +386,7 @@ describe("offline model-dependent subcommands", () => {
 			const legacy = await f.run(["commit", "--legacy", "--dry-run", "--no-changelog"]);
 			expect(legacy.exitCode, `${legacy.stdout}\n${legacy.stderr}`).toBe(0);
 			expect(legacy.stdout).toContain("feat: added offline fixture");
-			expect(requests.splice(0)).toEqual([{ model: "Qwen3.6-35B-A3B", authorization: "Bearer fixture-token" }]);
+			expect(requests.splice(0)).toEqual([{ model: "GLM-5.3-public", authorization: "Bearer fixture-token" }]);
 			const service = path.join(f.home, "git-ai-service.ts");
 			await fs.writeFile(
 				service,

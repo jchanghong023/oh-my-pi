@@ -506,6 +506,8 @@ function collectExtensionSpecifierReferences(
 			node.type === "ExportNamedDeclaration" ||
 			node.type === "ExportAllDeclaration"
 		) {
+			// Type-only imports and exports are erased, so they cannot own runtime modules.
+			if (node.importKind === "type" || node.exportKind === "type") continue;
 			record("import", node.source);
 		} else if (node.type === "ImportExpression") {
 			record("import", node.source);
@@ -561,7 +563,7 @@ let extensionParseCacheDb: Database | null | undefined;
 const extensionSourceAnalysisCache = new Map<string, ExtensionSourceAnalysis>();
 
 function extensionParseCacheKey(source: string, importerPath: string): string {
-	return `${EXTENSION_PARSE_CACHE_SCHEMA_VERSION}:${path.extname(importerPath).toLowerCase()}:${Bun.hash(source).toString(16)}`;
+	return `${EXTENSION_PARSE_CACHE_SCHEMA_VERSION}:runtime-edges:${path.extname(importerPath).toLowerCase()}:${Bun.hash(source).toString(16)}`;
 }
 
 function getExtensionParseCacheDb(): Database | null {
