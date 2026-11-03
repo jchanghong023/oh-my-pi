@@ -28,8 +28,9 @@
 
 ### 本地构建与 CNB 分发
 
-- Windows 执行 `bun run local` 构建并安装到 `%LOCALAPPDATA%\omp`，可用 `PI_INSTALL_DIR` 指定安装目录。
-- Windows 执行 `bun run cnb`，按提示输入 CNB 仓库和已有 Release 标签；脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行 `git pull --ff-only`，再并行构建并上传二进制，复用本机依赖及编译缓存。WSL 源码及 `scripts/cnb-wsl.sh` 只能通过 Git 远端同步，不通过复制、移动或补丁绕过脏工作区检查。两端工作区须干净且源码版本一致；不打包或向 CNB 推送源码，同名附件覆盖可用 `--overwrite` 授权。
+- Windows 执行 `bun run local` 构建并直接替换 `%LOCALAPPDATA%\omp\omp.exe`，可用 `PI_INSTALL_DIR` 指定安装目录。不执行测试、native 加载探测或 exe 试运行，不杀已有进程；先将旧 exe 改名再换入新版，换入失败恢复旧文件，仍被旧进程占用的映像保留。
+- Windows 执行 `bun run cnb`，按提示输入 CNB 仓库和已有 Release 标签；脚本先在 Windows 和 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行 `git pull --ff-only`，再并行构建、并行上传 `omp-windows-x64.exe` 和 `omp-linux-x64`，复用本机依赖及编译缓存。每次直接覆盖这两个同名附件，不再需要 `--overwrite`，不修改其他附件；不打包、上传或向 CNB 推送源码。WSL 源码及 `scripts/cnb-wsl.sh` 只能通过 Git 远端同步，不复制、移动或打补丁绕过脏工作区检查。
+- 两个命令只负责构建交付，便于手动验证，不运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不做全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查及发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。
 - CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装与 Windows 完全相同版本的 Bun，以及 Rust、Bazel 和项目构建依赖；Bun 版本不一致会在编译前拒绝。Bazel 构建使用已提交的 `MODULE.bazel.lock`，锁文件过期时运行 `bun run gen:bazel-lock` 并通过 Git 提交同步，不由发布构建改写。遗留的 `tool-views.generated.js` 作为生成产物忽略，不移动或删除用户文件。该分发不改变 `omp update` 或安装器的 GitHub 来源。
 
 ### Fork 门禁与 Dev TUI 分片

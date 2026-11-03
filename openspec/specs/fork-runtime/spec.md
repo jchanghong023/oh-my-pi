@@ -63,10 +63,10 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 以下是现有个人分发能力，不代表对外发布目标；上游同步不触发构建或发布。
 
 - 个人 Release 版本使用 `+fork.N`，仅从本仓库 `main` 通过手动 CI 生成；手动运行默认只构建可下载的二进制 artifact（`publish_release=false`），明确启用发布后才创建 Release，非 `main` 分支不能发布。CI 仅执行构建、打包及其必要准备，不运行单元、集成、冒烟或安装测试；发布 MUST 等待版本元数据、全部二进制和浏览器扩展构建成功，不依赖测试作业。本地测试入口保留，按用户明确授权单独运行。发布须单独明确授权，`bun run slowtest` 仅做本机及适用 WSL 本地验证，NEVER 自动推送、触发/等待 CI 或创建 Release。`N` 取 `.github/workflows/ci.yml` 工作流的 `run_number`，GitHub 按工作流文件路径维护计数，重命名或删除重建该文件会让 `N` 从 1 重新开始（与历史 tag 撞号、旧安装收不到后续更新），NEVER 这样做。
-- 本地开发分发额外提供 `bun run local`（Windows 本机编译并替换安装版：旧可执行文件先改名，再换入新版，不中断旧会话；换入失败恢复旧文件）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区分别执行安全的 `git pull --ff-only`，再并行编译两平台二进制，并行上传到用户指定的已有 CNB Release）；构建复用各平台本地缓存，CNB 只接收二进制，不打包、上传或推送源码，覆盖已有同名附件须明确授权。CNB 本地分发不替代上述 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
-- CNB 本地分发的 WSL 源码及构建脚本 MUST 只通过 Git 远端同步；调度端只传参数及版本元数据，不通过 stdin 传构建脚本，也不通过复制、移动、补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 完全一致，不一致时在编译前失败；保留 Export viewer 的精确字节元数据检查。Bazel 使用已提交的模块锁文件且不得在发布构建中改写它，过期锁文件通过生成命令更新后提交同步；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
+- 本地开发分发额外提供 `bun run local`（Windows 本机编译并直接替换安装目录中的 `omp.exe`：旧可执行文件先改名，再换入新版，不杀任何已有进程；换入失败恢复旧文件，仍被旧进程占用的映像保留）和 `bun run cnb`（先在 Windows 与 Ubuntu-24.04 WSL2 的 `/root/oh-my-pi` 工作区执行安全的 `git pull --ff-only`，确认两端 Git 提交一致，再并行编译两平台二进制，并行上传到用户指定的已有 CNB Release）；构建复用各平台本地缓存。执行 `bun run cnb` 即直接覆盖 `omp-windows-x64.exe` 和 `omp-linux-x64` 两个同名附件，不另行确认，也不修改其他附件；移除冗余的 `--overwrite` 参数。CNB 只接收这两个二进制，不打包、上传或推送源码。该分发不替代 GitHub 正式 Release，也不改变安装器或 `omp update` 的 GitHub 来源。
+- `local` 和 `cnb` 的目标是最快构建交付、便于手动验证：MUST NOT 运行任何测试、冒烟、worker 探测、native 加载探测或构建产物试运行。CNB 不执行全仓源码哈希扫描、重复 WSL 预检、Release 附件竞态检查或发布后重复查询；只保留干净工作区、Git 提交一致性、Bun 版本、构建输出及上传接口所必需的检查和确认。WSL 源码及构建脚本 MUST 只通过 Git 远端同步，不通过 stdin 传脚本，也不复制、移动、打补丁或清理用户文件绕过脏工作区检查。两端 Bun 版本 MUST 一致；保留构建资源所必需的 Export viewer 精确字节元数据校验。Bazel 使用已提交的模块锁且不得在发布构建中改写它，过期锁文件通过生成命令更新后提交同步；遗留 `tool-views.generated.js` 仅作为忽略的生成产物保留。
 - 仓库只启用 `.github/workflows/ci.yml`；`nix.yml` 与 `bun-cache-warm.yml` 以 `.disabled` 后缀停用，不参与任何触发。fork 不提供 Nix 发布与独立的 Bun 缓存预热工作流；恢复或新增工作流须显式写明触发条件与授权，不得隐式恢复上游默认触发。
-- 构建发布 CI 安装 native 产物时显式跳过宿主 addon 的加载探测（`--skip-load-probe`），仍执行构建所需的版本戳写入；该选项不改变本地构建/安装默认执行加载探测的行为。
+- 构建发布 CI 及 `bun run local`、`bun run cnb` 安装 native 产物时显式跳过宿主 addon 加载探测（`--skip-load-probe`），仍写入构建所需的版本戳；普通 `bun run build:native` 的默认加载探测行为不变。
 - 构建发布 CI 使用上游 Bazel cache 配置 action；没有集群远程缓存凭据时仍执行构建，不依赖 fork 专用的 GitHub Bazel 磁盘或依赖缓存。
 - 二进制必须携带 fork 版本和更新仓库信息。
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。

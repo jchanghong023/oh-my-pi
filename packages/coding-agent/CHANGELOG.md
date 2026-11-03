@@ -18,6 +18,7 @@
 - Removed the SDK's `skipPythonPreflight` option; session initialization no longer performs Python preflight checks.
 - Removed `startup.checkUpdate` and `marketplace.autoUpdate`; startup never checks for OMP or plugin updates. Use explicit update commands instead.
 - Company/offline initialization helpers now return Promises; await them before accessing company models or credentials.
+- `bun run cnb` now always overwrites its two named binary attachments; the redundant `--overwrite` flag has been removed.
 
 ### Removed
 
@@ -57,6 +58,7 @@
 
 ### Changed
 
+- Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.
 - Default the offline company `smol` role to `Qwen3.8-27B` while preserving explicit role assignments.
 - Recognize image input for the company gateway's `Deepseek-v4.1-Flash` model.
 - Keep the offline `company/Qwen3.8-27B` context window at 262,144 tokens while other company chat models use 204,800 tokens.
