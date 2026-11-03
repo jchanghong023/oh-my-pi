@@ -185,7 +185,7 @@ describe("company runtime catalog and request auth", () => {
 			task: "Qwen3.8-27B",
 			vision: "Qwen3.8-27B",
 			advisor: "Qwen3.8-27B",
-			smol: "Qwen3.6-35B-A3B",
+			smol: "Qwen3.8-27B",
 			tiny: "Qwen3.6-35B-A3B",
 			commit: "Qwen3.6-35B-A3B",
 			plan: "GLM-5.3-public",

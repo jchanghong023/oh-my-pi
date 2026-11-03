@@ -56,6 +56,7 @@
 
 ### Changed
 
+- Default the offline company `smol` role to `Qwen3.8-27B` while preserving explicit role assignments.
 - Recognize image input for the company gateway's `Deepseek-v4.1-Flash` model.
 - Keep the offline `company/Qwen3.8-27B` context window at 262,144 tokens while other company chat models use 204,800 tokens.
 - Reuse the host's shared native cache for Linux daemon brokers and their workers instead of extracting a separate copy per runtime scope.

@@ -183,10 +183,10 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 		expect(probe.companySelector).toBe("company/GLM-5.2-public");
 		expect(probe.companyContextWindow).toBe(204_800);
 		expect(probe.companyCredentialAvailable).toBe(true);
-		expect(probe.smolSelector).toBe("company/Qwen3.6-35B-A3B");
+		expect(probe.smolSelector).toBe("company/Qwen3.8-27B");
 		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");
 		expect(probe.explicitSelector).toBe("company/GLM-5.2-public");
-		expect(probe.inheritedSmolSelector).toBe("company/Qwen3.6-35B-A3B");
+		expect(probe.inheritedSmolSelector).toBe("company/Qwen3.8-27B");
 		expect(probe.offlineRequests).toBe(0);
 		expect(probe.subsequentProviders).not.toContain("company");
 		expect(probe.inheritedProviders).toContain("company");
@@ -246,7 +246,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 		const env = await isolatedEnv(true, true);
 		const publicModel = "openai/gpt-4o-mini";
 		const probe = await probeBenchRuntime(env, true, { smol: publicModel, tiny: publicModel });
-		expect(probe.smolSelector).toBe("company/Qwen3.6-35B-A3B");
+		expect(probe.smolSelector).toBe("company/Qwen3.8-27B");
 		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");
 		expect(probe.hostSmolRole).toBe(publicModel);
 		expect(probe.hostTinyRole).toBe(publicModel);

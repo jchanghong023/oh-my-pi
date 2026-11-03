@@ -65,7 +65,7 @@ omp
 
 在上述内网模式下，OMP 复用 Claude Code 中已配置的公司 API 地址和凭据，无需另行登录。
 
-内网未显式配置时，默认主模型、PLAN 和 SLOW 角色均使用 `company/GLM-5.3-public`；也可用 `omp --model company/GLM-5.3-public` 显式选择。TASK、VISION 和 ADVISOR 仍使用 `company/Qwen3.8-27B`，SMOL、TINY 和 COMMIT 仍使用 `company/Qwen3.6-35B-A3B`，MEMORY 保持自动解析。`GLM-5.2-public` 仍保留供显式选择，已有角色设置及 CLI 模型参数优先。模型输入、目录参数及公司服务约定见[公司内网模型需求](../openspec/specs/model-providers/spec.md)。
+内网未显式配置时，默认主模型、PLAN 和 SLOW 角色均使用 `company/GLM-5.3-public`；也可用 `omp --model company/GLM-5.3-public` 显式选择。SMOL、TASK、VISION 和 ADVISOR 使用 `company/Qwen3.8-27B`，TINY 和 COMMIT 使用 `company/Qwen3.6-35B-A3B`，MEMORY 保持自动解析。`GLM-5.2-public` 仍保留供显式选择，已有角色设置及 CLI 模型参数优先。模型输入、目录参数及公司服务约定见[公司内网模型需求](../openspec/specs/model-providers/spec.md)。
 
 ### 旧终端的状态字符与图标
 

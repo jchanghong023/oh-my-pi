@@ -23,7 +23,7 @@ export const COMPANY_OFFLINE_CONTEXT_WINDOW = 204_800;
  */
 export const COMPANY_OFFLINE_ROLE_DEFAULTS: Readonly<Record<string, string>> = {
 	default: "company/GLM-5.3-public",
-	smol: "company/Qwen3.6-35B-A3B",
+	smol: "company/Qwen3.8-27B",
 	tiny: "company/Qwen3.6-35B-A3B",
 	commit: "company/Qwen3.6-35B-A3B",
 	task: "company/Qwen3.8-27B",
