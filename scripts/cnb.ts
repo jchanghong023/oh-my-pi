@@ -4,7 +4,6 @@ import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createInterface } from "node:readline/promises";
 
 const root = path.resolve(import.meta.dir, "..");
 const distro = "Ubuntu-24.04";
@@ -53,7 +52,7 @@ function options(): { repo?: string; tag?: string } {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help") {
-			console.log("Usage: bun run cnb [--repo owner/repository] [--tag tag]\nRequires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi), an existing CNB Release and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Builds and uploads only the two binaries, without tests or source archives; matching attachments are always overwritten.");
+			console.log("Usage: bun run cnb [--repo owner/repository] [--tag tag]\nDefaults to CNB repository jchanghong/bin and existing release tag omp. Requires clean tracking branches on Windows and Ubuntu-24.04 WSL (/root/oh-my-pi) and official @cnbcool/cnb-cli login. Both worktrees are fast-forward pulled and must have the same commit. Builds and uploads only the two binaries, without tests or source archives; matching attachments are always overwritten.");
 			process.exit(0);
 		}
 		if ((arg !== "--repo" && arg !== "--tag") || !args[i + 1] || args[i + 1]!.startsWith("--")) throw new Error(`Invalid argument: ${arg}`);
@@ -64,19 +63,11 @@ function options(): { repo?: string; tag?: string } {
 	return result;
 }
 
-async function target(): Promise<{ repo: string; tag: string }> {
-	const opts = options();
-	if (!opts.repo || !opts.tag) {
-		if (!process.stdin.isTTY) throw new Error("Specify --repo and --tag, or run interactively.");
-		const rl = createInterface({ input: process.stdin, output: process.stdout });
-		try {
-			opts.repo ||= (await rl.question("CNB repository (owner/repository): ")).trim();
-			opts.tag ||= (await rl.question("Existing release tag: ")).trim();
-		} finally { rl.close(); }
-	}
-	if (!opts.repo || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$/.test(opts.repo) || opts.repo.endsWith(".git")) throw new Error("Invalid CNB repository path.");
-	if (!opts.tag || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(opts.tag) || opts.tag.includes("..") || opts.tag.endsWith("/") || opts.tag.includes("//")) throw new Error("Invalid release tag.");
-	return { repo: opts.repo, tag: opts.tag };
+function target(): { repo: string; tag: string } {
+	const { repo = "jchanghong/bin", tag = "omp" } = options();
+	if (!repo || !/^[A-Za-z0-9_][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_][A-Za-z0-9_.-]*)+$/.test(repo) || repo.endsWith(".git")) throw new Error("Invalid CNB repository path.");
+	if (!tag || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(tag) || tag.includes("..") || tag.endsWith("/") || tag.includes("//")) throw new Error("Invalid release tag.");
+	return { repo, tag };
 }
 
 // Invoke the official npm CLI through Node, supplying arguments over stdin. This
@@ -142,7 +133,7 @@ async function upload(repo: string, release: Release, file: string, name: string
 
 async function main(): Promise<void> {
 	const started = performance.now();
-	const { repo, tag } = await target();
+	const { repo, tag } = target();
 	if (process.platform !== "win32" || process.arch !== "x64") throw new Error("CNB distribution requires a Windows x64 host.");
 	const wsl = Bun.which("wsl.exe");
 	if (!wsl) throw new Error("WSL is required.");

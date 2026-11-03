@@ -58,6 +58,7 @@
 
 ### Changed
 
+- Default `bun run cnb` to the existing `omp` release in `jchanghong/bin`, overwriting its two binary attachments without interactive prompts.
 - Make `local` and `cnb` build-only delivery commands without tests, smoke checks, native load probes or executable trial runs; CNB also skips full-source hashing and repeated release checks, while local replacement never stops existing omp processes.
 - Default the offline company `smol` role to `Qwen3.8-27B` while preserving explicit role assignments.
 - Recognize image input for the company gateway's `Deepseek-v4.1-Flash` model.
