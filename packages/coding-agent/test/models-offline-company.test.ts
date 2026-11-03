@@ -136,7 +136,9 @@ async function runModels(
 		providers: new Set(payload.models.map(model => model.provider)),
 		selectors: payload.models.map(model => model.selector),
 		companyContextWindows: Object.fromEntries(
-			payload.models.filter(model => model.provider === "company").map(model => [model.selector, model.contextWindow]),
+			payload.models
+				.filter(model => model.provider === "company")
+				.map(model => [model.selector, model.contextWindow]),
 		),
 		companyMaxTokens: payload.models.filter(model => model.provider === "company").map(model => model.maxTokens),
 		stderr,
