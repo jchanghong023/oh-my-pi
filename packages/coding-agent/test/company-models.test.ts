@@ -193,7 +193,7 @@ describe("company runtime catalog and request auth", () => {
 		});
 		for (const model of result.capped) {
 			expect(model.baseUrl).toBe("http://127.0.0.1:8081/gateway");
-			expect(model.contextWindow).toBe(200_000);
+			expect(model.contextWindow).toBe(204_800);
 			expect(model.maxTokens).toBe(81_920);
 			expect(model.compat).toMatchObject({ supportsOutputEffort: false, disableAdaptiveThinking: true });
 		}

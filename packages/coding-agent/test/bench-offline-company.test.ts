@@ -181,7 +181,7 @@ describe("OMP_OFFLINE=1 omp bench company environment", () => {
 
 		expect(probe.providers).toContain("company");
 		expect(probe.companySelector).toBe("company/GLM-5.2-public");
-		expect(probe.companyContextWindow).toBe(200_000);
+		expect(probe.companyContextWindow).toBe(204_800);
 		expect(probe.companyCredentialAvailable).toBe(true);
 		expect(probe.smolSelector).toBe("company/Qwen3.6-35B-A3B");
 		expect(probe.tinySelector).toBe("company/Qwen3.6-35B-A3B");

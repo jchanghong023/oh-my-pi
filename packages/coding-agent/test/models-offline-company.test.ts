@@ -153,7 +153,7 @@ describe("OMP_OFFLINE=1 omp models company environment", () => {
 		expect(providers.has("company")).toBe(true);
 		expect(selectors).toContain("company/GLM-5.3-public");
 		expect(selectors).toContain("company/Deepseek-v4.1-Flash");
-		expect(companyContextWindows.every(window => window === 200_000)).toBe(true);
+		expect(companyContextWindows.every(window => window === 204_800)).toBe(true);
 		expect(companyMaxTokens.every(tokens => tokens === 81_920)).toBe(true);
 		expect(stderr).not.toContain("Company provider unavailable");
 	}, 30_000);
