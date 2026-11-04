@@ -538,13 +538,13 @@ describe("skill description compressor cost gate", () => {
 	it("ends at the first provider attempt refused after admission, without transport retries", async () => {
 		const authStorage = createInMemoryAuthStorage();
 		authStorages.push(authStorage);
-		const settings = Settings.isolated({ modelRoles: { smol: "skill-gate/probe" } });
+		const settings = Settings.isolated({ modelRoles: { smol: "deepseek/probe" } });
 		const registry = new ModelRegistry(
 			authStorage,
 			path.join(os.tmpdir(), `omp-skill-models-${Snowflake.next()}.yml`),
 			{ settings },
 		);
-		registry.registerProvider("skill-gate", {
+		registry.registerProvider("deepseek", {
 			baseUrl: "https://provider.invalid/v1",
 			api: "openai-completions",
 			apiKey: "test-key",

@@ -138,7 +138,7 @@ describe("ZCode optional index bridge with real native services", () => {
 		);
 		const started = performance.now();
 		const found = await f.wiki<KnowledgeSearchResult>("search", { query: "Guide", index: "manual", limit: 1 });
-		expect(performance.now() - started).toBeGreaterThanOrEqual(490);
+		expect(performance.now() - started).toBeGreaterThanOrEqual(500);
 		expect(found.total).toBeGreaterThan(0);
 		const sections = [];
 		let cursor: string | undefined;

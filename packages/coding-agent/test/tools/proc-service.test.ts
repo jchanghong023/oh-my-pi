@@ -25,6 +25,7 @@ import { WriteTool } from "../../src/tools/write";
 import { sharedBrowserDaemonName } from "../../src/tools/browser/shared-daemon";
 import type { ToolSession } from "../../src/tools";
 import type { DaemonSnapshot } from "@oh-my-pi/pi-tui/tools/daemon";
+import { hasLiveOwnedService, listServices } from "../../src/launch/services";
 
 function startBroker(projectDir: string, runtimeDir: string): Promise<void> {
 	const previous = [
@@ -656,6 +657,58 @@ describe("proc:// background jobs", () => {
 });
 
 describe("bash services via proc://", () => {
+	it.each([false, true])(
+		"propagates log-read failure without stopping the launched service (readiness: %s)",
+		async withReadiness => {
+			const now = Date.now();
+			const daemon: DaemonSnapshot = {
+				name: "log-failure-service",
+				id: "log-failure-service-id",
+				state: withReadiness ? "ready" : "running",
+				pid: 12345,
+				owner: "Main",
+				createdAt: now,
+				startedAt: now,
+				...(withReadiness ? { readyAt: now } : {}),
+				restartCount: 0,
+				outputBytes: 0,
+				persist: false,
+				detached: false,
+			};
+			const operations: DaemonOperation["op"][] = [];
+			const client: DaemonBrokerClient = {
+				projectDir: process.cwd(),
+				onCompletion: () => () => {},
+				close() {},
+				async request(operation: DaemonOperation): Promise<DaemonRpcResult> {
+					operations.push(operation.op);
+					if (operation.op === "start") return { op: "start", daemon, readyTimedOut: false };
+					if (operation.op === "logs") throw new Error("service output log is unreadable");
+					if (operation.op === "list") return { op: "list", daemons: [daemon] };
+					throw new Error(`Unexpected broker op ${operation.op}`);
+				},
+			};
+			const spy = vi.spyOn(daemonClient, "daemonClientForProject").mockResolvedValue(client);
+			const session = toolSession(process.cwd());
+			try {
+				const error = await rejectionMessage(
+					new BashTool(session).execute("service-log-failure", {
+						command: "printf 'READY\\n'",
+						name: daemon.name,
+						pty: false,
+						...(withReadiness ? { ready: { log: "READY", timeout: 5 } } : {}),
+					}),
+				);
+				expect(error).toBe("service output log is unreadable");
+				expect(hasLiveOwnedService(session)).toBeTrue();
+				expect(await listServices(session)).toEqual([daemon]);
+				expect(operations).toEqual(["start", "logs", "list"]);
+			} finally {
+				spy.mockRestore();
+			}
+		},
+	);
+
 	it.skipIf(process.platform === "win32")(
 		"starts at log readiness, delivers stdin, switches persistence, and restarts a live name",
 		async () => {

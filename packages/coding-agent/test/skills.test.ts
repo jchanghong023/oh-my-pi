@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { promises as fsPromises } from "node:fs";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -14,6 +14,7 @@ import {
 import { type Skill as CapabilitySkill, skillCapability } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { getCapability } from "@oh-my-pi/pi-coding-agent/discovery";
 import { getWslWindowsHomeCandidate, runHostProbe } from "@oh-my-pi/pi-coding-agent/discovery/agents";
+import * as discoveryHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
 import {
 	type LoadSkillsResult,
 	loadSkills,
@@ -184,6 +185,7 @@ describe("skills", () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-skills-"));
 			const sharedDir = path.join(root, "shared");
 			const customDir = path.join(root, "custom");
+			const projectDir = path.join(root, ".omp", "skills");
 			const userDir = path.join(isolatedHome, ".agents", "skills", "shared-priority");
 			const previous = process.env.OMP_SKILLS_DIR;
 			const writeSkill = async (directory: string, name: string, description: string) => {
@@ -195,6 +197,8 @@ describe("skills", () => {
 				);
 			};
 			try {
+				await fs.mkdir(path.join(root, ".git"));
+				await writeSkill(projectDir, "shared-priority", "Project version");
 				await writeSkill(path.dirname(userDir), "shared-priority", "User version");
 				await writeSkill(customDir, "shared-priority", "Configured version");
 				await writeSkill(sharedDir, "shared-priority", "Shared version");
@@ -203,6 +207,7 @@ describe("skills", () => {
 				const options = {
 					...DISABLE_ALL_BUILTIN_SKILLS,
 					enableAgentsUser: true,
+					enablePiProject: true,
 					cwd: root,
 					customDirectories: [customDir],
 				};
@@ -220,6 +225,9 @@ describe("skills", () => {
 				expect(loaded.skills.find(skill => skill.name === "custom/shared-priority")?.filePath).toBe(
 					path.join(customDir, "shared-priority", "SKILL.md"),
 				);
+				expect(loaded.skills.find(skill => skill.name === "native/shared-priority")?.filePath).toBe(
+					path.join(projectDir, "shared-priority", "SKILL.md"),
+				);
 				const disabledOptions = {
 					...options,
 					disabledExtensions: ["skill:custom/shared-priority"],
@@ -231,11 +239,18 @@ describe("skills", () => {
 				expect((await loadSkills(disabledOptions)).skills.map(skill => skill.name)).toEqual(
 					loaded.skills.map(skill => skill.name).filter(name => name !== "custom/shared-priority"),
 				);
-				expect(
-					(await loadSkillCatalog({ ...options, enabled: false })).skills.every(skill => skill.disabledReason),
-				).toBe(true);
+				const masterDisabled = await loadSkillCatalog({ ...options, enabled: false });
+				expect(masterDisabled.skills.map(skill => skill.name)).toEqual(loaded.skills.map(skill => skill.name));
+				expect(masterDisabled.skills.every(skill => skill.disabledReason === "item-disabled")).toBe(true);
+				const scanDisabled = spyOn(nodeFs.promises, "readdir");
+				try {
+					expect(await loadSkills({ ...options, enabled: false })).toEqual({ skills: [], warnings: [] });
+					expect(scanDisabled).not.toHaveBeenCalled();
+				} finally {
+					scanDisabled.mockRestore();
+				}
 				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "missing"));
-				const fallback = await loadSkills({ ...options, customDirectories: [] });
+				const fallback = await loadSkills({ ...options, customDirectories: [], enablePiProject: false });
 				expect(fallback.skills.find(skill => skill.name === "shared-priority")?.filePath).toBe(
 					path.join(userDir, "SKILL.md"),
 				);
@@ -266,7 +281,7 @@ describe("skills", () => {
 			Object.defineProperty(process, "platform", { value: "linux" });
 			restoreEnvValue("OMP_OFFLINE", " TrUe ");
 			restoreEnvValue("OMP_SKILLS_DIR", shared);
-			const readdir = spyOn(fsPromises, "readdir");
+			const readdir = spyOn(nodeFs.promises, "readdir");
 			const options = {
 				...DISABLE_ALL_BUILTIN_SKILLS,
 				cwd: root,
@@ -299,6 +314,100 @@ describe("skills", () => {
 				readdir.mockRestore();
 				Object.defineProperty(process, "platform", { value: platform });
 				restoreEnvValue("OMP_OFFLINE", previousOffline);
+				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
+				resetCapabilities();
+				await removeWithRetries(root);
+			}
+		});
+
+		// Shared roots obey the ordinary one-level scanner in either network mode and refresh real bytes.
+		it.each([undefined, "true"])("refreshes a one-level shared root with OMP_OFFLINE=%s", async offline => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-refresh-"));
+			const previousShared = process.env.OMP_SKILLS_DIR;
+			const previousOffline = process.env.OMP_OFFLINE;
+			const filePath = path.join(root, "shared", "visible", "SKILL.md");
+			const body = (text: string) => `---\nname: visible\ndescription: Shared refresh\n---\n${text}\n`;
+			try {
+				await fs.mkdir(path.dirname(filePath), { recursive: true });
+				await fs.writeFile(filePath, body("First revision"));
+				await fs.mkdir(path.join(root, "shared", "group", "nested"), { recursive: true });
+				await fs.writeFile(
+					path.join(root, "shared", "group", "nested", "SKILL.md"),
+					"---\nname: nested\ndescription: Must not recurse\n---\nNested\n",
+				);
+				restoreEnvValue("OMP_OFFLINE", offline);
+				restoreEnvValue("OMP_SKILLS_DIR", path.join(root, "shared"));
+				const options = { ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root };
+				const first = await loadSkills(options);
+				expect(first.skills.map(skill => skill.name)).toEqual(["visible"]);
+				const handler = new SkillProtocolHandler();
+				expect((await handler.resolve(parseInternalUrl("skill://visible")!, first)).content).toContain(
+					"First revision",
+				);
+				await fs.writeFile(filePath, body("Updated revision with different bytes"));
+				resetCapabilities();
+				const refreshed = await loadSkills(options);
+				const content = (await handler.resolve(parseInternalUrl("skill://visible")!, refreshed)).content;
+				expect(content).toContain("Updated revision with different bytes");
+				expect(content).not.toContain("First revision");
+				expect(
+					(await loadSkills({ ...options, includeSkills: ["visible"], ignoredSkills: ["vis*"] })).skills,
+				).toEqual([]);
+				restoreEnvValue("OMP_SKILLS_DIR", "   ");
+				expect((await loadSkills(options)).skills).toEqual([]);
+			} finally {
+				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
+				restoreEnvValue("OMP_OFFLINE", previousOffline);
+				resetCapabilities();
+				await removeWithRetries(root);
+			}
+		});
+
+		// Force the custom directory to complete before Shared; priority cannot depend on IO completion.
+		it("scans shared and custom roots concurrently while preserving Shared precedence", async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-shared-concurrent-"));
+			const shared = path.join(root, "shared");
+			const custom = path.join(root, "custom");
+			const previousShared = process.env.OMP_SKILLS_DIR;
+			const releaseShared = Promise.withResolvers<void>();
+			const customStarted = Promise.withResolvers<void>();
+			const scanSkills = discoveryHelpers.scanSkillsFromDir;
+			let restoreScanner: (() => void) | undefined;
+			try {
+				for (const [directory, description] of [
+					[shared, "Shared winner"],
+					[custom, "Custom loser"],
+				]) {
+					await fs.mkdir(path.join(directory, "same"), { recursive: true });
+					await fs.writeFile(
+						path.join(directory, "same", "SKILL.md"),
+						`---\nname: same\ndescription: ${description}\n---\n${description}\n`,
+					);
+				}
+				restoreEnvValue("OMP_SKILLS_DIR", shared);
+				const scanner = spyOn(discoveryHelpers, "scanSkillsFromDir").mockImplementation(
+					async (context, options) => {
+						if (options.dir === shared) await releaseShared.promise;
+						const result = await scanSkills(context, options);
+						if (options.dir === custom) customStarted.resolve();
+						return result;
+					},
+				);
+				restoreScanner = () => scanner.mockRestore();
+				const pending = loadSkills({ ...DISABLE_ALL_BUILTIN_SKILLS, cwd: root, customDirectories: [custom] });
+				await customStarted.promise;
+				releaseShared.resolve();
+				const loaded = await pending;
+				expect(loaded.skills.map(skill => skill.name)).toEqual(["custom/same", "same"]);
+				expect(loaded.skills.find(skill => skill.name === "same")).toMatchObject({
+					description: "Shared winner",
+					filePath: path.join(shared, "same", "SKILL.md"),
+					_source: { providerName: "Shared" },
+				});
+				expect(loaded.skills.find(skill => skill.name === "custom/same")?.description).toBe("Custom loser");
+			} finally {
+				releaseShared.resolve();
+				restoreScanner?.();
 				restoreEnvValue("OMP_SKILLS_DIR", previousShared);
 				resetCapabilities();
 				await removeWithRetries(root);
@@ -508,7 +617,7 @@ describe("skills", () => {
 				resetSettingsForTest();
 				const settings = await Settings.init({ inMemory: true, cwd });
 				const releaseSettings = initializeWithSettings(settings);
-				const readdirSpy = spyOn(fsPromises, "readdir");
+				const readdirSpy = spyOn(nodeFs.promises, "readdir");
 				try {
 					if (disabledReason === "provider-disabled") disableProvider("claude");
 					const options = {

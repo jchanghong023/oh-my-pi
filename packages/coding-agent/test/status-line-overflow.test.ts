@@ -381,6 +381,9 @@ describe("overflow: embedded context fallback", () => {
 					expect(context).not.toContain("%");
 				} else {
 					expect(context).toContain(`${percent}%`);
+					if (percent > 100) {
+						expect(component.getTopBorder(width).content).toContain(`${theme.getFgAnsi("error")}${percent}%`);
+					}
 				}
 				expect(component.render(width).every(line => visibleWidth(line) <= width)).toBe(true);
 			}

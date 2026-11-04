@@ -36,6 +36,12 @@ export interface GoalRuntimeSnapshot {
 	budgetReportedFor?: string;
 }
 
+export interface GoalStartInput {
+	objective: string;
+	tokenBudget?: number;
+	autoOrchestrate?: boolean;
+}
+
 export type GoalPromptKind = "active" | "continuation" | "budget-limit";
 
 function cloneGoal(goal: Goal): Goal {
@@ -485,15 +491,16 @@ export class GoalRuntime {
 		return { enabled: true, mode: "active", autoOrchestrate: autoOrchestrate === true ? true : undefined, goal };
 	}
 
-	async createGoal(input: {
-		objective: string;
-		tokenBudget?: number;
-		autoOrchestrate?: boolean;
-	}): Promise<GoalModeState> {
+	async createGoal(input: GoalStartInput): Promise<GoalModeState>;
+	async createGoal(input: GoalStartInput, isCurrent: (() => boolean) | undefined): Promise<GoalModeState | undefined>;
+	async createGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<GoalModeState | undefined> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=create");
 		validateTokenBudget(input.tokenBudget);
 		return await this.#withAccounting(async () => {
+			// A host may prepare tools before entry. Recheck after waiting for the
+			// accounting queue so a cancelled entry cannot commit into a newer session.
+			if (isCurrent && !isCurrent()) return;
 			const existing = this.#host.getState();
 			if (existing?.goal && existing.goal.status !== "dropped" && existing.goal.status !== "complete") {
 				throw new Error("cannot create a new goal because this session already has a goal");
@@ -506,20 +513,22 @@ export class GoalRuntime {
 		});
 	}
 
-	async replaceGoal(input: {
-		objective: string;
-		tokenBudget?: number;
-		autoOrchestrate?: boolean;
-	}): Promise<GoalModeState> {
+	async replaceGoal(input: GoalStartInput): Promise<GoalModeState>;
+	async replaceGoal(input: GoalStartInput, isCurrent: (() => boolean) | undefined): Promise<GoalModeState | undefined>;
+	async replaceGoal(input: GoalStartInput, isCurrent?: () => boolean): Promise<GoalModeState | undefined> {
 		const objective = input.objective.trim();
 		if (!objective) throw new Error("objective is required when op=replace");
 		validateTokenBudget(input.tokenBudget);
 		return await this.#withAccounting(async () => {
+			if (isCurrent && !isCurrent()) return;
 			const existing = this.#host.getState();
 			if (!existing?.enabled || !isAccountingStatus(existing.goal)) {
 				throw new Error("cannot replace goal because no goal is active");
 			}
 			await this.#flushUsageLocked("suppressed");
+			// Usage persistence can emit asynchronous host events. A pause, abort,
+			// replacement, or session switch during them takes precedence over entry.
+			if (isCurrent && !isCurrent()) return;
 			const state = this.#createGoalState(objective, input.tokenBudget, input.autoOrchestrate);
 			this.#budgetReportedFor = undefined;
 			this.#markActiveAccounting(state.goal);

@@ -671,7 +671,8 @@ describe("RPC index commands use the real index services", () => {
 		f.controller.abort();
 		await Promise.all(f.tasks);
 		expect(f.input).not.toHaveBeenCalled();
-		expect(f.output).toEqual(["No knowledge indexes."]);
+		expect(f.output[0]).toBe("No knowledge indexes.");
+		expect(f.output.slice(1).join("\n")).toMatch(/cancel/i);
 	});
 
 	test("cancelled repository rebuilding preserves the previous usable generation", async () => {

@@ -127,6 +127,25 @@ describe("positional loop intervals", () => {
 		expect(typeof parseLoopArgs("10 999999999999h xxx")).toBe("string");
 		expect(typeof parseLoopArgs("10 30s --interval 1m xxx")).toBe("string");
 	});
+
+	test("accepts the largest whole-second interval below the timer ceiling and rejects the next second", () => {
+		expect(parseLoopArgs("2 2147483s check")).toEqual({
+			limit: { kind: "iterations", iterations: 2 },
+			intervalMs: 2_147_483_000,
+			prompt: "check",
+		});
+		expect(parseLoopArgs("2 2147484s check")).toBe("Loop interval must not exceed 2147483647 milliseconds.");
+		expect(parseLoopArgs("2 596h32m check")).toBe("Loop interval must not exceed 2147483647 milliseconds.");
+	});
+
+	test.each(["-1s", "1.5s", "0s", "9007199254740992s"])(
+		"rejects a known-unit interval with an invalid amount: %s",
+		token => {
+			const result = parseLoopArgs(`2 ${token} check`);
+			expect(typeof result).toBe("string");
+			expect(result).toContain("Loop duration must be positive.");
+		},
+	);
 });
 
 describe("loop condition parsing", () => {

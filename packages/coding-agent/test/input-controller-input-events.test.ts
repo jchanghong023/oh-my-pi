@@ -192,7 +192,7 @@ describe("interactive native input ingress", () => {
 						await release.promise;
 					});
 				});
-				const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+				const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 				const register = vi.fn(() => "bg_team_images");
 				Object.assign(h.session, {
 					model: starts ? model : undefined,

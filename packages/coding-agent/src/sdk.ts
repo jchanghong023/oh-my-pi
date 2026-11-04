@@ -906,6 +906,8 @@ export interface CreateAgentSessionOptions {
 	enableIrc?: boolean;
 	/** Tool names explicitly requested (enables disabled-by-default tools) */
 	toolNames?: string[];
+	/** Pin this session's edit variant, overriding settings and model-specific adaptation without persisting it. */
+	editMode?: EditMode;
 	/** Names from `toolNames` that a fork inherits as `xd://` devices rather than explicit top-level tools. */
 	mountedToolNames?: string[];
 	/** Limit the session to explicitly supplied tool names, without discovered extras. */
@@ -2876,7 +2878,7 @@ async function createAgentSessionScoped(
 		// entries capture it at fetch time and are dropped at injection if a newer
 		// mutation (any tool) bumped it in the meantime.
 		const fileMutationVersions = new Map<string, number>();
-		const disposeCallbacks = new Set<() => void>();
+		const disposeCallbacks = new Set<() => void | Promise<void>>();
 		const activeToolNames = new Set<string>();
 		const toolRegistry = options.toolRestrictions
 			? new GuardedToolRegistry(options.toolRestrictions)
@@ -2890,6 +2892,7 @@ async function createAgentSessionScoped(
 		const toolSession: ToolSession = {
 			toolRestrictions: options.toolRestrictions,
 			allowRestrictedGoal: options.allowRestrictedGoal,
+			editMode: options.editMode,
 			subagentHooks: options.subagentHooks,
 			get cwd() {
 				return sessionManager.getCwd();
@@ -5681,6 +5684,7 @@ async function createAgentSessionScoped(
 			interactivePrompts: options.interactivePrompts,
 			rebindModelAfterDiscovery: options.model === undefined || options.rebindModelAfterDiscovery === true,
 			toolRegistry,
+			editMode: options.editMode,
 			reconcileBrowserMcpFilter: mcpManager
 				? async enabled => {
 						await mcpManager.reconcileBrowserFilter(enabled);
@@ -6158,7 +6162,7 @@ async function createAgentSessionScoped(
 					restoreProviderToggles?.();
 					unsubscribeMcpNotifications?.();
 					unregisterMcpPostmortem?.();
-					for (const callback of disposeCallbacks) callback();
+					for (const callback of disposeCallbacks) await callback();
 					disposeCallbacks.clear();
 					// Drop refs so the process-global postmortem list doesn't retain
 					// the bridge closure past explicit dispose.

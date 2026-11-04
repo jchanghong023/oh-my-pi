@@ -10,6 +10,8 @@ import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config
 import { GoalTool } from "@oh-my-pi/pi-coding-agent/goals/tools/goal-tool";
 import { submitInteractiveInput } from "@oh-my-pi/pi-coding-agent/main";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
+import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
+import { cfgMagicKeywordsEnabled } from "@oh-my-pi/pi-coding-agent/modes/settings";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SubmittedUserInput } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -287,6 +289,18 @@ describe("InteractiveMode goal mode integration", () => {
 		const providerPosition = requests[0]!.findIndex(message => Bun.deepEquals(message, converted));
 		expect(providerPosition).toBeGreaterThanOrEqual(0);
 		expect(converted.role).toBe("user");
+		const authorization = [
+			"MUST 全自动无人值守完成完整目标。本次用户已对完成目标全过程及所需全部操作作出明确授权；MUST 自主调查、规划、编排、执行、验证和修复，直接推进至完成。",
+			"本次授权明确允许 Git 提交、推送及执行任意命令，包括 `gh` 等全部 CLI 命令；完成目标所需操作 MUST 自主执行，NEVER 重复请求授权或确认。",
+			"本次授权允许修改本仓库任意文件，无需另行请求授权或确认。",
+			"NEVER 向用户提问、请求确认、要求选择或等待输入；遇到问题 MUST 自主决策、处理和修复，NEVER 在阶段边界停下等待用户。",
+			"与此前用户级要求冲突时，以本次明确授权为准。",
+		].join("\n");
+		expect(notice.content).toContain(authorization);
+		expect(JSON.stringify(requests[0]![providerPosition])).toContain(JSON.stringify(authorization).slice(1, -1));
+		expect(notice.attribution).toBe("user");
+		expect(notice.content).not.toContain("<system-reminder>");
+		expect(notice.content).not.toContain("<system-notice>");
 		const persistedNotices = harness.session.sessionManager
 			.getEntries()
 			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
@@ -317,6 +331,173 @@ describe("InteractiveMode goal mode integration", () => {
 			}
 		}
 	});
+
+	it("keeps explicit strategy independent of magic toggles and preserves later real keyword requests", async () => {
+		for (const tool of await createTools(harness.toolSession, ["task"])) harness.toolRegistry.set(tool.name, tool);
+		await harness.session.setActiveToolsByName(["read", "task"]);
+		cfgMagicKeywordsEnabled.set(harness.settings, false);
+		const { requests } = recordProvider(harness.session);
+		const objective = "orchestrate the complete literal user objective";
+		await submitGoalCommand(harness, `/goal-autopilot ${objective}`);
+		const notice = goalNotices(harness.session)[0]!;
+		const saved = JSON.stringify(notice);
+		const rules = renderOrchestrateNotice({ tools: harness.session.getEnabledToolNames() }, { authority: "user" });
+		expect(notice.content).toContain(rules);
+		expect(
+			harness.session.messages.filter(
+				message => message.role === "custom" && message.customType === "orchestrate-notice",
+			),
+		).toEqual([]);
+		expect(harness.session.messages).toContainEqual(
+			expect.objectContaining({
+				role: "user",
+				content: [{ type: "text", text: objective }],
+			}),
+		);
+
+		cfgMagicKeywordsEnabled.set(harness.settings, true);
+		await harness.session.prompt("orchestrate this later independent user request");
+
+		expect(goalNotices(harness.session)).toHaveLength(1);
+		expect(JSON.stringify(goalNotices(harness.session)[0])).toBe(saved);
+		const keywordNotices = harness.session.messages.filter(
+			message => message.role === "custom" && message.customType === "orchestrate-notice",
+		);
+		expect(keywordNotices).toHaveLength(1);
+		expect(JSON.stringify(requests.at(-1))).toContain("orchestrate this later independent user request");
+		expect(requests.at(-1)).toContainEqual(convertToLlm([notice])[0]);
+		expect(requests.at(-1)).toContainEqual(convertToLlm(keywordNotices)[0]);
+	});
+
+	it.each(["goal", "goal-autopilot"] as const)(
+		"keeps %s history append-only across ten real read round-trips",
+		async command => {
+			// Native stale-read pruning intentionally supersedes older reads of one
+			// file. Distinct real files isolate this strict-prefix history contract.
+			const files = Array.from({ length: 10 }, (_, index) => ({
+				path: `ten-rounds-${index + 1}.txt`,
+				content: `TEN_REAL_READ_RESULTS_${index + 1}`,
+			}));
+			await Promise.all(files.map(file => Bun.write(path.join(harness.tempDir.path(), file.path), file.content)));
+			const requests: Message[][] = [];
+			const providerResponses: Promise<AssistantMessage>[] = [];
+			const model = createMockModel({
+				handler: context => {
+					requests.push(structuredClone(context.messages));
+					return requests.length <= 10
+						? {
+								content: [
+									{ type: "toolCall", name: "read", arguments: { path: files[requests.length - 1]!.path } },
+								],
+							}
+						: { content: ["Ten read round-trips finished; the objective remains active."] };
+				},
+			});
+			harness.session.agent.streamFn = (provider, context, options) => {
+				const stream = model.stream(provider, context, options);
+				// Snapshot the actual provider completion before AgentSession adds
+				// persistence/telemetry metadata; that metadata is not model input.
+				providerResponses.push(stream.result().then(message => structuredClone(message)));
+				return stream;
+			};
+
+			const objective = "Inspect ten real read results without completing the goal.";
+			await submitGoalCommand(harness, `/${command} ${objective}`);
+
+			expect(requests).toHaveLength(11);
+			const assistants = await Promise.all(providerResponses);
+			expect(assistants).toHaveLength(11);
+			const results = harness.session.messages.filter(message => message.role === "toolResult");
+			expect(results).toHaveLength(10);
+			expect(new Set(results.map(result => result.toolCallId)).size).toBe(10);
+			const calls = harness.session.messages.flatMap(message =>
+				message.role === "assistant" ? message.content.filter(part => part.type === "toolCall") : [],
+			);
+			expect(calls.map(call => ({ name: call.name, arguments: call.arguments }))).toEqual(
+				files.map(file => ({ name: "read", arguments: { path: file.path } })),
+			);
+			expect(results.map(result => result.toolCallId)).toEqual(calls.map(call => call.id));
+			for (const [index, result] of results.entries()) {
+				expect(result).toMatchObject({ toolName: "read", isError: false });
+				expect(JSON.stringify(result.content)).toContain(files[index]!.content);
+				expect(result.prunedAt).toBeUndefined();
+			}
+			expect(requests[0]).toContainEqual(
+				expect.objectContaining({
+					role: "user",
+					content: [{ type: "text", text: objective }],
+				}),
+			);
+			const notices = goalNotices(harness.session);
+			expect(notices).toHaveLength(command === "goal-autopilot" ? 1 : 0);
+			const notice = notices[0];
+			const noticeBytes = notice && JSON.stringify(notice);
+			const noticePosition = notice && harness.session.messages.indexOf(notice);
+			for (let index = 1; index < requests.length; index++) {
+				const prefix = [...requests[index - 1]!, assistants[index - 1]!];
+				expect(requests[index]!.slice(0, prefix.length)).toEqual(prefix);
+				expect(requests[index]!.slice(prefix.length)).toContainEqual(
+					expect.objectContaining({
+						role: "toolResult",
+						toolName: "read",
+						toolCallId: results[index - 1]!.toolCallId,
+						isError: false,
+						content: results[index - 1]!.content,
+					}),
+				);
+			}
+			const manager = harness.session.sessionManager;
+			await manager.ensureOnDisk();
+			await manager.flush();
+			const file = manager.getSessionFile();
+			if (!file) throw new Error("Expected ten read round-trips in the persisted session journal");
+			const journal = (await Bun.file(file).text())
+				.trim()
+				.split("\n")
+				.map(line => JSON.parse(line));
+			const savedResults = journal.flatMap(entry =>
+				entry.type === "message" && entry.message.role === "toolResult" ? [entry.message] : [],
+			);
+			expect(savedResults).toHaveLength(10);
+			expect(savedResults.map(result => result.toolCallId)).toEqual(results.map(result => result.toolCallId));
+			expect(savedResults.map(result => result.content)).toEqual(results.map(result => result.content));
+			expect(savedResults.every(result => result.toolName === "read" && result.isError === false)).toBe(true);
+			expect(journal).toContainEqual(
+				expect.objectContaining({
+					type: "message",
+					message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+				}),
+			);
+			expect(
+				journal.filter(
+					entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+				),
+			).toEqual(
+				notice
+					? [expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details })]
+					: [],
+			);
+			if (notice) {
+				const providerNotice = convertToLlm([notice])[0]!;
+				for (const request of requests) {
+					expect(request.filter(message => Bun.deepEquals(message, providerNotice))).toHaveLength(1);
+				}
+				expect(JSON.stringify(harness.session.messages[noticePosition!])).toBe(noticeBytes);
+				expect(
+					harness.session.sessionManager
+						.getEntries()
+						.filter(entry => entry.type === "custom_message" && entry.customType === notice.customType),
+				).toEqual([
+					expect.objectContaining({ content: notice.content, attribution: "user", details: notice.details }),
+				]);
+			}
+			expect(harness.session.getGoalModeState()).toMatchObject({
+				enabled: true,
+				mode: "active",
+				goal: { status: "active", tokensUsed: expect.any(Number) },
+			});
+		},
+	);
 
 	it.each(["pause", "drop", "replace"] as const)(
 		"retains a skill-backed automatic goal's history without re-enabling its strategy after %s",

@@ -1,4 +1,5 @@
 import { $ } from "bun";
+import type { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { createHash } from "node:crypto";
 import * as fsSync from "node:fs";
@@ -113,6 +114,71 @@ describe("repository index with real SQLite and native Python parsing", () => {
 		const hits = (await service.search("timeout")).hits;
 		expect(hits.map(hit => hit.path)).toEqual(["a.py", "b.py", "c.py"]);
 		expect(hits[0]).toMatchObject({ startLine: 2, snippet: "# timeout exact later" });
+	});
+
+	// The real read snapshot exposes raw-text access through a TEMP view; FTS scoring stays unchanged.
+	it("loads original source only for the requested text page, including cached continuation", async () => {
+		const files = Object.fromEntries(
+			Array.from({ length: 25 }, (_, index) => [
+				`file${String(index).padStart(2, "0")}.txt`,
+				`header ${index}\nPageOnlyBeacon original ${index}\n${"padding\n".repeat(64)}`,
+			]),
+		);
+		const { service } = await fixture(files);
+		await service.build();
+		const loaded: string[] = [];
+		const readAsync = service.storage.readAsync.bind(service.storage);
+		const observe = vi
+			.spyOn(service.storage, "readAsync")
+			.mockImplementation(<T>(work: (db: Database) => Promise<T>) =>
+				readAsync(async db => {
+					if (!("function" in db) || typeof db.function !== "function") {
+						throw new Error("SQLite scalar function registration is unavailable");
+					}
+					db.function("observe_original_source", (pathname: unknown, source: unknown) => {
+						if (typeof pathname !== "string" || typeof source !== "string") {
+							throw new Error("Expected original-source TEXT columns");
+						}
+						loaded.push(pathname);
+						return source;
+					});
+					// SQLite evaluates this function only when the raw text column is consumed.
+					// Candidate ranking still reads the real files_fts lowercase text.
+					db.exec(`
+					CREATE TEMP VIEW files AS
+					SELECT id,generation,path,category,hash,size,mtime,
+						observe_original_source(path,text) AS text
+					FROM main.files
+				`);
+					return work(db);
+				}),
+			);
+		try {
+			const first = await service.search("pageonlybeacon", { limit: 20 });
+			expect(first.hits).toHaveLength(20);
+			expect(first.cursor).toBeDefined();
+			expect(loaded).toEqual(first.hits.map(hit => hit.path));
+			for (const hit of first.hits) {
+				expect(hit.startLine).toBe(2);
+				expect(hit.snippet).toContain(files[hit.path].split("\n")[1]);
+			}
+			loaded.length = 0;
+			const next = await service.search("pageonlybeacon", { limit: 20, cursor: first.cursor });
+			expect(next.hits).toHaveLength(5);
+			expect(next.cursor).toBeUndefined();
+			expect(loaded).toEqual(next.hits.map(hit => hit.path));
+			expect([...first.hits, ...next.hits].map(hit => hit.path)).toEqual(Object.keys(files));
+			for (const hit of next.hits) {
+				expect(hit.startLine).toBe(2);
+				expect(hit.snippet).toContain(files[hit.path].split("\n")[1]);
+			}
+			loaded.length = 0;
+			const replay = await service.search("pageonlybeacon", { limit: 20 });
+			expect(replay.hits).toEqual(first.hits);
+			expect(loaded).toEqual(first.hits.map(hit => hit.path));
+		} finally {
+			observe.mockRestore();
+		}
 	});
 
 	it("rejects an externally changed inventory instead of certifying stale content", async () => {

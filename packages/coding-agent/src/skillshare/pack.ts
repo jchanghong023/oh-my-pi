@@ -10,6 +10,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { SEMVER_RE } from "@oh-my-pi/pi-utils/version";
 import { SKILL_DEFAULT_IGNORES, SKILL_LIMITS, SKILL_NAME_MAX, SKILL_NAME_RE } from "@oh-my-pi/pi-wire/skillshare";
 import { validateAgentSkillFrontmatter } from "../discovery/agent-plugin-format";
 import { CREDENTIAL_PATTERNS } from "../secrets/patterns";
@@ -43,10 +44,6 @@ export interface PackResult {
 	hasScripts: boolean;
 	secrets: SecretFinding[];
 }
-
-/** Strict SemVer 2.0.0 (semver.org regex). */
-export const SEMVER_RE =
-	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
 const SKILL_FILE = "SKILL.md";
 const IGNORE_FILE = ".skillignore";

@@ -29,7 +29,7 @@ import {
 	type TeamSynthesisOutput,
 } from "@oh-my-pi/pi-coding-agent/team";
 
-const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 const participant: TeamParticipant = {
 	index: 0,
 	modelPattern: `${model.provider}/${model.id}`,

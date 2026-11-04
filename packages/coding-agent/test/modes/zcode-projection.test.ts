@@ -158,15 +158,20 @@ describe("native Bash live output preview", () => {
 			isError: false,
 			details: { async: { state: "running", jobId: "job-1", type: "bash" } },
 		};
-		for (const projection of [
-			new ZCodeProjection({ sessionId: "s", cwd: "/work", messages: [input, assistant, result] }),
-			new ZCodeProjection({ sessionId: "s", cwd: "/work", messages: [input, assistant, result] }),
-		]) {
-			expect(projection.rows().find(row => row.kind === "toolCall")).toMatchObject({
-				toolName: "Bash",
-				backgrounded: true,
-				workId: "job-1",
-			});
+		const cold = new ZCodeProjection({ sessionId: "s", cwd: "/work", messages: [input, assistant, result] });
+		const live = new ZCodeProjection({ sessionId: "s", cwd: "/work" });
+		try {
+			for (const message of [input, assistant, result]) live.applyEvent({ type: "message_end", message });
+			for (const projection of [cold, live]) {
+				expect(projection.rows().find(row => row.kind === "toolCall")).toMatchObject({
+					toolName: "Bash",
+					backgrounded: true,
+					workId: "job-1",
+				});
+			}
+		} finally {
+			cold.dispose();
+			live.dispose();
 		}
 	});
 

@@ -279,4 +279,35 @@ describe("Dev native TSP surface", () => {
 				!content().includes("Dev ·"),
 		);
 	}, 60_000);
+	it("failed Dev exit prevents persistent cwd changes without moving the visible stage or its history", async () => {
+		await init();
+		await mode.handleDevInput("/dev");
+		await mode.handleDevInput(`/dev new ${REQUIREMENT}`);
+		const controller = peekSpecDrivenController(session.sessionManager)!;
+		await until(() => controller.status().phase === "requirements" && !controller.observation().active);
+		const stage = controller.nativeSession()!;
+		const before = controller.observation();
+		const history = [...stage.messages];
+		const sessionFile = stage.sessionFile;
+		const calls = provider.requests.length;
+		const originalCwd = stage.sessionManager.getCwd();
+		const exit = vi.spyOn(controller, "exit").mockRejectedValue(new Error("owned work has not settled"));
+		try {
+			await expect(mode.applyCwdChange(path.join(tempDir.path(), "not-adopted"))).rejects.toThrow(
+				"owned work has not settled",
+			);
+		} finally {
+			exit.mockRestore();
+		}
+		expect(mode.session).toBe(stage);
+		expect(mode.sessionManager.getCwd()).toBe(originalCwd);
+		expect(stage.sessionManager.getCwd()).toBe(originalCwd);
+		expect(session.sessionManager.getCwd()).toBe(originalCwd);
+		expect(stage.sessionFile).toBe(sessionFile);
+		expect(stage.messages).toEqual(history);
+		expect(controller.inputMode()).toBe("dev");
+		expect(controller.observation().runId).toBe(before.runId);
+		expect(controller.observation().approvals).toEqual(before.approvals);
+		expect(provider.requests).toHaveLength(calls);
+	}, 60_000);
 });

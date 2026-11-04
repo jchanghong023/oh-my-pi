@@ -1,5 +1,6 @@
 import type { AgentOptions, AgentTelemetryConfig, AgentTool, AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import type { EditStore } from "@oh-my-pi/pi-natives";
+import type { EditMode } from "@oh-my-pi/pi-tui/tools/edit";
 import type { FetchImpl, ImageContent, Message, Model, ServiceTierByFamily, ToolChoice } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type { AsyncJobManagerApi } from "../async/job-manager";
@@ -222,6 +223,8 @@ export interface ToolSession {
 	subagentHooks?: NativeSubagentHooks;
 	/** Explicit restricted Goal grant; never widens the requested tool list. */
 	allowRestrictedGoal?: boolean;
+	/** Session-only edit variant pin, shared by edit schemas, read anchors and prompt policies. */
+	editMode?: EditMode;
 	/** Current working directory */
 	cwd: string;
 	/** Cost gate of the session tree, forwarded to subagents. */
@@ -581,8 +584,8 @@ export interface ToolSession {
 	queueDeferredMessage?(message: CustomMessage): void;
 	/** Queue a broker supervised-process completion for the owning session. */
 	queueLaunchCompletion?(notification: DaemonCompletionNotification): Promise<void>;
-	/** Register cleanup that runs when this session is disposed; returns a handle that removes the cleanup. */
-	registerDisposeCallback?(callback: () => void): (() => void) | void;
+	/** Register cleanup awaited when this session is disposed; returns a handle that removes the cleanup. */
+	registerDisposeCallback?(callback: () => void | Promise<void>): (() => void) | void;
 	/** Register cleanup that runs when this ToolSession adopts a different session ID. */
 	registerSessionChangeCallback?(callback: () => void): (() => void) | void;
 	/** Queue late LSP diagnostics (arrived after an edit/write returned) to be shown

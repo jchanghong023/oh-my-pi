@@ -3,7 +3,7 @@ import * as path from "node:path";
 import type { Api, AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
 import { Effort } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { $ } from "bun";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -276,7 +276,7 @@ describe("runEvalCompletion", () => {
 		expect(spy).toHaveBeenCalledTimes(1);
 	});
 
-	it("prefers the session active model for the default tier, falling back to @default", async () => {
+	it("prefers the session active model for the default tier", async () => {
 		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "ok" }));
 		const session = makeSession({ available: [SMOL, DEFAULT, SLOW], activeModel: "p/slow" });
 
@@ -284,6 +284,23 @@ describe("runEvalCompletion", () => {
 
 		const model = spy.mock.calls[0]?.[0] as Model<Api>;
 		expect(`${model.provider}/${model.id}`).toBe("p/slow");
+	});
+
+	// An absent active model must exercise @default rather than the fixture's active-model default.
+	it("resolves @default when the session has no current model", async () => {
+		const spy = vi.spyOn(ai, "completeSimple").mockResolvedValue(assistant({ text: "role answer" }));
+		const session = makeSession({ roles: { default: "p/slow" } });
+		session.getActiveModelString = () => undefined;
+		session.getModelString = () => undefined;
+
+		const result = await runEvalCompletionAndWait({ prompt: "q", model: "default" }, { session });
+
+		expect(spy.mock.calls.map(call => call[0].id)).toEqual(["slow"]);
+		expect(spy.mock.calls[0]?.[2]?.reasoning).toBeUndefined();
+		expect(result).toEqual({
+			text: "role answer",
+			details: { model: "p/slow", tier: "default", structured: false },
+		});
 	});
 
 	it("uses the tier fallback chain after the primary model fails", async () => {
@@ -385,8 +402,19 @@ describe("runEvalCompletion", () => {
 	});
 
 	it.each(["slow", "smol", "default"] as const)("uses the appropriate requested chain for the %s tier", async tier => {
-		const primary = getBundledModel("google", "gemini-3.5-flash");
-		if (!primary) throw new Error("Missing bundled Gemini model");
+		// Keep Gemini's real effort normalization without depending on bundled provider admission.
+		const primary = buildModel({
+			id: "gemini-3.5-flash",
+			name: "Gemini 3.5 Flash",
+			api: "google-generative-ai",
+			provider: "google",
+			baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 0 },
+			contextWindow: 1_048_576,
+			maxTokens: 65_536,
+		});
 		const exactFallback = makeReasoningModel("exact-fallback");
 		const normalizedFallback = makeReasoningModel("normalized-fallback");
 		const session = makeSession({

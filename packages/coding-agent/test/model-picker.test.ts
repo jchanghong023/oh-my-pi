@@ -139,6 +139,25 @@ describe("ModelPicker", () => {
 		expect(onPick.mock.calls[0]?.[2]).toEqual({ overContext: false });
 	});
 
+	test("unknown capacities remain selectable without an estimated over-context warning", () => {
+		const unknown = { ...makeModel("test", "unknown-capacity"), contextWindow: null, maxTokens: null };
+		const { picker, onPick } = createPicker({
+			models: [unknown],
+			scoped: true,
+			picker: { currentContextTokens: 9_000_000 },
+		});
+
+		const rendered = normalize(picker.render(220));
+		expect(rendered).toContain("unknown-capacity");
+		expect(rendered).toContain("ctx unknown");
+		expect(rendered).toContain("out unknown");
+		expect(rendered).not.toContain("context>");
+		picker.handleInput("\n");
+		expect(onPick).toHaveBeenCalledTimes(1);
+		expect(onPick.mock.calls[0]?.[0]).toBe(unknown);
+		expect(onPick.mock.calls[0]?.[2]).toEqual({ overContext: false });
+	});
+
 	test("uses cached models for Enter while the catalog catch-up is still pending", () => {
 		const cached = makeModel("test", "cached-fast");
 		const refreshGate = Promise.withResolvers<boolean>();

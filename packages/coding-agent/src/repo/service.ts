@@ -53,6 +53,11 @@ function check(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
 }
 
+/** Validate the original UTF-16 query before opening storage or taking a missing-index fast path. */
+export function validateRepoQueryLength(query: string): void {
+	if (query.length > MAX_QUERY_LENGTH) throw new Error("Repository query exceeds 500 characters; narrow it.");
+}
+
 /** Normalize query scope without opening an index; missing indexes have no literal backslash identities. */
 export function normalizeRepoQueryPath(
 	value: string | undefined,
@@ -1178,7 +1183,7 @@ export class RepoService {
 	}
 
 	async search(query: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoTextHit>> {
-		if (query.length > MAX_QUERY_LENGTH) throw new Error("Repository query exceeds 500 characters; narrow it.");
+		validateRepoQueryLength(query);
 		return this.#diagnose(
 			"search",
 			async stage => {
@@ -1296,7 +1301,7 @@ export class RepoService {
 	}
 
 	async symbol(name: string, options: RepoQueryOptions = {}): Promise<RepoQueryResult<RepoSymbolHit>> {
-		if (name.length > MAX_QUERY_LENGTH) throw new Error("Repository query exceeds 500 characters; narrow it.");
+		validateRepoQueryLength(name);
 		return this.#diagnose(
 			"symbol",
 			async stage => {

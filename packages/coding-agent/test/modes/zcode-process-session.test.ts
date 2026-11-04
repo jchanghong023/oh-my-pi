@@ -30,6 +30,31 @@ import {
 } from "./zcode-process-harness";
 
 describe("ZCode actual public app-server process", () => {
+	test("reserved auto collaboration mode rejects both creation and runtime switching without side effects", async () => {
+		await using root = await TempDir.create("@zcode-auto-mode-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const before = await peer.request("session/list", {});
+		expect(
+			await peer.requestFrame("session/create", {
+				workspace: workspace(config.cwdA),
+				model,
+				mode: "auto",
+				titleGenerationEnabled: false,
+			}),
+		).toMatchObject({ error: { code: -32602, data: { reasonCode: "mode.auto.unimplemented" } } });
+		expect(await peer.request("session/list", {})).toEqual(before);
+		const sessionId = await create(peer, config.cwdA);
+		const current = await peer.request("session/read", { sessionId });
+		expect(await peer.requestFrame("session/setMode", { sessionId, mode: "auto" })).toMatchObject({
+			error: { code: -32602, data: { reasonCode: "mode.auto.unimplemented" } },
+		});
+		expect(await peer.request("session/read", { sessionId })).toEqual(current);
+		expect(config.requests).toEqual([]);
+		expect(await peer.eof()).toBe(0);
+	}, 90_000);
+
 	test("forks first and later assistant turns at their inherited boundary and resolves native path linkage on cold reopen", async () => {
 		await using root = await TempDir.create("@zcode-fork-boundary-");
 		await using config = await fixture(root);

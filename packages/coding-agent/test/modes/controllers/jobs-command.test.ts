@@ -67,6 +67,34 @@ describe("CommandController /jobs full", () => {
 		expect(commandLines.at(-1)).toEndWith("END");
 		expect(lines[second + 1]).toBe("  sleep 5");
 	});
+
+	it.each([false, true])(
+		"warns without opening a panel or report when async jobs are unavailable (full=%s)",
+		async full => {
+			const showWarning = vi.fn();
+			const showJobsSheet = vi.fn();
+			const requestJobCaptions = vi.fn();
+			const reportContainer = new Container();
+			const ctx = {
+				viewSession: { getAsyncJobTree: () => null, requestJobCaptions },
+				showWarning,
+				showJobsSheet,
+				reportContainer,
+			} as unknown as InteractiveModeContext;
+			await new CommandController(ctx).handleJobsCommand({ full });
+			expect(showWarning).toHaveBeenCalledTimes(1);
+			expect(showJobsSheet).not.toHaveBeenCalled();
+			expect(reportContainer.children).toEqual([]);
+			expect(requestJobCaptions).toHaveBeenCalledTimes(full ? 1 : 0);
+		},
+	);
+
+	it("renders an empty full report with a zero running count rather than opening a sheet", async () => {
+		const lines = await renderFullJobs([]);
+		expect(lines.join("\n")).toMatch(/Running:\s+0/);
+		expect(lines.join("\n")).toContain("No async jobs");
+		expect(lines.some(line => /\[(?:bash|task|eval)\]/.test(line))).toBe(false);
+	});
 });
 
 describe("/jobs in the terminal", () => {
@@ -84,8 +112,8 @@ describe("/jobs in the terminal", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 test model");
+		const model = modelRegistry.find("ascend", "qwen3.8-flash-next");
+		if (!model) throw new Error("Expected retained ascend/qwen3.8-flash-next presentation model");
 		manager = new AsyncJobManager({});
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] } }),

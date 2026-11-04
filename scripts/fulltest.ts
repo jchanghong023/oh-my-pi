@@ -418,6 +418,10 @@ async function runFulltestObserved(
 		);
 		const afterBuild = await acquire("post-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		await acquire("post-build source check", async () => assertFulltestSourceStable(beforeNative, afterBuild, true));
+		const checkSourceSnapshot = async (stage: string): Promise<void> => {
+			const current = await acquire(`${stage} source identity`, () => captureSourceIdentity(gate, gateRepoRoot));
+			await acquire(`${stage} source check`, async () => assertFulltestSourceStable(afterBuild, current));
+		};
 		if (report?.owner) {
 			report.sourceDigest = afterBuild.digest;
 			report.sourceRevision = afterBuild.head;
@@ -441,7 +445,7 @@ async function runFulltestObserved(
 			options.full || process.env.OMP_FULLTEST_AFFECTED === "0"
 				? undefined
 				: await acquire("affected baseline", () =>
-						(infrastructure.bunTestSelection ?? bunTestSelection)(gateRepoRoot, true, null),
+						(infrastructure.bunTestSelection ?? bunTestSelection)(gateRepoRoot, true, null, report?.id),
 					);
 		const baseline = baselineSelection?.mode === "affected" ? baselineSelection.baseline : undefined;
 		const changedPaths = await acquire("changed paths", () =>
@@ -493,6 +497,7 @@ async function runFulltestObserved(
 		const scriptTests = options.full
 			? files.filter(file => file.startsWith("scripts/") && /\.(?:test|spec)\.[jt]sx?$/.test(file))
 			: selectChangedScriptTests(changedPaths, files);
+		await checkSourceSnapshot("pre-script");
 		if (scriptTests.length) {
 			// These fixture-only scripts use independent temporary or in-memory state.
 			// Keep every other script serial, including timing-sensitive gate selftests.
@@ -523,6 +528,7 @@ async function runFulltestObserved(
 					},
 				),
 			);
+			await checkSourceSnapshot("post-independent-script");
 			await attempt("repository scripts", () =>
 				runGateCommands(
 					gate,
@@ -541,6 +547,8 @@ async function runFulltestObserved(
 				),
 			);
 		}
+		// Script selftests are readers, not another source-generating preparation stage.
+		await checkSourceSnapshot("post-script");
 		let tests: GateCommand[] = [];
 		await attempt("test plan", async () => {
 			tests = fulltestCommands(options, home, afterBuild.digest).map(command => {
@@ -618,6 +626,7 @@ async function runFulltestObserved(
 				RUST_TEST_THREADS: String(testBudget),
 			},
 		});
+		await checkSourceSnapshot("pre-test");
 		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
 		const rustChecksFinished = Promise.withResolvers<void>();
 		const staticRun = (async () => {
@@ -667,7 +676,9 @@ async function runFulltestObserved(
 			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
 		})();
 		await Promise.all([staticRun, testRun, rustRun]);
+		await checkSourceSnapshot("post-parallel-test");
 		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
+		await checkSourceSnapshot("pre-startup");
 		await attempt("TypeScript startup tests", () => runGateCommands(gate, startupTests, { concurrency: 1 }));
 		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
 		logger.info("Fulltest source stability resolved", {

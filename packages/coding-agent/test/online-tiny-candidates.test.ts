@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { getRoleInfo } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import { formatModelStringWithRouting } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -8,10 +8,27 @@ import {
 	expandOnlineTinyModelFallbacks,
 } from "@oh-my-pi/pi-coding-agent/tiny/online-candidates";
 
-const localTiny = getBundledModel("local", "lfm2.5-230m")!;
-const primary = getBundledModel("google", "gemini-3.5-flash")!;
-const secondary = getBundledModel("openai", "gpt-4o-mini")!;
-const fallback = getBundledModel("google-vertex", "gemini-3.5-flash")!;
+/** Explicit shared-protocol models: this suite does not test runtime provider admission. */
+function fixtureModel(provider: string, id: string) {
+	return buildModel({
+		provider,
+		id,
+		name: id,
+		api: provider === "local" ? "local-inference" : provider === "openrouter" ? "openrouter" : "openai-completions",
+		...(provider === "local" ? { kind: "tiny" as const } : {}),
+		baseUrl: provider === "local" ? "local://inference" : "https://fixture.invalid/v1",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	});
+}
+
+const localTiny = fixtureModel("local", "lfm2.5-230m")!;
+const primary = fixtureModel("google", "gemini-3.5-flash")!;
+const secondary = fixtureModel("openai", "gpt-4o-mini")!;
+const fallback = fixtureModel("google-vertex", "gemini-3.5-flash")!;
 const models = [primary, secondary, fallback];
 const primarySelector = `${primary.provider}/${primary.id}`;
 const localTinySelector = `${localTiny.provider}/${localTiny.id}`;
@@ -76,7 +93,7 @@ describe("online tiny fallback candidates", () => {
 	});
 
 	it("uses the most specific wildcard key", () => {
-		const routed = getBundledModel("openrouter", "google/gemini-3.5-flash")!;
+		const routed = fixtureModel("openrouter", "google/gemini-3.5-flash")!;
 		const settings = Settings.isolated({
 			"retry.fallbackChains": {
 				"openrouter/*": [secondarySelector],
@@ -131,7 +148,7 @@ describe("online tiny fallback candidates", () => {
 	});
 
 	it("strips upstream routing before expanding wildcard fallbacks", () => {
-		const routed = getBundledModel("openrouter", "google/gemini-3.5-flash")!;
+		const routed = fixtureModel("openrouter", "google/gemini-3.5-flash")!;
 		const settings = Settings.isolated({
 			"retry.fallbackChains": {
 				"openrouter/*": ["google-vertex/*"],
@@ -146,7 +163,7 @@ describe("online tiny fallback candidates", () => {
 	});
 
 	it("keeps distinct @upstream routes for the same aggregator model", () => {
-		const routed = getBundledModel("openrouter", "google/gemini-3.5-flash")!;
+		const routed = fixtureModel("openrouter", "google/gemini-3.5-flash")!;
 		const settings = Settings.isolated({ "retry.modelFallback": true });
 		settings.setModelRole("tiny", "openrouter/google/gemini-3.5-flash@cerebras");
 		settings.setModelRole("smol", "openrouter/google/gemini-3.5-flash@openai");
@@ -159,7 +176,7 @@ describe("online tiny fallback candidates", () => {
 	});
 
 	it("resolves routed @upstream fallback selectors before lookup", () => {
-		const routed = getBundledModel("openrouter", "google/gemini-3.5-flash")!;
+		const routed = fixtureModel("openrouter", "google/gemini-3.5-flash")!;
 		const settings = Settings.isolated({
 			"retry.fallbackChains": {
 				tiny: ["openrouter/google/gemini-3.5-flash@cerebras"],

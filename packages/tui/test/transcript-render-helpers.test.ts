@@ -83,8 +83,11 @@ describe("background receipt projections", () => {
 		for (const message of messages) {
 			const original = JSON.stringify(message);
 			for (const current of [message, JSON.parse(original) as typeof message]) {
-				for (const compactToolActivity of [false, true]) {
-					setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
+				for (const mode of ["clean", "compact", "detailed"] as const) {
+					setChatTranscriptDisplayPreferences({
+						compactToolActivity: mode === "compact",
+						hideToolActivity: mode !== "detailed",
+					});
 					const block = buildAsyncResultBlock(current);
 					expect(block.render(160)).toEqual([]);
 					harness = await TspHarness.start(tui => tui.addChild(buildAsyncResultBlock(current)), {
@@ -130,8 +133,11 @@ describe("background receipt projections", () => {
 		);
 		const original = JSON.stringify(message);
 		for (const current of [message, JSON.parse(original) as typeof message]) {
-			for (const compactToolActivity of [false, true]) {
-				setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
+			for (const mode of ["clean", "compact", "detailed"] as const) {
+				setChatTranscriptDisplayPreferences({
+					compactToolActivity: mode === "compact",
+					hideToolActivity: mode !== "detailed",
+				});
 				const output = Bun.stripANSI(buildAsyncResultBlock(current).render(160).join("\n"));
 				expect(output).toContain("artifact write failed");
 				expect(output).toContain("invalid output");

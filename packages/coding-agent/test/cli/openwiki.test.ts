@@ -6,7 +6,7 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const cli = path.resolve(import.meta.dir, "../../src/cli.ts");
 
-async function run(root: string, args: string[], env: Record<string, string> = {}) {
+async function run(root: string, args: readonly string[], env: Record<string, string> = {}) {
 	const home = path.join(root, "home");
 	await mkdir(home, { recursive: true });
 	const proc = Bun.spawn([process.execPath, cli, "openwiki", ...args], {
@@ -106,7 +106,21 @@ describe("omp openwiki command boundary", () => {
 		expect(existsSync(dir.join("home", "standalone"))).toBe(false);
 	}, 30_000);
 
-	for (const command of ["search", "read", "personal", "ingest", "mcp", "integrations"]) {
+	for (const command of [
+		"search",
+		"read",
+		"personal",
+		"ingest",
+		"mcp",
+		"integrations",
+		"connector",
+		"connectors",
+		"install",
+		"chat",
+		"auth",
+		"cron",
+		"ngrok",
+	]) {
 		it(`rejects unsupported ${command} without generating a wiki`, async () => {
 			using dir = TempDir.createSync("@omp-openwiki-unsupported-");
 			const result = await run(dir.path(), [command]);
@@ -116,6 +130,28 @@ describe("omp openwiki command boundary", () => {
 			expect(existsSync(dir.join("home", "standalone"))).toBe(false);
 		}, 30_000);
 	}
+
+	// Both public help forms must remain read-only.
+	it.each([{ args: [] }, { args: ["--help"] }])(
+		"shows help without generating a wiki for %j",
+		async ({ args }) => {
+			using dir = TempDir.createSync("@omp-openwiki-concurrency-help-");
+			const result = await run(dir.path(), args);
+			expect(result.code, result.text).toBe(0);
+			expect(existsSync(dir.join("openwiki"))).toBe(false);
+			expect(existsSync(dir.join("home", "standalone"))).toBe(false);
+		},
+		30_000,
+	);
+
+	// A piped command cannot silently become an interactive repository manager.
+	it("requires a terminal for link and preserves the requested directory", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-link-terminal-");
+		const result = await run(dir.path(), ["link", dir.path()]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain("link requires an interactive terminal");
+		expect(existsSync(dir.join("openwiki"))).toBe(false);
+	}, 30_000);
 
 	it("rejects mutually exclusive export and server options", async () => {
 		using dir = TempDir.createSync("@omp-openwiki-flags-");

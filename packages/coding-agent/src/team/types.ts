@@ -197,7 +197,7 @@ export interface TeamParticipantStatus {
 	/** Proposal label for proposer runs; role label otherwise. */
 	label: string;
 	role: TeamRole;
-	state: "pending" | "running" | "completed" | "failed";
+	state: "pending" | "running" | "completed" | "failed" | "cancelled";
 }
 
 /** Per-proposal bookkeeping after each stage settles. */

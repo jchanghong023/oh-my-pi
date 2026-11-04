@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
 	executeAcpBuiltinSlashCommand,
@@ -6,6 +6,9 @@ import {
 } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { buildAvailableSlashCommands } from "@oh-my-pi/pi-coding-agent/slash-commands/available-commands";
 import type { RpcSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
+import { BUILTIN_SLASH_COMMANDS_INTERNAL } from "../../src/slash-commands/builtin-registry";
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("RPC builtin dispatch", () => {
 	test("host modes use their registered RPC adapter while ACP retains its own surface", async () => {
@@ -59,5 +62,39 @@ describe("RPC builtin dispatch", () => {
 			expect(rpc.some(command => command.name === name)).toBe(true);
 		}
 		expect(rpc.some(command => command.name === "wiki")).toBe(false);
+	});
+
+	test("gates every registered TUI-only name and alias without invoking a handler", async () => {
+		const runtime = {} as RpcSlashCommandRuntime;
+		const entries = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(command => !command.handle && !command.handleRpc);
+		expect(entries.length).toBeGreaterThan(0);
+		for (const command of entries) {
+			for (const name of [command.name, ...(command.aliases ?? [])]) {
+				await expect(executeRpcBuiltinSlashCommand(`/${name}`, runtime)).rejects.toThrow(
+					`/${command.name} is only available in the interactive TUI.`,
+				);
+				expect(await executeAcpBuiltinSlashCommand(`/${name} untouched argument`, runtime)).toBe(false);
+			}
+		}
+	});
+
+	test("refuses arguments for every shared no-argument command before dispatch", async () => {
+		const runtime = {} as RpcSlashCommandRuntime;
+		const entries = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(
+			command => (command.handle || command.handleRpc) && !(command.acpAllowArgs ?? command.allowArgs),
+		);
+		expect(entries.length).toBeGreaterThan(0);
+		for (const command of entries) {
+			const handler = command.handle ? vi.spyOn(command, "handle") : undefined;
+			const rpcHandler = command.handleRpc ? vi.spyOn(command, "handleRpc") : undefined;
+			for (const name of [command.name, ...(command.aliases ?? [])]) {
+				expect(await executeAcpBuiltinSlashCommand(`/${name} literal untouched`, runtime)).toBe(false);
+				await expect(executeRpcBuiltinSlashCommand(`/${name} literal untouched`, runtime)).rejects.toThrow(
+					`/${command.name} does not accept arguments.`,
+				);
+			}
+			if (handler) expect(handler).not.toHaveBeenCalled();
+			if (rpcHandler) expect(rpcHandler).not.toHaveBeenCalled();
+		}
 	});
 });

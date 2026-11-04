@@ -118,7 +118,7 @@ function harness(options: HarnessOptions = {}) {
 	editor.setText(options.draft ?? "");
 	const ctx = {
 		settings: Settings.isolated({
-			"composer.predictions": options.enabled ?? true,
+			...(options.enabled === undefined ? {} : { "composer.predictions": options.enabled }),
 			"composer.predictionAlternatives": options.alternatives ?? false,
 		}),
 		viewSession: session,
@@ -183,6 +183,30 @@ describe("ComposerPredictionController", () => {
 
 		expect(controller.choices).toEqual(["now run the tests"]);
 		expect(renders()).toBe(1);
+	});
+
+	it("default predictions insert through Tab or Right without submitting, and invalid replies stay invisible", async () => {
+		for (const key of ["\t", "\x1b[C"]) {
+			const h = harness();
+			const submitted: string[] = [];
+			h.editor.onSubmit = text => {
+				submitted.push(text);
+			};
+			h.controller.request();
+			expect(h.turns).toHaveLength(1);
+			await h.reply(0, "now run the tests");
+			expect(h.paint()).toContain("now run the tests");
+			h.editor.handleInput(key);
+			expect(h.editor.getText()).toBe("now run the tests");
+			expect(submitted).toEqual([]);
+			h.controller.cancel();
+		}
+		const invalid = harness();
+		invalid.controller.request();
+		await invalid.reply(0, "NO_PREDICTION");
+		expect(invalid.controller.choices).toBeUndefined();
+		expect(invalid.editor.getText()).toBe("");
+		expect(invalid.paint()).not.toContain("NO_PREDICTION");
 	});
 
 	it("splits the reply into alternatives only with composer.predictionAlternatives on", async () => {

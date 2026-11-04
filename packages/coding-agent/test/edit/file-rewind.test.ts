@@ -110,4 +110,61 @@ describe("exact filesystem checkpoints", () => {
 		expect(await fs.readFile(path.join(cwd, "b"), "utf8")).toBe("");
 		expect((await restoreFileCheckpoints([{ path: "unknown" }], { cwd })).reason).toContain("missing_checkpoint");
 	});
+
+	test("rejects canonical duplicate paths and invalid UTF-8 checkpoints before changing any file", async () => {
+		const target = path.join(cwd, "a");
+		await fs.writeFile(target, "after");
+		for (const [checkpoints, reason] of [
+			[
+				[
+					{ path: "a", before: "before", after: "after" },
+					{ path: "./a", before: "before", after: "after" },
+				],
+				"duplicate_path",
+			],
+			[[{ path: "a", before: "\ud800", after: "after" }], "invalid_utf8_checkpoint"],
+			[[{ path: "a", before: "before", after: "\udfff" }], "invalid_utf8_checkpoint"],
+			[[{ path: "file://a", before: "before", after: "after" }], "unsafe_path"],
+		] as const) {
+			const result = await restoreFileCheckpoints(checkpoints, { cwd });
+			expect(result.applied).toBe(false);
+			expect(result.reason).toContain(reason);
+			expect(result.receipts.every(receipt => receipt.status === "rejected")).toBe(true);
+			expect(await fs.readFile(target, "utf8")).toBe("after");
+		}
+	});
+
+	test("rejects hard links and non-regular files without modifying either alias", async () => {
+		const target = path.join(cwd, "target");
+		const alias = path.join(cwd, "alias");
+		await fs.writeFile(target, "after");
+		await fs.link(target, alias);
+		const linked = await restoreFileCheckpoints([{ path: "alias", before: "before", after: "after" }], { cwd });
+		expect(linked).toMatchObject({ applied: false, reason: expect.stringContaining("unsafe_path") });
+		expect(await fs.readFile(target, "utf8")).toBe("after");
+		expect(await fs.readFile(alias, "utf8")).toBe("after");
+		await fs.mkdir(path.join(cwd, "directory"));
+		const directory = await restoreFileCheckpoints([{ path: "directory", before: "before", after: "after" }], {
+			cwd,
+		});
+		expect(directory).toMatchObject({ applied: false, reason: expect.stringContaining("unsafe_path") });
+		expect((await fs.stat(path.join(cwd, "directory"))).isDirectory()).toBe(true);
+	});
+
+	test("rejects Windows alternate data streams without touching the base file and preserves ordinary colon filenames elsewhere", async () => {
+		await fs.writeFile(path.join(cwd, "base"), "base bytes");
+		const streamPath = "base:stream";
+		if (process.platform !== "win32") await fs.writeFile(path.join(cwd, streamPath), "after");
+		const result = await restoreFileCheckpoints([{ path: streamPath, before: "before", after: "after" }], { cwd });
+		if (process.platform === "win32") {
+			expect(result).toMatchObject({ applied: false, reason: "unsafe_path: alternate data stream" });
+			expect(result.receipts).toEqual([
+				{ path: path.join(cwd, streamPath), status: "rejected", reason: "not_attempted" },
+			]);
+		} else {
+			expect(result.applied).toBe(true);
+			expect(await fs.readFile(path.join(cwd, streamPath), "utf8")).toBe("before");
+		}
+		expect(await fs.readFile(path.join(cwd, "base"), "utf8")).toBe("base bytes");
+	});
 });

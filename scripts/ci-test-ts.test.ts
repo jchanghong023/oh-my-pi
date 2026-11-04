@@ -134,6 +134,31 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await save();
 		// Ordinary and startup producers together cover the current fork TS scope.
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		// A newer failure/cancellation/incomplete attempt must not inherit an
+		// older clean success and omit the unchanged tests that just failed.
+		const newer = path.join(root, "runs", "test-timing", "zz-newer-attempt");
+		await fs.mkdir(newer);
+		for (const [completion, exitCode] of [
+			["partial", 23],
+			["partial", 130],
+			["running", null],
+		] as const) {
+			await fs.writeFile(
+				path.join(newer, "run.json"),
+				JSON.stringify({ ...report, completion, exitCode, startedAtUtc: new Date().toISOString() }),
+			);
+			expect((await bunTestSelection(root)).mode).toBe("full");
+		}
+		await fs.writeFile(
+			path.join(newer, "run.json"),
+			JSON.stringify({ ...report, runId: "zz-newer-attempt", completion: "running", exitCode: null }),
+		);
+		expect(await bunTestSelection(root, true, null, "zz-newer-attempt")).toMatchObject({
+			mode: "affected",
+			baseline: revision,
+		});
+		expect((await bunTestSelection(root, true, null, "different-current-run")).mode).toBe("full");
+		await fs.rm(newer, { recursive: true });
 		// A prior full report did not include display consumers in the ordinary group.
 		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
 		await save();

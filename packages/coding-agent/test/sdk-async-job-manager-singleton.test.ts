@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -10,6 +10,10 @@ import { createAgentSession, type ExtensionFactory } from "@oh-my-pi/pi-coding-a
 import type { AsyncJobSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { runEvalAgent } from "@oh-my-pi/pi-coding-agent/eval/agent-bridge";
+import * as taskDiscovery from "@oh-my-pi/pi-coding-agent/task/discovery";
+import * as taskExecutor from "@oh-my-pi/pi-coding-agent/task/executor";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 
 describe("AsyncJobManager ownership across concurrent top-level sessions", () => {
 	const tempDirs: string[] = [];
@@ -37,9 +41,14 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 			removeSyncWithRetries(tempDir);
 		}
 		AsyncJobManager.resetForTests();
+		vi.restoreAllMocks();
 	});
 
-	async function spawnTopLevelSession(extraSettings?: Record<string, unknown>, extensions: ExtensionFactory[] = []) {
+	async function spawnTopLevelSession(
+		extraSettings?: Record<string, unknown>,
+		extensions: ExtensionFactory[] = [],
+		offline = false,
+	) {
 		const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-sdk-async-singleton-${Snowflake.next()}-`));
 		tempDirs.push(tempDir);
 		const cwd = path.join(tempDir, `project-${Snowflake.next()}`);
@@ -48,6 +57,7 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
+			offline,
 			settings: Settings.isolated({ "bash.autoBackground.enabled": true, ...extraSettings }),
 			disableExtensionDiscovery: true,
 			extensions,
@@ -62,14 +72,21 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		return session;
 	}
 
-	it.each([
-		{ label: "default", settings: undefined, limit: 32 },
-		{ label: "above the hard ceiling", settings: { "async.maxJobs": 100 }, limit: 32 },
-		{ label: "a lower configured limit", settings: { "async.maxJobs": 2 }, limit: 2 },
-	])(
-		"rejects excess background work with $label settings",
-		async ({ settings, limit }) => {
-			const session = await spawnTopLevelSession(settings);
+	it.each(
+		[false, true].flatMap(offline => [
+			{ offline, label: "default", settings: undefined, limit: 32 },
+			{
+				offline,
+				label: "above the hard ceiling",
+				settings: { "async.maxJobs": 100, "task.maxConcurrency": 1 },
+				limit: 32,
+			},
+			{ offline, label: "a lower configured limit", settings: { "async.maxJobs": 2 }, limit: 2 },
+		]),
+	)(
+		"rejects excess background work with $label settings (offline=$offline)",
+		async ({ settings, limit, offline }) => {
+			const session = await spawnTopLevelSession(settings, [], offline);
 			const release = Promise.withResolvers<string>();
 			let started = 0;
 			try {
@@ -80,7 +97,7 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 					return release.promise;
 				};
 				for (let index = 0; index < limit; index++) {
-					manager.register(index % 2 === 0 ? "bash" : "task", "capacity probe", run, {
+					manager.register((["bash", "task", "eval"] as const)[index % 3]!, "capacity probe", run, {
 						ownerId: "CapacityProbe",
 						suppressDelivery: true,
 					});
@@ -88,6 +105,34 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 				expect(() =>
 					manager.register("task", "excess work", run, { ownerId: "CapacityProbe", suppressDelivery: true }),
 				).toThrow(/Background job limit reached/);
+				expect(started).toBe(limit);
+				vi.spyOn(taskDiscovery, "discoverAgents").mockResolvedValue({
+					agents: [
+						{
+							name: "task",
+							description: "Capacity probe",
+							systemPrompt: "Probe",
+							source: "bundled",
+							spawns: "*",
+							model: ["@task"],
+						},
+					],
+					projectAgentsDir: null,
+				});
+				const execute = vi.spyOn(taskExecutor, "runSubprocess");
+				const evalSession: ToolSession = {
+					cwd: session.sessionManager.getCwd(),
+					settings: session.settings,
+					asyncJobManager: manager,
+					hasUI: false,
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+					getActiveModelString: () => "openai/gpt-4o-mini",
+				};
+				await expect(runEvalAgent({ prompt: "must not start" }, { session: evalSession })).rejects.toThrow(
+					/Background job limit reached/,
+				);
+				expect(execute).not.toHaveBeenCalled();
 				expect(started).toBe(limit);
 			} finally {
 				release.resolve("done");
@@ -97,6 +142,49 @@ describe("AsyncJobManager ownership across concurrent top-level sessions", () =>
 		},
 		60000,
 	);
+
+	it("releases root-manager capacity after completion, failure and cancellation while queued tasks stay uncounted", async () => {
+		const session = await spawnTopLevelSession({ "async.maxJobs": 1 });
+		const release = Promise.withResolvers<string>();
+		try {
+			const manager = session.asyncJobManager!;
+			const queued = manager.register("task", "queued child", () => release.promise, {
+				queued: true,
+				suppressDelivery: true,
+			});
+			expect(manager.atCapacity).toBe(false);
+			const completed = manager.register("eval", "completed eval", async () => "done", { suppressDelivery: true });
+			await manager.getJob(completed)!.promise;
+			expect(manager.getJob(completed)?.status).toBe("completed");
+			expect(manager.atCapacity).toBe(false);
+			const failed = manager.register(
+				"bash",
+				"failed shell",
+				async () => {
+					throw new Error("fixture failure");
+				},
+				{ suppressDelivery: true },
+			);
+			await manager.getJob(failed)!.promise;
+			expect(manager.getJob(failed)?.status).toBe("failed");
+			expect(manager.atCapacity).toBe(false);
+			const cancelled = manager.register("eval", "cancelled eval", () => release.promise, {
+				suppressDelivery: true,
+			});
+			expect(manager.atCapacity).toBe(true);
+			expect(manager.cancel(cancelled)).toBe(true);
+			expect(manager.getJob(cancelled)?.status).toBe("cancelled");
+			expect(manager.atCapacity).toBe(false);
+			const last = manager.register("bash", "replacement", () => release.promise, { suppressDelivery: true });
+			expect(manager.atCapacity).toBe(true);
+			expect(manager.getJob(queued)?.queued).toBe(true);
+			expect(manager.getJob(last)?.status).toBe("running");
+		} finally {
+			release.resolve("released");
+			await session.asyncJobManager?.waitForAll();
+			await session.dispose();
+		}
+	}, 60_000);
 
 	it("does not cancel the primary session's running jobs when a secondary session disposes", async () => {
 		const primary = await spawnTopLevelSession();

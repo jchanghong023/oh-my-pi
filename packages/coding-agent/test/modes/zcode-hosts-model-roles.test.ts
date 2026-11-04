@@ -7,9 +7,11 @@ import { type LogEvent, registerLogSink } from "@oh-my-pi/pi-utils/logger";
 import { MODEL_ROLE_IDS } from "@oh-my-pi/pi-coding-agent/config/model-roles";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resolveModelRoleValue } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { cfgModelTags } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import { ModelRoleService, type ModelRoleServiceDeps } from "@oh-my-pi/pi-coding-agent/modes/zcode/hosts/model-roles";
+import { cfgTeamMembers } from "@oh-my-pi/pi-coding-agent/team/settings";
 
 beforeAll(() => Settings.init({ inMemory: true }));
 const temporaryDirectories: TempDir[] = [];
@@ -170,6 +172,91 @@ describe("ModelRoleService", () => {
 			expect(role.revision).toStartWith("role-");
 		}
 	});
+
+	test("projects hidden, configured and unconfigured custom role metadata without writing", async () => {
+		const fx = await setup([CHAT_MODEL, IMAGE_MODEL]);
+		cfgModelTags.override(fx.settings, {
+			hidden_reviewer: { name: "Hidden reviewer", hidden: true },
+		});
+		fx.settings.overrideModelRoles({ custom_reviewer: "p/m", missing_reviewer: "p/missing" });
+		const before = await fs.readFile(fx.configFile, "utf8");
+		const result = await fx.service.listRoles({ roleId: "draft_reviewer" });
+		const role = (id: string) => result.roles.find(candidate => candidate.roleId === id);
+		expect(role("hidden_reviewer")).toMatchObject({
+			roleId: "hidden_reviewer",
+			name: "Hidden reviewer",
+			configurable: true,
+			hidden: true,
+			section: "chat",
+			source: "default",
+			userValue: null,
+			projectValue: null,
+			candidateModels: [{ provider: "p", modelId: "m" }],
+			writableScopes: ["user"],
+			unresolvedReason: "not_configured",
+			revision: expect.stringMatching(/^role-/),
+		});
+		expect(role("custom_reviewer")).toMatchObject({
+			source: "runtime",
+			explicitValue: "p/m",
+			effectiveModel: { provider: "p", modelId: "m" },
+		});
+		expect(role("missing_reviewer")).toMatchObject({
+			source: "runtime",
+			explicitValue: "p/missing",
+			unresolvedReason: "no_matching_model",
+		});
+		expect(role("draft_reviewer")).toMatchObject({
+			userValue: null,
+			projectValue: null,
+			hidden: false,
+			section: "chat",
+			revision: expect.stringMatching(/^role-/),
+		});
+		expect(role("image")).toMatchObject({
+			hidden: false,
+			section: "kind",
+			candidateModels: [{ provider: "p", modelId: "img" }],
+		});
+		expect(await fs.readFile(fx.configFile, "utf8")).toBe(before);
+		expect(fx.emitted).toEqual([]);
+	});
+
+	test.each([null, { kind: "auto" } as const])(
+		"clearing a role with %j leaves Team, other roles and the current model projection untouched",
+		async selection => {
+			const fx = await setup([CHAT_MODEL, OTHER_CHAT_MODEL]);
+			await fs.writeFile(
+				fx.configFile,
+				"modelRoles:\n  default: p/m\n  advisor: p/m2\n  slow: p/m2\nteam:\n  members:\n    - p/m\n",
+			);
+			await fx.settings.reloadFromDisk();
+			const before = await fx.service.listRoles({ sessionModel: { provider: "p", modelId: "m" } });
+			const revision = before.roles.find(role => role.roleId === "advisor")!.revision;
+			const result = await fx.service.setRole({
+				roleId: "advisor",
+				scope: "user",
+				selection,
+				expectedRevision: revision,
+			});
+			expect(result.persisted).toBe(true);
+			expect(result.role.userValue).toBeNull();
+			expect(result.role.revision).not.toBe(revision);
+			const disk = await Settings.loadIsolated({ cwd: fx.cwd, agentDir: fx.agentDir });
+			isolatedSettings.push(disk);
+			expect(disk.getGlobalModelRole("advisor")).toBeUndefined();
+			expect(disk.getGlobalModelRole("default")).toBe("p/m");
+			expect(disk.getGlobalModelRole("slow")).toBe("p/m2");
+			expect(cfgTeamMembers.get(disk)).toEqual(["p/m"]);
+			const resolved = resolveModelRoleValue("@advisor", [CHAT_MODEL, OTHER_CHAT_MODEL] as unknown as Model[], {
+				settings: disk,
+			});
+			expect(resolved.model?.id).toBe("m2");
+			expect((await fx.service.listRoles({ sessionModel: { provider: "p", modelId: "m" } })).sessionModel).toEqual(
+				before.sessionModel,
+			);
+		},
+	);
 
 	test("reports persisted only after an actual user config write", async () => {
 		const fx = await setup([CHAT_MODEL]);

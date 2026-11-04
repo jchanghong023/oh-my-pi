@@ -63,6 +63,8 @@
 
 ### Changed
 
+- Developer Test Agent and its five skills are now manual-only and hidden from model-facing listings; ordinary test requests no longer inject routing hints.
+
 - Temporarily disable Clippy in local verification gates while retaining Rust format checks and explicit `lint:rs` / `fix:rs` commands.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
 - Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev and ZCode host callbacks stay on their owning thread.
@@ -181,6 +183,29 @@
 
 ### Fixed
 
+- Include publication stage, result and timing when Knowledge imports finish.
+- Preserve autopilot mode when reading or resuming Goal history through RPC.
+- Wait for asynchronous tool cleanup before session disposal completes, including Knowledge workers.
+- Reject workflow artifacts redirected through symlinks or junctions, including during publication.
+- Preserve unrelated installer files during startup log retention.
+- Preserve the current goal and mode when autopilot tool activation fails.
+- Keep Team children queued until they acquire a concurrency slot, and cancel every active child when discussion stops.
+- Honor explicit user confirmation policies even when the tool policy allows an operation.
+- Enforce Repo query length limits consistently, including when the index is missing.
+- Report corrupt OpenWiki state instead of treating it as a fresh workspace.
+- Refresh resident sessions immediately after user model-role configuration changes without switching their current model.
+- Preserve structured Skills notifications and send one cancellation receipt for index operations.
+- Explain unavailable background pipe streams instead of returning a missing resource.
+- Reject invalid known-unit `/loop` intervals instead of silently treating them as task text.
+- Keep existing Markdown requirements when advancing a confirmed Dev business document, and enforce stage-local edit and speculation settings on new and restored stage sessions.
+- Reject missing or unreadable configuration in explicit `config set` / `reset` commands, preserve unrelated configuration, and return the committed revision.
+- Read cold workflow artifacts without activating the parent session or acquiring its write lease.
+- Keep Team configuration storage and run previews collapsed until explicitly opened, without displaying a chat session's main model.
+- Reject non-user model-role writes with the structured `scope_not_allowed` error.
+- Validate ZCode artifact versions using strict SemVer, including prerelease and build metadata combinations.
+- Preserve both recovery files when native installation rollback fails.
+- Stop validation after protected source changes, rerun after failed or incomplete prior runs, and scrub Windows credential variables regardless of casing.
+- Select writable Windows test temporary drives correctly when the system drive is not C: or available space is unknown.
 - Show tool-specific targets and Eval code in compact activity, with consistent wrapped-device command previews, background submission IDs and wait details.
 - Keep compact thinking activity current when viewing worker-hosted agents.
 - Fixed session startup errors when an extension imports host API types without using them at runtime.

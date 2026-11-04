@@ -15,6 +15,7 @@ import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ZCodeQueries } from "../../src/modes/zcode/queries";
 import { TextTap } from "../../src/job-widgets/text-tap";
 import * as controllers from "../../src/spec-driven/controller";
+import { SessionManager } from "../../src/session/session-manager";
 
 const resources: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -451,6 +452,10 @@ describe("ZCodeSessionManager", () => {
 		const { manager, cwd, other, root } = await fixture();
 		const record = await manager.create({ additionalDirectories: [other] });
 		await manager.close(record.id);
+		const open = spyOn(SessionManager, "open");
+		resources.push(async () => {
+			open.mockRestore();
+		});
 		const opening = manager.resume(record.id, {
 			mcpServers: [],
 			toolAllowlist: ["read"],
@@ -481,6 +486,8 @@ describe("ZCodeSessionManager", () => {
 		expect(restored.session.sessionManager.getAdditionalDirectories()).toEqual([other]);
 		await expect(manager.resume(record.id, { additionalDirectories: [root] })).rejects.toThrow();
 		expect(await manager.resume(record.id, { additionalDirectories: [] })).toBe(restored);
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(restored.cwd).toBe(cwd);
 	});
 
 	it("reads and renames cold history without hosting it, then restores and deletes it", async () => {
@@ -496,6 +503,58 @@ describe("ZCodeSessionManager", () => {
 		expect(await manager.resume(record.id)).toBe(restored);
 		await manager.delete(record.id);
 		expect((await manager.list()).some(info => info.id === record.id)).toBe(false);
+		await expect(manager.read(record.id)).rejects.toThrow();
+	});
+
+	it("keeps supplied MCP secrets out of history and preserves credentials until explicit deletion", async () => {
+		const { manager, authStorage } = await fixture(true);
+		const secret = "SESSION_MCP_SECRET_CANARY";
+		const endpoint = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				expect(request.headers.get("authorization")).toBe(`Bearer ${secret}`);
+				if (request.method === "DELETE") return new Response(null, { status: 204 });
+				if (request.method !== "POST") return new Response(null, { status: 405 });
+				const body = (await request.json()) as { id?: number; method: string };
+				if (body.id === undefined) return new Response(null, { status: 202 });
+				const result =
+					body.method === "initialize"
+						? {
+								protocolVersion: "2025-03-26",
+								capabilities: { tools: {} },
+								serverInfo: { name: "private", version: "1" },
+							}
+						: { tools: [{ name: "marker", inputSchema: { type: "object", properties: {} } }] };
+				return Response.json({ jsonrpc: "2.0", id: body.id, result });
+			},
+		});
+		resources.push(async () => endpoint.stop(true));
+		const servers = [
+			{
+				name: "private",
+				type: "http" as const,
+				alwaysLoad: true,
+				url: `http://127.0.0.1:${endpoint.port}/mcp`,
+				headers: [{ name: "Authorization", value: `Bearer ${secret}` }],
+			},
+		];
+		const record = await manager.create({ mcpServers: servers });
+		const provider = record.configuration.mcp.credentialProvider;
+		if (!provider) throw new Error("Missing private credential provider");
+		const file = record.session.sessionManager.getSessionFile()!;
+		await record.session.sessionManager.flush();
+		expect(JSON.stringify(record.configuration)).not.toContain(secret);
+		expect(await fs.readFile(file, "utf8")).not.toContain(secret);
+		expect(authStorage.credentials.get(provider)).toEqual({ type: "api_key", key: JSON.stringify(servers) });
+		await manager.close(record.id);
+		expect(authStorage.credentials.get(provider)).toEqual({ type: "api_key", key: JSON.stringify(servers) });
+		const restored = await manager.resume(record.id);
+		expect(restored.configuration.mcp).toEqual(record.configuration.mcp);
+		expect(restored.session.agent.state.tools.some(tool => tool.name === "mcp__private_marker")).toBe(true);
+		await manager.delete(record.id);
+		expect(authStorage.credentials.get(provider)).toBeUndefined();
+		expect(manager.get(record.id)).toBeUndefined();
 		await expect(manager.read(record.id)).rejects.toThrow();
 	});
 });

@@ -428,6 +428,9 @@ test("business native session writes only its designated document and rejects de
 			isError: true,
 		});
 	}
+	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md"]) {
+		await expect(fs.stat(path.join(fixture.cwd, file))).rejects.toMatchObject({ code: "ENOENT" });
+	}
 	fixture.setNativeTool("edit", { path: outputPaths[0], old_string: "业务草稿", new_string: "业务更新" });
 	await fixture.request({ entry: false, feedback: "更新", outputPaths });
 	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务更新");
@@ -455,6 +458,8 @@ test("business native writes reject linked parents, hard links and nonregular ta
 	}
 	expect(await fs.readFile(original, "utf8")).toBe("原始内容");
 	expect(await fs.readFile(path.join(targetDir, "business.md"), "utf8")).toBe("目录原始内容");
+	expect(await fs.readFile(path.join(fixture.cwd, "hard.md"), "utf8")).toBe("原始内容");
+	expect((await fs.stat(path.join(fixture.cwd, "directory.md"))).isDirectory()).toBe(true);
 }, 120_000);
 
 test("requirements actor preserves an existing mixed-case native capability while rejecting unsafe paths", async () => {
@@ -1003,7 +1008,11 @@ test("actor clones the supplied parent tool policy without lifting its denylist"
 	});
 	fixture.setNativeTool("write", { path: "denied.ts", content: "blocked by parent" });
 	await fixture.request();
-	await expect(fs.stat(path.join(fixture.cwd, "denied.ts"))).rejects.toThrow();
+	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+		toolName: "write",
+		isError: true,
+	});
+	await expect(fs.stat(path.join(fixture.cwd, "denied.ts"))).rejects.toMatchObject({ code: "ENOENT" });
 }, 120_000);
 
 test("actual new executor entry clears the previous report turn boundary", async () => {
@@ -1065,7 +1074,11 @@ test("stage inherits an actual SDK embedding root deny policy without an explici
 	});
 	fixture.setNativeTool("write", { path: "inherited-denied.ts", content: "must remain denied" });
 	await fixture.request();
-	await expect(fs.stat(path.join(fixture.cwd, "inherited-denied.ts"))).rejects.toThrow();
+	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+		toolName: "write",
+		isError: true,
+	});
+	await expect(fs.stat(path.join(fixture.cwd, "inherited-denied.ts"))).rejects.toMatchObject({ code: "ENOENT" });
 }, 120_000);
 
 test("requirements instructions load only for real stage entry, never preparation or follow-up", async () => {

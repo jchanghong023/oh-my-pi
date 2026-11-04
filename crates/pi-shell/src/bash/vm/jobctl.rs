@@ -1460,3 +1460,270 @@ impl Shell {
 		self.k.jobctl.pgrp = None;
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::testkit::{FakeHost, Rig, fault::skeleton_init};
+
+	/// A host stop event reaches the foreground state even on a target without
+	/// Unix process probes. Exit/continue events must not invent a stop.
+	#[test]
+	fn foreground_stop_events_are_consumed_from_the_host_event_chain() {
+		let mut rig = Rig::new(FakeHost::new(), skeleton_init(&[]));
+		let (shell, host, store) = rig.parts();
+		let root = shell.procs[0].vpid;
+		shell.k.jobctl.root = Some(root);
+		shell.k.jobctl.events.push((root, ProcEvent::Continued));
+		shell.job_events(&mut Cx { host, store });
+		assert!(!shell.k.jobctl.has_fg_stop());
+		shell
+			.k
+			.jobctl
+			.events
+			.push((root, ProcEvent::Stopped(Signal::Tstp)));
+		shell.job_events(&mut Cx { host, store });
+		assert_eq!(shell.k.jobctl.fg_stop, Some(Signal::Tstp));
+		assert!(shell.k.jobctl.events.is_empty(), "each event must be consumed once");
+		shell.k.jobctl.fg_stop = None;
+		shell.job_events(&mut Cx { host, store });
+		assert!(!shell.k.jobctl.has_fg_stop(), "a consumed stop must not be replayed");
+	}
+
+	#[cfg(target_os = "linux")]
+	mod stale_stops {
+		use std::{
+			io::{self, Write},
+			os::unix::process::{CommandExt, ExitStatusExt},
+			process::{Child, Command, Stdio},
+			thread,
+			time::{Duration, Instant},
+		};
+
+		use super::*;
+		use crate::{
+			bash::{ExitStatus, ModeId, ShellInit, WaitKey, vm::proc::Blocked},
+			sys::proc::{ProcState, info},
+		};
+
+		#[derive(Clone, Copy, Debug)]
+		enum ProbeCase {
+			Stopped,
+			Resumed,
+			Exited,
+		}
+
+		impl ProbeCase {
+			const fn state(self) -> ProcState {
+				match self {
+					Self::Stopped => ProcState::Stopped,
+					Self::Resumed => ProcState::Sleeping,
+					Self::Exited => ProcState::Zombie,
+				}
+			}
+		}
+
+		/// Keep the child owned and unreaped until the consumer has probed it.
+		/// In particular, Zombie is a real Linux exit, not a fabricated PID.
+		struct ProbeChild(Child);
+
+		impl ProbeChild {
+			fn wait_state(&self, expected: ProcState) {
+				let start = Instant::now();
+				let pid = i32::try_from(self.0.id()).expect("child pid fits");
+				loop {
+					let current = info(pid).expect("owned child remains in the process table");
+					if current.state == expected {
+						break;
+					}
+					assert!(
+						start.elapsed() < Duration::from_secs(5),
+						"child {pid}: expected {expected:?}, got {:?}",
+						current.state
+					);
+					thread::sleep(Duration::from_millis(5));
+				}
+			}
+
+			fn with_queued_stop(case: ProbeCase) -> (Self, ProcEvent) {
+				let mut child = Self(
+					Command::new("/bin/sh")
+						.args(["-c", "kill -STOP \"$$\"; IFS= read -r code; exit \"$code\""])
+						.stdin(Stdio::piped())
+						.stdout(Stdio::null())
+						.stderr(Stdio::null())
+						.process_group(0)
+						.spawn()
+						.expect("spawn stop/read/exit fixture"),
+				);
+				child.wait_state(ProcState::Stopped);
+				let event = crate::proctree::test_wait_for_stopped_child(child.0.id());
+				match case {
+					ProbeCase::Stopped => {},
+					ProbeCase::Resumed => child.cont().expect("resume into the blocking read"),
+					ProbeCase::Exited => {
+						child
+							.0
+							.stdin
+							.as_mut()
+							.expect("fixture input")
+							.write_all(b"23\n")
+							.expect("supply the child's exit status");
+						child.cont().expect("resume the child so it can exit");
+					},
+				}
+				child.wait_state(case.state());
+				(child, event)
+			}
+		}
+
+		impl ExtProc for ProbeChild {
+			fn pid(&self) -> u32 {
+				self.0.id()
+			}
+
+			fn poll_wait(&mut self, cx: &mut Context<'_>) -> Poll<ExitStatus> {
+				let Some(status) = self.0.try_wait().expect("poll the owned child") else {
+					cx.waker().wake_by_ref();
+					return Poll::Pending;
+				};
+				Poll::Ready(match status.code() {
+					Some(code) => ExitStatus::Exited(code),
+					None => {
+						ExitStatus::SignaledRaw(status.signal().expect("child terminated by signal"))
+					},
+				})
+			}
+
+			fn signal(&mut self, sig: Signal) -> io::Result<()> {
+				let pid = i32::try_from(self.0.id()).expect("child pid fits");
+				if crate::proctree::kill_process_group(pid, i32::from(sig.number(Platform::current())))
+				{
+					Ok(())
+				} else {
+					Err(io::Error::last_os_error())
+				}
+			}
+
+			fn stop(&mut self) -> io::Result<()> {
+				self.signal(Signal::Stop)
+			}
+
+			fn cont(&mut self) -> io::Result<()> {
+				self.signal(Signal::Cont)
+			}
+		}
+
+		impl Drop for ProbeChild {
+			fn drop(&mut self) {
+				let _ = self.0.kill();
+				let _ = self.0.wait();
+			}
+		}
+
+		fn consume_delayed_stop(case: ProbeCase, background: bool) {
+			let (child, event) = ProbeChild::with_queued_stop(case);
+			let pid = child.pid();
+			let init = ShellInit { mode: ModeId::Zsh, ..skeleton_init(&[]) };
+			let mut rig = Rig::new(FakeHost::new(), init);
+			let (shell, host, store) = rig.parts();
+			let root = shell.procs[0].vpid;
+			let vpid = Vpid(root.0 + 1);
+			shell.k.jobctl.root = Some(root);
+			let mut vp = Vproc::new(
+				vpid,
+				Some(root),
+				shell.procs[0].fds.clone(),
+				shell.procs[0].cwd.clone(),
+				None,
+				true,
+			);
+			let mut frame = Frame::new(None, 0, FrameKind::Subshell);
+			frame.scratch =
+				Some(Box::new(Scratch { live: Live::Ext(Box::new(child)), ..Scratch::default() }));
+			vp.frames.push(frame);
+			vp.blocked = Some(Blocked { key: WaitKey::Ext { pid }, at: 0 });
+			shell.procs.push(vp);
+			let wait = if background {
+				shell.k.jobctl.leaders.push((vpid, Some(vpid)));
+				let cwd = shell.procs[0].cwd.clone();
+				shell.procs[0]
+					.jobs
+					.add(JobId(1), vpid, "stop/read/exit".into(), true, cwd);
+				WaitKey::Job(JobId(1))
+			} else {
+				WaitKey::Proc(vpid)
+			};
+			shell.procs[0].blocked = Some(Blocked { key: wait.clone(), at: 17 });
+			let queued_output = shell.procs[0].out.len();
+
+			// Delay consumption until after SIGCONT or exit. The frame still
+			// owns the real external, so job_events must reach ext_stopped.
+			shell.k.jobctl.events.push((vpid, event));
+			shell.job_events(&mut Cx { host, store });
+
+			let stopped = matches!(case, ProbeCase::Stopped);
+			assert_eq!(
+				shell.k.jobctl.fg_stop,
+				(!background && stopped).then_some(Signal::Stop),
+				"{case:?}, background={background}: only a current stop may suspend the foreground"
+			);
+			assert_eq!(
+				shell.procs[1].stopped,
+				background && stopped,
+				"{case:?}: a stale stop must not re-stop the job vproc"
+			);
+			if stopped {
+				assert!(shell.procs[0].blocked.is_none(), "a real stop releases the owner's wait");
+			} else {
+				assert_eq!(
+					shell.procs[0].blocked.as_ref().map(|b| (&b.key, b.at)),
+					Some((&wait, 17)),
+					"{case:?}: a stale stop must not finish the owner's wait"
+				);
+				assert_eq!(shell.procs[0].out.len(), queued_output, "no stale stopped-job notice");
+			}
+			if background {
+				assert_eq!(
+					shell.procs[0]
+						.jobs
+						.by_vpid(vpid)
+						.expect("registered job")
+						.state,
+					if stopped {
+						JobState::Stopped(Signal::Stop)
+					} else {
+						JobState::Running
+					},
+					"{case:?}: the job table must reflect only current stops"
+				);
+			}
+			assert!(shell.k.jobctl.events.is_empty(), "even filtered events are consumed once");
+			assert_eq!(
+				info(i32::try_from(pid).expect("child pid fits"))
+					.expect("unreaped fixture")
+					.state,
+				case.state(),
+				"consuming a delayed event must not change the real process state"
+			);
+		}
+
+		/// Linux's live probe must reject a stop undone before the scheduler
+		/// consumes it, while still suspending for a genuinely stopped child.
+		#[test]
+		fn foreground_stale_stops_do_not_suspend_resumed_or_exited_children() {
+			for case in [ProbeCase::Stopped, ProbeCase::Resumed, ProbeCase::Exited] {
+				consume_delayed_stop(case, false);
+			}
+		}
+
+		/// A delayed stop must not mark a resumed/exited background job stopped,
+		/// emit a false notice or release its owner's wait.
+		#[test]
+		fn background_stale_stops_do_not_restop_resumed_or_exited_jobs() {
+			for case in [ProbeCase::Stopped, ProbeCase::Resumed, ProbeCase::Exited] {
+				consume_delayed_stop(case, true);
+			}
+		}
+	}
+}

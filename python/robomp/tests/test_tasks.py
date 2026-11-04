@@ -255,7 +255,13 @@ async def test_pr_metadata_fetch_failure(db, caplog, branchless_mapping, error):
         row, pr = await resolve()
         assert (row.number if row else None) == (7 if branchless_mapping else None)
         assert pr is None
-        assert "PR metadata fetch failed" in caplog.text
+        warnings = [record for record in caplog.records if record.getMessage() == "PR metadata fetch failed"]
+        assert len(warnings) == 1
+        assert warnings[0].name == "robomp.tasks"
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].repo == "octo/widget"
+        assert warnings[0].pr == 12
+        assert warnings[0].err == str(error)
     else:
         with pytest.raises(ValueError, match="unexpected"):
             await resolve()
@@ -316,7 +322,11 @@ async def test_pr_handler_fetch_failure(
 
     if isinstance(error, GitHubError):
         assert await invoke() is None
-        assert warning in caplog.text
+        warnings = [record for record in caplog.records if record.getMessage() == warning]
+        assert len(warnings) == 1
+        assert warnings[0].name == "robomp.tasks"
+        assert warnings[0].levelno == logging.WARNING
+        assert warnings[0].err == str(error)
     else:
         with pytest.raises(ValueError, match="unexpected"):
             await invoke()

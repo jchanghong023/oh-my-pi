@@ -10,6 +10,7 @@ import { STTController } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
 import { cfgSttLanguage, cfgSttSubmitTrigger } from "@oh-my-pi/pi-coding-agent/stt/settings";
+import { localSttModel } from "./helpers/local-stt-model";
 
 const ZERO_USAGE = {
 	input: 0,
@@ -232,7 +233,7 @@ describe("STTController cloud transcription", () => {
 	});
 
 	it("keeps local-inference models on the streaming worker path", async () => {
-		const model = getBundledModel("local", "whisper-base");
+		const model = localSttModel("whisper-base");
 		settings.setModelRole("dictation", "local/whisper-base");
 		const registry = registryFor(model);
 		vi.spyOn(downloader, "isSttModelCached").mockResolvedValue(true);

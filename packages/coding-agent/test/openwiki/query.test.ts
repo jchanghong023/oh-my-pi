@@ -114,9 +114,9 @@ describe("OMP OpenWiki read-only tools", () => {
 		expect(await readFile(registry)).toEqual(beforeRegistry);
 		expect(await readFile(page)).toEqual(beforePage);
 		await rm(payments, { recursive: true });
-		await expect(
-			read.execute("missing", { wiki: "payments", page: pagePath, sections: [section] }),
-		).rejects.toThrow();
+		await expect(read.execute("missing", { wiki: "payments", page: pagePath, sections: [section] })).rejects.toThrow(
+			/invalid_state:[\s\S]*(?:payments|unavailable|missing|accessible|found)/i,
+		);
 		expect(await readFile(registry)).toEqual(beforeRegistry);
 	}, 30_000);
 
@@ -149,6 +149,7 @@ describe("OMP OpenWiki read-only tools", () => {
 			await search.execute("hinted", { query: "配置", paths: ["src/punctuated.ts"] }),
 		);
 		expect(hinted.results[0].ref).toContain(punctuated);
+		expect(hinted.results.map(result => result.ref[0])).toContain(exact);
 		const single = json<WikiSearchResults>(await search.execute("single", { query: "配" }));
 		expect(single.results.some(result => result.ref.includes(exact))).toBe(true);
 		expect(single.results.some(result => result.ref.includes(unrelated))).toBe(true);
@@ -223,6 +224,19 @@ describe("OMP OpenWiki read-only tools", () => {
 			await search.execute("corrected", { query: "VALIDATION_BEACON", limit: 1 }),
 		);
 		expect(found.results[0].ref).toContain("openwiki/architecture/service.md#operation");
+		for (const limit of [0, 21]) {
+			await expect(search.execute("limit-boundary", { query: "VALIDATION_BEACON", limit })).rejects.toThrow(
+				/invalid_input:[\s\S]*limit:[\s\S]*1[\s\S]*20/,
+			);
+		}
+		for (const paths of [["../outside.ts"], ["/absolute.ts"], ["src/*.ts"], Array(21).fill("src/app.ts")]) {
+			await expect(search.execute("invalid-paths", { query: "VALIDATION_BEACON", paths })).rejects.toThrow(
+				/invalid_input:[\s\S]*paths/,
+			);
+		}
+		await expect(search.execute("long-query", { query: "x".repeat(2001) })).rejects.toThrow(
+			/invalid_input:[\s\S]*query:[\s\S]*2000/,
+		);
 	}, 30_000);
 
 	it("returns usable anchors from the selected page when a section is unknown", async () => {
@@ -326,5 +340,155 @@ describe("OMP OpenWiki read-only tools", () => {
 		expect(json<WikiSearchResults>(noHits).results).toEqual([]);
 		const restricted = new WriteTool({ ...context, xdev: { ...xdev, isAllowed: () => false } });
 		expect(restricted.approval(args)).toBe("exec");
+	}, 30_000);
+
+	// The host must preserve full Markdown and bound corrective anchor disclosure.
+	it("reads multiple complete Markdown sections and bounds available anchor corrections", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-complete-markdown-");
+		const root = dir.join("repo");
+		await repository(root, "COMPLETE_MARKDOWN_BEACON");
+		const page = "openwiki/architecture/long.md";
+		const markdown = Array.from(
+			{ length: 25 },
+			(_, index) =>
+				`## Section ${index}\n\nCOMPLETE_MARKDOWN_BEACON ${index} **bold** [source](../../src/service.ts)\n\n\`\`\`ts\nconst section = ${index};\n\`\`\`\n`,
+		).join("\n");
+		await writeFile(path.join(root, page), `---\ntitle: Long\ntype: guide\n---\n\n# Long\n\n${markdown}`);
+		const context = session(root, dir.join("agent"));
+		const reader = new OpenWikiReadTool(context);
+		const result = json<{ page: string; wiki?: string; sections: Array<{ section: string; content: string }> }>(
+			await reader.execute("multiple", { page, sections: ["section-0", "section-24"] }),
+		);
+		expect(result.page).toBe(page);
+		expect(result.wiki).toBeUndefined();
+		expect(result.sections.map(section => section.section)).toEqual(["section-0", "section-24"]);
+		expect(result.sections[0].content).toContain("**bold** [source](../../src/service.ts)");
+		expect(result.sections[1].content).toContain("```ts\nconst section = 24;\n```");
+		const error = await reader.execute("bad-anchor", { page, sections: ["missing-anchor"] }).catch(error => error);
+		expect(error).toBeInstanceOf(Error);
+		expect(error.message).toContain(page);
+		expect(error.message).toContain("missing-anchor");
+		expect(error.message).toMatch(/Available anchors \(first 20\)/);
+		const anchors = JSON.parse(error.message.match(/\[[^\n]*?\]/)?.[0] ?? "null") as string[];
+		expect(anchors).toHaveLength(20);
+		expect(anchors).toContain("section-0");
+		expect(anchors).not.toContain("section-24");
+		expect(await readFile(path.join(root, page), "utf8")).toBe(
+			`---\ntitle: Long\ntype: guide\n---\n\n# Long\n\n${markdown}`,
+		);
+	}, 30_000);
+
+	// CLI workspace selection must change the same profile state used by host queries.
+	it("uses and clears the active workspace through the OMP command without changing wiki data", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-workspace-cli-");
+		const root = dir.join("current");
+		const payments = dir.join("payments");
+		const platform = dir.join("platform");
+		const config = dir.join("config");
+		const agent = path.join(config, "agent");
+		await Promise.all([
+			repository(root, "Currentbeacon"),
+			repository(payments, "Paymentactivebeacon"),
+			repository(platform, "Platformactivebeacon"),
+		]);
+		await saveWikiWorkspaces(
+			[
+				{ name: "Payments", roots: [root, payments] },
+				{ name: "Platform", roots: [root, platform] },
+			],
+			{ configDirectory: path.join(agent, "openwiki") },
+		);
+		const registry = path.join(agent, "openwiki", "wiki-workspaces.json");
+		const before = JSON.parse(await readFile(registry, "utf8"));
+		async function command(...args: string[]) {
+			const child = Bun.spawn(
+				[process.execPath, path.resolve(import.meta.dir, "../../src/cli.ts"), "openwiki", "workspace", ...args],
+				{
+					cwd: root,
+					env: {
+						PATH: process.env.PATH,
+						SystemRoot: process.env.SystemRoot,
+						HOME: dir.path(),
+						USERPROFILE: dir.path(),
+						OMP_CONFIG_ROOT: config,
+						OMP_OFFLINE: "1",
+						NO_COLOR: "1",
+					},
+					stdin: "ignore",
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [code, stdout, stderr] = await Promise.all([
+				child.exited,
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+			]);
+			expect(code, stdout + stderr).toBe(0);
+			return stdout;
+		}
+		expect(await command("current")).toContain("No active wiki workspace is set");
+		expect(await command("use", "payments")).toContain("Active wiki workspace: Payments");
+		expect(await command("current")).toContain("Active wiki workspace: Payments");
+		const search = new OpenWikiSearchTool(session(root, agent));
+		const selected = json<WikiSearchResults>(await search.execute("selected", { query: "Paymentactivebeacon" }));
+		expect(selected.results[0].wiki).toBe("payments");
+		const excluded = json<WikiSearchResults>(await search.execute("excluded", { query: "Platformactivebeacon" }));
+		expect(excluded.results).toEqual([]);
+		expect(await command("clear")).toContain("Cleared the active wiki workspace");
+		expect(json<WikiWorkspaceRequired>(await search.execute("ambiguous-again", { query: "BEACON" })).status).toBe(
+			"workspace_required",
+		);
+		const after = JSON.parse(await readFile(registry, "utf8"));
+		expect(after.active).toEqual([]);
+		expect(after.wikis).toEqual(before.wikis);
+		expect(after.workspaces).toEqual(before.workspaces);
+		expect(await readFile(path.join(payments, "openwiki", "architecture", "service.md"), "utf8")).toContain(
+			"Paymentactivebeacon",
+		);
+	}, 30_000);
+
+	// The JSON examples exposed to the AI must form a working linked-Wiki read,
+	// including multiple anchors and preservation of the example's wiki identity.
+	it("executes the public read description JSON example against actual Markdown", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-description-example-");
+		const current = dir.join("current");
+		const jobs = dir.join("jobs");
+		const agent = dir.join("agent");
+		await Promise.all([repository(current, "CURRENT_ONLY"), repository(jobs, "JOBS_ONLY")]);
+		await writeFile(
+			path.join(jobs, "openwiki", "architecture", "jobs.md"),
+			"---\ntitle: Jobs\ntype: guide\n---\n# Jobs\n\n## Retry Control\n\nDOCUMENTED_RETRY_BEACON\n\n## Cancellation\n\nDOCUMENTED_CANCEL_BEACON\n",
+		);
+		await saveWikiWorkspaces([{ name: "Jobs", roots: [current, jobs] }], {
+			configDirectory: path.join(agent, "openwiki"),
+		});
+		const reader = new OpenWikiReadTool(session(current, agent));
+		const examples = [...reader.description.matchAll(/```json\s*\n([\s\S]*?)\n```/g)].map(match =>
+			JSON.parse(match[1]),
+		);
+		expect(examples).toHaveLength(2);
+		const [searchResult, readArgs] = examples as [
+			{ ref: string[]; wiki: string },
+			{ page: string; sections: string[]; wiki: string },
+		];
+		expect(searchResult.ref.map(ref => ref.split("#")[0])).toEqual([readArgs.page, readArgs.page]);
+		expect(searchResult.ref.map(ref => ref.split("#")[1])).toEqual(readArgs.sections);
+		expect(readArgs.wiki).toBe(searchResult.wiki);
+		const read = json<{ wiki: string; sections: Array<{ content: string }> }>(
+			await reader.execute("documented-example", readArgs),
+		);
+		expect(read.wiki).toBe("jobs");
+		expect(read.sections).toHaveLength(2);
+		expect(read.sections[0].content).toContain("DOCUMENTED_RETRY_BEACON");
+		expect(read.sections[1].content).toContain("DOCUMENTED_CANCEL_BEACON");
+		const normalized = json<WikiSearchResults>(
+			await new OpenWikiSearchTool(session(current, agent)).execute("normalized-query", {
+				query: "  DOCUMENTED_RETRY_BEACON  ",
+				limit: 20,
+			}),
+		);
+		expect(normalized.results[0].wiki).toBe("jobs");
+		expect(normalized.results[0].ref).toContain("openwiki/architecture/jobs.md#retry-control");
 	}, 30_000);
 });

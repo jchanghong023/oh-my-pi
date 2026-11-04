@@ -19,6 +19,7 @@ import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/h
 import { stampNativeVersion } from "../../../scripts/stamp-native-version";
 import { withRustCompilerEvents } from "../../../scripts/test-gate-native-events";
 import { generateEnumExports } from "./gen-enums";
+import { matchesInstalledFile } from "./installed-file";
 
 if (process.argv.length > 2) {
 	throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts");
@@ -109,9 +110,12 @@ async function cleanupStaleTemps(dir: string): Promise<void> {
 }
 
 async function installBinary(src: string, dest: string): Promise<void> {
+	if (await matchesInstalledFile(src, dest)) return;
+
 	const tempPath = `${dest}.tmp.${process.pid}`;
 
 	await fs.copyFile(src, tempPath);
+	await fs.chmod(tempPath, 0o644);
 
 	try {
 		// Atomic rename - works even if dest is loaded on Linux/macOS (old inode stays valid)
@@ -191,13 +195,15 @@ async function resolveBuiltAddonPath(outputDir: string, canonicalFilename: strin
 }
 
 async function installGeneratedBindings(outputDir: string): Promise<void> {
-	const sourcePath = path.join(outputDir, "index.d.ts");
-	const destPath = path.join(nativeDir, "index.d.ts");
-	try {
-		await fs.copyFile(sourcePath, destPath);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		throw new Error(`Failed to install generated index.d.ts: ${message}`);
+	for (const filename of ["index.d.ts", "index.js"]) {
+		const sourcePath = path.join(outputDir, filename);
+		const destPath = path.join(nativeDir, filename);
+		try {
+			await installBinary(sourcePath, destPath);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			throw new Error(`Failed to install generated ${filename}: ${message}`);
+		}
 	}
 }
 
@@ -299,8 +305,10 @@ try {
 		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
 		await installBinary(builtAddonPath, canonicalAddonPath);
 	}
+	// Finalize both bindings outside nativeDir so only final bytes reach the
+	// installed-file comparison, never napi's intermediate const-enum declarations.
+	await generateEnumExports(buildOutputDir);
 	await installGeneratedBindings(buildOutputDir);
-	await generateEnumExports();
 
 	console.log("Bindings build complete.");
 } finally {

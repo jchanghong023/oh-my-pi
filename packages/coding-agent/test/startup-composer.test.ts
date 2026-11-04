@@ -10,7 +10,7 @@ import * as registry from "@oh-my-pi/pi-coding-agent/collab/registry";
 import { CollabSocket } from "@oh-my-pi/pi-coding-agent/collab/relay-client";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { getCompanyConfig } from "@oh-my-pi/pi-coding-agent/config/company-provider";
 import * as pluginHelpers from "@oh-my-pi/pi-coding-agent/discovery/helpers";
@@ -559,12 +559,38 @@ describe("Composer prepaint", () => {
 			const testSession = await createTestSession();
 			const cache = composerCache.ComposerCache.open(path.join(testSession.tempDir, "composer.db"));
 			vi.spyOn(composerCache, "sharedComposerCache").mockReturnValue(cache);
-			const anthropic = testSession.session.model;
-			const openai = getBundledModel("openai", "gpt-5.2");
-			if (!anthropic || !openai) throw new Error("Bundled test models missing");
+			const modelLimits = { contextWindow: 128000, maxTokens: 4096 };
+			const anthropic = buildModel({
+				id: "prepaint-anthropic",
+				name: "Anthropic protocol fixture",
+				api: "anthropic-messages",
+				provider: "ascend",
+				baseUrl: "https://anthropic.invalid",
+				reasoning: false,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				...modelLimits,
+			});
+			const openai = buildModel({
+				id: "gpt-5.2",
+				name: "OpenAI protocol fixture",
+				api: "openai-responses",
+				provider: "openai-codex",
+				baseUrl: "https://api.openai.invalid/v1",
+				reasoning: true,
+				input: ["text"],
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+				...modelLimits,
+			});
+			for (const model of [openai, anthropic]) {
+				testSession.session.modelRegistry.registerProvider(model.provider, {
+					api: model.api,
+					baseUrl: model.baseUrl,
+					apiKey: "prepaint-fixture-key",
+					models: [{ ...model, ...modelLimits }],
+				});
+			}
 			testSession.session.settings.setModelRole("default", `${openai.provider}/${openai.id}`);
-			vi.spyOn(testSession.session.modelRegistry, "hasConfiguredAuth").mockReturnValue(true);
-			vi.spyOn(testSession.session.modelRegistry, "getAvailable").mockReturnValue([openai, anthropic]);
 			cfgTierOpenai.set(testSession.session.settings, configured);
 			await testSession.session.setModel(openai);
 			testSession.session.setFastMode(sessionFast);

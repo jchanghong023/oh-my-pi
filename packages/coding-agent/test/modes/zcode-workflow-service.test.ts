@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { ZCodeSessionManager } from "../../src/modes/zcode/sessions";
@@ -9,6 +10,9 @@ import { serializeSavedWorkflow } from "../../src/modes/zcode/workflows/definiti
 import { AuthStorage } from "../../src/session/auth-storage";
 import type { ZCodeSavedWorkflowMeta } from "../../src/modes/zcode/schema/vendor/zcode-protocol/index";
 import { workflowRunsStateSchema } from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/workflow-runs";
+import { AgentStorage } from "../../src/session/agent-storage";
+import { HistoryStorage } from "../../src/session/history-storage";
+import { closeSessionIndex } from "../../src/session/session-index";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -17,6 +21,15 @@ afterEach(async () => {
 async function fixture() {
 	const root = await mkdtemp(join(tmpdir(), "omp-workflow-service-"));
 	cleanup.push(() => rm(root, { recursive: true, force: true }));
+	cleanup.push(async () => {
+		// Settings/SDK storage is process-owned, not closed by an individual session.
+		// Release the same singleton owners as the workflow-driver/tools fixtures
+		// before removing this fixture's directories on Windows.
+		HistoryStorage.close();
+		closeSessionIndex();
+		AgentStorage.close();
+		closeModelCache();
+	});
 	const cwd = join(root, "project");
 	const agentDir = join(root, "agent");
 	await mkdir(join(cwd, ".zcode", "workflows"), { recursive: true });
@@ -184,5 +197,194 @@ describe("native saved workflow preflight", () => {
 		expect(
 			service.runs({ workspace: { workspacePath: `${cwd}-absent`, workspaceKey: `${cwd}-absent` }, limit: 50 }),
 		).toEqual({ runs: [] });
+	});
+	it("reads cold workflow artifact bytes without activating the parent runtime or acquiring its write lease", async () => {
+		const { manager, service, cwd } = await fixture();
+		const parent = await manager.create();
+		const native = parent.session.sessionManager;
+		const artifact = await native.allocateArtifactPath("workflow-md");
+		if (!artifact.id || !artifact.path) throw new Error("Missing native artifact allocation");
+		const content = "# Cold artifact\n只读历史，不恢复执行。\n";
+		await writeFile(artifact.path, content);
+		service.journal.createRun({
+			runId: "cold-artifact",
+			parentSessionId: parent.id,
+			cwd,
+			status: "completed",
+			caps: { maxConcurrency: 1 },
+			spentTokens: 0,
+		});
+		service.journal.putNode({
+			runId: "cold-artifact",
+			siteId: "report",
+			ordinal: 0,
+			kind: "artifact",
+			artifactId: "report",
+			inputHash: "cold-artifact",
+			status: "completed",
+			result: {
+				id: "report",
+				kind: "markdown",
+				version: 1,
+				uri: `artifact://${artifact.id}`,
+				contentType: "text/markdown",
+				bytes: Buffer.byteLength(content),
+				publishedAt: 1,
+			},
+		});
+		await manager.close(parent.id);
+		expect(manager.get(parent.id)).toBeUndefined();
+		const before = await manager.readEntries(parent.id);
+		const result = await service.artifactRead({
+			sessionId: parent.id,
+			runId: "cold-artifact",
+			artifactId: "report",
+			version: 1,
+			offset: 0,
+			limit: 4096,
+		});
+		expect(result).toEqual({
+			dataBase64: Buffer.from(content).toString("base64"),
+			mediaType: "text/markdown",
+			totalBytes: Buffer.byteLength(content),
+			nextOffset: null,
+		});
+		expect(manager.get(parent.id)).toBeUndefined();
+		expect(await manager.readEntries(parent.id)).toEqual(before);
+	});
+});
+
+describe("workflow mutation admission", () => {
+	it("preflights missing actor boundaries before changing a predecessor or creating a successor", async () => {
+		const { manager, service, cwd } = await fixture();
+		const parent = await manager.create();
+		service.journal.createRun({
+			runId: "missing-boundary",
+			parentSessionId: parent.id,
+			cwd,
+			scriptText: "return 1;",
+			status: "running",
+			caps: { maxConcurrency: 1 },
+			spentTokens: 0,
+		});
+		service.journal.putNode({
+			runId: "missing-boundary",
+			siteId: "ask",
+			ordinal: 0,
+			kind: "ask",
+			actorSiteId: "actor",
+			actorOrdinal: 0,
+			actorSeq: 0,
+			inputHash: "ask",
+			status: "completed",
+			result: "committed answer",
+		});
+		const before = service.getRun(parent.id, "missing-boundary");
+		await expect(service.amend(parent, { workId: "missing-boundary", maxConcurrency: 2 })).rejects.toMatchObject({
+			reason: "missing_boundaries",
+		});
+		expect(service.getRun(parent.id, "missing-boundary")).toEqual(before);
+		expect(service.listRuns(parent.id).runs.map(run => run.runId)).toEqual(["missing-boundary"]);
+	});
+
+	it("makes amend and resume mutually exclusive and releases the mutation after an unchanged rejection", async () => {
+		const { manager, service, cwd } = await fixture();
+		const parent = await manager.create();
+		service.journal.createRun({
+			runId: "unchanged",
+			parentSessionId: parent.id,
+			cwd,
+			scriptText: "return 1;",
+			status: "stopped",
+			stopReason: "user",
+			caps: { maxConcurrency: 3 },
+			spentTokens: 0,
+		});
+		const first = service.amend(parent, { workId: "unchanged", maxConcurrency: 3 });
+		await expect(service.resume(parent, "unchanged")).rejects.toThrow("control is busy");
+		await expect(first).rejects.toMatchObject({ reason: "unchanged" });
+		await expect(service.amend(parent, { workId: "unchanged", maxConcurrency: 3 })).rejects.toMatchObject({
+			reason: "unchanged",
+		});
+		expect(service.listRuns(parent.id).runs.map(run => run.runId)).toEqual(["unchanged"]);
+		expect(service.getRun(parent.id, "unchanged")).toMatchObject({ status: "stopped", caps: { maxConcurrency: 3 } });
+	});
+});
+
+describe("workflow successor settings", () => {
+	it("amends an ended run into a distinct successor retaining script, args and spent tokens without rewriting its predecessor", async () => {
+		const { manager, service, cwd } = await fixture();
+		const parent = await manager.create();
+		const scriptText = "return args;";
+		const args = { marker: "retained native input" };
+		service.journal.createRun({
+			runId: "ended",
+			parentSessionId: parent.id,
+			cwd,
+			scriptText,
+			args,
+			status: "stopped",
+			stopReason: "user",
+			caps: { maxConcurrency: 3 },
+			spentTokens: 17,
+		});
+		const predecessor = service.getRun(parent.id, "ended");
+		const successor = await service.amend(parent, { workId: "ended", maxConcurrency: 4 });
+		expect(successor.runId).not.toBe("ended");
+		expect(successor.launch.amend).toMatchObject({ predecessorRunId: "ended" });
+		expect(service.getRun(parent.id, successor.runId)).toMatchObject({
+			parentSessionId: parent.id,
+			scriptText,
+			args,
+			caps: { maxConcurrency: 4 },
+			spentTokens: 17,
+			resumedFrom: "ended",
+		});
+		expect(service.getRun(parent.id, "ended")).toEqual(predecessor);
+		expect(new Set(service.listRuns(parent.id).runs.map(run => run.runId))).toEqual(
+			new Set(["ended", successor.runId]),
+		);
+		await service.cancel(parent.id, successor.runId);
+	});
+});
+
+describe("workflow default and live caps", () => {
+	it("uses the OS concurrency ceiling and durably records only effective live cap changes", async () => {
+		const { manager, service, cwd } = await fixture();
+		const parent = await manager.create();
+		const prepared = await service.prepareScript({ cwd, script: "return 1;" });
+		if (!prepared.ok) throw new Error(prepared.message);
+		const started = await service.start(parent, prepared.prepared);
+		const ceiling = Math.max(1, availableParallelism());
+		expect(service.getRun(parent.id, started.runId).caps).toEqual({ maxConcurrency: ceiling });
+		expect(service.control(parent.id, started.runId, { maxConcurrency: ceiling + 1 })).toEqual({
+			changed: true,
+			maxConcurrency: ceiling + 1,
+		});
+		expect(service.control(parent.id, started.runId, { maxConcurrency: 1 })).toEqual({
+			changed: true,
+			maxConcurrency: 1,
+		});
+		expect(service.control(parent.id, started.runId, { maxConcurrency: 1 })).toEqual({
+			changed: false,
+			maxConcurrency: 1,
+		});
+		const changes = service.journal.getEvents(started.runId, { types: ["run-caps-changed"], reportItems: "all" });
+		expect(changes.map(row => row.event)).toEqual([
+			{
+				type: "run-caps-changed",
+				runId: started.runId,
+				caps: { maxConcurrency: ceiling + 1 },
+				previous: { maxConcurrency: ceiling },
+			},
+			{
+				type: "run-caps-changed",
+				runId: started.runId,
+				caps: { maxConcurrency: 1 },
+				previous: { maxConcurrency: ceiling + 1 },
+			},
+		]);
+		expect(service.getRun(parent.id, started.runId).caps).toEqual({ maxConcurrency: 1 });
+		await service.cancel(parent.id, started.runId);
 	});
 });

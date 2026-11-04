@@ -176,7 +176,7 @@ export async function deliverTeamReport(
 function previewQuestion(question: string): string {
 	const singleLine = question.trim().replace(/\s+/g, " ");
 	if (singleLine.length <= QUESTION_PREVIEW_LENGTH) return singleLine;
-	return `${singleLine.slice(0, QUESTION_PREVIEW_LENGTH - 1)}…`;
+	return `${singleLine.slice(0, QUESTION_PREVIEW_LENGTH)}…`;
 }
 
 /** Resolve independent slots from settings and the effective available models. */

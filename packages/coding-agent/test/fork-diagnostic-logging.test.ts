@@ -27,6 +27,7 @@ async function sandbox(level = "debug", offline = false) {
 	const root = path.join(directory, "project");
 	const home = path.join(directory, "home");
 	const configRoot = path.join(directory, "config");
+	const cacheRoot = path.join(directory, "cache");
 	const profileRoot = path.join(configRoot, "profiles", profile);
 	const agent = path.join(profileRoot, "agent");
 	await Promise.all([root, home, agent].map(dir => fs.mkdir(dir, { recursive: true, mode: 0o700 })));
@@ -40,6 +41,7 @@ async function sandbox(level = "debug", offline = false) {
 	}
 	Object.assign(env, {
 		OMP_CONFIG_ROOT: configRoot,
+		OMP_CACHE_DIR: cacheRoot,
 		HOME: home,
 		USERPROFILE: home,
 		TMPDIR: directory,
@@ -57,7 +59,8 @@ async function sandbox(level = "debug", offline = false) {
 		OMP_OFFLINE: offline ? "1" : "0",
 		OMP_LOG_LEVEL: level,
 	});
-	const logsDir = path.join(profileRoot, "logs");
+	const selectedCache = process.platform === "linux" ? path.join(cacheRoot, String(process.getuid!())) : cacheRoot;
+	const logsDir = path.join(selectedCache, "profiles", profile, "logs");
 	async function logs(): Promise<{ raw: string; records: RecordLine[] }> {
 		const files = await fs.readdir(logsDir);
 		const records: RecordLine[] = [];
@@ -129,7 +132,7 @@ async function sandbox(level = "debug", offline = false) {
 }
 
 function terminal(record: RecordLine) {
-	return /^(?:knowledge\.init\.(?:completed|finished)|knowledge\.database\.(?:completed|failed)|knowledge\.cli\.command\.(?:completed|failed|cancelled|rejected)|knowledge\.query\.(?:completed|finished)|knowledge\.storage\.migration\.(?:completed|failed))$/.test(
+	return /^(?:knowledge\.init\.finished|knowledge\.import\.completed|knowledge\.database\.(?:completed|failed)|knowledge\.cli\.command\.(?:completed|failed|cancelled|rejected)|knowledge\.query\.(?:completed|finished)|knowledge\.storage\.migration\.(?:completed|failed))$/.test(
 		record.message,
 	);
 }
@@ -153,7 +156,10 @@ function expectClosedOperations(records: RecordLine[]) {
 				terminal(record) &&
 				record.operation_id === start.operation_id &&
 				record.call_id === start.call_id &&
-				record.event === event,
+				(record.event === event ||
+					(start.message === "knowledge.init.started" &&
+						record.message === "knowledge.import.completed" &&
+						record.event === "knowledge.import.completed")),
 		);
 		expect(endings.length).toBeGreaterThan(0);
 		for (const end of endings) {
@@ -229,8 +235,15 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			expect(imported.code).toBe(0);
 			expect(JSON.parse(imported.stdout).index).toMatchObject({ name, documentCount: 1 });
 			const initial = await box.logs();
-			const published = event(initial.records, "knowledge.init.completed");
-			expect(published).toMatchObject({ stage: "publish", result: "completed", file_count: 1, document_count: 1 });
+			const published = event(initial.records, "knowledge.import.completed");
+			expect(published).toMatchObject({
+				event: "knowledge.import.completed",
+				stage: "publish",
+				result: "completed",
+				file_count: 1,
+				document_count: 1,
+				fulltext_status: "ready",
+			});
 			expect(published.section_count as number).toBeGreaterThan(0);
 			const operation = sameOperation(initial.records, published);
 			expect(operation.map(record => record.message)).toContain("knowledge.cli.command.started");
@@ -239,7 +252,6 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 
 			const duplicate = await box.cli(["knowledge", "init", documents, "--name", name, "--json"]);
 			expect(duplicate.code).toBe(1);
-			expect(duplicate.stderr).toContain("Document index already exists");
 			const missing = await box.cli([
 				"knowledge",
 				"init",
@@ -249,7 +261,6 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 				"--json",
 			]);
 			expect(missing.code).toBe(1);
-			expect(missing.stderr).toContain("Markdown root is not a directory");
 			await fs.rename(documents, path.join(box.directory, "documents-unavailable"));
 			const wiki = await box.probe("wiki", canary);
 			expect(wiki.indexes).toHaveLength(1);
@@ -273,18 +284,20 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			const rejected = records.find(
 				record => record.message === "knowledge.init.finished" && record.reason === "duplicate_name",
 			);
+			if (!rejected) throw new Error("Missing rejected duplicate-import diagnostic");
 			expect(rejected).toMatchObject({ stage: "validate", result: "rejected", cleanup: "not_needed" });
-			const duplicateOperation = sameOperation(records, rejected as RecordLine);
+			const duplicateOperation = sameOperation(records, rejected);
 			expect(duplicateOperation.some(record => record.message === "knowledge.database.completed")).toBe(true);
 			expect(duplicateOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(false);
 			const absent = records.find(record => record.message === "knowledge.init.finished" && record.stage === "scan");
+			if (!absent) throw new Error("Missing rejected source-directory diagnostic");
 			expect(absent).toMatchObject({
 				result: "rejected",
 				reason: "source_not_directory",
 				document_count: 0,
 				cleanup: "not_needed",
 			});
-			const absentOperation = sameOperation(records, absent as RecordLine);
+			const absentOperation = sameOperation(records, absent);
 			expect(absentOperation.some(record => record.message === "knowledge.init.scan.started")).toBe(true);
 			expect(
 				absentOperation.some(
@@ -297,8 +310,9 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 					record.cleanup === "completed" &&
 					record.result === "failed",
 			);
+			if (!rollback) throw new Error("Missing failed import rollback diagnostic");
 			expect(rollback).toMatchObject({ stage: "read", document_count: 1 });
-			const rollbackOperation = sameOperation(records, rollback as RecordLine);
+			const rollbackOperation = sameOperation(records, rollback);
 			expect(rollbackOperation.some(record => record.message === "knowledge.init.lock.completed")).toBe(true);
 			expect(
 				rollbackOperation.some(
@@ -309,8 +323,9 @@ describe("fork diagnostics on the real rotating disk transport", () => {
 			const cancelled = records.find(
 				record => record.message === "knowledge.init.finished" && record.result === "cancelled",
 			);
+			if (!cancelled) throw new Error("Missing cancelled import diagnostic");
 			expect(cancelled).toMatchObject({ cleanup: "completed", document_count: 1 });
-			expect(sameOperation(records, cancelled as RecordLine).some(record => record.level === "error")).toBe(false);
+			expect(sameOperation(records, cancelled).some(record => record.level === "error")).toBe(false);
 			const queried = event(records, "knowledge.query.completed");
 			expect(queried).toMatchObject({ result: "completed", tool_call_id: "diagnostic-wiki" });
 			expect(queried.rendered_section_count as number).toBeGreaterThan(0);

@@ -980,3 +980,197 @@ pub(crate) fn search(
 	check()?;
 	Ok(best.into_iter().map(|(id, ..)| id).collect())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	// Frozen deterministic vectors exercise ANN (>256 eligible rows), not the
+	// small-scope fallback.
+	#[test]
+	fn persisted_ann_meets_recall_in_each_scope_after_reopen_and_rejects_wrong_identity() {
+		const DIMS: usize = 8;
+		const ROWS_PER_INDEX: usize = 2048;
+		const K: usize = 64;
+		let directory = std::env::temp_dir().join(format!(
+			"knowledge-ann-quality-{}-{}",
+			std::process::id(),
+			std::time::SystemTime::now()
+				.duration_since(std::time::UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		std::fs::create_dir_all(&directory).unwrap();
+		struct Cleanup(std::path::PathBuf);
+		impl Drop for Cleanup {
+			fn drop(&mut self) {
+				let _ = std::fs::remove_dir_all(&self.0);
+			}
+		}
+		let _cleanup = Cleanup(directory.clone());
+		let path = directory.join("knowledge.db");
+		let connection = Connection::open(&path).unwrap();
+		connection
+			.execute_batch(
+				"CREATE TABLE doc_indexes(id INTEGER PRIMARY KEY,name TEXT);
+			CREATE TABLE documents(id INTEGER PRIMARY KEY,index_id INTEGER,relative_path TEXT);
+			CREATE TABLE sections(id INTEGER PRIMARY KEY,index_id INTEGER,document_id INTEGER);
+			CREATE TABLE wiki_vector_generations(index_id INTEGER,token TEXT,model TEXT,dimensions \
+				 INTEGER,complete INTEGER);
+			CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
+			INSERT INTO doc_indexes VALUES(1,'one'),(2,'two');
+			INSERT INTO documents VALUES(1,1,'scope/evidence.md'),(2,1,'scope-other/decoy.md'),
+				(3,2,'scope/evidence.md'),(4,2,'scope-other/decoy.md');",
+			)
+			.unwrap();
+		connection.execute_batch(SCHEMA).unwrap();
+		let mut originals = Vec::new();
+		let mut state = 0x1234_5678_u64;
+		connection.execute_batch("BEGIN").unwrap();
+		for index in 1..=2i64 {
+			for ordinal in 0..ROWS_PER_INDEX {
+				let id = (index - 1) * ROWS_PER_INDEX as i64 + ordinal as i64 + 1;
+				let document = (index - 1) * 2 + if ordinal % 8 == 0 { 1 } else { 2 };
+				let mut values = [0.0f32; DIMS];
+				for value in &mut values {
+					state ^= state << 13;
+					state ^= state >> 7;
+					state ^= state << 17;
+					*value = (state as u32 as f64 / u32::MAX as f64 * 2.0 - 1.0) as f32;
+				}
+				let norm = values
+					.iter()
+					.map(|value| f64::from(*value).powi(2))
+					.sum::<f64>()
+					.sqrt();
+				for value in &mut values {
+					*value = (f64::from(*value) / norm) as f32;
+				}
+				let bytes: Vec<u8> = values
+					.iter()
+					.flat_map(|value| value.to_le_bytes())
+					.collect();
+				connection
+					.execute("INSERT INTO sections VALUES(?,?,?)", params![id, index, document])
+					.unwrap();
+				connection
+					.execute("INSERT INTO wiki_section_vectors VALUES(?,?,?)", params![index, id, bytes])
+					.unwrap();
+				originals.push((id, index, ordinal % 8 == 0, values));
+			}
+			let token = format!("generation-{index}");
+			connection
+				.execute("INSERT INTO wiki_vector_generations VALUES(?,?,'model',?,1)", params![
+					index,
+					token,
+					DIMS as i64
+				])
+				.unwrap();
+			build(&connection, "database-identity", index, &token, DIMS, ROWS_PER_INDEX, &|| Ok(()))
+				.unwrap();
+		}
+		connection.execute_batch("COMMIT").unwrap();
+		drop(connection);
+		let connection = Connection::open(&path).unwrap();
+		let cache = IndexCache::default();
+		for (group, index, path) in [
+			("unfiltered", None, None),
+			("index", Some("one"), None),
+			("directory", None, Some("scope/")),
+			("file", None, Some("scope/evidence.md")),
+			("index-and-file", Some("one"), Some("scope/evidence.md")),
+		] {
+			let (generations, failure) = prepare(
+				&connection,
+				"database-identity",
+				"guard",
+				&cache,
+				"model",
+				index,
+				PathScope::validate(path).unwrap(),
+				&|| Ok(()),
+			)
+			.unwrap();
+			assert!(failure.is_none(), "{group}: {failure:?}");
+			let eligible: Vec<_> = originals
+				.iter()
+				.filter(|(_, owner, scoped, _)| {
+					(index.is_none() || *owner == 1) && (path.is_none() || *scoped)
+				})
+				.collect();
+			// The file+index group has 256 rows and explicitly covers the exact
+			// boundary too.
+			let mut sum = 0.0;
+			for query_index in [0, 17, 319, 1023] {
+				let query: Vec<f64> = originals[query_index]
+					.3
+					.iter()
+					.map(|value| f64::from(*value))
+					.collect();
+				let qnorm = query.iter().map(|value| value * value).sum::<f64>().sqrt();
+				let mut exact: Vec<_> = eligible
+					.iter()
+					.map(|(id, _, _, values)| {
+						let vnorm = values
+							.iter()
+							.map(|value| f64::from(*value).powi(2))
+							.sum::<f64>()
+							.sqrt();
+						let dot = query
+							.iter()
+							.zip(values)
+							.map(|(q, v)| q * f64::from(*v))
+							.sum::<f64>();
+						(*id, dot / (qnorm * vnorm))
+					})
+					.collect();
+				exact.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+				let actual = search(&generations, DIMS, &query, K, &|| Ok(())).unwrap();
+				assert_eq!(actual.len(), K.min(eligible.len()), "{group}");
+				assert_eq!(
+					actual
+						.iter()
+						.collect::<std::collections::HashSet<_>>()
+						.len(),
+					actual.len()
+				);
+				let threshold = exact[K.min(exact.len()) - 1].1;
+				// Predeclared tie rule: an equally distant boundary neighbor
+				// receives full credit.
+				let credit = actual
+					.iter()
+					.filter(|id| {
+						exact
+							.iter()
+							.any(|(expected, score)| expected == *id && *score >= threshold - 1e-12)
+					})
+					.count();
+				let recall = credit as f64 / K.min(eligible.len()) as f64;
+				sum += recall;
+				eprintln!("knowledge ANN group={group} query={query_index} recall_at_{K}={recall}");
+			}
+			assert!(sum / 4.0 >= 0.99, "{group}: mean Recall@{K}={}", sum / 4.0);
+		}
+		let (wrong, failure) =
+			prepare(&connection, "different-database", "guard", &cache, "model", None, None, &|| {
+				Ok(())
+			})
+			.unwrap();
+		assert!(wrong.is_empty());
+		assert!(failure.is_some());
+		let (empty, failure) = prepare(
+			&connection,
+			"database-identity",
+			"guard",
+			&cache,
+			"model",
+			None,
+			PathScope::validate(Some("absent/")).unwrap(),
+			&|| Ok(()),
+		)
+		.unwrap();
+		assert!(empty.is_empty());
+		assert!(failure.is_none());
+		cache.clear();
+	}
+}

@@ -19,6 +19,7 @@ function fixture(continuation = false, goalEnabled = true) {
 	let confirmDrop = false;
 	const output: string[] = [];
 	const continuations: string[] = [];
+	const notices: string[] = [];
 	const continuationMessages: Array<{ customType: string; content: unknown; details?: unknown }> = [];
 	const transcript = { id: "session-a" };
 	const contexts = new Map<string, Pick<SessionContext, "mode" | "modeData">>();
@@ -65,6 +66,7 @@ function fixture(continuation = false, goalEnabled = true) {
 		},
 		sendGoalModeContext: async () => {},
 		getTodoPhases: () => [],
+		emitNotice: (_level: string, message: string) => notices.push(message),
 		promptCustomMessage: async (message: { customType: string; content: unknown; details?: unknown }) => {
 			continuations.push(message.customType);
 			continuationMessages.push(message);
@@ -93,6 +95,7 @@ function fixture(continuation = false, goalEnabled = true) {
 		session,
 		output,
 		continuations,
+		notices,
 		continuationMessages,
 		transcript,
 		contexts,
@@ -131,14 +134,24 @@ describe("ZCode goal slash adapter", () => {
 	});
 
 	test.each([
-		["abort", false],
-		["abort", true],
-		["pause", false],
-		["pause", true],
+		["abort", false, false],
+		["abort", true, false],
+		["abort", true, true],
+		["pause", false, false],
+		["pause", true, false],
+		["pause", true, true],
 	] as const)(
-		"P2-12 preserves paused state when %s interrupts pending tool activation (autoOrchestrate=%s)",
-		async (stop, autoOrchestrate) => {
+		"P2-12 preserves paused state when %s interrupts pending tool activation (new autopilot=%s, original autopilot=%s)",
+		async (stop, autoOrchestrate, originalAutopilot) => {
 			const f = fixture(true);
+			if (autoOrchestrate) {
+				// An automatic replacement prepares tools before committing its
+				// objective. Interrupt a real existing goal, not an uncommitted one.
+				await f.controller.handleSlash("set Original objective before replacement", f.runtime, {
+					autoOrchestrate: originalAutopilot,
+				});
+			}
+			const original = structuredClone(f.state());
 			const cancellation = new AbortController();
 			f.runtime.signal = cancellation.signal;
 			const requested = Promise.withResolvers<void>();
@@ -161,6 +174,7 @@ describe("ZCode goal slash adapter", () => {
 				await requested.promise;
 				const goalId = f.state()!.goal.id;
 				expect(f.state()).toMatchObject({ enabled: true, goal: { status: "active" } });
+				if (autoOrchestrate) expect(f.state()).toEqual(original);
 				if (stop === "abort") {
 					// Match the RPC host: close continuation and command channels before runtime abort cleanup.
 					f.controller.stopForHostAbort();
@@ -174,15 +188,18 @@ describe("ZCode goal slash adapter", () => {
 				expect(paused).toMatchObject({ enabled: false, goal: { id: goalId, status: "paused" } });
 				expect(persisted).toMatchObject({
 					mode: "goal_paused",
-					modeData: { goal: paused!.goal, ...(autoOrchestrate ? { autoOrchestrate: true } : {}) },
+					modeData: { goal: paused!.goal, ...(originalAutopilot ? { autoOrchestrate: true } : {}) },
 				});
+				expect(paused?.goal.objective).toBe(
+					autoOrchestrate ? "Original objective before replacement" : "interrupted objective",
+				);
 				const outputBefore = [...f.output];
 
 				released.resolve();
 				const result = await entering;
 				expect(f.state()).toEqual(paused);
 				expect(f.contexts.get(f.transcript.id)).toEqual(persisted);
-				expect(f.state()?.autoOrchestrate === true).toBe(autoOrchestrate);
+				expect(f.state()?.autoOrchestrate === true).toBe(originalAutopilot);
 				expect(result).toBeUndefined();
 				expect(f.output).toEqual(outputBefore);
 				f.controller.observe({ type: "agent_end", isTerminal: true, messages: [] });
@@ -327,6 +344,30 @@ describe("ZCode goal slash adapter", () => {
 			dispose();
 		}
 	});
+
+	test.each(["create", "replace"] as const)(
+		"failed autopilot %s tool activation cannot change the saved mode or objective",
+		async operation => {
+			const f = fixture();
+			if (operation === "replace") await f.controller.handleSlash("set Original ordinary objective", f.runtime);
+			const previous = structuredClone(f.state());
+			const persisted = structuredClone(f.contexts.get(f.transcript.id));
+			const tools = f.tools();
+			const failure = new Error("The host could not activate Goal tools");
+			const activate = spyOn(f.session, "setActiveToolsByName").mockRejectedValueOnce(failure);
+			try {
+				await expect(
+					f.controller.handleSlash("set New unattended objective", f.runtime, { autoOrchestrate: true }),
+				).rejects.toBe(failure);
+				expect(f.state()).toEqual(previous);
+				expect(f.contexts.get(f.transcript.id)).toEqual(persisted);
+				expect(f.tools()).toEqual(tools);
+				expect(f.controller.continuationPending).toBe(false);
+			} finally {
+				activate.mockRestore();
+			}
+		},
+	);
 
 	test("explicit auto-orchestrate creates and replaces goals without forcing continuation", async () => {
 		const f = fixture();
@@ -609,6 +650,57 @@ describe("ZCode goal slash adapter", () => {
 		expect(f.state()?.goal.id).toBe(id);
 		expect(f.state()?.goal.tokenBudget).toBeUndefined();
 	});
+
+	test.each([false, true])(
+		"bounds the app-server recovery stretch without replenishing it (autopilot=%s)",
+		async autoOrchestrate => {
+			const f = fixture(true);
+			const objective = "Keep the full app-server objective <literal> intact";
+			await f.controller.handleSlash(`set ${objective}`, f.runtime, { autoOrchestrate });
+			const end = (messages: unknown[]) =>
+				f.controller.observe({
+					type: "agent_end",
+					isTerminal: true,
+					messages,
+				} as AgentSessionEvent);
+			const text = {
+				role: "assistant",
+				stopReason: "stop",
+				content: [{ type: "text", text: "I will call read now." }],
+			};
+			end([]);
+			await tick();
+			end([text]);
+			await tick();
+			expect(f.continuations).toEqual(["goal-continuation", "goal-tool-recovery"]);
+			expect(f.continuationMessages[1]?.content).toContain(escapeXmlText(objective));
+			end([
+				{
+					role: "assistant",
+					stopReason: "toolUse",
+					content: [{ type: "toolCall", id: "r1", name: "read", arguments: { path: "task.txt" } }],
+				},
+				{
+					role: "toolResult",
+					toolName: "read",
+					toolCallId: "r1",
+					content: [{ type: "text", text: "new task evidence" }],
+					isError: false,
+				},
+				text,
+			]);
+			await tick();
+			expect(f.continuations).toEqual(["goal-continuation", "goal-tool-recovery", "goal-continuation"]);
+			end([text]);
+			await tick();
+			f.controller.refresh();
+			await tick();
+			expect(f.continuations).toEqual(["goal-continuation", "goal-tool-recovery", "goal-continuation"]);
+			expect(f.notices).toEqual([expect.stringContaining("unfinished")]);
+			expect(f.state()).toMatchObject({ enabled: true, goal: { objective, status: "active" } });
+			expect(f.controller.continuationPending).toBe(false);
+		},
+	);
 
 	test("loop ownership suppresses goal continuation until the host refreshes its gate", async () => {
 		const f = fixture(true);

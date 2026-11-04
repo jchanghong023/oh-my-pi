@@ -169,11 +169,7 @@ describe("always-ask-cached resolution", () => {
 		const real = path.join(agentDir, "real");
 		const link = path.join(agentDir, "link");
 		fs.mkdirSync(real);
-		try {
-			fs.symlinkSync(real, link, "junction");
-		} catch {
-			return; // Symlinks unavailable on this host.
-		}
+		fs.symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
 		// The target does not exist yet: its key still resolves the link, so a folder grant on the
 		// link's own parent never covers a file that lands elsewhere.
 		expect(approvalTargetKey(agentDir, "link/new.ts")).toBe(approvalTargetKey(agentDir, "real/new.ts"));
@@ -388,6 +384,7 @@ describe("always-ask-cached wrapper cycle", () => {
 	});
 	afterEach(() => {
 		setAgentDir(originalAgentDir);
+		vi.restoreAllMocks();
 	});
 
 	function runnerWith(sessionManager: SessionManager, select: ExtensionUIContext["select"]): ExtensionRunner {
@@ -466,9 +463,72 @@ describe("always-ask-cached wrapper cycle", () => {
 		} as AgentToolContext;
 	}
 
+	it.each(["always-ask", "always-ask-cached", "write", "yolo", "guarded"] as const)(
+		"%s preserves user policies through a tool-owned allow at the execution gate",
+		async mode => {
+			const cwd = path.join(agentDir, "work");
+			for (const policy of ["allow", "prompt", "deny"] as const) {
+				const session = SessionManager.inMemory(cwd);
+				const tool = {
+					...pathTool("policy_probe", "write", cwd),
+					approval: () => ({ tier: "write" as const, policy: "allow" as const }),
+				};
+				const execute = vi.spyOn(tool, "execute");
+				const select = vi.fn<ExtensionUIContext["select"]>(async () => undefined);
+				const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
+				const ctx = {
+					...context(session),
+					settings: Settings.isolated({
+						"tools.approvalMode": mode,
+						"tools.approval": { policy_probe: policy },
+					}),
+				};
+				if (policy === "allow") {
+					const result = await wrapper.execute("allowed", { path: "a.txt" }, undefined, undefined, ctx);
+					expect(result.content).toEqual([{ type: "text", text: "executed" }]);
+					expect(execute).toHaveBeenCalledTimes(1);
+					expect(select).not.toHaveBeenCalled();
+				} else {
+					await expect(wrapper.execute("blocked", { path: "a.txt" }, undefined, undefined, ctx)).rejects.toThrow(
+						policy === "deny" ? /blocked by user policy/ : /denied by user/,
+					);
+					expect(execute).not.toHaveBeenCalled();
+					expect(select).toHaveBeenCalledTimes(policy === "prompt" ? 1 : 0);
+				}
+			}
+		},
+	);
+
+	it("guarded critical calls prompt every time and cannot reuse a remembered target grant", async () => {
+		const session = SessionManager.inMemory(agentDir);
+		const tool = {
+			...pathTool("critical_probe", "write", agentDir),
+			approval: () => ({ tier: "write" as const, override: true, reason: "critical probe" }),
+		};
+		const target = approvalTargetKey(agentDir, "a.txt")!;
+		getApprovalGrants(agentDir, session.getSessionId()).record(
+			approvalGrantKey("write", target),
+			tool.name,
+			"session",
+		);
+		const select = vi.fn<ExtensionUIContext["select"]>(async (_title, choices) => {
+			expect(choices).toEqual(["允许", "拒绝"]);
+			return "允许";
+		});
+		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
+		const ctx = { ...context(session), settings: Settings.isolated({ "tools.approvalMode": "guarded" }) };
+		for (const id of ["critical-1", "critical-2"]) {
+			expect((await wrapper.execute(id, { path: "a.txt" }, undefined, undefined, ctx)).content).toEqual([
+				{ type: "text", text: "executed" },
+			]);
+		}
+		expect(select).toHaveBeenCalledTimes(2);
+	});
+
 	it("remembers a session grant for its conversation only, and an Always grant for every one", async () => {
 		const cwd = path.join(agentDir, "work");
 		const tool = pathTool("write", "write", cwd);
+		const executed = vi.spyOn(tool, "execute");
 		const first = SessionManager.inMemory(cwd);
 		const prompt = await promptFor(tool, { path: "a.txt" });
 		const select = vi.fn(chooseAnswer(prompt, { grant: "target", always: false }));
@@ -496,11 +556,13 @@ describe("always-ask-cached wrapper cycle", () => {
 			context(third),
 		);
 		expect(never).not.toHaveBeenCalled();
+		expect(executed).toHaveBeenCalledTimes(4);
 	});
 
 	it("records nothing for Approve Once or Deny", async () => {
 		const cwd = path.join(agentDir, "work");
 		const tool = pathTool("write", "write", cwd);
+		const executed = vi.spyOn(tool, "execute");
 		const session = SessionManager.inMemory(cwd);
 		const prompt = await promptFor(tool, { path: "a.txt" });
 		const answers: ExtensionApprovalAnswer[] = ["once", "deny", "once"];
@@ -514,12 +576,14 @@ describe("always-ask-cached wrapper cycle", () => {
 		);
 		await wrapper.execute("o3", { path: "a.txt" }, undefined, undefined, context(session));
 		expect(select).toHaveBeenCalledTimes(3);
+		expect(executed).toHaveBeenCalledTimes(2);
 	});
 
 	it("asks for each targeted exec call without offering a target grant", async () => {
 		const cwd = path.join(agentDir, "work");
 		const session = SessionManager.inMemory(cwd);
 		const tool = pathTool("probe_exec", "exec", cwd);
+		const executed = vi.spyOn(tool, "execute");
 		const args = { path: "a.txt" };
 		const prompt = await promptFor(tool, args, { grants: false });
 		const select = vi.fn<ExtensionUIContext["select"]>(async (title, choices, options) => {
@@ -530,16 +594,19 @@ describe("always-ask-cached wrapper cycle", () => {
 		await wrapper.execute("e1", args, undefined, undefined, context(session));
 		await wrapper.execute("e2", args, undefined, undefined, context(session));
 		expect(select).toHaveBeenCalledTimes(2);
+		expect(executed).toHaveBeenCalledTimes(2);
 	});
 
 	it("offers an exec call without targets the session answer, not grants", async () => {
 		const session = SessionManager.inMemory(path.join(agentDir, "work"));
 		const tool: AgentTool = { ...pathTool("probe_exec", "exec", agentDir), approvalCacheTargets: undefined };
+		const executed = vi.spyOn(tool, "execute");
 		const prompt = await promptFor(tool, {}, { sessionSubject: "probe_exec" });
 		const select = vi.fn(chooseAnswer(prompt, "session"));
 		const wrapper = new ExtensionToolWrapper(tool, runnerWith(session, select));
 		await wrapper.execute("e1", {}, undefined, undefined, context(session));
 		await wrapper.execute("e2", {}, undefined, undefined, context(session));
 		expect(select).toHaveBeenCalledTimes(1);
+		expect(executed).toHaveBeenCalledTimes(2);
 	});
 });

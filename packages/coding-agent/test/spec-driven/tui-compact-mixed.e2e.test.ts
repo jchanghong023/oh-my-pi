@@ -579,16 +579,19 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				const consumedPeers = observed.flatMap((item, index) => {
 					if (item.name !== "wait" || index >= firstFollowup) return [];
 					const details = recordedResult(history, item.intent).details;
-					if (!isRecord(details) || !isRecord(details.waited)) return [];
-					const { from, body } = details.waited;
-					if (
-						typeof from !== "string" ||
-						typeof body !== "string" ||
-						!/^Mixed(?:Alpha|Beta)$/u.test(from) ||
-						body !== `MIXED_${from.slice("Mixed".length).toUpperCase()}_POST_COMPACT_PEER`
-					)
-						return [];
-					return [{ from, body }];
+					if (!isRecord(details) || !Array.isArray(details.waited)) return [];
+					return details.waited.flatMap((message: unknown) => {
+						if (!isRecord(message)) return [];
+						const { from, body } = message;
+						if (
+							typeof from !== "string" ||
+							typeof body !== "string" ||
+							!/^Mixed(?:Alpha|Beta)$/u.test(from) ||
+							body !== `MIXED_${from.slice("Mixed".length).toUpperCase()}_POST_COMPACT_PEER`
+						)
+							return [];
+						return [{ from, body }];
+					});
 				});
 				expect(consumedPeers.length).toBeGreaterThan(0);
 				for (const marker of [

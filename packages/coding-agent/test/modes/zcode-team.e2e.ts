@@ -529,6 +529,44 @@ describe("omp/team native observation bridge", () => {
 		f.bridge.dispose();
 	});
 
+	test("closing observation leaves the native job running and cold reads never invent its later completion", async () => {
+		const f = fixture();
+		const finish = Promise.withResolvers<void>();
+		const jobId = f.jobs.register(
+			"task",
+			"/team detached history",
+			async () => {
+				await finish.promise;
+				return "done";
+			},
+			{ ownerId: "Main", suppressDelivery: true },
+		);
+		try {
+			await logger.withLogContext({ job_id: jobId }, async () => {
+				f.bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, { id: "detached.team-proposal-A", status: "started" });
+			});
+			expect((await read(f.bridge, jobId)).status).toBe("running");
+			f.cold();
+			const snapshots = f.entries.length;
+			const restored = await read(f.bridge, jobId);
+			expect(restored.status).toBe("unavailable");
+			expect(restored.unavailable).toContain("No live native owner; last recorded state was running.");
+			expect(f.jobs.getJob(jobId)!.status).toBe("running");
+			expect(f.jobs.getJob(jobId)!.abortController.signal.aborted).toBe(false);
+			f.bus.emit(TASK_SUBAGENT_LIFECYCLE_CHANNEL, { id: "detached.team-proposal-A", status: "completed" });
+			expect(f.entries).toHaveLength(snapshots);
+			expect(restored.nodes[0].status).toBe("running");
+			finish.resolve();
+			await f.jobs.getJob(jobId)!.promise;
+			expect((await read(f.bridge, jobId)).status).toBe("unavailable");
+			expect(f.coldReads()).toBe(2);
+		} finally {
+			finish.resolve();
+			await f.jobs.getJob(jobId)!.promise;
+			f.bridge.dispose();
+		}
+	});
+
 	test("rejects unknown fields and does not attach an unrelated child without native job context", async () => {
 		const f = fixture();
 		await expect(f.bridge.handle({ action: "list", sessionId: "root", cwd: "/other" })).rejects.toThrow("fields");

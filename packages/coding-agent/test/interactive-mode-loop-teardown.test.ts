@@ -12,6 +12,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
+import { getTestModel } from "./helpers/model-fixtures";
 
 async function flushMicrotasks(): Promise<void> {
 	await Promise.resolve();
@@ -41,8 +42,7 @@ describe("InteractiveMode shutdown during a loop condition gate", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		const model = modelRegistry.find("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		session = new AgentSession({
 			agent: new Agent({ initialState: { model, systemPrompt: ["test"], tools: [], messages: [] } }),
 			sessionManager: SessionManager.inMemory(tempDir.path()),

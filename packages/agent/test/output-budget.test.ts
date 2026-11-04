@@ -135,10 +135,33 @@ describe("fitOutputTokensToContextWindow", () => {
 		// Claude 4.5+ on the Claude API ends at the window with
 		// `model_context_window_exceeded` instead of a 400, so fitting only
 		// takes output room away; older Claude still 400s and is fitted.
-		const opus = getBundledModel("anthropic", "claude-opus-5-5");
+		// Protocol fixtures are authored independently of the fork's bundled chat roster.
+		const opus = buildModel({
+			id: "claude-opus-5-5",
+			name: "Claude Opus 5.5",
+			api: "anthropic-messages",
+			provider: "anthropic",
+			baseUrl: "https://api.anthropic.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+		});
 		expect(fitOutputTokensToContextWindow(opus, promptOf(990_000), undefined, tokenizer)).toBeUndefined();
 		// Same model on an unverified host keeps the fit.
-		const bedrockOpus = getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-5-5");
+		const bedrockOpus = buildModel({
+			id: "global.anthropic.claude-opus-5-5",
+			name: "Claude Opus 5.5",
+			api: "bedrock-converse-stream",
+			provider: "amazon-bedrock",
+			baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+		});
 		expect(fitOutputTokensToContextWindow(bedrockOpus, promptOf(990_000), undefined, tokenizer)).toBe(
 			MIN_FITTED_OUTPUT_TOKENS,
 		);
@@ -174,7 +197,18 @@ describe("fitOutputTokensToContextWindow", () => {
 		// counting the visible text, or the signature's 2,000 byte-tokens, leaves
 		// the 32k cap in place and overflows the window.
 		const model: Model = {
-			...getBundledModel("amazon-bedrock", "global.anthropic.claude-opus-5"),
+			...buildModel({
+				id: "global.anthropic.claude-opus-5",
+				name: "Claude Opus 5",
+				api: "bedrock-converse-stream",
+				provider: "amazon-bedrock",
+				baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+				reasoning: true,
+				input: ["text", "image"],
+				cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+			}),
 			contextWindow: 40_000,
 		};
 		const signature = "s".repeat(8_000);
@@ -265,6 +299,40 @@ describe("fitOutputTokensToContextWindow", () => {
 		};
 		expect(fitOutputTokensToContextWindow(deepseek, rewritten, undefined, tokenizer)).toBe(
 			1_000_000 - 880_000 - 2 * MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
+		);
+	});
+
+	// An unreconstructable request-only transform must invalidate provider anchoring.
+	test.each(["anonymous-anchor", "anonymous-current", "no-anchor"] as const)(
+		"uses the full local estimate for %s request context",
+		kind => {
+			const anchor = reported(900_000, 2);
+			anchor.perCallContextTokens = 100_000;
+			anchor.perCallContextTokensBySource = { fixture: kind === "anonymous-anchor" ? 99_999 : 100_000 };
+			const temporary = userOf(50_003, 0);
+			markPerCallContextMessage(temporary, kind === "anonymous-current" ? undefined : "fixture");
+			const context: Context = {
+				systemPrompt: ["s".repeat(28)],
+				messages: [userOf(600_000, 1), ...(kind === "no-anchor" ? [] : [anchor]), temporary],
+			};
+			// Include the system prefix and assistant text, not the stale 900k report.
+			const local = 7 + tokenizer.countMessages(context.messages);
+			expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
+				1_000_000 -
+					(local + Math.ceil(local / 10) + context.messages.length * MESSAGE_FRAMING_TOKENS) -
+					OUTPUT_FIT_HEADWAY_TOKENS,
+			);
+		},
+	);
+
+	// Shrinking request-only context cannot make the anchored component negative.
+	test("floors a negative anchored remainder before adding the ordinary tail", () => {
+		const anchor = reported(20_000, 1);
+		anchor.perCallContextTokens = 100_000;
+		anchor.perCallContextTokensBySource = { fixture: 100_000 };
+		const context: Context = { messages: [anchor, userOf(600_003, 2)] };
+		expect(fitOutputTokensToContextWindow(deepseek, context, undefined, tokenizer)).toBe(
+			1_000_000 - 660_004 - MESSAGE_FRAMING_TOKENS - OUTPUT_FIT_HEADWAY_TOKENS,
 		);
 	});
 

@@ -294,6 +294,7 @@ export function parseModelList(value: unknown): string[] | undefined {
 export interface ParsedAgentFields {
 	name: string;
 	description: string;
+	hide?: boolean;
 	tools?: string[];
 	spawns?: string[] | "*";
 	model?: string[];
@@ -374,6 +375,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 
 	const thinkingLevel = parseConfiguredThinkingLevel(rawThinkingLevel);
 	const model = parseModelList(frontmatter.model);
+	const hide = parseBoolean(frontmatter.hide);
 	const blocking = parseBoolean(frontmatter.blocking);
 	const structured = parseBoolean(frontmatter.structured);
 	const readSummarize = parseBoolean(frontmatter.readSummarize);
@@ -395,6 +397,7 @@ export function parseAgentFields(frontmatter: Record<string, unknown>): ParsedAg
 	return {
 		name,
 		description,
+		hide,
 		tools,
 		spawns,
 		model,

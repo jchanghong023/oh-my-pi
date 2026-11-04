@@ -31,7 +31,7 @@ function runIndexDashboard(
 	const started = performance.now();
 	let stage = "dashboard";
 	let cancelled = false;
-	const current = (): boolean => {
+	const attached = (): boolean => {
 		if (
 			session.isDisposed ||
 			session.sessionId !== sessionId ||
@@ -39,11 +39,29 @@ function runIndexDashboard(
 			session.sessionManager !== manager
 		) {
 			controller.abort();
+			return false;
 		}
-		return !signal.aborted;
+		return true;
 	};
-	const output = async (text: string): Promise<void> => {
-		if (current()) await runtime.output(text);
+	const current = (): boolean => attached() && !signal.aborted;
+	const output = async (text: string, outputStage = stage, allowCancelled = false): Promise<void> => {
+		if (!(allowCancelled ? attached() : current())) return;
+		try {
+			await runtime.output(text);
+		} catch (error) {
+			logger.warn("RPC index dashboard output failed", {
+				component: "rpc",
+				event:
+					outputStage === "progress_output"
+						? "rpc_index_progress_output_failed"
+						: "rpc_index_dashboard_output_failed",
+				command,
+				stage: outputStage,
+				result: "failed",
+				elapsed_ms: performance.now() - started,
+				...logger.diagnosticError(error),
+			});
+		}
 	};
 	let lastPhase: string | undefined;
 	let lastProgressAt = 0;
@@ -53,17 +71,7 @@ function runIndexDashboard(
 		if (lastPhase === phase && now - lastProgressAt < 200 && completed !== total) return;
 		lastPhase = phase;
 		lastProgressAt = now;
-		void output(`${name}: ${phase} ${completed}/${total}`).catch(error => {
-			logger.warn("RPC index progress output failed", {
-				component: "rpc",
-				event: "rpc_index_progress_output_failed",
-				command,
-				stage: "progress_output",
-				result: "failed",
-				elapsed_ms: performance.now() - started,
-				...logger.diagnosticError(error),
-			});
-		});
+		void output(`${name}: ${phase} ${completed}/${total}`, "progress_output");
 	};
 	runtime.runCommandInBackground(() => {
 		const inherited = logger.getLogContext();
@@ -129,6 +137,7 @@ function runIndexDashboard(
 						});
 					} else {
 						const result = cancelled || !current() ? "cancelled" : "completed";
+						if (result === "cancelled") await output(`${name} cancelled.`, "cancel_output", true);
 						logger.info("RPC index dashboard ended", {
 							...fields(),
 							event: `rpc_index_dashboard_${result}`,

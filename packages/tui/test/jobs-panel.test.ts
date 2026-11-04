@@ -224,6 +224,10 @@ describe("JobsSheet", () => {
 			tui.setFocus(sheet);
 			await scheduler.settle(terminal);
 			assertSelection("0");
+			const nativeJobKeys = list(sheet.describe(CX))?.c?.flatMap(child =>
+				"key" in child && child.key?.startsWith("job-") ? [child.key] : [],
+			);
+			expect(nativeJobKeys).toEqual(jobs.map(job => job.id));
 			terminal.sendInput("x");
 			expect(cancel).not.toHaveBeenCalled();
 			for (let i = 0; i < 39; i++) terminal.sendInput(DOWN);
@@ -238,6 +242,7 @@ describe("JobsSheet", () => {
 			// the TUI's deferred resize-settle window before screen assertions.
 			await scheduler.advance(terminal, 300);
 			assertSelection("39");
+			expect(prop(list(sheet.describe({ ...CX, cols: 120 })), "selected")).toBe("job-39");
 			terminal.sendInput("x");
 			expect(cancel).toHaveBeenCalledTimes(2);
 			expect(cancel).toHaveBeenLastCalledWith("job-39");

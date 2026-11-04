@@ -5,6 +5,7 @@ import type { Readable, Writable } from "node:stream";
 import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import type { SessionInfo } from "../../session/session-listing";
 import type { AgentSession } from "../../session/agent-session";
+import { isLocalAgentSession } from "../../session/agent-session-handle";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { Settings } from "../../config/settings";
 import { ModelRegistry } from "../../config/model-registry";
@@ -80,6 +81,15 @@ export class ZCodeProtocolError extends Error {
 	) {
 		super(message);
 	}
+}
+
+function assertImplementedCollaborationMode(
+	mode: L.ZCodeSessionCreateParams["mode"],
+): asserts mode is Exclude<L.ZCodeSessionCreateParams["mode"], "auto"> {
+	if (mode === "auto")
+		throw new ZCodeProtocolError(-32602, "Auto mode is reserved but not implemented yet", {
+			reasonCode: "mode.auto.unimplemented",
+		});
 }
 
 /** Bounded output queue; writes serialize only transport, never business dispatch. */
@@ -554,13 +564,12 @@ export class ZCodeServer {
 					await this.manager.recordInputAdmission(record.id, inputId, sourceCommand);
 					this.#inputAdmissionObservers.get(JSON.stringify([record.id, inputId]))?.();
 				},
+				reloadModelRoleSettings: source => this.#reloadModelRoleSettings(source),
 				settingsChanged: () => {
 					void this.writer
 						.write({ method: "settings_changed", params: { scope: "user" } })
 						.catch(error => process.stderr.write(`${String(error)}\n`));
-					void this.#refreshWorkspaceConfigs(record.cwd).catch(error =>
-						process.stderr.write(`${String(error)}\n`),
-					);
+					void this.#refreshAllWorkspaceConfigs().catch(error => process.stderr.write(`${String(error)}\n`));
 				},
 				submit: async (text, options = {}) => {
 					const { execution, ...promptOptions } = options;
@@ -1042,6 +1051,39 @@ export class ZCodeServer {
 		// 两条初始化路径均完整解析本地缓存，在线时保留原生自动 provider discovery 权限。
 		if (offlineFromEnv()) await registry.refresh("offline");
 		else await registry.reapplyModelPolicies();
+	}
+	async #reloadModelRoleSettings(source: AgentSession): Promise<void> {
+		const agentDir = path.resolve(source.settings.getAgentDir());
+		for (const hosted of this.#hosted.values()) {
+			const { record } = hosted;
+			const current = () => !this.#closed && this.manager.get(record.id) === record && !record.session.isDisposed;
+			if (!current() || path.resolve(record.settings.getAgentDir()) !== agentDir) continue;
+			await record.run(async () => {
+				try {
+					await hosted.commands.reloadModelRoleSettings(current);
+					for (const ref of record.registry.list()) {
+						const child = ref.session;
+						if (!current()) return;
+						if (
+							!child ||
+							child === record.session ||
+							!isLocalAgentSession(child) ||
+							child.isDisposed ||
+							path.resolve(child.settings.getAgentDir()) !== agentDir
+						)
+							continue;
+						await child.settings.reloadFromDisk({ includeParents: true });
+					}
+				} catch (error) {
+					if (current()) throw error;
+				}
+			});
+		}
+		for (const catalog of this.#catalogRecords.values()) {
+			if (this.#closed) return;
+			if (path.resolve(catalog.settings.getAgentDir()) === agentDir)
+				await catalog.settings.reloadFromDisk({ includeParents: true });
+		}
 	}
 	#configurationRecords(): ZCodeConfigurationRecord[] {
 		return [
@@ -2488,6 +2530,8 @@ export class ZCodeServer {
 				return this.configuration.updateModelIoPreferences(raw);
 			case "session/create": {
 				const params = L.zcodeSessionCreateParamsSchema.parse(raw);
+				const mode = params.mode;
+				assertImplementedCollaborationMode(mode);
 				this.#registerWorkspace(params.workspace);
 				const hosted = await this.#attach(
 					await this.manager.create({
@@ -2502,8 +2546,7 @@ export class ZCodeServer {
 				);
 				const selected = params.model;
 				if (selected) await this.#model(hosted, selected);
-				const mode = params.mode;
-				if (mode && mode !== "auto") await hosted.record.run(() => hosted.controls.switchMode(mode));
+				if (mode) await hosted.record.run(() => hosted.controls.switchMode(mode));
 				if (params.thoughtLevel) {
 					const thought = parseZCodeThinkingLevel(params.thoughtLevel);
 					if (thought === undefined) throw new ZCodeProtocolError(-32602, "Invalid reasoning level");
@@ -2672,10 +2715,7 @@ export class ZCodeServer {
 				const hosted = await this.#active(params.sessionId);
 				assertDevCommandAllowed(hosted.record.session, "switchCollaborationMode");
 				const requestedMode = params.mode;
-				if (requestedMode === "auto")
-					throw new ZCodeProtocolError(-32602, "Auto mode is reserved but not implemented yet", {
-						reasonCode: "mode.auto.unimplemented",
-					});
+				assertImplementedCollaborationMode(requestedMode);
 				const mode = await hosted.record.run(() => hosted.controls.switchMode(requestedMode));
 				hosted.projection.setState({ config: { ...hosted.projection.snapshot().config, mode: mode.mode } });
 				return this.#snapshot(params.sessionId);

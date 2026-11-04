@@ -102,6 +102,41 @@ describe("restricted folder resolution", () => {
 		).toMatchObject({ policy: "deny", source: "user" });
 	});
 
+	it.each(["always-ask", "always-ask-cached", "write", "yolo", "guarded"] as const)(
+		"%s keeps read, write, edit, search and command restrictions above remembered grants",
+		mode => {
+			const grants = getApprovalGrants(path.join(cwd, "agent"), "all-actions");
+			const target = approvalTargetKey(cwd, "restricted/nested/file.txt")!;
+			grants.record(approvalGrantKey("write", target), "write", "session");
+			for (const [name, tier] of [
+				["read", "read"],
+				["write", "write"],
+				["edit", "write"],
+				["grep", "read"],
+			] as const) {
+				const tool = pathTool(name, tier, cwd);
+				const result = resolveApproval(
+					tool,
+					{ path: "restricted/nested/file.txt" },
+					mode,
+					{ [name]: "allow" },
+					grants,
+					restrictions(),
+				);
+				expect(result).toMatchObject({ policy: "prompt", source: "restriction", override: true, tier });
+				expect(sessionApprovalScope(result, name)).toBeUndefined();
+			}
+			expect(
+				resolveApproval(bash, { cwd: "restricted/nested" }, mode, { bash: "allow" }, grants, restrictions()),
+			).toMatchObject({
+				policy: "prompt",
+				source: "restriction",
+				override: true,
+				tier: "exec",
+			});
+		},
+	);
+
 	it("never restricts a sibling that only shares the folder's name prefix", () => {
 		const read = pathTool("read", "read", cwd);
 		fs.mkdirSync(path.join(cwd, "restricted-other"));
@@ -163,11 +198,7 @@ describe("restricted folder resolution", () => {
 		}
 
 		const link = path.join(cwd, "link");
-		try {
-			fs.symlinkSync(restricted, link, "junction");
-		} catch {
-			return; // Symlinks unavailable on this host.
-		}
+		fs.symlinkSync(restricted, link, process.platform === "win32" ? "junction" : "dir");
 		expect(resolveApproval(read, { path: "link/secret.txt" }, "yolo", {}, undefined, restrictions()).policy).toBe(
 			"prompt",
 		);
@@ -232,11 +263,11 @@ describe("restricted folder wrapper gate", () => {
 		response = "deny";
 		await expect(
 			wrapper.execute("r4", { path: "restricted/secret.txt" }, undefined, undefined, context),
-		).rejects.toThrow();
+		).rejects.toThrow("Tool call denied by user: read");
 		response = "unknown";
 		await expect(
 			wrapper.execute("r5", { path: "restricted/secret.txt" }, undefined, undefined, context),
-		).rejects.toThrow();
+		).rejects.toThrow("Tool call denied by user: read");
 
 		expect(select).toHaveBeenCalledTimes(4);
 		expect(execute).toHaveBeenCalledTimes(3);

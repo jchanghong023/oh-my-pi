@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "bun:test";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { lookup } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { cfgDisplayMode } from "@oh-my-pi/pi-coding-agent/modes/settings";
@@ -125,22 +126,35 @@ describe("InputController tool output expansion", () => {
 
 describe("InputController tool activity visibility", () => {
 	it("cycles the same clean, compact and detailed settings as /display", () => {
-		const settings = Settings.isolated();
+		const settings = Settings.isolated({
+			"terminal.showImages": false,
+			"images.autoResize": false,
+			"images.blockImages": true,
+		});
 		const showStatus = vi.fn();
 		const controller = new InputController({ settings, showStatus } as unknown as InteractiveModeContext);
 		cfgDisplayMode.set(settings, "compact");
+		const imagePreferences = () => ({
+			showImages: lookup("terminal.showImages")?.get(settings),
+			autoResize: lookup("images.autoResize")?.get(settings),
+			blockImages: lookup("images.blockImages")?.get(settings),
+		});
+		const independentImages = { showImages: false, autoResize: false, blockImages: true };
 
 		controller.toggleToolActivityVisibility();
 		expect(cfgDisplayMode.get(settings)).toBe("detailed");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
 		expect(showStatus).toHaveBeenLastCalledWith("Display: detailed");
+		expect(imagePreferences()).toEqual(independentImages);
 
 		controller.toggleToolActivityVisibility();
 		expect(cfgDisplayMode.get(settings)).toBe("clean");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(true);
+		expect(imagePreferences()).toEqual(independentImages);
 
 		controller.toggleToolActivityVisibility();
 		expect(cfgDisplayMode.get(settings)).toBe("compact");
 		expect(cfgHideThinkingBlock.get(settings)).toBe(false);
+		expect(imagePreferences()).toEqual(independentImages);
 	});
 });

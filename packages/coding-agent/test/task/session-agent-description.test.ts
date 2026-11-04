@@ -43,6 +43,23 @@ describe("task description session agents", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("omits hidden discovered and session agents from the model-facing description", async () => {
+		const hidden = { ...tagged("manual-only", "private/model"), hide: true };
+		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({
+			agents: [...DISCOVERED, hidden],
+			projectAgentsDir: null,
+		});
+		const hiddenSessionAgent = { ...tagged("manual-session", "private/session-model"), hide: true };
+		const tool = await TaskTool.create(createSession(() => [hiddenSessionAgent, tagged("m1", "b/y")]));
+
+		expect(tool.description).toContain("`task`");
+		expect(tool.description).toContain("`m1`");
+		expect(tool.description).not.toContain("manual-only");
+		expect(tool.description).not.toContain("private/model");
+		expect(tool.description).not.toContain("manual-session");
+		expect(tool.description).not.toContain("private/session-model");
+	});
+
 	it("lists the frozen surface and stays byte-identical when a later tag lands", async () => {
 		vi.spyOn(discoveryModule, "discoverAgents").mockResolvedValue({ agents: DISCOVERED, projectAgentsDir: null });
 		const committed = [tagged("m1", "b/y")];

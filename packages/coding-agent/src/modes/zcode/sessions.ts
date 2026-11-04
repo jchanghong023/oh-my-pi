@@ -965,6 +965,24 @@ export class ZCodeSessionManager {
 		return entries.filter((entry): entry is SessionEntry => entry.type !== "session");
 	}
 
+	/** Resolve native artifact content without activating a cold session or taking its writer lease. */
+	async getArtifactPath(id: string, artifactId: string): Promise<string | null> {
+		const live = this.#liveSession(id);
+		if (live) return live.sessionManager.getArtifactPath(artifactId);
+		const info = await this.#find(id);
+		const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
+			throwIfMissing: true,
+			suppressBreadcrumb: true,
+			initialCwd: info.cwd,
+			runtimeOwnership: false,
+		});
+		try {
+			return await manager.getArtifactPath(artifactId);
+		} finally {
+			await manager.close();
+		}
+	}
+
 	/**
 	 * Ledger scans may outlive their list snapshot. Pin each journal read against local deletion;
 	 * a completed deletion is absence, not unreadable history. Real read/delete failures still reject.

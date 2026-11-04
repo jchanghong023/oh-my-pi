@@ -252,7 +252,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 			path.join(agentDir, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
-					fixture: {
+					deepseek: {
 						baseUrl: `http://127.0.0.1:${server.port}/v1`,
 						api: "openai-completions",
 						auth: "none",
@@ -270,7 +270,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 				},
 			}),
 		);
-		const config = "modelRoles:\n  default: fixture/fixture-model\nstartup:\n  setupWizard: false\n";
+		const config = "modelRoles:\n  default: deepseek/fixture-model\nstartup:\n  setupWizard: false\n";
 		await writeFile(path.join(agentDir, "config.yml"), config);
 		function launch(command: "--init" | "--update") {
 			const proc = Bun.spawn(
@@ -337,6 +337,7 @@ async function scenario(interrupt: boolean): Promise<void> {
 			}
 		}
 		const first = await finish(initial);
+		if (!interrupt) expect(first.code, first.output).toBe(0);
 		const instructions = path.join(root, "openwiki", "INSTRUCTIONS.md");
 		expect(await readFile(instructions, "utf8")).toBe(interrupt ? "Keep my instructions.\n" : "");
 		if (interrupt) {
@@ -360,8 +361,6 @@ async function scenario(interrupt: boolean): Promise<void> {
 			expect(JSON.parse(await readFile(sidecar(alpha), "utf8")).claims).toMatchObject([claim(alpha)]);
 			expect((await manifest()).pages[alpha].completedRunId).toBe(committedEntry.completedRunId);
 			expect(starts.filter(event => event.phase === "resume").map(event => event.page)).toEqual([beta, quickstart]);
-		} else {
-			expect(first.code, first.output).toBe(0);
 		}
 		expect(
 			starts
@@ -483,6 +482,44 @@ async function scenario(interrupt: boolean): Promise<void> {
 				gitHead: secondHead,
 			});
 			expect(existsSync(statePath)).toBe(false);
+		}
+		if (!interrupt) {
+			// Persisted Wiki data is not disposable: all three corrupt-state boundaries
+			// must fail before inference and preserve both damaged bytes and committed work.
+			for (const [file, diagnostic] of [
+				[manifestPath, /manifest.*malformed/i],
+				[statePath, /run state.*malformed/i],
+				[metadataPath, /metadata.*(?:malformed|invalid)|(?:malformed|invalid).*metadata/i],
+			] as const) {
+				const saved = existsSync(file) ? await readFile(file, "utf8") : undefined;
+				const committed = await Promise.all(
+					[alpha, beta, quickstart].map(async page => ({
+						page: await readFile(pageFile(page), "utf8"),
+						claims: await readFile(sidecar(page), "utf8"),
+					})),
+				);
+				const invalid = "{ invalid persisted wiki state";
+				await writeFile(file, invalid);
+				const count = requests.length;
+				try {
+					const rejected = await finish(launch("--update"));
+					expect(rejected.code, rejected.output).toBe(1);
+					expect(rejected.output).toMatch(diagnostic);
+					expect(requests).toHaveLength(count);
+					expect(await readFile(file, "utf8")).toBe(invalid);
+					expect(
+						await Promise.all(
+							[alpha, beta, quickstart].map(async page => ({
+								page: await readFile(pageFile(page), "utf8"),
+								claims: await readFile(sidecar(page), "utf8"),
+							})),
+						),
+					).toEqual(committed);
+				} finally {
+					if (saved === undefined) await unlink(file);
+					else await writeFile(file, saved);
+				}
+			}
 		}
 	} finally {
 		releaseAlpha();

@@ -18,7 +18,6 @@ import * as path from "node:path";
 import { type } from "@oh-my-pi/omptype";
 import { Agent, AgentBusyError, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel, type MockHandler, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import type { PromptTemplate } from "@oh-my-pi/pi-coding-agent/config/prompt-templates";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -36,6 +35,7 @@ import { tagImageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { removeSyncWithRetries, Snowflake, withTimeout } from "@oh-my-pi/pi-utils";
 import manualContinuePrompt from "../src/prompts/system/manual-continue.md" with { type: "text" };
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { goalProtocolModel } from "./helpers/goal-protocol-model";
 
 const COLLAB_PROMPT_TYPE = "collab-prompt";
 const IMAGE_SOURCE_PATH = "/tmp/private-project/screenshot.png";
@@ -91,7 +91,7 @@ describe("AgentSession queued steer delivery", () => {
 		promptTemplates: PromptTemplate[] = [],
 		compactGate?: { entered: () => void; release: Promise<void> },
 	): Promise<SteerHarness> {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = goalProtocolModel();
 		const mock = createMockModel({ responses });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -197,22 +197,58 @@ describe("AgentSession queued steer delivery", () => {
 		expect(session.agent.hasQueuedMessages()).toBe(false);
 	});
 
-	for (const goalState of ["active", "paused", "none"] as const) {
+	for (const goalState of [
+		"ordinary-active",
+		"autopilot-active",
+		"paused",
+		"budget-limited",
+		"complete",
+		"exiting",
+		"agent-handoff",
+		"none",
+	] as const) {
 		it(`delivers ${goalState} Goal feedback at the allowed boundary without interrupting a tool batch`, async () => {
-			const { session, mock } = await createSession([
+			const feedback = "change direction after this batch";
+			const { session, sessionManager, mock } = await createSession([
 				{
 					content: [
 						{ type: "toolCall", id: "first", name: "accumulate", arguments: { value: 1 } },
 						{ type: "toolCall", id: "second", name: "accumulate", arguments: { value: 2 } },
 					],
 				},
-				{ content: [{ type: "toolCall", id: "third", name: "accumulate", arguments: { value: 3 } }] },
+				context => ({
+					content: [
+						{
+							type: "toolCall",
+							id: "third",
+							name: "accumulate",
+							arguments: {
+								value: context.messages.some(
+									message => message.role === "user" && JSON.stringify(message.content).includes(feedback),
+								)
+									? 30
+									: 3,
+							},
+						},
+					],
+				}),
 				{ content: ["Work finished."] },
 				{ content: ["Feedback received after yield."] },
 			]);
 			if (goalState !== "none") {
-				await session.goalRuntime.createGoal({ objective: "Accumulate the complete batch", autoOrchestrate: true });
+				await session.goalRuntime.createGoal({
+					objective: "Accumulate the complete batch",
+					autoOrchestrate: goalState !== "ordinary-active",
+				});
 				if (goalState === "paused") await session.goalRuntime.pauseGoal();
+				if (goalState === "budget-limited" || goalState === "complete" || goalState === "exiting") {
+					const state = session.getGoalModeState()!;
+					session.setGoalModeState({
+						...state,
+						mode: goalState === "exiting" ? "exiting" : "active",
+						goal: { ...state.goal, status: goalState === "exiting" ? "active" : goalState },
+					});
+				}
 			}
 			const started = Promise.withResolvers<void>();
 			const release = Promise.withResolvers<void>();
@@ -243,27 +279,60 @@ describe("AgentSession queued steer delivery", () => {
 			const prompt = session.prompt("start the batch");
 			try {
 				await withTimeout(started.promise, 2_000, "The first tool did not start");
-				await session.prompt("change direction after this batch", { streamingBehavior: "followUp" });
-				expect(session.getQueuedMessages().followUp).toEqual(["change direction after this batch"]);
+				if (goalState === "agent-handoff") {
+					await session.followUp(feedback, undefined, { attribution: "agent" });
+				} else {
+					await session.prompt(feedback, { streamingBehavior: "followUp" });
+				}
+				// Queue chips expose user-owned input, not agent handoffs. The
+				// contract here is delivery after this still-running complete batch.
+				expect(mock.calls).toHaveLength(1);
+				expect(totals).toEqual([]);
 			} finally {
 				release.resolve();
 				await prompt;
 			}
 			await session.waitForIdle();
 
+			const active = goalState === "ordinary-active" || goalState === "autopilot-active";
 			const nextRequest = JSON.stringify(mock.calls[1].context.messages);
-			expect(nextRequest.includes("change direction after this batch")).toBe(goalState === "active");
+			expect(nextRequest.includes(feedback)).toBe(active);
 			expect(nextRequest).toContain("total=3");
-			expect(totals).toEqual([1, 3, 6]);
+			expect(totals).toEqual(active ? [1, 3, 33] : [1, 3, 6]);
+			expect(JSON.stringify(mock.calls[2].context.messages)).toContain(active ? "total=33" : "total=6");
 			expect(interrupted).toBe(false);
-			expect(
-				session.messages.filter(
-					message =>
-						message.role === "user" &&
-						JSON.stringify(message.content).includes("change direction after this batch"),
+			const deliveredFeedback = session.messages.filter(
+				message => message.role === "user" && JSON.stringify(message.content).includes(feedback),
+			);
+			expect(deliveredFeedback).toHaveLength(1);
+			expect(deliveredFeedback[0]).toMatchObject({
+				attribution: goalState === "agent-handoff" ? "agent" : "user",
+			});
+			const providerDeliveries = mock.calls.map(call =>
+				call.context.messages.filter(
+					message => message.role === "user" && JSON.stringify(message.content).includes(feedback),
 				),
-			).toHaveLength(1);
-			expect(mock.calls).toHaveLength(goalState === "active" ? 3 : 4);
+			);
+			expect(providerDeliveries.map(messages => messages.length)).toEqual(active ? [0, 1, 1] : [0, 0, 0, 1]);
+			expect(JSON.stringify(mock.calls.at(-1)!.context.messages)).toContain(active ? "total=33" : "total=6");
+			expect(
+				sessionManager
+					.getEntries()
+					.filter(
+						entry =>
+							entry.type === "message" &&
+							entry.message.role === "user" &&
+							JSON.stringify(entry.message.content).includes(feedback),
+					),
+			).toEqual([
+				expect.objectContaining({
+					message: expect.objectContaining({
+						role: "user",
+						attribution: goalState === "agent-handoff" ? "agent" : "user",
+					}),
+				}),
+			]);
+			expect(mock.calls).toHaveLength(active ? 3 : 4);
 			expect(session.agent.hasQueuedMessages()).toBe(false);
 		});
 	}

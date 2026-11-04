@@ -63,7 +63,7 @@ async function snapshot(directory: string): Promise<Record<string, string>> {
 	return files;
 }
 
-async function scenario(xdev: boolean) {
+async function scenario(xdev: boolean, ordinary = false) {
 	using dir = TempDir.createSync("@omp-openwiki-ai-query-");
 	const home = dir.join("home");
 	const configRoot = dir.join("config");
@@ -150,7 +150,9 @@ async function scenario(xdev: boolean) {
 			}
 			let reply: Reply;
 			try {
-				if (xdev && results.discover === undefined) {
+				if (ordinary) {
+					reply = { text: "ORDINARY_RESULT_4" };
+				} else if (xdev && results.discover === undefined) {
 					reply = { id: "discover", name: "read", args: { path: "xd://" } };
 				} else if (results.search === undefined) {
 					const args = { query: beacon };
@@ -194,7 +196,7 @@ async function scenario(xdev: boolean) {
 			path.join(agent, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
-					fixture: {
+					deepseek: {
 						baseUrl: `http://127.0.0.1:${server.port}/v1`,
 						api: "openai-completions",
 						auth: "none",
@@ -214,7 +216,7 @@ async function scenario(xdev: boolean) {
 		);
 		await writeFile(
 			path.join(agent, "config.yml"),
-			`modelRoles:\n  default: fixture/fixture-model\n  smol: fixture/fixture-model\nstartup:\n  setupWizard: false\ntools:\n  xdev: ${xdev}\n`,
+			`modelRoles:\n  default: deepseek/fixture-model\n  smol: deepseek/fixture-model\nstartup:\n  setupWizard: false\ntools:\n  xdev: ${xdev}\n`,
 		);
 		const child = Bun.spawn(
 			[
@@ -225,9 +227,11 @@ async function scenario(xdev: boolean) {
 				"--print",
 				"--no-session",
 				"--model",
-				"fixture/fixture-model",
+				"deepseek/fixture-model",
 				...(xdev ? [] : ["--tools", "read,write"]),
-				`Find ${beacon} in the linked workspace and read the matching section.`,
+				ordinary
+					? "Compute two plus two without looking up repository information."
+					: `Find ${beacon} in the linked workspace and read the matching section.`,
 			],
 			{
 				cwd: repo,
@@ -251,6 +255,21 @@ async function scenario(xdev: boolean) {
 		const output = stdout + stderr;
 		expect(code, output).toBe(0);
 		expect(scriptError, output).toBe("");
+		if (ordinary) {
+			// The CLI can also make title, planning, or stop-classification calls.
+			// Laziness applies to every request, not an incidental request count.
+			expect(requests.length).toBeGreaterThan(0);
+			expect(results).toEqual({});
+			for (const request of requests) {
+				const messages = JSON.stringify(request.messages);
+				expect(messages).not.toContain(beacon);
+				expect(messages).not.toContain(evidence);
+				expect(messages).not.toContain("openwiki/architecture/service.md");
+			}
+			expect(stdout).toContain("ORDINARY_RESULT_4");
+			expect(await Promise.all([snapshot(repo), snapshot(other), snapshot(registryDir)])).toEqual(before);
+			return;
+		}
 		expect(requests.length, output).toBeGreaterThanOrEqual(xdev ? 4 : 3);
 		const offered = requests.flatMap(request =>
 			(request.tools ?? []).map(tool => tool.function?.name).filter(Boolean),
@@ -301,4 +320,9 @@ describe("OMP CLI OpenWiki query with a scripted local model", () => {
 		120_000,
 	);
 	it("discovers and dispatches the same queries through xdev", async () => scenario(true), 120_000);
+	it(
+		"does not preload or enumerate wiki content for an unrelated ordinary conversation",
+		async () => scenario(true, true),
+		120_000,
+	);
 });

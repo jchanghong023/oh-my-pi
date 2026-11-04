@@ -4,6 +4,11 @@
 
 ### Fixed
 
+- Accept verbatim Windows shell working directories.
+- Trim Unicode edge whitespace consistently when validating Knowledge index names.
+
+- Keep native addons and generated bindings in place when rebuilt bytes are unchanged.
+
 - Fix Windows compilation failures in embedded Zsh job control, FTP error handling and line-editor path buffers.
 - Build native SIMD dependencies correctly on Windows systems with non-UTF-8 locale settings.
 - Keep Knowledge caches within a shared process budget that adapts to memory pressure, and honor zero available memory on Linux.

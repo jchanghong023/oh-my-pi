@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as asrClient from "@oh-my-pi/pi-coding-agent/stt/asr-client";
 import { normalizeSttLanguage } from "@oh-my-pi/pi-coding-agent/stt/asr-worker";
@@ -10,15 +9,16 @@ import * as downloader from "@oh-my-pi/pi-coding-agent/stt/downloader";
 import { STTController, type STTControllerDependencies } from "@oh-my-pi/pi-coding-agent/stt/stt-controller";
 import { getTinyModelsCacheDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
+import { localSttModel } from "./helpers/local-stt-model";
 
 const WHISPER_BASE_REPO = "onnx-community/whisper-base";
 const NEMOTRON_REPO = "csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-160ms-int8-2026-04-25";
 const DICTATION_MODELS = [
-	getBundledModel("local", "whisper-base"),
-	getBundledModel("local", "whisper-small"),
-	getBundledModel("local", "whisper-large-v3-turbo"),
-	getBundledModel("local", "parakeet-tdt-0.6b-v3"),
-	getBundledModel("local", "nemotron-streaming-en-0.6b"),
+	localSttModel("whisper-base"),
+	localSttModel("whisper-small"),
+	localSttModel("whisper-large-v3-turbo"),
+	localSttModel("parakeet-tdt-0.6b-v3"),
+	localSttModel("nemotron-streaming-en-0.6b"),
 ];
 const registry: STTControllerDependencies["registry"] = {
 	getError: () => undefined,

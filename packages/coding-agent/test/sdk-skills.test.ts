@@ -13,6 +13,8 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { getAgentDir, setAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { cleanupTempHome } from "./helpers/temp-home-cleanup";
+import { createExtensionDashboardRuntime } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/dashboard-runtime";
+import { restoreEnvValue } from "./helpers/settings-test-state";
 
 import { cfgAutolearnEnabled } from "@oh-my-pi/pi-coding-agent/autolearn/settings";
 import { cfgSkillsCustomDirectories } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
@@ -293,6 +295,74 @@ This skill is added after session creation.
 		unsubscribe();
 
 		expect(session.systemPrompt.join("\n")).toContain("live-custom-skill");
+	});
+
+	// The dashboard's existing settings toggle must asynchronously update execution and command metadata.
+	it("refreshes shared skill execution and command metadata after dashboard disable and re-enable", async () => {
+		const previousShared = process.env.OMP_SKILLS_DIR;
+		const shared = path.join(tempDir, "shared-root");
+		const file = path.join(shared, "dashboard-shared", "SKILL.md");
+		const authored =
+			"---\nname: dashboard-shared\ndescription: Live shared skill\n---\nShared body stays read-only\n";
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, authored);
+		restoreEnvValue("OMP_SKILLS_DIR", shared);
+		let session: AgentSession | undefined;
+		try {
+			const settings = createIsolatedSkillsSettings();
+			({ session } = await createSession({
+				cwd: tempDir,
+				agentDir: tempDir,
+				sessionManager: SessionManager.inMemory(tempDir),
+				modelRegistry: sharedModelRegistry,
+				settings,
+			}));
+			const active = session;
+			const dashboard = createExtensionDashboardRuntime({ cwd: tempDir, settings });
+			const read = active.getToolByName("read");
+			if (!read) throw new Error("Expected the session's actual read tool");
+			expect(active.skills.find(skill => skill.name === "dashboard-shared")).toMatchObject({
+				filePath: file,
+				_source: { providerName: "Shared" },
+			});
+			const before = await read.execute("read-enabled-shared", { path: "skill://dashboard-shared" });
+			expect(before.content).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ type: "text", text: expect.stringContaining("Shared body stays read-only") }),
+				]),
+			);
+			const waitForPresence = (present: boolean, mutate: () => void) => {
+				const changed = Promise.withResolvers<void>();
+				const unsubscribe = active.subscribeCommandMetadataChanged(() => {
+					if (active.skills.some(skill => skill.name === "dashboard-shared") === present) changed.resolve();
+				});
+				mutate();
+				return changed.promise.finally(unsubscribe);
+			};
+			await waitForPresence(false, () => dashboard.setDisabledExtensions(["skill:dashboard-shared"]));
+			expect(active.agent.state.systemPrompt.join("\n")).not.toContain("dashboard-shared");
+			await expect(read.execute("read-disabled-shared", { path: "skill://dashboard-shared" })).rejects.toThrow(
+				/Unknown skill/,
+			);
+			const disabled = await dashboard.loadExtensions(dashboard.getDisabledExtensions());
+			expect(disabled.find(row => row.id === "skill:dashboard-shared")).toMatchObject({
+				state: "disabled",
+				source: { providerName: "Shared" },
+			});
+			await waitForPresence(true, () => dashboard.setDisabledExtensions([]));
+			expect(active.agent.state.systemPrompt.join("\n")).toContain("dashboard-shared");
+			const restored = await read.execute("read-reenabled-shared", { path: "skill://dashboard-shared" });
+			expect(restored.content).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ type: "text", text: expect.stringContaining("Shared body stays read-only") }),
+				]),
+			);
+			expect(fs.readFileSync(file, "utf8")).toBe(authored);
+			expect(fs.readdirSync(path.dirname(file))).toEqual(["SKILL.md"]);
+		} finally {
+			await session?.dispose();
+			restoreEnvValue("OMP_SKILLS_DIR", previousShared);
+		}
 	});
 
 	it("manage_skill hot-registers managed skills in the active session", async () => {

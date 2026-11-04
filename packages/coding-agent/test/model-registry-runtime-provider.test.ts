@@ -79,7 +79,9 @@ describe("ModelRegistry runtime provider registration", () => {
 		headerName: string,
 		expectedValue: string | undefined,
 	): Promise<void> {
-		for (const model of getProviderModels(registry, providerName)) {
+		const models = getProviderModels(registry, providerName);
+		expect(models.length).toBeGreaterThan(0);
+		for (const model of models) {
 			expect((await registry.resolveModelHeaders(model))?.[headerName]).toBe(expectedValue);
 		}
 	}
@@ -137,11 +139,11 @@ describe("ModelRegistry runtime provider registration", () => {
 		}
 
 		expect(fetchRequests).not.toContain("https://api.cline.bot/api/v1/ai/cline/recommended-models");
-		expect(registry.find("cline-pass", "kimi-k3")).toBeDefined();
+		expect(registry.find("cline-pass", "kimi-k3")).toBeUndefined();
 	});
 
 	test("validates provider config before mutating custom API state", () => {
-		const beforeAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
+		const beforeAnthropicCount = registry.getAll().filter(model => model.provider === "ascend").length;
 
 		const invalidConfig: ProviderConfigInput = {
 			api: "custom-atomic-api",
@@ -156,7 +158,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		);
 		expect(getCustomApi("custom-atomic-api")).toBeUndefined();
 
-		const afterAnthropicCount = registry.getAll().filter(model => model.provider === "anthropic").length;
+		const afterAnthropicCount = registry.getAll().filter(model => model.provider === "ascend").length;
 		expect(afterAnthropicCount).toBe(beforeAnthropicCount);
 	});
 
@@ -185,7 +187,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			{
 				baseUrl: "https://gateway.example.com/v1",
 				apiKey: "RUNTIME_KEY",
-				api: "openai-completions",
+				api: "openai-images",
 				fetchDynamicModels: async () => [
 					{ ...baseModel, id: "mismatched", api: "openai-images", kind: "chat" },
 					{ ...baseModel, id: "gpt-image-2", api: "openai-images" },
@@ -195,52 +197,34 @@ describe("ModelRegistry runtime provider registration", () => {
 		);
 		await registry.refreshRuntimeProviders("online");
 
+		const images = registry.getAll("image").filter(model => model.provider === "my-gateway");
+		expect(images.map(model => model.id)).toEqual(["gpt-image-2"]);
 		expect(registry.find("my-gateway", "mismatched")).toBeUndefined();
-		expect(registry.find("my-gateway", "gpt-image-2")).toMatchObject({ kind: "image" });
+		expect(registry.getAll().some(model => model.provider === "my-gateway")).toBe(false);
 	});
 
-	test("registerProvider rebuilds inferred computer capability after OpenAI runtime reroutes", async () => {
-		const modelId = "gpt-5.4";
-		const directModel = registry.find("openai", modelId);
-		expect(directModel?.supportsComputerUse).toBe(true);
-
-		registry.registerProvider("openai", { baseUrl: "https://runtime-proxy.example.com/v1" }, "ext://runtime");
-		expect(registry.find("openai", modelId)?.supportsComputerUse).toBe(false);
-
-		await registry.refresh("offline");
-		expect(registry.find("openai", modelId)?.supportsComputerUse).toBe(false);
-		await registry.refreshProvider("openai", "offline");
-		expect(registry.find("openai", modelId)?.supportsComputerUse).toBe(false);
-
-		registry.clearSourceRegistrations("ext://runtime");
-		expect(registry.find("openai", modelId)?.supportsComputerUse).toBe(true);
-	});
-
-	test("config.models re-registration rebuilds inferred capability after a saved transport override", () => {
-		const providerName = "openai";
-		const modelId = "gpt-5.4";
-		const proxyBaseUrl = "https://runtime-proxy.example.com/v1";
-
-		registry.registerProvider(providerName, { baseUrl: proxyBaseUrl }, "ext://runtime");
+	test("OpenAI chat models cannot be restored by runtime transport overrides or refresh", async () => {
+		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
 		registry.registerProvider(
-			providerName,
+			"openai",
 			{
-				baseUrl: "https://api.openai.com/v1",
+				baseUrl: "https://runtime-proxy.example.com/v1",
 				api: "openai-responses",
 				apiKey: "RUNTIME_KEY",
-				models: [{ ...baseModel, id: modelId }],
+				models: [{ ...baseModel, id: "gpt-5.4" }],
 			},
 			"ext://runtime",
 		);
-
-		const model = registry.find(providerName, modelId);
-		expect(model?.baseUrl).toBe(proxyBaseUrl);
-		expect(model?.supportsComputerUse).toBe(false);
-		expect(model?.supportsComputerUseConfig).toBeUndefined();
+		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
+		await registry.refresh("offline");
+		await registry.refreshProvider("openai", "offline");
+		expect(registry.getAll().filter(model => model.provider === "openai")).toEqual([]);
+		registry.clearSourceRegistrations("ext://runtime");
+		expect(registry.find("openai", "gpt-5.4")).toBeUndefined();
 	});
 
 	test("registerProvider applies headers-only overrides to existing provider models across refresh", async () => {
-		const providerName = "anthropic";
+		const providerName = "ascend";
 		const runtimeHeader = "X-Runtime-Provider-Header";
 
 		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
@@ -256,7 +240,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		const modelHeaders: Record<string, string> = { "X-Message-ID": "message-1" };
 
 		registry.registerProvider(
-			"runtime-provider",
+			"deepseek",
 			{
 				baseUrl: "https://runtime.example.com/v1",
 				apiKey: "RUNTIME_KEY",
@@ -272,7 +256,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		modelHeaders["X-Message-ID"] = "message-2";
 		modelHeaders["X-Model-Turn-ID"] = "model-turn-2";
 
-		const model = registry.find("runtime-provider", "runtime-model");
+		const model = registry.find("deepseek", "runtime-model");
 		if (!model) throw new Error("Expected runtime model");
 		expect(await registry.resolveModelHeaders(model)).toEqual({
 			"X-Request-ID": "request-2",
@@ -283,7 +267,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("registerProvider applies authHeader overrides to existing provider models across refresh", async () => {
-		const providerName = "anthropic";
+		const providerName = "ascend";
 
 		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
 		registry.registerProvider(providerName, { apiKey: "RUNTIME_AUTH_KEY", authHeader: true }, "ext://runtime");
@@ -294,7 +278,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("registerProvider applies remoteCompaction-only overrides to existing provider models across refresh", async () => {
-		const providerName = "anthropic";
+		const providerName = "ascend";
 		const overrideEndpoint = "https://runtime.example.com/v1/compact";
 
 		expect(getProviderModels(registry, providerName).length).toBeGreaterThan(1);
@@ -305,7 +289,9 @@ describe("ModelRegistry runtime provider registration", () => {
 		);
 
 		const expectCompaction = () => {
-			for (const model of getProviderModels(registry, providerName)) {
+			const models = getProviderModels(registry, providerName);
+			expect(models.length).toBeGreaterThan(0);
+			for (const model of models) {
 				expect(model.remoteCompaction?.enabled).toBe(false);
 				expect(model.remoteCompaction?.endpoint).toBe(overrideEndpoint);
 			}
@@ -323,7 +309,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("refreshRuntimeProviders preserves model-level remoteCompaction over provider defaults", async () => {
-		const providerName = "dynamic-compact-provider";
+		const providerName = "deepseek";
 		const providerEndpoint = "https://runtime.example.com/v1/responses/provider-compact";
 		const modelEndpoint = "https://runtime.example.com/v1/responses/model-compact";
 
@@ -363,7 +349,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		});
 	});
 	test("combines static fallback models with dynamic provider discovery", async () => {
-		const providerName = "combined-runtime-provider";
+		const providerName = "deepseek";
 		let dynamicFetches = 0;
 		registry.registerProvider(
 			providerName,
@@ -388,7 +374,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("configured discovery suppresses extension fetchDynamicModels for the same provider", async () => {
-		const providerName = "runtime-configured-provider";
+		const providerName = "deepseek";
 		fs.writeFileSync(
 			modelsJsonPath,
 			JSON.stringify({
@@ -442,7 +428,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		const overrideRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: catalogFetch });
 		let runtimeFetches = 0;
 		overrideRegistry.registerProvider(
-			"anthropic",
+			"deepseek",
 			{
 				baseUrl: "https://runtime.example.com/v1",
 				api: "anthropic-messages",
@@ -454,21 +440,18 @@ describe("ModelRegistry runtime provider registration", () => {
 			"ext://runtime",
 		);
 
-		await overrideRegistry.refreshProvider("anthropic", "online");
+		await overrideRegistry.refreshProvider("deepseek", "online");
 
 		expect(runtimeFetches).toBe(1);
 		expect(catalogFetches).toBe(0);
-		expect(getProviderModels(overrideRegistry, "anthropic").map(model => model.id)).toEqual([
+		expect(getProviderModels(overrideRegistry, "deepseek").map(model => model.id)).toEqual([
 			"runtime-anthropic-model",
 		]);
 	});
 
 	test("refreshProvider aborts and retries inherited shared-catalog fetches", async () => {
 		vi.useFakeTimers();
-		// Pin the keyless premise: a host ANTHROPIC_API_KEY (dev machines, agent
-		// harnesses) gives the anthropic manager a fetchDynamicModels hook whose
-		// endpoint fetch starts only after the catalog abort — its deadline timer
-		// arms after the last advanceTimersByTime and the refresh hangs forever.
+		// Keep the retained provider keyless so the shared catalog owns the request.
 		const peekSpy = vi.spyOn(authStorage.keys, "peek").mockResolvedValue(undefined);
 		let catalogFetches = 0;
 		let abortedFetches = 0;
@@ -493,7 +476,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		};
 		const stalledRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: stalledFetch });
 
-		const firstRefresh = stalledRegistry.refreshProvider("anthropic", "online");
+		const firstRefresh = stalledRegistry.refreshProvider("deepseek", "online");
 		await drainMicrotasksUntil(() => catalogFetches === 1, "first shared-catalog fetch did not start");
 		vi.advanceTimersByTime(9_999);
 		await Promise.resolve();
@@ -502,7 +485,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		await firstRefresh;
 		expect(abortedFetches).toBe(1);
 
-		const secondRefresh = stalledRegistry.refreshProvider("anthropic", "online");
+		const secondRefresh = stalledRegistry.refreshProvider("deepseek", "online");
 		await drainMicrotasksUntil(() => catalogFetches === 2, "second shared-catalog fetch did not start");
 		vi.advanceTimersByTime(10_000);
 		await secondRefresh;
@@ -515,7 +498,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		vi.useFakeTimers();
 		const hangingFetch = Promise.withResolvers<readonly NonNullable<ProviderConfigInput["models"]>[number][]>();
 		registry.registerProvider(
-			"hanging-runtime-provider",
+			"deepseek",
 			{
 				baseUrl: "https://runtime.example.com/v1",
 				apiKey: "RUNTIME_KEY",
@@ -548,7 +531,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		vi.advanceTimersByTime(1);
 		await refresh;
 		expect(outcome).toBe("resolved");
-		expect(registry.find("hanging-runtime-provider", "any-model")).toBeUndefined();
+		expect(registry.find("deepseek", "any-model")).toBeUndefined();
 	});
 
 	test("registerProvider preserves explicit thinking and backfills wire facts", () => {
@@ -569,8 +552,8 @@ describe("ModelRegistry runtime provider registration", () => {
 			],
 		};
 
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
-		const model = registry.find("runtime-provider", "runtime-thinking-model");
+		registry.registerProvider("deepseek", config, "ext://runtime");
+		const model = registry.find("deepseek", "runtime-thinking-model");
 
 		expect(model?.thinking).toEqual({
 			mode: "anthropic-adaptive",
@@ -589,11 +572,11 @@ describe("ModelRegistry runtime provider registration", () => {
 			models: [{ ...baseModel, id: "gpt-5.6-sol", preferWebsockets: false }],
 		};
 
-		registry.registerProvider("runtime-codex", config, "ext://runtime");
-		expect(registry.find("runtime-codex", "gpt-5.6-sol")?.preferWebsockets).toBe(false);
+		registry.registerProvider("openai-codex", config, "ext://runtime");
+		expect(registry.find("openai-codex", "gpt-5.6-sol")?.preferWebsockets).toBe(false);
 
 		await registry.refresh("offline");
-		expect(registry.find("runtime-codex", "gpt-5.6-sol")?.preferWebsockets).toBe(false);
+		expect(registry.find("openai-codex", "gpt-5.6-sol")?.preferWebsockets).toBe(false);
 	});
 
 	test("registerProvider lets an extension disable WebSockets on a bundled Codex model", () => {
@@ -617,12 +600,12 @@ describe("ModelRegistry runtime provider registration", () => {
 			models: [baseModel],
 		};
 
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
-		expect(registry.find("runtime-provider", "runtime-model")).toBeDefined();
+		registry.registerProvider("deepseek", config, "ext://runtime");
+		expect(registry.find("deepseek", "runtime-model")).toBeDefined();
 
 		await registry.refresh("offline");
 
-		const model = registry.find("runtime-provider", "runtime-model");
+		const model = registry.find("deepseek", "runtime-model");
 		expect(model?.baseUrl).toBe("https://runtime.example.com/v1");
 		expect(model?.api).toBe("openai-completions");
 	});
@@ -639,12 +622,12 @@ describe("ModelRegistry runtime provider registration", () => {
 			models: [{ ...baseModel, id: "online-survivor" }],
 		};
 
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
-		expect(registry.find("runtime-provider", "online-survivor")).toBeDefined();
+		registry.registerProvider("deepseek", config, "ext://runtime");
+		expect(registry.find("deepseek", "online-survivor")).toBeDefined();
 
 		await registry.refresh("online");
 
-		const model = registry.find("runtime-provider", "online-survivor");
+		const model = registry.find("deepseek", "online-survivor");
 		expect(model?.api).toBe("openai-completions");
 	});
 
@@ -654,7 +637,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		const runtimeHeader = "X-Runtime-Headers-Only";
 
 		registry.registerProvider(
-			"runtime-provider",
+			"deepseek",
 			{
 				baseUrl: "https://runtime.example.com/v1",
 				apiKey: "RUNTIME_KEY",
@@ -663,27 +646,23 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 			"ext://runtime",
 		);
-		registry.registerProvider("runtime-provider", { baseUrl: overrideBaseUrl }, "ext://runtime");
-		registry.registerProvider(
-			"runtime-provider",
-			{ headers: { [runtimeHeader]: "runtime-header" } },
-			"ext://runtime",
-		);
+		registry.registerProvider("deepseek", { baseUrl: overrideBaseUrl }, "ext://runtime");
+		registry.registerProvider("deepseek", { headers: { [runtimeHeader]: "runtime-header" } }, "ext://runtime");
 
 		await expectModelTransportAcrossRefresh(
 			registry,
-			"runtime-provider",
+			"deepseek",
 			modelId,
 			overrideBaseUrl,
 			runtimeHeader,
 			"runtime-header",
 		);
 		registry.clearSourceRegistrations("ext://runtime");
-		expect(registry.find("runtime-provider", modelId)).toBeUndefined();
+		expect(registry.find("deepseek", modelId)).toBeUndefined();
 	});
 
 	test("runtime headers override modelOverrides headers across refresh cycles", async () => {
-		const targetModel = registry.getAll().find(model => model.provider === "anthropic");
+		const targetModel = registry.getAll().find(model => model.provider === "ascend");
 		if (!targetModel) throw new Error("Expected bundled anthropic model");
 
 		const modelId = targetModel.id;
@@ -695,33 +674,33 @@ describe("ModelRegistry runtime provider registration", () => {
 			modelsJsonPath,
 			JSON.stringify({
 				providers: {
-					anthropic: { modelOverrides: { [modelId]: { headers: { [sharedHeader]: configHeaderValue } } } },
+					ascend: { modelOverrides: { [modelId]: { headers: { [sharedHeader]: configHeaderValue } } } },
 				},
 			}),
 		);
 
 		const configuredRegistry = new ModelRegistry(authStorage, modelsJsonPath, { fetch: offlineFetch });
-		const configuredModel = configuredRegistry.find("anthropic", modelId);
+		const configuredModel = configuredRegistry.find("ascend", modelId);
 		expect(configuredModel && (await configuredRegistry.resolveModelHeaders(configuredModel))?.[sharedHeader]).toBe(
 			configHeaderValue,
 		);
 
 		configuredRegistry.registerProvider(
-			"anthropic",
+			"ascend",
 			{ headers: { [sharedHeader]: runtimeHeaderValue } },
 			"ext://runtime",
 		);
-		await expectProviderHeaderAcrossRefresh(configuredRegistry, "anthropic", sharedHeader, runtimeHeaderValue);
+		await expectProviderHeaderAcrossRefresh(configuredRegistry, "ascend", sharedHeader, runtimeHeaderValue);
 
 		configuredRegistry.clearSourceRegistrations("ext://runtime");
-		const restoredModel = configuredRegistry.find("anthropic", modelId);
+		const restoredModel = configuredRegistry.find("ascend", modelId);
 		expect(restoredModel && (await configuredRegistry.resolveModelHeaders(restoredModel))?.[sharedHeader]).toBe(
 			configHeaderValue,
 		);
 	});
 
 	test("runtime-registered models inherit configured provider guardrails", () => {
-		const providerName = "amazon-bedrock";
+		const providerName = "deepseek";
 		const modelId = "runtime-bedrock-model";
 		const guardrailIdentifier = "arn:aws:bedrock:eu-west-2:123456789012:guardrail/abcd1234";
 
@@ -757,25 +736,27 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("extension-registered API keys survive refresh cycle for auth resolution", async () => {
-		// Set up the env var that the apiKey config references
+		const previous = process.env.TEST_RUNTIME_KEY;
 		process.env.TEST_RUNTIME_KEY = "test-value";
-
-		const config: ProviderConfigInput = {
-			baseUrl: "https://runtime.example.com/v1",
-			apiKey: "TEST_RUNTIME_KEY",
-			api: "openai-completions",
-			models: [baseModel],
-		};
-
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
-		expect(registry.authStorage.keys.source("runtime-provider") !== undefined).toBe(true);
-
-		await registry.refresh("offline");
-
-		// The fallback resolver should still find the API key after refresh
-		expect(registry.authStorage.keys.source("runtime-provider") !== undefined).toBe(true);
-
-		delete process.env.TEST_RUNTIME_KEY;
+		try {
+			const config: ProviderConfigInput = {
+				baseUrl: "https://runtime.example.com/v1",
+				apiKey: "TEST_RUNTIME_KEY",
+				api: "openai-completions",
+				models: [baseModel],
+			};
+			registry.registerProvider("deepseek", config, "ext://runtime");
+			const model = registry.find("deepseek", baseModel.id);
+			if (!model) throw new Error("Expected retained runtime model");
+			expect(await registry.getApiKey(model)).toBe("test-value");
+			await registry.refresh("offline");
+			const refreshed = registry.find("deepseek", baseModel.id);
+			if (!refreshed) throw new Error("Runtime model disappeared after refresh");
+			expect(await registry.getApiKey(refreshed)).toBe("test-value");
+		} finally {
+			if (previous === undefined) delete process.env.TEST_RUNTIME_KEY;
+			else process.env.TEST_RUNTIME_KEY = previous;
+		}
 	});
 
 	test("extension-registered custom API handler survives model refresh", async () => {
@@ -787,7 +768,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			models: [baseModel],
 		};
 
-		registry.registerProvider("runtime-provider", config, "ext://runtime");
+		registry.registerProvider("deepseek", config, "ext://runtime");
 		expect(getCustomApi("custom-runtime-api")).toBeDefined();
 
 		// Custom API registry is separate from model registry — verify it persists
@@ -814,18 +795,18 @@ describe("ModelRegistry runtime provider registration", () => {
 			models: [{ ...baseModel, id: "model-v2", name: "Model V2" }],
 		};
 
-		registry.registerProvider("runtime-provider", config1, "ext://runtime");
+		registry.registerProvider("deepseek", config1, "ext://runtime");
 		registry.registerProvider(
-			"runtime-provider",
+			"deepseek",
 			{ baseUrl: overrideBaseUrl, headers: { [runtimeHeader]: "runtime-header" } },
 			"ext://runtime",
 		);
-		registry.registerProvider("runtime-provider", config2, "ext://runtime");
+		registry.registerProvider("deepseek", config2, "ext://runtime");
 
-		expect(registry.find("runtime-provider", "model-v1")).toBeUndefined();
+		expect(registry.find("deepseek", "model-v1")).toBeUndefined();
 		await expectModelTransportAcrossRefresh(
 			registry,
-			"runtime-provider",
+			"deepseek",
 			"model-v2",
 			overrideBaseUrl,
 			runtimeHeader,
@@ -834,7 +815,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("provider source handoff does not retain previous source transport overrides", async () => {
-		const providerName = "shared-runtime-provider";
+		const providerName = "deepseek";
 		const leakedHeader = "X-Old-Source-Header";
 		const sourceBBaseUrl = "https://source-b.example.com/v1";
 
@@ -876,7 +857,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("transport-only source handoff clears previous source headers immediately", async () => {
-		const providerName = "anthropic";
+		const providerName = "ascend";
 		const sourceAHeader = "X-Source-A-Header";
 		const sourceBHeader = "X-Source-B-Header";
 
@@ -890,7 +871,7 @@ describe("ModelRegistry runtime provider registration", () => {
 
 	test("multiple extension providers survive refresh independently", async () => {
 		registry.registerProvider(
-			"provider-a",
+			"deepseek",
 			{
 				baseUrl: "https://a.example.com",
 				apiKey: "KEY_A",
@@ -900,7 +881,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			"ext://a",
 		);
 		registry.registerProvider(
-			"provider-b",
+			"ascend",
 			{
 				baseUrl: "https://b.example.com",
 				apiKey: "KEY_B",
@@ -910,13 +891,13 @@ describe("ModelRegistry runtime provider registration", () => {
 			"ext://b",
 		);
 
-		expect(registry.find("provider-a", "model-a")).toBeDefined();
-		expect(registry.find("provider-b", "model-b")).toBeDefined();
+		expect(registry.find("deepseek", "model-a")).toBeDefined();
+		expect(registry.find("ascend", "model-b")).toBeDefined();
 
 		await registry.refresh("offline");
 
-		expect(registry.find("provider-a", "model-a")).toBeDefined();
-		expect(registry.find("provider-b", "model-b")).toBeDefined();
+		expect(registry.find("deepseek", "model-a")).toBeDefined();
+		expect(registry.find("ascend", "model-b")).toBeDefined();
 	});
 
 	test("clearSourceRegistrations and syncExtensionSources remove source-scoped API and OAuth providers", () => {
@@ -955,7 +936,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("oauth.modifyModels projection survives refresh and refreshProvider", async () => {
-		await authStorage.credentials.set("projecting-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -978,9 +959,9 @@ describe("ModelRegistry runtime provider registration", () => {
 				refreshToken: async credentials => credentials,
 				getApiKey: credentials => credentials.access,
 				modifyModels: models => [
-					...models.filter(model => model.provider !== "projecting-provider"),
+					...models.filter(model => model.provider !== "deepseek"),
 					{
-						...(models.find(model => model.provider === "projecting-provider") as Model<Api>),
+						...(models.find(model => model.provider === "deepseek" && model.id === baseModel.id) as Model<Api>),
 						id: "projected-model",
 						name: "Projected Model",
 						headers: { "X-Mode": "projected" },
@@ -989,32 +970,33 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 		};
 
-		registry.registerProvider("projecting-provider", config, "ext://oauth");
+		registry.registerProvider("deepseek", config, "ext://oauth");
 
-		const projectedIds = () => getProviderModels(registry, "projecting-provider").map(model => model.id);
+		const projectedIds = () => getProviderModels(registry, "deepseek").map(model => model.id);
 		expect(projectedIds()).toEqual(["projected-model"]);
-		await expectProviderHeader(registry, "projecting-provider", "X-Parent", "parent");
-		await expectProviderHeader(registry, "projecting-provider", "X-Mode", "projected");
+		await expectProviderHeader(registry, "deepseek", "X-Parent", "parent");
+		await expectProviderHeader(registry, "deepseek", "X-Mode", "projected");
 		providerHeaders["X-Parent"] = "rotated";
 
 		// The model selector reloads the registry offline every time it opens; the
 		// projection must not fall back to the bootstrap `models` array.
 		await registry.refresh("offline");
 		expect(projectedIds()).toEqual(["projected-model"]);
-		await expectProviderHeader(registry, "projecting-provider", "X-Parent", "rotated");
-		await expectProviderHeader(registry, "projecting-provider", "X-Mode", "projected");
+		await expectProviderHeader(registry, "deepseek", "X-Parent", "rotated");
+		await expectProviderHeader(registry, "deepseek", "X-Mode", "projected");
 
-		await registry.refreshProvider("projecting-provider", "offline");
+		await registry.refreshProvider("deepseek", "offline");
 		expect(projectedIds()).toEqual(["projected-model"]);
-		await expectProviderHeader(registry, "projecting-provider", "X-Parent", "rotated");
-		await expectProviderHeader(registry, "projecting-provider", "X-Mode", "projected");
+		await expectProviderHeader(registry, "deepseek", "X-Parent", "rotated");
+		await expectProviderHeader(registry, "deepseek", "X-Mode", "projected");
 
 		registry.clearSourceRegistrations("ext://oauth");
-		expect(getProviderModels(registry, "projecting-provider")).toEqual([]);
+		expect(getProviderModels(registry, "deepseek").some(model => model.id === "projected-model")).toBe(false);
+		expect(getProviderModels(registry, "deepseek").length).toBeGreaterThan(0);
 	});
 
 	test("oauth.modifyModels output is materialized through buildModel", async () => {
-		await authStorage.credentials.set("materializing-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1036,12 +1018,12 @@ describe("ModelRegistry runtime provider registration", () => {
 				refreshToken: async credentials => credentials,
 				getApiKey: credentials => credentials.access,
 				modifyModels: models => [
-					...models.filter(model => model.provider !== "materializing-provider"),
+					...models.filter(model => model.provider !== "deepseek"),
 					{
 						...baseModel,
 						id: "claude-sonnet-4-5",
 						name: "Synthesized Model",
-						provider: "materializing-provider",
+						provider: "deepseek",
 						api: "custom-materialize-api",
 						baseUrl: "https://example.invalid/",
 					} as unknown as Model<Api>,
@@ -1049,9 +1031,9 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 		};
 
-		registry.registerProvider("materializing-provider", config, "ext://oauth");
+		registry.registerProvider("deepseek", config, "ext://oauth");
 
-		const [projected, ...rest] = getProviderModels(registry, "materializing-provider");
+		const [projected, ...rest] = getProviderModels(registry, "deepseek");
 		expect(rest).toEqual([]);
 		expect(projected?.id).toBe("claude-sonnet-4-5");
 		expect(projected?.identity).toEqual({ class: "anthropic", family: "sonnet", revision: "4.5.0" });
@@ -1059,7 +1041,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("a spec-shaped projected model keeps its sparse compat override", async () => {
-		await authStorage.credentials.set("compat-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1080,11 +1062,11 @@ describe("ModelRegistry runtime provider registration", () => {
 				refreshToken: async credentials => credentials,
 				getApiKey: credentials => credentials.access,
 				modifyModels: models => [
-					...models.filter(model => model.provider !== "compat-provider"),
+					...models.filter(model => model.provider !== "deepseek"),
 					{
 						...baseModel,
 						id: "synthesized-model",
-						provider: "compat-provider",
+						provider: "deepseek",
 						api: "openai-completions",
 						baseUrl: "https://example.invalid/",
 						compat: { promptCacheSessionHeader: "x-grok-conv-id" },
@@ -1093,16 +1075,16 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 		};
 
-		registry.registerProvider("compat-provider", config, "ext://oauth");
+		registry.registerProvider("deepseek", config, "ext://oauth");
 
-		const [projected] = getProviderModels(registry, "compat-provider") as Model<"openai-completions">[];
+		const [projected] = getProviderModels(registry, "deepseek") as Model<"openai-completions">[];
 		expect(projected?.id).toBe("synthesized-model");
 		expect(projected?.compat?.promptCacheSessionHeader).toBe("x-grok-conv-id");
 		expect(projected?.compatConfig).toEqual({ promptCacheSessionHeader: "x-grok-conv-id" });
 	});
 
 	test("a throwing modifyModels logs once per distinct failure", async () => {
-		await authStorage.credentials.set("noisy-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1112,7 +1094,7 @@ describe("ModelRegistry runtime provider registration", () => {
 
 		try {
 			registry.registerProvider(
-				"noisy-provider",
+				"deepseek",
 				{
 					api: "custom-noisy-api",
 					baseUrl: "https://example.invalid/",
@@ -1134,7 +1116,7 @@ describe("ModelRegistry runtime provider registration", () => {
 			const modifierWarnings = () =>
 				warn.mock.calls.filter(([message]) => String(message).includes("extension model projection failed"));
 			expect(modifierWarnings()).toHaveLength(1);
-			expect(modifierWarnings()[0]?.[1]).toMatchObject({ provider: "noisy-provider", error: "boom" });
+			expect(modifierWarnings()[0]?.[1]).toMatchObject({ provider: "deepseek", error: "boom" });
 
 			// Same failure on every later recomposition must not spam the log.
 			await registry.refresh("offline");
@@ -1145,7 +1127,7 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("a non-idempotent modifyModels does not compound across refreshes", async () => {
-		await authStorage.credentials.set("appending-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1156,7 +1138,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		// feeding it an already-projected list would duplicate on every rebuild.
 		let projectionCount = 0;
 		registry.registerProvider(
-			"appending-provider",
+			"deepseek",
 			{
 				api: "custom-appending-api",
 				baseUrl: "https://example.invalid/",
@@ -1169,7 +1151,9 @@ describe("ModelRegistry runtime provider registration", () => {
 					getApiKey: credentials => credentials.access,
 					modifyModels: models => {
 						projectionCount += 1;
-						const seed = models.find(model => model.provider === "appending-provider") as Model<Api>;
+						const seed = models.find(
+							model => model.provider === "deepseek" && model.id === baseModel.id,
+						) as Model<Api>;
 						return [...models, { ...seed, id: `extra-${projectionCount}` }];
 					},
 				},
@@ -1177,14 +1161,20 @@ describe("ModelRegistry runtime provider registration", () => {
 			"ext://oauth",
 		);
 
-		const ids = () => getProviderModels(registry, "appending-provider").map(model => model.id);
-		expect(ids()).toEqual(["runtime-model", "extra-1"]);
+		const expectProjection = () => {
+			const ids = getProviderModels(registry, "deepseek")
+				.filter(model => model.id === baseModel.id || model.id.startsWith("extra-"))
+				.map(model => model.id);
+			expect(ids).toHaveLength(2);
+			expect(new Set(ids)).toEqual(new Set([baseModel.id, `extra-${projectionCount}`]));
+		};
+		expectProjection();
 
 		await registry.refresh("offline");
-		expect(ids()).toHaveLength(2);
+		expectProjection();
 
 		await registry.refresh("online");
-		expect(ids()).toHaveLength(2);
+		expectProjection();
 	});
 
 	test("a non-idempotent modifyModels does not compound when another provider registers", async () => {
@@ -1212,38 +1202,41 @@ describe("ModelRegistry runtime provider registration", () => {
 						getApiKey: credentials => credentials.access,
 						modifyModels: models => {
 							projectionCount += 1;
-							const seed = models.find(model => model.provider === providerName) as Model<Api>;
+							const seed = models.find(
+								model => model.provider === providerName && model.id === baseModel.id,
+							) as Model<Api>;
 							return [...models, { ...seed, id: `extra-${projectionCount}` }];
 						},
 					},
 				},
 				"ext://oauth",
 			);
+			return () => {
+				const ids = getProviderModels(registry, providerName)
+					.filter(model => model.id === baseModel.id || model.id.startsWith("extra-"))
+					.map(model => model.id);
+				expect(ids).toHaveLength(2);
+				expect(new Set(ids)).toEqual(new Set([baseModel.id, `extra-${projectionCount}`]));
+			};
 		};
 
-		await registerAppending("appending-first", "custom-appending-first-api");
-		expect(getProviderModels(registry, "appending-first").map(model => model.id)).toEqual([
-			"runtime-model",
-			"extra-1",
-		]);
+		const expectFirstProjection = await registerAppending("deepseek", "custom-appending-first-api");
+		expectFirstProjection();
 
-		await registerAppending("appending-second", "custom-appending-second-api");
+		const expectSecondProjection = await registerAppending("ascend", "custom-appending-second-api");
 		// Catalog changes rerun whole-catalog hooks, but each run must start from
 		// the unprojected snapshot rather than accumulating prior output.
-		expect(getProviderModels(registry, "appending-first")).toHaveLength(2);
-		expect(getProviderModels(registry, "appending-second").map(model => model.id)).toEqual([
-			"runtime-model",
-			"extra-1",
-		]);
+		expectFirstProjection();
+		expectSecondProjection();
 
 		await registry.refresh("offline");
-		expect(getProviderModels(registry, "appending-first")).toHaveLength(2);
-		expect(getProviderModels(registry, "appending-second")).toHaveLength(2);
+		expectFirstProjection();
+		expectSecondProjection();
 	});
 
 	test("provider-scoped lookups preserve whole-catalog modifyModels projections", async () => {
-		const hiddenModel = registry.getAll().find(model => model.provider === "anthropic");
-		await authStorage.credentials.set("filtering-provider", {
+		const hiddenModel = registry.getAll().find(model => model.provider === "ascend");
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1251,7 +1244,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		});
 
 		registry.registerProvider(
-			"filtering-provider",
+			"deepseek",
 			{
 				api: "custom-filtering-api",
 				baseUrl: "https://example.invalid/",
@@ -1280,8 +1273,8 @@ describe("ModelRegistry runtime provider registration", () => {
 	});
 
 	test("provider-scoped lookups do not intern other providers' transient projections", async () => {
-		const anthropicId = registry.getAll().find(model => model.provider === "anthropic")?.id;
-		await authStorage.credentials.set("changing-provider", {
+		const anthropicId = registry.getAll().find(model => model.provider === "ascend")?.id;
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1289,7 +1282,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		});
 		let projectionCount = 0;
 		registry.registerProvider(
-			"changing-provider",
+			"deepseek",
 			{
 				api: "custom-changing-api",
 				baseUrl: "https://example.invalid/",
@@ -1303,9 +1296,7 @@ describe("ModelRegistry runtime provider registration", () => {
 					modifyModels: models => {
 						projectionCount += 1;
 						return models.map(model =>
-							model.provider === "changing-provider"
-								? { ...model, name: `projection-${projectionCount}` }
-								: model,
+							model.provider === "deepseek" ? { ...model, name: `projection-${projectionCount}` } : model,
 						);
 					},
 				},
@@ -1314,20 +1305,20 @@ describe("ModelRegistry runtime provider registration", () => {
 		);
 
 		const refreshPromise = registry.refresh("offline");
-		expect(registry.find("anthropic", anthropicId!)).toBeDefined();
-		expect(registry.find("changing-provider", "runtime-model")?.name).toBe("projection-3");
+		expect(registry.find("ascend", anthropicId!)).toBeDefined();
+		expect(registry.find("deepseek", "runtime-model")?.name).toBe("projection-3");
 		await refreshPromise;
 	});
 
 	test("registering another provider reapplies whole-catalog modifyModels projections", async () => {
-		await authStorage.credentials.set("filtering-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
 		registry.registerProvider(
-			"filtering-provider",
+			"deepseek",
 			{
 				api: "custom-filtering-api",
 				baseUrl: "https://example.invalid/",
@@ -1338,14 +1329,14 @@ describe("ModelRegistry runtime provider registration", () => {
 					login: async () => ({ access: "a", refresh: "r", expires: Date.now() + 60_000 }),
 					refreshToken: async credentials => credentials,
 					getApiKey: credentials => credentials.access,
-					modifyModels: models => models.filter(model => model.provider !== "later-provider"),
+					modifyModels: models => models.filter(model => model.provider !== "ascend"),
 				},
 			},
 			"ext://oauth",
 		);
 
 		registry.registerProvider(
-			"later-provider",
+			"ascend",
 			{
 				api: "custom-later-api",
 				baseUrl: "https://example.invalid/",
@@ -1356,19 +1347,19 @@ describe("ModelRegistry runtime provider registration", () => {
 			"ext://runtime",
 		);
 
-		expect(getProviderModels(registry, "later-provider")).toEqual([]);
+		expect(getProviderModels(registry, "ascend")).toEqual([]);
 	});
 
 	test("runtime transport overrides reapply whole-catalog modifyModels projections", async () => {
 		const proxyBaseUrl = "https://proxy.example.invalid/v1";
-		await authStorage.credentials.set("filtering-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
 		registry.registerProvider(
-			"filtering-provider",
+			"deepseek",
 			{
 				api: "custom-filtering-api",
 				baseUrl: "https://example.invalid/",
@@ -1380,28 +1371,39 @@ describe("ModelRegistry runtime provider registration", () => {
 					refreshToken: async credentials => credentials,
 					getApiKey: credentials => credentials.access,
 					modifyModels: models =>
-						models.filter(model => model.provider !== "anthropic" || model.baseUrl !== proxyBaseUrl),
+						models.filter(model => model.provider !== "ascend" || model.baseUrl !== proxyBaseUrl),
 				},
 			},
 			"ext://oauth",
 		);
-		expect(getProviderModels(registry, "anthropic").length).toBeGreaterThan(0);
+		expect(getProviderModels(registry, "ascend").length).toBeGreaterThan(0);
 
-		registry.registerProvider("anthropic", { baseUrl: proxyBaseUrl }, "ext://runtime");
+		registry.registerProvider("ascend", { baseUrl: proxyBaseUrl }, "ext://runtime");
 
-		expect(getProviderModels(registry, "anthropic")).toEqual([]);
+		expect(getProviderModels(registry, "ascend")).toEqual([]);
 	});
 
 	test("online discovery reapplies modifiers to an unprojected full catalog", async () => {
-		const target = registry.getAll().find(model => model.provider === "anthropic");
-		await authStorage.credentials.set("renaming-provider", {
+		registry.registerProvider(
+			"ascend",
+			{
+				api: "custom-dynamic-api",
+				baseUrl: "https://dynamic.invalid/",
+				apiKey: "RUNTIME_KEY",
+				streamSimple,
+				models: [{ ...baseModel, id: "target-model" }],
+				fetchDynamicModels: async () => [{ ...baseModel, id: "dynamic-model" }],
+			},
+			"ext://runtime",
+		);
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
 			expires: Date.now() + 60_000,
 		});
 		registry.registerProvider(
-			"renaming-provider",
+			"deepseek",
 			{
 				api: "custom-renaming-api",
 				baseUrl: "https://example.invalid/",
@@ -1414,7 +1416,7 @@ describe("ModelRegistry runtime provider registration", () => {
 					getApiKey: credentials => credentials.access,
 					modifyModels: models =>
 						models.map(model =>
-							model.provider === target?.provider && model.id === target.id
+							model.provider === "ascend" && model.id === "target-model"
 								? { ...model, name: `${model.name} projected` }
 								: model,
 						),
@@ -1422,25 +1424,15 @@ describe("ModelRegistry runtime provider registration", () => {
 			},
 			"ext://oauth",
 		);
-		registry.registerProvider(
-			"dynamic-provider",
-			{
-				api: "custom-dynamic-api",
-				baseUrl: "https://example.invalid/",
-				apiKey: "RUNTIME_KEY",
-				streamSimple,
-				fetchDynamicModels: async () => [{ ...baseModel, id: "dynamic-model" }],
-			},
-			"ext://runtime",
-		);
 
-		expect(registry.find(target!.provider, target!.id)?.name).toBe(`${target!.name} projected`);
+		expect(registry.find("ascend", "target-model")?.name).toBe(`${baseModel.name} projected`);
 		await registry.refreshRuntimeProviders("online");
-		expect(registry.find(target!.provider, target!.id)?.name).toBe(`${target!.name} projected`);
+		expect(registry.find("ascend", "dynamic-model")).toBeDefined();
+		expect(registry.find("ascend", "target-model")?.name).toBe(`${baseModel.name} projected`);
 	});
 
 	test("a modifyModels that mutates in place then throws cannot corrupt the catalog", async () => {
-		await authStorage.credentials.set("mutating-provider", {
+		await authStorage.credentials.set("deepseek", {
 			type: "oauth",
 			access: "access-token",
 			refresh: "refresh-token",
@@ -1449,13 +1441,24 @@ describe("ModelRegistry runtime provider registration", () => {
 		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
 
 		try {
-			const targetBefore = registry.getAll()[0];
+			registry.registerProvider(
+				"ascend",
+				{
+					api: "openai-completions",
+					baseUrl: "https://mutation-target.invalid/v1",
+					apiKey: "RUNTIME_KEY",
+					models: [{ ...baseModel, id: "mutation-target" }],
+				},
+				"ext://runtime",
+			);
+			const targetBefore = registry.find("ascend", "mutation-target");
+			expect(targetBefore).toBeDefined();
 			const targetSnapshot = structuredClone(targetBefore!);
-			const anthropicBefore = registry.getAll().filter(model => model.provider === "anthropic").length;
-			expect(anthropicBefore).toBeGreaterThan(0);
+			const ascendIds = () => new Set(getProviderModels(registry, "ascend").map(model => model.id));
+			const beforeIds = ascendIds();
 
 			registry.registerProvider(
-				"mutating-provider",
+				"deepseek",
 				{
 					api: "custom-mutating-api",
 					baseUrl: "https://example.invalid/",
@@ -1470,8 +1473,11 @@ describe("ModelRegistry runtime provider registration", () => {
 						// then fails. None of those mutations may reach the canonical
 						// unprojected catalog used for fallback or later refreshes.
 						modifyModels: models => {
-							models[0]!.name = "Corrupted by failing hook";
-							models[0]!.cost.input = -1;
+							const target = models.find(
+								model => model.provider === "ascend" && model.id === "mutation-target",
+							)!;
+							target.name = "Corrupted by failing hook";
+							target.cost.input = -1;
 							models.length = 0;
 							throw new Error("mutated then failed");
 						},
@@ -1481,13 +1487,13 @@ describe("ModelRegistry runtime provider registration", () => {
 			);
 
 			expect(registry.find(targetBefore!.provider, targetBefore!.id)).toEqual(targetSnapshot);
-			expect(registry.getAll().filter(model => model.provider === "anthropic")).toHaveLength(anthropicBefore);
-			expect(getProviderModels(registry, "mutating-provider").map(model => model.id)).toEqual(["runtime-model"]);
+			expect(ascendIds()).toEqual(beforeIds);
+			expect(registry.find("deepseek", baseModel.id)?.name).toBe(baseModel.name);
 
 			await registry.refresh("offline");
 			expect(registry.find(targetBefore!.provider, targetBefore!.id)).toEqual(targetSnapshot);
-			expect(registry.getAll().filter(model => model.provider === "anthropic")).toHaveLength(anthropicBefore);
-			expect(getProviderModels(registry, "mutating-provider").map(model => model.id)).toEqual(["runtime-model"]);
+			expect(ascendIds()).toEqual(beforeIds);
+			expect(registry.find("deepseek", baseModel.id)?.name).toBe(baseModel.name);
 		} finally {
 			warn.mockRestore();
 		}
@@ -1517,7 +1523,7 @@ describe("ModelRegistry runtime provider registration", () => {
 		// stubs the method. `getProviderHeaders` is documented as provider-level
 		// "without including per-model overrides", so a provider-scoped accessor
 		// must not answer with some model's own baseUrl.
-		const providerName = "charm-hyper";
+		const providerName = "deepseek";
 		fs.writeFileSync(
 			modelsJsonPath,
 			JSON.stringify({

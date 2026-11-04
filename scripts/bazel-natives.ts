@@ -40,6 +40,7 @@
  */
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { matchesInstalledFile } from "../packages/natives/scripts/installed-file";
 import { detectHostAvx2Support, detectHostMusl, resolveLocalHostAddon } from "./host-detect";
 import { hasVersionStampSlot, nativesPackageVersion, stampNativeVersion } from "./stamp-native-version";
 
@@ -258,6 +259,22 @@ async function runBazel(
 	return { exitCode, stdout: stdoutText, stderrTail: tail };
 }
 
+/** Both files remain recovery inputs when restoring the previous addon fails. */
+class AddonRollbackError extends Error {
+	constructor(
+		readonly backupPath: string,
+		readonly tempPath: string,
+		installError: unknown,
+		rollbackError: unknown,
+	) {
+		super(
+			`Cannot restore previous addon at ${backupPath}: ${String(rollbackError)}; new addon retained at ${tempPath}`,
+			{ cause: installError },
+		);
+		this.name = "AddonRollbackError";
+	}
+}
+
 /** Replace even a mapped Windows addon, retaining the previous image on install failure. */
 async function atomicInstallAddon(tempPath: string, destPath: string): Promise<void> {
 	try {
@@ -281,25 +298,12 @@ async function atomicInstallAddon(tempPath: string, destPath: string): Promise<v
 			try {
 				await fs.rename(backupPath, destPath);
 			} catch (rollbackError) {
-				throw new Error(`Cannot restore previous addon at ${backupPath}: ${String(rollbackError)}`, {
-					cause: error,
-				});
+				throw new AddonRollbackError(backupPath, tempPath, error, rollbackError);
 			}
 		}
 		throw error;
 	}
 	if (renamedAside) await fs.unlink(backupPath).catch(() => {});
-}
-
-async function matchesInstalledFile(sourcePath: string, destPath: string): Promise<boolean> {
-	try {
-		const installed = await fs.stat(destPath);
-		if (!installed.isFile() || !(installed.mode & 0o200)) return false;
-		return (await fs.readFile(destPath)).equals(await fs.readFile(sourcePath));
-	} catch {
-		// A comparison is optional; retain the normal replacement/error path.
-		return false;
-	}
 }
 
 /**
@@ -329,7 +333,7 @@ async function installAddon(
 		else await atomicInstallAddon(tempPath, destPath);
 		return stamp;
 	} catch (err) {
-		await fs.unlink(tempPath).catch(() => {});
+		if (!(err instanceof AddonRollbackError)) await fs.unlink(tempPath).catch(() => {});
 		throw err;
 	}
 }

@@ -442,12 +442,19 @@ export class GoalHost {
 		generation = ++this.#continuationGeneration;
 		state = this.#session.getGoalModeState();
 		const entered = await this.#enter(
-			() =>
+			isCurrent =>
 				state?.enabled
-					? this.#session.goalRuntime.replaceGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate })
-					: this.#session.goalRuntime.createGoal({ objective: rest, autoOrchestrate: options?.autoOrchestrate }),
+					? this.#session.goalRuntime.replaceGoal(
+							{ objective: rest, autoOrchestrate: options?.autoOrchestrate },
+							isCurrent,
+						)
+					: this.#session.goalRuntime.createGoal(
+							{ objective: rest, autoOrchestrate: options?.autoOrchestrate },
+							isCurrent,
+						),
 			false,
 			current,
+			options?.autoOrchestrate === true,
 		);
 		if (!entered || !current()) return;
 		const goalAutoOrchestrateInitialId =
@@ -496,9 +503,10 @@ export class GoalHost {
 	}
 
 	async #enter(
-		start: () => Promise<GoalModeState>,
+		start: (isCurrent?: () => boolean) => Promise<GoalModeState | undefined>,
 		scheduleContinuation = true,
 		commandCurrent: () => boolean = () => true,
+		prepareTools = false,
 	): Promise<GoalModeState | undefined> {
 		const generation = this.#continuationGeneration;
 		const transcript = this.#session.sessionManager.getSessionId();
@@ -529,13 +537,24 @@ export class GoalHost {
 				context_sent: contextSent,
 			});
 			this.#log("goal_enter_started", "enter", "started", context);
+			const ownerCurrent = (): boolean =>
+				commandCurrent() &&
+				!this.#session.isDisposed &&
+				generation === this.#continuationGeneration &&
+				transcript === this.#session.sessionManager.getSessionId();
+			const entryCurrent = (): boolean => {
+				const active = this.#session.getGoalModeState();
+				return (
+					ownerCurrent() &&
+					active?.goal.id === previousState?.goal.id &&
+					active?.goal.status === previousState?.goal.status &&
+					active?.enabled === previousState?.enabled
+				);
+			};
 			const current = (state: GoalModeState): boolean => {
 				const active = this.#session.getGoalModeState();
 				return (
-					commandCurrent() &&
-					!this.#session.isDisposed &&
-					generation === this.#continuationGeneration &&
-					transcript === this.#session.sessionManager.getSessionId() &&
+					ownerCurrent() &&
 					active?.enabled === true &&
 					active.goal.status === "active" &&
 					active.goal.id === state.goal.id
@@ -546,9 +565,33 @@ export class GoalHost {
 				// (a reattached paused goal already holds it). A `goal` tool the host enabled
 				// before the goal stays enabled afterwards.
 				const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
+				const activateTools = async (): Promise<void> => {
+					stage = "activate_tools";
+					stageStarted = performance.now();
+					await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+					toolsActivated = true;
+				};
+				// Autopilot must not persist a new objective or mode until its tools
+				// are ready. Tool activation owns its rollback; never rewind GoalRuntime
+				// over a concurrent pause, abort, replacement, or session change.
+				if (prepareTools) {
+					await activateTools();
+					if (!entryCurrent()) {
+						this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: true });
+						return;
+					}
+					// The runtime emits goal_updated while committing. Its observer must
+					// retain the pre-entry tools, not recapture the newly enabled `goal`.
+					this.#previousTools = previousTools;
+					previousToolsCaptured = true;
+				}
 				stage = "start";
 				stageStarted = performance.now();
-				const state = await start();
+				const state = await start(prepareTools ? entryCurrent : undefined);
+				if (!state) {
+					this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: toolsActivated });
+					return;
+				}
 				runtimeStarted = true;
 				stateCommitted = true;
 				if (!current(state)) {
@@ -557,10 +600,7 @@ export class GoalHost {
 				}
 				this.#previousTools = previousTools;
 				previousToolsCaptured = true;
-				stage = "activate_tools";
-				stageStarted = performance.now();
-				await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
-				toolsActivated = true;
+				if (!prepareTools) await activateTools();
 				// GoalRuntime has already committed the state. Never restore its snapshot:
 				// activation may have yielded to a pause, abort, replacement, or session change.
 				if (!current(state)) {

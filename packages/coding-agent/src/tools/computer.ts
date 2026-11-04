@@ -145,9 +145,7 @@ export function createComputerPrelude(
 			await controller.close();
 		},
 	};
-	const unregisterDisposal = session.registerDisposeCallback?.(() => {
-		void lifetime.close();
-	});
+	const unregisterDisposal = session.registerDisposeCallback?.(() => lifetime.close());
 
 	return {
 		name: "computer",

@@ -24,10 +24,18 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 			mkdirSync(${JSON.stringify(claudeConfigDir)}, { recursive: true });
 			const initial = ${JSON.stringify(initial) ?? "undefined"};
 			if (initial !== undefined) writeFileSync(file, initial);
+			const originalFile = Bun.file;
+			let reads = 0;
+			Bun.file = (path, ...args) => {
+				const result = originalFile(path, ...args);
+				if (String(path) !== file) return result;
+				return { text: async () => { reads++; return result.text(); } };
+			};
 			const { getCompanyConfig, getCompanyConfigError, setCompanyOfflineEnabled, companySnapshotForSubprocess } = await import(${JSON.stringify(modulePath)});
 			// The lane starts gated off even when the fixture config is valid.
 			const gatedConfig = getCompanyConfig();
 			const gatedError = getCompanyConfigError();
+			await Promise.all([setCompanyOfflineEnabled(true), setCompanyOfflineEnabled(true)]);
 			await setCompanyOfflineEnabled(true);
 			const before = getCompanyConfig();
 			const error = getCompanyConfigError();
@@ -62,6 +70,7 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 			});
 			console.log(JSON.stringify({
 				gatedConfigUndefined: gatedConfig === undefined,
+				reads,
 				gatedErrorUndefined: gatedError === undefined,
 				available: before !== undefined,
 				unchanged: before === afterWrite && before === getCompanyConfig() && error === getCompanyConfigError(),
@@ -82,7 +91,9 @@ function runSnapshotProbe(initial: string | undefined, relocateClaudeConfig = fa
 			},
 		);
 		if (child.exitCode !== 0) throw new Error(child.stderr.toString());
-		return JSON.parse(child.stdout.toString());
+		const result = JSON.parse(child.stdout.toString());
+		expect(result.reads).toBe(1);
+		return result;
 	} finally {
 		rmSync(home, { recursive: true, force: true });
 	}
@@ -194,6 +205,63 @@ describe("company provider startup snapshot", () => {
 		expect(result.inheritedMatches).toBe(true);
 		expect(result.workerMatches).toBe(true);
 		expect(result.error).toContain("not valid JSON");
+		expect(JSON.stringify(result)).not.toContain("fixture-secret");
+	});
+
+	test.each([
+		{ name: "missing env", config: {}, error: "must contain env" },
+		{
+			name: "non-string URL",
+			config: { env: { ANTHROPIC_BASE_URL: 7, ANTHROPIC_AUTH_TOKEN: "fixture-secret" } },
+			error: "BASE_URL is missing or empty",
+		},
+		{
+			name: "empty token",
+			config: { env: { ANTHROPIC_BASE_URL: "http://internal.invalid", ANTHROPIC_AUTH_TOKEN: " " } },
+			error: "AUTH_TOKEN is missing or invalid",
+		},
+		{
+			name: "header injection token",
+			config: {
+				env: {
+					ANTHROPIC_BASE_URL: "http://internal.invalid",
+					ANTHROPIC_AUTH_TOKEN: "fixture-secret\r\ninjected: yes",
+				},
+			},
+			error: "AUTH_TOKEN is missing or invalid",
+		},
+		{
+			name: "URL credentials",
+			config: {
+				env: {
+					ANTHROPIC_BASE_URL: "http://user:fixture-secret@internal.invalid",
+					ANTHROPIC_AUTH_TOKEN: "fixture-secret",
+				},
+			},
+			error: "without credentials, query or fragment",
+		},
+		{
+			name: "URL query",
+			config: {
+				env: {
+					ANTHROPIC_BASE_URL: "http://internal.invalid?token=fixture-secret",
+					ANTHROPIC_AUTH_TOKEN: "fixture-secret",
+				},
+			},
+			error: "without credentials, query or fragment",
+		},
+		{
+			name: "unsupported URL scheme",
+			config: { env: { ANTHROPIC_BASE_URL: "file:///fixture-secret", ANTHROPIC_AUTH_TOKEN: "fixture-secret" } },
+			error: "HTTP(S) base URL",
+		},
+	])("caches invalid $name without exposing credential material", ({ config, error }) => {
+		const result = runSnapshotProbe(JSON.stringify(config));
+		expect(result.available).toBe(false);
+		expect(result.unchanged).toBe(true);
+		expect(result.inheritedMatches).toBe(true);
+		expect(result.workerMatches).toBe(true);
+		expect(result.error).toContain(error);
 		expect(JSON.stringify(result)).not.toContain("fixture-secret");
 	});
 

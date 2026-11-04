@@ -1,3 +1,7 @@
+/** Strict SemVer 2.0.0 (semver.org regex, with an absolute end-of-input assertion). */
+export const SEMVER_RE =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?(?![\s\S])/;
+
 const DIGITS = /^\d+$/;
 
 /**

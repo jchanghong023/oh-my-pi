@@ -34,6 +34,25 @@ const PATTERNS = AVAILABLE.map(model => `${model.provider}/${model.id}`);
 
 describe("team member resolution", () => {
 	it.each([
+		{ target: "member", capability: { supportsTools: false } },
+		{ target: "session", capability: { supportsTools: false } },
+		{ target: "member", capability: { kind: "embedding" } },
+		{ target: "session", capability: { kind: "reranker" } },
+	])("rejects a non-Team $target capability before allocating any slots: $capability", ({ target, capability }) => {
+		const incompatible = { ...fakeModel("custom", "unsupported"), ...capability } as Model;
+		const sessionModel = target === "session" ? incompatible : SESSION;
+		const member = target === "member" ? incompatible : AVAILABLE[1]!;
+		const result = resolveTeamParticipants({
+			configuredMembers: [`${member.provider}/${member.id}`],
+			sessionModel,
+			availableModels: [sessionModel, member],
+		});
+		expect(result.ok).toBe(false);
+		if (result.ok) throw new Error("An incompatible model must not create runnable Team slots");
+		expect(result.error).toContain("custom/unsupported");
+	});
+
+	it.each([
 		{ members: [0], slots: [0, 0, 0] },
 		{ members: [0, 1], slots: [0, 1, 0] },
 		{ members: [0, 1, 2], slots: [0, 1, 2] },

@@ -131,9 +131,18 @@ describe("Markdown parsing", () => {
 	});
 
 	it("splits oversized sections into bounded complete chunks", () => {
-		const parsed = parseMarkdown(new TextEncoder().encode(`# Doc\n${"y".repeat(40_000)}\n`));
+		const source = `# Doc\n${"y".repeat(40_000)}\n`;
+		const parsed = parseMarkdown(new TextEncoder().encode(source));
 		expect(parsed.sections.length).toBeGreaterThan(1);
-		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThan(20_000);
+		expect(Math.max(...parsed.sections.map(section => section.rawMarkdown.length))).toBeLessThanOrEqual(18_000);
+		const bytes = Buffer.from(source);
+		let covered = 0;
+		for (const section of parsed.sections) {
+			expect(bytes.subarray(section.byteStart, section.byteEnd).toString()).toBe(section.rawMarkdown);
+			expect(section.byteStart).toBeLessThanOrEqual(covered);
+			covered = Math.max(covered, section.byteEnd);
+		}
+		expect(covered).toBe(bytes.length);
 	});
 
 	it("keeps every chunk within the cap when a blank-line split leaves a long tail", () => {
@@ -214,6 +223,45 @@ describe("Markdown parsing", () => {
 	});
 });
 describe("KnowledgeIndexEngine indexing contract", () => {
+	// Ignore rules and file creation order cannot alter the authoritative corpus.
+	it("discovers hidden uppercase Markdown independently of ignore rules in stable collator order", async () => {
+		const root = await tempDir("knowledge-discovery-root-");
+		const agentDir = await tempDir("knowledge-discovery-agent-");
+		const paths = ["z.md", "alpha.MD", ".hidden/notes.Md", ".private.md", "évidence.md"];
+		for (const relative of paths)
+			await Bun.write(path.join(root, relative), `# Guide\ndiscoverybeacon ${relative}\n`);
+		for (const relative of [".gitignore", ".ignore"]) await Bun.write(path.join(root, relative), "*\n");
+		await Bun.write(path.join(root, "ignored.txt"), "discoverybeacon must not be imported\n");
+		await Bun.write(path.join(root, "suffix.md.bak"), "discoverybeacon must not be imported\n");
+		await fs.mkdir(path.join(root, "directory.md"));
+		const expected = [...paths]
+			.sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+			.sort(new Intl.Collator("en-US").compare);
+		const discovered = (await enumerateMarkdownFiles(root)).map(relative => relative.replaceAll("\\", "/"));
+		expect(discovered).toEqual(expected);
+		expect(
+			(await enumerateMarkdownFiles(path.join(root, "."))).map(relative => relative.replaceAll("\\", "/")),
+		).toEqual(expected);
+		const engine = new KnowledgeIndexEngine({ agentDir });
+		try {
+			for (const name of ["first", "second"]) {
+				const built = await engine.init(root, name);
+				expect(built).toMatchObject({ processed: paths.length, failed: 0, index: { documentCount: paths.length } });
+				const stored = withSqliteDatabase(
+					engine.databasePath,
+					db => db.query("SELECT relative_path FROM documents WHERE index_id=? ORDER BY id").all(built.index.id),
+					{ readonly: true },
+				);
+				expect(stored).toEqual(expected.map(relative_path => ({ relative_path })));
+			}
+			await fs.rm(root, { recursive: true });
+			const hits = engine.search("discoverybeacon", { limit: 100 }).sections;
+			expect(hits).toHaveLength(paths.length * 2);
+			expect(new Set(hits.map(hit => `${hit.index}/${hit.path}`)).size).toBe(paths.length * 2);
+		} finally {
+			engine.close();
+		}
+	});
 	it("keeps default technical-name search distinct from explicit raw Markdown regex matching", async () => {
 		const root = await tempDir("docs-regex-root-");
 		const agentDir = await tempDir("docs-regex-agent-");

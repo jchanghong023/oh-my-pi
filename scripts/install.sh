@@ -59,6 +59,20 @@ install_log() {
     return 0
 }
 
+install_log_name_valid() {
+    log_candidate="${1##*/}"
+    case "$log_candidate" in
+        omp.install.[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].*.log) ;;
+        *) return 1 ;;
+    esac
+    log_fields="${log_candidate#omp.install.??????????.}"
+    log_epoch="${log_fields%%.*}"
+    log_pid="${log_fields#*.}"
+    log_pid="${log_pid%.log}"
+    case "$log_epoch" in ""|*[!0-9]*) return 1 ;; esac
+    case "$log_pid" in ""|*[!0-9]*) return 1 ;; esac
+}
+
 install_log_init() {
     log_root="$HOME/${PI_CONFIG_DIR:-.omp}"
     explicit_root=false
@@ -123,9 +137,12 @@ install_log_init() {
     # Only installer logs are eligible, never application logs or live attempts.
     (
         count=0
-        for old in "$log_dir"/omp.install.*.log; do [ -f "$old" ] && count=$((count + 1)); done
+        for old in "$log_dir"/omp.install.*.log; do
+            [ -f "$old" ] && install_log_name_valid "$old" && count=$((count + 1))
+        done
         for old in "$log_dir"/omp.install.*.log; do
             [ -f "$old" ] || continue
+            install_log_name_valid "$old" || continue
             old_pid="${old%.log}"; old_pid="${old_pid##*.}"
             case "$old_pid" in ""|*[!0-9]*) continue ;; esac
             kill -0 "$old_pid" 2>/dev/null && continue

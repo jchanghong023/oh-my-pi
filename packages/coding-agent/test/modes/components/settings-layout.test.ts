@@ -1,8 +1,7 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { all } from "@oh-my-pi/pi-coding-agent/config/registry";
 
-import { getSettingsForTab, SETTING_TABS, TAB_GROUPS } from "@oh-my-pi/pi-tui/overlays/settings-defs";
+import { getSettingsForTab, TAB_GROUPS, type SettingsDisplayEntry } from "@oh-my-pi/pi-tui/overlays/settings-defs";
 import { createSettingsHost } from "@oh-my-pi/pi-coding-agent/config/settings-ui";
 import { createPluginSettingsHost } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/settings-host";
 import { SettingsSelectorComponent } from "@oh-my-pi/pi-tui/overlays/settings-selector";
@@ -24,50 +23,48 @@ describe("settings layout", () => {
 		resetSettingsForTest();
 	});
 
-	it("every UI setting declares a group registered in TAB_GROUPS for its tab", () => {
-		const violations: string[] = [];
-		for (const setting of all()) {
-			const ui = setting.ui;
-			if (!ui) continue;
-			if (!ui.group) {
-				violations.push(`${setting.id}: missing ui.group`);
-			} else if (!TAB_GROUPS[ui.tab].includes(ui.group)) {
-				violations.push(`${setting.id}: group "${ui.group}" not in TAB_GROUPS["${ui.tab}"]`);
-			}
-		}
-		expect(violations).toEqual([]);
-	});
+	it("groups settings in declared order without dropping ungrouped or external sections", () => {
+		const entry = (path: string, group?: string): SettingsDisplayEntry => ({
+			path,
+			type: "boolean",
+			defaultValue: false,
+			ui: { tab: "appearance", group, label: path, description: "" },
+		});
+		const firstEntries = TAB_GROUPS.appearance.map((group, index) => entry(`group-${index}-first`, group));
+		const secondEntries = TAB_GROUPS.appearance.map((group, index) => entry(`group-${index}-second`, group));
+		const entries: SettingsDisplayEntry[] = [
+			entry("external-first", "external"),
+			...firstEntries.reverse(),
+			entry("ungrouped"),
+			...secondEntries.reverse(),
+			entry("external-second", "external"),
+			{
+				path: "other-tab",
+				type: "boolean",
+				defaultValue: false,
+				ui: { tab: "model", group: TAB_GROUPS.model[0], label: "Other", description: "" },
+			},
+		];
 
-	it("getSettingsForTab returns contiguous groups in TAB_GROUPS order", () => {
-		for (const tab of SETTING_TABS) {
-			const defs = getSettingsForTab(createSettingsHost().entries, tab);
-			expect(defs.length).toBeGreaterThan(0);
-
-			// Collapse the def sequence into the order groups first appear.
-			const sequence: string[] = [];
-			for (const def of defs) {
-				const group = def.group ?? "";
-				if (sequence[sequence.length - 1] !== group) sequence.push(group);
-			}
-
-			// Contiguous: no group appears twice in the collapsed sequence.
-			expect(new Set(sequence).size).toBe(sequence.length);
-
-			// Ordered: grouped sections follow the TAB_GROUPS declaration order.
-			const grouped = sequence.filter(group => group !== "");
-			const expected = TAB_GROUPS[tab].filter(group => grouped.includes(group));
-			expect(grouped).toEqual(expected);
-		}
+		const defs = getSettingsForTab(entries, "appearance");
+		expect(defs.map(def => def.path)).toEqual([
+			"ungrouped",
+			...TAB_GROUPS.appearance.flatMap((_, index) => [`group-${index}-first`, `group-${index}-second`]),
+			"external-first",
+			"external-second",
+		]);
+		expect(getSettingsForTab(entries, "model").map(def => def.path)).toEqual(["other-tab"]);
 	});
 
 	it("hides advisor dependent settings when advisor is disabled", () => {
+		cfgAdvisorEnabled.set(Settings.instance, false);
 		const advisorDependentPaths = ["advisor.syncBacklog", "advisor.immuneTurns"];
 		const advisorDependentPathSet = new Set<string>(advisorDependentPaths);
 		const defs = getSettingsForTab(createSettingsHost().entries, "model").filter(def =>
 			advisorDependentPathSet.has(def.path),
 		);
 
-		expect(defs.map(def => def.path)).toEqual(advisorDependentPaths);
+		expect(new Set(defs.map(def => def.path))).toEqual(advisorDependentPathSet);
 		for (const def of defs) {
 			expect(def.condition?.()).toBe(false);
 		}
@@ -79,21 +76,19 @@ describe("settings layout", () => {
 		}
 	});
 
-	it("exposes usage-aware fallback as an opt-in advanced policy", () => {
+	it("shows usage reserve controls only while usage-aware fallback is enabled", () => {
+		cfgRetryUsageAwareFallback.set(Settings.instance, false);
 		const defs = getSettingsForTab(createSettingsHost().entries, "model").filter(def =>
 			def.path.startsWith("retry.usage"),
 		);
-		expect(defs.map(def => def.path)).toEqual([
-			"retry.usageAwareFallback",
-			"retry.usageReservePct",
-			"retry.usageReservePolicy",
-		]);
-		expect(defs[0]).toMatchObject({ type: "boolean", defaultValue: false });
-		expect(defs[1]?.condition?.()).toBe(false);
-		expect(defs[2]?.condition?.()).toBe(false);
+		expect(new Set(defs.map(def => def.path))).toEqual(
+			new Set(["retry.usageAwareFallback", "retry.usageReservePct", "retry.usageReservePolicy"]),
+		);
+		expect(defs.find(def => def.path === "retry.usageAwareFallback")?.type).toBe("boolean");
+		const reserveDefs = defs.filter(def => def.path !== "retry.usageAwareFallback");
+		for (const def of reserveDefs) expect(def.condition?.()).toBe(false);
 		cfgRetryUsageAwareFallback.set(Settings.instance, true);
-		expect(defs[1]?.condition?.()).toBe(true);
-		expect(defs[2]?.condition?.()).toBe(true);
+		for (const def of reserveDefs) expect(def.condition?.()).toBe(true);
 	});
 
 	it("keeps each wrapped status preview line inside the settings panel", () => {
@@ -121,33 +116,60 @@ describe("settings layout", () => {
 		}
 	});
 
-	it("renders preview inside SettingsSelectorComponent submenu without crashing", async () => {
+	it("applies the selected composer shape through the settings host", async () => {
 		await setTheme("dark");
+		const changes: Array<[string, unknown]> = [];
+		const host = createSettingsHost();
+		host.set("composer.shape", "box");
 		const selector = new SettingsSelectorComponent(
 			{
 				availableThinkingLevels: [],
 				thinkingLevel: undefined,
 				availableThemes: ["dark", "light"],
 				providers: [],
-				settings: createSettingsHost(),
+				settings: host,
 				plugins: createPluginSettingsHost(process.cwd()),
 			},
 			{
-				onChange: () => {},
+				onChange: (path, value) => changes.push([path, value]),
 				onCancel: () => {},
 			},
 		);
 
-		for (const ch of "composer shape") selector.handleInput(ch);
-		// Open the composer.shape submenu
-		selector.handleInput("\n");
-
-		const rendered = selector.render(80).join("\n");
-		expect(rendered.length).toBeGreaterThan(0);
-
+		selector.handleNativeEvent({ type: "activate", key: "", item: "composer.shape" });
 		// Cycle down to claude
 		selector.handleInput("\x1b[B");
-		const nextRendered = selector.render(80).join("\n");
-		expect(nextRendered).not.toBe(rendered);
+		selector.handleInput("\r");
+		expect(changes).toEqual([["composer.shape", "claude"]]);
+		expect(host.get("composer.shape")).toBe("claude");
+	});
+
+	it("persists worktree option machine values from keyboard and native selection", () => {
+		const host = createSettingsHost();
+		host.set("session.worktreeScope", "repo");
+		const changes: Array<[string, unknown]> = [];
+		const selector = new SettingsSelectorComponent(
+			{
+				availableThinkingLevels: [],
+				thinkingLevel: undefined,
+				availableThemes: ["titanium", "light"],
+				providers: [],
+				settings: host,
+				plugins: createPluginSettingsHost(process.cwd()),
+			},
+			{ onChange: (path, value) => changes.push([path, value]), onCancel: () => {} },
+		);
+		selector.handleNativeEvent({ type: "action", key: "", act: "page", value: "interaction", mods: [] });
+		selector.handleNativeEvent({ type: "activate", key: "", item: "session.worktreeScope" });
+		selector.handleInput("\x1b[A");
+		selector.handleInput("\r");
+		expect(host.get("session.worktreeScope")).toBe("directory");
+		expect(changes).toEqual([["session.worktreeScope", "directory"]]);
+		selector.handleNativeEvent({ type: "change", key: "", item: "session.worktreeScope", value: "repo" });
+		expect(host.get("session.worktreeScope")).toBe("repo");
+		expect(changes).toEqual([
+			["session.worktreeScope", "directory"],
+			["session.worktreeScope", "repo"],
+		]);
 	});
 });

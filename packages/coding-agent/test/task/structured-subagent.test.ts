@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
-import path from "node:path";
+import * as path from "node:path";
 import { AuthStorage, type Api, type Model } from "@oh-my-pi/pi-ai";
 import { unregisterCustomApis } from "@oh-my-pi/pi-ai/api-registry";
 import {
@@ -36,6 +36,7 @@ import type {
 	LoadExtensionsResult,
 } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
 import type { CustomTool } from "@oh-my-pi/pi-coding-agent/extensibility/custom-tools/types";
+import { __closeExtensionParseCacheForTests } from "@oh-my-pi/pi-coding-agent/extensibility/plugins/legacy-pi-compat";
 import {
 	artifactsDirsFromRegistry,
 	resetRegisteredArtifactDirsForTests,
@@ -526,7 +527,14 @@ describe("structured subagent primitive", () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-seance-policy-"));
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("anthropic", "test-key");
-		const modelRegistry = new ModelRegistry(authStorage);
+		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir, "models.yml"));
+		const models = [consumerModel("anthropic", "claude-sonnet-4-5"), consumerModel("anthropic", "claude-sonnet-4-6")];
+		// Saved-model restoration uses find; the explicit override uses the available catalog.
+		// Keep both views explicit rather than depending on retired bundled model entries.
+		vi.spyOn(modelRegistry, "find").mockImplementation((provider, id) =>
+			models.find(model => model.provider === provider && model.id === id),
+		);
+		vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => models);
 		const cwd = path.join(tempDir, "project");
 		const sourceFile = path.join(tempDir, "sessions", "source.jsonl");
 		await fs.mkdir(path.dirname(sourceFile), { recursive: true });
@@ -1751,11 +1759,14 @@ describe("agent frontmatter structured opt-in", () => {
 		AgentLifecycleManager.resetGlobalForTests();
 		AgentRegistry.resetGlobalForTests();
 		unregisterCustomApis(MOCK_API_SOURCE);
-		for (const key of ENV_KEYS) restoreEnvValue(key, savedEnv[key]);
-		__resetDirsFromEnvForTests();
-		// The child sessions opened agent.db and models.db under root; Windows cannot delete open files.
+		// Close native database handles while their isolated agent directory is still active.
 		AgentStorage.close();
 		closeModelCache();
+		// SDK extension loading owns a separate process-wide cache under HOME,
+		// not the registry's scoped models.db connection.
+		__closeExtensionParseCacheForTests();
+		for (const key of ENV_KEYS) restoreEnvValue(key, savedEnv[key]);
+		__resetDirsFromEnvForTests();
 		await removeWithRetries(root);
 	});
 
@@ -1891,11 +1902,28 @@ describe("agent frontmatter structured opt-in", () => {
 			agents: [worker, { ...worker, name: "leaf", tools: ["read"] }, getBundledAgent("seance")!],
 			projectAgentsDir: null,
 		});
+		// Observe real SDK creation without installing hooks on the ordinary-child control.
+		// One-shot children are not lifecycle-owned; keep their disposal promises reachable too.
+		const createSession = sdkModule.createAgentSession;
+		const children: AgentSession[] = [];
+		const create = vi.spyOn(sdkModule, "createAgentSession").mockImplementation(async options => {
+			const created = await createSession(options);
+			children.push(created.session);
+			return created;
+		});
 		try {
 			await body({ parent, cwd, model, worker });
 		} finally {
-			await AgentLifecycleManager.global().dispose();
-			authStorage.close();
+			try {
+				await AgentLifecycleManager.global().dispose();
+				for (const child of children) await child.dispose();
+				await modelRegistry.awaitBackgroundRefresh();
+			} finally {
+				create.mockRestore();
+				model.reset();
+				settings.cancelPendingSaves();
+				authStorage.close();
+			}
 		}
 	}
 
@@ -1982,6 +2010,71 @@ describe("agent frontmatter structured opt-in", () => {
 					expect(observations).toEqual(["before", "after"]);
 				},
 				() => ({ content: ["settled shared result"] }),
+			);
+		},
+		30_000,
+	);
+
+	// Cold setup failures must release both the host admission and native resources.
+	it.each(["configure", "attached"] as const)(
+		"cold native %s failure cleans the child and temporary artifacts without model dispatch",
+		async phase => {
+			await withNativeHookFixture(
+				async ({ parent, model }) => {
+					const failure = new Error(`cold ${phase} rejected`);
+					const disposed = Promise.withResolvers<void>();
+					let created: AgentSession | undefined;
+					let reserved = false;
+					let configured = 0;
+					const failed: unknown[] = [];
+					const settled: Array<SingleResult | undefined> = [];
+					parent.subagentHooks = {
+						beforeSpawn: async () => {
+							reserved = true;
+							return { keepAlive: false };
+						},
+						configureSession: async () => {
+							configured++;
+							if (phase === "configure") throw failure;
+							return {
+								onSessionCreated: child => {
+									created = child;
+									child.addDisposer(() => disposed.resolve());
+									throw failure;
+								},
+							};
+						},
+						onSpawnFailed: async (_request, error) => {
+							reserved = false;
+							failed.push(error);
+							throw new Error("admission cleanup must not replace setup failure");
+						},
+						onSettled: async (_request, result) => {
+							settled.push(result);
+						},
+					};
+					const invocation = await runStructuredSubagent(
+						request({ session: parent, structured: false, keepAlive: true }),
+					);
+					expect(invocation.result.exitCode).toBe(1);
+					expect(invocation.result.error).toContain(failure.message);
+					expect(configured).toBe(1);
+					expect(failed).toEqual([failure]);
+					expect(reserved).toBe(false);
+					expect(settled).toEqual([invocation.result]);
+					expect(model.calls).toHaveLength(0);
+					if (phase === "attached") {
+						expect(created).toBeDefined();
+						await disposed.promise;
+					} else {
+						expect(created).toBeUndefined();
+					}
+					expect(AgentRegistry.global().get(invocation.result.id)?.session ?? null).toBeNull();
+					expect(AgentLifecycleManager.global().has(invocation.result.id!)).toBe(false);
+					expect(artifactsDirsFromRegistry()).toEqual([]);
+					await expect(fs.stat(invocation.artifactsDir!)).rejects.toMatchObject({ code: "ENOENT" });
+				},
+				() => ({ content: ["unexpected dispatch"] }),
 			);
 		},
 		30_000,
@@ -2131,6 +2224,7 @@ describe("agent frontmatter structured opt-in", () => {
 
 	it.each([
 		"capture",
+		"apply",
 		"branch",
 		"subdir",
 		"ordinary-subdir",
@@ -2144,6 +2238,7 @@ describe("agent frontmatter structured opt-in", () => {
 				async ({ parent, cwd }) => {
 					cfgTaskIsolationEnabled.set(parent.settings, true);
 					cfgTaskIsolationCommits.set(parent.settings, "generic");
+					if (mode === "apply") cfgTaskIsolationApply.set(parent.settings, false);
 					for (const args of [
 						["init"],
 						["config", "user.email", "native-hooks@example.invalid"],
@@ -2169,7 +2264,7 @@ describe("agent frontmatter structured opt-in", () => {
 					let observedResult: SingleResult | undefined;
 					parent.subagentHooks = {
 						beforeSpawn: async () => ({
-							applyChanges: false,
+							applyChanges: mode === "apply",
 							keepAlive: mode === "retained",
 							preserveCwd: mode === "subdir" ? true : undefined,
 						}),
@@ -2258,8 +2353,13 @@ describe("agent frontmatter structured opt-in", () => {
 					if (mode === "subdir" || mode === "ordinary-subdir") {
 						expect(await Bun.file(path.join(cwd, "app", "child-only.txt")).exists()).toBe(false);
 					}
-					expect(await Bun.file(path.join(cwd, "child-only.txt")).exists()).toBe(false);
-					expect(cfgTaskIsolationApply.get(parent.settings)).toBe(true);
+					if (mode === "apply") {
+						expect(settled.changesApplied).toBe(true);
+						expect(await fs.readFile(path.join(cwd, "child-only.txt"), "utf8")).toBe("child mutation");
+					} else {
+						expect(await Bun.file(path.join(cwd, "child-only.txt")).exists()).toBe(false);
+					}
+					expect(cfgTaskIsolationApply.get(parent.settings)).toBe(mode !== "apply");
 					if (mode === "retained") {
 						expect(observations).toEqual([]);
 						await fs.writeFile(path.join(configuredCwd!, "late.txt"), "late mutation");

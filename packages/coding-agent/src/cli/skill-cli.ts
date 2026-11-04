@@ -7,6 +7,7 @@ import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { formatBytes, isEnoent, VERSION } from "@oh-my-pi/pi-utils";
 import chalk from "@oh-my-pi/pi-utils/chalk";
 import { CliUsageError } from "@oh-my-pi/pi-utils/cli";
+import { SEMVER_RE } from "@oh-my-pi/pi-utils/version";
 import {
 	SKILL_LIMITS,
 	SKILL_SCOPE_RE,
@@ -19,7 +20,7 @@ import {
 import { StencilCredential } from "../stencil/credential";
 import { parseSkillSpec, type SkillSpec, SkillshareClient, SkillshareError } from "../skillshare/client";
 import { installSkills, searchSkills, showSkillInfo, uninstallSkills, updateSkills } from "../skillshare/installer";
-import { bumpVersion, type PackResult, packSkill, SEMVER_RE } from "../skillshare/pack";
+import { bumpVersion, type PackResult, packSkill } from "../skillshare/pack";
 import { handleSkillList } from "./skill-list";
 
 export type SkillAction =

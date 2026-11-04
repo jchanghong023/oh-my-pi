@@ -7,30 +7,43 @@ import { Type } from "@oh-my-pi/omptype/typebox";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
+import { cfgEditMode, cfgEditModelVariants } from "../../src/edit/settings";
+import { AgentRegistry } from "../../src/registry/agent-registry";
+import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
 import { createAgentSession } from "../../src/sdk";
 import type { AgentSession } from "../../src/session/agent-session";
+import { isLocalAgentSession } from "../../src/session/agent-session-handle";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
 import { CURRENT_SESSION_VERSION } from "../../src/session/session-entries";
 import { closeSessionIndex } from "../../src/session/session-index";
+import { artifactVersion } from "../../src/spec-driven/artifacts";
 import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
+import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
+import { checkSkillReadAccess, SkillAccessDeniedError } from "../../src/spec-driven/skill-policy";
 import * as teamOrchestrator from "../../src/team/orchestrator";
 import {
+	BEHAVIOR_TEST,
 	contentText,
 	createProviderFixture,
 	isScoutProbeRequest,
+	IMPLEMENTATION,
+	IMPLEMENTATION_PATH,
+	respond,
 	rolePayload,
+	TEST_PATH,
 	scoutProbeReply,
 } from "./provider-fixture";
 import { cfgTeamMembers } from "../../src/team/settings";
-import { cfgTaskIsolationEnabled, cfgTaskMaxRecursionDepth } from "../../src/task/settings";
+import { cfgTaskIsolationEnabled, cfgTaskMaxRecursionDepth, cfgTaskSpeculativeLaunch } from "../../src/task/settings";
 import * as isolationRunner from "../../src/task/isolation-runner";
-import { cfgAsyncEnabled } from "../../src/tools/settings";
+import { cfgAsyncEnabled, cfgToolsSpeculativeExecutionEnabled } from "../../src/tools/settings";
+import { renderSubagentUserPrompt } from "../../src/task/structured-subagent";
 
 async function consumer(
 	options: Parameters<typeof createProviderFixture>[0] = {},
@@ -44,9 +57,11 @@ async function consumer(
 	const authStorage = await AuthStorage.create(":memory:");
 	let session: AgentSession | undefined;
 	let runtime: SpecDrivenRuntime | undefined;
+	let registry: ModelRegistry | undefined;
 	const dispose = async () => {
 		await runtime?.dispose();
 		await session?.dispose();
+		await registry?.awaitBackgroundRefresh();
 		authStorage.close();
 		await provider[Symbol.asyncDispose]();
 		HistoryStorage.close();
@@ -61,17 +76,22 @@ async function consumer(
 			path.join(agentDir, "models.yml"),
 			`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n      - id: chat-b\n        reasoning: false\n        contextWindow: 1000000\n`,
 		);
-		const settings = Settings.isolated({
-			modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
-			"compaction.enabled": false,
-			"prewalk.enabled": false,
-			"tools.xdev": false,
-			"async.enabled": false,
-			"eval.js": true,
-			"todo.enabled": false,
-			"mcp.startupTimeoutMs": 0,
+		const settings = await Settings.loadIsolated({
+			cwd,
+			agentDir,
+			inMemory: true,
+			overrides: {
+				modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
+				"compaction.enabled": false,
+				"prewalk.enabled": false,
+				"tools.xdev": false,
+				"async.enabled": false,
+				"eval.js": true,
+				"todo.enabled": false,
+				"mcp.startupTimeoutMs": 0,
+			},
 		});
-		const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
+		registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
 		const model = registry.find("deepseek", "chat-a");
 		if (!model) throw new Error("Local runtime fixture model unavailable");
 		({ session } = await createAgentSession({
@@ -227,7 +247,12 @@ test("original request remains in native requirements history, not saved workspa
 }, 120_000);
 
 test("business entry restores its native conversation and hands the complete confirmed document to requirements", async () => {
-	await using fixture = await consumer({ reply: () => ({ text: "继续澄清。" }) });
+	const authorityPath = "docs/requirements/orders/approval.md";
+	const authority = "# 订单审批权威\n\n已存在的审批规则 Ω；必须完整交接，不能由业务文档替代。\n";
+	await using fixture = await consumer({ reply: () => ({ text: "继续澄清。" }) }, async cwd => {
+		await fs.mkdir(path.dirname(path.join(cwd, authorityPath)), { recursive: true });
+		await fs.writeFile(path.join(cwd, authorityPath), authority);
+	});
 	const request = "  描述订单审批业务\n保留原始空格  ";
 	const businessPath = "docs/business-requirements.md";
 	await fixture.orchestrator.startBusiness(request, "business-native", businessPath);
@@ -279,7 +304,19 @@ test("business entry restores its native conversation and hands the complete con
 			.map(rolePayload)
 			.findLast(payload => payload?.specDrivenRole === "requirements" && payload.input.entry === true);
 		expect(requirements?.input.request).toBe(request);
-		expect(requirements?.input.files).toEqual([expect.objectContaining({ path: businessPath, content: document })]);
+		expect(requirements?.input.files).toEqual([
+			{
+				path: businessPath,
+				content: document,
+				version: artifactVersion(Buffer.from(document)),
+			},
+			{
+				path: authorityPath,
+				content: authority,
+				version: artifactVersion(Buffer.from(authority)),
+			},
+		]);
+		expect(await fs.readFile(path.join(fixture.cwd, authorityPath), "utf8")).toBe(authority);
 		expect(requirements?.input.userReply).toBe("/dev next 确认业务");
 	} finally {
 		await restored.dispose();
@@ -1547,3 +1584,714 @@ test("stopping a stage aborts and settles its actual in-flight scout without del
 	expect(JSON.stringify(native.messages)).not.toContain("late scout parent result");
 	expect(fixture.provider.failures).toEqual([]);
 }, 120_000);
+
+test("all Dev stages enforce session-only edit and speculation defaults on creation and recovery", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "保留原生阶段历史。" }) });
+	cfgEditMode.set(fixture.settings, "hashline");
+	cfgEditModelVariants.set(fixture.settings, { "deepseek/chat-a": "patch" });
+	cfgTaskSpeculativeLaunch.set(fixture.settings, true);
+	cfgToolsSpeculativeExecutionEnabled.set(fixture.settings, true);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize("session-defaults", context);
+	const roles = ["business", "requirements", "solution", "planner", "executor"] as const;
+	const assertDefaults = (runtime: SpecDrivenRuntime) => {
+		for (const role of roles) {
+			const stage = runtime.nativeSession(role)!;
+			expect(cfgEditMode.get(stage.settings), role).toBe("replace");
+			expect(cfgTaskSpeculativeLaunch.get(stage.settings), role).toBe(role === "executor");
+			expect(cfgToolsSpeculativeExecutionEnabled.get(stage.settings), role).toBe(role === "executor");
+		}
+		expect(cfgEditMode.get(fixture.settings)).toBe("hashline");
+		expect(cfgEditModelVariants.get(fixture.settings)).toEqual({ "deepseek/chat-a": "patch" });
+		expect(cfgTaskSpeculativeLaunch.get(fixture.settings)).toBe(true);
+		expect(cfgToolsSpeculativeExecutionEnabled.get(fixture.settings)).toBe(true);
+	};
+	for (const role of roles) {
+		await fixture.runtime.ports.agents.run(
+			{ role, entry: true, request: "只澄清当前阶段", files: [], outputPaths: ["stage.md"] },
+			context,
+		);
+		const request = fixture.provider.requests.findLast(item => rolePayload(item)?.specDrivenRole === role)!;
+		const edit = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "edit");
+		expect(JSON.stringify(edit?.function?.parameters), role).toContain("old_string");
+	}
+	const saved: SpecSavedRun = {
+		runId: context.runId,
+		phase: "executing",
+		changeId: "session-defaults",
+		paths,
+		approvals: {},
+		sessions: fixture.runtime.sessionRefs(),
+	};
+	assertDefaults(fixture.runtime);
+	await fixture.runtime.dispose();
+	const requests = fixture.provider.requests.length;
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		for (const role of roles) await restored.ports.agents.prepare(role, context, saved.sessions[role]);
+		assertDefaults(restored);
+		expect(fixture.provider.requests).toHaveLength(requests);
+		for (const role of roles)
+			expect(restored.nativeSession(role)?.sessionFile).toBe(saved.sessions[role]?.sessionFile);
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
+test("idle execution child retains bundled skill reads until its native session is disposed", async () => {
+	const marker = "OMP_IDLE_EXECUTION_SKILL_CHILD";
+	const followup = "OMP_IDLE_EXECUTION_SKILL_FOLLOWUP";
+	const skillName = "requesting-code-review";
+	let dispatched = false;
+	await using fixture = await consumer({
+		reply(request) {
+			const lastUser = request.messages.findLastIndex(
+				message => message.role === "user" && contentText(message.content) === followup,
+			);
+			if (lastUser >= 0) {
+				if (!request.messages.slice(lastUser + 1).some(message => message.role === "tool"))
+					return {
+						tool: { name: "read", args: { i: "Reading retained skill", path: `skill://${skillName}:raw` } },
+					};
+				return { text: "保活会话已读取技能。" };
+			}
+			if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
+				dispatched = true;
+				return {
+					tool: {
+						name: "task",
+						args: {
+							context: "Return without reading a skill; keep the native child available.",
+							tasks: [{ name: "SkillKeeper", task: marker, solutionSpace: "return a result" }],
+						},
+					},
+				};
+			}
+			return { text: "首次任务已结束。" };
+		},
+	});
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("idle-child-skill", context);
+	await fixture.runtime.ports.agents.run(
+		{ role: "executor", entry: true, request: "派发后等待结果", files: [], outputPaths: ["completion.md"] },
+		context,
+	);
+	const executor = fixture.runtime.nativeSession("executor")!;
+	const ref = AgentRegistry.global()
+		.list()
+		.find(item => item.parentId === executor.getAgentId() && item.kind === "sub");
+	expect(ref?.status).toBe("idle");
+	if (!ref?.session || !isLocalAgentSession(ref.session)) throw new Error("Expected a live native task child");
+	const child = ref.session;
+	const skill = child.skills.find(item => item.name === skillName);
+	if (!skill) throw new Error("Execution child lost its bundled skill catalog");
+	expect(skill.hide).toBe(false);
+	const firstMessages = child.messages.length;
+	await child.prompt(followup, { expandPromptTemplates: false, runCommands: false });
+	const result = child.messages
+		.slice(firstMessages)
+		.find(message => message.role === "toolResult" && message.toolName === "read");
+	expect(result).toMatchObject({ isError: false });
+	expect(JSON.stringify(result)).toContain("# Requesting Code Review");
+	expect(fixture.provider.failures).toEqual([]);
+	await child.dispose();
+	expect(() => checkSkillReadAccess(skill, { scope: child.sessionManager })).toThrow(SkillAccessDeniedError);
+}, 120_000);
+
+test.each(["docs-zh-CN/requirements", "docs/requirements", "requirements"])(
+	"requirements entry includes complete recursive Markdown from the sole authority %s",
+	async authority => {
+		const file = `${authority}/orders/approval.md`;
+		const content = "# 权威规则 Ω\n\n保留递归业务规则原文。\n";
+		await using fixture = await consumer({ reply: () => ({ text: "根据权威材料澄清。" }) }, async cwd => {
+			await fs.mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
+			await fs.writeFile(path.join(cwd, file), content);
+		});
+		await fixture.orchestrator.start("手动提供业务文档，直接开发", "authority-discovery");
+		const input = fixture.provider.requests
+			.map(rolePayload)
+			.find(item => item?.specDrivenRole === "requirements")?.input;
+		expect(input?.files).toEqual([{ path: file, content, version: artifactVersion(Buffer.from(content)) }]);
+		expect(fixture.orchestrator.save().sessions.business).toBeUndefined();
+		expect(fixture.orchestrator.save().approvals.business).toBeUndefined();
+		expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(content);
+	},
+	120_000,
+);
+
+test.each(["ambiguous", "empty", "unreadable"] as const)(
+	"authority discovery rejects %s material before model work or approval",
+	async failure => {
+		await using fixture = await consumer({ reply: () => ({ text: "不应调用模型。" }) }, async cwd => {
+			await fs.mkdir(path.join(cwd, "docs/requirements"), { recursive: true });
+			if (failure === "ambiguous") {
+				await fs.writeFile(path.join(cwd, "docs/requirements/keep.md"), "# 保留原权威\n");
+				await fs.mkdir(path.join(cwd, "requirements"));
+			}
+		});
+		const originalStat = fs.stat;
+		const denied = Object.assign(new Error("authority inspection denied"), { code: "EACCES" });
+		const stat =
+			failure === "unreadable"
+				? spyOn(fs, "stat").mockImplementation(((target: Parameters<typeof fs.stat>[0], ...options: unknown[]) =>
+						String(target).replaceAll("\\", "/").endsWith("/docs-zh-CN/requirements")
+							? Promise.reject(denied)
+							: Reflect.apply(originalStat, fs, [target, ...options])) as typeof fs.stat)
+				: undefined;
+		try {
+			await expect(fixture.orchestrator.start("新需求", "authority-rejected")).rejects.toThrow(
+				failure === "ambiguous"
+					? "Ambiguous Markdown requirement authorities"
+					: failure === "empty"
+						? "No authoritative Markdown requirements"
+						: "authority inspection denied",
+			);
+		} finally {
+			stat?.mockRestore();
+		}
+		expect(fixture.orchestrator.status().phase).toBe("idle");
+		expect(fixture.orchestrator.save().approvals).toEqual({});
+		expect(fixture.provider.requests).toEqual([]);
+		if (failure !== "empty") {
+			await expect(fs.stat(path.join(fixture.cwd, "openspec/changes/authority-rejected"))).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		}
+		if (failure === "ambiguous")
+			expect(await fs.readFile(path.join(fixture.cwd, "docs/requirements/keep.md"), "utf8")).toBe("# 保留原权威\n");
+	},
+	120_000,
+);
+
+test("a completion report delivered by a native task child closes both child and executor writes", async () => {
+	const marker = "OMP_CHILD_REPORT_DELIVERY";
+	let reportPath = "";
+	let dispatched = false;
+	let observed = 0;
+	let awaitingAcceptance = false;
+	await using fixture = await consumer({
+		reply(request) {
+			const child = request.messages.some(
+				message =>
+					message.role === "user" &&
+					contentText(message.content).includes(`Complete assignment thoroughly:\n\n${marker}`),
+			);
+			const results = request.messages.filter(message => message.role === "tool");
+			if (child) {
+				if (results.length === 0)
+					return {
+						tool: {
+							name: "write",
+							args: { i: "Delivering report", path: reportPath, content: "实际子代理报告" },
+						},
+					};
+				if (results.length === 1)
+					return {
+						tool: {
+							name: "write",
+							args: {
+								i: "Probing post-report child write",
+								path: "child-after-report.ts",
+								content: "must not land",
+							},
+						},
+					};
+				return { text: "子代理报告已交付，等待用户验收。" };
+			}
+			if (rolePayload(request)?.specDrivenRole === "executor") {
+				if (!dispatched) {
+					dispatched = true;
+					return {
+						tool: {
+							name: "task",
+							args: {
+								context: "Deliver the approved completion report and stop autonomous writes.",
+								tasks: [{ task: marker, solutionSpace: "deliver one report" }],
+							},
+						},
+					};
+				}
+				if (results.length === 1)
+					return {
+						tool: {
+							name: "write",
+							args: { i: "Probing executor write", path: "parent-after-report.ts", content: "must not land" },
+						},
+					};
+			}
+			return { text: "等待用户最终 next。" };
+		},
+	});
+	await fixture.runtime.dispose();
+	const runtime = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		getStatus: () => ({ phase: "executing", generation: 0, useTeam: false, awaitingAcceptance }),
+		observeReport: () => {
+			observed++;
+			awaitingAcceptance = true;
+		},
+	});
+	try {
+		const context = { runId: runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		const paths = await runtime.ports.artifacts.initialize("child-report-delivery", context);
+		reportPath = paths.report;
+		await runtime.ports.agents.run(
+			{ role: "executor", entry: true, request: "交付报告但不批准", files: [], outputPaths: [reportPath] },
+			context,
+		);
+		expect(observed).toBe(1);
+		expect(awaitingAcceptance).toBe(true);
+		expect(await fs.readFile(path.join(fixture.cwd, reportPath), "utf8")).toBe("实际子代理报告");
+		for (const file of ["child-after-report.ts", "parent-after-report.ts"])
+			await expect(fs.stat(path.join(fixture.cwd, file))).rejects.toMatchObject({ code: "ENOENT" });
+		const parent = runtime.nativeSession("executor")!;
+		expect(parent.messages.findLast(message => message.role === "toolResult")).toMatchObject({ isError: true });
+		expect(fixture.provider.failures).toEqual([]);
+	} finally {
+		await runtime.dispose();
+	}
+}, 120_000);
+
+test("bundled spec-executor delegates test-first implementation and independent native review", async () => {
+	const marker = "OMP_BUNDLED_SPEC_EXECUTOR";
+	let dispatched = false;
+	const assignments = [marker, "OMP_SPEC_IMPLEMENT_CHILD", "OMP_SPEC_REVIEW_CHILD"];
+	const assignmentText = (content: unknown) => {
+		const text = contentText(content);
+		let found: string | undefined;
+		let last = -1;
+		for (const candidate of assignments) {
+			const index = text.lastIndexOf(renderSubagentUserPrompt(candidate));
+			if (index > last) {
+				found = candidate;
+				last = index;
+			}
+		}
+		return found;
+	};
+	const assignmentStart = (request: { messages: ReadonlyArray<{ role: string; content?: unknown }> }) =>
+		request.messages.findLastIndex(
+			message =>
+				!["assistant", "tool", "toolResult"].includes(message.role) &&
+				assignmentText(message.content) !== undefined,
+		);
+	const assignment = (request: { messages: ReadonlyArray<{ role: string; content?: unknown }> }, text: string) => {
+		const start = assignmentStart(request);
+		return start >= 0 && assignmentText(request.messages[start]!.content) === text;
+	};
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				// The bundled executor is tool-restricted. Its implementer needs an explicit
+				// native tool contract; an unrestricted generic task inherits no tool names.
+				const start = assignmentStart(request);
+				// Seance children inherit stage data and ancestor tool calls. Script only their actual assignment.
+				const delegated = { ...request, messages: request.messages.slice(start) };
+				if (assignment(request, "OMP_SPEC_IMPLEMENT_CHILD") || assignment(request, "OMP_SPEC_REVIEW_CHILD"))
+					return respond(delegated);
+				const child = assignment(request, marker);
+				if (child) {
+					const results = delegated.messages.filter(message => message.role === "tool").length;
+					if (results < 2)
+						return {
+							tool: {
+								name: "task",
+								args: {
+									context:
+										results === 0
+											? "Write and run the failing greeting behavior test, implement, then rerun it."
+											: "Independently review the approved greeting implementation.",
+									tasks: [
+										{
+											agent: results === 0 ? "greeting-implementer" : "reviewer",
+											task: results === 0 ? "OMP_SPEC_IMPLEMENT_CHILD" : "OMP_SPEC_REVIEW_CHILD",
+											solutionSpace:
+												results === 0 ? "approved greeting implementation" : "independent review",
+										},
+									],
+								},
+							},
+						};
+					return { text: "已收到实施及独立审查结果。" };
+				}
+				if (rolePayload(request)?.specDrivenRole === "executor") {
+					if (!dispatched) {
+						dispatched = true;
+						return {
+							tool: {
+								name: "task",
+								args: {
+									context: "Implement and verify the approved greeting plan with an independent reviewer.",
+									tasks: [{ agent: "spec-executor", task: marker, solutionSpace: "approved execution" }],
+								},
+							},
+						};
+					}
+					return { text: "原生内置执行代理已返回。" };
+				}
+				return respond(request);
+			},
+		},
+		async cwd => {
+			const agentsDir = path.join(cwd, ".omp", "agents");
+			await fs.mkdir(agentsDir, { recursive: true });
+			await fs.writeFile(
+				path.join(agentsDir, "greeting-implementer.md"),
+				[
+					"---",
+					"name: greeting-implementer",
+					"description: Implement and verify the approved greeting behavior",
+					"tools: [read, write, bash]",
+					"---",
+					"Write the greeting behavior test, run it before implementation, implement the greeting, then rerun it.",
+				].join("\n"),
+			);
+		},
+	);
+	cfgTaskMaxRecursionDepth.set(fixture.settings, 5);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize("bundled-executor", context);
+	await fixture.runtime.ports.agents.run(
+		{ role: "executor", entry: true, request: "执行获批问候计划", files: [], outputPaths: ["completion.md"] },
+		context,
+	);
+	const executorRequests = fixture.provider.requests.filter(request => assignment(request, marker));
+	expect(executorRequests.length).toBeGreaterThan(0);
+	const tools = (executorRequests[0]!.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""));
+	expect(tools).toContain("task");
+	expect(tools).toContain("wait");
+	const implementation = fixture.provider.requests.filter(request => assignment(request, "OMP_SPEC_IMPLEMENT_CHILD"));
+	expect(implementation.length).toBeGreaterThan(0);
+	const refs = AgentRegistry.global().list();
+	const bundledRefs = refs.filter(
+		item =>
+			item.parentId === fixture.runtime.nativeSession("executor")!.getAgentId() &&
+			item.session &&
+			isLocalAgentSession(item.session) &&
+			assignment(item.session, marker),
+	);
+	expect(bundledRefs).toHaveLength(1);
+	const implementationRefs = refs.filter(
+		item =>
+			item.parentId === bundledRefs[0]!.id &&
+			item.session &&
+			isLocalAgentSession(item.session) &&
+			assignment(item.session, "OMP_SPEC_IMPLEMENT_CHILD"),
+	);
+	expect(implementationRefs).toHaveLength(1);
+	const implementationSession = implementationRefs[0]!.session;
+	if (!implementationSession || !isLocalAgentSession(implementationSession))
+		throw new Error("Expected the retained native implementation child");
+	const results = implementationSession.messages
+		.slice(assignmentStart(implementationSession) + 1)
+		.filter(message => message.role === "toolResult");
+	expect(results.map(result => result.toolName)).toEqual(["write", "bash", "write", "bash"]);
+	expect(results[0]).toMatchObject({ isError: false });
+	expect(results[1]).toMatchObject({ isError: true, details: { exitCode: expect.any(Number) } });
+	expect((results[1]!.details as { exitCode: number }).exitCode).not.toBe(0);
+	expect(results[2]).toMatchObject({ isError: false });
+	expect(results[3]).toMatchObject({ isError: false });
+	expect(await fs.readFile(path.join(fixture.cwd, TEST_PATH), "utf8")).toBe(BEHAVIOR_TEST);
+	expect(contentText(results[3]!.content)).toContain("1 pass");
+	expect(await fs.readFile(path.join(fixture.cwd, IMPLEMENTATION_PATH), "utf8")).toBe(IMPLEMENTATION);
+	const reviews = fixture.provider.requests.filter(request => assignment(request, "OMP_SPEC_REVIEW_CHILD"));
+	expect(reviews.length).toBeGreaterThan(0);
+	expect(
+		reviews
+			.at(-1)!
+			.messages.some(
+				message => message.role === "tool" && contentText(message.content).includes("export function greet"),
+			),
+	).toBe(true);
+	expect((reviews[0]!.tools ?? []).map(tool => tool.function?.name.replace(/^_/u, ""))).not.toContain("write");
+	const reviewRefs = refs.filter(
+		item =>
+			item.parentId === bundledRefs[0]!.id &&
+			item.session &&
+			isLocalAgentSession(item.session) &&
+			assignment(item.session, "OMP_SPEC_REVIEW_CHILD"),
+	);
+	expect(reviewRefs).toHaveLength(1);
+	expect(reviewRefs[0]!.id).not.toBe(implementationRefs[0]!.id);
+	const reviewSession = reviewRefs[0]!.session;
+	if (!reviewSession || !isLocalAgentSession(reviewSession))
+		throw new Error("Expected the retained independent native reviewer");
+	const reviewResults = reviewSession.messages
+		.slice(assignmentStart(reviewSession) + 1)
+		.filter(message => message.role === "toolResult");
+	expect(reviewResults[0]).toMatchObject({ toolName: "read", isError: false });
+	expect(contentText(reviewResults[0]!.content)).toContain("export function greet(name: string): string");
+	expect(contentText(reviewResults[0]!.content)).toContain('return `Hello, ${name.trim() || "world"}!`;');
+	expect(reviewSession.getEnabledToolNames()).not.toContain("write");
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test("new and restored stage requests inject complete original methods with stage-specific handoff trimming", async () => {
+	await using fixture = await consumer({ reply: () => ({ text: "继续本阶段澄清。" }) });
+	const roles = ["business", "requirements", "solution", "planner", "executor"] as const;
+	const method = async (source: "jch" | "superpowers", name: string) => {
+		const skill = await loadSpecDrivenSkill(source, name);
+		return fs.readFile(skill.filePath, "utf8");
+	};
+	const grill = await method("jch", "jch-grill-me");
+	const plans = await method("superpowers", "writing-plans");
+	const usingBody = await method("superpowers", "using-superpowers");
+	const development = await method("superpowers", "subagent-driven-development");
+	const brainstorming = await method("superpowers", "brainstorming");
+	const planBoundary = plans.indexOf("\n## Execution Handoff");
+	if (planBoundary < 0) throw new Error("Pinned writing-plans lacks its execution handoff");
+	const expected: Record<(typeof roles)[number], string[]> = {
+		business: [grill],
+		requirements: [grill],
+		solution: [],
+		planner: [plans.slice(0, planBoundary)],
+		executor: [usingBody, development],
+	};
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize("original-method-injection", context);
+	const assertRequest = (role: (typeof roles)[number], since: number) => {
+		const request = fixture.provider.requests.slice(since).find(item => rolePayload(item)?.specDrivenRole === role);
+		if (!request) throw new Error(`Missing actual ${role} model request`);
+		const system = request.messages
+			.filter(message => message.role === "system")
+			.map(message => contentText(message.content))
+			.join("\n");
+		let previous = -1;
+		for (const body of expected[role]) {
+			const index = system.indexOf(body);
+			expect(index, role).toBeGreaterThan(previous);
+			previous = index;
+		}
+		expect(system).not.toContain(brainstorming);
+		for (const body of [grill, plans, usingBody, development])
+			if (!expected[role].includes(body)) expect(system).not.toContain(body);
+	};
+	for (const role of roles) {
+		const since = fixture.provider.requests.length;
+		await fixture.runtime.ports.agents.run(
+			{ role, entry: true, request: "明确停止访谈，继续授权范围内工作", files: [], outputPaths: ["stage.md"] },
+			context,
+		);
+		assertRequest(role, since);
+	}
+	const saved: SpecSavedRun = {
+		runId: context.runId,
+		phase: "executing",
+		changeId: "original-method-injection",
+		paths,
+		sessions: fixture.runtime.sessionRefs(),
+		approvals: {},
+	};
+	await fixture.runtime.dispose();
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+	});
+	try {
+		for (const role of roles) {
+			await restored.ports.agents.prepare(role, context, saved.sessions[role]);
+			const since = fixture.provider.requests.length;
+			await restored.ports.agents.run(
+				{ role, entry: false, request: "", feedback: "继续澄清，不批准", files: [], outputPaths: ["stage.md"] },
+				context,
+			);
+			assertRequest(role, since);
+		}
+	} finally {
+		await restored.dispose();
+	}
+}, 120_000);
+
+test("business uses existing indexed business facts without acquiring code or index-management tools", async () => {
+	const token = "OMP_BUSINESS_APPROVAL_RULE";
+	const fact = `${token}: 只有已确认订单可以进入核对流程。`;
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				if (rolePayload(request)?.specDrivenRole !== "business") return { text: "业务会话。" };
+				if (!request.messages.some(message => message.role === "tool"))
+					return { tool: { name: "knowledge_search", args: { query: token, mode: "grep" } } };
+				return { text: "已检索业务规则；尚未确认业务文档。" };
+			},
+		},
+		async cwd => {
+			const source = path.join(cwd, "authorized-business-sources");
+			await fs.mkdir(source);
+			await fs.writeFile(path.join(source, "approval.md"), `# 订单审批规则\n\n${fact}\n`);
+			const engine = new KnowledgeIndexEngine({ cwd, agentDir: path.join(cwd, ".isolated-agent") });
+			try {
+				await engine.init(source, "business-facts");
+				expect(
+					engine
+						.search(token, { mode: "grep" })
+						.sections.map(section => section.text)
+						.join("\n"),
+				).toContain(fact);
+			} finally {
+				engine.close();
+			}
+		},
+	);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize("business-facts", context, "docs/business.md");
+	await fixture.runtime.ports.agents.run(
+		{ role: "business", entry: true, request: "核对授权业务规则", files: [], outputPaths: [paths.business!] },
+		context,
+	);
+	const native = fixture.runtime.nativeSession("business")!;
+	const result = native.messages.find(
+		message => message.role === "toolResult" && message.toolName === "knowledge_search",
+	);
+	expect(result).toMatchObject({ isError: false });
+	expect(JSON.stringify(result)).toContain(fact);
+	expect(JSON.stringify(result)).toContain("approval.md:");
+	expect(await fs.readFile(path.join(fixture.cwd, "authorized-business-sources/approval.md"), "utf8")).toBe(
+		`# 订单审批规则\n\n${fact}\n`,
+	);
+	for (const forbidden of ["repo", "lsp", "bash", "eval", "task", "goal"])
+		expect(native.getEnabledToolNames()).not.toContain(forbidden);
+	expect(fixture.runtime.sessionRefs().requirements).toBeUndefined();
+	await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+// Exercise native business tool execution, not a promise in the role prompt.
+test.each([true, false])(
+	"business searches real OpenWiki and preserves source state (available=%s)",
+	async available => {
+		const token = "OMP_BUSINESS_WIKI_RELEASE_RULE";
+		const fact = `${token}: Release 2026.11 requires confirmed orders before reconciliation.`;
+		const sourcePath = "openwiki/architecture/orders.md";
+		const source = `---\ntype: guide\ntitle: Order rules\ndescription: Authorized order policy\n---\n\n# Order rules\n\n## Release policy\n\n${fact}\n`;
+		let delivered = "";
+		await using fixture = await consumer(
+			{
+				reply(request) {
+					if (rolePayload(request)?.specDrivenRole !== "business") return { text: "业务会话。" };
+					const results = request.messages.filter(message => message.role === "tool");
+					if (results.length === 0) return { tool: { name: "openwiki_search", args: { query: token } } };
+					if (results.length === 1) {
+						if (!available) {
+							expect(contentText(results[0].content)).toContain("no OpenWiki directory");
+							return {
+								tool: {
+									name: "read",
+									args: { i: "Reading authorized business source", path: "authorized-policy.md" },
+								},
+							};
+						}
+						const search: unknown = JSON.parse(contentText(results[0].content));
+						if (!isRecord(search) || !Array.isArray(search.results))
+							throw new Error("Native Wiki search did not return results");
+						const hit = search.results.find(
+							value =>
+								isRecord(value) &&
+								Array.isArray(value.ref) &&
+								value.ref.some(ref => typeof ref === "string" && ref.startsWith(`${sourcePath}#`)),
+						);
+						if (!isRecord(hit) || !Array.isArray(hit.ref) || typeof hit.ref[0] !== "string")
+							throw new Error("Native Wiki search did not locate the seeded business rule");
+						const [page, section] = hit.ref[0].split("#");
+						expect(page).toBe(sourcePath);
+						return {
+							tool: {
+								name: "openwiki_read",
+								args: {
+									page,
+									sections: [section],
+									...(typeof hit.wiki === "string" ? { wiki: hit.wiki } : {}),
+								},
+							},
+						};
+					}
+					if (results.length === 2) {
+						const original = contentText(results[1].content);
+						expect(original).toContain(fact);
+						delivered = `# Business policy\n\nSource: ${available ? `${sourcePath}#release-policy` : "authorized-policy.md"}\nVersion: 2026.11\n${available ? "" : "Limitation: OpenWiki unavailable; used authorized policy instead.\n"}\n${fact}\n`;
+						return {
+							tool: {
+								name: "write",
+								args: {
+									i: "Writing designated business document",
+									path: "docs/business.md",
+									content: delivered,
+								},
+							},
+						};
+					}
+					return { text: "已保存业务资料及版本来源；等待用户决定，不代表软件已实现。" };
+				},
+			},
+			async cwd => {
+				const git = Bun.spawn(["git", "init", "--quiet"], {
+					cwd,
+					stdout: "ignore",
+					stderr: "pipe",
+					env: { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, HOME: cwd, GIT_CONFIG_NOSYSTEM: "1" },
+				});
+				const [code, error] = await Promise.all([git.exited, new Response(git.stderr).text()]);
+				if (code !== 0) throw new Error(`Business Wiki fixture git init: ${error}`);
+				await fs.writeFile(path.join(cwd, "authorized-policy.md"), fact);
+				if (available) {
+					await fs.mkdir(path.join(cwd, "openwiki", "architecture"), { recursive: true });
+					await fs.writeFile(path.join(cwd, sourcePath), source);
+					await fs.writeFile(path.join(cwd, "openwiki", "quickstart.md"), "# Existing business Wiki\n");
+					await fs.writeFile(path.join(cwd, "openwiki", ".last-update.json"), "{}\n");
+				}
+			},
+		);
+		const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		const paths = await fixture.runtime.ports.artifacts.initialize(
+			"business-wiki-facts",
+			context,
+			"docs/business.md",
+		);
+		await fixture.runtime.ports.agents.run(
+			{
+				role: "business",
+				entry: true,
+				request: "核对业务规则并记录来源及版本，不推进开发",
+				files: [],
+				outputPaths: [paths.business!],
+			},
+			context,
+		);
+		const native = fixture.runtime.nativeSession("business")!;
+		const results = native.messages.filter(message => message.role === "toolResult");
+		expect(results.map(result => result.toolName)).toEqual([
+			"openwiki_search",
+			available ? "openwiki_read" : "read",
+			"write",
+		]);
+		expect(results.map(result => result.isError === true)).toEqual([!available, false, false]);
+		expect(JSON.stringify(results[1])).toContain(fact);
+		expect(await fs.readFile(path.join(fixture.cwd, "docs/business.md"), "utf8")).toBe(delivered);
+		expect(delivered).toContain("Version: 2026.11");
+		expect(await fs.readFile(path.join(fixture.cwd, "authorized-policy.md"), "utf8")).toBe(fact);
+		if (available) {
+			expect(await fs.readFile(path.join(fixture.cwd, sourcePath), "utf8")).toBe(source);
+			expect(await fs.readFile(path.join(fixture.cwd, "openwiki", ".last-update.json"), "utf8")).toBe("{}\n");
+			expect(await fs.readFile(path.join(fixture.cwd, "openwiki", "quickstart.md"), "utf8")).toBe(
+				"# Existing business Wiki\n",
+			);
+		} else {
+			expect(delivered).toContain("Limitation: OpenWiki unavailable");
+			await expect(fs.stat(path.join(fixture.cwd, "openwiki"))).rejects.toMatchObject({ code: "ENOENT" });
+		}
+		for (const forbidden of ["repo", "lsp", "bash", "eval", "task", "team", "goal"])
+			expect(native.getEnabledToolNames()).not.toContain(forbidden);
+		expect(fixture.runtime.sessionRefs().requirements).toBeUndefined();
+		await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(fixture.provider.failures).toEqual([]);
+	},
+	120_000,
+);

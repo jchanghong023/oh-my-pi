@@ -109,10 +109,12 @@ describe("compaction and focus status spacing", () => {
 		const events = new EventController(ctx);
 		ctx.eventController = events;
 		const auth = createInMemoryAuthStorage();
+		const model = getBundledModel("ascend", "qwen3.8-flash-next");
+		if (!model) throw new Error("Expected retained ascend/qwen3.8-flash-next presentation model");
 		const hudSession = new AgentSession({
 			agent: new Agent({
 				initialState: {
-					model: getBundledModel("anthropic", "claude-sonnet-4-5")!,
+					model,
 					systemPrompt: ["Test"],
 					tools: [],
 				},

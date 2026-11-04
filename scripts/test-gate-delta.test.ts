@@ -106,3 +106,77 @@ it("does not invoke delta without a qualified baseline", async () => {
 	expect(gateResult.exitCode).toBe(0);
 	expect(selection).toMatchObject({ mode: "full", packages: ["pi-knowledge", "pi-natives"] });
 });
+
+// Exercise cargo-delta's actual Git/Cargo dependency analysis, not an injected
+// affected JSON response. This requires the preinstalled pinned tool; it never
+// installs dependencies or substitutes a simulated selection for real evidence.
+it("real cargo-delta follows a changed crate through reverse dependencies and excludes an independent crate", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-real-rust-impact-"));
+	const run = async (...argv: string[]) => {
+		const child = Bun.spawn(argv, {
+			cwd: root,
+			env: { ...process.env, RUSTUP_AUTO_INSTALL: "0", OMP_GATE_EVENT_TOKEN: "", OMP_GATE_EVENT_FILE: "" },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [code, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(code, `${argv.join(" ")}\n${stdout}\n${stderr}`).toBe(0);
+		return stdout.trim();
+	};
+	try {
+		await fs.mkdir(path.join(root, ".config"));
+		await fs.writeFile(
+			path.join(root, ".config", "cargo-delta.toml"),
+			'file_exclude_patterns = ["target"]\ntrip_wire_patterns = ["Cargo.toml", "Cargo.lock", "**/Cargo.toml"]\n[parser]\nmods = true\nincludes = true\nfile_refs = true\n',
+		);
+		await fs.writeFile(
+			path.join(root, "Cargo.toml"),
+			'[workspace]\nresolver = "2"\nmembers = ["pi-knowledge", "pi-natives", "independent"]\n',
+		);
+		await fs.writeFile(path.join(root, ".gitignore"), "target/\n");
+		for (const name of ["pi-knowledge", "pi-natives", "independent"]) {
+			const crate = path.join(root, name);
+			await fs.mkdir(path.join(crate, "src"), { recursive: true });
+			await fs.writeFile(
+				path.join(crate, "Cargo.toml"),
+				`[package]\nname = "${name}"\nversion = "0.1.0"\nedition = "2021"\n${
+					name === "pi-natives" ? '[dependencies]\npi-knowledge = { path = "../pi-knowledge" }\n' : ""
+				}`,
+			);
+			await fs.writeFile(
+				path.join(crate, "src", "lib.rs"),
+				name === "pi-natives"
+					? "pub fn answer() -> u8 { pi_knowledge::answer() }\n"
+					: "pub fn answer() -> u8 { 1 }\n",
+			);
+		}
+		await run("cargo", "generate-lockfile", "--offline");
+		await run("git", "init", "-q");
+		await run("git", "config", "user.name", "Fixture");
+		await run("git", "config", "user.email", "fixture@example.invalid");
+		await run("git", "add", ".");
+		await run("git", "-c", "commit.gpgsign=false", "commit", "-qm", "dependency baseline");
+		const revision = await run("git", "rev-parse", "HEAD");
+		await fs.writeFile(path.join(root, "pi-knowledge", "src", "lib.rs"), "pub fn answer() -> u8 { 2 }\n");
+		let selected: RustDeltaSelection | undefined;
+		const result = await runGate(
+			"fulltest",
+			async gate => {
+				selected = await selectRustPackages(gate, root, revision);
+			},
+			{ print: () => {} },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(selected).toMatchObject({ tool: "cargo-delta", mode: "affected", baseline: revision });
+		expect(selected!.packages.toSorted()).toEqual(["pi-knowledge", "pi-natives"]);
+		// No cargo test/build is needed to prove selection, and no result cache
+		// may be substituted for analyzing this still-dirty source.
+		expect(await run("git", "status", "--porcelain")).toContain("pi-knowledge/src/lib.rs");
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+}, 30_000);

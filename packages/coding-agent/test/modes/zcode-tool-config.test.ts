@@ -15,12 +15,16 @@ import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 
 const managers: MCPManager[] = [];
 const servers: Bun.Server<undefined>[] = [];
-const fixture = path.resolve(import.meta.dir, "../fixtures/readiness-mcp.ts");
+const fixture = path.resolve(import.meta.dir, "../fixtures/zcode-stdio-mcp.ts");
 const stdio = (name: string) => ({
 	name,
 	command: process.execPath,
 	args: [fixture],
-	env: [{ name: "SRV_NAME", value: name }],
+	env: [
+		{ name: "SRV_NAME", value: name },
+		{ name: "DELAY_STARTUP", value: "0" },
+		{ name: "STARTUP_NOTIFY_URL", value: "" },
+	],
 	timeoutMs: 2_000,
 });
 
@@ -30,24 +34,28 @@ afterEach(async () => {
 });
 
 describe("ZCode caller MCP configuration", () => {
-	it.skipIf(process.platform === "win32")(
-		"prepares actual stdio tools before returning and closes only its own manager",
-		async () => {
-			const first = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("first")] });
-			managers.push(first);
-			const second = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("second")] });
-			managers.push(second);
-			expect(first.getTools().map(tool => tool.name)).toEqual(["mcp__first_marker"]);
-			expect(second.getTools().map(tool => tool.name)).toEqual(["mcp__second_marker"]);
-			await first.disconnectAll();
-			expect(first.getConnectedServers()).toEqual([]);
-			const connection = second.getConnection("second");
-			if (!connection) throw new Error("second session lost its connection");
-			expect((await callTool(connection, "second_marker")).content).toEqual([
-				{ type: "text", text: "MARKER_OK::second" },
-			]);
-		},
-	);
+	it("prepares actual stdio tools before returning and closes only its own manager", async () => {
+		const first = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("first")] });
+		managers.push(first);
+		const second = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("second")] });
+		managers.push(second);
+		expect(first.getTools().map(tool => tool.name)).toEqual(["mcp__first_marker"]);
+		expect(second.getTools().map(tool => tool.name)).toEqual(["mcp__second_marker"]);
+		expect(first.getConnectedServers()).toEqual(["first"]);
+		expect(second.getConnectedServers()).toEqual(["second"]);
+		const firstConnection = first.getConnection("first");
+		if (!firstConnection) throw new Error("first session did not finish tool discovery");
+		expect((await callTool(firstConnection, "first_marker")).content).toEqual([
+			{ type: "text", text: "MARKER_OK::first" },
+		]);
+		await first.disconnectAll();
+		expect(first.getConnectedServers()).toEqual([]);
+		const connection = second.getConnection("second");
+		if (!connection) throw new Error("second session lost its connection");
+		expect((await callTool(connection, "second_marker")).content).toEqual([
+			{ type: "text", text: "MARKER_OK::second" },
+		]);
+	});
 
 	it("uses actual HTTP discovery, literal caller headers and tool execution", async () => {
 		const requests: string[] = [];
@@ -122,21 +130,18 @@ describe("ZCode caller MCP configuration", () => {
 		}
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"uses caller load policy through the original MCP tool discoverable catalog",
-		async () => {
-			const manager = await prepareZCodeMcpManager({
-				cwd: import.meta.dir,
-				servers: [
-					{ ...stdio("lazy"), alwaysLoad: false, protocolVersion: "legacy" },
-					{ ...stdio("resident"), alwaysLoad: true },
-				],
-			});
-			managers.push(manager);
-			expect(manager.getTools().find(tool => tool.name === "mcp__lazy_marker")?.loadMode).toBe("discoverable");
-			expect(manager.getTools().find(tool => tool.name === "mcp__resident_marker")?.loadMode).toBe("essential");
-		},
-	);
+	it("uses caller load policy through the original MCP tool discoverable catalog", async () => {
+		const manager = await prepareZCodeMcpManager({
+			cwd: import.meta.dir,
+			servers: [
+				{ ...stdio("lazy"), alwaysLoad: false, protocolVersion: "legacy" },
+				{ ...stdio("resident"), alwaysLoad: true },
+			],
+		});
+		managers.push(manager);
+		expect(manager.getTools().find(tool => tool.name === "mcp__lazy_marker")?.loadMode).toBe("discoverable");
+		expect(manager.getTools().find(tool => tool.name === "mcp__resident_marker")?.loadMode).toBe("essential");
+	});
 
 	it("rejects unsupported client credentials grants before connecting with a safe recovery contract", async () => {
 		const servers = [
@@ -170,51 +175,89 @@ describe("ZCode caller MCP configuration", () => {
 			assertFault(error);
 		}
 		await expect(
-			prepareZCodeMcpManager({ cwd: import.meta.dir, servers }).catch(assertFault),
-		).resolves.toBeUndefined();
+			prepareZCodeMcpManager({ cwd: import.meta.dir, servers }).catch(error => {
+				assertFault(error);
+				throw error;
+			}),
+		).rejects.toBeInstanceOf(Error);
 		const auth = createInMemoryAuthStorage();
 		try {
 			await expect(
-				persistZCodeMcpConfiguration(auth, "unsupported", import.meta.dir, servers).catch(assertFault),
-			).resolves.toBeUndefined();
+				persistZCodeMcpConfiguration(auth, "unsupported", import.meta.dir, servers).catch(error => {
+					assertFault(error);
+					throw error;
+				}),
+			).rejects.toBeInstanceOf(Error);
 		} finally {
 			auth.close();
 		}
 	});
 
-	it.skipIf(process.platform === "win32")(
-		"fails a bad session before admission without disconnecting a live session",
-		async () => {
-			const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
-			managers.push(live);
-			await expect(
-				prepareZCodeMcpManager({
-					cwd: import.meta.dir,
-					servers: [
-						{ name: "broken", command: "zcode-nonexistent-mcp-executable", args: [], env: [], timeoutMs: 100 },
-					],
-				}),
-			).rejects.toThrow("MCP startup failed");
-			expect(live.getConnectedServers()).toEqual(["live"]);
-		},
-	);
-
-	it.skipIf(process.platform === "win32")(
-		"aborts a pending actual stdio handshake without affecting another owner",
-		async () => {
-			const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
-			managers.push(live);
-			const controller = new AbortController();
-			const pending = prepareZCodeMcpManager({
+	it("fails a bad session before admission without disconnecting a live session", async () => {
+		const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
+		managers.push(live);
+		await expect(
+			prepareZCodeMcpManager({
 				cwd: import.meta.dir,
-				signal: controller.signal,
-				servers: [{ ...stdio("slow"), env: [{ name: "DELAY_STARTUP", value: "5000" }] }],
-			});
-			controller.abort();
-			await expect(pending).rejects.toThrow();
-			expect(live.getConnectedServers()).toEqual(["live"]);
-		},
-	);
+				servers: [
+					{ name: "broken", command: "zcode-nonexistent-mcp-executable", args: [], env: [], timeoutMs: 100 },
+				],
+			}),
+		).rejects.toThrow("MCP startup failed");
+		expect(live.getConnectedServers()).toEqual(["live"]);
+		const connection = live.getConnection("live");
+		if (!connection) throw new Error("failed admission disconnected the live owner");
+		expect((await callTool(connection, "live_marker")).content).toEqual([{ type: "text", text: "MARKER_OK::live" }]);
+	});
+
+	it("aborts a pending actual stdio handshake without affecting another owner", async () => {
+		const live = await prepareZCodeMcpManager({ cwd: import.meta.dir, servers: [stdio("live")] });
+		managers.push(live);
+		const controller = new AbortController();
+		const initialized = Promise.withResolvers<void>();
+		const endpoint = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch() {
+				initialized.resolve();
+				return new Response(null, { status: 204 });
+			},
+		});
+		servers.push(endpoint);
+		const pending = prepareZCodeMcpManager({
+			cwd: import.meta.dir,
+			signal: controller.signal,
+			servers: [
+				{
+					...stdio("slow"),
+					env: [
+						{ name: "SRV_NAME", value: "slow" },
+						{ name: "DELAY_STARTUP", value: "5000" },
+						{ name: "STARTUP_NOTIFY_URL", value: `http://127.0.0.1:${endpoint.port}/initialized` },
+					],
+				},
+			],
+		});
+		// Abort only after the real child has received initialize, not before spawning.
+		await Promise.race([
+			initialized.promise,
+			pending.then(
+				manager => {
+					managers.push(manager);
+					throw new Error("Pending stdio server was admitted before its handshake completed");
+				},
+				error => {
+					throw error;
+				},
+			),
+		]);
+		controller.abort();
+		await expect(pending).rejects.toThrow();
+		expect(live.getConnectedServers()).toEqual(["live"]);
+		const connection = live.getConnection("live");
+		if (!connection) throw new Error("cancelled admission disconnected the live owner");
+		expect((await callTool(connection, "live_marker")).content).toEqual([{ type: "text", text: "MARKER_OK::live" }]);
+	});
 
 	it("keeps explicit empty configs authoritative and does not perform ambient discovery", async () => {
 		const manager = await prepareZCodeMcpManager({
@@ -273,5 +316,145 @@ describe("ZCode caller MCP configuration", () => {
 				},
 			]),
 		).toThrow("Duplicate MCP environment");
+	});
+
+	it("rejects invalid URLs and case-insensitive duplicate headers without echoing caller secrets", () => {
+		const secret = "MCP_CREDENTIAL_CANARY";
+		const base = { name: "http", type: "http" as const, url: "https://example.invalid/mcp", headers: [] };
+		for (const input of [
+			{ ...base, url: `https://user:${secret}@example.invalid/mcp` },
+			{ ...base, url: `file:///${secret}` },
+			{ ...base, url: `not-a-url-${secret}` },
+			{
+				...base,
+				headers: [
+					{ name: "Authorization", value: secret },
+					{ name: "authorization", value: `${secret}-other` },
+				],
+			},
+		]) {
+			let failure: unknown;
+			try {
+				normalizeZCodeMcpServers(import.meta.dir, [input]);
+			} catch (error) {
+				failure = error;
+			}
+			expect(failure).toBeInstanceOf(Error);
+			expect(String(failure)).not.toContain(secret);
+		}
+	});
+
+	it("canonicalizes reordered MCP supply and isolates credential providers by cwd and session", async () => {
+		const auth = createInMemoryAuthStorage();
+		try {
+			const first = [
+				{
+					...stdio("z"),
+					env: [
+						{ name: "B", value: "2" },
+						{ name: "A", value: "1" },
+					],
+				},
+				{
+					name: "a",
+					type: "http" as const,
+					url: "https://example.invalid/mcp",
+					headers: [
+						{ name: "X-Z", value: "z" },
+						{ name: "X-A", value: "a" },
+					],
+				},
+			];
+			const reordered = [
+				{
+					...first[1]!,
+					headers: [
+						{ name: "X-A", value: "a" },
+						{ name: "X-Z", value: "z" },
+					],
+				},
+				{
+					...first[0]!,
+					env: [
+						{ name: "A", value: "1" },
+						{ name: "B", value: "2" },
+					],
+				},
+			];
+			const reference = await persistZCodeMcpConfiguration(auth, "one", import.meta.dir, first);
+			expect(zcodeMcpConfigurationIdentity(reordered)).toBe(reference.identity);
+			expect(reference.identity).toMatch(/^[a-f0-9]{64}$/);
+			expect(Object.keys(reference).sort()).toEqual(["credentialProvider", "identity", "version"]);
+			expect(reference.credentialProvider).toMatch(/^zcode-mcp:[a-f0-9]{64}$/);
+			const peer = await persistZCodeMcpConfiguration(auth, "two", import.meta.dir, first);
+			const otherCwd = await persistZCodeMcpConfiguration(auth, "one", path.join(import.meta.dir, "other"), first);
+			expect(peer.credentialProvider).not.toBe(reference.credentialProvider);
+			expect(otherCwd.credentialProvider).not.toBe(reference.credentialProvider);
+			expect(zcodeMcpConfigurationIdentity(undefined)).toBe("ambient");
+			expect(zcodeMcpConfigurationIdentity([])).not.toBe("ambient");
+			expect(restoreZCodeMcpConfiguration(auth, reference)).toEqual(first);
+		} finally {
+			auth.close();
+		}
+	});
+
+	it("rejects corrupt and mismatched saved supply instead of falling back to ambient", async () => {
+		const auth = createInMemoryAuthStorage();
+		try {
+			const reference = await persistZCodeMcpConfiguration(auth, "saved", import.meta.dir, [stdio("saved")]);
+			if (!reference.credentialProvider) throw new Error("Missing credential provider");
+			for (const key of ["not json", "{}", '[{"name":"invalid"}]', JSON.stringify([stdio("other")])]) {
+				await auth.credentials.set(reference.credentialProvider, { type: "api_key", key });
+				expect(() => restoreZCodeMcpConfiguration(auth, reference)).toThrow(/Invalid saved|identity mismatch/);
+				expect(auth.credentials.get(reference.credentialProvider)).toEqual({ type: "api_key", key });
+			}
+		} finally {
+			auth.close();
+		}
+	});
+});
+
+describe("MCP discovery failure admission", () => {
+	it("rejects actual HTTP tool discovery errors without exposing placeholder tools or remote secrets", async () => {
+		const calls: string[] = [];
+		const secret = "REMOTE_MCP_FAILURE_SECRET";
+		const endpoint = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			async fetch(request) {
+				if (request.method !== "POST") return new Response(null, { status: 405 });
+				const body = (await request.json()) as { id?: number; method: string };
+				calls.push(body.method);
+				if (body.id === undefined) return new Response(null, { status: 202 });
+				if (body.method === "initialize")
+					return Response.json({
+						jsonrpc: "2.0",
+						id: body.id,
+						result: {
+							protocolVersion: "2025-03-26",
+							capabilities: { tools: {} },
+							serverInfo: { name: "broken", version: "1" },
+						},
+					});
+				return Response.json({ jsonrpc: "2.0", id: body.id, error: { code: -32000, message: secret } });
+			},
+		});
+		servers.push(endpoint);
+		await expect(
+			prepareZCodeMcpManager({
+				cwd: import.meta.dir,
+				servers: [
+					{
+						name: "broken",
+						type: "http",
+						url: `http://127.0.0.1:${endpoint.port}/mcp`,
+						headers: [],
+						timeoutMs: 1000,
+					},
+				],
+			}),
+		).rejects.toMatchObject({ message: "MCP startup failed: configured servers did not complete tool discovery" });
+		expect(calls).toContain("initialize");
+		expect(calls).toContain("tools/list");
 	});
 });

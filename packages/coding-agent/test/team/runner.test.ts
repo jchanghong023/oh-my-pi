@@ -40,6 +40,81 @@ describe("team modelMatches", () => {
 	});
 });
 
+describe("Team temporary artifact lease", () => {
+	it("keeps temporary materials until deferred child disposal settles and then removes the entire lease", async () => {
+		const temporary = TempDir.createSync("omp-team-deferred-lease-");
+		const cleanup = Promise.withResolvers<void>();
+		const removed = Promise.withResolvers<void>();
+		const operationId = `team-deferred-${crypto.randomUUID()}`;
+		let lease: string | undefined;
+		const disposeSink = registerLogSink(event => {
+			if (event.context?.operation_id !== operationId) return;
+			if (event.context.event === "team_artifacts_cleanup_completed") removed.resolve();
+			else if (event.context.event === "team_artifacts_cleanup_failed") {
+				removed.reject(new Error("Team temporary artifact cleanup reported failure instead of completing"));
+			}
+		});
+		const executor = spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
+			lease = options.artifactsDir;
+			expect(options.persistArtifacts).toBe(false);
+			expect(lease).toBeDefined();
+			fs.writeFileSync(path.join(lease!, "pending-child.txt"), "child still owns these bytes");
+			options.onCleanupDeferred?.(cleanup.promise);
+			return {
+				index: options.index,
+				id: options.id,
+				agent: options.agent.name,
+				agentSource: options.agent.source,
+				task: options.task,
+				exitCode: 1,
+				output: "",
+				stderr: "child setup failed",
+				truncated: false,
+				durationMs: 1,
+				tokens: 0,
+				requests: 0,
+				resolvedModel: "fixture/model",
+			};
+		});
+		try {
+			const runner = createTeamSubagentRunner({
+				cwd: temporary.path(),
+				settings: Settings.isolated(),
+				modelRegistry: {} as ModelRegistry,
+				sessionFile: null,
+				artifactsDir: temporary.path(),
+				parentAgentId: "Main",
+			});
+			const result = await logger.withLogContext({ operation_id: operationId }, () =>
+				runner(
+					{
+						role: "proposer",
+						label: "team-proposal-A",
+						modelPattern: "fixture/model",
+						task: "Read-only inspection",
+						schema: TEAM_PROPOSAL_SCHEMA,
+					},
+					new AbortController().signal,
+				),
+			);
+			expect(result).toEqual({ ok: false, error: "child setup failed" });
+			expect(fs.readFileSync(path.join(lease!, "pending-child.txt"), "utf8")).toBe("child still owns these bytes");
+			cleanup.resolve();
+			await removed.promise;
+			expect(fs.existsSync(lease!)).toBe(false);
+		} finally {
+			cleanup.resolve();
+			try {
+				if (lease) await removed.promise;
+			} finally {
+				executor.mockRestore();
+				disposeSink();
+				temporary.removeSync();
+			}
+		}
+	});
+});
+
 describe("team runner abort diagnostics", () => {
 	// These are the executor's complete soft-stop and force-stop reason formats.
 	// The executor boundary is scripted; allocation, classification, logging and
@@ -110,6 +185,10 @@ describe("team runner abort diagnostics", () => {
 				const settings = Settings.isolated();
 				const executor = spyOn(executorModule, "runSubprocess").mockImplementation(async options => {
 					expect(options.modelOverride).toBe(modelPattern);
+					expect(options.maxRuntimeMs).toBe(0);
+					expect(options.persistArtifacts).toBe(false);
+					expect(options.enableMCP).toBe(false);
+					expect(options.restrictToolNames).toBe(true);
 					childId = options.id;
 					leaseDir = options.artifactsDir;
 					expect(leaseDir).toBeDefined();
@@ -274,6 +353,7 @@ describe("team root observability", () => {
 			});
 			try {
 				authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
+				authStorage.keys.setRuntime("ascend", "team-root-events-fixture-key");
 				const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 				const settings = Settings.isolated();
 				const session = {
@@ -294,7 +374,7 @@ describe("team root observability", () => {
 				const pending = runner(
 					{
 						role: "proposer",
-						modelPattern: "anthropic/claude-sonnet-4-5",
+						modelPattern: "ascend/qwen3.8-flash-next",
 						label: "team-proposal-A",
 						task: "inspect locally without contacting a provider",
 						schema: TEAM_PROPOSAL_SCHEMA,
@@ -324,7 +404,7 @@ describe("team root observability", () => {
 					await currentRunner(
 						{
 							role: "proposer",
-							modelPattern: "anthropic/claude-sonnet-4-5",
+							modelPattern: "ascend/qwen3.8-flash-next",
 							label: "team-proposal-B",
 							task: "inspect the current session without contacting a provider",
 							schema: TEAM_PROPOSAL_SCHEMA,

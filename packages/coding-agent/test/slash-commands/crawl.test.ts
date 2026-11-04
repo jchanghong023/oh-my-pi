@@ -3,7 +3,10 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { executeAcpBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
+import {
+	executeAcpBuiltinSlashCommand,
+	executeRpcBuiltinSlashCommand,
+} from "@oh-my-pi/pi-coding-agent/slash-commands/acp-builtins";
 import { buildCrawlArgumentCompletions } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-completions";
 import {
 	BUILTIN_SLASH_COMMANDS,
@@ -76,6 +79,39 @@ describe("/crawl", () => {
 		}
 		expect(h.messages).toHaveLength(invalid.length);
 		expect(h.tasks).toHaveLength(0);
+	});
+
+	it("passes single-page defaults and explicit recursive limits through ACP and RPC without a model prompt", async () => {
+		const run = vi.spyOn(crawl, "runCrawl").mockResolvedValue(undefined);
+		for (const dispatch of [executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand]) {
+			const h = harness();
+			expect(await dispatch("/crawl https://example.com/page", h.runtime as never)).toEqual({ consumed: true });
+			await Promise.all(h.tasks);
+			expect(run.mock.calls.at(-1)?.[1]).toEqual({
+				url: "https://example.com/page",
+				recursive: false,
+				output: "tmp",
+				concurrency: 2,
+			});
+			expect(
+				await dispatch(
+					'/crawl https://example.com/page --recursive --no-scroll --output "saved pages" --concurrency 3 --max-pages 8 --max-depth 0 --wait 0.25',
+					h.runtime as never,
+				),
+			).toEqual({ consumed: true });
+			await Promise.all(h.tasks);
+			expect(run.mock.calls.at(-1)?.[1]).toEqual({
+				url: "https://example.com/page",
+				recursive: true,
+				output: "saved pages",
+				concurrency: 3,
+				maxPages: 8,
+				maxDepth: 0,
+				wait: 0.25,
+				scroll: false,
+			});
+			h.dispose();
+		}
 	});
 
 	it("returns immediately, isolates sessions, cancels on stop, and waits for cleanup before restarting", async () => {

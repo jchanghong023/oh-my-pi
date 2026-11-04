@@ -4,7 +4,7 @@ import * as path from "node:path";
 import type { ChatUsageEvent } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, ChoiceQuestion, ImageContent, Model, NoulQuestion } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { cfgJudgmentAttemptTimeoutMs, cfgModelRoles } from "@oh-my-pi/pi-coding-agent/config/model-settings";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -48,9 +48,31 @@ const OPENROUTER_TEXT_ONLY = {
 	input: ["text"],
 } as Model<Api>;
 
-const LOCAL = getBundledModel("local", "qwen2.5-1.5b");
-const ONLINE = getBundledModel("anthropic", "claude-sonnet-4-6");
-if (!LOCAL || !ONLINE) throw new Error("Expected bundled local and online judge models");
+// Exercise local/Claude judge protocols without requiring them in the bundled chat roster.
+const LOCAL = buildModel({
+	id: "qwen2.5-1.5b",
+	name: "Qwen2.5 1.5B",
+	api: "local-inference",
+	provider: "local",
+	baseUrl: "local://inference",
+	reasoning: false,
+	input: ["text"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 0,
+	maxTokens: 0,
+});
+const ONLINE = buildModel({
+	id: "claude-sonnet-4-6",
+	name: "Claude Sonnet 4.6",
+	api: "anthropic-messages",
+	provider: "anthropic",
+	baseUrl: "https://api.anthropic.com",
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+	contextWindow: 1_000_000,
+	maxTokens: 64_000,
+});
 
 const ONLINE_BACKUP = { ...ONLINE, id: "claude-sonnet-judge-backup", name: "Judge Backup" } as Model<Api>;
 
@@ -1444,5 +1466,67 @@ describe("judge enabledModels session isolation", () => {
 
 		expect(new ChainJudge({ settings: parent, registry, purpose: "test" }).primaryModel()).toBeUndefined();
 		expect(new ChainJudge({ settings: child, registry, purpose: "test" }).primaryModel()).toBeUndefined();
+	});
+
+	// Session fallback is an explicit exception to the filtered role pool, not a remote default retry.
+	it("uses the session model outside enabledModels when the scoped judge pool is empty", async () => {
+		const settings = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+		const registry = makeRegistry([LOCAL, ONLINE, ONLINE_BACKUP], { [ONLINE.provider]: "online-key" });
+		const chat = vi.spyOn(ai, "completeSimple").mockImplementation(async model => reply(model, "level: high"));
+		const native = vi.spyOn(globalThis, "fetch");
+
+		const result = await new ChainJudge({
+			settings,
+			registry,
+			purpose: "test",
+			sessionModel: ONLINE_BACKUP,
+		}).judge({ state: "rename a local", questions: { level: TIER_QUESTION } });
+
+		expect(result.answers.level.choice).toBe("high");
+		expect(chat.mock.calls.map(call => call[0].id)).toEqual([ONLINE_BACKUP.id]);
+		expect(native).not.toHaveBeenCalled();
+		expect(settings.getModelRole("judge")).toBe(`${ONLINE.provider}/${ONLINE.id}`);
+	});
+
+	// Reusing the registry within its chain-cache window must not reuse another session's scope.
+	it("keeps different session scopes isolated while sharing a registry", () => {
+		const registry = makeRegistry([LOCAL, ONLINE], { [ONLINE.provider]: "online-key" });
+		const restricted = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+		const permitted = Settings.isolated({
+			enabledModels: [`${ONLINE.provider}/${ONLINE.id}`],
+			modelRoles: { judge: `${ONLINE.provider}/${ONLINE.id}` },
+		});
+
+		expect(new ChainJudge({ settings: restricted, registry, purpose: "thinking" }).primaryModel()).toBeUndefined();
+		expect(new ChainJudge({ settings: permitted, registry, purpose: "text" }).primaryModel()?.id).toBe(ONLINE.id);
+		expect(new ChainJudge({ settings: restricted, registry, purpose: "thinking" }).primaryModel()).toBeUndefined();
+	});
+
+	// Image selection must filter scope before choosing a compatible native backend.
+	it("does not call an out-of-scope native image judge", async () => {
+		const settings = Settings.isolated({
+			enabledModels: [`${LOCAL.provider}/${LOCAL.id}`],
+			modelRoles: { judge: `${OPENAI_DECISIONS.provider}/${OPENAI_DECISIONS.id}` },
+		});
+		const registry = makeRegistry([LOCAL, OPENAI_DECISIONS], { [OPENAI_DECISIONS.provider]: "openai-key" });
+		const native = vi.spyOn(globalThis, "fetch");
+		const chat = vi.spyOn(ai, "completeSimple");
+
+		await expect(
+			new ChainJudge({ settings, registry, purpose: "image" }).judge({
+				state: "look at this",
+				questions: { visible: { type: "noul", instructions: "Is an object visible?" } },
+				images: [IMAGE_ONE],
+			}),
+		).rejects.toThrow("judgment: no compatible judge candidate supports images");
+
+		expect(native).not.toHaveBeenCalled();
+		expect(chat).not.toHaveBeenCalled();
 	});
 });

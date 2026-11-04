@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
+import { getOAuthCredentialProvider } from "@oh-my-pi/pi-ai/oauth";
 import { Settings } from "../../src/config/settings";
 import { getExtensionUISelectOptionLabel, type ExtensionUIContext } from "../../src/extensibility/extensions/types";
 import { executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand } from "../../src/slash-commands/acp-builtins";
@@ -67,21 +68,20 @@ describe("shared logout business", () => {
 		expect(result.status).toBe("removed");
 		expect(storage.credentials.list("anthropic").map(row => row.id)).toEqual([originalRows[0]!.id]);
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
-		expect(formatLogoutCommandResult(result)?.message).toContain("b@example.com");
+		expect(result.status === "removed" && result.account.credentialId).toBe(selectedId);
 	});
 
 	test("explicit provider and account cancellation leave every credential intact", async () => {
 		const { storage, session, refreshProvider } = await logoutFixture();
 		const before = storage.credentials.list("anthropic");
 		const ui: LogoutCommandUI = {
-			selectProvider: vi.fn(async () => {
-				throw new Error("must not select provider");
-			}),
+			selectProvider: vi.fn(async () => undefined),
 			selectAccount: vi.fn(async () => undefined),
 		};
 		expect(await logoutProviderForCommand(session, "anthropic", ui)).toEqual({ status: "cancelled" });
 		expect(storage.credentials.list("anthropic")).toEqual(before);
 		expect(refreshProvider).not.toHaveBeenCalled();
+		expect(ui.selectProvider).not.toHaveBeenCalled();
 	});
 
 	test("invalid or disappeared selections never remove a different account", async () => {
@@ -119,6 +119,94 @@ describe("shared logout business", () => {
 		expect(refreshProvider).not.toHaveBeenCalled();
 	});
 
+	test.each(["sessionId", "sessionGeneration", "modelRegistry", "isDisposed"] as const)(
+		"cancels logout when %s changes during account selection",
+		async field => {
+			const { storage, session, refreshProvider } = await logoutFixture();
+			const before = storage.credentials.list("anthropic");
+			const result = await logoutProviderForCommand(session, "anthropic", {
+				selectProvider: async () => "anthropic",
+				selectAccount: async (_provider, accounts) => {
+					Object.defineProperty(session, field, {
+						value:
+							field === "modelRegistry"
+								? { ...session.modelRegistry }
+								: field === "isDisposed"
+									? true
+									: field === "sessionGeneration"
+										? 1
+										: "replacement",
+						configurable: true,
+					});
+					return accounts[0]!.credentialId;
+				},
+			});
+			expect(result.status).toBe("skipped");
+			expect(formatLogoutCommandResult(result)?.level).toBe("error");
+			expect(storage.credentials.list("anthropic")).toEqual(before);
+			expect(refreshProvider).not.toHaveBeenCalled();
+		},
+	);
+
+	test("automatically chooses a sole provider and account, warning about the real remaining auth source", async () => {
+		const { storage, session, refreshProvider } = await logoutFixture();
+		await storage.credentials.set("anthropic", [{ type: "api_key", key: "stored-key" }]);
+		storage.keys.setRuntime("anthropic", "runtime-key");
+		const ui = { selectProvider: vi.fn(), selectAccount: vi.fn() };
+		const result = await logoutProviderForCommand(session, undefined, ui);
+		expect(storage.credentials.list("anthropic")).toEqual([]);
+		expect(ui.selectProvider).not.toHaveBeenCalled();
+		expect(ui.selectAccount).not.toHaveBeenCalled();
+		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
+		expect(result.status).toBe("removed");
+		expect("remainingSource" in result ? result.remainingSource : undefined).toBe(
+			storage.keys.describe("anthropic", session.sessionId),
+		);
+		expect(await storage.keys.get("anthropic", session.sessionId)).toBe("runtime-key");
+		expect(formatLogoutCommandResult(result)?.level).toBe("warning");
+	});
+
+	test("cancelling provider selection lists only stored providers and leaves all accounts untouched", async () => {
+		const { storage, session, refreshProvider } = await logoutFixture();
+		await storage.credentials.set("openai-codex", [{ type: "api_key", key: "other-stored-key" }]);
+		const before = storage.credentials.list("anthropic");
+		const other = storage.credentials.list("openai-codex");
+		const selectAccount = vi.fn();
+		const result = await logoutProviderForCommand(session, undefined, {
+			selectProvider: async providers => {
+				expect(providers.length).toBeGreaterThanOrEqual(2);
+				for (const provider of providers)
+					expect(storage.credentials.has(getOAuthCredentialProvider(provider.id))).toBe(true);
+				return undefined;
+			},
+			selectAccount,
+		});
+		expect(result).toEqual({ status: "cancelled" });
+		expect(formatLogoutCommandResult(result)).toBeUndefined();
+		expect(storage.credentials.list("anthropic")).toEqual(before);
+		expect(storage.credentials.list("openai-codex")).toEqual(other);
+		expect(selectAccount).not.toHaveBeenCalled();
+		expect(refreshProvider).not.toHaveBeenCalled();
+	});
+
+	test("explains non-stored auth at its source without offering account selection", async () => {
+		const { storage, session, refreshProvider } = await logoutFixture();
+		for (const row of storage.credentials.list("anthropic"))
+			await storage.credentials.removeById("anthropic", row.id);
+		storage.keys.setRuntime("anthropic", "non-stored-key");
+		const describeSource = vi.spyOn(storage.keys, "describe");
+		const ui = { selectProvider: vi.fn(), selectAccount: vi.fn() };
+		const result = await logoutProviderForCommand(session, "anthropic", ui);
+		expect(result.status).toBe("skipped");
+		expect(formatLogoutCommandResult(result)?.level).toBe("error");
+		expect(describeSource).toHaveBeenCalledWith("anthropic", session.sessionId);
+		expect(storage.credentials.list("anthropic")).toEqual([]);
+		expect(await storage.keys.get("anthropic", session.sessionId)).toBe("non-stored-key");
+		expect(ui.selectProvider).not.toHaveBeenCalled();
+		expect(ui.selectAccount).not.toHaveBeenCalled();
+		expect(refreshProvider).not.toHaveBeenCalled();
+	});
+
 	test("ACP logout selects among stored accounts and consumes only the chosen credential", async () => {
 		const { storage, session, refreshProvider } = await logoutFixture();
 		const originalRows = storage.credentials.list("anthropic");
@@ -143,7 +231,7 @@ describe("shared logout business", () => {
 		expect(await executeAcpBuiltinSlashCommand("/logout", runtime)).toEqual({ consumed: true });
 		expect(storage.credentials.list("anthropic").map(row => row.id)).toEqual([originalRows[0]!.id]);
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
-		expect(output.join("\n")).toContain("b@example.com");
+		expect(storage.credentials.list("anthropic")[0]!.credential).toEqual(originalRows[0]!.credential);
 	});
 });
 
@@ -212,12 +300,45 @@ describe("shared clear business", () => {
 		expect(await executeAcpBuiltinSlashCommand("/clear", runtime)).toEqual({ consumed: true });
 		expect(resetSessionContext).toHaveBeenCalledTimes(1);
 		expect(newSession).not.toHaveBeenCalled();
-		expect(output.join("\n")).toContain("2 messages dropped");
 	});
+
+	for (const host of [executeAcpBuiltinSlashCommand, executeRpcBuiltinSlashCommand]) {
+		test(`${host.name} clears the current session without creating another`, async () => {
+			const fixture = ordinaryTaskDispatchFixture();
+			fixture.resetSessionContext.mockResolvedValueOnce({ droppedCount: 1 });
+			const result = await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear");
+			expect(result).toEqual({ consumed: true });
+			expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
+			expect(fixture.newSession).not.toHaveBeenCalled();
+		});
+
+		test(`${host.name} reports a compaction/session race without rejecting the request`, async () => {
+			const fixture = ordinaryTaskDispatchFixture();
+			const session = fixture.tuiRuntime.ctx.session;
+			Object.defineProperty(session, "isCompacting", { configurable: true, value: true });
+			vi.spyOn(Bun, "sleep").mockImplementation(async () => {
+				Object.defineProperty(session, "sessionGeneration", { value: 1 });
+				Object.defineProperty(session, "isCompacting", { value: false });
+			});
+			expect(await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear")).toEqual({
+				consumed: true,
+			});
+			expect(fixture.resetSessionContext).not.toHaveBeenCalled();
+			expect(fixture.newSession).not.toHaveBeenCalled();
+		});
+
+		test(`${host.name} reports a streaming refusal rather than a successful reset`, async () => {
+			const fixture = ordinaryTaskDispatchFixture();
+			fixture.resetSessionContext.mockResolvedValueOnce(undefined);
+			await fixture[host === executeAcpBuiltinSlashCommand ? "acp" : "rpc"]("/clear");
+			expect(fixture.resetSessionContext).toHaveBeenCalledTimes(1);
+			expect(fixture.newSession).not.toHaveBeenCalled();
+		});
+	}
 });
 
 function ordinaryTaskDispatchFixture() {
-	const resetSessionContext = vi.fn(async () => ({ droppedCount: 2 }));
+	const resetSessionContext = vi.fn<AgentSession["resetSessionContext"]>(async () => ({ droppedCount: 2 }));
 	const newSession = vi.fn(async () => true);
 	const session = {
 		model: { api: "openai-responses" },

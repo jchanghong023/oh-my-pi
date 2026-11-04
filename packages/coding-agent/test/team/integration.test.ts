@@ -621,6 +621,14 @@ describe("team in-process integration", () => {
 				);
 				expect(outcomes.every(outcome => outcome.ok)).toBe(true);
 				expect(leases).toHaveLength(2);
+				for (const lease of leases) {
+					expect(
+						await fs.access(path.dirname(lease)).then(
+							() => true,
+							() => false,
+						),
+					).toBe(persisted);
+				}
 			} finally {
 				inspectChild = undefined;
 			}

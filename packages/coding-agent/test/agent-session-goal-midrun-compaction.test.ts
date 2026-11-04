@@ -4,13 +4,13 @@ import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentMessage, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import * as compactionModule from "@oh-my-pi/pi-agent-core/compaction";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import { buildGoalAutoOrchestrateMessage } from "@oh-my-pi/pi-coding-agent/goals/request-context";
 import type { GoalModeState } from "@oh-my-pi/pi-coding-agent/goals/state";
+import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-keywords";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
@@ -22,6 +22,7 @@ import { createSubagentSettings } from "@oh-my-pi/pi-coding-agent/task/executor"
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { computeNonMessageTokens } from "@oh-my-pi/pi-tui/status-line/context-usage";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { goalProtocolModel } from "./helpers/goal-protocol-model";
 
 function activeGoalState(): GoalModeState {
 	const now = Date.now();
@@ -112,8 +113,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		sessionManager: SessionManager;
 	}> {
 		const observedContexts: string[][] = [];
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("Expected claude-sonnet-4-5 model to exist");
+		const model = goalProtocolModel();
 
 		const modelRegistry = sharedModelRegistry;
 		const parentSettings = Settings.isolated({
@@ -438,6 +438,145 @@ describe("AgentSession mid-run threshold compaction", () => {
 		} finally {
 			await reopened.close();
 		}
+	});
+
+	it("reconstructs exactly once after each of two committed compactions using the current capability snapshot", async () => {
+		const { session, sessionManager, observedContexts } = await createHarness(
+			{
+				"compaction.enabled": false,
+				"compaction.autoContinue": false,
+				"compaction.keepRecentTokens": 1,
+				"magicKeywords.enabled": false,
+			},
+			{
+				persistHistory: true,
+				tool: {
+					name: "task",
+					label: "Task",
+					description: "Callable orchestration capability",
+					parameters: type({}),
+					execute: async () => ({ content: [{ type: "text", text: "real task capability result" }] }),
+				},
+			},
+		);
+		const objective = "orchestrate all work literally {{objective}}\n\nKeep every objective line.\tEND";
+		const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
+		await session.prompt(objective, { goalAutoOrchestrateInitialId: state.goal.id });
+		const rules = renderOrchestrateNotice({ tools: session.getEnabledToolNames() }, { authority: "user" });
+		const contentText = (content: CustomMessage["content"]): string =>
+			typeof content === "string"
+				? content
+				: content
+						.filter(part => part.type === "text")
+						.map(part => part.text)
+						.join("");
+		const initial = session.messages.find(
+			message => message.role === "custom" && message.customType === "goal-auto-orchestrate-context",
+		);
+		if (initial?.role !== "custom") throw new Error("Expected the persisted initial auto Goal notice");
+		expect(contentText(initial.content)).toContain(objective);
+		expect(contentText(initial.content)).toContain(rules);
+		expect(sessionManager.getBranch()).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+			}),
+		);
+		const summaries = ["FIRST-SUMMARY-WITHOUT-OBJECTIVE", "SECOND-SUMMARY-WITHOUT-OBJECTIVE"];
+		let committedCount = 0;
+		const compact = vi.spyOn(compactionModule, "compact").mockImplementation(async preparation => ({
+			summary: summaries[committedCount++]!,
+			shortSummary: undefined,
+			firstKeptEntryId: preparation.firstKeptEntryId,
+			tokensBefore: preparation.tokensBefore,
+			details: {},
+		}));
+
+		for (const hasTask of [false, true]) {
+			await session.setActiveToolsByName(hasTask ? ["task"] : []);
+			await session.compact();
+			const committed = sessionManager.getBranch().filter(entry => entry.type === "compaction");
+			expect(committed).toHaveLength(hasTask ? 2 : 1);
+			const event = committed.at(-1)!;
+			const recoveries = sessionManager
+				.getBranch()
+				.filter(
+					entry =>
+						entry.type === "custom_message" &&
+						entry.customType === "goal-auto-orchestrate-context" &&
+						(entry.details as { compactionEntryId?: string } | undefined)?.compactionEntryId === event.id,
+				);
+			expect(recoveries).toHaveLength(1);
+			const recovery = recoveries[0]!;
+			expect(recovery).toMatchObject({
+				attribution: "user",
+				details: { source: "goal-auto-orchestrate", goalId: state.goal.id, compactionEntryId: event.id },
+			});
+			if (recovery.type !== "custom_message") throw new Error("Expected persisted recovery message");
+			// Custom history accepts both strings and text blocks; assert its actual
+			// text rather than treating an array's toContain as substring matching.
+			const recoveryText = contentText(recovery.content);
+			expect(recoveryText).toContain(objective);
+			expect(recoveryText).toContain("MUST 全自动无人值守完成完整目标。");
+			if (hasTask) expect(recoveryText).toContain(rules);
+			else expect(recoveryText).not.toContain(rules);
+			expect(event.summary).toBe(summaries[committed.length - 1]!);
+			expect(event.summary).not.toContain(objective);
+			expect(event.summary).not.toContain(rules);
+			const saved = sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context")
+				.map(entry => JSON.stringify(entry));
+			await session.prompt(`Inspect the persisted baseline after compaction ${committed.length}.`);
+			const provider = observedContexts.at(-1)!.map(value => JSON.parse(value));
+			expect(
+				provider.filter(message => message.role === "user" && contentText(message.content) === recoveryText),
+			).toHaveLength(1);
+			expect(
+				sessionManager
+					.getBranch()
+					.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context")
+					.map(entry => JSON.stringify(entry)),
+			).toEqual(saved);
+		}
+		expect(compact).toHaveBeenCalledTimes(2);
+		expect(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		).toHaveLength(3);
+		await sessionManager.flush();
+		const file = sessionManager.getSessionFile();
+		if (!file) throw new Error("Expected persisted goal journal");
+		const journal = (await Bun.file(file).text())
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line));
+		expect(
+			journal.filter(
+				entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+			),
+		).toHaveLength(3);
+		expect(
+			journal.filter(
+				entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context",
+			),
+		).toEqual(
+			sessionManager
+				.getBranch()
+				.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context"),
+		);
+		expect(journal.filter(entry => entry.type === "compaction").map(entry => entry.summary)).toEqual(summaries);
+		expect(journal).toContainEqual(
+			expect.objectContaining({
+				type: "message",
+				message: expect.objectContaining({ role: "user", content: [{ type: "text", text: objective }] }),
+			}),
+		);
+		expect(session.getGoalModeState()).toMatchObject({
+			autoOrchestrate: true,
+			goal: { objective, status: "active" },
+		});
 	});
 
 	it("does not backfill a restored auto Goal notice during ordinary prompts or tool continuation", async () => {
@@ -1205,7 +1344,7 @@ describe("AgentSession mid-run threshold compaction", () => {
 		},
 	);
 
-	it.each(["paused", "completed", "dropped", "ordinary", "exiting"] as const)(
+	it.each(["paused", "completed", "dropped", "ordinary", "exiting", "budget-limited"] as const)(
 		"does not revive a %s Goal when compaction commits",
 		async mode => {
 			const { session, sessionManager } = await createHarness({
@@ -1227,7 +1366,12 @@ describe("AgentSession mid-run threshold compaction", () => {
 								? { ...state, goal: { ...state.goal, status: "complete" } }
 								: mode === "ordinary"
 									? { ...state, autoOrchestrate: false }
-									: { ...state, mode: "exiting" },
+									: mode === "budget-limited"
+										? {
+												...state,
+												goal: { ...state.goal, status: "budget-limited", tokenBudget: 1, tokensUsed: 1 },
+											}
+										: { ...state, mode: "exiting" },
 				);
 				return {
 					summary: "SUMMARY-WITHOUT-GOAL-OR-RULES",
@@ -1255,6 +1399,46 @@ describe("AgentSession mid-run threshold compaction", () => {
 			).toHaveLength(0);
 		},
 	);
+
+	it("restores the current replacement rather than the obsolete goal when compaction commits", async () => {
+		const { session, sessionManager, observedContexts } = await createHarness({
+			"compaction.enabled": false,
+			"compaction.autoContinue": false,
+			"compaction.keepRecentTokens": 1,
+		});
+		await session.prompt("Seed history which can actually be compacted.");
+		await session.goalRuntime.createGoal({ objective: "OBSOLETE_GOAL_MUST_NOT_REAPPEAR", autoOrchestrate: true });
+		const compact = mockCompaction("SUMMARY-OMITS-BOTH-GOALS");
+		compact.mockImplementation(async preparation => {
+			await session.goalRuntime.replaceGoal({
+				objective: "CURRENT_REPLACEMENT_FULL_OBJECTIVE",
+				autoOrchestrate: true,
+			});
+			return {
+				summary: "SUMMARY-OMITS-BOTH-GOALS",
+				shortSummary: undefined,
+				firstKeptEntryId: preparation.firstKeptEntryId,
+				tokensBefore: preparation.tokensBefore,
+				details: {},
+			};
+		});
+
+		await session.compact();
+		const current = session.getGoalModeState()!;
+		const recoveries = sessionManager
+			.getBranch()
+			.filter(entry => entry.type === "custom_message" && entry.customType === "goal-auto-orchestrate-context");
+		expect(recoveries).toEqual([
+			expect.objectContaining({
+				content: expect.stringContaining("CURRENT_REPLACEMENT_FULL_OBJECTIVE"),
+				details: expect.objectContaining({ goalId: current.goal.id }),
+			}),
+		]);
+		await session.prompt("Read the recovered replacement.");
+		const input = observedContexts.at(-1)!.join("\n");
+		expect(input).toContain("CURRENT_REPLACEMENT_FULL_OBJECTIVE");
+		expect(input).not.toContain("OBSOLETE_GOAL_MUST_NOT_REAPPEAR");
+	});
 
 	it("continues below the mid-run threshold while message_end notifications remain pending", async () => {
 		const releaseMessageEnd = Promise.withResolvers<void>();

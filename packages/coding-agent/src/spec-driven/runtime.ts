@@ -400,8 +400,17 @@ export async function createSpecDrivenRuntime(args: {
 				ctx.signal.throwIfAborted();
 				const operation = (async () => {
 					let files = input.files;
-					if (input.entry && input.role === "requirements" && !requireStore().native && !files.length)
-						files = await requireStore().readAuthorityDocuments();
+					if (input.entry && input.role === "requirements" && !requireStore().native) {
+						const authority = await requireStore().readAuthorityDocuments();
+						const paths = new Set<string>();
+						files = [];
+						for (const file of [...input.files, ...authority]) {
+							const realPath = await containedSpecPath(cwd, file.path);
+							if (paths.has(realPath)) continue;
+							paths.add(realPath);
+							files.push(file);
+						}
+					}
 					let teamResult: TeamRunResult | undefined;
 					if (input.entry && input.role === "solution" && input.useTeam) {
 						const approved = await args.checkApproved?.();

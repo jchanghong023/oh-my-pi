@@ -7,7 +7,7 @@ import { isEnoent, logger, prompt, sanitizeText, truncate } from "@oh-my-pi/pi-u
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import type { OutputMeta } from "@oh-my-pi/pi-tui/tools/output-meta";
 import { REPO_EXCLUSIONS } from "../repo/files";
-import { normalizeRepoQueryPath, resolveRepoRoot, RepoService } from "../repo/service";
+import { normalizeRepoQueryPath, resolveRepoRoot, RepoService, validateRepoQueryLength } from "../repo/service";
 import { repoIndexPath } from "../repo/storage";
 import type { RepoQueryResult, RepoStatus, RepoSymbolHit, RepoTextHit } from "../repo/types";
 import repoDescription from "../prompts/tools/repo.md" with { type: "text" };
@@ -273,12 +273,17 @@ export class RepoTool implements AgentTool<typeof repoSchema, RepoToolDetails> {
 				try {
 					const value = await (async () => {
 						const action = params.action ?? "search";
+						if (params.query !== undefined) {
+							try {
+								validateRepoQueryLength(params.query);
+							} catch (error) {
+								throw new ToolError(error instanceof Error ? error.message : String(error));
+							}
+						}
 						if (action !== "status" && (!params.query || !params.query.trim()))
 							throw new ToolError(
 								`repo ${action} requires query (e.g. ${action === "search" ? '{"query":"Widget"}' : '{"action":"symbol","query":"Widget"}'}).`,
 							);
-						if (params.query && params.query.length > 500)
-							throw new ToolError("Repository query exceeds 500 characters; narrow it.");
 						const agentDir = this.session.settings.getAgentDir();
 						stage = "open";
 						const root = resolveRepoRoot(this.session.cwd);

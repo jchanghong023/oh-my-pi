@@ -5,7 +5,7 @@ import { z } from "zod";
 import { KnowledgeService } from "../../knowledge/service";
 import type { KnowledgeProgress } from "../../knowledge/types";
 import { REPO_EXCLUSIONS } from "../../repo/files";
-import { normalizeRepoQueryPath, RepoService, resolveRepoRoot } from "../../repo/service";
+import { normalizeRepoQueryPath, RepoService, resolveRepoRoot, validateRepoQueryLength } from "../../repo/service";
 import { repoIndexPath } from "../../repo/storage";
 import type { RepoProgress, RepoQueryResult, RepoStatus } from "../../repo/types";
 import { LegacyProtocol as L } from "./schema";
@@ -252,6 +252,7 @@ export class OmpIndexesBridge {
 		const payload = z.object(shape).strict().parse(raw);
 		const params = ompRepoParamsSchema.parse({ ...payload, action: methodSchema.value });
 		return this.#run("repo", params, signal, async (cwd, inner, onProgress) => {
+			if (params.action === "text" || params.action === "symbol") validateRepoQueryLength(params.query);
 			const root = resolveRepoRoot(cwd);
 			if ("confirmedRoot" in params) {
 				const confirmedRoot = await this.#directory(params.confirmedRoot);
@@ -266,7 +267,7 @@ export class OmpIndexesBridge {
 			if (readOnly && !(await repositoryIndexExists(repoIndexPath(this.#agentDir, root)))) {
 				if (params.action === "status") return missingRepoStatus(root);
 				if (params.action === "text" || params.action === "symbol") {
-					normalizeRepoQueryPath(params.path);
+					normalizeRepoQueryPath(params.path, true);
 					return missingRepoQuery(root, params.cursor);
 				}
 			}

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import type { Stats } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,8 +10,10 @@ import { ZCodeSessionManager } from "../../src/modes/zcode/sessions";
 import { makeOmpWorkflowDriver, type OmpWorkflowDriver } from "../../src/modes/zcode/workflows/driver";
 import { createOmpWorkflowWorld } from "../../src/modes/zcode/workflows/world";
 import {
+	ARTIFACT_CAPS,
 	InMemoryJournalStore,
 	WorkflowEngine,
+	WORLD_READ_CAPS,
 	type WorkflowReportSink,
 } from "../../src/modes/zcode/workflows/vendor/dynamic-workflow/index";
 import { AgentStorage } from "../../src/session/agent-storage";
@@ -18,6 +21,7 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { cfgToolsApproval } from "../../src/tools/settings";
+import { ZCodeWorkflowService } from "../../src/modes/zcode/workflows/service";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -63,6 +67,18 @@ async function fixture(
 		closeModelCache();
 	});
 	const requests: ModelRequest[] = [];
+	const wireHeaders: Headers[] = [];
+	const requestWaiters = new Set<() => void>();
+	const waitForRequests = (count: number) =>
+		new Promise<void>(resolve => {
+			const check = () => {
+				if (requests.length < count) return;
+				requestWaiters.delete(check);
+				resolve();
+			};
+			requestWaiters.add(check);
+			check();
+		});
 	const held = Promise.withResolvers<void>();
 	const cancelled = Promise.withResolvers<void>();
 	const endpoint = Bun.serve({
@@ -74,7 +90,9 @@ async function fixture(
 			const parsed = modelRequestSchema.safeParse(await request.json());
 			if (!parsed.success) return new Response("Invalid model request", { status: 400 });
 			const body = parsed.data;
+			wireHeaders.push(new Headers(request.headers));
 			requests.push(body);
+			for (const check of requestWaiters) check();
 			const response = reply?.(body) ?? { text: "native actor response" };
 			const typed = "result" in response;
 			const submit = typed ? body.tools?.find(tool => tool.function.name === "submit_result") : undefined;
@@ -157,7 +175,19 @@ async function fixture(
 	});
 	cleanup.push(() => sessions.dispose());
 	const parent = await sessions.create();
-	return { cwd, parent, sessions, requests, held: held.promise, cancelled: cancelled.promise };
+	return {
+		cwd,
+		parent,
+		sessions,
+		requests,
+		wireHeaders,
+		authStorage,
+		models,
+		model,
+		waitForRequests,
+		held: held.promise,
+		cancelled: cancelled.promise,
+	};
 }
 
 function unusedSink(): WorkflowReportSink {
@@ -458,5 +488,326 @@ describe("OMP workflow native driver", () => {
 		expect(parent.session.isDisposed).toBe(false);
 		driver.dispose();
 		await driver.closed;
+	});
+
+	it("gates actual provider requests per run, rejects invalid limits and releases cancelled waiters", async () => {
+		const f = await fixture(() => ({ hold: true }));
+		const changed = new Set<() => void>();
+		const service = new ZCodeWorkflowService({
+			agentDir: path.join(f.cwd, "agent"),
+			manager: f.sessions,
+			catalog: async () => [f.parent.session.model!],
+			onChange: () => {
+				for (const check of changed) check();
+			},
+		});
+		cleanup.push(() => service.dispose());
+		const prepared = await service.prepareScript({
+			cwd: f.cwd,
+			script:
+				'const a = agent("a"); const b = agent("b"); return await Promise.all([a.ask("first"), b.ask("second")]);',
+		});
+		if (!prepared.ok) throw new Error(prepared.message);
+		const first = await service.submit(f.parent, prepared.prepared, {
+			toolCallId: "first-launch",
+			inputId: "first-input",
+			maxConcurrency: 1,
+		});
+		await f.waitForRequests(1);
+		const waiting = new Promise<void>(resolve => {
+			const check = () => {
+				const run = service.projection(f.parent.id).workflowRuns.runs.find(run => run.runId === first.runId);
+				if (!run?.nodes.some(node => node.phase === "waiting" || node.phase === "queued")) return;
+				changed.delete(check);
+				resolve();
+			};
+			changed.add(check);
+			check();
+		});
+		await waiting;
+		expect(f.requests).toHaveLength(1);
+		for (const maxConcurrency of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
+			expect(() => service.control(f.parent.id, first.runId, { maxConcurrency })).toThrow(
+				"Invalid workflow concurrency",
+			);
+			expect(service.getRun(f.parent.id, first.runId).caps.maxConcurrency).toBe(1);
+		}
+		// A second run owns a different provider gate, even under the same parent.
+		const second = await service.submit(f.parent, prepared.prepared, {
+			toolCallId: "second-launch",
+			inputId: "second-input",
+			maxConcurrency: 1,
+		});
+		await f.waitForRequests(2);
+		expect(f.requests).toHaveLength(2);
+		await service.cancel(f.parent.id, first.runId);
+		expect(service.getRun(f.parent.id, first.runId).status).toBe("stopped");
+		expect(service.getRun(f.parent.id, second.runId).status).toBe("running");
+		expect(f.requests).toHaveLength(2);
+		await service.cancel(f.parent.id, second.runId);
+		expect(f.parent.session.isDisposed).toBe(false);
+	});
+
+	it("rejects redirected artifact sources even when their real target remains inside the workspace", async () => {
+		const { parent, cwd } = await fixture(undefined, ["read"]);
+		await fs.mkdir(path.join(cwd, "real"));
+		await fs.writeFile(path.join(cwd, "real", "report.txt"), "must not publish redirected bytes");
+		await fs.symlink(path.join(cwd, "real"), path.join(cwd, "redirect"), "junction");
+		const world = createOmpWorkflowWorld(parent);
+		await expect(
+			world.publish({
+				runId: "redirected",
+				siteId: "report",
+				ordinal: 0,
+				op: "file",
+				id: "report",
+				version: 1,
+				path: "redirect/report.txt",
+			}),
+		).rejects.toThrow();
+		expect(await fs.readFile(path.join(cwd, "real", "report.txt"), "utf8")).toBe("must not publish redirected bytes");
+	});
+});
+
+describe("workflow artifact publish-time source boundaries", () => {
+	// Replacing an already-validated parent must not let publish follow a new link.
+	it.each(["inside", "outside"] as const)(
+		"rejects a publish-time directory replacement with a junction %s the workspace",
+		async location => {
+			const { parent, cwd } = await fixture(undefined, ["read"]);
+			const root = await fs.realpath(cwd);
+			const directory = path.join(root, "source");
+			const retained = path.join(root, "retained-source");
+			const replacement =
+				location === "inside"
+					? path.join(root, "replacement")
+					: await fs.mkdtemp(path.join(os.tmpdir(), "omp-workflow-outside-"));
+			if (location === "outside") cleanup.push(() => fs.rm(replacement, { recursive: true, force: true }));
+			else await fs.mkdir(replacement);
+			await fs.mkdir(directory);
+			const source = path.join(directory, "report.bin");
+			const original = Buffer.from([0, 1, 128, 255]);
+			const redirected = Buffer.from(`must-not-publish-${location}`);
+			await fs.writeFile(source, original);
+			await fs.writeFile(path.join(replacement, "report.bin"), redirected);
+			const open = fs.open.bind(fs);
+			let replaced = false;
+			const allocation = spyOn(parent.session.sessionManager, "allocateArtifactPath");
+			const opening = spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+				if (filePath === source && !replaced) {
+					replaced = true;
+					// Every earlier path/lstat check has finished; the native open has not.
+					await fs.rename(directory, retained);
+					await fs.symlink(replacement, directory, "junction");
+				}
+				return open(filePath, flags, mode);
+			});
+			try {
+				const world = createOmpWorkflowWorld(parent);
+				await expect(
+					world.publish({
+						runId: "source-replacement",
+						siteId: "report",
+						ordinal: 0,
+						op: "file",
+						id: "report",
+						version: 1,
+						path: "source/report.bin",
+					}),
+				).rejects.toThrow();
+				expect(replaced).toBe(true);
+				expect(await fs.realpath(source)).toBe(await fs.realpath(path.join(replacement, "report.bin")));
+				expect(await fs.readFile(path.join(retained, "report.bin"))).toEqual(original);
+				expect(await fs.readFile(path.join(replacement, "report.bin"))).toEqual(redirected);
+				expect(allocation).not.toHaveBeenCalled();
+			} finally {
+				opening.mockRestore();
+				allocation.mockRestore();
+			}
+		},
+	);
+
+	// Actual growth is interleaved with real open/stat calls, never fabricated metadata or bytes.
+	it.each(["before-open", "after-stat"] as const)(
+		"rejects a file growing beyond the artifact byte cap %s without allocating an artifact",
+		async boundary => {
+			const { parent, cwd } = await fixture(undefined, ["read"]);
+			const source = path.join(await fs.realpath(cwd), "growing.bin");
+			await fs.writeFile(source, Buffer.from([128]));
+			await fs.truncate(source, ARTIFACT_CAPS.maxFileBytes);
+			const open = fs.open.bind(fs);
+			let grew = false;
+			const restores: Array<() => void> = [];
+			const grow = async () => {
+				if (grew) return;
+				grew = true;
+				await fs.appendFile(source, Buffer.from([255]));
+			};
+			const allocation = spyOn(parent.session.sessionManager, "allocateArtifactPath");
+			const opening = spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+				if (filePath !== source) return open(filePath, flags, mode);
+				if (boundary === "before-open") await grow();
+				const handle = await open(filePath, flags, mode);
+				if (boundary === "after-stat" && !grew) {
+					const observed: { stat(): Promise<Stats> } = handle;
+					const stat = observed.stat.bind(observed);
+					const snapshot = spyOn(observed, "stat").mockImplementation(async () => {
+						const value = await stat();
+						await grow();
+						return value;
+					});
+					restores.push(() => snapshot.mockRestore());
+				}
+				return handle;
+			});
+			try {
+				const world = createOmpWorkflowWorld(parent);
+				await expect(
+					world.publish({
+						runId: "source-growth",
+						siteId: "report",
+						ordinal: 0,
+						op: "file",
+						id: "report",
+						version: 1,
+						path: "growing.bin",
+					}),
+				).rejects.toThrow(/exceeds its byte cap|changed while reading/);
+				expect(grew).toBe(true);
+				expect((await fs.stat(source)).size).toBe(ARTIFACT_CAPS.maxFileBytes + 1);
+				expect(allocation).not.toHaveBeenCalled();
+			} finally {
+				opening.mockRestore();
+				for (const restore of restores.reverse()) restore();
+				allocation.mockRestore();
+			}
+		},
+	);
+});
+
+describe("workflow world command rewriting", () => {
+	it("rejects an extension rewrite before executing either the original or replacement shell command", async () => {
+		const { parent, cwd } = await fixture(undefined, ["bash"]);
+		const runner = parent.session.extensionRunner!;
+		const originalHasHandlers = runner.hasHandlers.bind(runner);
+		const handlers = spyOn(runner, "hasHandlers").mockImplementation(
+			event => event === "tool_call" || originalHasHandlers(event),
+		);
+		const rewrite = spyOn(runner, "emitToolCall").mockResolvedValue({
+			input: { command: "echo rewritten > replacement.txt", cwd, timeout: 1 },
+		});
+		try {
+			const world = createOmpWorkflowWorld(parent);
+			await expect(
+				world.read("run", [
+					process.execPath,
+					["-e", "require('node:fs').writeFileSync('original.txt', 'must not execute')"],
+				]),
+			).rejects.toThrow("rewritten world.run command");
+			expect(rewrite).toHaveBeenCalledTimes(1);
+			await expect(fs.access(path.join(cwd, "original.txt"))).rejects.toThrow();
+			await expect(fs.access(path.join(cwd, "replacement.txt"))).rejects.toThrow();
+		} finally {
+			rewrite.mockRestore();
+			handlers.mockRestore();
+		}
+	});
+});
+
+describe("workflow world process bounds", () => {
+	it.each(["stdout", "stderr"] as const)(
+		"rejects actual %s bytes beyond the configured world-read cap",
+		async channel => {
+			const { parent } = await fixture(undefined, ["bash"]);
+			const world = createOmpWorkflowWorld(parent);
+			const cap = channel === "stdout" ? WORLD_READ_CAPS.runStdoutMaxBytes : WORLD_READ_CAPS.runStderrMaxBytes;
+			await expect(
+				world.read("run", [process.execPath, ["-e", `process.${channel}.write("x".repeat(${cap + 1}));`]]),
+			).rejects.toThrow("Workflow command output exceeds the world-read cap");
+		},
+	);
+
+	it("terminates a real command at its explicit timeout instead of reporting partial success", async () => {
+		const { parent } = await fixture(undefined, ["bash"]);
+		const world = createOmpWorkflowWorld(parent);
+		await expect(
+			world.read("run", [process.execPath, ["-e", "setInterval(() => {}, 1000);"], { timeoutMs: 1 }]),
+		).rejects.toThrow("Workflow command cancelled or timed out");
+	});
+});
+
+describe("request-scoped native execution authorization", () => {
+	it("sends temporary authorization to the actual provider without persisting or leaking it into the next input", async () => {
+		const { parent, wireHeaders, requests, authStorage, models, model } = await fixture();
+		const secret = "EXECUTION_REQUEST_HEADER_CANARY";
+		const originalModel = parent.session.model;
+		const credentialBefore = authStorage.credentials.get("deepseek");
+		const configurationBefore = await fs.readFile(models, "utf8");
+		const manager = parent.session.sessionManager;
+		const modelChangesBefore = manager.getEntries().filter(entry => entry.type === "model_change");
+		await parent.session.withExecutionModel(
+			{
+				model,
+				resolveRequestAuth: async () => ({ headers: { Authorization: secret } }),
+			},
+			() => parent.session.prompt("exercise request-only authorization"),
+		);
+		expect(requests).toHaveLength(1);
+		expect(wireHeaders[0]!.get("authorization")).toBe(secret);
+		expect(parent.session.model).toBe(originalModel);
+		await parent.session.prompt("exercise the next ordinary input");
+		expect(requests).toHaveLength(2);
+		expect(wireHeaders[1]!.get("authorization")).not.toBe(secret);
+		expect(authStorage.credentials.get("deepseek")).toEqual(credentialBefore);
+		expect(await fs.readFile(models, "utf8")).toBe(configurationBefore);
+		expect(manager.getEntries().filter(entry => entry.type === "model_change")).toEqual(modelChangesBefore);
+		await manager.flush();
+		const journalFile = manager.getSessionFile();
+		expect(journalFile).toBeDefined();
+		expect(await fs.readFile(journalFile!, "utf8")).not.toContain(secret);
+	});
+});
+
+describe("live workflow amendment ownership", () => {
+	it("stops a real in-flight actor before superseding its run and preserves inherited caps in the successor", async () => {
+		const f = await fixture(() => ({ hold: true }));
+		const service = new ZCodeWorkflowService({
+			agentDir: path.join(f.cwd, "agent"),
+			manager: f.sessions,
+			catalog: async () => [f.model],
+			onChange: () => {},
+		});
+		cleanup.push(() => service.dispose());
+		const prepared = await service.prepareScript({
+			cwd: f.cwd,
+			script: 'const actor = agent("actor"); return await actor.ask("hold native amendment");',
+		});
+		if (!prepared.ok) throw new Error(prepared.message);
+		const first = await service.submit(f.parent, prepared.prepared, {
+			toolCallId: "amend-launch",
+			inputId: "amend-input",
+			maxConcurrency: 3,
+		});
+		await f.waitForRequests(1);
+		const successor = await service.amend(f.parent, {
+			workId: first.runId,
+			subagentModel: `${f.model.provider}/${f.model.id}`,
+		});
+		await f.cancelled;
+		expect(successor.runId).not.toBe(first.runId);
+		expect(successor).toMatchObject({ supersededRunId: first.runId });
+		expect(service.getRun(f.parent.id, first.runId)).toMatchObject({
+			status: "stopped",
+			stopReason: "superseded",
+			supersededBy: successor.runId,
+		});
+		expect(service.getRun(f.parent.id, successor.runId)).toMatchObject({
+			parentSessionId: f.parent.id,
+			resumedFrom: first.runId,
+			caps: { maxConcurrency: 3 },
+			scriptText: prepared.prepared.script,
+		});
+		expect(f.parent.session.isDisposed).toBe(false);
+		await service.cancel(f.parent.id, successor.runId);
 	});
 });

@@ -11,6 +11,7 @@ import { Agent, type AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import { convertCodexResponsesMessages } from "@oh-my-pi/pi-ai/providers/openai-codex-responses";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SessionMaintenance, type SessionMaintenanceHost } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
@@ -79,6 +80,13 @@ function maintenance(
 }
 
 describe("SessionMaintenance.contextFitsModel", () => {
+	it("does not treat unknown capacity as zero or a local estimated upper bound", () => {
+		const retained: AgentMessage = { role: "user", content: "x".repeat(32_000), timestamp: 0 };
+		const state = maintenance([retained], { usageTokens: 1_000_000 });
+		expect(state.contextFitsModel({ ...candidate, contextWindow: null, maxTokens: null })).toBe(true);
+		expect(state.contextFitsModel(candidate)).toBe(false);
+	});
+
 	it("fits a candidate whose request drops the active model's replayed reasoning", () => {
 		const turn = codexTurn("Important conclusion.", 1);
 		expect(convertCodexResponsesMessages(candidate, { messages: [turn] }).some(i => i.type === "reasoning")).toBe(
@@ -124,7 +132,18 @@ describe("SessionMaintenance.contextFitsModel", () => {
 	});
 
 	it("does not charge a candidate whose cold session rebuilds its own reasoning out of the request", () => {
-		const copilot = { ...getBundledModel<"openai-responses">("github-copilot", "gpt-5.4"), contextWindow: 2_000 };
+		const copilot = buildModel({
+			id: "gpt-5.4",
+			name: "Protocol fixture",
+			provider: "github-copilot",
+			api: "openai-responses",
+			baseUrl: "https://api.githubcopilot.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 2000,
+			maxTokens: 1000,
+		});
 		const turn = responsesTurn(copilot, "Important conclusion.", 1);
 		// A connection-bound host starts cold until its first response.
 		expect(maintenance([turn], { providerSessionState: new Map() }).contextFitsModel(copilot)).toBe(true);

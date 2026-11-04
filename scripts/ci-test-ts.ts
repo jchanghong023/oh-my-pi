@@ -64,6 +64,7 @@ export async function bunTestSelection(
 	root: string = repoRoot,
 	enabled = process.env.OMP_FULLTEST_AFFECTED === "1",
 	hint: string | null | undefined = process.env.OMP_FULLTEST_BASELINE,
+	currentRunId: string | undefined = process.env.OMP_TEST_RUN_ID,
 ): Promise<BunSelection> {
 	const fallback = {
 		tool: "bun",
@@ -80,24 +81,30 @@ export async function bunTestSelection(
 	} catch {
 		return fallback;
 	}
-	// Run directories are timestamp-prefixed by beginTestRun. Inspect newest
-	// first and stop at the first usable ancestor rather than parsing all history.
+	// Run directories are timestamp-prefixed by beginTestRun. A newer failed or
+	// incomplete attempt must prevent reuse of an older successful baseline.
 	const directories = entries.filter(entry => entry.isDirectory()).sort((a, b) => b.name.localeCompare(a.name));
 	for (const entry of directories) {
 		try {
 			const run = JSON.parse(
 				await fs.readFile(path.join(root, "runs", "test-timing", entry.name, "run.json"), "utf8"),
 			);
+			if (
+				run.scope !== "fulltest: fork feature suites" ||
+				run.platform !== process.platform ||
+				run.architecture !== process.arch
+			)
+				continue;
+			// fulltest creates its running report before it selects tests. Only
+			// that exact report is this invocation, not an interrupted prior run.
+			if (entry.name === currentRunId && run.runId === currentRunId && run.completion === "running") continue;
+			if (run.completion !== "complete" || run.exitCode !== 0)
+				return { ...fallback, reason: "most recent fork-feature fulltest failed or is incomplete" };
 			const producers = Array.isArray(run.producers)
 				? run.producers.filter((producer: TestProducerRecord) => producer.scope === "ci-test-ts:local-ts")
 				: [];
 			if (
-				run.scope !== "fulltest: fork feature suites" ||
-				run.completion !== "complete" ||
-				run.exitCode !== 0 ||
 				run.dirtyState !== "clean" ||
-				run.platform !== process.platform ||
-				run.architecture !== process.arch ||
 				run.runtimeVersions?.bun !== Bun.version ||
 				run.reconciliation?.status !== "validated" ||
 				run.unreconciledScope != null ||
@@ -355,8 +362,120 @@ const forkCodingAgentFiles = new Set([
 	"test/status-line-transparent.test.ts",
 	"test/status-line-segment-padding.test.ts",
 	"test/status-line-brand-fade.test.ts",
+	"test/agent-session-auto-compaction-progress-guard.test.ts",
+	"test/agent-session-compaction.test.ts",
+	"test/agent-session-goal-midrun-compaction.test.ts",
+	"test/agent-session-magic-keywords.test.ts",
+	"test/agent-session-queued-drain-compaction.test.ts",
+	"test/agent-session-queued-steer-delivery.test.ts",
+	"test/agent-session-stats.test.ts",
+	"test/approval-launch-contract.test.ts",
+	"test/artifacts-integrity.test.ts",
+	"test/ask-timeout.test.ts",
+	"test/autolearn-managed-skills.test.ts",
+	"test/bench-offline-company.test.ts",
+	"test/cli-explicit-extension-isolation.test.ts",
+	"test/cli/openwiki-ai-query.test.ts",
+	"test/cli/openwiki-dry-run.test.ts",
+	"test/cli/openwiki-generation.test.ts",
+	"test/cli/openwiki-process-boundary.test.ts",
+	"test/cli/openwiki-recovery.test.ts",
+	"test/cli/openwiki.test.ts",
+	"test/commit-conventional.test.ts",
+	"test/compact-status-spacing.test.ts",
+	"test/compaction-speculation.test.ts",
+	"test/composer-prediction-controller.test.ts",
+	"test/config-cli-revision-contract.test.ts",
+	"test/context-fits-model.test.ts",
+	"test/developer-test-agent-resources.test.ts",
+	"test/discovery-input-metadata.test.ts",
+	"test/discovery-per-call-compaction-baseline.test.ts",
+	"test/discovery-queued-maintenance-guards.test.ts",
+	"test/discovery-skill-scanner.test.ts",
+	"test/discovery/claude-plugins.test.ts",
+	"test/edit/file-rewind.test.ts",
+	"test/eval/completion-bridge.test.ts",
+	"test/extension-dashboard-mcp-parity.test.ts",
+	"test/fork-diagnostic-logging.test.ts",
+	"test/fork-runtime-defaults.test.ts",
+	"test/input-controller-input-events.test.ts",
+	"test/input-controller-thinking-visibility.test.ts",
+	"test/interactive-mode-activity-line.test.ts",
+	"test/interactive-mode-loop-teardown.test.ts",
+	"test/interactive-mode-loop.test.ts",
+	"test/interactive-mode-working-label.test.ts",
+	"test/internal-urls/mcp-protocol.test.ts",
+	"test/judgment-chain.test.ts",
+	"test/knowledge-cli.test.ts",
+	"test/knowledge-hub.test.ts",
+	"test/knowledge-index-names.test.ts",
+	"test/loop-limit.test.ts",
+	"test/model-picker.test.ts",
+	"test/model-provider-contract.test.ts",
+	"test/model-registry-default-config.test.ts",
+	"test/model-registry-runtime-provider.test.ts",
+	"test/modes/components/oauth-selector.test.ts",
+	"test/modes/components/settings-layout.test.ts",
+	"test/modes/controllers/input-controller-tool-expansion.test.ts",
+	"test/modes/controllers/jobs-command.test.ts",
+	"test/modes/goal-autopilot-process-websocket.test.ts",
+	"test/native-pipe-fallback-contract.test.ts",
+	"test/online-tiny-candidates.test.ts",
+	"test/openwiki/agents-instructions.test.ts",
+	"test/openwiki/host-lifecycle.test.ts",
+	"test/openwiki/index-isolation.test.ts",
+	"test/openwiki/native-pool.test.ts",
+	"test/openwiki/query.test.ts",
+	"test/openwiki/resources.test.ts",
+	"test/openwiki/visualize-browser.test.ts",
+	"test/openwiki/visualize.test.ts",
+	"test/parallel-review-MagicSkills-regression.test.ts",
+	"test/parallel-review-OfflineStartup-regression.test.ts",
+	"test/parallel-review-ProviderCatalog-regression.test.ts",
+	"test/parallel-review-TeamDiscussion-regression.test.ts",
+	"test/personal-tool-arguments.test.ts",
+	"test/repo-spec-contract.test.ts",
+	"test/repo-windows-acl.test.ts",
+	"test/retry-fallback.test.ts",
+	"test/rpc-index-commands.test.ts",
+	"test/rpc-index-progress.test.ts",
+	"test/runtime-irc-receipt-contract.test.ts",
+	"test/runtime-tool-cancellation-contract.test.ts",
+	"test/sdk-async-job-manager-singleton.test.ts",
+	"test/sdk-move-cwd.test.ts",
+	"test/sdk-skills.test.ts",
+	"test/session/model-execution.test.ts",
+	"test/settings-gated-tools-live.test.ts",
+	"test/setup-wizard.test.ts",
+	"test/slash-commands/crawl.test.ts",
+	"test/slash-commands/personal-prompt-delivery.test.ts",
+	"test/slash-commands/personal-session-isolation.test.ts",
+	"test/slash-commands/rpc-builtins.test.ts",
+	"test/speculative-live-config.test.ts",
+	"test/speculative-read-integration.test.ts",
+	"test/startup-composer.test.ts",
+	"test/startup-python-diagnostic.test.ts",
+	"test/status-line-overflow.test.ts",
+	"test/stt-cloud.test.ts",
+	"test/stt-preflight.test.ts",
+	"test/stt-whisper-language.test.ts",
+	"test/title-generator.test.ts",
+	"test/tools/ask.test.ts",
+	"test/tools/jtd-upstream-contract.test.ts",
+	"test/tools/todo-append-recovery.test.ts",
+	"test/tools/todo.test.ts",
+	"test/upstream-extension-validation.test.ts",
+	"test/vibe/spawn-model-role.test.ts",
+	"test/zero-config-terminal.test.ts",
+	"test/tools/browser/crawl.test.ts",
+	"test/tools/browser/crawl-access.test.ts",
+	"test/parallel-review-SessionRuntimeCompact-regression.test.ts",
+	"test/developer-test-agent-materialization.test.ts",
+	"test/task/structured-subagent.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {
+	"packages/agent": ["test/discovery-per-call-context.test.ts", "test/output-budget.test.ts"],
+	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
 	"packages/natives": ["test/python-symbols.test.ts"],
 	"packages/tui": [
@@ -366,6 +485,14 @@ const forkPackageFiles: Record<string, string[]> = {
 		"test/transcript-seam-loss.test.ts",
 		"test/thinking-preview.test.ts",
 		"test/status-line-profile.test.ts",
+		"test/composer-transcript-navigation.test.ts",
+		"test/editor-ime-eligibility.test.ts",
+		"test/emergency-restore-altscreen.test.ts",
+		"test/jobs-panel.test.ts",
+		"test/oauth-selector.test.ts",
+		"test/theme-terminal-softening.test.ts",
+		"test/transcript-render-helpers.test.ts",
+		"test/web-search-render.test.ts",
 	],
 	"packages/snapcompact": ["test/snapcompact.test.ts"],
 };
@@ -595,7 +722,11 @@ function isIntegrationTest(testFile: string): boolean {
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
 		/^(?:\.\/)?test\/modes\/(?:zcode-process(?:-(?:projection|session|catalog|execution))?|zcode-workflow-(?:sandbox-)?process)\.test\.ts$/.test(
 			testFile,
-		)
+		) ||
+		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
+		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
+		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
+		testFile === "test/tools/browser/crawl.test.ts"
 	);
 }
 
@@ -604,7 +735,15 @@ export function isIntegrationCommand(command: TestCommand): boolean {
 }
 
 function isStartupTest(file: string): boolean {
-	return /^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) || file === "test/modes/zcode-hosts-goal.test.ts";
+	return (
+		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
+		file === "test/modes/zcode-hosts-goal.test.ts" ||
+		file === "test/zero-config-terminal.test.ts" ||
+		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
+		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
+		file === "test/goals/goal-autopilot-public-views.test.ts" ||
+		file === "test/modes/goal-autopilot-process-websocket.test.ts"
+	);
 }
 
 // Startup files are isolated before chunking, including in full mode.
@@ -748,6 +887,9 @@ const SCRUBBED_ENV_NAMES = new Set([
 ]);
 
 function isScrubbedEnvVar(key: string): boolean {
+	// Windows environment names are case-insensitive; retain original keys in
+	// buildChildEnv so deletion (and fulltest's overlay tombstone) uses that key.
+	if (process.platform === "win32") key = key.toUpperCase();
 	if (SCRUBBED_ENV_NAMES.has(key)) {
 		return true;
 	}

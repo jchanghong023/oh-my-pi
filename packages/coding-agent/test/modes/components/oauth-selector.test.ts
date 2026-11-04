@@ -20,8 +20,7 @@ describe("OAuthSelectorComponent", () => {
 	it("fuzzy-filters provider lists from typed input", () => {
 		const providers = getOAuthProviders();
 		const target = providers.find(provider => provider.available && provider.id === "openai-codex");
-		expect(target).toBeDefined();
-		if (!target) return;
+		if (!target) throw new Error("Expected the available openai-codex login entry");
 
 		const selected: string[] = [];
 		const component = new OAuthSelectorComponent(
@@ -110,8 +109,7 @@ describe("OAuthSelectorComponent", () => {
 				providers.find(provider => provider.available && provider.id === "vllm") ??
 				providers.find(provider => provider.available) ??
 				providers[0];
-			expect(victim).toBeDefined();
-			if (!victim) return;
+			if (!victim) throw new Error("Expected a provider to exercise disabled login filtering");
 
 			resetSettingsForTest();
 			await Settings.init({ inMemory: true, overrides: { disabledProviders: [victim.id] } });
@@ -135,8 +133,7 @@ describe("OAuthSelectorComponent", () => {
 
 		it("hides alias logins whose storeCredentialsAs target is disabled", async () => {
 			const alias = getOAuthProviders().find(provider => provider.storeCredentialsAs === "openai-codex");
-			expect(alias).toBeDefined();
-			if (!alias) return;
+			if (!alias) throw new Error("Expected a login alias storing openai-codex credentials");
 			expect(alias.id).not.toBe("openai-codex");
 
 			resetSettingsForTest();
@@ -185,6 +182,8 @@ describe("OAuthSelectorComponent", () => {
 				.map(line => Bun.stripANSI(line))
 				.join("\n");
 			expect(rendered).toContain("OpenCode Go");
+			component.handleInput("\r");
+			expect(selected).toEqual(["opencode-go"]);
 		});
 	});
 });

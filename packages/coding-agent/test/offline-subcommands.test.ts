@@ -226,6 +226,22 @@ function anthropicCommitResponse(body: {
 }
 
 describe("offline model-dependent subcommands", () => {
+	it("rejects explicit company CLI selections outside the offline lane without reading company credentials", async () => {
+		const f = await fixture({ offline: false });
+		for (const selector of [
+			["--provider", "company"],
+			["--model", "company/GLM-5.3-public"],
+		]) {
+			const result = await f.run([...selector, "--print", "--no-extensions", "hello"]);
+			expect(result.exitCode).not.toBe(0);
+			expect(result.stderr).toContain("OMP_OFFLINE=1");
+			expect(result.stderr).not.toContain("Company provider unavailable");
+			expect(result.stderr).not.toContain("fixture-token");
+		}
+		expect(await Bun.file(f.companyPath).exists()).toBe(false);
+		expect(await fs.readFile(f.configPath, "utf8")).toBe(f.configText);
+	}, 30_000);
+
 	it("keeps shared SDK initialization off terminal streams when company configuration is invalid", async () => {
 		const f = await fixture({ modelRoles: { default: "ascend/vision" } });
 		await fs.writeFile(f.companyPath, JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "fixture-token" } }));

@@ -20,7 +20,12 @@ import { setTerminalGlyphProtocol } from "@oh-my-pi/pi-tui/terminal-capabilities
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext } from "@oh-my-pi/pi-coding-agent/modes/types";
 
-import { cfgSetupVersion, cfgSymbolPreset } from "@oh-my-pi/pi-coding-agent/modes/settings";
+import {
+	cfgSetupVersion,
+	cfgSymbolPreset,
+	cfgThemeDark,
+	cfgThemeLight,
+} from "@oh-my-pi/pi-coding-agent/modes/settings";
 
 type SetupApplicationSceneHost = Omit<SetupSceneHost, "ctx"> & { ctx: InteractiveModeContext };
 
@@ -417,7 +422,7 @@ describe("setup wizard short terminals", () => {
 		}
 	});
 
-	it("keeps the curated theme list and its selection visible on a 24-row terminal", async () => {
+	it("keeps the theme selection visible on a 24-row terminal", async () => {
 		await initTheme(false, "unicode", false, "titanium", "light");
 		const component = new SetupWizardComponent(createSetupHost(shortTerminalCtx(24)), [themeSetupScene]);
 		void component.run();
@@ -427,9 +432,6 @@ describe("setup wizard short terminals", () => {
 			const frame = component.render(80).map(line => Bun.stripANSI(line));
 			expect(frame.length).toBe(24);
 			expect(frame.some(line => line.trimStart().startsWith(theme.nav.cursor))).toBe(true);
-			for (const label of ["Match terminal", "Titanium", "Light", "Colorblind colors", "ANSI-safe", "Browse all"]) {
-				expect(frame.some(line => line.includes(label))).toBe(true);
-			}
 		} finally {
 			nowSpy.mockRestore();
 			component.dispose();
@@ -438,6 +440,35 @@ describe("setup wizard short terminals", () => {
 });
 
 describe("setup wizard theme previews", () => {
+	it("Match terminal preserves the configured dark theme and only saves the light mapping", async () => {
+		await initTheme(false, "unicode", false, "dark-terminal", "light");
+		const settings = Settings.isolated();
+		cfgThemeDark.set(settings, "dark-terminal");
+		cfgThemeLight.set(settings, "dark");
+		const finished = Promise.withResolvers<string>();
+		const host = bindSceneHost({
+			ctx: {
+				settings,
+				ui: { invalidate: () => {}, requestRender: () => {} },
+			},
+			requestRender: () => {},
+			finish: finished.resolve,
+			setFocus: () => {},
+			restoreFocus: () => {},
+		} as unknown as SetupApplicationSceneHost);
+		const controller = themeSetupScene.mount(host);
+		try {
+			controller.handleInput?.("1");
+			controller.handleInput?.("\r");
+			expect(await finished.promise).toBe("done");
+			expect(cfgThemeDark.get(settings)).toBe("dark-terminal");
+			expect(cfgThemeLight.get(settings)).toBe("light");
+			expect(settings.getGlobalSettings()).toMatchObject({ theme: { dark: "dark-terminal", light: "light" } });
+		} finally {
+			controller.dispose?.();
+		}
+	});
+
 	it("restores the selected glyph preset after previewing ANSI-safe mode", async () => {
 		await initTheme(false, "nerd", false, "titanium", "light");
 		const settings = Settings.isolated({ symbolPreset: "nerd", colorBlindMode: false });

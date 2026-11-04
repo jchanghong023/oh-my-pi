@@ -26,7 +26,6 @@ import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "..
 import { isNativeRendering } from "../native/state";
 import { NativeImageCache, nativeMediaNode } from "../native/blobs";
 import { linkedImageText } from "../prompt/image-references";
-import { createGradientHighlighter } from "../prompt/gradient-highlight";
 import { Memo } from "../native/memo";
 import { DEFAULT_SPINNER_INTERVAL_MS, spinnerAnimated, spinnerInterval } from "../spinner-clock";
 import { EMPTY_LINK_TARGETS, resolveImageOptions } from "../render/render-utils";
@@ -55,12 +54,6 @@ import { chatTranscriptDisplayPreferences as displayPreferences } from "./displa
  */
 const MAX_TRANSCRIPT_ERROR_ROWS = 8;
 const EMPTY_STABLE_RENDER: readonly string[] = [];
-export const paintCompactToolActivity = createGradientHighlighter({
-	probe: "",
-	highlight: /[^\n]+/gu,
-	stops: 14,
-	hue: t => t * 330,
-});
 /** Text renderers that threw once; each failure is logged once per renderer, not per frame. */
 const failedTextRenderers = new WeakSet<AssistantTextRenderer>();
 

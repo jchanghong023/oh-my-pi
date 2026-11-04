@@ -1404,4 +1404,92 @@ mod tests {
 			.unwrap();
 		assert_eq!(value, 10000);
 	}
+
+	// Global accounting is exercised in a separate test process so other
+	// parallel unit tests cannot change the sampled budget or masquerade as
+	// leaked bytes.
+	#[test]
+	fn shared_cache_admission_shrink_clear_and_drop_return_every_reserved_byte() {
+		const CHILD: &str = "OMP_KNOWLEDGE_CACHE_ACCOUNTING_TEST";
+		if std::env::var_os(CHILD).is_none() {
+			let output = std::process::Command::new(std::env::current_exe().unwrap())
+				.args(["--exact", "database::hybrid::tests::shared_cache_admission_shrink_clear_and_drop_return_every_reserved_byte", "--nocapture"])
+				.env(CHILD, "1")
+				.output().unwrap();
+			assert!(
+				output.status.success(),
+				"{}\n{}",
+				String::from_utf8_lossy(&output.stdout),
+				String::from_utf8_lossy(&output.stderr)
+			);
+			assert!(
+				String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+				"isolated test must actually execute"
+			);
+			return;
+		}
+		assert_eq!(HYBRID_DATA_BYTES.load(Ordering::Relaxed), 0);
+		let first = HybridDataCache::new();
+		let second = HybridDataCache::new();
+		HYBRID_DATA_BUDGET.store(1024, Ordering::Relaxed);
+		let entry = |id| RankedSection {
+			section_id: id,
+			shape:      query::Shape::Content,
+			match_kind: MatchKind::Related,
+			rank:       0.0,
+		};
+		for id in [1, 2] {
+			first.insert_candidate("guard", "query", &entry(id));
+		}
+		for id in [3, 4] {
+			second.insert_candidate("guard", "query", &entry(id));
+		}
+		let retained = first.0.borrow().bytes + second.0.borrow().bytes;
+		assert!(retained > 0 && retained <= 1024);
+		assert_eq!(HYBRID_DATA_BYTES.load(Ordering::Relaxed), retained);
+		assert!(first.candidate("guard", "query", 1).is_some());
+		// Shrinking the shared budget trims only the active owner, leaving idle
+		// owners alone until they next execute or are explicitly cleared/dropped.
+		let idle_bytes = second.0.borrow().bytes;
+		HYBRID_DATA_BUDGET.store(400, Ordering::Relaxed);
+		assert!(first.reserve(&mut first.0.borrow_mut(), 0));
+		assert_eq!(second.0.borrow().bytes, idle_bytes);
+		assert!(HYBRID_DATA_BYTES.load(Ordering::Relaxed) <= 400);
+		first.clear();
+		drop(first);
+		drop(second);
+		assert_eq!(HYBRID_DATA_BYTES.load(Ordering::Relaxed), 0);
+
+		HYBRID_DATA_BUDGET.store(1024, Ordering::Relaxed);
+		let barrier = Arc::new(std::sync::Barrier::new(9));
+		std::thread::scope(|scope| {
+			for owner in 0..8 {
+				let barrier = Arc::clone(&barrier);
+				scope.spawn(move || {
+					let cache = HybridDataCache(
+						RefCell::new(HybridData {
+							hits:       VecDeque::new(),
+							candidates: VecDeque::new(),
+							bytes:      0,
+						}),
+						MAX_HYBRID_DATA_BUDGET,
+					);
+					barrier.wait();
+					for offset in 0..4 {
+						cache.insert_candidate("guard", "query", &entry(owner * 4 + offset));
+					}
+					barrier.wait();
+					barrier.wait();
+					// Drop returns admission even for an owner whose last operation
+					// had no capacity to retain another candidate.
+				});
+			}
+			barrier.wait();
+			barrier.wait();
+			let used = HYBRID_DATA_BYTES.load(Ordering::Relaxed);
+			barrier.wait();
+			assert!(used > 0 && used <= 1024, "concurrent owners retained {used} bytes");
+		});
+		assert_eq!(HYBRID_DATA_BYTES.load(Ordering::Relaxed), 0);
+	}
 }

@@ -998,3 +998,49 @@ fn groups() -> Vec<u32> {
 const fn groups() -> Vec<u32> {
 	Vec::new()
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::bash::{CmdTag, EnvView, Host as _, RunId, Via, Vpid};
+
+	/// The native boundary rejects the whole invocation, not just the corrupt
+	/// operand; a valid preceding mkdir operand must not create a directory.
+	#[tokio::test]
+	async fn native_builtin_rejects_raw_arguments_before_any_side_effect() {
+		let dir = tempfile::tempdir().expect("isolated builtin directory");
+		let cwd = BString::from(dir.path().as_os_str().as_encoded_bytes());
+		let mut host =
+			PiHost::new(Box::new(crate::sys::StdFs::default()), tokio::runtime::Handle::current());
+		host.set_tools(ToolConfig::from_env(&[], None, tokio::runtime::Handle::current()));
+		let Resolved::Native(command) = host.resolve(BStr::new("mkdir"), ModeId::Bash, ResolveCtx {
+			has_slash: false,
+			via:       Via::Plain,
+		}) else {
+			panic!("mkdir must resolve to the native builtin");
+		};
+		let argv = [
+			BString::from("mkdir"),
+			BString::from("must-not-exist"),
+			BString::from(&b"invalid-\xff"[..]),
+		];
+		let env = EnvView::new(Vec::new());
+		let inv = Invocation {
+			argv:      &argv,
+			env:       &env,
+			cwd:       cwd.as_bstr(),
+			stdio:     std::array::from_fn(|_| FdRef::closed()),
+			extra_fds: &[],
+			tag:       CmdTag { run: RunId(1), vpid: Vpid(1), seq: 1 },
+			vpid:      Vpid(1),
+			umask:     0o022,
+		};
+		let error = match host.start(&command, inv) {
+			Ok(_) => panic!("string-only builtin accepted a non-UTF-8 argument"),
+			Err(error) => error,
+		};
+		assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+		assert_eq!(error.to_string(), "builtin cannot accept non-UTF-8 argument");
+		assert!(!dir.path().join("must-not-exist").exists(), "partial argv must never execute");
+	}
+}

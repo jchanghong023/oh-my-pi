@@ -46,7 +46,7 @@ import {
 	createInitialState,
 	refreshState,
 } from "@oh-my-pi/pi-tui/overlays/extensions/state-manager";
-import { isShadowedExtension } from "@oh-my-pi/pi-tui/overlays/extensions/types";
+import { type Extension, isShadowedExtension } from "@oh-my-pi/pi-tui/overlays/extensions/types";
 import { restoreEnvValue } from "./helpers/settings-test-state";
 
 describe("loadAllExtensions MCP parity with /mcp list (issue #3827)", () => {
@@ -430,18 +430,27 @@ describe("shared skill runtime/dashboard parity", () => {
 		return rows;
 	};
 
+	// Scope fixture assertions by their on-disk identity, not the invocation names
+	// whose precedence and namespaces these tests are meant to verify. Bundled
+	// providers remain included in the runtime/dashboard parity check above.
+	const panelRows = (rows: Extension[]) =>
+		rows.filter(row => path.basename(path.dirname(row.path)) === "panel-shared");
+
 	test("shows the shared bare winner and both invocable namespace versions", async () => {
 		const rows = await loadAndCompare();
-		expect(rows.map(row => row.name).sort()).toEqual([
-			"configured/panel-shared",
-			"panel-shared",
-			"personal/panel-shared",
-		]);
+		expect(
+			panelRows(rows)
+				.map(row => row.name)
+				.sort(),
+		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
 		const shared = rows.find(row => row.name === "panel-shared")!;
 		expect(shared.path).toBe(path.join(sharedDir, "panel-shared", "SKILL.md"));
 		expect(shared.source.providerName).toBe("Shared");
 		expect(rows.find(row => row.name === "personal/panel-shared")?.path).toBe(
 			path.join(root, "personal", "skills", "panel-shared", "SKILL.md"),
+		);
+		expect(rows.find(row => row.name === "configured/panel-shared")?.path).toBe(
+			path.join(projectDir, "configured", "panel-shared", "SKILL.md"),
 		);
 	});
 
@@ -490,7 +499,7 @@ describe("shared skill runtime/dashboard parity", () => {
 
 	test("keeps disabled rows through the existing toggle and refresh state APIs without editing skills", async () => {
 		const initial = await loadAndCompare();
-		const originalBytes = await Promise.all(initial.map(row => fs.readFile(row.path, "utf8")));
+		const originalBytes = await Promise.all(panelRows(initial).map(row => fs.readFile(row.path, "utf8")));
 		const providers = runtime.getProviders();
 		let state = createInitialState(initial, providers);
 		const aliasId = "skill:personal/panel-shared";
@@ -498,7 +507,7 @@ describe("shared skill runtime/dashboard parity", () => {
 		state = applyDisabledExtensionsToState(state, runtime.getDisabledExtensions(), providers);
 		expect(state.extensions.find(row => row.id === aliasId)?.state).toBe("disabled");
 		state = refreshState(state, await loadAndCompare(), providers);
-		expect(state.extensions).toHaveLength(3);
+		expect(state.extensions.map(row => row.id).sort()).toEqual(initial.map(row => row.id).sort());
 		expect(state.extensions.find(row => row.id === aliasId)?.disabledReason).toBe("item-disabled");
 		expect(state.extensions.find(row => row.name === "panel-shared")?.state).toBe("active");
 
@@ -508,17 +517,28 @@ describe("shared skill runtime/dashboard parity", () => {
 
 		runtime.setDisabledExtensions(["skill:panel-shared"]);
 		const disabled = await loadAndCompare();
-		expect(disabled).toHaveLength(3);
-		expect(disabled.every(row => row.state === "disabled")).toBe(true);
+		expect(disabled.map(row => row.id).sort()).toEqual(initial.map(row => row.id).sort());
+		expect(panelRows(disabled).map(row => ({ name: row.name, state: row.state }))).toEqual(
+			panelRows(initial).map(row => ({ name: row.name, state: "disabled" })),
+		);
+		expect(
+			disabled.filter(row => !panelRows(disabled).includes(row)).map(row => ({ id: row.id, state: row.state })),
+		).toEqual(
+			initial.filter(row => !panelRows(initial).includes(row)).map(row => ({ id: row.id, state: row.state })),
+		);
 		runtime.setDisabledExtensions([]);
 		await loadAndCompare();
-		expect(await Promise.all(initial.map(row => fs.readFile(row.path, "utf8")))).toEqual(originalBytes);
+		expect(await Promise.all(panelRows(initial).map(row => fs.readFile(row.path, "utf8")))).toEqual(originalBytes);
 	});
 
 	test("keeps configured include, ignore, and master-disabled skills visible for management", async () => {
 		cfgSkillsIncludeSkills.set(settings, ["personal/*"]);
 		const included = await loadAndCompare();
-		expect(included).toHaveLength(3);
+		expect(
+			panelRows(included)
+				.map(row => row.name)
+				.sort(),
+		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
 		expect(included.filter(row => row.state === "active").map(row => row.name)).toEqual(["personal/panel-shared"]);
 		cfgSkillsIgnoredSkills.set(settings, ["personal/*"]);
 		expect((await loadAndCompare()).every(row => row.state === "disabled")).toBe(true);
@@ -595,9 +615,21 @@ describe("shared skill runtime/dashboard parity", () => {
 		const replacementPath = await writeSkill(replacementDir, "Replacement shared version");
 		restoreEnvValue("OMP_SKILLS_DIR", replacementDir);
 		const refreshed = await loadAndCompare();
-		expect(refreshed).toHaveLength(3);
+		expect(
+			panelRows(refreshed)
+				.map(row => row.name)
+				.sort(),
+		).toEqual(["configured/panel-shared", "panel-shared", "personal/panel-shared"]);
 		expect(refreshed.find(row => row.name === "panel-shared")?.path).toBe(replacementPath);
 		expect(refreshed.find(row => row.name === "panel-shared")?.description).toBe("Replacement shared version");
 		expect(refreshed.find(row => row.name === "personal/panel-shared")?.state).toBe("active");
+		expect(refreshed.find(row => row.name === "personal/panel-shared")?.path).toBe(
+			path.join(root, "personal", "skills", "panel-shared", "SKILL.md"),
+		);
+		expect(refreshed.find(row => row.name === "configured/panel-shared")).toMatchObject({
+			state: "active",
+			path: path.join(projectDir, "configured", "panel-shared", "SKILL.md"),
+		});
+		expect(refreshed.some(row => row.path === path.join(sharedDir, "panel-shared", "SKILL.md"))).toBe(false);
 	});
 });

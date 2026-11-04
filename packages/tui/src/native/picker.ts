@@ -74,8 +74,8 @@ export function pickerAction(
 	return { id, label, ...(caps && caps.length > 0 ? { keys: caps } : {}), ...opts };
 }
 
-/** The right-aligned `Close esc` every picker ends with; Tern's backdrop and head `esc` send it too. */
-export const CLOSE_ACTION: TspPickerAction = { id: "close", label: "Close", keys: ["esc"], end: true };
+/** The right-aligned close action every picker ends with; Tern's backdrop and head `esc` send it too. */
+export const CLOSE_ACTION: TspPickerAction = { id: "close", label: "关闭", keys: ["esc"], end: true };
 
 /** A `time` fact: the compact age of `at` (`now`, `5m`, `2h`, `3d`, `2w`, `6mo`, `1y`). */
 export function pickerAge(at: Date | number, now = Date.now()): string {

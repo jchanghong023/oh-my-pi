@@ -833,4 +833,81 @@ mod tests {
 		assert_eq!(char_index(&line, 3), 2);
 		assert_eq!(char_index(&line, 5), 4);
 	}
+
+	/// Insertion stops at the platform's byte bound, not a character count.
+	/// The visible search status retains the old text when insertion is refused.
+	#[test]
+	fn insertion_at_the_path_buffer_limit_keeps_the_search_text() {
+		use crate::{
+			bash::{
+				Cx,
+				vm::zle::{Context as EditContext, Editor, Zle},
+			},
+			testkit::{FakeHost, Rig, fault::skeleton_init},
+		};
+
+		#[cfg(unix)]
+		let limit = libc::PATH_MAX as usize;
+		#[cfg(not(unix))]
+		let limit = 1024;
+		for (text, accepts) in
+			[("x".repeat(limit - 1), true), ("x".repeat(limit), false), ("é".repeat(limit / 2), false)]
+		{
+			let mut rig = Rig::new(FakeHost::new(), skeleton_init(&[]));
+			let (shell, host, store) = rig.parts();
+			let mut cx = Cx { host, store };
+			let mut zle = Zle::new(false);
+			let mut ed = Editor::new(EditContext::LineStart, 0);
+			ed.lastchar_wide = Some('Z');
+			let mut zw = Zw {
+				k:    &mut shell.k,
+				cx:   &mut cx,
+				vp:   &mut shell.procs[0],
+				zle:  &mut zle,
+				ed:   &mut ed,
+				args: &[],
+			};
+			let search = Isearch {
+				sbuf:          text.chars().collect(),
+				top_spot:      0,
+				spots:         Vec::new(),
+				nomatch:       0,
+				skip_line:     false,
+				skip_pos:      false,
+				odir:          -1,
+				dir:           -1,
+				shown_dir:     -1,
+				status_full:   false,
+				bad:           b"XXXXXXX",
+				sens:          3,
+				pattern:       false,
+				hl:            0,
+				pos:           0,
+				pat_hl:        0,
+				pat_pos:       0,
+				revert_patpos: false,
+				dup_ok:        false,
+				end_pos:       0,
+				savekeys:      None,
+				feep:          false,
+				nosearch:      true,
+				okeymap:       "main".into(),
+				patprog:       None,
+				matchlist:     None,
+				exitfn:        None,
+				aborted:       false,
+				zt:            Vec::new(),
+				last_line:     Vec::new(),
+				env:           CharEnvBuf::default(),
+			};
+			let _continuation = insert(&mut zw, Box::new(search));
+			let status = zw
+				.ed
+				.statusline
+				.as_ref()
+				.expect("visible incremental search status");
+			let expected = format!("{}{}_", text, if accepts { "Z" } else { "" });
+			assert!(status.ends_with(expected.as_bytes()), "search insertion at {} bytes", text.len());
+		}
+	}
 }

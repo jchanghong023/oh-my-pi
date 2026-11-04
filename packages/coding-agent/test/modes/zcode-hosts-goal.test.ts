@@ -324,27 +324,47 @@ describe("RPC goal command", () => {
 
 	test("an extension session change aborts the detached run's prompt; the command's own result is unaffected", async () => {
 		const rpc = await start({ continuation: false, script: "slow" });
-		const { results, statusOf, unsubscribe } = watchPromptResults(rpc);
+		const { statusOf, unsubscribe } = watchPromptResults(rpc);
 		const started = Promise.withResolvers<void>();
+		const replacementStarted = Promise.withResolvers<void>();
+		let agentStarts = 0;
 		const unsubscribeEvents = rpc.onEvent(event => {
-			if (event.type === "agent_start") started.resolve();
+			if (event.type !== "agent_start") return;
+			agentStarts++;
+			if (agentStarts === 1) started.resolve();
+			else replacementStarted.resolve();
 		});
 		try {
 			const first = await rpc.prompt("first, stalls");
 			await withTimeout(started.promise, 10_000, "First run never started");
-			// The command then starts a run of its own in the new session.
-			await rpc.promptAndWait("/goaltest-new-session hello from the new session");
+			// The command starts a run of its own in the new session. Track its
+			// result by id rather than leaving a promptAndWait pending at teardown.
+			const command = await rpc.prompt("/goaltest-new-session hello from the new session");
 			// The detached run never yields; its prompt must still be closed, as aborted.
 			expect(await withTimeout(statusOf(first), 10_000, "The detached run's prompt was never reported")).toBe(
 				"aborted",
 			);
+			await withTimeout(replacementStarted.promise, 5_000, "The replacement session's run never started");
+			// agent_start precedes provider admission. If replacement cancelled
+			// the first run before the mock handler consumed its one slow turn,
+			// that stall belongs to the new run instead. Release it only AFTER
+			// observing the old prompt's abort, so release cannot complete the old
+			// prompt and mask a broken detach.
+			const release = await rpc.prompt("/goaltest-release");
+			expect(await withTimeout(statusOf(command), 10_000, "The session-change command never completed")).toBe(
+				"completed",
+			);
+			expect(await withTimeout(statusOf(release), 5_000, "The release command never completed")).toBe("completed");
 			const state = await rpc.getState();
 			expect(state.isSettled).toBe(true);
 		} finally {
-			unsubscribe();
-			unsubscribeEvents();
+			try {
+				await rpc.abort();
+			} finally {
+				unsubscribe();
+				unsubscribeEvents();
+			}
 		}
-		expect([...results.values()].filter(status => status !== "aborted")).toEqual(["completed"]);
 	}, 30_000);
 
 	test("an extension navigation during a live run leaves that run's prompt to complete normally", async () => {

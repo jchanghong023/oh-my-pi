@@ -1040,3 +1040,134 @@ fn input_output_error() -> io::Error {
 		io::ErrorKind::Other.into()
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn spec(recv: bool, interact: bool) -> XferSpec {
+		XferSpec {
+			recv,
+			data_fd: 10,
+			fromasc: false,
+			toasc: false,
+			block: true,
+			tmout: 0,
+			interact,
+			one: false,
+			eof: false,
+		}
+	}
+
+	/// Native BrokenPipe classification controls both status and suppression;
+	/// another error must remain visible even in an interactive shell.
+	#[test]
+	fn transfer_error_classification_preserves_interactive_pipe_semantics() {
+		for recv in [false, true] {
+			for interact in [false, true] {
+				let spec = spec(recv, interact);
+				let mut read = Xfer::new(&spec);
+				read.got(&spec, -1, Some(io::ErrorKind::BrokenPipe.into()));
+				assert!(read.out.done);
+				assert_eq!(
+					read.out.ret,
+					if recv {
+						1
+					} else if interact {
+						3
+					} else {
+						2
+					}
+				);
+				assert_eq!(read.out.msgs.is_empty(), interact);
+				if !interact {
+					assert_eq!(read.out.msgs[0], (true, "read failed: broken pipe".into()));
+				}
+				let mut write = Xfer::new(&spec);
+				write.wrote_fail(&spec, Some(io::ErrorKind::BrokenPipe.into()));
+				assert!(write.out.done);
+				assert_eq!(
+					write.out.ret,
+					if !recv {
+						1
+					} else if interact {
+						3
+					} else {
+						2
+					}
+				);
+				assert_eq!(write.out.msgs.is_empty(), interact);
+				if !interact {
+					assert_eq!(write.out.msgs[0], (true, "write failed: broken pipe".into()));
+				}
+				let mut other = Xfer::new(&spec);
+				other.got(&spec, -1, Some(io::ErrorKind::PermissionDenied.into()));
+				assert_eq!(other.out.ret, if recv { 1 } else { 2 });
+				assert_eq!(other.out.msgs, [(true, "read failed: permission denied".into())]);
+			}
+		}
+	}
+
+	/// A closed output fd reports the engine's portable EBADF equivalent.
+	#[test]
+	fn sending_to_a_closed_data_descriptor_reports_bad_fd() {
+		let spec = spec(false, false);
+		let mut transfer = Xfer::new(&spec);
+		let descriptor = FdRef::closed();
+		let Poll::Ready(Err(error)) =
+			descriptor.poll_write(&mut Context::from_waker(std::task::Waker::noop()), b"payload")
+		else {
+			panic!("writing to a closed descriptor must fail");
+		};
+		transfer.wrote_fail(&spec, Some(error));
+		assert_eq!(transfer.out, XferOut {
+			ret: 1,
+			done: true,
+			msgs: vec![(true, "write failed: bad file descriptor".into())],
+			..XferOut::default()
+		});
+	}
+
+	/// Invalid and truncated block payloads fail through portable I/O errors,
+	/// with the original Unix EIO diagnostic retained on Unix.
+	#[test]
+	fn malformed_blocks_produce_transfer_errors_without_native_errno_aliases() {
+		use std::io::{Seek as _, Write as _};
+
+		use crate::{
+			bash::{MemStore, Vpid, fd::FdTable},
+			sys::StdFile,
+			testkit::FakeHost,
+		};
+
+		for (bytes, diagnostic) in [
+			(&[0, 0x80, 1][..], "block too large to handle"),
+			(&[0, 0, 4, b'a'][..], "short data block"),
+		] {
+			let mut input = tempfile::tempfile().expect("data connection");
+			input.write_all(bytes).expect("block bytes");
+			input.rewind().expect("rewind data connection");
+			let mut vp = Vproc::new(Vpid(1), None, FdTable::default(), "/".into(), None, false);
+			vp.fds
+				.set(10, Some(FdRef::from_file(Box::new(StdFile::new(input)))));
+			let mut host = FakeHost::new();
+			let mut store = MemStore::default();
+			let mut cx = Cx { host: &mut host, store: &mut store };
+			let spec = spec(true, false);
+			let mut transfer = Xfer::new(&spec);
+			let result = transfer
+				.run(&mut Context::from_waker(std::task::Waker::noop()), &mut cx, &vp, &spec)
+				.expect("regular file data connection is ready");
+			assert_eq!((result.ret, result.done, result.n), (1, true, 0), "{diagnostic}");
+			assert_eq!(result.msgs.len(), 2, "{diagnostic}");
+			assert_eq!(result.msgs[0], (false, diagnostic.into()));
+			#[cfg(unix)]
+			assert_eq!(result.msgs[1], (true, "read failed: Input/output error".into()));
+			#[cfg(not(unix))]
+			{
+				assert_eq!(input_output_error().raw_os_error(), None);
+				assert_eq!(result.msgs[1], (true, "read failed: input/output error".into()));
+			}
+		}
+	}
+}

@@ -43,6 +43,38 @@ describe("ZCode artifact release version", () => {
 	it("preserves a valid explicit version with build metadata", () => {
 		expect(requireArtifactVersion("18.12.5+fork.9")).toBe("18.12.5+fork.9");
 	});
+
+	it("ignores ZCODE_ARTIFACT_ROOT and invalid release provenance during a dry run", async () => {
+		using temp = TempDir.createSync("@omp-artifact-dry-run-");
+		const outputRoot = temp.join("existing-artifacts");
+		await fs.mkdir(outputRoot);
+		const sentinel = path.join(outputRoot, "keep.json");
+		await Bun.write(sentinel, '{"userOwned":true}\n');
+		const child = Bun.spawn(
+			[process.execPath, "scripts/ci-release-build-binaries.ts", "--dry-run", "--targets", "linux-x64,win32-x64"],
+			{
+				cwd: repoRoot,
+				env: {
+					...process.env,
+					ZCODE_ARTIFACT_ROOT: outputRoot,
+					RELEASE_VERSION: "not-a-version",
+					RELEASE_COMMIT: "0".repeat(40),
+				},
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [code, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		]);
+		expect(code, stderr).toBe(0);
+		expect(stdout).toContain("DRY RUN Bun.build target=bun-linux-x64-baseline");
+		expect(stdout).toContain("DRY RUN Bun.build target=bun-windows-x64-baseline");
+		expect(await fs.readdir(outputRoot)).toEqual(["keep.json"]);
+		expect(await Bun.file(sentinel).text()).toBe('{"userOwned":true}\n');
+	});
 });
 
 describe("Windows release binary target", () => {
@@ -55,15 +87,32 @@ describe("Windows release binary target", () => {
 		const output = result.text();
 		expect(output).toContain("DRY RUN bun --cwd=packages/collab-web run gen:export-viewer --check");
 
-		expect(output).toContain("Building packages/coding-agent/binaries/omp-windows-x64.exe...");
-		expect(output).toContain(
-			"DRY RUN Bun.build target=bun-windows-x64-baseline outfile=packages/coding-agent/binaries/omp-windows-x64.exe",
+		const buildPlans = Array.from(output.matchAll(/^DRY RUN Bun\.build (.+)$/gm), match =>
+			Object.fromEntries(
+				(match[1] ?? "").split(/\s+/).map((field): [string, string] => {
+					const [key = "", value = ""] = field.split("=", 2);
+					return [key, value];
+				}),
+			),
 		);
-		expect(output).toContain("Building packages/coding-agent/binaries/omp-windows-arm64.exe...");
-		expect(output).toContain(
-			"DRY RUN Bun.build target=bun-windows-arm64 outfile=packages/coding-agent/binaries/omp-windows-arm64.exe",
+		expect(buildPlans).toHaveLength(2);
+		expect(buildPlans.map(build => ({ target: build.target, outfile: build.outfile }))).toEqual(
+			expect.arrayContaining([
+				{
+					target: "bun-windows-x64-baseline",
+					outfile: "packages/coding-agent/binaries/omp-windows-x64.exe",
+				},
+				{
+					target: "bun-windows-arm64",
+					outfile: "packages/coding-agent/binaries/omp-windows-arm64.exe",
+				},
+			]),
 		);
-		expect(output).toContain("external=fastembed,onnxruntime-node");
+		for (const build of buildPlans) {
+			const external = new Set((build.external ?? "").split(","));
+			expect(external.has("fastembed")).toBe(true);
+			expect(external.has("onnxruntime-node")).toBe(true);
+		}
 		expect(output).not.toContain("bun-windows-x64-modern");
 	});
 

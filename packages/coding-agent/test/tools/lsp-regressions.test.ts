@@ -840,6 +840,7 @@ describe("lsp regressions", () => {
 	it("rejects code action apply without a selector and applies a selected action", async () => {
 		const tempDir = TempDir.createSync("@omp-lsp-action-selector-");
 		let executed = 0;
+		let failCommand = false;
 		try {
 			const config: ServerConfig = { command: "fake-lsp", fileTypes: [".ts"], rootMarkers: [] };
 			installFakeLsp((message, server) => {
@@ -849,7 +850,15 @@ describe("lsp regressions", () => {
 					server.send({ jsonrpc: "2.0", id: message.id, result: [{ title: "Fix it", command: "fix" }] });
 				} else if (message.method === "workspace/executeCommand") {
 					executed++;
-					server.send({ jsonrpc: "2.0", id: message.id, result: null });
+					server.send(
+						failCommand
+							? {
+									jsonrpc: "2.0",
+									id: message.id,
+									error: { code: -32603, message: "fixture application rejected" },
+								}
+							: { jsonrpc: "2.0", id: message.id, result: null },
+					);
 				} else if (message.method === "shutdown") {
 					server.send({ jsonrpc: "2.0", id: message.id, result: null });
 				} else if (message.method === "exit") {
@@ -893,6 +902,21 @@ describe("lsp regressions", () => {
 			expect(result.details?.success).toBe(true);
 			expect(result.isError).not.toBe(true);
 			expect(executed).toBe(1);
+			failCommand = true;
+			const failed = await tool.execute("failed-action", {
+				action: "code_actions",
+				file,
+				line: 1,
+				apply: true,
+				query: "Fix",
+			});
+			expect(failed.details?.success).toBe(false);
+			expect(failed.isError).toBe(true);
+			expect(failed.content[0]).toMatchObject({
+				type: "text",
+				text: expect.stringContaining("fixture application rejected"),
+			});
+			expect(executed).toBe(2);
 		} finally {
 			await lspClient.shutdownAll();
 			tempDir.removeSync();

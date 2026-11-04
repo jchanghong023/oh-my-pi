@@ -89,7 +89,19 @@ async function git(cwd: string, ...args: string[]) {
 	if (code !== 0) throw new Error(`git ${args.join(" ")}: ${stderr}`);
 }
 
-async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "missing-plan" | "planner-only") {
+async function scenario(
+	mode:
+		| "partial"
+		| "drift"
+		| "split"
+		| "plan-role"
+		| "missing-plan"
+		| "planner-only"
+		| "default"
+		| "shared"
+		| "no-tools"
+		| "auto",
+) {
 	using dir = TempDir.createSync("@omp-openwiki-generation-");
 	const root = dir.join("repo");
 	const home = dir.join("home");
@@ -102,6 +114,14 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 	await writeFile(path.join(root, "README.md"), "# Fixture\n\nStable source.\n");
 	await git(root, "add", "README.md");
 	await git(root, "commit", "--quiet", "-m", "fixture");
+	if (mode === "default") {
+		await mkdir(path.join(root, "openwiki"), { recursive: true });
+		await mkdir(path.join(root, ".github", "workflows"), { recursive: true });
+		await writeFile(path.join(root, "openwiki", "old.md"), "# Obsolete generated page\n");
+		await writeFile(path.join(root, "openwiki", "INSTRUCTIONS.md"), "Keep user-owned Wiki guidance.\n");
+		await writeFile(path.join(root, "CLAUDE.md"), "# Existing standalone instructions\n");
+		await writeFile(path.join(root, ".github", "workflows", "openwiki.yml"), "# User-owned workflow\n");
+	}
 	const requests: Request[] = [];
 	let changed = false;
 	const server = Bun.serve({
@@ -169,7 +189,7 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 			path.join(agentDir, "models.yml"),
 			Bun.YAML.stringify({
 				providers: {
-					fixture: {
+					deepseek: {
 						baseUrl: `http://127.0.0.1:${server.port}/v1`,
 						api: "openai-completions",
 						auth: "none",
@@ -177,6 +197,7 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 							id,
 							name: id,
 							reasoning: true,
+							supportsTools: mode !== "no-tools",
 							thinking: { mode: "effort", efforts: ["low", "medium", "high", "xhigh"] },
 							compat: { supportsReasoningEffort: true, reasoningDisableMode: "none-effort" },
 							input: ["text"],
@@ -187,27 +208,34 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 				},
 			}),
 		);
-		const explicitModel = mode === "partial" || mode === "split";
+		const explicitModel = mode === "partial" || mode === "split" || mode === "shared";
 		const modelRoles: Record<string, string> = {
-			default: explicitModel ? "fixture/not-the-selected-model" : "fixture/fixture-model",
+			default: explicitModel ? "deepseek/not-the-selected-model" : "deepseek/fixture-model",
+			task: "deepseek/task-must-not-be-selected",
 		};
-		if (mode !== "drift") {
+		if (mode !== "drift" && mode !== "default") {
 			modelRoles.plan =
 				mode === "missing-plan"
-					? "fixture/unavailable-planner"
+					? "deepseek/unavailable-planner"
 					: mode === "split" || mode === "planner-only"
-						? "fixture/fixture-model"
-						: "fixture/planner-model";
+						? "deepseek/fixture-model"
+						: "deepseek/planner-model";
 		}
 		if (mode === "plan-role") {
 			modelRoles.default += ":high";
 			modelRoles.plan += ":medium";
 		}
+		if (mode === "auto") {
+			modelRoles.default += ":auto";
+			modelRoles.plan += ":auto";
+		}
 		const config = Bun.YAML.stringify({ modelRoles, startup: { setupWizard: false } });
 		await writeFile(path.join(agentDir, "config.yml"), config);
-		const selector = explicitModel ? ["--model-id", "fixture/fixture-model:xhigh"] : [];
+		const selector = explicitModel
+			? [mode === "shared" ? "--modelId" : "--model-id", "deepseek/fixture-model:xhigh"]
+			: [];
 		if (mode === "split" || mode === "planner-only") {
-			selector.push("--planner-model", mode === "split" ? "fixture/planner-model:off" : "fixture/planner-model");
+			selector.push("--planner-model", mode === "split" ? "deepseek/planner-model:off" : "deepseek/planner-model");
 		}
 		if (mode === "planner-only") selector.push("--debug");
 		const telemetry = mode === "drift" ? "README.md/telemetry.json" : "nested/telemetry/record.json";
@@ -220,8 +248,7 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 				"openwiki",
 				"code",
 				"--init",
-				"--language",
-				"en",
+				...(mode === "default" ? [] : ["--language", "en"]),
 				"--print",
 				"--telemetry-file",
 				telemetry,
@@ -270,18 +297,25 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 			expect(existsSync(path.join(root, "openwiki"))).toBe(false);
 			return;
 		}
+		if (mode === "no-tools") {
+			expect(code, output).toBe(1);
+			expect(stderr).toContain("does not support tool calling");
+			expect(requests).toEqual([]);
+			expect(existsSync(path.join(root, "openwiki"))).toBe(false);
+			return;
+		}
 		if (mode === "planner-only") {
 			const debugLine = stderr.split("\n").find(line => line.startsWith("OpenWiki debug: model="));
-			expect(debugLine).toMatch(/\bmodel=fixture\/fixture-model\b/);
-			expect(debugLine).toMatch(/\bplannerModel=fixture\/planner-model\b/);
+			expect(debugLine).toMatch(/\bmodel=deepseek\/fixture-model\b/);
+			expect(debugLine).toMatch(/\bplannerModel=deepseek\/planner-model\b/);
 		}
 		const plannerRequests = requests.filter(req => req.tools?.some(tool => tool.function?.name === "submit_plan"));
 		const pageRequests = requests.filter(req => req.tools?.some(tool => tool.function?.name === "submit_page"));
 		expect(new Set(plannerRequests.map(req => req.model)), output).toEqual(
-			new Set([mode === "partial" || mode === "drift" ? "fixture-model" : "planner-model"]),
+			new Set(["partial", "drift", "default", "shared"].includes(mode) ? ["fixture-model"] : ["planner-model"]),
 		);
 		expect(new Set(pageRequests.map(req => req.model)), output).toEqual(new Set(["fixture-model"]));
-		if (mode === "partial" || mode === "split" || mode === "plan-role") {
+		if (mode === "partial" || mode === "split" || mode === "plan-role" || mode === "shared") {
 			expect(new Set(pageRequests.map(req => req.reasoning_effort)), output).toEqual(
 				new Set([mode === "plan-role" ? "high" : "xhigh"]),
 			);
@@ -289,13 +323,37 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 				new Set([mode === "split" ? "none" : mode === "plan-role" ? "medium" : "xhigh"]),
 			);
 		}
+		if (mode === "default" || mode === "planner-only" || mode === "auto") {
+			expect(
+				requests.every(req => req.reasoning_effort === undefined),
+				output,
+			).toBe(true);
+		}
+		expect(requests.every(req => !req.tools?.some(tool => tool.function?.name === "task"))).toBe(true);
 		expect(
 			requests.some(req =>
 				req.messages.some(message => message.role === "tool" && message.tool_call_id === "call_submit_plan"),
 			),
 		).toBe(true);
-		expect(existsSync(path.join(root, ".github", "workflows"))).toBe(false);
-		expect(existsSync(path.join(root, "CLAUDE.md"))).toBe(false);
+		if (mode === "default") {
+			expect(await readFile(path.join(root, "CLAUDE.md"), "utf8")).toBe("# Existing standalone instructions\n");
+			expect(await readFile(path.join(root, ".github", "workflows", "openwiki.yml"), "utf8")).toBe(
+				"# User-owned workflow\n",
+			);
+			expect(await readFile(path.join(root, "openwiki", "INSTRUCTIONS.md"), "utf8")).toBe(
+				"Keep user-owned Wiki guidance.\n",
+			);
+			expect(existsSync(path.join(root, "openwiki", "old.md"))).toBe(false);
+			expect(JSON.parse(await readFile(path.join(root, "openwiki", ".last-update.json"), "utf8")).language).toBe(
+				"zh-CN",
+			);
+		} else {
+			expect(existsSync(path.join(root, ".github", "workflows"))).toBe(false);
+			expect(existsSync(path.join(root, "CLAUDE.md"))).toBe(false);
+		}
+		const instructions = await readFile(path.join(root, "AGENTS.md"), "utf8");
+		expect(instructions).toContain("openwiki_search");
+		expect(instructions).toContain("openwiki_read");
 		expect(existsSync(dir.join("standalone"))).toBe(false);
 		if (mode !== "drift") {
 			expect(JSON.parse(await readFile(path.join(root, telemetry), "utf8"))).toMatchObject({
@@ -311,6 +369,7 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 				output,
 			).toBe(true);
 			expect(code, output).not.toBe(0);
+			expect(pageRequests).toHaveLength(2);
 			expect(output).toMatch(/fail|skip|incomplete/i);
 			const metadata = path.join(root, "openwiki", ".last-update.json");
 			if (existsSync(metadata)) expect(JSON.parse(await readFile(metadata, "utf8")).status).not.toBe("complete");
@@ -332,10 +391,16 @@ async function scenario(mode: "partial" | "drift" | "split" | "plan-role" | "mis
 				).not.toBe("complete");
 			}
 		}
-		if (mode === "split" || mode === "plan-role" || mode === "planner-only") {
+		if (
+			mode === "split" ||
+			mode === "plan-role" ||
+			mode === "planner-only" ||
+			mode === "default" ||
+			mode === "shared"
+		) {
 			expect(JSON.parse(await readFile(path.join(root, "openwiki", ".last-update.json"), "utf8"))).toMatchObject({
 				status: "complete",
-				model: "fixture/fixture-model",
+				model: "deepseek/fixture-model",
 			});
 		}
 	} finally {
@@ -364,6 +429,26 @@ describe("omp openwiki generation with a local scripted model", () => {
 	it(
 		"overrides only the planner and reports both actual model IDs while pages use default",
 		async () => scenario("planner-only"),
+		120_000,
+	);
+	it(
+		"defaults to Chinese and reinitializes only generated Wiki content while preserving standalone settings",
+		async () => scenario("default"),
+		120_000,
+	);
+	it(
+		"uses the public explicit model for both phases ahead of roles without changing saved roles",
+		async () => scenario("shared"),
+		120_000,
+	);
+	it(
+		"rejects a selected model without tool support before creating Wiki state",
+		async () => scenario("no-tools"),
+		120_000,
+	);
+	it(
+		"does not send the session auto thinking marker as a provider reasoning effort",
+		async () => scenario("auto"),
 		120_000,
 	);
 });

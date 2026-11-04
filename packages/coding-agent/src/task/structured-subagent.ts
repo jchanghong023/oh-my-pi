@@ -507,7 +507,11 @@ export async function resolveEffectiveSubagentPolicy(
 	];
 	const agent = getAgent(agents, agentName);
 	if (!agent) {
-		const available = agents.map(candidate => candidate.name).join(", ") || "none";
+		const available =
+			agents
+				.filter(candidate => !candidate.hide)
+				.map(candidate => candidate.name)
+				.join(", ") || "none";
 		const searched = discovery.searchedDirs?.map(dir => shortenPath(dir)).join(", ") || "none";
 		throw new StructuredSubagentError(
 			"preflight",
@@ -517,7 +521,7 @@ export async function resolveEffectiveSubagentPolicy(
 	const disabledAgents = cfgTaskDisabledAgents.get(request.session.settings);
 	if (disabledAgents.includes(agentName)) {
 		const enabled = agents
-			.filter(candidate => !disabledAgents.includes(candidate.name))
+			.filter(candidate => !candidate.hide && !disabledAgents.includes(candidate.name))
 			.map(candidate => candidate.name);
 		throw new StructuredSubagentError(
 			"preflight",

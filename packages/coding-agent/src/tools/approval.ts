@@ -364,6 +364,8 @@ export function approvalRestrictions(
  *     (see {@link resolveCachedModeApproval}).
  *  4. A call touching a folder in `restrictions` turns any non-deny result into
  *     a per-call prompt sourced `restriction` (see {@link restrictedFolderReason}).
+ * Tool denials are final; user denials and prompts cannot be relaxed by a
+ * tool-owned allow decision.
  *
  * In yolo mode, override-based tool prompts are ignored; user `tools.approval`
  * settings remain authoritative.
@@ -448,6 +450,17 @@ function resolvePolicy(
 			policy: "deny",
 			tier: decision.tier,
 			override: decision.override,
+			source: "user",
+			...(combinedUserPolicyKey ? { policyKey: combinedUserPolicyKey } : {}),
+		};
+	}
+
+	// A tool's explicit allow never cancels an explicit user request to ask.
+	if (combinedUserPolicy === "prompt" && decision.policy === "allow") {
+		return {
+			policy: "prompt",
+			tier: decision.tier,
+			override: mode !== "yolo" && decision.override,
 			source: "user",
 			...(combinedUserPolicyKey ? { policyKey: combinedUserPolicyKey } : {}),
 		};

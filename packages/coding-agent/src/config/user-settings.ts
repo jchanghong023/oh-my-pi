@@ -28,6 +28,8 @@ export interface UserSettingWrite {
 export interface UserSettingSaveResult {
 	saveState: "complete" | "failed" | "unknown";
 	write: UserSettingWrite;
+	/** Whole-file CAS revision, established while the explicit edit's write lock is held. */
+	revision?: string;
 }
 export class UserSettingError extends Error {
 	constructor(
@@ -58,6 +60,10 @@ export interface UserSettingsStoreOptions {
 	agentDir: string;
 	/** Existing Settings migration, applied only in memory to identify reset sources. */
 	migrate?: (raw: RawSettings) => RawSettings;
+	/** Explicit CLI edits must not initialize a missing configuration. */
+	requireExisting?: boolean;
+	/** Ordinary user-setting consumers retain leaf-scoped conflict detection. */
+	revisionScope?: "setting" | "file";
 }
 
 function leaf(raw: RawSettings, keys: readonly string[]): unknown {
@@ -106,10 +112,14 @@ export class UserSettingsStore {
 	readonly #activeDir: string;
 	readonly #domain: string;
 	readonly #migrate: UserSettingsStoreOptions["migrate"];
+	readonly #requireExisting: boolean;
+	readonly #revisionScope: "setting" | "file";
 	constructor(options: UserSettingsStoreOptions) {
 		this.#activeDir = path.resolve(options.agentDir);
 		this.#migrate = options.migrate;
 		this.#domain = this.#activeDir;
+		this.#requireExisting = options.requireExisting === true;
+		this.#revisionScope = options.revisionScope ?? "setting";
 	}
 
 	async #target(directory: string): Promise<string> {
@@ -256,6 +266,8 @@ export class UserSettingsStore {
 	}
 	#snapshot(active: LoadedSide, keys: readonly string[]): UserSettingSnapshot {
 		const issues: UserSettingIssue[] = [];
+		if (this.#requireExisting && active.state === "missing")
+			issues.push({ code: "missing", message: "User configuration does not exist; nothing was saved." });
 		const side = (loaded: LoadedSide): UserSettingValue => {
 			if (loaded.message) issues.push({ code: loaded.state, message: loaded.message });
 			if (loaded.state === "present")
@@ -278,7 +290,10 @@ export class UserSettingsStore {
 			mutation.segments,
 			leaf(active.raw, mutation.segments),
 		]);
-		const identity = [this.#domain, keys, active.file, canonical(a.value), canonical(activeReset)];
+		const identity =
+			this.#revisionScope === "file"
+				? [this.#domain, active.file, active.source]
+				: [this.#domain, keys, active.file, canonical(a.value), canonical(activeReset)];
 		return {
 			revision: valid ? createHash("sha256").update(JSON.stringify(identity)).digest("hex") : null,
 			...a,
@@ -301,6 +316,8 @@ export class UserSettingsStore {
 		try {
 			const initialActive = await this.#load(this.#activeDir);
 			if (initialActive.message) fail("invalid_config", "Configuration cannot be safely read.");
+			if (this.#requireExisting && initialActive.state === "missing")
+				fail("invalid_config", "User configuration does not exist; nothing was saved.");
 			const initialRevisions =
 				expectedRevision === undefined
 					? mutations.map(mutation => this.#snapshot(initialActive, mutation.segments).revision)
@@ -358,6 +375,8 @@ export class UserSettingsStore {
 						const { edits, source } = prepared;
 						if (edits.every(mutation => equal(leaf(loaded.raw, mutation.segments), mutation.value))) {
 							receipt.write = { status: "unchanged" };
+							if (this.#revisionScope === "file")
+								receipt.revision = this.#snapshot(loaded, mutations[0].segments).revision ?? undefined;
 							return;
 						}
 						const temp = `${loaded.file}.${randomUUID()}.tmp`;
@@ -377,10 +396,13 @@ export class UserSettingsStore {
 							if (
 								readback.file !== loaded.file ||
 								readback.message ||
+								(this.#requireExisting && readback.state !== "present") ||
 								!edits.every(mutation => equal(leaf(readback.raw, mutation.segments), mutation.value))
 							)
 								throw new Error("Configuration readback could not confirm the saved fields.");
 							receipt.write = { status: "saved" };
+							if (this.#revisionScope === "file")
+								receipt.revision = this.#snapshot(readback, mutations[0].segments).revision ?? undefined;
 						} catch (error) {
 							receipt.write = { status: publishing ? "unknown" : "failed", message: String(error) };
 							receipt.saveState = publishing ? "unknown" : "failed";

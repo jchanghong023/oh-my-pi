@@ -397,7 +397,25 @@ describe("ZCode business read queries", () => {
 			baseRevision: f.projection.snapshot().revision,
 			baseLogEpoch: "epoch",
 		};
-		expect((await f.queries.applyFileRewind(params)).applied).toBe(true);
+		const historyBefore = structuredClone(f.manager.get("session")!.session.sessionManager.getBranch());
+		const restored = await f.queries.applyFileRewind(params);
+		expect(restored).toMatchObject({
+			applied: true,
+			response: { receipts: [{ path: file, status: "restored" }] },
+		});
+		const historyAfter = f.manager.get("session")!.session.sessionManager.getBranch();
+		expect(historyAfter.slice(0, historyBefore.length)).toEqual(historyBefore);
+		expect(historyAfter.slice(historyBefore.length)).toEqual([
+			expect.objectContaining({
+				type: "custom",
+				customType: "workspace-file-rewind",
+				data: {
+					targetEntryId: "entry-0",
+					targetEntityId: row.entityId,
+					receipts: [{ path: file, status: "restored" }],
+				},
+			}),
+		]);
 		expect(await readFile(file, "utf8")).toBe("before\n");
 		expect((await f.queries.fileChanges(params)).state).toBe("reverted");
 		expect(await f.queries.revertedTargets("session")).toEqual([row.entityId]);

@@ -11,7 +11,6 @@ import {
 } from "@oh-my-pi/pi-agent-core/compaction";
 import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -24,6 +23,7 @@ import type { CompactionEntry } from "@oh-my-pi/pi-coding-agent/session/session-
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { INCOMPLETE_RECOVERY_MAX_RETRIES } from "@oh-my-pi/pi-coding-agent/session/session-maintenance";
 import * as telemetryExport from "../src/telemetry-export";
+import { goalProtocolModel } from "./helpers/goal-protocol-model";
 
 import {
 	cfgCompactionAsyncEnabled,
@@ -128,10 +128,7 @@ describe("AgentSession auto-compaction progress guard", () => {
 			emitBeforeAgentStart: async () => undefined,
 		};
 
-		const bundled = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!bundled) {
-			throw new Error("Expected built-in anthropic model to exist");
-		}
+		const bundled = goalProtocolModel();
 		// Pin the window and output reservation: every usage figure below is tuned
 		// to a 200k/64k threshold, so catalog regeneration must not shift the
 		// headroom math.

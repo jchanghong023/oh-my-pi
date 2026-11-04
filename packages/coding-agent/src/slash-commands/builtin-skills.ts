@@ -57,8 +57,8 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			await handleSkillsCommand(command.args, {
 				cwd: runtime.cwd,
 				registryUrl: cfgSkillsRegistryUrl.get(runtime.settings) || DEFAULT_SKILLS_URL,
-				output: text => runtime.output(text),
-				error: text => runtime.output(text),
+				output: text => runtime.session.emitNotice("info", text),
+				error: text => runtime.session.emitNotice("error", text),
 				refresh: async () => {
 					await runtime.session.refreshSkills();
 					await runtime.refreshCommands();

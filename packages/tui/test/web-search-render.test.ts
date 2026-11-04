@@ -81,14 +81,16 @@ describe("renderSearchResult", () => {
 			query: "test query",
 		});
 		const answer = answerSection(component.render(120).map(l => sanitizeText(l)));
-		// TUI collapsed view keeps the answer intact; only explicit compact mode caps it.
+		// TUI collapsed view keeps the answer intact; only an explicit CLI budget caps it.
 		expect(answer).toContain("FINAL_UNIQUE_MARKER");
 		expect(answer).not.toMatch(/more line/);
 	});
 
-	it("truncates the answer only when compact mode provides maxAnswerLines", async () => {
+	it("honors the explicit CLI answer-line budget without mutating the full response", async () => {
 		const uiTheme = (await getThemeByName("dark"))!;
-		const component = renderSearchResult(buildResult(ANSWER), { expanded: false, isPartial: false }, uiTheme, {
+		const result = buildResult(ANSWER);
+		const original = structuredClone(result);
+		const component = renderSearchResult(result, { expanded: false, isPartial: false }, uiTheme, {
 			query: "test query",
 			maxAnswerLines: 3,
 		});
@@ -96,5 +98,11 @@ describe("renderSearchResult", () => {
 
 		expect(answer).toMatch(/more line/);
 		expect(answer).not.toContain("FINAL_UNIQUE_MARKER");
+		expect(result).toEqual(original);
+		const expanded = renderSearchResult(result, { expanded: true, isPartial: false }, uiTheme, {
+			query: "test query",
+			maxAnswerLines: 3,
+		});
+		expect(answerSection(expanded.render(120).map(line => sanitizeText(line)))).toContain("FINAL_UNIQUE_MARKER");
 	});
 });

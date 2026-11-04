@@ -10,6 +10,7 @@ import {
 	SpecArtifactStore,
 	type SpecCloseProgress,
 } from "../../src/spec-driven/artifacts";
+import { ensureSpecDrivenResources } from "../../src/spec-driven/resources";
 import type { SpecArtifactPaths } from "../../src/spec-driven/types";
 
 const roots: string[] = [];
@@ -511,8 +512,10 @@ test("native requirements are validated and acceptance uses the real archive wit
 	expect(await fs.readFile(path.join(cwd, "openspec", "specs", "sample", "spec.md"), "utf8")).toContain(
 		"sample behavior",
 	);
-	for (const file of [paths.solution, paths.plan, paths.report])
-		expect(await fs.stat(path.join(cwd, file))).toBeDefined();
+	for (const file of [paths.solution, paths.plan, paths.report]) {
+		const accepted = input.acceptedVersions.find(version => version.path === file)!;
+		expect(artifactVersion(await fs.readFile(path.join(cwd, file)))).toBe(accepted.version);
+	}
 	await expect(fs.stat(path.join(cwd, result.archivedChangePath, "plan.md"))).rejects.toThrow();
 	await expect(fs.stat(path.join(cwd, result.archivedChangePath, "completion.md"))).rejects.toThrow();
 }, 120_000);
@@ -698,3 +701,89 @@ test("contained paths reject traversal, devices, selectors and escaping junction
 	await fs.symlink(outside, path.join(cwd, "linked"), process.platform === "win32" ? "junction" : "dir");
 	await expect(containedSpecPath(cwd, "linked/file.md")).rejects.toThrow();
 });
+
+test("every business template section requires nonempty content without inventing confirmation", async () => {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-sections-"));
+	roots.push(cwd);
+	const store = new SpecArtifactStore({ cwd, changeId: "business-sections" });
+	const paths = await store.initialize("docs/business-requirements/business-sections.md");
+	const headings = [
+		"基本信息",
+		"业务背景与目标",
+		"实际使用场景与现状",
+		"期望结果",
+		"业务规则与边界",
+		"典型例子",
+		"业务验收预期",
+		"待确认事项",
+		"资料来源",
+		"业务确认与交接",
+	];
+	const sections = headings.map(heading => `## ${heading}\n${heading}：待用户确认，尚未交付。\n`);
+	const full = `# 订单核对需求\n\n${sections.join("\n")}`;
+	const file = path.join(cwd, paths.business!);
+	await fs.mkdir(path.dirname(file), { recursive: true });
+	for (const [index, heading] of headings.entries()) {
+		for (const replacement of ["", `## ${heading}\n \t\n`]) {
+			await fs.writeFile(file, full.replace(sections[index]!, replacement));
+			await expect(store.readBusiness(paths.business)).rejects.toThrow(heading);
+		}
+	}
+	await fs.writeFile(file, full);
+	expect(await store.readBusiness(paths.business)).toEqual({
+		path: paths.business!,
+		content: full,
+		version: artifactVersion(Buffer.from(full)),
+	});
+	await expect(fs.stat(path.join(cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+test("unreadable recursive Markdown authority invalidates unchanged approved files with its actual cause", async () => {
+	const context = await fixture();
+	const approved = (await context.store.readRequirements()).files;
+	const originalReaddir = fs.readdir;
+	const denied = Object.assign(new Error("authority enumeration denied"), { code: "EACCES" });
+	const readdir = spyOn(fs, "readdir").mockImplementation(((
+		target: Parameters<typeof fs.readdir>[0],
+		...options: unknown[]
+	) =>
+		String(target).replaceAll("\\", "/").endsWith("/requirements")
+			? Promise.reject(denied)
+			: Reflect.apply(originalReaddir, fs, [target, ...options])) as typeof fs.readdir);
+	try {
+		const checked = await context.store.checkVersions(approved);
+		expect(checked).toEqual({
+			matches: false,
+			changed: [
+				{ path: "requirements", reason: "Cannot enumerate approved requirements: authority enumeration denied" },
+			],
+		});
+	} finally {
+		readdir.mockRestore();
+	}
+	for (const file of approved)
+		expect(artifactVersion(await fs.readFile(path.join(context.cwd, file.path)))).toBe(file.version);
+	expect(await context.store.checkVersions(approved)).toEqual({ matches: true, changed: [] });
+}, 120_000);
+
+test("external omp-spec shadow blocks initialization, requirement approval and archive without mutating the change", async () => {
+	const context = await fixture(true);
+	const input = await acceptance(context);
+	const resources = await ensureSpecDrivenResources();
+	const override = path.join(context.cwd, "openspec/schemas/omp-spec");
+	await fs.mkdir(path.dirname(override), { recursive: true });
+	await fs.cp(path.dirname(resources.specSchemaPath), override, { recursive: true });
+	const newStore = new SpecArtifactStore({ cwd: context.cwd, changeId: "blocked-new" });
+	await expect(newStore.initialize()).rejects.toThrow("an external schema shadows it");
+	await expect(context.store.readRequirements()).rejects.toThrow("an external schema shadows it");
+	await expect(context.store.close(input)).rejects.toThrow("an external schema shadows it");
+	await expect(fs.stat(path.join(context.cwd, "openspec/changes/blocked-new"))).rejects.toMatchObject({
+		code: "ENOENT",
+	});
+	await expect(fs.stat(path.join(context.cwd, "openspec/changes/archive"))).rejects.toMatchObject({ code: "ENOENT" });
+	for (const approved of input.acceptedVersions)
+		expect(artifactVersion(await fs.readFile(path.join(context.cwd, approved.path)))).toBe(approved.version);
+	expect(await fs.readFile(path.join(context.cwd, context.store.changeDir, ".openspec.yaml"), "utf8")).toContain(
+		"schema: omp-spec",
+	);
+}, 120_000);

@@ -10,6 +10,7 @@ import {
 	enableProvider,
 	enableUserSource,
 	initializeWithSettings,
+	getCapability,
 	loadCapability,
 } from "@oh-my-pi/pi-coding-agent/capability";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -24,6 +25,7 @@ import {
 import type { Skill } from "@oh-my-pi/pi-coding-agent/capability/skill";
 import { loadSkills } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { loadAllExtensions } from "@oh-my-pi/pi-coding-agent/modes/components/extensions/state-manager";
+import { discoverAgents } from "@oh-my-pi/pi-coding-agent/task/discovery";
 import { __resetDirsFromEnvForTests, logger, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import "@oh-my-pi/pi-coding-agent/discovery/claude-plugins";
 
@@ -248,6 +250,131 @@ describe("listClaudePluginRoots", () => {
 		const disabled = await loadCapability<Skill>("skills", { cwd: tempDir, providers: ["claude-plugins"] });
 		expect(disabled.all.map(skill => skill.name)).not.toContain("probe");
 		expect((await listClaudePluginRoots(tempDir, tempDir)).roots.some(root => root.origin === "claude")).toBe(false);
+	});
+
+	test("all plugin capability consumers skip the foreign registry, cache and enabledPlugins layers by default", async () => {
+		const claudeDir = path.join(tempDir, ".claude");
+		const pluginDir = path.join(claudeDir, "plugins");
+		const cache = path.join(pluginDir, "cache", "poison");
+		const settingsFiles = [
+			path.join(claudeDir, "settings.json"),
+			path.join(tempDir, ".claude", "settings.local.json"),
+		];
+		await fs.mkdir(cache, { recursive: true });
+		await fs.writeFile(path.join(pluginDir, "installed_plugins.json"), "invalid registry");
+		for (const file of settingsFiles) await fs.writeFile(file, '{"enabledPlugins":{"poison@market":true}}');
+		const reads = vi.spyOn(capabilityFs, "readFile");
+		const stats = vi.spyOn(nodeFs.promises, "stat");
+		const walks = vi.spyOn(nodeFs.promises, "readdir");
+		const warn = vi.spyOn(logger, "warn").mockImplementation(() => {});
+		for (const id of ["skills", "rules", "slash-commands", "hooks", "tools", "mcps"]) {
+			const capability = getCapability(id);
+			if (!capability) throw new Error(`Missing capability ${id}`);
+			const provider = capability.providers.find(candidate => candidate.id === "claude-plugins");
+			if (!provider) throw new Error(`Missing plugin provider for ${id}`);
+			const result = await provider.load({ cwd: tempDir, home: tempDir, repoRoot: null });
+			expect(result.items, id).toEqual([]);
+			expect(result.warnings ?? [], id).toEqual([]);
+		}
+		const agents = await discoverAgents(tempDir, tempDir);
+		expect(agents.agents.map(agent => agent.name)).toContain("task");
+		expect(agents.agents.map(agent => agent.name)).not.toContain("poison");
+		const forbidden = (file: unknown) =>
+			typeof file === "string" &&
+			(path.resolve(file) === pluginDir ||
+				path.resolve(file).startsWith(`${pluginDir}${path.sep}`) ||
+				settingsFiles.includes(path.resolve(file)));
+		expect(reads.mock.calls.filter(([file]) => forbidden(file))).toEqual([]);
+		expect(stats.mock.calls.filter(([file]) => forbidden(file))).toEqual([]);
+		expect(walks.mock.calls.filter(([file]) => forbidden(file))).toEqual([]);
+		expect(warn.mock.calls.filter(([message]) => String(message).includes("plugin registry"))).toEqual([]);
+	});
+
+	test.each(["claude-plugins", "claude", "*", "all"])(
+		"enabledProviders %s opts in without leaking roots to a disabled scope",
+		async selector => {
+			const registry = path.join(tempDir, ".claude", "plugins", "installed_plugins.json");
+			await fs.mkdir(path.dirname(registry), { recursive: true });
+			await fs.writeFile(
+				registry,
+				JSON.stringify({
+					version: 2,
+					plugins: {
+						"scoped@fixture": [{ scope: "user", installPath: path.join(tempDir, "scoped-plugin"), version: "1" }],
+					},
+				}),
+			);
+			const disabled = await listClaudePluginRoots(tempDir, tempDir);
+			expect(disabled.roots).toEqual([]);
+			const release = initializeWithSettings(Settings.isolated({ enabledProviders: [selector] }));
+			try {
+				expect((await listClaudePluginRoots(tempDir, tempDir)).roots.map(root => root.id)).toEqual([
+					"scoped@fixture",
+				]);
+				disableProvider("claude-plugins");
+				expect((await listClaudePluginRoots(tempDir, tempDir)).roots).toEqual([]);
+			} finally {
+				release();
+			}
+			expect((await listClaudePluginRoots(tempDir, tempDir)).roots).toEqual([]);
+		},
+	);
+
+	test("native project priority and explicit Claude-format plugin directories survive the foreign-source default", async () => {
+		const project = path.join(tempDir, "project");
+		const explicit = path.join(tempDir, "explicit");
+		for (const [root, name, description] of [
+			[path.join(tempDir, "user-native"), "shared-probe", "User native"],
+			[path.join(tempDir, "project-native"), "shared-probe", "Project native"],
+			[explicit, "explicit-probe", "Explicit Claude manifest"],
+		]) {
+			await fs.mkdir(path.join(root!, "skills", name!), { recursive: true });
+			await fs.writeFile(
+				path.join(root!, "skills", name!, "SKILL.md"),
+				`---\nname: ${name}\ndescription: ${description}\n---\nFixture\n`,
+			);
+		}
+		await fs.mkdir(path.join(explicit, ".claude-plugin"), { recursive: true });
+		await fs.writeFile(path.join(explicit, ".claude-plugin", "plugin.json"), '{"name":"explicit-fixture"}');
+		for (const [registry, scope, root] of [
+			[path.join(tempDir, ".omp", "plugins", "installed_plugins.json"), "user", path.join(tempDir, "user-native")],
+			[
+				path.join(project, ".omp", "plugins", "installed_plugins.json"),
+				"project",
+				path.join(tempDir, "project-native"),
+			],
+		]) {
+			await fs.mkdir(path.dirname(registry!), { recursive: true });
+			await fs.writeFile(
+				registry!,
+				JSON.stringify({
+					version: 2,
+					plugins: {
+						"native@fixture": [{ scope, installPath: root, version: "1" }],
+					},
+				}),
+			);
+		}
+		try {
+			await injectPluginDirRoots(tempDir, [explicit, explicit], project);
+			const roots = await listClaudePluginRoots(tempDir, project);
+			expect(roots.roots.find(root => root.origin === "plugin-dir")).toMatchObject({
+				path: explicit,
+				plugin: "explicit-fixture",
+			});
+			const result = await loadCapability<Skill>("skills", { cwd: project });
+			expect(result.items.filter(skill => skill.name === "shared-probe")).toHaveLength(1);
+			expect(result.items.find(skill => skill.name === "shared-probe")?.frontmatter?.description).toBe(
+				"Project native",
+			);
+			expect(result.items.filter(skill => skill.name === "explicit-probe")).toHaveLength(1);
+			expect(result.items.find(skill => skill.name === "explicit-probe")?.frontmatter?.description).toBe(
+				"Explicit Claude manifest",
+			);
+			expect(roots.roots.some(root => root.origin === "claude")).toBe(false);
+		} finally {
+			await injectPluginDirRoots(tempDir, []);
+		}
 	});
 
 	test("logs registry warnings once per cached computation", async () => {
@@ -953,7 +1080,10 @@ describe("listClaudePluginRoots", () => {
 
 			const result = await loadCapability<Skill>("skills", { cwd: tempDir });
 
-			expect(result.all.find(skill => skill.name === "xlsx")).toBeDefined();
+			expect(result.all.find(skill => skill.name === "xlsx")).toMatchObject({
+				name: "xlsx",
+				frontmatter: { description: "Spreadsheet skill" },
+			});
 			expect(result.all.find(skill => skill.name === "skill-creator")).toBeUndefined();
 		});
 	}

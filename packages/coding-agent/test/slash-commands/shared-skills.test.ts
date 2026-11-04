@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, removeWithRetries, setAgentDir } from "@oh-my-pi/pi-utils";
 import type { SkillPackument, SkillVersionManifest, SkillVersionSummary } from "@oh-my-pi/pi-wire/skillshare";
+import { DEFAULT_SKILLS_URL } from "@oh-my-pi/pi-wire/skillshare";
 import { Settings } from "../../src/config/settings";
 import { SkillshareClient } from "../../src/skillshare/client";
 import { computeIntegrity } from "../../src/skillshare/installer";
@@ -55,6 +56,7 @@ describe("shared skill registry commands", () => {
 	let output: string[];
 	let clients: SkillshareClient[];
 	let approve: boolean;
+	let searchError: Error | undefined;
 	const refreshSkills = vi.fn(async () => {});
 	const refreshCommands = vi.fn(async () => {});
 	const confirm = vi.fn(async () => approve);
@@ -85,6 +87,7 @@ describe("shared skill registry commands", () => {
 		clients = [];
 		output = [];
 		approve = true;
+		searchError = undefined;
 		refreshSkills.mockClear();
 		refreshCommands.mockClear();
 		confirm.mockClear();
@@ -92,7 +95,10 @@ describe("shared skill registry commands", () => {
 		vi.spyOn(SkillshareClient, "create").mockImplementation(async options => {
 			const client = await createClient(options);
 			clients.push(client);
-			vi.spyOn(client, "search").mockResolvedValue({ total: 0, page: 1, perPage: 10, hits: [] });
+			vi.spyOn(client, "search").mockImplementation(async () => {
+				if (searchError) throw searchError;
+				return { total: 0, page: 1, perPage: 10, hits: [] };
+			});
 			vi.spyOn(client, "packument").mockImplementation(async () => registry);
 			vi.spyOn(client, "version").mockImplementation(
 				async (_scope, _name, version): Promise<SkillVersionManifest> => ({
@@ -114,7 +120,12 @@ describe("shared skill registry commands", () => {
 		runtime = {
 			cwd: project,
 			settings: Settings.isolated({ "skills.registryUrl": "https://skills.test" }),
-			session: { refreshSkills, emitNotice: vi.fn() },
+			session: {
+				refreshSkills,
+				emitNotice: vi.fn((_level: string, text: string) => {
+					output.push(text);
+				}),
+			},
 			sessionManager: { getCwd: () => project },
 			output: (text: string) => {
 				output.push(text);
@@ -169,5 +180,54 @@ describe("shared skill registry commands", () => {
 		expect(refreshSkills).not.toHaveBeenCalled();
 		expect(refreshCommands).not.toHaveBeenCalled();
 		expect(output.join("\n")).toContain("declined");
+	});
+
+	test("requires a confirmation-capable host for scripts and reports the failure without installing", async () => {
+		runtime.ui = undefined;
+		expect(await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime)).toEqual({ consumed: true });
+		expect(clients[0]!.tarball).not.toHaveBeenCalled();
+		expect(await Bun.file(path.join(project, ".omp", "skills.json")).exists()).toBe(false);
+		expect(refreshSkills).not.toHaveBeenCalled();
+		expect(refreshCommands).not.toHaveBeenCalled();
+		expect(output.join("\n")).toContain("Skills: Installing a skill with scripts requires a confirmation UI.");
+		expect(clients[0]!.close).toHaveBeenCalledTimes(1);
+	});
+
+	test.each(["search", "install", "unknown", "install --unknown"])(
+		"reports invalid /skills %s without contacting the registry",
+		async args => {
+			expect(await executeAcpBuiltinSlashCommand(`/skills ${args}`, runtime)).toEqual({ consumed: true });
+			expect(output.join("\n")).toMatch(/Usage: \/skills|Unknown \/skills subcommand|Unknown option/);
+			expect(clients).toEqual([]);
+			expect(refreshSkills).not.toHaveBeenCalled();
+			expect(refreshCommands).not.toHaveBeenCalled();
+		},
+	);
+
+	test("reports registry errors without rejecting the command and closes the client", async () => {
+		searchError = new Error("registry unavailable");
+		expect(await executeAcpBuiltinSlashCommand("/skills search unavailable", runtime)).toEqual({ consumed: true });
+		expect(output).toEqual(["Skills: registry unavailable"]);
+		expect(clients[0]!.close).toHaveBeenCalledTimes(1);
+		expect(refreshSkills).not.toHaveBeenCalled();
+		expect(runtime.session.emitNotice).toHaveBeenCalledWith("error", "Skills: registry unavailable");
+	});
+
+	test("reports an up-to-date update without refreshing command state", async () => {
+		await executeAcpBuiltinSlashCommand(`/skills install ${PACKAGE}`, runtime);
+		refreshSkills.mockClear();
+		refreshCommands.mockClear();
+		output.length = 0;
+		expect(await executeAcpBuiltinSlashCommand("/skills update", runtime)).toEqual({ consumed: true });
+		expect(output.at(-1)).toBe("Registry skills are already up to date.");
+		expect(refreshSkills).not.toHaveBeenCalled();
+		expect(refreshCommands).not.toHaveBeenCalled();
+	});
+
+	test("uses the default registry when no source is configured and emits informational search results", async () => {
+		runtime.settings = Settings.isolated();
+		expect(await executeAcpBuiltinSlashCommand("/skills search shared", runtime)).toEqual({ consumed: true });
+		expect(clients[0]!.registryUrl).toBe(DEFAULT_SKILLS_URL);
+		expect(runtime.session.emitNotice).toHaveBeenCalledWith("info", output[0]);
 	});
 });

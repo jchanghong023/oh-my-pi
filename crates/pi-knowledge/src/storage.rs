@@ -1320,6 +1320,104 @@ mod tests {
 			.unwrap()
 	}
 
+	// First open creates parent directories and WAL storage, not a published
+	// corpus.
+	#[test]
+	fn missing_database_creates_nested_wal_storage_without_an_index() {
+		let fixture = Fixture::new();
+		let path = fixture
+			.directory
+			.join("nested")
+			.join("profile")
+			.join("knowledge.db");
+		let storage = Storage::open_impl(path.to_str().unwrap(), None).unwrap();
+		assert!(path.is_file());
+		assert!(storage.list().unwrap().is_empty());
+		let mode: String = storage
+			.connection
+			.query_row("PRAGMA journal_mode", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(mode, "wal");
+		let mut engine = crate::database::DatabaseEngine::new(
+			path.to_string_lossy().into_owned(),
+			path.to_string_lossy().into_owned(),
+		);
+		let error = engine
+			.search("needle", &Default::default(), || Ok(()))
+			.unwrap_err();
+		assert_eq!(error.error_message(), "No documentation indexes available");
+	}
+
+	// A future database must remain byte-for-byte intact and emit its actual
+	// version.
+	#[test]
+	fn future_schema_rejection_preserves_evidence_and_closes_the_connection() {
+		let fixture = Fixture::new();
+		let future = SCHEMA_VERSION + 1;
+		{
+			let connection = Connection::open(&fixture.path).unwrap();
+			connection
+				.execute_batch(
+					"CREATE TABLE retained_evidence(body TEXT NOT NULL);
+				INSERT INTO retained_evidence VALUES('untouched original evidence');",
+				)
+				.unwrap();
+			connection
+				.pragma_update(None, "user_version", future)
+				.unwrap();
+		}
+		let before = fs::read(&fixture.path).unwrap();
+		let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+		let observed = Arc::clone(&events);
+		let hook: StorageDiagnosticHook = Arc::new(move |event, _| {
+			observed.lock().unwrap().push(event);
+		});
+		let error = Storage::open_with_diagnostics(&fixture.path, hook)
+			.err()
+			.expect("future schema must fail");
+		assert!(error.error_message().contains(&format!("version {future}")));
+		assert_eq!(fs::read(&fixture.path).unwrap(), before);
+		let events = events.lock().unwrap();
+		let rejected = events
+			.iter()
+			.find(|event| event.message == "knowledge.storage.open.rejected")
+			.unwrap();
+		assert_eq!(rejected.schema_version, Some(future));
+		assert_eq!(rejected.supported_version, Some(SCHEMA_VERSION));
+		assert!(
+			events
+				.iter()
+				.any(|event| event.message == "knowledge.storage.open.cleanup"
+					&& event.result == "completed")
+		);
+		let connection = Connection::open(&fixture.path).unwrap();
+		let evidence: String = connection
+			.query_row("SELECT body FROM retained_evidence", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(evidence, "untouched original evidence");
+		let version: i64 = connection
+			.query_row("PRAGMA user_version", [], |row| row.get(0))
+			.unwrap();
+		assert_eq!(version, future);
+		drop(connection);
+		fs::rename(&fixture.path, fixture.directory.join("released.db")).unwrap();
+	}
+
+	// Both creation and a later open repair group/world-readable Unix modes.
+	#[cfg(unix)]
+	#[test]
+	fn storage_creation_and_reopen_enforce_owner_only_permissions() {
+		use std::os::unix::fs::PermissionsExt;
+		let fixture = Fixture::new();
+		let storage = fixture.open();
+		assert_eq!(fs::metadata(&fixture.path).unwrap().permissions().mode() & 0o777, 0o600);
+		drop(storage);
+		fs::set_permissions(&fixture.path, fs::Permissions::from_mode(0o666)).unwrap();
+		let reopened = fixture.open();
+		assert_eq!(fs::metadata(&fixture.path).unwrap().permissions().mode() & 0o777, 0o600);
+		assert!(reopened.list().unwrap().is_empty());
+	}
+
 	#[test]
 	fn deferred_vectors_publish_atomically_and_isolate_corrupt_generations() {
 		let fixture = Fixture::new();

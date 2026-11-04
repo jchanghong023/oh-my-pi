@@ -237,6 +237,8 @@ export function createOmpWorkflowWorld(parent: ZCodeSessionRecord, signal?: Abor
 							throw new WorkflowError("ArtifactSourceMissing", "Artifact source is not a regular file");
 						if (stat.size > ARTIFACT_CAPS.maxFileBytes)
 							throw new WorkflowError("ArtifactTooLarge", "File artifact exceeds its byte cap");
+						// Recheck the current path against the opened file before reading any bytes.
+						await workspaceFile(cwd, given, true, stat);
 						const buffer = Buffer.alloc(Math.min(stat.size + 1, ARTIFACT_CAPS.maxFileBytes + 1));
 						let offset = 0;
 						while (offset < buffer.length) {
@@ -340,7 +342,12 @@ function stringArgs(op: string, args: unknown[], min: number, max: number): Arra
 	}
 	return args as Array<string | undefined>;
 }
-async function workspaceFile(cwd: string, given: string, artifact = false): Promise<string> {
+async function workspaceFile(
+	cwd: string,
+	given: string,
+	artifact = false,
+	openedStat?: { dev: number; ino: number },
+): Promise<string> {
 	const root = await fs.realpath(cwd);
 	const requested = path.resolve(cwd, given);
 	const lexical = path.relative(path.resolve(cwd), requested);
@@ -357,6 +364,20 @@ async function workspaceFile(cwd: string, given: string, artifact = false): Prom
 			artifact ? "ArtifactPathOutsideWorkspace" : "DriverError",
 			"Path resolves outside the workflow workspace",
 		);
+	}
+	if (artifact && lexical) {
+		// Canonicalize only the workspace alias; artifact descendants must not redirect.
+		let componentPath = root;
+		let currentStat: typeof openedStat;
+		for (const component of lexical.split(path.sep)) {
+			componentPath = path.join(componentPath, component);
+			const stat = await fs.lstat(componentPath);
+			currentStat = stat;
+			if (stat.isSymbolicLink())
+				throw new WorkflowError("ArtifactSourceMissing", "Artifact source must not traverse symbolic links");
+		}
+		if (openedStat && (currentStat?.dev !== openedStat.dev || currentStat?.ino !== openedStat.ino))
+			throw new WorkflowError("ArtifactSourceMissing", "Artifact source changed before reading");
 	}
 	return target;
 }

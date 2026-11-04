@@ -20,7 +20,7 @@
 
 ### 首选：交互式有序草稿
 
-在目标会话输入 **`/team configure`**，打开 Team 配置面板，不会发起讨论。面板显示用户保存名单、当前有效来源与名单、主模型、实际提案槽位及诊断；旧的失效／无法解析项保留在原槽位，须替换或删除后才能保存，不会静默丢弃。
+输入 **`/team configure`** 打开当前 profile 的全局 Team 配置，不会发起讨论。主界面显示有序成员草稿及必要诊断；`v`／`V` 展开或收起用户存储、实际来源和只读运行预览。配置不读取或显示当前聊天主模型，也不依赖其可用性。旧的失效／无法解析项保留在原槽位，须替换或删除后才能保存，不会静默丢弃。
 
 | 键位 | 操作 |
 | --- | --- |
@@ -31,6 +31,7 @@
 | `0` | 将草稿改为默认名单 `[]`，仍需保存 |
 | `s` | 保存当前有序草稿到当前 profile 的用户设置 |
 | `r` | 重读版本并与保留的草稿比较，不自动覆盖草稿 |
+| `v`／`V` | 展开／收起只读高级详情 |
 | `Esc` | 取消；草稿已改时以 `Y` 确认放弃、`N` 留在面板 |
 | `PgUp`／`PgDn` | 滚动查看窄屏中的诊断与保存回执 |
 
@@ -96,7 +97,7 @@ omp config get team.members --json
 2. **读取真实目录。** 优先使用 Team 的 `get_team_models`（见下文），可确定性查询中文线索与跨 provider 候选；CLI 环境可在相同上下文运行 `omp models --json`，必要时用 `omp models find <目录可能使用的名称片段> --json` 缩小候选。查询和配置不是模型推理调用，目录可用也不等于已验证服务连通性或任务质量。
 3. **逐项匹配。** 将用户的中文名、简称、版本、参数规模和 provider 限制与候选的名称和真实模型引用核对。例如“智谱”“千问”是查找 GLM／Qwen 的线索，不是可拼造的模型 ID。保存只采用目录中的真实 `{provider, modelId}`；CLI 使用其完整 selector。
 4. **处理歧义与缺失。** 用户指定的完整 selector 精确匹配时直接采用；自然语言描述按名称／家族、版本、规模、来源与可用范围筛选后只有一个有效候选时也直接采用，并说明映射。多个 provider 提供同名模型、存在多个符合描述的版本，或“最好／最新”没有可核实标准时，列出会影响选择的候选差异，批量请用户确认；不擅自按字典序、价格、名称相似度选一个，也不静默升级版本。零匹配先换中英文名称片段并检查完整目录及禁用／认证配置；仍无匹配就报告缺失，不生成假 ID，不用另一模型替换。
-5. **检查实际允许范围。** 核对 `enabledModels`、`enabledProviders`／`disabledProviders` 和当前项目的覆盖，排除非聊天模型；当前会话主模型也必须满足要求。用户只要求配置参与者时，不顺带切换主模型、开放被禁用的 provider、添加所有可用模型或更改凭据。
+5. **检查实际允许范围。** 核对 `enabledModels`、`enabledProviders`／`disabledProviders` 和当前项目的覆盖，排除非聊天模型；全局名单配置不检查当前聊天主模型。用户只要求配置参与者时，不顺带切换主模型、开放被禁用的 provider、添加所有可用模型或更改凭据。
 6. **最小写入。** 先用共享接口预览，再按用户顺序保存真实模型引用，保留其明确要求的重复项；只更新 `team.members`。CLI 可用 `config set/reset`。已有 provider 无需重写 `models.yml`。确需新增自定义服务时，先依据用户提供或已核实的 endpoint、协议、模型 ID 和认证来源按 [模型配置](models.md) 接入；缺失关键信息再问，不能虚构地址、密钥、上下文或工具能力。当前没有主动 provider 保存接口，不得假称 Team 保存会自动保存 provider。密钥不在回复中展示，也不为了名单配置复制认证文件。
 7. **读回验证。** 核对保存回执、名单及有效值与用户意图一致，报告“自然语言名称 → selector”、修改路径及覆盖情况。冲突先重读比较；结果未知先核实，不自动重试。只查询名单不足以证明真实服务可用；未经当次明确授权，不为验证配置启动 `/team` 或发送真实模型请求。
 
@@ -104,13 +105,13 @@ omp config get team.members --json
 
 ### RPC：GUI／Agent 共用的配置入口
 
-RPC v3 的 `teamConfig` 能力提供三个接口。调用方必须在目标会话／profile 的 RPC 上操作；它们是可供 GUI 和 Agent 集成的入口，**不表示外部 ZCode GUI 已完成集成或验收**。
+RPC v3 的 `teamConfig` 能力提供三个接口。调用方 MUST 在目标 profile 的 RPC 进程操作；配置属于全局用户层，不是会话私有名单。ZCode 使用 `omp/team/configure {workspace, request}` 调用同一服务，无需先选择或创建聊天会话。接口存在不表示外部 ZCode GUI 已完成集成或验收。
 
-- `get_team_config`：读取版本 `revision`、用户／有效名单、来源、槽位、诊断和存储状态。可传 `preview: {clientRevision, members}` 只读预览拟保存名单与最终有效参与者；`members` 使用 `{provider, modelId}` 数组，保留顺序与重复项。无法解析的旧槽位可用 `{rawSelector}` 参与预览诊断，但不能直接保存。调用方只展示仍匹配当前会话与 `clientRevision` 的结果。
+- `get_team_config`：读取版本 `revision`、用户／有效名单、来源、槽位、诊断和存储状态。可传 `preview: {clientRevision, members}` 只读预览拟保存名单与最终有效参与者；`members` 使用 `{provider, modelId}` 数组，保留顺序与重复项。无法解析的旧槽位可用 `{rawSelector}` 参与预览诊断，但不能直接保存。调用方只展示仍匹配当前 workspace、profile 与 `clientRevision` 的结果。
 - `get_team_models`：可选 `query`，返回完整目录的确定性候选及 `selectable`／不可选原因。中文查找线索同上述面板规则；不调用模型替用户猜选。
 - `set_team_config`：传入 `scope: "user"`、上次读取的 `expectedRevision` 和 `members: [{provider, modelId}, ...]`。`[]` 显式保存默认名单，`null` 移除用户字段以继承其他来源；均不改变主模型。保存回传配置、写入状态与是否有效匹配；失败通过 `revision_conflict`、`invalid_config`、`persistence_failed` 等结构化错误及状态区分，不将请求已发出等同于保存成功。
 
-取消／切换会话后丢弃迟到结果；已提交保存不能因界面退出视为撤销。GUI／Agent 同样必须对冲突重读比较，对结果未知不自动重放，并提示高优先级覆盖。
+取消／切换 workspace 或 profile 后丢弃迟到结果；已提交保存不能因界面退出视为撤销。GUI／Agent 同样必须对冲突重读比较，对结果未知不自动重放，并提示高优先级覆盖。
 
 ## 4. 配置文件在哪里
 

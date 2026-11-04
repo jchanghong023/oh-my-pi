@@ -260,6 +260,29 @@ describe("CommandCatalogService", () => {
 		).toBe("/move destination with spaces/");
 	});
 
+	test.each(['/mcp dis"obsolete tail" keep', "/mcp dis\\ obsolete keep"])(
+		"argument replacement consumes quoted and escaped suffixes without duplicating later arguments: %s",
+		async text => {
+			await using temp = await TempDir.create("@zcode-catalog-suffix-");
+			const cwd = temp.absolute();
+			const service = new CommandCatalogService({ cwd });
+			const session = {
+				customCommands: [],
+				setSlashCommands() {},
+				sessionManager: { getCwd: () => cwd },
+				skills: [],
+				skillsSettings: cfgSkills.get(Settings.isolated()),
+			};
+			const completion = await service.complete({ text, cursor: "/mcp dis".length, session });
+			const item = completion.items.find(candidate => candidate.label === "disable");
+			expect(item).toBeDefined();
+			expect(item).toMatchObject({ replaceStart: "/mcp ".length, replaceEnd: text.lastIndexOf(" keep") });
+			expect(text.slice(0, item!.replaceStart) + item!.insertText + text.slice(item!.replaceEnd)).toBe(
+				"/mcp disable keep",
+			);
+		},
+	);
+
 	test("strict resolution distinguishes builtins, skills, and unknown input", async () => {
 		await using temp = await TempDir.create("zcode-hosts-resolve-");
 		const cwd = path.resolve(temp.path());
@@ -316,5 +339,15 @@ describe("CommandCatalogService", () => {
 		};
 		await service.buildCatalog(sessionWithSkill);
 		expect(service.revision).not.toBe(before);
+		const changed = service.revision;
+		const again = await service.buildCatalog(sessionWithSkill);
+		expect(service.revision).toBe(changed);
+		const completion = await service.complete({ text: "/skill:lat", cursor: 10, session: sessionWithSkill });
+		expect(completion.revision).toBe(changed);
+		expect(completion.items).toContainEqual(expect.objectContaining({ label: "skill:late" }));
+		expect(await service.buildCatalog(sessionWithSkill)).toEqual(again);
+		expect(service.revision).toBe(changed);
+		await service.buildCatalog(session);
+		expect(service.revision).not.toBe(changed);
 	});
 });

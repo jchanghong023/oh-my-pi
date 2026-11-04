@@ -546,7 +546,8 @@ describe("ZCode plan mode host", () => {
 
 		await host.controller.beginSessionChange();
 		host.changeSession();
-		const destinationModel = getBundledModel("anthropic", "claude-haiku-4-5");
+		const destinationModel = getBundledModel("ascend", "qwen3.8-flash-next");
+		if (!destinationModel) throw new Error("Expected retained provider destination model");
 		await host.session.setModelTemporary(destinationModel, ThinkingLevel.Medium);
 		await host.controller.endSessionChange();
 		host.setStreaming(false);

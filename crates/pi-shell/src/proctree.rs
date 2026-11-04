@@ -1163,6 +1163,40 @@ fn signal_snapshot<'a>(
 	signaled
 }
 
+/// A real Linux stop event for job-control consumer tests. Keep the syscall
+/// fixture outside `bash`, whose safe-code boundary also applies to its tests.
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn test_wait_for_stopped_child(pid: u32) -> crate::bash::ProcEvent {
+	use std::time::{Duration, Instant};
+
+	let pid = i32::try_from(pid).expect("child pid fits");
+	let start = Instant::now();
+	loop {
+		let mut status = 0;
+		// SAFETY: the caller owns this child; status is writable. WUNTRACED
+		// consumes only its stop notification, leaving the child unreaped.
+		let observed =
+			unsafe { libc::waitpid(pid, &raw mut status, libc::WUNTRACED | libc::WNOHANG) };
+		if observed == pid {
+			assert!(libc::WIFSTOPPED(status), "fixture child must have stopped, not exited");
+			assert_eq!(libc::WSTOPSIG(status), libc::SIGSTOP);
+			return crate::bash::ProcEvent::Stopped(crate::bash::Signal::Stop);
+		}
+		if observed < 0 {
+			assert_eq!(
+				std::io::Error::last_os_error().kind(),
+				std::io::ErrorKind::Interrupted,
+				"wait for the owned fixture child's stop"
+			);
+		}
+		assert!(
+			start.elapsed() < Duration::from_secs(5),
+			"timed out waiting for child {pid} to stop"
+		);
+		std::thread::sleep(Duration::from_millis(5));
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -1525,6 +1559,59 @@ mod tests {
 			}
 		}
 		assert_eq!(deliveries, 1, "one wave must not signal both a group and its member again");
+	}
+
+	/// Exercise the public termination entrypoint, not just the shared wave
+	/// helper: TERM cleanup's newly created child must finish before return.
+	#[cfg(unix)]
+	#[tokio::test(flavor = "multi_thread")]
+	async fn terminate_tree_allows_one_group_term_cleanup_before_returning() {
+		use std::{
+			os::unix::process::CommandExt,
+			process::{Child, Command, Stdio},
+		};
+
+		struct Cleanup(Child, Process);
+		impl Drop for Cleanup {
+			fn drop(&mut self) {
+				self.1.signal_tree(KILL_SIGNAL);
+				let _ = self.0.kill();
+				let _ = self.0.wait();
+			}
+		}
+		let dir = tempfile::tempdir().expect("termination fixture");
+		let child = Command::new("/bin/sh")
+			.args([
+				"-c",
+				"trap '/bin/sleep 0.2; printf cleaned >> cleaned; exit 0' TERM; : > ready; while :; \
+				 do :; done",
+			])
+			.current_dir(dir.path())
+			.stdout(Stdio::null())
+			.stderr(Stdio::null())
+			.process_group(0)
+			.spawn()
+			.expect("cleanup process");
+		let process =
+			Process::from_pid(i32::try_from(child.id()).unwrap()).expect("pin cleanup root");
+		let mut cleanup = Cleanup(child, process.clone());
+		tokio::time::timeout(Duration::from_secs(5), async {
+			while !dir.path().join("ready").exists() {
+				tokio::time::sleep(Duration::from_millis(5)).await;
+			}
+		})
+		.await
+		.expect("TERM trap installed");
+		let terminated = process
+			.terminate_tree(true, 1_000, 2_000, CancelToken::default())
+			.await
+			.expect("terminate process tree");
+		assert!(terminated, "the root must finish within its TERM grace");
+		assert_eq!(
+			std::fs::read(dir.path().join("cleaned")).expect("completed TERM cleanup"),
+			b"cleaned"
+		);
+		assert_eq!(cleanup.0.wait().expect("reap cleanup root").code(), Some(0));
 	}
 
 	/// Escaped descendants still receive TERM, and children born in its trap

@@ -1,18 +1,17 @@
 import * as path from "node:path";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { registerProvider } from "../capability";
-import { type Hook, hookCapability } from "../capability/hook";
 import { type Skill, skillCapability } from "../capability/skill";
 import { type SlashCommand, slashCommandCapability } from "../capability/slash-command";
 import type { LoadContext, LoadResult } from "../capability/types";
 import { getDeveloperTestAgentRoot } from "../extensibility/plugins/developer-test-agent-resources";
-import { createSourceMeta, loadFilesFromDir, scanSkillsFromDir } from "./helpers";
+import { loadFilesFromDir, scanSkillsFromDir } from "./helpers";
 
 const PROVIDER_ID = "developer-test-agent";
 const provider = {
 	id: PROVIDER_ID,
 	displayName: "Developer Test Agent",
-	description: "Bundled unit-test agent skills, commands and routing hint",
+	description: "Manual-only bundled unit-test skills and commands",
 	priority: 1,
 };
 
@@ -47,23 +46,5 @@ export async function loadDeveloperTestCommands(ctx: LoadContext): Promise<LoadR
 	});
 }
 
-async function loadDeveloperTestHooks(ctx: LoadContext): Promise<LoadResult<Hook>> {
-	const root = await getDeveloperTestAgentRoot(ctx.agentDir);
-	const filePath = path.join(root, "scripts", "user-prompt-hint.ts");
-	return {
-		items: [
-			{
-				name: "developer-test-agent-hint",
-				path: filePath,
-				type: "pre",
-				tool: "*",
-				level: "project",
-				_source: createSourceMeta(PROVIDER_ID, filePath, "project", "bundled-developer-test-agent"),
-			},
-		],
-	};
-}
-
 registerProvider<Skill>(skillCapability.id, { ...provider, load: loadDeveloperTestSkills });
 registerProvider<SlashCommand>(slashCommandCapability.id, { ...provider, load: loadDeveloperTestCommands });
-registerProvider<Hook>(hookCapability.id, { ...provider, load: loadDeveloperTestHooks });

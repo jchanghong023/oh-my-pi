@@ -313,6 +313,35 @@ describe("CodeAgent hot credential refresh", () => {
 		expect(cache.refresh()).toBe("synthetic-A");
 	});
 
+	test("registry reads use the current-user value instead of a stale process environment snapshot", () => {
+		const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		if (!descriptor) throw new Error("process.platform descriptor is unavailable");
+		const previous = process.env.JCH_CODEAGENT3_X_AUTH_TOKEN;
+		const spawn = spyOn(Bun, "spawnSync").mockReturnValue({
+			exitCode: 0,
+			stdout: Buffer.from(
+				"HKEY_CURRENT_USER\\Environment\r\n    JCH_CODEAGENT3_X_AUTH_TOKEN    REG_SZ    registry-live-token\r\n",
+			),
+		} as Bun.SyncSubprocess);
+		try {
+			Object.defineProperty(process, "platform", { ...descriptor, value: "win32" });
+			process.env.JCH_CODEAGENT3_X_AUTH_TOKEN = "stale-process-token";
+			expect(readCodeAgentRegistryToken()).toBe("registry-live-token");
+			expect(spawn.mock.calls[0]?.[0]).toEqual([
+				"reg.exe",
+				"query",
+				"HKCU\\Environment",
+				"/v",
+				"JCH_CODEAGENT3_X_AUTH_TOKEN",
+			]);
+		} finally {
+			spawn.mockRestore();
+			Object.defineProperty(process, "platform", descriptor);
+			if (previous === undefined) delete process.env.JCH_CODEAGENT3_X_AUTH_TOKEN;
+			else process.env.JCH_CODEAGENT3_X_AUTH_TOKEN = previous;
+		}
+	});
+
 	for (const [caseName, valueLine] of [
 		["empty REG_SZ", "    JCH_CODEAGENT3_X_AUTH_TOKEN    REG_SZ    \r\n"],
 		[

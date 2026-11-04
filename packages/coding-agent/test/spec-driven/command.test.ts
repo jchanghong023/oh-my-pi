@@ -72,13 +72,14 @@ function fixture() {
 		mode = "chat";
 	});
 	const start = spyOn(controller, "new").mockImplementation(async () => {});
+	const finishBusiness = spyOn(controller, "finishBusiness").mockImplementation(async () => {});
 	const next = spyOn(controller, "next").mockImplementation(async () => {});
 	const back = spyOn(controller, "back").mockImplementation(async () => {});
 	const drop = spyOn(controller, "drop").mockImplementation(async () => {});
 	const setTeam = spyOn(controller, "setTeam").mockImplementation(async value => {
 		useTeam = value;
 	});
-	spies.push(enter, exit, start, next, back, drop, setTeam);
+	spies.push(enter, exit, start, finishBusiness, next, back, drop, setTeam);
 	const invoke = (args: string, text = args ? `/dev ${args}` : "/dev") =>
 		BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS[0]!.handle!({ name: "dev", args, text }, host);
 	return {
@@ -89,6 +90,7 @@ function fixture() {
 		exit,
 		start,
 		next,
+		finishBusiness,
 		back,
 		drop,
 		setTeam,
@@ -116,7 +118,15 @@ describe("/dev six-entry boundary", () => {
 	it("requires explicit entry for every subcommand, including new", async () => {
 		const f = fixture();
 		try {
-			for (const args of ["config", "new 完整需求", "next", "back", "drop"]) {
+			for (const args of [
+				"config",
+				"new 完整需求",
+				"business 完整业务描述",
+				"finish-business",
+				"next",
+				"back",
+				"drop",
+			]) {
 				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
 			}
 			expect(f.enter).not.toHaveBeenCalled();
@@ -125,6 +135,7 @@ describe("/dev six-entry boundary", () => {
 			expect(f.back).not.toHaveBeenCalled();
 			expect(f.drop).not.toHaveBeenCalled();
 			expect(f.setTeam).not.toHaveBeenCalled();
+			expect(f.finishBusiness).not.toHaveBeenCalled();
 			expect(f.select).not.toHaveBeenCalled();
 			await f.invoke("");
 			await f.invoke("");
@@ -177,11 +188,22 @@ describe("/dev six-entry boundary", () => {
 		const f = fixture();
 		try {
 			await f.invoke("");
-			for (const args of ["new", "new   ", "config extra", "back extra", "drop extra", "next pure normalizer"]) {
+			for (const args of [
+				"new",
+				"new   ",
+				"business",
+				"business   ",
+				"finish-business extra",
+				"config extra",
+				"back extra",
+				"drop extra",
+				"next pure normalizer",
+			]) {
 				expect(await f.invoke(args)).toMatchObject({ failed: true, errorCode: "invalid_params" });
 			}
 			expect(f.start).not.toHaveBeenCalled();
 			expect(f.next).not.toHaveBeenCalled();
+			expect(f.finishBusiness).not.toHaveBeenCalled();
 			expect(f.setTeam).not.toHaveBeenCalled();
 			expect(f.back).not.toHaveBeenCalled();
 			expect(f.drop).not.toHaveBeenCalled();
@@ -358,4 +380,26 @@ describe("/dev six-entry boundary", () => {
 			await f.dispose();
 		}
 	});
+});
+
+it("business entry forwards raw description and attachments while business-only completion preserves the original decision", async () => {
+	const f = fixture();
+	try {
+		await f.invoke("");
+		const images: ImageContent[] = [{ type: "image", data: "business-image", mimeType: "image/png" }];
+		const imageLinks = ["business.png"];
+		f.host.input = { images, imageLinks };
+		await f.invoke("business 订单审批", "/dev business\n订单审批\n  保留业务描述 Ω [Image #1]  ");
+		expect(f.start).toHaveBeenCalledWith("订单审批\n  保留业务描述 Ω [Image #1]  ", images, imageLinks, true);
+		expect(f.finishBusiness).not.toHaveBeenCalled();
+		expect(f.next).not.toHaveBeenCalled();
+		f.phase("business");
+		const raw = "/dev finish-business   ";
+		await f.invoke("finish-business", raw);
+		expect(f.finishBusiness).toHaveBeenCalledWith(raw);
+		expect(f.next).not.toHaveBeenCalled();
+		expect(f.start).toHaveBeenCalledTimes(1);
+	} finally {
+		await f.dispose();
+	}
 });

@@ -1,11 +1,32 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { getOAuthCredentialProvider, getOAuthProviders } from "@oh-my-pi/pi-ai/oauth";
+import type { DescribeContext, NativeNode } from "../src/native/node";
 import { OAuthSelectorComponent } from "../src/overlays/oauth-selector";
 import { initTheme } from "../src/theme/theme";
 
 beforeAll(async () => {
 	await initTheme();
 });
+
+const nativeContext: DescribeContext = {
+	cols: 100,
+	reduceMotion: false,
+	dark: true,
+	supports: () => true,
+	feature: () => true,
+};
+
+function nodes(root: NativeNode): NativeNode[] {
+	return [root, ...(root.c ?? []).flatMap(child => ("k" in child ? nodes(child) : []))];
+}
+
+function picker(selector: OAuthSelectorComponent) {
+	const node = nodes(selector.describe(nativeContext)).find(child => child.k === "picker");
+	if (!node || node.k !== "picker" || !node.p) throw new Error("Expected the data-first account picker");
+	const items = node.p.items;
+	if (!items) throw new Error("Expected the initial account picker catalogue");
+	return { ...node.p, items };
+}
 
 describe("OAuth logout selector", () => {
 	test("offers one canonical logout entry for shared credentials, including disabled providers", () => {
@@ -20,6 +41,15 @@ describe("OAuth logout selector", () => {
 			{ disabledProviders: ["openai-codex", "openai-codex-device"] },
 		);
 		try {
+			const props = picker(selector);
+			expect(props.items.map(item => item.id)).toEqual(["openai-codex"]);
+			expect(props.items[0]?.dot).toBe("success");
+			const fallback = selector.describe({ ...nativeContext, supports: kind => kind !== "picker" });
+			expect(
+				nodes(fallback)
+					.filter(node => node.k === "item")
+					.map(node => node.key),
+			).toEqual(["openai-codex"]);
 			selector.handleInput("\x1b[B");
 			selector.handleInput("\r");
 			expect(selected).toBe("openai-codex");
@@ -43,6 +73,18 @@ describe("OAuth logout selector", () => {
 			() => {},
 		);
 		try {
+			expect(
+				picker(selector)
+					.items.map(item => item.id)
+					.sort(),
+			).toEqual(["openai-codex", other.id].sort());
+			const fallback = selector.describe({ ...nativeContext, supports: kind => kind !== "picker" });
+			expect(
+				nodes(fallback)
+					.filter(node => node.k === "item")
+					.map(node => node.key)
+					.sort(),
+			).toEqual(["openai-codex", other.id].sort());
 			selector.handleInput("\r");
 			selector.handleInput("\x1b[B");
 			selector.handleInput("\r");
@@ -56,6 +98,7 @@ describe("OAuth logout selector", () => {
 
 	test("keeps device aliases available as separate login methods", () => {
 		const aliasIndex = getOAuthProviders().findIndex(provider => provider.id === "openai-codex-device");
+		expect(aliasIndex).toBeGreaterThanOrEqual(0);
 		let selected: string | undefined;
 		const selector = new OAuthSelectorComponent(
 			"login",
@@ -66,6 +109,9 @@ describe("OAuth logout selector", () => {
 			() => {},
 		);
 		try {
+			const props = picker(selector);
+			expect(props.items.some(item => item.id === "openai-codex")).toBe(true);
+			expect(props.items.some(item => item.id === "openai-codex-device")).toBe(true);
 			for (let index = 0; index < aliasIndex; index++) selector.handleInput("\x1b[B");
 			selector.handleInput("\r");
 			expect(selected).toBe("openai-codex-device");
@@ -85,6 +131,9 @@ describe("OAuth logout selector", () => {
 			() => {},
 		);
 		try {
+			expect(picker(selector).items).toEqual([]);
+			const fallback = selector.describe({ ...nativeContext, supports: kind => kind !== "picker" });
+			expect(nodes(fallback).filter(node => node.k === "item")).toEqual([]);
 			selector.handleInput("\r");
 			expect(selected).toBeUndefined();
 		} finally {

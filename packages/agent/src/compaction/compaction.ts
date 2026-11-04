@@ -285,6 +285,21 @@ export function calculatePromptTokens(usage: Usage): number {
 	return calculateContextTokens(usage);
 }
 
+/**
+ * Context retained after a request settles, excluding its request-only messages.
+ * `tokens` may be a raw provider prompt snapshot instead of total context usage.
+ * Keep usage and snapshots unchanged so request budgeting can still compare
+ * per-call deltas against the original provider report, including old journals
+ * that have no per-call metadata.
+ */
+export function calculatePersistentContextTokens(
+	message: AssistantMessage,
+	tokens = calculateContextTokens(message.usage),
+): number {
+	const perCallTokens = message.perCallContextTokens ?? 0;
+	return Math.max(0, tokens - (Number.isFinite(perCallTokens) && perCallTokens > 0 ? perCallTokens : 0));
+}
+
 export function hasContextTokenUsage(usage: Usage): boolean {
 	return (
 		(usage.contextTokens ?? 0) > 0 ||

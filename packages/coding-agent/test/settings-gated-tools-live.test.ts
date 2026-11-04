@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,7 +6,7 @@ import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { createAgentSession, type CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
@@ -14,6 +14,8 @@ import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { cfgEditMode } from "@oh-my-pi/pi-coding-agent/edit/settings";
 import { cfgBashEnabled } from "@oh-my-pi/pi-coding-agent/exec/settings";
 import { cfgGithubEnabled, cfgGrepEnabled } from "@oh-my-pi/pi-coding-agent/tools/settings";
+import { pythonBackend } from "@oh-my-pi/pi-coding-agent/eval";
+import * as pyKernel from "@oh-my-pi/pi-coding-agent/eval/py/kernel";
 
 // Tool-gating settings (`grep.enabled`, `*.enabled`, ...) must reconcile a live
 // session's tools and prompt instead of waiting for the next session.
@@ -32,6 +34,7 @@ describe("settings-gated tools in a live session", () => {
 
 	afterEach(async () => {
 		for (const session of sessions.splice(0)) await session.dispose().catch(() => {});
+		vi.restoreAllMocks();
 	});
 
 	afterAll(() => {
@@ -39,7 +42,14 @@ describe("settings-gated tools in a live session", () => {
 		if (fs.existsSync(registryDir)) removeSyncWithRetries(registryDir);
 	});
 
-	async function startSession(settings: Settings, toolNames?: string[]): Promise<AgentSession> {
+	async function startSession(
+		settings: Settings,
+		toolNames?: string[],
+		extra: Pick<
+			CreateAgentSessionOptions,
+			"offline" | "sessionManager" | "parentTaskPrefix" | "taskDepth" | "agentId"
+		> = {},
+	): Promise<AgentSession> {
 		const { session } = await createAgentSession({
 			cwd: registryDir,
 			agentDir: registryDir,
@@ -57,6 +67,7 @@ describe("settings-gated tools in a live session", () => {
 			rules: [],
 			workspaceTree: { rootPath: registryDir, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
 			toolNames,
+			...extra,
 		});
 		sessions.push(session);
 		return session;
@@ -67,6 +78,41 @@ describe("settings-gated tools in a live session", () => {
 		await Promise.resolve();
 		await session.runToolRegistryMutation(async () => {});
 	}
+
+	it.each([false, true])(
+		"creates fresh, resumed and child Python-enabled sessions without probing (offline=%s)",
+		async offline => {
+			const available = vi.spyOn(pythonBackend, "checkAvailability").mockResolvedValue({
+				ok: false,
+				reason: "fixture Python cannot start",
+			});
+			const kernelProbe = vi.spyOn(pyKernel, "checkPythonKernelAvailability");
+			const kernelStart = vi.spyOn(pyKernel.PythonKernel, "start");
+			const resumed = SessionManager.inMemory(registryDir);
+			resumed.appendMessage({ role: "user", content: "restored conversation", timestamp: 0 });
+			for (const extra of [
+				{ offline },
+				{ offline, sessionManager: resumed },
+				{ offline, parentTaskPrefix: "PythonChild", taskDepth: 1, agentId: "PythonChild" },
+			]) {
+				const session = await startSession(
+					Settings.isolated({ "eval.py": true, "eval.js": false }),
+					["eval"],
+					extra,
+				);
+				expect(session.getAllToolNames()).toContain("eval");
+			}
+			expect(available).not.toHaveBeenCalled();
+			expect(kernelProbe).not.toHaveBeenCalled();
+			expect(kernelStart).not.toHaveBeenCalled();
+			const tool = sessions[0]!.getToolByName("eval")!;
+			await expect(tool.execute("missing-python", { language: "py", code: "print(1)" })).rejects.toThrow(
+				"fixture Python cannot start",
+			);
+			expect(available).toHaveBeenCalledTimes(1);
+			expect(kernelStart).not.toHaveBeenCalled();
+		},
+	);
 
 	const GREP_POLICY = "NEVER shell `grep`/`rg`/`awk`";
 

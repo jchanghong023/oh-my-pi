@@ -13,6 +13,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import type { AuthStorage, FetchImpl } from "@oh-my-pi/pi-ai";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
@@ -37,7 +38,23 @@ function createSearchContext(modelProvider: string, modelId: string) {
 	const authStorage = createInMemoryAuthStorage();
 	openAuthStorages.push(authStorage);
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = modelRegistry.find(modelProvider, modelId);
+	// This tests the shared Anthropic wire adapter, not admission of a bundled
+	// chat provider. The fork intentionally has no Anthropic chat catalog.
+	const model =
+		modelProvider === "anthropic"
+			? buildModel({
+					id: modelId,
+					name: modelId,
+					provider: modelProvider,
+					api: "anthropic-messages",
+					baseUrl: "https://api.anthropic.com",
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 200_000,
+					maxTokens: 4096,
+				})
+			: modelRegistry.find(modelProvider, modelId);
 	if (!model) throw new Error(`Missing catalog model: ${modelProvider}/${modelId}`);
 	return { authStorage, modelRegistry, model };
 }

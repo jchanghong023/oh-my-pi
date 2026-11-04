@@ -364,6 +364,8 @@ export function canSpawnAtDepth(maxRecursionDepth: number, taskDepth: number): b
 export interface AgentDefinition {
 	name: string;
 	description: string;
+	/** Hide from model-facing agent lists without disabling explicit invocation. */
+	hide?: boolean;
 	systemPrompt: string;
 	tools?: string[];
 	/** Exact host allowlist: suppress native convenience-tool additions (structured yield remains required). */

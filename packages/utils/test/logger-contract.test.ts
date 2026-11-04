@@ -60,6 +60,8 @@ async function runScenario(
 				LOCALAPPDATA: path.join(root, "local"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_CONFIG_ROOT: "",
+				OMP_CACHE_DIR: "",
+				OMP_OFFLINE: "0",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
 				XDG_DATA_HOME: "",
@@ -514,6 +516,7 @@ async function runDiagnosticConsumer(
 		configRoot?: (root: string) => string;
 		exitCode?: number;
 		offline?: string;
+		logLevel?: string;
 	} = {},
 ): Promise<{ root: string; stdout: string; stderr: string; pid: number }> {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-diagnostic-contract-"));
@@ -545,10 +548,11 @@ async function runDiagnosticConsumer(
 				XDG_CACHE_HOME: path.join(root, "cache"),
 				PI_CONFIG_DIR: ".omp",
 				OMP_CONFIG_ROOT: options.configRoot?.(root) ?? path.join(root, "primary"),
+				OMP_CACHE_DIR: "",
 				OMP_PROFILE: "",
 				PI_PROFILE: "",
 				OMP_OFFLINE: options.offline ?? "0",
-				OMP_LOG_LEVEL: "",
+				OMP_LOG_LEVEL: options.logLevel ?? "",
 				BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
 			},
 			stdout: "pipe",
@@ -571,6 +575,40 @@ function consumerFallbackDir(root: string): string {
 }
 
 describe("diagnostic consumer contracts", () => {
+	test.each([
+		["error", ["error"]],
+		["warn", ["error", "warn"]],
+		["info", ["error", "warn", "info"]],
+		["debug", ["error", "warn", "info", "debug"]],
+		["not-a-level", ["error", "warn"]],
+		["", ["error", "warn"]],
+	] as const)("applies offline level %s before reading context and delivering sinks", async (logLevel, levels) => {
+		const result = await runDiagnosticConsumer(
+			`
+			const observed = [];
+			const touched = [];
+			logger.setTransports({ console: false, file: path.join(root, "level-logs") });
+			const dispose = logger.registerLogSink(event => observed.push(event.level));
+			for (const level of ["error", "warn", "info", "debug"]) {
+				logger[level]("level-" + level, { get marker() { touched.push(level); return level; } });
+			}
+			dispose();
+			logger.flush();
+			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ observed, touched: [...new Set(touched)] }));
+		`,
+			{ offline: "1", logLevel },
+		);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+		expect(JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"))).toEqual({
+			observed: levels,
+			touched: levels,
+		});
+		expect((await readLogEntries(path.join(result.root, "level-logs"))).map(entry => entry.level)).toEqual([
+			...levels,
+		]);
+	});
+
 	test("filters offline worker forwarding and foreign records before touching context or sinks", async () => {
 		const result = await runDiagnosticConsumer(
 			`

@@ -308,6 +308,73 @@ it("scopes semantic candidates before top-k and reports the ranking actually use
 	expect(grep.text).toMatch(/reranked:\s*no/i);
 	expect(f.server.requests).toHaveLength(beforeGrep);
 }, 60_000);
+
+// Capability absence must not probe a model or silently prepare corpus vectors.
+it.each(["model-without-vectors", "vectors-without-model"] as const)(
+	"keeps the full-text evidence and actual status for %s",
+	async capability => {
+		const f = await fixture();
+		if (capability === "vectors-without-model") await f.configure({ embedding: "test-embedding" });
+		await f.add("manual", lexicalFiles);
+		await f.configure();
+		const baseline = await f.service.search("alpha beta");
+		if (capability === "model-without-vectors") await f.configure({ embedding: "test-embedding" });
+		const before = f.server.requests.length;
+		const page = await f.service.searchKnowledge("alpha beta");
+		expect(page.text).toMatch(/retrieval:\s*fulltext/i);
+		expect(page.text).toMatch(/reranked:\s*no/i);
+		expect(page.result.sections).toEqual(baseline.sections);
+		expect(page.result.total).toBe(3);
+		expect(f.server.requests.slice(before)).toEqual([]);
+	},
+	30_000,
+);
+
+// A committed window survives optional preparation failure and resumes DB-only.
+it("retries only missing vectors after a later window fails without rereading sources", async () => {
+	const f = await fixture();
+	await f.configure({ embedding: "test-embedding" });
+	f.server.setEmbedding("partial");
+	const source = path.join(f.root, "partial-source");
+	for (let i = 0; i < 130; i++) {
+		await Bun.write(
+			path.join(source, `${String(i).padStart(3, "0")}.md`),
+			`# Evidence ${i}\nalpha beta ${i >= 128 ? "Restart" : "saved"} checkpoint ${i}.\n`,
+		);
+	}
+	const progress: number[] = [];
+	const built = await f.service.init(source, "manual", {
+		onProgress: value => {
+			if (value.message?.includes("counted after each batch")) progress.push(value.completed);
+		},
+	});
+	expect(built).toMatchObject({ processed: 130, failed: 0, vectorStatus: "failed", index: { sectionCount: 130 } });
+	expect(progress).toEqual([0, 128]);
+	const db = new Database(f.service.databasePath, { readonly: true });
+	try {
+		expect(db.query("SELECT count(*) AS count FROM wiki_section_vectors").get()).toEqual({ count: 128 });
+		expect(db.query("SELECT count(*) AS count FROM wiki_ann_generations").get()).toEqual({ count: 0 });
+	} finally {
+		db.close();
+	}
+	await fs.rm(source, { recursive: true });
+	const beforeQuery = f.server.requests.length;
+	const fulltext = await f.service.searchKnowledge("alpha beta");
+	expect(fulltext.result.total).toBe(130);
+	expect(fulltext.text).toMatch(/retrieval:\s*fulltext/i);
+	expect(f.server.requests.slice(beforeQuery)).toEqual([]);
+	f.server.setEmbedding("ok");
+	expect(await f.service.retryVectors()).toEqual({ total: 1, completed: 1, skipped: 0 });
+	const resumedInputs = f.server.requests.slice(beforeQuery).flatMap(request => request.body.input ?? []);
+	expect(resumedInputs).toHaveLength(2);
+	expect(resumedInputs.every(input => input.includes("Restart"))).toBe(true);
+	const afterRetry = f.server.requests.length;
+	expect(await f.service.retryVectors()).toEqual({ total: 1, completed: 0, skipped: 1 });
+	expect(f.server.requests).toHaveLength(afterRetry);
+	const semantic = await f.service.searchKnowledge("如何恢复任务");
+	expect(semantic.text).toMatch(/retrieval:\s*hybrid/i);
+	expect(semantic.result.sections.every(hit => hit.text.includes("alpha beta"))).toBe(true);
+}, 60_000);
 describe("Knowledge semantic and rerank public contracts", () => {
 	it("imports and searches full text with no model configuration and no model requests", async () => {
 		const f = await fixture();
@@ -435,11 +502,7 @@ describe("Knowledge semantic and rerank public contracts", () => {
 			expect(result.total).toBe(3);
 			expect(result.sections.every(hit => hit.text.includes("alpha beta"))).toBe(true);
 			// A normal query must not repair a failed generation on the user's behalf.
-			expect(
-				f.server.requests
-					.slice(requestCount)
-					.every(request => !Array.isArray(request.body.input) || request.body.input.length <= 1),
-			).toBe(true);
+			expect(f.server.requests.slice(requestCount)).toEqual([]);
 		},
 		30_000,
 	);
@@ -694,8 +757,10 @@ describe("Knowledge semantic and rerank public contracts", () => {
 		const base = await f.service.search("alpha beta");
 		await f.configure({ reranker: true });
 		f.server.setRerank("tie");
-		const ranked = await f.service.search("alpha beta");
-		expect(identities(ranked.sections)).toEqual(identities(base.sections));
+		const ranked = await f.service.searchKnowledge("alpha beta");
+		expect(identities(ranked.result.sections)).toEqual(identities(base.sections));
+		expect(ranked.text).toMatch(/retrieval:\s*fulltext/i);
+		expect(ranked.text).toMatch(/reranked:\s*yes/i);
 		expect(f.server.requests.filter(request => request.route.endsWith("/rerank"))).toHaveLength(1);
 	}, 30_000);
 

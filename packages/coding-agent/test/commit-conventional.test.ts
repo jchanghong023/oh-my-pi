@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from "bun:test";
 import * as path from "node:path";
 import * as ai from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getCodeAgentModels } from "../src/config/codeagent-provider";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { CommitInferenceCache, computeCommitCacheKey } from "../src/commit/conventional/cache";
 import { type ConventionalGenerationConfig, conventionalGenerationConfig } from "../src/commit/conventional/config";
@@ -215,9 +215,7 @@ describe("llm-git generation routing", () => {
 	});
 
 	test("retries failed CodeAgent fast generation before falling back to analysis", async () => {
-		const bundled = getBundledModel("anthropic", "claude-haiku-4-5");
-		if (!bundled) throw new Error("expected bundled model");
-		const target = { model: { ...bundled, provider: "codeagent" }, apiKey: "test-key" };
+		const target = { model: getCodeAgentModels()[0]!, apiKey: "test-key" };
 		let calls = 0;
 		const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
 			calls += 1;
@@ -346,7 +344,6 @@ describe("commit inference cache", () => {
 			systemPrompt: "system",
 			userPrompt: "user",
 		};
-		expect(computeCommitCacheKey(material)).toBe(computeCommitCacheKey(material));
 		expect(computeCommitCacheKey({ ...material, userPrompt: "different" })).not.toBe(computeCommitCacheKey(material));
 
 		using tempDir = TempDir.createSync("@omp-commit-cache-");

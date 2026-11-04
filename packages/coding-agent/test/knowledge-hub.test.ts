@@ -8,7 +8,12 @@ import { DEFAULT_TAB_WIDTH } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../src/config/settings";
 import { KnowledgeIndexEngine } from "../src/knowledge/engine";
 import { KnowledgeService } from "../src/knowledge/service";
-import type { KnowledgeIndexSummary, KnowledgeSearchResult } from "../src/knowledge/types";
+import type {
+	KnowledgeBuildOptions,
+	KnowledgeBuildResult,
+	KnowledgeIndexSummary,
+	KnowledgeSearchResult,
+} from "../src/knowledge/types";
 import { KnowledgeHubComponent } from "../src/modes/components/knowledge-hub";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 
@@ -625,6 +630,101 @@ describe("KnowledgeHub explicit grep with real native snapshots", () => {
 			await hub.dispose();
 		}
 	}, 15_000);
+});
+
+describe("KnowledgeHub import progress lifecycle", () => {
+	function progressDurationMs(frame: string, label: "elapsed" | "last update"): number {
+		const duration = frame.match(
+			label === "elapsed" ? /manual · elapsed (\d+(?:\.\d+)?)(ms|s)\b/ : /last update (\d+(?:\.\d+)?)(ms|s) ago/,
+		);
+		if (!duration) throw new Error(`Missing ${label} duration in progress frame:\n${frame}`);
+		return Number(duration[1]) * (duration[2] === "ms" ? 1 : 1000);
+	}
+
+	it.each(["cancel", "complete", "failure", "dispose"] as const)(
+		"refreshes elapsed and idle time without inventing progress and clears its ticker on %s",
+		async ending => {
+			const root = await tempDir("knowledge-hub-progress-");
+			const agentDir = await tempDir("knowledge-hub-progress-agent-");
+			const opened = await openHub(root, agentDir, false);
+			const { hub, waitFor, renderedFrames } = opened;
+			const entered = Promise.withResolvers<void>();
+			const pending = Promise.withResolvers<KnowledgeBuildResult>();
+			let signal: AbortSignal | undefined;
+			let progress: KnowledgeBuildOptions | undefined;
+			const init = spyOn(KnowledgeService.prototype, "init").mockImplementationOnce((_directory, _name, options) => {
+				signal = options?.signal;
+				progress = options;
+				entered.resolve();
+				return pending.promise;
+			});
+			let now = performance.now();
+			const clock = spyOn(performance, "now").mockImplementation(() => now);
+			const interval = spyOn(globalThis, "setInterval");
+			const clear = spyOn(globalThis, "clearInterval");
+			try {
+				await waitFor(rendered => rendered.includes("No knowledge indexes"));
+				for (const input of ["n", "manual", "\r", ".", "\r", "\r"]) hub.handleInput(input);
+				await entered.promise;
+				progress?.onProgress?.({ phase: "fts", total: 8, completed: 3, failed: 1, message: "Embedding sections" });
+				const before = hub
+					.render(200)
+					.map(line => Bun.stripANSI(line))
+					.join("\n");
+				expect(before).toContain("manual · elapsed");
+				expect(before).toContain("3/8 (37%) · failed=1");
+				expect(before).toContain("Embedding sections");
+				expect(progressDurationMs(before, "elapsed")).toBe(0);
+				expect(progressDurationMs(before, "last update")).toBe(0);
+				const tickCall = interval.mock.calls.find(call => call[1] === 1000);
+				expect(tickCall).toBeDefined();
+				const timerIndex = interval.mock.calls.indexOf(tickCall!);
+				const timer = interval.mock.results[timerIndex]!.value;
+				const callback = tickCall![0];
+				if (typeof callback !== "function") throw new Error("Expected the owned refresh callback");
+				now += 2300;
+				const frameCount = renderedFrames.length;
+				callback();
+				// Inspect the frame emitted by the ticker, not a manual render that could
+				// hide a callback which never requested a UI update.
+				const refreshed = Bun.stripANSI(renderedFrames[frameCount] ?? "");
+				expect(progressDurationMs(refreshed, "elapsed")).toBe(2000);
+				expect(progressDurationMs(refreshed, "last update")).toBe(2000);
+				expect(refreshed).toContain("3/8 (37%) · failed=1");
+				expect(refreshed).toContain("Embedding sections");
+				if (ending === "cancel") {
+					hub.handleInput("c");
+					expect(signal?.aborted).toBe(true);
+				} else if (ending === "dispose") {
+					await hub.dispose();
+					expect(signal?.aborted).toBe(true);
+				} else if (ending === "failure") {
+					pending.reject(new Error("controlled import failure"));
+					await waitFor(rendered => rendered.includes("controlled import failure"));
+				} else {
+					pending.resolve({
+						index: { id: 1, name: "manual", rootPath: root, documentCount: 8, sectionCount: 8 },
+						processed: 8,
+						failed: 0,
+						vectorStatus: "ready",
+					});
+					await waitFor(() => true);
+				}
+				expect(clear).toHaveBeenCalledWith(timer);
+				expect(hub.render(200).join("\n")).not.toContain("Embedding sections");
+			} finally {
+				pending.reject(new DOMException("cancelled", "AbortError"));
+				try {
+					await hub.dispose();
+				} finally {
+					init.mockRestore();
+					clock.mockRestore();
+					interval.mockRestore();
+					clear.mockRestore();
+				}
+			}
+		},
+	);
 });
 
 // Windows filenames cannot contain control characters (\r, \t, ESC…), so the

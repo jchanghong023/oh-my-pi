@@ -362,6 +362,105 @@ describe("TeamConfigService", () => {
 		expect(cleared.config.issues).toEqual([]);
 	});
 
+	it("returns a saved-but-overridden receipt without removing the higher-priority roster", async () => {
+		settings = settings.overlay({ "team.members": ["deepseek/Qwen3.8-35B"] });
+		service = new TeamConfigService({ getSettings: () => settings, getModelRegistry: () => registry });
+		const current = await service.getConfig();
+		const saved = await service.setConfig({
+			scope: "user",
+			expectedRevision: current.revision!,
+			members: [{ provider: "deepseek", modelId: "Qwen3.8-27B" }],
+		});
+		expect(saved).toMatchObject({
+			saveState: "complete",
+			write: { status: "saved" },
+			effectiveMatchesRequested: false,
+			config: { source: "runtime" },
+		});
+		expect(saved.config.userMembers?.map(slot => slot.rawSelector)).toEqual(["deepseek/Qwen3.8-27B"]);
+		expect(saved.config.participants.map(slot => slot.model.modelId)).toEqual([
+			"Qwen3.8-35B",
+			"Qwen3.8-35B",
+			"Qwen3.8-35B",
+		]);
+		expect(saved.effectiveNote).toContain("higher-priority");
+		expect(cfgTeamMembers.get(settings)).toEqual(["deepseek/Qwen3.8-35B"]);
+	});
+
+	it.each([
+		"team:\n  members: []\nteam:\n  members: [deepseek/Qwen3.8-35B]\n",
+		"team:\n  members: []\n  members: [deepseek/Qwen3.8-35B]\n",
+	])("rejects ambiguous YAML at read and save without replacing its original bytes: %j", async source => {
+		const before = await service.getConfig();
+		const file = path.join(agentDir, "config.yml");
+		await Bun.write(file, source);
+		const invalid = await service.getConfig();
+		expect(invalid.storage.readState).toBe("invalid");
+		expect(invalid.revision).toBeNull();
+		expect(invalid.writableScopes).toEqual([]);
+		expect(invalid.issues).toContainEqual(expect.objectContaining({ target: "storage", code: "invalid" }));
+		await expect(
+			service.setConfig({
+				scope: "user",
+				expectedRevision: before.revision!,
+				members: [],
+			}),
+		).rejects.toMatchObject({
+			code: "invalid_config",
+			data: { write: { status: "not_attempted" } },
+		});
+		expect(await Bun.file(file).text()).toBe(source);
+		expect(notifications).toEqual([]);
+	});
+
+	it("rejects a context-invalidated save before touching the profile configuration", async () => {
+		const current = await service.getConfig();
+		const file = path.join(agentDir, "config.yml");
+		const before = await Bun.file(file).text();
+		settings = Settings.isolated();
+		await expect(
+			service.setConfig({
+				scope: "user",
+				expectedRevision: current.revision!,
+				members: [],
+			}),
+		).rejects.toMatchObject({
+			code: "execution_failed",
+			data: { write: { status: "not_attempted" } },
+		});
+		expect(await Bun.file(file).text()).toBe(before);
+		expect(notifications).toEqual([]);
+	});
+
+	it("reports notification failure as a committed write and preserves the fresh saved roster", async () => {
+		const current = await service.getConfig();
+		service = new TeamConfigService({
+			getSettings: () => settings,
+			getModelRegistry: () => registry,
+			emit: () => {
+				throw new Error("settings notification rejected");
+			},
+		});
+		await expect(
+			service.setConfig({
+				scope: "user",
+				expectedRevision: current.revision!,
+				members: [{ provider: "deepseek", modelId: "Qwen3.8-35B" }],
+			}),
+		).rejects.toMatchObject({
+			code: "execution_failed",
+			message: "settings notification rejected",
+			data: {
+				saveState: "complete",
+				write: { status: "saved" },
+				effectiveMatchesRequested: true,
+				config: { userMembers: [{ rawSelector: "deepseek/Qwen3.8-35B" }] },
+			},
+		});
+		expect((await service.getConfig()).userMembers?.map(slot => slot.rawSelector)).toEqual(["deepseek/Qwen3.8-35B"]);
+		expect(cfgTeamMembers.get(settings)).toEqual(["deepseek/Qwen3.8-35B"]);
+	});
+
 	it("blocks writes when the stored roster has an invalid type", async () => {
 		await Bun.write(path.join(agentDir, "config.yml"), "team:\n  members: 42\n");
 		const config = await service.getConfig();

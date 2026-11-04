@@ -6,7 +6,7 @@ import { type } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Effort } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { personalCommandProtocolModel } from "./helpers/personal-command-model";
 import * as autoThinkingClassifier from "@oh-my-pi/pi-coding-agent/auto-thinking/classifier";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -44,8 +44,7 @@ async function createMagicKeywordSession(
 	session: AgentSession;
 	settings: Settings;
 }> {
-	const model = getBundledModel("anthropic", modelId);
-	if (!model) throw new Error("Expected bundled Claude Sonnet model");
+	const model = personalCommandProtocolModel(modelId);
 	const agent = new Agent({
 		initialState: {
 			model,
@@ -309,7 +308,7 @@ describe("AgentSession magic keyword settings", () => {
 			const mock = createMockModel({ responses: [{ content: ["working"] }, { content: ["relaxed"] }] });
 			const agent = new Agent({
 				getApiKey: () => "test-key",
-				initialState: { model: getBundledModel("anthropic", id), systemPrompt: ["Test"], tools: [] },
+				initialState: { model: personalCommandProtocolModel(id), systemPrompt: ["Test"], tools: [] },
 				convertToLlm,
 				streamFn: mock.stream,
 			});

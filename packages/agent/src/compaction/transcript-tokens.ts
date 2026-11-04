@@ -5,8 +5,9 @@
  * conversation?" — and usually the wrong one, because the provider already
  * answered it. Every settled assistant turn carries `usage` covering the exact
  * prompt it was sent: the system prompt, the tool schemas, and every message up
- * to and including itself. The only genuinely unaccounted-for text is the tail
- * appended *after* that turn.
+ * to and including itself. Its request-only context is excluded from the
+ * retained transcript baseline. The only genuinely unaccounted-for text is
+ * the tail appended *after* that turn.
  *
  * These helpers locate the newest trustworthy usage report and tokenize only
  * that tail, so a long session pays counting proportional to one turn instead
@@ -21,7 +22,7 @@
 import type { AssistantMessage, Message } from "@oh-my-pi/pi-ai";
 import type { MessageCountOptions, Tokenizer } from "../tokenizer";
 import type { AgentMessage } from "../types";
-import { calculateContextTokens, hasContextTokenUsage } from "./compaction";
+import { calculateContextTokens, calculatePersistentContextTokens, hasContextTokenUsage } from "./compaction";
 
 /** A provider usage report that accounts for a prefix of the transcript. */
 export interface TranscriptUsageAnchor {
@@ -29,7 +30,7 @@ export interface TranscriptUsageAnchor {
 	index: number;
 	/** The anchoring assistant turn. */
 	message: AssistantMessage;
-	/** Conversation tokens the provider reported for that prompt. */
+	/** Conversation tokens covered by this anchor; request anchors include request-only context. */
 	tokens: number;
 }
 
@@ -89,7 +90,7 @@ export function findTranscriptUsageAnchor(
 	for (let index = messages.length - 1; index >= fromIndex; index--) {
 		const message = messages[index];
 		if (!isTranscriptUsageAnchor(message) || message.timestamp <= rewriteAt) continue;
-		return { index, message, tokens: calculateContextTokens(message.usage) };
+		return { index, message, tokens: calculatePersistentContextTokens(message) };
 	}
 	return undefined;
 }
@@ -105,6 +106,9 @@ export function findTranscriptUsageAnchor(
  * its `historyRewriteAt` may be predated before a natively replayed retained
  * tail so that tail's bound thinking survives, but the tail's usage still
  * counted the summarized prefix.
+ * Unlike transcript anchors, request anchors retain the original provider
+ * tokens: request budgeting applies the change in per-call context separately
+ * and must not subtract the previous call's temporary context twice.
  */
 export function findRequestUsageAnchor(messages: readonly Message[]): TranscriptUsageAnchor | undefined {
 	let rewriteAt = Number.NEGATIVE_INFINITY;

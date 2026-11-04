@@ -24,6 +24,33 @@ describe("runKnowledgeCommand", () => {
 		expect(commands.some(command => command.name === "docs")).toBe(false);
 	});
 
+	// Unsupported maintenance verbs must fail in the real parser before opening storage.
+	it.each(["list", "status", "update", "rebuild", "embed"])(
+		"rejects the unsupported knowledge %s command without creating storage",
+		async action => {
+			const cwd = await tempDir("knowledge-cli-verbs-root-");
+			const agentDir = await tempDir("knowledge-cli-verbs-agent-");
+			const child = Bun.spawn([process.execPath, path.join(import.meta.dir, "../src/cli.ts"), "knowledge", action], {
+				cwd,
+				env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, OMP_CACHE_DIR: "", OMP_OFFLINE: "0" },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			const [stdout, stderr, code] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			expect(code).not.toBe(0);
+			expect(`${stdout}${stderr}`).toContain(action);
+			expect(`${stdout}${stderr}`).toContain("init");
+			expect(`${stdout}${stderr}`).toContain("remove");
+			expect(await Bun.file(path.join(agentDir, "knowledge.db")).exists()).toBe(false);
+		},
+		30_000,
+	);
+
 	it("sanitizes a user-supplied root in a top-level CLI error", async () => {
 		const cwd = await tempDir("docs-cli-error-root-");
 		const agentDir = await tempDir("docs-cli-error-agent-");

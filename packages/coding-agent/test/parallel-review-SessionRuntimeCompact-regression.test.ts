@@ -33,7 +33,7 @@ describe("session runtime boundary regressions", () => {
 	});
 
 	it("does not fetch unrelated runtime catalogs after offline UI startup with an already-resolved explicit selector", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const model = getBundledModel("ascend", "qwen3.8-flash-next");
 		if (!model) throw new Error("Expected bundled startup model");
 		const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 		let fetches = 0;

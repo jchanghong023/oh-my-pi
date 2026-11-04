@@ -1114,3 +1114,29 @@ test("cancelled native jobs block control and new work until actual owner-tree s
 		auth.close();
 	}
 });
+
+test("legacy four-stage saved runs restore without inventing optional business facts or replaying work", async () => {
+	const first = await fixture();
+	await first.owner.enter();
+	await first.owner.setTeam(true);
+	await first.owner.new("原有四阶段开发需求");
+	await first.owner.next(undefined, "/dev next 原始需求批准");
+	await first.owner.next("one", "/dev next one 原始方案批准");
+	await first.owner.next(undefined, "/dev next 原始计划批准");
+	await first.owner.exit();
+	const saved = await first.state();
+	delete saved.run.entryPhase;
+	delete saved.run.businessCompleted;
+	await fs.writeFile(path.join(first.root, ".omp/dev/state.json"), JSON.stringify(saved));
+	const restored = await fixture(first.root);
+	await restored.owner.enter();
+	expect(restored.owner.status()).toMatchObject({ phase: "executing", entryPhase: "requirements", useTeam: true });
+	expect(restored.owner.observation().runId).toBe(saved.run.runId);
+	expect(restored.owner.observation().approvals).toEqual(saved.run.approvals);
+	expect(restored.calls.some(call => call.startsWith("model:"))).toBe(false);
+	expect(restored.calls).not.toContain("prepare:business");
+	const actual = (await restored.state()).run;
+	expect(actual.sessions).not.toHaveProperty("business");
+	expect(actual.approvals).not.toHaveProperty("business");
+	expect(actual.paths).not.toHaveProperty("business");
+});

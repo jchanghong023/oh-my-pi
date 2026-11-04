@@ -199,6 +199,9 @@ it.each(["rejection", "exception"])(
 		const source = `
 import { postmortem } from "@oh-my-pi/pi-utils";
 import { observeGateUnhandledFailures } from ${JSON.stringify(path.join(import.meta.dir, "test-gate-failure-events.ts"))};
+// The observer only reports; its documented contract preserves the caller's
+// exit policy. Install the real standalone CLI fatal/cleanup owner explicitly.
+postmortem.installProcessHandlers();
 observeGateUnhandledFailures();
 postmortem.register("fixture-cleanup-barrier", async () => {
 	process.stdout.write("OMP_FIXTURE_CLEANUP_READY\\n");
@@ -278,8 +281,7 @@ it("reports affected Bun files and empty selections without fabricating testcase
 		);
 		await git("add", ".");
 		await git("commit", "-qm", "fixture baseline");
-		await fs.writeFile(path.join(repo, "A.ts"), "export const value = 3;\n");
-		const invoke = async (report: string) => {
+		const invoke = async (report: string, affected = true) => {
 			const reportDir = path.join(directory, report);
 			const child = Bun.spawn(
 				[
@@ -287,7 +289,7 @@ it("reports affected Bun files and empty selections without fabricating testcase
 					path.join(import.meta.dir, "test-report-bun.ts"),
 					"./A.test.ts",
 					"./B.test.ts",
-					"--changed=HEAD",
+					...(affected ? ["--changed=HEAD"] : []),
 				],
 				{
 					cwd: repo,
@@ -311,6 +313,11 @@ it("reports affected Bun files and empty selections without fabricating testcase
 			const name = (await fs.readdir(reportDir)).find(entry => entry.endsWith(".producer.json"))!;
 			return JSON.parse(await fs.readFile(path.join(reportDir, name), "utf8"));
 		};
+		const baselineRun = await invoke("baseline", false);
+		expect(baselineRun).toMatchObject({ status: "passed", report: "available", selection: { mode: "full" } });
+		expect((await fs.readFile(marker, "utf8")).trim().split("\n").sort()).toEqual(["A:1", "B:2"]);
+		await fs.writeFile(marker, "");
+		await fs.writeFile(path.join(repo, "A.ts"), "export const value = 3;\n");
 		const selected = await invoke("selected");
 		expect(selected.selection.mode).toBe("affected");
 		expect(selected.report).toBe("available");

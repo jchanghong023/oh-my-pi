@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getTestModel } from "./helpers/model-fixtures";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { rebindMemoryBackendForCwd } from "@oh-my-pi/pi-coding-agent/hindsight/backend";
@@ -91,7 +91,7 @@ describe("createAgentSession cwd after /move", () => {
 				);
 				const settings = await Settings.loadIsolated({ cwd: cwdA, agentDir });
 				const sessionManager = SessionManager.create(cwdA, SessionManager.getDefaultSessionDir(cwdA, agentDir));
-				authStorage.keys.setRuntime("openai", "test-key");
+				authStorage.keys.setRuntime("ascend", "test-key");
 				({ session } = await createAgentSession({
 					cwd: cwdA,
 					agentDir,
@@ -99,7 +99,7 @@ describe("createAgentSession cwd after /move", () => {
 					authStorage,
 					modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
 					settings,
-					model: getBundledModel("openai", "gpt-4o-mini"),
+					model: getTestModel("ascend"),
 					toolNames: ["read"],
 					disableExtensionDiscovery: true,
 					skills: [],
@@ -164,7 +164,7 @@ describe("createAgentSession cwd after /move", () => {
 			authStorage,
 			modelRegistry,
 			settings: Settings.isolated({ "async.enabled": false }),
-			model: getBundledModel("openai", "gpt-4o-mini"),
+			model: getTestModel("ascend"),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],
@@ -223,7 +223,7 @@ describe("createAgentSession cwd after /move", () => {
 			authStorage,
 			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir, "models.yml")),
 			settings,
-			model: getBundledModel("openai", "gpt-4o-mini"),
+			model: getTestModel("ascend"),
 			restrictToolNames: true,
 			toolNames: ["read"],
 			disableExtensionDiscovery: true,

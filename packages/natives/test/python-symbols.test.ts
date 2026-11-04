@@ -330,10 +330,10 @@ test.skipIf(process.platform === "win32")(
 					process.setuid(65534);
 					const options = { pattern: "**/*.py", path: ${JSON.stringify(root)} };
 					const ordinary = await glob(options);
-					let strictFailed = false;
+					let strictError;
 					try { await glob({ ...options, strictErrors: true }); }
-					catch { strictFailed = true; }
-					console.log(JSON.stringify({ matches: ordinary.matches.map(match => match.path), strictFailed }));
+					catch (error) { strictError = String(error); }
+					console.log(JSON.stringify({ matches: ordinary.matches.map(match => match.path), strictError }));
 				`;
 				const child = Bun.spawn([process.execPath, "-e", script], { stdout: "pipe", stderr: "pipe" });
 				const [output, errors, exitCode] = await Promise.all([
@@ -342,12 +342,15 @@ test.skipIf(process.platform === "win32")(
 					child.exited,
 				]);
 				if (exitCode !== 0) throw new Error(`Unprivileged native glob failed: ${errors}`);
-				expect(JSON.parse(output)).toEqual({ matches: ["visible.py"], strictFailed: true });
+				expect(JSON.parse(output)).toEqual({
+					matches: ["visible.py"],
+					strictError: expect.stringContaining(blocked),
+				});
 			} else {
 				expect((await glob({ pattern: "**/*.py", path: root })).matches.map(match => match.path)).toEqual([
 					"visible.py",
 				]);
-				await expect(glob({ pattern: "**/*.py", path: root, strictErrors: true })).rejects.toThrow();
+				await expect(glob({ pattern: "**/*.py", path: root, strictErrors: true })).rejects.toThrow(blocked);
 			}
 		} finally {
 			await fs.chmod(blocked, 0o700).catch(() => {});

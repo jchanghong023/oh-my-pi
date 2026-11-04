@@ -179,6 +179,8 @@ export interface SettingsOptions {
 	inMemory?: boolean;
 	/** Read config sources without opening storage or writing migrations */
 	readOnly?: boolean;
+	/** Explicit config edits load without initialization and require an existing whole-file CAS snapshot. */
+	existingConfigOnly?: boolean;
 	/** Initial runtime overrides, keyed by setting id (legacy ids migrate; values are checked like `override`). */
 	overrides?: Readonly<Record<string, unknown>>;
 	/** Extra config.yml-style overlays loaded after global/project settings */
@@ -750,6 +752,7 @@ export class Settings {
 
 	/** Whether to persist changes */
 	#persist: boolean;
+	readonly #existingConfigOnly: boolean;
 	/** Main-thread instance this worker mirror replicates; set only by {@link Settings.mirror}. */
 	#mirror: SettingsMirrorSource | undefined;
 	/** {@link SettingsMirrorState.generation} this mirror last adopted; `-1` before the first. */
@@ -767,6 +770,7 @@ export class Settings {
 		if (options.configFiles) configFiles.push(...options.configFiles);
 		this.#configFiles = configFiles.map(file => path.resolve(this.#cwd, expandTilde(file)));
 		this.#persist = !options.inMemory && options.readOnly !== true;
+		this.#existingConfigOnly = options.existingConfigOnly === true;
 		registerSettingsInstance(this);
 		if (options.overrides) this.#overrides = this.#overrideLayer(options.overrides);
 	}
@@ -808,7 +812,10 @@ export class Settings {
 	static init(options: SettingsOptions = {}): Promise<Settings> {
 		if (globalInstancePromise) return globalInstancePromise;
 
-		const promise = Promise.try(() => new Settings(options).#load());
+		const promise = Promise.try(() => {
+			const instance = new Settings(options);
+			return options.existingConfigOnly ? instance.#loadReadOnly() : instance.#load();
+		});
 		globalInstancePromise = promise;
 
 		return promise.then(
@@ -1134,6 +1141,8 @@ export class Settings {
 		return new UserSettingsStore({
 			agentDir: this.#agentDir,
 			migrate: raw => this.#migrateRawSettings(raw, false),
+			requireExisting: this.#existingConfigOnly,
+			revisionScope: this.#existingConfigOnly ? "file" : "setting",
 		}).read(setting.segments);
 	}
 
@@ -1190,6 +1199,8 @@ export class Settings {
 		const store = new UserSettingsStore({
 			agentDir: this.#agentDir,
 			migrate: raw => this.#migrateRawSettings(raw, false),
+			requireExisting: this.#existingConfigOnly,
+			revisionScope: this.#existingConfigOnly ? "file" : "setting",
 		});
 		this.#persistedMutationGeneration++;
 		let refresh = false;
@@ -2509,17 +2520,21 @@ export class Settings {
 
 	async #loadReadOnly(): Promise<Settings> {
 		const [globalResult, projectResult] = await Promise.allSettled([
-			this.#loadExistingMainYaml(),
-			this.#loadProjectSettings(),
+			this.#readExistingMainYaml(false),
+			this.#readProjectSettings(false),
 		]);
 		if (globalResult.status === "rejected") throw globalResult.reason;
 		if (projectResult.status === "rejected") throw projectResult.reason;
-		if (globalResult.value) {
-			this.#global = globalResult.value;
+		this.#configPath = globalResult.value.configPath;
+		if (globalResult.value.settings) {
+			this.#global = globalResult.value.settings;
 		}
 
-		this.#project = projectResult.value;
-		this.#configOverlay = await this.#loadConfigOverlays();
+		this.#commitProjectRead(projectResult.value);
+		this.#project = projectResult.value.settings;
+		const overlays = await this.#readConfigOverlays(false);
+		this.#configOverlay = overlays.settings;
+		this.#overlayShellPathSource = overlays.shellPathSource;
 		this.#rebuildMerged();
 		this.#validateAll();
 		return this;

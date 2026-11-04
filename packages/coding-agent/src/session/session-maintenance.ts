@@ -21,6 +21,7 @@ import {
 	type CompactionResult,
 	type CompactionSummaryMessage,
 	calculateContextTokens,
+	calculatePersistentContextTokens,
 	collectShakeRegions,
 	COMPACTION_RECOVERY_BAND,
 	compact,
@@ -3066,9 +3067,9 @@ export class SessionMaintenance {
 		// persistence; rewrites and dead-end cut-point rechecks do. Awaiting it on every tool turn lets
 		// a slow message_end listener leave the TUI "generating" with no provider
 		// request or tool running.
-		const billedContextTokens = calculateContextTokens(lastAssistant.usage);
+		const persistentContextTokens = calculatePersistentContextTokens(lastAssistant);
 		const storedContextTokens = this.#estimateStoredContextTokens();
-		let contextTokens = compactionContextTokens(billedContextTokens, storedContextTokens);
+		let contextTokens = compactionContextTokens(persistentContextTokens, storedContextTokens);
 		if (queuedDrainMessages.length > 0) {
 			// 缺陷 G02: 队列待消费输入按直接 prompt 同一口径计入待输入预算 ——
 			// provider usage(锚定估算)+pending 与本地估算+pending 取较大者,
@@ -3728,7 +3729,7 @@ export class SessionMaintenance {
 		// (the floor applied below) drive the decision instead.
 		const assistantUsageContextTokens = assistantPredatesCompaction
 			? 0
-			: calculateContextTokens(assistantMessage.usage);
+			: calculatePersistentContextTokens(assistantMessage);
 		const storedContextTokens = this.#estimateStoredContextTokens();
 		// Pruning frees bytes for the NEXT prompt; it does not change the size of
 		// the prompt the LLM just billed for. Earlier revisions subtracted the
@@ -3738,7 +3739,8 @@ export class SessionMaintenance {
 		// post-prune estimate below the user-configured trigger — the visible
 		// context (anchored to the same provider billing) still showed >threshold,
 		// but `shouldCompact` no-op'd (#3174). Anchor the initial trigger on the
-		// last turn's billed context tokens, floored by the post-prune
+		// last turn's billed persistent context tokens (excluding request-only
+		// context), floored by the post-prune
 		// stored-conversation estimate so a payload-compression hook still can't
 		// deflate the trigger.
 		const contextTokens = compactionContextTokens(assistantUsageContextTokens, storedContextTokens);

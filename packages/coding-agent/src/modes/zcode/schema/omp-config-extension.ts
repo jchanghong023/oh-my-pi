@@ -166,7 +166,8 @@ export const zcodeSessionConfigureParamsSchema = z.discriminatedUnion("operation
 			sessionId: z.string().min(1),
 			operation: z.literal("set_model_role"),
 			roleId: z.string().min(1),
-			scope: z.literal("user"),
+			// The role service rejects non-user scopes with the structured scope_not_allowed code.
+			scope: z.string(),
 			expectedRevision: z.string().min(1),
 			selection: ompRoleSelectionSchema,
 		})

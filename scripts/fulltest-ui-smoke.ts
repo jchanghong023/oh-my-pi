@@ -89,6 +89,7 @@ async function removeFixture(configRoot: string): Promise<void> {
 		if (!broker || broker.status() === "exited") continue;
 		let connection: IpcConnection | undefined;
 		let timer: NodeJS.Timeout | undefined;
+		let shutdownError: unknown;
 		try {
 			const token = (await fs.readFile(path.join(runtimeDir, "broker.token"), "utf8")).trim();
 			connection = await IpcConnection.connect(daemonBrokerEndpoint(runtimeDir), {
@@ -116,14 +117,15 @@ async function removeFixture(configRoot: string): Promise<void> {
 			connection.send(JSON.stringify({ id, token, operation: { op: "shutdown" } } satisfies DaemonWireRequest));
 			await response.promise;
 		} catch (error) {
-			// The normal idle timer may win the shutdown race. Only a stable
-			// process-exit observation makes that an already-released scope.
-			if (broker.status() !== "exited") throw error;
+			// Idle shutdown can remove the pipe before the process handle signals
+			// exit. Preserve the error until the existing exit wait confirms release.
+			shutdownError = error;
 		} finally {
 			clearTimeout(timer);
 			connection?.destroy();
 		}
 		if (!(await broker.waitForExit({ timeoutMs: 5_000 }))) {
+			if (shutdownError !== undefined) throw shutdownError;
 			throw new Error(`Fixture broker did not exit after shutdown: ${runtimeDir}`);
 		}
 	}
@@ -457,6 +459,14 @@ const STUB_BLOCKING_ISSUE = "新增必填 options 参数会破坏不传该参数
 const STUB_DEFAULT_BLOCKING_ISSUE = "提案未定义 options 缺省时的行为，无法保证旧调用语义不变。";
 
 function reviewPayload(target: string, round: number, recheck: boolean): Record<string, unknown> {
+	if (recheck && invalidRequiredRecheck) {
+		return {
+			noSubstantiveIssues: true,
+			reviewSummary: "没有新增问题，但故意遗漏仍需逐项裁决的历史阻断 ID。",
+			findings: [],
+			blockingResolutions: [],
+		};
+	}
 	if (!recheck) {
 		return {
 			noSubstantiveIssues: false,
@@ -485,7 +495,9 @@ function reviewPayload(target: string, round: number, recheck: boolean): Record<
 		reviewSummary:
 			round === 1
 				? "参数已改为可选；只关闭参数必填阻断，缺省行为仍未明确。"
-				: "缺省分支已明确保留原有逻辑，剩余阻断已解决。",
+				: target === "B"
+					? "缺省兼容性反例仍成立，剩余阻断未解决。"
+					: "缺省分支已明确保留原有逻辑，剩余阻断已解决。",
 		findings: [],
 		blockingResolutions:
 			round === 1
@@ -504,8 +516,11 @@ function reviewPayload(target: string, round: number, recheck: boolean): Record<
 				: [
 						{
 							findingId: `${target}-F2`,
-							status: "resolved",
-							basis: "第二轮修订明确未传 options 时完整执行原有逻辑。",
+							status: target === "B" ? "unresolved" : "resolved",
+							basis:
+								target === "B"
+									? "第二轮仍未证明缺省分支与旧调用语义一致，兼容性反例仍成立。"
+									: "第二轮修订明确未传 options 时完整执行原有逻辑。",
 						},
 					],
 	};
@@ -534,6 +549,17 @@ function revisionPayload(target: string, round: number): Record<string, unknown>
 						},
 					]
 				: [
+						// A failed first recheck cannot close F1. The next revision
+						// must still answer it as well as F2 before it can be rechecked.
+						...(invalidRequiredRecheck
+							? [
+									{
+										findingId: `${target}-F1`,
+										disposition: "accepted-and-revised",
+										explanation: "保留第一轮将 options 改为可选的修订，旧调用仍无需补传参数。",
+									},
+								]
+							: []),
 						{
 							findingId: `${target}-F2`,
 							disposition: "accepted-and-revised",
@@ -597,7 +623,7 @@ function stagePayload(
 		case "synthesis":
 			return {
 				reportMarkdown:
-					"### 需求与验收标准\n增加新功能，旧调用无需修改。\n\n### 核心方案\n方案 A：可选 options 参数，未传时保留旧行为。\n\n### 关键依据\n原始提案、修订记录与新审查者确认的阻断已解决结论。",
+					"### 需求与验收标准\n增加新功能，旧调用无需修改。\n\n### 核心方案\n比较可选 options 参数与缺省兼容路径。\n\n### 关键依据\n原始提案、逐条修订与新审查者裁决；可采用状态以结构化追踪为准。",
 				recommendedProposal: "A",
 				recommendationReason: "满足全部验收标准且改动最小",
 				recommendationPreconditions: "旧调用保留缺省路径，修订后的接口必须经过兼容性验证",
@@ -612,6 +638,7 @@ const stubRequests: StubRequestLog[] = [];
 let stubMessageCounter = 0;
 /** When > 0, team-stage requests sleep this long first (cancellation case). */
 let slowTeamStagesMs = 0;
+let invalidRequiredRecheck = false;
 
 function stubSseBody(
 	requestModel: string,
@@ -932,11 +959,11 @@ try {
 	const initialReviewCount = stubRequests.filter(request => request.stage === "review" && !request.recheck).length;
 	const recheckCount = stubRequests.filter(request => request.stage === "review" && request.recheck).length;
 	if (
-		(stageCounts.get("proposal") ?? 0) < 2 ||
+		(stageCounts.get("proposal") ?? 0) < 3 ||
 		(stageCounts.get("alignment") ?? 0) < 1 ||
-		initialReviewCount < 2 ||
-		(stageCounts.get("revision") ?? 0) < 2 ||
-		recheckCount < 2 ||
+		initialReviewCount < 3 ||
+		(stageCounts.get("revision") ?? 0) < 6 ||
+		recheckCount < 6 ||
 		(stageCounts.get("synthesis") ?? 0) < 1
 	) {
 		fail(`/team did not exercise the expected stages: ${JSON.stringify([...stageCounts])}`, team.session);
@@ -944,6 +971,9 @@ try {
 	const reviewedTargets = new Set(
 		stubRequests.filter(request => request.stage === "review" && !request.recheck).map(request => request.target),
 	);
+	if ([...reviewedTargets].sort().join(",") !== "A,B,C") {
+		fail("/team did not review all three independent proposer slots", team.session);
+	}
 	for (const target of reviewedTargets) {
 		for (const round of [1, 2]) {
 			const revised = stubRequests.some(
@@ -958,6 +988,48 @@ try {
 			}
 		}
 	}
+	if (!(await waitFor(() => normalizePtyOutput(team.output).includes("B-F2"), 20_000))) {
+		fail("/team did not visibly preserve the remaining B-F2 blocker after partial closure", team.session);
+	}
+
+	// Run another real command through the same TUI. A clean new-findings
+	// verdict without exact historical decisions must fail both rechecks,
+	// remain non-adoptable and never inherit the first run's recommendation.
+	invalidRequiredRecheck = true;
+	const invalidRequestsStart = stubRequests.length;
+	const invalidOutputStart = team.output.length;
+	team.session.write("/team 验证必需复核遗漏裁决时不得推荐\r");
+	if (
+		!(await waitFor(
+			() => stubRequests.slice(invalidRequestsStart).some(request => request.stage === "synthesis"),
+			120_000,
+		))
+	)
+		fail("/team invalid-recheck case never reached synthesis", team.session);
+	const invalidRequests = stubRequests.slice(invalidRequestsStart);
+	for (const target of ["A", "B", "C"]) {
+		for (const stage of ["revision", "review"]) {
+			const rounds = invalidRequests
+				.filter(
+					request =>
+						request.stage === stage && request.target === target && (stage !== "review" || request.recheck),
+				)
+				.map(request => request.round)
+				.sort();
+			if (rounds.join(",") !== "1,2") {
+				fail(`/team invalid-recheck case did not spend exactly two ${stage} rounds for ${target}`, team.session);
+			}
+		}
+	}
+	if (
+		!(await waitFor(() => {
+			const output = normalizePtyOutput(team.output.slice(invalidOutputStart));
+			return output.includes("修订后必需复核未完成") && output.includes("A-F1");
+		}, 60_000))
+	) {
+		fail("/team invalid-recheck result did not visibly retain A-F1 and the failed-recheck gate", team.session);
+	}
+	invalidRequiredRecheck = false;
 
 	team.session.write("\x04");
 	const teamOutcome = await Promise.race([team.exitPromise, sleep(20_000).then(() => undefined)]);
@@ -967,18 +1039,41 @@ try {
 	if (teamOutcome.exitCode !== 0) {
 		fail(`/team TUI exited with code ${teamOutcome.exitCode} (expected 0)`);
 	}
-	let reportPersisted = false;
+	const persistedReports: string[] = [];
 	for await (const file of new Bun.Glob("*/*.jsonl").scan(path.join(profileAgentDir, "sessions"))) {
 		const entries = Bun.JSONL.parse(await Bun.file(path.join(profileAgentDir, "sessions", file)).text()) as {
 			type?: string;
 			customType?: string;
+			content?: unknown;
 		}[];
-		if (entries.some(entry => entry.type === "custom_message" && entry.customType === "team-result")) {
-			reportPersisted = true;
-			break;
+		for (const entry of entries) {
+			if (
+				entry.type === "custom_message" &&
+				entry.customType === "team-result" &&
+				typeof entry.content === "string"
+			) {
+				persistedReports.push(entry.content);
+			}
 		}
 	}
-	if (!reportPersisted) fail("/team report rendered but was not durably saved in the session");
+	const completedReport = persistedReports.find(report => report.includes("【推荐】方案 A"));
+	if (
+		!completedReport ||
+		!completedReport.includes("| 方案 A | ✅ 可作为选项") ||
+		!completedReport.includes("| 方案 B | ⛔ 尚不可采用") ||
+		!completedReport.includes("B-F2") ||
+		completedReport.includes("【推荐】方案 B") ||
+		!completedReport.includes("选择仅确认该方案")
+	)
+		fail("/team partial-closure report lost the persisted blocker, recommendation gate or closing contract");
+	const invalidReport = persistedReports.find(report => report.includes("修订后必需复核未完成"));
+	if (
+		!invalidReport ||
+		invalidReport.includes("【推荐】") ||
+		invalidReport.includes("✅ 可作为选项") ||
+		!["A-F1", "A-F2", "B-F1", "B-F2", "C-F1", "C-F2"].every(id => invalidReport.includes(id))
+	)
+		fail("/team invalid required rechecks were not durably gated with all historical blocker IDs");
 	console.log("ui-smoke: /team case PASS — real TUI run rendered and persisted the final /team report");
 	await recordUiCase("team-report-persisted");
 

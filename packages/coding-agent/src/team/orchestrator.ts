@@ -328,8 +328,20 @@ async function runTeamDiscussionImpl(
 	/** Run one subagent call under the concurrency semaphore. */
 	const runCall = async (
 		call: TeamSubagentCall,
-		context: { stage: string; member_index?: number; proposal_label?: string; round?: number; recheck?: boolean },
+		context: {
+			stage: TeamProgressUpdate["stage"];
+			member_index?: number;
+			proposal_label?: string;
+			round?: number;
+			recheck?: boolean;
+		},
+		progress: { label: string; text: string },
 	): Promise<TeamCallDiagnosticsOutcome> => {
+		const updateParticipant = (status: TeamProgressUpdate["participants"][number]["state"], text: string): void => {
+			trackParticipant(progress.label, call.role, status);
+			emitProgress(context.stage, `${progress.text}（${text}）`);
+		};
+		updateParticipant("pending", "等待并发许可");
 		const fields = {
 			...context,
 			call_id: `team-call-${crypto.randomUUID()}`,
@@ -361,9 +373,20 @@ async function runTeamDiscussionImpl(
 					elapsed_ms: performance.now() - started,
 					...logger.diagnosticError(error),
 				});
+				updateParticipant("cancelled", "已取消");
 				return retainOutcome({ ok: false, error: "cancelled while waiting for a concurrency slot" });
 			}
+			let participantState: "completed" | "failed" | "cancelled" = "failed";
 			try {
+				if (signal.aborted) {
+					participantState = "cancelled";
+					return retainOutcome({ ok: false, error: "cancelled before runner start" });
+				}
+				updateParticipant("running", "运行中");
+				if (signal.aborted) {
+					participantState = "cancelled";
+					return retainOutcome({ ok: false, error: "cancelled before runner start" });
+				}
 				logger.info("Team runner started", {
 					component: "team.orchestrator",
 					event: "team_runner_started",
@@ -374,6 +397,7 @@ async function runTeamDiscussionImpl(
 				// Retain the original yield before stage parsers trim or budget it.
 				const retained = retainOutcome(outcome);
 				const result = signal.aborted ? "cancelled" : outcome.ok ? "completed" : "failed";
+				participantState = result;
 				const terminal = {
 					component: "team.orchestrator",
 					event: `team_call_${result}`,
@@ -386,6 +410,7 @@ async function runTeamDiscussionImpl(
 				else logger.info("Team call finished", terminal);
 				return retained;
 			} catch (error) {
+				participantState = signal.aborted ? "cancelled" : "failed";
 				const terminal = {
 					component: "team.orchestrator",
 					event: signal.aborted ? "team_call_cancelled" : "team_call_failed",
@@ -402,7 +427,13 @@ async function runTeamDiscussionImpl(
 					error: signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error),
 				});
 			} finally {
+				// Settle the current holder before admitting the next queued call.
+				trackParticipant(progress.label, call.role, participantState);
 				semaphore.release();
+				emitProgress(
+					context.stage,
+					`${progress.text}（${participantState === "cancelled" ? "已取消" : participantState === "completed" ? "调用完成" : "调用失败"}）`,
+				);
 			}
 		});
 	};
@@ -446,8 +477,6 @@ async function runTeamDiscussionImpl(
 	state.records = records;
 	await Promise.all(
 		records.map(async record => {
-			trackParticipant(record.label, "proposer", "running");
-			emitProgress("investigation", `阶段一：独立调查（${record.label} 运行中）`);
 			const call: TeamSubagentCall = {
 				role: "proposer",
 				modelPattern: record.participant.modelPattern,
@@ -455,13 +484,17 @@ async function runTeamDiscussionImpl(
 				task: buildProposalTask({ question, cwd }),
 				schema: TEAM_PROPOSAL_SCHEMA,
 			};
-			const outcome = await runCall(call, {
-				stage: "investigation",
-				member_index: record.participant.index,
-				proposal_label: record.label,
-				round: 0,
-				recheck: false,
-			});
+			const outcome = await runCall(
+				call,
+				{
+					stage: "investigation",
+					member_index: record.participant.index,
+					proposal_label: record.label,
+					round: 0,
+					recheck: false,
+				},
+				{ label: record.label, text: `阶段一：独立调查（${record.label}）` },
+			);
 			if (signal.aborted) return;
 			const parseStarted = performance.now();
 			const proposal = outcome.ok
@@ -524,7 +557,6 @@ async function runTeamDiscussionImpl(
 	}
 
 	// ── Stage 2: alignment (session model) ──────────────────────────────────
-	trackParticipant("alignment", "aligner", "running");
 	emitProgress("alignment", "阶段二：对齐与比较");
 	const alignmentOutcome = await runCall(
 		{
@@ -535,6 +567,7 @@ async function runTeamDiscussionImpl(
 			schema: TEAM_ALIGNMENT_SCHEMA,
 		},
 		{ stage: "alignment", round: 0, recheck: false },
+		{ label: "alignment", text: "阶段二：对齐与比较" },
 	);
 	if (signal.aborted) return { status: "cancelled" };
 	const alignmentParseStarted = performance.now();
@@ -578,7 +611,6 @@ async function runTeamDiscussionImpl(
 			candidates.map(async record => {
 				const reviewer = assignReviewerParticipant(participants, record.participant.index);
 				record.reviewer = reviewer;
-				trackParticipant(`review-${record.label}`, "reviewer", "running");
 				const reviewOutcome = await runCall(
 					{
 						role: "reviewer",
@@ -594,6 +626,7 @@ async function runTeamDiscussionImpl(
 						round: 1,
 						recheck: false,
 					},
+					{ label: `review-${record.label}`, text: `阶段三：交叉审查（${record.label}）` },
 				);
 				if (signal.aborted) return;
 				const parseStarted = performance.now();
@@ -657,8 +690,6 @@ async function runTeamDiscussionImpl(
 			for (let round = 1; round <= TEAM_MAX_REVISION_ROUNDS; round++) {
 				if (signal.aborted) return;
 				record.roundsUsed = round;
-				trackParticipant(`revision-${record.label}`, "reviser", "running");
-				emitProgress("revision", `阶段四：修订与复核（${record.label} 第 ${round} 轮）`);
 				const expectedFindingIds = [
 					...new Set([
 						...record.reviews.at(-1)!.findings.map(finding => finding.id),
@@ -688,6 +719,10 @@ async function runTeamDiscussionImpl(
 						proposal_label: record.label,
 						round,
 						recheck: false,
+					},
+					{
+						label: `revision-${record.label}`,
+						text: `阶段四：修订与复核（${record.label} 第 ${round} 轮修订）`,
 					},
 				);
 				if (signal.aborted) return;
@@ -728,7 +763,6 @@ async function runTeamDiscussionImpl(
 					disputes_blocking_finding: revision.reviewFlags.disputesBlockingFinding,
 				});
 				if (needsRecheck(revision.reviewFlags)) {
-					trackParticipant(`recheck-${record.label}`, "reviewer", "running");
 					const recheckOutcome = await runCall(
 						{
 							role: "reviewer",
@@ -749,6 +783,10 @@ async function runTeamDiscussionImpl(
 							proposal_label: record.label,
 							round,
 							recheck: true,
+						},
+						{
+							label: `recheck-${record.label}`,
+							text: `阶段四：修订与复核（${record.label} 第 ${round} 轮复核）`,
 						},
 					);
 					if (signal.aborted) return;
@@ -847,7 +885,6 @@ async function runTeamDiscussionImpl(
 	}
 
 	// ── Stage 5: synthesis (session model) ──────────────────────────────────
-	trackParticipant("synthesis", "synthesizer", "running");
 	emitProgress("synthesis", "阶段五：汇总方案");
 	const synthesisOutcome = await runCall(
 		{
@@ -861,6 +898,7 @@ async function runTeamDiscussionImpl(
 			schema: TEAM_SYNTHESIS_SCHEMA,
 		},
 		{ stage: "synthesis", round: 0, recheck: false },
+		{ label: "synthesis", text: "阶段五：汇总方案" },
 	);
 	if (signal.aborted) return { status: "cancelled" };
 	const synthesisParseStarted = performance.now();

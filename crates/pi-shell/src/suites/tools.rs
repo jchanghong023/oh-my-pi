@@ -156,6 +156,25 @@ async fn timeout_signals_and_statuses_follow_gnu() {
 	assert_eq!(r.stderr, "timeout: sending signal TERM to command 'sleep'\n");
 }
 
+/// Preserve-status must report the signal, including KILL, for both external
+/// commands and an in-process operand rather than returning the default 124.
+#[tokio::test(flavor = "multi_thread")]
+async fn timeout_preserves_signal_status_for_external_and_in_process_operands() {
+	let mut s = session();
+	for (command, expected) in [
+		("timeout --preserve-status -s KILL 0.1 /bin/sleep 5", 137),
+		("timeout --preserve-status -s INT 0.1 /bin/sleep 5", 130),
+		("timeout --preserve-status -s TERM 0.1 eval 'while :; do :; done'", 143),
+		("timeout --preserve-status -s KILL 0.1 eval 'while :; do :; done'", 137),
+		("timeout -s INT 0.1 /bin/sleep 5", 124),
+	] {
+		let result = tokio::time::timeout(Duration::from_secs(5), run(&mut s, command))
+			.await
+			.expect("timed operand must terminate");
+		assert_eq!(result.status, expected, "{command}: {}", result.stderr);
+	}
+}
+
 /// A nested timeout's tracked external and virtual labels are one TERM wave;
 /// the handler's newly spawned cleanup child must survive that wave.
 #[tokio::test(flavor = "multi_thread")]
@@ -164,15 +183,15 @@ async fn nested_timeout_term_wave_allows_cleanup_child() {
 	let dir = tempfile::tempdir().unwrap();
 	let cleaned = dir.path().join("cleaned");
 	let command = format!(
-		"timeout 0.5 timeout 5 /bin/sh -c 'trap \"/bin/sleep 0.2; : > \\\"$1\\\"; exit\" TERM; \
-		 while :; do :; done' sh {}",
+		"timeout 0.5 timeout 5 /bin/sh -c 'trap \"/bin/sleep 0.2; printf cleaned >> \\\"$1\\\"; \
+		 exit\" TERM; while :; do :; done' sh {}",
 		cleaned.display(),
 	);
 	let result = tokio::time::timeout(Duration::from_secs(5), run(&mut s, &command))
 		.await
 		.expect("nested timeout did not finish");
 	assert_eq!(result.status, 124, "{}", result.stderr);
-	assert!(cleaned.exists(), "TERM cleanup child was interrupted");
+	assert_eq!(std::fs::read(&cleaned).expect("TERM cleanup child completed"), b"cleaned");
 }
 
 /// A command that ignores the signal is killed after `-k`, external
@@ -234,8 +253,8 @@ async fn cancelled_pipeline_waits_for_term_cleanup() {
 	let ready = dir.path().join("ready");
 	let cleaned = dir.path().join("cleaned");
 	let command = format!(
-		"/bin/sh -c 'trap \"/bin/sleep 0.2; : > \\\"$2\\\"; exit\" TERM; : > \"$1\"; while :; do :; \
-		 done' sh {} {} | /bin/cat",
+		"/bin/sh -c 'trap \"/bin/sleep 0.2; printf cleaned >> \\\"$2\\\"; exit\" TERM; : > \"$1\"; \
+		 while :; do :; done' sh {} {} | /bin/cat",
 		ready.display(),
 		cleaned.display(),
 	);
@@ -253,7 +272,7 @@ async fn cancelled_pipeline_waits_for_term_cleanup() {
 	};
 	let (result, ()) = tokio::join!(run_with(&mut s, &command, cancel), cancel_when_ready);
 	assert_eq!(result.status, 143);
-	assert!(cleaned.exists(), "run returned before the TERM handler finished");
+	assert_eq!(std::fs::read(&cleaned).expect("TERM cleanup finished before return"), b"cleaned");
 }
 
 #[tokio::test(flavor = "multi_thread")]

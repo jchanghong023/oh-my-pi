@@ -305,6 +305,8 @@ export interface AgentSessionConfig {
 	rebindModelAfterDiscovery?: boolean;
 	/** Tool registry for LSP and settings. */
 	toolRegistry?: Map<string, AgentTool>;
+	/** Session-only edit variant pin, shared with the built-in tool context. */
+	editMode?: ToolSession["editMode"];
 	/** Creates tools registered only while vibe mode is active. */
 	createVibeTools?: () => AgentTool[];
 	/** Names whose current registry entry is the built-in implementation. */
@@ -460,6 +462,7 @@ export interface PromptOptions {
 		fingerprint: string;
 		epoch?: string;
 		type?: string;
+		automationId?: string;
 		/** Frozen host input intent; interpreted only by the session's delivery owner. */
 		configuration?: { mode?: string; planEnabled?: boolean };
 	};

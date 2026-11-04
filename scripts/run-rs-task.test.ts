@@ -377,7 +377,7 @@ async function runCheckRs(fixture: Fixture, cwd: string, env: Record<string, str
 		new Response(proc.stderr).text(),
 	]);
 	const output = `${stdout}${stderr}`;
-	return { exitCode, output, cargoRan: output.includes("cargo-stub clippy") };
+	return { exitCode, output, cargoRan: output.includes("cargo-stub fmt --all -- --check") };
 }
 
 describe.skipIf(process.platform === "win32")("run-rs-task.ts check:rs", () => {
@@ -394,6 +394,7 @@ describe.skipIf(process.platform === "win32")("run-rs-task.ts check:rs", () => {
 
 			expect(result.cargoRan).toBe(true);
 			expect(result.output).toContain("crates/x/src/lib.rs");
+			expect(result.output).not.toContain("cargo-stub clippy");
 			expect(result.exitCode).toBe(0);
 		},
 		CASE_TIMEOUT_MS,

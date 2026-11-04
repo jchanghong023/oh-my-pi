@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -11,6 +11,7 @@ import {
 	resolveSpecDrivenResourcePath,
 	runOpenSpec,
 	runSuperpowersScript,
+	type SpecDrivenProcessResult,
 } from "../../src/spec-driven/resources";
 
 const upstreamOpenSpecSkills = [
@@ -458,6 +459,15 @@ describe("pinned upstream resources", () => {
 		expect(shadowed.result.exitCode).toBe(0);
 		expect(JSON.parse(shadowed.result.stdout).source).toBe("project");
 		expect(shadowed.error).toContain("an external schema shadows it");
+		await fs.rm(override, { recursive: true });
+		const userOverride = path.join(home, "data", "openspec", "schemas", "omp-spec");
+		await fs.mkdir(path.dirname(userOverride), { recursive: true });
+		await fs.cp(path.dirname(bundled.schemaPath), userOverride, { recursive: true });
+		const userShadowed = await resolve();
+		expect(userShadowed.result.exitCode).toBe(0);
+		expect(JSON.parse(userShadowed.result.stdout).source).toBe("user");
+		expect(userShadowed.error).toContain("an external schema shadows it");
+		await expect(fs.stat(path.join(cwd, "openspec/changes"))).rejects.toMatchObject({ code: "ENOENT" });
 	}, 30_000);
 
 	it("uses the real CLI for requirements-only status and proposal/spec instructions", async () => {
@@ -630,3 +640,154 @@ describe("pinned upstream resources", () => {
 		await expect(runOpenSpec(["--version"], temporary, abort.signal)).rejects.toThrow();
 	});
 });
+
+it("embedded script launch preserves exact arguments and workspace runtime environment", async () => {
+	const cwd = path.join(temporary, "script arguments Ω (workspace)");
+	await fs.mkdir(cwd);
+	const args = ["missing skill directory Ω (not a command)", "--combine", "/dev next", "literal=$VALUE"];
+	const resources = await ensureSpecDrivenResources();
+	const spawn = Bun.spawn;
+	const launches: Array<{ command: string[]; env?: Record<string, string> }> = [];
+	const intercepted = spyOn(Bun, "spawn").mockImplementation(((
+		command: string[],
+		options: { env?: Record<string, string> },
+	) => {
+		launches.push({ command: [...command], env: options.env });
+		return Reflect.apply(spawn, Bun, [command, options]);
+	}) as typeof Bun.spawn);
+	try {
+		const result = await runSuperpowersScript("skills/writing-skills/render-graphs.js", args, cwd);
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain(path.join(cwd, args[0]!, "SKILL.md"));
+		expect(result.stdout).toBe("");
+		expect(launches).toHaveLength(1);
+		const launch = launches[0]!;
+		expect(launch.command).toEqual([
+			process.execPath,
+			await resolveSpecDrivenResourcePath(resources.superpowersRoot, "skills/writing-skills/render-graphs.js"),
+			...args,
+		]);
+		expect(launch.env?.BUN_BE_BUN).toBe("1");
+		expect(launch.env?.OMP_BUN_EXECUTABLE).toBe(process.execPath);
+		expect(launch.env?.PATH?.split(path.delimiter)[0]).toBe(path.join(resources.root, "omp-runtime"));
+		expect(launch.env?.BRAINSTORM_DIR).toBe(path.join(cwd, ".superpowers", "brainstorm"));
+		await expect(fs.stat(path.join(cwd, ".omp/dev/state.json"))).rejects.toMatchObject({ code: "ENOENT" });
+		const shellArgs = ["missing plan Ω (not a command).md", "literal base", "literal head"];
+		let shell: SpecDrivenProcessResult | undefined;
+		try {
+			shell = await runSuperpowersScript(
+				"skills/subagent-driven-development/scripts/review-package",
+				shellArgs,
+				cwd,
+			);
+		} catch (error) {
+			expect(error instanceof Error ? error.message : String(error)).toBe(
+				"Superpowers scripts require Bash and POSIX utilities (Git for Windows Bash on Windows)",
+			);
+			expect(launches).toHaveLength(1);
+		}
+		if (shell) {
+			expect(shell.exitCode).toBe(2);
+			expect(shell.stderr).toContain(`no such plan file: ${shellArgs[0]}`);
+			expect(shell.stdout).toBe("");
+			expect(launches).toHaveLength(2);
+			const bashLaunch = launches[1]!;
+			expect(bashLaunch.command.slice(2)).toEqual(shellArgs);
+			expect(bashLaunch.env?.BRAINSTORM_DIR).toBe(path.join(cwd, ".superpowers", "brainstorm"));
+			const runtimePaths = bashLaunch.env?.PATH?.split(path.delimiter);
+			expect(runtimePaths?.[0]).toBe(path.join(resources.root, "omp-runtime"));
+			if (process.platform === "win32") {
+				expect(path.basename(bashLaunch.command[0]!).toLowerCase()).toBe("bash.exe");
+				expect(bashLaunch.command[0]!.replaceAll("\\", "/").toLowerCase()).not.toContain("/system32/");
+				expect(runtimePaths?.slice(1, 3)).toEqual([
+					path.dirname(bashLaunch.command[0]!),
+					path.resolve(path.dirname(bashLaunch.command[0]!), "../usr/bin"),
+				]);
+			}
+		}
+	} finally {
+		intercepted.mockRestore();
+	}
+}, 30_000);
+
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+	it(`public Superpowers ${signal} waits for the actual bundled server to exit without reporting success`, async () => {
+		const cwd = path.join(temporary, `script-signal-${signal}`);
+		await fs.mkdir(cwd);
+		const pidFile = path.join(cwd, "owned-script.pid");
+		const preload = path.join(cwd, "observe-script.mjs");
+		await fs.writeFile(
+			preload,
+			[
+				'import fs from "node:fs";',
+				"const spawn = Bun.spawn;",
+				"Bun.spawn = function (...args) {",
+				"  const child = Reflect.apply(spawn, Bun, args);",
+				'  if (Array.isArray(args[0]) && args[0].some(arg => String(arg).endsWith("server.cjs")))',
+				`    fs.writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));`,
+				"  return child;",
+				"};",
+			].join("\n"),
+		);
+		const child = Bun.spawn(
+			[
+				process.execPath,
+				"--preload",
+				preload,
+				path.resolve(import.meta.dir, "../../src/cli.ts"),
+				"superpowers",
+				"skills/brainstorming/scripts/server.cjs",
+			],
+			{
+				cwd,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				env: { ...process.env, BUN_BE_BUN: "1", SUPERPOWERS_DISABLE_TELEMETRY: "1" },
+			},
+		);
+		const stdout = new Response(child.stdout).text();
+		const stderr = new Response(child.stderr).text();
+		let scriptPid: number | undefined;
+		try {
+			const deadline = Date.now() + 10_000;
+			const infoPath = path.join(cwd, ".superpowers/brainstorm/state/server-info");
+			while (!(await Bun.file(infoPath).exists())) {
+				if (child.exitCode !== null) throw new Error(`Script exited before startup: ${await stderr}`);
+				if (Date.now() >= deadline) throw new Error("Bundled server did not publish its real startup state");
+				await Bun.sleep(10);
+			}
+			scriptPid = Number(await fs.readFile(pidFile, "utf8"));
+			expect(Number.isSafeInteger(scriptPid) && scriptPid > 0).toBe(true);
+			const info = (await Bun.file(infoPath).json()) as { port: number; type: string };
+			expect(info.type).toBe("server-started");
+			const url = `http://127.0.0.1:${info.port}/`;
+			expect((await fetch(url)).status).toBe(403);
+			child.kill(signal);
+			const exitCode = await Promise.race([
+				child.exited,
+				Bun.sleep(5_000).then(() => {
+					throw new Error(`${signal} did not settle the script process`);
+				}),
+			]);
+			expect(exitCode).not.toBe(0);
+			// The CLI buffers output until the script settles; abort can reject
+			// before forwarding it. Startup is proven by server-info and HTTP above.
+			await stdout;
+			await stderr;
+			expect(() => process.kill(scriptPid!, 0)).toThrow();
+			await expect(fetch(url)).rejects.toThrow();
+		} finally {
+			if (child.exitCode === null) child.kill();
+			if (scriptPid !== undefined) {
+				try {
+					process.kill(scriptPid, "SIGKILL");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+				}
+			}
+			await child.exited;
+			await Promise.all([stdout, stderr]);
+		}
+	}, 30_000);
+}

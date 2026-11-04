@@ -9,13 +9,13 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 
 const CHILD_FLAG = "--disabled-company-startup-child";
 const STOP = new Error("startup role snapshot captured");
-const AVAILABLE_SELECTOR = "anthropic/claude-opus-4-5";
+const AVAILABLE_SELECTOR = "deepseek/deepseek-v4-flash";
 
 // Startup publishes process-global company/worker state, so isolate the real
 // startup path rather than changing the test runner's environment or providers.
 if (process.argv.includes(CHILD_FLAG)) {
 	const authStorage = await AuthStorage.create(":memory:");
-	authStorage.keys.setRuntime("anthropic", "fixture-key");
+	authStorage.keys.setRuntime("deepseek", "fixture-key");
 	const settings = Settings.isolated({
 		disabledProviders: ["company"],
 		modelRoles: { default: AVAILABLE_SELECTOR },

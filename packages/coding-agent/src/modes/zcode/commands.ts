@@ -38,6 +38,8 @@ export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "
 export interface ZCodeCommandHostOptions {
 	output?: (text: string) => void | Promise<void>;
 	settingsChanged?: (frame: object) => void;
+	/** Refresh this profile's resident settings and native role consumers before notifying clients. */
+	reloadModelRoleSettings?: (source: AgentSession) => Promise<void>;
 	/** Select the presentation owner for this session's interactive requests. */
 	createInteractions?: (
 		publish: (pending: PendingInteraction[]) => void,
@@ -202,10 +204,10 @@ export class ZCodeCommandHost {
 			emit: frame => {
 				if (!this.#disposed) this.options.settingsChanged?.(frame);
 			},
-			reloadSessionSettings: async () => {
-				await session.settings.reloadFromDisk();
-				if (!this.#disposed) await this.#plan.refreshModelRole();
-			},
+			reloadSessionSettings: () =>
+				this.options.reloadModelRoleSettings
+					? this.options.reloadModelRoleSettings(session)
+					: this.reloadModelRoleSettings(),
 		});
 		this.#unsubscribe = session.subscribe(event =>
 			this.#run(() => {
@@ -440,6 +442,7 @@ export class ZCodeCommandHost {
 							uiContext: this.options.uiContext ?? this.interactions.ui,
 							createInteractions: this.options.createInteractions,
 							settingsChanged: this.options.settingsChanged,
+							reloadModelRoleSettings: this.options.reloadModelRoleSettings,
 							submit: this.options.submit,
 							submitCustom: this.options.submitCustom,
 							recordInputAdmission: this.options.recordInputAdmission,
@@ -674,6 +677,17 @@ export class ZCodeCommandHost {
 				this.interactions.resolve(id, response) ||
 				(this.#nativeCommands?.resolveInteraction(id, response) ?? false),
 		);
+	}
+	/** Adopt saved role settings without changing the conversation's temporary main model. */
+	reloadModelRoleSettings(current: () => boolean = () => true): Promise<void> {
+		return this.#run(async () => {
+			if (!current() || this.#disposed || this.session.isDisposed) return;
+			await this.session.settings.reloadFromDisk({ includeParents: true });
+			if (!current() || this.#disposed || this.session.isDisposed) return;
+			await this.#plan.refreshModelRole();
+			if (!current() || this.#disposed || this.session.isDisposed) return;
+			await this.#nativeCommands?.reloadModelRoleSettings(current);
+		});
 	}
 	configure(operation: string, params: Record<string, unknown> = {}): Promise<unknown> {
 		return this.#run(() => this.#configure(operation, params));

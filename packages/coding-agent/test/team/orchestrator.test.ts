@@ -1647,6 +1647,132 @@ describe("team orchestrator", () => {
 		expect(result.candidates.every(candidate => !candidate.reviewSucceeded && candidate.exclusionReason)).toBe(true);
 	});
 
+	it("keeps exact blocker identities and adoption gates when synthesis prose is truncated", async () => {
+		const originalReport = "完整结构化结果与工件保留必要证据。".repeat(1000);
+		const { result } = await run({
+			review: () => reviewData({ blocking: 1 }),
+			revision: ({ findingIds }) => revisionData({}, findingIds),
+			synthesis: () => ({
+				...synthesisData("A"),
+				reportMarkdown: originalReport,
+				hardConstraintViolations: [{ proposalLabel: "A", issue: "仍违反兼容硬约束", evidence: "src/api.ts:91" }],
+			}),
+		});
+		expect(result.status).toBe("completed");
+		expect(result.reportMarkdown).toContain("…（超出输出预算，已截断）");
+		expect(result.reportMarkdown).toContain("A-F1");
+		expect(result.reportMarkdown).toContain("A-F2");
+		expect(result.reportMarkdown).toContain("src/api.ts:91");
+		expect(result.reportMarkdown).not.toContain("【推荐】");
+		expect(result.droppedRecommendation).toBe(true);
+		expect(result.candidates.find(candidate => candidate.label === "A")).toMatchObject({
+			adoptable: false,
+			unresolvedBlocking: [
+				{ id: "A-F1", issue: "阻断问题 1" },
+				{ id: "A-F2", issue: "仍违反兼容硬约束", evidence: "src/api.ts:91" },
+			],
+		});
+		expect(result.subagentResults!.find(call => call.role === "synthesizer")!.outcome.data).toMatchObject({
+			reportMarkdown: originalReport,
+		});
+	});
+
+	it("propagates cancellation to every active child and never starts queued slots or later stages", async () => {
+		const controller = new AbortController();
+		const started = Promise.withResolvers<void>();
+		const calls: TeamSubagentCall[] = [];
+		const signals: AbortSignal[] = [];
+		const updates: TeamProgressUpdate[] = [];
+		const pending = runTeamDiscussion({
+			question: "Cancel this discussion only",
+			cwd: "/tmp/repo",
+			participants: [...participants3(), participantOf(MODEL_A, 3)],
+			sessionModelPattern: PATTERN_A,
+			signal: controller.signal,
+			maxConcurrency: 2,
+			onProgress: update => updates.push(update),
+			runner: async (call, signal) => {
+				calls.push(call);
+				signals.push(signal);
+				if (calls.length === 2) started.resolve();
+				await new Promise<void>(resolve => {
+					if (signal.aborted) resolve();
+					else signal.addEventListener("abort", () => resolve(), { once: true });
+				});
+				return { ok: false, error: "cancelled" };
+			},
+		});
+		let result: Awaited<typeof pending>;
+		try {
+			await Promise.race([
+				started.promise,
+				pending.then(early => {
+					throw new Error(
+						`Discussion settled before two active children started: ${early.status}; ${early.failureReason ?? ""}`,
+					);
+				}),
+			]);
+		} finally {
+			controller.abort();
+			result = await pending;
+		}
+		expect(result.status).toBe("cancelled");
+		expect(calls.map(call => call.label)).toEqual(["team-proposal-A", "team-proposal-B"]);
+		expect(signals.map(signal => signal.aborted)).toEqual([true, true]);
+		expect(result.reportMarkdown).toBeUndefined();
+		expect(result.candidates.every(candidate => !candidate.adoptable)).toBe(true);
+		expect(updates.at(-1)!.participants.map(participant => [participant.label, participant.state])).toEqual([
+			["A", "cancelled"],
+			["B", "cancelled"],
+			["C", "cancelled"],
+			["D", "cancelled"],
+		]);
+	});
+
+	it("distinguishes queued slots from the single child actually holding a concurrency permit", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const updates: TeamProgressUpdate[] = [];
+		const { runner, calls } = createScriptedRunner({});
+		const pending = runTeamDiscussion({
+			question: "Show real queue state",
+			cwd: "/tmp/repo",
+			participants: participants3(),
+			sessionModelPattern: PATTERN_A,
+			signal: new AbortController().signal,
+			maxConcurrency: 1,
+			onProgress: update => updates.push(update),
+			runner: async (call, signal) => {
+				if (call.label === "team-proposal-A") {
+					entered.resolve();
+					await release.promise;
+				}
+				return runner(call, signal);
+			},
+		});
+		try {
+			await Promise.race([
+				entered.promise,
+				pending.then(early => {
+					throw new Error(
+						`Discussion settled before the first permit holder entered: ${early.status}; ${early.failureReason ?? ""}`,
+					);
+				}),
+			]);
+			const visible = updates.at(-1)!.participants;
+			expect(visible.filter(slot => slot.state === "running").map(slot => slot.label)).toEqual(["A"]);
+			expect(visible.filter(slot => slot.state === "pending").map(slot => slot.label)).toEqual(["B", "C"]);
+		} finally {
+			release.resolve();
+			await pending;
+		}
+		expect(calls.filter(call => call.role === "proposer").map(call => call.label)).toEqual([
+			"team-proposal-A",
+			"team-proposal-B",
+			"team-proposal-C",
+		]);
+	});
+
 	for (const maxConcurrency of [1, 2]) {
 		it(`queues all repeated roster slots with maxConcurrency=${maxConcurrency}`, async () => {
 			let active = 0;

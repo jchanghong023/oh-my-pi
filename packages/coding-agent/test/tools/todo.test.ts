@@ -876,7 +876,9 @@ describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => 
 		// Mid-stream the new flat shape can surface `{ op: 1 }` before the
 		// discriminator string lands.
 		const args = { op: 1 } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
-		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+		const rendered = Bun.stripANSI(todoToolRenderer.renderCall(args, renderOptions, theme).render(120).join("\n"));
+		expect(rendered).toContain("Todo");
+		expect(rendered).toContain("update");
 	});
 
 	it("does not throw when a flat op's items field is a non-array", () => {
@@ -885,14 +887,19 @@ describe("todoToolRenderer.renderCall malformed-args regression (#2005)", () => 
 			phase: "Work",
 			items: "Second" as unknown as string[],
 		} as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
-		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+		const rendered = Bun.stripANSI(todoToolRenderer.renderCall(args, renderOptions, theme).render(120).join("\n"));
+		expect(rendered).toContain("append");
+		expect(rendered).toContain("Work");
+		expect(rendered).not.toContain("6 items");
 	});
 
 	it("does not throw on the legacy streaming-truncated `ops` string", () => {
 		// Old transcripts/collab-web still carry `{ ops: "[{" }` mid-stream;
 		// `normalizeTodoArg` must keep tolerating the legacy batch shape.
 		const args = { ops: '[{"op":"init"' } as unknown as Parameters<typeof todoToolRenderer.renderCall>[0];
-		expect(() => todoToolRenderer.renderCall(args, renderOptions, theme)).not.toThrow();
+		const rendered = Bun.stripANSI(todoToolRenderer.renderCall(args, renderOptions, theme).render(120).join("\n"));
+		expect(rendered).toContain("Todo");
+		expect(rendered).toContain("update");
 	});
 
 	it("renders op summary metadata for a well-formed flat call", () => {

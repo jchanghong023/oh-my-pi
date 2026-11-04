@@ -14,6 +14,8 @@ export function editVariantForModel(settings: Settings, model: string | undefine
 
 export interface EditModeSessionLike {
 	settings: Settings;
+	/** Explicit session pin; ordinary sessions continue to resolve settings and model variants. */
+	editMode?: EditModeSetting;
 	getActiveModelString?: () => string | undefined;
 }
 
@@ -22,6 +24,7 @@ export interface EditModeSessionLike {
  * `"none"` wins over `edit.modelVariants`: tool registration follows the setting, not the model.
  */
 export function resolveEditMode(session: EditModeSessionLike): EditModeSetting {
+	if (session.editMode !== undefined) return session.editMode;
 	const mode = cfgEditMode.get(session.settings);
 	if (mode === "none") return mode;
 

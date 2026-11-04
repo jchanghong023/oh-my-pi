@@ -347,7 +347,12 @@ export class RpcGoalController {
 			this.#session.sessionManager.appendModeChange("none");
 			return;
 		}
-		this.#session.setGoalModeState({ enabled: context.mode === "goal", mode: "active", goal });
+		this.#session.setGoalModeState({
+			enabled: context.mode === "goal",
+			mode: "active",
+			goal,
+			...(context.modeData?.autoOrchestrate === true ? { autoOrchestrate: true } : {}),
+		});
 		const restored = await runtime.onThreadResumed({ preserveActiveGoal: options?.preserveActiveGoal });
 		if (!restored?.goal) return;
 		const previousTools = this.#session.getEnabledToolNames();

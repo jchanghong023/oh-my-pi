@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model, ModelKind } from "@oh-my-pi/pi-catalog/types";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import {
 	expandDefaultRetryFallbackChains,
 	findRetryFallbackCandidates,
@@ -12,16 +12,32 @@ import {
 } from "@oh-my-pi/pi-coding-agent/session/retry-fallback-chains";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 
+/** Selector grammar and shared wire policy are independent of fork provider admission. */
+function fixtureModel(provider: string, id: string): Model {
+	return buildModel({
+		provider,
+		id,
+		name: id,
+		api: provider === "openrouter" ? "openrouter" : "openai-completions",
+		baseUrl: "https://fixture.invalid/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200000,
+		maxTokens: 8192,
+	});
+}
+
 function createContext(
 	chains: RetryFallbackResolutionContext["chains"],
 	roles: Record<string, string> = {},
 ): RetryFallbackResolutionContext {
 	const models = [
-		getBundledModel("google", "gemini-3.5-flash"),
-		getBundledModel("google-vertex", "gemini-3.5-flash"),
-		getBundledModel("openrouter", "google/gemini-3.5-flash"),
-		getBundledModel("openai", "gpt-4o-mini"),
-		getBundledModel("xai-oauth", "grok-4.7"),
+		fixtureModel("google", "gemini-3.5-flash"),
+		fixtureModel("google-vertex", "gemini-3.5-flash"),
+		fixtureModel("openrouter", "google/gemini-3.5-flash"),
+		fixtureModel("openai", "gpt-4o-mini"),
+		fixtureModel("xai-oauth", "grok-4.7"),
 	].filter(model => model !== undefined);
 	return {
 		chains,
@@ -138,8 +154,39 @@ describe("retry fallback selector resolution", () => {
 		]);
 	});
 
+	it("preserves the source route when a same-provider wildcard changes the id prefix", () => {
+		const context = createContext({ "openrouter/*": ["openrouter/alternate/*"] });
+		expect(
+			findRetryFallbackCandidates(context, "openrouter/*", "openrouter/google/gemini-3.5-flash@priority"),
+		).toEqual([
+			{
+				raw: "openrouter/alternate/gemini-3.5-flash@priority",
+				provider: "openrouter",
+				id: "alternate/gemini-3.5-flash@priority",
+				thinkingLevel: undefined,
+			},
+		]);
+	});
+
+	it("preserves a cataloged literal at-sign id when a wildcard crosses providers", () => {
+		const literal = fixtureModel("openrouter", "google/model@literal");
+		const target = fixtureModel("deepseek", "model@literal");
+		const models = [literal, target];
+		const context: RetryFallbackResolutionContext = {
+			chains: { "openrouter/*": ["deepseek/*"] },
+			getModelRole: () => undefined,
+			modelLookup: {
+				find: (provider, id) => models.find(model => model.provider === provider && model.id === id),
+				hasProvider: provider => models.some(model => model.provider === provider),
+			},
+		};
+		expect(findRetryFallbackCandidates(context, "openrouter/*", "openrouter/google/model@literal")).toEqual([
+			{ raw: "deepseek/model@literal", provider: "deepseek", id: "model@literal", thinkingLevel: undefined },
+		]);
+	});
+
 	it("preserves route identity when selecting an exact model chain", () => {
-		const model = getBundledModel("openrouter", "google/gemini-3.5-flash");
+		const model = fixtureModel("openrouter", "google/gemini-3.5-flash");
 		const plain = "openrouter/google/gemini-3.5-flash:high";
 		const routed = "openrouter/google/gemini-3.5-flash@google-ai-studio/priority:high";
 		const context = createContext({
@@ -173,7 +220,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("matches an auto-keyed primary at any effort without demoting it behind a fixed effort", () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
+		const model = fixtureModel("anthropic", "claude-sonnet-4-5");
 		if (!model) throw new Error("Expected bundled model claude-sonnet-4-5");
 		const auto = "anthropic/claude-sonnet-4-5:auto";
 		const low = "anthropic/claude-sonnet-4-5:low";
@@ -200,7 +247,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("prefers an exact model+effort key over a different-effort key regardless of object order", () => {
-		const model = getBundledModel("google", "gemini-3.5-flash");
+		const model = fixtureModel("google", "gemini-3.5-flash");
 		const low = "google/gemini-3.5-flash:low";
 		const max = "google/gemini-3.5-flash:max";
 
@@ -215,7 +262,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("lets a suffixless key match any effort but an exact effort key still wins", () => {
-		const model = getBundledModel("google", "gemini-3.5-flash");
+		const model = fixtureModel("google", "gemini-3.5-flash");
 		const low = "google/gemini-3.5-flash:low";
 		const suffixless = "google/gemini-3.5-flash";
 
@@ -230,7 +277,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("never escalates to a different-effort chain when no matching effort is configured", () => {
-		const model = getBundledModel("google", "gemini-3.5-flash");
+		const model = fixtureModel("google", "gemini-3.5-flash");
 		const low = "google/gemini-3.5-flash:low";
 		const max = "google/gemini-3.5-flash:max";
 
@@ -245,7 +292,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("treats effort aliases as equivalent to their canonical form when matching keys", () => {
-		const model = getBundledModel("google", "gemini-3.5-flash");
+		const model = fixtureModel("google", "gemini-3.5-flash");
 		const canonicalHigh = "google/gemini-3.5-flash:high";
 		const aliasKey = "google/gemini-3.5-flash:hi";
 
@@ -257,7 +304,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("matches a requested effort key to the active model's clamped effort", () => {
-		const model = getBundledModel("google", "gemini-3.5-flash");
+		const model = fixtureModel("google", "gemini-3.5-flash");
 		const high = "google/gemini-3.5-flash:high";
 		const max = "google/gemini-3.5-flash:max";
 
@@ -301,7 +348,7 @@ describe("retry fallback selector resolution", () => {
 	});
 
 	it("keeps a role's chain when the live effort differs from the role's explicit effort (#13789)", () => {
-		const model = getBundledModel("xai-oauth", "grok-4.7");
+		const model = fixtureModel("xai-oauth", "grok-4.7");
 		const high = "xai-oauth/grok-4.7:high";
 		const xhigh = "xai-oauth/grok-4.7:xhigh";
 
@@ -326,7 +373,7 @@ describe("retry fallback selector resolution", () => {
 });
 
 describe("retry fallback kind-role validation", () => {
-	const chatModel = getBundledModel("openai", "gpt-4o-mini");
+	const chatModel = fixtureModel("openai", "gpt-4o-mini");
 	if (!chatModel) throw new Error("Expected bundled OpenAI test model");
 	const judgeModel: Model = { ...chatModel, id: "test-judge", name: "Test Judge", kind: "judge" };
 	const imageModel: Model = { ...chatModel, id: "test-image", name: "Test Image", kind: "image" };

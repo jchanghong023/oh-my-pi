@@ -133,6 +133,32 @@ async fn native_command_names_and_nested_arguments_keep_bytes() {
 	}
 }
 
+/// A lossy-name hash entry and an exact raw-byte function must both lose to
+/// the native executable; raw-aware tools must forward the operand unchanged.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_dispatch_bypasses_functions_and_utf8_hash_entries() {
+	use std::os::unix::fs::symlink;
+
+	let dir = tempfile::tempdir().unwrap();
+	let raw = std::ffi::OsStr::from_bytes(b"command-\xff");
+	symlink("/bin/sh", dir.path().join(raw)).unwrap();
+	symlink("/bin/false", dir.path().join(raw.to_string_lossy().as_ref())).unwrap();
+	let mut s = session_in(dir.path(), &[]);
+	let cached = run(&mut s, "PATH=.; command-�").await;
+	assert_eq!(cached.status, 1, "the UTF-8 lookalike must be executable");
+	let defined = run(&mut s, "eval $'function command-\\xff { printf function; }'").await;
+	assert_eq!(defined.status, 0, "{}", defined.stderr);
+	for (command, expected) in [
+		("$'command-\\xff' -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
+		("timeout 5 /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
+		("nohup /bin/sh -c 'printf %s \"$1\"' _ $'raw-\\xfe'", &b"raw-\xfe"[..]),
+	] {
+		let result = run(&mut s, &format!("{command} > result")).await;
+		assert_eq!(result.status, 0, "{command}: {}", result.stderr);
+		assert_eq!(std::fs::read(dir.path().join("result")).unwrap(), expected, "{command}");
+	}
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn declaration_raw_operands_report_invoked_name_and_status() {
 	let mut s = session();
@@ -140,6 +166,10 @@ async fn declaration_raw_operands_report_invoked_name_and_status() {
 		("f() { local -p bad=1; }; f", 1, "local: bad=1: not found"),
 		("declare -p bad=1", 1, "declare: bad=1: not found"),
 		("f() { local -p $'bad-\\xff'; }; f", 1, "local: bad-\u{fffd}: not found"),
+		("declare -p $'bad-\\xff'", 1, "declare: bad-\u{fffd}: not found"),
+		("readonly -p bad=1", 1, "readonly: bad=1: not found"),
+		("readonly -p $'bad-\\xff'", 1, "readonly: bad-\u{fffd}: not found"),
+		("f() { local $'bad-\\xff'; }; f", 1, "local: bad-\u{fffd}: not a valid variable name"),
 		("declare $'bad-\\xff'", 1, "declare: bad-\u{fffd}: not a valid variable name"),
 		("readonly $'bad-\\xff'", 1, "readonly: bad-\u{fffd}: not a valid variable name"),
 		("export $'bad-\\xff'", 2, "export: bad-\u{fffd}: invalid variable name"),

@@ -599,7 +599,7 @@ describe("TranscriptContainer", () => {
 		transcript.liveRowCount(2);
 		transcript.liveRowCount(2);
 		const viewport = transcript.renderViewport(2, 10, frame);
-		expect(viewport.length).toBeGreaterThan(1);
+		expect(viewport).toEqual(["ab", "cd", "ef", "gh", "partial"]);
 	});
 
 	it("retires only the un-emitted final suffix", () => {
@@ -2113,10 +2113,16 @@ describe("TranscriptContainer file changes", () => {
 			expect(wrappedEdit.render(120).join("")).not.toBe("");
 			expect(wrappedPatch.render(120).join("")).not.toBe("");
 
+			const cancelled = call(root, "edit", { path: "cancelled.ts" });
+			cancelled.setExecutionStarted();
+			cancelled.seal();
+			expect(cancelled.isTranscriptBlockFinalized()).toBe(true);
+
 			const expectOriginalCards = () => {
 				const compactAnsi = root.render(120);
 				const compact = views(root);
 				for (const view of compact) expect(view).toContain("lifecycle.txt");
+				for (const view of compact) expect(view).toContain("cancelled.ts");
 				mode(root, false);
 				expect(root.render(120)).toEqual(compactAnsi);
 				expect(views(root)).toEqual(compact);

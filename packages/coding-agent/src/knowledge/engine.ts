@@ -186,6 +186,7 @@ export class KnowledgeIndexEngine {
 			},
 			async () => {
 				const context = logger.getLogContext();
+				const started = performance.now();
 				const build = await this.#native.initDeferred(
 					path.resolve(this.cwd, directory),
 					name,
@@ -253,6 +254,11 @@ export class KnowledgeIndexEngine {
 					log("knowledge.import.completed", {
 						component: "knowledge",
 						event: "knowledge.import.completed",
+						stage: "publish",
+						result: "completed",
+						elapsed_ms: performance.now() - started,
+						file_count: build.processed + build.failed,
+						document_count: build.index.documentCount,
 						fulltext_status: "ready",
 						vector_status: vectorStatus,
 						section_count: build.index.sectionCount,

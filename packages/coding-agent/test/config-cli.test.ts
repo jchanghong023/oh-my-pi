@@ -29,10 +29,11 @@ async function runCliProcess(args: string[], env: NodeJS.ProcessEnv): Promise<Cl
 	return { exitCode, output, error };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
 	resetSettingsForTest();
 	testAgentDir = TempDir.createSync("@omp-config-cli-");
 	setAgentDir(testAgentDir.path());
+	await Bun.write(testAgentDir.join("config.yml"), "{}\n");
 });
 
 afterEach(async () => {
@@ -258,6 +259,7 @@ describe("config CLI schema coverage", () => {
 				key: "compaction.enabled",
 				value: true,
 				overriddenBy: "overlay",
+				revision: expect.any(String),
 			});
 		} finally {
 			if (previousConfigFiles === undefined) delete process.env.PI_CONFIG_FILES;

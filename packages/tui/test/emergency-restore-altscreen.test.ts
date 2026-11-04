@@ -78,6 +78,25 @@ describe("emergencyTerminalRestore alt-screen gating", () => {
 		expect(writes).toEqual([]);
 	});
 
+	it.each([false, true])(
+		"closes only the negotiated keyboard mode before suppressing later restore (kitty=%s)",
+		kitty => {
+			const { terminal, writes } = startCapturedTerminal();
+			if (kitty) process.stdin.emit("data", "\x1b[?0u");
+			writes.length = 0;
+			terminal.stop();
+			const stopped = writes.join("");
+			if (kitty) expect(stopped).toContain("\x1b[<u");
+			else expect(stopped).not.toContain("\x1b[<u");
+			expect(stopped).not.toContain("\x1b[>4;0m");
+			expect(stopped).not.toContain("\x1b[?1049l");
+			writes.length = 0;
+			emergencyTerminalRestore();
+			emergencyTerminalRestore();
+			expect(writes).toEqual([]);
+		},
+	);
+
 	it("emits DECRST 1049 on the post-stop path while the alt screen is tracked active, then resets the state", () => {
 		const { terminal, writes } = startCapturedTerminal();
 		terminal.stop();

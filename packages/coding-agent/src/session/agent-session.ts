@@ -2662,6 +2662,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			agent: this.agent,
 			sessionManager: this.sessionManager,
 			settings: this.settings,
+			editMode: config.editMode,
 			effectiveExtensionRoots: () => this.effectiveExtensionRoots,
 			modelRegistry: this.#modelRegistry,
 			extensionRunner: () => this.#extensionRunner,

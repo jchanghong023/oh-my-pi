@@ -835,3 +835,60 @@ pub fn compgroups(ctx: &mut Ctx<'_, '_>, _ops: &Ops, args: &[BString]) -> R {
 	}
 	done(0)
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::{
+		bash::{Cx as HostCx, fs::Fs as _},
+		testkit::{FakeHost, Rig, fault::skeleton_init},
+	};
+
+	/// Exact completion accepts the last byte below its doubled ZLE buffer
+	/// bound, and excludes the same existing candidate at or beyond it.
+	#[test]
+	fn exact_completion_enforces_the_doubled_path_buffer_boundary() {
+		#[cfg(unix)]
+		let limit = libc::PATH_MAX as usize * 2;
+		#[cfg(not(unix))]
+		let limit = 2048;
+		for length in [limit - 1, limit, limit + 1] {
+			let mut rig = Rig::new(FakeHost::new(), skeleton_init(&[]));
+			let (shell, host, store) = rig.parts();
+			let env = Env {
+				prefix:   vec![b'x'; length],
+				suffix:   Vec::new(),
+				globdots: false,
+				qopts:    QuoteOpts::default(),
+			};
+			let path = absolute(&shell.procs[0].cwd, &env.prefix);
+			host
+				.fs
+				.add_file(path.to_str().expect("ASCII candidate"), b"existing candidate", 0o644);
+			let crate::bash::FsPoll::Ready(Ok(metadata)) = host.fs.stat(path.as_bstr(), true) else {
+				panic!("candidate metadata");
+			};
+			let probes = [(Probe::Stat { path, follow: true }, ProbeResult::Stat(Some(metadata)))];
+			let mut cx = HostCx { host, store };
+			let mut ctx =
+				Ctx::new(&mut shell.k, &mut cx, &mut shell.procs[0], &probes, 1, "compfiles");
+			let mut failed = false;
+			let Ok(result) = cfp_test_exact(
+				&mut ctx,
+				&mut failed,
+				&env,
+				&[Vec::new()],
+				Some(&[BString::from("true")]),
+				&[],
+			) else {
+				panic!("completion must resolve from the supplied metadata");
+			};
+			if length < limit {
+				assert_eq!(result, Some(vec![env.prefix]), "last allowed candidate");
+			} else {
+				assert_eq!(result, None, "candidate at length {length} must be excluded");
+			}
+			assert!(!failed);
+		}
+	}
+}

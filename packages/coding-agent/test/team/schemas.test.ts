@@ -117,26 +117,42 @@ describe("team yield payload validation", () => {
 		expect(data).toEqual(original);
 	});
 
-	it("caps model narratives without silently dropping structured findings", () => {
+	it("caps model narratives at the exact budget with a visible marker and preserves structured fields", () => {
+		const marker = "…（超出输出预算，已截断）";
+		const capped = (character: string, budget: number) => character.repeat(budget - marker.length) + marker;
 		expect(parseTeamReview({ ...review(), reviewSummary: "r".repeat(2000) })).toBeUndefined();
-		expect(
-			parseTeamReview({ ...review(), findings: [], noSubstantiveIssues: true, reviewSummary: "r".repeat(2000) })
-				?.reviewSummary.length,
-		).toBeLessThan(2000);
-		expect(
-			parseTeamRevision({ ...revision(), revisedProposal: "v".repeat(5000) }, ["A-F1"])?.revisedProposal.length,
-		).toBeLessThan(5000);
-		expect(
-			parseTeamSynthesis({
-				reportMarkdown: "s".repeat(14000),
-				recommendedProposal: "A",
-				recommendationReason: "Evidence",
-				recommendationPreconditions: "Compatible API",
-				hardConstraintViolations: [],
-			})?.reportMarkdown.length,
-		).toBeLessThan(14000);
+		const cleanReview = { ...review(), findings: [], noSubstantiveIssues: true, reviewSummary: "r".repeat(2000) };
+		expect(parseTeamReview(cleanReview)).toEqual({ ...cleanReview, reviewSummary: capped("r", 1500) });
+		const oversizedRevision = {
+			...revision(),
+			revisedProposal: "v".repeat(5000),
+			revisionSummary: "c".repeat(2000),
+		};
+		const original = structuredClone(oversizedRevision);
+		expect(parseTeamRevision(oversizedRevision, ["A-F1"])).toEqual({
+			...oversizedRevision,
+			revisedProposal: capped("v", 4000),
+			revisionSummary: capped("c", 1500),
+		});
+		expect(oversizedRevision).toEqual(original);
+		const oversizedAlignment = { ...alignment(), unifiedUnderstanding: "a".repeat(4000) };
+		expect(parseTeamAlignment(oversizedAlignment)).toEqual({
+			...oversizedAlignment,
+			unifiedUnderstanding: capped("a", 3000),
+		});
+		const oversizedSynthesis = {
+			reportMarkdown: "s".repeat(14000),
+			recommendedProposal: "A",
+			recommendationReason: "Evidence",
+			recommendationPreconditions: "Compatible API",
+			hardConstraintViolations: [{ proposalLabel: "A", issue: "Breaks compatibility", evidence: "src/api.ts:10" }],
+		};
+		expect(parseTeamSynthesis(oversizedSynthesis)).toEqual({
+			...oversizedSynthesis,
+			reportMarkdown: capped("s", 12000),
+		});
 		expect(enforceTextBudget("exact", 5)).toBe("exact");
-		expect(enforceTextBudget("a".repeat(100), 50)).toHaveLength(50);
+		expect(enforceTextBudget("a".repeat(100), 50)).toBe(capped("a", 50));
 	});
 
 	it.each([

@@ -53,10 +53,10 @@ export interface ModelRoleServiceDeps {
 	/** Outbound frame sink; the host forwards `settings_changed` frames to the client. */
 	readonly emit: (frame: object) => void;
 	/**
-	 * Reload the persisted config layers of the hosted session's own Settings
-	 * clone after a role save. Sessions snapshot the global layer via
-	 * `cloneForCwd` at creation, so without this their role resolution
-	 * (`/switch @role`, subagent role picks) keeps the pre-save value.
+	 * Reload the saved profile's resident Settings clones and refresh their
+	 * native role consumers before returning. Sessions snapshot the global
+	 * layer via `cloneForCwd`, so refreshing only the saving session leaves
+	 * other residents stale. Notification and the save receipt follow this barrier.
 	 */
 	readonly reloadSessionSettings?: () => Promise<void | {
 		result: "completed" | "degraded";
@@ -79,8 +79,8 @@ export interface ModelRoleListOptions {
 /** Options for {@link ModelRoleService.setRole}. */
 export interface ModelRoleSetOptions {
 	readonly roleId: string;
-	/** Wire contract allows `"user"` only; other runtime values reject with scope_not_allowed. */
-	readonly scope: "user";
+	/** Only "user" is writable; other scope strings reject with scope_not_allowed. */
+	readonly scope: string;
 	readonly selection: ModelRoleSelection;
 	/** Required revision of this user role slot, not the role catalog. */
 	readonly expectedRevision: string;
@@ -247,10 +247,7 @@ export class ModelRoleService {
 				throw new ModelRoleError("invalid_params", `Invalid model role: ${String(roleId)}`);
 			}
 
-			// Wire-level scope guard: the declared type is "user", but the raw
-			// frame value is untyped at runtime and needs a distinct error code.
-			const scope: unknown = command.scope;
-			if (scope !== "user") {
+			if (command.scope !== "user") {
 				throw new ModelRoleError("scope_not_allowed", "Model roles support only user writes");
 			}
 			if (typeof command.expectedRevision !== "string" || !command.expectedRevision) {

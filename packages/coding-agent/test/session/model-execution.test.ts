@@ -10,7 +10,8 @@ import {
 import { ModelControls, type ModelControlsHost } from "../../src/session/model-controls";
 
 function harness(selected = true) {
-	const original = getBundledModel("anthropic", "claude-sonnet-4-5");
+	const original = getBundledModel("ascend", "qwen3.8-27b");
+	if (!original) throw new Error("Expected retained provider original model");
 	const temporary = { ...original, provider: "execution-provider", id: "execution-model" } as Model;
 	let current: Model | undefined = selected ? original : undefined;
 	let idle = true;

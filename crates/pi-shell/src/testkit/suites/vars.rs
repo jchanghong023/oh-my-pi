@@ -123,11 +123,13 @@ fn readonly_functions_and_declare_f_errors() {
 	);
 	let body = ["func () ", "{ ", "    :", "}"].join("\n");
 	assert_eq!(out, format!("1\n1\n1\n1\n0\n{body}\ndeclare -fr func\n"));
+	// Approved declaration display contract: an assignment-shaped operand is
+	// reported under the invoked command as not found, also with `-f`.
 	assert_eq!(
 		err,
 		"bash: line 1: unset: func: cannot unset: readonly function\nbash: line 1: declare: func: \
-		 readonly function\nbash: line 1: declare: -a: invalid option\nbash: line 1: declare: \
-		 cannot use `-f' to make functions\n"
+		 readonly function\nbash: line 1: declare: -a: invalid option\nbash: line 1: declare: x=1: \
+		 not found\n"
 	);
 }
 

@@ -303,7 +303,9 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 				expect(result.exitCode, result.stdout).toBe(0);
 				expect(result.stdout).toContain("continue using the old inode and old version");
 				expect(result.stdout).toContain("Exit and restart those sessions");
-				expect(() => process.kill(running.pid, 0)).not.toThrow();
+				expect(result.stdout).toContain(String(running.pid));
+				expect(result.stdout).toContain(target);
+				expect(running.exitCode).toBeNull();
 
 				const installed = Bun.spawn([target, "--version"], { stdout: "pipe", stderr: "pipe" });
 				const [installedExit, installedOutput] = await Promise.all([
@@ -368,7 +370,126 @@ describe.skipIf(process.platform === "win32")("fork installer routing", () => {
 		expect(result.stdout).toContain(`Add ${fixture.installDir} to your PATH`);
 		expect(result.commands).not.toContain("/releases/download/");
 	});
+
+	test("records independent attempts with bounded correlated fields and a safe release version", async () => {
+		const fixture = await createFixture();
+		const logsDir = path.join(fixture.env.OMP_CONFIG_ROOT!, "logs");
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const result = await runInstallerWithFixture([], fixture);
+			expect(result.exitCode, result.stderr).toBe(0);
+		}
+		const names = await fs.readdir(logsDir);
+		expect(names).toHaveLength(2);
+		const operationIds = new Set<string>();
+		for (const name of names) {
+			expect(name).toMatch(/^omp\.install\.\d{4}-\d{2}-\d{2}\.\d+\.\d+\.log$/);
+			const lines = (await Bun.file(path.join(logsDir, name)).text()).trim().split("\n");
+			const records = lines.map(line => Object.fromEntries(line.split(" ").map(field => field.split("="))));
+			expect(records[0].event).toBe("install_started");
+			expect(records.at(-1)?.event).toBe("install_completed");
+			expect(new Set(records.map(record => record.operation_id)).size).toBe(1);
+			operationIds.add(records[0].operation_id);
+			for (const record of records) {
+				expect(record.stage.length).toBeGreaterThan(0);
+				expect(Number(record.elapsed_ms)).toBeGreaterThanOrEqual(0);
+				expect(record.platform.length).toBeGreaterThan(0);
+				expect(record.target_version).toMatch(/^(?:unspecified|redacted|v?\d+\.\d+\.\d+(?:\+fork\.\d+)?)$/);
+			}
+		}
+		expect(operationIds.size).toBe(2);
+	});
+
+	test("falls back from an unusable preferred log directory without failing installation", async () => {
+		const fixture = await createFixture();
+		const root = fixture.env.OMP_CONFIG_ROOT!;
+		await fs.mkdir(root, { recursive: true });
+		await fs.writeFile(path.join(root, "logs"), "blocked log directory");
+		const result = await runInstallerWithFixture([], fixture);
+		expect(result.exitCode, result.stderr).toBe(0);
+		const log = await installerLog(path.join(fixture.env.HOME!, ".local", "state", "omp", "logs"));
+		expect(log).toContain("level=WARN");
+		expect(log).toContain("event=log_directory_fallback");
+		expect(log).toContain("event=install_completed");
+		expect(await Bun.file(path.join(root, "logs")).text()).toBe("blocked log directory");
+	});
 });
+
+// Only the startup logger is exercised here: argument rejection exits before
+// platform selection, network access, candidate creation, or binary installation.
+// On Windows, opt into a real Git Bash explicitly; never accidentally select WSL.
+const startupLogShell = process.platform === "win32" ? process.env.OMP_TEST_INSTALLER_SHELL : "sh";
+if (startupLogShell) {
+	test("retention removes only expired installer attempts and protects live PIDs and unrelated logs", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-installer-prune-"));
+		tempDirs.push(root);
+		const logsDir = path.join(root, "config", "logs");
+		const installDir = path.join(root, "never-install");
+		await fs.mkdir(logsDir, { recursive: true });
+		const dead = "omp.install.2000-01-01.946684800000.2147483647.log";
+		const unrelated = ["omp.2000-01-01.2147483647.log", "unrelated.txt", "omp.install.unrelated.2147483647.log"];
+		for (const name of [dead, ...unrelated]) {
+			const file = path.join(logsDir, name);
+			await fs.writeFile(file, `preserve:${name}`);
+			await fs.utimes(file, new Date("2000-01-01"), new Date("2000-01-01"));
+		}
+		const command = `
+set -eu
+PATH=/usr/bin:/bin
+export PATH
+root="$OMP_TEST_PRUNE_ROOT"
+if command -v cygpath >/dev/null 2>&1; then root="$(cygpath -u "$root")"; fi
+HOME="$root/home"
+OMP_CONFIG_ROOT="$root/config"
+export HOME OMP_CONFIG_ROOT
+mkdir -p "$HOME"
+live="omp.install.2000-01-01.946684800001.$$.log"
+printf 'preserve:%s' "$live" > "$OMP_CONFIG_ROOT/logs/$live"
+touch -t 200001010000 "$OMP_CONFIG_ROOT/logs/$live"
+printf '%s' "$live" > "$root/live-log-name"
+# This real shell remains alive while its child installer tests kill -0.
+sh scripts/install.sh --startup-log-prune-invalid-option
+`;
+		const proc = Bun.spawn([startupLogShell, "-c", command], {
+			cwd: repoRoot,
+			env: {
+				...process.env,
+				OMP_TEST_PRUNE_ROOT: root,
+				OMP_CACHE_DIR: "",
+				OMP_OFFLINE: "",
+				OMP_PROFILE: "",
+				PI_PROFILE: "",
+				PI_INSTALL_DIR: installDir,
+				BASH_ENV: "",
+				ENV: "",
+			},
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const [exitCode, stdout, stderr] = await Promise.all([
+			proc.exited,
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
+		expect(exitCode, `${stdout}\n${stderr}`).toBe(1);
+		expect(stdout).toContain("Unknown option: --startup-log-prune-invalid-option");
+		const live = await fs.readFile(path.join(root, "live-log-name"), "utf8");
+		expect(live).toMatch(/^omp\.install\.2000-01-01\.946684800001\.\d+\.log$/);
+		expect(await Bun.file(path.join(logsDir, dead)).exists()).toBe(false);
+		for (const name of [live, ...unrelated]) {
+			expect(await Bun.file(path.join(logsDir, name)).text()).toBe(`preserve:${name}`);
+		}
+		await expect(fs.stat(installDir)).rejects.toMatchObject({ code: "ENOENT" });
+		const startupLogs = (await fs.readdir(logsDir)).filter(name => name !== live && !unrelated.includes(name));
+		expect(startupLogs).toHaveLength(1);
+		for (const name of startupLogs) {
+			const text = await fs.readFile(path.join(logsDir, name), "utf8");
+			expect(text).toContain("event=install_started");
+			expect(text).toContain("event=install_failed");
+			expect(text).not.toContain("event=http_request_started");
+			expect(text).not.toContain("event=candidate_created");
+		}
+	});
+}
 
 const windowsPowerShell = process.platform === "win32" ? Bun.which("powershell.exe") : null;
 const metadataPowerShellHosts = [windowsPowerShell, process.platform === "win32" ? Bun.which("pwsh.exe") : null].filter(

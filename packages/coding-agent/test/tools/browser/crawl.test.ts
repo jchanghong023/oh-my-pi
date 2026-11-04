@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, spyOn, vi } from "bun:test";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { TempDir } from "@oh-my-pi/pi-utils";
+import type { Browser } from "puppeteer-core";
 import type { SlashCommandRuntime } from "../../../src/slash-commands/types";
 import * as access from "../../../src/tools/browser/crawl-access";
 import { type CrawlOptions, runCrawl } from "../../../src/tools/browser/crawl";
+import { closeLaunchedBrowser, ensureChromiumExecutable, loadPuppeteer } from "../../../src/tools/browser/launch";
 import {
 	extractReadableFromHtml,
 	type ReadableExtractOptions,
@@ -28,6 +32,7 @@ function fixture(
 	const written: Array<{ content: string; name: string }> = [];
 	const output: string[] = [];
 	const codes: string[] = [];
+	const requests: Array<{ action: string; name: string; url?: string; app?: { relay: boolean } }> = [];
 	const runtime = {
 		session: {},
 		output: (text: string) => {
@@ -36,6 +41,7 @@ function fixture(
 	} as unknown as SlashCommandRuntime;
 	spyOn(access, "crawlBrowserRequest").mockImplementation(async (_session, parameters, signal) => {
 		const args = parameters as { action: string; name: string; code?: string; chain?: Array<{ method: string }> };
+		requests.push(parameters as (typeof requests)[number]);
 		if (args.action === "close") {
 			closed.push(args.name);
 			tabs.delete(args.name);
@@ -85,7 +91,7 @@ function fixture(
 		written.push({ name, content });
 		return `/out/${name}`;
 	});
-	return { runtime, opened, closed, written, output, codes };
+	return { runtime, opened, closed, written, output, codes, requests };
 }
 
 /** Execute the browser script against a page whose DOM and URL change on a virtual clock. */
@@ -95,18 +101,30 @@ function scriptedPage({
 	persistentIndicator = false,
 	loadDelayMs = 1000,
 	requestUrl,
+	eventStream = false,
 	html,
 	scrolling,
 	fullArticle,
+	links,
 }: {
 	redirectUrl?: string;
 	onWait?: () => void;
 	persistentIndicator?: boolean;
 	loadDelayMs?: number;
 	requestUrl?: string;
+	eventStream?: boolean;
 	html?: string;
+	links?: (batches: number) => string[];
 	scrolling?: { container?: boolean; endless?: boolean; stalled?: boolean; onScroll?: () => void };
-	fullArticle?: { label?: string; url?: string; form?: boolean; noop?: boolean; onClick?: () => void };
+	fullArticle?: {
+		label?: string;
+		url?: string;
+		form?: boolean;
+		noop?: boolean;
+		disabled?: boolean;
+		download?: boolean;
+		onClick?: () => void;
+	};
 } = {}) {
 	let elapsed = 0;
 	let requestedUrl = "";
@@ -131,7 +149,7 @@ function scriptedPage({
 		},
 		type: fullArticle?.form ? "submit" : "button",
 		form: fullArticle?.form ? {} : null,
-		disabled: false,
+		disabled: fullArticle?.disabled ?? false,
 		getClientRects: () => [{}],
 		getBoundingClientRect: () => ({ top: 0, bottom: 30, left: 0, right: 100 }),
 		clientHeight: 30,
@@ -141,7 +159,8 @@ function scriptedPage({
 		closest: (selector: string): Element | null =>
 			selector === "a[href]" && !fullArticle?.url ? null : (control as unknown as Element),
 		getAttribute: (name: string) => (name === "href" ? (fullArticle?.url ?? null) : null),
-		hasAttribute: (name: string) => controlMarkers.has(name),
+		hasAttribute: (name: string) =>
+			(name === "download" && fullArticle?.download === true) || controlMarkers.has(name),
 		setAttribute: (name: string) => controlMarkers.add(name),
 		removeAttribute: (name: string) => controlMarkers.delete(name),
 	};
@@ -184,11 +203,22 @@ function scriptedPage({
 					requestId: "data",
 					request: { url: requestUrl },
 				});
+				if (eventStream)
+					listeners.get("Network.responseReceived")?.({
+						type: "Fetch",
+						requestId: "data",
+						response: { mimeType: "text/event-stream; charset=utf-8" },
+					});
 			}
 			return { status: () => 200, headers: () => ({ "content-type": "text/html" }) };
 		},
 		url: currentUrl,
 		evaluate: async (script: string | ((...args: unknown[]) => unknown), ...args: unknown[]) => {
+			const anchors = (links?.(batches) ?? []).map(href => ({
+				href,
+				hasAttribute: (name: string) => name === "href",
+				setAttribute: () => {},
+			}));
 			const document = {
 				body: { innerText: loaded() ? renderedText() : "Article title\nLoading..." },
 				contentType: "text/html",
@@ -199,20 +229,22 @@ function scriptedPage({
 				querySelectorAll: (selector: string) =>
 					selector === "body *"
 						? [...(scrolling?.container ? [scrollArea] : []), ...(fullArticle ? [control] : [])]
-						: selector.startsWith("[data-omp-crawl-")
-							? [
-									...(markers.has(selector.slice(1, -1)) ? [scrollArea] : []),
-									...(controlMarkers.has(selector.slice(1, -1)) ? [control] : []),
-								]
-							: (persistentIndicator || !loaded()) &&
-								  selector.split(",").some(part => part.trim() === ".loading")
+						: selector === "a[href], area[href]" || selector === "a[href], area[href], img[src]"
+							? anchors
+							: selector.startsWith("[data-omp-crawl-")
 								? [
-										{
-											getClientRects: () => [{ width: 5, height: 5 }],
-											getBoundingClientRect: () => ({ width: 5, height: 5 }),
-										},
+										...(markers.has(selector.slice(1, -1)) ? [scrollArea] : []),
+										...(controlMarkers.has(selector.slice(1, -1)) ? [control] : []),
 									]
-								: [],
+								: (persistentIndicator || !loaded()) &&
+									  selector.split(",").some(part => part.trim() === ".loading")
+									? [
+											{
+												getClientRects: () => [{ width: 5, height: 5 }],
+												getBoundingClientRect: () => ({ width: 5, height: 5 }),
+											},
+										]
+									: [],
 			};
 			const evaluate = new Function(
 				"document",
@@ -289,7 +321,7 @@ function scriptedPage({
 					nextBatchAt = undefined;
 					listeners.get("Network.loadingFinished")?.({ requestId: "scroll-data" });
 				}
-				if (requestPending && loaded()) {
+				if (requestPending && loaded() && !eventStream) {
 					requestPending = false;
 					listeners.get("Network.loadingFinished")?.({ requestId: "data" });
 				}
@@ -298,8 +330,244 @@ function scriptedPage({
 			{ now: () => 10_000 + elapsed },
 		);
 	};
-	return { run, extractionCount: () => extractions, detachmentCount: () => detachments };
+	return { run, extractionCount: () => extractions, detachmentCount: () => detachments, elapsed: () => elapsed };
 }
+
+let closePendingCrawlBrowser: (() => Promise<void>) | undefined;
+
+/** Run the generated crawl program in a private Chromium profile against loopback HTML. */
+async function crawlDomFixture(pages: Record<string, string>, entry = "/article/preview") {
+	using directory = TempDir.createSync("@omp-crawl-dom-");
+	const requested: string[] = [];
+	let closeOwnedFixture: (() => Promise<void>) | undefined;
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch(request) {
+			const pathname = new URL(request.url).pathname;
+			requested.push(pathname);
+			const html = pages[pathname];
+			return new Response(html ?? "Not found", {
+				status: html === undefined ? 404 : 200,
+				headers: { "content-type": "text/html; charset=utf-8" },
+			});
+		},
+	});
+	try {
+		const executablePath = await ensureChromiumExecutable();
+		if (!executablePath) throw new Error("Crawl DOM acceptance requires a locally available Chromium executable");
+		const puppeteer = await loadPuppeteer();
+		const profile = directory.join("browser-profile");
+		const home = directory.join("home");
+		// SHGetFolderPath verifies %USERPROFILE%\AppData\Local on Windows,
+		// independently of LOCALAPPDATA; both must resolve to an existing private folder.
+		const config = directory.join("home", "AppData", "Roaming");
+		const cache = directory.join("cache");
+		const data = directory.join("home", "AppData", "Local");
+		const temp = directory.join("tmp");
+		await Promise.all([profile, home, config, cache, data, temp].map(path => mkdir(path, { recursive: true })));
+		const privateEnv: NodeJS.ProcessEnv = {
+			HOME: home,
+			USERPROFILE: home,
+			APPDATA: config,
+			LOCALAPPDATA: data,
+			XDG_CONFIG_HOME: config,
+			XDG_CACHE_HOME: cache,
+			XDG_DATA_HOME: data,
+			CHROME_CONFIG_HOME: config,
+			CHROME_USER_DATA_DIR: undefined,
+			TMP: temp,
+			TEMP: temp,
+			TMPDIR: temp,
+		};
+		const privateEnvNames = new Set(Object.keys(privateEnv));
+		const inheritedEnv = Object.fromEntries(
+			Object.entries(process.env).filter(([name]) => !privateEnvNames.has(name.toUpperCase())),
+		);
+		const launchAbort = new AbortController();
+		let launchedBrowser: Browser | undefined = undefined;
+		let closePromise: Promise<void> | undefined;
+		closeOwnedFixture = () =>
+			(closePromise ??= (async () => {
+				if (launchedBrowser) await closeLaunchedBrowser(launchedBrowser);
+				else launchAbort.abort();
+				await server.stop(true);
+			})());
+		// Bun's test deadline can interrupt launch without entering its finally.
+		closePendingCrawlBrowser = closeOwnedFixture;
+		const browser = await puppeteer.launch({
+			executablePath,
+			headless: true,
+			userDataDir: profile,
+			// Use loopback WebSocket CDP: Bun's Windows pipe transport can stall target discovery.
+			args: [
+				"--remote-debugging-port=0",
+				"--remote-debugging-address=127.0.0.1",
+				"--no-sandbox",
+				"--disable-dev-shm-usage",
+			],
+			pipe: false,
+			signal: launchAbort.signal,
+			// Remove case variants before merging: Windows environment names are case-insensitive.
+			env: { ...inheritedEnv, ...privateEnv },
+		});
+		launchedBrowser = browser;
+		try {
+			const page = await browser.newPage();
+			const initialTabs = (await browser.pages()).length;
+			let createdTabs = 0;
+			browser.on("targetcreated", target => {
+				if (target.type() === "page") createdTabs++;
+			});
+			const navigations: string[] = [];
+			page.on("framenavigated", frame => {
+				if (frame === page.mainFrame()) navigations.push(frame.url());
+			});
+			// Do not allow fixture HTML to contact external sites.
+			await page.setRequestInterception(true);
+			page.on("request", request => {
+				if (new URL(request.url()).origin === server.url.origin) void request.continue();
+				else void request.abort();
+			});
+			const url = new URL(entry, server.url).href;
+			const extractedAnchors: string[][] = [];
+			const tab = {
+				click: (selector: string) => page.click(selector),
+				extract: async (format: ReadableFormat, opts?: ReadableExtractOptions) => {
+					extractedAnchors.push(
+						await page.$$eval("a[href]", anchors => anchors.map(anchor => anchor.getAttribute("href")!)),
+					);
+					const result = await extractReadableFromHtml(await page.content(), page.url(), format, opts);
+					if (!result?.markdown) throw new Error("No readable fixture content");
+					return result.markdown;
+				},
+			};
+			const f = fixture({ [url]: {} }, undefined, async code => {
+				const execute = new Function("page", "tab", "wait", `return (async () => { ${code} })();`);
+				return execute(page, tab, (ms: number) => new Promise(resolve => setTimeout(resolve, ms)));
+			});
+			const savedPaths: string[] = [];
+			spyOn(access, "writeCrawlMarkdown").mockImplementation(async (_session, _output, name, content, signal) => {
+				signal?.throwIfAborted();
+				const destination = directory.join(name);
+				await writeFile(destination, content);
+				savedPaths.push(destination);
+				return destination;
+			});
+			await runCrawl(
+				f.runtime,
+				{
+					url,
+					recursive: false,
+					output: directory.path(),
+					concurrency: 1,
+					wait: 0,
+					scroll: false,
+				},
+				new AbortController().signal,
+			);
+			expect(f.output.at(-1)).toContain("1 saved, 0 failed");
+			expect(savedPaths).toHaveLength(1);
+			expect(f.opened).toHaveLength(1);
+			expect(f.closed).toEqual(f.opened);
+			expect(createdTabs).toBe(0);
+			expect((await browser.pages()).length).toBe(initialTabs);
+			return {
+				markdown: await readFile(savedPaths[0]!, "utf8"),
+				url: page.url(),
+				origin: server.url.origin,
+				navigations,
+				requested,
+				extractedAnchors,
+			};
+		} finally {
+			await closeOwnedFixture();
+		}
+	} finally {
+		await closeOwnedFixture?.();
+		closePendingCrawlBrowser = undefined;
+		if (!closeOwnedFixture) await server.stop(true);
+	}
+}
+
+describe("crawl real DOM reading contracts", () => {
+	afterEach(async () => {
+		const close = closePendingCrawlBrowser;
+		closePendingCrawlBrowser = undefined;
+		await close?.();
+	});
+
+	it("absolutizes relative body anchors before serializing saved Markdown", async () => {
+		const result = await crawlDomFixture({
+			"/article/preview": `<html><head><base href="/docs/v2/"></head><body><article>
+				<h1>Link resolution</h1><p>Read the <a href="../guide?mode=all&amp;lang=en#install">installation guide</a>
+				and <a href="/reference">API reference</a> for complete setup instructions.</p>
+			</article></body></html>`,
+		});
+		const guide = `${result.origin}/docs/guide?mode=all&lang=en#install`;
+		expect(result.extractedAnchors).toEqual([[guide, `${result.origin}/reference`]]);
+		expect(result.markdown).toContain(`[installation guide](${guide})`);
+		expect(result.markdown).toContain(`[API reference](${result.origin}/reference)`);
+		expect(result.navigations).toEqual([`${result.origin}/article/preview`]);
+	}, 30_000);
+
+	it("prefers an in-page expander over a later full-article navigation candidate", async () => {
+		const result = await crawlDomFixture({
+			"/article/preview": `<html><body><article><h1>Preferred expansion</h1>
+				<p id="body">PREVIEW_ONLY</p>
+				<button onclick="document.querySelector('#body').textContent='INLINE_COMPLETE_ARTICLE';this.remove()">查看全文</button>
+				<a href="/navigation-candidate">阅读全文</a>
+			</article></body></html>`,
+			"/navigation-candidate": "<html><body>WRONG_NAVIGATION_ARTICLE</body></html>",
+		});
+		expect(result.markdown).toContain("INLINE_COMPLETE_ARTICLE");
+		expect(result.markdown).not.toContain("PREVIEW_ONLY");
+		expect(result.markdown).not.toContain("WRONG_NAVIGATION_ARTICLE");
+		expect(result.navigations).toEqual([`${result.origin}/article/preview`]);
+		expect(result.requested).not.toContain("/navigation-candidate");
+	}, 30_000);
+
+	it("activates the actionable ancestor of a nested full-article label", async () => {
+		const result = await crawlDomFixture({
+			"/article/preview": `<html><body><article><h1>Nested reading control</h1>
+				<p id="body">NESTED_PREVIEW</p><button onclick="document.querySelector('#body').textContent='NESTED_COMPLETE_ARTICLE';this.remove()">
+				<span><strong>展开全文</strong></span></button>
+			</article></body></html>`,
+		});
+		expect(result.markdown).toContain("NESTED_COMPLETE_ARTICLE");
+		expect(result.markdown).not.toContain("NESTED_PREVIEW");
+		expect(result.navigations).toEqual([`${result.origin}/article/preview`]);
+	}, 30_000);
+
+	it("navigates a target blank full-article anchor in the same owned tab without clicking it", async () => {
+		const result = await crawlDomFixture({
+			"/article/preview": `<html><body><h1>Preview</h1><p>BLANK_PREVIEW</p>
+				<a target="_blank" href="/article/full" onclick="fetch('/anchor-clicked')">Read the full article</a></body></html>`,
+			"/article/full": "<html><body><h1>Complete article</h1><p>SAME_TAB_FULL_CONTENT</p></body></html>",
+		});
+		expect(result.url).toBe(`${result.origin}/article/full`);
+		expect(result.navigations).toEqual([`${result.origin}/article/preview`, `${result.origin}/article/full`]);
+		expect(result.markdown).toContain(`Source: ${result.origin}/article/full\n`);
+		expect(result.markdown).toContain("SAME_TAB_FULL_CONTENT");
+		expect(result.markdown).not.toContain("BLANK_PREVIEW");
+		expect(result.requested).not.toContain("/anchor-clicked");
+	}, 30_000);
+
+	it("stops following reading links after one full article instead of chasing recommendations", async () => {
+		const result = await crawlDomFixture({
+			"/article/preview": `<html><body><h1>Preview</h1><a href="/article/full">阅读全文</a></body></html>`,
+			"/article/full": `<html><body><article><h1>Original full article</h1><p>ORIGINAL_COMPLETE_CONTENT</p>
+				<aside><h2>Recommended stories</h2><a href="/recommendation">Read more</a></aside></article></body></html>`,
+			"/recommendation": "<html><body><h1>Different article</h1><p>RECOMMENDED_CONTENT</p></body></html>",
+		});
+		expect(result.url).toBe(`${result.origin}/article/full`);
+		expect(result.navigations).toEqual([`${result.origin}/article/preview`, `${result.origin}/article/full`]);
+		expect(result.requested).not.toContain("/recommendation");
+		expect(result.markdown).toContain("ORIGINAL_COMPLETE_CONTENT");
+		expect(result.markdown).not.toContain("RECOMMENDED_CONTENT");
+		expect(result.markdown).toContain(`[Read more](${result.origin}/recommendation)`);
+	}, 30_000);
+});
 
 const options: CrawlOptions = { url: "https://example.test/", recursive: true, output: "/out", concurrency: 2 };
 afterEach(() => vi.restoreAllMocks());
@@ -634,6 +902,190 @@ describe("crawl engine", () => {
 		expect(f.opened).toHaveLength(1);
 		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
 		expect(f.opened).toHaveLength(2);
+	});
+
+	it("caps concurrent child pages at the requested worker count", async () => {
+		const children = Array.from({ length: 5 }, (_, index) => `https://example.test/child-${index}`);
+		const pages = Object.fromEntries(["https://example.test/", ...children].map(url => [url, {}]));
+		const release = Promise.withResolvers<void>();
+		const saturated = Promise.withResolvers<void>();
+		let active = 0;
+		let maximum = 0;
+		const f = fixture(pages, undefined, async (_code, url) => {
+			if (url !== options.url) {
+				active++;
+				maximum = Math.max(maximum, active);
+				if (active === 2) saturated.resolve();
+				await release.promise;
+				active--;
+			}
+			return {
+				url,
+				status: 200,
+				contentType: "text/html",
+				attachment: false,
+				info: { url, links: url === options.url ? children : [], contentType: "text/html", login: false },
+				markdown: `Content for ${url}`,
+				endUrl: url,
+			};
+		});
+		const running = runCrawl(f.runtime, options, new AbortController().signal);
+		try {
+			await saturated.promise;
+			expect(active).toBe(2);
+			expect(maximum).toBe(2);
+		} finally {
+			release.resolve();
+			await running;
+		}
+		expect(maximum).toBe(2);
+		expect(f.written).toHaveLength(6);
+		expect(f.closed.sort()).toEqual(f.opened.sort());
+	});
+
+	it("retains saved pages on cancellation and restarts from the entry without resuming its queue", async () => {
+		const controller = new AbortController();
+		let cancelChildren = true;
+		const f = fixture(
+			{
+				[options.url]: { links: ["https://example.test/child"] },
+				"https://example.test/child": {},
+			},
+			url => {
+				if (cancelChildren && url !== options.url) controller.abort();
+			},
+		);
+		await runCrawl(f.runtime, options, controller.signal);
+		expect(f.written.map(file => file.content)).toEqual([`Source: ${options.url}\n\nReadable content\n`]);
+		expect(f.output.at(-1)).toContain("Crawl cancelled: 1 saved, 0 failed; saved files retained.");
+		cancelChildren = false;
+		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
+		expect(f.written.map(file => file.content)).toEqual([
+			`Source: ${options.url}\n\nReadable content\n`,
+			`Source: ${options.url}\n\nReadable content\n`,
+		]);
+		expect(f.closed.sort()).toEqual(f.opened.sort());
+	});
+
+	it("uses only owned Relay tabs and never adopts or focuses user tabs", async () => {
+		const f = fixture({ "https://example.test/": {} });
+		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
+		expect(f.requests.map(request => request.action)).toEqual(["open", "run", "close"]);
+		expect(f.requests[0]).toMatchObject({ url: "about:blank", app: { relay: true } });
+		expect(new Set(f.requests.map(request => request.name)).size).toBe(1);
+		expect(f.requests[0]?.name).toMatch(/^crawl-/);
+		expect(f.written).toHaveLength(1);
+	});
+
+	it("discovers links after scrolling and also reads and scrolls recursive child pages", async () => {
+		const child = "https://example.test/child";
+		const rootPage = scriptedPage({ scrolling: {}, links: batches => (batches >= 3 ? [child, child] : []) });
+		const childPage = scriptedPage({ scrolling: { container: true }, fullArticle: { label: "阅读全文" } });
+		const f = fixture({ [options.url]: {}, [child]: {} }, undefined, (code, url) =>
+			(url === options.url ? rootPage : childPage).run(code),
+		);
+		await runCrawl(f.runtime, options, new AbortController().signal);
+		expect(f.written).toHaveLength(2);
+		expect(f.written[1]?.content).toContain(`Source: ${child}\n`);
+		expect(f.written[1]?.content).toContain("The complete article body.");
+		expect(f.written[1]?.content).toContain("Lazy section 3");
+		expect(f.closed.sort()).toEqual(f.opened.sort());
+	});
+
+	it.each(["disabled", "download"] as const)(
+		"fails an unavailable full-article control (%s) without clicking or saving its preview",
+		async boundary => {
+			let clicks = 0;
+			const browser = scriptedPage({
+				fullArticle: {
+					url: "https://example.test/full",
+					[boundary]: true,
+					onClick: () => clicks++,
+				},
+			});
+			const f = fixture({ [options.url]: {} }, undefined, browser.run);
+			await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
+			expect(f.written).toEqual([]);
+			expect(clicks).toBe(0);
+			expect(f.output.join("\n")).toContain(boundary === "disabled" ? "disabled" : "download");
+			expect(f.closed).toEqual(f.opened);
+		},
+	);
+
+	it("does not wait for a persistent event stream to end before saving stable rendered content", async () => {
+		const browser = scriptedPage({ requestUrl: "https://api.example.test/events", eventStream: true });
+		const f = fixture({ [options.url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, recursive: false }, new AbortController().signal);
+		expect(f.written).toHaveLength(1);
+		expect(f.written[0]?.content).toContain("The complete article body.");
+		expect(f.output.at(-1)).toContain("1 saved, 0 failed");
+		expect(browser.detachmentCount()).toBe(1);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it.each(["查看全文", "阅读全文", "显示全文", "继续阅读", "Read more", "Read the full article", "Continue reading"])(
+		"reads an explicit full-article control labelled %s without scroll opt-in",
+		async label => {
+			const url = "https://example.test/article";
+			const browser = scriptedPage({ fullArticle: { label } });
+			const f = fixture({ [url]: {} }, undefined, browser.run);
+			await runCrawl(f.runtime, { ...options, url, recursive: false, scroll: false }, new AbortController().signal);
+			expect(f.written[0]?.content).toContain("The complete article body.");
+			expect(f.written[0]?.content).not.toContain("Preview only");
+			expect(browser.detachmentCount()).toBe(1);
+		},
+	);
+
+	it("navigates to cross-origin full text in its owned tab and records the final source", async () => {
+		const url = "https://example.test/preview";
+		const full = "https://articles.test/full";
+		let clicks = 0;
+		const browser = scriptedPage({ fullArticle: { url: full, onClick: () => clicks++ } });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(f.written[0]?.content).toContain(`Source: ${full}\n`);
+		expect(f.written[0]?.content).toContain("The complete article body.");
+		expect(f.opened).toHaveLength(1);
+		expect(clicks).toBe(0);
+		expect(f.closed).toEqual(f.opened);
+	});
+
+	it.each(["mailto:owner@example.test", "file:///private/full"])(
+		"refuses a non-web full-article target %s without saving a preview",
+		async full => {
+			const url = "https://example.test/preview";
+			let clicks = 0;
+			const browser = scriptedPage({ fullArticle: { url: full, onClick: () => clicks++ } });
+			const f = fixture({ [url]: {} }, undefined, browser.run);
+			await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+			expect(f.written).toEqual([]);
+			expect(clicks).toBe(0);
+			expect(f.output.join("\n")).toContain("not an HTTP or HTTPS webpage");
+			expect(f.closed).toEqual(f.opened);
+		},
+	);
+
+	it.each(["加载更多", "Like", "Submit", "评论"])(
+		"never activates an unrelated business control labelled %s",
+		async label => {
+			let clicks = 0;
+			const url = "https://example.test/dashboard";
+			const browser = scriptedPage({ fullArticle: { label, onClick: () => clicks++ } });
+			const f = fixture({ [url]: {} }, undefined, browser.run);
+			await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+			expect(clicks).toBe(0);
+			expect(f.written).toHaveLength(1);
+			expect(f.closed).toEqual(f.opened);
+		},
+	);
+
+	it("waits at least the default five seconds before extracting lazy content", async () => {
+		const url = "https://example.test/feed";
+		const browser = scriptedPage({ scrolling: {} });
+		const f = fixture({ [url]: {} }, undefined, browser.run);
+		await runCrawl(f.runtime, { ...options, url, recursive: false }, new AbortController().signal);
+		expect(browser.elapsed()).toBeGreaterThanOrEqual(5_000);
+		expect(f.written[0]?.content).toContain("Lazy section 3");
 	});
 	it("allows redirect responses but blocks attachment responses before Chromium handles them", async () => {
 		const f = fixture({ "https://example.test/": {} });

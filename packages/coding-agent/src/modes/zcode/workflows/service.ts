@@ -555,9 +555,10 @@ export class ZCodeWorkflowService {
 		const artifact = this.getArtifact(input.sessionId, input.runId, input.artifactId, input.version);
 		if (!artifact.uri?.startsWith("artifact://"))
 			throw new Error("Workflow artifact has no native content reference");
-		const parent =
-			this.#options.manager.get(input.sessionId) ?? (await this.#options.manager.resume(input.sessionId));
-		const path = await parent.session.sessionManager.getArtifactPath(artifact.uri.slice("artifact://".length));
+		const path = await this.#options.manager.getArtifactPath(
+			input.sessionId,
+			artifact.uri.slice("artifact://".length),
+		);
 		if (path === null) throw new Error("Workflow artifact content was not found");
 		const file = await open(path, "r");
 		try {

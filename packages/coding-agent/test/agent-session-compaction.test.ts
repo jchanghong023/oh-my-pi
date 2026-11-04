@@ -32,7 +32,7 @@ import { createTools, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { removeSyncWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 import { e2eApiKey } from "./utilities";
 
-describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", () => {
+describe.skipIf(!e2eApiKey("ASCEND_API_KEY"))("AgentSession compaction e2e", () => {
 	let session: AgentSession;
 	let tempDir: string;
 	let sessionManager: SessionManager;
@@ -69,9 +69,9 @@ describe.skipIf(!e2eApiKey("ANTHROPIC_API_KEY"))("AgentSession compaction e2e", 
 		};
 		const tools = await createTools(toolSession);
 
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		const agent = new Agent({
-			getApiKey: () => e2eApiKey("ANTHROPIC_API_KEY"),
+			getApiKey: () => e2eApiKey("ASCEND_API_KEY"),
 			initialState: {
 				model,
 				systemPrompt: ["You are a helpful assistant. Be concise."],
@@ -572,7 +572,7 @@ describe("AgentSession edited-input compaction admission", () => {
 			const belowThreshold = outcome.startsWith("below-threshold");
 			const admissionFailure = outcome.endsWith("admission-failure");
 			const directory = fs.mkdtempSync(path.join(os.tmpdir(), "omp-edited-compaction-"));
-			const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+			const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 			const auth = await AuthStorage.create(":memory:");
 			auth.keys.setRuntime(model.provider, "fixture-key");
 			const manager = SessionManager.create(directory, directory);
@@ -782,7 +782,7 @@ describe("AgentSession explicit context exhaustion recovery", () => {
 		["max_tokens", false],
 		["max_tokens", true],
 	] as const)("distinguishes %s from output truncation (delivered=%s)", async (stopType, delivered) => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5")!;
+		const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
 		const usage = {
 			input: 12,
 			output: 5,

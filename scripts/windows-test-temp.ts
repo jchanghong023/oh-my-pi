@@ -17,8 +17,10 @@ export function windowsTestTempOverride(): { TMP: string; TEMP: string } | undef
 	const currentDrive = current.replaceAll("/", "\\").slice(0, 2).toUpperCase();
 	if (currentDrive.length === 2 && currentDrive !== systemDrive) return undefined;
 
+	let firstDir: string | undefined;
 	let best: { dir: string; free: number } | undefined;
-	for (let code = "D".charCodeAt(0); code <= "Z".charCodeAt(0); code++) {
+	let hasUnknownFreeSpace = false;
+	for (let code = "A".charCodeAt(0); code <= "Z".charCodeAt(0); code++) {
 		const root = `${String.fromCharCode(code)}:\\`;
 		if (root.slice(0, 2).toUpperCase() === systemDrive) continue;
 		if (!fs.existsSync(root)) continue;
@@ -32,18 +34,26 @@ export function windowsTestTempOverride(): { TMP: string; TEMP: string } | undef
 		} catch {
 			continue;
 		}
-		let free = 0;
+		firstDir ??= dir;
+		let free: number | undefined;
 		try {
 			if (typeof fs.statfsSync === "function") {
 				const stats = fs.statfsSync(root);
-				free = Number(stats.bsize) * Number(stats.bavail);
+				const available = Number(stats.bsize) * Number(stats.bavail);
+				if (Number.isFinite(available) && available >= 0) free = available;
 			}
 		} catch {
 			// Free-space comparison is best effort; fall back to probe order.
 		}
-		if (best === undefined || free > best.free) best = { dir, free };
+		if (free === undefined) {
+			hasUnknownFreeSpace = true;
+		} else if (best === undefined || free > best.free) {
+			best = { dir, free };
+		}
 	}
-	if (best === undefined) return undefined;
+	// A capacity comparison is meaningful only when every writable candidate is known.
+	const dir = hasUnknownFreeSpace ? firstDir : best?.dir;
+	if (dir === undefined) return undefined;
 
-	return { TMP: best.dir, TEMP: best.dir };
+	return { TMP: dir, TEMP: dir };
 }

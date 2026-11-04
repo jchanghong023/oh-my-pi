@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { ZCodeProviderConfiguration } from "../../src/modes/zcode/provider-config";
@@ -216,7 +216,7 @@ describe("ZCode provider configuration consumer", () => {
 		expect(result.snoozedInteractionCount).toBe(2);
 		expect(config.getWorkspacePreferences(f.dir).askUserQuestionAutoResolutionEnabled).toBe(false);
 		expect(config.getWorkspacePreferences(join(f.dir, "other")).askUserQuestionAutoResolutionEnabled).toBe(true);
-		expect(calls).toHaveLength(1);
+		expect(calls).toEqual([`${resolve(f.dir)}:false`]);
 		expect(
 			(await config.updateModelIoPreferences({ workspace, preferences: { fullRetentionEnabled: true } }))
 				.updatedSessionCount,
@@ -231,7 +231,45 @@ describe("ZCode provider configuration consumer", () => {
 				workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
 				preferences: { fullRetentionEnabled: true },
 			}),
-		).rejects.toThrow();
+		).rejects.toThrow("Model IO retention consumer is unavailable");
 		expect(config.getWorkspacePreferences(f.dir).fullRetentionEnabled).toBe(false);
+	});
+
+	test("missing interaction consumer rejects without committing a workspace template", async () => {
+		const f = await fixture();
+		const config = new ZCodeProviderConfiguration({ records: () => [f] });
+		await expect(
+			config.updateInteractionPreferences({
+				workspace: { workspacePath: f.dir, workspaceKey: "fixture" },
+				preferences: { askUserQuestionAutoResolutionEnabled: false },
+			}),
+		).rejects.toThrow("Interaction preference consumer is unavailable");
+		expect(config.getWorkspacePreferences(f.dir).askUserQuestionAutoResolutionEnabled).toBe(true);
+	});
+
+	test("workspace-only preference templates return zero and are not inherited by a new owner", async () => {
+		const f = await fixture();
+		const config = new ZCodeProviderConfiguration();
+		const workspace = { workspacePath: f.dir, workspaceKey: "fixture" };
+		expect(
+			await config.updateInteractionPreferences({
+				workspace,
+				preferences: { askUserQuestionAutoResolutionEnabled: false },
+			}),
+		).toMatchObject({ snoozedInteractionCount: 0, askUserQuestionAutoResolutionEnabled: false });
+		expect(
+			await config.updateModelIoPreferences({
+				workspace,
+				preferences: { fullRetentionEnabled: true },
+			}),
+		).toMatchObject({ updatedSessionCount: 0, fullRetentionEnabled: true });
+		expect(config.getWorkspacePreferences(f.dir)).toEqual({
+			askUserQuestionAutoResolutionEnabled: false,
+			fullRetentionEnabled: true,
+		});
+		expect(new ZCodeProviderConfiguration().getWorkspacePreferences(f.dir)).toEqual({
+			askUserQuestionAutoResolutionEnabled: true,
+			fullRetentionEnabled: false,
+		});
 	});
 });

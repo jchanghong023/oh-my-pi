@@ -498,7 +498,7 @@ describe("ZCode actual public app-server process", () => {
 			try {
 				await fs.appendFile(
 					path.join(config.agentDir, "models.yml"),
-					`  zcode-discovery:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    discovery:\n      type: openai-models-list\n`,
+					`  ascend:\n    baseUrl: http://127.0.0.1:${endpoint.port}/v1\n    auth: none\n    api: openai-completions\n    discovery:\n      type: openai-models-list\n`,
 				);
 				await using peer = new ProcessPeer(config.cwdA, config.env);
 				await peer.ready();
@@ -513,7 +513,7 @@ describe("ZCode actual public app-server process", () => {
 					frame =>
 						frame.method === "v4/conversation/frame" && isRecord(frame.params) && frame.params.topic === topic,
 				);
-				expect(JSON.stringify(initial)).not.toContain("zcode-discovery/background-chat");
+				expect(JSON.stringify(initial)).not.toContain("ascend/background-chat");
 				await deadline(requested.promise);
 				discovered.resolve();
 				const notification = await peer.next(
@@ -521,7 +521,7 @@ describe("ZCode actual public app-server process", () => {
 						frame.method === "v4/conversation/frame" &&
 						isRecord(frame.params) &&
 						frame.params.topic === topic &&
-						JSON.stringify(frame.params).includes("zcode-discovery/background-chat"),
+						JSON.stringify(frame.params).includes("ascend/background-chat"),
 				);
 				const wire = workspaceConfigTopicWireFrameSchema.parse(notification.params);
 				if (wire.kind !== "complete" || wire.frame.payload.kind !== "deltas")

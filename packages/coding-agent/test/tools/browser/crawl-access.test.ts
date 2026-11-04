@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { getTestModel } from "../../helpers/model-fixtures";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../../src/config/model-registry";
 import { Settings } from "../../../src/config/settings";
@@ -23,7 +23,7 @@ async function createSession(settings: Record<string, unknown> = {}): Promise<Cr
 		settings: Settings.isolated({ "compaction.enabled": false, ...settings }),
 		authStorage: auth,
 		modelRegistry: new ModelRegistry(auth, directory.join("models.yml")),
-		model: getBundledModel("openai", "gpt-4o-mini"),
+		model: getTestModel("ascend"),
 		agentRegistry: new AgentRegistry(),
 		bindProcessState: false,
 		disableExtensionDiscovery: true,
@@ -42,6 +42,7 @@ async function createSession(settings: Record<string, unknown> = {}): Promise<Cr
 beforeEach(() => {
 	directory = TempDir.createSync("crawl-access-");
 	auth = createInMemoryAuthStorage();
+	auth.keys.setRuntime("ascend", "crawl-fixture-key");
 });
 
 afterEach(async () => {
@@ -55,6 +56,20 @@ describe("crawl session access", () => {
 	it("rejects a disabled browser before dispatch", async () => {
 		const { session } = await createSession({ "browser.enabled": false });
 		await expect(crawlBrowserRequest(session, { action: "tabs" })).rejects.toThrow(/not enabled/);
+	});
+
+	it("keeps crawl browser access disabled in OMP_OFFLINE even when browser settings permit it", async () => {
+		const { session } = await createSession({ "browser.enabled": true, "tools.approvalMode": "yolo" });
+		const previous = process.env.OMP_OFFLINE;
+		try {
+			process.env.OMP_OFFLINE = "1";
+			await expect(crawlBrowserRequest(session, { action: "open", name: "offline-crawl" })).rejects.toThrow(
+				"Browser is disabled in OMP_OFFLINE mode.",
+			);
+		} finally {
+			if (previous === undefined) delete process.env.OMP_OFFLINE;
+			else process.env.OMP_OFFLINE = previous;
+		}
 	});
 
 	it("applies the real browser deny policy before dispatch", async () => {

@@ -606,3 +606,34 @@ describe("explicit Dev file decisions", () => {
 		expect(restored.inputs).toEqual([]);
 	});
 });
+
+it("business assent, busy completion and stale delivery actions never approve another stage or flow", async () => {
+	const f = fixture();
+	await f.core.startBusiness("业务口述原文", "business-first", f.docs.business.path);
+	await f.core.converse("同意，继续");
+	expect(f.core.status().phase).toBe("business");
+	expect(f.core.save().approvals).toEqual({});
+	expect(f.reads).toEqual([]);
+	const before = f.core.save();
+	f.settings.busy = true;
+	await expect(f.core.finishBusiness()).rejects.toThrow("native work pending");
+	expect(f.core.save()).toEqual(before);
+	f.settings.busy = false;
+	const raw = "  /dev finish-business\n仅交付文档，保留 Ω  ";
+	const models = f.inputs.length;
+	await f.core.finishBusiness(raw);
+	expect(f.core.save().approvals).toEqual({
+		business: { files: [{ path: f.docs.business.path, version: f.docs.business.version }], userReply: raw },
+	});
+	expect(f.core.status().businessCompleted).toBe(true);
+	expect(f.inputs).toHaveLength(models);
+	expect(f.settings.closeCalls).toBe(0);
+	await expect(f.core.finishBusiness(raw)).rejects.toThrow("仅业务阶段");
+	await f.core.start("后续直接开发，手动提供业务文档", "development-second");
+	const development = f.core.save();
+	await expect(f.core.finishBusiness(raw)).rejects.toThrow("仅业务阶段");
+	expect(f.core.save()).toEqual(development);
+	expect(f.core.save().approvals).toEqual({});
+	expect(f.core.status().entryPhase).toBe("requirements");
+	expect(f.settings.closeCalls).toBe(0);
+});

@@ -34,7 +34,7 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 		options: Partial<CreateAgentSessionOptions> & { allowRestrictedGoal?: boolean } = {},
 	): Promise<AgentSession> {
 		const authStorage = createInMemoryAuthStorage();
-		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime("ascend", "test-key");
 		const modelRegistry = new ModelRegistry(authStorage, tempDir.join("models.yml"));
 		const sessionManager = SessionManager.inMemory(tempDir.path());
 		const settings = Settings.instance;
@@ -48,7 +48,7 @@ describe("goal tool registration when goal mode is enabled at runtime", () => {
 			authStorage,
 			modelRegistry,
 			settings,
-			model: getBundledModel("anthropic", "claude-sonnet-4-5"),
+			model: getBundledModel("ascend", "qwen3.8-flash-next"),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],

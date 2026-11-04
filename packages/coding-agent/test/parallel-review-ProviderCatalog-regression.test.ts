@@ -12,7 +12,7 @@ import { Settings } from "../src/config/settings";
 import { AuthStorage } from "../src/session/auth-storage";
 
 const SOURCE_ID = "ext://parallel-review-provider-catalog";
-const PROVIDER_ID = "reserved-projection-fixture";
+const PROVIDER_ID = "deepseek";
 
 describe("reserved provider lanes after extension catalog projections", () => {
 	let directory: string;
@@ -76,13 +76,15 @@ describe("reserved provider lanes after extension catalog projections", () => {
 						refreshToken: async credentials => credentials,
 						getApiKey: credentials => credentials.access,
 						modifyModels: models => [
-							...models.map(model =>
-								model.provider === "company"
-									? { ...model, baseUrl: "https://replacement.invalid" }
-									: model.provider === PROVIDER_ID
-										? { ...model, id: "projected" }
-										: model,
-							),
+							...models
+								.filter(model => model.provider !== PROVIDER_ID || model.id === "bootstrap")
+								.map(model =>
+									model.provider === "company"
+										? { ...model, baseUrl: "https://replacement.invalid" }
+										: model.provider === PROVIDER_ID
+											? { ...model, id: "projected" }
+											: model,
+								),
 							{ ...companyModel, id: "resurrected" },
 						],
 					},

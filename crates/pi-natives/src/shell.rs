@@ -1075,13 +1075,14 @@ mod tests {
 	#[tokio::test]
 	async fn read_output_stops_when_cancelled_before_pipe_eof() {
 		let shell = CoreShell::new(None);
+		let (tx, rx) = flume::unbounded::<String>();
 		let mut cancel = CancelToken::default();
 		let abort = cancel.emplace_abort_token();
 		let handle = tokio::spawn(async move {
 			shell
 				.run(
 					CoreShellRunOptions {
-						command:    "sh -c 'sleep 30 & wait'".to_string(),
+						command:    "sh -c 'sleep 30 & printf \"READY\\n\"; wait'".to_string(),
 						cwd:        None,
 						env:        None,
 						timeout_ms: None,
@@ -1089,13 +1090,24 @@ mod tests {
 						pipe_taps:  None,
 						trace:      None,
 					},
-					None,
+					Some(tx),
 					cancel,
 				)
 				.await
 		});
 
-		time::sleep(Duration::from_millis(10)).await;
+		let mut output = String::new();
+		time::timeout(Duration::from_secs(5), async {
+			while !output.contains("READY\n") {
+				output.push_str(
+					&rx.recv_async()
+						.await
+						.expect("child output before cancellation"),
+				);
+			}
+		})
+		.await
+		.expect("child must start before cancellation");
 		abort.abort(AbortReason::Signal);
 		let result = time::timeout(Duration::from_secs(3), handle)
 			.await

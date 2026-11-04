@@ -14,6 +14,7 @@ import {
 	getFastembedCacheDir,
 	getGithubCacheDbPath,
 	getHistoryDbPath,
+	getKnowledgeDbPath,
 	getLogsDir,
 	getModelDbPath,
 	getNativeGrammarsDir,
@@ -28,6 +29,7 @@ import {
 const keys = [
 	"OMP_CACHE_DIR",
 	"OMP_CONFIG_ROOT",
+	"OMP_WIKI_DIR",
 	"OMP_OFFLINE",
 	"OMP_PROFILE",
 	"PI_PROFILE",
@@ -64,6 +66,16 @@ describe("cache root", () => {
 		fs.rmSync(temp, { recursive: true, force: true });
 	});
 
+	it("does not treat the removed Wiki-only root as an alias for configuration or performance data", () => {
+		const wiki = path.join(temp, "standalone-wiki");
+		process.env.OMP_WIKI_DIR = wiki;
+		__resetDirsFromEnvForTests();
+		expect(getConfigRootDir()).toBe(path.join(temp, "persistent"));
+		expect(getAgentDir()).toBe(path.join(temp, "persistent", "agent"));
+		expect(getKnowledgeDbPath()).toBe(path.join(temp, "persistent", "agent", "knowledge.db"));
+		expect(fs.existsSync(wiki)).toBe(false);
+	});
+
 	it("routes caches, logs and stats to the explicit root without moving persistent data", () => {
 		const root = path.join(temp, "cache-root");
 		const selectedRoot = process.platform === "linux" ? path.join(root, String(process.getuid!())) : root;
@@ -91,6 +103,8 @@ describe("cache root", () => {
 		expect(getLogsDir()).toBe(path.join(selectedRoot, "logs"));
 		expect(getNativesDir()).toBe(path.join(selectedRoot, "natives"));
 		expect(getNativeGrammarsDir()).toBe(path.join(selectedRoot, "natives", "grammars"));
+		expect(getKnowledgeDbPath()).toBe(path.join(selectedRoot, "knowledge.db"));
+		expect(getKnowledgeDbPath(path.join(temp, "other-agent"))).toBe(path.join(selectedRoot, "knowledge.db"));
 		process.env.OMP_GITHUB_CACHE_DB = path.join(temp, "github.db");
 		expect(getGithubCacheDbPath()).toBe(path.join(temp, "github.db"));
 	});
@@ -158,5 +172,37 @@ describe("cache root", () => {
 		expect(getNativesDir()).toBe(native);
 		delete process.env.PI_NATIVES_DIR;
 		expect(getNativesDir()).toBe(path.join(selectedRoot, "natives"));
+	});
+
+	it("expands a trimmed home-relative cache selection ahead of offline defaults", () => {
+		process.env.OMP_CACHE_DIR = "  ~/omp-cache-contract  ";
+		process.env.OMP_OFFLINE = " On ";
+		const root = path.join(os.homedir(), "omp-cache-contract");
+		const selected = process.platform === "linux" ? path.join(root, String(process.getuid!())) : root;
+		expect(resolveCacheRoot("work")).toBe(path.join(selected, "profiles", "work"));
+	});
+
+	it("does not migrate or reset persistent state when the selected cache disappears or changes", () => {
+		const persistent = path.join(temp, "persistent");
+		const config = path.join(persistent, "agent", "config.yml");
+		const session = path.join(persistent, "agent", "sessions", "saved.jsonl");
+		fs.mkdirSync(path.dirname(session), { recursive: true });
+		fs.writeFileSync(config, "temperature: 0.4\n");
+		fs.writeFileSync(session, "persistent session evidence\n");
+		const first = path.join(temp, "first-cache");
+		process.env.OMP_CACHE_DIR = first;
+		__resetDirsFromEnvForTests();
+		const oldKnowledge = getKnowledgeDbPath();
+		fs.mkdirSync(path.dirname(oldKnowledge), { recursive: true });
+		fs.writeFileSync(oldKnowledge, "old knowledge bytes");
+		fs.rmSync(first, { recursive: true });
+		process.env.OMP_CACHE_DIR = path.join(temp, "second-cache");
+		__resetDirsFromEnvForTests();
+		expect(getKnowledgeDbPath()).not.toBe(oldKnowledge);
+		expect(fs.existsSync(getKnowledgeDbPath())).toBe(false);
+		expect(fs.existsSync(process.env.OMP_CACHE_DIR)).toBe(false);
+		expect(fs.readFileSync(config, "utf8")).toBe("temperature: 0.4\n");
+		expect(fs.readFileSync(session, "utf8")).toBe("persistent session evidence\n");
+		expect(getAgentDbPath()).toBe(path.join(persistent, "agent", "agent.db"));
 	});
 });

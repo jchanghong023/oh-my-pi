@@ -27,6 +27,8 @@ import {
 	TASK_SUBAGENT_PROGRESS_CHANNEL,
 } from "@oh-my-pi/pi-coding-agent/task/types";
 import { EventBus, emitSubagentFrame } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { ProcProtocolHandler } from "../../src/internal-urls/proc-protocol";
+import { parseInternalUrl } from "../../src/internal-urls/parse";
 
 afterEach(() => {
 	vi.restoreAllMocks();
@@ -210,6 +212,31 @@ describe("effective team rosters", () => {
 });
 
 describe("team controller dispatch", () => {
+	it("rejects a session without background capability before starting any stage", async () => {
+		const discussion = vi.spyOn(orchestratorModule, "runTeamDiscussion");
+		const output: string[] = [];
+		const session = {
+			...stubSession({ registerCalls: 0, acknowledged: [] }, []),
+			asyncJobManager: undefined,
+		} as unknown as AgentSession;
+		const result = await startTeamDiscussion("分析缺失后台能力", {
+			session,
+			settings: teamSettings(),
+			cwd: "/tmp/repo",
+			hooks: {
+				output: text => {
+					output.push(text);
+				},
+			},
+		});
+		expect(result.started).toBe(false);
+		expect(result.jobId).toBeUndefined();
+		expect(result.message).toContain("后台任务不可用");
+		expect(result.message).toContain("async job");
+		expect(output).toEqual([result.message]);
+		expect(discussion).not.toHaveBeenCalled();
+	});
+
 	it.each([
 		{ persistFails: true, discussionFails: false },
 		{ persistFails: false, discussionFails: false },
@@ -227,6 +254,14 @@ describe("team controller dispatch", () => {
 			status: discussionFails ? ("failed" as const) : ("completed" as const),
 			reportMarkdown: discussionFails ? undefined : "durable team report",
 			failureReason: discussionFails ? "discussion rejected" : undefined,
+			subagentResults: [
+				{
+					role: "proposer",
+					modelPattern: MODEL_PATTERN,
+					label: "team-proposal-A",
+					outcome: { ok: true, data: { proposal: "Complete raw original with tail evidence" } },
+				},
+			],
 		};
 		const discussion = vi.spyOn(orchestratorModule, "runTeamDiscussion").mockResolvedValue(aggregate);
 		const base: Model = {
@@ -287,6 +322,20 @@ describe("team controller dispatch", () => {
 			expect(job.structured?.data).toEqual(aggregate);
 			expect(manager.isJobResultConsumed(job.id)).toBe(false);
 			expect(job.status).toBe(persistFails || discussionFails ? "failed" : "completed");
+			const recovered = await new ProcProtocolHandler().resolve(parseInternalUrl(`proc://${job.id}`), {
+				session: {
+					cwd: "/tmp/repo",
+					hasUI: false,
+					settings: Settings.isolated({ "launch.enabled": false }),
+					asyncJobManager: manager,
+					getAgentId: () => "Main",
+					getSessionFile: () => null,
+					getSessionSpawns: () => "*",
+				},
+			});
+			expect(recovered.content).toContain(JSON.stringify(aggregate, null, 2));
+			expect(recovered.content).toContain("Complete raw original with tail evidence");
+			expect(manager.isJobResultConsumed(job.id)).toBe(false);
 			if (persistFails) {
 				expect(acknowledge).not.toHaveBeenCalled();
 				expect(job.errorText).toContain("persist receipt rejected");
@@ -544,6 +593,22 @@ describe("team controller dispatch", () => {
 		expect(sent).toHaveLength(1);
 		expect(sent[0]!.customType).toBe("team-dispatch");
 		expect(sent[0]!.content).toContain("[team-dispatch bg_stub_1]");
+	});
+
+	it("includes all first 80 question characters in the durable dispatch preview before any truncation marker", async () => {
+		const jobManager: JobManagerStub = { registerCalls: 0, acknowledged: [] };
+		const sent: { customType: string; content: string }[] = [];
+		const prefix = "0123456789".repeat(8);
+		const result = await startTeamDiscussion(`${prefix}PRIVATE_TAIL`, {
+			session: stubSession(jobManager, sent),
+			settings: teamSettings(),
+			cwd: "/tmp/repo",
+			hooks: {},
+		});
+		expect(result.started).toBe(true);
+		expect(sent).toHaveLength(1);
+		expect(sent[0]!.content).toContain(`原始问题：${prefix}`);
+		expect(sent[0]!.content).not.toContain("PRIVATE_TAIL");
 	});
 
 	it.each([

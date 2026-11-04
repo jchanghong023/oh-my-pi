@@ -116,7 +116,7 @@ function streamsResource(url: InternalUrl, session: ToolSession, id: string, str
 	const job = ownerJobs(session).find(item => item.id === id);
 	if (!job) throw new Error(`Background job not found: ${id}`);
 	const streams = job.process?.streams;
-	if (!streams) throw new Error(`proc://${id} has no pipe streams: only bash jobs record them.`);
+	if (!streams) return textResource(url, `${id} has no available pipe streams.`, undefined, stream === undefined);
 	if (stream === undefined) {
 		const rows = streams.list().map(info => {
 			// Stage source spans lines (`for …; do …; done`); a row shows each on one line.

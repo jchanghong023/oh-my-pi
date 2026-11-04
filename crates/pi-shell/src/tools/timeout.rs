@@ -461,4 +461,72 @@ mod tests {
 			matches!(parsed("timeout --help"), Parsed::Print(text) if text.starts_with("Usage: timeout"))
 		);
 	}
+
+	/// Keep an in-process operand pending across the escalation deadline.
+	/// Unlike a fast cancelling eval, this necessarily traverses the -k branch.
+	#[test]
+	fn escalation_of_pending_in_process_operand_uses_platform_status() {
+		use std::sync::Arc;
+
+		use crate::{
+			bash::{Budget, Cx, Script, Step},
+			testkit::{FakeHost, Rig, fault::skeleton_init},
+			tools::{Labels, SpawnLog, ToolConfig},
+		};
+
+		for preserve in [false, true] {
+			let mut host = FakeHost::new();
+			host.tool(
+				"timeout",
+				Arc::new(|_: &mut ShellApi<'_, '_>, _: &[BString]| -> CallOutcome {
+					unreachable!("the test drives the outstanding timeout call")
+				}),
+			);
+			let mut rig = Rig::new(host, skeleton_init(&[]));
+			let (shell, host, store) = rig.parts();
+			shell.submit(Script::command(b"timeout -k 1 1 true".to_vec()));
+			let (id, call) = loop {
+				match shell.step(&mut Cx { host: &mut *host, store: &mut *store }, Budget::default()) {
+					Step::Call { id, call } => break (id, call),
+					Step::Yield => {},
+					other => panic!("expected timeout call, got {other:?}"),
+				}
+			};
+			let mut timeout = Timeout::new(call);
+			let mut opts = options("timeout -k 1 1 true");
+			opts.preserve = preserve;
+			timeout.phase = Phase::Signalled { opts, kill_at: Some(10), give_up: None, recheck: 10 };
+			let ctl = shell.control();
+			let log = SpawnLog::default();
+			let mut labels = Labels::default();
+			let config = ToolConfig::default();
+			let mut turn = Turn {
+				now:    10,
+				ctl:    &ctl,
+				log:    &log,
+				group:  &[],
+				live:   true,
+				labels: &mut labels,
+				waker:  std::task::Waker::noop(),
+				config: &config,
+			};
+			let mut cx = Cx { host: &mut *host, store: &mut *store };
+			let mut api = shell.api(&mut cx, id).expect("outstanding timeout call");
+			assert!(timeout.advance(&mut api, &mut turn).is_none());
+			assert!(
+				matches!(timeout.phase, Phase::Signalled { kill_at: None, give_up: Some(_), .. }),
+				"the kill-after deadline must actually trigger escalation"
+			);
+			turn.now += nanos(REAP_AFTER_KILL);
+			let Some(CallOutcome::Exit(status)) = timeout.advance(&mut api, &mut turn) else {
+				panic!("expired escalation must finish the timeout");
+			};
+			let expected = if cfg!(windows) {
+				if preserve { 128 } else { 124 }
+			} else {
+				137
+			};
+			assert_eq!(status, expected, "preserve-status={preserve}");
+		}
+	}
 }

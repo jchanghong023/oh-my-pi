@@ -35,6 +35,7 @@ class TeamConfigPanel implements Component {
 	#selected = 0;
 	#scroll = 0;
 	#followSelection = false;
+	#showAdvanced = false;
 	#clientRevision = 0;
 	#readGeneration = 0;
 	#saving = false;
@@ -115,9 +116,7 @@ class TeamConfigPanel implements Component {
 					) ?? null;
 				this.#baseline = JSON.stringify(this.#draft);
 				this.#revision = snapshot.revision;
-				this.#message = first
-					? "本地有序草稿；重复模型是独立代理槽位。主模型仅对齐与综合，不会改变。"
-					: "已重读外部配置。";
+				this.#message = first ? "本地有序草稿；重复模型是独立代理槽位，保存后供后续讨论使用。" : "已重读外部配置。";
 			} else if (adoptRevision) {
 				this.#revision = snapshot.revision;
 				this.#message = "已重读当前两端原值供比较；草稿保持不变。再次 S 将使用本次读取的版本。";
@@ -252,10 +251,13 @@ class TeamConfigPanel implements Component {
 			if (!this.#current()) return;
 			++this.#readGeneration;
 			if (error instanceof TeamConfigError && error.data?.config) this.#snapshot = error.data.config;
-			this.#message =
-				error instanceof TeamConfigError
-					? `${error.code}：${error.message}；${printable(error.data)}。草稿保留；R 重读比较，禁止自动重试。`
-					: `保存结果未知：${printable(error instanceof Error ? error.message : error)}。请重读核实，勿盲目重试。`;
+			if (error instanceof TeamConfigError) {
+				const write = error.data ? `${error.data.saveState}；${printable(error.data.write)}` : "";
+				const issues = error.data?.issues?.map(issue => issue.message).join("；");
+				this.#message = `${error.code}：${error.message}；${write}${issues ? `；${issues}` : ""}。草稿保留；R 重读比较，禁止自动重试。`;
+			} else {
+				this.#message = `保存结果未知：${printable(error instanceof Error ? error.message : error)}。请重读核实，勿盲目重试。`;
+			}
 		} finally {
 			this.#saving = false;
 			if (this.#current()) this.ctx.ui.requestRender();
@@ -281,6 +283,9 @@ class TeamConfigPanel implements Component {
 			this.#followSelection = false;
 		} else if (matchesKey(data, "pageDown")) {
 			this.#scroll += 8;
+			this.#followSelection = false;
+		} else if (data === "v" || data === "V") {
+			this.#showAdvanced = !this.#showAdvanced;
 			this.#followSelection = false;
 		} else if (!this.#saving && this.#snapshot) {
 			const draft = this.#draft ?? [];
@@ -328,28 +333,16 @@ class TeamConfigPanel implements Component {
 		const lines: string[] = [];
 		const add = (line: string) => lines.push(...wrapLiteralLine(printable(line), Math.max(1, width)));
 		const snapshot = this.#snapshot;
-		add(`Team 配置 ${this.#dirty() ? "[未保存]" : ""} — 主模型不变`);
+		add(`Team 配置 ${this.#dirty() ? "[未保存]" : ""}`);
 		add(this.#message);
 		if (snapshot) {
-			add(`profile: ${snapshot.profile ?? "default"} | source: ${snapshot.source} | ${snapshot.storage.readState}`);
 			if (snapshot.source === "project" || snapshot.source === "overlay" || snapshot.source === "runtime")
 				add(`覆盖提示：${snapshot.source} 层高于用户层；保存用户名单不会移除此覆盖。`);
-			const showSlots = (name: string, slots: readonly TeamMemberSlot[] | null | undefined) => {
-				add(
-					`${name}: ${slots === undefined ? "不可读/不适用" : slots === null ? "缺失" : slots.length === 0 ? "[]" : ""}`,
-				);
-				for (const slot of slots ?? [])
-					add(`  ${slot.index + 1}. ${slot.rawSelector} [${slot.status}] ${slot.reason ?? ""}`);
-			};
-			showSlots(`用户原值 [${snapshot.storage.readState}]`, snapshot.userMembers);
-			showSlots("当前有效名单", snapshot.effectiveMembers);
-			add(`主模型（对齐/综合）: ${printable(snapshot.sessionModel)}`);
-			add(`实际运行槽位: ${printable(snapshot.participants)}`);
 			for (const issue of snapshot.issues) add(`问题 [${issue.target}]: ${issue.message}`);
 		}
 		add("── 有序草稿（添加/复制同模型 = 另一个独立代理）──");
 		let selectedRow = lines.length;
-		if (this.#draft === null) add("未设置（保存 null 移除用户层；0 改为显式 []）");
+		if (this.#draft === null) add("未配置成员；0 恢复默认（需保存）");
 		else if (!this.#draft.length) add("[] 默认回退，需保存才生效");
 		for (const [index, member] of (this.#draft ?? []).entries()) {
 			if (index === this.#selected) selectedRow = lines.length;
@@ -374,14 +367,31 @@ class TeamConfigPanel implements Component {
 		}
 		if (snapshot?.preview?.clientRevision === String(this.#clientRevision)) {
 			const preview = snapshot.preview;
-			add(`拟保存用户名单: ${printable(preview.userMembers)}`);
-			add(`预计有效来源: ${preview.source}；有效名单: ${printable(preview.effectiveMembers)}`);
-			add(`预计运行槽位: ${printable(preview.participants)}`);
 			for (const issue of preview.issues) add(`草稿问题: ${issue.message}`);
+		}
+		if (this.#showAdvanced && snapshot) {
+			add("── 高级详情（只读）──");
+			add(`profile: ${snapshot.profile ?? "default"} | source: ${snapshot.source} | ${snapshot.storage.readState}`);
+			const showSlots = (name: string, slots: readonly TeamMemberSlot[] | null | undefined) => {
+				add(
+					`${name}: ${slots === undefined ? "不可读/不适用" : slots === null ? "缺失" : slots.length === 0 ? "[]" : ""}`,
+				);
+				for (const slot of slots ?? [])
+					add(`  ${slot.index + 1}. ${slot.rawSelector} [${slot.status}] ${slot.reason ?? ""}`);
+			};
+			showSlots(`用户原值 [${snapshot.storage.readState}]`, snapshot.userMembers);
+			showSlots("当前有效名单", snapshot.effectiveMembers);
+			add(`实际运行槽位（只读预览）: ${printable(snapshot.participants)}`);
+			if (snapshot.preview?.clientRevision === String(this.#clientRevision)) {
+				const preview = snapshot.preview;
+				add(`拟保存用户名单: ${printable(preview.userMembers)}`);
+				add(`预计有效来源: ${preview.source}；有效名单: ${printable(preview.effectiveMembers)}`);
+				add(`预计运行槽位: ${printable(preview.participants)}`);
+			}
 		}
 		const footer = this.#confirmDiscard
 			? "放弃草稿并退出？Y 放弃 / N 留在面板（保存中退出不撤销写入）"
-			: "↑↓ 槽位 a 添加 e 替换 u 上移 j 下移 c 复制 d 删除 | 0 默认[] s 保存 r 重读比较 Esc 取消 | PgUp/PgDn 滚动";
+			: `↑↓ 槽位 a 添加 e 替换 u 上移 j 下移 c 复制 d 删除 | 0 默认[] s 保存 r 重读比较 Esc 取消 | v 高级详情（${this.#showAdvanced ? "收起" : "展开"}） PgUp/PgDn 滚动`;
 		const footerLines = wrapLiteralLine(footer, Math.max(1, width));
 		const capacity = Math.max(1, (this.ctx.ui.terminal.rows || 24) - footerLines.length);
 		if (this.#followSelection) {

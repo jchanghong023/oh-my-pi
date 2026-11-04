@@ -12,6 +12,7 @@ import { cfgTaskIsolationEnabled, cfgTaskSpeculativeLaunch, cfgWorktreeOnStart }
 import { getBundledAgent } from "../task/agents";
 import { isSeanceIsolationSkills } from "../task/seance-policy";
 import type { NativeSubagentHooks } from "../task/types";
+import { cfgToolsSpeculativeExecutionEnabled } from "../tools/settings";
 import { assertSpecWritePath, existingNativeSpec, matchesNativeSpecPattern } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
@@ -152,7 +153,10 @@ export async function createSpecActor(args: {
 	cfgEditMode.override(settings, "replace");
 	cfgTaskIsolationEnabled.override(settings, false);
 	cfgWorktreeOnStart.override(settings, "off");
-	if (args.role !== "executor") cfgTaskSpeculativeLaunch.override(settings, false);
+	if (args.role !== "executor") {
+		cfgTaskSpeculativeLaunch.override(settings, false);
+		cfgToolsSpeculativeExecutionEnabled.override(settings, false);
+	}
 	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
 	let stageOutputPaths: readonly string[] | undefined;
 	let reportTurn: unknown;
@@ -504,6 +508,7 @@ export async function createSpecActor(args: {
 	const created = await createAgentSession({
 		...args.options,
 		settings,
+		editMode: "replace",
 		toolRestrictions: restrictions,
 		...(business
 			? {

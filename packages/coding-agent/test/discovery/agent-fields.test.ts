@@ -13,6 +13,17 @@ describe("parseAgentFields", () => {
 		expect(parseAgentFields({ name: " Sub ", description: "desc" })).toBeNull();
 	});
 
+	test.each([
+		[true, true],
+		[false, false],
+		["true", true],
+		["false", false],
+		["sometimes", undefined],
+		[undefined, undefined],
+	])("parses hide frontmatter %p as %p", (hide, expected) => {
+		expect(parseAgentFields({ name: "reviewer", description: "desc", hide })?.hide).toBe(expected);
+	});
+
 	test("parses blocking from boolean frontmatter", () => {
 		const fields = parseAgentFields({
 			name: "reviewer",

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -178,5 +178,88 @@ describe("ZCode immutable OMP artifact production", () => {
 		await fs.writeFile(path.join(value.outputRoot, "keep"), "existing artifact");
 		await expect(produceZCodeArtifacts({ ...value, version: "18.12.5", binaries: [binary] })).rejects.toThrow();
 		expect(await fs.readFile(path.join(value.outputRoot, "keep"), "utf8")).toBe("existing artifact");
+	});
+
+	it.each(["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64", "win32-arm64"])(
+		"validates the complete %s executable header and publishes matching manifests",
+		async target => {
+			const value = await fixture();
+			const arm64 = target.endsWith("arm64");
+			const bytes = Buffer.alloc(256);
+			if (target.startsWith("linux")) {
+				bytes.write("7f454c46", 0, "hex");
+				bytes[4] = 2;
+				bytes[5] = 1;
+				bytes.writeUInt16LE(arm64 ? 183 : 62, 18);
+			} else if (target.startsWith("darwin")) {
+				bytes.writeUInt32LE(0xfeedfacf, 0);
+				bytes.writeUInt32LE(arm64 ? 0x0100000c : 0x01000007, 4);
+			} else {
+				bytes.write("MZ");
+				bytes.writeUInt32LE(128, 60);
+				bytes.writeUInt32LE(0x4550, 128);
+				bytes.writeUInt16LE(0xaa64, 132);
+			}
+			await fs.writeFile(value.executable, bytes);
+			await produceZCodeArtifacts({
+				...value,
+				version: "1.2.3+fork.9",
+				binaries: [{ target, executable: value.executable }],
+			});
+			const executable = target.startsWith("win32") ? "omp.exe" : "omp";
+			const artifact = path.join(value.outputRoot, target, executable);
+			expect(await fs.readFile(artifact)).toEqual(bytes);
+			const manifest = await Bun.file(path.join(value.outputRoot, target, "omp-artifact.json")).json();
+			expect(manifest).toMatchObject({
+				target,
+				executable,
+				version: "1.2.3+fork.9",
+				files: { [executable]: await hashArtifactFile(artifact) },
+			});
+			await fs.rm(value.outputRoot, { recursive: true });
+			// Correct magic alone is insufficient: class/endian/CPU mismatches fail.
+			if (target.startsWith("linux")) bytes[5] = 2;
+			else if (target.startsWith("darwin")) bytes.writeUInt32LE(0, 4);
+			else bytes.writeUInt16LE(0x8664, 132);
+			await fs.writeFile(value.executable, bytes);
+			await expect(
+				produceZCodeArtifacts({ ...value, version: "1.2.3", binaries: [{ target, executable: value.executable }] }),
+			).rejects.toThrow("target mismatch");
+			expect(await Bun.file(path.join(value.outputRoot, "omp-release.json")).exists()).toBe(false);
+		},
+	);
+
+	it.each(["binary-bytes", "source-checkout"] as const)(
+		"removes its own output root when %s changes during copying",
+		async mutation => {
+			const value = await fixture();
+			const copyFile = fs.copyFile.bind(fs);
+			const copy = spyOn(fs, "copyFile").mockImplementationOnce(async (source, destination, mode) => {
+				await copyFile(source, destination, mode);
+				if (mutation === "binary-bytes") await fs.appendFile(value.executable, "changed after copy");
+				else await fs.writeFile(path.join(value.repo, "source.ts"), "export const value = 3;\n");
+			});
+			try {
+				await expect(
+					produceZCodeArtifacts({
+						...value,
+						version: "1.2.3",
+						binaries: [{ target: "win32-x64", executable: value.executable }],
+					}),
+				).rejects.toThrow(mutation === "binary-bytes" ? "changed during copy" : "clean source checkout");
+				expect(copy).toHaveBeenCalledTimes(1);
+				await expect(fs.stat(value.outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
+			} finally {
+				copy.mockRestore();
+			}
+		},
+	);
+
+	it("rejects an empty target list without creating output", async () => {
+		const value = await fixture();
+		await expect(produceZCodeArtifacts({ ...value, version: "1.2.3", binaries: [] })).rejects.toThrow(
+			"unique, nonempty targets",
+		);
+		await expect(fs.stat(value.outputRoot)).rejects.toMatchObject({ code: "ENOENT" });
 	});
 });

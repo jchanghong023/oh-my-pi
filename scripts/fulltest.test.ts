@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { testTimeoutMs } from "./ci-test-ts";
-import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
+import { fastcheckCommands, parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import {
 	fulltestCommands,
 	gateCpuBudget,
@@ -26,6 +26,39 @@ test("fork plan excludes standalone Python suites while preserving the public TU
 	const commands = fulltestCommands({ debug: false }, "/tmp/home", "digest");
 	expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
+});
+
+test("fastcheck discovers only static primitives and keeps Clippy outside its command plan", async () => {
+	const commands = await fastcheckCommands();
+	expect(commands.length).toBeGreaterThan(2);
+	expect(commands.find(command => command.label === "static/Rust fmt")?.argv).toEqual(["bun", "run", "check:rs"]);
+	expect(commands.find(command => command.label === "static/TS lint+format")?.argv).toEqual([
+		"bun",
+		"run",
+		"check:tools",
+	]);
+	for (const command of commands) {
+		expect(command.label).toStartWith("static/");
+		expect(command.argv).not.toContain("test");
+		expect(command.argv).not.toContain("test:rs");
+		expect(command.argv).not.toContain("clippy");
+		expect(command.argv).not.toContain("bazel");
+		expect(command.argv).not.toContain("clean");
+	}
+});
+
+test("debug changes only the isolated smoke diagnostic argument, not test scope", () => {
+	for (const full of [false, true]) {
+		const normal = fulltestCommands({ debug: false, full }, "/tmp/home", "digest");
+		const debug = fulltestCommands({ debug: true, full }, "/tmp/home", "digest");
+		const smoke = debug.find(command => command.label === "smoke/isolated dev TUI PTY")!;
+		expect(smoke.argv).toEqual(["bun", "scripts/test-report-ui-smoke.ts", "--debug"]);
+		expect(debug.map(command => ({ ...command, argv: command.argv.filter(arg => arg !== "--debug") }))).toEqual(
+			normal,
+		);
+		expect(debug.filter(command => command.argv.includes("--debug"))).toHaveLength(1);
+		expect(normal.some(command => command.label === "test/compact_display")).toBe(false);
+	}
 });
 
 test("both TypeScript lanes use the available worker budget in fork and full plans", () => {
@@ -597,17 +630,19 @@ describe("fulltest source snapshot checkpoints", () => {
 	for (const interval of ["preparation", "native", "scripts", "tests"] as const) {
 		for (const change of ["source", "new-test", "head"] as const) {
 			test(`rejects ${change} movement during ${interval} rather than certifying an omitted snapshot`, async () => {
-				const { failure } = await exercise(change, interval);
+				const { failure, testsRun } = await exercise(change, interval);
 				expect(failure).toBeInstanceOf(Error);
 				expect(String(failure)).toContain("Source changed");
+				if (interval !== "tests") expect(testsRun).toBe(false);
 			});
 		}
 	}
 	for (const interval of ["preparation", "scripts", "tests"] as const) {
 		test(`rejects binding regeneration outside native generation during ${interval}`, async () => {
-			const { failure } = await exercise("bindings", interval);
+			const { failure, testsRun } = await exercise("bindings", interval);
 			expect(failure).toBeInstanceOf(Error);
 			expect(String(failure)).toContain("Source changed");
+			if (interval !== "tests") expect(testsRun).toBe(false);
 		});
 	}
 
@@ -848,7 +883,7 @@ describe("fulltest lane scheduling", () => {
 		const failures: unknown[] = [];
 		let startupHasStarted = false;
 		let ordinaryHome: string | undefined;
-		let sourceCaptures = 0;
+		const capturedStartupStates: boolean[] = [];
 		const identity: SourceIdentity = {
 			head: "head",
 			digest: "digest",
@@ -873,8 +908,7 @@ describe("fulltest lane scheduling", () => {
 			{
 				captureChangedPaths: async () => [],
 				captureSourceIdentity: async () => {
-					sourceCaptures++;
-					if (sourceCaptures === 4) expect(startupHasStarted).toBe(true);
+					capturedStartupStates.push(startupHasStarted);
 					return identity;
 				},
 				cpuBudget: 16,
@@ -926,7 +960,9 @@ describe("fulltest lane scheduling", () => {
 			finishStatic.resolve();
 			await run;
 			expect(startupHasStarted).toBe(true);
-			expect(sourceCaptures).toBe(4);
+			expect(capturedStartupStates.at(-1)).toBe(true);
+			expect(capturedStartupStates.slice(0, -1)).toContain(false);
+			expect(capturedStartupStates.slice(0, -1).every(started => !started)).toBe(true);
 			expect(failures.map(error => String(error))).toEqual(["Error: ordinary failure", "Error: Rust failure"]);
 		} finally {
 			finishOrdinary.resolve();

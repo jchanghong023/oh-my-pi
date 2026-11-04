@@ -179,17 +179,15 @@ function makeDuration(amountText: string, unitMs: number): LoopLimitConfig | str
  * Parse a compact duration token such as `10m`, or a compound one like `1h30m`.
  * Returns `undefined` when the token is not duration-shaped (or has an unknown
  * unit when parsing an optional interval), otherwise an error for an unknown
- * unit / non-positive amount.
+ * unit / invalid amount. Limits retain unsigned integer syntax; intervals also
+ * recognize signed and fractional amounts so known units cannot hide invalid values.
  */
 function parseCompoundDuration(token: string, unknownUnitsArePrompt = false): LoopLimitConfig | string | undefined {
-	if (!/^(?:\d+[a-z]+)+$/.test(token)) return undefined;
-	const segments = token.match(/\d+[a-z]+/g);
-	if (!segments) return undefined;
+	const durationPattern = unknownUnitsArePrompt ? /^(?:[+-]?(?:\d+(?:\.\d*)?|\.\d+)[a-z]+)+$/ : /^(?:\d+[a-z]+)+$/;
+	if (!durationPattern.test(token)) return undefined;
 	let totalMs = 0;
 	let invalidAmount = false;
-	for (const segment of segments) {
-		const match = /^(\d+)([a-z]+)$/.exec(segment);
-		if (!match) return LOOP_USAGE;
+	for (const match of token.matchAll(/([+-]?(?:\d+(?:\.\d*)?|\.\d+))([a-z]+)/g)) {
 		const unitMs = TIME_UNITS_MS.get(match[2]);
 		if (unitMs === undefined) {
 			return unknownUnitsArePrompt ? undefined : "Loop duration unit must be seconds, minutes, or hours.";

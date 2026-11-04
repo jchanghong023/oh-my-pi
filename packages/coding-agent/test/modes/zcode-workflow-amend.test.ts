@@ -210,3 +210,58 @@ test("native seeding refuses a truncated source without writing a partial target
 	).rejects.toThrow("boundary requires the first 2");
 	expect(target.buildSessionContext().messages).toEqual([]);
 });
+
+test("seed messages are copied by value and markers retain exact source ordinals", async () => {
+	const { dir } = await fixture();
+	const target = SessionManager.inMemory(dir);
+	const message = { role: "user" as const, content: [{ type: "text" as const, text: "original" }], timestamp: 1 };
+	const sourceMessages = [message];
+	const store = makeActorTranscriptStore({ read: async () => ({ messages: sourceMessages }) });
+	const seed = { sourceSessionId: "source", messageCount: 1 };
+	expect(await seedActorTranscript({ seed, store, target, targetSessionId: target.getSessionId() })).toBe(1);
+	message.content[0]!.text = "mutated source";
+	expect(sourceMessages[0]!.content[0]!.text).toBe("mutated source");
+	expect(target.buildSessionContext().messages[0]).toMatchObject({
+		role: "user",
+		content: [{ type: "text", text: "original" }],
+	});
+	expect(target.getBranch()).toContainEqual(
+		expect.objectContaining({
+			type: "custom",
+			customType: "zcode.workflow.actor-seed",
+			data: { sourceSessionId: "source", index: 0, digest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+		}),
+	);
+});
+
+for (const boundary of ["custom_message", "reset_boundary", "compaction", "branch_summary"] as const) {
+	test(`${boundary} permanently prevents further actor seeding`, async () => {
+		const { dir } = await fixture();
+		const target = SessionManager.inMemory(dir);
+		const source = SessionManager.inMemory(dir);
+		for (const content of ["first", "second"]) source.appendMessage({ role: "user", content, timestamp: 1 });
+		const store = makeActorTranscriptStore({
+			read: async () => ({ messages: source.buildSessionContext().messages }),
+		});
+		const seed = { sourceSessionId: "source", messageCount: 1 };
+		await seedActorTranscript({ seed, store, target, targetSessionId: target.getSessionId() });
+		if (boundary === "custom_message") target.appendCustomMessageEntry("own", "own custom history", true);
+		else if (boundary === "reset_boundary") target.appendResetBoundary();
+		else if (boundary === "compaction") {
+			const kept = target.getBranch().find(entry => entry.type === "message")!;
+			target.appendCompaction("own compacted history", undefined, kept.id, 1);
+		} else target.branchWithSummary(target.getBranch().at(-1)!.id, "own branch history");
+		const before = structuredClone(target.getBranch());
+		for (let attempt = 0; attempt < 2; attempt++) {
+			expect(
+				await seedActorTranscript({
+					seed: { ...seed, messageCount: 2 },
+					store,
+					target,
+					targetSessionId: target.getSessionId(),
+				}),
+			).toBeUndefined();
+			expect(target.getBranch()).toEqual(before);
+		}
+	});
+}

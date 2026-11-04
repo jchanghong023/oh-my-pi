@@ -4,6 +4,7 @@ import * as ai from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import { type GeneratedProvider, getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { formatModelStringWithRouting, resolveModelOverride } from "@oh-my-pi/pi-coding-agent/config/model-resolver";
+import { getCodeAgentModels } from "@oh-my-pi/pi-coding-agent/config/codeagent-provider";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { tinyTitleClient } from "@oh-my-pi/pi-coding-agent/tiny/title-client";
 import { DEFAULT_SPINNER_INTERVAL_MS } from "@oh-my-pi/pi-tui/spinner-clock";
@@ -23,15 +24,41 @@ import { isWsl, logger, setTerminalHeadless } from "@oh-my-pi/pi-utils";
 import { mockWindowsConsoleTitle, type WindowsConsoleTitleMock } from "./terminal-title-test-utils";
 
 function getModelOrThrow(id: string): Model<Api> {
-	const model = getBundledModel("anthropic", id);
-	if (!model) throw new Error(`Expected model ${id}`);
+	const model = getBundledModel("ascend", id);
+	if (!model) throw new Error(`Expected retained title fixture ${id}`);
 	return model;
 }
 
+function localTinyFixture(): Model {
+	return buildModel({
+		id: "fixture-local-tiny",
+		name: "Fixture local tiny",
+		provider: "local",
+		api: "local-inference",
+		kind: "tiny",
+		baseUrl: "local://inference",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 8192,
+		maxTokens: 1024,
+	});
+}
+
+/** Explicit selector fixtures exercise shared routing, not runtime provider admission. */
 function getModelFor(provider: GeneratedProvider, id: string): Model<Api> {
-	const model = getBundledModel(provider, id);
-	if (!model) throw new Error(`Expected model ${provider}/${id}`);
-	return model;
+	return buildModel({
+		provider,
+		id,
+		name: id,
+		api: provider === "openrouter" ? "openrouter" : "openai-completions",
+		baseUrl: "https://fixture.invalid/v1",
+		reasoning: true,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 200_000,
+		maxTokens: 8192,
+	});
 }
 
 function createSettings(model: Model<Api>): Settings {
@@ -54,7 +81,7 @@ afterEach(() => {
 
 describe("title generator", () => {
 	it("returns the marker-wrapped title without forcing a tool call", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Structured Title</title>" }],
@@ -80,9 +107,9 @@ describe("title generator", () => {
 	});
 
 	it("selects an available local-inference model from the tiny role", async () => {
-		const localModel = getBundledModel("local", "lfm2.5-230m");
+		const localModel = localTinyFixture();
 		if (!localModel) throw new Error("Expected bundled local tiny model");
-		const paidModel = getModelOrThrow("claude-haiku-4-5");
+		const paidModel = getModelOrThrow("minimax2.7");
 		const settings = createSettings(localModel);
 		const registry = createRegistry(localModel, [localModel, paidModel]);
 		const generateMock = vi.spyOn(tinyTitleClient, "generate").mockResolvedValue("Local Title");
@@ -100,9 +127,9 @@ describe("title generator", () => {
 	});
 
 	it("never falls back to a paid title model when local inference fails", async () => {
-		const localModel = getBundledModel("local", "lfm2.5-230m");
+		const localModel = localTinyFixture();
 		if (!localModel) throw new Error("Expected bundled local tiny model");
-		const paidModel = getModelOrThrow("claude-haiku-4-5");
+		const paidModel = getModelOrThrow("minimax2.7");
 		const settings = createSettings(localModel);
 		const registry = createRegistry(localModel, [localModel, paidModel]);
 		vi.spyOn(tinyTitleClient, "generate").mockResolvedValue(null);
@@ -172,7 +199,7 @@ describe("title generator", () => {
 			"```reasoning\nThinking process:\n<title>Wrong internal scratchpad</title>\n```\n<title>Fix login button</title>",
 		],
 	] as const)("ignores leaked %s reasoning markup before the visible title", async (_marker, responseText) => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: responseText }],
@@ -189,7 +216,7 @@ describe("title generator", () => {
 	});
 
 	it("preserves in-band reasoning syntax inside the parsed title", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Fix <think> tag parsing</title>" }],
@@ -206,7 +233,7 @@ describe("title generator", () => {
 	});
 
 	it("appends the marker instruction after a resolved TITLE_SYSTEM.md prompt", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const customPrompt = "Generate lowercase colon-delimited session names.";
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -232,7 +259,7 @@ describe("title generator", () => {
 	});
 
 	it('unwraps a JSON {"title": ...} response into the bare title', async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '{"title": "Optimize CNPG kernel reports"}' }],
@@ -249,7 +276,7 @@ describe("title generator", () => {
 	});
 
 	it("unwraps a code-fenced JSON title response", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '```json\n{"title": "Fix login button on mobile"}\n```' }],
@@ -266,7 +293,7 @@ describe("title generator", () => {
 	});
 
 	it("unwraps a JSON title wrapped in <title> markers", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '<title>{"title": "Add OAuth authentication"}</title>' }],
@@ -283,7 +310,7 @@ describe("title generator", () => {
 	});
 
 	it("salvages the title from truncated JSON output", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: '{"title": "Debug failing CI tests"' }],
@@ -300,7 +327,7 @@ describe("title generator", () => {
 	});
 
 	it("defers titling for a greeting without invoking the model", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "error",
 			errorMessage: "unexpected remote fallback",
@@ -314,7 +341,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null when the model rejects a non-greeting taskless message with the none sentinel", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>none</title>" }],
@@ -332,7 +359,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null for a self-closing <title/> marker", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title/>" }],
@@ -350,7 +377,7 @@ describe("title generator", () => {
 	});
 
 	it("returns null for a bare <title> marker", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>" }],
@@ -368,7 +395,7 @@ describe("title generator", () => {
 	});
 
 	it("logs and returns null when title credentials are missing", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "error",
 			errorMessage: "unexpected remote fallback",
@@ -401,7 +428,7 @@ describe("title generator", () => {
 	});
 
 	it("logs and returns null when title credential lookup throws", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "error",
 			errorMessage: "unexpected remote fallback",
@@ -437,8 +464,8 @@ describe("title generator", () => {
 	});
 
 	it("stops title fallback traversal after cancellation", async () => {
-		const primary = getModelOrThrow("claude-haiku-4-5");
-		const fallback = getModelOrThrow("claude-sonnet-4-5");
+		const primary = getModelOrThrow("minimax2.7");
+		const fallback = getModelOrThrow("qwen3.8-flash-next");
 		const controller = new AbortController();
 		let apiKeyCalls = 0;
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockImplementation(async () => {
@@ -487,7 +514,7 @@ describe("title generator", () => {
 	});
 
 	it("uses a reasoning-safe output budget for reasoning models", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Budget Title</title>" }],
@@ -510,7 +537,7 @@ describe("title generator", () => {
 	// reasoning-safe budget, otherwise the `<title>` output is truncated
 	// before it can be emitted.
 	it("uses a reasoning-safe output budget even when the model declares reasoning: false", async () => {
-		const baseModel = getModelOrThrow("claude-sonnet-4-5");
+		const baseModel = getModelOrThrow("qwen3.8-flash-next");
 		const model = { ...baseModel, reasoning: false } as Model<Api>;
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -530,7 +557,7 @@ describe("title generator", () => {
 	});
 
 	it("strips code blocks from the message sent to the model", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Setup Screen</title>" }],
@@ -640,9 +667,9 @@ describe("title generator", () => {
 	});
 
 	it("resolves the model roles in precedence order: tiny -> commit -> smol", async () => {
-		const tinyModel = getModelOrThrow("claude-haiku-4-5");
-		const commitModel = getModelOrThrow("claude-sonnet-4-5");
-		const smolModel = getModelOrThrow("claude-opus-4-8");
+		const tinyModel = getModelOrThrow("minimax2.7");
+		const commitModel = getModelOrThrow("qwen3.8-flash-next");
+		const smolModel = getModelOrThrow("qwen3.8-27b");
 
 		const mockComplete = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
@@ -700,7 +727,7 @@ describe("title generator", () => {
 	});
 
 	it("does not attempt the current model when no registry models are available", async () => {
-		const model = getModelOrThrow("claude-sonnet-4-5");
+		const model = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockResolvedValue({
 			stopReason: "stop",
 			content: [{ type: "text", text: "<title>Unexpected</title>" }],
@@ -781,8 +808,8 @@ describe("title generator", () => {
 	});
 
 	it("expands appended currentModel fallbackChains without merging role chains", async () => {
-		const current = getModelOrThrow("claude-opus-4-8");
-		const currentFallback = getModelOrThrow("claude-sonnet-4-5");
+		const current = getModelOrThrow("qwen3.8-27b");
+		const currentFallback = getModelOrThrow("qwen3.8-flash-next");
 		const roleOnly = getModelFor("openai", "gpt-4o-mini");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
 			if (model.id === current.id) {
@@ -833,8 +860,8 @@ describe("title generator", () => {
 	it.each(["missing-auth", "exception", "response-error", "invalid-title"] as const)(
 		"continues from a CodeAgent candidate after %s",
 		async failure => {
-			const primary = { ...getModelOrThrow("claude-haiku-4-5"), provider: "codeagent", id: "test-codeagent" };
-			const fallback = getModelOrThrow("claude-sonnet-4-5");
+			const primary = getCodeAgentModels()[0]!;
+			const fallback = getModelOrThrow("qwen3.8-flash-next");
 			const complete = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
 				if (model.provider !== "codeagent") {
 					return {
@@ -869,8 +896,8 @@ describe("title generator", () => {
 	);
 
 	it.each([true, false])("honors modelFallback=%s when the title model returns a provider error", async enabled => {
-		const smolModel = getModelOrThrow("claude-opus-4-8");
-		const fallbackModel = getModelOrThrow("claude-sonnet-4-5");
+		const smolModel = getModelOrThrow("qwen3.8-27b");
+		const fallbackModel = getModelOrThrow("qwen3.8-flash-next");
 		const completeSimpleMock = vi.spyOn(ai, "completeSimple").mockImplementation(async model => {
 			if (model.id === smolModel.id) {
 				return {
