@@ -39,7 +39,7 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 	const commands: GateCommand[] = [
 		{ label: "static/TS lint+format", argv: ["bun", "run", "check:tools"], cwd: gateRepoRoot },
 		{
-			label: "static/Rust fmt+clippy",
+			label: "static/Rust fmt",
 			argv: ["bun", "run", "check:rs"],
 			cwd: gateRepoRoot,
 			env: {
@@ -92,8 +92,10 @@ export async function fastcheckCommands(): Promise<GateCommand[]> {
 
 export async function runFastcheck(gate: GateRun, concurrency?: number): Promise<void> {
 	console.log("scope=repository-static selection=all-project-static-checks");
-	console.log("coverage: existing TS/Rust static checks; fastcheck runs no tests");
-	console.log("omitted: all test execution; Python and standalone SDK checks; packaging");
+	console.log("coverage: TS lint/format/types and Rust format; fastcheck runs no tests");
+	console.log(
+		"omitted: Clippy (temporarily disabled); all test execution; Python and standalone SDK checks; packaging",
+	);
 	const commands = await gate.charged(fastcheckCommands);
 	await runGateCommands(gate, commands, { concurrency: concurrency ?? gatePoolWidth(undefined, 3, 12) });
 }

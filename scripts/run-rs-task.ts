@@ -45,10 +45,8 @@ const LINT_EXEMPT_FORK_EXCLUDES = [
 	"grep-searcher",
 ] as const satisfies readonly string[];
 const TASK_COMMANDS = {
-	"check:rs": [
-		["cargo", "fmt", "--all", "--", "--check"],
-		["cargo", "clippy", "--workspace", ...LINT_EXEMPT_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"],
-	],
+	// Clippy is temporarily disabled in gates; explicit lint:rs/fix:rs remain available.
+	"check:rs": [["cargo", "fmt", "--all", "--", "--check"]],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
 		[

@@ -63,6 +63,7 @@
 
 ### Changed
 
+- Temporarily disable Clippy in local verification gates while retaining Rust format checks and explicit `lint:rs` / `fix:rs` commands.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
 - Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev and ZCode host callbacks stay on their owning thread.
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
