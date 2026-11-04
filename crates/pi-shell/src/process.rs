@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::Result;
-use parking_lot::Mutex;
 /// Current state of a process reference.
 ///
 /// Defined in `pi-builtins` alongside the process-table snapshots its process
@@ -996,8 +995,8 @@ async fn wait_for_root_exit(
 pub fn kill_process_group(pgid: i32, signal: i32) -> bool {
 	// Defense in depth: refuse to deliver a signal to the harness's own
 	// process group. Doing so terminates the harness along with the targets.
-	// `SpawnRegistry` only ever records pgids brush created for this run (never
-	// the harness pgid); this catches any future caller that bypasses it.
+	// Callers only ever hold pgids of processes they spawned (never the
+	// harness pgid); this catches any future caller that gets that wrong.
 	if pgid <= 0 || is_self_process_group(pgid) {
 		return false;
 	}
@@ -1104,6 +1103,17 @@ impl TerminationTargets {
 	pub fn signal(&self, signal: i32) {
 		let _ = signal_trees(&self.processes, &self.pgids, signal, &host_protected_pids());
 	}
+
+	/// Signal only the recorded processes, without their groups or descendants.
+	/// Used by `timeout --foreground`.
+	pub fn signal_roots(&self, signal: i32) {
+		let protected = host_protected_pids();
+		for process in &self.processes {
+			if !protected.contains(&process.pid()) {
+				let _ = process.signal(signal);
+			}
+		}
+	}
 }
 
 /// Snapshot a complete wave before delivering anything: a TERM handler may
@@ -1151,226 +1161,6 @@ fn signal_snapshot<'a>(
 		}
 	}
 	signaled
-}
-
-/// A single external child reported by the shell's spawn-observer hook.
-///
-/// `process` is captured *at spawn time* so its OS-level identity is pinned
-/// before the pid can be recycled. On Windows an open process handle keeps
-/// the pid reserved for the lifetime of the reference; on Linux the pidfd
-/// pins identity; on macOS the recorded `(pid, start_time)` triple detects
-/// impersonation. Storing only the raw pid and re-opening at cancellation
-/// time — as previous versions did — leaked kills onto unrelated processes
-/// that happened to acquire the recycled pid between the child exiting and
-/// the run being cancelled (issue #4605).
-#[derive(Clone)]
-struct SpawnedProcess {
-	process: Option<Process>,
-	pgid:    Option<i32>,
-}
-
-/// Per-run record of the OS processes a single shell command launched,
-/// captured at spawn time via brush's `SpawnObserver` hook.
-///
-/// Replaces the old process-global "new descendants since a baseline" diff,
-/// which could not distinguish the children of concurrent runs sharing one
-/// host process: a run that cancelled would signal *any* descendant spawned
-/// after its baseline, including another run's children. Ownership is now
-/// explicit — only processes this run actually spawned are ever signalled.
-#[derive(Default)]
-struct RegistryState {
-	spawned:       Vec<SpawnedProcess>,
-	/// The next `spawned.len()` at which `record` runs a sweep. Bounds sweep
-	/// frequency when the live set stabilizes above the initial threshold:
-	/// without this watermark, every subsequent `record` would find
-	/// `len >= PRUNE_THRESHOLD` true and sweep on every spawn (O(n²) in a
-	/// large-fan-out run like `for i in {1..1000}; do sleep 60 & done`). With
-	/// it, the next sweep only fires once the vec has grown by another
-	/// `PRUNE_THRESHOLD` entries since the previous sweep — restoring true
-	/// amortized O(1) per spawn regardless of how many entries survive each
-	/// sweep.
-	next_sweep_at: usize,
-}
-
-#[derive(Default)]
-pub struct SpawnRegistry {
-	state: Mutex<RegistryState>,
-}
-
-impl SpawnRegistry {
-	/// Amortized-cost threshold for opportunistic pruning of exited entries.
-	///
-	/// A shell run that spawns many short-lived external commands (e.g. a bash
-	/// loop invoking a binary per iteration) would otherwise retain one owned
-	/// process handle per spawn — a pidfd on Linux, a `HANDLE` on Windows — for
-	/// the lifetime of the run, exhausting per-process FD/handle limits.
-	///
-	/// Each sweep costs `O(N)` (one non-blocking status probe per entry, plus
-	/// a Toolhelp descendant walk on Windows for exited roots). The next sweep
-	/// is scheduled `PRUNE_THRESHOLD` further records away — via the
-	/// `next_sweep_at` watermark — so a run that keeps many concurrent
-	/// long-lived children (`for i in {1..1000}; do sleep 60 & done`) does not
-	/// sweep on every spawn just because the vec is already above threshold.
-	/// Amortized cost per spawn stays `O(1)` regardless of the live-set size.
-	const PRUNE_THRESHOLD: usize = 64;
-
-	/// Create an empty registry.
-	#[must_use]
-	pub fn new() -> Self {
-		Self::default()
-	}
-
-	/// Record a freshly spawned child. Called from the spawn-observer hook.
-	///
-	/// The `Process` handle MUST be opened by the caller *immediately* after
-	/// the child's pid becomes visible, so identity is pinned before any race
-	/// with pid recycling can start. When the pin fails (child already exited
-	/// before we could `Process::from_pid`) the entry becomes a no-op at
-	/// termination time — there is nothing left to signal.
-	///
-	/// Exited entries are swept opportunistically once the recorded vec
-	/// crosses the next-sweep watermark, so long-running loops of short
-	/// external commands cannot exhaust the process' FD/handle limit by
-	/// retaining one owned handle per historical spawn.
-	pub fn record(&self, pgid: Option<i32>, process: Option<Process>) {
-		let mut state = self.state.lock();
-		state.spawned.push(SpawnedProcess { process, pgid });
-		if state.spawned.len() >= state.next_sweep_at.max(Self::PRUNE_THRESHOLD) {
-			prune_exited(&mut state.spawned);
-			// Schedule the next sweep `PRUNE_THRESHOLD` further records away.
-			// Comparing against the post-sweep live-set size (not the pre-sweep
-			// length) bounds the sweep frequency when many entries survive:
-			// each sweep costs O(N) but now runs at most once per
-			// `PRUNE_THRESHOLD` records, so amortized per-record cost is O(1)
-			// even if the live set stays large.
-			state.next_sweep_at = state.spawned.len() + Self::PRUNE_THRESHOLD;
-		}
-	}
-
-	/// Pids of recorded processes that are still alive, in spawn order.
-	///
-	/// Liveness is probed through each entry's pinned [`Process`] (pidfd on
-	/// Linux, start-time identity on macOS, open handle on Windows), so a
-	/// recycled pid never reports as one of this run's children. Entries whose
-	/// pin failed at spawn time are skipped — they already exited. The
-	/// recorded set is not mutated; pruning stays with `record`/`build_targets`.
-	#[must_use]
-	pub fn live_pids(&self) -> Vec<i32> {
-		let state = self.state.lock();
-		state
-			.spawned
-			.iter()
-			.filter_map(|entry| entry.process.as_ref())
-			.filter(|process| process.status() == ProcessStatus::Running)
-			.map(Process::pid)
-			.collect()
-	}
-
-	/// Build the kill set from the processes recorded so far. Re-read on every
-	/// signal wave so a child spawned during a grace window — between the
-	/// cancel firing and the next wave — is still reaped.
-	///
-	/// A recorded process contributes only while alive; a recorded pgid
-	/// contributes only while the group still has members, so once the run's
-	/// whole tree exits the targets are empty and the wave loop can stop early.
-	///
-	/// Pruning also runs here so a cancellation cycle sees a compact target
-	/// set even when the record-time threshold hasn't fired yet.
-	#[must_use]
-	pub fn build_targets(&self) -> TerminationTargets {
-		let mut targets = TerminationTargets::new();
-		let spawned = {
-			let mut state = self.state.lock();
-			prune_exited(&mut state.spawned);
-			// Reset the watermark to the current live-set size + threshold;
-			// leaving a stale pre-sweep value would misgate the next
-			// record-time sweep.
-			state.next_sweep_at = state.spawned.len() + Self::PRUNE_THRESHOLD;
-			state.spawned.clone()
-		};
-		for entry in spawned {
-			if let Some(process) = entry.process {
-				targets.add_process(process);
-			}
-			// If the observer failed to pin a handle at spawn time (the child
-			// exited before `Process::from_pid` could open it), the child is
-			// already gone — signalling anything for that pid would either
-			// no-op or, worse, race a recycled pid onto an unrelated process.
-			// Drop the entry entirely rather than reintroduce the pid-reuse
-			// window this whole change exists to close (#4605).
-			if let Some(pgid) = entry.pgid
-				&& pgid > 0
-				&& process_group_alive(pgid)
-			{
-				targets.add_pgid(pgid);
-			}
-		}
-		targets
-	}
-}
-
-/// Drop registry entries whose pinned process, process group, and — on
-/// Windows — descendant tree are all gone. With nothing still-live the entry
-/// contributes nothing to the next termination wave and only pins an owned OS
-/// handle for no reason.
-///
-/// The platform split matters because Windows has no process groups. On Unix
-/// a child reparented onto init keeps its pgid, so a live pgid still catches
-/// grandchildren whose immediate parent exited. On Windows there is no
-/// reparenting and no pgid, so we probe the descendant tree directly through
-/// the still-open pinned handle — dropping that handle would release the pid
-/// slot, letting a recycled pid make future Toolhelp walks unsafe (issue
-/// #4605) and orphaning any leftover child from the next cancellation wave.
-fn prune_exited(spawned: &mut Vec<SpawnedProcess>) {
-	spawned.retain(|entry| {
-		if let Some(process) = &entry.process {
-			if process.status() == ProcessStatus::Running {
-				return true;
-			}
-			// Windows-only: root exited but the pinned handle still keeps its
-			// pid reserved, so `live_descendants` walks the *original* subtree
-			// via Toolhelp. If any child is still running we must keep the
-			// entry — closing the handle would both release the pid (racing
-			// pid reuse) and strand the surviving child.
-			#[cfg(target_os = "windows")]
-			if !process.live_descendants().is_empty() {
-				return true;
-			}
-		}
-		entry
-			.pgid
-			.is_some_and(|pgid| pgid > 0 && process_group_alive(pgid))
-	});
-}
-
-/// True when process group `pgid` still has at least one member. `kill(2)`
-/// with signal 0 performs permission/existence checks without delivering a
-/// signal; `EPERM` means the group exists but is not ours to signal, which
-/// still counts as alive.
-#[must_use]
-#[allow(
-	clippy::missing_const_for_fn,
-	reason = "calls non-const platform_process_group_alive on unix"
-)]
-fn process_group_alive(pgid: i32) -> bool {
-	if pgid <= 0 {
-		return false;
-	}
-	platform_process_group_alive(pgid)
-}
-
-#[cfg(unix)]
-fn platform_process_group_alive(pgid: i32) -> bool {
-	// SAFETY: `kill` takes integer identifiers by value and does not access
-	// caller-owned memory. A negative pid targets the process group; signal 0
-	// only runs the existence/permission checks.
-	let ret = unsafe { libc::kill(-pgid, 0) };
-	ret == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-#[cfg(not(unix))]
-const fn platform_process_group_alive(_pgid: i32) -> bool {
-	false
 }
 
 #[cfg(test)]
@@ -1611,80 +1401,9 @@ mod tests {
 		);
 	}
 
-	/// Regression test for issue #4605: `SpawnRegistry` MUST pin a stable
-	/// [`Process`] reference at spawn time rather than defer re-opening the
-	/// pid until termination.
-	///
-	/// Before the fix, `SpawnRegistry` stored only the raw pid; `build_targets`
-	/// called `Process::from_pid` at cancellation time. On Windows pids recycle
-	/// aggressively, so a bash-spawned `pwsh.exe` that had already exited could
-	/// see its pid reassigned to an unrelated PowerShell session (e.g. the
-	/// user's other Cursor terminal). `Process::from_pid` at cancel time would
-	/// happily open that unrelated process, and `signal_tree` would then
-	/// enumerate — and `TerminateProcess` — the entire foreign subtree.
-	///
-	/// This test cannot literally trigger Windows pid recycling from a
-	/// cross-platform Rust test, but it can prove the observable defense: a
-	/// recorded process reference survives the original pid's death (so no
-	/// "look it up again" step exists to be raced), and the registry never
-	/// consults `Process::from_pid` when a handle was pinned at record time.
-	#[cfg(unix)]
-	#[test]
-	fn spawn_registry_pins_identity_at_record_time() {
-		use std::{process::Command, thread, time::Duration};
-
-		// Phase 1: while the child is alive, the pinned handle carries identity
-		// forward into `build_targets` without any `Process::from_pid` re-open
-		// step existing to be raced against pid reuse.
-		let mut long = Command::new("sleep")
-			.arg("30")
-			.spawn()
-			.expect("spawn sleep");
-		let long_pid = i32::try_from(long.id()).expect("child pid fits in i32");
-
-		let registry = SpawnRegistry::new();
-		let pinned = Process::from_pid(long_pid).expect("pin child at record time");
-		registry.record(None, Some(pinned));
-
-		let live_targets = registry.build_targets();
-		assert!(
-			!live_targets.is_empty(),
-			"a still-live pinned child must appear in the target set — otherwise the cancellation \
-			 cleanup would silently miss it"
-		);
-		let live_pids: Vec<i32> = live_targets.processes.iter().map(Process::pid).collect();
-		assert_eq!(
-			live_pids,
-			vec![long_pid],
-			"target set must come from the pinned handle recorded at spawn time, not a re-lookup by \
-			 pid (which would race pid reuse — issue #4605)"
-		);
-
-		let _ = long.kill();
-		let _ = long.wait();
-
-		// Phase 2: once the child exits, the registry MUST drop the entry
-		// rather than reintroduce a `Process::from_pid` re-open at kill time.
-		// Poll until pruning sees the pidfd as Exited (kernel-visible within
-		// milliseconds in practice).
-		let mut empty_after_exit = false;
-		for _ in 0..40 {
-			if registry.build_targets().is_empty() {
-				empty_after_exit = true;
-				break;
-			}
-			thread::sleep(Duration::from_millis(25));
-		}
-		assert!(
-			empty_after_exit,
-			"once the pinned child exits the registry must drop it — re-opening by pid at \
-			 termination time is exactly the pid-reuse race #4605 closes"
-		);
-	}
-
 	/// `TerminationTargets::add_process` must accept a pre-pinned handle
-	/// without going through `Process::from_pid`. This is the API contract
-	/// `SpawnRegistry` relies on to avoid the PID-reuse race.
+	/// without going through `Process::from_pid`, so a caller that pinned the
+	/// handle at spawn time avoids the PID-reuse race.
 	#[cfg(unix)]
 	#[test]
 	fn add_process_bypasses_from_pid_lookup() {
@@ -2005,7 +1724,6 @@ while :; do :; done"#,
 			"watermark must not advance while the vec stays below it — otherwise a sweep ran"
 		);
 	}
-
 	/// `wait_for_exit` on a lone process resolves when it exits, reports a
 	/// timeout as `false`, and surfaces cancellation as an abort error.
 	#[tokio::test(flavor = "multi_thread")]

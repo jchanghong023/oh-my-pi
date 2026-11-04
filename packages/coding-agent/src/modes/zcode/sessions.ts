@@ -14,6 +14,7 @@ import {
 	type CreateAgentSessionResult,
 } from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
+import { isLocalAgentSession } from "../../session/agent-session-handle";
 import { peekSpecDrivenController } from "../../spec-driven/controller";
 import { AgentStorage } from "../../session/agent-storage";
 import type { PromptOptions } from "../../session/agent-session-types";
@@ -220,7 +221,10 @@ export class ZCodeSessionManager {
 			for (const ref of record.registry.list()) {
 				if (ref.kind !== "sub") continue;
 				if (ref.status === "running") add("childRunning", "Native child agent is still running", record.id);
-				if (ref.session) inspect(ref.session, ref.session.sessionManager.getSessionId());
+				if (ref.session) {
+					if (isLocalAgentSession(ref.session)) inspect(ref.session, ref.session.sessionManager.getSessionId());
+					else add("runtimeBusy", "Native child ownership is on another thread", record.id);
+				}
 			}
 		}
 		return blockers;
@@ -262,7 +266,11 @@ export class ZCodeSessionManager {
 		if (root) return root.session;
 		for (const record of this.#records.values()) {
 			for (const ref of record.registry.list()) {
-				if (ref.kind === "sub" && ref.session?.sessionManager.getSessionId() === id) return ref.session;
+				if (ref.kind === "sub" && ref.session?.sessionManager.getSessionId() === id) {
+					if (!isLocalAgentSession(ref.session))
+						throw new Error("Native ZCode child must stay on its host thread");
+					return ref.session;
+				}
 			}
 		}
 		return undefined;
@@ -274,6 +282,7 @@ export class ZCodeSessionManager {
 		for (const root of this.#records.values()) {
 			for (const ref of root.registry.list()) {
 				if (ref.kind !== "sub" || ref.session?.sessionManager.getSessionId() !== id) continue;
+				if (!isLocalAgentSession(ref.session)) throw new Error("Native ZCode child must stay on its host thread");
 				const file = ref.session.sessionManager.getSessionFile() ?? ref.sessionFile;
 				if (file) return { root, agentId: ref.id, ref, session: ref.session, file };
 			}
@@ -293,7 +302,10 @@ export class ZCodeSessionManager {
 						(candidate.sessionFile && path.resolve(candidate.sessionFile) === path.resolve(file)))
 						? candidate
 						: undefined;
-				return { root, agentId: child.agentId, ref, session: ref?.session ?? undefined, file };
+				const session = ref?.session ?? undefined;
+				if (session && !isLocalAgentSession(session))
+					throw new Error("Native ZCode child must stay on its host thread");
+				return { root, agentId: child.agentId, ref, session, file };
 			}
 		}
 		return undefined;

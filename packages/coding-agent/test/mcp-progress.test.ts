@@ -4,9 +4,11 @@ import { StdioTransport } from "@oh-my-pi/pi-coding-agent/mcp/transports/stdio";
 import type { MCPToolCallResult } from "@oh-my-pi/pi-coding-agent/mcp/types";
 import type { MCPProgress } from "@oh-my-pi/pi-tui/tools/mcp";
 import { withTimeout } from "@oh-my-pi/pi-utils";
+import { deadlinesOnlyUnderDeadline } from "./helpers/mcp-deadline";
 import { rejectionOf } from "./helpers/rejection";
 
 const transports: StdioTransport[] = [];
+const underDeadline = deadlinesOnlyUnderDeadline();
 afterEach(async () => {
 	await Promise.all(transports.splice(0).map(transport => transport.close()));
 });
@@ -200,13 +202,13 @@ describe("MCP stdio request progress", () => {
 			transport.onNotification = method => {
 				if (method === "notifications/progress" && timedOut) late.resolve();
 			};
-			// Await before expect: on Bun 1.4.2 (Windows), `expect(pending).rejects` can stall subprocess
-			// pipe reads until the promise settles, which would hide every progress notification.
 			const error = await rejectionOf(
 				withTimeout(
-					transport.request("tools/call", params({ steps: 100, delayMs: 5 }), {
-						onProgress: () => count++,
-					}),
+					underDeadline(() =>
+						transport.request("tools/call", params({ steps: 100, delayMs: 5 }), {
+							onProgress: () => count++,
+						}),
+					),
 					400,
 					"progress extended the deadline",
 				),

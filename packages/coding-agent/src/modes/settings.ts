@@ -1,6 +1,7 @@
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { offlineFromEnv } from "../cli/args";
+import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
 import { formatKeyHint, formatKeyHints } from "@oh-my-pi/pi-tui/app-keybindings";
 import { cfgReadToolResultPreview } from "../tools/settings";
 import { MAGIC_KEYWORDS, type MagicKeywordId } from "./magic-keywords";
@@ -20,6 +21,9 @@ import { applyHyperlinkSetting } from "@oh-my-pi/pi-tui/render/hyperlink";
 import { setInlineImageMaxColumns, setInlineImageMaxRows } from "@oh-my-pi/pi-tui/render/render-utils";
 import { setShimmerMode } from "@oh-my-pi/pi-tui/theme/shimmer";
 import { setAutoThemeMapping, setColorBlindMode, setSymbolPreset } from "@oh-my-pi/pi-tui/theme/theme";
+import { DEFAULT_MAX_FPS, parseMaxFps, setMaxFps } from "@oh-my-pi/pi-tui/frame-rate";
+import { setMotionEffects } from "@oh-my-pi/pi-tui/motion-effects";
+import { parseSpinnerInterval, setSpinnerInterval } from "@oh-my-pi/pi-tui/spinner-clock";
 
 const EMPTY_UNKNOWN_RECORD: Record<string, unknown> = {};
 
@@ -557,6 +561,54 @@ export const cfgTuiTitleSpinner = register({
 	},
 });
 
+export const cfgTuiSpinnerInterval = register({
+	id: "tui.spinnerInterval",
+	type: "number",
+	// Unset follows `tui.motion`; any value set (file, flag, env) wins over the preset.
+	default: undefined,
+	env: "PI_SPINNER_INTERVAL",
+	validate: raw => {
+		if (raw !== undefined && raw !== null) parseSpinnerInterval(raw);
+	},
+	normalize: parseSpinnerInterval,
+	ui: {
+		tab: "appearance",
+		group: "显示",
+		label: "旋转图标间隔（毫秒）",
+		description: "所有旋转图标（包括终端标题）的帧间隔；0 为静态。未设置时跟随动画预设",
+		options: [
+			{ value: "0", label: "静态", description: "无动画" },
+			{ value: "80", label: "80 ms", description: "12.5 帧/秒" },
+			{ value: "250", label: "250 ms", description: "4 帧/秒" },
+			{ value: "1000", label: "1 s", description: "1 帧/秒" },
+		],
+	},
+});
+
+export const cfgTuiMaxFps = register({
+	id: "tui.maxFps",
+	type: "number",
+	default: DEFAULT_MAX_FPS,
+	env: "PI_MAX_FPS",
+	validate: raw => {
+		if (raw !== undefined && raw !== null) parseMaxFps(raw);
+	},
+	normalize: parseMaxFps,
+	ui: {
+		tab: "appearance",
+		group: "显示",
+		label: "每秒最大帧数",
+		description: "TUI 重绘频率上限，包括流式文字。按键回显保持 30 fps，让输入继续响应",
+		options: [
+			{ value: "30", label: "30 fps", description: "默认" },
+			{ value: "15", label: "15 fps" },
+			{ value: "4", label: "4 fps", description: "适合多个分屏的低刷新率" },
+			{ value: "1", label: "1 fps", description: "最低" },
+		],
+	},
+});
+effect(cfgTuiMaxFps, setMaxFps);
+
 export const cfgTuiHyperlinks = register({
 	id: "tui.hyperlinks",
 	type: "enum",
@@ -610,7 +662,7 @@ export const cfgDisplayShimmer = register({
 		tab: "appearance",
 		group: "显示",
 		label: "微光动画",
-		description: "工作中和加载中消息的动画样式",
+		description: "工作中和加载中消息的动画样式；减少或关闭动画时不显示",
 		options: [
 			{ value: "classic", label: "经典", description: "柔和的余弦波扫过文字" },
 			{ value: "kitt", label: "KITT 扫描器", description: "《霹雳游侠》（1982）中左右往返的红灯" },
@@ -618,7 +670,44 @@ export const cfgDisplayShimmer = register({
 		],
 	},
 });
-effect(cfgDisplayShimmer, setShimmerMode);
+
+export const cfgTuiMotion = register({
+	id: "tui.motion",
+	type: "enum",
+	values: MOTION_MODES,
+	default: "full",
+	env: "PI_MOTION",
+	ui: {
+		tab: "appearance",
+		group: "显示",
+		label: "动画",
+		description:
+			"统一控制旋转图标、微光和装饰性闪烁或渐变，不影响流式文字（参见每秒最大帧数）。显式设置的旋转图标间隔优先",
+		options: [
+			{ value: "full", label: "完整", description: "每种动画使用各自设置（默认）" },
+			{ value: "reduced", label: "减少", description: "旋转图标间隔 250 ms，关闭微光和闪烁／渐变" },
+			{ value: "none", label: "关闭", description: "静态旋转图标和标题，关闭微光和闪烁／渐变" },
+		],
+	},
+});
+
+/** Effective animation settings: `tui.motion`'s preset under the user's own spinner interval and shimmer. */
+export const cfgMotionResolved = combine(
+	{ mode: cfgTuiMotion, spinnerInterval: cfgTuiSpinnerInterval, shimmer: cfgDisplayShimmer },
+	({ mode, spinnerInterval, shimmer }) => {
+		const preset = MOTION_PRESETS[mode];
+		return {
+			spinnerInterval: spinnerInterval ?? preset.spinnerInterval,
+			shimmer: preset.effects ? shimmer : ("disabled" as const),
+			effects: preset.effects,
+		};
+	},
+);
+effect(cfgMotionResolved, motion => {
+	setSpinnerInterval(motion.spinnerInterval);
+	setShimmerMode(motion.shimmer);
+	setMotionEffects(motion.effects);
+});
 
 export const cfgDisplayPinnedAgents = register({
 	id: "display.pinnedAgents",

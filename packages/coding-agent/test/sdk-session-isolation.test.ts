@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async/job-manager";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { Rule } from "@oh-my-pi/pi-coding-agent/capability/rule";
@@ -546,7 +547,7 @@ describe("createAgentSession session storage isolation", () => {
 				});
 				firstSession = first.session;
 				const manager = first.session.asyncJobManager;
-				if (!manager) throw new Error("Expected an owned async-job manager");
+				if (!(manager instanceof AsyncJobManager)) throw new Error("Expected an owned async-job manager");
 				const disposeStarted = Promise.withResolvers<void>();
 				const disposeGate = Promise.withResolvers<void>();
 				releaseDispose = () => disposeGate.resolve();

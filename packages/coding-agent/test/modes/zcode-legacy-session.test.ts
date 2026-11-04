@@ -184,7 +184,7 @@ describe("legacy sessions share canonical projection", () => {
 					kind: "sub",
 					parentId: "Main",
 					status: "idle",
-					session: { sessionId: id },
+					session: { sessionManager: { getSessionId: () => id } },
 					displayName: id,
 					createdAt: index + 1,
 					lifecycle: { acceptedAt: 4, terminalAt: 4 },

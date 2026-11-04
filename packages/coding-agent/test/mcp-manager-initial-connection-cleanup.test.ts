@@ -321,7 +321,12 @@ describe("MCPManager initial connection ownership", () => {
 	it("stops a reconnect still resolving its credentials on disconnectAll without starting its handshake", async () => {
 		const manager = new MCPManager(process.cwd());
 		const hangFixture = path.join(import.meta.dir, "fixtures", "hang-during-init-mcp.ts");
-		const connectSpy = vi.spyOn(mcpClient, "connectToServer");
+		const connect = mcpClient.connectToServer;
+		const connectStarted = Promise.withResolvers<void>();
+		const connectSpy = vi.spyOn(mcpClient, "connectToServer").mockImplementation((...args) => {
+			connectStarted.resolve();
+			return connect(...args);
+		});
 		// Initial credential setup is not the cancellation boundary under test.
 		const credentialSpy = vi.spyOn(configValue, "resolveConfigValue").mockResolvedValue("probe");
 		const config: MCPStdioServerConfig = {
@@ -333,6 +338,9 @@ describe("MCPManager initial connection ownership", () => {
 
 		try {
 			await manager.connectServers({ hang: config }, {}, undefined, 200);
+			// The initial connect starts once its `!command` credential resolves, which
+			// can outlast the startup window on a loaded host; wait for it, not a timer.
+			await connectStarted.promise;
 			expect(connectSpy).toHaveBeenCalledTimes(1);
 			// The reconnect is still resolving its `!command` credential when teardown runs.
 			const credential = Promise.withResolvers<string | undefined>();

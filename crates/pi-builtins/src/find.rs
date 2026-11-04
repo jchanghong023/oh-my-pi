@@ -543,8 +543,26 @@ pub mod matchers {
 			LiteralArg(OsString),
 		}
 
+		impl Arg {
+			fn new(value: &str) -> Self {
+				let parts: Vec<_> = value.split("{}").collect();
+				if parts.len() == 1 {
+					Self::LiteralArg(OsString::from(value))
+				} else {
+					Self::FileArg(parts.into_iter().map(OsString::from).collect())
+				}
+			}
+
+			fn expand(&self, path: &Path) -> OsString {
+				match self {
+					Self::LiteralArg(arg) => arg.clone(),
+					Self::FileArg(parts) => parts.join(path.as_os_str()),
+				}
+			}
+		}
+
 		pub struct SingleExecMatcher {
-			executable:         String,
+			executable:         Arg,
 			args:               Vec<Arg>,
 			exec_in_parent_dir: bool,
 		}
@@ -555,20 +573,11 @@ pub mod matchers {
 				args: &[&str],
 				exec_in_parent_dir: bool,
 			) -> Result<Self, Box<dyn Error>> {
-				let transformed_args = args
-					.iter()
-					.map(|&a| {
-						let parts = a.split("{}").collect::<Vec<_>>();
-						if parts.len() == 1 {
-							// No {} present
-							Arg::LiteralArg(OsString::from(a))
-						} else {
-							Arg::FileArg(parts.iter().map(OsString::from).collect())
-						}
-					})
-					.collect();
-
-				Ok(Self { executable: executable.to_string(), args: transformed_args, exec_in_parent_dir })
+				Ok(Self {
+					executable: Arg::new(executable),
+					args: args.iter().map(|arg| Arg::new(arg)).collect(),
+					exec_in_parent_dir,
+				})
 			}
 		}
 
@@ -582,12 +591,9 @@ pub mod matchers {
 				};
 
 				let mut argv = Vec::with_capacity(self.args.len() + 1);
-				argv.push(OsString::from(&self.executable));
+				argv.push(self.executable.expand(&path_to_file));
 				for arg in &self.args {
-					argv.push(match arg {
-						Arg::LiteralArg(a) => a.clone(),
-						Arg::FileArg(parts) => parts.join(path_to_file.as_os_str()),
-					});
+					argv.push(arg.expand(&path_to_file));
 				}
 				// GNU runs `-exec` in find's working directory, which is the
 				// shell's; `-execdir` moves to the entry's parent.
@@ -608,7 +614,12 @@ pub mod matchers {
 				match matcher_io.host().run_command_async(command).await {
 					Ok(status) => status.success(),
 					Err(e) => {
-						let _ = writeln!(&mut matcher_io.host().stderr, "Failed to run {}: {}", self.executable, e);
+						let _ = writeln!(
+							&mut matcher_io.host().stderr,
+							"Failed to run {}: {}",
+							self.executable.expand(&path_to_file).to_string_lossy(),
+							e
+						);
 						false
 					},
 				}
@@ -762,6 +773,25 @@ pub mod matchers {
 
 			fn has_side_effects(&self) -> bool {
 				true
+			}
+		}
+
+		#[cfg(all(test, unix))]
+		mod tests {
+			use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::Path};
+
+			use super::Arg;
+
+			#[test]
+			fn exec_executable_and_arguments_expand_native_path_bytes() {
+				let path = OsString::from_vec(b"bin/prog-\xff".to_vec());
+				let path = Path::new(&path);
+				assert_eq!(Arg::new("{}").expand(path), path.as_os_str());
+				assert_eq!(
+					Arg::new("before{}after{}").expand(path),
+					OsString::from_vec(b"beforebin/prog-\xffafterbin/prog-\xff".to_vec())
+				);
+				assert_eq!(Arg::new("literal").expand(path), "literal");
 			}
 		}
 	}
@@ -4844,10 +4874,9 @@ use std::{
 	time::SystemTime,
 };
 
-use brush_core::{ShellExtensions, builtins::Registration};
 use clap::{Arg, ArgAction, ArgMatches, Command, builder::OsStringValueParser};
 
-use crate::host::{AsyncUtility, Host, async_util, matches_parser};
+use crate::host::{AsyncUtility, Host, matches_parser};
 use matchers::{Follow, WalkEntry};
 
 pub struct Config {
@@ -5362,11 +5391,6 @@ impl AsyncUtility for Find {
 	}
 }
 
-/// Creates the `find` builtin registration.
-pub(crate) fn find_builtin<SE: ShellExtensions>() -> Registration<SE> {
-	async_util::<Find, SE>()
-}
-
 #[cfg(test)]
 mod tests {
 	use std::{fs, path::PathBuf};
@@ -5499,7 +5523,8 @@ mod tests {
 	async fn exec_uses_shell_cwd_and_captures_child_stdout() {
 		let (_dir, root) = fixture();
 		let (code, out, err) =
-			crate::host::run_script("find . -maxdepth 0 -exec /bin/pwd ';'", "", &root).await;
+			crate::host::run_extra(&["find", ".", "-maxdepth", "0", "-exec", "/bin/pwd", ";"], "", &root, &[])
+				.await;
 		assert_eq!(code, 0, "stderr: {err}");
 		assert_eq!(err, "");
 		assert_eq!(out, format!("{}\n", root.display()));
@@ -5513,14 +5538,15 @@ mod tests {
 		let (_dir, root) = fixture();
 		fs::create_dir(root.join("sub")).unwrap();
 		fs::write(root.join("sub/d.txt"), b"x").unwrap();
-		let (code, out, err) = crate::host::run_script(
-			"find . -name d.txt -execdir pwd ';' && find sub -name d.txt -exec wc -c {} +",
-			"",
-			&root,
-		)
-		.await;
+		let (code, out, err) =
+			crate::host::run_extra(&["find", ".", "-name", "d.txt", "-execdir", "pwd", ";"], "", &root, &[]).await;
 		assert_eq!(code, 0, "stderr: {err}");
-		assert_eq!(out, format!("{}\n1 sub/d.txt\n", root.join("sub").display()));
+		assert_eq!(out, format!("{}\n", root.join("sub").display()));
+		let (code, out, err) =
+			crate::host::run_extra(&["find", "sub", "-name", "d.txt", "-exec", "wc", "-c", "{}", "+"], "", &root, &[])
+				.await;
+		assert_eq!(code, 0, "stderr: {err}");
+		assert_eq!(out, "1 sub/d.txt\n");
 	}
 
 	#[tokio::test(flavor = "multi_thread")]
@@ -5802,7 +5828,7 @@ mod tests {
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn printf_into_closed_pipe_stops_without_panicking() {
-		use brush_core::openfiles::OpenFile;
+		use crate::openfile::OpenFile;
 
 		let (_dir, root) = fixture();
 		let (mut host, capture) = crate::host::Host::for_test("find", "", &root);
@@ -5822,7 +5848,7 @@ mod tests {
 	#[cfg(unix)]
 	#[tokio::test(flavor = "multi_thread")]
 	async fn diagnostic_into_closed_pipe_does_not_panic() {
-		use brush_core::openfiles::OpenFile;
+		use crate::openfile::OpenFile;
 
 		use crate::host::StreamWriter;
 

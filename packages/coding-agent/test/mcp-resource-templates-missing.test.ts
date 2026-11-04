@@ -92,6 +92,7 @@ describe("MCPManager loads resources for a templates-less server", () => {
 		};
 
 		try {
+			// A zero startup window waits for the fresh fixture to connect.
 			await manager.connectServers({ docs: config }, {}, undefined, 0);
 			await manager.ensureServerResources("docs");
 			const resources = manager.getServerResources("docs");
@@ -118,6 +119,7 @@ describe("MCPManager loads resources for a templates-less server", () => {
 		};
 
 		try {
+			// A zero startup window waits for the fresh fixture to connect.
 			await manager.connectServers({ docs: config }, {}, undefined, 0);
 			await manager.ensureServerResources("docs");
 			const resources = manager.getServerResources("docs");

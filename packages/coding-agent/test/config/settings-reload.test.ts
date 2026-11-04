@@ -221,6 +221,39 @@ describe("Settings layer refresh", () => {
 		expect(settings.getModelRoleProvenance("smol")).toBe("global");
 	});
 
+	it("mirrors process role defaults live without overriding configured or cleared roles", () => {
+		const source = Settings.isolated({ modelRoles: { plan: "custom/plan", smol: null } });
+		source.setModelRoleDefaults({ plan: "company/plan", smol: "company/smol", task: "company/task" });
+		const mirror = Settings.mirror(
+			{
+				write: write => {
+					if (write.op !== "setModelRoleDefaults") throw new Error(`Unexpected write: ${write.op}`);
+					source.setModelRoleDefaults(write.roles);
+					return source.mirrorState();
+				},
+				refresh: async () => source.mirrorState(),
+				cloneForCwd: cwd => source.cloneForCwd(cwd),
+			},
+			source.mirrorState(),
+		);
+		const child = mirror.overlay();
+		const unsubscribe = source.onLayersChange(() => mirror.applyMirrorState(source.mirrorState()));
+		try {
+			expect(child.getModelRole("plan")).toBe("custom/plan");
+			expect(child.getModelRole("smol")).toBeUndefined();
+			expect(child.getModelRole("task")).toBe("company/task");
+			source.setModelRoleDefaults({ plan: "company/new-plan", smol: "company/new-smol", task: "company/new-task" });
+			expect(child.getModelRole("task")).toBe("company/new-task");
+			expect(child.getModelRole("plan")).toBe("custom/plan");
+			expect(child.getModelRole("smol")).toBeUndefined();
+			mirror.setModelRoleDefaults({ task: "company/forwarded" });
+			expect(source.getModelRole("task")).toBe("company/forwarded");
+			expect(child.getModelRole("task")).toBe("company/forwarded");
+		} finally {
+			unsubscribe();
+		}
+	});
+
 	it("clearing a persisted null role removes its tombstone and restores process defaults", async () => {
 		await writeConfig({ modelRoles: { smol: null, plan: "company/GLM-5.2-public" } });
 		const settings = await Settings.init({ cwd: startProject, agentDir });

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import type { AsyncJobManager } from "../async/job-manager";
+import type { AsyncJobManagerApi } from "../async/job-manager";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
@@ -15,9 +15,10 @@ import type { NativeSubagentHooks } from "../task/types";
 import { assertSpecWritePath, existingNativeSpec, matchesNativeSpecPattern } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
+import { isLocalAgentSession } from "../session/agent-session-handle";
 import { SessionManager } from "../session/session-manager";
 import { ToolRestrictions } from "../session/tool-restrictions";
-import { AgentRegistry } from "../registry/agent-registry";
+import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
 import taskTemplate from "../prompts/spec-driven-task.md" with { type: "text" };
 import communicationPrompt from "../prompts/spec-driven-communication.md" with { type: "text" };
@@ -44,7 +45,7 @@ export interface SpecActor {
 }
 
 /** Collect every registered descendant of `ownerId` through the actual agent parent chain. */
-export function specDescendantAgentIds(registry: AgentRegistry, ownerId: string): string[] {
+export function specDescendantAgentIds(registry: AgentRegistryApi, ownerId: string): string[] {
 	const children = new Map<string, string[]>();
 	for (const ref of registry.list()) {
 		if (!ref.parentId) continue;
@@ -68,7 +69,7 @@ export function specDescendantAgentIds(registry: AgentRegistry, ownerId: string)
 }
 
 /** Wait for all jobs owned by `ownerId`, treating rejected jobs as settled and picking up late registrations. */
-async function waitOwnedSettled(manager: AsyncJobManager, ownerId: string): Promise<void> {
+async function waitOwnedSettled(manager: AsyncJobManagerApi, ownerId: string): Promise<void> {
 	const awaited = new Set<string>();
 	for (;;) {
 		const pending = manager.getUnsettledJobs().filter(job => job.ownerId === ownerId && !awaited.has(job.id));
@@ -84,9 +85,9 @@ async function waitOwnedSettled(manager: AsyncJobManager, ownerId: string): Prom
  * cannot stop an idle grandchild; this walks the registered parent chain instead.
  */
 export async function cancelSpecDescendantJobs(
-	manager: AsyncJobManager,
+	manager: AsyncJobManagerApi,
 	ownerId: string,
-	registry: AgentRegistry = AgentRegistry.global(),
+	registry: AgentRegistryApi = AgentRegistry.global(),
 ): Promise<boolean> {
 	const targets = new Set<string>([ownerId]);
 	for (let pass = 0; pass < 3; pass++) {
@@ -108,10 +109,8 @@ export async function cancelSpecDescendantJobs(
 				.filter(id => id !== ownerId)
 				.map(async id => {
 					const child = registry.get(id)?.session;
-					if (!child || child.isDisposed) return;
-					if (child.getGoalModeState()?.enabled) await child.goalRuntime.pauseGoal();
-					child.clearQueue();
-					await child.abort();
+					if (!child || (isLocalAgentSession(child) && child.isDisposed)) return;
+					await child.abort({ clearQueuedInputs: true });
 				}),
 		);
 		for (const id of targets) await waitOwnedSettled(manager, id);

@@ -3,6 +3,7 @@ import { beforeAll, describe, expect, setSystemTime, test } from "bun:test";
 import { Agent, ThinkingLevel } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -19,7 +20,10 @@ import {
 	sortModelItems,
 } from "@oh-my-pi/pi-tui/overlays/model-browser";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
+import {
+	createModelMentionSource,
+	getModelMentionSuggestions,
+} from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 
 /** Optional presentation metadata a catalog or discovery source may attach. */
@@ -139,6 +143,35 @@ describe("createModelMentionSource", () => {
 
 		available.push(makeModel("c", "example-3"));
 		expect(selectors("example")).toContain("c/example-3");
+	});
+
+	test("hides an effort row whose selector names an available model outside the picker scope", async () => {
+		await initTheme();
+		const glm = buildModel({
+			id: "glm",
+			name: "GLM",
+			api: "ollama-chat",
+			provider: "a",
+			baseUrl: "https://example.com",
+			reasoning: true,
+			thinking: { mode: "budget", efforts: [Effort.Low, Effort.High, Effort.Max] },
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 128_000,
+			maxTokens: 1024,
+		});
+		const glmMax = makeModel("a", "glm:max");
+		const candidates = createModelMentionSource({
+			source: createModelBrowserSource(Settings.isolated()),
+			registry: { getError: () => undefined, getAvailable: () => [glm, glmMax], getAll: () => [glm, glmMax] },
+			scopedModels: () => [glm],
+		});
+
+		const completion = getModelMentionSuggestions("^a/glm:", candidates);
+		expect(completion.kind === "matched" && completion.suggestions.items.map(item => item.value)).toEqual([
+			"a/glm:low",
+			"a/glm:high",
+		]);
 	});
 });
 

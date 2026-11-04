@@ -63,13 +63,65 @@ const FOREIGN_USER_PROVIDERS: Record<string, true> = {
 /** Outstanding {@link initializeWithSettings} holds, oldest first; the newest one is bound. */
 const settingsHolds: { settings: Settings }[] = [];
 
+/** Worker thread: the main thread's bound settings (mirrored), in effect below this thread's own holds. */
+let inheritedBoundSettings: Settings | undefined;
+
+/** Observers of binding and unbound-switch changes ({@link onProviderSwitchesChange}). */
+const switchListeners = new Set<() => void>();
+
+/** Provider switches a worker thread inherits from the main thread ({@link providerSwitches}). */
+export interface ProviderSwitches {
+	/** Settings the newest hold bound; the live switches come from its `enabledProviders`/`disabledProviders`. */
+	readonly bound: Settings | null;
+	/** Switches in effect while nothing is bound. */
+	readonly unboundDisabled: readonly string[];
+	readonly unboundEnabled: readonly string[];
+}
+
+/** Current binding and unbound switches, for handing to a worker thread. */
+export function providerSwitches(): ProviderSwitches {
+	return {
+		bound: boundSettings() ?? null,
+		unboundDisabled: [...unboundDisabledProviders],
+		unboundEnabled: [...unboundEnabledProviders],
+	};
+}
+
+/** Calls `listener` after the binding or the unbound switches change; returns the unsubscribe. */
+export function onProviderSwitchesChange(listener: () => void): () => void {
+	switchListeners.add(listener);
+	return () => {
+		switchListeners.delete(listener);
+	};
+}
+
+/**
+ * Worker bootstrap only: adopt the main thread's switches. `bound` (a settings mirror) applies
+ * whenever this thread holds no binding of its own; the unbound switches replace this thread's.
+ */
+export function installProviderSwitches(switches: ProviderSwitches): void {
+	inheritedBoundSettings = switches.bound ?? undefined;
+	unboundDisabledProviders = new Set(switches.unboundDisabled);
+	unboundEnabledProviders = new Set(switches.unboundEnabled);
+}
+
+function notifySwitchListeners(): void {
+	for (const listener of Array.from(switchListeners)) {
+		try {
+			listener();
+		} catch (error) {
+			logger.warn("Capability: provider-switch listener failed", { error: String(error) });
+		}
+	}
+}
+
 /**
  * Settings instance the newest {@link initializeWithSettings} hold bound.
  * Unset when nothing is bound; callers must not fall back to the process
  * singleton or tests pick up the developer's config.
  */
 export function boundSettings(): Settings | undefined {
-	return settingsHolds.at(-1)?.settings;
+	return settingsHolds.at(-1)?.settings ?? inheritedBoundSettings;
 }
 
 /** Async session identity wins; explicit discovery scope precedes the ordinary TUI binding. */
@@ -404,9 +456,12 @@ export function disableUserSource(providerId: string): void {
 export function initializeWithSettings(activeSettings: Settings): () => void {
 	const hold = { settings: activeSettings };
 	settingsHolds.push(hold);
+	notifySwitchListeners();
 	return () => {
 		const index = settingsHolds.indexOf(hold);
-		if (index !== -1) settingsHolds.splice(index, 1);
+		if (index === -1) return;
+		settingsHolds.splice(index, 1);
+		notifySwitchListeners();
 	};
 }
 
@@ -445,8 +500,12 @@ export function getDisabledProviders(): string[] {
  */
 export function setDisabledProviders(providerIds: string[]): void {
 	const settings = scopedSettings();
-	if (settings) cfgDisabledProviders.set(settings, [...new Set(providerIds)]);
-	else unboundDisabledProviders = new Set(providerIds);
+	if (settings) {
+		cfgDisabledProviders.set(settings, [...new Set(providerIds)]);
+		return;
+	}
+	unboundDisabledProviders = new Set(providerIds);
+	notifySwitchListeners();
 }
 
 /**
@@ -461,8 +520,12 @@ export function getEnabledProviders(): string[] {
  */
 export function setEnabledProviders(providerIds: string[]): void {
 	const settings = scopedSettings();
-	if (settings) cfgEnabledProviders.set(settings, [...new Set(providerIds)]);
-	else unboundEnabledProviders = new Set(providerIds);
+	if (settings) {
+		cfgEnabledProviders.set(settings, [...new Set(providerIds)]);
+		return;
+	}
+	unboundEnabledProviders = new Set(providerIds);
+	notifySwitchListeners();
 }
 
 // =============================================================================
@@ -576,8 +639,10 @@ export function reset(): void {
  */
 export function resetCapabilityForTests(): void {
 	settingsHolds.length = 0;
+	inheritedBoundSettings = undefined;
 	unboundDisabledProviders = new Set();
 	unboundEnabledProviders = new Set();
+	notifySwitchListeners();
 	clearFsCache();
 }
 

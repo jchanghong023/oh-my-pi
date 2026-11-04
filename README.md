@@ -175,7 +175,7 @@ _[观看录屏 ↗](https://omp.sh/clips/web.mp4)_
 
 ### 09 · 不折不扣的原生，Windows 上也是。
 
-别的 agent 靠 shell 调用 rg、grep、find 和 bash。在很多机器上这些二进制根本不存在；即便存在，每次调用也要付出一次 fork-exec 往返的代价。omp 把真正的实现链接进进程。ripgrep、glob、find：进程内。brush 就是那个 bash——它的会话能跨调用存活，另有 58 个命令行工具（ls、sed、sort、xargs，甚至 jq）被移植进 builtins crate 并在进程内运行，零 fork/exec。同一个 omp 二进制跑在 macOS、Linux 和 Windows 上——无需 WSL 桥。
+别的 agent 靠 shell 调用 rg、grep、find 和 bash。在很多机器上这些二进制根本不存在；即便存在，每次调用也要付出一次 fork-exec 往返的代价。omp 把真正的实现链接进进程。ripgrep、glob、find：进程内。bash 使用我们自研的 bash 5.3 引擎——它的会话能跨调用存活，另有 58 个命令行工具（ls、sed、sort、xargs，甚至 jq）被移植进 builtins crate 并在进程内运行，零 fork/exec。同一个 omp 二进制跑在 macOS、Linux 和 Windows 上——无需 WSL 桥。
 
 ### 10 · 带优先级和结论的代码审查
 
@@ -294,9 +294,10 @@ Eval 的 `computer` 辅助方法——`computer.window(...)`、`win.screenshot()
 
 ### 提示词控制
 
-三个独立的小写单词可让某一轮对话切换到专门的 agent 行为：
+独立的小写单词可让某一轮对话切换到专门的 agent 行为：
 
 - `ultrathink` — 要求谨慎的多步推理，并使用所支持的最高自动思考强度。
+- `chillax` — 要求简短推理；对于支持逐消息思考强度的模型，将强度降至最低，轮次执行中也可生效。
 - `orchestrate` — 通过并行子 agent 执行大量独立工作，并逐阶段验证。
 - `workflowz` — 用当前 `task` 工具构建确定性的多子 agent 工作流。
 
@@ -431,7 +432,7 @@ agent 拿到的是结构化内容，而不是被剥光的 HTML。
 
 ## 约 **~80,000** 行 Rust 代码，包办了其他 harness 靠 shell 出去完成的工作。
 
-六个 crate，一个带平台标签的 N-API addon。搜索、shell、AST、高亮、PTY、桌面控制、图片解码、BPE 计数 —— 全部在进程内、跑在 libuv 线程池上。热路径上没有 fork/exec。另有约 80k 行以 vendor 形式随行：brush bash fork，加上 58 个命令行工具 —— coreutils、findutils、sed、jq、ripgrep 驱动的 grep、fd、diff、moreutils —— 全部移植进 builtins crate，直接编译进 shell。
+六个 crate，一个带平台标签的 N-API addon。搜索、shell、AST、高亮、PTY、桌面控制、图片解码、BPE 计数 —— 全部在进程内、跑在 libuv 线程池上。热路径上没有 fork/exec。shell 使用我们自研的 bash 5.3 引擎，58 个命令行工具 —— coreutils、findutils、sed、jq、ripgrep 驱动的 grep、fd、diff、moreutils —— 全部移植进 builtins crate，直接编译进 shell。
 
 - Crates：`pi-natives`、`pi-shell`、`pi-ast`、`pi-iso`、`pi-voice`、`pi-walker`
 - Platforms：`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`win32-x64`、`win32-arm64` —— x64 同时提供 AVX2 与 baseline 两种二进制
@@ -654,14 +655,13 @@ bun dev -- --version
 | Crate | 说明 |
 | -------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
 | **[pi-natives](crates/pi-natives)**                | `@oh-my-pi/pi-natives` 使用的核心 Rust 原生 addon（N-API `cdylib`）；聚合下列 crates |
-| **[pi-shell](crates/pi-shell)**                    | 从 `pi-natives` 拆出的内嵌 shell / PTY / 进程管理（封装 `brush-*`） |
+| **[pi-shell](crates/pi-shell)**                    | 内嵌 bash 5.3 引擎（解析器、VM、进程创建、会话）、PTY 与进程管理 |
 | **[pi-ast](crates/pi-ast)**                        | 基于 tree-sitter 的代码摘要器与 AST 工具（50+ 语言语法） |
 | **[pi-iso](crates/pi-iso)**                        | 任务隔离后端解析器：APFS clones、btrfs/zfs reflinks、overlayfs、projfs、rcopy |
 | **[pi-voice](crates/pi-voice)**                    | 音频采集/播放、Opus 编解码与实时 WebRTC 流式原语 |
 | **[pi-walker](crates/pi-walker)**                  | 供 natives 与 shell 共用的并行忽略规则感知遍历器、目录列表缓存、glob 与内容搜索 |
 | **[pi-edit](crates/pi-edit)**                      | `edit` 工具背后的编辑引擎：基于行的 patch/hashline 模式、流式预览、原子应用 |
-| **[brush-core](crates/vendor/brush-core)**         | 为内嵌 bash 执行而 vendor 的 [brush-shell](https://github.com/reubeno/brush) fork |
-| **[pi-builtins](crates/pi-builtins)**              | Bash builtins（cd、echo、test、printf、read、export、…）外加 67 个进程内命令行工具 |
+| **[pi-builtins](crates/pi-builtins)**              | 67 个进程内命令行工具及进程 builtins（ps、top、pgrep、pkill 等） |
 
 ## 贡献
 
@@ -673,7 +673,7 @@ Issues 与 pull requests 对所有人开放。目前的开放 PR 仍属**试行*
 
 OMP 基于 [MIT License](LICENSE) 授权。
 
-第三方与 vendor 代码（包括 `crates/vendor/brush-core` 以及 `crates/pi-builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
+第三方与 vendor 代码（包括 `crates/pi-builtins/LICENSE` 中标明的第三方部分）仍遵循各自的上游许可证。每个分发组件均带有自己的 `THIRD-PARTY-NOTICES.txt`：CLI（`packages/coding-agent`）、原生 addon（`packages/natives`）和 robomp（`python/robomp`）。`omp --license` 会打印 CLI 与 addon 的声明。
 
 © 2025 Mario Zechner
 © 2025-2026 Can Bölük

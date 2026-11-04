@@ -1150,13 +1150,25 @@ export const cfgProvidersOpenaiWebsockets = register({
 	ui: {
 		tab: "providers",
 		group: "协议",
-		label: "OpenAI WebSockets",
-		description: "OpenAI Codex 模型的 WebSocket 策略（auto 使用模型默认值，on 强制开启，off 关闭）",
+		label: "OpenAI Codex WebSockets",
+		description: "仅适用于 OpenAI Codex 模型的 WebSocket 策略",
 		options: [
-			{ value: "auto", label: "自动", description: "使用模型或 Provider 默认的 WebSocket 行为" },
+			{ value: "auto", label: "自动", description: "使用 Codex 模型默认的 WebSocket 行为" },
 			{ value: "off", label: "关闭", description: "为 OpenAI Codex 模型关闭 WebSocket" },
 			{ value: "on", label: "开启", description: "为 OpenAI Codex 模型强制开启 WebSocket" },
 		],
+	},
+});
+
+export const cfgProvidersOpenaiResponsesWebsockets = register({
+	id: "providers.openaiResponsesWebsockets",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "providers",
+		group: "协议",
+		label: "OpenAI Responses WebSockets",
+		description: "为目录中支持的标准 Responses 模型启用；模型或请求设为 false 时关闭",
 	},
 });
 

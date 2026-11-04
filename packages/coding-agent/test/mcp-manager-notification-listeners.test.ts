@@ -4,10 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
 import type { MCPServerConfig } from "@oh-my-pi/pi-coding-agent/mcp/types";
-import { removeSyncWithRetries } from "@oh-my-pi/pi-utils";
+import { isRecord, removeSyncWithRetries } from "@oh-my-pi/pi-utils";
 import { CUSTOM_NOTIFICATION_METHOD, CUSTOM_NOTIFICATION_PAYLOAD } from "./fixtures/notifications-mcp";
 
 const FIXTURE_PATH = path.join(import.meta.dir, "fixtures", "notifications-mcp.ts");
+/** Marks the post-connect frame the ordering test injects, apart from the fixture's own. */
+const INJECTED_PROBE = "post-connect";
 const BUN_EXEC = process.execPath;
 
 type CapturedFrame = { server: string; method: string; params: unknown };
@@ -256,36 +258,29 @@ describe("MCPManager notification listeners", () => {
 		// #handleServerNotification (which awaits refreshServerTools) sees
 		// the callback complete.
 		const manager = new MCPManager(workDir);
-		const events: string[] = [];
+		const initialCallback = Promise.withResolvers<void>();
 		const { promise: hold, resolve: release } = Promise.withResolvers<void>();
-		const { promise: hold2, resolve: release2 } = Promise.withResolvers<void>();
-		const { promise: callbackStarted, resolve: markCallbackStarted } = Promise.withResolvers<void>();
-
 		manager.setOnToolsChanged(async () => {
-			events.push("cb:start");
-			await hold;
-			events.push("cb:end");
+			initialCallback.resolve();
 		});
 
 		try {
-			await manager.connectServers({ alpha: serverConfig() }, {});
-			// Drain initial startup callbacks before installing the refresh handler,
-			// including connections that outlast the discovery window.
-			release();
+			// Wait for startup and its callback before installing the refresh handler.
+			await manager.connectServers({ alpha: serverConfig() }, {}, undefined, 0);
+			await initialCallback.promise;
 			await manager.waitForStartup(0);
-			const priorLen = events.length;
 
-			// Trigger a fresh refresh and hold the callback again — this is the
-			// path #handleServerNotification takes for tools/list_changed.
+			// Trigger a fresh refresh and hold the callback.
+			const started = Promise.withResolvers<void>();
 			let cbState: "started" | "ended" | undefined;
 			manager.setOnToolsChanged(async () => {
 				cbState = "started";
-				markCallbackStarted();
-				await hold2;
+				started.resolve();
+				await hold;
 				cbState = "ended";
 			});
 			const refreshDone = manager.refreshServerTools("alpha");
-			await callbackStarted;
+			await started.promise;
 			expect(cbState).toBe("started");
 			// refreshServerTools has NOT resolved yet — proves it's awaiting.
 			let refreshResolved = false;
@@ -295,14 +290,11 @@ describe("MCPManager notification listeners", () => {
 			await Bun.sleep(10);
 			expect(refreshResolved).toBe(false);
 			// Release the callback; refresh should now resolve promptly.
-			release2();
+			release();
 			await refreshDone;
 			expect(cbState).toBe("ended");
-			// Drain events reference — just to silence unused var if refactored.
-			expect(events.length).toBeGreaterThanOrEqual(priorLen);
 		} finally {
 			release();
-			release2();
 			await manager.disconnectAll();
 		}
 	});
@@ -323,31 +315,34 @@ describe("MCPManager notification listeners", () => {
 		const events: string[] = [];
 		const initialFrames = makeFrameCollector();
 		const stopInitialFrames = manager.addNotificationListener(initialFrames.listener);
-		const { promise: callbackStarted, resolve: markCallbackStarted } = Promise.withResolvers<void>();
-		const { promise: listenerFired, resolve: markListenerFired } = Promise.withResolvers<void>();
+		const callbackStarted = Promise.withResolvers<void>();
+		const listenerFired = Promise.withResolvers<void>();
 		const { promise: gate, resolve: releaseGate } = Promise.withResolvers<void>();
+		const initialDone = Promise.withResolvers<void>();
 
 		manager.setOnToolsChanged(() => {
 			events.push("initial-cb:done");
+			initialDone.resolve();
 		});
+
 		try {
-			await manager.connectServers({ alpha: serverConfig() }, {});
-			// The fixture emits a list_changed frame during its handshake. Drain
-			// that frame and startup work before testing a post-connect notification.
+			// Drain the fixture's own startup notification before installing the gate.
+			await manager.connectServers({ alpha: serverConfig() }, {}, undefined, 0);
+			await initialDone.promise;
 			await initialFrames.awaitFrame("alpha", "notifications/tools/list_changed");
 			await manager.waitForStartup(0);
 			stopInitialFrames();
 			expect(events).toContain("initial-cb:done");
 			manager.setOnToolsChanged(async () => {
 				events.push("cb:start");
-				markCallbackStarted();
+				callbackStarted.resolve();
 				await gate;
 				events.push("cb:end");
 			});
-			manager.addNotificationListener((_server, method) => {
-				if (method === "notifications/tools/list_changed") {
+			manager.addNotificationListener((_server, method, params) => {
+				if (method === "notifications/tools/list_changed" && isRecord(params) && params.probe === INJECTED_PROBE) {
 					events.push("listener:fire");
-					markListenerFired();
+					listenerFired.resolve();
 				}
 			});
 
@@ -359,9 +354,9 @@ describe("MCPManager notification listeners", () => {
 			// (where refresh actually runs and the callback is awaited).
 			const conn = manager.getConnection("alpha");
 			if (!conn?.transport.onNotification) throw new Error("expected transport onNotification to be wired");
-			void conn.transport.onNotification("notifications/tools/list_changed", {});
+			void conn.transport.onNotification("notifications/tools/list_changed", { probe: INJECTED_PROBE });
 
-			await callbackStarted;
+			await callbackStarted.promise;
 			expect(events).toContain("cb:start");
 
 			// CRITICAL: at this point the callback is holding, and the
@@ -374,8 +369,7 @@ describe("MCPManager notification listeners", () => {
 			// Release the gate. Now the callback resolves, refresh completes,
 			// and the listener fires — in that order.
 			releaseGate();
-
-			await listenerFired;
+			await listenerFired.promise;
 
 			const idxCbEnd = events.indexOf("cb:end");
 			const idxFire = events.indexOf("listener:fire");

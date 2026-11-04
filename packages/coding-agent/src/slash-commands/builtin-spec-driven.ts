@@ -1,4 +1,5 @@
 import type { AgentSession } from "../session/agent-session";
+import type { AgentViewSession } from "../session/agent-session-handle";
 import { getSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
 import { reloadTuiPluginState } from "./builtin-marketplace";
 import { clearSubmittedText, restoreDetachedDraft } from "./helpers/draft";
@@ -32,7 +33,7 @@ export function isDevSessionTransitionCommand(name: string, args = ""): boolean 
 }
 
 /** Safety policy applies to the actual visible native stage, not a separate Dev command runtime. */
-export function assertDevCommandAllowed(session: AgentSession, name: string, args = ""): void {
+export function assertDevCommandAllowed(session: AgentViewSession, name: string, args = ""): void {
 	const controller = peekSpecDrivenController(session.sessionManager);
 	if (controller?.inputMode() !== "dev" || name === "dev") return;
 	if (isDevSessionTransitionCommand(name, args)) return;

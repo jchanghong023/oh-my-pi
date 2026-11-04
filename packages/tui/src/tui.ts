@@ -55,6 +55,7 @@ import { onTerminalBackgroundFallbackChange } from "./theme/theme";
 import { compositeLineAt } from "./render/composite";
 import { stripExtensionLinkMarkers } from "./render/extension-links";
 import { tmuxMultiplexer } from "./multiplexers/tmux";
+import { minFrameIntervalMs } from "./frame-rate";
 import {
 	Ellipsis,
 	getWidthConfigEpoch,
@@ -314,6 +315,13 @@ export interface Component {
 
 	/** User actions on nodes this component described (toggle, select, activate, custom). */
 	handleNativeEvent?(event: NativeUiEvent): void;
+
+	/**
+	 * Native transcript blocks drawn right after this one as siblings (a `TranscriptContainer` child only): notes
+	 * about the block that must show while it is collapsed, such as a tool card's Spotlight notice. The terminal
+	 * rows never show them. Return the same array while unchanged.
+	 */
+	nativeTrailers?(): readonly Component[];
 
 	/**
 	 * Pure preflight for focused input that must precede TUI-wide input listeners
@@ -952,15 +960,16 @@ export class TUI extends Container {
 	 * `#scheduleRender` to inflate the next render delay proportionally so a
 	 * spike of slow frames (large transcript diffs, huge assistant text wrap,
 	 * component-tree walks) does not busy-loop the CPU: the throttle would
-	 * otherwise collapse to zero once `elapsed >= MIN_RENDER_INTERVAL_MS` and
+	 * otherwise collapse to zero once `elapsed` passes the frame interval and
 	 * fire the next frame immediately (see #4145).
 	 */
 	#lastFrameCostMs = 0;
-	static readonly #MIN_RENDER_INTERVAL_MS = 1000 / 30;
 	readonly #offlineLinux =
 		process.platform === "linux" && /^(1|true|yes|on)$/i.test(process.env.OMP_OFFLINE?.trim() ?? "");
+	/** Input frames retain the historical 30 fps cadence regardless of the background ceiling. */
+	static readonly #INPUT_FRAME_INTERVAL_MS = 1000 / 30;
+	static readonly #INPUT_RENDER_GRACE_MS = TUI.#INPUT_FRAME_INTERVAL_MS;
 	#inputRenderPending = false;
-	static readonly #INPUT_RENDER_GRACE_MS = TUI.#MIN_RENDER_INTERVAL_MS;
 	/**
 	 * Cap on the adaptive floor derived from `#lastFrameCostMs`. Bounds the UI
 	 * responsiveness at ~5 fps under sustained heavy renders — anything slower
@@ -2808,6 +2817,16 @@ export class TUI extends Container {
 			});
 			return;
 		}
+		// A render while a keystroke's latch is set rides the fixed input cadence: an animation frame
+		// parked further out under the `tui.maxFps` ceiling is replaced by one the keystroke can ride.
+		// Input listeners (scroll wheel, toggles) and focused components alike request through here.
+		if (this.#inputRenderPending && this.#renderTimer && !this.#nativeLive) {
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+			this.#renderRequested = true;
+			this.#scheduleRender();
+			return;
+		}
 		this.#requestOrdinaryRender();
 	}
 
@@ -2913,10 +2932,13 @@ export class TUI extends Container {
 		}
 		const now = this.#renderScheduler.now();
 		const elapsed = now - this.#lastRenderAt;
-		// Only background frames pay the offline floor; input retains the normal
-		// cadence, grace window and adaptive/output backpressure.
-		const interval = this.#offlineLinux && !this.#inputRenderPending ? 100 : TUI.#MIN_RENDER_INTERVAL_MS;
-		const cadenceDelay = Math.max(0, interval - elapsed);
+		// Offline Linux background frames are capped at 10 fps; an explicitly lower
+		// maxFps ceiling still applies. Input keeps the upstream responsive cadence.
+		const configuredIntervalMs = minFrameIntervalMs();
+		const frameIntervalMs = this.#inputRenderPending
+			? Math.min(TUI.#INPUT_FRAME_INTERVAL_MS, configuredIntervalMs)
+			: Math.max(configuredIntervalMs, this.#offlineLinux ? 100 : 0);
+		const cadenceDelay = Math.max(0, frameIntervalMs - elapsed);
 		// Adaptive backpressure — target ~50% render duty cycle: the next frame
 		// starts no sooner than `last_frame_end + last_frame_cost`, i.e.
 		// `last_frame_start + 2 × last_frame_cost`. So `elapsed` (which counts
@@ -3010,6 +3032,11 @@ export class TUI extends Container {
 			data = data.slice(0, searchFrom + match.index) + data.slice(searchFrom + match.index + match[0].length);
 		}
 		if (data.length === 0) return;
+		// Every keystroke arms the input latch before any consumer runs, so whichever consumer
+		// requests the paint — an input listener or the focused component — it is paced at the input
+		// cadence, not the ceiling. Input that triggers no render leaves the latch for the next frame
+		// to consume at the 30 fps floor once; harmless.
+		this.#inputRenderPending = true;
 
 		if (
 			this.#heldInput !== undefined &&
@@ -3034,17 +3061,13 @@ export class TUI extends Container {
 				this.setFocus(focusedOverlay.preFocus);
 			}
 		}
-		if (this.#offlineLinux) {
-			this.#inputRenderPending = true;
-			// Re-evaluate a background timer on the existing scheduler rather than
-			// making an input echo wait for its slower offline deadline.
-			if (this.#renderTimer) {
-				this.#renderTimer.cancel();
-				this.#renderTimer = undefined;
-				this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
-			}
+		if (this.#offlineLinux && this.#renderTimer) {
+			// Input can arrive without requesting another render. Re-evaluate a
+			// pending offline background timer so it does not delay input echo.
+			this.#renderTimer.cancel();
+			this.#renderTimer = undefined;
+			this.#renderScheduler.scheduleImmediate(() => this.#scheduleRender());
 		}
-
 		// Ctrl+C/Esc use app-level double-press windows. Give those gestures one
 		// frame to drain queued input before an ordinary repaint; delaying every
 		// key would make idle navigation pay a full frame of latency.

@@ -251,8 +251,10 @@ describe("createAgentSession MCP server instructions (deferred UI)", () => {
 			appendSystemPrompt: USER_APPEND_MARKER,
 		});
 		try {
-			// A zero startup window waits for the fixture's handshake even under load,
-			// so both sources are present in the initial prompt.
+			// Without `hasUI`, MCP discovery is not deferred, and a zero startup window
+			// waits for the fixture to connect during session creation (the default
+			// window can end first on a loaded host), so the first prompt already
+			// carries both the server instructions and the user's append prompt.
 			const prompt = session.systemPrompt.join("\n");
 
 			expect(prompt).toContain(SERVER_INSTRUCTIONS);

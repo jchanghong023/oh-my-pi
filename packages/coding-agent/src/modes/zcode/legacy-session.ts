@@ -178,7 +178,7 @@ export class LegacySessionBridge {
 		}
 		for (const ref of refs) {
 			const childSessionId =
-				ref.session?.sessionId ??
+				ref.session?.sessionManager.getSessionId() ??
 				Object.values(persisted).find(child => child.parent === null && child.agentId === ref.id)?.header?.id;
 			if (!childSessionId) throw new Error(`Subagent ${ref.id} has no authoritative session identity`);
 			const base = {

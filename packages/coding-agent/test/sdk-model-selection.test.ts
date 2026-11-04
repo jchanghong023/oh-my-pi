@@ -25,6 +25,7 @@ import { getBundledAgent } from "@oh-my-pi/pi-coding-agent/task/agents";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import { isLocalAgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { createPersistedSubagentReviverFactory } from "@oh-my-pi/pi-coding-agent/task/persisted-revive";
@@ -379,7 +380,9 @@ describe("createAgentSession deferred model pattern resolution", () => {
 				enableLsp: false,
 			})(ref);
 			if (!reviver) throw new Error("Expected a cold task reviver");
-			revived = await reviver(ref);
+			const restored = await reviver(ref);
+			if (!isLocalAgentSession(restored)) throw new Error("Cold SDK fixture must revive on its owning thread");
+			revived = restored;
 			expect(modelListCalls).toBe(0);
 			expect(revived.model?.provider).toBe("runtime-provider");
 			expect(revived.model?.id).toBe("runtime-fallback-model");

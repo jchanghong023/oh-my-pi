@@ -72,3 +72,9 @@ packages/coding-agent/src/spec-driven/vendor/resources/openspec/** -text
 packages/coding-agent/src/spec-driven/vendor/resources/superpowers/** -text
 packages/coding-agent/src/spec-driven/vendor/resources/jch/** -text
 
+# Shell parser corpora and golden stdout retain significant trailing spaces.
+crates/pi-shell/src/bash/syntax/suites/data/*.txt whitespace=-blank-at-eol
+crates/pi-shell/src/testkit/fixtures/skeleton/*.out whitespace=-blank-at-eol
+# Keep the vendored JSON Schema test suite in its upstream form.
+packages/omptype/test/fixtures/json-schema-test-suite/** whitespace=-blank-at-eol
+

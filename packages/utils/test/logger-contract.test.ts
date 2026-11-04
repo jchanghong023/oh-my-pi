@@ -571,6 +571,36 @@ function consumerFallbackDir(root: string): string {
 }
 
 describe("diagnostic consumer contracts", () => {
+	test("filters offline worker forwarding and foreign records before touching context or sinks", async () => {
+		const result = await runDiagnosticConsumer(
+			`
+			const forwarded = [];
+			const received = [];
+			let touched = 0;
+			const context = { get secret() { touched++; return "not serialized"; } };
+			logger.setTransports({ file: false });
+			const dispose = logger.registerLogSink(event => received.push(event.message));
+			logger.setLogForwarder({ emit: event => forwarded.push(event.message), flush() {} });
+			logger.info("filtered worker", context);
+			logger.warn("forwarded warning");
+			logger.emitForeign({ level: "debug", message: "filtered relay", context, timestamp: new Date() });
+			logger.setLogForwarder(undefined);
+			logger.emitForeign({ level: "info", message: "filtered foreign", context, timestamp: new Date() });
+			logger.emitForeign({ level: "warn", message: "foreign warning", context: undefined, timestamp: new Date() });
+			dispose();
+			fs.writeFileSync(path.join(root, "result.json"), JSON.stringify({ touched, forwarded, received }));
+		`,
+			{ offline: "1" },
+		);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toBe("");
+		expect(JSON.parse(await fs.readFile(path.join(result.root, "result.json"), "utf8"))).toEqual({
+			touched: 0,
+			forwarded: ["forwarded warning"],
+			received: ["foreign warning"],
+		});
+	});
+
 	test("isolates concurrent contexts, inherits nested fields, and shares merged context with sinks", async () => {
 		const result = await runDiagnosticConsumer(`
 			const observed = [];

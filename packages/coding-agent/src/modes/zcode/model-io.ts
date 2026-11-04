@@ -1,11 +1,11 @@
 import * as fs from "node:fs/promises";
 import type { Model, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
-import type { ArtifactManager } from "../../session/artifacts";
+import type { ArtifactManagerApi } from "../../session/artifacts";
 
 export interface ZCodeModelIoRetentionOptions {
 	sessionId: string;
 	/** The original session owner supplies its artifact manager. */
-	artifacts: () => ArtifactManager | null;
+	artifacts: () => ArtifactManagerApi | null;
 	/** Diagnostic failure only: original ZCode capture never interrupts model execution. */
 	onError: (error: Error) => void;
 }

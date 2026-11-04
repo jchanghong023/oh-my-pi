@@ -7,6 +7,11 @@
 - Allow HTTP callers to choose a fixed retry delay instead of server hints or exponential backoff.
 - Retain warnings and errors by default in offline mode, and honor `OMP_LOG_LEVEL` overrides for troubleshooting without serializing filtered records.
 
+### Added
+
+- Added `logger.setLogForwarder(forwarder)` (`LogForwarder { emit, flush }`), which routes a thread's records — `withContext` fields merged, context reduced to clone-safe JSON — to another thread instead of its own file and sinks, and `logger.emitForeign(event)`, which writes such a record with its original timestamp and runs the sinks without the caller's `withContext` fields
+- Added `expandTilde(path, home?)` (`@oh-my-pi/pi-utils/path`), which expands a leading `~` to the home directory; `@oh-my-pi/pi-coding-agent/tools/path-utils` re-exports it ([#17931](https://github.com/can1357/oh-my-pi/pull/17931) by [@will-bogusz](https://github.com/will-bogusz))
+
 ## [18.16.0] - 2026-11-02
 
 - Restore upstream archive encoding without the additional `AbortSignal` cancellation interface.

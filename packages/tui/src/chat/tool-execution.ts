@@ -1,7 +1,13 @@
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Box } from "../components/box";
-import { SPINNER_ADVANCE_MS } from "../components/loader";
+import {
+	onSpinnerIntervalChange,
+	sharedSpinnerFrame,
+	spinnerAnimated,
+	spinnerInterval,
+	spinnerTickDelay,
+} from "../spinner-clock";
 import { Image } from "../components/image";
 import { Spacer } from "../components/spacer";
 import { Text } from "../components/text";
@@ -31,7 +37,7 @@ import {
 	rootToggleExpanded,
 } from "../native/node";
 import { plainText } from "../native/spans";
-import { diagnosticsSection, displayPath, toolHead } from "../tools/native-view";
+import { diagnosticsSection, displayPath, resultText, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
 import { imageLinksEnabled, linkedImageText } from "../prompt/image-references";
@@ -51,6 +57,7 @@ import type { XdevMountedState } from "../tools/xdev";
 import { isFramedBlockComponent, markFramedBlockComponent, renderStatusLine, WidthAwareText } from "../render/index";
 import { cachedPngConversion, convertImageToPngShared, imagePayloadKey } from "./image-loading";
 import { FenceFigure } from "./fence-figure";
+import { SpotlightNotices } from "./spotlight";
 import { sanitizeWithOptionalSixelPassthrough } from "../render/sixel";
 import { renderDiff } from "../chrome/diff";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "./display-preferences";
@@ -384,27 +391,27 @@ const NATIVE_STATUS_TONE: Record<TspCardStatus, TspTone | undefined> = {
 	cancelled: "info",
 };
 
-/** Phase-locked spinner glyph index shared by every live tool block so parallel
- * spinners advance in lockstep instead of each tracking its own start time. */
-export function sharedSpinnerFrame(frameCount: number, now: number = performance.now()): number {
-	return frameCount > 0 ? Math.floor(now / SPINNER_ADVANCE_MS) % frameCount : 0;
-}
-
 /** Live tool blocks currently driving a spinner. A single shared ticker (below)
  * advances and repaints every registered block per glyph step, so N concurrent
- * live/streaming blocks — e.g. parallel `task` subagents — cost one shared timer
- * and one coalesced render frame per tick instead of N unsynchronized timers
- * each independently waking the render scheduler (issue #8731). */
+ * live/streaming blocks — e.g. parallel `task` subagents — cost one timer at the
+ * shared spinner cadence and one coalesced render frame per tick instead of N
+ * unsynchronized timers each independently waking the render scheduler
+ * (issue #8731). The glyph index comes from `sharedSpinnerFrame`, so blocks
+ * stay in phase with every other spinner on the clock. */
 const liveSpinnerBlocks = new Set<{ tickSpinner(frame: number): void }>();
-
 let sharedSpinnerTimer: NodeJS.Timeout | undefined;
 
-/** Arm the shared spinner ticker if it is not already running. */
+/**
+ * Arm the shared ticker if it is not already running and spinners animate. Ticks land on the shared
+ * clock's boundaries, so this ticker and the working row repaint in the same frame. Each tick re-reads
+ * the period; a tick under a static spinner paints frame 0 and leaves the ticker stopped.
+ */
 function ensureSharedSpinnerTicker(): void {
-	if (sharedSpinnerTimer || isNativeRendering()) return;
-	sharedSpinnerTimer = setInterval(() => {
-		// A native surface opened while blocks were live: the terminal clocks
-		// their spinners, so the repaint ticker has nothing left to do.
+	if (sharedSpinnerTimer || isNativeRendering() || !spinnerAnimated()) return;
+	sharedSpinnerTimer = setTimeout(() => {
+		sharedSpinnerTimer = undefined;
+		// A native surface opened while blocks were live: the terminal clocks their spinners, so the
+		// repaint ticker has nothing left to do — drop the live blocks and stay stopped.
 		if (isNativeRendering()) {
 			stopSharedSpinnerTicker();
 			return;
@@ -412,8 +419,13 @@ function ensureSharedSpinnerTicker(): void {
 		const frame = sharedSpinnerFrame(theme.spinnerFrames.length);
 		// Removing the current block mid-iteration is safe on a Set.
 		for (const block of liveSpinnerBlocks) block.tickSpinner(frame);
-	}, SPINNER_ADVANCE_MS);
+		if (liveSpinnerBlocks.size > 0) ensureSharedSpinnerTicker();
+	}, spinnerTickDelay(spinnerInterval()));
 }
+// Static → animated: nothing is ticking, so restart.
+onSpinnerIntervalChange(() => {
+	if (liveSpinnerBlocks.size > 0) ensureSharedSpinnerTicker();
+});
 
 /** Register a live block with the shared ticker, starting it on first use. */
 export function registerSpinnerBlock(block: { tickSpinner(frame: number): void }): void {
@@ -425,22 +437,28 @@ export function registerSpinnerBlock(block: { tickSpinner(frame: number): void }
 export function unregisterSpinnerBlock(block: { tickSpinner(frame: number): void }): void {
 	if (!liveSpinnerBlocks.delete(block)) return;
 	if (liveSpinnerBlocks.size === 0 && sharedSpinnerTimer) {
-		clearInterval(sharedSpinnerTimer);
+		clearTimeout(sharedSpinnerTimer);
 		sharedSpinnerTimer = undefined;
 	}
 }
 
 /** Stop the shared spinner ticker and drop every registered live block.
  *  Called on interactive-mode teardown so a stray live block cannot keep the
- *  process-wide spinner interval alive past shutdown (lingering event-loop
+ *  process-wide spinner timer alive past shutdown (lingering event-loop
  *  handles pin the process; cf. `postmortem.quit`). Test files that assert on
  *  ticker arming also use this to start from a clean slate. */
 export function stopSharedSpinnerTicker(): void {
 	liveSpinnerBlocks.clear();
 	if (sharedSpinnerTimer) {
-		clearInterval(sharedSpinnerTimer);
+		clearTimeout(sharedSpinnerTimer);
 		sharedSpinnerTimer = undefined;
 	}
+}
+
+/** Whether the shared spinner ticker has a tick armed. Test seam: other timers on a fake clock
+ *  (collab relay heartbeats) make a raw timer count ambiguous. */
+export function sharedSpinnerTickerArmed(): boolean {
+	return sharedSpinnerTimer !== undefined;
 }
 
 // Stable per-instance counter so each tool execution's inline images get a
@@ -554,6 +572,8 @@ export class ToolExecutionComponent extends Container {
 	// LSP diagnostics that arrived after the result (native only), shown in the frame.
 	#lateDiagnostics: readonly FileDiagnosticsResult[] | undefined;
 	readonly #nativeImages = new NativeImageCache();
+	// The Spotlight notice drawn after the card in a native transcript (see nativeTrailers).
+	readonly #spotlight = new SpotlightNotices();
 	// Wall clock captured whenever a task card is rebuilt.
 	#taskRenderNowMs = Date.now();
 	// Set on each `render()` when the last painted pending shape must be
@@ -771,6 +791,9 @@ export class ToolExecutionComponent extends Container {
 		this.#blockVersion++;
 		this.#isPartial = isPartial;
 		this.#displaceableByToolName = displaceableToolName(this.#toolName, result, isPartial);
+		if (!isPartial && this.#toolCallId !== undefined) {
+			this.#spotlight.set(this.#toolCallId, result.details, resultText(result));
+		}
 		// When tool is complete, ensure args are marked complete so spinner stops
 		if (!isPartial) {
 			this.#argsComplete = true;
@@ -1128,6 +1151,11 @@ export class ToolExecutionComponent extends Container {
 	handleNativeEvent(event: NativeUiEvent): void {
 		const expanded = rootToggleExpanded(event);
 		if (expanded !== undefined) this.setExpanded(expanded);
+	}
+
+	/** The result's Spotlight notice, a block of its own right after the card (visible while it is collapsed). */
+	nativeTrailers(): readonly Component[] {
+		return this.#spotlight.list();
 	}
 
 	/** The file paths this call targets (edit/write/apply_patch args), display-relative. */
@@ -1501,6 +1529,7 @@ export class ToolExecutionComponent extends Container {
 	setToolActivityVisible(visible: boolean): void {
 		if (this.#toolActivityVisible !== visible) this.#blockVersion++;
 		this.#toolActivityVisible = visible;
+		this.#spotlight.setHidden(!visible);
 		super.invalidate();
 	}
 
