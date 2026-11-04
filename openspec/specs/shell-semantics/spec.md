@@ -145,3 +145,37 @@ OMP MUST 将 Windows `timeout -k` 的取消回退与可投递的 POSIX KILL 区�
 - **WHEN** Windows 上进程内操作数不响应初次取消，随后 `-k` 升级期限到达
 - **THEN** 未使用 `--preserve-status` MUST 返回 124；使用 `--preserve-status` 的取消回退 MUST 返回 128；不得仅因升级期限到达而返回 137。
 - **AND** POSIX 实际 KILL 的现有 137 契约保持不变。
+
+### Requirement: 上游 Zsh 引擎的 Windows 构建兼容
+
+OMP MUST 修复继承的 Zsh 引擎在 Windows 引用 Unix 专属模块和 `libc` 的构建缺陷，不通过禁用模块、弱化静态检查或把 POSIX 错误码当作 Win32 错误码来绕过。
+
+已确认上游来源为 `can1357/oh-my-pi@36de1b3221364b7387bfab31bfb5bbf33dd3b70e`：以下代码及 `pi-shell` 的 `libc` 仅限 Unix 依赖声明与该提交一致，Windows x64 的 `bun run fastcheck` 实际报告了对应的 8 条 `E0433`；它们不是 fork 合并冲突造成的接口不匹配。纯格式、局部变量命名及 Clippy 误报不作为本节的上游业务缺陷。
+
+- `bash/vm/jobctl.rs` 无条件调用仅在 Unix 导出的 `sys::proc`，产生 2 条错误。
+- `bash/vm/builtins/zsh_mod_zftp/io.rs` 无条件使用 `libc::EBADF`、`libc::EIO`、`libc::EPIPE`，产生 4 条错误。
+- `bash/vm/zle/comp/computil/files.rs` 和 `bash/vm/zle/widgets/isearch.rs` 无条件引用 `libc::PATH_MAX`，各产生 1 条错误；运行期的 `unwrap_or` 无法补救编译期名称解析失败。
+
+#### Scenario: 非 Unix 平台处理进程停止事件
+
+- **WHEN** 在 Windows 构建或处理 Shell 外部进程状态事件
+- **THEN** MUST 沿用宿主进程事件链路，不引用 Unix 专属的进程状态探针，也不伪造系统探测结果。
+- **AND** Unix 仍通过原有探针过滤已经恢复运行的陈旧停止事件，其他作业控制语义保持不变。
+
+#### Scenario: FTP 产生或分类 I/O 错误
+
+- **WHEN** Zsh FTP 遇到关闭的文件描述符、无效或短数据块、断开的管道
+- **THEN** MUST 复用引擎的坏文件描述符错误和跨平台 I/O 错误分类，不要求 Windows 提供 Unix `libc`。
+- **AND** Unix 原有 `EBADF`、`EIO`、断管分类及错误输出语义保持；非 Unix 不把数值相同的 POSIX errno 当作本机操作系统错误。
+
+#### Scenario: ZLE 补全与增量搜索的路径缓冲界限
+
+- **WHEN** 在 Windows 或 Unix 构建 ZLE 补全和增量搜索
+- **THEN** MUST 共享平台可编译的 ZLE 缓冲上限：Unix 使用原有 `libc::PATH_MAX`，非 Unix 使用现有 Zsh 约定的 1024 字节界限；补全保留两倍缓冲界限，增量搜索保留原有长度判定。
+- **AND** 此值只约束原有 ZLE 算法缓冲，不作为 Windows 文件系统路径限制，不削弱宿主长路径支持。
+
+#### Scenario: 验证与证据边界
+
+- **WHEN** 验证上述上游构建缺陷的修复
+- **THEN** 使用本机既有 `bun run fastcheck` 确认名称解析、格式和静态检查通过，不以新增 lint 豁免、跳过模块或平台功能替代修复。
+- **AND** 静态检查不冒充真实 FTP、PTY、作业控制或 Unix 运行验证；其他平台和运行时场景只按实际执行结果报告。

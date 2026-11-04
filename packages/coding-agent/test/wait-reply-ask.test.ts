@@ -80,7 +80,6 @@ describe("a reply wait on an agent in `ask`", () => {
 			slashCommands: [],
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			toolNames: ["ask"],
 		});
 		session = created.session;

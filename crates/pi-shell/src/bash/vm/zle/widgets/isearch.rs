@@ -543,7 +543,7 @@ fn ungetkeycmd(zw: &mut Zw<'_, '_>) {
 
 /// The `PATH_MAX` zsh limits the search string to (bytes).
 fn path_max() -> usize {
-	usize::try_from(libc::PATH_MAX).unwrap_or(1024)
+	super::super::PATH_BUFFER_MAX
 }
 
 /// A key command read during the search.

@@ -565,7 +565,7 @@ pub fn perform(
 		ZftpOp::Poll { fd } => {
 			let h = vp.fds.handle(*fd);
 			if !h.is_open() {
-				let e = io::Error::from_raw_os_error(libc::EBADF);
+				let e = io::Error::other(crate::bash::fd::BadFd);
 				return Ok(ZftpAns::Polled(Err(Fail::of(&e))));
 			}
 			ZftpAns::Polled(Ok(h.poll_read(tcx, &mut []).is_ready()))
@@ -819,7 +819,7 @@ impl Xfer {
 							.out
 							.msgs
 							.push((false, "block too large to handle".into()));
-						self.got(spec, -1, Some(io::Error::from_raw_os_error(libc::EIO)));
+						self.got(spec, -1, Some(input_output_error()));
 						continue;
 					}
 					self.at = XferAt::Body { size, got: 0, flags: hdr[0] };
@@ -856,7 +856,7 @@ impl Xfer {
 						match r {
 							Ok(0) => {
 								self.out.msgs.push((false, "short data block".into()));
-								self.got(spec, -1, Some(io::Error::from_raw_os_error(libc::EIO)));
+								self.got(spec, -1, Some(input_output_error()));
 							},
 							Ok(n) => self.at = XferAt::Body { size, got: got + n, flags },
 							Err(None) => {
@@ -1027,5 +1027,16 @@ impl Xfer {
 }
 
 fn is_epipe(e: &io::Error) -> bool {
-	e.kind() == io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(libc::EPIPE)
+	e.kind() == io::ErrorKind::BrokenPipe
+}
+
+fn input_output_error() -> io::Error {
+	#[cfg(unix)]
+	{
+		io::Error::from_raw_os_error(libc::EIO)
+	}
+	#[cfg(not(unix))]
+	{
+		io::ErrorKind::Other.into()
+	}
 }

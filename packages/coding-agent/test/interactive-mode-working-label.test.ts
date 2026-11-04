@@ -139,7 +139,7 @@ describe("InteractiveMode live working label", () => {
 			modelRegistry: session.modelRegistry,
 		});
 		cfgDisplayMode.override(current.settings, "compact");
-		const live = new InteractiveMode(current, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
 		try {
 			await live.init({ suppressWelcomeIntro: true });
 			live.ensureLoadingAnimation();
@@ -226,7 +226,7 @@ describe("InteractiveMode live working label", () => {
 			modelRegistry: session.modelRegistry,
 		});
 		cfgDisplayMode.override(current.settings, "compact");
-		const live = new InteractiveMode(current, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
 		const contract = new DisplayContract(2113);
 		let fakeTimers = false;
 		try {
@@ -317,16 +317,7 @@ describe("InteractiveMode live working label", () => {
 				modelRegistry: session.modelRegistry,
 			});
 			cfgDisplayMode.override(current.settings, "compact");
-			const live = new InteractiveMode(
-				current,
-				"test",
-				undefined,
-				() => {},
-				undefined,
-				undefined,
-				undefined,
-				composer,
-			);
+			const live = new InteractiveMode(current, "test", undefined, undefined, undefined, undefined, composer);
 			const contract = new DisplayContract(2112);
 			let unwatch = () => {};
 			let fakeTimers = false;

@@ -27,7 +27,7 @@ use crate::bash::{
 };
 
 /// zsh `PATH_MAX2`.
-const PATH_MAX2: usize = libc::PATH_MAX as usize * 2;
+const PATH_MAX2: usize = crate::bash::vm::zle::PATH_BUFFER_MAX * 2;
 
 /// What `compfiles` reads from the completion state once.
 struct Env {

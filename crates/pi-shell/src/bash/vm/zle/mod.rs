@@ -47,6 +47,13 @@ use crate::bash::{
 	vm::{Cx, Kernel, expand::Expander, proc::Vproc, zsh::params as zparams},
 };
 
+/// ZLE's path buffer bound, not a limit on host filesystem paths.
+#[cfg(unix)]
+pub const PATH_BUFFER_MAX: usize = libc::PATH_MAX as usize;
+/// Zsh's portable path buffer bound on targets without Unix `PATH_MAX`.
+#[cfg(not(unix))]
+pub const PATH_BUFFER_MAX: usize = 1024;
+
 /// zsh `ZSH_INVALID_WCHAR_BASE`: a byte that is not part of a valid
 /// character is kept in the line as this private-use character plus the
 /// byte, so it converts back unchanged.

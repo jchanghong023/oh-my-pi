@@ -134,7 +134,6 @@ try {
 			disableExtensionDiscovery: true,
 			enableMCP: false,
 			enableLsp: false,
-			skipPythonPreflight: true,
 			cacheWarming: false,
 			contextFiles: [],
 			promptTemplates: [],

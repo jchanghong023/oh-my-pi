@@ -97,7 +97,7 @@ describe("Dev native TSP surface", () => {
 			onResize();
 		};
 		const composer = new Composer({ terminal });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", undefined, undefined, undefined, undefined, composer);
 		// Composer owns its real render scheduler. Only the existing test
 		// terminal's hello/ack delivery is driven here, with no renderer mock.
 		pump = setInterval(() => {

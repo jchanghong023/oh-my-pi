@@ -26,10 +26,12 @@ use std::task::{Context, Poll, Waker};
 
 use bstr::{BStr, BString};
 
+#[cfg(unix)]
+use super::proc::Live;
 use super::{
 	Cx, Kernel, Shell,
 	exec::{self, Flow},
-	proc::{Frame, FrameKind, JobState, Live, PendingWrite, Saved, Scratch, ScriptKind, Vproc},
+	proc::{Frame, FrameKind, JobState, PendingWrite, Saved, Scratch, ScriptKind, Vproc},
 	state,
 };
 use crate::bash::{
@@ -1292,8 +1294,9 @@ impl Shell {
 			let Some(leader) = leader_of(&self.k, vpid) else {
 				continue;
 			};
-			// A stop already undone (the job was continued before this turn
-			// saw it) is not reported.
+			// On Unix, a stop already undone before this turn is not reported.
+			// Other hosts report state through process events without this OS probe.
+			#[cfg(unix)]
 			if matches!(ev, ProcEvent::Stopped(_)) && !self.ext_stopped(vpid) {
 				continue;
 			}
@@ -1368,6 +1371,7 @@ impl Shell {
 
 	/// Whether the program vproc `vpid` waits for is stopped now (`true`
 	/// when it cannot be told).
+	#[cfg(unix)]
 	fn ext_stopped(&self, vpid: Vpid) -> bool {
 		let Some(p) = self.procs.iter().find(|p| p.vpid == vpid) else {
 			return true;

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fix Windows compilation failures in embedded Zsh job control, FTP error handling and line-editor path buffers.
 - Build native SIMD dependencies correctly on Windows systems with non-UTF-8 locale settings.
 - Keep Knowledge caches within a shared process budget that adapts to memory pressure, and honor zero available memory on Linux.
 - Restore startup and external shell commands on glibc 2.17, and preserve native loader errors without retrying the same failed addon.
