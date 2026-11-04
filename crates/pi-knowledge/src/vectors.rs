@@ -534,16 +534,82 @@ pub(crate) fn read_vector_ids(
 
 /// Validate every row before an embedding request, retaining only each valid
 /// generation's IDs and the exact f64 normalization scales already computed.
-pub(crate) fn read_vector_norms(
+pub(crate) fn read_vector_norms<F>(
 	connection: &Connection,
 	model: &str,
 	dimensions: usize,
 	index: Option<&str>,
-	check: &dyn Fn() -> CoreResult<()>,
-) -> CoreResult<VectorNorms> {
+	check: F,
+) -> CoreResult<VectorNorms>
+where
+	F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+{
 	let mut norms = VectorNorms { generations: Vec::new() };
-	read_vector_data(connection, model, dimensions, index, None, check, false, Some(&mut norms))?;
-	Ok(norms)
+	let Some(pool) = crate::parallel::pool().filter(|_| {
+		dimensions
+			.checked_mul(4)
+			.is_some_and(|bytes| bytes > 0 && bytes <= 512 * 1024)
+	}) else {
+		read_vector_data(
+			connection,
+			model,
+			dimensions,
+			index,
+			None,
+			&check,
+			false,
+			Some(&mut norms),
+		)?;
+		return Ok(norms);
+	};
+	pool.in_place_scope(|scope| {
+		let mut validator =
+			parallel::Validator::new(scope, parallel::batch_workers(pool), dimensions, check.clone());
+		let mut generations = connection.prepare(
+			"SELECT g.index_id FROM wiki_vector_generations g JOIN doc_indexes i ON i.id=g.index_id \
+			 WHERE g.complete=1 AND g.model=? AND g.dimensions=? AND i.name NOT GLOB '__building__*' \
+			 AND (? IS NULL OR i.name=?) ORDER BY i.id",
+		)?;
+		let ids = generations
+			.query_map(params![model, dimensions as i64, index, index], |row| row.get::<_, i64>(0))?;
+		for id in ids {
+			check()?;
+			let id = id?;
+			let mut statement = connection.prepare(SCOPED_VECTOR_ROWS)?;
+			let mut rows = statement.query([id])?;
+			let mut count = 0usize;
+			let mut valid = true;
+			while let Some(row) = rows.next()? {
+				check()?;
+				count += 1;
+				let section_id = row.get(0)?;
+				let rusqlite::types::ValueRef::Blob(bytes) = row.get_ref(1)? else {
+					valid = false;
+					break;
+				};
+				if Some(bytes.len()) != dimensions.checked_mul(4) {
+					valid = false;
+					break;
+				}
+				validator.push(section_id, bytes, &check)?;
+			}
+			let scales = validator.finish(&check)?;
+			let vector_count: i64 = connection.query_row(
+				"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
+				[id],
+				|row| row.get(0),
+			)?;
+			if valid
+				&& usize::try_from(vector_count).ok() == Some(count)
+				&& let Some(rows) = scales
+			{
+				norms
+					.generations
+					.push(ValidatedGeneration { index_id: id, rows });
+			}
+		}
+		Ok(norms)
+	})
 }
 
 /// Select IDs from an already validated snapshot without reading vector BLOBs.
@@ -719,6 +785,7 @@ pub(crate) fn score_matrix(
 /// Read and score one row at a time. A generation has its own bounded top-k,
 /// which is committed only after every row (including out-of-scope rows) and
 /// its vector count have been validated.
+#[cfg(test)]
 pub(crate) fn score_stream(
 	connection: &Connection,
 	model: &str,
@@ -788,7 +855,7 @@ where
 	pool.in_place_scope(|scope| {
 		let mut scorer = parallel::Scorer::new(
 			scope,
-			pool.current_num_threads(),
+			parallel::batch_workers(pool),
 			query,
 			dimensions,
 			limit,

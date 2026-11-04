@@ -442,8 +442,9 @@ describe("ZCode actual public app-server process", () => {
 		if (!childId) throw new Error("Native child history was not registered");
 		const watched = await subscribe(peer, childId, "web-remote-replayable");
 		await output(peer, childId, "ZCODE_TEST_CHILD_MARKER_DONE");
-		const count = config.requests.length;
 		expect(await peer.request("session/close", { sessionId: id })).toEqual({ closed: true });
+		// Capture after close settles native work; child completion can still wake the parent before then.
+		const count = config.requests.length;
 		const rows = v4ConversationRowsRangeResultSchema.parse(
 			await peer.request("v4/conversation/rowsRange", { sessionId: childId, limit: 100 }),
 		);

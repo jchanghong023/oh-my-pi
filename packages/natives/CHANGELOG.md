@@ -4,10 +4,12 @@
 
 ### Fixed
 
+- Keep Knowledge caches within a shared process budget that adapts to memory pressure, and honor zero available memory on Linux.
 - Restore startup and external shell commands on glibc 2.17, and preserve native loader errors without retrying the same failed addon.
 
 ### Changed
 
+- Scale Knowledge search across available CPU cores and memory, accelerating full-text scoring, cold snapshots, and large vector validation without changing results or cursors.
 - Overlap bounded Knowledge document projection preparation with candidate scoring on the same read snapshot.
 - Use bounded parallel CPU batches for large Knowledge vector searches while preserving exact scores and source-order ties.
 - Reduce repeated Knowledge search work by reusing vector validation and grep snapshots, and filtering paths before payload reads.

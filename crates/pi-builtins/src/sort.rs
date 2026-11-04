@@ -68,6 +68,10 @@ mod buffer_hint {
 use std::{ffi::OsString, path::Path};
 
 use pi_vfs::BlockingFs;
+#[cfg(any(target_os = "linux", test))]
+use pi_vfs::memory::meminfo_available_bytes;
+#[cfg(test)]
+use pi_vfs::memory::cgroup_memory_headroom;
 
 // Heuristics to size the external sort buffer without overcommit memory.
 pub(crate) fn automatic_buffer_size(fs: &BlockingFs, files: &[OsString]) -> usize {
@@ -127,7 +131,7 @@ fn file_size_hint(fs: &BlockingFs, files: &[OsString]) -> Option<usize> {
 fn available_memory_hint() -> Option<usize> {
 	let system = system_available_memory();
 	#[cfg(target_os = "linux")]
-	let system = match (system, linux_cgroup_memory_headroom()) {
+	let system = match (system, pi_vfs::memory::cgroup_available_bytes()) {
 		(Some(system), Some(cgroup)) => Some(system.min(cgroup)),
 		(system, cgroup) => system.or(cgroup),
 	};
@@ -156,123 +160,6 @@ fn system_available_memory() -> Option<u128> {
 	physical_memory_bytes()
 }
 
-/// The memory available to start new work, from the text of
-/// `/proc/meminfo`: `MemAvailable`, or on kernels without it `MemFree +
-/// Buffers + Cached`. The file counts in KiB. (uucore's reader multiplied
-/// the procfs crate's values, already in bytes, by 1024 again, so available
-/// memory always gave the 1 GiB maximum; only a cgroup limit made the hint
-/// smaller.)
-#[cfg(any(target_os = "linux", test))]
-fn meminfo_available_bytes(meminfo: &str) -> Option<u128> {
-	let field = |name: &str| -> Option<u128> {
-		meminfo
-			.lines()
-			.find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))?
-			.split_ascii_whitespace()
-			.next()?
-			.parse::<u128>()
-			.ok()
-	};
-	let kib = field("MemAvailable").filter(|&kib| kib > 0).or_else(|| {
-		let free = field("MemFree")? + field("Buffers").unwrap_or(0) + field("Cached").unwrap_or(0);
-		(free > 0).then_some(free)
-	})?;
-	Some(kib * 1024)
-}
-
-/// Memory the process's cgroups still let it use. `/proc/meminfo` reports the
-/// whole machine, so in a container or a systemd scope with a lower limit a
-/// buffer sized from it gets the process killed.
-#[cfg(target_os = "linux")]
-fn linux_cgroup_memory_headroom() -> Option<u128> {
-	let membership = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-	cgroup_memory_headroom(&membership, Path::new("/sys/fs/cgroup"))
-}
-
-/// The smallest `limit - usage` over the cgroup named in `membership` (the
-/// text of `/proc/self/cgroup`) and its ancestors under `root`, where each
-/// limit is the lower of `memory.max` and `memory.high` (cgroup v2), or
-/// `memory.limit_in_bytes` (cgroup v1, mounted at `root/memory`). `None`
-/// when no cgroup on the path sets a limit.
-#[cfg(any(target_os = "linux", test))]
-fn cgroup_memory_headroom(membership: &str, root: &Path) -> Option<u128> {
-	for line in membership.lines() {
-		let mut fields = line.splitn(3, ':');
-		let (Some(_), Some(controllers), Some(path)) = (fields.next(), fields.next(), fields.next())
-		else {
-			continue;
-		};
-		let relative = path.trim_start_matches('/');
-		let headroom = if controllers.is_empty() {
-			// cgroup v2: one unified hierarchy.
-			headroom_along(&root.join(relative), root, &CGROUP_V2)
-		} else if controllers.split(',').any(|controller| controller == "memory") {
-			let base = root.join("memory");
-			headroom_along(&base.join(relative), &base, &CGROUP_V1)
-		} else {
-			None
-		};
-		if headroom.is_some() {
-			return headroom;
-		}
-	}
-	None
-}
-
-/// Where a cgroup version reports a memory limit and its use.
-#[cfg(any(target_os = "linux", test))]
-struct MemoryFiles {
-	limits:      &'static [&'static str],
-	usage:       &'static str,
-	/// The `memory.stat` field counting page cache the kernel reclaims under
-	/// pressure: usage includes it, though it is not taken.
-	reclaimable: &'static str,
-}
-
-#[cfg(any(target_os = "linux", test))]
-const CGROUP_V2: MemoryFiles = MemoryFiles {
-	limits:      &["memory.max", "memory.high"],
-	usage:       "memory.current",
-	reclaimable: "inactive_file",
-};
-
-#[cfg(any(target_os = "linux", test))]
-const CGROUP_V1: MemoryFiles = MemoryFiles {
-	limits:      &["memory.limit_in_bytes"],
-	usage:       "memory.usage_in_bytes",
-	reclaimable: "total_inactive_file",
-};
-
-/// Walks from `dir` up to `top`, returning the smallest headroom that any
-/// level with a numeric limit allows.
-#[cfg(any(target_os = "linux", test))]
-fn headroom_along(dir: &Path, top: &Path, files: &MemoryFiles) -> Option<u128> {
-	let read = |dir: &Path, name: &str| -> Option<u128> {
-		std::fs::read_to_string(dir.join(name)).ok()?.trim().parse().ok()
-	};
-	let reclaimable = |dir: &Path| -> Option<u128> {
-		let stat = std::fs::read_to_string(dir.join("memory.stat")).ok()?;
-		stat.lines().find_map(|line| line.strip_prefix(files.reclaimable)?.strip_prefix(' ')?.parse().ok())
-	};
-	let mut smallest: Option<u128> = None;
-	let mut level = Some(dir);
-	while let Some(dir) = level {
-		// v2's "max" does not parse and so sets no limit; v1's "unlimited" is
-		// a huge number that never wins the minimum.
-		if let Some(limit) = files.limits.iter().filter_map(|name| read(dir, name)).min() {
-			let usage = read(dir, files.usage)
-				.unwrap_or(0)
-				.saturating_sub(reclaimable(dir).unwrap_or(0));
-			let headroom = limit.saturating_sub(usage);
-			smallest = Some(smallest.map_or(headroom, |smallest| smallest.min(headroom)));
-		}
-		if dir == top {
-			break;
-		}
-		level = dir.parent().filter(|parent| parent.starts_with(top));
-	}
-	smallest
-}
 
 fn clamp_hint(bytes: u128) -> usize {
 	let min = super::MIN_AUTOMATIC_BUF_SIZE as u128;

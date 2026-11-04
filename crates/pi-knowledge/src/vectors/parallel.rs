@@ -13,11 +13,18 @@ use std::{
 use rayon::ThreadPoolBuilder;
 use rayon::{Scope, ThreadPool};
 
-use super::{CoreResult, ExactTopK, KnowledgeError, ScoredRow, StreamScorer, insert_top_k};
+use super::{
+	CoreResult, ExactTopK, KnowledgeError, ScoredRow, StreamScorer, VectorNorm, insert_top_k,
+};
 
 const BATCH_BYTES: usize = 512 * 1024;
 const BATCH_ROWS: usize = 256;
 const MIN_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+
+pub(super) fn batch_workers(pool: &ThreadPool) -> usize {
+	let bytes = crate::parallel::memory_budget(128, 64 * 1024 * 1024);
+	pool.current_num_threads().min((bytes / BATCH_BYTES).max(1))
+}
 
 pub(super) fn pool_for(
 	rows: usize,
@@ -210,6 +217,163 @@ fn score_batch(
 		insert_top_k(&mut best, prototype.limit, ScoredRow { id: row.id, order: row.order, score });
 	}
 	Ok(best.into_sorted_vec())
+}
+
+/// Validation batches are consumed in source order, and only complete valid
+/// generations are published by the caller. SQLite never leaves its thread.
+pub(super) struct Validator<'a, 'scope, F> {
+	scope:      &'a Scope<'scope>,
+	workers:    usize,
+	dimensions: usize,
+	check:      F,
+	stopped:    Arc<AtomicBool>,
+	batch:      Batch,
+	pending:    VecDeque<Receiver<CoreResult<Option<Vec<VectorNorm>>>>>,
+	scales:     Vec<VectorNorm>,
+	valid:      bool,
+}
+
+impl<'a, 'scope, F> Validator<'a, 'scope, F>
+where
+	F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+{
+	pub(super) fn new(
+		scope: &'a Scope<'scope>,
+		workers: usize,
+		dimensions: usize,
+		check: F,
+	) -> Self {
+		Self {
+			scope,
+			workers,
+			dimensions,
+			check,
+			stopped: Arc::new(AtomicBool::new(false)),
+			batch: Batch::default(),
+			pending: VecDeque::new(),
+			scales: Vec::new(),
+			valid: true,
+		}
+	}
+
+	fn receive(&mut self, check: &dyn Fn() -> CoreResult<()>) -> CoreResult<()> {
+		let receiver = self.pending.front().expect("pending vector validation");
+		let result = loop {
+			check()?;
+			match receiver.recv_timeout(Duration::from_millis(10)) {
+				Ok(result) => break result?,
+				Err(RecvTimeoutError::Timeout) => {},
+				Err(RecvTimeoutError::Disconnected) => {
+					return Err(KnowledgeError::message(
+						"Documentation vector validation worker stopped",
+					));
+				},
+			}
+		};
+		self.pending.pop_front();
+		match result {
+			Some(mut scales) if self.valid => self.scales.append(&mut scales),
+			Some(_) => {},
+			None => {
+				self.valid = false;
+				self.scales.clear();
+			},
+		}
+		Ok(())
+	}
+
+	fn submit(&mut self, check: &dyn Fn() -> CoreResult<()>) -> CoreResult<()> {
+		if self.batch.rows.is_empty() {
+			return Ok(());
+		}
+		if self.pending.len() >= self.workers {
+			self.receive(check)?;
+		}
+		check()?;
+		let batch = std::mem::take(&mut self.batch);
+		let dimensions = self.dimensions;
+		let stopped = Arc::clone(&self.stopped);
+		let worker_check = self.check.clone();
+		let (sender, receiver) = mpsc::sync_channel(1);
+		self.scope.spawn(move |_| {
+			let check = || {
+				if stopped.load(Ordering::Relaxed) {
+					return Err(KnowledgeError::message("Documentation vector validation cancelled"));
+				}
+				worker_check()
+			};
+			let result = validate_batch(&batch, dimensions, &check);
+			let _ = sender.send(result);
+		});
+		self.pending.push_back(receiver);
+		Ok(())
+	}
+
+	pub(super) fn push(
+		&mut self,
+		id: i64,
+		bytes: &[u8],
+		check: &dyn Fn() -> CoreResult<()>,
+	) -> CoreResult<()> {
+		if self.batch.bytes.len().saturating_add(bytes.len()) > BATCH_BYTES
+			|| self.batch.rows.len() == BATCH_ROWS
+		{
+			self.submit(check)?;
+		}
+		self.batch.bytes.extend_from_slice(bytes);
+		self.batch.rows.push(Row { id, order: 0, scale: 0.0 });
+		Ok(())
+	}
+
+	pub(super) fn finish(
+		&mut self,
+		check: &dyn Fn() -> CoreResult<()>,
+	) -> CoreResult<Option<Vec<VectorNorm>>> {
+		self.submit(check)?;
+		while !self.pending.is_empty() {
+			self.receive(check)?;
+		}
+		let valid = std::mem::replace(&mut self.valid, true);
+		let scales = std::mem::take(&mut self.scales);
+		Ok(valid.then_some(scales))
+	}
+}
+
+impl<F> Drop for Validator<'_, '_, F> {
+	fn drop(&mut self) {
+		self.stopped.store(true, Ordering::Relaxed);
+	}
+}
+
+fn validate_batch(
+	batch: &Batch,
+	dimensions: usize,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<Option<Vec<VectorNorm>>> {
+	let mut scales = Vec::with_capacity(batch.rows.len());
+	for (row, bytes) in batch
+		.rows
+		.iter()
+		.zip(batch.bytes.chunks_exact(dimensions * 4))
+	{
+		check()?;
+		let mut norm = 0.0f64;
+		for (column, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
+			if column != 0 && column % 1024 == 0 {
+				check()?;
+			}
+			let value = f32::from_le_bytes(*chunk);
+			if !value.is_finite() {
+				return Ok(None);
+			}
+			norm += f64::from(value).powi(2);
+		}
+		if !norm.is_finite() || norm == 0.0 {
+			return Ok(None);
+		}
+		scales.push(VectorNorm { section_id: row.id, scale: norm.sqrt() });
+	}
+	Ok(Some(scales))
 }
 
 #[cfg(test)]

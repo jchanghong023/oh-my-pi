@@ -11,6 +11,7 @@ use std::{
 	sync::{Arc, LazyLock},
 };
 
+use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -395,9 +396,9 @@ fn analyze_terms(query: &str) -> Vec<String> {
 			add(run);
 		}
 	}
-	if terms.len() > 32 {
-		(0..32)
-			.map(|index| terms[index * (terms.len() - 1) / 31].to_owned())
+	if terms.len() > MAX_QUERY_TERMS {
+		(0..MAX_QUERY_TERMS)
+			.map(|index| terms[index * (terms.len() - 1) / (MAX_QUERY_TERMS - 1)].to_owned())
 			.collect()
 	} else {
 		terms.into_iter().map(str::to_owned).collect()
@@ -1210,6 +1211,13 @@ fn compare_scored(a: &ScoredSection, b: &ScoredSection) -> Ordering {
 		.then_with(|| a.section.section_id.cmp(&b.section.section_id))
 }
 
+const MAX_QUERY_TERMS: usize = 32;
+
+pub(crate) struct CandidateScore {
+	flags:  [u8; MAX_QUERY_TERMS],
+	scored: ScoredSection,
+}
+
 /// Scores candidates as they are read, retaining only term flags and ranking
 /// metadata until corpus-wide frequencies are known.
 pub(crate) struct CandidateRanker<'a> {
@@ -1256,28 +1264,22 @@ impl<'a> CandidateRanker<'a> {
 		}
 	}
 
-	pub(crate) fn push(&mut self, candidate: Candidate) {
+	pub(crate) fn score(&self, candidate: Candidate) -> CandidateScore {
 		let mut topic_title = 0;
 		let mut topic_body = 0;
 		let mut phrase_flags = None;
-		for (position, ((pattern, frequency), topic)) in self
-			.patterns
-			.iter()
-			.zip(&mut self.frequencies)
-			.zip(&self.topics)
-			.enumerate()
-		{
+		let mut flags = [0; MAX_QUERY_TERMS];
+		for (position, (pattern, topic)) in self.patterns.iter().zip(&self.topics).enumerate() {
 			let in_title = pattern.is_match(&candidate.title);
 			let in_body = pattern.is_match(&candidate.raw) || pattern.is_match(&candidate.plain);
-			*frequency += usize::from(in_body);
 			if *topic {
 				topic_body += usize::from(in_body);
 				topic_title += usize::from(in_title);
 			}
-			let flags = u8::from(in_body) | (u8::from(in_title) << 1);
-			self.flags.push(flags);
+			let flag = u8::from(in_body) | (u8::from(in_title) << 1);
+			flags[position] = flag;
 			if self.phrase_term == Some(position) {
-				phrase_flags = Some(flags);
+				phrase_flags = Some(flag);
 			}
 		}
 		let title_phrase = phrase_flags
@@ -1291,24 +1293,43 @@ impl<'a> CandidateRanker<'a> {
 		} else {
 			None
 		};
-		self.scored.push(ScoredSection {
-			section: RankedSection {
-				section_id: candidate.section_id,
-				shape:      candidate.shape,
-				match_kind: if candidate.exact {
-					MatchKind::ExactName
-				} else {
-					MatchKind::Related
+		CandidateScore {
+			flags,
+			scored: ScoredSection {
+				section: RankedSection {
+					section_id: candidate.section_id,
+					shape:      candidate.shape,
+					match_kind: if candidate.exact {
+						MatchKind::ExactName
+					} else {
+						MatchKind::Related
+					},
+					rank:       candidate.rank,
 				},
-				rank:       candidate.rank,
+				title_phrase,
+				phrase,
+				topic_title,
+				topic_body,
+				relevance: 0.0,
+				body_hash,
 			},
-			title_phrase,
-			phrase,
-			topic_title,
-			topic_body,
-			relevance: 0.0,
-			body_hash,
-		});
+		}
+	}
+
+	pub(crate) fn merge(&mut self, score: CandidateScore) {
+		for (frequency, flags) in self.frequencies.iter_mut().zip(&score.flags) {
+			*frequency += usize::from(flags & 1 != 0);
+		}
+		self
+			.flags
+			.extend_from_slice(&score.flags[..self.terms.len()]);
+		self.scored.push(score.scored);
+	}
+
+	#[cfg(test)]
+	pub(crate) fn push(&mut self, candidate: Candidate) {
+		let score = self.score(candidate);
+		self.merge(score);
 	}
 
 	#[expect(
@@ -1354,7 +1375,21 @@ impl<'a> CandidateRanker<'a> {
 		}
 		let mut scored = self.scored;
 		check()?;
-		scored.sort_by(compare_scored);
+		if scored.len() >= 8192
+			&& scored
+				.iter()
+				.all(|entry| entry.relevance.is_finite() && entry.section.rank.is_finite())
+		{
+			if let Some(pool) = crate::parallel::pool() {
+				// Stable parallel sort preserves the serial order even when the
+				// comparator regards two entries as equal.
+				pool.install(|| scored.par_sort_by(compare_scored));
+			} else {
+				scored.sort_by(compare_scored);
+			}
+		} else {
+			scored.sort_by(compare_scored);
+		}
 		check()?;
 		let mut seen = HashSet::new();
 		let mut groups: [Vec<RankedSection>; 5] = std::array::from_fn(|_| Vec::new());

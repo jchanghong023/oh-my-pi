@@ -40,6 +40,7 @@ mod file;
 #[cfg(any(unix, windows))]
 pub mod file_lock;
 mod fs;
+pub mod memory;
 mod metadata;
 mod native;
 mod options;

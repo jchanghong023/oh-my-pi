@@ -2,7 +2,10 @@
 use std::{
 	cell::RefCell,
 	collections::{HashMap, HashSet, VecDeque},
-	sync::Arc,
+	sync::{
+		Arc, Mutex,
+		atomic::{AtomicUsize, Ordering},
+	},
 };
 
 use rusqlite::{Connection, params};
@@ -17,9 +20,12 @@ use super::{
 
 const SNAPSHOT_STALE: &str = "KNOWLEDGE_SNAPSHOT_STALE";
 
-// This is a retained-data budget, shared by vectors and hydrated sections.
-// Oversized matrices are scored a row at a time after the model call.
-const HYBRID_DATA_BUDGET: usize = 16 * 1024 * 1024;
+// Retained cache data share one process-wide budget. Active contexts can
+// additionally retain their validation data until their operation completes.
+const MAX_HYBRID_DATA_BUDGET: usize = 1024 * 1024 * 1024;
+const MAX_MATRIX_BUDGET: usize = 8 * 1024 * 1024;
+static HYBRID_DATA_BYTES: AtomicUsize = AtomicUsize::new(0);
+static HYBRID_DATA_BUDGET: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, PartialEq, Eq)]
 struct VectorKey {
@@ -73,8 +79,8 @@ struct HybridData {
 pub(super) struct HybridDataCache(RefCell<HybridData>, usize);
 
 impl HybridDataCache {
-	pub(super) const fn new() -> Self {
-		Self(
+	pub(super) fn new() -> Self {
+		let cache = Self(
 			RefCell::new(HybridData {
 				matrices:     VecDeque::new(),
 				vector_ids:   VecDeque::new(),
@@ -83,8 +89,20 @@ impl HybridDataCache {
 				candidates:   VecDeque::new(),
 				bytes:        0,
 			}),
-			HYBRID_DATA_BUDGET,
-		)
+			MAX_HYBRID_DATA_BUDGET,
+		);
+		cache.refresh_budget();
+		cache
+	}
+
+	pub(super) fn refresh_budget(&self) {
+		HYBRID_DATA_BUDGET.store(crate::parallel::memory_budget(32, usize::MAX), Ordering::Relaxed);
+		// Trim even on cache hits; sampling is per operation, not per row.
+		self.reserve(&mut self.0.borrow_mut(), 0);
+	}
+
+	fn budget(&self) -> usize {
+		self.1.min(HYBRID_DATA_BUDGET.load(Ordering::Relaxed))
 	}
 
 	pub(super) fn clear(&self) {
@@ -94,14 +112,29 @@ impl HybridDataCache {
 		data.vector_norms.clear();
 		data.hits.clear();
 		data.candidates.clear();
+		HYBRID_DATA_BYTES.fetch_sub(data.bytes, Ordering::Relaxed);
 		data.bytes = 0;
 	}
 
 	fn reserve(&self, data: &mut HybridData, bytes: usize) -> bool {
-		if bytes > self.1 {
+		let shared_budget = HYBRID_DATA_BUDGET.load(Ordering::Relaxed);
+		let budget = self.1.min(shared_budget);
+		if bytes > budget {
 			return false;
 		}
-		while data.bytes > self.1 - bytes {
+		loop {
+			if data.bytes <= budget - bytes
+				&& HYBRID_DATA_BYTES
+					.try_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+						total
+							.checked_add(bytes)
+							.filter(|&next| next <= shared_budget)
+					})
+					.is_ok()
+			{
+				return true;
+			}
+			let before = data.bytes;
 			if let Some(old) = data.hits.pop_front() {
 				data.bytes -= old.bytes;
 			} else if let Some(old) = data.candidates.pop_front() {
@@ -113,10 +146,10 @@ impl HybridDataCache {
 			} else if let Some(old) = data.matrices.pop_front() {
 				data.bytes -= old.bytes;
 			} else {
-				break;
+				return false;
 			}
+			HYBRID_DATA_BYTES.fetch_sub(before - data.bytes, Ordering::Relaxed);
 		}
-		true
 	}
 
 	fn matrix(&self, key: &VectorKey) -> Option<Arc<crate::vectors::VectorMatrix>> {
@@ -298,6 +331,12 @@ impl HybridDataCache {
 		data
 			.hits
 			.push_back(CachedHit { guard: guard.to_owned(), hit: copy_hit(hit, &entry), bytes });
+	}
+}
+
+impl Drop for HybridDataCache {
+	fn drop(&mut self) {
+		self.clear();
 	}
 }
 
@@ -573,6 +612,16 @@ impl DatabaseEngine {
 	where
 		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
 	{
+		// Only the most recent preparation pins validation across model I/O.
+		// Older tokens remain usable: score_hybrid can revalidate their guard.
+		for context in &self.hybrid {
+			context.vector_norms.lock().expect("vector norms").clear();
+			context
+				.vector_matrices
+				.lock()
+				.expect("vector matrices")
+				.clear();
+		}
 		let output = self.search(text, options, check.clone())?;
 		let key = output.result.cursor_base.q;
 		let guard = self.guard()?;
@@ -590,14 +639,16 @@ impl DatabaseEngine {
 		for hit in &output.result.sections {
 			self.hybrid_data.insert_hit(&guard, hit);
 		}
-		let (source_order, vectors, vector_failure) =
-			self.hybrid_snapshot_checked(&guard, check.clone(), |connection| {
+		let (source_order, vectors, vector_failure, vector_norms, vector_matrices) = self
+			.hybrid_snapshot_checked(&guard, check.clone(), |connection| {
 				let mut wanted: HashSet<i64> = baseline
 					.ranked
 					.iter()
 					.map(|entry| entry.section_id)
 					.collect();
 				let mut vector_dimensions = Vec::new();
+				let mut vector_norms = HashMap::new();
+				let mut vector_matrices = HashMap::new();
 				{
 					let has_generations: bool = if model.is_some() {
 						connection.query_row(
@@ -640,7 +691,7 @@ impl DatabaseEngine {
 								model,
 								dimension,
 								options.index.as_deref(),
-								self.hybrid_data.1 / 2,
+								(self.hybrid_data.budget() / 2).min(MAX_MATRIX_BUDGET),
 							)? {
 								let matrix = crate::vectors::read_scoped_vector_matrix(
 									connection,
@@ -655,29 +706,29 @@ impl DatabaseEngine {
 								None
 							};
 							let section_ids = if let Some(matrix) = matrix.as_ref() {
+								vector_matrices.insert(dimension, Arc::clone(matrix));
 								&matrix.section_ids
 							} else {
+								// Validation is needed even when scoped IDs are cached:
+								// the active context must retain it across eviction.
+								let validation_key =
+									vector_key(&guard, model, dimension, options.index.as_deref(), None);
+								let norms =
+									if let Some(norms) = self.hybrid_data.vector_norms(&validation_key) {
+										norms
+									} else {
+										let norms = crate::vectors::read_vector_norms(
+											connection,
+											model,
+											dimension,
+											options.index.as_deref(),
+											check.clone(),
+										)?;
+										self.hybrid_data.insert_vector_norms(validation_key, norms)
+									};
 								let ids = if let Some(ids) = self.hybrid_data.vector_ids(&key) {
 									ids
 								} else {
-									// Validation and scales belong to the whole
-									// generation,
-									// independently of this query's path restriction.
-									let validation_key =
-										vector_key(&guard, model, dimension, options.index.as_deref(), None);
-									let norms =
-										if let Some(norms) = self.hybrid_data.vector_norms(&validation_key) {
-											norms
-										} else {
-											let norms = crate::vectors::read_vector_norms(
-												connection,
-												model,
-												dimension,
-												options.index.as_deref(),
-												&check,
-											)?;
-											self.hybrid_data.insert_vector_norms(validation_key, norms)
-										};
 									let ids = crate::vectors::scoped_validated_ids(
 										connection,
 										&norms,
@@ -686,6 +737,7 @@ impl DatabaseEngine {
 									)?;
 									self.hybrid_data.insert_vector_ids(key, ids)
 								};
+								vector_norms.insert(dimension, norms);
 								if !ids.is_empty() {
 									wanted.extend(ids.iter().copied());
 									vector_dimensions.push(dimension);
@@ -714,7 +766,7 @@ impl DatabaseEngine {
 						source_order.insert(id, position as i64);
 					}
 				}
-				Ok((source_order, vector_dimensions, false))
+				Ok((source_order, vector_dimensions, false, vector_norms, vector_matrices))
 			})?;
 		let fulltext = baseline
 			.ranked
@@ -754,6 +806,8 @@ impl DatabaseEngine {
 			path: options.path.clone(),
 			model: model.map(str::to_owned),
 			vector_dimensions: vectors.clone(),
+			vector_norms: Mutex::new(vector_norms),
+			vector_matrices: Mutex::new(vector_matrices),
 			limit: options.limit,
 			baseline,
 			baseline_positions,
@@ -790,7 +844,8 @@ impl DatabaseEngine {
 			return Ok(None);
 		}
 		let model = context.model.as_deref().ok_or_else(stale)?;
-		self.hybrid_snapshot_checked(&context.guard, check.clone(), |connection| {
+		let result = self.hybrid_snapshot_checked(&context.guard, check.clone(), |connection| {
+			check()?;
 			let key = vector_key(
 				&context.guard,
 				model,
@@ -798,16 +853,34 @@ impl DatabaseEngine {
 				context.index.as_deref(),
 				context.path.as_deref(),
 			);
-			check()?;
-			let result = if let Some(matrix) = self.hybrid_data.matrix(&key) {
+			let matrix = context
+				.vector_matrices
+				.lock()
+				.expect("vector matrices")
+				.remove(&dimensions)
+				.or_else(|| self.hybrid_data.matrix(&key));
+			let result = if let Some(matrix) = matrix {
 				crate::vectors::score_matrix(&matrix, query, limit, &check)
-			} else if let Some(norms) = self.hybrid_data.vector_norms(&vector_key(
-				&context.guard,
-				model,
-				dimensions,
-				context.index.as_deref(),
-				None,
-			)) {
+			} else {
+				let key = vector_key(&context.guard, model, dimensions, context.index.as_deref(), None);
+				let retained = context
+					.vector_norms
+					.lock()
+					.expect("vector norms")
+					.remove(&dimensions)
+					.or_else(|| self.hybrid_data.vector_norms(&key));
+				let norms = if let Some(norms) = retained {
+					norms
+				} else {
+					let norms = crate::vectors::read_vector_norms(
+						connection,
+						model,
+						dimensions,
+						context.index.as_deref(),
+						check.clone(),
+					)?;
+					self.hybrid_data.insert_vector_norms(key, norms)
+				};
 				crate::vectors::score_validated_stream_parallel(
 					connection,
 					model,
@@ -819,21 +892,19 @@ impl DatabaseEngine {
 					check.clone(),
 					&norms,
 				)
-			} else {
-				crate::vectors::score_stream(
-					connection,
-					model,
-					dimensions,
-					context.index.as_deref(),
-					context.path.as_deref().map(PathScope),
-					query,
-					limit,
-					&check,
-				)
 			}?;
 			check()?;
 			Ok(Some(result))
-		})
+		});
+		// Success, failure and cancellation all release this operation's
+		// additional working set; reusable data remain in the bounded cache.
+		context.vector_norms.lock().expect("vector norms").clear();
+		context
+			.vector_matrices
+			.lock()
+			.expect("vector matrices")
+			.clear();
+		result
 	}
 
 	/// Hydrate only explicitly selected candidates from the prepared snapshot.
@@ -875,6 +946,12 @@ impl DatabaseEngine {
 		check: &dyn Fn() -> CoreResult<()>,
 	) -> CoreResult<KnowledgeSearchOutput> {
 		let context = self.hybrid_context(token)?;
+		context.vector_norms.lock().expect("vector norms").clear();
+		context
+			.vector_matrices
+			.lock()
+			.expect("vector matrices")
+			.clear();
 		let baseline_ids: HashSet<i64> = context
 			.baseline
 			.ranked
@@ -1361,7 +1438,7 @@ mod tests {
 	}
 
 	#[test]
-	fn oversized_validated_ids_are_reused_within_guard() {
+	fn oversized_validated_ids_preserve_results_within_guard() {
 		let fixture = Fixture::new();
 		let writer = Connection::open(&fixture.path).unwrap();
 		writer.execute_batch(
@@ -1387,7 +1464,23 @@ mod tests {
 			.expect_ready();
 		assert_eq!(second.vector_dimensions, first.vector_dimensions);
 		let reused = engine.hybrid_data.vector_ids(&key).unwrap();
-		assert!(Arc::ptr_eq(&ids, &reused));
+		// A bounded cache may evict and reconstruct the ID allocation while
+		// retaining equivalent validated evidence for the same corpus guard.
+		assert_eq!(ids.as_ref(), reused.as_ref());
+		assert!(engine.hybrid_data.0.borrow().bytes <= engine.hybrid_data.1);
+		let first_scores = engine
+			.score_hybrid(&first.token, 2, || Ok(()), &[0.0, 1.0], 203)
+			.unwrap()
+			.unwrap();
+		let second_scores = engine
+			.score_hybrid(&second.token, 2, || Ok(()), &[0.0, 1.0], 203)
+			.unwrap()
+			.unwrap();
+		assert_eq!(first_scores, second_scores);
+		assert_eq!(&second_scores[..2], &[3, 1]);
+		let mut all_ids = second_scores;
+		all_ids.sort_unstable();
+		assert_eq!(all_ids, (1..=203).collect::<Vec<i64>>());
 	}
 
 	#[test]

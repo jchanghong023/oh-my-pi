@@ -2,12 +2,12 @@ use std::{
 	collections::{HashMap, VecDeque},
 	fs,
 	path::Path,
-	sync::Arc,
+	sync::{Arc, Mutex},
 	time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, Row, types::ValueRef};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, types::ValueRef};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +22,11 @@ mod hybrid;
 
 #[path = "projection_loader.rs"]
 mod projection_loader;
+
+#[path = "snapshot.rs"]
+mod snapshot;
+#[cfg(test)]
+use snapshot::hash_row;
 
 const INVALID_CURSOR: &str = "Invalid documentation search cursor";
 const INDEX_ROWS: &str = "SELECT i.id,i.name,i.root_path,d.id \
@@ -409,7 +414,8 @@ pub struct SearchDiagnostics {
 	/// With lookahead, records caller preparation/wait time; worker decoding
 	/// can overlap candidate scoring and is not summed into this duration.
 	pub projection:     Duration,
-	/// Time preparing and scoring matched candidates.
+	/// Caller wall time preparing and scoring matched candidates, including
+	/// worker waits.
 	pub scoring:        Duration,
 	/// Time computing global weights, sorting, and grouping results.
 	pub finalize:       Duration,
@@ -465,6 +471,8 @@ struct HybridContext {
 	path:               Option<String>,
 	model:              Option<String>,
 	vector_dimensions:  Vec<usize>,
+	vector_norms:       Mutex<HashMap<usize, Arc<crate::vectors::VectorNorms>>>,
+	vector_matrices:    Mutex<HashMap<usize, Arc<crate::vectors::VectorMatrix>>>,
 	limit:              Option<f64>,
 	baseline:           Arc<Ranking>,
 	baseline_positions: HashMap<i64, usize>,
@@ -606,7 +614,7 @@ pub struct DatabaseEngine {
 }
 impl DatabaseEngine {
 	/// Create a search engine for the database and cursor identity paths.
-	pub const fn new(path: String, cursor_path: String) -> Self {
+	pub fn new(path: String, cursor_path: String) -> Self {
 		Self {
 			path,
 			cursor_path,
@@ -674,11 +682,11 @@ impl DatabaseEngine {
 			)?)
 		})?;
 		connection.busy_timeout(Duration::from_secs(5))?;
-		// Share up to 500 MiB of file pages without enlarging the private page
-		// cache.
-		connection.execute_batch(
-			"PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL; PRAGMA mmap_size=524288000;",
-		)?;
+		// OS-backed pages are shared across owners rather than duplicated in
+		// each connection's private SQLite page cache.
+		connection.execute_batch("PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;")?;
+		let mapped_bytes = crate::parallel::memory_budget(4, 64 * 1024 * 1024 * 1024);
+		connection.pragma_update(None, "mmap_size", mapped_bytes as i64)?;
 		check_file_identity(Path::new(&self.path), &identity)?;
 		self.identity = identity;
 		self.generation += 1;
@@ -687,6 +695,7 @@ impl DatabaseEngine {
 	}
 
 	fn guard(&self) -> CoreResult<String> {
+		self.hybrid_data.refresh_budget();
 		let connection = self.connection.as_ref().expect("opened search connection");
 		let version: i64 = connection.query_row("PRAGMA data_version", [], |row| row.get(0))?;
 		let changes: i64 = connection.query_row("SELECT total_changes()", [], |row| row.get(0))?;
@@ -1003,18 +1012,11 @@ impl DatabaseEngine {
 }
 
 /// Preserve the legacy cursor's exact byte stream independently of the query.
-fn corpus_snapshot(connection: &Connection, check: Check<'_>) -> CoreResult<Sha256> {
-	let mut snapshot = Sha256::new();
-	let mut buffer = String::new();
-	for sql in [INDEX_ROWS, SECTION_ROWS] {
-		let mut statement = connection.prepare_cached(sql)?;
-		let mut rows = statement.query([])?;
-		while let Some(row) = rows.next()? {
-			check()?;
-			hash_row(&mut snapshot, row, &mut buffer)?;
-		}
-	}
-	Ok(snapshot)
+fn corpus_snapshot<F>(connection: &Connection, check: &F) -> CoreResult<Sha256>
+where
+	F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+{
+	snapshot::compute(connection, check)
 }
 
 fn grep_snapshot(
@@ -1127,8 +1129,7 @@ trait ContextLoader {
 	fn prepare(
 		&mut self,
 		connection: &Connection,
-		plan: &query::QueryPlan,
-		parameters: &[&dyn rusqlite::ToSql],
+		documents: &[i64],
 		check: Check<'_>,
 	) -> CoreResult<()>;
 	fn load(
@@ -1138,6 +1139,12 @@ trait ContextLoader {
 		name: Option<&LiteralMatcher>,
 		check: Check<'_>,
 	) -> CoreResult<DocumentContexts>;
+	fn score(
+		&self,
+		inputs: Vec<CandidateInput>,
+		ranker: &query::CandidateRanker<'_>,
+		name: Option<&LiteralMatcher>,
+	) -> Vec<CoreResult<Option<query::CandidateScore>>>;
 }
 
 fn rank_inner(
@@ -1192,6 +1199,8 @@ fn rank_inner(
 	}
 	let mut buffer = String::new();
 	let mut document_contexts: HashMap<i64, DocumentContexts> = HashMap::new();
+	let mut context_bytes = 0usize;
+	let context_budget = crate::parallel::memory_budget(64, 256 * 1024 * 1024);
 	let mut ranker = query::CandidateRanker::new(query_text, &plan.terms);
 	// Normal text needs only FTS candidates; technical names must additionally
 	// examine every in-scope section to preserve punctuation-aware recall.
@@ -1216,99 +1225,114 @@ fn rank_inner(
 	if name.is_none() && !plan.terms.is_empty() {
 		parameters.push(&plan.fts);
 	}
-	if let Some(loader) = loader.as_deref_mut() {
-		let started = diagnostics.as_ref().map(|_| Instant::now());
-		loader.prepare(connection, plan, &parameters, check)?;
-		if let Some(diagnostics) = diagnostics.as_mut() {
-			diagnostics.projection += started.expect("enabled diagnostics").elapsed();
-		}
-	}
 	let mut rows = statement.query(parameters.as_slice())?;
-	loop {
-		let row_started = diagnostics.as_ref().map(|_| Instant::now());
-		let row = rows.next()?;
-		if let Some(diagnostics) = diagnostics.as_mut() {
-			diagnostics.section_sqlite += row_started.expect("enabled diagnostics").elapsed();
+	let mut exhausted = false;
+	while !exhausted {
+		// A batch is bounded by both row count and source bytes; an individual
+		// oversized section is processed alone rather than truncated.
+		let mut batch = Vec::new();
+		let mut bytes = 0usize;
+		while batch.len() < 256 && bytes < 8 * 1024 * 1024 {
+			let row_started = diagnostics.as_ref().map(|_| Instant::now());
+			let next = rows.next()?;
+			if let Some(diagnostics) = diagnostics.as_mut() {
+				diagnostics.section_sqlite += row_started.expect("enabled diagnostics").elapsed();
+			}
+			let Some(row) = next else {
+				exhausted = true;
+				break;
+			};
+			if let Some(diagnostics) = diagnostics.as_mut() {
+				diagnostics.section_rows += 1;
+			}
+			check()?;
+			let id: i64 = row.get(0)?;
+			let bm25 = ranks.get(&id).copied();
+			if bm25.is_none() && name.is_none() {
+				continue;
+			}
+			let document_id: i64 = row.get(1)?;
+			// Delay a conversion error until the row is actually needed, as
+			// source-aware exact-name filtering can discard it.
+			let markdown: rusqlite::Result<String> = row.get(13);
+			bytes = bytes.saturating_add(markdown.as_ref().map_or(0, String::len));
+			batch.push((id, document_id, bm25, markdown));
 		}
-		let Some(row) = row else { break };
-		if let Some(diagnostics) = diagnostics.as_mut() {
-			diagnostics.section_rows += 1;
-		}
-		check()?;
-		let id: i64 = row.get(0)?;
-		let bm25 = ranks.get(&id).copied();
-		if bm25.is_none() && name.is_none() {
+		if batch.is_empty() {
 			continue;
 		}
-		let document_id: i64 = row.get(1)?;
-		if let std::collections::hash_map::Entry::Vacant(entry) = document_contexts.entry(document_id)
+		if (batch.len() >= 16 || bytes >= 256 * 1024)
+			&& let Some(loader) = loader.as_deref_mut()
 		{
+			let mut ids = Vec::new();
+			let mut unique = std::collections::HashSet::new();
+			for (_, id, ..) in &batch {
+				if !document_contexts.contains_key(id) && unique.insert(*id) {
+					ids.push(*id);
+				}
+			}
 			let started = diagnostics.as_ref().map(|_| Instant::now());
-			entry.insert(match loader.as_deref_mut() {
-				Some(loader) => loader.load(connection, document_id, name, check)?,
-				None => load_contexts(connection, document_id, name, check)?,
-			});
+			loader.prepare(connection, &ids, check)?;
 			if let Some(diagnostics) = diagnostics.as_mut() {
 				diagnostics.projection += started.expect("enabled diagnostics").elapsed();
-				diagnostics.documents += 1;
 			}
 		}
-		let contexts = document_contexts
-			.get_mut(&document_id)
-			.expect("loaded document contexts");
-		// Source-aware name matching has already decided these rows. Avoid
-		// copying and projecting their bodies when neither recall path matched.
-		if bm25.is_none() && contexts.exact_names.get(&id) == Some(&false) {
-			contexts.projections.remove(&id);
-			continue;
+		let mut inputs = Vec::with_capacity(batch.len());
+		for (id, document_id, bm25, markdown) in batch {
+			check()?;
+			if !document_contexts.contains_key(&document_id) {
+				let started = diagnostics.as_ref().map(|_| Instant::now());
+				let contexts = match loader.as_deref_mut() {
+					Some(loader) => loader.load(connection, document_id, name, check)?,
+					None => load_contexts(connection, document_id, name, check)?,
+				};
+				// Reconstructing an evicted document is safe within this same
+				// SQLite snapshot. Keep one oversized document if necessary.
+				let size = contexts.estimated_bytes();
+				if context_bytes.saturating_add(size) > context_budget {
+					document_contexts.clear();
+					context_bytes = 0;
+				}
+				context_bytes = context_bytes.saturating_add(size);
+				document_contexts.insert(document_id, contexts);
+				if let Some(diagnostics) = diagnostics.as_mut() {
+					diagnostics.projection += started.expect("enabled diagnostics").elapsed();
+					diagnostics.documents += 1;
+				}
+			}
+			let contexts = document_contexts
+				.get_mut(&document_id)
+				.expect("loaded document contexts");
+			let exact = contexts.exact_names.remove(&id);
+			let projection = contexts.projections.remove(&id);
+			let context = contexts.sections.remove(&id);
+			if bm25.is_none() && exact == Some(false) {
+				continue;
+			}
+			if projection.is_none() && context.is_none() {
+				return Err(KnowledgeError::message("Documentation search snapshot is inconsistent"));
+			}
+			inputs.push(CandidateInput { id, bm25, markdown: markdown?, exact, projection, context });
 		}
 		let score_started = diagnostics.as_ref().map(|_| Instant::now());
-		let projection = contexts.projections.remove(&id);
-		let context = contexts.sections.get(&id);
-		if projection.is_none() && context.is_none() {
-			return Err(KnowledgeError::message("Documentation search snapshot is inconsistent"));
-		}
-		let markdown: String = row.get(13)?;
-		let raw = query::normalize_search_text(&markdown);
-		let exact = if let Some(exact) = contexts.exact_names.get(&id) {
-			*exact
-		} else if let Some(name) = name.as_ref() {
-			// Legacy rows without source coordinates retain the same contextual
-			// matcher, even when their scoring fields were prepared at import.
-			let context = context.ok_or_else(|| {
-				KnowledgeError::message("Documentation search snapshot is inconsistent")
-			})?;
-			name.matches_name_section(&raw, &markdown, context)
-		} else {
-			false
+		let scored = match loader.as_deref() {
+			Some(loader) => loader.score(inputs, &ranker, name),
+			None => inputs
+				.into_iter()
+				.map(|input| score_candidate(input, &ranker, name, check))
+				.collect(),
 		};
-		if bm25.is_none() && !exact {
-			continue;
+		for score in scored {
+			if let Some(score) = score? {
+				ranker.merge(score);
+				if let Some(diagnostics) = diagnostics.as_mut() {
+					diagnostics.candidates += 1;
+				}
+			}
 		}
-		let (plain, title, shape) = if let Some(projection) = projection {
-			(projection.plain, projection.title, projection.shape)
-		} else {
-			let context = context.expect("reconstructed section context");
-			let tokens = markdown::lex_section(&markdown, context);
-			(
-				query::normalize_search_text(&markdown::plain_text(&tokens)),
-				query::normalize_search_text(&markdown::local_title(&markdown, context)),
-				context.shape,
-			)
-		};
-		ranker.push(Candidate {
-			section_id: id,
-			raw_markdown: markdown,
-			raw,
-			plain,
-			title,
-			shape,
-			exact,
-			rank: bm25.unwrap_or(0.0),
-		});
 		if let Some(diagnostics) = diagnostics.as_mut() {
+			// Wall time spent in this stage, not aggregate worker CPU time.
 			diagnostics.scoring += score_started.expect("enabled diagnostics").elapsed();
-			diagnostics.candidates += 1;
 		}
 	}
 	// JSON.stringify([...ranks]) uses JS's float formatter, not serde_json's.
@@ -1352,6 +1376,90 @@ struct DocumentContexts {
 	sections:    HashMap<i64, SectionContext>,
 	exact_names: HashMap<i64, bool>,
 	projections: HashMap<i64, SectionProjection>,
+}
+
+impl DocumentContexts {
+	fn estimated_bytes(&self) -> usize {
+		let sections = self.sections.values().fold(0usize, |total, context| {
+			let edge_size = |edge: &query::ContextEdge| match edge {
+				query::ContextEdge::Empty => 0,
+				query::ContextEdge::Shared { source, .. } => source.len(),
+			};
+			total
+				.saturating_add(256)
+				.saturating_add(2 * context.fence_prefix.as_ref().map_or(0, String::len))
+				.saturating_add(2 * edge_size(&context.before))
+				.saturating_add(2 * edge_size(&context.after))
+		});
+		self.projections.values().fold(
+			sections.saturating_add(self.exact_names.len().saturating_mul(64)),
+			|total, projection| {
+				total
+					.saturating_add(256)
+					.saturating_add(projection.plain.len())
+					.saturating_add(projection.title.len())
+			},
+		)
+	}
+}
+
+struct CandidateInput {
+	id:         i64,
+	bm25:       Option<f64>,
+	markdown:   String,
+	exact:      Option<bool>,
+	projection: Option<SectionProjection>,
+	context:    Option<SectionContext>,
+}
+
+fn score_candidate(
+	input: CandidateInput,
+	ranker: &query::CandidateRanker<'_>,
+	name: Option<&LiteralMatcher>,
+	check: Check<'_>,
+) -> CoreResult<Option<query::CandidateScore>> {
+	check()?;
+	let raw = query::normalize_search_text(&input.markdown);
+	let exact = if let Some(exact) = input.exact {
+		exact
+	} else if let Some(name) = name {
+		let context = input
+			.context
+			.as_ref()
+			.ok_or_else(|| KnowledgeError::message("Documentation search snapshot is inconsistent"))?;
+		name.matches_name_section(&raw, &input.markdown, context)
+	} else {
+		false
+	};
+	if input.bm25.is_none() && !exact {
+		return Ok(None);
+	}
+	let (plain, title, shape) = if let Some(projection) = input.projection {
+		(projection.plain, projection.title, projection.shape)
+	} else {
+		let context = input
+			.context
+			.as_ref()
+			.expect("reconstructed section context");
+		let tokens = markdown::lex_section(&input.markdown, context);
+		(
+			query::normalize_search_text(&markdown::plain_text(&tokens)),
+			query::normalize_search_text(&markdown::local_title(&input.markdown, context)),
+			context.shape,
+		)
+	};
+	let score = ranker.score(Candidate {
+		section_id: input.id,
+		raw_markdown: input.markdown,
+		raw,
+		plain,
+		title,
+		shape,
+		exact,
+		rank: input.bm25.unwrap_or(0.0),
+	});
+	check()?;
+	Ok(Some(score))
 }
 
 /// Only contiguous, byte-consistent stored source participates in a name
@@ -1449,6 +1557,15 @@ fn load_contexts(
 	if let Some(payload) = payload {
 		return decode_contexts(&payload, name, check);
 	}
+	load_legacy_contexts(connection, document_id, name, check)
+}
+
+fn load_legacy_contexts(
+	connection: &Connection,
+	document_id: i64,
+	name: Option<&LiteralMatcher>,
+	check: Check<'_>,
+) -> CoreResult<DocumentContexts> {
 	let mut statement = connection.prepare_cached(
 		"SELECT id,document_id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
 		 ORDER BY ordinal",
@@ -1560,38 +1677,6 @@ fn push_string(output: &mut String, text: &str) {
 	output.push_str(&text[start..]);
 	output.push('"');
 }
-fn hash_row(snapshot: &mut Sha256, row: &Row<'_>, output: &mut String) -> CoreResult<()> {
-	output.clear();
-	output.push('{');
-	for position in 0..row.as_ref().column_count() {
-		if position != 0 {
-			output.push(',');
-		}
-		push_string(output, row.as_ref().column_name(position)?);
-		output.push(':');
-		match row.get_ref(position)? {
-			ValueRef::Null => output.push_str("null"),
-			ValueRef::Integer(value) => push_number(output, value as f64),
-			ValueRef::Real(value) => push_number(output, value),
-			ValueRef::Text(value) => push_string(output, &String::from_utf8_lossy(value)),
-			ValueRef::Blob(value) => {
-				output.push('{');
-				for (position, byte) in value.iter().enumerate() {
-					if position != 0 {
-						output.push(',');
-					}
-					push_string(output, &position.to_string());
-					output.push(':');
-					output.push_str(&byte.to_string());
-				}
-				output.push('}');
-			},
-		}
-	}
-	output.push('}');
-	snapshot.update(output.as_bytes());
-	Ok(())
-}
 fn digest(bytes: &[u8]) -> String {
 	format!("{:x}", Sha256::digest(bytes))
 }
@@ -1695,6 +1780,45 @@ needle evidence legacy');
 			)
 			.unwrap();
 		for document_id in [1, 2] {
+			// Each scoped document must reach the 16-candidate dispatch threshold;
+			// padding only the encoded projection no longer activates lookahead.
+			let mut byte_start: i64 = connection
+				.query_row(
+					"SELECT COALESCE(MAX(byte_end),0)+1 FROM sections WHERE document_id=?",
+					[document_id],
+					|row| row.get(0),
+				)
+				.unwrap();
+			for ordinal in 3..16 {
+				let id = 100 + document_id * 100 + ordinal;
+				let raw = format!("# Extra {ordinal}\nneedle evidence extra {ordinal}");
+				let byte_end = byte_start + raw.len() as i64;
+				connection
+					.execute(
+						"INSERT INTO sections VALUES(?1,1,?2,?3,'Extra',1,?4,?5,?6,?7,?8)",
+						rusqlite::params![
+							id,
+							document_id,
+							ordinal,
+							ordinal * 3 + 1,
+							ordinal * 3 + 2,
+							byte_start,
+							byte_end,
+							raw
+						],
+					)
+					.unwrap();
+				connection
+					.execute(
+						"INSERT INTO \
+						 sections_fts(rowid,section_id,index_id,relative_path,heading_path,body)
+						 SELECT s.id,s.id,s.index_id,d.relative_path,s.heading_path,s.raw_markdown
+						 FROM sections s JOIN documents d ON d.id=s.document_id WHERE s.id=?",
+						[id],
+					)
+					.unwrap();
+				byte_start = byte_end + 1;
+			}
 			let mut statement = connection
 				.prepare(
 					"SELECT id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
@@ -1881,7 +2005,7 @@ needle evidence legacy');
 		assert_eq!(
 			search(&mut fixture.engine(), "needle evidence", KnowledgeSearchOptions::default())
 				["result"]["total"],
-			7
+			33
 		);
 	}
 
