@@ -18,7 +18,7 @@ use super::{
 pub type CoreResult<T> = Result<T, KnowledgeError>;
 type Check<'a> = &'a dyn Fn() -> CoreResult<()>;
 /// Current supported storage schema version.
-pub const SCHEMA_VERSION: i64 = 12;
+pub const SCHEMA_VERSION: i64 = 13;
 /// Prefix reserved for in-progress index builds.
 pub const BUILDING_INDEX_PREFIX: &str = "__building__";
 const BUILDING_GLOB: &str = "__building__*";
@@ -438,11 +438,14 @@ impl Storage {
 		let mut stage = "schema";
 		let schema = (|| -> CoreResult<()> {
 			storage.connection.execute_batch(SCHEMA_SQL)?;
-			if version > 0 && version < SCHEMA_VERSION {
+			storage
+				.connection
+				.execute_batch(crate::vector_index::SCHEMA)?;
+			if version > 0 && version < 12 {
 				stage = "migration";
 				storage.migrate(version, &mut stage)?;
-			} else if version == 0 {
-				storage.connection.execute_batch("PRAGMA user_version=12")?;
+			} else if version < SCHEMA_VERSION {
+				storage.connection.execute_batch("PRAGMA user_version=13")?;
 			}
 			check_file_identity(Path::new(&storage.path), &storage.identity)?;
 			Ok(())
@@ -611,7 +614,7 @@ impl Storage {
 					None
 				})?;
 				check_file_identity(Path::new(&storage.path), &storage.identity)?;
-				storage.connection.execute_batch("PRAGMA user_version=12")?;
+				storage.connection.execute_batch("PRAGMA user_version=13")?;
 				Ok(())
 			})?;
 			guard.commit()
@@ -1293,6 +1296,30 @@ mod tests {
 		}
 	}
 
+	fn semantic_ids(storage: &Storage, index: Option<&str>) -> Vec<i64> {
+		let mut engine =
+			crate::database::DatabaseEngine::new(storage.path.clone(), storage.path.clone());
+		let options = crate::database::KnowledgeSearchOptions {
+			index: index.map(str::to_owned),
+			..Default::default()
+		};
+		let prepared = match engine
+			.prepare_hybrid("unrelated", &options, Some("model"), || Ok(()))
+			.unwrap()
+		{
+			crate::database::HybridPreparation::Ready(prepared) => prepared,
+			crate::database::HybridPreparation::Fulltext(_) => panic!("stable fixture must prepare"),
+		};
+		if prepared.vector_dimensions.is_empty() {
+			return Vec::new();
+		}
+		assert_eq!(prepared.vector_dimensions, vec![2]);
+		engine
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 100)
+			.unwrap()
+			.unwrap()
+	}
+
 	#[test]
 	fn deferred_vectors_publish_atomically_and_isolate_corrupt_generations() {
 		let fixture = Fixture::new();
@@ -1324,27 +1351,20 @@ mod tests {
 			storage.publish_deferred_import(&token, name).unwrap();
 			ids.push(sources[0].section_id);
 		}
-		let matrix =
-			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
-				.unwrap();
-		assert!(ids.iter().all(|id| matrix.section_ids.contains(id)));
+		let candidates = semantic_ids(&storage, None);
+		assert!(ids.iter().all(|id| candidates.contains(id)));
 		storage
 			.connection
 			.execute("UPDATE wiki_section_vectors SET vector=x'0000803f' WHERE section_id=?", [ids[1]])
 			.unwrap();
-		let matrix =
-			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
-				.unwrap();
-		assert!(matrix.section_ids.contains(&ids[0]));
-		assert!(!matrix.section_ids.contains(&ids[1]));
+		let candidates = semantic_ids(&storage, None);
+		assert!(candidates.contains(&ids[0]));
+		assert!(!candidates.contains(&ids[1]));
 		storage
 			.connection
 			.execute("UPDATE sections SET raw_markdown='changed' WHERE id=?", [ids[0]])
 			.unwrap();
-		let matrix =
-			crate::vectors::read_vector_matrix(&storage.connection, "model", 2, None, &|| Ok(()))
-				.unwrap();
-		assert!(matrix.section_ids.is_empty());
+		assert!(semantic_ids(&storage, None).is_empty());
 	}
 
 	#[test]
@@ -1419,15 +1439,30 @@ mod tests {
 				.unwrap();
 			storage.publish_vector_import(&token, &|| Ok(())).unwrap();
 			storage.finish_vector_retry(&token).unwrap();
-			let matrix = crate::vectors::read_vector_matrix(
-				&storage.connection,
-				"model",
-				2,
-				Some("retry"),
-				&|| Ok(()),
-			)
-			.unwrap();
-			assert_eq!(matrix.section_ids.len(), 2);
+			assert_eq!(semantic_ids(&storage, Some("retry")).len(), 2);
+			storage
+				.connection
+				.execute("DELETE FROM wiki_ann_shards WHERE index_id=?", [id])
+				.unwrap();
+			assert!(semantic_ids(&storage, Some("retry")).is_empty());
+			let rebuild = storage.begin_vector_retry(id, None, &|| Ok(())).unwrap();
+			assert!(!rebuild.complete);
+			assert_eq!((rebuild.completed, rebuild.total, rebuild.dimensions), (2, 2, 2));
+			let rebuild_token = rebuild.token.unwrap();
+			assert!(
+				storage
+					.read_vector_import_batch(&rebuild_token, 0, 100)
+					.unwrap()
+					.is_empty()
+			);
+			storage
+				.publish_vector_import(&rebuild_token, &|| Ok(()))
+				.unwrap();
+			storage.finish_vector_retry(&rebuild_token).unwrap();
+			assert_eq!(semantic_ids(&storage, Some("retry")).len(), 2);
+			let ready = storage.begin_vector_retry(id, None, &|| Ok(())).unwrap();
+			assert!(ready.complete);
+			assert!(ready.token.is_none());
 			if complete {
 				storage
 					.connection
@@ -1442,16 +1477,8 @@ mod tests {
 				storage.write_vector_import_batch(&token, &rows).unwrap();
 				storage.publish_vector_import(&token, &|| Ok(())).unwrap();
 				storage.finish_vector_retry(&token).unwrap();
-				let matrix = crate::vectors::read_vector_matrix(
-					&storage.connection,
-					"model",
-					2,
-					Some("retry"),
-					&|| Ok(()),
-				)
-				.unwrap();
 				assert_eq!(
-					matrix.section_ids,
+					semantic_ids(&storage, Some("retry")),
 					sources
 						.iter()
 						.map(|source| source.section_id)
@@ -1639,7 +1666,7 @@ mod tests {
 			.connection
 			.query_row("PRAGMA user_version", [], |row| row.get(0))
 			.unwrap();
-		assert_eq!(version, 12);
+		assert_eq!(version, 13);
 		let payload: Vec<u8> = storage
 			.connection
 			.query_row("SELECT payload FROM wiki_document_projections", [], |row| row.get(0))

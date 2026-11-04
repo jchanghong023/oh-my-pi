@@ -4,17 +4,17 @@
 
 ### Fixed
 
+- Build native SIMD dependencies correctly on Windows systems with non-UTF-8 locale settings.
 - Keep Knowledge caches within a shared process budget that adapts to memory pressure, and honor zero available memory on Linux.
 - Restore startup and external shell commands on glibc 2.17, and preserve native loader errors without retrying the same failed addon.
 
 ### Changed
 
-- Scale Knowledge search across available CPU cores and memory, accelerating full-text scoring, cold snapshots, and large vector validation without changing results or cursors.
+- Scale Knowledge full-text search and cold snapshots across available CPU cores and memory.
 - Overlap bounded Knowledge document projection preparation with candidate scoring on the same read snapshot.
-- Use bounded parallel CPU batches for large Knowledge vector searches while preserving exact scores and source-order ties.
-- Reduce repeated Knowledge search work by reusing vector validation and grep snapshots, and filtering paths before payload reads.
+- Reuse persistent Knowledge vector indexes across queries and restarts, with memory-aware parallel construction and scoped ANN recall.
+- Reduce repeated Knowledge search work by reusing vector indexes and grep snapshots, and filtering paths before payload reads.
 - Preserve fork cancellation, timeout and Windows path behavior on the new embedded bash engine.
-- Avoid sorting Knowledge vector BLOBs and allocating over-budget vector matrices; stream exact scoring and reuse validated IDs and evidence without changing scores or result order.
 - Keep incomplete Knowledge vector batches for explicit resumption while only complete generations participate in search.
 - Load default native addons and grammars from `OMP_CACHE_DIR` when set, or the per-user Linux offline cache root.
 - Rename the native Wiki API and Rust core to Knowledge, including `pi-knowledge` and Knowledge test selection.

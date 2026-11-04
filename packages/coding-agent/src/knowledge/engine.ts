@@ -320,6 +320,13 @@ export class KnowledgeIndexEngine {
 			if (batch.nextSectionId === undefined) break;
 			after = batch.nextSectionId;
 		}
+		options.onProgress?.({
+			phase: "fts",
+			total: checkpoint.total,
+			completed,
+			failed: 0,
+			message: "Building vector search index",
+		});
 		await this.#native.publishVectorImport(token, options.signal);
 	}
 
@@ -367,6 +374,18 @@ export class KnowledgeIndexEngine {
 						const token = generation.token;
 						if (!token) throw new Error("Knowledge vector retry did not return a writer token");
 						try {
+							if (generation.completed === generation.total) {
+								options.onProgress?.({
+									phase: "fts",
+									total: generation.total,
+									completed: generation.completed,
+									failed: 0,
+									message: `Building vector search index ${position + 1}/${indexes.length}: ${index.name}`,
+								});
+								await this.#native.publishVectorImport(token, options.signal);
+								result.completed++;
+								continue;
+							}
 							if (!embedding)
 								throw new Error("No embedding model configured; cannot continue building knowledge vectors");
 							await this.#fillVectors(
@@ -575,7 +594,10 @@ export class KnowledgeIndexEngine {
 		if ("result" in snapshot) return snapshot;
 		if (snapshot.vectorFailure) {
 			cacheable = false;
-			optionalModelFailure("search.vector-read");
+			optionalModelFailure(
+				"search.vector-index",
+				snapshot.vectorFailureReason ? new Error(snapshot.vectorFailureReason) : undefined,
+			);
 		}
 		type Ranked = { sectionId: number; matchKind: string; sourceOrder: number };
 		const fulltext: Ranked[] = snapshot.fulltext;
@@ -603,12 +625,25 @@ export class KnowledgeIndexEngine {
 			if (vector && !compatible) cacheable = false;
 			if (compatible && vector) {
 				const queryVector = vector;
-				const ids =
-					(await searchPhase(
-						"vector_search",
-						() => this.#native.scoreHybridSearch(snapshot.token, queryVector, SEMANTIC_LIMIT, signal),
-						hits => ({ semantic_count: hits?.length ?? 0 }),
-					)) ?? [];
+				let ids: number[] = [];
+				try {
+					ids =
+						(await searchPhase(
+							"vector_search",
+							() => this.#native.scoreHybridSearch(snapshot.token, queryVector, SEMANTIC_LIMIT, signal),
+							hits => ({ semantic_count: hits?.length ?? 0 }),
+						)) ?? [];
+				} catch (error) {
+					signal?.throwIfAborted();
+					if (
+						error instanceof Error &&
+						(error.name === "AbortError" ||
+							error.message === "Stale documentation search cursor: indexed snapshot has changed")
+					)
+						throw error;
+					cacheable = false;
+					optionalModelFailure("search.vector-index", error);
+				}
 				if (ids.length) {
 					const hits = await searchPhase(
 						"semantic_evidence",

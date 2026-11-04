@@ -2781,6 +2781,7 @@ export interface KnowledgeHybridPrepared {
   fulltext: Array<KnowledgeHybridRank>
   vectorDimensions: Array<number>
   vectorFailure: boolean
+  vectorFailureReason?: string
 }
 
 export interface KnowledgeHybridRank {

@@ -17,5 +17,6 @@ pub mod projection;
 pub mod query;
 /// SQLite index storage.
 pub mod storage;
+mod vector_index;
 /// Optional, identity-bound derived section vectors.
 pub mod vectors;

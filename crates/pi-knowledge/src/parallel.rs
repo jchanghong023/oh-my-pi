@@ -12,6 +12,30 @@ pub(crate) fn memory_budget(divisor: usize, cap: usize) -> usize {
 		.min(cap)
 }
 
+/// Native libraries may size scratch arrays from physical CPUs rather than
+/// process affinity/cgroup quotas. Use this only for admission, not scheduling.
+pub(crate) fn hardware_threads() -> usize {
+	#[cfg(windows)]
+	{
+		use windows_sys::Win32::System::Threading::{ALL_PROCESSOR_GROUPS, GetActiveProcessorCount};
+		// SAFETY: read-only system query, with the documented all-groups
+		// selector.
+		let count = unsafe { GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) };
+		if count > 0 {
+			return count as usize;
+		}
+	}
+	#[cfg(unix)]
+	{
+		// SAFETY: sysconf takes a constant selector and no pointers.
+		let count = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+		if count > 0 {
+			return count as usize;
+		}
+	}
+	std::thread::available_parallelism().map_or(1, |count| count.get())
+}
+
 pub(crate) fn pool() -> Option<&'static ThreadPool> {
 	let workers = std::thread::available_parallelism()
 		.map_or(1, |count| count.get())

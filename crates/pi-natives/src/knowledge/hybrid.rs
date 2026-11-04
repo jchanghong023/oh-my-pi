@@ -28,11 +28,12 @@ pub struct KnowledgeHybridRank {
 }
 #[napi(object, object_from_js = false)]
 pub struct KnowledgeHybridPrepared {
-	pub token:             String,
-	pub effective_query:   String,
-	pub fulltext:          Vec<KnowledgeHybridRank>,
-	pub vector_dimensions: Vec<u32>,
-	pub vector_failure:    bool,
+	pub token:                 String,
+	pub effective_query:       String,
+	pub fulltext:              Vec<KnowledgeHybridRank>,
+	pub vector_dimensions:     Vec<u32>,
+	pub vector_failure:        bool,
+	pub vector_failure_reason: Option<String>,
 }
 #[napi(object, object_from_js = false)]
 pub struct KnowledgeHybridCandidate {
@@ -54,9 +55,9 @@ pub struct KnowledgeHybridCandidate {
 impl From<HybridPrepared> for KnowledgeHybridPrepared {
 	fn from(value: HybridPrepared) -> Self {
 		Self {
-			token:             value.token,
-			effective_query:   value.effective_query,
-			fulltext:          value
+			token:                 value.token,
+			effective_query:       value.effective_query,
+			fulltext:              value
 				.fulltext
 				.into_iter()
 				.map(|item| KnowledgeHybridRank {
@@ -66,12 +67,13 @@ impl From<HybridPrepared> for KnowledgeHybridPrepared {
 					source_order: item.source_order,
 				})
 				.collect(),
-			vector_dimensions: value
+			vector_dimensions:     value
 				.vector_dimensions
 				.into_iter()
 				.map(|dim| dim as u32)
 				.collect(),
-			vector_failure:    value.vector_failure,
+			vector_failure:        value.vector_failure,
+			vector_failure_reason: value.vector_failure_reason,
 		}
 	}
 }

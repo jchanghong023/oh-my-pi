@@ -26,13 +26,15 @@
 
 ### Added
 
+- Run local mock embedding and rerank endpoints for knowledge search performance work from a source checkout.
 - Use the bundled Developer Test Agent with `/dt`, `/generate-dt-files`, `/generate-dt-dir`, `/incremental-dt` and `/cloud-dt-fix`, including its Python, Java, C/C++ and Go unit-test skills.
 - Start an optional business interview with `/dev business <description>` and an automatically assigned document path, then confirm its complete document with `/dev next` or deliver business requirements only with `/dev finish-business`; `/dev new` still starts directly with development requirements.
 - Build and replace the local Windows executable without stopping running sessions with `bun run local`, or build and upload Windows and WSL Linux binaries in parallel to a CNB release with `bun run cnb`, without packaging or publishing source code.
 - Use `/minimal` to request minimal changes and directly relevant verification, optionally alongside a task.
 - Support optional `OMP_CACHE_DIR` for caches, statistics, logs and default native files, with a per-user Linux offline default while keeping sessions and knowledge persistent.
 - Prepare knowledge embeddings with up to eight concurrent requests of 16 sections each, 90-second attempt deadlines and up to ten attempts separated by fixed ten-second waits.
-- Press `r retry` in `/knowledge` to resume missing vectors from saved sections across the current profile, keeping saved batches after failure or cancellation and skipping completed indexes.
+- Press `r retry` in `/knowledge` to resume missing vectors or rebuild missing vector indexes from saved data without re-embedding complete vectors or requiring source files.
+- Combine independent full-text and persistent vector recall in Knowledge search, retaining full-text results when an optional vector index is unavailable.
 
 - Default offline memory and knowledge embeddings to company `Qwen3-Embedding-8B` (4096 dimensions), enable `Qwen3-Reranker-8B` for knowledge search unless explicitly configured, and retry transient embedding overloads with bounded backoff.
 

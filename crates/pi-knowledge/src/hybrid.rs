@@ -1,7 +1,7 @@
 //! Internal snapshot-bound ranking exchange with the host model clients.
 use std::{
 	cell::RefCell,
-	collections::{HashMap, HashSet, VecDeque},
+	collections::{HashSet, VecDeque},
 	sync::{
 		Arc, Mutex,
 		atomic::{AtomicUsize, Ordering},
@@ -23,36 +23,8 @@ const SNAPSHOT_STALE: &str = "KNOWLEDGE_SNAPSHOT_STALE";
 // Retained cache data share one process-wide budget. Active contexts can
 // additionally retain their validation data until their operation completes.
 const MAX_HYBRID_DATA_BUDGET: usize = 1024 * 1024 * 1024;
-const MAX_MATRIX_BUDGET: usize = 8 * 1024 * 1024;
 static HYBRID_DATA_BYTES: AtomicUsize = AtomicUsize::new(0);
 static HYBRID_DATA_BUDGET: AtomicUsize = AtomicUsize::new(0);
-
-#[derive(Clone, PartialEq, Eq)]
-struct VectorKey {
-	guard:      String,
-	model:      String,
-	dimensions: usize,
-	index:      Option<String>,
-	path:       Option<String>,
-}
-
-struct CachedMatrix {
-	key:    VectorKey,
-	matrix: Arc<crate::vectors::VectorMatrix>,
-	bytes:  usize,
-}
-
-struct CachedVectorIds {
-	key:   VectorKey,
-	ids:   Arc<Vec<i64>>,
-	bytes: usize,
-}
-
-struct CachedVectorNorms {
-	key:   VectorKey,
-	norms: Arc<crate::vectors::VectorNorms>,
-	bytes: usize,
-}
 
 struct CachedHit {
 	guard: String,
@@ -68,12 +40,9 @@ struct CachedCandidate {
 }
 
 struct HybridData {
-	matrices:     VecDeque<CachedMatrix>,
-	vector_ids:   VecDeque<CachedVectorIds>,
-	vector_norms: VecDeque<CachedVectorNorms>,
-	hits:         VecDeque<CachedHit>,
-	candidates:   VecDeque<CachedCandidate>,
-	bytes:        usize,
+	hits:       VecDeque<CachedHit>,
+	candidates: VecDeque<CachedCandidate>,
+	bytes:      usize,
 }
 
 pub(super) struct HybridDataCache(RefCell<HybridData>, usize);
@@ -82,12 +51,9 @@ impl HybridDataCache {
 	pub(super) fn new() -> Self {
 		let cache = Self(
 			RefCell::new(HybridData {
-				matrices:     VecDeque::new(),
-				vector_ids:   VecDeque::new(),
-				vector_norms: VecDeque::new(),
-				hits:         VecDeque::new(),
-				candidates:   VecDeque::new(),
-				bytes:        0,
+				hits:       VecDeque::new(),
+				candidates: VecDeque::new(),
+				bytes:      0,
 			}),
 			MAX_HYBRID_DATA_BUDGET,
 		);
@@ -101,15 +67,8 @@ impl HybridDataCache {
 		self.reserve(&mut self.0.borrow_mut(), 0);
 	}
 
-	fn budget(&self) -> usize {
-		self.1.min(HYBRID_DATA_BUDGET.load(Ordering::Relaxed))
-	}
-
 	pub(super) fn clear(&self) {
 		let mut data = self.0.borrow_mut();
-		data.matrices.clear();
-		data.vector_ids.clear();
-		data.vector_norms.clear();
 		data.hits.clear();
 		data.candidates.clear();
 		HYBRID_DATA_BYTES.fetch_sub(data.bytes, Ordering::Relaxed);
@@ -139,123 +98,11 @@ impl HybridDataCache {
 				data.bytes -= old.bytes;
 			} else if let Some(old) = data.candidates.pop_front() {
 				data.bytes -= old.bytes;
-			} else if let Some(old) = data.vector_ids.pop_front() {
-				data.bytes -= old.bytes;
-			} else if let Some(old) = data.vector_norms.pop_front() {
-				data.bytes -= old.bytes;
-			} else if let Some(old) = data.matrices.pop_front() {
-				data.bytes -= old.bytes;
 			} else {
 				return false;
 			}
 			HYBRID_DATA_BYTES.fetch_sub(before - data.bytes, Ordering::Relaxed);
 		}
-	}
-
-	fn matrix(&self, key: &VectorKey) -> Option<Arc<crate::vectors::VectorMatrix>> {
-		let mut data = self.0.borrow_mut();
-		let position = data.matrices.iter().position(|entry| entry.key == *key)?;
-		let entry = data.matrices.remove(position).expect("matrix cache entry");
-		let matrix = Arc::clone(&entry.matrix);
-		data.matrices.push_back(entry);
-		Some(matrix)
-	}
-
-	fn insert_matrix(
-		&self,
-		key: VectorKey,
-		matrix: crate::vectors::VectorMatrix,
-	) -> Arc<crate::vectors::VectorMatrix> {
-		let bytes = matrix
-			.matrix
-			.capacity()
-			.saturating_mul(std::mem::size_of::<f32>())
-			.saturating_add(
-				matrix
-					.section_ids
-					.capacity()
-					.saturating_mul(std::mem::size_of::<i64>()),
-			)
-			.saturating_add(key.guard.capacity())
-			.saturating_add(key.model.capacity())
-			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
-			.saturating_add(key.path.as_ref().map_or(0, String::capacity))
-			.saturating_add(256);
-		let matrix = Arc::new(matrix);
-		let mut data = self.0.borrow_mut();
-		if self.reserve(&mut data, bytes) {
-			data.bytes += bytes;
-			data
-				.matrices
-				.push_back(CachedMatrix { key, matrix: Arc::clone(&matrix), bytes });
-		}
-		matrix
-	}
-
-	fn vector_ids(&self, key: &VectorKey) -> Option<Arc<Vec<i64>>> {
-		let mut data = self.0.borrow_mut();
-		let position = data.vector_ids.iter().position(|item| item.key == *key)?;
-		let item = data
-			.vector_ids
-			.remove(position)
-			.expect("vector IDs cache entry");
-		let ids = Arc::clone(&item.ids);
-		data.vector_ids.push_back(item);
-		Some(ids)
-	}
-
-	fn insert_vector_ids(&self, key: VectorKey, ids: Vec<i64>) -> Arc<Vec<i64>> {
-		let bytes = ids
-			.capacity()
-			.saturating_mul(std::mem::size_of::<i64>())
-			.saturating_add(key.guard.capacity())
-			.saturating_add(key.model.capacity())
-			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
-			.saturating_add(key.path.as_ref().map_or(0, String::capacity))
-			.saturating_add(256);
-		let ids = Arc::new(ids);
-		let mut data = self.0.borrow_mut();
-		if self.reserve(&mut data, bytes) {
-			data.bytes += bytes;
-			data
-				.vector_ids
-				.push_back(CachedVectorIds { key, ids: Arc::clone(&ids), bytes });
-		}
-		ids
-	}
-
-	fn vector_norms(&self, key: &VectorKey) -> Option<Arc<crate::vectors::VectorNorms>> {
-		let mut data = self.0.borrow_mut();
-		let position = data.vector_norms.iter().position(|item| item.key == *key)?;
-		let item = data
-			.vector_norms
-			.remove(position)
-			.expect("vector norms cache entry");
-		let norms = Arc::clone(&item.norms);
-		data.vector_norms.push_back(item);
-		Some(norms)
-	}
-
-	fn insert_vector_norms(
-		&self,
-		key: VectorKey,
-		norms: crate::vectors::VectorNorms,
-	) -> Arc<crate::vectors::VectorNorms> {
-		let bytes = norms
-			.retained_bytes()
-			.saturating_add(key.guard.capacity())
-			.saturating_add(key.model.capacity())
-			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
-			.saturating_add(256);
-		let norms = Arc::new(norms);
-		let mut data = self.0.borrow_mut();
-		if self.reserve(&mut data, bytes) {
-			data.bytes += bytes;
-			data
-				.vector_norms
-				.push_back(CachedVectorNorms { key, norms: Arc::clone(&norms), bytes });
-		}
-		norms
 	}
 
 	fn candidate(&self, guard: &str, query: &str, id: i64) -> Option<RankedSection> {
@@ -353,22 +200,6 @@ fn copy_hit(hit: &KnowledgeSearchHit, entry: &RankedSection) -> KnowledgeSearchH
 		shape:         entry.shape,
 		match_kind:    entry.match_kind,
 		rank:          entry.rank,
-	}
-}
-
-fn vector_key(
-	guard: &str,
-	model: &str,
-	dimensions: usize,
-	index: Option<&str>,
-	path: Option<&str>,
-) -> VectorKey {
-	VectorKey {
-		guard: guard.to_owned(),
-		model: model.to_owned(),
-		dimensions,
-		index: index.map(str::to_owned),
-		path: path.map(str::to_owned),
 	}
 }
 
@@ -612,14 +443,12 @@ impl DatabaseEngine {
 	where
 		F: Fn() -> CoreResult<()> + Clone + Send + 'static,
 	{
-		// Only the most recent preparation pins validation across model I/O.
-		// Older tokens remain usable: score_hybrid can revalidate their guard.
+		// Only the latest operation pins native indexes across model I/O.
 		for context in &self.hybrid {
-			context.vector_norms.lock().expect("vector norms").clear();
 			context
-				.vector_matrices
+				.vector_indexes
 				.lock()
-				.expect("vector matrices")
+				.expect("vector indexes")
 				.clear();
 		}
 		let output = self.search(text, options, check.clone())?;
@@ -639,160 +468,46 @@ impl DatabaseEngine {
 		for hit in &output.result.sections {
 			self.hybrid_data.insert_hit(&guard, hit);
 		}
-		let (source_order, vectors, vector_failure, vector_norms, vector_matrices) = self
-			.hybrid_snapshot_checked(&guard, check.clone(), |connection| {
-				let mut wanted: HashSet<i64> = baseline
-					.ranked
-					.iter()
-					.map(|entry| entry.section_id)
-					.collect();
-				let mut vector_dimensions = Vec::new();
-				let mut vector_norms = HashMap::new();
-				let mut vector_matrices = HashMap::new();
-				{
-					let has_generations: bool = if model.is_some() {
-						connection.query_row(
-							"SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND \
-							 name='wiki_vector_generations')",
-							[],
-							|row| row.get(0),
-						)?
-					} else {
-						false
-					};
-					if let Some(model) = model.filter(|_| has_generations) {
-						let mut dimensions = connection.prepare(
-							"SELECT DISTINCT g.dimensions FROM wiki_vector_generations g JOIN \
-							 doc_indexes i ON i.id=g.index_id WHERE g.complete=1 AND g.model=? AND \
-							 typeof(g.dimensions)='integer' AND g.dimensions>0 AND \
-							 g.dimensions<=4294967295 AND i.name NOT GLOB '__building__*' AND (? IS NULL \
-							 OR i.name=?) ORDER BY g.dimensions",
-						)?;
-						let dims = dimensions
-							.query_map(params![model, options.index, options.index], |row| {
-								row.get::<_, i64>(0)
-							})?;
-						for dimension in dims {
-							check()?;
-							let dimension = usize::try_from(dimension?).map_err(|_| stale())?;
-							let key = vector_key(
-								&guard,
-								model,
-								dimension,
-								options.index.as_deref(),
-								options.path.as_deref(),
-							);
-							let matrix = if let Some(matrix) = self.hybrid_data.matrix(&key) {
-								Some(matrix)
-							} else if self.hybrid_data.vector_ids(&key).is_some() {
-								None
-							} else if crate::vectors::matrix_fits(
-								connection,
-								model,
-								dimension,
-								options.index.as_deref(),
-								(self.hybrid_data.budget() / 2).min(MAX_MATRIX_BUDGET),
-							)? {
-								let matrix = crate::vectors::read_scoped_vector_matrix(
-									connection,
-									model,
-									dimension,
-									options.index.as_deref(),
-									options.path.as_deref().map(PathScope),
-									&check,
-								)?;
-								Some(self.hybrid_data.insert_matrix(key.clone(), matrix))
-							} else {
-								None
-							};
-							let section_ids = if let Some(matrix) = matrix.as_ref() {
-								vector_matrices.insert(dimension, Arc::clone(matrix));
-								&matrix.section_ids
-							} else {
-								// Validation is needed even when scoped IDs are cached:
-								// the active context must retain it across eviction.
-								let validation_key =
-									vector_key(&guard, model, dimension, options.index.as_deref(), None);
-								let norms =
-									if let Some(norms) = self.hybrid_data.vector_norms(&validation_key) {
-										norms
-									} else {
-										let norms = crate::vectors::read_vector_norms(
-											connection,
-											model,
-											dimension,
-											options.index.as_deref(),
-											check.clone(),
-										)?;
-										self.hybrid_data.insert_vector_norms(validation_key, norms)
-									};
-								let ids = if let Some(ids) = self.hybrid_data.vector_ids(&key) {
-									ids
-								} else {
-									let ids = crate::vectors::scoped_validated_ids(
-										connection,
-										&norms,
-										options.path.as_deref().map(PathScope),
-										&check,
-									)?;
-									self.hybrid_data.insert_vector_ids(key, ids)
-								};
-								vector_norms.insert(dimension, norms);
-								if !ids.is_empty() {
-									wanted.extend(ids.iter().copied());
-									vector_dimensions.push(dimension);
-								}
-								continue;
-							};
-							if !section_ids.is_empty() {
-								wanted.extend(section_ids.iter().copied());
-								vector_dimensions.push(dimension);
-							}
-						}
-					}
-				}
-				let mut source_order = HashMap::with_capacity(wanted.len());
-				let mut statement = connection.prepare(
-					"SELECT s.id FROM sections s JOIN documents d ON d.id=s.document_id JOIN \
-					 doc_indexes i ON i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (? IS \
-					 NULL OR i.name=?) ORDER BY i.id,d.id,s.ordinal,s.id",
-				)?;
-				let ids = statement
-					.query_map(params![options.index, options.index], |row| row.get::<_, i64>(0))?;
-				for (position, id) in ids.enumerate() {
-					check()?;
-					let id = id?;
-					if wanted.contains(&id) {
-						source_order.insert(id, position as i64);
-					}
-				}
-				Ok((source_order, vector_dimensions, false, vector_norms, vector_matrices))
+		let (indexes, vector_failure_reason) =
+			self.hybrid_snapshot_checked(&guard, check.clone(), |connection| match model {
+				Some(model) => crate::vector_index::prepare(
+					connection,
+					&self.identity,
+					&guard,
+					&self.vector_indexes,
+					model,
+					options.index.as_deref(),
+					options.path.as_deref().map(PathScope),
+					&check,
+				),
+				None => Ok((Vec::new(), None)),
 			})?;
+		let mut dimensions: Vec<usize> = indexes.iter().map(|index| index.dimensions).collect();
+		dimensions.sort_unstable();
+		dimensions.dedup();
+		// Stable storage identities provide deterministic ties without scanning
+		// every section merely to assign transient source-order positions.
 		let fulltext = baseline
 			.ranked
 			.iter()
-			.map(|entry| {
-				Ok(HybridRank {
-					section_id:   entry.section_id,
-					match_kind:   entry.match_kind,
-					rank:         entry.rank,
-					source_order: *source_order.get(&entry.section_id).ok_or_else(stale)?,
-				})
+			.map(|entry| HybridRank {
+				section_id:   entry.section_id,
+				match_kind:   entry.match_kind,
+				rank:         entry.rank,
+				source_order: entry.section_id,
 			})
-			.collect::<CoreResult<Vec<_>>>()?;
+			.collect();
 		let baseline_positions = baseline
 			.ranked
 			.iter()
 			.enumerate()
 			.map(|(position, entry)| (entry.section_id, position))
 			.collect();
-		let mut allowed: HashSet<i64> = baseline
+		let allowed = baseline
 			.ranked
 			.iter()
 			.map(|entry| entry.section_id)
 			.collect();
-		// All valid vector IDs were included in source_order above.
-		allowed.extend(source_order.keys().copied());
 		self.hybrid_sequence = self.hybrid_sequence.wrapping_add(1);
 		let token = digest(
 			format!("{}:{}:{}:{}", key, guard, baseline.version, self.hybrid_sequence).as_bytes(),
@@ -805,14 +520,12 @@ impl DatabaseEngine {
 			index: options.index.clone(),
 			path: options.path.clone(),
 			model: model.map(str::to_owned),
-			vector_dimensions: vectors.clone(),
-			vector_norms: Mutex::new(vector_norms),
-			vector_matrices: Mutex::new(vector_matrices),
+			vector_dimensions: dimensions.clone(),
+			vector_indexes: Mutex::new(indexes),
 			limit: options.limit,
 			baseline,
 			baseline_positions,
-			source_order,
-			allowed,
+			allowed: Mutex::new(allowed),
 		}));
 		while self.hybrid.len() > 8 {
 			self.hybrid.pop_front();
@@ -821,8 +534,9 @@ impl DatabaseEngine {
 			token,
 			effective_query: text.to_owned(),
 			fulltext,
-			vector_dimensions: vectors,
-			vector_failure,
+			vector_dimensions: dimensions,
+			vector_failure: vector_failure_reason.is_some(),
+			vector_failure_reason,
 		})
 	}
 
@@ -846,64 +560,42 @@ impl DatabaseEngine {
 		let model = context.model.as_deref().ok_or_else(stale)?;
 		let result = self.hybrid_snapshot_checked(&context.guard, check.clone(), |connection| {
 			check()?;
-			let key = vector_key(
-				&context.guard,
-				model,
-				dimensions,
-				context.index.as_deref(),
-				context.path.as_deref(),
-			);
-			let matrix = context
-				.vector_matrices
-				.lock()
-				.expect("vector matrices")
-				.remove(&dimensions)
-				.or_else(|| self.hybrid_data.matrix(&key));
-			let result = if let Some(matrix) = matrix {
-				crate::vectors::score_matrix(&matrix, query, limit, &check)
-			} else {
-				let key = vector_key(&context.guard, model, dimensions, context.index.as_deref(), None);
-				let retained = context
-					.vector_norms
-					.lock()
-					.expect("vector norms")
-					.remove(&dimensions)
-					.or_else(|| self.hybrid_data.vector_norms(&key));
-				let norms = if let Some(norms) = retained {
-					norms
-				} else {
-					let norms = crate::vectors::read_vector_norms(
-						connection,
-						model,
-						dimensions,
-						context.index.as_deref(),
-						check.clone(),
-					)?;
-					self.hybrid_data.insert_vector_norms(key, norms)
-				};
-				crate::vectors::score_validated_stream_parallel(
+			let mut indexes = context.vector_indexes.lock().expect("vector indexes");
+			if indexes.is_empty() {
+				let (loaded, failed) = crate::vector_index::prepare(
 					connection,
+					&self.identity,
+					&context.guard,
+					&self.vector_indexes,
 					model,
-					dimensions,
 					context.index.as_deref(),
 					context.path.as_deref().map(PathScope),
-					query,
-					limit,
-					check.clone(),
-					&norms,
-				)
-			}?;
+					&check,
+				)?;
+				if let Some(reason) = failed
+					&& !loaded.iter().any(|index| index.dimensions == dimensions)
+				{
+					return Err(KnowledgeError::message(reason));
+				}
+				*indexes = loaded;
+			}
+			let ids = crate::vector_index::search(&indexes, dimensions, query, limit, &check)?;
 			check()?;
-			Ok(Some(result))
+			context
+				.allowed
+				.lock()
+				.expect("hybrid candidates")
+				.extend(ids.iter().copied());
+			Ok(Some(ids))
 		});
-		// Success, failure and cancellation all release this operation's
-		// additional working set; reusable data remain in the bounded cache.
-		context.vector_norms.lock().expect("vector norms").clear();
 		context
-			.vector_matrices
+			.vector_indexes
 			.lock()
-			.expect("vector matrices")
+			.expect("vector indexes")
 			.clear();
+		if result.is_err() {
+			self.vector_indexes.clear();
+		}
 		result
 	}
 
@@ -915,21 +607,19 @@ impl DatabaseEngine {
 		check: &dyn Fn() -> CoreResult<()>,
 	) -> CoreResult<Vec<HybridCandidate>> {
 		let context = self.hybrid_context(token)?;
+		let allowed = context.allowed.lock().expect("hybrid candidates");
 		self.hybrid_snapshot(&context.guard, |connection| {
 			let mut unique = HashSet::new();
 			let mut hits = Vec::with_capacity(ids.len());
 			let mut resolver = CandidateResolver::new(&context.query, &self.hybrid_data);
 			for &id in ids {
 				check()?;
-				if !context.allowed.contains(&id) || !unique.insert(id) {
+				if !allowed.contains(&id) || !unique.insert(id) {
 					return Err(stale());
 				}
 				let entry = resolver.candidate(connection, &context, id, check)?;
 				let hit = self.hydrate_cached(connection, &context.guard, &entry)?;
-				hits.push(HybridCandidate {
-					hit,
-					source_order: *context.source_order.get(&id).ok_or_else(stale)?,
-				});
+				hits.push(HybridCandidate { hit, source_order: id });
 			}
 			Ok(hits)
 		})
@@ -946,12 +636,12 @@ impl DatabaseEngine {
 		check: &dyn Fn() -> CoreResult<()>,
 	) -> CoreResult<KnowledgeSearchOutput> {
 		let context = self.hybrid_context(token)?;
-		context.vector_norms.lock().expect("vector norms").clear();
 		context
-			.vector_matrices
+			.vector_indexes
 			.lock()
-			.expect("vector matrices")
+			.expect("vector indexes")
 			.clear();
+		let allowed = context.allowed.lock().expect("hybrid candidates");
 		let baseline_ids: HashSet<i64> = context
 			.baseline
 			.ranked
@@ -961,7 +651,7 @@ impl DatabaseEngine {
 		let mut unique = HashSet::new();
 		if ids
 			.iter()
-			.any(|id| !context.allowed.contains(id) || !unique.insert(*id))
+			.any(|id| !allowed.contains(id) || !unique.insert(*id))
 			|| !baseline_ids.is_subset(&unique)
 		{
 			return Err(stale());
@@ -1209,7 +899,7 @@ mod tests {
 				CREATE VIRTUAL TABLE sections_fts USING fts5(section_id UNINDEXED,index_id \
 					 UNINDEXED,relative_path,heading_path,body,content='',contentless_delete=1);
 				CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions INTEGER,complete \
-					 INTEGER);
+					 INTEGER,token TEXT);
 				CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
 				INSERT INTO doc_indexes VALUES(1,'one','/unused'),(2,'two','/unused');
 				INSERT INTO documents \
@@ -1222,17 +912,48 @@ mod tests {
 					 VALUES(1,1,1,'scope/a.md','A','# A needle evidence \
 					 one'),(2,2,1,'outside.md','B','# B outside evidence'),(3,3,2,'scope/c.md','C','# \
 					 C needle evidence two');
-				INSERT INTO wiki_vector_generations VALUES(1,'model',2,1),(2,'model',2,1);
+				INSERT INTO wiki_vector_generations VALUES(1,'model',2,1,'one'),(2,'model',2,1,'two');
 				INSERT INTO wiki_section_vectors \
-					 VALUES(1,1,x'0000404000008040'),(1,2,x'0000803f00000000'),(2,3,x'000000000000803f'\
+					 VALUES(1,1,x'9a99193fcdcc4c3f'),(1,2,x'0000803f00000000'),(2,3,x'000000000000803f'\
 					 );",
 				)
 				.unwrap();
-			Self { dir, path }
+			connection
+				.execute_batch(crate::vector_index::SCHEMA)
+				.unwrap();
+			let fixture = Self { dir, path };
+			fixture.publish_vectors();
+			fixture
 		}
 
 		fn engine(&self) -> DatabaseEngine {
 			DatabaseEngine::new(self.path.clone(), self.path.clone())
+		}
+
+		fn publish_vectors(&self) {
+			let mut engine = self.engine();
+			engine.ensure_database().unwrap();
+			let connection = engine.connection.as_ref().unwrap();
+			for (id, token) in [(1, "one"), (2, "two")] {
+				let (dimensions, total): (i64, i64) = connection
+					.query_row(
+						"SELECT g.dimensions,(SELECT count(*) FROM wiki_section_vectors v WHERE \
+						 v.index_id=g.index_id) FROM wiki_vector_generations g WHERE g.index_id=?",
+						[id],
+						|row| Ok((row.get(0)?, row.get(1)?)),
+					)
+					.unwrap();
+				crate::vector_index::build(
+					connection,
+					&engine.identity,
+					id,
+					token,
+					usize::try_from(dimensions).unwrap(),
+					usize::try_from(total).unwrap(),
+					&|| Ok(()),
+				)
+				.unwrap();
+			}
 		}
 	}
 
@@ -1320,6 +1041,8 @@ mod tests {
 				.unwrap(),
 			vec![3]
 		);
+		// This raw SQL mutation leaves the FTS row unchanged, so section 1
+		// remains a fulltext candidate even though its vectors are invalid.
 		let refreshed = engine
 			.read_hybrid_candidates(&third.token, &[1], &|| Ok(()))
 			.unwrap();
@@ -1350,6 +1073,7 @@ mod tests {
 				.read_hybrid_candidates(&reopened.token, &[1], &|| Ok(()))
 				.is_err()
 		);
+		fixture.publish_vectors();
 		let local = engine
 			.prepare_hybrid("evidence", &options, Some("model"), &|| Ok(()))
 			.unwrap()
@@ -1433,12 +1157,11 @@ mod tests {
 		assert!(cache.bytes <= 900);
 		let empty = uncached.hybrid_data.0.borrow();
 		assert_eq!(empty.bytes, 0);
-		assert!(empty.matrices.is_empty());
 		assert!(empty.hits.is_empty());
 	}
 
 	#[test]
-	fn oversized_validated_ids_preserve_results_within_guard() {
+	fn repeated_preparation_preserves_scoped_candidates_within_guard() {
 		let fixture = Fixture::new();
 		let writer = Connection::open(&fixture.path).unwrap();
 		writer.execute_batch(
@@ -1446,6 +1169,7 @@ mod tests {
 			 INSERT INTO sections SELECT x,1,1,x,'A',1,1,2,0,1,'extra' FROM n;
 			 INSERT INTO wiki_section_vectors SELECT 1,id,x'0000803f00000000' FROM sections WHERE id>=4;"
 		).unwrap();
+		fixture.publish_vectors();
 		let mut engine = fixture.engine();
 		engine.hybrid_data.1 = 4096;
 		let options = KnowledgeSearchOptions::default();
@@ -1453,20 +1177,11 @@ mod tests {
 			.prepare_hybrid("needle", &options, Some("model"), || Ok(()))
 			.unwrap()
 			.expect_ready();
-		let guard = engine.hybrid_context(&first.token).unwrap().guard.clone();
-		let key = vector_key(&guard, "model", 2, None, None);
-		assert!(engine.hybrid_data.matrix(&key).is_none());
-		let ids = engine.hybrid_data.vector_ids(&key).unwrap();
-		assert_eq!(ids.len(), 203);
 		let second = engine
 			.prepare_hybrid("evidence", &options, Some("model"), || Ok(()))
 			.unwrap()
 			.expect_ready();
 		assert_eq!(second.vector_dimensions, first.vector_dimensions);
-		let reused = engine.hybrid_data.vector_ids(&key).unwrap();
-		// A bounded cache may evict and reconstruct the ID allocation while
-		// retaining equivalent validated evidence for the same corpus guard.
-		assert_eq!(ids.as_ref(), reused.as_ref());
 		assert!(engine.hybrid_data.0.borrow().bytes <= engine.hybrid_data.1);
 		let first_scores = engine
 			.score_hybrid(&first.token, 2, || Ok(()), &[0.0, 1.0], 203)
@@ -1490,8 +1205,8 @@ mod tests {
 		let fixture = Fixture::new();
 		let writer = Connection::open(&fixture.path).unwrap();
 		let mut vector = vec![0.0f32; 256];
-		vector[0] = 3.0;
-		vector[1] = 4.0;
+		vector[0] = 0.6;
+		vector[1] = 0.8;
 		let bytes: Vec<u8> = vector
 			.iter()
 			.flat_map(|value| value.to_le_bytes())
@@ -1502,6 +1217,7 @@ mod tests {
 		writer
 			.execute("UPDATE wiki_section_vectors SET vector=?", [bytes])
 			.unwrap();
+		fixture.publish_vectors();
 		let mut engine = fixture.engine();
 		engine.hybrid_data.1 = 2048;
 		engine
@@ -1524,8 +1240,8 @@ mod tests {
 			.unwrap();
 		let options =
 			KnowledgeSearchOptions { path: Some("scope/c.md".into()), ..Default::default() };
-		// A different query AND a different path must reuse the completed
-		// validation, even when SQLite refuses any new vector payload read.
+		// A different query and path reuse the published ANN index without
+		// rereading authoritative vector payloads during a read-only query.
 		let prepared = engine
 			.prepare_hybrid("evidence", &options, Some("model"), || Ok(()))
 			.unwrap()
@@ -1607,6 +1323,17 @@ mod tests {
 			.prepare_hybrid("needle", &options, Some("model"), || Ok(()))
 			.unwrap()
 			.expect_ready();
+		assert!(
+			engine
+				.read_hybrid_candidates(&prepared.token, &[2], &|| Ok(()))
+				.is_err(),
+			"semantic-only evidence must be authorized by scoring first"
+		);
+		let semantic = engine
+			.score_hybrid(&prepared.token, 2, || Ok(()), &[1.0, 0.0], 3)
+			.unwrap()
+			.unwrap();
+		assert!(semantic.contains(&2));
 		let candidate = engine
 			.read_hybrid_candidates(&prepared.token, &[2], &|| Ok(()))
 			.unwrap()

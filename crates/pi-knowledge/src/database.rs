@@ -437,13 +437,15 @@ pub struct HybridRank {
 
 /// Snapshot-bound input for host-side fusion and optional reranking.
 pub struct HybridPrepared {
-	pub token:             String,
-	pub effective_query:   String,
-	pub fulltext:          Vec<HybridRank>,
-	pub vector_dimensions: Vec<usize>,
+	pub token:                 String,
+	pub effective_query:       String,
+	pub fulltext:              Vec<HybridRank>,
+	pub vector_dimensions:     Vec<usize>,
 	/// Optional derived-vector reading failed; the fulltext result remains
 	/// valid.
-	pub vector_failure:    bool,
+	pub vector_failure:        bool,
+	/// Reason the optional index could not be used, for existing diagnostics.
+	pub vector_failure_reason: Option<String>,
 }
 
 /// Either a stable hybrid snapshot or a plain search after concurrent changes.
@@ -471,13 +473,11 @@ struct HybridContext {
 	path:               Option<String>,
 	model:              Option<String>,
 	vector_dimensions:  Vec<usize>,
-	vector_norms:       Mutex<HashMap<usize, Arc<crate::vectors::VectorNorms>>>,
-	vector_matrices:    Mutex<HashMap<usize, Arc<crate::vectors::VectorMatrix>>>,
+	vector_indexes:     Mutex<Vec<crate::vector_index::Generation>>,
 	limit:              Option<f64>,
 	baseline:           Arc<Ranking>,
 	baseline_positions: HashMap<i64, usize>,
-	source_order:       HashMap<i64, i64>,
-	allowed:            std::collections::HashSet<i64>,
+	allowed:            Mutex<std::collections::HashSet<i64>>,
 }
 
 /// A bounded candidate and its stable source order.
@@ -600,6 +600,7 @@ pub struct DatabaseEngine {
 	corpus_snapshot:     Option<Sha256>,
 	grep_snapshot:       Option<Sha256>,
 	hybrid_data:         hybrid::HybridDataCache,
+	vector_indexes:      crate::vector_index::IndexCache,
 	cache:               VecDeque<(String, Arc<Ranking>)>,
 	cached_sections:     usize,
 	hybrid:              VecDeque<Arc<HybridContext>>,
@@ -625,6 +626,7 @@ impl DatabaseEngine {
 			corpus_snapshot: None,
 			grep_snapshot: None,
 			hybrid_data: hybrid::HybridDataCache::new(),
+			vector_indexes: crate::vector_index::IndexCache::default(),
 			cache: VecDeque::new(),
 			cached_sections: 0,
 			hybrid: VecDeque::new(),
@@ -663,6 +665,7 @@ impl DatabaseEngine {
 		self.corpus_snapshot = None;
 		self.grep_snapshot = None;
 		self.hybrid_data.clear();
+		self.vector_indexes.clear();
 		self.cached_sections = 0;
 		self.hybrid.clear();
 		self.hybrid_completed.clear();
@@ -696,6 +699,7 @@ impl DatabaseEngine {
 
 	fn guard(&self) -> CoreResult<String> {
 		self.hybrid_data.refresh_budget();
+		self.vector_indexes.refresh_budget();
 		let connection = self.connection.as_ref().expect("opened search connection");
 		let version: i64 = connection.query_row("PRAGMA data_version", [], |row| row.get(0))?;
 		let changes: i64 = connection.query_row("SELECT total_changes()", [], |row| row.get(0))?;
@@ -2545,11 +2549,11 @@ needle evidence legacy');
 		connection
 			.execute_batch(
 				"CREATE TABLE wiki_vector_generations(index_id INTEGER,model TEXT,dimensions \
-				 INTEGER,complete INTEGER);
+				 INTEGER,complete INTEGER,token TEXT);
 			 CREATE TABLE wiki_section_vectors(index_id INTEGER,section_id INTEGER,vector BLOB);
 			 INSERT INTO documents VALUES(2,1,'outside.md','Other','markdown','other',10,1.0);
 			 INSERT INTO sections VALUES(4,1,2,0,'Other',1,1,1,0,5,'other');
-			 INSERT INTO wiki_vector_generations VALUES(1,'model',2,1);
+			 INSERT INTO wiki_vector_generations VALUES(1,'model',2,1,'generation');
 			 INSERT INTO wiki_section_vectors VALUES
 			 (1,1,x'0000803f00000000'),(1,2,x'0000803f00000000'),
 			 (1,3,x'0000803f00000000'),(1,4,x'000000000000803f');",
@@ -2557,6 +2561,13 @@ needle evidence legacy');
 			.unwrap();
 		drop(connection);
 		let mut engine = fixture.engine();
+		engine.ensure_database().unwrap();
+		let connection = engine.connection.as_ref().unwrap();
+		connection
+			.execute_batch(crate::vector_index::SCHEMA)
+			.unwrap();
+		crate::vector_index::build(connection, &engine.identity, 1, "generation", 2, 4, &|| Ok(()))
+			.unwrap();
 		let options = KnowledgeSearchOptions { path: Some("old.md".into()), ..Default::default() };
 		let prepared = engine
 			.prepare_hybrid("needle", &options, Some("model"), &|| Ok(()))
@@ -2778,6 +2789,12 @@ needle evidence legacy');
 			)
 			.unwrap();
 		let mut engine = fixture.engine();
+		engine.ensure_database().unwrap();
+		connection
+			.execute_batch(crate::vector_index::SCHEMA)
+			.unwrap();
+		crate::vector_index::build(&connection, &engine.identity, 1, "generation", 2, 3, &|| Ok(()))
+			.unwrap();
 		let prepared = engine
 			.prepare_hybrid("unrelated", &KnowledgeSearchOptions::default(), Some("model"), &|| Ok(()))
 			.unwrap()
@@ -2835,6 +2852,16 @@ needle evidence legacy');
 			)
 			.unwrap();
 		let mut engine = fixture.engine();
+		engine.ensure_database().unwrap();
+		connection
+			.execute_batch(crate::vector_index::SCHEMA)
+			.unwrap();
+		assert!(
+			crate::vector_index::build(&connection, &engine.identity, 1, "bad", 2, 3, &|| Ok(()))
+				.is_err()
+		);
+		crate::vector_index::build(&connection, &engine.identity, 2, "good", 2, 1, &|| Ok(()))
+			.unwrap();
 		let prepared = engine
 			.prepare_hybrid("unrelated", &KnowledgeSearchOptions::default(), Some("model"), &|| Ok(()))
 			.unwrap()

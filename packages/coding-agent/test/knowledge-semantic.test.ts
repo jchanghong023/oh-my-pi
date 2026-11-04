@@ -1,8 +1,10 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { KnowledgeSearchEngine } from "@oh-my-pi/pi-natives";
+import { KnowledgeIndexEngine } from "../src/knowledge/engine";
 import { KnowledgeService } from "../src/knowledge/service";
 import type { KnowledgeSectionHit } from "../src/knowledge/types";
 
@@ -202,6 +204,70 @@ const lexicalFiles = {
 	"b.md": "# Second\nalpha beta second complete evidence.\n",
 	"c.md": "# Third\nalpha beta third complete evidence.\n",
 };
+
+it("rebuilds missing ANN indexes from saved vectors without model calls or source files", async () => {
+	const f = await fixture();
+	await f.configure({ embedding: "test-embedding" });
+	const source = await f.add("manual", lexicalFiles);
+	await fs.rm(source, { recursive: true, force: true });
+	await f.configure();
+	const baseline = await f.service.search("alpha beta");
+	const db = new Database(f.service.databasePath, { strict: true });
+	try {
+		expect(db.query("SELECT count(*) AS count FROM wiki_ann_generations").get()).toEqual({ count: 1 });
+		db.exec("DELETE FROM wiki_ann_shards");
+	} finally {
+		db.close();
+	}
+	const requests = f.server.requests.length;
+	expect(await f.service.retryVectors()).toEqual({ total: 1, completed: 1, skipped: 0 });
+	expect(await f.service.retryVectors()).toEqual({ total: 1, completed: 0, skipped: 1 });
+	expect(f.server.requests.slice(requests)).toEqual([]);
+	expect(identities((await f.service.search("alpha beta")).sections)).toEqual(identities(baseline.sections));
+	await f.configure({ embedding: "test-embedding" });
+	const semantic = await f.service.searchKnowledge("如何恢复任务");
+	expect(semantic.text).toMatch(/retrieval:\s*hybrid/i);
+	expect(semantic.result.sections).toHaveLength(3);
+	expect(new Set(identities(semantic.result.sections))).toEqual(new Set(identities(baseline.sections)));
+}, 30_000);
+
+it.each(["unavailable", "abort", "stale"] as const)(
+	"handles native vector scoring %s without losing the fulltext or cancellation contract",
+	async failure => {
+		const f = await fixture();
+		await f.configure({ embedding: "test-embedding" });
+		await f.add("manual", lexicalFiles);
+		await f.configure();
+		const baseline = await f.service.search("alpha beta");
+		await f.configure({ embedding: "test-embedding" });
+		await f.service.close();
+		const engine = new KnowledgeIndexEngine({ agentDir: f.agentDir, cwd: f.root });
+		const error =
+			failure === "abort"
+				? new DOMException("cancelled", "AbortError")
+				: new Error(
+						failure === "stale"
+							? "Stale documentation search cursor: indexed snapshot has changed"
+							: "Knowledge vector index unavailable: memory budget exhausted",
+					);
+		const score = spyOn(KnowledgeSearchEngine.prototype, "scoreHybridSearch").mockRejectedValue(error);
+		try {
+			if (failure === "abort") {
+				await expect(engine.searchWindowAsync("alpha beta")).rejects.toThrow("cancelled");
+			} else {
+				const result = await engine.searchWindowAsync("alpha beta");
+				expect(result.retrieval).toBe("fulltext");
+				expect(identities(result.sections)).toEqual(identities(baseline.sections));
+				expect(result.sections.map(hit => hit.text)).toEqual(baseline.sections.map(hit => hit.text));
+			}
+			expect(score).toHaveBeenCalledTimes(failure === "stale" ? 2 : 1);
+		} finally {
+			score.mockRestore();
+			engine.close();
+		}
+	},
+	30_000,
+);
 
 it("scopes semantic candidates before top-k and reports the ranking actually used across pages", async () => {
 	const f = await fixture();

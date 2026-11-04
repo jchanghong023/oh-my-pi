@@ -61,6 +61,28 @@ Examples:
 - Embedding reuses `mnemopi.embeddingModel`, `mnemopi.embeddingApiUrl` and `mnemopi.embeddingApiKey` and their existing environment/company configuration rules; it does not require enabling the memory system. `mnemopi.noEmbeddings` and `MNEMOPI_NO_EMBEDDINGS` disable the embedding path under the existing configuration precedence, without disabling reranking. Reranking is separately optional via `knowledge.reranker.model`, `knowledge.reranker.baseUrl` and `knowledge.reranker.apiKey`. No model is downloaded automatically, and an explicitly different endpoint does not receive a company-only token.
 - `init` prepares optional vectors within the hidden import before publication. A complete full-text import remains usable if vector preparation fails; cancellation or full-text failure does not publish a partial index. Existing full-text-only indexes continue to work; to prepare vectors for one, explicitly remove and re-import it with Embedding available. Queries never build or backfill corpus vectors.
 
+## Local mock models for search performance work
+
+From a source checkout, run `bun scripts/mock-retrieval-models.ts` to start a loopback-only service at `http://127.0.0.1:18080/v1`. An optional port argument changes the port. The service requires no credentials.
+
+Save the following in a separate YAML file and start OMP with a new, isolated profile, for example `omp --profile mock-retrieval --config path/to/mock-models.yml`:
+
+```yaml
+mnemopi:
+  embeddingModel: Qwen3-Embedding-8B
+  embeddingApiUrl: http://127.0.0.1:18080/v1
+knowledge:
+  reranker:
+    model: Qwen3-Reranker-8B
+    baseUrl: http://127.0.0.1:18080/v1
+```
+
+The embedding endpoint returns deterministic, dense 4096-dimensional float32 vectors, and the reranker orders documents by lexical overlap. Both accept the company model IDs so Knowledge exercises the same model-selection path, but they do not run Qwen or reproduce its semantic results, token counts, context limits, inference or network latency. Reported usage is zero.
+
+Use a new isolated profile and database: the mock and real models share the same IDs but have incompatible vector spaces. Never switch an existing memory or Knowledge database between the mock and real endpoints; regenerate real embeddings in a separate database. The service does not enable the Mnemopi backend by itself.
+
+For search timings, follow [Query Timing Diagnostics](#query-timing-diagnostics): outward success includes a 500 ms minimum wait. Mock-model work and localhost transfer are included in the measured path, but cannot estimate company-model latency.
+
 ## Explicit Grep
 - Grep does not resolve or call Embedding or Reranker models.
 - `mode:"grep"` scans the selected imported corpus's database-stored original raw Markdown, not normalized searchable text, FTS candidates or source files. There is no filesystem grep or filesystem grep's 4 MiB file cap.
