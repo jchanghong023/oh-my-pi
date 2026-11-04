@@ -1,9 +1,22 @@
+import * as fs from "node:fs";
 import { readFile } from "node:fs/promises";
+import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isOpenWikiSourceCheckout } from "./resource-dependencies";
 import { openWikiResourceFingerprint } from "./resource-fingerprint";
+import visualArchivePath from "./visual-archive";
 
-/** Load prebuilt browser assets; compiled binaries carry the same resource map inline. */
+let embeddedVisualAssets: string | undefined;
+
+/** Share one lazily decompressed resource map with the license command. */
+export function getEmbeddedOpenWikiVisualAssets(): string | undefined {
+	if (!visualArchivePath) return process.env.PI_OPENWIKI_VISUAL_ASSETS;
+	return (embeddedVisualAssets ??= Bun.zstdDecompressSync(
+		fs.readFileSync(path.resolve(import.meta.dir, visualArchivePath)),
+	).toString("utf8"));
+}
+
+/** Load prebuilt browser assets from the source checkout or the bundled archive. */
 export async function getOpenWikiVisualAssets(): Promise<{
 	clientJs: string;
 	clientLibJs: string;
@@ -11,7 +24,7 @@ export async function getOpenWikiVisualAssets(): Promise<{
 	licenseAssets: Record<string, string>;
 	browserAssets: Record<string, string>;
 }> {
-	let serialized = process.env.PI_OPENWIKI_VISUAL_ASSETS;
+	let serialized = getEmbeddedOpenWikiVisualAssets();
 	if (!serialized) {
 		try {
 			serialized = await readFile(

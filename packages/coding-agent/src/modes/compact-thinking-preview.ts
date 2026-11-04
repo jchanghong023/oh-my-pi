@@ -11,14 +11,16 @@ import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
 import { theme } from "@oh-my-pi/pi-tui/theme";
 import { describeShimmer, type ShimmerPalette, shimmerEnabled, shimmerText } from "@oh-my-pi/pi-tui/theme/shimmer";
-import type { BashToolDetails } from "@oh-my-pi/pi-tui/tools/bash";
+import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { type CoordinationDetails, waitToolRenderer } from "@oh-my-pi/pi-tui/tools/wait";
+import { isXdHelpContent, parseXdUrl } from "@oh-my-pi/pi-tui/tools/xd-url";
 import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
 import { formatDuration, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AgentSessionEvent } from "../session/agent-session";
 import { lexShellCommand } from "../tools/shell-tokenize";
 import { collectPendingToolCalls, TOOL_EXECUTION_START_CUSTOM_TYPE } from "../session/exit-diagnostics";
+import { summarizeCompactTool } from "./compact-tool-summary";
 import { decodeStreamedToolArgs } from "./controllers/tool-args-reveal";
 import type { InteractiveModeContext } from "./types";
 
@@ -28,6 +30,8 @@ type Call = {
 	id: string;
 	name: string;
 	detail: string;
+	semanticName?: string;
+	waitTarget?: string;
 	command?: string;
 	intent?: string;
 	startedAt?: number;
@@ -37,6 +41,7 @@ type Call = {
 type ToolRow = {
 	id: string;
 	name: string;
+	semanticName?: string;
 	detail: string;
 	command?: string;
 	duration?: number;
@@ -81,34 +86,68 @@ function shellPreview(command: string): string {
 	return command;
 }
 
-function summary(args: unknown, intent?: unknown, operation?: string): { detail: string; command?: string } {
-	const fields = args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
-	const descriptions = [intent, fields.i, fields.intent, fields.title];
-	const commands: unknown[] = [operation, fields.command];
-	const targets = [fields.path, fields.target, fields.url, fields.query, fields.pattern];
-	if (typeof fields.path === "string" && fields.path.startsWith("xd://") && typeof fields.content === "string") {
-		try {
-			const inner: unknown = JSON.parse(fields.content);
-			if (inner && typeof inner === "object" && !Array.isArray(inner)) {
-				const payload = inner as Record<string, unknown>;
-				descriptions.push(payload.i, payload.intent, payload.title);
-				commands.push(payload.command);
-				targets.push(payload.path, payload.target, payload.url, payload.query);
-			}
-		} catch {
-			// Partial arguments may not yet contain a complete device payload.
-		}
+function fields(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+/** Project the transport and its structured result without exposing payload or output text. */
+function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknown>): void {
+	const outer = fields(args);
+	const dispatch = fields(fields(result?.details).xdev);
+	const path = typeof outer.path === "string" ? outer.path : undefined;
+	const device = call.name === "write" && path ? parseXdUrl(unwrapHashlineHeaderPath(path)) : null;
+	const help = (typeof outer.content === "string" && isXdHelpContent(outer.content)) || dispatch.mode === "help";
+	const deviceName =
+		device?.name ??
+		(typeof dispatch.tool === "string" ? dispatch.tool : undefined) ??
+		(path === undefined && call.semanticName !== call.name ? call.semanticName : undefined);
+	const wrapped = call.name === "write" && !!deviceName && !help;
+	const semanticName = wrapped ? deviceName! : call.name;
+	const identityChanged = call.semanticName !== undefined && call.semanticName !== semanticName;
+	if (identityChanged) {
+		call.detail = "";
+		call.command = undefined;
+		call.waitTarget = undefined;
 	}
-	const description = descriptions.find((item): item is string => typeof item === "string" && !!item.trim());
-	const command = commands.find((item): item is string => typeof item === "string" && !!item.trim());
-	if (command) return { detail: description && clean(description) !== clean(command) ? description : "", command };
-	return {
-		detail: description ?? targets.find((item): item is string => typeof item === "string" && !!item.trim()) ?? "",
-	};
+	call.semanticName = semanticName;
+	let effectiveArgs: unknown = args;
+	let effectiveResult = result;
+	if (wrapped) {
+		const decoded =
+			typeof outer.content === "string" && outer.content.length
+				? decodeStreamedToolArgs(outer.content, { rawInput: false })
+				: undefined;
+		// Both sources belong only to this event; retain the resulting display facts, not their payloads.
+		effectiveArgs = { ...fields(decoded), ...fields(dispatch.args) };
+		effectiveResult = result ? { ...result, details: dispatch.inner } : undefined;
+	}
+	const target = waitTarget(semanticName, effectiveResult as ToolRenderResult<CoordinationDetails> | undefined);
+	if (target) call.waitTarget = target;
+	call.intent = [call.intent, outer.i, outer.intent, outer.title].find(
+		(value): value is string => typeof value === "string" && !!value.trim(),
+	);
+	if (
+		!Object.keys(fields(effectiveArgs)).length &&
+		!target &&
+		!identityChanged &&
+		(call.detail || call.command || (!path && !call.intent))
+	)
+		return;
+	const detail = summarizeCompactTool(
+		semanticName,
+		effectiveArgs,
+		call.intent,
+		semanticName === "wait" ? call.waitTarget : undefined,
+	);
+	if (wrapped && !detail.detail && !detail.command && !call.detail && !call.command && path) detail.detail = path;
+	if (detail.detail || detail.command) {
+		call.detail = detail.detail;
+		if (detail.command) call.command = detail.command;
+	}
 }
 
 function waitTarget(name: string, result?: ToolRenderResult<CoordinationDetails>): string | undefined {
-	if (name !== "wait" || !result?.details?.jobs?.length) return undefined;
+	if (name !== "wait" || !Array.isArray(result?.details?.jobs) || !result.details.jobs.length) return undefined;
 	return waitToolRenderer.activitySummary({}, { expanded: false, isPartial: true, result }).detail;
 }
 
@@ -133,7 +172,7 @@ function toolLine(
 	const prefix = !historical && item.preparing ? `${identity} · 准备中` : identity;
 	const timerPrefix = item.backgroundJobId
 		? ` · ${clean(item.backgroundJobId)} · 提交 `
-		: item.name === "wait"
+		: (item.semanticName ?? item.name) === "wait"
 			? " · 等待 "
 			: " · ";
 	const suffix = item.duration === undefined ? "" : `${timerPrefix}${formatDuration(item.duration)}`;
@@ -144,7 +183,8 @@ function toolLine(
 	const available = width - visibleWidth(prefix) - visibleWidth(suffix);
 	let detail = clean(item.detail).trim();
 	if (item.command) {
-		const shell = item.name === "bash" || (item.name === "wait" && item.command.startsWith("[bash] "));
+		const semanticName = item.semanticName ?? item.name;
+		const shell = semanticName === "bash" || (semanticName === "wait" && item.command.startsWith("[bash] "));
 		const raw = clean(shell ? shellPreview(item.command) : item.command).trim();
 		const command = shell ? truncateToWidth(raw, TRUNCATE_LENGTHS.SHORT) : raw;
 		const intentWidth = Math.min(TRUNCATE_LENGTHS.SHORT, Math.floor((available - 6) / 3));
@@ -254,13 +294,10 @@ export class CompactThinkingPreview implements Component {
 			if (!name) continue;
 			const args = block ? streamedArgs(block) : (diagnostic?.args ?? marker?.args ?? update?.args);
 			const intent = diagnostic?.intent ?? (typeof marker?.intent === "string" ? marker.intent : undefined);
-			this.#appendCall({
-				id,
-				name,
-				...summary(args, intent, waitTarget(name, update?.partialResult)),
-				intent,
-				startedAt,
-			});
+			const call: Call = { id, name, detail: "", intent, startedAt };
+			updateCall(call, args);
+			if (update) updateCall(call, update.args, update.partialResult);
+			this.#appendCall(call);
 		}
 	}
 
@@ -288,41 +325,42 @@ export class CompactThinkingPreview implements Component {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call) {
 				call.name = event.toolName;
-				call.intent = event.intent;
-				Object.assign(call, summary(event.args, event.intent));
+				call.intent = event.intent ?? call.intent;
+				updateCall(call, event.args);
 				call.startedAt ??= now;
 			} else {
-				this.#appendCall({
+				const next: Call = {
 					id: event.toolCallId,
 					name: event.toolName,
-					...summary(event.args, event.intent),
+					detail: "",
 					intent: event.intent,
 					startedAt: now,
-				});
+				};
+				updateCall(next, event.args);
+				this.#appendCall(next);
 			}
 			memory.undisplayedDispatch = true;
 		} else if (event.type === "tool_execution_end") {
 			const call = calls.find(item => item.id === event.toolCallId);
 			if (call && call.endedAt === undefined) {
+				updateCall(call, undefined, event.result);
 				call.endedAt = now;
-				if (call.name === "bash") {
-					const result: ToolRenderResult<BashToolDetails> = event.result;
-					if (result.details?.async?.state === "running") call.backgroundJobId = result.details.async.jobId;
+				if (call.semanticName === "bash") {
+					const details = fields(event.result.details);
+					const inner = call.name === "write" ? fields(fields(details.xdev).inner) : details;
+					const async = fields(inner.async);
+					if (async.state === "running" && typeof async.jobId === "string") call.backgroundJobId = async.jobId;
 				}
 			}
 		} else if (event.type === "tool_execution_update") {
 			const call = calls.find(item => item.id === event.toolCallId);
-			if (call && call.endedAt === undefined) {
-				const detail = summary(event.args, call.intent, waitTarget(call.name, event.partialResult));
-				if (detail.detail || detail.command) Object.assign(call, detail);
-			}
+			if (call && call.endedAt === undefined) updateCall(call, event.args, event.partialResult);
 		} else if (event.type === "message_update" && event.message.role === "assistant") {
 			for (const block of event.message.content) {
 				if (block.type !== "toolCall") continue;
 				const call = calls.find(item => item.id === block.id && item.endedAt === undefined);
 				if (!call) continue;
-				const detail = summary(streamedArgs(block), call.intent);
-				if (detail.detail || detail.command) Object.assign(call, detail);
+				updateCall(call, streamedArgs(block));
 			}
 		}
 	}
@@ -395,6 +433,7 @@ export class CompactThinkingPreview implements Component {
 			const items = memory.calls.map(call => ({
 				id: call.id,
 				name: call.name,
+				semanticName: call.semanticName,
 				detail: call.detail,
 				command: call.command,
 				duration: displayDuration(call),
@@ -417,10 +456,14 @@ export class CompactThinkingPreview implements Component {
 			const block = stream.content.findLast(
 				(item): item is ToolCall => item.type === "toolCall" && !memory.calls.some(call => call.id === item.id),
 			)!;
+			const call: Call = { id: block.id, name: block.name, detail: "" };
+			updateCall(call, streamedArgs(block));
 			const item: ToolRow = {
-				id: block.id,
-				name: block.name,
-				...summary(streamedArgs(block)),
+				id: call.id,
+				name: call.name,
+				semanticName: call.semanticName,
+				detail: call.detail,
+				command: call.command,
 				preparing: true,
 			};
 			memory.snapshot = { kind: "tool", rows: [{ ...item }] };
@@ -433,6 +476,7 @@ export class CompactThinkingPreview implements Component {
 					rows: memory.calls.map(call => ({
 						id: call.id,
 						name: call.name,
+						semanticName: call.semanticName,
 						detail: call.detail,
 						command: call.command,
 						duration: displayDuration(call),
@@ -449,6 +493,9 @@ export class CompactThinkingPreview implements Component {
 				for (const item of snapshot.rows) {
 					const call = memory.calls.find(candidate => candidate.id === item.id && candidate.endedAt !== undefined);
 					if (call) {
+						item.detail = call.detail;
+						item.command = call.command;
+						item.semanticName = call.semanticName;
 						item.duration = duration(call, now);
 						item.backgroundJobId = call.backgroundJobId;
 					}

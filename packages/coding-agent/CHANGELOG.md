@@ -61,6 +61,7 @@
 
 ### Changed
 
+- Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
 - Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev and ZCode host callbacks stay on their owning thread.
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
 - Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
@@ -177,6 +178,7 @@
 
 ### Fixed
 
+- Show tool-specific targets and Eval code in compact activity, with consistent wrapped-device command previews, background submission IDs and wait details.
 - Keep compact thinking activity current when viewing worker-hosted agents.
 - Fixed session startup errors when an extension imports host API types without using them at runtime.
 - Accept company rerank responses without a model while rejecting explicit mismatches, and expose sanitized HTTP, timeout and response-validation failures as offline-visible warnings.

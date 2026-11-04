@@ -5,9 +5,10 @@ import license from "../../LICENSE" with { type: "text" };
 import cliNotices from "../../THIRD-PARTY-NOTICES.txt" with { type: "text" };
 import { isOpenWikiSourceCheckout } from "../openwiki/resource-dependencies";
 import { openWikiResourceFingerprint } from "../openwiki/resource-fingerprint";
+import { getEmbeddedOpenWikiVisualAssets } from "../openwiki/visual-assets";
 
 function openWikiNotices(): string[] {
-	let encoded = process.env.PI_OPENWIKI_VISUAL_ASSETS;
+	let encoded = getEmbeddedOpenWikiVisualAssets();
 	if (encoded === undefined) {
 		try {
 			encoded = readFileSync(

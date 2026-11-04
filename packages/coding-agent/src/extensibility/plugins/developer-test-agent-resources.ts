@@ -1,15 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { getAgentDir } from "@oh-my-pi/pi-utils";
+import bundledArchive from "./developer-test-agent-archive";
 
 /** Resolve the source tree or materialize the build's immutable plugin resources in the active profile. */
 export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()): Promise<string> {
-	const embedded = process.env.PI_DEVELOPER_TEST_AGENT_RESOURCES;
-	if (embedded === undefined) return path.join(import.meta.dir, "bundled/developer-test-agent");
+	if (!bundledArchive) return path.join(import.meta.dir, "bundled/developer-test-agent");
 
-	const digest = createHash("sha256").update(embedded).digest("hex");
+	const { digest } = bundledArchive;
 	const parent = path.join(agentDir, "developer-test-agent", "resources");
 	const destination = path.join(parent, digest, "developer-test-agent");
 	try {
@@ -18,7 +18,8 @@ export async function getDeveloperTestAgentRoot(agentDir: string = getAgentDir()
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 
-	const entries = JSON.parse(gunzipSync(Buffer.from(embedded, "base64")).toString("utf8")) as Array<
+	const archive = await fs.readFile(path.resolve(import.meta.dir, bundledArchive.path));
+	const entries = JSON.parse(gunzipSync(archive).toString("utf8")) as Array<
 		[string, { data: string; mode: number } | null]
 	>;
 	await fs.mkdir(parent, { recursive: true });

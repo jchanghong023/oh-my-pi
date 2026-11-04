@@ -63,6 +63,17 @@ function hasNativeKind(node: NativeNode, kind: string): boolean {
 	return node.k === kind || (node.c ?? []).some(child => "k" in child && hasNativeKind(child, kind));
 }
 
+function activityRows(dock: CompactThinkingPreview, width = 120): string[][] {
+	const context: DescribeContext = {
+		cols: width,
+		reduceMotion: false,
+		dark: true,
+		supports: () => true,
+		feature: () => true,
+	};
+	return [dock.render(width), nativeRows(dock.describe(context))].map(rows => rows.map(row => Bun.stripANSI(row)));
+}
+
 type MessageUpdate = Extract<AgentSessionEvent, { type: "message_update" }>;
 
 function thinkingMessage(text: string, timestamp = 1): AssistantMessage {
@@ -1159,6 +1170,341 @@ describe("compact thinking dock focus restoration", () => {
 			expect(text).toContain("write");
 			expect(text).toContain("DEVICE_RAW_COMMAND");
 			expect(text).not.toContain("DEVICE_TARGET");
+		}
+	});
+
+	// A device is transport: summaries use the inner tool semantics but keep the actual write identity.
+	it.each([
+		{ name: "knowledge_search", args: { query: "mbist simulation" }, visible: ["mbist simulation"] },
+		{ name: "openwiki_search", args: { query: "job retry" }, visible: ["job retry"] },
+		{ name: "repo", args: { action: "search", query: "Widget", path: "src" }, visible: ["search", "Widget", "src"] },
+		{ name: "ast_grep", args: { pat: "oldApi($$$)", path: "src" }, visible: ["oldApi($$$)", "src"] },
+		{
+			name: "ast_edit",
+			args: { paths: ["src/**/*.ts"], ops: [{ pat: "old($$$)", out: "new($$$)" }] },
+			visible: ["src/**/*.ts"],
+		},
+		{ name: "lsp", args: { action: "references", file: "app.ts" }, visible: ["references", "app.ts"] },
+		{ name: "openwiki_read", args: { page: "architecture/jobs.md" }, visible: ["architecture/jobs.md"] },
+		{ name: "todo", args: { op: "done", task: "修复解析器" }, visible: ["done", "修复解析器"] },
+		{ name: "task", args: { tasks: [{ name: "Parser" }, { name: "Renderer" }] }, visible: ["Parser", "2"] },
+		{
+			name: "eval",
+			args: { code: '%load "scripts/setup.py"', title: "加载脚本" },
+			visible: ["加载脚本", '%load "scripts/setup.py"'],
+		},
+		{
+			name: "apply_patch",
+			args: { input: "*** Begin Patch\n*** Add File: hello.txt\n+PRIVATE_PATCH\n*** End Patch\n" },
+			visible: ["hello.txt"],
+		},
+	])("renders equivalent direct and device $name targets in ANSI and native rows", async ({ name, args, visible }) => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "tool_execution_start", toolCallId: "direct", toolName: name, args });
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "device",
+			toolName: "write",
+			args: { path: `xd://${name}`, content: JSON.stringify(args) },
+		});
+		for (const rows of activityRows(h.dock)) {
+			expect(rows).toHaveLength(3);
+			expect(rows[0]).toStartWith(` ${name} · `);
+			expect(rows[1]).toStartWith(" write · ");
+			for (const target of visible) {
+				expect(rows[0]).toContain(target);
+				expect(rows[1]).toContain(target);
+			}
+			expect(rows[1]).not.toContain(`xd://${name}`);
+			expect(rows.join("\n")).not.toContain("PRIVATE_PATCH");
+			expect(rows[2]).toBe("");
+		}
+	});
+
+	// Hashline URL normalization must happen before shell semantics and command-width selection.
+	it.each(["xd://bash", "[xd://bash#ABCD]", "XD://bash"])(
+		"keeps write identity and shell previews for %s",
+		async path => {
+			const h = focusFixture();
+			const live = liveSession();
+			h.register("Worker", live);
+			await h.focus.focusAgent("Worker");
+			await live.emit({
+				type: "tool_execution_start",
+				toolCallId: "device",
+				toolName: "write",
+				intent: "检查环境",
+				args: {
+					i: "OUTER_ARGUMENT_INTENT",
+					path,
+					content: JSON.stringify({ i: "INNER_INTENT", command: "pwd && echo HIDDEN_COMMAND" }),
+				},
+			});
+			for (const rows of activityRows(h.dock)) {
+				expect(rows[0]).toContain("write · 检查环境 · pwd && …");
+				expect(rows[0]).not.toMatch(/HIDDEN_COMMAND|OUTER_ARGUMENT_INTENT|INNER_INTENT|xd:\/\//i);
+				expect(rows[1]).toBe("");
+				expect(rows[2]).toBe("");
+			}
+			await live.emit({
+				type: "tool_execution_update",
+				toolCallId: "device",
+				toolName: "write",
+				args: { path, content: JSON.stringify({ command: `find /${"目录/".repeat(30)}HIDDEN_END` }) },
+				partialResult: { content: [{ type: "text", text: "PRIVATE_OUTPUT" }] },
+			});
+			for (const rows of activityRows(h.dock)) {
+				expect(rows[0]).toContain("find /目录/");
+				expect(rows[0]).toContain("…");
+				expect(rows[0]).not.toMatch(/HIDDEN_END|PRIVATE_OUTPUT/);
+				expect(Bun.stringWidth(rows[0]!)).toBeLessThanOrEqual(120);
+				expect(Bun.stringWidth(rows[0]!.split(" · ")[2] ?? "")).toBeLessThanOrEqual(40);
+			}
+		},
+	);
+
+	// Partial outer and inner JSON must use the same safe semantic projection during preparation.
+	it("decodes partially streamed device commands and raw patch targets before dispatch", async () => {
+		const h = focusFixture();
+		const message = thinkingMessage("");
+		const call = { type: "toolCall" as const, id: "device", name: "write", arguments: {} };
+		setStreamingPartialJson(
+			call,
+			JSON.stringify({
+				path: "[xd://bash#ABCD]",
+				content: '{"title":42,"command":"pwd && echo HIDDEN_COMMAND',
+			}).slice(0, -1),
+		);
+		message.content = [call];
+		const live = liveSession(message);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toContain("write · 准备中");
+			expect(rows[0]).toContain("pwd && …");
+			expect(rows[0]).not.toContain("HIDDEN_COMMAND");
+		}
+		const patch = {
+			type: "toolCall" as const,
+			id: "patch",
+			name: "apply_patch",
+			customWireName: "apply_patch",
+			arguments: {},
+		};
+		setStreamingPartialJson(patch, "*** Begin Patch\n*** Add File: preview.txt\n+PRIVATE_PATCH\n*** End Patch\n");
+		message.content = [patch];
+		await live.emit({
+			type: "message_update",
+			message,
+			assistantMessageEvent: { type: "toolcall_delta", contentIndex: 0, delta: "", partial: message },
+		});
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toContain("apply_patch · 准备中");
+			expect(rows[0]).toContain("preview.txt");
+			expect(rows.join("\n")).not.toContain("PRIVATE_PATCH");
+		}
+		expect(call.arguments).toEqual({});
+		expect(patch.arguments).toEqual({});
+	});
+
+	// Only structured nested details can mark a device submission as background or identify waited jobs.
+	it("projects device bash submission and wait updates without leaking result bodies", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		const shellArgs = { command: "bun run fulltest" };
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "shell",
+			toolName: "write",
+			args: { path: "xd://bash", content: JSON.stringify(shellArgs) },
+		});
+		h.rows();
+		setSystemTime(10_002);
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "shell",
+			toolName: "write",
+			result: {
+				content: [{ type: "text", text: "PRIVATE_SUBMISSION_OUTPUT" }],
+				details: {
+					xdev: {
+						tool: "bash",
+						mode: "execute",
+						args: shellArgs,
+						inner: { async: { state: "running", jobId: "bg_9", type: "bash" } },
+					},
+				},
+			},
+		});
+		const waitArgs = { i: "等待检查" };
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "waiting",
+			toolName: "write",
+			args: { path: "xd://wait", content: JSON.stringify(waitArgs) },
+		});
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "waiting",
+			toolName: "write",
+			args: {},
+			partialResult: {
+				content: [{ type: "text", text: "PRIVATE_WAIT_OUTPUT" }],
+				details: {
+					xdev: {
+						tool: "wait",
+						mode: "execute",
+						args: waitArgs,
+						inner: {
+							op: "wait",
+							jobs: [
+								{ id: "old", type: "bash", status: "completed", label: "OLD_COMMAND", durationMs: 1 },
+								{
+									id: "bg_9",
+									type: "bash",
+									status: "running",
+									label: "bun run fulltest && echo HIDDEN_COMMAND",
+									durationMs: 0,
+								},
+							],
+						},
+					},
+				},
+			},
+		});
+		setSystemTime(15_002);
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toContain("write · bun run fulltest");
+			expect(rows[0]).toEndWith(`bg_9 · 提交 ${formatDuration(2)}`);
+			expect(rows[1]).toContain("write · 等待检查 · [bash] bg_9 bun run fulltest && …");
+			expect(rows[1]).toEndWith(`等待 ${formatDuration(5000)}`);
+			expect(rows.join("\n")).not.toMatch(
+				/PRIVATE_SUBMISSION_OUTPUT|PRIVATE_WAIT_OUTPUT|OLD_COMMAND|HIDDEN_COMMAND/,
+			);
+			expect(rows[2]).toBe("");
+		}
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "waiting",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "PRIVATE_FINISHED_OUTPUT" }] },
+		});
+		setSystemTime(30_000);
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toEndWith(`提交 ${formatDuration(2)}`);
+			expect(rows[1]).toEndWith(`等待 ${formatDuration(5000)}`);
+			expect(rows.join("\n")).not.toContain("PRIVATE_FINISHED_OUTPUT");
+		}
+	});
+
+	// async:true is a request, not proof that a background job was actually accepted.
+	it("does not invent background submission metadata from requested async mode or output text", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({
+			type: "tool_execution_start",
+			toolCallId: "foreground",
+			toolName: "write",
+			args: { path: "xd://bash", content: '{"command":"echo done","async":true}' },
+		});
+		h.rows();
+		setSystemTime(12_000);
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "foreground",
+			toolName: "write",
+			result: { content: [{ type: "text", text: "background job bg_FAKE is running" }] },
+		});
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toContain("write · echo done");
+			expect(rows[0]).toEndWith(formatDuration(2000));
+			expect(rows[0]).not.toMatch(/bg_FAKE|提交/);
+		}
+	});
+
+	// Freshly focused pending devices use canonical arguments and structured job snapshots, not cached cards.
+	it("recovers pending device wait semantics and its original timer on focus", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const message = thinkingMessage("");
+		const args = { path: "[xd://wait#ABCD]", content: '{"i":"等待恢复"}' };
+		message.content = [{ type: "toolCall", id: "recover", name: "write", arguments: args }];
+		const live = liveSession(message);
+		live.session.agent.emitExternalEvent(
+			{ type: "tool_execution_start", toolCallId: "recover", toolName: "write", args },
+			{ stateOnly: true },
+		);
+		live.session.sessionManager.appendCustomEntry("tool_execution_start", {
+			toolCallId: "recover",
+			toolName: "write",
+			startedAt: new Date(5000).toISOString(),
+		});
+		vi.spyOn(live.session, "activeToolExecutionUpdates").mockReturnValue([
+			{
+				type: "tool_execution_update",
+				toolCallId: "recover",
+				toolName: "write",
+				args,
+				partialResult: {
+					content: [{ type: "text", text: "PRIVATE_RECOVERY_OUTPUT" }],
+					details: {
+						xdev: {
+							tool: "wait",
+							mode: "execute",
+							args: { i: "等待恢复" },
+							inner: {
+								op: "wait",
+								jobs: [{ id: "bg_7", type: "bash", status: "running", label: "echo recovered", durationMs: 0 }],
+							},
+						},
+					},
+				},
+			},
+		]);
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toContain("write · 等待恢复 · [bash] bg_7 echo recovered");
+			expect(rows[0]).toEndWith(`等待 ${formatDuration(5000)}`);
+			expect(rows[0]).not.toContain("PRIVATE_RECOVERY_OUTPUT");
+			expect(rows[1]).toBe("");
+		}
+	});
+
+	// Text devices, help requests, and private tool payloads have no inferred command or leaked body.
+	it.each([
+		{ path: "xd://resolve", content: "PRIVATE_REASON", summary: "write" },
+		{ path: "xd://reject", content: "PRIVATE_REASON", summary: "write" },
+		{ path: "xd://propose", content: "PRIVATE_PLAN", summary: "write" },
+		{ path: "xd://bash", content: "?", summary: "write" },
+		{ path: "xd://think", content: '{"thoughts":"PRIVATE_THOUGHTS"}', summary: "write" },
+		{
+			path: "xd://yield",
+			content: '{"key":1,"data":"PRIVATE_PAYLOAD","error":"PRIVATE_ERROR"}',
+			summary: "write · 1",
+		},
+	])("does not promote $path content into public activity", async ({ summary, ...args }) => {
+		const h = focusFixture();
+		const live = liveSession();
+		h.register("Worker", live);
+		await h.focus.focusAgent("Worker");
+		await live.emit({ type: "tool_execution_start", toolCallId: "private", toolName: "write", args });
+		for (const rows of activityRows(h.dock)) {
+			expect(rows[0]).toStartWith(` ${summary}`);
+			expect(rows.join("\n")).not.toMatch(
+				/PRIVATE_REASON|PRIVATE_PLAN|PRIVATE_THOUGHTS|PRIVATE_PAYLOAD|PRIVATE_ERROR/,
+			);
+			expect(rows[1]).toBe("");
+			expect(rows[2]).toBe("");
 		}
 	});
 

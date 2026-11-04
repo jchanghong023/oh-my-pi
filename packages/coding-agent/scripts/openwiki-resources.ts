@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
+import type { BunPlugin } from "bun";
 import {
 	openWikiLicensedPackages as licensedPackages,
 	openWikiPackageDirectory as packageDirectory,
@@ -96,6 +97,25 @@ export async function buildOpenWikiResources(): Promise<OpenWikiResources> {
 		throw new Error("OpenWiki resource inputs changed during generation; regenerate the resources.");
 	}
 	return { skills, visual };
+}
+
+/** Keep the visualizer map out of JavaScript source and bytecode string tables. */
+export function createOpenWikiVisualArchivePlugin(visual: Record<string, string>): BunPlugin {
+	const archive = Bun.zstdCompressSync(JSON.stringify(visual));
+	return {
+		name: "omp-openwiki-visual-archive",
+		target: "bun",
+		setup(build) {
+			build.onResolve({ filter: /^\.\/visual-archive$/ }, ({ importer }) => {
+				if (!importer.replaceAll("\\", "/").endsWith("/openwiki/visual-assets.ts")) return undefined;
+				return { path: "openwiki-visual-assets.json.zst", namespace: "omp-openwiki-visual-archive" };
+			});
+			build.onLoad({ filter: /.*/, namespace: "omp-openwiki-visual-archive" }, () => ({
+				contents: archive,
+				loader: "file",
+			}));
+		},
+	};
 }
 
 /** Publish a complete JSON resource in one rename, never a partially written file. */

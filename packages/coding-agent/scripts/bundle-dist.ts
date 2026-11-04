@@ -3,11 +3,14 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
-import { buildDeveloperTestAgentResources } from "./developer-test-agent-resources";
+import {
+	buildDeveloperTestAgentResources,
+	createDeveloperTestAgentArchivePlugin,
+} from "./developer-test-agent-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
-import { buildOpenWikiResources, writeOpenWikiResource } from "./openwiki-resources";
+import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin, writeOpenWikiResource } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
@@ -93,6 +96,7 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 					entry === "docs-index.generated.txt" ||
 					entry === "spec-driven-resources.tar.gz" ||
 					/^spec-driven-resources.*\.gz$/.test(entry) ||
+					/^developer-test-agent-resources\.json-[^/]+\.gz$/.test(entry) ||
 					entry.endsWith(".node") ||
 					entry.endsWith(".js.map") ||
 					/\.json-[^/]+\.zst$/.test(entry) ||
@@ -155,6 +159,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 			target: "bun",
 			plugins: [
 				createJsonParsePlugin(),
+				createOpenWikiVisualArchivePlugin(openWikiResources.visual),
+				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(specDrivenArchive),
@@ -165,8 +171,6 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify(docsPayload.payload),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
-				"process.env.PI_OPENWIKI_VISUAL_ASSETS": JSON.stringify(JSON.stringify(openWikiResources.visual)),
-				"process.env.PI_DEVELOPER_TEST_AGENT_RESOURCES": JSON.stringify(await buildDeveloperTestAgentResources()),
 			},
 			minify: {
 				whitespace: true,

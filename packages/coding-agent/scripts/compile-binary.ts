@@ -2,11 +2,14 @@
 // absent on cross-compiling release runners.
 import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
 import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/scripts/embed-native";
-import { buildDeveloperTestAgentResources } from "./developer-test-agent-resources";
+import {
+	buildDeveloperTestAgentResources,
+	createDeveloperTestAgentArchivePlugin,
+} from "./developer-test-agent-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
-import { buildOpenWikiResources } from "./openwiki-resources";
+import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
 import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
@@ -71,8 +74,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
-				"process.env.PI_OPENWIKI_VISUAL_ASSETS": JSON.stringify(JSON.stringify(openWikiResources.visual)),
-				"process.env.PI_DEVELOPER_TEST_AGENT_RESOURCES": JSON.stringify(await buildDeveloperTestAgentResources()),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository
@@ -93,6 +94,8 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			},
 			plugins: [
 				createJsonParsePlugin(),
+				createOpenWikiVisualArchivePlugin(openWikiResources.visual),
+				createDeveloperTestAgentArchivePlugin(await buildDeveloperTestAgentResources()),
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(await buildSpecDrivenArchive()),
