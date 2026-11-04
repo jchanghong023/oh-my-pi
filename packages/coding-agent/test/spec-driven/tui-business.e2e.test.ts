@@ -71,7 +71,9 @@ test.skipIf(!tuiTest)(
 				expect((await state()).run?.sessions.requirements).toBeUndefined();
 				await tui("expect", "text", "业务需求已交付");
 				await tui("submit", "/dev");
+				await tui("expect", "text", "ordinary-root-beacon", "--timeout", "30000");
 				await tui("submit", "/dev");
+				await stage("idle");
 				await tui("expect", "text", "业务需求已交付");
 				expect((await state()).run?.runId).toBe(initial.runId);
 				await tui("submit", "/dev business 停止访谈，保存已确认业务需求并等待确认");
