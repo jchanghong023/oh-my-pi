@@ -31,7 +31,7 @@ pub const SIGNAL: u32 = 1 << 4;
 
 pub(crate) enum SignalRequest {
 	Single(SigTarget, Signal),
-	Wave { labels: Vec<u32>, sig: Signal, extra: Vec<crate::process::Process>, groups: bool },
+	Wave { labels: Vec<u32>, sig: Signal, extra: Vec<crate::proctree::Process>, groups: bool },
 }
 
 /// Shared control state of one shell.
@@ -208,7 +208,7 @@ impl ControlHandle {
 		&self,
 		labels: &[u32],
 		sig: Signal,
-		extra: Vec<crate::process::Process>,
+		extra: Vec<crate::proctree::Process>,
 		groups: bool,
 	) {
 		self.0.signals.lock().push(SignalRequest::Wave {

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import * as fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import * as path from "node:path";
 import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
 import { captureArtifactSource, produceZCodeArtifacts, requireArtifactVersion } from "./zcode-artifact";
@@ -17,16 +16,6 @@ interface BinaryTarget {
 const repoRoot = path.join(import.meta.dir, "..");
 const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
-const transformersManifest: unknown = createRequire(import.meta.url)("@huggingface/transformers/package.json");
-if (
-	typeof transformersManifest !== "object" ||
-	transformersManifest === null ||
-	!("version" in transformersManifest) ||
-	typeof transformersManifest.version !== "string"
-) {
-	throw new Error("@huggingface/transformers package manifest has no string version");
-}
-const transformersVersion = transformersManifest.version;
 const buildVersion = Bun.env.RELEASE_VERSION;
 const updateRepository = Bun.env.UPDATE_REPOSITORY;
 // Worker threads re-enter the binary's single CLI host entry.
@@ -138,7 +127,6 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 		repoRoot,
 		entrypoint,
 		outfile: path.join(repoRoot, target.outfile),
-		transformersVersion,
 		buildVersion,
 		updateRepository,
 		native: target,

@@ -59,7 +59,7 @@ describe("libkitty end-to-end", () => {
 		});
 		term = new VirtualTerminal(120, 32);
 		const composer = new Composer({ terminal: term });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, composer);
 	});
 
 	afterEach(async () => {
@@ -674,7 +674,7 @@ describe("libkitty end-to-end", () => {
 		// reasoning must never accompany them, even when visibility is toggled.
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, composer);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
 		await term.waitForRender();
@@ -760,7 +760,7 @@ describe("libkitty end-to-end", () => {
 		expect(chatTranscriptDisplayPreferences.hideToolActivity).toBe(false);
 		term = new VirtualTerminal(120, 10);
 		const composer = new Composer({ terminal: term });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, undefined, composer);
+		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, undefined, composer);
 		expect(mode.hideToolActivity).toBe(false);
 		await mode.init({ suppressWelcomeIntro: true });
 		void mode.getUserInput();
@@ -829,7 +829,6 @@ describe("libkitty end-to-end", () => {
 		mode = new InteractiveMode(
 			session,
 			"test",
-			undefined,
 			() => {},
 			undefined,
 			undefined,

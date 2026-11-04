@@ -255,7 +255,6 @@ import {
 	resolveRetryFallbackChainKey,
 } from "./session/retry-fallback-chains";
 import { describeUsageFallback } from "./session/retry-fallback-reason";
-import { loadRuntimeIdentity } from "./session/runtime-identity";
 import { getRestorableSessionModels } from "./session/session-context";
 import { SessionManager } from "./session/session-manager";
 import { SHAPE_RULE } from "./spotlight/shape";
@@ -298,13 +297,12 @@ import {
 	AUTO_THINKING,
 	type ConfiguredThinkingLevel,
 	concreteThinkingLevel,
+	newSessionThinkingLevel,
 	parseConfiguredThinkingLevel,
 	parseThinkingLevel,
-	resolveProvisionalAutoLevel,
-	resolveThinkingLevelForModel,
+	resolveConfiguredThinkingLevel,
 	shouldDisableReasoning,
 	toReasoningEffort,
-	automaticThinkingLevel,
 } from "@oh-my-pi/pi-tui/thinking";
 import {
 	BashTool,
@@ -1053,6 +1051,13 @@ export interface CreateAgentSessionOptions {
 	 */
 	deferUsageReserveConfirmation?: boolean;
 
+	/**
+	 * Hold background skill-description compression until
+	 * {@link AgentSession.startSkillDescriptionCompression}: resolving its model composes the
+	 * whole model catalog. The interactive TUI sets this and starts it after the first frame.
+	 * Default: false, which starts it once the session (and so its cost gate) exists.
+	 */
+	deferSkillDescriptionCompression?: boolean;
 	/**
 	 * Opt-in OpenTelemetry instrumentation forwarded to the underlying Agent.
 	 * Passing `{}` enables the loop's GenAI-semantic-convention spans. See
@@ -2185,7 +2190,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		options = { ...options, offline: true };
 	}
 	registerLocalInferenceApi();
-	await loadRuntimeIdentity();
 	const extensionRoots = options.extensionRoots?.();
 	const explicit = extensionRoots?.explicit ?? options.additionalExtensionPaths ?? [];
 	const mode = extensionRoots?.mode ?? (options.disableExtensionDiscovery ? "explicit-only" : "merge");
@@ -2627,21 +2631,16 @@ async function createAgentSessionScoped(
 		if (level === undefined && !hasThinkingEntry && restoredSessionThinkingLevel !== undefined) {
 			level = restoredSessionThinkingLevel;
 		}
-		if (level === undefined && !hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel) {
-			level = defaultRoleSpec.thinkingLevel;
-		}
-		const configuredDefaultLevel = parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings));
-		if (
-			level === undefined &&
-			configuredDefaultLevel !== AUTO_THINKING &&
-			selectedModel?.thinking?.defaultLevel !== undefined
-		) {
-			level = selectedModel.thinking.defaultLevel;
-		}
-		if (level === undefined) {
-			level = automaticThinkingLevel(selectedModel, configuredDefaultLevel);
-		}
-		return level;
+		if (level !== undefined) return level;
+		const roleLevel =
+			!hasExplicitModel && !hasThinkingEntry && defaultRoleSpec.explicitThinkingLevel
+				? defaultRoleSpec.thinkingLevel
+				: undefined;
+		return newSessionThinkingLevel(
+			selectedModel,
+			roleLevel,
+			parseConfiguredThinkingLevel(cfgDefaultThinkingLevel.get(settings)),
+		);
 	};
 	let thinkingLevel = pickInitialThinkingLevel(model);
 	let autoThinking = thinkingLevel === AUTO_THINKING;
@@ -2652,9 +2651,7 @@ async function createAgentSessionScoped(
 	if (model) {
 		const resolvedModel = model;
 		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			autoThinking
-				? resolveProvisionalAutoLevel(resolvedModel)
-				: resolveThinkingLevelForModel(resolvedModel, effectiveThinkingLevel),
+			resolveConfiguredThinkingLevel(resolvedModel, thinkingLevel),
 		);
 		// Fire-and-forget connection warm-up so the handshake overlaps the rest
 		// of session setup (extension/skill load, tool registry, system prompt
@@ -2689,11 +2686,8 @@ async function createAgentSessionScoped(
 	const adoptThinkingForModel = (selectedModel: Model): void => {
 		thinkingLevel = pickInitialThinkingLevel(selectedModel);
 		autoThinking = thinkingLevel === AUTO_THINKING;
-		const concreteLevel = concreteThinkingLevel(thinkingLevel);
 		effectiveThinkingLevel = logger.time("resolveThinkingLevelForModel", () =>
-			autoThinking
-				? resolveProvisionalAutoLevel(selectedModel)
-				: resolveThinkingLevelForModel(selectedModel, concreteLevel),
+			resolveConfiguredThinkingLevel(selectedModel, thinkingLevel),
 		);
 	};
 
@@ -3083,12 +3077,9 @@ async function createAgentSessionScoped(
 		};
 		// The Spotlight experiment starts before the first prompt build: its shaping rule rides the system prompt
 		// and its shaping replaces the native read summarizer / bash minimizer for the session.
-		// Helper sessions (security scan, spec generation) stay out of it. A task subagent's reads are edit-likely only
-		// once it read or edited the file.
+		// Helper sessions (security scan, spec generation) stay out of it.
 		const spotlightExperiment =
-			options.bindProcessState === false
-				? undefined
-				: startSpotlightExperiment(settings, sessionManager, { subagent: taskDepth > 0 });
+			options.bindProcessState === false ? undefined : startSpotlightExperiment(settings, sessionManager);
 		if (spotlightExperiment) toolSession.spotlight = spotlightExperiment;
 		let browserPrelude: EvalPreludeDefinition | undefined;
 		let computerPrelude: EvalPreludeDefinition | undefined;
@@ -4606,20 +4597,16 @@ async function createAgentSessionScoped(
 				: openSessionSkillDescriptionStore(agentDir);
 		const skillDescriptions = new SkillDescriptionCatalog({
 			store: ownedSkillDescriptionStore,
-			// Like the other one-shot model calls, each compression request resolves
-			// its own telemetry handle, so its usage stays out of the run summary.
-			// The first requests can start before `agent` is constructed; they use
-			// the telemetry config and session id the agent is constructed with.
-			compress: createSkillDescriptionCompressor(
-				modelRegistry,
-				settings,
-				() => sessionManager.getCwd(),
-				undefined,
-				() =>
+			// Hold requests until the session owns its cost gate.
+			deferCompression: true,
+			compress: createSkillDescriptionCompressor(modelRegistry, settings, {
+				getCwd: () => sessionManager.getCwd(),
+				getCostGate: currentCostGate,
+				getTelemetry: () =>
 					agent
 						? resolveTelemetry(agent.telemetry, agent.sessionId)
 						: resolveTelemetry(options.telemetry, providerSessionId),
-			),
+			}),
 		});
 		// Instructions from MCP servers the host connects outside `mcpManager`
 		// (ACP client-declared servers); installed via
@@ -5761,6 +5748,7 @@ async function createAgentSessionScoped(
 			obfuscator,
 			agentId: resolvedAgentId,
 			agentKind,
+			agentRegistry,
 			providerSessionId: options.providerSessionId,
 			accountPoolScope,
 			providerPromptCacheKeySource,
@@ -5791,6 +5779,8 @@ async function createAgentSessionScoped(
 				}),
 			);
 		}
+		// The session now owns its cost gate; the interactive TUI starts compression after its first frame.
+		if (options.deferSkillDescriptionCompression !== true) skillDescriptions.startCompression();
 		credentialNoticeSession = session;
 		// Hashline snapshots are session-scoped: /new and switchSession fire the
 		// change callbacks, so clear the tool-side store there — stale tags would

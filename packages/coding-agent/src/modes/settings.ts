@@ -747,7 +747,8 @@ export const cfgDisplaySmoothStreaming = register({
 		tab: "appearance",
 		group: "显示",
 		label: "Smooth Streaming",
-		description: "Reveal assistant text and streamed tool input smoothly while chunks arrive",
+		description:
+			"Reveal assistant text and streamed tool input smoothly while chunks arrive (Tern types assistant text out itself)",
 	},
 });
 
@@ -835,8 +836,7 @@ export const cfgDisplayCollapseCompacted = register({
 		tab: "appearance",
 		group: "显示",
 		label: "折叠已压缩历史",
-		description:
-			"干净／详细模式下将已压缩历史折叠到摘要分隔线后；关闭后保留完整记录。紧凑模式始终只保留旧对话正文，不受此项影响",
+		description: "将已压缩历史折叠到摘要分隔线后；关闭后保留完整记录，并在各压缩点显示分隔线",
 	},
 });
 

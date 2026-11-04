@@ -20,6 +20,7 @@ import { withChargedActivity, withCompilerActivity } from "../../../scripts/test
  * interactive UI itself remains bundled and does not require devtools.
  */
 export const COMPILED_EXTERNAL_DEPENDENCIES: readonly string[] = Object.freeze([
+	"@huggingface/transformers",
 	"fastembed",
 	"onnxruntime-node",
 	"react-devtools-core",
@@ -33,8 +34,6 @@ export interface CodingAgentCompileOptions {
 	readonly entrypoint: string;
 	/** Absolute standalone executable output path. */
 	readonly outfile: string;
-	/** Concrete Transformers.js version baked into the tiny-model worker. */
-	readonly transformersVersion: string;
 	/** Optional application version embedded into the standalone executable. */
 	readonly buildVersion?: string;
 	/** Optional GitHub repository used by binary-only self-updates. */
@@ -72,7 +71,6 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: options.native ? await embeddedAddonFiles(options.native) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
-				"process.env.PI_TINY_TRANSFORMERS_VERSION": JSON.stringify(options.transformersVersion),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),

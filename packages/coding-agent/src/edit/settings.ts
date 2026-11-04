@@ -23,6 +23,12 @@ export const EDIT_MODES = [
 	"sloppy",
 ] as const satisfies readonly EditMode[];
 
+/**
+ * `edit.mode` value: an edit tool variant, or `"none"` to unregister the edit tool and force-enable
+ * `bash` (see `resolveBuiltinToolPlan` in `tools/index.ts`).
+ */
+export type EditModeSetting = EditMode | "none";
+
 /** Narrows free text (config values, per-model variants) to an edit mode; `undefined` when unknown. */
 export function normalizeEditMode(mode?: string | null): EditMode | undefined {
 	return EDIT_MODES.find(candidate => candidate === mode);
@@ -36,7 +42,7 @@ export function normalizeEditMode(mode?: string | null): EditMode | undefined {
 export const cfgEditMode = register({
 	id: "edit.mode",
 	type: "enum",
-	values: EDIT_MODES,
+	values: [...EDIT_MODES, "none"] as const satisfies readonly EditModeSetting[],
 	default: "hashline",
 	// Pins the variant: it also skips the per-model hashline fallback (see `utils/edit-mode.ts`).
 	env: "PI_EDIT_VARIANT",
@@ -44,7 +50,7 @@ export const cfgEditMode = register({
 		tab: "files",
 		group: "编辑",
 		label: "编辑模式",
-		description: "选择 edit 工具变体（replace、patch、hashline 或 apply_patch）",
+		description: "选择 edit 工具变体（replace、patch、hashline 或 apply_patch）；none 移除 edit 工具并保持 bash 启用",
 	},
 });
 

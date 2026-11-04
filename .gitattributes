@@ -75,6 +75,14 @@ packages/coding-agent/src/spec-driven/vendor/resources/jch/** -text
 # Shell parser corpora and golden stdout retain significant trailing spaces.
 crates/pi-shell/src/bash/syntax/suites/data/*.txt whitespace=-blank-at-eol
 crates/pi-shell/src/testkit/fixtures/skeleton/*.out whitespace=-blank-at-eol
+crates/pi-shell/src/testkit/fixtures/history/zsh_extended.hist whitespace=-blank-at-eol
+# These source fixtures are paired with byte-exact upstream zcompile dumps.
+crates/pi-shell/src/testkit/fixtures/zcompile/zcalc.zsh whitespace=-blank-at-eol
+crates/pi-shell/src/testkit/fixtures/zcompile/zmv.zsh whitespace=-blank-at-eol
+# Inline zsh stderr and PTY SGR transcripts contain literal trailing blanks.
+crates/pi-shell/src/testkit/suites/zsh_mod_zutil.rs whitespace=-blank-at-eol
+crates/pi-shell/tests/fixtures/zsh_comp_pty/menu_select_navigation.txt whitespace=-blank-at-eol
+crates/pi-shell/tests/fixtures/zsh_comp_pty/menu_select_widget_over_rows.txt whitespace=-blank-at-eol
 # Keep the vendored JSON Schema test suite in its upstream form.
 packages/omptype/test/fixtures/json-schema-test-suite/** whitespace=-blank-at-eol
 

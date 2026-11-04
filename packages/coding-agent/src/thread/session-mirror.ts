@@ -227,6 +227,7 @@ export interface SessionAbortOptions {
 	reason?: string;
 	preserveCompaction?: boolean;
 	clearQueuedInputs?: boolean;
+	deliverQueuedMessages?: boolean;
 }
 
 /**

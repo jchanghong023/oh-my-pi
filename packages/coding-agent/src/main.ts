@@ -70,7 +70,7 @@ import {
 } from "./config/model-resolver";
 import { ModelsConfigFile } from "./config/models-config";
 import { serviceTierSettingToTier } from "./config/service-tier";
-import { all, combine, type ProtocolHost, type SettingValueOf } from "./config/registry";
+import { all, combine, type ProtocolHost } from "./config/registry";
 import { Settings, settings } from "./config/settings";
 import { initializeWithSettings } from "./discovery";
 import { clearPluginRootsAndCaches, injectPluginDirRoots, preloadPluginRoots } from "./discovery/helpers";
@@ -120,7 +120,6 @@ import {
 	persistForeignSession,
 } from "./session/foreign-session-import";
 import type { ForeignSessionInfo, ForeignSessionSource, ForeignSessionStore } from "./session/foreign-session-store";
-import { loadRuntimeIdentity } from "./session/runtime-identity";
 import {
 	findSessionContinuation,
 	type PickerListing,
@@ -147,7 +146,7 @@ import { registerLocalInferenceApi } from "./tiny/local-inference-api";
 import { automaticThinkingLevel, concreteThinkingLevel, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { LspStartupServerInfo } from "./tools";
 import { sanitizeDisplayWarnings } from "@oh-my-pi/pi-tui/render/render-utils";
-import { getChangelogPath, resolveStartupChangelogForDisplay, type StartupChangelogSelection } from "./utils/changelog";
+import { getChangelogPath, readLastChangelogVersion, resolveStartupChangelogForDisplay } from "./utils/changelog";
 import { EventBus } from "./utils/event-bus";
 import { CliUsageError } from "./cli/usage-error";
 import { scheduleGcAutoCompress } from "./cli/gc-auto-compress";
@@ -657,7 +656,6 @@ export function createAcpSessionFactory(args: AcpSessionFactoryOptions): AcpSess
 async function runInteractiveMode(
 	session: AgentSession,
 	version: string,
-	startupChangelog: StartupChangelogSelection | undefined,
 	notifs: (InteractiveModeNotify | null)[],
 	initialMessages: string[],
 	setExtensionUIContext: (uiContext: ExtensionUIContext, hasUI: boolean) => void,
@@ -671,7 +669,7 @@ async function runInteractiveMode(
 	initialMessage?: string,
 	initialImages?: ImageContent[],
 	joinLink?: string,
-	startDeferredStartupWork?: () => void,
+	startDeferredStartupWork?: (mode: InteractiveMode) => void,
 	startupLease?: ComposerLease,
 	offline = false,
 	startupGoal?: string,
@@ -684,7 +682,6 @@ async function runInteractiveMode(
 		mode = new InteractiveModeConstructor(
 			session,
 			version,
-			startupChangelog,
 			setExtensionUIContext,
 			lspServers,
 			mcpManager,
@@ -710,14 +707,24 @@ async function runInteractiveMode(
 			forceSetupWizard || (!offline && setupWizardEnabled && storedSetupVersion < CURRENT_SETUP_VERSION)
 				? await import("./modes/setup")
 				: undefined;
+		const setupOptions = {
+			resuming,
+			isTTY: process.stdin.isTTY && process.stdout.isTTY,
+			setupWizardEnabled: cfgStartupSetupWizard.get(settings),
+			force: forceSetupWizard,
+		};
 		setupScenes = setupWizard
-			? await setupWizard.selectSetupScenes(storedSetupVersion, setupWizard.ALL_SCENES, mode, {
-					resuming,
-					isTTY: process.stdin.isTTY && process.stdout.isTTY,
-					setupWizardEnabled,
-					force: forceSetupWizard,
-				})
+			? await setupWizard.selectSetupScenes(storedSetupVersion, setupWizard.ALL_SCENES, mode, setupOptions)
 			: [];
+		// Record an eligible wizard version even when no scenes need to run.
+		if (
+			setupWizard &&
+			setupScenes.length === 0 &&
+			storedSetupVersion < CURRENT_SETUP_VERSION &&
+			setupWizard.setupWizardAllowed(setupOptions)
+		) {
+			await setupWizard.markSetupWizardComplete(settings);
+		}
 		playStartupSplash = showStartupSplash && setupScenes.length === 0;
 
 		await logger.time("InteractiveMode.init", () =>
@@ -727,7 +734,7 @@ async function runInteractiveMode(
 				autoStartCollab: joinLink === undefined,
 			}),
 		);
-		startDeferredStartupWork?.();
+		startDeferredStartupWork?.(mode);
 
 		if (playStartupSplash) {
 			// Keep optional animation code off the offline startup path when no splash is requested.
@@ -1202,21 +1209,6 @@ export function watchScopedModelSettings(
 		session.setScopedModels(mapped);
 	});
 	session.addDisposer(stop);
-}
-
-async function getChangelogForDisplay(
-	parsed: Args,
-	mode: SettingValueOf<typeof cfgStartupChangelogMode>,
-): Promise<StartupChangelogSelection | undefined> {
-	if (parsed.continue || parsed.resume || isForeignSessionImport(parsed)) {
-		return undefined;
-	}
-
-	return resolveStartupChangelogForDisplay({
-		mode,
-		currentVersion: VERSION,
-		changelogPath: getChangelogPath(),
-	});
 }
 
 const SESSION_ID_ARG_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -2112,9 +2104,6 @@ export async function runRootCommand(
 		const credentialScopedCacheHydration = logger.time("hydrateCredentialScopedModelCaches", () =>
 			modelRegistry.hydrateCredentialScopedModelCaches(),
 		);
-		// A source checkout's uncommitted diff is read off-thread; it overlaps model setup and is
-		// awaited before any session entry is written.
-		const runtimeIdentityLoad = logger.time("loadRuntimeIdentity", loadRuntimeIdentity);
 		if (parsedArgs.noPty || parsedArgs.mode === "rpc-ui") {
 			Bun.env.PI_NO_PTY = "1";
 		}
@@ -2239,7 +2228,6 @@ export async function runRootCommand(
 		// Reading the token immediately after `--continue` distinguishes the session
 		// id from UUID-shaped values owned by later extension flags.
 		normalizeContinueSessionArgs(parsedArgs, rawArgs);
-		await runtimeIdentityLoad;
 
 		// Resolve native resume/fork flags or import one foreign transcript into a
 		// fresh persisted OMP session before constructing the AgentSession.
@@ -2516,6 +2504,7 @@ export async function runRootCommand(
 			options.settingsApproval = isInteractive;
 			options.tuiTranscript = isInteractive;
 			options.autoTitle = isInteractive;
+			options.deferSkillDescriptionCompression = isInteractive;
 			options.settings = settingsInstance;
 			options.telemetry = startupTelemetry;
 			options.extensions = startupExtensions;
@@ -2772,18 +2761,13 @@ export async function runRootCommand(
 				stdoutIsTTY: process.stdout.isTTY,
 			});
 
-			// Startup changelog is only consumed by interactive mode below; kick the
-			// CHANGELOG.md parse off now so it overlaps session creation instead of
-			// serializing after it.
-			const startupChangelogPromise =
-				isInteractive && !parsedArgs.offline
-					? logger.time(
-							"main:getChangelogForDisplay",
-							getChangelogForDisplay,
-							parsedArgs,
-							cfgStartupChangelogMode.get(settingsInstance),
-						)
-					: undefined;
+			// Read before deferred post-paint display advances the marker. Offline and
+			// resumed/imported sessions neither read nor advance startup changelogs.
+			const showsStartupChangelog =
+				isInteractive &&
+				!parsedArgs.offline &&
+				!(parsedArgs.continue || parsedArgs.resume || isForeignSessionImport(parsedArgs));
+			const lastChangelogVersion = showsStartupChangelog ? await readLastChangelogVersion() : undefined;
 
 			const preloadProviderRegistrations =
 				isInteractive && autoResumed ? extensionsResult.runtime.pendingProviderRegistrations.slice() : [];
@@ -2881,11 +2865,22 @@ export async function runRootCommand(
 			// empty (issue #9220). Fire-and-forget: the prompt must never block on the
 			// background pass.
 			// Interactive-only work that must not delay the first session-bound frame:
-			// runInteractiveMode calls it once init has painted. Neither feeds the first
-			// prompt: fallback-chain validation only produces header warnings, and the
-			// background refresh already raced the first prompt when it ran earlier.
-			const startDeferredStartupWork = (): void => {
+			// runInteractiveMode calls it once init has painted. None feeds the first
+			// prompt: fallback-chain validation and the startup changelog only add header
+			// rows, and the background refresh already raced the first prompt when it ran earlier.
+			const startDeferredStartupWork = (interactive: InteractiveMode): void => {
+				if (showsStartupChangelog) {
+					void resolveStartupChangelogForDisplay({
+						mode: cfgStartupChangelogMode.get(settingsInstance),
+						currentVersion: VERSION,
+						lastVersion: lastChangelogVersion,
+						changelogPath: getChangelogPath(),
+					})
+						.then(selection => selection && interactive.showStartupChangelog(selection))
+						.catch(error => logger.warn("Startup changelog failed", { error: String(error) }));
+				}
 				void session.loadDeferredExtensions();
+				session.startSkillDescriptionCompression();
 				if (!parsedArgs.offline) modelRegistry.refreshInBackground();
 				session.validateRetryFallbackChains();
 				if (configuredScope.length > 0) {
@@ -2996,8 +2991,6 @@ export async function runRootCommand(
 					input: rpcInput,
 				});
 			} else if (isInteractive) {
-				const startupChangelog = await startupChangelogPromise;
-
 				const modelScopeNotification = buildModelScopeNotification(
 					scopedModels,
 					cfgStartupQuiet.get(settingsInstance),
@@ -3022,7 +3015,6 @@ export async function runRootCommand(
 					await runInteractiveMode(
 						session,
 						VERSION,
-						startupChangelog,
 						notifs,
 						initialArgs.messages,
 						setToolUIContext,

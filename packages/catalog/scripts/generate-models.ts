@@ -591,7 +591,10 @@ async function generateModels(selectedProvider?: string) {
 	const catalogProviderModels = catalogProviderModelBatches.flatMap(batch => batch.models);
 	const bundledModelsDevModels = modelsDevModels.filter(model => !authoritativeCatalogProviders.has(model.provider));
 	// getGitLabDuoModels returns built models; project back to spec stage for the bundle.
-	const gitLabDuoModels = getGitLabDuoModels().map(model => toModelSpec(model));
+	const gitLabDuoModels =
+		selectedProvider === undefined || selectedProvider === "gitlab-duo"
+			? getGitLabDuoModels().map(model => toModelSpec(model))
+			: [];
 	// Combine models. stencil.so has priority unless a provider's successful endpoint
 	// discovery is authoritative; those endpoint snapshots replace stencil.so rows.
 	let allModels = applyGlobalModelsDevFallback(

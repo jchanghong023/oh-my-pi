@@ -14,6 +14,10 @@ LIBSQLITE3_FLAGS = "-DSQLITE_MAX_MMAP_SIZE=68719476736LL"
 # their line endings and turn valid NumKong declarations into syntax errors.
 CFLAGS_x86_64_pc_windows_msvc = "-DLIBWASM_STATIC /utf-8"
 CXXFLAGS_x86_64_pc_windows_msvc = "/utf-8"
+# PCRE2 compiled in, as the shipped addon builds it
+# (`packages/natives/scripts/build-bindings.ts`): a system libpcre2 would make
+# `obash` load a Homebrew dylib at every start and depend on it.
+PCRE2_SYS_STATIC = "1"
 # Store each crate's metadata only in its .rmeta instead of duplicating it into
 # every rlib. Measured on a reqwest-sized graph: 196 MB -> 130 MB target dir at
 # identical build times. Requires the pinned nightly (rust-toolchain.toml).

@@ -71,7 +71,7 @@ describe("InteractiveMode startup header after the terminal reports a light back
 			settings: Settings.isolated(),
 			modelRegistry,
 		});
-		mode = new InteractiveMode(session, "test", startupChangelog);
+		mode = new InteractiveMode(session, "test");
 		vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
 	});
 
@@ -109,6 +109,7 @@ describe("InteractiveMode startup header after the terminal reports a light back
 	it("recolors the What's New heading", async () => {
 		const headers = vi.spyOn(mode.composer, "setHeaderExtras");
 		await mode.init();
+		mode.showStartupChangelog(startupChangelog);
 		const darkAccent = fgPrefix("accent");
 		const headingText = Bun.stripANSI(headers.mock.calls[0]![1]![1]!.render(120).join("\n")).trim();
 		expect(renderedLine(headingText)).toContain(darkAccent);

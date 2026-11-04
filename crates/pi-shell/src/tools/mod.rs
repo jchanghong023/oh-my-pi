@@ -135,7 +135,7 @@ impl ToolConfig {
 	}
 }
 
-type SpawnRecord = (u32, Option<crate::process::Process>);
+type SpawnRecord = (u32, Option<crate::proctree::Process>);
 
 /// External identities spawned in labeled subshell trees.
 ///
@@ -151,20 +151,20 @@ impl SpawnLog {
 		if lineage.label != 0 && !lineage.detached {
 			let process = i32::try_from(pid)
 				.ok()
-				.and_then(crate::process::Process::from_pid);
+				.and_then(crate::proctree::Process::from_pid);
 			self.0.lock().push((lineage.label, process));
 		}
 	}
 
 	/// Pinned, still-live external members of the labeled trees.
-	fn live(&self, labels: &[u32]) -> Vec<crate::process::Process> {
+	fn live(&self, labels: &[u32]) -> Vec<crate::proctree::Process> {
 		self
 			.0
 			.lock()
 			.iter()
 			.filter(|(label, _)| labels.contains(label))
 			.filter_map(|(_, process)| process.as_ref())
-			.filter(|process| process.status() == crate::process::ProcessStatus::Running)
+			.filter(|process| process.status() == crate::proctree::ProcessStatus::Running)
 			.cloned()
 			.collect()
 	}
@@ -175,7 +175,7 @@ impl SpawnLog {
 			labels.contains(label)
 				&& process
 					.as_ref()
-					.is_some_and(|process| process.status() == crate::process::ProcessStatus::Running)
+					.is_some_and(|process| process.status() == crate::proctree::ProcessStatus::Running)
 		})
 	}
 
@@ -560,7 +560,7 @@ mod tests {
 		assert!(log.has_external(&[7]), "an exited external remains recorded");
 		log.forget(&[7]);
 		assert!(!log.has_external(&[7]));
-		assert_eq!(snapshot[0].status(), crate::process::ProcessStatus::Exited);
+		assert_eq!(snapshot[0].status(), crate::proctree::ProcessStatus::Exited);
 	}
 
 	#[test]

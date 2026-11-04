@@ -24,7 +24,7 @@ import {
 } from "@oh-my-pi/pi-tui/chat/reply-write";
 import { readMediaPath } from "@oh-my-pi/pi-tui/native/blobs";
 import { TodoReminderComponent } from "@oh-my-pi/pi-tui/chat/todo-reminder";
-import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
+import { isNativeRendering, nativePacing } from "@oh-my-pi/pi-tui/native/state";
 import { textContent } from "@oh-my-pi/pi-tui/chat/transcript-entry";
 import {
 	asyncJobState,
@@ -379,9 +379,10 @@ export class EventController {
 				: null,
 		);
 		this.#streamingReveal = new StreamingRevealController({
-			// Extension text renderers receive the full text on each drawn update.
+			// Extension renderers receive the full text; Tern paces streamed Markdown itself.
 			getSmoothStreaming: () =>
 				cfgDisplaySmoothStreaming.get(this.ctx.settings) &&
+				!nativePacing() &&
 				!this.ctx.viewSession.extensionRunner?.getAssistantTextRenderers?.().length,
 			getHideThinkingBlock: () =>
 				chatTranscriptDisplayPreferences.hideToolActivity || this.ctx.effectiveHideThinkingBlock,

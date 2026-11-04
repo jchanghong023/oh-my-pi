@@ -61,7 +61,7 @@ describe("inline click-to-focus geometry", () => {
 		term = new VirtualTerminal(120, 32);
 		eventBus = new EventBus();
 		const composer = new Composer({ terminal: term });
-		mode = new InteractiveMode(session, "test", undefined, () => {}, undefined, undefined, eventBus, composer);
+		mode = new InteractiveMode(session, "test", () => {}, undefined, undefined, eventBus, composer);
 		cfgDisplayMode.set(mode.settings, "detailed");
 		chatTranscriptDisplayPreferences.compactToolActivity = false;
 	});

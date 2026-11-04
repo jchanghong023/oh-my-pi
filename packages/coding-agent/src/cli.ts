@@ -32,6 +32,7 @@ import {
 
 import { declareWorkerHostEntry, installWorkerInbox, isWorkerHostSelector } from "@oh-my-pi/pi-utils/worker-host";
 import { installSqliteLockShim } from "@oh-my-pi/pi-natives/sqlite-locks";
+import { isNativeShell, runNativeShell } from "./cli/native-shell";
 import { extractProfileFlags } from "./cli/profile-bootstrap";
 import {
 	BLOB_BROKER_WORKER_ARG,
@@ -482,6 +483,12 @@ export async function runCli(argv: string[]): Promise<void> {
 		if (typeof entry.start !== "function") throw new Error("Workflow sandbox entry must export start");
 		await entry.start({ vm, createInterface, stdin: process.stdin, stdout: process.stdout });
 		return;
+	}
+	// `omp zsh|bash|sh [args...]`: the whole argv belongs to the shell (`--help`,
+	// `--profile`, `-c` included), so it dispatches before profile bootstrap,
+	// prepaint, network setup and the command table.
+	if (isNativeShell(argv[0])) {
+		await runNativeShell(argv);
 	}
 	let resolvedArgv = argv;
 	try {

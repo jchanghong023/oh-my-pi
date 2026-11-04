@@ -376,7 +376,7 @@ modelRoles:
 
 ### 搜索 provider
 
-二十三个后端。固定其中一个，或让 `auto` 按顺序走完整条链路。
+二十四个后端。固定其中一个，或让 `auto` 按顺序走完整条链路。
 
 | provider     | 认证                                      |
 | ------------ | ----------------------------------------- |
@@ -389,6 +389,7 @@ modelRoles:
 | `zai`        | `ZAI_API_KEY`                             |
 | `exa`        | `EXA_API_KEY`（或 mcp）                   |
 | `tinyfish`   | `TINYFISH_API_KEY`                        |
+| `keenable`   | `KEENABLE_API_KEY`（无密钥回退）         |
 | `jina`       | `JINA_API_KEY`                            |
 | `kagi`       | `KAGI_API_KEY`                            |
 | `tavily`     | `TAVILY_API_KEY`                          |
