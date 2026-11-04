@@ -144,10 +144,17 @@ try {
 					const cache = path.join(root, variant);
 					const child = Bun.spawn([binary], {
 						env: { ...process.env, PI_NATIVES_DIR: cache, PI_NATIVE_VARIANT: variant },
-						stdout: "ignore",
+						stdout: "pipe",
 						stderr: "ignore",
 					});
-					expect(await child.exited).toBe(0);
+					const [output, childExitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+					expect(childExitCode).toBe(0);
+					const failure: { error: string } = JSON.parse(output);
+					const cachedCandidate = path.join(cache, packageJson.version, `pi_natives.${tag}-${variant}.node`);
+					// Keep the first loader failure, without retrying a partially loaded image.
+					expect(failure.error.split("\n").filter(line => line.startsWith(`- ${cachedCandidate}:`))).toHaveLength(
+						1,
+					);
 					const extracted = (await fs.readdir(path.join(cache, packageJson.version)))
 						.filter(filename => filename.endsWith(".node"))
 						.sort();

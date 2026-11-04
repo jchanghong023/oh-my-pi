@@ -921,7 +921,9 @@ export function loadNative() {
 			: null;
 	const fallbackEmbeddedPath = fallbackEmbeddedFile && path.join(ctx.versionedDir, fallbackEmbeddedFile.filename);
 
-	for (const candidate of runtimeCandidates) {
+	// A failed dlopen can leave a NODELETE image partially relocated on older
+	// glibc. Retrying that same image can crash instead of reporting its error.
+	for (const candidate of new Set(runtimeCandidates)) {
 		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
 			maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile);
 		}

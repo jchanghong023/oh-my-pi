@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore startup and external shell commands on glibc 2.17, and preserve native loader errors without retrying the same failed addon.
+
 ### Changed
 
 - Preserve fork cancellation, timeout and Windows path behavior on the new embedded bash engine.

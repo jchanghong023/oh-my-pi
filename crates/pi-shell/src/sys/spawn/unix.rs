@@ -155,8 +155,11 @@ fn next_wait(mb: &Arc<Mailbox>) -> Option<Wait> {
 pub(super) struct State {
 	/// The process umask when the spawner was created: `posix_spawn` cannot
 	/// set one, so specs asking for another take the fork path.
-	umask:  Option<u32>,
-	groups: Mutex<Groups>,
+	umask:     Option<u32>,
+	groups:    Mutex<Groups>,
+	/// Optional libc extension; older glibc must use the fork path.
+	#[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+	add_chdir: Option<posix::AddChdir>,
 }
 
 /// Scopes the spawner created, for leak checks.
@@ -257,8 +260,10 @@ impl State {
 	/// it (read here otherwise).
 	pub(super) fn new(umask: Option<u32>) -> Self {
 		Self {
-			umask:  umask.or_else(process_umask),
+			umask: umask.or_else(process_umask),
 			groups: Mutex::new(Groups { list: Vec::new(), next_sweep: SWEEP }),
+			#[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+			add_chdir: posix::add_chdir(),
 		}
 	}
 
@@ -562,9 +567,12 @@ fn launch(
 ) -> io::Result<(i32, Place)> {
 	// `posix_spawn` cannot set resource limits either.
 	#[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
-	if prog.rlimits.is_empty() && state.posix_eligible(prog.umask, prog.ign) {
+	if prog.rlimits.is_empty()
+		&& state.posix_eligible(prog.umask, prog.ign)
+		&& let Some(add_chdir) = state.add_chdir
+	{
 		let exec = Exec::new(prog)?;
-		return retry_join(place, |p| posix::spawn(&exec, fds, p, prog.ign));
+		return retry_join(place, |p| posix::spawn(&exec, fds, p, prog.ign, add_chdir));
 	}
 	#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
 	let _ = state;
@@ -985,6 +993,38 @@ mod posix {
 	use super::{Exec, NSIG, Place, ignored};
 	use crate::bash::SigSet;
 
+	pub(super) type AddChdir = unsafe extern "C" fn(
+		*mut libc::posix_spawn_file_actions_t,
+		*const libc::c_char,
+	) -> libc::c_int;
+
+	#[cfg(target_os = "macos")]
+	#[allow(clippy::unnecessary_wraps, reason = "the libc extension is optional on Linux")]
+	pub(super) const fn add_chdir() -> Option<AddChdir> {
+		Some(libc::posix_spawn_file_actions_addchdir_np)
+	}
+
+	#[cfg(target_os = "linux")]
+	pub(super) fn add_chdir() -> Option<AddChdir> {
+		// A direct reference makes dlopen fail on glibc < 2.29 before the
+		// spawner can choose its existing fork fallback (including at CLI
+		// startup).
+		static ADD_CHDIR: std::sync::LazyLock<Option<AddChdir>> = std::sync::LazyLock::new(|| {
+			// SAFETY: RTLD_DEFAULT and this NUL-terminated symbol name are valid.
+			let symbol = unsafe {
+				libc::dlsym(libc::RTLD_DEFAULT, c"posix_spawn_file_actions_addchdir_np".as_ptr())
+			};
+			if symbol.is_null() {
+				None
+			} else {
+				// SAFETY: the resolved libc function has the AddChdir signature
+				// and remains available for the lifetime of the process.
+				Some(unsafe { std::mem::transmute::<*mut libc::c_void, AddChdir>(symbol) })
+			}
+		});
+		*ADD_CHDIR
+	}
+
 	/// `POSIX_SPAWN_SETSID` (`<sys/spawn.h>`, macOS 10.15+; absent from the
 	/// libc crate).
 	#[cfg(target_os = "macos")]
@@ -1002,7 +1042,13 @@ mod posix {
 
 	/// `posix_spawn` `exec` with `fds` installed, at `place`, with every
 	/// signal not in `ign` reset to its default.
-	pub fn spawn(exec: &Exec, fds: &[(i32, OwnedFd)], place: Place, ign: SigSet) -> io::Result<i32> {
+	pub fn spawn(
+		exec: &Exec,
+		fds: &[(i32, OwnedFd)],
+		place: Place,
+		ign: SigSet,
+		add_chdir: AddChdir,
+	) -> io::Result<i32> {
 		let mut actions = FileActions::new()?;
 		for (target, fd) in fds {
 			// SAFETY: `actions` is initialized; both fds are plain integers.
@@ -1011,7 +1057,7 @@ mod posix {
 			})?;
 		}
 		// SAFETY: `actions` is initialized; `cwd` outlives the spawn call.
-		check(unsafe { libc::posix_spawn_file_actions_addchdir_np(actions.ptr(), exec.cwd()) })?;
+		check(unsafe { add_chdir(actions.ptr(), exec.cwd()) })?;
 		let mut attr = Attr::new()?;
 		let mut flags = libc::POSIX_SPAWN_SETSIGMASK | libc::POSIX_SPAWN_SETSIGDEF;
 		match place {
