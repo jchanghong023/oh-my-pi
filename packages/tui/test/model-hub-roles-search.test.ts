@@ -4,6 +4,7 @@
  * keys, and once a query is live, typing keeps editing it.
  */
 import { beforeAll, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext } from "../src/native/node";
@@ -115,4 +116,26 @@ test("a live query keeps taking printable keys on the Roles rows", () => {
 	expect(props.strip).toBeNull();
 	expect(props.query).toBe("sonne");
 	expect(props.scope).toBe("all");
+});
+
+test("left-clicking model kind tabs filters the model list and can restore all models", () => {
+	const hub = createHub();
+	const selector = "anthropic/claude-sonnet";
+	const clickTab = (label: string) => {
+		const lines = hub.render(120).map(line => stripVTControlCharacters(line));
+		const row = lines.findIndex(line => line.includes("类型："));
+		const line = lines[row]!;
+		const column = Bun.stringWidth(line.slice(0, line.indexOf(label)));
+		hub.handleInput(`\x1b[<0;${column + 1};${row + 1}M`);
+	};
+	try {
+		expect(pickerProps(hub).order).toContain(selector);
+		clickTab("image");
+		expect(pickerProps(hub).tab).toBe("image");
+		expect(pickerProps(hub).order).not.toContain(selector);
+		clickTab("all");
+		expect(pickerProps(hub).order).toContain(selector);
+	} finally {
+		hub.dispose();
+	}
 });

@@ -13,6 +13,8 @@
 
 ### Fixed
 
+- Choose a model in the Ctrl+T picker with a single left click, without changing its layout or keyboard controls.
+- Switch model-kind and role-category tabs in `/model` with a left click.
 - Keep multiline status previews inside the settings panel on narrow terminals.
 - Closing an overlay that others were opened over no longer leaves them returning focus to it once they close ([#16476](https://github.com/can1357/oh-my-pi/pull/16476))
 

@@ -1455,7 +1455,7 @@ export class ModelBrowser implements Component {
 	 * Route a mouse event. `line` is relative to the browser's first rendered
 	 * row (the search row).
 	 */
-	routeMouse(event: SgrMouseEvent, line: number): void {
+	routeMouse(event: SgrMouseEvent, line: number, _col?: number, activateOnClick = false): void {
 		if (event.wheel !== null) {
 			// Wheel pans the window; it never moves the selection and never wraps.
 			this.#windowStart = this.#clampWindowStart(this.#windowStart + event.wheel);
@@ -1470,8 +1470,8 @@ export class ModelBrowser implements Component {
 		const index = this.#hoverIndexAt(line);
 		const item = index !== null ? this.#menu.visibleItems[index] : undefined;
 		if (index === null || !item) return;
-		// ModelBrowserSource idiom: click selects, click-again activates.
-		if (index === this.#menu.selectedIndex) {
+		// The compact session picker activates on one click; hubs select first.
+		if (activateOnClick || index === this.#menu.selectedIndex) {
 			this.onActivate?.(item);
 		} else if (this.#menu.setSelectedIndex(index)) {
 			this.#ensureSelectedVisible();

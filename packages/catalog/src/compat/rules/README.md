@@ -363,6 +363,8 @@ behavior {
 
 `model-hub-hidden-providers` hides the listed provider scopes in the model hub only; it does not remove models, disable roles, or change authentication.
 
+Tests targeting a visible provider should select its `provider:<id>` scope directly instead of counting sidebar arrow-key steps; hidden scopes and search ranking can change the navigation order. Assert the target provider's model is shown and another provider's model is absent so remaining in the All-models scope cannot produce a false pass.
+
 `role-defaults "<role>"` declares one agent role's built-in default model selector chain, one `model "<selector>"` child per entry, most preferred first. Selectors are copied verbatim (`provider/id`, bare ids, fuzzy fragments such as `-mini`, and `@role` references); duplicates within a role and repeated roles are compile errors. `roleDefaultModels()` returns every chain keyed by role in declaration order.
 
 ## Auth grammar

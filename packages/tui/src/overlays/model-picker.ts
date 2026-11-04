@@ -7,6 +7,7 @@
 import type { Model } from "@oh-my-pi/pi-ai";
 import { addKeyAliases, canonicalKeyId } from "../keybindings";
 import { type KeyId, parseKey } from "../keys";
+import type { SgrMouseEvent } from "../mouse";
 import type { Component, TUI } from "../tui";
 import { type ThemeColor, theme } from "../theme/theme";
 import {
@@ -114,8 +115,7 @@ function footerHint(mode: "session" | "role" | "task" | "selection"): string {
 
 /**
  * The ctrl+t picker component. Hosted as a non-fullscreen bottom-anchored
- * overlay (`ui.showOverlay(..., { anchor: "bottom-center" })`); keyboard-only,
- * since mouse tracking is reserved for fullscreen overlays.
+ * overlay (`ui.showOverlay(..., { anchor: "bottom-center" })`).
  */
 export class ModelPickerComponent implements Component {
 	#tui: TUI;
@@ -123,6 +123,7 @@ export class ModelPickerComponent implements Component {
 	#registry: ModelPickerRegistry;
 	#scopedModels: ReadonlyArray<ScopedModelItem>;
 	#browser: ModelBrowser;
+	#renderWidth = 0;
 	#configError: string | undefined;
 	#currentSelector: string | undefined;
 	#currentQuickRoleSelector: string | undefined;
@@ -294,8 +295,7 @@ export class ModelPickerComponent implements Component {
 	}
 
 	handleInput(data: string): void {
-		// Mouse tracking is off outside fullscreen overlays; drop any stray SGR
-		// reports instead of feeding them to the search input.
+		// Mouse input is routed separately with overlay-local coordinates.
 		if (data.startsWith("\x1b[<")) return;
 		if (this.#taskMatchKeys.size > 0) {
 			const parsed = parseKey(data);
@@ -307,6 +307,11 @@ export class ModelPickerComponent implements Component {
 		}
 		this.#browser.handleInput(data);
 	}
+
+	routeMouse(event: SgrMouseEvent, line: number, col: number): void {
+		if (col < 2 || col >= this.#renderWidth - 2) return;
+		this.#browser.routeMouse(event, line - 2, col - 2, true);
+	}
 	/** Flip between session-model and Task-subagent targets, repointing the highlight. */
 	#toggleTaskMode(): void {
 		this.#taskMode = !this.#taskMode;
@@ -317,6 +322,7 @@ export class ModelPickerComponent implements Component {
 	}
 
 	render(width: number): string[] {
+		this.#renderWidth = width;
 		const termRows = Math.max(16, this.#tui.terminal?.rows || process.stdout.rows || 40);
 		const listBudget = Math.floor(termRows * HEIGHT_FRACTION) - CHROME_ROWS - BROWSER_FRAME_ROWS;
 		this.#browser.setMaxVisible(Math.max(MIN_VISIBLE, listBudget));

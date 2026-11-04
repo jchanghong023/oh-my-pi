@@ -143,13 +143,12 @@ describe("model hub assign mode scope filtering (#12692)", () => {
 	});
 
 	test("outside assign mode the litellm provider scope still lists its model", () => {
-		const { body, key } = createHub();
-		// From the initial All-models scope hop straight to the litellm provider
-		// without entering assign mode; the accepts filter must not apply.
-		key(DOWN); // All models → google
-		key(DOWN); // google → litellm
+		const { hub, body } = createHub();
+		// Hidden provider scopes change sidebar hop counts; select the visible scope by identity.
+		hub.handleNativeEvent({ type: "select", key: "scopes", item: "provider:litellm" });
 
 		const rendered = body();
 		expect(rendered).toContain("chat-only");
+		expect(rendered).not.toContain("web-search-pro");
 	});
 });

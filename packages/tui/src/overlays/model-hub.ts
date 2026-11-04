@@ -74,7 +74,7 @@ import {
 	type StripChip as HubStripChip,
 	type StripState as HubStripState,
 } from "./hub-frame";
-import { renderSegmentTrack } from "../chrome/segment-track";
+import { renderSegmentTrack, type SegmentTrackRange } from "../chrome/segment-track";
 
 const MODEL_HUB_BODY_MIN_WIDTH = 28;
 
@@ -412,6 +412,9 @@ export class ModelHubComponent implements Component {
 	#catalogCorpus: { items: readonly ModelBrowserItem[]; corpus: FuzzyCorpus<ModelBrowserItem> } | undefined;
 	#modelKindTab: "all" | ModelKind = "all";
 	#roleTab: RoleTab = "all";
+	#tabRanges: SegmentTrackRange[] = [];
+	#tabCaptionWidth = 0;
+	#tabWidth = 0;
 	#configError: string | undefined;
 
 	#entries: SidebarEntry[] = [];
@@ -2307,7 +2310,7 @@ export class ModelHubComponent implements Component {
 
 	#routeMouseEvent(event: SgrMouseEvent): boolean {
 		if (this.#assignmentPending) return true;
-		const { footerColumn, bodyHeight, contentLine, overSidebar, overBody, bodyLine } = this.#frame.locate(
+		const { footerColumn, bodyHeight, contentLine, overSidebar, overBody, bodyLine, bodyColumn } = this.#frame.locate(
 			event.row,
 			event.col,
 		);
@@ -2365,6 +2368,17 @@ export class ModelHubComponent implements Component {
 		}
 
 		if (overBody) {
+			const rolesView = entry.kind === "roles" && this.#assigning === null;
+			if (bodyLine === 0 && (rolesView || this.#isBrowserView(entry))) {
+				const column = bodyColumn - this.#tabCaptionWidth;
+				const index = this.#tabRanges.findIndex(
+					range =>
+						column >= range.start && column < range.end && range.end <= this.#tabWidth - this.#tabCaptionWidth,
+				);
+				const item = rolesView ? ROLE_TABS[index] : MODEL_KIND_TABS[index];
+				if (item) this.handleNativeEvent({ type: "select", key: rolesView ? "roleTabs" : "kinds", item });
+				return true;
+			}
 			if (entry.kind === "roles" && this.#assigning === null) {
 				this.#focus = "list";
 				const listLine = bodyLine - this.#rolesRowStart;
@@ -2465,21 +2479,26 @@ export class ModelHubComponent implements Component {
 
 	#renderModelKindTabs(width: number): string {
 		const active = MODEL_KIND_TABS.indexOf(this.#modelKindTab);
+		const prefix = ` ${theme.fg("dim", "类型：")} `;
+		this.#tabCaptionWidth = visibleWidth(prefix);
+		this.#tabWidth = width;
 		const track = renderSegmentTrack(
 			MODEL_KIND_TABS.map(kind => ({ label: kind })),
 			Math.max(0, active),
+			this.#tabRanges,
 		);
-		return truncateToWidth(
-			` ${theme.fg("dim", "类型：")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`,
-			width,
-		);
+		return truncateToWidth(`${prefix}${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}`, width);
 	}
 
 	#renderRoleTabs(width: number): string {
 		const active = ROLE_TABS.indexOf(this.#roleTab);
+		const prefix = ` ${theme.fg("dim", "角色：")} `;
+		this.#tabCaptionWidth = visibleWidth(prefix);
+		this.#tabWidth = width;
 		const track = renderSegmentTrack(
 			ROLE_TABS.map(tab => ({ label: tab === "kind" ? "类型" : tab })),
 			Math.max(0, active),
+			this.#tabRanges,
 		);
 		const { names, active: activePreset } = this.#presets();
 		// p/P type into a live query instead of switching presets.
@@ -2492,7 +2511,7 @@ export class ModelHubComponent implements Component {
 				? `   ${theme.fg("dim", "预设：")} ${activePreset ? theme.fg("accent", activePreset) : theme.fg("muted", "自定义")}  ${theme.fg("dim", presetKeys)}`
 				: "";
 		return truncateToWidth(
-			` ${theme.fg("dim", "角色：")} ${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
+			`${prefix}${track}  ${theme.fg("dim", formatKeyHints(["alt+left", "alt+right"]))}${preset}`,
 			width,
 		);
 	}

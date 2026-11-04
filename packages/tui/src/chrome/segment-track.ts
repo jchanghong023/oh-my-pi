@@ -12,8 +12,15 @@ import { type ThemeColor, theme } from "../theme/index";
 import { BG_RESET, FG_RESET } from "../theme/color";
 import type { NativeNode } from "../native/node";
 import { node, row } from "../native/describe";
+import { visibleWidth } from "../utils";
 export interface TrackSegment {
 	label: string;
+}
+
+/** Terminal-cell bounds of a rendered segment, relative to the track. */
+export interface SegmentTrackRange {
+	start: number;
+	end: number;
 }
 
 /** Vivid theme colors for position-based segment coloring, in preference
@@ -83,30 +90,45 @@ export function describeSegmentTrack(segments: readonly TrackSegment[], activeIn
  * a single line of styled text with no surrounding caption or arrows — callers
  * frame it as they need.
  */
-export function renderSegmentTrack(segments: TrackSegment[], activeIndex: number): string {
+export function renderSegmentTrack(
+	segments: TrackSegment[],
+	activeIndex: number,
+	ranges?: SegmentTrackRange[],
+): string {
 	// Powerline triangles point *into* the chip so the colored caps merge with
 	// the filled body: left cap points left, right cap points right.
 	const capLeft = theme.sep.powerlineRight;
 	const capRight = theme.sep.powerlineLeft;
 	const thinSep = theme.fg("statusLineSep", theme.sep.powerlineThin);
 	const palette = resolveSegmentPalette(segments.length);
+	if (ranges) ranges.length = 0;
 
 	let track = "";
+	let column = 0;
 	segments.forEach((segment, i) => {
 		if (i > 0) {
 			// A thin separator reads cleanly only between two plain labels; the chip
 			// caps already delimit the active segment, so pad around it instead.
-			track += i === activeIndex || i - 1 === activeIndex ? "  " : ` ${thinSep} `;
+			const separator = i === activeIndex || i - 1 === activeIndex ? "  " : ` ${thinSep} `;
+			track += separator;
+			if (ranges) column += visibleWidth(separator);
 		}
 		const color = palette[i % palette.length];
 		const fg = theme.getFgAnsi(color);
+		let rendered: string;
 		if (i !== activeIndex) {
-			track += `${fg}${segment.label}${FG_RESET}`;
-			return;
+			rendered = `${fg}${segment.label}${FG_RESET}`;
+		} else {
+			const bg = fg.replace("\x1b[38;", "\x1b[48;");
+			const label = `${bg}${theme.getContrastFgAnsi(color)}\x1b[1m ${segment.label} \x1b[22m${BG_RESET}`;
+			rendered = `${fg}${capLeft}${label}${fg}${capRight}${FG_RESET}`;
 		}
-		const bg = fg.replace("\x1b[38;", "\x1b[48;");
-		const label = `${bg}${theme.getContrastFgAnsi(color)}\x1b[1m ${segment.label} \x1b[22m${BG_RESET}`;
-		track += `${fg}${capLeft}${label}${fg}${capRight}${FG_RESET}`;
+		track += rendered;
+		if (ranges) {
+			const start = column;
+			column += visibleWidth(rendered);
+			ranges.push({ start, end: column });
+		}
 	});
 	return track;
 }

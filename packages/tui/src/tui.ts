@@ -24,6 +24,7 @@ import { TuiDebugServer } from "./debug-server";
 import { extractPrintableText, isKeyRelease, matchesKey } from "./keys";
 import { KITTY_PLACEHOLDER } from "./kitty-graphics";
 import { LoopWatchdog } from "./loop-watchdog";
+import { parseSgrMouse, type MouseRoutable } from "./mouse";
 import { assumedTspHello, NativeBackend, type NativeHost } from "./native/backend";
 import { col } from "./native/describe";
 import { TSP_PREFIX, type TspHello } from "./native/encode";
@@ -103,8 +104,8 @@ const PAINT_BEGIN = `${HIDE_CURSOR}${SYNC_OUTPUT_BEGIN}${DISABLE_AUTOWRAP}`;
 const PAINT_END = `${ENABLE_AUTOWRAP}${SYNC_OUTPUT_END}`;
 const PAINT_BEGIN_NO_SYNC = `${HIDE_CURSOR}${DISABLE_AUTOWRAP}`;
 const PAINT_END_NO_SYNC = ENABLE_AUTOWRAP;
-// Mouse reporting is scoped to fullscreen overlays that opt into pointer
-// interaction, plus the opt-in normal-buffer click capture (`tui.mouse`).
+// Mouse reporting is scoped to overlays that opt into pointer interaction,
+// plus the opt-in normal-buffer click capture (`tui.mouse`).
 // 1000h = button click tracking, 1003h = any-motion tracking for hover
 // targets, and 1006h = SGR extended coordinates past column/row 223.
 // Selection-first surfaces leave these modes disabled so the terminal retains
@@ -325,6 +326,9 @@ export interface Component {
 	 */
 	handleInput?(data: string): void;
 
+	/** Optional handler for overlay-local mouse input. */
+	routeMouse?: MouseRoutable["routeMouse"];
+
 	/**
 	 * If true, component receives key release events (Kitty protocol).
 	 * Default is false - release events are filtered out.
@@ -508,8 +512,8 @@ export interface OverlayOptions {
 	 */
 	fullscreen?: boolean;
 	/**
-	 * Enable terminal mouse reporting while fullscreen. Defaults on; disable it
-	 * when native terminal text selection takes precedence over pointer events.
+	 * Enable terminal mouse reporting. Defaults on for fullscreen overlays and
+	 * off for floating overlays; disable it when native text selection takes precedence.
 	 */
 	mouseTracking?: boolean;
 }
@@ -1125,6 +1129,7 @@ export class TUI extends Container {
 		/** Focus restored after closing; tracks live focus changes beneath an input-less key holder. */
 		preFocus: Component | null;
 		hidden: boolean;
+		mouseBounds?: { row: number; col: number; width: number; height: number; firstLine: number };
 		/**
 		 * A sheet the user clicked away from (see {@link TUI.#focusFromPointer}):
 		 * it stays up but no longer holds the keys, until focus moves back into it.
@@ -3060,6 +3065,26 @@ export class TUI extends Container {
 			return;
 		}
 
+		if (data.startsWith("\x1b[<")) {
+			const overlay = this.#getTopmostVisibleOverlay();
+			if (overlay?.options?.mouseTracking === true && !overlay.options.fullscreen && overlay.component.routeMouse) {
+				const event = parseSgrMouse(data);
+				const bounds = overlay.mouseBounds;
+				if (
+					event &&
+					bounds &&
+					event.row >= bounds.row &&
+					event.row < bounds.row + bounds.height &&
+					event.col >= bounds.col &&
+					event.col < bounds.col + bounds.width
+				) {
+					overlay.component.routeMouse(event, event.row - bounds.row + bounds.firstLine, event.col - bounds.col);
+					this.requestRender();
+				}
+				return;
+			}
+		}
+
 		if (this.#inputListeners.size > 0) {
 			let current = data;
 			for (const listener of this.#inputListeners) {
@@ -3324,14 +3349,19 @@ export class TUI extends Container {
 			// (width and maxHeight don't depend on overlay height).
 			const { width, maxHeight } = this.#resolveOverlayLayout(options, 0, termWidth, termHeight);
 			let overlayLines = component.render(width);
+			let firstLine = 0;
 			if (overlayLines.length > maxHeight) {
 				const anchor = options?.anchor ?? "center";
-				overlayLines =
+				firstLine =
 					anchor === "bottom-left" || anchor === "bottom-center" || anchor === "bottom-right"
-						? overlayLines.slice(overlayLines.length - maxHeight)
-						: overlayLines.slice(0, maxHeight);
+						? overlayLines.length - maxHeight
+						: 0;
+				overlayLines = overlayLines.slice(firstLine, firstLine + maxHeight);
 			}
 			const { row, col } = this.#resolveOverlayLayout(options, overlayLines.length, termWidth, termHeight);
+			if (options?.mouseTracking === true && component.routeMouse) {
+				entry.mouseBounds = { row, col, width, height: overlayLines.length, firstLine };
+			}
 			for (let i = 0; i < overlayLines.length; i++) {
 				const idx = row + i;
 				if (idx < 0 || idx >= result.length) continue;
@@ -3965,8 +3995,10 @@ export class TUI extends Container {
 				? this.#inlineMouseProvider?.() === true
 					? "inline"
 					: "off"
-				: wantAlt && topOverlay.options?.mouseTracking !== false
-					? "full"
+				: topOverlay.options?.mouseTracking === true || (wantAlt && topOverlay.options?.mouseTracking !== false)
+					? wantAlt
+						? "full"
+						: "inline"
 					: "off";
 		if (wantAlt && !this.#altActive) {
 			// Enhanced keyboard modes can be buffer-local: re-push the active

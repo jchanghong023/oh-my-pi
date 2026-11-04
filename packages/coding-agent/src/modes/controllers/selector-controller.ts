@@ -956,6 +956,7 @@ export class SelectorController {
 				width: "100%",
 				maxHeight: "100%",
 				margin: 0,
+				mouseTracking: true,
 			});
 			this.ctx.ui.setFocus(picker);
 			return handle;
