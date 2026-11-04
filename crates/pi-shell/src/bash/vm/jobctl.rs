@@ -1295,7 +1295,8 @@ impl Shell {
 				continue;
 			};
 			// On Unix, a stop already undone before this turn is not reported.
-			// Other hosts report state through process events without this OS probe.
+			// Other hosts report state through process events without this OS
+			// probe.
 			#[cfg(unix)]
 			if matches!(ev, ProcEvent::Stopped(_)) && !self.ext_stopped(vpid) {
 				continue;
