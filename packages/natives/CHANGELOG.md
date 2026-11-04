@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Overlap bounded Knowledge document projection preparation with candidate scoring on the same read snapshot.
+- Use bounded parallel CPU batches for large Knowledge vector searches while preserving exact scores and source-order ties.
 - Reduce repeated Knowledge search work by reusing vector validation and grep snapshots, and filtering paths before payload reads.
 - Preserve fork cancellation, timeout and Windows path behavior on the new embedded bash engine.
 - Avoid sorting Knowledge vector BLOBs and allocating over-budget vector matrices; stream exact scoring and reuse validated IDs and evidence without changing scores or result order.

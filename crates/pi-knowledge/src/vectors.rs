@@ -11,6 +11,8 @@ use crate::{
 	storage::Storage,
 };
 
+mod parallel;
+
 // Defer BLOB reads until the source keys have been sorted. OFFSET 0 prevents
 // flattening this ordered coroutine; LIMIT -1 retains every section.
 const SCOPED_VECTOR_ROWS: &str =
@@ -682,6 +684,18 @@ fn insert_top_k(rows: &mut BinaryHeap<ScoredRow>, limit: usize, row: ScoredRow) 
 	}
 }
 
+trait StreamScorer {
+	fn push(
+		&mut self,
+		id: i64,
+		order: usize,
+		bytes: &[u8],
+		scale: f64,
+		check: &dyn Fn() -> CoreResult<()>,
+	) -> CoreResult<()>;
+	fn finish(&mut self, check: &dyn Fn() -> CoreResult<()>) -> CoreResult<Vec<ScoredRow>>;
+}
+
 /// Score cached normalized vectors in stable source order.
 pub(crate) fn score_matrix(
 	matrix: &VectorMatrix,
@@ -715,7 +729,7 @@ pub(crate) fn score_stream(
 	limit: usize,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<Vec<i64>> {
-	score_stream_inner(connection, model, dimensions, index, path, query, limit, check, None)
+	score_stream_inner(connection, model, dimensions, index, path, query, limit, check, None, None)
 }
 
 pub(crate) fn score_validated_stream(
@@ -729,7 +743,70 @@ pub(crate) fn score_validated_stream(
 	check: &dyn Fn() -> CoreResult<()>,
 	norms: &VectorNorms,
 ) -> CoreResult<Vec<i64>> {
-	score_stream_inner(connection, model, dimensions, index, path, query, limit, check, Some(norms))
+	score_stream_inner(
+		connection,
+		model,
+		dimensions,
+		index,
+		path,
+		query,
+		limit,
+		check,
+		Some(norms),
+		None,
+	)
+}
+
+/// Keep SQLite on its owning thread and snapshot; only bounded, validated
+/// payload batches cross into the reusable CPU pool.
+pub(crate) fn score_validated_stream_parallel<F>(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	query: &[f64],
+	limit: usize,
+	check: F,
+	norms: &VectorNorms,
+) -> CoreResult<Vec<i64>>
+where
+	F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+{
+	check()?;
+	let rows = norms
+		.generations
+		.iter()
+		.map(|generation| generation.rows.len())
+		.sum::<usize>();
+	let pool = parallel::pool_for(rows, dimensions, limit);
+	let Some(pool) = pool else {
+		return score_validated_stream(
+			connection, model, dimensions, index, path, query, limit, &check, norms,
+		);
+	};
+	pool.in_place_scope(|scope| {
+		let mut scorer = parallel::Scorer::new(
+			scope,
+			pool.current_num_threads(),
+			query,
+			dimensions,
+			limit,
+			check.clone(),
+		);
+		score_stream_inner(
+			connection,
+			model,
+			dimensions,
+			index,
+			path,
+			query,
+			limit,
+			&check,
+			Some(norms),
+			Some(&mut scorer),
+		)
+	})
 }
 
 fn score_stream_inner(
@@ -742,6 +819,7 @@ fn score_stream_inner(
 	limit: usize,
 	check: &dyn Fn() -> CoreResult<()>,
 	norms: Option<&VectorNorms>,
+	mut scorer: Option<&mut dyn StreamScorer>,
 ) -> CoreResult<Vec<i64>> {
 	if dimensions == 0 {
 		return Ok(Vec::new());
@@ -823,6 +901,14 @@ fn score_stream_inner(
 				valid = false;
 				break;
 			}
+			if let Some(scorer) = scorer.as_deref_mut()
+				&& let Some(scale) = cached_scale
+				&& selected
+			{
+				scorer.push(section_id, order, bytes, scale, check)?;
+				order += 1;
+				continue;
+			}
 			normalized.clear();
 			if selected {
 				normalized.reserve(dimensions);
@@ -871,7 +957,14 @@ fn score_stream_inner(
 			)?;
 			usize::try_from(vector_count).ok() == Some(count)
 		};
+		let partial = match scorer.as_deref_mut() {
+			Some(scorer) => scorer.finish(check)?,
+			None => Vec::new(),
+		};
 		if valid && complete {
+			for row in partial {
+				insert_top_k(&mut generation_best, limit, row);
+			}
 			for row in generation_best.drain() {
 				insert_top_k(&mut best.rows, limit, row);
 			}
@@ -1102,6 +1195,10 @@ mod scoped_tests {
 		);
 		let query = [0.123456789012345, -0.75, 1.25];
 		let norms = read_vector_norms(&connection, "model", 3, None, &|| Ok(())).unwrap();
+		let pool = rayon::ThreadPoolBuilder::new()
+			.num_threads(2)
+			.build()
+			.unwrap();
 		assert_eq!(
 			scoped_validated_ids(&connection, &norms, scope, &|| Ok(())).unwrap(),
 			matrix.section_ids
@@ -1125,6 +1222,24 @@ mod scoped_tests {
 			let stream =
 				score_stream(&connection, "model", 3, None, scope, &query, limit, &|| Ok(())).unwrap();
 			assert_eq!(stream, score_matrix(&matrix, &query, limit, &|| Ok(())).unwrap());
+			let threaded = pool
+				.in_place_scope(|tasks| {
+					let mut scorer = parallel::Scorer::new(tasks, 2, &query, 3, limit, || Ok(()));
+					score_stream_inner(
+						&connection,
+						"model",
+						3,
+						None,
+						scope,
+						&query,
+						limit,
+						&|| Ok(()),
+						Some(&norms),
+						Some(&mut scorer),
+					)
+				})
+				.unwrap();
+			assert_eq!(threaded, stream);
 			assert_eq!(
 				score_validated_stream(
 					&connection,

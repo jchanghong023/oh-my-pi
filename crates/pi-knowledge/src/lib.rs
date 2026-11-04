@@ -10,6 +10,7 @@ pub mod import;
 pub mod importer;
 /// Markdown tokenization and section context.
 pub mod markdown;
+mod parallel;
 /// Search projections.
 pub mod projection;
 /// Query parsing and ranking.

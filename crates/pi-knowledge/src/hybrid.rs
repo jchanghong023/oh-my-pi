@@ -808,7 +808,7 @@ impl DatabaseEngine {
 				context.index.as_deref(),
 				None,
 			)) {
-				crate::vectors::score_validated_stream(
+				crate::vectors::score_validated_stream_parallel(
 					connection,
 					model,
 					dimensions,
@@ -816,7 +816,7 @@ impl DatabaseEngine {
 					context.path.as_deref().map(PathScope),
 					query,
 					limit,
-					&check,
+					check.clone(),
 					&norms,
 				)
 			} else {

@@ -20,6 +20,9 @@ use super::{
 #[path = "hybrid.rs"]
 mod hybrid;
 
+#[path = "projection_loader.rs"]
+mod projection_loader;
+
 const INVALID_CURSOR: &str = "Invalid documentation search cursor";
 const INDEX_ROWS: &str = "SELECT i.id,i.name,i.root_path,d.id \
                           document_id,d.relative_path,d.title,d.source_kind,d.sha256,d.size_bytes,\
@@ -403,6 +406,8 @@ pub struct SearchDiagnostics {
 	/// Time advancing the scoped section query, excluding row processing.
 	pub section_sqlite: Duration,
 	/// Time loading, decoding, validating, and matching document projections.
+	/// With lookahead, records caller preparation/wait time; worker decoding
+	/// can overlap candidate scoring and is not summed into this duration.
 	pub projection:     Duration,
 	/// Time preparing and scoring matched candidates.
 	pub scoring:        Duration,
@@ -877,7 +882,7 @@ impl DatabaseEngine {
 							&plan,
 							options.index.as_deref(),
 							path,
-							&check,
+							check.clone(),
 							snapshot.clone(),
 							&mut self.search_diagnostics,
 						)?
@@ -1067,7 +1072,75 @@ fn rank_grep(
 	})
 }
 
-fn rank(
+fn rank<F>(
+	connection: &Connection,
+	query_text: &str,
+	plan: &query::QueryPlan,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	check: F,
+	snapshot: Sha256,
+	diagnostics: &mut Option<SearchDiagnostics>,
+) -> CoreResult<Ranking>
+where
+	F: Fn() -> CoreResult<()> + Clone + Send + 'static,
+{
+	let name = plan.technical_name.as_deref().map(|name| {
+		LiteralMatcher::new(
+			&query::normalize_search_text(name),
+			!name.contains(['/', '\\']) && !name.contains("::"),
+		)
+	});
+	if let Some(pool) = crate::parallel::pool() {
+		pool.in_place_scope(|scope| {
+			let mut loader = projection_loader::Loader::new(scope, check.clone(), name.as_ref());
+			rank_inner(
+				connection,
+				query_text,
+				plan,
+				index,
+				path,
+				&check,
+				snapshot,
+				diagnostics,
+				name.as_ref(),
+				Some(&mut loader),
+			)
+		})
+	} else {
+		rank_inner(
+			connection,
+			query_text,
+			plan,
+			index,
+			path,
+			&check,
+			snapshot,
+			diagnostics,
+			name.as_ref(),
+			None,
+		)
+	}
+}
+
+trait ContextLoader {
+	fn prepare(
+		&mut self,
+		connection: &Connection,
+		plan: &query::QueryPlan,
+		parameters: &[&dyn rusqlite::ToSql],
+		check: Check<'_>,
+	) -> CoreResult<()>;
+	fn load(
+		&mut self,
+		connection: &Connection,
+		document_id: i64,
+		name: Option<&LiteralMatcher>,
+		check: Check<'_>,
+	) -> CoreResult<DocumentContexts>;
+}
+
+fn rank_inner(
 	connection: &Connection,
 	query_text: &str,
 	plan: &query::QueryPlan,
@@ -1076,6 +1149,8 @@ fn rank(
 	check: Check<'_>,
 	mut snapshot: Sha256,
 	diagnostics: &mut Option<SearchDiagnostics>,
+	name: Option<&LiteralMatcher>,
+	mut loader: Option<&mut dyn ContextLoader>,
 ) -> CoreResult<Ranking> {
 	let fts_started = diagnostics.as_ref().map(|_| Instant::now());
 	let mut ranks = HashMap::new();
@@ -1115,12 +1190,6 @@ fn rank(
 		diagnostics.fts = fts_started.expect("enabled diagnostics").elapsed();
 		diagnostics.fts_matches = ranks.len();
 	}
-	let name = plan.technical_name.as_deref().map(|name| {
-		LiteralMatcher::new(
-			&query::normalize_search_text(name),
-			!name.contains(['/', '\\']) && !name.contains("::"),
-		)
-	});
 	let mut buffer = String::new();
 	let mut document_contexts: HashMap<i64, DocumentContexts> = HashMap::new();
 	let mut ranker = query::CandidateRanker::new(query_text, &plan.terms);
@@ -1142,11 +1211,19 @@ fn rank(
 	let scope_length = scope_bytes.map_or(0, <[u8]>::len) as i64;
 	let directory = scope_bytes.is_some_and(|path| path.ends_with(b"/"));
 	let index = index.map(super::storage::sqlite_text);
-	let mut rows = if name.is_none() && !plan.terms.is_empty() {
-		statement.query(rusqlite::params![index, scope_bytes, scope_length, directory, plan.fts])?
-	} else {
-		statement.query(rusqlite::params![index, scope_bytes, scope_length, directory])?
-	};
+	let mut parameters: Vec<&dyn rusqlite::ToSql> =
+		vec![&index, &scope_bytes, &scope_length, &directory];
+	if name.is_none() && !plan.terms.is_empty() {
+		parameters.push(&plan.fts);
+	}
+	if let Some(loader) = loader.as_deref_mut() {
+		let started = diagnostics.as_ref().map(|_| Instant::now());
+		loader.prepare(connection, plan, &parameters, check)?;
+		if let Some(diagnostics) = diagnostics.as_mut() {
+			diagnostics.projection += started.expect("enabled diagnostics").elapsed();
+		}
+	}
+	let mut rows = statement.query(parameters.as_slice())?;
 	loop {
 		let row_started = diagnostics.as_ref().map(|_| Instant::now());
 		let row = rows.next()?;
@@ -1167,7 +1244,10 @@ fn rank(
 		if let std::collections::hash_map::Entry::Vacant(entry) = document_contexts.entry(document_id)
 		{
 			let started = diagnostics.as_ref().map(|_| Instant::now());
-			entry.insert(load_contexts(connection, document_id, name.as_ref(), check)?);
+			entry.insert(match loader.as_deref_mut() {
+				Some(loader) => loader.load(connection, document_id, name, check)?,
+				None => load_contexts(connection, document_id, name, check)?,
+			});
 			if let Some(diagnostics) = diagnostics.as_mut() {
 				diagnostics.projection += started.expect("enabled diagnostics").elapsed();
 				diagnostics.documents += 1;
@@ -1367,25 +1447,7 @@ fn load_contexts(
 		)
 		.optional()?;
 	if let Some(payload) = payload {
-		check()?;
-		let projection: DocumentProjection = serde_json::from_slice(&payload).map_err(|error| {
-			KnowledgeError::message(format!("Invalid documentation query projection: {error}"))
-		})?;
-		projection.validate()?;
-		let exact_names = match name {
-			Some(name) => projection.exact_names(name, check)?,
-			None => HashMap::new(),
-		};
-		let mut sections = HashMap::new();
-		let mut projections = HashMap::with_capacity(projection.sections.len());
-		for section in projection.sections {
-			check()?;
-			if let Some(context) = section.legacy_context.as_ref() {
-				sections.insert(section.section_id, context.context());
-			}
-			projections.insert(section.section_id, section);
-		}
-		return Ok(DocumentContexts { sections, exact_names, projections });
+		return decode_contexts(&payload, name, check);
 	}
 	let mut statement = connection.prepare_cached(
 		"SELECT id,document_id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
@@ -1432,6 +1494,33 @@ fn load_contexts(
 		exact_names: source.exact_names,
 		projections: HashMap::new(),
 	})
+}
+
+fn decode_contexts(
+	payload: &[u8],
+	name: Option<&LiteralMatcher>,
+	check: Check<'_>,
+) -> CoreResult<DocumentContexts> {
+	check()?;
+	let projection: DocumentProjection = serde_json::from_slice(payload).map_err(|error| {
+		KnowledgeError::message(format!("Invalid documentation query projection: {error}"))
+	})?;
+	check()?;
+	projection.validate()?;
+	let exact_names = match name {
+		Some(name) => projection.exact_names(name, check)?,
+		None => HashMap::new(),
+	};
+	let mut sections = HashMap::new();
+	let mut projections = HashMap::with_capacity(projection.sections.len());
+	for section in projection.sections {
+		check()?;
+		if let Some(context) = section.legacy_context.as_ref() {
+			sections.insert(section.section_id, context.context());
+		}
+		projections.insert(section.section_id, section);
+	}
+	Ok(DocumentContexts { sections, exact_names, projections })
 }
 
 fn push_number(output: &mut String, number: f64) {
@@ -1587,6 +1676,214 @@ mod tests {
 	};
 
 	use super::*;
+
+	fn projection_lookahead_fixture() -> Fixture {
+		let fixture = Fixture::new();
+		let connection = Connection::open(&fixture.path).unwrap();
+		connection
+			.execute_batch(
+				"INSERT INTO documents VALUES(2,1,'dir \
+				 %_/two.md','Title','markdown','two-hash',100,1.0),
+			 (3,1,'legacy.md','Title','markdown','legacy-hash',100,1.0);
+			 INSERT INTO sections SELECT id+10,index_id,2,ordinal,heading_path,heading_level,
+			 line_start,line_end,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=1;
+			 INSERT INTO sections VALUES(21,1,3,0,'Legacy',1,1,3,0,0,'# Legacy
+needle evidence legacy');
+			 INSERT INTO sections_fts(rowid,section_id,index_id,relative_path,heading_path,body)
+			 SELECT s.id,s.id,s.index_id,d.relative_path,s.heading_path,s.raw_markdown FROM sections s
+			 JOIN documents d ON d.id=s.document_id WHERE s.document_id<>1;",
+			)
+			.unwrap();
+		for document_id in [1, 2] {
+			let mut statement = connection
+				.prepare(
+					"SELECT id,byte_start,byte_end,raw_markdown FROM sections WHERE document_id=? \
+					 ORDER BY ordinal",
+				)
+				.unwrap();
+			let sections: Vec<(i64, i64, i64, String)> = statement
+				.query_map([document_id], |row| {
+					Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+				})
+				.unwrap()
+				.collect::<rusqlite::Result<_>>()
+				.unwrap();
+			let rows: Vec<_> = sections
+				.iter()
+				.map(|(id, start, end, raw)| crate::projection::ProjectionSection {
+					section_id: *id,
+					document_id,
+					byte_start: *start,
+					byte_end: *end,
+					raw_markdown: raw,
+				})
+				.collect();
+			let projection = crate::projection::prepare_document(&rows, &|| Ok(())).unwrap();
+			let mut payload = serde_json::to_vec(&projection).unwrap();
+			// Reach the lookahead threshold without constructing a large corpus.
+			payload.resize(256 * 1024, b' ');
+			connection
+				.execute("INSERT INTO wiki_document_projections VALUES(?,?)", rusqlite::params![
+					document_id,
+					payload
+				])
+				.unwrap();
+		}
+		fixture
+	}
+
+	#[test]
+	fn projection_lookahead_preserves_complete_pages_sources_and_cursors() {
+		let fixture = projection_lookahead_fixture();
+		let connection = Connection::open(&fixture.path).unwrap();
+		let pool = rayon::ThreadPoolBuilder::new()
+			.num_threads(2)
+			.build()
+			.unwrap();
+		for (query, path) in
+			[("needle", None), ("needle evidence", None), ("needle evidence", Some("dir %_/"))]
+		{
+			let options = KnowledgeSearchOptions {
+				path: path.map(str::to_owned),
+				limit: Some(1.0),
+				..Default::default()
+			};
+			let plan = query::analyze_query(query);
+			let name = plan.technical_name.as_ref().map(|name| {
+				LiteralMatcher::new(
+					&query::normalize_search_text(name),
+					!name.contains(['/', '\\']) && !name.contains("::"),
+				)
+			});
+			connection.execute_batch("BEGIN DEFERRED").unwrap();
+			let snapshot = corpus_snapshot(&connection, &|| Ok(())).unwrap();
+			let baseline = rank_inner(
+				&connection,
+				query,
+				&plan,
+				None,
+				path.map(PathScope),
+				&|| Ok(()),
+				snapshot.clone(),
+				&mut None,
+				name.as_ref(),
+				None,
+			)
+			.unwrap();
+			let worker_used = Arc::new(AtomicBool::new(false));
+			let seen = Arc::clone(&worker_used);
+			let caller = thread::current().id();
+			let optimized = pool
+				.in_place_scope(|scope| {
+					let mut loader = projection_loader::Loader::new(
+						scope,
+						move || {
+							if thread::current().id() != caller {
+								seen.store(true, Ordering::Relaxed);
+							}
+							Ok(())
+						},
+						name.as_ref(),
+					);
+					rank_inner(
+						&connection,
+						query,
+						&plan,
+						None,
+						path.map(PathScope),
+						&|| Ok(()),
+						snapshot,
+						&mut None,
+						name.as_ref(),
+						Some(&mut loader),
+					)
+				})
+				.unwrap();
+			connection.execute_batch("COMMIT").unwrap();
+			assert!(worker_used.load(Ordering::Relaxed));
+			let mut serial = fixture.engine();
+			let mut parallel = fixture.engine();
+			for (engine, ranking) in [(&mut serial, baseline), (&mut parallel, optimized)] {
+				engine.ensure_database().unwrap();
+				engine.publish(
+					search_key(query, &options, &engine.cursor_path, false),
+					Arc::new(ranking),
+					engine.guard().unwrap(),
+				);
+			}
+			let mut page_options = options;
+			loop {
+				let expected =
+					serde_json::to_value(serial.search(query, &page_options, || Ok(())).unwrap())
+						.unwrap();
+				let actual =
+					serde_json::to_value(parallel.search(query, &page_options, || Ok(())).unwrap())
+						.unwrap();
+				assert_eq!(actual["result"], expected["result"]);
+				let end = actual["result"]["cursorBase"]["p"].as_i64().unwrap()
+					+ actual["result"]["sections"].as_array().unwrap().len() as i64;
+				if end == actual["result"]["total"].as_i64().unwrap() {
+					break;
+				}
+				page_options.cursor = Some(cursor(&actual, end as usize));
+			}
+		}
+	}
+
+	#[test]
+	fn projection_lookahead_cancellation_preserves_error_and_joins_workers() {
+		let fixture = projection_lookahead_fixture();
+		let connection = Connection::open(&fixture.path).unwrap();
+		let pool = rayon::ThreadPoolBuilder::new()
+			.num_threads(2)
+			.build()
+			.unwrap();
+		let leases = Arc::new(AtomicBool::new(false));
+		let lease = Arc::clone(&leases);
+		let caller = thread::current().id();
+		let plan = query::analyze_query("needle evidence");
+		connection.execute_batch("BEGIN DEFERRED").unwrap();
+		let snapshot = corpus_snapshot(&connection, &|| Ok(())).unwrap();
+		let error = pool
+			.in_place_scope(|scope| {
+				let mut loader = projection_loader::Loader::new(
+					scope,
+					move || {
+						lease.store(true, Ordering::Relaxed);
+						if thread::current().id() == caller {
+							Ok(())
+						} else {
+							Err(KnowledgeError::named("cancelled projection", "AbortError", Some("ABORT")))
+						}
+					},
+					None,
+				);
+				rank_inner(
+					&connection,
+					"needle evidence",
+					&plan,
+					None,
+					None,
+					&|| Ok(()),
+					snapshot,
+					&mut None,
+					None,
+					Some(&mut loader),
+				)
+			})
+			.err()
+			.expect("worker cancellation must fail the query");
+		connection.execute_batch("ROLLBACK").unwrap();
+		assert_eq!(error.error_message(), "cancelled projection");
+		assert_eq!(error.diagnostic_error_type(), "AbortError");
+		assert_eq!(error.diagnostic_code(), Some("ABORT"));
+		assert_eq!(Arc::strong_count(&leases), 1);
+		assert_eq!(
+			search(&mut fixture.engine(), "needle evidence", KnowledgeSearchOptions::default())
+				["result"]["total"],
+			7
+		);
+	}
 
 	#[test]
 	fn unsupported_projection_is_rejected_for_name_and_topic_queries() {

@@ -6790,6 +6790,7 @@ dependencies = [
  "libc",
  "pi-vfs",
  "pi-walker",
+ "rayon",
  "regex",
  "rusqlite",
  "ryu-js",
