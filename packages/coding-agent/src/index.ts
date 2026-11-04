@@ -73,6 +73,7 @@ export type {
 } from "@oh-my-pi/pi-tui/tools/task";
 // Tools (detail types and utilities)
 export * from "./tools";
+export { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-tui/tools/hashline-format";
 export * from "./utils/github";
 // UI components for extensions
 export {
