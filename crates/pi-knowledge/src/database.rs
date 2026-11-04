@@ -484,7 +484,17 @@ struct HybridCompleted {
 #[derive(Clone, Copy)]
 pub(crate) struct PathScope<'a>(&'a str);
 
+// Bind ?2 as BLOB bytes, ?3 as their length and ?4 as the directory-prefix
+// flag. This preserves PathScope::matches' literal, case-sensitive semantics.
+pub(crate) const PATH_SCOPE_FILTER: &str = "(?2 IS NULL OR (typeof(relative_path)='text' AND \
+                                            substr(CAST(relative_path AS BLOB),1,?3)=?2 AND (?4 \
+                                            OR length(CAST(relative_path AS BLOB))=?3)))";
+
 impl<'a> PathScope<'a> {
+	pub(crate) const fn as_str(self) -> &'a str {
+		self.0
+	}
+
 	pub(crate) fn validate(path: Option<&'a str>) -> CoreResult<Option<Self>> {
 		let Some(path) = path else { return Ok(None) };
 		let bytes = path.as_bytes();
@@ -575,6 +585,7 @@ pub struct DatabaseEngine {
 	generation:          u64,
 	cache_guard:         Option<String>,
 	corpus_snapshot:     Option<Sha256>,
+	grep_snapshot:       Option<Sha256>,
 	hybrid_data:         hybrid::HybridDataCache,
 	cache:               VecDeque<(String, Arc<Ranking>)>,
 	cached_sections:     usize,
@@ -599,6 +610,7 @@ impl DatabaseEngine {
 			generation: 0,
 			cache_guard: None,
 			corpus_snapshot: None,
+			grep_snapshot: None,
 			hybrid_data: hybrid::HybridDataCache::new(),
 			cache: VecDeque::new(),
 			cached_sections: 0,
@@ -636,6 +648,7 @@ impl DatabaseEngine {
 	fn clear_cache(&mut self) {
 		self.cache.clear();
 		self.corpus_snapshot = None;
+		self.grep_snapshot = None;
 		self.hybrid_data.clear();
 		self.cached_sections = 0;
 		self.hybrid.clear();
@@ -767,6 +780,7 @@ impl DatabaseEngine {
 			let mut cache_key = None;
 			let mut built = None;
 			let mut built_snapshot = None;
+			let mut built_grep_snapshot = None;
 			let result = (|| -> CoreResult<(String, KnowledgeSearchWindow)> {
 				let progress_check = check.clone();
 				self
@@ -835,13 +849,21 @@ impl DatabaseEngine {
 					};
 					let snapshot_time = snapshot_started.map_or(Duration::ZERO, |start| start.elapsed());
 					let ranking = Arc::new(if let Some(matcher) = grep.as_ref() {
+						let grep_snapshot = match (snapshot_guard == before)
+							.then(|| self.grep_snapshot.clone())
+							.flatten()
+						{
+							Some(snapshot) => snapshot,
+							None => grep_snapshot(connection, &check, snapshot.clone())?,
+						};
+						built_grep_snapshot = Some(grep_snapshot.clone());
 						rank_grep(
 							connection,
 							matcher,
 							options.index.as_deref(),
 							path,
 							&check,
-							snapshot.clone(),
+							grep_snapshot,
 						)?
 					} else {
 						self.search_diagnostics =
@@ -955,6 +977,9 @@ impl DatabaseEngine {
 			} else if let Some(ranking) = built {
 				self.publish(key, ranking, before);
 				self.corpus_snapshot = built_snapshot;
+				if let Some(snapshot) = built_grep_snapshot {
+					self.grep_snapshot = Some(snapshot);
+				}
 			} else if let Some(position) = self
 				.cache
 				.iter()
@@ -987,14 +1012,11 @@ fn corpus_snapshot(connection: &Connection, check: Check<'_>) -> CoreResult<Sha2
 	Ok(snapshot)
 }
 
-fn rank_grep(
+fn grep_snapshot(
 	connection: &Connection,
-	matcher: &pi_walker::grep::Engine,
-	index: Option<&str>,
-	path: Option<PathScope<'_>>,
 	check: Check<'_>,
 	mut snapshot: Sha256,
-) -> CoreResult<Ranking> {
+) -> CoreResult<Sha256> {
 	// FTS changes still invalidate the database snapshot, although FTS never
 	// supplies grep candidates. Stream shadow payloads without any schema work.
 	for sql in [
@@ -1024,6 +1046,17 @@ fn rank_grep(
 			}
 		}
 	}
+	Ok(snapshot)
+}
+
+fn rank_grep(
+	connection: &Connection,
+	matcher: &pi_walker::grep::Engine,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	check: Check<'_>,
+	snapshot: Sha256,
+) -> CoreResult<Ranking> {
 	let ranked = super::grep::scan(connection, matcher, index, path, check)?;
 	Ok(Ranking {
 		ranked,
@@ -1093,9 +1126,10 @@ fn rank(
 	let mut ranker = query::CandidateRanker::new(query_text, &plan.terms);
 	// Normal text needs only FTS candidates; technical names must additionally
 	// examine every in-scope section to preserve punctuation-aware recall.
-	let scope = " WHERE (?1 IS NULL OR (typeof(index_name)='text' AND index_name=?1)) AND (?2 IS \
-	             NULL OR (typeof(relative_path)='text' AND substr(CAST(relative_path AS \
-	             BLOB),1,?3)=?2 AND (?4 OR length(CAST(relative_path AS BLOB))=?3)))";
+	let scope = format!(
+		" WHERE (?1 IS NULL OR (typeof(index_name)='text' AND index_name=?1)) AND \
+		 {PATH_SCOPE_FILTER}"
+	);
 	let mut sql = format!("SELECT * FROM ({SECTION_ROWS}){scope}");
 	if name.is_none() && !plan.terms.is_empty() {
 		sql.push_str(
@@ -3274,6 +3308,59 @@ mod tests {
 			);
 		}
 		assert!(engine.cache.is_empty());
+	}
+
+	#[test]
+	fn different_grep_queries_reuse_fts_identity_without_changing_cursors() {
+		use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+		let fixture = grep_fixture(&["# One\nALPHA\n# Two\nBETA\n"]);
+		let mut engine = fixture.engine();
+		let first = search(&mut engine, "ALPHA", grep_options());
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.authorizer(Some(|context: AuthContext<'_>| {
+				if matches!(context.action, AuthAction::Read {
+					table_name: "sections_fts_data"
+						| "sections_fts_idx"
+						| "sections_fts_docsize"
+						| "sections_fts_config",
+					..
+				}) {
+					Authorization::Deny
+				} else {
+					Authorization::Allow
+				}
+			}))
+			.unwrap();
+		let actual = search(&mut engine, "BETA", grep_options());
+		assert_eq!(actual["result"]["total"], 1);
+		assert_eq!(actual["cacheHit"], false, "this is a new query, not a cached ranking");
+		let expected = search(&mut fixture.engine(), "BETA", grep_options());
+		assert_eq!(actual["result"], expected["result"]);
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+			.unwrap();
+		let writer = Connection::open(&fixture.path).unwrap();
+		assert_eq!(
+			writer
+				.execute("DELETE FROM sections_fts WHERE rowid=?", [first["result"]["sections"][0]
+					["sectionId"]
+					.as_i64()
+					.unwrap()])
+				.unwrap(),
+			1
+		);
+		let changed = search(&mut engine, "BETA", grep_options());
+		assert_ne!(actual["result"]["cursorBase"]["s"], changed["result"]["cursorBase"]["s"]);
+		engine.close();
+		let reopened = search(&mut engine, "BETA", grep_options());
+		assert_eq!(changed["result"], reopened["result"]);
 	}
 
 	#[test]

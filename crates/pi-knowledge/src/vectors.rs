@@ -7,7 +7,7 @@ use std::{cmp::Ordering, collections::BinaryHeap, path::Path};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::{
-	database::{CoreResult, KnowledgeError, check_file_identity},
+	database::{CoreResult, KnowledgeError, PATH_SCOPE_FILTER, PathScope, check_file_identity},
 	storage::Storage,
 };
 
@@ -45,6 +45,43 @@ pub struct VectorMatrix {
 	pub section_ids: Vec<i64>,
 	pub matrix:      Vec<f32>,
 	pub dimensions:  usize,
+}
+
+struct VectorNorm {
+	section_id: i64,
+	scale:      f64,
+}
+
+struct ValidatedGeneration {
+	index_id: i64,
+	rows:     Vec<VectorNorm>,
+}
+
+/// Small, query-independent metadata for fully validated generations. The
+/// caller binds it to the database guard, model, dimensions and index scope.
+pub(crate) struct VectorNorms {
+	generations: Vec<ValidatedGeneration>,
+}
+
+impl VectorNorms {
+	pub(crate) fn retained_bytes(&self) -> usize {
+		self.generations.iter().fold(
+			std::mem::size_of::<Self>().saturating_add(
+				self
+					.generations
+					.capacity()
+					.saturating_mul(std::mem::size_of::<ValidatedGeneration>()),
+			),
+			|bytes, generation| {
+				bytes.saturating_add(
+					generation
+						.rows
+						.capacity()
+						.saturating_mul(std::mem::size_of::<VectorNorm>()),
+				)
+			},
+		)
+	}
 }
 
 fn invalid() -> KnowledgeError {
@@ -435,7 +472,7 @@ pub fn read_vector_matrix(
 	index: Option<&str>,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<VectorMatrix> {
-	read_vector_data(connection, model, dimensions, index, None, check, true)
+	read_vector_data(connection, model, dimensions, index, None, check, true, None)
 }
 
 pub(crate) fn read_scoped_vector_matrix(
@@ -446,7 +483,7 @@ pub(crate) fn read_scoped_vector_matrix(
 	path: Option<crate::database::PathScope<'_>>,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<VectorMatrix> {
-	read_vector_data(connection, model, dimensions, index, path, check, true)
+	read_vector_data(connection, model, dimensions, index, path, check, true, None)
 }
 
 // Bound the temporary matrix as well as its retained allocation. Count all
@@ -481,6 +518,7 @@ pub(crate) fn matrix_fits(
 
 /// Validate complete generations and collect scoped IDs without retaining
 /// their vector matrices.
+#[cfg(test)]
 pub(crate) fn read_vector_ids(
 	connection: &Connection,
 	model: &str,
@@ -489,7 +527,59 @@ pub(crate) fn read_vector_ids(
 	path: Option<crate::database::PathScope<'_>>,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<Vec<i64>> {
-	Ok(read_vector_data(connection, model, dimensions, index, path, check, false)?.section_ids)
+	Ok(read_vector_data(connection, model, dimensions, index, path, check, false, None)?.section_ids)
+}
+
+/// Validate every row before an embedding request, retaining only each valid
+/// generation's IDs and the exact f64 normalization scales already computed.
+pub(crate) fn read_vector_norms(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<VectorNorms> {
+	let mut norms = VectorNorms { generations: Vec::new() };
+	read_vector_data(connection, model, dimensions, index, None, check, false, Some(&mut norms))?;
+	Ok(norms)
+}
+
+/// Select IDs from an already validated snapshot without reading vector BLOBs.
+pub(crate) fn scoped_validated_ids(
+	connection: &Connection,
+	norms: &VectorNorms,
+	path: Option<PathScope<'_>>,
+	check: &dyn Fn() -> CoreResult<()>,
+) -> CoreResult<Vec<i64>> {
+	let mut ids = Vec::new();
+	let Some(path) = path else {
+		for generation in &norms.generations {
+			for row in &generation.rows {
+				check()?;
+				ids.push(row.section_id);
+			}
+		}
+		return Ok(ids);
+	};
+	let sql = format!(
+		"SELECT s.id FROM sections s LEFT JOIN documents d ON d.id=s.document_id WHERE \
+		 s.index_id=?1 AND {PATH_SCOPE_FILTER} ORDER BY s.document_id,s.ordinal,s.id"
+	);
+	let mut statement = connection.prepare_cached(&sql)?;
+	let scope = path.as_str().as_bytes();
+	for generation in &norms.generations {
+		let mut rows = statement.query(params![
+			generation.index_id,
+			scope,
+			scope.len() as i64,
+			scope.ends_with(b"/")
+		])?;
+		while let Some(row) = rows.next()? {
+			check()?;
+			ids.push(row.get(0)?);
+		}
+	}
+	Ok(ids)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -625,6 +715,34 @@ pub(crate) fn score_stream(
 	limit: usize,
 	check: &dyn Fn() -> CoreResult<()>,
 ) -> CoreResult<Vec<i64>> {
+	score_stream_inner(connection, model, dimensions, index, path, query, limit, check, None)
+}
+
+pub(crate) fn score_validated_stream(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	query: &[f64],
+	limit: usize,
+	check: &dyn Fn() -> CoreResult<()>,
+	norms: &VectorNorms,
+) -> CoreResult<Vec<i64>> {
+	score_stream_inner(connection, model, dimensions, index, path, query, limit, check, Some(norms))
+}
+
+fn score_stream_inner(
+	connection: &Connection,
+	model: &str,
+	dimensions: usize,
+	index: Option<&str>,
+	path: Option<PathScope<'_>>,
+	query: &[f64],
+	limit: usize,
+	check: &dyn Fn() -> CoreResult<()>,
+	norms: Option<&VectorNorms>,
+) -> CoreResult<Vec<i64>> {
 	if dimensions == 0 {
 		return Ok(Vec::new());
 	}
@@ -632,6 +750,14 @@ pub(crate) fn score_stream(
 	let mut generation_best = BinaryHeap::new();
 	let mut order = 0usize;
 	let mut normalized = Vec::new();
+	let scoped_sql = format!(
+		"SELECT ordered.id,(SELECT v.vector FROM wiki_section_vectors v WHERE \
+		 v.index_id=ordered.index_id AND v.section_id=ordered.id),ordered.relative_path FROM \
+		 (SELECT s.id,s.index_id,d.relative_path FROM sections s LEFT JOIN documents d ON \
+		 d.id=s.document_id WHERE s.index_id=?1 AND {PATH_SCOPE_FILTER} ORDER BY \
+		 s.document_id,s.ordinal,s.id LIMIT -1 OFFSET 0) ordered"
+	);
+	let scope = path.map(|path| path.as_str().as_bytes());
 	let mut generations = connection.prepare(
 		"SELECT g.index_id FROM wiki_vector_generations g JOIN doc_indexes i ON i.id=g.index_id \
 		 WHERE g.complete=1 AND g.model=? AND g.dimensions=? AND i.name NOT GLOB '__building__*' \
@@ -642,14 +768,47 @@ pub(crate) fn score_stream(
 	for id in ids {
 		check()?;
 		let id = id?;
+		let validated = norms.and_then(|norms| {
+			norms
+				.generations
+				.iter()
+				.find(|generation| generation.index_id == id)
+		});
+		if norms.is_some() && validated.is_none() {
+			continue;
+		}
+		let mut scales = validated.map(|generation| generation.rows.iter());
 		generation_best.clear();
-		let mut statement = connection.prepare(SCOPED_VECTOR_ROWS)?;
-		let mut rows = statement.query([id])?;
+		let mut statement = connection.prepare_cached(if norms.is_some() {
+			&scoped_sql
+		} else {
+			SCOPED_VECTOR_ROWS
+		})?;
+		let mut rows = if norms.is_some() {
+			statement.query(params![
+				id,
+				scope,
+				scope.map_or(0, <[u8]>::len) as i64,
+				scope.is_some_and(|scope| scope.ends_with(b"/"))
+			])?
+		} else {
+			statement.query([id])?
+		};
 		let mut valid = true;
 		let mut count = 0usize;
 		while let Some(row) = rows.next()? {
 			check()?;
 			count += 1;
+			let section_id: i64 = row.get(0)?;
+			let cached_scale = match scales.as_mut() {
+				Some(scales) => Some(
+					scales
+						.find(|row| row.section_id == section_id)
+						.ok_or_else(invalid)?
+						.scale,
+				),
+				None => None,
+			};
 			let selected = match path {
 				None => true,
 				Some(path) => {
@@ -674,21 +833,23 @@ pub(crate) fn score_stream(
 					check()?;
 				}
 				let value = f32::from_le_bytes(*chunk);
-				if !value.is_finite() {
+				if cached_scale.is_none() && !value.is_finite() {
 					valid = false;
 					break;
 				}
-				norm += f64::from(value).powi(2);
+				if cached_scale.is_none() {
+					norm += f64::from(value).powi(2);
+				}
 				if selected {
 					normalized.push(value);
 				}
 			}
-			if !valid || !norm.is_finite() || norm == 0.0 {
+			if !valid || (cached_scale.is_none() && (!norm.is_finite() || norm == 0.0)) {
 				valid = false;
 				break;
 			}
 			if selected {
-				let scale = norm.sqrt();
+				let scale = cached_scale.unwrap_or_else(|| norm.sqrt());
 				for (column, value) in normalized.iter_mut().enumerate() {
 					if column != 0 && column % 1024 == 0 {
 						check()?;
@@ -700,12 +861,17 @@ pub(crate) fn score_stream(
 				order += 1;
 			}
 		}
-		let vector_count: i64 = connection.query_row(
-			"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
-			[id],
-			|row| row.get(0),
-		)?;
-		if valid && usize::try_from(vector_count).ok() == Some(count) {
+		let complete = if norms.is_some() {
+			true
+		} else {
+			let vector_count: i64 = connection.query_row(
+				"SELECT count(*) FROM wiki_section_vectors WHERE index_id=?",
+				[id],
+				|row| row.get(0),
+			)?;
+			usize::try_from(vector_count).ok() == Some(count)
+		};
+		if valid && complete {
 			for row in generation_best.drain() {
 				insert_top_k(&mut best.rows, limit, row);
 			}
@@ -722,6 +888,7 @@ fn read_vector_data(
 	path: Option<crate::database::PathScope<'_>>,
 	check: &dyn Fn() -> CoreResult<()>,
 	include_matrix: bool,
+	mut norms: Option<&mut VectorNorms>,
 ) -> CoreResult<VectorMatrix> {
 	let mut result = VectorMatrix { section_ids: Vec::new(), matrix: Vec::new(), dimensions };
 	if dimensions == 0 {
@@ -742,6 +909,7 @@ fn read_vector_data(
 		let start = result.section_ids.len();
 		let mut valid = true;
 		let mut section_count = 0usize;
+		let mut scales = Vec::new();
 		while let Some(row) = rows.next()? {
 			check()?;
 			let section_id: i64 = row.get(0)?;
@@ -789,7 +957,9 @@ fn read_vector_data(
 					*value = (f64::from(*value) / scale) as f32;
 				}
 			}
-			if selected {
+			if norms.is_some() {
+				scales.push(VectorNorm { section_id, scale: norm.sqrt() });
+			} else if selected {
 				result.section_ids.push(section_id);
 			}
 		}
@@ -801,6 +971,10 @@ fn read_vector_data(
 		if !valid || vector_count as usize != section_count {
 			result.section_ids.truncate(start);
 			result.matrix.truncate(start * dimensions);
+		} else if let Some(norms) = norms.as_deref_mut() {
+			norms
+				.generations
+				.push(ValidatedGeneration { index_id: id, rows: scales });
 		}
 	}
 	Ok(result)
@@ -927,6 +1101,11 @@ mod scoped_tests {
 				.collect::<Vec<_>>(),
 		);
 		let query = [0.123456789012345, -0.75, 1.25];
+		let norms = read_vector_norms(&connection, "model", 3, None, &|| Ok(())).unwrap();
+		assert_eq!(
+			scoped_validated_ids(&connection, &norms, scope, &|| Ok(())).unwrap(),
+			matrix.section_ids
+		);
 		for (&id, row) in matrix.section_ids.iter().zip(matrix.matrix.chunks_exact(3)) {
 			let raw = if (id - 1) % 7 == 0 {
 				[3.0f32, 4.0, -2.0]
@@ -946,6 +1125,21 @@ mod scoped_tests {
 			let stream =
 				score_stream(&connection, "model", 3, None, scope, &query, limit, &|| Ok(())).unwrap();
 			assert_eq!(stream, score_matrix(&matrix, &query, limit, &|| Ok(())).unwrap());
+			assert_eq!(
+				score_validated_stream(
+					&connection,
+					"model",
+					3,
+					None,
+					scope,
+					&query,
+					limit,
+					&|| Ok(()),
+					&norms
+				)
+				.unwrap(),
+				stream,
+			);
 			let mut actual = ExactTopK::new(&query, 3, limit);
 			for (order, (&id, row)) in matrix
 				.section_ids
@@ -988,6 +1182,20 @@ mod scoped_tests {
 			}
 		};
 		assert!(score_stream(&connection, "model", 3, None, scope, &query, 10, &cancelled).is_err());
+		assert!(
+			score_validated_stream(
+				&connection,
+				"model",
+				3,
+				None,
+				scope,
+				&query,
+				10,
+				&cancelled,
+				&norms
+			)
+			.is_err()
+		);
 		assert!(checks.get() > 80);
 	}
 }

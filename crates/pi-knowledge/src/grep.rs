@@ -6,7 +6,7 @@ use pi_walker::grep::Engine;
 use rusqlite::Connection;
 
 use super::{
-	database::{KnowledgeError, PathScope},
+	database::{KnowledgeError, PATH_SCOPE_FILTER, PathScope},
 	markdown::{ContextSection, ContextSectionRef, SectionContextScanner},
 	query::{MatchKind, RankedSection},
 };
@@ -202,24 +202,26 @@ pub(crate) fn scan(
 	path: Option<PathScope<'_>>,
 	check: Check<'_>,
 ) -> CoreResult<Vec<RankedSection>> {
-	let mut statement = connection.prepare_cached(
+	let sql = format!(
 		"SELECT s.id,s.document_id,s.byte_start,s.byte_end,s.raw_markdown,d.relative_path FROM \
 		 sections s LEFT JOIN documents d ON d.id=s.document_id JOIN doc_indexes i ON \
-		 i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (? IS NULL OR i.name=?) ORDER BY \
-		 s.index_id,s.document_id,s.ordinal,s.id",
-	)?;
+		 i.id=s.index_id WHERE i.name NOT GLOB '__building__*' AND (?1 IS NULL OR i.name=?1) AND \
+		 {PATH_SCOPE_FILTER} ORDER BY s.index_id,s.document_id,s.ordinal,s.id"
+	);
+	let mut statement = connection.prepare_cached(&sql)?;
 	let index = index.map(super::storage::sqlite_text);
-	let mut rows = statement.query(rusqlite::params![index, index])?;
+	let scope = path.map(|path| path.as_str().as_bytes());
+	let mut rows = statement.query(rusqlite::params![
+		index,
+		scope,
+		scope.map_or(0, <[u8]>::len) as i64,
+		scope.is_some_and(|scope| scope.ends_with(b"/"))
+	])?;
 	let mut lines = Lines::default();
 	let mut previous: Option<ContextSection> = None;
 	let mut scanner = SectionContextScanner::default();
 	while let Some(row) = rows.next()? {
 		check()?;
-		if let Some(path) = path
-			&& !matches!(row.get_ref(5)?, rusqlite::types::ValueRef::Text(value) if path.matches(value))
-		{
-			continue;
-		}
 		let mut section: ContextSection = ContextSection {
 			section_id:   row.get(0)?,
 			document_id:  row.get(1)?,

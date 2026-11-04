@@ -42,6 +42,12 @@ struct CachedVectorIds {
 	bytes: usize,
 }
 
+struct CachedVectorNorms {
+	key:   VectorKey,
+	norms: Arc<crate::vectors::VectorNorms>,
+	bytes: usize,
+}
+
 struct CachedHit {
 	guard: String,
 	hit:   KnowledgeSearchHit,
@@ -56,11 +62,12 @@ struct CachedCandidate {
 }
 
 struct HybridData {
-	matrices:   VecDeque<CachedMatrix>,
-	vector_ids: VecDeque<CachedVectorIds>,
-	hits:       VecDeque<CachedHit>,
-	candidates: VecDeque<CachedCandidate>,
-	bytes:      usize,
+	matrices:     VecDeque<CachedMatrix>,
+	vector_ids:   VecDeque<CachedVectorIds>,
+	vector_norms: VecDeque<CachedVectorNorms>,
+	hits:         VecDeque<CachedHit>,
+	candidates:   VecDeque<CachedCandidate>,
+	bytes:        usize,
 }
 
 pub(super) struct HybridDataCache(RefCell<HybridData>, usize);
@@ -69,11 +76,12 @@ impl HybridDataCache {
 	pub(super) const fn new() -> Self {
 		Self(
 			RefCell::new(HybridData {
-				matrices:   VecDeque::new(),
-				vector_ids: VecDeque::new(),
-				hits:       VecDeque::new(),
-				candidates: VecDeque::new(),
-				bytes:      0,
+				matrices:     VecDeque::new(),
+				vector_ids:   VecDeque::new(),
+				vector_norms: VecDeque::new(),
+				hits:         VecDeque::new(),
+				candidates:   VecDeque::new(),
+				bytes:        0,
 			}),
 			HYBRID_DATA_BUDGET,
 		)
@@ -83,6 +91,7 @@ impl HybridDataCache {
 		let mut data = self.0.borrow_mut();
 		data.matrices.clear();
 		data.vector_ids.clear();
+		data.vector_norms.clear();
 		data.hits.clear();
 		data.candidates.clear();
 		data.bytes = 0;
@@ -98,6 +107,8 @@ impl HybridDataCache {
 			} else if let Some(old) = data.candidates.pop_front() {
 				data.bytes -= old.bytes;
 			} else if let Some(old) = data.vector_ids.pop_front() {
+				data.bytes -= old.bytes;
+			} else if let Some(old) = data.vector_norms.pop_front() {
 				data.bytes -= old.bytes;
 			} else if let Some(old) = data.matrices.pop_front() {
 				data.bytes -= old.bytes;
@@ -178,6 +189,40 @@ impl HybridDataCache {
 				.push_back(CachedVectorIds { key, ids: Arc::clone(&ids), bytes });
 		}
 		ids
+	}
+
+	fn vector_norms(&self, key: &VectorKey) -> Option<Arc<crate::vectors::VectorNorms>> {
+		let mut data = self.0.borrow_mut();
+		let position = data.vector_norms.iter().position(|item| item.key == *key)?;
+		let item = data
+			.vector_norms
+			.remove(position)
+			.expect("vector norms cache entry");
+		let norms = Arc::clone(&item.norms);
+		data.vector_norms.push_back(item);
+		Some(norms)
+	}
+
+	fn insert_vector_norms(
+		&self,
+		key: VectorKey,
+		norms: crate::vectors::VectorNorms,
+	) -> Arc<crate::vectors::VectorNorms> {
+		let bytes = norms
+			.retained_bytes()
+			.saturating_add(key.guard.capacity())
+			.saturating_add(key.model.capacity())
+			.saturating_add(key.index.as_ref().map_or(0, String::capacity))
+			.saturating_add(256);
+		let norms = Arc::new(norms);
+		let mut data = self.0.borrow_mut();
+		if self.reserve(&mut data, bytes) {
+			data.bytes += bytes;
+			data
+				.vector_norms
+				.push_back(CachedVectorNorms { key, norms: Arc::clone(&norms), bytes });
+		}
+		norms
 	}
 
 	fn candidate(&self, guard: &str, query: &str, id: i64) -> Option<RankedSection> {
@@ -615,11 +660,27 @@ impl DatabaseEngine {
 								let ids = if let Some(ids) = self.hybrid_data.vector_ids(&key) {
 									ids
 								} else {
-									let ids = crate::vectors::read_vector_ids(
+									// Validation and scales belong to the whole
+									// generation,
+									// independently of this query's path restriction.
+									let validation_key =
+										vector_key(&guard, model, dimension, options.index.as_deref(), None);
+									let norms =
+										if let Some(norms) = self.hybrid_data.vector_norms(&validation_key) {
+											norms
+										} else {
+											let norms = crate::vectors::read_vector_norms(
+												connection,
+												model,
+												dimension,
+												options.index.as_deref(),
+												&check,
+											)?;
+											self.hybrid_data.insert_vector_norms(validation_key, norms)
+										};
+									let ids = crate::vectors::scoped_validated_ids(
 										connection,
-										model,
-										dimension,
-										options.index.as_deref(),
+										&norms,
 										options.path.as_deref().map(PathScope),
 										&check,
 									)?;
@@ -740,6 +801,24 @@ impl DatabaseEngine {
 			check()?;
 			let result = if let Some(matrix) = self.hybrid_data.matrix(&key) {
 				crate::vectors::score_matrix(&matrix, query, limit, &check)
+			} else if let Some(norms) = self.hybrid_data.vector_norms(&vector_key(
+				&context.guard,
+				model,
+				dimensions,
+				context.index.as_deref(),
+				None,
+			)) {
+				crate::vectors::score_validated_stream(
+					connection,
+					model,
+					dimensions,
+					context.index.as_deref(),
+					context.path.as_deref().map(PathScope),
+					query,
+					limit,
+					&check,
+					&norms,
+				)
 			} else {
 				crate::vectors::score_stream(
 					connection,
@@ -1309,6 +1388,121 @@ mod tests {
 		assert_eq!(second.vector_dimensions, first.vector_dimensions);
 		let reused = engine.hybrid_data.vector_ids(&key).unwrap();
 		assert!(Arc::ptr_eq(&ids, &reused));
+	}
+
+	#[test]
+	fn streamed_validation_is_reused_across_paths_and_invalidated_by_external_writes() {
+		use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+		let fixture = Fixture::new();
+		let writer = Connection::open(&fixture.path).unwrap();
+		let mut vector = vec![0.0f32; 256];
+		vector[0] = 3.0;
+		vector[1] = 4.0;
+		let bytes: Vec<u8> = vector
+			.iter()
+			.flat_map(|value| value.to_le_bytes())
+			.collect();
+		writer
+			.execute("UPDATE wiki_vector_generations SET dimensions=256", [])
+			.unwrap();
+		writer
+			.execute("UPDATE wiki_section_vectors SET vector=?", [bytes])
+			.unwrap();
+		let mut engine = fixture.engine();
+		engine.hybrid_data.1 = 2048;
+		engine
+			.prepare_hybrid("needle", &KnowledgeSearchOptions::default(), Some("model"), || Ok(()))
+			.unwrap();
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.authorizer(Some(|context: AuthContext<'_>| {
+				if matches!(context.action, AuthAction::Read {
+					table_name:  "wiki_section_vectors",
+					column_name: "vector",
+				}) {
+					Authorization::Deny
+				} else {
+					Authorization::Allow
+				}
+			}))
+			.unwrap();
+		let options =
+			KnowledgeSearchOptions { path: Some("scope/c.md".into()), ..Default::default() };
+		// A different query AND a different path must reuse the completed
+		// validation, even when SQLite refuses any new vector payload read.
+		let prepared = engine
+			.prepare_hybrid("evidence", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		engine
+			.connection
+			.as_ref()
+			.unwrap()
+			.authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+			.unwrap();
+		let query: Vec<f64> = vector.iter().map(|value| f64::from(*value)).collect();
+		let actual = engine
+			.score_hybrid(&prepared.token, 256, || Ok(()), &query, 3)
+			.unwrap()
+			.unwrap();
+		assert_eq!(actual, vec![3]);
+		let mut uncached = fixture.engine();
+		uncached.hybrid_data.1 = 0;
+		let reference = uncached
+			.prepare_hybrid("evidence", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		let expected = uncached
+			.score_hybrid(&reference.token, 256, || Ok(()), &query, 3)
+			.unwrap()
+			.unwrap();
+		assert_eq!(actual, expected);
+		assert_eq!(
+			serde_json::to_value(
+				engine
+					.finish_hybrid(&prepared.token, &actual, "", "", &|| Ok(()))
+					.unwrap()
+			)
+			.unwrap(),
+			serde_json::to_value(
+				uncached
+					.finish_hybrid(&reference.token, &expected, "", "", &|| Ok(()))
+					.unwrap()
+			)
+			.unwrap(),
+		);
+		assert!(
+			engine
+				.score_hybrid(
+					&prepared.token,
+					256,
+					|| Err(KnowledgeError::message("cancelled")),
+					&query,
+					3
+				)
+				.is_err()
+		);
+		writer
+			.execute("UPDATE wiki_section_vectors SET vector=x'00' WHERE section_id=2", [])
+			.unwrap();
+		let options =
+			KnowledgeSearchOptions { path: Some("scope/a.md".into()), ..Default::default() };
+		let changed = engine
+			.prepare_hybrid("needle", &options, Some("model"), || Ok(()))
+			.unwrap()
+			.expect_ready();
+		assert!(
+			changed.vector_dimensions.is_empty(),
+			"an out-of-scope corrupt row invalidates its whole generation"
+		);
+		assert!(
+			engine
+				.read_hybrid_candidates(&prepared.token, &actual, &|| Ok(()))
+				.is_err()
+		);
 	}
 
 	#[test]

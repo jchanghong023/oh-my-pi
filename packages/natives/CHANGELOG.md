@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Reduce repeated Knowledge search work by reusing vector validation and grep snapshots, and filtering paths before payload reads.
 - Preserve fork cancellation, timeout and Windows path behavior on the new embedded bash engine.
 - Avoid sorting Knowledge vector BLOBs and allocating over-budget vector matrices; stream exact scoring and reuse validated IDs and evidence without changing scores or result order.
 - Keep incomplete Knowledge vector batches for explicit resumption while only complete generations participate in search.
