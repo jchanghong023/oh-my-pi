@@ -6,6 +6,7 @@ import { testTimeoutMs } from "./ci-test-ts";
 import { fastcheckCommands, parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import {
 	fulltestCommands,
+	fulltestWorkerAllocation,
 	gateCpuBudget,
 	parseFulltestArgs,
 	removeFulltestHome,
@@ -63,6 +64,37 @@ test("both TypeScript lanes use the available worker budget in fork and full pla
 			expect(commands.find(command => command.label === label)?.env?.OMP_TEST_CONCURRENCY).toBe("all");
 		}
 	}
+});
+
+describe("fulltest worker allocation", () => {
+	test("gives Bun the unused Rust share and favors its longer queue when both run", () => {
+		expect(fulltestWorkerAllocation(28, true, true)).toEqual({ ordinary: 20, rust: 4, serial: false });
+		expect(fulltestWorkerAllocation(28, true, false)).toEqual({ ordinary: 24, rust: 0, serial: false });
+		expect(fulltestWorkerAllocation(28, false, true)).toEqual({ ordinary: 0, rust: 24, serial: false });
+		expect(fulltestWorkerAllocation(28, false, false)).toEqual({ ordinary: 0, rust: 0, serial: false });
+		expect(fulltestWorkerAllocation(16, true, true)).toEqual({ ordinary: 9, rust: 3, serial: false });
+	});
+
+	test("keeps concurrent pools within the ceiling and preserves static/subprocess headroom", () => {
+		for (let cores = 1; cores <= 64; cores++) {
+			const ceiling = Math.min(28, cores);
+			for (const ordinary of [false, true]) {
+				for (const rust of [false, true]) {
+					const allocation = fulltestWorkerAllocation(cores, ordinary, rust);
+					expect(allocation.ordinary > 0).toBe(ordinary);
+					expect(allocation.rust > 0).toBe(rust);
+					expect(Number.isInteger(allocation.ordinary)).toBe(true);
+					expect(Number.isInteger(allocation.rust)).toBe(true);
+					const peak = allocation.serial
+						? Math.max(allocation.ordinary, allocation.rust)
+						: allocation.ordinary + allocation.rust;
+					expect(peak).toBeLessThanOrEqual(Math.max(1, ceiling - 4));
+					if (ordinary && rust) expect(allocation.rust).toBeLessThanOrEqual(4);
+					expect(allocation.serial).toBe(ceiling <= 5);
+				}
+			}
+		}
+	});
 });
 
 test("script selection uses changed modules and existing tests, not business files or a clean tree", () => {
@@ -157,6 +189,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 			gate,
 			{ debug: false, full: scenario.full },
 			{
+				cpuBudget: 28,
 				captureSourceRevision: async () => revision,
 				scriptTestFiles: async () => [],
 				captureChangedPaths: async (_gate, _root, base) => {
@@ -189,7 +222,18 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		);
 		const forkAffected = scenario.packages.some(pkg => pkg === "pi-knowledge" || pkg === "pi-natives");
 		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
+		const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite")!;
+		const expectedBunBudget = rust.length ? "20" : "24";
+		expect(ordinary.env?.OMP_TEST_CPU_BUDGET).toBe(expectedBunBudget);
+		expect(ordinary.env?.CARGO_BUILD_JOBS).toBe(expectedBunBudget);
+		expect(ordinary.env?.RUST_TEST_THREADS).toBe(expectedBunBudget);
+		expect(
+			commands.find(command => command.label === "test/TypeScript startup suite")?.env?.OMP_TEST_CPU_BUDGET,
+		).toBe("28");
 		if (rust.length) {
+			expect(rust[0]!.env?.OMP_TEST_CPU_BUDGET).toBe("4");
+			expect(rust[0]!.env?.CARGO_BUILD_JOBS).toBe("4");
+			expect(rust[0]!.env?.RUST_TEST_THREADS).toBe("4");
 			expect(rust[0]!.argv).toEqual([
 				"bun",
 				"scripts/run-rs-task.ts",
@@ -323,7 +367,7 @@ test("changed paths include staged, deleted, rename sides and untracked paths", 
 	}
 }, 20_000);
 
-test("direct scheduler overlaps commands and continues after a failure", async () => {
+test("direct scheduler overlaps commands, continues independent work, and preserves the first actual failure", async () => {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-gate-scheduler-"));
 	try {
 		const script = path.join(directory, "worker.ts");
@@ -350,6 +394,7 @@ if (role === "second") {
     if (Date.now() > deadline) process.exit(91);
     await Bun.sleep(20);
   }
+  process.exit(23);
 }
 `,
 		);
@@ -364,6 +409,8 @@ if (role === "second") {
 			),
 		);
 		expect(result.exitCode).toBe(17);
+		expect(result.failures?.some(failure => failure.message.includes("first"))).toBe(true);
+		expect(result.failures?.some(failure => failure.message.includes("second"))).toBe(true);
 		expect(settled.sort()).toEqual(["first", "later", "second"]);
 		expect(await fs.readFile(path.join(directory, "second"), "utf8")).toBe("started");
 		expect(await fs.readFile(path.join(directory, "later"), "utf8")).toBe("started");
@@ -606,6 +653,9 @@ if (label === ordinary) process.exit(17);
 			expect(startup).toHaveLength(1);
 			expect(rust).toHaveLength(1);
 			expect(ordinary[0]!.nativeFinished).toBe(true);
+			expect(rust[0]!.nativeFinished).toBe(true);
+			expect(startup[0]!.nativeFinished).toBe(true);
+			expect((await starts("static/TS"))[0]!.nativeFinished).toBe(true);
 			expect(startup[0]!.ordinaryFinished).toBe(true);
 			expect(ordinary[0]!.argv).toContain("--defer-startup");
 			expect(startup[0]!.argv).toContain("--only-startup");
@@ -614,9 +664,7 @@ if (label === ordinary) process.exit(17);
 			expect(startup[0]!.home).not.toBe(ordinary[0]!.home);
 			expect(ordinary[0]!.userprofile).toBe(ordinary[0]!.home);
 			expect(ordinary[0]!.configRoot).toBe("");
-			const budgets = [ordinary[0], rust[0]].map(entry => Number(entry!.budget));
-			expect(budgets.every(budget => Number.isInteger(budget) && budget >= 1)).toBe(true);
-			expect(budgets.reduce((sum, budget) => sum + budget, 0)).toBeLessThanOrEqual(16);
+			expect([ordinary[0]!.budget, rust[0]!.budget, startup[0]!.budget]).toEqual(["9", "3", "16"]);
 			expect(await starts("smoke/isolated dev TUI PTY")).toHaveLength(1);
 			if (full) {
 				for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK"]) {
@@ -714,6 +762,8 @@ describe("fulltest lane scheduling", () => {
 		const ordinaryStarted = Promise.withResolvers<void>();
 		const rustStarted = Promise.withResolvers<void>();
 		const finishStatic = Promise.withResolvers<void>();
+		const smokeStarted = Promise.withResolvers<void>();
+		const finishSmoke = Promise.withResolvers<void>();
 		const finishOrdinary = Promise.withResolvers<void>();
 		const finishRust = Promise.withResolvers<void>();
 		const ordinarySettled = Promise.withResolvers<void>();
@@ -741,6 +791,7 @@ describe("fulltest lane scheduling", () => {
 				captureSourceRevision: async () => revision,
 				scriptTestFiles: async () => [],
 				cpuBudget: 16,
+				bunTestSelection: async () => ({ tool: "bun", mode: "full", reason: "fixture" }),
 				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 				runGateCommands: async (_runner, commands, options) => {
 					const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite");
@@ -763,6 +814,9 @@ describe("fulltest lane scheduling", () => {
 						await finishRust.promise;
 						rustSettled.resolve();
 						throw new Error("Rust failure");
+					} else if (commands.some(command => command.label === "smoke/isolated dev TUI PTY")) {
+						smokeStarted.resolve();
+						await finishSmoke.promise;
 					} else if (startup) {
 						expect(commands).toHaveLength(1);
 						expect(startup.argv).toContain("--only-startup");
@@ -787,6 +841,9 @@ describe("fulltest lane scheduling", () => {
 			await rustSettled.promise;
 			expect(startupHasStarted).toBe(false);
 			finishStatic.resolve();
+			await smokeStarted.promise;
+			expect(startupHasStarted).toBe(false);
+			finishSmoke.resolve();
 			await run;
 			expect(startupHasStarted).toBe(true);
 			expect(failures.map(error => String(error))).toEqual(["Error: ordinary failure", "Error: Rust failure"]);
@@ -794,49 +851,88 @@ describe("fulltest lane scheduling", () => {
 			finishOrdinary.resolve();
 			finishRust.resolve();
 			finishStatic.resolve();
+			finishSmoke.resolve();
 			await run;
 		}
 	});
-	test("serializes CPU-heavy lanes on a small allocation without omitting suites", async () => {
-		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
-		const seen: string[] = [];
-		const gate = {
-			signal: new AbortController().signal,
-			charged: async <T>(operation: () => T | Promise<T>) => operation(),
-			run: async () => {},
-			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
-			record: (error: unknown) => error,
-			fail: (error: unknown) => error,
-		} as unknown as GateRun;
-		await runFulltest(
-			gate,
-			{ debug: false, full: true },
-			{
-				cpuBudget: 2,
-				captureSourceRevision: async () => revision,
-				scriptTestFiles: async () => [],
-				captureChangedPaths: async () => [],
-				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
-				runGateCommands: async (_runner, commands, options) => {
-					if (commands.some(command => command.label === "static/TS")) expect(options?.concurrency).toBe(1);
-					for (const command of commands) {
-						seen.push(command.label);
-						if (
-							command.label === "test/TypeScript fork feature suite" ||
-							command.label === "test/Rust workspace"
-						) {
-							expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+	for (const cpuBudget of [1, 2, 4, 5]) {
+		test(`serializes heavy lanes on ${cpuBudget} CPUs without omitting suites`, async () => {
+			const revision: SourceRevision = { head: "head", dirty: false, status: "" };
+			const seen: string[] = [];
+			const staticStarted = Promise.withResolvers<void>();
+			const ordinaryStarted = Promise.withResolvers<void>();
+			const rustStarted = Promise.withResolvers<void>();
+			const finishStatic = Promise.withResolvers<void>();
+			const finishOrdinary = Promise.withResolvers<void>();
+			const finishRust = Promise.withResolvers<void>();
+			const gate = {
+				signal: new AbortController().signal,
+				charged: async <T>(operation: () => T | Promise<T>) => operation(),
+				run: async () => {},
+				childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+				record: (error: unknown) => error,
+				fail: (error: unknown) => error,
+			} as unknown as GateRun;
+			const run = runFulltest(
+				gate,
+				{ debug: false, full: true },
+				{
+					cpuBudget,
+					captureSourceRevision: async () => revision,
+					scriptTestFiles: async () => [],
+					captureChangedPaths: async () => [],
+					fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
+					runGateCommands: async (_runner, commands, options) => {
+						for (const command of commands) {
+							seen.push(command.label);
+							if (command.label === "static/TS") {
+								expect(options?.concurrency).toBe(1);
+								staticStarted.resolve();
+								await finishStatic.promise;
+							} else if (command.label === "test/TypeScript fork feature suite") {
+								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+								ordinaryStarted.resolve();
+								await finishOrdinary.promise;
+							} else if (command.label === "test/Rust workspace") {
+								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
+								rustStarted.resolve();
+								await finishRust.promise;
+							} else if (command.label === "test/TypeScript startup suite") {
+								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe(String(cpuBudget));
+							}
 						}
-					}
+					},
 				},
-			},
-		);
-		expect(seen.indexOf("static/TS")).toBeLessThan(seen.indexOf("test/TypeScript fork feature suite"));
-		expect(seen.indexOf("test/TypeScript fork feature suite")).toBeLessThan(seen.indexOf("test/Rust workspace"));
-		expect(seen.indexOf("test/Rust workspace")).toBeLessThan(seen.indexOf("smoke/isolated dev TUI PTY"));
-		for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK", "test/TypeScript startup suite"])
-			expect(seen).toContain(label);
-	});
+			);
+			try {
+				await staticStarted.promise;
+				expect(seen).not.toContain("test/TypeScript fork feature suite");
+				expect(seen).not.toContain("test/Rust workspace");
+				finishStatic.resolve();
+				await ordinaryStarted.promise;
+				expect(seen).not.toContain("test/Rust workspace");
+				finishOrdinary.resolve();
+				await rustStarted.promise;
+				expect(seen).not.toContain("smoke/isolated dev TUI PTY");
+				expect(seen).not.toContain("test/TypeScript startup suite");
+				finishRust.resolve();
+				await run;
+				for (const label of [
+					"test/Python suites",
+					"test/Go SDK",
+					"test/Rust SDK",
+					"smoke/isolated dev TUI PTY",
+					"test/TypeScript startup suite",
+				])
+					expect(seen).toContain(label);
+			} finally {
+				finishStatic.resolve();
+				finishOrdinary.resolve();
+				finishRust.resolve();
+				await run;
+			}
+		});
+	}
 });
 
 describe("gate-local profile fixture isolation", () => {

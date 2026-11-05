@@ -273,6 +273,8 @@ export async function fixture(root: TempDir, skillsEnabled = false) {
 		WINDIR: Bun.env.WINDIR,
 		TEMP: root.path(),
 		TMP: root.path(),
+		// Share only Bun's content-keyed transpiler cache, not application state.
+		BUN_RUNTIME_TRANSPILER_CACHE_PATH: Bun.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 		HOME: home,
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: configRoot,

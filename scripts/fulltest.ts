@@ -43,6 +43,22 @@ export function gateCpuBudget(cores: number = os.availableParallelism(), release
 	return release.toLowerCase().includes("microsoft") ? Math.max(1, Math.floor(cores / 2)) : cores;
 }
 
+/** Keep static/subprocess headroom while favoring the longer Bun test lane. */
+export function fulltestWorkerAllocation(cpuBudget: number, hasOrdinaryTests: boolean, hasRustTests: boolean) {
+	const budget = testConcurrencyLimit(cpuBudget, process.platform, "");
+	const capacity = Math.max(1, budget - 4);
+	const serial = capacity < 2;
+	const rust = !hasRustTests
+		? 0
+		: !hasOrdinaryTests
+			? capacity
+			: serial
+				? 1
+				: Math.min(4, Math.max(1, Math.floor(capacity / 4)));
+	const ordinary = hasOrdinaryTests ? capacity - (serial ? 0 : rust) : 0;
+	return { ordinary, rust, serial };
+}
+
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
@@ -562,16 +578,19 @@ async function runFulltestObserved(
 				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		});
 		// Reserve capacity for static checks and subprocesses spawned by the suites.
-		// Bun and nextest otherwise each independently claim the whole machine.
-		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget(), process.platform, "");
-		const testBudget = Math.max(1, Math.floor((cpuBudget - 4) / 2));
-		const withBudget = (command: GateCommand): GateCommand => ({
+		// The short Rust lane takes at most four workers when Bun also has work;
+		// do not strand half the machine after Rust finishes.
+		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget());
+		const ordinaryTests = tests.filter(command => command.label === "test/TypeScript fork feature suite");
+		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
+		const allocation = fulltestWorkerAllocation(cpuBudget, ordinaryTests.length > 0, rustTests.length > 0);
+		const withBudget = (command: GateCommand, budget: number): GateCommand => ({
 			...command,
 			env: {
 				...command.env,
-				OMP_TEST_CPU_BUDGET: String(testBudget),
-				CARGO_BUILD_JOBS: String(testBudget),
-				RUST_TEST_THREADS: String(testBudget),
+				OMP_TEST_CPU_BUDGET: String(budget),
+				CARGO_BUILD_JOBS: String(budget),
+				RUST_TEST_THREADS: String(budget),
 			},
 		});
 		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
@@ -589,7 +608,7 @@ async function runFulltestObserved(
 						let remainingRustChecks = checks.filter(command => command.label.startsWith("static/Rust")).length;
 						if (!remainingRustChecks) rustChecksFinished.resolve();
 						await runGateCommands(child, checks, {
-							concurrency: cpuBudget <= 4 ? 1 : 2,
+							concurrency: allocation.serial ? 1 : 2,
 							onCommandSettled: command => {
 								if (command.label.startsWith("static/Rust") && --remainingRustChecks === 0)
 									rustChecksFinished.resolve();
@@ -609,22 +628,38 @@ async function runFulltestObserved(
 				command.label !== "test/TypeScript startup suite" &&
 				!command.label.startsWith("test/Rust"),
 		);
-		const ordinaryTests = tests
-			.filter(command => command.label === "test/TypeScript fork feature suite")
-			.map(withBudget);
-		const rustTests = tests.filter(command => command.label.startsWith("test/Rust")).map(withBudget);
 		const testRun = (async () => {
-			if (cpuBudget <= 4) await staticRun;
-			await attempt("non-Rust tests", () => runGateCommands(gate, ordinaryTests, { concurrency: 1 }));
+			if (allocation.serial) await staticRun;
+			await attempt("non-Rust tests", () =>
+				runGateCommands(
+					gate,
+					ordinaryTests.map(command => withBudget(command, allocation.ordinary)),
+					{
+						concurrency: 1,
+					},
+				),
+			);
 		})();
 		const rustRun = (async () => {
-			if (cpuBudget <= 4) await testRun;
+			if (allocation.serial) await testRun;
 			else await rustChecksFinished.promise;
-			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
+			await attempt("Rust tests", () =>
+				runGateCommands(
+					gate,
+					rustTests.map(command => withBudget(command, allocation.rust)),
+					{ concurrency: 1 },
+				),
+			);
 		})();
 		await Promise.all([staticRun, testRun, rustRun]);
 		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
-		await attempt("TypeScript startup tests", () => runGateCommands(gate, startupTests, { concurrency: 1 }));
+		await attempt("TypeScript startup tests", () =>
+			runGateCommands(
+				gate,
+				startupTests.map(command => withBudget(command, cpuBudget)),
+				{ concurrency: 1 },
+			),
+		);
 	} catch (error) {
 		// Record the triggering failure before cleanup can report its own error.
 		throw gate.record(error);

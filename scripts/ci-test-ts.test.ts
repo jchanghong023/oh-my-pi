@@ -315,7 +315,7 @@ test("startup integration chunks bypass only the heavy integration limit", () =>
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
-test("bounded pool runs eligible chunks in order, caps heavy work and drains the entire queue", async () => {
+test("bounded pool fills ordinary workers past the cap4 heavy queue and drains every chunk once", async () => {
 	const items = ["h1", "h2", "h3", "h4", "h5", "h6", "l1", "l2"];
 	const started: string[] = [];
 	const finished: string[] = [];
@@ -328,7 +328,7 @@ test("bounded pool runs eligible chunks in order, caps heavy work and drains the
 		items,
 		6,
 		item =>
-			isIntegrationCommand({
+			isLimitedIntegrationCommand({
 				label: item,
 				cwd: "packages/coding-agent",
 				command: ["bun", "test", item.startsWith("h") ? "test/modes/zcode-process.test.ts" : "test/unit.test.ts"],
@@ -472,6 +472,11 @@ test("historical chunk durations reorder only exact matches, retaining every com
 	changed.command[3] = "test/other.test.ts";
 	expect(prioritizeLocalCommands(commands, [changed])).toEqual(commands);
 	expect(prioritizeLocalCommands(commands, [producer(2, 10), producer(2, 20)])).toEqual(commands);
+	const relabeled = producer(2, 100);
+	relabeled.producer = relabeled.producer.replace(commands[2].label, "packages/coding-agent (new chunk)");
+	expect(prioritizeLocalCommands(commands, [relabeled])).toEqual(commands);
+	const duplicate = producer(2, 20);
+	expect(prioritizeLocalCommands(commands, [duplicate, { ...duplicate }])).toEqual(commands);
 	expect(commands.map(command => command.command[3])).toEqual([
 		"test/a.test.ts",
 		"test/b.test.ts",
@@ -480,13 +485,26 @@ test("historical chunk durations reorder only exact matches, retaining every com
 	]);
 });
 
-test("only the latest complete successful same-revision fulltest supplies scheduling history", async () => {
+test("only the latest trustworthy fulltest supplies exact chunk scheduling hints across revisions", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-timing-history-"));
 	const now = Date.now();
 	const revision = "a".repeat(40);
+	const currentRevision = "b".repeat(40);
+	const commands = ["fast", "slow"].map(name => ({
+		label: `packages/foo (${name})`,
+		cwd: "packages/foo",
+		command: ["bun", "test", `test/${name}.test.ts`],
+		parallel: 1,
+	}));
 	const producer = {
-		producer: "ci-test-ts:local-ts:1234abcd:packages/foo:attempt-1",
-		command: ["bun", "test"],
+		producer: `ci-test-ts:local-ts:1234abcd:${commands[1].label}:attempt-1`,
+		command: [
+			...commands[1].command,
+			"--parallel=1",
+			"--timeout=30000",
+			"--reporter=junit",
+			"--reporter-outfile=x.xml",
+		],
 		scope: "ci-test-ts:local-ts",
 		attempt: 1,
 		startedAt: new Date(now).toISOString(),
@@ -524,25 +542,35 @@ test("only the latest complete successful same-revision fulltest supplies schedu
 			}),
 		);
 	};
-	const readHistory = () => latestLocalTestProducers(revision, root, now, "current");
+	const readHistory = () => latestLocalTestProducers(currentRevision, root, now, "current");
 	try {
 		expect(await readHistory()).toEqual([]);
 		await put("valid");
 		expect(await readHistory()).toEqual(producers);
+		// A new commit retains real timings, but only for unchanged exact commands.
+		expect(prioritizeLocalCommands(commands, await readHistory())).toEqual([commands[1], commands[0]]);
+		const changed = commands.map(command => ({ ...command, command: [...command.command] }));
+		changed[1].command[2] = "test/changed.test.ts";
+		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
+		expect(await latestLocalTestProducers(revision, root, now, "current")).toEqual(producers);
 		expect(await latestLocalTestProducers(undefined, root, now, "current")).toEqual([]);
 		expect(await latestLocalTestProducers("invalid", root, now, "current")).toEqual([]);
-		expect(await latestLocalTestProducers("b".repeat(40), root, now, "current")).toEqual([]);
+		expect(await latestLocalTestProducers("c".repeat(64), root, now, "current")).toEqual(producers);
 		for (const overrides of [
 			{ completion: "partial" },
 			{ exitCode: 1 },
 			{ scope: "fulltest: full current-platform project suites" },
-			{ sourceRevision: "b".repeat(40) },
+			{ sourceRevision: "invalid" },
 			{ sourceRevision: null },
+			{ sourceRevision: "b".repeat(41) },
 			{ runtimeVersions: { bun: "other" } },
 			{ runtimeVersions: null },
 			{ startedAtUtc: new Date(now - 8 * 86400000).toISOString() },
 			{ reconciliation: { status: "invalid", cases: 1, failures: 0 } },
 			{ producers: [] },
+			{ reconciliation: { status: "validated", cases: 0, failures: 0 } },
+			{ reconciliation: { status: "validated", cases: 1, failures: 1 } },
+			{ unreconciledScope: "partial suite" },
 			{ producers: [producer] },
 			{ producers: [producer, { ...startup, report: "missing" }] },
 			{ producers: [producer, { ...startup, exitCode: 1 }] },
@@ -563,7 +591,24 @@ test("only the latest complete successful same-revision fulltest supplies schedu
 		await put("current", { runId: "different", completion: "running", startedAtUtc: new Date(now).toISOString() });
 		expect(await readHistory()).toEqual([]);
 		await put("current", { completion: "running", startedAtUtc: new Date(now).toISOString() });
-		await put("newer", { completion: "partial", exitCode: 1, startedAtUtc: new Date(now - 500).toISOString() });
+		await put("newer", {
+			completion: "partial",
+			exitCode: 1,
+			sourceRevision: currentRevision,
+			startedAtUtc: new Date(now - 500).toISOString(),
+		});
+		expect(await readHistory()).toEqual([]);
+		await put("newer", {
+			completion: "complete",
+			exitCode: 1,
+			sourceRevision: currentRevision,
+			startedAtUtc: new Date(now - 500).toISOString(),
+		});
+		expect(await readHistory()).toEqual([]);
+		await put("newer", {
+			sourceRevision: "invalid",
+			startedAtUtc: new Date(now - 500).toISOString(),
+		});
 		expect(await readHistory()).toEqual([]);
 		await put("newer", {
 			startedAtUtc: new Date(now - 500).toISOString(),

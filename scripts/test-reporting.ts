@@ -64,14 +64,15 @@ interface HistoryRun {
 }
 
 // History is a scheduling hint, never a test result. Only the most recent
-// fulltest on this machine can qualify, and only for the tested source.
+// fulltest on this machine can qualify. Its source revision may differ from
+// the current run; the scheduler still requires an exact unchanged chunk.
 export async function latestLocalTestProducers(
-	sourceRevision: string | undefined,
+	currentSourceRevision: string | undefined,
 	root: string = reportRoot,
 	now: number = Date.now(),
 	currentRunId: string | undefined = process.env.OMP_TEST_RUN_ID,
 ): Promise<TestProducerRecord[]> {
-	if (!sourceRevision || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(sourceRevision)) return [];
+	if (!currentSourceRevision || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(currentSourceRevision)) return [];
 	try {
 		const entries = await fs.readdir(root, { withFileTypes: true });
 		let latestTime = -Infinity;
@@ -101,7 +102,7 @@ export async function latestLocalTestProducers(
 			now - latestTime > 7 * 24 * 60 * 60 * 1000 ||
 			latest.completion !== "complete" ||
 			latest.exitCode !== 0 ||
-			latest.sourceRevision !== sourceRevision ||
+			!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(latest.sourceRevision ?? "") ||
 			latest.runtimeVersions?.bun !== Bun.version ||
 			latest.reconciliation?.status !== "validated" ||
 			!(typeof latest.reconciliation.cases === "number" && latest.reconciliation.cases > 0) ||

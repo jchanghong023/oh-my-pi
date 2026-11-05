@@ -391,6 +391,8 @@ async function fixture(root: TempDir, baseUrl: string) {
 		LOCALAPPDATA: home,
 		TEMP: temp,
 		TMP: temp,
+		// Keep the gate's compiled-source cache while isolating every runtime fixture.
+		BUN_RUNTIME_TRANSPILER_CACHE_PATH: Bun.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH,
 		HOME: home,
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: configRoot,
