@@ -553,9 +553,11 @@ export async function createSpecActor(args: {
 		initialAgentStatus: "idle",
 		bindProcessState: false,
 		agentRegistry: registry,
-		sessionManager: args.sessionFile
-			? await SessionManager.open(args.sessionFile, args.sessionDirectory)
-			: SessionManager.create(args.options.cwd!, args.sessionDirectory),
+		sessionManager:
+			args.options.sessionManager ??
+			(args.sessionFile
+				? await SessionManager.open(args.sessionFile, args.sessionDirectory)
+				: SessionManager.create(args.options.cwd!, args.sessionDirectory)),
 		requireYieldTool: false,
 		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
 		// factories without admitting ambient tools or extension discovery.

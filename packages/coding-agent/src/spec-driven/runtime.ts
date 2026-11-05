@@ -4,8 +4,9 @@ import type { Settings } from "../config/settings";
 import { formatModelStringWithRouting } from "../config/model-resolver";
 import type { AgentSession } from "../session/agent-session";
 import { loadSessionFile, readSessionHeaderId } from "../session/session-loader";
+import { SessionManager } from "../session/session-manager";
 import { buildRunnerDeps, resolveTeamParticipantsForSession } from "../team/controller";
-import { createMCPProxyTools, followMCPTools } from "../task/executor";
+import { followMCPTools } from "../task/executor";
 import { cfgTaskMaxConcurrency } from "../task/settings";
 import { runTeamDiscussion } from "../team/orchestrator";
 import { createTeamSubagentRunner } from "../team/runner";
@@ -217,8 +218,16 @@ export async function createSpecDrivenRuntime(args: {
 				executor && capabilities?.enableMCP !== false && !capabilities?.restrictToolNames
 					? capabilities?.mcpManager
 					: undefined;
+			const sessionDirectory = await containedSpecPath(cwd, `.omp/dev/sessions/${runId}`);
+			const sessionManager = sessionFile
+				? await SessionManager.open(sessionFile, sessionDirectory)
+				: SessionManager.create(cwd, sessionDirectory);
 			const mcpFollower = inheritedMcpManager
-				? followMCPTools(inheritedMcpManager, new Set(capabilities?.customTools?.map(tool => tool.name)))
+				? followMCPTools(
+						inheritedMcpManager,
+						{ scope: sessionManager.getSessionId(), seed: capabilities?.mcpToolScope },
+						new Set(capabilities?.customTools?.map(tool => tool.name)),
+					)
 				: undefined;
 			const actor = await createSpecActor({
 				role,
@@ -252,7 +261,7 @@ export async function createSpecDrivenRuntime(args: {
 								return instructions;
 							}
 						: undefined,
-				sessionDirectory: await containedSpecPath(cwd, `.omp/dev/sessions/${runId}`),
+				sessionDirectory,
 				checkApproved: args.checkApproved,
 				getStatus: args.getStatus,
 				observeReport: args.observeReport,
@@ -263,6 +272,7 @@ export async function createSpecDrivenRuntime(args: {
 					: undefined,
 				options: {
 					cwd,
+					sessionManager,
 					settings: settings.overlay(),
 					model: sessionFile ? undefined : session.model,
 					modelRegistry: session.modelRegistry,
@@ -279,9 +289,8 @@ export async function createSpecDrivenRuntime(args: {
 								mcpTools:
 									capabilities?.enableMCP === false || capabilities?.restrictToolNames
 										? undefined
-										: inheritedMcpManager
-											? createMCPProxyTools(inheritedMcpManager)
-											: capabilities?.mcpTools,
+										: (mcpFollower?.proxyTools() ?? capabilities?.mcpTools),
+								mcpToolScope: mcpFollower?.scope,
 								extensionRoots: () => session.effectiveExtensionRoots,
 								preloadedPreparedExtensions: session.preparedExtensions?.filter(prepared =>
 									session.extensionRunner?.isExtensionActive(prepared.path),

@@ -49,6 +49,8 @@ import {
 	type IsolationContext,
 	makeIsolationCommitMessage,
 	mergeIsolatedChanges,
+	nativeWorkspace,
+	type OpenWorkspace,
 	persistNestedPatches,
 	prepareIsolationContext,
 	renderIsolationSummary,
@@ -56,6 +58,7 @@ import {
 } from "./isolation-runner";
 import { generateTaskName, sanitizeAgentId } from "./name-generator";
 import { AgentOutputManager } from "./output-manager";
+import { ovnfsWorkspace } from "./ovnfs";
 import { resolveSpawnPolicy } from "./spawn-policy";
 import { isBundledSeance, prepareSeance, type PreparedSeanceSession } from "./seance";
 import { SEANCE_AGENT_NAME } from "./seance-policy";
@@ -83,6 +86,7 @@ import {
 	cfgTaskIsolationMerge,
 	cfgTaskMaxRecursionDepth,
 	cfgTaskPerCallModel,
+	ovnfsCommand,
 	perCallModelEnabled,
 } from "./settings";
 import {
@@ -839,6 +843,7 @@ function buildExecutorOptions(
 		inheritedSessionAgents: session.getSessionAgents?.(),
 		getAgentDefinitions: session.getAgentDefinitions,
 		mcpManager: enableMCP ? (session.mcpManager ?? MCPManager.instance()) : undefined,
+		mcpToolScope: session.mcpToolScope,
 		enableMCP,
 		customTools: request.customTools,
 		workPoolYieldItems: request.workPoolYieldItems,
@@ -887,6 +892,12 @@ async function loadPlanReference(
 		request.session.getPlanReferencePath?.() ?? "local://PLAN.md",
 		sessionLocalProtocolOptions(request.session),
 	);
+}
+
+/** Isolated runs work in ovnfs checkouts when `ovnfs.enabled` is on, else in native clones per `isolation.backend`. */
+function openIsolatedWorkspace(settings: Settings): OpenWorkspace {
+	const ovnfs = ovnfsCommand(settings);
+	return ovnfs ? ovnfsWorkspace(ovnfs) : nativeWorkspace(parseIsolationBackend(cfgIsolationBackend.get(settings)));
 }
 
 function buildFailureResult(
@@ -1145,7 +1156,7 @@ async function runAdmittedSubagent(
 					baseOptions,
 					context: isolationContext,
 					preserveCwd: spawnOverrides?.preserveCwd,
-					preferredBackend: parseIsolationBackend(cfgIsolationBackend.get(request.session.settings)),
+					openWorkspace: openIsolatedWorkspace(request.session.settings),
 					agentId: id,
 					mergeMode: policy.mergeMode,
 					artifactsDir: lease.artifactsDir,

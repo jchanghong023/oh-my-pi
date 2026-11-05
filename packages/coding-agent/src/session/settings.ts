@@ -621,15 +621,15 @@ export const cfgTextVerbosity = register({
 	id: "textVerbosity",
 	type: "enum",
 	values: ["low", "medium", "high"] as const,
-	default: "medium",
+	default: "low",
 	ui: {
 		tab: "model",
 		group: "采样",
 		label: "文本详细程度",
 		description: "OpenAI Responses 和 Codex 的回复详细程度（低、中或高）",
 		options: [
-			{ value: "low", label: "低", description: "倾向简洁回复" },
-			{ value: "medium", label: "中", description: "兼顾简洁与细节（默认）" },
+			{ value: "low", label: "低", description: "倾向简洁回复（默认）" },
+			{ value: "medium", label: "中", description: "兼顾简洁与细节" },
 			{ value: "high", label: "高", description: "倾向详细回复" },
 		],
 	},

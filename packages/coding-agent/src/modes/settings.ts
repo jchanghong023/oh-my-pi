@@ -795,6 +795,18 @@ export const cfgDisplayCacheMissMarker = register({
 	},
 });
 
+export const cfgDisplayShellVisualization = register({
+	id: "display.shellVisualization",
+	type: "boolean",
+	default: true,
+	ui: {
+		tab: "appearance",
+		group: "显示",
+		label: "Shell 可视化",
+		description: "以交互式执行可视化呈现 Bash 命令，而非普通 Shell 命令文本",
+	},
+});
+
 export const cfgDisplayAdvisorCollapsedLines = register({
 	id: "display.advisorCollapsedLines",
 	type: "number",
@@ -818,6 +830,7 @@ effect(
 	combine({
 		hideToolActivity: cfgDisplayMode.map(mode => mode !== "detailed"),
 		compactToolActivity: cfgDisplayMode.map(mode => mode === "compact"),
+		shellVisualization: cfgDisplayShellVisualization,
 		readToolResultPreview: cfgReadToolResultPreview,
 		showImages: cfgTerminalShowImages,
 		cacheMissMarker: cfgDisplayCacheMissMarker,

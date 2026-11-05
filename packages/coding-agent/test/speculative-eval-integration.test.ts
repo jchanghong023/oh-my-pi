@@ -82,7 +82,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -176,7 +176,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-control-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -232,7 +232,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-final-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -291,7 +291,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-final-keep-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -344,7 +344,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-dispatch-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -404,7 +404,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-committed-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -477,7 +477,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-appended-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -527,7 +527,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-child-id-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -582,7 +582,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-denied-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -630,7 +630,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-discard-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -701,7 +701,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-restart-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -819,7 +819,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-reset-gate-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -905,7 +905,7 @@ describe("streamed eval speculation", () => {
 			getSessionSpawns: () => "*",
 			getEvalSessionId: () => "speculative-eval-failure-test",
 			getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-			getEvalBridgeToolNames: () => ["read"],
+			getAdvertisedEvalToolNames: () => ["read"],
 			settings,
 		};
 		const read = new ReadTool(session);
@@ -989,7 +989,7 @@ pythonIt("claims a Python read started before the outer eval call finishes strea
 		getSessionSpawns: () => "*",
 		getEvalSessionId: () => "speculative-eval-python-test",
 		getToolForEvalBridge: name => (name === "read" ? eraseToolSchema(read) : undefined),
-		getEvalBridgeToolNames: () => ["read"],
+		getAdvertisedEvalToolNames: () => ["read"],
 		settings,
 	};
 	const read = new ReadTool(session);

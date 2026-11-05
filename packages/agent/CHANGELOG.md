@@ -10,6 +10,8 @@
 
 - Exclude request-only context from later transcript and compaction token estimates without changing recorded provider usage.
 - Fixed steering and follow-up queue notifications observing a batch before its preparation claim was installed and missing the transition to delivery, leaving pending-message snapshots stale after asynchronous preparation.
+- Added `Agent.queuedMessageGate` to filter queued messages before delivery and observe claimed messages returned undelivered.
+- Added `wireToolsFingerprint()`, returning a hash of the tool specs sent with a request.
 
 ## [18.16.0] - 2026-11-02
 
