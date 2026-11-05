@@ -2,8 +2,6 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Serial } from "@oh-my-pi/pi-utils";
-import { testConcurrencyLimit } from "../../../scripts/test-gate-scheduler";
 
 // Declare the implementation loaded by the spawned CLI for Bun's native --changed graph.
 import "../src/tools";
@@ -13,11 +11,8 @@ describe("knowledge_search CLI without source files", () => {
 	let directory: string | undefined;
 	let preparedIndex: ReadonlyArray<{ name: string; bytes: Uint8Array }>;
 	const profile = "wiki-e2e";
-	// A rejection never poisons a Serial lane; its next scenario still runs.
-	const lanes = Array.from({ length: Math.min(2, testConcurrencyLimit()) }, () => new Serial());
-	// With a single CPU slot, don't start queued test watchdogs ahead of their scenarios.
-	const scenarioTest = lanes.length === 1 ? it.serial : it.concurrent;
-	let nextLane = 0;
+	// Start each real-process watchdog with its scenario, not while it waits in a private queue.
+	const scenarioTest = it.serial;
 	const sections = Array.from(
 		{ length: 12 },
 		(_, index) =>
@@ -76,16 +71,13 @@ describe("knowledge_search CLI without source files", () => {
 		dispose(): Promise<void>;
 	}
 
-	function withScenario(input: ScenarioInput, body: (scenario: Scenario) => Promise<void>): Promise<void> {
-		const lane = lanes[nextLane++ % lanes.length]!;
-		return lane.run(async () => {
-			const scenario = await createScenario(input, preparedIndex);
-			try {
-				await body(scenario);
-			} finally {
-				await scenario.dispose();
-			}
-		});
+	async function withScenario(input: ScenarioInput, body: (scenario: Scenario) => Promise<void>): Promise<void> {
+		const scenario = await createScenario(input, preparedIndex);
+		try {
+			await body(scenario);
+		} finally {
+			await scenario.dispose();
+		}
 	}
 
 	async function createScenario(

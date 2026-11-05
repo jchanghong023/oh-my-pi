@@ -15,7 +15,7 @@ const command = ["bun", "scripts/fulltest-ui-smoke.ts", ...args];
 // Explicit selectors retain the standalone runner's behavior. The normal
 // full suite can overlap independent fixtures; team and cancel share a stub.
 const parallelSuite = args.every(arg => arg === "--debug");
-const phases = parallelSuite ? ["--startup-only", "--team-group-only", "--repo-only"] : [undefined];
+const phases = parallelSuite ? ["--startup-only", "--team-group-only"] : [undefined];
 const concurrency = Math.min(phases.length, testConcurrencyLimit());
 const run = await beginTestRun(`dev TUI PTY smoke: ${args.join(" ") || "all scenarios"}`);
 const startedAt = new Date().toISOString();

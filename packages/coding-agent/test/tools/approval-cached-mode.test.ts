@@ -202,7 +202,7 @@ describe("always-ask-cached resolution", () => {
 
 	it("keeps native read-only index approval semantics through bare and wrapped xd targets", () => {
 		const agentDir = freshAgentDir();
-		const nativeTools = ["knowledge_search", "repo", "peek"].map(name => ({
+		const nativeTools = ["knowledge_search", "openwiki_search", "peek"].map(name => ({
 			...pathTool(name, "read", agentDir),
 			approvalCacheTargets: undefined,
 		}));

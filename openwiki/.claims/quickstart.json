@@ -27,16 +27,6 @@
       ]
     },
     {
-      "id": "claim_c9fa7557ea5844639320e156a7792540",
-      "statement": "终端可用 omp -c 恢复当前项目最近会话，-P 选择独立 profile，其聊天记录、设置和 Wiki／Repo 数据库隔离。",
-      "evidence": [
-        {
-          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L34-L45",
-          "version": "repo-lines-v1:sha256:92443b741258c424bcfc5313b78f3203a53c0716f29a9d1a66ee2ab8f0dbf903:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZlZWFmZjY0ZDFkNDdkZjVhYTgxMTM2NDNmOTM4OGJlMTk2NzM4YThmNDMwYWU4NTQzNDFiODM5ODE0MDc4ZGUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImU2MDE3OTliZjYwMGUyMzI2YjRiNDkwMzUxZDM2MmQxZjZiOTIwNzY1MzJkOGQ2ZDQzNWNmYzVlZDMzZjVmYTciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYzNjQyNjMwYmE2OTYzMWQ2NDUyN2NjZmUxZTIxZTI1YzBiZjlhZDE2MDM2OGVjYWIyMmViMTBmN2QyMzYyMzgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjE2MWQ5ZDFmZWEyZmUxMWEzNzUwODQyMmIxNjlkNjZhNTI2ODk1NmZlMWFkNWZmMjcxZjliOTQzN2JkNjZmYzgifQ"
-        }
-      ]
-    },
-    {
       "id": "claim_ae6b09adb63c40d795a738402d2e7422",
       "statement": "本 fork 安装器针对自身 Release 预编译二进制，新 Release 仅提供 Linux glibc x64 和 Windows x64，而上游 README 的公共安装方式不能直接视作 fork 发布渠道。",
       "evidence": [
@@ -145,20 +135,6 @@
         {
           "resource": "repo://docs-zh-CN/quick-start-intranet.md#L188-L201",
           "version": "repo-lines-v1:sha256:ad985be10d516c5330a62ee7c83973b4d64bf343251661824d483196d5a0de08:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjRiZGVlMDJhODdjMDM4NzVhYTIwZWFjZWExZjEyODBlMmQ5Njg0YzQ0NmIzNjUxZjlhNzM0Y2U2YWEyZTAyNmEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQzNTRiMTkyZGRlZDg1YzQ0YTc2M2IxNTgyZjQ3YzhiMDczOWM2NTA0YzQ1YTJjM2QzOTNiMjUzMGQxNzkxYzMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OGEyY2M4NzNiMTMwNTY5ZGJkZTM2NTkxMmMwMjVlN2JkNTUwNjNkOGE2N2NmNjJhYWY2NDA1ODgyNjNmNjEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImU5NzM5NjdiYWU0ZDJhYWI2Y2M5MGUxOGQ2ZDg4OWY2Y2UxM2E3MjhjZWViZTlkMTFhMDNmMjdhNDFiMzNmOGEifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_3df2d358d9ac4970ab216356227add47",
-      "statement": "Repo 索引由用户在面板显式确认建立，代码命中是定位线索；外部编辑或切分支后需完整更新，修改前应读取当前源码。",
-      "evidence": [
-        {
-          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L203-L221",
-          "version": "repo-lines-v1:sha256:bb45622a946794bf810bca294f74bfed87bf953d470e2f175a48fac582883d34:eyJzZWxlY3RlZExpbmVDb3VudCI6MTksImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEyYmZhNWYzMjYwNjVmZGM0OTcwZThjOWQxMjJlZDZlZWQ4YTUzYWM1NWQwNjIyMWU1Y2IzMTMxMTYzNjdhZmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4YzQyNWFiNzFiMzViYmIxM2VkYmI1ZDAyY2JlYzc1MjBmMzMwNDA4YzM5M2ZiOGE4ODAxMGFiZjlkYzBkNDEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjgyMjVkY2FjOWRjNTY1ZTIyYWIzZDYzNWRjYjRiMTI4NThmYWVlMDFkZjliNzIyM2E1NjllYWNiZjIwYzEyM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImIyN2U0NzU3ZDI2MDliMDNjNTk1YmUwZGJjNDk0Y2QyYzM3MDdjMWQzYTBkMDQyNDhjOWM0YWExOTQ4YzliODIifQ"
-        },
-        {
-          "resource": "repo://docs-zh-CN/quick-start-intranet.md#L239-L247",
-          "version": "repo-lines-v1:sha256:07af203a333c0d1fa03fcd5d564104d90f9773043dc4c45441da0dd33892e7a3:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYzRjNzFiMjVlMGQwZmViYTAxMzIzYWJiOGJkMWZkNjI4MjA1MTBiNWY4N2U2MWYxNGY3M2U2ZTY3MDMwNGY2YSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiN2UyMjQwZDFmM2JkNDlkNzgxZDNjNTcwMzAxZTg1YzZhZjYwOTUyNzlkZDI5MDQzMjVjNTljNDY0Y2Y4Y2JlZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYWY3NTM4MDE0OTQwNmYxMmRjYTQxMDYzNWM5MTQyYjdiYWMzZWM0YTZhNTEwZWI3ZmY3YTg0NGEwNzlhYzY5NyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDYxZDJmZDY0MGE3MGE2YmY5OWY2NWM2NzkxMmZlYjY0M2MzMjY0MjdjMTA2NmY5OGY5YTdlODY1N2M2YjhlMyJ9"
         }
       ]
     },

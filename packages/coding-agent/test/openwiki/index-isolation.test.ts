@@ -7,7 +7,7 @@ import { KnowledgeService } from "../../src/knowledge/service";
 import type { ToolSession } from "../../src/tools";
 import { KnowledgeSearchTool } from "../../src/tools/knowledge-search";
 import { OpenWikiReadTool, OpenWikiSearchTool } from "../../src/tools/openwiki";
-import { RepoTool } from "../../src/tools/repo";
+import { GrepTool } from "../../src/tools/grep";
 import { createMixedWorkspace } from "../helpers/mixed-session-workspace";
 
 function text(result: { content: Array<{ type: string; text?: string }> }) {
@@ -16,7 +16,7 @@ function text(result: { content: Array<{ type: string; text?: string }> }) {
 
 describe("OpenWiki independent index consumer boundary", () => {
 	// Unlike merely seeding a mixed session, invoke every real query consumer.
-	it("keeps document and code indexes queryable and unchanged while searching linked Wiki pages", async () => {
+	it("keeps document indexes and code search unchanged while searching linked Wiki pages", async () => {
 		using dir = TempDir.createSync("@omp-openwiki-index-isolation-");
 		const root = dir.join("repo");
 		const agent = dir.join("agent");
@@ -36,14 +36,12 @@ describe("OpenWiki independent index consumer boundary", () => {
 		const knowledge = new KnowledgeSearchTool(session);
 		const service = new KnowledgeService({ cwd: root, agentDir: agent });
 		try {
-			const repo = new RepoTool(session);
+			const grep = new GrepTool(session);
 			const wiki = new OpenWikiSearchTool(session);
-			expect([knowledge.name, repo.name, wiki.name]).toEqual(["knowledge_search", "repo", "openwiki_search"]);
 			const registry = path.join(agent, "openwiki", "wiki-workspaces.json");
 			const beforeRegistry = await readFile(registry, "utf8");
 			const beforeIndexes = await service.list();
-			const beforeCode = await repo.execute("code-before", { query: "MIXED_REPO_EVIDENCE" });
-			expect(text(beforeCode)).toContain("src/engine.py");
+			const beforeCode = await grep.execute("code-before", { pattern: "MIXED_REPO_EVIDENCE", path: "src" });
 			expect(text(beforeCode)).toContain("MIXED_REPO_EVIDENCE");
 			const beforeDocuments = await knowledge.execute("docs-before", { query: "MIXED_KNOWLEDGE_EVIDENCE" });
 			expect(text(beforeDocuments)).toContain("MIXED_KNOWLEDGE_EVIDENCE");
@@ -65,11 +63,8 @@ describe("OpenWiki independent index consumer boundary", () => {
 				expect(exact.sections[0].content).toContain("MIXED_WIKI_EVIDENCE");
 			}
 			expect(new Set(wikiResult.results.map(result => result.wiki)).size).toBe(2);
-			const afterCode = await repo.execute("code-after", { query: "MIXED_REPO_EVIDENCE" });
-			if (beforeCode.details?.action !== "search" || afterCode.details?.action !== "search") {
-				throw new Error("Repository searches did not return search details");
-			}
-			expect(afterCode.details.hits).toEqual(beforeCode.details.hits);
+			const afterCode = await grep.execute("code-after", { pattern: "MIXED_REPO_EVIDENCE", path: "src" });
+			expect(text(afterCode)).toBe(text(beforeCode));
 			expect(text(await knowledge.execute("docs-after", { query: "MIXED_KNOWLEDGE_EVIDENCE" }))).toBe(
 				text(beforeDocuments),
 			);

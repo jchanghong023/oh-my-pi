@@ -20,7 +20,7 @@ This repo contains multiple packages, but **`packages/coding-agent/`** is the pr
 | `packages/omptype`      | ArkType-compatible schema validation with a lazy JIT runtime                            |
 | `packages/utils`        | Shared utilities (logger, streams, temp files)                                          |
 | `crates/pi-natives`     | Rust crate for performance-critical text/grep ops                                       |
-| `crates/pi-wiki`        | Independent Rust wiki indexing core; `pi-natives` provides thin N-API bindings          |
+| `crates/pi-knowledge`   | Independent Rust Knowledge indexing core; `pi-natives` provides thin N-API bindings     |
 
 **Catalog import convention**: code in this repo imports catalog _values_ (bundled models, model-thinking helpers, identity, descriptors, model manager/cache) from `@oh-my-pi/pi-catalog/<module>` — never via `@oh-my-pi/pi-ai`. The pi-ai barrel re-exports only the model/effort _types_ its own signatures use (`Model`, `Api`, `ThinkingConfig`, `Effort`, …); type-only imports of those from `@oh-my-pi/pi-ai` are fine.
 
@@ -263,7 +263,7 @@ For the bash tool specifically:
 - `跑 full` / `运行 fulltest` means `bun run fulltest`; `跑 fast` means `bun run fastcheck`. NEVER infer `--full` or other flags from command names or words such as “完整” and “全量”.
 - NEVER commit unless asked.
 - Never use `tsc`/`npx tsc` — always `bun check`.
-- NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. Cargo and Nextest select all of `pi-wiki` and `pi-natives` namespaces `wiki::` and `python_symbols::`; scope is `rust-fork-features`. The independent `pi-wiki` doctest stage runs `cargo test -p pi-wiki --doc --no-fail-fast`; the native `cdylib` has no doctests. `fulltest` and `slowtest` test fork features, not the entire workspace; static checks and compilation retain their full scope.
+- NEVER run `cargo test` directly for Rust tests — use `bun run test:rs`. Cargo and Nextest select all of `pi-knowledge` and the `pi-natives` namespace `knowledge::`; scope is `rust-fork-features`. The independent `pi-knowledge` doctest stage runs `cargo test -p pi-knowledge --doc --no-fail-fast`; the native `cdylib` has no doctests. `fulltest` and `slowtest` test fork features, not the entire workspace; static checks and compilation retain their full scope.
 - Merge commits (maintainer merges of PRs) follow: `Merge PR #<number>: <conventional PR subject> (@<author>)` — e.g. `Merge PR #6386: feat(catalog): add native Meta Model API provider (@eggpeat)`.
 ## Rust Build Profiles
 

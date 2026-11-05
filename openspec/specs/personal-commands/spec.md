@@ -123,7 +123,7 @@ OMP MUST 让命令目录与相应宿主的派发能力一致，并在共享进�
 - **THEN** 以下具体约束适用：
 
 - 命令目录 MUST 支持 `includeTuiOnlyBuiltins` 与 `includeRpcBuiltins`：省略时 MUST NOT 广告仅 TUI 命令，声明时 MUST 同时广告可用处理器对应的命令。
-- 共享进程宿主的会话迁移 MUST 通过 `rebindCwd` 建立会话级目录绑定；MUST NOT 修改进程级项目目录，以免影响同进程中的兄弟会话。
+- 共享进程宿主 MUST 声明 `sessionScopedCwd`，会话迁移后由 sessionManager 提供当前目录；MUST NOT 修改进程级项目目录，以免影响同进程中的兄弟会话。
 - `/wt` 解析出的目标路径与当前会话目录相同时 MUST 跳过重定位，并且 MUST NOT 清理源工作树或其中的未提交内容。
 
 #### Scenario: 共享命令目录与会话迁移的可观察行为
@@ -225,26 +225,25 @@ OMP MUST 使用配置的注册表源并仅经确认授权安装带脚本的技�
 - **WHEN** 在 ACP/RPC 会话中执行 `/skills` 子命令，包括带脚本技能的安装
 - **THEN** 使用配置或默认注册表，未获确认时不安装，结果经会话通知输出并刷新技能状态
 
-### Requirement: `/knowledge` 与 `/repo` 的 RPC 面板
+### Requirement: `/knowledge` 的 RPC 面板
 
 OMP MUST 在 RPC 宿主以对话框面板提供索引维护，破坏性操作需二次确认，取消与会话切换安全中止。
 
-#### Scenario: `/knowledge` 与 `/repo` 的 RPC 面板的详细边界
+#### Scenario: `/knowledge` 的 RPC 面板的详细边界
 
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
 - `/knowledge` 面板 MUST 提供索引列表、新建索引（目录与名称输入）、删除索引、搜索与 grep，并 MUST 支持分页浏览命中章节。
-- `/repo` 面板 MUST 提供索引状态、构建、更新、重建与删除；删除 MUST 保留项目文件。
 - 删除等破坏性操作 MUST 先经确认对话框；用户取消 MUST 本次操作不产生任何变更。
 - 索引进度 MUST 节流上报（同一阶段未完成时至少间隔 200 毫秒），完成时 MUST 输出最终结果行。
 - 任一阶段 MUST 记录包含操作标识与阶段名的操作日志；输出失败 MUST 只记录警告，不中断索引。
 - 会话切换、销毁或取消信号触发时 MUST 中止当前索引操作并输出取消结果，MUST NOT 写入已切换会话。
 - TUI MUST 继续打开既有面板，语义与外观不变。
 
-#### Scenario: `/knowledge` 与 `/repo` 的 RPC 面板的可观察行为
+#### Scenario: `/knowledge` 的 RPC 面板的可观察行为
 
-- **WHEN** 在 RPC 宿主执行 `/knowledge` 或 `/repo` 并选择操作，或中途取消
+- **WHEN** 在 RPC 宿主执行 `/knowledge` 并选择操作，或中途取消
 - **THEN** 经确认后执行对应索引操作并按节流输出进度，取消与会话切换时安全中止
 
 ### Requirement: `/wt` 会话工作树

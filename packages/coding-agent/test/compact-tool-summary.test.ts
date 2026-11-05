@@ -43,11 +43,6 @@ describe("compact tool parameter summaries", () => {
 		},
 		{ name: "grep", args: { pattern: "TODO", path: "src" }, visible: ["TODO", "src"] },
 		{ name: "knowledge_search", args: { query: "mbist failure", path: "docs" }, visible: ["mbist failure", "docs"] },
-		{
-			name: "repo",
-			args: { action: "symbol", query: "Widget.render", path: "src" },
-			visible: ["symbol", "Widget.render", "src"],
-		},
 		{ name: "todo", args: { op: "start", task: "修复解析器" }, visible: ["start", "修复解析器"] },
 		{ name: "goal", args: { op: "create", objective: "完成迁移" }, visible: ["create", "完成迁移"] },
 		{ name: "task", args: { name: "Parser", agent: "task", task: "检查解析器" }, visible: ["Parser", "检查解析器"] },
@@ -127,7 +122,6 @@ describe("compact tool parameter summaries", () => {
 			detail: "",
 			command: "echo raw",
 		});
-		expect(summarizeCompactTool("repo", { action: "search", query: "TARGET", i: "INTENT" }).detail).toBe("INTENT");
 	});
 
 	// Eval preserves its source spelling; it is not guessed to be a shell or parsed as a browser invocation.
@@ -195,7 +189,7 @@ describe("compact tool parameter summaries", () => {
 
 	it("ignores wrong-type schema fields and leaves input objects unchanged", () => {
 		const args = Object.freeze({ action: {}, query: "Widget", path: [], i: 7, title: ["PRIVATE_TITLE"] });
-		expect(summarizeCompactTool("repo", args).detail).toContain("Widget");
+		expect(summarizeCompactTool("knowledge_search", args).detail).toContain("Widget");
 		expect(args).toEqual({ action: {}, query: "Widget", path: [], i: 7, title: ["PRIVATE_TITLE"] });
 		for (const name of [
 			"lsp",

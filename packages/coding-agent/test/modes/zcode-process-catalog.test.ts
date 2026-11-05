@@ -134,14 +134,7 @@ describe("ZCode actual public app-server process", () => {
 			.sort((a, b) => a.value.localeCompare(b.value));
 		expect(workspaceRows).toEqual(offlineRows);
 		const names = physical.frame.payload.snapshot.config.slashCommands.map(item => item.name.replace(/^\//, ""));
-		for (const name of [
-			"knowledge",
-			"repo",
-			"team",
-			"goal-autopilot",
-			"jch-workflowzbatch",
-			"skill:zcode-process-fixture",
-		]) {
+		for (const name of ["knowledge", "team", "goal-autopilot", "jch-workflowzbatch", "skill:zcode-process-fixture"]) {
 			expect(names).toContain(name);
 		}
 		const catalogParams = { workspace: workspace(config.cwdA) };

@@ -58,22 +58,21 @@ async function fixture() {
 		});
 		created.push(result);
 		const output: string[] = [];
-		const rebindCwd = vi.fn(async (newCwd: string): Promise<void> => {
-			runtime.cwd = newCwd;
-		});
 		const runtime = {
 			session: result.session,
 			sessionManager: manager,
 			settings,
-			cwd,
-			rebindCwd,
+			get cwd() {
+				return manager.getCwd();
+			},
+			sessionScopedCwd: true,
 			output: (text: string) => {
 				output.push(text);
 			},
 			refreshCommands: async () => {},
 			reloadPlugins: async () => {},
 		} as unknown as RpcSlashCommandRuntime;
-		return { ...result, runtime, manager, settings, output, rebindCwd };
+		return { ...result, runtime, manager, settings, output };
 	}
 	return { root, source, target, make };
 }
@@ -100,7 +99,6 @@ describe("personal command session isolation", () => {
 		const firstIdentity = first.manager.getSessionId();
 		const siblingIdentity = sibling.manager.getSessionId();
 		expect(await executeRpcBuiltinSlashCommand(`/move ${f.target}`, first.runtime)).toEqual({ consumed: true });
-		expect(first.rebindCwd).toHaveBeenCalledWith(f.target);
 		expect(first.manager.getCwd()).toBe(f.target);
 		expect(first.runtime.cwd).toBe(f.target);
 		expect(first.manager.getSessionId()).toBe(firstIdentity);
@@ -158,7 +156,6 @@ describe("personal command session isolation", () => {
 		expect(getProjectDir()).toBe(processDirectory);
 		expect(process.cwd()).toBe(nativeProcessDirectory);
 		expect(move).not.toHaveBeenCalled();
-		expect(host.rebindCwd).not.toHaveBeenCalled();
 		expect(git(f.source, "status", "--porcelain")).toBe(before);
 		expect(git(f.source, "diff", "--cached")).toBe(staged);
 		expect(await Bun.file(path.join(f.source, "tracked.txt")).text()).toBe("unstaged\n");

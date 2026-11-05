@@ -684,7 +684,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
 		const selected = [
 			"packages/ai/test/proxy.test.ts",
-			"packages/natives/test/python-symbols.test.ts",
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
@@ -693,8 +692,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/knowledge-index.test.ts",
 			"packages/coding-agent/test/knowledge-models.test.ts",
 			"packages/coding-agent/test/knowledge-semantic.test.ts",
-			"packages/coding-agent/test/repo-index.test.ts",
-			"packages/coding-agent/test/repo-review-regressions.test.ts",
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",

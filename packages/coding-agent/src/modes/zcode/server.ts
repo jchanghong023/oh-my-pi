@@ -2241,16 +2241,6 @@ export class ZCodeServer {
 			case "omp/wiki/cancel":
 				this.#registerIndexWorkspace(raw);
 				return this.indexes.handleKnowledge(method.slice("omp/wiki/".length), raw, this.#lifetime.signal);
-			case "omp/repo/status":
-			case "omp/repo/init":
-			case "omp/repo/update":
-			case "omp/repo/rebuild":
-			case "omp/repo/remove":
-			case "omp/repo/text":
-			case "omp/repo/symbol":
-			case "omp/repo/cancel":
-				this.#registerIndexWorkspace(raw);
-				return this.indexes.handleRepo(method.slice("omp/repo/".length), raw, this.#lifetime.signal);
 			case "omp/team/configure": {
 				const { workspace, request } = P.ompTeamConfigureParamsSchema.parse(raw);
 				const cwd = path.resolve(this.options.cwd ?? process.cwd());

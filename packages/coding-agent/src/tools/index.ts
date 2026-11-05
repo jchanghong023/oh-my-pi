@@ -73,7 +73,6 @@ import { MemoryReflectTool } from "./memory-reflect";
 import { MemoryRetainTool } from "./memory-retain";
 import { OpenWikiListWikisTool, OpenWikiListWorkspacesTool, OpenWikiReadTool, OpenWikiSearchTool } from "./openwiki";
 import { wrapToolWithMetaNotice } from "./output-meta";
-import { RepoTool } from "./repo";
 import { ReadTool } from "./read";
 import type { PlanProposalHandler } from "./resolve";
 import { SecurityScanTool } from "./security-scan";
@@ -155,7 +154,6 @@ export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./openwiki";
 export * from "./read";
-export * from "./repo";
 export * from "./knowledge-search";
 export * from "./report-tool-issue";
 export * from "./resolve";
@@ -627,7 +625,6 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	find: s => new FindTool(s),
 	lsp: LspTool.createIf,
 	knowledge_search: s => new KnowledgeSearchTool(s),
-	repo: s => new RepoTool(s),
 	openwiki_search: s => new OpenWikiSearchTool(s),
 	openwiki_read: s => new OpenWikiReadTool(s),
 	openwiki_list_workspaces: s => new OpenWikiListWorkspacesTool(s),
@@ -699,7 +696,6 @@ export async function resolveBuiltinToolPlan(session: ToolSession, toolNames?: s
 			: undefined;
 	if (!restrictToolNames && !session.toolRestrictions?.hasAllowlist && requestedTools?.includes("read")) {
 		if (!requestedTools.includes("knowledge_search")) requestedTools.push("knowledge_search");
-		if (!requestedTools.includes("repo")) requestedTools.push("repo");
 		if ((session.taskDepth ?? 0) === 0) {
 			for (const name of OPENWIKI_QUERY_TOOL_NAMES) {
 				if (!requestedTools.includes(name)) requestedTools.push(name);

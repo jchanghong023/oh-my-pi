@@ -262,7 +262,6 @@ export function resolveXdevTool(state: XdevState, name: string): Tool | undefine
 export function isReadOnlyIndexDevice(state: XdevState | undefined, name: string): boolean {
 	return (
 		(name === "knowledge_search" ||
-			name === "repo" ||
 			name === "openwiki_search" ||
 			name === "openwiki_read" ||
 			name === "openwiki_list_workspaces" ||

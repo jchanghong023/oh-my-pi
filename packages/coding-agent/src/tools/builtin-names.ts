@@ -14,7 +14,6 @@ export const BUILTIN_TOOL_NAMES = [
 	"find",
 	"lsp",
 	"knowledge_search",
-	"repo",
 	"openwiki_search",
 	"openwiki_read",
 	"openwiki_list_workspaces",

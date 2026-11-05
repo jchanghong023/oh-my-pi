@@ -7,7 +7,6 @@ import * as path from "node:path";
 import { Settings } from "../src/config/settings";
 import { KnowledgeService } from "../src/knowledge/service";
 import { getExtensionUISelectOptionLabel, type ExtensionUIContext } from "../src/extensibility/extensions/types";
-import { RepoService } from "../src/repo/service";
 import type { AgentSession } from "../src/session/agent-session";
 import { executeRpcBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { RpcSlashCommandRuntime } from "../src/slash-commands/types";
@@ -25,7 +24,6 @@ async function fixture() {
 	const agentDir = path.join(directory, "agent");
 	const docsDir = path.join(directory, "docs");
 	await Promise.all([cwd, agentDir, docsDir].map(value => fs.mkdir(value)));
-	await Bun.write(path.join(cwd, "engine.py"), "def sensor_target(): return 'sensorbeacon'\n");
 	await Bun.write(path.join(docsDir, "manual.md"), "# Sensors\n\nThe sensorbeacon measures temperature.\n");
 	const settings = await Settings.loadIsolated({ cwd, agentDir, inMemory: true });
 	const session = {
@@ -479,156 +477,35 @@ describe("RPC index commands use the real index services", () => {
 		}
 	});
 
-	test("repository build requires confirmation of the actual root, then update and deletion preserve project files", async () => {
+	test("a session switch while deletion confirmation is pending cannot remove an index or output into the new session", async () => {
 		const f = await fixture();
-		f.select.mockResolvedValueOnce("Build repository index");
-		await f.run("/repo");
-		expect(f.confirm.mock.calls[0]?.[0]).toBe("Build repository index?");
-		const missing = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+		const before = new KnowledgeService({ cwd: f.cwd, agentDir: f.agentDir });
 		try {
-			expect(f.confirm.mock.calls[0]?.[1]).toBe(`Root: ${missing.root}`);
-			expect((await missing.status()).exists).toBe(false);
+			await before.init(f.docsDir, "manual");
 		} finally {
-			missing.close();
+			await before.close();
 		}
-
-		f.select.mockResolvedValueOnce("Build repository index");
-		f.confirm.mockResolvedValueOnce(true);
-		await f.run("/repo");
-		expect(f.output.join("\n")).toContain("Build repository index complete.");
-		await Bun.write(path.join(f.cwd, "engine.py"), "def sensor_updated(): return 'updatedbeacon'\n");
-		f.select.mockResolvedValueOnce("Update repository index");
-		await f.run("/repo");
-		const updated = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
-		try {
-			expect((await updated.symbol("sensor_updated")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
-			expect((await updated.search("sensorbeacon")).hits).toEqual([]);
-		} finally {
-			updated.close();
-		}
-
-		f.select.mockResolvedValueOnce("Delete repository index");
-		f.confirm.mockResolvedValueOnce(true);
-		await f.run("/repo");
-		const removed = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
-		try {
-			expect((await removed.status()).exists).toBe(false);
-		} finally {
-			removed.close();
-		}
-		expect(await Bun.file(path.join(f.cwd, "engine.py")).text()).toContain("sensor_updated");
-	});
-
-	test("repository rebuild recovers a corrupt database only after confirmation", async () => {
-		const f = await fixture();
-		const before = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
-		await before.build();
-		const indexPath = before.storage.path;
-		before.close();
-		await Bun.write(indexPath, "corrupt database");
 		const events: LogEvent[] = [];
-		const operationId = "rpc-repo-recovery-regression";
+		const operationId = "rpc-knowledge-session-switch-regression";
 		const dispose = registerLogSink(event => {
 			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
 		});
 		try {
-			f.select.mockResolvedValueOnce("Rebuild repository index");
-			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
-			expect(await Bun.file(indexPath).text()).toBe("corrupt database");
-			expect(f.output.join("\n")).toContain("Unable to read repository index status:");
-			const firstCall = events[0]?.context?.call_id;
-			expect(firstCall).toEqual(expect.any(String));
-			expect(events.map(event => event.context?.event)).toEqual([
-				"rpc_index_dashboard_started",
-				"rpc_index_dashboard_stage_failed",
-				"rpc_index_dashboard_cancelled",
-			]);
-			expect(events[1]).toMatchObject({
-				level: "error",
-				context: {
-					command: "/repo",
-					stage: "repo_status",
-					result: "failed",
-					error_type: "Error",
-					operation_id: operationId,
-					call_id: firstCall,
-					elapsed_ms: expect.any(Number),
-				},
-			});
-			expect(events[2]?.context).toMatchObject({ result: "cancelled", call_id: firstCall });
-			f.select.mockResolvedValueOnce("Rebuild repository index");
-			f.confirm.mockResolvedValueOnce(true);
-			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
-			expect(f.output.join("\n")).toContain("Rebuild repository index complete.");
-			const recovered = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
-			try {
-				expect(recovered.storage.recoveryError).toBeUndefined();
-				expect((await recovered.symbol("sensor_target")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
-			} finally {
-				recovered.close();
-			}
-			expect(events.slice(3).map(event => event.context?.event)).toEqual([
-				"rpc_index_dashboard_started",
-				"rpc_index_dashboard_stage_failed",
-				"rpc_index_dashboard_completed",
-			]);
-			const recoveryCall = events[3]?.context?.call_id;
-			expect(recoveryCall).toEqual(expect.any(String));
-			expect(recoveryCall).not.toBe(firstCall);
-			expect(events[4]).toMatchObject({
-				level: "error",
-				context: {
-					command: "/repo",
-					stage: "repo_status",
-					result: "failed",
-					operation_id: operationId,
-					call_id: recoveryCall,
-					elapsed_ms: expect.any(Number),
-				},
-			});
-			expect(events[5]?.context).toMatchObject({
-				stage: "index_output",
-				result: "completed",
-				call_id: recoveryCall,
-			});
-			const serialized = JSON.stringify(events);
-			for (const sensitive of [
-				indexPath,
-				f.cwd,
-				f.agentDir,
-				"Repository index recovery required",
-				"corrupt database",
-				"engine.py",
-			]) {
-				expect(serialized).not.toContain(sensitive);
-			}
-		} finally {
-			dispose();
-		}
-	});
-
-	test("a session switch while root confirmation is pending cannot create an index or output into the new session", async () => {
-		const f = await fixture();
-		const events: LogEvent[] = [];
-		const operationId = "rpc-repo-session-switch-regression";
-		const dispose = registerLogSink(event => {
-			if (event.context?.operation_id === operationId && event.context.component === "rpc") events.push(event);
-		});
-		try {
-			f.select.mockResolvedValueOnce("Build repository index");
+			f.select.mockResolvedValueOnce("Delete knowledge index").mockResolvedValueOnce("1. manual");
 			let outputCount = 0;
 			f.confirm.mockImplementationOnce(async () => {
 				outputCount = f.output.length;
 				f.session.sessionGeneration++;
 				return true;
 			});
-			await logger.withLogContext({ operation_id: operationId }, () => f.run("/repo"));
+			await logger.withLogContext({ operation_id: operationId }, () => f.run("/knowledge"));
 			expect(f.output).toHaveLength(outputCount);
-			const service = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+			const service = new KnowledgeService({ cwd: f.cwd, agentDir: f.agentDir });
 			try {
-				expect((await service.status()).exists).toBe(false);
+				expect((await service.list()).map(index => index.name)).toEqual(["manual"]);
+				expect((await service.search("sensorbeacon")).sections).toHaveLength(1);
 			} finally {
-				service.close();
+				await service.close();
 			}
 			expect(events.map(event => event.context?.event)).toEqual([
 				"rpc_index_dashboard_started",
@@ -638,8 +515,8 @@ describe("RPC index commands use the real index services", () => {
 			expect(events[1]).toMatchObject({
 				level: "info",
 				context: {
-					command: "/repo",
-					stage: "maintenance_confirm",
+					command: "/knowledge",
+					stage: "delete_confirm",
 					result: "cancelled",
 					operation_id: operationId,
 					call_id: events[0]?.context?.call_id,
@@ -649,7 +526,7 @@ describe("RPC index commands use the real index services", () => {
 				},
 			});
 			const serialized = JSON.stringify(events);
-			for (const sensitive of [f.cwd, f.agentDir, "Build repository index?", "Root:"]) {
+			for (const sensitive of [f.cwd, f.agentDir, "Delete knowledge index?", "Source files are preserved."]) {
 				expect(serialized).not.toContain(sensitive);
 			}
 		} finally {
@@ -675,25 +552,31 @@ describe("RPC index commands use the real index services", () => {
 		expect(f.output.slice(1).join("\n")).toMatch(/cancel/i);
 	});
 
-	test("cancelled repository rebuilding preserves the previous usable generation", async () => {
+	test("cancelled knowledge import preserves an existing searchable snapshot", async () => {
 		const f = await fixture();
-		const before = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
-		const generation = (await before.build()).generation;
-		before.close();
-		f.select.mockResolvedValueOnce("Rebuild repository index");
-		f.confirm.mockResolvedValueOnce(true);
+		const before = new KnowledgeService({ cwd: f.cwd, agentDir: f.agentDir });
+		try {
+			await before.init(f.docsDir, "manual");
+		} finally {
+			await before.close();
+		}
+		await Bun.write(path.join(f.cwd, "replacement.md"), "# Replacement\n\nUnpublished replacement evidence.\n");
+		f.select.mockResolvedValueOnce("New knowledge index");
+		f.input.mockResolvedValueOnce(f.cwd).mockResolvedValueOnce("cancelled");
 		f.runtime.output = text => {
 			f.output.push(text);
-			if (text.startsWith("/repo: enumerating")) f.controller.abort();
+			if (text.startsWith("/knowledge: scan")) f.controller.abort();
 		};
-		await f.run("/repo");
-		expect(f.output.join("\n")).not.toContain("Rebuild repository index complete.");
-		const retained = new RepoService({ cwd: f.cwd, agentDir: f.agentDir });
+		await f.run("/knowledge");
+		expect(f.controller.signal.aborted).toBe(true);
+		expect(f.output.join("\n")).toContain("/knowledge cancelled.");
+		expect(f.output.join("\n")).not.toContain("Created knowledge index cancelled:");
+		const retained = new KnowledgeService({ cwd: f.cwd, agentDir: f.agentDir });
 		try {
-			expect((await retained.status()).generation).toBe(generation);
-			expect((await retained.symbol("sensor_target")).hits).toHaveLength(1);
+			expect((await retained.list()).map(index => index.name)).toEqual(["manual"]);
+			expect((await retained.search("sensorbeacon")).sections).toHaveLength(1);
 		} finally {
-			retained.close();
+			await retained.close();
 		}
 	});
 });

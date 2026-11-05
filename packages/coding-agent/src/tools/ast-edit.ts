@@ -749,12 +749,12 @@ export class AstEditTool implements AgentTool<typeof astEditSchema, AstEditToolD
 										if (applyStage === "native_apply") {
 											// Native apply commits files sequentially and can reject after a partial write.
 											// Preview paths are candidates, not proof of success or an exhaustive
-											// post-preview scope: keep the index uncertain until full reconciliation.
+											// post-preview scope: notify observers of possible partial writes.
 											invalidateFsScanAfterUncertainWrites(
 												result.fileChanges.map(change =>
 													resolveAstEditResultPath(resolvedSearchPath, isDirectory, change.path),
 												),
-												"AST edit apply failed; files may have been partially written; reconcile to verify coverage",
+												"AST edit apply failed; files may have been partially written",
 											);
 										}
 										logger.error("Deferred AST edit apply failed", {

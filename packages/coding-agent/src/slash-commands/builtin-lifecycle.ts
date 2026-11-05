@@ -110,7 +110,7 @@ async function relocateHeadlessSession(
 	}
 	try {
 		// 共享进程 Host 由 sessionManager 唯一持有 cwd，不能修改兄弟会话的进程目录。
-		if (!runtime.rebindCwd) setProjectDir(resolvedPath);
+		if (!runtime.sessionScopedCwd) setProjectDir(resolvedPath);
 	} catch (err) {
 		try {
 			await runtime.sessionManager.rollbackMove(previousState);
@@ -923,8 +923,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 	},
 ];
 async function rescopeHeadlessToCwd(runtime: SlashCommandRuntime, cwd: string): Promise<void> {
-	if (runtime.rebindCwd) await runtime.rebindCwd(cwd);
-	else setProjectDir(cwd);
+	if (!runtime.sessionScopedCwd) setProjectDir(cwd);
 	await runtime.settings.reloadForCwd(cwd);
 	await rebindMemoryBackendForCwd(runtime.session);
 	clearClaudePluginRootsCache();

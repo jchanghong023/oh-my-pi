@@ -3,24 +3,6 @@
   "pageVersion": "sha256:4bd792425298db9f6525b995a5317d90b1494bf38df323cc3505679cbf297798",
   "claims": [
     {
-      "id": "claim_fa15f492c4ae4619a3ea8ff41942831f",
-      "statement": "OMP 内置 OpenWiki 是 vendored fork 的进程内仓库 Wiki 适配，而生成页面、fork 引擎和既有 wiki/repo 索引各有边界。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/openwiki/spec.md#L139-L149",
-          "version": "repo-lines-v1:sha256:61a02b131185fd16b04c68e4b0d917d2c7f6f667063f00bb763ec8787e568fbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzYjc3MTg2MjQ0OTIyMThkNjYzYWZkNWJiNzNhNGRkZmZkMmFhNWMzYjVmNjk0NjZlYjYzNTJlNzE2MDdlMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOTMzMTJlMzJlYjJiOTgzMWMxZDRmYTRiYjI0Y2RhYTZmYjJkMjkyMjc5OTI5ZDZlODAzZTYxNGMxOGY2NDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OTUyMDdlZjNhMTUzYzc4YWU4MzUxYzY1YjI4MTI1MWE1ZDhlMTE3YTgxNGJiMzQ1ZGNhMzUyNDY1ZGZhMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3NTg4ZWE1NmM2ZDcwMjBhOWNkODExMDAzNDkzY2FmM2QzYWEyY2ZhNGRjNDJkYWVhYzI3ODdjMDE2MDJmMmEifQ"
-        },
-        {
-          "resource": "repo://openspec/specs/openwiki/spec.md#L3-L10",
-          "version": "repo-lines-v1:sha256:b26a7f897c0dd0b83efd59766c9c054111dd612c9fb48bcec903559fc7125b14:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTk0NDEzMjk3YTNlOTVhOWI3MmY1ZTRjMDRhYTljMzA2ZjkwMDlhZDg4ZmEwZjk5NDUzZDE5NjM4MzU2NjhiOSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZGY5MWIyMmViYmRiMjZhOTk1N2U4ZTRhNjkyNjY3ODQ3YjRkMTE4MmI0MDRiNjJiNzcyYjA0MDA3OWE2ZTNlZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjIsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjY2YmY5NDY3ZTMzYzQxOWNlZTQwNTIwNzU3N2EyN2FmYWNkZjNiNWUzMDQ1MDc1MGQzOGNiYjNhNjAwY2NhYSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMTlkMWViOGEwMDZkODVmOTVmZGEyYzc0ZjNlNmIxNTc0N2E2NjViZDJmNTcyYzE1Yjc2Y2U4Yzk3MGFmMjI0MSJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/openwiki/vendor-loader.ts",
-          "version": "repo-file-v1:sha256:2e24cbc290eaaf447a40f7c2ecf746f52b13693273518b8073937c8c8f12982b"
-        }
-      ]
-    },
-    {
       "id": "claim_e4d984f4babe448ab28db9b40a6d55dc",
       "statement": "CLI 支持仓库 init、update、链接、工作区和可视化，默认 zh-CN，排除个人模式、连接器及 CLI 查询等功能。",
       "evidence": [
@@ -217,16 +199,6 @@
         {
           "resource": "repo://packages/coding-agent/src/openwiki/model.ts#L83-L129",
           "version": "repo-lines-v1:sha256:048f49fd9d980e06603c4854e1e099d58ed86380791f8d2128d6c7dbc5c9366b:eyJzZWxlY3RlZExpbmVDb3VudCI6NDcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjkwYTc3MTk5MTNkODJjNDg0OWFlN2NlMjI5OWZjNmQ3MDRkMTFkMDVjMjUwOTc2MjM3YTVlYzU2N2YyN2FjMTAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjdhZjA5NmZjNGYwNTI0YjY0Y2UxYThmNzk1ZjEzNmQyZjdmMDVlZjAyYWNhNjMwZmQ3MTM1MmU0YzgzZDM2NTQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNkOGZkOGI2NDRkOTI5ZjQ2M2M0NzZiODA0Mzc0ZGY2ZWQ2MjgyM2ExMmEyODBhMzgyZmM1MGE3NDJiNTI1MTUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUyMWYxYWJkMjExNDBkMGFhYjJlYTFmNzAwMTQ2ZDNjYTNkNGJjYmM3MzE1ODg5YjU2NDI5YWU5NjU5NDZiNzgifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_df1e3cf8b14a4baaa65fa678af8933b7",
-      "statement": "OpenWiki 与现有文档和代码索引独立，普通任务不会自动预加载 Wiki。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/openwiki/spec.md#L139-L149",
-          "version": "repo-lines-v1:sha256:61a02b131185fd16b04c68e4b0d917d2c7f6f667063f00bb763ec8787e568fbe:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUzYjc3MTg2MjQ0OTIyMThkNjYzYWZkNWJiNzNhNGRkZmZkMmFhNWMzYjVmNjk0NjZlYjYzNTJlNzE2MDdlMjYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVkOTMzMTJlMzJlYjJiOTgzMWMxZDRmYTRiYjI0Y2RhYTZmYjJkMjkyMjc5OTI5ZDZlODAzZTYxNGMxOGY2NDkiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc5OTUyMDdlZjNhMTUzYzc4YWU4MzUxYzY1YjI4MTI1MWE1ZDhlMTE3YTgxNGJiMzQ1ZGNhMzUyNDY1ZGZhMjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3NTg4ZWE1NmM2ZDcwMjBhOWNkODExMDAzNDkzY2FmM2QzYWEyY2ZhNGRjNDJkYWVhYzI3ODdjMDE2MDJmMmEifQ"
         }
       ]
     },

@@ -147,7 +147,6 @@ import { getEditStore } from "../edit/store";
 import { releaseCompletionHandles } from "../eval/completion-bridge";
 import { releaseJudgmentBatches } from "../eval/judgment-batch-bridge";
 import type { EvalPreludeDefinition } from "../eval/preludes";
-import { RepoLifecycle } from "../repo/lifecycle";
 import type { PythonResult } from "../eval/py/executor";
 import { EVAL_STATE_CONTEXT_TYPE, formatEvalStateContext, isEvalStateContext } from "../eval/state";
 import { WorkPoolRegistry } from "../task/workpool";
@@ -278,7 +277,6 @@ import {
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { supportsExternalThinking } from "../tools/think";
 import { USER_TODO_EDIT_CUSTOM_TYPE } from "../tools/todo";
-import type { XdevDispatch } from "../tools/xdev";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { currentThreadId, isMainThread } from "../thread/identity";
@@ -1121,7 +1119,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#commandMetadataChangedListeners: CommandMetadataChangedListener[] = [];
 	#sessionChangeCallbacks = new Set<() => void>();
 	#inputDeliveryHandler?: (source: PromptOptions["sourceCommand"], signal?: AbortSignal) => Promise<void>;
-	#repoLifecycle?: RepoLifecycle;
 	#observedSessionId: string | undefined;
 
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
@@ -6374,69 +6371,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	registerSessionChangeCallback(callback: () => void): () => void {
 		this.#sessionChangeCallbacks.add(callback);
 		return () => this.#sessionChangeCallbacks.delete(callback);
-	}
-
-	/** Attach after SDK initialization so every dispatcher (TUI, ACP, headless) observes executions. */
-	attachRepoLifecycle(lifecycle: RepoLifecycle): void {
-		this.#repoLifecycle = lifecycle;
-		lifecycle.start();
-		const unregisterSessionChange = this.registerSessionChangeCallback(() => lifecycle.onSessionChange());
-		const dispatchedCommands = new Map<string, XdevDispatch>();
-		const unsubscribeToolEvents = this.subscribe(event => {
-			// The write transport preserves the canonical tool and its execution
-			// details in xdev. Retain live metadata when an interrupt replaces the
-			// final result with the agent loop's transport-level interruption marker.
-			if (event.type === "tool_execution_update" && event.toolName === "write") {
-				const dispatch = event.partialResult?.details?.xdev;
-				if (dispatch?.mode === "execute" && (dispatch.tool === "eval" || dispatch.tool === "bash")) {
-					dispatchedCommands.set(event.toolCallId, dispatch);
-				}
-				return;
-			}
-			if (event.type !== "tool_execution_end") return;
-			const previousDispatch = dispatchedCommands.get(event.toolCallId);
-			dispatchedCommands.delete(event.toolCallId);
-			const outerDetails = event.result?.details;
-			const dispatch = event.toolName === "write" ? (outerDetails?.xdev ?? previousDispatch) : undefined;
-			if (dispatch && dispatch.mode !== "execute") return;
-			const kind = event.toolName === "write" ? dispatch?.tool : event.toolName;
-			if (kind !== "bash" && kind !== "eval") return;
-			const details = dispatch ? (dispatch.inner ?? previousDispatch?.inner) : outerDetails;
-			// Refused and validation-error calls did not execute. A non-zero exit,
-			// timeout, or interrupt after tool execution started may have mutated files.
-			const interruptedAfterStart = outerDetails?.__interrupted === true && outerDetails?.execution === "started";
-			if (
-				event.isError &&
-				!details?.exitCode &&
-				!details?.timedOut &&
-				!(kind === "eval" && Array.isArray(details?.cells)) &&
-				!interruptedAfterStart
-			)
-				return;
-			lifecycle.commandExecuted(kind);
-			// A background result only schedules the command. A panel reconcile can
-			// finish before the job actually mutates the tree, so invalidate again
-			// at settlement even when its delivery was suppressed by wait/cancel.
-			const asyncJob = details?.async;
-			if (asyncJob?.state !== "running" || typeof asyncJob.jobId !== "string") return;
-			const job = this.#asyncJobManager?.getJob(asyncJob.jobId);
-			if (!job || job.type !== kind || (this.#agentId && job.ownerId !== this.#agentId)) return;
-			void job.promise.then(() => {
-				if (this.#repoLifecycle === lifecycle) lifecycle.commandExecuted(kind);
-			});
-		});
-		this.addDisposer(() => {
-			unsubscribeToolEvents();
-			dispatchedCommands.clear();
-			unregisterSessionChange();
-			this.#repoLifecycle = undefined;
-			lifecycle.dispose();
-		});
-	}
-
-	/** Called by a host after an independent cwd move commits. */
-	refreshRepoLifecycle(): void {
-		this.#repoLifecycle?.onSessionChange();
 	}
 
 	subscribeCommandMetadataChanged(listener: CommandMetadataChangedListener): () => void {
@@ -13929,17 +13863,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * @param options.onRecorded Receives the `bashExecution` message the run is recorded as, once it is persisted or queued; a throw is logged
 	 */
 	executeBash(command: string, onChunk?: (chunk: string) => void, options?: BashExecuteOptions): Promise<BashResult> {
-		const execution = this.#bash.executeBash(command, onChunk, options);
-		return execution.then(
-			result => {
-				this.#repoLifecycle?.commandExecuted("bash");
-				return result;
-			},
-			error => {
-				this.#repoLifecycle?.commandExecuted("bash");
-				throw error;
-			},
-		);
+		return this.#bash.executeBash(command, onChunk, options);
 	}
 
 	/** Record a bash result supplied outside executeBash in the current ownership scope. */
@@ -13979,17 +13903,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		onChunk?: (chunk: string) => void,
 		options?: PythonExecuteOptions,
 	): Promise<PythonResult> {
-		const execution = this.#eval.executePython(code, onChunk, options);
-		return execution.then(
-			result => {
-				this.#repoLifecycle?.commandExecuted("eval");
-				return result;
-			},
-			error => {
-				this.#repoLifecycle?.commandExecuted("eval");
-				throw error;
-			},
-		);
+		return this.#eval.executePython(code, onChunk, options);
 	}
 
 	assertEvalExecutionAllowed(): void {
@@ -14798,9 +14712,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#releaseHeldQueuedMessages([...previousSteeringMessages, ...previousFollowUpMessages]);
 			if (previousSessionState.sessionId !== this.sessionManager.getSessionId()) {
 				this.#notifySessionChangeCallbacks();
-			}
-			if (path.resolve(previousSessionState.cwd) !== path.resolve(this.sessionManager.getCwd())) {
-				this.refreshRepoLifecycle();
 			}
 			generationSettled.resolve();
 			this.#sessionGenerationSettled = previousSessionGenerationSettled;

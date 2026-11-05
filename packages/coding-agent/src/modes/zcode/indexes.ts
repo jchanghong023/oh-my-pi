@@ -4,10 +4,6 @@ import { getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { z } from "zod";
 import { KnowledgeService } from "../../knowledge/service";
 import type { KnowledgeProgress } from "../../knowledge/types";
-import { REPO_EXCLUSIONS } from "../../repo/files";
-import { normalizeRepoQueryPath, RepoService, resolveRepoRoot, validateRepoQueryLength } from "../../repo/service";
-import { repoIndexPath } from "../../repo/storage";
-import type { RepoProgress, RepoQueryResult, RepoStatus } from "../../repo/types";
 import { LegacyProtocol as L } from "./schema";
 
 const text = z.string().min(1);
@@ -29,24 +25,6 @@ export const ompKnowledgeParamsSchema = z.discriminatedUnion("action", [
 	z.object({ ...knowledgeQuery, action: z.literal("grep"), case: z.boolean().optional() }).strict(),
 	z.object({ ...base, action: z.literal("cancel") }).strict(),
 ]);
-const repoQuery = {
-	...base,
-	query: text,
-	path: text.optional(),
-	category: z.enum(["source", "test", "config", "other"]).optional(),
-	limit: z.number().int().min(1).max(50).optional(),
-	cursor: text.optional(),
-};
-export const ompRepoParamsSchema = z.discriminatedUnion("action", [
-	z.object({ ...base, action: z.literal("status") }).strict(),
-	z.object({ ...base, action: z.literal("init"), confirmedRoot: text }).strict(),
-	z.object({ ...base, action: z.literal("update"), confirmedRoot: text }).strict(),
-	z.object({ ...base, action: z.literal("rebuild"), confirmedRoot: text }).strict(),
-	z.object({ ...base, action: z.literal("remove"), confirmedRoot: text }).strict(),
-	z.object({ ...repoQuery, action: z.literal("text") }).strict(),
-	z.object({ ...repoQuery, action: z.literal("symbol") }).strict(),
-	z.object({ ...base, action: z.literal("cancel") }).strict(),
-]);
 type Scope = { workspace: z.infer<typeof workspaceSchema>; operationId: string; action: string };
 interface Operation {
 	controller: AbortController;
@@ -55,71 +33,13 @@ interface Operation {
 export interface OmpIndexesBridgeOptions {
 	agentDir?: string;
 	notify(
-		method: "omp/wiki/progress" | "omp/repo/progress",
+		method: "omp/wiki/progress",
 		params: {
 			operationId: string;
 			workspace: z.infer<typeof workspaceSchema>;
-			progress: KnowledgeProgress | RepoProgress;
+			progress: KnowledgeProgress;
 		},
 	): void;
-}
-
-// tools/repo 的 missing helpers 不公开；这里只映射相同结果，不为只读请求打开原生存储。
-function missingRepoStatus(root: string): RepoStatus {
-	return {
-		root,
-		exists: false,
-		generation: null,
-		fileCount: 0,
-		symbolCount: 0,
-		failures: [],
-		failureCount: 0,
-		failuresTruncated: false,
-		pendingPaths: [],
-		pendingCount: 0,
-		pendingTruncated: false,
-		needsReconcile: false,
-		uncertainReasons: [],
-		uncertainCount: 0,
-		uncertaintyTruncated: false,
-		unchecked: true,
-		lastFullCheck: null,
-		incomplete: true,
-		exclusions: REPO_EXCLUSIONS,
-	};
-}
-
-async function repositoryIndexExists(databasePath: string): Promise<boolean> {
-	try {
-		await fs.stat(databasePath);
-		return true;
-	} catch (error) {
-		if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
-		throw error;
-	}
-}
-
-function missingRepoQuery(root: string, cursor: string | undefined): RepoQueryResult<never> {
-	if (cursor) {
-		let value: unknown;
-		try {
-			value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
-		} catch {
-			throw new Error("Invalid repository index cursor");
-		}
-		if (value && typeof value === "object" && "generation" in value && value.generation !== null)
-			throw new Error("Stale repository index cursor; restart the search");
-		throw new Error("Invalid repository index cursor");
-	}
-	return {
-		root,
-		generation: null,
-		status: "missing",
-		hits: [],
-		truncated: false,
-		warnings: [],
-		coverage: missingRepoStatus(root),
-	};
 }
 
 /** Only adapts native services: they remain the sole owners of persisted index generations. */
@@ -127,9 +47,7 @@ export class OmpIndexesBridge {
 	readonly #options: OmpIndexesBridgeOptions;
 	readonly #agentDir: string;
 	readonly #knowledge = new Map<string, KnowledgeService>();
-	readonly #repos = new Map<string, RepoService>();
 	readonly #operations = new Map<string, Operation>();
-	readonly #mutations = new Set<string>();
 	#disposed = false;
 	#disposing?: Promise<void>;
 
@@ -145,10 +63,9 @@ export class OmpIndexesBridge {
 		return canonical;
 	}
 
-	#key(kind: string, params: Scope, cwd: string): string {
+	#key(params: Scope, cwd: string): string {
 		// 路径和身份共同约束取消，不能让另一工作区复用 operationId 取消当前任务。
 		return JSON.stringify([
-			kind,
 			cwd,
 			params.workspace.workspaceIdentity ?? cwd,
 			params.workspace.workspaceKey,
@@ -158,21 +75,16 @@ export class OmpIndexesBridge {
 	}
 
 	async #run<T>(
-		kind: "knowledge" | "repo",
 		params: Scope,
 		signal: AbortSignal | undefined,
-		work: (
-			cwd: string,
-			signal: AbortSignal,
-			progress: (value: KnowledgeProgress | RepoProgress) => void,
-		) => Promise<T>,
+		work: (cwd: string, signal: AbortSignal, progress: (value: KnowledgeProgress) => void) => Promise<T>,
 	): Promise<T | { cancelled: boolean }> {
 		if (this.#disposed) throw new Error("Index bridge is disposed");
 		signal?.throwIfAborted();
 		const cwd = await this.#directory(params.workspace.workspacePath);
 		if (this.#disposed) throw new Error("Index bridge is disposed");
 		signal?.throwIfAborted();
-		const key = this.#key(kind, params, cwd);
+		const key = this.#key(params, cwd);
 		if (params.action === "cancel") {
 			const active = this.#operations.get(key);
 			active?.controller.abort(new DOMException("Index operation cancelled", "AbortError"));
@@ -188,7 +100,7 @@ export class OmpIndexesBridge {
 		try {
 			const result = await work(cwd, controller.signal, progress => {
 				if (this.#disposed || controller.signal.aborted || this.#operations.get(key) !== operation) return;
-				this.#options.notify(kind === "knowledge" ? "omp/wiki/progress" : "omp/repo/progress", {
+				this.#options.notify("omp/wiki/progress", {
 					operationId: params.operationId,
 					workspace: params.workspace,
 					progress,
@@ -209,7 +121,7 @@ export class OmpIndexesBridge {
 		const { action: methodSchema, ...shape } = schema.shape;
 		const payload = z.object(shape).strict().parse(raw);
 		const params = ompKnowledgeParamsSchema.parse({ ...payload, action: methodSchema.value });
-		return this.#run("knowledge", params, signal, async (cwd, inner, onProgress) => {
+		return this.#run(params, signal, async (cwd, inner, onProgress) => {
 			let service = this.#knowledge.get(cwd);
 			if (!service) {
 				service = new KnowledgeService({ agentDir: this.#agentDir, cwd });
@@ -245,100 +157,17 @@ export class OmpIndexesBridge {
 		});
 	}
 
-	handleRepo(action: string, raw: unknown, signal?: AbortSignal) {
-		const schema = ompRepoParamsSchema.options.find(option => option.shape.action.value === action);
-		if (!schema) throw new Error(`Unknown Repo method: ${action}`);
-		const { action: methodSchema, ...shape } = schema.shape;
-		const payload = z.object(shape).strict().parse(raw);
-		const params = ompRepoParamsSchema.parse({ ...payload, action: methodSchema.value });
-		return this.#run("repo", params, signal, async (cwd, inner, onProgress) => {
-			if (params.action === "text" || params.action === "symbol") validateRepoQueryLength(params.query);
-			const root = resolveRepoRoot(cwd);
-			if ("confirmedRoot" in params) {
-				const confirmedRoot = await this.#directory(params.confirmedRoot);
-				// 确认的是同一真实目录，不应因路径别名或 Windows 大小写误拒用户。
-				const matches =
-					process.platform === "win32"
-						? confirmedRoot.toLowerCase() === root.toLowerCase()
-						: confirmedRoot === root;
-				if (!matches) throw new Error(`Confirm repository root: ${root}`);
-			}
-			const readOnly = params.action === "status" || params.action === "text" || params.action === "symbol";
-			if (readOnly && !(await repositoryIndexExists(repoIndexPath(this.#agentDir, root)))) {
-				if (params.action === "status") return missingRepoStatus(root);
-				if (params.action === "text" || params.action === "symbol") {
-					normalizeRepoQueryPath(params.path, true);
-					return missingRepoQuery(root, params.cursor);
-				}
-			}
-			let service = this.#repos.get(root);
-			if (!service) {
-				service = new RepoService({ agentDir: this.#agentDir, cwd, root });
-				this.#repos.set(root, service);
-			}
-			if (params.action === "status") {
-				const recoveryError = service.storage.recoveryError;
-				if (recoveryError) {
-					// GUI 仅对 exists 的索引开放重建；保留真实库的根与故障，不能伪装为 missing。
-					return {
-						...missingRepoStatus(root),
-						exists: true,
-						needsReconcile: true,
-						uncertainReasons: [recoveryError.message],
-						uncertainCount: 1,
-					} satisfies RepoStatus;
-				}
-				return service.status();
-			}
-			if (params.action === "text" || params.action === "symbol") {
-				const options = {
-					path: params.path,
-					category: params.category,
-					limit: params.limit,
-					cursor: params.cursor,
-					signal: inner,
-				};
-				return params.action === "text"
-					? service.search(params.query, options)
-					: service.symbol(params.query, options);
-			}
-			if (params.action === "cancel") throw new Error("Cancellation is handled before service admission");
-			// 同根的写入串行准入，避免删除与排队重建交错后重新发布已删除索引。
-			if (this.#mutations.has(root)) throw new Error("Repository maintenance is already active");
-			this.#mutations.add(root);
-			try {
-				inner.throwIfAborted();
-				const options = { signal: inner, onProgress };
-				switch (params.action) {
-					case "init":
-						return await service.build(options);
-					case "update":
-						return await service.reconcile(options);
-					case "rebuild":
-						return await (service.storage.recoveryError ? service.recover(options) : service.rebuild(options));
-					case "remove":
-						await service.remove();
-						return { removed: true as const, root };
-				}
-			} finally {
-				this.#mutations.delete(root);
-			}
-		});
-	}
-
 	dispose(): Promise<void> {
 		if (this.#disposing) return this.#disposing;
 		this.#disposed = true;
 		for (const operation of this.#operations.values())
 			operation.controller.abort(new DOMException("Index bridge closed", "AbortError"));
-		for (const service of this.#repos.values()) service.close();
 		const closing = [...this.#knowledge.values()].map(service => service.close());
 		this.#disposing = Promise.all([
 			...closing,
 			...[...this.#operations.values()].map(operation => operation.done),
 		]).then(() => {
 			this.#knowledge.clear();
-			this.#repos.clear();
 		});
 		return this.#disposing;
 	}

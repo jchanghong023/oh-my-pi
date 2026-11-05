@@ -111,7 +111,6 @@ import { createAgentHubRuntime } from "../agent-hub-runtime";
 import { AgentsHubComponent } from "@oh-my-pi/pi-tui/overlays/agents-hub";
 import { CopySelectorComponent } from "@oh-my-pi/pi-tui/overlays/copy-selector";
 import { KnowledgeHubComponent } from "../components/knowledge-hub";
-import { RepoHubComponent } from "../components/repo-hub";
 import { ExtensionDashboard } from "@oh-my-pi/pi-tui/overlays/extensions/extension-dashboard";
 import { listLiveToolRecords, liveToolRecordFromSession } from "@oh-my-pi/pi-tui/overlays/extensions/live-tool-session";
 import { createExtensionDashboardRuntime } from "../components/extensions/dashboard-runtime";
@@ -180,7 +179,6 @@ type MenuKind =
 	| "model-hub"
 	| "agents-dashboard"
 	| "knowledge-dashboard"
-	| "repo-dashboard"
 	| "agent-hub"
 	| "usage-dashboard";
 
@@ -714,31 +712,6 @@ export class SelectorController {
 			// path) surfaces in the status line instead of silently dying.
 			hub?.dispose();
 			this.#releaseMenu("knowledge-dashboard", menu);
-			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
-		}
-	}
-
-	async showRepoDashboard(): Promise<void> {
-		if (this.#focusOpenMenu("repo-dashboard")) return;
-		const menu = this.#claimMenu("repo-dashboard");
-		let closed = false;
-		let hub: RepoHubComponent | undefined;
-		const done = () => {
-			if (closed) return;
-			closed = true;
-			hub?.dispose();
-			menu.handle?.hide();
-			this.#releaseMenu("repo-dashboard", menu);
-			this.focusActiveEditorArea();
-			this.ctx.ui.requestRender();
-		};
-		try {
-			hub = await RepoHubComponent.create(this.ctx.ui, getProjectDir(), this.ctx.settings, { onCancel: done });
-			const component = hub;
-			this.#mountMenu(menu, component, () => this.#showFullscreenMenu(component));
-		} catch (error) {
-			hub?.dispose();
-			this.#releaseMenu("repo-dashboard", menu);
 			this.ctx.showStatus(error instanceof Error ? error.message : String(error));
 		}
 	}

@@ -116,7 +116,7 @@ Profile 是启动时身份，不在运行进程热切换。`omp/profiles/list` �
 | --- | --- |
 | `ompConfiguration` | `omp/team/configure` 路由全局 Team 配置，不依赖聊天会话；用户层保存使用 revision 和原生配置服务，冲突或提交未知须重新读取，不盲目重放。 |
 | `ompTeam`、`ompTan` | Team 讨论仍由 `/team` 发起，观测接口只读或停止所属 live run；Tan 交给父会话原生任务 owner。历史失去 owner 时不能把派发回执当作完成。 |
-| `ompIndexes` | `omp/wiki/*` 和 `omp/repo/*` 调用原生索引服务；操作用 workspace 与 `operationId` 关联进度和取消，进度不是成功终态，取消受理也不证明回滚。维护操作核对执行端确认路径。 |
+| `ompIndexes` | `omp/wiki/*` 调用原生文档索引服务；操作用 workspace 与 `operationId` 关联进度和取消，进度不是成功终态，取消受理也不证明回滚。维护操作核对执行端确认路径。 |
 | `ompSkillManagement` | `skills/manage` 消费原生 inventory；启停写当前 profile 用户层，工作区写 scope 不支持。 |
 | `ompSpecDriven` | Dev 观测需客户端显式 `includeSpecDriven:true`；可选 `sendText.specRun` 绑定流程、阶段和材料版本，过期时拒绝。旧客户端不携带时仍受原生 Dev 准入约束。 |
 

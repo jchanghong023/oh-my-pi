@@ -6,7 +6,6 @@ import { Writable } from "node:stream";
 import { __resetDirsFromEnvForTests, getAgentDir } from "@oh-my-pi/pi-utils/dirs";
 import { ZCodeServer } from "../../src/modes/zcode/server";
 import type { KnowledgeBuildResult, KnowledgeSearchResult } from "../../src/knowledge/types";
-import type { RepoStatus } from "../../src/repo/types";
 import { SessionManager } from "../../src/session/session-manager";
 
 // 原生服务回归在 .e2e.ts；这里仅补公共 dispatch 的路由、通知与冷读边界。
@@ -44,7 +43,6 @@ test("public optional methods preserve workspace routing, native index results a
 		};
 		const document = path.join(cwd, "guide.md");
 		await fs.writeFile(document, "# DispatchSignal\n\nNative dispatch documentation survives source removal.\n");
-		await fs.writeFile(path.join(cwd, "entry.ts"), "export function dispatchSignal() { return 42; }\n");
 		const frames: Array<{ method?: string; params?: unknown }> = [];
 		server = new ZCodeServer({
 			cwd,
@@ -80,19 +78,6 @@ test("public optional methods preserve workspace routing, native index results a
 			query: "DispatchSignal",
 		})) as KnowledgeSearchResult;
 		expect(search.sections.some(section => section.text.includes("Native dispatch documentation"))).toBe(true);
-		const status = (await server.dispatch("omp/repo/status", {
-			workspace,
-			operationId: "repo-status",
-		})) as RepoStatus;
-		await expect(
-			server.dispatch("omp/repo/init", { workspace, operationId: "bad-root", confirmedRoot: other }),
-		).rejects.toThrow("Confirm repository root");
-		const repo = (await server.dispatch("omp/repo/init", {
-			workspace,
-			operationId: "repo-build",
-			confirmedRoot: status.root,
-		})) as RepoStatus;
-		expect(repo.fileCount).toBeGreaterThan(0);
 		await expect(
 			server.dispatch("omp/wiki/list", { workspace, operationId: "bad-shape", action: "list" }),
 		).rejects.toThrow();
@@ -106,8 +91,6 @@ test("public optional methods preserve workspace routing, native index results a
 			server.dispatch("omp/wiki/searchExtra", { workspace, operationId: "unknown", query: "DispatchSignal" }),
 		).rejects.toThrow();
 		await server.dispatch("omp/wiki/remove", { workspace, operationId: "wiki-remove", name: "dispatch-docs" });
-		await server.dispatch("omp/repo/remove", { workspace, operationId: "repo-remove", confirmedRoot: status.root });
-		expect(await fs.readFile(path.join(cwd, "entry.ts"), "utf8")).toContain("dispatchSignal");
 
 		// 冷读必须使用真实 journal，不能为了查看 Team 结果激活 Agent 或取得 writer lease。
 		const journal = SessionManager.create(cwd, SessionManager.getDefaultSessionDir(cwd, getAgentDir()));

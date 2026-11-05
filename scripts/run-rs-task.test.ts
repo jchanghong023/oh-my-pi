@@ -63,7 +63,6 @@ mod knowledge { #[test] fn knowledge_case() { assert!(${options.fail ? "false" :
 mod another_module { #[test] fn knowledge_other_module_case() {} }`
 					: name === "pi-natives"
 						? `mod knowledge { #[test] fn native_knowledge_binding_case() {} }
-mod python_symbols { #[test] fn symbols_case() {} }
 mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be filtered");'} } }`
 						: `mod knowledge { #[test] fn other_crate_case() { ${options.full ? "" : 'panic!("must be excluded");'} } }`,
 			);
@@ -125,7 +124,7 @@ mod shell { #[test] fn excluded_case() { ${options.full ? "" : 'panic!("must be 
 
 describe("Rust fork feature CLI", () => {
 	it(
-		"runs the full Knowledge package and native Knowledge bindings and Python symbols regardless of unrelated changes",
+		"runs the full Knowledge package and native Knowledge bindings regardless of unrelated changes",
 		async () => {
 			const { result, repeated } = await runWorkspace({ repeat: true });
 			for (const run of [result, repeated!]) {
@@ -139,7 +138,6 @@ describe("Rust fork feature CLI", () => {
 				const xml = run.reports[run.producers.indexOf(nextest)];
 				expect(xml).toContain("knowledge_case");
 				expect(xml).toContain("knowledge_other_module_case");
-				expect(xml).toContain("symbols_case");
 				expect(xml).not.toContain("excluded_case");
 				expect(xml).toContain("native_knowledge_binding_case");
 				expect(xml).not.toContain("other_crate_case");
@@ -171,7 +169,6 @@ describe("Rust fork feature CLI", () => {
 			expect(xml).toContain("knowledge_case");
 			expect(xml).toContain("knowledge_other_module_case");
 			expect(xml).toContain("native_knowledge_binding_case");
-			expect(xml).toContain("symbols_case");
 			expect(xml).toContain("failure");
 			expect(xml).not.toContain("excluded_case");
 		},
@@ -218,7 +215,7 @@ describe("Rust delta selection", () => {
 					expect(nextest.command.includes(name)).toBe(packages.includes(name));
 				const xml = result.reports[result.producers.indexOf(nextest)];
 				expect(xml.includes("knowledge_other_module_case")).toBe(packages.includes("pi-knowledge"));
-				expect(xml.includes("symbols_case")).toBe(packages.includes("pi-natives"));
+				expect(xml.includes("native_knowledge_binding_case")).toBe(packages.includes("pi-natives"));
 				expect(xml).not.toContain("excluded_case");
 				const doc = result.producers.find(producer => producer.producer === "cargo test --doc")!;
 				expect(doc.status).toBe(packages.includes("pi-knowledge") ? "stage" : "not-selected");

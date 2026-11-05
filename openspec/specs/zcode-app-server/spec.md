@@ -89,7 +89,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 | `ompProfiles` | `omp/profiles/list`、`omp/profiles/prepareSwitch`、`omp/profiles/cancelSwitch`；`modes/zcode/profiles.ts` 的 `listParams`、`prepareParams`、`cancelParams` 与桥接返回值 |
 | `ompTan` | `omp/tan/start`、`omp/tan/list`、`omp/tan/stop`；`modes/zcode/tan.ts` 的 `ompTanStartParamsSchema`、`ompTanListParamsSchema`、`ompTanStopParamsSchema`、`OmpTanJob` |
 | `ompTeam` | `omp/team` 的 `list`／`read`／`stop` action；`modes/zcode/team.ts` 的 `handle` 字段校验、`OmpTeamRun`、`OmpTeamNode`、`OmpTeamEdge` |
-| `ompIndexes` | `omp/wiki/list`、`init`、`remove`、`search`、`grep`、`cancel` 及 `omp/repo/status`、`init`、`update`、`rebuild`、`remove`、`text`、`symbol`、`cancel`；各 action 均加对应 `omp/wiki/` 或 `omp/repo/` 前缀，参数见 `modes/zcode/indexes.ts` 的 `ompKnowledgeParamsSchema`、`ompRepoParamsSchema` |
+| `ompIndexes` | `omp/wiki/list`、`init`、`remove`、`search`、`grep`、`cancel`；各 action 均加 `omp/wiki/` 前缀，参数见 `modes/zcode/indexes.ts` 的 `ompKnowledgeParamsSchema` |
 | `ompSkillManagement` | `skills/manage` 的 `list`／`refresh`／`setEnabled` action；`modes/zcode/catalogs.ts` 的 `zcodeSkillsManageParamsSchema`、`zcodeSkillsManageResultSchema` |
 | `ompSpecDriven` | 会话订阅与运行查询的 `includeSpecDriven:true`、`v4/conversation/workflowRuns` 的 `runId` 过滤及 `sendText` 的 `specRun` 准入绑定；见 `modes/zcode/schema/omp-spec-extension.ts` |
 
@@ -110,13 +110,13 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 - Team 运行事实来自原生事件、registry、job 与所属 journal；`source` 区分 `native-live`／`native-journal`。节点、工具、消息、时间线只记录真实变化，查询与收口刷新真实状态；冷查询不新建 AgentSession 或抢写租约。无 live owner 的历史 running 状态须为 `unavailable`，不能推断完成／取消。`stop` 仅对所属 live 原生 job 尝试取消，历史不可停止时返回 `accepted:false`。
 - 现有 edge 仅支持 `reviews`／`revises`／`rechecks`，`evidence` 标明原生调用标签依据；未公开的对齐输入、反馈及综合消费因果关系通过 `unavailable` 明确提示，不添加枚举、不按时间或模型猜边。该观测面不等于 [Team 动态运行视图完整关系目标](../team-run-view/spec.md) 已实现或验收。
 
-**Knowledge／Repo 的进度、取消与只读边界**
+**Knowledge 的进度、取消与只读边界**
 
-- 每个请求带 `workspace`、非空 `operationId`；方法后缀决定 action，wire 参数不另传 `action`。Knowledge `init` 带绝对执行端 `directory`、`name` 与 `confirmedDirectory`，`remove` 带 `name`；查询字段及分页／预算限制按上述 schema。Repo 维护带 `confirmedRoot`，查询支持 `query` 及既有 `path`／`category`／`limit`／`cursor`。确认路径按执行端 canonical 目录比较，不能用客户端路径猜根或绕过确认。
-- 返回值直接来自 `KnowledgeService`／`RepoService`，类型见 `knowledge/types.ts`、`repo/types.ts`；Knowledge list 为 `{indexes}`，remove 为 `{removed:true}`，Repo remove 另含 `root`。缺库只读查询返回原生缺失状态／结果，不建目录、库或 AgentSession。损坏／较新 Repo schema 的 status 用已有 `exists`、`root`、`needsReconcile`、`uncertainReasons`、`unchecked`、`incomplete` 暴露恢复需要，确认后 `rebuild` 复用原生 recovery，不静默删除重建。
-- 通知 `omp/wiki/progress`／`omp/repo/progress` 为 `{operationId,workspace,progress}`；`progress` 原样采用 `KnowledgeProgress`／`RepoProgress`，不得造百分比或将通知视作成功终态。客户端以完整 workspace 与 operationId 关联；最终结果／错误仍在原请求返回，不进入 conversation snapshot 或重放日志。
+- 每个请求带 `workspace`、非空 `operationId`；方法后缀决定 action，wire 参数不另传 `action`。Knowledge `init` 带绝对执行端 `directory`、`name` 与 `confirmedDirectory`，`remove` 带 `name`；查询字段及分页／预算限制按上述 schema。确认路径按执行端 canonical 目录比较，不能用客户端路径猜根或绕过确认。
+- 返回值直接来自 `KnowledgeService`，类型见 `knowledge/types.ts`；list 为 `{indexes}`，remove 为 `{removed:true}`。缺库只读查询返回原生缺失状态／结果，不建目录、库或 AgentSession。
+- 通知 `omp/wiki/progress` 为 `{operationId,workspace,progress}`；`progress` 原样采用 `KnowledgeProgress`，不得造百分比或将通知视作成功终态。客户端以完整 workspace 与 operationId 关联；最终结果／错误仍在原请求返回，不进入 conversation snapshot 或重放日志。
 - `cancel` 使用目标操作同一 `operationId` 与 workspace，返回 `{cancelled:boolean}`；归属同时受类型、canonical cwd、workspace identity／key、remoteSessionId 限定。`true` 只表示找到并发出 abort，不证明回滚；同域 ID 正在使用时拒绝重复准入，不把另一次调用当重试。完成／取消后释放身份；不再发送被取消或已销毁操作的进度。EOF／dispose 取消并等待自有操作收口，不因关闭详情而取消。
-- 持久索引代际及维护仍由原生服务拥有；同 Repo 根维护互斥，失败／取消如实结算，不增加平行索引或后台队列。
+- 持久索引及维护仍由原生服务拥有，失败／取消如实结算，不增加平行索引或后台队列。
 
 **Skill 管理**
 
@@ -830,13 +830,13 @@ sequenceDiagram
 - `provider/testModelConnectivity` 保留，使用目标 workspace 下原生实际解析的模型及原生凭据进行最小真实请求；原生支持的内置免凭据模型直接沿其原生请求链执行，不要求补 key。确实需要凭据而缺失、认证失败及不可达须保留结构化原因，不能注入测试凭据、只检查配置存在或伪造成功。连接测试不改变默认模型、已有会话或持久凭据。
 - 管理操作保持 workspaceIdentity／远端路由、profile 与请求代际归属；只读清单不启动会话，不把 Host 的旧 `.zcode/cli` 配置当成 OMP 配置。MCP 等其他管理面不随本需求扩大。
 
-**Team、Wiki 与 Repo 核心界面**
+**Team 与 Knowledge 核心界面**
 
 - Team 是当前会话的 `/team …` 内置聊天命令；专用设置入口只配置成员、模型与顺序，不承载任务输入或运行。聊天记录显示复用工作流组件的动态流程卡片，点击卡片在右侧展示逐 Agent／每次调用的真实过程、阶段及审查／修订关系；完成后卡片与最终方案保留，继续使用当前输入框。底层仍由原生 Team 编排，不转成普通工作流；配置合同见 [Team 模型配置界面](../team-configuration/spec.md#requirement-team-模型配置界面)，运行观测合同见 [Team 动态运行视图与交互关系](../team-run-view/spec.md#requirement-team-动态运行视图与交互关系)。
 - Team 成员／模型／顺序属于原生运行 profile 的全局用户配置，所有会话共用，不按会话分别保存。新增可选 `omp/team/configure` 扩展以 `{workspace, request}` 路由当前执行端的原生 TeamConfigService；`request.operation` 仅为 `get_team_config`、`get_team_models` 或 `set_team_config`，其参数及结果复用已有配置合同。读取、预览与保存不依赖 sessionId，不创建／激活会话或请求模型，不能借配置入口启动讨论；profile 仍由可信执行端确定，工作区不成为平行存储所有者，单文件本机锁、CAS 与原子保存遵循 [Team 配置保存服务](../team-configuration/spec.md)。
-- Knowledge 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Knowledge 专页](../knowledge-index/spec.md)；Repo 专页承接全部 TUI 维护操作及原生查询，权威合同见 [Repo 专页](../repo-index/spec.md)。两者左侧入口位于自动化下方，相邻展示。
-- 除本次明确取消的模型 Provider 认证界面及操作外，OMP 已尽力适配但仍无法实现的功能，其 ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Knowledge／Repo／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因；此例外不扩大到 Skill、MCP 或其他管理面。
-- Knowledge／Repo 严格只增加可选能力、独立方法／通知和 schema，不修改既有 ZCode 协议的字段、方法、通知、信封、版本或语义，不改 vendor 基线。Host 只桥接、UI 只展示，管理与查询仍由各自原生索引服务拥有。新增进度、取消和错误也属于扩展，不借修改旧聊天／会话合同承载；旧客户端与缺少扩展的旧 Agent 保持既有行为。
+- Knowledge 专页承接 TUI 的新增／导入、删除和搜索，权威合同见 [Knowledge 专页](../knowledge-index/spec.md)；左侧入口位于自动化下方。
+- 除明确退役的功能外，OMP 已尽力适配但仍无法实现的功能，其 ZCode 原有页面、入口和操作控件均保留可见，不得因 OMP 能力缺失而删除或隐藏；使用禁用态和明确原因表达真实边界，不伪造可用状态或切回旧 Agent。Knowledge／Team 缺少可选扩展时也保留入口及页面，清楚显示不可用原因；此例外不扩大到 Skill、MCP 或其他管理面。
+- Knowledge 严格只增加可选能力、独立方法／通知和 schema，不修改既有 ZCode 协议的字段、方法、通知、信封、版本或语义，不改 vendor 基线。Host 只桥接、UI 只展示，管理与查询仍由原生索引服务拥有。新增进度、取消和错误也属于扩展，不借修改旧聊天／会话合同承载；旧客户端与缺少扩展的旧 Agent 保持既有行为。
 
 #### Scenario: 权限与提问的可观察行为
 
@@ -937,7 +937,7 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 - 原生 custom command 以 `void`／空串完成、不产生模型正文时，在真实处理完成的原生 admission 边界记录受理并返回 accepted；原处理器已消费并展示的错误仍保留其真实输出，不将 accepted 解释为业务成功。返回非空 prompt 的命令继续在原 prompt／queue 边界准入，未知、取消或未完成的处理不能提前接受；同 commandId 沿用既有 ledger 去重。
 - OMP 运行时实际目录中的命令及别名优先于 ZCode 同名本地逻辑；文本中的引号、换行和内部空白完整交给 OMP 原生处理器。非法参数返回原生用法或错误，不降为普通模型问题、不以受理代替完成；仅 TUI 专属子操作明确不可用，不阻断同命令其他独立操作。
 - app-server 从同进程结果、事件及 UI 回调生成 ZCode 输出和交互，调用同一业务服务，不为界面另造命令执行、权限或配置保存实现，也不通过内部序列化绕行。
-- ZCode 中的 `/knowledge` 与 `/repo` 路由到共享索引服务，业务合同分别见[文档索引](../knowledge-index/spec.md)和[代码定位索引](../repo-index/spec.md)，不在桌面层复制维护逻辑。
+- ZCode 中的 `/knowledge` 路由到共享索引服务，业务合同见[文档索引](../knowledge-index/spec.md)，不在桌面层复制维护逻辑。
 - ZCode 的 `/plan` 路由到原生计划宿主，并以交互投影展示草稿退出确认、计划正文及批准；取消或拒绝不切入执行，批准后交回同一原生计划链路。本次只接入保留当前上下文继续执行，不接入清空上下文、压缩后执行或终端计划编辑器。
 - ZCode 的 `/loop` 由所属会话的命令宿主调用共享解析和执行链，位置间隔契约见[循环间隔](../personal-commands/spec.md)。切换或关闭目标会话后，旧待提交、间隔定时器及条件进程不得再提交；loop 与 goal 宿主不得并行自动提交。
 - ZCode 的 `/goal` 路由到目标会话的同一原生 Goal 控制器，状态由该控制器投影，不维护第二份目标状态；fork 续跑差异见[Goal 续跑边界](../goal-autopilot/spec.md)。

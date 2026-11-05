@@ -11,8 +11,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/lsp/edits";
 import type { TextEdit } from "@oh-my-pi/pi-coding-agent/lsp/types";
 import { subscribeFsMutation } from "@oh-my-pi/pi-coding-agent/tools/fs-cache-invalidation";
-import { RepoLifecycle } from "../../src/repo/lifecycle";
-import { RepoService } from "../../src/repo/service";
 
 // Rewrite `./moved` → `./renamed` on line 0 of the reference file below.
 const importEdit: TextEdit[] = [
@@ -62,7 +60,7 @@ describe("applyEditsThenRename", () => {
 	});
 });
 
-describe("LSP resource snapshots without a repository index", () => {
+describe("LSP resource snapshots", () => {
 	let cwd: string;
 	let unsubscribe: () => void;
 	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
@@ -210,23 +208,22 @@ describe("LSP resource snapshots without a repository index", () => {
 	});
 });
 
-describe("LSP edits with a real repository index", () => {
+describe("LSP edit mutation notifications", () => {
 	let temp: string;
 	let cwd: string;
-	let service: RepoService | undefined;
-	let lifecycle: RepoLifecycle | undefined;
+	let notifications: Array<{ paths: readonly string[]; reason?: string }>;
+	let unsubscribe: () => void;
 
 	beforeEach(async () => {
-		temp = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-edits-repo-"));
+		temp = await fs.mkdtemp(path.join(os.tmpdir(), "lsp-edits-mutations-"));
 		cwd = path.join(temp, "project");
 		await fs.mkdir(cwd);
+		notifications = [];
+		unsubscribe = subscribeFsMutation((paths, reason) => notifications.push({ paths, reason }));
 	});
 
 	afterEach(async () => {
-		lifecycle?.dispose();
-		service?.close();
-		lifecycle = undefined;
-		service = undefined;
+		unsubscribe();
 		await fs.rm(temp, { recursive: true, force: true });
 	});
 
@@ -238,38 +235,27 @@ describe("LSP edits with a real repository index", () => {
 		},
 	];
 
-	async function indexed(files: Record<string, string>): Promise<RepoService> {
+	async function seed(files: Record<string, string>): Promise<void> {
 		for (const [name, content] of Object.entries(files)) {
 			const file = path.join(cwd, name);
 			await fs.mkdir(path.dirname(file), { recursive: true });
 			await Bun.write(file, content);
 		}
-		const agentDir = path.join(temp, "profile");
-		service = new RepoService({ cwd, agentDir });
-		await service.build();
-		lifecycle = new RepoLifecycle({ agentDir, getCwd: () => cwd });
-		lifecycle.start();
-		await service.reconcile();
-		return service;
 	}
 
-	it("refreshes search and symbols after a text rename", async () => {
-		// Keep markers token-disjoint: text search also recalls split identifier tokens.
-		const repo = await indexed({ "engine.py": "def staleidentifier(): pass\n" });
+	it("notifies a committed text rename", async () => {
+		await seed({ "engine.py": "def staleidentifier(): pass\n" });
 		await applyWorkspaceEdit(
 			{ changes: { [uri("engine.py")]: renameSymbol("staleidentifier", "freshbinding") } },
 			cwd,
 		);
-		expect((await repo.symbol("freshbinding")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
-		expect((await repo.search("freshbinding")).hits.map(hit => hit.path)).toEqual(["engine.py"]);
-		expect((await repo.symbol("staleidentifier")).hits).toEqual([]);
-		expect((await repo.search("staleidentifier")).hits).toEqual([]);
-		expect((await repo.status()).unchecked).toBe(false);
+		expect(await Bun.file(path.join(cwd, "engine.py")).text()).toBe("def freshbinding(): pass\n");
+		expect(notifications).toEqual([{ paths: [path.join(cwd, "engine.py")], reason: undefined }]);
 	});
 
 	for (const format of ["changes", "documentChanges"] as const) {
-		it(`refreshes the committed prefix when a later ${format} edit fails`, async () => {
-			const repo = await indexed({ "first.py": "def initialbinding(): pass\n" });
+		it(`notifies the committed prefix when a later ${format} edit fails`, async () => {
+			await seed({ "first.py": "def initialbinding(): pass\n" });
 			const firstEdits = renameSymbol("initialbinding", "committedentry");
 			const missingEdits = renameSymbol("missing", "unreachable");
 			const edit =
@@ -282,16 +268,13 @@ describe("LSP edits with a real repository index", () => {
 							],
 						};
 			await expect(applyWorkspaceEdit(edit, cwd)).rejects.toThrow();
-			expect((await repo.status()).pendingPaths).toEqual(["first.py"]);
-			const refreshed = await repo.symbol("committedentry");
-			expect(refreshed.hits.map(hit => hit.path)).toEqual(["first.py"]);
-			expect((await repo.symbol("initialbinding")).hits).toEqual([]);
-			expect((await repo.search("initialbinding")).hits).toEqual([]);
+			expect(await Bun.file(path.join(cwd, "first.py")).text()).toBe("def committedentry(): pass\n");
+			expect(notifications).toEqual([{ paths: [path.join(cwd, "first.py")], reason: undefined }]);
 		});
 	}
 
-	it("refreshes an uncertain failed write without certifying its coverage", async () => {
-		const repo = await indexed({ "engine.py": "def before_failure(): pass\n" });
+	it("notifies an uncertain failed write", async () => {
+		await seed({ "engine.py": "def before_failure(): pass\n" });
 		const file = path.join(cwd, "engine.py");
 		const write = Bun.write.bind(Bun);
 		const failure = new Error("write interrupted after truncation");
@@ -307,15 +290,12 @@ describe("LSP edits with a real repository index", () => {
 		} finally {
 			writeSpy.mockRestore();
 		}
-		const refreshed = await repo.symbol("partial_write");
-		expect(refreshed.hits.map(hit => hit.path)).toEqual(["engine.py"]);
-		expect(refreshed.coverage.unchecked).toBe(true);
-		expect((await repo.symbol("before_failure")).hits).toEqual([]);
-		expect((await repo.search("before_failure")).hits).toEqual([]);
+		expect(await Bun.file(file).text()).toBe("def partial_write(): pass\n");
+		expect(notifications).toEqual([{ paths: [file], reason: expect.any(String) }]);
 	});
 
 	it("tracks create, overwrite rename and delete at their committed paths", async () => {
-		const repo = await indexed({
+		await seed({
 			"nested/renamed.py": "def displaced_symbol(): pass\n",
 			"cleared.py": "def cleared_symbol(): pass\n",
 		});
@@ -323,17 +303,16 @@ describe("LSP edits with a real repository index", () => {
 			{ documentChanges: [{ kind: "create", uri: uri("cleared.py"), options: { overwrite: true } }] },
 			cwd,
 		);
-		expect((await repo.symbol("cleared_symbol")).hits).toEqual([]);
 		expect(await Bun.file(path.join(cwd, "cleared.py")).text()).toBe("");
 		await applyWorkspaceEdit({ documentChanges: [{ kind: "create", uri: uri("created.py") }] }, cwd);
-		expect((await repo.status()).pendingPaths).toEqual(["created.py"]);
+		expect(notifications.at(-1)).toEqual({ paths: [path.join(cwd, "created.py")], reason: undefined });
 		await applyTextEdits(path.join(cwd, "created.py"), [
 			{
 				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
 				newText: "def createdentry(): pass\n",
 			},
 		]);
-		expect((await repo.symbol("createdentry")).hits.map(hit => hit.path)).toEqual(["created.py"]);
+		expect(await Bun.file(path.join(cwd, "created.py")).text()).toBe("def createdentry(): pass\n");
 		await applyWorkspaceEdit(
 			{
 				documentChanges: [
@@ -347,20 +326,22 @@ describe("LSP edits with a real repository index", () => {
 			},
 			cwd,
 		);
-		expect((await repo.symbol("createdentry")).hits.map(hit => hit.path)).toEqual(["nested/renamed.py"]);
-		expect((await repo.search("createdentry")).hits.map(hit => hit.path)).toEqual(["nested/renamed.py"]);
-		expect((await repo.symbol("displaced_symbol")).hits).toEqual([]);
+		expect(await Bun.file(path.join(cwd, "nested/renamed.py")).text()).toBe("def createdentry(): pass\n");
+		expect(await Bun.file(path.join(cwd, "created.py")).exists()).toBe(false);
+		expect(notifications.flatMap(notification => notification.paths)).toEqual(
+			expect.arrayContaining([path.join(cwd, "created.py"), path.join(cwd, "nested/renamed.py")]),
+		);
 		await applyWorkspaceEdit(
 			{ documentChanges: [{ kind: "delete", uri: uri("nested"), options: { recursive: true } }] },
 			cwd,
 		);
-		expect((await repo.symbol("createdentry")).hits).toEqual([]);
-		expect((await repo.search("createdentry")).hits).toEqual([]);
+		expect(await Bun.file(path.join(cwd, "nested/renamed.py")).exists()).toBe(false);
+		expect(notifications.at(-1)?.paths).toContain(path.join(cwd, "nested/renamed.py"));
 	});
 
 	for (const entrypoint of ["workspace", "references"] as const) {
-		it(`refreshes descendant paths after a directory rename via ${entrypoint}`, async () => {
-			const repo = await indexed({
+		it(`notifies descendant paths after a directory rename via ${entrypoint}`, async () => {
+			await seed({
 				"before/engine.py": "def directoryentry(): pass\n",
 				"before/nested/child.py": "def descendantentry(): pass\n",
 			});
@@ -372,16 +353,22 @@ describe("LSP edits with a real repository index", () => {
 			} else {
 				await applyEditsThenRename([], path.join(cwd, "before"), path.join(cwd, "after"));
 			}
-			expect((await repo.symbol("directoryentry")).hits.map(hit => hit.path)).toEqual(["after/engine.py"]);
-			expect((await repo.search("directoryentry")).hits.map(hit => hit.path)).toEqual(["after/engine.py"]);
-			expect((await repo.symbol("descendantentry")).hits.map(hit => hit.path)).toEqual(["after/nested/child.py"]);
-			expect((await repo.search("descendantentry")).hits.map(hit => hit.path)).toEqual(["after/nested/child.py"]);
-			expect((await repo.status()).unchecked).toBe(false);
+			expect(await Bun.file(path.join(cwd, "after/engine.py")).text()).toBe("def directoryentry(): pass\n");
+			expect(await Bun.file(path.join(cwd, "after/nested/child.py")).text()).toBe("def descendantentry(): pass\n");
+			expect(await fs.lstat(path.join(cwd, "before")).catch(() => undefined)).toBeUndefined();
+			expect(notifications.flatMap(notification => notification.paths)).toEqual(
+				expect.arrayContaining([
+					path.join(cwd, "before/engine.py"),
+					path.join(cwd, "before/nested/child.py"),
+					path.join(cwd, "after/engine.py"),
+					path.join(cwd, "after/nested/child.py"),
+				]),
+			);
 		});
 	}
 
-	it("refreshes concrete descendants after a recursive delete partially fails", async () => {
-		const repo = await indexed({
+	it("notifies concrete descendants after a recursive delete partially fails", async () => {
+		await seed({
 			"nested/removed.py": "def removedentry(): pass\n",
 			"nested/retained.py": "def retainedentry(): pass\n",
 		});
@@ -405,14 +392,16 @@ describe("LSP edits with a real repository index", () => {
 		} finally {
 			rmSpy.mockRestore();
 		}
-		expect((await repo.symbol("removedentry")).hits).toEqual([]);
-		expect((await repo.search("removedentry")).hits).toEqual([]);
-		expect((await repo.symbol("retainedentry")).hits.map(hit => hit.path)).toEqual(["nested/retained.py"]);
-		expect((await repo.status()).unchecked).toBe(true);
+		expect(await Bun.file(path.join(directory, "removed.py")).exists()).toBe(false);
+		expect(await Bun.file(path.join(directory, "retained.py")).text()).toBe("def retainedentry(): pass\n");
+		expect(notifications).toContainEqual({
+			paths: expect.arrayContaining([path.join(directory, "removed.py"), path.join(directory, "retained.py")]),
+			reason: expect.any(String),
+		});
 	});
 
 	it("tracks the old and new paths of a rename with reference edits", async () => {
-		const repo = await indexed({
+		await seed({
 			"moved.py": "def moved_symbol(): pass\n",
 			"reference.py": "def before_reference(): pass\n",
 		});
@@ -421,14 +410,16 @@ describe("LSP edits with a real repository index", () => {
 			path.join(cwd, "moved.py"),
 			path.join(cwd, "renamed.py"),
 		);
-		expect((await repo.symbol("moved_symbol")).hits.map(hit => hit.path)).toEqual(["renamed.py"]);
-		expect((await repo.search("moved_symbol")).hits.map(hit => hit.path)).toEqual(["renamed.py"]);
-		expect((await repo.symbol("after_reference")).hits.map(hit => hit.path)).toEqual(["reference.py"]);
-		expect((await repo.symbol("before_reference")).hits).toEqual([]);
+		expect(await Bun.file(path.join(cwd, "renamed.py")).text()).toBe("def moved_symbol(): pass\n");
+		expect(await Bun.file(path.join(cwd, "moved.py")).exists()).toBe(false);
+		expect(await Bun.file(path.join(cwd, "reference.py")).text()).toBe("def after_reference(): pass\n");
+		expect(notifications.flatMap(notification => notification.paths)).toEqual(
+			expect.arrayContaining(["moved.py", "renamed.py", "reference.py"].map(name => path.join(cwd, name))),
+		);
 	});
 
-	it("invalidates restored reference edits even if the temporary edits were already indexed", async () => {
-		const repo = await indexed({
+	it("notifies restored reference edits after temporary edits were committed", async () => {
+		await seed({
 			"moved.py": "def moved_symbol(): pass\n",
 			"first.py": "def before_reference(): pass\n",
 			"second.py": "def second_reference(): pass\n",
@@ -438,13 +429,11 @@ describe("LSP edits with a real repository index", () => {
 		const second = path.join(cwd, "second.py");
 		const write = Bun.write.bind(Bun);
 		let observedTemporary = false;
-		let temporaryPaths: string[] | undefined;
-		let temporaryOldPaths: string[] | undefined;
+		let temporaryContent: string | undefined;
 		const writeSpy = spyOn(Bun, "write").mockImplementation(async (target, content) => {
 			if (target === second && !observedTemporary) {
 				observedTemporary = true;
-				temporaryPaths = (await repo.symbol("after_reference")).hits.map(hit => hit.path);
-				temporaryOldPaths = (await repo.symbol("before_reference")).hits.map(hit => hit.path);
+				temporaryContent = await Bun.file(first).text();
 			}
 			return write(target as string, content as string);
 		});
@@ -463,17 +452,15 @@ describe("LSP edits with a real repository index", () => {
 			writeSpy.mockRestore();
 		}
 		expect(observedTemporary).toBe(true);
-		expect(temporaryPaths).toEqual(["first.py"]);
-		expect(temporaryOldPaths).toEqual([]);
-		expect((await repo.symbol("before_reference")).hits.map(hit => hit.path)).toEqual(["first.py"]);
-		expect((await repo.symbol("after_reference")).hits).toEqual([]);
-		expect((await repo.symbol("second_reference")).hits.map(hit => hit.path)).toEqual(["second.py"]);
-		expect((await repo.symbol("moved_symbol")).hits.map(hit => hit.path)).toEqual(["moved.py"]);
-		expect((await repo.status()).unchecked).toBe(false);
+		expect(temporaryContent).toBe("def after_reference(): pass\n");
+		expect(await Bun.file(first).text()).toBe("def before_reference(): pass\n");
+		expect(await Bun.file(second).text()).toBe("def second_reference(): pass\n");
+		expect(await Bun.file(path.join(cwd, "moved.py")).text()).toBe("def moved_symbol(): pass\n");
+		expect(notifications.filter(notification => notification.paths.includes(first)).length).toBeGreaterThanOrEqual(2);
 	});
 
 	it("invalidates an overwrite destination restored after a failed resource rename", async () => {
-		const repo = await indexed({
+		await seed({
 			"source.py": "def source_symbol(): pass\n",
 			"target.py": "def target_symbol(): pass\n",
 		});
@@ -481,10 +468,10 @@ describe("LSP edits with a real repository index", () => {
 		const target = path.join(cwd, "target.py");
 		const rename = fs.rename;
 		const failure = Object.assign(new Error("source rename denied"), { code: "EACCES" });
-		let displacedPaths: string[] | undefined;
+		let destinationWasDisplaced = false;
 		const renameSpy = spyOn(fs, "rename").mockImplementation(async (from, to) => {
 			if (from === source && to === target) {
-				displacedPaths = (await repo.symbol("target_symbol")).hits.map(hit => hit.path);
+				destinationWasDisplaced = !(await Bun.file(target).exists());
 				throw failure;
 			}
 			return rename(from, to);
@@ -508,15 +495,14 @@ describe("LSP edits with a real repository index", () => {
 		} finally {
 			renameSpy.mockRestore();
 		}
-		expect(displacedPaths).toEqual([]);
-		expect((await repo.symbol("target_symbol")).hits.map(hit => hit.path)).toEqual(["target.py"]);
-		expect((await repo.symbol("source_symbol")).hits.map(hit => hit.path)).toEqual(["source.py"]);
+		expect(destinationWasDisplaced).toBe(true);
+		expect(await Bun.file(source).text()).toBe("def source_symbol(): pass\n");
 		expect(await Bun.file(target).text()).toBe("def target_symbol(): pass\n");
-		expect((await repo.status()).unchecked).toBe(false);
+		expect(notifications.flatMap(notification => notification.paths)).toContain(target);
 	});
 
-	it("refreshes displaced directory descendants when a failed rename restores them", async () => {
-		const repo = await indexed({
+	it("notifies displaced directory descendants when a failed rename restores them", async () => {
+		await seed({
 			"source/engine.py": "def sourceentry(): pass\n",
 			"target/nested/child.py": "def restoredentry(): pass\n",
 		});
@@ -524,10 +510,10 @@ describe("LSP edits with a real repository index", () => {
 		const target = path.join(cwd, "target");
 		const rename = fs.rename;
 		const failure = Object.assign(new Error("directory rename denied"), { code: "EACCES" });
-		let displacedPaths: string[] | undefined;
+		let destinationWasDisplaced = false;
 		const renameSpy = spyOn(fs, "rename").mockImplementation(async (from, to) => {
 			if (from === source && to === target) {
-				displacedPaths = (await repo.symbol("restoredentry")).hits.map(hit => hit.path);
+				destinationWasDisplaced = !(await Bun.file(path.join(target, "nested/child.py")).exists());
 				throw failure;
 			}
 			return rename(from, to);
@@ -546,19 +532,17 @@ describe("LSP edits with a real repository index", () => {
 		} finally {
 			renameSpy.mockRestore();
 		}
-		expect(displacedPaths).toEqual([]);
-		expect((await repo.symbol("restoredentry")).hits.map(hit => hit.path)).toEqual(["target/nested/child.py"]);
-		expect((await repo.search("restoredentry")).hits.map(hit => hit.path)).toEqual(["target/nested/child.py"]);
-		expect((await repo.symbol("sourceentry")).hits.map(hit => hit.path)).toEqual(["source/engine.py"]);
-		expect((await repo.status()).unchecked).toBe(false);
+		expect(destinationWasDisplaced).toBe(true);
+		expect(await Bun.file(path.join(target, "nested/child.py")).text()).toBe("def restoredentry(): pass\n");
+		expect(await Bun.file(path.join(source, "engine.py")).text()).toBe("def sourceentry(): pass\n");
+		expect(notifications.flatMap(notification => notification.paths)).toContain(path.join(target, "nested/child.py"));
 	});
 
 	it("does not publish mutations for previews, ignored operations or rejected edits", async () => {
-		const repo = await indexed({
+		await seed({
 			"source.py": "def source_symbol(): pass\n",
 			"target.py": "def target_symbol(): pass\n",
 		});
-		const generation = (await repo.status()).generation;
 		expect(
 			applyTextEditsToString("def source_symbol(): pass\n", renameSymbol("source_symbol", "preview_symbol")),
 		).toContain("preview_symbol");
@@ -592,9 +576,8 @@ describe("LSP edits with a real repository index", () => {
 				cwd,
 			),
 		).rejects.toThrow("overlapping LSP edits");
-		expect(await repo.status()).toMatchObject({ generation, pendingCount: 0, unchecked: false });
-		expect((await repo.symbol("source_symbol")).hits.map(hit => hit.path)).toEqual(["source.py"]);
-		expect((await repo.symbol("unwritten_symbol")).hits).toEqual([]);
-		expect((await repo.symbol("preview_symbol")).hits).toEqual([]);
+		expect(notifications).toEqual([]);
+		expect(await Bun.file(path.join(cwd, "source.py")).text()).toBe("def source_symbol(): pass\n");
+		expect(await Bun.file(path.join(cwd, "target.py")).text()).toBe("def target_symbol(): pass\n");
 	});
 });

@@ -57,7 +57,7 @@ describe("RPC builtin dispatch", () => {
 		};
 		const acp = await buildAvailableSlashCommands(session, async () => []);
 		const rpc = await buildAvailableSlashCommands(session, async () => [], { includeRpcBuiltins: true });
-		for (const name of ["knowledge", "repo", "plan", "loop", "goal"]) {
+		for (const name of ["knowledge", "plan", "loop", "goal"]) {
 			expect(acp.some(command => command.name === name)).toBe(false);
 			expect(rpc.some(command => command.name === name)).toBe(true);
 		}

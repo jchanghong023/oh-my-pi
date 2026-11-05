@@ -179,8 +179,6 @@ function fallback(name: string, fields: Fields): string {
 			return join(text(fields.pattern), text(fields.path));
 		case "knowledge_search":
 			return join(text(fields.query), text(fields.path));
-		case "repo":
-			return join(text(fields.action), text(fields.query), text(fields.path));
 		default:
 			return firstText(fields.path, fields.target, fields.url, fields.query, fields.pattern) ?? "";
 	}

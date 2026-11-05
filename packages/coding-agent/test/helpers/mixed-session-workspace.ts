@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { saveWikiWorkspaces } from "#openwiki-vendor";
 import { KnowledgeService } from "../../src/knowledge/service";
-import { RepoService } from "../../src/repo/service";
 
 export interface MixedWorkspace {
 	readonly configuration: Record<string, unknown>;
@@ -12,7 +11,7 @@ export interface MixedWorkspace {
 	[Symbol.asyncDispose](): Promise<void>;
 }
 
-/** Start the external search fixture; all repository and knowledge operations remain real. */
+/** Start the external search fixture; all Git, Wiki, and knowledge operations remain real. */
 export function createMixedWorkspace(): MixedWorkspace {
 	const searchQueries: string[] = [];
 	const server = Bun.serve({
@@ -103,12 +102,6 @@ export function createMixedWorkspace(): MixedWorkspace {
 			await saveWikiWorkspaces([{ id: "mixed", name: "Mixed", roots: [cwd, peer] }], {
 				configDirectory: path.join(agentDir, "openwiki"),
 			});
-			const repo = new RepoService({ cwd, agentDir });
-			try {
-				await repo.build();
-			} finally {
-				repo.close();
-			}
 			const knowledge = new KnowledgeService({ cwd, agentDir });
 			try {
 				await knowledge.init("docs", "mixed");

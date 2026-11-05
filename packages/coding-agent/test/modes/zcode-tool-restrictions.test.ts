@@ -199,7 +199,6 @@ describe("caller tool admission restrictions", () => {
 		let calls = 0;
 		const policy = new ToolRestrictions({ allowlist: ["read", "mcp__local_lookup"] });
 		expect(policy.allows("knowledge_search")).toBe(false);
-		expect(policy.allows("repo")).toBe(false);
 		expect(policy.allows("write")).toBe(false);
 		expect(new ToolRestrictions({ allowlist: [] }).allows("read")).toBe(false);
 		await policy.wrap(counterTool("mcp__local_lookup", () => calls++)).execute("allowed", {});

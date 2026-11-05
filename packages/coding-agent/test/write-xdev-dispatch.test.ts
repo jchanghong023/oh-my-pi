@@ -10,6 +10,7 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import * as themeModule from "@oh-my-pi/pi-tui/theme";
 import { ToolChoiceQueue } from "@oh-my-pi/pi-coding-agent/session/tool-choice-queue";
 import { LocalProtocolHandler } from "@oh-my-pi/pi-coding-agent/internal-urls/local-protocol";
+import { KnowledgeService } from "@oh-my-pi/pi-coding-agent/knowledge/service";
 import { createTools, type Tool, type ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { requiresApproval, resolveApproval } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import { Text } from "@oh-my-pi/pi-tui";
@@ -249,7 +250,7 @@ describe("read and write route xd:// device URLs", () => {
 		const session = xdevSession(process.cwd(), {});
 		const tools = await createTools(session);
 		const write = tools.find(tool => tool.name === "write")!;
-		for (const name of ["knowledge_search", "repo"]) {
+		for (const name of ["knowledge_search", "openwiki_search"]) {
 			const args = { path: `xd://${name}`, content: JSON.stringify({ query: "probe" }) };
 			expect(requiresApproval(write, args, "always-ask", { write: "deny" }).required).toBe(false);
 			expect(requiresApproval(write, args, "always-ask", { write: "prompt" }).required).toBe(false);
@@ -265,9 +266,31 @@ describe("read and write route xd:// device URLs", () => {
 
 	it("runs index device queries concurrently while keeping file writes exclusive", async () => {
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "write-xdev-index-scheduling-"));
+		const cleanups = new Set<() => void | Promise<void>>();
 		try {
-			const settings = Object.assign(Settings.isolated({}), { getAgentDir: () => path.join(tempDir, "agent") });
-			const session = xdevSession(tempDir, { settings, enableLsp: false });
+			const agentDir = path.join(tempDir, "agent");
+			const documents = path.join(tempDir, "documents");
+			await Bun.write(path.join(agentDir, "config.yml"), "mnemopi:\n  noEmbeddings: true\n");
+			await Bun.write(path.join(documents, "guide.md"), "# Scheduling\nSCHEDULING_BEACON\n");
+			// Use a real local index: OpenWiki requires Git, and knowledge_search
+			// correctly rejects an empty profile rather than returning a successful query.
+			const service = new KnowledgeService({ agentDir, cwd: tempDir });
+			try {
+				await service.init(documents, "scheduling");
+			} finally {
+				await service.close();
+			}
+			const settings = Object.assign(Settings.isolated({}), { getAgentDir: () => agentDir });
+			const session = xdevSession(tempDir, {
+				settings,
+				enableLsp: false,
+				registerDisposeCallback: cleanup => {
+					cleanups.add(cleanup);
+					return () => {
+						cleanups.delete(cleanup);
+					};
+				},
+			});
 			const tools = await createTools(session);
 			const write = tools.find(tool => tool.name === "write")!;
 			const runBatch = async (args: Array<{ path: string; content: string }>) => {
@@ -310,7 +333,10 @@ describe("read and write route xd:// device URLs", () => {
 				await stream.result();
 				return maximum;
 			};
-			const query = { path: "xd://repo", content: JSON.stringify({ action: "status" }) };
+			const query = {
+				path: "xd://knowledge_search",
+				content: JSON.stringify({ query: "SCHEDULING_BEACON", mode: "grep" }),
+			};
 			expect(await runBatch([query, query])).toBe(2);
 			const target = path.join(tempDir, "target.txt");
 			expect(
@@ -321,9 +347,13 @@ describe("read and write route xd:// device URLs", () => {
 			).toBe(1);
 			expect(await Bun.file(target).text()).toBe("second");
 		} finally {
-			await removeWithRetries(tempDir);
+			try {
+				await Promise.all([...cleanups].map(cleanup => cleanup()));
+			} finally {
+				await removeWithRetries(tempDir);
+			}
 		}
-	});
+	}, 30_000);
 
 	it("records the effective tier reported after an execution decorator rewrites device args", async () => {
 		let executedQuery: string | undefined;

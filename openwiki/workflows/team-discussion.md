@@ -86,7 +86,7 @@ flowchart TD
 
 真实 runner 直接调用 `runSubprocess`，**不是**主 Agent 调用原生 `task` 工具。它以 `modelOverride` 绑定每个调用的确切模型，并核对实际解析身份；模型不匹配、子进程错误或无效结构化输出都作为调用失败。每个子调用使用新会话和严格 schema；Team 不设置通用子代理墙钟时限，但仍可能遇到执行器请求预算或其他内部终止。
 
-只读是程序边界，不只是提示词：工具白名单为 `read`、`grep`、`glob`、`knowledge_search`、`repo`、`ast_grep`，执行器另提供必需的 `yield`；`restrictToolNames` 禁止自动扩展，且关闭 LSP、IRC、MCP 和跨 Agent 读取。没有 `bash`、`edit`、`write`、`task` 或 `hub`。工作区额外授权目录仍传递给子代理；隔离根阻止读取其他子调用工件。普通 Team 不向子代理传入 `AGENTS.md` 上下文文件，受限工作流可显式保留既有上下文。
+只读是程序边界，不只是提示词：工具白名单为 `read`、`grep`、`glob`、`knowledge_search`、`ast_grep`，执行器另提供必需的 `yield`；`restrictToolNames` 禁止自动扩展，且关闭 LSP、IRC、MCP 和跨 Agent 读取。没有 `bash`、`edit`、`write`、`task` 或 `hub`。工作区额外授权目录仍传递给子代理；隔离根阻止读取其他子调用工件。普通 Team 不向子代理传入 `AGENTS.md` 上下文文件，受限工作流可显式保留既有上下文。
 
 每次调用取得工件租约：有 `.jsonl` 会话文件时使用其同名兄弟工件目录并保留以供审计；否则使用临时目录，结束后删除。执行器若将超时的子会话 disposal 延后，临时目录也延后到清理完成才删除，避免与打开的句柄竞争。会话切换会取消旧 job，并过滤旧会话迟到的进度、事件与交付，避免污染新会话。
 

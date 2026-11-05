@@ -188,7 +188,6 @@ import type { MnemopiSessionStateApi } from "./mnemopi/state";
 import autolearnCaptureRefused from "./prompts/system/autolearn-capture-refused.md" with { type: "text" };
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
 import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
-import { RepoLifecycle } from "./repo/lifecycle";
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
@@ -336,7 +335,6 @@ import {
 	warmupLspServers,
 	xdevEntries,
 } from "./tools";
-import { resolveToolTier } from "./tools/approval";
 import { resolveYieldReportText } from "./tools/yield";
 import {
 	createModelJobCaptionWriter,
@@ -1615,7 +1613,6 @@ const MAX_MCP_INSTRUCTIONS_LENGTH = 4000;
 /** Built-ins `createTools` force-includes into explicit tool lists; the active set mirrors them. */
 const SESSION_MANAGED_BUILTIN_TOOL_NAMES = [
 	"knowledge_search",
-	"repo",
 	"openwiki_search",
 	"openwiki_read",
 	"openwiki_list_workspaces",
@@ -4880,8 +4877,7 @@ async function createAgentSessionScoped(
 		if (!restrictToolNames && explicitlyRequestedToolNames) {
 			const readToolRequested = explicitlyRequestedToolNames.includes("read");
 			for (const name of SESSION_MANAGED_BUILTIN_TOOL_NAMES) {
-				if ((name === "knowledge_search" || name === "repo" || name.startsWith("openwiki_")) && !readToolRequested)
-					continue;
+				if ((name === "knowledge_search" || name.startsWith("openwiki_")) && !readToolRequested) continue;
 				if (builtInRegistryToolNames.has(name) && !explicitlyRequestedToolNames.includes(name)) {
 					explicitlyRequestedToolNames.push(name);
 				}
@@ -6082,18 +6078,6 @@ async function createAgentSessionScoped(
 			throw new Error(`Agent "${resolvedAgentId}" was replaced during session initialization.`);
 		}
 		hasRegistered = true;
-		// 受限清单不等于只读：按实际启用（含挂载）工具的审批级别保留写入通知。
-		// read 的动态审批及必需的只读辅助工具不代表可写；复用审批解析，缺省声明仍按 exec。
-		if (
-			!restrictToolNames ||
-			session.getEnabledToolNames().some(name => {
-				const tool = session.getToolByName(name);
-				if (!tool) return false;
-				return resolveToolTier(tool, {}) !== "read";
-			})
-		) {
-			session.attachRepoLifecycle(new RepoLifecycle({ agentDir, getCwd: () => sessionManager.getCwd() }));
-		}
 		// MCP notification bridge cleanup — assigned when the bridge is wired below,
 		// invoked from the dispose wrapper AND registered as a postmortem so both
 		// explicit-dispose (SDK embedders that reuse the process across sessions) and

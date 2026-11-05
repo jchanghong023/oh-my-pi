@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Removed the fork's Repo code index, `repo` tool, `/repo` panel, Python-symbol indexing and ZCode Repo extensions; use existing file search, AST and LSP tools for code navigation. Existing user databases and project files are left untouched.
 - Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
 - Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; databases with the old name are no longer adopted. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
 - Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
@@ -55,7 +56,7 @@
 - Persist only the workspace solution-Team toggle, default off and editable in no-agent or requirements phases when runtime conditions allow. New flows inherit it; successful completion preserves it and drop clears it. Team starts only on solution entry, not follow-up turns. Goal remains a user-controlled native executor-session capability, with no Dev setting or per-turn recreation.
 - Let `/dev` requirements and solution agents query existing Knowledge indexes directly while retaining their stage-specific file write restrictions.
 - Let `/dev` requirements, solution and planning agents delegate investigation to read-only Scout subagents without expanding stage write access.
-- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Knowledge/Repo operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
+- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Knowledge operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
 - Expose native `/dev` through opt-in ZCode queries and subscriptions using the same workspace controller, five role states, Team configuration, native messages, approvals and recovery rules. Cold history remains read-only and never acquires control or starts models; unrelated dynamic workflows and desktop UI integration remain separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
@@ -121,7 +122,6 @@
 - Restore upstream HTML export resource loading, extension-tool schema validation, service log failure propagation, Web Search failure receipts, and JTD conversion.
 - Save the clean, compact, and detailed tiers as `display.mode`; remove independent compact/hide switches while retaining image-setting precedence.
 - Require `?` to request `xd://` device documentation; empty content and `help` follow the device's normal input rules.
-- Limit Repo search and symbol queries and page sizes consistently across tools and ZCode.
 - Notify same-process Team settings and app-server clients when user configuration is saved; preserve unsaved TUI drafts during refresh.
 - Apply desktop presentation to app-server sessions and keep display shortcuts aligned with `/display`.
 - Keep completion thinking disabled for smol and default tiers, including fallback models.
@@ -198,7 +198,6 @@
 - Preserve the current goal and mode when autopilot tool activation fails.
 - Keep Team children queued until they acquire a concurrency slot, and cancel every active child when discussion stops.
 - Honor explicit user confirmation policies even when the tool policy allows an operation.
-- Enforce Repo query length limits consistently, including when the index is missing.
 - Report corrupt OpenWiki state instead of treating it as a fresh workspace.
 - Refresh resident sessions immediately after user model-role configuration changes without switching their current model.
 - Preserve structured Skills notifications and send one cancellation receipt for index operations.
@@ -297,7 +296,7 @@
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.
 - Preserve native stage input, attachments and drafts when Dev admission or artifact checks fail; retain no-agent Dev mode after successful completion without manufacturing model replies.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
-- Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities, Skill catalogs and Repo recovery, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
+- Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities and Skill catalogs, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
 - Keep ZCode clock calibration independent of history scans and reuse indexed receipts across restarts, without queuing foreground lookups behind full background rebuilds or shortening deduplication history.
 - Allow ZCode profile switching after a completed session deletion, reject incompatible concurrent resume options, and retain structured Team configuration error codes and save receipts on the wire.
 - Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log, native Goal and ZCode coverage and leaving upstream RPC behavior unchanged.

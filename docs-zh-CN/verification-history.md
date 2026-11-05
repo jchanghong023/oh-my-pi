@@ -87,10 +87,8 @@ Windows 真实源码 `bun run dev`＋`tui-test` 使用隔离配置及 localhost 
 | [Team 动态运行界面](../openspec/specs/team-run-view/spec.md) | 核心专用设置入口、工作流式动画、每个 Agent／每次调用的过程及真实交互关系 | 新增需求；既有配置面板与讨论验证不代表动态运行界面已实现或验收 |
 | [从需求到交付：OpenSpec × Superpowers × OMP 的规格驱动多 Agent 编排](../openspec/specs/spec-driven-orchestration/spec.md) | `/dev` 协同开发模式及独立 OpenSpec 的边界；用户交互、四阶段对话路由、明确转换、消息队列、同源操作窗口、摘要与完整材料；既有四类职责、三次原生 handoff、Team、自主执行、可选 Goal 和内容绑定验收 | `/dev` 模式、阶段对话、消息级取消、同源操作、待验收只读反馈及版本绑定修复已实现；原 `/spec` 不保留为兼容入口。Windows 控制器／编排／真实终端回归 104 项通过，报告 `runs/test-timing/2026-10-24T15-55-36.514Z-29148-6cf3a9ef/run.json`；覆盖修复准备期间排队、失败／暂停后显式恢复，以及流程释放后的持续输入提示。隔离 localhost 模型的真实源码 TUI 已观察三次 handoff、并行原生任务集成、只读反馈、修复后新验收版本、旧验收拒绝及授权同步归档；实际取消确认、保留草稿、窄屏重排与模式切换证据在 `node_modules/.cache/dev-interaction-acceptance-1792853087249/artifacts/`。ZCode 普通／Goal 流程及消息取消已通过真实 app-server 边界验证，查询、订阅、兼容与历史按协议合同独立核对；本地门禁结果以本轮运行报告为准。桌面 GUI、编译产物、其他平台及真实模型质量须分别验收，不复用旧 `/spec` 或历史二进制证据证明新增交互；跨进程恢复不在范围内。独立 OpenSpec 六项手动技能及既有 Team 契约保持各自边界。2026-10-25 定向修复：初始化失败可重试、消息取消沿注册后代链确认停止、切换／帮助反馈落聊天区、TUI 中文阶段／角色、15 秒心跳、启动需求多行编辑、cost／等待指标及显式质量未知。Windows 七个 spec-driven 测试文件 115 通过／0 失败（33.6s），报告 `runs/test-timing/2026-10-25T05-59-45.985Z-119652-9da93762/run.json` 为 complete；默认源码 TUI＋隔离 localhost provider 观察切换与帮助持久消息、心跳、多行编辑、`/dev status` 原始 `awaiting-specification` 及 `需求 Agent · 等待你` 去向。未运行 fulltest／slowtest、真实模型或 worktree 场景。 |
 | [ZCode Wiki 专页](../openspec/specs/knowledge-index/spec.md) | 自动化下方独立页面；新增／导入、删除、搜索／grep、分页与正文；仅可选增量协议扩展 | 新增需求；复用原生 Wiki，不修改 ZCode 既有协议；专页未验收 |
-| [ZCode Repo 专页](../openspec/specs/repo-index/spec.md) | 与 Wiki 相邻；全部 TUI 索引维护及原生查询；仅可选增量协议扩展 | 新增需求；复用原生 Repo，不修改 ZCode 既有协议；专页未验收 |
 | offline 用户配置双写（历史验证，规格已删除） | 当时 Linux offline 用户主动持久化 OMP 配置时，TUI／RPC／配置命令／Agent 代配均须在同次操作保存 shm 与解析后的原始 NFS 目录；跨主机 NFS 锁、双端字段合并／读回及部分／未知结果，不以后台备份代替。该能力及要求已退役，不约束当前或未来实现 | 当时 Settings／Team／CLI 已接入；Windows 定向回归与真实入口证据见上方专项记录，不代表 Linux／公司 NFS 跨主机及 CentOS 已验收。尚无主动 models.yml provider 保存 API；文本 edit 不等同程序事务保证 |
 | [Goal 自动编排](../openspec/specs/goal-autopilot/spec.md) | `/goal-autopilot` 的命令与模式持久化、上游 Goal 正常历史消息链、首次通知及成功压缩后的完整目标／共享 Orchestrate 重构、构造去重与历史不变性、全过程授权与无人值守、持久化与 WebSocket／严格前缀验收，以及普通 Goal 共用的一次性无工具纠偏和运行中追加输入 | Windows 已修复并复现验证连续工具循环中的 Ctrl+Q 用户消息饥饿：执行中／暂停／无 Goal 三项定向回归通过，coding-agent 类型检查通过；真实 `bun run dev` 的普通 Goal 原始 Ctrl+Q、无人值守 Goal Win32 按键报告两场景均验证当前工具批次后送达、读取更新后的真实文件并完成目标。修复前／后的请求、终端帧、输入字节与源码指纹保留在 `node_modules/.cache/goal-continuous-ctrlq/`。当前合并源码 fastcheck PASS：33.5 秒，compile_excluded=0.0 秒，exit=0；未完整观测的编译保守计费，保留 10 项既有警告；队列投递回归文件 42 项通过。未运行本次 fulltest／slowtest、Linux／WSL、真实模型或 GUI。既有真实 Ctrl+Q、通知／压缩、JchTools、工具纠偏及 WebSocket 证据仍限于其原记录源码，不代表当前完整验收 |
-| [代码定位索引](../openspec/specs/repo-index/spec.md) | `/repo` 面板、`repo` 查询及索引生命周期 | 五项 P2 缺陷已修复，Windows 六个定向文件 110 通过／8 平台跳过／0 失败，报告 `runs/test-timing/2026-10-18T00-42-14.841Z-38996-496fb302/run.json` 为 complete；当前源码 native 构建、coding-agent 类型、改动格式／lint 及 Rust LSP diagnostics 通过。真实 dev CLI＋tui-test 验证 Eval 设备未核对提示、真实 LSP 重命名更新、Python 3.6 参数／类名及长根路径确认；真实服务验证 Windows 大小写删除和 LSP 目录操作。OpenLane 309 文件／998 符号，31 二进制＋1 超限排除、无解析失败；`import` 六页 106 唯一路径独立核对一致，完整更新、取消重建、删除与缺库提示通过，341 源文件指纹不变。证据 `node_modules/.cache/repo-p2-fix-20261018/verification.json`。旧解析错误须显式重建；模拟模型不代表真实模型验收，本轮未运行 fulltest／slowtest、Linux／WSL、公司仓库／NFS 或规模性能验收 |
 | [ZCode 接入](../openspec/specs/zcode-app-server/spec.md) | `ZCODE_AGENT_SERVER_COMMAND=omp` → `omp app-server --stdio`；独立协议目录与 AgentSession 同进程直调 API，命令宿主位于 `modes/zcode/hosts/`，多会话隔离、协议来源及职责见 [ZCode 接入需求](../openspec/specs/zcode-app-server/spec.md)，全部有效能力一次实现、统一验收 | 审查修复已实施：成功删除不再永久阻塞 profile 准备，并发恢复拒绝不兼容参数，工作区文本生成／取消已接入，Team 字符串错误码及保存回执保留于 wire。Windows 定向回归按有效结果去重 15 项通过，含真实 app-server＋localhost 模型的生成／取消／EOF、Team 冲突与非法配置、删除后 profile 准备、HS-E2E-02 与 busy execution 拒绝无卡事实，以及存储 reuse／sequence／profile 同源与错误码；coding-agent 类型检查、10 个改动 TS 文件 lint 与格式处理通过。首轮新增 MCP fixture 缺字段及 Highspeed journal 重复 admission 计数断言失败已修正，仅复验受影响项，原失败报告保留。未运行 fulltest／slowtest、真实模型、外部 ZCode GUI 或桌面／远端发行验证；同进程多会话及整体交付仍未完成统一验收。独立 RPC 已退役，其历史证据不替代新架构验收 |
 | [循环轮次间隔](../openspec/specs/personal-commands/spec.md) | `/loop` 位置间隔、包含首轮的次数、总时长及 TUI／app-server 宿主等待取消 | 限制参数后 `3D` 等非时长正文保持原文；解析边界回归、真实解析冒烟及 LSP diagnostics 通过。两端真实 `cli.ts --mode rpc-ui` 经 localhost 模型服务验证数字前缀正文送达、旧用法、位置间隔的总轮数、慢轮结束后的完整等待与会话删除（对应独立 RPC 场景退役前源码）；相关回归及同提交 fork-affected slowtest 通过。实际 TUI loop 终端交互与真实模型未验证 |
 | [界面显示模式](../openspec/specs/tui-presentation/spec.md) | 经典隐藏工具与思考，全量沿用上游；默认紧凑在同一任务内优先显示运行中工具，仅有隐藏调用时显示低强调累计摘要，两行思考，最近三次真实写入的原版卡片（仅最新展开），以及 30 秒后自动刷新的 Bash 日志；失败和待输入立即提示；全部改动只影响显示，不改模型上下文或执行 | 新契约已实施；新增回归先红后绿，相关定向测试及 TUI／coding-agent lint、格式、类型检查通过。隔离 localhost 模拟模型＋`bun run dev`＋`tui-test` 验证三档、插话与中途正文、并发工具与摘要阈值、真实 write/edit 折叠、短失败与审批、前后台长 Bash、无输出／静默计时、真实 `/compact soft` 上游压缩卡；日志刷新未新增模型请求。模型上下文及会话记录的三档切换前后 JSON 等值回归通过，证据在 `node_modules/.cache/fork-tui-e2e-v2/`。未运行 fulltest／slowtest、Linux／WSL 或真实 native 终端 E2E。 |
@@ -172,15 +170,6 @@ grep 输入及长行的既有专项验证：Windows 下 `Input`、`docs-hub`、`
 * **未改动名单规则的既有证据：** `members.ts`、`controller.ts` 的成员选择规则本次未改；未配置／A／AB／ABC／ABCD 的真实 TUI 五场景证据继续限于 `node_modules/.cache/team-roster-evidence/1792152393470/report.json` 所记录源码，不扩展为当前全功能验收。
 * **未验证范围：** 本次未运行 fulltest／slowtest、Linux／WSL、真实公司网关或真实模型；压缩队列图片恢复由真实 composer 消费者单测验证，未另跑真实 TUI 压缩交互。GPT-6 Luna 的既有两个受控场景不证明当前公司服务可用性或任意实际项目的方案质量，第 6 节真实公司模型验收仍未完成。
 
-## repo-index.md — 实现行为与验证边界
-
-本地自动化覆盖文本匹配、路径/类别筛选、分页与代次失效、Python 定义和解析失败、添加/编辑/删除/重命名、完整核对（包括同大小同时间戳）、取消/失败后保留旧代次、删除不动源码以及并发读取的代次一致性，使用真实 SQLite 与内置 Python 解析而非服务替身。已有 Windows 上 wiki/repo 相关 13 个文件的 131 个测试通过、10 个按平台条件跳过，以及 coding-agent 类型检查和改动格式检查通过的记录。已有交互端到端冒烟以真实 PTY 运行 `bun run dev` 和本机构建的 native 模块：从 `/repo` 建立/查看状态，经真实工具派发执行 `search`/`symbol`，实际编辑后再查询，随后外部改动完整核对、取消重建、面板删除，结果通过；**模型响应由 localhost stub 提供，并非真实模型对任务的成功率验证**。既有 AST 部分写入失败的局部回归、fastcheck 和 Windows native 只读文件故障冒烟仍限于其原记录工作树。本轮 Windows 六个定向文件 110 项通过、8 项按平台跳过；当前源码 native 构建、coding-agent 类型检查、改动文件格式及 lint、Rust LSP diagnostics 通过。真实 `bun run dev`＋`tui-test` 使用隔离配置和 localhost 模拟模型，验证设备 Eval 未核对提示、真实 basedpyright 重命名后的文本／符号更新、Python 3.6 参数／类名及后续定义、151 字符根路径在 48／80／120 列的完整确认；真实服务另验证大小写别名删除及 LSP 目录重命名／删除。OpenLane 建库为 309 文件、998 符号，排除 31 个二进制及 1 个超限文件，无解析失败；`import` 六页 106 个唯一路径与文件系统独立核对一致，完整更新、取消重建保留旧代次、删除及缺库提示通过，341 个文件指纹未变。证据为 `node_modules/.cache/repo-p2-fix-20261018/verification.json`；本轮未运行 fulltest／slowtest、Linux／WSL、公司 NFS 或真实模型验收。
-
-另有确定性合成 Python 语料的本地对照基准，以生产环境使用的 native `grep`（同样纳入隐藏文件、遵循忽略规则、大小写不敏感的字面量查询）对照已建索引；两边均检查命中及未命中的路径集合，分别记录首次和重复查询，以及建库、单路径更新、完整核对与数据库大小。这不是公司代码，工作负载、存储和主机配置均不代表公司部署；不能据此声称公司项目提速或 AI 修改质量改善。在公司真实仓库应另行记录目标命中/遗漏、端到端任务结果、建库与维护成本、网络文件系统和权限下的行为。
-
-索引只提供代码定位线索：不保证找全调用方，不判断影响范围、测试覆盖或配置消费，也不替代当前文件阅读、穷尽 `grep`、项目构建测试及人工审查。
-
-
 ## 迁出规格的实施与验收状态
 
 ### zcode-model-configuration — Team 配置协议的当前实现状态
@@ -197,11 +186,7 @@ grep 输入及长行的既有专项验证：Windows 下 `Input`、`docs-hub`、`
 
 ### wiki-index — Wiki 页面当前实现状态
 
-**实现状态：Wiki 专页、附加协议与 Host 路由已接入原生索引服务；原标题仅保留既有链接锚点，不表示仍未实现。Windows 真实 Electron 定向验证已通过新增、完整正文、grep 原始空白及错误、删除和窄屏展示；与 Repo 合并场景确认模型请求为零、源文件保留。跨仓证据及尚未覆盖的平台／远端组合统一见 [OMP 联调阻塞记录](../../forkZcode/docs/testing/omp-integration-blockers.md)，不以既有 TUI／工具通过替代页面验收。**
-
-### repo-index — Repo 页面当前实现状态
-
-**实现状态：Repo 专页、附加协议与 Host 路由已接入原生索引服务；原标题仅保留既有链接锚点，不表示仍未实现。Windows 真实 Electron 定向验证已通过建立、状态、文本／Python 符号／路径查询、源码修改后更新、重建、删除及窄屏展示；模型请求为零、源文件保留。跨仓证据及尚未覆盖的平台／远端组合统一见 [OMP 联调阻塞记录](../../forkZcode/docs/testing/omp-integration-blockers.md)，不外推为全部验收通过。**
+**实现状态：Wiki 专页、附加协议与 Host 路由已接入原生索引服务；原标题仅保留既有链接锚点，不表示仍未实现。Windows 真实 Electron 定向验证已通过新增、完整正文、grep 原始空白及错误、删除和窄屏展示；当时的合并场景确认模型请求为零、源文件保留。跨仓证据及尚未覆盖的平台／远端组合统一见 [OMP 联调阻塞记录](../../forkZcode/docs/testing/omp-integration-blockers.md)，不以既有 TUI／工具通过替代页面验收。**
 
 ### team-run-view — Team 运行视图当前实现状态
 

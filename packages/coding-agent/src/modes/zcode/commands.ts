@@ -554,10 +554,7 @@ export class ZCodeCommandHost {
 					get cwd(): string {
 						return runtime.sessionManager.getCwd();
 					},
-					rebindCwd: () => {
-						// 原生工具与 ExtensionContext 已从 manager 取实时 cwd；只刷新本会话仓库资源。
-						this.session.refreshRepoLifecycle();
-					},
+					sessionScopedCwd: true,
 					signal: operation.signal,
 					assertCanActivateMode: mode => {
 						if (mode === "dev" && this.#loop.enabled)
@@ -593,7 +590,7 @@ export class ZCodeCommandHost {
 						clearPluginRootsAndCaches(projectPath ? [projectPath] : undefined);
 						await this.session.refreshSkillsAndCommands();
 						await this.catalog();
-						// /move、/wt 的 rebindCwd 尚未刷新原生资源；最终 reload 完成后才能重建引用目录。
+						// /move、/wt 的原生资源在 reload 后才就绪，此时重建引用目录。
 						if (current()) await this.options.resourcesReloaded?.();
 					},
 					setModel: async model => {

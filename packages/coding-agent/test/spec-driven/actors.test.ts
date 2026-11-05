@@ -418,10 +418,10 @@ test("business native session writes only its designated document and rejects de
 	fixture.setNativeTool("write", { path: outputPaths[0], content: "业务草稿" });
 	await fixture.request({ outputPaths });
 	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务草稿");
-	for (const name of ["bash", "eval", "task", "goal", "repo", "lsp", "grep", "glob"]) {
+	for (const name of ["bash", "eval", "task", "goal", "lsp", "grep", "glob"]) {
 		expect(fixture.advertisedTools).not.toContain(name);
 	}
-	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md", "xd://repo", "local://other.md"]) {
+	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md", "xd://bash", "local://other.md"]) {
 		fixture.setNativeTool("write", { path: file, content: "越权" });
 		await fixture.request({ entry: false, feedback: "继续", outputPaths });
 		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({

@@ -141,7 +141,6 @@ describe("CommandCatalogService", () => {
 		expect(catalog.get("skill:probe")).toMatchObject({ source: "skill", execution: "omp" });
 		for (const name of [
 			"knowledge",
-			"repo",
 			"team",
 			"plan",
 			"loop",

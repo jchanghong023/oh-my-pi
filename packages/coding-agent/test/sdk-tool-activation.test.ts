@@ -1771,9 +1771,8 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		});
 
 		try {
-			expect(session.getToolByName("repo")).toBeDefined();
+			expect(session.getToolByName("knowledge_search")).toBeDefined();
 			expect(session.getActiveToolNames()).toContain("knowledge_search");
-			expect(session.getActiveToolNames()).toContain("repo");
 			for (const name of openwikiQueryTools) {
 				expect(session.getToolByName(name)).toBeDefined();
 				expect(session.getActiveToolNames()).toContain(name);
@@ -1845,17 +1844,17 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("does not force-activate an inactive extension replacing repo", async () => {
+	it("does not force-activate an inactive extension replacing knowledge_search", async () => {
 		const tempDir = makeTempDir();
 		const replacement: ExtensionFactory = pi => {
 			pi.registerTool({
-				name: "repo",
-				label: "Extension Repo",
-				description: "Inactive replacement for the built-in repo tool.",
+				name: "knowledge_search",
+				label: "Extension Knowledge Search",
+				description: "Inactive replacement for the built-in knowledge search tool.",
 				parameters: type({}),
 				defaultInactive: true,
 				async execute() {
-					return { content: [{ type: "text", text: "extension repo" }] };
+					return { content: [{ type: "text", text: "extension knowledge search" }] };
 				},
 			});
 		};
@@ -1865,9 +1864,9 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			toolNames: ["read"],
 		});
 		try {
-			expect(session.getToolByName("repo")?.label).toBe("Extension Repo");
-			expect(session.hasBuiltInTool("repo")).toBe(false);
-			expect(session.getActiveToolNames()).not.toContain("repo");
+			expect(session.getToolByName("knowledge_search")?.label).toBe("Extension Knowledge Search");
+			expect(session.hasBuiltInTool("knowledge_search")).toBe(false);
+			expect(session.getActiveToolNames()).not.toContain("knowledge_search");
 		} finally {
 			await session.dispose();
 		}
@@ -2281,7 +2280,6 @@ describe("createAgentSession defaultInactive tool activation", () => {
 				expect.arrayContaining(["read", "yield", "generate_image", "learn", "manage_skill", "write"]),
 			);
 			expect(activeToolNames).toContain("knowledge_search");
-			expect(activeToolNames).toContain("repo");
 			// Explicit and force-included tools stay top-level. Ambient custom and
 			// extension capabilities mount through the device-only write transport.
 			const mountedNames = normal.getXdevToolEntries().map(entry => entry.name);
@@ -2307,7 +2305,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 		}
 	});
 
-	it("does not add wiki and repo to explicit tool lists without read", async () => {
+	it("does not add knowledge and wiki queries to explicit tool lists without read", async () => {
 		const tempDir = makeTempDir();
 		const { session } = await createAgentSession({
 			...baseOptions(tempDir),
@@ -2318,7 +2316,7 @@ describe("createAgentSession defaultInactive tool activation", () => {
 			const activeToolNames = session.getActiveToolNames();
 			expect(activeToolNames).toContain("bash");
 			expect(activeToolNames).not.toContain("knowledge_search");
-			expect(activeToolNames).not.toContain("repo");
+			for (const name of openwikiQueryTools) expect(activeToolNames).not.toContain(name);
 		} finally {
 			await session.dispose();
 		}

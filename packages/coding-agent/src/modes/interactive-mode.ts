@@ -3213,7 +3213,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (newCwd !== previousCwd) this.#bindDevObservation();
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
-		this.session.refreshRepoLifecycle();
 		return true;
 	}
 
@@ -10113,9 +10112,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 	showKnowledgeDashboard(): void {
 		void this.#selectorController.showKnowledgeDashboard();
-	}
-	showRepoDashboard(): void {
-		void this.#selectorController.showRepoDashboard();
 	}
 	showGitUi(revision?: string): void {
 		void this.#selectorController.showGitTui(revision);

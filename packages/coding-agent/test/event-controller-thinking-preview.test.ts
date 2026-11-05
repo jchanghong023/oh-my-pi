@@ -1177,7 +1177,6 @@ describe("compact thinking dock focus restoration", () => {
 	it.each([
 		{ name: "knowledge_search", args: { query: "mbist simulation" }, visible: ["mbist simulation"] },
 		{ name: "openwiki_search", args: { query: "job retry" }, visible: ["job retry"] },
-		{ name: "repo", args: { action: "search", query: "Widget", path: "src" }, visible: ["search", "Widget", "src"] },
 		{ name: "ast_grep", args: { pat: "oldApi($$$)", path: "src" }, visible: ["oldApi($$$)", "src"] },
 		{
 			name: "ast_edit",

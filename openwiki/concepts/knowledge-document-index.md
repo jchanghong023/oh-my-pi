@@ -40,7 +40,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # Knowledge 文档证据索引
 
-Knowledge 索引将一次导入的 Markdown 固化为可检索的证据，而不是对源目录的实时视图。它与面向代码的 [Repo 索引](repo-code-index.md) 是不同的生命周期：Knowledge 管理契约只有新建和删除，没有 update、rebuild 或自动同步。重新导出文档后，先删除旧索引，再显式导入：
+Knowledge 索引将一次导入的 Markdown 固化为可检索的证据，而不是对源目录的实时视图。Knowledge 管理契约只有新建和删除，没有 update、rebuild 或自动同步。重新导出文档后，先删除旧索引，再显式导入：
 
 ```sh
 omp knowledge init "<dir>" --name "<name>"

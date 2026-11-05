@@ -11,8 +11,6 @@
 // fixture's `deepseek` provider configured with a local Anthropic Messages server
 // that answers every stage marker with a schema-valid `yield` tool call, and
 // the run must reach the observable final report in the transcript.
-// A separate PTY case runs /repo against a temporary Python project and a
-// loopback model stub; unlike the model, repository indexing and tools are real.
 
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -26,7 +24,6 @@ import {
 	parseDaemonWireMessage,
 	type DaemonWireRequest,
 } from "../packages/coding-agent/src/launch/protocol";
-import { runRepoSmoke } from "./repo-ui-smoke";
 import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { beginTestRun, endTestRun, recordTestProducer, testReportPath, writeCommandCase } from "./test-reporting";
 
@@ -294,14 +291,6 @@ async function recordUiCase(name: string): Promise<void> {
 	});
 	caseStartedAt = new Date().toISOString();
 	caseStarted = performance.now();
-}
-
-if (process.argv.includes("--repo-only")) {
-	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
-	await recordUiCase("repo-index-e2e");
-	await endTestRun(timingRun, 0);
-	cancelFailureReport();
-	process.exit(0);
 }
 
 if (!process.argv.includes("--team-group-only")) {
@@ -1196,15 +1185,11 @@ try {
 }
 
 await recordUiCase("team-cancel-propagation");
-if (!process.argv.includes("--team-group-only")) {
-	await runRepoSmoke({ startTui, waitFor, normalizePtyOutput, sleep });
-	await recordUiCase("repo-index-e2e");
-}
 
 await endTestRun(timingRun, 0);
 cancelFailureReport();
 console.log(
 	process.argv.includes("--team-group-only")
 		? "ui-smoke: PASS — /team runs and cancels"
-		: "ui-smoke: PASS — dev TUI renders/exits, /team runs/cancels, and /repo operates end to end",
+		: "ui-smoke: PASS — dev TUI renders/exits and /team runs/cancels",
 );

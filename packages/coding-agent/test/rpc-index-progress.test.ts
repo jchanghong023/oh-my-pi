@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "../src/config/settings";
-import { RepoService } from "../src/repo/service";
+import { KnowledgeService } from "../src/knowledge/service";
 import { executeRpcBuiltinSlashCommand } from "../src/slash-commands/acp-builtins";
 import type { RpcSlashCommandRuntime } from "../src/slash-commands/types";
 
@@ -18,7 +18,7 @@ async function fixture() {
 	directories.push(root);
 	const cwd = path.join(root, "project");
 	await fs.mkdir(cwd);
-	await Bun.write(path.join(cwd, "sensor.py"), "def sensor_beacon(): return 42\n");
+	await Bun.write(path.join(cwd, "sensor.md"), "# Sensor\n\nThe sensorbeacon measures temperature.\n");
 	const settings = await Settings.loadIsolated({ cwd, agentDir: path.join(root, "agent"), inMemory: true });
 	const tasks: Promise<void>[] = [];
 	const output: string[] = [];
@@ -35,7 +35,11 @@ async function fixture() {
 		session,
 		sessionManager: session.sessionManager,
 		signal: controller.signal,
-		ui: { select: async () => "Build repository index", confirm: async () => true, input: async () => undefined },
+		ui: {
+			select: async () => "New knowledge index",
+			confirm: async () => true,
+			input: async (title: string) => (title === "Markdown directory" ? cwd : "manual"),
+		},
 		output: (text: string) => {
 			output.push(text);
 		},
@@ -53,31 +57,33 @@ describe("RPC index progress contract", () => {
 		const f = await fixture();
 		let now = 1_000;
 		vi.spyOn(Date, "now").mockImplementation(() => now);
-		const build = RepoService.prototype.build;
-		vi.spyOn(RepoService.prototype, "build").mockImplementation(async function (this: RepoService, options) {
-			options?.onProgress?.({ phase: "parsing", processed: 1, total: 10 });
-			now += 199;
-			options?.onProgress?.({ phase: "parsing", processed: 2, total: 10 });
-			now += 1;
-			options?.onProgress?.({ phase: "parsing", processed: 3, total: 10 });
-			options?.onProgress?.({ phase: "parsing", processed: 10, total: 10 });
-			options?.onProgress?.({ phase: "reading", processed: 0, total: 9 });
-			return build.call(this, options);
-		});
-		expect(await executeRpcBuiltinSlashCommand("/repo", f.runtime)).toEqual({ consumed: true });
+		const init = KnowledgeService.prototype.init;
+		vi.spyOn(KnowledgeService.prototype, "init").mockImplementation(
+			async function (this: KnowledgeService, directory, name, options) {
+				options?.onProgress?.({ phase: "scan", completed: 1, total: 10, failed: 0 });
+				now += 199;
+				options?.onProgress?.({ phase: "scan", completed: 2, total: 10, failed: 0 });
+				now += 1;
+				options?.onProgress?.({ phase: "scan", completed: 3, total: 10, failed: 0 });
+				options?.onProgress?.({ phase: "scan", completed: 10, total: 10, failed: 0 });
+				options?.onProgress?.({ phase: "fts", completed: 0, total: 9, failed: 0 });
+				return init.call(this, directory, name, options);
+			},
+		);
+		expect(await executeRpcBuiltinSlashCommand("/knowledge", f.runtime)).toEqual({ consumed: true });
 		await Promise.all(f.tasks);
-		expect(f.output.filter(text => text.startsWith("/repo: parsing"))).toEqual([
-			"/repo: parsing 1/10",
-			"/repo: parsing 3/10",
-			"/repo: parsing 10/10",
+		expect(f.output.filter(text => /^\/knowledge: scan \d+\/10$/.test(text))).toEqual([
+			"/knowledge: scan 1/10",
+			"/knowledge: scan 3/10",
+			"/knowledge: scan 10/10",
 		]);
-		expect(f.output).toContain("/repo: reading 0/9");
-		expect(f.output.at(-1)).toContain("Build repository index complete.");
-		const service = new RepoService({ cwd: f.cwd, agentDir: f.settings.getAgentDir() });
+		expect(f.output).toContain("/knowledge: fts 0/9");
+		expect(f.output.at(-1)).toContain("Created knowledge index manual: 1 documents.");
+		const service = new KnowledgeService({ cwd: f.cwd, agentDir: f.settings.getAgentDir() });
 		try {
-			expect((await service.symbol("sensor_beacon")).hits.map(hit => hit.path)).toEqual(["sensor.py"]);
+			expect((await service.search("sensorbeacon")).sections.map(section => section.path)).toEqual(["sensor.md"]);
 		} finally {
-			service.close();
+			await service.close();
 		}
 	});
 
@@ -85,21 +91,21 @@ describe("RPC index progress contract", () => {
 		const f = await fixture();
 		let failures = 0;
 		f.runtime.output = text => {
-			if (text.startsWith("/repo:")) {
+			if (text.startsWith("/knowledge:")) {
 				failures++;
 				throw new Error("host progress output unavailable");
 			}
 			f.output.push(text);
 		};
-		expect(await executeRpcBuiltinSlashCommand("/repo", f.runtime)).toEqual({ consumed: true });
+		expect(await executeRpcBuiltinSlashCommand("/knowledge", f.runtime)).toEqual({ consumed: true });
 		await Promise.all(f.tasks);
 		expect(failures).toBeGreaterThan(0);
-		expect(f.output.at(-1)).toContain("Build repository index complete.");
-		const service = new RepoService({ cwd: f.cwd, agentDir: f.settings.getAgentDir() });
+		expect(f.output.at(-1)).toContain("Created knowledge index manual: 1 documents.");
+		const service = new KnowledgeService({ cwd: f.cwd, agentDir: f.settings.getAgentDir() });
 		try {
-			expect((await service.symbol("sensor_beacon")).hits.map(hit => hit.path)).toEqual(["sensor.py"]);
+			expect((await service.search("sensorbeacon")).sections.map(section => section.path)).toEqual(["sensor.md"]);
 		} finally {
-			service.close();
+			await service.close();
 		}
 	});
 });

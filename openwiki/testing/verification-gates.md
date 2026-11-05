@@ -92,7 +92,7 @@ flowchart TD
 
 ### 选择不是结果缓存
 
-默认 fulltest 只在 fork 白名单内用 Bun 原生 `--changed` 和依赖图选测；没有合格的 clean、完整成功基线，或输入无法安全追踪时，回退完整白名单，而不是整个上游测试集。当前 [source 选择规则](../../scripts/test-gate-source.ts)尤其保守：仅特定 `coding-agent/src/tools` 和 `repo` 下的普通 TS 源码可走受影响选择；构建、配置、fixture 等不确定输入触发完整选择。根 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为选测变更输入，但仍参与源码完整性核验；包内资源不享有这个排除。间接启动 CLI 的测试应在共享 harness 静态声明真实运行依赖，而不是执行 CLI 主入口来建立依赖图。
+默认 fulltest 只在 fork 白名单内用 Bun 原生 `--changed` 和依赖图选测；没有合格的 clean、完整成功基线，或输入无法安全追踪时，回退完整白名单，而不是整个上游测试集。当前 [source 选择规则](../../scripts/test-gate-source.ts)尤其保守：仅特定 `coding-agent/src/tools` 下的普通 TS 源码可走受影响选择；构建、配置、fixture 等不确定输入触发完整选择。根 `docs/`、`docs-zh-CN/` 和 `AGENTS.md` 不作为选测变更输入，但仍参与源码完整性核验；包内资源不享有这个排除。间接启动 CLI 的测试应在共享 harness 静态声明真实运行依赖，而不是执行 CLI 主入口来建立依赖图。
 
 Rust 使用预先安装的 `cargo-delta 0.5.0` 与 Git 基线、Cargo metadata 分析受影响包及逆向依赖，再与 `pi-knowledge`、`pi-natives` fork 范围取交集。工具缺失、版本不符、分析失败或无有效基线时回退完整 fork 范围；空交集记录未选，不启动 Cargo。只有选中 `pi-knowledge` 才执行其 doctest；`pi-natives` 为 `cdylib`，没有 doctest。独立 `test:rs` 不使用 delta，`--full` 使用 workspace。见 [delta 实现](../../scripts/test-gate-delta.ts)和 [Rust 运行器](../../scripts/run-rs-task.ts)。
 
@@ -123,7 +123,7 @@ fulltest 将脚本、静态检查和测试绑定到同一 post-native source ide
 | 门禁选择、超时、进程回收、报告 | `scripts/test-gate-delta.test.ts`、`test-gate-runtime.test.ts`、`test-reporting.test.ts` | 对应 `fulltest.test.ts`、`slowtest.test.ts` 和获授权的真实入口；短任务自测不替代真实门禁。 |
 | Dev/OpenSpec 编排与资源 | `test/spec-driven/controller.test.ts`、`resources.test.ts` | `process.e2e.test.ts`、资源进程测试及相关 `tui-*.e2e.test.ts`，覆盖真实入口、失败和生命周期。 |
 | ZCode 协议、权限、模型配置 | `test/modes/zcode-commands.test.ts`、`zcode-provider-config.test.ts` | 对应 `zcode-process-*.test.ts`、`zcode-permissions.e2e.ts`、`zcode-spec-driven.e2e.ts`；见 [ZCode app-server](../integrations/zcode-app-server.md)。 |
-| Knowledge/Repo 索引与 Python symbols | 相关消费者测试及 `pi-knowledge`、`pi-natives` fork Rust 测试 | 跨语言或配置变更还需相应进程和索引回归；见 [Knowledge 文档索引](../concepts/knowledge-document-index.md)。 |
+| Knowledge 文档索引 | 相关消费者测试及 `pi-knowledge`、`pi-natives` fork Rust 测试 | 跨语言或配置变更还需相应进程和索引回归；见 [Knowledge 文档索引](../concepts/knowledge-document-index.md)。 |
 | TUI 输入、状态和焦点 | 相应组件/控制器测试 | 相关 spec-driven TUI PTY 场景和隔离 dev-TUI 冒烟，保留取消、恢复、焦点等不同边界。 |
 
 路径中的 `test/` 指 `packages/coding-agent/test/`。局部 UT 可证明其断言的逻辑；真实子进程覆盖启动和协议，但本地 fixture 不证明真实提供者认证。参考终端或虚拟终端可验证渲染模型，PTY 上实际源码 TUI 可验证终端交互，但都不是共享桌面真实 GUI 输入。真实桌面输入需要另行明确授权，门禁记作 `NOT_RUN_SEPARATE_USER_INSTRUCTION_REQUIRED`；真实模型质量、公司内网与真实认证也需单独授权和证据。

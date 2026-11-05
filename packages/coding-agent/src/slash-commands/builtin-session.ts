@@ -40,7 +40,7 @@ import {
 import { StatsNotice } from "@oh-my-pi/pi-tui/overlays/stats-notice";
 import { handleTodoAcp } from "./helpers/todo";
 import { buildUsageReportText } from "./helpers/usage-report";
-import { handleRpcKnowledgeDashboard, handleRpcRepoDashboard } from "./helpers/index-dashboard";
+import { handleRpcKnowledgeDashboard } from "./helpers/index-dashboard";
 import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 async function handleUsageResetCommand(
@@ -609,16 +609,6 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		handleRpc: (_command, runtime) => handleRpcKnowledgeDashboard(runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showKnowledgeDashboard();
-			clearSubmittedText(runtime);
-		},
-	},
-	{
-		name: "repo",
-		icon: "tree",
-		description: "Open the repository index dashboard",
-		handleRpc: (_command, runtime) => handleRpcRepoDashboard(runtime),
-		handleTui: (_command, runtime) => {
-			runtime.ctx.showRepoDashboard();
 			clearSubmittedText(runtime);
 		},
 	},

@@ -166,10 +166,7 @@ function forkTestCommands(packages: readonly string[]): readonly (readonly strin
 	if (!packages.length) return [];
 	const knowledge = packages.includes("pi-knowledge");
 	const native = packages.includes("pi-natives");
-	const expression = [
-		knowledge && "package(pi-knowledge)",
-		native && "(package(pi-natives) & (test(/^knowledge::/) | test(/^python_symbols::/)))",
-	]
+	const expression = [knowledge && "package(pi-knowledge)", native && "(package(pi-natives) & test(/^knowledge::/))"]
 		.filter(Boolean)
 		.join(" | ");
 	return [
@@ -536,7 +533,7 @@ async function runCommand(command: readonly string[], scope?: string): Promise<n
 								mode: "full",
 								reason: full
 									? "all workspace packages and test namespaces"
-									: "full pi-knowledge package and pi-natives knowledge bindings and python_symbols namespaces",
+									: "full pi-knowledge package and pi-natives knowledge bindings",
 							},
 				timingBasis: "nextest native JUnit case time",
 				runnerVersion: toolVersion([executable, "nextest", "--version"], env),

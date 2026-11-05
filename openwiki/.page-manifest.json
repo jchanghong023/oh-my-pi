@@ -29,13 +29,6 @@
       "gitHead": "2d80773f938bc23dd00e3638202da365e961c7df",
       "sourceFingerprint": "sha256:41059dbf087fa36d580de7a4d8bac81f76466568cf46f98248539b2fcc7a27cd"
     },
-    "/openwiki/concepts/repo-code-index.md": {
-      "pageVersion": "sha256:b5cb40f374ce308a0a6b87ab159b13d312f963adecaaf37b4ecb7d89a58dc697",
-      "completedBy": "openwiki/0.0.0-unknown",
-      "completedRunId": "e0e2cc5f-6568-4d32-b4bf-c7cddd11f791",
-      "gitHead": "2d80773f938bc23dd00e3638202da365e961c7df",
-      "sourceFingerprint": "sha256:41059dbf087fa36d580de7a4d8bac81f76466568cf46f98248539b2fcc7a27cd"
-    },
     "/openwiki/concepts/tui-and-personal-defaults.md": {
       "pageVersion": "sha256:e3279a623d8c7f3502b8602dbba3fadced433c9a913d4cd2b52d27b1ba951e5c",
       "completedBy": "openwiki/0.0.0-unknown",

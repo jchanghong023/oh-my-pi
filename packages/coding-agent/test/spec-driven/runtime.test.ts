@@ -2157,7 +2157,7 @@ test("business uses existing indexed business facts without acquiring code or in
 	expect(await fs.readFile(path.join(fixture.cwd, "authorized-business-sources/approval.md"), "utf8")).toBe(
 		`# 订单审批规则\n\n${fact}\n`,
 	);
-	for (const forbidden of ["repo", "lsp", "bash", "eval", "task", "goal"])
+	for (const forbidden of ["lsp", "bash", "eval", "task", "goal"])
 		expect(native.getEnabledToolNames()).not.toContain(forbidden);
 	expect(fixture.runtime.sessionRefs().requirements).toBeUndefined();
 	await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -2287,7 +2287,7 @@ test.each([true, false])(
 			expect(delivered).toContain("Limitation: OpenWiki unavailable");
 			await expect(fs.stat(path.join(fixture.cwd, "openwiki"))).rejects.toMatchObject({ code: "ENOENT" });
 		}
-		for (const forbidden of ["repo", "lsp", "bash", "eval", "task", "team", "goal"])
+		for (const forbidden of ["lsp", "bash", "eval", "task", "team", "goal"])
 			expect(native.getEnabledToolNames()).not.toContain(forbidden);
 		expect(fixture.runtime.sessionRefs().requirements).toBeUndefined();
 		await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });

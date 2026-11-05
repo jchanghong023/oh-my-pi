@@ -24,7 +24,7 @@ function notifyMutation(paths: readonly string[], uncertaintyReason?: string): v
 				stage: "mutation_notify",
 				path_count: paths.length,
 				listener_count: mutationListeners.size,
-				index_uncertain: uncertaintyReason !== undefined,
+				mutation_uncertain: uncertaintyReason !== undefined,
 				uncertainty_source:
 					uncertaintyReason === undefined
 						? undefined
@@ -43,7 +43,7 @@ function notifyMutation(paths: readonly string[], uncertaintyReason?: string): v
 			let notifiedCount = 0;
 			let failedCount = 0;
 			let firstFailure: Record<string, unknown> | undefined;
-			// A successful source mutation must never be reported as failed by indexing.
+			// A successful source mutation must never be reported as failed by an observer.
 			for (const listener of mutationListeners) {
 				try {
 					listener(paths, uncertaintyReason);
@@ -63,8 +63,7 @@ function notifyMutation(paths: readonly string[], uncertaintyReason?: string): v
 				...firstFailure,
 			};
 			if (failedCount) logger.warn("Filesystem mutation observers failed after source change", resultFields);
-			else if (uncertaintyReason !== undefined)
-				logger.warn("Filesystem mutation index coverage uncertain", resultFields);
+			else if (uncertaintyReason !== undefined) logger.warn("Filesystem mutation may be partial", resultFields);
 			else logger.info("Filesystem mutation notification completed", resultFields);
 		},
 	);

@@ -147,7 +147,6 @@ export const parseCodeStatus = nativeBindings.parseCodeStatus ?? missingNativeEx
 export const parseKey = nativeBindings.parseKey ?? missingNativeExport("parseKey");
 export const parseKittySequence = nativeBindings.parseKittySequence ?? missingNativeExport("parseKittySequence");
 export const pdfToMarkdown = nativeBindings.pdfToMarkdown ?? missingNativeExport("pdfToMarkdown");
-export const pythonSymbols = nativeBindings.pythonSymbols ?? missingNativeExport("pythonSymbols");
 export const rasterizeSvg = nativeBindings.rasterizeSvg ?? missingNativeExport("rasterizeSvg");
 export const readImageFromClipboard = nativeBindings.readImageFromClipboard ?? missingNativeExport("readImageFromClipboard");
 export const readTextFromClipboard = nativeBindings.readTextFromClipboard ?? missingNativeExport("readTextFromClipboard");

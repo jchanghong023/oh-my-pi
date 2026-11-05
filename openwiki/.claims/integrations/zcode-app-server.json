@@ -273,24 +273,6 @@
       ]
     },
     {
-      "id": "claim_584b26db1e9e47349515e810860769ac",
-      "statement": "Wiki 和 Repo 扩展由原生索引服务执行，按 workspace 和 operationId 关联进度及取消；进度不是终态，取消受理不保证回滚。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/zcode-app-server/spec.md#L113-L119",
-          "version": "repo-lines-v1:sha256:ff576bce7da4dde3909e0a6c051a5ca2d29db69dc85bbc91bb16046bc82d91dd:eyJzZWxlY3RlZExpbmVDb3VudCI6NywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOWFkNzFlZjkyNDM3OTFiYmQ4NjY5Nzg2ZWVjMWU3ZmQ2ZmI3ZTNlZGE1OTkzNTE4ZWM1YWUwNTNmMWJiNjc3NCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNGNkMmE3MGNlZDlkMTViNTgzM2Q4MzY1MzkzOWZjOGQzNDlkZjBjOThiNWRkNDI5YzMyOTExZjI1OTE0OWUzMyIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODMyYTc1NDVlZTQ5ZmQwNWU2MGYzYjM1MTVhYTU2OTAyMjQ0NGYxMDg5OGQ2Y2U5M2JhYWQ0ZmM3ZjdjYzQ4OCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYWMzNTNiYjEwODczNmFkZTNhNzcwYmYzN2RkZWQxMDQ5N2NjZTdlYzMyYzI4ZTBlMjk1Y2ZjZWEzMWMzYjNlOCJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/indexes.ts",
-          "version": "repo-file-v1:sha256:395e8f43e186001c42af0698d2c09f764419c7f0fe9b1f7eece421f16a2174f4"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/server.ts#L2194-L2211",
-          "version": "repo-lines-v1:sha256:ad30d307e948161e9597f96dbbf7951ad532c5ab74d015514e597234e863f39d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQwMDQ0ZjNlMTY4YWFmODI3YmRhZWU1ZDAxMTNlMmUzNGZhZmRhOGU4ZTdiMmRiODI3MTU2ZDRhMzk4Mzc1NjkiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImUyODMzNGZiMDcxMzBhZjk4NjBiNWMwZTk4NzI0NDgyZWUwODEzZjllY2I4YTcxNmM1ZmU2YmM1OTdiODI3NzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFiOWUxMDExNThkNjU3NDg5YjFmOTNlNGJjMGIyNThiZDIxNDdjZmVlZjhmM2U2Yzc5N2NhZWU3ODM2N2NkYjQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyMzgxYzRmZTFhMzEwMTc4YWRjMmM5MGUxZTZhMDg5ZGM3ODZhMDQ4M2U5OWQ1NjQzYmVlMmNiYzlkZTVhNDIifQ"
-        }
-      ]
-    },
-    {
       "id": "claim_28ab23d978f34970a67392a7a71df12b",
       "statement": "Skill 管理读取原生 inventory，启停仅保存当前 profile 用户层，workspace 写入不支持。",
       "evidence": [

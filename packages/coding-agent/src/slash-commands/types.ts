@@ -87,8 +87,8 @@ export interface SlashCommandRuntime {
 	bindMainSession?: (session: AgentSession) => Promise<void>;
 	/** Native attachments supplied with this slash submission. */
 	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
-	/** Rebind a session-scoped host after native relocation; absent hosts retain process cwd binding. */
-	rebindCwd?: (cwd: string) => Promise<void> | void;
+	/** Keep cwd in the session manager rather than rebinding the shared process directory. */
+	sessionScopedCwd?: boolean;
 	/** Cancellation of the host prompt/request, when supported. */
 	signal?: AbortSignal;
 	/** Actual host dialogs, including headless RPC tool UI when extensions have no UI. */

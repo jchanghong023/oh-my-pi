@@ -6,7 +6,6 @@ import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
 import { TEAM_SLASH_COMMANDS } from "../../src/jch-commands/team";
 import { KnowledgeService } from "../../src/knowledge/service";
-import { RepoService } from "../../src/repo/service";
 import { createAgentSession } from "../../src/sdk";
 import type { AgentSession } from "../../src/session/agent-session";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -17,9 +16,9 @@ import { beginSettingsTest, restoreSettingsTestState } from "../helpers/settings
 import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../spec-driven/provider-fixture";
 
 // Real registered /team handler -> native background owner -> every real child
-// SDK session -> HTTP model fixture -> actual Wiki/Repo/read tools -> durable report.
+// SDK session -> HTTP model fixture -> actual Knowledge/grep/read tools -> durable report.
 // The fixture proves tool access and evidence transport, not model reasoning quality.
-test("public Team stages and recheck query retained Wiki and Repo evidence without modifying project bytes", async () => {
+test("public Team stages and recheck query retained Knowledge and current source evidence without modifying project bytes", async () => {
 	const state = beginSettingsTest();
 	await using root = await TempDir.create("@omp-team-retrieval-");
 	const cwd = root.join("project");
@@ -28,14 +27,13 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 	await Promise.all([cwd, agentDir, documents].map(directory => fs.mkdir(directory, { recursive: true })));
 	setAgentDir(agentDir);
 	const source = path.join(cwd, "engine.py");
-	const sourceText = "def preserve_api(): return 'TEAM_REPO_BEACON'\n";
+	const sourceText = "def preserve_api(): return 'TEAM_SOURCE_BEACON'\n";
 	await fs.writeFile(source, sourceText);
 	await fs.writeFile(
 		path.join(documents, "guide.md"),
 		"# Compatibility\nTEAM_WIKI_BEACON requires preserving the public API.\n",
 	);
 	const wiki = new KnowledgeService({ agentDir, cwd });
-	const repo = new RepoService({ agentDir, cwd });
 	const auth = await AuthStorage.create(":memory:");
 	let session: AgentSession | undefined;
 	const observed: Array<{ marker: string; results: string[] }> = [];
@@ -60,7 +58,7 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 			.map(message => contentText(message.content));
 		const queries = [
 			{ name: "knowledge_search", args: { query: "TEAM_WIKI_BEACON", mode: "grep" } },
-			{ name: "repo", args: { query: "TEAM_REPO_BEACON" } },
+			{ name: "grep", args: { pattern: "TEAM_SOURCE_BEACON", path: source } },
 			{ name: "read", args: { path: source } },
 		];
 		if (results.length < queries.length) {
@@ -69,7 +67,7 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 		}
 		expect(results).toHaveLength(3);
 		expect(results[0]).toContain("TEAM_WIKI_BEACON");
-		expect(results[1]).toContain("TEAM_REPO_BEACON");
+		expect(results[1]).toContain("TEAM_SOURCE_BEACON");
 		expect(results[2]).toContain(sourceText.trim());
 		observed.push({ marker, results });
 		let data: Record<string, unknown>;
@@ -133,7 +131,7 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 		} else if (marker.startsWith("synthesis"))
 			data = {
 				reportMarkdown:
-					"## Evidence\nTEAM_WIKI_BEACON and TEAM_REPO_BEACON establish the compatibility condition. Preserve the existing API.",
+					"## Evidence\nTEAM_WIKI_BEACON and TEAM_SOURCE_BEACON establish the compatibility condition. Preserve the existing API.",
 				recommendedProposal: "A",
 				recommendationReason: "Preserves verified compatibility",
 				recommendationPreconditions: "Keep the public API",
@@ -146,7 +144,6 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 	try {
 		await wiki.init(documents, "manual");
 		await fs.rm(documents, { recursive: true });
-		await repo.build();
 		const configFile = path.join(agentDir, "models.yml");
 		await fs.writeFile(
 			configFile,
@@ -228,7 +225,7 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 				.filter(entry => entry.type === "custom_message" && entry.customType === "team-result"),
 		).toHaveLength(1);
 		expect(result.reportMarkdown).toContain("TEAM_WIKI_BEACON");
-		expect(result.reportMarkdown).toContain("TEAM_REPO_BEACON");
+		expect(result.reportMarkdown).toContain("TEAM_SOURCE_BEACON");
 		expect(await fs.readFile(source, "utf8")).toBe(sourceText);
 		expect(await fs.readFile(configFile, "utf8")).toBe(configBytes);
 		expect(await fs.readdir(cwd)).toEqual(["engine.py"]);
@@ -237,7 +234,6 @@ test("public Team stages and recheck query retained Wiki and Repo evidence witho
 		await session?.dispose();
 		auth.close();
 		await wiki.close();
-		repo.close();
 		restoreSettingsTestState(state);
 	}
 }, 120_000);

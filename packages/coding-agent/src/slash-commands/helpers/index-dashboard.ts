@@ -1,9 +1,6 @@
 import { createHash } from "node:crypto";
 import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import { KnowledgeService } from "../../knowledge/service";
-import { RepoService } from "../../repo/service";
-import type { RepoProgress } from "../../repo/types";
-import { formatRepoStatusLines } from "../../tools/repo";
 import type { RpcSlashCommandRuntime, SlashCommandResult } from "../types";
 
 interface IndexCommandScope {
@@ -17,7 +14,6 @@ interface IndexCommandScope {
 
 /** Keep dialogs and index maintenance attached to the session that opened them. */
 function runIndexDashboard(
-	name: string,
 	runtime: RpcSlashCommandRuntime,
 	run: (scope: IndexCommandScope) => Promise<void>,
 ): SlashCommandResult {
@@ -27,7 +23,7 @@ function runIndexDashboard(
 	const manager = session.sessionManager;
 	const controller = new AbortController();
 	const signal = runtime.signal ? AbortSignal.any([runtime.signal, controller.signal]) : controller.signal;
-	const command = name === "/knowledge" || name === "/repo" ? name : "unknown";
+	const command = "/knowledge";
 	const started = performance.now();
 	let stage = "dashboard";
 	let cancelled = false;
@@ -71,7 +67,7 @@ function runIndexDashboard(
 		if (lastPhase === phase && now - lastProgressAt < 200 && completed !== total) return;
 		lastPhase = phase;
 		lastProgressAt = now;
-		void output(`${name}: ${phase} ${completed}/${total}`, "progress_output");
+		void output(`${command}: ${phase} ${completed}/${total}`, "progress_output");
 	};
 	runtime.runCommandInBackground(() => {
 		const inherited = logger.getLogContext();
@@ -123,7 +119,7 @@ function runIndexDashboard(
 						failed = true;
 						failure = error;
 						failureStage = stage;
-						await output(`${name} failed: ${error instanceof Error ? error.message : String(error)}`);
+						await output(`${command} failed: ${error instanceof Error ? error.message : String(error)}`);
 					} else {
 						cancelled = true;
 					}
@@ -137,7 +133,7 @@ function runIndexDashboard(
 						});
 					} else {
 						const result = cancelled || !current() ? "cancelled" : "completed";
-						if (result === "cancelled") await output(`${name} cancelled.`, "cancel_output", true);
+						if (result === "cancelled") await output(`${command} cancelled.`, "cancel_output", true);
 						logger.info("RPC index dashboard ended", {
 							...fields(),
 							event: `rpc_index_dashboard_${result}`,
@@ -159,7 +155,7 @@ function line(value: string): string {
 
 /** RPC dialogs replace the terminal dashboard; all indexing remains in KnowledgeService. */
 export function handleRpcKnowledgeDashboard(runtime: RpcSlashCommandRuntime): SlashCommandResult {
-	return runIndexDashboard("/knowledge", runtime, async scope => {
+	return runIndexDashboard(runtime, async scope => {
 		scope.stage("knowledge_service_create");
 		const service = new KnowledgeService({ agentDir: runtime.settings.getAgentDir(), cwd: runtime.cwd });
 		try {
@@ -292,102 +288,6 @@ export function handleRpcKnowledgeDashboard(runtime: RpcSlashCommandRuntime): Sl
 			const previous = scope.stage("knowledge_close");
 			await service.close();
 			scope.stage(previous);
-		}
-	});
-}
-
-/** User-confirmed repository maintenance uses the same service as the TUI panel. */
-export function handleRpcRepoDashboard(runtime: RpcSlashCommandRuntime): SlashCommandResult {
-	return runIndexDashboard("/repo", runtime, async scope => {
-		scope.stage("repo_service_create");
-		const service = new RepoService({ agentDir: runtime.settings.getAgentDir(), cwd: runtime.cwd });
-		// Closing aborts the service's in-flight/lock-waiting operation, including removal.
-		const close = () => {
-			const previous = scope.stage("repo_close");
-			service.close();
-			scope.stage(previous);
-		};
-		scope.signal.addEventListener("abort", close, { once: true });
-		try {
-			let exists = false;
-			const statusStarted = performance.now();
-			try {
-				scope.stage("repo_status");
-				const status = await service.status();
-				exists = status.exists;
-				scope.stage("index_output");
-				await scope.output(formatRepoStatusLines(status).join("\n"));
-			} catch (error) {
-				const failedStage = scope.stage("status_error_output");
-				logger.error("RPC repository dashboard status failed", {
-					component: "rpc",
-					event: "rpc_index_dashboard_stage_failed",
-					command: "/repo",
-					stage: failedStage,
-					result: "failed",
-					elapsed_ms: performance.now() - statusStarted,
-					...logger.diagnosticError(error),
-				});
-				await scope.output(
-					`Root: ${line(service.root)}\nUnable to read repository index status: ${line(String(error))}`,
-				);
-			}
-			if (!scope.current()) return;
-			const recovery = Boolean(service.storage.recoveryError);
-			scope.stage("action_select");
-			const action = await runtime.ui.select(
-				"Repository index",
-				[
-					...(!exists && !recovery ? ["Build repository index"] : []),
-					...(exists ? ["Update repository index"] : []),
-					"Rebuild repository index",
-					...(exists || recovery ? ["Delete repository index"] : []),
-				],
-				{ signal: scope.signal },
-			);
-			if (!scope.current() || !action) return scope.cancel();
-			if (action !== "Update repository index") {
-				if (!["Build repository index", "Rebuild repository index", "Delete repository index"].includes(action))
-					return;
-				scope.stage("maintenance_confirm");
-				const confirmed = await runtime.ui.confirm(`${action}?`, `Root: ${line(service.root)}`, {
-					signal: scope.signal,
-				});
-				if (!scope.current() || !confirmed) return scope.cancel();
-			}
-			const options = {
-				signal: scope.signal,
-				onProgress: (value: RepoProgress) => scope.progress(value.phase, value.processed, value.total),
-			};
-			if (action === "Delete repository index") {
-				scope.stage("repo_remove");
-				await service.remove();
-				scope.stage("index_output");
-				await scope.output("Deleted repository index. Project files are preserved.");
-			} else {
-				scope.stage(
-					action === "Build repository index"
-						? "repo_build"
-						: action === "Update repository index"
-							? "repo_reconcile"
-							: recovery
-								? "repo_recover"
-								: "repo_rebuild",
-				);
-				const status =
-					action === "Build repository index"
-						? await service.build(options)
-						: action === "Update repository index"
-							? await service.reconcile(options)
-							: recovery
-								? await service.recover(options)
-								: await service.rebuild(options);
-				scope.stage("index_output");
-				await scope.output(`${action} complete.\n${formatRepoStatusLines(status).join("\n")}`);
-			}
-		} finally {
-			scope.signal.removeEventListener("abort", close);
-			close();
 		}
 	});
 }

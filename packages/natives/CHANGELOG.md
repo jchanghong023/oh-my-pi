@@ -51,6 +51,7 @@
 ### Removed
 
 - Removed the unused `VcsGitRepo.diffChanges` native API.
+- Removed the Repo-only Python definition extraction API and its native symbol types.
 
 ### Breaking Changes
 

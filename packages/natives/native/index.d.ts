@@ -3638,27 +3638,6 @@ export interface PtyStartOptions {
   shell?: string
 }
 
-export interface PythonSymbol {
-  name: string
-  qualname: string
-  kind: string
-  startLine: number
-  endLine: number
-  signature?: string
-}
-
-export declare function pythonSymbols(options: PythonSymbolsOptions): Promise<PythonSymbolsResult>
-
-export interface PythonSymbolsOptions {
-  code: string
-  signal?: unknown
-}
-
-export interface PythonSymbolsResult {
-  symbols: Array<PythonSymbol>
-  parseError: boolean
-}
-
 /**
  * Rasterize SVG/SVGZ bytes into a bounded PNG without resolving local files.
  *
