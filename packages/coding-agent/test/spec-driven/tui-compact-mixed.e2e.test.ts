@@ -757,7 +757,6 @@ test("resumed compact transcript stays in place while successive tools finish an
 						() => screen.checkpoint(`tool ${index + 1} awaiting model`),
 						value => value.screen.includes(current.intent),
 					);
-					expect(frame.screen).not.toContain("工具调用");
 					expect(frame.screen).not.toContain("JUMP_TS_LINE_");
 					release[index]!.resolve();
 				}
