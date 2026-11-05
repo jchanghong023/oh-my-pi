@@ -227,6 +227,16 @@ crate.annotation(
     deps = ["@@//crates/vendor/grep-searcher:grep-searcher"],
 )
 
+# Zig 0.14 does not infer EVEX512 from AVX-512 flags used by NumKong's ISA
+# probes and per-function kernels. Enable the encoding without raising the
+# translation-unit ISA baseline (AVX2 and AVX-512F remain disabled).
+crate.annotation(
+    build_script_env = {
+        "CFLAGS_x86_64_unknown_linux_gnu": "-mevex512",
+    },
+    crate = "numkong",
+)
+
 # Release addons must never pick up a host libpcre2 (Homebrew paths leaked into
 # shipped dylibs before); always build the vendored static copy.
 crate.annotation(

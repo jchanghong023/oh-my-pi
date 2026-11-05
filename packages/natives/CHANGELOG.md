@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Build Linux x64 native SIMD dependencies correctly with the pinned Zig toolchain without raising the baseline CPU requirements.
 - Replace cached Windows native addons even while another omp process is using the previous build, preventing missing shell trace crashes after local updates.
 - Accept verbatim Windows shell working directories.
 - Trim Unicode edge whitespace consistently when validating Knowledge index names.
