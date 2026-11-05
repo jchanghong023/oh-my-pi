@@ -226,9 +226,7 @@ fn configure_rayon_pool() {
 			return;
 		},
 	};
-	if result.is_ok() {
-		pi_shell::set_rayon_global_pool_available(true);
-	}
+	pi_shell::set_rayon_global_pool_available(result.is_ok());
 }
 
 /// Build the custom Tokio runtime napi-rs uses on Windows, sized to what the

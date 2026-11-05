@@ -1789,15 +1789,46 @@ pub fn panic_scope_active() -> bool {
 
 static RAYON_GLOBAL_POOL_AVAILABLE: AtomicBool = AtomicBool::new(!cfg!(target_os = "windows"));
 
-/// Records whether utility builtins may use Rayon's process-global worker pool
-/// without risking lazy initialization under Windows commit pressure.
+/// Records whether utility builtins may use Rayon's process-global worker pool.
+/// Windows configures this after the native addon has loaded; other threaded
+/// targets initialize the pool on first use in [`rayon_global_pool_available`].
 pub fn set_rayon_global_pool_available(available: bool) {
 	RAYON_GLOBAL_POOL_AVAILABLE.store(available, Ordering::SeqCst);
 }
 
-/// Whether utility builtins may enter Rayon's process-global worker pool.
+/// Whether native helpers and utility builtins may enter Rayon's global pool.
+///
+/// On non-Windows hosts, initialize it only when parallel work is requested,
+/// never while loading the addon. `build_global` returns thread-spawn failures
+/// (including Linux EAGAIN) instead of panicking like the first `par_iter`
+/// would. Cache failure as well as success: Rayon's global initializer is
+/// one-shot even when spawning fails, so every caller must stay sequential
+/// after that failure rather than retrying through a parallel iterator.
 #[must_use]
 pub fn rayon_global_pool_available() -> bool {
+	#[cfg(target_os = "wasi")]
+	return false;
+
+	#[cfg(not(any(target_os = "windows", target_os = "wasi")))]
+	{
+		static INITIALIZED: OnceLock<bool> = OnceLock::new();
+		let available = INITIALIZED.get_or_init(|| {
+			// Keep native CPU helpers bounded even on high-core-count hosts;
+			// leave Windows sizing and its reserved thread capacity unchanged.
+			let threads = std::thread::available_parallelism()
+				.map_or(1, |threads| threads.get())
+				.clamp(1, 8);
+			rayon::ThreadPoolBuilder::new()
+				.num_threads(threads)
+				.build_global()
+				.is_ok()
+		});
+		if !available {
+			return false;
+		}
+	}
+
+	#[cfg(not(target_os = "wasi"))]
 	RAYON_GLOBAL_POOL_AVAILABLE.load(Ordering::SeqCst)
 }
 

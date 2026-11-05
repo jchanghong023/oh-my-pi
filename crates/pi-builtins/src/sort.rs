@@ -6238,8 +6238,8 @@ fn sort_by<'a>(unsorted: &mut Vec<Line<'a>>, settings: &GlobalSettings, line_dat
 	};
 	let stable = settings.stable || settings.unique;
 	// WASI has no threads (rayon's pool hits an unreachable trap there), and
-	// Windows leaves the global pool unavailable when pi-natives could not
-	// safely configure it under commit pressure; both sort sequentially.
+	// other hosts leave the global pool unavailable when worker creation
+	// fails under resource pressure; both sort sequentially.
 	#[cfg(not(target_os = "wasi"))]
 	let sort_parallel = |unsorted: &mut Vec<Line<'a>>| {
 		if stable {
