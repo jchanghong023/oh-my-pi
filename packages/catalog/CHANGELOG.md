@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Replaced the built-in CodeAgent model with `deepseek-v4.1-flash-1017` and increased its context window to 409,600 tokens.
+
 ### Added
 
 - Added `company/Deepseek-v4.1-Flash` to the offline intranet model catalog with the same configuration as `DeepSeek-V4-Flash-public`.

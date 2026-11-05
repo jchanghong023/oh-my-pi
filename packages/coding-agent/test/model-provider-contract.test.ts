@@ -178,13 +178,13 @@ describe("fork provider boundaries", () => {
 		expect(getCodeAgentModels()).toHaveLength(1);
 		expect(getCodeAgentModels()[0]).toMatchObject({
 			provider: "codeagent",
-			id: "DeepSeek-V4-Flash-0731-CodeAgent",
-			name: "DeepSeek-V4-Flash-0731-CodeAgent",
+			id: "deepseek-v4.1-flash-1017",
+			name: "deepseek-v4.1-flash-1017",
 			api: "openai-completions",
 			baseUrl: "https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2",
 			reasoning: true,
 			supportsTools: true,
-			contextWindow: 200000,
+			contextWindow: 409600,
 			maxTokens: 32768,
 			compat: { supportsStrictMode: false },
 		});
