@@ -9,12 +9,15 @@ interface BinaryTarget {
 	id: string;
 	platform: string;
 	arch: string;
+	x64Variant?: "baseline" | "modern";
 	target: Bun.Build.CompileTarget;
 	outfile: string;
 }
 
 const repoRoot = path.join(import.meta.dir, "..");
-const binariesDir = path.join(repoRoot, "packages", "coding-agent", "binaries");
+const binariesDir = Bun.env.OMP_RELEASE_BINARY_DIR
+	? path.resolve(Bun.env.OMP_RELEASE_BINARY_DIR)
+	: path.join(repoRoot, "packages", "coding-agent", "binaries");
 const entrypoint = path.join(repoRoot, "packages", "coding-agent", "src", "cli.ts");
 const buildVersion = Bun.env.RELEASE_VERSION;
 const updateRepository = Bun.env.UPDATE_REPOSITORY;
@@ -39,6 +42,7 @@ const targets: BinaryTarget[] = [
 		id: "linux-x64",
 		platform: "linux",
 		arch: "x64",
+		x64Variant: "baseline",
 		target: "bun-linux-x64-baseline",
 		outfile: "packages/coding-agent/binaries/omp-linux-x64",
 	},
@@ -67,7 +71,8 @@ const targets: BinaryTarget[] = [
 		id: "win32-x64",
 		platform: "win32",
 		arch: "x64",
-		target: "bun-windows-x64-baseline",
+		x64Variant: "modern",
+		target: "bun-windows-x64",
 		outfile: "packages/coding-agent/binaries/omp-windows-x64.exe",
 	},
 	{
@@ -114,11 +119,17 @@ async function runCommand(command: string[], cwd: string): Promise<void> {
 	}
 }
 
+function binaryOutfile(target: BinaryTarget): string {
+	return path.join(binariesDir, path.basename(target.outfile));
+}
+
 async function buildBinary(target: BinaryTarget): Promise<void> {
-	console.log(`Building ${target.outfile}...`);
+	const outfile = binaryOutfile(target);
+	const displayOutfile = Bun.env.OMP_RELEASE_BINARY_DIR ? outfile : target.outfile;
+	console.log(`Building ${displayOutfile}...`);
 	if (isDryRun) {
 		console.log(
-			`DRY RUN Bun.build target=${target.target} outfile=${target.outfile} external=${COMPILED_EXTERNAL_DEPENDENCIES.join(",")}`,
+			`DRY RUN Bun.build target=${target.target} outfile=${displayOutfile} external=${COMPILED_EXTERNAL_DEPENDENCIES.join(",")}`,
 		);
 		return;
 	}
@@ -126,10 +137,10 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 	await compileCodingAgent({
 		repoRoot,
 		entrypoint,
-		outfile: path.join(repoRoot, target.outfile),
+		outfile,
 		buildVersion,
 		updateRepository,
-		native: target,
+		native: { ...target, nativeDir: Bun.env.OMP_RELEASE_NATIVE_DIR },
 		target: target.target,
 		minifyIdentifiers: true,
 		skipBuiltinCodesign: shouldAdhocSignDarwinBinary(target),
@@ -144,7 +155,7 @@ async function buildBinary(target: BinaryTarget): Promise<void> {
 				"-",
 				"--entitlements",
 				path.join(repoRoot, "scripts", "macos-entitlements.plist"),
-				path.join(repoRoot, target.outfile),
+				outfile,
 			],
 			repoRoot,
 		);
@@ -207,7 +218,7 @@ async function main(): Promise<void> {
 			outputRoot: artifactRoot,
 			binaries: selectedTargets.map(target => ({
 				target: target.id,
-				executable: path.join(repoRoot, target.outfile),
+				executable: binaryOutfile(target),
 			})),
 		});
 	}

@@ -68,107 +68,50 @@ jobs:
               } >> "$GITHUB_OUTPUT"
               echo "Building fork version $version from upstream baseline $baseline_tag"
 
-   # Cross-build the native addons required by the Linux and Windows binaries.
-   # Keep the artifact layout consumed by native-artifacts / scripts/bazel-natives.ts.
-   native_addon_build:
-      name: Build native addon ${{ matrix.target_id }}
-      runs-on: ubuntu-22.04
-      strategy:
-         fail-fast: false
-         matrix:
-            include:
-               - { target_id: linux-x64-baseline, target: natives-linux-x64-baseline }
-               - { target_id: linux-x64-modern, target: natives-linux-x64-modern }
-               - { target_id: win32-x64-baseline, target: natives-win32-x64-baseline }
-      steps:
-         - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-         - id: cache
-           uses: ./.github/actions/bazel-cache
-         - name: Build native addon
-           run: |
-              set -eo pipefail
-              if [ "$(ulimit -Sn)" != unlimited ] && [ "$(ulimit -Sn)" -lt 65536 ]; then ulimit -Sn 65536 || true; fi
-              bazelisk --bazelrc="${{ steps.cache.outputs.rc }}" build "//:${{ matrix.target }}"
-         # Stage outputs underneath a natives-<target> directory so this
-         # artifact keeps the same internal layout as the upstream
-         # bazel-bin/natives-*/*.node upload: a glob like
-         # bazel-bin/<target>/*.node would flatten the directory away.
-         - name: Upload native addon artifact
-           run: |
-              set -eo pipefail
-              mkdir -p "addon-staging/natives-${{ matrix.target_id }}"
-              cp bazel-bin/${{ matrix.target }}/*.node "addon-staging/natives-${{ matrix.target_id }}/"
-         - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-           with:
-              name: native-addons-${{ matrix.target_id }}
-              path: addon-staging/natives-*/*.node
-              if-no-files-found: error
-              retention-days: 1
-
-   # Gather the per-triple artifacts back into the artifacts consumed by
-   # native-artifacts and the release_binary jobs.
-   native_addons:
-      name: Gather native addons
-      needs: [native_addon_build]
-      if: ${{ !cancelled() && needs.native_addon_build.result == 'success' }}
-      runs-on: ubuntu-22.04
-      steps:
-         - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-           with:
-              pattern: native-addons-*
-              path: tmp-gather
-              merge-multiple: true
-         # Keep the linux-x64 pair separate; native-artifacts selects the
-         # artifact(s) required by each release binary target.
-         - name: Upload linux-x64 native addon artifact
-           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-           with:
-              name: natives-linux-x64
-              path: tmp-gather/natives-linux-x64-*/*.node
-              if-no-files-found: error
-              retention-days: 1
-         - name: Upload remaining native addon artifacts
-           uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-           with:
-              name: native-addons
-              path: |
-                 tmp-gather/natives-*/*.node
-                 !tmp-gather/natives-linux-x64-*/*.node
-              if-no-files-found: error
-              retention-days: 1
-
-   # Build the two personal release targets. Each artifact remains downloadable even when
-   # publish_release is false.
+   # Build on each target host with the same Cargo native and binary entrypoints as CNB.
+   # Artifacts remain downloadable when publish_release is false.
    release_binary:
       name: "Release binary: ${{ matrix.target_id }}"
-      if: ${{ !cancelled() &&
-         needs.release_metadata.result == 'success' &&
-         needs.native_addons.result == 'success' }}
-      needs: [release_metadata, native_addons]
+      if: ${{ !cancelled() && needs.release_metadata.result == 'success' }}
+      needs: [release_metadata]
       strategy:
          fail-fast: false
          matrix:
             include:
                - {
                     target_id: linux-x64,
-                    binary_path: packages/coding-agent/binaries/omp-linux-x64,
-                    native_targets: linux-x64-baseline linux-x64-modern,
+                    runner: ubuntu-22.04,
+                    rust_target: x86_64-unknown-linux-gnu,
+                    native_variant: baseline-glibc2.17,
+                    binary_name: omp-linux-x64,
                  }
                - {
                     target_id: win32-x64,
-                    binary_path: packages/coding-agent/binaries/omp-windows-x64.exe,
-                    native_targets: win32-x64-baseline,
+                    runner: windows-2022,
+                    rust_target: x86_64-pc-windows-msvc,
+                    native_variant: modern-avx2,
+                    binary_name: omp-windows-x64.exe,
                  }
-      runs-on: ubuntu-22.04
+      runs-on: ${{ matrix.runner }}
       permissions:
          contents: read
+      defaults:
+         run:
+            shell: bash
+      env:
+         CARGO_TARGET_DIR: ${{ runner.temp }}/omp-release-cargo-target
+         OMP_RELEASE_NATIVE_DIR: ${{ runner.temp }}/omp-release-native
+         OMP_RELEASE_BINARY_DIR: ${{ runner.temp }}/omp-release-binaries
+         OMP_BUILD_CACHE_DIR: ${{ runner.temp }}/omp-release-build-assets
+         RELEASE_TARGETS: ${{ matrix.target_id }}
+         RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
+         UPDATE_REPOSITORY: ${{ github.repository }}
+         RELEASE_COMMIT: ${{ github.sha }}
       steps:
          - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
            with:
               submodules: recursive
          - name: Require OpenWiki gitlink checkout
-           shell: bash
            run: |
               set -euo pipefail
               expected="$(git rev-parse HEAD:vendor/openwiki)"
@@ -183,46 +126,64 @@ jobs:
            uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              key: bun-1.4.4-${{ runner.os }}-${{ hashFiles('bun.lock') }}
               restore-keys: |
-                 bun-${{ runner.os }}-
-         - run: bun install --frozen-lockfile
-         - name: Require OpenWiki host bridge
-           working-directory: packages/coding-agent
-           run: |
-              bun -e '
-                import * as vendor from "#openwiki-vendor";
-                for (const name of ["getActiveOpenWikiHomeDir", "setEmbeddedOpenWikiHomeDir", "startEmbeddedVisualizeServer"]) {
-                  if (typeof vendor[name] !== "function") throw new Error(`Missing OpenWiki embedding export: ${name}`);
-                }
-              '
-         - name: Install prebuilt native addon(s)
-           uses: ./.github/actions/native-artifacts
+                 bun-1.4.4-${{ runner.os }}-
+         - name: Restore Cargo and build asset caches
+           id: cargo-cache
+           uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
-              targets: ${{ matrix.native_targets }}
-              skip-load-probe: "true"
+              path: |
+                 ~/.cargo/registry
+                 ~/.cargo/git
+                 ${{ env.CARGO_TARGET_DIR }}
+                 ${{ env.OMP_BUILD_CACHE_DIR }}
+              key: cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.4-zigbuild0.24.1-zig0.14.1-${{ github.sha }}
+              restore-keys: |
+                 cargo-local-strip-symbols-v1-${{ runner.os }}-${{ matrix.native_variant }}-${{ hashFiles('rust-toolchain.toml') }}-bun1.4.4-zigbuild0.24.1-zig0.14.1-
+         - name: Install pinned host Rust toolchain
+           run: |
+              set -euo pipefail
+              toolchain="$(bun -e 'console.log(Bun.TOML.parse(await Bun.file("rust-toolchain.toml").text()).toolchain.channel)')"
+              rustup toolchain install "$toolchain" --profile minimal --target "${{ matrix.rust_target }}"
+              echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+         - name: Install pinned Linux glibc 2.17 cross-linker
+           if: runner.os == 'Linux'
+           run: |
+              set -euo pipefail
+              python3 -m pip install --user cargo-zigbuild==0.24.1 ziglang==0.14.1
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+         - run: bun install --frozen-lockfile
+         - name: Build one host native addon
+           run: bun scripts/build-release-native.ts
          - name: Build release binary
-           env:
-              RELEASE_TARGETS: ${{ matrix.target_id }}
-              RELEASE_VERSION: ${{ needs.release_metadata.outputs.version }}
-              UPDATE_REPOSITORY: ${{ github.repository }}
-              RELEASE_COMMIT: ${{ github.sha }}
-           run: bun run ci:release:build-binaries
+           run: bun scripts/ci-release-build-binaries.ts
          - name: Upload release binary artifact
            uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
            with:
               name: omp-binary-${{ matrix.target_id }}
-              path: ${{ matrix.binary_path }}
-         # Main-only save, after the build so it is off the leg's critical
-         # path: caches saved on a tag or branch are readable only by that ref
-         # yet count against the shared 10 GB repo cache quota.
+              path: ${{ env.OMP_RELEASE_BINARY_DIR }}/${{ matrix.binary_name }}
+              if-no-files-found: error
+         # Save only on main, after building. Cargo owns dependency/source freshness;
+         # the commit suffix refreshes immutable GitHub caches, not gate or binary results.
+         - name: Save Cargo and build asset caches
+           if: github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+           continue-on-error: true
+           uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+           with:
+              path: |
+                 ~/.cargo/registry
+                 ~/.cargo/git
+                 ${{ env.CARGO_TARGET_DIR }}
+                 ${{ env.OMP_BUILD_CACHE_DIR }}
+              key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
          - name: Save bun store
            if: github.ref == 'refs/heads/main' && steps.bun-cache.outputs.cache-hit != 'true'
            continue-on-error: true
            uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
            with:
               path: ~/.bun/install/cache
-              key: bun-${{ runner.os }}-${{ hashFiles('**/bun.lock') }}
+              key: ${{ steps.bun-cache.outputs.cache-primary-key }}
 
 
    browser_relay:

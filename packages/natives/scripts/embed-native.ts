@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import packageJson from "../package.json" with { type: "json" };
@@ -20,6 +21,8 @@ export const EMBEDDED_ADDON_ZSTD_LEVEL = 19;
 export interface NativeEmbedTarget {
 	readonly platform: string;
 	readonly arch: string;
+	/** Embed only this x64 variant; omitted SDK builds retain both available variants. */
+	readonly x64Variant?: "baseline" | "modern";
 }
 
 /** Inputs for {@link embeddedAddonFiles}. */
@@ -30,6 +33,58 @@ export interface EmbedOptions extends NativeEmbedTarget {
 	readonly version?: string;
 }
 
+const frameCacheMagic = Buffer.from("OMPZSTD1");
+const frameCacheHeaderSize = frameCacheMagic.length + 64;
+
+/** Cache only complete, integrity-checked frames, not addon validation results. */
+async function compressedAddon(bytes: Uint8Array): Promise<Uint8Array> {
+	const cacheRoot = Bun.env.OMP_BUILD_CACHE_DIR;
+	if (!cacheRoot) return Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL });
+
+	const key = createHash("sha256")
+		.update(`embedded-addon-zstd-v1\0${Bun.version}\0${Bun.revision}\0${EMBEDDED_ADDON_ZSTD_LEVEL}\0`)
+		.update(bytes)
+		.digest();
+	const cacheDir = path.join(path.resolve(cacheRoot), "embedded-addon-zstd");
+	const cacheFile = path.join(cacheDir, `${key.toString("hex")}.frame`);
+	try {
+		const cached = await fs.readFile(cacheFile);
+		const frame = cached.subarray(frameCacheHeaderSize);
+		if (
+			frame.length > 0 &&
+			cached.subarray(0, frameCacheMagic.length).equals(frameCacheMagic) &&
+			cached.subarray(8, 40).equals(key) &&
+			cached.subarray(40, frameCacheHeaderSize).equals(createHash("sha256").update(frame).digest())
+		) {
+			return frame;
+		}
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+
+	const frame = await Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL });
+	const header = Buffer.allocUnsafe(frameCacheHeaderSize);
+	header.set(frameCacheMagic);
+	header.set(key, 8);
+	header.set(createHash("sha256").update(frame).digest(), 40);
+	await fs.mkdir(cacheDir, { recursive: true });
+	const temporary = `${cacheFile}.${randomUUID()}.tmp`;
+	try {
+		const file = await fs.open(temporary, "wx");
+		try {
+			// Separate writes avoid copying the potentially large frame into a container buffer.
+			await file.writeFile(header);
+			await file.writeFile(frame);
+		} finally {
+			await file.close();
+		}
+		await fs.rename(temporary, cacheFile);
+	} finally {
+		await fs.rm(temporary, { force: true });
+	}
+	return frame;
+}
+
 /**
  * Build the in-memory `Bun.build({ files })` overrides that embed one target's
  * addons into a standalone binary: one `<addon>.node.zst` zstd frame per addon
@@ -38,9 +93,9 @@ export interface EmbedOptions extends NativeEmbedTarget {
  * (no timestamps, no container), which keeps release-to-release binary patches
  * small.
  *
- * Nothing is written to disk. Bun.build shares the runtime's directory cache
- * and never re-reads it on a miss, so a process that imported pi-natives before
- * writing the frames cannot resolve them; in-memory files bypass that lookup.
+ * Source addons may live outside the checkout. Manifest and frame overrides
+ * always use the package's real module directory, without writing generated
+ * files there; only an explicitly configured compression cache writes to disk.
  *
  * @throws when no addon exists for the target, or when an addon lacks the
  * `@oh-my-pi/pi-natives@<version>` version stamp and legacy sentinel.
@@ -48,20 +103,25 @@ export interface EmbedOptions extends NativeEmbedTarget {
 export async function embeddedAddonFiles({
 	platform,
 	arch,
+	x64Variant,
 	nativeDir = defaultNativeDir,
 	version = packageJson.version,
 }: EmbedOptions): Promise<Record<string, string | Uint8Array>> {
+	if (x64Variant !== undefined && (arch !== "x64" || (x64Variant !== "baseline" && x64Variant !== "modern"))) {
+		throw new Error(`Invalid explicit native x64 variant ${JSON.stringify(x64Variant)} for ${platform}-${arch}.`);
+	}
 	const platformTag = `${platform}-${arch}`;
 	const candidates =
 		arch === "x64"
 			? [
 					{ variant: "modern", filename: `pi_natives.${platformTag}-modern.node` },
 					{ variant: "baseline", filename: `pi_natives.${platformTag}-baseline.node` },
-				]
+				].filter(candidate => x64Variant === undefined || candidate.variant === x64Variant)
 			: [{ variant: "default", filename: `pi_natives.${platformTag}.node` }];
 
-	// Override keys must equal the bundler's symlink-resolved module paths.
 	const dir = await fs.realpath(nativeDir);
+	// The loader imports the checked-in manifest, not the external addon source directory.
+	const embedDir = nativeDir === defaultNativeDir ? dir : await fs.realpath(defaultNativeDir);
 	const present = new Set(await fs.readdir(dir));
 	const available = await Promise.all(
 		candidates
@@ -86,9 +146,7 @@ export async function embeddedAddonFiles({
 	}
 
 	// Variants compress concurrently on Bun's thread pool.
-	const frames = await Promise.all(
-		available.map(({ bytes }) => Bun.zstdCompress(bytes, { level: EMBEDDED_ADDON_ZSTD_LEVEL })),
-	);
+	const frames = await Promise.all(available.map(({ bytes }) => compressedAddon(bytes)));
 	const imports = available.map(
 		({ filename }, index) =>
 			`import zstdPath${index} from ${JSON.stringify(`./${filename}.zst`)} with { type: "file" };`,
@@ -110,8 +168,8 @@ export const embeddedAddon = {
 
 	const overrides: Record<string, string | Uint8Array> = {};
 	available.forEach(({ filename }, index) => {
-		overrides[path.join(dir, `${filename}.zst`)] = frames[index];
+		overrides[path.join(embedDir, `${filename}.zst`)] = frames[index];
 	});
-	overrides[path.join(dir, "embedded-addon.js")] = manifest;
+	overrides[path.join(embedDir, "embedded-addon.js")] = manifest;
 	return overrides;
 }

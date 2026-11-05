@@ -1,7 +1,7 @@
 // Deep import: the pi-utils barrel loads the host native addon, which is
 // absent on cross-compiling release runners.
 import { USER_AGENT } from "@oh-my-pi/pi-utils/dirs";
-import { embeddedAddonFiles, type NativeEmbedTarget } from "../../natives/scripts/embed-native";
+import { embeddedAddonFiles, type EmbedOptions } from "../../natives/scripts/embed-native";
 import {
 	buildDeveloperTestAgentResources,
 	createDeveloperTestAgentArchivePlugin,
@@ -42,7 +42,7 @@ export interface CodingAgentCompileOptions {
 	 * Native addon target embedded for the runtime loader to extract; `null`
 	 * compiles without one (probe builds that never load the addon).
 	 */
-	readonly native: NativeEmbedTarget | null;
+	readonly native: EmbedOptions | null;
 	/** Optional cross-compilation runtime target. */
 	readonly target?: Bun.Build.CompileTarget;
 	/** Optional unmodified Bun executable used as the standalone runtime template. */

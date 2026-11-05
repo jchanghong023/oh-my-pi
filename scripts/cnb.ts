@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -30,17 +29,20 @@ async function safeGit(wsl: string, linux: boolean, args: string[]): Promise<str
 	return out.trim();
 }
 
+async function ensureSource(wsl: string, linux: boolean, expectedCommit?: string): Promise<void> {
+	if (await safeGit(wsl, linux, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]))
+		throw new Error(
+			`${linux ? "WSL" : "Windows"} working tree has uncommitted changes; commit or preserve them before publishing.`,
+		);
+	if (expectedCommit && (await safeGit(wsl, linux, ["rev-parse", "HEAD"])) !== expectedCommit)
+		throw new Error(`${linux ? "WSL" : "Windows"} source commit changed during publication.`);
+}
+
 async function pullBoth(wsl: string): Promise<string> {
-	const ensureClean = async (linux: boolean): Promise<void> => {
-		if (await safeGit(wsl, linux, ["status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"]))
-			throw new Error(
-				`${linux ? "WSL" : "Windows"} working tree has uncommitted changes; commit or preserve them before pulling.`,
-			);
-	};
-	await Promise.all([ensureClean(false), ensureClean(true)]);
+	await Promise.all([ensureSource(wsl, false), ensureSource(wsl, true)]);
 	const update = async (linux: boolean): Promise<string> => {
 		await safeGit(wsl, linux, ["pull", "--ff-only", "--no-recurse-submodules"]);
-		await ensureClean(linux);
+		await ensureSource(wsl, linux);
 		console.log(`${linux ? "WSL" : "Windows"} git pull --ff-only completed.`);
 		return safeGit(wsl, linux, ["rev-parse", "HEAD"]);
 	};
@@ -55,6 +57,15 @@ async function run(command: string[], cwd: string, env: NodeJS.ProcessEnv): Prom
 	const proc = Bun.spawn(command, { cwd, env, stdout: "inherit", stderr: "inherit", stdin: "ignore" });
 	const code = await proc.exited;
 	if (code !== 0) throw new Error(`${path.basename(command[0]!)} failed (${code})`);
+}
+
+async function timed<T>(label: string, action: () => Promise<T>): Promise<T> {
+	const started = performance.now();
+	try {
+		return await action();
+	} finally {
+		console.log(`${label} elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
+	}
 }
 
 function options(): { repo?: string; tag?: string } {
@@ -146,6 +157,7 @@ async function getRelease(repo: string, tag: string): Promise<Release> {
 }
 
 async function upload(repo: string, release: Release, file: string, name: string, size: number): Promise<void> {
+	const started = performance.now();
 	const result = await cnb([
 		"releases",
 		"post-release-asset-upload-url",
@@ -212,7 +224,7 @@ async function upload(repo: string, release: Release, file: string, name: string
 		assetPath,
 		"--verbose",
 	]);
-	console.log(`Confirmed ${name}`);
+	console.log(`Confirmed ${name}; upload elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
 }
 
 async function main(): Promise<void> {
@@ -222,9 +234,6 @@ async function main(): Promise<void> {
 		throw new Error("CNB distribution requires a Windows x64 host.");
 	const wsl = Bun.which("wsl.exe");
 	if (!wsl) throw new Error("WSL is required.");
-	const commit = await pullBoth(wsl);
-	const release = await getRelease(repo, tag);
-	const temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cnb-"));
 	const cache = path.join(
 		process.env.LOCALAPPDATA ?? os.tmpdir(),
 		"omp-cnb",
@@ -237,12 +246,46 @@ async function main(): Promise<void> {
 	} catch {
 		throw new Error("Windows CNB build cache is locked.");
 	}
-	const saved: { original: string; backup: string }[] = [];
+	let temp: string | undefined;
 	try {
-		const linuxOut = path.join(temp, "linux-output");
-		const cleanEnv = { ...process.env, CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? path.join(root, "target") };
+		const commit = await timed("Git synchronization", () => pullBoth(wsl));
+		const release = await getRelease(repo, tag);
+		temp = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cnb-"));
+		const linuxOut = path.join(temp, linuxName);
+		// Pin empty values too: a WSL-only dotenv file must not alter cache identity.
+		const releaseVersion = process.env.RELEASE_VERSION ?? "";
+		const updateRepository = process.env.UPDATE_REPOSITORY ?? "";
+		const cacheKey = (target: string) =>
+			createHash("sha256")
+				.update(
+					JSON.stringify({
+						schema: 1,
+						commit,
+						bun: Bun.version,
+						bunRevision: Bun.revision,
+						target,
+						releaseVersion,
+						updateRepository,
+					}),
+				)
+				.digest("hex");
+		const windowsCache = path.join(cache, "win32-x64-modern");
+		const windowsCompleted = path.join(windowsCache, "completed", cacheKey("win32-x64-modern"));
+		const winOut = path.join(windowsCompleted, windowsName);
+		const marker = path.join(windowsCompleted, "complete");
+		const cleanEnv: NodeJS.ProcessEnv = {
+			...process.env,
+			RELEASE_VERSION: releaseVersion,
+			UPDATE_REPOSITORY: updateRepository,
+			CARGO_TARGET_DIR: process.env.CARGO_TARGET_DIR ?? path.join(root, "target"),
+			OMP_RELEASE_NATIVE_DIR: path.join(windowsCache, "native"),
+			OMP_RELEASE_BINARY_DIR: windowsCompleted,
+			OMP_BUILD_CACHE_DIR: path.join(windowsCache, "build-assets"),
+		};
 		delete cleanEnv.ZCODE_ARTIFACT_ROOT;
 		delete cleanEnv.CNB_TOKEN;
+		const wslEnv = { ...process.env };
+		delete wslEnv.CNB_TOKEN;
 		const runLinux = async () => {
 			const proc = Bun.spawn(
 				[
@@ -256,77 +299,64 @@ async function main(): Promise<void> {
 					linuxOut,
 					wslSource,
 					Bun.version,
+					commit,
+					cacheKey("linux-x64-baseline-glibc2.17"),
+					releaseVersion,
+					updateRepository,
+					Bun.revision,
 				],
-				{ stdin: "ignore", stdout: "inherit", stderr: "inherit", env: cleanEnv },
+				{ stdin: "ignore", stdout: "inherit", stderr: "inherit", env: wslEnv },
 			);
 			const code = await proc.exited;
 			if (code !== 0) throw new Error(`WSL build failed (${code}).`);
 		};
-		console.log(`Using existing Windows and WSL worktrees; CNB receives binaries only, never Git pushes.`);
-		const win = root;
-		for (const relative of [
-			"packages/coding-agent/binaries/omp-windows-x64.exe",
-			"packages/natives/native/pi_natives.win32-x64-baseline.node",
-			"packages/natives/native/pi_natives.win32-x64-modern.node",
-			"packages/stats/src/embedded-client.generated.txt",
-		]) {
-			const original = path.join(win, relative);
-			try {
-				if (!(await fs.lstat(original)).isFile())
-					throw new Error(`Existing output is not a regular file: ${relative}`);
-				const backup = path.join(temp, `saved-${saved.length}`);
-				await fs.copyFile(original, backup, constants.COPYFILE_EXCL);
-				await fs.unlink(original);
-				saved.push({ original, backup });
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-			}
-		}
-		const windowsBuild = (async () => {
-			const started = performance.now();
-			try {
-				await run([process.execPath, "install", "--frozen-lockfile"], win, cleanEnv);
-				await run(
-					[
-						process.execPath,
-						"scripts/bazel-natives.ts",
-						"host",
-						"--dest",
-						"packages/natives/native",
-						"--skip-load-probe",
-					],
-					win,
-					cleanEnv,
-				);
-				const native = path.join(win, "packages/natives/native");
-				const addons = await fs.readdir(native);
-				const built = addons.filter(name => /^pi_natives\.win32-x64-(baseline|modern)\.node$/.test(name));
-				if (built.length !== 1) throw new Error("Windows native build did not produce exactly one host variant.");
-				console.log(`Windows native variant: ${built[0]}`);
-				if (built[0]!.includes("-modern."))
-					console.warn(
-						"The Windows executable contains a modern x64 addon and requires a compatible CPU; it is not a baseline build.",
+		console.log("Using existing Windows and WSL worktrees; CNB receives binaries only, never Git pushes.");
+		const windowsBuild = timed("Windows build", async () => {
+			await ensureSource(wsl, false, commit);
+			const cached = await timed("Windows cache lookup", async () => {
+				try {
+					const stat = await fs.stat(winOut);
+					return (
+						stat.isFile() && stat.size > 0 && (await fs.readFile(marker, "utf8")) === cacheKey("win32-x64-modern")
 					);
-				await run([process.execPath, "run", "ci:release:build-binaries", "--targets", "win32-x64"], win, cleanEnv);
-			} finally {
-				console.log(`Windows build elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					return false;
+				}
+			});
+			if (cached) {
+				console.log("Windows completed-binary cache hit (win32-x64-modern); native/package skipped.");
+				return;
 			}
-		})();
-		const linuxBuild = (async () => {
-			const started = performance.now();
-			try {
-				await runLinux();
-			} finally {
-				console.log(`Linux build elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
-			}
-		})();
+			console.log("Windows completed-binary cache miss (win32-x64-modern).");
+			await fs.mkdir(windowsCompleted, { recursive: true });
+			await fs.rm(marker, { force: true });
+			await fs.rm(winOut, { force: true });
+			await timed("Windows dependencies", () =>
+				run([process.execPath, "install", "--frozen-lockfile"], root, cleanEnv),
+			);
+			await timed("Windows native", () =>
+				run([process.execPath, "scripts/build-release-native.ts"], root, cleanEnv),
+			);
+			await timed("Windows package", () =>
+				run([process.execPath, "scripts/ci-release-build-binaries.ts", "--targets", "win32-x64"], root, cleanEnv),
+			);
+			const stat = await fs.stat(winOut);
+			if (!stat.isFile() || stat.size === 0)
+				throw new Error("Windows packaging did not produce a non-empty binary.");
+			await ensureSource(wsl, false, commit);
+			const pending = `${marker}.tmp`;
+			await fs.writeFile(pending, cacheKey("win32-x64-modern"));
+			await fs.rename(pending, marker);
+		});
+		const linuxBuild = timed("Linux build", runLinux);
 		const outcomes = await Promise.allSettled([windowsBuild, linuxBuild]);
 		const failure = outcomes.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (failure) throw failure.reason;
-		const winOut = path.join(win, "packages/coding-agent/binaries", "omp-windows-x64.exe");
 		const [winStat, linuxStat] = await Promise.all([fs.stat(winOut), fs.stat(linuxOut)]);
 		if (!winStat.isFile() || !linuxStat.isFile() || winStat.size === 0 || linuxStat.size === 0)
 			throw new Error("Build outputs must be non-empty executable files.");
+		await Promise.all([ensureSource(wsl, false, commit), ensureSource(wsl, true, commit)]);
 		console.log(`Publishing ${repo} tag ${tag}, source commit ${commit}; overwriting matching binary attachments.`);
 		const uploads = await Promise.allSettled([
 			upload(repo, release, winOut, windowsName, winStat.size),
@@ -334,16 +364,11 @@ async function main(): Promise<void> {
 		]);
 		const uploadFailure = uploads.find((result): result is PromiseRejectedResult => result.status === "rejected");
 		if (uploadFailure) throw uploadFailure.reason;
-		console.log("Both CNB binaries uploaded.");
+		console.log("Both CNB binaries uploaded and confirmed.");
 	} finally {
 		console.log(`CNB total elapsed: ${((performance.now() - started) / 1000).toFixed(1)}s`);
 		try {
-			for (const { original, backup } of saved) {
-				await fs.rm(original, { force: true });
-				await fs.copyFile(backup, original, constants.COPYFILE_EXCL);
-				await fs.unlink(backup);
-			}
-			await fs.rm(temp, { recursive: true, force: true });
+			if (temp) await fs.rm(temp, { recursive: true, force: true });
 		} finally {
 			await fs.rmdir(lock);
 		}

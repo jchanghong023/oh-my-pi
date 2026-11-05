@@ -19,6 +19,8 @@
 
 ### Changed
 
+- Build fork release addons directly with cached Cargo: one CentOS 7/glibc 2.17 baseline addon on Linux x64 and one modern/AVX2 addon on Windows x64, without Bazel or load probes.
+
 - Scale Knowledge full-text search and cold snapshots across available CPU cores and memory.
 - Overlap bounded Knowledge document projection preparation with candidate scoring on the same read snapshot.
 - Reuse persistent Knowledge vector indexes across queries and restarts, with memory-aware parallel construction and scoped ANN recall.

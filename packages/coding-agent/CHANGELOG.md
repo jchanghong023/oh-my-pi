@@ -65,6 +65,8 @@
 
 ### Changed
 
+- Share host-native Cargo release builds between CNB and manual CI, reusing persistent build caches and embedding only the Linux baseline or Windows AVX2 addon; CNB still overwrites and confirms both binary uploads on cache hits.
+
 - Developer Test Agent and its five skills are now manual-only and hidden from model-facing listings; ordinary test requests no longer inject routing hints.
 - Run fulltest faster with measured longest-first scheduling, work-aware worker allocation, overlapping isolated phases, shared transpiler caches, and independent two-scenario Knowledge CLI fixtures.
 

@@ -1,7 +1,7 @@
 /**
  * Local napi build: regenerates TypeScript bindings and runtime enum exports,
  * then installs the host addon. This is the default backend for the `host`
- * target; explicit release targets build through Bazel. No cross-compilation.
+ * target; publishing uses scripts/build-release-native.ts.
  *
  * `OMP_NATIVE_CARGO_PROFILE` selects the cargo profile (default `local`:
  * incremental, unstripped). Image builds set `ci` for a stripped addon.
@@ -21,21 +21,14 @@ import { withRustCompilerEvents } from "../../../scripts/test-gate-native-events
 import { generateEnumExports } from "./gen-enums";
 import { matchesInstalledFile } from "./installed-file";
 
-if (process.argv.length > 2) {
-	throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts");
-}
-
-// pcre2-sys prefers a system libpcre2 when pkg-config finds one. Keep the
-// static build so the local addon never retains host Homebrew paths.
-process.env.PCRE2_SYS_STATIC ??= "1";
-
 // Windows: cc-rs and rustc auto-locate cl.exe/link.exe through the VS
 // registry, but the cmake crate (opusic-sys' bundled Opus) needs cmake —
 // and its Ninja generator needs ninja — on PATH. VS Build Tools ships both
 // without exposing them, so outside a vcvars prompt the build dies on
 // "cmake not found". Resolve the VS install via vswhere and append its
 // CMake/Ninja dirs, keeping any user-provided tools ahead.
-if (process.platform === "win32" && (!Bun.which("cmake") || !Bun.which("ninja"))) {
+export function ensureWindowsBuildTools(): void {
+	if (process.platform !== "win32" || (Bun.which("cmake") && Bun.which("ninja"))) return;
 	const vcToolsComponent =
 		process.arch === "arm64"
 			? "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
@@ -67,35 +60,6 @@ const rustDir = path.join(repoRoot, "crates/pi-natives");
 const nativeDir = path.join(import.meta.dir, "../native");
 const packageJsonPath = path.join(import.meta.dir, "../package.json");
 
-const localAddon = resolveLocalHostAddon({
-	platform: process.platform,
-	arch: process.arch,
-	avx2: detectHostAvx2Support(),
-});
-const effectiveVariant = localAddon.x64Variant;
-const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
-
-// Pin Rust target-cpu so x64 baseline/modern variants get a reproducible ISA floor
-// instead of inheriting the host CPU when RUSTFLAGS is unset. Non-x64 builds keep
-// the target's default CPU features: `-C target-cpu=native` would bake the build
-// host's CPU features into the addon and trips ring 0.17's aarch64-apple
-// const assertion (CAPS_STATIC == MIN_STATIC_FEATURES). Shipping Windows addons
-// also link the MSVC CRT statically so clean systems need no VC++ Redistributable.
-if (!Bun.env.RUSTFLAGS) {
-	const rustFlags: string[] = [];
-	if (process.platform === "win32") {
-		rustFlags.push("-C", "target-feature=+crt-static");
-	}
-	if (effectiveVariant === "modern") {
-		rustFlags.push("-C", "target-cpu=x86-64-v3");
-	} else if (effectiveVariant === "baseline") {
-		rustFlags.push("-C", "target-cpu=x86-64-v2");
-	}
-	if (rustFlags.length > 0) {
-		Bun.env.RUSTFLAGS = rustFlags.join(" ");
-	}
-}
-
 async function cleanupStaleTemps(dir: string): Promise<void> {
 	try {
 		const entries = await fs.readdir(dir);
@@ -109,7 +73,7 @@ async function cleanupStaleTemps(dir: string): Promise<void> {
 	}
 }
 
-async function installBinary(src: string, dest: string): Promise<void> {
+export async function installBinary(src: string, dest: string): Promise<void> {
 	if (await matchesInstalledFile(src, dest)) return;
 
 	const tempPath = `${dest}.tmp.${process.pid}`;
@@ -207,110 +171,121 @@ async function installGeneratedBindings(outputDir: string): Promise<void> {
 	}
 }
 
-const canonicalAddonFilename = localAddon.filename;
-const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);
+export async function buildBindings(): Promise<void> {
+	if (process.argv.length > 2) {
+		throw new Error("Usage: bun packages/natives/scripts/build-bindings.ts");
+	}
+	// Never retain a dependency on a host-provided PCRE2 shared library.
+	process.env.PCRE2_SYS_STATIC ??= "1";
+	ensureWindowsBuildTools();
+	const localAddon = resolveLocalHostAddon({
+		platform: process.platform,
+		arch: process.arch,
+		avx2: detectHostAvx2Support(),
+	});
+	const effectiveVariant = localAddon.x64Variant;
+	const variantSuffix = effectiveVariant ? `-${effectiveVariant}` : "";
 
-console.log(`Building pi-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
+	// Pin the ISA floor rather than inheriting the host CPU. Shipping Windows
+	// addons also link the CRT statically, avoiding a redistributable dependency.
+	if (!Bun.env.RUSTFLAGS) {
+		const rustFlags: string[] = [];
+		if (process.platform === "win32") rustFlags.push("-C", "target-feature=+crt-static");
+		if (effectiveVariant === "modern") rustFlags.push("-C", "target-cpu=x86-64-v3");
+		else if (effectiveVariant === "baseline") rustFlags.push("-C", "target-cpu=x86-64-v2");
+		if (rustFlags.length > 0) Bun.env.RUSTFLAGS = rustFlags.join(" ");
+	}
+	const canonicalAddonFilename = localAddon.filename;
+	const canonicalAddonPath = path.join(nativeDir, canonicalAddonFilename);
 
-await fs.mkdir(nativeDir, { recursive: true });
-await cleanupStaleTemps(nativeDir);
-await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
-const buildOutputDir = await fs.mkdtemp(
-	path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
-);
+	console.log(`Building pi-natives bindings for ${process.platform}-${process.arch}${variantSuffix} (local)…`);
 
-// Resolve the CLI's JS entry from the package manifest rather than the
-// `node_modules/.bin` shim: `bunx @napi-rs/cli` can pick up the wrong bin on
-// systems where `cli` exists on PATH (e.g. Mono's /usr/bin/cli on Ubuntu), and
-// on Windows the shim is a `napi.exe` launcher that Bun would try to parse as
-// JavaScript.
-const require_ = createRequire(import.meta.url);
-const napiManifestPath = require_.resolve("@napi-rs/cli/package.json");
-const napiManifest: unknown = require_(napiManifestPath);
-const napiBinEntry =
-	typeof napiManifest === "object" &&
-	napiManifest !== null &&
-	"bin" in napiManifest &&
-	typeof napiManifest.bin === "object" &&
-	napiManifest.bin !== null &&
-	"napi" in napiManifest.bin &&
-	typeof napiManifest.bin.napi === "string"
-		? napiManifest.bin.napi
-		: null;
-if (!napiBinEntry) {
-	throw new Error(`@napi-rs/cli manifest at ${napiManifestPath} declares no string \`bin.napi\` entry`);
-}
-const napiBin = path.join(path.dirname(napiManifestPath), napiBinEntry);
-
-// Profiles live in the root Cargo.toml; `local` trades size for iteration
-// speed, `ci` strips and drops incremental state.
-const cargoProfile = Bun.env.OMP_NATIVE_CARGO_PROFILE?.trim() || "local";
-
-const napiArgs = [
-	"build",
-	"--manifest-path",
-	path.join(rustDir, "Cargo.toml"),
-	"--package-json-path",
-	packageJsonPath,
-	"--platform",
-	"--no-js",
-	"--dts",
-	"index.d.ts",
-	"-o",
-	buildOutputDir,
-	"--profile",
-	cargoProfile,
-];
-
-// Local-only opt-in: pass extra cargo features through to napi build, e.g.
-// OMP_NATIVE_FEATURES=wayland-pipewire bun --cwd=packages/natives run build
-const extraFeatures = Bun.env.OMP_NATIVE_FEATURES?.trim();
-if (extraFeatures) {
-	napiArgs.push("--features", extraFeatures);
-}
-
-// napi-rs / cargo route much failure detail to stdout (e.g. `cargo metadata`
-// errors), so a stderr-only error collapses real failures to a bare message.
-const BUILD_LOG_TAIL_LINES = 40;
-
-/** Tail-cap captured build output into a labeled section for the failure report. */
-function tailSection(label: string, text: string): string {
-	const trimmed = text.trimEnd();
-	if (!trimmed) return "";
-	const lines = trimmed.split("\n");
-	const capped = lines.length > BUILD_LOG_TAIL_LINES;
-	const shown = capped ? lines.slice(-BUILD_LOG_TAIL_LINES) : lines;
-	return `\n--- ${label}${capped ? ` (last ${BUILD_LOG_TAIL_LINES} lines)` : ""} ---\n${shown.join("\n")}`;
-}
-
-try {
-	// The package declares Bun as its build runtime. Invoke napi's JavaScript
-	// entry through this Bun process instead of its `#!/usr/bin/env node` shim so
-	// an old host Node installation cannot make an otherwise supported Bun build fail.
-	const buildResult = await withRustCompilerEvents(process.env as Record<string, string>, async env =>
-		$`${process.execPath} ${napiBin} ${napiArgs}`.env(env).nothrow(),
+	await fs.mkdir(nativeDir, { recursive: true });
+	await cleanupStaleTemps(nativeDir);
+	await fs.mkdir(path.join(nativeDir, ".build"), { recursive: true });
+	const buildOutputDir = await fs.mkdtemp(
+		path.join(nativeDir, ".build", `${process.platform}-${process.arch}-${effectiveVariant ?? "default"}-local-`),
 	);
-	if (buildResult.exitCode !== 0) {
-		const stdout = buildResult.stdout?.toString("utf-8") ?? "";
-		const stderr = buildResult.stderr?.toString("utf-8") ?? "";
-		const detail = `${tailSection("stdout", stdout)}${tailSection("stderr", stderr)}`;
-		throw new Error(`napi build failed (exit ${buildResult.exitCode})${detail}`);
+
+	// Resolve the JS entry instead of a platform shim or an unrelated `cli` on PATH.
+	const require_ = createRequire(import.meta.url);
+	const napiManifestPath = require_.resolve("@napi-rs/cli/package.json");
+	const napiManifest: unknown = require_(napiManifestPath);
+	const napiBinEntry =
+		typeof napiManifest === "object" &&
+		napiManifest !== null &&
+		"bin" in napiManifest &&
+		typeof napiManifest.bin === "object" &&
+		napiManifest.bin !== null &&
+		"napi" in napiManifest.bin &&
+		typeof napiManifest.bin.napi === "string"
+			? napiManifest.bin.napi
+			: null;
+	if (!napiBinEntry) {
+		throw new Error(`@napi-rs/cli manifest at ${napiManifestPath} declares no string \`bin.napi\` entry`);
+	}
+	const napiBin = path.join(path.dirname(napiManifestPath), napiBinEntry);
+
+	// Profiles live in the root Cargo.toml; retain the development override.
+	const cargoProfile = Bun.env.OMP_NATIVE_CARGO_PROFILE?.trim() || "local";
+	const napiArgs = [
+		"build",
+		"--manifest-path",
+		path.join(rustDir, "Cargo.toml"),
+		"--package-json-path",
+		packageJsonPath,
+		"--platform",
+		"--no-js",
+		"--dts",
+		"index.d.ts",
+		"-o",
+		buildOutputDir,
+		"--profile",
+		cargoProfile,
+	];
+
+	// Local-only opt-in, e.g. OMP_NATIVE_FEATURES=wayland-pipewire.
+	const extraFeatures = Bun.env.OMP_NATIVE_FEATURES?.trim();
+	if (extraFeatures) napiArgs.push("--features", extraFeatures);
+
+	// Cargo routes some failure details to stdout rather than stderr.
+	const BUILD_LOG_TAIL_LINES = 40;
+	function tailSection(label: string, text: string): string {
+		const trimmed = text.trimEnd();
+		if (!trimmed) return "";
+		const lines = trimmed.split("\n");
+		const capped = lines.length > BUILD_LOG_TAIL_LINES;
+		const shown = capped ? lines.slice(-BUILD_LOG_TAIL_LINES) : lines;
+		return `\n--- ${label}${capped ? ` (last ${BUILD_LOG_TAIL_LINES} lines)` : ""} ---\n${shown.join("\n")}`;
 	}
 
-	const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
-	// Stamp before the addon becomes visible under its canonical name.
-	const { version } = (await Bun.file(packageJsonPath).json()) as { version: string };
-	await stampNativeVersion(builtAddonPath, version);
-	if (builtAddonPath !== canonicalAddonPath) {
-		console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
-		await installBinary(builtAddonPath, canonicalAddonPath);
-	}
-	// Finalize both bindings outside nativeDir so only final bytes reach the
-	// installed-file comparison, never napi's intermediate const-enum declarations.
-	await generateEnumExports(buildOutputDir);
-	await installGeneratedBindings(buildOutputDir);
+	try {
+		// Use this Bun, not an old system Node selected by a shebang.
+		const buildResult = await withRustCompilerEvents(process.env as Record<string, string>, async env =>
+			$`${process.execPath} ${napiBin} ${napiArgs}`.env(env).nothrow(),
+		);
+		if (buildResult.exitCode !== 0) {
+			const stdout = buildResult.stdout?.toString("utf-8") ?? "";
+			const stderr = buildResult.stderr?.toString("utf-8") ?? "";
+			const detail = `${tailSection("stdout", stdout)}${tailSection("stderr", stderr)}`;
+			throw new Error(`napi build failed (exit ${buildResult.exitCode})${detail}`);
+		}
 
-	console.log("Bindings build complete.");
-} finally {
-	await fs.rm(buildOutputDir, { recursive: true, force: true });
+		const builtAddonPath = await resolveBuiltAddonPath(buildOutputDir, canonicalAddonFilename);
+		// Stamp before the addon becomes visible under its canonical name.
+		const { version } = (await Bun.file(packageJsonPath).json()) as { version: string };
+		await stampNativeVersion(builtAddonPath, version);
+		if (builtAddonPath !== canonicalAddonPath) {
+			console.log(`Normalizing native addon filename: ${path.basename(builtAddonPath)} → ${canonicalAddonFilename}`);
+			await installBinary(builtAddonPath, canonicalAddonPath);
+		}
+		// Finalize outside nativeDir so comparisons see only the final bytes.
+		await generateEnumExports(buildOutputDir);
+		await installGeneratedBindings(buildOutputDir);
+		console.log("Bindings build complete.");
+	} finally {
+		await fs.rm(buildOutputDir, { recursive: true, force: true });
+	}
 }
+
+if (import.meta.main) await buildBindings();

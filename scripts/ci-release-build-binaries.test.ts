@@ -71,7 +71,7 @@ describe("ZCode artifact release version", () => {
 		]);
 		expect(code, stderr).toBe(0);
 		expect(stdout).toContain("DRY RUN Bun.build target=bun-linux-x64-baseline");
-		expect(stdout).toContain("DRY RUN Bun.build target=bun-windows-x64-baseline");
+		expect(stdout).toContain("DRY RUN Bun.build target=bun-windows-x64");
 		expect(await fs.readdir(outputRoot)).toEqual(["keep.json"]);
 		expect(await Bun.file(sentinel).text()).toBe('{"userOwned":true}\n');
 	});
@@ -99,7 +99,7 @@ describe("Windows release binary target", () => {
 		expect(buildPlans.map(build => ({ target: build.target, outfile: build.outfile }))).toEqual(
 			expect.arrayContaining([
 				{
-					target: "bun-windows-x64-baseline",
+					target: "bun-windows-x64",
 					outfile: "packages/coding-agent/binaries/omp-windows-x64.exe",
 				},
 				{
