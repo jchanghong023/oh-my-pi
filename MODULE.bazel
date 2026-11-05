@@ -28,12 +28,15 @@ bazel_dep(name = "hermetic_cc_toolchain", version = "4.2.0")
 #   compile-only steps get private throwaway caches, links keep the shared one.
 # - rustc's -Wl,--fix-cortex-a53-843419 on aarch64 linux links is dropped;
 #   zig cc rejects it as an unsupported linker arg.
+# - rustc's static-link regions resolve library names to explicit archives;
+#   zig 0.14 otherwise searches for a shared library.
 single_version_override(
     module_name = "hermetic_cc_toolchain",
     patch_strip = 1,
     patches = [
         "//bazel/patches:hermetic_cc_toolchain-isolated-compile-cache.patch",
         "//bazel/patches:hermetic_cc_toolchain-drop-cortex-a53-link-arg.patch",
+        "//bazel/patches:hermetic_cc_toolchain-static-link-regions.patch",
     ],
 )
 
