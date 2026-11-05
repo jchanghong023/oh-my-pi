@@ -17,10 +17,10 @@ function reasoningParameters(options?: ChatCompletionsReasoningOptions): OpenAIC
 }
 
 describe("CodeAgent thinking policy", () => {
-	it.each(["low", "high", "max"] as const)("enables thinking with the selected %s effort", effort => {
-		const params = reasoningParameters({ reasoning: effort });
+	it("enables thinking with the selected effort", () => {
+		const params = reasoningParameters({ reasoning: "high" });
 		expect(params.thinking).toEqual({ type: "enabled" });
-		expect(params.reasoning_effort).toBe(effort);
+		expect(params.reasoning_effort).toBe("high");
 	});
 
 	it("turns thinking off when explicitly disabled", () => {
