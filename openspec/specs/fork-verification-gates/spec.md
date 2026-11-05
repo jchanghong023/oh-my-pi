@@ -222,23 +222,6 @@ OMP MUST 在 native 产物成功替换后立即尝试清理该次让位的旧文
 - **THEN** MUST 尝试删除该次让位文件；删除失败 MUST NOT 撤销成功换入或将安装判失败。
 - **AND** 换入失败时继续按既有回滚及恢复文件保留要求处理，不能先删除恢复所需的文件。
 
-### Requirement: 旧 compact 专属验证设施彻底清退
-
-本次简化 MUST 删除只服务旧 compact 的命令、测试清单、调度、报告分组、基线条件及自测，保留普通门禁与仍有效的共享消费者验证，不保留兼容层。
-
-#### Scenario: 移除旧专属入口及配套约束
-
-- **WHEN** 新 compact 需求替换旧行为
-- **THEN** 根命令 `compact_display`、`scripts/compact-display-tests.ts`、`ci-test-ts` 的 `compact-display` 模式、`--exclude-compact-display` 参数和 fulltest 中的 `test/compact_display` 通道 MUST 移除，不保留同义入口、空成功命令或改名后的替代通道。
-- **AND** 只服务该通道的 fixture、自测、选测分流、隔离配置、专属报告 producer 与基线完整性条件同时清退；旧报告可作为历史事实保留，但不能作为新需求已验证的证据。
-- **AND** 普通测试发现、选测、文件隔离、并发预算、失败传播、报告和 Git 版本记录不得因删除旧分支失效。
-
-#### Scenario: 只删除失效契约，不清空共享测试
-
-- **WHEN** 旧 compact 专属测试或断言不再对应本次两个显示差异
-- **THEN** MUST 删除该部分，而不是改名、固定新的偶然输出或增加 skip 保留旧套件。
-- **AND** 上游原有测试和仍保护 clean、detailed、原 diff、共享 TUI 或其他已批准 fork 功能的用例保持；混合文件仅清退旧 compact 专属内容。
-
 ### Requirement: 新 compact 的最小必要验证边界
 
 新 compact MUST 复用现有普通测试入口、原组件及消费者验证，只为按文件目标筛选的 write／edit 上游原展示和两行活动区的具体行为缺口增加必要用例，不重建专属测试框架、截图矩阵或全工具组合套件。

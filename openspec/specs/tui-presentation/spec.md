@@ -381,34 +381,6 @@ OMP MUST 在多行输入时保护输入法预编辑位置，避免非末行预�
 - **WHEN** 输入法安全布局关闭，或焦点、硬件光标、侧边框、行末位置、选区条件中任一条件不满足
 - **THEN** 非末行 MUST 沿用正常边框布局；末行及其他输入区域的既有安全行为保持不变。
 
-### Requirement: 显示档位不得新增旁路设置
-
-OMP MUST 移除独立暴露的 `display.compactToolActivity` 设置入口，使工具活动及结果图片由 `/display` 三档控制，并保留已批准的图片设置边界。
-
-#### Scenario: 修改显示档位
-- **WHEN** 用户通过 `/display` 或原工具可见性快捷键切换显示档位
-- **THEN** 工具活动和结果图片 MUST 与 clean、compact、detailed 的批准规则一致，不得再通过独立工具紧凑显示开关旁路改变；现有 `terminal.showImages` 与 `images.*` 仍按原优先级独立生效。
-
-### Requirement: 设置汉化和默认主题文档一致
-
-OMP MUST 将主要设置页面中 worktree scope 的可翻译名称、说明和选项呈现为简体中文，并使设置文档的深色主题默认值与已批准值一致。
-
-#### Scenario: 查看会话工作树范围设置
-- **WHEN** 用户打开 `session.worktreeScope` 设置
-- **THEN** 该项名称、说明及选项说明 MUST 使用自然简体中文，保留配置键及 `directory`／`repo` 机器值和原有行为。
-
-#### Scenario: 查看主题设置文档
-- **WHEN** 用户查看设置文档中的 `theme.dark` 默认值
-- **THEN** 文档 MUST 写 `titanium`，与普通及 offline 的已批准默认设置一致，不覆盖用户显式选择。
-
-### Requirement: Spinner 帧间隔恢复上游
-
-OMP MUST 将本次全局 Spinner 的帧间隔恢复为审查基线上游的 80 毫秒，不改变其他已批准的 offline 显示节流规则。
-
-#### Scenario: Spinner 帧推进
-- **WHEN** 使用该全局 Spinner 推进动画帧
-- **THEN** MUST 按上游 80 毫秒间隔推进，而非 fork 新增的 160 毫秒间隔。
-
 ### Requirement: 紧凑模式按文件目标保留 write／edit 原展示
 
 compact MUST 仅按 write／edit 的操作目标与既有路由识别文件操作；一旦已有参数足以确定其为文件写入或编辑，MUST 沿用上游 detailed 的原组件和完整显示行为，保持相同内容、消息顺序、状态反馈、交互、截断、展开／折叠、滚动及归档语义。是否真实修改文件、是否有 diff、是否成功及 `fileChanged`、前后快照等结果字段 MUST NOT 成为额外显示门槛；不增加最近次数限制、专属摘要组件或独立生命周期。

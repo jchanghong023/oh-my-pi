@@ -168,7 +168,7 @@ OMP MUST 同进程托管 AgentSession，stdout 只输出协议帧；存储成功
 **入口与仓库边界**
 
 - OMP 是用户预先独立安装的外部依赖，不打入 OmpCode 安装包、ZIP 或其他发行归档，不由 OmpCode 自动下载、安装、升级或替换。ZCode 桌面按 OmpCode FORK-003 选择已有外部 OMP：显式非空 `ZCODE_AGENT_SERVER_COMMAND` 优先；未设置时直接调用当前终端继承 PATH 中的 `omp`，不扫描安装目录、自行遍历 PATH 或维护发现缓存，开发态与打包态一致。显式配置失败不回退；未找到、不可用或协议不兼容时明确阻断并提示安装／更新兼容 OMP，不回退随包副本、源码运行器或原 Agent；完整选择及发行排除合同由 OmpCode FORK-003 维护。现有 Host 默认调用 `omp app-server --stdio`，桌面追加 `--surface desktop`；OMP 对外说 ZCode 协议，对内与 AgentSession 同进程直接调用业务 API，不启动会话宿主子进程。
-- 协议实现目标目录为 `packages/coding-agent/src/modes/zcode/`，是待实现的独立模式目录；CLI 注册和构建复用上游入口。协议解析、路由、事件映射和投影集中在该目录，不在 Agent 核心、工具或 UI 中散布 ZCode 专属分支，也不另造 Agent loop。
+- 协议实现集中在独立模式目录 `packages/coding-agent/src/modes/zcode/`；CLI 注册和构建复用上游入口。协议解析、路由、事件映射和投影集中在该目录，不在 Agent 核心、工具或 UI 中散布 ZCode 专属分支，也不另造 Agent loop。
 - OmpCode 保留上游 Agent 源码，通过启动和初始化接入外部 OMP；两仓各自持续合并上游。OMP 不跨仓深路径引用 ZCode 源码，OmpCode 不嵌入 OMP 的私有运行时实现或发行资产。
 - OMP 项目独立交付可安装、可校验的发行物；OmpCode 仅记录兼容的 OMP 版本／提交范围、ZCode 协议基线和实际能力，不将 OMP 发行物装配进自己的桌面或远端发行包。需要提取协议 schema 时包含完整依赖闭包及来源；schema diff／结构校验不等于行为兼容，更不能把 MCP 的 `protocolVersion` 配置当作 App–Agent 协商。
 
@@ -909,7 +909,7 @@ loop MUST NOT 在存在待处理计划审批时自动续跑，审批结束后 MU
 
 ### Requirement: 执行期模型恢复的投机执行沿用上游
 
-执行期模型恢复请求的工具投机执行与任务投机启动 MUST 遵循[恢复请求的推测执行沿用上游](../model-and-skill-discovery/spec.md#requirement-恢复请求的推测执行沿用上游)，不得仅因 `recoverModelRequest` 而额外禁用。
+执行期模型恢复请求的工具投机执行与任务投机启动 MUST 遵循[恢复请求的推测执行](../model-and-skill-discovery/spec.md#requirement-恢复请求的推测执行)，不得仅因 `recoverModelRequest` 而额外禁用。
 
 #### Scenario: 恢复请求开启或关闭投机执行
 
