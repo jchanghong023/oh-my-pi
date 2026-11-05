@@ -28,6 +28,7 @@
 
 ### Fixed
 
+- Fixed CodeAgent thinking levels so selected reasoning is enabled and thinking can still be switched off.
 - Fixed provider-scoped catalog generation requiring unrelated GitLab Duo reference models.
 
 ## [18.16.0] - 2026-11-02

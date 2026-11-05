@@ -4,6 +4,8 @@ provider "codeagent" {
 	allow-unauthenticated #true
 	automatic-default #false
 	supports-strict-mode #false
+	// The gateway defaults to no thinking; reasoning_effort alone does not enable it.
+	reasoning-disable-mode "zai-thinking-disabled"
 	seed api="openai-completions" base-url="https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2" bundle="never" {
 		model "deepseek-v4.1-flash-1017" name="deepseek-v4.1-flash-1017" {
 			reasoning #true
