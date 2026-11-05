@@ -36,8 +36,15 @@ provider "company" {
 			input "text"
 			cost input=0 output=0 cache-read=0 cache-write=0
 			limits context=1000000 max-tokens=81920
-			thinking-mode "budget"
-			thinking-efforts "minimal" "low" "medium" "high"
+			// Measured company gateway dialect: high can skip reasoning entirely;
+			// ultra is the stable deep-thinking tier. OMP exposes it as xhigh.
+			supports-output-effort #true
+			thinking-mode "anthropic-budget-effort"
+			thinking-default-level "medium"
+			thinking-efforts "low" "medium" "xhigh" "max"
+			thinking-effort-map {
+				xhigh "ultra"
+			}
 		}
 		model "MiniMax-M2.7" name="MiniMax-M2.7" {
 			reasoning #true

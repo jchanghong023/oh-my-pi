@@ -116,7 +116,7 @@ Knowledge 向量建库的并发、单次超时与固定重试策略采用[Knowle
    | `Qwen3.8-27B`              | 文本、图片 |   262,144 |   81,920 |
 
 - 公司网关的 `Qwen3.8-27B` 与 `Deepseek-v4.1-Flash` MUST 声明文本和图片输入；`GLM-5.3-public` MUST 保持纯文本声明，不依据模型名称或厂商能力推断公司部署支持图片。
-- 公司 Provider 的默认模型为 `GLM-5.3-public`，原有 `GLM-5.2-public` 继续保留供显式选择。GLM-5.3 支持工具调用及 `minimal`／`low`／`medium`／`high` 预算思考，沿用上述公司网关协议与认证。表中为内置目录参数；运行时上下文覆盖及各默认角色遵循[offline 启动约定](../fork-runtime/spec.md)。
+- 公司 Provider 的默认模型为 `GLM-5.3-public`，原有 `GLM-5.2-public` 继续保留供显式选择。GLM-5.3 支持工具调用，默认思考级别 MUST 为 `medium`；可选级别为 `low`／`medium`／`xhigh`／`max`，其中 OMP 的 `xhigh` MUST 映射为公司网关实测的 `ultra`。沿用 Anthropic Messages 预算思考，并通过 `output_config.effort` 发送所选级别；不提供实测不稳定的 `high` 或未验证的 `minimal`／`none` effort 值。`low` 用于极简单问题，`medium` 用于日常，`ultra` 用于稳定的深度思考，`max` 用于接受波动的最大思考深度；实测字符数不作为固定输出保证。沿用上述公司网关协议与认证。表中为内置目录参数；运行时上下文覆盖及各默认角色遵循[offline 启动约定](../fork-runtime/spec.md)。
 - Mnemopi 已启用且没有显式向量配置时，自动使用 `Qwen3-Embedding-8B`（4096 维），知识库同样采用此默认值；两者复用启动缓存中的 URL 和 Token，不改变记忆系统的启用状态。显式向量模型、地址、凭据，以及显式设置的 `mnemopi.embeddingVariant` 仍优先（只有它的 schema 默认值会让位给公司模型）；不会将公司 Token 发送给显式配置的其他地址。
 - company 嵌入默认值同样让位于通用 API 路由：company lane 激活时，若 `OPENROUTER_BASE_URL` 指向非 openrouter 主机（自定义通用网关），或 `MNEMOPI_EMBEDDINGS_VIA_API` 为真值（显式要求向量走 API），向量改按通用 API 配置解析（模型、地址、密钥），不注入公司 URL 与 Token；仅有共享的通用 API 密钥而无自定义网关地址时不构成让位条件。官方嵌入地址判定仅认可 `openrouter.ai` 和既有 `www.openrouter.ai` 别名，不因路径、相似域名或任意子域包含该字符串就信任它。
 - 向量采用 OpenAI 兼容 `/v1/embeddings`：去掉 Base URL 末尾斜杠，已有 `/v1` 时不重复追加，保留其他路径前缀。不探测其他路径、不回退到公网；公司网关兼容性需要内网实测。
