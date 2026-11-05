@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ptree, removeWithRetries } from "@oh-my-pi/pi-utils";
 
 // Declare the implementation loaded by the spawned CLI for Bun's native --changed graph.
 import "../src/tools";
@@ -54,13 +55,14 @@ describe("knowledge_search CLI without source files", () => {
 				indexFiles.map(async name => ({ name, bytes: await fs.readFile(path.join(indexDirectory, name)) })),
 			);
 			await fs.rm(documents, { recursive: true });
-		} finally {
-			await preparation.dispose();
+		} catch (error) {
+			await rethrowAfterCleanup(error, preparation.dispose);
 		}
+		await preparation.dispose();
 	}, 120_000);
 
 	afterAll(async () => {
-		if (directory) await fs.rm(directory, { recursive: true, force: true });
+		if (directory) await removeWithRetries(directory);
 	}, 120_000);
 
 	type ScenarioInput = { query?: string; mode?: "search" | "grep"; caseSensitive?: boolean };
@@ -75,9 +77,20 @@ describe("knowledge_search CLI without source files", () => {
 		const scenario = await createScenario(input, preparedIndex);
 		try {
 			await body(scenario);
-		} finally {
-			await scenario.dispose();
+		} catch (error) {
+			await rethrowAfterCleanup(error, scenario.dispose);
 		}
+		await scenario.dispose();
+	}
+
+	/** A cleanup failure must not replace the command timeout or assertion that caused it. */
+	async function rethrowAfterCleanup(error: unknown, cleanup: () => Promise<void>): Promise<never> {
+		try {
+			await cleanup();
+		} catch (cleanupError) {
+			throw new AggregateError([error, cleanupError], "Wiki CLI scenario and cleanup failed", { cause: error });
+		}
+		throw error;
 	}
 
 	async function createScenario(
@@ -93,21 +106,21 @@ describe("knowledge_search CLI without source files", () => {
 		const observed: Array<{ text: string; isError: boolean; elapsedMs: number }> = [];
 		const observedCalls = new Set<string>();
 		const issuedCalls = new Map<string, number>();
-		const children = new Set<Bun.Subprocess>();
+		const lifetime = new AbortController();
+		const children = new Set<Promise<ptree.ExecResult>>();
 		let callNumber = 0;
 		let stopServer: (() => void | Promise<void>) | undefined;
 
 		async function dispose() {
 			try {
-				for (const child of children) {
-					if (child.exitCode === null) child.kill();
-				}
-				await Promise.allSettled([...children].map(child => child.exited));
+				// Await tree termination and pipe drainage before removing the isolated cwd/index.
+				lifetime.abort(new Error("Wiki CLI scenario disposed"));
+				await Promise.allSettled(children);
 			} finally {
 				try {
 					await stopServer?.();
 				} finally {
-					await fs.rm(scenarioDirectory, { recursive: true, force: true });
+					await removeWithRetries(scenarioDirectory);
 				}
 			}
 		}
@@ -249,44 +262,56 @@ describe("knowledge_search CLI without source files", () => {
 			);
 			return { knowledgePath, observed, cli, dispose };
 		} catch (error) {
-			await dispose();
-			throw error;
+			return rethrowAfterCleanup(error, dispose);
 		}
 
 		async function cli(args: string[]): Promise<string> {
-			const child = Bun.spawn([process.execPath, "run", "dev", "--profile", profile, "--cwd", root, ...args], {
-				cwd: path.resolve(import.meta.dir, "../../.."),
-				env: {
-					...process.env,
-					OMP_CONFIG_ROOT: configRoot,
-					OMP_CACHE_DIR: "",
-					OMP_PROFILE: profile,
-					PI_PROFILE: "",
-					PI_CODING_AGENT_DIR: "",
-					OMP_OFFLINE: "",
-					PI_CONFIG_FILES: "",
-					MNEMOPI_NO_EMBEDDINGS: "true",
+			// Launch the public source entry directly: `bun run dev` owns only a wrapper,
+			// whose exit does not prove the CLI and its knowledge worker have exited.
+			const child = ptree.exec(
+				[
+					process.execPath,
+					path.resolve(import.meta.dir, "../src/cli.ts"),
+					"--profile",
+					profile,
+					"--cwd",
+					root,
+					...args,
+				],
+				{
+					cwd: path.resolve(import.meta.dir, ".."),
+					env: {
+						...process.env,
+						OMP_CONFIG_ROOT: configRoot,
+						OMP_CACHE_DIR: "",
+						OMP_PROFILE: profile,
+						PI_PROFILE: "",
+						PI_CODING_AGENT_DIR: "",
+						OMP_OFFLINE: "",
+						PI_CONFIG_FILES: "",
+						MNEMOPI_NO_EMBEDDINGS: "true",
+					},
+					stderr: "full",
+					detached: process.platform !== "win32",
+					signal: lifetime.signal,
+					timeout: 20_000,
+					allowNonZero: true,
+					allowAbort: true,
 				},
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-			});
+			);
 			children.add(child);
-			const timer = setTimeout(() => child.kill(), 20_000);
 			try {
-				const [stdout, stderr, code] = await Promise.all([
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-					child.exited,
-				]);
-				if (code !== 0) throw new Error(`Wiki CLI exited ${code}: ${stderr}`);
+				const { stdout, stderr, exitCode: code, exitError } = await child;
+				if (exitError?.aborted) {
+					throw new Error(
+						`Wiki CLI ${exitError.message} after ${observed.length} tool results\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+						{ cause: exitError },
+					);
+				}
+				if (code !== 0) throw new Error(`Wiki CLI exited ${code}: ${stderr}`, { cause: exitError });
 				return stdout;
 			} finally {
-				clearTimeout(timer);
-				if (child.exitCode === null) {
-					child.kill();
-					await child.exited;
-				}
+				// ptree.exec settles only after deadline/abort tree termination completes.
 				children.delete(child);
 			}
 		}
