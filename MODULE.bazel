@@ -28,15 +28,12 @@ bazel_dep(name = "hermetic_cc_toolchain", version = "4.2.0")
 #   compile-only steps get private throwaway caches, links keep the shared one.
 # - rustc's -Wl,--fix-cortex-a53-843419 on aarch64 linux links is dropped;
 #   zig cc rejects it as an unsupported linker arg.
-# - rustc's static-link regions resolve library names to explicit archives;
-#   zig 0.14 otherwise searches for a shared library.
 single_version_override(
     module_name = "hermetic_cc_toolchain",
     patch_strip = 1,
     patches = [
         "//bazel/patches:hermetic_cc_toolchain-isolated-compile-cache.patch",
         "//bazel/patches:hermetic_cc_toolchain-drop-cortex-a53-link-arg.patch",
-        "//bazel/patches:hermetic_cc_toolchain-static-link-regions.patch",
     ],
 )
 
@@ -228,6 +225,26 @@ crate.annotation(
 crate.annotation(
     crate = "grep-printer",
     deps = ["@@//crates/vendor/grep-searcher:grep-searcher"],
+)
+
+# Pass CXX's single-object runtime archive directly to the final linker.
+# Zig 0.14 does not resolve rustc's -l name inside static-link regions.
+crate.annotation(
+    additive_build_file_content = """
+load("@rules_cc//cc:defs.bzl", "cc_library")
+cc_library(
+    name = "cxx_cc",
+    srcs = ["src/cxx.cc"],
+    hdrs = ["include/cxx.h"],
+    alwayslink = True,
+    include_prefix = "rust",
+    includes = ["include"],
+    linkstatic = True,
+    strip_include_prefix = "include",
+    visibility = ["//visibility:public"],
+)
+""",
+    crate = "cxx",
 )
 
 # Zig 0.14 does not infer EVEX512 from NumKong's AVX-512 flags, and its
