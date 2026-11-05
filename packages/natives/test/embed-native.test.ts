@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { embeddedAddonFiles } from "../scripts/embed-native";
 import packageJson from "../package.json" with { type: "json" };
 import { type EmbeddedAddon, extractEmbeddedAddons } from "../native/loader-state.js";
+import { detectHostAvx2Support, resolveLocalHostAddon } from "../../../scripts/host-detect";
 
 describe("native addon embedding", () => {
 	for (const [label, contents] of [
@@ -94,6 +95,47 @@ describe("native addon embedding", () => {
 			await fs.rm(root, { recursive: true, force: true });
 		}
 	});
+
+	it.skipIf(process.platform !== "win32")(
+		"replaces a mapped addon while its existing process keeps using it",
+		async () => {
+			const root = await fs.mkdtemp(path.join(os.tmpdir(), "pi-natives-locked-"));
+			try {
+				const { filename } = resolveLocalHostAddon({
+					platform: process.platform,
+					arch: process.arch,
+					avx2: detectHostAvx2Support(),
+				});
+				const source = path.join(import.meta.dir, "../native", filename);
+				const target = path.join(root, filename);
+				await fs.copyFile(source, target);
+				// Keep a valid PE image but force extraction of a different build size.
+				const replacement = Buffer.concat([await fs.readFile(source), Buffer.from([0])]);
+				const zstdPath = path.join(root, "replacement.zst");
+				await Bun.write(zstdPath, Bun.zstdCompressSync(replacement, { level: 1 }));
+				const child = Bun.spawn(
+					[
+						process.execPath,
+						path.join(import.meta.dir, "fixtures/locked-addon-extraction.ts"),
+						target,
+						zstdPath,
+						String(replacement.length),
+					],
+					{ stdout: "pipe", stderr: "pipe" },
+				);
+				const [stdout, stderr, exitCode] = await Promise.all([
+					new Response(child.stdout).text(),
+					new Response(child.stderr).text(),
+					child.exited,
+				]);
+				expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+				expect(JSON.parse(stdout)).toEqual({ written: [target], script: "echo still-running" });
+				expect(await fs.readFile(target)).toEqual(replacement);
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it.skipIf(process.arch !== "x64" || process.platform === "win32")(
 		"extracts only the selected addon until the loader tries a fallback",

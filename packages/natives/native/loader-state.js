@@ -484,6 +484,7 @@ function isEmbeddedAddonFileCurrent(targetPath, file) {
 }
 
 function publishNativeFile(tempPath, targetPath) {
+	let retainTemp = false;
 	try {
 		fs.renameSync(tempPath, targetPath);
 	} catch (error) {
@@ -496,10 +497,39 @@ function publishNativeFile(tempPath, targetPath) {
 		} catch {
 			// Preserve the original publication failure below.
 		}
-		throw error;
+		if (process.platform !== "win32") throw error;
+
+		// A same-version rebuild may replace an addon still mapped by another
+		// omp process. Windows permits renaming that image, but not overwriting it.
+		const backupPath = `${targetPath}.old.${process.pid}.${randomUUID()}`;
+		try {
+			fs.renameSync(targetPath, backupPath);
+		} catch {
+			throw error;
+		}
+		try {
+			fs.renameSync(tempPath, targetPath);
+		} catch (installError) {
+			try {
+				fs.renameSync(backupPath, targetPath);
+			} catch (rollbackError) {
+				retainTemp = true;
+				throw new Error(
+					`Failed to publish ${targetPath} and restore the previous addon: ${rollbackError.message}. ` +
+					`Recovery files retained at ${backupPath} and ${tempPath}.`,
+					{ cause: installError },
+				);
+			}
+			throw installError;
+		}
+		try {
+			fs.unlinkSync(backupPath);
+		} catch {
+			// Running processes may still hold the old image.
+		}
 	} finally {
 		try {
-			fs.unlinkSync(tempPath);
+			if (!retainTemp) fs.unlinkSync(tempPath);
 		} catch {
 			// A successful rename already removed it; otherwise best-effort cleanup.
 		}
@@ -510,7 +540,6 @@ function writeEmbeddedAddonFile(targetPath, content) {
 	const tempPath = `${targetPath}.tmp.${process.pid}.${randomUUID()}`;
 	try {
 		fs.writeFileSync(tempPath, content, { mode: 0o755, flag: "wx" });
-		publishNativeFile(tempPath, targetPath);
 	} catch (err) {
 		try {
 			fs.unlinkSync(tempPath);
@@ -519,6 +548,7 @@ function writeEmbeddedAddonFile(targetPath, content) {
 		}
 		throw err;
 	}
+	publishNativeFile(tempPath, targetPath);
 }
 
 export function extractEmbeddedAddons({ files, targetDir }) {
@@ -601,17 +631,22 @@ function maybeStageNodeModulesAddon(ctx, errors) {
 			// destination to another cold starter and must never truncate a DLL
 			// that another process has already loaded.
 			fs.copyFileSync(sourcePath, tempPath, fs.constants.COPYFILE_EXCL);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			errors.push(`staged addon copy (${filename}): ${message}`);
+			try {
+				fs.unlinkSync(tempPath);
+			} catch {
+				// Failed copies may leave a partial file.
+			}
+			continue;
+		}
+		try {
 			publishNativeFile(tempPath, targetPath);
 			stagedPath = stagedPath || targetPath;
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			errors.push(`staged addon copy (${filename}): ${message}`);
-		} finally {
-			try {
-				fs.unlinkSync(tempPath);
-			} catch {
-				// Publication normally removed it; failed copies may leave a partial file.
-			}
+			errors.push(`staged addon publication (${filename}): ${message}`);
 		}
 	}
 	return stagedPath;
@@ -911,7 +946,9 @@ export function loadNative() {
 	const require_ = createRequire(import.meta.url);
 
 	const errors = [];
-	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
+	const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
+	const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors, selectedEmbeddedFile);
+	const selectedEmbeddedPath = selectedEmbeddedFile && path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
 	const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
 	const prepended = [embeddedCandidate, stagedCandidate].filter(c => typeof c === "string");
 	const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
@@ -924,8 +961,10 @@ export function loadNative() {
 	// A failed dlopen can leave a NODELETE image partially relocated on older
 	// glibc. Retrying that same image can crash instead of reporting its error.
 	for (const candidate of new Set(runtimeCandidates)) {
+		// A failed replacement must not fall back to that same stale cache file.
+		if (candidate === selectedEmbeddedPath && !embeddedCandidate) continue;
 		if (fallbackEmbeddedFile && candidate === fallbackEmbeddedPath) {
-			maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile);
+			if (!maybeExtractEmbeddedAddon(ctx, errors, fallbackEmbeddedFile)) continue;
 		}
 		try {
 			startupMarker(`native:require:${path.basename(candidate)}`);

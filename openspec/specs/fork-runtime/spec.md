@@ -229,6 +229,19 @@ OMP MUST 只在能确认进程映像就是安装目标时执行强杀回退。
 - **WHEN** 旧 `omp.exe` 无法重命名且存在同名进程
 - **THEN** 仅映像路径完全等于安装目标的进程被结束；路径不可读时安装以 `unsafe_identity` 失败并列出 PID
 
+### Requirement: Windows 内嵌 native 缓存的占用替换
+
+OMP MUST 在 Windows 上替换仍被其他进程加载的过期内嵌 addon，而不中断旧进程；不能因替换失败继续使用缺少当前 shell trace API 的旧缓存。
+
+上游缺陷归属：已集成基线 `can1357/oh-my-pi@88a69582c755bd000e8dc0290981fc787a4f400c` 的 [`writeEmbeddedAddonFile`、`maybeExtractEmbeddedAddon`](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L456-L524) 直接重命名覆盖缓存 DLL；Windows 已映射该文件时返回 `EPERM`。提取失败后 [`loadNative` 仍尝试旧缓存](https://github.com/can1357/oh-my-pi/blob/88a69582c755bd000e8dc0290981fc787a4f400c/packages/natives/native/loader-state.js#L857-L890)，且版本校验接受同版本的旧构建，可能使 Bash 预览实例化 `RunTrace` 时抛出 `undefined is not a constructor`。本条记录该上游基线的缺陷，不断言后续上游版本状态。
+
+#### Scenario: 同版本重建后旧进程仍占用缓存
+
+- **WHEN** 新二进制需要提取大小已变化的内嵌 addon，且另一进程仍加载同版本缓存中的旧 DLL
+- **THEN** 优先原子替换；Windows 不允许覆盖时把旧文件重命名到同目录唯一让位路径，再安装新文件，不终止旧进程、不改变现有缓存目录或 addon 文件名
+- **AND** 旧进程仍可调用其已加载 addon，新进程可加载新文件并使用 `RunTrace`；换入失败恢复旧文件，回滚失败保留新旧恢复文件并报出路径，让位文件清理失败不使换入失败
+- **AND** 验收使用真实已加载 DLL 复现替换失败，再确认替换后的文件字节、新进程的 shell trace 能力及旧进程继续运行；普通 native 构建和 `local`／`cnb` 的验证授权边界不变
+
 ### Requirement: native 能力缺失时的运行期降级
 
 OMP MUST 在加载到的 native addon 缺少管道流能力时降级相关视图而不影响命令执行。
