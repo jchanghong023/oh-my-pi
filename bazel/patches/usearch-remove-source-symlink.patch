@@ -1,0 +1,19 @@
+Remove the compile-only source-root symlink before Bazel validates bridge outputs.
+
+--- a/build.rs
++++ b/build.rs
+@@ -87,6 +87,14 @@
+ 
+     build.try_compile("usearch")?;
+ 
++    // The bridge source-root symlink is only needed while compiling. Bazel
++    // removes CARGO_MANIFEST_DIR before validating the OUT_DIR tree artifact.
++    #[cfg(unix)]
++    std::fs::remove_file(
++        std::path::Path::new(&std::env::var("OUT_DIR")?)
++            .join("cxxbridge/crate/usearch"),
++    )?;
++
+     println!("cargo:rerun-if-changed=rust/lib.rs");
+     println!("cargo:rerun-if-changed=rust/lib.cpp");
+     println!("cargo:rerun-if-changed=rust/lib.hpp");

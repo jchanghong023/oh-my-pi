@@ -239,6 +239,14 @@ crate.annotation(
     patches = ["//bazel/patches:numkong-export-headers.patch"],
 )
 
+# cxx-build's source-root symlink is compile-only and otherwise dangles after
+# Bazel removes the build script's temporary manifest directory.
+crate.annotation(
+    crate = "usearch",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:usearch-remove-source-symlink.patch"],
+)
+
 # Release addons must never pick up a host libpcre2 (Homebrew paths leaked into
 # shipped dylibs before); always build the vendored static copy.
 crate.annotation(
