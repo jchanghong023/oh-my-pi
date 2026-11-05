@@ -2,10 +2,10 @@
 // Preserve the real PTY runner and its fixtures. The child records each finished
 // TUI scenario; this wrapper retains a failed stage if it cannot finish one.
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { Subprocess } from "bun";
 import { observeGateUnhandledFailures, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
+import { testConcurrencyLimit } from "./test-gate-scheduler";
 import { beginTestRun, endTestRun, recordTestProducer } from "./test-reporting";
 
 observeGateUnhandledFailures();
@@ -16,7 +16,7 @@ const command = ["bun", "scripts/fulltest-ui-smoke.ts", ...args];
 // full suite can overlap independent fixtures; team and cancel share a stub.
 const parallelSuite = args.every(arg => arg === "--debug");
 const phases = parallelSuite ? ["--startup-only", "--team-group-only", "--repo-only"] : [undefined];
-const concurrency = Math.min(phases.length, Math.max(1, os.availableParallelism()));
+const concurrency = Math.min(phases.length, testConcurrencyLimit());
 const run = await beginTestRun(`dev TUI PTY smoke: ${args.join(" ") || "all scenarios"}`);
 const startedAt = new Date().toISOString();
 const started = performance.now();

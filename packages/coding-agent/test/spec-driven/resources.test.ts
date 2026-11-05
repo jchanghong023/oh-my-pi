@@ -4,7 +4,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { isEnoent, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import {
 	ensureSpecDrivenResources,
 	loadSpecDrivenSkill,
@@ -752,14 +752,23 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 		try {
 			const deadline = Date.now() + 10_000;
 			const infoPath = path.join(cwd, ".superpowers/brainstorm/state/server-info");
-			while (!(await Bun.file(infoPath).exists())) {
+			// The publisher appends a newline after the JSON; existence alone can
+			// observe the newly created file before its single record is written.
+			let infoText = "";
+			while (!infoText.endsWith("\n")) {
+				try {
+					infoText = await Bun.file(infoPath).text();
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+				}
+				if (infoText.endsWith("\n")) break;
 				if (child.exitCode !== null) throw new Error(`Script exited before startup: ${await stderr}`);
 				if (Date.now() >= deadline) throw new Error("Bundled server did not publish its real startup state");
 				await Bun.sleep(10);
 			}
 			scriptPid = Number(await fs.readFile(pidFile, "utf8"));
 			expect(Number.isSafeInteger(scriptPid) && scriptPid > 0).toBe(true);
-			const info = (await Bun.file(infoPath).json()) as { port: number; type: string };
+			const info = JSON.parse(infoText) as { port: number; type: string };
 			expect(info.type).toBe("server-started");
 			const url = `http://127.0.0.1:${info.port}/`;
 			expect((await fetch(url)).status).toBe(403);

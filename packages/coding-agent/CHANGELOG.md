@@ -66,7 +66,7 @@
 ### Changed
 
 - Developer Test Agent and its five skills are now manual-only and hidden from model-facing listings; ordinary test requests no longer inject routing hints.
-- Run fulltest chunks longest-first across source revisions and allocate unused Rust capacity to Bun, while keeping public CLI fixtures on the gate's shared transpiler cache without sharing application state.
+- Run fulltest faster with measured longest-first scheduling, work-aware worker allocation, overlapping isolated phases, shared transpiler caches, and independent two-scenario Knowledge CLI fixtures.
 
 - Temporarily disable Clippy in local verification gates while retaining Rust format checks and explicit `lint:rs` / `fix:rs` commands.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.

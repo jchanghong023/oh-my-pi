@@ -59,6 +59,14 @@ export function fulltestWorkerAllocation(cpuBudget: number, hasOrdinaryTests: bo
 	return { ordinary, rust, serial };
 }
 
+/** Reserve the smoke runner's three independent PTYs before assigning startup workers. */
+export function fulltestTrailingWorkerAllocation(cpuBudget: number, hasSmokeTests: boolean) {
+	const budget = testConcurrencyLimit(cpuBudget, process.platform, "");
+	const serial = budget <= 5;
+	const smoke = hasSmokeTests ? Math.min(3, budget) : 0;
+	return { startup: serial ? budget : budget - smoke, smoke, serial };
+}
+
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
@@ -395,6 +403,7 @@ async function runFulltestObserved(
 				{ concurrency: 1 },
 			),
 		);
+		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget());
 		if (report?.owner) {
 			report.sourceRevision = source.head;
 			report.dirtyState = source.dirty ? "dirty" : "clean";
@@ -465,14 +474,20 @@ async function runFulltestObserved(
 			gate.charged(infrastructure.scriptTestFiles ?? scriptTestFiles),
 		);
 		const scriptTests = options.full ? files : selectChangedScriptTests(changedPaths, files);
+		let independentScriptCommands: GateCommand[] = [];
 		if (scriptTests.length) {
-			// These fixture-only scripts use independent temporary or in-memory state.
-			// Keep every other script serial, including timing-sensitive gate selftests.
+			// Only fixture-local scripts may share the heavy phase's reserved workers.
+			// Unknown scripts, clock/watchdog selftests and shared writers stay isolated.
 			const parallelScripts = new Set([
 				"scripts/ci-release-checksums.test.ts",
+				"scripts/ci-test-ts.test.ts",
+				"scripts/fulltest.test.ts",
 				"scripts/gen-nix-bun.test.ts",
 				"scripts/inline-functions.test.ts",
 				"scripts/install-tests/fork-installer-routing.test.ts",
+				"scripts/run-rs-task.test.ts",
+				"scripts/slowtest.test.ts",
+				"scripts/test-reporting.test.ts",
 			]);
 			const commands = [...scriptTests].sort().map((file, index) => ({
 				label: `test/repository scripts ${file}`,
@@ -486,15 +501,7 @@ async function runFulltestObserved(
 				},
 				kind: "charged" as const,
 			}));
-			await attempt("independent repository scripts", () =>
-				runGateCommands(
-					gate,
-					commands.filter(command => parallelScripts.has(command.argv[2]!)),
-					{
-						concurrency: testConcurrencyLimit(),
-					},
-				),
-			);
+			independentScriptCommands = commands.filter(command => parallelScripts.has(command.argv[2]!));
 			await attempt("repository scripts", () =>
 				runGateCommands(
 					gate,
@@ -577,10 +584,8 @@ async function runFulltestObserved(
 			for (const command of tests)
 				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
 		});
-		// Reserve capacity for static checks and subprocesses spawned by the suites.
-		// The short Rust lane takes at most four workers when Bun also has work;
-		// do not strand half the machine after Rust finishes.
-		const cpuBudget = testConcurrencyLimit(infrastructure.cpuBudget ?? gateCpuBudget());
+		// Reserve two workers each for static checks and independent script files.
+		// The short Rust lane takes at most four workers when Bun also has work.
 		const ordinaryTests = tests.filter(command => command.label === "test/TypeScript fork feature suite");
 		const rustTests = tests.filter(command => command.label.startsWith("test/Rust"));
 		const allocation = fulltestWorkerAllocation(cpuBudget, ordinaryTests.length > 0, rustTests.length > 0);
@@ -593,6 +598,10 @@ async function runFulltestObserved(
 				RUST_TEST_THREADS: String(budget),
 			},
 		});
+		const scriptRun = attempt("independent repository scripts", () =>
+			runGateCommands(gate, independentScriptCommands, { concurrency: allocation.serial ? 1 : 2 }),
+		);
+		if (allocation.serial) await scriptRun;
 		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
 		const rustChecksFinished = Promise.withResolvers<void>();
 		const staticRun = (async () => {
@@ -622,10 +631,12 @@ async function runFulltestObserved(
 			}
 		})();
 		const startupTests = tests.filter(command => command.label === "test/TypeScript startup suite");
+		const smokeTests = tests.filter(command => command.label === "smoke/isolated dev TUI PTY");
 		const otherTests = tests.filter(
 			command =>
 				command.label !== "test/TypeScript fork feature suite" &&
 				command.label !== "test/TypeScript startup suite" &&
+				command.label !== "smoke/isolated dev TUI PTY" &&
 				!command.label.startsWith("test/Rust"),
 		);
 		const testRun = (async () => {
@@ -651,15 +662,25 @@ async function runFulltestObserved(
 				),
 			);
 		})();
-		await Promise.all([staticRun, testRun, rustRun]);
+		await Promise.all([staticRun, testRun, rustRun, scriptRun]);
 		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
-		await attempt("TypeScript startup tests", () =>
+		const trailing = fulltestTrailingWorkerAllocation(cpuBudget, smokeTests.length > 0);
+		const smokeRun = attempt("isolated dev TUI smoke", () =>
 			runGateCommands(
 				gate,
-				startupTests.map(command => withBudget(command, cpuBudget)),
+				smokeTests.map(command => withBudget(command, trailing.smoke)),
 				{ concurrency: 1 },
 			),
 		);
+		if (trailing.serial) await smokeRun;
+		const startupRun = attempt("TypeScript startup tests", () =>
+			runGateCommands(
+				gate,
+				startupTests.map(command => withBudget(command, trailing.startup)),
+				{ concurrency: 1 },
+			),
+		);
+		await Promise.all([smokeRun, startupRun]);
 	} catch (error) {
 		// Record the triggering failure before cleanup can report its own error.
 		throw gate.record(error);
