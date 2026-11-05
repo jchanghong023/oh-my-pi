@@ -32,9 +32,9 @@ async function fixture(records: Record<string, unknown>[], exitCode = 0) {
 			startedMs: performance.now(),
 			scope: "fixture",
 			owner: true,
-			sourceRevision: null,
-			dirtyState: null,
-			dirtyStateIdentity: null,
+			sourceRevision: "a".repeat(40),
+			dirtyState: "dirty",
+			dirtyStateIdentity: "b".repeat(64),
 		};
 		await endTestRun(run, exitCode);
 		return JSON.parse(await fs.readFile(path.join(dir, "run.json"), "utf8"));
@@ -87,6 +87,10 @@ test("affected selection reports only executed XML cases and native deselections
 		emptyBun,
 	]);
 	expect(report.completion).toBe("complete");
+	expect(report.sourceRevision).toBe("a".repeat(40));
+	expect(report.dirtyState).toBe("dirty");
+	expect(report.dirtyStateIdentity).toBe("b".repeat(64));
+	expect(report).not.toHaveProperty("sourceDigest");
 	expect(report.coverage).toBe("affected-tests-only");
 	expect(report.reconciliation).toMatchObject({
 		status: "validated",

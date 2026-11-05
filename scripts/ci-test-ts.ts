@@ -8,8 +8,8 @@ import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { bunRequiresFullSelection, captureChangedPaths, captureSourceIdentity } from "./test-gate-source";
-import type { GateCommand, GateRun } from "./test-gate-runtime";
+import { bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
+import type { GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
 	endTestRun,
@@ -1748,26 +1748,16 @@ export function prioritizeLocalCommands<T extends TestCommand>(commands: T[], pr
 		.map(item => item.command);
 }
 
-/** Never let a caller-supplied digest stand in for the current source inventory. */
-async function verifiedFulltestDigest(expected: string | undefined): Promise<string | undefined> {
-	if (!expected || !/^[a-f0-9]{64}$/.test(expected)) return undefined;
+/** Revision history only orders chunks; worktree changes never invalidate test execution. */
+export async function verifiedFulltestRevision(
+	expected: string | undefined,
+	root: string = repoRoot,
+): Promise<string | undefined> {
+	if (!expected || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(expected)) return undefined;
 	try {
-		const gate = {
-			signal: new AbortController().signal,
-			charged: async <T>(work: () => T | Promise<T>) => work(),
-			capture: async (command: GateCommand) => {
-				const child = Bun.spawn([...command.argv], { cwd: command.cwd, stdout: "pipe", stderr: "pipe" });
-				const [stdout, stderr, exitCode] = await Promise.all([
-					new Response(child.stdout).text(),
-					new Response(child.stderr).text(),
-					child.exited,
-				]);
-				if (exitCode !== 0) throw new Error(stderr);
-				return { stdout };
-			},
-		} as unknown as GateRun;
-		const actual = await captureSourceIdentity(gate, repoRoot);
-		return actual.digest === expected ? expected : undefined;
+		const child = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd: root, stdout: "pipe", stderr: "ignore" });
+		const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+		return exitCode === 0 && stdout.trim() === expected ? expected : undefined;
 	} catch {
 		return undefined;
 	}
@@ -1875,9 +1865,9 @@ if (import.meta.main) {
 	}
 	// Prioritize within the selected shard, without changing shard membership.
 	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));
-	const digest =
-		requestedMode === "local-ts" ? await verifiedFulltestDigest(Bun.env.OMP_FULLTEST_SOURCE_DIGEST) : undefined;
-	const producers = digest ? await latestLocalTestProducers(digest) : [];
+	const revision =
+		requestedMode === "local-ts" ? await verifiedFulltestRevision(Bun.env.OMP_FULLTEST_SOURCE_REVISION) : undefined;
+	const producers = revision ? await latestLocalTestProducers(revision) : [];
 	const scheduledCommands = localMode ? prioritizeLocalCommands(requestedCommands, producers) : requestedCommands;
 	const explicitConcurrency = Boolean(Bun.env.OMP_TEST_CONCURRENCY?.trim());
 	// CI defaults to one process at a time, but memory-sized workflow buckets

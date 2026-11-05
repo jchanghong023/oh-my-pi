@@ -11,6 +11,7 @@ import {
 	prioritizeLocalCommands,
 	runBoundedPool,
 	testConcurrency,
+	verifiedFulltestRevision,
 } from "./ci-test-ts";
 import { latestLocalTestProducers, type TestProducerRecord } from "./test-reporting";
 import { fulltestCommands } from "./fulltest";
@@ -48,7 +49,6 @@ test("Bun discovery excludes the OpenWiki fork but keeps OMP consumer tests", as
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
 	const previous = process.env.OMP_FULLTEST_AFFECTED;
-	const previousDigest = process.env.OMP_FULLTEST_SOURCE_DIGEST;
 	const git = async (...args: string[]) => {
 		const child = Bun.spawn(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
 		const [out, err, code] = await Promise.all([
@@ -61,7 +61,9 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 	};
 	try {
 		process.env.OMP_FULLTEST_AFFECTED = "1";
-		delete process.env.OMP_FULLTEST_SOURCE_DIGEST;
+		expect(await verifiedFulltestRevision(undefined, root)).toBeUndefined();
+		expect(await verifiedFulltestRevision("invalid", root)).toBeUndefined();
+		expect(await verifiedFulltestRevision("a".repeat(40), root)).toBeUndefined();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		await git("init", "-q");
 		await git("config", "user.email", "fixture@example.invalid");
@@ -71,6 +73,8 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await git("add", "fixture.ts", ".gitignore");
 		await git("commit", "-qm", "fixture baseline");
 		const revision = await git("rev-parse", "HEAD");
+		expect(await verifiedFulltestRevision(revision, root)).toBe(revision);
+		expect(await verifiedFulltestRevision("b".repeat(40), root)).toBeUndefined();
 		const dir = path.join(root, "runs", "test-timing", "fixture");
 		await fs.mkdir(dir, { recursive: true });
 		const report = {
@@ -79,7 +83,6 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			dirtyState: "clean",
 			sourceRevision: revision,
-			sourceDigest: "a".repeat(64),
 			platform: process.platform,
 			architecture: process.arch,
 			runtimeVersions: { bun: Bun.version },
@@ -182,12 +185,10 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await fs.appendFile(path.join(root, "fixture.ts"), "// working tree change\n");
 		expect(await bunCleanBaseline({ tool: "bun", mode: "affected", baseline: revision }, root)).toBe(false);
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
+		// Scheduling provenance is the Git revision, not a worktree content snapshot.
+		expect(await verifiedFulltestRevision(revision, root)).toBe(revision);
 		report.dirtyState = "dirty";
 		await save();
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		process.env.OMP_FULLTEST_SOURCE_DIGEST = "b".repeat(64);
-		expect((await bunTestSelection(root)).mode).toBe("full");
-		process.env.OMP_FULLTEST_SOURCE_DIGEST = "a".repeat(64);
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.dirtyState = "clean";
 		report.producers[0] = {
@@ -227,6 +228,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
 		await git("add", "fixture.ts");
 		await git("commit", "-qm", "working tree change");
+		expect(await verifiedFulltestRevision(revision, root)).toBeUndefined();
 		await git("checkout", "-q", "--orphan", "unrelated");
 		await git("add", "fixture.ts");
 		await git("commit", "-qm", "unrelated history");
@@ -234,8 +236,6 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 	} finally {
 		if (previous === undefined) delete process.env.OMP_FULLTEST_AFFECTED;
 		else process.env.OMP_FULLTEST_AFFECTED = previous;
-		if (previousDigest === undefined) delete process.env.OMP_FULLTEST_SOURCE_DIGEST;
-		else process.env.OMP_FULLTEST_SOURCE_DIGEST = previousDigest;
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 20_000);
@@ -480,11 +480,11 @@ test("historical chunk durations reorder only exact matches, retaining every com
 	]);
 });
 
-test("only the latest complete successful same-source fulltest supplies history", async () => {
+test("only the latest complete successful same-revision fulltest supplies scheduling history", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-timing-history-"));
 	const now = Date.now();
-	const digest = "a".repeat(64);
-	const producer: TestProducerRecord & { report: string } = {
+	const revision = "a".repeat(40);
+	const producer = {
 		producer: "ci-test-ts:local-ts:1234abcd:packages/foo:attempt-1",
 		command: ["bun", "test"],
 		scope: "ci-test-ts:local-ts",
@@ -492,44 +492,64 @@ test("only the latest complete successful same-source fulltest supplies history"
 		startedAt: new Date(now).toISOString(),
 		durationSeconds: 12,
 		exitCode: 0,
-		selection: { tool: "bun", mode: "full" },
+		status: "passed",
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 2 },
 		report: "available",
+	} satisfies TestProducerRecord & { report: string };
+	const startup = {
+		...producer,
+		producer: "ci-test-ts:local-ts:1234abcd:startup:attempt-1",
+		selection: { ...producer.selection, group: "startup" },
 	};
+	const producers = [producer, startup];
 	const put = async (name: string, overrides: object = {}) => {
 		const dir = path.join(root, name);
 		await fs.mkdir(dir, { recursive: true });
 		await Bun.write(
 			path.join(dir, "run.json"),
 			JSON.stringify({
+				runId: name,
 				scope: "fulltest: fork feature suites",
 				startedAtUtc: new Date(now - 1000).toISOString(),
 				completion: "complete",
 				exitCode: 0,
-				sourceDigest: digest,
+				sourceRevision: revision,
 				platform: process.platform,
 				architecture: process.arch,
+				runtimeVersions: { bun: Bun.version },
 				reconciliation: { status: "validated", cases: 1, failures: 0 },
 				unreconciledScope: null,
-				producers: [producer],
+				producers,
 				...overrides,
 			}),
 		);
 	};
-	const readHistory = () => latestLocalTestProducers(digest, root, now, "current");
+	const readHistory = () => latestLocalTestProducers(revision, root, now, "current");
 	try {
 		expect(await readHistory()).toEqual([]);
 		await put("valid");
-		expect(await readHistory()).toEqual([producer]);
+		expect(await readHistory()).toEqual(producers);
 		expect(await latestLocalTestProducers(undefined, root, now, "current")).toEqual([]);
-		expect(await latestLocalTestProducers("b".repeat(64), root, now, "current")).toEqual([]);
+		expect(await latestLocalTestProducers("invalid", root, now, "current")).toEqual([]);
+		expect(await latestLocalTestProducers("b".repeat(40), root, now, "current")).toEqual([]);
 		for (const overrides of [
 			{ completion: "partial" },
 			{ exitCode: 1 },
 			{ scope: "fulltest: full current-platform project suites" },
-			{ sourceDigest: "b".repeat(64) },
+			{ sourceRevision: "b".repeat(40) },
+			{ sourceRevision: null },
+			{ runtimeVersions: { bun: "other" } },
+			{ runtimeVersions: null },
 			{ startedAtUtc: new Date(now - 8 * 86400000).toISOString() },
 			{ reconciliation: { status: "invalid", cases: 1, failures: 0 } },
-			{ producers: [{ ...producer, report: "missing" }] },
+			{ producers: [] },
+			{ producers: [producer] },
+			{ producers: [producer, { ...startup, report: "missing" }] },
+			{ producers: [producer, { ...startup, exitCode: 1 }] },
+			{ producers: [producer, { ...startup, status: "partial" }] },
+			{ producers: [producer, { ...startup, selection: { ...startup.selection, mode: "affected" } }] },
+			{ producers: [producer, { ...startup, selection: { ...startup.selection, suiteRevision: 1 } }] },
+			{ producers: [producer, { ...startup, selection: { tool: "bun", mode: "full", group: "startup" } }] },
 			{ architecture: "other" },
 			{ platform: "other" },
 		]) {
@@ -537,15 +557,19 @@ test("only the latest complete successful same-source fulltest supplies history"
 			expect(await readHistory()).toEqual([]);
 		}
 		await put("valid");
-		await put("current", { completion: "running", sourceDigest: null, startedAtUtc: new Date(now).toISOString() });
-		expect(await readHistory()).toEqual([producer]);
+		// The current running report already has a revision; it is not a prior failed run.
+		await put("current", { completion: "running", startedAtUtc: new Date(now).toISOString() });
+		expect(await readHistory()).toEqual(producers);
+		await put("current", { runId: "different", completion: "running", startedAtUtc: new Date(now).toISOString() });
+		expect(await readHistory()).toEqual([]);
+		await put("current", { completion: "running", startedAtUtc: new Date(now).toISOString() });
 		await put("newer", { completion: "partial", exitCode: 1, startedAtUtc: new Date(now - 500).toISOString() });
 		expect(await readHistory()).toEqual([]);
 		await put("newer", {
 			startedAtUtc: new Date(now - 500).toISOString(),
-			producers: [{ ...producer, durationSeconds: 30 }],
+			producers: [{ ...producer, durationSeconds: 30 }, startup],
 		});
-		expect((await readHistory()).map(item => item.durationSeconds)).toEqual([30]);
+		expect((await readHistory()).map(item => item.durationSeconds)).toEqual([30, 12]);
 		await fs.mkdir(path.join(root, "invalid"));
 		await Bun.write(path.join(root, "invalid", "run.json"), "{");
 		expect(await readHistory()).toEqual([]);

@@ -23,9 +23,11 @@
 ### Removed
 
 - Removed the built-in `/code-review-export` command.
+- Removed full-repository source fingerprint scans and gate failures caused by source or temporary-file changes during verification; Git revision reporting and affected-test selection remain available.
 
 ### Added
 
+- Record Windows CPU, memory, disk capacity and disk I/O metrics every two seconds in a background temporary log with `bun scripts/monitor-system.ts`, then inspect test-run peaks with `--report`.
 - Run local mock embedding and rerank endpoints for knowledge search performance work from a source checkout.
 - Use the bundled Developer Test Agent with `/dt`, `/generate-dt-files`, `/generate-dt-dir`, `/incremental-dt` and `/cloud-dt-fix`, including its Python, Java, C/C++ and Go unit-test skills.
 - Start an optional business interview with `/dev business <description>` and an automatically assigned document path, then confirm its complete document with `/dev next` or deliver business requirements only with `/dev finish-business`; `/dev new` still starts directly with development requirements.
@@ -314,7 +316,7 @@
 - Keep ZCode history pagination complete when late rows arrive, avoid executing extensions during cold workspace catalog reads, and reject unsupported tool approval dialogs without disguising them as user questions.
 - Keep ZCode fork dividers after the actual inherited response and resolve native parent journal paths to session identities across live and cold history.
 - Keep runtime journal leases exclusive within one process and held through writer shutdown; preserve callable tool schemas through admission wrappers and cancel failed MCP initialization without affecting other sessions.
-- Keep gate scope tied to one source snapshot, fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
+- Fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
 - Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.
 - Avoid rewriting unchanged stamped native addons and writable bindings during installation, while retaining version and load verification.
 - Fixed compacted-history replay losing running background tool updates, dropping message-form skill requests, and showing synthetic prompts as user messages.

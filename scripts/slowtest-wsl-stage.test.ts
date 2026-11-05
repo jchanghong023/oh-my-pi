@@ -17,7 +17,7 @@ import {
 } from "./slowtest-wsl-stage";
 import type { GateCapture, GateCommand, GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
+import { captureSourceRevision, type SourceRevision } from "./test-gate-source";
 
 /**
  * Git for Windows layouts ship bash.exe beside git.exe (mingw64/bin), in the
@@ -59,13 +59,11 @@ function fakeRuntime(capture: (command: GateCommand) => Promise<string | GateCap
 	} as unknown as GateRun;
 	return { gate, commands };
 }
-function source(dirty = false): SourceIdentity {
+function source(dirty = false): SourceRevision {
 	return {
 		head: "a".repeat(40),
-		digest: "local-only-digest",
 		dirty,
 		status: dirty ? " M source.ts\n?? new.ts\n" : "",
-		files: [],
 	};
 }
 let temporary: string;
@@ -124,7 +122,7 @@ function executionFixture(override?: (command: GateCommand) => Promise<string | 
 	const options: WslOptions = {
 		debug: true,
 		root: temporary,
-		identity: source(),
+		revision: source(),
 		workflowPath: helper,
 		which: () => process.execPath,
 		selection: { status: "AVAILABLE", distro: "Ubuntu-24.04" },
@@ -360,7 +358,7 @@ describe("fixed network-remote source", () => {
 	});
 	test("dirty input is blocked before helper, remote or WSL operations", async () => {
 		const f = executionFixture();
-		expect((await runWslStage(f.gate, { ...f.options, identity: source(true) })).status).toBe("BLOCKED");
+		expect((await runWslStage(f.gate, { ...f.options, revision: source(true) })).status).toBe("BLOCKED");
 		expect(f.commands).toHaveLength(0);
 	});
 	test("in-progress Windows operation blocks before any WSL command", async () => {
@@ -415,25 +413,22 @@ describe("fixed network-remote source", () => {
 			expect(f.commands.every(c => c.argv[0] === "git")).toBe(true);
 		}
 	});
-	test("local identity records dirty additions/deletions without copying or Git writes", async () => {
-		const root = await fs.mkdtemp(path.join(temporary, "identity-"));
-		await fs.writeFile(path.join(root, "tracked.ts"), "dirty edit\n");
-		await fs.writeFile(path.join(root, "new.ts"), "addition\n");
-		await fs.mkdir(path.join(root, "target"));
-		await fs.writeFile(path.join(root, "target", "cache"), "preserved\n");
+	test("local revision capture records Git status using only rev-parse and status", async () => {
+		const status = " M tracked.ts\n D deleted.ts\n?? new.ts\n";
 		const f = fakeRuntime(async command => {
 			if (command.argv[1] === "rev-parse") return source().head;
-			if (command.argv[1] === "status") return " M tracked.ts\n D deleted.ts\n?? new.ts\n";
-			if (command.argv.includes("--stage")) return `100644 ${"b".repeat(40)} 0\ttracked.ts\0`;
-			return "tracked.ts\0deleted.ts\0new.ts\0target/cache\0";
+			if (command.argv[1] === "status") return status;
+			throw new Error(`unexpected source command: ${command.argv.join(" ")}`);
 		});
-		const before = await captureSourceIdentity(f.gate, root);
-		expect(before.dirty).toBe(true);
-		expect(before.files.map(f => f.path)).toEqual(["new.ts", "tracked.ts"]);
-		await fs.writeFile(path.join(root, "new.ts"), "changed addition\n");
-		expect((await captureSourceIdentity(f.gate, root)).digest).not.toBe(before.digest);
-		expect(await fs.readFile(path.join(root, "target", "cache"), "utf8")).toBe("preserved\n");
-		for (const command of f.commands) expect(["rev-parse", "status", "ls-files"]).toContain(command.argv[1]);
+		expect(await captureSourceRevision(f.gate, temporary)).toEqual({
+			head: source().head,
+			dirty: true,
+			status,
+		});
+		expect(f.commands.map(command => command.argv)).toEqual([
+			["git", "rev-parse", "HEAD"],
+			["git", "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
+		]);
 	});
 });
 

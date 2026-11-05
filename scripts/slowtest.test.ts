@@ -45,17 +45,14 @@ async function fixture(selection: WslSelection, dirty = false) {
 	const directory = await fs.mkdtemp(path.join(temporary, "case-"));
 	const root = path.join(directory, "source");
 	await fs.mkdir(root);
-	await fs.writeFile(path.join(root, "source.ts"), "export const value = 1;\n");
 	const localRecord = path.join(directory, "current.jsonl");
 	const linuxRecord = path.join(directory, "linux.jsonl");
 	const deps: SlowtestDependencies = {
 		discover: async () => selection,
-		identity: async () => ({
+		revision: async () => ({
 			head: "a".repeat(40),
-			digest: await fs.readFile(path.join(root, "source.ts"), "utf8"),
 			dirty,
 			status: dirty ? " M source.ts\n?? new.ts\n" : "",
-			files: [],
 		}),
 		fulltest: async gate => {
 			await gate.run({
@@ -69,7 +66,7 @@ async function fixture(selection: WslSelection, dirty = false) {
 				label: "isolated Linux stub",
 				argv: [process.execPath, stub, linuxRecord, "none", "linux", "0"],
 			});
-			return { status: "PASS", distro: selection.distro, head: options.identity!.head };
+			return { status: "PASS", distro: selection.distro, head: options.revision!.head };
 		},
 	};
 	const execute = () =>
@@ -148,7 +145,7 @@ describe("slowtest isolated mechanism", () => {
 		};
 		f.deps.wsl = async (gate, options) => {
 			await gate.run({ label: "Linux stub", argv: [process.execPath, stub, f.linuxRecord, barrier, "linux", "0"] });
-			return { status: "PASS", distro: "Ubuntu-24.04", head: options.identity!.head };
+			return { status: "PASS", distro: "Ubuntu-24.04", head: options.revision!.head };
 		};
 		expect((await f.execute()).status).toBe("PASS");
 		expect(await f.records(f.localRecord)).toEqual([{ role: "current" }]);
@@ -226,16 +223,11 @@ describe("slowtest isolated mechanism", () => {
 		expect(local.completed).toBe(true);
 	}, 20000);
 
-	test.each(["before", "after"] as const)("source identity exception %s validation fails the gate", async phase => {
+	test("source revision capture failure prevents validation from starting", async () => {
 		const f = await fixture({ status: "SKIPPED_NOT_APPLICABLE", reason: "fixture" });
-		const identity = f.deps.identity;
-		let observations = 0;
 		let currentStarted = false;
-		f.deps.identity = async (gate, root) => {
-			observations++;
-			if (observations === (phase === "before" ? 1 : 2))
-				throw new GateCommandError("source evidence unavailable", 31);
-			return identity(gate, root);
+		f.deps.revision = async () => {
+			throw new GateCommandError("source evidence unavailable", 31);
 		};
 		f.deps.fulltest = async () => {
 			currentStarted = true;
@@ -243,18 +235,8 @@ describe("slowtest isolated mechanism", () => {
 		const result = await f.execute();
 		expect(result.status).toBe("FAIL");
 		expect(result.exitCode).toBe(31);
-		expect(currentStarted).toBe(phase === "after");
+		expect(currentStarted).toBe(false);
 	});
-
-	test("source changes during current validation cannot verify one identity", async () => {
-		const f = await fixture({ status: "SKIPPED_NOT_APPLICABLE", reason: "fixture" });
-		const original = f.deps.fulltest;
-		f.deps.fulltest = async (gate, options) => {
-			await original(gate, options);
-			await gate.charged(() => fs.writeFile(path.join(f.root, "source.ts"), "changed during validation\n"));
-		};
-		expect((await f.execute()).status).toBe("FAIL");
-	}, 20000);
 
 	test("mismatching Linux fixed commit fails without cancelling current validation", async () => {
 		const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });

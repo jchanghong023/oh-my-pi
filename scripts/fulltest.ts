@@ -10,12 +10,7 @@ import { buildChildEnv, bunTestSelection, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
 import { GateAbortError, GateCommandError } from "./test-gate-failure-events";
-import {
-	bunRequiresFullSelection,
-	captureChangedPaths,
-	captureSourceIdentity,
-	type SourceIdentity,
-} from "./test-gate-source";
+import { bunRequiresFullSelection, captureChangedPaths, captureSourceRevision } from "./test-gate-source";
 import { selectRustPackages, type RustDeltaSelection } from "./test-gate-delta";
 import { beginTestRun, finalizeTestRun, recordTestProducer, type TestReportRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
@@ -100,7 +95,7 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 }
 
 /** Execute the requested suites; independently authorized integrations stay separate. */
-export function fulltestCommands(options: FulltestOptions, home: string, sourceDigest?: string): GateCommand[] {
+export function fulltestCommands(options: FulltestOptions, home: string, sourceRevision?: string): GateCommand[] {
 	const env = localTestEnvironment(home);
 	return [
 		{
@@ -113,7 +108,7 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceD
 				...localTestEnvironment(path.join(home, "typescript")),
 				OMP_TEST_CONCURRENCY: "all",
 				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
-				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
+				OMP_FULLTEST_SOURCE_REVISION: sourceRevision,
 			},
 		},
 		{
@@ -126,7 +121,7 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceD
 				...localTestEnvironment(path.join(home, "typescript-startup")),
 				OMP_TEST_CONCURRENCY: "all",
 				OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
-				OMP_FULLTEST_SOURCE_DIGEST: sourceDigest,
+				OMP_FULLTEST_SOURCE_REVISION: sourceRevision,
 			},
 		},
 		{
@@ -189,35 +184,6 @@ export async function removeFulltestHome(home: string): Promise<void> {
 	await removeWithRetries(home);
 }
 
-/** Only the native producer's two tracked regular-file bindings may change content. */
-function assertFulltestSourceStable(before: SourceIdentity, after: SourceIdentity, allowNativeBindings = false): void {
-	const unchanged =
-		before.head === after.head &&
-		(allowNativeBindings
-			? before.files.length === after.files.length &&
-				before.files.every((file, index) => {
-					const next = after.files[index];
-					const generated =
-						file.kind === "file" &&
-						(file.path === "packages/natives/native/index.js" ||
-							file.path === "packages/natives/native/index.d.ts");
-					return (
-						file.path === next.path &&
-						file.kind === next.kind &&
-						file.executable === next.executable &&
-						file.link === next.link &&
-						(generated || file.sha256 === next.sha256)
-					);
-				})
-			: before.digest === after.digest);
-	if (!unchanged) {
-		throw new GateAbortError(
-			"Source changed while preparing or running tests; result does not verify one source snapshot",
-			1,
-		);
-	}
-}
-
 /** Select existing script tests for changed script modules, never for unrelated business changes. */
 export function selectChangedScriptTests(changed: readonly string[], files: readonly string[]): string[] {
 	const available = new Set(files);
@@ -260,17 +226,18 @@ export function selectChangedScriptTests(changed: readonly string[], files: read
 }
 
 interface FulltestInfrastructure {
-	captureSourceIdentity: typeof captureSourceIdentity;
+	captureSourceRevision: typeof captureSourceRevision;
 	captureChangedPaths: typeof captureChangedPaths;
 	runGateCommands: typeof runGateCommands;
 	fastcheckCommands: typeof fastcheckCommands;
 	bunTestSelection?: typeof bunTestSelection;
 	selectRustPackages?: typeof selectRustPackages;
 	cpuBudget?: number;
+	scriptTestFiles?: () => Promise<string[]>;
 }
 
 const fulltestInfrastructure: FulltestInfrastructure = {
-	captureSourceIdentity,
+	captureSourceRevision,
 	captureChangedPaths,
 	runGateCommands,
 	fastcheckCommands,
@@ -325,14 +292,14 @@ async function runFulltestObserved(
 	infrastructure: FulltestInfrastructure,
 	report?: TestReportRun,
 ): Promise<void> {
-	const { captureSourceIdentity, runGateCommands, fastcheckCommands } = infrastructure;
+	const { captureSourceRevision, runGateCommands, fastcheckCommands } = infrastructure;
 	if (!((process.platform === "win32" || process.platform === "linux") && process.arch === "x64")) {
 		throw new GateAbortError(
 			`UNVERIFIED: supported local platform is Windows/Linux x64, found ${process.platform}-${process.arch}`,
 			1,
 		);
 	}
-	/** A prerequisite whose failure makes the remaining snapshot invalid. */
+	/** A prerequisite whose failure prevents the remaining work from running. */
 	const acquire = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
 		try {
 			return await work();
@@ -355,19 +322,18 @@ async function runFulltestObserved(
 			return false;
 		}
 	};
-	const before = await acquire("source identity", () => captureSourceIdentity(gate, gateRepoRoot));
-	logger.info("Fulltest source identity resolved", {
+	const source = await acquire("source revision", () => captureSourceRevision(gate, gateRepoRoot));
+	logger.info("Fulltest source revision recorded", {
 		component: "test-gate-fulltest",
-		event: "fulltest_source_identity",
+		event: "fulltest_source_revision",
 		stage: "source-before",
 		result: "completed",
-		head: before.head,
-		dirty: before.dirty,
-		source_fingerprint: before.digest,
+		head: source.head,
+		dirty: source.dirty,
 		bun_version: Bun.version,
 	});
-	console.log(`source: HEAD=${before.head} dirty=${before.dirty} digest=${before.digest}`);
-	if (before.dirty) console.log(`source: uncommitted summary\n${before.status.trimEnd()}`);
+	console.log(`source: HEAD=${source.head} dirty=${source.dirty}`);
+	if (source.dirty) console.log(`source: uncommitted summary\n${source.status.trimEnd()}`);
 	if (options.full) {
 		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=all-tests`);
 		console.log(
@@ -398,9 +364,6 @@ async function runFulltestObserved(
 	);
 	const home = await acquire("isolated test home", () => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
 	try {
-		// Preparation is not a producer: even generated bindings must remain unchanged here.
-		const beforeNative = await acquire("pre-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
-		await acquire("pre-build source check", async () => assertFulltestSourceStable(before, beforeNative));
 		// Native source/binding generation must finish before static/test readers.
 		await attempt("native build", () =>
 			runGateCommands(
@@ -416,31 +379,20 @@ async function runFulltestObserved(
 				{ concurrency: 1 },
 			),
 		);
-		const afterBuild = await acquire("post-build source identity", () => captureSourceIdentity(gate, gateRepoRoot));
-		await acquire("post-build source check", async () => assertFulltestSourceStable(beforeNative, afterBuild, true));
-		const checkSourceSnapshot = async (stage: string): Promise<void> => {
-			const current = await acquire(`${stage} source identity`, () => captureSourceIdentity(gate, gateRepoRoot));
-			await acquire(`${stage} source check`, async () => assertFulltestSourceStable(afterBuild, current));
-		};
 		if (report?.owner) {
-			report.sourceDigest = afterBuild.digest;
-			report.sourceRevision = afterBuild.head;
-			report.dirtyState = afterBuild.dirty ? "dirty" : "clean";
-			// The pre-build Git diff identity may no longer describe generated bindings.
-			report.dirtyStateIdentity = null;
+			report.sourceRevision = source.head;
+			report.dirtyState = source.dirty ? "dirty" : "clean";
 		}
-		logger.info("Fulltest post-build source identity resolved", {
-			component: "test-gate-fulltest",
-			event: "fulltest_source_identity",
-			stage: "source-after-build",
-			result: "completed",
-			head: afterBuild.head,
-			dirty: afterBuild.dirty,
-			source_fingerprint: afterBuild.digest,
-		});
-		console.log(
-			`source tested after builds: HEAD=${afterBuild.head} dirty=${afterBuild.dirty} digest=${afterBuild.digest}`,
-		);
+		const scriptTestFiles = async (): Promise<string[]> => {
+			const files: string[] = [];
+			for await (const file of new Bun.Glob("scripts/**/*.{test,spec}.{js,jsx,ts,tsx}").scan({
+				cwd: gateRepoRoot,
+				onlyFiles: true,
+			})) {
+				files.push(file.replaceAll("\\", "/"));
+			}
+			return files.sort();
+		};
 		const baselineSelection =
 			options.full || process.env.OMP_FULLTEST_AFFECTED === "0"
 				? undefined
@@ -493,11 +445,10 @@ async function runFulltestObserved(
 			});
 		};
 		// A clean committed tree has no changed script modules, so runs no script selftests.
-		const files = afterBuild.files.map(file => file.path);
-		const scriptTests = options.full
-			? files.filter(file => file.startsWith("scripts/") && /\.(?:test|spec)\.[jt]sx?$/.test(file))
-			: selectChangedScriptTests(changedPaths, files);
-		await checkSourceSnapshot("pre-script");
+		const files = await acquire("repository script test discovery", () =>
+			gate.charged(infrastructure.scriptTestFiles ?? scriptTestFiles),
+		);
+		const scriptTests = options.full ? files : selectChangedScriptTests(changedPaths, files);
 		if (scriptTests.length) {
 			// These fixture-only scripts use independent temporary or in-memory state.
 			// Keep every other script serial, including timing-sensitive gate selftests.
@@ -515,7 +466,7 @@ async function runFulltestObserved(
 				env: {
 					...localTestEnvironment(path.join(home, "script-tests", String(index))),
 					OMP_FULLTEST_AFFECTED: options.full ? undefined : "1",
-					OMP_FULLTEST_SOURCE_DIGEST: afterBuild.digest,
+					OMP_FULLTEST_SOURCE_REVISION: source.head,
 				},
 				kind: "charged" as const,
 			}));
@@ -528,7 +479,6 @@ async function runFulltestObserved(
 					},
 				),
 			);
-			await checkSourceSnapshot("post-independent-script");
 			await attempt("repository scripts", () =>
 				runGateCommands(
 					gate,
@@ -547,11 +497,9 @@ async function runFulltestObserved(
 				),
 			);
 		}
-		// Script selftests are readers, not another source-generating preparation stage.
-		await checkSourceSnapshot("post-script");
 		let tests: GateCommand[] = [];
 		await attempt("test plan", async () => {
-			tests = fulltestCommands(options, home, afterBuild.digest).map(command => {
+			tests = fulltestCommands(options, home, source.head).map(command => {
 				if (command.label.startsWith("test/TypeScript")) {
 					return {
 						...command,
@@ -626,7 +574,6 @@ async function runFulltestObserved(
 				RUST_TEST_THREADS: String(testBudget),
 			},
 		});
-		await checkSourceSnapshot("pre-test");
 		// Rust tests need only wait for the Cargo static lane, not unrelated TS checks.
 		const rustChecksFinished = Promise.withResolvers<void>();
 		const staticRun = (async () => {
@@ -676,21 +623,8 @@ async function runFulltestObserved(
 			await attempt("Rust tests", () => runGateCommands(gate, rustTests, { concurrency: 1 }));
 		})();
 		await Promise.all([staticRun, testRun, rustRun]);
-		await checkSourceSnapshot("post-parallel-test");
 		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
-		await checkSourceSnapshot("pre-startup");
 		await attempt("TypeScript startup tests", () => runGateCommands(gate, startupTests, { concurrency: 1 }));
-		const after = await acquire("post-test source identity", () => captureSourceIdentity(gate, gateRepoRoot));
-		logger.info("Fulltest source stability resolved", {
-			component: "test-gate-fulltest",
-			event: "fulltest_source_identity",
-			stage: "source-after-tests",
-			result: after.digest === afterBuild.digest && after.head === afterBuild.head ? "unchanged" : "changed",
-			head: after.head,
-			dirty: after.dirty,
-			source_fingerprint: after.digest,
-		});
-		await acquire("post-test source check", async () => assertFulltestSourceStable(afterBuild, after));
 	} catch (error) {
 		// Record the triggering failure before cleanup can report its own error.
 		throw gate.record(error);

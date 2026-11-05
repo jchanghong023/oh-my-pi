@@ -8,7 +8,7 @@ import * as path from "node:path";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { GateCommandError } from "./test-gate-failure-events";
 import { GATE_LIMIT_SECONDS, type GateCapture, type GateCommand, type GateRun } from "./test-gate-runtime";
-import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
+import { captureSourceRevision, type SourceRevision } from "./test-gate-source";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 export const WSL_TEST_DISTRIBUTION = "Ubuntu-24.04";
@@ -53,7 +53,7 @@ export interface WslOptions {
 	root?: string;
 	which?: (tool: string) => string | null;
 	selection?: WslSelection;
-	identity?: SourceIdentity;
+	revision?: SourceRevision;
 	/** Deployed helper location; injection supports isolated orchestration tests. */
 	workflowPath?: string;
 }
@@ -220,7 +220,7 @@ export function gitRemoteIdentity(value: string): string {
 export async function resolveWslRemoteSource(
 	gate: GateRun,
 	root: string,
-	source: SourceIdentity,
+	source: SourceRevision,
 ): Promise<WslRemoteSource> {
 	if (source.dirty)
 		throw new Error(
@@ -556,15 +556,14 @@ async function runWslStageObserved(gate: GateRun, options: WslOptions): Promise<
 	const selection = options.selection ?? (await discoverWsl(gate, options));
 	if (selection.status !== "AVAILABLE") return selection;
 	const root = options.root ?? repoRoot;
-	stage = "source-identity";
-	const source = options.identity ?? (await captureSourceIdentity(gate, root));
-	logger.info("WSL source identity resolved", {
+	stage = "source-revision";
+	const source = options.revision ?? (await captureSourceRevision(gate, root));
+	logger.info("WSL source revision recorded", {
 		component: "test-gate-wsl",
-		event: "wsl_source_identity",
+		event: "wsl_source_revision",
 		stage,
 		result: "completed",
 		head: source.head,
-		source_fingerprint: source.digest,
 		dirty: source.dirty,
 		scope: "fork-features",
 	});

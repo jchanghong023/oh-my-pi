@@ -13,7 +13,7 @@ import {
 } from "./slowtest-wsl-stage";
 import { GATE_LIMIT_SECONDS, runGate, type GateRun } from "./test-gate-runtime";
 import { GateCommandError } from "./test-gate-failure-events";
-import { captureSourceIdentity, type SourceIdentity } from "./test-gate-source";
+import { captureSourceRevision, type SourceRevision } from "./test-gate-source";
 import { beginTestRun, finalizeTestRun } from "./test-reporting";
 import { exitGateProcess } from "./test-gate-watchdog";
 
@@ -37,13 +37,13 @@ export function parseSlowtestArgs(args: readonly string[]): SlowtestArgs | null 
 export interface SlowtestDependencies {
 	fulltest(gate: GateRun, options: { debug: boolean }): Promise<void>;
 	discover(gate: GateRun, options: WslOptions): Promise<WslSelection>;
-	identity(gate: GateRun, root: string): Promise<SourceIdentity>;
+	revision(gate: GateRun, root: string): Promise<SourceRevision>;
 	wsl(gate: GateRun, options: WslOptions): Promise<WslStageResult>;
 }
 const dependencies: SlowtestDependencies = {
 	fulltest: runFulltest,
 	discover: discoverWsl,
-	identity: captureSourceIdentity,
+	revision: captureSourceRevision,
 	wsl: runWslStage,
 };
 export interface SlowtestOptions extends SlowtestArgs {
@@ -103,18 +103,17 @@ async function runSlowtestObserved(
 			platform: options.platform,
 			which: options.which,
 		};
-		const before = await injected.identity(gate, root);
-		logger.info("Slowtest source identity resolved", {
+		const source = await injected.revision(gate, root);
+		logger.info("Slowtest source revision recorded", {
 			component: "test-gate-slowtest",
-			event: "slowtest_source_identity",
+			event: "slowtest_source_revision",
 			stage: "source-before",
 			result: "completed",
-			head: before.head,
-			source_fingerprint: before.digest,
-			dirty: before.dirty,
+			head: source.head,
+			dirty: source.dirty,
 		});
-		console.log(`slowtest: current source HEAD=${before.head} digest=${before.digest} dirty=${before.dirty}`);
-		if (before.dirty) console.log(`slowtest: uncommitted source summary\n${before.status.trimEnd()}`);
+		console.log(`slowtest: current source HEAD=${source.head} dirty=${source.dirty}`);
+		if (source.dirty) console.log(`slowtest: uncommitted source summary\n${source.status.trimEnd()}`);
 		const attempt = async (label: string, work: () => Promise<unknown>): Promise<boolean> => {
 			try {
 				await work();
@@ -134,19 +133,19 @@ async function runSlowtestObserved(
 				event: "slowtest_linux_started",
 				stage: "linux-leg",
 				result: "started",
-				expected_head: before.head,
+				expected_head: source.head,
 			});
 			try {
 				const selection = await injected.discover(gate, wslOptions);
 				let result: WslStageResult;
 				if (selection.status !== "AVAILABLE") result = selection;
 				else {
-					if (before.dirty)
+					if (source.dirty)
 						throw new GateCommandError(
 							"BLOCKED: commit and push intended source before WSL execution; dirty source cannot be transferred; this gate does not perform Git writes",
 							1,
 						);
-					result = await injected.wsl(gate, { ...wslOptions, selection, identity: before });
+					result = await injected.wsl(gate, { ...wslOptions, selection, revision: source });
 				}
 				if ("exitCode" in result) {
 					const failure = gate.record(
@@ -158,7 +157,7 @@ async function runSlowtestObserved(
 					);
 					if (gate.signal.aborted)
 						throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
-				} else if (result.status === "PASS" && result.head !== before.head) {
+				} else if (result.status === "PASS" && result.head !== source.head) {
 					gate.record(new GateCommandError("UNVERIFIED: WSL result belongs to a different fixed commit", 1));
 				}
 				const skipped = result.status !== "PASS";
@@ -210,37 +209,14 @@ async function runSlowtestObserved(
 			if (gate.signal.aborted) throw gate.signal.reason instanceof GateCommandError ? gate.signal.reason : failure;
 		}
 		const wslResult = settled[1]?.status === "fulfilled" ? settled[1].value : undefined;
-		let after: SourceIdentity;
-		try {
-			after = await injected.identity(gate, root);
-		} catch (error) {
-			throw gate.fail(error);
-		}
-		if (before.head !== after.head || before.digest !== after.digest)
-			throw gate.fail(
-				new GateCommandError(
-					`UNVERIFIED: current source changed during slowtest (before=${before.head}/${before.digest}, after=${after.head}/${after.digest})`,
-					1,
-				),
-			);
-		logger.info("Slowtest source stability resolved", {
-			component: "test-gate-slowtest",
-			event: "slowtest_source_identity",
-			stage: "source-after",
-			result: "unchanged",
-			head: after.head,
-			source_fingerprint: after.digest,
-			dirty: after.dirty,
-		});
 		if (wslResult?.status === "PASS") {
-			console.log(`slowtest: both platforms verified fixed commit ${before.head}; local digest=${before.digest}`);
-			logger.info("Slowtest fixed commit coverage merged", {
+			console.log(`slowtest: current-platform tests completed; WSL verified fixed commit ${source.head}`);
+			logger.info("Slowtest platform coverage merged", {
 				component: "test-gate-slowtest",
 				event: "slowtest_platforms_verified",
 				stage: "merged-result",
 				result: "completed",
-				head: before.head,
-				source_fingerprint: before.digest,
+				head: source.head,
 				platform_count: 2,
 				scope: "fork-features",
 			});

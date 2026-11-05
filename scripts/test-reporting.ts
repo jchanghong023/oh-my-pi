@@ -15,7 +15,6 @@ export interface TestReportRun {
 	sourceRevision: string | null;
 	dirtyState: string | null;
 	dirtyStateIdentity: string | null;
-	sourceDigest?: string;
 }
 
 export interface TestSelection {
@@ -28,6 +27,8 @@ export interface TestSelection {
 	changedPaths?: string[];
 	packages?: string[];
 	reportPath?: string;
+	group?: "ordinary" | "startup";
+	suiteRevision?: 2;
 }
 
 export interface TestProducerRecord {
@@ -48,13 +49,15 @@ export interface TestProducerRecord {
 }
 
 interface HistoryRun {
+	runId?: string;
 	scope?: string;
 	startedAtUtc?: string;
 	platform?: string;
 	architecture?: string;
 	completion?: string;
 	exitCode?: number | null;
-	sourceDigest?: string | null;
+	sourceRevision?: string | null;
+	runtimeVersions?: { bun?: string };
 	unreconciledScope?: string | null;
 	reconciliation?: { status?: string; cases?: number; failures?: number };
 	producers?: (TestProducerRecord & { report?: string })[];
@@ -63,12 +66,12 @@ interface HistoryRun {
 // History is a scheduling hint, never a test result. Only the most recent
 // fulltest on this machine can qualify, and only for the tested source.
 export async function latestLocalTestProducers(
-	sourceDigest: string | undefined,
+	sourceRevision: string | undefined,
 	root: string = reportRoot,
 	now: number = Date.now(),
 	currentRunId: string | undefined = process.env.OMP_TEST_RUN_ID,
 ): Promise<TestProducerRecord[]> {
-	if (!sourceDigest || !/^[a-f0-9]{64}$/.test(sourceDigest)) return [];
+	if (!sourceRevision || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(sourceRevision)) return [];
 	try {
 		const entries = await fs.readdir(root, { withFileTypes: true });
 		let latestTime = -Infinity;
@@ -82,7 +85,7 @@ export async function latestLocalTestProducers(
 				// An unreadable report cannot safely establish which run was last.
 				return [];
 			}
-			if (entry.name === currentRunId && run.completion === "running" && run.sourceDigest == null) continue;
+			if (entry.name === currentRunId && run.runId === currentRunId && run.completion === "running") continue;
 			if (run.scope !== "fulltest: fork feature suites") continue;
 			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
 			const started = Date.parse(run.startedAtUtc ?? "");
@@ -98,7 +101,8 @@ export async function latestLocalTestProducers(
 			now - latestTime > 7 * 24 * 60 * 60 * 1000 ||
 			latest.completion !== "complete" ||
 			latest.exitCode !== 0 ||
-			latest.sourceDigest !== sourceDigest ||
+			latest.sourceRevision !== sourceRevision ||
+			latest.runtimeVersions?.bun !== Bun.version ||
 			latest.reconciliation?.status !== "validated" ||
 			!(typeof latest.reconciliation.cases === "number" && latest.reconciliation.cases > 0) ||
 			latest.reconciliation.failures !== 0 ||
@@ -107,16 +111,19 @@ export async function latestLocalTestProducers(
 			!latest.producers.some(producer => producer?.report === "available") ||
 			!latest.producers.every(
 				producer =>
-					producer?.selection?.mode !== "affected" &&
-					((producer?.report === "available" &&
-						producer.status !== "partial" &&
-						producer.status !== "unsupported") ||
-						(producer?.report === "not-supported" && producer.status === "stage")),
+					producer?.exitCode === 0 &&
+					producer.selection?.mode !== "affected" &&
+					((producer.report === "available" && producer.status === "passed") ||
+						(producer.report === "not-supported" && producer.status === "stage")),
 			)
 		)
 			return [];
 		const typescript = latest.producers.filter(producer => producer?.scope === "ci-test-ts:local-ts");
-		return typescript.every(producer => producer.selection?.mode === "full") ? typescript : [];
+		return typescript.length > 0 &&
+			typescript.every(producer => producer.selection?.mode === "full" && producer.selection.suiteRevision === 2) &&
+			["ordinary", "startup"].every(group => typescript.some(producer => producer.selection?.group === group))
+			? typescript
+			: [];
 	} catch {
 		return [];
 	}
@@ -478,7 +485,6 @@ async function writeRun(
 				sourceRevision: run.sourceRevision,
 				dirtyState: run.dirtyState,
 				dirtyStateIdentity: run.dirtyStateIdentity,
-				sourceDigest: run.sourceDigest ?? null,
 				dirtyStateIdentityBasis: "git status plus tracked diff; untracked file names, not their contents",
 				platform: process.platform,
 				architecture: process.arch,

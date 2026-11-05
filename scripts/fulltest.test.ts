@@ -13,17 +13,12 @@ import {
 	selectChangedScriptTests,
 } from "./fulltest";
 import { runGate, GATE_LIMIT_SECONDS, type GateRun } from "./test-gate-runtime";
-import {
-	bunRequiresFullSelection,
-	captureChangedPaths,
-	captureSourceIdentity,
-	type SourceIdentity,
-} from "./test-gate-source";
+import { bunRequiresFullSelection, captureChangedPaths, type SourceRevision } from "./test-gate-source";
 import type { TestReportRun } from "./test-reporting";
 import { runGateCommands } from "./test-gate-scheduler";
 
 test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
-	const commands = fulltestCommands({ debug: false }, "/tmp/home", "digest");
+	const commands = fulltestCommands({ debug: false }, "/tmp/home", "a".repeat(40));
 	expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
 });
@@ -49,8 +44,8 @@ test("fastcheck discovers only static primitives and keeps Clippy outside its co
 
 test("debug changes only the isolated smoke diagnostic argument, not test scope", () => {
 	for (const full of [false, true]) {
-		const normal = fulltestCommands({ debug: false, full }, "/tmp/home", "digest");
-		const debug = fulltestCommands({ debug: true, full }, "/tmp/home", "digest");
+		const normal = fulltestCommands({ debug: false, full }, "/tmp/home", "a".repeat(40));
+		const debug = fulltestCommands({ debug: true, full }, "/tmp/home", "a".repeat(40));
 		const smoke = debug.find(command => command.label === "smoke/isolated dev TUI PTY")!;
 		expect(smoke.argv).toEqual(["bun", "scripts/test-report-ui-smoke.ts", "--debug"]);
 		expect(debug.map(command => ({ ...command, argv: command.argv.filter(arg => arg !== "--debug") }))).toEqual(
@@ -126,7 +121,7 @@ test("root documentation does not force full Bun selection or hide changed runti
 
 test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it for --full", async () => {
 	const baseline = "a".repeat(40);
-	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
+	const revision: SourceRevision = { head: baseline, dirty: true, status: "" };
 	const gate = {
 		signal: new AbortController().signal,
 		charged: async <T>(work: () => T | Promise<T>) => work(),
@@ -162,7 +157,8 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 			gate,
 			{ debug: false, full: scenario.full },
 			{
-				captureSourceIdentity: async () => identity,
+				captureSourceRevision: async () => revision,
+				scriptTestFiles: async () => [],
 				captureChangedPaths: async (_gate, _root, base) => {
 					observedBase = base;
 					return [...scenario.changed];
@@ -221,7 +217,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 
 test("delta failure and absence of a qualified baseline retain the full Rust fork", async () => {
 	const baseline = "a".repeat(40);
-	const identity: SourceIdentity = { head: baseline, digest: "digest", dirty: true, status: "", files: [] };
+	const revision: SourceRevision = { head: baseline, dirty: true, status: "" };
 	const gate = {
 		signal: new AbortController().signal,
 		charged: async <T>(work: () => T | Promise<T>) => work(),
@@ -237,7 +233,8 @@ test("delta failure and absence of a qualified baseline retain the full Rust for
 			gate,
 			{ debug: false },
 			{
-				captureSourceIdentity: async () => identity,
+				captureSourceRevision: async () => revision,
+				scriptTestFiles: async () => [],
 				captureChangedPaths: async () => [],
 				bunTestSelection: async () =>
 					missingBaseline
@@ -323,76 +320,6 @@ test("changed paths include staged, deleted, rename sides and untracked paths", 
 		]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
-	}
-}, 20_000);
-
-test("source snapshots include submodule revisions and dirty contents instead of rejecting directories", async () => {
-	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-submodule-"));
-	const root = path.join(directory, "parent");
-	const upstream = path.join(directory, "upstream");
-	const git = async (cwd: string, ...args: string[]) => {
-		const child = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr, code] = await Promise.all([
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
-			child.exited,
-		]);
-		expect(code, stderr).toBe(0);
-		return stdout;
-	};
-	const gate = {
-		signal: new AbortController().signal,
-		charged: async <T>(operation: () => T | Promise<T>) => operation(),
-		capture: async ({ argv, cwd }: { argv: string[]; cwd: string }) => ({
-			stdout: await git(cwd, ...argv.slice(1)),
-		}),
-	} as unknown as GateRun;
-	try {
-		for (const cwd of [root, upstream]) {
-			await fs.mkdir(cwd);
-			await git(cwd, "init", "-q");
-			await git(cwd, "config", "user.email", "fixture@example.invalid");
-			await git(cwd, "config", "user.name", "Fixture");
-		}
-		await Bun.write(path.join(upstream, "source.ts"), "original\n");
-		await git(upstream, "add", ".");
-		await git(upstream, "commit", "-qm", "source");
-		await git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", upstream, "vendor/library");
-		await git(root, "commit", "-qm", "submodule");
-		const submodule = path.join(root, "vendor", "library");
-		const clean = await captureSourceIdentity(gate, root);
-		expect(clean.dirty).toBe(false);
-		expect(clean.files.find(file => file.path === "vendor/library")?.kind).toBe("submodule");
-		await Bun.write(path.join(submodule, "source.ts"), "dirty\n");
-		const dirty = await captureSourceIdentity(gate, root);
-		expect(dirty.dirty).toBe(true);
-		expect(dirty.digest).not.toBe(clean.digest);
-		await Bun.write(path.join(submodule, "source.ts"), "another dirty edit\n");
-		const edited = await captureSourceIdentity(gate, root);
-		expect(edited.digest).not.toBe(dirty.digest);
-		await Bun.write(path.join(submodule, "new.ts"), "addition\n");
-		const added = await captureSourceIdentity(gate, root);
-		expect(added.digest).not.toBe(edited.digest);
-		await fs.rm(path.join(submodule, "source.ts"));
-		expect((await captureSourceIdentity(gate, root)).digest).not.toBe(added.digest);
-		await git(submodule, "reset", "--hard", "-q", "HEAD");
-		await fs.rm(path.join(submodule, "new.ts"));
-		await git(
-			submodule,
-			"-c",
-			"user.email=fixture@example.invalid",
-			"-c",
-			"user.name=Fixture",
-			"commit",
-			"--allow-empty",
-			"-qm",
-			"new revision",
-		);
-		expect((await captureSourceIdentity(gate, root)).digest).not.toBe(clean.digest);
-		await fs.rm(path.join(submodule, ".git"));
-		await expect(captureSourceIdentity(gate, root)).rejects.toMatchObject({ code: "ENOENT" });
-	} finally {
-		await fs.rm(directory, { recursive: true, force: true });
 	}
 }, 20_000);
 
@@ -529,141 +456,56 @@ describe("shared per-test budget", () => {
 	});
 });
 
-describe("fulltest source snapshot checkpoints", () => {
-	const sourcePath = "packages/metaharness/adapters/edit/runner.test.ts";
-	const generatedPaths = ["packages/natives/native/index.js", "packages/natives/native/index.d.ts"];
-
-	async function exercise(
-		change: "source" | "new-test" | "head" | "bindings" | "binding-mode",
-		interval: "preparation" | "native" | "scripts" | "tests",
-	) {
-		let identity: SourceIdentity = {
-			head: "initial-head",
-			digest: "initial-digest",
-			dirty: false,
-			status: "",
-			files: [sourcePath, ...generatedPaths, "scripts/fulltest.test.ts"]
-				.filter(file => change !== "new-test" || file !== sourcePath)
-				.map(file => ({
-					path: file,
-					kind: "file",
-					sha256: "initial",
-					executable: false,
-				})),
-		};
-		let mutated = false;
-		let testsRun = false;
-		let scriptEnv: Record<string, string | undefined> | undefined;
-		let tsAffected: string | undefined;
-		let childDigest: string | undefined;
-		const report = { owner: true } as TestReportRun;
-		const mutate = () => {
-			if (mutated) return;
-			mutated = true;
-			const paths = change === "bindings" || change === "binding-mode" ? generatedPaths : [sourcePath];
-			identity = {
-				...identity,
-				head: change === "head" ? "moved-head" : identity.head,
-				digest: change === "head" ? identity.digest : "changed-digest",
-				dirty: change !== "head",
-				status: change === "head" ? "" : paths.map(file => ` M ${file}\n`).join(""),
-				files: identity.files.map(file =>
-					change !== "head" && paths.includes(file.path)
-						? { ...file, sha256: "changed", executable: change === "binding-mode" }
-						: file,
-				),
-			};
-			if (change === "new-test") {
-				identity.files = [
-					...identity.files,
-					{ path: sourcePath, kind: "file", sha256: "new-test", executable: false },
-				];
-			}
-		};
-		const gate = {
-			signal: new AbortController().signal,
-			charged: async <T>(operation: () => T | Promise<T>) => operation(),
-			run: async () => {
-				if (interval === "preparation") mutate();
+test("fulltest records revision once and passes scheduling hints after native generation", async () => {
+	const revision: SourceRevision = { head: "a".repeat(40), dirty: true, status: " M scripts/fulltest.ts\n" };
+	let captures = 0;
+	const commands: { label: string; env?: Record<string, string | undefined> }[] = [];
+	const report = { owner: true } as TestReportRun;
+	const gate = {
+		signal: new AbortController().signal,
+		charged: async <T>(operation: () => T | Promise<T>) => operation(),
+		run: async () => {},
+		childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
+		record: (error: unknown) => error,
+		fail: (error: unknown) => error,
+	} as unknown as GateRun;
+	await runFulltest(
+		gate,
+		{ debug: false },
+		{
+			captureSourceRevision: async () => {
+				captures++;
+				return revision;
 			},
-			childGate: async (_level: string, work: (child: GateRun) => Promise<unknown>) => work(gate),
-			record: (error: unknown) => error,
-			fail: (error: unknown) => error,
-		} as unknown as GateRun;
-		let failure: unknown;
-		try {
-			await runFulltest(
-				gate,
-				{ debug: false },
-				{
-					captureSourceIdentity: async () => identity,
-					captureChangedPaths: async () => ["scripts/fulltest.ts"],
-					fastcheckCommands: async () => [],
-					runGateCommands: async (_gate, commands) => {
-						if (commands.some(command => command.label === "build/native")) {
-							if (interval === "native") mutate();
-						} else if (commands.some(command => command.label.startsWith("test/repository scripts "))) {
-							scriptEnv = commands.find(command => command.label.startsWith("test/repository scripts "))?.env;
-							if (interval === "scripts") mutate();
-						} else {
-							const typescript = commands.find(
-								command => command.label === "test/TypeScript fork feature suite",
-							);
-							if (typescript) {
-								childDigest = typescript.env?.OMP_FULLTEST_SOURCE_DIGEST;
-								tsAffected = typescript.env?.OMP_FULLTEST_AFFECTED;
-							}
-							if (commands.some(command => command.label.startsWith("test/"))) testsRun = true;
-							if (interval === "tests") mutate();
-						}
-					},
-				},
-				report,
-			);
-		} catch (error) {
-			failure = error;
-		}
-		expect(mutated).toBe(true);
-		return { failure, testsRun, childDigest, tsAffected, scriptEnv, report };
+			captureChangedPaths: async () => ["scripts/fulltest.ts"],
+			scriptTestFiles: async () => ["scripts/fulltest.test.ts"],
+			bunTestSelection: async () => ({ tool: "bun", mode: "full", reason: "fixture" }),
+			selectRustPackages: async () => ({
+				tool: "cargo-delta",
+				mode: "full",
+				packages: ["pi-knowledge", "pi-natives"],
+				reason: "fixture",
+			}),
+			fastcheckCommands: async () => [],
+			runGateCommands: async (_gate, selected) => {
+				commands.push(...selected);
+			},
+		},
+		report,
+	);
+	expect(captures).toBe(1);
+	expect(commands[0]?.label).toBe("build/native");
+	for (const label of [
+		"test/repository scripts scripts/fulltest.test.ts",
+		"test/TypeScript fork feature suite",
+		"test/TypeScript startup suite",
+	]) {
+		const command = commands.find(command => command.label === label);
+		expect(command?.env?.OMP_FULLTEST_SOURCE_REVISION).toBe(revision.head);
+		expect(command?.env?.OMP_FULLTEST_AFFECTED).toBe("1");
 	}
-
-	for (const interval of ["preparation", "native", "scripts", "tests"] as const) {
-		for (const change of ["source", "new-test", "head"] as const) {
-			test(`rejects ${change} movement during ${interval} rather than certifying an omitted snapshot`, async () => {
-				const { failure, testsRun } = await exercise(change, interval);
-				expect(failure).toBeInstanceOf(Error);
-				expect(String(failure)).toContain("Source changed");
-				if (interval !== "tests") expect(testsRun).toBe(false);
-			});
-		}
-	}
-	for (const interval of ["preparation", "scripts", "tests"] as const) {
-		test(`rejects binding regeneration outside native generation during ${interval}`, async () => {
-			const { failure, testsRun } = await exercise("bindings", interval);
-			expect(failure).toBeInstanceOf(Error);
-			expect(String(failure)).toContain("Source changed");
-			if (interval !== "tests") expect(testsRun).toBe(false);
-		});
-	}
-
-	test("rejects generated binding mode changes even during native generation", async () => {
-		const { failure } = await exercise("binding-mode", "native");
-		expect(failure).toBeInstanceOf(Error);
-		expect(String(failure)).toContain("Source changed");
-	});
-
-	test("allows native binding regeneration and still executes the full test plan", async () => {
-		const { failure, testsRun, childDigest, tsAffected, scriptEnv, report } = await exercise("bindings", "native");
-		expect(failure).toBeUndefined();
-		expect(testsRun).toBe(true);
-		expect(childDigest).toBe("changed-digest");
-		expect(report.sourceDigest).toBe("changed-digest");
-		expect(report.sourceRevision).toBe("initial-head");
-		expect(report.dirtyState).toBe("dirty");
-		expect(tsAffected).toBe("1");
-		expect(scriptEnv?.OMP_FULLTEST_AFFECTED).toBe("1");
-		expect(scriptEnv?.OMP_FULLTEST_SOURCE_DIGEST).toBe("changed-digest");
-	});
+	expect(report.sourceRevision).toBe(revision.head);
+	expect(report.dirtyState).toBe("dirty");
 });
 
 for (const full of [false, true]) {
@@ -673,7 +515,7 @@ for (const full of [false, true]) {
 		const ordinaryLabel = "test/TypeScript fork feature suite";
 		const startupLabel = "test/TypeScript startup suite";
 		const rustLabel = full ? "test/Rust workspace" : "test/Rust fork features";
-		const identity: SourceIdentity = { head: "head", digest: "digest", dirty: false, status: "", files: [] };
+		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
 		try {
 			await fs.writeFile(
 				worker,
@@ -712,7 +554,8 @@ if (label === ordinary) process.exit(17);
 					{ debug: false, full },
 					{
 						cpuBudget: 16,
-						captureSourceIdentity: async () => identity,
+						captureSourceRevision: async () => revision,
+						scriptTestFiles: async () => [],
 						captureChangedPaths: async () => ["packages/tui/src/tui.ts"],
 						bunTestSelection: async () => ({ tool: "bun", mode: "affected", baseline: "a".repeat(40) }),
 						selectRustPackages: async () => ({
@@ -799,13 +642,7 @@ describe("fulltest lane scheduling", () => {
 			const finishSecondRust = Promise.withResolvers<void>();
 			const rustTestsStarted = Promise.withResolvers<void>();
 			let rustTestsHaveStarted = false;
-			const identity: SourceIdentity = {
-				head: "head",
-				digest: "digest",
-				dirty: false,
-				status: "",
-				files: [],
-			};
+			const revision: SourceRevision = { head: "head", dirty: false, status: "" };
 			const gate = {
 				signal: new AbortController().signal,
 				charged: async <T>(operation: () => T | Promise<T>) => operation(),
@@ -831,7 +668,8 @@ describe("fulltest lane scheduling", () => {
 				{ debug: false },
 				{
 					cpuBudget: 16,
-					captureSourceIdentity: async () => identity,
+					captureSourceRevision: async () => revision,
+					scriptTestFiles: async () => [],
 					captureChangedPaths: async () => [],
 					fastcheckCommands: async () => [
 						{ label: "static/TS", argv: ["ts"] },
@@ -883,14 +721,7 @@ describe("fulltest lane scheduling", () => {
 		const failures: unknown[] = [];
 		let startupHasStarted = false;
 		let ordinaryHome: string | undefined;
-		const capturedStartupStates: boolean[] = [];
-		const identity: SourceIdentity = {
-			head: "head",
-			digest: "digest",
-			dirty: false,
-			status: "",
-			files: [],
-		};
+		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
 		const gate = {
 			signal: new AbortController().signal,
 			charged: async <T>(operation: () => T | Promise<T>) => operation(),
@@ -907,10 +738,8 @@ describe("fulltest lane scheduling", () => {
 			{ debug: false },
 			{
 				captureChangedPaths: async () => [],
-				captureSourceIdentity: async () => {
-					capturedStartupStates.push(startupHasStarted);
-					return identity;
-				},
+				captureSourceRevision: async () => revision,
+				scriptTestFiles: async () => [],
 				cpuBudget: 16,
 				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 				runGateCommands: async (_runner, commands, options) => {
@@ -923,7 +752,7 @@ describe("fulltest lane scheduling", () => {
 						expect(startup).toBeUndefined();
 						expect(ordinary.argv).toContain("--defer-startup");
 						expect(ordinary.env?.OMP_FULLTEST_AFFECTED).toBe("1");
-						expect(ordinary.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
+						expect(ordinary.env?.OMP_FULLTEST_SOURCE_REVISION).toBe("head");
 						ordinaryHome = ordinary.env?.HOME;
 						ordinaryStarted.resolve();
 						await finishOrdinary.promise;
@@ -940,7 +769,7 @@ describe("fulltest lane scheduling", () => {
 						expect(startup.env?.HOME).toBeDefined();
 						expect(startup.env?.HOME).not.toBe(ordinaryHome);
 						expect(startup.env?.OMP_FULLTEST_AFFECTED).toBe("1");
-						expect(startup.env?.OMP_FULLTEST_SOURCE_DIGEST).toBe("digest");
+						expect(startup.env?.OMP_FULLTEST_SOURCE_REVISION).toBe("head");
 						expect(startup.env?.OMP_TEST_CONCURRENCY).toBe("all");
 						expect(options?.concurrency).toBe(1);
 						startupHasStarted = true;
@@ -960,9 +789,6 @@ describe("fulltest lane scheduling", () => {
 			finishStatic.resolve();
 			await run;
 			expect(startupHasStarted).toBe(true);
-			expect(capturedStartupStates.at(-1)).toBe(true);
-			expect(capturedStartupStates.slice(0, -1)).toContain(false);
-			expect(capturedStartupStates.slice(0, -1).every(started => !started)).toBe(true);
 			expect(failures.map(error => String(error))).toEqual(["Error: ordinary failure", "Error: Rust failure"]);
 		} finally {
 			finishOrdinary.resolve();
@@ -972,7 +798,7 @@ describe("fulltest lane scheduling", () => {
 		}
 	});
 	test("serializes CPU-heavy lanes on a small allocation without omitting suites", async () => {
-		const identity: SourceIdentity = { head: "head", digest: "digest", dirty: false, status: "", files: [] };
+		const revision: SourceRevision = { head: "head", dirty: false, status: "" };
 		const seen: string[] = [];
 		const gate = {
 			signal: new AbortController().signal,
@@ -987,7 +813,8 @@ describe("fulltest lane scheduling", () => {
 			{ debug: false, full: true },
 			{
 				cpuBudget: 2,
-				captureSourceIdentity: async () => identity,
+				captureSourceRevision: async () => revision,
+				scriptTestFiles: async () => [],
 				captureChangedPaths: async () => [],
 				fastcheckCommands: async () => [{ label: "static/TS", argv: ["ts"] }],
 				runGateCommands: async (_runner, commands, options) => {
