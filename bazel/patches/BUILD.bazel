@@ -1,2 +1,2 @@
-# Module override patches (see MODULE.bazel single_version_override entries).
+# Module and crate-universe patches configured in MODULE.bazel.
 exports_files(glob(["*.patch"]))

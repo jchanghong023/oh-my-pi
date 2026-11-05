@@ -235,6 +235,8 @@ crate.annotation(
         "CFLAGS_x86_64_unknown_linux_gnu": "-mevex512 -mpopcnt",
     },
     crate = "numkong",
+    patch_args = ["-p1"],
+    patches = ["//bazel/patches:numkong-export-headers.patch"],
 )
 
 # Release addons must never pick up a host libpcre2 (Homebrew paths leaked into

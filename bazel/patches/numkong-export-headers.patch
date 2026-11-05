@@ -1,0 +1,41 @@
+Export NumKong headers through OUT_DIR so sandboxed dependents retain them.
+
+--- a/build.rs
++++ b/build.rs
+@@ -34,6 +34,20 @@
+             println!("cargo:rerun-if-changed={}", p.display());
+         }
+     }
++}
++
++fn export_headers(source: &Path, destination: &Path) -> std::io::Result<()> {
++    std::fs::create_dir_all(destination)?;
++    for entry in std::fs::read_dir(source)? {
++        let entry = entry?;
++        let output = destination.join(entry.file_name());
++        if entry.file_type()?.is_dir() {
++            export_headers(&entry.path(), &output)?;
++        } else {
++            std::fs::copy(entry.path(), output)?;
++        }
++    }
++    Ok(())
+ }
+ 
+ struct IsaProbe {
+@@ -467,9 +481,12 @@
+     // Compile
+     build.compile("numkong");
+ 
+-    // Expose the include directory so dependents can find <numkong/numkong.h>
+-    let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+-    println!("cargo:include={}/include", manifest_dir);
++    // Export headers as build outputs: sandboxed dependents cannot retain
++    // this build script's temporary CARGO_MANIFEST_DIR/runfiles directory.
++    let out_dir = env::var("OUT_DIR").unwrap();
++    let include_dir = Path::new(&out_dir).join("include");
++    export_headers(Path::new("include"), &include_dir).map_err(|error| error.to_string())?;
++    println!("cargo:include={}", include_dir.display());
+ 
+     // Watch directories recursively instead of listing individual files
+     watch_dir("c");
