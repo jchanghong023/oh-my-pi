@@ -454,6 +454,7 @@ describe("createAgentSession credential_disabled subscription", () => {
 				tools: new Map(),
 				assistantThinkingRenderers: [],
 				assistantTextRenderers: [],
+				transcriptPresenters: [],
 				linkSchemes: [],
 				fileWriteFallbackHandlers: [],
 				fileDeleteFallbackHandlers: [],

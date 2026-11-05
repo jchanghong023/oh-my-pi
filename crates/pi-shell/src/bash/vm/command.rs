@@ -1106,7 +1106,9 @@ fn expand(
 		}
 		// bash's `sv_path` runs for a temporary `PATH` too.
 		if !assign_only
-			&& name.as_slice() == b"PATH"
+			&& (name.as_slice() == b"PATH"
+				|| (k.engine.config().platform == crate::bash::ids::Platform::Windows
+					&& name.as_slice() == b"PATHEXT"))
 			&& let Err(err) = builtins::flush_hash(&mut k.root, cx.store, vp)
 		{
 			k.fail(err);
@@ -1984,8 +1986,13 @@ fn lookup(k: &mut Kernel, vp: &mut Vproc, cx: &mut Cx<'_>, op: Op, typeset: bool
 		// File-system probes: `CmdExpanded` reads the clock after them.
 		k.clock_stale();
 		// bash's `search_for_command`: a `PATH` in the command's temporary
-		// environment bypasses the hash table (lookup and insertion).
-		let temp_path = st(vp).assigns.iter().any(|(n, _)| n.as_slice() == b"PATH");
+		// environment bypasses the hash table (lookup and insertion); on
+		// Windows `PATHEXT` changes the same answer.
+		let windows = k.engine.config().platform == crate::bash::ids::Platform::Windows;
+		let temp_path = st(vp)
+			.assigns
+			.iter()
+			.any(|(n, _)| n.as_slice() == b"PATH" || (windows && n.as_slice() == b"PATHEXT"));
 		let mut sc = exec::take_scratch(vp);
 		let name = sc.exec.as_ref().map_or_default(|e| e.argv[0].clone());
 		if sc.io.as_ref().is_none_or(|io| io.search.is_none()) {

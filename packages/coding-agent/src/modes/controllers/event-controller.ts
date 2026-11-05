@@ -37,6 +37,7 @@ import {
 	toolRenderName,
 } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TtsrNotificationComponent } from "@oh-my-pi/pi-tui/chat/ttsr-notification";
+import { eventBlockId, PresentedBlock } from "@oh-my-pi/pi-tui/chat/transcript-presentation";
 import { createUsageRowBlock, TurnUsageTally, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { appKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { getSymbolTheme, theme } from "@oh-my-pi/pi-tui/theme";
@@ -308,7 +309,7 @@ export class EventController {
 	#displaceableTodoComponent: ToolExecutionComponent | undefined = undefined;
 	// Most recent TTSR notification block. A new ttsr_triggered event merges its
 	// rules into this block while it is still the (live-region) transcript tail.
-	#lastTtsrNotification: TtsrNotificationComponent | undefined = undefined;
+	#lastTtsrNotification: PresentedBlock<TtsrNotificationComponent> | undefined = undefined;
 	#streamingReveal: StreamingRevealController;
 	#toolArgsReveal: ToolArgsRevealController;
 	#prevHideThinking = false;
@@ -684,9 +685,9 @@ export class EventController {
 	 * Re-key a live streamed tool card whose id changed mid-stream (see
 	 * {@link #streamedToolCallIdByIndex}). Moves every id-keyed tracker from the
 	 * old id to the new one so the next cumulative `message_update` reuses the
-	 * existing card instead of creating a duplicate (#6879). The card component
-	 * itself is id-agnostic (routing is via `pendingTools`), so only the maps and
-	 * the shared read group's entry need re-keying.
+	 * existing card instead of creating a duplicate (#6879). Routing is via
+	 * `pendingTools`; the card (or the shared read group's entry) takes the new
+	 * id too, which is what transcript presenters see and refresh by.
 	 */
 	#migrateStreamedToolCallId(oldId: string, newId: string): void {
 		// `oldId` may be "" (the block streamed before its id): that empty key still
@@ -696,13 +697,13 @@ export class EventController {
 		if (pending && !this.ctx.pendingTools.has(newId)) {
 			this.ctx.pendingTools.delete(oldId);
 			this.ctx.pendingTools.set(newId, pending);
-			if (pending instanceof ToolExecutionComponent) pending.updateToolCallId(newId);
+			if (pending instanceof ToolExecutionComponent) pending.renameToolCallId(newId);
 		}
 		const timeline = this.#toolTimelineComponents.get(oldId);
 		if (timeline && !this.#toolTimelineComponents.has(newId)) {
 			this.#toolTimelineComponents.delete(oldId);
 			this.#toolTimelineComponents.set(newId, timeline);
-			if (timeline instanceof ToolExecutionComponent) timeline.updateToolCallId(newId);
+			if (timeline instanceof ToolExecutionComponent && timeline !== pending) timeline.renameToolCallId(newId);
 			else if (timeline instanceof ReadToolGroupComponent && timeline !== pending) {
 				timeline.renameEntry(oldId, newId);
 			}
@@ -2991,18 +2992,34 @@ export class EventController {
 			this.ctx.chatContainer.children.at(-1) === previous &&
 			this.ctx.chatContainer.canRemoveBlock(previous)
 		) {
-			previous.addRules(event.rules);
+			previous.inner.addRules(event.rules);
+			previous.setBlock({
+				type: "event",
+				id: previous.block.id,
+				event: { type: "ttsr_triggered", rules: previous.inner.rules },
+			});
 			this.ctx.ui.requestRender();
 			return;
 		}
-		const component = new TtsrNotificationComponent(event.rules);
+		const notification = new TtsrNotificationComponent(event.rules);
+		const component = new PresentedBlock(notification, {
+			type: "event",
+			id: eventBlockId("ttsr"),
+			event: { type: "ttsr_triggered", rules: notification.rules },
+		});
 		component.setExpanded(this.ctx.toolOutputExpanded);
 		this.ctx.present(component);
 		this.#lastTtsrNotification = component;
 	}
 
 	async #handleTodoReminder(event: Extract<AgentSessionEvent, { type: "todo_reminder" }>): Promise<void> {
-		const component = new TodoReminderComponent(event.todos, event.attempt, event.maxAttempts);
+		const { todos, attempt, maxAttempts } = event;
+		const component = new PresentedBlock(new TodoReminderComponent(todos, attempt, maxAttempts), {
+			type: "event",
+			id: eventBlockId("todo-reminder"),
+			event: { type: "todo_reminder", todos, attempt, maxAttempts },
+		});
+		component.setExpanded(this.ctx.toolOutputExpanded);
 		this.ctx.present(component);
 	}
 	async #handleTodoAutoClear(_event: Extract<AgentSessionEvent, { type: "todo_auto_clear" }>): Promise<void> {

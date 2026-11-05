@@ -73,6 +73,12 @@ export const cfgSkillsIgnoredSkills = register({
 	default: EMPTY_STRING_ARRAY,
 });
 
+export const cfgSkillsManualSkills = register({
+	id: "skills.manualSkills",
+	type: "array",
+	default: EMPTY_STRING_ARRAY,
+});
+
 export const cfgSkillsIncludeSkills = register({
 	id: "skills.includeSkills",
 	type: "array",
@@ -92,6 +98,7 @@ export const cfgSkills = combine({
 	enableAgentsProject: cfgSkillsEnableAgentsProject,
 	customDirectories: cfgSkillsCustomDirectories,
 	ignoredSkills: cfgSkillsIgnoredSkills,
+	manualSkills: cfgSkillsManualSkills,
 	includeSkills: cfgSkillsIncludeSkills,
 });
 
@@ -183,5 +190,18 @@ export const cfgExtensionAssistantTextRenderers = register({
 		label: "Extension Reply Renderers",
 		description:
 			"允许扩展调整助手回复的显示、原地重绘回复，并接收其专属链接的点击；会话、导出和模型上下文仍保留原始回复",
+	},
+});
+
+export const cfgExtensionTranscriptPresenters = register({
+	id: "extensionRenderers.transcriptPresenters",
+	type: "boolean",
+	default: false,
+	ui: {
+		tab: "tools",
+		group: "Extensions",
+		label: "Extension Transcript Presenters",
+		description:
+			"Let extensions draw transcript blocks such as tool calls in full, as one compact row, or hidden; the session, exports and model context are unchanged",
 	},
 });

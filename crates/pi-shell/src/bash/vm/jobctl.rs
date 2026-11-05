@@ -26,7 +26,7 @@ use std::task::{Context, Poll, Waker};
 
 use bstr::{BStr, BString};
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 use super::proc::Live;
 use super::{
 	Cx, Kernel, Shell,
@@ -1382,7 +1382,7 @@ impl Shell {
 			.iter()
 			.rev()
 			.find_map(|f| match f.scratch.as_deref().map(|sc| &sc.live) {
-				Some(Live::Ext(ext)) => Some(ext.pid()),
+				Some(super::proc::Live::Ext(ext)) => Some(ext.pid()),
 				_ => None,
 			});
 		let Some(pid) = pid.and_then(|pid| i32::try_from(pid).ok()) else {

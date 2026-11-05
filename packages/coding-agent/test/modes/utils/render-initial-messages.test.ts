@@ -19,6 +19,7 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { setChatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { ReadToolGroupComponent } from "@oh-my-pi/pi-tui/chat/read-tool-group";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { InteractiveModeContext, RenderSessionContextOptions } from "@oh-my-pi/pi-coding-agent/modes/types";
 import { UiHelpers } from "@oh-my-pi/pi-coding-agent/modes/utils/ui-helpers";
@@ -91,12 +92,14 @@ function makeCtx(): RenderInitialMessagesTestContext {
 			sessionManager: {
 				buildSessionContext: llmContextSpy,
 				getEntries: vi.fn(() => []),
+				getConversationTip: () => undefined,
 				getCwd: vi.fn(() => "/tmp"),
 			},
 		},
 		sessionManager: {
 			buildSessionContext: llmContextSpy,
 			getEntries: vi.fn(() => []),
+			getConversationTip: () => undefined,
 			getCwd: vi.fn(() => "/tmp"),
 		},
 		renderSessionContextIncrementally: renderSessionContextSpy,
@@ -208,6 +211,7 @@ function makeRenderCtx(
 			extensionRunner: undefined,
 			sessionManager: {
 				getEntries: vi.fn(() => []),
+				getConversationTip: () => undefined,
 				getCwd: vi.fn(() => "/tmp"),
 				putBlobSync: vi.fn(() => ({
 					hash: "hash",
@@ -219,6 +223,7 @@ function makeRenderCtx(
 		},
 		sessionManager: {
 			getEntries: vi.fn(() => []),
+			getConversationTip: () => undefined,
 			getCwd: vi.fn(() => "/tmp"),
 			putBlobSync: vi.fn(() => ({
 				hash: "hash",
@@ -711,19 +716,16 @@ describe("UiHelpers.renderInitialMessages — image replay", () => {
 			const { ctx, chatContainer } = makeRenderCtx(transcript, true, display === "clean", display === "compact");
 			await new UiHelpers(ctx).renderInitialMessages();
 			const ansi = Bun.stripANSI(chatContainer.render(100).join("\n"));
+			const cx: DescribeContext = {
+				cols: 100,
+				reduceMotion: true,
+				dark: true,
+				supports: () => true,
+				feature: () => false,
+			};
 			const native = chatContainer
-				.nativeBlocks()
-				.map(block =>
-					JSON.stringify(
-						block.describe?.({
-							cols: 100,
-							reduceMotion: true,
-							dark: true,
-							supports: () => true,
-							feature: () => false,
-						}),
-					),
-				)
+				.nativeBlocks(cx)
+				.map(block => JSON.stringify(block.describe?.(cx)))
 				.join("\n");
 			if (hidden) {
 				expect(native).not.toContain('"k":"image"');

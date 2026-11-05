@@ -4,6 +4,7 @@ import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-messa
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { stopSharedSpinnerTicker, ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TspDocument } from "@oh-my-pi/pi-tui/native/apply";
+import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { Reconciler } from "@oh-my-pi/pi-tui/native/reconcile";
 import { setSvgFigureRendering, svgFigureRendering } from "@oh-my-pi/pi-tui/chat/svg-figure";
 import { setTableCharts, tableChartMode } from "@oh-my-pi/pi-tui/chat/table-chart";
@@ -1862,15 +1863,16 @@ describe("TranscriptContainer file changes", () => {
 		const ansi = Bun.stripANSI(root.render(120).join("\n"));
 		const native = [false, true].map(dataFirst => {
 			const document = new TspDocument("s:file-changes");
+			const cx: DescribeContext = {
+				cols: 120,
+				dark: true,
+				reduceMotion: false,
+				supports: kind => dataFirst || kind !== "tool",
+				feature: () => true,
+			};
 			const ops = new Reconciler("s:file-changes").reconcile(
-				{ main: root.nativeBlocks(), dock: [], layer: [] },
-				{
-					cols: 120,
-					dark: true,
-					reduceMotion: false,
-					supports: kind => dataFirst || kind !== "tool",
-					feature: () => true,
-				},
+				{ main: root.nativeBlocks(cx), dock: [], layer: [] },
+				cx,
 			);
 			expect(document.applyFrame({ sf: "s:file-changes", s: 1, ops })).toEqual([]);
 			return visibleNativeProps(document.snapshot());

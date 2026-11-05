@@ -872,6 +872,12 @@ export interface AnthropicOptions extends StreamOptions {
 	/** Force OAuth bearer auth mode for proxy tokens that don't match Anthropic token prefixes. */
 	isOAuth?: boolean;
 	/**
+	 * Send no Claude Code app headers (`x-app: cli`,
+	 * `anthropic-dangerous-direct-browser-access`) on an API-key request. For
+	 * adapter wrappers that present another client's identity.
+	 */
+	omitClaudeCodeAppHeaders?: boolean;
+	/**
 	 * Pre-built Anthropic Messages client. When provided, skips internal client
 	 * construction entirely. Accepts any structurally compatible client,
 	 * including SDK clients such as `AnthropicVertex`.
@@ -898,6 +904,8 @@ export type AnthropicClientOptionsArgs = {
 	headers?: Record<string, string>;
 	dynamicHeaders?: Record<string, string>;
 	isOAuth?: boolean;
+	/** See {@link AnthropicOptions.omitClaudeCodeAppHeaders}. */
+	omitClaudeCodeAppHeaders?: boolean;
 	hasTools?: boolean;
 	/** Whether a tool in ANTHROPIC_BUFFERED_INPUT_TOOLS is present; suppresses the request-wide fine-grained streaming beta. */
 	hasBufferedInputTools?: boolean;
@@ -2291,6 +2299,7 @@ const streamAnthropicOnce = (
 					headers: options?.headers,
 					dynamicHeaders: copilotDynamicHeaders?.headers,
 					isOAuth: options?.isOAuth,
+					omitClaudeCodeAppHeaders: options?.omitClaudeCodeAppHeaders,
 					hasTools: !!context.tools?.length,
 					hasBufferedInputTools:
 						context.tools?.some(tool => ANTHROPIC_BUFFERED_INPUT_TOOLS.has(tool.name)) ?? false,
@@ -4277,6 +4286,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		hasBufferedInputTools = false,
 		thinkingEnabled = false,
 		isOAuth,
+		omitClaudeCodeAppHeaders,
 		maxRetryDelayMs,
 		sessionId,
 		disableStrictTools: disableStrictToolsOverride,
@@ -4410,6 +4420,7 @@ export function buildAnthropicClientOptions(args: AnthropicClientOptionsArgs): A
 		apiKey,
 		baseUrl,
 		isOAuth: oauthToken,
+		omitClaudeCodeAppHeaders,
 		extraBetas: betaFeatures,
 		stream,
 		modelHeaders: requestModelHeaders,

@@ -41,7 +41,7 @@ import {
 	type NativeUiEvent,
 	rootToggleExpanded,
 } from "../native/node";
-import { plainText } from "../native/spans";
+import { plainLine, plainText } from "../native/spans";
 import { diagnosticsSection, displayPath, resultText, toolHead } from "../tools/native-view";
 import type { FileDiagnosticsResult } from "../tools/lsp";
 import { NativeImageCache, readMediaPath, shownMedia } from "../native/blobs";
@@ -70,6 +70,8 @@ import { type AnimationFrame, trimBlankEdges } from "../chrome/transcript-contai
 import { isXdHelpContent, parseXdUrl } from "../tools/xd-url";
 import { unwrapHashlineHeaderPath } from "../tools/hashline-format";
 import { internalUrlSchemeSpec, internalUrlSchemeSpecs, splitUrlScheme } from "../tools/url-scheme-host";
+import { LateDiagnosticsMessageComponent } from "./late-diagnostics-message";
+import { compactRows, presentNative, TranscriptPresentationState } from "./transcript-presentation";
 
 /** Resolves the canonical renderer key while retaining the provider's wire name in message history. */
 export function toolRenderName(wireName: string, tool: AgentTool | undefined): string {
@@ -314,6 +316,8 @@ export interface ToolExecutionOptions {
 	showImages?: boolean; // default: true (only used if terminal supports images)
 	/** Allow the name-keyed renderer registry only when the active tool is the built-in implementation. */
 	useBuiltInRenderer?: boolean;
+	/** Ask the extension transcript presenters; false for a replayed transcript (overlays). Default: true. */
+	transcriptPresenters?: boolean;
 }
 
 /** A tool result or progress frame as a card shows it. */
@@ -335,6 +339,9 @@ export interface ToolExecutionHandle extends Component {
 	/** Seal the block as final history and stop its animations. */
 	seal(): void;
 }
+
+/** {@link ToolExecutionComponent.nativeTrailers} of a hidden call without late diagnostics. */
+const EMPTY_TRAILERS: readonly Component[] = [];
 
 /** Tools whose returned call hands its card to the background job it started (see {@link parksAsBackground}). */
 const JOB_CARD_TOOLS: Record<string, "always" | "native"> = { task: "always", bash: "native", eval: "native" };
@@ -592,6 +599,29 @@ export class ToolExecutionComponent extends Container {
 	readonly #native = new Memo();
 	// LSP diagnostics that arrived after the result (native only), shown in the frame.
 	#lateDiagnostics: readonly FileDiagnosticsResult[] | undefined;
+	/** The standalone block showing {@link #lateDiagnostics} while the card is not drawn in full. */
+	#lateDiagnosticsBlock:
+		| { files: readonly FileDiagnosticsResult[]; block: LateDiagnosticsMessageComponent }
+		| undefined;
+	/** Whether presenters draw this card (not a replayed transcript). */
+	#presented = true;
+	/** What the presenters chose; an expanded card always draws in full. */
+	readonly #presentation = new TranscriptPresentationState(
+		() =>
+			this.#presented
+				? {
+						type: "toolCall",
+						id: this.#toolCallId ?? "",
+						toolName: this.#toolName,
+						args: this.#args,
+						result: this.#result ? { content: this.#result.content, details: this.#rawDetails } : undefined,
+						isError: this.#result?.isError === true,
+						isPartial: this.#result === undefined || this.#isPartial,
+					}
+				: undefined,
+		() => this.#expanded,
+		this,
+	);
 	readonly #nativeImages = new NativeImageCache();
 	// The Spotlight notice drawn after the card in a native transcript (see nativeTrailers).
 	readonly #spotlight = new SpotlightNotices();
@@ -643,6 +673,7 @@ export class ToolExecutionComponent extends Container {
 		this.#toolLabel = tool?.label ?? toolName;
 		this.#renderer = options.useBuiltInRenderer === false ? undefined : toolRenderers[toolName];
 		this.#showImages = options.showImages ?? true;
+		this.#presented = options.transcriptPresenters ?? true;
 		this.#tool = tool;
 		this.#ui = ui;
 		this.#args = args;
@@ -671,13 +702,6 @@ export class ToolExecutionComponent extends Container {
 
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
-	}
-
-	updateToolCallId(toolCallId: string): void {
-		if (this.#toolCallId === toolCallId) return;
-		this.#toolCallId = toolCallId;
-		this.#blockVersion++;
-		this.#ui.requestComponentRender(this);
 	}
 
 	#updateShellTrace(details: unknown): void {
@@ -829,6 +853,7 @@ export class ToolExecutionComponent extends Container {
 		if (args === this.#args) return;
 		this.#args = args;
 		this.#blockVersion++;
+		this.#presentation.markStale();
 		this.#displayInputVersion++;
 		this.#updateSpinnerAnimation();
 		this.#updateDisplay();
@@ -956,6 +981,9 @@ export class ToolExecutionComponent extends Container {
 		this.#resultVersion++;
 		this.#blockVersion++;
 		this.#isPartial = isPartial;
+		this.#presentation.markStale();
+		// A final frame can land after the card retired to scrollback, which is never drawn again.
+		if (!isPartial) this.#presentation.recheck();
 		this.#displaceableByToolName = displaceableToolName(this.#toolName, result, isPartial);
 		if (!isPartial && this.#toolCallId !== undefined) {
 			this.#spotlight.set(this.#toolCallId, result.details, resultText(result));
@@ -1176,6 +1204,7 @@ export class ToolExecutionComponent extends Container {
 	isTranscriptBlockPending(): boolean {
 		return (
 			this.#isToolActivityVisible() &&
+			this.#presentation.shown.mode === "full" &&
 			((this.#showImages && !this.#toolImagesHidden() && this.#kittyConversionsAwaited.size > 0) ||
 				this.#figure?.pending === true)
 		);
@@ -1329,9 +1358,51 @@ export class ToolExecutionComponent extends Container {
 		if (expanded !== undefined) this.setExpanded(expanded);
 	}
 
-	/** The result's Spotlight notice, a block of its own right after the card (visible while it is collapsed). */
+	/**
+	 * Blocks of their own right after the card: the result's Spotlight notice (visible while it is
+	 * collapsed), and late diagnostics the card absorbed while a presenter compacts or hides it, so
+	 * they stay visible.
+	 */
 	nativeTrailers(): readonly Component[] {
-		return this.#spotlight.list();
+		const mode = this.#presentation.shown.mode;
+		const late = this.#lateDiagnostics;
+		// Drawn in full, the card shows its diagnostics itself: the notices' own (stable) list.
+		if (mode === "full" || late === undefined) return mode === "hidden" ? EMPTY_TRAILERS : this.#spotlight.list();
+		if (this.#lateDiagnosticsBlock?.files !== late) {
+			this.#lateDiagnosticsBlock = { files: late, block: new LateDiagnosticsMessageComponent([...late]) };
+		}
+		const diagnostics = this.#lateDiagnosticsBlock.block;
+		// Not a transcript child: the transcript-wide visibility reaches it only through this card.
+		diagnostics.setToolActivityVisible(this.#isToolActivityVisible());
+		// A call a presenter hides takes its notice with it.
+		return mode === "hidden" ? [diagnostics] : [...this.#spotlight.list(), diagnostics];
+	}
+
+	refreshTranscriptPresentation(ids?: ReadonlySet<string>): boolean {
+		if (!this.#presentation.refresh(ids)) return false;
+		this.#blockVersion++;
+		super.invalidate();
+		return true;
+	}
+
+	/** The streamed call's id changed (or an empty one was filled in): presenters see, and refresh by, the new one. */
+	renameToolCallId(toolCallId: string): void {
+		if (toolCallId === this.#toolCallId) return;
+		this.#toolCallId = toolCallId;
+		this.#presentation.markStale();
+		this.#blockVersion++;
+		super.invalidate();
+	}
+
+	isTranscriptBlockCompact(): boolean {
+		if (
+			!this.#isToolActivityVisible() ||
+			this.#allocation === 0 ||
+			(this.#toolName === "wait" && this.#isBenignSkip())
+		) {
+			return false;
+		}
+		return this.#presentation.shown.mode === "compact";
 	}
 
 	/** The file paths this call targets (edit/write/apply_patch args), display-relative. */
@@ -1380,7 +1451,7 @@ export class ToolExecutionComponent extends Container {
 	 * `elapsed` timer in the head and terminal-local collapse clamped to the
 	 * view's preview. Renderers without describe hooks (and extension tools
 	 * with only render hooks) get the generic card. Hidden tool activity stays
-	 * mounted so toggling it is one prop change.
+	 * mounted so toggling it is one prop change; a presenter's answer applies on top.
 	 */
 	override describe(cx?: DescribeContext): NativeNode {
 		if (
@@ -1397,6 +1468,7 @@ export class ToolExecutionComponent extends Container {
 			json: cx?.supports("json") === true,
 			shell: cx?.supports("shell") === true,
 		};
+		const presentation = this.#presentation.draw();
 		const key = [
 			dataFirst,
 			this.#toolCallId,
@@ -1417,10 +1489,17 @@ export class ToolExecutionComponent extends Container {
 			host.json,
 			host.shell,
 			getThemeEpoch(),
+			presentation,
 		];
-		return this.#native.get(key, () =>
-			withHidden(dataFirst ? this.#describeTool(host) : this.#describeCard(host), !this.#isToolActivityVisible()),
-		);
+		return this.#native.get(key, () => {
+			const full = dataFirst ? this.#describeTool(host) : this.#describeCard(host);
+			const shown = presentNative(full, presentation, {
+				role: `omp.tool.${this.#toolName}`,
+				title: this.#toolLabel,
+				target: this.#activitySummary().detail,
+			});
+			return withHidden(shown, !this.#isToolActivityVisible());
+		});
 	}
 
 	/** Milliseconds since execution started (running) or its total (settled); undefined before it starts. */
@@ -1555,11 +1634,10 @@ export class ToolExecutionComponent extends Container {
 				title: typeof fallbackHead === "string" ? fallbackHead : fallbackHead?.map(s => s.t).join(""),
 			}),
 		];
-		const started = this.#executionStartedAtNow;
-		if (started !== undefined) {
-			const ended = status === "running" ? undefined : this.#executionEndedAtNow;
-			const took = Math.max(0, Math.round((ended ?? performance.now()) - started));
-			headChildren.push(node("elapsed", ended === undefined ? { age: took } : { age: took, stopped: took }));
+		const took = this.#elapsedMs(status);
+		if (took !== undefined) {
+			const live = status === "running" || status === "pending";
+			headChildren.push(node("elapsed", live ? { age: took } : { age: took, stopped: took }));
 		}
 		const children: NativeChild[] = [
 			node("row", { gap: "sm", align: "baseline" }, headChildren, "head"),
@@ -1714,6 +1792,7 @@ export class ToolExecutionComponent extends Container {
 		if (this.#toolActivityVisible !== visible) this.#blockVersion++;
 		this.#toolActivityVisible = visible;
 		this.#spotlight.setHidden(!visible);
+		this.#lateDiagnosticsBlock?.block.setToolActivityVisible(visible);
 		super.invalidate();
 	}
 
@@ -1784,6 +1863,15 @@ export class ToolExecutionComponent extends Container {
 		) {
 			return [];
 		}
+		const presentation = this.#presentation.draw();
+		if (presentation.mode === "hidden") return [];
+		if (presentation.mode === "compact") {
+			// A squeezed allocation keeps the head (identity, spinner) and as many rows as fit.
+			return compactRows(this.#compactText(width), presentation, width, this.#compactGlyph()).slice(
+				0,
+				this.#allocation,
+			);
+		}
 		if (this.#renderState.expanded !== this.#expanded || this.#displayImagesHidden !== this.#toolImagesHidden())
 			this.#updateDisplay();
 		let lines = super.render(width);
@@ -1811,9 +1899,12 @@ export class ToolExecutionComponent extends Container {
 		return lines;
 	}
 
-	#renderCompact(width: number): readonly string[] {
+	/** The one-row summary: bold label, muted detail, and the elapsed seconds of a running call. */
+	#compactText(width: number): string {
 		const summary = this.#activitySummary();
-		const detail = summary.detail ? theme.fg("muted", ` · ${summary.detail.replace(/\s+/g, " ")}`) : "";
+		// Raw call input (a bash command): stripped of ANSI and control characters before theming.
+		const shownDetail = summary.detail ? plainLine(summary.detail) : "";
+		const detail = shownDetail ? theme.fg("muted", ` · ${shownDetail}`) : "";
 		// Elapsed ticks only while the call is genuinely running; a settled
 		// placeholder row must not read as live ("Todo · running 0s").
 		const elapsed =
@@ -1823,15 +1914,21 @@ export class ToolExecutionComponent extends Container {
 						` ${Math.max(0, Math.floor((this.#presentationFrame.now - this.#executionStartedAtNow) / 1000))}s`,
 					)
 				: "";
-		const text = truncateToWidth(
-			`${theme.fg("toolTitle", theme.bold(summary.label))}${detail}${elapsed}`,
+		return truncateToWidth(
+			`${theme.fg("toolTitle", theme.bold(plainLine(summary.label)))}${detail}${elapsed}`,
 			Math.max(1, width - 4),
 		);
-		if (this.#allocation === 1) {
-			const glyph = this.#spinnerFrame === undefined ? "•" : (theme.spinnerFrames[this.#spinnerFrame] ?? "•");
-			const styledGlyph = theme.fg(this.#spinnerFrame === undefined ? "dim" : "muted", glyph);
-			return [truncateToWidth(`${styledGlyph} ${text}`, width)];
-		}
+	}
+
+	/** The one-row form's lead glyph: the spinner while it animates, else a dim bullet. */
+	#compactGlyph(): string {
+		const glyph = this.#spinnerFrame === undefined ? "•" : (theme.spinnerFrames[this.#spinnerFrame] ?? "•");
+		return theme.fg(this.#spinnerFrame === undefined ? "dim" : "muted", glyph);
+	}
+
+	#renderCompact(width: number): readonly string[] {
+		const text = this.#compactText(width);
+		if (this.#allocation === 1) return [truncateToWidth(`${this.#compactGlyph()} ${text}`, width)];
 		return [truncateToWidth(`${theme.fg("dim", "╭─")} ${text}`, width), theme.fg("dim", "╰")];
 	}
 
@@ -2337,7 +2434,7 @@ export class ToolExecutionComponent extends Container {
 	#getTextOutput(): string {
 		if (!this.#result) return "";
 		// Image placeholders embed a link only under an enabled hyperlink policy.
-		const key = `${this.#resultVersion}|${this.#showImages}|${displayPreferences.hideToolActivity}|${TERMINAL.imageProtocol ?? "-"}|${imageLinksEnabled()}`;
+		const key = `${this.#resultVersion}|${this.#showImages}|${this.#toolImagesHidden()}|${TERMINAL.imageProtocol ?? "-"}|${imageLinksEnabled()}`;
 		if (key === this.#textOutputKey) return this.#textOutput;
 
 		const textBlocks = this.#result.content.filter(c => c.type === "text");
@@ -2354,7 +2451,7 @@ export class ToolExecutionComponent extends Container {
 				.map(img => {
 					const mimeType = String(img.mimeType);
 					const dims =
-						img.data && this.#showImages && !displayPreferences.hideToolActivity
+						img.data && this.#showImages && !this.#toolImagesHidden()
 							? (getImageDimensions(img.data, mimeType) ?? undefined)
 							: undefined;
 					const placeholder = imageFallback(mimeType, dims);

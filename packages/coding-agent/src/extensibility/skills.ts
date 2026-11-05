@@ -353,6 +353,7 @@ export async function loadSkillCatalog(
 		enableAgentsProject = true,
 		customDirectories = [],
 		ignoredSkills = [],
+		manualSkills = [],
 		includeSkills = [],
 		disabledExtensions = [],
 		extensionRoots,
@@ -674,6 +675,15 @@ export async function loadSkillCatalog(
 			!matchesIncludePatterns(skill.name)
 		) {
 			skill.disabledReason = "item-disabled";
+		}
+	}
+	if (manualSkills.length > 0) {
+		const manualGlobs = manualSkills.map(pattern => new Bun.Glob(pattern));
+		for (const skill of skills) {
+			const rawName = admitted.get(skill.name)?.rawName ?? skill.name;
+			if (manualGlobs.some(glob => glob.match(rawName) || glob.match(skill.name))) {
+				skill.hide = true;
+			}
 		}
 	}
 	// Deterministic ordering for prompt stability (case-insensitive, then exact name, then path).

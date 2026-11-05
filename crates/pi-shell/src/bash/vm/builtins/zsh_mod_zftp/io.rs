@@ -304,6 +304,25 @@ fn unsupported() -> io::Error {
 	io::ErrorKind::Unsupported.into()
 }
 
+// `EBADF` and `EIO`. Windows OS error numbers are not C's, so there the
+// error carries the `strerror` text, which `FsErr` reports.
+#[cfg(unix)]
+fn ebadf() -> io::Error {
+	io::Error::from_raw_os_error(libc::EBADF)
+}
+#[cfg(not(unix))]
+fn ebadf() -> io::Error {
+	io::Error::other("Bad file descriptor")
+}
+#[cfg(unix)]
+fn eio() -> io::Error {
+	io::Error::from_raw_os_error(libc::EIO)
+}
+#[cfg(not(unix))]
+fn eio() -> io::Error {
+	io::Error::other("Input/output error")
+}
+
 fn inet(a: &SockAddr) -> Option<SocketAddr> {
 	match a {
 		SockAddr::Inet(s) => Some(*s),
@@ -565,7 +584,7 @@ pub fn perform(
 		ZftpOp::Poll { fd } => {
 			let h = vp.fds.handle(*fd);
 			if !h.is_open() {
-				let e = io::Error::other(crate::bash::fd::BadFd);
+				let e = ebadf();
 				return Ok(ZftpAns::Polled(Err(Fail::of(&e))));
 			}
 			ZftpAns::Polled(Ok(h.poll_read(tcx, &mut []).is_ready()))
@@ -819,7 +838,7 @@ impl Xfer {
 							.out
 							.msgs
 							.push((false, "block too large to handle".into()));
-						self.got(spec, -1, Some(input_output_error()));
+						self.got(spec, -1, Some(eio()));
 						continue;
 					}
 					self.at = XferAt::Body { size, got: 0, flags: hdr[0] };
@@ -856,7 +875,7 @@ impl Xfer {
 						match r {
 							Ok(0) => {
 								self.out.msgs.push((false, "short data block".into()));
-								self.got(spec, -1, Some(input_output_error()));
+								self.got(spec, -1, Some(eio()));
 							},
 							Ok(n) => self.at = XferAt::Body { size, got: got + n, flags },
 							Err(None) => {
@@ -1026,19 +1045,9 @@ impl Xfer {
 	}
 }
 
+/// `EPIPE` maps to `BrokenPipe` on every platform.
 fn is_epipe(e: &io::Error) -> bool {
 	e.kind() == io::ErrorKind::BrokenPipe
-}
-
-fn input_output_error() -> io::Error {
-	#[cfg(unix)]
-	{
-		io::Error::from_raw_os_error(libc::EIO)
-	}
-	#[cfg(not(unix))]
-	{
-		io::ErrorKind::Other.into()
-	}
 }
 
 #[cfg(test)]
@@ -1165,7 +1174,7 @@ mod tests {
 			assert_eq!(result.msgs[1], (true, "read failed: Input/output error".into()));
 			#[cfg(not(unix))]
 			{
-				assert_eq!(input_output_error().raw_os_error(), None);
+				assert_eq!(eio().raw_os_error(), None);
 				assert_eq!(result.msgs[1], (true, "read failed: input/output error".into()));
 			}
 		}

@@ -20,6 +20,7 @@ describe("InputController tool output expansion", () => {
 			settings,
 			toolOutputExpanded: false,
 			chatContainer: { children: [expandable, inert] },
+			pendingShellContainer: { children: [] },
 			ui: { requestRender },
 			showStatus,
 		} as unknown as InteractiveModeContext;
@@ -32,7 +33,6 @@ describe("InputController tool output expansion", () => {
 		// at their new heights in the same frame.
 		expect(requestRender).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledWith(true);
-		expect(showStatus).toHaveBeenCalledWith("Tool output expansion: enabled");
 	});
 
 	it("expands file-targeted cards in compact, including unchanged and failed calls", async () => {

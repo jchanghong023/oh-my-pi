@@ -471,12 +471,11 @@ fn files_from_host_specs() {
 	assert_eq!(files_from_hostspec(b"C:\\list", true), None);
 	assert_eq!(files_from_hostspec(b"\\\\srv\\share\\list", true), None);
 	assert!(files_from_hostspec(b"C:\\list", false).is_some());
-	assert_eq!(files_from_hostspec(b"c:relative", true), None);
-	assert_eq!(files_from_hostspec(b"C:/list", true), None);
-	assert_eq!(files_from_hostspec(b"h::module/list", true), Some((b"h".to_vec(), &b"module/list"[..])));
 	assert_eq!(files_from_hostspec(b"h:/list", false), Some((b"h".to_vec(), &b"/list"[..])));
 	assert_eq!(files_from_hostspec(b"host:/list", true), Some((b"host".to_vec(), &b"/list"[..])));
 	assert_eq!(files_from_hostspec(b"user@h:/list", true), Some((b"user@h".to_vec(), &b"/list"[..])));
+	assert_eq!(files_from_hostspec(b"h::list", true), Some((b"h".to_vec(), &b"list"[..])));
+	assert_eq!(files_from_hostspec(b"C:list", true), None);
 	assert!(is_absolute_operator_path(b"C:\\x", true));
 	assert!(is_absolute_operator_path(b"\\\\srv\\x", true));
 	assert!(!is_absolute_operator_path(b"C:x", true));

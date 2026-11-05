@@ -577,8 +577,6 @@ fn create_with_mode(
 	process_umask: Option<u32>,
 	nonblock: bool,
 ) -> io::Result<fs::File> {
-	#[cfg(not(unix))]
-	let _ = process_umask;
 	let options = || {
 		#[cfg_attr(not(unix), expect(unused_mut, reason = "custom flags are Unix's"))]
 		let mut o = options(flags, mode);
@@ -592,6 +590,8 @@ fn create_with_mode(
 		let _ = nonblock;
 		o
 	};
+	#[cfg(not(unix))]
+	let _ = process_umask;
 	#[cfg(unix)]
 	if flags.contains(OpenFlags::CREATE) && process_umask.is_none_or(|mask| mode & mask != 0) {
 		use std::os::unix::fs::PermissionsExt as _;
