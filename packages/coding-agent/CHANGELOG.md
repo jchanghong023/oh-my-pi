@@ -66,6 +66,7 @@
 
 ### Changed
 
+- Restore direct native `/goal` and `/goal-autopilot` command handling while busy; generated objectives retain normal prompt/steering admission instead of forcing raw commands into a fork-specific queue.
 - Enable `tui.completeScrollback` by default without modifying existing configuration files; explicit `false` retains upstream deferred scrollback behavior.
 
 - Knowledge hybrid search pages now warn that semantic candidates may be unrelated even after reranking and must be checked against the returned text.
@@ -192,6 +193,11 @@
 
 ### Fixed
 
+- Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.
+- Return the unattended reply only for actual `ask` timeouts in active autopilot Goals; preserve ordinary timeout choices, cancellation and abort behavior.
+- Preserve an initial autopilot notice through Stop when its native queued objective is retained, delivering it once with that objective.
+- Keep exhausted Goals budget-limited on resume until the budget permits work again.
+- Restore the previous tools and Goal when fresh autopilot entry is cancelled after tool activation.
 - Keep fulltest's bundled-server shutdown and external-settings-edit checks deterministic under concurrent load.
 - Keep automatic background completion notices hidden when extension transcript presenters are enabled, without hiding artifact or structured-output diagnostics.
 - Include publication stage, result and timing when Knowledge imports finish.

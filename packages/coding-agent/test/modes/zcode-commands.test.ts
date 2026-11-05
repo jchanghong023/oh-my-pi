@@ -90,6 +90,72 @@ describe("ZCode session interactions", () => {
 		});
 		expect(await answer).toMatchObject({ kind: "submit", results: [{ id: "q1", selectedOptions: ["B"] }] });
 	});
+	it("returns timed-out ask results without turning cancellation or abort into a timeout", async () => {
+		const interactions = new ZCodeInteractions(() => {});
+		const questions = [
+			{ id: "first", question: "First?", options: [{ label: "A" }, { label: "B" }], recommended: 1 },
+			{ id: "second", question: "Second?", options: [{ label: "C" }], multi: true },
+		];
+		let timeouts = 0;
+		const options = { timeout: 0, onTimeout: () => timeouts++ };
+		try {
+			await expect(interactions.ui.askDialog!(questions, options)).resolves.toMatchObject({
+				kind: "submit",
+				results: [
+					{ id: "first", selectedOptions: ["B"], timedOut: true },
+					{ id: "second", selectedOptions: ["C"], timedOut: true },
+				],
+			});
+			expect(timeouts).toBe(1);
+			const cancelled = interactions.ui.askDialog!(questions, options);
+			interactions.resolve(interactions.pending[0]!.interactionId, { action: "cancel" });
+			await expect(cancelled).resolves.toBeUndefined();
+			const controller = new AbortController();
+			const aborted = interactions.ui.askDialog!(questions, { ...options, signal: controller.signal });
+			controller.abort();
+			await expect(aborted).resolves.toBeUndefined();
+			await Bun.sleep(1);
+			expect(timeouts).toBe(1);
+			expect(interactions.pending).toEqual([]);
+		} finally {
+			interactions.dispose();
+		}
+	});
+	it("keeps ask timeouts paused by global autoresolution and permanently snoozed per interaction", async () => {
+		const interactions = new ZCodeInteractions(() => {});
+		const questions = [{ id: "next", question: "Next?", options: [{ label: "Continue" }] }];
+		let timeouts = 0;
+		const options = { timeout: 0, onTimeout: () => timeouts++ };
+		try {
+			interactions.setAutoResolutionEnabled(false);
+			const answer = interactions.ui.askDialog!(questions, options);
+			await Bun.sleep(1);
+			expect(interactions.pending[0]!.autoResolution?.state).toBe("snoozed");
+			expect(timeouts).toBe(0);
+			interactions.setAutoResolutionEnabled(true);
+			await expect(answer).resolves.toMatchObject({
+				kind: "submit",
+				results: [{ id: "next", selectedOptions: ["Continue"], timedOut: true }],
+			});
+			expect(timeouts).toBe(1);
+
+			const snoozed = interactions.ui.askDialog!(questions, options);
+			const id = interactions.pending[0]!.interactionId;
+			expect(interactions.snoozeAutoResolution(id)).toBe("paused");
+			interactions.setAutoResolutionEnabled(false);
+			interactions.setAutoResolutionEnabled(true);
+			await Bun.sleep(1);
+			expect(interactions.pending[0]!.autoResolution?.state).toBe("snoozed");
+			expect(timeouts).toBe(1);
+			interactions.resolve(id, { optionId: "Continue" });
+			await expect(snoozed).resolves.toMatchObject({
+				kind: "submit",
+				results: [{ id: "next", selectedOptions: ["Continue"] }],
+			});
+		} finally {
+			interactions.dispose();
+		}
+	});
 	it("submits all native questions together and preserves multi-select and custom answers", async () => {
 		const interactions = new ZCodeInteractions(() => {});
 		const answer = interactions.ui.askDialog!([
@@ -681,7 +747,6 @@ describe("ZCode session interactions", () => {
 	it("uses the selected presentation owner for command interactions", async () => {
 		const session = {
 			subscribe: () => () => {},
-			agent: { addBeforeQueuedMessageDequeueHook: () => () => {} },
 		} as unknown as AgentSession;
 		const updates: unknown[] = [];
 		let selected: ZCodeInteractions | undefined;
@@ -904,7 +969,7 @@ describe("ZCode session interactions", () => {
 		}
 	});
 	for (const busy of ["streaming", "compacting"] as const) {
-		it(`controls the native Goal while ${busy} without admitting controls to the held objective queue`, async () => {
+		it(`controls the native Goal while ${busy} without queuing commands or disturbing held user inputs`, async () => {
 			const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-goal-control-"));
 			const authStorage = await AuthStorage.create(":memory:");
 			// AgentSession 在 prompt admission 时也校验 registry auth；不能只给 Agent.getApiKey。
@@ -1016,24 +1081,30 @@ describe("ZCode session interactions", () => {
 					);
 				}
 				expect(session.isCompacting).toBe(busy === "compacting");
+				for (const text of ["/goal show", "/goal next objective", "/goal-autopilot unattended objective"]) {
+					const receipt = await host.dispatch(text);
+					await receipt.completion;
+					expect(session.getQueuedInputMessages()).toEqual([]);
+					expect(session.getGoalModeState()!.goal.objective).toBe("original objective");
+				}
 				const inputs = [
-					{ text: "/goal set replacement objective", inputId: "goal-set" },
-					{ text: "/goal next objective", inputId: "goal-objective" },
-					{ text: "/goal-autopilot unattended objective", inputId: "goal-autopilot" },
+					{ text: "first held user message", inputId: "held-first" },
+					{ text: "second held user message", inputId: "held-second" },
 				];
 				for (const input of inputs) {
-					const receipt = await host.dispatch(input.text, {
+					await session.prompt(input.text, {
+						queueOnly: true,
+						streamingBehavior: "followUp",
 						inputId: input.inputId,
 						sourceCommand: {
 							sessionId: null,
 							commandId: input.inputId,
 							fingerprint: input.text,
-							type: "goal",
+							type: "sendMessage",
 						},
 					});
-					await receipt.completion;
 				}
-				const queued = session.getQueuedInputMessages();
+				let queued = session.getQueuedInputMessages();
 				expect(queued).toHaveLength(inputs.length);
 				for (const [index, input] of inputs.entries()) {
 					expect(queued[index]).toBe(agent.peekFollowUpQueue()[index]);
@@ -1043,7 +1114,7 @@ describe("ZCode session interactions", () => {
 							sessionId: null,
 							commandId: input.inputId,
 							fingerprint: input.text,
-							type: "goal",
+							type: "sendMessage",
 						},
 					});
 				}
@@ -1070,6 +1141,36 @@ describe("ZCode session interactions", () => {
 				expect(session.getQueuedInputMessages()).toEqual(queued);
 				for (const [index, message] of queued.entries())
 					expect(session.getQueuedInputMessages()[index]).toBe(message);
+				if (busy === "streaming") {
+					// Controller execution is immediate; only its objective uses native prompt admission.
+					await expect(host.dispatch("/goal set requires native admission")).rejects.toThrow(
+						"Agent is already processing",
+					);
+					expect(session.getQueuedInputMessages()).toEqual(queued);
+					for (const [index, behavior] of ["steer", "followUp"].entries()) {
+						const text =
+							index === 0 ? "/goal set steering objective" : "/goal-autopilot set unattended objective";
+						const objective = index === 0 ? "steering objective" : "unattended objective";
+						const inputId = `direct-goal-${behavior}`;
+						const receipt = await host.dispatch(text, {
+							inputId,
+							streamingBehavior: behavior as "steer" | "followUp",
+							sourceCommand: { sessionId: null, commandId: inputId, fingerprint: text, type: "goal" },
+						});
+						await receipt.completion;
+						expect(session.getGoalModeState()!.goal.objective).toBe(objective);
+						const nativeQueue = behavior === "steer" ? agent.peekSteeringQueue() : agent.peekFollowUpQueue();
+						expect(nativeQueue).toContainEqual(
+							expect.objectContaining({
+								inputId,
+								content: [{ type: "text", text: objective }],
+								sourceCommand: { sessionId: null, commandId: inputId, fingerprint: text, type: "goal" },
+							}),
+						);
+					}
+					queued = session.getQueuedInputMessages();
+					expect(queued).toHaveLength(inputs.length + 2);
+				}
 				host.cancel();
 				release.resolve();
 				await session.abort({ reason: USER_INTERRUPT_LABEL, preserveQueuedInputs: true });

@@ -1584,7 +1584,6 @@ export class ZCodeSessionManager {
 			>;
 			toolDenylist?: readonly string[];
 		},
-		promoteQueuedCommand?: (inputId: string) => Promise<void>,
 	): Promise<unknown> {
 		const record = this.#require(id);
 		const session = this.#inputSession(record);
@@ -1593,23 +1592,6 @@ export class ZCodeSessionManager {
 		return record.run(async () => {
 			if (payload.execution && (session.isBusyForSnapshot || session.hasPendingAsyncWork())) {
 				throw new Error("Execution materials require an idle session");
-			}
-			if (type === "sendQueuedNow" && session.isStreaming && promoteQueuedCommand) {
-				if (!payload.queueItemId) throw new Error("Queue input identity is required");
-				if (
-					!session
-						.getQueuedInputMessages()
-						.some(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId)
-				)
-					throw new Error("Queue item was already delivered or removed");
-				await promoteQueuedCommand(payload.queueItemId);
-				// A native control-only command may consume its queued input without a model prompt.
-				if (
-					!session
-						.getQueuedInputMessages()
-						.some(message => (message as AgentMessage & { inputId?: string }).inputId === payload.queueItemId)
-				)
-					return { queueItemId: payload.queueItemId };
 			}
 			if (
 				type === "sendQueuedNow" &&

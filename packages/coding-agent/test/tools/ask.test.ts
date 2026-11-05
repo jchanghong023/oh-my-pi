@@ -23,6 +23,7 @@ import type { Api, AssistantMessage, Message, Model } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { GoalModeState } from "../../src/goals/state";
+import { ZCodeInteractions } from "../../src/modes/zcode/interactions";
 
 const autopilotState: GoalModeState = {
 	enabled: true,
@@ -1671,6 +1672,138 @@ describe("askToolRenderer question layout", () => {
 });
 
 describe("AskTool rich ask dialog", () => {
+	it.each<{ name: string; state: GoalModeState | undefined; automatic: boolean }>([
+		{ name: "ordinary chat", state: undefined, automatic: false },
+		{ name: "ordinary Goal", state: { ...autopilotState, autoOrchestrate: undefined }, automatic: false },
+		{ name: "active autopilot", state: autopilotState, automatic: true },
+	])("preserves native ZCode timeout behavior for $name", async ({ state, automatic }) => {
+		const interactions = new ZCodeInteractions(() => {});
+		const abort = vi.fn();
+		const tool = new AskTool(
+			createSession({
+				settings: Settings.isolated({ "ask.timeout": 0.001 }),
+				getGoalModeState: () => state,
+			}),
+		);
+		try {
+			const result = await tool.execute(
+				"zcode-timeout",
+				{
+					questions: [
+						{
+							id: "next",
+							question: "What next?",
+							options: [{ label: "Stop" }, { label: "Continue" }],
+							recommended: 1,
+						},
+					],
+				},
+				undefined,
+				undefined,
+				createContext({ askDialog: interactions.ui.askDialog, abort }),
+			);
+			expect(result.details).toMatchObject({
+				selectedOptions: automatic ? [] : ["Continue"],
+				timedOut: true,
+				customInput: automatic ? "按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总" : undefined,
+			});
+			expect(result.content).toEqual([
+				{
+					type: "text",
+					text: automatic
+						? "Automatic reply after timeout: 按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总"
+						: "User selected: Continue (auto-selected after timeout)",
+				},
+			]);
+			expect(abort).not.toHaveBeenCalled();
+			expect(interactions.pending).toEqual([]);
+		} finally {
+			interactions.dispose();
+		}
+	});
+
+	it("continues every timed-out ZCode autopilot question without inventing recommended answers", async () => {
+		const interactions = new ZCodeInteractions(() => {});
+		const abort = vi.fn();
+		const tool = new AskTool(
+			createSession({
+				settings: Settings.isolated({ "ask.timeout": 0.001 }),
+				getGoalModeState: () => autopilotState,
+			}),
+		);
+		try {
+			const result = await tool.execute(
+				"zcode-multi-timeout",
+				{
+					questions: [
+						{ id: "first", question: "First?", options: [{ label: "A" }] },
+						{ id: "second", question: "Second?", options: [{ label: "B" }], multi: true },
+					],
+				},
+				undefined,
+				undefined,
+				createContext({ askDialog: interactions.ui.askDialog, abort }),
+			);
+			expect(result.details?.results).toEqual([
+				expect.objectContaining({
+					id: "first",
+					selectedOptions: [],
+					timedOut: true,
+					customInput: "按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总",
+				}),
+				expect.objectContaining({
+					id: "second",
+					selectedOptions: [],
+					timedOut: true,
+					customInput: "按原目标自主决定，全程授权你继续调查、实施、验证和修复，完成后再汇总",
+				}),
+			]);
+			expect(abort).not.toHaveBeenCalled();
+			expect(interactions.pending).toEqual([]);
+		} finally {
+			interactions.dispose();
+		}
+	});
+
+	it.each(["cancel", "abort", "decline"] as const)(
+		"does not turn an explicit ZCode %s into an autopilot timeout reply",
+		async action => {
+			const interactions = new ZCodeInteractions(() => {});
+			const abort = vi.fn();
+			const controller = new AbortController();
+			const tool = new AskTool(
+				createSession({
+					settings: Settings.isolated({ "ask.timeout": 30 }),
+					getGoalModeState: () => autopilotState,
+				}),
+			);
+			try {
+				const outcome = tool.execute(
+					`zcode-${action}`,
+					{ questions: [{ id: "next", question: "Continue?", options: [{ label: "Yes" }] }] },
+					controller.signal,
+					undefined,
+					createContext({ askDialog: interactions.ui.askDialog, abort }),
+				);
+				expect(interactions.pending).toHaveLength(1);
+				if (action === "abort") controller.abort();
+				else interactions.resolve(interactions.pending[0]!.interactionId, { action });
+				if (action === "decline") {
+					await expect(outcome).resolves.toMatchObject({
+						details: { selectedOptions: [], customInput: "User declined to answer" },
+					});
+					expect(abort).not.toHaveBeenCalled();
+				} else {
+					await expect(outcome).rejects.toBeInstanceOf(ToolAbortError);
+					expect(abort).toHaveBeenCalledTimes(action === "cancel" ? 1 : 0);
+				}
+				expect(interactions.pending).toEqual([]);
+			} finally {
+				interactions.dispose();
+			}
+		},
+	);
+
 	it.each<{ name: string; state: GoalModeState | undefined; selectedOptions: string[] }>([
 		{ name: "ordinary chat", state: undefined, selectedOptions: ["不提交"] },
 		{ name: "ordinary Goal", state: { ...autopilotState, autoOrchestrate: undefined }, selectedOptions: ["不提交"] },

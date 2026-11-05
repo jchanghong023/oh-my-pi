@@ -4187,6 +4187,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// never revoke a foreground-control grant acquired by a later prompt.
 		const computerControlRevocation =
 			event.type === "agent_end" ? revokeComputerControlForOwner(this.#eval.getKernelOwnerId()) : undefined;
+		// Dequeue preparation can be rolled back before history delivery. Keep initial
+		// Goal provenance on the original input until Agent actually starts delivering it.
+		if (event.type === "message_start") this.#goalAutoOrchestrateInitialSources.delete(event.message);
 		// Only the user's own prompt, steer or follow-up lifts the computer-use stop their Escape set;
 		// synthetic continues and agent-sent messages (subagent budget steers) never do.
 		if (
@@ -8432,9 +8435,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return notice;
 	}
 
-	#takeGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
+	#buildGoalAutoOrchestrateInitialContext(message: AgentMessage): CustomMessage | undefined {
 		const source = this.#goalAutoOrchestrateInitialSources.get(message);
-		this.#goalAutoOrchestrateInitialSources.delete(message);
 		return source?.generation === this.#promptGeneration
 			? this.#buildGoalAutoOrchestrateContext(undefined, source.goalId)
 			: undefined;
@@ -9400,8 +9402,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				// Construct only after async preparation and Agent's delivery ownership check.
 				let notice: CustomMessage | undefined;
 				for (const message of messages) {
-					if (notice) this.#goalAutoOrchestrateInitialSources.delete(message);
-					else notice = this.#takeGoalAutoOrchestrateInitialContext(message);
+					notice = this.#buildGoalAutoOrchestrateInitialContext(message);
+					if (notice) break;
 				}
 				return notice ? [...contextual, notice] : contextual;
 			},
@@ -11575,7 +11577,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	mutateQueuedInput(
 		inputId: string,
 		operation: "edit" | "delete" | "reorder" | "sendNow",
-		options: { text?: string; beforeInputId?: string | null; goalAutoOrchestrateInitialId?: string } = {},
+		options: { text?: string; beforeInputId?: string | null } = {},
 	): boolean {
 		for (const queue of ["steering", "followUp"] as const) {
 			const selected = queue === "steering" ? this.agent.peekSteeringQueue() : this.agent.peekFollowUpQueue();
@@ -11621,10 +11623,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					toolDenylist: (original as AgentMessage & { toolDenylist?: readonly string[] }).toolDenylist,
 				});
 				this.#queuedMessageRawText.set(replacement, options.text);
-				const source =
-					options.goalAutoOrchestrateInitialId !== undefined
-						? { goalId: options.goalAutoOrchestrateInitialId, generation: this.#promptGeneration }
-						: this.#goalAutoOrchestrateInitialSources.get(original);
+				const source = this.#goalAutoOrchestrateInitialSources.get(original);
 				if (source) this.#goalAutoOrchestrateInitialSources.set(replacement, source);
 				remaining.splice(start, 0, ...this.#createMagicKeywordNotices(options.text, source?.goalId), replacement);
 				this.agent.replaceQueue(queue, remaining);

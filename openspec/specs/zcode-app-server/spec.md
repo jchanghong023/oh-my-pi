@@ -188,7 +188,7 @@ OMP MUST 同进程托管 AgentSession，stdout 只输出协议帧；存储成功
 - 队列提升、编辑、fork 继承与冷恢复只读取所在 native branch 的事实，不能按模型名推断卡或给普通历史输入补卡；扁平 queueItem.highspeed 与 user row.highspeed 必须一致。
 - Stop 保留原生队列后，idle 会话的显式 `sendQueuedNow`（含无 execution）必须通过原生 `takeQueuedInput` 仅提取所选输入，并沿既有 prompt admission 真正提交；不能只改为 steering 后返回成功，也不能打开全局 autoDrain／解除 Stop held 来批量释放其他输入。busy 且无 execution 仍沿原生 steer 规则，携带 execution 仍受现有 idle-only guard 与模型材料校验约束。
 - 显式提升继续使用原 `queueItemId` 作为 `inputId`，优先保留原排队输入的 `sourceCommand`；新提升命令的 commandId 只标识控制 ACK，不抢占原输入归属。缺省 `highspeedMeta` 从该 inputId 所在 native branch 的原卡事实继承；只有真实 admission 后才能 ACK 成功或发布 accepted／promoted。admission 前失败须由原生队列 owner 恢复所选输入及原位置，不伪造提升事实。
-- running 中显式 `sendQueuedNow` 提升 Goal 时，必须在同一命令 owner 内先将所选原输入交给既有 Goal slash 控制器，再沿原生 steering 消费其结果；不得等待当前 HTTP stream 结束才设置目标，也不得把 `/goal` 原文当模型正文。普通排队 Goal 仍等原生 dequeue admission 才应用；提升按原 inputId 去重，保留 sourceCommand，未选队列与 Stop held、revision CAS、busy execution 拒绝边界均不改变。不支持实时 steer 的 provider 在当前响应结束前仍真实保留 pending 输入，不提前移除队列或伪造 promoted，也不为达成 UI 超时断言而中断当前执行。
+- `/goal` 与 `/goal-autopilot` 原始命令直接交给目标会话现有 Goal 控制器，包括运行中提交；不强制排队原始命令，不在普通 dequeue 或 `sendQueuedNow` 提升时重新解析／应用 Goal。控制器生成的目标正文沿用原生 prompt／steering admission，尊重调用方 `streamingBehavior`，保留 `inputId`／`sourceCommand` 归属；普通队列提升、未选输入、Stop held、revision CAS、busy execution、维护和 owner 边界不变。不支持实时 steer 时沿用原生缓冲／拒绝事实，不等待 stream 结束后再处理原始管理命令，也不谎称模型已消费。
 - `setHighspeedMetrics` 使用既有 row target 解析到本会话已持久化用户输入，仅对已存在卡快照追加 native annotation；只写调用方提供且经 schema 校验的真实指标，不补造耗时、成功或 TPS。
 - 迟到卡用于下一轮时必须准确标识，普通轮不误标；同一已接受 inputId 的卡在 snapshot、刷新及冷恢复中一致，且不跨会话。无 execution 的 busy queue 必须保留卡；现有 idle-only execution guard 不因卡投影而绕过，busy 且携带 execution 时明确拒绝且不写卡，不得静默丢弃或改写原执行材料。
 - Stop 后显式提升的 userInput 投影保留原 queueItemId／command 归属，卡在快照与刷新恢复后保持一致，未选输入仍 held。admission 前失败必须恢复真实队列状态；revision CAS 拒绝与原生 admission 失败通过真实 ACK 区分，不伪造 accepted。无 execution 的 idle 提升、GUI 的 `modelExecution` 提升与 busy steer／execution 拒绝均按同一 owner 的实际结果投影。
@@ -940,8 +940,8 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 - ZCode 中的 `/knowledge` 路由到共享索引服务，业务合同见[文档索引](../knowledge-index/spec.md)，不在桌面层复制维护逻辑。
 - ZCode 的 `/plan` 路由到原生计划宿主，并以交互投影展示草稿退出确认、计划正文及批准；取消或拒绝不切入执行，批准后交回同一原生计划链路。本次只接入保留当前上下文继续执行，不接入清空上下文、压缩后执行或终端计划编辑器。
 - ZCode 的 `/loop` 由所属会话的命令宿主调用共享解析和执行链，位置间隔契约见[循环间隔](../personal-commands/spec.md)。切换或关闭目标会话后，旧待提交、间隔定时器及条件进程不得再提交；loop 与 goal 宿主不得并行自动提交。
-- ZCode 的 `/goal` 路由到目标会话的同一原生 Goal 控制器，状态由该控制器投影，不维护第二份目标状态；fork 续跑差异见[Goal 续跑边界](../goal-autopilot/spec.md)。
-- app-server 的独立 `pauseGoal`／`resumeGoal` 控制必须即时交给同一原生 Goal 控制器，不得因会话正在执行或压缩而排到运行中目标之后；暂停与恢复由原有 owner 发布事实，恢复继续同一目标，不转为模型正文或重复创建目标。普通目标正文、`/goal set` 与 `/goal-autopilot` 的创建／替换仍走原生输入队列 admission，保留 `inputId`／`sourceCommand`、Stop held 与手动压缩期间的队列行为；控制不绕过会话 generation、取消或 owner 边界。
+- ZCode 的 `/goal` 与 `/goal-autopilot` 直接路由到目标会话同一原生 Goal 控制器，状态由该控制器投影；不维护第二份目标状态、原始 Goal 命令队列或 dequeue／提升解析管线。运行中也先走控制器，其生成的执行正文再遵守既有 prompt／steering admission 与调用方 `streamingBehavior`，不能把 slash 原文当模型正文；fork 续跑差异见[Goal 续跑边界](../goal-autopilot/spec.md)。
+- app-server 的独立 `pauseGoal`／`resumeGoal` 控制同样直接交给该控制器，不因正在执行或压缩而排到运行中目标之后；暂停与恢复由原 owner 发布事实，恢复继续同一目标，不重复创建。普通原生输入队列和用户 follow-up 不变，结果正文保留 `inputId`／`sourceCommand`，仍受 Stop held、busy、手动压缩／维护、会话 generation、取消及 owner 准入约束；直接管理不保证模型立即执行，也不绕过原生拒绝。耗尽预算的 `resume` 保持受限，直到预算调整后不再耗尽。
 - `/goal-autopilot` 的完整模式契约与验收条件统一见 [Goal 自动编排需求](../goal-autopilot/spec.md)；接入沿用上述命令提交、目录、补全、输出与宿主对话机制，不维护第二份业务语义。
 - `/jch-workflowzbatch <任务块软目标> <并发上限> <任务正文>` 复用共享命令处理器，以普通用户消息展开并沿用 workflowz；完整批处理约束见 [JCH 命令](../personal-commands/spec.md)。目录发现、补全与提交沿用 app-server 同一命令链路；正文内部空白及字面量须保留，非法参数只返回用法且不启动模型回合。不增加专属调度、配置写入或程序级并发/禁测拦截。
 - `/team`、`/advisor` 的开关/状态/记录、魔法关键词命令、技能与 `/compact` 复用已有执行路径。`/advisor configure` 的终端编辑器仍明确报告仅 TUI 可用，role 保存继续使用现有配置接口。
@@ -959,6 +959,16 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 
 - **WHEN** 用户从 ZCode 调用原生命令或技能
 - **THEN** 走同一 slash 注册与处理链，保留参数、取消和会话身份
+
+#### Scenario: Goal 管理直达控制器且结果遵守原生准入
+
+- **WHEN** 用户在 idle、busy、保留队列的 Stop 或手动维护期间提交 `/goal`／`/goal-autopilot`，或调用独立暂停／恢复控制
+- **THEN** 原始命令直接交同一 Goal 控制器，未被强制存入输入队列等待 dequeue／提升解析；执行正文按真实 prompt／steering admission 受理或拒绝，尊重 `streamingBehavior` 并保留 `inputId`／`sourceCommand`，不解除 Stop held、不跨 owner／generation，普通 follow-up 与未选队列不变
+
+#### Scenario: Goal 修复在桌面原生链路可观察
+
+- **WHEN** 同一 journal 切换兄弟分支、无人值守初始正文排队后保留 Stop 再显式发送、恢复耗尽预算的目标、取消首次入场或等待 `ask` 超时
+- **THEN** 状态、首次完整通知、预算限制、实际工具回滚及超时答复／取消分别满足 [Goal 自动编排验收条件](../goal-autopilot/spec.md)；真实取消／abort 不转换为自主答复，既有权限审批不自动批准，历史通过证据不得代替当前链路验收
 
 ### Requirement: 命令目录与补全契约
 

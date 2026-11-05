@@ -3,7 +3,6 @@ import { cfgDisabledExtensions, cfgSkills } from "../../extensibility/settings";
 import { withActiveSettings } from "../../config/settings-context";
 import { clearPluginRootsAndCaches, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
 import { getSkillSlashCommandName, loadSkills, parseSkillInvocation } from "../../extensibility/skills";
-import { parseGoalSubcommand } from "../../goals/state";
 import { SKILL_PROMPT_MESSAGE_TYPE, type CustomMessage } from "../../session/messages";
 import type { ExtensionUIContext } from "../../extensibility/extensions/types";
 import type { AgentSession } from "../../session/agent-session";
@@ -70,6 +69,8 @@ export interface ZCodeCommandReceipt {
 	completion: Promise<void>;
 }
 
+const sessionCommandOwners = new WeakMap<AgentSession, ZCodeCommandHost>();
+
 /** Workspace capability facts without opening or leasing a conversation journal. */
 export async function workspaceCatalog(cwd: string, settings: Settings) {
 	return withActiveSettings(settings, async () => {
@@ -103,9 +104,9 @@ export class ZCodeCommandHost {
 	readonly #roles: ModelRoleService;
 	readonly #operations = new Set<AbortController>();
 	readonly #planTasks = new Set<Promise<void>>();
-	readonly #goalPromotions = new Map<string, Promise<void>>();
 	readonly #unsubscribe: () => void;
-	readonly #unsubscribeQueue: () => void;
+	#sessionChanges = 0;
+	#transitionReconcilePending = false;
 	#disposed = false;
 	#initialized: Promise<void> | undefined;
 	#nativeCommands?: ZCodeCommandHost;
@@ -177,17 +178,13 @@ export class ZCodeCommandHost {
 			},
 			reset: async current => {
 				if (this.#disposed || !current()) return false;
-				await this.#goal.beginSessionChange();
-				await this.#plan.beginSessionChange();
-				let changed = false;
-				try {
-					// Reset model context on the same authoritative journal; never remap the Host's session identity.
-					if (current()) changed = (await session.resetSessionContext()) !== undefined;
-					return changed;
-				} finally {
-					await this.#plan.endSessionChange();
-					await this.#goal.endSessionChange({ detachedRun: changed });
-				}
+				const result = await this.#wrapSessionChange(
+					async () => ({
+						cancelled: !current() || (await session.resetSessionContext()) === undefined,
+					}),
+					{ detachesRun: true },
+				);
+				return !result.cancelled;
 			},
 			onContinuationDropped: () => this.#goal.refresh(),
 			continuationAllowed: () => !this.#disposed && !this.#plan.reviewPending,
@@ -218,9 +215,6 @@ export class ZCodeCommandHost {
 				this.#plan.observe(event);
 			}),
 		);
-		this.#unsubscribeQueue = session.agent.addBeforeQueuedMessageDequeueHook(signal =>
-			this.#run(() => this.#promoteGoalCommand(signal)),
-		);
 	}
 	/** Native SessionManager is the sole cwd owner, including relocation rollback. */
 	get cwd(): string {
@@ -240,71 +234,106 @@ export class ZCodeCommandHost {
 			if (!(error instanceof Error && error.name === "AbortError")) this.#output(String(error));
 		});
 	}
-	/** Explicit promotion shares native Goal dispatch with the dequeue hook, without draining siblings. */
-	promoteQueuedGoal(inputId: string): Promise<void> {
-		return this.#run(() => this.#promoteGoalCommand(undefined, inputId));
-	}
-	async #promoteGoalCommand(signal?: AbortSignal, inputId?: string): Promise<void> {
-		const steering = this.session.agent.peekSteeringQueue();
-		const candidates = inputId
-			? this.session.getQueuedInputMessages().filter(message => "inputId" in message && message.inputId === inputId)
-			: steering.length
-				? steering
-				: this.session.getQueuedInputMessages().slice(0, 1);
-		for (const message of candidates) {
-			if (this.#disposed || signal?.aborted) return;
-			if (message.role !== "user" || !message.inputId) continue;
-			const text =
-				typeof message.content === "string"
-					? message.content
-					: message.content
-							.filter(block => block.type === "text")
-							.map(block => block.text)
-							.join("\n");
-			if (!/^\/goal(?:-autopilot)?(?:\s|$)/.test(text)) continue;
-			// Keep the input in its owner's queue throughout asynchronous controller work.
-			// Stop can therefore hold it even while the shared controller is awaiting a hook.
-			let pending = this.#goalPromotions.get(message.inputId);
-			if (!pending) {
-				pending = (async () => {
-					const receipt = await this.#dispatch(
-						text,
-						{
-							inputId: message.inputId,
-							inputClientId: message.inputClientId,
-							sourceCommand: message.sourceCommand,
-							attachments: message.attachments,
-							toolDenylist: message.toolDenylist,
-						},
-						true,
-					);
-					await receipt.completion;
-				})();
-				this.#goalPromotions.set(message.inputId, pending);
-			}
-			try {
-				await pending;
-			} finally {
-				if (this.#goalPromotions.get(message.inputId) === pending) this.#goalPromotions.delete(message.inputId);
-			}
-		}
-	}
 	initialize(): Promise<void> {
 		return (this.#initialized ??= this.#run(async () => {
 			// actor 的 SDK 已绑定父 owner；重新绑定本地 interactions 会把 ask 错投到 actor 新任务。
 			if (!this.options.uiContext)
 				this.options.setToolUIContext?.(this.interactions.ui, true, this.interactions.createSubagentUI);
+			sessionCommandOwners.set(this.session, this);
+			this.session.setSessionSwitchReconciler(() =>
+				this.#run(async () => {
+					if (this.#disposed) return;
+					if (this.#sessionChanges > 0) {
+						this.#transitionReconcilePending = true;
+						return;
+					}
+					await this.#reconcileModes(true);
+				}),
+			);
 			await initializeExtensions(this.session, {
 				mode: "rpc",
 				uiContext: this.options.uiContext ?? this.interactions.ui,
 				reportSendError: (_action, error) => this.#output(error.message),
 				reportRuntimeError: error => this.#output(error.error),
 				onShutdown: () => this.cancel(),
+				wrapSessionChange: (change, options) => this.#wrapSessionChange(change, options),
 			});
-			await this.#goal.reconcile();
-			await this.#goal.settled();
-			await this.#plan.reconcile();
+			await this.#reconcileModes(false);
 		}));
+	}
+	#goalBranchSelected(): boolean {
+		const mode = this.session.sessionManager.buildSessionContext().mode;
+		return mode === "goal" || mode === "goal_paused";
+	}
+	async #reconcileModes(preserveActiveGoal: boolean): Promise<void> {
+		// Tear down the source mode's tool/model presentation before entering the
+		// destination mode, so one host cannot overwrite the other's restored tools.
+		if (this.#goalBranchSelected()) {
+			await this.#plan.reconcile({ preserveRestoredModel: preserveActiveGoal });
+			await this.#goal.reconcile({ preserveActiveGoal });
+		} else {
+			await this.#goal.reconcile({ preserveActiveGoal });
+			await this.#plan.reconcile({ preserveRestoredModel: preserveActiveGoal });
+		}
+	}
+	async #wrapSessionChange<T extends { cancelled: boolean }>(
+		change: () => Promise<T>,
+		options: { detachesRun: boolean },
+	): Promise<T> {
+		if (this.#disposed) throw new Error("Session command host is closed");
+		const sessionId = this.session.sessionManager.getSessionId();
+		const leafId = this.session.sessionManager.getLeafId();
+		this.#sessionChanges++;
+		let goalStarted = false;
+		let planStarted = false;
+		let result: T | undefined;
+		try {
+			await this.#goal.beginSessionChange();
+			goalStarted = true;
+			await this.#plan.beginSessionChange(options);
+			planStarted = true;
+			result = await change();
+			return result;
+		} finally {
+			const endGoal = async () => {
+				if (!goalStarted) return;
+				try {
+					// GoalHost restores changed session ids itself; same-file navigation
+					// must adopt its selected branch before releasing continuations too.
+					if (
+						this.#sessionChanges === 1 &&
+						sessionId === this.session.sessionManager.getSessionId() &&
+						(this.#transitionReconcilePending || leafId !== this.session.sessionManager.getLeafId())
+					)
+						await this.#goal.reconcile({ preserveActiveGoal: true });
+				} finally {
+					await this.#goal.endSessionChange({
+						detachedRun: options.detachesRun && result?.cancelled !== true,
+					});
+				}
+			};
+			const endPlan = async () => {
+				if (planStarted) await this.#plan.endSessionChange(options);
+			};
+			try {
+				if (this.#goalBranchSelected()) {
+					try {
+						await endPlan();
+					} finally {
+						await endGoal();
+					}
+				} else {
+					try {
+						await endGoal();
+					} finally {
+						await endPlan();
+					}
+				}
+			} finally {
+				this.#sessionChanges--;
+				if (this.#sessionChanges === 0) this.#transitionReconcilePending = false;
+			}
+		}
 	}
 	async catalog() {
 		const catalog = await this.#run(() => this.#catalog.buildCatalog(this.session));
@@ -416,7 +445,7 @@ export class ZCodeCommandHost {
 			},
 		);
 	}
-	async #dispatch(text: string, options: ZCodeDispatchOptions, promoting = false): Promise<ZCodeCommandReceipt> {
+	async #dispatch(text: string, options: ZCodeDispatchOptions): Promise<ZCodeCommandReceipt> {
 		if (this.#disposed) throw new Error("Session command host is closed");
 		const parsed = parseSlashCommand(text);
 		const native = peekSpecDrivenController(this.session.sessionManager);
@@ -487,26 +516,6 @@ export class ZCodeCommandHost {
 			return { accepted: true, completion: Promise.resolve() };
 		}
 		const command = parseSlashCommand(text);
-		const goalSubcommand =
-			resolved.kind === "builtin" && command && (resolved.name === "goal" || resolved.name === "goal-autopilot")
-				? parseGoalSubcommand(command.args).sub
-				: undefined;
-		if (
-			!promoting &&
-			(this.session.isStreaming || this.session.isCompacting) &&
-			goalSubcommand !== "pause" &&
-			goalSubcommand !== "resume" &&
-			/^\/goal(?:-autopilot)?(?:\s|$)/.test(text)
-		) {
-			// 创建／替换仍由原生队列接纳；pause/resume 若排在运行中目标之后便无法及时控制。
-			// 控制继续走下方同一控制器及 generation／取消边界，不另建目标状态。
-			await this.#submit(text, {
-				...options,
-				queueOnly: true,
-				streamingBehavior: options.streamingBehavior ?? "followUp",
-			});
-			return { accepted: true, completion: Promise.resolve() };
-		}
 		const operation = new AbortController();
 		const generation = this.session.sessionGeneration;
 		this.#operations.add(operation);
@@ -629,25 +638,13 @@ export class ZCodeCommandHost {
 				}
 				if (current() && result && "prompt" in result) {
 					this.#loop.capturePrompt(result.prompt);
-					if (promoting && options.inputId) {
-						if (
-							!this.session.mutateQueuedInput(options.inputId, "edit", {
-								text: result.prompt,
-								goalAutoOrchestrateInitialId: result.goalAutoOrchestrateInitialId,
-							})
-						)
-							throw new Error("Goal input was removed before native dequeue");
-						admit();
-					} else {
-						await this.#submit(
-							result.prompt,
-							{ ...options, goalAutoOrchestrateInitialId: result.goalAutoOrchestrateInitialId },
-							admit,
-							rejectAdmission,
-						);
-					}
+					await this.#submit(
+						result.prompt,
+						{ ...options, goalAutoOrchestrateInitialId: result.goalAutoOrchestrateInitialId },
+						admit,
+						rejectAdmission,
+					);
 				} else if (current()) {
-					if (promoting && options.inputId) this.session.mutateQueuedInput(options.inputId, "delete");
 					admit();
 				}
 			} catch (error) {
@@ -744,7 +741,10 @@ export class ZCodeCommandHost {
 			this.#loop.clear();
 			this.interactions.dispose();
 			this.#unsubscribe();
-			this.#unsubscribeQueue();
+			if (sessionCommandOwners.get(this.session) === this) {
+				this.session.setSessionSwitchReconciler(null);
+				sessionCommandOwners.delete(this.session);
+			}
 		});
 	}
 }

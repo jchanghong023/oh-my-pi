@@ -228,7 +228,7 @@ describe("ZCode direct session runtime controls", () => {
 			directory.removeSync();
 		}
 	});
-	it("admits busy Goal commands into the native queue and stop holds their original identities", async () => {
+	it("dispatches busy Goal intent immediately and Stop holds only its native objective input", async () => {
 		const directory = TempDir.createSync("zcode-held-goal-");
 		const started = Promise.withResolvers<void>();
 		const wait: AgentTool = {
@@ -261,7 +261,7 @@ describe("ZCode direct session runtime controls", () => {
 				streamFn: mock.stream,
 			}),
 			sessionManager: SessionManager.inMemory(directory.path()),
-			settings: Settings.isolated({ "compaction.enabled": false }),
+			settings: Settings.isolated({ "compaction.enabled": false, "goal.continuationModes": [] }),
 			modelRegistry: new ModelRegistry(auth, directory.join("models.yml")),
 			toolRegistry: new Map<string, AgentTool>([
 				[wait.name, wait],
@@ -285,9 +285,13 @@ describe("ZCode direct session runtime controls", () => {
 				},
 			});
 			await receipt.completion;
-			expect(session.getGoalModeState()).toBeUndefined();
+			expect(session.isStreaming).toBe(true);
+			expect(session.getGoalModeState()?.goal).toMatchObject({
+				status: "active",
+				objective: "deliver all files",
+			});
 			expect(projection.snapshot().queue.items).toMatchObject([
-				{ queueItemId: "goal-command", kind: "sendGoalCommand", text: "/goal deliver all files" },
+				{ queueItemId: "goal-command", kind: "sendGoalCommand", text: "deliver all files" },
 			]);
 			host.cancel();
 			await session.abort({ preserveQueuedInputs: true });
@@ -297,8 +301,9 @@ describe("ZCode direct session runtime controls", () => {
 				queue: { autoDrain: false, items: [{ queueItemId: "goal-command", kind: "sendGoalCommand" }] },
 				inputRouting: { mode: "choice" },
 			});
-			expect(session.mutateQueuedInput("goal-command", "edit", { text: "/goal corrected objective" })).toBe(true);
-			expect(session.getQueuedMessages().followUp).toEqual(["/goal corrected objective"]);
+			expect(session.getGoalModeState()?.goal.status).toBe("paused");
+			expect(session.mutateQueuedInput("goal-command", "edit", { text: "corrected follow-up" })).toBe(true);
+			expect(session.getQueuedMessages().followUp).toEqual(["corrected follow-up"]);
 			const promoted = Promise.withResolvers<void>();
 			const unsubscribe = session.subscribe(event => {
 				if (
@@ -312,7 +317,17 @@ describe("ZCode direct session runtime controls", () => {
 			await promoted.promise;
 			await session.waitForIdle();
 			unsubscribe();
-			expect(session.getGoalModeState()?.goal).toMatchObject({ status: "active", objective: "corrected objective" });
+			expect(session.getGoalModeState()?.goal).toMatchObject({ status: "paused", objective: "deliver all files" });
+			const delivered = session.messages.find(
+				message => message.role === "user" && message.inputId === "goal-command",
+			);
+			if (!delivered || delivered.role !== "user") throw new Error("Goal objective was not delivered as user input");
+			expect(delivered).toMatchObject({
+				inputId: "goal-command",
+				inputClientId: "desktop",
+				sourceCommand: { commandId: "goal-command", type: "sendGoalCommand" },
+			});
+			expect(delivered.content).toEqual([{ type: "text", text: "corrected follow-up" }]);
 			expect(session.getQueuedInputMessages()).toEqual([]);
 			expect(projection.snapshot().queue.items).toHaveLength(0);
 		} finally {
@@ -323,4 +338,76 @@ describe("ZCode direct session runtime controls", () => {
 			directory.removeSync();
 		}
 	});
+	for (const mode of ["goal", "goal-autopilot"] as const) {
+		it(`restores ${mode} from the selected branch after native edit`, async () => {
+			const directory = TempDir.createSync("zcode-goal-rewind-");
+			const model = getBundledModel("ascend", "qwen3.8-flash-next")!;
+			const mock = createMockModel({ handler: { content: ["done"] } });
+			const auth = createInMemoryAuthStorage();
+			auth.keys.setRuntime(model.provider, "fixture-control-key");
+			const goalTool = new GoalTool({ getGoalRuntime: () => session.goalRuntime } as ToolSession);
+			const session = new AgentSession({
+				agent: new Agent({
+					initialState: { model, systemPrompt: ["test"], tools: [] },
+					getApiKey: () => "test-key",
+					streamFn: mock.stream,
+				}),
+				sessionManager: SessionManager.inMemory(directory.path()),
+				settings: Settings.isolated({ "compaction.enabled": false, "goal.continuationModes": [] }),
+				modelRegistry: new ModelRegistry(auth, directory.join("models.yml")),
+				toolRegistry: new Map<string, AgentTool>([[goalTool.name, goalTool as unknown as AgentTool]]),
+			});
+			const host = new ZCodeCommandHost(session, directory.path(), () => {});
+			try {
+				await (
+					await host.dispatch("earlier normal turn")
+				).completion;
+				await session.waitForIdle();
+				const earlier = session.sessionManager
+					.getBranch()
+					.find(entry => entry.type === "message" && entry.message.role === "user");
+				if (!earlier) throw new Error("Missing earlier user entry");
+				await (
+					await host.dispatch(`/${mode} objective A`)
+				).completion;
+				await session.waitForIdle();
+				const goalLeaf = session.sessionManager.getLeafId();
+				if (!goalLeaf) throw new Error("Missing Goal branch leaf");
+				const targetId = session.getGoalModeState()?.goal.id;
+				expect(session.getGoalModeState()?.autoOrchestrate).toBe(mode === "goal-autopilot" ? true : undefined);
+				await session.promptEditedUserQuery(earlier.id, "edited earlier turn");
+				await session.waitForIdle();
+				expect(session.sessionManager.buildSessionContext().mode).toBe("none");
+				expect(session.getGoalModeState()).toBeUndefined();
+				expect(session.getEnabledToolNames()).not.toContain("goal");
+				await session.navigateTree(goalLeaf, { summarize: false });
+				expect(session.getGoalModeState()?.goal).toMatchObject({
+					id: targetId,
+					objective: "objective A",
+					status: "active",
+				});
+				expect(session.getGoalModeState()?.autoOrchestrate).toBe(mode === "goal-autopilot" ? true : undefined);
+				expect(session.getEnabledToolNames()).toContain("goal");
+				const otherMode = mode === "goal-autopilot" ? "goal" : "goal-autopilot";
+				await (
+					await host.dispatch(`/${otherMode} set objective B`)
+				).completion;
+				await session.waitForIdle();
+				expect(session.getGoalModeState()?.autoOrchestrate).toBe(otherMode === "goal-autopilot" ? true : undefined);
+				await session.navigateTree(goalLeaf, { summarize: false });
+				expect(session.getGoalModeState()?.goal.id).toBe(targetId);
+				expect(session.getGoalModeState()?.autoOrchestrate).toBe(mode === "goal-autopilot" ? true : undefined);
+				await session.goalRuntime.dropGoal();
+				host.dispose();
+				// Disposed hosts release the native callback instead of restoring an old owner.
+				await session.navigateTree(goalLeaf, { summarize: false });
+				expect(session.getGoalModeState()).toBeUndefined();
+			} finally {
+				host.dispose();
+				await session.dispose();
+				auth.close();
+				directory.removeSync();
+			}
+		});
+	}
 });

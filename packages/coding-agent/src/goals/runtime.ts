@@ -545,7 +545,10 @@ export class GoalRuntime {
 			state.enabled = true;
 			state.mode = "active";
 			state.reason = undefined;
-			state.goal.status = "active";
+			state.goal.status =
+				state.goal.tokenBudget !== undefined && state.goal.tokensUsed >= state.goal.tokenBudget
+					? "budget-limited"
+					: "active";
 			state.goal.updatedAt = this.#now();
 			this.#budgetReportedFor = undefined;
 			this.#markActiveAccounting(state.goal);

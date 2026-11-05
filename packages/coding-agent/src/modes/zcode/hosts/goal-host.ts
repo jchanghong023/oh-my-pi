@@ -78,6 +78,8 @@ export class GoalHost {
 	readonly #session: GoalHostSession;
 	/** Active tool set before goal mode added `goal`; restored when the goal ends. */
 	#previousTools: string[] | undefined;
+	/** A fresh entry's baseline while tool activation has not yet created a goal. */
+	#preparingTools: { transcript: string; tools: string[] } | undefined;
 	/** Continuation turns submitted whose terminal `agent_end` has not arrived. */
 	#pendingContinuationTurns = 0;
 	readonly #continuationGuard = new GoalContinuationGuard();
@@ -556,15 +558,41 @@ export class GoalHost {
 				return (
 					ownerCurrent() &&
 					active?.enabled === true &&
-					active.goal.status === "active" &&
+					(active.goal.status === "active" || active.goal.status === "budget-limited") &&
 					active.goal.id === state.goal.id
 				);
+			};
+			const previousToolsSnapshot = this.#previousTools;
+			const previousTools =
+				previousToolsSnapshot ??
+				(this.#preparingTools?.transcript === transcript
+					? this.#preparingTools.tools
+					: this.#session.getEnabledToolNames());
+			const preparation = { transcript, tools: previousTools };
+			const rollbackPreparedTools = async (): Promise<void> => {
+				const active = this.#session.getGoalModeState();
+				if (
+					!prepareTools ||
+					runtimeStarted ||
+					previousState?.enabled ||
+					transcript !== this.#session.sessionManager.getSessionId() ||
+					this.#preparingTools !== preparation ||
+					(this.#previousTools !== previousToolsSnapshot && this.#previousTools !== previousTools) ||
+					active?.goal.id !== previousState?.goal.id ||
+					active?.goal.status !== previousState?.goal.status ||
+					active?.enabled !== previousState?.enabled
+				)
+					return;
+				// Only undo this entry's tool preparation, never a newer goal or
+				// destination session. Runtime state and accounting are not rewound.
+				this.#previousTools = previousToolsSnapshot;
+				this.#preparingTools = undefined;
+				await this.#session.setActiveToolsByName(previousTools);
 			};
 			try {
 				// The pre-goal tool set is captured once, when this controller first adds `goal`
 				// (a reattached paused goal already holds it). A `goal` tool the host enabled
 				// before the goal stays enabled afterwards.
-				const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
 				const activateTools = async (): Promise<void> => {
 					stage = "activate_tools";
 					stageStarted = performance.now();
@@ -572,16 +600,17 @@ export class GoalHost {
 					toolsActivated = true;
 				};
 				// Autopilot must not persist a new objective or mode until its tools
-				// are ready. Tool activation owns its rollback; never rewind GoalRuntime
-				// over a concurrent pause, abort, replacement, or session change.
+				// are ready. Capture its baseline before activation so a concurrent
+				// goal cannot adopt the temporary tool set as its original tools.
 				if (prepareTools) {
+					this.#preparingTools = preparation;
 					await activateTools();
 					if (!entryCurrent()) {
+						await rollbackPreparedTools();
 						this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: true });
 						return;
 					}
-					// The runtime emits goal_updated while committing. Its observer must
-					// retain the pre-entry tools, not recapture the newly enabled `goal`.
+					// Runtime observers must retain the baseline, not the newly enabled `goal`.
 					this.#previousTools = previousTools;
 					previousToolsCaptured = true;
 				}
@@ -589,6 +618,7 @@ export class GoalHost {
 				stageStarted = performance.now();
 				const state = await start(prepareTools ? entryCurrent : undefined);
 				if (!state) {
+					await rollbackPreparedTools();
 					this.#log("goal_enter_completed", "enter", "cancelled", { ...fields(), partial: toolsActivated });
 					return;
 				}
@@ -610,7 +640,7 @@ export class GoalHost {
 				stage = "reset_continuation";
 				stageStarted = performance.now();
 				this.#resetContinuation();
-				if (this.#session.isStreaming) {
+				if (this.#session.isStreaming && state.goal.status === "active") {
 					stage = "send_context";
 					stageStarted = performance.now();
 					await this.#session.sendGoalModeContext({ deliverAs: "steer" });
@@ -626,6 +656,9 @@ export class GoalHost {
 				this.#log("goal_enter_completed", "enter", "enabled", { ...fields(), partial: false });
 				return state;
 			} catch (error) {
+				await rollbackPreparedTools().catch(rollbackError =>
+					this.#reportError(rollbackError, "restore_prepared_tools", {}, "error"),
+				);
 				const diagnostic = fields();
 				this.#reportError(
 					error,
@@ -638,6 +671,8 @@ export class GoalHost {
 					"error",
 				);
 				throw error;
+			} finally {
+				if (this.#preparingTools === preparation) this.#preparingTools = undefined;
 			}
 		});
 	}
@@ -831,7 +866,10 @@ export class GoalHost {
 				this.#queueExit(() => this.#exit());
 			} else if (event.state?.enabled && this.#previousTools === undefined) {
 				// Created by the agent's `goal` tool rather than this controller.
-				this.#previousTools = this.#session.getEnabledToolNames();
+				this.#previousTools =
+					this.#preparingTools?.transcript === this.#session.sessionManager.getSessionId()
+						? this.#preparingTools.tools
+						: this.#session.getEnabledToolNames();
 			}
 			return;
 		}

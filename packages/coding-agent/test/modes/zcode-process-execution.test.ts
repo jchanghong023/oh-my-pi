@@ -270,8 +270,8 @@ describe("ZCode actual public app-server process", () => {
 		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
 
-	test("running queued Goal promotion dispatches native intent before the current stream ends", async () => {
-		await using root = await TempDir.create("@zcode-promoted-goal-");
+	test("busy Goal dispatch creates its target immediately and queues only the objective for native steering", async () => {
+		await using root = await TempDir.create("@zcode-direct-goal-");
 		await using config = await fixture(root);
 		await using peer = new ProcessPeer(config.cwdA, config.env);
 		await peer.ready();
@@ -279,7 +279,7 @@ describe("ZCode actual public app-server process", () => {
 		await subscribe(peer, id);
 		const snapshot = async () => {
 			const subscription = await subscribe(peer, id, "web-remote-replayable");
-			if (!isRecord(subscription)) throw new Error("Missing promoted Goal subscription");
+			if (!isRecord(subscription)) throw new Error("Missing direct Goal subscription");
 			const ack = subscribeAckSchema.parse(subscription.ack);
 			const assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
 			for (;;) {
@@ -327,7 +327,9 @@ describe("ZCode actual public app-server process", () => {
 			),
 		).toMatchObject({ status: "accepted", result: { delivery: "queue", inputId } });
 		const queued = await snapshot();
-		expect(queued.goal).toBeNull();
+		expect(queued.goal).toMatchObject({ objective, status: "active" });
+		const targetId = queued.goal?.targetId;
+		expect(queued.queue.items.find(item => item.queueItemId === inputId)?.text).toBe(objective);
 		expect(queued.queue.items.map(item => item.queueItemId)).toEqual([siblingId, inputId]);
 		expect(
 			await command(peer, id, "sendQueuedNow", {
@@ -336,7 +338,7 @@ describe("ZCode actual public app-server process", () => {
 				modelExecution: { selectionScope: "execution" },
 			}),
 		).toMatchObject({ status: "failed" });
-		expect((await snapshot()).goal).toBeNull();
+		expect((await snapshot()).goal?.targetId).toBe(targetId);
 		const request = {
 			commandId: promotionId,
 			clientId: "public-process-test",
@@ -346,11 +348,11 @@ describe("ZCode actual public app-server process", () => {
 			baseRevision: (await snapshot()).revision,
 			issuedAt: Date.now(),
 		};
-		// Replay the identical envelope: command idempotency cannot replace the native target twice.
+		// The queue contains an ordinary objective now; steering/replay must not create another Goal.
 		expect(await peer.request("v4/command", request)).toMatchObject({ status: "accepted" });
 		const promoted = await snapshot();
 		expect(promoted.goal).toMatchObject({ objective, status: "active" });
-		const targetId = promoted.goal?.targetId;
+		expect(promoted.goal?.targetId).toBe(targetId);
 		const replay = await peer.request("v4/command", request);
 		expect(replay).toMatchObject({ status: expect.stringMatching(/^(?:accepted|duplicate)$/) });
 		expect((await snapshot()).goal?.targetId).toBe(targetId);
@@ -377,7 +379,7 @@ describe("ZCode actual public app-server process", () => {
 		expect(await peer.eof()).toBe(0);
 		const files = await fs.readdir(path.join(config.agentDir, "sessions"), { recursive: true });
 		const journalFile = files.find(file => file.endsWith(`_${id}.jsonl`));
-		if (!journalFile) throw new Error("Missing promoted Goal journal");
+		if (!journalFile) throw new Error("Missing direct Goal journal");
 		const entries = (await fs.readFile(path.join(config.agentDir, "sessions", journalFile), "utf8"))
 			.trim()
 			.split("\n")

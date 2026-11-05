@@ -543,7 +543,7 @@ describe("AgentSession queued steer delivery", () => {
 		expect(mock.calls.length).toBeGreaterThan(1);
 	});
 
-	it("admits a Goal input to the canonical queue before manual compaction cleanup", async () => {
+	it("admits an explicitly queued input before manual compaction cleanup", async () => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		const { session, mock } = await createSession(
@@ -560,9 +560,9 @@ describe("AgentSession queued steer delivery", () => {
 			expect(session.isCompacting).toBe(true);
 			expect(session.isStreaming).toBe(false);
 			let admitted = false;
-			await session.prompt("queued objective", {
-				inputId: "goal-during-compact",
-				sourceCommand: { sessionId: null, commandId: "goal", fingerprint: "goal", type: "goal" },
+			await session.prompt("queued input", {
+				inputId: "input-during-compact",
+				sourceCommand: { sessionId: null, commandId: "input", fingerprint: "input", type: "sendText" },
 				queueOnly: true,
 				streamingBehavior: "followUp",
 				onPromptAdmitted: () => {
@@ -573,7 +573,7 @@ describe("AgentSession queued steer delivery", () => {
 			const queued = session.getQueuedInputMessages();
 			expect(queued).toHaveLength(1);
 			expect(queued[0]).toBe(session.agent.peekFollowUpQueue().at(-1)!);
-			expect("inputId" in queued[0] && queued[0].inputId).toBe("goal-during-compact");
+			expect("inputId" in queued[0] && queued[0].inputId).toBe("input-during-compact");
 			expect(mock.calls).toHaveLength(2);
 			release.resolve();
 			expect(await compaction).toBeInstanceOf(Error);
@@ -582,7 +582,7 @@ describe("AgentSession queued steer delivery", () => {
 			session.setQueueAutoDrain(true);
 			await session.waitForIdle();
 			expect(
-				session.messages.find(message => message.role === "user" && message.inputId === "goal-during-compact"),
+				session.messages.find(message => message.role === "user" && message.inputId === "input-during-compact"),
 			).toBe(queued[0]);
 			expect(session.getQueuedInputMessages()).toEqual([]);
 		} finally {
@@ -595,10 +595,12 @@ describe("AgentSession queued steer delivery", () => {
 		const { session, mock } = await createSession([{ content: ["goal answer"] }, { content: ["next answer"] }]);
 		session.setQueueAutoDrain(false);
 		session.agent.setFollowUpMode("one-at-a-time");
+		const state = await session.goalRuntime.createGoal({ objective: "rewritten objective", autoOrchestrate: true });
 		await session.prompt("original objective", {
 			inputId: "goal-original",
 			queueOnly: true,
 			streamingBehavior: "followUp",
+			goalAutoOrchestrateInitialId: state.goal.id,
 		});
 		await session.prompt("later input", {
 			inputId: "goal-later",
@@ -606,14 +608,7 @@ describe("AgentSession queued steer delivery", () => {
 			streamingBehavior: "followUp",
 		});
 		const original = session.getQueuedInputMessages()[0];
-		await session.goalRuntime.createGoal({ objective: "rewritten objective", autoOrchestrate: true });
-		const goalId = session.getGoalModeState()!.goal.id;
-		expect(
-			session.mutateQueuedInput("goal-original", "edit", {
-				text: "rewritten objective",
-				goalAutoOrchestrateInitialId: goalId,
-			}),
-		).toBe(true);
+		expect(session.mutateQueuedInput("goal-original", "edit", { text: "rewritten objective" })).toBe(true);
 		// Further ordinary edits must retain the initial command's provenance as well.
 		expect(session.mutateQueuedInput("goal-original", "edit", { text: "final objective" })).toBe(true);
 		const queued = session.getQueuedInputMessages();

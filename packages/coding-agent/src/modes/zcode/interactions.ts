@@ -1,9 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { theme } from "@oh-my-pi/pi-tui/theme";
-import type {
-	ExtensionApprovalAnswer,
-	ExtensionUIDialogOptions,
-	ExtensionUIContext,
+import {
+	type ExtensionApprovalAnswer,
+	type ExtensionUIDialogOptions,
+	type ExtensionUIContext,
+	timedOutAskDialogResult,
 } from "../../extensibility/extensions/types";
 import type { ToolSession } from "../../tools";
 import { approvalOnceLabel } from "../../tools/approval";
@@ -151,6 +152,7 @@ export class ZCodeInteractions {
 			editor: (title, prefill, options) => input(title, prefill, options),
 			askDialog: async (questions, options) => {
 				if (questions.length === 0) return { kind: "submit", results: [] };
+				let timedOut = false;
 				const answer = await this.request(
 					{
 						kind: "userInput",
@@ -171,8 +173,15 @@ export class ZCodeInteractions {
 						currentQuestionIndex: 0,
 						options: questions[0]!.options.map(item => ({ optionId: item.label, label: item.label })),
 					},
-					options,
+					{
+						...options,
+						onTimeout: () => {
+							timedOut = true;
+							options?.onTimeout?.();
+						},
+					},
 				);
+				if (timedOut) return timedOutAskDialogResult(questions);
 				if (answer === undefined) return undefined;
 				// decline(用户拒绝,如 Escape dismiss)与取消分开(用户裁定,findings B):
 				// tools/ask.ts 只认 submit/chat 结果,这里以显式 customInput 产出 declined

@@ -236,6 +236,58 @@ describe("goal runtime", () => {
 		}
 	});
 
+	it.each([true, false])(
+		"keeps exhausted budgets limited across pause/resume without duplicate steering (autopilot=%s)",
+		async autoOrchestrate => {
+			for (const restoredBudget of [20, undefined]) {
+				const harness = createHarness();
+				const original = await harness.runtime.createGoal({
+					objective: "Finish only within the approved budget",
+					tokenBudget: 10,
+					autoOrchestrate,
+				});
+				harness.runtime.onTurnStart("turn-1", createUsage());
+				harness.setUsage({ input: 10 });
+				harness.advance(2_000);
+				await harness.runtime.onToolCompleted("read");
+				expect(harness.getState()?.goal.status).toBe("budget-limited");
+				expect(harness.hiddenMessages).toHaveLength(1);
+				await harness.runtime.pauseGoal();
+				harness.advance(5_000);
+
+				const resumed = await harness.runtime.resumeGoal();
+				expect(resumed).toMatchObject({
+					enabled: true,
+					mode: "active",
+					goal: { id: original.goal.id, status: "budget-limited", tokensUsed: 10, timeUsedSeconds: 2 },
+				});
+				expect(resumed.autoOrchestrate === true).toBe(autoOrchestrate);
+				expect(harness.persists.at(-1)).toMatchObject({
+					mode: "goal",
+					state: { enabled: true, goal: { status: "budget-limited" } },
+				});
+				expect(harness.runtime.buildActivePrompt()).toBeUndefined();
+				expect(harness.runtime.buildContinuationPrompt()).toBeUndefined();
+				harness.setUsage({ input: 12 });
+				harness.advance(3_000);
+				await harness.runtime.onToolCompleted("read");
+				await harness.runtime.onAgentEnd();
+				expect(harness.getState()?.goal).toMatchObject({
+					status: "budget-limited",
+					tokensUsed: 12,
+					timeUsedSeconds: 5,
+				});
+				expect(harness.hiddenMessages).toHaveLength(1);
+
+				await harness.runtime.onBudgetMutated(restoredBudget);
+				expect(harness.getState()).toMatchObject({ enabled: true, goal: { status: "active", tokensUsed: 12 } });
+				expect(harness.getState()?.autoOrchestrate === true).toBe(autoOrchestrate);
+				expect(harness.runtime.buildContinuationPrompt()).toContain(original.goal.objective);
+				expect(harness.hiddenMessages).toHaveLength(1);
+			}
+		},
+	);
+
 	it("retains orchestration across internal reconciliation and interruption without auto-starting restored goals", async () => {
 		const harness = createHarness({
 			state: { enabled: true, mode: "active", autoOrchestrate: true, goal: createGoal() },

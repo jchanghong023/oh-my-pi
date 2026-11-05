@@ -215,6 +215,176 @@ describe("ZCode goal slash adapter", () => {
 		},
 	);
 
+	test.each(["host abort", "command abort"] as const)(
+		"cancelled fresh autopilot entry restores tools after %s without leaking a later baseline",
+		async stop => {
+			const f = fixture(true);
+			const cancellation = new AbortController();
+			f.runtime.signal = cancellation.signal;
+			const requested = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			const applyTools = f.session.setActiveToolsByName.bind(f.session);
+			const activate = spyOn(f.session, "setActiveToolsByName").mockImplementation(async names => {
+				await applyTools(names);
+				if (names.includes("goal")) {
+					requested.resolve();
+					await released.promise;
+				}
+			});
+			const entering = f.controller.handleSlash("set Cancelled objective", f.runtime, { autoOrchestrate: true });
+			try {
+				await requested.promise;
+				expect(f.state()).toBeUndefined();
+				expect(f.tools()).toEqual(["read", "goal"]);
+				if (stop === "host abort") {
+					f.controller.stopForHostAbort();
+					await f.session.goalRuntime.onTaskAborted({ reason: "interrupted" });
+				} else {
+					cancellation.abort();
+				}
+				released.resolve();
+				expect(await entering).toBeUndefined();
+				expect(f.state()).toBeUndefined();
+				expect(f.contexts.has(f.transcript.id)).toBe(false);
+				expect(f.tools()).toEqual(["read"]);
+				expect(f.output).toEqual([]);
+				expect(f.continuations).toEqual([]);
+				f.runtime.signal = undefined;
+
+				await f.controller.handleSlash("set Later objective", f.runtime, { autoOrchestrate: true });
+				await f.controller.handle({ op: "pause" });
+				expect(f.tools()).toEqual(["read"]);
+				await f.controller.handle({ op: "resume" });
+				expect(f.tools()).toEqual(["read", "goal"]);
+				await f.controller.handle({ op: "drop" });
+				expect(f.state()).toBeUndefined();
+				expect(f.tools()).toEqual(["read"]);
+			} finally {
+				released.resolve();
+				await entering.catch(() => {});
+				activate.mockRestore();
+			}
+		},
+	);
+
+	test("partially applied fresh autopilot activation failure restores tools and preserves the exception", async () => {
+		const f = fixture();
+		const failure = new Error("Activation failed after applying tools");
+		const applyTools = f.session.setActiveToolsByName.bind(f.session);
+		const activate = spyOn(f.session, "setActiveToolsByName").mockImplementation(async names => {
+			await applyTools(names);
+			if (names.includes("goal")) throw failure;
+		});
+		try {
+			await expect(
+				f.controller.handleSlash("set Failed objective", f.runtime, { autoOrchestrate: true }),
+			).rejects.toBe(failure);
+			expect(f.state()).toBeUndefined();
+			expect(f.contexts.has(f.transcript.id)).toBe(false);
+			expect(f.tools()).toEqual(["read"]);
+			expect(f.output).toEqual([]);
+		} finally {
+			activate.mockRestore();
+		}
+		await f.controller.handle({ op: "create", objective: "Later objective" });
+		await f.controller.handle({ op: "drop" });
+		expect(f.tools()).toEqual(["read"]);
+	});
+
+	test.each(["created", "replaced", "destination session"] as const)(
+		"cancelled fresh autopilot preparation cannot restore over a concurrently %s goal",
+		async transition => {
+			const f = fixture();
+			const requested = Promise.withResolvers<void>();
+			const released = Promise.withResolvers<void>();
+			const applyTools = f.session.setActiveToolsByName.bind(f.session);
+			let firstActivation = true;
+			const activate = spyOn(f.session, "setActiveToolsByName").mockImplementation(async names => {
+				await applyTools(names);
+				if (firstActivation) {
+					firstActivation = false;
+					requested.resolve();
+					await released.promise;
+				}
+			});
+			const entering = f.controller.handleSlash("set Stale objective", f.runtime, { autoOrchestrate: true });
+			try {
+				await requested.promise;
+				if (transition === "destination session") {
+					await f.controller.beginSessionChange();
+					f.transcript.id = "session-b";
+					await applyTools(["write"]);
+					f.session.setGoalModeState(undefined);
+					await f.controller.endSessionChange();
+					await f.controller.handle({ op: "create", objective: "Destination objective" });
+				} else {
+					await f.session.goalRuntime.createGoal({ objective: "Concurrent objective" });
+					if (transition === "replaced") {
+						await f.controller.handleSlash("set Concurrent replacement", { output: () => {} });
+					}
+				}
+				const state = structuredClone(f.state());
+				const persisted = structuredClone(f.contexts.get(f.transcript.id));
+				const tools = [...f.tools()];
+				released.resolve();
+				expect(await entering).toBeUndefined();
+				expect(f.state()).toEqual(state);
+				expect(f.contexts.get(f.transcript.id)).toEqual(persisted);
+				expect(f.tools()).toEqual(tools);
+				expect(f.output).toEqual([]);
+				await f.controller.handle({ op: "drop" });
+				expect(f.tools()).toEqual(transition === "destination session" ? ["write"] : ["read"]);
+			} finally {
+				released.resolve();
+				await entering.catch(() => {});
+				activate.mockRestore();
+			}
+		},
+	);
+
+	test.each([true, false])(
+		"exhausted resume restores goal tools but not active context or automatic turns (autopilot=%s)",
+		async autoOrchestrate => {
+			for (const budget of ["20", "off"]) {
+				const f = fixture(true);
+				await f.controller.handleSlash("set Budgeted objective", f.runtime, { autoOrchestrate });
+				const state = f.state()!;
+				f.session.setGoalModeState({ ...state, goal: { ...state.goal, tokensUsed: 10 } });
+				await f.session.goalRuntime.onBudgetMutated(10);
+				await f.controller.handle({ op: "pause" });
+				f.controller.stopForHostAbort();
+				f.session.isStreaming = true;
+				const context = spyOn(f.session, "sendGoalModeContext");
+				try {
+					await f.controller.handleSlash("resume", f.runtime);
+					expect(f.state()).toMatchObject({
+						enabled: true,
+						mode: "active",
+						goal: { id: state.goal.id, status: "budget-limited", tokenBudget: 10, tokensUsed: 10 },
+					});
+					expect(f.state()?.autoOrchestrate === true).toBe(autoOrchestrate);
+					expect(f.tools()).toEqual(["read", "goal"]);
+					expect(context).not.toHaveBeenCalled();
+					expect(f.session.goalRuntime.buildContinuationPrompt()).toBeUndefined();
+					f.session.isStreaming = false;
+					f.controller.observe({ type: "agent_end", isTerminal: true, messages: [] });
+					f.controller.refresh();
+					await tick();
+					expect(f.continuations).toEqual([]);
+					expect(f.controller.continuationPending).toBe(false);
+
+					await f.controller.handleSlash(`budget ${budget}`, f.runtime);
+					await tick();
+					expect(f.state()?.goal.status).toBe("active");
+					expect(f.state()?.autoOrchestrate === true).toBe(autoOrchestrate);
+					expect(f.continuations).toEqual(["goal-continuation"]);
+				} finally {
+					context.mockRestore();
+				}
+			}
+		},
+	);
+
 	test("failed slash tool activation preserves the original exception and diagnoses the committed goal", async () => {
 		const f = fixture();
 		const objective = "PRIVATE_GOAL_ACTIVATION_OBJECTIVE";

@@ -1769,19 +1769,13 @@ export class ZCodeServer {
 								? { ...promotion.modelExecution, selection: promotion.modelSelection }
 								: undefined;
 						if (promotion?.modelSelection && !execution) await this.#model(hosted, promotion.modelSelection);
-						const commandHost = hosted.commands;
-						await this.manager.mutate(
-							hosted.record.id,
-							envelope.type,
-							{
-								...payload,
-								execution,
-								highspeedMeta: promotion?.highspeedMeta,
-								inputId: envelope.commandId,
-								sourceCommand: { ...this.ledger.identity(envelope), type: envelope.type },
-							},
-							inputId => commandHost.promoteQueuedGoal(inputId),
-						);
+						await this.manager.mutate(hosted.record.id, envelope.type, {
+							...payload,
+							execution,
+							highspeedMeta: promotion?.highspeedMeta,
+							inputId: envelope.commandId,
+							sourceCommand: { ...this.ledger.identity(envelope), type: envelope.type },
+						});
 						if (envelope.type === "setFollowupMode")
 							hosted.projection.setState({
 								config: {
