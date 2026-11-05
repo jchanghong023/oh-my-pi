@@ -2,11 +2,7 @@ import { type Component, Container, type HistoryBatch, ownDescription } from "..
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { popLoopPhase, pushLoopPhase } from "@oh-my-pi/pi-utils";
 import { measureRender, renderForScrollback } from "../components/image";
-import { clampScrollOffset, maxScrollOffset, viewportRange } from "../components/scroll-viewport";
-import { editorKey } from "./keybinding-hints";
 import { col } from "../native/describe";
-import { theme } from "../theme";
-import { truncateToWidth } from "../utils";
 import type { DescribeContext, NativeNode } from "../native/node";
 import { sameItems } from "../native/memo";
 import { isNativeSettled, settleNative } from "../native/settle";
@@ -370,13 +366,7 @@ export class TranscriptContainer extends Container {
 	#pinnedFrontier: { index: number; since: number; logged: boolean } | undefined;
 	/** Block spans of the last `renderViewport` output, for click hit-testing. */
 	#lastViewportSpans: TranscriptViewportSpan[] = [];
-	#viewportWidth = 0;
-	#viewportRows = 0;
-	#viewportOverflow = false;
 	#viewportHistoryAdjacent = true;
-	#viewportNavigationEnabled = false;
-	/** Leading live row selected by the reader; undefined follows the normal tail allocator. */
-	#viewportScrollOffset: number | undefined;
 	/**
 	 * The composed frame {@link beginFrame} opened; `undefined` outside one.
 	 * {@link renderViewport} closes it, so it never outlives the synchronous
@@ -457,8 +447,6 @@ export class TranscriptContainer extends Container {
 	}
 
 	override clear(): void {
-		this.resetViewportScroll();
-		this.#viewportOverflow = false;
 		super.clear();
 		this.#entries = [];
 		this.#frontier = 0;
@@ -493,7 +481,6 @@ export class TranscriptContainer extends Container {
 	 * rewrites them, so unpaired use would duplicate them on the next retirement.
 	 */
 	resetStableEmission(): void {
-		this.resetViewportScroll();
 		this.#syncEntries();
 		if (this.#offered?.kind === "append" || (this.#offered?.kind === "commit" && this.#offered.split)) {
 			this.#offered = undefined;
@@ -698,91 +685,9 @@ export class TranscriptContainer extends Container {
 		this.#frameRows.clear();
 	}
 
-	/** Enable controls only when a host routes keyboard or mouse navigation to this viewport. */
-	setViewportNavigationEnabled(enabled: boolean): void {
-		this.#viewportNavigationEnabled = enabled;
-		if (!enabled) this.resetViewportScroll();
-	}
-
-	get isViewportScrolled(): boolean {
-		return this.#viewportScrollOffset !== undefined;
-	}
-
 	/** Whether the last viewport preserved the complete live prefix after history. */
 	get isViewportHistoryAdjacent(): boolean {
 		return this.#viewportHistoryAdjacent;
-	}
-
-	/** Browse unarchived rows without publishing mutable Markdown into terminal history. */
-	scrollViewport(delta: number, page = false): boolean {
-		if (
-			!this.#viewportNavigationEnabled ||
-			this.#viewportRows < 2 ||
-			this.#viewportWidth === 0 ||
-			!Number.isFinite(delta) ||
-			delta === 0
-		)
-			return false;
-		if (!this.isViewportScrolled && (!this.#viewportOverflow || delta > 0)) return false;
-		const { rows } = this.#liveViewportRows(this.#viewportWidth);
-		const height = this.#viewportRows - 1;
-		const end = maxScrollOffset(rows.length, height);
-		if (end === 0) return this.resetViewportScroll();
-		const before = this.#viewportScrollOffset ?? end;
-		const step = page ? Math.max(1, height - 1) : 1;
-		const next = clampScrollOffset(before + Math.trunc(delta) * step, rows.length, height);
-		this.#viewportScrollOffset = next < end ? next : undefined;
-		return next !== before || this.isViewportScrolled;
-	}
-
-	/** Resume tail following and normal retirement. */
-	resetViewportScroll(): boolean {
-		const changed = this.isViewportScrolled;
-		this.#viewportScrollOffset = undefined;
-		return changed;
-	}
-
-	#liveViewportRows(width: number): { rows: string[]; owners: (Component | undefined)[] } {
-		this.#syncEntries();
-		const rows: string[] = [];
-		const owners: (Component | undefined)[] = [];
-		let above = this.#projectedHistoryEnd();
-		for (const { entry, index } of this.#liveEntries()) {
-			const measured = this.#liveBlock(entry, index, width);
-			const block = measured.images
-				? this.#renderEntry(entry, width).slice(this.#projectedEmittedRowCount(entry, index, width))
-				: measured.rows;
-			if (block.length === 0) continue;
-			const compact = isCompact(entry.component);
-			if (separatorRows(above, compact) > 0) {
-				rows.push("");
-				owners.push(undefined);
-			}
-			for (const row of block) {
-				rows.push(row);
-				owners.push(entry.component);
-			}
-			above = compact;
-		}
-		return { rows, owners };
-	}
-
-	#renderScrolledViewport(width: number, capacity: number): readonly string[] | undefined {
-		const { rows, owners } = this.#liveViewportRows(width);
-		const height = Math.max(0, capacity - 1);
-		if (rows.length <= height) {
-			this.resetViewportScroll();
-			return undefined;
-		}
-		const range = viewportRange(rows.length, height, this.#viewportScrollOffset ?? 0);
-		this.#viewportScrollOffset = range.start;
-		const visible = rows.slice(range.start, range.end);
-		const hint = truncateToWidth(
-			theme.fg("dim", `↑ ${editorKey("tui.editor.pageUp")}/${editorKey("tui.editor.pageDown")} 翻页 · Esc 返回底部`),
-			width,
-		);
-		this.#commitViewportSpans([undefined, ...owners.slice(range.start, range.end)]);
-		return [hint, ...visible];
 	}
 
 	/** Block spans of the last `renderViewport` output, in output coordinates. Empty when the tail is empty. */
@@ -835,27 +740,16 @@ export class TranscriptContainer extends Container {
 				(entry.component as FinalizableBlock).hasActiveTranscriptContent?.() !== false &&
 				this.#measure(entry, width).rows.length > this.#projectedEmittedRowCount(entry, index, width),
 		);
-		this.#viewportWidth = width;
-		this.#viewportRows = Math.max(0, Math.trunc(Math.min(rows, visibleRows)));
-		this.#viewportOverflow = false;
 		this.#viewportHistoryAdjacent = true;
 		// Visible active blocks cannot necessarily retire. Allocate against the rows the
 		// reader can actually see, rather than letting caller chrome cut off
 		// their already-budgeted content. Settled tails retain baseline layout
 		// and Complete Scrollback's existing retirement policy.
-		const capacity = hasActive ? this.#viewportRows : Math.max(0, Math.trunc(rows));
+		const capacity = Math.max(0, Math.trunc(hasActive ? Math.min(rows, visibleRows) : rows));
 		if (live.length === 0 || capacity === 0) {
 			this.#lastViewportSpans = [];
 			this.#viewportHistoryAdjacent = live.length === 0;
-			if (live.length === 0) this.resetViewportScroll();
 			return EMPTY_ROWS;
-		}
-		if (this.isViewportScrolled) {
-			const scrolled = this.#renderScrolledViewport(width, capacity);
-			if (scrolled !== undefined) {
-				this.#viewportHistoryAdjacent = false;
-				return scrolled;
-			}
 		}
 
 		// Collect newest-first and stop one block past what the viewport can
@@ -887,7 +781,6 @@ export class TranscriptContainer extends Container {
 		}
 		if (shown.length > capacity) {
 			this.#viewportHistoryAdjacent = false;
-			this.#viewportOverflow = hasActive;
 			// Blocks the walk never reached are still transcript state: the
 			// emergency layout consults them only where it must.
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
@@ -941,12 +834,10 @@ export class TranscriptContainer extends Container {
 					owners.push(component);
 				}
 			}
-			this.#viewportOverflow = hasActive && output.length > this.#viewportRows;
 			this.#commitViewportSpans(owners, output.length);
 			return output;
 		}
 		this.#viewportHistoryAdjacent = false;
-		this.#viewportOverflow = hasActive;
 		if (shown.length + gapRows > capacity) {
 			return this.#renderEmergency(shown, live.slice(0, unrendered), width, capacity, frame);
 		}
@@ -1085,7 +976,6 @@ export class TranscriptContainer extends Container {
 		if (this.#offered !== undefined) return this.#offered.batch;
 		const replay = this.#peekReplayBatch(width);
 		if (replay !== undefined) return replay;
-		if (policy === "pressure" && this.isViewportScrolled) return undefined;
 
 		this.#completeFullyEmittedHeads(width);
 		const room = Math.max(0, Math.trunc(capacity));

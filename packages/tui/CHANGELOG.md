@@ -35,6 +35,7 @@
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
 
 ### Fixed
+- Enable upstream Complete Scrollback by default so replies displaced by HUDs or dialogs remain in terminal history; explicit opt-out retains upstream behavior, without fork chat paging or HUD-specific retirement rules.
 - Display the shared native picker close action in Chinese while preserving Escape and cancellation behavior.
 - Tern's classic renderer draws inline images (table charts included) as Kitty Unicode placeholders, so text that replaces an image's cells removes the image instead of leaving a stale copy over the table while an answer streams or the pane resizes
 - The native composer's first frame shows the cached thinking level on the model chip (or effort chip) instead of the plain model icon until the session attaches

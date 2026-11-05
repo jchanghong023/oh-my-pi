@@ -66,6 +66,8 @@
 
 ### Changed
 
+- Enable `tui.completeScrollback` by default without modifying existing configuration files; explicit `false` retains upstream deferred scrollback behavior.
+
 - Knowledge hybrid search pages now warn that semantic candidates may be unrelated even after reranking and must be checked against the returned text.
 
 - Share host-native Cargo release builds between CNB and manual CI, reusing persistent build caches and embedding only the Linux baseline or Windows AVX2 addon; CNB still overwrites and confirms both binary uploads on cache hits.

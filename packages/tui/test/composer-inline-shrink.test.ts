@@ -86,7 +86,7 @@ function makeHarness(
 	const composer = new Composer({
 		terminal,
 		tuiOptions: { renderScheduler: scheduler },
-		preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 	});
 	const transcript = new TranscriptContainer();
 	for (let i = 0; i < transcriptRows; i++) {
@@ -228,10 +228,11 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
-	it("keeps finalized compact prose available and input visible after self-clearing chrome changes", async () => {
+	it("archives completed prose before a table while a self-clearing HUD is still visible", async () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 		const h = makeHarness(60, 18, 0, ["SHELL_BEFORE_COMPACT_REPLY"]);
+		h.composer.setPreferences({ completeScrollback: true });
 		h.composer.setRuntimeChildren([h.transcript, h.hud, h.editor], {
 			selfClearingChrome: [h.hud],
 			transientChrome: [h.editor],
@@ -239,49 +240,29 @@ describe("composer inline shrink (#11007)", () => {
 		const message = new AssistantMessageComponent();
 		h.transcript.addChild(message);
 		const paragraphs = Array.from({ length: 24 }, (_, i) => `PARA${String(i + 1).padStart(2, "0")}`);
+		const source = `${paragraphs.join("\n\n")}\n\n| Item | Value |\n| --- | --- |\n| active | table |\n`;
+		const assertContent = () => {
+			const history = Bun.stripANSI(h.terminal.getScrollBuffer().join("\n"));
+			expect(Array.from(history.matchAll(/PARA\d{2}/g), match => match[0])).toEqual(paragraphs);
+			expect(history).toContain("active");
+			expect(history).toContain("table");
+			expect(history).toContain("SHELL_BEFORE_COMPACT_REPLY");
+			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
+		};
 		try {
 			h.hud.rows = 3;
-			for (let count = 1; count <= paragraphs.length; count++) {
-				message.updateContent(reply(paragraphs.slice(0, count).join("\n\n")), { transient: true });
-				h.composer.ui.requestRender();
-				await h.scheduler.settle(h.terminal);
-			}
-			message.updateContent(
-				reply(`${paragraphs.join("\n\n")}\n\n| Item | Value |\n| --- | --- |\n| active | table |`),
-				{ transient: true },
-			);
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			// Upstream may clip mutable prose while the unfinished table and HUD
-			// share the viewport; compact must not add its own publication budget.
-			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
-			h.hud.rows = 0;
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
-			h.hud.rows = 3;
-			h.composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
-			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
-			message.updateContent(
-				reply(`${paragraphs.join("\n\n")}\n\n| Item | Value |\n| --- | --- |\n| active | table |\n`),
-			);
+			message.updateContent(reply(source));
 			message.markTranscriptBlockFinalized();
+			h.composer.ui.requestRender();
+			await h.scheduler.settle(h.terminal);
+			assertContent();
+			expect(h.terminal.getViewport().join("\n")).toContain("Live widget row 2");
 			h.hud.rows = 0;
 			h.composer.ui.requestRender();
 			await h.scheduler.settle(h.terminal);
-			// Full semantic rendering is the existing export/full-content boundary,
-			// independent of how much unfinished Markdown reached native scrollback.
-			for (const compactToolActivity of [true, false]) {
-				setChatTranscriptDisplayPreferences({ compactToolActivity, hideToolActivity: compactToolActivity });
-				const full = Bun.stripANSI(h.transcript.render(60).join("\n"));
-				expect(Array.from(full.match(/PARA\d{2}/g) ?? [])).toEqual(paragraphs);
-				expect(full).toContain("active");
-				expect(full).toContain("table");
-			}
-			expect(h.terminal.getScrollBuffer().join("\n")).toContain("SHELL_BEFORE_COMPACT_REPLY");
-			expect(h.terminal.getViewport().join("\n")).toContain("EDITOR");
+			assertContent();
 		} finally {
+			message.dispose();
 			h.composer.stop();
 			setChatTranscriptDisplayPreferences(previous);
 		}
@@ -599,7 +580,7 @@ describe("composer inline shrink (#11007)", () => {
 		const composer = new Composer({
 			terminal,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 		});
 		const transcript = new TranscriptContainer();
 		// The response straddles the top edge: only its rows above the screen
@@ -703,7 +684,7 @@ describe("composer inline shrink (#11007)", () => {
 		[100, 28],
 		[120, 36],
 	] as const) {
-		it(`keeps every default compact frame stable through transient growth and refill at ${columns}x${rows}`, async () => {
+		it(`keeps compact frames stable with deferred scrollback through transient growth and refill at ${columns}x${rows}`, async () => {
 			const previous = { ...chatTranscriptDisplayPreferences };
 			setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
 			const h = makeHarness(columns, rows);
@@ -719,7 +700,6 @@ describe("composer inline shrink (#11007)", () => {
 					.filter(row => row.startsWith(TRANSCRIPT_PREFIX))
 					.map(row => Number(row.slice(TRANSCRIPT_PREFIX.length)));
 			try {
-				expect(COMPOSER_DEFAULTS.completeScrollback).toBe(false);
 				await h.scheduler.settle(h.terminal);
 				const initial = contract.observe(event, h.terminal);
 				unsubscribe = contract.watch(
@@ -1353,7 +1333,7 @@ describe("composer inline shrink (#11007)", () => {
 		}
 	});
 
-	it("does not bill a transient HUD already painted on the first frame into the floor", async () => {
+	it("restores rows covered by an initial Todo HUD when complete scrollback is disabled", async () => {
 		const rows = 30;
 		const shell = Array.from({ length: 12 }, (_, i) => `shell${i}`);
 		const terminal = new VirtualTerminal(COLUMNS, rows);
@@ -1362,37 +1342,33 @@ describe("composer inline shrink (#11007)", () => {
 		const composer = new Composer({
 			terminal,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 		});
 		const transcript = new TranscriptContainer();
 		const todos = new InlineWidget();
 		const editor = new Container();
 		editor.addChild(new Text("EDITOR", 0, 0));
-		// A resumed session paints its restored todo HUD before the first frame.
 		todos.rows = 8;
 		composer.setRuntimeChildren([transcript, todos, editor], {
 			transientChrome: [editor],
 			selfClearingChrome: [todos],
 		});
 		composer.start({ playWelcomeIntro: false });
-		const h = { terminal, scheduler, composer, transcript, editor };
 		try {
-			await h.scheduler.settle(h.terminal);
+			await scheduler.settle(terminal);
 			composer.setRunActive(true);
 			const answer = Array.from({ length: 110 }, (_, i) => `line${i}`);
 			for (const row of answer) transcript.addChild({ render: () => [row] });
 			composer.ui.requestRender();
-			await h.scheduler.settle(h.terminal);
+			await scheduler.settle(terminal);
 			composer.setRunActive(false);
-			await h.scheduler.advance(h.terminal, 300);
-
-			// The todo HUD auto-clears: rows it covered must come back, not leave a band.
+			await scheduler.advance(terminal, 300);
 			todos.rows = 0;
 			composer.ui.requestRender();
-			await h.scheduler.advance(h.terminal, 300);
-			expect(h.terminal.getViewport().findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
-			expect(blankBand(h.terminal)).toBeLessThanOrEqual(2);
-			const history = h.terminal
+			await scheduler.advance(terminal, 300);
+			expect(terminal.getViewport().findIndex(row => row.includes("EDITOR"))).toBe(rows - 1);
+			expect(blankBand(terminal)).toBeLessThanOrEqual(2);
+			const history = terminal
 				.getScrollBuffer()
 				.map(row => Bun.stripANSI(row).trim())
 				.filter(row => /^(shell|line)\d+$/.test(row));
@@ -1411,7 +1387,7 @@ describe("composer inline shrink (#11007)", () => {
 		const composer = new Composer({
 			terminal,
 			tuiOptions: { renderScheduler: scheduler },
-			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true, completeScrollback: false },
 		});
 		const transcript = new TranscriptContainer();
 		const editorRoot = new Container();

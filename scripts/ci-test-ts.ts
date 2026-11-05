@@ -478,7 +478,6 @@ const forkPackageFiles: Record<string, string[]> = {
 		"test/transcript-seam-loss.test.ts",
 		"test/thinking-preview.test.ts",
 		"test/status-line-profile.test.ts",
-		"test/composer-transcript-navigation.test.ts",
 		"test/editor-ime-eligibility.test.ts",
 		"test/emergency-restore-altscreen.test.ts",
 		"test/jobs-panel.test.ts",

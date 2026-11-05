@@ -401,7 +401,7 @@ export const cfgTuiResizeScrollback = register({
 export const cfgTuiCompleteScrollback = register({
 	id: "tui.completeScrollback",
 	type: "boolean",
-	default: false,
+	default: true,
 	ui: {
 		tab: "appearance",
 		group: "显示",

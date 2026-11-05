@@ -986,7 +986,6 @@ describe("TranscriptContainer", () => {
 
 	it("keeps the first visible content row when live blocks exceed the viewport", () => {
 		const transcript = new TranscriptContainer();
-		transcript.setViewportNavigationEnabled(true);
 		const block = new Block(["older", "visible first", "visible last"], false);
 		transcript.addChild(block);
 
@@ -996,7 +995,6 @@ describe("TranscriptContainer", () => {
 
 	it("allocates live blocks inside the visible height instead of clipping their allocated rows afterward", () => {
 		const transcript = new TranscriptContainer();
-		transcript.setViewportNavigationEnabled(true);
 		transcript.addChild(new Block(["older 1", "older 2", "older 3", "older 4"], false));
 		transcript.addChild(new Block(["latest 1", "latest 2", "latest 3", "latest 4"], false));
 
