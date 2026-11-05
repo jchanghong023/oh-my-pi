@@ -46,6 +46,7 @@
 - 独立 UI smoke 和仓库脚本仍按 Git 变更规划；Repo、CLI、native、Team、TUI 等实际依赖变化须运行 UI。缺基线或依赖未知时保守运行，静态检查及必要 native 准备始终全局执行。Git／cargo-delta 未选证据包含有效基线 revision、相对变更路径、零选择及原因，delta 另记录空包列表，不虚构 XML、用例或耗时。实际执行的受影响 Nextest 使用 `cargo-delta`／`affected` 并记录包和基线及真实 JUnit；全量回退仍使用 `cargo-nextest`／`full`。doctest 无 JUnit，按实际阶段结果报告，未选不冒充 PASS。混合报告保留实际用例和失败；affected、partial、失败报告不能作为完整基线，不提交报告 sidecar 或改写历史。
 - Bun 与 cargo-delta 的依赖分析均有近似：动态依赖、环境或外部输入可能漏检，affected 不等于完整新回归，仍须适时运行完整回归。报告区分本轮实际执行、deselected、not-selected 与未运行；默认 fulltest scope 为 `fulltest: fork feature suites`，控制台范围为 `fork-features`，旧范围报告不能作为新范围基线。历史用例耗时不算本轮新执行，也不能称全仓全量通过。普通失败继续其他独立工作，保留首个实际失败退出码；取消、参数错误和原预算到限仍停止本次拥有的工作。
 - CLI 子进程夹具在公共 harness 或独立启动器中静态导入真实使用的 Tools registry，补足 Bun 无法追踪的 spawn 路径字符串；不导入或执行 CLI 主入口，不仅为某两个实验源码添加特例依赖。双连接订阅的初始快照按各自游标对齐后再比较完整状态，不假定顺序订阅恰好处于同一版本。Dev 首次进入与命令去重夹具沿用普通 `sendText` 合同，不附加协议未要求的 CAS revision guard；版本冲突检查仍由独立 guard 合同覆盖。
+- 并发门禁中的时序断言以实际完成边界为准：Superpowers 服务启动先等待完整换行终止的状态记录，再验证 HTTP 与进程退出；Settings 的“排队保存后发生外部编辑”场景须在同一 JS turn 完成外部写入，再 flush，不能让异步文件 I/O 与 100ms debounce 自由竞争后仍假定固定顺序。原退出、回收、外部值优先及内存状态断言保持。
 - ZCode 与原生 Dev 的 public process 夹具继承门禁的 `BUN_RUNTIME_TRANSPILER_CACHE_PATH`，只共享 Bun 编译缓存；每例 HOME、TEMP、应用配置、凭据、会话、数据库及工作区仍独立，实际 CLI 和协议链路不替换为模拟调用。
 - Knowledge CLI 的 23 个既有真实消费者场景使用各自的 provider、观测、配置、工作区、子进程和清理，最多两个场景并行，单槽预算仍串行。预备索引只保留不可变数据库／WAL 字节，每例复制后独立打开；不共享运行期数据库、CLI 或会话，不减少分页、控制字符、错误及真实至少 500ms 等待覆盖。
 - ZCode 命令索引对异步读取的无效 journal 先核验文件版本：读取期间版本变化才重取快照；版本稳定且仍损坏时继续拒绝完整 coverage。保留原读／删除 owner、取消与真实读取错误传播，不跳过坏 journal，也不将某一种上游写入分支未经证实地归因为本次失败。

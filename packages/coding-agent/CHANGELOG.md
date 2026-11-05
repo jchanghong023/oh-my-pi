@@ -186,6 +186,7 @@
 
 ### Fixed
 
+- Keep fulltest's bundled-server shutdown and external-settings-edit checks deterministic under concurrent load.
 - Keep automatic background completion notices hidden when extension transcript presenters are enabled, without hiding artifact or structured-output diagnostics.
 - Include publication stage, result and timing when Knowledge imports finish.
 - Preserve autopilot mode when reading or resuming Goal history through RPC.

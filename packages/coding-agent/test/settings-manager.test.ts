@@ -1634,9 +1634,9 @@ describe("Settings", () => {
 			const settings = await Settings.init({ cwd: projectDir, agentDir });
 			cfgDefaultThinkingLevel.set(settings, Effort.High);
 
-			await writeSettings({
-				defaultThinkingLevel: Effort.Medium,
-			});
+			// Complete the external edit in this turn: yielding for async I/O can
+			// let the 100ms background save run before the intended later edit.
+			fs.writeFileSync(getConfigPath(), YAML.stringify({ defaultThinkingLevel: Effort.Medium }, null, 2));
 			await settings.flush();
 
 			expect((await readSettings()).defaultThinkingLevel).toBe(Effort.Medium);
