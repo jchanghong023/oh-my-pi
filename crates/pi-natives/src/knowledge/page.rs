@@ -628,6 +628,13 @@ pub fn knowledge_tool_page<'env>(
 		(retrieval, reranked)
 	};
 	append(&mut header, &format!("\nRetrieval: {retrieval}; reranked: {reranked}."));
+	if retrieval == "hybrid" {
+		append(
+			&mut header,
+			"\nSemantic candidates may be unrelated, even after reranking. Returned hits do not \
+			 establish that the corpus answers the query; relevance must be checked against the text.",
+		);
+	}
 	let base: KnowledgeCursorBase = window.get_named_property("cursorBase")?;
 	let total: i64 = window.get_named_property("total")?;
 	// Reserve the actual largest cursor and escaped continuation JSON this
