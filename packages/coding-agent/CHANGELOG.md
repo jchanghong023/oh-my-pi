@@ -28,6 +28,7 @@
 
 ### Added
 
+- Use native TUI `/sketch` without installation or configuration to draw or annotate pasted images in a local offline browser canvas, then add a PNG attachment to your draft for manual sending.
 - Use `/forkreviewer [scope]` for read-only fork review, split into small functional shards with compact issue reports.
 - Expose existing Knowledge search as a local read-only stdio MCP service with `omp knowledge mcp`, profile-aware shared database access, isolated worker lifecycle and OpenCode2/Claude Code setup instructions.
 - See the latest tool's live Output in a compact preview of up to six lines, including finite background Bash output; it stays visible while the status line is running and closes three seconds after both activity and the tool finish, without changing tool history or input.

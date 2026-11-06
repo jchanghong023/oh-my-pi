@@ -2474,24 +2474,32 @@ export class InputController {
 		return entries.length;
 	}
 
-	async #insertPendingImage(imageData: ImageContent, source?: ImageAttachmentSource): Promise<void> {
+	async #insertPendingImage(
+		imageData: ImageContent,
+		source?: ImageAttachmentSource,
+		isCurrent?: () => boolean,
+	): Promise<boolean> {
+		if (isCurrent && !isCurrent()) return false;
 		const image: ImageContent = source
 			? tagImageAttachmentSource(imageData, source.path, source.kind)
 			: { type: "image", data: imageData.data, mimeType: imageData.mimeType };
 		// The source URL stays on the image for the model; the chip opens the file itself,
 		// or a stable blob copy of the original bytes behind an internal URL (else the payload).
 		const [imageLink] = await materializeImageChipLinks([image], this.ctx.sessionManager);
+		const dims = await this.#imageDimensions(imageData);
+		// No draft state changes until all asynchronous preparation has completed.
+		if (isCurrent && !isCurrent()) return false;
+		setCachedImageDimensions(image, dims ?? null);
 		this.ctx.editor.pendingImages.push(image);
 		this.ctx.editor.pendingImageLinks.push(imageLink);
 		this.ctx.editor.imageLinks = this.ctx.editor.pendingImageLinks;
 		const imageNum = this.ctx.editor.pendingImages.length;
-		const dims = await this.#imageDimensions(imageData);
-		setCachedImageDimensions(image, dims ?? null);
 		const kind = source?.kind ?? "image";
 		// The buffer holds the compact chip token; the atom table expands it to the bracketed
 		// marker (the wire/transcript format) on submit.
 		this.ctx.editor.insertAtom(chipLabel(kind, imageNum), formatVisionMarker(kind, imageNum, dims));
 		this.ctx.ui.requestRender();
+		return true;
 	}
 
 	/** Probe pixel dimensions for the marker label (`[Image #N, WxH]`). Returns undefined when the
@@ -2515,20 +2523,27 @@ export class InputController {
 		image: ImageContent,
 		unsupportedMessage: string,
 		sourcePath?: string,
+		isCurrent?: () => boolean,
 	): Promise<string | undefined> {
-		if (!target.attachImage) return undefined;
-		const prepared = await this.#preparePastedImage(image, unsupportedMessage, sourcePath);
+		if (!target.attachImage || (isCurrent && !isCurrent())) return undefined;
+		const prepared = await this.#preparePastedImage(image, unsupportedMessage, sourcePath, isCurrent);
 		if (!prepared) return undefined;
 		const dims = await this.#imageDimensions(prepared.image);
-		if (this.ctx.ui.getFocused() !== target) return undefined;
+		if (this.ctx.ui.getFocused() !== target || (isCurrent && !isCurrent())) return undefined;
 		const attachment = prepared.source
 			? tagImageAttachmentSource(prepared.image, prepared.source.path, prepared.source.kind)
 			: prepared.image;
 		return target.attachImage(attachment, dims);
 	}
 
-	async #normalizePastedImage(image: ImageContent, unsupportedMessage: string): Promise<ImageContent | null> {
+	async #normalizePastedImage(
+		image: ImageContent,
+		unsupportedMessage: string,
+		isCurrent?: () => boolean,
+	): Promise<ImageContent | null> {
+		if (isCurrent && !isCurrent()) return null;
 		let imageData = await ensureSupportedImageInput(image);
+		if (isCurrent && !isCurrent()) return null;
 		if (!imageData) {
 			this.ctx.showStatus(unsupportedMessage);
 			return null;
@@ -2558,9 +2573,10 @@ export class InputController {
 		image: ImageContent,
 		unsupportedMessage: string,
 		sourcePath?: string,
+		isCurrent?: () => boolean,
 	): Promise<{ image: ImageContent; source: ImageAttachmentSource | undefined } | null> {
-		const normalized = await this.#normalizePastedImage(image, unsupportedMessage);
-		if (!normalized) return null;
+		const normalized = await this.#normalizePastedImage(image, unsupportedMessage, isCurrent);
+		if (!normalized || (isCurrent && !isCurrent())) return null;
 		const path = sourcePath ?? (await this.#persistPastedImage(image));
 		return { image: normalized, source: path ? { path, kind: "image" } : undefined };
 	}
@@ -2569,11 +2585,11 @@ export class InputController {
 		image: ImageContent,
 		unsupportedMessage: string,
 		sourcePath?: string,
+		isCurrent?: () => boolean,
 	): Promise<boolean> {
-		const prepared = await this.#preparePastedImage(image, unsupportedMessage, sourcePath);
+		const prepared = await this.#preparePastedImage(image, unsupportedMessage, sourcePath, isCurrent);
 		if (!prepared) return false;
-		await this.#insertPendingImage(prepared.image, prepared.source);
-		return true;
+		return this.#insertPendingImage(prepared.image, prepared.source, isCurrent);
 	}
 
 	/**
@@ -2625,7 +2641,7 @@ export class InputController {
 	 * paste with an actionable status; ENOENT propagates to the caller's
 	 * clipboard-fallback handling.
 	 */
-	async #insertPendingVideoPreview(pastedPath: string): Promise<void> {
+	async #insertPendingVideoPreview(pastedPath: string, isCurrent?: () => boolean): Promise<void> {
 		try {
 			const absolutePath = resolveReadPath(pastedPath, this.ctx.sessionManager.getCwd());
 			const meta = await probeVideo(absolutePath);
@@ -2633,9 +2649,11 @@ export class InputController {
 			const preview = await this.#normalizePastedImage(
 				{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
 				"Unsupported pasted video preview format",
+				isCurrent,
 			);
-			if (preview) await this.#insertPendingImage(preview, { path: absolutePath, kind: "video" });
+			if (preview) await this.#insertPendingImage(preview, { path: absolutePath, kind: "video" }, isCurrent);
 		} catch (error) {
+			if (isCurrent && !isCurrent()) return;
 			if (error instanceof VideoError) {
 				this.ctx.editor.pasteText(pastedPath);
 				this.ctx.ui.requestRender();
@@ -2650,19 +2668,37 @@ export class InputController {
 	 * Route an image paste to the focused destination. A focused prompt that did not opt into
 	 * images refuses, so the image never lands in the hidden main editor (#6057).
 	 */
-	async #pasteImageIntoFocus(paste: (sink: ImagePasteSink) => Promise<unknown>): Promise<void> {
+	async #pasteImageIntoFocus(
+		paste: (sink: ImagePasteSink, isCurrent?: () => boolean) => Promise<unknown>,
+		isCurrent?: () => boolean,
+	): Promise<void> {
+		if (isCurrent && !isCurrent()) return;
 		const focused = this.ctx.ui.getFocused();
-		if (!focused || focused === this.ctx.editor || !hasPasteText(focused)) {
-			await paste(this.#editorImageSink);
+		const editor = this.ctx.editor;
+		const ownsTarget = isCurrent
+			? () => isCurrent() && this.ctx.editor === editor && this.ctx.ui.getFocused() === focused
+			: undefined;
+		if (!focused || focused === editor || !hasPasteText(focused)) {
+			const sink: ImagePasteSink = ownsTarget
+				? {
+						attach: (image, unsupportedMessage, sourcePath) =>
+							this.#normalizeAndInsertPastedImage(image, unsupportedMessage, sourcePath, ownsTarget),
+						pasteText: text => {
+							if (ownsTarget()) this.#editorImageSink.pasteText(text);
+						},
+						attachVideo: path => this.#insertPendingVideoPreview(path, ownsTarget),
+					}
+				: this.#editorImageSink;
+			await paste(sink, ownsTarget);
 			return;
 		}
 		if (!focused.acceptsImages) {
 			this.ctx.showStatus("Image paste is not supported in this prompt");
 			return;
 		}
-		const promptPaste = this.#beginPromptImagePaste(focused);
+		const promptPaste = this.#beginPromptImagePaste(focused, ownsTarget);
 		try {
-			await paste(promptPaste.sink);
+			await paste(promptPaste.sink, ownsTarget);
 		} finally {
 			promptPaste.finish();
 		}
@@ -2672,26 +2708,27 @@ export class InputController {
 	 * Start one paste into an image-accepting prompt. Reserves the prompt's slot before the first
 	 * await so a following Enter waits; `finish` delivers the collected text once.
 	 */
-	#beginPromptImagePaste(target: Component & PasteTarget): PromptImagePaste {
+	#beginPromptImagePaste(target: Component & PasteTarget, isCurrent?: () => boolean): PromptImagePaste {
 		const finishPaste = target.beginPaste?.();
 		const pasted: string[] = [];
 		return {
 			sink: {
 				attach: async (image, unsupportedMessage, sourcePath) => {
-					const marker = await this.#attachPromptImage(target, image, unsupportedMessage, sourcePath);
+					const marker = await this.#attachPromptImage(target, image, unsupportedMessage, sourcePath, isCurrent);
 					if (marker === undefined) return false;
 					pasted.push(marker);
 					return true;
 				},
 				pasteText: text => {
-					pasted.push(text);
+					if (!isCurrent || isCurrent()) pasted.push(text);
 				},
 			},
 			finish: () => {
-				const text = pasted.join(" ");
+				const current = !isCurrent || isCurrent();
+				const text = current ? pasted.join(" ") : "";
 				if (finishPaste) finishPaste(text || undefined);
 				else if (text && this.ctx.ui.getFocused() === target) target.pasteText(text);
-				this.ctx.ui.requestRender();
+				if (current) this.ctx.ui.requestRender();
 			},
 		};
 	}
@@ -2704,11 +2741,12 @@ export class InputController {
 		return this.clipboard.isTerminalLocal?.() ?? true;
 	}
 
-	async #tryPasteClipboardImage(sink: ImagePasteSink): Promise<boolean> {
+	async #tryPasteClipboardImage(sink: ImagePasteSink, isCurrent?: () => boolean): Promise<boolean> {
+		if (isCurrent && !isCurrent()) return false;
 		if (!this.#clipboardIsTerminalLocal()) return false;
 		try {
 			const image = await this.clipboard.readImage();
-			if (!image) return false;
+			if (!image || (isCurrent && !isCurrent())) return false;
 			await sink.attach(
 				{ type: "image", data: image.data.toBase64(), mimeType: image.mimeType },
 				`Unsupported clipboard image format: ${image.mimeType}`,
@@ -2719,11 +2757,12 @@ export class InputController {
 		}
 	}
 
-	handleImagePathPaste(path: string): Promise<void> {
-		return this.#pasteImageIntoFocus(sink => this.#pasteImagePath(path, sink));
+	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void> {
+		return this.#pasteImageIntoFocus((sink, ownsTarget) => this.#pasteImagePath(path, sink, ownsTarget), isCurrent);
 	}
 
-	async #pasteImagePath(path: string, sink: ImagePasteSink): Promise<void> {
+	async #pasteImagePath(path: string, sink: ImagePasteSink, isCurrent?: () => boolean): Promise<void> {
+		if (isCurrent && !isCurrent()) return;
 		try {
 			if (isVideoPath(path)) {
 				if (sink.attachVideo) {
@@ -2735,15 +2774,29 @@ export class InputController {
 				this.ctx.showStatus("Video paste is not supported in this prompt");
 				return;
 			}
+			const sessionManager = this.ctx.sessionManager;
+			const sessionLocalPath = isCurrent && path.startsWith("local://");
+			const resolvedPath = sessionLocalPath
+				? InternalUrlRouter.instance().locateSync(path, {
+						localProtocolOptions: {
+							getArtifactsDir: () => sessionManager.getArtifactsDir(),
+							getSessionId: () => sessionManager.getSessionId(),
+						},
+					})
+				: undefined;
+			if (sessionLocalPath && resolvedPath === undefined) throw new Error(`No local file backs ${path}`);
 			const image = await loadImageInput({
 				path,
-				cwd: this.ctx.sessionManager.getCwd(),
+				cwd: sessionManager.getCwd(),
+				resolvedPath,
 				autoResize: false,
 			});
+			if (isCurrent && !isCurrent()) return;
 			if (!image) {
 				// Path resolved but is not a readable image (e.g. a zero-byte or
 				// locked transient screenshot file). Prefer the clipboard bytes.
-				if (await this.#tryPasteClipboardImage(sink)) return;
+				if (await this.#tryPasteClipboardImage(sink, isCurrent)) return;
+				if (isCurrent && !isCurrent()) return;
 				sink.pasteText(path);
 				this.ctx.showStatus("Pasted path is not a supported image");
 				return;
@@ -2751,9 +2804,10 @@ export class InputController {
 			await sink.attach(
 				{ type: "image", data: image.data, mimeType: image.mimeType },
 				`Unsupported pasted image format: ${image.mimeType}`,
-				image.resolvedPath,
+				sessionLocalPath ? path : image.resolvedPath,
 			);
 		} catch (error) {
+			if (isCurrent && !isCurrent()) return;
 			if (error instanceof ImageInputTooLargeError) {
 				sink.pasteText(path);
 				this.ctx.showStatus(error.message);
@@ -2763,7 +2817,8 @@ export class InputController {
 				// #2375: the bracketed paste forwarded by a local terminal carries a
 				// path on the *local* filesystem. The bytes may still be on the
 				// clipboard (Win+Shift+S), so try those before giving up.
-				if (await this.#tryPasteClipboardImage(sink)) return;
+				if (await this.#tryPasteClipboardImage(sink, isCurrent)) return;
+				if (isCurrent && !isCurrent()) return;
 				// Over SSH the clipboard lives on the remote host, so the path is
 				// genuinely unreachable; pasting it as text would look like the
 				// image was attached when nothing was sent. Surface an SSH-aware
@@ -2787,7 +2842,8 @@ export class InputController {
 				);
 				return;
 			}
-			if (await this.#tryPasteClipboardImage(sink)) return;
+			if (await this.#tryPasteClipboardImage(sink, isCurrent)) return;
+			if (isCurrent && !isCurrent()) return;
 			sink.pasteText(path);
 			this.ctx.showStatus("Failed to read pasted image path");
 		}

@@ -22,6 +22,7 @@ import { BUILTIN_MAGIC_KEYWORD_SLASH_COMMANDS } from "./builtin-magic-keywords";
 import { BUILTIN_MARKETPLACE_SLASH_COMMANDS, reloadTuiPluginState } from "./builtin-marketplace";
 import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
+import { BUILTIN_SKETCH_SLASH_COMMANDS } from "./builtin-sketch";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS } from "./builtin-spec-driven";
 import { parseSlashCommand } from "./helpers/parse";
@@ -48,6 +49,7 @@ export interface TuiBuiltinSlashCommand extends BuiltinSlashCommand {
 const BUILTIN_SLASH_COMMAND_REGISTRY: ReadonlyArray<SlashCommandSpec> = [
 	...BUILTIN_MODE_SLASH_COMMANDS,
 	...BUILTIN_CRAWL_SLASH_COMMANDS,
+	...BUILTIN_SKETCH_SLASH_COMMANDS,
 	...BUILTIN_COLLABORATION_SLASH_COMMANDS,
 	...BUILTIN_SESSION_SLASH_COMMANDS,
 	...BUILTIN_LIFECYCLE_SLASH_COMMANDS,

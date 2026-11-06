@@ -6,6 +6,26 @@
 
 ## Requirements
 
+### Requirement: 原生 `/sketch` 离线画布
+
+OMP MUST 在原生交互 TUI 提供无需安装扩展或额外配置的 `/sketch`，通过本地浏览器绘图后将真实 PNG 附件加入当前草稿，由用户手动发送。
+
+#### Scenario: 本地绘图与手动提交
+
+- **WHEN** 用户在原生 TUI 调用 `/sketch`
+- **THEN** 打开自包含浏览器画布，支持手绘、剪贴板图片粘贴与标注、颜色、笔刷大小、撤销、清空和画布尺寸调整；图片粘贴取决于实际桌面剪贴板能力
+- **AND** 浏览器按 `Enter` MUST 将 PNG 作为真实图片附件加入原输入草稿，保留已有文字与附件，MUST NOT 自动发送或启动模型回合；用户可补充描述后自行发送
+- **AND** 画布 HTML、脚本、样式等离线资源 MUST 随源码和发行二进制静态内嵌；绘图本身 MUST NOT 请求公网、CDN 或外部模型服务
+- **AND** 浏览器脚本 MUST 以 Firefox 52 ESR 的保守语法和基础 API 为基线（ES5 风格函数、`XMLHttpRequest`，不使用可选链、`async`/`await` 或 `NodeList.forEach`）；该设计基线 MUST NOT 被表述为公司旧 Firefox、CentOS 或桌面环境的实机兼容认证
+- **AND** 本功能仅属于原生 TUI，MUST NOT 宣称 GUI、ACP 或 RPC 绘图集成，也不提供远程自动转发；OMP 与浏览器应在同一主机，异地主机须由用户自行将显示端口通过 SSH 转发至 OMP 的回环地址
+
+#### Scenario: 取消、隔离与本地服务清理
+
+- **WHEN** 用户在终端或浏览器按 `Escape`，或当前会话、视图归属或生命周期已变化
+- **THEN** 取消 MUST 保留原输入草稿；会话切换、销毁或焦点移动后，旧结果 MUST NOT 插入其他会话或输入视图，包括 PNG 读取、归一化和附件插入期间的迟到结果
+- **AND** 本地服务 MUST 仅绑定 `127.0.0.1`，以端口 `0` 请求系统分配端口，每次启动使用随机能力 URL，拒绝跨来源请求并限制提交载荷大小
+- **AND** 提交完成、取消、失败或宿主销毁时 MUST 关闭本次本地服务并使旧能力 URL 失效
+
 ### Requirement: 内置 Developer Test Agent
 
 OMP MUST 内置 Developer Test Agent 的专属子代理、五个技能及 `/dt`、`/generate-dt-files`、`/generate-dt-dir`、`/incremental-dt`、`/cloud-dt-fix` 命令，复用现有发现、命令展开、task、todo、ask 和 `skill://` 链路，不建立旧宿主 API 兼容层。

@@ -10252,8 +10252,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.#inputController.handleImagePaste();
 	}
 
-	handleImagePathPaste(path: string): Promise<void> {
-		return this.#inputController.handleImagePathPaste(path);
+	handleImagePathPaste(path: string, isCurrent?: () => boolean): Promise<void> {
+		return this.#inputController.handleImagePathPaste(path, isCurrent);
 	}
 
 	/** Queue slash-command input behind the active turn. */

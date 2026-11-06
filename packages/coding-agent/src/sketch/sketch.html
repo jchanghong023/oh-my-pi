@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<!--
+Adapted for native OMP from ogulcancelik/pi-extensions/packages/pi-sketch/extensions/sketch.html
+https://github.com/ogulcancelik/pi-extensions
+Firefox 52 ESR-compatible standalone drawing UI; no remote assets.
+
+MIT License
+
+Copyright (c) 2025 Can Celik
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OMP sketch</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #1a1a1a;
+      min-height: 100vh;
+      padding: 20px;
+      color: #aaa;
+      text-align: center;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    .toolbar > * { margin: 4px 6px; }
+    button {
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { background: #444; }
+    button.primary { background: #2563eb; }
+    button.primary:hover { background: #1d4ed8; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    .brush-sizes, .colors { display: flex; align-items: center; }
+    .brush-size {
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      margin: 0 3px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .brush-size.active { border-color: #2563eb; }
+    .brush-size .dot { background: #fff; border-radius: 50%; }
+    .color-btn {
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      margin: 0 2px;
+      border-radius: 50%;
+      border: 2px solid transparent;
+    }
+    .color-btn:hover { opacity: 0.8; }
+    .color-btn.active { border-color: #fff; }
+    .canvas-container { position: relative; display: inline-block; }
+    canvas {
+      display: block;
+      background: #fff;
+      border-radius: 8px;
+      cursor: crosshair;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+    }
+    .resize-handle {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      width: 16px;
+      height: 16px;
+      cursor: nwse-resize;
+      background: linear-gradient(135deg, transparent 50%, #666 50%);
+      border-radius: 0 0 6px 0;
+      opacity: 0.7;
+    }
+    .resize-handle:hover { opacity: 1; }
+    .hint { color: #999; font-size: 13px; margin-top: 16px; }
+    kbd { background: #333; padding: 2px 6px; border-radius: 4px; font-family: inherit; }
+    #status { min-height: 24px; margin: 12px 0; }
+    #status[data-state="error"] { color: #fca5a5; }
+    #status[data-state="success"] { color: #86efac; }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="colors" aria-label="Ink color">
+      <button class="color-btn active" data-color="#000000" style="background: #000;" title="Black" aria-label="Black"></button>
+      <button class="color-btn" data-color="#ef4444" style="background: #ef4444;" title="Red" aria-label="Red"></button>
+      <button class="color-btn" data-color="#22c55e" style="background: #22c55e;" title="Green" aria-label="Green"></button>
+      <button class="color-btn" data-color="#3b82f6" style="background: #3b82f6;" title="Blue" aria-label="Blue"></button>
+      <button class="color-btn" data-color="#ffffff" style="background: #fff;" title="White (eraser)" aria-label="White eraser"></button>
+    </div>
+    <div class="brush-sizes" aria-label="Brush size">
+      <button class="brush-size" data-size="2" title="Small" aria-label="Small brush"><span class="dot" style="width: 4px; height: 4px;"></span></button>
+      <button class="brush-size active" data-size="4" title="Medium" aria-label="Medium brush"><span class="dot" style="width: 8px; height: 8px;"></span></button>
+      <button class="brush-size" data-size="8" title="Large" aria-label="Large brush"><span class="dot" style="width: 14px; height: 14px;"></span></button>
+    </div>
+    <button id="clearButton">Clear</button>
+    <button id="undoButton">Undo</button>
+    <button class="primary" id="sendButton">Attach sketch</button>
+    <button id="cancelButton">Cancel</button>
+  </div>
+  <div class="canvas-container">
+    <canvas id="canvas" width="1000" height="600" aria-label="Sketch canvas"></canvas>
+    <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
+  </div>
+  <div class="hint">
+    <kbd>Ctrl+V</kbd> paste image · <kbd>Enter</kbd> attach · <kbd>Esc</kbd> cancel · <kbd>C</kbd> clear · <kbd>Z</kbd> undo · <kbd>1-3</kbd> brush size
+  </div>
+  <div id="status" role="status" aria-live="polite" data-state="ready">Draw or paste a screenshot. Attaching does not send a message.</div>
+  <script>
+    (function () {
+      'use strict';
+      var canvas = document.getElementById('canvas');
+      var ctx = canvas.getContext('2d');
+      var status = document.getElementById('status');
+      var sendButton = document.getElementById('sendButton');
+      var cancelButton = document.getElementById('cancelButton');
+      var brushSize = 4;
+      var brushColor = '#000000';
+      var drawing = false;
+      var resizing = false;
+      var restoring = false;
+      var pending = false;
+      var finished = false;
+      var pasteGeneration = 0;
+      var states = [];
+      var lastX = 0;
+      var lastY = 0;
+      var endpoint = window.location.pathname;
+      var DEFAULT_WIDTH = 1000;
+      var DEFAULT_HEIGHT = 600;
+
+      function setStatus(state, message) {
+        status.setAttribute('data-state', state);
+        status.textContent = message;
+      }
+
+      function busy() { return pending || finished || restoring; }
+
+      function whiteBackground() {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      function saveState() {
+        states.push({ data: canvas.toDataURL('image/png'), width: canvas.width, height: canvas.height });
+        if (states.length > 50) states.shift();
+      }
+
+      function finishStroke() {
+        if (!drawing) return;
+        drawing = false;
+        saveState();
+      }
+
+      function clearCanvas() {
+        if (busy() || resizing) return;
+        pasteGeneration++;
+        drawing = false;
+        canvas.width = DEFAULT_WIDTH;
+        canvas.height = DEFAULT_HEIGHT;
+        whiteBackground();
+        saveState();
+      }
+
+      function undo() {
+        if (busy() || resizing || states.length < 2) return;
+        pasteGeneration++;
+        drawing = false;
+        restoring = true;
+        var previous = states[states.length - 2];
+        var image = new Image();
+        image.onload = function () {
+          canvas.width = previous.width;
+          canvas.height = previous.height;
+          ctx.drawImage(image, 0, 0);
+          states.pop();
+          restoring = false;
+        };
+        image.onerror = function () {
+          restoring = false;
+          setStatus('error', 'Undo could not restore the image. Your drawing is unchanged.');
+        };
+        image.src = previous.data;
+      }
+
+      function getPos(event) {
+        var rect = canvas.getBoundingClientRect();
+        return {
+          x: (event.clientX - rect.left) * canvas.width / rect.width,
+          y: (event.clientY - rect.top) * canvas.height / rect.height
+        };
+      }
+
+      canvas.addEventListener('mousedown', function (event) {
+        if (event.button !== 0 || busy() || resizing) return;
+        event.preventDefault();
+        drawing = true;
+        var pos = getPos(event);
+        lastX = pos.x;
+        lastY = pos.y;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, brushSize / 2, 0, Math.PI * 2);
+        ctx.fillStyle = brushColor;
+        ctx.fill();
+      });
+      canvas.addEventListener('mousemove', function (event) {
+        if (!drawing) return;
+        var pos = getPos(event);
+        ctx.beginPath();
+        ctx.moveTo(lastX, lastY);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.strokeStyle = brushColor;
+        ctx.lineWidth = brushSize;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
+        lastX = pos.x;
+        lastY = pos.y;
+      });
+      document.addEventListener('mouseup', finishStroke);
+      canvas.addEventListener('mouseleave', finishStroke);
+
+      function selectButton(selector, selected) {
+        var buttons = document.querySelectorAll(selector);
+        var i;
+        for (i = 0; i < buttons.length; i++) buttons[i].classList.remove('active');
+        selected.classList.add('active');
+      }
+      function bindChoices(selector, choose) {
+        var buttons = document.querySelectorAll(selector);
+        var i;
+        for (i = 0; i < buttons.length; i++) {
+          buttons[i].addEventListener('click', function () {
+            if (busy()) return;
+            selectButton(selector, this);
+            choose(this);
+          });
+        }
+      }
+      bindChoices('.brush-size', function (button) { brushSize = parseInt(button.getAttribute('data-size'), 10); });
+      bindChoices('.color-btn', function (button) { brushColor = button.getAttribute('data-color'); });
+
+      function transport(action, body) {
+        pending = true;
+        sendButton.disabled = true;
+        cancelButton.disabled = true;
+        setStatus('pending', action === 'submit' ? 'Attaching sketch…' : 'Cancelling…');
+        var xhr = new XMLHttpRequest();
+        function failed(message) {
+          pending = false;
+          sendButton.disabled = false;
+          cancelButton.disabled = false;
+          setStatus('error', message + ' Your drawing is still here; try again.');
+        }
+        xhr.open('POST', endpoint + action, true);
+        xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
+        xhr.onload = function () {
+          if (xhr.status !== 200) {
+            failed(xhr.responseText || 'The sketch could not be attached.');
+            return;
+          }
+          finished = true;
+          pending = false;
+          setStatus('success', action === 'submit'
+            ? 'Sketch attached. Return to OMP to add text and send the message. You can close this tab.'
+            : 'Sketch cancelled. You can close this tab.');
+          window.close();
+        };
+        xhr.onerror = function () { failed('Could not reach OMP.'); };
+        xhr.onabort = function () { failed('The request was interrupted.'); };
+        xhr.send(body);
+      }
+      function send() {
+        if (busy() || resizing) return;
+        finishStroke();
+        pasteGeneration++;
+        try {
+          transport('submit', canvas.toDataURL('image/png').split(',')[1]);
+        } catch (error) {
+          pending = false;
+          sendButton.disabled = false;
+          cancelButton.disabled = false;
+          setStatus('error', 'Could not attach the sketch. Your drawing is still here; try again.');
+        }
+      }
+      function cancel() {
+        if (busy()) return;
+        finishStroke();
+        pasteGeneration++;
+        transport('cancel', '');
+      }
+      document.getElementById('clearButton').addEventListener('click', clearCanvas);
+      document.getElementById('undoButton').addEventListener('click', undo);
+      sendButton.addEventListener('click', send);
+      cancelButton.addEventListener('click', cancel);
+
+      document.addEventListener('keydown', function (event) {
+        var key = (event.key || '').toLowerCase();
+        if (key === 'enter') { event.preventDefault(); send(); }
+        else if (key === 'escape' || key === 'esc') { event.preventDefault(); cancel(); }
+        else if (event.ctrlKey || event.metaKey || event.altKey) return;
+        else if (key === 'c') clearCanvas();
+        else if (key === 'z') undo();
+        else if (key === '1') document.querySelector('[data-size="2"]').click();
+        else if (key === '2') document.querySelector('[data-size="4"]').click();
+        else if (key === '3') document.querySelector('[data-size="8"]').click();
+      });
+
+      function pasteImage(blob) {
+        var generation = ++pasteGeneration;
+        var image = new Image();
+        var objectUrl = URL.createObjectURL(blob);
+        image.onload = function () {
+          URL.revokeObjectURL(objectUrl);
+          if (generation !== pasteGeneration || busy() || resizing) return;
+          finishStroke();
+          var scale = Math.min(DEFAULT_WIDTH / image.width, DEFAULT_HEIGHT / image.height, 1);
+          canvas.width = Math.max(1, Math.round(image.width * scale));
+          canvas.height = Math.max(1, Math.round(image.height * scale));
+          whiteBackground();
+          ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+          saveState();
+        };
+        image.onerror = function () {
+          URL.revokeObjectURL(objectUrl);
+          setStatus('error', 'The pasted image could not be loaded. Your drawing is unchanged.');
+        };
+        image.src = objectUrl;
+      }
+      document.addEventListener('paste', function (event) {
+        if (busy() || resizing) return;
+        var items = event.clipboardData && event.clipboardData.items;
+        if (!items) return;
+        var i;
+        for (i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image/') !== 0) continue;
+          var blob = items[i].getAsFile();
+          if (!blob) continue;
+          event.preventDefault();
+          pasteImage(blob);
+          break;
+        }
+      });
+
+      document.getElementById('resizeHandle').addEventListener('mousedown', function (event) {
+        if (event.button !== 0 || busy() || resizing) return;
+        event.preventDefault();
+        finishStroke();
+        pasteGeneration++;
+        resizing = true;
+        var startX = event.clientX;
+        var startY = event.clientY;
+        var startWidth = canvas.width;
+        var startHeight = canvas.height;
+        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        function move(moveEvent) {
+          canvas.width = Math.max(200, startWidth + moveEvent.clientX - startX);
+          canvas.height = Math.max(150, startHeight + moveEvent.clientY - startY);
+          whiteBackground();
+          ctx.putImageData(imageData, 0, 0);
+        }
+        function finishResize() {
+          resizing = false;
+          saveState();
+          document.removeEventListener('mousemove', move);
+          document.removeEventListener('mouseup', finishResize);
+        }
+        document.addEventListener('mousemove', move);
+        document.addEventListener('mouseup', finishResize);
+      });
+
+      whiteBackground();
+      saveState();
+      window.addEventListener('beforeunload', function () {
+        // A submit may already be accepted while its acknowledgement is in
+        // flight. Do not let unload cancellation race a pending submission.
+        if (!finished && !pending && navigator.sendBeacon) navigator.sendBeacon(endpoint + 'cancel', '');
+      });
+    }());
+  </script>
+</body>
+</html>
