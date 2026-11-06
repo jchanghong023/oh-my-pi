@@ -185,16 +185,18 @@ export class ChildProcess<In extends InMask = InMask> {
 	#stderrDone: Promise<void>;
 	#exited: Promise<number>;
 	#stdoutDone = false;
-	#stdoutSettled: PromiseWithResolvers<void> | undefined;
 	#stdoutStream: ReadableStream<Uint8Array> | undefined;
 	#stdoutExposed = false;
 	#openPipeReaders = 1;
-	// Set at a command deadline or explicit cancellation; normal commands keep
-	// complete EOF-based capture. Active pipe readers are cancelled at cutoff so
-	// their pending read() settles as done and partial output is kept.
+	// Set at the command deadline or on abort; otherwise commands keep complete
+	// EOF-based capture. Active pipe readers are cancelled at cutoff so their
+	// pending read() settles as done and partial output is kept.
 	#cutoff = false;
-	/** Readers of piped stdio; deadline/abort cancellation settles pending reads. */
+	/** Readers of piped stdio; timeout and abort cancel them so pending reads settle. */
 	#pipeReaders = new Set<{ cancel(reason?: unknown): Promise<void> }>();
+	// Each registration reconciles its listener with root-exit and reader activity.
+	// Keeping the registration after idle lets a later output read re-arm the signal.
+	#abortRegistrations?: Set<() => void>;
 	#timeoutTimer?: NodeJS.Timeout;
 	#stderrStream?: ReadableStream<Uint8Array>;
 	// Termination in flight after kill(); aborted exits await it before reporting.
@@ -254,11 +256,13 @@ export class ChildProcess<In extends InMask = InMask> {
 			this.#openPipeReaders--;
 			this.#stderrTail += dec.decode();
 			trim();
+			this.#syncAbortListeners();
 		})();
 
 		proc.exited
 			.catch(() => null)
 			.then(async exitCode => {
+				this.#syncAbortListeners();
 				if (this.#exitReasonPending) {
 					this.#exitReason = this.#exitReasonPending;
 					reject(this.#exitReasonPending);
@@ -353,8 +357,7 @@ export class ChildProcess<In extends InMask = InMask> {
 			if (reason?.aborted) {
 				// Dispatch tree termination before cancelling readers: open pipes
 				// are evidence that a dead leader's owned group is still alive.
-				this.#cutoff = true;
-				for (const reader of this.#pipeReaders) reader.cancel().catch(() => {});
+				this.#cutoffOutput();
 			}
 		}
 	}
@@ -549,12 +552,13 @@ export class ChildProcess<In extends InMask = InMask> {
 	}
 
 	/**
-	 * Read a pipe fully, stopping early only at a command deadline or cancellation.
+	 * Read a pipe fully, stopping early only at an explicit command deadline or abort.
 	 */
 	async #readStream(stream: ReadableStream<Uint8Array>): Promise<string> {
-		this.#openPipeReaders++;
 		const reader = stream.getReader();
+		this.#openPipeReaders++;
 		this.#pipeReaders.add(reader);
+		this.#syncAbortListeners();
 		const dec = new TextDecoder();
 		let out = "";
 		try {
@@ -582,6 +586,7 @@ export class ChildProcess<In extends InMask = InMask> {
 		const reader = this.stdout.getReader();
 		this.#openPipeReaders++;
 		this.#pipeReaders.add(reader);
+		this.#syncAbortListeners();
 		const chunks: Uint8Array[] = [];
 		let length = 0;
 		try {
@@ -638,6 +643,7 @@ export class ChildProcess<In extends InMask = InMask> {
 			if (pulled || pipeSettled) return;
 			pulled = true;
 			this.#openPipeReaders++;
+			this.#syncAbortListeners();
 		};
 		const finish = () => {
 			if (finished) return;
@@ -680,9 +686,7 @@ export class ChildProcess<In extends InMask = InMask> {
 
 	#markStdoutDone(): void {
 		this.#stdoutDone = true;
-		const settled = this.#stdoutSettled;
-		this.#stdoutSettled = undefined;
-		settled?.resolve();
+		this.#syncAbortListeners();
 	}
 
 	async #readOutputBytes(waitForCleanExit = false): Promise<Uint8Array<ArrayBuffer>> {
@@ -759,18 +763,43 @@ export class ChildProcess<In extends InMask = InMask> {
 	// ── Signal / timeout ─────────────────────────────────────────────────
 
 	attachSignal(signal: AbortSignal): void {
-		const cleanup = this.#exited.catch(() => {});
-		const onAbort = () => this.kill(new AbortError(signal.reason, "<cancelled>"));
-		const stdoutTracked = this.#trackStdout();
-		if (signal.aborted) return void onAbort();
-		signal.addEventListener("abort", onAbort, { once: true });
-		const stdoutDone =
-			this.#stdoutDone || !stdoutTracked
-				? undefined
-				: (this.#stdoutSettled ??= Promise.withResolvers<void>()).promise;
-		void Promise.allSettled([cleanup, this.#stderrDone, stdoutDone]).then(() =>
-			signal.removeEventListener("abort", onAbort),
-		);
+		this.#exited.catch(() => {});
+		this.#trackStdout();
+		let attached = false;
+		const onAbort = () => {
+			// The { once: true } listener has removed itself at this point.
+			attached = false;
+			const rootRunning = this.proc.exitCode === null && this.proc.signalCode === null;
+			if (rootRunning || this.#openPipeReaders > 0) {
+				this.#abortRegistrations?.delete(sync);
+			}
+			this.kill(new AbortError(signal.reason, "<cancelled>"));
+		};
+		const sync = () => {
+			const rootRunning = this.proc.exitCode === null && this.proc.signalCode === null;
+			const active = rootRunning || this.#openPipeReaders > 0;
+			if (signal.aborted) {
+				if (active) onAbort();
+				return;
+			}
+			if (active === attached) return;
+			if (active) signal.addEventListener("abort", onAbort, { once: true });
+			else signal.removeEventListener("abort", onAbort);
+			attached = active;
+		};
+		(this.#abortRegistrations ??= new Set()).add(sync);
+		if (signal.aborted) onAbort();
+		else sync();
+	}
+
+	#syncAbortListeners(): void {
+		if (!this.#abortRegistrations) return;
+		for (const sync of this.#abortRegistrations) sync();
+	}
+
+	#cutoffOutput(): void {
+		this.#cutoff = true;
+		for (const reader of this.#pipeReaders) reader.cancel().catch(() => {});
 	}
 
 	#clearTimeout(): void {
@@ -798,8 +827,7 @@ export class ChildProcess<In extends InMask = InMask> {
 			) {
 				this.kill(new TimeoutError(ms, this.#stderrTail), -1);
 			}
-			this.#cutoff = true;
-			for (const reader of this.#pipeReaders) reader.cancel().catch(() => {});
+			this.#cutoffOutput();
 		}, ms);
 		timer.unref?.();
 		this.#timeoutTimer = timer;

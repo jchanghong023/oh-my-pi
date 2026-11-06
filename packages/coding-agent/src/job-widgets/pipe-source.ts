@@ -6,13 +6,11 @@ import type { JobTextChunk, JobTextSource } from "./types";
  * Build the run's stream taps, or `undefined` when the loaded native addon
  * predates `PipeStreams`.
  *
- * The loader keeps a previous release's addon next to a newer tree on purpose,
- * and classes have no `missingNativeExport` fallback, so `new PipeStreams()`
- * would otherwise throw `undefined is not a constructor` out of every bash
- * call. Stream taps only feed `proc://<id>/streams` and the pipe widgets, so a
- * stale addon degrades that one view instead of failing the command (and, in
- * the field, pushing the agent to retry interactive `pty` mode, which takes
- * over the terminal).
+ * The loader keeps a previous release's addon next to a newer tree on purpose.
+ * Missing classes diagnose that stale addon when constructed. Stream taps only
+ * feed `proc://<id>/streams` and the pipe widgets, so a stale or failing binding
+ * degrades that one view instead of failing the command (and, in the field,
+ * pushing the agent to retry interactive `pty` mode, which takes over the terminal).
  */
 export function createPipeStreams(binding: unknown = PipeStreams): PipeStreams | undefined {
 	if (typeof binding !== "function") return undefined;

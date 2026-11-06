@@ -368,7 +368,45 @@ export async function embedConfiguredApi(texts: readonly string[]): Promise<Embe
 	return embedApi(capInputs(texts));
 }
 
+const DEFAULT_EMBEDDING_BATCH_SIZE = 64;
+
+/**
+ * Max texts per `/embeddings` request. Some hosted providers cap the inputs per
+ * request (DashScope: 10), and a rejected request fails the whole call. Reads the
+ * runtime scope's `embeddings.batchSize`, then `MNEMOPI_EMBEDDING_BATCH_SIZE`, then 64.
+ */
+function embeddingBatchSize(): number {
+	return (
+		positiveBatchSize(activeEmbeddingOptions()?.batchSize) ??
+		positiveBatchSize(Number.parseInt($env.MNEMOPI_EMBEDDING_BATCH_SIZE ?? "", 10)) ??
+		DEFAULT_EMBEDDING_BATCH_SIZE
+	);
+}
+
+/** Floors a configured size to a whole request cap; undefined unless it is at least 1. */
+function positiveBatchSize(value: number | undefined): number | undefined {
+	if (value === undefined || !Number.isFinite(value)) return undefined;
+	const size = Math.floor(value);
+	return size >= 1 ? size : undefined;
+}
+
 async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
+	const size = embeddingBatchSize();
+	if (texts.length <= size) {
+		return embedApiBatch(texts);
+	}
+	const matrix: EmbeddingMatrix = [];
+	for (let offset = 0; offset < texts.length; offset += size) {
+		const part = await embedApiBatch(texts.slice(offset, offset + size));
+		if (part === null) {
+			return null;
+		}
+		matrix.push(...part);
+	}
+	return matrix;
+}
+
+async function embedApiBatch(texts: readonly string[]): Promise<EmbeddingMatrix | null> {
 	const inherited = logger.getLogContext();
 	return logger.withLogContext(
 		{
@@ -532,6 +570,10 @@ async function embedApi(texts: readonly string[]): Promise<EmbeddingMatrix | nul
 					stage = "response_schema";
 					if (rows === undefined) {
 						return degraded("missing_data");
+					}
+					// A short or long matrix would stamp vectors onto the wrong memories.
+					if (rows.length !== texts.length) {
+						return degraded("row_count");
 					}
 					if (strict) {
 						if (data.model !== undefined && data.model !== model) return degraded("model_mismatch");
