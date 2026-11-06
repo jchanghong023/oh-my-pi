@@ -200,6 +200,7 @@
 
 ### Fixed
 
+- Wait for bundled skill scripts to exit and be reaped before the CLI finishes SIGINT or SIGTERM shutdown.
 - Restore Linux regression coverage for compaction, SDK prompts, plugin catalogs and IME recovery with isolated, catalog-independent fixtures.
 - Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.
 - Return the unattended reply only for actual `ask` timeouts in active autopilot Goals; preserve ordinary timeout choices, cancellation and abort behavior.
