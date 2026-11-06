@@ -30,11 +30,7 @@ type Scenario = ProviderScenario & {
 	onScreenFailureEvidence?: (directory: string) => void;
 };
 
-async function eventually<T>(
-	read: () => Promise<T>,
-	predicate: (value: T) => boolean,
-	timeout = 60_000,
-): Promise<T> {
+async function eventually<T>(read: () => Promise<T>, predicate: (value: T) => boolean, timeout = 60_000): Promise<T> {
 	const deadline = Date.now() + timeout;
 	let value = await read();
 	while (!predicate(value)) {

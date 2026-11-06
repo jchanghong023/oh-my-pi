@@ -870,17 +870,20 @@ test("retained real edit does not move when the next assistant stream is empty o
 				expect(await Bun.file(path.join(cwd, "retained-edit.ts")).text()).toBe(`${edited}\n`);
 				const collapsed = await eventually(
 					() => screen.checkpoint("compact edit initially collapsed"),
-					frame => frame.screen.includes("EDIT_CLI_01") && !frame.screen.includes("EDIT_CLI_46"),
+					frame =>
+						frame.screen.includes("EDIT_CLI_01") &&
+						!frame.screen.includes("EDIT_CLI_46") &&
+						frame.screen.includes("CLI_READ_RESULT"),
 				);
 				expect(collapsed.screen).not.toContain("retained-search.txt");
-				expect(collapsed.screen).not.toContain("retained-read.txt");
+				expect(collapsed.screen).toContain("CLI_READ_RESULT");
 				await tui("key", "press", "Ctrl+O");
 				const expanded = await eventually(
 					() => screen.checkpoint("compact edit expanded"),
 					frame => frame.screen.includes("EDIT_CLI_01") && frame.screen.includes("EDIT_CLI_46"),
 				);
 				expect(expanded.screen).not.toContain("retained-search.txt");
-				expect(expanded.screen).not.toContain("retained-read.txt");
+				expect(expanded.screen).toContain("CLI_READ_RESULT");
 				await tui("key", "press", "Ctrl+O");
 				await eventually(
 					() => screen.checkpoint("compact edit collapsed again"),

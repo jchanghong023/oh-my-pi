@@ -136,7 +136,11 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 							// acknowledges scrolling; identical samples are not an end marker.
 							const previous = screen;
 							await tui("key", "press", "Down", "Down", "Down", "Down", "Down");
-							screen = await eventually(() => tui("text"), next => next !== previous, 30_000);
+							screen = await eventually(
+								() => tui("text"),
+								next => next !== previous,
+								30_000,
+							);
 						}
 						throw new Error("Native /session details did not expose every material");
 					}
@@ -315,7 +319,11 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 					if (historyScreen.includes(discussion)) break;
 					const previous = historyScreen;
 					await tui("key", "press", "Shift+Down");
-					historyScreen = await eventually(() => tui("text"), next => next !== previous, 30_000);
+					historyScreen = await eventually(
+						() => tui("text"),
+						next => next !== previous,
+						30_000,
+					);
 				}
 				expect(historyScreen).toContain(discussion);
 				await tui("key", "press", "Escape");
