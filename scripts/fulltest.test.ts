@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
+import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import { testTimeoutMs } from "./ci-test-ts";
 import { fastcheckCommands, parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import {
@@ -1228,6 +1230,94 @@ describe("fulltest lane scheduling", () => {
 });
 
 describe("gate-local profile fixture isolation", () => {
+	for (const explicitExecutable of [false, true]) {
+		const platform = detectBrowserPlatform();
+		test.skipIf(!platform || platform === BrowserPlatform.LINUX_ARM)(
+			`browser consumer reuses ${explicitExecutable ? "the explicit executable before the host cache" : "the host binary cache"} without sharing application state`,
+			async () => {
+				const directory = await fs.mkdtemp(path.join(os.tmpdir(), "omp-browser-isolation-"));
+				const home = path.join(directory, "gate-home");
+				const host = path.join(directory, "host");
+				const cacheDir = path.join(host, "puppeteer");
+				const cachedExecutable = computeExecutablePath({
+					buildId: PUPPETEER_REVISIONS.chrome,
+					cacheDir,
+					platform,
+				});
+				const override = path.join(directory, "explicit-chrome");
+				try {
+					await Bun.write(cachedExecutable, "cached binary");
+					await Bun.write(override, "explicit binary");
+					const consumer = `
+import { spyOn } from "bun:test";
+import * as path from "node:path";
+import * as browsers from "@oh-my-pi/pi-utils/browsers";
+import { getAgentDir, getPuppeteerDir } from ${JSON.stringify(new URL("../packages/utils/src/dirs.ts", import.meta.url).href)};
+import { ensureChromiumExecutable, loadPuppeteer } from ${JSON.stringify(new URL("../packages/coding-agent/src/tools/browser/launch.ts", import.meta.url).href)};
+spyOn(browsers, "install").mockImplementation(async () => {
+	throw new Error("The isolated browser consumer must reuse a local executable, not download one");
+});
+const executable = await ensureChromiumExecutable();
+await loadPuppeteer();
+const sandbox = getPuppeteerDir();
+console.log(JSON.stringify({ executable, agent: getAgentDir(), sandbox, sandboxReady: await Bun.file(path.join(sandbox, "package.json")).exists() }));
+`;
+					const construction = `
+import { localTestEnvironment } from ${JSON.stringify(new URL("./fulltest.ts", import.meta.url).href)};
+const child = Bun.spawn([process.execPath, "-e", ${JSON.stringify(consumer)}], {
+	env: localTestEnvironment(${JSON.stringify(home)}),
+	stdout: "pipe",
+	stderr: "pipe",
+});
+const [exitCode, stdout, stderr] = await Promise.all([
+	child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+]);
+process.stdout.write(stdout);
+process.stderr.write(stderr);
+process.exit(exitCode);
+`;
+					const child = Bun.spawn([process.execPath, "-e", construction], {
+						env: {
+							...process.env,
+							HOME: host,
+							USERPROFILE: host,
+							OMP_CONFIG_ROOT: host,
+							PI_CODING_AGENT_DIR: "",
+							OMP_PROFILE: "",
+							PI_PROFILE: "",
+							PI_CONFIG_DIR: "",
+							OMP_CACHE_DIR: "",
+							OMP_OFFLINE: "",
+							XDG_DATA_HOME: "",
+							XDG_STATE_HOME: "",
+							XDG_CACHE_HOME: "",
+							PUPPETEER_EXECUTABLE_PATH: explicitExecutable ? override : "",
+						},
+						stdout: "pipe",
+						stderr: "pipe",
+					});
+					const [exitCode, stdout, stderr] = await Promise.all([
+						child.exited,
+						new Response(child.stdout).text(),
+						new Response(child.stderr).text(),
+					]);
+					expect({ exitCode, stderr }).toEqual({ exitCode: 0, stderr: "" });
+					expect(JSON.parse(stdout)).toEqual({
+						executable: explicitExecutable ? override : cachedExecutable,
+						agent: path.join(home, ".omp", "agent"),
+						sandbox: path.join(home, ".omp", "puppeteer"),
+						sandboxReady: true,
+					});
+					expect(await Bun.file(path.join(cacheDir, "package.json")).exists()).toBe(false);
+					expect(await Bun.file(cachedExecutable).text()).toBe("cached binary");
+				} finally {
+					await fs.rm(directory, { recursive: true, force: true });
+				}
+			},
+			20_000,
+		);
+	}
+
 	for (const selector of [
 		"HOME",
 		"PI_CONFIG_DIR",

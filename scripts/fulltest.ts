@@ -1,11 +1,14 @@
 #!/usr/bin/env bun
 // Full current-platform validation. No WSL, remote pipelines, publication,
 // desktop input, or quality-definition changes belong in this entry point.
-import * as fs from "node:fs/promises";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
+import { getPuppeteerDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
+import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import { buildChildEnv, bunTestSelection, testTimeoutMs } from "./ci-test-ts";
 import { gateRepoRoot, fastcheckCommands } from "./fastcheck";
 import { GATE_LIMIT_SECONDS, runGate, type GateCommand, type GateRun } from "./test-gate-runtime";
@@ -70,6 +73,15 @@ export function fulltestTrailingWorkerAllocation(cpuBudget: number, hasSmokeTest
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
+	const browserPlatform = detectBrowserPlatform();
+	const cachedBrowser =
+		browserPlatform && browserPlatform !== BrowserPlatform.LINUX_ARM
+			? computeExecutablePath({
+					buildId: PUPPETEER_REVISIONS.chrome,
+					cacheDir: getPuppeteerDir(),
+					platform: browserPlatform,
+				})
+			: undefined;
 	// App execution aliases are not installed interpreters. Keep the same
 	// process-only Windows PATH normalization used by the prior gate acceptance.
 	if (process.platform === "win32") {
@@ -107,6 +119,10 @@ export function localTestEnvironment(home: string): Record<string, string | unde
 		// isolated application HOME. These are not fresh build/cache variants.
 		CARGO_HOME: process.env.CARGO_HOME ?? path.join(os.homedir(), ".cargo"),
 		RUSTUP_HOME: process.env.RUSTUP_HOME ?? path.join(os.homedir(), ".rustup"),
+		// Reuse an installed tool binary, never the host's browser profile or
+		// Puppeteer import sandbox. Missing caches keep normal browser resolution.
+		PUPPETEER_EXECUTABLE_PATH:
+			env.PUPPETEER_EXECUTABLE_PATH || (cachedBrowser && fs.existsSync(cachedBrowser) ? cachedBrowser : undefined),
 		RUSTUP_AUTO_INSTALL: "0",
 		// Bun serializes fixture stdin as UTF-8; detached Windows Python must
 		// not decode that protocol using the machine's legacy ANSI code page.
@@ -189,14 +205,14 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceR
 export async function removeFulltestHome(home: string): Promise<void> {
 	if (process.platform === "win32") {
 		const detachJunctions = async (directory: string): Promise<void> => {
-			for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+			for (const entry of await fs.promises.readdir(directory, { withFileTypes: true })) {
 				const target = path.join(directory, entry.name);
 				if (entry.isSymbolicLink()) {
 					try {
-						await fs.rmdir(target);
+						await fs.promises.rmdir(target);
 					} catch (error) {
 						if ((error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
-						await fs.unlink(target);
+						await fs.promises.unlink(target);
 					}
 				} else if (entry.isDirectory()) {
 					await detachJunctions(target);
@@ -386,7 +402,9 @@ async function runFulltestObserved(
 			{ label: "version/Rust", argv: ["cargo", "--version"], cwd: gateRepoRoot, env: { RUSTUP_AUTO_INSTALL: "0" } },
 		].map(command => attempt(command.label, () => gate.run(command))),
 	);
-	const home = await acquire("isolated test home", () => fs.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")));
+	const home = await acquire("isolated test home", () =>
+		fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-fulltest-home-")),
+	);
 	try {
 		// Native source/binding generation must finish before static/test readers.
 		await attempt("native build", () =>
@@ -582,7 +600,7 @@ async function runFulltestObserved(
 		});
 		await attempt("test homes", async () => {
 			for (const command of tests)
-				if (command.env?.HOME) await gate.charged(() => fs.mkdir(command.env!.HOME!, { recursive: true }));
+				if (command.env?.HOME) await gate.charged(() => fs.promises.mkdir(command.env!.HOME!, { recursive: true }));
 		});
 		// Reserve two workers each for static checks and independent script files.
 		// The short Rust lane takes at most four workers when Bun also has work.
