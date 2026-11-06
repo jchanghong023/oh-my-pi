@@ -200,8 +200,9 @@
 
 ### Fixed
 
+- Reuse installed Chromium binaries during isolated fulltest runs without sharing browser profiles or application state.
 - Wait for bundled skill scripts to exit and be reaped before the CLI finishes SIGINT or SIGTERM shutdown.
-- Restore Linux regression coverage for compaction, SDK prompts, plugin catalogs and IME recovery with isolated, catalog-independent fixtures.
+- Restore Linux fulltest coverage for compaction, SDK prompts, offline commits, plugin catalogs, IME recovery and native Dev TUI workflows.
 - Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.
 - Return the unattended reply only for actual `ask` timeouts in active autopilot Goals; preserve ordinary timeout choices, cancellation and abort behavior.
 - Preserve an initial autopilot notice through Stop when its native queued objective is retained, delivering it once with that objective.
