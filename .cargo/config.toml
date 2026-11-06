@@ -5,6 +5,8 @@
 # Ninja; macOS dev hosts need `brew install ninja`.
 [env]
 CMAKE_GENERATOR = "Ninja"
+# Keep bundled Opus on the same static/dynamic CRT as Rust on Windows.
+CMAKE_TOOLCHAIN_FILE_x86_64_pc_windows_msvc = { value = ".cargo/windows-msvc.cmake", relative = true }
 # Permit Knowledge's resource-bounded mmap requests on supported x64 hosts.
 # This raises only the ceiling; SQLite's default mapping remains disabled.
 LIBSQLITE3_FLAGS = "-DSQLITE_MAX_MMAP_SIZE=68719476736LL"

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Build Windows native addons without Opus-related LNK4217 linker warnings.
 - Build loadable native addons on CentOS 7/glibc 2.17 with the system's endian conversion macros.
 - Keep token counting, syntax warmup and built-in sorting usable when Rayon cannot create worker threads on Linux and other resource-constrained hosts.
 - Restore native Bazel builds after shared diff and embedded shell help updates.
