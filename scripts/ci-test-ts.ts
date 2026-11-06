@@ -482,6 +482,7 @@ const forkPackageFiles: Record<string, string[]> = {
 		"test/emergency-restore-altscreen.test.ts",
 		"test/jobs-panel.test.ts",
 		"test/oauth-selector.test.ts",
+		"test/timeline-picker-native.test.ts",
 		"test/theme-terminal-softening.test.ts",
 		"test/transcript-render-helpers.test.ts",
 		"test/web-search-render.test.ts",

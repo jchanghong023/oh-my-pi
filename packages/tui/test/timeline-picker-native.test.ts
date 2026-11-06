@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { stripVTControlCharacters } from "node:util";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { TspKind, TspPickerProps, TspProps } from "@oh-my-pi/pi-wire";
 import type { SessionMessageEntryLike } from "../src/chat/transcript-entry";
@@ -319,6 +320,186 @@ describe("session tree picker", () => {
 		if (root.k !== "col" || sheet?.key !== "picker") throw new Error("expected a column holding the picker");
 		return props(sheet);
 	}
+
+	function toolTreeSelector(
+		switched: string[] = [],
+		intents: readonly unknown[] = ["Tracing ack provenance", "Inspecting pong ownership"],
+	) {
+		const entries = [
+			entry("user", null, user("Review these calls")),
+			entry(
+				"calls",
+				"user",
+				assistant([
+					{ type: "text", text: "Checking both sources." },
+					{
+						type: "toolCall",
+						id: "c2",
+						name: "grep",
+						arguments: {
+							pattern: "pong",
+							...(intents[1] === undefined ? {} : { i: intents[1] }),
+							details: { token: "ARGS-BRAVO" },
+						},
+					},
+					{
+						type: "toolCall",
+						id: "c1",
+						name: "grep",
+						arguments: {
+							pattern: "ack",
+							...(intents[0] === undefined ? {} : { i: intents[0] }),
+							details: { token: "ARGS-ALPHA" },
+						},
+					},
+				]),
+			),
+			entry("t1", "calls", toolResult("c1", "RESULT-ALPHA\nTAIL-ALPHA")),
+			entry("t2", "t1", {
+				...toolResult("c2", "RESULT-BRAVO\nTAIL-BRAVO"),
+				isError: true,
+			} as AgentMessage),
+		];
+		const nodes: TreeSelectorNode[] = entries.map(e => ({ entry: e, children: [] }));
+		for (let index = 0; index < nodes.length - 1; index++) nodes[index]!.children.push(nodes[index + 1]!);
+		return new TreeSelectorComponent(
+			[nodes[0]!],
+			"t1",
+			80,
+			(id, options) => switched.push(`${id}${options.summarize ? "+summary" : ""}`),
+			() => {},
+		);
+	}
+
+	function treeLabels(selector: TreeSelectorComponent): Map<string, string> {
+		return new Map(
+			(treeProps(selector).items ?? []).map(item => [
+				item.id,
+				typeof item.label === "string" ? item.label : item.label.map(part => part.t).join(""),
+			]),
+		);
+	}
+
+	function treeText(selector: TreeSelectorComponent): string {
+		return stripVTControlCharacters(selector.render(160).join("\n"));
+	}
+
+	test("tool rows prefix their own recorded intent and search it, not an unrelated result summary", () => {
+		const selector = toolTreeSelector();
+		const labels = treeLabels(selector);
+		for (const [id, intent, pattern, result] of [
+			["t1", "Tracing ack provenance", "ack", "RESULT-ALPHA"],
+			["t2", "Inspecting pong ownership", "pong", "RESULT-BRAVO"],
+		] as const) {
+			const label = labels.get(id)!;
+			expect(label.startsWith(intent)).toBe(true);
+			expect(label.slice(intent.length)).toContain("grep");
+			expect(label.slice(intent.length)).toContain(pattern);
+			expect(label).not.toContain(result);
+		}
+		expect(labels.get("t1")).not.toContain("Inspecting pong ownership");
+		expect(labels.get("t2")).not.toContain("Tracing ack provenance");
+		expect(labels.get("user")).toBe("user: Review these calls");
+		expect(labels.get("calls")).toBe("assistant: Checking both sources.");
+		typeText(selector, "Tracing ack provenance");
+		expect(treeProps(selector).order).toEqual(["t1"]);
+	});
+
+	test.each([undefined, "", "   ", 42])("an absent or invalid intent (%p) keeps the original tool summary", intent => {
+		const original = treeLabels(toolTreeSelector([], [undefined, undefined])).get("t1");
+		const selector = toolTreeSelector([], [intent, undefined]);
+		expect(treeLabels(selector).get("t1")).toBe(original);
+		expect(original).toContain("grep");
+		expect(original).toContain("ack");
+	});
+
+	test("Alt+Enter toggles full stored arguments, result text and status without switching sessions", () => {
+		const switched: string[] = [];
+		const selector = toolTreeSelector(switched);
+		expect(treeText(selector)).not.toContain("ARGS-ALPHA");
+		expect(treeText(selector)).not.toContain("RESULT-ALPHA");
+		selector.handleInput("\x1b\r");
+		const expanded = treeText(selector);
+		for (const marker of ["ARGS-ALPHA", "RESULT-ALPHA", "TAIL-ALPHA"]) expect(expanded).toContain(marker);
+		expect(expanded).toMatch(/success/i);
+		for (const marker of ["ARGS-BRAVO", "RESULT-BRAVO"]) expect(expanded).not.toContain(marker);
+		expect(selector.getTreeList().getSelectedNode()?.entry.id).toBe("t1");
+		expect(switched).toEqual([]);
+		selector.handleInput("\x1b\r");
+		for (const marker of ["ARGS-ALPHA", "RESULT-ALPHA", "TAIL-ALPHA"])
+			expect(treeText(selector)).not.toContain(marker);
+		expect(switched).toEqual([]);
+	});
+
+	test("moving selection folds the previous tool and never auto-expands the new or revisited row", () => {
+		const selector = toolTreeSelector();
+		selector.handleInput("\x1b\r");
+		expect(treeText(selector)).toContain("RESULT-ALPHA");
+		selector.handleInput("\x1b[B");
+		expect(treeProps(selector).selected).toBe("t2");
+		for (const marker of ["ARGS-ALPHA", "RESULT-ALPHA", "ARGS-BRAVO", "RESULT-BRAVO"]) {
+			expect(treeText(selector)).not.toContain(marker);
+		}
+		selector.handleInput("\x1b\r");
+		const expanded = treeText(selector);
+		for (const marker of ["ARGS-BRAVO", "RESULT-BRAVO", "TAIL-BRAVO"]) expect(expanded).toContain(marker);
+		expect(expanded).toMatch(/error/i);
+		expect(expanded).not.toContain("RESULT-ALPHA");
+		selector.handleInput("\x1b[A");
+		expect(treeProps(selector).selected).toBe("t1");
+		for (const marker of ["RESULT-ALPHA", "RESULT-BRAVO"]) expect(treeText(selector)).not.toContain(marker);
+	});
+
+	test("native details appear directly after only the selected tool; pointer selection folds without switching", () => {
+		const switched: string[] = [];
+		const selector = toolTreeSelector(switched);
+		const project = (child: NativeChild): NativeNode => {
+			const described = "k" in child ? child : child.describe?.(pickerCx);
+			if (!described) throw new Error("expected a native description");
+			return { ...described, c: described.c?.map(project) };
+		};
+		const findList = (root: NativeNode): NativeNode | undefined => {
+			if (root.k === "list") return root;
+			for (const child of root.c ?? []) {
+				const found = findList(child as NativeNode);
+				if (found) return found;
+			}
+			return undefined;
+		};
+		expect(treeProps(selector).selected).toBe("t1");
+		selector.handleInput("\x1b\r");
+		const list = findList(project(selector.describe(pickerCx)));
+		expect(list).toBeDefined();
+		const rows = (list!.c ?? []) as NativeNode[];
+		const selectedIndex = rows.findIndex(row => row.key === "t1");
+		expect(selectedIndex).toBeGreaterThanOrEqual(0);
+		const details = rows[selectedIndex + 1];
+		expect(details?.k).not.toBe("item");
+		const text = JSON.stringify(details);
+		for (const marker of ["ARGS-ALPHA", "RESULT-ALPHA", "TAIL-ALPHA"]) expect(text).toContain(marker);
+		expect(text).toMatch(/success/i);
+		for (const marker of ["ARGS-BRAVO", "RESULT-BRAVO"]) expect(JSON.stringify(list)).not.toContain(marker);
+		selector.handleNativeEvent({ type: "select", key: "list", item: "t2" });
+		expect(treeProps(selector).selected).toBe("t2");
+		expect(switched).toEqual([]);
+		selector.handleInput("\x1b\r");
+		expect(findList(project(selector.describe(pickerCx)))).toBeDefined();
+		selector.handleInput("\x1b\r");
+		expect(treeProps(selector).selected).toBe("t2");
+		expect(switched).toEqual([]);
+	});
+
+	test("Enter still switches the selected tool and Ctrl+O still filters out tool rows", () => {
+		const switched: string[] = [];
+		const selector = toolTreeSelector(switched);
+		selector.handleInput("\x1b\r");
+		selector.handleInput("\r");
+		expect(switched).toEqual(["t1"]);
+		selector.handleInput("\x0f");
+		expect(treeProps(selector).order).toEqual(["user", "calls"]);
+		for (const marker of ["RESULT-ALPHA", "RESULT-BRAVO"]) expect(treeText(selector)).not.toContain(marker);
+		expect(switched).toEqual(["t1"]);
+	});
 
 	test("describes the tree picker when supported: depth, active path, label badge, current leaf", () => {
 		const selector = treeSelector();

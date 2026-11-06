@@ -7,8 +7,10 @@ import {
 	Input,
 	matchesKey,
 	Spacer,
+	Text,
 	TruncatedText,
 	truncateToWidth,
+	visibleWidth,
 } from "../index";
 import { isRecord, oklabDistance, sanitizeText } from "@oh-my-pi/pi-utils";
 /** Available session-tree display filters. */
@@ -58,15 +60,17 @@ import { TreeView, type TreeAncestor, type TreeRow } from "../components/tree-vi
 import { formatKeyHint, formatKeyHints } from "../app-keybindings";
 import { boundKeys, editorKey, editorKeys, interruptKey } from "../chrome/keybinding-hints";
 import { getKeybindings } from "../keybindings";
-import type { TspPickerItem, TspPickerProps, TspSpan, TspText } from "@oh-my-pi/pi-wire";
+import { INTENT_FIELD, type TspPickerItem, type TspPickerProps, type TspSpan, type TspText } from "@oh-my-pi/pi-wire";
 import type { ThemeColor } from "../theme/schema";
 import { col, keyed, node, span, text } from "../native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "../native/node";
+import type { DescribeContext, NativeChild, NativeNode, NativeScroll, NativeUiEvent } from "../native/node";
 import { actionHint, hintsRow, overlayCard } from "../native/overlay";
 import { CLOSE_ACTION, type PickerEvent, picker, pickerAction, pickerEvent, pickerQuery } from "../native/picker";
 import { plainText } from "../native/spans";
 import type { OutlineTarget } from "../chat/transcript-outline";
 import { collectBlocks, targetCopy, turnPreview } from "./copy-selector";
+import { ScrollView } from "../components/scroll-view";
+import { centeredViewportRange } from "../components/scroll-viewport";
 
 /** Filter mode for tree display */
 type FilterMode = TreeFilterMode;
@@ -243,6 +247,9 @@ class TreeList implements Component {
 	/** The search field; its value is the fuzzy query. */
 	readonly searchInput = new Input();
 	#toolCallMap: Map<string, ToolCallInfo> = new Map();
+	#expandedEntryId: string | undefined;
+	#details: ScrollView | undefined;
+	#detailScroll: NativeScroll | undefined;
 	#multipleRoots = false;
 	#activePathIds: Set<string> = new Set();
 	#containsActive: Map<TreeSelectorNode, boolean> = new Map();
@@ -262,6 +269,7 @@ class TreeList implements Component {
 				selected: string | undefined;
 				query: string;
 				filterMode: FilterMode;
+				details: ScrollView | undefined;
 				node: NativeNode;
 		  }
 		| undefined;
@@ -511,6 +519,7 @@ class TreeList implements Component {
 		// TreeView retains the nearest visible selection (including an anchor
 		// through empty filter results) when the predicate is replaced.
 		this.#tree.setFilter(this.#buildFilter());
+		this.#collapseUnselectedDetails();
 	}
 
 	/** Visible-row predicate combining the assistant-text rule, filter mode, and fuzzy query. */
@@ -615,6 +624,11 @@ class TreeList implements Component {
 				parts.push(msg.role);
 				if ("content" in msg && msg.content) {
 					parts.push(this.#extractContent(msg.content));
+					if (msg.role === "toolResult") {
+						const call = this.#toolCallMap.get(msg.toolCallId);
+						const intent = call?.arguments[INTENT_FIELD];
+						if (typeof intent === "string") parts.push(sanitizeTreeField(intent));
+					}
 				}
 				if (msg.role === "bashExecution") {
 					const bashMsg = msg as { command?: string };
@@ -697,10 +711,12 @@ class TreeList implements Component {
 	invalidate(): void {
 		this.#tree.invalidate();
 		this.#itemCache.clear();
+		this.#details?.invalidate();
 	}
 
 	dispose(): void {
 		this.#tree.dispose();
+		this.#details?.dispose();
 	}
 
 	getSearchQuery(): string {
@@ -723,6 +739,7 @@ class TreeList implements Component {
 	activateEntry(entryId: string): void {
 		if (!this.#tree.rows.some(row => row.key === entryId)) return;
 		this.#tree.setSelectedKey(entryId);
+		this.#collapseUnselectedDetails();
 		const selected = this.#tree.selectedItem;
 		if (selected && this.onSelect) this.onSelect(selected.entry.id, { summarize: false });
 	}
@@ -730,6 +747,7 @@ class TreeList implements Component {
 	/** Native row click: highlight the entry without switching. */
 	selectEntry(entryId: string): void {
 		if (this.#tree.rows.some(row => row.key === entryId)) this.#tree.setSelectedKey(entryId);
+		this.#collapseUnselectedDetails();
 	}
 
 	/**
@@ -838,7 +856,7 @@ class TreeList implements Component {
 	 * Branch heads carry a `branch` icon and the active path an accent bullet
 	 * instead of drawn tree connectors.
 	 */
-	describeList(): NativeNode {
+	describeList(cx: DescribeContext): NativeNode {
 		this.#syncNativeTheme();
 		const rows = this.#tree.rows;
 		let items = this.#itemsNative;
@@ -853,17 +871,53 @@ class TreeList implements Component {
 			memo?.items === items.items &&
 			memo.selected === selected &&
 			memo.query === query &&
-			memo.filterMode === this.#filterMode
+			memo.filterMode === this.#filterMode &&
+			memo.details === this.#details
 		) {
 			return memo.node;
 		}
+		const details = this.#details;
+		let children: readonly NativeChild[] = items.items;
+		if (details) {
+			const height = Math.max(1, Math.floor(this.maxVisibleLines / 2));
+			const window = centeredViewportRange(
+				this.#tree.selectionIndex,
+				rows.length,
+				Math.max(1, this.maxVisibleLines - height),
+			);
+			const visible: NativeChild[] = [];
+			for (let index = window.start; index < window.end; index++) {
+				visible.push(items.items[index]!);
+				if (rows[index]!.key === this.#expandedEntryId) {
+					visible.push({
+						...details.describe(cx),
+						key: `details-${this.#expandedEntryId}`,
+						scroll: this.#detailScroll,
+					});
+				}
+			}
+			children = visible;
+		}
 		const list = node(
 			"list",
-			{ selected: selected ?? null, filter: query || undefined, empty: this.#emptyText(), virtual: true },
-			items.items,
+			{
+				selected: selected ?? null,
+				filter: query || undefined,
+				empty: this.#emptyText(),
+				max: { lines: this.maxVisibleLines },
+				virtual: details ? undefined : true,
+			},
+			children,
 			"list",
 		);
-		this.#listNative = { items: items.items, selected, query, filterMode: this.#filterMode, node: list };
+		this.#listNative = {
+			items: items.items,
+			selected,
+			query,
+			filterMode: this.#filterMode,
+			details,
+			node: list,
+		};
 		return list;
 	}
 
@@ -981,9 +1035,22 @@ class TreeList implements Component {
 			return lines;
 		}
 
-		// Hierarchy, selection-centered windowing, and the scrollbar all live
-		// in TreeView; the gutter/row builders below only shape its lines.
-		lines.push(...this.#tree.render(width));
+		// Details consume physical lines, not navigable session entries.
+		const rendered = this.#tree.renderWithState(width);
+		const details = this.#details;
+		if (details && this.#expandedEntryId === this.#tree.selectedKey) {
+			const index = this.#tree.selectionIndex;
+			const row = this.#tree.rows[index]!;
+			const windowRows = this.#tree.rows.slice(rendered.windowStart, rendered.windowEnd);
+			const prefix = `  ${this.#renderGutter(row, width, windowRows).continuation}  `;
+			const detailLines = details.render(Math.max(1, width - visibleWidth(prefix)));
+			const offset = index - rendered.windowStart + 1;
+			lines.push(...rendered.lines.slice(0, offset));
+			for (const line of detailLines) lines.push(truncateToWidth(`${prefix}${line}`, width));
+			lines.push(...rendered.lines.slice(offset));
+		} else {
+			lines.push(...rendered.lines);
+		}
 
 		const filterLabel = this.#getFilterLabel();
 		if (filterLabel) {
@@ -1145,7 +1212,17 @@ class TreeList implements Component {
 				if (role === "toolResult") {
 					const toolMsg = msg as { toolCallId?: string; toolName?: string };
 					const toolCall = toolMsg.toolCallId ? this.#toolCallMap.get(toolMsg.toolCallId) : undefined;
-					if (toolCall) return [{ t: this.#formatToolCall(toolCall.name, toolCall.arguments), s: "muted" }];
+					if (toolCall) {
+						const intent = toolCall.arguments[INTENT_FIELD];
+						const summary: EntryPart = {
+							t: this.#formatToolCall(toolCall.name, toolCall.arguments),
+							s: "muted",
+						};
+						if (typeof intent === "string" && sanitizeTreeField(intent)) {
+							return [{ t: `${shortenPath(sanitizeTreeField(intent))} ` }, summary];
+						}
+						return [summary];
+					}
 					return [{ t: `[${toolMsg.toolName ?? "tool"}]`, s: "muted" }];
 				}
 				if (role === "bashExecution") {
@@ -1350,8 +1427,73 @@ class TreeList implements Component {
 		if (selected && this.onLabelEdit) this.onLabelEdit(selected.entry.id, selected.label);
 	}
 
+	hasDetails(): boolean {
+		return this.#details !== undefined;
+	}
+
+	/** Alt+Enter affects only the selected tool row, never the session leaf. */
+	toggleDetails(): void {
+		const selected = this.#tree.selectedItem;
+		if (!selected) return;
+		if (this.#expandedEntryId === selected.entry.id) {
+			this.#collapseDetails();
+			return;
+		}
+		const details = this.#toolDetailsText(selected);
+		if (details === undefined) return;
+		this.#collapseDetails();
+		this.#expandedEntryId = selected.entry.id;
+		const height = Math.max(1, Math.floor(this.maxVisibleLines / 2));
+		this.#details = new ScrollView(new Text(shortenPath(sanitizeText(details)), 0, 0), {
+			height,
+			scrollbar: "auto",
+		});
+		this.#tree.setMaxRows(Math.max(1, this.maxVisibleLines - height));
+	}
+
+	#toolDetailsText(node: TreeSelectorNode): string | undefined {
+		if (node.entry.type !== "message") return undefined;
+		const message = node.entry.message;
+		if (message.role === "toolResult") {
+			const call = this.#toolCallMap.get(message.toolCallId);
+			const args = call ? JSON.stringify(call.arguments) : "(unavailable)";
+			return `Status: ${message.isError ? "error" : "success"}\nArguments: ${args}\nResult:\n${this.#joinTextContent(message.content)}`;
+		}
+		if (message.role === "bashExecution" || message.role === "pythonExecution") {
+			const args = message.role === "bashExecution" ? { command: message.command } : { code: message.code };
+			const status = message.cancelled
+				? "cancelled"
+				: message.exitCode === undefined
+					? "exit code unavailable"
+					: `${message.exitCode === 0 ? "success" : "error"} (exit ${message.exitCode})`;
+			return `Status: ${status}\nArguments: ${JSON.stringify(args)}\nResult:\n${message.output}`;
+		}
+		return undefined;
+	}
+
+	#collapseDetails(): void {
+		this.#expandedEntryId = undefined;
+		this.#details?.dispose();
+		this.#details = undefined;
+		this.#detailScroll = undefined;
+		this.#tree.setMaxRows(this.maxVisibleLines);
+	}
+
+	#collapseUnselectedDetails(): void {
+		if (this.#expandedEntryId !== undefined && this.#expandedEntryId !== this.#tree.selectedKey) {
+			this.#collapseDetails();
+		}
+	}
+
 	handleInput(keyData: string): void {
-		if (matchesSelectUp(keyData)) {
+		if (matchesKey(keyData, "alt+enter") || matchesKey(keyData, "alt+return")) {
+			this.toggleDetails();
+		} else if (this.#details && (matchesKey(keyData, "shift+up") || matchesKey(keyData, "shift+down"))) {
+			const up = matchesKey(keyData, "shift+up");
+			this.#details.scroll(up ? -1 : 1);
+			this.#detailScroll = { by: up ? "line-up" : "line-down", n: (this.#detailScroll?.n ?? 0) + 1 };
+			this.#listNative = undefined;
+		} else if (matchesSelectUp(keyData)) {
 			this.#tree.moveSelection(-1, true);
 		} else if (matchesSelectDown(keyData)) {
 			this.#tree.moveSelection(1, true);
@@ -1420,6 +1562,7 @@ class TreeList implements Component {
 			const before = this.getSearchQuery();
 			if (this.searchInput.handleInput(keyData) && this.getSearchQuery() !== before) this.#applyFilter();
 		}
+		this.#collapseUnselectedDetails();
 	}
 }
 
@@ -1573,6 +1716,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 					"muted",
 					[
 						`${formatKeyHint("enter")}: switch.`,
+						`${formatKeyHint("alt+enter")}: tool details.`,
+						`${formatKeyHints(["shift+up", "shift+down"])}: scroll details.`,
 						`${formatKeyHints(["alt+up", "alt+down"])}: previous/next turn.`,
 						...(branchKeys ? [`${branchKeys}: previous/next branch.`] : []),
 						`${editorKeys("tui.select.pageUp", "tui.select.pageDown")} (${formatKeyHints(["left", "right"])}): page.`,
@@ -1601,7 +1746,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 	}
 
 	override describe(cx: DescribeContext): NativeNode {
-		return cx.supports("picker") ? this.#describePicker() : this.#describeCard();
+		return cx.supports("picker") && !this.#treeList.hasDetails() ? this.#describePicker() : this.#describeCard(cx);
 	}
 
 	/**
@@ -1655,6 +1800,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 						pickerAction("summarize", "Summarize & switch", "shift+enter"),
 						pickerAction("label", "Label", "shift+l"),
 						pickerAction("filter", "Filter", "ctrl+o"),
+						pickerAction("details", "Tool details", "alt+enter"),
 						CLOSE_ACTION,
 					],
 		};
@@ -1694,6 +1840,9 @@ export class TreeSelectorComponent extends OverlayPanel {
 			case "filter":
 				list.cycleFilter(1);
 				return;
+			case "details":
+				list.toggleDetails();
+				return;
 			case "close":
 				list.escape();
 				return;
@@ -1709,8 +1858,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 	 * Native tree: filter-mode `tabs`, the search query as an `input`, then
 	 * the entry `list` (or the label editor in its place) and the key hints.
 	 */
-	#describeCard(): NativeNode {
-		const content: NativeChild = this.#labelInput ?? this.#treeList.describeList();
+	#describeCard(cx: DescribeContext): NativeNode {
+		const content: NativeChild = this.#labelInput ?? this.#treeList.describeList(cx);
 		const search = this.#treeList.searchInput;
 		const query = search.getValue();
 		const cursor = search.getCursor();
@@ -1730,6 +1879,8 @@ export class TreeSelectorComponent extends OverlayPanel {
 			content,
 			hintsRow([
 				{ keys: ["enter"], label: "switch" },
+				{ keys: ["alt+enter"], label: "tool details" },
+				{ keys: ["shift+up", "shift+down"], label: "scroll details" },
 				{ keys: ["alt+up", "alt+down"], label: "previous/next turn" },
 				actionHint(["app.tree.previousBranch", "app.tree.nextBranch"], "previous/next branch"),
 				actionHint(["tui.select.pageUp", "tui.select.pageDown"], "page"),
@@ -1756,7 +1907,10 @@ export class TreeSelectorComponent extends OverlayPanel {
 			if (event.type === "select") this.#treeList.setFilterMode(event.item);
 			return;
 		}
-		if (event.key === "list" && !this.#labelInput) this.#treeList.activateEntry(event.item);
+		if (event.key === "list" && !this.#labelInput) {
+			if (event.type === "select") this.#treeList.selectEntry(event.item);
+			else this.#treeList.activateEntry(event.item);
+		}
 	}
 
 	#showLabelInput(entryId: string, currentLabel: string | undefined): void {

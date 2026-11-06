@@ -287,6 +287,13 @@ export class TreeView<T, K extends TreeKey = string> implements Component {
 		this.#touch();
 	}
 
+	/** Change the logical viewport without rebuilding the hierarchy. */
+	setMaxRows(maxRows: number): void {
+		if (this.#options.maxRows === maxRows) return;
+		this.#options.maxRows = maxRows;
+		this.#touch();
+	}
+
 	/** Every structural row before filtering. The returned array is immutable and stable until invalidated. */
 	get allRows(): readonly TreeRow<T, K>[] {
 		this.#ensureRows();
