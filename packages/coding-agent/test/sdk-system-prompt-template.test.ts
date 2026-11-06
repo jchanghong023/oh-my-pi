@@ -28,6 +28,8 @@ async function withSession<T>(
 	await Bun.write(path.join(cwd, CONFIG_DIR_NAME, "SYSTEM_TEMPLATE.md"), nativeTemplate);
 
 	const authStorage = await AuthStorage.create(":memory:");
+	const model = getTestModel("openai-codex");
+	authStorage.keys.setRuntime(model.provider, "test-key");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml"));
 	let session: AgentSession | undefined;
 	try {
@@ -38,7 +40,7 @@ async function withSession<T>(
 			modelRegistry,
 			settings: Settings.isolated(),
 			sessionManager: SessionManager.inMemory(cwd),
-			model: getTestModel("openai-codex"),
+			model,
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],
