@@ -188,7 +188,7 @@ import { MEMORY_BACKEND_TOOL_NAMES } from "./memory-backend/tool-names";
 import type { MnemopiSessionStateApi } from "./mnemopi/state";
 import autolearnCaptureRefused from "./prompts/system/autolearn-capture-refused.md" with { type: "text" };
 import mcpXdevGuidanceTemplate from "./prompts/system/mcp-xdev-guidance.md" with { type: "text" };
-import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
+import { getOfflineSystemNotice } from "./utils/offline-notice";
 import lateDiagnosticTemplate from "./prompts/tools/lsp-late-diagnostic.md" with { type: "text" };
 import { AgentLifecycleManager } from "./registry/agent-lifecycle";
 import {
@@ -5115,7 +5115,7 @@ async function createAgentSessionScoped(
 			// only when a provider fetches them, never held as pixels here.
 			blobBroker,
 		);
-		const offlineSystemNotice = options.offline ? offlineNoticePrompt.trim() : undefined;
+		const offlineSystemNotice = getOfflineSystemNotice(options.offline);
 		const withOfflineSystemNotice = (context: Context): Context => {
 			if (!offlineSystemNotice || context.systemPrompt?.some(block => block.includes(offlineSystemNotice))) {
 				return context;

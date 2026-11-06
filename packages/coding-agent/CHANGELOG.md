@@ -69,6 +69,7 @@
 
 ### Changed
 
+- Guide offline sessions toward local and intranet resources, with Linux storage and csh terminal instructions only where applicable; normal sessions and shell execution remain unchanged.
 - Compact Output previews skip blank and symbol-only rows, align text with the tool header while preserving relative indentation, and shrink to fit up to five output rows without blank padding or changes to original results.
 - Compact Output previews use upstream tool-card backgrounds, bold headers and output colors without changing their text, alignment, line budget or lifecycle.
 - Compact Output cards exclude Todo tool results, keeping the existing Todo panel without duplicating tasks or replacing another tool's preview.

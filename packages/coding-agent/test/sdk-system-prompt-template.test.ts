@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -8,9 +9,13 @@ import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-sessi
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { CONFIG_DIR_NAME, TempDir } from "@oh-my-pi/pi-utils";
+import { getOfflineSystemNotice } from "@oh-my-pi/pi-coding-agent/utils/offline-notice";
 
 type SystemPromptOption = string | string[] | ((defaultPrompt: string[]) => string | string[]);
-type ExplicitSystemPromptOptions = Pick<CreateAgentSessionOptions, "systemPromptTemplate" | "customSystemPrompt">;
+type ExplicitSystemPromptOptions = Pick<
+	CreateAgentSessionOptions,
+	"systemPromptTemplate" | "customSystemPrompt" | "offline" | "taskDepth" | "getApiKey" | "extensions"
+>;
 
 async function withSession<T>(
 	nativeTemplate: string,
@@ -97,6 +102,56 @@ describe("SDK systemPrompt replacements", () => {
 			},
 			async session => {
 				expect(session.systemPrompt).toEqual(["callback replacement"]);
+			},
+		);
+	});
+});
+
+describe("SDK offline notice at the provider boundary", () => {
+	it("preserves a normal session's replacement prompt without company restrictions", async () => {
+		await withSession(
+			"",
+			["sdk replacement"],
+			async session => {
+				const mock = createMockModel({ handler: { content: ["done"] } });
+				session.agent.streamFn = mock.stream;
+				await session.prompt("hello");
+				expect(mock.calls[0]?.context.systemPrompt).toEqual(["sdk replacement"]);
+			},
+			{ getApiKey: async () => "test-key" },
+		);
+	});
+
+	it("deduplicates an existing notice and restores it after a child session's prompt replacement", async () => {
+		const notice = getOfflineSystemNotice(true)!;
+		let turns = 0;
+		await withSession(
+			"",
+			["child replacement", notice],
+			async session => {
+				const mock = createMockModel({ handler: { content: ["done"] } });
+				session.agent.streamFn = mock.stream;
+				await session.prompt("first turn");
+				await session.prompt("second turn");
+
+				expect(mock.calls).toHaveLength(2);
+				for (const call of mock.calls) {
+					const systemPrompt = call.context.systemPrompt?.join("\n\n") ?? "";
+					expect([...systemPrompt.matchAll(/<system-notice id="offline">/g)]).toHaveLength(1);
+				}
+				expect(mock.calls[1]?.context.systemPrompt?.[0]).toBe("new replacement");
+			},
+			{
+				offline: true,
+				taskDepth: 1,
+				getApiKey: async () => "test-key",
+				extensions: [
+					pi => {
+						pi.on("before_agent_start", () => {
+							if (++turns === 2) return { systemPrompt: ["new replacement"] };
+						});
+					},
+				],
 			},
 		);
 	});

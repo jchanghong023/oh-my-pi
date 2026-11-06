@@ -325,6 +325,8 @@ const forkCodingAgentFiles = new Set([
 	"test/codeagent-thinking-policy.test.ts",
 	"test/offline-subcommands.test.ts",
 	"test/cli-offline-env.test.ts",
+	"test/offline-notice.test.ts",
+	"test/sdk-system-prompt-template.test.ts",
 	"test/mnemopi-company-embeddings.test.ts",
 	"test/profile-cli.test.ts",
 	"test/profile-bootstrap.test.ts",

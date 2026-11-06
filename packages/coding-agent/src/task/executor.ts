@@ -64,7 +64,7 @@ import { IrcBus } from "../irc/bus";
 import type { MCPManagerApi, MCPToolScope } from "../mcp/manager";
 import type { MnemopiSessionStateApi } from "../mnemopi/state";
 import { initializeExtensions } from "../modes/runtime-init";
-import offlineNoticePrompt from "../prompts/system/offline-notice.md" with { type: "text" };
+import { getOfflineSystemNotice } from "../utils/offline-notice";
 import subagentAsyncPendingTemplate from "../prompts/system/subagent-async-pending.md" with { type: "text" };
 import subagentSystemPromptTemplate from "../prompts/system/subagent-system-prompt.md" with { type: "text" };
 import submitReminderTemplate from "../prompts/system/subagent-yield-reminder.md" with { type: "text" };
@@ -182,8 +182,6 @@ import {
 } from "../session/context-settings";
 
 export type { YieldItem } from "@oh-my-pi/pi-tui/tools/task";
-
-const OFFLINE_SYSTEM_NOTICE = offlineNoticePrompt.trim();
 
 const TASK_ABORT_CLEANUP_GRACE_MS = 10_000;
 
@@ -5087,7 +5085,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					outputSchemaMode: options.outputSchemaMode,
 					restrictToolNames,
 					requireYieldTool: structured,
-					appendSystemPrompt: isCompanyLaneActive() ? OFFLINE_SYSTEM_NOTICE : undefined,
+					appendSystemPrompt: getOfflineSystemNotice(isCompanyLaneActive()),
 					contextFiles: options.contextFiles,
 					noContextFiles: options.noContextFiles,
 					// Subagents never receive AGENTS.md, including from additional workspace roots they rediscover.

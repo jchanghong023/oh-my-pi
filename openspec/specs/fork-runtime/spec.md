@@ -34,6 +34,27 @@ OMP MUST 按同一 operation_id 记录安全的阶段、结果与时长；offlin
 - **WHEN** 关键操作开始、结束或失败
 - **THEN** 按同一 operation_id 记录安全的阶段、结果与时长；offline 默认记录 WARN／ERROR，尊重显式日志级别，日志故障不掩盖业务结果
 
+### Requirement: offline 环境专用系统提示词
+
+OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 MUST 使用同一静态模板及条件渲染入口，不改写用户配置或改变 Shell 执行器。
+
+#### Scenario: 按环境注入而不影响普通模式
+
+- **WHEN** 会话未启用 offline
+- **THEN** 不追加 offline 规则，已有系统提示词和 Shell 行为保持不变，即使宿主是 Linux/csh。
+- **WHEN** 会话启用 offline
+- **THEN** 提示模型使用本地资料、已有依赖、团队 Skills 和已配置内网服务，不访问公网、不回退公共下载源或反复联网安装；缺少必要输入时报告具体缺项。
+- **AND** 区分 OMP Python Eval、检查工具和项目业务解释器，不因工具解释器较新而升级项目语法或依赖。
+- **AND** 仅 Linux 追加公司项目存储边界：持久材料及必要备份放获准且可写的 NFS；临时文件与可重建缓存优先放当前用户的 `/dev/shm`，不作为持久数据唯一副本；不足时使用获准的 NFS，不回退 `/local`、`/tmp`、`/run/user`；复用已有数据根和共享技能路径，不自动迁移或改写配置，也不假定 sudo、计算 GPU 或新版系统工具可用。
+- **AND** 仅 Linux 且 `SHELL` 路径 basename 为 `csh` 或 `tcsh` 时追加用户终端语法规则：用户可复制命令用 `setenv`／`unsetenv` 和对应激活脚本；`bash` 工具仍使用自身语法。仅任务确需时确认并显式进入 csh/tcsh 初始化，不假定 `ma`／`module` alias 在工具子进程存在，不用 Bash source `.cshrc`。
+- **AND** Windows offline 不注入 Linux 存储或 csh 规则；不硬编码 CentOS、用户名、内网地址、软件版本或历史资源余量。
+
+#### Scenario: 自定义提示词及子代理保持一致
+
+- **WHEN** offline CLI 解析自定义追加提示词，或 SDK／task 子代理创建、恢复会话并向模型发送上下文
+- **THEN** 保留原有提示词内容并追加适用规则；最终 provider 上下文已有完整规则时不重复追加，自定义提示词替换不能绕过 offline 规则。
+- **AND** 这些规则仅指导模型，不替代网络隔离、文件权限或现有数据目录解析，不自动执行安装、环境切换或数据搬迁。
+
 ### Requirement: 安装与运行
 
 OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告。

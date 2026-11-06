@@ -45,7 +45,7 @@ import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker"
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { isUserSourceEnabled } from "./capability";
 import { findConfigFile } from "./config";
-import offlineNoticePrompt from "./prompts/system/offline-notice.md" with { type: "text" };
+import { getOfflineSystemNotice } from "./utils/offline-notice";
 import {
 	COMPANY_OFFLINE_CONTEXT_WINDOW,
 	COMPANY_OFFLINE_ROLE_DEFAULTS,
@@ -1411,8 +1411,8 @@ export function applyResolvedSystemPromptInputs(
 	}
 	// OMP_OFFLINE: append the offline-environment notice after any resolved append
 	// prompt so it reaches the model in every session built from this launch.
-	if (parsed.offline) {
-		const offlineNoticeText = offlineNoticePrompt.trim();
+	const offlineNoticeText = getOfflineSystemNotice(parsed.offline);
+	if (offlineNoticeText) {
 		options.appendSystemPrompt = options.appendSystemPrompt
 			? `${options.appendSystemPrompt}\n\n${offlineNoticeText}`
 			: offlineNoticeText;

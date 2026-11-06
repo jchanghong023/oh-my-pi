@@ -98,26 +98,6 @@ describe("applyResolvedSystemPromptInputs", () => {
 
 		expect(options.appendSystemPrompt).toBeUndefined();
 	});
-
-	it("appends the offline notice when launched with OMP_OFFLINE=1", () => {
-		const options: CreateAgentSessionOptions = {};
-		const parsed = { ...parseArgs([]), offline: true };
-
-		applyResolvedSystemPromptInputs(options, undefined, undefined, parsed);
-
-		expect(typeof options.appendSystemPrompt).toBe("string");
-		expect(options.appendSystemPrompt?.length).toBeGreaterThan(0);
-	});
-
-	it("appends the offline notice after an existing append prompt under offline mode", () => {
-		const options: CreateAgentSessionOptions = {};
-		const parsed = { ...parseArgs([]), offline: true };
-
-		applyResolvedSystemPromptInputs(options, undefined, "existing append", parsed);
-
-		expect(options.appendSystemPrompt?.startsWith("existing append\n\n")).toBe(true);
-		expect(options.appendSystemPrompt?.length).toBeGreaterThan("existing append\n\n".length);
-	});
 });
 describe("system prompt template CLI resolution", () => {
 	async function buildPromptOptions(cwd: string, args: string[]): Promise<CreateAgentSessionOptions> {

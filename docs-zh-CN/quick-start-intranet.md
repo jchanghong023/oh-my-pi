@@ -91,6 +91,16 @@ OMP 的 **Python Eval** 与项目业务 Python 分开：显式 `python.interpret
 
 OMP 启动及主会话／子代理会话创建、恢复时不检查或预热 Python，也不显示首次启动的 Python 缺失警告。实际执行 Python Eval 时才按上述规则检查解释器，不可用时返回明确错误；需要提前诊断可手动运行 `omp setup python --check`。
 
+### 内网环境提示词
+
+`OMP_OFFLINE` 生效时，主会话、SDK 和子代理统一获得内网规则：优先本地资料、已有依赖、团队 Skills 与已配置内网服务，不访问公网或反复尝试公共源安装；缺少资源时报告具体缺项。检查工具、Python Eval 和业务 Python 分开，不擅自升级项目目标版本。
+
+Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS，临时文件与可重建缓存优先使用当前用户的 `/dev/shm`；shm 易失，不存唯一持久副本，不以 `/local`、`/tmp`、`/run/user` 回退。沿用已配置的数据根及共享技能目录，不自动迁移数据。
+
+仅当 Linux 的 `SHELL` 路径末段为 `csh` 或 `tcsh` 时，给用户复制执行的命令使用 `setenv`／`unsetenv` 等 csh 语法。OMP 的 `bash` 工具仍遵循自身执行语言；不能直接提交 csh 语法、假定 `ma` alias 可用，或用 Bash source `.cshrc`。确需模块初始化时才确认入口并显式通过对应 Shell 执行。
+
+普通模式不追加上述规则，Windows offline 不追加 Linux/csh 段落；不改变 Shell 执行器或用户配置。提示词不替代实际网络隔离、存储权限和公司实机验证。
+
 ### 中文输入法突然失效
 
 在发生故障的 OMP 输入框输入 `/jchime` 并发送；也可输入 `/jchime 只有当前窗口不能输入中文` 补充现象。内置指令已包含供较小模型执行的完整恢复块，无需另找脚本或填写总线地址。
