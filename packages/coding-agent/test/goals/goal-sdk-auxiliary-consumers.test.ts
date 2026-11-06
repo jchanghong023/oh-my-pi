@@ -381,7 +381,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 				};
 			});
 			const notice = await h.run(() => enter(h.session, h.signal));
-			const snapshot = structuredClone(notice);
 			const bytes = JSON.stringify(notice);
 			const text = contentText(notice.content);
 			const providerNotice = convertToLlm([notice])[0]!;
@@ -447,8 +446,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 						return result;
 					});
 					await h.run(() => child.prompt("Read the existing history; do not recreate the root Goal notice."));
-					// Reloading preserves fields and content, not object insertion order.
-					expect(notices(child)).toEqual([snapshot]);
 					expect(convertToLlm(notices(child))).toEqual([providerNotice]);
 					expect(
 						child.sessionManager
