@@ -191,18 +191,28 @@ async function run(
 	signal?.throwIfAborted();
 	const child = Bun.spawn(command, {
 		cwd,
-		signal,
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
 		env: { ...process.env, OPENSPEC_TELEMETRY: "0", DO_NOT_TRACK: "1", ...extraEnv },
 	});
-	const [stdout, stderr, exitCode] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	return { exitCode, stdout, stderr };
+	// Bun's spawn AbortSignal can reject `exited` before the child has been
+	// reaped. Own cancellation so the CLI cannot exit and orphan that child.
+	const abort = () => child.kill();
+	signal?.addEventListener("abort", abort, { once: true });
+	if (signal?.aborted) abort();
+	try {
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		signal?.throwIfAborted();
+		return { exitCode, stdout, stderr };
+	} finally {
+		signal?.removeEventListener("abort", abort);
+		await child.exited;
+	}
 }
 
 /** Locate the native init target without treating option values as paths. */

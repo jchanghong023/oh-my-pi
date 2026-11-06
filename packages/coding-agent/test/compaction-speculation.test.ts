@@ -114,6 +114,9 @@ describe("async speculative compaction", () => {
 			) => Promise<{ document: string } | undefined>;
 		} = {},
 	): SessionMaintenance {
+		// Keep fresh compaction and speculation on the same explicit protocol
+		// fixture instead of relying on retired providers in the live catalog.
+		vi.spyOn(modelRegistry, "getAvailable").mockImplementation(() => [model]);
 		agent = new Agent({
 			initialState: { model, systemPrompt: ["Test"], tools: [], messages: [] },
 		});

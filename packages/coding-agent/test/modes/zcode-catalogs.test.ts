@@ -122,7 +122,7 @@ describe("native profile catalog settings", () => {
 		const references = await f.catalogs.skillReferences(f.cwd, { settings: f.settings });
 		expect(references.skills.some(item => item.name === "sample" && item.pluginName === "sample-plugin")).toBe(true);
 		expect(await fs.readFile(f.registry, "utf8")).toBe(registryBefore);
-		expect(await fs.readdir(f.cwd)).toEqual([".git", "package"]);
+		expect((await fs.readdir(f.cwd)).sort()).toEqual([".git", "package"]);
 	});
 	it("keeps disabled skills in plugin inventory but excludes them from executable references", async () => {
 		const f = await fixture();

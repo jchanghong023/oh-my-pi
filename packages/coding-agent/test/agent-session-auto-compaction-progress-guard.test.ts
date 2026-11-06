@@ -138,6 +138,10 @@ describe("AgentSession auto-compaction progress guard", () => {
 			maxTokens: options.contextWindow ? Math.min(64_000, Math.floor(options.contextWindow / 4)) : 64_000,
 		};
 
+		// Protocol fixtures are outside the supported chat catalog; auth alone
+		// does not make them available to the blocking compaction path.
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([model]);
+
 		const agent = new Agent({
 			convertToLlm,
 			...(options.onProviderCall

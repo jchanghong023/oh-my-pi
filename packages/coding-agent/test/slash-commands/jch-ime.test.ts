@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import PurePosixPath as Path
@@ -84,7 +85,7 @@ with contextlib.ExitStack() as stack:
     stack.enter_context(patch.dict(os.environ, environment, clear=True))
     stack.enter_context(patch("sys.platform", "win32" if mode == "windows" else "linux"))
     stack.enter_context(patch("os.getuid", return_value=1000, create=True))
-    stack.enter_context(patch("shutil.which", return_value="/usr/bin/ibus"))
+    stack.enter_context(patch.object(shutil, "which", return_value="/usr/bin/ibus"))
     stack.enter_context(patch("subprocess.run", run))
     stack.enter_context(patch("pathlib.Path", Path))
     stack.enter_context(patch.object(Path, "iterdir", lambda self: iter(Path("/proc") / str(pid) for pid in list(processes)), create=True))

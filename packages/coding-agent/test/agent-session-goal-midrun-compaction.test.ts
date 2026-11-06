@@ -116,6 +116,9 @@ describe("AgentSession mid-run threshold compaction", () => {
 		const model = goalProtocolModel();
 
 		const modelRegistry = sharedModelRegistry;
+		// This protocol fixture is not in the supported chat catalog. Make its
+		// availability explicit so real compaction selection can reach the seam.
+		vi.spyOn(modelRegistry, "getAvailable").mockReturnValue([model]);
 		const parentSettings = Settings.isolated({
 			"compaction.enabled": true,
 			"compaction.methodOrder": ["soft"],

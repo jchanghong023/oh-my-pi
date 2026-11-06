@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { type CreateAgentSessionOptions, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
@@ -10,6 +9,7 @@ import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { CONFIG_DIR_NAME, TempDir } from "@oh-my-pi/pi-utils";
 import { getOfflineSystemNotice } from "@oh-my-pi/pi-coding-agent/utils/offline-notice";
+import { getTestModel } from "./helpers/model-fixtures";
 
 type SystemPromptOption = string | string[] | ((defaultPrompt: string[]) => string | string[]);
 type ExplicitSystemPromptOptions = Pick<
@@ -38,7 +38,7 @@ async function withSession<T>(
 			modelRegistry,
 			settings: Settings.isolated(),
 			sessionManager: SessionManager.inMemory(cwd),
-			model: getBundledModel("openai", "gpt-4o-mini"),
+			model: getTestModel("openai-codex"),
 			disableExtensionDiscovery: true,
 			skills: [],
 			contextFiles: [],
