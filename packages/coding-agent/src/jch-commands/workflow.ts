@@ -1,4 +1,5 @@
 import { prompt } from "@oh-my-pi/pi-utils";
+import forkReviewerPrompt from "../prompts/jch-forkreviewer.md" with { type: "text" };
 import imePrompt from "../prompts/jch-ime.md" with { type: "text" };
 import workflowzBatchPrompt from "../prompts/jch-workflowzbatch.md" with { type: "text" };
 import { usage } from "../slash-commands/helpers/parse";
@@ -8,6 +9,12 @@ import { defineJchPromptCommand } from "./define";
 const JCH_WORKFLOWZ_BATCH_USAGE = "用法：/jch-workflowzbatch <任务块软目标：正整数> <并发上限：正整数> <任务正文>";
 
 export const JCH_WORKFLOW_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
+	defineJchPromptCommand({
+		name: "forkreviewer",
+		description: "按功能分片只读审查已提交 fork 差异，主代理仅编排汇总",
+		inlineHint: "[自然语言范围、路径或比较引用]",
+		prompt: forkReviewerPrompt,
+	}),
 	{
 		name: "jch-workflowzbatch",
 		description: "JCH：展开独立任务工作流批处理要求，禁止测试和全仓检查",

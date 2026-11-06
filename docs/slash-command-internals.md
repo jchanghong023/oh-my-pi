@@ -561,3 +561,33 @@ Apply the rubric from the loaded skill. Report only issues introduced by the pat
 
 - `autoloadSkills` names skills from the parent session. Each one is injected as a hidden message before the reviewer's first prompt, like `/skill:<name>`. A name the parent does not know is ignored.
 - `spawns` limits which agents the reviewer may start with `task`. `scout` allows only an agent named `scout`, `*` allows any agent, and omitting it (with no `task` in `tools`) gives no spawning. When `tools` is declared and `spawns` is set, `task` is added to the tool list. At the maximum recursion depth `task` is removed and spawning is off.
+
+## 16) Built-in command note: `/forkreviewer`
+
+`/forkreviewer [scope]` expands a prompt into the current main session in TUI, ACP and RPC, using the existing JCH prompt-command path. It uses one bundled specialist agent type, `forkreviewer`, across small review tasks; it does not change `/review` or the ordinary `reviewer`.
+
+| Invocation | Scope |
+| ---------- | ----- |
+| `/forkreviewer` | All committed fork differences and their necessary upstream/downstream context |
+| `/forkreviewer 审查全仓库代码` | The same full-fork scope, not an independent audit of unchanged upstream code |
+| `/forkreviewer 审查 dev 模式代码` | The dev feature's related differences, entrypoints and producer/consumer boundaries, including paths without `dev` in their names |
+| `/forkreviewer 审查 dev 模式代码，比较 upstream/main 与 my-fork` | The requested feature scope using two explicit local comparison refs |
+
+**Comparison and requirements.** Explicit comparison refs take precedence. Otherwise the workflow resolves the repository's recorded upstream baseline and current committed `HEAD` to full SHAs, then pins that pair for every shard and source read. Dirty-worktree changes are excluded and left untouched; the comparison is not just the last commit or merge. Each handoff carries the pair, bounded ownership, upstream counterparts or added/deleted-file context, applicable approved requirements and a concrete review objective. Pending proposals are not automatically approved requirements. Missing comparison refs, requirements or dispatch/workpool/specialist capabilities are reported as blocking the affected scope, without guessing, fetching, installing or silently switching to a single-agent review.
+
+**Partition and dispatch.** The main agent only determines scope, partitions, dispatches, tracks coverage and collects compact results. It does not review shard code or re-review findings, and adds no candidate filtering, scoring, adversarial pass or second reviewer. Small bounded tasks use the current workpool's queue, concurrency, replacement and cancellation behavior; shard count is independent of concurrency, without sampling or a new scheduler/configuration. Specialists inspect their own shard and necessary caller/consumer evidence, take responsibility for their conclusions and never spawn nested agents. Cross-shard scope requests go back to the main agent for ownership/dispatch, not finding re-review.
+
+**Results.** Each small shard returns one terminal structured `yield({ data: { status, findings, ... } })` containing the full result object, with no incremental sections or repeated payload in its final reply:
+
+| Field | Meaning |
+| ----- | ------- |
+| `status` | Required: `completed` or `blocked` |
+| `findings` | Required list of `{ location, issue, evidence }` strings: precise location, real change-required issue and impact, shortest supporting evidence |
+| `blocked_reason` | Optional explanation of missing material/capability |
+| `scope_requests` | Optional list of `{ scope, reason }` strings for additional ownership |
+
+Normal completion without proven issues returns `findings: []`, not praise, nits, speculative suggestions or a correctness score. Blocking and scope requests are separate from findings; failures and cancellation retain their existing task-engine states, never successful empty results. The main agent keeps shard indexes, statuses and compact issues, with existing result references for full reports, and reports unfinished scope rather than claiming coverage.
+
+**Read-only boundary.** The command authorizes local source/requirements searches, read-only Git inspection, existing orchestration and reporting only. It performs no fixes, tests, builds, formatting, installs, network requests, fetches, configuration changes, commits or pushes, and does not mutate the worktree, index, branches or baseline. The specialist has local read/search tools, Bash for read-only Git inspection and structured `yield`, but no edit/write, task, web or eval tools. This is a prompt workflow and agent-behavior contract, not a deterministic static analyzer or a Bash sandbox; Bash read-only use is prompt-restricted as with the existing reviewer. Empty findings or completed shards do not prove defect absence, runtime correctness or model review accuracy; model selection uses existing agent configuration.
+
+**Reference.** The workflow adapts Superpowers' [requesting-code-review](../packages/coding-agent/src/spec-driven/vendor/resources/superpowers/skills/requesting-code-review/SKILL.md) and [reviewer handoff](../packages/coding-agent/src/spec-driven/vendor/resources/superpowers/skills/requesting-code-review/code-reviewer.md): targeted requirements, precise SHA pairs, crafted self-contained context, no nested reviewers and each specialist's own evidence. It does not adopt praise, nits, follow-up fixes, worktree mutations or re-review.
