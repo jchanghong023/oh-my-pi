@@ -30,8 +30,12 @@ type Scenario = ProviderScenario & {
 	onScreenFailureEvidence?: (directory: string) => void;
 };
 
-async function eventually<T>(read: () => Promise<T>, predicate: (value: T) => boolean): Promise<T> {
-	const deadline = Date.now() + 60_000;
+async function eventually<T>(
+	read: () => Promise<T>,
+	predicate: (value: T) => boolean,
+	timeout = 60_000,
+): Promise<T> {
+	const deadline = Date.now() + timeout;
 	let value = await read();
 	while (!predicate(value)) {
 		if (Date.now() >= deadline) throw new Error(`Timed out waiting for native state: ${JSON.stringify(value)}`);

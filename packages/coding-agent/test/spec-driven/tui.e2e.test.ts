@@ -96,7 +96,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				async function viewMaterials(files: string[], draft: string, resize = false): Promise<void> {
 					const before = await state();
 					const calls = provider.requests.length;
-					const normalize = (text: string) => text.replace(/[│┃║┆┊\s]/gu, "");
+					const normalize = (text: string) => text.replace(/[│┃║┆┊█\s]/gu, "");
 					const expected = await Promise.all(
 						files.map(async file => {
 							const content = await Bun.file(path.join(cwd, file)).text();
@@ -107,22 +107,38 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 							};
 						}),
 					);
+					const expectedDetails = expected
+						.flatMap(file => [
+							file.path,
+							...file.lines,
+							...(file.solution
+								? file.solution.candidates.map(
+										(candidate: { id: string; title: string }) =>
+											`${candidate.title} (${candidate.id})${candidate.id === file.solution.recommendedCandidateId ? " · 推荐" : ""}`,
+									)
+								: []),
+						])
+						.map(normalize);
 					await tui("submit", "/session");
 					await tui("expect", "text", "Session Info", "--timeout", "30000");
 					const screens: string[] = [];
 					async function scrollDetails(): Promise<void> {
 						await tui("key", "press", "Home");
-						let previous: string | undefined;
+						await tui("expect", "text", "Dev 工作区", "--timeout", "30000");
+						const viewports: string[] = [];
+						let screen = await tui("text");
 						for (let index = 0; index < 100; index++) {
-							await tui("wait", "idle", "--timeout", "30000");
-							const screen = await tui("text");
+							viewports.push(normalize(screen));
 							screens.push(normalize(screen));
-							if (screen === previous) return;
-							previous = screen;
-							// Overlap each viewport so wrapped material lines remain readable in full.
+							const details = viewports.join("\n");
+							if (expectedDetails.every(detail => details.includes(detail))) return;
+							// Visual idle can precede key consumption. A changed viewport
+							// acknowledges scrolling; identical samples are not an end marker.
+							const previous = screen;
 							await tui("key", "press", "Down", "Down", "Down", "Down", "Down");
+							screen = await eventually(() => tui("text"), next => next !== previous, 30_000);
 						}
-						throw new Error("Native /session details did not reach their scroll boundary");
+						throw new Error("Native /session details did not expose every material");
 					}
 					await scrollDetails();
 					if (resize) {
@@ -294,13 +310,12 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				await tui("key", "press", "Escape", "Escape");
 				await tui("key", "press", "a", "Home");
 				let historyScreen = "";
-				let previousHistoryScreen: string | undefined;
 				for (let index = 0; index < 500; index++) {
-					await tui("wait", "idle", "--timeout", "30000");
 					historyScreen = await tui("text");
-					if (historyScreen.includes(discussion) || historyScreen === previousHistoryScreen) break;
-					previousHistoryScreen = historyScreen;
+					if (historyScreen.includes(discussion)) break;
+					const previous = historyScreen;
 					await tui("key", "press", "Shift+Down");
+					historyScreen = await eventually(() => tui("text"), next => next !== previous, 30_000);
 				}
 				expect(historyScreen).toContain(discussion);
 				await tui("key", "press", "Escape");
@@ -549,16 +564,26 @@ test.skipIf(!tuiTest)(
 				// A real filesystem fault blocks native requirement sync, not a mocked close result.
 				await fs.mkdir(path.join(cwd, "openspec/specs"), { recursive: true });
 				await Bun.write(path.join(cwd, "openspec/specs/greeting"), "deliberate-sync-obstruction\n");
+				const closingDiagnostic = await fs.realpath(path.join(cwd, "openspec/specs/greeting/spec.md")).then(
+					() => {
+						throw new Error("The closing fixture unexpectedly resolved through its file obstruction");
+					},
+					(error: unknown) => {
+						if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+						return error.message;
+					},
+				);
 				const beforeClosing = provider.requests.length;
 				await tui("submit", "/dev next");
-				await tui("expect", "text", "OpenSpec archive failed", "--timeout", "30000");
+				// Containment preflight may reject the real obstruction before the
+				// archive CLI runs. Assert its cause, full details and restored input.
+				await expectNativeFailure(tui, /ENOTDIR/u, closingDiagnostic, "/dev next");
 				await idle();
 				expect((await state()).run?.sessions.executor?.sessionFile).toBe(execution.sessions.executor?.sessionFile);
 				expect((await state()).run?.archivedChangePath).toBeUndefined();
 				expect(provider.requests).toHaveLength(beforeClosing);
 				const acceptedReport = await Bun.file(path.join(cwd, missingReportPath)).text();
 				await Bun.write(path.join(cwd, missingReportPath), `${acceptedReport}\nExternal post-acceptance edit.\n`);
-				await clearNativeDraft(tui, "/dev next");
 				await tui("submit", "/dev next");
 				await tui("expect", "text", "变化", "--timeout", "30000");
 				expect((await state()).run?.sessions.executor?.sessionId).toBe(execution.sessions.executor?.sessionId);
