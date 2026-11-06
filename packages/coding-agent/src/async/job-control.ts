@@ -149,6 +149,7 @@ interface TrackedJobLike {
 	type: AsyncJobType;
 	status: string;
 	label: string;
+	name?: string;
 	/** See {@link AsyncJob.intent}. */
 	intent?: string;
 	startTime: number;
@@ -231,6 +232,7 @@ export function snapshotJobs(session: ToolSession, jobs: TrackedJobLike[]): JobS
 			type: latest.type,
 			status: latest.status as JobSnapshot["status"],
 			label: latest.label,
+			...(latest.name ? { name: latest.name } : {}),
 			...(latest.intent ? { intent: latest.intent } : {}),
 			durationMs: Math.max(0, (latest.endTime ?? now) - latest.startTime),
 			...(exitCode !== undefined ? { exitCode } : {}),
@@ -328,6 +330,7 @@ export function buildJobResult(
 		lines.push(`## Completed (${completed.length})\n`);
 		for (const j of completed) {
 			lines.push(`### ${j.id} [${j.type}] — ${j.status}`);
+			if (j.name) lines.push(`Name: ${j.name}`);
 			if (j.intent) lines.push(`Intent: ${j.intent}`);
 			lines.push(`Label: ${j.label}`);
 			const handles = taskAgentHandles(j.id, j, j.agentUrlId);
@@ -378,7 +381,7 @@ export function buildJobResult(
 		for (const j of running) {
 			const intent = j.intent ? `${j.intent} — ` : "";
 			lines.push(
-				`- \`${j.id}\` [${j.type}] — ${intent}${j.label}${runningTaskProgressSuffix(j, { duration: true })}`,
+				`- \`${j.id}\` [${j.type}] — ${j.name ? `${j.name} — ` : ""}${intent}${j.label}${runningTaskProgressSuffix(j, { duration: true })}`,
 			);
 		}
 	}

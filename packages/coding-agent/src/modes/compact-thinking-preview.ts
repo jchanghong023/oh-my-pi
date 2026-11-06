@@ -146,6 +146,22 @@ function updateCall(call: Call, args?: unknown, result?: ToolRenderResult<unknow
 	}
 }
 
+/** Share request-side identity and target projection without reusing an activity component. */
+export function compactToolPreviewInfo(
+	name: string,
+	args: unknown,
+	intent?: string,
+	result?: ToolRenderResult<unknown>,
+): { name: string; detail: string; command?: string } {
+	const call: Call = { id: "", name, detail: "", intent };
+	updateCall(call, args, result);
+	return {
+		name: call.semanticName && call.semanticName !== name ? `${name} (${call.semanticName})` : name,
+		detail: call.detail,
+		command: call.command,
+	};
+}
+
 function waitTarget(name: string, result?: ToolRenderResult<CoordinationDetails>): string | undefined {
 	if (name !== "wait" || !Array.isArray(result?.details?.jobs) || !result.details.jobs.length) return undefined;
 	return waitToolRenderer.activitySummary({}, { expanded: false, isPartial: true, result }).detail;

@@ -59,6 +59,8 @@ export interface JobSnapshot {
 	type: "bash" | "task" | "eval";
 	status: "running" | "completed" | "failed" | "cancelled";
 	label: string;
+	/** Stable display name of a finite Bash job, independent of its command and ID. */
+	name?: string;
 	/** What the job is for, in the model's words (a process job's `label` is its command line). */
 	intent?: string;
 	durationMs: number;
@@ -287,7 +289,7 @@ function failurePreview(job: JobSnapshot): { lines: string[]; artifact?: string 
 /** The row label: a running task's own stage line when it reports one, else what the job is for, else its label. */
 function jobRowLabel(job: JobSnapshot): string {
 	if (job.type === "task" && job.status === "running" && job.stage?.trim()) return job.stage;
-	return job.intent || job.label;
+	return `${job.name ? `${job.name} — ` : ""}${job.intent || job.label}`;
 }
 
 /** A job as its tile; `live` while the card's clocks run. */
@@ -296,7 +298,7 @@ function jobTile(job: JobSnapshot, live: boolean): JobTile {
 		id: job.id,
 		type: job.type,
 		status: job.status,
-		label: job.intent || job.label,
+		label: jobRowLabel(job),
 		durationMs: job.durationMs,
 		live: live && job.status === "running",
 		...(job.widget ? { widget: job.widget } : {}),
@@ -989,7 +991,7 @@ export const waitToolRenderer = {
 			return { label: "Wait", detail: "Background work or peer message" };
 		}
 		const label = typeof job.label === "string" ? job.label.split(/\r?\n/, 1)[0].trim() : "";
-		const target = `[${job.type}] ${job.id}${label && label !== job.id ? ` ${label}` : ""}`;
+		const target = `[${job.type}] ${job.id}${job.name ? ` ${job.name}` : ""}${label && label !== job.id ? ` ${label}` : ""}`;
 		return { label: "Wait", detail: `${target}${jobs.length > 1 ? ` · +${jobs.length - 1} jobs` : ""}` };
 	},
 	renderCall: waitRenderCall,

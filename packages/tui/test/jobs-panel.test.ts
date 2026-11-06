@@ -89,6 +89,42 @@ describe("JobsSheet", () => {
 		expect(prop(byRole(root, "omp.jobs.summary")[0], "text")).toBe("2 running · 1 recent");
 	});
 
+	it("keeps finite Bash names and original IDs visible through selection, settlement and held-detail rebuilds", () => {
+		const job: JobsPanelJob = {
+			id: "bg_7",
+			name: "Owner Bash 4",
+			type: "bash",
+			status: "running",
+			label: "cargo test --workspace",
+			startTime: NOW - 2_000,
+		};
+		let jobs: JobsPanelSnapshot = { running: [job], recent: [] };
+		const source = {
+			load: () => jobs,
+			inspect: () => DETAILS["bash-1"],
+			cancel: vi.fn(),
+			close: vi.fn(),
+		};
+		const sheet = new JobsSheet(source);
+		for (const state of ["running", "failed", "evicted"] as const) {
+			if (state === "failed") jobs = { running: [], recent: [{ ...job, status: "failed", endTime: NOW }] };
+			if (state === "evicted") jobs = { running: [], recent: [] };
+			const root = sheet.describe(CX);
+			expect(texts(list(root)!)).toContain("Owner Bash 4");
+			expect(texts(list(root)!)).toContain("bg_7");
+			expect(prop(byRole(root, "omp.jobs.facts")[0], "items")).toContainEqual({
+				k: "Name",
+				v: [{ t: "Owner Bash 4" }],
+			});
+			expect(texts(byRole(root, "omp.jobs.id")[0]!)).toContain("bg_7");
+			const ansi = sheet.render(160).join("\n");
+			expect(ansi).toContain("Owner Bash 4");
+			expect(ansi).toContain("bg_7");
+			if (state === "running") sheet.handleInput("x");
+		}
+		expect(source.cancel).toHaveBeenCalledWith("bg_7");
+	});
+
 	it("moves the selection with ↑/↓ and shows the selected job's command and output", () => {
 		const { sheet } = setup();
 		sheet.handleInput(DOWN);

@@ -306,7 +306,8 @@ import { buildNamedToolChoice, isToolChoiceActive } from "../utils/tool-choice";
 import type { EventBus } from "../utils/event-bus";
 import type { VibeModeState } from "../vibe/state";
 import type { AgentSessionEvent, AgentSessionEventListener } from "./agent-session-events";
-import { type AgentViewSession, isLocalAgentSession } from "./agent-session-handle";
+import { type AgentViewSession, isLocalAgentSession, type LiveToolOutputSnapshot } from "./agent-session-handle";
+import { LiveToolOutputState } from "./live-tool-output";
 import {
 	asyncJobSnapshot,
 	asyncJobTree,
@@ -1111,6 +1112,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#lastAppendOnlyResolution?: { enable: boolean; providerId: string | undefined };
 	#eventListeners: AgentSessionEventListener[] = [];
 	#activeToolExecutionUpdates = new Map<string, Extract<AgentSessionEvent, { type: "tool_execution_update" }>>();
+	readonly #liveToolOutput = new LiveToolOutputState();
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
@@ -4045,6 +4047,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	async #emitSessionEvent(event: AgentSessionEvent, options: { detachExtensions?: boolean } = {}): Promise<void> {
+		this.#liveToolOutput.observe(event, Date.now());
 		if (event.type === "tool_execution_update") {
 			// Returned background calls have no later tool result to persist their
 			// terminal frame. Keep the latest update for future focus rebuilds;
@@ -6071,6 +6074,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	activeToolExecutionUpdates(): readonly Extract<AgentSessionEvent, { type: "tool_execution_update" }>[] {
 		return [...this.#activeToolExecutionUpdates.values()];
+	}
+
+	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
+		return this.#liveToolOutput.snapshot();
 	}
 
 	/**
@@ -8128,6 +8135,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// still-cached background-task snapshot from the old conversation must not
 		// survive to be replayed by a focus rebuild in the reset session (#10447).
 		this.#activeToolExecutionUpdates.clear();
+		this.#liveToolOutput.clear();
 	}
 
 	/**

@@ -64,8 +64,11 @@ import {
 	type AgentViewSessionManager,
 	type AgentViewState,
 	isLocalAgentSession,
+	type LiveToolOutputSnapshot,
+	type LiveToolOutputStamp,
 	type ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
+import { LiveToolOutputState } from "../session/live-tool-output";
 import type {
 	AgentSessionDisposeOptions,
 	AsyncJobInspection,
@@ -221,6 +224,7 @@ function emptyViewState(): SessionViewState {
 		ephemeralMaxTokensPreservesRequest: false,
 		settings: { base: null, layers: [] },
 		activeToolExecutionUpdates: [],
+		liveToolOutput: [],
 	};
 }
 
@@ -283,6 +287,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	#builtInTools = new Set<string>();
 	#runToolCallIds = new Set<string>();
 	readonly #activeUpdates = new Map<string, ToolExecutionUpdateEvent>();
+	readonly #liveToolOutput = new LiveToolOutputState();
 	#entries: SessionEntry[] = [];
 	readonly #entryIndex = new SessionEntryIndex();
 	/** Custom entries appended here and not yet echoed back by the home worker. */
@@ -541,6 +546,10 @@ export class RemoteAgentSession implements AgentViewSession {
 
 	activeToolExecutionUpdates(): readonly ToolExecutionUpdateEvent[] {
 		return [...this.#activeUpdates.values()];
+	}
+
+	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[] {
+		return this.#liveToolOutput.snapshot();
 	}
 
 	settleInFlightMessagePersistence(): Promise<void> {
@@ -885,6 +894,7 @@ export class RemoteAgentSession implements AgentViewSession {
 	/** Bridge only: merge a state patch from the publisher. */
 	applyPatch(patch: Partial<SessionMirrorState>): void {
 		if (this.#closed !== undefined) return;
+		if (patch.sessionId !== undefined && patch.sessionId !== this.#state.sessionId) this.#liveToolOutput.clear();
 		this.#state = { ...this.#state, ...patch };
 		if (patch.pendingToolCalls) this.#pendingToolCalls = new Set(patch.pendingToolCalls);
 	}
@@ -906,6 +916,7 @@ export class RemoteAgentSession implements AgentViewSession {
 		this.#pruneSettled(state.restorableQueue);
 		this.#activeUpdates.clear();
 		for (const update of state.activeToolExecutionUpdates) this.#activeUpdates.set(update.toolCallId, update);
+		this.#liveToolOutput.restore(state.liveToolOutput);
 		if (entries) this.applyEntries(entries);
 		this.#entryIndex.setLeaf(state.leafId);
 		this.#syncViewDerived(state);
@@ -939,9 +950,10 @@ export class RemoteAgentSession implements AgentViewSession {
 	}
 
 	/** Bridge only: dispatch one forwarded event to subscribers. */
-	applyEvent(event: AgentSessionEvent): void {
+	applyEvent(event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined): void {
 		if (this.#closed !== undefined) return;
 		this.#trackEvent(event);
+		if (outputStamp) this.#liveToolOutput.observe(event, outputStamp.receivedAt, outputStamp.dispatchOrder);
 		for (const listener of [...this.#listeners]) {
 			try {
 				listener(event);

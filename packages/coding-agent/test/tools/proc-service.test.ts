@@ -168,6 +168,9 @@ describe("proc:// background jobs", () => {
 			expect(list.content).toContain(`${id} [bash] running`);
 			expect(list.content).not.toContain("other-job");
 			expect(list.details?.proc?.jobs).toMatchObject([{ id, status: "running" }]);
+			const name = list.details?.proc?.jobs?.[0]?.name;
+			expect(name?.trim()).toBeTruthy();
+			expect(list.content).toContain(name!);
 			await expect(protocol.resolve(parseInternalUrl("proc://other-job"), { session })).rejects.toThrow("not found");
 			await expect(protocol.write(parseInternalUrl("proc://other-job/kill"), "", { session })).rejects.toThrow(
 				"not found",
@@ -189,6 +192,7 @@ describe("proc:// background jobs", () => {
 			);
 			expect(cancelled.details?.proc).toMatchObject({ op: "cancel", cancelled: [{ id, status: "cancelled" }] });
 			expect(manager.getJob(id)?.status).toBe("cancelled");
+			expect(cancelled.content[0]?.type === "text" ? cancelled.content[0].text : "").toContain(`Name: ${name}`);
 			const settledId = manager.register("bash", "completed command", async () => "DONE", {
 				id: "settled-job",
 				ownerId: "Main",
@@ -594,7 +598,7 @@ describe("proc:// background jobs", () => {
 			expect(rows.find(row => row.startsWith(taskId))).toMatch(
 				/ \[task\] running up \S+ — AcpSurface — 90 req · \$18\.40 · ctx 160K\/1M$/,
 			);
-			expect(rows.find(row => row.startsWith(bashId))).toMatch(/ \[bash\] running up \S+ — sleep 60$/);
+			expect(rows.find(row => row.startsWith(bashId))).not.toMatch(/90 req|\$18\.40/u);
 			const single = await proc.resolve(parseInternalUrl(`proc://${taskId}`), { session });
 			expect(single.content.split("\n")[0]).toMatch(
 				new RegExp(`^${taskId} \\[task\\] — running — AcpSurface — \\S+ · 90 req · \\$18\\.40 · ctx 160K/1M$`),

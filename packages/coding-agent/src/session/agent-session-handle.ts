@@ -13,6 +13,7 @@ import type { Effort, ImageContent, Model, ServiceTier, ToolResultMessage, Usage
 import type { ConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
+import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import type { Rule } from "../capability/rule";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -237,6 +238,23 @@ export interface AgentViewState {
 /** Live `tool_execution_update` event replayed when the TUI attaches mid-tool. */
 export type ToolExecutionUpdateEvent = Extract<AgentSessionEvent, { type: "tool_execution_update" }>;
 
+/** Display-only facts retained from actual dispatch, independent of transcript card lifetime. */
+export interface LiveToolOutputSnapshot {
+	toolCallId: string;
+	toolName: string;
+	args?: unknown;
+	intent?: string;
+	dispatchOrder: number;
+	result?: ToolRenderResult<unknown>;
+	terminalAt?: number;
+}
+
+/** Home-thread time and ordering for the mirrored output projection. */
+export interface LiveToolOutputStamp {
+	receivedAt: number;
+	dispatchOrder?: number;
+}
+
 /**
  * Whether `session` is homed on this thread. Thread bridges decode a handle
  * homed here to the local {@link AgentSession} object itself, so code running on
@@ -304,6 +322,8 @@ export interface AgentViewSession extends AgentSessionHandle {
 	readonly hasInterruptibleInput: boolean;
 	/** Tool execution updates of tools still running, for mid-tool attach. */
 	activeToolExecutionUpdates(): readonly ToolExecutionUpdateEvent[];
+	/** In-flight dispatches and latest real Output, including its original terminal reception time. */
+	getLiveToolOutputSnapshot(): readonly LiveToolOutputSnapshot[];
 	/** Await persistence of messages already emitted. */
 	settleInFlightMessagePersistence(): Promise<void>;
 	/** Session context for transcript rendering. */

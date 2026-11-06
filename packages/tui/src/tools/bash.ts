@@ -51,12 +51,12 @@ export const BASH_DEFAULT_PREVIEW_LINES = DEFAULT_TERMINAL_PREVIEW_LINES;
  * it waits on the result. The deadline counts the job's whole run time, not time left from now: an
  * auto-backgrounded call has already spent its foreground wait.
  */
-export function formatBackgroundNotice(jobId: string, timeoutSec: number | undefined): string {
+export function formatBackgroundNotice(jobId: string, timeoutSec: number | undefined, name?: string): string {
 	const deadline =
 		timeoutSec === undefined
 			? " (no deadline)"
 			: ` (killed once it has run ${timeoutSec}s in total; \`timeout: 0\` disables the deadline)`;
-	return `Backgrounded as job ${jobId}${deadline}; its output is injected into the conversation as a follow-up the moment it finishes. Do NOT poll for it (no \`sleep\`, \`ps\`, \`pgrep\`, \`top\`, \`pidwait\`, log tailing): every poll is a wasted turn. Do other work, or end your reply and wait to be woken.`;
+	return `Backgrounded as job ${jobId}${name ? ` — ${name}` : ""}${deadline}; its output is injected into the conversation as a follow-up the moment it finishes. Do NOT poll for it (no \`sleep\`, \`ps\`, \`pgrep\`, \`top\`, \`pidwait\`, log tailing): every poll is a wasted turn. Do other work, or end your reply and wait to be woken.`;
 }
 
 /**
@@ -105,6 +105,8 @@ export interface BashToolDetails {
 	async?: {
 		state: "running" | "completed" | "failed" | "cancelled";
 		jobId: string;
+		/** Stable finite-job display name, not the Bash service parameter. */
+		name?: string;
 		type: "bash";
 	};
 }
@@ -319,7 +321,7 @@ export function formatBashCommandText(args: BashRenderArgs): string {
 }
 
 /** Bash output with the LLM-facing notices (background, exit, wall time, artifact, truncation) removed. */
-function stripBashNotices(
+export function stripBashNotices(
 	rawOutput: string,
 	details: BashToolDetails | undefined,
 ): { text: string; artifactId?: string } {
@@ -353,7 +355,7 @@ function bashStatsParts(
 	const wallTimeMs = details?.wallTimeMs;
 	const statsParts: string[] = [];
 	if (details?.async?.state === "running") {
-		statsParts.push(`Backgrounded: ${details.async.jobId}`);
+		statsParts.push(`Backgrounded: ${details.async.name ? `${details.async.name} · ` : ""}${details.async.jobId}`);
 	}
 	if (details?.service) {
 		const service = details.service;
@@ -422,7 +424,8 @@ function callIntent(args: unknown): string | undefined {
 /** The run foot's facts under shell output: background job, service state and the full-output artifact. */
 function shellFootParts(details: BashToolDetails | undefined, artifactId: string | undefined): string[] {
 	const parts: string[] = [];
-	if (details?.async?.state === "running") parts.push(`Job ${details.async.jobId}`);
+	if (details?.async?.state === "running")
+		parts.push(`Job ${details.async.name ? `${details.async.name} · ` : ""}${details.async.jobId}`);
 	const service = details?.service;
 	if (service) {
 		parts.push(`Service ${service.name}`, service.state);

@@ -237,7 +237,7 @@ function serveBridge(): RpcServe<MainSessionBridge, SessionBridgeProtocol> {
 		opened: (bridge, opened) => bridge.opened(opened),
 		patch: (bridge, key, patch) => bridge.session(key)?.applyPatch(patch),
 		messages: (bridge, key, delta) => bridge.session(key)?.applyMessages(delta),
-		event: (bridge, key, event) => bridge.session(key)?.applyEvent(event),
+		event: (bridge, key, event, outputStamp) => bridge.session(key)?.applyEvent(event, outputStamp),
 		runState: (bridge, key, state) => bridge.session(key)?.applyRunState(state),
 		view: (bridge, key, state, entries) => bridge.session(key)?.applyView(state, entries),
 		viewPatch: (bridge, key, patch) => bridge.session(key)?.applyViewPatch(patch),

@@ -65,6 +65,7 @@ import type { OAuthManualInputManager } from "./oauth-manual-input";
 import type { ConversationPosition } from "./utils/conversation-position";
 import type { Theme } from "@oh-my-pi/pi-tui/theme";
 import type { TodoItem, TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
+import type { CompactToolOutputPreview } from "./compact-tool-output-preview";
 
 export type CompactionQueuedMessage = {
 	text: string;
@@ -179,6 +180,7 @@ export interface InteractiveModeContext {
 	pendingShellContainer: Container;
 	pendingMessagesContainer: Container;
 	statusContainer: Container;
+	readonly compactToolOutputPreview?: CompactToolOutputPreview;
 	/** Whether the status/working row rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	readonly statusRowOccupied: boolean;
 	todoContainer: Container;

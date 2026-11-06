@@ -139,7 +139,7 @@ function findQueuedMessage(messages: Iterable<AgentMessage>, id: string): AgentM
 
 /** View state without the event-maintained running tool updates, as diffed between flushes. */
 /** View state without the event-maintained running tool updates, as diffed between flushes. */
-type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates">;
+type DiffedViewState = Omit<SessionViewState, "activeToolExecutionUpdates" | "liveToolOutput">;
 
 /** Live objects behind the wire copies of the heavy view fields; an unchanged source reuses its copy. */
 interface ViewSources {
@@ -324,7 +324,21 @@ export class SessionPublisher {
 		}
 		if (!tick || this.#scheduled) this.flush();
 		try {
-			this.#bridge.remote.notify("event", this.#key, toWireData(event));
+			const toolEvent =
+				event.type === "tool_execution_start" ||
+				event.type === "tool_execution_update" ||
+				event.type === "tool_execution_end";
+			const output = toolEvent
+				? this.session.getLiveToolOutputSnapshot().find(call => call.toolCallId === event.toolCallId)
+				: undefined;
+			this.#bridge.remote.notify(
+				"event",
+				this.#key,
+				toWireData(event),
+				toolEvent
+					? { receivedAt: output?.terminalAt ?? Date.now(), dispatchOrder: output?.dispatchOrder }
+					: undefined,
+			);
 		} catch (error) {
 			logger.warn("SessionPublisher failed to forward an event", {
 				key: this.#key,
@@ -424,6 +438,7 @@ export class SessionPublisher {
 			const state: SessionViewState = {
 				...next,
 				activeToolExecutionUpdates: toWireData([...this.session.activeToolExecutionUpdates()]),
+				liveToolOutput: toWireData([...this.session.getLiveToolOutputSnapshot()]),
 			};
 			this.#bridge.remote.notify("view", this.#key, state, this.#entriesDelta());
 			return;

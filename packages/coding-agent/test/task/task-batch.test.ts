@@ -903,6 +903,8 @@ describe("task.batch spawning", () => {
 
 		expect(manager.cancel(secondJob.id)).toBe(true);
 		await secondJob.promise;
+		expect(updates.at(-1)?.progress?.find(p => p.id === "Second")?.status).toBe("aborted");
+		expect(updates.at(-1)?.async?.state).toBe("running");
 
 		gates.get("First")!.resolve();
 		await firstJob.promise;

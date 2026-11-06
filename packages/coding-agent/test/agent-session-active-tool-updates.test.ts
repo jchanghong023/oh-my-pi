@@ -6,12 +6,19 @@
  * settled update as its terminal frame. Logical session transitions must clear
  * every snapshot.
  */
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, vi } from "bun:test";
 import { Agent, type AgentEvent } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
+import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { convertToLlm } from "@oh-my-pi/pi-coding-agent/session/messages";
@@ -55,6 +62,7 @@ describe("AgentSession.activeToolExecutionUpdates cache lifecycle", () => {
 	afterEach(async () => {
 		if (session) await session.dispose();
 		for (const authStorage of authStorages.splice(0)) authStorage.close();
+		vi.restoreAllMocks();
 	});
 
 	async function makeSession(): Promise<AgentSession> {
@@ -95,6 +103,46 @@ describe("AgentSession.activeToolExecutionUpdates cache lifecycle", () => {
 		session.agent.emitExternalEvent(taskEnd("running"));
 		session.agent.emitExternalEvent(taskUpdate("completed"));
 		expect(session.activeToolExecutionUpdates().map(event => event.toolCallId)).toEqual(["task-1"]);
+	});
+
+	it("keeps the actual early background terminal output and its original expiry across view rebuilds", async () => {
+		await initTheme();
+		session = await makeSession();
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+		const context = createInteractiveModeContext({ session, viewSession: session });
+		const preview = new CompactToolOutputPreview(context);
+		try {
+			session.agent.emitExternalEvent({
+				type: "tool_execution_start",
+				toolCallId: "task-1",
+				toolName: "task",
+				args: {},
+			});
+			session.agent.emitExternalEvent(taskUpdate("running"));
+			clock.mockReturnValue(11_000);
+			session.agent.emitExternalEvent(taskUpdate("completed"));
+			clock.mockReturnValue(12_000);
+			session.agent.emitExternalEvent(taskEnd("running"));
+			preview.restore();
+			const rows = preview.render(100).map(row => Bun.stripANSI(row));
+			expect(rows[0]).toContain("completed");
+			expect(rows.join("\n")).toContain("Task completed");
+			expect(rows.join("\n")).not.toContain("Task running");
+			preview.clear();
+			clock.mockReturnValue(14_000);
+			preview.restore();
+			expect(preview.render(100)).toEqual([]);
+			// A delayed older stream cannot reopen a closed, newer output source.
+			session.agent.emitExternalEvent(taskUpdate("running"));
+			expect(preview.render(100)).toEqual([]);
+			expect(await session.newSession()).toBe(true);
+			expect(preview.render(100)).toEqual([]);
+		} finally {
+			preview.clear();
+			setChatTranscriptDisplayPreferences(previous);
+		}
 	});
 
 	it("clears snapshots across a new session", async () => {

@@ -381,7 +381,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				// A spawned subagent's task job takes the agent's id as its id and label: name it once.
 				const agent = row.agent && row.agent.id !== job.id ? ` ${row.agent.id}` : "";
 				rows.push(
-					`${guide}[${job.id}] ${job.type} (${job.status}) — ${formatCoarseDuration((job.endTime ?? now) - job.startTime)}${agent}`,
+					`${guide}[${job.id}] ${job.name ? `${job.name} ` : ""}${job.type} (${job.status}) — ${formatCoarseDuration((job.endTime ?? now) - job.startTime)}${agent}`,
 				);
 				// What the job is for leads; full mode follows it with what the command does and the whole command.
 				const lines = full ? [job.intent, job.caption, job.command ?? job.label] : [job.intent ?? job.label];

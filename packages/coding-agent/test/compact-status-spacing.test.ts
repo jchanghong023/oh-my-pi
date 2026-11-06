@@ -3,6 +3,7 @@ import { Agent } from "@oh-my-pi/pi-agent-core";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
+import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -357,6 +358,78 @@ describe("compaction and focus status spacing", () => {
 			mode.stop();
 			await hudSession.dispose();
 			auth.close();
+			setChatTranscriptDisplayPreferences(preferences);
+			setKeybindings(keys);
+		}
+	});
+
+	it("releases only the temporary Output rows and prioritizes input on small terminals", async () => {
+		const preferences = { ...chatTranscriptDisplayPreferences };
+		const keys = getKeybindings();
+		setKeybindings(KeybindingsManager.inMemory());
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true, hideToolActivity: true });
+		const terminal = new VirtualTerminal(80, 24);
+		const scheduler = new VirtualRenderScheduler();
+		const composer = new Composer({
+			terminal,
+			tuiOptions: { renderScheduler: scheduler },
+			preferences: { ...COMPOSER_DEFAULTS, quiet: true },
+		});
+		const ctx = createInteractiveModeContext({ composer, ui: composer.ui, editor: composer.editor });
+		let terminalAt: number | undefined;
+		const result = { content: [{ type: "text" as const, text: "TEMPORARY_OUTPUT_ONLY" }] };
+		ctx.session.getLiveToolOutputSnapshot = () => [
+			{
+				toolCallId: "temporary",
+				toolName: "bash",
+				dispatchOrder: 1,
+				args: { command: "echo preview" },
+				result,
+				terminalAt,
+			},
+		];
+		const summary = new CompactThinkingPreview(ctx);
+		const output: CompactToolOutputPreview = new CompactToolOutputPreview(ctx, () =>
+			Math.max(0, terminal.rows - Math.max(composer.rowsBelow(output) ?? 0, composer.editor.renderedRows + 4)),
+		);
+		composer.setRuntimeChildren([ctx.chatContainer, output, summary, composer.editor], {
+			selfClearingChrome: [output],
+			transientChrome: [composer.editor],
+		});
+		composer.editor.setText("INPUT_PRIORITY");
+		composer.ui.setFocus(composer.editor);
+		composer.start({ playWelcomeIntro: false });
+		const contract = new DisplayContract(2212);
+		const unwatch = contract.watch(composer.ui, terminal, () => "temporary Output layout");
+		const paint = async () => {
+			composer.ui.requestRender();
+			await scheduler.settle(terminal);
+			contract.assertHealthy();
+			expect(terminal.getViewport().join("\n")).toContain("INPUT_PRIORITY");
+		};
+		try {
+			await paint();
+			expect(output.render(80)).toHaveLength(6);
+			expect(summary.render(80)).toHaveLength(3);
+			for (const rows of [12, 8, 6]) {
+				terminal.resize(80, rows);
+				await scheduler.advance(terminal, 300);
+				await paint();
+				expect(output.render(80).length).toBeLessThanOrEqual(6);
+			}
+			terminal.resize(80, 24);
+			await scheduler.advance(terminal, 300);
+			await paint();
+			terminalAt = Date.now() - 3001;
+			output.restore();
+			await paint();
+			expect(output.render(80)).toEqual([]);
+			expect(summary.render(80)).toHaveLength(3);
+			expect(terminal.getScrollBuffer().join("\n")).not.toContain("TEMPORARY_OUTPUT_ONLY");
+		} finally {
+			unwatch();
+			output.clear();
+			composer.stop();
 			setChatTranscriptDisplayPreferences(preferences);
 			setKeybindings(keys);
 		}

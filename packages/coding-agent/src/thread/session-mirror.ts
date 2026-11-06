@@ -36,6 +36,8 @@ import type {
 	AgentSessionAdvisorOverview,
 	AgentSessionHandle,
 	AgentViewToolSchema,
+	LiveToolOutputSnapshot,
+	LiveToolOutputStamp,
 	ToolExecutionUpdateEvent,
 } from "../session/agent-session-handle";
 import type { AgentSessionEvent, AgentSessionEventListener } from "../session/agent-session-events";
@@ -202,6 +204,8 @@ export interface SessionViewState {
 	 * starts a watch; main keeps it current from the forwarded event stream.
 	 */
 	activeToolExecutionUpdates: ToolExecutionUpdateEvent[];
+	/** Bounded live Output facts, sent when the view is attached. */
+	liveToolOutput: LiveToolOutputSnapshot[];
 }
 
 /** One field of {@link SessionViewState}. */
@@ -302,7 +306,7 @@ export type SessionBridgeProtocol = {
 	opened: RpcMethod<[opened: SessionOpened], void>;
 	patch: RpcMethod<[key: string, patch: Partial<SessionMirrorState>], void>;
 	messages: RpcMethod<[key: string, delta: SessionMessagesDelta], void>;
-	event: RpcMethod<[key: string, event: AgentSessionEvent], void>;
+	event: RpcMethod<[key: string, event: AgentSessionEvent, outputStamp: LiveToolOutputStamp | undefined], void>;
 	runState: RpcMethod<[key: string, state: SessionRunState], void>;
 	/**
 	 * Watch started: the full view state, and what main's entry list (kept across

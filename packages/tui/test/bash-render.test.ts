@@ -28,6 +28,23 @@ describe("bashToolRenderer", () => {
 		terminal.imageProtocol = originalProtocol;
 	});
 
+	it("shows a finite job's name and original ID without rendering its startup receipt as Output", () => {
+		const result = {
+			content: [{ type: "text", text: `real output\n\n${formatBackgroundNotice("bg_7", 300, "Owner Bash 4")}` }],
+			details: { async: { state: "running" as const, jobId: "bg_7", name: "Owner Bash 4", type: "bash" as const } },
+		};
+		const args = { command: "cargo test --workspace" };
+		const options = { expanded: true, isPartial: false };
+		const ansi = sanitizeText(bashToolRenderer.renderResult(result, options, uiTheme, args).render(160).join("\n"));
+		const native = JSON.stringify(bashToolRenderer.describeResult(result, options, args));
+		for (const rendered of [ansi, native]) {
+			expect(rendered).toContain("Owner Bash 4");
+			expect(rendered).toContain("bg_7");
+			expect(rendered).toContain("real output");
+			expect(rendered).not.toContain("Backgrounded as job");
+		}
+	});
+
 	it("preserves raw output artifact labels in detailed views", () => {
 		for (const exitCode of [0, 1]) {
 			const result = {

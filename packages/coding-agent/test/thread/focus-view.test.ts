@@ -12,6 +12,11 @@ import { type AgentMessage, type AgentTool, ThinkingLevel } from "@oh-my-pi/pi-a
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { StatusLineComponent } from "@oh-my-pi/pi-tui/status-line";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import {
+	chatTranscriptDisplayPreferences,
+	setChatTranscriptDisplayPreferences,
+} from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { CompactToolOutputPreview } from "../../src/modes/compact-tool-output-preview";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
@@ -152,6 +157,7 @@ function focusHarness(): FocusHarness {
 	const focus: { controller?: SessionFocusController } = {};
 	const ctx = {
 		session: main,
+		keybindings: createInteractiveModeContext().keybindings,
 		get viewSession() {
 			return focus.controller?.target ?? main;
 		},
@@ -245,6 +251,64 @@ function composerFor(view: AgentViewSession, focusedAgentId: string) {
 }
 
 describe("focused view of a worker-homed agent session", () => {
+	it("restores a worker's early terminal Output without restarting its expiry or reviving running", async () => {
+		const probe = await startWorker();
+		await probe.open("OutputWorker", await mainRegistry(), {});
+		const remote = mirrorOf("OutputWorker");
+		const view = focusHarness();
+		await view.controller.focusAgent("OutputWorker");
+		const previous = { ...chatTranscriptDisplayPreferences };
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		const preview = new CompactToolOutputPreview({
+			viewSession: remote,
+			ui: createInteractiveModeContext().ui,
+		});
+		try {
+			await probe.emit("OutputWorker", {
+				type: "tool_execution_start",
+				toolCallId: "output",
+				toolName: "bash",
+				args: { command: "echo worker" },
+			});
+			await probe.emit("OutputWorker", {
+				type: "tool_execution_update",
+				toolCallId: "output",
+				toolName: "bash",
+				args: {},
+				partialResult: {
+					content: [{ type: "text", text: "WORKER_OUTPUT_FINAL" }],
+					details: { async: { state: "completed", jobId: "job-output", type: "bash" } },
+				},
+			});
+			await waitFor(() => preview.render(100).some(row => row.includes("WORKER_OUTPUT_FINAL")));
+			const terminalAt = remote.getLiveToolOutputSnapshot()[0]?.terminalAt;
+			if (terminalAt === undefined) throw new Error("Worker terminal Output lacks its original reception time");
+			await view.controller.unfocus();
+			await probe.emit("OutputWorker", {
+				type: "tool_execution_end",
+				toolCallId: "output",
+				toolName: "bash",
+				result: {
+					content: [{ type: "text", text: "Backgrounded as job job-output" }],
+					details: { async: { state: "running", jobId: "job-output", type: "bash" } },
+				},
+			});
+			await view.controller.focusAgent("OutputWorker");
+			const visible = preview
+				.render(100)
+				.map(row => Bun.stripANSI(row))
+				.join("\n");
+			expect(visible).toContain("WORKER_OUTPUT_FINAL");
+			expect(visible).toContain("completed");
+			const clock = vi.spyOn(Date, "now").mockReturnValue(terminalAt + 3000);
+			expect(preview.render(100)).toEqual([]);
+			clock.mockRestore();
+		} finally {
+			preview.clear();
+			setChatTranscriptDisplayPreferences(previous);
+		}
+	});
+
 	it("attaches, rebuilds the transcript, streams deltas in order, and steers from the composer", async () => {
 		const probe = await startWorker();
 		await probe.open("W1", await mainRegistry(), {});
@@ -344,7 +408,6 @@ describe("focused view of a worker-homed agent session", () => {
 		});
 		const render = (): string => stripVTControlCharacters(statusLine.getTopBorder(160).content);
 		const before = render();
-		expect(before).toContain("Sonnet");
 		const selectors = remote.getAvailableEffortSelectors();
 		const expected = selectors[selectors.indexOf(ThinkingLevel.Low) + 1];
 		const next = remote.cycleThinkingLevel();

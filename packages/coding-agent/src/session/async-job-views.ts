@@ -17,6 +17,7 @@ function jobSnapshotItem(job: AsyncJob, widgets: JobWidgetRegistry | undefined):
 		type: job.type,
 		status: job.status,
 		label: job.label,
+		name: job.name,
 		intent: job.intent,
 		caption: widgets?.caption(job),
 		command: job.process?.command,

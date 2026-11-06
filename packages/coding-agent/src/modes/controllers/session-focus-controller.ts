@@ -257,6 +257,7 @@ export class SessionFocusController {
 				await this.ctx.eventController.handleEvent(event);
 				if (generation !== this.#attachGeneration) return false;
 			}
+			this.ctx.compactToolOutputPreview?.restore();
 			await this.ctx.reloadTodos(target);
 			if (generation !== this.#attachGeneration) return false;
 			this.ctx.updatePendingMessagesDisplay();

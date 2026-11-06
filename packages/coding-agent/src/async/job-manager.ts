@@ -87,6 +87,8 @@ export interface AsyncJob {
 	/** When the job's run settled; `endTime - startTime` is its frozen run duration. */
 	endTime?: number;
 	label: string;
+	/** Stable display name of a finite Bash job; never a process-control alias. */
+	name?: string;
 	/**
 	 * What the job is for, in the model's words: the `i` intent on the call
 	 * that started it, as one line of plain text. Job views lead with it over
@@ -235,6 +237,7 @@ interface AsyncJobDelivery {
 		| "startTime"
 		| "endTime"
 		| "label"
+		| "name"
 		| "intent"
 		| "structured"
 		| "agentId"
@@ -290,6 +293,8 @@ export interface AsyncJobFilter {
 /** What a job body receives from {@link AsyncJobManagerApi.register}. */
 export interface AsyncJobRunContext {
 	jobId: string;
+	/** The root manager's stable display name, when this is a finite Bash job. */
+	name?: string;
 	signal: AbortSignal;
 	reportProgress: (text: string, details?: AsyncJobDetails) => Promise<void>;
 	/** Clear the queued flag once the job actually starts executing. */
@@ -392,6 +397,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 	readonly #evictionTimers = new Map<string, NodeJS.Timeout>();
 	readonly #releasedForegroundJobs = new Set<string>();
 	#nextAutoId = 1;
+	#nextBashName = 1;
 	readonly #deliverySinks = new Map<string, AsyncJobDeliverySink>();
 	readonly #onJobComplete: AsyncJobManagerOptions["onJobComplete"];
 	readonly #maxRunningJobsOption: AsyncJobManagerOptions["maxRunningJobs"];
@@ -495,6 +501,9 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 			status: "running",
 			startTime,
 			label,
+			...(type === "bash"
+				? { name: `${options?.ownerId ? `${options.ownerId} ` : ""}Bash ${this.#nextBashName++}` }
+				: {}),
 			...(options?.intent ? { intent: options.intent } : {}),
 			abortController,
 			promise: Promise.resolve(),
@@ -523,6 +532,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 			try {
 				const outcome = await run({
 					jobId: id,
+					name: job.name,
 					signal: abortController.signal,
 					reportProgress,
 					markRunning: () => {
@@ -1283,6 +1293,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 						startTime: job.startTime,
 						endTime: job.endTime,
 						label: job.label,
+						name: job.name,
 						intent: job.intent,
 						structured: job.structured,
 						agentId: job.agentId,
@@ -1425,6 +1436,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 			startTime: snapshot.startTime,
 			endTime: snapshot.endTime,
 			label: snapshot.label,
+			name: snapshot.name,
 			intent: snapshot.intent,
 			abortController: new AbortController(),
 			promise: Promise.resolve(),

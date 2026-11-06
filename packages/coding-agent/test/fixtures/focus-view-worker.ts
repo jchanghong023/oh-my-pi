@@ -7,10 +7,11 @@
  * reply in two deltas, holding between them until the test opens the gate.
  */
 import { MessagePort, parentPort } from "node:worker_threads";
-import { Agent } from "@oh-my-pi/pi-agent-core";
+import { Agent, type AgentEvent } from "@oh-my-pi/pi-agent-core";
 import type { Api, AssistantMessage, Context, Model, SimpleStreamOptions, TextContent } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
+import { Effort } from "@oh-my-pi/pi-catalog/effort";
 import type { TodoPhase } from "@oh-my-pi/pi-tui/tools/todo";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import type { ModelRegistry } from "../../src/config/model-registry";
@@ -46,6 +47,8 @@ export interface FocusProbe {
 	open(id: string, registry: ModelRegistry, settings: Record<string, unknown>): Promise<string>;
 	/** Prompt the session on its home thread; resolves when the run settles. */
 	prompt(id: string, text: string): Promise<void>;
+	/** Feed real session events while its main-thread view may be detached. */
+	emit(id: string, event: AgentEvent): Promise<void>;
 	/** Release the reply held between its two deltas. */
 	release(): Promise<void>;
 	report(id: string): Promise<FocusSessionReport>;
@@ -134,8 +137,9 @@ function textOf(content: unknown): string {
 
 const probe: FocusProbe = {
 	open: async (id, registry, overrides) => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("bundled model missing");
+		const model = Object.assign(createMockModel({ id: "focus-fixture", reasoning: true }), {
+			thinking: { mode: "effort" as const, efforts: [Effort.Low, Effort.Medium, Effort.High] },
+		});
 		const agent = new Agent({
 			getApiKey: () => "test-key",
 			initialState: { model, systemPrompt: ["Focus fixture"], tools: [] },
@@ -158,6 +162,9 @@ const probe: FocusProbe = {
 	},
 	prompt: async (id, text) => {
 		await local(id).prompt(text);
+	},
+	emit: async (id, event) => {
+		local(id).agent.emitExternalEvent(event);
 	},
 	release: async () => {
 		gate.resolve();

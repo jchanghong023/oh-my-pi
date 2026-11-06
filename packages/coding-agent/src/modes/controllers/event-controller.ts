@@ -125,6 +125,7 @@ interface AsyncResultJob {
 	jobId?: string;
 	type?: string;
 	label?: string;
+	name?: string;
 	durationMs?: number;
 }
 
@@ -141,7 +142,7 @@ function nativeTaskJobToast(message: { role: string; customType?: string; detail
 	if (!jobs.every(job => job.type === "task")) return;
 	if (jobs.length > 1) return `${jobs.length} background tasks completed`;
 	const job = jobs[0]!;
-	const name = sanitizeText(job.label ?? job.jobId ?? "task").trim() || "task";
+	const name = sanitizeText(job.name ?? job.label ?? job.jobId ?? "task").trim() || "task";
 	const took = typeof job.durationMs === "number" ? ` · ${formatDuration(job.durationMs)}` : "";
 	return `Background task ${name} completed${took}`;
 }
@@ -1136,6 +1137,7 @@ export class EventController {
 		(
 			this.ctx as InteractiveModeContext & { compactThinkingPreview?: { observe(event: AgentSessionEvent): void } }
 		).compactThinkingPreview?.observe(event);
+		this.ctx.compactToolOutputPreview?.observe(event);
 		if (event.type === "agent_end" || event.type === "session_abort") {
 			this.ctx.ui.requestRender();
 		}

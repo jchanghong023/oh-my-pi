@@ -5,6 +5,9 @@ import {
 	type AsyncJobRunResult,
 } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
+import { parseInternalUrl } from "../../src/internal-urls/parse";
+import { ProcProtocolHandler } from "../../src/internal-urls/proc-protocol";
+import type { ToolSession } from "../../src/tools";
 import { TextTap } from "../../src/job-widgets/text-tap";
 import type { ArtifactManagerApi } from "../../src/session/artifacts";
 import { CostCapError, type CostGateApi } from "../../src/session/cost-gate";
@@ -93,6 +96,16 @@ const probe: RuntimeProbe = async (op, ...args) => {
 			return true;
 		case "register":
 			return registerBody(manager(args[0]), String(args[1]), args[2] === true);
+		case "proc": {
+			const session = {
+				cwd: process.cwd(),
+				hasUI: false,
+				getAgentId: () => String(args[1]),
+				asyncJobManager: manager(args[0]),
+				settings: Settings.isolated({ "launch.enabled": false }),
+			} as ToolSession;
+			return new ProcProtocolHandler().resolve(parseInternalUrl(String(args[2])), { session });
+		}
 		case "progress":
 			await body(args[0]).report?.(String(args[1]));
 			return true;

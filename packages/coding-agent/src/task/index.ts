@@ -1368,6 +1368,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 		// the call returns, so post-return job updates never drop them.
 		let settledCount = 0;
 		let failedCount = 0;
+		let syncFinished = syncSpawns.length === 0;
 		let primaryJobId = asyncSpawns[0].agentId;
 		const syncResults: SingleResult[] = [];
 		// oxlint-disable-next-line prefer-const -- read by buildAsyncDetails before assignment
@@ -1383,7 +1384,12 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 			outputPaths: syncOutputPaths,
 			progress: spawns.map(spawn => ({ ...spawn.progress })),
 			async: {
-				state: settledCount < asyncSpawns.length ? "running" : failedCount > 0 ? "failed" : "completed",
+				state:
+					!syncFinished || settledCount < asyncSpawns.length
+						? "running"
+						: failedCount > 0
+							? "failed"
+							: "completed",
 				jobId: primaryJobId,
 				type: "task",
 			},
@@ -1544,6 +1550,7 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				spawn.progress.status = payloads[position] ? "failed" : "aborted";
 			}
 		}
+		syncFinished = true;
 
 		const spawnedSummary = started.length > 0 ? renderSpawnFeedback(true) : scheduleFailureSummary.trim();
 		const text = [merged.contentParts.join("\n\n"), spawnedSummary]
@@ -1687,6 +1694,10 @@ export class TaskTool implements AgentTool<TaskToolSchemaInstance, TaskToolDetai
 				if (!permitHeld || runSignal.aborted) {
 					progress.status = "aborted";
 					onSettled?.(true);
+					await reportProgress(
+						`Background task ${agentId} cancelled before execution.`,
+						buildDetails() as unknown as Record<string, unknown>,
+					);
 					throw new Error("Aborted before execution");
 				}
 				try {

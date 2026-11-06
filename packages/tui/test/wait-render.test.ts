@@ -53,6 +53,34 @@ describe("job renderer task-result preview", () => {
 		await initTheme();
 	});
 
+	it("shows finite Bash names beside their original IDs in ANSI and native job snapshots", () => {
+		for (const status of ["running", "completed", "failed", "cancelled"] as const) {
+			const result = {
+				content: [{ type: "text", text: "" }],
+				details: {
+					op: "wait" as const,
+					jobs: [
+						{
+							id: "bg_7",
+							name: "Owner Bash 4",
+							type: "bash" as const,
+							status,
+							label: "cargo test --workspace",
+							durationMs: 500,
+						},
+					],
+				},
+			};
+			const options = { expanded: true, isPartial: false };
+			const ansi = Bun.stripANSI(waitToolRenderer.renderResult(result, options, theme).render(160).join("\n"));
+			const native = JSON.stringify(waitToolRenderer.describeResult(result, options));
+			for (const rendered of [ansi, native]) {
+				expect(rendered).toContain("Owner Bash 4");
+				expect(rendered).toContain("bg_7");
+			}
+		}
+	});
+
 	it("omits only matching Bash outcomes from collapsed wait rows", () => {
 		const result = {
 			content: [{ type: "text", text: "original wait output" }],

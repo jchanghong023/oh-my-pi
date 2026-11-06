@@ -802,7 +802,7 @@ export class ZCodeProjection {
 		>(job => ({
 			workId: job.id,
 			kind: job.type === "task" ? "subagent" : "bash",
-			title: job.label,
+			title: job.name ? `${job.name} — ${job.label}` : job.label,
 			status: job.status === "running" ? "running" : job.status === "cancelled" ? "cancelled" : "failed",
 			startedAt: job.startTime,
 			endedAt: job.endTime,

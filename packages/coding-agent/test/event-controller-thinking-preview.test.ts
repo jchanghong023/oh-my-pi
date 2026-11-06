@@ -4,12 +4,14 @@ import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { setStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
 import { resetSettingsForTest, Settings, settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { CompactThinkingPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-thinking-preview";
+import { CompactToolOutputPreview } from "@oh-my-pi/pi-coding-agent/modes/compact-tool-output-preview";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { SessionFocusController } from "@oh-my-pi/pi-coding-agent/modes/controllers/session-focus-controller";
 import { statusLineHost } from "@oh-my-pi/pi-coding-agent/modes/status-line-host";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
+import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { Loader } from "@oh-my-pi/pi-tui";
 import {
@@ -171,6 +173,7 @@ function liveSession(message: AssistantMessage | null = null, activeThinkingInde
 const eventControllers: EventController[] = [];
 const focusControllers: SessionFocusController[] = [];
 const statusLines: StatusLineComponent<AgentSession>[] = [];
+const outputPreviews: CompactToolOutputPreview[] = [];
 let previousDisplayPreferences: typeof chatTranscriptDisplayPreferences;
 
 function focusFixture() {
@@ -206,11 +209,27 @@ function focusFixture() {
 	});
 	focusControllers.push(focus);
 	const dock = new CompactThinkingPreview(ctx);
-	Object.assign(ctx, { compactThinkingPreview: dock });
+	const output = new CompactToolOutputPreview(ctx);
+	outputPreviews.push(output);
+	Object.assign(ctx, { compactThinkingPreview: dock, compactToolOutputPreview: output });
 	return {
 		ctx,
 		focus,
 		dock,
+		output,
+		outputRows: (width = 120) =>
+			[
+				output.render(width),
+				nativeRows(
+					output.describe({
+						cols: width,
+						reduceMotion: false,
+						dark: true,
+						supports: () => true,
+						feature: () => true,
+					}),
+				),
+			].map(rows => rows.map(row => Bun.stripANSI(row))),
 		register(id: string, live: { session: typeof main.session }) {
 			registry.register({
 				id,
@@ -249,6 +268,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+	for (const output of outputPreviews.splice(0)) output.clear();
 	for (const controller of focusControllers.splice(0)) controller.dispose();
 	for (const controller of eventControllers.splice(0)) controller.dispose();
 	for (const statusLine of statusLines.splice(0)) statusLine.dispose();
@@ -1676,5 +1696,233 @@ describe("execution-only read group activity", () => {
 		now = 1000;
 		node = group.describe(toolCx);
 		expect(node.k === "tool" ? node.p : undefined).toMatchObject({ status: "cancelled", took: 600 });
+	});
+});
+
+function outputCall(
+	id: string,
+	order: number,
+	text: string,
+	options: Partial<LiveToolOutputSnapshot> = {},
+): LiveToolOutputSnapshot {
+	return {
+		toolCallId: id,
+		toolName: "bash",
+		dispatchOrder: order,
+		args: { command: `echo ${id}` },
+		result: { content: [{ type: "text", text }] },
+		...options,
+	};
+}
+
+describe("compact latest live Output consumers", () => {
+	it("selects by dispatch order only after real Output and replaces cumulative frames", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const first = outputCall("first", 1, "first output");
+		const second = outputCall("second", 2, "");
+		let calls = [first, second];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("OutputWorker", live);
+		await h.focus.focusAgent("OutputWorker");
+		for (const rows of h.outputRows()) {
+			expect(rows).toHaveLength(6);
+			expect(rows[0]).toContain("bash · running · echo first");
+			expect(rows.join("\n")).toContain("first output");
+		}
+		calls = [
+			first,
+			{
+				...second,
+				result: {
+					content: [{ type: "text", text: "\x1b[31m \t\n\x1b[0m" }, { type: "image" }],
+				},
+			},
+		];
+		for (const rows of h.outputRows()) expect(rows[0]).toContain("echo first");
+		calls = [
+			first,
+			{
+				...second,
+				result: {
+					content: [{ type: "text", text: "Backgrounded as job bg_2; output will follow" }],
+					details: { async: { jobId: "bg_2", state: "running" } },
+				},
+			},
+		];
+		for (const rows of h.outputRows()) expect(rows[0]).toContain("echo first");
+		const newer = outputCall("second", 2, "one\ntwo");
+		calls = [newer, outputCall("first", 1, "late first output")];
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("echo second");
+			expect(
+				rows
+					.slice(1)
+					.filter(Boolean)
+					.map(row => row.trim()),
+			).toEqual(["one", "two"]);
+		}
+		calls = [outputCall("first", 1, "even later"), outputCall("second", 2, "one\ntwo\nthree")];
+		for (const rows of h.outputRows()) {
+			expect(rows).toHaveLength(6);
+			expect(
+				rows
+					.slice(1)
+					.filter(Boolean)
+					.map(row => row.trim()),
+			).toEqual(["one", "two", "three"]);
+		}
+	});
+
+	it("keeps background Output live after loop completion without retained tool cards", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		let frame = outputCall("shell", 1, "0", {
+			result: {
+				content: [{ type: "text", text: "0" }],
+				details: { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } },
+			},
+		});
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => [frame]);
+		h.register("BackgroundOutput", live);
+		await h.focus.focusAgent("BackgroundOutput");
+		await live.emit({ type: "agent_end", messages: [] });
+		h.ctx.pendingTools.clear();
+		for (let second = 1; second <= 25; second++) {
+			setSystemTime(10_000 + second * 1000);
+			frame = {
+				...frame,
+				result: {
+					content: [{ type: "text", text: `tick ${second}` }],
+					details: { async: { jobId: "bg_1", name: "BuildPackage", state: "running" } },
+				},
+			};
+			await live.emit({
+				type: "tool_execution_update",
+				toolCallId: "shell",
+				toolName: "bash",
+				args: frame.args,
+				partialResult: frame.result!,
+			});
+			for (const rows of h.outputRows()) {
+				expect(rows).toHaveLength(6);
+				expect(rows[0]).toContain("bash · BuildPackage · bg_1 · running");
+				expect(rows.join("\n")).toContain(`tick ${second}`);
+			}
+		}
+		expect(h.ctx.pendingTools.size).toBe(0);
+	});
+
+	it("expires from terminal receipt without painting and never falls back or reopens on rebuild", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const old = outputCall("old", 1, "old still running");
+		const terminal = outputCall("latest", 2, "terminal Output", { terminalAt: 10_000 });
+		let calls = [old, terminal];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("TerminalOutput", live);
+		await h.focus.focusAgent("TerminalOutput");
+		await live.emit({
+			type: "tool_execution_end",
+			toolCallId: "latest",
+			toolName: "bash",
+			result: terminal.result!,
+			isError: false,
+		});
+		setChatTranscriptDisplayPreferences({ compactToolActivity: false });
+		await h.focus.focusAgent(MAIN_AGENT_ID);
+		vi.advanceTimersByTime(3000);
+		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
+		await h.focus.focusAgent("TerminalOutput");
+		expect(h.outputRows()).toEqual([[], []]);
+		const rebuilt = new CompactToolOutputPreview(h.ctx);
+		outputPreviews.push(rebuilt);
+		expect(rebuilt.render(120)).toEqual([]);
+		calls = [terminal, outputCall("old", 1, "late old"), outputCall("new-no-output", 3, "")];
+		for (const rows of h.outputRows()) expect(rows).toEqual([]);
+		calls = [...calls, outputCall("new-output", 4, "new Output")];
+		for (const rows of h.outputRows()) {
+			expect(rows).toHaveLength(6);
+			expect(rows.join("\n")).toContain("new Output");
+		}
+		vi.advanceTimersByTime(3000);
+		for (const rows of h.outputRows()) expect(rows).toHaveLength(6);
+	});
+
+	it("does not let an earlier terminal deadline close a newer Output source", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		let calls = [outputCall("done", 1, "done", { terminalAt: 10_000 })];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("ReplacementOutput", live);
+		await h.focus.focusAgent("ReplacementOutput");
+		vi.advanceTimersByTime(2000);
+		calls = [outputCall("next", 2, "replacement")];
+		await live.emit({
+			type: "tool_execution_update",
+			toolCallId: "next",
+			toolName: "bash",
+			args: {},
+			partialResult: calls[0]!.result!,
+		});
+		vi.advanceTimersByTime(1000);
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
+	});
+
+	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const call = outputCall(
+			"wrapped",
+			1,
+			"discarded\r最新\t内容\nline2\nline3\nline4\nline5\nline6\n\x1b[31m尾部中文宽字符尾部中文宽字符\x1b[0m",
+		);
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		h.register("WrappedOutput", live);
+		await h.focus.focusAgent("WrappedOutput");
+		const [ansi, native] = h.outputRows(18);
+		expect(ansi).toEqual(native);
+		expect(ansi).toHaveLength(6);
+		for (const row of ansi!) expect(Bun.stringWidth(row)).toBeLessThanOrEqual(18);
+		expect(ansi!.join("\n")).not.toContain("discarded");
+		expect(ansi!.join("\n")).not.toContain("line2");
+		expect(ansi!.join("\n")).not.toContain("\t");
+		expect(ansi!.join("\n")).toContain("尾部中文");
+		let budget = 3;
+		const small = new CompactToolOutputPreview(h.ctx, () => budget);
+		outputPreviews.push(small);
+		expect(small.render(18)).toHaveLength(3);
+		budget = 0;
+		expect(small.render(18)).toEqual([]);
+	});
+
+	it("uses each read's own result and never turns out:// parameter text into Output", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const first = outputCall("read-first", 1, "unformatted first", {
+			toolName: "read",
+			args: { path: "first.txt" },
+			result: {
+				content: [{ type: "text", text: "1:first body" }],
+				details: { displayContent: { text: "first body" } },
+			},
+		});
+		const second = outputCall("read-second", 2, "second body", { toolName: "read", args: { path: "second.txt" } });
+		const reply = outputCall("reply", 3, "", {
+			toolName: "write",
+			args: { path: "out://answer", content: "assistant reply stays in the transcript" },
+		});
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([first, second, reply]);
+		h.register("ReadOutput", live);
+		await h.focus.focusAgent("ReadOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("read · running · second.txt");
+			expect(rows.join("\n")).toContain("second body");
+			expect(rows.join("\n")).not.toContain("first body");
+			expect(rows.join("\n")).not.toContain("assistant reply");
+		}
 	});
 });

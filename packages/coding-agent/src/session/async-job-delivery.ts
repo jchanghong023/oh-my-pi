@@ -54,6 +54,7 @@ type AsyncResultJobDetails = {
 	status?: AsyncJob["status"];
 	agentId?: string;
 	label?: string;
+	name?: string;
 	durationMs?: number;
 	/** Source capture metadata belongs to this job, not to the enclosing delivery report. */
 	meta?: OutputMeta;
@@ -139,10 +140,10 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 		// subagent's output), a subagent's payload and its validation error are
 		// text the job controls: it must not close the `<system-notice>` it renders
 		// into or open a forged harness block. Neither may the label naming it.
-		// A bash job is named by its whole command: its label truncates the tail, so parallel jobs
-		// that share a prefix would otherwise read the same in the notice that delivers them.
+		// Keep the full command identity alongside the finite job's independent display name.
 		const command = entry.job?.type === "bash" ? entry.job.process?.command : undefined;
-		const headerLabel = command === undefined ? entry.job?.label : commandIdentity(command);
+		const identity = command === undefined ? entry.job?.label : commandIdentity(command);
+		const headerLabel = entry.job?.name ? `${entry.job.name}${identity ? ` — ${identity}` : ""}` : identity;
 		return {
 			jobId: entry.jobId,
 			agentUrlId,
@@ -153,6 +154,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			status: entry.job?.status,
 			agentId: entry.job?.agentId,
 			label: entry.job?.label,
+			name: entry.job?.name,
 			headerLabel: headerLabel ? escapeHarnessTags(headerLabel) : undefined,
 			namedByCommand: command !== undefined,
 			durationMs: entry.durationMs,
@@ -174,6 +176,7 @@ export function buildAsyncResultBatchMessage(entries: AsyncResultEntry[]): Custo
 			status: job.status,
 			agentId: job.agentId,
 			label: job.label,
+			...(job.name ? { name: job.name } : {}),
 			durationMs: job.durationMs,
 			...(job.meta ? { meta: job.meta } : {}),
 			...(job.structured ? { schema: job.structured } : {}),

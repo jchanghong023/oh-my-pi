@@ -28,6 +28,8 @@
 
 ### Added
 
+- See the latest tool's live Output in a fixed six-line compact preview, including finite background Bash output; it closes three seconds after completion without changing tool history or input.
+- Identify finite background Bash jobs by stable automatic names alongside their original IDs, without changing service or cancellation semantics.
 - Record Windows CPU, memory, disk capacity and disk I/O metrics every two seconds in a background temporary log with `bun scripts/monitor-system.ts`, then inspect test-run peaks with `--report`.
 - Run local mock embedding and rerank endpoints for knowledge search performance work from a source checkout.
 - Use the bundled Developer Test Agent with `/dt`, `/generate-dt-files`, `/generate-dt-dir`, `/incremental-dt` and `/cloud-dt-fix`, including its Python, Java, C/C++ and Go unit-test skills.

@@ -2443,7 +2443,7 @@ const COLUMN_WIDTH_MIN = 4;
 function renderJobLine(job: AsyncJobSnapshotItem, now: number): string {
 	const duration = formatDuration(Math.max(0, (job.endTime ?? now) - job.startTime));
 	const status = formatJobStatus(job.status);
-	return `${theme.fg("dim", job.id)} ${theme.fg("dim", `[${job.type}]`)} ${status} ${theme.fg("dim", `(${duration})`)}`;
+	return `${theme.fg("dim", job.id)} ${job.name ? `${theme.bold(job.name)} ` : ""}${theme.fg("dim", `[${job.type}]`)} ${status} ${theme.fg("dim", `(${duration})`)}`;
 }
 
 function formatJobStatus(status: AsyncJobSnapshotItem["status"]): string {

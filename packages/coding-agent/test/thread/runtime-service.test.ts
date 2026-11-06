@@ -118,6 +118,16 @@ describe("runtime thread services: async jobs", () => {
 
 		await probe("progress", id, "halfway");
 		expect(manager.getJob(id)?.progressText).toBe("halfway");
+		const listing = (await probe("proc", manager, "Worker", "proc://")) as {
+			content: string;
+			details: { proc: { jobs: Array<{ id: string; name?: string }> } };
+		};
+		const name = listing.details.proc.jobs[0]?.name;
+		expect(name?.trim()).toBeTruthy();
+		expect(listing.content).toContain(name!);
+		expect(listing.content).toContain(id);
+		const liveView = (await probe("proc", manager, "Worker", `proc://${id}`)) as { content: string };
+		expect(liveView.content).toContain(`Name: ${name}`);
 
 		const awaited = probe("awaitJob", manager, id);
 		await probe("finish", id, "all done");
@@ -134,6 +144,13 @@ describe("runtime thread services: async jobs", () => {
 
 		expect(await manager.drainDeliveries({ timeoutMs: 5_000 })).toBe(true);
 		expect(await probe("deliveries")).toEqual([{ jobId: id, text: "all done", status: "completed", isRow: true }]);
+		const settledView = (await probe("proc", manager, "Worker", `proc://${id}`)) as {
+			content: string;
+			details: { proc: { job: { id: string; name?: string; status: string } } };
+		};
+		expect(settledView.content).toContain(`Name: ${name}`);
+		expect(settledView.details.proc.job).toMatchObject({ id, name, status: "completed" });
+		expect(job?.name).toBe(name);
 	});
 
 	it("cancels the worker body from main and keeps the shutdown reason a symbol", async () => {

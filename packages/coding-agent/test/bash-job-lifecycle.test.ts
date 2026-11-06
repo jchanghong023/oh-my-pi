@@ -3,8 +3,12 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
+import type { BashToolDetails } from "@oh-my-pi/pi-tui/tools/bash";
 import { AsyncJobManager } from "../src/async";
 import { Settings } from "../src/config/settings";
+import { parseInternalUrl } from "../src/internal-urls/parse";
+import { ProcProtocolHandler } from "../src/internal-urls/proc-protocol";
+import { asyncJobSnapshot } from "../src/session/async-job-views";
 import type { ToolSession } from "../src/tools";
 import { BashTool } from "../src/tools/bash";
 import { WriteTool } from "../src/tools/write";
@@ -33,6 +37,83 @@ beforeEach(async () => {
 afterEach(async () => {
 	await manager.dispose();
 	await fs.rm(cwd, { recursive: true, force: true });
+});
+
+it("keeps repeated finite Bash names distinct across receipts, owner views and final outcomes without aliases", async () => {
+	const release = Promise.withResolvers<void>();
+	const session: ToolSession = {
+		cwd,
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionId: () => cwd,
+		getSessionSpawns: () => "*",
+		getAgentId: () => "Owner",
+		getToolCallIntent: () => "Checking command",
+		asyncJobManager: manager,
+		allocateOutputArtifact: async () => {
+			await release.promise;
+			return {};
+		},
+		settings: Settings.isolated({ "async.enabled": true, "launch.enabled": false }),
+	};
+	const bash = new BashTool(session);
+	const protocol = new ProcProtocolHandler();
+	const frames: BashToolDetails[] = [];
+	try {
+		const first = await bash.execute(
+			"named-first",
+			{ command: "printf named-output", async: true, timeout: 0 },
+			undefined,
+			update => {
+				if (update.details) frames.push(update.details);
+			},
+		);
+		const second = await bash.execute("named-second", { command: "printf named-output", async: true });
+		const failed = await bash.execute("named-failed", { command: "printf failed-output; exit 3", async: true });
+		const receipts = [first, second, failed].map(result => {
+			const job = result.details?.async;
+			if (!job?.name) throw new Error("expected a named finite Bash job");
+			const text = result.content.find(block => block.type === "text")?.text ?? "";
+			expect(text).toContain(`${job.jobId} — ${job.name}`);
+			expect(result.details?.service).toBeUndefined();
+			return job;
+		});
+		expect(new Set(receipts.map(job => job.name)).size).toBe(3);
+		expect(first.details?.timeoutDisabled).toBe(true);
+		const listed = await protocol.resolve(parseInternalUrl("proc://"), { session });
+		for (const { jobId, name } of receipts) {
+			expect(listed.content).toContain(name!);
+			expect(listed.details?.proc?.jobs).toContainEqual(
+				expect.objectContaining({ id: jobId, name, status: "running" }),
+			);
+			const detail = await protocol.resolve(parseInternalUrl(`proc://${jobId}`), { session });
+			expect(detail.content).toContain(`Name: ${name}`);
+			await expect(
+				protocol.resolve(parseInternalUrl(`proc://${encodeURIComponent(name!)}`), { session }),
+			).rejects.toThrow("not found");
+		}
+		const foreign = await protocol.resolve(parseInternalUrl("proc://"), {
+			session: { ...session, getAgentId: () => "Other" },
+		});
+		expect(foreign.details?.proc?.jobs).toEqual([]);
+		release.resolve();
+		await manager.waitForAll();
+		for (const [index, { jobId, name }] of receipts.entries()) {
+			const status = index === 2 ? "failed" : "completed";
+			const detail = await protocol.resolve(parseInternalUrl(`proc://${jobId}`), { session });
+			expect(detail.details?.proc?.job).toMatchObject({ id: jobId, name, status });
+			expect(detail.content).toContain(index === 2 ? "failed-output" : "named-output");
+			expect(manager.isJobResultConsumed(jobId)).toBe(false);
+			expect(asyncJobSnapshot(manager, "Owner").recent).toContainEqual(
+				expect.objectContaining({ id: jobId, name, status }),
+			);
+		}
+		expect(frames.some(frame => frame.async?.state === "completed")).toBe(true);
+		expect(frames.every(frame => frame.async?.name === receipts[0]!.name)).toBe(true);
+	} finally {
+		release.resolve();
+		await manager.waitForAll();
+	}
 });
 
 it("rejects unnamed readiness and async PTY before executing commands", async () => {

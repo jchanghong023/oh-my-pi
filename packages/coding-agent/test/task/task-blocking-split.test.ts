@@ -269,6 +269,7 @@ describe("task per-item blocking split", () => {
 		// must already report the converged async state, not a stale "running".
 		gates.get("WorkerTwo")!.resolve();
 		await manager.getJob("WorkerTwo")!.promise;
+		expect(updates.at(-1)?.details.async?.state).toBe("running");
 		gates.get("ScoutTwo")!.resolve();
 		const result = await executePromise;
 

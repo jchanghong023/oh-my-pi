@@ -132,6 +132,7 @@ import {
 import { onDownloadActivity } from "../downloads/activity";
 import { DownloadActivityHud, JudgmentBatchProgressHud } from "./progress-hud";
 import { CompactThinkingPreview } from "./compact-thinking-preview";
+import { CompactToolOutputPreview } from "./compact-tool-output-preview";
 import { autosaveApprovedPlan, planSaveFileName } from "../plan-mode/plan-autosave";
 import { dispatchApprovedPlan } from "../plan-mode/session-approval";
 import { resolvePlanModelTransition } from "../plan-mode/model-transition";
@@ -1381,6 +1382,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	statusContainer: Container;
 	/** Compact activity dock; its per-session display memory never enters the transcript. */
 	readonly compactThinkingPreview = new CompactThinkingPreview(this);
+	/** Read-only Output sits above the activity dock; the input and its trailing chrome win space. */
+	readonly compactToolOutputPreview: CompactToolOutputPreview = new CompactToolOutputPreview(this, () =>
+		Math.max(
+			0,
+			this.ui.terminal.rows -
+				Math.max(this.composer.rowsBelow(this.compactToolOutputPreview) ?? 0, this.editor.renderedRows + 4),
+		),
+	);
 	/** Whether {@link statusContainer} rendered lines in the latest frame; the band composer's editor top gap collapses only then. */
 	statusRowOccupied = false;
 	todoContainer: Container;
@@ -2022,6 +2031,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		// hands a queued `/compact` and the input in the compaction queue back to the editor.
 		if (!options?.viewOnly) this.#inputController.restoreCompactionQueueToEditor();
 		this.compactThinkingPreview.clear();
+		this.compactToolOutputPreview.clear();
 		this.streamingComponent = undefined;
 		this.streamingMessage = undefined;
 		this.lastAssistantUsage = undefined;
@@ -2536,6 +2546,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				this.statusContainer,
 				this.attachmentChipsContainer,
 				this.hookWidgetContainerAbove,
+				this.compactToolOutputPreview,
 				this.compactThinkingPreview,
 				this.editorContainer,
 				this.hookWidgetContainerBelow,
@@ -2567,6 +2578,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.subagentContainer,
 					this.modelCycleContainer,
 					this.progressHudContainer,
+					this.compactToolOutputPreview,
 				],
 				// Natively the HUD pills lead the dock, queued messages sit between
 				// the working row and the composer, and the attachment chips live
@@ -2583,6 +2595,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					this.statusContainer,
 					this.pendingMessagesContainer,
 					this.hookWidgetContainerAbove,
+					this.compactToolOutputPreview,
 					this.compactThinkingPreview,
 					this.editorContainer,
 					this.hookWidgetContainerBelow,
