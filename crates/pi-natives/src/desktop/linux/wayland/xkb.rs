@@ -583,8 +583,8 @@ mod tests {
 
 	#[test]
 	fn reads_the_keymap_from_the_start_of_a_shared_fd() {
-		// SAFETY: the `memfd_create` syscall returns a fresh descriptor or -1; ownership
-		// moves into the `File` exactly once.
+		// SAFETY: the `memfd_create` syscall returns a fresh descriptor or -1;
+		// ownership moves into the `File` exactly once.
 		let mut file = unsafe {
 			let fd = libc::syscall(libc::SYS_memfd_create, c"xkb".as_ptr(), 0) as libc::c_int;
 			assert!(fd >= 0, "memfd_create failed");
