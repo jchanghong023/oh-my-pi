@@ -200,6 +200,7 @@
 
 ### Fixed
 
+- Restore Linux regression coverage for compaction, SDK prompts, plugin catalogs and IME recovery with isolated, catalog-independent fixtures.
 - Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.
 - Return the unattended reply only for actual `ask` timeouts in active autopilot Goals; preserve ordinary timeout choices, cancellation and abort behavior.
 - Preserve an initial autopilot notice through Stop when its native queued objective is retained, delivering it once with that objective.

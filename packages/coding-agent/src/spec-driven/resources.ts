@@ -5,6 +5,7 @@ import { parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { extractArchive } from "@oh-my-pi/pi-utils/ar";
 import { getDocumentConversionCacheDir } from "@oh-my-pi/pi-utils/dirs";
 import { withFileLock } from "@oh-my-pi/pi-utils/file-lock";
+import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import type { Skill } from "../extensibility/skills";
 import { collectSpecDrivenResources } from "./resource-inventory";
 import bundledArchivePath from "./resource-archive";
@@ -196,9 +197,16 @@ async function run(
 		stderr: "pipe",
 		env: { ...process.env, OPENSPEC_TELEMETRY: "0", DO_NOT_TRACK: "1", ...extraEnv },
 	});
-	// Bun's spawn AbortSignal can reject `exited` before the child has been
-	// reaped. Own cancellation so the CLI cannot exit and orphan that child.
-	const abort = () => child.kill();
+	// The CLI's process-wide signal handler exits after postmortem cleanup.
+	// Join that cleanup as well as cancellation, so it cannot exit before
+	// this owned child has been reaped.
+	const abort = () => {
+		if (child.exitCode === null) child.kill();
+	};
+	const unregisterCleanup = postmortem.register(`spec-driven-process:${child.pid}`, async () => {
+		abort();
+		await child.exited;
+	});
 	signal?.addEventListener("abort", abort, { once: true });
 	if (signal?.aborted) abort();
 	try {
@@ -212,6 +220,7 @@ async function run(
 	} finally {
 		signal?.removeEventListener("abort", abort);
 		await child.exited;
+		unregisterCleanup();
 	}
 }
 
