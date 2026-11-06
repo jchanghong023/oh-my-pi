@@ -23,6 +23,8 @@
 - Redacted local embedding initialization and inference errors while preserving their nonfatal fallback and diagnostic severity.
 - Report rejected offline diagnostic database and data paths as structured failures without opening unsafe paths or closing caller-owned databases.
 
+## [18.17.0] - 2026-11-06
+
 ### Changed
 
 - Development installs reuse fastembed’s ONNX Runtime instead of installing a duplicate native runtime.

@@ -325,18 +325,19 @@ describe("RPC goal command", () => {
 	test("an extension session change aborts the detached run's prompt; the command's own result is unaffected", async () => {
 		const rpc = await start({ continuation: false, script: "slow" });
 		const { statusOf, unsubscribe } = watchPromptResults(rpc);
-		const started = Promise.withResolvers<void>();
+		// Wait for provider admission so the first run owns the fixture's slow model call.
+		const stalled = Promise.withResolvers<void>();
 		const replacementStarted = Promise.withResolvers<void>();
 		let agentStarts = 0;
 		const unsubscribeEvents = rpc.onEvent(event => {
+			if (event.type === "message_end" && event.message.role === "user") stalled.resolve();
 			if (event.type !== "agent_start") return;
 			agentStarts++;
-			if (agentStarts === 1) started.resolve();
-			else replacementStarted.resolve();
+			if (agentStarts > 1) replacementStarted.resolve();
 		});
 		try {
 			const first = await rpc.prompt("first, stalls");
-			await withTimeout(started.promise, 10_000, "First run never started");
+			await withTimeout(stalled.promise, 10_000, "First run's model call never started");
 			// The command starts a run of its own in the new session. Track its
 			// result by id rather than leaving a promptAndWait pending at teardown.
 			const command = await rpc.prompt("/goaltest-new-session hello from the new session");

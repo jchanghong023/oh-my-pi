@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { findFreeCdpPort } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
-import { ensureChromiumExecutable } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import {
+	closeLaunchedBrowser,
+	ensureChromiumExecutable,
+	RENDERER_PRIORITY_ARGS,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import { acquireBrowser, releaseBrowser } from "@oh-my-pi/pi-coding-agent/tools/browser/registry";
 import { waitForRelayExtension } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/probe";
 import { type RelayServer, startRelayServer } from "@oh-my-pi/pi-coding-agent/tools/browser/relay/server";
@@ -105,7 +109,7 @@ async function launchRelayFixture(
 	const browsers: Browser[] = [];
 	async function close() {
 		try {
-			await Promise.all(browsers.map(browser => browser.close()));
+			await Promise.all(browsers.map(browser => closeLaunchedBrowser(browser)));
 		} finally {
 			server.stop();
 			pages.stop(true);
@@ -118,7 +122,7 @@ async function launchRelayFixture(
 			headless: true,
 			pipe: true,
 			enableExtensions: true,
-			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain"],
+			args: ["--no-first-run", "--no-default-browser-check", "--use-mock-keychain", ...RENDERER_PRIORITY_ARGS],
 		});
 		browsers.push(browser);
 		// CDP returns the ID Chrome assigned to the loaded extension. Its resolved

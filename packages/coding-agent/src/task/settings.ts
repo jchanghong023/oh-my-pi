@@ -11,7 +11,7 @@ import { effect, register } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { type ServiceTierInheritSettingValue, validateAgentServiceTierOverrides } from "../config/service-tier";
 import { THINKING_EFFORTS } from "@oh-my-pi/pi-catalog/effort";
-import { isRecord, logger, setWorktreesDir } from "@oh-my-pi/pi-utils";
+import { $which, isRecord, logger, setWorktreesDir } from "@oh-my-pi/pi-utils";
 import { setFeedModelBadgeEnabled } from "@oh-my-pi/pi-tui/render/render-utils";
 import { getThinkingLevelMetadata } from "@oh-my-pi/pi-tui/thinking";
 
@@ -49,7 +49,11 @@ export const cfgIsolationBackend = register({
 		label: "隔离后端",
 		description: "用于 Subagent 隔离和工作树克隆的后端",
 		options: [
-			{ value: "auto", label: "自动", description: "由 PAL 选择最佳可用后端" },
+			{
+				value: "auto",
+				label: "自动",
+				description: "找到 ovnfs 时隔离 Subagent 使用 ovnfs 检出目录；否则（以及工作树）由 PAL 选择最佳可用后端",
+			},
 			{ value: "apfs", label: "APFS", description: "macOS clonefile 写时复制（APFS）" },
 			{ value: "btrfs", label: "btrfs", description: "btrfs 子卷快照" },
 			{ value: "zfs", label: "ZFS", description: "ZFS 快照与克隆" },
@@ -143,20 +147,6 @@ export const cfgTaskIsolationApply = register({
 	},
 });
 
-export const cfgOvnfsEnabled = register({
-	id: "ovnfs.enabled",
-	protocolDefault: ["rpc", "acp"],
-	type: "boolean",
-	default: false,
-	ui: {
-		tab: "tasks",
-		group: "Isolation",
-		label: "ovnfs (experimental)",
-		description:
-			"Use ovnfs checkouts (copy-on-write views of a folder, ready in about a second at any size) whenever a separate copy is needed: the system prompt tells agents to open checkouts instead of git worktrees or copies, and isolated subagents (when allowed) run in checkouts instead of native clones",
-	},
-});
-
 export const cfgOvnfsPath = register({
 	id: "ovnfs.path",
 	type: "string",
@@ -165,17 +155,20 @@ export const cfgOvnfsPath = register({
 		tab: "tasks",
 		group: "Isolation",
 		label: "ovnfs Binary",
-		description: "ovnfs executable for `ovnfs.enabled`; unset uses `ovnfs` on PATH",
+		description:
+			"ovnfs executable; unset looks for `ovnfs` on PATH. When it is found, ovnfs checkouts (copy-on-write views of a folder, ready in about a second at any size) serve every separate copy: the system prompt tells agents to open checkouts instead of git worktrees or copies, and isolated subagents (when allowed, with `isolation.backend` on auto) run in checkouts instead of native clones",
 	},
 });
 
 /**
- * The ovnfs command agents and isolated subagents use, or `undefined` when
- * `ovnfs.enabled` is off. Read by the system prompt (checkout guidance) and the
- * task runner (ovnfs-backed isolation).
+ * The ovnfs command agents and isolated subagents use (`ovnfs.path`, else `ovnfs`),
+ * or `undefined` when that binary is not found. Read by the system prompt (checkout
+ * guidance), the bash git guard, `grep`/`glob` (searches through the daemon), and the
+ * task runner (ovnfs-backed isolation when `isolation.backend` is auto).
  */
 export function ovnfsCommand(settings: Settings): string | undefined {
-	return cfgOvnfsEnabled.get(settings) ? cfgOvnfsPath.get(settings)?.trim() || "ovnfs" : undefined;
+	const command = cfgOvnfsPath.get(settings)?.trim() || "ovnfs";
+	return $which(command) ? command : undefined;
 }
 
 export const cfgTaskIsolationMerge = register({

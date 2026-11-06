@@ -384,6 +384,7 @@ import {
 	getMarkdownTheme,
 	onTerminalAppearanceChange,
 	onThemeChange,
+	setMarkdownColorful,
 	setMarkdownMermaidRendering,
 	setSymbolPreset,
 	startMacOSAppearanceReprobeFallback,
@@ -455,6 +456,7 @@ import {
 	cfgTuiMaxInlineImages,
 	cfgTuiAutoGraph,
 	cfgTuiMouse,
+	cfgTuiColorfulMarkdown,
 	cfgTuiRenderMermaid,
 	cfgTuiRenderSvg,
 	cfgTuiResizeScrollback,
@@ -530,6 +532,7 @@ const cfgLiveUiSettings = combine({
 	"display.collapseCompacted": cfgDisplayCollapseCompacted,
 	"display.showTokenUsage": cfgDisplayShowTokenUsage,
 	"display.showTurnTime": cfgDisplayShowTurnTime,
+	"tui.colorfulMarkdown": cfgTuiColorfulMarkdown,
 	"tui.renderMermaid": cfgTuiRenderMermaid,
 	"tui.renderSvg": cfgTuiRenderSvg,
 	"extensionRenderers.assistantText": cfgExtensionAssistantTextRenderers,
@@ -2170,6 +2173,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#rootSubagentEventBus = subagentEventBus ?? session.subagentEventBus;
 
 		setTuiTight(cfgTuiTight.get(settings));
+		setMarkdownColorful(cfgTuiColorfulMarkdown.get(settings));
 		setMarkdownMermaidRendering(cfgTuiRenderMermaid.get(settings));
 		setSvgFigureRendering(cfgTuiRenderSvg.get(settings));
 		this.#applyAutoGraphSetting();
@@ -4792,6 +4796,10 @@ export class InteractiveMode implements InteractiveModeContext {
 				"display.showTurnTime",
 			)
 		) {
+			rebuildChat = true;
+		}
+		if (any("tui.colorfulMarkdown")) {
+			setMarkdownColorful(cfgTuiColorfulMarkdown.get(this.settings));
 			rebuildChat = true;
 		}
 		if (any("tui.renderMermaid")) {

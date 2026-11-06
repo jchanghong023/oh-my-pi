@@ -18,6 +18,7 @@ import {
 	attachPageWithTimeout,
 	findFreeCdpPort,
 	findReusableCdp,
+	gracefulKillTreeOnce,
 	pickElectronTarget,
 	probeCdpStatus,
 	resolveSpawnArgs,
@@ -25,7 +26,11 @@ import {
 	waitForMainFrame,
 } from "@oh-my-pi/pi-coding-agent/tools/browser/attach";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
-import { ensureChromiumExecutable, loadPuppeteer } from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
+import {
+	ensureChromiumExecutable,
+	loadPuppeteer,
+	RENDERER_PRIORITY_ARGS,
+} from "@oh-my-pi/pi-coding-agent/tools/browser/launch";
 import {
 	acquireBrowser,
 	type BrowserHandle,
@@ -234,6 +239,7 @@ describe("pickElectronTarget", () => {
 					"--no-default-browser-check",
 					"--use-mock-keychain",
 					"--password-store=basic",
+					...RENDERER_PRIORITY_ARGS,
 					`--user-data-dir=${root}`,
 					`--remote-debugging-port=${port}`,
 				],
@@ -297,7 +303,7 @@ describe("pickElectronTarget", () => {
 				restoreWait?.();
 				await prelude.invoke({ action: "close", name }, context).catch(() => {});
 				if (attached) await releaseBrowser(attached, { kill: false });
-				child.kill();
+				await gracefulKillTreeOnce(child.pid);
 				await child.exited;
 				await removeWithRetries(root);
 			}
@@ -522,6 +528,7 @@ describe("pickElectronTarget", () => {
 				"--no-default-browser-check",
 				"--use-mock-keychain",
 				"--password-store=basic",
+				...RENDERER_PRIORITY_ARGS,
 			];
 			const child = Bun.spawn(
 				[exe, ...flags, `--user-data-dir=${borrowedProfile}`, `--remote-debugging-port=${port}`],
@@ -572,7 +579,7 @@ describe("pickElectronTarget", () => {
 			} finally {
 				await invoke({ action: "close", name: ownedName, kill: true }).catch(() => {});
 				await invoke({ action: "close", name: borrowedName, kill: true }).catch(() => {});
-				child.kill();
+				await gracefulKillTreeOnce(child.pid);
 				await child.exited;
 				await fs.rm(root, { recursive: true, force: true });
 			}
@@ -594,6 +601,7 @@ describe("pickElectronTarget", () => {
 				"--no-first-run",
 				"--use-mock-keychain",
 				"--password-store=basic",
+				...RENDERER_PRIORITY_ARGS,
 				`--user-data-dir=${profile}`,
 			];
 			const session = makeSession();
@@ -642,6 +650,7 @@ describe("pickElectronTarget", () => {
 					"--use-mock-keychain",
 					"--window-size=900,700",
 					"--force-device-scale-factor=2",
+					...RENDERER_PRIORITY_ARGS,
 					`--user-data-dir=${root}`,
 					`--remote-debugging-port=${port}`,
 					// Viewport coverage adopts a neutral page; browser first-run
@@ -704,7 +713,7 @@ describe("pickElectronTarget", () => {
 				});
 			} finally {
 				await invoke({ action: "close", name }).catch(() => {});
-				child.kill();
+				await gracefulKillTreeOnce(child.pid);
 				await child.exited;
 				await removeWithRetries(root);
 			}
