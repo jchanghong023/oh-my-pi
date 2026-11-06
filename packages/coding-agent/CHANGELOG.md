@@ -28,7 +28,7 @@
 
 ### Added
 
-- See the latest tool's live Output in a fixed six-line compact preview, including finite background Bash output; it stays visible while the status line is running and closes three seconds after both activity and the tool finish, without changing tool history or input.
+- See the latest tool's live Output in a compact preview of up to six lines, including finite background Bash output; it stays visible while the status line is running and closes three seconds after both activity and the tool finish, without changing tool history or input.
 - Identify finite background Bash jobs by stable automatic names alongside their original IDs, without changing service or cancellation semantics.
 - Record Windows CPU, memory, disk capacity and disk I/O metrics every two seconds in a background temporary log with `bun scripts/monitor-system.ts`, then inspect test-run peaks with `--report`.
 - Run local mock embedding and rerank endpoints for knowledge search performance work from a source checkout.
@@ -68,7 +68,8 @@
 
 ### Changed
 
-- Compact Output previews show the latest five nonblank display lines, skipping empty and whitespace-only lines without changing the original results.
+- Compact Output previews skip blank and symbol-only rows, align text with the tool header while preserving relative indentation, and shrink to fit up to five output rows without blank padding or changes to original results.
+- Compact Output previews use upstream tool-card backgrounds, bold headers and output colors without changing their text, alignment, line budget or lifecycle.
 - Restore direct native `/goal` and `/goal-autopilot` command handling while busy; generated objectives retain normal prompt/steering admission instead of forcing raw commands into a fork-specific queue.
 - Enable `tui.completeScrollback` by default without modifying existing configuration files; explicit `false` retains upstream deferred scrollback behavior.
 

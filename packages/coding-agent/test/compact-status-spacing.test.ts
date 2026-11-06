@@ -409,7 +409,7 @@ describe("compaction and focus status spacing", () => {
 		};
 		try {
 			await paint();
-			expect(output.render(80)).toHaveLength(6);
+			expect(output.render(80)).toHaveLength(2);
 			expect(summary.render(80)).toHaveLength(3);
 			for (const rows of [12, 8, 6]) {
 				terminal.resize(80, rows);

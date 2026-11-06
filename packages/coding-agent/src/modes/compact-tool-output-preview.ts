@@ -1,8 +1,12 @@
 import type { Component } from "@oh-my-pi/pi-tui";
 import { chatTranscriptDisplayPreferences as displayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
+import { card } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeNode } from "@oh-my-pi/pi-tui/native/node";
-import { plainText } from "@oh-my-pi/pi-tui/native/spans";
+import { plainText, rowsText, styledBackground } from "@oh-my-pi/pi-tui/native/spans";
+import { backgroundChrome } from "@oh-my-pi/pi-tui/native/tone";
 import { replaceTabs, truncateToWidth, wrapTextWithAnsi } from "@oh-my-pi/pi-tui/render/render-utils";
+import { getStateBgColor, padToWidth } from "@oh-my-pi/pi-tui/render/utils";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import { toolOutputText } from "@oh-my-pi/pi-tui/tools/output-preview";
 import type { ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { getPaddingX, padding } from "@oh-my-pi/pi-tui/utils";
@@ -14,6 +18,14 @@ import type { InteractiveModeContext } from "./types";
 
 function singleLine(value: string): string {
 	return replaceTabs(sanitizeText(plainText(value))).replace(/[\r\n]+/g, " ");
+}
+
+function compactOutputText(output: string): string {
+	const lines = output.split("\n").filter(line => /[\p{L}\p{N}]/u.test(line));
+	if (lines.length === 0) return "";
+	let indent = Number.POSITIVE_INFINITY;
+	for (const line of lines) indent = Math.min(indent, line.length - line.trimStart().length);
+	return lines.map(line => line.slice(indent)).join("\n");
 }
 
 /** A text-only projection of session execution facts, independent of transcript tool cards. */
@@ -64,7 +76,7 @@ export class CompactToolOutputPreview implements Component {
 			if (!call.result || (selected && call.dispatchOrder <= selected.call.dispatchOrder)) continue;
 			let output = this.#outputText.get(call.result);
 			if (output === undefined) {
-				output = toolOutputText(call.toolName, call.result);
+				output = compactOutputText(toolOutputText(call.toolName, call.result));
 				this.#outputText.set(call.result, output);
 			}
 			if (output.trim()) selected = { call, output };
@@ -127,15 +139,25 @@ export class CompactToolOutputPreview implements Component {
 		if (height > 1)
 			rows.push(
 				...wrapTextWithAnsi(output, innerWidth)
-					.filter(row => row.trim().length > 0)
+					.filter(row => /[\p{L}\p{N}]/u.test(row))
 					.slice(-(height - 1)),
 			);
-		while (rows.length < height) rows.push("");
 		const left = padding(inset);
-		return rows.map(row => (row ? left + row : ""));
+		const background = getStateBgColor(
+			state === "running" ? "running" : state === "failed" ? "error" : state === "cancelled" ? "pending" : "success",
+		);
+		return rows.map((row, index) =>
+			padToWidth(
+				left + (index === 0 ? theme.fg("toolTitle", theme.bold(row)) : theme.fg("toolOutput", row)),
+				width,
+				value => theme.bgFill(background, value),
+			),
+		);
 	}
 
 	describe(cx: DescribeContext): NativeNode {
-		return { k: "rows", p: { cols: cx.cols, lines: this.render(cx.cols) } };
+		const lines = this.render(cx.cols);
+		if (lines.length === 0) return { k: "rows", p: { cols: cx.cols, lines } };
+		return card({ ...backgroundChrome(styledBackground(lines[0]!)), inset: true }, [rowsText(lines)]);
 	}
 }

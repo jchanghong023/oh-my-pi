@@ -28,6 +28,14 @@ import { createInteractiveModeContext, createSessionStub } from "./helpers/inter
 
 function nativeRows(node: NativeNode): readonly string[] {
 	if (node.k === "rows" && node.p) return node.p.lines;
+	if (node.k === "card") {
+		return (node.c ?? []).flatMap(child => {
+			if (!("k" in child)) throw new Error("Expected native card content");
+			return [...nativeRows(child)];
+		});
+	}
+	if (node.k === "text")
+		return (node.p?.text ?? node.p?.spans?.map(span => span.t).join("") ?? "").split("\n");
 	if (node.k !== "col" || !node.c) throw new Error("Expected dock rows or native activity column");
 	const text = (child: NativeNode): string => {
 		if (child.k === "rows") return child.p?.lines.join("") ?? "";
@@ -229,7 +237,7 @@ function focusFixture() {
 						feature: () => true,
 					}),
 				),
-			].map(rows => rows.map(row => Bun.stripANSI(row))),
+			].map(rows => rows.map(row => Bun.stripANSI(row).trimEnd())),
 		register(id: string, live: { session: typeof main.session }) {
 			registry.register({
 				id,
@@ -1726,7 +1734,6 @@ describe("compact latest live Output consumers", () => {
 		h.register("OutputWorker", live);
 		await h.focus.focusAgent("OutputWorker");
 		for (const rows of h.outputRows()) {
-			expect(rows).toHaveLength(6);
 			expect(rows[0]).toContain("bash · running · echo first");
 			expect(rows.join("\n")).toContain("first output");
 		}
@@ -1764,7 +1771,6 @@ describe("compact latest live Output consumers", () => {
 		}
 		calls = [outputCall("first", 1, "even later"), outputCall("second", 2, "one\ntwo\nthree")];
 		for (const rows of h.outputRows()) {
-			expect(rows).toHaveLength(6);
 			expect(
 				rows
 					.slice(1)
@@ -1806,7 +1812,6 @@ describe("compact latest live Output consumers", () => {
 				partialResult: frame.result!,
 			});
 			for (const rows of h.outputRows()) {
-				expect(rows).toHaveLength(6);
 				expect(rows[0]).toContain("bash · BuildPackage · bg_1 · running");
 				expect(rows.join("\n")).toContain(`tick ${second}`);
 			}
@@ -1866,11 +1871,9 @@ describe("compact latest live Output consumers", () => {
 		for (const rows of h.outputRows()) expect(rows).toEqual([]);
 		calls = [...calls, outputCall("new-output", 4, "new Output")];
 		for (const rows of h.outputRows()) {
-			expect(rows).toHaveLength(6);
 			expect(rows.join("\n")).toContain("new Output");
 		}
 		vi.advanceTimersByTime(3000);
-		for (const rows of h.outputRows()) expect(rows).toHaveLength(6);
 	});
 
 	it("does not let an earlier terminal deadline close a newer Output source", async () => {
@@ -1894,10 +1897,10 @@ describe("compact latest live Output consumers", () => {
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
 	});
 
-	it("shows the latest five nonblank display rows without changing the original Output", async () => {
+	it("shows the latest five meaningful display rows without changing the original Output", async () => {
 		const h = focusFixture();
 		const live = liveSession();
-		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n\n`;
+		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n{}\n---\n\x1b[31m╰──╯\x1b[0m\n✅\n\n`;
 		const call = outputCall("nonblank", 1, text);
 		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
 		h.register("NonblankOutput", live);
@@ -1906,6 +1909,35 @@ describe("compact latest live Output consumers", () => {
 			expect(rows.slice(1).map(row => row.trim())).toEqual(["first", "second", "third", "fourth", "fifth"]);
 		}
 		expect(call.result?.content).toEqual([{ type: "text", text }]);
+	});
+
+	it("aligns output with its header, preserves relative indentation and never pads short output", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const call = outputCall("aligned", 1, "\n    根节点\n      child 42\n    ---\n    {}\n");
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		h.register("AlignedOutput", live);
+		await h.focus.focusAgent("AlignedOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows).toHaveLength(3);
+			const inset = rows[0]!.length - rows[0]!.trimStart().length;
+			expect(rows.slice(1)).toEqual([`${" ".repeat(inset)}根节点`, `${" ".repeat(inset + 2)}child 42`]);
+		}
+	});
+
+	it("does not open or replace meaningful output for symbol-only frames", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		let calls = [outputCall("symbols", 2, "\x1b[31m{}\n---\n╰──╯\x1b[0m\n✅")];
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => calls);
+		h.register("SymbolOutput", live);
+		await h.focus.focusAgent("SymbolOutput");
+		expect(h.outputRows()).toEqual([[], []]);
+		calls = [outputCall("content", 1, "0"), ...calls];
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("echo content");
+			expect(rows.slice(1).map(row => row.trim())).toEqual(["0"]);
+		}
 	});
 
 	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {
