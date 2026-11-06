@@ -1814,6 +1814,28 @@ describe("compact latest live Output consumers", () => {
 		expect(h.ctx.pendingTools.size).toBe(0);
 	});
 
+	it("retains completed Output while the status line is running and expires three seconds after it stops", async () => {
+		setSystemTime(10_000);
+		const h = focusFixture();
+		const live = liveSession();
+		const terminal = outputCall("latest", 1, "completed while still working", { terminalAt: 10_000 });
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([terminal]);
+		h.register("WorkingOutput", live);
+		await h.focus.focusAgent("WorkingOutput");
+		await live.emit({ type: "agent_start" });
+		vi.advanceTimersByTime(10_000);
+		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("completed while still working");
+
+		await live.emit({ type: "agent_end", messages: [] });
+		vi.advanceTimersByTime(2999);
+		const rebuilt = new CompactToolOutputPreview(h.ctx);
+		outputPreviews.push(rebuilt);
+		expect(Bun.stripANSI(rebuilt.render(120).join("\n"))).toContain("completed while still working");
+		vi.advanceTimersByTime(1);
+		expect(h.outputRows()).toEqual([[], []]);
+		expect(rebuilt.render(120)).toEqual([]);
+	});
+
 	it("expires from terminal receipt without painting and never falls back or reopens on rebuild", async () => {
 		setSystemTime(10_000);
 		const h = focusFixture();
@@ -1870,6 +1892,20 @@ describe("compact latest live Output consumers", () => {
 		});
 		vi.advanceTimersByTime(1000);
 		for (const rows of h.outputRows()) expect(rows.join("\n")).toContain("replacement");
+	});
+
+	it("shows the latest five nonblank display rows without changing the original Output", async () => {
+		const h = focusFixture();
+		const live = liveSession();
+		const text = `discard\nfirst\n \nsecond\n\t\nthird\n${" ".repeat(150)}\nfourth\n\x1b[31m  \x1b[0m\nfifth\n\n`;
+		const call = outputCall("nonblank", 1, text);
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockReturnValue([call]);
+		h.register("NonblankOutput", live);
+		await h.focus.focusAgent("NonblankOutput");
+		for (const rows of h.outputRows()) {
+			expect(rows.slice(1).map(row => row.trim())).toEqual(["first", "second", "third", "fourth", "fifth"]);
+		}
+		expect(call.result?.content).toEqual([{ type: "text", text }]);
 	});
 
 	it("wraps safe output before its tail window and keeps ANSI/native text identical", async () => {

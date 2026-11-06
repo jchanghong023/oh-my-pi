@@ -592,6 +592,7 @@ function resolveWorktreeContext(cwd: string): WorktreeContext | null {
 interface ActiveMeter {
 	activeMs: number;
 	activeStartedAt: number | null;
+	lastActivityEndAt: number | null;
 	sessionFile: string | undefined;
 }
 
@@ -1109,9 +1110,10 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 */
 	resetActiveTime(): void {
 		const meter = this.#meter();
-		if (meter.activeMs === 0 && meter.activeStartedAt === null) return;
+		if (meter.activeMs === 0 && meter.activeStartedAt === null && meter.lastActivityEndAt === null) return;
 		meter.activeMs = 0;
 		meter.activeStartedAt = null;
+		meter.lastActivityEndAt = null;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
 	}
@@ -1140,7 +1142,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	markActivityEnd(): void {
 		const meter = this.#meter();
 		if (meter.activeStartedAt === null) return;
-		meter.activeMs += Math.max(0, Date.now() - meter.activeStartedAt);
+		const now = Date.now();
+		meter.activeMs += Math.max(0, now - meter.activeStartedAt);
+		meter.lastActivityEndAt = now;
 		meter.activeStartedAt = null;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
@@ -1163,6 +1167,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	getTurnElapsedMs(): number | null {
 		const startedAt = this.#meter().activeStartedAt;
 		return startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+	}
+
+	/** Original stop time for the viewed session's last active window, independent of painting. */
+	getLastActivityEndAt(): number | null {
+		return this.#meter().lastActivityEndAt;
 	}
 
 	/**
@@ -1188,7 +1197,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 			}
 		}
 		if (!meter) {
-			meter = { activeMs: 0, activeStartedAt: null, sessionFile: currentFile };
+			meter = { activeMs: 0, activeStartedAt: null, lastActivityEndAt: null, sessionFile: currentFile };
 			this.#activeMeters.set(this.session, meter);
 		}
 		return meter;

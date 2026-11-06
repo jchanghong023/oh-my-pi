@@ -25,7 +25,7 @@ export class CompactToolOutputPreview implements Component {
 	#outputText = new WeakMap<ToolRenderResult<unknown>, string>();
 
 	constructor(
-		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui">,
+		private readonly ctx: Pick<InteractiveModeContext, "viewSession" | "ui" | "statusLine">,
 		private readonly availableRows: () => number = () => 6,
 	) {}
 
@@ -37,7 +37,7 @@ export class CompactToolOutputPreview implements Component {
 		this.#sessionId = undefined;
 	}
 
-	/** Synchronize even without a visible paint; terminal deadlines are owned by the session. */
+	/** Synchronize even without a visible paint; close only after tool completion and activity stop. */
 	observe(event: AgentSessionEvent): void {
 		if (
 			event.type === "tool_execution_start" ||
@@ -69,7 +69,11 @@ export class CompactToolOutputPreview implements Component {
 			}
 			if (output.trim()) selected = { call, output };
 		}
-		const deadline = selected?.call.terminalAt === undefined ? undefined : selected.call.terminalAt + 3000;
+		const terminalAt = selected?.call.terminalAt;
+		const deadline =
+			terminalAt === undefined || this.ctx.statusLine.getTurnElapsedMs() !== null
+				? undefined
+				: Math.max(terminalAt, this.ctx.statusLine.getLastActivityEndAt() ?? terminalAt) + 3000;
 		if (this.#deadline !== deadline) {
 			clearTimeout(this.#timer);
 			this.#timer = undefined;
@@ -120,7 +124,12 @@ export class CompactToolOutputPreview implements Component {
 		const header = identity.filter(Boolean).join(" · ");
 		const target = info.command || info.detail;
 		const rows = [truncateToWidth(singleLine(target ? `${header} · ${target}` : header), innerWidth)];
-		if (height > 1) rows.push(...wrapTextWithAnsi(output, innerWidth).slice(-(height - 1)));
+		if (height > 1)
+			rows.push(
+				...wrapTextWithAnsi(output, innerWidth)
+					.filter(row => row.trim().length > 0)
+					.slice(-(height - 1)),
+			);
 		while (rows.length < height) rows.push("");
 		const left = padding(inset);
 		return rows.map(row => (row ? left + row : ""));

@@ -260,8 +260,8 @@ describe("focused view of a worker-homed agent session", () => {
 		const previous = { ...chatTranscriptDisplayPreferences };
 		setChatTranscriptDisplayPreferences({ compactToolActivity: true });
 		const preview = new CompactToolOutputPreview({
+			...createInteractiveModeContext(),
 			viewSession: remote,
-			ui: createInteractiveModeContext().ui,
 		});
 		try {
 			await probe.emit("OutputWorker", {
