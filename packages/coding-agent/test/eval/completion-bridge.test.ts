@@ -233,7 +233,12 @@ await Bun.write(${JSON.stringify(resultPath)}, JSON.stringify(result));
 process.exit(0);
 `,
 	);
-	const child = await $`bun ${scriptPath}`.cwd(repoRoot).quiet().nothrow();
+	// This child exercises a real kernel, so it must discover a compatible interpreter.
+	const child = await $`bun ${scriptPath}`
+		.cwd(repoRoot)
+		.env({ ...process.env, PI_TEST_RUNTIME: undefined, PI_PYTHON_SKIP_CHECK: undefined })
+		.quiet()
+		.nothrow();
 	const stdout = child.stdout.toString();
 	const stderr = child.stderr.toString();
 	if (child.exitCode !== 0)
