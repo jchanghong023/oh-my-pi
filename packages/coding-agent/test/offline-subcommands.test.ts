@@ -32,6 +32,7 @@ async function fixture(
 		USERPROFILE: home,
 		OMP_CONFIG_ROOT: path.join(home, "config"),
 		PI_CODING_AGENT_DIR: path.join(home, "agent"),
+		OMP_COMMIT_CACHE_DB: path.join(home, "commit-inference.db"),
 		PI_CONFIG_DIR: ".omp",
 		CLAUDE_CONFIG_DIR: claudeDir,
 		NO_COLOR: "1",
