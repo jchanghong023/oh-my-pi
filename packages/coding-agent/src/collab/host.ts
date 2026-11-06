@@ -11,6 +11,7 @@
 
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { logger } from "@oh-my-pi/pi-utils";
 import type {
@@ -30,6 +31,7 @@ import type { SessionEntry as StoredSessionEntry } from "../session/session-entr
 import { TASK_SUBAGENT_LIFECYCLE_CHANNEL, TASK_SUBAGENT_PROGRESS_CHANNEL } from "../task/types";
 import { generateRoomKey, generateWriteToken, importRoomKey } from "./crypto";
 import { collabDisplayName } from "./display-name";
+import { intranetCollabEnabled, intranetRelayUrl, intranetUsername } from "./intranet";
 import {
 	type AgentSnapshot,
 	COLLAB_PROMPT_MESSAGE_TYPE,
@@ -206,6 +208,7 @@ export class CollabHost {
 	#webLink = "";
 	#viewLink = "";
 	#webViewLink = "";
+	#intranetUsername: string | undefined;
 	#writeToken: Uint8Array | null = null;
 	#sessionId: string;
 	#startedAt = 0;
@@ -310,6 +313,11 @@ export class CollabHost {
 		return this.#relayConnected;
 	}
 
+	/** Actual login account registered with the trusted intranet relay. */
+	get intranetUsername(): string | undefined {
+		return this.#intranetUsername;
+	}
+
 	get link(): string {
 		return this.#link;
 	}
@@ -395,6 +403,10 @@ export class CollabHost {
 
 	async start(relayUrl: string, webUrl = ""): Promise<void> {
 		if (this.ending) throw new CollabHostStoppedError("collab host already stopped");
+		if (intranetCollabEnabled()) {
+			relayUrl = intranetRelayUrl(relayUrl);
+			this.#intranetUsername = intranetUsername();
+		}
 		const rawKey = generateRoomKey();
 		const writeToken = generateWriteToken();
 		const roomId = generateRoomId();
@@ -413,7 +425,19 @@ export class CollabHost {
 		const key = await importRoomKey(rawKey);
 		if (this.ending) throw new CollabHostStoppedError("collab host stopped before connecting");
 
-		const socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "host", key });
+		const intranetRegistration = this.#intranetUsername
+			? {
+					username: this.#intranetUsername,
+					hostname: os.hostname(),
+					link: this.#access === "view" ? this.#viewLink : this.#link,
+				}
+			: undefined;
+		const socket = new CollabSocket({
+			wsUrl: parsed.wsUrl,
+			role: "host",
+			key,
+			...(intranetRegistration ? { intranetRegistration } : {}),
+		});
 		this.#socket = socket;
 
 		let opened = false;
@@ -443,7 +467,7 @@ export class CollabHost {
 			} else {
 				void this.#teardown();
 				this.#ctx.session.emitNotice("warning", `Collab ended: ${reason}`, "collab");
-				this.#onEnded?.();
+				if (!socket.registrationFailed) this.#onEnded?.();
 			}
 		};
 		socket.connect();

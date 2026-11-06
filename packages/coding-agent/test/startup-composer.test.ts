@@ -265,7 +265,7 @@ it.each(["online", "offline", "splash"] as const)(
 				"test",
 				import.meta.path,
 				"--test-name-pattern",
-				"keeps guest mutations gated until outer startup completes",
+				"keeps guest mutations gated until outer startup",
 			],
 			{
 				env: {
@@ -284,7 +284,7 @@ it.each(["online", "offline", "splash"] as const)(
 			child.exited,
 		]);
 		expect(exitCode, stdout + stderr).toBe(0);
-		expect(stdout + stderr).toMatch(/1 pass/);
+		expect(stdout + stderr).toMatch(/2 pass/);
 	},
 	60_000,
 );

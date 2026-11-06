@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
+import { open } from "../../src/collab/crypto";
+import { unpackEnvelope } from "../../src/collab/protocol";
 import {
 	CollabSocket,
 	HOST_RECLAIM_BACKOFF_MAX_MS,
@@ -319,6 +321,117 @@ describe("CollabSocket host room recovery", () => {
 		vi.advanceTimersByTime(60_000);
 		expect(ScriptedWebSocket.instances).toHaveLength(attemptOffsetsMs.length + 2);
 	});
+});
+
+describe("CollabSocket intranet registration", () => {
+	it("holds encrypted prompts and readiness until registration is acknowledged on every connection", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		installScriptedWebSocket();
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const socket = new CollabSocket({
+			wsUrl: "ws://localhost:8788/r/transient-network-room",
+			role: "host",
+			key,
+			intranetRegistration: {
+				username: "j00808874",
+				hostname: "intranet-host",
+				link: "https://collab.example/#private-capability",
+			},
+		});
+		let opens = 0;
+		let recreations = 0;
+		const controls: string[] = [];
+		socket.onOpen = () => opens++;
+		socket.onRoomRecreated = () => recreations++;
+		socket.onControl = message => controls.push(message.t);
+
+		try {
+			socket.connect();
+			for (const [index, text] of ["initial queued prompt", "queued after network loss"].entries()) {
+				if (index > 0) {
+					instance(index - 1).relayClose(1006, "Connection ended");
+					vi.advanceTimersByTime(1_000);
+				}
+				const prompt = { t: "prompt", text } as const;
+				socket.send(prompt);
+				const ws = instance(index);
+				ws.open();
+				// Seal with real AES-GCM before trying either historical reclaim fast path.
+				await socket.flush();
+				ws.deliver(JSON.stringify({ t: "peer-joined", peer: 1 }));
+				vi.advanceTimersByTime(HOST_RECLAIM_CONFIRM_MS * 2);
+				expect(socket.isOpen).toBe(false);
+				expect({ opens, recreations }).toEqual({ opens: index, recreations: 0 });
+				expect(controls).toEqual([]);
+				expect(ws.sent.filter(data => typeof data !== "string")).toEqual([]);
+
+				ws.deliver(JSON.stringify({ t: "registered" }));
+				for (let turn = 0; turn < 10; turn++) await Promise.resolve();
+				expect(socket.isOpen).toBe(true);
+				expect({ opens, recreations }).toEqual({ opens: index + 1, recreations: index });
+				const encrypted = ws.sent.filter((data): data is Uint8Array => data instanceof Uint8Array);
+				expect(encrypted).toHaveLength(1);
+				const envelope = unpackEnvelope(encrypted[0]!);
+				if (!envelope) throw new Error("Expected an encrypted routing envelope");
+				expect(await open(key, envelope.payload)).toEqual(prompt);
+				ws.deliver(JSON.stringify({ t: "peer-joined", peer: 1 }));
+				expect(controls).toEqual(["peer-joined"]);
+				controls.length = 0;
+			}
+		} finally {
+			socket.close();
+		}
+	});
+
+	it.each(["registration-error", "4010"] as const)(
+		"terminates rejected registration via %s without draining prompts or reconnecting",
+		async rejection => {
+			vi.useFakeTimers();
+			installScriptedWebSocket();
+			const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+			const socket = new CollabSocket({
+				wsUrl: "ws://localhost:8788/r/transient-network-room",
+				role: "host",
+				key,
+				intranetRegistration: {
+					username: "j00808874",
+					hostname: "second-host",
+					link: "https://collab.example/#private-capability",
+				},
+			});
+			const closes: Array<{ reason: string; willReconnect: boolean }> = [];
+			let opens = 0;
+			socket.onOpen = () => opens++;
+			socket.onClose = (reason, willReconnect) => closes.push({ reason, willReconnect });
+			const reason = "User j00808874 is already sharing on first-host; use /join j00808874 to join.";
+
+			try {
+				socket.connect();
+				const ws = instance(0);
+				ws.open();
+				socket.send({ t: "prompt", text: "must never leave the rejected host" });
+				await socket.flush();
+				if (rejection === "registration-error") {
+					ws.deliver(JSON.stringify({ t: "registration-error", message: reason }));
+					ws.relayClose(4010, "username registration failed");
+				} else {
+					ws.relayClose(4010, reason);
+				}
+				socket.send({ t: "prompt", text: "also rejected after terminal close" });
+				// A delayed ack and elapsed retry/reclaim windows cannot resurrect this host.
+				ws.deliver(JSON.stringify({ t: "registered" }));
+				vi.advanceTimersByTime(HOST_RECLAIM_WINDOW_MS + 60_000);
+				expect(closes).toEqual([{ reason, willReconnect: false }]);
+				expect(opens).toBe(0);
+				expect(socket.isOpen).toBe(false);
+				expect(ScriptedWebSocket.instances).toHaveLength(1);
+				expect(ws.sent.filter(data => typeof data !== "string")).toEqual([]);
+			} finally {
+				socket.close();
+			}
+		},
+	);
 });
 
 describe("CollabSocket silent connection", () => {

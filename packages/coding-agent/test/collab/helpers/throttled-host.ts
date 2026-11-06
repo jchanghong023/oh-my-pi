@@ -108,7 +108,7 @@ export function instrumentRelay(relay: InMemoryRelay, opts: { throttle: boolean 
 		if (!opts.throttle) return;
 		const send = ws.send.bind(ws);
 		ws.send = data => {
-			ws.bufferedAmount += data.byteLength;
+			if (typeof data !== "string") ws.bufferedAmount += data.byteLength;
 			send(data);
 		};
 	};

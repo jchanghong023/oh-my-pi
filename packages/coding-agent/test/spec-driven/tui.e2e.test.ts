@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { SpecArtifactStore } from "../../src/spec-driven/artifacts";
 import type { SpecSavedRun } from "../../src/spec-driven/types";
 import {
 	contentText,
@@ -572,20 +573,45 @@ test.skipIf(!tuiTest)(
 				// A real filesystem fault blocks native requirement sync, not a mocked close result.
 				await fs.mkdir(path.join(cwd, "openspec/specs"), { recursive: true });
 				await Bun.write(path.join(cwd, "openspec/specs/greeting"), "deliberate-sync-obstruction\n");
-				const closingDiagnostic = await fs.realpath(path.join(cwd, "openspec/specs/greeting/spec.md")).then(
-					() => {
-						throw new Error("The closing fixture unexpectedly resolved through its file obstruction");
-					},
-					(error: unknown) => {
-						if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
-						return error.message;
-					},
+				const closingRun = (await state()).run!;
+				const closingStore = new SpecArtifactStore({
+					cwd: await fs.realpath(cwd),
+					changeId: closingRun.changeId!,
+					paths: closingRun.paths,
+				});
+				const closingReport = await closingStore.readReport();
+				// Use the exact closing API and approved versions, not a different
+				// filesystem probe: preflight and the native CLI can fail differently.
+				// The real obstruction remains in place for the subsequent TUI close.
+				const closingDiagnostic = await closingStore
+					.close({
+						acceptedVersions: [
+							...Object.values(closingRun.approvals).flatMap(approval => approval?.files ?? []),
+							{ path: closingReport.path, version: closingReport.version },
+						],
+					})
+					.then(
+						() => {
+							throw new Error("The closing fixture unexpectedly archived through its file obstruction");
+						},
+						(error: unknown) => {
+							if (!(error instanceof Error)) throw error;
+							const { code } = error as NodeJS.ErrnoException;
+							if (!code) expect(error.message).toStartWith("OpenSpec archive failed (1):");
+							return {
+								reason: code ? new RegExp(code, "u") : /OpenSpec archive failed \(1\)/u,
+								message: error.message,
+							};
+						},
+					);
+				expect(closingDiagnostic.message.replaceAll("\\\\", "/").replaceAll("\\", "/")).toContain(
+					path.join(closingStore.cwd, "openspec/specs/greeting").replaceAll("\\", "/"),
 				);
 				const beforeClosing = provider.requests.length;
 				await tui("submit", "/dev next");
-				// Containment preflight may reject the real obstruction before the
-				// archive CLI runs. Assert its cause, full details and restored input.
-				await expectNativeFailure(tui, /ENOTDIR/u, closingDiagnostic, "/dev next");
+				// Assert the actual closing cause, every native diagnostic line in
+				// /session, and restoration of the failed command in the composer.
+				await expectNativeFailure(tui, closingDiagnostic.reason, closingDiagnostic.message, "/dev next");
 				await idle();
 				expect((await state()).run?.sessions.executor?.sessionFile).toBe(execution.sessions.executor?.sessionFile);
 				expect((await state()).run?.archivedChangePath).toBeUndefined();

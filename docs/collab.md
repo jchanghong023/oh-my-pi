@@ -2,7 +2,60 @@
 
 `/collab` shares your running session with other omp instances in real time. Guests render the **same session natively in their own TUI** — streaming assistant text, tool-call cards, footer state (cwd, model, context %, cost), ctrl+o expansion, `/dump` — no terminal mirroring. Guests can prompt and interrupt the agent; the host machine runs the agent and all tools.
 
-## Quick start
+## Offline intranet: username sharing
+
+With `OMP_OFFLINE=1`, OMP provides a separate built-in intranet relay and native TUI username sharing. This is not the public `my.omp.sh` relay. The relay and all username-sharing clients must enable offline mode; outside offline mode, existing commands, help, invitation links, permissions, and other functionality are unchanged.
+
+### Start the relay
+
+Run in tcsh on the relay machine:
+
+```tcsh
+setenv OMP_OFFLINE 1
+omp collab serve --host 0.0.0.0 --port 7466
+```
+
+The service listens directly on the address and port selected by `--host` and `--port`; without these flags the default is `127.0.0.1:7466`. Clients on other machines use `ws://<intranet-IP-or-hostname>:7466`, replacing the placeholder with the relay machine's actual IP or hostname. Username discovery uses HTTP on the same server and port, at `/collab/users/<username>`. No certificates, TLS, reverse proxy, authentication setup, or additional service is required.
+
+The foreground service reports its listening address; Ctrl+C or a termination signal stops it and closes its rooms. The standalone OMP binary runs this relay without external Bun/Node.js, source checkout, model configuration, model credentials, or a model session. This applies to the relay only: clients keep their existing model configuration. It does not install a system service.
+
+### Configure and use the clients
+
+On **each host and guest**, enable offline mode and launch the native TUI:
+
+```tcsh
+setenv OMP_OFFLINE 1
+omp
+```
+
+In `/settings`, set only `collab.relayUrl` for this feature to the same `ws://<intranet-IP-or-hostname>:7466` origin. Use the same configuration root/profile as the TUI; project overrides can affect the effective setting (see [Settings](./settings.md)). An unset/empty relay or the default public `my.omp.sh` relay is rejected offline before connecting; there is no public fallback.
+
+The host shares its current session with:
+
+```text
+/collab
+```
+
+OMP registers the process's actual OS login username, for example `j00808874`, and displays `/join j00808874` rather than the usual capability link, browser invitation, or QR code. This is not `collab.displayName`, a numeric UID, or a user-entered alias; changing `USER` or `LOGNAME` does not change it. Login names must have the same meaning across the machines using this relay.
+
+In another offline TUI configured for that relay:
+
+```text
+/join j00808874
+```
+
+No host confirmation, copied invitation, credentials, or separate account registration is required. Username joining is a **native TUI** feature, not `omp join <username>`, GUI, browser, ACP, or RPC functionality. Existing `/join <link>` and `omp join <link>` remain link-based, and valid links keep their original access level.
+
+### Ownership, access, and limits
+
+- **One active shared room per username per relay**, across machines, processes, and profiles. Repeating `/collab` on the same active control room reuses it. A competing host is rejected with the current host's machine name and `/join <username>`; it never automatically takes over. Stop the original host's sharing before moving ownership.
+- Guests joining a session shared with `/collab` can read history, prompt, interrupt, control subagents, and answer interactive requests using the existing writable-guest permissions. Models and tools still run on the host machine as the host account; host-only commands remain host-only. A room explicitly shared read-only stays read-only, including username discovery; `/collab view` can still deliberately reveal a read-only invitation link.
+- `/collab status` shows sharing status and the username join hint. `/collab stop` (or host `/leave`) ends sharing and withdraws the username; guest `/leave` restores the guest's prior local session without stopping the host. The stop command contains a space: `/collab stop`, not `/collabstop`. Stop your own live host before joining another room. Unknown/unshared usernames and connection failures report errors, not a successful join.
+- Disconnecting the host removes its registration when the relay closes that connection. Relay restart loses its live rooms and registrations; hosts must reconnect and register again. When a session switch replaces a room, old guests do not silently enter the new session: explicitly `/join <username>` again.
+- `omp collab list/link` and `/collab list` still discover **local hosts only**, not a network-wide user directory. `collab.autoStart`, when enabled, uses the same configured relay and username ownership rules.
+- This built-in relay supplies WebSocket forwarding and username lookup only: no embedded web UI, `/share` storage/viewer, or `/healthz`. It is separate from the unpublished production Go service described below.
+
+## Quick start (non-offline invitation links)
 
 Host:
 
@@ -35,10 +88,10 @@ The guest's previous session is restored on `/leave` (or when the host stops).
 | `/collab`              | Start full-control sharing; reuse a control room or replace a view-only room        |
 | `/collab <relay>`      | Start sharing through a specific relay (`relay.example.com`, `ws://localhost:7475`) |
 | `/collab view [relay]` | Start read-only sharing, or print the existing room's read-only link/QR             |
-| `/collab status`       | Show link + participants                                                            |
+| `/collab status`       | Show sharing state + participants (username join hint offline; otherwise link)     |
 | `/collab stop`         | Stop sharing                                                                        |
 | `/collab list`         | List every active local Collab host (no links)                                      |
-| `/join <link>`         | Join a shared session as a guest                                                    |
+| `/join <link>`         | Join a shared session as a guest; offline TUI also accepts `/join <username>`      |
 | `/leave`               | Leave (guest) or stop sharing (host)                                                |
 
 `/collab start [relay]` is also accepted. Passing a relay while a reusable room is active does not move that room to another relay; stop it first to change the relay.
@@ -85,7 +138,7 @@ Each host row carries a stable `instanceId` (random per process, kept across the
 
 A link is a deliberate per-host act. `omp collab link` asks the selected host for one URL, bound to the generation observed while listing: if the host has since started a new room (a session switch), the request fails with `stale_generation` instead of handing out the successor room, and you list again. A host published with `view` access refuses `control`. A PID that matches more than one live host (or none) is rejected with the candidate instance IDs; use the instance ID. The printed URL grants whatever its access says — treat a control URL like the `/collab` link itself.
 
-How it works: each room publishes its own private IPC endpoint (a Unix domain socket on macOS/Linux, a named pipe on Windows — never a TCP port) once its relay connection succeeds; a rotation publishes under fresh artifact names, so withdrawing the old room can never disturb its successor. Full-control and view-only URLs, the room key, and the write token stay in the host process's memory; disk holds only discovery metadata (protocol version, instance ID, PID, endpoint, creation time, and a random bearer token) under `~/.omp/run/collab-hosts`. On macOS/Linux, permissions are tightened to owner-only on every publication. Windows inherits the configuration root's ACL, so that root must remain private to the user. Two authenticated operations exist over the endpoint: `snapshot` (host state, with free-form strings bounded so an unusual session title cannot make a host unlistable) and `link` (`access` + `generation` → one URL). Listing queries every live host concurrently with short independent deadlines, skips unresponsive or foreign-version entries, and prunes metadata left behind by crashed hosts; a transient socket error (`EMFILE`, `EACCES`, …) never prunes a live host. Stopped rooms disappear immediately — the registry keeps no history, lists no guests or remote hosts, and requires no relay change. Third-party dashboards and bridges can build on `omp collab list --json` plus `omp collab link` — or speak the newline-delimited JSON endpoint directly — without omp shipping a remote product of its own.
+How it works: each room publishes its own private IPC endpoint (a Unix domain socket on macOS/Linux, a named pipe on Windows — never a TCP port) once its relay connection succeeds; a rotation publishes under fresh artifact names, so withdrawing the old room can never disturb its successor. The local registry does not persist full-control or view-only URLs, room keys, or write tokens; disk holds only discovery metadata (protocol version, instance ID, PID, endpoint, creation time, and a random bearer token) under `~/.omp/run/collab-hosts`. Offline username discovery uses the intranet relay separately from this local registry. On macOS/Linux, permissions are tightened to owner-only on every publication. Windows inherits the configuration root's ACL, so that root must remain private to the user. Two authenticated operations exist over the endpoint: `snapshot` (host state, with free-form strings bounded so an unusual session title cannot make a host unlistable) and `link` (`access` + `generation` → one URL). Listing queries every live host concurrently with short independent deadlines, skips unresponsive or foreign-version entries, and prunes metadata left behind by crashed hosts; a transient socket error (`EMFILE`, `EACCES`, …) never prunes a live host. Stopped rooms disappear immediately — the registry keeps no history, lists no guests or remote hosts, and requires no relay change. Third-party dashboards and bridges can build on `omp collab list --json` plus `omp collab link` — or speak the newline-delimited JSON endpoint directly — without omp shipping a remote product of its own.
 
 A missing registry directory means no active hosts. An unreadable or symlinked registry directory is a listing error, not a successful empty result; POSIX also rejects foreign-owned directories. Individual unreachable or malformed host entries are still omitted independently. The CLI exits nonzero for a directory error; `/collab list` displays a sanitized, bounded error and leaves the TUI usable.
 
@@ -115,15 +168,15 @@ The trailing `.<key>` or `#<key>` part is the room secret, base64url-encoded, in
 
 The room secret is dot-joined in newly generated links because RFC 3986 forbids a raw `#` inside a URL fragment; parsers still accept legacy `#` forms and `%23`-mangled legacy deep links.
 
-## End-to-end encryption
+## End-to-end encryption (non-offline invitation links)
 
-Every session payload (entries, events, state, prompts) is sealed with AES-256-GCM before it touches the socket. The relay sees only:
+Every session payload (entries, events, state, prompts) is sealed with AES-256-GCM before it touches the socket. In the non-offline invitation-link protocol, keys are not sent to the relay; it sees only:
 
 - room ids and connection counts,
 - opaque ciphertext frames and their sizes,
 - a 4-byte routing prefix (which guest a frame targets).
 
-Possession of the link is the trust boundary: a full link reads and steers the session, a view-only link reads it. Share both like secrets.
+For invitation links, possession of the link is the trust boundary: a full link reads and steers the session, a view-only link reads it. Share both like secrets.
 
 ## Guest permission model
 
@@ -147,6 +200,8 @@ When a guest joins during an assistant turn, that in-flight turn appears on the 
 
 ## Web client
 
+The following describes the existing browser client and hosted service, not a web UI bundled with `omp collab serve`; the built-in intranet relay does not serve `/`.
+
 `packages/collab-web` is a standalone browser client for the same links — no omp install needed on the guest side. The relay serves it at `/`, which is what makes the `/collab` deep link click-to-join: `https://<relay>/#<link>` loads the client and auto-connects from the fragment. It renders the live transcript (streaming text, thinking, tool cards), a subagent panel with on-demand transcripts, and a composer with the same guest powers (prompt, interrupt, hub actions). Run `bun run dev` in the package for a local instance, `bun run mock-host` for an offline scripted host to develop against, and `bun run build` to emit a static `dist/` deployable anywhere (HTTPS required for WebCrypto). The client never talks to anything but the relay, and the key stays in the URL fragment.
 
 Set `collab.webUrl` when the browser UI is hosted separately from the websocket relay. When empty, `/collab` derives `http(s)://host[:port]` from `collab.relayUrl`; explicit web UI URLs must use `https://` except for localhost/loopback `http://` development origins, and cannot contain a query string or fragment. The generated browser URL still carries the relay-specific collab link in the fragment.
@@ -155,9 +210,9 @@ Set `collab.webUrl` when the browser UI is hosted separately from the websocket 
 
 | Setting               | Default               | Meaning                                                                                                        |
 | --------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay used by `/collab` when no relay is passed inline                                                         |
+| `collab.relayUrl`     | `wss://my.omp.sh`     | Relay used by `/collab`; offline username sharing/joining requires an explicit intranet origin instead         |
 | `collab.webUrl`       | empty                 | Browser UI URL for `/collab` links; empty derives from relay; explicit `http://` is allowed only for localhost |
-| `collab.displayName`  | OS username           | Name shown to other participants                                                                               |
+| `collab.displayName`  | OS username           | Participant display name only; does not change offline username registration                                 |
 | `collab.autoStart`    | `off`                 | `view` / `control`: host every interactive session as it starts and publish it to the local registry           |
 | `share.serverUrl`     | `https://my.omp.sh/s` | Share viewer/upload base used by `/share` (links are `<base>/<id>#<key>`)                                      |
 | `share.store`         | `blob`                | `/share` uploads to the blob server; `gist` uses an authenticated secret gist with blob fallback               |
@@ -165,11 +220,13 @@ Set `collab.webUrl` when the browser UI is hosted separately from the websocket 
 
 ## Self-hosting the relay
 
+The offline-only built-in intranet relay is started with `OMP_OFFLINE=1 omp collab serve`; see the deployment steps above. It supports `GET /r/<roomId>?role=host|guest` and `GET /collab/users/<username>` and does not embed the browser client or `/share`. It is not a distribution of the production Go relay.
+
 The production relay is not currently distributed for self-hosting: its Go source and standalone binaries are not published. The endpoint list below documents the hosted service's network contract, not an installable release.
 
 For local protocol development, this repository includes a source-available, WebSocket-only stand-in at [`packages/collab-web/scripts/local-relay.ts`](../packages/collab-web/scripts/local-relay.ts). Run `bun run relay` from `packages/collab-web` to listen on `ws://localhost:7466`. It implements `/r/<roomId>` but does not serve the browser client, `/share` blobs, or `/healthz`, so it is not a replacement for the production service.
 
-The relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
+The production hosted relay is a small content-blind Go service. It keeps no state beyond live connections and exposes:
 
 - `GET /` — the static collab-web guest client (target of the `/collab` deep link),
 - `GET /r/<roomId>?role=host|guest` — WebSocket upgrade,
@@ -184,6 +241,7 @@ The relay is a small content-blind Go service. It keeps no state beyond live con
 - [`src/collab/protocol.ts`](../packages/coding-agent/src/collab/protocol.ts), [`crypto.ts`](../packages/coding-agent/src/collab/crypto.ts), [`relay-client.ts`](../packages/coding-agent/src/collab/relay-client.ts) — frames, links, encryption, and transport
 - [`src/collab/registry.ts`](../packages/coding-agent/src/collab/registry.ts) — private local host discovery
 - [`src/collab/settings.ts`](../packages/coding-agent/src/collab/settings.ts) — `collab.*` defaults
+- [`src/collab/intranet.ts`](../packages/coding-agent/src/collab/intranet.ts), [`relay-server.ts`](../packages/coding-agent/src/collab/relay-server.ts), [`src/commands/collab.ts`](../packages/coding-agent/src/commands/collab.ts) — offline username lookup, built-in intranet relay, and CLI service entry
 - [`packages/collab-web`](../packages/collab-web/) — browser guest and local development relay
 
 ## Architecture notes

@@ -12,6 +12,7 @@
 import { getProxyForUrl } from "@oh-my-pi/pi-ai/utils/proxy";
 import { logger } from "@oh-my-pi/pi-utils";
 import { open, sealSerialized } from "./crypto";
+import type { IntranetHostRegistration } from "./intranet";
 import type { CollabFrame, EncodedFrame, RelayControlMessage } from "./protocol";
 import { packEnvelope, unpackEnvelope } from "./protocol";
 
@@ -93,6 +94,7 @@ export interface CollabSocketOptions {
 	wsUrl: string;
 	role: "host" | "guest";
 	key: CryptoKey;
+	intranetRegistration?: IntranetHostRegistration;
 }
 
 export class CollabSocket {
@@ -122,9 +124,11 @@ export class CollabSocket {
 	#hostReclaimUntil: number | undefined;
 	/** Backoff for those retries: the relay completes each upgrade before refusing it, so `onopen` cannot reset it. */
 	#reclaimAttempt = 0;
-	/** A reclaim-time open not yet confirmed by the relay: not writable, not reported open. */
+	/** An open awaiting duplicate-host confirmation or intranet registration: not writable or reported open. */
 	#provisional: WebSocket | undefined;
 	#confirmTimer: NodeJS.Timeout | undefined;
+	#registrationPending: WebSocket | undefined;
+	#registrationFailed = false;
 	#heartbeatTimer: NodeJS.Timeout | undefined;
 	/** When the current socket last received anything, pongs included. */
 	#lastHeard = 0;
@@ -170,6 +174,11 @@ export class CollabSocket {
 		return this.#isWritable(this.#ws);
 	}
 
+	/** A terminal intranet registration rejection must not trigger owner-side relaunch. */
+	get registrationFailed(): boolean {
+		return this.#registrationFailed;
+	}
+
 	/**
 	 * False once the relay has retired this peer. Owners read this instead of
 	 * keeping their own departure bookkeeping: a frame that finishes decrypting
@@ -189,6 +198,7 @@ export class CollabSocket {
 		this.#retryMissingRoom = false;
 		this.#hostReclaimUntil = undefined;
 		this.#attempt = 0;
+		this.#registrationFailed = false;
 		this.#openSocket();
 	}
 
@@ -506,6 +516,7 @@ export class CollabSocket {
 	/** Intentional close: clears any retry timer, suppresses reconnect. A later connect() starts fresh. */
 	close(): void {
 		const hadActivity = this.#ws !== null || this.#retryTimer !== undefined;
+		const registrationPending = this.#registrationPending !== undefined;
 		this.#clearRetry();
 		this.#clearProvisional();
 		this.#stopHeartbeat();
@@ -523,7 +534,7 @@ export class CollabSocket {
 				// Closing is terminal, so backpressure no longer matters: every
 				// prepared envelope (typically a final `bye`) enters the socket buffer
 				// ahead of the close frame.
-				if (ws.readyState === WebSocket.OPEN) {
+				if (ws.readyState === WebSocket.OPEN && !registrationPending) {
 					for (const envelope of prepared) ws.send(envelope);
 				}
 				ws.close(1000);
@@ -543,9 +554,22 @@ export class CollabSocket {
 		const ws: WebSocket = Reflect.construct(WebSocket, [url, options]);
 		ws.binaryType = "arraybuffer";
 		this.#ws = ws;
+		if (this.#opts.intranetRegistration) {
+			this.#provisional = ws;
+			this.#registrationPending = ws;
+		}
 		ws.onopen = () => {
 			if (this.#ws !== ws) return;
 			this.#startHeartbeat(ws);
+			if (this.#opts.intranetRegistration) {
+				try {
+					ws.send(JSON.stringify({ t: "register", ...this.#opts.intranetRegistration }));
+				} catch {
+					this.#registrationFailed = true;
+					this.#failFatal("could not register intranet collaboration host");
+				}
+				return;
+			}
 			if (this.#rejoining && this.#hostReclaimUntil !== undefined && Date.now() < this.#hostReclaimUntil) {
 				// The relay may still refuse this socket as a duplicate host; commit only
 				// once it has had the chance to.
@@ -558,9 +582,9 @@ export class CollabSocket {
 		ws.onmessage = (event: MessageEvent) => {
 			if (this.#ws !== ws) return;
 			this.#lastHeard = Date.now();
-			// The relay only talks to a host it accepted; commit before dispatching so
-			// the room reset still precedes every frame.
-			if (this.#provisional === ws) this.#commitOpen(ws);
+			// Ordinary reclaim opens can commit on any relay message. Intranet
+			// opens require the explicit registered acknowledgement instead.
+			if (this.#provisional === ws && !this.#opts.intranetRegistration) this.#commitOpen(ws);
 			this.#handleMessage(ws, event.data);
 		};
 		ws.addEventListener("pong", () => {
@@ -623,7 +647,7 @@ export class CollabSocket {
 	}
 
 	#commitOpen(ws: WebSocket): void {
-		if (this.#ws !== ws) return;
+		if (this.#ws !== ws || this.#registrationPending === ws) return;
 		this.#clearProvisional();
 		if (!this.#retryMissingRoom) this.#attempt = 0;
 		// Before waking the sender, or it resumes a stale targeted iterator.
@@ -648,6 +672,7 @@ export class CollabSocket {
 			this.#confirmTimer = undefined;
 		}
 		this.#provisional = undefined;
+		this.#registrationPending = undefined;
 	}
 
 	#handleMessage(ws: WebSocket, data: unknown): void {
@@ -659,10 +684,31 @@ export class CollabSocket {
 				logger.debug("collab: ignoring malformed control message");
 				return;
 			}
+			if (this.#opts.intranetRegistration) {
+				const registrationMessage = msg as { t: string; message?: unknown };
+				if (registrationMessage?.t === "registered") {
+					if (this.#registrationPending === ws) {
+						this.#registrationPending = undefined;
+						this.#commitOpen(ws);
+					}
+					return;
+				}
+				if (registrationMessage?.t === "registration-error") {
+					this.#registrationFailed = true;
+					this.#failFatal(
+						typeof registrationMessage.message === "string"
+							? registrationMessage.message
+							: "intranet registration failed",
+					);
+					return;
+				}
+				if (this.#registrationPending === ws) return;
+			}
 			this.#applyPeerLifecycle(msg);
 			this.onControl?.(msg);
 			return;
 		}
+		if (this.#registrationPending === ws) return;
 		const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : data instanceof Uint8Array ? data : null;
 		if (!bytes) return;
 		const envelope = unpackEnvelope(bytes);
@@ -748,7 +794,9 @@ export class CollabSocket {
 			this.#scheduleRetry(this.#reclaimAttempt++, HOST_RECLAIM_BACKOFF_MAX_MS);
 			return;
 		}
-		const fatalReason = RELAY_CLOSE_REASONS[code];
+		const registrationFailure = code === 4010 && this.#opts.intranetRegistration !== undefined;
+		if (registrationFailure) this.#registrationFailed = true;
+		const fatalReason = registrationFailure ? reason || "intranet registration failed" : RELAY_CLOSE_REASONS[code];
 		const closeReason = fatalReason ?? (reason || `connection lost (code ${code})`);
 		const retryRoom = this.#opts.role === "guest" && (code === 4001 || (code === 4004 && this.#retryMissingRoom));
 		if (retryRoom) {

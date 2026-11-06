@@ -24,6 +24,7 @@ import {
 	WRITE_TOKEN_BYTES,
 } from "@oh-my-pi/pi-wire";
 import type { CollabSessionState } from "@oh-my-pi/pi-tui/status-line/types";
+import { offlineFromEnv } from "../cli/args";
 import type { AgentSessionEvent } from "../session/agent-session";
 import type { SessionEntry, SessionHeader } from "../session/session-entries";
 
@@ -174,7 +175,7 @@ export function generateRoomId(): string {
 }
 
 /** Normalize a relay base URL (ws/wss/http/https) into a ws/wss origin, or an error. */
-function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
+export function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: string } {
 	let url: URL;
 	try {
 		url = new URL(relayUrl);
@@ -194,7 +195,7 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 		default:
 			return { error: `Unsupported relay URL scheme: ${url.protocol}` };
 	}
-	if (scheme === "ws:" && !isLocalHostname(url.hostname)) {
+	if (scheme === "ws:" && !isLocalHostname(url.hostname) && !offlineFromEnv()) {
 		return { error: "relay link must be wss:// (plain ws:// is only allowed for localhost)" };
 	}
 	const port = url.port ? `:${url.port}` : "";
@@ -204,8 +205,7 @@ function normalizeRelayOrigin(relayUrl: string): { origin: string } | { error: s
 /**
  * Render the shareable link. Compact forms: the default relay collapses to
  * `<roomId>.<key>`, other wss relays drop the scheme (`host[:port]/r/…`);
- * only localhost ws:// links keep their full URL so parsing cannot
- * mis-infer wss.
+ * ws:// links keep their full URL so parsing cannot mis-infer wss.
  *
  * The room secret is dot-joined (`<roomId>.<key>`) rather than `#`-joined:
  * RFC 3986 forbids a raw `#` inside a fragment, so strict URL stacks (macOS

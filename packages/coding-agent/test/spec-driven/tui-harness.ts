@@ -145,6 +145,7 @@ async function expectNativeFailure(
 	);
 	if (!detail) return;
 	const normalize = (text: string) => text.replace(/\\+/gu, "/").replace(/[│┃║┆┊█\s]/gu, "");
+	const expectedLines = detail.split(/\r?\n/u).map(normalize).filter(Boolean);
 	// Only after proving automatic draft restoration, clear the whole line
 	// deliberately for navigation. submit() appends; it does not replace it.
 	await clearNativeDraft(tui, submittedText);
@@ -155,7 +156,10 @@ async function expectNativeFailure(
 	for (let index = 0; index < 100; index++) {
 		const screen = await tui("text");
 		screens.push(normalize(screen));
-		if (screens.join("").includes(normalize(detail))) break;
+		// A full native JSON diagnostic can span multiple viewports. Assert
+		// every complete line, without treating overlapping screens as one
+		// contiguous copy of the underlying document.
+		if (expectedLines.every(line => screens.join("").includes(line))) break;
 		// PTY key completion and visual idle do not acknowledge the next
 		// render. Collect another viewport only after this scroll is painted.
 		await tui("key", "press", "Shift+Down");
@@ -164,7 +168,7 @@ async function expectNativeFailure(
 			next => next !== screen,
 		);
 	}
-	expect(screens.join("")).toContain(normalize(detail));
+	for (const line of expectedLines) expect(screens.join("")).toContain(line);
 	await tui("key", "press", "Escape");
 }
 

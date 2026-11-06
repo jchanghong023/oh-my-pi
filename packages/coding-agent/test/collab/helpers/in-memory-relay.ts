@@ -4,8 +4,9 @@
  * `FakeWebSocket` + `InMemoryRelay` replace the real Bun.serve relay and
  * loopback WebSocket. They mirror the production relay's forwarding contract
  * exactly (4-byte peerId envelope routing, peer-joined/peer-left control
- * frames) but deliver every frame on a microtask with zero network or timer
- * latency. Real `CollabSocket` / `CollabHost` / `CollabGuestLink` run
+ * frames, and the intranet register→registered acknowledgement) but deliver
+ * every frame on a microtask with zero network or timer latency. Real
+ * `CollabSocket` / `CollabHost` / `CollabGuestLink` run
  * unchanged on top, so sealing, enveloping, the hello→welcome handshake, and
  * permission enforcement are all exercised.
  *
@@ -52,8 +53,12 @@ export class FakeWebSocket {
 		});
 	}
 
-	send(data: Uint8Array): void {
+	send(data: Uint8Array | string): void {
 		if (this.readyState !== FakeWebSocket.OPEN) return;
+		if (typeof data === "string") {
+			this.#relay.control(this, data);
+			return;
+		}
 		// Snapshot: the relay rewrites the peerId in place, and the sender may
 		// reuse the buffer once send() returns. Routing happens now, against the
 		// room as it is at send time, so a frame written just before close() still
@@ -120,6 +125,20 @@ export class InMemoryRelay {
 		ws.peerId = this.#nextPeerId++;
 		this.#guests.set(ws.peerId, ws);
 		this.#host?.deliverControl(JSON.stringify({ t: "peer-joined", peer: ws.peerId }));
+	}
+
+	/** Acknowledge host registration before CollabSocket reports the room open. */
+	control(from: FakeWebSocket, json: string): void {
+		if (from !== this.#host) return;
+		let message: unknown;
+		try {
+			message = JSON.parse(json);
+		} catch {
+			return;
+		}
+		if (typeof message === "object" && message !== null && "t" in message && message.t === "register") {
+			from.deliverControl(JSON.stringify({ t: "registered" }));
+		}
 	}
 
 	forward(from: FakeWebSocket, bytes: Uint8Array): void {

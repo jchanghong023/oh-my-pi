@@ -28,6 +28,7 @@
 
 ### Added
 
+- Share offline TUI sessions directly by login username with `/collab` and `/join <username>` over plain intranet WS and same-server HTTP discovery, using the built-in `omp collab serve --host 0.0.0.0 --port 7466` relay with `OMP_OFFLINE=1`; one active room per username, with no certificates, proxy, authentication, or host approval required.
 - Use native TUI `/sketch` without installation or configuration to draw or annotate pasted images in a local offline browser canvas, then add a PNG attachment to your draft for manual sending.
 - Use `/forkreviewer [scope]` for read-only fork review, split into small functional shards with compact issue reports.
 - Expose existing Knowledge search as a local read-only stdio MCP service with `omp knowledge mcp`, profile-aware shared database access, isolated worker lifecycle and OpenCode2/Claude Code setup instructions.

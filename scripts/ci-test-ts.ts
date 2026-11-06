@@ -295,6 +295,9 @@ const forkCodingAgentDirectories = ["test/spec-driven/", "test/team/", "test/goa
 const forkCodingAgentPatterns = [/^test\/modes\/zcode-[^/]+\.(?:test|e2e)\.ts$/];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
+	"test/cli/collab-serve.test.ts",
+	"test/collab/intranet-relay.test.ts",
+	"test/collab/relay-client-reconnect.test.ts",
 	"test/session/picker-worktrees.test.ts",
 	"test/cli-goal-flag.test.ts",
 	"test/goal-tool-runtime-enable.test.ts",

@@ -4,7 +4,10 @@ import { APP_NAME, formatAge } from "@oh-my-pi/pi-utils";
 import { formatKeyHint } from "@oh-my-pi/pi-tui/app-keybindings";
 import { CollabGuestLink } from "../collab/guest";
 import type { CollabHost } from "../collab/host";
+import { intranetCollabEnabled, isIntranetUsername, resolveIntranetUsername } from "../collab/intranet";
+import { parseCollabLink } from "../collab/protocol";
 import { type CollabHostSnapshot, listCollabHosts } from "../collab/registry";
+import { cfgCollabRelayUrl } from "../collab/settings";
 import { settings } from "../config/settings";
 import { parseExportArgs } from "../export/html/args";
 import { shareSession } from "../export/share";
@@ -27,6 +30,10 @@ import { cfgShareRedactSecrets, cfgShareServerUrl, cfgShareStore } from "../comm
 
 /** Join hint printed by /collab: compact terminal link + clickable browser deep link. */
 function collabLinkHint(host: CollabHost, heading: string, view = false): string {
+	if (host.intranetUsername && !view) {
+		const username = truncateToWidth(sanitizeDisplayLine(host.intranetUsername), TRUNCATE_LENGTHS.LONG);
+		return `${theme.fg("accent", `/join ${username}`)}  ${theme.fg("success", heading)}`;
+	}
 	const bullet = theme.fg("accent", theme.format.bullet);
 	const link = view ? host.viewLink : host.link;
 	const webLink = view ? host.webViewLink : host.webLink;
@@ -55,7 +62,7 @@ function showCollabQrCode(ctx: InteractiveModeContext, webLink: string): void {
 
 function showCollabLink(ctx: InteractiveModeContext, host: CollabHost, heading: string, view = false): void {
 	ctx.showStatus(collabLinkHint(host, heading, view), { dim: false });
-	showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
+	if (!host.intranetUsername || view) showCollabQrCode(ctx, view ? host.webViewLink : host.webLink);
 }
 
 export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
@@ -318,12 +325,19 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 	{
 		name: "collab",
 		icon: "broadcast",
-		description: "Share this session live via a relay",
-		inlineHint: "[start|view|list|stop|status] [relayUrl]",
+		description: intranetCollabEnabled()
+			? "Share this session on the intranet by login username"
+			: "Share this session live via a relay",
+		inlineHint: intranetCollabEnabled()
+			? "[start|view|list|stop|status]"
+			: "[start|view|list|stop|status] [relayUrl]",
 		subcommands: [
 			{ name: "view", description: "Share a read-only link (guests can watch, not prompt)" },
 			{ name: "list", description: "List active local Collab hosts (no links; use `omp collab link`)" },
-			{ name: "status", description: "Show link + participants" },
+			{
+				name: "status",
+				description: intranetCollabEnabled() ? "Show username + participants" : "Show link + participants",
+			},
 			{ name: "stop", description: "Stop sharing" },
 		],
 		allowArgs: true,
@@ -352,8 +366,13 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					const names = host.participants.map(p =>
 						p.role === "host" ? `${p.name} (host)` : p.readOnly ? `${p.name} (view-only)` : p.name,
 					);
-					const link = host.access === "view" ? host.webViewLink : host.webLink;
-					ctx.showStatus(`Collab: ${names.join(", ")} — ${collabBrowserLink(link)}`);
+					if (host.intranetUsername) {
+						const participants = truncateToWidth(sanitizeDisplayLine(names.join(", ")), TRUNCATE_LENGTHS.LONG);
+						ctx.showStatus(collabLinkHint(host, `Collab: ${participants}`), { dim: false });
+					} else {
+						const link = host.access === "view" ? host.webViewLink : host.webLink;
+						ctx.showStatus(`Collab: ${names.join(", ")} — ${collabBrowserLink(link)}`);
+					}
 				} else if (ctx.collabGuest) {
 					ctx.showStatus(
 						ctx.collabGuest.readOnly
@@ -436,7 +455,10 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			try {
 				host = await ctx.collabController.start({ access, relay: knownStartVerb ? rest : args });
 			} catch (err) {
-				ctx.showError(`Failed to start collab session: ${errorMessage(err)}`);
+				const message = `Failed to start collab session: ${errorMessage(err)}`;
+				ctx.showError(
+					intranetCollabEnabled() ? truncateToWidth(sanitizeDisplayLine(message), TRUNCATE_LENGTHS.LINE) : message,
+				);
 				return;
 			}
 			let heading = existing ? "Collab session restarted with control access" : "Collab session started!";
@@ -447,15 +469,17 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 	{
 		name: "join",
 		icon: "signIn",
-		description: "Join a shared collab session",
-		inlineHint: "<link>",
+		description: intranetCollabEnabled()
+			? "Join an intranet session by username or collab link"
+			: "Join a shared collab session",
+		inlineHint: intranetCollabEnabled() ? "<username|link>" : "<link>",
 		allowArgs: true,
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
 			clearSubmittedText(runtime);
-			const link = command.args.trim();
+			let link = command.args.trim();
 			if (!link) {
-				ctx.showError("Usage: /join <link>");
+				ctx.showError(intranetCollabEnabled() ? "Usage: /join <username|link>" : "Usage: /join <link>");
 				return;
 			}
 			if (ctx.collabGuest) {
@@ -463,6 +487,13 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				return;
 			}
 			try {
+				if (intranetCollabEnabled() && "error" in parseCollabLink(link) && isIntranetUsername(link)) {
+					if (ctx.collabController.host) {
+						ctx.showError("Stop hosting first (/collab stop)");
+						return;
+					}
+					link = await resolveIntranetUsername(cfgCollabRelayUrl.get(ctx.settings), link);
+				}
 				// Stop stale/ending ownership and cancel pending starts, not a live room.
 				if (!ctx.collabController.host) await ctx.collabController.stop("joining another session");
 				// Recheck after teardown: a concurrent manual start may have won.
@@ -472,7 +503,10 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 				}
 				await new CollabGuestLink(ctx).join(link);
 			} catch (err) {
-				ctx.showError(`Failed to join collab session: ${errorMessage(err)}`);
+				const message = `Failed to join collab session: ${errorMessage(err)}`;
+				ctx.showError(
+					intranetCollabEnabled() ? truncateToWidth(sanitizeDisplayLine(message), TRUNCATE_LENGTHS.LINE) : message,
+				);
 			}
 		},
 	},

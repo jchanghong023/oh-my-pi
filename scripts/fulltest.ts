@@ -4,7 +4,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
+import type * as BrowserHelpers from "@oh-my-pi/pi-utils/browsers";
 import { getPuppeteerDir } from "@oh-my-pi/pi-utils/dirs";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { removeWithRetries } from "@oh-my-pi/pi-utils/temp";
@@ -73,6 +73,10 @@ export function fulltestTrailingWorkerAllocation(cpuBudget: number, hasSmokeTest
 /** Runtime tests use local fixtures, never the owner's live model credentials. */
 export function localTestEnvironment(home: string): Record<string, string | undefined> {
 	const env = buildChildEnv();
+	// Browser installation imports native-backed file locks; keep it out of CLI argument handling.
+	// The package's extensionless exports are import-only; require the source entry directly.
+	const { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } =
+		require("../packages/utils/src/browsers.ts") as typeof BrowserHelpers;
 	const browserPlatform = detectBrowserPlatform();
 	const cachedBrowser =
 		browserPlatform && browserPlatform !== BrowserPlatform.LINUX_ARM
