@@ -348,6 +348,14 @@
 - Fixed Linux offline Python Eval missing versioned Python executables when the default Python is too old; all offline flag spellings now discover and require Python 3.11+ without changing business environments.
 - Avoid synchronous per-skill existence probes and duplicate shared/custom directory scans on Linux offline launches.
 
+### Fixed
+
+- Hindsight `retain` and `learn` memories are no longer lost when delivery fails or omp exits: they are kept on disk, retried, and delivered by the next session without duplicates ([#18176](https://github.com/can1357/oh-my-pi/pull/18176) by [@alphastorm](https://github.com/alphastorm))
+- Fixed the session crashing with `Native shell returned an invalid execution trace` when a bash command assigned a long value containing multi-byte characters such as Chinese text ([#18259](https://github.com/can1357/oh-my-pi/issues/18259))
+- `grep -e` and `rg -e` in the bash tool accept patterns that start with `-` (e.g. `grep -e "--canary"`) instead of failing with an unknown-option error.
+- The bash execution visualization keeps updating, and saved traces still restore, after a command handles bytes that aren't valid UTF-8 (e.g. `v=$(printf '\377')`)
+- On Windows, `grep`, `glob` and isolated subagents no longer flash a console window when they query or start the ovnfs daemon.
+
 ## [18.17.0] - 2026-11-06
 
 ### Added

@@ -289,8 +289,8 @@ describe("learn execute", () => {
 			{
 				getHindsightSessionState: () =>
 					({
-						enqueueRetain: (memory: string, context?: string) => {
-							queued.push({ memory, context });
+						enqueueRetain: async (_toolCallId: string, items: Array<{ content: string; context?: string }>) => {
+							queued.push(...items.map(item => ({ memory: item.content, context: item.context })));
 						},
 					}) as unknown as HindsightSessionState,
 			},
@@ -312,8 +312,8 @@ describe("learn execute", () => {
 			{
 				getHindsightSessionState: () =>
 					({
-						enqueueRetain: (memory: string) => {
-							queued.push(memory);
+						enqueueRetain: async (_toolCallId: string, items: Array<{ content: string }>) => {
+							queued.push(...items.map(item => item.content));
 						},
 					}) as unknown as HindsightSessionState,
 			},
