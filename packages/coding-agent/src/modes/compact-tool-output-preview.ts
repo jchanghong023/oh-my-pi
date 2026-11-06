@@ -76,7 +76,7 @@ export class CompactToolOutputPreview implements Component {
 			if (!call.result || (selected && call.dispatchOrder <= selected.call.dispatchOrder)) continue;
 			let output = this.#outputText.get(call.result);
 			if (output === undefined) {
-				output = compactOutputText(toolOutputText(call.toolName, call.result));
+				output = compactOutputText(toolOutputText(call.toolName, call.result, call.args));
 				this.#outputText.set(call.result, output);
 			}
 			if (output.trim()) selected = { call, output };

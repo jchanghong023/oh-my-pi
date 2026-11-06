@@ -13,6 +13,7 @@ import { AgentRegistry, MAIN_AGENT_ID } from "@oh-my-pi/pi-coding-agent/registry
 import type { AgentSession, AgentSessionEvent } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { LiveToolOutputSnapshot } from "@oh-my-pi/pi-coding-agent/session/agent-session-handle";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
+import { LiveToolOutputState } from "@oh-my-pi/pi-coding-agent/session/live-tool-output";
 import { Loader } from "@oh-my-pi/pi-tui";
 import {
 	chatTranscriptDisplayPreferences,
@@ -34,8 +35,7 @@ function nativeRows(node: NativeNode): readonly string[] {
 			return [...nativeRows(child)];
 		});
 	}
-	if (node.k === "text")
-		return (node.p?.text ?? node.p?.spans?.map(span => span.t).join("") ?? "").split("\n");
+	if (node.k === "text") return (node.p?.text ?? node.p?.spans?.map(span => span.t).join("") ?? "").split("\n");
 	if (node.k !== "col" || !node.c) throw new Error("Expected dock rows or native activity column");
 	const text = (child: NativeNode): string => {
 		if (child.k === "rows") return child.p?.lines.join("") ?? "";
@@ -1724,6 +1724,57 @@ function outputCall(
 }
 
 describe("compact latest live Output consumers", () => {
+	const todoRoutes: { route: string; options: Partial<LiveToolOutputSnapshot> }[] = [
+		{ route: "direct", options: { toolName: "todo", args: { op: "view" } } },
+		{
+			route: "device result",
+			options: {
+				toolName: "write",
+				args: {},
+				result: {
+					content: [{ type: "text" as const, text: "TODO_RESULT" }],
+					details: { xdev: { tool: "todo", mode: "execute", inner: {} } },
+				},
+			},
+		},
+		{ route: "device path", options: { toolName: "write", args: { path: "xd://todo", content: "{}" } } },
+	];
+	it.each(todoRoutes)("excludes todo via $route without replacing another tool's output", async ({ options }) => {
+		const h = focusFixture();
+		const live = liveSession();
+		const todo = outputCall("todo", 2, "TODO_RESULT", options);
+		const output = new LiveToolOutputState();
+		const observe = (call: LiveToolOutputSnapshot) => {
+			output.observe(
+				{ type: "tool_execution_start", toolCallId: call.toolCallId, toolName: call.toolName, args: call.args },
+				Date.now(),
+				call.dispatchOrder,
+			);
+			output.observe(
+				{
+					type: "tool_execution_end",
+					toolCallId: call.toolCallId,
+					toolName: call.toolName,
+					result: call.result!,
+					isError: false,
+				},
+				Date.now(),
+			);
+		};
+		observe(todo);
+		vi.spyOn(live.session, "getLiveToolOutputSnapshot").mockImplementation(() => output.snapshot());
+		h.register("TodoOutput", live);
+		await h.focus.focusAgent("TodoOutput");
+		expect(h.outputRows()).toEqual([[], []]);
+		output.clear();
+		observe(outputCall("shell", 1, "SHELL_OUTPUT"));
+		observe(todo);
+		for (const rows of h.outputRows()) {
+			expect(rows[0]).toContain("bash · completed · echo shell");
+			expect(rows.slice(1).map(row => row.trim())).toEqual(["SHELL_OUTPUT"]);
+		}
+	});
+
 	it("selects by dispatch order only after real Output and replaces cumulative frames", async () => {
 		const h = focusFixture();
 		const live = liveSession();

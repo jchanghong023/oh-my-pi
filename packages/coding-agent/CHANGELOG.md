@@ -71,6 +71,7 @@
 
 - Compact Output previews skip blank and symbol-only rows, align text with the tool header while preserving relative indentation, and shrink to fit up to five output rows without blank padding or changes to original results.
 - Compact Output previews use upstream tool-card backgrounds, bold headers and output colors without changing their text, alignment, line budget or lifecycle.
+- Compact Output cards exclude Todo tool results, keeping the existing Todo panel without duplicating tasks or replacing another tool's preview.
 - Restore direct native `/goal` and `/goal-autopilot` command handling while busy; generated objectives retain normal prompt/steering admission instead of forcing raw commands into a fork-specific queue.
 - Enable `tui.completeScrollback` by default without modifying existing configuration files; explicit `false` retains upstream deferred scrollback behavior.
 

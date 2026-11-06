@@ -61,7 +61,7 @@ export class LiveToolOutputState {
 		) {
 			call.terminalAt ??= receivedAt;
 		}
-		if (toolOutputText(call.toolName, result).trim()) {
+		if (toolOutputText(call.toolName, result, call.args).trim()) {
 			call.result = result;
 			this.#latestOutputOrder = call.dispatchOrder;
 			// Older calls cannot reclaim the preview, even while they keep executing.
