@@ -21,6 +21,86 @@ Markdown ingestion and legacy searchable-text recovery use a faithful Rust port 
 
 New imports preserve code-fence context inside lists, including nested lists and lists within blockquotes, across section and overlapping long-line boundaries. Existing indexes with incorrect section boundaries are not automatically re-sliced; use the explicit remove → init lifecycle above to re-import them. Unicode-equivalent search spellings retain consistent complete-name ranking across cache reuse, eviction and reopening without changing cursor identity or the caller's displayed spelling.
 
+## Local stdio MCP clients
+
+Run `omp knowledge mcp` to expose the existing database to a stdio MCP client without starting the OMP TUI, an Agent session or a chat model. The only MCP tool is `knowledge_search`, with the inputs and complete evidence pages described below; static server instructions describe when to discover and use it. Index maintenance remains in OMP (`init`, `remove` and the panel's explicit vector preparation), not MCP.
+
+### Select the same existing database
+
+```sh
+omp knowledge mcp
+omp --profile work knowledge mcp
+```
+
+`--profile` is a global selector and must appear **before** `knowledge`. Without it, the existing environment profile rules apply: `OMP_PROFILE` takes precedence over `PI_PROFILE`; with neither selected, OMP uses the default profile. An explicitly empty `OMP_PROFILE` selects the default instead of inheriting `PI_PROFILE`.
+
+Use an absolute path to the installed `omp` executable in client configuration (for example, `C:/Tools/omp.exe` or `/opt/omp/omp`). For a source checkout, use an absolute Bun executable and arguments `["/absolute/checkout/packages/coding-agent/src/cli.ts", "knowledge", "mcp"]`; a named profile goes before `knowledge` here too. The compiled distribution starts its own bundled knowledge worker and does not require the source checkout.
+
+Match the environment and launch working directory used by the OMP instance that imported the materials:
+
+- `OMP_CONFIG_ROOT` selects the existing absolute configuration root; the ordinary non-XDG default is `~/.omp`, with default agent configuration under `agent/` and named profile configuration under `profiles/<name>/agent/`.
+- `OMP_CACHE_DIR` selects the existing performance root through OMP's UID/profile rules. The database is `knowledge.db` directly in the **effective** performance root; without one it stays in the resolved agent directory. Do not append another `knowledge/` directory or copy the database for MCP.
+- Forward the same values, profile, and any existing agent-directory/XDG overrides rather than inventing new paths. A newly chosen root selects a different database and does not import or migrate the old one. Match the workspace too when project configuration affects optional models.
+
+Same resolved database path means the same published corpus, not shared credentials or a machine-wide query daemon. Each MCP process owns its private `KnowledgeService`, worker and ranking context; other MCP and OMP processes keep their own resources.
+
+### OpenCode2 local configuration
+
+The acceptance client for this change is the already installed **`opencode2` v2.0.32**, not the `opencode` command printed in its generic help. No Claude Code installation is required for this acceptance. The following uses the documented [v2 local MCP configuration](https://opencode.ai/v2/docs/mcp-servers/#local): a named entry under `mcp.servers`, `type: "local"`, a command array and `environment` (not v1's directly named `mcp` entries or Claude's `mcpServers`/`env` shape). Merge the entry into the existing project `opencode.json`/`opencode.jsonc`, preserving other settings:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "omp-knowledge": {
+        "type": "local",
+        "command": ["/absolute/path/to/omp", "knowledge", "mcp"],
+        "cwd": "/absolute/path/to/existing-workspace",
+        "environment": {
+          "OMP_CONFIG_ROOT": "/absolute/path/to/existing-config-root",
+          "OMP_CACHE_DIR": "/absolute/path/to/existing-cache-root",
+          "OMP_PROFILE": ""
+        }
+      }
+    }
+  }
+}
+```
+
+Replace the example paths with the existing values; on Windows, JSON accepts forward slashes such as `C:/Tools/omp.exe`. Omit a root override if the importing OMP did not use it. The empty profile explicitly selects the default; to use a named profile, change `command` to `["/absolute/path/to/omp", "--profile", "work", "knowledge", "mcp"]`. If you intend to inherit the client's profile environment instead, omit `OMP_PROFILE`. Servers connect by default; v2 uses `disabled: true`, not `enabled: false`, to disable one. See the official [v2 configuration locations and precedence](https://opencode.ai/v2/docs/config/#locations); do not overwrite unrelated client configuration.
+
+`opencode2 mcp add --global omp-knowledge -- /absolute/path/to/omp knowledge mcp` is an alternative user-level registration command; repeated `--env KEY=value` options can supply the same roots before `--`. Registration writes configuration, not proof of a working query. Use `opencode2 mcp list` to inspect connection status, then start `opencode2` and ask a natural-language question that clearly needs your imported material, without naming a tool. V2 defaults to `codemode: true`: server instructions help discovery, and the agent invokes MCP tools through `execute` using `tools.<server>.knowledge_search(...)` (for this hyphenated name, `tools["omp-knowledge"].knowledge_search(...)`), rather than receiving each MCP tool directly on the model's native tool list. Inspect that actual invocation and returned citations, then exercise explicit grep and the returned continuation JSON. Setting `codemode: false` on the server entry optionally exposes tools directly; it is not required to connect or use Knowledge. Configuration, connection and successful evidence retrieval are separate checks; these instructions are not a report that those checks have passed.
+
+Check status for the intended project after connection is ready; an empty initial/default-location `mcp list` is not proof that the configured server is unavailable. OpenCode2 v2.0.32's [MCP API](https://opencode.ai/v2/docs/api/) supports a location-scoped check with the URL-encoded `location[directory]` query parameter. Acceptance must still include a real tool call returning indexed evidence, not just registration or connection status.
+
+### Claude Code configuration (compatible client)
+
+For users who already use Claude Code, register the stdio server at user scope:
+
+```sh
+claude mcp add --transport stdio --scope user omp-knowledge -- omp knowledge mcp
+claude mcp add --transport stdio --scope user omp-knowledge-work -- /absolute/path/to/omp --profile work knowledge mcp
+```
+
+Replace `omp` with the executable's absolute path to avoid the client's `PATH` differing from your shell. To forward custom roots, put environment options before the server name and keep `--` before the executable:
+
+```sh
+claude mcp add --env OMP_CONFIG_ROOT=/absolute/existing-config OMP_CACHE_DIR=/absolute/existing-cache --transport stdio --scope user omp-knowledge -- /absolute/path/to/omp knowledge mcp
+```
+
+The `--` separator prevents Claude from parsing OMP's arguments as its own. `claude mcp get omp-knowledge` and the session `/mcp` panel inspect configuration/connection; a real query and evidence page are still needed to establish retrieval success. See the [Claude Code stdio reference](https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server).
+
+The server advertises `annotations.readOnlyHint: true`; this is a hint, **not authorization**. Each external client controls its own permissions and does not inherit `tools.approval.knowledge_search` or an OMP approval dialog. In Claude permission settings, the first registration's actual full tool name is `mcp__omp-knowledge__knowledge_search` (the named-profile registration uses `mcp__omp-knowledge-work__knowledge_search`). If you choose to allow a tool, use its actual registered name, not a guessed alias or an unnecessarily broad wildcard; other clients may expose a different qualified name.
+
+### Evidence, cancellation and exit boundaries
+
+- MCP reuses the existing search, grep, parameter normalization (including ignored extra keys), DB-only evidence, page budgets and ≥500ms successful outward duration. Errors are tool results with `isError: true`; zero matches remain a successful exhausted page. No import, removal, source-file read or vector backfill tool is exposed. Opening the database may still create its WAL storage or migrate an old schema: business-read-only does not mean a SQLite read-only connection or a read-only filesystem.
+- Continue using the exact returned arguments and cursor on the same connection. Full-text/grep cursors retain the existing snapshot rules across reopening; hybrid/reranked cursors require the original ranking context or a legally reproducible ranking. Lost context or changed snapshots produce explicit cursor errors, not a silently restarted search. A valid old cursor whose retrieval/rerank status cannot be recovered reports `unknown` without losing its existing continuation behavior.
+- Request cancellation propagates to the existing operation, including scans, models, paging and minimum-duration waiting; a queued cancellation does not cancel another active request. Active cancellation may recycle this service's worker and invalidate this connection's earlier hybrid/reranked cursors; restart without the cursor when instructed. It does not clear another client's ranking context or worker.
+- stdin EOF (including Windows) and supported `SIGINT`/`SIGTERM` shutdown cancel pending work and await the service's own worker/database handle closure. A completed call keeps the service alive; client exit does not stop another MCP/OMP service. stdout carries MCP messages only; diagnostics belong on stderr or in logs.
+- Local stdio describes the client-to-tool transport, **not a guarantee that documents stay on the machine**. Returned evidence enters the external client's model context, and optional search models follow OMP's configured routes. Network exposure depends on both configurations. This endpoint adds no remote HTTP/SSE listener, cross-account authorization, offline guarantee or red-zone compliance certification, and does not automatically register clients.
+
 ## Inputs
 
 | Field | Type | Required | Description |

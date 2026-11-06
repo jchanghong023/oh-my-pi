@@ -526,3 +526,203 @@ OMP MUST 将 Reranker 作为普通搜索基础排名之后的独立可选增强�
 - **WHEN** `knowledge_search` 工具交付状态，或者查询被取消、遇到非法参数或基础数据库错误
 - **THEN** 状态不得暴露凭据、查询正文、模型请求或响应正文，也不得触发额外模型探测；取消和基础错误仍按原合同结束，不伪装成成功回退。
 - **AND** 状态占用纳入既有页面预算，不截断完整证据或改变首节超限例外；本变更不要求新增 TUI 界面或 RPC／ZCode 协议方法。
+
+### Requirement: Knowledge 本地 stdio MCP 查询入口
+
+OMP MUST 提供 `omp knowledge mcp` 作为长期运行的本地 stdio MCP 服务，使 Claude Code、opencode2 及其他兼容 stdio MCP 客户端能发现并调用既有 Knowledge 查询能力，无需启动 OMP TUI、建立 Agent 对话或提供聊天模型。该入口 MUST 复用既有 Knowledge 服务合同，不另建数据库或检索实现，不新增网络监听或跨进程共享守护服务，并提供面向按需工具发现的服务说明。
+
+#### Scenario: 默认上下文启动与发现工具
+- **WHEN** stdio MCP 客户端以 stdio 启动 `omp knowledge mcp` 并完成双方支持的 MCP 协议发现过程
+- **THEN** 服务仅公开 `knowledge_search` 工具，说明其查询已导入资料、返回完整证据以及快照和续页边界
+- **AND** 进程持续处理后续 MCP 请求，不在完成一次查询后退出，不进入 OMP TUI 或聊天推理循环
+
+#### Scenario: 默认按需发现与自然语言触发
+- **WHEN** 已安装的 opencode2 使用默认工具发现配置，用户提出明确需要查询已导入资料的自然语言问题，但未点名工具
+- **THEN** 服务通过 MCP 的 server instructions 简述适用任务、何时查询 Knowledge 以及工具的主要能力，并保留对 Claude Code 等客户端按需发现、在加载完整工具定义前识别用途的支持
+- **AND** 真实 opencode2 接入验收覆盖此类问题的工具发现和实际 `knowledge_search` 调用，不仅验证点名工具后的直接调用；不要求强制常驻加载工具定义，也不要求本轮安装或运行 Claude Code
+
+#### Scenario: 显式选择命名 profile
+- **WHEN** 客户端使用 `omp --profile <name> knowledge mcp` 启动服务
+- **THEN** 服务按既有全局 profile 规则选定配置和数据上下文，不将 profile 参数误作为查询或索引名称
+
+#### Scenario: 不扩大索引维护命令
+- **WHEN** 用户使用既有 Knowledge CLI 管理索引
+- **THEN** `init` 与 `remove` 的参数、确认和结果行为保持不变
+- **AND** `mcp` 仅新增查询服务入口，不增加 `list/status/update/rebuild/embed` 等维护命令，不修改 TUI／ZCode 协议
+
+### Requirement: MCP 只读工具及既有检索语义
+
+MCP 的 `knowledge_search` MUST 接受必填 `query: string` 和可选 `mode: "search" | "grep"`、`case: boolean`、`path: string`、`cursor: string`，沿用内置工具的有效参数、规范化及宽松额外键规则，并声明 `readOnlyHint: true`。MCP MUST 保持既有默认检索、模型回退和 grep 语义，且不得提供导入、删除、向量补齐、源文件读取或任意数据库选择工具。外部调用授权 MUST 由客户端自身权限机制管理，只读提示不得视为授权。
+
+#### Scenario: 只读提示与客户端权限归属
+- **WHEN** Claude Code 发现工具，或用户配置该工具的调用权限
+- **THEN** `tools/list` 中的 `knowledge_search` 声明 `annotations.readOnlyHint: true`，用于描述查询工具的只读性质
+- **AND** 调用由 Claude Code 自身的 MCP 权限机制决定，不自动继承 OMP 的 `tools.approval.knowledge_search`，不将只读提示解释为自动放行或绕过客户端审批
+- **AND** 不为外部调用新增 OMP 交互审批桥接；数据库打开和迁移的既有副作用仍按本规格的业务只读边界说明
+
+#### Scenario: 默认普通搜索
+- **WHEN** 调用方提供合法 query，未显式指定 grep
+- **THEN** 查询覆盖当前上下文的全部已导入索引，在可用时沿用现有语义召回、RRF 和可选精排，否则保留既有全文或基础排名
+- **AND** 不新增 semantic／hybrid 模式、算法参数或独立聊天推理要求，不因可选模型失败掩盖数据库故障
+
+#### Scenario: 显式 grep 与路径范围
+- **WHEN** 调用方提供 `mode="grep"` 及可选 case、path
+- **THEN** 按既有规则对数据库保存的原始 Markdown 行执行正则匹配，case 默认 true，path 仅限定数据库中的字面相对文件或目录
+- **AND** 不解析或调用 Embedding／Reranker，不修复非法表达式，不将正则改为字面量，不访问原始文档目录
+
+#### Scenario: 保持参数边界
+- **WHEN** 输入包含额外键、缺失或空白 query、过长 query／grep 表达式或非法 path
+- **THEN** 额外键沿用既有忽略规则；已识别参数按内置工具规则规范化或报错
+- **AND** 普通搜索的有效 query 截断、grep 表达式原样保留及超过 500 UTF-16 单元拒绝的行为不因 MCP 改变
+
+#### Scenario: 查询不触发索引维护
+- **WHEN** 语料无向量、源文件已被删除或尚无任何索引
+- **THEN** 服务不自动导入、删除、同步、补算语料向量或启动模型服务
+- **AND** 已入库证据继续按 DB-only 合同查询；无索引仍明确报错并提示既有 init 入口
+- **AND** 数据库打开可沿用空 WAL 库创建和旧 schema 迁移，不把工具只读描述为 SQLite 只读连接或只读文件系统支持
+
+### Requirement: MCP 完整证据与稳定分页
+
+MCP MUST 交付与内置 `knowledge_search` 一致的工具文本页，保留完整存储正文、来源、版本身份、实际检索状态、结果计数及续页信息，沿用既有页预算、读快照与游标合同。MCP MUST NOT 截断章节、以摘要替代证据、另建分页顺序或将失效续页静默转换为新搜索。
+
+#### Scenario: 返回可引用正文
+- **WHEN** 搜索返回实际命中
+- **THEN** 每条证据保留索引名、相对路径、行范围、标题、文档 SHA-256 和 sectionId，并如实报告实际检索与精排状态
+- **AND** 正文及来源来自数据库的同一读快照，不回读源文件，不用模型生成内容替换原文；未展开线索不能冒充完整证据
+
+#### Scenario: 页预算与完整遍历
+- **WHEN** 结果超过一页或首个章节超过常规页预算
+- **THEN** 沿用约 4000 字符、最多 10 节的工具页规则，首个超限章节仍完整返回，放不下的后续章节留给续页
+- **AND** 有效续页沿固定结果集合和顺序推进，保留全部全文证据，不重复或跳过章节及来源，不再对工具正文作第二次截断
+
+#### Scenario: 续页参数或语料变化
+- **WHEN** 续页参数不匹配、游标损坏或已失效，或数据库变化已使原快照不再有效
+- **THEN** 返回明确的工具错误，不拼接另一查询顺序、旧来源与新正文，不把故障当作零命中
+
+#### Scenario: 服务重开与排名上下文
+- **WHEN** 服务重开后提交先前的游标
+- **THEN** 原全文／grep 游标仍按既有数据库快照和身份规则判断是否有效
+- **AND** 混合检索或精排游标只有在原排名上下文可复用或合法重现时才续页，否则明确要求重新查询，不承诺跨 MCP 进程共享该上下文
+
+#### Scenario: 有效旧游标无法可信恢复状态
+- **WHEN** 旧游标仍可按既有合同续页，但无法可信恢复原结果集的检索或精排状态
+- **THEN** 无法恢复的状态明确显示为 `unknown`，不猜测为全文、混合、grep 或精排已采用／未采用
+- **AND** 保持该旧游标原有的可续页行为，不仅因状态未知而拒绝续页，不为补齐状态重新调用模型或更换排名
+
+#### Scenario: 保持对外查询时长合同
+- **WHEN** MCP 查询成功，包括续页及正常零命中
+- **THEN** 保留既有成功对外时长至少 500ms 的合同，补足等待可取消且不持有数据库事务
+- **AND** 不将该下限描述为查询延迟上限，错误和取消不补足等待
+
+### Requirement: MCP 配置、数据和模型上下文隔离
+
+MCP 服务 MUST 沿用 OMP 既有 profile、启动工作目录、配置根、性能缓存根及模型配置解析，访问实际解析出的 Knowledge 数据库，而非写死路径或创建 MCP 专用副本。MCP MUST 保留各自上下文的凭据和模型身份边界，不增加客户端必填模型配置，不将一次连接的配置、凭据或排名套用于其他上下文。
+
+#### Scenario: 与现有 OMP 访问同一数据库
+- **WHEN** OMP 与 MCP 使用相同的数据根和 profile，且既有解析规则得到同一实际数据库路径
+- **THEN** 两者查询同一已发布语料，不要求再导入一份，不迁移旧名称或旧位置的数据库
+- **AND** 自定义 `OMP_CONFIG_ROOT`、`OMP_CACHE_DIR` 和 profile 的既有隔离规则保持不变
+
+#### Scenario: 不同上下文并存
+- **WHEN** 多个 MCP／OMP 实例选择不同的数据根、profile 或工作目录相关配置
+- **THEN** 各实例只使用自己解析出的数据库和模型设置，不因同机或查询相同而混用凭据、向量身份或排名缓存
+- **AND** 不将“同机多实例”解释为绕过既有路径规则，强制不同上下文共用数据库
+
+#### Scenario: 可选模型及离线环境
+- **WHEN** 当前上下文配置了兼容的 Embedding／Reranker，或未配置、不可用、禁用这些能力
+- **THEN** 沿用现有 Knowledge 的能力选择、凭据优先级和回退规则，不要求使用 Claude Code 的聊天模型凭据代替
+- **AND** grep 不访问模型；无公网环境的既有能力不因 MCP 包装失效，不自动下载组件或新增公网回退
+
+### Requirement: 同机多客户端的数据共享与执行隔离
+
+系统 MUST 支持同一操作系统账户下多个 stdio MCP 客户端（包括 Claude Code 和 opencode2）和多个 OMP 实例同时访问 Knowledge。每个 MCP 进程 MUST 持有自身查询服务和执行资源；实际数据库路径一致时共享已发布数据，不新增全机唯一服务前提，不承诺共享进程内排名／索引缓存，也不通过关闭其他客户端资源实现取消或退出。
+
+#### Scenario: 多个 MCP 客户端与 OMP 同时查询
+- **WHEN** 至少两个 stdio MCP 客户端及多个 OMP 实例连接到同一实际 Knowledge 数据库并发起查询，本轮真实客户端验收使用已安装的 opencode2
+- **THEN** 各自得到符合该次读快照的正文和来源，无需复制数据库或重复导入语料
+- **AND** 不因已有另一个 MCP／OMP 实例而要求关闭它，不将共享文件页面描述成共享所有私有缓存或整机固定内存用量
+
+#### Scenario: 一个客户端结束而另一个继续
+- **WHEN** 客户端 A 取消查询、断开或退出，客户端 B 的服务仍然存续
+- **THEN** 仅释放 A 自有的请求与执行资源，B 仍可完成查询并按其自身有效排名上下文续页
+- **AND** 不终止 B 的 worker、清除 B 的缓存或关闭 B 的数据库连接
+
+#### Scenario: OMP 维护与其他客户端读取并存
+- **WHEN** 用户通过既有 OMP 入口导入或删除索引，其他客户端同时或随后查询
+- **THEN** 沿用现有导入租约、隐藏构建发布、读快照及变更检测规则，不暴露未发布的半成品或拼接两代证据
+- **AND** 变化后的新查询访问当前已发布语料；不再有效的旧游标明确报错，不在查询中自动重建索引
+
+#### Scenario: 同库并发首次打开旧 schema
+- **WHEN** 多个 MCP／OMP 实例同时首次打开需要迁移的同一实际 Knowledge 数据库
+- **THEN** 沿用既有打开锁、锁等待边界和迁移事务；不能在该边界内完成打开的调用返回可辨识的工具错误，而非零命中或成功空结果
+- **AND** 无论打开成功或失败，均不得破坏既有正文和来源，不得为处理争用而清空或重建数据库
+- **AND** 竞争迁移完成后，先前打开失败的 MCP 客户端可在同一连接中再次提交合法查询并按当前有效 schema 读取，不要求重启客户端；不承诺所有竞争启动的首次查询均成功
+
+### Requirement: MCP 协议输出与错误区分
+
+服务 MUST 使 stdout 只承载合法 MCP 协议消息，日志、进度和启动诊断不得污染协议流。合法查询的零命中 MUST 是成功结果；无索引、参数／正则／游标错误和基础数据库故障 MUST 作为可辨识的 MCP 工具错误返回，而协议级错误按 MCP 处理；取消不得伪装成成功或零命中。
+
+#### Scenario: 启动或模型初始化存在诊断
+- **WHEN** 启动、模型初始化、查询或关闭产生警告、日志及错误诊断
+- **THEN** 这些信息进入既有日志或 stderr，stdout 中没有欢迎文本、普通 CLI 的一次性 JSON 结果或其他非 MCP 内容
+- **AND** 诊断沿用现有脱敏合同，不记录原始 query、证据正文、原始路径或凭据
+
+#### Scenario: 正常零命中
+- **WHEN** 已有可查询索引且合法 query 没有命中
+- **THEN** 返回成功工具结果，明确本次检索的已导入语料中零命中且结果已耗尽，不声称信息在其他资料中也不存在
+
+#### Scenario: 工具执行故障
+- **WHEN** 调用已知工具但遇到无索引、非法参数／正则、损坏或失效游标、基础数据库故障
+- **THEN** 返回带 `isError: true` 的 MCP 工具结果并保留可操作的错误语义，不将其包装为成功文本、空列表或模型能力降级
+- **AND** 一次可报告的工具调用失败不要求客户端重启整个 MCP 连接才能再次提交合法查询
+
+### Requirement: MCP 请求取消与服务生命周期
+
+MCP 服务 MUST 将客户端请求取消传给现有 Knowledge 操作，保持排队与活动请求的取消语义，并在 stdin EOF 或正常退出信号到达时停止接收新工作、取消未完成操作并等待自有服务关闭。单次工具调用完成不得释放整个服务；取消和断开后不得继续交付迟到结果或遗留自有 worker。
+
+#### Scenario: 同一连接复用服务与请求排队
+- **WHEN** 同一 MCP 连接先后或重叠提交多个工具调用
+- **THEN** 服务可沿用现有排队机制处理，不为每次调用重建整个服务；取消尚在队列中的请求不取消正在执行的另一请求
+- **AND** 排名和资源只按各自有效上下文复用，不承诺同一 worker 内多条查询并行执行
+
+#### Scenario: 活动查询被取消
+- **WHEN** 客户端取消正在扫描、等待模型、分页或补足成功时长的调用
+- **THEN** 取消及时传播，不自动重试、不转为基础全文成功，不再交付该调用的迟到结果
+- **AND** 需要回收或重建自有 worker 时不影响其他进程，后续调用或续页沿用既有资源与游标失效规则
+
+#### Scenario: 取消后同连接旧排名上下文丢失
+- **WHEN** MCP 客户端 A 已取得混合检索或精排结果的游标，随后取消同一连接中的另一活动查询，且该取消导致其自有 worker 回收、原排名上下文丢失
+- **THEN** A 再次提交旧游标时，仅在原排名可合法重现时续页，否则明确报游标失效并提示不带游标重新查询，不静默交付另一排名
+- **AND** 客户端 B 的存续服务、有效排名上下文及续页不因 A 的取消而被清除或中断；此组合纳入多实例验收
+
+#### Scenario: 标准输入关闭或正常退出
+- **WHEN** stdio MCP 客户端关闭服务 stdin，或服务收到其平台支持的正常退出信号
+- **THEN** 服务结束协议循环，取消自有未完成请求，等待自有 Knowledge 服务释放 worker、数据库和映射句柄后退出
+- **AND** Windows 的 stdin EOF 不能只依赖 POSIX 信号处理；不关闭其他客户端服务，不以退出清理为由删除数据库、修改索引或改动源文件；正常数据库关闭仍沿用既有存储行为
+
+### Requirement: MCP 客户端配置说明与分发可用性
+
+交付 MUST 提供已安装 opencode2 的 local MCP 配置说明及默认和命名 profile 的 Claude Code stdio 配置说明，并使源码入口和既有编译分发程序都能启动该服务、完成工具发现与真实知识查询。说明 MUST 区分注册配置、连接成功和查询成功，不替用户自动修改客户端配置，并说明本地工具返回的正文仍会进入客户端模型上下文。本轮真实客户端验收 MUST 使用已安装的 opencode2 v2.0.32，命令名 MUST 写为 `opencode2`，不要求安装或运行 Claude Code；Claude Code 及其他兼容 stdio MCP 客户端的能力目标保持不变，不得将未观察到的运行结果写为已验证。
+
+#### Scenario: 配置现有 opencode2 本地服务
+- **WHEN** 用户按说明将 Knowledge 接入现有 opencode2
+- **THEN** 说明使用实际 v2 local MCP 格式：`mcp.servers` 下具名条目、`type: "local"`、含程序和参数的 `command` 数组及 `environment` 环境配置，而非一代直接在 `mcp` 下具名或 Claude Code 的配置结构；服务默认连接，禁用字段为 `disabled` 而非 `enabled`
+- **AND** 默认参数为 `knowledge mcp`，命名 profile 参数为 `--profile <name> knowledge mcp`；说明提供程序绝对路径、相同既有数据根和启动工作目录的配置方法，避免重复导入或误选数据库
+- **AND** 通过 `opencode2 mcp list` 检查连接后，仍须通过真实工具调用检查证据和续页；配置文件存在或连接成功不得替代查询成功。说明保留 server instructions 的发现目标，并明确 v2 默认 `codemode: true` 经 `execute` 调用 `tools.<server>.knowledge_search`，而非默认直接暴露每个 MCP 工具；`codemode: false` 是可选直接模式，不是接入前提
+
+#### Scenario: 注册默认或命名 profile
+- **WHEN** 用户按说明配置 Claude Code
+- **THEN** 默认入口为 `claude mcp add --transport stdio --scope user omp-knowledge -- omp knowledge mcp`；命名 profile 的服务参数顺序为 `omp --profile <name> knowledge mcp`
+- **AND** 说明提供将 omp 替换为实际程序绝对路径、传递自定义数据根环境及通过 `claude mcp get omp-knowledge`／会话 `/mcp` 检查连接和实际工具调用的方法
+- **AND** 服务启动不自动注册 MCP、改写 Claude 配置或安装其他软件
+- **AND** 权限说明使用实际注册的 server 名称和工具全名；上述示例对应 `mcp__omp-knowledge__knowledge_search`，明确权限由 Claude Code 管理，`readOnlyHint` 不等于调用授权
+
+#### Scenario: 源码与编译程序接入
+- **WHEN** 分别使用源码入口和实际编译分发程序作为已安装 opencode2 的 stdio 服务命令
+- **THEN** 均可发现工具、执行普通搜索和 grep、读取完整证据并继续有效分页，所需知识 worker 能正常启动与关闭
+- **AND** 无需发行机上另有源码目录或未分发的独立 worker 脚本；多 stdio MCP 客户端／OMP 同机使用时保持上述隔离合同，保留 Claude Code 的配置和协议兼容目标而不要求本轮运行该客户端
+
+#### Scenario: 数据流与安全边界说明
+- **WHEN** 用户阅读配置和使用说明
+- **THEN** 明确 stdio 仅代表工具连接位于本机，命中正文会进入外部客户端（包括 Claude Code 和 opencode2）配置的模型上下文，是否出网取决于其实际模型路由
+- **AND** 不把本机运行等同于红区合规、离线保证或跨账户授权，不宣称本变更提供这些范围外能力

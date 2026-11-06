@@ -28,6 +28,7 @@
 
 ### Added
 
+- Expose existing Knowledge search as a local read-only stdio MCP service with `omp knowledge mcp`, profile-aware shared database access, isolated worker lifecycle and OpenCode2/Claude Code setup instructions.
 - See the latest tool's live Output in a compact preview of up to six lines, including finite background Bash output; it stays visible while the status line is running and closes three seconds after both activity and the tool finish, without changing tool history or input.
 - Identify finite background Bash jobs by stable automatic names alongside their original IDs, without changing service or cancellation semantics.
 - Record Windows CPU, memory, disk capacity and disk I/O metrics every two seconds in a background temporary log with `bun scripts/monitor-system.ts`, then inspect test-run peaks with `--report`.

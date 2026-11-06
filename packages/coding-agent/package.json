@@ -559,6 +559,7 @@
 		"@babel/parser": "catalog:",
 		"@langchain/core": "^1.2.9",
 		"@langchain/openai": "^1.5.11",
+		"@modelcontextprotocol/sdk": "1.32.2",
 		"@oh-my-pi/omp-stats": "catalog:",
 		"@oh-my-pi/omptype": "catalog:",
 		"@oh-my-pi/pi-agent-core": "catalog:",
@@ -594,8 +595,8 @@
 		"posthog-node": "^5.51.4",
 		"puppeteer-core": "catalog:",
 		"react": "catalog:",
-		"zcode-workflow-typescript": "npm:typescript@5.9.3",
 		"yaml": "^2.9.0",
+		"zcode-workflow-typescript": "npm:typescript@5.9.3",
 		"zod": "^4.6.7"
 	},
 	"devDependencies": {

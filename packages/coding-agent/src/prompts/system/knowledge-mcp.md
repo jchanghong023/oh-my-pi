@@ -1,0 +1,5 @@
+Search imported enterprise knowledge, internal documentation, technical procedures, and project references with `knowledge_search` when answering questions that need this stored corpus. Default search accepts keywords or a whole question; explicit grep finds regular expressions in stored Markdown, optionally scoped to an indexed relative path.
+
+Results contain complete stored evidence with index, path, line range, document fingerprint, and section identity. Cite that evidence; follow emitted cursors with unchanged query parameters to retrieve further pages. Read the reported retrieval and rerank status. The corpus is an imported snapshot, not a live source-file view; zero matches describes only that corpus.
+
+This server exposes only read-only knowledge queries, not import, deletion, or source-file access. Missing indexes require the user's existing `omp knowledge init` workflow. Client permissions control calls; the read-only annotation grants no authorization. Returned evidence enters the client's model context; local stdio does not guarantee offline model routing.

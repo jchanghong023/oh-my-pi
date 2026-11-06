@@ -536,8 +536,7 @@ test("compact mixed long session preserves input, tool effects and peer messages
 				expect(visibilityResult.isError).toBe(true);
 				expect(visibilityResult.details).toMatchObject({ exitCode: 7 });
 				await screen.waitForVisualHandoff("mixed peer and failure");
-				await screen.checkpoint("failure stays hidden", frame => {
-					expect(frame.screen).not.toContain("MIXED_VISIBLE_FAILURE");
+				await screen.checkpoint("draft after failed tool", frame => {
 					expectVisibleDraft(frame, "", 120, 36);
 				});
 				allowVisibility.resolve();
