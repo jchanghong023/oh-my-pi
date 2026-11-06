@@ -65,10 +65,13 @@ use crate::{
 /// changes a disposition while spawners may run calls it (the shell's trap
 /// table, an embedding runtime's reset); a change it misses leaves a newly
 /// ignored signal ignored in later children.
+#[cfg(unix)]
 pub fn dispositions_changed() {
-	#[cfg(unix)]
 	imp::dispositions_changed();
 }
+
+#[cfg(not(unix))]
+pub const fn dispositions_changed() {}
 
 /// Spawns externals for a [`Host`](crate::bash::Host). Cheap to clone; clones
 /// share the leak-check registry.

@@ -190,11 +190,9 @@ fn is_utf8_locale(value: &str) -> bool {
 /// can read the user's keystrokes and the terminal's protocol replies out from
 /// under the TUI, or prompt on it. Detached, a `/dev/tty` open fails
 /// (`ENXIO`), so a prompt errors out instead.
+#[cfg(unix)]
 pub(crate) fn detach_from_terminal(cmd: &mut std::process::Command) {
-	#[cfg(unix)]
 	std::os::unix::process::CommandExt::setsid(cmd, true);
-	#[cfg(not(unix))]
-	let _ = cmd;
 }
 
 /// Run `git` asynchronously with bounded capture and a deadline.
@@ -213,6 +211,7 @@ pub(crate) async fn run(cwd: &Path, args: &[String], options: &RunOptions) -> Re
 		.stderr(Stdio::piped())
 		.kill_on_drop(true);
 	apply_env(&mut cmd);
+	#[cfg(unix)]
 	detach_from_terminal(cmd.as_std_mut());
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;
 
@@ -371,6 +370,7 @@ fn run_sync_impl(
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped());
 	apply_env(&mut cmd);
+	#[cfg(unix)]
 	detach_from_terminal(&mut cmd);
 	if let Some(write) = write {
 		for (key, value) in write.env {

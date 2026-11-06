@@ -44,9 +44,22 @@ const LINT_EXEMPT_FORK_EXCLUDES = [
 	"--exclude",
 	"grep-searcher",
 ] as const satisfies readonly string[];
+const CLIPPY_COMMAND = [
+	"cargo",
+	"clippy",
+	"--workspace",
+	...LINT_EXEMPT_FORK_EXCLUDES,
+	"--no-deps",
+	"--",
+	"-D",
+	"warnings",
+] as const satisfies readonly string[];
 const TASK_COMMANDS = {
-	// Clippy is temporarily disabled in gates; explicit lint:rs/fix:rs remain available.
-	"check:rs": [["cargo", "fmt", "--all", "--", "--check"]],
+	"check:rs": [
+		["cargo", "fmt", "--all", "--", "--check"],
+		["cargo", "build", "--workspace", ...VENDORED_FORK_EXCLUDES],
+		CLIPPY_COMMAND,
+	],
 	"fix:rs": [
 		["cargo", "fmt", "--all"],
 		[
@@ -62,7 +75,7 @@ const TASK_COMMANDS = {
 		],
 	],
 	"fmt:rs": [["cargo", "fmt", "--all"]],
-	"lint:rs": [["cargo", "clippy", "--workspace", ...LINT_EXEMPT_FORK_EXCLUDES, "--no-deps", "--", "-D", "warnings"]],
+	"lint:rs": [CLIPPY_COMMAND],
 	"test:rs": [],
 } as const satisfies Record<string, readonly (readonly string[])[]>;
 const FULL_TEST_COMMANDS = [

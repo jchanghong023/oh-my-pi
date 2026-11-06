@@ -84,7 +84,7 @@
 - Developer Test Agent and its five skills are now manual-only and hidden from model-facing listings; ordinary test requests no longer inject routing hints.
 - Run fulltest faster with measured longest-first scheduling, work-aware worker allocation, overlapping isolated phases, shared transpiler caches, and independent two-scenario Knowledge CLI fixtures.
 
-- Temporarily disable Clippy in local verification gates while retaining Rust format checks and explicit `lint:rs` / `fix:rs` commands.
+- Run real Rust workspace builds and restore Clippy in fastcheck and inherited fulltest/slowtest checks, rejecting Rust compiler and Clippy warnings without running tests in fastcheck.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
 - Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev and ZCode host callbacks stay on their owning thread.
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
@@ -201,6 +201,7 @@
 
 ### Fixed
 
+- Fix Windows-only Rust warnings and Clippy failures in shell lifecycle, locale and system helpers, and Git process setup.
 - Reuse installed Chromium binaries during isolated fulltest runs without sharing browser profiles or application state.
 - Wait for bundled skill scripts to exit and be reaped before the CLI finishes SIGINT or SIGTERM shutdown.
 - Restore Linux fulltest coverage for compaction, SDK prompts, offline commits, plugin catalogs, IME recovery and native Dev TUI workflows.

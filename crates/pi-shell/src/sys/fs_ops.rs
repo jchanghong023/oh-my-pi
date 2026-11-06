@@ -65,13 +65,16 @@ pub fn chown(path: &Path, uid: Option<u32>, gid: Option<u32>, follow: bool) -> i
 }
 
 /// `sync(2)`.
+#[cfg(unix)]
 pub fn sync() {
-	#[cfg(unix)]
 	// SAFETY: `sync` takes no arguments and cannot fail.
 	unsafe {
 		libc::sync();
 	}
 }
+
+#[cfg(not(unix))]
+pub const fn sync() {}
 
 #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android"))]
 mod xattr {

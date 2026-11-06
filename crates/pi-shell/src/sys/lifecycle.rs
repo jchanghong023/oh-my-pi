@@ -18,7 +18,9 @@ use std::{
 
 use parking_lot::{Mutex, MutexGuard};
 
-use crate::bash::{ExitStatus, ProcEvent, Signal};
+#[cfg(unix)]
+use crate::bash::ProcEvent;
+use crate::bash::{ExitStatus, Signal};
 
 /// State of one external.
 #[derive(Debug, Default)]
@@ -30,6 +32,7 @@ pub struct Lifecycle {
 	collected: bool,
 	/// A stop or continue the waiter observed that [`Lifecycle::poll_event`]
 	/// has not reported yet (the later of two unseen ones).
+	#[cfg(unix)]
 	change:    Option<ProcEvent>,
 	/// Output pumps that have not reached end of file yet: the command is
 	/// complete only once its output has been delivered.
@@ -73,6 +76,7 @@ impl Lifecycle {
 		Self {
 			status: None,
 			collected: false,
+			#[cfg(unix)]
 			change: None,
 			draining,
 			waker: None,
@@ -99,6 +103,7 @@ impl Lifecycle {
 
 	/// [`Lifecycle::poll`], reporting first a stop or continue observed
 	/// since the last call (once each); an exit makes it moot.
+	#[cfg(unix)]
 	pub fn poll_event(&mut self, cx: &Context<'_>) -> Poll<ProcEvent> {
 		if self.status.is_none()
 			&& let Some(change) = self.change.take()
@@ -110,6 +115,7 @@ impl Lifecycle {
 
 	/// The waiter observed a stop or continue of the running process.
 	/// Returns the waker to wake (outside the lock).
+	#[cfg(unix)]
 	pub const fn changed(&mut self, change: ProcEvent) -> Option<Waker> {
 		self.change = Some(change);
 		self.waker.take()
@@ -265,11 +271,13 @@ impl Tracker {
 	}
 
 	/// [`Lifecycle::poll_event`].
+	#[cfg(unix)]
 	pub fn poll_event(&self, cx: &Context<'_>) -> Poll<ProcEvent> {
 		self.life.lock().poll_event(cx)
 	}
 
 	/// [`Lifecycle::changed`], waking the poller.
+	#[cfg(unix)]
 	pub fn changed(&self, change: ProcEvent) {
 		let waker = self.life.lock().changed(change);
 		if let Some(w) = waker {

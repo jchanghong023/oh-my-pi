@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { BrowserPlatform, computeExecutablePath, detectBrowserPlatform } from "@oh-my-pi/pi-utils/browsers";
 import { PUPPETEER_REVISIONS } from "puppeteer-core/internal/revisions.js";
 import { testTimeoutMs } from "./ci-test-ts";
-import { fastcheckCommands, parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
+import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import {
 	fulltestCommands,
 	fulltestTrailingWorkerAllocation,
@@ -25,25 +25,6 @@ test("fork plan excludes standalone Python suites while preserving the public TU
 	const commands = fulltestCommands({ debug: false }, "/tmp/home", "a".repeat(40));
 	expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
-});
-
-test("fastcheck discovers only static primitives and keeps Clippy outside its command plan", async () => {
-	const commands = await fastcheckCommands();
-	expect(commands.length).toBeGreaterThan(2);
-	expect(commands.find(command => command.label === "static/Rust fmt")?.argv).toEqual(["bun", "run", "check:rs"]);
-	expect(commands.find(command => command.label === "static/TS lint+format")?.argv).toEqual([
-		"bun",
-		"run",
-		"check:tools",
-	]);
-	for (const command of commands) {
-		expect(command.label).toStartWith("static/");
-		expect(command.argv).not.toContain("test");
-		expect(command.argv).not.toContain("test:rs");
-		expect(command.argv).not.toContain("clippy");
-		expect(command.argv).not.toContain("bazel");
-		expect(command.argv).not.toContain("clean");
-	}
 });
 
 test("debug changes only the isolated smoke diagnostic argument, not test scope", () => {

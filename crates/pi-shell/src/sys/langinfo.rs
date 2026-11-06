@@ -51,15 +51,10 @@ pub struct Tm {
 /// `<langinfo.h>` name (`CODESET`, `D_T_FMT`, …). A locale the C library
 /// does not know (or an empty name) reads as `C`. `None`: an item this
 /// target lacks, or a target without the C library's locale functions.
-pub fn langinfo(locale: &[u8], cat: Category, item: &str) -> Option<Vec<u8>> {
-	native::langinfo(locale, cat, item)
-}
-
+pub use native::langinfo;
 /// C `strftime_l(fmt, tm)` in `locale`'s `LC_TIME`; `None` when the
 /// target lacks it.
-pub fn strftime(locale: &[u8], fmt: &[u8], tm: &Tm) -> Option<Vec<u8>> {
-	native::strftime(locale, fmt, tm)
-}
+pub use native::strftime;
 
 /// A locale's `LC_COLLATE` order (C `strcoll`), the order zsh sorts words
 /// in (`sort.c` `eltpcmp`).
@@ -93,9 +88,7 @@ pub enum Parse {
 /// `tm` starts zeroed with `tm_mday` 1 and `tm_isdst` -1 (zsh's
 /// `reverse_strftime`); `None` when the target lacks it. Input and
 /// format end at their first NUL byte, as C sees them.
-pub fn strptime(locale: &[u8], fmt: &[u8], input: &[u8]) -> Option<Parse> {
-	native::strptime(locale, fmt, input)
-}
+pub use native::strptime;
 
 #[cfg(any(
 	target_vendor = "apple",
@@ -378,20 +371,21 @@ mod native {
 			None
 		}
 
+		#[expect(clippy::unused_self, reason = "same instance API as the locale-backed collator")]
 		pub fn key(&self, s: &[u8]) -> Vec<u8> {
 			s.to_vec()
 		}
 	}
 
-	pub fn langinfo(_locale: &[u8], _cat: Category, _item: &str) -> Option<Vec<u8>> {
+	pub const fn langinfo(_locale: &[u8], _cat: Category, _item: &str) -> Option<Vec<u8>> {
 		None
 	}
 
-	pub fn strftime(_locale: &[u8], _fmt: &[u8], _tm: &Tm) -> Option<Vec<u8>> {
+	pub const fn strftime(_locale: &[u8], _fmt: &[u8], _tm: &Tm) -> Option<Vec<u8>> {
 		None
 	}
 
-	pub fn strptime(_locale: &[u8], _fmt: &[u8], _input: &[u8]) -> Option<super::Parse> {
+	pub const fn strptime(_locale: &[u8], _fmt: &[u8], _input: &[u8]) -> Option<super::Parse> {
 		None
 	}
 }
