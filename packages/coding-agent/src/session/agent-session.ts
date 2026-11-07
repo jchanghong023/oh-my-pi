@@ -401,6 +401,7 @@ import {
 	createInterruptedToolResults,
 	createInterruptedTurnAbortMessage,
 	hasRestorableTurn,
+	INTERRUPTED_TURN_ERROR,
 	SESSION_EXIT_CUSTOM_TYPE,
 	type SessionExitData,
 	summarizeToolArguments,
@@ -5756,8 +5757,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return true;
 	}
 
-	async #cancelPostPromptTasks(): Promise<void> {
-		this.#postPromptTasksAbortController.abort();
+	/** Cancel scheduled continuations; `reason` labels a continuation already running, as `agent.abort(reason)` does. */
+	async #cancelPostPromptTasks(reason?: string): Promise<void> {
+		this.#postPromptTasksAbortController.abort(reason);
 		this.#postPromptTasksAbortController = new AbortController();
 		this.#ttsr.resolveResume();
 
@@ -6803,8 +6805,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#fallbackExtensionTimers?.clearAll();
 		this.abortRetry();
 		this.abortCompaction();
-		const postPromptDrain = this.#cancelPostPromptTasks();
-		this.agent.abort();
+		// A process exit cuts a turn still in flight off instead of stopping it:
+		// label it as interrupted so `omp --restore` goes on with it.
+		const abortReason = options.reason === postmortem.Reason.EXIT ? INTERRUPTED_TURN_ERROR : undefined;
+		const postPromptDrain = this.#cancelPostPromptTasks(abortReason);
+		this.agent.abort(abortReason);
 		try {
 			await withTimeout(
 				postPromptDrain,
@@ -12628,7 +12633,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.abortBash();
 			this.abortEval();
 			const computerControlRevocation = revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
-			const postPromptDrain = this.#cancelPostPromptTasks();
+			const postPromptDrain = this.#cancelPostPromptTasks(options?.reason);
 			this.agent.abort(options?.reason);
 			await Promise.all([postPromptDrain, computerControlRevocation]);
 			await this.agent.waitForIdle();

@@ -518,10 +518,9 @@ mod imp {
 		orphan: Option<PTP_IO>,
 	}
 
-	#[expect(
+	#[allow(
 		clippy::non_send_fields_in_send_ty,
-		reason = "the kernel owns OVERLAPPED only while an operation is in flight; the owner \
-		          accesses it between operations"
+		reason = "the OVERLAPPED's raw handle is only touched by the kernel or the owner, never both"
 	)]
 	// SAFETY: `ov` and `buf` are used by the kernel during an operation and
 	// by the owner between operations, never both; `state` is locked.
@@ -844,17 +843,17 @@ mod imp {
 			let h = self.raw();
 			// SAFETY: the operation in flight on our open handle.
 			unsafe { CancelIoEx(h, self.op.ov.get()) };
+			let ov = self.op.ov.get();
 			// SAFETY: reads the status the kernel writes into the OVERLAPPED
 			// at completion (`HasOverlappedIoCompleted`); volatile, as the
 			// kernel may write it concurrently.
-			let status = unsafe { ptr::read_volatile(&raw const (*self.op.ov.get()).Internal) };
+			let status = unsafe { ptr::read_volatile(&raw const (*ov).Internal) };
 			if status == STATUS_PENDING as usize {
 				return Vec::new();
 			}
-			// SAFETY: completion published the byte count before clearing
-			// STATUS_PENDING.
-			let sent =
-				unsafe { ptr::read_volatile(&raw const (*self.op.ov.get()).InternalHigh) }.min(len);
+			// SAFETY: the operation completed, so the kernel wrote the byte
+			// count before the status read above.
+			let sent = unsafe { ptr::read_volatile(&raw const (*ov).InternalHigh) }.min(len);
 			// SAFETY: the operation completed: the kernel is done with the
 			// buffer (the completion callback never touches it).
 			let buf = unsafe { &*self.op.buf.get() };

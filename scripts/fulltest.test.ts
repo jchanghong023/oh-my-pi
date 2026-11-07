@@ -8,7 +8,6 @@ import { testTimeoutMs } from "./ci-test-ts";
 import { parseFastcheckArgs, gatePoolWidth } from "./fastcheck";
 import {
 	fulltestCommands,
-	fulltestTrailingWorkerAllocation,
 	fulltestWorkerAllocation,
 	gateCpuBudget,
 	parseFulltestArgs,
@@ -62,51 +61,30 @@ test("both TypeScript lanes use the available worker budget in fork and full pla
 });
 
 describe("fulltest worker allocation", () => {
-	test("gives Bun the unused Rust share and favors its longer queue when both run", () => {
-		expect(fulltestWorkerAllocation(28, true, true)).toEqual({ ordinary: 20, rust: 4, serial: false });
-		expect(fulltestWorkerAllocation(28, true, false)).toEqual({ ordinary: 24, rust: 0, serial: false });
-		expect(fulltestWorkerAllocation(28, false, true)).toEqual({ ordinary: 0, rust: 24, serial: false });
-		expect(fulltestWorkerAllocation(28, false, false)).toEqual({ ordinary: 0, rust: 0, serial: false });
-		expect(fulltestWorkerAllocation(16, true, true)).toEqual({ ordinary: 9, rust: 3, serial: false });
-	});
-
-	test("keeps concurrent pools within the ceiling and preserves static/subprocess headroom", () => {
+	test("bounds startup, ordinary and Rust overlap while preserving static headroom", () => {
 		for (let cores = 1; cores <= 64; cores++) {
-			const ceiling = Math.min(28, cores);
+			const capacity = Math.max(1, Math.min(28, cores) - 4);
 			for (const ordinary of [false, true]) {
 				for (const rust of [false, true]) {
-					const allocation = fulltestWorkerAllocation(cores, ordinary, rust);
-					expect(allocation.ordinary > 0).toBe(ordinary);
-					expect(allocation.rust > 0).toBe(rust);
-					expect(Number.isInteger(allocation.ordinary)).toBe(true);
-					expect(Number.isInteger(allocation.rust)).toBe(true);
-					const peak = allocation.serial
-						? Math.max(allocation.ordinary, allocation.rust)
-						: allocation.ordinary + allocation.rust;
-					expect(peak).toBeLessThanOrEqual(Math.max(1, ceiling - 4));
-					if (ordinary && rust) expect(allocation.rust).toBeLessThanOrEqual(4);
-					expect(allocation.serial).toBe(ceiling <= 5);
+					for (const startup of [false, true]) {
+						const allocation = fulltestWorkerAllocation(cores, ordinary, rust, startup);
+						const workers = [allocation.ordinary, allocation.rust, allocation.startup];
+						for (const [index, enabled] of [ordinary, rust, startup].entries()) {
+							expect(workers[index]! > 0).toBe(enabled);
+							expect(Number.isInteger(workers[index])).toBe(true);
+						}
+						const peak = allocation.serial
+							? Math.max(...workers)
+							: workers.reduce((sum, count) => sum + count, 0);
+						expect(peak).toBeLessThanOrEqual(capacity);
+						if (rust && ordinary) expect(allocation.rust).toBeLessThanOrEqual(4);
+						expect(allocation.serial).toBe(
+							capacity < Math.max(2, Number(ordinary) + Number(rust) + Number(startup)),
+						);
+					}
 				}
 			}
 		}
-	});
-
-	test("partitions trailing workers for three PTYs without exceeding the outer ceiling", () => {
-		for (let cores = 1; cores <= 64; cores++) {
-			const ceiling = Math.min(28, cores);
-			for (const smoke of [false, true]) {
-				const allocation = fulltestTrailingWorkerAllocation(cores, smoke);
-				expect(allocation.startup).toBeGreaterThan(0);
-				expect(allocation.smoke).toBe(smoke ? Math.min(3, ceiling) : 0);
-				expect(allocation.serial).toBe(ceiling <= 5);
-				const peak = allocation.serial
-					? Math.max(allocation.startup, allocation.smoke)
-					: allocation.startup + allocation.smoke;
-				expect(peak).toBeLessThanOrEqual(ceiling);
-				if (!smoke) expect(allocation.startup).toBe(ceiling);
-			}
-		}
-		expect(fulltestTrailingWorkerAllocation(28, true)).toEqual({ startup: 25, smoke: 3, serial: false });
 	});
 });
 
@@ -235,18 +213,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 		);
 		const forkAffected = scenario.packages.some(pkg => pkg === "pi-knowledge" || pkg === "pi-natives");
 		expect(rust).toHaveLength(scenario.full || forkAffected ? 1 : 0);
-		const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite")!;
-		const expectedBunBudget = rust.length ? "20" : "24";
-		expect(ordinary.env?.OMP_TEST_CPU_BUDGET).toBe(expectedBunBudget);
-		expect(ordinary.env?.CARGO_BUILD_JOBS).toBe(expectedBunBudget);
-		expect(ordinary.env?.RUST_TEST_THREADS).toBe(expectedBunBudget);
-		expect(
-			commands.find(command => command.label === "test/TypeScript startup suite")?.env?.OMP_TEST_CPU_BUDGET,
-		).toBe("25");
 		if (rust.length) {
-			expect(rust[0]!.env?.OMP_TEST_CPU_BUDGET).toBe("4");
-			expect(rust[0]!.env?.CARGO_BUILD_JOBS).toBe("4");
-			expect(rust[0]!.env?.RUST_TEST_THREADS).toBe("4");
 			expect(rust[0]!.argv).toEqual([
 				"bun",
 				"scripts/run-rs-task.ts",
@@ -594,7 +561,6 @@ await fs.appendFile(file(label, "start"), JSON.stringify({
   affected: process.env.OMP_FULLTEST_AFFECTED,
   budget: process.env.OMP_TEST_CPU_BUDGET,
   nativeFinished: await exists(file("build/native", "end")),
-  ordinaryFinished: await exists(file(ordinary, "end"))
 }) + "\\n");
 await fs.writeFile(file(label, "end"), "finished");
 if (label === ordinary) process.exit(17);
@@ -646,7 +612,6 @@ if (label === ordinary) process.exit(17);
 				affected?: string;
 				budget?: string;
 				nativeFinished: boolean;
-				ordinaryFinished: boolean;
 			};
 			const starts = async (label: string): Promise<Start[]> => {
 				const text = await fs
@@ -669,7 +634,6 @@ if (label === ordinary) process.exit(17);
 			expect(rust[0]!.nativeFinished).toBe(true);
 			expect(startup[0]!.nativeFinished).toBe(true);
 			expect((await starts("static/TS"))[0]!.nativeFinished).toBe(true);
-			expect(startup[0]!.ordinaryFinished).toBe(true);
 			expect(ordinary[0]!.argv).toContain("--defer-startup");
 			expect(startup[0]!.argv).toContain("--only-startup");
 			expect(ordinary[0]!.home).toBeDefined();
@@ -677,7 +641,6 @@ if (label === ordinary) process.exit(17);
 			expect(startup[0]!.home).not.toBe(ordinary[0]!.home);
 			expect(ordinary[0]!.userprofile).toBe(ordinary[0]!.home);
 			expect(ordinary[0]!.configRoot).toBe("");
-			expect([ordinary[0]!.budget, rust[0]!.budget, startup[0]!.budget]).toEqual(["9", "3", "13"]);
 			expect(await starts("smoke/isolated native TUI PTY")).toHaveLength(1);
 			if (full) {
 				for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK"]) {
@@ -770,18 +733,17 @@ describe("fulltest lane scheduling", () => {
 		});
 	}
 
-	test("cancels both active trailing lanes through the shared gate signal", async () => {
+	test("cancels active startup and ordinary lanes through the shared gate signal", async () => {
 		const controller = new AbortController();
 		const started = Promise.withResolvers<void>();
 		const active = new Set<string>();
 		const cancelled: string[] = [];
-		const interruption = new Error("caller cancelled trailing work");
+		const interruption = new Error("caller cancelled concurrent work");
 		const gate = {
 			signal: controller.signal,
 			charged: async <T>(operation: () => T | Promise<T>) => operation(),
 			run: async (command: GateCommand) => {
-				if (command.label !== "test/TypeScript startup suite" && command.label !== "smoke/isolated native TUI PTY")
-					return;
+				if (!command.label.startsWith("test/TypeScript")) return;
 				active.add(command.label);
 				if (active.size === 2) started.resolve();
 				try {
@@ -816,7 +778,7 @@ describe("fulltest lane scheduling", () => {
 			controller.abort(interruption);
 			expect(await run).toBe(interruption);
 			expect(active.size).toBe(0);
-			expect(cancelled.toSorted()).toEqual(["smoke/isolated native TUI PTY", "test/TypeScript startup suite"]);
+			expect(cancelled.toSorted()).toEqual(["test/TypeScript fork feature suite", "test/TypeScript startup suite"]);
 		} finally {
 			controller.abort(interruption);
 			await run;
@@ -824,7 +786,7 @@ describe("fulltest lane scheduling", () => {
 	});
 
 	for (const inheritedBudget of [2, 6]) {
-		test(`respects the caller's ${inheritedBudget}-worker ceiling across script and trailing pools`, async () => {
+		test(`respects the caller's ${inheritedBudget}-worker ceiling across concurrent pools`, async () => {
 			const previousBudget = process.env.OMP_TEST_CPU_BUDGET;
 			process.env.OMP_TEST_CPU_BUDGET = String(inheritedBudget);
 			const commands: GateCommand[] = [];
@@ -854,15 +816,17 @@ describe("fulltest lane scheduling", () => {
 						},
 					},
 				);
-				const heavy = fulltestWorkerAllocation(inheritedBudget, true, true);
-				const trailing = fulltestTrailingWorkerAllocation(inheritedBudget, true);
 				const budgetOf = (label: string) =>
 					Number(commands.find(command => command.label === label)?.env?.OMP_TEST_CPU_BUDGET);
-				expect(scriptConcurrency).toBe(inheritedBudget <= 5 ? 1 : 2);
-				expect(budgetOf("test/TypeScript fork feature suite")).toBe(heavy.ordinary);
-				expect(budgetOf("test/Rust workspace")).toBe(heavy.rust);
-				expect(budgetOf("test/TypeScript startup suite")).toBe(trailing.startup);
-				expect(budgetOf("smoke/isolated native TUI PTY")).toBe(trailing.smoke);
+				expect(scriptConcurrency).toBe(inheritedBudget <= 6 ? 1 : 2);
+				const workers = [
+					budgetOf("test/TypeScript fork feature suite"),
+					budgetOf("test/Rust workspace"),
+					budgetOf("test/TypeScript startup suite"),
+				];
+				const peak = inheritedBudget <= 6 ? Math.max(...workers) : workers.reduce((sum, count) => sum + count, 0);
+				expect(peak).toBeLessThanOrEqual(Math.max(1, inheritedBudget - 4));
+				expect(budgetOf("smoke/isolated native TUI PTY")).toBeLessThanOrEqual(inheritedBudget);
 			} finally {
 				if (previousBudget === undefined) delete process.env.OMP_TEST_CPU_BUDGET;
 				else process.env.OMP_TEST_CPU_BUDGET = previousBudget;
@@ -899,7 +863,7 @@ describe("fulltest lane scheduling", () => {
 			const failures: unknown[] = [];
 			const clockFailure = new Error("isolated clock fixture failure");
 			const scriptFailure = new Error("independent script fixture failure");
-			const serial = cpuBudget <= 5;
+			const serial = cpuBudget <= 6;
 			let activeScripts = 0;
 			let activeHeavyWorkers = 0;
 			let isolatedActive = false;
@@ -935,6 +899,7 @@ describe("fulltest lane scheduling", () => {
 					} else if (
 						command.label === "static/TS" ||
 						command.label === "test/TypeScript fork feature suite" ||
+						command.label === "test/TypeScript startup suite" ||
 						command.label === "test/Rust workspace"
 					) {
 						expect(isolatedActive).toBe(false);
@@ -949,11 +914,8 @@ describe("fulltest lane scheduling", () => {
 						}
 						await finishHeavy.promise;
 						activeHeavyWorkers -= workers;
-						if (++heavyFinished === 3) heavySettled.resolve();
-					} else if (
-						command.label === "test/TypeScript startup suite" ||
-						command.label === "smoke/isolated native TUI PTY"
-					) {
+						if (++heavyFinished === 4) heavySettled.resolve();
+					} else if (command.label === "smoke/isolated native TUI PTY") {
 						expect(activeScripts).toBe(0);
 						expect(activeHeavyWorkers).toBe(0);
 						trailingSeen.push(command.label);
@@ -1000,7 +962,7 @@ describe("fulltest lane scheduling", () => {
 				expect(scriptsSeen.toSorted()).toEqual(independent.toSorted());
 				expect(scriptHomes.size).toBe(independent.length);
 				expect(scriptHomes.has(undefined)).toBe(false);
-				expect(trailingSeen).toHaveLength(2);
+				expect(trailingSeen).toEqual(["smoke/isolated native TUI PTY"]);
 				expect(failures).toEqual([clockFailure, scriptFailure]);
 			} finally {
 				finishIsolated.resolve();
@@ -1012,7 +974,7 @@ describe("fulltest lane scheduling", () => {
 	}
 
 	for (const failedLane of ["smoke", "startup"] as const) {
-		test(`overlaps independent trailing lanes after every heavy lane settles despite ${failedLane} failure`, async () => {
+		test(`starts startup consumers before ordinary work drains and continues after ${failedLane} failure`, async () => {
 			const staticStarted = Promise.withResolvers<void>();
 			const ordinaryStarted = Promise.withResolvers<void>();
 			const rustStarted = Promise.withResolvers<void>();
@@ -1101,21 +1063,25 @@ describe("fulltest lane scheduling", () => {
 				},
 			);
 			try {
-				await Promise.all([staticStarted.promise, ordinaryStarted.promise, rustStarted.promise]);
-				expect(trailingStarted).toEqual([]);
+				await Promise.all([
+					staticStarted.promise,
+					ordinaryStarted.promise,
+					rustStarted.promise,
+					startupStarted.promise,
+				]);
+				expect(trailingStarted).toEqual(["startup"]);
 				finishOrdinary.resolve();
 				await ordinarySettled.promise;
-				expect(trailingStarted).toEqual([]);
+				expect(trailingStarted).toEqual(["startup"]);
 				finishRust.resolve();
 				await rustSettled.promise;
-				expect(trailingStarted).toEqual([]);
+				expect(trailingStarted).toEqual(["startup"]);
 				finishStatic.resolve();
-				await Promise.all([smokeStarted.promise, startupStarted.promise]);
-				expect(trailingStarted.toSorted()).toEqual(["smoke", "startup"]);
-				expect(trailingBudgets.toSorted((a, b) => a - b)).toEqual([3, 13]);
-				expect(trailingBudgets.reduce((sum, budget) => sum + budget, 0)).toBeLessThanOrEqual(16);
-				if (failedLane === "smoke") finishSmoke.resolve();
-				else finishStartup.resolve();
+				finishStartup.resolve();
+				await smokeStarted.promise;
+				expect(trailingStarted).toEqual(["startup", "smoke"]);
+				expect(Math.max(...trailingBudgets)).toBeLessThanOrEqual(16);
+				finishSmoke.resolve();
 			} finally {
 				finishOrdinary.resolve();
 				finishRust.resolve();
@@ -1179,8 +1145,6 @@ describe("fulltest lane scheduling", () => {
 								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe(String(Math.min(3, cpuBudget)));
 								smokeStarted.resolve();
 								await finishSmoke.promise;
-							} else if (command.label === "test/TypeScript startup suite") {
-								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe(String(cpuBudget));
 							}
 						}
 					},
@@ -1192,14 +1156,15 @@ describe("fulltest lane scheduling", () => {
 				expect(seen).not.toContain("test/Rust workspace");
 				finishStatic.resolve();
 				await ordinaryStarted.promise;
+				expect(seen.indexOf("test/TypeScript startup suite")).toBeLessThan(
+					seen.indexOf("test/TypeScript fork feature suite"),
+				);
 				expect(seen).not.toContain("test/Rust workspace");
 				finishOrdinary.resolve();
 				await rustStarted.promise;
 				expect(seen).not.toContain("smoke/isolated native TUI PTY");
-				expect(seen).not.toContain("test/TypeScript startup suite");
 				finishRust.resolve();
 				await smokeStarted.promise;
-				expect(seen).not.toContain("test/TypeScript startup suite");
 				finishSmoke.resolve();
 				await run;
 				for (const label of [

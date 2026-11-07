@@ -1,61 +1,21 @@
 import * as fs from "node:fs";
 import { hasFsCode, isEexist, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
 
+const RENAME_RETRIES = 40;
+const RENAME_RETRY_DELAY_MS = 50;
+
 /**
- * Publish a staged sibling file atomically, preserving an existing destination
- * across Windows `EPERM`/`EEXIST` replacement failures.
+ * Publish a staged sibling without removing the live destination. Windows
+ * replacement failures can be transient while readers hold a file handle.
  */
 export async function replaceFileAtomically(tempPath: string, targetPath: string): Promise<void> {
-	try {
-		await fs.promises.rename(tempPath, targetPath);
-		return;
-	} catch (error) {
-		if (!hasFsCode(error, "EPERM") && !isEexist(error)) throw error;
-		await replaceAfterWindowsRenameFailure(tempPath, targetPath, error);
-	}
-}
-
-async function replaceAfterWindowsRenameFailure(
-	tempPath: string,
-	targetPath: string,
-	renameError: unknown,
-): Promise<void> {
-	const backupPath = `${targetPath}.${process.pid}.${crypto.randomUUID()}.bak`;
-	try {
-		await fs.promises.rename(targetPath, backupPath);
-	} catch (error) {
-		if (isEnoent(error)) {
+	for (let attempt = 0; ; attempt++) {
+		try {
 			await fs.promises.rename(tempPath, targetPath);
 			return;
-		}
-		throw renameError;
-	}
-
-	try {
-		await fs.promises.rename(tempPath, targetPath);
-	} catch (replaceError) {
-		try {
-			await fs.promises.rename(backupPath, targetPath);
-		} catch (rollbackError) {
-			throw new Error(
-				`Failed to replace file after ${toError(renameError).message} (retry: ${
-					toError(replaceError).message
-				}; rollback: ${toError(rollbackError).message})`,
-				{ cause: toError(renameError) },
-			);
-		}
-		throw replaceError;
-	}
-
-	try {
-		await fs.promises.rm(backupPath);
-	} catch (error) {
-		if (!isEnoent(error)) {
-			logger.warn("Failed to remove atomic replacement backup", {
-				path: targetPath,
-				backupPath,
-				error: toError(error).message,
-			});
+		} catch (error) {
+			if ((!hasFsCode(error, "EPERM") && !isEexist(error)) || attempt >= RENAME_RETRIES) throw error;
+			await Bun.sleep(RENAME_RETRY_DELAY_MS);
 		}
 	}
 }

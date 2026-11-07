@@ -518,7 +518,7 @@ describe("relay extension self-update on a real relay", () => {
 		const rename = nodeFs.promises.rename.bind(nodeFs.promises);
 		let refused = 0;
 		const spy = spyOn(nodeFs.promises, "rename").mockImplementation(async (from, to) => {
-			// Windows answers a rename over a held file with EPERM; moving the held file aside still works.
+			// A reader's transient Windows handle can refuse the first atomic replacement.
 			if (String(from).endsWith(".tmp") && refused++ === 0) {
 				throw Object.assign(new Error("EPERM: operation not permitted, rename"), { code: "EPERM" });
 			}

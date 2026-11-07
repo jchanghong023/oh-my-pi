@@ -54,18 +54,13 @@ interface HistoryRun {
 	startedAtUtc?: string;
 	platform?: string;
 	architecture?: string;
-	completion?: string;
-	exitCode?: number | null;
 	sourceRevision?: string | null;
 	runtimeVersions?: { bun?: string };
-	unreconciledScope?: string | null;
-	reconciliation?: { status?: string; cases?: number; failures?: number };
 	producers?: (TestProducerRecord & { report?: string })[];
 }
 
-// History is a scheduling hint, never a test result. Only the most recent
-// fulltest on this machine can qualify. Its source revision may differ from
-// the current run; the scheduler still requires an exact unchanged chunk.
+// Scheduling hints are independent of successful coverage and affected-selection
+// baselines. A failed or interrupted fulltest still has completed chunk timings.
 export async function latestLocalTestProducers(
 	currentSourceRevision: string | undefined,
 	root: string = reportRoot,
@@ -75,59 +70,95 @@ export async function latestLocalTestProducers(
 	if (!currentSourceRevision || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(currentSourceRevision)) return [];
 	try {
 		const entries = await fs.readdir(root, { withFileTypes: true });
-		let latestTime = -Infinity;
-		let latest: HistoryRun | undefined;
+		const latest = new Map<string, { started: number; producer?: TestProducerRecord }>();
 		for (const entry of entries) {
-			if (!entry.isDirectory()) continue;
+			if (!entry.isDirectory() || entry.name === currentRunId) continue;
 			let run: HistoryRun;
 			try {
 				run = JSON.parse(await fs.readFile(path.join(root, entry.name, "run.json"), "utf8"));
 			} catch {
-				// An unreadable report cannot safely establish which run was last.
-				return [];
+				continue;
 			}
-			if (entry.name === currentRunId && run.runId === currentRunId && run.completion === "running") continue;
-			if (run.scope !== "fulltest: fork feature suites") continue;
-			if (run.platform !== process.platform || run.architecture !== process.arch) continue;
+			if (!run || typeof run !== "object") continue;
+			if (currentRunId !== undefined && run.runId === currentRunId) continue;
 			const started = Date.parse(run.startedAtUtc ?? "");
-			if (!Number.isFinite(started) || started > now) return [];
-			if (started === latestTime) return [];
-			if (started > latestTime) {
-				latestTime = started;
-				latest = run;
+			if (
+				run.scope !== "fulltest: fork feature suites" ||
+				run.platform !== process.platform ||
+				run.architecture !== process.arch ||
+				run.runtimeVersions?.bun !== Bun.version ||
+				!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(run.sourceRevision ?? "") ||
+				!Number.isFinite(started) ||
+				started > now ||
+				now - started > 7 * 24 * 60 * 60 * 1000
+			)
+				continue;
+			const dir = path.join(root, entry.name);
+			const files = (await fs.readdir(dir)).filter(file => file.endsWith(".producer.json"));
+			// Incremental records survive cancellation before run.json is finalized.
+			// A finalized summary is only a fallback for history without those files.
+			const producers: HistoryRun["producers"] = files.length
+				? await Promise.all(
+						files.map(async file => {
+							try {
+								return JSON.parse(await fs.readFile(path.join(dir, file), "utf8"));
+							} catch {
+								return null;
+							}
+						}),
+					)
+				: run.producers;
+			if (!Array.isArray(producers)) continue;
+			for (const producer of producers) {
+				if (
+					!producer ||
+					producer.scope !== "ci-test-ts:local-ts" ||
+					producer.report !== "available" ||
+					producer.selection?.tool !== "bun" ||
+					producer.selection.mode !== "full" ||
+					producer.selection.suiteRevision !== 3 ||
+					!["ordinary", "startup"].includes(producer.selection.group ?? "") ||
+					!Number.isInteger(producer.exitCode) ||
+					producer.exitCode < 0 ||
+					producer.exitCode >= 128 ||
+					producer.status !== (producer.exitCode === 0 ? "passed" : "failed")
+				)
+					continue;
+				const key = localTestProducerKey(producer);
+				const measured = Date.parse(producer.startedAt);
+				if (!key || !Number.isFinite(measured) || measured < started || measured > now) continue;
+				const previous = latest.get(key);
+				if (!previous || measured > previous.started) latest.set(key, { started: measured, producer });
+				else if (measured === previous.started) latest.set(key, { started: measured });
 			}
 		}
-		if (
-			!latest ||
-			now - latestTime > 7 * 24 * 60 * 60 * 1000 ||
-			latest.completion !== "complete" ||
-			latest.exitCode !== 0 ||
-			!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(latest.sourceRevision ?? "") ||
-			latest.runtimeVersions?.bun !== Bun.version ||
-			latest.reconciliation?.status !== "validated" ||
-			!(typeof latest.reconciliation.cases === "number" && latest.reconciliation.cases > 0) ||
-			latest.reconciliation.failures !== 0 ||
-			latest.unreconciledScope != null ||
-			!Array.isArray(latest.producers) ||
-			!latest.producers.some(producer => producer?.report === "available") ||
-			!latest.producers.every(
-				producer =>
-					producer?.exitCode === 0 &&
-					producer.selection?.mode !== "affected" &&
-					((producer.report === "available" && producer.status === "passed") ||
-						(producer.report === "not-supported" && producer.status === "stage")),
-			)
-		)
-			return [];
-		const typescript = latest.producers.filter(producer => producer?.scope === "ci-test-ts:local-ts");
-		return typescript.length > 0 &&
-			typescript.every(producer => producer.selection?.mode === "full" && producer.selection.suiteRevision === 3) &&
-			["ordinary", "startup"].every(group => typescript.some(producer => producer.selection?.group === group))
-			? typescript
-			: [];
+		return [...latest.values()].flatMap(item => (item.producer ? [item.producer] : []));
 	} catch {
 		return [];
 	}
+}
+
+/** Exact label and pre-budget argv identify a chunk, never its individual files. */
+export function localTestProducerKey(producer: TestProducerRecord): string | undefined {
+	if (
+		(producer.scope !== "ci-test-ts:local" && producer.scope !== "ci-test-ts:local-ts") ||
+		typeof producer.producer !== "string" ||
+		!Array.isArray(producer.command) ||
+		!producer.command.every(arg => typeof arg === "string") ||
+		producer.command[0] !== "bun" ||
+		producer.command[1] !== "test" ||
+		producer.attempt !== 1 ||
+		!Number.isFinite(producer.durationSeconds) ||
+		producer.durationSeconds < 0
+	)
+		return undefined;
+	const prefix = `${producer.scope}:`;
+	const match = /^([0-9a-f]{8}):(.+):attempt-1$/.exec(producer.producer.slice(prefix.length));
+	if (!producer.producer.startsWith(prefix) || !match) return undefined;
+	const argv = producer.command.filter(
+		arg => !/^(?:--parallel=|--timeout=|--reporter=|--reporter-outfile=)/.test(arg),
+	);
+	return JSON.stringify([match[2], argv]);
 }
 
 /** Command-level cases are only for a single observable CLI probe, never a whole multi-case runner. */

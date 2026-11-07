@@ -167,7 +167,7 @@ _[观看录屏 ↗](https://omp.sh/clips/collab.mp4)_
 
 ### 08 · 直接读 arxiv 上的 pdf，有何不可？
 
-web_search 串联二十三个经过排序的 provider，把找到的 URL 直接交给 read。arxiv PDF、GitHub 页面、Stack Overflow 帖子都会以带完整锚点的结构化 markdown 返回——和你处理本地文件用的是同一套工具。可引用、可跟进、可摘录，永远不丢来路。
+web_search 串联二十四个经过排序的 provider，把找到的 URL 直接交给 read。arxiv PDF、GitHub 页面、Stack Overflow 帖子都会以带完整锚点的结构化 markdown 返回——和你处理本地文件用的是同一套工具。可引用、可跟进、可摘录，永远不丢来路。
 
 ![omp TUI：web_search 针对 inference-time compute scaling 返回 10 条排好序的 Perplexity 来源，agent 选中一篇 arxiv 论文，调用 read https://arxiv.org/pdf/2604.10739v1，并用真实数字总结该论文的核心结果。](https://omp.sh/clips/web-poster.webp)
 
@@ -370,9 +370,9 @@ modelRoles:
 
 完整的 provider 与路由参考见 [omp.sh/docs/providers](https://omp.sh/docs/providers)。
 
-## 二十三个后端。_一个 agent 早就会用的工具_。
+## 二十四个后端。_一个 agent 早就会用的工具_。
 
-`web_search` 是内置的，不是外挂上去的。`auto` 会依次走过一个二十三个 provider 组成的链路；如果你已经在为某家付费，可以按名字固定它。每一次命中背后，站点感知的抽取都会把 GitHub、各类 registry、arXiv、Stack Overflow 和文档转成结构化 markdown——锚点与链接目标都得以保留。
+`web_search` 是内置的，不是外挂上去的。`auto` 会依次走过一个二十四个 provider 组成的链路；如果你已经在为某家付费，可以按名字固定它。每一次命中背后，站点感知的抽取都会把 GitHub、各类 registry、arXiv、Stack Overflow 和文档转成结构化 markdown——锚点与链接目标都得以保留。
 
 ### 搜索 provider
 

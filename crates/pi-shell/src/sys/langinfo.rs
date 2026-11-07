@@ -371,7 +371,7 @@ mod native {
 			None
 		}
 
-		#[expect(clippy::unused_self, reason = "same instance API as the locale-backed collator")]
+		#[expect(clippy::unused_self, reason = "same shape as the locale-backed `Coll::key`")]
 		pub fn key(&self, s: &[u8]) -> Vec<u8> {
 			s.to_vec()
 		}

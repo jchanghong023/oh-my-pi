@@ -14,6 +14,7 @@ import {
 	beginTestRun,
 	endTestRun,
 	latestLocalTestProducers,
+	localTestProducerKey,
 	recordTestProducer,
 	testReportPath,
 } from "./test-reporting";
@@ -733,6 +734,8 @@ function isIntegrationTest(testFile: string): boolean {
 			testFile,
 		) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
+		// Scoped publication exercises repeated native Git subprocesses, not a unit-only fixture.
+		testFile === "test/dev-workbench/git.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
@@ -1722,25 +1725,8 @@ export function prioritizeLocalCommands<T extends TestCommand>(commands: T[], pr
 	const durations = new Map<string, number>();
 	const ambiguous = new Set<string>();
 	for (const producer of producers) {
-		if (
-			(producer.scope !== "ci-test-ts:local" && producer.scope !== "ci-test-ts:local-ts") ||
-			typeof producer.producer !== "string" ||
-			!Array.isArray(producer.command) ||
-			!producer.command.every(arg => typeof arg === "string") ||
-			producer.command[0] !== "bun" ||
-			producer.command[1] !== "test" ||
-			producer.attempt !== 1 ||
-			!Number.isFinite(producer.durationSeconds) ||
-			producer.durationSeconds < 0
-		)
-			continue;
-		const prefix = `${producer.scope}:`;
-		const match = /^([0-9a-f]{8}):(.+):attempt-1$/.exec(producer.producer.slice(prefix.length));
-		if (!producer.producer.startsWith(prefix) || !match) continue;
-		const argv = producer.command.filter(
-			arg => !/^(?:--parallel=|--timeout=|--reporter=|--reporter-outfile=)/.test(arg),
-		);
-		const key = JSON.stringify([match[2], argv]);
+		const key = localTestProducerKey(producer);
+		if (!key) continue;
 		if (durations.has(key)) {
 			ambiguous.add(key);
 			continue;

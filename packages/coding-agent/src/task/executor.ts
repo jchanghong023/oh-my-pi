@@ -12,7 +12,16 @@ import type { AgentEvent, AgentIdentity, AgentMessage, AgentTelemetryConfig } fr
 import { AgentBusyError, recordHandoff, resolveTelemetry } from "@oh-my-pi/pi-agent-core";
 import type { Api, Model, ServiceTierByFamily, Usage } from "@oh-my-pi/pi-ai";
 import { isCursorExecResolved } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { isRecord, logger, popLoopPhase, prompt, pushLoopPhase, sanitizeText, untilAborted } from "@oh-my-pi/pi-utils";
+import {
+	isRecord,
+	logger,
+	popLoopPhase,
+	postmortem,
+	prompt,
+	pushLoopPhase,
+	sanitizeText,
+	untilAborted,
+} from "@oh-my-pi/pi-utils";
 import {
 	ASYNC_JOB_MANAGER_SHUTDOWN_REASON,
 	AsyncJobError,
@@ -85,10 +94,12 @@ import {
 	type PromptOptions,
 } from "../session/agent-session";
 import { isLocalAgentSession } from "../session/agent-session-handle";
+import type { AgentSessionDisposeOptions } from "../session/agent-session-types";
 import { type ArtifactManagerApi, writeArtifact } from "../session/artifacts";
 import { ASYNC_RESULT_MESSAGE_TYPE } from "../session/async-job-delivery";
 import type { AuthStorage } from "../session/auth-storage";
-import type { CostGateApi } from "../session/cost-gate";
+import { type CostCapRefusal, CostCapError, type CostGateApi } from "../session/cost-gate";
+import { INTERRUPTED_TURN_ERROR } from "../session/exit-diagnostics";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../session/messages";
 import { hasConversationalHistory, SessionManager } from "../session/session-manager";
 import { truncateTail } from "@oh-my-pi/pi-tui/tools/streaming-output";
@@ -1523,7 +1534,10 @@ function createSubagentRunMonitor(args: RunMonitorArgs): SubagentRunMonitor {
 	const abortActiveSession = (): Promise<void> => {
 		const session = activeSession;
 		if (!session) return Promise.resolve();
-		activeSessionAbortPromise ??= session.abort().catch(error => {
+		// A process shutdown cuts the turn off instead of stopping it: label it as
+		// interrupted so `omp --restore` (and `/restart`) goes on with it.
+		const options = abortReason === "shutdown" ? { reason: INTERRUPTED_TURN_ERROR } : undefined;
+		activeSessionAbortPromise ??= session.abort(options).catch(error => {
 			logger.debug("Subagent session abort cleanup failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -2503,6 +2517,11 @@ const PROMPT_DISPATCH_IDLE_TIMEOUT_MS = 5_000;
 
 class PromptDispatchError extends Error {}
 
+/** Failures no retry, reminder or notice turn can recover: they end the run. */
+function endsRun(err: unknown): boolean {
+	return err instanceof PromptDispatchError || err instanceof CostCapError;
+}
+
 /**
  * Drive one assignment through a live session: send the prompt (with `restore`,
  * go on with the turn the previous process left unfinished instead:
@@ -2540,6 +2559,12 @@ async function driveSessionToResult(
 	let error: string | undefined;
 	let aborted = false;
 	let abortReasonText: string | undefined;
+	// Cost-cap refusals are terminal: no retry or reminder can be sent until the cap is raised.
+	const refusalBefore = session.costCapRefusal;
+	const costCapRefusal = (): CostCapRefusal | undefined => {
+		const refusal = session.costCapRefusal;
+		return refusal !== refusalBefore ? refusal : undefined;
+	};
 	const checkAbort = () => {
 		if (abortSignal.aborted) {
 			aborted = monitor.isAbortedRun();
@@ -2588,6 +2613,8 @@ async function driveSessionToResult(
 			} catch (err) {
 				if (!(err instanceof PromptDroppedError)) throw err;
 			}
+			const refusal = costCapRefusal();
+			if (refusal) throw new CostCapError(refusal);
 			if (forceFinalYield) monitor.markFinalYieldForced(false);
 			if (attempt === MAX_PROMPT_DISPATCH_ATTEMPTS) {
 				throw new PromptDispatchError(`${label} dropped before provider dispatch after ${attempt} attempts`);
@@ -2633,7 +2660,7 @@ async function driveSessionToResult(
 			// below; real caller/timeout aborts (monitor signal) and genuine
 			// failures keep the old path.
 			const recoverableStop = monitor.budgetStopRequested() || monitor.yieldTurnStopRequested();
-			if (!recoverableStop || abortSignal.aborted || err instanceof PromptDispatchError) throw err;
+			if (!recoverableStop || abortSignal.aborted || endsRun(err)) throw err;
 		}
 
 		// The forced final turn must answer through `yield`, or with no tools at all.
@@ -2689,7 +2716,7 @@ async function driveSessionToResult(
 					);
 					await awaitAbortable(session.waitForIdle());
 				} catch (err) {
-					if (err instanceof PromptDispatchError) throw err;
+					if (endsRun(err)) throw err;
 					if (abortSignal.aborted || err instanceof ToolAbortError) {
 						// Benign control-flow exit — user cancel (^C) or compaction aborting
 						// pending operations both surface here as ToolAbortError. The outer
@@ -2771,8 +2798,7 @@ async function driveSessionToResult(
 						await dispatchPrompt(notice, { attribution: "agent", synthetic: true }, "async-pending notice");
 						await awaitAbortable(session.waitForIdle());
 					} catch (err) {
-						if (abortSignal.aborted || err instanceof ToolAbortError || err instanceof PromptDispatchError)
-							throw err;
+						if (abortSignal.aborted || err instanceof ToolAbortError || endsRun(err)) throw err;
 						// Other notice-turn failures leave the pending jobs to settle passively.
 						logger.warn("Subagent async-pending notice failed", {
 							error: err instanceof Error ? err.message : String(err),
@@ -2825,6 +2851,14 @@ async function driveSessionToResult(
 			exitCode = 1;
 		}
 
+		// The cap refused a request mid-run (the loop stops before the model call
+		// without throwing): its message is why the run produced no result.
+		const refusal = costCapRefusal();
+		if (!delivered && refusal && !aborted) {
+			exitCode = 1;
+			error ??= refusal.message;
+		}
+
 		// A recorded yield that async-result deliveries superseded and the
 		// model never refreshed is stale: fail the run instead of letting the
 		// parent act on a payload that predates the background job outcomes
@@ -2842,7 +2876,13 @@ async function driveSessionToResult(
 		} else {
 			exitCode = 1;
 			if (!abortSignal.aborted) {
-				error = err instanceof Error ? err.stack || err.message : String(err);
+				// A cost-cap refusal is a reason for the parent, not a crash to diagnose.
+				error =
+					err instanceof CostCapError
+						? err.message
+						: err instanceof Error
+							? err.stack || err.message
+							: String(err);
 			}
 		}
 	} finally {
@@ -3656,7 +3696,7 @@ export async function finalizeSubagentLifecycle(args: {
 	const ref = registry.get(args.id);
 	const ownsRef = Boolean(ref && ref.session === args.session);
 	const cleanupDeadlineAt = args.cleanupDeadlineAt ?? Date.now() + 5000;
-	const disposeSession = async (): Promise<void> => {
+	const disposeSession = async (options?: AgentSessionDisposeOptions): Promise<void> => {
 		// On a graceful finish (e.g. a `yield`) the advisor's review of the final
 		// turn was enqueued at turn end but may still be draining. Give it a
 		// chance to land in the transcript before the runtime is torn down —
@@ -3666,7 +3706,7 @@ export async function finalizeSubagentLifecycle(args: {
 			args.session.prepareForHeadlessAdvisorDrain();
 			await args.session.waitForAdvisorCatchup(Math.max(0, cleanupDeadlineAt - Date.now()));
 		}
-		const disposal = args.session.dispose();
+		const disposal = args.session.dispose(options);
 		const remainingMs = Math.max(0, cleanupDeadlineAt - Date.now());
 		try {
 			await untilAborted(AbortSignal.timeout(remainingMs), () => disposal);
@@ -3692,22 +3732,24 @@ export async function finalizeSubagentLifecycle(args: {
 	// An aborted run leaves a consistent session with its transcript on disk, so
 	// a kept-alive agent with a reviver stays resumable like a finished one.
 	// Manager shutdown also preserves the transcript, but disposes and unregisters
-	// the process-local session (restorable as parked). An explicit kill (Agent
-	// Hub, RPC `cancel_subagent`, collab, vibe) publishes the `aborted` tombstone
-	// before the run observes its abort, and stays terminal.
+	// the process-local session (restorable as parked); its exit is recorded as a
+	// process exit, so `omp --restore` goes on with the turn the shutdown cut off.
+	// An explicit kill (Agent Hub, RPC `cancel_subagent`, collab, vibe) publishes
+	// the `aborted` tombstone before the run observes its abort, and stays terminal.
 	const resumableAbort =
 		args.abortKind !== "shutdown" && args.keepAlive && args.reviveSession !== null && ref?.status !== "aborted";
 	if (args.aborted && !resumableAbort) {
+		const shutdownDispose = args.abortKind === "shutdown" ? { reason: postmortem.Reason.EXIT } : undefined;
 		if (ref && ownsRef) {
-			if (args.abortKind === "shutdown") {
+			if (shutdownDispose) {
 				try {
-					await AgentLifecycleManager.global().release(args.id, ref);
+					await AgentLifecycleManager.global().release(args.id, ref, { dispose: shutdownDispose });
 				} catch (error) {
 					logger.warn("runSubagent: failed to release session during manager shutdown", {
 						id: args.id,
 						error: String(error),
 					});
-					await disposeSession();
+					await disposeSession(shutdownDispose);
 					registry.unregister(args.id, ref);
 				}
 			} else {
@@ -3724,7 +3766,7 @@ export async function finalizeSubagentLifecycle(args: {
 				}
 			}
 		} else {
-			await disposeSession();
+			await disposeSession(shutdownDispose);
 		}
 		await releaseOwnedResources();
 		return;

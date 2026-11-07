@@ -298,7 +298,8 @@ function serveLifecycle(bridge: MainSessionBridge): RpcServe<AgentLifecycleManag
 		park: (lifecycle, id) => lifecycle.park(id),
 		ensureLive: (lifecycle, id) => lifecycle.ensureLive(id),
 		release: (lifecycle, id, expected, options) => lifecycle.release(id, expected, options),
-		releaseDescendants: (lifecycle, root, deadlineAt) => lifecycle.releaseDescendants(root, deadlineAt),
+		releaseDescendants: (lifecycle, root, deadlineAt, options) =>
+			lifecycle.releaseDescendants(root, deadlineAt, options),
 	};
 }
 

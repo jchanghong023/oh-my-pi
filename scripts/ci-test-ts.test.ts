@@ -353,7 +353,15 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 			isLimitedIntegrationCommand({
 				label: item,
 				cwd: "packages/coding-agent",
-				command: ["bun", "test", item.startsWith("h") ? "test/modes/zcode-process.test.ts" : "test/unit.test.ts"],
+				command: [
+					"bun",
+					"test",
+					item === "h1"
+						? "test/dev-workbench/git.test.ts"
+						: item.startsWith("h")
+							? "test/modes/zcode-process.test.ts"
+							: "test/unit.test.ts",
+				],
 			}),
 		4,
 		async item => {
@@ -507,80 +515,72 @@ test("historical chunk durations reorder only exact matches, retaining every com
 	]);
 });
 
-test("only the latest trustworthy fulltest supplies exact chunk scheduling hints across revisions", async () => {
+test("completed chunk hints do not require a successful or finalized fulltest", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-timing-history-"));
 	const now = Date.now();
 	const revision = "a".repeat(40);
 	const currentRevision = "b".repeat(40);
-	const commands = ["fast", "slow"].map(name => ({
-		label: `packages/foo (${name})`,
-		cwd: "packages/foo",
-		command: ["bun", "test", `test/${name}.test.ts`],
-		parallel: 1,
-	}));
 	const producer = {
-		producer: `ci-test-ts:local-ts:1234abcd:${commands[1].label}:attempt-1`,
-		command: [
-			...commands[1].command,
-			"--parallel=1",
-			"--timeout=30000",
-			"--reporter=junit",
-			"--reporter-outfile=x.xml",
-		],
+		producer: "ci-test-ts:local-ts:1234abcd:packages/foo (slow):attempt-1",
+		command: ["bun", "test", "test/slow.test.ts", "--parallel=1", "--timeout=30000"],
 		scope: "ci-test-ts:local-ts",
 		attempt: 1,
-		startedAt: new Date(now).toISOString(),
+		startedAt: new Date(now - 60_000).toISOString(),
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
 		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 3 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
-	const startup = {
-		...producer,
-		producer: "ci-test-ts:local-ts:1234abcd:startup:attempt-1",
-		selection: { ...producer.selection, group: "startup" },
-	};
-	const producers = [producer, startup];
-	const put = async (name: string, overrides: object = {}) => {
-		const dir = path.join(root, name);
-		await fs.mkdir(dir, { recursive: true });
+	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
+		const dir = path.join(root, "history");
+		await fs.rm(dir, { recursive: true, force: true });
+		await fs.mkdir(dir);
 		await Bun.write(
 			path.join(dir, "run.json"),
 			JSON.stringify({
-				runId: name,
+				runId: "history",
 				scope: "fulltest: fork feature suites",
-				startedAtUtc: new Date(now - 1000).toISOString(),
-				completion: "complete",
-				exitCode: 0,
+				startedAtUtc: new Date(now - 120_000).toISOString(),
+				completion: "running",
+				exitCode: null,
 				sourceRevision: revision,
 				platform: process.platform,
 				architecture: process.arch,
 				runtimeVersions: { bun: Bun.version },
-				reconciliation: { status: "validated", cases: 1, failures: 0 },
-				unreconciledScope: null,
-				producers,
+				producers: [],
 				...overrides,
 			}),
+		);
+		await Promise.all(
+			records.map((record, index) => Bun.write(path.join(dir, `${index}.producer.json`), JSON.stringify(record))),
 		);
 	};
 	const readHistory = () => latestLocalTestProducers(currentRevision, root, now, "current");
 	try {
 		expect(await readHistory()).toEqual([]);
-		await put("valid");
-		expect(await readHistory()).toEqual(producers);
-		// A new commit retains real timings, but only for unchanged exact commands.
-		expect(prioritizeLocalCommands(commands, await readHistory())).toEqual([commands[1], commands[0]]);
-		const changed = commands.map(command => ({ ...command, command: [...command.command] }));
-		changed[1].command[2] = "test/changed.test.ts";
-		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
-		expect(await latestLocalTestProducers(revision, root, now, "current")).toEqual(producers);
+		await put();
+		expect(await readHistory()).toEqual([producer]);
+		for (const overrides of [
+			{ completion: "partial", exitCode: 1 },
+			{ completion: "complete", exitCode: 1 },
+			{ reconciliation: { status: "invalid", cases: 0, failures: 1 } },
+			{ unreconciledScope: "cancelled before reconciliation" },
+		]) {
+			await put(overrides);
+			expect(await readHistory()).toEqual([producer]);
+		}
+		await put({}, [{ ...producer, status: "failed", exitCode: 1 }]);
+		expect(await readHistory()).toEqual([{ ...producer, status: "failed", exitCode: 1 }]);
+		// Historical finalized summaries still work when no incremental records exist.
+		await put({ completion: "complete", exitCode: 0, producers: [producer] }, []);
+		expect(await readHistory()).toEqual([producer]);
+		expect(await latestLocalTestProducers(revision, root, now, "current")).toEqual([producer]);
 		expect(await latestLocalTestProducers(undefined, root, now, "current")).toEqual([]);
 		expect(await latestLocalTestProducers("invalid", root, now, "current")).toEqual([]);
-		expect(await latestLocalTestProducers("c".repeat(64), root, now, "current")).toEqual(producers);
+		expect(await latestLocalTestProducers("c".repeat(64), root, now, "current")).toEqual([producer]);
 		for (const overrides of [
-			{ completion: "partial" },
-			{ exitCode: 1 },
+			{ runId: "current" },
 			{ scope: "fulltest: full current-platform project suites" },
 			{ sourceRevision: "invalid" },
 			{ sourceRevision: null },
@@ -588,60 +588,128 @@ test("only the latest trustworthy fulltest supplies exact chunk scheduling hints
 			{ runtimeVersions: { bun: "other" } },
 			{ runtimeVersions: null },
 			{ startedAtUtc: new Date(now - 8 * 86400000).toISOString() },
-			{ reconciliation: { status: "invalid", cases: 1, failures: 0 } },
-			{ producers: [] },
-			{ reconciliation: { status: "validated", cases: 0, failures: 0 } },
-			{ reconciliation: { status: "validated", cases: 1, failures: 1 } },
-			{ unreconciledScope: "partial suite" },
-			{ producers: [producer] },
-			{ producers: [producer, { ...startup, report: "missing" }] },
-			{ producers: [producer, { ...startup, exitCode: 1 }] },
-			{ producers: [producer, { ...startup, status: "partial" }] },
-			{ producers: [producer, { ...startup, selection: { ...startup.selection, mode: "affected" } }] },
-			{ producers: [producer, { ...startup, selection: { ...startup.selection, suiteRevision: 1 } }] },
-			{ producers: [producer, { ...startup, selection: { ...startup.selection, suiteRevision: 2 } }] },
-			{ producers: [{ ...producer, selection: { ...producer.selection, suiteRevision: 2 } }, startup] },
-			{ producers: [producer, { ...startup, selection: { tool: "bun", mode: "full", group: "startup" } }] },
+			{ startedAtUtc: new Date(now + 1000).toISOString() },
+			{ startedAtUtc: "invalid" },
 			{ architecture: "other" },
 			{ platform: "other" },
 		]) {
-			await put("valid", overrides);
+			await put(overrides);
 			expect(await readHistory()).toEqual([]);
 		}
-		await put("valid");
-		// The current running report already has a revision; it is not a prior failed run.
-		await put("current", { completion: "running", startedAtUtc: new Date(now).toISOString() });
-		expect(await readHistory()).toEqual(producers);
-		await put("current", { runId: "different", completion: "running", startedAtUtc: new Date(now).toISOString() });
+		for (const overrides of [
+			{ status: "partial" },
+			{ status: "not-selected" },
+			{ status: "failed", exitCode: 137 },
+			{ status: "passed", exitCode: 1 },
+			{ report: "missing" },
+			{ durationSeconds: -1 },
+			{ durationSeconds: null },
+			{ attempt: 2 },
+			{ startedAt: "invalid" },
+			{ startedAt: new Date(now + 1000).toISOString() },
+			{ startedAt: new Date(now - 180_000).toISOString() },
+			{ selection: { ...producer.selection, mode: "affected" } },
+			{ selection: { ...producer.selection, suiteRevision: 2 } },
+			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
+			{ selection: { ...producer.selection, group: "other" } },
+		]) {
+			// An unusable incremental record must not fall back to a stale summary.
+			await put({ producers: [producer] }, [{ ...producer, ...overrides }]);
+			expect(await readHistory()).toEqual([]);
+		}
+		await put({ producers: [producer] }, [null]);
 		expect(await readHistory()).toEqual([]);
-		await put("current", { completion: "running", startedAtUtc: new Date(now).toISOString() });
-		await put("newer", {
-			completion: "partial",
-			exitCode: 1,
-			sourceRevision: currentRevision,
-			startedAtUtc: new Date(now - 500).toISOString(),
-		});
+		await Bun.write(path.join(root, "history", "0.producer.json"), "{");
 		expect(await readHistory()).toEqual([]);
-		await put("newer", {
-			completion: "complete",
-			exitCode: 1,
-			sourceRevision: currentRevision,
-			startedAtUtc: new Date(now - 500).toISOString(),
-		});
-		expect(await readHistory()).toEqual([]);
-		await put("newer", {
-			sourceRevision: "invalid",
-			startedAtUtc: new Date(now - 500).toISOString(),
-		});
-		expect(await readHistory()).toEqual([]);
-		await put("newer", {
-			startedAtUtc: new Date(now - 500).toISOString(),
-			producers: [{ ...producer, durationSeconds: 30 }, startup],
-		});
-		expect((await readHistory()).map(item => item.durationSeconds)).toEqual([30, 12]);
+	} finally {
+		await fs.rm(root, { recursive: true, force: true });
+	}
+});
+
+test("each exact chunk keeps its latest usable measurement across interrupted runs", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-timing-order-"));
+	const now = Date.now();
+	const revision = "a".repeat(40);
+	const commands = ["fast", "slow", "unknown-a", "unknown-b"].map(name => ({
+		label: `packages/foo (${name})`,
+		cwd: "packages/foo",
+		command: ["bun", "test", `test/${name}.test.ts`],
+		parallel: 1,
+	}));
+	const producer = (index: number, durationSeconds: number, age: number) => ({
+		producer: `ci-test-ts:local-ts:1234abcd:${commands[index].label}:attempt-1`,
+		command: [...commands[index].command, "--parallel=1", "--timeout=30000"],
+		scope: "ci-test-ts:local-ts",
+		attempt: 1,
+		startedAt: new Date(now - age).toISOString(),
+		durationSeconds,
+		exitCode: 0,
+		status: "passed",
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 3 },
+		report: "available",
+	});
+	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
+		const dir = path.join(root, name);
+		await fs.mkdir(dir, { recursive: true });
+		await Bun.write(
+			path.join(dir, "run.json"),
+			JSON.stringify({
+				runId: name,
+				scope: "fulltest: fork feature suites",
+				startedAtUtc: new Date(now - age).toISOString(),
+				completion: "partial",
+				exitCode: 1,
+				sourceRevision: revision,
+				platform: process.platform,
+				architecture: process.arch,
+				runtimeVersions: { bun: Bun.version },
+				producers: [],
+				...overrides,
+			}),
+		);
+		await Promise.all(
+			records.map((record, index) => Bun.write(path.join(dir, `${index}.producer.json`), JSON.stringify(record))),
+		);
+	};
+	const readHistory = () => latestLocalTestProducers(revision, root, now, "current");
+	const ordered = async () => prioritizeLocalCommands(commands, await readHistory());
+	try {
+		const fast = producer(0, 1, 180_000);
+		const slow = producer(1, 20, 180_000);
+		await put("older", 240_000, [fast, slow], { completion: "complete", exitCode: 0 });
+		expect(await ordered()).toEqual([commands[1], commands[0], commands[2], commands[3]]);
+		// Only the fast chunk finished in the failed run; the slow hint survives.
+		const newerFast = producer(0, 30, 90_000);
+		await put("failed", 120_000, [newerFast]);
+		const history = await readHistory();
+		expect(history).toHaveLength(2);
+		expect(history).toEqual(expect.arrayContaining([newerFast, slow]));
+		expect(await ordered()).toEqual(commands);
+		// Cancellation left run.json running and only incremental completed records.
+		const newerSlow = producer(1, 40, 60_000);
+		await put("cancelled", 80_000, [newerSlow], { completion: "running", exitCode: null });
+		expect(await ordered()).toEqual([commands[1], commands[0], commands[2], commands[3]]);
+		// A killed or missing chunk never replaces its last complete measurement.
+		await put("killed", 40_000, [
+			{ ...producer(0, 100, 30_000), status: "partial", exitCode: 137 },
+			{ ...producer(1, 100, 30_000), report: "missing" },
+		]);
+		expect(await ordered()).toEqual([commands[1], commands[0], commands[2], commands[3]]);
+		await put("current", 20_000, [producer(0, 999, 10_000)], { completion: "running" });
+		expect(await ordered()).toEqual([commands[1], commands[0], commands[2], commands[3]]);
+		// Relabeling or changing argv makes a new identity, not an inherited duration.
+		const changed = commands.map(command => ({ ...command, command: [...command.command] }));
+		changed[1].command[2] = "test/changed.test.ts";
+		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
+		changed[1].command = [...commands[1].command];
+		changed[1].label = "packages/foo (relabeled)";
+		expect(prioritizeLocalCommands(changed, await readHistory())).toEqual(changed);
+		// Equal-time conflicting records are ambiguous, not a fabricated duration.
+		await put("ambiguous", 20_000, [producer(1, 5, 10_000), producer(1, 50, 10_000)]);
+		expect(await ordered()).toEqual(commands);
 		await fs.mkdir(path.join(root, "invalid"));
 		await Bun.write(path.join(root, "invalid", "run.json"), "{");
-		expect(await readHistory()).toEqual([]);
+		expect(await ordered()).toEqual(commands);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}

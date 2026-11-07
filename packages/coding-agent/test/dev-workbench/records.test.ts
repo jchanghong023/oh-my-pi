@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as crypto from "node:crypto";
+import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -131,6 +132,61 @@ describe("Git requirement records", () => {
 			code: "ENOENT",
 		});
 		expect(await fs.readFile(path.join(cwd, ".omp", "dev", "state.json"), "utf8")).toBe("not new state");
+	});
+
+	test("readers retain the previous record until a refused replacement is atomically published", async () => {
+		const cwd = await fixture();
+		const saved = await saveDevRequirement(cwd, record(), null);
+		const target = path.join(cwd, devRequirementPath("example"));
+		const rename = nodeFs.promises.rename;
+		const waiting = Promise.withResolvers<void>();
+		const publish = Promise.withResolvers<void>();
+		let replacements = 0;
+		const replacement = spyOn(nodeFs.promises, "rename").mockImplementation(async (source, destination) => {
+			if (String(source).endsWith(".tmp") && String(destination) === target) {
+				if (++replacements === 1) {
+					throw Object.assign(new Error("Windows replacement temporarily refused"), { code: "EPERM" });
+				}
+				waiting.resolve();
+				await publish.promise;
+			}
+			await rename(source, destination);
+		});
+		const writing = saveDevRequirement(cwd, { ...saved.record, stage: "requirements" }, saved.recordVersion);
+		try {
+			await waiting.promise;
+			expect(await readDevRequirement(cwd, "example")).toEqual(saved);
+			publish.resolve();
+			const updated = await writing;
+			expect((await readDevRequirement(cwd, "example")).recordVersion).toBe(updated.recordVersion);
+			expect(updated.record.stage).toBe("requirements");
+		} finally {
+			publish.resolve();
+			await writing.catch(() => {});
+			replacement.mockRestore();
+		}
+	});
+
+	test("a permanently refused replacement preserves the authoritative record and removes staging", async () => {
+		const cwd = await fixture();
+		const saved = await saveDevRequirement(cwd, record(), null);
+		const target = path.join(cwd, devRequirementPath("example"));
+		const rename = nodeFs.promises.rename;
+		const replacement = spyOn(nodeFs.promises, "rename").mockImplementation(async (source, destination) => {
+			if (String(source).endsWith(".tmp") && String(destination) === target) {
+				throw Object.assign(new Error("Windows replacement still refused"), { code: "EPERM" });
+			}
+			await rename(source, destination);
+		});
+		try {
+			await expect(
+				saveDevRequirement(cwd, { ...saved.record, stage: "requirements" }, saved.recordVersion),
+			).rejects.toMatchObject({ code: "EPERM" });
+			expect(await readDevRequirement(cwd, "example")).toEqual(saved);
+			expect(await fs.readdir(path.dirname(target))).toEqual(["example.json"]);
+		} finally {
+			replacement.mockRestore();
+		}
 	});
 
 	test("CAS compares actual bytes, rejects duplicate creation and serializes retained-owner writes", async () => {

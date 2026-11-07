@@ -1525,8 +1525,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		const name = this.sessionManager.getSessionName();
 		if (!name) return undefined;
 		const pin = this.statusLine.isSessionPinned(this.sessionManager.getSessionId()) && theme.icon.pin;
-		const title = sanitizeStatusText(name);
-		return `\x1b[2;3m${pin ? `${pin} ${title}` : title}\x1b[23;22m`;
+		const styledTitle = `\x1b[2;3m${sanitizeStatusText(name)}\x1b[23;22m`;
+		return pin ? `${theme.fg("accent", pin)} ${styledTitle}` : styledTitle;
 	}
 	/** Live gen tok/s for the working row: the viewed session's own meter, so a
 	 * focused subagent shows its own reading and the main session's survives
@@ -4974,7 +4974,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				autoThinking: thinking === AUTO_THINKING,
 				// A fresh session derives tiers from settings, not this session's `/fast` toggles.
 				fastMode: this.session.isFastModeConfiguredFor(model),
-				usingSubscription: this.session.modelRegistry.isUsingOAuth(model),
+				usingSubscription: this.session.modelRegistry.isUsingSubscription(model),
 				autoCompactEnabled: this.session.autoCompactionEnabled,
 				compactionBoundaries: model.contextWindow
 					? statusLineHost.computeCompactionBoundaries(this.session, model.contextWindow, model)
@@ -8632,7 +8632,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	/**
 	 * Tear down like {@link shutdown}, then relaunch the CLI with the original
 	 * launch argv (session-source flags and positional prompts stripped, see
-	 * {@link restartArgv}), resuming this session when it exists on disk.
+	 * {@link restartArgv}), restoring this session (`--restore`) when it exists on
+	 * disk: subagents the teardown cut off mid-turn go on in the new process.
 	 *
 	 * On POSIX the relaunch is a true `execvp(3)` image replacement: same PID,
 	 * same terminal, no lingering parent. Postmortem cleanups and stdout are
@@ -8644,7 +8645,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		if (this.#isShuttingDown) return;
 		this.#beginClose();
 		try {
-			await this.#teardown();
+			await this.#teardown(postmortem.Reason.EXIT);
 		} catch (error) {
 			this.#handleTeardownError("restart", error);
 			return;
@@ -8708,7 +8709,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	/** Shared `shutdown()`/`restart()` teardown: dispose the session and hand the terminal back. */
-	async #teardown(): Promise<void> {
+	async #teardown(reason?: postmortem.Reason): Promise<void> {
 		// An in-flight loop condition (or a deferred auto-submit timer) must not
 		// outlive session disposal: an unaborted `sleep 30`-style condition can
 		// resolve mid-teardown and drive `#passesLoopCondition` into invoking the
@@ -8742,10 +8743,11 @@ export class InteractiveMode implements InteractiveModeContext {
 			// The teardown is registered lazily in `init()` — a `/exit` reached
 			// before `init()` completed falls back to a direct dispose.
 			if (this.#signalTeardown) {
-				await this.#signalTeardown();
+				await this.#signalTeardown(reason);
 			} else {
 				await this.session.dispose({
 					mnemopiConsolidateTimeoutMs: SHUTDOWN_CONSOLIDATE_BUDGET_MS,
+					reason,
 				});
 			}
 		} finally {

@@ -215,6 +215,7 @@ import {
 	type Prewalk,
 } from "./session/agent-session";
 import { isLocalAgentSession } from "./session/agent-session-handle";
+import type { AgentSessionDisposeOptions } from "./session/agent-session-types";
 import {
 	createAuthStorageSettingsSync,
 	discoverAuthStorage as discoverAuthStorageFromConfig,
@@ -6156,7 +6157,7 @@ async function createAgentSessionScoped(
 
 		{
 			const originalDispose = session.dispose.bind(session);
-			session.dispose = async () => {
+			session.dispose = async (disposeOptions?: AgentSessionDisposeOptions) => {
 				try {
 					try {
 						// Reject new session work (eval starts) the moment disposal
@@ -6178,7 +6179,13 @@ async function createAgentSessionScoped(
 							await vibeRegistry.suspendScope(vibeRegistry.ownerScope(vibeParentSession), scopedAsyncJobManager);
 							if (agentRegistry === AgentRegistry.global() && registeredAgentRef) {
 								const lifecycle = AgentLifecycleManager.global();
-								await lifecycle.releaseDescendants(registeredAgentRef);
+								await lifecycle.releaseDescendants(
+									registeredAgentRef,
+									undefined,
+									disposeOptions?.reason === postmortem.Reason.EXIT
+										? { dispose: { reason: postmortem.Reason.EXIT } }
+										: undefined,
+								);
 								// A just-registered main root is still initializing until its session attaches.
 								// Its running ref must keep another root from disposing the global lifecycle.
 								const otherRoots = agentRegistry
@@ -6195,7 +6202,7 @@ async function createAgentSessionScoped(
 							}
 						}
 					} finally {
-						await originalDispose();
+						await originalDispose(disposeOptions);
 					}
 				} finally {
 					// Release once, and keep the shared connection alive while another

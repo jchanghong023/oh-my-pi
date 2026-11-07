@@ -23,8 +23,9 @@
  */
 
 import * as fs from "node:fs/promises";
-import { logger, untilAborted } from "@oh-my-pi/pi-utils";
+import { logger, postmortem, untilAborted } from "@oh-my-pi/pi-utils";
 import type { AgentSessionHandle } from "../session/agent-session-handle";
+import type { AgentSessionDisposeOptions } from "../session/agent-session-types";
 import { trackLateCleanup } from "../utils/late-cleanup";
 import {
 	type AgentRef,
@@ -130,6 +131,14 @@ interface ReopeningAgent {
 	promise: Promise<AgentRef>;
 }
 
+/** How {@link AgentLifecycleApi.release} ends an agent. */
+export interface AgentReleaseOptions {
+	/** Explicit kill: keep a terminal `aborted` row and persist the kill marker. */
+	tombstone?: boolean;
+	/** Forwarded to the live session's dispose (e.g. the reason its `session_exit` record carries). */
+	dispose?: AgentSessionDisposeOptions;
+}
+
 /** Public surface of the process-global agent lifecycle, implemented locally on main and by a proxy in workers. */
 export interface AgentLifecycleApi {
 	/** Install the factory used to cold-revive `parked` refs restored from disk. */
@@ -149,9 +158,9 @@ export interface AgentLifecycleApi {
 	/** Return the live session, reviving it if parked or killed. */
 	ensureLive(id: string): Promise<AgentSessionHandle>;
 	/** Dispose if live and drop timers; `tombstone` keeps a terminal `aborted` row. */
-	release(id: string, expected?: AgentRefExpectation, options?: { tombstone?: boolean }): Promise<boolean>;
-	/** Release the descendants of a still-current root without affecting other roots. */
-	releaseDescendants(root: AgentRef, deadlineAt?: number): Promise<void>;
+	release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean>;
+	/** Release this root's descendants; options apply only to running descendants. */
+	releaseDescendants(root: AgentRef, deadlineAt?: number, options?: AgentReleaseOptions): Promise<void>;
 	/** Tear down every adopted agent. */
 	dispose(deadlineAt?: number): Promise<void>;
 }
@@ -629,7 +638,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	 * it does not destroy it: {@link ensureLive} (a message, Hub revive/focus)
 	 * reopens the transcript.
 	 */
-	async release(id: string, expected?: AgentRefExpectation, options?: { tombstone?: boolean }): Promise<boolean> {
+	async release(id: string, expected?: AgentRefExpectation, options?: AgentReleaseOptions): Promise<boolean> {
 		const adopted = this.#adopted.get(id);
 		const current = this.#registry.get(id);
 		const currentMatches =
@@ -677,7 +686,7 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 			// dispose the captured session, even when tombstone persistence fails.
 			if (live) {
 				try {
-					await live.dispose();
+					await live.dispose(options?.dispose);
 				} catch (error) {
 					logger.warn("AgentLifecycleManager.release: session dispose failed", { id, error: String(error) });
 				}
@@ -696,7 +705,11 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 	}
 
 	/** Release a root's current descendants, fenced against replacement of the root ref. */
-	async releaseDescendants(root: AgentRef, deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS): Promise<void> {
+	async releaseDescendants(
+		root: AgentRef,
+		deadlineAt: number = Date.now() + AGENT_RELEASE_GRACE_MS,
+		options?: AgentReleaseOptions,
+	): Promise<void> {
 		if (this.#registry.get(root.id) !== root) return;
 		const refs = this.#registry.list();
 		const descendants = new Set([root.id]);
@@ -710,11 +723,13 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 				}
 			}
 		}
+		// Only an explicit owner exit marks an in-flight descendant as interrupted;
+		// ordinary root disposal keeps the fork's normal stop semantics.
 		await Promise.all(
 			refs
 				.filter(ref => ref !== root && descendants.has(ref.id))
 				.map(async ref => {
-					const release = this.release(ref.id, ref).then(() => {});
+					const release = this.release(ref.id, ref, ref.status === "running" ? options : undefined).then(() => {});
 					try {
 						await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
 					} catch (error) {
@@ -734,9 +749,14 @@ export class AgentLifecycleManager implements AgentLifecycleApi {
 		this.#disposed = true;
 		this.#unsubscribe = undefined;
 		const ids = [...new Set([...this.#adopted.keys(), ...this.#parks.keys()])];
+		// A turn still running (a revived or woken agent) is cut off by this
+		// teardown, not stopped: its session records a process exit, so
+		// `omp --restore` goes on with it.
+		const cutOff: AgentReleaseOptions = { dispose: { reason: postmortem.Reason.EXIT } };
 		await Promise.all(
 			ids.map(async id => {
-				const release = this.release(id).then(() => {});
+				const running = this.#registry.get(id)?.status === "running";
+				const release = this.release(id, undefined, running ? cutOff : undefined).then(() => {});
 				try {
 					await untilAborted(AbortSignal.timeout(Math.max(0, deadlineAt - Date.now())), () => release);
 				} catch (error) {
