@@ -10,6 +10,7 @@ import {
 	loadSpecDrivenSkill,
 	resolveSpecDrivenResourcePath,
 	runOpenSpec,
+	runOpenSpecDirectory,
 	runSuperpowersScript,
 	type SpecDrivenProcessResult,
 } from "../../src/spec-driven/resources";
@@ -800,3 +801,35 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
 		}
 	}, 30_000);
 }
+
+it("the packaged directory bridge validates real archived deltas without rebuilding an active change", async () => {
+	const cwd = path.join(temporary, "native-directory-bridge");
+	await fs.mkdir(cwd);
+	expect((await runOpenSpec(["new", "change", "directory-bridge", "--schema", "omp-spec"], cwd)).exitCode).toBe(0);
+	const active = path.join(cwd, "openspec/changes/directory-bridge");
+	await fs.writeFile(path.join(active, "proposal.md"), proposalContent);
+	const capability = path.join(active, "specs/offline-resources");
+	await fs.mkdir(capability, { recursive: true });
+	await fs.writeFile(path.join(capability, "spec.md"), deltaContent);
+	const archived = await runOpenSpec(["archive", "directory-bridge", "--yes", "--json"], cwd);
+	expect(archived.exitCode).toBe(0);
+	const archives = await fs.readdir(path.join(cwd, "openspec/changes/archive"));
+	const name = archives.find(entry => entry.endsWith("-directory-bridge"));
+	if (!name) throw new Error("Native archive did not publish the change");
+	const actual = path.join(cwd, "openspec/changes/archive", name);
+	const input = { projectRoot: cwd, changeDir: actual };
+	const valid = await runOpenSpecDirectory("validate-directory", input, cwd);
+	expect(valid.exitCode).toBe(0);
+	expect(JSON.parse(valid.stdout).valid).toBe(true);
+	const main = await fs.readFile(path.join(cwd, "openspec/specs/offline-resources/spec.md"));
+	await fs.writeFile(
+		path.join(actual, "specs/offline-resources/spec.md"),
+		"## ADDED Requirements\n\n### Requirement: Broken\nThe system SHALL work.\n",
+	);
+	const invalid = await runOpenSpecDirectory("validate-directory", input, cwd);
+	expect(invalid.exitCode).not.toBe(0);
+	expect(JSON.parse(invalid.stdout).valid).toBe(false);
+	expect(await fs.readFile(path.join(cwd, "openspec/specs/offline-resources/spec.md"))).toEqual(main);
+	await expect(fs.stat(active)).rejects.toMatchObject({ code: "ENOENT" });
+	expect(await fs.readdir(path.join(cwd, "openspec/changes/archive"))).toEqual(archives);
+}, 120_000);

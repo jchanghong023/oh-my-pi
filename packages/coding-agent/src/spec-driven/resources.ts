@@ -266,11 +266,12 @@ export async function runOpenSpec(
 	args: readonly string[],
 	cwd: string,
 	signal?: AbortSignal,
+	internal?: { archivePlan?: string },
 ): Promise<SpecDrivenProcessResult> {
 	const resources = await ensureSpecDrivenResources();
 	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "bin/openspec.js");
 	const commandArgs = [...args];
-	const environment = { BUN_BE_BUN: "1" };
+	const environment = { BUN_BE_BUN: "1", OMP_DEV_ARCHIVE_PLAN: internal?.archivePlan ?? "" };
 	if (commandArgs[0] === "init") {
 		const target = initTarget(commandArgs, cwd);
 		const hadConfig = await hasProjectConfig(target);
@@ -324,6 +325,18 @@ export async function runOpenSpec(
 		}
 	}
 	return run([process.execPath, entry, ...commandArgs], cwd, signal, environment);
+}
+
+/** Internal-only native directory bridge, shipped through the same verified resource archive as CLI. */
+export async function runOpenSpecDirectory(
+	action: "validate-directory" | "sync-directory" | "instructions-directory" | "plan-directory",
+	input: Record<string, unknown>,
+	cwd: string,
+	signal?: AbortSignal,
+): Promise<SpecDrivenProcessResult> {
+	const resources = await ensureSpecDrivenResources();
+	const entry = await resolveSpecDrivenResourcePath(resources.openspecRoot, "dist/core/omp-sync.js");
+	return run([process.execPath, entry, action, JSON.stringify(input)], cwd, signal, { BUN_BE_BUN: "1" });
 }
 
 /** Refuse a project/user override instead of silently using a different Dev workflow. */

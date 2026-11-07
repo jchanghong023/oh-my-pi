@@ -5,12 +5,15 @@ import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { Type } from "@oh-my-pi/omptype/typebox";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
+import { createAssistantMessageEventStream, type AssistantMessage, type ToolCall } from "@oh-my-pi/pi-ai";
+import { resolveApiKeyOnce } from "@oh-my-pi/pi-ai/auth-retry";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { cfgEditMode, cfgEditModelVariants } from "../../src/edit/settings";
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
 import { createAgentSession } from "../../src/sdk";
+import type { ExtensionFactory, ProviderConfig } from "../../src/extensibility/extensions/types";
 import type { AgentSession } from "../../src/session/agent-session";
 import { isLocalAgentSession } from "../../src/session/agent-session-handle";
 import { AuthStorage } from "../../src/session/auth-storage";
@@ -20,13 +23,13 @@ import { HistoryStorage } from "../../src/session/history-storage";
 import { CURRENT_SESSION_VERSION } from "../../src/session/session-entries";
 import { closeSessionIndex } from "../../src/session/session-index";
 import { artifactVersion } from "../../src/spec-driven/artifacts";
-import { SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
-import type { SpecSavedRun } from "../../src/spec-driven/types";
+import type { DevRequirementRecord, SpecSavedRun } from "../../src/spec-driven/types";
 import { checkSkillReadAccess, SkillAccessDeniedError } from "../../src/spec-driven/skill-policy";
 import * as teamOrchestrator from "../../src/team/orchestrator";
+import { createAssistantMessage } from "../helpers/agent-session-setup";
 import {
 	BEHAVIOR_TEST,
 	contentText,
@@ -38,6 +41,9 @@ import {
 	rolePayload,
 	TEST_PATH,
 	scoutProbeReply,
+	type ModelRequest,
+	type Reply,
+	teamStage,
 } from "./provider-fixture";
 import { cfgTeamMembers } from "../../src/team/settings";
 import { cfgTaskIsolationEnabled, cfgTaskMaxRecursionDepth, cfgTaskSpeculativeLaunch } from "../../src/task/settings";
@@ -49,6 +55,7 @@ async function consumer(
 	options: Parameters<typeof createProviderFixture>[0] = {},
 	setup?: (cwd: string) => Promise<void>,
 	rootOptions?: Partial<Parameters<typeof createAgentSession>[0]>,
+	runtimeOptions?: Pick<Parameters<typeof createSpecDrivenRuntime>[0], "getRecord" | "getStatus" | "repairPaths">,
 ) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-four-native-"));
 	const agentDir = path.join(cwd, ".isolated-agent");
@@ -101,7 +108,7 @@ async function consumer(
 			model,
 			authStorage,
 			modelRegistry: registry,
-			sessionManager: SessionManager.inMemory(),
+			sessionManager: SessionManager.inMemory(cwd),
 			contextFiles: [],
 			rules: [],
 			skills: [],
@@ -115,7 +122,8 @@ async function consumer(
 			bindProcessState: false,
 			...rootOptions,
 		}));
-		runtime = await createSpecDrivenRuntime({ session, settings, cwd });
+		runtime = await createSpecDrivenRuntime({ session, settings, cwd, ...runtimeOptions });
+		const nativeRuntime = runtime;
 		return {
 			cwd,
 			settings,
@@ -123,11 +131,53 @@ async function consumer(
 			session,
 			registry,
 			provider,
-			orchestrator: new SpecDrivenOrchestrator(runtime.ports, {
-				...runtime.options,
-				getUseTeam: () => false,
-				persist: async () => {},
-			}),
+			startNative: async (
+				request: string,
+				changeId: string,
+				role: "business" | "requirements" = "requirements",
+				businessPath?: string,
+				interview = false,
+			): Promise<SpecSavedRun> => {
+				const context = { runId: nativeRuntime.options.runId, generation: 1, signal: new AbortController().signal };
+				if (interview && role !== "business") {
+					const businessPaths = await nativeRuntime.ports.artifacts.initialize(
+						changeId,
+						context,
+						`docs/business-requirements/${changeId}.md`,
+					);
+					await nativeRuntime.ports.agents.prepare("business", context);
+					await nativeRuntime.ports.agents.run(
+						{
+							role: "business",
+							entry: true,
+							request,
+							files: [],
+							outputPaths: [businessPaths.business!],
+						},
+						context,
+					);
+				}
+				const paths = await nativeRuntime.ports.artifacts.initialize(changeId, context, businessPath);
+				await nativeRuntime.ports.agents.prepare(role, context);
+				await nativeRuntime.ports.agents.run(
+					{
+						role,
+						entry: true,
+						request,
+						files: [],
+						outputPaths: role === "business" ? [paths.business!] : paths.requirements,
+					},
+					context,
+				);
+				return {
+					runId: context.runId,
+					phase: role,
+					changeId,
+					paths,
+					approvals: {},
+					sessions: nativeRuntime.sessionRefs(),
+				} satisfies SpecSavedRun;
+			},
 			[Symbol.asyncDispose]: dispose,
 		};
 	} catch (error) {
@@ -212,7 +262,7 @@ test("executor rebinds only active parent extension factories", async () => {
 	expect(fixture.provider.requests).toHaveLength(0);
 }, 120_000);
 
-test("early stage retains explicit user skill invocation without adding automatic discovery", async () => {
+test("early stage preserves explicit user skill invocation without model work during preparation", async () => {
 	const skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
 	await using fixture = await consumer(
 		{},
@@ -230,18 +280,17 @@ test("early stage retains explicit user skill invocation without adding automati
 	await fixture.runtime.ports.agents.prepare("solution", context);
 	const stage = fixture.runtime.nativeSession("solution")!;
 	const skill = stage.skills.find(item => item.name === "manual-probe");
-	expect(skill?.hide).toBe(true);
+	expect(fixture.provider.requests).toHaveLength(0);
 	if (!skill) throw new Error("Manual skill missing from stage catalog");
 	const invoked = await stage.buildUserSkillPrompt(skill, { args: "" });
 	expect(JSON.stringify(invoked)).toContain("Explicit skill body");
 }, 120_000);
 
-test("original request remains in native requirements history, not saved workspace state", async () => {
+test("original business interview remains in native history, not saved workspace state", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "请补充验收条件。" }) });
 	const request = "  原始需求\n保留完整正文和空格  ";
-	await fixture.orchestrator.start(request, "native-request");
+	const saved = await fixture.startNative(request, "native-request", "requirements", undefined, true);
 	expect(fixture.runtime.originalRequest()).toBe(request);
-	const saved = fixture.orchestrator.save();
 	expect(JSON.stringify(saved)).not.toContain(request);
 	expect(saved.sessions.requirements?.sessionFile).toBe(fixture.runtime.nativeSession("requirements")?.sessionFile);
 }, 120_000);
@@ -255,7 +304,7 @@ test("business entry restores its native conversation and hands the complete con
 	});
 	const request = "  描述订单审批业务\n保留原始空格  ";
 	const businessPath = "docs/business-requirements.md";
-	await fixture.orchestrator.startBusiness(request, "business-native", businessPath);
+	const saved = await fixture.startNative(request, "business-native", "business", businessPath);
 	expect(fixture.runtime.originalRequest()).toBe(request);
 	await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toThrow();
 	const document = [
@@ -276,7 +325,6 @@ test("business entry restores its native conversation and hands the complete con
 	].join("\n");
 	await fs.mkdir(path.join(fixture.cwd, "docs"), { recursive: true });
 	await fs.writeFile(path.join(fixture.cwd, businessPath), document);
-	const saved = fixture.orchestrator.save();
 	const businessSessionFile = fixture.runtime.nativeSession("business")?.sessionFile;
 	await fixture.runtime.dispose();
 	const restored = await createSpecDrivenRuntime({
@@ -286,19 +334,36 @@ test("business entry restores its native conversation and hands the complete con
 		saved,
 	});
 	try {
-		const core = new SpecDrivenOrchestrator(restored.ports, {
-			...restored.options,
-			getUseTeam: () => false,
-			persist: async () => {},
-		});
-		await core.restore(saved);
+		const context = { runId: saved.runId, generation: 2, signal: new AbortController().signal };
+		await restored.ports.agents.prepare("business", context, saved.sessions.business);
 		expect(restored.nativeSession("business")?.sessionFile).toBe(businessSessionFile);
 		expect(restored.originalRequest()).toBe(request);
-		await core.converse("补充审批条件");
+		await restored.ports.agents.run(
+			{
+				role: "business",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: [businessPath],
+				feedback: "补充审批条件",
+			},
+			context,
+		);
 		expect(restored.originalRequest()).toBe(request);
 		await expect(fs.stat(path.join(fixture.cwd, "openspec"))).rejects.toThrow();
-		await core.next(undefined, "/dev next 确认业务");
-		expect(core.status().phase).toBe("requirements");
+		const confirmed = await restored.ports.artifacts.readBusiness(context);
+		const paths = await restored.ports.artifacts.initialize(saved.changeId!, context);
+		await restored.ports.agents.run(
+			{
+				role: "requirements",
+				entry: true,
+				request,
+				files: [confirmed],
+				outputPaths: paths.requirements,
+				userReply: "网页确认业务，保留原文",
+			},
+			context,
+		);
 		expect(restored.originalRequest()).toBe(request);
 		const requirements = fixture.provider.requests
 			.map(rolePayload)
@@ -317,7 +382,7 @@ test("business entry restores its native conversation and hands the complete con
 			},
 		]);
 		expect(await fs.readFile(path.join(fixture.cwd, authorityPath), "utf8")).toBe(authority);
-		expect(requirements?.input.userReply).toBe("/dev next 确认业务");
+		expect(requirements?.input.userReply).toBe("网页确认业务，保留原文");
 	} finally {
 		await restored.dispose();
 	}
@@ -460,7 +525,17 @@ test("missing native history reconstructs real materials and saved approval only
 }, 120_000);
 
 test("Team receives complete entry materials exactly once and follow-ups reuse the native solution session", async () => {
-	await using fixture = await consumer({ reply: () => ({ text: "方案讨论完成。" }) });
+	let pendingSolution: { path: string; content: string } | undefined;
+	await using fixture = await consumer({
+		reply: () => {
+			if (pendingSolution) {
+				const value = pendingSolution;
+				pendingSolution = undefined;
+				return { tool: { name: "write", args: value } };
+			}
+			return { text: "方案讨论完成。" };
+		},
+	});
 	cfgTeamMembers.set(
 		fixture.settings,
 		Array.from({ length: 4 }, () => "deepseek/chat-a"),
@@ -508,7 +583,7 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 			entry: true,
 			request: "完整原始需求",
 			files: [{ path: "requirement.md", version: "bytes", content: "# 完整材料\n末尾也必须保留" }],
-			outputPaths: ["solution.json"],
+			outputPaths: [paths.solution],
 			userReply: " 原文批准\n保留 ",
 			useTeam: true,
 		};
@@ -519,10 +594,17 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 		expect(discussion).toHaveBeenCalledTimes(1);
 		expect(JSON.parse(discussion.mock.calls[0]![0].question)).toEqual(input);
 		const writeSolution = async (id: string, content: string) => {
-			await fs.mkdir(path.dirname(path.join(fixture.cwd, paths.solution)), { recursive: true });
-			await fs.writeFile(
-				path.join(fixture.cwd, paths.solution),
-				JSON.stringify({ candidates: [{ id, title: "候选", content }], recommendedCandidateId: id }),
+			pendingSolution = {
+				path: paths.solution,
+				content: JSON.stringify({ candidates: [{ id, title: "候选", content }], recommendedCandidateId: id }),
+			};
+			await fixture.runtime.ports.agents.run(
+				{
+					...input,
+					entry: false,
+					feedback: "根据实际 Team 结果形成正式方案，不代表人员选择。",
+				},
+				context,
 			);
 		};
 		await writeSolution("excluded", "不可采用候选");
@@ -533,6 +615,25 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 		await expect(fixture.runtime.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
 		await writeSolution("chosen", "完整候选方案\n条件与风险补充");
 		expect((await fixture.runtime.ports.artifacts.readSolution(context)).candidates[0]!.id).toBe("chosen");
+		const basis = await fixture.runtime.solutionBasis();
+		const record: DevRequirementRecord = {
+			schemaVersion: 1,
+			requirementId: "team-entry-native",
+			changeId: "team-entry-native",
+			branch: "main",
+			stage: "solution",
+			lifecycle: "active",
+			materials: [],
+			decisions: [],
+			marks: {},
+			solutionBasis: basis,
+			report: { development: null, st: null },
+			syncRevisions: [],
+			gitOperations: [],
+			pr: null,
+			testing: "not-started",
+			relatedRequirementIds: [],
+		};
 		const saved: SpecSavedRun = {
 			runId: context.runId,
 			changeId: "team-entry-native",
@@ -547,11 +648,17 @@ test("Team receives complete entry materials exactly once and follow-ups reuse t
 			settings: fixture.settings,
 			cwd: fixture.cwd,
 			saved,
+			getRecord: () => record,
 		});
 		try {
 			expect((await restored.ports.artifacts.readSolution(context)).candidates[0]!.id).toBe("chosen");
-			await writeSolution("excluded", "不可采用候选");
-			await expect(restored.ports.artifacts.readSolution(context)).rejects.toThrow("不是本轮 Team 可采用");
+			const invalid = JSON.stringify({
+				candidates: [{ id: "excluded", title: "不可采用", content: "不可采用候选" }],
+				recommendedCandidateId: "excluded",
+			});
+			await fs.writeFile(path.join(fixture.cwd, paths.solution), invalid);
+			await expect(restored.ports.artifacts.readSolution(context)).rejects.toThrow();
+			expect(restored.nativeSession("solution")).toBeUndefined();
 			expect(discussion).toHaveBeenCalledTimes(1);
 		} finally {
 			await restored.dispose();
@@ -671,8 +778,13 @@ test("solution Team uses the visible session model for participant slots and syn
 
 test("saved session references reopen native history without model calls", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "澄清需求。" }) });
-	await fixture.orchestrator.start("原始需求只保存在原生历史", "restored-native");
-	const saved = fixture.orchestrator.save();
+	const saved = await fixture.startNative(
+		"原始需求只保存在原生历史",
+		"restored-native",
+		"requirements",
+		undefined,
+		true,
+	);
 	const count = fixture.provider.requests.length;
 	await fixture.runtime.dispose();
 	const restored = await createSpecDrivenRuntime({
@@ -682,13 +794,8 @@ test("saved session references reopen native history without model calls", async
 		saved,
 	});
 	try {
-		const core = new SpecDrivenOrchestrator(restored.ports, {
-			...restored.options,
-			getUseTeam: () => false,
-			persist: async () => {},
-		});
-		await core.restore(saved);
-		expect(core.status().phase).toBe("requirements");
+		const context = { runId: saved.runId, generation: 2, signal: new AbortController().signal };
+		await restored.ports.agents.prepare("requirements", context, saved.sessions.requirements);
 		expect(restored.originalRequest()).toBe("原始需求只保存在原生历史");
 		expect(restored.nativeSession("requirements")?.sessionFile).toBe(saved.sessions.requirements?.sessionFile);
 		expect(fixture.provider.requests).toHaveLength(count);
@@ -696,7 +803,17 @@ test("saved session references reopen native history without model calls", async
 		const handoffs = native.messages.filter(
 			message => message.role === "custom" && message.customType === "dev-stage-context",
 		).length;
-		await core.converse("历史有效时直接追问");
+		await restored.ports.agents.run(
+			{
+				role: "requirements",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: saved.paths!.requirements,
+				feedback: "历史有效时直接追问",
+			},
+			context,
+		);
 		expect(
 			native.messages.filter(message => message.role === "custom" && message.customType === "dev-stage-context"),
 		).toHaveLength(handoffs);
@@ -710,13 +827,12 @@ test("saved session references reopen native history without model calls", async
 
 test("stage model selection survives native history restoration", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "澄清需求。" }) });
-	await fixture.orchestrator.start("恢复阶段模型", "restore-stage-model");
+	const saved = await fixture.startNative("恢复阶段模型", "restore-stage-model");
 	const stage = fixture.runtime.nativeSession("requirements")!;
 	const selected = fixture.registry.find("deepseek", "chat-b");
 	if (!selected) throw new Error("Fixture model unavailable");
 	await stage.setModel(selected);
 	await stage.sessionManager.flush();
-	const saved = fixture.orchestrator.save();
 	const count = fixture.provider.requests.length;
 	await fixture.runtime.dispose();
 	const restored = await createSpecDrivenRuntime({
@@ -726,12 +842,15 @@ test("stage model selection survives native history restoration", async () => {
 		saved,
 	});
 	try {
-		const core = new SpecDrivenOrchestrator(restored.ports, {
-			...restored.options,
-			getUseTeam: () => false,
-			persist: async () => {},
-		});
-		await core.restore(saved);
+		await restored.ports.agents.prepare(
+			"requirements",
+			{
+				runId: saved.runId,
+				generation: 2,
+				signal: new AbortController().signal,
+			},
+			saved.sessions.requirements,
+		);
 		expect(restored.nativeSession("requirements")?.model?.id).toBe("chat-b");
 		expect(fixture.session.model?.id).toBe("chat-a");
 		expect(fixture.provider.requests).toHaveLength(count);
@@ -742,8 +861,7 @@ test("stage model selection survives native history restoration", async () => {
 
 test("malformed stage journal preserves the run and recovers only on user continuation", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "继续澄清。" }) });
-	await fixture.orchestrator.start("原始需求", "malformed-native");
-	const saved = fixture.orchestrator.save();
+	const saved = await fixture.startNative("原始需求", "malformed-native");
 	const journal = saved.sessions.requirements?.sessionFile;
 	if (!journal) throw new Error("Expected persisted stage journal");
 	const damaged = "{invalid header\n";
@@ -757,17 +875,22 @@ test("malformed stage journal preserves the run and recovers only on user contin
 		saved,
 	});
 	try {
-		const core = new SpecDrivenOrchestrator(restored.ports, {
-			...restored.options,
-			getUseTeam: () => false,
-			persist: async () => {},
-		});
-		await core.restore(saved);
-		expect(core.status().phase).toBe("requirements");
-		expect(core.save().runId).toBe(saved.runId);
+		const context = { runId: saved.runId, generation: 2, signal: new AbortController().signal };
+		await restored.ports.agents.prepare("requirements", context, saved.sessions.requirements);
+		expect(restored.options.runId).toBe(saved.runId);
 		expect(fixture.provider.requests).toHaveLength(count);
 		expect(await fs.readFile(journal, "utf8")).toBe(damaged);
-		await core.converse("请继续");
+		await restored.ports.agents.run(
+			{
+				role: "requirements",
+				entry: false,
+				request: "",
+				files: [],
+				outputPaths: saved.paths!.requirements,
+				feedback: "请继续",
+			},
+			context,
+		);
 		const native = restored.nativeSession("requirements")!;
 		const recovered = native.messages.find(
 			message => message.role === "custom" && message.customType === "dev-history-recovery",
@@ -781,10 +904,9 @@ test("malformed stage journal preserves the run and recovers only on user contin
 	}
 }, 120_000);
 
-test("archived executing recovery prepares old roles without active change instructions or automatic turns", async () => {
+test("archived native recovery reads real relocated material without recreating the active source or automatic turns", async () => {
 	await using fixture = await consumer({ reply: () => ({ text: "恢复后的只读说明。" }) });
-	await fixture.orchestrator.start("归档前的原始需求", "archived-recovery");
-	const saved = fixture.orchestrator.save();
+	const saved = await fixture.startNative("归档前的原始需求", "archived-recovery", "requirements", undefined, true);
 	const archivedChangePath = "openspec/changes/archive/2026-10-26-archived-recovery";
 	const proposal = saved.paths!.requirements[0]!;
 	await fs.writeFile(path.join(fixture.cwd, proposal), "# 真实归档需求");
@@ -793,9 +915,8 @@ test("archived executing recovery prepares old roles without active change instr
 		path.join(fixture.cwd, "openspec/changes/archived-recovery"),
 		path.join(fixture.cwd, archivedChangePath),
 	);
-	saved.phase = "executing";
-	saved.closing = { synced: true, archivedChangePath };
-	saved.approvals.executor = { files: [], userReply: "原始验收" };
+	saved.phase = "pr";
+	saved.archivedChangePath = archivedChangePath;
 	const count = fixture.provider.requests.length;
 	await fixture.runtime.dispose();
 	for (const missing of [false, true]) {
@@ -808,18 +929,12 @@ test("archived executing recovery prepares old roles without active change instr
 			saved: recovery,
 		});
 		try {
-			const core = new SpecDrivenOrchestrator(restored.ports, {
-				...restored.options,
-				getUseTeam: () => false,
-				persist: async () => {},
-			});
-			await core.restore(recovery);
-			expect(core.status().phase).toBe("executing");
-			expect(core.status().closing).toEqual(saved.closing);
+			const context = { runId: saved.runId, generation: 2, signal: new AbortController().signal };
+			await restored.ports.agents.prepare("requirements", context, recovery.sessions.requirements);
 			expect(fixture.provider.requests).toHaveLength(count);
 			if (!missing) expect(restored.originalRequest()).toBe("归档前的原始需求");
 			else {
-				const context = { runId: saved.runId, generation: 1, signal: new AbortController().signal };
+				const continuation = { ...context, generation: 3 };
 				await restored.ports.agents.run(
 					{
 						role: "requirements",
@@ -829,7 +944,7 @@ test("archived executing recovery prepares old roles without active change instr
 						outputPaths: [],
 						feedback: "解释归档材料",
 					},
-					context,
+					continuation,
 				);
 				const native = restored.nativeSession("requirements")!;
 				const recovered = native.messages.find(
@@ -839,17 +954,12 @@ test("archived executing recovery prepares old roles without active change instr
 				expect(JSON.stringify(recovered)).toContain("# 真实归档需求");
 				expect(JSON.stringify(recovered)).toContain(archivedChangePath);
 			}
-			const closing = spyOn(restored.ports.artifacts, "close").mockResolvedValue({ archivedChangePath });
-			try {
-				const requestsBeforeRetry = fixture.provider.requests.length;
-				await core.next();
-				expect(core.status().phase).toBe("idle");
-				expect(closing).toHaveBeenCalledTimes(1);
-				expect(closing.mock.calls[0]![0].progress).toEqual(saved.closing);
-				expect(fixture.provider.requests).toHaveLength(requestsBeforeRetry);
-			} finally {
-				closing.mockRestore();
-			}
+			await expect(fs.stat(path.join(fixture.cwd, "openspec/changes/archived-recovery"))).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+			expect(await fs.readFile(path.join(fixture.cwd, archivedChangePath, "proposal.md"), "utf8")).toBe(
+				"# 真实归档需求",
+			);
 		} finally {
 			await restored.dispose();
 		}
@@ -1712,13 +1822,13 @@ test.each(["docs-zh-CN/requirements", "docs/requirements", "requirements"])(
 			await fs.mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
 			await fs.writeFile(path.join(cwd, file), content);
 		});
-		await fixture.orchestrator.start("手动提供业务文档，直接开发", "authority-discovery");
+		const saved = await fixture.startNative("确认业务后的需求阶段继续澄清", "authority-discovery");
 		const input = fixture.provider.requests
 			.map(rolePayload)
 			.find(item => item?.specDrivenRole === "requirements")?.input;
 		expect(input?.files).toEqual([{ path: file, content, version: artifactVersion(Buffer.from(content)) }]);
-		expect(fixture.orchestrator.save().sessions.business).toBeUndefined();
-		expect(fixture.orchestrator.save().approvals.business).toBeUndefined();
+		expect(saved.sessions.business).toBeUndefined();
+		expect(saved.approvals.business).toBeUndefined();
 		expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(content);
 	},
 	120_000,
@@ -1744,7 +1854,7 @@ test.each(["ambiguous", "empty", "unreadable"] as const)(
 							: Reflect.apply(originalStat, fs, [target, ...options])) as typeof fs.stat)
 				: undefined;
 		try {
-			await expect(fixture.orchestrator.start("新需求", "authority-rejected")).rejects.toThrow(
+			await expect(fixture.startNative("新需求", "authority-rejected")).rejects.toThrow(
 				failure === "ambiguous"
 					? "Ambiguous Markdown requirement authorities"
 					: failure === "empty"
@@ -1754,8 +1864,7 @@ test.each(["ambiguous", "empty", "unreadable"] as const)(
 		} finally {
 			stat?.mockRestore();
 		}
-		expect(fixture.orchestrator.status().phase).toBe("idle");
-		expect(fixture.orchestrator.save().approvals).toEqual({});
+		expect(fixture.runtime.sessionRefs().business).toBeUndefined();
 		expect(fixture.provider.requests).toEqual([]);
 		if (failure !== "empty") {
 			await expect(fs.stat(path.join(fixture.cwd, "openspec/changes/authority-rejected"))).rejects.toMatchObject({
@@ -2295,3 +2404,658 @@ test.each([true, false])(
 	},
 	120_000,
 );
+
+test("an idle native task descendant loses write permission immediately when its requirement merges or completes", async () => {
+	const facts: DevRequirementRecord = {
+		schemaVersion: 1,
+		requirementId: "descendant-boundary",
+		changeId: "descendant-boundary",
+		branch: "main",
+		stage: "executing",
+		lifecycle: "active",
+		materials: [],
+		decisions: [],
+		marks: {},
+		solutionBasis: null,
+		report: { development: null, st: null },
+		syncRevisions: [],
+		gitOperations: [],
+		pr: null,
+		testing: "not-started",
+		relatedRequirementIds: [],
+	};
+	const followup = "OMP_DESCENDANT_BOUNDARY_WRITE";
+	let dispatched = false;
+	await using fixture = await consumer(
+		{
+			reply(request) {
+				const index = request.messages.findLastIndex(
+					message => message.role === "user" && contentText(message.content) === followup,
+				);
+				if (index >= 0) {
+					if (!request.messages.slice(index + 1).some(message => message.role === "tool"))
+						return {
+							tool: { name: "write", args: { path: "business.ts", content: "unauthorized descendant change" } },
+						};
+					return { text: "The actual tool result is preserved." };
+				}
+				if (rolePayload(request)?.specDrivenRole === "executor" && !dispatched) {
+					dispatched = true;
+					return {
+						tool: {
+							name: "task",
+							args: {
+								context: "Return while retaining the native child session.",
+								tasks: [
+									{
+										name: "BoundaryKeeper",
+										task: "Return a result without changing files",
+										solutionSpace: "return only",
+									},
+								],
+							},
+						},
+					};
+				}
+				return { text: "Child is idle." };
+			},
+		},
+		undefined,
+		undefined,
+		{ getRecord: () => facts },
+	);
+	await fs.writeFile(path.join(fixture.cwd, "business.ts"), "original");
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	await fixture.runtime.ports.artifacts.initialize(facts.changeId, context);
+	await fixture.runtime.ports.agents.run(
+		{
+			role: "executor",
+			entry: true,
+			request: "Create the retained native task",
+			files: [],
+			outputPaths: ["completion.md"],
+		},
+		context,
+	);
+	const executor = fixture.runtime.nativeSession("executor")!;
+	const ref = AgentRegistry.global()
+		.list()
+		.find(item => item.parentId === executor.getAgentId() && item.kind === "sub");
+	if (!ref?.session || !isLocalAgentSession(ref.session)) throw new Error("Expected retained native child");
+	const child = ref.session;
+	for (const state of ["testing", "completed"] as const) {
+		facts.stage = "testing";
+		if (state === "completed") {
+			facts.lifecycle = "completed";
+			facts.testing = "tested";
+		}
+		const boundary = child.messages.length;
+		await child.prompt(followup, { expandPromptTemplates: false, runCommands: false });
+		const result = child.messages
+			.slice(boundary)
+			.find(message => message.role === "toolResult" && message.toolName === "write");
+		expect(result).toMatchObject({ isError: true });
+		expect(await fs.readFile(path.join(fixture.cwd, "business.ts"), "utf8")).toBe("original");
+	}
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test.each(["configuration", "failed", "cancelled"] as const)(
+	"a new %s Team attempt invalidates old solution proof in memory and on cold read",
+	async failure => {
+		const record: DevRequirementRecord = {
+			schemaVersion: 1,
+			requirementId: "team-attempt-proof",
+			changeId: "team-attempt-proof",
+			branch: "main",
+			stage: "solution",
+			lifecycle: "active",
+			materials: [],
+			decisions: [],
+			marks: {},
+			solutionBasis: null,
+			report: { development: null, st: null },
+			syncRevisions: [],
+			gitOperations: [],
+			pr: null,
+			testing: "not-started",
+			relatedRequirementIds: [],
+		};
+		const entered = Promise.withResolvers<void>();
+		const aborted = Promise.withResolvers<void>();
+		let retrying = false;
+		let wrote = false;
+		let solutionPath = "";
+		const content = JSON.stringify({
+			recommendedCandidateId: "original",
+			candidates: [{ id: "original", title: "Original", content: "# 完整旧方案\n\n真实原生写入的可采用方向。" }],
+		});
+		await using fixture = await consumer(
+			{
+				fail: () => (retrying && failure === "failed" ? "Team member unavailable in isolated fixture" : undefined),
+				async delay(_request, signal) {
+					if (!retrying || failure !== "cancelled") return;
+					entered.resolve();
+					await new Promise<void>(resolve => {
+						if (signal.aborted) resolve();
+						else signal.addEventListener("abort", () => resolve(), { once: true });
+					});
+					aborted.resolve();
+				},
+				reply: () => {
+					if (!wrote) {
+						wrote = true;
+						return { tool: { name: "write", args: { path: solutionPath, content } } };
+					}
+					return { text: "原生方案已形成；不代表人员选择。" };
+				},
+			},
+			undefined,
+			undefined,
+			{ getRecord: () => record },
+		);
+		const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		const paths = await fixture.runtime.ports.artifacts.initialize(record.changeId, context);
+		solutionPath = paths.solution;
+		const input = {
+			role: "solution" as const,
+			entry: true,
+			request: "形成可采用的完整方案",
+			files: [],
+			outputPaths: [paths.solution],
+			useTeam: false,
+		};
+		await fixture.runtime.ports.agents.run(input, context);
+		expect((await fixture.runtime.ports.artifacts.readSolution(context)).version).toBe(artifactVersion(content));
+		record.solutionBasis = await fixture.runtime.solutionBasis();
+		expect(record.solutionBasis?.source).toBe("single-agent");
+		cfgTeamMembers.set(
+			fixture.settings,
+			failure === "configuration" ? [] : Array.from({ length: 4 }, () => "deepseek/chat-a"),
+		);
+		retrying = true;
+		const attempted = fixture.runtime.ports.agents
+			.run({ ...input, useTeam: true }, { ...context, generation: 2 })
+			.then(
+				() => null,
+				(error: unknown) => error,
+			);
+		if (failure === "cancelled") {
+			await entered.promise;
+			await fixture.runtime.stop();
+			await aborted.promise;
+		}
+		expect(await attempted).toBeInstanceOf(Error);
+		expect(await fs.readFile(path.join(fixture.cwd, paths.solution), "utf8")).toBe(content);
+		await expect(fixture.runtime.ports.artifacts.readSolution(context)).rejects.toThrow();
+		const saved: SpecSavedRun = {
+			runId: context.runId,
+			phase: "solution",
+			changeId: record.changeId,
+			paths,
+			approvals: {},
+			sessions: fixture.runtime.sessionRefs(),
+		};
+		await fixture.runtime.dispose();
+		const restored = await createSpecDrivenRuntime({
+			session: fixture.session,
+			settings: fixture.settings,
+			cwd: fixture.cwd,
+			saved,
+			getRecord: () => record,
+		});
+		try {
+			await expect(restored.ports.artifacts.readSolution(context)).rejects.toThrow();
+			expect(restored.nativeSession("solution")).toBeUndefined();
+		} finally {
+			await restored.dispose();
+		}
+		expect(fixture.provider.failures).toEqual([]);
+	},
+	120_000,
+);
+
+test("inherited Dev providers preserve root callbacks and registry ownership through native clones, Team, reload and disposal", async () => {
+	const providerName = "deepseek";
+	const modelId = "native-owned-model";
+	const api = "spec-native-owned-api";
+	const baseUrl = "http://127.0.0.1:1/native-provider-no-network";
+	const key = "isolated-native-provider-key";
+	const grandchildObservation = "Native grandchild returned through the original provider";
+	const models = ["chat-a", "chat-b", modelId].map(id => ({
+		id,
+		name: `Native owned provider fixture ${id}`,
+		reasoning: false,
+		input: ["text" as const],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 8192,
+	}));
+	let instances = 0;
+	let calls = 0;
+	let authCalls = 0;
+	let parentDelegated = false;
+	let childDelegated = false;
+	let scoutDelegated = false;
+	const streamOwners: number[] = [];
+	const dynamicOwners: number[] = [];
+	const authKeys: Array<string | undefined> = [];
+	const payloadHooks: Array<{ owner: number; sessionId: string }> = [];
+	const shutdownDenied: unknown[] = [];
+	const streamFailures: unknown[] = [];
+	const config = (owner: number, url = baseUrl): ProviderConfig => ({
+		baseUrl: url,
+		apiKey: key,
+		api,
+		models,
+		fetchDynamicModels: async () => {
+			dynamicOwners.push(owner);
+			return models;
+		},
+		streamSimple(model, context, options) {
+			streamOwners.push(owner);
+			const stream = createAssistantMessageEventStream();
+			void (async () => {
+				authKeys.push(await resolveApiKeyOnce(options?.apiKey));
+				await options?.onPayload?.({ providerFixtureOwner: owner }, model, options?.signal);
+				const request: ModelRequest = {
+					model: model.id,
+					messages: [
+						...(context.systemPrompt ? [{ role: "system", content: context.systemPrompt }] : []),
+						...context.messages.map(message => ({
+							role: message.role === "toolResult" ? "tool" : message.role,
+							content: message.content,
+							tool_calls:
+								message.role === "assistant"
+									? message.content
+											.filter((part): part is ToolCall => part.type === "toolCall")
+											.map(part => ({
+												id: part.id,
+												type: "function",
+												function: { name: part.name, arguments: JSON.stringify(part.arguments) },
+											}))
+									: undefined,
+							tool_call_id: message.role === "toolResult" ? message.toolCallId : undefined,
+						})),
+					],
+					tools: context.tools?.map(tool => ({
+						type: "function",
+						function: { name: tool.name, parameters: tool.parameters },
+					})),
+				};
+				const users = request.messages
+					.filter(message => message.role === "user")
+					.map(message => contentText(message.content));
+				const assignment = (marker: string) =>
+					users.some(text => text.includes(`Complete assignment thoroughly:\n\n${marker}`));
+				const canDelegate = context.tools?.some(tool => tool.name.replace(/^_/u, "") === "task") === true;
+				const nestedResult = context.messages.findLast(
+					message => message.role === "toolResult" && message.toolName === "task",
+				);
+				let reply: Reply;
+				if (
+					request.messages.some(
+						message =>
+							message.role === "system" && contentText(message.content).includes("Label the delegated work"),
+					)
+				) {
+					reply = { text: "<title>Observe native provider</title>" };
+				} else if (teamStage(request)) reply = respond(request);
+				else if (assignment("OWNED_PROVIDER_GRANDCHILD")) reply = { text: grandchildObservation };
+				else if (assignment("OWNED_PROVIDER_CHILD") && nestedResult)
+					reply = { text: contentText(nestedResult.content) };
+				else if (canDelegate && assignment("OWNED_PROVIDER_CHILD") && !childDelegated) {
+					childDelegated = true;
+					reply = {
+						tool: {
+							name: "task",
+							args: {
+								context: "Retain inherited provider ownership in a grandchild.",
+								tasks: [
+									{
+										name: "ProviderGrandchild",
+										task: "OWNED_PROVIDER_GRANDCHILD",
+										solutionSpace: "return an ownership observation",
+									},
+								],
+							},
+						},
+					};
+				} else if (canDelegate && rolePayload(request)?.specDrivenRole === "executor" && !parentDelegated) {
+					parentDelegated = true;
+					reply = {
+						tool: {
+							name: "task",
+							args: {
+								context: "Retain inherited provider ownership in a child.",
+								tasks: [
+									{
+										name: "ProviderChild",
+										task: "OWNED_PROVIDER_CHILD",
+										solutionSpace: "delegate an observation",
+									},
+								],
+							},
+						},
+					};
+				} else if (canDelegate && rolePayload(request)?.specDrivenRole === "requirements" && !scoutDelegated) {
+					scoutDelegated = true;
+					reply = {
+						tool: {
+							name: "task",
+							args: {
+								context: "Use only the native read-only scout.",
+								tasks: [
+									{
+										agent: "scout",
+										name: "ProviderScout",
+										task: "Return an ownership observation.",
+										solutionSpace: "read-only observation",
+									},
+								],
+							},
+						},
+					};
+				} else reply = { text: "Native owned provider remains available." };
+				const requested = reply.tools ?? (reply.tool ? [reply.tool] : []);
+				const toolCalls: ToolCall[] = requested.map(tool => ({
+					type: "toolCall",
+					id: `owned-provider-${++calls}`,
+					name: tool.name,
+					arguments: tool.args,
+				}));
+				const message: AssistantMessage = {
+					...createAssistantMessage(reply.text ?? ""),
+					api,
+					provider: providerName,
+					model: model.id,
+					content: toolCalls.length ? toolCalls : [{ type: "text", text: reply.text ?? "" }],
+					stopReason: toolCalls.length ? "toolUse" : "stop",
+				};
+				stream.push({ type: "start", partial: message });
+				for (const [index, toolCall] of toolCalls.entries()) {
+					stream.push({ type: "toolcall_start", contentIndex: index, partial: message });
+					stream.push({ type: "toolcall_end", contentIndex: index, toolCall, partial: message });
+				}
+				stream.push({ type: "done", reason: toolCalls.length ? "toolUse" : "stop", message });
+			})().catch((error: unknown) => {
+				streamFailures.push(error);
+				const message: AssistantMessage = {
+					...createAssistantMessage(""),
+					api,
+					provider: providerName,
+					model: model.id,
+					stopReason: "error",
+					errorMessage: String(error),
+				};
+				stream.push({ type: "error", reason: "error", error: message });
+			});
+			return stream;
+		},
+	});
+	const extension: ExtensionFactory = pi => {
+		const owner = ++instances;
+		pi.registerProvider(providerName, config(owner));
+		pi.on("before_provider_request", (_event, context) => {
+			payloadHooks.push({ owner, sessionId: context.sessionManager.getSessionId() });
+		});
+		pi.registerCommand("provider-owned-mutation", {
+			description: "Exercise scoped provider ownership",
+			handler: async args => {
+				if (args === "unregister") pi.unregisterProvider(providerName);
+				else pi.registerProvider(args === "add" ? `${providerName}-addition` : providerName, config(owner));
+			},
+		});
+		pi.on("session_shutdown", () => {
+			if (owner === 1) return;
+			try {
+				pi.unregisterProvider(providerName);
+			} catch (error) {
+				shutdownDenied.push(error);
+			}
+		});
+	};
+	await using fixture = await consumer({}, undefined, {
+		extensions: [extension],
+		getApiKey: async () => {
+			authCalls++;
+			return key;
+		},
+	});
+	try {
+		const model = fixture.registry.find(providerName, modelId);
+		if (!model) throw new Error("Native root extension did not register its provider");
+		await fixture.session.setModelTemporary(model);
+		fixture.settings.setModelRole("default", `${providerName}/${modelId}`);
+		cfgTaskIsolationEnabled.set(fixture.settings, false);
+		cfgTaskMaxRecursionDepth.set(fixture.settings, 5);
+		cfgTeamMembers.set(
+			fixture.settings,
+			Array.from({ length: 4 }, () => `${providerName}/${modelId}`),
+		);
+		await fixture.session.prompt("Root provider before Dev.", { expandPromptTemplates: false, runCommands: false });
+		const rootId = fixture.session.sessionId;
+		expect(payloadHooks.filter(hook => hook.sessionId === rootId).map(hook => hook.owner)).toEqual([1]);
+		const root = fixture.session;
+		const devRegistry = root.modelRegistry;
+		const runtime = fixture.runtime;
+		const devStartedAt = streamOwners.length;
+		const context = { runId: runtime.options.runId, generation: 1, signal: new AbortController().signal };
+		const paths = await runtime.ports.artifacts.initialize("provider-ownership", context);
+		await runtime.ports.agents.run(
+			{ role: "executor", entry: true, request: "OWNED_PROVIDER_EXECUTOR", files: [], outputPaths: [paths.report] },
+			context,
+		);
+		expect(parentDelegated).toBe(true);
+		expect(childDelegated).toBe(true);
+		const stage = runtime.nativeSession("executor")!;
+		const delegated = stage.messages.filter(message => message.role === "toolResult" && message.toolName === "task");
+		expect(delegated.length).toBeGreaterThan(0);
+		expect(delegated.every(message => message.role === "toolResult" && message.isError !== true)).toBe(true);
+		expect(JSON.stringify(delegated)).toContain(grandchildObservation);
+		const rejectMutations = async () => {
+			const runner = stage.extensionRunner;
+			const command = runner?.getRegisteredCommands().find(item => item.name === "provider-owned-mutation");
+			if (!runner || !command) throw new Error("Expected actual native extension command");
+			for (const args of ["add", "redefine", "unregister"]) {
+				await expect(
+					Promise.resolve().then(() => command.handler(args, runner.createCommandContext())),
+				).rejects.toBeInstanceOf(Error);
+			}
+			expect(devRegistry.find(`${providerName}-addition`, modelId)).toBeUndefined();
+			expect(fixture.registry.find(`${providerName}-addition`, modelId)).toBeUndefined();
+		};
+		await rejectMutations();
+		await stage.reload();
+		await rejectMutations();
+		await stage.prompt("Provider after native Dev reload.", { expandPromptTemplates: false, runCommands: false });
+		await runtime.ports.agents.run(
+			{
+				role: "requirements",
+				entry: true,
+				request: "OWNED_PROVIDER_SCOUT",
+				files: [],
+				outputPaths: paths.requirements,
+			},
+			context,
+		);
+		expect(scoutDelegated).toBe(true);
+		expect(
+			runtime
+				.nativeSession("requirements")
+				?.messages.find(message => message.role === "toolResult" && message.toolName === "task"),
+		).toMatchObject({ isError: false });
+		await runtime.ports.agents.run(
+			{
+				role: "solution",
+				entry: true,
+				request: "Native Team provider ownership",
+				files: [],
+				outputPaths: [paths.solution],
+				useTeam: true,
+			},
+			context,
+		);
+		for (const change of ["new", "changed"] as const) {
+			await expect(
+				createAgentSession({
+					cwd: fixture.cwd,
+					agentDir: path.join(fixture.cwd, ".isolated-agent"),
+					settings: root.settings.overlay(),
+					model,
+					authStorage: devRegistry.authStorage,
+					modelRegistry: devRegistry,
+					sessionManager: SessionManager.inMemory(fixture.cwd),
+					extensionProviderOwnership: "inherited",
+					extensions: [
+						pi =>
+							pi.registerProvider(
+								change === "new" ? `${providerName}-new` : providerName,
+								config(999, change === "changed" ? `${baseUrl}/changed` : baseUrl),
+							),
+					],
+					contextFiles: [],
+					rules: [],
+					skills: [],
+					promptTemplates: [],
+					slashCommands: [],
+					disableExtensionDiscovery: true,
+					enableMCP: false,
+					enableLsp: false,
+					offline: true,
+					autoTitle: false,
+					bindProcessState: false,
+				}),
+			).rejects.toBeInstanceOf(Error);
+			expect(devRegistry.find(providerName, modelId)?.baseUrl).toBe(baseUrl);
+			expect(devRegistry.find(`${providerName}-new`, modelId)).toBeUndefined();
+		}
+		const beforeRefresh = dynamicOwners.length;
+		await devRegistry.refreshRuntimeProviders("online");
+		expect(dynamicOwners.length).toBeGreaterThan(beforeRefresh);
+		expect(dynamicOwners.slice(beforeRefresh).every(owner => owner === 1)).toBe(true);
+		await runtime.stop();
+		await runtime.dispose();
+		expect(streamOwners.length).toBeGreaterThan(devStartedAt);
+		expect(streamOwners.slice(devStartedAt).every(owner => owner === 1)).toBe(true);
+		const before = streamOwners.length;
+		await fixture.session.prompt("Root provider after Dev stop and disposal.", {
+			expandPromptTemplates: false,
+			runCommands: false,
+		});
+		expect(streamOwners.length).toBeGreaterThan(before);
+		expect(streamOwners.at(-1)).toBe(1);
+		expect(authCalls).toBeGreaterThan(0);
+		expect(authKeys.every(value => value === key)).toBe(true);
+		expect(payloadHooks.filter(hook => hook.sessionId === rootId).map(hook => hook.owner)).toEqual([1, 1]);
+		expect(shutdownDenied.length).toBeGreaterThan(0);
+		expect(shutdownDenied.every(error => error instanceof Error)).toBe(true);
+		expect(fixture.registry.find(providerName, modelId)?.baseUrl).toBe(baseUrl);
+		expect(streamFailures).toEqual([]);
+	} finally {
+		await fixture.runtime.dispose();
+		await fixture.session.dispose();
+		fixture.registry.clearSourceRegistrations("<inline-0>");
+	}
+}, 120_000);
+
+test("cold solution inspection uses real native proof before Next persists a basis, but never invents missing proof", async () => {
+	const record: DevRequirementRecord = {
+		schemaVersion: 1,
+		requirementId: "cold-native-solution",
+		changeId: "cold-native-solution",
+		branch: "main",
+		stage: "solution",
+		lifecycle: "active",
+		materials: [],
+		decisions: [],
+		marks: {},
+		solutionBasis: null,
+		report: { development: null, st: null },
+		syncRevisions: [],
+		gitOperations: [],
+		pr: null,
+		testing: "not-started",
+		relatedRequirementIds: [],
+	};
+	const content = JSON.stringify({
+		recommendedCandidateId: "native",
+		candidates: [
+			{ id: "native", title: "Native proof", content: "# 完整技术方案\n\n由本阶段真实原生工具形成的可采用方向。" },
+		],
+	});
+	let solutionPath = "";
+	let wrote = false;
+	await using fixture = await consumer(
+		{
+			reply: () => {
+				if (!wrote) {
+					wrote = true;
+					return { tool: { name: "write", args: { path: solutionPath, content } } };
+				}
+				return { text: "正式方案已写入，等待人员选择。" };
+			},
+		},
+		undefined,
+		undefined,
+		{ getRecord: () => record },
+	);
+	const context = { runId: fixture.runtime.options.runId, generation: 1, signal: new AbortController().signal };
+	const paths = await fixture.runtime.ports.artifacts.initialize(record.changeId, context);
+	solutionPath = paths.solution;
+	await fixture.runtime.ports.agents.run(
+		{
+			role: "solution",
+			entry: true,
+			request: "形成完整候选方案",
+			files: [],
+			outputPaths: [paths.solution],
+			useTeam: false,
+		},
+		context,
+	);
+	expect(record.solutionBasis).toBeNull();
+	const saved: SpecSavedRun = {
+		runId: context.runId,
+		phase: "solution",
+		changeId: record.changeId,
+		paths,
+		approvals: {},
+		sessions: fixture.runtime.sessionRefs(),
+	};
+	await fixture.runtime.dispose();
+	const requests = fixture.provider.requests.length;
+	const restored = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved,
+		getRecord: () => record,
+	});
+	try {
+		expect((await restored.ports.artifacts.readSolution(context)).version).toBe(artifactVersion(content));
+		expect(restored.nativeSession("solution")).toBeUndefined();
+		expect(fixture.provider.requests).toHaveLength(requests);
+		expect(record.solutionBasis).toBeNull();
+	} finally {
+		await restored.dispose();
+	}
+	const unavailable = structuredClone(saved);
+	if (!unavailable.sessions.solution) throw new Error("Expected a real native solution journal reference");
+	unavailable.sessions.solution.sessionFile = path.join(fixture.cwd, "unavailable-solution-history.jsonl");
+	const missing = await createSpecDrivenRuntime({
+		session: fixture.session,
+		settings: fixture.settings,
+		cwd: fixture.cwd,
+		saved: unavailable,
+		getRecord: () => record,
+	});
+	try {
+		await expect(missing.ports.artifacts.readSolution(context)).rejects.toThrow();
+		expect(missing.nativeSession("solution")).toBeUndefined();
+		expect(fixture.provider.requests).toHaveLength(requests);
+		expect(await fs.readFile(path.join(fixture.cwd, paths.solution), "utf8")).toBe(content);
+	} finally {
+		await missing.dispose();
+	}
+}, 120_000);

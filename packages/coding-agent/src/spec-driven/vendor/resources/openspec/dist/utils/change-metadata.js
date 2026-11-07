@@ -239,8 +239,8 @@ export function resolveSchemaForChange(changeDir, explicitSchema, projectRootOve
  * Missing metadata means "not declared"; a marker that cannot be honored
  * yields invalidReason so callers can say why.
  */
-export function readSkipSpecsMarker(changeDir) {
-    return readBooleanMarker(changeDir, 'skip_specs');
+export function readSkipSpecsMarker(changeDir, projectRoot) {
+    return readBooleanMarker(changeDir, 'skip_specs', projectRoot);
 }
 /**
  * Non-throwing read of the retire_capabilities marker, with exactly the
@@ -252,8 +252,8 @@ export function readSkipSpecsMarker(changeDir) {
  * (#1302). Declared rather than inferred because the delete is recoverable only
  * from git, so it is the author's call.
  */
-export function readRetireCapabilitiesMarker(changeDir) {
-    return readBooleanMarker(changeDir, 'retire_capabilities');
+export function readRetireCapabilitiesMarker(changeDir, projectRoot) {
+    return readBooleanMarker(changeDir, 'retire_capabilities', projectRoot);
 }
 /**
  * Shared implementation for the boolean change-metadata markers, keyed by field
@@ -272,7 +272,7 @@ export function readRetireCapabilitiesMarker(changeDir) {
 function unhonorable(reason) {
     return { declared: false, invalidReason: reason.replace(/[\u0000-\u001f\u007f]/g, '?') };
 }
-function readBooleanMarker(changeDir, key) {
+function readBooleanMarker(changeDir, key, projectRootOverride) {
     let raw;
     try {
         raw = fs.readFileSync(path.join(changeDir, METADATA_FILENAME), 'utf-8');
@@ -311,7 +311,7 @@ function readBooleanMarker(changeDir, key) {
         // resolveSchema alone would normalize and accept); resolveSchema then
         // proves the schema actually parses. Any failure fails closed.
         try {
-            const projectRoot = path.resolve(changeDir, '../../..');
+            const projectRoot = projectRootOverride ?? path.resolve(changeDir, '../../..');
             if (!listSchemas(projectRoot).includes(result.data.schema)) {
                 return unhonorable(`schema: unknown schema '${result.data.schema}'`);
             }

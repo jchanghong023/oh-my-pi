@@ -1,82 +1,43 @@
 import { expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { MARKER, REQUIREMENT, rolePayload } from "./provider-fixture";
-import { clearNativeDraft, entry, expectNativeFailure, tuiTest, withTui } from "./tui-harness";
+import { WorkbenchFixture } from "../dev-workbench/fixture";
 import { registerMaterialFailureTests } from "./tui-materials-cases";
 
 registerMaterialFailureTests(["requirements", "planner"]);
 
-test.skipIf(!tuiTest)(
-	"native candidate decisions reject missing and invalid IDs, detect changed approval bytes and back only one stage",
-	async () => {
-		await withTui({}, [120, 36], async ({ cwd, provider, tui, state, stage, idle }) => {
-			await tui("submit", "/dev");
-			await idle();
-			await tui("submit", `/dev new ${REQUIREMENT}`);
-			await stage("requirements");
-			for (const raw of ["可以", "继续", "同意"]) {
-				await tui("submit", raw);
-				await tui("expect", "text", `${MARKER}_REQUIREMENTS_DIALOGUE: ${raw}`, "--timeout", "30000");
-				await idle();
-				expect((await state()).run?.phase).toBe("requirements");
-				expect(provider.requests.some(request => rolePayload(request)?.specDrivenRole === "solution")).toBe(false);
-			}
-			const calls = provider.requests.length;
-			await tui("submit", "/dev next pure");
-			await tui("expect", "text", "只有方案阶段允许", "--timeout", "30000");
-			expect((await state()).run?.phase).toBe("requirements");
-			expect(provider.requests).toHaveLength(calls);
-			await clearNativeDraft(tui, "/dev next pure");
-			await tui("submit", "/dev next");
-			await stage("solution");
-			const solution = await state();
-			const solutionCalls = provider.requests.length;
-			const solutionPath = (entry(provider, "solution").outputPaths as string[])[0]!;
-			const completeSolution = await Bun.file(path.join(cwd, solutionPath)).text();
-			await Bun.write(
-				path.join(cwd, solutionPath),
-				JSON.stringify({ candidates: [], recommendedCandidateId: "pure" }),
-			);
-			await tui("submit", "/dev next pure");
-			await expectNativeFailure(tui, /at least one candidate/, solutionPath, "/dev next pure");
-			await idle();
-			expect(await state()).toEqual(solution);
-			expect(provider.requests).toHaveLength(solutionCalls);
-			await clearNativeDraft(tui);
-			await Bun.write(path.join(cwd, solutionPath), completeSolution);
-			for (const command of ["/dev next", "/dev next nonexistent"]) {
-				await tui("submit", command);
-				await tui("expect", "text", "请选择有效方案 ID", "--timeout", "30000");
-				expect(await state()).toEqual(solution);
-				expect(provider.requests).toHaveLength(solutionCalls);
-				await clearNativeDraft(tui, command);
-			}
-			const proposal = (entry(provider, "requirements").outputPaths as string[])[0]!;
-			const original = await Bun.file(path.join(cwd, proposal)).text();
-			await Bun.write(path.join(cwd, proposal), `${original}\nExternal approved material edit.\n`);
-			await tui("submit", "/dev next pure");
-			await tui("expect", "text", "变化", "--timeout", "30000");
-			expect(await state()).toEqual(solution);
-			expect(provider.requests).toHaveLength(solutionCalls);
-			await Bun.write(path.join(cwd, proposal), original);
-			await clearNativeDraft(tui, "/dev next pure");
-			await tui("submit", "/dev next normalizer");
-			const planning = (await stage("planning")).run!;
-			expect(entry(provider, "planner").candidateId).toBe("normalizer");
-			const beforeBack = provider.requests.length;
-			await tui("submit", "/dev back");
-			await stage("solution");
-			expect(provider.requests).toHaveLength(beforeBack);
-			expect((await state()).run?.sessions.planner?.sessionId).toBe(planning.sessions.planner?.sessionId);
-			expect((await state()).run?.approvals.solution).toBeUndefined();
-			await tui("submit", "/dev back");
-			await stage("requirements");
-			expect(provider.requests).toHaveLength(beforeBack);
-			expect(await Bun.file(path.join(cwd, proposal)).text()).toBe(original);
-			expect(await Bun.file(path.join(cwd, (entry(provider, "planner").outputPaths as string[])[0]!)).exists()).toBe(
-				true,
-			);
+test("candidate decisions reject absent and unknown IDs and Back preserves files without invoking models", async () => {
+	await using fixture = await WorkbenchFixture.create();
+	await fixture.start();
+	const solution = await fixture.developUntil("solution");
+	const id = solution.record.requirementId;
+	const count = fixture.provider.requests.length;
+	for (const intent of [{ kind: "next" }, { kind: "next", candidateId: "nonexistent" }]) {
+		const response = await fixture.response("action-preview", {
+			requirementId: id,
+			expectedRecordVersion: solution.recordVersion,
+			expectedStage: "solution",
+			intent,
+			gitTarget: null,
 		});
-	},
-	180_000,
-);
+		expect(response.ok).toBe(false);
+		expect(await response.text()).toMatch(/candidate|方案|选择/iu);
+		expect((await fixture.get(id)).recordVersion).toBe(solution.recordVersion);
+	}
+	expect(fixture.provider.requests).toHaveLength(count);
+	await fixture.act(solution, { kind: "next", candidateId: "normalizer" });
+	const planning = await fixture.stage(id, "planning");
+	expect(planning.record.decisions.at(-1)?.candidateId).toBe("normalizer");
+	const files = await Promise.all(
+		planning.record.materials.map(async material => ({
+			path: material.path,
+			bytes: await fs.readFile(path.join(fixture.cwd, material.path), "utf8"),
+		})),
+	);
+	const beforeBack = fixture.provider.requests.length;
+	const backed = await fixture.act(planning, { kind: "back" });
+	expect(backed.snapshot.record.stage).toBe("solution");
+	expect(backed.snapshot.record.decisions.some(decision => decision.stage === "solution")).toBe(false);
+	expect(fixture.provider.requests).toHaveLength(beforeBack);
+	for (const file of files) expect(await fs.readFile(path.join(fixture.cwd, file.path), "utf8")).toBe(file.bytes);
+}, 180_000);

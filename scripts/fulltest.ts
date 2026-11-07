@@ -197,7 +197,7 @@ export function fulltestCommands(options: FulltestOptions, home: string, sourceR
 				]
 			: []),
 		{
-			label: "smoke/isolated dev TUI PTY",
+			label: "smoke/isolated native TUI PTY",
 			argv: ["bun", "scripts/test-report-ui-smoke.ts", ...(options.debug ? ["--debug"] : [])],
 			cwd: gateRepoRoot,
 			env,
@@ -381,7 +381,7 @@ async function runFulltestObserved(
 	if (options.full) {
 		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=all-tests`);
 		console.log(
-			"coverage: unfiltered TypeScript, Rust, Python and SDK suites; repository scripts; all static checks; native build; dev-TUI smoke",
+			"coverage: unfiltered TypeScript, Rust, Python and SDK suites; repository scripts; all static checks; native build; native-TUI smoke",
 		);
 		console.log(
 			"excluded: real desktop input, separately authorized integrations, and platform-unsupported suites; test-defined skips still apply",
@@ -389,7 +389,7 @@ async function runFulltestObserved(
 	} else {
 		console.log(`platform=${process.platform}-${process.arch} bun=${Bun.version}; scope=fork-features`);
 		console.log(
-			"coverage: fork TypeScript and Rust feature suites; selected changed repository script tests; all static checks; native build; dev-TUI smoke",
+			"coverage: fork TypeScript and Rust feature suites; selected changed repository script tests; all static checks; native build; native-TUI smoke",
 		);
 		console.log(
 			"outside-fork scope: Python SDK and Robomp suites; upstream-only suites; real desktop input; live credential-backed integrations; standalone Go/Rust SDKs",
@@ -584,7 +584,7 @@ async function runFulltestObserved(
 				);
 			}
 			if (baseline && changedPaths.length === 0) {
-				tests = tests.filter(command => command.label !== "smoke/isolated dev TUI PTY");
+				tests = tests.filter(command => command.label !== "smoke/isolated native TUI PTY");
 				await recordNotSelected(
 					"ui-smoke/runner-stage",
 					["bun", "scripts/test-report-ui-smoke.ts"],
@@ -653,12 +653,12 @@ async function runFulltestObserved(
 			}
 		})();
 		const startupTests = tests.filter(command => command.label === "test/TypeScript startup suite");
-		const smokeTests = tests.filter(command => command.label === "smoke/isolated dev TUI PTY");
+		const smokeTests = tests.filter(command => command.label === "smoke/isolated native TUI PTY");
 		const otherTests = tests.filter(
 			command =>
 				command.label !== "test/TypeScript fork feature suite" &&
 				command.label !== "test/TypeScript startup suite" &&
-				command.label !== "smoke/isolated dev TUI PTY" &&
+				command.label !== "smoke/isolated native TUI PTY" &&
 				!command.label.startsWith("test/Rust"),
 		);
 		const testRun = (async () => {
@@ -687,7 +687,7 @@ async function runFulltestObserved(
 		await Promise.all([staticRun, testRun, rustRun, scriptRun]);
 		await attempt("other tests", () => runGateCommands(gate, otherTests, { concurrency: 1 }));
 		const trailing = fulltestTrailingWorkerAllocation(cpuBudget, smokeTests.length > 0);
-		const smokeRun = attempt("isolated dev TUI smoke", () =>
+		const smokeRun = attempt("isolated native TUI smoke", () =>
 			runGateCommands(
 				gate,
 				smokeTests.map(command => withBudget(command, trailing.smoke)),

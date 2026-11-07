@@ -212,6 +212,7 @@ export function buildRunnerDeps(
 		additionalDirectories: session.sessionManager.getAdditionalDirectories(),
 		settings,
 		modelRegistry,
+		extensionProviderOwnership: session.nativeChildCapabilities?.extensionProviderOwnership,
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),

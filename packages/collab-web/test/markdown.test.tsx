@@ -67,6 +67,15 @@ describe("Transcript Markdown", () => {
 		expect(html).toContain('href="https://example.com"');
 		expect(html).toContain('href="mailto:a@b.test"');
 		expect(html).toContain('href="#anchor"');
+		const externalRel: string[] = [];
+		new HTMLRewriter()
+			.on('a[href="https://example.com"]', {
+				element(element) {
+					externalRel.push(...(element.getAttribute("rel") ?? "").split(/\s+/u));
+				},
+			})
+			.transform(html);
+		expect(externalRel).toContain("noreferrer");
 	});
 
 	it("typesets every delimiter form and marks display math", () => {

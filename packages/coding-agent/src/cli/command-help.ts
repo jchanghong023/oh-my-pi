@@ -67,6 +67,10 @@ export const knowledgeHelp = {
 	description: "Manage persistent knowledge indexes (init/remove) or serve read-only queries over stdio (mcp)",
 } satisfies CommandMetadata;
 
+export const devHelp = {
+	description: "Open the browser Dev workbench and keep its native host running",
+} satisfies CommandMetadata;
+
 export const dryBalanceHelp = {
 	description: "Dry-run OAuth account balancing across random session ids",
 } satisfies CommandMetadata;

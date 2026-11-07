@@ -46,11 +46,12 @@ import type { McpConnectionStatusEvent } from "./startup-events";
 import { resolveMCPStartupTimeoutMs } from "./timeout";
 
 import type { MCPToolDetails } from "@oh-my-pi/pi-tui/tools/mcp";
-import { DeferredMCPTool, MCPTool, type MCPToolCallObserver } from "./tool-bridge";
+import { DeferredMCPTool, MCPTool, type MCPReconnectOptions, type MCPToolCallObserver } from "./tool-bridge";
 import type { MCPToolCache } from "./tool-cache";
 import { setGeneratedHeader } from "./transports/header-policy";
 import type {
 	MCPAuthChallenge,
+	MCPAuthInvocation,
 	MCPGetPromptResult,
 	MCPPrompt,
 	MCPRequestOptions,
@@ -243,7 +244,11 @@ export interface MCPDiscoverOptions {
 }
 
 /** Handles an MCP `WWW-Authenticate` challenge and returns refreshed config. */
-export type MCPAuthHandler = (serverName: string, challenge: MCPAuthChallenge) => Promise<MCPServerConfig | undefined>;
+export type MCPAuthHandler = (
+	serverName: string,
+	challenge: MCPAuthChallenge,
+	invocation?: MCPAuthInvocation,
+) => Promise<MCPServerConfig | undefined>;
 
 /** Whether a handshake rejection is the teardown abort of `signal`, not a failure that preceded it. */
 function isAbortedHandshake(signal: AbortSignal, error: unknown): boolean {
@@ -745,6 +750,11 @@ export class MCPManager implements MCPManagerApi {
 		this.#authHandler = handler;
 	}
 
+	/** Read the exact handler so an exclusive UI owner can restore it after releasing its route. */
+	getAuthHandler(): MCPAuthHandler | undefined {
+		return this.#authHandler;
+	}
+
 	/**
 	 * Discover and connect to all MCP servers from .mcp.json files.
 	 * Returns tools and any connection errors.
@@ -1043,8 +1053,7 @@ export class MCPManager implements MCPManagerApi {
 				.then(async ({ connection, serverTools }) => {
 					if (this.#pendingToolLoads.get(name) !== toolsPromise) return;
 					this.#pendingToolLoads.delete(name);
-					const reconnect = (options?: { authChallenge?: MCPAuthChallenge }) =>
-						this.reconnectServer(name, options);
+					const reconnect = (options?: MCPReconnectOptions) => this.reconnectServer(name, options);
 					const customTools = MCPTool.fromTools(connection, serverTools, reconnect, this.#observeToolCall(name));
 					this.#replaceServerTools(name, customTools);
 					await this.#notifyOwnerToolsChanged();
@@ -1126,7 +1135,7 @@ export class MCPManager implements MCPManagerApi {
 					if (!value) continue;
 					const { connection, serverTools } = value;
 					connectedServers.add(name);
-					const reconnect = () => this.reconnectServer(name);
+					const reconnect = (options?: MCPReconnectOptions) => this.reconnectServer(name, options);
 					this.#replaceServerTools(
 						name,
 						MCPTool.fromTools(connection, serverTools, reconnect, this.#observeToolCall(name)),
@@ -1142,7 +1151,7 @@ export class MCPManager implements MCPManagerApi {
 					const cached = cachedTools.get(name);
 					if (cached) {
 						const source = this.#sources.get(name);
-						const reconnect = () => this.reconnectServer(name);
+						const reconnect = (options?: MCPReconnectOptions) => this.reconnectServer(name, options);
 						this.#replaceServerTools(
 							name,
 							DeferredMCPTool.fromTools(
@@ -1197,17 +1206,20 @@ export class MCPManager implements MCPManagerApi {
 	 * it provoked lands, then its session sees every tool the server now serves.
 	 */
 	#observeToolCall(name: string): MCPToolCallObserver {
-		return toolCallId => {
+		return (toolCallId, signal) => {
 			const scope = this.#toolCallScopes.get(toolCallId) ?? OWNER_TOOL_SCOPE;
 			this.#inFlightToolCalls.set(name, (this.#inFlightToolCalls.get(name) ?? 0) + 1);
-			return async () => {
-				const remaining = (this.#inFlightToolCalls.get(name) ?? 1) - 1;
-				if (remaining > 0) this.#inFlightToolCalls.set(name, remaining);
-				else this.#inFlightToolCalls.delete(name);
-				// A `list_changed` sent during the call already started this refresh.
-				await this.#toolRefreshes.get(name)?.promise.catch(() => {});
-				this.#grantServerTools(name, scope);
-			};
+			return Object.assign(
+				async () => {
+					const remaining = (this.#inFlightToolCalls.get(name) ?? 1) - 1;
+					if (remaining > 0) this.#inFlightToolCalls.set(name, remaining);
+					else this.#inFlightToolCalls.delete(name);
+					// A `list_changed` sent during the call already started this refresh.
+					await this.#toolRefreshes.get(name)?.promise.catch(() => {});
+					this.#grantServerTools(name, scope);
+				},
+				{ invocation: { scope, toolCallId, signal } },
+			);
 		};
 	}
 
@@ -1681,7 +1693,7 @@ export class MCPManager implements MCPManagerApi {
 	 */
 	async reconnectServer(
 		name: string,
-		options?: { manual?: boolean; authChallenge?: MCPAuthChallenge },
+		options?: MCPReconnectOptions & { manual?: boolean },
 	): Promise<MCPServerConnection | null> {
 		if (options?.manual) {
 			this.#reconnectHistory.delete(name);
@@ -1694,7 +1706,13 @@ export class MCPManager implements MCPManagerApi {
 			return null;
 		}
 
-		return this.#trackReconnect(name, this.#doReconnect(name, { authChallenge: options?.authChallenge }));
+		return this.#trackReconnect(
+			name,
+			this.#doReconnect(name, {
+				authChallenge: options?.authChallenge,
+				invocation: options?.invocation,
+			}),
+		);
 	}
 
 	/**
@@ -1798,7 +1816,7 @@ export class MCPManager implements MCPManagerApi {
 
 	async #doReconnect(
 		name: string,
-		options: { authChallenge?: MCPAuthChallenge; scheduled?: boolean },
+		options: MCPReconnectOptions & { scheduled?: boolean },
 	): Promise<MCPServerConnection | null> {
 		const { authChallenge, scheduled = false } = options;
 		const oldConnection = this.#connections.get(name);
@@ -1814,7 +1832,7 @@ export class MCPManager implements MCPManagerApi {
 				return null;
 			}
 			try {
-				const refreshedConfig = await this.#authHandler(name, authChallenge);
+				const refreshedConfig = await this.#authHandler(name, authChallenge, options.invocation);
 				if (!refreshedConfig) return null;
 				config = refreshedConfig;
 				this.#serverConfigs.set(name, config);
@@ -1953,7 +1971,7 @@ export class MCPManager implements MCPManagerApi {
 		};
 		try {
 			const serverTools = await listTools(connection);
-			const reconnect = (options?: { authChallenge?: MCPAuthChallenge }) => this.reconnectServer(name, options);
+			const reconnect = (options?: MCPReconnectOptions) => this.reconnectServer(name, options);
 			const customTools = MCPTool.fromTools(connection, serverTools, reconnect, this.#observeToolCall(name));
 			void this.toolCache?.set(name, config, serverTools);
 			this.#replaceServerTools(name, customTools);
@@ -2050,7 +2068,7 @@ export class MCPManager implements MCPManagerApi {
 			if (callProvoked) this.#callProvokedToolRefreshes.add(name);
 			throw error;
 		}
-		const reconnect = () => this.reconnectServer(name);
+		const reconnect = (options?: MCPReconnectOptions) => this.reconnectServer(name, options);
 		const customTools = MCPTool.fromTools(connection, serverTools, reconnect, this.#observeToolCall(name));
 		if (callProvoked) this.#scopeAddedTools(name, customTools);
 		void this.toolCache?.set(name, connection.config, serverTools);

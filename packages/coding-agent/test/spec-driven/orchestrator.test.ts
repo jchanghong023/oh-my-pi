@@ -1,639 +1,779 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { artifactVersion, SpecArtifactStore } from "../../src/spec-driven/artifacts";
+import { syncDevRequirement } from "../../src/spec-driven/native-sync";
 import { hasExplicitRepairIntent, SpecDrivenOrchestrator } from "../../src/spec-driven/orchestrator";
 import type {
+	DevActionIntent,
+	DevDecision,
+	DevRequirementRecord,
+	DevStage,
 	SpecAgentInput,
-	SpecDocument,
+	SpecConversationRecipient,
 	SpecDrivenPorts,
-	SpecSavedRun,
-	SpecSolution,
 	SpecStageRole,
 } from "../../src/spec-driven/types";
 
-describe("explicit repair intent", () => {
-	it("distinguishes constrained repairs from questions, discussion and general prohibitions", () => {
-		for (const text of [
-			"repair closing 明确只移除同步路径障碍，不修改已批准材料",
-			"修复这个错误，不要修改公开 API",
-			"修复报告中区别不清的问题",
-			"请修正批准范围内的失败测试",
-			"请继续完成已批准计划",
-			"Please fix the obstruction, without changing the approved files",
-			"修复：仅修复归档目录阻塞，删除刚才夹具自有的标记文件和目标目录；不修改已验收材料、不执行业务实现、不运行同步归档，等待我 /dev next。",
-		]) {
-			expect(hasExplicitRepairIntent(text)).toBe(true);
-		}
-		for (const text of [
-			"修复这个错误是否会影响现有调用？先解释，不要改代码",
-			"修正这个问题需要改哪些文件",
-			"改正这个错误会影响哪些调用",
-			"不要修复，只解释",
-			"修复这个错误，不要改代码",
-			"修复这个错误，不修改已批准材料和代码",
-			"好的",
-		]) {
-			expect(hasExplicitRepairIntent(text)).toBe(false);
-		}
-	});
+const roots: string[] = [];
+afterEach(async () => {
+	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
-
-function fixture(saved?: SpecSavedRun) {
-	const document = (path: string): SpecDocument => ({ path, version: `${path}-v1`, content: `完整原文 ${path} Ω` });
-	const docs = {
-		business: document("business-requirements.md"),
-		proposal: document("proposal.md"),
-		spec: document("spec.md"),
-		solution: document("solutions.json"),
-		plan: document("plan.md"),
-		report: document("completion.md"),
+const business =
+	"# 业务需求：订单\n\n" +
+	[
+		"基本信息",
+		"业务背景与目标",
+		"实际使用场景与现状",
+		"期望结果",
+		"业务规则与边界",
+		"典型例子",
+		"业务验收预期",
+		"待确认事项",
+		"资料来源",
+		"业务确认与交接",
+	]
+		.map(heading => `## ${heading}\n已确认的完整业务事实 Ω。\n`)
+		.join("\n");
+const proposal =
+	"## Why\n\nThe sample capability currently lacks a stable, documented behavior contract, so callers cannot rely on consistent results across supported workflows.\n\n## What Changes\n\n- Add sample behavior.\n\n## Capabilities\n\n### New Capabilities\n- `sample`: sample behavior.\n\n### Modified Capabilities\n\nNone.\n\n## Impact\n\nSample public API.\n";
+const delta =
+	"## ADDED Requirements\n\n### Requirement: Sample\nThe system SHALL preserve sample behavior.\n\n#### Scenario: Works\n- **WHEN** the sample API is used\n- **THEN** the expected result is returned\n";
+const report =
+	"# 完成报告\n\n## 完成情况\n实现批准范围。\n\n## 验证结果\nUT 未运行：无授权。独立审查未运行。\n\n## 未完成项\nWindows 尚未验证，存在平台限制。\n";
+function record(): DevRequirementRecord {
+	return {
+		schemaVersion: 1,
+		requirementId: "sample-change",
+		changeId: "sample-change",
+		branch: "main",
+		stage: "business",
+		lifecycle: "active",
+		materials: [],
+		decisions: [],
+		marks: {},
+		solutionBasis: null,
+		report: { development: null, st: null },
+		syncRevisions: [],
+		gitOperations: [],
+		pr: null,
+		testing: "not-started",
+		relatedRequirementIds: [],
 	};
+}
+async function fixture() {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-eight-stages-"));
+	roots.push(cwd);
+	const businessPath = "docs/business-requirements/sample-change.md";
+	const initial = new SpecArtifactStore({ cwd, changeId: "sample-change" });
+	const paths = await initial.initialize(businessPath);
+	const store = new SpecArtifactStore({ cwd, changeId: "sample-change", paths });
+	await store.initialize();
+	const write = async (file: string, content: string) => {
+		await fs.mkdir(path.dirname(path.join(cwd, file)), { recursive: true });
+		await fs.writeFile(path.join(cwd, file), content);
+	};
+	await write(businessPath, business);
+	await write(paths.requirements[0]!, proposal);
+	const spec = paths.requirements[1]!.replace(/\*+/, "sample");
+	await write(spec, delta);
+	await write(
+		paths.solution,
+		JSON.stringify({
+			recommendedCandidateId: "one",
+			candidates: [{ id: "one", title: "One", content: "# 完整方案\n\n唯一方向及其风险。" }],
+		}),
+	);
+	await write(paths.plan, "# Sample Implementation Plan\n\nImplement the approved sample API.\n");
+	await write(paths.report, report);
+	const initialRecord = record();
+	initialRecord.materials = [
+		{ id: "business", kind: "business", path: businessPath, version: artifactVersion(business) },
+		{ id: "proposal", kind: "proposal", path: paths.requirements[0]!, version: artifactVersion(proposal) },
+		{ id: "delta:sample", kind: "delta", path: spec, version: artifactVersion(delta) },
+		...(await Promise.all(
+			(["solution", "plan", "report"] as const).map(async kind => ({
+				id: kind,
+				kind,
+				path: paths[kind],
+				version: artifactVersion(await fs.readFile(path.join(cwd, paths[kind]))),
+			})),
+		)),
+	];
 	const inputs: SpecAgentInput[] = [];
 	const events: string[] = [];
-	const reads: string[] = [];
-	const persisted: SpecSavedRun[] = [];
-	const settings = {
-		team: false,
-		saveFailure: false,
-		prepareFailure: false,
-		closeFailure: false,
-		runFailure: false,
-		sessionSuffix: "",
-		bad: "",
-		busy: false,
-		candidates: ["one"],
-		closeCalls: 0,
-		syncCalls: 0,
-	};
-	let onRead: ((name: keyof typeof docs) => void) | undefined;
-	const sessions = new Set<SpecStageRole>();
-	const read = (name: keyof typeof docs) => {
-		reads.push(name);
-		onRead?.(name);
-		if (settings.bad === name) throw new Error(`${docs[name].path}: invalid structure`);
-		return structuredClone(docs[name]);
-	};
+	const persisted: DevRequirementRecord[] = [];
+	const refs: Partial<Record<SpecStageRole, SpecConversationRecipient>> = {};
+	const settings = { saveFailure: false, prepareFailure: false, busy: false, team: false, closeCalls: 0 };
 	const ports: SpecDrivenPorts = {
 		agents: {
 			async prepare(role) {
 				events.push(`prepare:${role}`);
 				if (settings.prepareFailure) throw new Error("prepare failed");
-				sessions.add(role);
+				refs[role] = { role, actorId: role, sessionId: `session-${role}` };
 			},
-			recipient: role =>
-				sessions.has(role)
-					? {
-							role,
-							actorId: role,
-							sessionId: `session-${role}${settings.sessionSuffix}`,
-							sessionFile: `${role}${settings.sessionSuffix}.jsonl`,
-						}
-					: undefined,
-			originalRequest: () => "原始需求 Ω",
+			recipient: role => refs[role],
+			originalRequest: () => "",
 			async run(input) {
-				events.push(`run:${input.role}`);
 				inputs.push(structuredClone(input));
-				if (settings.runFailure) throw new Error("provider failed");
-				return { text: "同意，完成" };
+				events.push(`run:${input.role}`);
+				return { text: "native reply, not approval" };
+			},
+			async solutionBasis(solution) {
+				return {
+					solutionVersion: solution.version,
+					candidateIds: solution.candidates.map(item => item.id),
+					usableCandidateIds: solution.candidates.map(item => item.id),
+					source: "single-agent",
+					sourceSessionId: "session-solution",
+					sourceEntryIds: ["native-result"],
+				};
 			},
 		},
 		artifacts: {
-			async initialize(_changeId, _context, businessPath) {
-				return {
-					...(businessPath ? { business: businessPath } : {}),
-					requirements: [docs.proposal.path, docs.spec.path],
-					solution: docs.solution.path,
-					plan: docs.plan.path,
-					report: docs.report.path,
-				};
-			},
-			async readBusiness() {
-				return read("business");
-			},
-			async readRequirements() {
-				return { files: [read("proposal"), read("spec")], version: "requirements-v1" };
-			},
-			async readSolution() {
-				return {
-					...read("solution"),
-					candidates: settings.candidates.map(id => ({ id, title: id, content: `完整方案 ${id}` })),
-					recommendedCandidateId: settings.candidates[0]!,
-				};
-			},
-			async readPlan() {
-				return read("plan");
-			},
-			async readReport() {
-				return read("report");
-			},
-			async checkVersions(files) {
-				const changed = files
-					.filter(file => !Object.values(docs).some(doc => doc.path === file.path && doc.version === file.version))
-					.map(file => ({ path: file.path, reason: "bytes changed" }));
-				return { matches: !changed.length, changed };
-			},
+			initialize: (_id, _context, file) => store.initialize(file),
+			readBusiness: () => store.readBusiness(businessPath),
+			readRequirements: () => store.readRequirements(),
+			readSolution: () => store.readSolution(),
+			readPlan: () => store.readPlan(),
+			readReport: () => store.readReport(),
+			checkVersions: (files, archived) => store.checkVersions(files, archived),
 			async close(input) {
 				settings.closeCalls++;
-				if (!input.progress?.synced) {
-					settings.syncCalls++;
-					await input.onProgress?.({ synced: true });
-				}
-				if (settings.closeFailure) throw new Error("archive failed");
-				await input.onProgress?.({ synced: true, archivedChangePath: "archive/change" });
-				return { archivedChangePath: "archive/change" };
+				return store.close(input);
 			},
 		},
 	};
 	const core = new SpecDrivenOrchestrator(ports, {
-		runId: saved?.runId ?? "run",
+		record: initialRecord,
+		paths,
 		getUseTeam: () => settings.team,
-		async persist(run) {
-			events.push(`save:${run.phase}`);
+		async persist(value) {
+			events.push(`save:${value.stage}`);
 			if (settings.saveFailure) throw new Error("disk full");
-			persisted.push(structuredClone(run));
+			persisted.push(structuredClone(value));
 		},
-		onStatusChange: status => events.push(`notify:${status.phase}`),
+		getSessions: () => refs,
+		persistSessions: async () => {},
 		assertTransitionAllowed() {
 			if (settings.busy) throw new Error("native work pending");
 		},
 	});
-	return {
-		core,
-		docs,
-		inputs,
-		reads,
-		events,
-		persisted,
-		settings,
-		onRead(callback: typeof onRead) {
-			onRead = callback;
-		},
-	};
-}
-
-describe("optional business delivery", () => {
-	it("hands off confirmed business bytes, invalidates changed approval and returns only on the chosen path", async () => {
-		const f = fixture();
-		await f.core.startBusiness("业务目标", "change", f.docs.business.path);
-		expect(f.core.status().phase).toBe("business");
-		await f.core.next(undefined, "/dev next");
-		expect(f.inputs.at(-1)?.files).toEqual([f.docs.business]);
-		expect(f.core.save().approvals.business?.userReply).toBe("/dev next");
-		f.docs.business.version = "changed";
-		await expect(f.core.next()).rejects.toThrow("已批准材料发生变化");
-		await f.core.back();
-		expect(f.core.status().phase).toBe("business");
-		expect(f.core.save().approvals.business).toBeUndefined();
-		const direct = fixture();
-		await direct.core.start("开发目标", "direct");
-		await expect(direct.core.back()).rejects.toThrow("不能回退");
-	});
-
-	it("finishes business without development or archive and permits another flow", async () => {
-		const f = fixture();
-		await f.core.startBusiness("仅交付文档", "change", f.docs.business.path);
-		f.settings.bad = "business";
-		await expect(f.core.finishBusiness()).rejects.toThrow("invalid structure");
-		expect(f.core.status().phase).toBe("business");
-		f.settings.bad = "";
-		f.settings.saveFailure = true;
-		await expect(f.core.finishBusiness()).rejects.toThrow("disk full");
-		expect(f.core.status().businessCompleted).toBeUndefined();
-		f.settings.saveFailure = false;
-		await f.core.finishBusiness();
-		expect(f.core.status().phase).toBe("idle");
-		expect(f.core.status().businessCompleted).toBe(true);
-		expect(f.events).not.toContain("prepare:requirements");
-		expect(f.settings.closeCalls).toBe(0);
-		await f.core.start("后续开发", "next-change");
-		expect(f.core.status().phase).toBe("requirements");
-	});
-});
-async function execution(f: { core: SpecDrivenOrchestrator }) {
-	await f.core.start("原始需求 Ω", "change");
-	await f.core.next();
-	await f.core.next();
-	await f.core.next();
-}
-
-describe("explicit Dev file decisions", () => {
-	it("advances four times only and closes without another model call", async () => {
-		const f = fixture();
-		await execution(f);
-		expect(f.core.status().phase).toBe("executing");
-		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner", "executor"]);
-		expect(f.settings.closeCalls).toBe(0);
-		await f.core.next();
-		expect(f.core.status().phase).toBe("idle");
-		expect(f.inputs).toHaveLength(4);
-	});
-	it("never reads structure on stage replies or ordinary agreement", async () => {
-		const f = fixture();
-		f.settings.bad = "proposal";
-		await f.core.start("原始需求 Ω", "change");
-		await f.core.converse("同意，继续");
-		expect(f.reads).toEqual([]);
-		expect(f.core.status().phase).toBe("requirements");
-		await expect(f.core.next()).rejects.toThrow("proposal.md");
-		expect(f.core.status().phase).toBe("requirements");
-		expect(f.core.save().approvals).toEqual({});
-	});
-	it("hands complete files and exact selection text to the planner", async () => {
-		const f = fixture();
-		await f.core.start("原始需求 Ω", "change");
-		await f.core.next(undefined, "需求决定原文\n Ω ");
-		const raw = " /dev next one\n 保留 Ω ";
-		await f.core.next("one", raw);
-		const solution: SpecSolution = {
-			...f.docs.solution,
-			candidates: [{ id: "one", title: "one", content: "完整方案 one" }],
-			recommendedCandidateId: "one",
+	let operation = 0;
+	async function act(intent: DevActionIntent, userReply = "  人员原始决定\n保留空白 Ω  ") {
+		const inspected = await core.inspect(intent);
+		const current = core.record();
+		const decision: DevDecision = {
+			operationId: `operation-${++operation}`,
+			stage: current.stage,
+			actor: { name: "人员", source: "local" },
+			at: "2026-11-07T12:00:00.000Z",
+			userReply,
+			files: inspected.files,
+			...(inspected.candidateId ? { candidateId: inspected.candidateId } : {}),
 		};
-		expect(f.inputs[2].files).toEqual([f.docs.proposal, f.docs.spec, solution]);
-		expect(f.inputs[2].userReply).toBe(raw);
-		expect(f.inputs[2].candidateId).toBe("one");
-	});
-	it("passes all alternatives and the recommendation while respecting a different user selection", async () => {
-		const f = fixture();
-		f.settings.candidates = ["one", "two"];
-		await f.core.start("原始需求", "change");
-		await f.core.next();
-		await f.core.next("two", "/dev next two");
-		expect(f.inputs[2].files.at(-1)).toMatchObject({
-			candidates: [
-				{ id: "one", title: "one", content: "完整方案 one" },
-				{ id: "two", title: "two", content: "完整方案 two" },
-			],
-			recommendedCandidateId: "one",
-		});
-		expect(f.inputs[2].candidateId).toBe("two");
-		expect(f.inputs[2].userReply).toBe("/dev next two");
-	});
-	it("hands approved executor originals, raw decisions and report path without narrowing business scope", async () => {
-		const f = fixture();
-		await f.core.start("原始需求 Ω", "change");
-		await f.core.next(undefined, "需求决定 Ω");
-		await f.core.next("one", "方案决定 Ω");
-		await f.core.next(undefined, "计划决定 Ω");
-		expect(f.inputs.at(-1)).toMatchObject({
-			role: "executor",
-			request: "原始需求 Ω",
-			files: [
-				f.docs.proposal,
-				f.docs.spec,
-				{
-					...f.docs.solution,
-					candidates: [{ id: "one", title: "one", content: "完整方案 one" }],
-					recommendedCandidateId: "one",
-				},
-				f.docs.plan,
-			],
-			userReply: "计划决定 Ω",
-			decisions: { requirements: "需求决定 Ω", solution: "方案决定 Ω", planner: "计划决定 Ω" },
-			candidateId: "one",
-			outputPaths: ["completion.md"],
-		});
-	});
-	for (const phase of ["solution", "planning", "executing"] as const) {
-		it(`rejects requirement bytes changed during ${phase} reads without approving, handing off or closing`, async () => {
-			const f = fixture();
-			await f.core.start("request", "change");
-			await f.core.next();
-			if (phase !== "solution") await f.core.next();
-			if (phase === "executing") await f.core.next();
-			const before = f.core.save();
-			const runs = f.inputs.length;
-			f.onRead(name => {
-				if (name === "proposal") {
-					f.docs.spec.version = "spec-v2";
-					f.docs.spec.content = "unapproved v2";
-				}
-			});
-			await expect(f.core.next()).rejects.toThrow("重新确认");
-			expect(f.core.save()).toEqual(before);
-			expect(f.inputs).toHaveLength(runs);
-			expect(f.settings.closeCalls).toBe(0);
-			expect(f.core.status().phase).toBe(phase);
-		});
+		if (intent.kind === "mark" || intent.kind === "set-test-state" || intent.kind === "link-fix") {
+			core.replaceRecord(await core.decide(current, intent, decision));
+		} else await core.execute(intent, decision);
+		return decision;
 	}
-	for (const material of ["solution", "plan"] as const) {
-		it(`rejects ${material} bytes changed after the approval check at final acceptance`, async () => {
-			const f = fixture();
-			await execution(f);
-			const before = f.core.save();
-			f.onRead(name => {
-				if (name === material) f.docs[material].version = "unapproved-v2";
-			});
-			await expect(f.core.next()).rejects.toThrow("重新确认");
-			expect(f.core.save()).toEqual(before);
-			expect(f.settings.closeCalls).toBe(0);
-		});
+	async function through(stage: DevStage) {
+		while (core.record().stage !== stage) await act({ kind: "next" });
 	}
-	it("compares actual handoff versions even when disk versions return to approved bytes after the read", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		await f.core.next();
-		const original = structuredClone(f.docs.proposal);
-		f.onRead(name => {
-			if (name === "proposal") f.docs.proposal.version = "transient-unapproved-v2";
-			if (name === "spec") Object.assign(f.docs.proposal, original);
-		});
-		await expect(f.core.next()).rejects.toThrow("重新确认");
-		expect((await f.core.checkApproved()).matches).toBe(true);
-		expect(f.inputs).toHaveLength(2);
-		expect(f.core.status().phase).toBe("solution");
-	});
-	it("clears a recovered native failure after successful conversation but retains approval mismatch", async () => {
-		const f = fixture();
-		await execution(f);
-		f.settings.prepareFailure = true;
-		await expect(f.core.back()).rejects.toThrow("prepare failed");
-		expect(f.core.status().blockedReason).toBe("prepare failed");
-		f.settings.prepareFailure = false;
-		await f.core.converse("重试原生对话");
-		expect(f.core.status().blockedReason).toBeUndefined();
-		f.docs.spec.version = "changed";
-		await expect(f.core.next()).rejects.toThrow("重新确认");
-		const blocked = f.core.status().blockedReason;
-		await f.core.converse("解释材料变化");
-		expect(f.core.status().blockedReason).toBe(blocked);
-	});
-	it("defaults a single candidate but rejects invalid and missing multi-candidate IDs", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		await f.core.next();
-		await expect(f.core.next("missing")).rejects.toThrow("有效方案 ID");
-		f.settings.candidates = ["one", "two"];
-		await expect(f.core.next()).rejects.toThrow("有效方案 ID");
-		expect(f.core.status().phase).toBe("solution");
-		await f.core.next("two");
-		expect(f.core.status().selection?.candidateId).toBe("two");
-	});
-	it("rejects stage-inapplicable parameters and native unsettled work", async () => {
-		const f = fixture();
-		await expect(f.core.next()).rejects.toThrow("/dev new");
-		await f.core.start("request", "change");
-		await expect(f.core.next("one")).rejects.toThrow("仅方案阶段");
-		f.settings.busy = true;
-		await expect(f.core.next()).rejects.toThrow("native work pending");
-		expect(f.core.status().phase).toBe("requirements");
-	});
-	it("checks approved bytes without changing phase or decisions", async () => {
-		const f = fixture();
-		await execution(f);
-		const before = f.core.save();
-		f.docs.spec.version = "changed";
-		f.reads.length = 0;
-		expect((await f.core.checkApproved()).matches).toBe(false);
-		await expect(f.core.next()).rejects.toThrow("重新确认");
-		await f.core.converse("解释不一致原因");
-		expect(f.inputs.at(-1)?.readOnly).toBe(true);
-		await expect(f.core.converse("修复", undefined, undefined, "repair")).rejects.toThrow("重新确认");
-		expect(f.core.save()).toEqual(before);
-		expect(f.core.status().phase).toBe("executing");
-		expect(f.reads).toEqual([]);
-	});
-	it("backs only one stage, revokes target approval, and runs no work", async () => {
-		const f = fixture();
-		await execution(f);
-		const count = f.inputs.length;
-		await f.core.back();
-		expect(f.core.status().phase).toBe("planning");
-		expect(Object.keys(f.core.save().approvals)).toEqual(["requirements", "solution"]);
-		await f.core.back();
-		expect(f.core.status().phase).toBe("solution");
-		expect(Object.keys(f.core.save().approvals)).toEqual(["requirements"]);
-		await f.core.back();
-		expect(f.core.status().phase).toBe("requirements");
-		await expect(f.core.back()).rejects.toThrow("不能回退");
-		expect(f.inputs).toHaveLength(count);
-	});
-	it("prepares and saves before publishing and running", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		expect(f.events.slice(0, 4)).toEqual([
-			"prepare:requirements",
-			"save:requirements",
-			"notify:requirements",
-			"run:requirements",
-		]);
-		f.settings.saveFailure = true;
-		await expect(f.core.next()).rejects.toThrow("disk full");
-		expect(f.core.status().phase).toBe("requirements");
-		expect(f.inputs).toHaveLength(1);
-		expect(f.core.save().approvals).toEqual({});
-	});
-	it("does not change phase or call a model when session preparation fails", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		f.settings.prepareFailure = true;
-		await expect(f.core.next()).rejects.toThrow("prepare failed");
-		expect(f.core.status().phase).toBe("requirements");
-		expect(f.inputs).toHaveLength(1);
-	});
-	it("uses one Team configuration source and never reruns Team for conversation", async () => {
-		const f = fixture();
-		f.settings.team = true;
-		await f.core.start("request", "change");
-		await f.core.next();
-		expect(f.inputs[1].useTeam).toBe(true);
-		f.reads.length = 0;
-		await f.core.converse("原始追问");
-		expect(f.inputs[2]).toMatchObject({ entry: false, feedback: "原始追问", files: [], request: "", useTeam: false });
-		expect(f.reads).toEqual([]);
-	});
-	it("lets the user explicitly accept a report disclosing failed and unverified work", async () => {
-		const f = fixture();
-		await execution(f);
-		f.docs.report.content =
-			"# 完成报告\n\n## 完成情况\n部分实施。\n\n## 验证结果\n测试失败，审查未运行。\n\n## 未完成项\n修复测试并完成审查。";
-		await f.core.observeReport();
-		expect(f.core.status().awaitingAcceptance).toBe(true);
-		await f.core.converse("解释验证限制");
-		expect(f.inputs.at(-1)?.readOnly).toBe(true);
-		const modelCalls = f.inputs.length;
-		await f.core.next(undefined, "/dev next 接受已披露的限制");
-		expect(f.settings.closeCalls).toBe(1);
-		expect(f.inputs).toHaveLength(modelCalls);
-		expect(f.core.save().approvals.executor?.userReply).toBe("/dev next 接受已披露的限制");
-		expect(f.core.status().phase).toBe("idle");
-	});
-	it("marks report writes without structure reads and revokes stale report eligibility on business repair", async () => {
-		const f = fixture();
-		await execution(f);
-		f.reads.length = 0;
-		await f.core.observeReport();
-		expect(f.reads).toEqual([]);
-		await f.core.converse("解释验证限制");
-		expect(f.inputs.at(-1)?.readOnly).toBe(true);
-		await f.core.converse("修复范围内缺陷", undefined, undefined, "repair");
-		expect(f.core.status().awaitingAcceptance).toBe(true);
-		expect(f.core.save().reportNeedsUpdate).toBeUndefined();
-		await f.core.beginRepair();
-		expect(f.core.status().awaitingAcceptance).toBe(false);
-		await expect(f.core.next()).rejects.toThrow("更新完成报告");
-		await f.core.observeReport();
-		await f.core.next();
-		expect(f.core.status().phase).toBe("idle");
-	});
-	it("blocks back when a failed sync left unrestored side effects without an archive", async () => {
-		const f = fixture();
-		await execution(f);
-		const saved = f.core.save();
-		saved.closing = { sideEffects: { paths: ["openspec/specs/example/spec.md"], diagnostic: "rollback failed" } };
-		const restored = fixture(saved);
-		await restored.core.restore(saved);
-		await expect(restored.core.back()).rejects.toThrow("实际结果");
-		expect(restored.core.status().phase).toBe("executing");
-	});
-	it("preserves acceptance and actual closing progress, keeps executor conversation, retries remaining work", async () => {
-		const f = fixture();
-		await execution(f);
-		f.settings.closeFailure = true;
-		await expect(f.core.next()).rejects.toThrow("archive failed");
-		const accepted = f.core.save().approvals.executor;
-		expect(f.core.currentRole()).toBe("executor");
-		expect(f.core.save().closing).toEqual({ synced: true });
-		await expect(f.core.back()).rejects.toThrow("实际结果");
-		await f.core.converse("解释收尾错误");
-		expect(f.inputs.at(-1)?.readOnly).toBe(true);
-		await f.core.converse("修复直接收尾故障", undefined, undefined, "repair");
-		await f.core.beginRepair();
-		expect(f.core.save().approvals.executor).toEqual(accepted);
-		f.settings.closeFailure = false;
-		const modelCalls = f.inputs.length;
-		await f.core.next(undefined, "重试，不重新验收");
-		expect(f.settings.syncCalls).toBe(1);
-		expect(f.inputs).toHaveLength(modelCalls);
-		expect(f.core.save().approvals.executor).toEqual(accepted);
-	});
-	it("refuses changed accepted material during closing without losing progress", async () => {
-		const f = fixture();
-		await execution(f);
-		f.settings.closeFailure = true;
-		await expect(f.core.next()).rejects.toThrow();
-		f.docs.report.version = "external-change";
-		await expect(f.core.next()).rejects.toThrow("重新确认");
-		expect(f.settings.closeCalls).toBe(1);
-		expect(f.core.status().phase).toBe("executing");
-		expect(f.core.save().closing?.synced).toBe(true);
-	});
-	it("restores native session references without models, structure reads, or stored bodies", async () => {
-		const f = fixture();
-		await execution(f);
-		const saved = f.core.save();
-		expect(JSON.stringify(saved)).not.toContain("完整原文");
-		expect(JSON.stringify(saved)).not.toContain("原始需求");
-		const restored = fixture(saved);
-		await restored.core.restore(saved);
-		expect(restored.core.status().phase).toBe("executing");
-		expect(restored.core.recipient()?.sessionFile).toBe("executor.jsonl");
-		expect(restored.inputs).toEqual([]);
-		expect(restored.reads).toEqual([]);
-	});
-	it("restores mismatched approvals without clearing decisions or running work", async () => {
-		const f = fixture();
-		await execution(f);
-		const saved = f.core.save();
-		const restored = fixture(saved);
-		restored.docs.spec.version = "changed";
-		await restored.core.restore(saved);
-		expect(restored.core.status().blockedReason).toContain("bytes changed");
-		expect(restored.core.save().approvals).toEqual(saved.approvals);
-		expect(restored.inputs).toEqual([]);
-	});
-	it("resumes only remaining closing work after restoration without reading structure", async () => {
-		const f = fixture();
-		await execution(f);
-		f.settings.closeFailure = true;
-		await expect(f.core.next()).rejects.toThrow("archive failed");
-		const saved = f.core.save();
-		const restored = fixture(saved);
-		await restored.core.restore(saved);
-		await restored.core.next();
-		expect(restored.reads).toEqual([]);
-		expect(restored.inputs).toEqual([]);
-		expect(restored.settings.syncCalls).toBe(0);
-		expect(restored.settings.closeCalls).toBe(1);
-		expect(restored.core.status().phase).toBe("idle");
-	});
-	it("sends native attachments and busy follow-ups without a Dev queue", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		f.settings.busy = true;
-		const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-		await f.core.converse("  原始输入 Ω\n", images, ["https://example.test/image.png"]);
-		expect(f.inputs.at(-1)).toMatchObject({
-			entry: false,
-			feedback: "  原始输入 Ω\n",
-			images,
-			imageLinks: ["https://example.test/image.png"],
-			files: [],
-			request: "",
-			useTeam: false,
-		});
-		expect(f.reads).toEqual([]);
-		expect(f.core.save().phase).toBe("requirements");
-	});
-	it("retains the saved target phase when native model work fails after entry", async () => {
-		const f = fixture();
-		await f.core.start("request", "change");
-		f.settings.runFailure = true;
-		await expect(f.core.next()).rejects.toThrow("provider failed");
-		expect(f.core.status().phase).toBe("solution");
-		expect(f.core.save().approvals.requirements?.userReply).toBe("/dev next");
-		expect(f.persisted.at(-1)?.phase).toBe("solution");
-	});
-	it("persists actual re-prepared native session references on restore", async () => {
-		const f = fixture();
-		await execution(f);
-		const saved = f.core.save();
-		const restored = fixture(saved);
-		restored.settings.sessionSuffix = "-recovered";
-		await restored.core.restore(saved);
-		expect(restored.core.save().sessions.executor?.sessionFile).toBe("executor-recovered.jsonl");
-		expect(restored.persisted.at(-1)?.sessions.executor?.sessionFile).toBe("executor-recovered.jsonl");
-		expect(restored.inputs).toEqual([]);
-	});
-	it("retains the saved phase and decisions when native history preparation fails", async () => {
-		const f = fixture();
-		await execution(f);
-		const saved = f.core.save();
-		const restored = fixture(saved);
-		restored.settings.prepareFailure = true;
-		await expect(restored.core.restore(saved)).rejects.toThrow("prepare failed");
-		expect(restored.core.status().phase).toBe("executing");
-		expect(restored.core.save().approvals).toEqual(saved.approvals);
-		expect(restored.core.status().blockedReason).toBe("prepare failed");
-		expect(restored.inputs).toEqual([]);
+	return { cwd, core, ports, store, paths, spec, inputs, events, persisted, refs, settings, write, act, through };
+}
+
+describe("explicit repair authorization", () => {
+	it("distinguishes a scoped imperative from discussion, assent and prohibition", () => {
+		for (const text of [
+			"修复这个错误，不要修改公开 API",
+			"请继续完成已批准计划",
+			"Please fix the obstruction, without changing the approved files",
+		])
+			expect(hasExplicitRepairIntent(text)).toBe(true);
+		for (const text of [
+			"修复这个错误是否影响调用？先解释",
+			"修正这个问题需要改哪些文件",
+			"不要修复，只解释",
+			"修复这个错误，不要改代码",
+			"好的",
+		])
+			expect(hasExplicitRepairIntent(text)).toBe(false);
 	});
 });
 
-it("business assent, busy completion and stale delivery actions never approve another stage or flow", async () => {
-	const f = fixture();
-	await f.core.startBusiness("业务口述原文", "business-first", f.docs.business.path);
-	await f.core.converse("同意，继续");
-	expect(f.core.status().phase).toBe("business");
-	expect(f.core.save().approvals).toEqual({});
-	expect(f.reads).toEqual([]);
-	const before = f.core.save();
-	f.settings.busy = true;
-	await expect(f.core.finishBusiness()).rejects.toThrow("native work pending");
-	expect(f.core.save()).toEqual(before);
-	f.settings.busy = false;
-	const raw = "  /dev finish-business\n仅交付文档，保留 Ω  ";
-	const models = f.inputs.length;
-	await f.core.finishBusiness(raw);
-	expect(f.core.save().approvals).toEqual({
-		business: { files: [{ path: f.docs.business.path, version: f.docs.business.version }], userReply: raw },
-	});
-	expect(f.core.status().businessCompleted).toBe(true);
-	expect(f.inputs).toHaveLength(models);
-	expect(f.settings.closeCalls).toBe(0);
-	await expect(f.core.finishBusiness(raw)).rejects.toThrow("仅业务阶段");
-	await f.core.start("后续直接开发，手动提供业务文档", "development-second");
-	const development = f.core.save();
-	await expect(f.core.finishBusiness(raw)).rejects.toThrow("仅业务阶段");
-	expect(f.core.save()).toEqual(development);
-	expect(f.core.save().approvals).toEqual({});
-	expect(f.core.status().entryPhase).toBe("requirements");
-	expect(f.settings.closeCalls).toBe(0);
+describe("material decisions, not chat, drive eight stages", () => {
+	it("imports without a business actor, hands full bytes and raw decisions onward, and stops fifth Next at ST", async () => {
+		const f = await fixture();
+		expect(f.core.record().stage).toBe("business");
+		expect(f.core.recipient()).toBeUndefined();
+		expect(f.inputs).toEqual([]);
+		const businessPath = f.paths.business;
+		if (!businessPath) throw new Error("Expected the initialized business material path");
+		const decision = await f.act({ kind: "next" });
+		expect(f.inputs[0]?.role).toBe("requirements");
+		expect(f.inputs[0]?.files).toContainEqual({
+			path: businessPath,
+			content: business,
+			version: artifactVersion(business),
+		});
+		expect(f.inputs[0]?.userReply).toBe(decision.userReply);
+		expect(f.refs.business).toBeUndefined();
+		await f.through("st");
+		expect(f.core.record().decisions.map(item => item.stage)).toEqual([
+			"business",
+			"requirements",
+			"solution",
+			"planning",
+			"executing",
+		]);
+		expect(f.core.record().report.development?.userReply).toBe(decision.userReply);
+		expect(f.core.record().report.development?.files).toContainEqual({
+			path: f.paths.report,
+			version: artifactVersion(report),
+		});
+		expect(f.settings.closeCalls).toBe(0);
+		expect(await Bun.file(path.join(f.cwd, "openspec/changes/sample-change/proposal.md")).exists()).toBe(true);
+		expect(f.inputs.map(input => input.role)).toEqual(["requirements", "solution", "planner", "executor"]);
+	}, 120_000);
+
+	it("accepts one candidate automatically, but preserves all alternatives and requires explicit choice for many", async () => {
+		const f = await fixture();
+		await f.through("solution");
+		const candidates = [
+			{ id: "a", title: "A", content: "# A\n\n完整方案 A Ω" },
+			{ id: "b", title: "B", content: "# B\n\n完整方案 B Ω" },
+		];
+		await f.write(f.paths.solution, JSON.stringify({ candidates, recommendedCandidateId: "b" }));
+		await expect(f.core.inspect({ kind: "next" })).rejects.toThrow();
+		await expect(f.core.inspect({ kind: "next", candidateId: "absent" })).rejects.toThrow();
+		await f.act({ kind: "next", candidateId: "a" });
+		expect(f.core.record().decisions.at(-1)?.candidateId).toBe("a");
+		expect(f.inputs.at(-1)?.files.find(file => file.path === f.paths.solution)?.content).toBe(
+			JSON.stringify({ candidates, recommendedCandidateId: "b" }),
+		);
+		expect(f.inputs.at(-1)?.candidateId).toBe("a");
+	}, 120_000);
+
+	it("rejects changed approved bytes and newly introduced recursive specifications without advancing or starting a successor", async () => {
+		for (const mutation of ["business", "delta", "recursive"] as const) {
+			const f = await fixture();
+			await f.through("solution");
+			const before = f.core.record();
+			const calls = f.inputs.length;
+			await f.write(
+				mutation === "business"
+					? f.paths.business!
+					: mutation === "delta"
+						? f.spec
+						: "openspec/changes/sample-change/specs/nested/extra/spec.md",
+				"changed after approval\n",
+			);
+			await expect(f.act({ kind: "next" })).rejects.toThrow();
+			expect(f.core.record().stage).toBe(before.stage);
+			expect(f.core.record().decisions).toEqual(before.decisions);
+			expect(f.inputs).toHaveLength(calls);
+		}
+	}, 120_000);
+
+	it("persists before preparing a successor and does not report success after save failure", async () => {
+		const f = await fixture();
+		f.settings.saveFailure = true;
+		await expect(f.act({ kind: "next" })).rejects.toThrow("disk full");
+		expect(f.core.record().stage).toBe("business");
+		expect(f.core.record().decisions).toEqual([]);
+		expect(f.inputs).toEqual([]);
+		expect(f.events).not.toContain("prepare:requirements");
+		f.settings.saveFailure = false;
+		await f.act({ kind: "next" });
+		expect(f.events.indexOf("save:requirements")).toBeLessThan(f.events.indexOf("prepare:requirements"));
+	}, 120_000);
+
+	it("rejects busy native trees before material approval and does not turn conversation into a decision", async () => {
+		const f = await fixture();
+		f.settings.busy = true;
+		await expect(f.act({ kind: "next" })).rejects.toThrow("native work pending");
+		expect(f.core.record().decisions).toEqual([]);
+		f.settings.busy = false;
+		await f.act({ kind: "next" });
+		const before = f.core.record().decisions;
+		await f.core.converse("同意，但这只是普通会话");
+		expect(f.core.record().decisions).toEqual(before);
+		expect(f.core.record().stage).toBe("requirements");
+	}, 120_000);
+
+	it("Back is adjacent, keeps all bytes, invalidates target and later decisions, and never starts a model", async () => {
+		const f = await fixture();
+		await expect(f.act({ kind: "back" })).rejects.toThrow();
+		await f.through("st");
+		const files = await Promise.all(
+			[f.paths.business!, f.paths.solution, f.paths.plan, f.paths.report, f.spec].map(
+				async file => [file, await fs.readFile(path.join(f.cwd, file), "utf8")] as const,
+			),
+		);
+		const count = f.inputs.length;
+		await f.act({ kind: "back" });
+		expect(f.core.record().stage).toBe("executing");
+		expect(f.core.record().report.development).toBeNull();
+		expect((await f.core.inspect({ kind: "next" })).files).toContainEqual({
+			path: f.paths.report,
+			version: artifactVersion(report),
+		});
+		expect(f.core.record().decisions.map(item => item.stage)).toEqual([
+			"business",
+			"requirements",
+			"solution",
+			"planning",
+		]);
+		expect(f.inputs).toHaveLength(count);
+		for (const [file, content] of files) expect(await fs.readFile(path.join(f.cwd, file), "utf8")).toBe(content);
+		await f.act({ kind: "back" });
+		expect(f.core.record().stage).toBe("planning");
+		expect(f.core.record().decisions.map(item => item.stage)).toEqual(["business", "requirements", "solution"]);
+	}, 120_000);
+
+	it("keeps the original development approval when ST appends truthful failures to the same report", async () => {
+		const f = await fixture();
+		await f.through("st");
+		const development = structuredClone(f.core.record().report.development);
+		await f.write(f.paths.report, `${report}\n## ST测试\n命令未运行；环境缺失。已执行用例失败，待人员决定。\n`);
+		await f.act({ kind: "mark", mark: "st-complete" }, "ST 有失败，已知风险仍确认交 PR");
+		expect(f.core.record().stage).toBe("pr");
+		expect(f.core.record().report.development).toEqual(development);
+		expect(f.core.record().report.st?.version).not.toBe(
+			development?.files.find(file => file.path === f.paths.report)?.version,
+		);
+		expect(f.core.record().marks["st-complete"]?.userReply).toBe("ST 有失败，已知风险仍确认交 PR");
+	}, 120_000);
 });
+
+for (const [stage, file, malformed] of [
+	["business", "business", "# 业务需求\n\n## 基本信息\n不完整。\n"],
+	["requirements", "proposal", "not a proposal\n"],
+	["requirements", "delta", "## ADDED Requirements\n### Requirement: Broken\nThe system SHALL work.\n"],
+	["solution", "solution", '{"candidates":[]}'],
+	["planning", "plan", " \n"],
+	["executing", "report", "# 完成报告\n## 完成情况\n仅一节\n"],
+] as const) {
+	for (const failure of ["missing", "malformed"] as const) {
+		it(`${stage} ${file} ${failure} leaves stage, approval and successor calls unchanged`, async () => {
+			const f = await fixture();
+			await f.through(stage);
+			const target =
+				file === "business"
+					? f.paths.business!
+					: file === "proposal"
+						? f.paths.requirements[0]!
+						: file === "delta"
+							? f.spec
+							: f.paths[file];
+			if (failure === "missing") await fs.unlink(path.join(f.cwd, target));
+			else await f.write(target, malformed);
+			const before = f.core.record();
+			const calls = f.inputs.length;
+			await expect(f.act({ kind: "next" })).rejects.toThrow();
+			expect(f.core.record().stage).toBe(before.stage);
+			expect(f.core.record().decisions).toEqual(before.decisions);
+			expect(f.inputs).toHaveLength(calls);
+		}, 120_000);
+	}
+}
+
+it("a successful seventh-stage archive is not terminal, Back preserves upstream approval and a new legal revision can synchronize", async () => {
+	const f = await fixture();
+	await f.through("st");
+	await f.act({ kind: "mark", mark: "st-complete" });
+	const inspected = await f.core.inspect({ kind: "sync-archive" });
+	const first = await syncDevRequirement(
+		{
+			cwd: f.cwd,
+			changeId: "sample-change",
+			changeDirectory: f.store.changeDir,
+			acceptedVersions: inspected.files,
+			previous: null,
+			operationId: "seventh-archive",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	const archived = f.core.record();
+	archived.syncRevisions.push(first);
+	f.core.replaceRecord(archived);
+	expect(f.core.record().stage).toBe("pr");
+	expect(f.core.record().lifecycle).toBe("active");
+	const development = f.core.record().report.development;
+	const count = f.inputs.length;
+	await f.act({ kind: "back" });
+	expect(f.core.record().stage).toBe("st");
+	expect(f.core.record().report.development).toEqual(development);
+	expect(f.core.record().syncRevisions).toEqual([first]);
+	expect(f.inputs).toHaveLength(count);
+	await f.write(f.paths.report, `${report}\n## ST测试\n首次失败后重新执行，仍存在未验证平台。\n`);
+	await f.act({ kind: "mark", mark: "st-complete" });
+	for (const stage of ["st", "executing", "planning", "solution", "requirements"] as const) {
+		await f.act({ kind: "back" });
+		expect(f.core.record().stage).toBe(stage);
+	}
+	const archive = first.archivedChangePath!;
+	await f.write(
+		`${archive}/specs/sample/spec.md`,
+		delta
+			.replace("## ADDED Requirements", "## MODIFIED Requirements")
+			.replace("preserve sample behavior", "preserve revised sample behavior"),
+	);
+	await f.through("st");
+	await f.act({ kind: "mark", mark: "st-complete" });
+	const revised = await f.core.inspect({ kind: "sync-archive" });
+	const second = await syncDevRequirement(
+		{
+			cwd: f.cwd,
+			changeId: "sample-change",
+			changeDirectory: archive,
+			acceptedVersions: revised.files,
+			previous: first,
+			operationId: "seventh-resync",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	expect(second.archivedChangePath).toBe(archive);
+	expect(await fs.readFile(path.join(f.cwd, "openspec/specs/sample/spec.md"), "utf8")).toContain(
+		"preserve revised sample behavior",
+	);
+	await expect(fs.stat(path.join(f.cwd, f.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
+	expect(f.core.record().stage).toBe("pr");
+}, 120_000);
+
+it("keeps observed merge facts distinct from human marks and becomes business-read-only only after tested", async () => {
+	const f = await fixture();
+	await f.through("st");
+	await f.act({ kind: "mark", mark: "st-complete" });
+	await expect(f.act({ kind: "next" })).rejects.toThrow();
+	await expect(f.act({ kind: "mark", mark: "pr-merged" })).rejects.toThrow();
+	await f.act({ kind: "mark", mark: "pr-submitted" }, "人员已提交 PR");
+	expect(f.core.record().stage).toBe("pr");
+	expect(f.core.record().marks["pr-merged"]).toBeUndefined();
+	await expect(f.act({ kind: "mark", mark: "pr-merged" })).rejects.toThrow();
+	const observed = f.core.record();
+	observed.pr = {
+		pr: {
+			forge: "github",
+			repository: "fixture/repo",
+			number: 1,
+			url: "https://example.invalid/pr/1",
+			sourceRef: "main",
+			baseRef: "release",
+		},
+		state: "merged",
+		headSha: "a".repeat(40),
+		baseSha: "b".repeat(40),
+		mergeSha: "c".repeat(40),
+		observedAt: "2026-11-07T12:00:00.000Z",
+	};
+	f.core.replaceRecord(observed);
+	expect(f.core.record().stage).toBe("pr");
+	await f.act({ kind: "mark", mark: "pr-merged" }, "人员确认这个 PR 已真实合入");
+	expect(f.core.record().stage).toBe("testing");
+	await expect(f.act({ kind: "back" })).rejects.toThrow();
+	await f.act({ kind: "set-test-state", state: "failed" });
+	expect(f.core.record().testing).toBe("failed");
+	await f.act({ kind: "link-fix", fixRequirementId: "related-fix" });
+	expect(f.core.record().relatedRequirementIds).toEqual(["related-fix"]);
+	await f.act({ kind: "set-test-state", state: "retest-pending" });
+	expect(f.core.record().testing).toBe("retest-pending");
+	await f.act({ kind: "mark", mark: "tested" }, "人员确认已测试，失败和限制已知");
+	expect(f.core.record().lifecycle).toBe("completed");
+	expect(f.core.record().marks.tested?.userReply).toBe("人员确认已测试，失败和限制已知");
+	for (const intent of [
+		{ kind: "back" },
+		{ kind: "next" },
+		{ kind: "commit" },
+		{ kind: "set-test-state", state: "failed" },
+		{ kind: "link-fix", fixRequirementId: "later-fix" },
+	] satisfies DevActionIntent[]) {
+		await expect(f.core.inspect(intent)).rejects.toThrow();
+	}
+	await expect(f.core.converse("修复旧需求")).rejects.toThrow();
+}, 120_000);
+
+it("ST cannot rewrite the original development conclusion under the name of a test update", async () => {
+	const f = await fixture();
+	await f.through("st");
+	const before = f.core.record();
+	await f.write(
+		f.paths.report,
+		report.replace("实现批准范围。", "改为实现另一未经确认范围。") + "\n## ST测试\n测试完成。\n",
+	);
+	await expect(f.act({ kind: "mark", mark: "st-complete" })).rejects.toThrow();
+	expect(f.core.record().stage).toBe("st");
+	expect(f.core.record().report.development).toEqual(before.report.development);
+	expect(f.core.record().marks["st-complete"]).toBeUndefined();
+	expect(f.core.record().decisions).toEqual(before.decisions);
+}, 120_000);
+
+it("unsettled native synchronization facts block Back and approvals without deleting real materials", async () => {
+	const f = await fixture();
+	await f.through("st");
+	await f.act({ kind: "mark", mark: "st-complete" });
+	const before = f.core.record();
+	const main = "openspec/specs/sample/spec.md";
+	await f.write(main, "native write awaiting explicit recovery");
+	before.syncRevisions.push({
+		operationId: "partial-sync",
+		files: [],
+		mainSpecs: [{ path: main, version: artifactVersion("native write awaiting explicit recovery") }],
+		archivedChangePath: null,
+		progress: { synced: false, sideEffects: { paths: [main], diagnostic: "Native rollback incomplete" } },
+	});
+	f.core.replaceRecord(before);
+	for (const intent of [
+		{ kind: "back" },
+		{ kind: "sync-archive" },
+		{ kind: "mark", mark: "pr-submitted" },
+	] satisfies DevActionIntent[]) {
+		await expect(f.core.inspect(intent)).rejects.toThrow();
+	}
+	expect(f.core.record()).toEqual(before);
+	expect(await fs.readFile(path.join(f.cwd, main), "utf8")).toBe("native write awaiting explicit recovery");
+	expect(await fs.readFile(path.join(f.cwd, f.paths.report), "utf8")).toBe(report);
+}, 120_000);
+
+it("explicit implementation repair invalidates old report eligibility across a cold record reload without erasing original approval", async () => {
+	const f = await fixture();
+	await f.through("st");
+	const approval = structuredClone(f.core.record().report.development);
+	await f.core.beginRepair();
+	expect(f.core.record().stage).toBe("executing");
+	expect(f.core.record().decisions.some(decision => decision.stage === "executing")).toBe(false);
+	expect(f.core.record().report.development).toEqual(approval);
+	await expect(f.core.inspect({ kind: "next" })).rejects.toThrow();
+	const cold = new SpecDrivenOrchestrator(f.ports, {
+		record: f.core.record(),
+		paths: f.paths,
+		getUseTeam: () => false,
+		persist: async () => {},
+	});
+	await expect(cold.inspect({ kind: "next" })).rejects.toThrow();
+	const revised = report.replace("实现批准范围。", "实现批准范围，并修复本轮已知错误。");
+	await f.write(f.paths.report, revised);
+	expect((await cold.inspect({ kind: "next" })).files).toContainEqual({
+		path: f.paths.report,
+		version: artifactVersion(revised),
+	});
+	expect(cold.record().report.development).toEqual(approval);
+}, 120_000);
+
+it("a scoped business draft commit is not Next, template approval or a model handoff", async () => {
+	const f = await fixture();
+	const draft = "# 业务草稿\n\n尚未完成十章节，不伪造交接。\n";
+	await f.write(f.paths.business!, draft);
+	const current = f.core.record();
+	current.materials = current.materials
+		.filter(file => file.kind === "business")
+		.map(file => ({ ...file, version: artifactVersion(draft) }));
+	f.core.replaceRecord(current);
+	const inspected = await f.core.inspect({ kind: "commit" });
+	const decision: DevDecision = {
+		operationId: "commit-business-draft",
+		stage: "business",
+		actor: { name: "人员", source: "local" },
+		at: "2026-11-07T12:00:00.000Z",
+		userReply: "仅提交本轮业务草稿，不批准材料",
+		files: inspected.files,
+	};
+	const next = await f.core.decide(current, { kind: "commit" }, decision);
+	expect(next).toEqual(current);
+	expect(next.stage).toBe("business");
+	expect(next.decisions).toEqual([]);
+	expect(f.inputs).toEqual([]);
+	expect(f.refs).toEqual({});
+	await expect(f.core.inspect({ kind: "next" })).rejects.toThrow();
+	expect(await fs.readFile(path.join(f.cwd, f.paths.business!), "utf8")).toBe(draft);
+}, 120_000);
+
+it("an execution batch commit cannot substitute for fifth-stage report acceptance", async () => {
+	const f = await fixture();
+	await f.through("executing");
+	await f.write("src/batch.ts", "export const implementedBatch = 1;\n");
+	const reportDraft = "# 完成报告\n\n尚在执行，没有完整交付报告。\n";
+	await f.write(f.paths.report, reportDraft);
+	const current = f.core.record();
+	current.materials = current.materials.map(file =>
+		file.kind === "report" ? { ...file, version: artifactVersion(reportDraft) } : file,
+	);
+	f.core.replaceRecord(current);
+	const calls = f.inputs.length;
+	const inspected = await f.core.inspect({ kind: "commit" });
+	const decision: DevDecision = {
+		operationId: "commit-execution-batch",
+		stage: "executing",
+		actor: { name: "人员", source: "local" },
+		at: "2026-11-07T12:00:00.000Z",
+		userReply: "只提交当前实现批次，继续执行",
+		files: inspected.files,
+	};
+	expect(await f.core.decide(current, { kind: "commit" }, decision)).toEqual(current);
+	expect(f.core.record().stage).toBe("executing");
+	expect(f.core.record().report.development).toBeNull();
+	expect(f.core.record().decisions.map(item => item.stage)).toEqual([
+		"business",
+		"requirements",
+		"solution",
+		"planning",
+	]);
+	expect(f.inputs).toHaveLength(calls);
+	await expect(f.core.inspect({ kind: "next" })).rejects.toThrow();
+	expect(await fs.readFile(path.join(f.cwd, "src/batch.ts"), "utf8")).toBe("export const implementedBatch = 1;\n");
+}, 120_000);
+
+it("a testing commit carries no business-code or material authorization and does not replace the human tested mark", async () => {
+	const f = await fixture();
+	await f.through("st");
+	await f.act({ kind: "mark", mark: "st-complete" });
+	await f.act({ kind: "mark", mark: "pr-submitted" });
+	const observed = f.core.record();
+	observed.pr = {
+		pr: {
+			forge: "github",
+			repository: "fixture/repo",
+			number: 2,
+			url: "https://example.invalid/pr/2",
+			sourceRef: "main",
+			baseRef: "release",
+		},
+		state: "merged",
+		headSha: "d".repeat(40),
+		baseSha: "e".repeat(40),
+		mergeSha: "f".repeat(40),
+		observedAt: "2026-11-07T12:00:00.000Z",
+	};
+	f.core.replaceRecord(observed);
+	await f.act({ kind: "mark", mark: "pr-merged" });
+	await f.write("src/unrelated.ts", "must not enter this testing commit\n");
+	const current = f.core.record();
+	const calls = f.inputs.length;
+	const inspected = await f.core.inspect({ kind: "commit" });
+	expect(inspected.files).toEqual([]);
+	const decision: DevDecision = {
+		operationId: "commit-testing-record",
+		stage: "testing",
+		actor: { name: "人员", source: "local" },
+		at: "2026-11-07T12:00:00.000Z",
+		userReply: "仅同步自身测试状态记录，不标记已测试",
+		files: inspected.files,
+	};
+	expect(await f.core.decide(current, { kind: "commit" }, decision)).toEqual(current);
+	expect(f.core.record().stage).toBe("testing");
+	expect(f.core.record().lifecycle).toBe("active");
+	expect(f.core.record().marks.tested).toBeUndefined();
+	expect(f.inputs).toHaveLength(calls);
+}, 120_000);
+
+it("Back and implementation repair retain commit history without treating commit replies as stage approvals", async () => {
+	const f = await fixture();
+	await f.through("solution");
+	const addCommitHistory = (stage: "solution" | "executing", operationId: string) => {
+		const current = f.core.record();
+		const decision: DevDecision = {
+			operationId,
+			stage,
+			actor: { name: "人员", source: "local" },
+			at: "2026-11-07T12:00:00.000Z",
+			userReply: "仅提交当前批次，不选择方案或验收交付",
+			files: [],
+		};
+		current.decisions.push(decision);
+		current.gitOperations.push({
+			operationId,
+			kind: "commit",
+			actor: decision.actor,
+			at: decision.at,
+			files: [],
+			target: {
+				localSourceRef: "refs/heads/main",
+				sourceRepository: "fixture/repo",
+				sourceRef: "main",
+				baseRepository: "fixture/repo",
+				baseRef: "release",
+				remote: "fixture",
+				remoteUrl: "file:///isolated-fixture",
+				targetRef: "refs/heads/main",
+				observedTip: null,
+			},
+			authorizedCommits: [],
+			knownCommitShas: [],
+		});
+		f.core.replaceRecord(current);
+		return decision;
+	};
+	const solutionCommit = addCommitHistory("solution", "historical-solution-commit");
+	expect(f.core.save().approvals.solution).toBeUndefined();
+	expect(f.core.status().selection).toBeUndefined();
+	await f.act({ kind: "next" });
+	expect(f.inputs.at(-1)?.candidateId).toBe("one");
+	expect(f.inputs.at(-1)?.userReply).not.toBe(solutionCommit.userReply);
+	await f.act({ kind: "back" });
+	expect(f.core.record().decisions).toContainEqual(solutionCommit);
+	expect(f.core.save().approvals.solution).toBeUndefined();
+	expect(f.core.status().selection).toBeUndefined();
+	await f.through("st");
+	const executionCommit = addCommitHistory("executing", "historical-execution-commit");
+	await f.core.beginRepair();
+	expect(f.core.record().stage).toBe("executing");
+	expect(f.core.record().decisions).toContainEqual(solutionCommit);
+	expect(f.core.record().decisions).toContainEqual(executionCommit);
+	expect(f.core.save().approvals.executor).toBeUndefined();
+	expect(f.core.record().gitOperations.map(operation => operation.operationId)).toEqual([
+		solutionCommit.operationId,
+		executionCommit.operationId,
+	]);
+}, 120_000);
+
+it("Next cannot replace the person's inspected material version with bytes changed before its core save", async () => {
+	const f = await fixture();
+	const intent = { kind: "next" } as const;
+	const inspected = await f.core.inspect(intent);
+	const decision: DevDecision = {
+		operationId: "changed-before-next-save",
+		stage: "business",
+		actor: { name: "人员", source: "local" },
+		at: "2026-11-07T12:00:00.000Z",
+		userReply: "只批准预览中的原始字节",
+		files: inspected.files,
+	};
+	await f.write(f.paths.business!, `${business}\n预览之后、核心保存之前的新字节。\n`);
+	await expect(f.core.execute(intent, decision)).rejects.toThrow();
+	expect(f.core.record().stage).toBe("business");
+	expect(f.core.record().decisions).toEqual([]);
+	expect(f.persisted).toEqual([]);
+	expect(f.inputs).toEqual([]);
+}, 120_000);
+
+it("an otherwise legal ST append still requires a fresh human material confirmation when it races the mark", async () => {
+	const f = await fixture();
+	await f.through("st");
+	const before = f.core.record();
+	const intent = { kind: "mark", mark: "st-complete" } as const;
+	const inspected = await f.core.inspect(intent);
+	const decision: DevDecision = {
+		operationId: "changed-before-st-mark",
+		stage: "st",
+		actor: { name: "人员", source: "local" },
+		at: "2026-11-07T12:00:00.000Z",
+		userReply: "只确认预览中的 ST 报告",
+		files: inspected.files,
+	};
+	await f.write(f.paths.report, `${report}\n## ST测试\n预览之后追加的实际失败结果。\n`);
+	await expect(f.core.decide(before, intent, decision)).rejects.toThrow();
+	expect(f.core.record()).toEqual(before);
+	expect(f.core.record().marks["st-complete"]).toBeUndefined();
+	const fresh = await f.core.inspect(intent);
+	expect(fresh.files).not.toEqual(inspected.files);
+	const freshReport = fresh.files.find(file => file.path === f.paths.report);
+	if (!freshReport) throw new Error("Expected the inspected ST report version");
+	expect(
+		(await f.core.decide(before, intent, { ...decision, operationId: "fresh-st-mark", files: fresh.files })).report
+			.st,
+	).toEqual(freshReport);
+}, 120_000);

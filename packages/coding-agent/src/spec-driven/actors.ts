@@ -1,11 +1,12 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
+import * as url from "node:url";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import type { AsyncJobManagerApi } from "../async/job-manager";
 import { prompt } from "@oh-my-pi/pi-utils";
 import { Settings } from "../config/settings";
 import { cfgEditMode } from "../edit/settings";
-import type { ExtensionFactory } from "../extensibility/extensions";
+import type { ExtensionFactory, ExtensionUIContext } from "../extensibility/extensions";
 import type { Skill } from "../extensibility/skills";
 import { cfgGoalEnabled } from "../goals/settings";
 import { cfgTaskIsolationEnabled, cfgTaskSpeculativeLaunch, cfgWorktreeOnStart } from "../task/settings";
@@ -13,11 +14,15 @@ import { getBundledAgent } from "../task/agents";
 import { isSeanceIsolationSkills } from "../task/seance-policy";
 import type { NativeSubagentHooks } from "../task/types";
 import { cfgToolsSpeculativeExecutionEnabled } from "../tools/settings";
-import { assertSpecWritePath, existingNativeSpec, matchesNativeSpecPattern } from "./artifacts";
+import { artifactVersion, assertSpecWritePath, existingNativeSpec, matchesNativeSpecPattern } from "./artifacts";
 import { cloneEmbeddingToolRestrictions, createAgentSession, type CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
 import { isLocalAgentSession } from "../session/agent-session-handle";
+import { initializeExtensions } from "../modes/runtime-init";
 import { SessionManager } from "../session/session-manager";
+import type { FileEntry } from "../session/session-entries";
+import { applyToolProxy } from "../extensibility/tool-proxy";
+import type { Tool } from "../tools";
 import { ToolRestrictions } from "../session/tool-restrictions";
 import { AgentRegistry, type AgentRegistryApi } from "../registry/agent-registry";
 import actorTemplate from "../prompts/agents/spec-driven.md" with { type: "text" };
@@ -27,20 +32,173 @@ import type { TeamRunResult } from "../team/types";
 import { hasExplicitRepairIntent } from "./orchestrator";
 import { grantSpecExecutionSkills } from "./skill-policy";
 import type {
+	DevRequirementRecord,
+	DevSolutionBasis,
 	SpecAgentInput,
 	SpecCandidate,
 	SpecConversationReply,
 	SpecDrivenStatus,
 	SpecRunContext,
 	SpecStageRole,
+	SpecSolution,
 } from "./types";
+
+export interface SpecNativeToolBoundary {
+	toolCallId: string;
+	toolName: string;
+	input: Record<string, unknown>;
+	sessionId: string;
+}
+
+function checkNativeSolutionCandidates(candidates: readonly SpecCandidate[], entries: readonly FileEntry[]) {
+	const source = entries.findLast(entry => entry.type === "custom" && entry.customType === "dev-solution-source");
+	if (
+		!source ||
+		source.type !== "custom" ||
+		!source.data ||
+		typeof source.data !== "object" ||
+		!("team" in source.data) ||
+		typeof source.data.team !== "boolean" ||
+		!("candidates" in source.data) ||
+		!Array.isArray(source.data.candidates)
+	)
+		throw new Error("方案来源无法从真实原生阶段历史确证；请返回需求阶段并重新进入方案。");
+	const attempt = entries.findLast(entry => entry.type === "custom" && entry.customType === "dev-solution-attempt");
+	if (attempt && entries.indexOf(source) <= entries.indexOf(attempt))
+		throw new Error("本次方案阶段尚无成功来源；先前方案不能替代失败或取消的本次 Team 讨论。");
+	const originals: unknown[] = source.data.candidates;
+	if (source.data.team)
+		for (const candidate of candidates) {
+			const original = originals.find(
+				item => item && typeof item === "object" && "id" in item && item.id === candidate.id,
+			);
+			if (
+				!original ||
+				typeof original !== "object" ||
+				!("adoptable" in original) ||
+				original.adoptable !== true ||
+				!("proposal" in original) ||
+				typeof original.proposal !== "string" ||
+				!original.proposal ||
+				!candidate.content.includes(original.proposal)
+			)
+				throw new Error(`方案 ${candidate.id} 不是本轮 Team 可采用的完整候选。`);
+		}
+	return { entry: source, team: source.data.team };
+}
+
+/** Read native facts without creating a model session during cold record recovery. */
+export function specSolutionBasisFromHistory(
+	solution: SpecSolution,
+	sessionId: string,
+	entries: readonly FileEntry[],
+): DevSolutionBasis {
+	const source = checkNativeSolutionCandidates(solution.candidates, entries);
+	const version = entries.findLast(entry => entry.type === "custom" && entry.customType === "dev-solution-version");
+	if (
+		!version ||
+		entries.indexOf(version) <= entries.indexOf(source.entry) ||
+		version.type !== "custom" ||
+		!version.data ||
+		typeof version.data !== "object" ||
+		!("version" in version.data) ||
+		version.data.version !== solution.version
+	)
+		throw new Error("方案字节版本尚未由真实原生写入确证；文件变化后须重新建立来源证明。");
+	return {
+		solutionVersion: solution.version,
+		candidateIds: solution.candidates.map(candidate => candidate.id),
+		usableCandidateIds: solution.candidates.map(candidate => candidate.id),
+		source: source.team ? "team" : "single-agent",
+		sourceSessionId: sessionId,
+		sourceEntryIds: [source.entry.id, version.id],
+	};
+}
+
+/** Recheck final native arguments, after extension transforms, at canonical dispatch. */
+class SpecActorToolRestrictions extends ToolRestrictions {
+	readonly #base: ToolRestrictions;
+	readonly #check: (name: string, input: unknown) => Promise<void>;
+	readonly #before?: (event: SpecNativeToolBoundary) => Promise<void>;
+	readonly #after?: (event: SpecNativeToolBoundary & { isError: boolean }) => Promise<void>;
+	readonly #cache = new WeakMap<Tool, Tool>();
+	#sessionId = "";
+	constructor(
+		base: ToolRestrictions,
+		check: (name: string, input: unknown) => Promise<void>,
+		before?: (event: SpecNativeToolBoundary) => Promise<void>,
+		after?: (event: SpecNativeToolBoundary & { isError: boolean }) => Promise<void>,
+		options = base.snapshot(),
+	) {
+		super(options);
+		this.#base = base;
+		this.#check = check;
+		this.#before = before;
+		this.#after = after;
+	}
+	override clone(): SpecActorToolRestrictions {
+		return new SpecActorToolRestrictions(this.#base, this.#check, this.#before, this.#after, this.snapshot());
+	}
+	bindSession(sessionId: string): void {
+		this.#sessionId = sessionId;
+	}
+	override wrap<T extends Tool>(tool: T): T {
+		const existing = this.#cache.get(tool);
+		if (existing) return existing as T;
+		const guarded = super.wrap(this.#base.wrap(tool));
+		const execute = guarded.execute;
+		const wrapped = {
+			execute: async (...args: Parameters<Tool["execute"]>) => {
+				await this.#check(tool.name, args[1]);
+				const event: SpecNativeToolBoundary = {
+					toolCallId: args[0],
+					toolName: tool.name,
+					input: args[1] as Record<string, unknown>,
+					sessionId: this.#sessionId,
+				};
+				if (!event.sessionId) throw new Error("Native tool owner is not registered");
+				await this.#before?.(event);
+				let isError = true;
+				let failure: unknown;
+				try {
+					await this.#check(tool.name, args[1]);
+					const result = await execute.call(guarded, ...args);
+					isError = false;
+					return result;
+				} catch (error) {
+					failure = error;
+					throw error;
+				} finally {
+					try {
+						await this.#after?.({ ...event, isError });
+					} catch (error) {
+						if (isError)
+							throw new AggregateError(
+								[failure, error],
+								"Native execution and owned-write journaling both failed",
+							);
+						throw error;
+					}
+				}
+			},
+			speculation: undefined,
+		} as T;
+		applyToolProxy(guarded, wrapped);
+		this.#cache.set(tool, wrapped);
+		this.#cache.set(wrapped, wrapped);
+		return wrapped;
+	}
+}
 
 export interface SpecActor {
 	readonly id: string;
 	readonly role: SpecStageRole;
 	readonly session: AgentSession;
 	request(input: SpecAgentInput, context: SpecRunContext, teamResult?: TeamRunResult): Promise<SpecConversationReply>;
+	prepareConversation(input: SpecAgentInput, context: SpecRunContext): Promise<void>;
 	checkSolutionCandidates(candidates: readonly SpecCandidate[]): void;
+	solutionBasis(solution: SpecSolution): DevSolutionBasis;
+	beginSolutionAttempt(context: SpecRunContext): void;
 	stop(): Promise<void>;
 	dispose(): Promise<void>;
 }
@@ -135,9 +293,15 @@ export async function createSpecActor(args: {
 	sessionFile?: string;
 	checkApproved?: () => Promise<unknown>;
 	getStatus?: () => SpecDrivenStatus | undefined;
+	getRecord?: () => DevRequirementRecord | undefined;
+	repairPaths?: () => readonly string[] | undefined;
+	uiForSession?: (session: AgentSession) => ExtensionUIContext;
 	observeReport?: () => void | Promise<void>;
 	beginRepair?: () => Promise<void>;
+	onToolStart?: (event: SpecNativeToolBoundary) => Promise<void>;
+	onToolEnd?: (event: SpecNativeToolBoundary & { isError: boolean }) => Promise<void>;
 	reportPath?: string;
+	solutionPath?: string;
 	recoverContext?: () => Promise<string>;
 	executionSkills?: readonly Skill[];
 	onSessionCreated?: (session: AgentSession) => (() => void) | void;
@@ -160,6 +324,160 @@ export async function createSpecActor(args: {
 	if (args.role === "executor") cfgGoalEnabled.override(settings, true);
 	let stageOutputPaths: readonly string[] | undefined;
 	let reportTurn: unknown;
+	const readonlyTools = new Set([
+		"read",
+		"find",
+		"grep",
+		"glob",
+		"web_search",
+		"knowledge_search",
+		"openwiki_search",
+		"openwiki_read",
+		"ask",
+		"wait",
+		"yield",
+	]);
+	const record = () => args.getRecord?.() ?? args.getStatus?.()?.record;
+	const boundary = (deliveredRepair?: boolean): "full" | "report" | "repair" | "read" => {
+		const facts = record();
+		const status = args.getStatus?.();
+		const repairing = deliveredRepair ?? repairAuthorized();
+		const currentReportTurn = deliveredRepair === undefined && !!reportTurn && lastUser() === reportTurn;
+		if (status?.pendingGitOperationId || status?.observedPr?.state === "merged") return "read";
+		if (facts) {
+			const activeRole =
+				facts.stage === "planning"
+					? "planner"
+					: ["executing", "st", "pr", "testing"].includes(facts.stage)
+						? "executor"
+						: facts.stage;
+			if (activeRole !== args.role) return "read";
+		}
+		if (
+			restrictions.snapshot().denylist?.includes("spec-readonly-input") ||
+			(facts && facts.lifecycle !== "active") ||
+			facts?.pr?.state === "merged" ||
+			facts?.stage === "testing"
+		)
+			return "read";
+		if (
+			status?.closing &&
+			(status.closing.sideEffects || status.closing.archiveCleanup || status.closing.retirementCleanup)
+		)
+			return repairing && (args.repairPaths?.() ?? status.repairPaths)?.length ? "repair" : "read";
+		if (facts?.stage === "st" || facts?.stage === "pr") {
+			if (repairing && !currentReportTurn) return "full";
+			return facts.stage === "st" ? "report" : "read";
+		}
+		if ((status?.awaitingAcceptance || reportTurn) && (!repairing || currentReportTurn)) return "read";
+		return "full";
+	};
+	const exactWrite = async (input: unknown, paths: readonly string[]): Promise<string | undefined> => {
+		const requested = input && typeof input === "object" && "path" in input ? input.path : undefined;
+		if (
+			typeof requested !== "string" ||
+			requested.includes("://") ||
+			/[\0:#?\[\]]/.test(requested.replace(/^[A-Za-z]:/, ""))
+		)
+			return "必须使用精确的普通文件路径。";
+		const relative = path
+			.relative(args.options.cwd!, path.resolve(args.options.cwd!, requested))
+			.replaceAll("\\", "/");
+		if (
+			!paths.some(
+				file =>
+					path.relative(args.options.cwd!, path.resolve(args.options.cwd!, file)).replaceAll("\\", "/") ===
+					relative,
+			)
+		)
+			return `当前阶段未授权写入：${requested}`;
+		await assertSpecWritePath(args.options.cwd!, relative);
+		return undefined;
+	};
+	const stageWrite = async (input: Record<string, unknown>): Promise<void> => {
+		const requested = input.path;
+		if (
+			typeof requested !== "string" ||
+			requested.includes("://") ||
+			/[\0:#?\[\]]/.test(requested.replace(/^[A-Za-z]:/, ""))
+		)
+			throw new Error("阶段产物必须使用精确文件路径。");
+		const cwd = args.options.cwd!;
+		const relative = path.relative(cwd, path.resolve(cwd, requested)).replaceAll("\\", "/");
+		const paths = args.getStatus?.()?.paths;
+		const outputs =
+			stageOutputPaths ??
+			(paths
+				? args.role === "business"
+					? paths.business
+						? [paths.business]
+						: []
+					: args.role === "requirements"
+						? paths.requirements
+						: [args.role === "solution" ? paths.solution : paths.plan]
+				: []);
+		let allowed = outputs.includes(relative);
+		if (!allowed && args.role === "requirements")
+			for (const output of outputs) {
+				if (!matchesNativeSpecPattern(output, relative)) continue;
+				const capability = relative.slice(output.indexOf("*"));
+				if (
+					/^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)+spec\.md$/.test(capability) ||
+					(await existingNativeSpec(cwd, relative)) ||
+					(await existingNativeSpec(cwd, `openspec/specs/${capability}`))
+				) {
+					allowed = true;
+					break;
+				}
+			}
+		if (!allowed) throw new Error(`未授权的阶段文件写入：${requested}`);
+		await assertSpecWritePath(cwd, relative);
+	};
+	const assertAgentFileTarget = async (input: Record<string, unknown>): Promise<void> => {
+		if (typeof input.path !== "string") throw new Error("文件写入必须指定精确路径。");
+		const fileUrl = input.path.toLowerCase().startsWith("file://");
+		if (input.path.includes("://") && !fileUrl) return;
+		const cwd = args.options.cwd!;
+		const target = path.resolve(cwd, fileUrl ? url.fileURLToPath(input.path) : input.path);
+		let ancestor = target;
+		const missing: string[] = [];
+		for (;;) {
+			try {
+				ancestor = await fs.realpath(ancestor);
+				break;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				missing.unshift(path.basename(ancestor));
+				const parent = path.dirname(ancestor);
+				if (parent === ancestor) throw error;
+				ancestor = parent;
+			}
+		}
+		const canonicalRoot = await fs.realpath(cwd);
+		const canonical = path.join(ancestor, ...missing);
+		const normalize = (file: string) => {
+			const relative = path.relative(canonicalRoot, file).replaceAll("\\", "/");
+			return process.platform === "win32" ? relative.toLowerCase() : relative;
+		};
+		const reserved = (relative: string) =>
+			["docs/dev-requirements", ".omp/dev-workbench"].some(
+				directory => relative === directory || relative.startsWith(`${directory}/`),
+			);
+		const ownBusiness = args.role === "business" && !record() && args.getStatus?.()?.paths?.business;
+		const localBusiness = ownBusiness && normalize(target) === normalize(path.resolve(cwd, ownBusiness));
+		if ((reserved(normalize(target)) || reserved(normalize(canonical))) && !localBusiness)
+			throw new Error("需求决定、批准及宿主控制记录只能由工作台 owner 保存，Agent 不得直接写入。");
+		try {
+			if ((await fs.stat(target)).nlink > 1)
+				throw new Error("无法证明硬链接写入不影响宿主控制记录；请使用无别名的普通文件。");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	};
+	const solutionWrites = new Set<string>();
+	let generatedSolutionVersion: string | undefined;
+	const checkCandidates = (candidates: readonly SpecCandidate[]) =>
+		checkNativeSolutionCandidates(candidates, session.sessionManager.getBranch());
 	const reportFile = args.reportPath ? path.resolve(args.options.cwd!, args.reportPath) : undefined;
 	const reportVersion = async (): Promise<string | undefined> => {
 		if (!reportFile) return undefined;
@@ -187,7 +505,6 @@ export async function createSpecActor(args: {
 		return reportObservation;
 	};
 	let needsRecovery = !!args.recoverContext;
-	let guardStop: Promise<void> | undefined;
 	const lastUser = () => session?.messages.findLast(message => message.role === "user");
 	const repairAuthorized = () => {
 		const user = lastUser();
@@ -236,19 +553,41 @@ export async function createSpecActor(args: {
 		const approval = await args.checkApproved?.();
 		if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
 			throw new Error("正式批准版本已变化，不得继续协作。");
-		const status = args.getStatus?.();
-		if (
-			status?.closing ||
-			status?.accepted ||
-			((status?.awaitingAcceptance || reportTurn) && !repairAuthorized()) ||
-			(reportTurn && lastUser() === reportTurn)
-		)
-			throw new Error("当前交付边界不允许继续派发协作。");
+		if (boundary() !== "full") throw new Error("当前交付边界不允许继续派发协作。");
 	};
-	const restrictions =
+	const inheritedRestrictions =
 		args.options.toolRestrictions?.clone() ??
 		cloneEmbeddingToolRestrictions(args.options.modelRegistry) ??
 		new ToolRestrictions();
+	const restrictions: SpecActorToolRestrictions = new SpecActorToolRestrictions(
+		inheritedRestrictions,
+		async (name, value) => {
+			if (readonlyTools.has(name)) return;
+			const mode = boundary();
+			const input = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+			if (name === "write" || name === "edit") await assertAgentFileTarget(input);
+			if (mode === "read") throw new Error("当前阶段只读；未证明写隔离的测试或工具不可执行。");
+			const approved = await args.checkApproved?.();
+			if (approved && typeof approved === "object" && "matches" in approved && !approved.matches)
+				throw new Error("正式批准版本已变化，须返回相应阶段重新确认。");
+			if (mode === "repair" || mode === "report") {
+				if (name !== "write" && name !== "edit")
+					throw new Error("限定修复只允许精确文件写入；命令执行没有写隔离证明。");
+				const reason = await exactWrite(
+					input,
+					mode === "report"
+						? args.reportPath
+							? [args.reportPath]
+							: []
+						: (args.repairPaths?.() ?? args.getStatus?.()?.repairPaths ?? []),
+				);
+				if (reason) throw new Error(reason);
+			} else if (args.role !== "executor" && ["write", "edit"].includes(name)) await stageWrite(input);
+			else if (args.role !== "executor" && name !== "task") throw new Error("当前阶段不开放此执行工具。");
+		},
+		args.onToolStart,
+		args.onToolEnd,
+	);
 	const business = args.role === "business";
 	const scout = args.role === "executor" || business ? undefined : getBundledAgent("scout");
 	if (args.role !== "executor" && !business && !scout) throw new Error("Bundled scout agent is unavailable");
@@ -264,9 +603,11 @@ export async function createSpecActor(args: {
 				throw new Error("执行确认前只能派发无额外工具和 worktree 的 scout。");
 		},
 		async configureSession() {
+			const childRestrictions = restrictions.clone();
 			return {
 				toolNames: ["read", "find", "grep", "glob", "web_search", "yield"],
-				toolRestrictions: restrictions.clone(),
+				toolRestrictions: childRestrictions,
+				extensionProviderOwnership: "inherited",
 				restrictToolNames: true,
 				allowRestrictedCustomTools: false,
 				customTools: [],
@@ -274,6 +615,9 @@ export async function createSpecActor(args: {
 				enableLsp: false,
 				enableIrc: false,
 				subagentHooks: undefined,
+				onSessionCreated(child) {
+					childRestrictions.bindSession(child.sessionId);
+				},
 			};
 		},
 	};
@@ -283,8 +627,21 @@ export async function createSpecActor(args: {
 			if (request.isolation?.requested) throw new Error("Dev 协作不得创建 worktree。");
 		},
 		async configureSession(_request, options) {
+			const childRestrictions = restrictions.clone();
 			return {
-				toolRestrictions: restrictions.clone(),
+				toolRestrictions: childRestrictions,
+				extensionProviderOwnership: "inherited",
+				preloadedPreparedExtensions: [
+					...(options.preloadedPreparedExtensions ?? []).filter(
+						extension => extension.path !== "<spec-stage-write-guard>",
+					),
+					{
+						path: "<spec-stage-write-guard>",
+						resolvedPath: "<spec-stage-write-guard>",
+						factory: writeGuard,
+						error: null,
+					},
+				],
 				...(options.restrictToolNames || options.toolNames ? { restrictToolNames: true } : {}),
 				...(!options.restrictToolNames && !options.toolNames && args.options.customTools?.length
 					? {
@@ -303,6 +660,7 @@ export async function createSpecActor(args: {
 					: (options.skills ?? args.options.skills),
 				subagentHooks: executorHooks,
 				onSessionCreated(child) {
+					childRestrictions.bindSession(child.sessionId);
 					child.addDisposer(grantSpecExecutionSkills(child.sessionManager, args.executionSkills ?? []));
 				},
 			};
@@ -310,12 +668,49 @@ export async function createSpecActor(args: {
 	};
 	const writeGuard: ExtensionFactory = pi => {
 		pi.on("before_agent_start", async () => {
+			if (record() && record()?.lifecycle !== "active") {
+				session.agent.abort("当前需求不接受新的自主执行轮次。");
+				session.clearQueue();
+				if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
+				return;
+			}
 			if (!needsRecovery || !args.recoverContext) return;
 			const content = await args.recoverContext();
 			needsRecovery = false;
 			return { message: { customType: "dev-history-recovery", display: false, content } };
 		});
 		pi.on("tool_call", async (event, ctx) => {
+			const builtin = pi.getAllTools().find(tool => tool.name === event.toolName)?.sourceInfo.source === "builtin";
+			if (!builtin && (boundary() !== "full" || args.role !== "executor"))
+				return { block: true, reason: "本阶段无法证明自定义、扩展或 MCP 工具满足文件写隔离。" };
+			const mode = boundary();
+			if (mode !== "full") {
+				if (readonlyTools.has(event.toolName)) return undefined;
+				if ((mode === "report" || mode === "repair") && ["write", "edit"].includes(event.toolName)) {
+					try {
+						const approved = await args.checkApproved?.();
+						if (approved && typeof approved === "object" && "matches" in approved && !approved.matches)
+							return { block: true, reason: "正式批准版本已变化，须返回相应阶段重新确认。" };
+						const paths =
+							mode === "report"
+								? args.reportPath
+									? [args.reportPath]
+									: []
+								: (args.repairPaths?.() ?? args.getStatus?.()?.repairPaths ?? []);
+						const reason = await exactWrite(event.input, paths);
+						if (reason) return { block: true, reason };
+						reportBeforeTool.set(event.toolCallId, await reportVersion());
+						return undefined;
+					} catch (error) {
+						return { block: true, reason: error instanceof Error ? error.message : String(error) };
+					}
+				}
+				return {
+					block: true,
+					reason:
+						"当前阶段只开放受限读取或精确文档修复；无法证明写隔离的命令、自定义工具、MCP、eval 和协作执行均被阻止。",
+				};
+			}
 			if (business) {
 				if (ctx.sessionManager.getSessionId() !== session.sessionId)
 					return { block: true, reason: "业务阶段不得派发子代理。" };
@@ -328,27 +723,14 @@ export async function createSpecActor(args: {
 				if (["read", "find", "grep", "glob", "web_search", "yield"].includes(event.toolName)) return undefined;
 				return { block: true, reason: "scout 只允许使用只读调查工具。" };
 			}
-			if (["read", "grep", "glob", "knowledge_search"].includes(event.toolName)) return undefined;
+			// Native questions do not write files or grant approval for subsequent tools.
+			if (["read", "grep", "glob", "knowledge_search", "ask"].includes(event.toolName)) return undefined;
 			try {
 				const approval = await args.checkApproved?.();
 				if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
 					return { block: true, reason: "正式批准版本已变化，请返回对应阶段重新确认。" };
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
-			}
-			const status = args.getStatus?.();
-			if ((status?.awaitingAcceptance || status?.accepted || reportTurn) && !repairAuthorized())
-				return { block: true, reason: "交付后只允许读取；只有明确请求修复或继续实施已批准计划才能修改。" };
-			if (status?.accepted) {
-				if (!["write", "edit", "bash"].includes(event.toolName))
-					return { block: true, reason: "收尾修复不得派发业务任务、协作或 Goal。" };
-				const requested = String("path" in event.input ? (event.input.path ?? "") : "");
-				if (
-					status.accepted.files.some(
-						file => path.resolve(args.options.cwd!, file.path) === path.resolve(args.options.cwd!, requested),
-					)
-				)
-					return { block: true, reason: "收尾修复不得修改已验收材料。" };
 			}
 			if (reportTurn && lastUser() === reportTurn)
 				return { block: true, reason: "当前阶段只允许读取；请在新一轮明确请求修复。" };
@@ -359,7 +741,6 @@ export async function createSpecActor(args: {
 			if (event.toolName === "task" && args.role !== "executor") {
 				const error = validateScoutTask(event.input);
 				if (error) return { block: true, reason: error };
-				if (status?.closing) return { block: true, reason: "当前阶段不可派发协作。" };
 				return undefined;
 			}
 			if (args.role === "executor") {
@@ -368,73 +749,18 @@ export async function createSpecActor(args: {
 			}
 			if (event.toolName !== "write" && event.toolName !== "edit")
 				return { block: true, reason: "执行确认前只能写本阶段的指定产物。" };
-			const requested = event.input.path;
-			if (
-				typeof requested !== "string" ||
-				requested.includes("://") ||
-				/[\0:#?\[\]]/.test(requested.replace(/^[A-Za-z]:/, ""))
-			)
-				return { block: true, reason: "阶段产物必须使用精确文件路径。" };
-			const cwd = args.options.cwd!;
-			const relative = (path.isAbsolute(requested) ? path.relative(cwd, requested) : requested).replaceAll(
-				"\\",
-				"/",
-			);
-			const paths = status?.paths;
-			const outputPaths =
-				stageOutputPaths ??
-				(paths
-					? args.role === "business"
-						? paths.business
-							? [paths.business]
-							: []
-						: args.role === "requirements"
-							? paths.requirements
-							: [args.role === "solution" ? paths.solution : paths.plan]
-					: []);
-			let allowed = outputPaths.some(output => output === relative);
 			try {
-				if (!allowed && !business) {
-					for (const output of outputPaths) {
-						if (!matchesNativeSpecPattern(output, relative)) continue;
-						const prefix = output.slice(0, output.indexOf("*"));
-						const capability = relative.slice(prefix.length);
-						if (
-							/^(?:[a-z0-9]+(?:-[a-z0-9]+)*\/)+spec\.md$/.test(capability) ||
-							(await existingNativeSpec(cwd, relative)) ||
-							(await existingNativeSpec(cwd, `openspec/specs/${capability}`))
-						) {
-							allowed = true;
-							break;
-						}
-					}
-				}
-				if (!allowed) return { block: true, reason: `未授权的阶段文件写入：${requested}` };
-				await assertSpecWritePath(cwd, relative);
+				await stageWrite(event.input);
+				if (args.role === "solution") solutionWrites.add(event.toolCallId);
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
 			}
 			return undefined;
 		});
 		pi.on("tool_result", async event => {
-			if (args.getStatus?.()?.accepted && ["write", "edit", "bash"].includes(event.toolName)) {
-				let failure: string | undefined;
-				try {
-					const approval = await args.checkApproved?.();
-					if (approval && typeof approval === "object" && "matches" in approval && !approval.matches)
-						failure = "已验收正式材料发生变化；必须返回对应阶段重新确认。";
-				} catch (error) {
-					failure = error instanceof Error ? error.message : String(error);
-				}
-				if (failure) {
-					// Signal synchronously; awaiting session.abort() here would wait on this very hook.
-					session.agent.abort(failure);
-					session.clearQueue();
-					if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
-					guardStop = session.abort({ goalReason: "internal", reason: failure });
-					void guardStop.catch(() => {});
-					return;
-				}
+			if (solutionWrites.delete(event.toolCallId) && !event.isError && args.solutionPath) {
+				const bytes = await fs.readFile(path.resolve(args.options.cwd!, args.solutionPath));
+				generatedSolutionVersion = artifactVersion(bytes);
 			}
 			if (reportBeforeTool.has(event.toolCallId)) {
 				const before = reportBeforeTool.get(event.toolCallId);
@@ -455,20 +781,21 @@ export async function createSpecActor(args: {
 			if (
 				ctx.sessionManager.getSessionId() === session.sessionId &&
 				valid &&
-				status?.awaitingAcceptance &&
-				!status.accepted &&
+				(status?.awaitingAcceptance || ["executing", "st", "pr"].includes(record()?.stage ?? "")) &&
+				boundary(explicitRepair) === "full" &&
 				explicitRepair
 			) {
 				await args.beginRepair?.();
+				reportTurn = undefined;
 			}
 			// Keep read-only explanations available after invalidation; tool_call is authoritative for writes.
 			if (
-				(!valid || status?.awaitingAcceptance || status?.accepted || (reportTurn && lastUser() === reportTurn)) &&
+				(!valid || boundary() !== "full" || (reportTurn && lastUser() === reportTurn)) &&
 				session.getGoalModeState()?.enabled
 			)
 				await session.goalRuntime.pauseGoal();
 			const facts = args.getStatus?.();
-			if (facts && (facts.blockedReason || facts.closing || facts.awaitingAcceptance || facts.accepted)) {
+			if (facts && (facts.blockedReason || facts.closing || facts.awaitingAcceptance || boundary() !== "full")) {
 				return {
 					message: {
 						customType: "dev-lifecycle-facts",
@@ -477,7 +804,11 @@ export async function createSpecActor(args: {
 							error: facts.blockedReason,
 							closing: facts.closing,
 							awaitingAcceptance: facts.awaitingAcceptance === true,
-							accepted: !!facts.accepted,
+							writeBoundary: boundary(),
+							stage: record()?.stage,
+							lifecycle: record()?.lifecycle,
+							merged: facts.observedPr?.state === "merged" || record()?.pr?.state === "merged",
+							observedPr: facts.observedPr ?? null,
 							approvedVersionsMatch: valid,
 							explicitRepair,
 						}),
@@ -496,17 +827,13 @@ export async function createSpecActor(args: {
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
 			}
-			const status = args.getStatus?.();
-			if (
-				status?.accepted ||
-				((status?.awaitingAcceptance || reportTurn) && !repairAuthorized()) ||
-				(reportTurn && lastUser() === reportTurn)
-			)
-				return { block: true, reason: "当前交付边界不允许继续派发协作。" };
+			if (boundary() !== "full") return { block: true, reason: "当前交付边界不允许继续派发协作。" };
 		});
 	};
 	const created = await createAgentSession({
 		...args.options,
+		extensionProviderOwnership: "inherited",
+		interactionParentSessionId: undefined,
 		settings,
 		editMode: "replace",
 		toolRestrictions: restrictions,
@@ -559,24 +886,42 @@ export async function createSpecActor(args: {
 				? await SessionManager.open(args.sessionFile, args.sessionDirectory)
 				: SessionManager.create(args.options.cwd!, args.sessionDirectory)),
 		requireYieldTool: false,
-		// Restricted SDK sessions ignore inline `extensions`, but rebind prepared
-		// factories without admitting ambient tools or extension discovery.
-		...(args.options.restrictToolNames || scout || business
-			? {
-					preloadedPreparedExtensions: [
-						...(scout || business ? [] : (args.options.preloadedPreparedExtensions ?? [])),
-						{
-							path: "<spec-stage-write-guard>",
-							resolvedPath: "<spec-stage-write-guard>",
-							factory: writeGuard,
-							error: null,
-						},
-					],
-				}
-			: { extensions: [...(args.options.extensions ?? []), writeGuard] }),
+		// Bind the safety factory even when the native parent supplied prepared extensions.
+		preloadedPreparedExtensions: [
+			...(args.options.preloadedPreparedExtensions ?? []).filter(
+				extension => extension.path !== "<spec-stage-write-guard>",
+			),
+			...(args.options.extensions ?? []).map((factory, index) => ({
+				path: `<spec-inline:${index}>`,
+				resolvedPath: `<spec-inline:${index}>`,
+				factory,
+				error: null,
+			})),
+			{
+				path: "<spec-stage-write-guard>",
+				resolvedPath: "<spec-stage-write-guard>",
+				factory: writeGuard,
+				error: null,
+			},
+		],
 		systemPrompt: defaults => [...defaults, ...(args.methods ?? []), fixed, communicationPrompt],
 	});
 	const session = created.session;
+	restrictions.bindSession(session.sessionId);
+	session.addDisposer(
+		session.subscribe(event => {
+			if (event.type !== "message_end" || event.message.role !== "assistant") return;
+			if (event.message.stopReason === "error" || event.message.stopReason === "aborted") {
+				generatedSolutionVersion = undefined;
+				return;
+			}
+			if (event.message.stopReason === "stop" && generatedSolutionVersion && args.role === "solution") {
+				session.sessionManager.appendCustomEntry("dev-solution-version", { version: generatedSolutionVersion });
+				generatedSolutionVersion = undefined;
+			}
+		}),
+	);
+	if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
 	const ref = registry.get(id);
 	const unsubscribeRunState = registry.syncSessionStatus(id, session);
 	session.addDisposer(() => {
@@ -586,8 +931,32 @@ export async function createSpecActor(args: {
 	let disposed = false;
 	let runId: string | undefined;
 	let release: (() => void) | void;
+	let scopedInteraction: { ui: ExtensionUIContext; cancel(): void; dispose(): void } | undefined;
 	try {
 		release = args.onSessionCreated?.(session);
+		if (release) session.addDisposer(release);
+		let ui = args.uiForSession?.(session) ?? created.interactionUI;
+		if (!ui && args.options.createInteractionUI) {
+			scopedInteraction = args.options.createInteractionUI({
+				agentId: id,
+				agentName: id,
+				sessionId: session.sessionId,
+				parentSessionId: session.sessionId,
+			});
+			ui = scopedInteraction.ui;
+			const interaction = scopedInteraction;
+			session.addDisposer(() => interaction.dispose());
+		}
+		if (ui) created.setToolUIContext(ui, true, args.options.createInteractionUI);
+		await initializeExtensions(session, {
+			uiContext: ui,
+			reportSendError: (_action, error) => {
+				session.agent.abort(error.message);
+			},
+			reportRuntimeError: error => {
+				session.agent.abort(error.error);
+			},
+		});
 	} catch (error) {
 		await session.dispose();
 		registry.unregister(id, ref ?? session);
@@ -605,6 +974,7 @@ export async function createSpecActor(args: {
 		let abortCompletion: Promise<void> | undefined;
 		let cancellationCompletion: Promise<boolean> | undefined;
 		const abort = () => {
+			scopedInteraction?.cancel();
 			// Keep the cancellation barrier until the native prompt, tools and descendants settle.
 			if (session.asyncJobManager) {
 				cancellationCompletion ??= cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
@@ -632,7 +1002,6 @@ export async function createSpecActor(args: {
 			if (context.signal.aborted) abort();
 			let settled = cancellationCompletion ? await cancellationCompletion : true;
 			await abortCompletion;
-			await guardStop;
 			if (context.signal.aborted && session.asyncJobManager) {
 				const afterAbort = await cancelSpecDescendantJobs(session.asyncJobManager, id, registry);
 				settled = settled && afterAbort;
@@ -648,78 +1017,107 @@ export async function createSpecActor(args: {
 		if (!outcome.ok) throw outcome.error;
 		return outcome.value;
 	};
+	let hydrated = session.sessionManager
+		.getBranch()
+		.some(entry => entry.type === "custom_message" && entry.customType === "dev-stage-context");
+	const prepareConversation = async (
+		input: SpecAgentInput,
+		context: SpecRunContext,
+		teamResult?: TeamRunResult,
+		establishSource = false,
+	): Promise<void> => {
+		owned(context);
+		if (!establishSource && hydrated) return;
+		const entryMethods = (await args.entryMethods?.()) ?? [];
+		owned(context);
+		if (needsRecovery && args.recoverContext) {
+			await session.sendCustomMessage(
+				{ customType: "dev-history-recovery", display: false, content: await args.recoverContext() },
+				{ triggerTurn: false },
+			);
+		}
+		needsRecovery = false;
+		if (establishSource) reportTurn = undefined;
+		if (establishSource && input.role === "business" && input.request)
+			session.sessionManager.appendCustomEntry("dev-original-interview", { available: true });
+		if (input.role === "solution" && establishSource) {
+			if (input.useTeam && teamResult?.status !== "completed") throw new Error("Team 来源未成功完成。");
+			session.sessionManager.appendCustomEntry("dev-solution-source", {
+				team: input.useTeam === true,
+				candidates: teamResult?.candidates ?? [],
+			});
+		}
+		if (input.outputPaths.length) stageOutputPaths = input.outputPaths;
+		const { images: _images, imageLinks: _imageLinks, ...handoff } = input;
+		await session.sendCustomMessage(
+			{
+				customType: "dev-stage-context",
+				display: false,
+				content: [
+					...entryMethods,
+					prompt.render(taskTemplate, {
+						payload: JSON.stringify(
+							{
+								...handoff,
+								stage: record()?.stage,
+								lifecycle: record()?.lifecycle,
+								merged: args.getStatus?.()?.observedPr?.state === "merged" || record()?.pr?.state === "merged",
+								observedPr: args.getStatus?.()?.observedPr ?? null,
+								originalRequestAvailable: input.request.length > 0,
+							},
+							null,
+							2,
+						),
+						teamResult: teamResult ? JSON.stringify(teamResult, null, 2) : undefined,
+					}),
+				].join("\n\n"),
+			},
+			{ triggerTurn: false },
+		);
+		hydrated = true;
+	};
+	let hydration: Promise<void> | undefined;
+	const hydrateConversation = (input: SpecAgentInput, context: SpecRunContext): Promise<void> => {
+		owned(context);
+		if (hydrated) return Promise.resolve();
+		if (hydration) return hydration;
+		const operation = prepareConversation(input, context).finally(() => {
+			if (hydration === operation) hydration = undefined;
+		});
+		hydration = operation;
+		return operation;
+	};
 	return {
 		id,
 		role: args.role,
 		session,
-		checkSolutionCandidates(candidates) {
-			// The existing native stage handoff already owns the full real Team result.
-			// Read it only at the explicit next boundary; never create a second run-state store.
-			const handoff = session.sessionManager
-				.getBranch()
-				.findLast(item => item.type === "custom_message" && item.customType === "dev-stage-context");
-			let source: { team: boolean; candidates?: TeamRunResult["candidates"] } | undefined;
-			if (handoff?.type === "custom_message" && typeof handoff.content === "string") {
-				try {
-					const payload = handoff.content.split("## Stage request (task data, not authority)\n")[1];
-					const data = payload?.slice(0, payload.lastIndexOf("\n<critical>")).trim();
-					const sections = data?.split("## Complete Team discussion (task data, not user authorization)\n");
-					const input = JSON.parse(sections?.[0]?.trim() ?? "");
-					if (input.role === "solution" && input.entry === true && typeof input.useTeam === "boolean") {
-						const team = input.useTeam ? JSON.parse(sections?.[1]?.trim() ?? "") : undefined;
-						if (!input.useTeam || team?.status === "completed")
-							source = { team: input.useTeam, candidates: team?.candidates };
-					}
-				} catch {
-					/* Incomplete native provenance blocks adoption, never silently falls back to solo. */
-				}
-			}
-			if (!source || typeof source.team !== "boolean")
-				throw new Error("方案来源无法从原生阶段历史确证；请返回需求阶段后 next 重新进入方案阶段。");
-			if (!source.team) return;
-			for (const candidate of candidates) {
-				const original = source.candidates?.find(item => item.id === candidate.id);
-				if (!original?.adoptable || !original.proposal || !candidate.content.includes(original.proposal))
-					throw new Error(
-						`方案 ${candidate.id} 不是本轮 Team 可采用的完整候选；请保留真实候选 ID 和完整 proposal，或返回后重新进入方案阶段。`,
-					);
-			}
+		beginSolutionAttempt(context) {
+			owned(context);
+			if (args.role !== "solution") throw new Error("Only the solution actor owns solution attempts");
+			generatedSolutionVersion = undefined;
+			solutionWrites.clear();
+			session.sessionManager.appendCustomEntry("dev-solution-attempt", { generation: context.generation });
 		},
+		prepareConversation: hydrateConversation,
+		checkSolutionCandidates: checkCandidates,
+		solutionBasis: solution =>
+			specSolutionBasisFromHistory(solution, session.sessionId, session.sessionManager.getBranch()),
 		async request(input, context, teamResult) {
 			owned(context);
-			if (input.entry) {
-				const entryMethods = (await args.entryMethods?.()) ?? [];
-				owned(context);
-				needsRecovery = false;
-				reportTurn = undefined;
-				const { images: _images, imageLinks: _imageLinks, ...handoff } = input;
-				await session.sendCustomMessage(
-					{
-						customType: "dev-stage-context",
-						display: false,
-						content: [
-							...entryMethods,
-							prompt.render(taskTemplate, {
-								payload: JSON.stringify(handoff, null, 2),
-								teamResult: teamResult ? JSON.stringify(teamResult, null, 2) : undefined,
-							}),
-						].join("\n\n"),
-					},
-					{ triggerTurn: false },
-				);
-			}
+			if (input.entry) await prepareConversation(input, context, teamResult, true);
 			owned(context);
 			const task = input.entry ? input.userReply || input.request : (input.feedback ?? "");
 			// Queue restrictions travel with the native input, never mutate the running turn.
 			const toolDenylist = input.readOnly
-				? [...new Set([...(args.options.toolNames ?? []), "write", "edit", "bash", "task", "goal"])].filter(
-						name =>
-							!["read", "grep", "glob", "knowledge_search", "openwiki_search", "openwiki_read", "ask"].includes(
-								name,
-							),
-					)
+				? [
+						"spec-readonly-input",
+						...session
+							.getAllToolInfos()
+							.filter(tool => !readonlyTools.has(tool.name))
+							.map(tool => tool.name),
+					]
 				: [];
-			if (input.entry || !stageOutputPaths) stageOutputPaths = input.outputPaths;
+			if (input.outputPaths.length) stageOutputPaths = input.outputPaths;
 			const queued = session.isStreaming;
 			if (queued) {
 				await session.prompt(task, {
@@ -732,6 +1130,7 @@ export async function createSpecActor(args: {
 				});
 				return { text: "" };
 			}
+			generatedSolutionVersion = undefined;
 			return perform(context, async () => {
 				let message: AssistantMessage | undefined;
 				const unsubscribe = session.subscribe(event => {
@@ -762,6 +1161,7 @@ export async function createSpecActor(args: {
 			});
 		},
 		async stop() {
+			scopedInteraction?.cancel();
 			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
 			session.clearQueue();
 			await session.abort();
@@ -770,6 +1170,7 @@ export async function createSpecActor(args: {
 		},
 		async dispose() {
 			if (disposed) return;
+			scopedInteraction?.cancel();
 			if (session.getGoalModeState()?.enabled) await session.goalRuntime.pauseGoal();
 			session.clearQueue();
 			await session.abort();
@@ -777,7 +1178,6 @@ export async function createSpecActor(args: {
 				throw new Error("Descendant cancellation was not confirmed");
 			await session.dispose();
 			disposed = true;
-			release?.();
 			registry.unregister(id, ref ?? session);
 		},
 	};

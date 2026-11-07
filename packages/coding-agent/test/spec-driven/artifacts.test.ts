@@ -3,15 +3,21 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import {
 	artifactVersion,
 	hasSpecCloseSideEffects,
 	containedSpecPath,
+	importDevBusiness,
+	readDevMaterial,
+	resolveDevMaterials,
 	SpecArtifactStore,
-	type SpecCloseProgress,
 } from "../../src/spec-driven/artifacts";
+import { DevGitService } from "../../src/spec-driven/git";
+import { saveDevRequirement } from "../../src/spec-driven/records";
 import { ensureSpecDrivenResources } from "../../src/spec-driven/resources";
-import type { SpecArtifactPaths } from "../../src/spec-driven/types";
+import { syncDevRequirement } from "../../src/spec-driven/native-sync";
+import type { DevRequirementRecord, SpecArtifactPaths, SpecCloseProgress } from "../../src/spec-driven/types";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -48,7 +54,7 @@ async function fixture(native = false, changeId = "sample-change"): Promise<Fixt
 	};
 	await write(
 		paths.requirements[0]!,
-		"## Why\n\nProvide sample behavior.\n\n## What Changes\n\n- Add sample behavior.\n\n## Capabilities\n\n### New Capabilities\n- `sample`: sample behavior.\n\n### Modified Capabilities\n\nNone.\n\n## Impact\n\nSample public API.\n",
+		"## Why\n\nProvide sample behavior for existing callers while keeping the expected public API guarantees stable across revisions.\n\n## What Changes\n\n- Add sample behavior.\n\n## Capabilities\n\n### New Capabilities\n- `sample`: sample behavior.\n\n### Modified Capabilities\n\nNone.\n\n## Impact\n\nSample public API.\n",
 	);
 	await write(
 		paths.requirements[1]!.replace(/\*+/, "sample"),
@@ -88,6 +94,147 @@ test("business document admission rejects incomplete drafts without creating dev
 	expect(document.version).toBe(artifactVersion(new TextEncoder().encode(content)));
 });
 
+const businessHeadings = [
+	"基本信息",
+	"业务背景与目标",
+	"实际使用场景与现状",
+	"期望结果",
+	"业务规则与边界",
+	"典型例子",
+	"业务验收预期",
+	"待确认事项",
+	"资料来源",
+	"业务确认与交接",
+] as const;
+function completeBusiness(): string {
+	return "# 业务需求：订单 Ω\n\n" + businessHeadings.map(heading => `## ${heading}\n真实完整业务事实。\n`).join("\n");
+}
+function importedRecord(changeId = "import-business"): DevRequirementRecord {
+	return {
+		schemaVersion: 1,
+		requirementId: changeId,
+		changeId,
+		branch: "main",
+		stage: "business",
+		lifecycle: "active",
+		materials: [],
+		decisions: [],
+		marks: {},
+		solutionBasis: null,
+		report: { development: null, st: null },
+		syncRevisions: [],
+		gitOperations: [],
+		pr: null,
+		testing: "not-started",
+		relatedRequirementIds: [],
+	};
+}
+
+describe("business imports use real bytes and owned Markdown", () => {
+	test("uploads selected content rather than reading the submitted filename as a host path", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-upload-"));
+		roots.push(cwd);
+		const bytes = new TextEncoder().encode(completeBusiness());
+		const record = importedRecord();
+		const document = await importDevBusiness(cwd, record, { kind: "upload", name: "not-on-host.md", bytes });
+		expect(document).toEqual({
+			path: "docs/business-requirements/import-business.md",
+			content: completeBusiness(),
+			version: artifactVersion(bytes),
+		});
+		expect(await fs.readFile(path.join(cwd, document.path), "utf8")).toBe(completeBusiness());
+		expect(record.decisions).toEqual([]);
+		await expect(fs.stat(path.join(cwd, "openspec"))).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(importDevBusiness(cwd, record, { kind: "upload", name: "again.md", bytes })).rejects.toThrow();
+		expect(await fs.readFile(path.join(cwd, document.path), "utf8")).toBe(completeBusiness());
+	});
+
+	test("copies a host file without acquiring ownership of or changing the source", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-host-import-"));
+		const external = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-external-"));
+		roots.push(cwd, external);
+		const source = path.join(external, "source Ω.MD");
+		await fs.writeFile(source, completeBusiness());
+		const document = await importDevBusiness(cwd, importedRecord(), { kind: "host-path", path: source });
+		expect(document.content).toBe(completeBusiness());
+		await fs.writeFile(source, "source changed independently");
+		expect(await fs.readFile(path.join(cwd, document.path), "utf8")).toBe(completeBusiness());
+		expect(await fs.readFile(source, "utf8")).toBe("source changed independently");
+	});
+
+	test("rejects URLs, non-Markdown and missing host files without publishing an internal copy", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-import-invalid-"));
+		roots.push(cwd);
+		for (const name of ["https://example.invalid/business.md", "business.pdf", "business.docx"]) {
+			await expect(
+				importDevBusiness(cwd, importedRecord(), {
+					kind: "upload",
+					name,
+					bytes: new TextEncoder().encode(completeBusiness()),
+				}),
+			).rejects.toThrow();
+			await expect(importDevBusiness(cwd, importedRecord(), { kind: "host-path", path: name })).rejects.toThrow();
+		}
+		await expect(
+			importDevBusiness(cwd, importedRecord(), { kind: "host-path", path: path.join(cwd, "missing.md") }),
+		).rejects.toThrow();
+		await expect(fs.stat(path.join(cwd, "docs/business-requirements/import-business.md"))).rejects.toMatchObject({
+			code: "ENOENT",
+		});
+	});
+
+	for (const heading of businessHeadings) {
+		for (const failure of ["missing", "empty"] as const) {
+			test(`imports but cannot approve ${failure} business section ${heading}, retaining bytes for repair`, async () => {
+				const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-sections-"));
+				roots.push(cwd);
+				const content =
+					"# 业务需求：订单\n\n" +
+					businessHeadings
+						.filter(item => failure !== "missing" || item !== heading)
+						.map(item => `## ${item}\n${failure === "empty" && item === heading ? "" : "业务事实。"}\n`)
+						.join("\n");
+				const document = await importDevBusiness(cwd, importedRecord(), {
+					kind: "upload",
+					name: "business.md",
+					bytes: new TextEncoder().encode(content),
+				});
+				expect(document.content).toBe(content);
+				await expect(
+					new SpecArtifactStore({ cwd, changeId: "import-business" }).readBusiness(document.path),
+				).rejects.toThrow();
+				expect(await fs.readFile(path.join(cwd, document.path), "utf8")).toBe(content);
+			});
+		}
+	}
+
+	test("does not write through a junction or overwrite a hard-linked destination", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-import-links-"));
+		const external = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-import-target-"));
+		roots.push(cwd, external);
+		await fs.mkdir(path.join(cwd, "docs"));
+		await fs.symlink(
+			external,
+			path.join(cwd, "docs/business-requirements"),
+			process.platform === "win32" ? "junction" : "dir",
+		);
+		const upload = {
+			kind: "upload" as const,
+			name: "business.md",
+			bytes: new TextEncoder().encode(completeBusiness()),
+		};
+		await expect(importDevBusiness(cwd, importedRecord(), upload)).rejects.toThrow();
+		await expect(fs.stat(path.join(external, "import-business.md"))).rejects.toMatchObject({ code: "ENOENT" });
+		await fs.unlink(path.join(cwd, "docs/business-requirements"));
+		await fs.mkdir(path.join(cwd, "docs/business-requirements"));
+		const source = path.join(external, "source.md");
+		await fs.writeFile(source, "must remain unchanged");
+		await fs.link(source, path.join(cwd, "docs/business-requirements/import-business.md"));
+		await expect(importDevBusiness(cwd, importedRecord(), upload)).rejects.toThrow();
+		expect(await fs.readFile(source, "utf8")).toBe("must remain unchanged");
+	});
+});
+
 async function acceptance(context: Fixture) {
 	const { store, paths, write } = context;
 	await write(
@@ -124,18 +271,18 @@ describe("stage files are the sole artifact inputs", () => {
 		const { cwd, store, paths, write } = await fixture(true);
 		const specs = `${store.changeDir}/specs`;
 		await fs.rm(path.join(cwd, specs), { recursive: true });
-		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格，请补齐后重试 /dev next");
+		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格");
 		await expect(store.readRequirements()).rejects.toThrow(`${specs}/*/spec.md`);
 		await expect(store.readRequirements()).rejects.toThrow("ENOENT");
 
 		await fs.mkdir(path.join(cwd, specs));
-		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格，请补齐后重试 /dev next");
+		await expect(store.readRequirements()).rejects.toThrow("缺少需求规格");
 		await expect(store.readRequirements()).rejects.toThrow(`${specs}/*/spec.md`);
 		await fs.rm(path.join(cwd, specs), { recursive: true });
 		await fs.writeFile(path.join(cwd, specs), "not a directory");
 		await expect(store.readRequirements()).rejects.toThrow("ENOTDIR");
 
-		await expect(store.readReport()).rejects.toThrow("缺少完成报告，请补齐后重试 /dev next");
+		await expect(store.readReport()).rejects.toThrow("缺少完成报告");
 		await expect(store.readReport()).rejects.toThrow(paths.report);
 		await expect(store.readReport()).rejects.toThrow("ENOENT");
 		await fs.mkdir(path.join(cwd, paths.report), { recursive: true });
@@ -542,12 +689,34 @@ test("restoration keeps the original paths without recreating an archived change
 	expect(await restored.checkVersions(input.acceptedVersions)).toEqual({ matches: true, changed: [] });
 	expect(await restored.close(input)).toEqual({ archivedChangePath });
 	await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toThrow();
+	const restarted = new SpecArtifactStore({
+		cwd: context.cwd,
+		changeId: context.store.changeId,
+		planPath: context.paths.plan,
+	});
+	expect(await restarted.initialize()).toEqual(context.paths);
+	const businessPath = "docs/business-requirements/sample-change.md";
+	await context.write(businessPath, completeBusiness());
+	expect(await restarted.initialize(businessPath)).toEqual({ ...context.paths, business: businessPath });
+	expect((await restarted.readBusiness(businessPath)).content).toBe(completeBusiness());
+	expect(
+		(await restarted.readRequirements()).files.every(file => file.path.startsWith(`${archivedChangePath}/`)),
+	).toBe(true);
+	await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
 	const fixed = new SpecArtifactStore({
 		cwd: context.cwd,
 		changeId: "another-change",
 		planPath: paths.plan,
 	});
 	expect(fixed.planPath).toBe(paths.plan);
+	const duplicate = path.join(context.cwd, "openspec/changes/archive", `1999-01-01-${context.store.changeId}`);
+	await fs.cp(path.join(context.cwd, archivedChangePath), duplicate, { recursive: true });
+	const explicit = new SpecArtifactStore({ cwd: context.cwd, changeId: context.store.changeId, paths: context.paths });
+	expect(await explicit.checkVersions(input.acceptedVersions, archivedChangePath)).toEqual({
+		matches: true,
+		changed: [],
+	});
+	await expect(explicit.checkVersions(input.acceptedVersions)).rejects.toBeInstanceOf(Error);
 }, 120_000);
 
 test("native archive progress survives failed persistence and retry performs only remaining checks", async () => {
@@ -787,3 +956,510 @@ test("external omp-spec shadow blocks initialization, requirement approval and a
 		"schema: omp-spec",
 	);
 }, 120_000);
+
+test("all material readers retain logical IDs and return actual archive paths after native synchronization", async () => {
+	const context = await fixture(true);
+	const input = await acceptance(context);
+	const record = importedRecord("sample-change");
+	record.stage = "pr";
+	record.materials = [
+		...input.specification.files.map((file, index) => ({
+			id: index === 0 ? "proposal-original-id" : `delta-original-${index}`,
+			kind: index === 0 ? ("proposal" as const) : ("delta" as const),
+			path: file.path,
+			version: file.version,
+		})),
+		...(["solution", "plan", "report"] as const).map(kind => ({
+			id: kind,
+			kind,
+			path: context.paths[kind],
+			version: input.acceptedVersions.find(file => file.path === context.paths[kind])!.version,
+		})),
+	];
+	const revision = await syncDevRequirement(
+		{
+			cwd: context.cwd,
+			changeId: record.changeId,
+			changeDirectory: context.store.changeDir,
+			acceptedVersions: input.acceptedVersions,
+			previous: null,
+			operationId: "first-archive",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	record.syncRevisions.push(revision);
+	expect(revision.archivedChangePath).toBeTruthy();
+	const archive = revision.archivedChangePath!;
+	const materials = await resolveDevMaterials(context.cwd, record);
+	for (const original of input.specification.files) {
+		const current = materials.find(file => file.id === record.materials.find(ref => ref.path === original.path)?.id)!;
+		expect(current.path).toBe(original.path.replace(context.store.changeDir, archive));
+		expect(await readDevMaterial(context.cwd, record, current.id)).toEqual({
+			path: current.path,
+			version: original.version,
+			content: original.content,
+		});
+	}
+	const reopened = new SpecArtifactStore({
+		cwd: context.cwd,
+		changeId: record.changeId,
+		paths: context.paths,
+		archivedChangePath: archive,
+	});
+	const requirements = await reopened.readRequirements();
+	expect(requirements.files.every(file => file.path.startsWith(`${archive}/`))).toBe(true);
+	expect(await reopened.checkVersions(input.acceptedVersions)).toEqual({ matches: true, changed: [] });
+	expect(await reopened.readSolution()).toEqual(await context.store.readSolution());
+	expect(await reopened.readPlan()).toEqual(await context.store.readPlan());
+	expect(await reopened.readReport()).toEqual(await context.store.readReport());
+	await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
+	await expect(readDevMaterial(context.cwd, record, "../../private")).rejects.toThrow();
+}, 120_000);
+
+test("archived revisions require native MODIFIED deltas and repeat the same operation without a second apply or archive", async () => {
+	const context = await fixture(true);
+	const input = await acceptance(context);
+	const first = await syncDevRequirement(
+		{
+			cwd: context.cwd,
+			changeId: "sample-change",
+			changeDirectory: context.store.changeDir,
+			acceptedVersions: input.acceptedVersions,
+			previous: null,
+			operationId: "archive-once",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	const archive = first.archivedChangePath!;
+	const deltaPath = `${archive}/specs/sample/spec.md`;
+	const originalDelta = await fs.readFile(path.join(context.cwd, deltaPath), "utf8");
+	const modified = originalDelta
+		.replace("## ADDED Requirements", "## MODIFIED Requirements")
+		.replace("preserve sample behavior", "preserve revised sample behavior");
+	await context.write(deltaPath, modified);
+	const reopened = new SpecArtifactStore({
+		cwd: context.cwd,
+		changeId: "sample-change",
+		planPath: context.paths.plan,
+	});
+	expect(await reopened.initialize()).toEqual(context.paths);
+	const requirements = await reopened.readRequirements();
+	const accepted = [
+		...requirements.files,
+		await reopened.readSolution(),
+		await reopened.readPlan(),
+		await reopened.readReport(),
+	].map(({ path, version }) => ({ path, version }));
+	const archives = await fs.readdir(path.join(context.cwd, "openspec/changes/archive"));
+	const second = await syncDevRequirement(
+		{
+			cwd: context.cwd,
+			changeId: "sample-change",
+			changeDirectory: archive,
+			acceptedVersions: accepted,
+			previous: first,
+			operationId: "revised-sync",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	expect(second.archivedChangePath).toBe(archive);
+	const main = path.join(context.cwd, "openspec/specs/sample/spec.md");
+	const bytes = await fs.readFile(main);
+	expect(bytes.toString("utf8")).toContain("preserve revised sample behavior");
+	const repeated = await syncDevRequirement(
+		{
+			cwd: context.cwd,
+			changeId: "sample-change",
+			changeDirectory: archive,
+			acceptedVersions: accepted,
+			previous: second,
+			operationId: "revised-sync",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	expect(repeated).toEqual(second);
+	expect(await fs.readFile(main)).toEqual(bytes);
+	expect(await fs.readdir(path.join(context.cwd, "openspec/changes/archive"))).toEqual(archives);
+	await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
+
+	await context.write(
+		deltaPath,
+		modified
+			.replace("## MODIFIED Requirements", "## ADDED Requirements")
+			.replace("revised sample", "different sample"),
+	);
+	const changedRequirements = await reopened.readRequirements();
+	await expect(
+		syncDevRequirement(
+			{
+				cwd: context.cwd,
+				changeId: "sample-change",
+				changeDirectory: archive,
+				acceptedVersions: [
+					...changedRequirements.files,
+					await reopened.readSolution(),
+					await reopened.readPlan(),
+					await reopened.readReport(),
+				].map(({ path, version }) => ({ path, version })),
+				previous: second,
+				operationId: "invalid-added-resync",
+				onProgress: async () => {},
+			},
+			new AbortController().signal,
+		),
+	).rejects.toThrow();
+	expect(await fs.readFile(main)).toEqual(bytes);
+	expect(await fs.readdir(path.join(context.cwd, "openspec/changes/archive"))).toEqual(archives);
+}, 120_000);
+
+test("archived Back edits retain active strict warning and main-spec scenario-loss gates", async () => {
+	const context = await fixture(true);
+	const activeDelta = `${context.store.changeDir}/specs/sample/spec.md`;
+	const original = await fs.readFile(path.join(context.cwd, activeDelta), "utf8");
+	const extraScenario =
+		"\n#### Scenario: Also works\n- **WHEN** another supported request is used\n- **THEN** the same guarantee holds\n";
+	const complete = original + extraScenario;
+	await context.write(activeDelta, complete.replace("SHALL", "should"));
+	await expect(context.store.readRequirements()).rejects.toThrow("WARNING");
+	await context.write(activeDelta, complete);
+	const input = await acceptance(context);
+	const { archivedChangePath } = await context.store.close(input);
+	const reopened = new SpecArtifactStore({
+		cwd: context.cwd,
+		changeId: context.store.changeId,
+		planPath: context.paths.plan,
+	});
+	expect(await reopened.initialize()).toEqual(context.paths);
+	const archivedDelta = `${archivedChangePath}/specs/sample/spec.md`;
+	const mainPath = path.join(context.cwd, "openspec/specs/sample/spec.md");
+	const main = await fs.readFile(mainPath);
+	await context.write(archivedDelta, original.replace("## ADDED Requirements", "## MODIFIED Requirements"));
+	await expect(reopened.readRequirements()).rejects.toThrow(/scenario/i);
+	const modified = complete.replace("## ADDED Requirements", "## MODIFIED Requirements");
+	await context.write(archivedDelta, modified.replace("SHALL", "should"));
+	await expect(reopened.readRequirements()).rejects.toThrow("WARNING");
+	await context.write(archivedDelta, modified);
+	expect((await reopened.readRequirements()).files.find(file => file.path === archivedDelta)?.content).toBe(modified);
+	expect(await fs.readFile(mainPath)).toEqual(main);
+	await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
+}, 120_000);
+
+/** Use the native repository and real ownership ledger, without invoking a Git executable. */
+async function ownedSyncFixture(context: Fixture, files: readonly string[]) {
+	const gitDir = path.join(context.cwd, ".git");
+	for (const child of ["objects", "refs/heads"]) await fs.mkdir(path.join(gitDir, child), { recursive: true });
+	await fs.writeFile(path.join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+	await fs.writeFile(
+		path.join(gitDir, "config"),
+		"[core]\nrepositoryformatversion = 0\nbare = false\nautocrlf = false\nhooksPath = disabled-hooks\n[user]\nname = Material Fixture\nemail = material@example.invalid\n[commit]\ngpgsign = false\n",
+	);
+	await context.write(".gitignore", ".omp/\n");
+	const record = importedRecord(context.store.changeId);
+	record.stage = "pr";
+	await saveDevRequirement(context.cwd, record, null);
+	const repo = vcs.requireGit(context.cwd);
+	await repo.stageFiles([".gitignore", `docs/dev-requirements/${record.requirementId}.json`, ...files]);
+	await repo.commitCreate("material ownership baseline", {});
+	const service = new DevGitService({ cwd: context.cwd, repo });
+	await service.initializeRequirementGit(record.requirementId);
+	return { repo, service, requirementId: record.requirementId };
+}
+
+test.each(["active", "archived"] as const)(
+	"resumes failed %s ownership settlement from its original capture without reapplying",
+	async location => {
+		const context = await fixture(true);
+		const accepted = await acceptance(context);
+		const previous =
+			location === "archived"
+				? await syncDevRequirement(
+						{
+							cwd: context.cwd,
+							changeId: context.store.changeId,
+							changeDirectory: context.store.changeDir,
+							acceptedVersions: accepted.acceptedVersions,
+							previous: null,
+							operationId: "baseline-archive",
+							onProgress: async () => {},
+						},
+						new AbortController().signal,
+					)
+				: null;
+		const directory = previous?.archivedChangePath ?? context.store.changeDir;
+		if (location === "archived") {
+			const delta = `${directory}/specs/sample/spec.md`;
+			await context.write(
+				delta,
+				(await fs.readFile(path.join(context.cwd, delta), "utf8"))
+					.replace("## ADDED Requirements", "## MODIFIED Requirements")
+					.replace("preserve sample", "preserve updated sample"),
+			);
+		}
+		const store = new SpecArtifactStore({
+			cwd: context.cwd,
+			changeId: context.store.changeId,
+			planPath: context.paths.plan,
+		});
+		const requirements = await store.readRequirements();
+		const files = [
+			...requirements.files,
+			await store.readSolution(),
+			await store.readPlan(),
+			await store.readReport(),
+		].map(({ path, version }) => ({ path, version }));
+		const main = "openspec/specs/sample/spec.md";
+		const before = location === "archived" ? artifactVersion(await fs.readFile(path.join(context.cwd, main))) : null;
+		const owned = await ownedSyncFixture(context, [
+			...files.map(file => file.path),
+			`${directory}/.openspec.yaml`,
+			...(before ? [main] : []),
+		]);
+		await context.write("unrelated.txt", "user-owned unrelated bytes\n");
+		let captures = 0;
+		let captureId = "";
+		let persisted: SpecCloseProgress = {};
+		const operationId = `owned-${location}-sync`;
+		await expect(
+			syncDevRequirement(
+				{
+					cwd: context.cwd,
+					changeId: context.store.changeId,
+					changeDirectory: directory,
+					acceptedVersions: files,
+					previous,
+					operationId,
+					onProgress: async progress => {
+						persisted = structuredClone(progress);
+					},
+					onBeforeWrite: async paths => {
+						captures++;
+						captureId = await owned.service.beginOwnedPaths(owned.requirementId, operationId, paths);
+						return captureId;
+					},
+					onAfterWrite: async () => {
+						throw new Error("ownership settlement unavailable");
+					},
+				},
+				new AbortController().signal,
+			),
+		).rejects.toThrow("ownership settlement unavailable");
+		expect(persisted.synced).toBe(true);
+		expect(persisted.ownership).toEqual({ captureId, state: "pending" });
+		const mainBytes = await fs.readFile(path.join(context.cwd, main));
+		const mainStat = await fs.stat(path.join(context.cwd, main));
+		const archives = await fs.readdir(path.join(context.cwd, "openspec/changes/archive"));
+		const cold = new DevGitService({ cwd: context.cwd, repo: owned.repo });
+		// Neither a saved revision nor an in-memory capture variable is needed after restart.
+		const recovered = await syncDevRequirement(
+			{
+				cwd: context.cwd,
+				changeId: context.store.changeId,
+				changeDirectory: directory,
+				acceptedVersions: files,
+				previous: null,
+				operationId,
+				onProgress: async progress => {
+					persisted = structuredClone(progress);
+				},
+				onBeforeWrite: async () => {
+					throw new Error("must not recapture a postimage");
+				},
+				onAfterWrite: async originalCapture => {
+					expect(originalCapture).toBe(captureId);
+					await cold.endOwnedPaths(owned.requirementId, originalCapture);
+				},
+			},
+			new AbortController().signal,
+		);
+		expect(captures).toBe(1);
+		expect(recovered.progress.ownership).toEqual({ captureId, state: "settled" });
+		expect(persisted.ownership?.state).toBe("settled");
+		expect(await fs.readFile(path.join(context.cwd, main))).toEqual(mainBytes);
+		expect((await fs.stat(path.join(context.cwd, main))).mtimeMs).toBe(mainStat.mtimeMs);
+		expect(await fs.readdir(path.join(context.cwd, "openspec/changes/archive"))).toEqual(archives);
+		const changes = await cold.getOwnedChanges(owned.requirementId);
+		const mainChange = changes.find(change => change.path === main)!;
+		expect(mainChange.beforeVersion).toBe(before);
+		expect(mainChange.afterVersion).toBe(artifactVersion(mainBytes));
+		expect(changes.some(change => change.path === "unrelated.txt")).toBe(false);
+		const cancellation = await owned.repo.previewOwnedPatch(mainChange.patch, { reverse: true });
+		expect(cancellation.expected.find(file => file.path === main)).toEqual({
+			path: main,
+			beforeVersion: artifactVersion(mainBytes),
+			afterVersion: before,
+		});
+		await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({ code: "ENOENT" });
+	},
+	120_000,
+);
+
+test("completed native receipts recover pending original ownership even when host progress was never saved", async () => {
+	const context = await fixture(true);
+	const accepted = await acceptance(context);
+	const first = await syncDevRequirement(
+		{
+			cwd: context.cwd,
+			changeId: context.store.changeId,
+			changeDirectory: context.store.changeDir,
+			acceptedVersions: accepted.acceptedVersions,
+			previous: null,
+			operationId: "receipt-baseline",
+			onProgress: async () => {},
+		},
+		new AbortController().signal,
+	);
+	const archive = first.archivedChangePath!;
+	const delta = `${archive}/specs/sample/spec.md`;
+	await context.write(
+		delta,
+		(await fs.readFile(path.join(context.cwd, delta), "utf8"))
+			.replace("## ADDED Requirements", "## MODIFIED Requirements")
+			.replace("preserve sample", "preserve receipt-recovered sample"),
+	);
+	const store = new SpecArtifactStore({
+		cwd: context.cwd,
+		changeId: context.store.changeId,
+		planPath: context.paths.plan,
+	});
+	const files = [
+		...(await store.readRequirements()).files,
+		await store.readSolution(),
+		await store.readPlan(),
+		await store.readReport(),
+	].map(({ path, version }) => ({ path, version }));
+	const main = "openspec/specs/sample/spec.md";
+	const before = artifactVersion(await fs.readFile(path.join(context.cwd, main)));
+	const owned = await ownedSyncFixture(context, [...files.map(file => file.path), `${archive}/.openspec.yaml`, main]);
+	const operationId = "completed-receipt-owned";
+	let captureId = "";
+	let captures = 0;
+	let settlements = 0;
+	const originalWriteFile = fs.writeFile;
+	const unavailable = spyOn(fs, "writeFile").mockImplementation(((
+		target: Parameters<typeof fs.writeFile>[0],
+		data: Parameters<typeof fs.writeFile>[1],
+		...options: unknown[]
+	) =>
+		String(target).endsWith(".ownership.json.tmp") && String(data).includes('"synced":true')
+			? Promise.reject(new Error("host progress journal unavailable"))
+			: Reflect.apply(originalWriteFile, fs, [target, data, ...options])) as typeof fs.writeFile);
+	try {
+		await expect(
+			syncDevRequirement(
+				{
+					cwd: context.cwd,
+					changeId: context.store.changeId,
+					changeDirectory: archive,
+					acceptedVersions: files,
+					previous: first,
+					operationId,
+					onProgress: async () => {},
+					onBeforeWrite: async paths => {
+						captures++;
+						captureId = await owned.service.beginOwnedPaths(owned.requirementId, operationId, paths);
+						return captureId;
+					},
+					onAfterWrite: async originalCapture => {
+						settlements++;
+						await owned.service.endOwnedPaths(owned.requirementId, originalCapture);
+					},
+				},
+				new AbortController().signal,
+			),
+		).rejects.toThrow("host progress journal unavailable");
+	} finally {
+		unavailable.mockRestore();
+	}
+	const receiptBase = path.join(context.cwd, ".omp/dev-workbench/sync", artifactVersion(operationId));
+	expect((JSON.parse(await fs.readFile(`${receiptBase}.json`, "utf8")) as { state: string }).state).toBe("completed");
+	const journal = JSON.parse(await fs.readFile(`${receiptBase}.ownership.json`, "utf8")) as {
+		progress: SpecCloseProgress;
+	};
+	expect(journal.progress.synced).toBeUndefined();
+	expect(journal.progress.ownership).toEqual({ captureId, state: "pending" });
+	expect(settlements).toBe(0);
+	const bytes = await fs.readFile(path.join(context.cwd, main));
+	const stat = await fs.stat(path.join(context.cwd, main));
+	const retry = {
+		cwd: context.cwd,
+		changeId: context.store.changeId,
+		changeDirectory: archive,
+		acceptedVersions: files,
+		previous: null,
+		operationId,
+		onProgress: async () => {},
+		onBeforeWrite: async () => {
+			throw new Error("must not recapture");
+		},
+	};
+	await expect(
+		syncDevRequirement(
+			{
+				...retry,
+				onAfterWrite: async () => {
+					throw new Error("endOwnedPaths unavailable");
+				},
+			},
+			new AbortController().signal,
+		),
+	).rejects.toThrow("endOwnedPaths unavailable");
+	const cold = new DevGitService({ cwd: context.cwd, repo: owned.repo });
+	const recovered = await syncDevRequirement(
+		{
+			...retry,
+			onAfterWrite: async originalCapture => {
+				expect(originalCapture).toBe(captureId);
+				await cold.endOwnedPaths(owned.requirementId, originalCapture);
+			},
+		},
+		new AbortController().signal,
+	);
+	expect(captures).toBe(1);
+	expect(recovered.progress.ownership).toEqual({ captureId, state: "settled" });
+	expect(recovered.progress.synced).toBe(true);
+	expect(await fs.readFile(path.join(context.cwd, main))).toEqual(bytes);
+	expect((await fs.stat(path.join(context.cwd, main))).mtimeMs).toBe(stat.mtimeMs);
+	const mainChange = (await cold.getOwnedChanges(owned.requirementId)).find(change => change.path === main)!;
+	expect(mainChange.beforeVersion).toBe(before);
+	expect(mainChange.afterVersion).toBe(artifactVersion(bytes));
+	const cancellation = await owned.repo.previewOwnedPatch(mainChange.patch, { reverse: true });
+	expect(cancellation.expected.find(file => file.path === main)?.afterVersion).toBe(before);
+}, 120_000);
+
+test("pending ownership remains recoverable independently of native sync completion", () => {
+	expect(hasSpecCloseSideEffects({ ownership: { captureId: "original-capture", state: "pending" } })).toBe(true);
+	expect(hasSpecCloseSideEffects({ ownership: { captureId: "original-capture", state: "settled" } })).toBe(false);
+});
+
+test.each(["active", "archived"] as const)(
+	"the %s proposal uses the native change parser before requirement approval",
+	async location => {
+		const context = await fixture(true);
+		const accepted = await acceptance(context);
+		const directory =
+			location === "archived" ? (await context.store.close(accepted)).archivedChangePath : context.store.changeDir;
+		const proposal = `${directory}/proposal.md`;
+		const original = await fs.readFile(path.join(context.cwd, proposal), "utf8");
+		for (const [content, nativeDiagnostic] of [
+			["not a proposal\n", "Why section"],
+			["## Why\n\nProvide sample behavior.\n", "What Changes section"],
+		] as const) {
+			await context.write(proposal, content);
+			await expect(context.store.readRequirements()).rejects.toThrow(nativeDiagnostic);
+			expect(await fs.readFile(path.join(context.cwd, proposal), "utf8")).toBe(content);
+		}
+		await context.write(proposal, original);
+		expect((await context.store.readRequirements()).files.find(file => file.path === proposal)?.content).toBe(
+			original,
+		);
+		if (location === "archived")
+			await expect(fs.stat(path.join(context.cwd, context.store.changeDir))).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+	},
+	120_000,
+);

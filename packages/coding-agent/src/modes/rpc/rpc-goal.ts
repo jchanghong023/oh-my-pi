@@ -90,14 +90,20 @@ export class RpcGoalController {
 	 */
 	#changeOverlappedReconcile = false;
 	readonly #onContinuationDropped: (() => void) | undefined;
+	readonly #continuationMode: "rpc" | "interactive";
 
 	/**
 	 * @param onContinuationDropped called when a pending continuation is abandoned
 	 *   (a gate closed while it waited), so settle reporting can re-check.
 	 */
-	constructor(session: RpcGoalSession, onContinuationDropped?: () => void) {
+	constructor(
+		session: RpcGoalSession,
+		onContinuationDropped?: () => void,
+		continuationMode: "rpc" | "interactive" = RPC_GOAL_CONTINUATION_MODE,
+	) {
 		this.#session = session;
 		this.#onContinuationDropped = onContinuationDropped;
+		this.#continuationMode = continuationMode;
 	}
 
 	/**
@@ -409,7 +415,7 @@ export class RpcGoalController {
 	 */
 	#continuationWanted(): boolean {
 		const session = this.#session;
-		if (!cfgGoalContinuationModes.get(session.settings).includes(RPC_GOAL_CONTINUATION_MODE)) return false;
+		if (!cfgGoalContinuationModes.get(session.settings).includes(this.#continuationMode)) return false;
 		if (this.#hostStopped || this.#suppressContinuation || session.isDisposed) return false;
 		if (session.getPlanModeState()?.enabled) return false;
 		const state = session.getGoalModeState();

@@ -283,6 +283,14 @@ export interface MCPAuthChallenge {
 	readonly wwwAuthenticate: readonly string[];
 }
 
+/** Actual caller captured at tool-call entry, before asynchronous work or an auth challenge. */
+export interface MCPAuthInvocation {
+	/** Existing native tool scope, or "owner" for an unattributed owning-session call. */
+	readonly scope: string;
+	readonly toolCallId: string;
+	readonly signal?: AbortSignal;
+}
+
 /** tools/call response */
 export interface MCPToolCallResult {
 	content: MCPContent[];

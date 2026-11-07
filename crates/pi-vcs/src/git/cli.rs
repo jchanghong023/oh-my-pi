@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use super::GitRepo;
 use crate::{
 	error::{Error, Result},
-	types::{CloneOptions, PushOptions},
+	types::{CloneOptions, PushOptions, RemoteRefResult},
 };
 
 /// Default deadline for local git plumbing via the fallback runner.
@@ -551,6 +551,62 @@ async fn terminate(child: &mut tokio::process::Child) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 impl GitRepo {
+	/// Query exactly one advertised full ref, preserving network failures as
+	/// errors rather than confusing them with a successfully observed absence.
+	pub async fn remote_ref(
+		&self,
+		remote: &str,
+		full_ref: &str,
+		cancel: Option<CancellationToken>,
+	) -> Result<RemoteRefResult> {
+		let _: gix::refs::FullName = full_ref
+			.try_into()
+			.map_err(|err| Error::backend("git ls-remote full ref", err))?;
+		if remote.is_empty() || !full_ref.starts_with("refs/") {
+			return Err(Error::backend(
+				"git ls-remote",
+				"an explicit remote and full refs/ name are required",
+			));
+		}
+		let args = vec![
+			"ls-remote".to_owned(),
+			"--refs".to_owned(),
+			"--exit-code".to_owned(),
+			"--".to_owned(),
+			remote.to_owned(),
+			full_ref.to_owned(),
+		];
+		let output = run(self.root(), &args, &RunOptions {
+			read_only: true,
+			timeout: Some(NETWORK_TIMEOUT),
+			cancel,
+			..RunOptions::default()
+		})
+		.await?;
+		if is_truncated(&output.stdout) || is_truncated(&output.stderr) {
+			return Err(Error::backend("git ls-remote", "truncated advertisement is unknown"));
+		}
+		if output.exit_code == 2 && output.stdout.is_empty() && output.stderr.trim().is_empty() {
+			return Ok(RemoteRefResult { sha: None });
+		}
+		let output = output.into_checked(&args)?;
+		let mut sha = None;
+		for line in output.stdout.lines() {
+			let Some((id, name)) = line.split_once('\t') else {
+				return Err(Error::backend("git ls-remote", "malformed advertisement"));
+			};
+			if name != full_ref {
+				continue;
+			}
+			let id = gix::hash::ObjectId::from_hex(id.as_bytes())
+				.map_err(|err| Error::backend("git ls-remote", err))?;
+			if id.is_null() || sha.replace(id.to_hex().to_string()).is_some() {
+				return Err(Error::backend("git ls-remote", "ambiguous or null advertisement"));
+			}
+		}
+		Ok(RemoteRefResult { sha })
+	}
+
 	/// Push the current branch (branch-scoped: never follows tags).
 	///
 	/// `--no-follow-tags` overrides a user's `push.followTags = true`, which

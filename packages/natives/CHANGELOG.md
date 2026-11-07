@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Resolve native merge bases in repositories without an optional commit-graph cache.
 - Build Windows native addons without Opus-related LNK4217 linker warnings.
 - Build loadable native addons on CentOS 7/glibc 2.17 with the system's endian conversion macros.
 - Keep token counting, syntax warmup and built-in sorting usable when Rayon cannot create worker threads on Linux and other resource-constrained hosts.
@@ -21,6 +22,8 @@
 - Restore startup and external shell commands on glibc 2.17, and preserve native loader errors without retrying the same failed addon.
 
 ### Changed
+
+- Add isolated canonical index snapshots, effective hook inspection, resumable hook-free scoped commits, exact remote-ref observations, and raw-byte guarded patch previews and partial results for the browser workbench.
 
 - Build fork release addons directly with cached Cargo: one CentOS 7/glibc 2.17 baseline addon on Linux x64 and one modern/AVX2 addon on Windows x64, without Bazel or load probes.
 

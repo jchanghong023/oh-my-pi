@@ -115,6 +115,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.configHelp,
 	},
 	{
+		name: "dev",
+		load: () => import("./commands/dev").then(m => m.default),
+		help: commandHelp.devHelp,
+	},
+	{
 		name: "knowledge",
 		load: () => import("./commands/knowledge").then(m => m.default),
 		help: commandHelp.knowledgeHelp,
@@ -342,7 +347,7 @@ for (const command of commands) {
 }
 
 /** Commands that accept launch-global flags before their command token. */
-export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true };
+export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: true, acp: true, dev: true };
 
 /** Commands whose trailing profile flags must be applied before their modules load. */
 export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = {

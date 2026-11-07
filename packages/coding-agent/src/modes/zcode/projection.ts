@@ -12,7 +12,6 @@ import { toZCodeReasoningLevel } from "./provider-config";
 import { modelSelectionSchema, type ModelSelection } from "./schema/vendor/model-selection";
 import { readHighspeedInputFacts } from "./sessions";
 import { deobfuscateAssistantContent } from "../../secrets/message-transform";
-import type { OmpSpecRun } from "./schema";
 import {
 	conversationSnapshotSchema,
 	conversationRowSchema,
@@ -25,7 +24,6 @@ import {
 	type SessionSummary,
 	type AttachmentRef,
 	PROTOCOL_V4_LIMITS,
-	WORKFLOW_RUNS_LIMITS,
 	workflowLaunchMetaSchema,
 	deriveSessionWorkflowActivity,
 } from "./schema";
@@ -277,8 +275,6 @@ export class ZCodeProjection {
 	// 调用方显式传入;无 linkage 时不合成 forkNotice 分割线(缺陷2)。
 	#forkParentSessionId?: string;
 
-	#workflowState: Pick<StatePatch, "workflowRuns" | "backgroundWorks"> = {};
-	#specRuns: OmpSpecRun[] = [];
 	constructor(options: ZCodeProjectionOptions) {
 		this.#options = options;
 		for (const [agentId, sessionId] of Object.entries(options.childSessions ?? {}))
@@ -457,28 +453,9 @@ export class ZCodeProjection {
 				}
 			: undefined;
 	}
-	setSpecDrivenInteraction(dev: StatePatch["dev"]): void {
-		this.setState({ dev: dev ?? { mode: "chat", actions: [] } });
-	}
-	setSpecDrivenRuns(runs: OmpSpecRun[]): void {
-		this.#specRuns = runs.slice(0, WORKFLOW_RUNS_LIMITS.maxRuns);
-		this.setWorkflowState(this.#workflowState);
-	}
 	setWorkflowState(state: Pick<StatePatch, "workflowRuns" | "backgroundWorks">): void {
-		this.#workflowState = state;
 		this.setState({
-			workflowRuns: this.#specRuns.length
-				? {
-						revision: Math.max(
-							state.workflowRuns?.revision ?? 0,
-							...this.#specRuns.map(run => run.spec.updatedAt),
-						),
-						runs: [
-							...(state.workflowRuns?.runs ?? []).filter(run => !("spec" in run) || !run.spec),
-							...this.#specRuns,
-						],
-					}
-				: state.workflowRuns,
+			workflowRuns: state.workflowRuns,
 			backgroundWorks: [
 				...this.#state.backgroundWorks.filter(work => work.kind !== "workflow"),
 				...(state.backgroundWorks ?? []),
@@ -787,7 +764,7 @@ export class ZCodeProjection {
 		const before = this.#state.rows.window;
 		this.#rebuild();
 		this.#publishRows(before, {
-			backgroundWorks: [...backgroundWorks, ...(this.#workflowState.backgroundWorks ?? [])],
+			backgroundWorks: [...backgroundWorks, ...this.#state.backgroundWorks.filter(work => work.kind === "workflow")],
 		});
 	}
 
@@ -1024,7 +1001,14 @@ export class ZCodeProjection {
 						stopState: "idle",
 						activeWorks: this.#state.control.activeWorks.filter(work => work.kind !== "primaryTurn"),
 					},
-					...(awaited ? { backgroundWorks: [...awaited, ...(this.#workflowState.backgroundWorks ?? [])] } : {}),
+					...(awaited
+						? {
+								backgroundWorks: [
+									...awaited,
+									...this.#state.backgroundWorks.filter(work => work.kind === "workflow"),
+								],
+							}
+						: {}),
 					...queueFacts,
 				});
 			} else
@@ -1183,14 +1167,7 @@ export class ZCodeProjection {
 			sessionEnded: state.control.sessionEnded,
 			hasBackgroundWork: state.backgroundWorks.some(work => work.status === "running"),
 			workflowActivity: deriveSessionWorkflowActivity({
-				workflowRuns: state.workflowRuns
-					? {
-							...state.workflowRuns,
-							runs: state.workflowRuns.runs.filter(
-								(run): run is Exclude<typeof run, OmpSpecRun> => !("spec" in run) || !run.spec,
-							),
-						}
-					: undefined,
+				workflowRuns: state.workflowRuns,
 				backgroundWorks: state.backgroundWorks,
 			}),
 			createdAt: times[0] ?? 0,

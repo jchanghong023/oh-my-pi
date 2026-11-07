@@ -14,7 +14,6 @@ import { closeSessionIndex } from "../../src/session/session-index";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { ZCodeQueries } from "../../src/modes/zcode/queries";
 import { TextTap } from "../../src/job-widgets/text-tap";
-import * as controllers from "../../src/spec-driven/controller";
 import { SessionManager } from "../../src/session/session-manager";
 
 const resources: Array<() => Promise<unknown>> = [];
@@ -59,38 +58,41 @@ async function fixture(enableMcp = false) {
 }
 
 describe("ZCodeSessionManager", () => {
-	it("restores ordinary mutations after the retained Dev controller exits", async () => {
+	it("applies ordinary queue mutations directly to the native session", async () => {
 		const { manager } = await fixture();
 		const record = await manager.create();
-		let mode: "chat" | "dev" = "dev";
 		const setQueueAutoDrain = spyOn(record.session, "setQueueAutoDrain");
-		const controller = {
-			inputMode: () => mode,
-			nativeSession: () => record.session,
-			checkConversationAllowed: async () => {
-				throw new Error("Development has no active native stage session");
-			},
-			exit: async () => {
-				mode = "chat";
-			},
-		};
-		const peek = spyOn(controllers, "peekSpecDrivenController").mockReturnValue(
-			controller as unknown as controllers.SpecDrivenController,
-		);
 		try {
-			await expect(manager.mutate(record.id, "setAutoDrain", { autoDrain: false })).rejects.toThrow(
-				"Development has no active native stage session",
-			);
-			expect(setQueueAutoDrain).not.toHaveBeenCalled();
-			await controller.exit();
 			await expect(manager.mutate(record.id, "setAutoDrain", { autoDrain: false })).resolves.toEqual({
 				autoDrain: false,
 			});
 			expect(setQueueAutoDrain).toHaveBeenCalledWith(false);
+			await expect(manager.mutate(record.id, "setAutoDrain", { autoDrain: true })).resolves.toEqual({
+				autoDrain: true,
+			});
+			expect(setQueueAutoDrain).toHaveBeenLastCalledWith(true);
 		} finally {
-			peek.mockRestore();
 			setQueueAutoDrain.mockRestore();
 		}
+	});
+
+	it("leaves retired development history untouched without discovering a development owner", async () => {
+		const { manager, cwd } = await fixture();
+		const directory = path.join(cwd, ".omp", "dev", "sessions", "retired");
+		const previous = SessionManager.create(cwd, directory);
+		previous.appendMessage({ role: "user", content: "previous user history", timestamp: 1 });
+		await previous.ensureOnDisk();
+		await previous.flush();
+		const id = previous.getSessionId();
+		const file = previous.getSessionFile()!;
+		await previous.close();
+		const before = await fs.readFile(file, "utf8");
+		const record = await manager.create();
+		await manager.mutate(record.id, "setAutoDrain", { autoDrain: false });
+		await manager.close(record.id);
+		expect((await manager.list()).some(info => info.id === id)).toBe(false);
+		expect(await manager.nativeChild(id)).toBeUndefined();
+		expect(await fs.readFile(file, "utf8")).toBe(before);
 	});
 
 	it("reads cold child Bash output only from its existing execution tree across registry eviction and revival", async () => {
@@ -491,16 +493,17 @@ describe("ZCodeSessionManager", () => {
 	});
 
 	it("reads and renames cold history without hosting it, then restores and deletes it", async () => {
-		const { manager } = await fixture();
+		const { manager, other } = await fixture();
 		const record = await manager.create();
 		await manager.close(record.id);
 		await manager.rename(record.id, "Cold title");
 		expect(manager.get(record.id)).toBeUndefined();
 		expect((await manager.read(record.id)).title).toBe("Cold title");
 		expect(manager.get(record.id)).toBeUndefined();
-		const restored = await manager.resume(record.id);
+		const restored = await manager.resume(record.id, { additionalDirectories: [other] });
 		expect(restored.id).toBe(record.id);
-		expect(await manager.resume(record.id)).toBe(restored);
+		expect(restored.session.sessionManager.getAdditionalDirectories()).toEqual([other]);
+		expect(await manager.resume(record.id, { additionalDirectories: [other] })).toBe(restored);
 		await manager.delete(record.id);
 		expect((await manager.list()).some(info => info.id === record.id)).toBe(false);
 		await expect(manager.read(record.id)).rejects.toThrow();

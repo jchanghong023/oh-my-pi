@@ -111,6 +111,13 @@ describe("math block grammar", () => {
 		expect(mathBlockAt("\\[\r\nx\r\n\\]\r\n")).toEqual({ raw: "\\[\r\nx\r\n\\]\r\n", body: "x" });
 	});
 
+	test("preserves the nonempty body boundary before whitespace-only rejection", () => {
+		expect(mathBlockAt("$$\n\n$$\n")).toBeUndefined();
+		expect(mathBlockMayCloseAt("$$\n\n$$\n")).toBe(true);
+		// A CR can supply the required body character while LF ends the line.
+		expect(mathBlockMayCloseAt("$$\r\n\r\n$$\r\n")).toBe(false);
+	});
+
 	test("declines a block that is unclosed, empty, or not on its own line", () => {
 		expect(mathBlockAt("$$\nunclosed\n")).toBeUndefined();
 		expect(mathBlockAt("$$\n \n$$\n")).toBeUndefined();
@@ -132,6 +139,18 @@ describe("MathBlockScan", () => {
 			if (block !== undefined) found.push(from);
 		}
 		expect(found).toEqual([source.indexOf("$$\na")]);
+	});
+
+	test("matches only at the requested offset without searching ahead", () => {
+		const source = "prose\n  $$\r\nx\r\n  $$\r\n";
+		const from = source.indexOf("  $$");
+		const scan = new MathBlockScan(source);
+		expect(mathBlockAt(source)).toBeUndefined();
+		expect(scan.at(0)).toBeUndefined();
+		expect(scan.at(from - 1)).toBeUndefined();
+		expect(scan.at(from)).toEqual({ raw: source.slice(from), body: "x" });
+		expect(mathBlockMayCloseAt(source, from - 1)).toBe(false);
+		expect(mathBlockMayCloseAt(source, from)).toBe(true);
 	});
 });
 
@@ -178,6 +197,15 @@ describe("mathBlockCloserIndex", () => {
 		expect(mathBlockCloserIndex(source, more, "$$")).toBeUndefined();
 		expect(mathBlockCloserIndex(source, more, "\\[")).toBe(source.indexOf("\\]"));
 	});
+
+	test("preserves physical line starts, indentation and CRLF at resumed offsets", () => {
+		const source = "text $$\r\n    $$\r\n  \\] \t\r\n   $$\t";
+		expect(mathBlockCloserIndex(source, 0, "$$")).toBe(source.lastIndexOf("   $$"));
+		// Starting inside a four-space indent must not turn its suffix into a closer.
+		expect(mathBlockCloserIndex(source, source.indexOf("    $$") + 1, "$$")).toBe(source.lastIndexOf("   $$"));
+		expect(mathBlockCloserIndex(source, 0, "\\[")).toBe(source.indexOf("  \\]"));
+		expect(mathBlockCloserIndex(source, source.indexOf("  \\]") + 1, "\\[")).toBeUndefined();
+	});
 });
 
 describe("math spans for a marked inline tokenizer", () => {
@@ -203,6 +231,16 @@ describe("math spans for a marked inline tokenizer", () => {
 		const [paragraph] = mathMarked().lexer(source);
 		return paragraph && "tokens" in paragraph && paragraph.tokens ? shape(paragraph.tokens) : paragraph;
 	};
+
+	test("keeps Unicode letters and numbers inside underscore-delimited words literal", () => {
+		const marked = mathMarked();
+		for (const source of ["甲_乙_丙", "é_ñ_ø", "٢_٣_٤", "²_Ⅳ_⑦"]) {
+			expect(marked.parseInline(source)).toBe(source);
+		}
+		// Combining marks and surrogate halves were not Letter/Number neighbors.
+		expect(marked.parseInline("\u0301_甲_")).toBe("\u0301<em>甲</em>");
+		expect(marked.parseInline("𐐀_甲_")).toBe("𐐀<em>甲</em>");
+	});
 
 	// One context stands for one inline source. A closer scan there also answers for the openers it passed, so every
 	// other offset must still find the span `mathSpanAt` finds in the rest of the source: past a `$` before a digit,

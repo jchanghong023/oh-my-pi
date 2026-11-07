@@ -94,11 +94,16 @@ export function rolePayload(
 function isLifecycleFacts(content: unknown): boolean {
 	try {
 		const value: unknown = JSON.parse(contentText(content));
-		const keys = ["awaitingAcceptance", "accepted", "approvedVersionsMatch", "explicitRepair"];
+		const booleans = ["awaitingAcceptance", "approvedVersionsMatch", "explicitRepair", "merged"];
+		const fields = [...booleans, "error", "closing", "writeBoundary", "stage", "lifecycle", "observedPr"];
 		return (
 			isRecord(value) &&
-			Object.keys(value).every(key => keys.includes(key) || key === "error" || key === "closing") &&
-			keys.every(key => typeof value[key] === "boolean") &&
+			Object.keys(value).every(key => fields.includes(key)) &&
+			booleans.every(key => typeof value[key] === "boolean") &&
+			typeof value.writeBoundary === "string" &&
+			(!("stage" in value) || typeof value.stage === "string") &&
+			(!("lifecycle" in value) || typeof value.lifecycle === "string") &&
+			(value.observedPr === null || isRecord(value.observedPr)) &&
 			(!("error" in value) || typeof value.error === "string") &&
 			(!("closing" in value) || isRecord(value.closing))
 		);
@@ -429,7 +434,7 @@ export function respond(request: ModelRequest, options: ProviderScenario = {}): 
 			files.push({
 				path,
 				content: path.endsWith("proposal.md")
-					? `## Why\nProvide a deterministic greeting.\n\n## What Changes\nAdd greet(name).\n\n## Capabilities\n### New Capabilities\n- greeting: pure greeting behavior\n\n## Impact\nSource and behavior tests only.\n`
+					? `## Why\nProvide deterministic greeting behavior so callers can normalize outer whitespace and empty names consistently without losing internal whitespace.\n\n## What Changes\nAdd greet(name).\n\n## Capabilities\n### New Capabilities\n- greeting: pure greeting behavior\n\n## Impact\nSource and behavior tests only.\n`
 					: `## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL satisfy this behavior: ${REQUIREMENT}\n\n#### Scenario: Normalized greeting\n- **WHEN** a name has outer whitespace or is empty\n- **THEN** trim its outer whitespace and use world for empty input, preserving internal whitespace\n`,
 			});
 	} else if (role === "solution") {

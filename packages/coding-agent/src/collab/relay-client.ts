@@ -10,7 +10,7 @@
  * closing the room.
  */
 import { getProxyForUrl } from "@oh-my-pi/pi-ai/utils/proxy";
-import { logger } from "@oh-my-pi/pi-utils";
+import { asStrictBytes, logger } from "@oh-my-pi/pi-utils";
 import { open, sealSerialized } from "./crypto";
 import type { IntranetHostRegistration } from "./intranet";
 import type { CollabFrame, EncodedFrame, RelayControlMessage } from "./protocol";
@@ -82,7 +82,7 @@ interface PendingSend {
 	cancelled: boolean;
 	eager: boolean;
 	onPrepared?: () => void;
-	preparedEnvelope?: Uint8Array;
+	preparedEnvelope?: Uint8Array<ArrayBuffer>;
 	/** Next batch frame, pulled right after a write so an exhausted batch leaves the head at once. */
 	head?: CollabFrame | string;
 	/** Supersession key from {@link CollabSocket.sendLatest}; a newer send under it cancels this one while queued. */
@@ -100,7 +100,8 @@ export interface CollabSocketOptions {
 export class CollabSocket {
 	/** Fires after every successful (re)connect. */
 	onOpen?: () => void;
-	onFrame?: (frame: CollabFrame, fromPeer: number) => void;
+	/** Native transport supplies connection activity; omitted metadata keeps ordinary callback semantics. */
+	onFrame?: (frame: CollabFrame, fromPeer: number, connectionActive?: boolean) => void;
 	onControl?: (msg: RelayControlMessage) => void;
 	/** Fires on each close; `willReconnect` distinguishes retries from terminal shutdown. */
 	onClose?: (reason: string, willReconnect: boolean) => void;
@@ -402,7 +403,7 @@ export class CollabSocket {
 				const sealed = await sealSerialized(this.#opts.key, serialized);
 				if (this.#closed || generation !== this.#sendGeneration) return;
 				if (pending.cancelled) continue;
-				const envelope = packEnvelope(pending.targetPeer, sealed);
+				const envelope = asStrictBytes(packEnvelope(pending.targetPeer, sealed));
 				pending.preparedEnvelope = envelope;
 				pending.onPrepared?.();
 				pending.onPrepared = undefined;
@@ -435,7 +436,7 @@ export class CollabSocket {
 
 	async #sendEnvelope(
 		pending: PendingSend,
-		envelope: Uint8Array,
+		envelope: Uint8Array<ArrayBuffer>,
 		generation: number,
 	): Promise<"sent" | "cancelled" | "stop"> {
 		while (!this.#closed && generation === this.#sendGeneration) {
@@ -739,7 +740,7 @@ export class CollabSocket {
 					this.#retryMissingRoom = false;
 					this.#attempt = 0;
 				}
-				this.onFrame?.(frame, envelope.peerId);
+				this.onFrame?.(frame, envelope.peerId, this.#ws === ws && this.#isWritable(ws));
 			})
 			.catch((err: unknown) => {
 				logger.debug("collab: frame handler failed", { error: String(err) });

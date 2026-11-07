@@ -1,38 +1,27 @@
 import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { REQUIREMENT } from "./provider-fixture";
-import { clearNativeDraft, eventually, expectNativeFailure, tuiTest, withTui } from "./tui-harness";
+import { WorkbenchFixture } from "../dev-workbench/fixture";
 import { registerMaterialFailureTests } from "./tui-materials-cases";
 
 registerMaterialFailureTests(["solution", "executor"]);
 
-test.skipIf(!tuiTest)(
-	"new initialization failure preserves saved Team and unrelated files and permits a fresh requirements run",
-	async () => {
-		await withTui({}, [100, 28], async ({ cwd, provider, tui, state, stage, idle }) => {
-			await tui("submit", "/dev");
-			await idle();
-			await tui("submit", "/dev config");
-			await tui("expect", "text", "方案 Team", "--timeout", "30000");
-			await tui("key", "press", "Up", "Enter");
-			const configured = await eventually(state, value => value.team);
-			await Bun.write(path.join(cwd, "user-source.txt"), "preserve user work\n");
-			await Bun.write(path.join(cwd, "openspec"), "real initializer path obstruction\n");
-			const calls = provider.requests.length;
-			await tui("submit", `/dev new ${REQUIREMENT}`);
-			await expectNativeFailure(tui, /ENOTDIR|not a directory/i, "openspec", `/dev new ${REQUIREMENT}`);
-			await idle();
-			expect(await state()).toEqual(configured);
-			expect(provider.requests).toHaveLength(calls);
-			expect(await Bun.file(path.join(cwd, "user-source.txt")).text()).toBe("preserve user work\n");
-			await fs.unlink(path.join(cwd, "openspec"));
-			await clearNativeDraft(tui);
-			await tui("submit", `/dev new ${REQUIREMENT}`);
-			await stage("requirements");
-			expect((await state()).team).toBe(true);
-			expect(await Bun.file(path.join(cwd, "user-source.txt")).text()).toBe("preserve user work\n");
-		});
-	},
-	180_000,
-);
+test("failed initialization preserves configuration and unrelated user files", async () => {
+	await using fixture = await WorkbenchFixture.create();
+	await fixture.start();
+	await fixture.request("team-config", { requirementId: null, expectedRecordVersion: null, useTeam: true });
+	await fs.writeFile(path.join(fixture.cwd, "user-source.txt"), "preserve user work\n");
+	await fs.writeFile(path.join(fixture.cwd, "openspec"), "not a directory\n");
+	const imported = await fixture.imported();
+	await fixture.act(imported, { kind: "next" });
+	const failed = await fixture.stage(imported.record.requirementId, "requirements");
+	expect(failed.runtime?.execution).toBe("failed");
+	expect(failed.runtime?.blockedReason?.trim().length).toBeGreaterThan(0);
+	expect(await fs.readFile(path.join(fixture.cwd, "openspec"), "utf8")).toBe("not a directory\n");
+	expect((await fs.lstat(path.join(fixture.cwd, "openspec"))).isFile()).toBe(true);
+	expect(failed.record.materials.map(material => material.kind)).toEqual(["business"]);
+	expect(await fixture.request("team-config")).toMatchObject({ useTeam: true });
+	expect(await fs.readFile(path.join(fixture.cwd, "user-source.txt"), "utf8")).toBe("preserve user work\n");
+	expect(fixture.provider.requests).toEqual([]);
+	expect(failed.record.decisions.map(decision => decision.stage)).toEqual(["business"]);
+}, 180_000);

@@ -1,4 +1,4 @@
-import { constants, createReadStream, promises as fs } from 'fs';
+import { constants, promises as fs } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import path from 'path';
 import { formatLocalDate } from '../utils/date.js';
@@ -7,7 +7,7 @@ import { Validator } from './validation/validator.js';
 import { VALIDATION_MESSAGES } from './validation/constants.js';
 import chalk from 'chalk';
 import { emitStoreRootBanner, isRootSelectionError, resolveOpenSpecRoot, toRootOutput, withStoreFlag, isStoreSelectedRoot, } from './root-selection.js';
-import { findSpecUpdates, buildUpdatedSpec, writeUpdatedSpec, retireSpec, finalizeRetiredSpec, pruneEmptyDirs, } from './specs-apply.js';
+import { findSpecUpdates, buildUpdatedSpec, writeUpdatedSpec, retireSpec, finalizeRetiredSpec, pruneEmptyDirs, fingerprintFileContents, } from './specs-apply.js';
 import { discoverSpecFiles, findUnreadDeltaFiles, hasAnyFileUnder } from '../utils/spec-discovery.js';
 import { METADATA_FILENAME, formatUnknownChangeMetadataKeysMessage, readRetireCapabilitiesMarker, readSkipSpecsMarker, readUnknownChangeMetadataKeys, } from '../utils/change-metadata.js';
 import { confirmPrompt, isNonInteractivePromptError } from '../utils/interactive.js';
@@ -296,14 +296,6 @@ async function copyDirContents(src, dest) {
         }
     }
     await fs.chmod(dest, sourceStat.mode & 0o7777);
-}
-/** SHA-256 of one file's bytes, streamed so a large file is never held whole. */
-async function fingerprintFileContents(filePath) {
-    const fileHash = createHash('sha256');
-    for await (const chunk of createReadStream(filePath)) {
-        fileHash.update(chunk);
-    }
-    return fileHash.digest();
 }
 async function fingerprintDirectoryContents(root) {
     const hash = createHash('sha256');
@@ -777,7 +769,7 @@ async function fingerprintPortableContent(filePath) {
 async function assertRetirementAuthorization(changeDir, expectedFingerprint, options = {}) {
     const metadataPath = path.join(changeDir, METADATA_FILENAME);
     const before = await fingerprintPortableContent(metadataPath);
-    const markerStillDeclared = options.verifyMarker === false || readRetireCapabilitiesMarker(changeDir).declared;
+    const markerStillDeclared = options.verifyMarker === false || readRetireCapabilitiesMarker(changeDir, options.projectRoot).declared;
     const after = await fingerprintPortableContent(metadataPath);
     if (before !== expectedFingerprint ||
         after !== expectedFingerprint ||
@@ -1025,8 +1017,628 @@ async function finalizeRetirementBackups(snapshots, mainSpecsDir) {
         }
     }
     if (errors.length > 0) {
-        throw new RetirementCleanupError(`${errors.join(' ')} The change was archived, but retirement cleanup did not complete. Inspect all reported recovery paths before recovery or cleanup.`);
+        const error = new RetirementCleanupError(`${errors.join(' ')} The change was archived, but retirement cleanup did not complete. Inspect all reported recovery paths before recovery or cleanup.`);
+        error.progress = { synced: true, retirementCleanup: {
+            paths: snapshots.filter(snapshot => snapshot.displacedPath !== undefined).map(snapshot => snapshot.displacedPath),
+            diagnostic: error.message,
+        } };
+        throw error;
     }
+}
+function specArchivePath(changeName, archiveDir) {
+    return path.join(archiveDir, ARCHIVE_DATE_PREFIX_PATTERN.test(changeName)
+        ? changeName : `${formatLocalDate()}-${changeName}`);
+}
+/** Exact native mutation endpoints for the host's preimage journal, before any write. */
+export async function planSpecDirectorySync({ changeDir, mainSpecsDir, changeName, archive }) {
+    const targets = (await findSpecUpdates(changeDir, mainSpecsDir)).map(update => update.target);
+    const archivePath = archive ? specArchivePath(changeName, path.join(path.dirname(changeDir), 'archive')) : null;
+    const paths = [...targets];
+    if (archivePath) {
+        for (const entry of await listTreeEntriesDeepestFirst(changeDir)) {
+            if (entry.kind === 'directory') continue;
+            if (entry.kind !== 'file') throw new Error(`Linked archive material is not host-owned: ${entry.relative}`);
+            paths.push(path.join(changeDir, entry.relative), path.join(archivePath, entry.relative));
+        }
+    }
+    return { changeDir, archivePath, sourceTreeVersion: await fingerprintDirectoryContents(changeDir), paths: [...new Set(paths)] };
+}
+
+/** Internal directory sync shares the archive transaction; it never reconstructs an active change. */
+export async function syncSpecDirectory(input, context) {
+    const { changeDir, mainSpecsDir, changeName, archivePath } = input;
+    const archiveDir = archivePath ? path.dirname(archivePath) : null;
+    const archiveName = archivePath ? path.basename(archivePath) : changeName;
+    const root = context?.root ?? {
+        path: path.dirname(path.dirname(mainSpecsDir)),
+        specsDir: mainSpecsDir,
+        changesDir: path.join(path.dirname(mainSpecsDir), 'changes'),
+    };
+    const options = context?.options ?? { yes: true, skipSpecs: input.skipSpecs };
+    const json = context?.json ?? true;
+    const skipValidation = context?.skipValidation ?? false;
+    const unknownMetadataWarning = context?.unknownMetadataWarning;
+    if (!context) {
+        const report = await new Validator().validateChangeDeltaSpecs(changeDir, { projectRoot: root.path });
+        if (!report.valid) throw new Error(report.issues.map(issue => issue.message).join('\n'));
+    }
+    const verifyExpected = async () => {
+        if (input.sourceTreeVersion && await fingerprintDirectoryContents(changeDir) !== input.sourceTreeVersion)
+            throw new Error('The confirmed change directory changed before native sync could apply it.');
+        for (const file of [...input.expectedSources, ...input.expectedTargets]) {
+            const actual = await fingerprintFileContents(file.path).then(hash => hash.toString('hex')).catch(error => {
+                if (isMissingPathError(error)) return null;
+                throw error;
+            });
+            if (actual !== file.version) throw new Error(`Confirmed specification bytes changed: ${file.path}`);
+        }
+        if (!context) {
+            const approved = new Set(input.expectedSources.map(file => path.resolve(file.path)));
+            for (const update of await findSpecUpdates(changeDir, mainSpecsDir)) {
+                if (!approved.has(path.resolve(update.source)))
+                    throw new Error(`Unapproved delta added: ${update.source}`);
+            }
+        }
+    };
+    await verifyExpected();
+        // Read once, before any spec is touched: whether this change is allowed to
+        // retire a capability at all. An unhonorable marker counts as undeclared,
+        // exactly as skip_specs treats one, so metadata the rest of the CLI rejects
+        // can never authorise a deletion.
+        const retirementMarker = readRetireCapabilitiesMarker(changeDir, root.path);
+        const retirementDeclared = retirementMarker.declared;
+        const retirementAuthorizationFingerprint = retirementDeclared
+            ? await fingerprintPortableContent(path.join(changeDir, METADATA_FILENAME))
+            : undefined;
+        if (archivePath) {
+            await assertArchiveDestinationAvailable(archivePath, archiveName);
+            await fs.mkdir(archiveDir, { recursive: true });
+        }
+        const claimPath = archiveClaimPath(archivePath ?? changeDir, archiveName);
+        let archiveClaim;
+        try {
+            // Handle spec updates unless skipSpecs flag is set
+            let specsUpdated = false;
+            let totals;
+            const specWarnings = [];
+            let changeArchived = false;
+            if (options.skipSpecs) {
+                if (!json) {
+                    console.log('Skipping spec updates (--skip-specs flag provided).');
+                }
+            }
+            else {
+                // Find specs to update
+                const specUpdates = await findSpecUpdates(changeDir, mainSpecsDir);
+                if (specUpdates.length > 0) {
+                    if (!json) {
+                        console.log('\nSpecs to update:');
+                        for (const update of specUpdates) {
+                            const status = update.exists ? 'update' : 'create';
+                            const capability = update.id;
+                            console.log(`  ${capability}: ${status}`);
+                        }
+                    }
+                    // Build the proposed updates before asking permission to apply them.
+                    // buildUpdatedSpec also reports content that the merge would drop, so
+                    // the confirmation must come after this preview.
+                    const prepared = [];
+                    let prepareError;
+                    try {
+                        for (const update of specUpdates) {
+                            const sourceBeforeBuild = await fingerprintPath(update.source);
+                            const targetBeforeBuild = await fingerprintPath(update.target);
+                            const built = await buildUpdatedSpec(update, changeName, { silent: true });
+                            const sourceAfterBuild = await fingerprintPath(update.source);
+                            const targetAfterBuild = await fingerprintPath(update.target);
+                            if (sourceBeforeBuild !== sourceAfterBuild ||
+                                targetBeforeBuild !== targetAfterBuild) {
+                                throw new Error(`Spec inputs for '${update.id}' changed while archive was preparing the preview.`);
+                            }
+                            prepared.push({
+                                update,
+                                rebuilt: built.rebuilt,
+                                counts: built.counts,
+                                outcome: await decideSpecOutcome(update, built, skipValidation, retirementDeclared),
+                                noRequirementBlocks: built.noRequirementBlocks,
+                                unaccountedContent: built.unaccountedContent,
+                                sourceFingerprint: sourceAfterBuild,
+                                sourceContentFingerprint: await fingerprintPortableContent(update.source),
+                                targetFingerprint: targetAfterBuild,
+                                targetMovableFingerprint: await fingerprintMovablePath(update.target),
+                            });
+                            specWarnings.push(...built.warnings);
+                        }
+                    }
+                    catch (err) {
+                        // A user may still decline spec updates and archive the change, as
+                        // before this preview existed. Defer the error until they accept.
+                        prepareError = err;
+                    }
+                    if (prepareError === undefined && !json) {
+                        for (const warning of specWarnings) {
+                            console.log(chalk.yellow(`⚠️  Warning: ${warning}`));
+                        }
+                    }
+                    let shouldUpdateSpecs = true;
+                    if (!options.yes) {
+                        if (json) {
+                            throw new ArchiveBlockedError('archive_confirmation_required', `Updating ${specUpdates.length} spec(s) requires confirmation: rerun with --yes.`, withStoreFlag(root, 'openspec archive <change-name> --json --yes'));
+                        }
+                        shouldUpdateSpecs = await confirmOrBlock({
+                            message: 'Proceed with spec updates?',
+                            default: true
+                        }, () => new ArchiveBlockedError('archive_confirmation_required', `Updating ${specUpdates.length} spec(s) requires confirmation, and no answer could be read from stdin.`, rerunCommand(root, changeName, options)));
+                        if (!shouldUpdateSpecs) {
+                            console.log('Skipping spec updates. Proceeding with archive.');
+                        }
+                    }
+                    if (shouldUpdateSpecs) {
+                        // The confirmation may stay open while another editor changes a main
+                        // spec. Never apply the proposal built before the prompt to a newer
+                        // baseline: in particular, a stale retirement decision must not
+                        // delete a requirement added while the prompt was waiting.
+                        if (prepareError === undefined) {
+                            try {
+                                const currentRetirementMarker = readRetireCapabilitiesMarker(changeDir, root.path);
+                                if (currentRetirementMarker.declared !== retirementMarker.declared ||
+                                    currentRetirementMarker.invalidReason !== retirementMarker.invalidReason) {
+                                    throw new Error(`The ${METADATA_FILENAME} retirement authorization changed while archive was awaiting confirmation.`);
+                                }
+                                const currentUpdates = await findSpecUpdates(changeDir, mainSpecsDir);
+                                const currentById = new Map(currentUpdates.map((update) => [update.id, update]));
+                                if (currentUpdates.length !== prepared.length) {
+                                    throw new Error('The change specs changed while archive was awaiting confirmation.');
+                                }
+                                for (const proposed of prepared) {
+                                    const current = currentById.get(proposed.update.id);
+                                    if (!current) {
+                                        throw new Error(`The delta for '${proposed.update.id}' changed while archive was awaiting confirmation.`);
+                                    }
+                                    if ((await fingerprintPath(current.source)) !== proposed.sourceFingerprint ||
+                                        (await fingerprintPath(current.target)) !== proposed.targetFingerprint) {
+                                        throw new Error(`Spec inputs for '${proposed.update.id}' changed while archive was awaiting confirmation. ` +
+                                            'No files were changed; review the new content and rerun.');
+                                    }
+                                    const rebuilt = await buildUpdatedSpec(current, changeName, { silent: true });
+                                    const outcome = await decideSpecOutcome(current, rebuilt, skipValidation, retirementDeclared);
+                                    if (current.exists !== proposed.update.exists ||
+                                        rebuilt.rebuilt !== proposed.rebuilt ||
+                                        JSON.stringify(rebuilt.counts) !== JSON.stringify(proposed.counts) ||
+                                        outcome !== proposed.outcome) {
+                                        throw new Error(`Main spec '${proposed.update.id}' changed while archive was awaiting confirmation. ` +
+                                            'No files were changed; review the new content and rerun.');
+                                    }
+                                }
+                            }
+                            catch (error) {
+                                prepareError = error;
+                            }
+                        }
+                        if (prepareError !== undefined) {
+                            const message = prepareError instanceof Error ? prepareError.message : String(prepareError);
+                            if (json) {
+                                throw new ArchiveBlockedError('archive_spec_update_failed', message, 'Fix the change delta specs and rerun. No files were changed.');
+                            }
+                            console.log(message);
+                            console.log('Aborted. No files were changed.');
+                            process.exitCode = 1;
+                            return null;
+                        }
+                        // Validate every rebuilt spec before writing any of them, so a
+                        // late validation failure really does leave all targets unchanged.
+                        if (!skipValidation) {
+                            for (const p of prepared) {
+                                // A retirement was already put to the validator, and failed on
+                                // nothing but "no requirements" - there is no spec left to write,
+                                // so re-reporting that one error would just abort the fix (#1302).
+                                if (p.outcome !== 'write')
+                                    continue;
+                                const specName = p.update.id;
+                                const report = await new Validator().validateSpecContent(specName, p.rebuilt);
+                                if (!report.valid) {
+                                    // This run is what emptied the capability, and "no
+                                    // requirements" is the only thing wrong with the spec that
+                                    // would be written - so retiring it is what archive would do,
+                                    // and what stands in the way of that is worth saying. Not
+                                    // always the *only* fix: a live requirement can be hiding in a
+                                    // second `## Requirements` section the validator never reaches,
+                                    // and merging the sections fixes that spec without a deletion.
+                                    const emptiedByThisRun = p.update.exists &&
+                                        p.counts.removed > 0 &&
+                                        p.noRequirementBlocks &&
+                                        (await isRetirableSpec(specName, p.rebuilt));
+                                    // The dead end #1302 describes: the rebuilt spec is unwritable
+                                    // for exactly one reason, and retiring the capability is the
+                                    // fix - but only the author can authorise deleting the spec, so
+                                    // the abort names the marker instead of just rejecting. Says so
+                                    // only when the marker is the ONLY thing missing, so it never
+                                    // sends someone after a marker that would not have helped.
+                                    const retirementHint = !retirementDeclared && emptiedByThisRun && p.unaccountedContent.length === 0
+                                        ? `This change removes the last requirement '${specName}' has. To retire the` +
+                                            ` capability and delete its spec, add \`retire_capabilities: true\` to the` +
+                                            ` change's ${METADATA_FILENAME} (alongside its \`schema:\`, which that file` +
+                                            ` requires), then rerun.` +
+                                            (retirementMarker.invalidReason
+                                                ? ` The marker present now cannot be honored (${retirementMarker.invalidReason}).`
+                                                : '')
+                                        : undefined;
+                                    // #1696: the marker is missing AND the file holds content a
+                                    // retirement cannot account for, so this abort said nothing at
+                                    // all - just "must have at least one requirement", with no way
+                                    // forward. It names the content instead of the marker, on
+                                    // purpose: the marker is only ever named when adding it would
+                                    // really let the archive through, and here it would not. Once
+                                    // the content is resolved the rerun names the marker.
+                                    const blockedRetirementHint = !retirementDeclared && emptiedByThisRun && p.unaccountedContent.length > 0
+                                        ? `This change removes the last requirement '${specName}' has, so the rebuilt ` +
+                                            `spec has none left and cannot be written. Retiring the capability is what ` +
+                                            `archive does instead, and it is refused while the spec holds content the ` +
+                                            `merge cannot safely account for and deleting the file would take with it: ` +
+                                            `${describeUnaccountedContent(p.unaccountedContent)}. ` +
+                                            'Move it into `## Purpose` or a canonical requirement, or delete the spec by hand, then rerun.' +
+                                            // Said here too, because an author looking at a marker they
+                                            // believe authorises the deletion should not have to clear
+                                            // the content first to find out it was never read.
+                                            (retirementMarker.invalidReason
+                                                ? ` The marker present now cannot be honored (${retirementMarker.invalidReason}).`
+                                                : '')
+                                        : undefined;
+                                    // The marker was set and retirement was still refused. Saying
+                                    // nothing left the author who did exactly what the docs asked
+                                    // back in the original dead end with no signal that their
+                                    // marker had been read at all.
+                                    // The author asked for a retirement and got the bare
+                                    // validation abort. Name the lines that stood in the way.
+                                    const refusalReason = retirementDeclared &&
+                                        p.unaccountedContent.length > 0 &&
+                                        (await isRetirableSpec(specName, p.rebuilt))
+                                        ? `'${specName}' declares retire_capabilities, but the spec holds content the merge ` +
+                                            `cannot safely account for and deleting the file would take with it: ` +
+                                            `${describeUnaccountedContent(p.unaccountedContent)}. ` +
+                                            'Move it into `## Purpose` or a canonical requirement, or delete the spec by hand.'
+                                        : undefined;
+                                    if (json) {
+                                        throw new ArchiveBlockedError('archive_spec_validation_failed', `Rebuilt spec for '${specName}' failed validation. No files were changed.`, refusalReason ??
+                                            retirementHint ??
+                                            blockedRetirementHint ??
+                                            `Run ${withStoreFlag(root, `openspec validate ${specName}`)} after fixing the change deltas.`);
+                                    }
+                                    console.log(chalk.red(`\nValidation errors in rebuilt spec for ${specName} (will not write changes):`));
+                                    for (const issue of report.issues) {
+                                        if (issue.level === 'ERROR')
+                                            console.log(chalk.red(`  ✗ ${issue.message}`));
+                                        else if (issue.level === 'WARNING')
+                                            console.log(chalk.yellow(`  ⚠ ${issue.message}`));
+                                    }
+                                    if (retirementHint)
+                                        console.log(chalk.yellow(`  → ${retirementHint}`));
+                                    if (blockedRetirementHint)
+                                        console.log(chalk.yellow(`  → ${blockedRetirementHint}`));
+                                    if (refusalReason)
+                                        console.log(chalk.yellow(`  → ${refusalReason}`));
+                                    console.log('Aborted. No files were changed.');
+                                    process.exitCode = 1;
+                                    return null;
+                                }
+                            }
+                        }
+                        // A legitimate concurrent archive cannot pass the exclusive claim,
+                        // while this catches an external process that created the final
+                        // destination during a confirmation prompt. Check before the first
+                        // spec mutation so a collision never strands a write or retirement.
+                        await verifyExpected();
+                        if (archivePath) await assertArchiveDestinationAvailable(archivePath, archiveName);
+                        archiveClaim = await claimArchiveDestination(archivePath ?? changeDir, archiveName);
+                        if (archivePath) await assertArchiveDestinationAvailable(archivePath, archiveName);
+                        const mutations = prepared
+                            .filter(({ outcome, counts }) => outcome === 'retire' ||
+                            (outcome === 'write' &&
+                                counts.added + counts.modified + counts.removed + counts.renamed > 0))
+                            .map(({ update, outcome, rebuilt }) => ({
+                            update,
+                            outcome: outcome,
+                            rebuilt,
+                        }));
+                        const hasRetirements = mutations.some(({ outcome }) => outcome === 'retire');
+                        await assertDistinctMutationTargets(mutations);
+                        for (const proposed of prepared) {
+                            if ((await fingerprintPath(proposed.update.source)) !== proposed.sourceFingerprint ||
+                                (await fingerprintPath(proposed.update.target)) !== proposed.targetFingerprint) {
+                                throw new Error(`Spec inputs for '${proposed.update.id}' changed before archive could apply them. ` +
+                                    'No files were changed; review the new content and rerun.');
+                            }
+                        }
+                        const specSnapshots = await captureSpecSnapshots(mutations, mainSpecsDir);
+                        const specSnapshotsByTarget = new Map(specSnapshots.map((snapshot) => [snapshot.target, snapshot]));
+                        const mutationAttempts = new Set();
+                        try {
+                            // All validations passed; write files and display counts
+                            const writeTotals = { added: 0, modified: 0, removed: 0, renamed: 0 };
+                            let wroteAny = false;
+                            for (const p of prepared) {
+                                // Deletions are deferred to the loop below.
+                                if (p.outcome !== 'write')
+                                    continue;
+                                const { added, modified, removed, renamed } = p.counts;
+                                if (added + modified + removed + renamed === 0) {
+                                    // Every operation was already synced: rewriting the file would
+                                    // only churn normalization differences into it.
+                                    continue;
+                                }
+                                await writeUpdatedSpec(p.update, p.rebuilt, p.counts, {
+                                    silent: json,
+                                    beforeMutate: async () => {
+                                        if ((await fingerprintSpecInputs(p.update)) !==
+                                            `${p.sourceFingerprint}\n${p.targetFingerprint}`) {
+                                            throw new Error(`Spec inputs for '${p.update.id}' changed before archive could write them.`);
+                                        }
+                                        mutationAttempts.add(p.update.target);
+                                    },
+                                    // Cross-root paths must be absolute when a store is selected.
+                                    ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
+                                });
+                                wroteAny = true;
+                                writeTotals.added += added;
+                                writeTotals.modified += modified;
+                                writeTotals.removed += removed;
+                                writeTotals.renamed += renamed;
+                            }
+                            // Retirements run only after every write has succeeded. If any
+                            // later mutation fails, the snapshots below restore every target.
+                            for (const p of prepared) {
+                                if (p.outcome !== 'retire')
+                                    continue;
+                                const { retired, resolvedPath, displacedPath } = await retireSpec(p.update, mainSpecsDir, {
+                                    silent: json,
+                                    deferDelete: true,
+                                    beforeMutate: async () => {
+                                        if (retirementAuthorizationFingerprint === undefined) {
+                                            throw new Error(`The ${METADATA_FILENAME} retirement authorization is unavailable.`);
+                                        }
+                                        await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint, { projectRoot: root.path });
+                                        if ((await fingerprintSpecInputs(p.update)) !==
+                                            `${p.sourceFingerprint}\n${p.targetFingerprint}`) {
+                                            throw new Error(`Spec inputs for '${p.update.id}' changed before archive could retire them.`);
+                                        }
+                                        mutationAttempts.add(p.update.target);
+                                    },
+                                    verifyDisplaced: async (displacedPath) => {
+                                        await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint, { projectRoot: root.path });
+                                        if ((await fingerprintMovablePath(displacedPath)) !==
+                                            p.targetMovableFingerprint) {
+                                            throw new Error(`Main spec '${p.update.id}' changed while archive was securing it for retirement.`);
+                                        }
+                                    },
+                                    ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
+                                });
+                                if (!retired)
+                                    continue;
+                                const retirementSnapshot = specSnapshotsByTarget.get(p.update.target);
+                                if (retirementSnapshot === undefined || displacedPath === undefined) {
+                                    throw new Error(`Could not track the displaced main spec for '${p.update.id}' during retirement.`);
+                                }
+                                retirementSnapshot.displacedPath = displacedPath;
+                                retirementSnapshot.displacedFingerprint = p.targetMovableFingerprint;
+                                wroteAny = true;
+                                // A rename applied on the way to the retirement still happened;
+                                // folding every count in keeps the totals honest about the whole
+                                // delta.
+                                writeTotals.added += p.counts.added;
+                                writeTotals.modified += p.counts.modified;
+                                writeTotals.removed += p.counts.removed;
+                                writeTotals.renamed += p.counts.renamed;
+                                // Deleting a file is the one archive outcome a JSON consumer cannot
+                                // infer from the totals, so it is recorded the way every other
+                                // spec-merge divergence is. Purpose always goes with the file, so it
+                                // is named too rather than left to the reader to work out, and the
+                                // note carries the command that brings the file back.
+                                const lost = ['Purpose'];
+                                // Derived from the path that was unlinked, never rebuilt from the
+                                // capability id: on a case-insensitive filesystem the id and the
+                                // real directory can differ in case, and git is case-sensitive, so
+                                // an id-derived path is one git rejects.
+                                // `update.target` is built from the capability id, so on a
+                                // case-insensitive filesystem it can differ in case from the file
+                                // that was actually unlinked - and git is case-sensitive, so the
+                                // printed command is one git rejects. A capability directory
+                                // symlinked to a sibling has the same problem without leaving the
+                                // tree. `retiredPath` carries the resolved path, so it wins
+                                // whenever it disagrees, not only when it escapes.
+                                const unlinkedPath = resolvedPath ?? p.update.target;
+                                // Measured against the REAL root, so the platform's own
+                                // `/var` -> `/private/var` link does not read as an escape. A path
+                                // that genuinely sits outside stays absolute, which is what routes
+                                // it to prose guidance instead of a command git would reject.
+                                const realRoot = await fs.realpath(root.path).catch(() => root.path);
+                                const relativeToRoot = path.relative(realRoot, unlinkedPath);
+                                const insideRoot = relativeToRoot !== '' &&
+                                    !relativeToRoot.startsWith('..') &&
+                                    !path.isAbsolute(relativeToRoot);
+                                const deletedPath = isStoreSelectedRoot(root) || !insideRoot
+                                    ? unlinkedPath
+                                    : relativeToRoot.split(path.sep).join('/');
+                                // A command is offered only when pasting it where archive was run
+                                // would actually work. An absolute path here means the file did not
+                                // live under that directory - a selected store, or a symlinked
+                                // capability directory - and `git checkout HEAD -- <abs>` is rejected
+                                // from a different worktree however it is quoted, so that case gets
+                                // guidance instead of a command that cannot run. A path with no
+                                // portable shell spelling is handled the same way.
+                                //
+                                // Conditional on purpose, too: whether the file is in `HEAD` is not
+                                // something archive knows - a spec an earlier archive CREATED and
+                                // nobody has committed yet is not - and promising recovery is the one
+                                // claim this feature must not get wrong.
+                                const pasteablePath = path.isAbsolute(deletedPath)
+                                    ? undefined
+                                    : quoteForShell(`:(top)${deletedPath}`);
+                                const recovery = pasteablePath
+                                    ? `If it was committed, restore it with: git checkout HEAD -- ${pasteablePath}`
+                                    : `It was deleted from ${deletedPath}; if it was committed, restore it from that checkout's history.`;
+                                const retirementNote = `${p.update.id} - capability retired; deleted the main spec (all requirements removed` +
+                                    `, declared by retire_capabilities) at ${deletedPath}` +
+                                    `. Its section(s) went with it: ${lost.join(', ')}. ` +
+                                    recovery;
+                                specWarnings.push(retirementNote);
+                                // The "Retiring ..." line already told a human the file is gone; the
+                                // sections it took along, and how to get them back, are the parts
+                                // they cannot see from the path.
+                                if (!json) {
+                                    console.log(`   ${recovery}`);
+                                }
+                            }
+                            specsUpdated = wroteAny;
+                            totals = writeTotals;
+                            if (!json) {
+                                console.log(`Totals: + ${writeTotals.added}, ~ ${writeTotals.modified}, - ${writeTotals.removed}, → ${writeTotals.renamed}`);
+                                console.log(wroteAny
+                                    ? 'Specs updated successfully.'
+                                    : 'Specs already in sync; no files changed.');
+                            }
+                            for (const proposed of prepared) {
+                                if ((await fingerprintPath(proposed.update.source)) !==
+                                    proposed.sourceFingerprint) {
+                                    throw new Error(`The delta for '${proposed.update.id}' changed before the change could be archived.`);
+                                }
+                            }
+                            if (hasRetirements) {
+                                await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint, { projectRoot: root.path });
+                            }
+                            // update.source is canonical (symlinks resolved), so measure it from
+                            // the canonical change directory; changes/ may itself be a symlink.
+                            if (archivePath) {
+                            const canonicalChangeDir = FileSystemUtils.canonicalizeExistingPath(changeDir);
+                            const verifyArchivedDeltas = async (stagedSource) => {
+                                if (input.sourceTreeVersion && await fingerprintDirectoryContents(archivePath) !== input.sourceTreeVersion)
+                                    throw new Error('Archived source tree changed outside the captured owned paths.');
+                                if (hasRetirements) {
+                                    await assertRetirementAuthorization(archivePath, retirementAuthorizationFingerprint, 
+                                    // Archived changes are nested one level deeper than active
+                                    // changes, so the marker reader cannot resolve their schema.
+                                    // Exact content equality proves this is the authorization
+                                    // already validated at the active path.
+                                    { verifyMarker: false });
+                                    if (stagedSource) {
+                                        await assertRetirementAuthorization(stagedSource, retirementAuthorizationFingerprint);
+                                    }
+                                }
+                                for (const proposed of prepared) {
+                                    const archivedSource = path.join(archivePath, path.relative(canonicalChangeDir, proposed.update.source));
+                                    if ((await fingerprintPortableContent(archivedSource)) !==
+                                        proposed.sourceContentFingerprint) {
+                                        throw new Error(`The archived delta for '${proposed.update.id}' changed during the final move.`);
+                                    }
+                                    if (stagedSource) {
+                                        const stagedDelta = path.join(stagedSource, path.relative(canonicalChangeDir, proposed.update.source));
+                                        if ((await fingerprintPortableContent(stagedDelta)) !==
+                                            proposed.sourceContentFingerprint) {
+                                            throw new Error(`The active delta for '${proposed.update.id}' changed during the fallback copy.`);
+                                        }
+                                    }
+                                }
+                            };
+                            if (input.sourceTreeVersion && await fingerprintDirectoryContents(changeDir) !== input.sourceTreeVersion)
+                                throw new Error('Change directory changed outside the captured owned paths.');
+                            await moveDirectory(changeDir, archivePath, {
+                                verifyCopiedDestination: verifyArchivedDeltas,
+                            });
+                            changeArchived = true;
+                            await verifyArchivedDeltas();
+                            }
+                            await finalizeRetirementBackups(specSnapshots, mainSpecsDir);
+                        }
+                        catch (error) {
+                            if (error instanceof MoveDestinationRetainedError) {
+                                changeArchived = true;
+                                try {
+                                    await finalizeRetirementBackups(specSnapshots, mainSpecsDir);
+                                }
+                                catch (cleanupError) {
+                                    throw new RetirementCleanupError(`${error.message} ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+                                }
+                                throw error;
+                            }
+                            if (error instanceof RetirementCleanupError)
+                                throw error;
+                            const rollbackErrors = [];
+                            try {
+                                await restoreSpecSnapshots(specSnapshots.filter(({ target }) => mutationAttempts.has(target)), mainSpecsDir);
+                            }
+                            catch (rollbackError) {
+                                rollbackErrors.push(rollbackError instanceof Error
+                                    ? rollbackError
+                                    : new Error(String(rollbackError)));
+                            }
+                            if (changeArchived) {
+                                try {
+                                    await moveDirectory(archivePath, changeDir);
+                                    changeArchived = false;
+                                }
+                                catch (rollbackError) {
+                                    rollbackErrors.push(rollbackError instanceof Error
+                                        ? rollbackError
+                                        : new Error(String(rollbackError)));
+                                }
+                            }
+                            if (rollbackErrors.length > 0) {
+                                const original = error instanceof Error ? error.message : String(error);
+                                throw new Error(`${original} Rollback also failed: ${rollbackErrors.map(({ message }) => message).join(' ')}`);
+                            }
+                            throw error;
+                        }
+                    }
+                }
+            }
+            // The destination was checked before the merge, so anything claiming it now
+            // appeared while we were working. Report that as the collision it is: a raw
+            // ENOTEMPTY from rename would otherwise degrade to a bare `archive_error`.
+            if (archivePath && !changeArchived) {
+                if (input.sourceTreeVersion && await fingerprintDirectoryContents(changeDir) !== input.sourceTreeVersion)
+                    throw new Error('Change directory changed outside the captured owned paths.');
+                await assertArchiveDestinationAvailable(archivePath, archiveName);
+                archiveClaim = await claimArchiveDestination(archivePath, archiveName);
+                await assertArchiveDestinationAvailable(archivePath, archiveName);
+                // Create archive directory if needed
+                await fs.mkdir(archiveDir, { recursive: true });
+                // Move change to archive (uses copy+remove on EPERM/EXDEV, e.g. Windows)
+                await moveDirectory(changeDir, archivePath);
+                changeArchived = true;
+            }
+            if (!json) {
+                console.log(`Change '${changeName}' archived as '${archiveName}'.`);
+            }
+            const targets = await Promise.all(input.expectedTargets.map(async file => ({
+                path: file.path,
+                version: await fingerprintFileContents(file.path).then(hash => hash.toString('hex')).catch(error => {
+                    if (isMissingPathError(error)) return null;
+                    throw error;
+                }),
+            })));
+            return {
+                archivedChangePath: archivePath,
+                targets,
+                progress: { synced: true, ...(archivePath ? { archivedChangePath: archivePath } : {}) },
+                archive: {
+                change: changeName,
+                archivedAs: archiveName,
+                path: archivePath,
+                specsUpdated,
+                ...(totals ? { totals } : {}),
+                ...(specWarnings.length > 0 || unknownMetadataWarning
+                    ? {
+                        warnings: unknownMetadataWarning
+                            ? [...specWarnings, unknownMetadataWarning]
+                            : specWarnings,
+                    }
+                    : {}),
+                },
+            };
+        }
+        finally {
+            if (archiveClaim)
+                await releaseArchiveClaim(archiveClaim, claimPath).catch(() => undefined);
+        }
 }
 export class ArchiveCommand {
     async execute(changeName, options = {}) {
@@ -1328,545 +1940,16 @@ export class ArchiveCommand {
         // Names that already carry a date prefix keep it: re-prefixing would stutter
         // the name, and when the archive runs on a later day the folder would sort
         // under a day on which the change did not happen (#1309).
-        const archiveName = ARCHIVE_DATE_PREFIX_PATTERN.test(changeName)
-            ? changeName
-            : `${formatLocalDate()}-${changeName}`;
-        const archivePath = path.join(archiveDir, archiveName);
-        // Read once, before any spec is touched: whether this change is allowed to
-        // retire a capability at all. An unhonorable marker counts as undeclared,
-        // exactly as skip_specs treats one, so metadata the rest of the CLI rejects
-        // can never authorise a deletion.
-        const retirementMarker = readRetireCapabilitiesMarker(changeDir);
-        const retirementDeclared = retirementMarker.declared;
-        const retirementAuthorizationFingerprint = retirementDeclared
-            ? await fingerprintPortableContent(path.join(changeDir, METADATA_FILENAME))
-            : undefined;
-        await assertArchiveDestinationAvailable(archivePath, archiveName);
-        await fs.mkdir(archiveDir, { recursive: true });
-        const claimPath = archiveClaimPath(archivePath, archiveName);
-        let archiveClaim;
-        try {
-            // Handle spec updates unless skipSpecs flag is set
-            let specsUpdated = false;
-            let totals;
-            const specWarnings = [];
-            let changeArchived = false;
-            if (options.skipSpecs) {
-                if (!json) {
-                    console.log('Skipping spec updates (--skip-specs flag provided).');
-                }
-            }
-            else {
-                // Find specs to update
-                const specUpdates = await findSpecUpdates(changeDir, mainSpecsDir);
-                if (specUpdates.length > 0) {
-                    if (!json) {
-                        console.log('\nSpecs to update:');
-                        for (const update of specUpdates) {
-                            const status = update.exists ? 'update' : 'create';
-                            const capability = update.id;
-                            console.log(`  ${capability}: ${status}`);
-                        }
-                    }
-                    // Build the proposed updates before asking permission to apply them.
-                    // buildUpdatedSpec also reports content that the merge would drop, so
-                    // the confirmation must come after this preview.
-                    const prepared = [];
-                    let prepareError;
-                    try {
-                        for (const update of specUpdates) {
-                            const sourceBeforeBuild = await fingerprintPath(update.source);
-                            const targetBeforeBuild = await fingerprintPath(update.target);
-                            const built = await buildUpdatedSpec(update, changeName, { silent: true });
-                            const sourceAfterBuild = await fingerprintPath(update.source);
-                            const targetAfterBuild = await fingerprintPath(update.target);
-                            if (sourceBeforeBuild !== sourceAfterBuild ||
-                                targetBeforeBuild !== targetAfterBuild) {
-                                throw new Error(`Spec inputs for '${update.id}' changed while archive was preparing the preview.`);
-                            }
-                            prepared.push({
-                                update,
-                                rebuilt: built.rebuilt,
-                                counts: built.counts,
-                                outcome: await decideSpecOutcome(update, built, skipValidation, retirementDeclared),
-                                noRequirementBlocks: built.noRequirementBlocks,
-                                unaccountedContent: built.unaccountedContent,
-                                sourceFingerprint: sourceAfterBuild,
-                                sourceContentFingerprint: await fingerprintPortableContent(update.source),
-                                targetFingerprint: targetAfterBuild,
-                                targetMovableFingerprint: await fingerprintMovablePath(update.target),
-                            });
-                            specWarnings.push(...built.warnings);
-                        }
-                    }
-                    catch (err) {
-                        // A user may still decline spec updates and archive the change, as
-                        // before this preview existed. Defer the error until they accept.
-                        prepareError = err;
-                    }
-                    if (prepareError === undefined && !json) {
-                        for (const warning of specWarnings) {
-                            console.log(chalk.yellow(`⚠️  Warning: ${warning}`));
-                        }
-                    }
-                    let shouldUpdateSpecs = true;
-                    if (!options.yes) {
-                        if (json) {
-                            throw new ArchiveBlockedError('archive_confirmation_required', `Updating ${specUpdates.length} spec(s) requires confirmation: rerun with --yes.`, withStoreFlag(root, 'openspec archive <change-name> --json --yes'));
-                        }
-                        shouldUpdateSpecs = await confirmOrBlock({
-                            message: 'Proceed with spec updates?',
-                            default: true
-                        }, () => new ArchiveBlockedError('archive_confirmation_required', `Updating ${specUpdates.length} spec(s) requires confirmation, and no answer could be read from stdin.`, rerunCommand(root, changeName, options)));
-                        if (!shouldUpdateSpecs) {
-                            console.log('Skipping spec updates. Proceeding with archive.');
-                        }
-                    }
-                    if (shouldUpdateSpecs) {
-                        // The confirmation may stay open while another editor changes a main
-                        // spec. Never apply the proposal built before the prompt to a newer
-                        // baseline: in particular, a stale retirement decision must not
-                        // delete a requirement added while the prompt was waiting.
-                        if (prepareError === undefined) {
-                            try {
-                                const currentRetirementMarker = readRetireCapabilitiesMarker(changeDir);
-                                if (currentRetirementMarker.declared !== retirementMarker.declared ||
-                                    currentRetirementMarker.invalidReason !== retirementMarker.invalidReason) {
-                                    throw new Error(`The ${METADATA_FILENAME} retirement authorization changed while archive was awaiting confirmation.`);
-                                }
-                                const currentUpdates = await findSpecUpdates(changeDir, mainSpecsDir);
-                                const currentById = new Map(currentUpdates.map((update) => [update.id, update]));
-                                if (currentUpdates.length !== prepared.length) {
-                                    throw new Error('The change specs changed while archive was awaiting confirmation.');
-                                }
-                                for (const proposed of prepared) {
-                                    const current = currentById.get(proposed.update.id);
-                                    if (!current) {
-                                        throw new Error(`The delta for '${proposed.update.id}' changed while archive was awaiting confirmation.`);
-                                    }
-                                    if ((await fingerprintPath(current.source)) !== proposed.sourceFingerprint ||
-                                        (await fingerprintPath(current.target)) !== proposed.targetFingerprint) {
-                                        throw new Error(`Spec inputs for '${proposed.update.id}' changed while archive was awaiting confirmation. ` +
-                                            'No files were changed; review the new content and rerun.');
-                                    }
-                                    const rebuilt = await buildUpdatedSpec(current, changeName, { silent: true });
-                                    const outcome = await decideSpecOutcome(current, rebuilt, skipValidation, retirementDeclared);
-                                    if (current.exists !== proposed.update.exists ||
-                                        rebuilt.rebuilt !== proposed.rebuilt ||
-                                        JSON.stringify(rebuilt.counts) !== JSON.stringify(proposed.counts) ||
-                                        outcome !== proposed.outcome) {
-                                        throw new Error(`Main spec '${proposed.update.id}' changed while archive was awaiting confirmation. ` +
-                                            'No files were changed; review the new content and rerun.');
-                                    }
-                                }
-                            }
-                            catch (error) {
-                                prepareError = error;
-                            }
-                        }
-                        if (prepareError !== undefined) {
-                            const message = prepareError instanceof Error ? prepareError.message : String(prepareError);
-                            if (json) {
-                                throw new ArchiveBlockedError('archive_spec_update_failed', message, 'Fix the change delta specs and rerun. No files were changed.');
-                            }
-                            console.log(message);
-                            console.log('Aborted. No files were changed.');
-                            process.exitCode = 1;
-                            return null;
-                        }
-                        // Validate every rebuilt spec before writing any of them, so a
-                        // late validation failure really does leave all targets unchanged.
-                        if (!skipValidation) {
-                            for (const p of prepared) {
-                                // A retirement was already put to the validator, and failed on
-                                // nothing but "no requirements" - there is no spec left to write,
-                                // so re-reporting that one error would just abort the fix (#1302).
-                                if (p.outcome !== 'write')
-                                    continue;
-                                const specName = p.update.id;
-                                const report = await new Validator().validateSpecContent(specName, p.rebuilt);
-                                if (!report.valid) {
-                                    // This run is what emptied the capability, and "no
-                                    // requirements" is the only thing wrong with the spec that
-                                    // would be written - so retiring it is what archive would do,
-                                    // and what stands in the way of that is worth saying. Not
-                                    // always the *only* fix: a live requirement can be hiding in a
-                                    // second `## Requirements` section the validator never reaches,
-                                    // and merging the sections fixes that spec without a deletion.
-                                    const emptiedByThisRun = p.update.exists &&
-                                        p.counts.removed > 0 &&
-                                        p.noRequirementBlocks &&
-                                        (await isRetirableSpec(specName, p.rebuilt));
-                                    // The dead end #1302 describes: the rebuilt spec is unwritable
-                                    // for exactly one reason, and retiring the capability is the
-                                    // fix - but only the author can authorise deleting the spec, so
-                                    // the abort names the marker instead of just rejecting. Says so
-                                    // only when the marker is the ONLY thing missing, so it never
-                                    // sends someone after a marker that would not have helped.
-                                    const retirementHint = !retirementDeclared && emptiedByThisRun && p.unaccountedContent.length === 0
-                                        ? `This change removes the last requirement '${specName}' has. To retire the` +
-                                            ` capability and delete its spec, add \`retire_capabilities: true\` to the` +
-                                            ` change's ${METADATA_FILENAME} (alongside its \`schema:\`, which that file` +
-                                            ` requires), then rerun.` +
-                                            (retirementMarker.invalidReason
-                                                ? ` The marker present now cannot be honored (${retirementMarker.invalidReason}).`
-                                                : '')
-                                        : undefined;
-                                    // #1696: the marker is missing AND the file holds content a
-                                    // retirement cannot account for, so this abort said nothing at
-                                    // all - just "must have at least one requirement", with no way
-                                    // forward. It names the content instead of the marker, on
-                                    // purpose: the marker is only ever named when adding it would
-                                    // really let the archive through, and here it would not. Once
-                                    // the content is resolved the rerun names the marker.
-                                    const blockedRetirementHint = !retirementDeclared && emptiedByThisRun && p.unaccountedContent.length > 0
-                                        ? `This change removes the last requirement '${specName}' has, so the rebuilt ` +
-                                            `spec has none left and cannot be written. Retiring the capability is what ` +
-                                            `archive does instead, and it is refused while the spec holds content the ` +
-                                            `merge cannot safely account for and deleting the file would take with it: ` +
-                                            `${describeUnaccountedContent(p.unaccountedContent)}. ` +
-                                            'Move it into `## Purpose` or a canonical requirement, or delete the spec by hand, then rerun.' +
-                                            // Said here too, because an author looking at a marker they
-                                            // believe authorises the deletion should not have to clear
-                                            // the content first to find out it was never read.
-                                            (retirementMarker.invalidReason
-                                                ? ` The marker present now cannot be honored (${retirementMarker.invalidReason}).`
-                                                : '')
-                                        : undefined;
-                                    // The marker was set and retirement was still refused. Saying
-                                    // nothing left the author who did exactly what the docs asked
-                                    // back in the original dead end with no signal that their
-                                    // marker had been read at all.
-                                    // The author asked for a retirement and got the bare
-                                    // validation abort. Name the lines that stood in the way.
-                                    const refusalReason = retirementDeclared &&
-                                        p.unaccountedContent.length > 0 &&
-                                        (await isRetirableSpec(specName, p.rebuilt))
-                                        ? `'${specName}' declares retire_capabilities, but the spec holds content the merge ` +
-                                            `cannot safely account for and deleting the file would take with it: ` +
-                                            `${describeUnaccountedContent(p.unaccountedContent)}. ` +
-                                            'Move it into `## Purpose` or a canonical requirement, or delete the spec by hand.'
-                                        : undefined;
-                                    if (json) {
-                                        throw new ArchiveBlockedError('archive_spec_validation_failed', `Rebuilt spec for '${specName}' failed validation. No files were changed.`, refusalReason ??
-                                            retirementHint ??
-                                            blockedRetirementHint ??
-                                            `Run ${withStoreFlag(root, `openspec validate ${specName}`)} after fixing the change deltas.`);
-                                    }
-                                    console.log(chalk.red(`\nValidation errors in rebuilt spec for ${specName} (will not write changes):`));
-                                    for (const issue of report.issues) {
-                                        if (issue.level === 'ERROR')
-                                            console.log(chalk.red(`  ✗ ${issue.message}`));
-                                        else if (issue.level === 'WARNING')
-                                            console.log(chalk.yellow(`  ⚠ ${issue.message}`));
-                                    }
-                                    if (retirementHint)
-                                        console.log(chalk.yellow(`  → ${retirementHint}`));
-                                    if (blockedRetirementHint)
-                                        console.log(chalk.yellow(`  → ${blockedRetirementHint}`));
-                                    if (refusalReason)
-                                        console.log(chalk.yellow(`  → ${refusalReason}`));
-                                    console.log('Aborted. No files were changed.');
-                                    process.exitCode = 1;
-                                    return null;
-                                }
-                            }
-                        }
-                        // A legitimate concurrent archive cannot pass the exclusive claim,
-                        // while this catches an external process that created the final
-                        // destination during a confirmation prompt. Check before the first
-                        // spec mutation so a collision never strands a write or retirement.
-                        await assertArchiveDestinationAvailable(archivePath, archiveName);
-                        archiveClaim = await claimArchiveDestination(archivePath, archiveName);
-                        await assertArchiveDestinationAvailable(archivePath, archiveName);
-                        const mutations = prepared
-                            .filter(({ outcome, counts }) => outcome === 'retire' ||
-                            (outcome === 'write' &&
-                                counts.added + counts.modified + counts.removed + counts.renamed > 0))
-                            .map(({ update, outcome, rebuilt }) => ({
-                            update,
-                            outcome: outcome,
-                            rebuilt,
-                        }));
-                        const hasRetirements = mutations.some(({ outcome }) => outcome === 'retire');
-                        await assertDistinctMutationTargets(mutations);
-                        for (const proposed of prepared) {
-                            if ((await fingerprintPath(proposed.update.source)) !== proposed.sourceFingerprint ||
-                                (await fingerprintPath(proposed.update.target)) !== proposed.targetFingerprint) {
-                                throw new Error(`Spec inputs for '${proposed.update.id}' changed before archive could apply them. ` +
-                                    'No files were changed; review the new content and rerun.');
-                            }
-                        }
-                        const specSnapshots = await captureSpecSnapshots(mutations, mainSpecsDir);
-                        const specSnapshotsByTarget = new Map(specSnapshots.map((snapshot) => [snapshot.target, snapshot]));
-                        const mutationAttempts = new Set();
-                        try {
-                            // All validations passed; write files and display counts
-                            const writeTotals = { added: 0, modified: 0, removed: 0, renamed: 0 };
-                            let wroteAny = false;
-                            for (const p of prepared) {
-                                // Deletions are deferred to the loop below.
-                                if (p.outcome !== 'write')
-                                    continue;
-                                const { added, modified, removed, renamed } = p.counts;
-                                if (added + modified + removed + renamed === 0) {
-                                    // Every operation was already synced: rewriting the file would
-                                    // only churn normalization differences into it.
-                                    continue;
-                                }
-                                await writeUpdatedSpec(p.update, p.rebuilt, p.counts, {
-                                    silent: json,
-                                    beforeMutate: async () => {
-                                        if ((await fingerprintSpecInputs(p.update)) !==
-                                            `${p.sourceFingerprint}\n${p.targetFingerprint}`) {
-                                            throw new Error(`Spec inputs for '${p.update.id}' changed before archive could write them.`);
-                                        }
-                                        mutationAttempts.add(p.update.target);
-                                    },
-                                    // Cross-root paths must be absolute when a store is selected.
-                                    ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
-                                });
-                                wroteAny = true;
-                                writeTotals.added += added;
-                                writeTotals.modified += modified;
-                                writeTotals.removed += removed;
-                                writeTotals.renamed += renamed;
-                            }
-                            // Retirements run only after every write has succeeded. If any
-                            // later mutation fails, the snapshots below restore every target.
-                            for (const p of prepared) {
-                                if (p.outcome !== 'retire')
-                                    continue;
-                                const { retired, resolvedPath, displacedPath } = await retireSpec(p.update, mainSpecsDir, {
-                                    silent: json,
-                                    deferDelete: true,
-                                    beforeMutate: async () => {
-                                        if (retirementAuthorizationFingerprint === undefined) {
-                                            throw new Error(`The ${METADATA_FILENAME} retirement authorization is unavailable.`);
-                                        }
-                                        await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint);
-                                        if ((await fingerprintSpecInputs(p.update)) !==
-                                            `${p.sourceFingerprint}\n${p.targetFingerprint}`) {
-                                            throw new Error(`Spec inputs for '${p.update.id}' changed before archive could retire them.`);
-                                        }
-                                        mutationAttempts.add(p.update.target);
-                                    },
-                                    verifyDisplaced: async (displacedPath) => {
-                                        await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint);
-                                        if ((await fingerprintMovablePath(displacedPath)) !==
-                                            p.targetMovableFingerprint) {
-                                            throw new Error(`Main spec '${p.update.id}' changed while archive was securing it for retirement.`);
-                                        }
-                                    },
-                                    ...(isStoreSelectedRoot(root) ? { displayPath: p.update.target } : {}),
-                                });
-                                if (!retired)
-                                    continue;
-                                const retirementSnapshot = specSnapshotsByTarget.get(p.update.target);
-                                if (retirementSnapshot === undefined || displacedPath === undefined) {
-                                    throw new Error(`Could not track the displaced main spec for '${p.update.id}' during retirement.`);
-                                }
-                                retirementSnapshot.displacedPath = displacedPath;
-                                retirementSnapshot.displacedFingerprint = p.targetMovableFingerprint;
-                                wroteAny = true;
-                                // A rename applied on the way to the retirement still happened;
-                                // folding every count in keeps the totals honest about the whole
-                                // delta.
-                                writeTotals.added += p.counts.added;
-                                writeTotals.modified += p.counts.modified;
-                                writeTotals.removed += p.counts.removed;
-                                writeTotals.renamed += p.counts.renamed;
-                                // Deleting a file is the one archive outcome a JSON consumer cannot
-                                // infer from the totals, so it is recorded the way every other
-                                // spec-merge divergence is. Purpose always goes with the file, so it
-                                // is named too rather than left to the reader to work out, and the
-                                // note carries the command that brings the file back.
-                                const lost = ['Purpose'];
-                                // Derived from the path that was unlinked, never rebuilt from the
-                                // capability id: on a case-insensitive filesystem the id and the
-                                // real directory can differ in case, and git is case-sensitive, so
-                                // an id-derived path is one git rejects.
-                                // `update.target` is built from the capability id, so on a
-                                // case-insensitive filesystem it can differ in case from the file
-                                // that was actually unlinked - and git is case-sensitive, so the
-                                // printed command is one git rejects. A capability directory
-                                // symlinked to a sibling has the same problem without leaving the
-                                // tree. `retiredPath` carries the resolved path, so it wins
-                                // whenever it disagrees, not only when it escapes.
-                                const unlinkedPath = resolvedPath ?? p.update.target;
-                                // Measured against the REAL root, so the platform's own
-                                // `/var` -> `/private/var` link does not read as an escape. A path
-                                // that genuinely sits outside stays absolute, which is what routes
-                                // it to prose guidance instead of a command git would reject.
-                                const realRoot = await fs.realpath(root.path).catch(() => root.path);
-                                const relativeToRoot = path.relative(realRoot, unlinkedPath);
-                                const insideRoot = relativeToRoot !== '' &&
-                                    !relativeToRoot.startsWith('..') &&
-                                    !path.isAbsolute(relativeToRoot);
-                                const deletedPath = isStoreSelectedRoot(root) || !insideRoot
-                                    ? unlinkedPath
-                                    : relativeToRoot.split(path.sep).join('/');
-                                // A command is offered only when pasting it where archive was run
-                                // would actually work. An absolute path here means the file did not
-                                // live under that directory - a selected store, or a symlinked
-                                // capability directory - and `git checkout HEAD -- <abs>` is rejected
-                                // from a different worktree however it is quoted, so that case gets
-                                // guidance instead of a command that cannot run. A path with no
-                                // portable shell spelling is handled the same way.
-                                //
-                                // Conditional on purpose, too: whether the file is in `HEAD` is not
-                                // something archive knows - a spec an earlier archive CREATED and
-                                // nobody has committed yet is not - and promising recovery is the one
-                                // claim this feature must not get wrong.
-                                const pasteablePath = path.isAbsolute(deletedPath)
-                                    ? undefined
-                                    : quoteForShell(`:(top)${deletedPath}`);
-                                const recovery = pasteablePath
-                                    ? `If it was committed, restore it with: git checkout HEAD -- ${pasteablePath}`
-                                    : `It was deleted from ${deletedPath}; if it was committed, restore it from that checkout's history.`;
-                                const retirementNote = `${p.update.id} - capability retired; deleted the main spec (all requirements removed` +
-                                    `, declared by retire_capabilities) at ${deletedPath}` +
-                                    `. Its section(s) went with it: ${lost.join(', ')}. ` +
-                                    recovery;
-                                specWarnings.push(retirementNote);
-                                // The "Retiring ..." line already told a human the file is gone; the
-                                // sections it took along, and how to get them back, are the parts
-                                // they cannot see from the path.
-                                if (!json) {
-                                    console.log(`   ${recovery}`);
-                                }
-                            }
-                            specsUpdated = wroteAny;
-                            totals = writeTotals;
-                            if (!json) {
-                                console.log(`Totals: + ${writeTotals.added}, ~ ${writeTotals.modified}, - ${writeTotals.removed}, → ${writeTotals.renamed}`);
-                                console.log(wroteAny
-                                    ? 'Specs updated successfully.'
-                                    : 'Specs already in sync; no files changed.');
-                            }
-                            for (const proposed of prepared) {
-                                if ((await fingerprintPath(proposed.update.source)) !==
-                                    proposed.sourceFingerprint) {
-                                    throw new Error(`The delta for '${proposed.update.id}' changed before the change could be archived.`);
-                                }
-                            }
-                            if (hasRetirements) {
-                                await assertRetirementAuthorization(changeDir, retirementAuthorizationFingerprint);
-                            }
-                            // update.source is canonical (symlinks resolved), so measure it from
-                            // the canonical change directory; changes/ may itself be a symlink.
-                            const canonicalChangeDir = FileSystemUtils.canonicalizeExistingPath(changeDir);
-                            const verifyArchivedDeltas = async (stagedSource) => {
-                                if (hasRetirements) {
-                                    await assertRetirementAuthorization(archivePath, retirementAuthorizationFingerprint, 
-                                    // Archived changes are nested one level deeper than active
-                                    // changes, so the marker reader cannot resolve their schema.
-                                    // Exact content equality proves this is the authorization
-                                    // already validated at the active path.
-                                    { verifyMarker: false });
-                                    if (stagedSource) {
-                                        await assertRetirementAuthorization(stagedSource, retirementAuthorizationFingerprint);
-                                    }
-                                }
-                                for (const proposed of prepared) {
-                                    const archivedSource = path.join(archivePath, path.relative(canonicalChangeDir, proposed.update.source));
-                                    if ((await fingerprintPortableContent(archivedSource)) !==
-                                        proposed.sourceContentFingerprint) {
-                                        throw new Error(`The archived delta for '${proposed.update.id}' changed during the final move.`);
-                                    }
-                                    if (stagedSource) {
-                                        const stagedDelta = path.join(stagedSource, path.relative(canonicalChangeDir, proposed.update.source));
-                                        if ((await fingerprintPortableContent(stagedDelta)) !==
-                                            proposed.sourceContentFingerprint) {
-                                            throw new Error(`The active delta for '${proposed.update.id}' changed during the fallback copy.`);
-                                        }
-                                    }
-                                }
-                            };
-                            await moveDirectory(changeDir, archivePath, {
-                                verifyCopiedDestination: verifyArchivedDeltas,
-                            });
-                            changeArchived = true;
-                            await verifyArchivedDeltas();
-                            await finalizeRetirementBackups(specSnapshots, mainSpecsDir);
-                        }
-                        catch (error) {
-                            if (error instanceof MoveDestinationRetainedError) {
-                                changeArchived = true;
-                                try {
-                                    await finalizeRetirementBackups(specSnapshots, mainSpecsDir);
-                                }
-                                catch (cleanupError) {
-                                    throw new RetirementCleanupError(`${error.message} ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-                                }
-                                throw error;
-                            }
-                            if (error instanceof RetirementCleanupError)
-                                throw error;
-                            const rollbackErrors = [];
-                            try {
-                                await restoreSpecSnapshots(specSnapshots.filter(({ target }) => mutationAttempts.has(target)), mainSpecsDir);
-                            }
-                            catch (rollbackError) {
-                                rollbackErrors.push(rollbackError instanceof Error
-                                    ? rollbackError
-                                    : new Error(String(rollbackError)));
-                            }
-                            if (changeArchived) {
-                                try {
-                                    await moveDirectory(archivePath, changeDir);
-                                    changeArchived = false;
-                                }
-                                catch (rollbackError) {
-                                    rollbackErrors.push(rollbackError instanceof Error
-                                        ? rollbackError
-                                        : new Error(String(rollbackError)));
-                                }
-                            }
-                            if (rollbackErrors.length > 0) {
-                                const original = error instanceof Error ? error.message : String(error);
-                                throw new Error(`${original} Rollback also failed: ${rollbackErrors.map(({ message }) => message).join(' ')}`);
-                            }
-                            throw error;
-                        }
-                    }
-                }
-            }
-            // The destination was checked before the merge, so anything claiming it now
-            // appeared while we were working. Report that as the collision it is: a raw
-            // ENOTEMPTY from rename would otherwise degrade to a bare `archive_error`.
-            if (!changeArchived) {
-                await assertArchiveDestinationAvailable(archivePath, archiveName);
-                archiveClaim = await claimArchiveDestination(archivePath, archiveName);
-                await assertArchiveDestinationAvailable(archivePath, archiveName);
-                // Create archive directory if needed
-                await fs.mkdir(archiveDir, { recursive: true });
-                // Move change to archive (uses copy+remove on EPERM/EXDEV, e.g. Windows)
-                await moveDirectory(changeDir, archivePath);
-                changeArchived = true;
-            }
-            if (!json) {
-                console.log(`Change '${changeName}' archived as '${archiveName}'.`);
-            }
-            return {
-                change: changeName,
-                archivedAs: archiveName,
-                path: archivePath,
-                specsUpdated,
-                ...(totals ? { totals } : {}),
-                ...(specWarnings.length > 0 || unknownMetadataWarning
-                    ? {
-                        warnings: unknownMetadataWarning
-                            ? [...specWarnings, unknownMetadataWarning]
-                            : specWarnings,
-                    }
-                    : {}),
-            };
-        }
-        finally {
-            if (archiveClaim)
-                await releaseArchiveClaim(archiveClaim, claimPath).catch(() => undefined);
-        }
+        const archivePath = specArchivePath(changeName, archiveDir);
+        const archivePlan = process.env.OMP_DEV_ARCHIVE_PLAN ? JSON.parse(process.env.OMP_DEV_ARCHIVE_PLAN) : null;
+        if (archivePlan && (archivePlan.changeDir !== changeDir || archivePlan.archivePath !== archivePath))
+            throw new Error('Native archive destination changed after the owned-path capture; confirm a new operation.');
+        const result = await syncSpecDirectory({
+            changeDir, mainSpecsDir, changeName, archivePath,
+            skipSpecs: !!options.skipSpecs, expectedSources: [], expectedTargets: [],
+            ...(archivePlan ? { sourceTreeVersion: archivePlan.sourceTreeVersion } : {}),
+        }, { root, options, json, skipValidation, unknownMetadataWarning });
+        return result?.archive ?? null;
     }
     async selectChange(changesDir, root, options) {
         const { select } = await import('@inquirer/prompts');

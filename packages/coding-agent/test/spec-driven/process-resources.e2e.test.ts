@@ -18,90 +18,52 @@ import {
 	workspace,
 } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import {
-	contentText,
-	createProviderFixture,
-	MARKER,
-	type Reply,
-	REQUIREMENT,
-	respond,
-	rolePayload,
-} from "./provider-fixture";
+import { contentText, createProviderFixture, MARKER, respond, rolePayload } from "./provider-fixture";
+import { WorkbenchFixture } from "../dev-workbench/fixture";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
-		"linked requirements cannot change business files and resume after the link is removed",
+		"public workbench rejects a linked stage directory without changing external bytes",
 		async () => {
-			await using root = await TempDir.create("@omp-dev-document-link-");
+			const outside = { path: "", linked: false };
 			let cwd = "";
-			let linkedDirectory = "";
-			let blockedWrite: Reply["tool"];
-			let repairing = false;
-			let repairDispatched = false;
-			await using provider = createProviderFixture({
+			await using workbench = await WorkbenchFixture.create({
 				async reply(request) {
-					const role = rolePayload(request)?.specDrivenRole;
-					if (repairing && role === "requirements") {
-						if (!repairDispatched && blockedWrite) {
-							repairDispatched = true;
-							return { tool: blockedWrite };
-						}
-						return { text: "需求文档已在正常目录中补齐，请确认。" };
-					}
 					const reply = respond(request);
-					const requested = reply.tool?.args.path;
+					const target = reply.tool?.args.path;
 					if (
-						role === "requirements" &&
-						typeof requested === "string" &&
-						requested.endsWith("/spec.md") &&
-						!blockedWrite
+						rolePayload(request)?.specDrivenRole === "requirements" &&
+						typeof target === "string" &&
+						target.endsWith("/spec.md") &&
+						!outside.linked
 					) {
-						blockedWrite = reply.tool;
-						linkedDirectory = path.dirname(path.join(cwd, requested));
-						await fs.mkdir(path.dirname(linkedDirectory), { recursive: true });
-						await fs.rename(root.join("staged-link"), linkedDirectory);
+						const directory = path.dirname(path.join(cwd, target));
+						await fs.mkdir(path.dirname(directory), { recursive: true });
+						await fs.symlink(outside.path, directory, process.platform === "win32" ? "junction" : "dir");
+						outside.linked = true;
 					}
 					return reply;
 				},
 			});
-			const config = await fixture(root, provider.baseUrl);
-			cwd = config.cwd;
-			await fs.mkdir(path.join(cwd, "src"));
-			const business = path.join(cwd, "src/spec.md");
-			await fs.writeFile(business, "business bytes");
-			// Create the junction before the public process can inspect the workspace.
-			await fs.symlink(
-				path.join(cwd, "src"),
-				root.join("staged-link"),
-				process.platform === "win32" ? "junction" : "dir",
-			);
-			await using peer = new PublicPeer(cwd, config.env, provider);
-			await peer.ready();
-			const session = await peer.create(cwd);
-			await peer.send(session, "/dev");
-			const since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
-			const current = await peer.stage(session, "requirements", false);
-			const stageId = current.spec.interaction?.recipient?.sessionId;
-			if (!stageId) throw new Error("Native requirements session missing");
-			await peer.settled(stageId, since);
-			if (!blockedWrite || !linkedDirectory) throw new Error("Native specification write was not exercised");
-			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
-			await peer.send(session, "/dev next", "failed");
-			expect((await peer.stage(session, "requirements", false)).spec.interaction?.recipient?.sessionId).toBe(
-				stageId,
-			);
-			await fs.rm(linkedDirectory, { recursive: true, force: true });
-			repairing = true;
-			const repairSince = await peer.send(session, "请在已移除链接的原路径补齐需求文档");
-			await peer.settled(stageId, repairSince);
-			const nextSince = await peer.send(session, "/dev next");
-			const solution = await peer.stage(session, "solution", false);
-			const solutionId = solution.spec.interaction?.recipient?.sessionId;
-			if (!solutionId) throw new Error("Native solution session missing");
-			await peer.settled(solutionId, nextSince);
-			expect(await fs.readFile(business, "utf8")).toBe("business bytes");
-			expect(provider.failures).toEqual([]);
-			await peer.send(session, "/dev");
+			cwd = workbench.cwd;
+			outside.path = workbench.root.join("external");
+			await fs.mkdir(outside.path);
+			await fs.writeFile(path.join(outside.path, "spec.md"), "business bytes");
+			await workbench.start();
+			const current = await workbench.developUntil("requirements");
+			expect(outside.linked).toBe(true);
+			expect(await fs.readFile(path.join(outside.path, "spec.md"), "utf8")).toBe("business bytes");
+			const count = workbench.provider.requests.length;
+			const response = await workbench.response("action-preview", {
+				requirementId: current.record.requirementId,
+				expectedRecordVersion: current.recordVersion,
+				expectedStage: "requirements",
+				intent: { kind: "next" },
+				gitTarget: null,
+			});
+			expect(response.ok).toBe(false);
+			expect((await workbench.get(current.record.requirementId)).record.decisions).toEqual(current.record.decisions);
+			expect(workbench.provider.requests).toHaveLength(count);
 		},
 		GATE_BUDGET,
 	);

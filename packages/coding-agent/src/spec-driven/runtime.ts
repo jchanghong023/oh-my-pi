@@ -1,9 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { formatModelStringWithRouting } from "../config/model-resolver";
+import type { ExtensionUIContext } from "../extensibility/extensions";
+import type { CreateAgentSessionOptions } from "../sdk";
 import type { AgentSession } from "../session/agent-session";
-import { loadSessionFile, readSessionHeaderId } from "../session/session-loader";
+import { loadSessionFile, readSessionHeaderId, type SessionLoadResult } from "../session/session-loader";
 import { SessionManager } from "../session/session-manager";
 import { buildRunnerDeps, resolveTeamParticipantsForSession } from "../team/controller";
 import { followMCPTools } from "../task/executor";
@@ -12,10 +15,14 @@ import { runTeamDiscussion } from "../team/orchestrator";
 import { createTeamSubagentRunner } from "../team/runner";
 import type { TeamRunResult } from "../team/types";
 import { artifactVersion, containedSpecPath, formalMaterialPaths, SpecArtifactStore } from "./artifacts";
-import { createSpecActor, type SpecActor } from "./actors";
-import { assertDevSpecSchema, ensureSpecDrivenResources, loadSpecDrivenSkill, runOpenSpec } from "./resources";
+import { createSpecActor, specSolutionBasisFromHistory, type SpecActor, type SpecNativeToolBoundary } from "./actors";
+import { assertDevSpecSchema, ensureSpecDrivenResources, loadSpecDrivenSkill, runOpenSpecDirectory } from "./resources";
 import { exposeSpecExecutionSkill, grantSpecExecutionSkills, grantSpecSkillAccess } from "./skill-policy";
 import type {
+	DevRequirementRecord,
+	DevSolutionBasis,
+	SpecSolution,
+	SpecAgentInput,
 	SpecConversationRecipient,
 	SpecDrivenPorts,
 	SpecDrivenStatus,
@@ -30,6 +37,8 @@ export interface SpecDrivenRuntime {
 	nativeSession(role: SpecStageRole): AgentSession | undefined;
 	sessionRefs(): SpecSavedRun["sessions"];
 	originalRequest(): string;
+	solutionBasis(): Promise<DevSolutionBasis | null>;
+	prepareConversation(input: SpecAgentInput, context: SpecRunContext): Promise<void>;
 	hasPendingTeam(session: AgentSession): boolean;
 	interruptTeam(session: AgentSession): Promise<boolean>;
 	stop(): Promise<void>;
@@ -54,9 +63,15 @@ export async function createSpecDrivenRuntime(args: {
 	saved?: SpecSavedRun;
 	checkApproved?: () => Promise<unknown>;
 	getStatus?: () => SpecDrivenStatus | undefined;
+	getRecord?: () => DevRequirementRecord | undefined;
+	repairPaths?: () => readonly string[] | undefined;
+	createInteractionUI?: CreateAgentSessionOptions["createInteractionUI"];
+	uiForSession?: (session: AgentSession) => ExtensionUIContext;
 	getSavedRun?: () => SpecSavedRun | undefined;
 	observeReport?: () => void | Promise<void>;
 	beginRepair?: () => Promise<void>;
+	onToolStart?: (event: SpecNativeToolBoundary) => Promise<void>;
+	onToolEnd?: (event: SpecNativeToolBoundary & { isError: boolean }) => Promise<void>;
 	onSessionCreated?: (role: SpecStageRole, session: AgentSession) => void;
 }): Promise<SpecDrivenRuntime> {
 	const { session, settings } = args;
@@ -69,8 +84,38 @@ export async function createSpecDrivenRuntime(args: {
 	const active = new Set<Promise<unknown>>();
 	const runId = args.saved?.runId ?? crypto.randomUUID();
 	const actors = new Map<SpecStageRole, SpecActor>();
+	const recoveredActors = new Set<SpecStageRole>();
 	const preparing = new Map<SpecStageRole, Promise<SpecActor>>();
 	let disposed = false;
+	let restoredOriginalRequest = "";
+	const businessSessionFile = args.saved?.sessions.business?.sessionFile;
+	if (businessSessionFile) {
+		try {
+			const history = await loadSessionFile(businessSessionFile, undefined, { throwIfMissing: true });
+			if (
+				!history.invalidHeader &&
+				!history.malformedRecords &&
+				history.entries.some(entry => entry.type === "custom" && entry.customType === "dev-original-interview") &&
+				!history.entries.some(
+					entry => entry.type === "custom_message" && entry.customType === "dev-history-recovery",
+				)
+			) {
+				const first = history.entries.find(entry => entry.type === "message" && entry.message.role === "user");
+				if (first?.type === "message" && first.message.role === "user") {
+					const content = first.message.content;
+					restoredOriginalRequest =
+						typeof content === "string"
+							? content
+							: content
+									.filter(part => part.type === "text")
+									.map(part => part.text)
+									.join("\n");
+				}
+			}
+		} catch (error) {
+			if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error;
+		}
+	}
 	let pendingTeam:
 		| { session: AgentSession; controller: AbortController; settled: PromiseWithResolvers<void> }
 		| undefined;
@@ -80,10 +125,26 @@ export async function createSpecDrivenRuntime(args: {
 				changeId: args.saved.changeId,
 				requirementsDir: await requirementsAuthority(cwd),
 				paths: args.saved.paths,
+				archivedChangePath: args.saved.closing?.archivedChangePath ?? args.saved.archivedChangePath,
 			})
 		: undefined;
 	const requireStore = () => {
 		if (!store) throw new Error("Dev artifacts are not initialized");
+		const saved = args.getSavedRun?.() ?? args.saved;
+		const archivedChangePath =
+			saved?.closing?.archivedChangePath ??
+			saved?.archivedChangePath ??
+			args.getRecord?.()?.syncRevisions.findLast(revision => revision.archivedChangePath)?.archivedChangePath;
+		if (archivedChangePath && store.archivedChangePath !== archivedChangePath) {
+			store = new SpecArtifactStore({
+				cwd,
+				changeId: store.changeId,
+				requirementsDir: store.requirementsDir,
+				planPath: store.planPath,
+				paths: saved?.paths ?? store.paths,
+				archivedChangePath,
+			});
+		}
 		return store;
 	};
 	const contextFor = (context: SpecRunContext): SpecRunContext => {
@@ -94,6 +155,7 @@ export async function createSpecDrivenRuntime(args: {
 	};
 	const recoveryContext = async (role: SpecStageRole, sessionFile?: string): Promise<string> => {
 		const saved = args.getSavedRun?.() ?? args.saved;
+		const record = args.getRecord?.();
 		const materials: Array<{ path: string; content?: string; version?: string; error?: string }> = [];
 		if (saved?.paths && saved.changeId) {
 			try {
@@ -128,6 +190,8 @@ export async function createSpecDrivenRuntime(args: {
 			phase: saved?.phase,
 			paths: saved?.paths,
 			approvals: saved?.approvals ?? {},
+			record: record ?? null,
+			originalRequestAvailable: false,
 			materials,
 		});
 	};
@@ -174,6 +238,7 @@ export async function createSpecDrivenRuntime(args: {
 				}
 			}
 			const missingHistory = !!(saved || args.saved) && !sessionFile;
+			if (missingHistory) recoveredActors.add(role);
 			const executor = role === "executor";
 			const executionResources = executor
 				? await Promise.all(
@@ -218,10 +283,19 @@ export async function createSpecDrivenRuntime(args: {
 				executor && capabilities?.enableMCP !== false && !capabilities?.restrictToolNames
 					? capabilities?.mcpManager
 					: undefined;
-			const sessionDirectory = await containedSpecPath(cwd, `.omp/dev/sessions/${runId}`);
-			const sessionManager = sessionFile
-				? await SessionManager.open(sessionFile, sessionDirectory)
-				: SessionManager.create(cwd, sessionDirectory);
+			const nativeSessionDirectory =
+				session.sessionManager.getSessionDir() || SessionManager.getDefaultSessionDir(cwd, settings.getAgentDir());
+			const sessionDirectory = path.join(nativeSessionDirectory, `spec-${encodeURIComponent(runId)}`);
+			const sessionManager = await SessionManager.open(
+				sessionFile ?? path.join(sessionDirectory, `${role}-${crypto.randomUUID()}.jsonl`),
+				sessionDirectory,
+				undefined,
+				{
+					initialCwd: cwd,
+					parentSession: session.sessionFile ?? session.sessionId,
+					suppressBreadcrumb: true,
+				},
+			);
 			const mcpFollower = inheritedMcpManager
 				? followMCPTools(
 						inheritedMcpManager,
@@ -239,16 +313,15 @@ export async function createSpecDrivenRuntime(args: {
 								await assertDevSpecSchema(cwd, lifetime.signal);
 								const instructions: string[] = [];
 								for (const artifact of ["proposal", "specs"]) {
-									const result = await runOpenSpec(
-										[
-											"instructions",
-											artifact,
-											"--change",
-											requireStore().changeId,
-											"--schema",
-											"omp-spec",
-											"--json",
-										],
+									const result = await runOpenSpecDirectory(
+										"instructions-directory",
+										{
+											changeDir: await containedSpecPath(cwd, await requireStore().resolveChangeDirectory()),
+											projectRoot: cwd,
+											changeName: requireStore().changeId,
+											artifactId: artifact,
+											schema: "omp-spec",
+										},
 										cwd,
 										lifetime.signal,
 									);
@@ -264,8 +337,17 @@ export async function createSpecDrivenRuntime(args: {
 				sessionDirectory,
 				checkApproved: args.checkApproved,
 				getStatus: args.getStatus,
+				getRecord: args.getRecord,
+				repairPaths: args.repairPaths,
+				uiForSession: args.uiForSession,
+				solutionPath:
+					role === "solution"
+						? (args.saved?.paths?.solution ?? requireStore().planPath.replace(/\.md$/, "-solutions.json"))
+						: undefined,
 				observeReport: args.observeReport,
 				beginRepair: args.beginRepair,
+				onToolStart: args.onToolStart,
+				onToolEnd: args.onToolEnd,
 				recoverContext: missingHistory ? () => recoveryContext(role, saved?.sessionFile) : undefined,
 				reportPath: executor
 					? (args.saved?.paths?.report ?? requireStore().planPath.replace(/\.md$/, "-completion.md"))
@@ -291,32 +373,37 @@ export async function createSpecDrivenRuntime(args: {
 										? undefined
 										: (mcpFollower?.proxyTools() ?? capabilities?.mcpTools),
 								mcpToolScope: mcpFollower?.scope,
-								extensionRoots: () => session.effectiveExtensionRoots,
-								preloadedPreparedExtensions: session.preparedExtensions?.filter(prepared =>
-									session.extensionRunner?.isExtensionActive(prepared.path),
-								),
-								preloadedExtensionPaths:
-									session.extensionPaths?.filter(extensionPath =>
-										session.extensionRunner
-											?.getLoadedExtensions()
-											.some(
-												extension =>
-													(extension.path === extensionPath || extension.resolvedPath === extensionPath) &&
-													session.extensionRunner?.isExtensionActive(extension.path),
-											),
-									) ?? [],
 							}
 						: {}),
+					extensionRoots: () => session.effectiveExtensionRoots,
+					preloadedPreparedExtensions: session.preparedExtensions?.filter(prepared =>
+						session.extensionRunner?.isExtensionActive(prepared.path),
+					),
+					preloadedExtensionPaths:
+						session.extensionPaths?.filter(extensionPath =>
+							session.extensionRunner
+								?.getLoadedExtensions()
+								.some(
+									extension =>
+										(extension.path === extensionPath || extension.resolvedPath === extensionPath) &&
+										session.extensionRunner?.isExtensionActive(extension.path),
+								),
+						) ?? [],
+					extensionProviderOwnership: "inherited",
 					contextFiles: [...(loadedContext.contextFiles ?? [])],
 					rules: [...(loadedContext.activeRules ?? [])],
 					skills: executor
 						? executionSkills
 						: [
-								...session.skills.map(skill => ({ ...skill, hide: true })),
+								...session.skills,
 								...skills.filter(skill => !session.skills.some(existing => existing.name === skill.name)),
 							],
-					promptTemplates: [],
+					promptTemplates: [...session.promptTemplates],
+					slashCommands: [...session.slashCommands],
 					spawns: executor ? "*" : role === "business" ? "" : "scout",
+					createInteractionUI: args.createInteractionUI,
+					interactionParentSessionId: session.sessionId,
+					interactivePrompts: !!args.createInteractionUI || !!args.uiForSession,
 					hasUI: false,
 					...(executor
 						? {}
@@ -328,7 +415,11 @@ export async function createSpecDrivenRuntime(args: {
 									"write",
 									"edit",
 									"task",
-									...(role === "requirements" || role === "solution" ? ["knowledge_search"] : []),
+									...(role === "requirements"
+										? ["knowledge_search", "ask"]
+										: role === "solution"
+											? ["knowledge_search"]
+											: []),
 								],
 								restrictToolNames: true,
 								enableMCP: false,
@@ -374,9 +465,10 @@ export async function createSpecDrivenRuntime(args: {
 			: undefined;
 	};
 	const originalRequest = () => {
-		const entryPhase = args.getStatus?.()?.entryPhase ?? args.getSavedRun?.()?.entryPhase ?? args.saved?.entryPhase;
-		const role = entryPhase === "business" || (!entryPhase && actors.has("business")) ? "business" : "requirements";
-		const history = actors.get(role)?.session.sessionManager.getEntries() ?? [];
+		const business = actors.get("business");
+		if (!business) return restoredOriginalRequest;
+		const history = business.session.sessionManager.getEntries();
+		if (!history.some(entry => entry.type === "custom" && entry.customType === "dev-original-interview")) return "";
 		// A recovery continuation is not the lost original request, including after reopening.
 		if (history.some(entry => entry.type === "custom_message" && entry.customType === "dev-history-recovery"))
 			return "";
@@ -392,7 +484,57 @@ export async function createSpecDrivenRuntime(args: {
 							.join("\n");
 			return text;
 		}
-		return "";
+		return restoredOriginalRequest;
+	};
+	const basisFor = async (solution: SpecSolution): Promise<DevSolutionBasis> => {
+		const actor = actors.get("solution");
+		if (actor && !recoveredActors.has("solution")) return actor.solutionBasis(solution);
+		const saved = (args.getSavedRun?.() ?? args.saved)?.sessions.solution;
+		if (!actor && saved?.sessionFile) {
+			let history: SessionLoadResult | undefined;
+			let sessionId: string | undefined;
+			try {
+				history = await loadSessionFile(saved.sessionFile, undefined, { throwIfMissing: true });
+				sessionId = await readSessionHeaderId(saved.sessionFile);
+			} catch (error) {
+				if (!isEnoent(error) && !(error instanceof SyntaxError)) throw error;
+			}
+			if (history && !history.invalidHeader && !history.malformedRecords && history.entries.length && sessionId)
+				return specSolutionBasisFromHistory(solution, sessionId, history.entries);
+		}
+		const basis = args.getRecord?.()?.solutionBasis;
+		if (
+			!basis ||
+			basis.solutionVersion !== solution.version ||
+			solution.candidates.length !== basis.candidateIds.length ||
+			solution.candidates.some(
+				candidate => !basis.candidateIds.includes(candidate.id) || !basis.usableCandidateIds.includes(candidate.id),
+			)
+		)
+			throw new Error("当前方案缺少与实际字节版本绑定的真实来源证明；请返回需求阶段并重新进入方案。");
+		return structuredClone(basis);
+	};
+	const prepareConversation = async (input: SpecAgentInput, context: SpecRunContext): Promise<void> => {
+		const ctx = contextFor(context);
+		const actor = await getActor(input.role);
+		let outputPaths = input.outputPaths;
+		if (input.role === "requirements") {
+			const activeDirectory = `openspec/changes/${requireStore().changeId}`;
+			const actualDirectory = await requireStore().resolveChangeDirectory();
+			outputPaths = outputPaths.map(file =>
+				file.startsWith(`${activeDirectory}/`)
+					? `${actualDirectory}/${file.slice(activeDirectory.length + 1)}`
+					: file,
+			);
+		}
+		const operation = actor.prepareConversation({ ...input, outputPaths }, ctx);
+		active.add(operation);
+		try {
+			await operation;
+			ctx.signal.throwIfAborted();
+		} finally {
+			active.delete(operation);
+		}
 	};
 	const ports: SpecDrivenPorts = {
 		agents: {
@@ -403,12 +545,26 @@ export async function createSpecDrivenRuntime(args: {
 			},
 			recipient,
 			originalRequest,
+			async solutionBasis(solution) {
+				return basisFor(solution);
+			},
+			prepareConversation,
 			async run(input, context) {
 				const ctx = contextFor(context);
 				const actor = await getActor(input.role);
 				ctx.signal.throwIfAborted();
 				const operation = (async () => {
 					let files = input.files;
+					let outputPaths = input.outputPaths;
+					if (input.role === "requirements") {
+						const activeDirectory = `openspec/changes/${requireStore().changeId}`;
+						const actualDirectory = await requireStore().resolveChangeDirectory();
+						outputPaths = outputPaths.map(file =>
+							file.startsWith(`${activeDirectory}/`)
+								? `${actualDirectory}/${file.slice(activeDirectory.length + 1)}`
+								: file,
+						);
+					}
 					if (input.entry && input.role === "requirements" && !requireStore().native) {
 						const authority = await requireStore().readAuthorityDocuments();
 						const paths = new Set<string>();
@@ -421,6 +577,10 @@ export async function createSpecDrivenRuntime(args: {
 						}
 					}
 					let teamResult: TeamRunResult | undefined;
+					if (input.entry && input.role === "solution") {
+						actor.beginSolutionAttempt(ctx);
+						recoveredActors.delete("solution");
+					}
 					if (input.entry && input.role === "solution" && input.useTeam) {
 						const approved = await args.checkApproved?.();
 						if (approved && typeof approved === "object" && "matches" in approved && !approved.matches)
@@ -438,6 +598,7 @@ export async function createSpecDrivenRuntime(args: {
 						try {
 							const runner = createTeamSubagentRunner({
 								...buildRunnerDeps(actor.session, actor.session.settings, cwd),
+								extensionProviderOwnership: "inherited",
 								parentAgentId: actor.id,
 								isCurrentSession: () => !disposed && !teamSignal.aborted && !actor.session.isDisposed,
 							});
@@ -466,7 +627,9 @@ export async function createSpecDrivenRuntime(args: {
 						if (!teamResult.candidates.some(candidate => candidate.adoptable))
 							throw new Error("Team 未产生可采用候选");
 					}
-					return actor.request({ ...input, files }, ctx, teamResult);
+					const result = await actor.request({ ...input, files, outputPaths }, ctx, teamResult);
+					if (input.entry) recoveredActors.delete(input.role);
+					return result;
 				})();
 				active.add(operation);
 				try {
@@ -500,8 +663,7 @@ export async function createSpecDrivenRuntime(args: {
 			async readSolution(context) {
 				contextFor(context);
 				const solution = await requireStore().readSolution();
-				const actor = await getActor("solution");
-				actor.checkSolutionCandidates(solution.candidates);
+				await basisFor(solution);
 				return solution;
 			},
 			async readPlan(context) {
@@ -528,6 +690,12 @@ export async function createSpecDrivenRuntime(args: {
 			return Object.fromEntries([...actors.keys()].map(role => [role, recipient(role)]));
 		},
 		originalRequest,
+		prepareConversation,
+		async solutionBasis() {
+			if (!store) return null;
+			const solution = await store.readSolution();
+			return basisFor(solution);
+		},
 		hasPendingTeam: owner => pendingTeam?.session === owner,
 		async interruptTeam(owner) {
 			const team = pendingTeam;
@@ -538,17 +706,21 @@ export async function createSpecDrivenRuntime(args: {
 		},
 		async stop() {
 			lifetime.abort();
-			await Promise.all(preparing.values());
-			await Promise.all([...actors.values()].map(actor => actor.stop()));
+			await Promise.allSettled(preparing.values());
+			const stopped = await Promise.allSettled([...actors.values()].map(actor => actor.stop()));
 			await Promise.allSettled(active);
+			const failure = stopped.find(result => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 			lifetime = new AbortController();
 		},
 		async dispose() {
 			if (disposed) return;
 			lifetime.abort();
-			await Promise.all(preparing.values());
-			await Promise.all([...actors.values()].map(actor => actor.dispose()));
+			await Promise.allSettled(preparing.values());
+			const stopped = await Promise.allSettled([...actors.values()].map(actor => actor.dispose()));
 			await Promise.allSettled(active);
+			const failure = stopped.find(result => result.status === "rejected");
+			if (failure?.status === "rejected") throw failure.reason;
 			disposed = true;
 		},
 	};

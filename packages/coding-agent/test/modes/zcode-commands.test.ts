@@ -28,6 +28,7 @@ import { convertToLlm, USER_INTERRUPT_LABEL } from "../../src/session/messages";
 import { SessionManager } from "../../src/session/session-manager";
 import { ToolRestrictions } from "../../src/session/tool-restrictions";
 import { EventBus } from "../../src/utils/event-bus";
+import { parseCommandEnvelope } from "../../src/modes/zcode/schema";
 
 interface NativeApprovalTestPrompt extends ExtensionApprovalPrompt {
 	toolCall: ZCodeToolCall;
@@ -40,6 +41,30 @@ function approveNative(
 ): Promise<ExtensionApprovalAnswer> {
 	return runZCodeToolCall({ ...prompt.toolCall, signal: options?.signal }, () => ui.approve!(prompt, options));
 }
+
+describe("ZCode ordinary command payloads", () => {
+	it("preserves Goal display text without accepting it or retired fields as ordinary text input", () => {
+		const envelope = {
+			commandId: "goal-display",
+			clientId: "ordinary-input-test",
+			sessionId: "ordinary-session",
+			issuedAt: 1,
+		};
+		const payload = { text: "native objective", displayText: "/goal native objective" };
+		const goal = parseCommandEnvelope({ ...envelope, type: "sendGoalCommand", payload });
+		expect(goal.ok).toBe(true);
+		if (!goal.ok) throw goal.error;
+		expect(goal.envelope.payload).toEqual(payload);
+		expect(parseCommandEnvelope({ ...envelope, type: "sendText", payload }).ok).toBe(false);
+		expect(
+			parseCommandEnvelope({
+				...envelope,
+				type: "sendText",
+				payload: { text: "ordinary input", specDriven: true },
+			}).ok,
+		).toBe(false);
+	});
+});
 
 describe("ZCode session interactions", () => {
 	it("publishes a selection and resolves only its owning pending request", async () => {
@@ -814,7 +839,7 @@ describe("ZCode session interactions", () => {
 		expect(receipt.accepted).toBe(true);
 		await receipt.completion;
 	});
-	it("runs native extensions, enforces Loop/Dev exclusion and controls Goal without model fallback", async () => {
+	it("runs native extensions, keeps Loop independent of rejected Dev commands and controls Goal without model fallback", async () => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-zcode-native-command-"));
 		const authStorage = await AuthStorage.create(":memory:");
 		authStorage.keys.setRuntime("ascend", "native-command-test-key");
@@ -886,12 +911,20 @@ describe("ZCode session interactions", () => {
 			await (
 				await host.dispatch("/loop 2")
 			).completion;
-			await expect(host.dispatch("/dev")).rejects.toThrow("Loop");
+			await expect(host.dispatch("/dev")).rejects.toMatchObject({ code: "unsupported" });
 			host.cancel();
-			await expect(host.dispatch("/dev")).rejects.toThrow("Loop");
+			await expect(host.dispatch("/dev")).rejects.toMatchObject({ code: "unsupported" });
 			await (
 				await host.dispatch("/loop")
 			).completion;
+			const beforeDev = sessionManager.getEntries();
+			for (const command of ["/dev", "/dev next", "/dev:new", "/dev config", "/dev drop"]) {
+				await expect(host.dispatch(command)).rejects.toMatchObject({ code: "unsupported" });
+			}
+			expect(sessionManager.getEntries()).toEqual(beforeDev);
+			expect(mock.calls).toHaveLength(0);
+			expect(admissions).toBe(0);
+			expect((await host.catalog()).some(command => command.name === "dev")).toBe(false);
 			await session.prompt("first turn");
 			await session.prompt("second turn");
 			expect(await host.catalog()).toContainEqual(

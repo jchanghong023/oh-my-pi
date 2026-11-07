@@ -3,9 +3,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { parse as parseYaml } from "yaml";
-import { assertDevSpecSchema, runOpenSpec, type SpecDrivenProcessResult } from "./resources";
+import { assertDevSpecSchema, runOpenSpec, runOpenSpecDirectory, type SpecDrivenProcessResult } from "./resources";
 import type {
+	DevMaterialRef,
+	DevRequirementRecord,
 	SpecArtifactPaths,
+	SpecCloseProgress,
 	SpecDocument,
 	SpecFileVersion,
 	SpecRequirements,
@@ -19,18 +22,16 @@ export interface SpecArtifactStoreOptions {
 	requirementsDir?: string;
 	planPath?: string;
 	paths?: SpecArtifactPaths;
-}
-
-export interface SpecCloseProgress {
-	synced?: boolean;
 	archivedChangePath?: string;
-	retirementCleanup?: { paths: string[]; diagnostic: string };
-	sideEffects?: { paths: string[]; diagnostic: string };
-	archiveCleanup?: { path: string; diagnostic: string };
 }
 
 export function hasSpecCloseSideEffects(progress?: SpecCloseProgress): boolean {
-	return !!(progress?.synced || progress?.archivedChangePath || progress?.sideEffects);
+	return !!(
+		progress?.synced ||
+		progress?.archivedChangePath ||
+		progress?.sideEffects ||
+		progress?.ownership?.state === "pending"
+	);
 }
 
 function isNativeSpec(file: string): boolean {
@@ -210,6 +211,62 @@ async function nativeSpecsBelow(cwd: string, directory: string): Promise<string[
 	return files.sort();
 }
 
+/** Resolve recorded archive facts, or a unique real native destination, never a guessed date. */
+export async function resolveSpecChangeDirectory(
+	cwd: string,
+	changeId: string,
+	archivedChangePath?: string,
+): Promise<string> {
+	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(changeId)) throw new Error("Invalid change ID");
+	const active = `openspec/changes/${changeId}`;
+	const archiveRoot = "openspec/changes/archive";
+	if (archivedChangePath) {
+		const name = archivedChangePath.slice(archiveRoot.length + 1);
+		if (
+			!archivedChangePath.startsWith(`${archiveRoot}/`) ||
+			name.includes("/") ||
+			name.includes("\\") ||
+			(name !== changeId && !/^\d{4}-\d{2}-\d{2}-/.test(name)) ||
+			(name !== changeId && name.slice(11) !== changeId)
+		)
+			throw new Error(`Invalid recorded archive path: ${archivedChangePath}`);
+		await assertSpecDirectory(cwd, archivedChangePath);
+		return archivedChangePath;
+	}
+	try {
+		await assertSpecDirectory(cwd, active);
+		return active;
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	let entries: string[];
+	try {
+		entries = await fs.readdir(await containedSpecPath(cwd, archiveRoot));
+	} catch (error) {
+		if (isEnoent(error)) return active;
+		throw error;
+	}
+	const candidates = entries.filter(
+		name => name === changeId || (/^\d{4}-\d{2}-\d{2}-/.test(name) && name.slice(11) === changeId),
+	);
+	if (candidates.length > 1) throw new Error("Cannot identify a unique native archive for the change");
+	if (!candidates.length) return active;
+	const directory = `${archiveRoot}/${candidates[0]}`;
+	await assertSpecDirectory(cwd, directory);
+	return directory;
+}
+
+async function assertSpecDirectory(cwd: string, relative: string): Promise<void> {
+	await containedSpecPath(cwd, relative);
+	const base = path.resolve(cwd);
+	const target = path.resolve(base, relative);
+	for (let current = target; current !== base; current = path.dirname(current)) {
+		const entry = await fs.lstat(current);
+		if (entry.isSymbolicLink() || !entry.isDirectory())
+			throw new Error(`Specification directory must not follow links: ${relative}`);
+	}
+}
+
 /** Enumerate formal materials without validating or changing the workflow. */
 export async function formalMaterialPaths(
 	cwd: string,
@@ -218,10 +275,9 @@ export async function formalMaterialPaths(
 	archivedChangePath?: string,
 ): Promise<string[]> {
 	const changeDir = `openspec/changes/${changeId}`;
+	const actual = await resolveSpecChangeDirectory(cwd, changeId, archivedChangePath);
 	const relocate = (file: string) =>
-		archivedChangePath && file.startsWith(`${changeDir}/`)
-			? `${archivedChangePath}/${file.slice(changeDir.length + 1)}`
-			: file;
+		file.startsWith(`${changeDir}/`) ? `${actual}/${file.slice(changeDir.length + 1)}` : file;
 	const requirements: string[] = [];
 	for (const file of paths.requirements) {
 		if (file !== `${changeDir}/specs/*/spec.md` && file !== `${changeDir}/specs/**/spec.md`) {
@@ -254,12 +310,14 @@ export class SpecArtifactStore {
 	readonly requirementsDir: string;
 	readonly native: boolean;
 	readonly paths?: SpecArtifactPaths;
+	readonly archivedChangePath?: string;
 	constructor(options: SpecArtifactStoreOptions) {
 		if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(options.changeId)) throw new Error("Invalid change ID");
 		this.cwd = path.resolve(options.cwd);
 		this.changeId = options.changeId;
 		this.changeDir = `openspec/changes/${options.changeId}`;
 		this.paths = options.paths;
+		this.archivedChangePath = options.archivedChangePath;
 		this.planPath =
 			options.paths?.plan ??
 			options.planPath ??
@@ -267,7 +325,12 @@ export class SpecArtifactStore {
 		this.requirementsDir = options.requirementsDir ?? "openspec/specs";
 		this.native = this.requirementsDir === "openspec/specs";
 	}
+	async resolveChangeDirectory(): Promise<string> {
+		return resolveSpecChangeDirectory(this.cwd, this.changeId, this.archivedChangePath);
+	}
 	async initialize(businessPath?: string): Promise<SpecArtifactPaths> {
+		const archived = (await this.resolveChangeDirectory()) !== this.changeDir;
+		if (archived && this.paths) return structuredClone(this.paths);
 		if (businessPath !== undefined) {
 			if (!/\.md$/i.test(businessPath)) throw new Error("业务文档必须是 Markdown 文件");
 			const normalized = path
@@ -307,19 +370,21 @@ export class SpecArtifactStore {
 				if (!isEnoent(error)) throw error;
 			}
 		}
-		await assertDevSpecSchema(this.cwd);
-		// Native `new change` also creates a project config when one is absent.
-		// Dev owns only this change, so create its native metadata without initializing the project.
-		const changesDir = await containedSpecPath(this.cwd, "openspec/changes");
-		await fs.mkdir(changesDir, { recursive: true });
-		const changeDir = await containedSpecPath(this.cwd, this.changeDir);
-		await fs.mkdir(changeDir, { recursive: !!this.paths?.business });
-		const now = new Date();
-		const created = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-		await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, {
-			flag: "wx",
-		});
-		if (this.paths) return structuredClone(this.paths);
+		if (!archived) {
+			await assertDevSpecSchema(this.cwd);
+			// Native `new change` also creates a project config when one is absent.
+			// Dev owns only this change, so create its native metadata without initializing the project.
+			const changesDir = await containedSpecPath(this.cwd, "openspec/changes");
+			await fs.mkdir(changesDir, { recursive: true });
+			const changeDir = await containedSpecPath(this.cwd, this.changeDir);
+			await fs.mkdir(changeDir, { recursive: !!this.paths?.business });
+			const now = new Date();
+			const created = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+			await fs.writeFile(path.join(changeDir, ".openspec.yaml"), `schema: omp-spec\ncreated: ${created}\n`, {
+				flag: "wx",
+			});
+			if (this.paths) return structuredClone(this.paths);
+		}
 		return {
 			requirements: [
 				`${this.changeDir}/proposal.md`,
@@ -358,7 +423,10 @@ export class SpecArtifactStore {
 	async #assertOwnSchema(signal?: AbortSignal): Promise<void> {
 		let metadata: string;
 		try {
-			metadata = await fs.readFile(await containedSpecPath(this.cwd, `${this.changeDir}/.openspec.yaml`), "utf8");
+			metadata = await fs.readFile(
+				await containedSpecPath(this.cwd, `${await this.resolveChangeDirectory()}/.openspec.yaml`),
+				"utf8",
+			);
 		} catch (error) {
 			if (isEnoent(error)) return;
 			throw error;
@@ -392,7 +460,8 @@ export class SpecArtifactStore {
 	}
 	async readRequirements(signal?: AbortSignal): Promise<SpecRequirements> {
 		signal?.throwIfAborted();
-		const directory = `${this.changeDir}/specs`;
+		const changeDir = await this.resolveChangeDirectory();
+		const directory = `${changeDir}/specs`;
 		const root = await containedSpecPath(this.cwd, directory);
 		let entries: string[];
 		try {
@@ -409,17 +478,38 @@ export class SpecArtifactStore {
 				`缺少需求规格，请补齐后重试 /dev next。路径：${directory}/*/spec.md；原因：目录中没有有效规格文件`,
 			);
 		const paths = [
-			`${this.changeDir}/proposal.md`,
-			...specs.map(file => `${this.changeDir}/specs/${file.replaceAll(path.sep, "/")}`),
+			`${changeDir}/proposal.md`,
+			...specs.map(file => `${changeDir}/specs/${file.replaceAll(path.sep, "/")}`),
 			...(!this.native ? await this.#markdownPaths() : []),
 		];
 		await this.#assertOwnSchema(signal);
-		const result = await runOpenSpec(
-			["validate", this.changeId, "--type", "change", "--strict", "--json"],
+		const result =
+			changeDir === this.changeDir
+				? await runOpenSpec(["validate", this.changeId, "--type", "change", "--strict", "--json"], this.cwd, signal)
+				: await runOpenSpecDirectory(
+						"validate-directory",
+						{
+							changeDir: await containedSpecPath(this.cwd, changeDir),
+							projectRoot: this.cwd,
+							mainSpecsDir: await containedSpecPath(this.cwd, "openspec/specs"),
+						},
+						this.cwd,
+						signal,
+					);
+		if (result.exitCode !== 0) throw new Error(`Specification validation failed: ${result.stdout}\n${result.stderr}`);
+		// Native `validate --type change` only validates delta specs. Dev also owns
+		// the proposal artifact, so use the existing native proposal validator.
+		const proposal = await runOpenSpecDirectory(
+			"validate-directory",
+			{
+				changeDir: await containedSpecPath(this.cwd, changeDir),
+				artifact: "proposal",
+			},
 			this.cwd,
 			signal,
 		);
-		if (result.exitCode !== 0) throw new Error(`Specification validation failed: ${result.stdout}\n${result.stderr}`);
+		if (proposal.exitCode !== 0)
+			throw new Error(`Proposal validation failed: ${proposal.stdout}\n${proposal.stderr}`);
 		const files = await Promise.all(paths.map(file => this.#read(file)));
 		signal?.throwIfAborted();
 		return { files, version: artifactVersion(JSON.stringify(files.map(file => [file.path, file.version]))) };
@@ -445,9 +535,20 @@ export class SpecArtifactStore {
 	/** Byte checks deliberately do not parse or validate artifacts, including during ordinary conversation. */
 	async checkVersions(files: readonly SpecFileVersion[], archivedChangePath?: string): Promise<SpecVersionCheck> {
 		if (!files.length) return { matches: true, changed: [] };
-		const archive = archivedChangePath ?? (await this.#findArchive(files));
+		const actual = await resolveSpecChangeDirectory(
+			this.cwd,
+			this.changeId,
+			archivedChangePath ?? this.archivedChangePath,
+		);
+		const archive =
+			archivedChangePath ??
+			this.archivedChangePath ??
+			(await this.#findArchive(files)) ??
+			(actual === this.changeDir ? undefined : actual);
 		const result = await this.#checkVersionsAt(files, archive);
-		const approved = new Set(files.map(file => file.path));
+		const logical = (file: string) =>
+			archive && file.startsWith(`${archive}/`) ? `${this.changeDir}/${file.slice(archive.length + 1)}` : file;
+		const approved = new Set(files.map(file => logical(file.path)));
 		const requirementPaths = this.paths?.requirements ?? [
 			`${this.changeDir}/proposal.md`,
 			`${this.changeDir}/specs/**/spec.md`,
@@ -458,7 +559,7 @@ export class SpecArtifactStore {
 			(!this.native && file.startsWith(`${this.requirementsDir}/`) && file.endsWith(".md")) ||
 			requirementPaths.includes(file);
 		// A solution-only check is not a requirements approval; no baseline exists yet.
-		if (files.some(file => isRequirement(file.path))) {
+		if (files.some(file => isRequirement(logical(file.path)))) {
 			try {
 				const materials = await formalMaterialPaths(
 					this.cwd,
@@ -545,12 +646,30 @@ export class SpecArtifactStore {
 			acceptedVersions: readonly SpecFileVersion[];
 			progress?: SpecCloseProgress;
 			onProgress?: (progress: SpecCloseProgress) => void | Promise<void>;
+			archivePlan?: string;
 		},
 		signal?: AbortSignal,
 	): Promise<{ archivedChangePath: string }> {
 		signal?.throwIfAborted();
 		const progress = input.progress ?? {};
 		const publish = async () => input.onProgress?.({ ...progress });
+		if (progress.sideEffects) {
+			const { diagnostic, expectedVersions } = progress.sideEffects;
+			if (!expectedVersions?.length) throw new Error(diagnostic);
+			for (const expected of expectedVersions) {
+				let actual: string | null;
+				try {
+					actual = artifactVersion(await fs.readFile(await containedSpecPath(this.cwd, expected.path)));
+				} catch (error) {
+					if (!isEnoent(error)) throw error;
+					actual = null;
+				}
+				if (actual !== expected.version) throw new Error(diagnostic);
+			}
+			delete progress.sideEffects;
+			await publish();
+			throw new Error("Native rollback was restored; a new explicit sync operation is required");
+		}
 		if (!progress.archivedChangePath) {
 			const recovered = await this.#findArchive(input.acceptedVersions);
 			if (recovered) {
@@ -623,6 +742,7 @@ export class SpecArtifactStore {
 					],
 					this.cwd,
 					signal,
+					{ archivePlan: input.archivePlan },
 				);
 			} catch (error) {
 				failure = error;
@@ -699,7 +819,11 @@ export class SpecArtifactStore {
 								changed.push(targets[i]!);
 							}
 						}
-						if (changed.length) progress.sideEffects = { paths: changed, diagnostic: rollback.message! };
+						progress.sideEffects = {
+							paths: changed.length ? changed : targets,
+							diagnostic: rollback.message!,
+							expectedVersions: targets.map((file, index) => ({ path: file, version: before[index] ?? null })),
+						};
 					}
 				} catch {
 					// Non-JSON diagnostics retain the ordinary native failure below.
@@ -725,6 +849,8 @@ export class SpecArtifactStore {
 		return { archivedChangePath: progress.archivedChangePath };
 	}
 	async #read(file: string, report = false): Promise<SpecDocument> {
+		const directory = await this.resolveChangeDirectory();
+		if (file.startsWith(`${this.changeDir}/`)) file = `${directory}/${file.slice(this.changeDir.length + 1)}`;
 		const resolved = await containedSpecPath(this.cwd, file);
 		let bytes: Buffer;
 		try {
@@ -739,4 +865,132 @@ export class SpecArtifactStore {
 		if (!content.trim()) throw new Error(`Empty specification artifact: ${file}`);
 		return { path: file, content, version: artifactVersion(bytes) };
 	}
+}
+
+/** The recorded archive location remains authoritative even during source-cleanup recovery. */
+function recordedArchive(record: DevRequirementRecord): string | undefined {
+	for (const revision of [...record.syncRevisions].reverse()) {
+		const archive = revision.archivedChangePath ?? revision.progress.archivedChangePath;
+		if (archive) return archive;
+	}
+	return undefined;
+}
+
+export async function resolveDevMaterials(cwd: string, record: DevRequirementRecord): Promise<DevMaterialRef[]> {
+	const active = `openspec/changes/${record.changeId}`;
+	const actual = await resolveSpecChangeDirectory(cwd, record.changeId, recordedArchive(record));
+	const relocate = (file: string) =>
+		file.startsWith(`${active}/`) ? `${actual}/${file.slice(active.length + 1)}` : file;
+	const logical = (file: string) =>
+		file.startsWith(`${actual}/`) ? `${active}/${file.slice(actual.length + 1)}` : file;
+	const byPath = new Map<string, Omit<DevMaterialRef, "version">>();
+	for (const ref of record.materials) {
+		const file = relocate(ref.path);
+		byPath.set(file, { id: ref.id, kind: ref.kind, path: file });
+	}
+	const business = `docs/business-requirements/${record.changeId}.md`;
+	if (![...byPath.values()].some(ref => ref.kind === "business"))
+		byPath.set(business, { id: "business", kind: "business", path: business });
+	const proposal = `${actual}/proposal.md`;
+	if (!byPath.has(proposal)) byPath.set(proposal, { id: "proposal", kind: "proposal", path: proposal });
+	try {
+		for (const file of await nativeSpecsBelow(cwd, `${actual}/specs`)) {
+			const relative = `${actual}/specs/${file.replaceAll(path.sep, "/")}`;
+			if (!byPath.has(relative))
+				byPath.set(relative, { id: `delta:${file.replaceAll(path.sep, "/")}`, kind: "delta", path: relative });
+		}
+	} catch (error) {
+		if (!isEnoent(error)) throw error;
+	}
+	const generated: Array<{ kind: "solution" | "plan" | "report"; suffix: string }> = [
+		{ kind: "solution", suffix: `-${record.changeId}-solutions.json` },
+		{ kind: "plan", suffix: `-${record.changeId}.md` },
+		{ kind: "report", suffix: `-${record.changeId}-completion.md` },
+	];
+	const missingKinds = generated.filter(item => ![...byPath.values()].some(ref => ref.kind === item.kind));
+	if (missingKinds.length) {
+		const directory = "docs/superpowers/plans";
+		let entries: string[] = [];
+		try {
+			entries = await fs.readdir(await containedSpecPath(cwd, directory));
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+		for (const item of missingKinds) {
+			const matches = entries.filter(
+				name => name.endsWith(item.suffix) && /^\d{4}-\d{2}-\d{2}$/.test(name.slice(0, -item.suffix.length)),
+			);
+			if (matches.length > 1) throw new Error(`Ambiguous owned ${item.kind} materials for ${record.changeId}`);
+			if (!matches.length) continue;
+			const file = `${directory}/${matches[0]}`;
+			await assertSpecWritePath(cwd, file);
+			byPath.set(file, { id: item.kind, kind: item.kind, path: file });
+		}
+	}
+	const materials: DevMaterialRef[] = [];
+	for (const ref of byPath.values()) {
+		const file = logical(ref.path);
+		const allowed =
+			ref.kind === "business"
+				? file === business
+				: ref.kind === "proposal"
+					? file === `${active}/proposal.md`
+					: ref.kind === "delta"
+						? file.startsWith(`${active}/specs/`) && isNativeSpec(file.slice(`${active}/specs/`.length))
+						: file.startsWith("docs/superpowers/plans/") &&
+							!file.slice("docs/superpowers/plans/".length).includes("/") &&
+							file.endsWith(
+								ref.kind === "solution"
+									? `-${record.changeId}-solutions.json`
+									: ref.kind === "report"
+										? `-${record.changeId}-completion.md`
+										: `-${record.changeId}.md`,
+							);
+		if (!allowed) throw new Error(`Material is outside its owned path: ${ref.path}`);
+		try {
+			const bytes = await fs.readFile(await containedSpecPath(cwd, ref.path));
+			materials.push({ ...ref, version: artifactVersion(bytes) });
+		} catch (error) {
+			if (!isEnoent(error)) throw error;
+		}
+	}
+	return materials;
+}
+
+export async function readDevMaterial(
+	cwd: string,
+	record: DevRequirementRecord,
+	materialId: string,
+): Promise<SpecDocument> {
+	const ref = (await resolveDevMaterials(cwd, record)).find(material => material.id === materialId);
+	if (!ref) throw new Error(`Unknown or missing requirement material: ${materialId}`);
+	const bytes = await fs.readFile(await containedSpecPath(cwd, ref.path));
+	return { path: ref.path, content: bytes.toString("utf8"), version: artifactVersion(bytes) };
+}
+
+export async function importDevBusiness(
+	cwd: string,
+	record: DevRequirementRecord,
+	source: { kind: "upload"; name: string; bytes: Uint8Array } | { kind: "host-path"; path: string },
+): Promise<SpecDocument> {
+	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.changeId)) throw new Error("Invalid change ID");
+	const name = source.kind === "upload" ? source.name : source.path;
+	if (!/\.md$/i.test(name) || /^[a-z][a-z0-9+.-]*:\/\//i.test(name))
+		throw new Error("业务文档导入仅支持 Markdown 文件，不支持 URL");
+	// External paths are read-only inputs, never passed to internal containment or cancellation.
+	if (source.kind === "host-path" && !(await fs.stat(path.resolve(cwd, source.path))).isFile())
+		throw new Error("业务文档导入源必须是普通文件");
+	const bytes = source.kind === "upload" ? source.bytes : await fs.readFile(path.resolve(cwd, source.path));
+	const file = `docs/business-requirements/${record.changeId}.md`;
+	await assertSpecWritePath(cwd, file);
+	const target = await containedSpecPath(cwd, file);
+	await fs.mkdir(path.dirname(target), { recursive: true });
+	await assertSpecWritePath(cwd, file);
+	await fs.writeFile(target, bytes, { flag: "wx" });
+	// Admission uses the one readBusiness template validator only when the person clicks Next.
+	return {
+		path: file,
+		content: Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8"),
+		version: artifactVersion(bytes),
+	};
 }

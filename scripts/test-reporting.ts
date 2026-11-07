@@ -28,7 +28,7 @@ export interface TestSelection {
 	packages?: string[];
 	reportPath?: string;
 	group?: "ordinary" | "startup";
-	suiteRevision?: 2;
+	suiteRevision?: 3;
 }
 
 export interface TestProducerRecord {
@@ -121,7 +121,7 @@ export async function latestLocalTestProducers(
 			return [];
 		const typescript = latest.producers.filter(producer => producer?.scope === "ci-test-ts:local-ts");
 		return typescript.length > 0 &&
-			typescript.every(producer => producer.selection?.mode === "full" && producer.selection.suiteRevision === 2) &&
+			typescript.every(producer => producer.selection?.mode === "full" && producer.selection.suiteRevision === 3) &&
 			["ordinary", "startup"].every(group => typescript.some(producer => producer.selection?.group === group))
 			? typescript
 			: [];

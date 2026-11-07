@@ -1,5 +1,7 @@
 # 从需求到交付：OpenSpec × Superpowers × OMP 的四阶段协作
 
+> 本文保留旧四阶段 Dev TUI 的设计说明，不是当前浏览器实现的操作指南。当前实现以未归档的 [replace-dev-tui-with-browser-workbench 增量规格](../openspec/changes/replace-dev-tui-with-browser-workbench/specs/spec-driven-orchestration/spec.md)及 [Lander／Sailor 八阶段指南](lander-sailor-six-stage-agent-workflow.md)为准；下文旧 Dev 子命令及三行固定区描述不适用于新工作台。
+
 需求还没确认就开始实现、方案只剩一句总结、计划写完便自动开工——这些问题不能只靠给模型增加一段“请严格遵守流程”解决。OMP 的 `/dev` 在**无代理、需求、方案、计划、执行**五种状态间切换原生会话，其中四个阶段 Agent 负责调查、设计与工程实施；程序管理工作区归属、正式材料及用户明确决定。
 
 ![OMP 四阶段工作流：文件检查、完整交接、明确用户决策和验收后归档](assets/spec-driven-orchestration/omp-workflow.svg)
@@ -154,7 +156,7 @@ Team 默认关闭，`/dev config` 保存后生效，取消不改变值。只有�
 
 Team 复用 `/team configure` 的成员及原生只读讨论，仅在进入方案时启动；方案主聊天不切到成员，普通追问不重跑。讨论失败不静默回退单代理；如需重新讨论，先结清工作，再 `back` 返回需求、`next` 重新进入方案。Dev 没有 Goal 配置：执行默认正常工作，用户可手动开启当前执行会话的原生 Goal；Dev 不按聊天轮次创建、删除或重建 Goal，恢复时也不自动启动。
 
-方案 Team 讨论期间，普通 `Esc` 或 ZCode 的停止操作也会取消并结清当前方案会话拥有的讨论，不要求先退出或 `drop`。停止保留阶段、批准、Team 配置和原生历史，不自动启动方案 Agent 或重跑讨论；需要重新讨论时仍通过 `back`、`next` 明确重入。
+方案 Team 讨论期间，普通 `Esc` 也会取消并结清当前方案会话拥有的讨论，不要求先退出或 `drop`。停止保留阶段、批准、Team 配置和原生历史，不自动启动方案 Agent 或重跑讨论；需要重新讨论时仍通过 `back`、`next` 明确重入。
 
 ### 原生主聊天与三行固定区
 
@@ -182,8 +184,6 @@ Dev 使用当前已有工作区，不创建或要求创建 Git worktree。Git �
 
 实际同步或归档已有结果后不能普通 `back` 或继续业务修改。正式材料版本失配时不能沿用旧验收；可恢复原材料后重试，或 `drop` 后新建变更。`drop` 不撤销既有同步归档结果，也不表示交付完成。全部收尾成功后回到无代理，保留 Team 配置、原生聊天和正式产物。
 
-ZCode 开放入口投影同一工作区控制者、原生阶段及动作事实，不另建执行器或消息系统，不把 `/dev` 冒充动态工作流；冷历史只读。TUI 和桌面 UI 的实际验收须分别报告，后端结果不能代替界面证据。
-
 ## 七、不需要每次都使用 `/dev`
 
 小修复可以继续用普通对话和原生工具。内置完整的十二项上游 `openspec-*` 技能，通过 `/skill:<name>` 调用，例如 `/skill:openspec-explore`、`/skill:openspec-propose`、`/skill:openspec-sync-specs`、`/skill:openspec-archive-change` 和 `/skill:openspec-verify-change`；终端入口为 `omp openspec ...`。当前工作目录直接包含 `openspec/` 时，OMP 将上游名称和描述放入默认索引，正文按需读取，其他目录保留手动调用。
@@ -194,7 +194,9 @@ ZCode 开放入口投影同一工作区控制者、原生阶段及动作事实�
 
 这套设计希望减少阶段越权和交接信息损失，不承诺减少 token、费用或等待，也不承诺提高任意真实模型的能力。文件合同、模拟模型测试、真实模型质量和实际软件交付是不同层面的证据，不能互相替代。收益仍需用真实任务中的遗漏、返工、人工纠偏、交付缺陷与实际成本衡量。
 
-公开终端验证使用 `test/spec-driven/tui.e2e.test.ts`，共用 `tui-harness.ts` 启动真实源码 CLI；`tui-capabilities.e2e.test.ts` 覆盖独立需求维护、阶段技能与已有 Wiki 索引，`tui-lifecycle.e2e.test.ts` 覆盖范围回退、原生 Goal／重试及外层模式互斥，`tui-closing.e2e.test.ts` 覆盖实际归档后的保存失败恢复与 Markdown 权威。以上路径均相对 `packages/coding-agent/`，模型使用隔离的本地 HTTP/SSE 服务。`native-surface.test.ts` 验证 native 协议文档与输入，不冒充 Tern 像素布局；ZCode 的公开 stdio 验证也不替代终端界面验证。
+测试文件的 `tui-` 前缀不代表仍覆盖旧 Dev TUI。`test/spec-driven/tui.e2e.test.ts`、`tui-materials*.e2e.test.ts`、`tui-interactions.e2e.test.ts`、`tui-business.e2e.test.ts`、`tui-lifecycle.e2e.test.ts`、`tui-closing.e2e.test.ts` 和 `tui-resource-lifecycle.e2e.test.ts` 现在通过 `test/dev-workbench/fixture.ts` 启动真实源码 CLI，驱动公开浏览器工作台 API 与原生阶段会话，覆盖 Team、材料拒绝、输入归属、业务导入、回退、人工 ST 交接及持久化等行为；不构成浏览器像素布局或旧三行 Dev 状态区的验证。
+
+普通 TUI 覆盖仍由 `tui-harness.ts` 和 `tui-test` 保留：`tui-resources.e2e.test.ts` 验证独立资源读取，`tui-compact-mixed.e2e.test.ts` 验证压缩及输入显示；`tui-capabilities.e2e.test.ts` 同时包含普通 TUI 的工具参数修正、独立需求维护，以及工作台原生阶段的 Wiki、技能授权和不可采用 Team 结果场景。以上路径均相对 `packages/coding-agent/`，模型使用隔离的本地 HTTP/SSE 服务。协议与后端结果不能代替实际浏览器界面验收，也不代表这些测试本轮已运行。
 
 ## 延伸阅读
 

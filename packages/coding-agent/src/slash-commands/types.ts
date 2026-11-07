@@ -83,8 +83,8 @@ export interface SlashCommandRuntime {
 	sessionManager: SessionManager;
 	settings: Settings;
 	cwd: string;
-	/** Bind the actual prepared Dev stage (or original ordinary session) in the native host. */
-	bindMainSession?: (session: AgentSession) => Promise<void>;
+	/** Register resources owned by the real host rather than its active conversation. */
+	registerHostShutdown?: (dispose: () => Promise<void>) => () => void;
 	/** Native attachments supplied with this slash submission. */
 	input?: Pick<SubmittedUserInput, "images" | "imageLinks">;
 	/** Keep cwd in the session manager rather than rebinding the shared process directory. */
@@ -95,8 +95,6 @@ export interface SlashCommandRuntime {
 	ui?: Pick<ExtensionUIContext, "select" | "confirm"> & Partial<Pick<ExtensionUIContext, "input">>;
 	/** Host model-selection policy. */
 	setModel?: (model: Model) => Promise<void>;
-	/** Check host-owned pending/paused mode conflicts before activation without changing either mode. */
-	assertCanActivateMode?: (mode: "dev" | "plan" | "goal" | "vibe") => void;
 	/** Host session-transition lifecycle; falls back to the session outside adapted hosts. */
 	newSession?: (options?: NewSessionOptions) => Promise<boolean>;
 	/** Emit text to the operator. TUI maps to `ctx.showStatus`, ACP to `sessionUpdate`. */

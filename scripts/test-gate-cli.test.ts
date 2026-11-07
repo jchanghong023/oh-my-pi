@@ -71,7 +71,7 @@ test("full mode selects every supported language plan without enabling separate 
 		"test/Python suites",
 		"test/Go SDK",
 		"test/Rust SDK",
-		"smoke/isolated dev TUI PTY",
+		"smoke/isolated native TUI PTY",
 	]);
 	for (const command of commands.filter(command => command.label.startsWith("test/TypeScript"))) {
 		expect(command.argv).toContain("all");

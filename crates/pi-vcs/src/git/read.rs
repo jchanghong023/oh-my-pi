@@ -658,9 +658,23 @@ impl GitRepo {
 			.rev_parse_single(b)
 			.map_err(|err| Error::backend("git merge-base", err))?
 			.detach();
-		match repo.merge_base(a_id, b_id) {
+		// The graph is an optional acceleration cache. Gitoxide reports a
+		// missing `objects/info` directory as an untyped graph-open error,
+		// unlike missing graph files within an existing directory.
+		let cache = match repo.commit_graph_if_enabled() {
+			Ok(cache) => cache,
+			Err(gix::repository::commit_graph_if_enabled::Error::OpenCommitGraph(_))
+				if std::fs::symlink_metadata(repo.objects.store_ref().path().join("info"))
+					.is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+			{
+				None
+			},
+			Err(err) => return Err(Error::backend("git merge-base", err)),
+		};
+		let mut graph = repo.revision_graph(cache.as_ref());
+		match repo.merge_base_with_graph(a_id, b_id, &mut graph) {
 			Ok(id) => Ok(Some(id.detach().to_string())),
-			Err(gix::repository::merge_base::Error::NotFound { .. }) => Ok(None),
+			Err(gix::repository::merge_base_with_graph::Error::NotFound { .. }) => Ok(None),
 			Err(err) => Err(Error::backend("git merge-base", err)),
 		}
 	}

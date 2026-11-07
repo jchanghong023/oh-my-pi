@@ -1,0 +1,39 @@
+.sh-composer-has-prediction .sh-composer-input::placeholder {
+	color: var(--fg-muted);
+	opacity: 1;
+}
+
+.sh-message-predictions {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding-top: 6px;
+	border-top: 1px solid var(--border);
+}
+
+.sh-message-prediction-hint {
+	color: var(--fg-muted);
+	font-size: 11px;
+}
+
+.sh-message-prediction-choice {
+	padding: 5px 8px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	background: transparent;
+	color: var(--fg-muted);
+	font: inherit;
+	font-size: 12px;
+	line-height: 1.5;
+	text-align: left;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.sh-message-prediction-choice[aria-pressed="true"],
+.sh-message-prediction-choice:hover,
+.sh-message-prediction-choice:focus-visible {
+	border-color: var(--border-strong);
+	background: var(--bg-raised);
+}

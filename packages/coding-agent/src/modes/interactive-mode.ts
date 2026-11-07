@@ -116,6 +116,7 @@ import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
 import { hasNativeJudge } from "../judgment";
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
+import type { MCPAuthHandler } from "../mcp/manager";
 import {
 	formatMCPConnectionStatusMessage,
 	isMcpConnectionStatusEvent,
@@ -172,21 +173,7 @@ import {
 	type WorktreeExitPlan,
 } from "../session/session-worktree";
 import type { ShakeMode } from "../session/shake-types";
-import {
-	BUILTIN_SLASH_COMMAND_RESERVED_NAMES,
-	buildTuiBuiltinSlashCommands,
-	executeBuiltinSlashCommand,
-} from "../slash-commands/builtin-registry";
-import {
-	assertDevCommandAllowed,
-	assertDevModeActivationAllowed,
-	isDevSessionTransitionCommand,
-} from "../slash-commands/builtin-spec-driven";
-import { parseSlashCommand } from "../slash-commands/helpers/parse";
-import { restoreDetachedDraft } from "../slash-commands/helpers/draft";
-import { containedSpecPath, formalMaterialPaths, parseSpecSolution } from "../spec-driven/artifacts";
-import { observeSpecDrivenController, peekSpecDrivenController } from "../spec-driven/controller";
-import { roleLabel } from "../spec-driven/stages";
+import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
@@ -1807,16 +1794,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	// session switches. While set, short replies like "c" are answers, not
 	// continue shortcuts.
 	#guidedGoalInterviewActive = false;
-	#devObservationUnsubscribe?: () => void;
+	isDevWorkbenchModeActive?: () => boolean;
+	handleDevWorkbenchModeInput?: (data: string) => boolean;
+	handleDevWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
+	#devWorkbenchInputUnsubscribe?: () => void;
 	readonly #rootSession: AgentSession;
-	readonly #rootEventBus: EventBus | undefined;
-	readonly #rootSubagentEventBus: EventBus | undefined;
+	readonly #hostShutdownCallbacks = new Set<() => Promise<void>>();
 	#sessionBindingUnsubscribers: Array<() => void> = [];
 	#sessionEventBusUnsubscribers: Array<() => void> = [];
-	#devError?: string;
-	#devNotice?: string;
-	#devEmptyView = false;
-	#devSessionDetails?: string;
 	#vibeModePreviousTools: string[] | undefined;
 	#vibeModeOwnerScope: VibeOwnerScope | undefined;
 	// In-flight #enterVibeMode promise: set before the activateVibeTools await
@@ -1873,6 +1858,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#planReviewAnnotationStateBySubmission = new WeakMap<SubmittedUserInput, string>();
 	readonly lspServers: LspStartupServerInfo[] | undefined = undefined;
 	mcpManager?: MCPManager;
+	readonly nativeMcpUiAuthHandler: MCPAuthHandler;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
 
 	readonly #codexResetFireworksController: CodexResetFireworksController;
@@ -1968,12 +1954,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		return this.session.sessionName;
 	}
 	focusAgentSession(id: string): Promise<void> {
+		this.#assertOrdinaryTuiInputAllowed();
 		return this.#focusController.focusAgent(id);
 	}
 	focusParentSession(): Promise<void> {
+		this.#assertOrdinaryTuiInputAllowed();
 		return this.#focusController.focusParent();
 	}
 	unfocusSession(): Promise<void> {
+		this.#assertOrdinaryTuiInputAllowed();
 		return this.#focusController.unfocus();
 	}
 	invalidatePendingFocus(): void {
@@ -2164,13 +2153,11 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.mcpManager = mcpManager;
 		// An MCP sign-in can wait for the user mid-turn; like the auto-QA and cfg:// prompts below, it runs as a wait for
 		// the user (AgentSession.waitForUser).
-		this.mcpManager?.setAuthHandler((serverName, challenge) =>
-			this.session.waitForUser(() => new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge)),
-		);
+		this.nativeMcpUiAuthHandler = (serverName, challenge) =>
+			this.session.waitForUser(() => new MCPCommandController(this).handleMCPAuthChallenge(serverName, challenge));
+		this.mcpManager?.setAuthHandler(this.nativeMcpUiAuthHandler);
 		this.#eventBus = eventBus;
 		this.#subagentEventBus = subagentEventBus;
-		this.#rootEventBus = eventBus ?? session.eventBus;
-		this.#rootSubagentEventBus = subagentEventBus ?? session.subagentEventBus;
 
 		setTuiTight(cfgTuiTight.get(settings));
 		setMarkdownColorful(cfgTuiColorfulMarkdown.get(settings));
@@ -2461,7 +2448,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			disposeSession: async reason => {
 				const errors: unknown[] = [];
 				for (const dispose of [
-					() => peekSpecDrivenController(this.#rootSession.sessionManager)?.dispose(),
+					...this.#hostShutdownCallbacks,
 					() => this.#btwController.dispose(),
 					() =>
 						this.#rootSession.dispose({
@@ -2612,11 +2599,16 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.setFocus(this.editor);
 		this.syncComposerShape();
 
+		this.#devWorkbenchInputUnsubscribe ??= this.ui.addInputListener(
+			data => (this.handleDevWorkbenchModeInput?.(data) ? { consume: true } : undefined),
+			{ prepend: true },
+		);
 		this.#inputController.setupKeyHandlers();
 		this.#inputController.setupEditorSubmitHandler();
 		// Native transcript controls (user-message toolbar, error-frame actions)
 		// run the same commands as their key bindings.
 		setTranscriptActionHandler(action => {
+			if (this.isDevWorkbenchModeActive?.()) return;
 			switch (action.act) {
 				case "retry":
 					void this.#inputController.handleRetry();
@@ -3158,7 +3150,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * reflect `newCwd` before this is called.
 	 */
 	async applyCwdChange(newCwd: string): Promise<boolean> {
-		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
+		if (this.isDevWorkbenchModeActive?.()) return false;
 		const previousCwd = getProjectDir();
 		try {
 			setProjectDir(newCwd);
@@ -3229,140 +3221,68 @@ export class InteractiveMode implements InteractiveModeContext {
 			);
 			return false;
 		}
-		if (newCwd !== previousCwd) this.#bindDevObservation();
 		setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
 		this.statusLine.applyCwdChange();
 		return true;
 	}
 
-	showDevCommandStatus(text: string): void {
-		const controller = peekSpecDrivenController(this.#rootSession.sessionManager);
-		if (controller?.inputMode() !== "dev") {
-			if (text.startsWith("协同开发操作失败：")) this.showError(text);
-			else this.showStatus(text);
-			return;
-		}
-		this.#devNotice = text;
-		controller.publishObservation();
+	get rootSession(): AgentSession {
+		return this.#rootSession;
 	}
 
-	#bindDevObservation(): void {
-		if (this.#devObservationUnsubscribe) return;
-		this.#devObservationUnsubscribe = observeSpecDrivenController(this.#rootSession.sessionManager, observation => {
-			if (observation.disposed || observation.interaction.mode !== "dev") {
-				this.setHookWidget("native-dev-input", undefined);
-				return;
-			}
-			const { status, interaction } = observation;
-			const recipient = interaction.recipient;
-			const role = recipient ? roleLabel(recipient.role) : "空阶段";
-			const action = interaction.actions.find(action => action.available);
-			const dev = peekSpecDrivenController(this.session.sessionManager);
-			const interruptible =
-				this.session.isStreaming ||
-				this.session.isBashRunning ||
-				this.session.isEvalRunning ||
-				dev?.hasPendingTeam(this.session);
-			const consequences: Record<string, string> = {
-				next:
-					status.phase === "business"
-						? "确认业务文档进入需求"
-						: status.phase === "requirements"
-							? "确认需求，进入方案阶段"
-							: status.phase === "solution"
-								? "批准指定候选方案，进入计划阶段"
-								: status.phase === "planning"
-									? "批准计划，开始执行"
-									: status.phase === "executing"
-										? "验收完成报告，同步正式需求并归档"
-										: "先用 /dev new 创建流程",
-				back: "返回上一阶段，不调用模型",
-				exit: "停止并保存流程，恢复普通会话",
-				new: "创建新流程，启动需求 Agent",
-				business: "创建业务流程，启动业务 Agent",
-				"finish-business": "交付业务文档并结束流程",
-				config: "仅修改后续方案 Team 开关",
-			};
-			const businessActions =
-				status.phase === "business"
-					? interaction.actions
-							.filter(action => action.available && (action.id === "next" || action.id === "finish-business"))
-							.map(action => `${action.command} · ${consequences[action.id]}`)
-							.join(" | ")
-					: "";
-			const lines = [
-				`Dev · ${status.businessCompleted ? "业务需求已交付 · 流程已结束" : role} · ${observation.active ? "运行中" : "等待输入"} · Team ${status.useTeam ? "开" : "关"}`,
-				observation.active
-					? interruptible
-						? `${this.keybindings.getKeys("app.interrupt")[0] === "escape" ? "Esc" : appKey(this.keybindings, "app.interrupt") || "Esc"} · 停止当前操作，保留流程`
-						: "正在处理，等待当前操作结清"
-					: businessActions ||
-						(action
-							? `${action.id === "new" ? "/dev new <需求>" : action.id === "next" && status.phase === "solution" ? "/dev next [方案ID]" : action.command} · ${consequences[action.id] ?? action.label}`
-							: "/dev new <需求> · 新建流程，随后才调用需求 Agent"),
-				`/session 完整详情 · ${
-					this.#devError ??
-					observation.error ??
-					status.blockedReason ??
-					interaction.blockedReason ??
-					observation.notice ??
-					this.#devNotice ??
-					(recipient
-						? "输入发送当前会话；/dev 停止保存并返回普通会话"
-						: "当前无接收者；输入和附件保留，请使用 /dev new 或 /dev business")
-				}`,
-			].map(line => replaceTabs(sanitizeText(line)).replace(/[\r\n]+/g, " "));
-			this.setHookWidget("native-dev-input", () => ({
-				render: width => lines.map(line => truncateToWidth(line, Math.max(1, width))),
-				invalidate() {},
-			}));
-		});
+	registerHostShutdown(dispose: () => Promise<void>): () => void {
+		if (this.#isShuttingDown) throw new Error("The native host is shutting down");
+		this.#hostShutdownCallbacks.add(dispose);
+		return () => this.#hostShutdownCallbacks.delete(dispose);
 	}
 
-	/** Switch all native command and rendering identities as one recoverable binding. */
-	async bindMainSession(target: AgentSession): Promise<void> {
-		const emptyView =
-			target === this.#rootSession &&
-			peekSpecDrivenController(this.#rootSession.sessionManager)?.inputMode() === "dev";
-		if (target === this.session && !this.focusedAgentId && emptyView === this.#devEmptyView) return;
-		await target.settleInFlightMessagePersistence();
-		const previous = this.session;
-		const previousEmptyView = this.#devEmptyView;
-		if (target !== previous && this.loopModeEnabled) this.disableLoopMode();
-		this.#uiHelpers.noteCompactionBindingChange(emptyView);
-		const adopt = (session: AgentSession) => {
-			this.session.setPromptDropped?.(undefined);
-			this.session = session;
-			this.sessionManager = session.sessionManager;
-			this.agent = session.agent;
-			session.setPromptDropped?.(prompt => {
-				if (this.session === session) this.#restoreDroppedPrompt(prompt);
-			});
-			this.settings = session.settings;
-			this.#eventBus = session.eventBus ?? (session === this.#rootSession ? this.#rootEventBus : undefined);
-			this.#subagentEventBus =
-				session.subagentEventBus ?? (session === this.#rootSession ? this.#rootSubagentEventBus : undefined);
-			this.#bindSessionSubscriptions();
-			void this.#syncSessionPinned();
-		};
-		try {
-			adopt(target);
-			this.#devEmptyView = emptyView;
-			await this.#focusController.bindMainSession(target);
-			await this.#reconcileModeFromSession();
-			this.#syncJobWidgetsListener();
-			this.#pendingSlashCommands = this.#buildPendingSlashCommands();
-			this.#rebuildSlashCommandAutocomplete(this.sessionManager.getCwd());
-			setSessionTerminalTitle(this.sessionManager.getSessionName(), this.sessionManager.getCwd());
-			await this.#uiHelpers.restoreCompactionQueue(target, emptyView);
-		} catch (error) {
-			this.#devEmptyView = previousEmptyView;
-			adopt(previous);
-			await this.#focusController.bindMainSession(previous);
-			this.#uiHelpers.noteCompactionBindingChange(previousEmptyView);
-			await this.#uiHelpers.restoreCompactionQueue(previous, previousEmptyView);
-			throw error;
-		}
+	getDevWorkbenchEntryBlocker(): string | undefined {
+		if (this.#isShuttingDown) return "The native host is shutting down.";
+		if (!this.#modesRestored || this.#modeSetInFlight || this.#modeChangeHolds > 0)
+			return "Wait for the ordinary session's mode transition to settle.";
+		if (this.session.isSessionTransitioning) return "Wait for the ordinary session switch to settle.";
+		if (this.collabController.host || this.collabGuest)
+			return "Stop the ordinary Collab share or leave its guest session before entering Dev workbench mode.";
+		if (this.focusedAgentId) return "Return to the ordinary local session first.";
+		if (
+			this.ui.hasOverlay() ||
+			this.hookSelector ||
+			this.hookInput ||
+			this.hookEditor ||
+			this.approvalOwnsComposer ||
+			this.ui.getFocused() !== this.editor
+		)
+			return "Close the ordinary session's native dialog or selector first.";
+		if (
+			this.planModeEnabled ||
+			this.planModePaused ||
+			this.goalModeEnabled ||
+			this.goalModePaused ||
+			this.#guidedGoalInterviewActive ||
+			this.vibeModeEnabled ||
+			this.#vibeModeEntry ||
+			this.#vibeSkillInFlight > 0 ||
+			this.loopModeEnabled ||
+			this.#loopAutoSubmitTimer ||
+			this.#pendingLoopIterations > 0 ||
+			this.#goalContinuationTimer ||
+			this.#pendingGoalContinuationTurns > 0
+		)
+			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering Dev workbench mode.";
+		if (
+			this.#pendingSubmittedInput ||
+			this.#inputController.hasOtherSubmissionDispatches() ||
+			this.loadingAnimation ||
+			this.compactionQueuedMessages.length > 0 ||
+			this.yieldCompaction
+		)
+			return "Wait for the ordinary session's pending input and compaction queue to settle.";
+		return undefined;
+	}
+
+	#assertOrdinaryTuiInputAllowed(): void {
+		if (this.isDevWorkbenchModeActive?.())
+			throw new Error("Exit Dev workbench mode with /dev before using ordinary TUI commands.");
 	}
 
 	#bindSessionEventBus(): void {
@@ -3465,174 +3385,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncHeaderExtras();
 	}
 
-	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void {
-		assertDevModeActivationAllowed(this.session, mode);
-		if (mode !== "dev") return;
-		if (this.loopModeEnabled) throw new Error("请先退出 Loop 模式，再进入协同开发模式。");
-		if (this.planModeEnabled || this.planModePaused) throw new Error("请先退出 Plan 模式。");
-		if (this.goalModeEnabled || this.goalModePaused || this.#guidedGoalInterviewActive)
-			throw new Error("请先退出 Goal 模式。");
-		if (this.vibeModeEnabled || this.#vibeModeEntry) throw new Error("请先退出 Vibe 模式。");
-	}
-
-	isDevInputRoute(text: string): boolean {
-		return (
-			peekSpecDrivenController(this.#rootSession.sessionManager)?.inputMode() === "dev" ||
-			parseSlashCommand(text)?.name === "dev"
-		);
-	}
-
-	async exitDevForSessionMove(): Promise<void> {
-		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
-	}
-
-	async handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean> {
-		const controller = peekSpecDrivenController(this.#rootSession.sessionManager);
-		const command = parseSlashCommand(text);
-		if (controller?.inputMode() !== "dev" && command?.name !== "dev") return false;
-		const restore = () => {
-			if (
-				this.editor.getExpandedText() === text &&
-				(!input?.images?.length || input.images.every((image, index) => this.editor.pendingImages[index] === image))
-			)
-				return;
-			restoreDetachedDraft(this.editor, text, input?.images, input?.imageLinks);
-		};
-		if (command && command.name !== "dev") {
-			try {
-				if (command.name === "session" && !command.args.trim() && controller) {
-					const owner = this.session;
-					const observation = controller.observation();
-					const state = observation.status;
-					const paths = state.paths;
-					const materialPaths = paths
-						? await formalMaterialPaths(
-								observation.cwd,
-								paths,
-								state.changeId!,
-								state.archivedChangePath ?? state.closing?.archivedChangePath,
-							)
-						: [];
-					const businessPath = paths?.business ?? state.business?.path;
-					if (businessPath && !materialPaths.includes(businessPath)) materialPaths.unshift(businessPath);
-					const materials = await Promise.all(
-						materialPaths.map(async file => {
-							try {
-								const content = await Bun.file(await containedSpecPath(observation.cwd, file)).text();
-								if (file === paths?.solution) {
-									try {
-										const solution = parseSpecSolution({ path: file, content, version: "" });
-										const candidates = solution.candidates
-											.map(
-												candidate =>
-													`### ${candidate.title} (${candidate.id})${candidate.id === solution.recommendedCandidateId ? " · 推荐" : ""}\n\n${candidate.content}`,
-											)
-											.join("\n\n");
-										return `## 方案候选\n\n${sanitizeText(candidates)}\n\n## ${file}（原始 JSON）\n\n${sanitizeText(content)}`;
-									} catch {
-										// Invalid material remains visible as raw bytes, without presenting a recommendation as valid.
-									}
-								}
-								return `## ${file}\n\n${sanitizeText(content)}`;
-							} catch (error) {
-								return `## ${file}\n\n读取错误: ${error instanceof Error ? error.message : String(error)}`;
-							}
-						}),
-					);
-					if (
-						this.session !== owner ||
-						controller.inputMode() !== "dev" ||
-						controller.observation().runId !== observation.runId
-					)
-						return true;
-					const details = [
-						`Dev: ${observation.interaction.recipient ? roleLabel(observation.interaction.recipient.role) : "空阶段"}`,
-						`阶段: ${state.phase} · Team ${state.useTeam ? "开" : "关"}`,
-						...(state.businessCompleted ? ["业务需求已交付，流程已结束；未执行软件验收、需求同步或归档。"] : []),
-						...[
-							...new Set(
-								[
-									this.#devError,
-									observation.error,
-									state.blockedReason,
-									observation.interaction.blockedReason,
-								].filter(Boolean),
-							),
-						].map(error => `错误/阻塞: ${error}`),
-						`提示: ${observation.notice ?? (this.#devNotice?.startsWith("协同开发操作失败：") ? undefined : this.#devNotice) ?? "查看不会调用模型、发送草稿或批准材料；Esc 关闭，方向键滚动。"}`,
-						"入口: /dev 停止保存并返回普通会话；再次进入恢复未结束流程",
-						"入口: /dev new <需求> 创建新流程（已有未结束流程需先 drop）",
-						"入口: /dev business <业务描述> 从业务阶段起步，自动保存文档",
-						"入口: /dev next 业务阶段确认业务文档并进入需求；需求阶段确认需求；方案阶段 /dev next <候选ID> 批准指定方案；计划阶段批准计划开始执行；执行阶段验收、同步并归档",
-						"入口: /dev finish-business 交付业务文档并结束流程，不启动开发",
-						"入口: /dev back 返回上一阶段，不调用模型",
-						"入口: /dev drop 删除流程状态，保留材料与原生会话",
-						"入口: /dev config 修改后续方案 Team 开关",
-						...observation.interaction.actions.map(
-							action =>
-								`动作: ${action.command} · ${action.label}${action.blockedReason ? ` · ${action.blockedReason}` : ""}`,
-						),
-						...materials,
-					].join("\n\n");
-					this.#devSessionDetails = sanitizeText(details);
-					try {
-						await this.#commandController.handleSessionCommand();
-					} finally {
-						this.#devSessionDetails = undefined;
-					}
-					return true;
-				}
-				assertDevCommandAllowed(this.session, command.name, command.args);
-				if (isDevSessionTransitionCommand(command.name, command.args)) {
-					await controller?.exit();
-					await executeBuiltinSlashCommand(text, { ctx: this, input });
-					return true;
-				}
-				return false;
-			} catch (error) {
-				restore();
-				this.#devError = error instanceof Error ? error.message : String(error);
-				controller?.publishObservation();
-				return true;
-			}
-		}
-		if (!command && controller?.nativeSession()) {
-			try {
-				await controller.checkConversationAllowed();
-				return false;
-			} catch (error) {
-				restore();
-				this.#devError = error instanceof Error ? error.message : String(error);
-				controller.publishObservation();
-				return true;
-			}
-		}
-		if (!command) {
-			restore();
-			this.#devError = "当前无阶段 Agent；输入和附件已保留，请使用 /dev new <需求> 或 /dev business <业务描述>。";
-			controller?.publishObservation();
-			return true;
-		}
-		if (this.editor.getExpandedText() === text) this.editor.clearDraft();
-		try {
-			if (
-				!command.args.trim() ||
-				["new", "business", "finish-business", "next", "back", "drop"].includes(
-					command.args.trim().split(/\s+/, 1)[0] ?? "",
-				)
-			) {
-				this.#devError = undefined;
-				this.#devNotice = undefined;
-			}
-			await executeBuiltinSlashCommand(text, { ctx: this, input, draftDetached: true });
-		} catch (error) {
-			restore();
-			this.#devError = error instanceof Error ? error.message : String(error);
-			controller?.publishObservation();
-		}
-		return true;
-	}
-
 	async getUserInput(): Promise<SubmittedUserInput> {
 		if (this.session.getGoalModeState()?.mode === "exiting") {
 			await this.#exitGoalMode({ reason: "completed", silent: true });
@@ -3650,6 +3402,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#scheduleLoopAutoSubmit(): void {
 		this.#cancelLoopAutoSubmit();
+		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs !== undefined && isLoopLimitExhausted(this.loopLimit)) {
 			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
@@ -3670,6 +3423,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#loopAutoSubmitTimer = setTimeout(() => {
 			this.#loopAutoSubmitTimer = undefined;
 			try {
+				if (this.isDevWorkbenchModeActive?.()) return;
 				if (!this.loopModeEnabled || !this.onInputCallback || this.#isShuttingDown) return;
 				if (this.#loopIntervalMs !== undefined && isLoopDurationExpired(this.loopLimit)) {
 					this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3714,6 +3468,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	#scheduleGoalContinuation(): void {
 		this.#cancelGoalContinuation("rescheduled");
 		const stop = (reason: string) => this.#logGoalContinuation("suppressed", reason);
+		if (this.isDevWorkbenchModeActive?.()) return stop("dev_workbench_mode");
 		if (this.loopModeEnabled) return stop("loop_mode");
 		if (!this.onInputCallback) return stop("not_waiting_for_input");
 		if (!cfgGoalContinuationModes.get(this.session.settings).includes("interactive"))
@@ -3747,6 +3502,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				const stopWaiting = (reason: string) =>
 					this.#logGoalContinuation("suppressed", reason, { ...elapsed(), stage: "idle_wait" });
 				if (!this.onInputCallback) return stopWaiting("not_waiting_for_input");
+				if (this.isDevWorkbenchModeActive?.()) return stopWaiting("dev_workbench_mode");
 				if (this.session !== owner) return stopWaiting("session_changed");
 				if (!this.goalModeEnabled || this.goalModePaused) return stopWaiting("goal_disabled_or_paused");
 				// The idle timer can outlive its scheduling window; agent_end reschedules.
@@ -3833,10 +3589,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#isAutoSubmitBlocked(): boolean {
+		if (this.isDevWorkbenchModeActive?.()) return true;
 		return this.session.isStreaming || this.session.isCompacting || this.session.hasPostPromptWork;
 	}
 
 	#submitLoopPromptWhenReady(prompt: string): void {
+		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
@@ -3861,6 +3619,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #loopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
+		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || this.loopPrompt !== prompt || !this.onInputCallback) return;
 		if (this.#isAutoSubmitBlocked()) {
 			this.#deferLoopAutoSubmit(() => {
@@ -4014,6 +3773,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 */
 	armLoopAutoSubmit(promptPromise: Promise<unknown>): void {
 		this.#cancelLoopAutoSubmit();
+		if (this.isDevWorkbenchModeActive?.()) return;
 		if (!this.loopModeEnabled || !this.loopPrompt || this.#isShuttingDown) return;
 		if (this.#loopIntervalMs === undefined) {
 			this.#scheduleLoopAutoSubmit();
@@ -4162,6 +3922,8 @@ export class InteractiveMode implements InteractiveModeContext {
 			message,
 			state: this.#getSessionModeState(),
 		});
+		if (this.isDevWorkbenchModeActive?.())
+			return refuse("conflict", "Exit Dev workbench mode with /dev before changing the ordinary session mode.");
 		if (!cfgExtensionHandlersModeControl.get(this.session.settings)) {
 			return refuse("disabled", "Extension mode control is disabled in settings (extensionHandlers.modeControl).");
 		}
@@ -4454,6 +4216,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		},
 		options?: { preserveDraft?: boolean; clearEditor?: boolean },
 	): SubmittedUserInput {
+		this.#assertOrdinaryTuiInputAllowed();
 		const submission: SubmittedUserInput = {
 			text: input.text,
 			images: input.images,
@@ -4569,8 +4332,8 @@ export class InteractiveMode implements InteractiveModeContext {
 		// The rebuild drops transient notices, including the one that refused this prompt.
 		if (prompt.reason) this.showError(prompt.reason);
 		// The drop arrives asynchronously (after the abort settles); never clobber
-		// a draft the user has already started typing in the meantime.
-		if (!this.editor.getText().trim()) {
+		// a draft the user has already started typing or attaching in the meantime.
+		if (!this.editor.getText().trim() && this.editor.pendingImages.length === 0) {
 			this.editor.pendingImages = prompt.images ? [...prompt.images] : [];
 			this.editor.pendingImageLinks = prompt.images ? prompt.images.map(() => undefined) : [];
 			this.editor.imageLinks = this.editor.pendingImageLinks;
@@ -6399,7 +6162,6 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Reconcile mode state from session entries on resume/switch. */
 	async #reconcileModeFromSession(options?: { preserveActiveGoal?: boolean }): Promise<void> {
-		this.#bindDevObservation();
 		// Report only the restored result, not the cleared state in between.
 		using _hold = this.#holdModeChanges();
 		const vibeScopeAlreadySuspended = this.#vibeScopeSuspendedForSwitch;
@@ -6539,7 +6301,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		workflow?: "parallel" | "iterative";
 		preserveRestoredModel?: boolean;
 	}): Promise<void> {
-		this.assertCanActivateMode("plan");
 		if (this.planModeEnabled) {
 			return;
 		}
@@ -7566,7 +7327,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.assertCanActivateMode("plan");
+		this.#assertOrdinaryTuiInputAllowed();
 		if (this.goalModeEnabled || this.goalModePaused) {
 			this.showWarning("Exit goal mode first.");
 			return false;
@@ -7638,7 +7399,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		initialPrompt?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.assertCanActivateMode("vibe");
+		this.#assertOrdinaryTuiInputAllowed();
 		if (this.vibeModeEnabled) {
 			await this.#exitVibeMode();
 			return false;
@@ -7753,7 +7514,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async #enterVibeMode(options?: { persistModeChange?: boolean; previousTools?: string[] }): Promise<void> {
-		this.assertCanActivateMode("vibe");
 		if (this.vibeModeEnabled) {
 			return;
 		}
@@ -7876,7 +7636,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean> {
-		this.assertCanActivateMode("goal");
+		this.#assertOrdinaryTuiInputAllowed();
 		if (this.planModeEnabled || this.planModePaused) {
 			this.#warnPlanModeBlocks();
 			return false;
@@ -7921,7 +7681,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		rest?: string,
 		input?: Pick<SubmittedUserInput, "images" | "imageLinks">,
 	): Promise<boolean> {
-		this.assertCanActivateMode("goal");
+		this.#assertOrdinaryTuiInputAllowed();
 		try {
 			if (this.planModeEnabled || this.planModePaused) {
 				this.#warnPlanModeBlocks();
@@ -8699,13 +8459,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	stop(): void {
-		this.#devObservationUnsubscribe?.();
-		this.#devObservationUnsubscribe = undefined;
+		this.#devWorkbenchInputUnsubscribe?.();
+		this.#devWorkbenchInputUnsubscribe = undefined;
 		for (const unsubscribe of this.#sessionBindingUnsubscribers) unsubscribe();
 		this.#sessionBindingUnsubscribers = [];
 		for (const unsubscribe of this.#sessionEventBusUnsubscribers) unsubscribe();
 		this.#sessionEventBusUnsubscribers = [];
-		this.setHookWidget("native-dev-input", undefined);
 		this.syncIdleMaintenanceView(null);
 		this.#hidePlanReview();
 		this.#appearanceRefreshRequest = undefined;
@@ -8796,8 +8555,6 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async shutdown(): Promise<void> {
-		this.#devObservationUnsubscribe?.();
-		this.#devObservationUnsubscribe = undefined;
 		if (this.#isShuttingDown) return;
 		// The previous graceful teardown failed AT the memoized session.dispose()
 		// (the session is already disposing), so it re-rejects identically forever
@@ -9064,6 +8821,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	setEditorComponent(
 		factory: ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => CustomEditor) | undefined,
 	): void {
+		this.#assertOrdinaryTuiInputAllowed();
 		const previousEditor = this.editor;
 		const previousText = previousEditor.getText();
 		const nextEditor = factory
@@ -9178,12 +8936,6 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.ui.requestRender();
 	}
 	showSessionInfo(info: string, context?: ContextUsage): void {
-		if (this.#devSessionDetails) {
-			info = `${theme.bold("Dev 工作区")}\n${this.#devSessionDetails
-				.split("\n")
-				.map(line => `${theme.fg("dim", "│")} ${line}`)
-				.join("\n")}\n\n${info}`;
-		}
 		this.#hideSessionInfo();
 		const overlay = new SessionInfoOverlay(this.ui, info, () => this.#hideSessionInfo(), context);
 		this.#sessionInfoOverlayHandle = this.ui.showOverlay(overlay, {
@@ -9677,19 +9429,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		// A focus switch replays another session's transcript: claim that session's link schemes first.
 		this.#applyExtensionLinks();
 		this.#applyTranscriptPresenters();
-		if (this.#devEmptyView && this.viewSession === this.#rootSession) {
-			this.resetTranscript();
-			this.initialChatRendered = true;
-			this.syncRetryHintRow();
-			this.ui.requestRender(true, { clearScrollback: options?.clearTerminalHistory === true });
-			return;
-		}
 		const owner = this.viewSession;
 		await this.#uiHelpers.renderInitialMessages(options);
 		if (this.viewSession !== owner) return;
 		this.syncRetryHintRow();
 		// A switch or tree move that replays the transcript strands a `/compact` queued for the old position.
 		this.#inputController.releaseStaleYieldCompaction();
+		if (!this.focusedAgentId) await this.#uiHelpers.restoreCompactionQueue(this.session);
 	}
 	/**
 	 * Reconcile the idle "F5 to Retry" status row with the transcript tail:
@@ -9700,11 +9446,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	 * dispatched by the editor to `InputController.handleRetry`.
 	 */
 	syncRetryHintRow(): void {
-		const show =
-			!(this.#devEmptyView && this.viewSession === this.#rootSession) &&
-			!this.collabGuest &&
-			!this.viewSession.isStreaming &&
-			this.viewSession.hasAbortedToolCallTail;
+		const show = !this.collabGuest && !this.viewSession.isStreaming && this.viewSession.hasAbortedToolCallTail;
 		if (this.#retryHintRow) {
 			const mounted = this.statusContainer.children.includes(this.#retryHintRow);
 			if (mounted && show) return;
@@ -9812,13 +9554,14 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	#vibeSessionTransitionBlocked(): boolean {
+		if (this.isDevWorkbenchModeActive?.()) return true;
 		if (!this.vibeModeEnabled) return false;
 		this.session.emitNotice("warning", "Exit vibe mode first.");
 		return true;
 	}
 
 	async prepareSessionSwitch(planReviewOwner?: object): Promise<void> {
-		await peekSpecDrivenController(this.#rootSession.sessionManager)?.exit();
+		this.#assertOrdinaryTuiInputAllowed();
 		this.#hidePlanReview(planReviewOwner);
 		this.#clearJudgmentBatchProgress(true);
 		await this.#btwController.dispose();
@@ -10174,10 +9917,12 @@ export class InteractiveMode implements InteractiveModeContext {
 	}
 
 	async handleResumeSession(sessionPath: string, options?: ResumeSessionOptions): Promise<void> {
+		this.#assertOrdinaryTuiInputAllowed();
 		await this.#selectorController.handleResumeSession(sessionPath, options);
 	}
 
 	handleSessionDeleteCommand(): Promise<void> {
+		this.#assertOrdinaryTuiInputAllowed();
 		return this.#selectorController.handleSessionDeleteCommand();
 	}
 

@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import * as fs from "node:fs/promises";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
@@ -15,7 +14,6 @@ import {
 } from "../../sdk";
 import type { AgentSession } from "../../session/agent-session";
 import { isLocalAgentSession } from "../../session/agent-session-handle";
-import { peekSpecDrivenController } from "../../spec-driven/controller";
 import { AgentStorage } from "../../session/agent-storage";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { readSessionInfo, type SessionInfo } from "../../session/session-listing";
@@ -288,8 +286,6 @@ export class ZCodeSessionManager {
 			}
 		}
 		for (const info of await this.list()) {
-			if (info.id === id && /(?:^|[\\/])\.omp[\\/]dev[\\/]sessions[\\/]/.test(info.path))
-				return { agentId: id, file: info.path };
 			const children = await collectSubSessions(info.path);
 			for (const [key, child] of Object.entries(children)) {
 				if (child.header?.id !== id) continue;
@@ -380,7 +376,6 @@ export class ZCodeSessionManager {
 
 	async create(options: ZCodeSessionCreateOptions = {}): Promise<ZCodeSessionRecord> {
 		this.#assertOpen();
-		await this.exitDev(options.cwd ?? this.#options.cwd);
 		// A recreation waits outside #opening: the earlier deletion must never wait back on it.
 		const deletion = options.sessionId ? this.#deletions.get(options.sessionId) : undefined;
 		if (deletion) {
@@ -456,7 +451,6 @@ export class ZCodeSessionManager {
 			if (await this.nativeChild(id))
 				throw new Error("Native child sessions are read-only; control them from their parent");
 			const info = await this.#find(id);
-			await this.exitDev(info.cwd);
 			await this.#assertDirectory(info.cwd);
 			const manager = await SessionManager.open(info.path, this.#sessionDir, this.#storage, {
 				throwIfMissing: true,
@@ -483,7 +477,6 @@ export class ZCodeSessionManager {
 		const parent = this.get(parentId);
 		if (parent) await parent.session.sessionManager.flush();
 		const info = await this.#find(parentId);
-		await this.exitDev(info.cwd);
 		const manager = await SessionManager.forkFrom(info.path, info.cwd, this.#sessionDir, this.#storage, {
 			suppressBreadcrumb: true,
 		});
@@ -822,24 +815,6 @@ export class ZCodeSessionManager {
 				: [];
 		const merged = new Map(all.map(info => [info.id, info]));
 		for (const info of local) merged.set(info.id, info);
-		const workspaces = new Set([this.#options.cwd, ...[...merged.values()].map(info => info.cwd)]);
-		const roots = new Set<string>();
-		for (const cwd of workspaces) roots.add(vcs.gitInfo(cwd)?.repoRoot ?? cwd);
-		for (const root of roots) {
-			const directory = path.join(root, ".omp", "dev", "sessions");
-			let entries: string[];
-			try {
-				entries = await fs.readdir(directory, { recursive: true });
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
-				throw error;
-			}
-			for (const entry of entries) {
-				if (!entry.endsWith(".jsonl")) continue;
-				const info = await readSessionInfo(path.join(directory, entry));
-				if (info) merged.set(info.id, info);
-			}
-		}
 		return [...merged.values()];
 	}
 
@@ -1052,7 +1027,7 @@ export class ZCodeSessionManager {
 		sourceCommand?: PromptOptions["sourceCommand"],
 		entryId?: string,
 		highspeedMeta?: HighspeedMessageMeta,
-		session: AgentSession = this.#inputSession(record),
+		session: AgentSession = record.session,
 	): Promise<void> {
 		await record.run(async () => {
 			const queued = session
@@ -1167,7 +1142,7 @@ export class ZCodeSessionManager {
 		this.#executions.get(id)?.policy.userTakeover();
 		const record = this.#require(id);
 		return this.#beginSubmission(id, options, admitted =>
-			this.#inputSession(record).prompt(text, { ...options, throwOnDrop: true, onPromptAdmitted: admitted }),
+			record.session.prompt(text, { ...options, throwOnDrop: true, onPromptAdmitted: admitted }),
 		);
 	}
 
@@ -1179,7 +1154,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		const start = (scoped: ZCodeInputOptions) =>
 			this.#beginSubmission(id, scoped, admitted =>
-				this.#inputSession(this.#require(id)).promptCustomMessage(message, {
+				this.#require(id).session.promptCustomMessage(message, {
 					...scoped,
 					queueChipText: options.queueChipText,
 					onPromptAdmitted: admitted,
@@ -1198,7 +1173,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		return this.#execute(id, options, execution, scoped =>
 			this.#beginSubmission(id, scoped, admitted =>
-				this.#inputSession(this.#require(id)).prompt(text, {
+				this.#require(id).session.prompt(text, {
 					...scoped,
 					throwOnDrop: true,
 					onPromptAdmitted: admitted,
@@ -1218,7 +1193,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		this.#assertOpen();
 		const record = this.#require(id);
-		const session = this.#inputSession(record);
+		const session = record.session;
 		let accepted = false;
 		const { promise: admitted, resolve, reject } = Promise.withResolvers<void>();
 		const completion = record.run(() =>
@@ -1270,7 +1245,7 @@ export class ZCodeSessionManager {
 	): ZCodeInputSubmission {
 		this.#assertOpen();
 		const record = this.#require(id);
-		const session = this.#inputSession(record);
+		const session = record.session;
 		if (session.isBusyForSnapshot || session.hasPendingAsyncWork() || this.#executions.has(id)) {
 			throw new Error("Execution materials require an idle session");
 		}
@@ -1519,15 +1494,13 @@ export class ZCodeSessionManager {
 
 	async stop(id: string): Promise<void> {
 		const record = this.#require(id);
-		const dev = peekSpecDrivenController(record.session.sessionManager);
-		const session = dev?.inputMode() === "dev" ? (dev.nativeSession() ?? record.session) : record.session;
+		const session = record.session;
 		this.#executions.get(id)?.controller.abort(new Error("Session stopped"));
 		const queued = session
 			.getQueuedInputMessages()
 			.map(
 				message => message as AgentMessage & { inputId?: string; sourceCommand?: PromptOptions["sourceCommand"] },
 			);
-		await dev?.interrupt(session);
 		await record.run(() => session.abort({ preserveQueuedInputs: true }));
 		const remaining = new Set(
 			session.getQueuedInputMessages().map(message => (message as AgentMessage & { inputId?: string }).inputId),
@@ -1586,9 +1559,7 @@ export class ZCodeSessionManager {
 		},
 	): Promise<unknown> {
 		const record = this.#require(id);
-		const session = this.#inputSession(record);
-		const dev = peekSpecDrivenController(record.session.sessionManager);
-		if (dev?.inputMode() === "dev") await dev.checkConversationAllowed();
+		const session = record.session;
 		return record.run(async () => {
 			if (payload.execution && (session.isBusyForSnapshot || session.hasPendingAsyncWork())) {
 				throw new Error("Execution materials require an idle session");
@@ -1690,7 +1661,6 @@ export class ZCodeSessionManager {
 				await session.sessionManager.flush();
 				const source = session.sessionManager.getSessionFile();
 				if (!source) throw new Error("Fork source has no durable journal");
-				await peekSpecDrivenController(record.session.sessionManager)?.exit();
 				const manager = await SessionManager.forkFrom(source, record.cwd, this.#sessionDir, this.#storage, {
 					entryId: entry.id,
 					suppressBreadcrumb: true,
@@ -1757,7 +1727,6 @@ export class ZCodeSessionManager {
 		}
 		const record = this.#records.get(id);
 		if (!record) return;
-		await peekSpecDrivenController(record.session.sessionManager)?.exit();
 		this.#records.delete(id);
 		const closing = record.run(async () => {
 			const modelIo = this.#modelIo.get(id);
@@ -1811,25 +1780,6 @@ export class ZCodeSessionManager {
 		await Promise.allSettled(this.#closing.values());
 		const failure = results.find(result => result.status === "rejected");
 		if (failure?.status === "rejected") throw failure.reason;
-	}
-	/** Only an explicit session lifecycle mutation settles an active workspace owner. */
-	async exitDev(cwd: string): Promise<void> {
-		const workspace = await fs.realpath(vcs.gitInfo(cwd)?.repoRoot ?? cwd);
-		for (const record of this.#records.values()) {
-			const controller = peekSpecDrivenController(record.session.sessionManager);
-			if (controller?.inputMode() !== "dev") continue;
-			const ownerWorkspace = await fs.realpath(vcs.gitInfo(record.cwd)?.repoRoot ?? record.cwd);
-			if (workspace === ownerWorkspace) await controller.exit();
-		}
-	}
-
-	/** Routing changes execution ownership, never the ordinary root's transcript or identity. */
-	#inputSession(record: ZCodeSessionRecord): AgentSession {
-		const controller = peekSpecDrivenController(record.session.sessionManager);
-		if (controller?.inputMode() !== "dev") return record.session;
-		const session = controller.nativeSession();
-		if (!session) throw new Error("Development has no active native stage session");
-		return session;
 	}
 	#require(id: string): ZCodeSessionRecord {
 		const record = this.get(id);

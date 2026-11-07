@@ -11,8 +11,6 @@ import {
 	subscribeAckSchema,
 	v4ConversationRowsRangeResultSchema,
 } from "../../src/modes/zcode/schema";
-import { SessionManager } from "../../src/session/session-manager";
-import { DevWorkspace } from "../../src/spec-driven/workspace";
 import {
 	type Frame,
 	model,
@@ -28,6 +26,41 @@ import {
 } from "./zcode-process-harness";
 
 describe("ZCode actual public app-server process", () => {
+	test("rejects retired Dev entrypoints and negotiation without changing ordinary session input", async () => {
+		await using root = await TempDir.create("@zcode-no-development-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const id = await create(peer, config.cwdA);
+		await subscribe(peer, id);
+		expect(await peer.request("runtime/capabilities", {})).not.toHaveProperty("ompSpecDriven");
+		const before = await peer.request("session/messages", { sessionId: id });
+		for (const text of ["/dev", "/dev next", "/dev:new", "/dev config", "/dev drop"]) {
+			expect(await command(peer, id, "sendText", { text })).toMatchObject({ status: "rejected" });
+			expect(await peer.requestFrame("session/send", { sessionId: id, content: text })).toHaveProperty("error");
+		}
+		for (const key of ["includeSpecDriven", "includeSpecBusiness"]) {
+			expect(
+				await peer.requestFrame("v4/conversation/subscribe", {
+					topic: `conversation/${id}`,
+					connectionId: `old-${key}`,
+					clientMode: "desktop-continuous",
+					[key]: true,
+				}),
+			).toHaveProperty("error");
+			expect(
+				await peer.requestFrame("v4/conversation/workflowRuns", {
+					sessionId: id,
+					[key]: true,
+				}),
+			).toHaveProperty("error");
+		}
+		expect(await peer.request("session/messages", { sessionId: id })).toEqual(before);
+		expect(config.requests).toHaveLength(0);
+		await command(peer, id, "sendText", { text: "ZCODE_TEST_COLD_TOOL" });
+		await finishedOutput(peer, id, "ZCODE_TEST_COLD_TOOL_DONE");
+		expect(await fs.readFile(path.join(config.cwdA, "proof.txt"), "utf8")).toBe("ZCODE_TEST_COLD_TOOL");
+	}, 120_000);
 	test("automation preempts and stopped held input admits GUI CAS with frozen execution", async () => {
 		await using root = await TempDir.create("@zcode-dispatch-");
 		await using config = await fixture(root);
@@ -270,6 +303,42 @@ describe("ZCode actual public app-server process", () => {
 		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
 
+	test("Goal payload display text does not block native Goal creation or replacement", async () => {
+		await using root = await TempDir.create("@zcode-goal-display-");
+		await using config = await fixture(root);
+		await using peer = new ProcessPeer(config.cwdA, config.env);
+		await peer.ready();
+		const id = await create(peer, config.cwdA);
+		await subscribe(peer, id);
+		const objectives = ["ZCODE_TEST_GOAL_FIRST", "ZCODE_TEST_GOAL_REPLACED"];
+		for (const objective of objectives) {
+			expect(
+				await command(peer, id, "sendGoalCommand", {
+					text: objective,
+					displayText: `/goal ${objective}`,
+				}),
+			).toMatchObject({ status: "accepted", result: { type: "inputAccepted" } });
+			await finishedOutput(peer, id, `${objective}_DONE`);
+		}
+		expect(await peer.eof()).toBe(0);
+		const files = await fs.readdir(path.join(config.agentDir, "sessions"), { recursive: true });
+		const journalFile = files.find(file => file.endsWith(`_${id}.jsonl`));
+		if (!journalFile) throw new Error("Missing Goal display journal");
+		const entries = (await fs.readFile(path.join(config.agentDir, "sessions", journalFile), "utf8"))
+			.trim()
+			.split("\n")
+			.map(line => JSON.parse(line) as unknown);
+		for (const objective of objectives) {
+			expect(entries).toContainEqual(
+				expect.objectContaining({
+					type: "mode_change",
+					mode: "goal",
+					data: expect.objectContaining({ goal: expect.objectContaining({ objective }) }),
+				}),
+			);
+		}
+	}, 120_000);
+
 	test("busy Goal dispatch creates its target immediately and queues only the objective for native steering", async () => {
 		await using root = await TempDir.create("@zcode-direct-goal-");
 		await using config = await fixture(root);
@@ -321,6 +390,7 @@ describe("ZCode actual public app-server process", () => {
 				"sendGoalCommand",
 				{
 					text: objective,
+					displayText: `/goal ${objective}`,
 					requestedDelivery: "queue",
 				},
 				inputId,
@@ -538,6 +608,86 @@ describe("ZCode actual public app-server process", () => {
 		expect((await fs.stat(proofPath)).mtimeMs).toBe(proofModifiedAt);
 		expect(config.requests).toHaveLength(requestCount);
 	}, 120_000);
+	test("restarted ordinary subscriptions resume before publishing guards and retain added workspace directories", async () => {
+		await using root = await TempDir.create("@zcode-subscribe-resume-");
+		await using config = await fixture(root);
+		let id = "";
+		const marker = "ZCODE_TEST_SUBSCRIBE_RESUME";
+		{
+			await using peer = new ProcessPeer(config.cwdA, config.env);
+			await peer.ready();
+			id = await create(peer, config.cwdA);
+			await subscribe(peer, id);
+			await command(peer, id, "sendText", { text: marker });
+			await finishedOutput(peer, id, `${marker}_DONE`);
+			expect(await peer.eof()).toBe(0);
+		}
+		for (const [clientMode, type] of [
+			["desktop-continuous", "forkAssistant"],
+			["web-remote-replayable", "retryTurn"],
+		] as const) {
+			await using peer = new ProcessPeer(config.cwdA, config.env);
+			await peer.ready();
+			const requestCount = config.requests.length;
+			// History queries remain existing-only, even when the next action will attach a live viewer.
+			await peer.request("session/messages", { sessionId: id });
+			await peer.request("v4/conversation/rowsRange", { sessionId: id, limit: 100 });
+			expect(config.requests).toHaveLength(requestCount);
+			const response = await peer.request("v4/conversation/subscribe", {
+				topic: `conversation/${id}`,
+				connectionId: `resume-${clientMode}`,
+				clientMode,
+				additionalDirectories: [config.cwdB],
+			});
+			if (!isRecord(response)) throw new Error("Missing ordinary subscription response");
+			const ack = subscribeAckSchema.parse(response.ack);
+			const assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
+			const snapshot = await (async () => {
+				for (;;) {
+					const frame = await peer.next(
+						frame =>
+							frame.method === "v4/conversation/frame" &&
+							isRecord(frame.params) &&
+							frame.params.subscriptionId === ack.subscriptionId,
+					);
+					for (const event of assembler.accept(conversationTopicWireCandidateSchema.parse(frame.params))) {
+						if (event.kind === "fault") throw new Error(event.fault.reasonCode);
+						if (event.frame.payload.kind === "snapshot") return event.frame.payload.snapshot;
+					}
+				}
+			})();
+			expect(config.requests).toHaveLength(requestCount);
+			const target = snapshot.rows.window.findLast(row => row.kind === "assistantText");
+			if (!target) throw new Error("Missing resumed assistant target");
+			// Use exactly the delivered snapshot, not a fresh rowsRange that could hide an implicit reattach.
+			expect(
+				await peer.request("v4/command", {
+					commandId: crypto.randomUUID(),
+					clientId: "public-process-test",
+					sessionId: id,
+					type,
+					payload: { target: { rowId: target.rowId, entityId: target.entityId } },
+					baseRevision: snapshot.revision,
+					baseLogEpoch: snapshot.logEpoch,
+					issuedAt: Date.now(),
+				}),
+			).toMatchObject({ status: "accepted" });
+			expect(target.actions?.canFork).toBe(true);
+			// A hot resume cannot add directories: success proves subscribe already supplied them to native resume.
+			expect(
+				await peer.requestFrame("session/resume", {
+					sessionId: id,
+					additionalDirectories: [config.cwdB],
+				}),
+			).not.toHaveProperty("error");
+			if (type === "retryTurn") {
+				await finishedOutput(peer, id, `${marker}_DONE`);
+				expect(config.requests.length).toBeGreaterThan(requestCount);
+			} else expect(config.requests).toHaveLength(requestCount);
+			expect(await peer.eof()).toBe(0);
+		}
+	}, 120_000);
+
 	test("cold projection eviction preserves pinned viewers and rebuilds history without replaying tools", async () => {
 		await using root = await TempDir.create("@zcode-cold-cache-");
 		await using config = await fixture(root);
@@ -569,8 +719,9 @@ describe("ZCode actual public app-server process", () => {
 				topic: `conversation/${id}`,
 				connectionId: "cache-viewer",
 				clientMode: "desktop-continuous",
-				includeSpecDriven: true,
 			});
+			// Subscription is interactive; only an explicit close returns it to existing-only history.
+			await peer.request("session/close", { sessionId: id });
 			epochs.set(id, (await read(id)).atLogEpoch);
 		}
 		// More active viewers than idle cache slots must remain attached to their epochs.
@@ -587,10 +738,11 @@ describe("ZCode actual public app-server process", () => {
 				topic: `conversation/${ids[1]}`,
 				connectionId: `recovered-${clientMode}`,
 				clientMode,
-				includeSpecDriven: true,
 				base: { logEpoch: epochs.get(ids[1]!), seq: 0 },
 			});
-			expect(result).toMatchObject({ ack: { mode: "snapshot", logEpoch: rebuilt.atLogEpoch } });
+			const active = await read(ids[1]!);
+			expect(result).toMatchObject({ ack: { mode: "snapshot", logEpoch: active.atLogEpoch } });
+			expect(active.atLogEpoch).not.toBe(rebuilt.atLogEpoch);
 		}
 		expect(
 			await peer.requestFrame("v4/conversation/rowsRange", { sessionId: crypto.randomUUID(), limit: 1 }),
@@ -598,51 +750,5 @@ describe("ZCode actual public app-server process", () => {
 		expect(await fs.readFile(proof, "utf8")).toBe("ZCODE_TEST_CACHE_TOOL");
 		expect((await fs.stat(proof)).mtimeMs).toBe(modified);
 		expect(config.requests).toHaveLength(count);
-	}, 120_000);
-
-	test("cold native Dev stage history is queryable without acquiring a workspace owner", async () => {
-		await using root = await TempDir.create("@zcode-native-dev-history-");
-		await using config = await fixture(root);
-		const directory = path.join(config.cwdA, ".omp", "dev", "sessions", "cold-run");
-		const stage = SessionManager.create(config.cwdA, directory);
-		stage.appendMessage({
-			role: "user",
-			content: [{ type: "text", text: "native-stage-history" }],
-			timestamp: Date.now(),
-		});
-		await stage.ensureOnDisk();
-		await stage.flush();
-		const id = stage.getSessionId();
-		const file = stage.getSessionFile()!;
-		await stage.close();
-		const before = await fs.readFile(file, "utf8");
-		await using peer = new ProcessPeer(config.cwdA, config.env);
-		await peer.ready();
-		const requests = config.requests.length;
-		const listed = LegacyProtocol.zcodeSessionListResultSchema.parse(
-			await peer.request("session/list", {
-				workspace: workspace(config.cwdA),
-			}),
-		);
-		expect(listed.sessions.some(session => session.sessionId === id)).toBe(true);
-		for (const clientMode of ["desktop-continuous", "web-remote-replayable"]) {
-			await peer.request("v4/conversation/subscribe", {
-				topic: `conversation/${id}`,
-				connectionId: `native-stage-${clientMode}`,
-				clientMode,
-				includeSpecDriven: true,
-			});
-			const rows = v4ConversationRowsRangeResultSchema.parse(
-				await peer.request("v4/conversation/rowsRange", {
-					sessionId: id,
-					limit: 100,
-				}),
-			);
-			expect(rows.rows.some(row => row.kind === "userInput" && row.text === "native-stage-history")).toBe(true);
-		}
-		expect(config.requests).toHaveLength(requests);
-		expect(await fs.readFile(file, "utf8")).toBe(before);
-		const owner = await DevWorkspace.acquire(config.cwdA);
-		owner.release();
 	}, 120_000);
 });

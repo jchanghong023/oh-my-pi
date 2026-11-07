@@ -17,7 +17,7 @@ import { latestLocalTestProducers, type TestProducerRecord } from "./test-report
 import { fulltestCommands } from "./fulltest";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
 
-test("Bun discovery excludes the OpenWiki fork but keeps OMP consumer tests", async () => {
+test("Bun discovery keeps OMP consumers but excludes vendor and explicit packaged verification", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-discovery-"));
 	try {
 		await fs.copyFile(path.join(import.meta.dir, "..", "bunfig.toml"), path.join(root, "bunfig.toml"));
@@ -32,6 +32,10 @@ test("Bun discovery excludes the OpenWiki fork but keeps OMP consumer tests", as
 			path.join(consumer, "consumer.test.ts"),
 			'import { test } from "bun:test"; test("consumer runs", () => { console.log("OMP_CONSUMER_RAN"); });\n',
 		);
+		await Bun.write(
+			path.join(root, "packages/coding-agent/scripts/verify-dev-workbench-package.ts"),
+			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
+		);
 		const child = Bun.spawn([process.execPath, "test"], { cwd: root, stdout: "pipe", stderr: "pipe" });
 		const [stdout, stderr, code] = await Promise.all([
 			new Response(child.stdout).text(),
@@ -41,6 +45,7 @@ test("Bun discovery excludes the OpenWiki fork but keeps OMP consumer tests", as
 		expect(code, stdout + stderr).toBe(0);
 		expect(stdout + stderr).toContain("OMP_CONSUMER_RAN");
 		expect(stdout + stderr).not.toContain("VENDOR_TEST_RAN");
+		expect(stdout + stderr).not.toContain("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
@@ -94,14 +99,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 2 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 3 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 2 },
+					selection: { mode: "full", group: "startup", suiteRevision: 3 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -162,16 +167,24 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		});
 		expect((await bunTestSelection(root, true, null, "different-current-run")).mode).toBe("full");
 		await fs.rm(newer, { recursive: true });
-		// A prior full report did not include display consumers in the ordinary group.
+		// Reports from before the workbench cutover do not cover the current consumers.
 		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 2 };
+		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 3 };
 		report.producers[1]!.selection = { mode: "full", group: "startup" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 2 };
+		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 3 };
 		await save();
+		for (const index of [0, 1]) {
+			report.producers[index]!.selection!.suiteRevision = 2;
+			await save();
+			expect((await bunTestSelection(root)).mode).toBe("full");
+			report.producers[index]!.selection!.suiteRevision = 3;
+		}
+		await save();
+		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
 		expect((await bunTestSelection(root, true, "f".repeat(40))).mode).toBe("full");
 		report.completion = "partial";
 		await save();
@@ -202,7 +215,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			status: "passed",
 			report: "available",
-			selection: { mode: "full", group: "ordinary", suiteRevision: 2 },
+			selection: { mode: "full", group: "ordinary", suiteRevision: 3 },
 		};
 		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
@@ -215,7 +228,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
-		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 2 } });
+		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 3 } });
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
@@ -308,10 +321,19 @@ test("integration chunk classification matches coding-agent test paths only", ()
 
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
-	const startup = command("test/spec-driven/tui-example.e2e.test.ts");
-	expect(isIntegrationCommand(startup)).toBe(true);
-	expect(isLimitedIntegrationCommand(startup)).toBe(false);
+	for (const file of [
+		"test/dev-workbench/browser.e2e.test.ts",
+		"test/dev-workbench/process.e2e.test.ts",
+		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
+		"test/goals/goal-autopilot-tui.e2e.test.ts",
+		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
+	]) {
+		expect(isIntegrationCommand(command(file))).toBe(true);
+		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
+	}
 	expect(isLimitedIntegrationCommand(command("test/modes/zcode-hosts-goal.test.ts"))).toBe(false);
+	expect(isLimitedIntegrationCommand(command("test/dev-workbench/host.test.ts"))).toBe(false);
+	expect(isLimitedIntegrationCommand(command("test/dev-workbench/other.e2e.test.ts"))).toBe(true);
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
 });
 
@@ -407,7 +429,7 @@ test("startup file workers use the fulltest budget without exceeding CPU or comm
 				isLimitedIntegrationCommand({
 					label: "startup",
 					cwd: "packages/coding-agent",
-					command: ["bun", "test", "test/spec-driven/tui-example.e2e.test.ts"],
+					command: ["bun", "test", "test/dev-workbench/process.e2e.test.ts"],
 				}),
 			4,
 			async file => {
@@ -511,7 +533,7 @@ test("only the latest trustworthy fulltest supplies exact chunk scheduling hints
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 2 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 3 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const startup = {
@@ -577,6 +599,8 @@ test("only the latest trustworthy fulltest supplies exact chunk scheduling hints
 			{ producers: [producer, { ...startup, status: "partial" }] },
 			{ producers: [producer, { ...startup, selection: { ...startup.selection, mode: "affected" } }] },
 			{ producers: [producer, { ...startup, selection: { ...startup.selection, suiteRevision: 1 } }] },
+			{ producers: [producer, { ...startup, selection: { ...startup.selection, suiteRevision: 2 } }] },
+			{ producers: [{ ...producer, selection: { ...producer.selection, suiteRevision: 2 } }, startup] },
 			{ producers: [producer, { ...startup, selection: { tool: "bun", mode: "full", group: "startup" } }] },
 			{ architecture: "other" },
 			{ platform: "other" },
@@ -684,6 +708,15 @@ test("local suites select fork consumers and drain failures without widening to 
 			`import { test } from "bun:test"; import { appendFileSync } from "node:fs"; test(${JSON.stringify(name)}, () => appendFileSync(process.env.MARKER!, ${JSON.stringify(`${name}\n`)}));\n`;
 		const selected = [
 			"packages/ai/test/proxy.test.ts",
+			"packages/natives/test/dev-workbench-vcs.test.ts",
+			"packages/collab-web/test/dev-workbench.test.tsx",
+			"packages/collab-web/test/composer.test.tsx",
+			"packages/collab-web/test/transcript.test.tsx",
+			"packages/collab-web/test/tool-view.test.tsx",
+			"packages/collab-web/test/markdown.test.tsx",
+			...["records", "git", "cancel", "host", "server", "collab", "cli", "resources"].map(
+				name => `packages/coding-agent/test/dev-workbench/${name}.test.ts`,
+			),
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
@@ -707,13 +740,23 @@ test("local suites select fork consumers and drain failures without widening to 
 		const excluded = [
 			"packages/ai/test/unrelated.test.ts",
 			"packages/natives/test/desktop.test.ts",
+			"packages/natives/test/vcs.test.ts",
+			"packages/natives/test/relay.test.ts",
+			"packages/collab-web/test/browser.test.tsx",
+			"packages/collab-web/test/upload.test.tsx",
+			"packages/collab-web/test/relay.test.ts",
 			"packages/coding-agent/test/tools/browser-launch.test.ts",
 			"packages/coding-agent/test/tools/proc-service.test.ts",
 			"packages/coding-agent/test/tools/lsp-regressions.test.ts",
 			"packages/coding-agent/test/task/worktree.test.ts",
 			"packages/coding-agent/test/rpc.test.ts",
+			"packages/coding-agent/test/settings-full-scope.test.ts",
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
+		await put(
+			"packages/coding-agent/scripts/verify-dev-workbench-package.ts",
+			'throw new Error("PACKAGED_VERIFICATION_RAN_WITHOUT_AUTHORIZATION");\n',
+		);
 		await put(
 			"packages/coding-agent/test/knowledge-search-tool.test.ts",
 			'import { test, expect } from "bun:test"; import { appendFileSync } from "node:fs"; test("failure", () => { appendFileSync(process.env.MARKER!, "failure\\n"); expect(Boolean(process.env.FAIL_FIXTURE)).toBe(false); }); test("after failure", () => appendFileSync(process.env.MARKER!, "after-failure\\n"));\n',
@@ -722,8 +765,37 @@ test("local suites select fork consumers and drain failures without widening to 
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
 		expect(await executed()).toEqual([]);
 		expect(dry).toContain("./test/modes/zcode-permissions.e2e.ts");
+		expect(dry).toContain(`scope=fork-features selected-files=${selected.length + 1} `);
+		expect(dry).not.toContain("verify-dev-workbench-package.ts");
+		const fullDry = await run([process.execPath, "scripts/ci-test-ts.ts", "all", "--unsharded", "--dry-run"]);
+		expect(fullDry).not.toContain("verify-dev-workbench-package.ts");
 		for (const file of excluded) expect(dry).not.toContain(file.replace("packages/coding-agent/", ""));
 		await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts"], { OMP_TEST_SHARD: "1/20" });
+		const reportRoot = path.join(root, "runs/test-timing");
+		const reportDirectories = await fs.readdir(reportRoot);
+		expect(reportDirectories).toHaveLength(1);
+		const report = JSON.parse(
+			await fs.readFile(path.join(reportRoot, reportDirectories[0]!, "run.json"), "utf8"),
+		) as { scope: string; producers: TestProducerRecord[] };
+		// The inherited shard remains reporting provenance even though local-ts
+		// executes the complete fork selection (verified by the execution markers).
+		const expectedScope = "ci-test-ts:local-ts:shard-1/20";
+		expect(report.scope).toBe(expectedScope);
+		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
+		expect(bunProducers.length).toBeGreaterThan(0);
+		for (const producer of bunProducers) {
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 3 });
+			expect(producer.exitCode).toBe(0);
+			expect(producer.status).toBe("passed");
+		}
+		const collabProducer = bunProducers.find(producer => producer.command.includes("test/dev-workbench.test.tsx"));
+		expect(collabProducer?.command.filter(arg => arg.endsWith(".test.tsx")).sort()).toEqual([
+			"test/composer.test.tsx",
+			"test/dev-workbench.test.tsx",
+			"test/markdown.test.tsx",
+			"test/tool-view.test.tsx",
+			"test/transcript.test.tsx",
+		]);
 		expect(await executed()).toEqual(fullMarkers);
 		await clear();
 		const emptyStartup = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--only-startup"]);
@@ -754,8 +826,12 @@ test("local suites select fork consumers and drain failures without widening to 
 			expect(await executed()).toEqual(fullMarkers);
 		}
 		const startupFiles = [
-			"test/spec-driven/tui-start.e2e.test.ts",
-			"test/spec-driven/tui-another.e2e.test.ts",
+			"test/dev-workbench/browser.e2e.test.ts",
+			"test/dev-workbench/process.e2e.test.ts",
+			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
+			"test/spec-driven/tui-resources.e2e.test.ts",
+			"test/spec-driven/tui-capabilities.e2e.test.ts",
+			"test/goals/goal-autopilot-tui.e2e.test.ts",
 			"test/modes/zcode-hosts-goal.test.ts",
 		];
 		for (const file of startupFiles) {

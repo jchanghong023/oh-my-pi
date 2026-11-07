@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { open } from "../../src/collab/crypto";
-import { unpackEnvelope } from "../../src/collab/protocol";
+import { open, seal } from "../../src/collab/crypto";
+import { type CollabFrame, packEnvelope, unpackEnvelope } from "../../src/collab/protocol";
 import {
 	CollabSocket,
 	HOST_RECLAIM_BACKOFF_MAX_MS,
@@ -39,7 +39,7 @@ class ScriptedWebSocket {
 		this.sent.push(data);
 	}
 
-	deliver(data: string): void {
+	deliver(data: string | Uint8Array): void {
 		this.onmessage?.(new MessageEvent("message", { data }));
 	}
 
@@ -168,6 +168,51 @@ describe("CollabSocket guest room recovery", () => {
 		expect(closes).toEqual([{ reason: "no such room", willReconnect: false }]);
 		vi.advanceTimersByTime(30_000);
 		expect(ScriptedWebSocket.instances).toHaveLength(1);
+	});
+
+	it("marks retained decryptions inactive without dropping goodbye or UI ends and marks reconnected traffic active", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		installScriptedWebSocket();
+		const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+		const socket = guestSocket(key);
+		const received: Array<{ frame: CollabFrame; active: boolean | undefined }> = [];
+		let finishBatch!: () => void;
+		let batch = new Promise<void>(resolve => {
+			finishBatch = resolve;
+		});
+		socket.onFrame = (frame, _peer, active) => {
+			received.push({ frame, active });
+			if (frame.t === "bye" || frame.t === "error") finishBatch();
+		};
+		try {
+			socket.connect();
+			instance(0).open();
+			const end = { t: "ui-request-end", reqId: 3 } satisfies CollabFrame;
+			const bye = { t: "bye", reason: "host stopped" } satisfies CollabFrame;
+			const endEnvelope = packEnvelope(0, await seal(key, end));
+			const byeEnvelope = packEnvelope(0, await seal(key, bye));
+			// Receipt is synchronous, but dispatch/decryption is queued behind it.
+			instance(0).deliver(endEnvelope);
+			instance(0).deliver(byeEnvelope);
+			instance(0).relayClose(1006, "transient drop");
+			await batch;
+			expect(received).toEqual([
+				{ frame: end, active: false },
+				{ frame: bye, active: false },
+			]);
+			batch = new Promise<void>(resolve => {
+				finishBatch = resolve;
+			});
+			vi.advanceTimersByTime(1_000);
+			instance(1).open();
+			const fresh = { t: "error", message: "fresh connection" } satisfies CollabFrame;
+			instance(1).deliver(packEnvelope(0, await seal(key, fresh)));
+			await batch;
+			expect(received.at(-1)).toEqual({ frame: fresh, active: true });
+		} finally {
+			socket.close();
+		}
 	});
 });
 

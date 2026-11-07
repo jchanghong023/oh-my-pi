@@ -56,7 +56,7 @@ export interface BunSelection {
 	selected?: number;
 	group?: "ordinary" | "startup";
 	/** Distinguishes the current fork test scope from older, narrower reports. */
-	suiteRevision?: 2;
+	suiteRevision?: 3;
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
@@ -117,7 +117,7 @@ export async function bunTestSelection(
 						producer.status === "passed" &&
 						producer.report === "available" &&
 						producer.selection?.mode === "full" &&
-						(producer.selection as BunSelection).suiteRevision === 2,
+						(producer.selection as BunSelection).suiteRevision === 3,
 				) ||
 				!["ordinary", "startup"].every(group =>
 					producers.some(
@@ -291,7 +291,7 @@ const nativeAndIntegrationPackages = [
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
 // uses Bun's test filename conventions plus the standalone ZCode E2E files.
-const forkCodingAgentDirectories = ["test/spec-driven/", "test/team/", "test/goals/"];
+const forkCodingAgentDirectories = ["test/spec-driven/", "test/dev-workbench/", "test/team/", "test/goals/"];
 const forkCodingAgentPatterns = [/^test\/modes\/zcode-[^/]+\.(?:test|e2e)\.ts$/];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
@@ -479,6 +479,14 @@ const forkPackageFiles: Record<string, string[]> = {
 	"packages/agent": ["test/discovery-per-call-context.test.ts", "test/output-budget.test.ts"],
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
+	"packages/natives": ["test/dev-workbench-vcs.test.ts"],
+	"packages/collab-web": [
+		"test/dev-workbench.test.tsx",
+		"test/composer.test.tsx",
+		"test/transcript.test.tsx",
+		"test/tool-view.test.tsx",
+		"test/markdown.test.tsx",
+	],
 	"packages/tui": [
 		"test/composer-inline-shrink.test.ts",
 		"test/composer-welcome-scrollback.test.ts",
@@ -738,6 +746,7 @@ export function isIntegrationCommand(command: TestCommand): boolean {
 function isStartupTest(file: string): boolean {
 	return (
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
+		/^test\/dev-workbench\/(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
 		file === "test/modes/zcode-hosts-goal.test.ts" ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
@@ -1827,7 +1836,7 @@ if (import.meta.main) {
 		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
-	if (requestedMode === "local-ts") selection.suiteRevision = 2;
+	if (requestedMode === "local-ts") selection.suiteRevision = 3;
 	if (
 		requestedCommands.length &&
 		requestedMode === "local-ts" &&
@@ -1836,7 +1845,7 @@ if (import.meta.main) {
 	) {
 		// Ask Bun to confirm the empty selection using one selected fork file.
 		const first = requestedCommands.find(command => command.parallel !== undefined)!;
-		const file = first.command.find(arg => /\.(?:test|e2e)\.ts$/.test(arg))!;
+		const file = first.command.find(arg => /\.(?:test|e2e)\.tsx?$/.test(arg))!;
 		requestedCommands = [
 			{
 				label: "Bun native empty affected selection",
@@ -1849,7 +1858,7 @@ if (import.meta.main) {
 	}
 	if (localMode) {
 		const count = requestedCommands.reduce(
-			(sum, command) => sum + command.command.filter(arg => /\.(?:test|e2e)\.ts$/.test(arg)).length,
+			(sum, command) => sum + command.command.filter(arg => /\.(?:test|e2e)\.tsx?$/.test(arg)).length,
 			0,
 		);
 		console.log(`scope=fork-features selected-files=${count} chunks=${requestedCommands.length}`);

@@ -40,6 +40,8 @@ export interface ToolResultLike {
  * ride the JSON `payload` attribute.
  */
 export interface ToolRenderHost {
+	/** Explicit native expand/collapse-all command; undefined leaves individual cards in control. */
+	toolsExpanded?: boolean;
 	/** True when the host can show a transcript for this agent id. */
 	hasAgent?(id: string): boolean;
 	/** Open the sub-session/transcript view for an agent id. */

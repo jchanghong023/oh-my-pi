@@ -17,7 +17,7 @@ const command = ["bun", "scripts/fulltest-ui-smoke.ts", ...args];
 const parallelSuite = args.every(arg => arg === "--debug");
 const phases = parallelSuite ? ["--startup-only", "--team-group-only"] : [undefined];
 const concurrency = Math.min(phases.length, testConcurrencyLimit());
-const run = await beginTestRun(`dev TUI PTY smoke: ${args.join(" ") || "all scenarios"}`);
+const run = await beginTestRun(`native TUI PTY smoke: ${args.join(" ") || "all scenarios"}`);
 const startedAt = new Date().toISOString();
 const started = performance.now();
 let exitCode = 0;

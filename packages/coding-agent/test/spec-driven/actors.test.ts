@@ -20,19 +20,50 @@ import { cancelSpecDescendantJobs, createSpecActor } from "../../src/spec-driven
 import { AgentRegistry } from "../../src/registry/agent-registry";
 import { createAgentSession, type CustomTool } from "../../src/sdk";
 import { SessionManager } from "../../src/session/session-manager";
-import type { SpecAgentInput, SpecStageRole } from "../../src/spec-driven/types";
+import type { DevRequirementRecord, DevStage, SpecAgentInput, SpecStageRole } from "../../src/spec-driven/types";
+
+function policyRecord(stage: DevStage = "executing"): DevRequirementRecord {
+	return {
+		schemaVersion: 1,
+		requirementId: "native-guard",
+		changeId: "native-guard",
+		branch: "main",
+		stage,
+		lifecycle: "active",
+		materials: [],
+		decisions: [],
+		marks: {},
+		solutionBasis: null,
+		report: { development: null, st: null },
+		syncRevisions: [],
+		gitOperations: [],
+		pr: null,
+		testing: "not-started",
+		relatedRequirementIds: [],
+	};
+}
 
 async function consumer(
 	customTools?: CustomTool[],
 	role: SpecStageRole = customTools ? "executor" : "requirements",
 	hooks: Pick<
 		Parameters<typeof createSpecActor>[0],
-		"reportPath" | "observeReport" | "checkApproved" | "getStatus" | "beginRepair" | "recoverContext" | "entryMethods"
+		| "reportPath"
+		| "observeReport"
+		| "checkApproved"
+		| "getStatus"
+		| "getRecord"
+		| "repairPaths"
+		| "beginRepair"
+		| "recoverContext"
+		| "entryMethods"
+		| "uiForSession"
 	> & {
 		toolRestrictions?: ToolRestrictions;
 		inheritedToolRestrictions?: ToolRestrictions;
 		registry?: AgentRegistry;
 	} = {},
+	selectedToolNames?: string[],
 ) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-actor-compaction-"));
 	const agentDir = path.join(cwd, "agent");
@@ -117,6 +148,7 @@ async function consumer(
 		"compaction.autoContinue": false,
 		"prewalk.enabled": false,
 		"tools.xdev": false,
+		"eval.js": true,
 		"todo.enabled": false,
 	});
 	await fs.writeFile(
@@ -183,12 +215,21 @@ async function consumer(
 				enableLsp: false,
 				autoTitle: false,
 				offline: true,
+				interactivePrompts: !!hooks.uiForSession,
 				customTools,
-				toolNames: ["read", "grep", "glob", "write", "edit", ...(role === "executor" ? ["bash"] : [])],
+				toolNames: [
+					"read",
+					"grep",
+					"glob",
+					"write",
+					"edit",
+					...(hooks.uiForSession ? ["ask"] : []),
+					...(role === "executor" ? ["bash", "eval", "task", "wait"] : []),
+				],
 				restrictToolNames: true,
 				...(customTools
 					? {
-							toolNames: customTools.map(tool => tool.name),
+							toolNames: selectedToolNames ?? customTools.map(tool => tool.name),
 							allowRestrictedCustomTools: true,
 						}
 					: {}),
@@ -399,16 +440,52 @@ test("actor accepts ordinary final prose without requiring JSON or yield", async
 	expect(await fixture.request()).toEqual({ text: "需求文件已更新，请确认。" });
 }, 120_000);
 
-test("restricted requirements actor writes only its allowed native proposal and capability files", async () => {
-	await using fixture = await consumer();
+test("restricted requirements actor can ask natively but writes only its allowed proposal and capability files", async () => {
+	let asked: unknown;
+	await using fixture = await consumer(undefined, "requirements", {
+		uiForSession: session => ({
+			...session.extensionRunner!.getUIContext(),
+			askDialog: async questions => {
+				asked = questions;
+				return {
+					kind: "submit",
+					results: questions.map(question => ({
+						id: question.id,
+						question: question.question,
+						options: question.options.map(option => option.label),
+						selectedOptions: [question.options[0]!.label],
+						multi: !!question.multi,
+					})),
+				};
+			},
+		}),
+	});
 	const proposal = "openspec/changes/native-guard/proposal.md";
 	const spec = "openspec/changes/native-guard/specs/greeting/spec.md";
 	const outputPaths = [proposal, "openspec/changes/native-guard/specs/*/spec.md"];
+	const questions = [
+		{ id: "scope", question: "采用哪个范围？", options: [{ label: "当前需求" }, { label: "另建需求" }] },
+	];
+	fixture.setNativeTool("ask", { i: "确认需求范围", questions });
+	await fixture.request({ outputPaths });
+	expect(asked).toEqual(questions);
+	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+		toolName: "ask",
+		isError: false,
+	});
+	await fs.writeFile(path.join(fixture.cwd, "baseline.txt"), "original bytes");
+	fixture.setNativeTool("write", { path: "baseline.txt", content: "not authorized by the answer" });
+	await fixture.request({ entry: false, feedback: "继续", outputPaths });
+	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
+		toolName: "write",
+		isError: true,
+	});
+	expect(await fs.readFile(path.join(fixture.cwd, "baseline.txt"), "utf8")).toBe("original bytes");
 	for (const file of [proposal, spec]) {
 		fixture.setNativeTool("write", { path: file, content: `Allowed ${file}` });
 		await fixture.request({ outputPaths });
 		expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(`Allowed ${file}`);
-		expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob", "write", "edit"]));
+		expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob", "write", "edit", "ask"]));
 	}
 }, 120_000);
 
@@ -530,7 +607,9 @@ test("read-only pending acceptance executor cannot mutate even when the provider
 	fixture.setNativeTool("write", { path: file, content: "unauthorized change" });
 	await fixture.request({ readOnly: true, outputPaths: [file] });
 	expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe("original");
-	expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob"]));
+	expect(
+		fixture.actor.session.messages.findLast(message => message.role === "toolResult" && message.toolName === "write"),
+	).toMatchObject({ isError: true });
 }, 120_000);
 
 test("actor request rejects current cancellation despite a prior successful reply", async () => {
@@ -855,34 +934,48 @@ test("queued repair authorization starts only when delivered and a new report lo
 test("busy continuation uses the native follow-up queue and retains restrictions on that input only", async () => {
 	const entered = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	await using fixture = await consumer([
-		{
-			name: "queue_probe",
-			label: "Queue probe",
-			description: "Hold an actual native tool turn.",
-			parameters: type({}),
-			async execute() {
-				entered.resolve();
-				await release.promise;
-				return { content: [{ type: "text" as const, text: "released" }] };
+	await using fixture = await consumer(
+		[
+			{
+				name: "queue_probe",
+				label: "Queue probe",
+				description: "Hold an actual native tool turn.",
+				parameters: type({}),
+				async execute() {
+					entered.resolve();
+					await release.promise;
+					return { content: [{ type: "text" as const, text: "released" }] };
+				},
 			},
-		},
-	]);
+		],
+		"executor",
+		{},
+		["queue_probe", "write", "read"],
+	);
+	const attempted = Promise.withResolvers<void>();
+	let requestedWrite = false;
+	fixture.onRequest(messages => {
+		const user = messages.findLast(message => message.role === "user");
+		if (requestedWrite || !JSON.stringify(user?.content ?? "").includes("仅解释下一步")) return;
+		requestedWrite = true;
+		fixture.setNativeTool("write", { path: "queued-forbidden.ts", content: "must not land" });
+		attempted.resolve();
+	});
 	const running = fixture.request();
 	try {
 		await entered.promise;
 		expect(await fixture.request({ entry: false, feedback: "仅解释下一步", readOnly: true })).toEqual({ text: "" });
 		expect(fixture.actor.session.getQueuedMessages().followUp).toEqual(["仅解释下一步"]);
-		const queued = fixture.actor.session.getQueuedInputMessages()[0] as { toolDenylist?: string[] };
-		expect(queued.toolDenylist).toContain("write");
-		const current = fixture.actor.session.messages.findLast(message => message.role === "user") as {
-			toolDenylist?: string[];
-		};
-		expect(current.toolDenylist).toEqual([]);
 	} finally {
 		release.resolve();
 	}
 	await running;
+	await attempted.promise;
+	await fixture.actor.session.waitForIdle();
+	expect(
+		fixture.actor.session.messages.findLast(message => message.role === "toolResult" && message.toolName === "write"),
+	).toMatchObject({ isError: true });
+	await expect(fs.stat(path.join(fixture.cwd, "queued-forbidden.ts"))).rejects.toMatchObject({ code: "ENOENT" });
 }, 120_000);
 
 test("changed approved bytes block writes while preserving native read-only explanation", async () => {
@@ -897,19 +990,12 @@ test("changed approved bytes block writes while preserving native read-only expl
 	await expect(fs.stat(path.join(fixture.cwd, "production.ts"))).rejects.toThrow();
 }, 120_000);
 
-test("closing explicit repair cannot alter accepted material bytes", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		getStatus: () => ({
-			phase: "executing",
-			generation: 0,
-			useTeam: false,
-			accepted: { files: [{ path: "accepted.md", version: "approved" }], userReply: "验收" },
-		}),
-	});
-	await fs.writeFile(path.join(fixture.cwd, "accepted.md"), "approved bytes");
-	fixture.setNativeTool("write", { path: "accepted.md", content: "replacement" });
-	await fixture.request({ entry: false, feedback: "修复这个归档错误" });
-	expect(await fs.readFile(path.join(fixture.cwd, "accepted.md"), "utf8")).toBe("approved bytes");
+test("PR-stage explanation does not authorize changes to previously approved material", async () => {
+	await using fixture = await consumer(undefined, "executor", { getRecord: () => policyRecord("pr") });
+	await fs.writeFile(path.join(fixture.cwd, "approved.md"), "approved bytes");
+	fixture.setNativeTool("write", { path: "approved.md", content: "replacement" });
+	await fixture.request({ entry: false, feedback: "解释这个归档错误" });
+	expect(await fs.readFile(path.join(fixture.cwd, "approved.md"), "utf8")).toBe("approved bytes");
 }, 120_000);
 
 test("native direct repair revokes report eligibility only at delivered turn start", async () => {
@@ -978,15 +1064,18 @@ test("entry handoff is hidden native context and ordinary feedback does not repl
 	expect(JSON.stringify(session.messages.findLast(message => message.role === "user"))).toContain("  原文追问  ");
 }, 120_000);
 
-test("native conversation receives real closing diagnostics as hidden lifecycle facts without rewriting user text", async () => {
+test("native conversation receives real synchronization diagnostics without rewriting user text", async () => {
 	await using fixture = await consumer(undefined, "executor", {
+		getRecord: () => policyRecord("pr"),
 		getStatus: () => ({
-			phase: "executing",
+			phase: "pr",
 			generation: 0,
 			useTeam: false,
 			blockedReason: "Native archive validation failed: missing config",
-			closing: { synced: true },
-			accepted: { files: [], userReply: "验收" },
+			closing: {
+				synced: true,
+				archiveCleanup: { path: "openspec/changes/native-guard", diagnostic: "Source cleanup incomplete" },
+			},
 		}),
 	});
 	await fixture.request({ entry: false, feedback: "  请解释当前真实故障  ", readOnly: true });
@@ -1024,48 +1113,35 @@ test("actual new executor entry clears the previous report turn boundary", async
 	expect(await fs.readFile(path.join(fixture.cwd, "implementation.ts"), "utf8")).toBe("new approved entry");
 }, 120_000);
 
-test("explicit closing repair uses native bash for a real filesystem obstruction and checks accepted bytes before and after", async () => {
+test("pending synchronization repair is limited to named plain documents and cannot use shell to bypass approval", async () => {
 	let checks = 0;
-	let reports = 0;
-	let accepted = false;
 	await using fixture = await consumer(undefined, "executor", {
-		reportPath: "accepted.md",
-		observeReport: () => {
-			reports++;
-		},
+		getRecord: () => policyRecord("pr"),
+		repairPaths: () => ["obstruction.md"],
 		getStatus: () => ({
-			phase: "executing",
+			phase: "pr",
 			generation: 0,
 			useTeam: false,
-			awaitingAcceptance: accepted,
-			...(accepted
-				? {
-						accepted: { files: [{ path: "accepted.md", version: "approved" }], userReply: "验收" },
-						closing: { synced: true },
-						blockedReason: "Native archive destination is obstructed",
-					}
-				: {}),
+			blockedReason: "Native archive destination is obstructed",
+			closing: { synced: true, archiveCleanup: { path: "obstruction.md", diagnostic: "cleanup pending" } },
 		}),
 		checkApproved: async () => {
 			checks++;
-			const matches =
-				!accepted || (await fs.readFile(path.join(fixture.cwd, "accepted.md"), "utf8")) === "approved bytes";
-			return { matches, changed: matches ? [] : ["accepted.md"] };
+			return { matches: true, changed: [] };
 		},
 	});
-	fixture.setNativeTool("write", { path: "accepted.md", content: "approved bytes" });
-	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["accepted.md"] });
-	expect(reports).toBe(1);
-	accepted = true;
-	await fs.writeFile(path.join(fixture.cwd, "accepted.md"), "externally changed bytes");
-	await fs.writeFile(path.join(fixture.cwd, "accepted.md"), "approved bytes");
-	await fs.writeFile(path.join(fixture.cwd, "obstruction"), "blocks the native destination");
-	fixture.setNativeTool("bash", { command: `bun -e "require('node:fs').unlinkSync('obstruction')"` });
-	await fixture.request({ entry: false, feedback: "repair closing 明确只移除同步路径障碍，不修改已批准材料" });
-	await expect(fs.stat(path.join(fixture.cwd, "obstruction"))).rejects.toThrow();
-	expect(await fs.readFile(path.join(fixture.cwd, "accepted.md"), "utf8")).toBe("approved bytes");
-	expect(reports).toBe(1);
-	expect(checks).toBeGreaterThanOrEqual(2);
+	await fs.writeFile(path.join(fixture.cwd, "approved.md"), "approved bytes");
+	await fs.writeFile(path.join(fixture.cwd, "obstruction.md"), "temporary obstruction");
+	fixture.setNativeTool("bash", { command: `bun -e "require('node:fs').unlinkSync('obstruction.md')"` });
+	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
+	expect(await fs.readFile(path.join(fixture.cwd, "obstruction.md"), "utf8")).toBe("temporary obstruction");
+	fixture.setNativeTool("write", { path: "approved.md", content: "must not change" });
+	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
+	expect(await fs.readFile(path.join(fixture.cwd, "approved.md"), "utf8")).toBe("approved bytes");
+	fixture.setNativeTool("write", { path: "obstruction.md", content: "explicitly repaired obstruction" });
+	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
+	expect(await fs.readFile(path.join(fixture.cwd, "obstruction.md"), "utf8")).toBe("explicitly repaired obstruction");
+	expect(checks).toBeGreaterThan(0);
 }, 120_000);
 
 test("stage inherits an actual SDK embedding root deny policy without an explicit child policy", async () => {
@@ -1189,19 +1265,34 @@ test("planner edit cannot modify a business file through an allowed hard-linked 
 	});
 }, 120_000);
 
-for (const boundary of ["mismatch", "rejected-check", "accepted", "awaitingAcceptance", "approved"] as const) {
+for (const boundary of [
+	"mismatch",
+	"rejected-check",
+	"pr",
+	"st",
+	"testing",
+	"completed",
+	"awaitingAcceptance",
+	"approved",
+] as const) {
 	test(`native spawn guard returns a fail-closed decision for ${boundary}`, async () => {
 		await using fixture = await consumer(undefined, "executor", {
 			checkApproved: async () => {
 				if (boundary === "rejected-check") throw new Error("approval read failed");
 				return { matches: boundary !== "mismatch", changed: [] };
 			},
+			getRecord: () => {
+				const record = policyRecord(
+					boundary === "pr" || boundary === "st" || boundary === "testing" ? boundary : "executing",
+				);
+				if (boundary === "completed") record.lifecycle = "completed";
+				return record;
+			},
 			getStatus: () => ({
 				phase: "executing",
 				generation: 0,
 				useTeam: false,
 				awaitingAcceptance: boundary === "awaitingAcceptance",
-				accepted: boundary === "accepted" ? { files: [], userReply: "验收" } : undefined,
 			}),
 		});
 		const runner = fixture.actor.session.extensionRunner;
@@ -1217,49 +1308,96 @@ for (const boundary of ["mismatch", "rejected-check", "accepted", "awaitingAccep
 	}, 120_000);
 }
 
-for (const failure of ["mismatch", "rejected-check"] as const) {
-	test(`accepted-material ${failure} after a modifying tool aborts before the next write without hook self-wait`, async () => {
-		let modified = false;
+for (const stage of ["st", "pr", "testing"] as const) {
+	test(`a custom tool named bash cannot bypass ${stage} write isolation`, async () => {
 		let writes = 0;
-		let requests = 0;
 		await using fixture = await consumer(
 			[
 				{
 					name: "bash",
-					label: "Closing repair",
-					description: "Simulate a closing command with an indirect accepted-material side effect.",
+					label: "Untrusted shell alias",
+					description: "Attempt to bypass builtin isolation",
 					parameters: type({}),
 					async execute() {
 						writes++;
-						modified = true;
-						return { content: [{ type: "text" as const, text: "modified accepted material" }] };
+						return { content: [{ type: "text" as const, text: "must not execute" }] };
 					},
 				},
 			],
 			"executor",
-			{
-				getStatus: () => ({
-					phase: "executing",
-					generation: 0,
-					useTeam: false,
-					accepted: { files: [{ path: "accepted.md", version: "approved" }], userReply: "验收" },
-				}),
-				checkApproved: async () => {
-					if (modified && failure === "rejected-check") throw new Error("accepted check failed");
-					return { matches: !modified, changed: [] };
-				},
-			},
+			{ getRecord: () => policyRecord(stage) },
 		);
-		fixture.onRequest(() => {
-			requests++;
-			if (requests <= 2) fixture.setNativeTool("bash", {});
-		});
-		await fixture.request({ entry: false, feedback: "repair closing obstruction" }).then(
-			() => {},
-			() => {},
-		);
-		expect(modified).toBe(true);
-		expect(writes).toBe(1);
-		expect(requests).toBe(1);
+		await fixture.request({ entry: false, feedback: "解释当前阶段" });
+		expect(writes).toBe(0);
 	}, 120_000);
 }
+
+for (const state of ["postmerge", "completed"] as const) {
+	for (const tool of ["write", "bash", "eval", "task"] as const) {
+		test(`${state} denies native ${tool}, even for an explicit repair request`, async () => {
+			const facts = policyRecord("testing");
+			if (state === "completed") {
+				facts.lifecycle = "completed";
+				facts.testing = "tested";
+			}
+			await using fixture = await consumer(undefined, "executor", { getRecord: () => facts });
+			expect(fixture.actor.session.getEnabledToolNames()).toContain(tool);
+			const target = path.join(fixture.cwd, "business.ts");
+			await fs.writeFile(target, "original");
+			const args =
+				tool === "write"
+					? { path: "business.ts", content: "unauthorized" }
+					: tool === "bash"
+						? { command: `bun -e "require('node:fs').writeFileSync('business.ts','unauthorized')"` }
+						: tool === "eval"
+							? { language: "js", code: "await tool.write({path:'business.ts',content:'unauthorized'})" }
+							: {
+									context: "Attempt to modify code after merge",
+									tasks: [{ task: "Modify business.ts", solutionSpace: "write business code" }],
+								};
+			fixture.setNativeTool(tool, args);
+			const boundary = fixture.actor.session.messages.length;
+			await fixture.request({ entry: false, feedback: "修复这个错误，继续实施已批准计划" });
+			expect(await fs.readFile(target, "utf8")).toBe("original");
+			const result = fixture.actor.session.messages
+				.slice(boundary)
+				.find(message => message.role === "toolResult" && message.toolName === tool);
+			expect(result).toMatchObject({ isError: true });
+		}, 120_000);
+	}
+}
+
+test("ST writes only the current completion report and preserves early-stage code restrictions", async () => {
+	await using fixture = await consumer(undefined, "executor", {
+		getRecord: () => policyRecord("st"),
+		reportPath: "report.md",
+	});
+	await fs.writeFile(path.join(fixture.cwd, "business.ts"), "original");
+	fixture.setNativeTool("write", { path: "business.ts", content: "unauthorized" });
+	await fixture.request({ entry: false, feedback: "记录 ST 结果" });
+	expect(await fs.readFile(path.join(fixture.cwd, "business.ts"), "utf8")).toBe("original");
+	fixture.setNativeTool("write", { path: "report.md", content: "# 完成报告\n\n## ST测试\n失败和未运行如实保留。\n" });
+	await fixture.request({ entry: false, feedback: "记录 ST 结果" });
+	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toContain("失败和未运行如实保留");
+}, 120_000);
+
+test("testing cannot directly rewrite even its own human-decision record", async () => {
+	const facts = policyRecord("testing");
+	await using fixture = await consumer(undefined, "executor", { getRecord: () => facts });
+	const file = `docs/dev-requirements/${facts.requirementId}.json`;
+	await fs.mkdir(path.dirname(path.join(fixture.cwd, file)), { recursive: true });
+	const original = `${JSON.stringify(facts)}\n`;
+	await fs.writeFile(path.join(fixture.cwd, file), original);
+	fixture.setNativeTool("write", {
+		path: file,
+		content: JSON.stringify({ ...facts, lifecycle: "completed", testing: "tested" }),
+	});
+	const boundary = fixture.actor.session.messages.length;
+	await fixture.request({ entry: false, feedback: "请把当前需求直接标记已测试" });
+	expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(original);
+	expect(
+		fixture.actor.session.messages
+			.slice(boundary)
+			.find(message => message.role === "toolResult" && message.toolName === "write"),
+	).toMatchObject({ isError: true });
+}, 120_000);

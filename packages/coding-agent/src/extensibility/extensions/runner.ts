@@ -858,9 +858,17 @@ export class ExtensionRunner {
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setSessionName = actions.setSessionName;
 		this.runtime.registerProvider = (name, config, sourceId) => {
+			if (this.runtime.inheritedProviderOwnership)
+				throw new Error(
+					`Inherited provider ${name} cannot be added or redefined by this helper; scoped provider mutation is unavailable.`,
+				);
 			this.modelRegistry.registerProvider(name, config, sourceId);
 		};
 		this.runtime.unregisterProvider = name => {
+			if (this.runtime.inheritedProviderOwnership)
+				throw new Error(
+					`Inherited provider ${name} cannot be unregistered by this helper; scoped provider mutation is unavailable.`,
+				);
 			this.modelRegistry.unregisterProvider(name);
 		};
 

@@ -2,7 +2,6 @@ import { describe, expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { v4ConversationRowsRangeResultSchema } from "../../src/modes/zcode/schema";
 import {
 	fixture,
 	GATE_BUDGET,
@@ -13,7 +12,7 @@ import {
 	textValues,
 } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { createProviderFixture, MARKER, REQUIREMENT, rolePayload } from "./provider-fixture";
+import { createProviderFixture, rolePayload } from "./provider-fixture";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
@@ -56,63 +55,18 @@ describe("spec-driven actual OMP public entry", () => {
 		GATE_BUDGET,
 	);
 	test(
-		"first Dev entry binds the native recipient before its first reply and keeps root history independent",
+		"ordinary ZCode rejects the retired Dev entry without model or workflow side effects",
 		async () => {
-			await using root = await TempDir.create("@omp-dev-native-first-entry-");
+			await using root = await TempDir.create("@omp-zcode-without-dev-");
 			await using provider = createProviderFixture();
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
 			await peer.ready();
 			const session = await peer.create(config.cwd);
-			await peer.send(session, "/dev");
-			const since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
-			const current = await peer.stage(session, "requirements", false);
-			const stageId = current.spec.interaction?.recipient?.sessionId;
-			if (!stageId) throw new Error("Native stage session missing");
-			expect(stageId).not.toBe(session);
-			await peer.settled(stageId, since);
-			const read = (id: string) =>
-				peer
-					.request("v4/conversation/rowsRange", { sessionId: id, limit: 200 })
-					.then(value => v4ConversationRowsRangeResultSchema.parse(value));
-			const stage = await read(stageId);
-			expect(stage.rows.some(row => row.kind === "toolCall" && row.status === "success")).toBe(true);
-			expect(JSON.stringify(stage.rows)).toContain("文件已写入。");
-			expect(JSON.stringify((await read(session)).rows)).not.toContain("文件已写入。");
-			const feedback = "Keep the current requirements; explain their whitespace rule.";
-			const replySince = peer.seen.length;
-			const nativeCommand = {
-				commandId: crypto.randomUUID(),
-				clientId: "omp-spec-acceptance",
-				sessionId: stageId,
-				type: "sendText",
-				payload: { text: feedback },
-				issuedAt: Date.now(),
-			};
-			expect(await peer.request("v4/command", nativeCommand)).toMatchObject({ status: "accepted" });
-			await peer.next(
-				frame =>
-					isConversation(frame, stageId) &&
-					textValues(frame).some(text => text.includes(`${MARKER}_REQUIREMENTS_DIALOGUE`)),
-				replySince,
-			);
-			expect(JSON.stringify((await read(stageId)).rows)).toContain(feedback);
-			expect(JSON.stringify((await read(session)).rows)).not.toContain(`${MARKER}_REQUIREMENTS_DIALOGUE`);
-			const replyCount = provider.requests.length;
-			expect(await peer.request("v4/command", nativeCommand)).toMatchObject({ status: "duplicate" });
-			const key = { sessionId: stageId, commandId: nativeCommand.commandId };
-			expect(await peer.request("v4/commands/query", { commands: [key] })).toMatchObject({
-				results: [{ key, result: { status: "accepted" } }],
-			});
-			expect(provider.requests.length).toBe(replyCount);
-			await peer.send(session, "/dev");
-			const ordinarySince = await peer.send(session, "ordinary conversation after Dev exit");
-			await peer.next(
-				frame =>
-					isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
-				ordinarySince,
-			);
-			expect(JSON.stringify((await read(stageId)).rows)).not.toContain(`${MARKER}_CHAT_READY`);
+			const count = provider.requests.length;
+			await peer.send(session, "/dev", "rejected");
+			expect(provider.requests).toHaveLength(count);
+			expect(await fs.readdir(config.cwd)).not.toContain("docs");
 			expect(provider.failures).toEqual([]);
 		},
 		GATE_BUDGET,

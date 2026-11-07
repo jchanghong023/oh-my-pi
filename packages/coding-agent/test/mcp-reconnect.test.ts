@@ -4,7 +4,8 @@ import {
 	MCPTransportError,
 	normalizeMCPTransportError,
 } from "@oh-my-pi/pi-coding-agent/mcp/errors";
-import type { MCPReconnect } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
+import { MCPManager } from "@oh-my-pi/pi-coding-agent/mcp/manager";
+import type { MCPReconnect, MCPToolCallObserver } from "@oh-my-pi/pi-coding-agent/mcp/tool-bridge";
 import {
 	createLegacyMCPToolName,
 	createMCPToolName,
@@ -16,7 +17,12 @@ import {
 import type { MCPImageContent } from "@oh-my-pi/pi-tui/tools/mcp";
 import { HttpTransport } from "@oh-my-pi/pi-coding-agent/mcp/transports/http";
 import { LegacySseTransport } from "@oh-my-pi/pi-coding-agent/mcp/transports/sse";
-import type { MCPServerConnection, MCPToolCallResult, MCPTransport } from "@oh-my-pi/pi-coding-agent/mcp/types";
+import type {
+	MCPAuthInvocation,
+	MCPServerConnection,
+	MCPToolCallResult,
+	MCPTransport,
+} from "@oh-my-pi/pi-coding-agent/mcp/types";
 import { ToolAbortError } from "@oh-my-pi/pi-coding-agent/tools/tool-errors";
 import { logger } from "@oh-my-pi/pi-utils";
 
@@ -49,6 +55,30 @@ function makeConnection(transport: MCPTransport, name = "test-server"): MCPServe
 		capabilities: { tools: {} },
 	};
 }
+
+describe("MCP auth handler routing", () => {
+	it("restores the exact programmatic callback after an exclusive UI route is released", async () => {
+		const manager = new MCPManager(process.cwd());
+		const config = { type: "stdio" as const, command: "echo" };
+		let programmaticCalls = 0;
+		const original = async () => {
+			programmaticCalls++;
+			return config;
+		};
+		expect(manager.getAuthHandler()).toBeUndefined();
+		manager.setAuthHandler(original);
+		const saved = manager.getAuthHandler();
+		const browserRoute = async () => undefined;
+		manager.setAuthHandler(browserRoute);
+		expect(manager.getAuthHandler()).toBe(browserRoute);
+		manager.setAuthHandler(saved);
+		expect(manager.getAuthHandler()).toBe(original);
+		expect(await manager.getAuthHandler()?.("alpha", { wwwAuthenticate: ["Bearer"] })).toBe(config);
+		expect(programmaticCalls).toBe(1);
+		manager.setAuthHandler(undefined);
+		expect(manager.getAuthHandler()).toBeUndefined();
+	});
+});
 
 // ---------------------------------------------------------------------------
 // deduplicateMCPToolsByName
@@ -550,6 +580,44 @@ describe("MCPTool.execute retry on connection error", () => {
 		expect(result.details?.isError).toBeFalsy();
 		expect(result.content[0]).toEqual({ type: "text", text: "authorized" });
 	});
+
+	for (const deferred of [false, true]) {
+		it(`carries the call-entry scope, id and signal into ${deferred ? "deferred" : "live"} tool authorization`, async () => {
+			const original = makeConnection(
+				mockTransport(async () => ({
+					...toolCallResult("authorize me", true),
+					_meta: { "mcp/www_authenticate": ["Bearer"] },
+				})),
+			);
+			const authorized = makeConnection(mockTransport(async () => toolCallResult("authorized")));
+			let seen: MCPAuthInvocation | undefined;
+			const reconnect: MCPReconnect = async options => {
+				seen = options?.invocation;
+				return authorized;
+			};
+			let scope = "actor-at-call-entry";
+			let settled = false;
+			const observe: MCPToolCallObserver = (toolCallId, signal) =>
+				Object.assign(
+					async () => {
+						settled = true;
+					},
+					{ invocation: { scope, toolCallId, signal } },
+				);
+			const tool = deferred
+				? new DeferredMCPTool(original.name, TOOL_DEF, async () => original, undefined, reconnect, observe)
+				: new MCPTool(original, TOOL_DEF, reconnect, observe);
+			const controller = new AbortController();
+			const pending = tool.execute("auth-call", {}, noop, noCtx, controller.signal);
+			scope = "unrelated-later-actor";
+			const result = await pending;
+			expect(seen?.scope).toBe("actor-at-call-entry");
+			expect(seen?.toolCallId).toBe("auth-call");
+			expect(seen?.signal).toBe(controller.signal);
+			expect(settled).toBe(true);
+			expect(result.content[0]).toEqual({ type: "text", text: "authorized" });
+		});
+	}
 
 	it("preserves the OAuth challenge metadata when no reconnect handler exists", async () => {
 		const result = await new MCPTool(

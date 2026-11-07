@@ -9,12 +9,6 @@ import type { AgentSession } from "../../session/agent-session";
 import type { MCPManager } from "../../mcp";
 import type { PromptOptions } from "../../session/agent-session-types";
 import { parseSlashCommand } from "../../slash-commands/helpers/parse";
-import {
-	assertDevCommandAllowed,
-	assertDevModeActivationAllowed,
-	isDevSessionTransitionCommand,
-} from "../../slash-commands/builtin-spec-driven";
-import { peekSpecDrivenController } from "../../spec-driven/controller";
 import type { RpcSlashCommandRuntime } from "../../slash-commands/types";
 import { initializeExtensions } from "../runtime-init";
 import { CommandCatalogService } from "./hosts/command-catalog";
@@ -30,8 +24,6 @@ import type { ToolSession } from "../../tools";
 export interface ZCodeDispatchOptions extends PromptOptions {
 	imageLinks?: string[];
 	execution?: ModelExecution & { selection: ModelSelection; offPeakTaskId?: string };
-	/** Recheck owner-bound native controls after asynchronous command preparation. */
-	validateBeforeDispatch?: (text: string) => void | Promise<void>;
 }
 export type ZCodeCustomPrompt = Pick<CustomMessage, "customType" | "content" | "display" | "details" | "attribution">;
 export interface ZCodeCommandHostOptions {
@@ -44,7 +36,6 @@ export interface ZCodeCommandHostOptions {
 		publish: (pending: PendingInteraction[]) => void,
 		output: (text: string) => void | Promise<void>,
 	) => ZCodeInteractions;
-	bindMainSession?: (session: AgentSession) => Promise<void>;
 	run?: <T>(operation: () => T) => T;
 	mcpManager?: MCPManager;
 	/** Native Tan adapter; execution remains owned by TanCommandController. */
@@ -109,8 +100,6 @@ export class ZCodeCommandHost {
 	#transitionReconcilePending = false;
 	#disposed = false;
 	#initialized: Promise<void> | undefined;
-	#nativeCommands?: ZCodeCommandHost;
-	#devControlPending = false;
 	readonly #publishInteractions: (pending: PendingInteraction[]) => void;
 	constructor(
 		readonly session: AgentSession,
@@ -224,7 +213,7 @@ export class ZCodeCommandHost {
 		return this.options.run ? this.options.run(operation) : operation();
 	}
 	#publishPending(): void {
-		this.#publishInteractions([...this.interactions.pending, ...(this.#nativeCommands?.interactions.pending ?? [])]);
+		this.#publishInteractions(this.interactions.pending);
 	}
 	#output(text: string): void | Promise<void> {
 		if (!this.#disposed) return this.options.output?.(text);
@@ -353,11 +342,6 @@ export class ZCodeCommandHost {
 		fail?: (error: unknown) => void,
 	): Promise<void> {
 		if (this.#disposed) throw new Error("Session command host is closed");
-		const command = parseSlashCommand(text);
-		const dev = peekSpecDrivenController(this.session.sessionManager);
-		if (!command && dev?.inputMode() === "dev" && dev.nativeSession() === this.session)
-			await dev.checkConversationAllowed();
-		else assertDevCommandAllowed(this.session, command?.name ?? "ordinary-agent", command?.args);
 		// Skill invocations use the same builder and custom-message business path as native hosts.
 		const invocation = parseSkillInvocation(text);
 		const skill =
@@ -422,81 +406,13 @@ export class ZCodeCommandHost {
 		});
 	}
 	dispatch(text: string, options: ZCodeDispatchOptions = {}): Promise<ZCodeCommandReceipt> {
-		const parsed = parseSlashCommand(text);
-		const control = parsed?.name === "dev" && /^(?:new|next|back)(?:\s|$)/.test(parsed.args);
-		if (control && this.#devControlPending)
-			return Promise.reject(
-				Object.assign(new Error("Development control is already running"), { code: "invalid_params" }),
-			);
-		if (control) this.#devControlPending = true;
-		return this.#run(() => this.#dispatch(text, options)).then(
-			receipt => {
-				if (control)
-					void receipt.completion
-						.finally(() => {
-							this.#devControlPending = false;
-						})
-						.catch(() => {});
-				return receipt;
-			},
-			error => {
-				if (control) this.#devControlPending = false;
-				throw error;
-			},
-		);
+		return this.#run(() => this.#dispatch(text, options));
 	}
 	async #dispatch(text: string, options: ZCodeDispatchOptions): Promise<ZCodeCommandReceipt> {
 		if (this.#disposed) throw new Error("Session command host is closed");
-		const parsed = parseSlashCommand(text);
-		const native = peekSpecDrivenController(this.session.sessionManager);
-		if (native?.inputMode() === "dev" && !parsed && text.startsWith("/"))
-			throw new Error("协同开发模式拒绝无效命令。");
-		if (parsed?.name === "dev" && parsed.args && !/^(?:config|drop)(?:\s|$)/.test(parsed.args))
-			native?.assertControlAllowed();
-		if (native?.inputMode() === "dev" && parsed && isDevSessionTransitionCommand(parsed.name, parsed.args))
-			await native.exit();
-		else if (native?.inputMode() === "dev" && parsed?.name !== "dev") {
-			await native.checkConversationAllowed();
-			const stage = native.nativeSession();
-			if (!stage) throw new Error("Development has no active native stage session");
-			if (stage !== this.session) {
-				if (this.#nativeCommands?.session !== stage) {
-					this.#nativeCommands?.dispose();
-					this.#nativeCommands = new ZCodeCommandHost(
-						stage,
-						stage.sessionManager.getCwd(),
-						() => this.#publishPending(),
-						{
-							run: this.options.run,
-							uiContext: this.options.uiContext ?? this.interactions.ui,
-							createInteractions: this.options.createInteractions,
-							settingsChanged: this.options.settingsChanged,
-							reloadModelRoleSettings: this.options.reloadModelRoleSettings,
-							submit: this.options.submit,
-							submitCustom: this.options.submitCustom,
-							recordInputAdmission: this.options.recordInputAdmission,
-							output: text =>
-								stage.appendCustomMessage(
-									{
-										customType: "zcode-command-output",
-										content: text,
-										display: true,
-										attribution: "agent",
-									},
-									{ waitForIdle: false },
-								),
-						},
-					);
-				}
-				return this.#nativeCommands.dispatch(text, options);
-			}
-		}
-		if (parsed) assertDevCommandAllowed(this.session, parsed.name, parsed.args);
+		if (parseSlashCommand(text)?.name === "dev")
+			throw Object.assign(new Error("/dev is not available in ZCode"), { code: "unsupported" });
 		const resolved = await this.#catalog.resolve(text, this.session);
-		if (native?.inputMode() === "dev" && resolved.kind !== "builtin")
-			throw Object.assign(new Error("协同开发模式拒绝未知命令或非本地入口；请先输入 /dev 返回普通聊天。"), {
-				code: "invalid_params",
-			});
 		// /tan 是运行中父会话的独立控制入口；必须先于 TUI-only 判定和 prompt admission。
 		if (resolved.kind === "builtin" && resolved.name === "tan" && this.options.startTan) {
 			const command = parseSlashCommand(text);
@@ -542,11 +458,8 @@ export class ZCodeCommandHost {
 					if (known?.source === "builtin")
 						throw Object.assign(new Error(`Invalid arguments for /${token}`), { code: "invalid_params" });
 				}
-				// Dev control never initializes or writes an ordinary root conversation.
-				if (resolved.kind !== "builtin" || resolved.name !== "dev") await this.initialize();
+				await this.initialize();
 				if (!current()) throw new DOMException("Command cancelled", "AbortError");
-				await options.validateBeforeDispatch?.(text);
-				if (command) assertDevCommandAllowed(this.session, command.name, command.args);
 				if (resolved.kind !== "builtin" || !resolved.spec) {
 					this.#loop.capturePrompt(text);
 					await this.#submit(text, options, admit, rejectAdmission);
@@ -555,7 +468,6 @@ export class ZCodeCommandHost {
 				let lastOutput: string | undefined;
 				const runtime: RpcSlashCommandRuntime = {
 					session: this.session,
-					bindMainSession: this.options.bindMainSession,
 					sessionManager: this.session.sessionManager,
 					input: { images: options.images, imageLinks: options.imageLinks },
 					settings: this.session.settings,
@@ -565,11 +477,6 @@ export class ZCodeCommandHost {
 					},
 					sessionScopedCwd: true,
 					signal: operation.signal,
-					assertCanActivateMode: mode => {
-						if (mode === "dev" && this.#loop.enabled)
-							throw new Error("请先退出 Loop 模式，再进入协同开发模式；现有模式保持不变。");
-						assertDevModeActivationAllowed(this.session, mode);
-					},
 					ui: {
 						select: async (...args) => {
 							const answer = this.interactions.ui.select(...args);
@@ -589,7 +496,7 @@ export class ZCodeCommandHost {
 					},
 					output: message => {
 						lastOutput = message;
-						if (current() && command?.name !== "dev") return this.#output(message);
+						if (current()) return this.#output(message);
 					},
 					refreshCommands: async () => {
 						await this.catalog();
@@ -615,8 +522,6 @@ export class ZCodeCommandHost {
 					},
 					runModeCommand: async (mode, args) => {
 						if (!current()) return;
-						if (mode === "plan" || mode === "goal" || mode === "goal-autopilot")
-							assertDevModeActivationAllowed(this.session, mode === "plan" ? "plan" : "goal");
 						if (mode === "plan") return this.#plan.handle(args, operation.signal);
 						if (mode === "loop") {
 							const result = await this.#loop.handle(args);
@@ -650,7 +555,7 @@ export class ZCodeCommandHost {
 			} catch (error) {
 				// 拒绝若在 completion 外抛出，桌面只能收到通用发送失败，所属会话没有诊断。
 				// 复用 native output 并等待落盘；仍抛出原错误，绝不能把拒绝记成 admission。
-				if (current() && command?.name !== "dev" && !(error instanceof Error && error.name === "AbortError")) {
+				if (current() && !(error instanceof Error && error.name === "AbortError")) {
 					await this.#output(String(error));
 				}
 				throw error;
@@ -666,11 +571,7 @@ export class ZCodeCommandHost {
 		return { accepted: true, completion };
 	}
 	resolveInteraction(id: string, response: unknown): boolean {
-		return this.#run(
-			() =>
-				this.interactions.resolve(id, response) ||
-				(this.#nativeCommands?.resolveInteraction(id, response) ?? false),
-		);
+		return this.#run(() => this.interactions.resolve(id, response));
 	}
 	/** Adopt saved role settings without changing the conversation's temporary main model. */
 	reloadModelRoleSettings(current: () => boolean = () => true): Promise<void> {
@@ -679,8 +580,6 @@ export class ZCodeCommandHost {
 			await this.session.settings.reloadFromDisk({ includeParents: true });
 			if (!current() || this.#disposed || this.session.isDisposed) return;
 			await this.#plan.refreshModelRole();
-			if (!current() || this.#disposed || this.session.isDisposed) return;
-			await this.#nativeCommands?.reloadModelRoleSettings(current);
 		});
 	}
 	configure(operation: string, params: Record<string, unknown> = {}): Promise<unknown> {
@@ -706,9 +605,7 @@ export class ZCodeCommandHost {
 		return this.#run(async () => {
 			if (this.#disposed) throw new Error("Session command host is closed");
 			signal?.throwIfAborted();
-			if (enabled) assertDevModeActivationAllowed(this.session, "plan");
 			await this.initialize();
-			if (enabled) assertDevModeActivationAllowed(this.session, "plan");
 			const paused = this.session.sessionManager.buildSessionContext().mode === "plan_paused";
 			if (!!this.session.getPlanModeState()?.enabled === enabled && !paused) return;
 			await this.#plan.handle("", signal, atInputBoundary);
@@ -724,7 +621,6 @@ export class ZCodeCommandHost {
 		this.#run(() => this.#cancel());
 	}
 	#cancel(): void {
-		this.#nativeCommands?.cancel();
 		for (const operation of this.#operations) operation.abort();
 		this.#operations.clear();
 		this.interactions.cancel();
@@ -734,8 +630,6 @@ export class ZCodeCommandHost {
 	}
 	dispose(): void {
 		this.#run(() => {
-			this.#nativeCommands?.dispose();
-			this.#nativeCommands = undefined;
 			this.#cancel();
 			this.#disposed = true;
 			this.#loop.clear();

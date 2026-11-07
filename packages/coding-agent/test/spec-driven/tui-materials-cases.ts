@@ -1,85 +1,55 @@
-import { expect, test } from "bun:test";
-import { REQUIREMENT } from "./provider-fixture";
-import { clearNativeDraft, entry, expectNativeFailure, nativeTranscript, tuiTest, withTui } from "./tui-harness";
+import { afterEach, expect, test } from "bun:test";
+import * as fs from "node:fs/promises";
+import { closePublicWorkbenches, WorkbenchFixture } from "../dev-workbench/fixture";
+import { type FixtureRole, rolePayload } from "./provider-fixture";
+afterEach(closePublicWorkbenches);
 
-export function registerMaterialFailureTests(roles: readonly ("requirements" | "solution" | "planner" | "executor")[]) {
-	for (const role of roles) {
+/** The old PTY matrix now uses the actual source CLI's public workbench API. */
+export async function assertMaterialFailure(
+	role: FixtureRole,
+	kind: "missing" | "malformed" | "unknown",
+): Promise<void> {
+	await using fixture = await WorkbenchFixture.create({ fileFailure: { role, kind } });
+	await fixture.start();
+	const stage = role === "planner" ? "planning" : role === "executor" ? "executing" : role;
+	const before = await fixture.developUntil(stage);
+	const count = fixture.provider.requests.length;
+	const recipient = before.runtime?.recipient;
+	const transcript = recipient?.sessionFile ? await fs.readFile(recipient.sessionFile, "utf8") : null;
+	const response = await fixture.response("action-preview", {
+		requirementId: before.record.requirementId,
+		expectedRecordVersion: before.recordVersion,
+		expectedStage: stage,
+		intent: role === "solution" ? { kind: "next", candidateId: "pure" } : { kind: "next" },
+		gitTarget: null,
+	});
+	expect(response.status).toBe(409);
+	const error = await response.json();
+	expect(error).toMatchObject({ category: "workbench-operation", error: expect.any(String) });
+	const after = await fixture.get(before.record.requirementId);
+	expect(after.record).toEqual(before.record);
+	expect(after.recordVersion).toBe(before.recordVersion);
+	expect(after.runtime?.recipient).toEqual(recipient);
+	if (transcript !== null && recipient?.sessionFile)
+		expect(await fs.readFile(recipient.sessionFile, "utf8")).toBe(transcript);
+	expect(fixture.provider.requests).toHaveLength(count);
+	const roles = ["requirements", "solution", "planner", "executor"];
+	expect(
+		fixture.provider.requests
+			.map(rolePayload)
+			.filter(Boolean)
+			.every(payload => roles.indexOf(payload!.specDrivenRole) <= roles.indexOf(role)),
+	).toBe(true);
+	expect(fixture.provider.failures).toEqual([]);
+}
+
+export function registerMaterialFailureTests(roles: readonly FixtureRole[]): void {
+	for (const role of roles)
 		for (const kind of ["missing", "malformed", "unknown"] as const) {
-			test.skipIf(
-				!tuiTest ||
-					(process.platform === "win32" &&
-						((kind === "malformed" && (role === "requirements" || role === "solution")) ||
-							(kind === "unknown" && (role === "requirements" || role === "solution" || role === "planner")))),
-			)(
-				`native TUI next preserves ${role} on ${kind} formal material and retains editor focus`,
-				async () => {
-					await withTui(
-						{ fileFailure: { role, kind } },
-						[100, 28],
-						async ({ provider, tui, state, stage, idle }) => {
-							await tui("submit", "/dev");
-							await idle();
-							await tui("submit", `/dev new ${REQUIREMENT}`);
-							await stage("requirements");
-							if (role !== "requirements") {
-								await tui("submit", "/dev next");
-								await stage("solution");
-							}
-							if (role === "planner" || role === "executor") {
-								await tui("submit", "/dev next pure");
-								await stage("planning");
-							}
-							if (role === "executor") {
-								await tui("submit", "/dev next");
-								await stage("executing");
-							}
-							const before = await state();
-							const calls = provider.requests.length;
-							const transcript = await nativeTranscript(before.run!, role);
-							await tui("submit", role === "solution" ? "/dev next pure" : "/dev next");
-							// Missing specs are reported against their directory, not the saved recursive glob.
-							const material =
-								role === "requirements"
-									? kind === "malformed"
-										? `openspec/changes/${before.run!.changeId}`
-										: before
-												.run!.paths!.requirements.find(file => file.includes("*"))!
-												.split("*", 1)[0]!
-												.replace(/\/$/u, "")
-									: (entry(provider, role).outputPaths as string[])[0]!;
-							const reason =
-								kind !== "malformed"
-									? role === "requirements"
-										? /缺少需求规格/
-										: role === "executor"
-											? /缺少完成报告/
-											: /ENOENT/
-									: role === "requirements"
-										? /Specification validation failed|Empty specification artifact/
-										: role === "solution"
-											? /valid JSON/
-											: role === "planner"
-												? /Empty specification artifact/
-												: /Completion report requires/;
-							await expectNativeFailure(
-								tui,
-								reason,
-								material,
-								role === "solution" ? "/dev next pure" : "/dev next",
-							);
-							await idle();
-							expect(await state()).toEqual(before);
-							expect(provider.requests).toHaveLength(calls);
-							expect(await nativeTranscript(before.run!, role)).toBe(transcript);
-							await clearNativeDraft(tui);
-							await tui("type", `retained-${role}-${kind}-draft`);
-							await tui("expect", "text", `retained-${role}-${kind}-draft`, "--timeout", "30000");
-							expect(provider.requests).toHaveLength(calls);
-						},
-					);
-				},
+			test(
+				`public workbench ${role} rejects ${kind} formal material without consuming approval or native history`,
+				() => assertMaterialFailure(role, kind),
 				180_000,
 			);
 		}
-	}
 }

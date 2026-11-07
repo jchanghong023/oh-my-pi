@@ -25,12 +25,16 @@ use gix::{
 use super::{
 	GitRepo,
 	filter::WorktreeFilter,
-	mutate::update_reference,
+	mutate::{raw_sha256, update_reference},
 	open::{load_index_or_head, status_with_index},
 };
 use crate::{
 	error::{Error, Result},
-	types::{ApplyOptions, DiffOptions, HunkSelection, HunkSelectionError, HunkSpec},
+	types::{
+		ApplyOptions, DiffOptions, HunkSelection, HunkSelectionError, HunkSpec,
+		OwnedPatchExpectation, OwnedPatchOptions, OwnedPatchPathResult, OwnedPatchPreview,
+		OwnedPatchPreviewOptions, OwnedPatchResult,
+	},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,6 +109,167 @@ impl ApplyFailure {
 	}
 }
 
+pub(super) fn guard_owned_path(repo: &GitRepo, path: &str) -> Result<PathBuf> {
+	validate_repo_path(path).map_err(ApplyFailure::into_error)?;
+	if path.contains('\\') || path.contains('\0') {
+		return Err(Error::backend("git owned patch", "noncanonical patch path"));
+	}
+	let mut components = Path::new(path).components().peekable();
+	let mut absolute = repo.root().to_owned();
+	while let Some(component) = components.next() {
+		let Component::Normal(name) = component else {
+			return Err(Error::backend("git owned patch", "noncanonical patch path"));
+		};
+		let name_text = name.to_string_lossy();
+		if cfg!(windows)
+			&& (name_text.contains(':')
+				|| name_text.trim_end_matches(['.', ' ']) != name_text.as_ref())
+		{
+			return Err(Error::backend("git owned patch", "noncanonical Windows patch path"));
+		}
+		if name_text.eq_ignore_ascii_case(".git") {
+			return Err(Error::backend("git owned patch", "patch cannot write Git metadata"));
+		}
+		absolute.push(name);
+		if components.peek().is_some() {
+			match fs::symlink_metadata(&absolute) {
+				Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+					return Err(Error::backend("git owned patch", format!("unsafe parent of {path}")));
+				},
+				Err(err) if err.kind() != std::io::ErrorKind::NotFound => return Err(err.into()),
+				_ => {},
+			}
+		}
+	}
+	Ok(absolute)
+}
+
+fn owned_raw_version(repo: &GitRepo, path: &str) -> Result<Option<String>> {
+	let absolute = guard_owned_path(repo, path)?;
+	let metadata = match fs::symlink_metadata(&absolute) {
+		Ok(metadata) => metadata,
+		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+		Err(err) => return Err(err.into()),
+	};
+	if metadata.file_type().is_symlink() {
+		let target = fs::read_link(&absolute)?;
+		#[cfg(unix)]
+		{
+			use std::os::unix::ffi::OsStrExt;
+			raw_sha256(target.as_os_str().as_bytes()).map(Some)
+		}
+		#[cfg(not(unix))]
+		{
+			raw_sha256(
+				target
+					.to_str()
+					.ok_or_else(|| Error::backend("git owned patch", "non-UTF8 symlink target"))?
+					.as_bytes(),
+			)
+			.map(Some)
+		}
+	} else if metadata.is_file() {
+		super::mutate::sha256_file(&absolute).map(Some)
+	} else {
+		Err(Error::backend("git owned patch", format!("not a regular file or symlink: {path}")))
+	}
+}
+
+fn owned_mode_matches(
+	repo: &GitRepo,
+	path: &str,
+	exists: bool,
+	mode: Option<Mode>,
+) -> Result<bool> {
+	let absolute = guard_owned_path(repo, path)?;
+	let metadata = match fs::symlink_metadata(absolute) {
+		Ok(metadata) => metadata,
+		Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(!exists),
+		Err(err) => return Err(err.into()),
+	};
+	if !exists {
+		return Ok(false);
+	}
+	let Some(mode) = mode else {
+		return Ok(metadata.is_file() || metadata.file_type().is_symlink());
+	};
+	if mode == Mode::COMMIT {
+		return Ok(false);
+	}
+	if mode == Mode::SYMLINK {
+		#[cfg(unix)]
+		return Ok(metadata.file_type().is_symlink());
+		#[cfg(not(unix))]
+		return Ok(metadata.is_file() || metadata.file_type().is_symlink());
+	}
+	if !metadata.is_file() || metadata.file_type().is_symlink() {
+		return Ok(false);
+	}
+	#[cfg(unix)]
+	{
+		use std::os::unix::fs::PermissionsExt;
+		return Ok((metadata.permissions().mode() & 0o111 != 0) == (mode == Mode::FILE_EXECUTABLE));
+	}
+	#[cfg(not(unix))]
+	Ok(true)
+}
+
+/// Only this isolated repository observes the stricter filter exit policy.
+/// Optional filter failures must not silently become confirmed raw bytes;
+/// neither user configuration nor the ordinary patch APIs are changed.
+pub(super) fn require_owned_filter_success(repo: &mut gix::Repository) -> Result<()> {
+	let drivers: BTreeSet<_> = repo
+		.config_snapshot()
+		.sections_by_name("filter")
+		.into_iter()
+		.flatten()
+		.filter_map(|section| section.header().subsection_name().map(ToOwned::to_owned))
+		.collect();
+	if !drivers.is_empty() {
+		let mut config = repo.config_snapshot_mut();
+		for driver in drivers {
+			config
+				.set_raw_value_by("filter", Some(driver.as_ref()), "required", "true")
+				.map_err(|err| Error::backend("git owned patch filter policy", err))?;
+		}
+		config
+			.commit()
+			.map_err(|err| Error::backend("git owned patch filter policy", err))?;
+	}
+	Ok(())
+}
+
+fn owned_repository(owner: &GitRepo) -> Result<gix::Repository> {
+	// A shared cached handle would miss filters changed after first use.
+	let mut repo = owner.gix_fresh()?.with_object_memory();
+	require_owned_filter_success(&mut repo)?;
+	Ok(repo)
+}
+
+fn owned_entry_version(
+	repo: &gix::Repository,
+	filter: &mut WorktreeFilter<'_>,
+	path: &str,
+	entry: Option<&FileEntry>,
+) -> Result<Option<String>> {
+	let Some(entry) = entry else {
+		return Ok(None);
+	};
+	if entry.mode == Mode::COMMIT {
+		return Err(Error::backend(
+			"git owned patch",
+			"gitlink ownership cannot be expressed as raw file bytes",
+		));
+	}
+	let bytes = blob_bytes(repo, entry.id)?;
+	let bytes = if entry.mode == Mode::SYMLINK {
+		bytes
+	} else {
+		filter.git_to_worktree(path, bytes)?
+	};
+	raw_sha256(&bytes).map(Some)
+}
+
 impl GitRepo {
 	/// Apply a git-format patch to the worktree or index.
 	pub fn apply_patch(&self, patch_text: &str, options: &ApplyOptions) -> Result<()> {
@@ -122,6 +287,281 @@ impl GitRepo {
 		let mut state = patch_worktree_map(self, &repo, &mut filter, &patches, options.reverse)?;
 		apply_patches_to_map(&repo, &mut state, &patches, options)?;
 		write_patch_worktree(self, &repo, &mut filter, &patches, options.reverse, &state)
+	}
+
+	/// Prepare raw-byte guards with the same Git clean/smudge and patch engine
+	/// as application. Intermediate blobs live in memory, never in the index
+	/// or worktree, and a failed filter cannot produce an approval snapshot.
+	pub fn preview_owned_patch(
+		&self,
+		patch_text: &str,
+		options: &OwnedPatchPreviewOptions,
+	) -> Result<OwnedPatchPreview> {
+		if patch_text.trim().is_empty() {
+			return Ok(OwnedPatchPreview { expected: Vec::new() });
+		}
+		let patches = parse_patch(patch_text).map_err(ApplyFailure::into_error)?;
+		let repo = owned_repository(self)?;
+		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
+		let mut expected = Vec::with_capacity(patches.len());
+		let mut touched = BTreeSet::new();
+		for patch in &patches {
+			let (source, target, ..) = patch_sides(patch, options.reverse);
+			let paths = [source, target.filter(|target| Some(*target) != source)];
+			let start = expected.len();
+			for path in paths.into_iter().flatten() {
+				if !touched.insert(path) {
+					return Err(Error::backend(
+						"git owned patch preview",
+						"a path appears in multiple patch entries",
+					));
+				}
+				expected.push(OwnedPatchExpectation {
+					path:           path.to_owned(),
+					before_version: owned_raw_version(self, path)?,
+					after_version:  None,
+				});
+			}
+			let one = std::slice::from_ref(patch);
+			let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
+			apply_patches_to_map(&repo, &mut state, one, &ApplyOptions {
+				reverse: options.reverse,
+				..ApplyOptions::default()
+			})?;
+			for item in &mut expected[start..] {
+				item.after_version =
+					owned_entry_version(&repo, &mut filter, &item.path, state.get(&item.path))?;
+				if owned_raw_version(self, &item.path)? != item.before_version {
+					return Err(Error::backend(
+						"git owned patch preview",
+						format!("preimage changed during preview: {}", item.path),
+					));
+				}
+			}
+		}
+		Ok(OwnedPatchPreview { expected })
+	}
+
+	/// Apply only paths whose raw worktree bytes still match the confirmed
+	/// preimages. Outcomes are observed per path, not an atomicity claim.
+	pub fn apply_owned_patch(
+		&self,
+		patch_text: &str,
+		options: &OwnedPatchOptions,
+	) -> Result<OwnedPatchResult> {
+		let patches = if patch_text.trim().is_empty() {
+			Vec::new()
+		} else {
+			parse_patch(patch_text).map_err(ApplyFailure::into_error)?
+		};
+		let mut expected = BTreeMap::new();
+		for item in &options.expected {
+			guard_owned_path(self, &item.path)?;
+			for version in [&item.before_version, &item.after_version]
+				.into_iter()
+				.flatten()
+			{
+				if version.len() != 64
+					|| !version
+						.bytes()
+						.all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+				{
+					return Err(Error::backend(
+						"git owned patch",
+						"versions must be lowercase raw-byte SHA-256 digests",
+					));
+				}
+			}
+			if expected.insert(item.path.as_str(), item).is_some() {
+				return Err(Error::backend("git owned patch", "duplicate expected path"));
+			}
+		}
+		let mut touched = BTreeSet::new();
+		for patch in &patches {
+			let old = patch.old_path.as_deref();
+			let new = patch.new_path.as_deref().filter(|new| Some(*new) != old);
+			for path in [old, new].into_iter().flatten() {
+				if !expected.contains_key(path) || !touched.insert(path) {
+					return Err(Error::backend(
+						"git owned patch",
+						"every patch path must have exactly one ownership guard",
+					));
+				}
+			}
+		}
+		if touched.len() != expected.len() {
+			return Err(Error::backend(
+				"git owned patch",
+				"ownership guard contains a path outside this patch",
+			));
+		}
+		let repo = owned_repository(self)?;
+		let mut filter = apply_filter(&repo, &patches, options.reverse)?;
+		let mut output = OwnedPatchResult {
+			paths:      Vec::with_capacity(expected.len()),
+			complete:   true,
+			diagnostic: None,
+		};
+		let mut diagnostics = Vec::new();
+		for patch in &patches {
+			let (source, target, source_mode, target_mode) = patch_sides(patch, options.reverse);
+			let paths = [source, target.filter(|target| Some(*target) != source)];
+			let mut attempted = [None, None];
+			let attempt = (|| -> Result<()> {
+				let mut already_done = true;
+				for path in paths.into_iter().flatten() {
+					if owned_raw_version(self, path)? != expected[path].after_version
+						|| !owned_mode_matches(
+							self,
+							path,
+							Some(path) == target,
+							if Some(path) == target {
+								target_mode.or(source_mode)
+							} else {
+								None
+							},
+						)? {
+						already_done = false;
+					}
+				}
+				if already_done {
+					return Ok(());
+				}
+				for path in paths.into_iter().flatten() {
+					let actual = owned_raw_version(self, path)?;
+					let is_after = actual == expected[path].after_version
+						&& owned_mode_matches(
+							self,
+							path,
+							Some(path) == target,
+							if Some(path) == target {
+								target_mode.or(source_mode)
+							} else {
+								None
+							},
+						)?;
+					if actual != expected[path].before_version && !is_after {
+						return Err(Error::backend(
+							"git owned patch",
+							format!("preimage changed: {path}"),
+						));
+					}
+				}
+				let one = std::slice::from_ref(patch);
+				let mut state = patch_worktree_map(self, &repo, &mut filter, one, options.reverse)?;
+				apply_patches_to_map(&repo, &mut state, one, &ApplyOptions {
+					reverse: options.reverse,
+					..ApplyOptions::default()
+				})?;
+				// Verify the exact checkout bytes before any destructive write.
+				for path in paths.into_iter().flatten() {
+					let after = owned_entry_version(&repo, &mut filter, path, state.get(path))?;
+					if after != expected[path].after_version {
+						return Err(Error::backend(
+							"git owned patch",
+							format!("confirmed postimage does not match patch: {path}"),
+						));
+					}
+				}
+				// Materialize a rename target before deleting its source. A
+				// partial rename can then resume from the retained source and
+				// already-matching target without overwriting either blindly.
+				for (position, path) in target
+					.into_iter()
+					.chain(source.filter(|source| Some(*source) != target))
+					.enumerate()
+				{
+					let actual = owned_raw_version(self, path)?;
+					if actual == expected[path].after_version
+						&& owned_mode_matches(
+							self,
+							path,
+							state.contains_key(path),
+							state.get(path).map(|entry| entry.mode),
+						)? {
+						continue;
+					}
+					if actual != expected[path].before_version {
+						return Err(Error::backend(
+							"git owned patch",
+							format!("preimage changed before write: {path}"),
+						));
+					}
+					attempted[position] = Some(path);
+					if let Some(entry) = state.get(path) {
+						let absolute = guard_owned_path(self, path)?;
+						if entry.mode != Mode::SYMLINK
+							&& fs::symlink_metadata(&absolute)
+								.is_ok_and(|metadata| metadata.file_type().is_symlink())
+						{
+							fs::remove_file(&absolute)?;
+						}
+						write_worktree_entry(self, &repo, &mut filter, path, entry)?;
+					} else {
+						remove_worktree_path(self, path)?;
+					}
+					if owned_raw_version(self, path)? != expected[path].after_version
+						|| !owned_mode_matches(
+							self,
+							path,
+							state.contains_key(path),
+							state.get(path).map(|entry| entry.mode),
+						)? {
+						return Err(Error::backend(
+							"git owned patch",
+							format!("postimage changed after write: {path}"),
+						));
+					}
+				}
+				Ok(())
+			})();
+			if let Err(err) = attempt {
+				output.complete = false;
+				diagnostics.push(err.to_string());
+			}
+			for path in paths.into_iter().flatten() {
+				let observed = owned_raw_version(self, path);
+				let (actual_version, status) = match observed {
+					Ok(actual) => {
+						let mode_ok = owned_mode_matches(
+							self,
+							path,
+							Some(path) == target,
+							if Some(path) == target {
+								target_mode.or(source_mode)
+							} else {
+								None
+							},
+						)
+						.unwrap_or(false);
+						let status = if actual == expected[path].after_version && mode_ok {
+							if attempted.contains(&Some(path)) {
+								"applied"
+							} else {
+								"unchanged"
+							}
+						} else {
+							"failed"
+						};
+						(actual, status)
+					},
+					Err(err) => {
+						diagnostics.push(format!("{path}: {err}"));
+						(None, "failed")
+					},
+				};
+				output.complete &= status != "failed";
+				output.paths.push(OwnedPatchPathResult {
+					path: path.to_owned(),
+					status: status.to_owned(),
+					actual_version,
+				});
+			}
+		}
+		if !diagnostics.is_empty() {
+			output.diagnostic = Some(diagnostics.join("\n"));
+		}
+		Ok(output)
 	}
 
 	/// Check whether a patch applies without changing the index or worktree.

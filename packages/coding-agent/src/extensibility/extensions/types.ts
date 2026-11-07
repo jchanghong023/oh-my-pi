@@ -2383,6 +2383,8 @@ export type SetServiceTierHandler = (family: ServiceTierFamily, tier: ServiceTie
 /** Shared state created by loader, used during registration and runtime. */
 export interface ExtensionRuntimeState {
 	flagValues: Map<string, boolean | string>;
+	/** Helper runtime uses the owning session's existing providers and cannot mutate them. */
+	readonly inheritedProviderOwnership?: boolean;
 	/** Provider registrations queued during extension loading, processed during session initialization */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }>;
 	/** Queue a provider registration until initialization, then apply it immediately. */

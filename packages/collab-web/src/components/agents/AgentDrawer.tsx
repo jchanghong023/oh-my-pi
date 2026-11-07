@@ -2,7 +2,7 @@ import type { AgentSnapshot, SessionEntry, SubagentLifecyclePayload, SubagentPro
 import { OctagonX, RotateCcw, SendHorizontal, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
-import type { GuestClient } from "../../lib/client";
+import type { AgentPort, SubmitResult } from "../../lib/client";
 import { fmtCost, fmtDuration, fmtTokens } from "../../lib/format";
 import { decideTranscriptPoll } from "../../lib/transcript-poll";
 import type { TranscriptProps } from "../transcript/Transcript";
@@ -17,7 +17,7 @@ export function AgentDrawer(props: {
 	agent: AgentSnapshot;
 	progress?: SubagentProgressPayload;
 	lifecycle?: SubagentLifecyclePayload;
-	client: GuestClient;
+	client: AgentPort;
 	/** View-link guests: hide kill/revive/chat (the host rejects them anyway). */
 	readOnly?: boolean;
 	/** Forwarded to tool renderers so nested task cards can drill further. */
@@ -28,6 +28,23 @@ export function AgentDrawer(props: {
 	const [entries, setEntries] = useState<readonly SessionEntry[]>([]);
 	const [fetchError, setFetchError] = useState<string | null>(null);
 	const [draft, setDraft] = useState("");
+	const [sending, setSending] = useState(false);
+	const [commandError, setCommandError] = useState<string | null>(null);
+	const sendCommand = async (cmd: "chat" | "kill" | "revive", text?: string): Promise<SubmitResult> => {
+		setSending(true);
+		setCommandError(null);
+		try {
+			const result = await client.sendAgentCmd(cmd, agent.id, text);
+			if (result.kind === "rejected" || result.kind === "unknown") setCommandError(result.message);
+			return result;
+		} catch (error) {
+			const message = `Acceptance unknown: ${error instanceof Error ? error.message : String(error)}`;
+			setCommandError(message);
+			return { kind: "unknown", message };
+		} finally {
+			setSending(false);
+		}
+	};
 	/** Resumes a stopped poll loop; null while no loop is mounted. */
 	const resumePollingRef = useRef<(() => void) | null>(null);
 	const quiescentRef = useRef(false);
@@ -123,11 +140,11 @@ export function AgentDrawer(props: {
 		resumePollingRef.current?.();
 	}, [progress, lifecycle, agent.status, agent.lastActivity]);
 
-	const sendChat = () => {
+	const sendChat = async (): Promise<void> => {
 		const text = draft.trim();
-		if (!text) return;
-		client.sendAgentCmd("chat", agent.id, text);
-		setDraft("");
+		if (!text || sending) return;
+		const result = await sendCommand("chat", text);
+		if (result.kind === "accepted" || result.kind === "sent") setDraft(current => (current === draft ? "" : current));
 	};
 
 	const p = progress?.progress;
@@ -150,14 +167,20 @@ export function AgentDrawer(props: {
 						<button
 							type="button"
 							className="ag-btn ag-btn--danger"
-							onClick={() => client.sendAgentCmd("kill", agent.id)}
+							disabled={sending}
+							onClick={() => void sendCommand("kill")}
 						>
 							<OctagonX size={13} aria-hidden />
 							kill
 						</button>
 					) : null}
 					{(agent.status === "parked" || agent.status === "aborted") && !readOnly ? (
-						<button type="button" className="ag-btn" onClick={() => client.sendAgentCmd("revive", agent.id)}>
+						<button
+							type="button"
+							className="ag-btn"
+							disabled={sending}
+							onClick={() => void sendCommand("revive")}
+						>
 							<RotateCcw size={13} aria-hidden />
 							revive
 						</button>
@@ -219,12 +242,13 @@ export function AgentDrawer(props: {
 					<div className="ag-empty">no transcript available</div>
 				)}
 			</div>
+			{commandError && <div role="alert">{commandError}</div>}
 			{!readOnly && (
 				<form
 					className="ag-chat"
 					onSubmit={e => {
 						e.preventDefault();
-						sendChat();
+						void sendChat();
 					}}
 				>
 					<input
@@ -233,7 +257,12 @@ export function AgentDrawer(props: {
 						placeholder={`message ${agent.displayName}…`}
 						onChange={e => setDraft(e.target.value)}
 					/>
-					<button type="submit" className="ag-iconbtn" aria-label="send" disabled={draft.trim().length === 0}>
+					<button
+						type="submit"
+						className="ag-iconbtn"
+						aria-label="send"
+						disabled={sending || draft.trim().length === 0}
+					>
 						<SendHorizontal size={15} aria-hidden />
 					</button>
 				</form>

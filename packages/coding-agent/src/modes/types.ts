@@ -30,6 +30,7 @@ import type {
 } from "../extensibility/extensions/types";
 import type { Skill } from "../extensibility/skills";
 import type { MCPManager } from "../mcp";
+import type { MCPAuthHandler } from "../mcp/manager";
 import type { PlanApprovalDetails } from "../plan-mode/approved-plan";
 import type { AgentSession } from "../session/agent-session";
 import type { AgentViewSession } from "../session/agent-session-handle";
@@ -210,8 +211,15 @@ export interface InteractiveModeContext {
 	// Session access
 	session: AgentSession;
 	sessionManager: SessionManager;
-	/** Atomically retarget the native owner, commands and transcript together. */
-	bindMainSession(target: AgentSession): Promise<void>;
+	/** Original native session owned by this host, independent of the viewed conversation. */
+	readonly rootSession: AgentSession;
+	/** Dispose long-lived native resources only during real host shutdown. */
+	registerHostShutdown(dispose: () => Promise<void>): () => void;
+	/** Installed by the real `/dev` entry only; absent for ordinary TUI consumers. */
+	isDevWorkbenchModeActive?: () => boolean;
+	handleDevWorkbenchModeInput?: (data: string) => boolean;
+	handleDevWorkbenchModeSubmit?: (text: string) => Promise<boolean>;
+	getDevWorkbenchEntryBlocker?: () => string | undefined;
 	/** Re-resolve the CLI/settings model scope after a successful OAuth login. */
 	refreshScopedModelsAfterLogin?: () => Promise<void>;
 	/** The current session display name / title. */
@@ -292,6 +300,8 @@ export interface InteractiveModeContext {
 	agent: AgentSession["agent"];
 	historyStorage?: HistoryStorage;
 	mcpManager?: MCPManager;
+	/** Exact ordinary TUI auth callback; workbench borrowing may restore only this handler. */
+	readonly nativeMcpUiAuthHandler?: MCPAuthHandler;
 	lspServers?: LspStartupServerInfo[];
 	/** Owns hosting: manual `/collab`, `collab.autoStart`, and room rotation on session switch. */
 	collabController: CollabController;
@@ -635,7 +645,6 @@ export interface InteractiveModeContext {
 	/** Reload session skills and derived `/skill:<name>` commands. */
 	refreshSkillState(): Promise<void>;
 	applyCwdChange(newCwd: string): Promise<boolean>;
-	exitDevForSessionMove(): Promise<void>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -748,10 +757,6 @@ export interface InteractiveModeContext {
 		options?: { autoOrchestrate?: boolean },
 	): Promise<boolean>;
 	handleGuidedGoalCommand(rest?: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
-	handleDevInput(text: string, input?: Pick<SubmittedUserInput, "images" | "imageLinks">): Promise<boolean>;
-	isDevInputRoute(text: string): boolean;
-	showDevCommandStatus(text: string): void;
-	assertCanActivateMode(mode: "dev" | "plan" | "goal" | "vibe"): void;
 	/** True while `/guided-goal` is interviewing the user and no goal record exists yet. */
 	isGuidedGoalInterviewActive(): boolean;
 	handleLoopCommand(args?: string): Promise<string | undefined>;

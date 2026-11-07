@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ToolView } from "../src/tool-render/ToolView";
+import { ToolView } from "../src/tool-render";
 
 describe("ToolView xd:// dispatches", () => {
 	it("renders successful execute-mode xdev writes as the inner generate_image tool", () => {
@@ -251,5 +251,45 @@ describe("ToolView ask renderer", () => {
 		expect(html).toContain("managed instance");
 		// The cache question answered without a note must not leak the db note.
 		expect(html.match(/managed instance/g)?.length).toBe(1);
+	});
+});
+
+describe("ToolView native host expansion", () => {
+	it("uses an explicit native expand command for the real tool body", () => {
+		const html = renderToStaticMarkup(
+			<ToolView
+				name="read"
+				host={{ toolsExpanded: true }}
+				args={{ path: "actual.md" }}
+				result={{ content: [{ type: "text", text: "full actual output" }] }}
+			/>,
+		);
+		const expanded: string[] = [];
+		new HTMLRewriter()
+			.on("button.tv-head", {
+				element(element) {
+					expanded.push(element.getAttribute("aria-expanded") ?? "");
+				},
+			})
+			.transform(html);
+		expect(expanded).toEqual(["true"]);
+		expect(html).toContain("full actual output");
+	});
+	it("lets native collapse override defaultOpen while leaving undefined callers unchanged", () => {
+		const collapsed = renderToStaticMarkup(
+			<ToolView
+				name="read"
+				defaultOpen
+				host={{ toolsExpanded: false }}
+				result={{ content: [{ type: "text", text: "body only when open" }] }}
+			/>,
+		);
+		const ordinary = renderToStaticMarkup(
+			<ToolView name="read" defaultOpen result={{ content: [{ type: "text", text: "body only when open" }] }} />,
+		);
+		expect(collapsed).toContain('aria-expanded="false"');
+		expect(collapsed).not.toContain("body only when open");
+		expect(ordinary).toContain('aria-expanded="true"');
+		expect(ordinary).toContain("body only when open");
 	});
 });

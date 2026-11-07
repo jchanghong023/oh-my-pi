@@ -794,6 +794,7 @@ function buildExecutorOptions(
 		additionalDirectories: session.additionalDirectories,
 		getApiKey: session.getApiKey,
 		createInteractionUI: session.createInteractionUI,
+		extensionProviderOwnership: session.extensionProviderOwnership,
 		interactionParentSessionId: session.getSessionId?.() ?? undefined,
 		credentialSourceSessionId: session.getCredentialSourceSessionId?.(),
 		agent: policy.effectiveAgent,

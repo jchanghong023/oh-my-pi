@@ -239,6 +239,101 @@ pub struct CommitOptions {
 	pub files:       Vec<String>,
 }
 
+/// Confirmed inputs for a hook-free commit and real-index reconciliation.
+#[derive(Debug, Clone)]
+pub struct ScopedCommitOptions {
+	/// Exact symbolic source branch.
+	pub expected_head_ref:      String,
+	/// Parent at confirmation time (an unborn HEAD is not supported).
+	pub expected_head_sha:      String,
+	/// SHA-256 of the real index's bytes at confirmation time.
+	pub expected_index_version: String,
+	/// Isolated index containing only the confirmed commit tree.
+	pub index_path:             PathBuf,
+	/// Isolated index containing the intended post-commit staged state.
+	pub reconciled_index_path:  PathBuf,
+	/// Exact confirmed tree object id.
+	pub expected_tree:          String,
+	/// Exact repository-relative paths authorized to differ.
+	pub files:                  Vec<String>,
+}
+
+/// Independent outcomes: publishing HEAD and the index is not one transaction.
+#[derive(Debug, Clone)]
+pub struct ScopedCommitResult {
+	/// Published commit, including on an index-only retry.
+	pub sha:           Option<String>,
+	/// The source ref points at this operation's commit.
+	pub ref_updated:   bool,
+	/// The real index has the confirmed reconciled state.
+	pub index_updated: bool,
+	/// Failure detail without discarding an already successful ref update.
+	pub diagnostic:    Option<String>,
+}
+
+/// A precisely observed advertised remote ref; absence is not a network error.
+#[derive(Debug, Clone)]
+pub struct RemoteRefResult {
+	/// Advertised object id, or absent after a successful exact query.
+	pub sha: Option<String>,
+}
+
+/// Operation-oriented raw worktree preimage and postimage SHA-256 digests.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchExpectation {
+	/// Exact repository-relative path (both sides of a rename are required).
+	pub path:           String,
+	/// Bytes before this operation, or absent.
+	pub before_version: Option<String>,
+	/// Bytes after this operation, or absent, regardless of patch direction.
+	pub after_version:  Option<String>,
+}
+
+/// Dry-run direction using the actual worktree and configured Git filters.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchPreviewOptions {
+	/// Reverse the patch before computing operation-oriented versions.
+	pub reverse: bool,
+}
+
+/// Exact raw worktree versions prepared without changing index or worktree.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchPreview {
+	/// Exhaustive operation-oriented preimages and postimages.
+	pub expected: Vec<OwnedPatchExpectation>,
+}
+
+/// Guarded worktree-only patch application.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchOptions {
+	/// Reverse the patch, not the supplied operation-oriented digests.
+	pub reverse:  bool,
+	/// Exhaustive ownership guards for the patch paths.
+	pub expected: Vec<OwnedPatchExpectation>,
+}
+
+/// One observed path outcome, including partially completed writes.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchPathResult {
+	/// Repository-relative path.
+	pub path:           String,
+	/// `applied`, `unchanged`, or `failed`.
+	pub status:         String,
+	/// Actual raw byte digest, or absent.
+	pub actual_version: Option<String>,
+}
+
+/// Guarded patches deliberately report partial work rather than atomicity.
+#[derive(Debug, Clone)]
+pub struct OwnedPatchResult {
+	/// Exhaustive per-path observations.
+	pub paths:      Vec<OwnedPatchPathResult>,
+	/// Every path reached its confirmed postimage.
+	pub complete:   bool,
+	/// Precondition, write, or observation error details.
+	pub diagnostic: Option<String>,
+}
+
 /// Which hunks of a file a selection covers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HunkSpec {

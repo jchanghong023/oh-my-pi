@@ -440,6 +440,7 @@ export interface ExecutorOptions {
 	/** Scoped non-terminal interaction host of the owning root session. */
 	createInteractionUI?: CreateAgentSessionOptions["createInteractionUI"];
 	interactionParentSessionId?: string;
+	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Parent session's manager; the child and its revived turns use this exact delivery scope. */
 	asyncJobManager?: AsyncJobManagerApi;
 	/** Parent session whose stored credential affinities seed the child session. */
@@ -4184,6 +4185,8 @@ async function configureNativeSubagentSession(
 		"lspReadOnly",
 		"enableIrc",
 		"subagentHooks",
+		"extensionProviderOwnership",
+		"preloadedPreparedExtensions",
 	] as const;
 	for (const key of keys) {
 		if (Object.hasOwn(overrides, key)) Object.assign(configured, { [key]: overrides[key] });
@@ -5057,6 +5060,7 @@ async function runSubprocessOnThisThread(options: ExecutorOptions): Promise<Sing
 					authStorage,
 					modelRegistry,
 					getApiKey: options.getApiKey,
+					extensionProviderOwnership: options.extensionProviderOwnership,
 					credentialSourceSessionId: options.credentialSourceSessionId,
 					oauthAccountPools: options.oauthAccountPools,
 					inheritedSessionAgents: options.inheritedSessionAgents,

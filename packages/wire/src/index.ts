@@ -306,6 +306,19 @@ export type CollabUiSelectItem = string | { label: string; description?: string 
 
 export type CollabUiResponseValue = string | undefined;
 
+export type SubmitResult =
+	| { kind: "sent" }
+	| { kind: "accepted" }
+	| { kind: "rejected"; message: string }
+	| { kind: "unknown"; message: string };
+
+/** Async native input boundary shared by browser session transports. */
+export interface ComposerPort<Result extends SubmitResult = SubmitResult> {
+	sendPrompt(text: string, images?: readonly ImageContent[]): Promise<Result>;
+	sendUiResponse(reqId: number, value?: CollabUiResponseValue): Promise<Result>;
+	sendAbort(): Promise<Result>;
+}
+
 export type CollabUiRequestDraft =
 	| {
 			kind: "select";

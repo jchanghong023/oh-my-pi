@@ -433,7 +433,7 @@ export class Validator {
                 message: 'No delta sections found. Add headers such as "## ADDED Requirements" or move non-delta notes outside specs/.',
             });
         }
-        const marker = readSkipSpecsMarker(changeDir);
+        const marker = readSkipSpecsMarker(changeDir, options.projectRoot);
         if (marker.invalidReason) {
             issues.push({ level: 'ERROR', path: METADATA_FILENAME, message: this.formatInvalidMarkerMessage(marker.invalidReason) });
         }

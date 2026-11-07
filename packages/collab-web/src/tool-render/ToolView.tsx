@@ -4,7 +4,7 @@
  */
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { resolveToolRenderer } from "./registry";
 import type { ToolRenderHost, ToolRenderProps, ToolResultLike } from "./types";
 import { isRecord, replaceTabs, stripAnsi } from "./util";
@@ -50,7 +50,11 @@ function executeXdevDispatch(props: ToolViewProps): XdevDispatch | null {
 }
 
 export function ToolView(props: ToolViewProps): ReactNode {
-	const [open, setOpen] = useState(props.defaultOpen ?? false);
+	const [open, setOpen] = useState(props.host?.toolsExpanded ?? props.defaultOpen ?? false);
+	const toolsExpanded = props.host?.toolsExpanded;
+	useEffect(() => {
+		if (toolsExpanded !== undefined) setOpen(toolsExpanded);
+	}, [toolsExpanded]);
 	const xdev = executeXdevDispatch(props);
 	const { args, intent: argIntent } = normalizeArgs(props.args);
 	const intent = props.intent?.trim() || argIntent;

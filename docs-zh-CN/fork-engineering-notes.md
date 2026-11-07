@@ -33,7 +33,7 @@
 - CNB CLI 需具备目标仓库 Release 读写权限；`CNB_TOKEN` 可提供令牌。WSL 需安装与 Windows 完全相同版本的 Bun，以及 Rust、Bazel 和项目构建依赖；Bun 版本不一致会在编译前拒绝。Bazel 构建使用已提交的 `MODULE.bazel.lock`，锁文件过期时运行 `bun run gen:bazel-lock` 并通过 Git 提交同步，不由发布构建改写。遗留的 `tool-views.generated.js` 作为生成产物忽略，不移动或删除用户文件。该分发不改变 `omp update` 或安装器的 GitHub 来源。
 - 仓库根目录 `.cnb.yml` 提供单独的 `main`／`api_trigger` fastcheck 流水线，使用 64 核 amd64 节点，不发布产物；CNB `docker:cache` 分别缓存系统依赖、Bun／Rust 工具链和项目 Bun 依赖包，版本键包含对应 Dockerfile、工具链或依赖清单及锁文件。每轮仍执行 `bun install --frozen-lockfile` 及安装脚本，不缓存检查结果。手动触发需要 `repo-cnb-trigger:rw`；配置须提交到目标分支，或通过触发接口的 `config` 参数传入。
 
-### Fork 门禁与 Dev TUI 分片
+### Fork 门禁与 Dev 消费者分片
 
 - 三层门禁直接运行既有 Bun／Cargo 原语，记录 Git 版本和工作区状态，保留预算和失败汇总；不扫描全仓内容指纹，也不因运行期间源码或临时文件变化中止或自动重跑。fastcheck 不运行测试，保留原有工具和增量编译缓存。slowtest 运行本机 fulltest 及适用的 WSL fulltest，各端独立选测并保留固定提交同步；不缓存门禁或完整命令结果，也不引入自建结果缓存框架。
 - `bun scripts/monitor-system.ts` 在 Windows 后台启动性能采集器，每 2 秒将 CPU、内存、各磁盘卷容量及各物理磁盘 I/O 繁忙度、读写速率和队列长度写入系统临时目录 `omp-test-monitor-*/samples.jsonl`，启动后立即返回。入口使用 TypeScript/Bun，常驻 PowerShell 进程读取 Windows 原生性能计数器，避免每轮创建进程。`--stop <监控目录>` 请求停止并保留数据；`--report <监控目录>` 显示 CPU/内存及各磁盘 I/O 均值、峰值和容量，可在采集中读取。数据包含时间戳和采集耗时，便于对齐测试阶段；容量使用率与 I/O 繁忙度分开记录。
@@ -64,9 +64,9 @@
 - 首事件禁用回归验证超过 idle 预算后仍可成功收到正文，不再断言整个进程没有其他定时器；透明预览回归验证实际终端单元的显式前景色和透明背景，兼容 256 色及真彩编码，不绑定翻译文本。命令报告以输入／补全完成后的实际呈现边界核对恢复、主屏无污染和历史无重复，不将输入阶段的重排归因于报告。
 - Windows sed 文件截断夹具验证 Windows 流式读取与 Unix 打开时快照各自的既有合同，取消手工过滤；Python `export_html` 按 `Path` 比较跨平台结果，而非要求 Windows 路径呈现为 POSIX 字符串。
 - 上游显式 TS 全量入口覆盖 `stats` 及 `metaharness`，后者包含包根目录下的 edit adapter 测试；这不意味着两者完整套件进入日常 fork 门禁。历史费用回填用例使用独立的分时／分日期价格夹具，不假定实时模型目录中某个型号必然在固定日期换价；仍断言费用、缓存节省及重启后的回填结果。
-- Dev TUI 场景分布在 `tui.e2e.test.ts`、`tui-materials.e2e.test.ts`、`tui-materials-later-roles.e2e.test.ts`、`tui-interactions.e2e.test.ts`、`tui-resources.e2e.test.ts` 和 `tui-resource-lifecycle.e2e.test.ts`；`tui-harness.ts` 维持隔离及超时。
+- 历史 `dev-TUI smoke`／`spec-driven TUI` 分组名和 `tui-` 文件前缀不等于仍测试旧 Dev TUI。`tui.e2e.test.ts`、`tui-materials.e2e.test.ts`、`tui-materials-later-roles.e2e.test.ts`、`tui-interactions.e2e.test.ts`、`tui-business.e2e.test.ts`、`tui-lifecycle.e2e.test.ts`、`tui-closing.e2e.test.ts` 及 `tui-resource-lifecycle.e2e.test.ts` 已使用 `test/dev-workbench/fixture.ts`，通过真实源码 CLI 的公开浏览器工作台 API 驱动原生流程；这不是浏览器像素布局或旧 Dev 三行状态区验证。普通 TUI 的资源读取和压缩显示仍分别由 `tui-resources.e2e.test.ts`、`tui-compact-mixed.e2e.test.ts` 及 `tui-harness.ts` 保留；`tui-capabilities.e2e.test.ts` 同时包含普通 TUI 和工作台原生阶段场景。当前 Dev 行为以未归档的 `replace-dev-tui-with-browser-workbench` 增量规格及 [Lander／Sailor 八阶段指南](lander-sailor-six-stage-agent-workflow.md)为准。
 - 协同开发公开进程 E2E 按两个测试文件分片；共享进程与 provider fixture 保持每个场景的独立目录、会话和超时，重复正常场景可按上述消费者契约等价合并；材料失败矩阵的 provider／fixture 保持逐例隔离。
-- OpenSpec 资源授权 E2E 先确认多行草稿及光标已进入真实输入框，再单独发送 Enter；每轮关联独立输入和完成标记后检查原生读取结果，不用旧回复或画面 idle 代替当前工具轮完成。缺失完成报告的 E2E 检查状态区材料提示、`/session` 完整读取诊断及阶段／批准不变，不要求原始 `ENOENT` 直接出现在状态区。
+- 普通 TUI 的 OpenSpec 资源授权 E2E 先确认多行草稿及光标已进入真实输入框，再单独发送 Enter；每轮关联独立输入和完成标记后检查原生读取结果，不用旧回复或画面 idle 代替当前工具轮完成。工作台缺失完成报告的消费者场景检查公开 API 的材料诊断、原生阶段会话及批准不变，不再要求旧 Dev 状态区或 `/session` 画面。
 - ZCode 真实 stdio 进程用例按会话、执行、投影及目录等职责分成五个文件，共用 `zcode-process-harness.ts`；workflow 的三个用例分成文件／预检和 sandbox 两个目标，共用 `zcode-workflow-process-helpers.ts`。每例仍使用独立目录和 app-server，保留独特消费者行为、失败断言及超时，重复正常场景可按上述契约等价合并；workflow 两个文件分别注册清理钩子。workflow fixture Host 对未实现的 `subagents/readRuntimeConfig` 及时返回协议错误 `-32601`，不靠等待生产端超时模拟不支持。
 - 递归 submodule 隔离用例中的独立只读 Git 查询并行执行；copy／rcopy 两条路径、父工作树不变、对象保留及分支合并断言与原 30 秒用例预算保持不变。
 - 验证时按授权运行对应局部测试及门禁，并核对场景、隔离、超时和实际报告；入口存在不代表已通过。

@@ -11,10 +11,21 @@ import {
 	applyConversationDeltas,
 	conversationSnapshotSchema,
 	routedTopicWireFrameSchema,
+	commandPayloadSchemas,
+	parseCommandEnvelope,
+	v4ConversationSubscribeParamsSchema,
+	v4ConversationWorkflowRunsParamsSchema,
+	v4ConversationWorkflowRunArtifactReadParamsSchema,
+	v4ConversationWorkflowRunArtifactsResultSchema,
+	PROTOCOL_V4_LIMITS,
+	workflowRunSchema,
+	type CommandPayloadMap,
+	type V4ConversationWorkflowRunArtifactsResult,
 	type ConversationDelta,
 	type ConversationSnapshot,
 } from "../../src/modes/zcode/schema";
 
+import * as baseline from "../../src/modes/zcode/schema/vendor/zcode-protocol-v4/index";
 const user = (inputId: string): AgentUserMessage => ({ role: "user", content: "same text", timestamp: 100, inputId });
 const usage = {
 	input: 0,
@@ -2131,4 +2142,133 @@ describe("native turn header execution lifecycle", () => {
 			projection.dispose();
 		}
 	});
+});
+
+describe("ordinary ZCode protocol boundaries", () => {
+	it("retains large artifact histories and byte-read bounds without a development run", () => {
+		const metadata = {
+			artifacts: [
+				{
+					id: "report",
+					kind: "markdown",
+					version: 17,
+					versions: Array.from({ length: 17 }, (_, index) => ({
+						version: index + 1,
+						publishedAt: index + 1,
+						bytes: 10,
+					})),
+					itemCount: 0,
+				},
+			],
+		} satisfies V4ConversationWorkflowRunArtifactsResult;
+		expect(v4ConversationWorkflowRunArtifactsResultSchema.parse(metadata)).toEqual(metadata);
+		const read = { sessionId: "s", runId: "run", artifactId: "report", version: 17, offset: 0, limit: 64 };
+		expect(v4ConversationWorkflowRunArtifactReadParamsSchema.parse(read)).toEqual(read);
+		for (const version of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+			expect(v4ConversationWorkflowRunArtifactReadParamsSchema.safeParse({ ...read, version }).success).toBe(false);
+		}
+		expect(v4ConversationWorkflowRunArtifactReadParamsSchema.safeParse({ ...read, path: "/arbitrary" }).success).toBe(
+			false,
+		);
+		expect(
+			v4ConversationWorkflowRunArtifactReadParamsSchema.safeParse({
+				...read,
+				limit: PROTOCOL_V4_LIMITS.attachmentChunkMaxBytes + 1,
+			}).success,
+		).toBe(false);
+	});
+
+	it("accepts ordinary inputs and rejects retired negotiation and bound input payloads", () => {
+		const payload = { text: "ordinary input", requestedDelivery: "queue" } satisfies CommandPayloadMap["sendText"];
+		expect(commandPayloadSchemas.sendText.parse(payload)).toEqual(payload);
+		const envelope = {
+			clientId: "client",
+			commandId: "command",
+			sessionId: "s",
+			type: "sendText",
+			payload,
+			issuedAt: 1,
+		};
+		expect(parseCommandEnvelope(envelope).ok).toBe(true);
+		expect(parseCommandEnvelope({ ...envelope, payload: { ...payload, specRun: { runId: "old" } } }).ok).toBe(false);
+		const subscription = { topic: "conversation/s", connectionId: "client", clientMode: "desktop-continuous" };
+		expect(v4ConversationSubscribeParamsSchema.safeParse(subscription).success).toBe(true);
+		for (const key of ["includeSpecDriven", "includeSpecBusiness"]) {
+			expect(v4ConversationSubscribeParamsSchema.safeParse({ ...subscription, [key]: true }).success).toBe(false);
+			expect(v4ConversationWorkflowRunsParamsSchema.safeParse({ sessionId: "s", [key]: true }).success).toBe(false);
+		}
+		const projection = new ZCodeProjection({ sessionId: "s", cwd: "/work" });
+		try {
+			expect(
+				conversationSnapshotSchema.parse({
+					...projection.snapshot(),
+					dev: { mode: "dev", actions: [] },
+				}),
+			).not.toHaveProperty("dev");
+		} finally {
+			projection.dispose();
+		}
+	});
+
+	it.each(["desktop-continuous", "web-remote-replayable"] as const)(
+		"preserves ordinary workflow snapshots, deltas and replay for %s without local namespaces",
+		clientMode => {
+			const projection = new ZCodeProjection({ sessionId: "s", cwd: "/work" });
+			const topics = new ZCodeTopics();
+			const runs = Array.from({ length: baseline.WORKFLOW_RUNS_LIMITS.maxRuns }, (_, index) =>
+				workflowRunSchema.parse({
+					runId: `dynamic-${index}`,
+					status: "running",
+					usage: { spentTokens: 12, nodesUsed: 1 },
+					actors: [],
+					nodes: [],
+					lastEventSequence: 7,
+				}),
+			);
+			const completed = runs.map(run => ({ ...run, status: "completed" as const }));
+			projection.setWorkflowState({ workflowRuns: { revision: 1, runs } });
+			topics.register("conversation/s", projection);
+			const frames: unknown[] = [];
+			const sub = topics.subscribe({ topic: "conversation/s", connectionId: "client", clientMode }, frame =>
+				frames.push(frame),
+			);
+			try {
+				sub.flush();
+				const initial = baseline.conversationTopicWireFrameSchema.parse(frames[0]);
+				if (initial.kind !== "complete") throw new Error("Unexpected fragmented small workflow snapshot");
+				// Registration starts at the already-published projection sequence, not necessarily zero.
+				const base = { logEpoch: sub.ack.logEpoch, seq: initial.frame.toSeq };
+				projection.setWorkflowState({
+					workflowRuns: { revision: 2, runs: completed },
+				});
+				const repair = topics.recover({
+					subscriptionId: sub.ack.subscriptionId,
+					base,
+				});
+				expect(repair.ack.mode).toBe("resume");
+				repair.flush();
+				expect(frames.length).toBeGreaterThanOrEqual(3);
+				let snapshot = projection.snapshot();
+				let replayed = false;
+				for (const candidate of frames) {
+					const wire = baseline.conversationTopicWireFrameSchema.parse(candidate);
+					if (wire.kind !== "complete") throw new Error("Unexpected fragmented small workflow frame");
+					if (wire.frame.payload.kind === "snapshot") {
+						snapshot = wire.frame.payload.snapshot;
+						expect(snapshot.workflowRuns?.runs).toEqual(runs);
+					} else {
+						replayed = true;
+						snapshot = baseline.applyConversationDeltas(snapshot, wire.frame.payload.deltas);
+					}
+					expect(snapshot).not.toHaveProperty("dev");
+					expect(snapshot.workflowRuns?.runs.every(row => !("spec" in row))).toBe(true);
+				}
+				expect(replayed).toBe(true);
+				expect(snapshot.workflowRuns?.runs).toEqual(completed);
+			} finally {
+				topics.dispose();
+				projection.dispose();
+			}
+		},
+	);
 });

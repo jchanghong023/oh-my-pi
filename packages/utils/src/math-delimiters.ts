@@ -29,15 +29,43 @@ export interface MathBlock {
 	body: string;
 }
 
-// Display math blocks: opening `$$` / `\[` and closing `$$` / `\]` each alone on
-// their own line (≤3 leading spaces). Matched at the block level — before
-// paragraph/list parsing — so a multi-line equation (e.g. a matrix with `\\`
-// row breaks) survives as one unit and blank lines inside the block don't split
-// it. The own-line requirement leaves inline `$$…$$` inside prose to the span
-// grammar below. `\r?\n` at each line boundary keeps the grammar CRLF-safe for
-// direct callers; marked-fed renderers already normalize line endings first.
-const MATH_BLOCK_DOLLAR = / {0,3}\$\$[ \t]*\r?\n([\s\S]+?)\r?\n {0,3}\$\$[ \t]*(?:\r?\n|$)/y;
-const MATH_BLOCK_BRACKET = / {0,3}\\\[[ \t]*\r?\n([\s\S]+?)\r?\n {0,3}\\\][ \t]*(?:\r?\n|$)/y;
+// Display math blocks require delimiter-only lines with at most three leading
+// spaces. Scan offsets directly: sticky regexes are unavailable in legacy
+// browsers, and searching a failed suffix again for every opener is quadratic.
+function blockLineEnd(source: string, from: number, delimiter: MathBlockOpener | "\\]"): number {
+	let at = from;
+	while (at < from + 3 && source.charCodeAt(at) === 0x20) at++;
+	if (source.charCodeAt(at) !== delimiter.charCodeAt(0) || source.charCodeAt(at + 1) !== delimiter.charCodeAt(1)) {
+		return -1;
+	}
+	at += 2;
+	while (source.charCodeAt(at) === 0x20 || source.charCodeAt(at) === 0x09) at++;
+	if (source.charCodeAt(at) === 0x0d && source.charCodeAt(at + 1) === 0x0a) return at + 2;
+	if (source.charCodeAt(at) === 0x0a) return at + 1;
+	return at === source.length ? at : -1;
+}
+
+interface MathBlockMatch {
+	end: number;
+	bodyEnd: number;
+}
+
+function blockMatch(source: string, bodyStart: number, dollar: boolean): MathBlockMatch | undefined {
+	const closer = dollar ? "$$" : "\\]";
+	// The old body grammar was nonempty, even before its whitespace-only check.
+	for (
+		let newline = source.indexOf("\n", bodyStart + 1);
+		newline !== -1;
+		newline = source.indexOf("\n", newline + 1)
+	) {
+		const end = blockLineEnd(source, newline + 1, closer);
+		if (end !== -1) {
+			const bodyEnd = newline > bodyStart + 1 && source.charCodeAt(newline - 1) === 0x0d ? newline - 1 : newline;
+			return { end, bodyEnd };
+		}
+	}
+	return undefined;
+}
 
 /**
  * Leftmost offset at or after `from` where an opener could begin. A scan hint,
@@ -185,19 +213,24 @@ function spanOf(source: string, opener: MathOpener, bodyStart: number, closeAt: 
 
 /** The own-line display block starting at offset 0, or `undefined`. */
 export function mathBlockAt(source: string): MathBlock | undefined {
-	MATH_BLOCK_DOLLAR.lastIndex = 0;
-	MATH_BLOCK_BRACKET.lastIndex = 0;
-	return blockOf(MATH_BLOCK_DOLLAR.exec(source) ?? MATH_BLOCK_BRACKET.exec(source));
+	const dollarEnd = blockLineEnd(source, 0, "$$");
+	const dollar = dollarEnd !== -1;
+	const bodyStart = dollar ? dollarEnd : blockLineEnd(source, 0, "\\[");
+	if (bodyStart === -1 || source.charCodeAt(bodyStart - 1) !== 0x0a) return undefined;
+	return blockOf(source, 0, bodyStart, blockMatch(source, bodyStart, dollar));
 }
 
-/** The block a match of the block grammar describes; a whitespace-only body is no block. */
-function blockOf(match: RegExpExecArray | null): MathBlock | undefined {
-	return match === null || match[1].trim() === "" ? undefined : { raw: match[0], body: match[1] };
+/** The block a match describes; a whitespace-only body is no block. */
+function blockOf(
+	source: string,
+	from: number,
+	bodyStart: number,
+	match: MathBlockMatch | undefined,
+): MathBlock | undefined {
+	if (match === undefined) return undefined;
+	const body = source.slice(bodyStart, match.bodyEnd);
+	return body.trim() === "" ? undefined : { raw: source.slice(from, match.end), body };
 }
-
-// An own-line display opener line (`$$` or `\[` after up to 3 spaces), capturing
-// the opener and the line's end: "" when it is the source's unterminated last line.
-const MATH_BLOCK_OPENER_LINE_RE = / {0,3}(\$\$|\\\[)[ \t]*(\r?\n|$)/y;
 
 /**
  * {@link mathBlockAt} for many offsets of one `source`. An own-line opener
@@ -218,20 +251,21 @@ export class MathBlockScan {
 
 	/** The own-line display block starting at `from`, or `undefined`. */
 	at(from: number): MathBlock | undefined {
-		MATH_BLOCK_OPENER_LINE_RE.lastIndex = from;
-		const line = MATH_BLOCK_OPENER_LINE_RE.exec(this.#source);
+		// Keep the ToLength conversion previously performed by RegExp.lastIndex.
+		from = from > 0 ? Math.floor(from) : 0;
+		const source = this.#source;
+		const dollarEnd = blockLineEnd(source, from, "$$");
+		const dollar = dollarEnd !== -1;
+		const bodyStart = dollar ? dollarEnd : blockLineEnd(source, from, "\\[");
 		// An unterminated opener line opens no block.
-		if (line === null || line[2] === "") return undefined;
-		const dollar = line[1] === "$$";
+		if (bodyStart === -1 || source.charCodeAt(bodyStart - 1) !== 0x0a) return undefined;
 		if (from >= (dollar ? this.#unclosedDollarFrom : this.#unclosedBracketFrom)) return undefined;
-		const grammar = dollar ? MATH_BLOCK_DOLLAR : MATH_BLOCK_BRACKET;
-		grammar.lastIndex = from;
-		const match = grammar.exec(this.#source);
-		if (match === null) {
+		const match = blockMatch(source, bodyStart, dollar);
+		if (match === undefined) {
 			if (dollar) this.#unclosedDollarFrom = from;
 			else this.#unclosedBracketFrom = from;
 		}
-		return blockOf(match);
+		return blockOf(source, from, bodyStart, match);
 	}
 }
 
@@ -257,9 +291,9 @@ export function mathBlockInContext(context: { source?: string; end?: number }, s
  * `undefined`.
  */
 export function mathBlockOpenerAt(source: string, from = 0): MathBlockOpener | undefined {
-	MATH_BLOCK_OPENER_LINE_RE.lastIndex = from;
-	const line = MATH_BLOCK_OPENER_LINE_RE.exec(source);
-	return line === null ? undefined : line[1] === "$$" ? "$$" : "\\[";
+	from = from > 0 ? Math.floor(from) : 0;
+	if (blockLineEnd(source, from, "$$") !== -1) return "$$";
+	return blockLineEnd(source, from, "\\[") !== -1 ? "\\[" : undefined;
 }
 
 /**
@@ -272,21 +306,18 @@ export function mathBlockOpenerAt(source: string, from = 0): MathBlockOpener | u
  * start.
  */
 export function mathBlockMayCloseAt(source: string, from = 0): boolean {
-	MATH_BLOCK_OPENER_LINE_RE.lastIndex = from;
-	const line = MATH_BLOCK_OPENER_LINE_RE.exec(source);
-	if (line === null) return false;
+	from = from > 0 ? Math.floor(from) : 0;
+	const dollarEnd = blockLineEnd(source, from, "$$");
+	const dollar = dollarEnd !== -1;
+	const bodyStart = dollar ? dollarEnd : blockLineEnd(source, from, "\\[");
+	if (bodyStart === -1) return false;
 	// The opener's own line is still being written.
-	if (line[2] === "") return true;
-	const grammar = line[1] === "$$" ? MATH_BLOCK_DOLLAR : MATH_BLOCK_BRACKET;
-	grammar.lastIndex = from;
-	const match = grammar.exec(source);
+	if (source.charCodeAt(bodyStart - 1) !== 0x0a) return true;
+	const match = blockMatch(source, bodyStart, dollar);
 	// No closer line yet, or only on the last line, which is still being written.
-	if (match === null || (from + match[0].length === source.length && !match[0].endsWith("\n"))) return true;
-	return blockOf(match) !== undefined;
+	if (match === undefined || (match.end === source.length && source.charCodeAt(match.end - 1) !== 0x0a)) return true;
+	return blockOf(source, from, bodyStart, match) !== undefined;
 }
-
-// A display closer alone on its line, captured; the last line counts unterminated.
-const MATH_BLOCK_CLOSER_LINE_RE = /(?<=^|\n) {0,3}(\$\$|\\\])[ \t]*(?=\r?\n|$)/g;
 
 /**
  * Offset of the first line of `source`, from the line start `from` on, that
@@ -295,14 +326,20 @@ const MATH_BLOCK_CLOSER_LINE_RE = /(?<=^|\n) {0,3}(\$\$|\\\])[ \t]*(?=\r?\n|$)/g
  * line at which a block `opener` opened before `from` could close.
  */
 export function mathBlockCloserIndex(source: string, from: number, opener: MathBlockOpener): number | undefined {
+	from = from > 0 ? Math.floor(from) : 0;
 	const closer = opener === "$$" ? "$$" : "\\]";
-	MATH_BLOCK_CLOSER_LINE_RE.lastIndex = from;
-	for (
-		let line = MATH_BLOCK_CLOSER_LINE_RE.exec(source);
-		line !== null;
-		line = MATH_BLOCK_CLOSER_LINE_RE.exec(source)
-	) {
-		if (line[1] === closer) return line.index;
+	// A search resumed inside a line must not accept its indented suffix.
+	let at = from;
+	if (at > 0 && source.charCodeAt(at - 1) !== 0x0a) {
+		const newline = source.indexOf("\n", at);
+		if (newline === -1) return undefined;
+		at = newline + 1;
+	}
+	while (at < source.length) {
+		if (blockLineEnd(source, at, closer) !== -1) return at;
+		const newline = source.indexOf("\n", at);
+		if (newline === -1) break;
+		at = newline + 1;
 	}
 	return undefined;
 }

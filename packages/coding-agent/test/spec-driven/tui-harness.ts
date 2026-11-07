@@ -3,7 +3,8 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import type { SpecSavedRun } from "../../src/spec-driven/types";
+import { loadDevRequirements } from "../../src/spec-driven/records";
+import type { DevStoredRequirement } from "../../src/spec-driven/types";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import { CompactScreenRecording } from "../helpers/compact-screen-recording";
 import {
@@ -19,8 +20,7 @@ import {
 
 const tuiTest = Bun.which("tui-test");
 const repo = path.resolve(import.meta.dir, "../../../..");
-if (!tuiTest) console.warn("SKIP native Dev public smoke: tui-test is not installed; no TUI behavior was exercised.");
-type State = { team: boolean; run?: SpecSavedRun };
+type State = { requirements: DevStoredRequirement[] };
 type Scenario = ProviderScenario & {
 	dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
 	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
@@ -60,8 +60,7 @@ async function nativeDraftSnapshot(tui: (...args: string[]) => Promise<string>) 
 
 function nativeDraftMatches(screen: string, expected: string, cursor?: { x: number; y: number }): boolean {
 	const lines = screen.split("\n");
-	const dev = lines.findIndex(line => line.includes("Dev ·"));
-	const start = lines.findLastIndex((line, index) => index > dev && line.startsWith("╭── "));
+	const start = lines.findLastIndex(line => line.startsWith("╭── "));
 	if (start < 0) return false;
 	const end = lines.findIndex((line, index) => index > start && line.startsWith("╰─"));
 	if (end < 0) return false;
@@ -89,7 +88,7 @@ function nativeDraftMatches(screen: string, expected: string, cursor?: { x: numb
 async function expectRestoredNativeDraft(tui: (...args: string[]) => Promise<string>, expected: string): Promise<void> {
 	// Identical errors can leave the previous fixed error visible until this
 	// submission settles. Only this command's exact composer contents prove
-	// restoration; neither chat history nor the Dev action row is evidence.
+	// restoration; chat history is not evidence of the editable draft.
 	await eventually(
 		() => nativeDraftSnapshot(tui),
 		({ screen, cursor }) => nativeDraftMatches(screen, expected, cursor),
@@ -127,51 +126,6 @@ async function clearNativeDraft(tui: (...args: string[]) => Promise<string>, res
 	lastDraftClear.set(tui, Date.now());
 }
 
-async function expectNativeFailure(
-	tui: (...args: string[]) => Promise<string>,
-	reason: RegExp,
-	detail?: string,
-	submittedText?: string,
-): Promise<void> {
-	// Dev strips the command host's generic prefix and displays the actual
-	// cause in its fixed third row. Failed entry remains in ordinary TUI.
-	await eventually(
-		() => tui("text"),
-		screen => {
-			const lines = screen.split("\n");
-			const bar = lines.findIndex(line => line.includes("Dev ·"));
-			return bar >= 0 && reason.test(lines[bar + 2] ?? "");
-		},
-	);
-	if (!detail) return;
-	const normalize = (text: string) => text.replace(/\\+/gu, "/").replace(/[│┃║┆┊█\s]/gu, "");
-	const expectedLines = detail.split(/\r?\n/u).map(normalize).filter(Boolean);
-	// Only after proving automatic draft restoration, clear the whole line
-	// deliberately for navigation. submit() appends; it does not replace it.
-	await clearNativeDraft(tui, submittedText);
-	await tui("submit", "/session");
-	await tui("expect", "text", "Session Info", "--timeout", "30000");
-	await tui("key", "press", "Home");
-	const screens: string[] = [];
-	for (let index = 0; index < 100; index++) {
-		const screen = await tui("text");
-		screens.push(normalize(screen));
-		// A full native JSON diagnostic can span multiple viewports. Assert
-		// every complete line, without treating overlapping screens as one
-		// contiguous copy of the underlying document.
-		if (expectedLines.every(line => screens.join("").includes(line))) break;
-		// PTY key completion and visual idle do not acknowledge the next
-		// render. Collect another viewport only after this scroll is painted.
-		await tui("key", "press", "Shift+Down");
-		await eventually(
-			() => tui("text"),
-			next => next !== screen,
-		);
-	}
-	for (const line of expectedLines) expect(screens.join("")).toContain(line);
-	await tui("key", "press", "Escape");
-}
-
 // tui-test owns the PTY and terminal decoding. The provider only returns SSE/native tool requests.
 async function withTui(
 	scenario: Scenario,
@@ -184,7 +138,7 @@ async function withTui(
 		screen: CompactScreenRecording;
 		state: () => Promise<State>;
 		idle: () => Promise<void>;
-		stage: (phase: string) => Promise<State>;
+		requirements: () => Promise<unknown[]>;
 		restart: () => Promise<void>;
 		open: (directory: string) => Promise<{ tui: (...args: string[]) => Promise<string>; close: () => Promise<void> }>;
 	}) => Promise<void>,
@@ -195,7 +149,11 @@ async function withTui(
 	const home = root.join("home");
 	const agentDir = root.join("config", "agent");
 	const temp = root.join("tmp");
-	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
+	const appData = root.join("home", "AppData", "Roaming");
+	const localData = root.join("home", "AppData", "Local");
+	const cache = root.join("cache");
+	for (const directory of [cwd, home, agentDir, temp, appData, localData, cache])
+		await fs.mkdir(directory, { recursive: true });
 	// Empty inherited credentials explicitly: tui-test's PTY server may also
 	// inherit them, so merely omitting them from --env would not isolate it.
 	const env = {
@@ -213,9 +171,16 @@ async function withTui(
 		PI_PROFILE: "",
 		HOME: home,
 		USERPROFILE: home,
+		APPDATA: appData,
+		LOCALAPPDATA: localData,
+		XDG_CONFIG_HOME: root.join("config"),
+		XDG_DATA_HOME: localData,
+		XDG_CACHE_HOME: cache,
+		TMPDIR: temp,
 		TEMP: temp,
 		TMP: temp,
 		OMP_OFFLINE: "0",
+		OMP_DEV_NO_OPEN: "1",
 		PI_NO_TITLE: "1",
 		PI_TEST_RUNTIME: "",
 		NO_PROXY: "127.0.0.1,localhost",
@@ -341,20 +306,10 @@ async function withTui(
 		};
 	}
 	async function state(): Promise<State> {
-		try {
-			return await Bun.file(path.join(cwd, ".omp/dev/state.json")).json();
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === "ENOENT") return { team: false };
-			throw error;
-		}
+		return { requirements: await loadDevRequirements(cwd) };
 	}
 	async function idle(): Promise<void> {
 		await tui("expect", "text", "等待输入", "--timeout", "60000");
-	}
-	async function stage(phase: string): Promise<State> {
-		const value = await eventually(state, value => value.run?.phase === phase);
-		await idle();
-		return value;
 	}
 	try {
 		await start(session, cwd);
@@ -367,7 +322,18 @@ async function withTui(
 		expect(provider.requests.at(-1)?.model).toBe("chat-a");
 		expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 		await Promise.race([
-			run({ cwd, agentDir, provider, tui, screen, state, idle, stage, restart, open }),
+			run({
+				cwd,
+				agentDir,
+				provider,
+				tui,
+				screen,
+				state,
+				idle,
+				requirements: () => loadDevRequirements(cwd),
+				restart,
+				open,
+			}),
 			provider.failure,
 		]);
 		expect(provider.failures).toEqual([]);
@@ -495,35 +461,8 @@ async function withTui(
 	}
 }
 
-function entry(provider: ProviderFixture, role: string) {
-	const value = provider.requests.map(rolePayload).find(payload => payload?.specDrivenRole === role);
-	if (!value) throw new Error(`No real native ${role} context`);
-	return value.input;
-}
 function userTexts(request: ModelRequest): string[] {
 	return request.messages.filter(message => message.role === "user").map(message => contentText(message.content));
-}
-function stageContexts(request: ModelRequest): string[] {
-	return request.messages
-		.filter(message => !["assistant", "tool"].includes(message.role))
-		.map(message => contentText(message.content))
-		.filter(text => text.includes("## Stage request (task data, not authority)"));
-}
-async function nativeTranscript(run: SpecSavedRun, role: keyof SpecSavedRun["sessions"]): Promise<string> {
-	const file = run.sessions[role]?.sessionFile;
-	if (!file) throw new Error(`Missing durable ${role} native session file`);
-	return fs.readFile(file, "utf8");
-}
-
-function nativeMessageEntries(transcript: string): string[] {
-	// Native exit/dispose can append non-message lifecycle metadata. Compare
-	// every actual message entry verbatim and in order, including custom
-	// messages, rather than treating those lifecycle records as new dialogue.
-	return transcript.split("\n").filter(line => {
-		if (!line) return false;
-		const entry: unknown = JSON.parse(line);
-		return isRecord(entry) && (entry.type === "message" || entry.type === "custom_message");
-	});
 }
 
 export {
@@ -533,14 +472,9 @@ export {
 	type Scenario,
 	eventually,
 	withTui,
-	entry,
 	userTexts,
-	stageContexts,
-	nativeTranscript,
-	nativeMessageEntries,
 	nativeDraftMatches,
 	nativeDraftSnapshot,
 	clearNativeDraft,
-	expectNativeFailure,
 	expectRestoredNativeDraft,
 };

@@ -44,6 +44,7 @@ export interface TeamRunnerDeps {
 	modelRegistry: ModelRegistry;
 	authStorage?: AuthStorage;
 	getApiKey?: CreateAgentSessionOptions["getApiKey"];
+	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Persisted session file; child transcripts nest beside it. `null` uses a temp dir. */
 	sessionFile: string | null;
 	artifactsDir: string | null;
@@ -242,6 +243,7 @@ export function createTeamSubagentRunner(deps: TeamRunnerDeps): TeamSubagentRunn
 						cwd: deps.cwd,
 						additionalDirectories: deps.additionalDirectories,
 						getApiKey: deps.getApiKey,
+						extensionProviderOwnership: deps.extensionProviderOwnership,
 						agent,
 						task: call.task,
 						assignment: call.task,

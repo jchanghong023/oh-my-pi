@@ -116,6 +116,28 @@ export class ExtensionRuntimeNotInitializedError extends Error {
 	}
 }
 
+function sameInheritedProviderData(left: unknown, right: unknown): boolean {
+	// Rebinding allocates new closures; none replace the owner's original callbacks.
+	if (typeof left === "function" || typeof right === "function")
+		return typeof left === "function" && typeof right === "function";
+	if (Object.is(left, right)) return true;
+	if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+	if (Array.isArray(left) || Array.isArray(right))
+		return (
+			Array.isArray(left) &&
+			Array.isArray(right) &&
+			left.length === right.length &&
+			left.every((value: unknown, index: number) => sameInheritedProviderData(value, right[index]))
+		);
+	const a = left as Record<string, unknown>;
+	const b = right as Record<string, unknown>;
+	const keys = Object.keys(a).filter(key => a[key] !== undefined);
+	return (
+		keys.length === Object.keys(b).filter(key => b[key] !== undefined).length &&
+		keys.every(key => sameInheritedProviderData(a[key], b[key]))
+	);
+}
+
 /**
  * Extension runtime with throwing stubs for action methods.
  * These are replaced with real implementations during initialization.
@@ -123,12 +145,32 @@ export class ExtensionRuntimeNotInitializedError extends Error {
 export class ExtensionRuntime implements IExtensionRuntime {
 	flagValues = new Map<string, boolean | string>();
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; sourceId: string }> = [];
+	readonly inheritedProviderOwnership: boolean;
+	readonly #inheritedProviders?: ReadonlyMap<string, ReadonlyMap<string, unknown>>;
+	constructor(inheritedProviders?: ReadonlyMap<string, ReadonlyMap<string, unknown>>) {
+		this.#inheritedProviders = inheritedProviders;
+		this.inheritedProviderOwnership = inheritedProviders !== undefined;
+	}
 
 	registerProvider(name: string, config: ProviderConfig, sourceId: string): void {
+		if (this.#inheritedProviders) {
+			const declarations = this.#inheritedProviders.get(sourceId);
+			if (!declarations?.has(name) || !sameInheritedProviderData(declarations.get(name), config))
+				throw new Error(
+					`Inherited provider ${name} cannot be added or redefined by this helper; scoped provider mutation is unavailable.`,
+				);
+			// This is replay of the owning factory's declaration, not a new registration.
+			// Keep the owner's original callbacks and configuration in the same registry.
+			return;
+		}
 		this.pendingProviderRegistrations.push({ name, config, sourceId });
 	}
 
 	unregisterProvider(name: string): void {
+		if (this.inheritedProviderOwnership)
+			throw new Error(
+				`Inherited provider ${name} cannot be unregistered by this helper; scoped provider mutation is unavailable.`,
+			);
 		const remaining = this.pendingProviderRegistrations.filter(registration => registration.name !== name);
 		this.pendingProviderRegistrations.splice(0, this.pendingProviderRegistrations.length, ...remaining);
 	}

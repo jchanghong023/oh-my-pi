@@ -80,7 +80,7 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 
 **OMP 附加能力与方法契约**
 
-本节说明当前 OMP 适配层已有的附加 wire，不改变上述固定基线、既有方法／字段／枚举或版本。`runtime/capabilities` 分别以 `ompProfiles`、`ompTan`、`ompTeam`、`ompIndexes`、`ompSkillManagement`、`ompSpecDriven` 宣布下列能力；Team／role 配置另由 `ompConfiguration` 宣布，不能将运行观测与配置能力互相替代。客户端仅在对应能力为 `true` 时开放入口，缺失时明确不支持，不直接读写执行端配置或另造调用。
+本节说明当前 OMP 适配层已有的附加 wire，不改变上述固定基线、既有方法／字段／枚举或版本。`runtime/capabilities` 分别以 `ompProfiles`、`ompTan`、`ompTeam`、`ompIndexes`、`ompSkillManagement` 宣布下列能力；Team／role 配置另由 `ompConfiguration` 宣布，不能将运行观测与配置能力互相替代。客户端仅在对应能力为 `true` 时开放入口，缺失时明确不支持，不直接读写执行端配置或另造调用。
 
 字段及严格校验直接引用以下当前源码，方法名由 `server.ts` 分发；本地声明不是对 vendored schema 的修改。以下路径均相对本仓 `packages/coding-agent/src/`：
 
@@ -91,7 +91,6 @@ OMP 新增的是 ZCode 现有协议的兼容实现，不是另外设计一套 Ap
 | `ompTeam` | `omp/team` 的 `list`／`read`／`stop` action；`modes/zcode/team.ts` 的 `handle` 字段校验、`OmpTeamRun`、`OmpTeamNode`、`OmpTeamEdge` |
 | `ompIndexes` | `omp/wiki/list`、`init`、`remove`、`search`、`grep`、`cancel`；各 action 均加 `omp/wiki/` 前缀，参数见 `modes/zcode/indexes.ts` 的 `ompKnowledgeParamsSchema` |
 | `ompSkillManagement` | `skills/manage` 的 `list`／`refresh`／`setEnabled` action；`modes/zcode/catalogs.ts` 的 `zcodeSkillsManageParamsSchema`、`zcodeSkillsManageResultSchema` |
-| `ompSpecDriven` | 会话订阅与运行查询的 `includeSpecDriven:true`、`v4/conversation/workflowRuns` 的 `runId` 过滤及 `sendText` 的 `specRun` 准入绑定；见 `modes/zcode/schema/omp-spec-extension.ts` |
 
 - 上述 workspace 对象复用 `LegacyProtocol.zcodeWorkflowsListParamsSchema.shape.workspace`，不是新的身份格式。外层沿用既有 stdio 请求 ID、result／error 信封；数字协议错误码原样保留，字符串业务码放在数字 `error.code:-32000` 的 `error.data.code`，已知业务 data／回执不得丢失。无专用数字码的校验或业务异常按当前分发器返回 `-32602`，客户端不凭消息文本推断成功、取消或可自动重试。
 - 全部请求受既有启动 ready 门禁与进程生命周期约束；owner EOF 关闭本进程资源，不增加 shutdown／exit 方法。attachment／详情关闭只释放原订阅，不等于关闭原生运行 owner。附加查询不改变 desktop-continuous／web-remote-replayable 的快照与恢复语义，也不把临时响应当作持久执行事实。
@@ -144,7 +143,7 @@ OMP MUST 以写入时记录的完整快照实现工作区文件回退，只回�
 - 预览逐文件核对当前内容：与最后快照哈希不一致标 `external_modified`，读取失败标 `file_read_failed`，符号链接或非普通文件标 `unsupported_checkpoint`；`canApply` 仅在存在安全文件且没有任何不安全文件时为真，已回退目标再次预览不可应用。
 - 应用前重新预览，条件变化返回 `applied:false` 与原因，不部分回退。确认后按规范路径互斥锁恢复（跨会话共享同一文件锁）；只接受完整已知 UTF-8 快照，符号链接路径、父目录重定向、硬链接、非普通文件、Windows 备用数据流、重复路径与非法 UTF-8 一律拒绝（`unsafe_path`、`path_redirected`、`duplicate_path`、`invalid_utf8_checkpoint`）。进程外写入不受该锁约束，提交无法确认时报 `unknown`，不自动回滚。
 - 成功后追加 `workspace-file-rewind` 自定义条目（目标 `entryId`／`entityId`、逐文件 receipt 与 `restored`／`unchanged`／`rejected`／`unknown` 状态）并 flush，文件变更与索引失效沿用 write／edit 的既有通知。
-- 回退不调用模型、不新建会话、不截断或重写消息历史，也不改变 Dev 工作流 `drop` 及既有文件恢复的语义。
+- 回退不调用模型、不新建会话、不截断或重写消息历史，既有文件恢复语义不变。
 
 #### Scenario: 预览发现文件已被外部修改
 
@@ -438,75 +437,10 @@ ZCode 子代理投影须覆盖配置／模型隔离、真实派生与父问答�
 - Host 的会话创建期 Memory 偏好须落实到该会话的原生 OMP backend，活动会话不随设置开关热切换。消息 ACK 与执行 telemetry 使用实际采用值；记忆文件与读写跟随 OMP backend，不复制旧 ZCode Memory 数据库或假造 Extraction 结果。不把旧数据库布局当 OMP 状态来源。
 - 会话内定时任务复用既有 Host `automation/create` 等反向协议与 Host 持久调度所有者；适配器仅注册真实工具、校验并转交显式会话上下文及实际结果。调度触发轮禁止再创建／修改调度，取消后不提交迟到结果；不在 OMP 再建第二份调度队列。
 
-**原生 dev 接入合同**
-
-本节仅使已有 Dev 后端接入与[协同开发契约](../spec-driven-orchestration/spec.md)一致，复用当前已有工作区及原生阶段会话，不为 Dev 创建工作树。工作区唯一性、原有六个命令及显式业务动作、含可选业务的阶段角色、仅 Team 配置、原生聊天与 Goal、批准、停止及必要状态恢复均以该契约为权威。TUI 的唯一新增常驻显示为三行 Dev 固定区，其余显示、详情和配置复用原生 OMP 交互，不另建 Dev 界面体系；本轮不新增桌面 UI 或平行工作流；业务角色来自同一原生 Dev，不新增桌面专属阶段。既有动态工作流合同保持不变，不能借其恢复机制接管 Dev，后端成功不代表桌面 UI 已验收。
-
-**复用与兼容**
-
-- 翻译、路由及投影仍集中在 `packages/coding-agent/src/modes/zcode/`，消费当前工作区同一原生 Dev 控制者的事实和变化；不让会话核心依赖 ZCode schema，不调用动态工作流引擎或制造 `CreateWorkflow`、虚假 `toolCallId`、脚本节点来模拟阶段，不另建状态机、执行队列或批准 API。
-- 查询优先复用既有 `workflows/runs`、`v4/conversation/workflowRuns`、`workflowRunArtifacts`／`workflowRunArtifactRead` 记录和读取形态，沿用语义相符的 Markdown／JSON 展示，不把 Dev 存成可启动的动态工作流定义或模板。
-- 既有字段不足时仅增加必要、可选且显式 capability 协商的事实扩展，由现有 schema、生产者与消费者共同落实，不新增另一组执行 API；旧客户端不接收未知字段／枚举，既有动态工作流响应及订阅保持原形。能力协商不是缩减后端必需事实的开关，完整消费者可获取全部真实材料和操作事实，不伪造任务完成数、审查配额、证据引擎或成功。
-
-**身份、查询与订阅**
-
-- 传输路由继续使用既有 `workspaceIdentity?.trim() || workspacePath` 及远端 `remoteSessionId`，请求和消息绑定显式原生会话及流程身份，不成为第二套 Dev 隔离单位。工作区由执行端识别当前已有目录或 Git 工作树，同一工作树的别名、子目录或不同普通会话不得各建流程，分支变化不产生另一流程，不同已有工作树互不影响；Dev 及内部协作不得创建工作树或要求工作树隔离前置。
-- 每次成功 `new` 对应独立流程身份；仅进入 Dev、恢复、读取配置或详情不创建新流程。恢复有效工作区状态继续原流程，不以 change 名、显示名、协议请求 ID 或工具调用身份代替流程身份，不覆盖不同流程历史，也不从旧聊天推测批准。
-- 列表、详情和订阅投影同一真实截面，角色仅无代理、业务、需求、方案、计划、执行，忙碌、错误及停止依据当前原生运行事实显示，验收、收尾和完成结果保留必要业务约束，不为业务交付完成或软件验收另增代理角色。只呈现已保存 Team 值，配置可修改性和按钮可用性依据阶段及实际运行推导，不另存冻结、采用配置、忙碌或临时错误副本；仅有配置不是损坏或已有流程，Team 开启不表示讨论正在运行，不新增 Dev Goal 开关或状态。
-- 保留 revision／seq／snapshot 及 desktop-continuous、web-remote-replayable 各自订阅恢复语义，不发明第三条恢复流；退订、关闭详情或切换查看目标仅释放观察，不因此退出 Dev 或释放其控制权。实际会话管理和工作目录变更须由原生准入确保先成功退出 Dev，不能用查看目标切换绕过这一规则。
-- 同工作区已有控制者时其他入口拒绝接管和配置修改，原生进入失败保留原会话及输入；停止、保存、释放或旧工作收尾失败投影真实原因，不把占用判成恢复损坏。不同工作区及无关普通会话仍正常运行，迟到结果不得污染其他流程或会话。
-
-**原生操作与产物读取**
-
-- Dev 操作继续走既有 `sendText` → builtin 或等价原生链路，保留协同开发契约的原有六个入口及显式业务起步、仅业务结束动作，先进入后操作。其他旧 Dev 命令及批准参数从注册、路由、补全、帮助、界面动作和相关提示词中彻底删除，不保留别名、兼容处理或专属迁移提示；旧命令与未知子命令同样拒绝，不交给模型。目录、可用性、用法和输出与原生同源，不在适配层重建允许表，不删除普通 OMP 原生命令。
-- `/dev config` 仅查看及保存工作区的 Team 开关，复用原生命令交互或如实说明界面限制，不由客户端直接写执行端状态；成员配置继续沿用原生 Team 作用域，不建立平行通用配置。配置及动作可用性由原生 owner 按阶段、运行事实及控制权判断，不持久化冻结或按钮状态，不能因协议可达绕过限制。
-- 执行默认正常执行，用户可通过当前执行会话的原生能力手动开启 Goal，仍受获批计划、批准版本及验收收尾限制；这不是新增 Dev 入口或外层阶段。Dev 不按聊天轮次创建、删除、重建或改写 Goal，不在 Dev 状态和投影持久层另存 Goal 状态，恢复 Dev 不自动启动 Goal；原生 Goal 自身状态及生命周期仍由原生所有者管理。
-- 每次控制动作绑定提交时的工作区控制者、流程、阶段及真实版本依据；开发产物结构检查集中于 `next`，业务文档检查仅发生在用户选择业务阶段 `next` 或仅业务结束时，正常澄清不因文件未生成报错或自动切阶段。继续依赖批准前仅核对本流程正式材料的已有版本，检查返回结果而不直接改阶段，准入拒绝过期依赖；不自动检测业务代码或整个工作区的变化，不要求用户手抄版本。普通澄清、补充和范围内修复直接交当前原生会话，不经外层模型转发、不广播 Team 成员、不把“同意”当批准或仅业务完成；冲突动作不延迟形成额外批准或重复收尾。
-- 原生问答可复用既有 pending interaction，不编造工具调用或把阶段决定当工具授权；ACK 只表示真实 admission，不证明保存、配置修改、阶段切换、停止、验收收尾或软件交付已成功。停止请求必须等原生 owner 确认自有调用及后代结清，不因主 Agent 回复结束推断 Team／Goal 已停。
-- 消息、输入、附件、队列、草稿、历史、压缩、停止及其回执完全来自所属原生阶段会话，绑定流程、阶段及 Agent；Dev 不另建消息队列、草稿副本、消息处理状态机或持久收据状态。旧阶段输入及迟到结果不转交新阶段；退出与 drop 共用原生停止结清流程，涵盖当前 Agent、Team、Goal 及自有任务，未结清拒绝切换，不在 Host／GUI 另建调度真值。
-- 直接投影真实阶段原生消息和工具事件，不复制到父会话后重新输出，不解析聊天摘要推导批准或运行，不将状态和错误摘要反复追加为聊天；流程状态和完整材料单独呈现，不因 TUI 截断状态文本裁剪后端材料。
-- 产物身份、媒体类型及字节版本覆盖本流程实际启用的业务需求文档、原 proposal／增量、全部方案候选、推荐 ID 及所选 ID、原格式计划和完成报告；开发链的单能力变更仍有五个正式文件，业务启用时另有业务文档，方案、计划和报告保留在 `docs/superpowers/plans/`。仅阶段进入完整交接，同阶段追问不重复注入全部未变文件；Team 只在进入方案时启动，失败后结清，再经 `back`、`next` 重入，不增加同阶段 Team 重跑或专用重试机制。除实际启用的业务需求文档外，不得新建 design／tasks、交接、确认、逐任务状态文件或材料全文副本。
-- 只读访问限于流程实际记录的产物及引用，保留路径和归属限制；缺失、不可读或版本未知返回真实缺口，不补建或伪造成功。原生归档已确认的正常路径搬移不属于外部失配或丢失，查询、恢复和重试使用实际归档结果定位同一材料，不重建原 change 目录或重复归档；不因文件可读、报告存在或材料版本一致而声称业务代码未变或测试通过。
-
-**历史观测与显式恢复**
-
-- 历史查询、产物读取及订阅重连只读取真实观测，不创建阶段 AgentSession、取得工作区控制权或写权限、重新武装批准或启动模型，不借动态工作流 journal 恢复入口接管 Dev。
-- 失去 live owner 的最后运行观测不等于仍在运行或已成功；已确证终态可保留，其余显示历史、中断或当前事实不可用，不伪装 running 或因留存材料自动恢复。
-- 用户显式进入 Dev 时才交原生工作区控制逻辑取得唯一控制权并恢复必要业务事实：阶段、Team 配置、变更与产物身份、方案选择、原生会话关联、批准原文和版本、必要验收及收尾信息；可由既有引用取得的信息不重复保存，不另存忙碌、临时错误、队列、正文或 Goal 状态。有效状态继续同一流程，聊天缺失不直接删除有效流程；配置可修改性和动作按恢复后阶段及实际运行重新推导，版本检查不直接改阶段。恢复不自动发送输入、重放工具、重跑 Team 或启动 Goal，主动继续不构成阶段批准。
-- 确实不可恢复、清除、旧任务收尾及部分同步归档等事实由原生 owner 投影，不从历史视图触发清除、猜测批准或伪造可新建。仅业务结束、最终验收及 `drop` 遵守同一协同开发契约；收尾自动版本检查仅覆盖本流程实际启用并已确认的业务文档、正式需求材料、方案、计划及完成报告，不新增业务代码清单、快照或全工作区变化检测。
-- 执行阶段最终 `next` 仅由用户提交，原生程序直接同步、校验和归档，不调用模型、不委派执行代理或增加收尾代理。失败时保留同一执行会话、历史及实际进度，真实错误与详情可供用户和当前执行代理读取；用户仍可经已有原生输入通路对话，一般提问只读，明确修复仅允许不改变已验收内容的直接收尾故障。执行代理不得自行验收、提交 `next` 或运行同步归档；修复后用户再次 `next`，程序只完成剩余收尾，不重新验收、重跑业务任务或重启 Goal，不为此新增命令、协议方法、消息系统或持久错误副本。
-
 #### Scenario: 多会话与消息的可观察行为
 
 - **WHEN** 一个会话等待问答，另一个会话继续消息与工具
 - **THEN** 两者在同一进程独立推进，结果和停止只归属各自会话
-
-#### Scenario: 不同普通会话不能创建同工作树并行 Dev
-
-- **WHEN** 通过两个普通会话或两个实例操作同一工作树的 Dev
-- **THEN** 执行端识别同一工作区并执行唯一流程及控制权门禁；非控制者无法创建、推进、清除或修改配置，路由会话不同不绕过限制，无关工作区和普通会话不受影响
-
-#### Scenario: 查询不恢复而显式进入可恢复
-
-- **WHEN** 无 live Dev owner 时先冷读历史，随后用户明确进入 Dev
-- **THEN** 冷读不取得控制权、不创建阶段会话、不恢复批准或执行；明确进入才依据有效必要业务状态恢复同一流程和 Team 配置，核对批准版本并重新推导动作及配置可修改性，不恢复冻结、忙碌、错误或消息队列副本，不自动启动模型、Team 或 Goal
-
-#### Scenario: 命令与配置投影服从原生准入
-
-- **WHEN** 客户端提交 Dev 控制或配置操作
-- **THEN** 使用同一新命令语义及原生阶段、配置、版本和工作结清门禁，旧 Dev 命令无可调用或兼容入口，提交时按未知子命令拒绝；ACK 不代替成功事实，冲突操作不延迟排队为下一阶段批准
-
-#### Scenario: 普通追问复用原生阶段会话
-
-- **WHEN** 客户端在同一 Dev 阶段继续澄清、补充或请求批准范围内修复
-- **THEN** 原生会话直接接收本次输入及支持的附件，消息和工具事件直接投影，不复制父会话回复、不重复交接未变化的全部材料、不重跑 Team，也不按聊天轮次重建 Goal；仍受批准版本及当前验收收尾约束
-
-#### Scenario: 可选业务与直接需求入口同源
-
-- **WHEN** 协商了相应 Dev 观测能力的客户端在已进入的 Dev 中选择业务起步，或使用原有 `/dev new` 手动提供业务文件直接从需求开始
-- **THEN** 适配层 MUST 投影原生 owner 实际采用的角色、会话、动作和材料；业务阶段支持 Grill-me 对话及真实知识检索工具事件，直接需求起步不补造业务会话、模板校验或业务阶段批准
-- **AND** 业务阶段的 `next` 和仅业务结束均由同一原生控制者检查当前材料版本及工作结清，不新增执行或批准 API，不从聊天文本或 ACK 推断成功
-- **AND** 业务文档以独立正式材料身份读取，不混入开发规格或用摘要代替原文；新增角色及必要事实仍遵守显式能力协商，未协商的既有客户端不接收未知字段或枚举
 
 ### Requirement: 会话级 MCP 供给与启动校验
 
@@ -617,34 +551,6 @@ OMP MUST 支持为单次执行临时绑定模型与请求级认证，并在该�
 
 - **WHEN** 某次执行携带请求级认证
 - **THEN** 该次请求完成后凭据不留在凭据存储或设置文件中，后续请求按原解析结果使用认证
-
-### Requirement: Dev 运行注册表与冷查询观测
-
-OMP MUST 为每个原生 Dev 流程维护只含身份与版本索引的运行注册表，使无 live owner 的冷查询仍可读取真实阶段、Team 开关与材料就绪度。
-
-#### Scenario: Dev 运行注册表的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- 注册表文件 MUST 位于工作区 `.omp/spec-sessions/<runId>/zcode.json`，`format` 为 `2`，内容含 `storage`、`sourceFile`、`workspaceIdentity`、`remoteSessionId`、`runId`、`sessionId`、`cwd`、`changeId`、`phase`、本流程实际入口及必要的仅业务交付结果、`archivedChangePath`、`closing`、`awaitingAcceptance`、`generation`、时间戳与 `artifacts[{versions:[{version,digest,bytes,sourceVersion}]}]`。
-- `runId` MUST 只允许 `[a-zA-Z0-9_-]+`，且目录路径 MUST 受包含校验限制在工作区内；不合法身份或越界路径 MUST 拒绝读取与写入。
-- 冷查询的 `useTeam` MAY 回退读取 `.omp/dev/state.json`，且仅当该文件 `version` 为 `1`、`team` 为布尔值且 `run.runId` 与当前 run 一致时采用。
-- 运行状态 MUST 只取 `completed`、`running`、`stopped`；失去 live owner 且没有已确认完成事实的运行 MUST 以 `stopReason:"interrupted"` 结算，MUST NOT 显示为仍在运行。
-- 观测状态 MUST 由运行事实推导：已归档且阶段结束，或已由原生 owner 确认完成仅业务交付，为 `terminal`，无 owner 或被阻断为 `blocked`，等待验收为 `waiting`，其余为 `active`。
-- 材料就绪度 MUST 为 `present`、`missing`、`not_generated`、`unreadable`、`unknown` 之一：哈希与最新版本一致为 `present`，有版本但文件缺失为 `missing`，从未生成且无构建版本为 `not_generated`，读取或解析失败为 `unreadable`，其余为 `unknown`。
-- 注册表 MUST 只采样材料摘要与哈希，MUST NOT 复制材料正文、逐任务状态、消息或执行队列；确认、阶段决定与批准原文仍由原生流程与产物文件拥有。
-
-#### Scenario: owner 消失后的冷查询
-
-- **WHEN** 读取一个没有 live owner、未归档且没有仅业务交付完成事实的 Dev 运行
-- **THEN** 该行显示为 stopped 且 `stopReason:"interrupted"`，状态为 blocked，材料就绪度按实际文件与版本哈希判定
-
-#### Scenario: 仅业务交付结束后的冷查询
-
-- **WHEN** 原生 owner 已成功记录仅业务交付完成，之后关闭或退出 owner，再冷查询该流程及业务文档
-- **THEN** MUST 按真实业务交付结果显示 `completed` 和 `terminal`，不因没有开发变更归档路径而改判 `interrupted`，也不宣称开发、测试或软件验收已完成
-- **AND** 文档就绪度继续依据真实文件、捕获字节版本及哈希判定；历史读取不创建需求 Agent、不重新激活已结束流程，也不执行需求同步或归档
 
 ### Requirement: 工作流沙箱进程入口
 
@@ -925,13 +831,13 @@ OMP MUST 走同一 slash 注册与处理链，保留参数、取消和会话身�
 - **WHEN** 本节所述功能在适用条件下运行
 - **THEN** 以下具体约束适用：
 
-保留完整真实命令目录、命令名与参数补全；动态参数候选复用现有 OMP 补全器。名称、别名、说明和用法来自目标工作区当前 OMP 注册信息，不维护人工白名单；不提供命令专属表单。
+保留完整真实的非 Dev 命令目录、命令名与参数补全；动态参数候选复用现有 OMP 补全器。名称、别名、说明和用法来自目标工作区当前 OMP 注册信息，不维护人工白名单；不提供命令专属表单。
 
 ZCode 对仅支持终端的操作返回明确不支持；其他命令的输出与错误从原生处理结果投影，不由桌面层重解释。
 
 **必须接入的命令**
 
-app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原生内置命令及其合法参数，不以此文档的示例命令限制实际目录。使用既有 `createSession.firstInput.text`、`sendText.text` 与交互应答，除 Dev 准入绑定（`sendText.specRun`）外不新增逐命令接口、参数字段或协议版本；ZCode 不复制参数解析、校验或业务逻辑。新增普通内置命令应由实际目录发现并复用同一提交路径，无需增加 ZCode 命令分支。下列已有命令的业务合同继续有效，但不得据旧本地解析拦截实际注册的命令。
+app-server 的同进程入口须通过通用提交支持全部非 Dev、非 TUI 专属的原生内置命令及其合法参数，不以此文档的示例命令限制实际目录。使用既有 `createSession.firstInput.text`、`sendText.text` 与交互应答，不新增逐命令接口、参数字段或协议版本；ZCode 不复制参数解析、校验或业务逻辑。新增普通内置命令应由实际目录发现并复用同一提交路径，无需增加 ZCode 命令分支。下列已有命令的业务合同继续有效，但不得据旧本地解析拦截实际注册的命令。
 
 - app-server 直接调用目标会话的 prompt／命令业务入口，复用同一注册表的命令、别名与补全，不另维护人工目录。已识别但仅限 TUI 的命令必须明确拒绝，不能原样交给模型。
 - 原生 custom command 以 `void`／空串完成、不产生模型正文时，在真实处理完成的原生 admission 边界记录受理并返回 accepted；原处理器已消费并展示的错误仍保留其真实输出，不将 accepted 解释为业务成功。返回非空 prompt 的命令继续在原 prompt／queue 边界准入，未知、取消或未完成的处理不能提前接受；同 commandId 沿用既有 ledger 去重。
@@ -990,42 +896,6 @@ app-server 的同进程入口须通过通用提交支持全部非 TUI 专属原�
 
 - **WHEN** 客户端在带引号或转义空格的参数中间请求补全
 - **THEN** 返回该命令的动态候选，并按解析出的 token 边界替换，不破坏其余参数
-
-### Requirement: Dev 观测的能力协商与查询过滤
-
-Dev 观测 MUST 只在客户端声明能力时出现，缺席时 MUST 完全剥离；逐命令入口只保留材料版本准入绑定这一例外。
-
-#### Scenario: Dev 观测协商的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- `runtime/capabilities` MUST 增列 `ompSpecDriven`；客户端只在为 `true` 时开放 Dev 观测入口。
-- 会话订阅与运行查询 MUST 支持 `includeSpecDriven:true`；`v4/conversation/workflowRuns` MUST 支持 `runId` 过滤。
-- 未声明 `includeSpecDriven` 时 MUST 剥离 Dev 交互状态与带 spec 的运行行，既有动态工作流响应保持原形。
-- `sendText.specRun`（`runId`、`generation`、`phase`、`files[path,version]`、可选 `actionId`）是本协议唯一的逐命令字段例外；携带时执行协议附加绑定校验，绑定过期、run 或阶段不符、文件哈希不符时 MUST 拒绝输入。未携带时 MUST NOT 因缺少该字段拒绝旧客户端，也不执行该附加绑定校验。
-- 旧客户端不发送该字段，其既有协议字段及默认行为保持不变；无论是否携带，所有客户端仍受原生 Dev 控制权、阶段及批准版本准入守卫约束，缺席 MUST NOT 绕过或放宽这些原生守卫。
-- Dev 观测 MUST NOT 改变既有方法、通知、信封或版本语义。
-
-#### Scenario: 材料版本过期时拒绝 Dev 输入
-
-- **WHEN** 客户端携带的 `specRun.files` 与实际材料哈希不一致
-- **THEN** 输入以材料绑定过期原因拒绝，不送达模型也不改变阶段
-
-### Requirement: Dev 材料版本域
-
-OMP MUST 只放宽基线 `workflowRunArtifact*` 的 `version` 数值域，不改变材料身份、元数据与字节读取边界；Dev 的不可变捕获不受脚本引擎的发布次数上限约束。
-
-#### Scenario: 版本历史超过基线发布上限
-
-- **WHEN** 同一材料的不可变捕获产生的版本数超过基线 `versions` 的 16 条上限，客户端随后读取该材料
-- **THEN** 新版本 MUST 正常写入并保留在 `versions` 中，MUST NOT 按 16 条裁剪或淘汰最旧版本；读取 MUST 返回真实写入的全部版本
-- **AND** `version` MUST 为不超过 `Number.MAX_SAFE_INTEGER` 的正整数，`versions` 元素结构与身份、元数据、字节读取范围上限 MUST 与基线一致
-
-#### Scenario: 版本域之外的取值被拒绝
-
-- **WHEN** 客户端请求的 `version` 为零、负数、非整数或超过 `Number.MAX_SAFE_INTEGER`
-- **THEN** 请求以协议校验错误拒绝，不返回材料字节
 
 ### Requirement: 范围与验收
 

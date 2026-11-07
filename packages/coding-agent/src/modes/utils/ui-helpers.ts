@@ -250,14 +250,9 @@ export class UiHelpers {
 	#chatRenderedBeforeReplay = false;
 	/** Queues belong to the session that accepted them, even when a queued command changes the view. */
 	readonly #parkedCompactionQueues = new WeakMap<AgentSession, CompactionQueuedMessage[]>();
-	#compactionEmptyView = false;
 
-	noteCompactionBindingChange(emptyView: boolean): void {
-		this.#compactionEmptyView = emptyView;
-	}
-
-	async restoreCompactionQueue(session: AgentSession, emptyView: boolean): Promise<void> {
-		if (emptyView || this.ctx.session !== session) return;
+	async restoreCompactionQueue(session: AgentSession): Promise<void> {
+		if (this.ctx.session !== session) return;
 		const parked = this.#parkedCompactionQueues.get(session);
 		if (!parked?.length) return;
 		this.#parkedCompactionQueues.delete(session);
@@ -1371,7 +1366,6 @@ export class UiHelpers {
 		onQueued: (queued: readonly AgentMessage[]) => void,
 	): Promise<boolean> {
 		const owner = this.ctx.session;
-		const emptyView = this.#compactionEmptyView;
 		let builtin: string | boolean;
 		try {
 			builtin = await executeBuiltinSlashCommand(message.text, {
@@ -1383,23 +1377,17 @@ export class UiHelpers {
 				draftDetached: message.draftDetached,
 			});
 		} catch (error) {
-			if (
-				this.ctx.session !== owner ||
-				this.#compactionEmptyView !== emptyView ||
-				!message.draftDetached ||
-				parseSlashCommand(message.text)?.name !== "team"
-			)
+			if (this.ctx.session !== owner || !message.draftDetached || parseSlashCommand(message.text)?.name !== "team")
 				throw error;
 			restoreDetachedDraft(this.ctx.editor, message.text, message.images, message.imageLinks);
 			this.ctx.showError(error instanceof Error ? error.message : String(error));
 			return true;
 		}
 		if (builtin === true) {
-			if (this.ctx.session === owner && this.#compactionEmptyView === emptyView)
-				this.#parkLoopOnLocalConsume(message.text, false);
+			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, false);
 			return true;
 		}
-		if (this.ctx.session !== owner || this.#compactionEmptyView !== emptyView) {
+		if (this.ctx.session !== owner) {
 			throw new Error("The queued message's session changed before delivery");
 		}
 		if (typeof builtin === "string") {
@@ -1408,12 +1396,11 @@ export class UiHelpers {
 				images: message.images,
 				onPromptQueued: onQueued,
 			});
-			if (this.ctx.session === owner && this.#compactionEmptyView === emptyView)
-				this.#parkLoopOnLocalConsume(message.text, forwarded);
+			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
 		if (isKnownSkillCommand(this.ctx, message.text)) {
-			// Skill loading can await while Dev changes the view; keep its dispatch on the accepting session.
+			// Skill loading can await a session change; keep dispatch on the accepting session.
 			const skillHost = Object.create(this.ctx) as InteractiveModeContext;
 			Object.defineProperty(skillHost, "session", { value: owner });
 			if (
@@ -1429,8 +1416,7 @@ export class UiHelpers {
 		if (this.ctx.isKnownSlashCommand(message.text)) {
 			// No `streamingBehavior`: this prompt never queues (a busy session rejects it).
 			const forwarded = await owner.prompt(message.text);
-			if (this.ctx.session === owner && this.#compactionEmptyView === emptyView)
-				this.#parkLoopOnLocalConsume(message.text, forwarded);
+			if (this.ctx.session === owner) this.#parkLoopOnLocalConsume(message.text, forwarded);
 			return !forwarded;
 		}
 		await this.ctx.withLocalSubmission(
@@ -1480,8 +1466,7 @@ export class UiHelpers {
 		}
 
 		const owner = this.ctx.session;
-		const emptyView = this.#compactionEmptyView;
-		const isOwnerVisible = () => this.ctx.session === owner && this.#compactionEmptyView === emptyView;
+		const isOwnerVisible = () => this.ctx.session === owner;
 		const ownerQueue = () =>
 			isOwnerVisible() ? this.ctx.compactionQueuedMessages : (this.#parkedCompactionQueues.get(owner) ?? []);
 		const setOwnerQueue = (messages: CompactionQueuedMessage[]) => {

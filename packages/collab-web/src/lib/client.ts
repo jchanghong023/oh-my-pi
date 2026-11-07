@@ -17,11 +17,15 @@ import type {
 	AgentSnapshot,
 	AssistantMessage,
 	CollabUiRequest,
+	ComposerPort,
+	GuestFrame,
 	CollabUiResponseValue,
 	HostFrame,
+	ImageContent,
 	SessionEntry,
 	SessionHeader,
 	SessionState,
+	SubmitResult,
 	SubagentLifecyclePayload,
 	SubagentProgressPayload,
 } from "@oh-my-pi/pi-wire";
@@ -83,6 +87,10 @@ const SNAPSHOT_PROGRESS_TIMEOUT_MS = 30_000;
 /** Commit delay when `requestAnimationFrame` is unavailable (tests, non-DOM hosts). */
 const FRAME_FALLBACK_MS = 16;
 
+// Optional browser globals; declarations also keep the replica importable by Node-only consumers.
+declare const requestAnimationFrame: ((callback: () => void) => number) | undefined;
+declare const cancelAnimationFrame: (handle: number) => void;
+
 /** Runs `callback` on the next animation frame; returns its cancel function. */
 function scheduleFrame(callback: () => void): () => void {
 	if (typeof requestAnimationFrame === "function") {
@@ -114,8 +122,25 @@ interface PendingTranscript {
 	timer: Timer;
 }
 
-export class GuestClient {
-	readonly #socket: CollabSocket;
+/** Transport-independent replica; encrypted Collab and same-origin workbench share one reducer. */
+export interface SessionTransport {
+	onOpen?: () => void;
+	onFrame?: (frame: HostFrame, fromPeer: number) => void;
+	onClose?: (reason: string, willReconnect: boolean) => void;
+	connect(): void;
+	close(): void;
+	send(frame: GuestFrame): void;
+}
+
+export type { ComposerPort, SubmitResult } from "@oh-my-pi/pi-wire";
+
+export interface AgentPort {
+	sendAgentCmd(cmd: "chat" | "kill" | "revive", agentId: string, text?: string): Promise<SubmitResult>;
+	fetchTranscript(agentId: string, fromByte: number): Promise<TranscriptResult | null>;
+}
+
+export class SessionReplica {
+	readonly #socket: SessionTransport;
 	readonly #name: string;
 	/** base64url write token from a full link; absent when joined via a view link. */
 	readonly #writeToken: string | undefined;
@@ -168,14 +193,12 @@ export class GuestClient {
 	#cancelFrameCommit: (() => void) | null = null;
 
 	/** @throws Error when the link does not parse. */
-	constructor(link: string, displayName: string) {
-		const parsed = parseCollabLink(link);
-		if ("error" in parsed) throw new Error(parsed.error);
+	constructor(transport: SessionTransport, displayName: string, writeToken?: string) {
 		this.#name = displayName;
-		this.#writeToken = parsed.writeToken ? encodeBase64Url(parsed.writeToken) : undefined;
-		this.#socket = new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: importRoomKey(parsed.key) });
+		this.#writeToken = writeToken;
+		this.#socket = transport;
 		this.#socket.onOpen = () => this.#handleOpen();
-		this.#socket.onFrame = frame => this.#applyFrameSafe(frame);
+		this.#socket.onFrame = frame => this.receiveFrame(frame);
 		this.#socket.onClose = (reason, willReconnect) => this.#handleClose(reason, willReconnect);
 		this.#snapshot = this.#buildSnapshot();
 	}
@@ -213,8 +236,8 @@ export class GuestClient {
 		return this.#snapshot;
 	}
 
-	sendPrompt(text: string): void {
-		this.#socket.send({ t: "prompt", text });
+	sendPrompt(text: string, images?: readonly ImageContent[]): void {
+		this.#socket.send({ t: "prompt", text, images: images ? [...images] : undefined });
 	}
 
 	sendUiResponse(reqId: number, value?: CollabUiResponseValue): void {
@@ -248,6 +271,30 @@ export class GuestClient {
 		this.#pendingTranscripts.set(reqId, { resolve, timer });
 		this.#socket.send({ t: "fetch-transcript", reqId, agentId, fromByte });
 		return promise;
+	}
+	/** Production ingress for native host frames, including chunked snapshots and UI endings. */
+	receiveFrame(frame: HostFrame): void {
+		this.#applyFrameSafe(frame);
+	}
+
+	/** Refresh actual edited history without ending UI waits or dropping events received during the read. */
+	refreshHistory(frames: readonly HostFrame[], knownAtStart: ReadonlySet<string>): void {
+		const welcome = frames.find(frame => frame.t === "welcome");
+		if (!welcome || welcome.header.id !== this.#header?.id)
+			throw new Error("Native transcript snapshot belongs to a different session");
+		if (this.#pendingSnapshot) throw new Error("Native transcript snapshot is still downloading");
+		const entries: SessionEntry[] = [];
+		for (const frame of frames) if (frame.t === "snapshot-chunk") entries.push(...frame.entries);
+		if (entries.length !== welcome.entryCount) throw new Error("Native transcript snapshot is incomplete");
+		const ids = new Set(entries.map(entry => entry.id));
+		for (const entry of this.#entries) if (!knownAtStart.has(entry.id) && !ids.has(entry.id)) entries.push(entry);
+		this.#entries = entries;
+		this.#publishedEntries = [...entries];
+		this.#commit();
+	}
+
+	connectionClosed(reason: string, willReconnect: boolean): void {
+		this.#handleClose(reason, willReconnect);
 	}
 
 	/**
@@ -663,4 +710,45 @@ export class GuestClient {
 		this.#snapshot = this.#buildSnapshot();
 		for (const listener of this.#listeners) listener();
 	}
+}
+
+/** Standalone Collab retains its encrypted link validation and relay transport. */
+export class GuestClient extends SessionReplica {
+	constructor(link: string, displayName: string) {
+		const parsed = parseCollabLink(link);
+		if ("error" in parsed) throw new Error(parsed.error);
+		super(
+			new CollabSocket({ wsUrl: parsed.wsUrl, role: "guest", key: importRoomKey(parsed.key) }),
+			displayName,
+			parsed.writeToken ? encodeBase64Url(parsed.writeToken) : undefined,
+		);
+	}
+}
+
+/** Standalone Collab consumes a successful local send, as before; this is not a remote Host ACK. */
+export function guestComposerPort(client: GuestClient): ComposerPort {
+	return {
+		async sendPrompt(text, images) {
+			client.sendPrompt(text, images);
+			return { kind: "sent" };
+		},
+		async sendUiResponse(reqId, value) {
+			client.sendUiResponse(reqId, value);
+			return { kind: "sent" };
+		},
+		async sendAbort() {
+			client.sendAbort();
+			return { kind: "sent" };
+		},
+	};
+}
+
+export function guestAgentPort(client: GuestClient): AgentPort {
+	return {
+		fetchTranscript: (id, fromByte) => client.fetchTranscript(id, fromByte),
+		async sendAgentCmd(command, id, text) {
+			client.sendAgentCmd(command, id, text);
+			return { kind: "sent" };
+		},
+	};
 }

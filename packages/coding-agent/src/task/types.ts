@@ -41,6 +41,8 @@ export type NativeSubagentOverrides = Pick<
 	| "lspReadOnly"
 	| "enableIrc"
 	| "subagentHooks"
+	| "extensionProviderOwnership"
+	| "preloadedPreparedExtensions"
 > & {
 	onSessionCreated?: (session: AgentSession) => void | (() => void);
 };

@@ -52,7 +52,6 @@ function createMoveContext(sourceDir: string, settingsFlush?: () => Promise<void
 		showError: vi.fn(),
 		showWarning: vi.fn(),
 		applyCwdChange,
-		exitDevForSessionMove: async () => {},
 		withBtwSessionMove,
 		updateEditorBorderColor: vi.fn(),
 		reloadTodos: vi.fn(async () => {}),

@@ -23,7 +23,7 @@ import { runGateCommands } from "./test-gate-scheduler";
 
 test("fork plan excludes standalone Python suites while preserving the public TUI smoke", () => {
 	const commands = fulltestCommands({ debug: false }, "/tmp/home", "a".repeat(40));
-	expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
+	expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 	expect(commands.flatMap(command => command.argv)).not.toContain("scripts/test-report-py.ts");
 });
 
@@ -31,13 +31,24 @@ test("debug changes only the isolated smoke diagnostic argument, not test scope"
 	for (const full of [false, true]) {
 		const normal = fulltestCommands({ debug: false, full }, "/tmp/home", "a".repeat(40));
 		const debug = fulltestCommands({ debug: true, full }, "/tmp/home", "a".repeat(40));
-		const smoke = debug.find(command => command.label === "smoke/isolated dev TUI PTY")!;
+		const smoke = debug.find(command => command.label === "smoke/isolated native TUI PTY")!;
 		expect(smoke.argv).toEqual(["bun", "scripts/test-report-ui-smoke.ts", "--debug"]);
 		expect(debug.map(command => ({ ...command, argv: command.argv.filter(arg => arg !== "--debug") }))).toEqual(
 			normal,
 		);
 		expect(debug.filter(command => command.argv.includes("--debug"))).toHaveLength(1);
 		expect(normal.some(command => command.label === "test/compact_display")).toBe(false);
+	}
+});
+
+test("fork and full plans never schedule the independently authorized packaged workbench verifier", () => {
+	for (const full of [false, true]) {
+		const commands = fulltestCommands({ debug: false, full }, "/tmp/home");
+		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
+		for (const command of commands) {
+			expect(command.argv.some(arg => arg.includes("verify-dev-workbench-package"))).toBe(false);
+			expect(command.argv.some(arg => /(?:bundle-dist|build-binary|compile-binary)\.ts$/.test(arg))).toBe(false);
+		}
 	}
 });
 
@@ -252,7 +263,7 @@ test("fulltest uses cargo-delta for Rust independently of Bun and bypasses it fo
 				expect(JSON.parse(rust[0]!.env!.OMP_FULLTEST_CHANGED_PATHS!)).toEqual([...scenario.changed]);
 			}
 		}
-		expect(commands.some(command => command.label === "smoke/isolated dev TUI PTY")).toBe(true);
+		expect(commands.some(command => command.label === "smoke/isolated native TUI PTY")).toBe(true);
 		const ts = commands.filter(command => command.label.startsWith("test/TypeScript"));
 		expect(ts).toHaveLength(2);
 		expect(ts.map(command => command.env?.OMP_FULLTEST_BASELINE)).toEqual(
@@ -667,7 +678,7 @@ if (label === ordinary) process.exit(17);
 			expect(ordinary[0]!.userprofile).toBe(ordinary[0]!.home);
 			expect(ordinary[0]!.configRoot).toBe("");
 			expect([ordinary[0]!.budget, rust[0]!.budget, startup[0]!.budget]).toEqual(["9", "3", "13"]);
-			expect(await starts("smoke/isolated dev TUI PTY")).toHaveLength(1);
+			expect(await starts("smoke/isolated native TUI PTY")).toHaveLength(1);
 			if (full) {
 				for (const label of ["test/Python suites", "test/Go SDK", "test/Rust SDK"]) {
 					expect(await starts(label)).toHaveLength(1);
@@ -769,7 +780,7 @@ describe("fulltest lane scheduling", () => {
 			signal: controller.signal,
 			charged: async <T>(operation: () => T | Promise<T>) => operation(),
 			run: async (command: GateCommand) => {
-				if (command.label !== "test/TypeScript startup suite" && command.label !== "smoke/isolated dev TUI PTY")
+				if (command.label !== "test/TypeScript startup suite" && command.label !== "smoke/isolated native TUI PTY")
 					return;
 				active.add(command.label);
 				if (active.size === 2) started.resolve();
@@ -805,7 +816,7 @@ describe("fulltest lane scheduling", () => {
 			controller.abort(interruption);
 			expect(await run).toBe(interruption);
 			expect(active.size).toBe(0);
-			expect(cancelled.toSorted()).toEqual(["smoke/isolated dev TUI PTY", "test/TypeScript startup suite"]);
+			expect(cancelled.toSorted()).toEqual(["smoke/isolated native TUI PTY", "test/TypeScript startup suite"]);
 		} finally {
 			controller.abort(interruption);
 			await run;
@@ -851,7 +862,7 @@ describe("fulltest lane scheduling", () => {
 				expect(budgetOf("test/TypeScript fork feature suite")).toBe(heavy.ordinary);
 				expect(budgetOf("test/Rust workspace")).toBe(heavy.rust);
 				expect(budgetOf("test/TypeScript startup suite")).toBe(trailing.startup);
-				expect(budgetOf("smoke/isolated dev TUI PTY")).toBe(trailing.smoke);
+				expect(budgetOf("smoke/isolated native TUI PTY")).toBe(trailing.smoke);
 			} finally {
 				if (previousBudget === undefined) delete process.env.OMP_TEST_CPU_BUDGET;
 				else process.env.OMP_TEST_CPU_BUDGET = previousBudget;
@@ -941,7 +952,7 @@ describe("fulltest lane scheduling", () => {
 						if (++heavyFinished === 3) heavySettled.resolve();
 					} else if (
 						command.label === "test/TypeScript startup suite" ||
-						command.label === "smoke/isolated dev TUI PTY"
+						command.label === "smoke/isolated native TUI PTY"
 					) {
 						expect(activeScripts).toBe(0);
 						expect(activeHeavyWorkers).toBe(0);
@@ -1044,7 +1055,7 @@ describe("fulltest lane scheduling", () => {
 					runGateCommands: async (_runner, commands, options) => {
 						const ordinary = commands.find(command => command.label === "test/TypeScript fork feature suite");
 						const startup = commands.find(command => command.label === "test/TypeScript startup suite");
-						const smoke = commands.find(command => command.label === "smoke/isolated dev TUI PTY");
+						const smoke = commands.find(command => command.label === "smoke/isolated native TUI PTY");
 						if (commands.some(command => command.label === "static/TS")) {
 							staticStarted.resolve();
 							await finishStatic.promise;
@@ -1164,7 +1175,7 @@ describe("fulltest lane scheduling", () => {
 								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe("1");
 								rustStarted.resolve();
 								await finishRust.promise;
-							} else if (command.label === "smoke/isolated dev TUI PTY") {
+							} else if (command.label === "smoke/isolated native TUI PTY") {
 								expect(command.env?.OMP_TEST_CPU_BUDGET).toBe(String(Math.min(3, cpuBudget)));
 								smokeStarted.resolve();
 								await finishSmoke.promise;
@@ -1184,7 +1195,7 @@ describe("fulltest lane scheduling", () => {
 				expect(seen).not.toContain("test/Rust workspace");
 				finishOrdinary.resolve();
 				await rustStarted.promise;
-				expect(seen).not.toContain("smoke/isolated dev TUI PTY");
+				expect(seen).not.toContain("smoke/isolated native TUI PTY");
 				expect(seen).not.toContain("test/TypeScript startup suite");
 				finishRust.resolve();
 				await smokeStarted.promise;
@@ -1195,7 +1206,7 @@ describe("fulltest lane scheduling", () => {
 					"test/Python suites",
 					"test/Go SDK",
 					"test/Rust SDK",
-					"smoke/isolated dev TUI PTY",
+					"smoke/isolated native TUI PTY",
 					"test/TypeScript startup suite",
 				])
 					expect(seen).toContain(label);

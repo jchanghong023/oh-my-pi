@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
 import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
@@ -9,23 +9,15 @@ import {
 	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
 	MARKER,
-	REQUIREMENT,
 	respond,
 	rolePayload,
 	teamStage,
 	type ModelRequest,
 	type Reply,
 } from "./provider-fixture";
-import {
-	clearNativeDraft,
-	entry,
-	eventually,
-	expectNativeFailure,
-	nativeMessageEntries,
-	nativeTranscript,
-	tuiTest,
-	withTui,
-} from "./tui-harness";
+import { eventually, tuiTest, withTui } from "./tui-harness";
+import { closePublicWorkbenches, WorkbenchFixture } from "../dev-workbench/fixture";
+afterEach(closePublicWorkbenches);
 
 function calls(request: ModelRequest) {
 	return request.messages
@@ -59,23 +51,6 @@ function result(request: ModelRequest, name: string, target?: string): string {
 	const message = request.messages.find(message => message.role === "tool" && message.tool_call_id === call.id);
 	if (!message) throw new Error(`Missing real ${name} result: ${call.id}`);
 	return contentText(message.content);
-}
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-	const child = Bun.spawn(["git", ...args], {
-		cwd,
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-		env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: path.join(cwd, ".fixture-no-global-config") },
-	});
-	const [stdout, stderr, code] = await Promise.all([
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text(),
-		child.exited,
-	]);
-	if (code !== 0) throw new Error(`Fixture git ${args.join(" ")}: ${stderr}`);
-	return stdout;
 }
 
 test.skipIf(!tuiTest || process.platform === "win32")(
@@ -238,7 +213,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				);
 				expect(await Bun.file(path.join(cwd, target)).text()).toBe(updated);
 				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
-				expect((await state()).run).toBeUndefined();
+				expect((await state()).requirements).toEqual([]);
 				expect(await Bun.file(path.join(cwd, ".omp/dev/state.json")).exists()).toBe(false);
 				expect(provider.requests.every(request => !rolePayload(request) && !teamStage(request))).toBe(true);
 				expect(calls(completed).map(call => call.name)).toEqual(["read", "read", "write", "read"]);
@@ -255,288 +230,138 @@ const stageSkills: Record<string, string[]> = {
 	executor: ["subagent-driven-development", "using-superpowers"],
 };
 
-test.skipIf(!tuiTest || process.platform === "win32")(
-	"four native stages consume indexed Wiki evidence, enforce stage skill grants and preserve existing worktrees",
-	async () => {
-		const { manifest } = await collectSpecDrivenResources(
-			path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
-		);
-		const superpowers = manifest.skills.filter(skill => skill.source === "superpowers").map(skill => skill.name);
-		const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
-		const knowledgeToken = "OMP_CAPABILITY_WIKI_EVIDENCE";
-		const knowledgeFact = `${knowledgeToken}: preserve internal whitespace in Ada  Lovelace; trim outer whitespace only.`;
-		const sentinel = "export const untouched = 'business bytes remain unchanged';\n";
-		let worktrees = "";
-		await withTui(
-			{
-				async setup(cwd) {
-					await Bun.write(path.join(cwd, "src/untouched.ts"), sentinel);
-					await git(cwd, "init", "-b", "main");
-					await git(cwd, "config", "user.name", "TUI fixture");
-					await git(cwd, "config", "user.email", "tui-fixture@example.invalid");
-					await git(cwd, "add", "src/untouched.ts");
-					await git(cwd, "commit", "-m", "isolated fixture baseline");
-					await git(cwd, "worktree", "add", "--detach", path.join(path.dirname(cwd), "existing-worktree"));
-					worktrees = await git(cwd, "worktree", "list", "--porcelain");
-					const documents = path.join(path.dirname(cwd), "wiki-source");
-					await Bun.write(
-						path.join(documents, "greeting-contract.md"),
-						`# Greeting contract\n\n${knowledgeFact}\n`,
-					);
-					const engine = new KnowledgeIndexEngine({
-						cwd,
-						agentDir: path.join(path.dirname(cwd), "config", "agent"),
+test("native workbench stages consume indexed Wiki evidence and enforce packaged skill grants", async () => {
+	const { manifest } = await collectSpecDrivenResources(
+		path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
+	);
+	const superpowers = manifest.skills.filter(skill => skill.source === "superpowers").map(skill => skill.name);
+	const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
+	const token = "OMP_CAPABILITY_WIKI_EVIDENCE";
+	const fact = `${token}: preserve internal whitespace; trim outer whitespace only.`;
+	await using fixture = await WorkbenchFixture.create({
+		async setup(cwd, agentDir) {
+			await Bun.write(path.join(cwd, "src/untouched.ts"), "original user bytes\n");
+			const documents = path.join(cwd, "../wiki-source");
+			await Bun.write(path.join(documents, "greeting.md"), `# Contract\n\n${fact}\n`);
+			const engine = new KnowledgeIndexEngine({ cwd, agentDir });
+			try {
+				await engine.init(documents, "capability-contract");
+			} finally {
+				engine.close();
+			}
+		},
+		reply(request) {
+			const payload = rolePayload(request);
+			if (!payload) return respond(request);
+			const executed = calls(request);
+			for (const name of skills) {
+				const target = `skill://${name}:raw`;
+				if (!executed.some(call => call.name === "read" && call.args.path === target))
+					return invoke(request, "read", { i: "Probing stage resource grant", path: target });
+			}
+			if (payload.specDrivenRole === "requirements") {
+				if (!executed.some(call => call.name === "knowledge_search"))
+					return invoke(request, "knowledge_search", { query: token, mode: "grep" });
+				if (!executed.some(call => call.name === "write" && call.args.path === "src/untouched.ts"))
+					return invoke(request, "write", {
+						i: "Probing unauthorized mutation",
+						path: "src/untouched.ts",
+						content: "unauthorized\n",
 					});
-					try {
-						await engine.init(documents, "capability-contract");
-					} finally {
-						engine.close();
-					}
-				},
-				reply(request) {
-					const child = request.messages.some(
-						message =>
-							message.role === "user" &&
-							contentText(message.content).includes(
-								"Complete assignment thoroughly:\n\nOMP_SPEC_IMPLEMENT_CHILD",
-							),
-					);
-					if (child && !rolePayload(request)) {
-						const executed = calls(request);
-						for (const name of superpowers) {
-							const target = `skill://${name}:raw`;
-							if (!executed.some(call => call.name === "read" && call.args.path === target))
-								return invoke(request, "read", { i: "Probing delegated skill access", path: target });
-						}
-						return respond(request);
-					}
-					const payload = rolePayload(request);
-					if (!payload) return respond(request);
-					const executed = calls(request);
-					for (const name of skills) {
-						const target = `skill://${name}:raw`;
-						if (!executed.some(call => call.name === "read" && call.args.path === target))
-							return invoke(request, "read", { i: "Probing actual stage resource grant", path: target });
-					}
-					if (payload.specDrivenRole === "requirements") {
-						if (!executed.some(call => call.name === "knowledge_search"))
-							return invoke(request, "knowledge_search", { query: knowledgeToken, mode: "grep" });
-						if (!executed.some(call => call.name === "write" && call.args.path === "src/untouched.ts"))
-							return invoke(request, "write", {
-								i: "Probing unauthorized business mutation",
-								path: "src/untouched.ts",
-								content: "unauthorized mutation\n",
-							});
-						// Carry the real retrieved fact in a stage artifact, not a fabricated provider-only summary.
-						const reply = respond(request);
-						if (
-							reply.tool?.name.replace(/^_/u, "") === "write" &&
-							typeof reply.tool.args.content === "string" &&
-							String(reply.tool.args.path).endsWith("proposal.md")
-						) {
-							const evidence = result(request, "knowledge_search");
-							expect(evidence).toContain(knowledgeFact);
-							reply.tool.args.content += `\n## Indexed evidence\n${knowledgeFact}\n`;
-						}
-						return reply;
-					}
-					return respond(request);
-				},
-			},
-			[120, 36],
-			async ({ cwd, provider, tui, state, stage, idle }) => {
-				await tui("submit", "/dev");
-				await idle();
-				await tui("submit", `/dev new ${MARKER}: ${REQUIREMENT}`);
-				await stage("requirements");
-				const requirementsRequest = provider.requests
-					.filter(request => rolePayload(request)?.specDrivenRole === "requirements")
-					.at(-1)!;
-				expect(result(requirementsRequest, "knowledge_search")).toContain(knowledgeFact);
-				expect(result(requirementsRequest, "write", "src/untouched.ts")).toContain("未授权的阶段文件写入");
-				expect(await Bun.file(path.join(cwd, "src/untouched.ts")).text()).toBe(sentinel);
-				await tui("submit", "/dev next");
-				await stage("solution");
-				expect(
-					(entry(provider, "solution").files as Array<{ content: string }>).some(file =>
-						file.content.includes(knowledgeFact),
-					),
-				).toBe(true);
-				await tui("submit", "/dev next pure");
-				await stage("planning");
-				await tui("submit", "/dev next");
-				await stage("executing");
-				await eventually(state, value => value.run?.awaitingAcceptance === true);
-				await idle();
-				const executorRequest = provider.requests.find(
-					request => rolePayload(request)?.specDrivenRole === "executor",
-				)!;
-				const usingSuperpowers = await loadSpecDrivenSkill("superpowers", "using-superpowers");
-				const skillContent = await Bun.file(usingSuperpowers.filePath).text();
-				expect(
-					executorRequest.messages.some(
-						message => message.role === "system" && contentText(message.content).includes(skillContent),
-					),
-				).toBe(true);
-				const executorSystem = executorRequest.messages
-					.filter(message => message.role === "system")
-					.map(message => contentText(message.content))
-					.join("\n");
-				const subagentSkill = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
-				const subagentContent = await Bun.file(subagentSkill.filePath).text();
-				expect(executorSystem.indexOf(skillContent)).toBeLessThan(executorSystem.indexOf(subagentContent));
-				for (const name of superpowers) expect(executorSystem).toContain(name);
-				for (const [role, allowed] of Object.entries(stageSkills)) {
-					const completed = provider.requests
-						.filter(request => rolePayload(request)?.specDrivenRole === role)
-						.at(-1)!;
-					for (const name of skills) {
-						const target = `skill://${name}:raw`;
-						const actual = result(completed, "read", target);
-						if (allowed.includes(name) || (role === "executor" && superpowers.includes(name))) {
-							expect(actual).not.toContain("Skill access denied:");
-							expect(
-								parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name,
-							).toBe(name);
-						} else expect(actual).toContain(`Skill access denied: ${name}`);
-					}
-				}
-				const childRequest = provider.requests.findLast(request =>
-					request.messages.some(
-						message =>
-							message.role === "user" &&
-							contentText(message.content).includes(
-								"Complete assignment thoroughly:\n\nOMP_SPEC_IMPLEMENT_CHILD",
-							),
-					),
-				)!;
-				const childSystem = childRequest.messages
-					.filter(message => message.role === "system")
-					.map(message => contentText(message.content))
-					.join("\n");
-				for (const name of superpowers) expect(childSystem).toContain(name);
-				for (const name of superpowers) {
-					const target = `skill://${name}:raw`;
-					const actual = result(childRequest, "read", target);
-					expect(actual).not.toContain("Skill access denied:");
-					expect(parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name).toBe(
-						name,
-					);
-				}
-				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
-				expect(await Bun.file(path.join(cwd, "src/untouched.ts")).text()).toBe(sentinel);
-				expect(await git(cwd, "worktree", "list", "--porcelain")).toBe(worktrees);
-			},
-		);
-	},
-	300_000,
-);
+			}
+			return respond(request);
+		},
+	});
+	await fixture.start();
+	await fixture.developUntil("executing");
+	const requirements = fixture.provider.requests.findLast(
+		request => rolePayload(request)?.specDrivenRole === "requirements",
+	)!;
+	expect(result(requirements, "knowledge_search")).toContain(fact);
+	expect(result(requirements, "write", "src/untouched.ts")).toMatch(/未授权|denied|not allowed/iu);
+	expect(await Bun.file(path.join(fixture.cwd, "src/untouched.ts")).text()).toBe("original user bytes\n");
+	for (const [role, allowed] of Object.entries(stageSkills)) {
+		const completed = fixture.provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === role)!;
+		for (const name of skills) {
+			const target = `skill://${name}:raw`;
+			const actual = result(completed, "read", target);
+			if (allowed.includes(name) || (role === "executor" && superpowers.includes(name))) {
+				expect(actual).not.toContain("Skill access denied:");
+				expect(parseFrontmatter(actual, { source: target, repair: false, level: "off" }).frontmatter.name).toBe(
+					name,
+				);
+			} else expect(actual).toContain(`Skill access denied: ${name}`);
+		}
+	}
+	const executor = fixture.provider.requests.find(request => rolePayload(request)?.specDrivenRole === "executor")!;
+	const system = executor.messages
+		.filter(message => message.role === "system")
+		.map(message => contentText(message.content))
+		.join("\n");
+	const usingSkill = await loadSpecDrivenSkill("superpowers", "using-superpowers");
+	const delegated = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
+	expect(system.indexOf(await Bun.file(usingSkill.filePath).text())).toBeGreaterThanOrEqual(0);
+	expect(system.indexOf(await Bun.file(delegated.filePath).text())).toBeGreaterThan(
+		system.indexOf(await Bun.file(usingSkill.filePath).text()),
+	);
+	expect(fixture.provider.failures).toEqual([]);
+}, 300_000);
 
-test.skipIf(!tuiTest)(
-	"completed four-stage Team with no adoptable direction stays blocked without invented candidates or solo fallback",
-	async () => {
-		await withTui(
-			{
-				reply(request) {
-					const reply = respond(request);
-					if (teamStage(request) === "proposal" && reply.tool && isRecord(reply.tool.args.data))
-						reply.tool.args.data.proposal = `${reply.tool.args.data.proposal}\n\n## Mandatory runtime dependency\nFetch the greeting template from an external HTTPS service on every greet call.\n`;
-					if (
-						rolePayload(request)?.specDrivenRole === "requirements" &&
-						reply.tool?.name.replace(/^_/u, "") === "write" &&
-						typeof reply.tool.args.content === "string"
-					)
-						reply.tool.args.content += "\nThe runtime SHALL NOT access the network.\n";
-					if (teamStage(request) !== "synthesis" || !reply.tool) return reply;
-					const labels = [
-						...new Set(
-							request.messages
-								.filter(message => message.role === "user")
-								.flatMap(message =>
-									[...contentText(message.content).matchAll(/^### 方案 ([A-Z]+)(?:（.*）)?$/gmu)].map(
-										match => match[1]!,
-									),
-								),
+test("Team with no adoptable direction remains blocked without solo fallback or invented candidates", async () => {
+	await using fixture = await WorkbenchFixture.create({
+		reply(request) {
+			const reply = respond(request);
+			if (teamStage(request) === "proposal" && reply.tool && isRecord(reply.tool.args.data))
+				reply.tool.args.data.proposal = `${reply.tool.args.data.proposal}\n\nFetch an external HTTPS template on every greet call.`;
+			if (
+				rolePayload(request)?.specDrivenRole === "requirements" &&
+				reply.tool?.name.replace(/^_/u, "") === "write" &&
+				typeof reply.tool.args.content === "string"
+			)
+				reply.tool.args.content += "\nThe runtime SHALL NOT access the network.\n";
+			if (teamStage(request) !== "synthesis" || !reply.tool) return reply;
+			const labels = [
+				...new Set(
+					request.messages
+						.filter(message => message.role === "user")
+						.flatMap(message =>
+							[...contentText(message.content).matchAll(/^### 方案 ([A-Z]+)(?:（.*）)?$/gmu)].map(
+								match => match[1]!,
+							),
 						),
-					];
-					if (!labels.length) throw new Error("Synthesis request lacks actual proposal labels");
-					const data = reply.tool.args.data;
-					if (!isRecord(data)) throw new Error("Expected real structured Team synthesis");
-					data.reportMarkdown = "## 硬约束检查\n全部已讨论方向均违反无网络访问的硬约束，没有可采用方向。";
-					data.recommendedProposal = "";
-					data.recommendationReason = "";
-					data.hardConstraintViolations = labels.map(proposalLabel => ({
-						proposalLabel,
-						issue: "方案要求联网访问，违反已确认离线硬约束",
-						evidence: "用户明确要求运行时不得联网",
-					}));
-					return reply;
-				},
-			},
-			[120, 36],
-			async ({ cwd, provider, tui, state, stage, idle }) => {
-				await tui("submit", "/dev");
-				await idle();
-				await tui("submit", "/dev config");
-				await tui("expect", "text", "方案 Team", "--timeout", "30000");
-				await tui("key", "press", "Up", "Enter");
-				await eventually(state, value => value.team);
-				await tui("submit", `/dev new ${REQUIREMENT} 运行时不得联网。`);
-				await stage("requirements");
-				await tui("submit", "/dev next");
-				await expectNativeFailure(tui, /Team 未产生可采用候选/);
-				await idle();
-				const blocked = await state();
-				expect(blocked.run?.phase).toBe("solution");
-				expect(blocked.team).toBe(true);
-				expect(new Set(provider.requests.map(teamStage).filter(Boolean))).toEqual(
-					new Set(["proposal", "alignment", "review", "synthesis"]),
-				);
-				expect(
-					provider.requests.filter(request => rolePayload(request)?.specDrivenRole === "solution"),
-				).toHaveLength(0);
-				expect(
-					provider.requests.filter(request =>
-						["planner", "executor"].includes(rolePayload(request)?.specDrivenRole ?? ""),
-					),
-				).toHaveLength(0);
-				const solutionPath = blocked.run?.paths?.solution;
-				if (!solutionPath) throw new Error("Blocked run lost its durable solution artifact path");
-				expect(await Bun.file(path.join(cwd, solutionPath)).exists()).toBe(false);
-				const run = blocked.run!;
-				const approval = run.approvals.requirements;
-				if (!approval?.files.length) throw new Error("Blocked run lost its approved requirement versions");
-				expect(approval.userReply).not.toBe("");
-				const approvedFiles = await Promise.all(
-					approval.files.map(async file => ({
-						path: file.path,
-						content: await Bun.file(path.join(cwd, file.path)).text(),
-					})),
-				);
-				const requirementsHistory = nativeMessageEntries(await nativeTranscript(run, "requirements"));
-				expect(requirementsHistory.length).toBeGreaterThan(0);
-				const requests = provider.requests.length;
-				await clearNativeDraft(tui, "/dev next");
-				await tui("submit", "/dev");
-				await tui("expect", "text", "ordinary-root-beacon", "--timeout", "30000");
-				await tui("submit", "/dev");
-				await stage("solution");
-				expect(provider.requests).toHaveLength(requests);
-				const restored = await state();
-				expect(restored.run?.runId).toBe(run.runId);
-				expect(restored.run?.changeId).toBe(run.changeId);
-				expect(restored.run?.phase).toBe("solution");
-				expect(restored.team).toBe(true);
-				expect(restored.run?.approvals).toEqual(run.approvals);
-				for (const file of approvedFiles)
-					expect(await Bun.file(path.join(cwd, file.path)).text()).toBe(file.content);
-				expect(nativeMessageEntries(await nativeTranscript(restored.run!, "requirements"))).toEqual(
-					requirementsHistory,
-				);
-				expect(restored.run?.paths?.solution).toBe(solutionPath);
-				expect(await Bun.file(path.join(cwd, solutionPath)).exists()).toBe(false);
-			},
-		);
-	},
-	300_000,
-);
+				),
+			];
+			if (!labels.length || !isRecord(reply.tool.args.data)) throw new Error("Real Team synthesis context missing");
+			Object.assign(reply.tool.args.data, {
+				reportMarkdown: "All discussed directions violate the explicit offline constraint.",
+				recommendedProposal: "",
+				recommendationReason: "",
+				hardConstraintViolations: labels.map(proposalLabel => ({
+					proposalLabel,
+					issue: "Requires network",
+					evidence: "Runtime must not access network",
+				})),
+			});
+			return reply;
+		},
+	});
+	await fixture.start();
+	await fixture.request("team-config", { requirementId: null, expectedRecordVersion: null, useTeam: true });
+	const requirements = await fixture.developUntil("requirements");
+	await fixture.act(requirements, { kind: "next" });
+	const blocked = await fixture.stage(requirements.record.requirementId, "solution");
+	expect(blocked.runtime?.blockedReason).toMatch(/Team|候选|adoptable/iu);
+	expect(new Set(fixture.provider.requests.map(teamStage).filter(Boolean))).toEqual(
+		new Set(["proposal", "alignment", "review", "synthesis"]),
+	);
+	expect(
+		fixture.provider.requests.filter(request =>
+			["solution", "planner", "executor"].includes(rolePayload(request)?.specDrivenRole ?? ""),
+		),
+	).toEqual([]);
+	expect(blocked.record.decisions).toEqual(expect.arrayContaining(requirements.record.decisions));
+	expect(blocked.record.solutionBasis).toBeNull();
+	const count = fixture.provider.requests.length;
+	await fixture.get(blocked.record.requirementId);
+	expect(fixture.provider.requests).toHaveLength(count);
+}, 300_000);

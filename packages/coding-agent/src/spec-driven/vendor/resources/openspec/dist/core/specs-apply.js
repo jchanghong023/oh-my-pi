@@ -4,8 +4,8 @@
  * Extracted from ArchiveCommand to enable standalone spec application.
  * Applies delta specs from a change to main specs without archiving.
  */
-import { promises as fs } from 'fs';
-import { randomUUID } from 'crypto';
+import { createReadStream, promises as fs } from 'fs';
+import { createHash, randomUUID } from 'crypto';
 import path from 'path';
 import chalk from 'chalk';
 import { extractRequirementsSection, diffScenarioNames, describeScenarioBalance, describeUnappliedContent, foldRequirementName, parseDeltaSpec, normalizeRequirementName, } from './parsers/requirement-blocks.js';
@@ -17,6 +17,14 @@ import { discoverSpecFiles } from '../utils/spec-discovery.js';
 import { FileSystemUtils } from '../utils/file-system.js';
 import { assertSpecFileWithin } from '../utils/spec-path-containment.js';
 import { matchLineEnding } from '../utils/line-endings.js';
+/** SHA-256 of one file's bytes, streamed so a large file is never held whole. */
+export async function fingerprintFileContents(filePath) {
+    const fileHash = createHash('sha256');
+    for await (const chunk of createReadStream(filePath)) {
+        fileHash.update(chunk);
+    }
+    return fileHash.digest();
+}
 function isLexicallyWithin(allowedDirectory, targetPath) {
     const relative = path.relative(path.resolve(allowedDirectory), path.resolve(targetPath));
     return (relative === '' ||

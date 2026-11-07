@@ -2,7 +2,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@oh-my-pi/pi-ai";
-import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { bindEffects } from "@oh-my-pi/pi-coding-agent/config/registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -13,8 +12,8 @@ import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { peekSpecDrivenController } from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
-import { postmortem, TempDir } from "@oh-my-pi/pi-utils";
+import * as imageLoading from "@oh-my-pi/pi-coding-agent/utils/image-loading";
+import { postmortem, TempDir, withTimeout } from "@oh-my-pi/pi-utils";
 import { chatTranscriptDisplayPreferences } from "@oh-my-pi/pi-tui/chat/display-preferences";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 
@@ -54,8 +53,6 @@ describe("libkitty end-to-end", () => {
 			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
 			settings: Settings.isolated(),
 			modelRegistry,
-			// Native /dev requires the root session's real manager; session.dispose owns teardown.
-			ownedAsyncJobManager: new AsyncJobManager({}),
 		});
 		term = new VirtualTerminal(120, 32);
 		const composer = new Composer({ terminal: term });
@@ -64,7 +61,6 @@ describe("libkitty end-to-end", () => {
 
 	afterEach(async () => {
 		vi.restoreAllMocks();
-		await peekSpecDrivenController(session.sessionManager)?.dispose();
 		mode?.stop();
 		// Settle fixture-owned input after assertions so its keepalive is disposed.
 		mode?.onInputCallback?.({ text: "", cancelled: true, started: false });
@@ -77,33 +73,12 @@ describe("libkitty end-to-end", () => {
 		resetSettingsForTest();
 	});
 
-	async function emptyDev() {
+	it("finishes root disposal and reports a registered native host teardown failure", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
-		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager);
-		if (!controller) throw new Error("Expected native dev controller");
-		return controller;
-	}
-
-	it("shows rejected Dev subcommands before a controller exists and entry conflicts in ordinary chat", async () => {
-		await mode.init({ suppressWelcomeIntro: true });
-		const rows = () => plainRows(term.getViewport()).join("\n");
-		await mode.handleDevInput("/dev next");
-		await term.waitForRender(() => rows().includes("请先输入 /dev"));
-		expect(peekSpecDrivenController(session.sessionManager)).toBeUndefined();
-		const failure = vi.spyOn(mode, "showError");
-		mode.loopModeEnabled = true;
-		await mode.handleDevInput("/dev");
-		await term.waitForRender(() => rows().includes("协同开发操作失败"));
-		expect(failure).toHaveBeenCalled();
-		expect(peekSpecDrivenController(session.sessionManager)?.inputMode()).not.toBe("dev");
-		expect(rows()).not.toContain("Dev ·");
-	});
-
-	it("finishes root disposal and reports failure when Dev disposal rejects", async () => {
-		const controller = await emptyDev();
-		const failure = new Error("Dev teardown unavailable");
-		vi.spyOn(controller, "dispose").mockRejectedValue(failure);
+		const failure = new Error("Owned native host teardown unavailable");
+		mode.registerHostShutdown(async () => {
+			throw failure;
+		});
 		const rootDispose = vi.spyOn(session, "dispose");
 		const quit = vi.spyOn(postmortem, "quit").mockResolvedValue(undefined);
 		const showError = vi.spyOn(mode, "showError");
@@ -114,343 +89,47 @@ describe("libkitty end-to-end", () => {
 		expect(quit).not.toHaveBeenCalled();
 	});
 
-	it("restores dropped drafts only from the adopted session and restores the binding after rollback", async () => {
+	it("restores a dropped ordinary root draft and attachments without overwriting newer input", async () => {
 		await mode.init({ suppressWelcomeIntro: true });
-		const stage = new AgentSession({
-			agent: new Agent({
-				initialState: { model: session.model!, systemPrompt: ["Stage"], tools: [], messages: [] },
-			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry: session.modelRegistry,
-		});
-		const rootHooks = vi.spyOn(session, "setPromptDropped");
-		const stageHooks = vi.spyOn(stage, "setPromptDropped");
-		try {
-			await mode.bindMainSession(stage);
-			const stageDrop = stageHooks.mock.calls.findLast(call => call[0])?.[0];
-			expect(stageDrop).toBeDefined();
-			const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
-			stageDrop!({ text: "recovered stage draft", images: [image] });
-			expect(mode.editor.getText()).toBe("recovered stage draft");
-			expect(mode.editor.pendingImages).toEqual([image]);
-			mode.editor.setText("new user draft");
-			stageDrop!({ text: "must not overwrite" });
-			expect(mode.editor.getText()).toBe("new user draft");
-			await mode.bindMainSession(session);
-			mode.editor.setText("");
-			stageDrop!({ text: "hidden stage late drop" });
-			expect(mode.editor.getText()).toBe("");
-			expect(stageHooks.mock.calls.at(-1)?.[0]).toBeUndefined();
-			const subscribe = vi.spyOn(stage, "subscribe").mockImplementationOnce(() => {
-				throw new Error("stage subscription failed");
-			});
-			await expect(mode.bindMainSession(stage)).rejects.toThrow("stage subscription failed");
-			subscribe.mockRestore();
-			expect(mode.session).toBe(session);
-			const rootDrop = rootHooks.mock.calls.findLast(call => call[0])?.[0];
-			rootDrop!({ text: "recovered root draft" });
-			expect(mode.editor.getText()).toBe("recovered root draft");
-			const rolledBackDrop = stageHooks.mock.calls.findLast(call => call[0])?.[0];
-			mode.editor.setText("");
-			rolledBackDrop!({ text: "rolled-back stage late drop" });
-			expect(mode.editor.getText()).toBe("");
-		} finally {
-			await mode.bindMainSession(session);
-			await stage.dispose();
-		}
-	});
-
-	it("shows an empty native Dev surface only after entry and restores ordinary root history on exit", async () => {
-		session.sessionManager.appendMessage({ role: "user", content: "ORDINARY_ROOT_HISTORY", timestamp: Date.now() });
-		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
-		await mode.init({ suppressWelcomeIntro: true });
-		const rows = () => plainRows(term.getViewport()).join("\n");
-		await term.waitForRender(() => rows().includes("ORDINARY_ROOT_HISTORY"));
-		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager)!;
-		await term.waitForRender(() => rows().includes("Dev ·") && !rows().includes("ORDINARY_ROOT_HISTORY"));
-		const clear = vi.spyOn(mode, "resetTranscript");
-		controller.publishObservation();
-		mode.showDevCommandStatus("progress without a transcript switch");
-		controller.publishObservation();
-		expect(clear).not.toHaveBeenCalled();
-		expect(session.sessionManager.buildSessionContext().messages).toHaveLength(1);
-		await controller.exit();
-		await term.waitForRender(() => rows().includes("ORDINARY_ROOT_HISTORY"));
-		expect(
-			rows()
-				.split("\n")
-				.filter(row => row.includes("ORDINARY_ROOT_HISTORY")),
-		).toHaveLength(1);
-	});
-
-	it("extends the existing session info viewer with full material and diagnostics without sending drafts", async () => {
-		const controller = await emptyDev();
-		const snapshot = controller.observation();
-		const fullError = `FULL_ERROR_START ${"diagnostic ".repeat(60)} FULL_ERROR_END`;
-		await Bun.write(
-			path.join(tempDir.path(), "solution.md"),
-			"# Candidates\n\n## candidate-alpha\n\nFULL_MATERIAL_END",
-		);
-		vi.spyOn(controller, "observation").mockReturnValue({
-			...snapshot,
-			error: fullError,
-			status: {
-				...snapshot.status,
-				paths: { requirements: [], solution: "solution.md", plan: "plan.md", report: "report.md" },
-			},
-		});
-		const report = vi.spyOn(mode, "showSessionInfo");
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		const next = vi.spyOn(controller, "next");
 		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
-		mode.editor.setText("UNSENT_VIEWER_DRAFT");
-		mode.editor.pendingImages.push(image);
-		mode.editor.pendingImageLinks.push(undefined);
-		expect(await mode.handleDevInput("/session", { images: [image] })).toBe(true);
-		expect(report).toHaveBeenCalledTimes(1);
-		const overlay = mode.ui.overlayStack.at(-1)?.component;
-		if (!overlay?.describe) throw new Error("Expected native session info viewer");
-		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
-		expect(content).toContain(session.sessionId);
-		expect(content).toContain("Provider");
-		expect(content).toContain("读取错误");
-		expect(content).toContain("FULL_ERROR_START");
-		expect(content).toContain("FULL_ERROR_END");
-		expect(content).toContain("candidate-alpha");
-		expect(content).toContain("FULL_MATERIAL_END");
-		expect(content).toContain("/dev next");
-		expect(mode.editor.getExpandedText()).toBe("UNSENT_VIEWER_DRAFT");
-		expect(mode.editor.pendingImages).toEqual([image]);
-		expect(next).not.toHaveBeenCalled();
-		expect(prompt).not.toHaveBeenCalled();
-		expect(session.messages).toEqual([]);
-	});
-
-	it("shows both business decisions in the three-line Dev area without changing direct requirements", async () => {
-		const controller = await emptyDev();
-		const snapshot = controller.observation();
-		const observation = vi.spyOn(controller, "observation");
-		const widget = vi.spyOn(mode, "setHookWidget");
-		const recipient = { role: "business" as const, actorId: "business", sessionId: "business-session" };
-		const next = { id: "next", command: "/dev next", label: "确认并继续", available: true };
-		const finish = { id: "finish-business", command: "/dev finish-business", label: "仅业务结束", available: true };
-		observation.mockReturnValue({
-			...snapshot,
-			status: { ...snapshot.status, phase: "business", entryPhase: "business" },
-			interaction: { ...snapshot.interaction, recipient, actions: [next, finish] },
-		});
-		const render = (width: number) => {
-			controller.publishObservation();
-			const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
-			if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
-			return call[1](mode.ui, {} as never).render(width);
+		const dispatch = vi.spyOn(session.agent, "prompt").mockResolvedValue();
+		const dropPrompt = async (text: string, updateDraft?: () => void) => {
+			const started = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			// Hold actual session admission so an abort wins before any user message is persisted.
+			const normalization = vi
+				.spyOn(imageLoading, "normalizeModelContextImages")
+				.mockImplementation(async images => {
+					started.resolve();
+					await release.promise;
+					return images;
+				});
+			const pending = session.prompt(text, { images: [image] });
+			try {
+				await withTimeout(started.promise, 2_000, "Image admission never started");
+				updateDraft?.();
+				await session.abort();
+			} finally {
+				release.resolve();
+				await pending;
+				normalization.mockRestore();
+			}
 		};
-		for (const width of [100, 120]) {
-			const lines = render(width);
-			expect(lines).toHaveLength(3);
-			expect(lines[0]).toContain("业务 Agent");
-			expect(lines[1]).toContain("/dev next · 确认业务文档进入需求");
-			expect(lines[1]).toContain("/dev finish-business · 交付业务文档并结束流程");
-			expect(lines[2]).toContain("/session");
-		}
-		observation.mockReturnValue({
-			...snapshot,
-			status: { ...snapshot.status, phase: "business", entryPhase: "business" },
-			interaction: { ...snapshot.interaction, recipient, actions: [next, { ...finish, available: false }] },
-		});
-		expect(render(120)[1]).not.toContain("/dev finish-business");
-		observation.mockReturnValue({
-			...snapshot,
-			status: { ...snapshot.status, phase: "requirements", entryPhase: "requirements" },
-			interaction: { ...snapshot.interaction, recipient: { ...recipient, role: "requirements" }, actions: [next] },
-		});
-		const requirements = render(120);
-		expect(requirements[1]).toContain("/dev next · 确认需求，进入方案阶段");
-		expect(requirements[1]).not.toContain("finish-business");
-	});
-
-	it("shows completed business delivery and reads the real document in native details without side effects", async () => {
-		const controller = await emptyDev();
-		const snapshot = controller.observation();
-		const businessPath = "business-requirements.md";
-		await Bun.write(path.join(tempDir.path(), businessPath), "# Real business document\n\nCURRENT_BUSINESS_BYTES");
-		vi.spyOn(controller, "observation").mockReturnValue({
-			...snapshot,
-			status: {
-				...snapshot.status,
-				phase: "idle",
-				entryPhase: "business",
-				businessCompleted: true,
-				business: { path: businessPath, content: "STALE_BUSINESS_CONTENT", version: "old" },
-				paths: {
-					business: businessPath,
-					requirements: [],
-					solution: "solution.json",
-					plan: "plan.md",
-					report: "report.md",
-				},
-			},
-		});
-		const widget = vi.spyOn(mode, "setHookWidget");
-		controller.publishObservation();
-		const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
-		if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
-		const lines = call[1](mode.ui, {} as never).render(120);
-		expect(lines).toHaveLength(3);
-		expect(lines[0]).toContain("业务需求已交付 · 流程已结束");
-		expect(lines[0]).not.toContain("软件");
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		const next = vi.spyOn(controller, "next");
-		mode.editor.setText("BUSINESS_VIEWER_DRAFT");
-		expect(await mode.handleDevInput("/session")).toBe(true);
-		const overlay = mode.ui.overlayStack.at(-1)?.component;
-		if (!overlay?.describe) throw new Error("Expected native session info viewer");
-		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
-		expect(content).toContain("业务需求已交付，流程已结束");
-		expect(content).toContain(businessPath);
-		expect(content).toContain("CURRENT_BUSINESS_BYTES");
-		expect(content).not.toContain("STALE_BUSINESS_CONTENT");
-		expect(mode.editor.getExpandedText()).toBe("BUSINESS_VIEWER_DRAFT");
-		expect(next).not.toHaveBeenCalled();
-		expect(prompt).not.toHaveBeenCalled();
-		expect(session.messages).toEqual([]);
-	});
-
-	it("reports a missing business document from its real path instead of displaying cached content", async () => {
-		const controller = await emptyDev();
-		const snapshot = controller.observation();
-		vi.spyOn(controller, "observation").mockReturnValue({
-			...snapshot,
-			status: {
-				...snapshot.status,
-				phase: "business",
-				entryPhase: "business",
-				business: { path: "missing-business.md", content: "STALE_CACHED_TEXT", version: "old" },
-			},
-		});
-		expect(await mode.handleDevInput("/session")).toBe(true);
-		const overlay = mode.ui.overlayStack.at(-1)?.component;
-		if (!overlay?.describe) throw new Error("Expected native session info viewer");
-		const content = JSON.stringify(overlay.describe({ supports: () => false } as never));
-		expect(content).toContain("missing-business.md");
-		expect(content).toContain("读取错误");
-		expect(content).not.toContain("STALE_CACHED_TEXT");
-	});
-
-	it("keeps empty Dev input and attachments without calling a model or opening a panel", async () => {
-		const controller = await emptyDev();
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		const panel = vi.spyOn(mode, "showHookCustom");
-		const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
-		mode.editor.setText("unsent requirement");
-		mode.editor.pendingImages.push(image);
-		mode.editor.pendingImageLinks.push(undefined);
-		await mode.handleDevInput("unsent requirement", { images: [image] });
-		expect(mode.editor.getExpandedText()).toContain("unsent requirement");
+		await dropPrompt("recovered ordinary draft");
+		expect(mode.editor.getExpandedText()).toBe("recovered ordinary draft");
 		expect(mode.editor.pendingImages).toEqual([image]);
-		expect(controller.status().phase).toBe("idle");
-		expect(prompt).not.toHaveBeenCalled();
-		expect(panel).not.toHaveBeenCalled();
+		const newerImage = { ...image, data: "AQ==" };
+		await dropPrompt("must not overwrite the newer draft", () => {
+			mode.editor.setText("newer ordinary draft");
+			mode.editor.pendingImages = [newerImage];
+		});
+		expect(mode.editor.getExpandedText()).toBe("newer ordinary draft");
+		expect(mode.editor.pendingImages).toEqual([newerImage]);
+		await dropPrompt("must not overwrite a newer image-only draft", () => mode.editor.setText(""));
+		expect(mode.editor.getExpandedText()).toBe("");
+		expect(mode.editor.pendingImages).toEqual([newerImage]);
 		expect(session.messages).toEqual([]);
-		expect(mode.ui.hasOverlay()).toBe(false);
-	});
-
-	for (const [width, height] of [
-		[100, 28],
-		[120, 36],
-	] as const) {
-		it(`keeps three Dev lines and the composer visible at ${width}x${height} and after resize`, async () => {
-			term.resize(width, height);
-			const controller = await emptyDev();
-			const widget = vi.spyOn(mode, "setHookWidget");
-			mode.editor.setText("NATIVE_DRAFT");
-			controller.publishObservation();
-			const rows = () => plainRows(term.getViewport());
-			await term.waitForRender(() => rows().some(row => row.includes("Dev ·")));
-			const call = widget.mock.calls.findLast(call => call[0] === "native-dev-input" && call[1]);
-			expect(typeof call?.[1]).toBe("function");
-			if (typeof call?.[1] !== "function") throw new Error("Expected native widget factory");
-			expect(call[1](mode.ui, {} as never).render(width)).toHaveLength(3);
-			expect(rows().filter(row => row.includes("Dev ·"))).toHaveLength(1);
-			expect(rows().some(row => row.includes("NATIVE_DRAFT"))).toBe(true);
-			term.resize(width === 100 ? 120 : 100, height === 28 ? 36 : 28);
-			controller.publishObservation();
-			await term.waitForRender();
-			expect(mode.editor.getExpandedText()).toBe("NATIVE_DRAFT");
-			expect(rows().filter(row => row.includes("Dev ·"))).toHaveLength(1);
-			expect(mode.ui.hasOverlay()).toBe(false);
-		});
-	}
-
-	it("binds real native session, manager and agent without copying replies into root", async () => {
-		const controller = await emptyDev();
-		const stage = new AgentSession({
-			agent: new Agent({
-				initialState: { model: session.model!, systemPrompt: ["Stage"], tools: [], messages: [] },
-			}),
-			sessionManager: SessionManager.create(tempDir.path(), tempDir.path()),
-			settings: Settings.isolated(),
-			modelRegistry: session.modelRegistry,
-			ownedAsyncJobManager: new AsyncJobManager({}),
-		});
-		try {
-			const settle = vi
-				.spyOn(stage, "settleInFlightMessagePersistence")
-				.mockRejectedValueOnce(new Error("storage unavailable"));
-			await expect(mode.bindMainSession(stage)).rejects.toThrow("storage unavailable");
-			expect(mode.session).toBe(session);
-			expect(mode.sessionManager).toBe(session.sessionManager);
-			settle.mockRestore();
-			stage.sessionManager.appendMessage({ role: "user", content: "STAGE_NATIVE_MESSAGE", timestamp: Date.now() });
-			stage.agent.replaceMessages(stage.sessionManager.buildSessionContext().messages);
-			mode.editor.setText("preserved draft");
-			await mode.bindMainSession(stage);
-			expect(mode.session).toBe(stage);
-			expect(mode.sessionManager).toBe(stage.sessionManager);
-			expect(mode.agent).toBe(stage.agent);
-			expect(mode.settings).toBe(stage.settings);
-			expect(mode.viewSession).toBe(stage);
-			await term.waitForRender(() =>
-				plainRows(term.getViewport()).some(row => row.includes("STAGE_NATIVE_MESSAGE")),
-			);
-			expect(plainRows(term.getViewport()).filter(row => row.includes("STAGE_NATIVE_MESSAGE"))).toHaveLength(1);
-			const native = vi.spyOn(controller, "nativeSession").mockReturnValue(stage);
-			const guard = vi.spyOn(controller, "checkConversationAllowed").mockResolvedValue();
-			const image = { type: "image" as const, data: "AA==", mimeType: "image/png" };
-			mode.editor.pendingImages.push(image);
-			mode.editor.pendingImageLinks.push(undefined);
-			expect(await mode.handleDevInput("preserved draft", { images: [image] })).toBe(false);
-			expect(guard).toHaveBeenCalledTimes(1);
-			expect(mode.editor.pendingImages).toEqual([image]);
-			native.mockRestore();
-			guard.mockRestore();
-			expect(session.messages).toEqual([]);
-			expect(session.sessionManager.getEntries().some(entry => entry.type === "message")).toBe(false);
-			await mode.bindMainSession(session);
-			expect(mode.session).toBe(session);
-			expect(mode.sessionManager).toBe(session.sessionManager);
-			expect(mode.agent).toBe(session.agent);
-			expect(mode.editor.getExpandedText()).toBe("preserved draft");
-		} finally {
-			await mode.bindMainSession(session);
-			await stage.dispose();
-		}
-	});
-
-	it("exit restores ordinary native history and removes Dev chrome without submitting a reply", async () => {
-		const controller = await emptyDev();
-		const prompt = vi.spyOn(session, "prompt").mockResolvedValue(true);
-		mode.editor.setText("ordinary draft");
-		await controller.exit();
-		expect(mode.session).toBe(session);
-		expect(mode.agent).toBe(session.agent);
-		expect(mode.sessionManager).toBe(session.sessionManager);
-		expect(mode.editor.getExpandedText()).toBe("ordinary draft");
-		expect(prompt).not.toHaveBeenCalled();
-		await term.waitForRender();
-		expect(plainRows(term.getViewport()).some(row => row.includes("Dev ·"))).toBe(false);
+		expect(dispatch).not.toHaveBeenCalled();
 	});
 
 	it("paints the submitted user message before any model reply", async () => {

@@ -21,8 +21,6 @@ import {
 	PROTOCOL_V4_LIMITS,
 	utf8JsonByteLength,
 } from "./schema";
-import { conversationTopicFrameSchema as baselineConversationTopicFrameSchema } from "./schema/vendor/zcode-protocol-v4/index";
-import { legacySpecDetails, legacySpecInteraction } from "./spec-driven";
 
 export type TopicDelta = ConversationDelta | SessionsIndexDelta | WorkspaceConfigDelta;
 export type TopicSnapshot = ConversationSnapshot | SessionsIndexSnapshot | WorkspaceConfigSnapshot;
@@ -38,16 +36,12 @@ interface TopicState {
 	history: { from: number; to: number; deltas: TopicDelta[] }[];
 	dispose?: () => void;
 	released?: true;
-	specRunIds: Set<string>;
-	businessRunIds: Set<string>;
 }
 interface Subscription {
 	id: string;
 	topic: string;
 	connectionId: string;
 	profile: "continuous" | "replayable";
-	includeSpecDriven: boolean;
-	includeSpecBusiness: boolean;
 	emit: (frame: RoutedTopicWireFrame) => void;
 	ordinal: number;
 	paused: boolean;
@@ -75,16 +69,6 @@ export class ZCodeTopics {
 			epoch: snapshot.logEpoch,
 			seq: "seq" in snapshot ? snapshot.seq : 0,
 			history: [],
-			specRunIds: new Set(
-				"workflowRuns" in snapshot ? snapshot.workflowRuns?.runs.filter(run => run.spec).map(run => run.runId) : [],
-			),
-			businessRunIds: new Set(
-				"workflowRuns" in snapshot
-					? snapshot.workflowRuns?.runs
-							.filter(run => run.spec && !legacySpecDetails(run.spec))
-							.map(run => run.runId)
-					: [],
-			),
 		};
 		this.#topics.set(topic, state);
 		state.dispose = source.subscribe?.(deltas => this.publish(topic, deltas));
@@ -107,16 +91,6 @@ export class ZCodeTopics {
 			state.epoch = snapshot.logEpoch;
 			state.seq = "seq" in snapshot ? snapshot.seq : 0;
 			state.history = [];
-			state.specRunIds = new Set(
-				"workflowRuns" in snapshot ? snapshot.workflowRuns?.runs.filter(run => run.spec).map(run => run.runId) : [],
-			);
-			state.businessRunIds = new Set(
-				"workflowRuns" in snapshot
-					? snapshot.workflowRuns?.runs
-							.filter(run => run.spec && !legacySpecDetails(run.spec))
-							.map(run => run.runId)
-					: [],
-			);
 			for (const sub of this.#subscriptions.values())
 				if (sub.topic === topic) {
 					sub.pending = [];
@@ -126,19 +100,6 @@ export class ZCodeTopics {
 					this.#snapshot(sub, state);
 				}
 			return;
-		}
-		for (const delta of deltas) {
-			if (delta.op === "workflowRun.updated" && delta.run?.spec) {
-				state.specRunIds.add(delta.runId);
-				if (!legacySpecDetails(delta.run.spec)) state.businessRunIds.add(delta.runId);
-			}
-			if (delta.op === "state.updated")
-				for (const run of delta.patch.workflowRuns?.runs ?? []) {
-					if (run.spec) {
-						state.specRunIds.add(run.runId);
-						if (!legacySpecDetails(run.spec)) state.businessRunIds.add(run.runId);
-					}
-				}
 		}
 		const from = state.seq;
 		state.seq += 1;
@@ -163,8 +124,6 @@ export class ZCodeTopics {
 			connectionId: string;
 			clientMode: "desktop-continuous" | "web-remote-replayable";
 			base?: { logEpoch: string; seq: number };
-			includeSpecDriven?: true;
-			includeSpecBusiness?: true;
 		},
 		emit: (frame: RoutedTopicWireFrame) => void,
 	): { ack: SubscribeAck; flush: () => void } {
@@ -177,8 +136,6 @@ export class ZCodeTopics {
 			topic: params.topic,
 			connectionId: params.connectionId,
 			profile: params.clientMode === "desktop-continuous" ? "continuous" : "replayable",
-			includeSpecDriven: params.includeSpecDriven === true,
-			includeSpecBusiness: params.includeSpecBusiness === true,
 			emit,
 			ordinal: 0,
 			paused: true,
@@ -321,59 +278,7 @@ export class ZCodeTopics {
 		);
 	}
 	#deliver(sub: Subscription, candidate: unknown, kind: "initial" | "online" | "recovery" = "online"): void {
-		let frame = routedTopicFrameSchema.parse(candidate);
-		if (sub.topic.startsWith("conversation/") && !sub.includeSpecDriven) {
-			const conversation = conversationTopicFrameSchema.parse(frame);
-			const nativeIds = this.#requireTopic(sub.topic).specRunIds;
-			if (conversation.payload.kind === "snapshot") {
-				delete conversation.payload.snapshot.dev;
-				const runs = conversation.payload.snapshot.workflowRuns;
-				if (runs) runs.runs = runs.runs.filter(run => !run.spec);
-			} else {
-				conversation.payload.deltas = conversation.payload.deltas.filter(delta => {
-					if (delta.op === "state.updated") {
-						delete delta.patch.dev;
-						const runs = delta.patch.workflowRuns;
-						if (runs) runs.runs = runs.runs.filter(run => !run.spec);
-					}
-					if (delta.op === "workflowRun.updated" || delta.op === "workflowRun.removed")
-						return !nativeIds.has(delta.runId);
-					return true;
-				});
-			}
-			// Strip every local namespace before the pinned client's validation/encoding.
-			frame = baselineConversationTopicFrameSchema.parse(conversation);
-		} else if (sub.topic.startsWith("conversation/") && !sub.includeSpecBusiness) {
-			const conversation = conversationTopicFrameSchema.parse(frame);
-			const businessIds = this.#requireTopic(sub.topic).businessRunIds;
-			const legacyRuns = (runs: NonNullable<ConversationSnapshot["workflowRuns"]>) => {
-				runs.runs = runs.runs.filter(run => !run.spec || !!legacySpecDetails(run.spec));
-				for (const run of runs.runs) if (run.spec) run.spec = legacySpecDetails(run.spec)!;
-			};
-			if (conversation.payload.kind === "snapshot") {
-				const snapshot = conversation.payload.snapshot;
-				if (snapshot.dev) snapshot.dev = legacySpecInteraction(snapshot.dev) ?? { mode: "dev", actions: [] };
-				if (snapshot.workflowRuns) legacyRuns(snapshot.workflowRuns);
-			} else {
-				conversation.payload.deltas = conversation.payload.deltas.filter(delta => {
-					if (delta.op === "state.updated") {
-						if (delta.patch.dev)
-							delta.patch.dev = legacySpecInteraction(delta.patch.dev) ?? { mode: "dev", actions: [] };
-						if (delta.patch.workflowRuns) legacyRuns(delta.patch.workflowRuns);
-					}
-					if (delta.op === "workflowRun.updated" || delta.op === "workflowRun.removed") {
-						if (businessIds.has(delta.runId)) return false;
-						if (delta.op === "workflowRun.updated" && delta.run?.spec) {
-							const spec = legacySpecDetails(delta.run.spec);
-							if (!spec) return false;
-							delta.run.spec = spec;
-						}
-					}
-					return true;
-				});
-			}
-			frame = conversation;
-		}
+		const frame = routedTopicFrameSchema.parse(candidate);
 		if (sub.paused || sub.saturated) {
 			if (sub.needsSnapshot) return;
 			const bytes = utf8JsonByteLength(frame);

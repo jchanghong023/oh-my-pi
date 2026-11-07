@@ -4,6 +4,7 @@
 
 ### Breaking Changes
 
+- Replace Dev-only terminal mode and Dev↔ZCode routes with the eight-stage browser workbench opened by `/dev` or `omp dev`; old Dev subcommands/state are not migrated. In Dev, the current TUI accepts only another `/dev` to settle native work and restore the original session; ordinary work must settle before entry, and page closure does not exit Dev. Ordinary TUI, ZCode and existing user files/history remain.
 - Removed the fork's Repo code index, `repo` tool, `/repo` panel, Python-symbol indexing and ZCode Repo extensions; use existing file search, AST and LSP tools for code navigation. Existing user databases and project files are left untouched.
 - Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
 - Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; databases with the old name are no longer adopted. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
@@ -28,6 +29,7 @@
 
 ### Added
 
+- Get TUI word completions and next-message predictions, including alternative suggestions, in the Dev browser workbench; accepting a suggestion fills the draft without sending it.
 - Share offline TUI sessions directly by login username with `/collab` and `/join <username>` over plain intranet WS and same-server HTTP discovery, using the built-in `omp collab serve --host 0.0.0.0 --port 7466` relay with `OMP_OFFLINE=1`; one active room per username, with no certificates, proxy, authentication, or host approval required.
 - Use native TUI `/sketch` without installation or configuration to draw or annotate pasted images in a local offline browser canvas, then add a PNG attachment to your draft for manual sending.
 - Use `/forkreviewer [scope]` for read-only fork review, split into small functional shards with compact issue reports.
@@ -37,7 +39,7 @@
 - Record Windows CPU, memory, disk capacity and disk I/O metrics every two seconds in a background temporary log with `bun scripts/monitor-system.ts`, then inspect test-run peaks with `--report`.
 - Run local mock embedding and rerank endpoints for knowledge search performance work from a source checkout.
 - Use the bundled Developer Test Agent with `/dt`, `/generate-dt-files`, `/generate-dt-dir`, `/incremental-dt` and `/cloud-dt-fix`, including its Python, Java, C/C++ and Go unit-test skills.
-- Start an optional business interview with `/dev business <description>` and an automatically assigned document path, then confirm its complete document with `/dev next` or deliver business requirements only with `/dev finish-business`; `/dev new` still starts directly with development requirements.
+- Import existing business Markdown without a prior interview, or use the business agent for local-only writing and hand the document to a separately created development requirement.
 - Build and replace the local Windows executable without stopping running sessions with `bun run local`, or build and upload Windows and WSL Linux binaries in parallel to a CNB release with `bun run cnb`, without packaging or publishing source code.
 - Use `/minimal` to request minimal changes and directly relevant verification, optionally alongside a task.
 - Support optional `OMP_CACHE_DIR` for caches, statistics, logs and default native files, with a per-user Linux offline default while keeping sessions and knowledge persistent.
@@ -55,15 +57,14 @@
 - Preview OpenWiki initialization and updates with `--dry-run`, showing model selection and candidate paths without invoking a model or writing Wiki files.
 - Add built-in `omp openwiki` repository generation, incremental updates, workspace linking and offline visualization/static export, with read-only AI query tools. Generation uses the current OMP profile's default role or a per-run `--modelId`; it still requires a reachable tool-capable model. OpenWiki user data follows the OMP configuration root and profile without migrating standalone workspaces.
 - Run eligible affected fork fulltest stages when a complete clean baseline permits, accurately reporting unselected stages.
-- Streamline Dev and ZCode process coverage and schedule startup-sensitive tests with bounded parallelism while preserving consumer and isolation boundaries.
+- Move Dev acceptance to browser/native consumers while retaining material failures, permissions, cancellation, Team/Goal and ordinary TUI coverage within existing gate budgets; packaged acceptance remains an explicitly authorized separate program.
 - Add `bun run fulltest --full` to run the current platform's full supported test suites without fork or changed-file selection.
-- Added workspace-owned `/dev` orchestration with one unfinished flow and one controller per existing workspace, four persistent native stage sessions and minimal recoverable business state. Git worktree subdirectories, aliases and branches share ownership; Dev neither creates nor requires worktrees.
-- Use native stage chat, streaming, tool events, attachments, queues, drafts, history, compaction and stopping without relaying or duplicating replies. A three-line Dev area shows role/runtime/Team, the main action and its consequence, and errors or progress; configuration and details are manual native interactions, without automatic dialogs or a separate decision panel.
-- Persist only the workspace solution-Team toggle, default off and editable in no-agent or requirements phases when runtime conditions allow. New flows inherit it; successful completion preserves it and drop clears it. Team starts only on solution entry, not follow-up turns. Goal remains a user-controlled native executor-session capability, with no Dev setting or per-turn recreation.
+- Open the Dev browser workbench with eight material-driven stages and five native agent roles. ST, PR and tester completion are human marks with same-operation scoped Git confirmation; unmerged cancellation reverses owned changes, and merged fixes use linked requirements.
+- Reuse native chat, tools, MCP, extensions, approvals, attachments, Team and Goal; page closure does not stop host-owned work and reconnection does not replay actions. Offline workbench guests use native Collab over ordinary HTTP/WS without remote-browser WebCrypto; existing non-offline permissions remain.
+- Keep one development slot per existing Git root/branch without creating worktrees or branches, and store minimal requirement/decision/Git facts without copying chat into Git. The embedded UI uses the existing source/npm/binary resource chain; integration and platform/artifact acceptance remain pending.
 - Let `/dev` requirements and solution agents query existing Knowledge indexes directly while retaining their stage-specific file write restrictions.
 - Let `/dev` requirements, solution and planning agents delegate investigation to read-only Scout subagents without expanding stage write access.
 - Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Knowledge operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
-- Expose native `/dev` through opt-in ZCode queries and subscriptions using the same workspace controller, five role states, Team configuration, native messages, approvals and recovery rules. Cold history remains read-only and never acquires control or starts models; unrelated dynamic workflows and desktop UI integration remain separate.
 - Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
 - Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
@@ -205,6 +206,11 @@
 
 - Fix Windows-only Rust warnings and Clippy failures in shell lifecycle, locale and system helpers, and Git process setup.
 - Reuse installed Chromium binaries during isolated fulltest runs without sharing browser profiles or application state.
+- Keep Dev browser stages, materials and conversation controls usable as windows resize; preserve local writing and explicit guest reconnect.
+- Keep image-only drafts intact when native input is dropped, and preserve attachments through Dev conversations.
+- Keep Dev's owner session running when local collaborators disconnect, without serializing runtime-only model state.
+- Publish completed Dev Team solutions and their native provenance before the next stage action.
+- Initialize `/dev` commands without an import-order crash.
 - Wait for bundled skill scripts to exit and be reaped before the CLI finishes SIGINT or SIGTERM shutdown.
 - Restore Linux fulltest coverage for compaction, SDK prompts, offline commits, plugin catalogs, IME recovery and native Dev TUI workflows.
 - Read Goal state from the active history branch without leaking objectives or autopilot mode from sibling branches.

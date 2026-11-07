@@ -1,0 +1,191 @@
+import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
+import { offlineFromEnv } from "../cli/args";
+import type { InteractiveModeContext } from "../modes/types";
+import { nativeBusy } from "../spec-driven/controller";
+import { openPathWithResult } from "../utils/open";
+import { createDevWorkbenchHost, type DevWorkbenchHandle, type DevWorkbenchHost, getOrStartDevWorkbench } from "./host";
+
+const modes = new WeakMap<InteractiveModeContext, DevWorkbenchTuiMode>();
+
+/** An exclusive input owner, not a second terminal workflow or session binding. */
+export class DevWorkbenchTuiMode {
+	readonly #context: InteractiveModeContext;
+	#phase: "inactive" | "entering" | "active" | "exiting" = "inactive";
+	#host: DevWorkbenchHost | undefined;
+	#pending: Promise<void> | undefined;
+	#overlay: HookInputComponent | undefined;
+	#overlayHandle: { hide(): void } | undefined;
+	#previousDisableSubmit = false;
+
+	constructor(context: InteractiveModeContext) {
+		this.#context = context;
+		context.isDevWorkbenchModeActive = () => this.active;
+		context.handleDevWorkbenchModeInput = data => this.handleInput(data);
+		context.handleDevWorkbenchModeSubmit = text => this.submit(text);
+		context.registerHostShutdown(() => this.close());
+	}
+
+	get active(): boolean {
+		return this.#phase !== "inactive";
+	}
+
+	async toggle(): Promise<void> {
+		if (this.#pending) {
+			await this.#pending;
+			return;
+		}
+		const pending = this.active ? this.#exit() : this.#enter();
+		this.#pending = pending;
+		try {
+			await pending;
+		} finally {
+			if (this.#pending === pending) this.#pending = undefined;
+		}
+	}
+
+	async close(): Promise<void> {
+		if (this.#pending) {
+			try {
+				await this.#pending;
+			} catch {
+				/* A failed close remains retryable below. */
+			}
+		}
+		if (this.active) await this.toggle();
+	}
+
+	handleInput(data: string): boolean {
+		if (!this.active) return false;
+		this.#overlay?.handleInput(data);
+		this.#context.ui.requestRender();
+		return true;
+	}
+
+	async submit(text: string): Promise<boolean> {
+		if (!this.active) return false;
+		if (text.trim() !== "/dev") {
+			this.#context.showWarning("Dev 工作台占用当前终端；普通聊天、命令和快捷操作已暂停。仅再次输入 /dev 可退出。");
+			return true;
+		}
+		if (this.#pending) {
+			this.#context.showStatus("Dev 工作台正在切换，请等待结清后再次输入 /dev。");
+			return true;
+		}
+		await this.toggle();
+		return true;
+	}
+
+	#showOverlay(detail: string): void {
+		this.#overlayHandle?.hide();
+		this.#overlay?.dispose();
+		const overlay = new HookInputComponent(
+			`Dev 浏览器工作台\n${detail}\n普通终端操作已暂停；仅输入 /dev 并提交可退出。关闭网页不会退出。`,
+			"/dev",
+			text => {
+				void this.submit(text).catch(error =>
+					this.#context.showError(error instanceof Error ? error.message : String(error)),
+				);
+			},
+			() => this.#context.showWarning("请明确输入 /dev 退出；Esc、Ctrl+C 和关闭网页不退出 Dev。"),
+			{ tui: this.#context.ui },
+		);
+		this.#overlay = overlay;
+		this.#overlayHandle = this.#context.ui.showOverlay(overlay, {
+			anchor: "bottom-center",
+			width: "100%",
+			maxHeight: "100%",
+			margin: 0,
+			fullscreen: true,
+		});
+		this.#context.ui.setFocus(overlay);
+		this.#context.ui.requestRender();
+	}
+
+	#release(): void {
+		this.#overlayHandle?.hide();
+		this.#overlayHandle = undefined;
+		this.#overlay?.dispose();
+		this.#overlay = undefined;
+		this.#context.editor.disableSubmit = this.#previousDisableSubmit;
+		this.#phase = "inactive";
+		this.#context.ui.requestRender();
+	}
+
+	async #enter(): Promise<void> {
+		const context = this.#context;
+		const blocked = context.getDevWorkbenchEntryBlocker?.();
+		if (!context.getDevWorkbenchEntryBlocker)
+			throw new Error("当前终端未提供真实 Dev 互斥准入检查，请使用 omp dev。");
+		if (blocked) throw new Error(blocked);
+		if (nativeBusy(context.session))
+			throw new Error("普通原生任务或自动续跑尚未结清；请先停止或等待，再输入 /dev。不会自动停止普通任务。");
+		this.#previousDisableSubmit = context.editor.disableSubmit;
+		context.editor.disableSubmit = true;
+		this.#phase = "entering";
+		try {
+			this.#showOverlay("正在启动，请稍候。");
+			this.#host = await createDevWorkbenchHost({
+				session: context.session,
+				settings: context.settings,
+				cwd: context.sessionManager.getCwd(),
+				mcpManager: context.mcpManager,
+				nativeMcpUiAuthHandler: context.nativeMcpUiAuthHandler,
+			});
+			const handle = await getOrStartDevWorkbench(this.#host);
+			this.#phase = "active";
+			this.#showOverlay(handle.urls.join("\n"));
+			for (const url of handle.urls) context.showStatus(`Dev 工作台已就绪：${url}`);
+			if (offlineFromEnv() && handle.urls.length === 1)
+				context.showWarning("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。");
+			this.#openBrowser(handle);
+		} catch (error) {
+			if (this.#host) {
+				try {
+					await this.#host.close();
+					this.#host = undefined;
+				} catch (cleanupError) {
+					this.#phase = "exiting";
+					this.#showOverlay("服务启动失败且 Dev 尚未结清；普通终端保持暂停。输入 /dev 重试退出。");
+					throw new AggregateError([error, cleanupError], "Dev 服务启动失败，且资源仍待结清");
+				}
+			}
+			this.#release();
+			throw error;
+		}
+	}
+
+	#openBrowser(handle: DevWorkbenchHandle): void {
+		if (process.env.OMP_DEV_NO_OPEN === "1") {
+			this.#context.showStatus(`已按 OMP_DEV_NO_OPEN=1 跳过自动打开浏览器；请复制此地址访问：${handle.loopbackUrl}`);
+			return;
+		}
+		void openPathWithResult(handle.loopbackUrl).then(result => {
+			if (this.#phase !== "active") return;
+			if (!result.opened)
+				this.#context.showWarning(`浏览器未自动打开：${result.reason}\n请复制此地址访问：${handle.loopbackUrl}`);
+		});
+	}
+
+	async #exit(): Promise<void> {
+		this.#phase = "exiting";
+		this.#showOverlay("正在停止接收新操作并结清 Dev 工作；普通终端将在结清后恢复。");
+		try {
+			await this.#host?.close();
+			this.#host = undefined;
+		} catch (error) {
+			this.#showOverlay("Dev 尚未结清；普通终端保持暂停。输入 /dev 重试退出。");
+			throw error;
+		}
+		this.#release();
+		this.#context.showStatus("已退出 Dev 工作台，普通会话和草稿保持不变。");
+	}
+}
+
+export function getDevWorkbenchTuiMode(context: InteractiveModeContext): DevWorkbenchTuiMode {
+	let mode = modes.get(context);
+	if (!mode) {
+		mode = new DevWorkbenchTuiMode(context);
+		modes.set(context, mode);
+	}
+	return mode;
+}

@@ -1,6 +1,7 @@
 // Optional OMP configuration extension, developed with the Host adapter; not part of the pinned upstream baseline.
 import { z } from "zod";
 import { zcodeWorkflowsListParamsSchema } from "./vendor/zcode-protocol/index";
+import * as baseline from "./vendor/zcode-protocol-v4/index";
 // Optional OMP configuration extension. Session identity is explicit; profile is
 // derived by the server from the trusted connection, never supplied by the UI.
 export const ompModelRefSchema = z
@@ -220,3 +221,44 @@ export type OmpTeamModels = z.infer<typeof ompTeamModelsSchema>;
 export type OmpSaveReceipt = z.infer<typeof ompSaveReceiptSchema>;
 export type ZCodeSessionConfigureParams = z.infer<typeof zcodeSessionConfigureParamsSchema>;
 export type ZCodeSessionConfigureResult = z.infer<typeof zcodeSessionConfigureResultSchema>;
+// Native immutable captures are not limited to the script engine's sixteen publications.
+// Only the version domain changes; identity, metadata and byte-read bounds stay pinned.
+const nativeArtifactVersion = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
+export const workflowRunArtifactVersionSchema = baseline.workflowRunArtifactVersionSchema.extend({
+	version: nativeArtifactVersion,
+});
+export type WorkflowRunArtifactVersion = z.infer<typeof workflowRunArtifactVersionSchema>;
+export const workflowRunArtifactSchema = baseline.workflowRunArtifactSchema.extend({
+	version: nativeArtifactVersion,
+	versions: z.array(workflowRunArtifactVersionSchema),
+});
+export type WorkflowRunArtifact = z.infer<typeof workflowRunArtifactSchema>;
+export const workflowRunArtifactSummarySchema = baseline.workflowRunArtifactSummarySchema.extend({
+	version: nativeArtifactVersion,
+});
+export type WorkflowRunArtifactSummary = z.infer<typeof workflowRunArtifactSummarySchema>;
+export const v4ConversationWorkflowRunArtifactsResultSchema =
+	baseline.v4ConversationWorkflowRunArtifactsResultSchema.extend({
+		artifacts: z.array(workflowRunArtifactSchema),
+	});
+export type V4ConversationWorkflowRunArtifactsResult = z.infer<typeof v4ConversationWorkflowRunArtifactsResultSchema>;
+export const v4ConversationWorkflowRunArtifactReadParamsSchema =
+	baseline.v4ConversationWorkflowRunArtifactReadParamsSchema.extend({ version: nativeArtifactVersion });
+export type V4ConversationWorkflowRunArtifactReadParams = z.infer<
+	typeof v4ConversationWorkflowRunArtifactReadParamsSchema
+>;
+
+// Validate the complete ordinary input before the pinned parser strips unknown payload keys.
+// Goal input has its own displayText contract; shared dispatch must use its command-specific schema.
+export const commandPayloadSchemas = {
+	...baseline.commandPayloadSchemas,
+	sendText: baseline.commandPayloadSchemas.sendText.strict(),
+};
+export const parseCommandEnvelope: typeof baseline.parseCommandEnvelope = value => {
+	const parsed = baseline.parseCommandEnvelope(value);
+	if (!parsed.ok || parsed.envelope.type !== "sendText") return parsed;
+	const envelope = baseline.commandEnvelopeSchema.parse(value);
+	const payload = commandPayloadSchemas.sendText.safeParse(envelope.payload);
+	if (!payload.success) return { ok: false, error: payload.error };
+	return { ok: true, envelope: { ...parsed.envelope, payload: payload.data } };
+};

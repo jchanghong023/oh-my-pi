@@ -1,0 +1,25 @@
+.sh-predictive-textarea {
+	position: relative;
+	flex: 1;
+	min-width: 0;
+	width: 100%;
+}
+.sh-predictive-textarea > textarea {
+	display: block;
+	width: 100%;
+	box-sizing: border-box;
+}
+.sh-prediction-mirror {
+	position: absolute;
+	inset: 0;
+	box-sizing: border-box;
+	overflow: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	color: transparent;
+	pointer-events: none;
+}
+.sh-word-prediction {
+	color: var(--fg-muted);
+	opacity: 0.65;
+}

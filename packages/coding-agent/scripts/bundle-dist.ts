@@ -7,6 +7,11 @@ import {
 	buildDeveloperTestAgentResources,
 	createDeveloperTestAgentArchivePlugin,
 } from "./developer-test-agent-resources";
+import {
+	buildDevWorkbenchAssets,
+	createDevWorkbenchAssetsPlugin,
+	writeDevWorkbenchAssets,
+} from "./dev-workbench-resources";
 import { buildDocsIndexPayload } from "./generate-docs-index";
 import { createJsonParsePlugin } from "./json-parse-plugin";
 import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
@@ -122,6 +127,8 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 	// build-time embed) can still resolve omp:// docs (see src/internal-urls/docs-index.ts).
 	try {
 		const openWikiResources = await buildOpenWikiResources();
+		const workbenchAssets = await buildDevWorkbenchAssets();
+		await writeDevWorkbenchAssets(workbenchAssets);
 		const vendorBundle = await withCompilerActivity(() =>
 			Bun.build({
 				entrypoints: [path.join(packageDir, "scripts/openwiki-vendor-entry.ts")],
@@ -164,6 +171,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				createOpenWikiVendorLoaderPlugin(),
 				await createLegacyPiVirtualModulePlugin(),
 				createSpecDrivenArchivePlugin(specDrivenArchive),
+				createDevWorkbenchAssetsPlugin(workbenchAssets),
 				inlineNativeNoticesPlugin,
 			],
 			external: [...ALWAYS_EXTERNAL, ...RUNTIME_EXTERNAL],

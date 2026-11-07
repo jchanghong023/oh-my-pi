@@ -223,6 +223,7 @@ export class CommandCatalogService {
 	 */
 	async resolve(text: string, session?: object): Promise<CommandResolution> {
 		const parsed = parseSlashCommand(text);
+		if (parsed?.name === "dev") throw new CommandCatalogError("/dev is not available in ZCode", "unsupported");
 		if (parsed) {
 			const spec = lookupBuiltinSlashCommand(parsed.name);
 			if (spec) {
@@ -264,6 +265,7 @@ export class CommandCatalogService {
 		const entries: CommandCatalogEntry[] = [];
 		const descriptors: CommandDescriptor[] = [];
 		for (const command of available) {
+			if (command.name === "dev") continue;
 			const entry = entryFromAvailable(command);
 			entries.push(entry);
 			descriptors.push(

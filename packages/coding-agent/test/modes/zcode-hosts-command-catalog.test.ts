@@ -114,8 +114,8 @@ describe("CommandCatalogService", () => {
 		};
 		const catalog = byName(await service.buildCatalog(session));
 		// 目录必须覆盖真实 registry；新增普通 builtin 不需要再维护 ZCode 命令名单。
-		const registered = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(command =>
-			Boolean(command.handle || command.handleRpc || command.handleTui),
+		const registered = BUILTIN_SLASH_COMMANDS_INTERNAL.filter(
+			command => command.name !== "dev" && Boolean(command.handle || command.handleRpc || command.handleTui),
 		);
 		expect(
 			[...catalog.values()].filter(command => command.source === "builtin").map(command => command.name),
@@ -132,6 +132,11 @@ describe("CommandCatalogService", () => {
 			for (const alias of command.aliases ?? []) {
 				expect(await service.resolve(`/${alias}`, session)).toMatchObject({ kind: "builtin", name: command.name });
 			}
+		}
+		expect(catalog.has("dev")).toBe(false);
+		expect((await service.complete({ text: "/dev", cursor: 4, session })).items).toEqual([]);
+		for (const command of ["/dev", "/dev next", "/dev:new"]) {
+			await expect(service.resolve(command, session)).rejects.toMatchObject({ code: "unsupported" });
 		}
 		expect(catalog.get("model")).toMatchObject({
 			source: "builtin",

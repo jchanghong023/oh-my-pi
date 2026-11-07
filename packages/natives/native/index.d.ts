@@ -812,6 +812,8 @@ export declare class VcsGitRepo {
   statusSummary(signal?: unknown | undefined | null): Promise<VcsStatusSummary>
   /** Read config. */
   configGet(key: string, signal?: unknown | undefined | null): Promise<string | undefined | null>
+  /** Resolve an effective executable hook without executing it. */
+  hookPath(name: string, signal?: unknown | undefined | null): Promise<string | null>
   /** Set config. */
   configSet(key: string, value: string, signal?: unknown | undefined | null): Promise<undefined>
   /** List remotes. */
@@ -866,12 +868,19 @@ export declare class VcsGitRepo {
   diffTree(base: string, head: string, binary: boolean, signal?: unknown | undefined | null): Promise<string>
   /** Stage paths. */
   stageFiles(files: Array<string>, signal?: unknown | undefined | null): Promise<undefined>
+  /**
+   * Snapshot exact paths into a private index through the native clean
+   * pipeline.
+   */
+  stageFilesIntoIndex(files: Array<string>, indexPath: string, signal?: unknown | undefined | null): Promise<undefined>
   /** Unstage paths. */
   unstage(files: Array<string>, signal?: unknown | undefined | null): Promise<undefined>
   /** Stage selected hunks. */
   stageHunks(selections: Array<VcsHunkSelection>, rawDiff?: string | undefined | null, signal?: unknown | undefined | null): Promise<undefined>
   /** Create commit. */
   commitCreate(message: string, options: VcsCommitOptions, signal?: unknown | undefined | null): Promise<string>
+  /** Hook-free confirmed-tree commit with locked, resumable index publication. */
+  commitCreateScoped(message: string, options: VcsScopedCommitOptions, signal?: unknown | undefined | null): Promise<VcsScopedCommitResult>
   /**
    * Write a commit object for `tree` on `parents` without moving any ref or
    * touching the index/worktree (`git commit-tree`).
@@ -897,6 +906,13 @@ export declare class VcsGitRepo {
   writeTree(indexPath?: string | undefined | null, signal?: unknown | undefined | null): Promise<string>
   /** Apply patch. */
   applyPatch(patch: string, options: VcsApplyOptions, signal?: unknown | undefined | null): Promise<undefined>
+  /**
+   * Prepare actual raw-byte preimages/postimages without index/worktree
+   * writes.
+   */
+  previewOwnedPatch(patch: string, options: VcsOwnedPatchPreviewOptions, signal?: unknown | undefined | null): Promise<VcsOwnedPatchPreview>
+  /** Guard worktree preimages and report every path's actual partial outcome. */
+  applyOwnedPatch(patch: string, options: VcsOwnedPatchOptions, signal?: unknown | undefined | null): Promise<VcsOwnedPatchResult>
   /** Check patch applicability. */
   canApplyPatch(patch: string, options: VcsApplyOptions, signal?: unknown | undefined | null): Promise<boolean>
   /** Cherry-pick commit. */
@@ -911,6 +927,8 @@ export declare class VcsGitRepo {
   stashTryPop(reinstateIndex: boolean, signal?: unknown | undefined | null): Promise<boolean>
   /** Push via Git CLI. */
   push(options: VcsPushOptions, signal?: unknown | undefined | null): Promise<void>
+  /** Observe exactly one full remote ref; transport errors remain unknown. */
+  remoteRef(remote: string, fullRef: string, signal?: unknown | undefined | null): Promise<VcsRemoteRefResult>
   /** Fetch a refspec via Git CLI. */
   fetch(remote: string, source: string, target: string, timeoutMs?: number | undefined | null, signal?: unknown | undefined | null): Promise<void>
 }
@@ -4524,11 +4542,53 @@ export interface VcsNumstatEntry {
   removed?: number
 }
 
+/** Operation-oriented raw worktree SHA-256 guards; null means absent. */
+export interface VcsOwnedPatchExpectation {
+  path: string
+  beforeVersion: string | null
+  afterVersion: string | null
+}
+
+/** Guarded patch settings (versions are not swapped when reversing). */
+export interface VcsOwnedPatchOptions {
+  reverse: boolean
+  expected: Array<VcsOwnedPatchExpectation>
+}
+
+/** One actual worktree path outcome. */
+export interface VcsOwnedPatchPathResult {
+  path: string
+  status: "applied" | "unchanged" | "failed"
+  actualVersion: string | null
+}
+
+/** Raw-byte guards prepared without index/worktree writes. */
+export interface VcsOwnedPatchPreview {
+  expected: Array<VcsOwnedPatchExpectation>
+}
+
+/** Dry-run the patch against the actual worktree and configured filters. */
+export interface VcsOwnedPatchPreviewOptions {
+  reverse: boolean
+}
+
+/** Partial writes are retained and reported, never silently rolled back. */
+export interface VcsOwnedPatchResult {
+  paths: Array<VcsOwnedPatchPathResult>
+  complete: boolean
+  diagnostic?: string
+}
+
 /** Push options. */
 export interface VcsPushOptions {
   remote?: string
   refspec?: string
   forceWithLease?: boolean
+}
+
+/** Successful exact remote advertisement observation. */
+export interface VcsRemoteRefResult {
+  sha: string | null
 }
 
 /** Restore options. */
@@ -4537,6 +4597,25 @@ export interface VcsRestoreOptions {
   staged?: boolean
   worktree?: boolean
   files?: Array<string>
+}
+
+/** Confirmed tree and independent real-index reconciliation. */
+export interface VcsScopedCommitOptions {
+  expectedHeadRef: string
+  expectedHeadSha: string
+  expectedIndexVersion: string
+  indexPath: string
+  reconciledIndexPath: string
+  expectedTree: string
+  files: Array<string>
+}
+
+/** Actual publication steps, including a recoverable index failure. */
+export interface VcsScopedCommitResult {
+  sha: string | null
+  refUpdated: boolean
+  indexUpdated: boolean
+  diagnostic?: string
 }
 
 /** Bounded object contents. */

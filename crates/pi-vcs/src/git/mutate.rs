@@ -5,6 +5,7 @@ use std::{
 	collections::{BTreeMap, BTreeSet},
 	ffi::OsStr,
 	fs,
+	io::{Read, Write},
 	path::{Path, PathBuf},
 	process::{Command, Stdio},
 };
@@ -21,8 +22,9 @@ use super::{
 use crate::{
 	error::{Error, Result},
 	types::{
-		CleanOptions, CommitAuthor, CommitOptions, DetachGitDirResult, ResetMode, RestoreOptions,
-		WorktreeAddOptions, WorktreeAddResult, WorktreeClone,
+		CleanOptions, CommitAuthor, CommitOptions, DetachGitDirResult, HeadState, ResetMode,
+		RestoreOptions, ScopedCommitOptions, ScopedCommitResult, WorktreeAddOptions,
+		WorktreeAddResult, WorktreeClone,
 	},
 };
 
@@ -30,6 +32,78 @@ const INDEX_WRITE: gix::index::write::Options = gix::index::write::Options {
 	extensions: gix::index::write::Extensions::None,
 	skip_hash:  false,
 };
+
+pub(crate) fn raw_sha256(bytes: &[u8]) -> Result<String> {
+	let mut hash = gix::hash::hasher(gix::hash::Kind::Sha256);
+	hash.update(bytes);
+	hash
+		.try_finalize()
+		.map(|id| id.to_hex().to_string())
+		.map_err(|err| Error::backend("SHA-256", err))
+}
+
+pub(crate) fn sha256_file(path: &Path) -> Result<String> {
+	let mut file = fs::File::open(path)?;
+	let mut hash = gix::hash::hasher(gix::hash::Kind::Sha256);
+	let mut buffer = [0; 8192];
+	loop {
+		let read = file.read(&mut buffer)?;
+		if read == 0 {
+			break;
+		}
+		hash.update(&buffer[..read]);
+	}
+	hash
+		.try_finalize()
+		.map(|id| id.to_hex().to_string())
+		.map_err(|err| Error::backend("SHA-256", err))
+}
+
+fn scoped_paths(files: &[String]) -> Result<BTreeSet<BString>> {
+	let mut paths = BTreeSet::new();
+	for path in files {
+		if path.is_empty()
+			|| path.contains('\\')
+			|| path.contains('\0')
+			|| Path::new(path).components().any(|part| match part {
+				std::path::Component::Normal(name) => {
+					name.to_string_lossy().eq_ignore_ascii_case(".git")
+				},
+				_ => true,
+			})
+			|| !paths.insert(BString::from(path.as_bytes()))
+		{
+			return Err(Error::backend(
+				"git scoped commit",
+				"scope requires unique exact repository-relative paths",
+			));
+		}
+	}
+	if paths.is_empty() {
+		return Err(Error::backend("git scoped commit", "empty confirmed scope"));
+	}
+	Ok(paths)
+}
+
+fn scoped_index(repo: &gix::Repository, path: &Path) -> Result<gix::index::File> {
+	let metadata = fs::symlink_metadata(path)?;
+	if !metadata.is_file() || metadata.len() < 12 + repo.object_hash().len_in_bytes() as u64 {
+		return Err(Error::backend("git scoped commit", "invalid or linked index file"));
+	}
+	let index = gix::index::File::at(path, repo.object_hash(), false, Default::default())
+		.map_err(|err| Error::backend("git scoped commit", err))?;
+	if index.entries().iter().any(|entry| {
+		entry.stage() != gix::index::entry::Stage::Unconflicted
+			|| entry.mode == gix::index::entry::Mode::DIR
+	}) {
+		return Err(Error::backend(
+			"git scoped commit",
+			"conflicted or sparse-directory index cannot be reconciled safely",
+		));
+	}
+	Ok(index)
+}
+
 /// Apply a ref update, synthesizing a committer for the reflog entry when no
 /// identity is configured. Reflog lines require a signature, but git never
 /// fails branch/reset/stash ref updates over missing identity — only
@@ -94,8 +168,53 @@ impl GitRepo {
 	/// under the index name. Unrelated names that share an inode (hardlinks)
 	/// and distinct NFC/NFD files when precompose is off stay separate.
 	pub fn stage_files(&self, files: &[String]) -> Result<()> {
-		let repo = self.gix()?;
-		let mut index = load_index_or_head(&repo, "git add")?;
+		self.stage_files_at(files, None)
+	}
+
+	/// Snapshot exactly these worktree paths through Git's native clean
+	/// pipeline into an existing isolated index. Never stage-all on an empty
+	/// scope and never touch the real index or any worktree file.
+	pub fn stage_files_into_index(&self, files: &[String], index_path: &Path) -> Result<()> {
+		if files.is_empty() {
+			return Ok(());
+		}
+		self.stage_files_at(files, Some(index_path))
+	}
+
+	fn stage_files_at(&self, files: &[String], index_path: Option<&Path>) -> Result<()> {
+		// Confirmation snapshots observe live filter configuration without
+		// changing the ordinary staging path's cached-handle behavior.
+		let mut repo = if index_path.is_some() {
+			self.gix_fresh()?
+		} else {
+			self.gix()?
+		};
+		let mut private_lock = None;
+		let mut index = if let Some(path) = index_path {
+			if !fs::symlink_metadata(path)?.is_file()
+				|| fs::canonicalize(path)? == fs::canonicalize(repo.index_path())?
+			{
+				return Err(Error::backend(
+					"git isolated stage",
+					"an existing private index distinct from the real index is required",
+				));
+			}
+			for file in files {
+				super::patch::guard_owned_path(self, file)?;
+			}
+			private_lock = Some(
+				gix::lock::File::acquire_to_update_resource(
+					path,
+					gix::lock::acquire::Fail::Immediately,
+					None,
+				)
+				.map_err(|err| Error::backend("git isolated stage", err))?,
+			);
+			super::patch::require_owned_filter_success(&mut repo)?;
+			scoped_index(&repo, path)?
+		} else {
+			load_index_or_head(&repo, "git add")?
+		};
 		// Whole seconds since the epoch before any file is stat'ed (see
 		// `stage_one`).
 		let staging_started = std::time::SystemTime::now()
@@ -109,26 +228,32 @@ impl GitRepo {
 		if precompose_unicode_enabled(&repo) {
 			requested = remap_composed_index_paths(self.root(), &index, requested);
 		}
-		let mut selected = collect_stage_paths(self, &requested, all)?;
-		for entry in index.entries() {
-			let path = entry.path(&index).to_str_lossy().into_owned();
-			if (all
-				|| requested
-					.iter()
-					.any(|wanted| stage_path_matches(&path, wanted)))
-				&& fs::symlink_metadata(self.root().join(&path)).is_ok()
-			{
-				selected.insert(path);
+		let mut selected = if index_path.is_some() {
+			std::mem::take(&mut requested)
+		} else {
+			collect_stage_paths(self, &requested, all)?
+		};
+		if index_path.is_none() {
+			for entry in index.entries() {
+				let path = entry.path(&index).to_str_lossy().into_owned();
+				if (all
+					|| requested
+						.iter()
+						.any(|wanted| stage_path_matches(&path, wanted)))
+					&& fs::symlink_metadata(self.root().join(&path)).is_ok()
+				{
+					selected.insert(path);
+				}
 			}
+			index.remove_entries(|_, path, _| {
+				let path = path.to_str_lossy();
+				(all
+					|| requested
+						.iter()
+						.any(|wanted| stage_path_matches(&path, wanted)))
+					&& !selected.contains(path.as_ref())
+			});
 		}
-		index.remove_entries(|_, path, _| {
-			let path = path.to_str_lossy();
-			(all
-				|| requested
-					.iter()
-					.any(|wanted| stage_path_matches(&path, wanted)))
-				&& !selected.contains(path.as_ref())
-		});
 		let (mut filter, filter_index) = repo
 			.filter_pipeline(None)
 			.map_err(|err| Error::backend("git add", err))?;
@@ -144,6 +269,12 @@ impl GitRepo {
 				},
 				Staged::Removed => {
 					replaced.insert(path.into());
+				},
+				Staged::Kept if index_path.is_some() => {
+					return Err(Error::backend(
+						"git isolated stage",
+						format!("scope path is not a stageable file: {path}"),
+					));
 				},
 				Staged::Kept => {},
 			}
@@ -169,9 +300,20 @@ impl GitRepo {
 			);
 		}
 		index.sort_entries();
-		index
-			.write(INDEX_WRITE)
-			.map_err(|err| Error::backend("git add", err))
+		if let Some(mut lock) = private_lock {
+			index
+				.write_to(&mut lock, INDEX_WRITE)
+				.map_err(|err| Error::backend("git isolated stage", err))?;
+			lock.flush()?;
+			lock
+				.commit()
+				.map_err(|err| Error::backend("git isolated stage", err))?;
+			Ok(())
+		} else {
+			index
+				.write(INDEX_WRITE)
+				.map_err(|err| Error::backend("git add", err))
+		}
 	}
 
 	/// Reset selected index entries to HEAD while preserving the worktree.
@@ -306,6 +448,278 @@ impl GitRepo {
 			.map_err(|err| Error::backend("git commit", err))?;
 		let _ = run_commit_hook(self, "post-commit", &[]);
 		Ok(id.to_hex().to_string())
+	}
+
+	/// Publish only the confirmed tree, then reconcile the real index under
+	/// its Git lock. Retrying the same parent/tree/message only finishes the
+	/// index; it never creates a second commit or rolls the ref back.
+	pub fn commit_create_scoped(
+		&self,
+		message: &str,
+		options: &ScopedCommitOptions,
+	) -> Result<ScopedCommitResult> {
+		const OP: &str = "git scoped commit";
+		let normalized = if message.ends_with('\n') {
+			Cow::Borrowed(message)
+		} else {
+			Cow::Owned(format!("{message}\n"))
+		};
+		let message = normalized.as_ref();
+		// Signing, identity and hook facts must reflect current configuration.
+		let repo = self.gix_fresh()?;
+		let _head_lock = gix::lock::Marker::acquire_to_hold_resource(
+			&self.info().head_path,
+			gix::lock::acquire::Fail::Immediately,
+			None,
+		)
+		.map_err(|err| Error::backend(OP, err))?;
+		let HeadState::Ref { ref_name: head_ref, commit: Some(head_sha), .. } = self.head()? else {
+			return Err(Error::backend(OP, "a born symbolic source branch is required"));
+		};
+		if head_ref != options.expected_head_ref || !head_ref.starts_with("refs/heads/") {
+			return Err(Error::backend(OP, "source symbolic ref changed"));
+		}
+		let parent = gix::hash::ObjectId::from_hex(options.expected_head_sha.as_bytes())
+			.map_err(|err| Error::backend(OP, err))?;
+		let tree = gix::hash::ObjectId::from_hex(options.expected_tree.as_bytes())
+			.map_err(|err| Error::backend(OP, err))?;
+		let current = gix::hash::ObjectId::from_hex(head_sha.as_bytes())
+			.map_err(|err| Error::backend(OP, err))?;
+		let resumed = current != parent;
+		if resumed {
+			let commit = repo
+				.find_commit(current)
+				.map_err(|err| Error::backend(OP, err))?;
+			let mut parents = commit.parent_ids();
+			if parents.next().map(|id| id.detach()) != Some(parent)
+				|| parents.next().is_some()
+				|| commit
+					.tree_id()
+					.map_err(|err| Error::backend(OP, err))?
+					.detach()
+					!= tree
+				|| commit
+					.message_raw()
+					.map_err(|err| Error::backend(OP, err))?
+					.as_bstr()
+					!= message.as_bytes().as_bstr()
+			{
+				return Err(Error::backend(OP, "source HEAD changed to a different operation"));
+			}
+		}
+		if !resumed {
+			for name in [
+				"pre-commit",
+				"prepare-commit-msg",
+				"commit-msg",
+				"post-commit",
+				"reference-transaction",
+				"pre-push",
+			] {
+				if self.resolve_hook_path_in(&repo, name, true)?.is_some() {
+					return Err(Error::backend(
+						OP,
+						format!("active {name} hook blocks hook-free scoped commit"),
+					));
+				}
+			}
+		}
+		let mut result = ScopedCommitResult {
+			sha:           resumed.then_some(head_sha),
+			ref_updated:   resumed,
+			index_updated: false,
+			diagnostic:    None,
+		};
+		let attempt = (|| -> Result<()> {
+			let scope = scoped_paths(&options.files)?;
+			let real_index_path = repo.index_path();
+			for path in [
+				real_index_path.as_path(),
+				options.index_path.as_path(),
+				options.reconciled_index_path.as_path(),
+			] {
+				if !fs::symlink_metadata(path)?.is_file() {
+					return Err(Error::backend(OP, "indexes must be regular files, not symlinks"));
+				}
+			}
+			let real_path = fs::canonicalize(repo.index_path())?;
+			let commit_path = fs::canonicalize(&options.index_path)?;
+			let reconciled_path = fs::canonicalize(&options.reconciled_index_path)?;
+			if real_path == commit_path
+				|| real_path == reconciled_path
+				|| commit_path == reconciled_path
+			{
+				return Err(Error::backend(
+					OP,
+					"two isolated indexes distinct from the real index are required",
+				));
+			}
+			let mut index_lock = gix::lock::File::acquire_to_update_resource(
+				&real_path,
+				gix::lock::acquire::Fail::Immediately,
+				None,
+			)
+			.map_err(|err| Error::backend(OP, err))?;
+			let _commit_lock = gix::lock::Marker::acquire_to_hold_resource(
+				&commit_path,
+				gix::lock::acquire::Fail::Immediately,
+				None,
+			)
+			.map_err(|err| Error::backend(OP, err))?;
+			let _reconciled_lock = gix::lock::Marker::acquire_to_hold_resource(
+				&reconciled_path,
+				gix::lock::acquire::Fail::Immediately,
+				None,
+			)
+			.map_err(|err| Error::backend(OP, err))?;
+			let mut index = scoped_index(&repo, &real_path)?;
+			let proposed = scoped_index(&repo, &commit_path)?;
+			let reconciled = scoped_index(&repo, &reconciled_path)?;
+			if write_index_tree(&repo, &proposed)? != tree {
+				return Err(Error::backend(
+					OP,
+					"confirmed tree does not match the isolated commit index",
+				));
+			}
+			let base = index_for_tree(&repo, Some(&commit_tree(&repo, &parent)?))?;
+			if index_diff_paths(&base, &proposed)
+				.iter()
+				.any(|path| !scope.contains(path))
+			{
+				return Err(Error::backend(OP, "commit tree changes an unconfirmed path"));
+			}
+			let same_content = index_diff_paths(&index, &reconciled).is_empty();
+			let same_unowned_flags = index.entries().iter().all(|entry| {
+				let path = entry.path(&index);
+				scope.contains(path)
+					|| reconciled
+						.entry_by_path(path)
+						.is_some_and(|other| entry.flags == other.flags)
+			});
+			if resumed && same_content && same_unowned_flags {
+				result.index_updated = true;
+				return Ok(());
+			}
+			if sha256_file(&real_path)? != options.expected_index_version {
+				return Err(Error::backend(OP, "real index version changed"));
+			}
+			if index_diff_paths(&index, &reconciled)
+				.iter()
+				.any(|path| !scope.contains(path))
+				|| !same_unowned_flags
+			{
+				return Err(Error::backend(
+					OP,
+					"reconciliation changes an unconfirmed index entry or flag",
+				));
+			}
+			// Keep the actual entries (including sparse/assume-valid flags and
+			// racy stats) outside the scope. Within it only the confirmed blob
+			// and mode change; surviving entries retain their unrelated flags.
+			let replacements: Vec<_> = reconciled
+				.entries()
+				.iter()
+				.filter_map(|entry| {
+					let path = entry.path(&reconciled);
+					if !scope.contains(path) {
+						return None;
+					}
+					let flags = index.entry_by_path(path).map_or(entry.flags, |old| {
+						let mut flags = old.flags;
+						if !entry
+							.flags
+							.contains(gix::index::entry::Flags::INTENT_TO_ADD)
+						{
+							flags.remove(gix::index::entry::Flags::INTENT_TO_ADD);
+						}
+						flags
+					});
+					Some((path.to_owned(), entry.id, entry.mode, flags))
+				})
+				.collect();
+			let racy_from = index.timestamp();
+			for entry in index.entries_mut() {
+				if entry.stat.is_racy(racy_from, Default::default()) {
+					entry.stat = gix::index::entry::Stat::default();
+				}
+			}
+			index.remove_entries(|_, path, _| scope.contains(path));
+			for (path, id, mode, flags) in replacements {
+				index.dangerously_push_entry(
+					gix::index::entry::Stat::default(),
+					id,
+					flags,
+					mode,
+					path.as_bstr(),
+				);
+			}
+			index.sort_entries();
+			index.remove_tree();
+			// Prepare all bytes before touching the ref. Only the final rename
+			// remains fallible after CAS; its failure is returned as partial.
+			index
+				.write_to(&mut index_lock, INDEX_WRITE)
+				.map_err(|err| Error::backend(OP, err))?;
+			index_lock.flush()?;
+			index_lock.with_mut(|file| file.sync_all())?;
+			let index_lock = index_lock.close()?;
+			if !resumed {
+				let sign = repo
+					.config_snapshot()
+					.try_boolean("commit.gpgSign")
+					.transpose()
+					.map_err(|err| Error::backend(OP, err))?
+					.unwrap_or(false);
+				let committer = repo
+					.committer()
+					.ok_or_else(|| Error::backend(OP, "committer identity is not configured"))?
+					.map_err(|err| Error::backend(OP, err))?;
+				let author = repo
+					.author()
+					.ok_or_else(|| Error::backend(OP, "author identity is not configured"))?
+					.map_err(|err| Error::backend(OP, err))?;
+				let id = if sign {
+					sign_commit(self, message, tree, &[parent], author, committer)?
+				} else {
+					repo
+						.new_commit_as(committer, author, message, tree, [parent])
+						.map_err(|err| Error::backend(OP, err))?
+						.id
+				};
+				let id_hex = id.to_hex().to_string();
+				if let Err(err) = update_reference(
+					&repo,
+					OP,
+					&options.expected_head_ref,
+					id,
+					gix::refs::transaction::PreviousValue::MustExistAndMatch(parent.into()),
+					"commit (scoped)",
+					false,
+				) {
+					// A ref transaction may report a late I/O failure. Observe
+					// the actual ref before throwing away a successful step.
+					if self.resolve_ref(&options.expected_head_ref)?.as_deref() == Some(id_hex.as_str())
+					{
+						result.sha = Some(id_hex);
+						result.ref_updated = true;
+					}
+					return Err(err);
+				}
+				result.sha = Some(id_hex);
+				result.ref_updated = true;
+			}
+			index_lock.commit().map_err(|err| Error::backend(OP, err))?;
+			result.index_updated = true;
+			Ok(())
+		})();
+		match attempt {
+			Ok(()) => Ok(result),
+			Err(err) if result.ref_updated => {
+				result.diagnostic = Some(err.to_string());
+				Ok(result)
+			},
+			Err(err) => Err(err),
+		}
 	}
 
 	/// Write a commit object for `tree` on top of `parents` without touching
@@ -928,14 +1342,62 @@ impl GitRepo {
 	/// or else the shared `hooks` directory, which linked worktrees read from
 	/// the common dir. `None` when the hook is missing or not executable.
 	pub fn hook_path(&self, name: &str) -> Result<Option<PathBuf>> {
-		let dir = self
-			.gix()?
-			.config_snapshot()
-			.string("core.hooksPath")
-			.map_or_else(
+		self.resolve_hook_path(name, false)
+	}
+
+	/// Strict effective-hook inspection for scoped operations. Interpolation
+	/// failures are blockers, not evidence that no hook exists.
+	pub fn hook_path_checked(&self, name: &str) -> Result<Option<PathBuf>> {
+		self.resolve_hook_path(name, true)
+	}
+
+	fn resolve_hook_path(&self, name: &str, strict: bool) -> Result<Option<PathBuf>> {
+		let repo = if strict {
+			self.gix_fresh()?
+		} else {
+			self.gix()?
+		};
+		self.resolve_hook_path_in(&repo, name, strict)
+	}
+
+	fn resolve_hook_path_in(
+		&self,
+		repo: &gix::Repository,
+		name: &str,
+		strict: bool,
+	) -> Result<Option<PathBuf>> {
+		let config = repo.config_snapshot();
+		let dir = if strict {
+			if config
+				.string("core.hooksPath")
+				.is_some_and(|value| value.starts_with(b":(optional)"))
+			{
+				return Err(Error::backend(
+					"git hook path",
+					"optional Gitoxide paths cannot describe Git hooksPath semantics",
+				));
+			}
+			let configured = config
+				.trusted_path("core.hooksPath")
+				.transpose()
+				.map_err(|err| Error::backend("git hook path", err))?;
+			if configured.is_none() && config.string("core.hooksPath").is_some() {
+				return Err(Error::backend(
+					"git hook path",
+					"hooksPath could not be resolved from trusted configuration",
+				));
+			}
+			configured.map_or_else(
+				|| self.info().common_dir.join("hooks"),
+				|value| self.root().join(value.as_ref()),
+			)
+		} else {
+			// Preserve the ordinary commit path's existing lookup behavior.
+			config.string("core.hooksPath").map_or_else(
 				|| self.info().common_dir.join("hooks"),
 				|value| self.root().join(value.to_str_lossy().as_ref()),
-			);
+			)
+		};
 		let hook = dir.join(name);
 		Ok(hook_is_executable(&hook).then_some(hook))
 	}

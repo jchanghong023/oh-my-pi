@@ -10,6 +10,7 @@ import type { EvalPreludeDefinition } from "../eval/preludes";
 import type { PromptTemplate } from "../config/prompt-templates";
 import type { Settings } from "../config/settings";
 import type { NativeSubagentHooks } from "../task/types";
+import type { CreateAgentSessionOptions } from "../sdk";
 import { EditTool } from "../edit";
 import type { ToolPathWithSource } from "../extensibility/custom-tools";
 import type {
@@ -219,6 +220,7 @@ export interface DeferredDiagnosticsEntry {
 export interface ToolSession {
 	/** Optional live-host native child callbacks. */
 	subagentHooks?: NativeSubagentHooks;
+	extensionProviderOwnership?: CreateAgentSessionOptions["extensionProviderOwnership"];
 	/** Explicit restricted Goal grant; never widens the requested tool list. */
 	allowRestrictedGoal?: boolean;
 	/** Session-only edit variant pin, shared by edit schemas, read anchors and prompt policies. */

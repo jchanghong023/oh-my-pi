@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added the native-session browser development workbench with eight-stage materials, explicit Git confirmations, Markdown import, and offline Collab participation.
+
+### Changed
+
+- Show Dev requirements, stages, materials and shared chat in a compact dark workbench with a mobile materials/chat switch and a native-session model control.
+- Serve the Dev workbench as one locally embedded classic-script build with old-browser API and layout fallbacks, rather than separate modern and legacy frontends.
+
+### Fixed
+
+- Preserve development-workbench composer drafts and attachments until host admission is known; unconfirmed workbench sends retain input.
+- Keep shared tool renderers safe to import during server-side rendering; custom elements initialize only through their browser entry.
+- Keep Dev stage navigation, document controls and the chat composer usable as the browser window narrows.
+- Preserve selected Dev materials after refresh, admit local business writing, and let disconnected guests rejoin explicitly.
+- Keep the Dev composer visible while short windows scroll and show long confirmation scopes before the reply field.
+- Avoid false native editor-sync errors after a Dev message is accepted.
+
 ## [18.15.0] - 2026-11-01
 
 ### Changed

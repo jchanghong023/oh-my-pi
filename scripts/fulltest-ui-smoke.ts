@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Fork-local: PTY smoke test for the interactive TUI started by `bun run dev`.
+// Fork-local: PTY smoke test for the ordinary interactive CLI.
 // Spawns packages/coding-agent/src/cli.ts in a real PTY (ConPTY on Windows,
 // openpty on POSIX) through the locally built pi-natives addon, waits for the
 // full-screen interface to render, probes that the input loop is live, then
@@ -52,7 +52,7 @@ async function cleanupSmokeFixture(): Promise<void> {
 postmortem.register("ui-smoke-fixture", cleanupSmokeFixture);
 
 async function removeFixture(configRoot: string): Promise<void> {
-	// PTY completion only reaps the dev command. Detached brokers have their
+	// PTY completion only reaps the interactive CLI. Detached brokers have their
 	// own lease and idle shutdown; deleting first races their final meta writes.
 	for (const handle of activeTuis) {
 		try {
@@ -189,7 +189,7 @@ function startTui(argv: string[], env: Record<string, string | undefined>, proje
 	const result = session.startArgv(
 		{
 			application: process.execPath,
-			args: ["run", "dev", ...(projectCwd ? ["--cwd", projectCwd] : []), ...argv],
+			args: ["packages/coding-agent/src/cli.ts", ...(projectCwd ? ["--cwd", projectCwd] : []), ...argv],
 			cwd: repoRoot,
 			cols: 120,
 			rows: 30,
@@ -234,7 +234,7 @@ function fail(message: string, ...sessions: PtySession[]): never {
 	reportGateFailure(new GateCommandError(message, 1));
 	console.error(`ui-smoke: FAIL — ${message}`);
 	// The ConPTY/openpty handle dying with this process does not guarantee the
-	// child dies with it; kill the dev TUI so failed runs leave no orphan. The
+	// child dies with it; kill the native TUI so failed runs leave no orphan. The
 	// non-zero-exit path gets here after the child already tore the session
 	// down, where kill() rejects — nothing left to clean up then.
 	for (const session of sessions) {
@@ -255,7 +255,7 @@ function normalizePtyOutput(text: string): string {
 		.replace(/[\r\n]+/g, "");
 }
 
-const timingRun = await beginTestRun("dev TUI PTY smoke scenarios");
+const timingRun = await beginTestRun("native TUI PTY smoke scenarios");
 // Fatal paths already await postmortem cleanup. Settle only our own report
 // there; an inherited run belongs to the wrapper/gate, not this PTY child.
 const cancelFailureReport = postmortem.register("ui-smoke-report", async () => {
@@ -277,9 +277,9 @@ let caseStarted = performance.now();
 async function recordUiCase(name: string): Promise<void> {
 	const durationSeconds = (performance.now() - caseStarted) / 1000;
 	const reportPath = testReportPath(`ui-${name}`);
-	await writeCommandCase(reportPath, "dev-tui/pty", name, durationSeconds, "passed");
+	await writeCommandCase(reportPath, "native-tui/pty", name, durationSeconds, "passed");
 	await recordTestProducer({
-		producer: `dev-tui/${name}`,
+		producer: `native-tui/${name}`,
 		command: ["bun", "scripts/fulltest-ui-smoke.ts", ...process.argv.slice(2)],
 		scope: name,
 		concurrency: 1,
@@ -369,7 +369,7 @@ if (!process.argv.includes("--team-group-only")) {
 		}
 	}
 	await fs.access(path.join(baseAgentDir, "agent.db"));
-	console.log("ui-smoke: base case PASS — dev TUI renders, reacts, and exits cleanly");
+	console.log("ui-smoke: base case PASS — native TUI renders, reacts, and exits cleanly");
 	await cleanupSmokeFixture();
 	await recordUiCase("startup-render-liveness-and-exit");
 }
@@ -1191,5 +1191,5 @@ cancelFailureReport();
 console.log(
 	process.argv.includes("--team-group-only")
 		? "ui-smoke: PASS — /team runs and cancels"
-		: "ui-smoke: PASS — dev TUI renders/exits and /team runs/cancels",
+		: "ui-smoke: PASS — native TUI renders/exits and /team runs/cancels",
 );

@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InteractiveMode } from "@oh-my-pi/pi-coding-agent/modes/interactive-mode";
@@ -7,18 +8,17 @@ import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
-import { peekSpecDrivenController } from "@oh-my-pi/pi-coding-agent/spec-driven/controller";
 import { Composer } from "@oh-my-pi/pi-tui/prompt/composer";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import { TempDir } from "@oh-my-pi/pi-utils";
-import type { TspNode } from "@oh-my-pi/pi-wire";
+import { setProjectDir, TempDir } from "@oh-my-pi/pi-utils";
 import { TspTestTerminal } from "../../../tui/test/native/tsp-harness";
-import { createProviderFixture, type ProviderFixture, REQUIREMENT } from "./provider-fixture";
+import { createProviderFixture, type ProviderFixture } from "./provider-fixture";
 
 // This exercises NativeBackend frames through the official reference document,
 // not a Tern process or its pixel layout. No PI_TUI_NATIVE probe/fallback claim.
-describe("Dev native TSP surface", () => {
+describe("ordinary native TSP surface", () => {
 	let tempDir: TempDir;
+	let originalCwd: string;
 	let authStorage: AuthStorage;
 	let session: AgentSession;
 	let provider: ProviderFixture;
@@ -30,6 +30,7 @@ describe("Dev native TSP surface", () => {
 	beforeAll(() => initTheme());
 
 	beforeEach(async () => {
+		originalCwd = process.cwd();
 		resetSettingsForTest();
 		tempDir = TempDir.createSync("@pi-dev-tsp-");
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
@@ -108,7 +109,6 @@ describe("Dev native TSP surface", () => {
 
 	afterEach(async () => {
 		try {
-			await peekSpecDrivenController(session.sessionManager)?.dispose();
 			mode?.stop();
 			mode?.onInputCallback?.({ text: "", cancelled: true, started: false });
 			await Promise.resolve();
@@ -118,6 +118,7 @@ describe("Dev native TSP surface", () => {
 			pump = undefined;
 			await provider?.[Symbol.asyncDispose]();
 			authStorage?.close();
+			setProjectDir(originalCwd);
 			tempDir?.removeSync();
 			vi.restoreAllMocks();
 			resetSettingsForTest();
@@ -146,9 +147,8 @@ describe("Dev native TSP surface", () => {
 		const deadline = Date.now() + 5000;
 		while (!predicate()) {
 			if (Date.now() >= deadline) {
-				const state = peekSpecDrivenController(session.sessionManager)?.observation();
 				throw new Error(
-					`Native surface timeout: ${predicate.toString()}; native=${mode.ui.nativeRendering}, frames=${terminal.frames.length}, phase=${state?.status.phase}, error=${state?.error ?? state?.status.blockedReason ?? ""}, applyErrors=${JSON.stringify(terminal.errors)}, providerFailures=${JSON.stringify(provider.failures)}`,
+					`Native surface timeout: ${predicate.toString()}; native=${mode.ui.nativeRendering}, frames=${terminal.frames.length}, applyErrors=${JSON.stringify(terminal.errors)}, providerFailures=${JSON.stringify(provider.failures)}`,
 				);
 			}
 			await Bun.sleep(5);
@@ -166,31 +166,11 @@ describe("Dev native TSP surface", () => {
 		await until(() => mode.ui.nativeRendering && terminal.frames.length > 0);
 	}
 
-	function expectDevLines() {
-		const widgets: string[][] = [];
-		const visit = (node: TspNode): void => {
-			if (node.k === "rows" && Array.isArray(node.p?.lines)) {
-				const lines = node.p.lines.filter((line): line is string => typeof line === "string").map(Bun.stripANSI);
-				if (lines.some(line => line.startsWith("Dev ·"))) widgets.push(lines);
-			}
-			for (const child of node.c ?? []) visit(child);
-		};
-		visit(document());
-		expect(widgets).toHaveLength(1);
-		expect(widgets[0]).toHaveLength(3);
-		expect(widgets[0]![1]).toContain("/dev new");
-		expect(widgets[0]![2]).toContain("/session");
-	}
-
-	it("keeps the three Dev rows, editable draft and attachment through both viewport sizes and restores root on exit", async () => {
+	it("keeps ordinary history, editable draft and attachments across viewport changes", async () => {
 		session.sessionManager.appendMessage({ role: "user", content: "TSP_ORDINARY_ROOT", timestamp: Date.now() });
 		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
 		await init();
 		await until(() => content().includes("TSP_ORDINARY_ROOT"));
-		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager)!;
-		await until(() => content().includes("Dev ·") && !content().includes("TSP_ORDINARY_ROOT"));
-		expect(controller.status().phase).toBe("idle");
 		const image = {
 			type: "image" as const,
 			data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1sAAAAASUVORK5CYII=",
@@ -199,10 +179,8 @@ describe("Dev native TSP surface", () => {
 		mode.editor.setText("TSP_UNSENT_DRAFT");
 		mode.editor.pendingImages.push(image);
 		mode.editor.pendingImageLinks.push(undefined);
-		await mode.handleDevInput("TSP_UNSENT_DRAFT", { images: [image] });
 		mode.ui.requestRender();
 		await until(() => content().includes("TSP_UNSENT_DRAFT"));
-		expectDevLines();
 		for (const [columns, rows] of [
 			[120, 36],
 			[100, 28],
@@ -210,104 +188,49 @@ describe("Dev native TSP surface", () => {
 			const previousFrames = terminal.frames.length;
 			resizeTerminal(columns, rows);
 			await until(() => terminal.frames.length > previousFrames && content().includes("TSP_UNSENT_DRAFT"));
+			expect(content()).toContain("TSP_ORDINARY_ROOT");
+			expect(content()).not.toContain("Dev ·");
 			expect(terminal.columns).toBe(columns);
 			expect(terminal.rows).toBe(rows);
-			expectDevLines();
 			expect(mode.ui.hasOverlay()).toBe(false);
 			expect(mode.editor.pendingImages).toEqual([image]);
 		}
-		// Input still reaches the native composer after the resize round trip.
 		terminal.send("!");
 		await until(() => content().includes("TSP_UNSENT_DRAFT!"));
 		expect(mode.editor.getExpandedText()).toBe("TSP_UNSENT_DRAFT!");
-		await controller.exit();
-		await until(() => content().includes("TSP_ORDINARY_ROOT") && !content().includes("Dev ·"));
 		expect(mode.session).toBe(session);
-		expect(mode.editor.getExpandedText()).toBe("TSP_UNSENT_DRAFT!");
-		expect(mode.editor.pendingImages).toEqual([image]);
 		expect(session.messages).toHaveLength(1);
+		expect(provider.requests).toEqual([]);
 	}, 60_000);
 
-	it("renders the controller-owned requirements session and opens manual config/details without sending its draft", async () => {
-		session.sessionManager.appendMessage({ role: "user", content: "TSP_HIDDEN_ROOT", timestamp: Date.now() });
-		session.agent.replaceMessages(session.sessionManager.buildSessionContext().messages);
+	it("opens ordinary session details without consuming draft or attachments", async () => {
 		await init();
-		await mode.handleDevInput("/dev");
-		const controller = peekSpecDrivenController(session.sessionManager)!;
-		await mode.handleDevInput(`/dev new ${REQUIREMENT}`);
-		await until(
-			() =>
-				controller.status().phase === "requirements" &&
-				!controller.observation().active &&
-				content().includes("TSP_STAGE_QUESTION") &&
-				!content().includes("TSP_HIDDEN_ROOT"),
-		);
-		const stage = controller.nativeSession();
-		if (!stage) throw new Error("Controller did not expose its requirements session");
-		expect(mode.session).toBe(stage);
-		const stageMessageCount = stage.messages.length;
-		expect(stageMessageCount).toBeGreaterThan(0);
-		expect(provider.requests.length).toBeGreaterThan(0);
-		expect(provider.failures).toEqual([]);
-		expect(mode.agent).toBe(stage.agent);
-		expect(mode.sessionManager).toBe(stage.sessionManager);
 		mode.editor.setText("TSP_VIEWER_DRAFT");
 		mode.ui.requestRender();
 		await until(() => content().includes("TSP_VIEWER_DRAFT"));
-		const beforeConfiguration = content();
-		const useTeam = controller.status().useTeam;
-		const configuration = mode.handleDevInput("/dev config");
-		await until(() => content() !== beforeConfiguration && content().includes("Team"));
+		const messages = [...session.messages];
+		await mode.handleSessionCommand();
+		await until(() => mode.ui.hasOverlay() && content().includes(session.sessionId));
 		terminal.send("\x1b");
-		await configuration;
 		await until(() => !mode.ui.hasOverlay() && content().includes("TSP_VIEWER_DRAFT"));
-		expect(controller.status().useTeam).toBe(useTeam);
-		await mode.handleDevInput("/session");
-		await until(
-			() => mode.ui.hasOverlay() && content().includes("Dev 工作区") && content().includes(stage.sessionId),
-		);
-		terminal.send("\x1b");
-		await until(() => !mode.ui.hasOverlay() && content().includes("TSP_STAGE_QUESTION"));
 		expect(mode.editor.getExpandedText()).toBe("TSP_VIEWER_DRAFT");
-		expect(stage.messages).toHaveLength(stageMessageCount);
-		expect(session.messages).toHaveLength(1);
-		await controller.exit();
-		await until(
-			() =>
-				content().includes("TSP_HIDDEN_ROOT") &&
-				!content().includes("TSP_STAGE_QUESTION") &&
-				!content().includes("Dev ·"),
-		);
+		expect(session.messages).toEqual(messages);
+		expect(provider.requests).toEqual([]);
 	}, 60_000);
-	it("failed Dev exit prevents persistent cwd changes without moving the visible stage or its history", async () => {
+
+	it("ordinary persistent cwd movement preserves the native root and its unsent composer draft", async () => {
 		await init();
-		await mode.handleDevInput("/dev");
-		await mode.handleDevInput(`/dev new ${REQUIREMENT}`);
-		const controller = peekSpecDrivenController(session.sessionManager)!;
-		await until(() => controller.status().phase === "requirements" && !controller.observation().active);
-		const stage = controller.nativeSession()!;
-		const before = controller.observation();
-		const history = [...stage.messages];
-		const sessionFile = stage.sessionFile;
-		const calls = provider.requests.length;
-		const originalCwd = stage.sessionManager.getCwd();
-		const exit = vi.spyOn(controller, "exit").mockRejectedValue(new Error("owned work has not settled"));
-		try {
-			await expect(mode.applyCwdChange(path.join(tempDir.path(), "not-adopted"))).rejects.toThrow(
-				"owned work has not settled",
-			);
-		} finally {
-			exit.mockRestore();
-		}
-		expect(mode.session).toBe(stage);
-		expect(mode.sessionManager.getCwd()).toBe(originalCwd);
-		expect(stage.sessionManager.getCwd()).toBe(originalCwd);
-		expect(session.sessionManager.getCwd()).toBe(originalCwd);
-		expect(stage.sessionFile).toBe(sessionFile);
-		expect(stage.messages).toEqual(history);
-		expect(controller.inputMode()).toBe("dev");
-		expect(controller.observation().runId).toBe(before.runId);
-		expect(controller.observation().approvals).toEqual(before.approvals);
-		expect(provider.requests).toHaveLength(calls);
+		const next = path.join(tempDir.path(), "destination");
+		await fs.mkdir(next);
+		mode.editor.setText("TSP_CWD_DRAFT");
+		mode.ui.requestRender();
+		await until(() => content().includes("TSP_CWD_DRAFT"));
+		const history = [...session.messages];
+		await mode.handleMoveCommand(next);
+		expect(mode.session).toBe(session);
+		expect(mode.sessionManager.getCwd()).toBe(next);
+		expect(mode.editor.getExpandedText()).toBe("TSP_CWD_DRAFT");
+		expect(session.messages).toEqual(history);
+		expect(provider.requests).toEqual([]);
 	}, 60_000);
 });

@@ -52,7 +52,7 @@ describe("EventController idle recap presentation", () => {
 	});
 });
 
-describe("compaction queue actor ownership", () => {
+describe("compaction queue session ownership", () => {
 	it("parks the remaining input and attachments until the submitting session is visible again", async () => {
 		const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 		const ownerPrompt = vi.fn(async () => true);
@@ -70,7 +70,6 @@ describe("compaction queue actor ownership", () => {
 		const helpers = new UiHelpers(ctx);
 		ctx.isKnownSlashCommand = text => helpers.isKnownSlashCommand(text);
 		ctx.handleNewCommand = async () => {
-			helpers.noteCompactionBindingChange(false);
 			ctx.session = other;
 		};
 
@@ -79,32 +78,9 @@ describe("compaction queue actor ownership", () => {
 		expect(otherPrompt).not.toHaveBeenCalled();
 
 		ctx.session = owner;
-		helpers.noteCompactionBindingChange(false);
-		await helpers.restoreCompactionQueue(owner, false);
+		await helpers.restoreCompactionQueue(owner);
 		expect(ownerPrompt).toHaveBeenCalledTimes(1);
 		expect(ownerPrompt).toHaveBeenCalledWith("keep with owner", expect.objectContaining({ images: [image] }));
 		expect(otherPrompt).not.toHaveBeenCalled();
-	});
-
-	it("does not send ordinary-session input into an empty Dev view of the same session", async () => {
-		const prompt = vi.fn(async () => true);
-		const ctx = createInteractiveModeContext({
-			session: { prompt },
-			compactionQueuedMessages: [
-				{ text: "/new", mode: "followUp", draftDetached: true },
-				{ text: "ordinary input", mode: "steer" },
-			],
-			recordLocalSubmission: () => () => {},
-		});
-		const helpers = new UiHelpers(ctx);
-		ctx.isKnownSlashCommand = text => helpers.isKnownSlashCommand(text);
-		ctx.handleNewCommand = async () => helpers.noteCompactionBindingChange(true);
-
-		await helpers.flushCompactionQueue();
-		expect(prompt).not.toHaveBeenCalled();
-		helpers.noteCompactionBindingChange(false);
-		await helpers.restoreCompactionQueue(ctx.session, false);
-		expect(prompt).toHaveBeenCalledTimes(1);
-		expect(prompt).toHaveBeenCalledWith("ordinary input", expect.any(Object));
 	});
 });

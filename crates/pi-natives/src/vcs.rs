@@ -200,6 +200,68 @@ pub struct VcsCommitOptions {
 	pub amend:       Option<bool>,
 	pub files:       Option<Vec<String>>,
 }
+/// Confirmed tree and independent real-index reconciliation.
+#[napi(object)]
+pub struct VcsScopedCommitOptions {
+	pub expected_head_ref:      String,
+	pub expected_head_sha:      String,
+	pub expected_index_version: String,
+	pub index_path:             String,
+	pub reconciled_index_path:  String,
+	pub expected_tree:          String,
+	pub files:                  Vec<String>,
+}
+/// Actual publication steps, including a recoverable index failure.
+#[napi(object)]
+pub struct VcsScopedCommitResult {
+	pub sha:           Either<String, Null>,
+	pub ref_updated:   bool,
+	pub index_updated: bool,
+	pub diagnostic:    Option<String>,
+}
+/// Successful exact remote advertisement observation.
+#[napi(object)]
+pub struct VcsRemoteRefResult {
+	pub sha: Either<String, Null>,
+}
+/// Operation-oriented raw worktree SHA-256 guards; null means absent.
+#[napi(object, use_nullable = true)]
+pub struct VcsOwnedPatchExpectation {
+	pub path:           String,
+	pub before_version: Option<String>,
+	pub after_version:  Option<String>,
+}
+/// Dry-run the patch against the actual worktree and configured filters.
+#[napi(object)]
+pub struct VcsOwnedPatchPreviewOptions {
+	pub reverse: bool,
+}
+/// Raw-byte guards prepared without index/worktree writes.
+#[napi(object)]
+pub struct VcsOwnedPatchPreview {
+	pub expected: Vec<VcsOwnedPatchExpectation>,
+}
+/// Guarded patch settings (versions are not swapped when reversing).
+#[napi(object)]
+pub struct VcsOwnedPatchOptions {
+	pub reverse:  bool,
+	pub expected: Vec<VcsOwnedPatchExpectation>,
+}
+/// One actual worktree path outcome.
+#[napi(object)]
+pub struct VcsOwnedPatchPathResult {
+	pub path:           String,
+	#[napi(ts_type = "\"applied\" | \"unchanged\" | \"failed\"")]
+	pub status:         String,
+	pub actual_version: Either<String, Null>,
+}
+/// Partial writes are retained and reported, never silently rolled back.
+#[napi(object)]
+pub struct VcsOwnedPatchResult {
+	pub paths:      Vec<VcsOwnedPatchPathResult>,
+	pub complete:   bool,
+	pub diagnostic: Option<String>,
+}
 /// Patch application options.
 #[napi(object)]
 #[derive(Default)]
@@ -364,6 +426,77 @@ impl From<VcsCommitOptions> for core::CommitOptions {
 			allow_empty: v.allow_empty.unwrap_or(false),
 			amend:       v.amend.unwrap_or(false),
 			files:       v.files.unwrap_or_default(),
+		}
+	}
+}
+impl From<VcsScopedCommitOptions> for core::ScopedCommitOptions {
+	fn from(v: VcsScopedCommitOptions) -> Self {
+		Self {
+			expected_head_ref:      v.expected_head_ref,
+			expected_head_sha:      v.expected_head_sha,
+			expected_index_version: v.expected_index_version,
+			index_path:             PathBuf::from(v.index_path),
+			reconciled_index_path:  PathBuf::from(v.reconciled_index_path),
+			expected_tree:          v.expected_tree,
+			files:                  v.files,
+		}
+	}
+}
+impl From<core::ScopedCommitResult> for VcsScopedCommitResult {
+	fn from(v: core::ScopedCommitResult) -> Self {
+		Self {
+			sha:           v.sha.map_or(Either::B(Null), Either::A),
+			ref_updated:   v.ref_updated,
+			index_updated: v.index_updated,
+			diagnostic:    v.diagnostic,
+		}
+	}
+}
+impl From<core::OwnedPatchPreview> for VcsOwnedPatchPreview {
+	fn from(v: core::OwnedPatchPreview) -> Self {
+		Self {
+			expected: v
+				.expected
+				.into_iter()
+				.map(|item| VcsOwnedPatchExpectation {
+					path:           item.path,
+					before_version: item.before_version,
+					after_version:  item.after_version,
+				})
+				.collect(),
+		}
+	}
+}
+impl From<VcsOwnedPatchOptions> for core::OwnedPatchOptions {
+	fn from(v: VcsOwnedPatchOptions) -> Self {
+		Self {
+			reverse:  v.reverse,
+			expected: v
+				.expected
+				.into_iter()
+				.map(|item| core::OwnedPatchExpectation {
+					path:           item.path,
+					before_version: item.before_version,
+					after_version:  item.after_version,
+				})
+				.collect(),
+		}
+	}
+}
+impl From<core::OwnedPatchResult> for VcsOwnedPatchResult {
+	fn from(v: core::OwnedPatchResult) -> Self {
+		Self {
+			paths:      v
+				.paths
+				.into_iter()
+				.map(|item| VcsOwnedPatchPathResult {
+					path:           item.path,
+					status:         item.status,
+					actual_version: item.actual_version.map_or(Either::B(Null), Either::A),
+				})
+				.collect(),
+			complete:   v.complete,
+			diagnostic: v.diagnostic,
 		}
 	}
 }
@@ -841,6 +974,21 @@ impl VcsGitRepo {
 		blocking("vcs.configGet", self.inner.clone(), signal, move |r| r.config_get(&key))
 	}
 
+	/// Resolve an effective executable hook without executing it.
+	#[napi]
+	pub fn hook_path(&self, name: String, signal: Option<Unknown>) -> Promise<Either<String, Null>> {
+		blocking("vcs.hookPath", self.inner.clone(), signal, move |repo| {
+			if name.contains(['/', '\\'])
+				|| Path::new(&name).file_name() != Some(std::ffi::OsStr::new(&name))
+			{
+				return Err(pi_vcs::Error::backend("git hook path", "a hook basename is required"));
+			}
+			repo
+				.hook_path_checked(&name)
+				.map(|path| path.map_or(Either::B(Null), |path| Either::A(path_string(path))))
+		})
+	}
+
 	/// Set config.
 	#[napi]
 	pub fn config_set(&self, key: String, value: String, signal: Option<Unknown>) -> Promise<()> {
@@ -1123,6 +1271,20 @@ impl VcsGitRepo {
 		blocking("vcs.stageFiles", self.inner.clone(), signal, move |r| r.stage_files(&files))
 	}
 
+	/// Snapshot exact paths into a private index through the native clean
+	/// pipeline.
+	#[napi]
+	pub fn stage_files_into_index(
+		&self,
+		files: Vec<String>,
+		index_path: String,
+		signal: Option<Unknown>,
+	) -> Promise<()> {
+		blocking("vcs.stageFilesIntoIndex", self.inner.clone(), signal, move |repo| {
+			repo.stage_files_into_index(&files, Path::new(&index_path))
+		})
+	}
+
 	/// Unstage paths.
 	#[napi]
 	pub fn unstage(&self, files: Vec<String>, signal: Option<Unknown>) -> Promise<()> {
@@ -1160,6 +1322,22 @@ impl VcsGitRepo {
 		let options = options.into();
 		blocking("vcs.commitCreate", self.inner.clone(), signal, move |r| {
 			r.commit_create(&message, &options)
+		})
+	}
+
+	/// Hook-free confirmed-tree commit with locked, resumable index publication.
+	#[napi]
+	pub fn commit_create_scoped(
+		&self,
+		message: String,
+		options: VcsScopedCommitOptions,
+		signal: Option<Unknown>,
+	) -> Promise<VcsScopedCommitResult> {
+		let options = options.into();
+		blocking("vcs.commitCreateScoped", self.inner.clone(), signal, move |repo| {
+			repo
+				.commit_create_scoped(&message, &options)
+				.map(Into::into)
 		})
 	}
 
@@ -1299,6 +1477,35 @@ impl VcsGitRepo {
 		})
 	}
 
+	/// Prepare actual raw-byte preimages/postimages without index/worktree
+	/// writes.
+	#[napi]
+	pub fn preview_owned_patch(
+		&self,
+		patch: String,
+		options: VcsOwnedPatchPreviewOptions,
+		signal: Option<Unknown>,
+	) -> Promise<VcsOwnedPatchPreview> {
+		let options = core::OwnedPatchPreviewOptions { reverse: options.reverse };
+		blocking("vcs.previewOwnedPatch", self.inner.clone(), signal, move |repo| {
+			repo.preview_owned_patch(&patch, &options).map(Into::into)
+		})
+	}
+
+	/// Guard worktree preimages and report every path's actual partial outcome.
+	#[napi]
+	pub fn apply_owned_patch(
+		&self,
+		patch: String,
+		options: VcsOwnedPatchOptions,
+		signal: Option<Unknown>,
+	) -> Promise<VcsOwnedPatchResult> {
+		let options = options.into();
+		blocking("vcs.applyOwnedPatch", self.inner.clone(), signal, move |repo| {
+			repo.apply_owned_patch(&patch, &options).map(Into::into)
+		})
+	}
+
 	/// Check patch applicability.
 	#[napi]
 	pub fn can_apply_patch(
@@ -1359,6 +1566,25 @@ impl VcsGitRepo {
 		let options = options.into();
 		let cancel = cancellation_token(signal);
 		vcs_future(env, "vcs.push", async move { repo.push(&options, cancel).await })
+	}
+
+	/// Observe exactly one full remote ref; transport errors remain unknown.
+	#[napi(ts_return_type = "Promise<VcsRemoteRefResult>")]
+	pub fn remote_ref<'e>(
+		&self,
+		remote: String,
+		full_ref: String,
+		signal: Option<Unknown>,
+		env: &'e Env,
+	) -> Result<Object<'e>> {
+		let repo = self.inner.clone();
+		let cancel = cancellation_token(signal);
+		vcs_future(env, "vcs.remoteRef", async move {
+			repo
+				.remote_ref(&remote, &full_ref, cancel)
+				.await
+				.map(|result| VcsRemoteRefResult { sha: result.sha.map_or(Either::B(Null), Either::A) })
+		})
 	}
 
 	/// Fetch a refspec via Git CLI.

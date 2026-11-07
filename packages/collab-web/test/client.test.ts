@@ -10,9 +10,11 @@ import type {
 	SubagentProgressPayload,
 	WireMessage,
 } from "@oh-my-pi/pi-wire";
-import { GuestClient } from "../src/lib/client";
+import { GuestClient, guestComposerPort, SessionReplica } from "../src/lib/client";
+import type { SessionTransport } from "../src/lib/client";
 import { COLLAB_PROTO, encodeBase64Url } from "../src/lib/link";
 import { CollabSocket } from "../src/lib/socket";
+import { settleComposerDraft } from "../src/components/shell/Composer";
 
 const LINK = `roomroomroom1234#${encodeBase64Url(new Uint8Array(32))}`;
 
@@ -419,29 +421,44 @@ describe("GuestClient frame apply", () => {
 		expect(snap.endedReason).toContain(`v${COLLAB_PROTO}`);
 	});
 
-	it("tracks host UI requests and sends responses", () => {
+	it("consumes ordinary local sends and keeps late UI endings isolated from the next request", async () => {
 		const sent: GuestFrame[] = [];
-		const sendSpy = vi.spyOn(CollabSocket.prototype, "send").mockImplementation((frame: GuestFrame) => {
-			sent.push(frame);
-		});
-		try {
-			const client = liveClient();
-			const request = {
-				reqId: 7,
-				kind: "select" as const,
-				title: "Continue?",
-				options: ["Yes", { label: "No", description: "Stop here" }],
-				selectionMarker: "radio" as const,
-			};
-			client.applyFrameForTest({ t: "ui-request", request });
-			expect(client.getSnapshot().uiRequest).toEqual(request);
-
-			client.sendUiResponse(7, "Yes");
-			expect(sent).toEqual([{ t: "ui-response", reqId: 7, value: "Yes" }]);
-			expect(client.getSnapshot().uiRequest).toBeNull();
-		} finally {
-			sendSpy.mockRestore();
-		}
+		const transport: SessionTransport = {
+			connect() {},
+			close() {},
+			send(frame) {
+				sent.push(frame);
+			},
+		};
+		const client = new SessionReplica(transport, "tester");
+		client.receiveFrame(welcomeFrame());
+		const request = {
+			reqId: 7,
+			kind: "select" as const,
+			title: "Continue?",
+			options: ["Yes", { label: "No", description: "Stop here" }],
+			selectionMarker: "radio" as const,
+		};
+		client.receiveFrame({ t: "ui-request", request });
+		client.receiveFrame({ t: "ui-request", request: { reqId: 8, kind: "editor", title: "Next", prefill: "kept" } });
+		expect(client.getSnapshot().uiRequest).toEqual(request);
+		expect(await guestComposerPort(client).sendUiResponse(7, "Yes")).toEqual({ kind: "sent" });
+		expect(sent).toEqual([{ t: "ui-response", reqId: 7, value: "Yes" }]);
+		expect(client.getSnapshot().uiRequest?.reqId).toBe(8);
+		client.receiveFrame({ t: "ui-request-end", reqId: 999 });
+		expect(client.getSnapshot().uiRequest?.reqId).toBe(8);
+		client.receiveFrame({ t: "ui-request-end", reqId: 7 });
+		expect(client.getSnapshot().uiRequest?.reqId).toBe(8);
+		client.receiveFrame({ t: "ui-request-end", reqId: 7 });
+		expect(client.getSnapshot().uiRequest?.reqId).toBe(8);
+		client.receiveFrame({ t: "ui-request-end", reqId: 8 });
+		expect(client.getSnapshot().uiRequest).toBeNull();
+		expect(sent).toHaveLength(1);
+		const draft = { text: "local draft", images: [], attachmentNames: [] };
+		const receipt = await guestComposerPort(client).sendPrompt(draft.text);
+		expect(receipt).toEqual({ kind: "sent" });
+		expect(sent.at(-1)).toMatchObject({ t: "prompt", text: draft.text });
+		expect(settleComposerDraft(draft, draft, receipt)).toEqual({ text: "", images: [], attachmentNames: [] });
 	});
 
 	it("clears pending host UI requests when the host ends them", () => {

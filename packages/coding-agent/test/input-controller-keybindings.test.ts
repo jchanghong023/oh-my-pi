@@ -16,9 +16,6 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { beginSettingsTest, restoreSettingsTestState, type SettingsTestState } from "./helpers/settings-test-state";
 
-import type { SlashCommandRuntime } from "../src/slash-commands/types";
-import type { AgentSession } from "../src/session/agent-session";
-import { getSpecDrivenController, type SpecRuntimeFactory } from "../src/spec-driven/controller";
 type FakeEditor = {
 	onEscape?: () => void;
 	onClear?: () => void;
@@ -247,8 +244,6 @@ async function createContext() {
 		chatContainer: { children: [], setToolActivityVisible: vi.fn() },
 		pendingShellContainer: { children: [] },
 		handleHotkeysCommand: vi.fn(),
-		handleDevInput: async () => false,
-		isDevInputRoute: () => false,
 		handlePlanModeCommand: vi.fn(),
 		handleNewCommand: vi.fn(),
 		showTreeSelector: vi.fn(),
@@ -270,7 +265,6 @@ async function createContext() {
 		canFollowUpBtw,
 		handleBtwFollowUpKey,
 		showError,
-		showDevCommandStatus: vi.fn(),
 		showStatus: vi.fn(),
 		isGuidedGoalInterviewActive,
 	} as unknown as InteractiveModeContext;
@@ -1061,177 +1055,7 @@ describe("InputController keybinding setup", () => {
 	});
 });
 
-describe("InputController Dev native shortcut admission", () => {
-	const fixtures: { owner: ReturnType<typeof getSpecDrivenController>; temp: TempDir }[] = [];
-
-	afterEach(async () => {
-		for (const { owner, temp } of fixtures.splice(0)) {
-			await owner.exit();
-			await temp.remove();
-		}
-	});
-
-	async function setup() {
-		const context = await createContext();
-		const native = await createContext();
-		const temp = await TempDir.create("@omp-dev-input-");
-		const root = context.ctx.session;
-		Object.assign(root.sessionManager, { getCwd: () => temp.path() });
-		const stage = native.ctx.session;
-		const factory: SpecRuntimeFactory = async args => ({
-			options: { runId: crypto.randomUUID() },
-			nativeSession: () => stage,
-			sessionRefs: () => ({}),
-			originalRequest: () => "request",
-			hasPendingTeam: () => false,
-			interruptTeam: async () => false,
-			stop: async () => {},
-			dispose: async () => {},
-			ports: {
-				agents: {
-					prepare: async role => {
-						args.onSessionCreated?.(role, stage);
-					},
-					recipient: role => ({ role, actorId: role, sessionId: role, sessionFile: temp.join(`${role}.jsonl`) }),
-					originalRequest: () => "request",
-					run: async () => ({ text: "requirements" }),
-				},
-				artifacts: {
-					readBusiness: async () => ({ path: "business.md", version: "1", content: "business" }),
-					initialize: async () => ({
-						requirements: ["proposal.md"],
-						solution: "solution.md",
-						plan: "plan.md",
-						report: "report.md",
-					}),
-					readRequirements: async () => ({
-						files: [{ path: "proposal.md", version: "1", content: "request" }],
-						version: "1",
-					}),
-					readSolution: async () => ({
-						path: "solution.md",
-						version: "1",
-						content: "solution",
-						candidates: [{ id: "default", title: "solution", content: "solution" }],
-						recommendedCandidateId: "default",
-					}),
-					readPlan: async () => ({ path: "plan.md", version: "1", content: "plan" }),
-					readReport: async () => ({ path: "report.md", version: "1", content: "report" }),
-					checkVersions: async () => ({ matches: true, changed: [] }),
-					close: async () => ({ archivedChangePath: "archive/change" }),
-				},
-			},
-		});
-		const owner = getSpecDrivenController(
-			{
-				session: root,
-				sessionManager: root.sessionManager,
-				cwd: temp.path(),
-				settings: context.ctx.settings,
-				bindMainSession: async (session: AgentSession) => {
-					context.ctx.session = session;
-					Object.assign(context.ctx, { viewSession: session, sessionManager: session.sessionManager });
-				},
-			} as unknown as SlashCommandRuntime,
-			{ factory },
-		);
-		fixtures.push({ owner, temp });
-		await owner.enter();
-		const controller = new context.InputController(context.ctx);
-		controller.setupKeyHandlers();
-		return { ...context, owner, controller, native };
-	}
-
-	it("rejects idle Dev retry without calling the root or consuming its draft attachments", async () => {
-		const { ctx, editor, spies } = await setup();
-		const image: ImageContent = { type: "image", mimeType: "image/png", data: "abc" };
-		editor.setText("keep [Image #1]");
-		editor.pendingImages = [image];
-		editor.pendingImageLinks = ["keep.png"];
-		editor.imageLinks = editor.pendingImageLinks;
-
-		editor.onRetry?.();
-		await Promise.resolve();
-
-		expect(spies.retry).not.toHaveBeenCalled();
-		expect(spies.prompt).not.toHaveBeenCalled();
-		expect(ctx.showDevCommandStatus).toHaveBeenCalledWith(expect.stringContaining("尚无当前阶段原生会话"));
-		expect(editor.getText()).toBe("keep [Image #1]");
-		expect(editor.pendingImages).toEqual([image]);
-		expect(editor.pendingImageLinks).toEqual(["keep.png"]);
-		expect(editor.imageLinks).toEqual(["keep.png"]);
-	});
-
-	it("rejects public idle Dev queue before clearing the live draft or calling any root input path", async () => {
-		const { ctx, editor, spies, controller } = await setup();
-		const onInput = vi.fn();
-		ctx.onInputCallback = onInput;
-		const image: ImageContent = { type: "image", mimeType: "image/png", data: "abc" };
-		editor.setText("/queue keep [Image #1]");
-		editor.pendingImages = [image];
-		editor.pendingImageLinks = ["keep.png"];
-		editor.imageLinks = editor.pendingImageLinks;
-
-		await controller.handleQueueCommand("keep [Image #1]");
-
-		expect(onInput).not.toHaveBeenCalled();
-		expect(spies.prompt).not.toHaveBeenCalled();
-		expect(spies.followUp).not.toHaveBeenCalled();
-		expect(ctx.showDevCommandStatus).toHaveBeenCalledWith(expect.stringContaining("尚无当前阶段原生会话"));
-		expect(editor.getText()).toBe("/queue keep [Image #1]");
-		expect(editor.pendingImages).toEqual([image]);
-		expect(editor.pendingImageLinks).toEqual(["keep.png"]);
-		expect(editor.imageLinks).toEqual(["keep.png"]);
-	});
-
-	it("restores rejected detached Dev queue beside a newer draft with both sets of attachments", async () => {
-		const { editor, spies, controller } = await setup();
-		const newer: ImageContent = { type: "image", mimeType: "image/png", data: "new" };
-		const detached: ImageContent = { type: "image", mimeType: "image/png", data: "old" };
-		editor.setText("new [Image #1]");
-		editor.pendingImages = [newer];
-		editor.pendingImageLinks = ["new.png"];
-
-		await controller.handleQueueCommand("old [Image #1]", {
-			text: "/queue old [Image #1]",
-			images: [detached],
-			imageLinks: ["old.png"],
-		});
-
-		expect(spies.prompt).not.toHaveBeenCalled();
-		expect(spies.followUp).not.toHaveBeenCalled();
-		expect(editor.getText()).toBe("/queue old [Image #2]\n\nnew [Image #1]");
-		expect(editor.pendingImages).toEqual([newer, detached]);
-		expect(editor.pendingImageLinks).toEqual(["new.png", "old.png"]);
-		expect(editor.imageLinks).toEqual(["new.png", "old.png"]);
-	});
-
-	it("retries and queues on the visible native requirements stage, never the hidden root", async () => {
-		const { owner, ctx, editor, spies, controller, native } = await setup();
-		await owner.new("complete request");
-		expect(owner.status().phase).toBe("requirements");
-		expect(ctx.viewSession).toBe(native.ctx.session);
-		editor.setText("retry draft");
-
-		editor.onRetry?.();
-		await Promise.resolve();
-
-		expect(native.spies.retry).toHaveBeenCalledTimes(1);
-		expect(editor.getText()).toBe("");
-		await controller.handleQueueCommand("native idle input");
-		Object.assign(ctx.session, { isStreaming: true });
-		await controller.handleQueueCommand("native queued input");
-		Object.assign(ctx.session, { isStreaming: false });
-		expect(native.spies.prompt).toHaveBeenCalledWith("native idle input", {
-			images: undefined,
-			streamingBehavior: "followUp",
-		});
-		expect(native.spies.followUp).toHaveBeenCalledWith("native queued input", undefined);
-		expect(spies.retry).not.toHaveBeenCalled();
-		expect(spies.prompt).not.toHaveBeenCalled();
-		expect(spies.followUp).not.toHaveBeenCalled();
-	});
-
+describe("InputController native queue admission", () => {
 	it("retains ordinary idle and streaming public queue behavior", async () => {
 		const { InputController, ctx, editor, spies } = await createContext();
 		const controller = new InputController(ctx);

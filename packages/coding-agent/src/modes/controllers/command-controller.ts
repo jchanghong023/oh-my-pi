@@ -25,6 +25,7 @@ import { formatDuration, logger, Snowflake, sanitizeText } from "@oh-my-pi/pi-ut
 import { getActiveProfile, getConfigDirName } from "@oh-my-pi/pi-utils/dirs";
 import { classifyTerminalMultiplexer } from "@oh-my-pi/pi-tui/terminal-multiplexer";
 import { shouldEnableAppendOnlyContext } from "../../config/append-only-context-mode";
+import { getDevWorkbenchTuiMode } from "../../dev-workbench/tui-mode";
 import { type BashResult, isPersistentShellCdCommand } from "../../exec/bash-executor";
 import { type LoadedCustomShare, loadCustomShare } from "../../export/custom-share";
 import { parseExportArgs } from "../../export/html/args";
@@ -87,6 +88,9 @@ import {
 	limitMatchesActiveAccount,
 } from "../../slash-commands/helpers/active-oauth-account";
 import { formatResetContextResult, resetContextForCommand } from "../../slash-commands/helpers/clear";
+import { handleDevCommand } from "../../slash-commands/builtin-spec-driven";
+import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
+import type { ParsedSlashCommand, SlashCommandResult, TuiSlashCommandRuntime } from "../../slash-commands/types";
 import { formatProviderName } from "@oh-my-pi/pi-tui/chrome/format";
 import { formatCompactQuota } from "@oh-my-pi/pi-tui/overlays/advisor-config";
 import { resolveTernPane } from "../../tools/browser/tern/kind";
@@ -191,6 +195,38 @@ function hasForkApiKeyOverride(argv: string[]): boolean {
 		if (flagConsumesValue(arg, argv[i + 1])) i++;
 	}
 	return false;
+}
+
+/**
+ * Bind the lightweight Dev command to the native host here, not in its spec:
+ * the browser host itself consumes the builtin registry.
+ */
+export async function handleDevCommandTui(
+	command: ParsedSlashCommand,
+	runtime: TuiSlashCommandRuntime,
+): Promise<SlashCommandResult> {
+	const { ctx } = runtime;
+	const consumedText = !runtime.draftDetached && ctx.editor.getExpandedText() === command.text;
+	if (consumedText) ctx.editor.setText("");
+	const result = await handleDevCommand(command, {
+		session: ctx.session,
+		settings: ctx.settings,
+		cwd: ctx.sessionManager.getCwd(),
+		output: text => ctx.showStatus(text),
+		registerHostShutdown: dispose => ctx.registerHostShutdown(dispose),
+		toggleDevWorkbench: () => getDevWorkbenchTuiMode(ctx).toggle(),
+	});
+	if (runtime.draftDetached) {
+		if (result && "failed" in result && result.failed) {
+			restoreDetachedDraft(ctx.editor, command.text, runtime.input?.images, runtime.input?.imageLinks);
+		} else if (runtime.input?.images?.length) {
+			restoreDetachedDraft(ctx.editor, "", runtime.input.images, runtime.input.imageLinks);
+		}
+	}
+	if (!runtime.draftDetached && consumedText && result && "failed" in result && result.failed) {
+		restoreDetachedDraft(ctx.editor, command.text);
+	}
+	return result;
 }
 
 export class CommandController {
@@ -1822,15 +1858,6 @@ export class CommandController {
 
 	/** Save source settings before acquiring the gate for a complete relocation operation. */
 	async #withSessionMove(operation: () => Promise<boolean>): Promise<boolean> {
-		try {
-			await this.ctx.exitDevForSessionMove();
-		} catch (err) {
-			this.ctx.session.emitNotice(
-				"error",
-				`Cannot move session: ${err instanceof Error ? err.message : String(err)}`,
-			);
-			return false;
-		}
 		try {
 			await this.ctx.settings.flush();
 		} catch (err) {

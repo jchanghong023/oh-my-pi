@@ -25,7 +25,7 @@ import { METADATA_FILENAME } from '../../utils/change-metadata.js';
  * index when references are declared, and resolves the config path for
  * fix text. Shared by both instruction surfaces.
  */
-async function loadRootConfigContext(root) {
+export async function loadRootConfigContext(root) {
     // readProjectConfig never throws: missing/unparseable configs are null.
     const projectConfig = readProjectConfig(root.path);
     // One registry read serves every relationship consumer in this

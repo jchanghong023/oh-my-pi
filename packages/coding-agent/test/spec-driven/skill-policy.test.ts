@@ -652,3 +652,35 @@ describe("pinned skill discovery and access", () => {
 		}
 	});
 });
+
+it("browser inspection scope cannot borrow a native executor's bundled resource grant", async () => {
+	const bundled = await loadSpecDrivenSkill("superpowers", "requesting-code-review");
+	const skill = exposeSpecExecutionSkill(bundled);
+	const native: ToolSession = {
+		cwd: os.tmpdir(),
+		hasUI: false,
+		getSessionFile: () => null,
+		getSessionSpawns: () => "*",
+		settings: Settings.isolated(),
+	};
+	const browser: ToolSession = { ...native };
+	const revoke = grantSpecExecutionSkills(native, [skill]);
+	try {
+		const url = parseInternalUrl(`skill://${skill.name}`);
+		const result = await handler.resolve(url, { session: native, skills: [skill] });
+		expect(result.sourcePath).toBe(bundled.filePath);
+		expect(result.content.length).toBeGreaterThan(0);
+		await expect(handler.resolve(url, { session: browser, skills: [skill] })).rejects.toBeInstanceOf(
+			SkillAccessDeniedError,
+		);
+		await expect(handler.locate(url, { session: browser, skills: [skill] })).rejects.toBeInstanceOf(
+			SkillAccessDeniedError,
+		);
+		expect((await handler.resolve(url, { session: native, skills: [skill] })).content).toBe(result.content);
+	} finally {
+		revoke();
+	}
+	await expect(
+		handler.resolve(parseInternalUrl(`skill://${skill.name}`), { session: native, skills: [skill] }),
+	).rejects.toBeInstanceOf(SkillAccessDeniedError);
+});

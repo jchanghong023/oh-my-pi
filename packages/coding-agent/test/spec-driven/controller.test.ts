@@ -1,1142 +1,683 @@
-import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Agent } from "@oh-my-pi/pi-agent-core";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
-import { AsyncJobManager } from "../../src/async/job-manager";
-import { ModelRegistry } from "../../src/config/model-registry";
+import * as vcs from "@oh-my-pi/pi-natives/vcs";
+import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { Settings } from "../../src/config/settings";
-import { AgentSession } from "../../src/session/agent-session";
+import { ModelRegistry } from "../../src/config/model-registry";
+import { createAgentSession } from "../../src/sdk";
+import { AuthStorage } from "../../src/session/auth-storage";
+import { AgentStorage } from "../../src/session/agent-storage";
+import { HistoryStorage } from "../../src/session/history-storage";
 import { SessionManager } from "../../src/session/session-manager";
-import type { SlashCommandRuntime } from "../../src/slash-commands/types";
-import {
-	getSpecDrivenController,
-	observeSpecDrivenController,
-	peekSpecDrivenController,
-	type SpecDrivenController,
-	type SpecRuntimeFactory,
-} from "../../src/spec-driven/controller";
+import { closeSessionIndex } from "../../src/session/session-index";
+import { artifactVersion } from "../../src/spec-driven/artifacts";
+import { SpecDrivenController, type SpecRuntimeFactory } from "../../src/spec-driven/controller";
+import { DevGitService } from "../../src/spec-driven/git";
+import { SpecAdmissionError } from "../../src/spec-driven/orchestrator";
+import { readDevRequirement, saveDevRequirement } from "../../src/spec-driven/records";
+import { createSpecDrivenRuntime, type SpecDrivenRuntime } from "../../src/spec-driven/runtime";
 import type {
-	SpecAgentInput,
-	SpecArtifactPaths,
-	SpecConversationRecipient,
-	SpecStageRole,
+	DevActionIntent,
+	DevActionPreview,
+	DevGitTarget,
+	DevRequirementRecord,
+	DevRequirementSnapshot,
 } from "../../src/spec-driven/types";
 import { DevWorkspace } from "../../src/spec-driven/workspace";
-import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
-const roots: string[] = [];
-const owners: SpecDrivenController[] = [];
-afterEach(async () => {
-	for (const owner of owners.splice(0)) await owner.exit();
-	for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
-});
-type SessionEvent = Parameters<Parameters<AgentSession["subscribe"]>[0]>[0];
-const sessionListeners = new WeakMap<AgentSession, Set<(event: SessionEvent) => unknown>>();
-function session(cwd: string): AgentSession {
-	const listeners = new Set<(event: SessionEvent) => unknown>();
-	const native = {
-		sessionManager: { getCwd: () => cwd },
-		isBusyForSnapshot: false,
-		hasAdmittedSubmission: false,
-		queuedMessageCount: 0,
-		hasPendingAsyncWork: () => false,
-		getAsyncJobTree: () => null,
-		hasUnsettledAsyncJobTree: () => false,
-		waitForAdmittedSubmissions: async () => {},
-		waitForIdle: async () => {},
-		subscribe: (listener: (event: SessionEvent) => unknown) => {
-			listeners.add(listener);
-			return () => {
-				listeners.delete(listener);
-			};
-		},
-	} as unknown as AgentSession;
-	sessionListeners.set(native, listeners);
-	return native;
-}
-async function fixture(cwd?: string) {
-	const root = cwd ?? (await fs.mkdtemp(path.join(os.tmpdir(), "dev-controller-")));
-	if (!cwd) roots.push(root);
-	const ordinary = session(root);
-	const ordinaryHistory = [{ role: "user" as const, content: "ordinary draft", timestamp: 0 }];
-	Object.assign(ordinary, { messages: ordinaryHistory });
-	let bound = ordinary;
-	const stages = new Map<SpecStageRole, AgentSession>();
-	const refs = new Map<SpecStageRole, SpecConversationRecipient>();
-	let prepareError: Error | undefined;
-	const calls: string[] = [];
-	const inputs: SpecAgentInput[] = [];
-	let failPrepare = false;
-	let failStop = false;
-	let failInitialize = false;
-	let failClose = false;
-	let failModel = false;
-	let runGate: Promise<void> | undefined;
+import { createProviderFixture, rolePayload } from "./provider-fixture";
+
+const business =
+	"# 业务需求：订单\n\n" +
+	[
+		"基本信息",
+		"业务背景与目标",
+		"实际使用场景与现状",
+		"期望结果",
+		"业务规则与边界",
+		"典型例子",
+		"业务验收预期",
+		"待确认事项",
+		"资料来源",
+		"业务确认与交接",
+	]
+		.map(heading => `## ${heading}\n已确认的完整事实 Ω。\n`)
+		.join("\n");
+async function fixture(configuration: { remote?: boolean; failFinalCancellation?: boolean } = {}) {
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-native-controller-"));
+	const agentDir = path.join(cwd, "isolated-agent");
+	await fs.mkdir(agentDir);
+	await fs.mkdir(path.join(cwd, ".git/objects"), { recursive: true });
+	await fs.mkdir(path.join(cwd, ".git/refs/heads"), { recursive: true });
+	await fs.mkdir(path.join(cwd, ".git/hooks"));
+	await fs.writeFile(path.join(cwd, ".git/HEAD"), "ref: refs/heads/main\n");
+	await fs.writeFile(
+		path.join(cwd, ".git/config"),
+		"[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tautocrlf = false\n\thooksPath = .git/hooks\n[commit]\n\tgpgSign = false\n[user]\n\tname = Controller Test\n\temail = controller@example.invalid\n",
+	);
+	await fs.writeFile(path.join(cwd, "tracked.txt"), "unrelated original bytes\n");
+	const repo = vcs.git(cwd);
+	if (!repo) throw new Error("Native fixture Git discovery failed");
+	await repo.stageFiles(["tracked.txt"]);
+	const initial = await repo.commitCreate("fixture", {});
+	const remote = configuration.remote ? await fs.mkdtemp(path.join(os.tmpdir(), "omp-controller-bare-remote-")) : null;
+	if (remote) {
+		for (const directory of ["objects/info", "objects/pack", "refs/heads", "refs/tags", "fixture-hooks"]) {
+			await fs.mkdir(path.join(remote, directory), { recursive: true });
+		}
+		await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/heads/main\n");
+		await fs.writeFile(
+			path.join(remote, "config"),
+			"[core]\n\trepositoryformatversion = 0\n\tbare = true\n\thooksPath = fixture-hooks\n",
+		);
+		await repo.remoteAdd("fixture", remote);
+		await repo.push({ remote: "fixture", refspec: `${initial}:refs/heads/main`, forceWithLease: false });
+		await repo.createBranch("feature", initial, false);
+		await repo.checkout("feature");
+		await repo.fetch("fixture", "refs/heads/main", "refs/remotes/fixture/main");
+	}
+	let modelGate: Promise<void> | undefined;
 	let modelStarted = Promise.withResolvers<void>();
-	let pendingTeam: { owner: AgentSession; interrupt: () => Promise<boolean> } | undefined;
-	const paths: SpecArtifactPaths = {
-		requirements: ["proposal.md"],
-		solution: "solution.md",
-		plan: "plan.md",
-		report: "report.md",
+	const provider = createProviderFixture({
+		reply: () => ({ text: "继续澄清，不代表批准。" }),
+		delay: async () => {
+			modelStarted.resolve();
+			await modelGate;
+		},
+	});
+	await fs.writeFile(
+		path.join(agentDir, "models.yml"),
+		`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
+	);
+	const settings = await Settings.loadIsolated({
+		cwd,
+		agentDir,
+		inMemory: true,
+		overrides: {
+			modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
+			"compaction.enabled": false,
+			"prewalk.enabled": false,
+			"tools.xdev": false,
+			"async.enabled": false,
+			"todo.enabled": false,
+			"mcp.startupTimeoutMs": 0,
+		},
+	});
+	const authStorage = await AuthStorage.create(":memory:");
+	const registry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
+	const model = registry.find("deepseek", "chat-a");
+	if (!model) throw new Error("Local controller fixture model unavailable");
+	const { session } = await createAgentSession({
+		cwd,
+		agentDir,
+		settings,
+		model,
+		authStorage,
+		modelRegistry: registry,
+		sessionManager: SessionManager.inMemory(),
+		contextFiles: [],
+		rules: [],
+		skills: [],
+		promptTemplates: [],
+		slashCommands: [],
+		disableExtensionDiscovery: true,
+		enableMCP: false,
+		enableLsp: false,
+		autoTitle: false,
+		offline: true,
+		bindProcessState: false,
+	});
+	const runtimes: SpecDrivenRuntime[] = [];
+	let failStop: boolean | SpecDrivenRuntime = false;
+	const factory: SpecRuntimeFactory = async args => {
+		const runtime = await createSpecDrivenRuntime(args);
+		const stop = runtime.stop.bind(runtime);
+		runtime.stop = async () => {
+			if (failStop === true || failStop === runtime) throw new Error("native stop failed");
+			await stop();
+		};
+		runtimes.push(runtime);
+		return runtime;
 	};
-	const doc = (file: string) => ({ path: file, version: "bytes-1", content: "material" });
-	const factory: SpecRuntimeFactory = async args => ({
-		options: { runId: args.saved?.runId ?? crypto.randomUUID() },
-		nativeSession: role => stages.get(role),
-		sessionRefs: () => Object.fromEntries(refs),
-		originalRequest: () => "request",
-		hasPendingTeam: owner => pendingTeam?.owner === owner,
-		async interruptTeam(owner) {
-			if (pendingTeam?.owner !== owner) return false;
-			const team = pendingTeam;
-			pendingTeam = undefined;
-			calls.push("interrupt-team");
-			return team.interrupt();
-		},
-		async stop() {
-			calls.push("stop");
-			if (failStop) throw new Error("stop failed");
-		},
-		async dispose() {
-			calls.push("dispose");
-		},
-		ports: {
-			agents: {
-				async prepare(role) {
-					calls.push(`prepare:${role}`);
-					if (prepareError) throw prepareError;
-					if (failPrepare) throw new Error("prepare failed");
-					if (!stages.has(role)) {
-						const child = session(args.cwd);
-						stages.set(role, child);
-						args.onSessionCreated?.(role, child);
-					}
-					refs.set(role, {
-						role,
-						actorId: role,
-						sessionId: role,
-						sessionFile: path.join(args.cwd, `${role}.jsonl`),
-					});
-				},
-				recipient: role => refs.get(role),
-				originalRequest: () => "request",
-				async run(input, context) {
-					inputs.push(structuredClone(input));
-					calls.push(`model:${input.role}`);
-					modelStarted.resolve();
-					if (failModel) throw new Error("network failed");
-					context.signal.throwIfAborted();
-					if (runGate) {
-						let abort: () => void = () => {};
-						const cancelled = new Promise<never>((_resolve, reject) => {
-							abort = () => reject(context.signal.reason);
-							context.signal.addEventListener("abort", abort, { once: true });
+	let finalSaveFailures = 0;
+	const owner = new SpecDrivenController(
+		{ session, settings, cwd },
+		factory,
+		configuration.failFinalCancellation
+			? {
+					createGit: options => {
+						const records = options.records;
+						if (!records) throw new Error("Controller did not provide its actual record store");
+						return new DevGitService({
+							...options,
+							records: {
+								...records,
+								save: async (record, expected) => {
+									if (record.lifecycle === "cancelled" && finalSaveFailures === 0) {
+										finalSaveFailures++;
+										throw new Error("final tombstone CAS failure");
+									}
+									return records.save(record, expected);
+								},
+							},
 						});
-						try {
-							await Promise.race([runGate, cancelled]);
-						} finally {
-							context.signal.removeEventListener("abort", abort);
-						}
-					}
-					return { text: "native" };
-				},
-			},
-			artifacts: {
-				async readBusiness() {
-					return doc(paths.business ?? args.saved!.paths!.business!);
-				},
-				async initialize(_changeId, _context, businessPath) {
-					calls.push("initialize");
-					if (failInitialize) throw new Error("initialize failed");
-					if (businessPath) paths.business = businessPath;
-					return paths;
-				},
-				async readRequirements() {
-					return {
-						files: paths.requirements.map(file => doc(file.replace(/\*{1,2}/, "area/greeting"))),
-						version: "bytes-1",
-					};
-				},
-				async readSolution() {
-					return {
-						...doc("solution.md"),
-						candidates: [{ id: "one", title: "One", content: "One" }],
-						recommendedCandidateId: "one",
-					};
-				},
-				async readPlan() {
-					return doc("plan.md");
-				},
-				async readReport() {
-					return doc("report.md");
-				},
-				async checkVersions() {
-					return { matches: true, changed: [] };
-				},
-				async close(input) {
-					await input.onProgress?.({ synced: true });
-					if (failClose) throw new Error("archive failed");
-					return { archivedChangePath: "archive/change" };
-				},
-			},
-		},
-	});
-	const host = {
-		session: ordinary,
-		sessionManager: ordinary.sessionManager,
-		cwd: root,
-		settings: {},
-		output: () => {},
-		bindMainSession: async (target: AgentSession) => {
-			calls.push("bind");
-			bound = target;
-		},
-	} as unknown as SlashCommandRuntime;
-	const owner = getSpecDrivenController(host, { factory });
-	owners.push(owner);
-	return {
-		owner,
-		host,
-		ordinary,
-		stages,
-		calls,
-		inputs,
-		root,
-		paths,
-		bound: () => bound,
-		ordinaryHistory,
-		failPrepare: (value: boolean) => {
-			failPrepare = value;
-		},
-		failStop: (value: boolean) => {
-			failStop = value;
-		},
-		failInitialize: (value: boolean) => {
-			failInitialize = value;
-		},
-		failClose: (value: boolean) => {
-			failClose = value;
-		},
-		prepareError: (error?: Error) => {
-			prepareError = error;
-		},
-		failModel: (value: boolean) => {
-			failModel = value;
-		},
-		gate: (value?: Promise<void>) => {
-			runGate = value;
-			modelStarted = Promise.withResolvers<void>();
-		},
-		waitForModel: () => modelStarted.promise,
-		pendingTeam: (owner: AgentSession, interrupt: () => Promise<boolean>) => {
-			pendingTeam = { owner, interrupt };
-		},
-		state: async () => JSON.parse(await fs.readFile(path.join(root, ".omp/dev/state.json"), "utf8")),
-	};
-}
-describe("Dev workspace controller", () => {
-	test("business recovery keeps optional back and business-only completion permits another flow", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("业务需求", undefined, undefined, true);
-		await f.owner.exit();
-		const restored = await fixture(f.root);
-		await restored.owner.enter();
-		expect(restored.owner.status().phase).toBe("business");
-		await restored.owner.next();
-		expect(restored.owner.actions().find(action => action.id === "back")?.available).toBe(true);
-		await restored.owner.back();
-		await restored.owner.finishBusiness();
-		const run = (await restored.state()).run;
-		expect(run.businessCompleted).toBe(true);
-		expect(run.phase).toBe("idle");
-		await restored.owner.exit();
-		const completed = await fixture(f.root);
-		await completed.owner.enter();
-		expect(completed.owner.status().businessCompleted).toBe(true);
-		expect(completed.calls).not.toContain("prepare:requirements");
-		await completed.owner.new("直接开发");
-		expect(completed.owner.status().phase).toBe("requirements");
-	});
-	test("publishes ready actions after a direct native prompt releases admission and idle barriers", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		const native = f.owner.nativeSession()!;
-		const admitted = Promise.withResolvers<void>();
-		const idle = Promise.withResolvers<void>();
-		Object.assign(native, {
-			hasAdmittedSubmission: true,
-			isBusyForSnapshot: true,
-			waitForAdmittedSubmissions: () => admitted.promise,
-			waitForIdle: () => idle.promise,
+					},
+				}
+			: {},
+	);
+	async function preview(
+		snapshot: DevRequirementSnapshot,
+		intent: DevActionIntent,
+		gitTarget: DevGitTarget | null = null,
+	): Promise<DevActionPreview> {
+		return owner.prepareDevAction({
+			requirementId: snapshot.record.requirementId,
+			expectedRecordVersion: snapshot.recordVersion,
+			expectedStage: snapshot.record.stage,
+			intent,
+			gitTarget,
 		});
-		const ready = Promise.withResolvers<void>();
-		let active = false;
-		let nextAvailable = false;
-		const unsubscribe = observeSpecDrivenController(f.ordinary.sessionManager, observation => {
-			active = observation.active;
-			nextAvailable = observation.interaction.actions.some(action => action.id === "next" && action.available);
-			if (!active && nextAvailable) ready.resolve();
-		});
+	}
+	async function waitForNativeIdle(requirementId: string): Promise<DevRequirementSnapshot> {
+		const settled = Promise.withResolvers<DevRequirementSnapshot>();
+		const inspect = (snapshot: DevRequirementSnapshot) => {
+			if (snapshot.record.requirementId !== requirementId || !snapshot.runtime) return;
+			if (snapshot.runtime.execution === "failed") {
+				settled.reject(new Error(snapshot.runtime.blockedReason ?? "Native stage failed"));
+			} else if (snapshot.runtime.execution === "idle" && snapshot.runtime.recipient) settled.resolve(snapshot);
+		};
+		const unsubscribe = owner.observe(inspect);
 		try {
-			for (const listener of sessionListeners.get(native)!) {
-				// The dispatcher must not await the barrier that drains its own handlers.
-				expect(listener({ type: "agent_end", messages: [] })).toBeUndefined();
-			}
-			expect(active).toBe(true);
-			expect(nextAvailable).toBe(false);
-			Object.assign(native, { hasAdmittedSubmission: false });
-			admitted.resolve();
-			await Promise.resolve();
-			await Promise.resolve();
-			expect(active).toBe(true);
-			expect(nextAvailable).toBe(false);
-			Object.assign(native, { isBusyForSnapshot: false });
-			idle.resolve();
-			await ready.promise;
-			expect(active).toBe(false);
-			expect(nextAvailable).toBe(true);
+			inspect(await owner.getRequirement(requirementId));
+			return await settled.promise;
 		} finally {
-			admitted.resolve();
-			idle.resolve();
 			unsubscribe();
 		}
-	});
-	test("rejects another owner without clearing the first owner's state or aliasing ordinary managers", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.setTeam(true);
-		const b = await fixture(a.root);
-		expect(peekSpecDrivenController({})).toBeUndefined();
-		await expect(b.owner.enter()).rejects.toThrow("占用");
-		expect(await a.state()).toEqual({ version: 1, team: true });
-		await a.owner.exit();
-		await b.owner.enter();
-		expect(b.owner.status().useTeam).toBe(true);
-	});
-	test("reuses the controller but locks and restores the root manager's current workspace after exit", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.setTeam(true);
-		await a.owner.exit();
-		const savedA = await a.state();
-		const b = await fixture();
-		await b.owner.enter();
-		await b.owner.new("request");
-		const savedB = await b.state();
-		const cwd = spyOn(a.ordinary.sessionManager, "getCwd").mockReturnValue(b.root);
-		try {
-			expect(a.host.cwd).toBe(a.root);
-			expect(getSpecDrivenController({ ...a.host, cwd: b.root })).toBe(a.owner);
-			expect(a.owner.observation().cwd).toBe(b.root);
-			await expect(a.owner.enter()).rejects.toThrow("占用");
-			expect(a.owner.observation().released).toBe(true);
-			expect(await a.state()).toEqual(savedA);
-			expect(await b.state()).toEqual(savedB);
-			await b.owner.exit();
-			await a.owner.enter();
-			expect(a.owner.observation().cwd).toBe(await fs.realpath(b.root));
-			expect(a.owner.observation().runId).toBe(savedB.run.runId);
-			expect(a.owner.status().phase).toBe("requirements");
-			expect(a.owner.status().useTeam).toBe(false);
-			expect(a.owner.observation().interaction.recipient?.sessionFile).toBe(
-				savedB.run.sessions.requirements.sessionFile,
-			);
-			expect(a.calls.some(call => call.startsWith("model:"))).toBe(false);
-			await expect(b.owner.enter()).rejects.toThrow("占用");
-			const workspaceA = await DevWorkspace.acquire(a.root);
-			try {
-				expect(await workspaceA.read()).toEqual(savedA);
-			} finally {
-				workspaceA.release();
-			}
-			await a.owner.exit();
-			expect(await a.state()).toEqual(savedA);
-			expect(await b.state()).toEqual(savedB);
-		} finally {
-			cwd.mockRestore();
-		}
-	});
-	test("observes authoritative approvals through back, exit and restore", async () => {
-		const f = await fixture();
-		expect(f.owner.observation().approvals).toEqual({});
-		await f.owner.enter();
-		await f.owner.new("request");
-		await f.owner.next(undefined, "/dev next 批准需求");
-		await f.owner.next("one", "/dev next one 批准方案");
-		const approved = (await f.state()).run.approvals;
-		expect(f.owner.observation().approvals).toEqual(approved);
-		expect(approved.requirements.userReply).toBe("/dev next 批准需求");
-		expect(approved.solution.userReply).toBe("/dev next one 批准方案");
-		await f.owner.back();
-		expect(f.owner.status().specification).toBeDefined();
-		expect(f.owner.observation().approvals).toEqual({ requirements: approved.requirements });
-		await f.owner.exit();
-		expect(f.owner.observation().approvals).toEqual({ requirements: approved.requirements });
-		await f.owner.enter();
-		expect(f.owner.observation().approvals).toEqual({ requirements: approved.requirements });
-		await f.owner.back();
-		expect(f.owner.observation().approvals).toEqual({});
-	});
-	test("keeps configuration separate from run and aliases only owned stage managers", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.setTeam(true);
-		expect(await f.state()).toEqual({ version: 1, team: true });
-		await f.owner.new("request");
-		expect(peekSpecDrivenController(f.stages.get("requirements")!.sessionManager)).toBe(f.owner);
-		expect(f.owner.rootSession()).toBe(f.ordinary);
-		expect(f.owner.nativeSession()).toBe(f.stages.get("requirements"));
-		const state = await f.state();
-		expect(Object.keys(state).sort()).toEqual(["run", "team", "version"]);
-		expect(state.run.sessions.requirements.sessionFile).toBeString();
-		expect(JSON.stringify(state)).not.toContain("material");
-		await f.owner.drop();
-		expect(await f.state()).toEqual({ version: 1, team: false });
-		expect(f.owner.inputMode()).toBe("dev");
-		expect(peekSpecDrivenController(f.stages.get("requirements")!.sessionManager)).toBeUndefined();
-	});
-	test.each(["*", "**"])(
-		"restores nested-only approved requirements from %s native output pattern",
-		async wildcard => {
-			const a = await fixture();
-			a.paths.requirements = [
-				"openspec/changes/native/proposal.md",
-				`openspec/changes/native/specs/${wildcard}/spec.md`,
-			];
-			await a.owner.enter();
-			await a.owner.setTeam(true);
-			await a.owner.new("request");
-			await a.owner.next();
-			await a.owner.next("one");
-			await a.owner.next();
-			const saved = await a.state();
-			expect(saved.run.approvals.requirements.files.map((file: { path: string }) => file.path)).toEqual([
-				"openspec/changes/native/proposal.md",
-				"openspec/changes/native/specs/area/greeting/spec.md",
-			]);
-			expect(saved.run.paths.requirements).toContain(`openspec/changes/native/specs/${wildcard}/spec.md`);
-			await a.owner.exit();
-			const b = await fixture(a.root);
-			await b.owner.enter();
-			expect(b.owner.status().phase).toBe("executing");
-			expect(b.owner.status().useTeam).toBe(true);
-			expect(b.owner.observation().approvals).toEqual(saved.run.approvals);
-			expect(b.owner.observation().interaction.recipient?.sessionFile).toBe(saved.run.sessions.executor.sessionFile);
-			const native = b.owner.nativeSession();
-			if (!native) throw new Error("Restored executor native session is missing");
-			expect(b.bound()).toBe(native);
-			expect(b.calls.some(call => call.startsWith("model:"))).toBe(false);
-			expect(await b.state()).toEqual(saved);
-		},
-	);
-	test("restores native references without model work even when history is unavailable", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.setTeam(true);
-		await a.owner.new("request");
-		await a.owner.next();
-		await a.owner.next();
-		await a.owner.next();
-		await a.owner.exit();
-		const saved = await a.state();
-		for (const ref of Object.values(saved.run.sessions) as SpecConversationRecipient[]) {
-			await expect(fs.stat(ref.sessionFile!)).rejects.toMatchObject({ code: "ENOENT" });
-		}
-		const b = await fixture(a.root);
-		await b.owner.enter();
-		expect(b.owner.status().phase).toBe("executing");
-		expect(b.owner.status().useTeam).toBe(true);
-		expect(b.calls.some(call => call.startsWith("model:"))).toBe(false);
-		expect(b.owner.nativeSession()).toBeDefined();
-		expect(await b.state()).toEqual(saved);
-	});
-	test("failed restored preparation returns to ordinary chat and retries the same saved run", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.setTeam(true);
-		await a.owner.new("request");
-		await a.owner.exit();
-		const saved = await fs.readFile(path.join(a.root, ".omp/dev/state.json"), "utf8");
-		const b = await fixture(a.root);
-		b.failPrepare(true);
-		await expect(b.owner.enter()).rejects.toThrow("prepare failed");
-		expect(b.owner.inputMode()).toBe("chat");
-		expect(b.bound()).toBe(b.ordinary);
-		expect(b.owner.observation().released).toBe(true);
-		expect(b.owner.observation().interaction.recipient).toBeUndefined();
-		expect(b.ordinary.messages).toBe(b.ordinaryHistory);
-		await expect(b.owner.submitText("not a Dev prompt")).rejects.toThrow();
-		expect(b.calls).not.toContain("model:requirements");
-		expect(await fs.readFile(path.join(a.root, ".omp/dev/state.json"), "utf8")).toBe(saved);
-		b.failPrepare(false);
-		await b.owner.enter();
-		expect(b.owner.inputMode()).toBe("dev");
-		const native = b.owner.nativeSession();
-		if (!native) throw new Error("Restored native session is missing");
-		expect(b.bound()).toBe(native);
-		expect((await b.state()).run.runId).toBe(JSON.parse(saved).run.runId);
-		expect(b.calls).not.toContain("model:requirements");
-	});
-	test("failed restored host binding stops native work before another owner restores the untouched run", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.new("request");
-		await a.owner.exit();
-		const saved = await fs.readFile(path.join(a.root, ".omp/dev/state.json"), "utf8");
-		const b = await fixture(a.root);
-		const original = b.host.bindMainSession!;
-		const bind = spyOn(b.host, "bindMainSession").mockImplementation(async target => {
-			await original(target);
-			if (target !== b.ordinary) throw new Error("binding failed");
-		});
-		try {
-			await expect(b.owner.enter()).rejects.toThrow("binding failed");
-		} finally {
-			bind.mockRestore();
-		}
-		expect(b.owner.inputMode()).toBe("chat");
-		expect(b.bound()).toBe(b.ordinary);
-		expect(b.owner.nativeSession()).toBeUndefined();
-		expect(b.owner.observation().released).toBe(true);
-		expect(b.ordinary.messages).toBe(b.ordinaryHistory);
-		expect(b.calls.indexOf("stop")).toBeLessThan(b.calls.indexOf("dispose"));
-		expect(b.calls).not.toContain("model:requirements");
-		expect(await fs.readFile(path.join(a.root, ".omp/dev/state.json"), "utf8")).toBe(saved);
-		const c = await fixture(a.root);
-		await c.owner.enter();
-		expect((await c.state()).run.runId).toBe(JSON.parse(saved).run.runId);
-		expect(c.calls).not.toContain("model:requirements");
-	});
-	test("failed enter cleanup retains a retryable owner while ordinary chat stays bound", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.new("request");
-		await a.owner.exit();
-		const saved = await a.state();
-		const b = await fixture(a.root);
-		b.failPrepare(true);
-		b.failStop(true);
-		await expect(b.owner.enter()).rejects.toThrow("stop failed");
-		expect(b.owner.inputMode()).toBe("chat");
-		expect(b.bound()).toBe(b.ordinary);
-		expect(b.owner.observation().released).toBe(false);
-		expect(b.calls).not.toContain("dispose");
-		await expect(b.owner.enter()).rejects.toThrow("stop failed");
-		await expect(b.owner.submitText("not a Dev prompt")).rejects.toThrow("停止");
-		const c = await fixture(a.root);
-		await expect(c.owner.enter()).rejects.toThrow("占用");
-		expect(await b.state()).toEqual(saved);
-		b.failStop(false);
-		b.failPrepare(false);
-		await b.owner.enter();
-		expect(b.owner.inputMode()).toBe("dev");
-		expect((await b.state()).run.runId).toBe(saved.run.runId);
-		expect(b.calls).not.toContain("model:requirements");
-		await b.owner.exit();
-		await c.owner.enter();
-		expect((await c.state()).run.runId).toBe(saved.run.runId);
-		expect(c.calls).not.toContain("model:requirements");
-	});
-	test("saved-run read errors preserve valid state and release the uninitialized owner", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.new("request");
-		await a.owner.exit();
-		const saved = await a.state();
-		const b = await fixture(a.root);
-		const read = spyOn(DevWorkspace.prototype, "read").mockRejectedValue(new Error("read denied"));
-		try {
-			await expect(b.owner.enter()).rejects.toThrow("read denied");
-		} finally {
-			read.mockRestore();
-		}
-		expect(b.owner.inputMode()).toBe("chat");
-		expect(b.bound()).toBe(b.ordinary);
-		expect(b.owner.observation().released).toBe(true);
-		expect(await b.state()).toEqual(saved);
-		await b.owner.enter();
-		expect((await b.state()).run.runId).toBe(saved.run.runId);
-	});
-	test("missing native history is not corrupt state and a later owner can retry its references", async () => {
-		const a = await fixture();
-		await a.owner.enter();
-		await a.owner.setTeam(true);
-		await a.owner.new("request");
-		await a.owner.exit();
-		const saved = await a.state();
-		const b = await fixture(a.root);
-		b.prepareError(Object.assign(new Error("native history missing"), { code: "ENOENT" }));
-		await expect(b.owner.enter()).rejects.toThrow("native history missing");
-		expect(b.owner.inputMode()).toBe("chat");
-		expect(b.owner.observation().released).toBe(true);
-		expect(await b.state()).toEqual(saved);
-		const c = await fixture(a.root);
-		await c.owner.enter();
-		expect((await c.state()).run.sessions).toEqual(saved.run.sessions);
-		expect(c.owner.status().useTeam).toBe(true);
-		expect(c.calls).not.toContain("model:requirements");
-	});
-	test("first idle binding failure leaves ordinary input intact and permits entry retry", async () => {
-		const f = await fixture();
-		const original = f.host.bindMainSession!;
-		let failed = false;
-		const bind = spyOn(f.host, "bindMainSession").mockImplementation(async target => {
-			await original(target);
-			if (!failed) {
-				failed = true;
-				throw new Error("binding failed");
-			}
-		});
-		try {
-			await expect(f.owner.enter()).rejects.toThrow("binding failed");
-		} finally {
-			bind.mockRestore();
-		}
-		expect(f.owner.inputMode()).toBe("chat");
-		expect(f.bound()).toBe(f.ordinary);
-		expect(f.ordinary.messages).toBe(f.ordinaryHistory);
-		expect(f.owner.observation().released).toBe(true);
-		await f.owner.enter();
-		expect(f.owner.inputMode()).toBe("dev");
-	});
-	test("clears only corrupt Dev state, leaving artifacts and unrelated settings intact", async () => {
-		const f = await fixture();
-		const dir = path.join(f.root, ".omp/dev");
-		await fs.mkdir(dir, { recursive: true });
-		await fs.writeFile(path.join(dir, "state.json"), '{"version":999,"team":true}');
-		await fs.writeFile(path.join(dir, "keep.txt"), "artifact");
-		await f.owner.enter();
-		expect(f.owner.status().useTeam).toBe(false);
-		expect(await fs.readFile(path.join(dir, "keep.txt"), "utf8")).toBe("artifact");
-		await expect(fs.stat(path.join(dir, "state.json"))).rejects.toMatchObject({ code: "ENOENT" });
-		expect(f.owner.observation().notice).toContain("旧 Dev 状态无法恢复，已清除");
-	});
-	test.each(["current session", "prior approval", "retirement cleanup"])(
-		"clears an unrecoverable run missing its %s and permits a new run",
-		async missing => {
-			const a = await fixture();
-			await a.owner.enter();
-			await a.owner.setTeam(true);
-			await a.owner.new("request");
-			await a.owner.next();
-			await a.owner.next();
-			await a.owner.next();
-			await a.owner.exit();
-			const saved = await a.state();
-			if (missing === "current session") delete saved.run.sessions.executor;
-			else if (missing === "prior approval") delete saved.run.approvals.planner;
-			else saved.run.closing = { retirementCleanup: { diagnostic: "incomplete cleanup" } };
-			const stateFile = path.join(a.root, ".omp/dev/state.json");
-			await fs.writeFile(stateFile, JSON.stringify(saved));
-			const preserved = [
-				path.join(a.root, "proposal.md"),
-				path.join(a.root, "executor.jsonl"),
-				path.join(a.root, ".omp/settings.json"),
-			];
-			for (const file of preserved) await fs.writeFile(file, "preserve");
-			const b = await fixture(a.root);
-			await b.owner.enter();
-			expect(b.owner.status().phase).toBe("idle");
-			expect(b.owner.status().useTeam).toBe(false);
-			expect(b.owner.nativeSession()).toBeUndefined();
-			expect(b.calls.some(call => call.startsWith("prepare:") || call.startsWith("model:"))).toBe(false);
-			await expect(fs.stat(stateFile)).rejects.toMatchObject({ code: "ENOENT" });
-			for (const file of preserved) expect(await fs.readFile(file, "utf8")).toBe("preserve");
-			await b.owner.new("replacement request");
-			expect(b.owner.status().phase).toBe("requirements");
-			expect(b.owner.nativeSession()).toBeDefined();
-			expect((await b.state()).run.runId).not.toBe(saved.run.runId);
-		},
-	);
-	test("initialization and preparation failures retain configuration and remove only this run", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.setTeam(true);
-		f.failInitialize(true);
-		await expect(f.owner.new("request")).rejects.toThrow("initialize failed");
-		expect(await f.state()).toEqual({ version: 1, team: true });
-		f.failInitialize(false);
-		f.failPrepare(true);
-		await expect(f.owner.new("request")).rejects.toThrow("prepare failed");
-		expect(await f.state()).toEqual({ version: 1, team: true });
-	});
-	test("failed atomic save does not advance the original phase or call its next model", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		const save = spyOn(DevWorkspace.prototype, "save").mockRejectedValue(new Error("disk full"));
-		try {
-			await expect(f.owner.next()).rejects.toThrow("disk full");
-		} finally {
-			save.mockRestore();
-		}
-		expect(f.owner.status().phase).toBe("requirements");
-		expect(f.calls).not.toContain("model:solution");
-		expect((await f.state()).run.phase).toBe("requirements");
-	});
-	test("failed stage binding preserves the saved phase and original approval", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		const saved = await f.state();
-		const original = f.host.bindMainSession!;
-		const bind = spyOn(f.host, "bindMainSession").mockImplementation(async target => {
-			if (target === f.stages.get("solution")) throw new Error("binding failed");
-			await original(target);
-		});
-		try {
-			await expect(f.owner.next()).rejects.toThrow("binding failed");
-		} finally {
-			bind.mockRestore();
-		}
-		expect(f.owner.status().phase).toBe("requirements");
-		expect(f.bound()).toBe(f.stages.get("requirements")!);
-		expect(await f.state()).toEqual(saved);
-		expect(f.calls).not.toContain("model:solution");
-	});
-	test("recovery binding failure retains the original operation diagnostic", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		f.failPrepare(true);
-		const bind = spyOn(f.host, "bindMainSession").mockRejectedValue(new Error("secondary binding failed"));
-		try {
-			const error = await f.owner.next().catch(error => error);
-			expect(error.message).toContain("prepare failed");
-			expect(error.message).toContain("secondary binding failed");
-			expect(f.owner.observation().error).toBe(error.message);
-		} finally {
-			bind.mockRestore();
-		}
-	});
-	test("a successful native continuation clears the previous conversation error", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		f.failModel(true);
-		await expect(f.owner.submitText("retry this discussion")).rejects.toThrow("network failed");
-		expect(f.owner.observation().error).toContain("network failed");
-		f.failModel(false);
-		await f.owner.submitText("continue this discussion");
-		expect(f.owner.observation().error).toBeUndefined();
-		expect(f.inputs.at(-1)?.feedback).toBe("continue this discussion");
-	});
-	test.each([false, true])("blocks native admission while plan approval saves (save fails: %s)", async failSave => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		await f.owner.next();
-		await f.owner.next();
-		const saved = await f.state();
-		const text = "  保留原始输入 Ω\n";
-		const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-		const imageLinks = ["https://example.test/image.png"];
-		const attachments = structuredClone({ images, imageLinks });
-		const saving = Promise.withResolvers<void>();
-		const releaseSave = Promise.withResolvers<void>();
-		const releaseModel = Promise.withResolvers<void>();
-		const original = DevWorkspace.prototype.save;
-		const save = spyOn(DevWorkspace.prototype, "save").mockImplementation(async function (
-			this: DevWorkspace,
-			state: unknown,
-		) {
-			saving.resolve();
-			await releaseSave.promise;
-			if (failSave) throw new Error("disk full");
-			return original.call(this, state);
-		});
-		f.gate(releaseModel.promise);
-		const next = f.owner.next(undefined, "/dev next 保留计划批准原文").then(
-			() => undefined,
-			error => error,
-		);
-		try {
-			await saving.promise;
-			await expect(f.owner.checkConversationAllowed()).rejects.toThrow("控制操作");
-			await expect(f.owner.submitText(text, images, imageLinks)).rejects.toThrow("控制操作");
-			expect(f.calls).not.toContain("model:executor");
-			expect(f.inputs).toHaveLength(3);
-			expect(await f.state()).toEqual(saved);
-			expect({ images, imageLinks }).toEqual(attachments);
-			releaseSave.resolve();
-			if (failSave) {
-				expect(await next).toEqual(new Error("disk full"));
-				expect(f.owner.status().phase).toBe("planning");
-				expect(await f.state()).toEqual(saved);
-				expect(f.calls).not.toContain("model:executor");
-				f.gate();
-				await f.owner.checkConversationAllowed();
-				await f.owner.submitText(text, images, imageLinks);
-				expect(f.inputs.at(-1)).toMatchObject({ role: "planner", entry: false, feedback: text, ...attachments });
-			} else {
-				await f.waitForModel();
-				Object.assign(f.owner.nativeSession()!, { isBusyForSnapshot: true, hasAdmittedSubmission: true });
-				expect((await f.state()).run.phase).toBe("executing");
-				expect((await f.state()).run.approvals.planner.userReply).toBe("/dev next 保留计划批准原文");
-				await f.owner.checkConversationAllowed();
-				const followup = f.owner.submitText(text, images, imageLinks);
-				releaseModel.resolve();
-				await followup;
-				expect(await next).toBeUndefined();
-				expect(f.inputs.at(-1)).toMatchObject({ role: "executor", entry: false, feedback: text, ...attachments });
-				Object.assign(f.owner.nativeSession()!, { isBusyForSnapshot: false, hasAdmittedSubmission: false });
-			}
-		} finally {
-			releaseSave.resolve();
-			releaseModel.resolve();
-			save.mockRestore();
-			await next;
-		}
-	});
-	test("new save failure preserves Team configuration and never starts a model", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.setTeam(true);
-		const original = DevWorkspace.prototype.save;
-		let failed = false;
-		const save = spyOn(DevWorkspace.prototype, "save").mockImplementation(async function (
-			this: DevWorkspace,
-			state: unknown,
-		) {
-			if (!failed) {
-				failed = true;
-				throw new Error("disk full");
-			}
-			return original.call(this, state);
-		});
-		try {
-			await expect(f.owner.new("request")).rejects.toThrow("disk full");
-		} finally {
-			save.mockRestore();
-		}
-		expect(await f.state()).toEqual({ version: 1, team: true });
-		expect(f.calls).not.toContain("model:requirements");
-		expect(f.owner.status().phase).toBe("idle");
-	});
-	test("Team freezes at solution without touching its saved value", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		await f.owner.setTeam(true);
-		await f.owner.next();
-		expect(f.owner.observation().teamMutable).toBe(false);
-		await expect(f.owner.setTeam(false)).rejects.toThrow("冻结");
-		expect((await f.state()).team).toBe(true);
-	});
-	test("Team interrupt cannot release a drop's stop ownership while workspace read is pending", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.setTeam(true);
-		await f.owner.new("request");
-		const releaseTeam = Promise.withResolvers<void>();
-		f.gate(releaseTeam.promise);
-		const advancing = f.owner.next();
-		void advancing.catch(() => {});
-		await f.waitForModel();
-		expect(f.owner.status().phase).toBe("solution");
-		const native = f.owner.nativeSession()!;
-		f.pendingTeam(native, async () => {
-			releaseTeam.resolve();
-			return true;
-		});
-		const reading = Promise.withResolvers<void>();
-		const releaseRead = Promise.withResolvers<void>();
-		const originalRead = DevWorkspace.prototype.read;
-		const read = spyOn(DevWorkspace.prototype, "read").mockImplementation(async function (this: DevWorkspace) {
-			reading.resolve();
-			await releaseRead.promise;
-			return originalRead.call(this);
-		});
-		const save = spyOn(DevWorkspace.prototype, "save");
-		const dropping = f.owner.drop();
-		void dropping.catch(() => {});
-		try {
-			await reading.promise;
-			const interrupted = await f.owner.interrupt(native);
-			releaseTeam.resolve();
-			await advancing;
-			const models = f.calls.filter(call => call.startsWith("model:"));
-			await expect(f.owner.next()).rejects.toThrow("当前控制操作尚未结清");
-			await expect(f.owner.back()).rejects.toThrow("当前控制操作尚未结清");
-			await expect(f.owner.drop()).rejects.toThrow("停止操作尚未结清");
-			await expect(f.owner.exit()).rejects.toThrow("停止操作尚未结清");
-			expect(interrupted).toBe(false);
-			expect(f.calls).not.toContain("interrupt-team");
-			expect(f.calls.filter(call => call.startsWith("model:"))).toEqual(models);
-			releaseRead.resolve();
-			await dropping;
-			expect(save).toHaveBeenCalledTimes(1);
-			expect(f.calls.filter(call => call === "stop")).toHaveLength(1);
-			expect(f.calls.filter(call => call === "dispose")).toHaveLength(1);
-			expect(await f.state()).toEqual({ version: 1, team: false });
-			expect(f.owner.status().phase).toBe("idle");
-			expect(f.owner.nativeSession()).toBeUndefined();
-		} finally {
-			releaseTeam.resolve();
-			releaseRead.resolve();
-			await Promise.allSettled([advancing, dropping]);
-			read.mockRestore();
-			save.mockRestore();
-		}
-	});
-	test("failed stop retains workspace ownership and can be retried", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		f.failStop(true);
-		await expect(f.owner.exit()).rejects.toThrow("stop failed");
-		expect(f.owner.inputMode()).toBe("dev");
-		const other = await fixture(f.root);
-		await expect(other.owner.enter()).rejects.toThrow("占用");
-		f.failStop(false);
-		await f.owner.exit();
-		await other.owner.enter();
-	});
-	test("rejects next/back conflicts instead of approving a successor and rejects queued native input", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		const gate = Promise.withResolvers<void>();
-		f.gate(gate.promise);
-		const next = f.owner.next();
-		await expect(f.owner.next()).rejects.toThrow("控制操作");
-		await expect(f.owner.back()).rejects.toThrow("控制操作");
-		gate.resolve();
-		await next;
-		f.gate();
-		Object.assign(f.owner.nativeSession()!, { queuedMessageCount: 1 });
-		await expect(f.owner.next()).rejects.toThrow("原生会话");
-		await expect(f.owner.back()).rejects.toThrow("原生会话");
-		Object.assign(f.owner.nativeSession()!, { queuedMessageCount: 0 });
-	});
-	test("partial archive limits controls; successful completion stays idle with Team retained", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.setTeam(true);
-		await f.owner.new("request");
-		await f.owner.next();
-		await f.owner.next();
-		await f.owner.next();
-		f.failClose(true);
-		await expect(f.owner.next()).rejects.toThrow("archive failed");
-		expect((await f.state()).run.closing.synced).toBe(true);
-		expect(f.owner.actions().find(action => action.id === "back")?.available).toBe(false);
-		f.failClose(false);
-		await f.owner.next();
-		expect(f.owner.status().phase).toBe("idle");
-		expect(f.owner.status().useTeam).toBe(true);
-		expect((await f.state()).run.archivedChangePath).toBe("archive/change");
-	});
-	test("restores incomplete close side effects and prevents back", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		await f.owner.next();
-		await f.owner.next();
-		await f.owner.next();
-		await f.owner.exit();
-		const saved = await f.state();
-		saved.run.closing = {
-			sideEffects: { paths: ["openspec/specs/a/spec.md"], diagnostic: "rollback failed" },
-			archiveCleanup: { path: "openspec/changes/change (staged)", diagnostic: "cleanup failed" },
-		};
-		await fs.writeFile(path.join(f.root, ".omp/dev/state.json"), JSON.stringify(saved));
-		await f.owner.enter();
-		expect((await f.state()).run.closing).toEqual(saved.run.closing);
-		expect(f.owner.status().phase).toBe("executing");
-		expect(f.owner.actions().find(action => action.id === "back")?.available).toBe(false);
-	});
-	test("drop after partial archive abandons tracking without claiming side effects were reverted", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		await f.owner.next();
-		await f.owner.next();
-		await f.owner.next();
-		f.failClose(true);
-		await expect(f.owner.next()).rejects.toThrow("archive failed");
-		expect(f.owner.actions().find(action => action.id === "drop")?.label).toContain("不会撤销");
-		await f.owner.drop();
-		expect(await f.state()).toEqual({ version: 1, team: false });
-		expect(f.owner.inputMode()).toBe("dev");
-	});
-	test("new rejects ordinary mode rather than implicitly acquiring ownership", async () => {
-		const f = await fixture();
-		await expect(f.owner.new("request")).rejects.toThrow("进入开发模式");
-		expect(f.owner.observation().released).toBe(true);
-	});
-	test("a model failure after durable stage preparation retains its native run", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		f.failModel(true);
-		await expect(f.owner.new("request")).rejects.toThrow("network failed");
-		expect(f.owner.status().phase).toBe("requirements");
-		expect((await f.state()).run.sessions.requirements).toBeDefined();
-		expect(f.owner.nativeSession()).toBeDefined();
-		f.failModel(false);
-		const saved = await f.state();
-		await f.owner.exit();
-		const restored = await fixture(f.root);
-		await restored.owner.enter();
-		expect(restored.owner.status().phase).toBe("requirements");
-		expect(await restored.state()).toEqual(saved);
-		expect(restored.owner.nativeSession()).toBeDefined();
-		expect(restored.calls).not.toContain("model:requirements");
-	});
-	test("exit cancels and waits for a gated native operation before releasing its owner", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		await f.owner.new("request");
-		const gate = Promise.withResolvers<void>();
-		f.gate(gate.promise);
-		const next = f.owner.next().then(
-			() => undefined,
-			error => error,
-		);
-		await f.waitForModel();
-		await f.owner.exit();
-		expect(await next).toBeInstanceOf(Error);
-		expect(f.owner.observation().released).toBe(true);
-		expect(f.owner.inputMode()).toBe("chat");
-	});
-	test("enter rejects active ordinary admission before taking the workspace lock", async () => {
-		const f = await fixture();
-		Object.assign(f.ordinary, { hasAdmittedSubmission: true });
-		await expect(f.owner.enter()).rejects.toThrow("普通会话");
-		Object.assign(f.ordinary, { hasAdmittedSubmission: false });
-		await f.owner.enter();
-	});
-	test("idle enter and exit bind root using the destination mode before releasing ownership", async () => {
-		const f = await fixture();
-		const modes: string[] = [];
-		const bind = spyOn(f.host, "bindMainSession").mockImplementation(async target => {
-			expect(target).toBe(f.ordinary);
-			modes.push(f.owner.inputMode());
-			expect(f.owner.observation().released).toBe(false);
-		});
-		try {
-			await f.owner.enter();
-			await f.owner.exit();
-		} finally {
-			bind.mockRestore();
-		}
-		expect(modes).toEqual(["dev", "chat"]);
-		expect(f.owner.observation().released).toBe(true);
-	});
-	test("failed exit binding restores Dev mode and keeps the lease for retry", async () => {
-		const f = await fixture();
-		await f.owner.enter();
-		const bind = spyOn(f.host, "bindMainSession").mockRejectedValue(new Error("binding failed"));
-		try {
-			await expect(f.owner.exit()).rejects.toThrow("binding failed");
-		} finally {
-			bind.mockRestore();
-		}
-		expect(f.owner.inputMode()).toBe("dev");
-		expect(f.owner.observation().released).toBe(false);
-		await f.owner.exit();
-		expect(f.owner.inputMode()).toBe("chat");
-		expect(f.owner.observation().released).toBe(true);
-	});
-});
-
-test("cancelled native jobs block control and new work until actual owner-tree settlement", async () => {
-	const f = await fixture();
-	await f.owner.enter();
-	await f.owner.new("request");
-	const manager = new AsyncJobManager({ maxRunningJobs: 100 });
-	const auth = createInMemoryAuthStorage();
-	const model = getBundledModel("deepseek", "deepseek-v4-flash");
-	if (!model) throw new Error("expected bundled model");
-	const rootId = `settlement-${crypto.randomUUID()}`;
-	const native = new AgentSession({
-		agent: new Agent({ initialState: { model, systemPrompt: ["test"], tools: [] } }),
-		sessionManager: SessionManager.inMemory(),
-		settings: Settings.isolated(),
-		modelRegistry: new ModelRegistry(auth),
-		agentId: rootId,
-		asyncJobManager: manager,
-	});
-	const stage = f.owner.nativeSession()!;
-	Object.assign(stage, { hasUnsettledAsyncJobTree: native.hasUnsettledAsyncJobTree.bind(native) });
-	const direct = Promise.withResolvers<string>();
-	const descendant = Promise.withResolvers<string>();
-	const unrelated = Promise.withResolvers<string>();
-	try {
-		const directId = manager.register("bash", "direct", () => direct.promise, { ownerId: rootId });
-		manager.cancel(directId);
-		const recent = Array.from({ length: 12 }, (_, index) =>
-			manager.register("bash", `recent-${index}`, async () => "done", { ownerId: rootId }),
-		);
-		await Promise.all(recent.map(id => manager.getJob(id)!.promise));
-		expect(manager.getJob(directId)?.endTime).toBeUndefined();
-		expect(() => f.owner.assertControlAllowed()).toThrow("尚未结清");
-		await expect(f.owner.next()).rejects.toThrow("尚未结清");
-		await expect(f.owner.back()).rejects.toThrow("尚未结清");
-		await expect(f.owner.submitText("continue")).rejects.toThrow("尚未结清");
-		direct.resolve("done");
-		await manager.getJob(directId)!.promise;
-		f.owner.assertControlAllowed();
-
-		const child = `${rootId}-child`;
-		const grandchild = `${rootId}-grandchild`;
-		const link1 = manager.register("task", "child", async () => "done", { ownerId: rootId, agentId: child });
-		const link2 = manager.register("task", "grandchild", async () => "done", { ownerId: child, agentId: grandchild });
-		await Promise.all([manager.getJob(link1)!.promise, manager.getJob(link2)!.promise]);
-		manager.evictCompletedJobs({ ownerId: rootId });
-		manager.evictCompletedJobs({ ownerId: child });
-		const otherId = manager.register("bash", "other", () => unrelated.promise, { ownerId: `${rootId}-other` });
-		manager.cancel(otherId);
-		f.owner.assertControlAllowed();
-		const descendantId = manager.register("bash", "descendant", () => descendant.promise, {
-			ownerId: grandchild,
-			foreground: true,
-		});
-		manager.cancel(descendantId);
-		expect(() => f.owner.assertControlAllowed()).toThrow("尚未结清");
-		await expect(f.owner.exit()).rejects.toThrow("尚未结清");
-		expect(f.owner.inputMode()).toBe("dev");
-		descendant.resolve("done");
-		await manager.getJob(descendantId)!.promise;
-		await f.owner.exit();
-		expect(f.owner.inputMode()).toBe("chat");
-	} finally {
-		direct.resolve("done");
-		descendant.resolve("done");
-		unrelated.resolve("done");
-		await manager.waitForAll();
-		await native.dispose();
-		await manager.dispose();
-		auth.close();
 	}
+	async function confirm(action: DevActionPreview, userReply = "  人员明确原文\n不裁剪 Ω  ") {
+		const result = await owner.confirmDevAction({
+			operationId: action.action.binding.operationId,
+			confirmationToken: action.confirmationToken,
+			userReply,
+		});
+		if (result.persistence.save !== "succeeded" || result.persistence.error) {
+			throw new Error(
+				`Confirmed ${action.action.kind} did not save: ${result.persistence.error ?? JSON.stringify(result.persistence)}; stage=${result.snapshot.record.stage}`,
+			);
+		}
+		if (action.action.kind === "next" && result.persistence.save === "succeeded" && !result.persistence.error) {
+			return { ...result, snapshot: await waitForNativeIdle(action.action.binding.requirementId) };
+		}
+		return result;
+	}
+	async function imported() {
+		const created = await owner.createRequirement({ source: "import" });
+		await owner.importBusiness(created.record.requirementId, {
+			kind: "upload",
+			name: "orders.md",
+			bytes: new TextEncoder().encode(business),
+		});
+		return owner.getRequirement(created.record.requirementId);
+	}
+	return {
+		cwd,
+		owner,
+		session,
+		settings,
+		provider,
+		runtimes,
+		repo,
+		remote,
+		preview,
+		confirm,
+		imported,
+		finalSaveFailures: () => finalSaveFailures,
+		waitForNativeIdle,
+		gateModel(gate: Promise<void>) {
+			modelGate = gate;
+			modelStarted = Promise.withResolvers<void>();
+		},
+		waitForModelStart: () => modelStarted.promise,
+		failStop(value: boolean, runtime?: SpecDrivenRuntime) {
+			failStop = value ? (runtime ?? true) : false;
+		},
+		async [Symbol.asyncDispose]() {
+			failStop = false;
+			await owner.dispose();
+			await session.dispose();
+			await registry.awaitBackgroundRefresh();
+			authStorage.close();
+			await provider[Symbol.asyncDispose]();
+			HistoryStorage.close();
+			closeSessionIndex();
+			AgentStorage.close();
+			closeModelCache();
+			await fs.rm(cwd, { recursive: true, force: true });
+			if (remote) await fs.rm(remote, { recursive: true, force: true });
+		},
+	};
+}
+
+describe("record-driven native controller", () => {
+	test("cold lists and imports without actors, and preview cannot approve or invoke a model", async () => {
+		await using f = await fixture();
+		expect(await f.owner.listRequirements()).toEqual([]);
+		const snapshot = await f.imported();
+		expect(snapshot.record.stage).toBe("business");
+		expect(snapshot.runtime).toBeNull();
+		expect(f.runtimes).toEqual([]);
+		expect(f.provider.requests).toEqual([]);
+		const preview = await f.preview(snapshot, { kind: "next" });
+		expect(preview.action.binding.operationId.length).toBeGreaterThan(0);
+		expect(preview.confirmationToken.length).toBeGreaterThan(0);
+		expect(preview.action.binding.expectedRecordVersion).toBe(snapshot.recordVersion);
+		expect(preview.action.binding.files).toContainEqual({
+			path: `docs/business-requirements/${snapshot.record.changeId}.md`,
+			version: artifactVersion(business),
+		});
+		expect(preview.action.previewId).toBeNull();
+		expect(preview.git).toBeNull();
+		expect(f.provider.requests).toEqual([]);
+		expect(f.owner.nativeSession(snapshot.record.requirementId)).toBeUndefined();
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).record.decisions).toEqual([]);
+	}, 120_000);
+
+	test("first confirmed Next hands complete imported bytes and raw decision to the real requirements session without changing ordinary ownership", async () => {
+		await using f = await fixture();
+		const snapshot = await f.imported();
+		const ordinaryId = f.session.sessionId;
+		const ordinaryMessages = structuredClone(f.session.messages);
+		const action = await f.preview(snapshot, { kind: "next" });
+		const result = await f.confirm(action);
+		expect(result.persistence.save).toBe("succeeded");
+		expect(result.persistence.error).toBeUndefined();
+		expect(result.snapshot.record.stage).toBe("requirements");
+		expect(result.snapshot.record.decisions[0]?.userReply).toBe("  人员明确原文\n不裁剪 Ω  ");
+		expect(result.snapshot.record.decisions[0]?.operationId).toBe(action.action.binding.operationId);
+		expect(f.runtimes[0]?.nativeSession("business")).toBeUndefined();
+		const native = f.owner.nativeSession(snapshot.record.requirementId);
+		expect(native).toBeDefined();
+		expect(f.runtimes[0]?.originalRequest()).toBe("");
+		expect(native).not.toBe(f.session);
+		expect(f.owner.rootSession()).toBe(f.session);
+		expect(f.session.sessionId).toBe(ordinaryId);
+		expect(f.session.messages).toEqual(ordinaryMessages);
+		const input = f.provider.requests.map(rolePayload).find(item => item?.specDrivenRole === "requirements")?.input;
+		expect(input?.files).toContainEqual({
+			path: `docs/business-requirements/${snapshot.record.changeId}.md`,
+			content: business,
+			version: artifactVersion(business),
+		});
+		expect(input?.userReply).toBe("  人员明确原文\n不裁剪 Ω  ");
+		expect(input?.request).not.toContain("人员明确原文");
+	}, 120_000);
+
+	test("requires host-issued confirmation, rejects altered files and preserves duplicate operation identity", async () => {
+		await using f = await fixture();
+		const snapshot = await f.imported();
+		const preview = await f.preview(snapshot, { kind: "next" });
+		await expect(
+			f.owner.confirmDevAction({
+				operationId: preview.action.binding.operationId,
+				confirmationToken: "wrong",
+				userReply: "同意",
+			}),
+		).rejects.toThrow();
+		await expect(
+			f.owner.dispatch({ ...preview.action, userReply: "伪造直接动作" }, { name: "forged", source: "collab" }),
+		).rejects.toThrow();
+		const result = await f.confirm(preview);
+		const requests = f.provider.requests.length;
+		const repeated = await f.confirm(preview, "第二次不同原文不替换第一次");
+		expect(repeated.snapshot.record.decisions).toEqual(result.snapshot.record.decisions);
+		expect(f.provider.requests).toHaveLength(requests);
+		await expect(f.preview(snapshot, { kind: "next" })).rejects.toThrow();
+		const current = await readDevRequirement(f.cwd, snapshot.record.requirementId);
+		expect(current.record.decisions).toHaveLength(1);
+	}, 120_000);
+
+	test("material edits after preview invalidate confirmation without preparing a successor", async () => {
+		await using f = await fixture();
+		const snapshot = await f.imported();
+		const preview = await f.preview(snapshot, { kind: "next" });
+		const target = path.join(f.cwd, `docs/business-requirements/${snapshot.record.changeId}.md`);
+		await fs.writeFile(target, `${business}\n人工在确认后修改。\n`);
+		await expect(f.confirm(preview)).rejects.toThrow();
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).record.stage).toBe("business");
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).record.decisions).toEqual([]);
+		expect(f.provider.requests).toEqual([]);
+		expect(f.owner.nativeSession(snapshot.record.requirementId)).toBeUndefined();
+	}, 120_000);
+
+	test("a failed initial business-record save never starts a runtime or conversation", async () => {
+		await using f = await fixture();
+		await fs.writeFile(path.join(f.cwd, "docs"), "blocks business record directory");
+		await expect(f.owner.createRequirement({ source: "conversation", request: "不应调用模型" })).rejects.toThrow();
+		expect(f.runtimes).toEqual([]);
+		expect(f.provider.requests).toEqual([]);
+		expect(await fs.readFile(path.join(f.cwd, "docs"), "utf8")).toBe("blocks business record directory");
+	}, 120_000);
+
+	test("failed native settlement attempts every owned runtime and retains the canonical lease until retry", async () => {
+		await using f = await fixture();
+		const snapshot = await f.imported();
+		await f.confirm(await f.preview(snapshot, { kind: "next" }));
+		f.failStop(true);
+		await expect(f.owner.stop(snapshot.record.requirementId)).rejects.toThrow("native stop failed");
+		await expect(DevWorkspace.acquire(f.cwd)).rejects.toThrow();
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).record.stage).toBe("requirements");
+		f.failStop(false);
+		await f.owner.stop(snapshot.record.requirementId);
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).runtime?.execution).toBe("interrupted");
+		expect((await f.owner.readMaterial(snapshot.record.requirementId, "business")).content).toBe(business);
+		await f.owner.startLocalBusiness("独立本地业务会话");
+		const localSession = f.owner.nativeSession()!;
+		f.failStop(true, f.runtimes[0]);
+		let failure: unknown;
+		try {
+			await f.owner.dispose();
+		} catch (error) {
+			failure = error;
+		}
+		expect(failure).toBeInstanceOf(AggregateError);
+		expect((failure as AggregateError).errors.map((error: Error) => error.message)).toEqual(["native stop failed"]);
+		expect(localSession.isDisposed).toBe(true);
+		expect(f.owner.nativeSession()).toBeUndefined();
+		expect(f.owner.nativeSession(snapshot.record.requirementId)?.isDisposed).toBe(true);
+		expect(f.session.isDisposed).toBe(false);
+		await expect(DevWorkspace.acquire(f.cwd)).rejects.toThrow();
+		f.failStop(false);
+		await f.owner.dispose();
+		const lease = await DevWorkspace.acquire(f.cwd);
+		lease.release();
+		expect(f.session.isDisposed).toBe(false);
+	}, 120_000);
+
+	test("cancelled native jobs remain busy until actual descendant settlement, and unsubscribe does not stop the owner", async () => {
+		await using f = await fixture();
+		const snapshot = await f.imported();
+		await f.confirm(await f.preview(snapshot, { kind: "next" }));
+		const native = f.owner.nativeSession(snapshot.record.requirementId)!;
+		const jobs = native.asyncJobManager;
+		if (!jobs) throw new Error("Expected native job manager");
+		const release = Promise.withResolvers<string>();
+		const entered = Promise.withResolvers<void>();
+		const jobId = jobs.register(
+			"bash",
+			"unsettled fixture",
+			() => {
+				entered.resolve();
+				return release.promise;
+			},
+			{ ownerId: native.getAgentId()! },
+		);
+		try {
+			await entered.promise;
+			jobs.cancel(jobId);
+			expect(jobs.getJob(jobId)?.endTime).toBeUndefined();
+			const unsubscribe = f.owner.observe(() => {});
+			unsubscribe();
+			expect(jobs.getJob(jobId)?.endTime).toBeUndefined();
+			await expect(
+				f.preview(await f.owner.getRequirement(snapshot.record.requirementId), { kind: "back" }),
+			).rejects.toThrow();
+			release.resolve("settled");
+			await jobs.getJob(jobId)!.promise;
+			const before = f.provider.requests.length;
+			const back = await f.confirm(
+				await f.preview(await f.owner.getRequirement(snapshot.record.requirementId), { kind: "back" }),
+			);
+			expect(back.snapshot.record.stage).toBe("business");
+			expect(f.provider.requests).toHaveLength(before);
+		} finally {
+			release.resolve("settled");
+			await jobs.getJob(jobId)?.promise;
+		}
+	}, 120_000);
 });
 
-test("legacy four-stage saved runs restore without inventing optional business facts or replaying work", async () => {
-	const first = await fixture();
-	await first.owner.enter();
-	await first.owner.setTeam(true);
-	await first.owner.new("原有四阶段开发需求");
-	await first.owner.next(undefined, "/dev next 原始需求批准");
-	await first.owner.next("one", "/dev next one 原始方案批准");
-	await first.owner.next(undefined, "/dev next 原始计划批准");
-	await first.owner.exit();
-	const saved = await first.state();
-	delete saved.run.entryPhase;
-	delete saved.run.businessCompleted;
-	await fs.writeFile(path.join(first.root, ".omp/dev/state.json"), JSON.stringify(saved));
-	const restored = await fixture(first.root);
-	await restored.owner.enter();
-	expect(restored.owner.status()).toMatchObject({ phase: "executing", entryPhase: "requirements", useTeam: true });
-	expect(restored.owner.observation().runId).toBe(saved.run.runId);
-	expect(restored.owner.observation().approvals).toEqual(saved.run.approvals);
-	expect(restored.calls.some(call => call.startsWith("model:"))).toBe(false);
-	expect(restored.calls).not.toContain("prepare:business");
-	const actual = (await restored.state()).run;
-	expect(actual.sessions).not.toHaveProperty("business");
-	expect(actual.approvals).not.toHaveProperty("business");
-	expect(actual.paths).not.toHaveProperty("business");
-});
+test("an incomplete import remains editable material but cannot create a business decision or a successor", async () => {
+	await using f = await fixture();
+	const created = await f.owner.createRequirement({ source: "import" });
+	const bytes = "# 业务需求：订单\n\n## 基本信息\n导入不等于批准。\n";
+	const document = await f.owner.importBusiness(created.record.requirementId, {
+		kind: "upload",
+		name: "incomplete.md",
+		bytes: new TextEncoder().encode(bytes),
+	});
+	const snapshot = await f.owner.getRequirement(created.record.requirementId);
+	await expect(f.preview(snapshot, { kind: "next" })).rejects.toThrow();
+	const after = await f.owner.getRequirement(created.record.requirementId);
+	expect(after.record.stage).toBe("business");
+	expect(after.record.decisions).toEqual([]);
+	expect(after.runtime?.recipient ?? null).toBeNull();
+	expect(await fs.readFile(path.join(f.cwd, document.path), "utf8")).toBe(bytes);
+	expect(f.provider.requests).toEqual([]);
+}, 120_000);
+
+test("cold records are readable without native history or legacy-state adoption", async () => {
+	await using f = await fixture();
+	const snapshot = await f.imported();
+	const legacy = path.join(f.cwd, ".omp/dev/state.json");
+	await fs.mkdir(path.dirname(legacy), { recursive: true });
+	await fs.writeFile(legacy, "{legacy malformed state");
+	await f.owner.dispose();
+	const cold = new SpecDrivenController({ session: f.session, settings: f.settings, cwd: f.cwd });
+	try {
+		const listed = await cold.listRequirements();
+		expect(listed.map(item => item.record)).toEqual([snapshot.record]);
+		expect(listed[0]?.runtime).toBeNull();
+		expect((await cold.getRequirement(snapshot.record.requirementId)).recordVersion).toBe(snapshot.recordVersion);
+		expect(f.provider.requests).toEqual([]);
+		expect(await fs.readFile(legacy, "utf8")).toBe("{legacy malformed state");
+		const lease = await DevWorkspace.acquire(f.cwd);
+		lease.release();
+	} finally {
+		await cold.dispose();
+	}
+}, 120_000);
+
+test("native target resolution binds the actual requirement, session and generation", async () => {
+	await using f = await fixture();
+	const snapshot = await f.imported();
+	const result = await f.confirm(await f.preview(snapshot, { kind: "next" }));
+	const native = f.owner.nativeSession(snapshot.record.requirementId)!;
+	const target = {
+		requirementId: snapshot.record.requirementId,
+		sessionId: native.sessionId,
+		generation: result.snapshot.runtime!.generation,
+	};
+	expect(f.owner.resolveSession(target)).toBe(native);
+	expect(() => f.owner.resolveSession({ ...target, sessionId: f.session.sessionId })).toThrow();
+	expect(() => f.owner.resolveSession({ ...target, generation: target.generation + 1 })).toThrow();
+	expect(() => f.owner.resolveSession({ ...target, requirementId: "other-requirement" })).toThrow();
+	expect(() => f.owner.resolveSession({ ...target, requirementId: null })).toThrow();
+}, 120_000);
+
+test("local business preparation creates no Git requirement and does not occupy the development slot", async () => {
+	await using f = await fixture();
+	const local = await f.owner.startLocalBusiness("只在本地澄清业务，不启动开发");
+	expect(local.recipient.role).toBe("business");
+	expect(local.document).toBeNull();
+	expect(await f.owner.listRequirements()).toEqual([]);
+	const native = f.owner.nativeSession();
+	expect(native).toBeDefined();
+	expect(native).not.toBe(f.session);
+	const imported = await f.owner.createRequirement({ source: "import" });
+	expect(imported.record.stage).toBe("business");
+	expect(imported.runtime).toBeNull();
+	expect((await f.owner.listRequirements()).map(snapshot => snapshot.record.requirementId)).toEqual([
+		imported.record.requirementId,
+	]);
+}, 120_000);
+
+test("Next returns durable phase facts while its real native model continues in the background", async () => {
+	await using f = await fixture();
+	const snapshot = await f.imported();
+	const preview = await f.preview(snapshot, { kind: "next" });
+	const release = Promise.withResolvers<void>();
+	f.gateModel(release.promise);
+	try {
+		const result = await f.owner.confirmDevAction({
+			operationId: preview.action.binding.operationId,
+			confirmationToken: preview.confirmationToken,
+			userReply: "确认业务并后台开始需求澄清",
+		});
+		expect(result.persistence.save, result.persistence.error ?? JSON.stringify(result.persistence)).toBe("succeeded");
+		expect(result.snapshot.record.stage).toBe("requirements");
+		await f.waitForModelStart();
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).runtime?.execution).toBe("running");
+		const requests = f.provider.requests.length;
+		const unsubscribe = f.owner.observe(() => {});
+		unsubscribe();
+		expect((await f.owner.getRequirement(snapshot.record.requirementId)).runtime?.execution).toBe("running");
+		expect(f.provider.requests).toHaveLength(requests);
+		release.resolve();
+		const settled = await f.waitForNativeIdle(snapshot.record.requirementId);
+		expect(settled.runtime?.execution).toBe("idle");
+		expect(settled.record.decisions).toHaveLength(1);
+	} finally {
+		release.resolve();
+	}
+}, 120_000);
+
+test("a draft commit requires an explicit discovered Git target without approving the template or starting an actor", async () => {
+	await using f = await fixture();
+	const created = await f.owner.createRequirement({ source: "import" });
+	const draft = "# 业务草稿\n\n十章节仍待完善。\n";
+	await f.owner.importBusiness(created.record.requirementId, {
+		kind: "upload",
+		name: "draft.md",
+		bytes: new TextEncoder().encode(draft),
+	});
+	const before = await f.owner.getRequirement(created.record.requirementId);
+	await expect(f.preview(before, { kind: "commit" })).rejects.toThrow("Git");
+	const after = await f.owner.getRequirement(created.record.requirementId);
+	expect(after.record).toEqual(before.record);
+	expect(after.record.stage).toBe("business");
+	expect(after.record.decisions).toEqual([]);
+	expect(f.owner.nativeSession(created.record.requirementId)).toBeUndefined();
+	expect(f.provider.requests).toEqual([]);
+	expect((await f.owner.readMaterial(created.record.requirementId, "business")).content).toBe(draft);
+}, 120_000);
+
+test("the same controller cancellation confirmation resumes final tombstone CAS after a successful fixed-SHA publication", async () => {
+	await using f = await fixture({ remote: true, failFinalCancellation: true });
+	const snapshot = await f.imported();
+	const id = snapshot.record.requirementId;
+	const targets = await f.owner.discoverDevGitTargets(id);
+	const target = targets.find(
+		candidate =>
+			candidate.localSourceRef === "refs/heads/feature" &&
+			candidate.sourceRef === "refs/heads/feature" &&
+			candidate.baseRef === "refs/heads/main",
+	);
+	if (!target) throw new Error("Native controller did not discover the existing fixture source/base target");
+	const preview = await f.preview(snapshot, { kind: "cancel" }, target);
+	const confirmation = {
+		operationId: preview.action.binding.operationId,
+		confirmationToken: preview.confirmationToken,
+		userReply: "确认撤销本需求全部范围并提交推送，不影响原有文件",
+	};
+	const first = await f.owner.confirmDevAction(confirmation);
+	const diagnostic = JSON.stringify({
+		persistence: first.persistence,
+		lifecycle: first.snapshot.record.lifecycle,
+		finalSaveFailures: f.finalSaveFailures(),
+	});
+	expect(first.persistence.commit.status, diagnostic).toBe("succeeded");
+	expect(first.persistence.commit.indexReconciled, diagnostic).toBe(true);
+	expect(first.persistence.push.status, diagnostic).toBe("succeeded");
+	expect(first.persistence.save, diagnostic).toBe("failed");
+	expect(first.persistence.error, diagnostic).toContain("final tombstone CAS failure");
+	expect(first.snapshot.record.lifecycle).toBe("cancelling");
+	const sha = first.persistence.commit.sha;
+	if (!sha) throw new Error("Expected the already-published cancellation SHA");
+	expect(await f.repo.headSha()).toBe(sha);
+	expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(sha);
+	const committed = JSON.parse((await f.repo.showBlob(`${sha}:docs/dev-requirements/${id}.json`)).data.toString());
+	expect(committed.lifecycle).toBe("cancelled");
+	expect((await readDevRequirement(f.cwd, id)).record.lifecycle).toBe("cancelling");
+	await expect(f.owner.createRequirement({ source: "import" })).rejects.toThrow();
+	const resumed = await f.owner.confirmDevAction(confirmation);
+	expect(resumed.persistence.save).toBe("succeeded");
+	expect(resumed.persistence.error).toBeUndefined();
+	expect(resumed.snapshot.record.lifecycle).toBe("cancelled");
+	expect(resumed.persistence.commit.sha).toBe(sha);
+	expect(await f.repo.headSha()).toBe(sha);
+	expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(sha);
+	expect((await readDevRequirement(f.cwd, id)).record.lifecycle).toBe("cancelled");
+	expect(f.finalSaveFailures()).toBe(1);
+	expect(await fs.readFile(path.join(f.cwd, "tracked.txt"), "utf8")).toBe("unrelated original bytes\n");
+	await expect(
+		fs.stat(path.join(f.cwd, `docs/business-requirements/${snapshot.record.changeId}.md`)),
+	).rejects.toMatchObject({ code: "ENOENT" });
+	const successor = await f.owner.createRequirement({ source: "import" });
+	expect(successor.record.requirementId).not.toBe(id);
+	expect(successor.record.stage).toBe("business");
+	expect(successor.runtime).toBeNull();
+	expect(f.provider.requests).toEqual([]);
+}, 120_000);
+
+test("cancelling material reads tolerate a removed recorded archive without changing cancellation facts", async () => {
+	await using f = await fixture();
+	const initial = await f.imported();
+	await f.owner.dispose();
+	const id = initial.record.requirementId;
+	const archive = `openspec/changes/archive/2026-11-07-${initial.record.changeId}`;
+	const proposalPath = `${archive}/proposal.md`;
+	const content =
+		"## Why\n\nThe requirement's archived proposal is retained until its explicitly confirmed cancellation removes the owned materials.\n\n## What Changes\n\n- Preserve material history as a read-only cancellation fact.\n";
+	await fs.mkdir(path.join(f.cwd, archive), { recursive: true });
+	await fs.writeFile(path.join(f.cwd, proposalPath), content);
+	const proposal = {
+		id: "proposal",
+		kind: "proposal" as const,
+		path: proposalPath,
+		version: artifactVersion(content),
+	};
+	const archived: DevRequirementRecord = {
+		...initial.record,
+		stage: "pr",
+		materials: [...initial.record.materials, proposal],
+		syncRevisions: [
+			{
+				operationId: "recorded-archive-before-cancellation",
+				files: [{ path: proposal.path, version: proposal.version }],
+				mainSpecs: [],
+				archivedChangePath: archive,
+				progress: { synced: true, archivedChangePath: archive },
+			},
+		],
+	};
+	let stored = await saveDevRequirement(f.cwd, archived, initial.recordVersion);
+	const reader = new SpecDrivenController({ session: f.session, settings: f.settings, cwd: f.cwd });
+	try {
+		expect(await reader.listMaterials(id)).toContainEqual(proposal);
+		expect((await reader.readMaterial(id, proposal.id)).content).toBe(content);
+		await fs.rm(path.join(f.cwd, archive), { recursive: true });
+		const activeBytes = await fs.readFile(path.join(f.cwd, `docs/dev-requirements/${id}.json`));
+		await expect(reader.listMaterials(id)).rejects.toMatchObject({ code: "ENOENT" });
+		await expect(reader.readMaterial(id, proposal.id)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await readDevRequirement(f.cwd, id)).toEqual(stored);
+		expect(await fs.readFile(path.join(f.cwd, `docs/dev-requirements/${id}.json`))).toEqual(activeBytes);
+		stored = await saveDevRequirement(f.cwd, { ...stored.record, lifecycle: "cancelling" }, stored.recordVersion);
+		for (const lifecycle of ["cancelling", "cancelled"] as const) {
+			if (stored.record.lifecycle !== lifecycle)
+				stored = await saveDevRequirement(f.cwd, { ...stored.record, lifecycle }, stored.recordVersion);
+			const bytes = await fs.readFile(path.join(f.cwd, `docs/dev-requirements/${id}.json`));
+			expect(await reader.listMaterials(id)).toEqual([]);
+			await expect(reader.readMaterial(id, proposal.id)).rejects.toBeInstanceOf(SpecAdmissionError);
+			expect(await readDevRequirement(f.cwd, id)).toEqual(stored);
+			expect(await fs.readFile(path.join(f.cwd, `docs/dev-requirements/${id}.json`))).toEqual(bytes);
+			await expect(fs.stat(path.join(f.cwd, archive))).rejects.toMatchObject({ code: "ENOENT" });
+			await expect(fs.stat(path.join(f.cwd, `openspec/changes/${initial.record.changeId}`))).rejects.toMatchObject({
+				code: "ENOENT",
+			});
+		}
+		expect(f.provider.requests).toEqual([]);
+	} finally {
+		await reader.dispose();
+	}
+}, 120_000);

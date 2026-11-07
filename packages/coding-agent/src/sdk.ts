@@ -147,6 +147,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensibility/extensions";
 import type { UserWaitTracker } from "./extensibility/extensions/user-wait";
+import { ExtensionRuntime as SessionExtensionRuntime } from "./extensibility/extensions/loader";
 import { formatExtensionLoadNotifications } from "./extensibility/extensions/load-errors";
 import { partitionStartupExtensions, recordStartupVerdicts } from "./extensibility/extensions/startup-deferral";
 import {
@@ -793,6 +794,12 @@ export interface CreateAgentSessionOptions {
 	additionalExtensionPaths?: string[];
 	/** Disable extension discovery (explicit paths still load). */
 	disableExtensionDiscovery?: boolean;
+	/**
+	 * Helpers can retain the supplied registry's already-loaded extension providers
+	 * without taking ownership of registrations or cleanup. Default: session-owned.
+	 * Inherited factories replay existing declarations; later provider mutations fail.
+	 */
+	extensionProviderOwnership?: "session" | "inherited";
 	/**
 	 * Live extension-root policy inherited by a child session. Keeps recursive
 	 * sub-discovery aligned with the parent while `preloadedExtensionPaths` only
@@ -2148,7 +2155,7 @@ const embeddingSessionHooks = new WeakMap<
 	ModelRegistry,
 	Pick<
 		CreateAgentSessionOptions,
-		"resolveRequestAuth" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
+		"resolveRequestAuth" | "getApiKey" | "onPayload" | "onResponse" | "onModelResponse" | "toolRestrictions"
 	>
 >();
 
@@ -2156,6 +2163,7 @@ const embeddingSessionHooks = new WeakMap<
 export function cloneEmbeddingToolRestrictions(modelRegistry: ModelRegistry | undefined): ToolRestrictions | undefined {
 	return modelRegistry ? embeddingSessionHooks.get(modelRegistry)?.toolRestrictions?.clone() : undefined;
 }
+
 export type NativeChildCapabilities = Pick<
 	CreateAgentSessionOptions,
 	| "customTools"
@@ -2170,6 +2178,7 @@ export type NativeChildCapabilities = Pick<
 	| "mcpTools"
 	| "mcpManager"
 	| "mcpToolScope"
+	| "extensionProviderOwnership"
 >;
 
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
@@ -2217,6 +2226,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		mcpTools: options.mcpTools,
 		mcpManager: result.mcpManager,
 		mcpToolScope: options.mcpToolScope,
+		extensionProviderOwnership: options.extensionProviderOwnership,
 	};
 	return result;
 }
@@ -2228,6 +2238,10 @@ async function createAgentSessionScoped(
 	if (options.systemPromptTemplate !== undefined && options.customSystemPrompt !== undefined) {
 		throw new Error("systemPromptTemplate cannot be combined with a literal custom system prompt");
 	}
+	if (options.extensionProviderOwnership === "inherited" && (!options.modelRegistry || options.preloadedExtensions))
+		throw new Error(
+			"Inherited extension providers require the owning ModelRegistry and independent prepared factories, not a live parent runtime.",
+		);
 	const cwd = options.cwd ?? getProjectDir();
 	const agentDir = options.agentDir ?? getAgentDir();
 	const eventBus = options.eventBus ?? new EventBus();
@@ -2463,6 +2477,9 @@ async function createAgentSessionScoped(
 		options = {
 			...options,
 			resolveRequestAuth: options.resolveRequestAuth ?? inheritedHooks.resolveRequestAuth,
+			getApiKey:
+				options.getApiKey ??
+				(options.extensionProviderOwnership === "inherited" ? inheritedHooks.getApiKey : undefined),
 			onPayload: options.onPayload ?? inheritedHooks.onPayload,
 			onResponse: options.onResponse ?? inheritedHooks.onResponse,
 			onModelResponse: options.onModelResponse ?? inheritedHooks.onModelResponse,
@@ -2471,6 +2488,7 @@ async function createAgentSessionScoped(
 	if (!options.parentTaskPrefix)
 		embeddingSessionHooks.set(modelRegistry, {
 			resolveRequestAuth: options.resolveRequestAuth,
+			getApiKey: options.getApiKey,
 			onPayload: options.onPayload,
 			onResponse: options.onResponse,
 			onModelResponse: options.onModelResponse,
@@ -2903,6 +2921,7 @@ async function createAgentSessionScoped(
 			allowRestrictedGoal: options.allowRestrictedGoal,
 			editMode: options.editMode,
 			subagentHooks: options.subagentHooks,
+			extensionProviderOwnership: options.extensionProviderOwnership,
 			get cwd() {
 				return sessionManager.getCwd();
 			},
@@ -3347,6 +3366,19 @@ async function createAgentSessionScoped(
 		// `disableExtensionDiscovery` is honored implicitly: a caller that set
 		// the flag and pre-resolved the result already reflects that choice.
 		let extensionPaths: string[];
+		let inheritedProviderRuntime: SessionExtensionRuntime | undefined;
+		if (options.extensionProviderOwnership === "inherited") {
+			const inherited = modelRegistry.subscribeMirror(() => {});
+			inherited.unsubscribe();
+			const declarations = new Map<string, Map<string, unknown>>();
+			for (const change of inherited.snapshot.changes) {
+				if (change.kind !== "register" || !change.sourceId) continue;
+				let providers = declarations.get(change.sourceId);
+				if (!providers) declarations.set(change.sourceId, (providers = new Map()));
+				providers.set(change.name, change.config);
+			}
+			inheritedProviderRuntime = new SessionExtensionRuntime(declarations);
+		}
 		let extensionsResult: LoadExtensionsResult;
 		if (!restrictToolNames && options.preloadedExtensions) {
 			extensionsResult = {
@@ -3370,13 +3402,21 @@ async function createAgentSessionScoped(
 				preparedExtensions,
 				cwd,
 				eventBus,
+				inheritedProviderRuntime,
 			);
 			for (const { path, error } of extensionsResult.errors) {
 				logger.error("Failed to bind extension", { path, error });
 			}
 		} else if (options.preloadedExtensionPaths) {
 			extensionPaths = options.preloadedExtensionPaths;
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, extensionPaths, cwd, eventBus);
+			extensionsResult = await logger.time(
+				"loadExtensions",
+				loadExtensions,
+				extensionPaths,
+				cwd,
+				eventBus,
+				inheritedProviderRuntime,
+			);
 			for (const { path, error } of extensionsResult.errors) {
 				logger.error("Failed to load extension", { path, error });
 			}
@@ -3384,7 +3424,14 @@ async function createAgentSessionScoped(
 			extensionPaths = await logger.time("discoverSessionExtensionPaths", () =>
 				discoverSessionExtensionPaths(options, cwd, settings),
 			);
-			extensionsResult = await logger.time("loadExtensions", loadExtensions, extensionPaths, cwd, eventBus);
+			extensionsResult = await logger.time(
+				"loadExtensions",
+				loadExtensions,
+				extensionPaths,
+				cwd,
+				eventBus,
+				inheritedProviderRuntime,
+			);
 			for (const { path, error } of extensionsResult.errors) {
 				logger.error("Failed to load extension", { path, error });
 			}
@@ -3392,6 +3439,10 @@ async function createAgentSessionScoped(
 		// Forward the source-path list (NOT the loaded instances) so subagents
 		// rebuild their own session-scoped extensions.
 		toolSession.extensionPaths = extensionPaths;
+		if (inheritedProviderRuntime && extensionsResult.errors.length)
+			throw new Error(
+				`Inherited extension binding failed: ${extensionsResult.errors.map(error => `${error.path}: ${error.error}`).join("\n")}`,
+			);
 		toolSession.effectiveExtensionRoots = buildSessionExtensionRoots;
 
 		// Inline source ids must remain stable when caller factories are rebound in
@@ -3435,12 +3486,14 @@ async function createAgentSessionScoped(
 		// Process provider registrations queued during extension loading.
 		// This must happen before the runner is created so that models registered by
 		// extensions are available for model selection on session resume / fallback.
-		if (!restrictToolNames) {
+		if (!restrictToolNames && !inheritedProviderRuntime) {
 			const activeExtensionSources = extensionsResult.extensions.map(extension => extension.path);
 			modelRegistry.syncExtensionSources(activeExtensionSources);
 			modelRegistry.clearSourceRegistrations(new Set(activeExtensionSources));
 		}
 		if (extensionsResult.runtime.pendingProviderRegistrations.length > 0) {
+			if (inheritedProviderRuntime)
+				throw new Error("Inherited helper cannot take ownership of queued provider registrations.");
 			for (const { name, config, sourceId } of extensionsResult.runtime.pendingProviderRegistrations) {
 				modelRegistry.registerProvider(name, config, sourceId);
 			}
@@ -6515,6 +6568,8 @@ async function createAgentSessionScoped(
 				}
 				if (session.isDisposed) return;
 				// Providers queue until the runner is initialized; drain them as session creation does.
+				if (runtime.inheritedProviderOwnership && runtime.pendingProviderRegistrations.length)
+					throw new Error("Inherited helper cannot register deferred providers.");
 				for (const { name, config, sourceId } of runtime.pendingProviderRegistrations.splice(0)) {
 					modelRegistry.registerProvider(name, config, sourceId);
 				}

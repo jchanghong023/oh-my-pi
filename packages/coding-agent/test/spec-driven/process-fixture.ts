@@ -4,6 +4,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { requireGit } from "@oh-my-pi/pi-natives/vcs";
+import { initializeRepository } from "../dev-workbench/fixture";
 import {
 	COMMANDS_REQUIRING_BASE_REVISION,
 	LegacyProtocol,
@@ -11,17 +13,16 @@ import {
 	conversationTopicFrameSchema,
 	conversationTopicWireCandidateSchema,
 	v4ConversationRowsRangeResultSchema,
-	v4ConversationWorkflowRunsResultSchema,
 } from "../../src/modes/zcode/schema";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import {
 	contentText,
 	createProviderFixture,
-	MARKER,
 	type ModelRequest,
-	REQUIREMENT,
 	rolePayload,
+	type FixtureRole,
 } from "./provider-fixture";
+import { assertMaterialFailure } from "./tui-materials-cases";
 
 const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
 if (executable && !path.isAbsolute(executable))
@@ -259,7 +260,6 @@ class PublicPeer {
 			topic: `conversation/${id}`,
 			connectionId: `spec-${id}`,
 			clientMode: "desktop-continuous",
-			includeSpecDriven: true,
 		});
 		return id;
 	}
@@ -289,26 +289,6 @@ class PublicPeer {
 			}),
 		).toMatchObject({ status, ...(status === "failed" ? { reasonCode: "fault.command.execution" } : {}) });
 		return since;
-	}
-	async stage(sessionId: string, phase: string, ready = true) {
-		let cursor = 0;
-		for (;;) {
-			const result = v4ConversationWorkflowRunsResultSchema.parse(
-				await this.request("v4/conversation/workflowRuns", { sessionId, includeSpecDriven: true, limit: 64 }),
-			);
-			const run = result.runs.findLast(row => row.spec?.phase === phase);
-			if (
-				run?.spec &&
-				(!ready ||
-					run.spec.actions.some(action => action.id === "next" && action.available) ||
-					run.spec.state === "terminal" ||
-					run.spec.state === "blocked")
-			)
-				return { ...run, spec: run.spec };
-			this.#waiting = `stage ${phase}: conversation/${sessionId}`;
-			const event = await this.next(frame => isConversation(frame, sessionId), cursor);
-			cursor = this.seen.indexOf(event) + 1;
-		}
 	}
 	async settled(sessionId: string, since: number) {
 		const command = this.#currentCommand;
@@ -374,7 +354,11 @@ async function fixture(root: TempDir, baseUrl: string) {
 	// 原生隔离保护临时产物的父目录；临时空间与项目必须分开，
 	// 否则把 fixture 根作为 TEMP 会连真实项目源码也划入受保护范围。
 	const temp = root.join("tmp");
-	for (const directory of [cwd, home, agentDir, temp]) await fs.mkdir(directory, { recursive: true });
+	const appData = root.join("home", "AppData", "Roaming");
+	const localData = root.join("home", "AppData", "Local");
+	const cache = root.join("cache");
+	for (const directory of [cwd, home, agentDir, temp, appData, localData, cache])
+		await fs.mkdir(directory, { recursive: true });
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
 		`providers:\n  deepseek:\n    baseUrl: ${baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: deepseek-v4-flash\n        reasoning: false\n        contextWindow: 200000\n      - id: deepseek-v4-pro\n        reasoning: false\n        contextWindow: 200000\n`,
@@ -388,7 +372,12 @@ async function fixture(root: TempDir, baseUrl: string) {
 		SystemRoot: Bun.env.SystemRoot,
 		WINDIR: Bun.env.WINDIR,
 		ProgramFiles: Bun.env.ProgramFiles,
-		LOCALAPPDATA: home,
+		APPDATA: appData,
+		LOCALAPPDATA: localData,
+		XDG_CONFIG_HOME: configRoot,
+		XDG_DATA_HOME: localData,
+		XDG_CACHE_HOME: cache,
+		TMPDIR: temp,
 		TEMP: temp,
 		TMP: temp,
 		// Keep the gate's compiled-source cache while isolating every runtime fixture.
@@ -412,10 +401,11 @@ async function fixture(root: TempDir, baseUrl: string) {
 		DO_NOT_TRACK: "1",
 	};
 	await fs.writeFile(env.GIT_CONFIG_GLOBAL!, "");
-	await git(cwd, env, ["init", "--initial-branch=main"]);
+	await initializeRepository(cwd);
 	await fs.writeFile(path.join(cwd, "baseline.txt"), "Baseline belongs to the acceptance fixture.\n");
-	await git(cwd, env, ["add", "baseline.txt"]);
-	await git(cwd, env, ["-c", "core.hooksPath=", "commit", "-m", "Fixture baseline"]);
+	const repo = requireGit(cwd);
+	await repo.stageFiles(["baseline.txt"]);
+	await repo.commitCreate("Fixture baseline", {});
 	return { cwd, env, root: root.path() };
 }
 async function run(cwd: string, env: NodeJS.ProcessEnv, command: string[]) {
@@ -427,62 +417,22 @@ async function run(cwd: string, env: NodeJS.ProcessEnv, command: string[]) {
 	]);
 	return { stdout, stderr, exitCode };
 }
-async function git(cwd: string, env: NodeJS.ProcessEnv, args: string[]): Promise<string> {
-	const result = await run(cwd, env, ["git", ...args]);
-	if (result.exitCode !== 0) throw new Error(`Fixture Git ${args.join(" ")}: ${result.stderr}`);
-	return result.stdout.trim();
+async function git(cwd: string, _env: NodeJS.ProcessEnv, args: string[]): Promise<string> {
+	const repo = requireGit(cwd);
+	if (args.join(" ") === "rev-parse HEAD") return (await repo.headSha()) ?? "";
+	if (args.join(" ") === "status --porcelain") return (await repo.statusPorcelain({})).trim();
+	throw new Error(`Unsupported native fixture query: ${args.join(" ")}`);
 }
 
-function registerInvalidFileTests(roles: readonly ("requirements" | "solution" | "planner" | "executor")[]): void {
-	for (const [index, role] of (["requirements", "solution", "planner", "executor"] as const).entries()) {
-		if (!roles.includes(role)) continue;
+function registerInvalidFileTests(roles: readonly FixtureRole[]): void {
+	for (const role of roles)
 		for (const kind of ["missing", "malformed", "unknown"] as const) {
 			test(
-				`${role} next rejects ${kind} native files without advancing or calling a successor`,
-				async () => {
-					await using root = await TempDir.create("@omp-dev-invalid-file-");
-					await using provider = createProviderFixture({ fileFailure: { role, kind } });
-					const config = await fixture(root, provider.baseUrl);
-					await using peer = new PublicPeer(config.cwd, config.env, provider);
-					await peer.ready();
-					const session = await peer.create(config.cwd);
-					await peer.send(session, "/dev");
-					let since = await peer.send(session, `/dev new ${MARKER}: ${REQUIREMENT}`);
-					const phases = ["requirements", "solution", "planning", "executing"];
-					for (let position = 0; position < index; position++) {
-						const current = await peer.stage(session, phases[position]!);
-						const stageId = current.spec.interaction?.recipient?.sessionId;
-						if (!stageId) throw new Error("Native stage session missing");
-						await peer.settled(stageId, since);
-						since = await peer.send(session, position === 1 ? "/dev next pure" : "/dev next");
-					}
-					const current = await peer.stage(session, phases[index]!);
-					const stageId = current.spec.interaction?.recipient?.sessionId;
-					if (!stageId) throw new Error("Native stage session missing");
-					await peer.settled(stageId, since);
-					const count = provider.requests.length;
-					await peer.send(session, index === 1 ? "/dev next pure" : "/dev next", "failed");
-					const refused = await peer.stage(session, phases[index]!);
-					expect(refused.spec.phase).toBe(current.spec.phase);
-					expect(refused.spec.explanation?.length).toBeGreaterThan(0);
-					expect(provider.requests.length).toBe(count);
-					expect(
-						provider.requests
-							.map(rolePayload)
-							.filter(Boolean)
-							.every(
-								payload =>
-									(["requirements", "solution", "planner", "executor"] as readonly string[]).indexOf(
-										payload!.specDrivenRole,
-									) <= index,
-							),
-					).toBe(true);
-					expect(provider.failures).toEqual([]);
-				},
+				`${role} public Next rejects ${kind} files without a successor`,
+				() => assertMaterialFailure(role, kind),
 				GATE_BUDGET,
 			);
 		}
-	}
 }
 
 export {
