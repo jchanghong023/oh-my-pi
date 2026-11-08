@@ -204,6 +204,7 @@ const JS_EVAL_PROCESS_ARG = "__omp_worker_js_eval_process";
 const STT_WORKER_ARG = "__omp_worker_stt";
 const TTS_WORKER_ARG = "__omp_worker_tts";
 const MNEMOPI_EMBED_WORKER_ARG = "__omp_worker_mnemopi_embed";
+const WEBGUI_SHARED_WORKER_ARG = "__omp_worker_shared_webgui";
 
 async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 	if (arg === TINY_WORKER_ARG) {
@@ -320,6 +321,11 @@ async function runWorkerEntrypoint(arg: string | undefined): Promise<boolean> {
 		const parentPort = getWorkerParentPort();
 		if (parentPort) installWorkerInbox(parentPort);
 		await import("./subprocess/parent-watchdog-worker");
+		return true;
+	}
+	if (arg === WEBGUI_SHARED_WORKER_ARG) {
+		const { runSharedWebServerWorker } = await import("./webgui/shared-server");
+		await runSharedWebServerWorker();
 		return true;
 	}
 	if (arg === DAEMON_BROKER_WORKER_ARG) {

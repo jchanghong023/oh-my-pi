@@ -64,6 +64,7 @@ packages/ai/test/.temp-images/
 .omp/plugins/
 .omp/spec-sessions/
 .omp/dev/
+.omp/dev-workbench/
 .pi_config/
 .opencode/
 .worktrees/

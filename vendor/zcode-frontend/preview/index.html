@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <title>ZCode 界面预览 · OMP 会话信息</title>
+    <title>ZCode 界面预览 · OMP 项目信息</title>
     <style>
       html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
       body { display: flex; flex-direction: column; height: 100dvh; }
@@ -17,6 +17,9 @@
       #session-info header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
       #session-info h2, #session-info-status { margin: 0; font-size: inherit; }
       #session-info button { font: inherit; cursor: pointer; }
+      #session-info select { font: inherit; min-width: 0; max-width: 100%; }
+      #project-selector-label { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+      #project-dev-link { overflow-wrap: anywhere; }
       #session-info dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 6px 0 0; }
       #session-info dl[hidden] { display: none; }
       #session-info dt { font-weight: 600; }
@@ -33,8 +36,18 @@
       <nav aria-label="预览布局"><a href="?">自适应首页</a><a href="?view=chat">空会话</a><a href="?mobile=1">手机首页</a><a href="?mobile=1&view=chat">手机空会话</a></nav>
     </aside>
     <section id="session-info" aria-labelledby="session-info-heading">
-      <header><h2 id="session-info-heading">OMP 会话信息（只读）</h2><button id="session-info-refresh" type="button">刷新会话信息</button></header>
-      <p id="session-info-status" role="status" aria-live="polite">正在读取会话信息…</p>
+      <header>
+        <h2 id="session-info-heading">OMP 项目与会话信息（只读）</h2>
+        <label id="project-selector-label" for="project-selector">已登记项目 <select id="project-selector"><option value="">未选择项目</option></select></label>
+        <button id="session-info-refresh" type="button">刷新项目与会话信息</button>
+      </header>
+      <p id="session-info-status" role="status" aria-live="polite">正在读取项目列表…</p>
+      <dl id="project-info-fields" hidden>
+        <dt>项目根目录</dt><dd id="project-info-root"></dd>
+        <dt>项目 ID</dt><dd id="project-info-id"></dd>
+        <dt>占用模式</dt><dd id="project-info-mode"></dd>
+        <dt>登记阶段</dt><dd id="project-info-phase"></dd>
+      </dl>
       <dl id="session-info-fields" hidden>
         <dt>当前目录</dt><dd id="session-info-cwd"></dd>
         <dt>会话名称</dt><dd id="session-info-name"></dd>

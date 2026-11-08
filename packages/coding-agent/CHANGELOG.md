@@ -4,10 +4,12 @@
 
 ### Added
 
-- Open the copied WebGUI interface preview with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to stop its server and restore terminal input, without connecting an Agent backend.
+- Open the copied WebGUI interface preview with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to leave the preview and restore terminal input, without connecting chat to an Agent backend.
 - View the current OMP session's directory, name, persistent ID, model and busy state in the WebGUI information panel, with manual refresh; standalone previews remain unbound and chat stays disconnected.
 
 ### Changed
+
+- Use one shared Dev/WebGUI web service across projects and profiles within the same configuration root, select registered projects independently per page, and prevent simultaneous native owners of the same project; leaving one project keeps the others online and preserves Dev capability URLs.
 
 - Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.
 

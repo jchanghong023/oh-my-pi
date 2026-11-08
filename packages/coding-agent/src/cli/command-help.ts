@@ -64,11 +64,11 @@ export const knowledgeHelp = {
 } satisfies CommandMetadata;
 
 export const devHelp = {
-	description: "Open the browser Dev workbench and keep its native host running",
+	description: "Open this project's exclusive native Dev workbench through the shared browser server",
 } satisfies CommandMetadata;
 
 export const webGuiHelp = {
-	description: "Open the copied WebGUI interface preview without connecting an Agent backend",
+	description: "Open the shared WebGUI project browser without creating an Agent or occupying a project",
 } satisfies CommandMetadata;
 
 export const dryBalanceHelp = {

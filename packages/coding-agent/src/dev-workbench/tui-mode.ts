@@ -6,8 +6,14 @@ import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
 import { nativeBusy } from "../spec-driven/controller";
 import { openPathWithResult } from "../utils/open";
-import { startWebGui, type WebGuiHandle } from "../webgui/host";
-import { createDevWorkbenchHost, type DevWorkbenchHandle, type DevWorkbenchHost, getOrStartDevWorkbench } from "./host";
+import { startWebGui, WebGuiStartError, type WebGuiHandle } from "../webgui/host";
+import {
+	createDevWorkbenchHost,
+	DevWorkbenchStartError,
+	type DevWorkbenchHandle,
+	type DevWorkbenchHost,
+	getOrStartDevWorkbench,
+} from "./host";
 
 const modes = new WeakMap<InteractiveModeContext, DevWorkbenchTuiMode>();
 
@@ -192,6 +198,8 @@ export class DevWorkbenchTuiMode {
 			if ((this.#mode === "webgui" || offlineFromEnv()) && handle.urls.length === 1)
 				this.#showNotice("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。", "warning");
 		} catch (error) {
+			if (error instanceof DevWorkbenchStartError) this.#host = error.host;
+			else if (error instanceof WebGuiStartError) this.#host = error.handle;
 			if (this.#host) {
 				try {
 					await this.#host.close();

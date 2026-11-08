@@ -43,6 +43,7 @@ import { $env } from "@oh-my-pi/pi-utils/env";
 import { ensureTheme } from "@oh-my-pi/pi-tui/theme";
 import { CLI_THINKING_LEVELS, parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import type { Args } from "../cli/args";
+import { offlineFromEnv } from "../cli/args";
 import { applyStartupCwd } from "../cli/startup-cwd";
 import {
 	COMPANY_OFFLINE_CONTEXT_WINDOW,
@@ -81,6 +82,9 @@ import { specDescendantAgentIds } from "../spec-driven/actors";
 import { lookupBuiltinSlashCommand } from "../slash-commands/builtin-registry";
 import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import { parseCommandArgs } from "../utils/command-args";
+import { acquireBrowserProject, type BrowserProjectLease } from "../webgui/project-registry";
+import { readWebGuiSessionInfo } from "../webgui/session-source";
+import { ensureSharedWebServer } from "../webgui/shared-server";
 
 // Only session-scoped handlers belong here: no global setup, session switching or TUI lifecycle.
 const DEV_SESSION_BUILTINS = new Set([
@@ -101,6 +105,13 @@ export interface DevWorkbenchHandle {
 	urls: readonly string[];
 	loopbackUrl: string;
 	close(): Promise<void>;
+}
+
+/** A failed entry still owns its project until this host can finish settling. */
+export class DevWorkbenchStartError extends AggregateError {
+	constructor(errors: readonly unknown[], readonly host: DevWorkbenchHost) {
+		super(errors, "Dev host startup and settlement failed");
+	}
 }
 interface InputReceipt {
 	browserId: string;
@@ -124,6 +135,8 @@ type EntryListener = NonNullable<AgentSession["sessionManager"]["onEntryAppended
 type FrameListener = (frame: HostFrame | DevComposerPredictionFrame | object) => void;
 const hosts = new Map<string, Promise<DevWorkbenchHost>>();
 const services = new WeakMap<DevWorkbenchHost, Promise<DevWorkbenchHandle>>();
+// SDK startup failures do not expose a reliable settlement handle; only process exit may release these.
+const unsettledStartupProjects = new Set<BrowserProjectLease>();
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Browser human interaction uses the existing interactive Goal policy, never a settings override. */
@@ -134,6 +147,7 @@ export function createDevGoalController(session: AgentSession): RpcGoalControlle
 export class DevWorkbenchHost {
 	readonly cwd: string;
 	readonly settings: Settings;
+	readonly projectLease: BrowserProjectLease;
 	readonly #cacheKey: string | undefined;
 	readonly #ownsRoot: boolean;
 	readonly rootSession: AgentSession;
@@ -157,26 +171,32 @@ export class DevWorkbenchHost {
 	#closing: Promise<void> | undefined;
 	#stopping = false;
 	#service: DevWorkbenchHandle | undefined;
+	#serviceStartup: Promise<void> | undefined;
 	readonly #authShutdown = new AbortController();
 	readonly #mcpManager: MCPManager | undefined;
 	readonly #restoreMcpAuth: (() => void) | undefined;
+	readonly #closeRootResources: (() => Promise<void>) | undefined;
 
 	constructor(input: {
 		session: AgentSession;
 		settings: Settings;
 		cwd: string;
+		projectLease: BrowserProjectLease;
 		cacheKey?: string;
 		ownsRoot?: boolean;
 		mcpManager?: MCPManager;
 		restoreMcpAuth?: () => void;
+		closeRootResources?: () => Promise<void>;
 	}) {
 		this.cwd = input.cwd;
+		this.projectLease = input.projectLease;
 		this.#cacheKey = input.cacheKey;
 		this.#ownsRoot = input.ownsRoot === true;
 		this.settings = input.settings.overlay();
 		this.rootSession = input.session;
 		this.#mcpManager = input.mcpManager;
 		this.#restoreMcpAuth = input.restoreMcpAuth;
+		this.#closeRootResources = input.closeRootResources;
 		const uiForSession = (session: AgentSession) => this.nativeUi.createContext(() => this.targetForSession(session));
 		const createInteractionUI: NonNullable<CreateAgentSessionOptions["createInteractionUI"]> = origin => {
 			const parent = this.controller
@@ -1123,6 +1143,12 @@ export class DevWorkbenchHost {
 	attachService(service: DevWorkbenchHandle): void {
 		this.#service = service;
 	}
+	trackServiceStartup(startup: Promise<DevWorkbenchHandle>): void {
+		this.#serviceStartup = startup.then(() => {}, () => {});
+	}
+	get stopping(): boolean {
+		return this.#stopping;
+	}
 	close(): Promise<void> {
 		this.#stopping = true;
 		let closing = this.#closing;
@@ -1136,6 +1162,8 @@ export class DevWorkbenchHost {
 		return closing;
 	}
 	async #close(): Promise<void> {
+		await this.projectLease.markExiting();
+		await this.#serviceStartup;
 		const failures: unknown[] = [];
 		this.#authShutdown.abort("Dev workbench host shutdown");
 		this.nativeUi.close();
@@ -1172,7 +1200,9 @@ export class DevWorkbenchHost {
 		for (const dispose of this.#disposers) dispose();
 		this.#restoreMcpAuth?.();
 		if (this.#ownsRoot) await this.rootSession.dispose();
+		await this.#closeRootResources?.();
 		await this.#service?.close();
+		await this.projectLease.close();
 		if (this.#cacheKey) hosts.delete(this.#cacheKey);
 		services.delete(this);
 	}
@@ -1186,6 +1216,9 @@ export async function createDevWorkbenchHost(input: {
 	ownsRoot?: boolean;
 	mcpManager?: MCPManager;
 	nativeMcpUiAuthHandler?: MCPAuthHandler;
+	/** Internal ownership handoff from standalone startup, acquired before its Agent exists. */
+	projectLease?: BrowserProjectLease;
+	closeRootResources?: () => Promise<void>;
 }): Promise<DevWorkbenchHost> {
 	if (input.session.isDisposed) throw new Error("Cannot enter Dev mode with a disposed native root");
 	const { root: cwd } = await DevWorkspace.resolve(input.cwd);
@@ -1194,26 +1227,33 @@ export async function createDevWorkbenchHost(input: {
 	let pending = hosts.get(cacheKey);
 	if (!pending) {
 		pending = (async () => {
-			const candidate = input.mcpManager ?? input.session.nativeChildCapabilities?.mcpManager;
-			const manager = candidate instanceof MCPManager ? candidate : undefined;
-			const previousAuth = manager?.getAuthHandler();
-			const bindUiAuth = !!manager && (!previousAuth || previousAuth === input.nativeMcpUiAuthHandler);
-			const authHandler: MCPAuthHandler = (name, challenge, invocation) => {
-				return host.handleNativeMcpAuth(name, challenge, invocation);
-			};
-			const restoreMcpAuth = () => {
-				if (bindUiAuth && manager?.getAuthHandler() === authHandler) manager.setAuthHandler(previousAuth);
-			};
-			const host = new DevWorkbenchHost({
-				session: input.session,
-				settings: input.settings,
-				cwd,
-				cacheKey,
-				ownsRoot: input.ownsRoot === true,
-				mcpManager: manager,
-				restoreMcpAuth,
-			});
+			const projectLease = input.projectLease ?? await acquireBrowserProject(cwd, "dev");
+			let host: DevWorkbenchHost | undefined;
 			try {
+				if (projectLease.mode !== "dev" || normalizePathForComparison(projectLease.root) !== normalizePathForComparison(cwd))
+					throw new Error("Dev project ownership does not match its native workspace");
+				const candidate = input.mcpManager ?? input.session.nativeChildCapabilities?.mcpManager;
+				const manager = candidate instanceof MCPManager ? candidate : undefined;
+				const previousAuth = manager?.getAuthHandler();
+				const bindUiAuth = !!manager && (!previousAuth || previousAuth === input.nativeMcpUiAuthHandler);
+				const authHandler: MCPAuthHandler = (name, challenge, invocation) => {
+					if (!host) throw new Error("Dev host is not initialized");
+					return host.handleNativeMcpAuth(name, challenge, invocation);
+				};
+				const restoreMcpAuth = () => {
+					if (bindUiAuth && manager?.getAuthHandler() === authHandler) manager.setAuthHandler(previousAuth);
+				};
+				host = new DevWorkbenchHost({
+					session: input.session,
+					settings: input.settings,
+					cwd,
+					projectLease,
+					cacheKey,
+					ownsRoot: input.ownsRoot === true,
+					mcpManager: manager,
+					restoreMcpAuth,
+					closeRootResources: input.closeRootResources,
+				});
 				if (input.ownsRoot && input.setToolUIContext) {
 					const ui = host.nativeUi.createContext(() => ({
 						requirementId: null,
@@ -1224,23 +1264,32 @@ export async function createDevWorkbenchHost(input: {
 				}
 				if (bindUiAuth) manager?.setAuthHandler(authHandler);
 			} catch (error) {
-				try {
-					await host.close();
-				} catch (cleanup) {
-					throw new AggregateError([error, cleanup], "Dev host entry and settlement failed");
+				if (host) {
+					try {
+						await host.close();
+					} catch (cleanup) {
+						throw new DevWorkbenchStartError([error, cleanup], host);
+					}
+				} else if (!input.projectLease) {
+					await projectLease.markExiting();
+					await projectLease.close();
 				}
 				throw error;
 			}
 			return host;
 		})();
 		hosts.set(cacheKey, pending);
-		void pending.catch(() => hosts.delete(cacheKey));
+		void pending.catch(error => {
+			if (error instanceof DevWorkbenchStartError) hosts.set(cacheKey, Promise.resolve(error.host));
+			else hosts.delete(cacheKey);
+		});
 	}
 	const host = await pending;
 	if (host.rootSession !== input.session)
 		throw new Error(
 			"This workspace already has a Dev host bound to another native root; exit it before entering again",
 		);
+	if (host.stopping) throw new DevWorkbenchStartError([new Error("Dev host is still exiting")], host);
 	return host;
 }
 export function getOrStartDevWorkbench(
@@ -1249,9 +1298,37 @@ export function getOrStartDevWorkbench(
 ): Promise<DevWorkbenchHandle> {
 	let pending = services.get(host);
 	if (!pending) {
-		pending = startDevWorkbenchServer(host, options).then(handle => {
-			host.attachService(handle);
-			return handle;
+		if (host.stopping) return Promise.reject(new DevWorkbenchStartError([new Error("Dev host is exiting")], host));
+		const opening = (async () => {
+			// The native capability listener is private; only the shared gateway publishes Dev URLs.
+			const internal = await startDevWorkbenchServer(host, { ...options, offline: false });
+			host.attachService(internal);
+			if (host.stopping) throw new Error("Dev host exited during listener startup");
+			const shared = await ensureSharedWebServer();
+			if (host.stopping) throw new Error("Dev host exited during gateway startup");
+			const allowLan = offlineFromEnv();
+			await host.projectLease.activate(() => readWebGuiSessionInfo(host.rootSession), internal.loopbackUrl, allowLan);
+			if (host.stopping) {
+				await host.projectLease.markExiting();
+				throw new Error("Dev host exited during project activation");
+			}
+			const publicPath = `/dev/${host.projectLease.projectId}${new URL(internal.loopbackUrl).pathname}`;
+			const publicAddress = (address: string): string => new URL(publicPath, address).href;
+			return {
+				url: publicAddress(allowLan ? shared.url : shared.loopbackUrl),
+				urls: (allowLan ? shared.urls : [shared.loopbackUrl]).map(publicAddress),
+				loopbackUrl: publicAddress(shared.loopbackUrl),
+				close: () => host.close(),
+			};
+		})();
+		host.trackServiceStartup(opening);
+		pending = opening.catch(async error => {
+			try {
+				await host.close();
+			} catch (cleanup) {
+				throw new DevWorkbenchStartError([error, cleanup], host);
+			}
+			throw error;
 		});
 		services.set(host, pending);
 		void pending.catch(() => services.delete(host));
@@ -1270,7 +1347,10 @@ export async function closeAllDevWorkbenches(): Promise<void> {
 		);
 }
 /** Native startup shared by the browser host; constructing it never submits a turn. */
-export async function createDevWorkbenchSession(parsed: Args): Promise<{
+async function createDevWorkbenchSession(
+	parsed: Args,
+	ownResource: (settle: () => Promise<void>) => void,
+): Promise<{
 	session: AgentSession;
 	settings: Settings;
 	cwd: string;
@@ -1278,11 +1358,11 @@ export async function createDevWorkbenchSession(parsed: Args): Promise<{
 	mcpManager?: MCPManager;
 	ownsRoot: true;
 }> {
-	await applyStartupCwd(parsed);
 	const cwd = getProjectDir();
 	await ensureTheme();
 	await setCompanyOfflineEnabled(parsed.offline === true);
 	const activeSettings = await Settings.init({ cwd, configFiles: parsed.config });
+	ownResource(() => activeSettings.flush());
 	if (parsed.approvalMode) cfgToolsApprovalMode.override(activeSettings, parsed.approvalMode);
 	else if (parsed.autoApprove) cfgToolsApprovalMode.override(activeSettings, "yolo");
 	if (parsed.warnCost !== undefined) cfgSessionWarnCost.override(activeSettings, parsed.warnCost);
@@ -1314,7 +1394,12 @@ export async function createDevWorkbenchSession(parsed: Args): Promise<{
 	if (parsed.noPty) Bun.env.PI_NO_PTY = "1";
 	if (parsed.noTitle) Bun.env.PI_NO_TITLE = "1";
 	const authStorage = await discoverAuthStorage(undefined, { settings: activeSettings });
-	createAuthStorageSettingsSync(activeSettings, authStorage);
+	ownResource(async () => { authStorage.close(); });
+	const authSync = createAuthStorageSettingsSync(activeSettings, authStorage);
+	ownResource(async () => {
+		authSync.stop();
+		await authSync.settled();
+	});
 	const modelRegistry = new ModelRegistry(authStorage, undefined, { settings: activeSettings });
 	await modelRegistry.hydrateCredentialScopedModelCaches();
 	const scopedModels = await resolveScopedModels(parsed, modelRegistry, activeSettings);
@@ -1331,6 +1416,7 @@ export async function createDevWorkbenchSession(parsed: Args): Promise<{
 	options.subagentEventBus = new EventBus();
 	if (parsed.apiKey && options.model) authStorage.keys.setRuntime(options.model.provider, parsed.apiKey);
 	const result = await createAgentSession(options);
+	ownResource(() => result.session.dispose());
 	if (parsed.apiKey && !options.model && result.session.model) {
 		authStorage.keys.setRuntime(result.session.model.provider, parsed.apiKey);
 	}
@@ -1359,13 +1445,24 @@ export async function createDevWorkbenchSession(parsed: Args): Promise<{
 
 /** Standalone native owner; the browser only subscribes to this process. */
 export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[]): Promise<void> {
-	const boot = await createDevWorkbenchSession(parsedArgs);
+	await applyStartupCwd(parsedArgs);
+	const projectLease = await acquireBrowserProject(getProjectDir(), "dev");
+	const resources: Array<() => Promise<void>> = [];
+	const closeRootResources = async (): Promise<void> => {
+		while (resources.length) {
+			await resources[resources.length - 1]();
+			resources.pop();
+		}
+	};
 	let host: DevWorkbenchHost | undefined;
-	const shutdown = Promise.withResolvers<void>();
+	let sessionReturned = false;
+	let shutdown = Promise.withResolvers<void>();
 	const signal = () => shutdown.resolve();
 	for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(name, signal);
 	try {
-		host = await createDevWorkbenchHost(boot);
+		const boot = await createDevWorkbenchSession(parsedArgs, settle => resources.push(settle));
+		sessionReturned = true;
+		host = await createDevWorkbenchHost({ ...boot, projectLease, closeRootResources });
 		const handle = await getOrStartDevWorkbench(host);
 		for (const url of handle.urls) process.stdout.write(`Dev workbench ready: ${url}\n`);
 		if (handle.urls.length === 1 && parsedArgs.offline) {
@@ -1379,12 +1476,36 @@ export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[
 				process.stderr.write(`Browser opener failed: ${opened.reason}. Service remains ready at ${handle.url}\n`);
 		}
 		await shutdown.promise;
+	} catch (error) {
+		if (!sessionReturned) {
+			unsettledStartupProjects.add(projectLease);
+			throw new Error(
+				"Dev 原生会话启动失败，无法确认内部资源已结清；项目占用将保持到当前 OMP 进程结束。请结束此 OMP 进程后重试。",
+				{ cause: error },
+			);
+		}
+		if (error instanceof DevWorkbenchStartError) host = error.host;
+		throw error;
 	} finally {
-		for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(name, signal);
+		// A failed settlement must keep the OS lease and a live terminal retry path.
 		try {
-			await host?.close();
+			while (sessionReturned) {
+				try {
+					if (host) await host.close();
+					else {
+						await projectLease.markExiting();
+						await closeRootResources();
+						await projectLease.close();
+					}
+					break;
+				} catch (error) {
+					shutdown = Promise.withResolvers<void>();
+					process.stderr.write(`Dev 尚未结清，项目占用保持；按 Ctrl+C 重试退出：${message(error)}\n`);
+					await shutdown.promise;
+				}
+			}
 		} finally {
-			await boot.session.dispose();
+			for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(name, signal);
 		}
 	}
 }
