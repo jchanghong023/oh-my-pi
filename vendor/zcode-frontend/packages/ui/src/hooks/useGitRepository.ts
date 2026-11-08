@@ -39,6 +39,7 @@ interface GitLiveDataRefreshInput {
   includeExtendedData: boolean;
   refreshToken: string | number | boolean | null;
   workspaceRpcEnabled: boolean;
+  service?: object;
 }
 
 export interface GitPaneFileChange extends GitFileChange {
@@ -362,6 +363,11 @@ export function shouldRefreshLiveGitData(
     return true;
   }
 
+  // Same-root resident-session changes replace the scoped service without changing the path.
+  if (previous.service !== next.service) {
+    return true;
+  }
+
   if (previous.refreshToken !== next.refreshToken) {
     return true;
   }
@@ -419,6 +425,7 @@ export function useGitRepository(options: {
       includeExtendedData,
       refreshToken,
       workspaceRpcEnabled,
+      service: gitService,
     };
 
     if (!workspaceRpcEnabled) {
@@ -437,6 +444,7 @@ export function useGitRepository(options: {
       return;
     }
 
+    const previousService = lastLiveRefreshInputRef.current?.service;
     const shouldRefresh = shouldRefreshLiveGitData(
       lastLiveRefreshInputRef.current,
       nextRefreshInput,
@@ -451,7 +459,7 @@ export function useGitRepository(options: {
     requestVersionRef.current = requestVersion;
 
     setRepositoryState((current) =>
-      current.workspaceKey === workspaceKey
+      current.workspaceKey === workspaceKey && previousService === gitService
         ? {
             ...current,
             loading: true,
@@ -535,10 +543,11 @@ export function useGitRepository(options: {
   ]);
 
   return useMemo(() => {
-    // useEffect 在 workspace 切换后的 commit 才会清理旧状态。render 阶段先按
-    // workspaceKey 投影为空状态，避免旧机器的 Git 路径通过新远端 fileWatcherService 注册。
+    // Workspace and scoped-service ownership must match before exposing paths to watchers.
+    // A same-root resident-session switch must not reuse the previous session's Git snapshot.
     const currentRepositoryState =
-      repositoryState.workspaceKey === workspaceKey
+      repositoryState.workspaceKey === workspaceKey &&
+      lastLiveRefreshInputRef.current?.service === gitService
         ? repositoryState
         : createInitialState(workspacePath, { workspaceKey });
     const datasets = {
@@ -560,5 +569,5 @@ export function useGitRepository(options: {
       sourceOptions: buildSourceOptions(datasets),
       datasets,
     };
-  }, [lastFileChangeEntry, lastSummaryEntry, repositoryState, workspaceKey, workspacePath]);
+  }, [gitService, lastFileChangeEntry, lastSummaryEntry, repositoryState, workspaceKey, workspacePath]);
 }

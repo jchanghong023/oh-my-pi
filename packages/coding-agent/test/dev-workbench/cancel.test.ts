@@ -20,7 +20,24 @@ import type {
 } from "../../src/spec-driven/types";
 
 const directories: string[] = [];
+const nativeOperations = new Set<Promise<void>>();
+
+function ownNativeTest<T>(run: (value: T) => Promise<void>): (value: T) => Promise<void> {
+	return value => {
+		const operation = run(value);
+		nativeOperations.add(operation);
+		void operation.then(
+			() => nativeOperations.delete(operation),
+			() => nativeOperations.delete(operation),
+		);
+		return operation;
+	};
+}
+
 afterEach(async () => {
+	// A Bun deadline does not cancel the native work or its enclosing async callback.
+	// Drain the owned callback before removing a repository it can still read/write.
+	await Promise.allSettled([...nativeOperations]);
 	await Promise.all(directories.splice(0).map(directory => fs.rm(directory, { recursive: true, force: true })));
 });
 
@@ -519,6 +536,45 @@ async function fixture() {
 }
 
 describe("requirement cancellation policy", () => {
+	test("proven owned parent links avoid repeated native ancestor walks even with shuffled captures", async () => {
+		const f = await fixture();
+		const committed = f.changes.filter(change => change.layer === "committed");
+		f.changes.splice(0, committed.length, ...committed.reverse());
+		let mergeBaseCalls = 0;
+		const mergeBase = f.options.repo.mergeBase;
+		f.options.repo.mergeBase = async (...args) => {
+			mergeBaseCalls++;
+			return mergeBase(...args);
+		};
+		const plan = await f.plan();
+		expect(plan.conflicts).toEqual([]);
+		expect(mergeBaseCalls).toBe(0);
+		expect((await f.run(plan)).snapshot.record.lifecycle).toBe("cancelled");
+		expect(await f.read("code.txt")).toBe("base\nunrelated later line\n");
+	});
+
+	test("gaps in owned parent links retain native ancestry proof without walking either pair twice", async () => {
+		const f = await fixture();
+		const commitDetails = f.options.repo.commitDetails;
+		f.options.repo.commitDetails = async (...args) => {
+			const details = await commitDetails(...args);
+			return details.sha === "C3" ? { ...details, parents: ["unowned-intermediate"] } : details;
+		};
+		f.changes.find(change => change.commitSha === "C3")!.parentSha = "unowned-intermediate";
+		const mergeBase = f.options.repo.mergeBase;
+		const pairs: string[] = [];
+		f.options.repo.mergeBase = async (...args) => {
+			pairs.push([args[0], args[1]].sort().join(":"));
+			return mergeBase(...args);
+		};
+		const plan = await f.plan();
+		expect(plan.conflicts).toEqual([]);
+		expect(pairs.length).toBeGreaterThan(0);
+		expect(new Set(pairs).size).toBe(pairs.length);
+		expect((await f.run(plan)).snapshot.record.lifecycle).toBe("cancelled");
+		expect(await f.read("code.txt")).toBe("base\nunrelated later line\n");
+	});
+
 	test("create then edit before any commit follows the terminal owned postimage, not the creation layer", async () => {
 		const f = await fixture();
 		expect(await f.read("owned-new.md")).toBe("owned new revised\n");
@@ -801,7 +857,7 @@ async function initializeNativeRepository(root: string, bare: boolean): Promise<
 
 test.each(["lf", "crlf"] as const)(
 	"native cancellation preserves real history, archive and unrelated staged hunks with %s worktree bytes",
-	async eol => {
+	ownNativeTest(async (eol: "lf" | "crlf") => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cancel-native-"));
 		directories.push(root);
 		const cwd = path.join(root, "checkout");
@@ -1103,12 +1159,12 @@ test.each(["lf", "crlf"] as const)(
 		expect(await repo.headSha(signal)).toBe(result.persistence.commit.sha);
 		expect((await repo.commitDetails(result.persistence.commit.sha!, signal)).parents).toEqual([head]);
 		for (const sha of ownedShas) expect(await repo.refExists(sha, signal)).toBe(true);
-	},
+	}),
 );
 
 test.each(["confirmed-publication", "unrelated-descendant", "changed-after-preview"] as const)(
 	"native cancellation binds refreshed PR head to confirmed publication: %s",
-	async scenario => {
+	ownNativeTest(async (scenario: "confirmed-publication" | "unrelated-descendant" | "changed-after-preview") => {
 		const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-cancel-pr-head-"));
 		directories.push(root);
 		const cwd = path.join(root, "checkout");
@@ -1269,5 +1325,5 @@ test.each(["confirmed-publication", "unrelated-descendant", "changed-after-previ
 			expect(closeCount).toBe(1);
 			expect(await fs.readFile(path.join(cwd, "code.txt"), "utf8")).toBe("original user bytes\n");
 		}
-	},
+	}),
 );

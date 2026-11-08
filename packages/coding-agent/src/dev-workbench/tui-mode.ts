@@ -6,8 +6,17 @@ import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
 import { nativeBusy } from "../spec-driven/controller";
 import { openPathWithResult } from "../utils/open";
-import { closeAllWebGuis, startWebGui, WebGuiStartError, type WebGuiHandle } from "../webgui/host";
+import {
+	closeAllWebGuis,
+	releaseWebGuiBindingsAfterHandoff,
+	startWebGui,
+	WebGuiStartError,
+	type WebGuiHandle,
+} from "../webgui/host";
 import { closeWebServer } from "../webgui/server";
+import { bindNativeWebGuiCommandEnvironment } from "../webgui/native-command-host";
+import { nativeWebGuiQuestions } from "../webgui/native-interactions";
+import { enterDevFromWebGuiNativeSession } from "../webgui/native-session-host";
 import {
 	closeAllDevWorkbenches,
 	createDevWorkbenchHost,
@@ -182,7 +191,43 @@ export class DevWorkbenchTuiMode {
 			this.#showOverlay("正在启动，请稍候。");
 			let handle: DevWorkbenchHandle;
 			if (this.#mode === "webgui") {
-				const gui = await startWebGui(context.session);
+				if (!context.initializeWebGuiNativeHost || !context.getToolUIContext)
+					throw new Error("The native host does not expose WebGUI composition and UI ownership");
+				const originalToolUI = context.getToolUIContext();
+				if (!originalToolUI) throw new Error("The native tool UI has not initialized");
+				context.initializeWebGuiNativeHost();
+				const restoreEnvironment = bindNativeWebGuiCommandEnvironment(context.session, {
+					mcpManager: context.mcpManager,
+				});
+				const gui = await startWebGui(context.session, {
+					setToolUIContext: (ui, hasUI) => context.setToolUIContext(ui, hasUI),
+					restoreToolUIContext: () => {
+						if (context.ownsToolUIContext?.(nativeWebGuiQuestions(context.session).ui))
+							context.setToolUIContext(originalToolUI, true);
+						restoreEnvironment();
+					},
+					commandHost: {
+						close: () => this.close(),
+						restart: async () => {
+							await this.close();
+							await context.restart();
+						},
+						toggleMode: async (mode, session) => {
+							if (mode === "webgui") return this.close();
+							if (session !== context.session) {
+								const transferred = await enterDevFromWebGuiNativeSession(session);
+								await releaseWebGuiBindingsAfterHandoff();
+								this.#host = transferred.host;
+								this.#mode = "dev";
+								this.#phase = "active";
+								this.#showOverlay("地址可选择复制，或按住 Ctrl 点击在浏览器中打开。", transferred.handle.urls);
+								return;
+							}
+							await this.close();
+							await this.toggle("dev");
+						},
+					},
+				});
 				this.#host = gui;
 				handle = gui;
 			} else {
@@ -231,7 +276,11 @@ export class DevWorkbenchTuiMode {
 	}
 
 	async #settle(): Promise<void> {
-		const results = await Promise.allSettled([this.#host?.close(), closeAllDevWorkbenches(), closeAllWebGuis()]);
+		const results = await Promise.allSettled([
+			...(this.#mode === "webgui" ? [] : [this.#host?.close()]),
+			closeAllDevWorkbenches(),
+			closeAllWebGuis(),
+		]);
 		const failed = results.filter(result => result.status === "rejected");
 		if (failed.length)
 			throw new AggregateError(

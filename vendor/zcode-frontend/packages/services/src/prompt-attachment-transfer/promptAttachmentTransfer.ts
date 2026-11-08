@@ -18,6 +18,8 @@ export interface PromptAttachmentStageParams {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   localPath: string;
+  /** Browser uploads carry actual bytes, never a renderer-local path. */
+  bytesBase64?: string;
   fileName: string;
   mime: string;
   sizeBytes?: number;

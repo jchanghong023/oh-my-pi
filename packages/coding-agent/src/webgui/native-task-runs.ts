@@ -5,7 +5,7 @@ import { isEnoent, isRecord } from "@oh-my-pi/pi-utils";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Emitter } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
+import { Emitter, type Event } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
 import type {
 	NativeTaskOutput,
 	NativeTaskOutputContent,
@@ -18,6 +18,12 @@ import { containedRealPath } from "../internal-urls/filesystem-resource";
 import { assertNativeChat } from "./native-chat";
 import type { NativeChildDirectory, OwnedNativeChild } from "./native-subagents";
 import type { WebGuiMethod, WebGuiServiceContext } from "./rpc-contract";
+
+export interface NativeTaskRunAdapter {
+	readonly methods: Readonly<Record<string, WebGuiMethod>>;
+	readonly onDidChange: Event<{ sessionId: string; revision: number }>;
+	dispose(): void;
+}
 
 interface Invocation {
 	run: NativeTaskRun;

@@ -997,7 +997,7 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		return true;
 	}
 
-	async dispose(options?: { timeoutMs?: number }): Promise<boolean> {
+	async dispose(options?: { timeoutMs?: number; strict?: boolean }): Promise<boolean> {
 		this.#disposed = true;
 		this.#clearEvictionTimers();
 		this.#cancelJobs(undefined, ASYNC_JOB_MANAGER_SHUTDOWN_REASON);
@@ -1006,6 +1006,9 @@ export class AsyncJobManager implements AsyncJobManagerApi {
 		const jobsSettled = await this.#waitForAllUntil(deadline);
 		const drained = await this.drainDeliveries({ timeoutMs: Math.max(deadline - Date.now(), 0) });
 		this.#clearEvictionTimers();
+		if (options?.strict && (!jobsSettled || !drained)) {
+			throw new Error("Async jobs or completion deliveries did not settle during strict disposal");
+		}
 		// Bypass the grace-period sleep: dispose has already drained/cancelled
 		// deliveries above, so there is nothing left for the model to read via
 		// `agent://<id>` — sleeping the retention window here would only leak

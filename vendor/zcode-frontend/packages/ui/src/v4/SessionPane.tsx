@@ -4,6 +4,11 @@ import { isRequestVerificationConfigNetworkError } from "@/request-security-edit
 import { useShallow } from "zustand/react/shallow";
 import { remoteHostIdFromWorkspaceIdentity } from "@zcode/shared";
 import { useRemoteConversationAvailable } from "@/v4/RemoteConversationAvailability.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
+import { useOptionalPlatform } from "@/hooks/usePlatform.js";
+import { executeNativeBrowserAction, openNativeBrowserUrl, type NativeBrowserActionInput } from "@/v4/nativeBrowserActions.js";
+import { usePaneLayoutStore } from "@/v4/paneLayoutStore.js";
+import { useWorkbenchGroupStore } from "@/v4/workbenchGroupStore.js";
 import {
   createRemoteWorkspaceDisconnectedError,
   getRemoteConnectionFailureCode,
@@ -103,9 +108,11 @@ import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import {
   ConversationComposer,
   type ComposerRestoreRequest,
+  type NativeComposerTarget,
   type ConversationComposerSendOptions,
   type ConversationComposerSendResult,
 } from "@/v4/ConversationComposer.js";
+import { captureV4ComposerDraftHandoff, stageV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import type { ConversationDropTargetController } from "@/v4/composer/conversationDropTarget.js";
 import { shouldIgnoreEscapeForStopGeneration } from "@/v4/composer/escapeStop.js";
 import { useConversationPanePresentation } from "@/side-pane-full-view/index.js";
@@ -516,6 +523,7 @@ export function SessionPane({
   onSearchResultHighlightDone,
 }: SessionPaneProps) {
   const paneRef = useRef<HTMLDivElement>(null);
+  const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const remoteAvailable = useRemoteConversationAvailable();
   const {
     layer,
@@ -534,6 +542,15 @@ export function SessionPane({
     zcodeTaskService,
   } = useServices();
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const browserPlatform = useOptionalPlatform();
+  const nativeAttachmentTarget = useRef<{ sessionId: string | null; target: NativeComposerTarget | null }>({ sessionId, target: null });
+  const handleNativeAttachmentTargetChange = useCallback((target: NativeComposerTarget | null) => {
+    nativeAttachmentTarget.current = { sessionId, target };
+  }, [sessionId]);
+  const [nativePresentations, setNativePresentations] = useState<Record<string, {
+    mode?: "clean" | "compact" | "detailed"; hideThinking?: boolean; todoExpanded?: boolean; todoMarkdown?: string;
+  }>>({});
   const slashCommands = useSlashCommands(workspacePath, workspaceIdentity);
   const baseWorkspaceServices = useBaseWorkspaceServices();
   const composerClientNamespace = useComposerClientNamespace();
@@ -547,6 +564,14 @@ export function SessionPane({
   const composerDraftGeneration = useZCodeSessionStore(
     (store) => store.getWorkspaceState(workspacePath, workspaceIdentity).draftFocusVersion,
   );
+  const nativeDraftOwnerKey = JSON.stringify([workspaceKey, composerDraftGeneration, composerProjectId]);
+  const nativeDraftOwnerRef = useRef(nativeDraftOwnerKey);
+  nativeDraftOwnerRef.current = nativeDraftOwnerKey;
+  const nativeDraftNavigation = useRef<{ ownerKey: string; sessionId: string } | null>(null);
+  const [nativeDraftState, setNativeDraftState] = useState<{ ownerKey: string; sessionId: string } | null>(null);
+  const nativeDraftFlight = useRef<{ ownerKey: string; promise: Promise<string> } | null>(null);
+  const nativeDraftSessionId = sessionId === null && nativeDraftState?.ownerKey === nativeDraftOwnerKey
+    ? nativeDraftState.sessionId : null;
   const pendingAtEntry = useMemo(() => {
     if (sessionId !== null || newTaskComposerScope.projectId !== null) return null;
     const pending = readPendingTaskDraft(newTaskComposerScope);
@@ -710,7 +735,6 @@ export function SessionPane({
     [onSummaryPanelVariantOverrideChange],
   );
 
-  const workspaceKey = workspaceIdentity?.trim() || workspacePath;
   const workspaceConfigOptions = useZCodeSessionStore(
     (store) => store.getWorkspaceState(workspacePath, workspaceIdentity).configOptions,
   );
@@ -910,8 +934,9 @@ export function SessionPane({
     workspaceIdentity,
     provider,
     sessionId,
+    modelSessionId: sessionId ?? nativeDraftSessionId,
     sessionConfig: runtimeReady && snapshot?.sessionId === sessionId ? snapshot.config : null,
-    agentStartupAllowed: draftAgentStartupAllowed,
+    agentStartupAllowed: nativeHostAvailable ? Boolean(sessionId ?? nativeDraftSessionId) : draftAgentStartupAllowed,
     modelSelectionService,
   });
   const modelSelectionView =
@@ -937,12 +962,15 @@ export function SessionPane({
       (!rootSessionId || rootSessionId === sessionId) &&
       sessionId &&
       snapshot?.sessionId === sessionId &&
-      modelSelectionDisplayView?.nativeSession?.chatAvailable &&
-      modelSelectionDisplayView.nativeSession.sessionId !== sessionId,
+      modelSelectionView?.nativeSession !== undefined &&
+      (modelSelectionView.nativeSession === null ||
+        modelSelectionView.nativeSession.sessionId !== sessionId ||
+        modelSelectionView.nativeSession.workspacePath !== workspacePath),
   );
   const nativeComposerBound =
     modelSelectionView?.nativeSession?.chatAvailable === true &&
     modelSelectionView.nativeSession.sessionId === sessionId &&
+    modelSelectionView.nativeSession.workspacePath === workspacePath &&
     snapshot?.sessionId === sessionId &&
     !nativeHistoryRecoveryPending;
   const handleResumeNativeHistory = useCallback(async () => {
@@ -964,6 +992,18 @@ export function SessionPane({
       if (resumed.session.sessionId !== targetSessionId)
         throw new Error("原生 Host 未恢复所选会话。");
       if (!stillViewingTarget()) return;
+      const projectUrl = (resumed as typeof resumed & { projectUrl?: string }).projectUrl;
+      if (projectUrl) {
+        const destination = new URL(projectUrl, window.location.href);
+        const currentProject = new URL(window.location.href);
+        if (destination.origin !== currentProject.origin ||
+            destination.pathname !== currentProject.pathname ||
+            destination.searchParams.get("project") !== currentProject.searchParams.get("project")) {
+          destination.searchParams.set("session", targetSessionId);
+          window.location.assign(destination.href);
+          return;
+        }
+      }
       const refreshed = await modelSelectionRead.refresh();
       if (
         refreshed.kind !== "ready" ||
@@ -1021,8 +1061,9 @@ export function SessionPane({
     useZCodeSessionStore.getState().invalidateDraftRuntime(workspacePath, workspaceIdentity);
   }, [draftConfigRef, modelSelectionView?.revision, sessionId, workspaceIdentity, workspacePath]);
   const createSubmissionFromComposer = useCallback(
-    () => createComposerSubmissionConfig(draftConfigRef.current, modelSelectionView),
-    [draftConfigRef, modelSelectionView],
+    () => nativeHostAvailable && sessionId === null && !nativeDraftSessionId
+      ? null : createComposerSubmissionConfig(draftConfigRef.current, modelSelectionView),
+    [draftConfigRef, modelSelectionView, nativeHostAvailable, sessionId, nativeDraftSessionId],
   );
   const composerSubmissionReady = useMemo(
     () => createComposerSubmissionConfig(draftConfig, modelSelectionView) !== null,
@@ -1114,13 +1155,121 @@ export function SessionPane({
       workspacePath,
     ],
   );
+  const ensureNativeDraftSession = useCallback((): Promise<string> => {
+    if (sessionId) return Promise.resolve(sessionId);
+    if (nativeDraftSessionId) return Promise.resolve(nativeDraftSessionId);
+    if (!nativeHostAvailable) return Promise.reject(new Error("No native browser host is available"));
+    if (nativeDraftFlight.current?.ownerKey === nativeDraftOwnerKey)
+      return nativeDraftFlight.current.promise;
+    const ownerKey = nativeDraftOwnerKey;
+    const promise: Promise<string> = zcodeSessionService.createSession({
+      workspacePath,
+      ...(workspaceIdentity ? { workspaceIdentity } : {}),
+    }).then((created) => {
+      if (!created.session.sessionId) throw new Error("The native host did not create a session");
+      if (nativeDraftOwnerRef.current !== ownerKey ||
+          composerBindingRef.current.workspaceKey !== workspaceKey ||
+          composerBindingRef.current.sessionId !== null)
+        throw new Error("The project draft changed while creating its native session");
+      setNativeDraftState({ ownerKey, sessionId: created.session.sessionId });
+      return created.session.sessionId;
+    }).catch((error) => {
+      if (nativeDraftFlight.current?.promise === promise) nativeDraftFlight.current = null;
+      throw error;
+    });
+    nativeDraftFlight.current = { ownerKey, promise };
+    return promise;
+  }, [sessionId, nativeDraftSessionId, nativeHostAvailable, nativeDraftOwnerKey, workspaceKey, workspacePath, workspaceIdentity, zcodeSessionService]);
   const { settings: sharedSettings } = useSettings();
   const appFollowupMode = resolveAppFollowupMode(sharedSettings);
-  const messageStreamShowReasoning = sharedSettings?.messageStreamShowReasoning ?? true;
-  const messageStreamShowTodos = sharedSettings?.messageStreamShowTodos ?? false;
-  const toolGroupingExploreEnabled = sharedSettings?.toolGroupingExploreEnabled ?? true;
-  const toolGroupingTerminalEnabled = sharedSettings?.toolGroupingTerminalEnabled ?? true;
-  const toolGroupingChangesEnabled = sharedSettings?.toolGroupingChangesEnabled ?? false;
+  const nativePresentationSessionId = sessionId ?? nativeDraftSessionId;
+  const nativePresentation = nativePresentationSessionId ? nativePresentations[nativePresentationSessionId] : undefined;
+  const nativeDisplayMode = nativePresentation?.mode;
+  const nativeHideThinking = nativeDisplayMode === "clean" || nativePresentation?.hideThinking === true;
+  const messageStreamShowReasoning = nativeDisplayMode === "clean" ? false :
+    nativePresentation?.hideThinking !== undefined
+      ? !nativePresentation.hideThinking : sharedSettings?.messageStreamShowReasoning ?? true;
+  const messageStreamShowTodos = nativePresentation?.todoExpanded ?? sharedSettings?.messageStreamShowTodos ?? false;
+  const toolGroupingExploreEnabled = nativePresentation?.mode
+    ? nativePresentation.mode !== "detailed" : sharedSettings?.toolGroupingExploreEnabled ?? true;
+  const toolGroupingTerminalEnabled = nativePresentation?.mode
+    ? nativePresentation.mode !== "detailed" : sharedSettings?.toolGroupingTerminalEnabled ?? true;
+  const toolGroupingChangesEnabled = nativePresentation?.mode
+    ? nativePresentation.mode !== "detailed" : sharedSettings?.toolGroupingChangesEnabled ?? false;
+  const handleNativeBrowserAction = useCallback((input: NativeBrowserActionInput, requestId: string) => {
+    const originSessionId = sessionId ?? nativeDraftSessionId;
+    if (!originSessionId || input.originSessionId !== originSessionId)
+      return Promise.reject(new Error("The native action belongs to another session"));
+    return executeNativeBrowserAction(input, {
+      sessionId: originSessionId,
+      workspaceIdentity: workspaceKey,
+      requestId,
+      platform: browserPlatform ?? null,
+      async reportMediaState(event) {
+        if (!zcodeSessionService.reportBrowserMediaState)
+          throw new Error("The native host cannot accept browser media settlement");
+        const result = await zcodeSessionService.reportBrowserMediaState({
+          workspacePath,
+          ...(workspaceIdentity ? { workspaceIdentity } : {}),
+          sessionId: originSessionId,
+          connectionId: input.connectionId,
+          clientId: input.clientId,
+          event,
+        });
+        if (result.accepted !== true) throw new Error("The native host rejected browser media settlement");
+      },
+      attachFile(file) {
+        const current = nativeAttachmentTarget.current;
+        return (current.sessionId === originSessionId ||
+          (sessionId === null && nativeDraftSessionId === originSessionId && current.sessionId === null)) &&
+          current.target?.addFile(file) === true;
+      },
+      setDraft(text, files, onlyIfEmpty) {
+        const current = nativeAttachmentTarget.current;
+        if (!(current.sessionId === originSessionId ||
+              (sessionId === null && nativeDraftSessionId === originSessionId && current.sessionId === null)) || !current.target)
+          throw new Error("The originating session composer is unavailable");
+        return current.target.setDraft(text, files, onlyIfEmpty);
+      },
+      openSession(action) {
+        const targetId = String(action.sessionId);
+        const recordNavigation = () => {
+          if (sessionId === null && targetId !== originSessionId)
+            nativeDraftNavigation.current = { ownerKey: nativeDraftOwnerKey, sessionId: targetId };
+        };
+        const destination = new URL(typeof action.url === "string" ? action.url : window.location.href, window.location.href);
+        destination.searchParams.set("session", targetId);
+        if (action.placement === "window" || destination.pathname !== window.location.pathname) {
+          openNativeBrowserUrl(destination.href);
+          recordNavigation();
+          return;
+        }
+        const workspaceScope = { workspacePath, workspaceIdentity, remoteSessionId: remoteSessionId ?? undefined };
+        const groups = useWorkbenchGroupStore.getState();
+        groups.splitSessionIntoGroup(paneId, "right", { workspaceScope, sessionId: targetId }, { workspaceScope, sessionId: originSessionId });
+        const grouped = Object.values(useWorkbenchGroupStore.getState().groups).some((group) =>
+          group.primaryBinding.sessionId === targetId || Object.values(group.panes).some((pane) => pane.sessionId === targetId));
+        if (!grouped) {
+          usePaneLayoutStore.getState().openSessionInNewPane(workspaceScope, targetId);
+          if (!Object.values(usePaneLayoutStore.getState().panes).some((pane) => pane.sessionId === targetId))
+            throw new Error("The browser could not open another session pane");
+        }
+        recordNavigation();
+      },
+      setTodoExpanded(expanded, markdown) {
+        setNativePresentations((current) => ({
+          ...current, [originSessionId]: { ...current[originSessionId], todoExpanded: expanded,
+            ...(markdown !== undefined ? { todoMarkdown: markdown } : {}) },
+        }));
+        handleSummaryPanelVariantChange(expanded ? "panel" : "mini");
+      },
+      setDisplayMode(mode, hideThinking) {
+        setNativePresentations((current) => ({
+          ...current, [originSessionId]: { ...current[originSessionId], mode, hideThinking },
+        }));
+      },
+    });
+  }, [sessionId, nativeDraftSessionId, nativeDraftOwnerKey, workspaceKey, workspacePath, workspaceIdentity, remoteSessionId, browserPlatform, handleSummaryPanelVariantChange, paneId, zcodeSessionService]);
   const snapshotSessionId = snapshot?.sessionId ?? null;
   const snapshotFollowupMode = snapshot?.config.followupMode ?? null;
   const snapshotRevision = snapshot?.revision ?? null;
@@ -2004,6 +2153,8 @@ export function SessionPane({
       chatLoadingBlockedByActiveWork,
       chatLoadingBlockedByInteraction,
       messageStreamShowReasoning,
+      nativeHideThinking,
+      nativeDisplayMode,
       messageStreamShowTodos,
       toolGroupingExploreEnabled,
       toolGroupingTerminalEnabled,
@@ -2082,6 +2233,8 @@ export function SessionPane({
       chatLoadingBlockedByActiveWork,
       chatLoadingBlockedByInteraction,
       messageStreamShowReasoning,
+      nativeHideThinking,
+      nativeDisplayMode,
       messageStreamShowTodos,
       toolGroupingExploreEnabled,
       toolGroupingTerminalEnabled,
@@ -2133,7 +2286,7 @@ export function SessionPane({
   // pane 未绑定会话时后台建 phase=draft 会话作预热载体：配置写 CAS 直达、首发复用。
   // 对外绑定语义不变（shell activeTaskId 仍 null），预热会话只是 pane 内部 effective 订阅目标。
   const { binding: prewarmBinding, waitForSession: waitForDraftSession } = useDraftSessionPrewarm({
-    enabled: sessionId === null && draftAgentStartupAllowed && !recoveringDraft,
+    enabled: !nativeHostAvailable && sessionId === null && draftAgentStartupAllowed && !recoveringDraft,
     workspaceKey,
     paneId,
     invalidationVersion: draftRuntimeInvalidationVersion,
@@ -2150,7 +2303,7 @@ export function SessionPane({
   // runtime 换代（CUA Helper 就绪、liveness 恢复等触发 workspace-dispose）会冲掉草稿态尚未
   // 持久化的预热会话。重建期间禁止发送，否则附件会挂在已消失的会话上（sessionNotFound）。
   const { rebuilding: draftRuntimeRebuilding } = useDraftRuntimeRebuildGate({
-    enabled: sessionId === null,
+    enabled: !nativeHostAvailable && sessionId === null,
     onRuntimeRestart,
     onRuntimeLifecycle,
     prewarmSessionId,
@@ -2160,7 +2313,7 @@ export function SessionPane({
   const ensureDraftPrewarmConfigBeforeSendRef = useRef<(targetSessionId: string) => Promise<void>>(
     async () => undefined,
   );
-  const effectiveSessionId = sessionId ?? recoveringDraft?.sessionId ?? prewarmSessionId;
+  const effectiveSessionId = sessionId ?? nativeDraftSessionId ?? recoveringDraft?.sessionId ?? prewarmSessionId;
   const sessionRuntimeReady = Boolean(
     effectiveSessionId &&
     lease?.sessionId === effectiveSessionId &&
@@ -2455,30 +2608,40 @@ export function SessionPane({
       options: ConversationComposerSendOptions | undefined,
       taskGroupIdAtSend?: string | null,
     ) => {
-      if (modelSelectionView?.nativeSession !== undefined) {
-        if (!modelSelectionView.nativeSession?.chatAvailable ||
-            !sessionId || modelSelectionView.nativeSession.sessionId !== sessionId)
-          return "blocked" as const;
-        const nativeSnapshot = snapshotRef.current;
-        if (
-          nativeSnapshot?.sessionId !== sessionId ||
-          nativeSnapshot.inputRouting.mode !== "startNow"
-        )
-          return "blocked" as const;
-        if (
-          options?.attachments?.length ||
-          options?.contextAttachmentCount ||
-          options?.conversationQuotes?.length
-        ) {
-          throw new Error("OMP browser chat currently supports plain text only.");
+      if (nativeHostAvailable || modelSelectionView?.nativeSession !== undefined) {
+        const targetSessionId = sessionId ?? await ensureNativeDraftSession();
+        if (sessionId) {
+          if (!modelSelectionView?.nativeSession?.chatAvailable ||
+              modelSelectionView.nativeSession.sessionId !== sessionId ||
+              modelSelectionView.nativeSession.workspacePath !== workspacePath)
+            return "blocked" as const;
+          const nativeSnapshot = snapshotRef.current;
+          if (nativeSnapshot?.sessionId !== sessionId || nativeSnapshot.inputRouting.mode === "reject")
+            return "blocked" as const;
         }
-        const submission = createSubmissionFromComposer();
-        if (!submission) return "blocked" as const;
+        let submission = options?.submission ?? createSubmissionFromComposer();
+        if (!submission) {
+          if (!modelSelectionService) throw new Error("Native model selection service is unavailable");
+          const view = await modelSelectionService.getView({ sessionId: targetSessionId, selection: null });
+          if (view.nativeSession?.sessionId !== targetSessionId || view.nativeSession.workspacePath !== workspacePath)
+            throw new Error("The native model view belongs to another session");
+          submission = createComposerSubmissionConfig(draftConfigRef.current, view);
+        }
+        if (!submission) throw new Error("Select an available model for this native session");
         // Native chat 使用同一命令与投影生命周期。
         const ack = await dispatchCommand(
           "sendText",
-          { text, ...submission },
-          sessionId,
+          {
+            text,
+            ...submission,
+            ...(options?.attachments?.length ? { attachments: options.attachments } : {}),
+            ...(options?.conversationQuotes?.length ? { conversationQuotes: options.conversationQuotes } : {}),
+            ...(options?.requestedDelivery ? { requestedDelivery: options.requestedDelivery } : {}),
+            ...(options?.heldQueueDisposition ? { heldQueueDisposition: options.heldQueueDisposition } : {}),
+            ...(options?.expectedHeldQueueItemIds ? { expectedHeldQueueItemIds: options.expectedHeldQueueItemIds } : {}),
+            ...(options?.source ? { source: options.source } : {}),
+          },
+          targetSessionId,
           undefined,
           undefined,
           options?.localTtft,
@@ -2486,7 +2649,25 @@ export function SessionPane({
             ? (envelope) => options.onCommandCreated?.(envelope.commandId)
             : undefined,
         );
-        if (ack.status !== "accepted") throw new Error(ack.reasonCode ?? "sendText rejected");
+        if (ack.reasonCode === "guard.heldQueueConfirmationStale")
+          return "confirmationRequired" as const;
+        if (ack.status !== "accepted") throw new Error(ack.message ?? ack.reasonCode ?? "sendText rejected");
+        const navigation = nativeDraftNavigation.current;
+        if (sessionId === null && nativeDraftOwnerRef.current === nativeDraftOwnerKey &&
+            !(navigation?.ownerKey === nativeDraftOwnerKey && navigation.sessionId !== targetSessionId) &&
+            composerBindingRef.current.workspaceKey === workspaceKey && composerBindingRef.current.sessionId === null) {
+          const handoff = captureV4ComposerDraftHandoff(workspacePath, workspaceIdentity, composerClientNamespace);
+          const submittedRefs = new Set(options?.attachments?.map((attachment) => attachment.ref) ?? []);
+          const remaining = handoff.attachments.filter((attachment) =>
+            !submittedRefs.has((attachment as { attachmentRef?: AttachmentRef }).attachmentRef?.ref ?? ""));
+          if (remaining.length > 0) {
+            stageV4ComposerDraftAttachments(workspacePath, workspaceIdentity, composerDraftGeneration,
+              { ...handoff, attachments: remaining }, targetSessionId);
+            const source = nativeAttachmentTarget.current;
+            if (source.sessionId === null) remaining.forEach((attachment) => source.target?.removeFile(attachment.id));
+          }
+          if (promoteComposerDraft(targetSessionId)) onSessionCreated?.(targetSessionId);
+        }
         return;
       }
       const dispatchSubmissionCommand = async (...args: Parameters<typeof dispatchCommand>) => {
@@ -2684,7 +2865,7 @@ export function SessionPane({
         return "confirmationRequired" as const;
       }
       if (ack.status !== "accepted") {
-        throw new Error(ack.reasonCode ?? "sendText 被拒绝");
+        throw new Error(ack.message ?? ack.reasonCode ?? "sendText 被拒绝");
       }
       if (draftBinding) {
         draftBinding.promote();
@@ -2710,6 +2891,18 @@ export function SessionPane({
       intl,
       createSubmissionFromComposer,
       modelSelectionView,
+      nativeHostAvailable,
+      ensureNativeDraftSession,
+      modelSelectionService,
+      draftConfigRef,
+      promoteComposerDraft,
+      onSessionCreated,
+      nativeDraftOwnerKey,
+      workspaceKey,
+      workspacePath,
+      workspaceIdentity,
+      composerClientNamespace,
+      composerDraftGeneration,
       sessionId,
       settleCurrentQueueInputs,
       waitForDraftSession,
@@ -2892,12 +3085,18 @@ export function SessionPane({
       );
       if (ack.status !== "accepted" && ack.status !== "duplicate") {
         logger.warn(`[v4-pane] edit 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
-        return false;
+        throw new Error(ack.message ?? ack.reasonCode ?? "editUserQuery rejected");
       }
-      // fork ACK 只做旧协议解码兼容；新 edit 永不导航 child。blocked 由行内冲突弹窗处理。
+      if (
+        modelSelectionView?.nativeSession !== undefined &&
+        ack.result?.type === "editUserQuery" &&
+        ack.result.disposition === "fork"
+      ) {
+        onSessionCreated?.(ack.result.sessionId);
+      }
       return ack;
     },
-    [dispatchCommand, sessionId],
+    [dispatchCommand, sessionId, modelSelectionView, onSessionCreated],
   );
 
   const handleAssistantFeedback = useCallback(
@@ -3184,6 +3383,9 @@ export function SessionPane({
 
   const followupModeSyncKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    // Native busy delivery is session-owned; browser-wide ZCode preferences must not
+    // silently turn the default follow-up queue into steer for every resident.
+    if (nativeHostAvailable || modelSelectionDisplayView?.nativeSession !== undefined) return;
     const targetSessionId = sessionId ?? prewarmSessionId;
     if (!targetSessionId || !appFollowupMode || snapshotRevision === null) return;
     if (snapshotSessionId !== targetSessionId) return;
@@ -3202,6 +3404,8 @@ export function SessionPane({
     );
   }, [
     appFollowupMode,
+    modelSelectionDisplayView,
+    nativeHostAvailable,
     configCommandBarrier,
     dispatchConfigCas,
     prewarmSessionId,
@@ -3345,7 +3549,8 @@ export function SessionPane({
   const handleStop = useCallback(
     (source: "button" | "escape") => {
       const current = snapshotRef.current;
-      if (!sessionId || !current?.control.canStop) {
+      const targetSessionId = sessionId ?? nativeDraftSessionId;
+      if (!targetSessionId || current?.sessionId !== targetSessionId || !current.control.canStop) {
         logger.lifecycle.info("[v4-pane] stop 命令被跳过（无可停执行）", {
           source,
           sessionId: sessionId ?? "",
@@ -3363,12 +3568,15 @@ export function SessionPane({
       void dispatchCommand(
         "stop",
         foregroundExecutionId ? { expectedForegroundExecutionId: foregroundExecutionId } : {},
-        sessionId,
-      ).catch((error) => {
+        targetSessionId,
+      ).then((ack) => {
+        if (!["accepted", "noop", "duplicate"].includes(ack.status))
+          toast(ack.reasonCode ?? `stop ${ack.status}`);
+      }).catch((error) => {
         logger.lifecycle.warn(`[v4-pane] stop 失败: ${String(error)}`);
       });
     },
-    [dispatchCommand, sessionId],
+    [dispatchCommand, sessionId, nativeDraftSessionId],
   );
 
   const handlePauseGoal = useCallback(() => {
@@ -3396,7 +3604,7 @@ export function SessionPane({
   // 保留窗口冒泡阶段，让 mention/slash 的 preventDefault 和 dialog 优先处理。
   useEffect(() => {
     if (!focused || readOnly) return;
-    if (!sessionId || !snapshot?.control.canStop) return;
+    if (!(sessionId ?? nativeDraftSessionId) || !snapshot?.control.canStop) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       if (!paneRef.current) return;
@@ -3413,6 +3621,7 @@ export function SessionPane({
     handleStop,
     readOnly,
     sessionId,
+    nativeDraftSessionId,
     snapshot?.control.canStop,
   ]);
 
@@ -3510,7 +3719,37 @@ export function SessionPane({
   const errored = sessionId !== null && state.status === "error";
   // retry 的产品裁决属于行级权威投影。这里仅提供命令能力，入口是否展示
   // 完全读取 row.actions.canRetry，禁止再用 pane phase 形成第二套 guard。
-  const retryActionsEnabled = runtimeReady && !readOnly && !selectionSideChat && Boolean(sessionId);
+  const retryActionsEnabled =
+    runtimeReady &&
+    remoteAvailable &&
+    !readOnly &&
+    !selectionSideChat &&
+    Boolean(sessionId) &&
+    (!(nativeHostAvailable || modelSelectionDisplayView?.nativeSession !== undefined) ||
+      nativeComposerBound);
+  const handleRetry = useCallback(
+    async (target: ConversationRowTarget): Promise<void> => {
+      const current = snapshotRef.current;
+      if (!retryActionsEnabled || !sessionId || current?.sessionId !== sessionId) return;
+      const row = current.rows.window.find(
+        (candidate) => candidate.rowId === target.rowId && candidate.entityId === target.entityId,
+      );
+      if (row?.actions?.canRetry !== true) return;
+      // Keep the composer draft and attachments untouched; native retry owns the original query.
+      const ack = await dispatchCommand(
+        "retryTurn",
+        { target },
+        sessionId,
+        current.revision,
+        current.logEpoch,
+      );
+      if (ack.status !== "accepted" && ack.status !== "duplicate") {
+        logger.warn(`[v4-pane] retry 被拒绝: ${ack.status} ${ack.reasonCode ?? ""}`);
+        throw new Error(ack.message ?? ack.reasonCode ?? "retryTurn rejected");
+      }
+    },
+    [dispatchCommand, retryActionsEnabled, sessionId],
+  );
   // fork 可用性完全由 row.actions.canFork（CLI stable resolver 投影）裁决；pane 只提供命令回调。
   const forkActionsEnabled = runtimeReady && !readOnly && !selectionSideChat && Boolean(sessionId);
   // editUserQuery 已由 command 层防御 latest real user query，并在 running
@@ -3819,8 +4058,9 @@ export function SessionPane({
       rootDraftScopeKey={composerScopeKey(newTaskComposerScope)}
       replaceComposerDraft={replaceComposerDraft}
       submissionReady={
-        draftProjectReady && composerSubmissionReady && runtimeReady && !recoveringDraft &&
-        (modelSelectionDisplayView?.nativeSession === undefined || nativeComposerBound)
+        nativeHostAvailable && sessionId === null ? true :
+          draftProjectReady && composerSubmissionReady && runtimeReady && !recoveringDraft &&
+          (modelSelectionDisplayView?.nativeSession === undefined || nativeComposerBound)
       }
       stageComposerContent={stageComposerContent}
       captureComposerContentLifecycleCommit={captureComposerContentLifecycleCommit}
@@ -3841,7 +4081,7 @@ export function SessionPane({
       onExternalTextInsertApplied={handleExternalTextInsertApplied}
       autoFocusEnabled={focused}
       disabled={
-        (modelSelectionDisplayView?.nativeSession !== undefined &&
+        (sessionId !== null && modelSelectionDisplayView?.nativeSession !== undefined &&
           !nativeComposerBound) ||
         connecting ||
         draftRuntimeRebuilding ||
@@ -3855,6 +4095,8 @@ export function SessionPane({
       modelSelectionState={modelSelectionRead.state}
       modelSelectionReload={modelSelectionRead.reload}
       attachmentSessionId={effectiveSessionId}
+      ensureAttachmentSession={nativeHostAvailable && sessionId === null ? ensureNativeDraftSession : undefined}
+      modelSelectionSessionId={sessionId ?? nativeDraftSessionId}
       attachmentPut={attachmentPut}
       onRuntimeRestart={onRuntimeRestart}
       onRuntimeLifecycle={onRuntimeLifecycle}
@@ -3886,6 +4128,7 @@ export function SessionPane({
       suppressGoalCommands={selectionSideChat}
       appSlashCommands={appSlashCommands}
       onDropTargetControllerChange={handleDropTargetControllerChange}
+      onNativeComposerTargetChange={handleNativeAttachmentTargetChange}
     />
   );
   const pendingGuideProjection = snapshot ? projectPendingGuideQueue(snapshot.queue) : null;
@@ -3953,6 +4196,12 @@ export function SessionPane({
           onResume={handleResumeQueue}
         />
       ) : null}
+      {nativePresentation?.todoExpanded && nativePresentation.todoMarkdown ? (
+        <section data-testid="v4-native-todo" data-session-id={nativePresentationSessionId}
+          className="rounded-lg border border-card-border bg-card p-3">
+          <pre className="whitespace-pre-wrap break-words text-ui-base">{nativePresentation.todoMarkdown}</pre>
+        </section>
+      ) : null}
       {/* Bugfix: v4 权限/问答等待态只是 runtime 的阻塞交互，必须和 composer
           共享 timeline bottom dock；渲染在 SessionPane 外层会脱离主列宽度并挤占下半屏。 */}
       {effectiveSessionId && snapshot?.sessionId === effectiveSessionId ? (
@@ -3965,6 +4214,7 @@ export function SessionPane({
           isWebRemoteControl={compactForRemoteControl}
           provider={provider}
           snapshot={snapshot}
+          onBrowserAction={handleNativeBrowserAction}
           onPlanInteractionAccepted={
             compactForRemoteControl ? handleMobilePlanInteractionAccepted : undefined
           }
@@ -4166,6 +4416,7 @@ export function SessionPane({
                   scrollMemoryKey={timelineScrollMemoryKey}
                   rowContext={rowContext}
                   onFork={forkActionsEnabled ? handleFork : undefined}
+                  onRetry={retryActionsEnabled ? handleRetry : undefined}
                   onFeedbackChange={
                     !readOnly && !selectionSideChat && sessionId
                       ? handleAssistantFeedback

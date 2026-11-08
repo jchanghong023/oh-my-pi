@@ -13,7 +13,8 @@ import type {
 	GitWorkspaceRepositoryInfo,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/git";
 import type { SystemInfo } from "../../../../vendor/zcode-frontend/packages/shared/src/protocol";
-import { createNativeFileMethods } from "./native-files";
+import { createNativeAttachmentMethods } from "./native-attachments";
+import { createNativeFileMethods, createNativeFileWatcherMethods } from "./native-files";
 import { createNativeGitMethods } from "./native-git";
 import {
 	type WebGuiMethod,
@@ -30,6 +31,8 @@ function unavailable(feature: string): WebGuiMethod {
 }
 
 export function createFileServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
+	const watchers = createNativeFileWatcherMethods(context);
+	const attachments = createNativeAttachmentMethods(context);
 	// Unbound attachments retain unavailable reads without scanning any native workspace.
 	const repositorySummary = (): GitRepositorySummary => ({
 		workspacePath: context.workspacePath ?? "",
@@ -80,7 +83,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			readWorkspaceFileSearchIgnore: unavailable("file.readWorkspaceFileSearchIgnore"),
 			applyWorkspaceFileSearchIgnoreTransform: unavailable("file.applyWorkspaceFileSearchIgnoreTransform"),
 			writeWorkspaceFileSearchIgnore: unavailable("file.writeWorkspaceFileSearchIgnore"),
-			...(context.nativeSession ? createNativeFileMethods(context) : {}),
+			...createNativeFileMethods(context),
 		} satisfies Record<keyof IFileService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.MediaPreview, {
 			// TODO(omp-media): Connect native media authorization, bytes and URL lifecycle.
@@ -108,7 +111,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			commit: unavailable("git.commit"),
 			push: unavailable("git.push"),
 			getIdentity: unavailable("git.getIdentity"),
-			...(context.nativeSession ? createNativeGitMethods(context) : {}),
+			...(context.projectId ? createNativeGitMethods(context) : {}),
 		} satisfies Record<keyof IGitService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.GitCheckpoint, {
 			// TODO(omp-git-checkpoints): Connect native checkpoint storage/diff/restore.
@@ -122,22 +125,30 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			// TODO(omp-system): Connect native network probes.
 			probeIntranet: unavailable("system.probeIntranet"),
 		} satisfies Record<keyof ISystemService, WebGuiMethod>),
-		// TODO(omp-file-watcher): Connect native watch/unwatch/disposeAll and the
-		// onDynamicChange publisher. Subscription disposal is protocol-only, never
-		// a claim that fs.watch was installed or a native watcher id was allocated.
-		createWebGuiService(ServiceChannels.FileWatcher, {
-			watch: unavailable("file-watcher.watch"),
-			unwatch: unavailable("file-watcher.unwatch"),
-			disposeAll: unavailable("file-watcher.disposeAll"),
-		} satisfies Record<Exclude<keyof IFileWatcherService, "onDynamicChange">, WebGuiMethod>),
-		// TODO(omp-attachments): Connect native attachment staging/adoption/cancel/
-		// cleanup and onDynamicProgress publishing. Idle event subscriptions are
-		// connection-owned; no transfer, file ref or upload result is fabricated.
-		createWebGuiService(ServiceChannels.PromptAttachmentTransfer, {
-			stage: unavailable("prompt-attachment-transfer.stage"),
-			adopt: unavailable("prompt-attachment-transfer.adopt"),
-			cancel: unavailable("prompt-attachment-transfer.cancel"),
-			cleanup: unavailable("prompt-attachment-transfer.cleanup"),
-		} satisfies Record<Exclude<keyof IPromptAttachmentTransferService, "onDynamicProgress">, WebGuiMethod>),
+		createWebGuiService(
+			ServiceChannels.FileWatcher,
+			{
+				watch: watchers.methods.watch,
+				unwatch: watchers.methods.unwatch,
+				disposeAll: watchers.methods.disposeAll,
+			} satisfies Record<Exclude<keyof IFileWatcherService, "onDynamicChange">, WebGuiMethod>,
+			{
+				dynamicEvents: watchers.dynamicEvents,
+				dispose: watchers.dispose,
+			},
+		),
+		createWebGuiService(
+			ServiceChannels.PromptAttachmentTransfer,
+			{
+				stage: attachments.methods.stage,
+				adopt: attachments.methods.adopt,
+				cancel: attachments.methods.cancel,
+				cleanup: attachments.methods.cleanup,
+			} satisfies Record<Exclude<keyof IPromptAttachmentTransferService, "onDynamicProgress">, WebGuiMethod>,
+			{
+				dynamicEvents: attachments.dynamicEvents,
+				dispose: attachments.dispose,
+			},
+		),
 	];
 }

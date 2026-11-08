@@ -28,7 +28,7 @@ export function buildGitAutoRefreshWatchPaths(
     "workspacePath" | "repoRoot" | "isGitAvailable" | "isRepository"
   > &
     Partial<Pick<GitRepositorySummary, "autoRefreshWatchPaths">>,
-  systemInfo?: Pick<SystemInfo, "platform"> | null,
+  systemInfo?: (Pick<SystemInfo, "platform"> & { nativeRecursive?: boolean }) | null,
 ): GitAutoRefreshWatchPath[] {
   if (!summary.isGitAvailable || !summary.isRepository) {
     return [];
@@ -36,7 +36,8 @@ export function buildGitAutoRefreshWatchPaths(
 
   const workspacePath = normalizeWatchPath(summary.workspacePath || summary.repoRoot);
   const platform = systemInfo?.platform?.trim();
-  const canWatchWorkspaceRecursively = Boolean(platform && platform !== "linux");
+  const canWatchWorkspaceRecursively = systemInfo?.nativeRecursive === true ||
+    Boolean(platform && platform !== "linux");
   const watchPaths: GitAutoRefreshWatchPath[] = [];
   if (workspacePath.length > 0 && canWatchWorkspaceRecursively) {
     watchPaths.push({

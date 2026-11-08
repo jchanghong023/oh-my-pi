@@ -47,9 +47,11 @@ interface PersonalizationDraftState {
   draft: string;
   saving: boolean;
   filePath: string | null;
+  exists: boolean;
+  detachedDrafts: Array<{ content: string; filePath: string | null }>;
   beginLoad: (service: object) => { generation: number; requestId: number };
   markLoadSuccess: (
-    result: { content: string; filePath: string },
+    result: { content: string; filePath: string; exists?: boolean },
     generation: number,
     requestId: number,
   ) => void;
@@ -69,6 +71,8 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
   draft: "",
   saving: false,
   filePath: null,
+  exists: true,
+  detachedDrafts: [],
   beginLoad: (service) => {
     set((state) => ({
       ...(state.boundService === service
@@ -76,6 +80,9 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
         : {
             generation: state.generation + 1,
             boundService: service,
+            detachedDrafts: state.draft !== state.baseline
+              ? [...state.detachedDrafts, { content: state.draft, filePath: state.filePath }]
+              : state.detachedDrafts,
             readState: "loading" as const,
             baseline: "",
             draft: "",
@@ -95,6 +102,10 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
       return {
         readState: "ready",
         filePath: result.filePath,
+        exists: result.exists !== false,
+        detachedDrafts: state.draft !== state.baseline && !resumeDraft
+          ? [...state.detachedDrafts, { content: state.draft, filePath: state.filePath }]
+          : state.detachedDrafts,
         baseline: result.content,
         draft: resumeDraft ? state.draft : result.content,
         saving: state.saving,
@@ -117,7 +128,7 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
     ),
   endSaveSuccess: (content, generation) =>
     set((state) =>
-      state.generation !== generation ? state : { saving: false, baseline: content },
+      state.generation !== generation ? state : { saving: false, baseline: content, exists: true },
     ),
   endSaveFailure: (generation) =>
     set((state) => (state.generation !== generation ? state : { saving: false })),
@@ -125,8 +136,7 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
 
 /**
  * 个性化（用户自定义指令）编辑页，单层直达：标题（框架渲染）→ 说明 → 直接铺在页面上的编辑器。
- * 唯一事实源是 `~/.zcode/AGENTS.md`（CLI 用户级默认指令，注入所有会话）。
- * 仅桌面本地入口渲染编辑器（Web 远控给本地端指引，不发起任何读写）。
+ * 使用当前连接的 OMP profile 用户级 AGENTS 文件，路径由服务提供。
  * 显式「保存/取消」：保存仅脏态且未超限可用，取消丢弃修改恢复基线；Ctrl/Cmd+S 等价保存。
  * 表单状态在模块级 store，保存中切走分区后写入失败草稿仍可恢复重试。
  * 读取成功前禁用编辑（失败给重试入口）；内容超过 Agent 读取上限（100KB）时阻断保存并提示。
@@ -134,32 +144,15 @@ const usePersonalizationDraftStore = create<PersonalizationDraftState>((set, get
  */
 export function PersonalizationSection({
   settingService,
-  isDesktop = false,
 }: {
   settingService: PersonalizationSettingService;
-  /** 仅桌面本地入口可编辑：手机远控的 base services 可能归属远程 Source
-   *（remoteWorkspaceServiceCollection 把远程 Source 的 settingService 注册进该
-   * workspace 的服务集合，文件路径不是跨机器身份），编辑会写错机器。 */
+  /** Browser and desktop use the same connection-bound instruction service. */
   isDesktop?: boolean;
 }) {
-  // Web 远控不发起任何个性化读写，只给本地桌面端指引（同 WorkspaceFileSearchSection
-  // 的无 workspace 分层先例：提前返回，不挂服务解析 hook 链）。
-  if (!isDesktop) {
-    return <LocalOnlyPersonalizationHint />;
-  }
-  return <DesktopPersonalizationEditor settingService={settingService} />;
+  return <PersonalizationEditor settingService={settingService} />;
 }
 
-function LocalOnlyPersonalizationHint() {
-  const { intl } = useZCodeIntl();
-  return (
-    <p className="text-ui-base leading-6 text-foreground-subtle">
-      {intl.formatMessage({ id: "settings.personalization.localOnly" })}
-    </p>
-  );
-}
-
-function DesktopPersonalizationEditor({
+function PersonalizationEditor({
   settingService,
 }: {
   settingService: PersonalizationSettingService;
@@ -169,6 +162,9 @@ function DesktopPersonalizationEditor({
   const baseline = usePersonalizationDraftStore((state) => state.baseline);
   const draft = usePersonalizationDraftStore((state) => state.draft);
   const saving = usePersonalizationDraftStore((state) => state.saving);
+  const filePath = usePersonalizationDraftStore((state) => state.filePath);
+  const exists = usePersonalizationDraftStore((state) => state.exists);
+  const detachedDrafts = usePersonalizationDraftStore((state) => state.detachedDrafts);
   const beginLoad = usePersonalizationDraftStore((state) => state.beginLoad);
   const markLoadSuccess = usePersonalizationDraftStore((state) => state.markLoadSuccess);
   const markLoadError = usePersonalizationDraftStore((state) => state.markLoadError);
@@ -214,7 +210,7 @@ function DesktopPersonalizationEditor({
 
   const draftBytes = useMemo(() => countUtf8Bytes(draft), [draft]);
   const overLimit = draftBytes > USER_INSTRUCTIONS_MAX_BYTES;
-  const dirty = readState === "ready" && draft !== baseline;
+  const dirty = readState === "ready" && (!exists || draft !== baseline);
   const canSave = dirty && !overLimit && !saving;
 
   return (
@@ -223,6 +219,20 @@ function DesktopPersonalizationEditor({
       <p className="text-ui-base text-foreground-subtle">
         {intl.formatMessage({ id: "settings.personalization.description" })}
       </p>
+      {filePath ? <p className="break-all text-ui-sm text-foreground-subtle">{filePath}</p> : null}
+      {readState === "ready" && !exists ? (
+        <p className="text-ui-sm text-foreground-subtle">
+          AGENTS.md 尚不存在；保存后创建。
+        </p>
+      ) : null}
+      {detachedDrafts.map((detachedDraft, index) => (
+        <div key={`${detachedDraft.filePath ?? ""}:${index}`} className="space-y-2">
+          <p className="break-all text-ui-sm text-foreground-subtle">
+            原目标或连接已变化，保留未保存草稿（不会写入当前目标）：{detachedDraft.filePath}
+          </p>
+          <SettingsFormTextarea value={detachedDraft.content} readOnly className="min-h-32 w-full" />
+        </div>
+      ))}
       {readState === "error" ? (
         <div className="space-y-2">
           <p className="text-ui-base text-foreground-subtle">

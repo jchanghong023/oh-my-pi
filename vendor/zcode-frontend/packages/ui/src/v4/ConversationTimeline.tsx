@@ -271,6 +271,7 @@ export interface ConversationTimelineProps {
   /** 行渲染上下文（theme/codePreviewSettings/workspacePath）；宿主保证引用稳定。 */
   rowContext: ConversationRowRenderContext;
   onFork?: (target: ConversationRowTarget) => void;
+  onRetry?: (target: ConversationRowTarget) => Promise<void> | void;
   onFeedbackChange?: AssistantFeedbackHandler;
   onEdit?: (
     target: ConversationRowTarget,
@@ -362,6 +363,7 @@ function ConversationTimelineImpl({
   scrollMemoryKey = null,
   rowContext,
   onFork,
+  onRetry,
   onFeedbackChange,
   onEdit,
   canLoadOlder = false,
@@ -2075,6 +2077,7 @@ function ConversationTimelineImpl({
                         apiRetry={null}
                         context={rowContext}
                         onFork={onFork}
+                        onRetry={onRetry}
                         onFeedbackChange={onFeedbackChange}
                         onEdit={onEdit}
                         topClearedByTimeline={clearsStatusPanel}
@@ -2107,6 +2110,7 @@ function ConversationTimelineImpl({
                     apiRetry={apiRetry}
                     context={rowContext}
                     onFork={onFork}
+                    onRetry={onRetry}
                     onFeedbackChange={onFeedbackChange}
                     onEdit={onEdit}
                     topClearedByTimeline={sessionStartAtTop && liveUnitIndex === 0}

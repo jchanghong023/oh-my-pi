@@ -10,7 +10,7 @@ import productionConfig from "../../../../vendor/zcode-frontend/preview/vite.con
 import { WEBGUI_RPC_PATH, WEBGUI_SERVER_INFO_PATH } from "../../../../vendor/zcode-frontend/preview/session-info";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
-import { AgentRegistry, createAgentSession } from "../../src/sdk";
+import { AgentRegistry, createAgentSession, type CreateAgentSessionOptions } from "../../src/sdk";
 import type { AgentSession } from "../../src/session/agent-session";
 import { listSessionsReadOnly } from "../../src/session/session-listing";
 import { SessionManager } from "../../src/session/session-manager";
@@ -22,7 +22,26 @@ import {
 	systemChromiumCandidatesForTest,
 } from "../../src/tools/browser/launch";
 import { NativeCwdHost } from "../../src/webgui/native-cwd";
-import { acquireBrowserProject, type BrowserProjectLease } from "../../src/webgui/project-registry";
+import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
+import {
+	cancelPendingInteractions,
+	installNativeWebGuiInteractions,
+	restoreNativeWebGuiInteractions,
+} from "../../src/webgui/native-interactions";
+import {
+	closeWebGuiNativeSessions,
+	enableWebGuiNativeSessions,
+	releaseWebGuiNativeProjects,
+	resumeWebGuiNativeSession,
+	webGuiSessionProject,
+} from "../../src/webgui/native-session-host";
+import {
+	acquireBrowserProject,
+	attachBrowserProjectSession,
+	listBrowserProjects,
+	readBrowserProject,
+	type BrowserProjectLease,
+} from "../../src/webgui/project-registry";
 import {
 	resolveWebGuiProject,
 	WebGuiRequestError,
@@ -30,6 +49,7 @@ import {
 	type WebGuiSocketData,
 } from "../../src/webgui/rpc-server";
 import { readWebGuiSessionInfo } from "../../src/webgui/session-source";
+import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
 import type { ControlledReply, CoreBrowserFixture, NativeBrowserCase } from "./core-browser-types";
@@ -252,6 +272,8 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				let cwdHost: NativeCwdHost | undefined;
 				let page: Page | undefined;
 				let reply: ControlledReply | undefined;
+				const replies = new Set<ControlledReply>();
+				const siblings = new Set<AgentSession>();
 				let restorePrompt: (() => void) | undefined;
 				let caseClosed = false;
 				let native: NativeBrowserCase | undefined;
@@ -268,15 +290,26 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 							rpc = new WebGuiRpcHost();
 						},
 						async () => {
-							reply?.finish();
-							await session?.abort();
+							for (const pending of replies) pending.finish();
+							for (const owned of [session, ...siblings]) {
+								if (!owned) continue;
+								cancelPendingInteractions(owned);
+								await owned.abort({ clearQueuedInputs: true });
+							}
+							await closeWebGuiNativeSessions();
 						},
 						async () => {
 							if (cwdHost) await cwdHost.close();
 							else await lease?.close();
+							await releaseWebGuiNativeProjects();
 						},
 						async () => {
 							restorePrompt?.();
+							for (const sibling of siblings) {
+								restoreNativeWebGuiInteractions(sibling);
+								await sibling.dispose();
+							}
+							if (session) restoreNativeWebGuiInteractions(session);
 							await session?.dispose();
 						},
 						async () => {
@@ -297,8 +330,11 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						}
 					}
 					if (failures.length) throw new AggregateError(failures, "Native browser case cleanup failed");
+					enableWebGuiNativeSessions();
 				};
 				try {
+					activateNativeWebGuiComposition();
+					enableWebGuiNativeSessions();
 					const model = getTestModel("ascend");
 					auth.keys.setRuntime(model.provider, "test-key");
 					const skillFile = path.join(cwd, "skills", "webgui-retained-skill", "SKILL.md");
@@ -308,19 +344,19 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 							"---\nname: webgui-retained-skill\ndescription: Retained native skill\n---\nRead-only fixture instructions.\n",
 						);
 					}
-					({ session } = await createAgentSession({
-						cwd,
+					const isolatedOptions = (): CreateAgentSessionOptions => ({
 						agentDir: cwd,
-						sessionManager: manager,
 						authStorage: auth,
 						modelRegistry: new ModelRegistry(auth, path.join(cwd, "models.yml")),
 						model,
 						settings: Settings.isolated({
 							"compaction.enabled": false,
 							"async.enabled": false,
+							"retry.enabled": false,
 							"memory.backend": "off",
 						}),
-						toolNames: [],
+						toolNames: ["ask"],
+						interactivePrompts: true,
 						disableExtensionDiscovery: true,
 						bindProcessState: false,
 						offline: true,
@@ -332,7 +368,6 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 										description: "Retained native skill",
 										filePath: skillFile,
 										baseDir: path.dirname(skillFile),
-										// The file belongs to this case's isolated agentDir; settings initially show user skills.
 										source: "user",
 									},
 								]
@@ -346,7 +381,13 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						enableLsp: false,
 						taskDepth: 1,
 						agentId: "SubAgent",
-					}));
+					});
+					const createIsolatedSession = async (sessionManager: SessionManager, directory = cwd) => {
+						const result = await createAgentSession({ ...isolatedOptions(), cwd: directory, sessionManager });
+						installNativeWebGuiInteractions(result.session, { setToolUIContext: result.setToolUIContext });
+						return result.session;
+					};
+					session = await createIsolatedSession(manager);
 					const activeSession = session;
 					// No accidental provider/network call is possible, even before a scenario installs its reply.
 					activeSession.agent.streamFn = () => {
@@ -358,6 +399,16 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						allowLan: false,
 						nativeSession: activeSession,
 					});
+					const contextFor = (target: AgentSession): WebGuiServiceContext => {
+						const project = webGuiSessionProject(target);
+						return {
+							connectionId: `core-${target.sessionId}`,
+							projectId: project.projectId,
+							workspacePath: project.root,
+							nativeSession: target,
+							signal: new AbortController().signal,
+						};
+					};
 					page = await sharedBrowser.newPage();
 					reportBrowserErrors(page);
 					page.setDefaultTimeout(20_000);
@@ -382,12 +433,12 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 								await historical.close();
 							}
 						},
-						setReply(prefix, suffix) {
+						setReply(prefix, suffix, target = activeSession) {
 							const began = Promise.withResolvers<void>();
 							const finished = Promise.withResolvers<void>();
 							const barrier = Promise.withResolvers<void>();
-							const mock = createMockModel({ responses: [{ content: [prefix + suffix] }] });
-							activeSession.agent.streamFn = (selectedModel, context, options) => {
+							const mock = createMockModel({ handler: { content: [prefix + suffix] } });
+							target.agent.streamFn = (selectedModel, context, options) => {
 								const stream = new AssistantMessageEventStream();
 								void (async () => {
 									for await (const event of mock.stream(selectedModel, context, options)) {
@@ -405,11 +456,34 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 												partial: { ...event.partial, content: [{ type: "text", text: prefix }] },
 											});
 											began.resolve();
-											await barrier.promise;
+											// A paused provider must settle when the real native run is cancelled.
+											await new Promise<void>(resolve => {
+												const abort = () => resolve();
+												if (options?.signal?.aborted) return resolve();
+												options?.signal?.addEventListener("abort", abort, { once: true });
+												void barrier.promise.then(() => {
+													options?.signal?.removeEventListener("abort", abort);
+													resolve();
+												});
+											});
+											if (options?.signal?.aborted) {
+												stream.push({
+													type: "error",
+													reason: "aborted",
+													error: {
+														...event.partial,
+														stopReason: "aborted",
+														content: [{ type: "text", text: prefix }],
+													},
+												});
+												await target.waitForIdle();
+												finished.resolve();
+												return;
+											}
 											stream.push({ ...event, delta: suffix });
 										} else stream.push(event);
 									}
-									await activeSession.waitForIdle();
+									await target.waitForIdle();
 									finished.resolve();
 								})().catch(error => {
 									stream.fail(error);
@@ -419,7 +493,41 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 								return stream;
 							};
 							reply = { began: began.promise, finished: finished.promise, finish: () => barrier.resolve() };
+							replies.add(reply);
 							return reply;
+						},
+						setFailure(reason, target = activeSession) {
+							const mock = createMockModel({ responses: [{ stopReason: "error", errorMessage: reason }] });
+							target.agent.streamFn = mock.stream;
+						},
+						sessionFor(sessionId) {
+							const resident = listBrowserProjects()
+								.flatMap(project => [...(project.nativeSessions ?? [])])
+								.find(candidate => candidate.sessionId === sessionId && !candidate.isDisposed);
+							if (!resident) throw new Error(`No resident fixture session: ${sessionId}`);
+							return resident;
+						},
+						async createSibling() {
+							const sibling = await createIsolatedSession(SessionManager.create(cwd, historyDir));
+							siblings.add(sibling);
+							sibling.agent.streamFn = () => {
+								throw new Error("Sibling needs a controlled reply");
+							};
+							const project = readBrowserProject(lease!.projectId)!;
+							attachBrowserProjectSession(project.projectId, project.ownerId, sibling);
+							return sibling;
+						},
+						contextFor,
+						async resumeHistory(sessionId) {
+							const resident = await resumeWebGuiNativeSession(
+								contextFor(activeSession),
+								sessionId,
+								isolatedOptions(),
+							);
+							resident.agent.streamFn = () => {
+								throw new Error("Continued history needs a controlled reply");
+							};
+							return resident;
 						},
 						rejectNextPrompt(reason) {
 							if (restorePrompt) throw new Error("An admission rejection is already armed");

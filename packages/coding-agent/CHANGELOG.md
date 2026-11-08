@@ -7,9 +7,12 @@
 - Open WebGUI with `/webgui` or `omp webgui` from source or packaged OMP; enter `/webgui` again to close this instance's web service and restore terminal input.
 - Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels.
 - Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
-- Read native OMP session histories and send basic text messages with streaming replies synchronized across connected WebGUI browsers, without changing the original TUI.
+- Create native development sessions from standalone WebGUI, choose or create projects, and run sessions independently without replacing ordinary OMP or TUI execution.
 - Inspect native subagent conversations and observed task/workpool ancestry, status, actors and outputs without starting another execution engine.
 - Browse native workspace files, Git changes/history and effective Skills through read-only WebGUI adapters.
+- Answer native questions, upload files and images, reference files with `@`, queue or steer follow-ups, edit prompts, and retry failed replies in WebGUI.
+- Use native commands and effective Skills from the web composer, and view, edit and save the current profile's user AGENTS.md.
+- Refresh workspace files and Git changes automatically, and settle all owned sessions and resources before exiting WebGUI.
 
 ### Changed
 
@@ -38,6 +41,8 @@
 
 ### Fixed
 
+- Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.
+- Cancel native Dev requirements faster while preserving unrelated staged changes.
 - Restore WebGUI startup, settings navigation and automation-page rendering after product-only interface removal; keep unbound capabilities explicitly unavailable.
 - Preserve project and task-group identity when resending recovered commands; retain visible Provider save/delete errors and current automation edits.
 - Keep RPC subscriptions and pending requests consistent across initialization, cancellation, timeout and re-subscription.
@@ -50,7 +55,7 @@
 - Report unbound provider/configuration reads as unavailable instead of returning empty native configuration.
 - Fix standalone Web license-resource delivery and remove service-package exports that pointed to absent host-only implementations.
 - Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
-- Open WebGUI on Firefox 68 without a blank page or collapsed layout, while retaining the same production resources for Chrome.
+- Open WebGUI and render native assistant replies on Firefox 68 without a blank page or collapsed layout, using the same production resources as Chrome.
 - Restore Firefox 68 code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
 - Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.

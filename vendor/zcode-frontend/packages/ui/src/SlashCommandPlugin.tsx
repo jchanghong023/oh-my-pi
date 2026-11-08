@@ -23,6 +23,7 @@ import {
   KEY_TAB_COMMAND,
 } from "lexical";
 import { useSubagents } from "@/hooks/useSubagents.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useSkills } from "@/hooks/useSkills.js";
 import { buildSlashApplyMentionPayload } from "@/lib/slashApplyMentionPayload.js";
 import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
@@ -70,6 +71,7 @@ export function SlashCommandPlugin({
 }: SlashCommandPluginProps & { provider: ZCodeProvider }) {
   const [editor] = useLexicalComposerContext();
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
   const [activeTrigger, setActiveTrigger] = useState<ActivePromptInputTrigger | null>(null);
   // 远程 workspace 的 slashCommands 写在 workspaceIdentity 桶。
   // 这里只按 workspacePath 读取会落到 path 桶，表现为 ZCode Agent 已收到 available_commands_update 但 / 面板为空。
@@ -93,29 +95,42 @@ export function SlashCommandPlugin({
   const dismissedSignatureRef = useRef<string | null>(null);
   const activeSignatureRef = useRef<string | null>(null);
   const activeTokenRef = useRef<ActivePromptInputTokenSnapshot | null>(null);
+  const cliSuggestions = useMemo(
+    () => buildSlashSuggestions(commands, { includeNativeCommands: nativeHostAvailable }),
+    [commands, nativeHostAvailable],
+  );
   const commandSuggestions = useMemo(() => {
     const excluded = new Set((excludedCommandNames ?? []).map(normalizeSlashCommandValue));
     const recoveryNames = new Set(
       appCommands?.filter((command) => command.recovery).map((command) => command.value),
     );
-    const cliSuggestions = buildSlashSuggestions(commands).filter(
-      (item) => !excluded.has(item.value) && !recoveryNames.has(item.value),
+    const commandSuggestions = cliSuggestions.filter(
+      (item) =>
+        !(nativeHostAvailable && item.value.startsWith("skill:")) &&
+        !excluded.has(item.value) &&
+        !recoveryNames.has(item.value),
     );
     // App 层命令追加在 CLI catalog 之后展示；CLI 已提供同名命令时以 CLI 为准，避免遮蔽。
-    const cliValues = new Set(cliSuggestions.map((item) => item.value));
+    const cliValues = new Set(commandSuggestions.map((item) => item.value));
     const appSuggestions = buildAppSlashCommandSuggestions(appCommands ?? []).filter(
       (item) => !cliValues.has(item.value) && !excluded.has(item.value),
     );
-    return [...cliSuggestions, ...appSuggestions];
-  }, [appCommands, commands, excludedCommandNames]);
-  const subagentSuggestions = useMemo(() => buildSubagentSuggestions(agents), [agents]);
-  const skillSuggestions = useMemo(
-    () =>
-      buildSkillSuggestions(
-        filterSkillsForProvider(skills, provider).filter((skill) => skill.enabled),
-      ),
-    [provider, skills],
-  );
+    return [...commandSuggestions, ...appSuggestions];
+  }, [appCommands, cliSuggestions, excludedCommandNames, nativeHostAvailable]);
+  const subagentSuggestions = useMemo(() => nativeHostAvailable ? [] : buildSubagentSuggestions(agents), [agents, nativeHostAvailable]);
+  const skillSuggestions = useMemo(() => {
+    if (nativeHostAvailable) {
+      // Keep canonical /skill:* insertion and command availability, but admit
+      // only skills readable in the confirmed selected session's native catalog.
+      const names = new Set(skills.filter((skill) => skill.enabled).map((skill) => skill.name));
+      return cliSuggestions.filter(
+        (item) => item.value.startsWith("skill:") && names.has(item.value.slice("skill:".length)),
+      );
+    }
+    return buildSkillSuggestions(
+      filterSkillsForProvider(skills, provider).filter((skill) => skill.enabled),
+    );
+  }, [cliSuggestions, provider, skills, nativeHostAvailable]);
   const filteredCommandSuggestions = useMemo(
     () => filterPromptInputSuggestions(commandSuggestions, activeTrigger?.query ?? null),
     [commandSuggestions, activeTrigger?.query],

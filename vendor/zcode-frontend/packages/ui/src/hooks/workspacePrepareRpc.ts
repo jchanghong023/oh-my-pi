@@ -13,6 +13,7 @@ import { zcodeWorkspacePresentationToConfigOptions } from "@/lib/zcodeSessionPro
 export async function prepareWorkspaceWithZCodeSessionService(params: {
   workspacePath: string;
   workspaceIdentity?: string;
+  sessionId?: string;
   provider: ZCodeProvider;
   zcodeSessionService: Pick<IZCodeSessionService, "readWorkspacePresentation">;
 }): Promise<ZCodeWorkspacePrepareResult> {
@@ -28,6 +29,7 @@ export async function prepareWorkspaceWithZCodeSessionService(params: {
     presentation = await params.zcodeSessionService.readWorkspacePresentation({
       workspacePath: params.workspacePath,
       workspaceIdentity: params.workspaceIdentity,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     });
   } catch (error) {
     logger.warn("[zcode-workspace-presentation] readWorkspacePresentation failed", {

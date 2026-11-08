@@ -43,6 +43,7 @@ import { ProjectSidebarListHeader } from "@/project-sidebar/ProjectSidebarListHe
 import { ProjectSidebarNavigation } from "@/project-sidebar/ProjectSidebarNavigation.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
+import { useNativeHostAvailable, useNativeProjectNavigation } from "@/hooks/useBackendBusinessAvailability.js";
 import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
@@ -70,6 +71,8 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
   const { tree, pin } = useProjectPinIntent(authoritativeTree);
   const onSelectTask = useProjectTaskNavigation(props, tree, remoteService);
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const navigateNativeProject = useNativeProjectNavigation();
   const tabStore = useTabStoreApi();
   const setTheme = useZCodeStore((state) => state.setTheme);
   const { view, setView } = preferences;
@@ -87,19 +90,35 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
     ),
   );
   const { openFiles, openTaskFiles } = useProjectFileTree(props, directory, remoteService);
+  const openProjectFiles = useCallback(async (project: VirtualProject, rootPath: string) => {
+    if (nativeHostAvailable && rootPath !== props.workspacePath) {
+      if (!navigateNativeProject) throw new Error("Project navigation is unavailable.");
+      await navigateNativeProject(rootPath, false, false, true);
+      return;
+    }
+    await openFiles(project, rootPath);
+  }, [nativeHostAvailable, navigateNativeProject, props.workspacePath, openFiles]);
+  const openNativeTaskFiles: typeof openTaskFiles = useCallback(async (task, remoteSessionId) => {
+    if (nativeHostAvailable && task.workspacePath !== props.workspacePath) {
+      if (!navigateNativeProject) throw new Error("Project navigation is unavailable.");
+      await navigateNativeProject(task.workspacePath, false, false, true);
+      return;
+    }
+    await openTaskFiles(task, remoteSessionId);
+  }, [nativeHostAvailable, navigateNativeProject, props.workspacePath, openTaskFiles]);
   const taskPresentation = useMemo(
     () => ({
       isWebRemoteControl: props.isWebRemoteControl,
       activeWorkspaceKey: props.workspaceIdentity?.trim() || props.workspacePath,
       onPin: pin,
-      onOpenTaskFiles: openTaskFiles,
+      onOpenTaskFiles: openNativeTaskFiles,
     }),
     [
       props.isWebRemoteControl,
       props.workspacePath,
       props.workspaceIdentity,
       pin,
-      openTaskFiles,
+      openNativeTaskFiles,
     ],
   );
   const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
@@ -163,7 +182,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
       isWebRemoteControl={props.isWebRemoteControl}
       onCreateTask={props.onCreateTask}
       onEdit={setEditor}
-      onViewFiles={openFiles}
+      onViewFiles={openProjectFiles}
     />
   );
   const openSettings = useCallback(() => {
@@ -222,7 +241,9 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                             onSelect={onSelectTask}
                             refresh={refresh}
                             onCreate={() => action(() => start())}
-                            onAddProject={() => setCreating(true)}
+                            onAddProject={() => nativeHostAvailable
+                              ? props.onOpenFolderFromWorkspaceMenu()
+                              : setCreating(true)}
                             hasExpandedProjects={hasExpandedProjects}
                             canToggleProjects={expandableProjects.length > 0}
                             onToggleProjects={() =>

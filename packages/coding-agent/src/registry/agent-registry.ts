@@ -191,6 +191,11 @@ export class AgentRegistry implements AgentRegistryApi {
 		return AgentRegistry.#scope.getStore();
 	}
 
+	/** Compare the installed singleton without creating it or consulting the current scope. */
+	static isProcessGlobal(registry: AgentRegistryApi): boolean {
+		return AgentRegistry.#global === registry;
+	}
+
 	/** The scoped or installed registry, lazily a local registry unless a worker installed a proxy. */
 	static global(): AgentRegistryApi {
 		const scoped = AgentRegistry.scoped();

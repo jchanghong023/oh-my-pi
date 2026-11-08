@@ -63,6 +63,14 @@ export interface RootProps {
   responsiveBrowserLayout?: boolean;
   /** Backend account, Agent and configuration business bindings are available; defaults to true. */
   backendBusinessAvailable?: boolean;
+  /** Native OMP host operations, independent of ZCode account/cloud capabilities. */
+  nativeHostAvailable?: boolean;
+  /** Display-only starting location for the project chooser, not an opened workspace. */
+  initialDirectoryPath?: string;
+  /** Opens/adopts a real project and reconnects its browser binding; create is explicit only. */
+  onOpenProject?: (
+    path: string, create?: boolean, newSession?: boolean, showFiles?: boolean,
+  ) => Promise<void>;
   /** 是否恢复上次关闭时的标签页，首个窗口 true，新窗口 false */
   restoreSession?: boolean;
   /** Whether the connected OMP settings service is available. */

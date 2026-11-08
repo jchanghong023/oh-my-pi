@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ZCodeSkillReferenceCatalogEntry } from "@zcode/shared";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
+import { useNativeHostAvailable, useNativeWorkspaceSession } from "@/hooks/useBackendBusinessAvailability.js";
 import { logger } from "@/logger.js";
 
 export interface ConversationSkillCatalogState {
@@ -42,6 +43,14 @@ export interface UseSkillsOptions {
  * 旧异步结果一律不得回填。
  */
 export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogState {
+  const nativeHostAvailable = useNativeHostAvailable();
+  const nativeScope = useNativeWorkspaceSession();
+  const nativeReady = !nativeHostAvailable || Boolean(
+    nativeScope?.ready &&
+    options.sessionId &&
+    nativeScope.sessionId === options.sessionId &&
+    nativeScope.workspacePath === options.workspacePath,
+  );
   const resolution = useWorkspaceServicesResolution(
     options.workspacePath,
     options.preferredRemoteSessionId,
@@ -59,7 +68,7 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
   const requestKey = `${workspaceKey}|${remoteSessionId ?? "local"}|${options.sessionId ?? "draft"}|runtime:${runtimeRevision}`;
 
   useEffect(() => {
-    if (!options.enabled || !options.sessionId || !rpcReady) return;
+    if (nativeHostAvailable || !options.enabled || !options.sessionId || !rpcReady) return;
     const subscription = services.zcodeAgentService.onAgentRuntimeRestarted((event) => {
       if (event.workspaceKey !== workspaceKey) return;
       // runtime 重建后 workspace/session key 不变，旧 catalog 会继续命中。
@@ -67,17 +76,17 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
       setRuntimeRevision((current) => current + 1);
     });
     return () => subscription.dispose();
-  }, [options.enabled, options.sessionId, rpcReady, services, workspaceKey]);
+  }, [nativeHostAvailable, options.enabled, options.sessionId, rpcReady, services, workspaceKey]);
 
   // 用 scope 身份隔离渲染：key 切换后的 effect 尚未执行时也只返回空态，避免旧 Session
   // 或旧 remote attachment 的 Skill 在一帧内泄漏到新 Composer。
   const requestScope = useMemo(
     () => ({}),
-    [options.enabled, remoteSessionId, requestKey, rpcReady, services],
+    [nativeHostAvailable, nativeReady, options.enabled, remoteSessionId, requestKey, rpcReady, services],
   );
 
   useEffect(() => {
-    if (!options.enabled || !options.workspacePath || !rpcReady) return;
+    if (!nativeReady || !options.enabled || !options.workspacePath || !rpcReady) return;
     const seq = ++requestSeqRef.current;
     let cancelled = false;
     setScopedState({
@@ -90,8 +99,21 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
       ...(remoteSessionId ? { remoteSessionId } : {}),
       ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     };
-    services.zcodeAgentService
-      .getSkillReferenceCatalog(params)
+    const request = nativeHostAvailable
+      ? services.skillsService.list(params).then((result) => ({
+          authority: "session" as const,
+          skills: result.skills.filter((skill) => skill.enabled).map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            description: skill.description,
+            path: skill.path,
+            scope: skill.scope,
+            enabled: true as const,
+            ...(skill.pluginName !== undefined ? { pluginName: skill.pluginName } : {}),
+          })),
+        }))
+      : services.zcodeAgentService.getSkillReferenceCatalog(params);
+    request
       .then((result) => {
         if (cancelled || seq !== requestSeqRef.current) return;
         setScopedState({
@@ -120,6 +142,8 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
       cancelled = true;
     };
   }, [
+    nativeHostAvailable,
+    nativeReady,
     options.enabled,
     options.sessionId,
     options.workspaceIdentity,
@@ -131,7 +155,7 @@ export function useSkills(options: UseSkillsOptions): ConversationSkillCatalogSt
     services,
   ]);
 
-  if (!options.enabled || !options.workspacePath || !rpcReady || scopedState.scope !== requestScope) {
+  if (!nativeReady || !options.enabled || !options.workspacePath || !rpcReady || scopedState.scope !== requestScope) {
     return EMPTY_STATE;
   }
   return scopedState.value;

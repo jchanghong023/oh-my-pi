@@ -40,6 +40,9 @@ export interface StartTeamDiscussionArgs {
 	settings: Settings;
 	cwd: string;
 	hooks: TeamControllerHooks;
+	signal?: AbortSignal;
+	/** Explicit native host owner; ordinary terminal/ACP/RPC calls retain the main owner. */
+	ownerId?: string;
 }
 
 export interface StartTeamDiscussionResult {
@@ -201,6 +204,7 @@ export function buildRunnerDeps(
 	settings: Settings,
 	cwd: string,
 	isCurrentSession?: () => boolean,
+	parentAgentId = MAIN_AGENT_ID,
 ): TeamRunnerDeps {
 	const sessionId = session.sessionId;
 	const modelRegistry = session.modelRegistry;
@@ -216,7 +220,7 @@ export function buildRunnerDeps(
 		authStorage: modelRegistry.authStorage,
 		sessionFile: session.sessionFile ?? null,
 		artifactsDir: session.sessionManager.getArtifactsDir(),
-		parentAgentId: MAIN_AGENT_ID,
+		parentAgentId,
 		eventBus: session.eventBus,
 		subagentEventBus: session.subagentEventBus,
 		isCurrentSession: isCurrentSession ?? (() => session.sessionId === sessionId),
@@ -245,6 +249,7 @@ async function startTeamDiscussionImpl(
 	args: StartTeamDiscussionArgs,
 ): Promise<StartTeamDiscussionResult> {
 	const { session, settings, hooks } = args;
+	args.signal?.throwIfAborted();
 	const sessionId = session.sessionId;
 	let sessionChanged = false;
 	const isCurrentSession = (): boolean => !sessionChanged && session.sessionId === sessionId;
@@ -327,10 +332,15 @@ async function startTeamDiscussionImpl(
 	let jobId: string | undefined;
 	let unregisterSessionChange: (() => void) | undefined;
 	const sessionAbort = new AbortController();
+	const abortCommand = (): void => {
+		sessionAbort.abort();
+		if (jobId) manager.cancel(jobId);
+	};
+	args.signal?.addEventListener("abort", abortCommand, { once: true });
 	try {
 		// Capture roots, artifacts, models and buses before the manager starts the
 		// asynchronous job; the live AgentSession may later adopt another identity.
-		const runnerDeps = buildRunnerDeps(session, settings, cwd, isCurrentSession);
+		const runnerDeps = buildRunnerDeps(session, settings, cwd, isCurrentSession, args.ownerId);
 		unregisterSessionChange = session.registerSessionChangeCallback(() => {
 			sessionChanged = true;
 			sessionAbort.abort();
@@ -346,6 +356,7 @@ async function startTeamDiscussionImpl(
 					const cleanupSessionChange = (): void => {
 						unregisterSessionChange?.();
 						unregisterSessionChange = undefined;
+						args.signal?.removeEventListener("abort", abortCommand);
 					};
 					signal.addEventListener("abort", cleanupSessionChange, { once: true });
 					if (signal.aborted) cleanupSessionChange();
@@ -510,11 +521,15 @@ async function startTeamDiscussionImpl(
 						cleanupSessionChange();
 					}
 				}),
-			{ ownerId: MAIN_AGENT_ID, suppressDelivery: true },
+			{ ownerId: args.ownerId ?? MAIN_AGENT_ID, suppressDelivery: true },
 		);
-		if (sessionChanged) manager.cancel(jobId);
+		if (sessionChanged || args.signal?.aborted) {
+			sessionAbort.abort();
+			manager.cancel(jobId);
+		}
 	} catch (error) {
 		unregisterSessionChange?.();
+		args.signal?.removeEventListener("abort", abortCommand);
 		logger.warn("Team job registration failed", {
 			component: "team.controller",
 			event: "team_dispatch_failed",

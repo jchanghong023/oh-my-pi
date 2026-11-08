@@ -344,6 +344,12 @@ export type HookInvocationRow = z.infer<typeof hookInvocationRowSchema>;
 // compact.status=cancelled 表示 auto compact 被 stop；失败终态为 failed。
 export const timelineMarkerPayloadSchema = z.union([
   z.object({
+    type: z.literal("nativeNotice"),
+    text: z.string(),
+    level: z.enum(["info", "warning", "error"]),
+    source: z.string().optional(),
+  }),
+  z.object({
     type: z.literal("compact"),
     origin: z.enum(["manual", "auto"]),
     status: z.enum(["running", "success", "failed", "noop", "cancelled"]),

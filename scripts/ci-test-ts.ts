@@ -477,6 +477,13 @@ const forkCodingAgentFiles = new Set([
 	"test/webgui/core-browser.e2e.test.ts",
 	"test/webgui/native-chat-history.test.ts",
 	"test/webgui/native-chat-stream.test.ts",
+	"test/webgui/native-attachments.test.ts",
+	"test/webgui/native-interactions.test.ts",
+	"test/webgui/native-browser-release.test.ts",
+	"test/webgui/project-ownership.test.ts",
+	"test/registry/agent-lifecycle.test.ts",
+	"test/agent-session-dispose-releases-memory.test.ts",
+	"test/sharpshooter-extract.test.ts",
 	"test/webgui/native-subagents.test.ts",
 	"test/webgui/native-child-ui-contract.test.ts",
 	"test/webgui/native-task-runs.test.ts",
@@ -489,7 +496,11 @@ const forkCodingAgentFiles = new Set([
 	"test/webgui/packaged-assets.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {
-	"packages/agent": ["test/discovery-per-call-context.test.ts", "test/output-budget.test.ts"],
+	"packages/agent": [
+		"test/discovery-per-call-context.test.ts",
+		"test/output-budget.test.ts",
+		"test/pause-gate.test.ts",
+	],
 	"packages/utils": ["test/dirs-cache.test.ts", "test/logger-contract.test.ts"],
 	"packages/ai": ["test/proxy.test.ts"],
 	"packages/natives": ["test/dev-workbench-vcs.test.ts"],

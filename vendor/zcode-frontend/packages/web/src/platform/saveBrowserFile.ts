@@ -4,7 +4,7 @@ const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 const DOWNLOAD_URL_RETENTION_MS = 40_000;
 
-async function readDownloadBytes(url: string): Promise<ArrayBuffer> {
+async function readDownloadBytes(url: string): Promise<{ data: ArrayBuffer; contentType: string }> {
   const parsed = new URL(url, window.location.href);
   if (!["https:", "http:", "data:", "blob:"].includes(parsed.protocol))
     throw new Error("download_failed");
@@ -16,10 +16,11 @@ async function readDownloadBytes(url: string): Promise<ArrayBuffer> {
     if (!response.ok) throw new Error("download_failed");
     if (Number(response.headers.get("content-length")) > MAX_DOWNLOAD_BYTES)
       throw new Error("file_too_large");
+    const contentType = response.headers.get("content-type") || "application/octet-stream";
     if (!response.body) {
       const data = await response.arrayBuffer();
       if (data.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file_too_large");
-      return data;
+      return { data, contentType };
     }
     reader = response.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -37,7 +38,7 @@ async function readDownloadBytes(url: string): Promise<ArrayBuffer> {
       data.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return data.buffer;
+    return { data: data.buffer, contentType };
   } finally {
     clearTimeout(timeout);
     controller.abort();
@@ -50,8 +51,10 @@ export async function saveBrowserFile(payload: SaveFileRequest): Promise<SaveFil
   let anchor: HTMLAnchorElement | undefined;
   let dispatched = false;
   try {
-    const data = payload.data ?? (await readDownloadBytes(payload.sourceUrl));
-    if (data.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file_too_large");
+    const download = payload.data
+      ? { data: payload.data, contentType: "application/octet-stream" }
+      : await readDownloadBytes(payload.sourceUrl);
+    if (download.data.byteLength > MAX_DOWNLOAD_BYTES) throw new Error("file_too_large");
     // 文件名来自上游产物；去掉路径和平台非法字符，避免浏览器把它当作目标目录。
     const leafName = payload.suggestedName.split(/[\\/]/).pop() || "download";
     const filename =
@@ -60,7 +63,7 @@ export async function saveBrowserFile(payload: SaveFileRequest): Promise<SaveFil
       )
         .join("")
         .trim() || "download";
-    objectUrl = URL.createObjectURL(new Blob([data], { type: "application/octet-stream" }));
+    objectUrl = URL.createObjectURL(new Blob([download.data], { type: download.contentType }));
     anchor = document.createElement("a");
     anchor.href = objectUrl;
     anchor.download = filename;

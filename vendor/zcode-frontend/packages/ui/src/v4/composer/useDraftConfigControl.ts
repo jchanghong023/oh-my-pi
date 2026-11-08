@@ -38,6 +38,7 @@ import {
 import { resolveAppFollowupMode } from "@/v4/composer/followupModeSettings.js";
 import { logger } from "@/logger.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 
 /** 目录水合单飞（per workspaceKey）：draft、已有 session 和严格模式双挂载共享一次 RPC。 */
 const workspaceCatalogHydrationFlights = new Map<string, Promise<void>>();
@@ -170,6 +171,7 @@ export function useDraftConfigControl(params: {
   provider?: ZCodeProvider;
   /** 会话切换恢复文字/模型，权限和 Plan 使用当前快照。 */
   sessionId: string | null;
+  modelSessionId?: string | null;
   /** 仅匹配当前 Session 的首份投影可用作初始化；null 表示还没恢复完成。 */
   sessionConfig?: Partial<SessionConfigState> | null;
   /** provider registry 已通过 renderer readiness 门禁后才允许拉起 Agent。 */
@@ -181,11 +183,13 @@ export function useDraftConfigControl(params: {
     workspaceIdentity,
     provider,
     sessionId,
+    modelSessionId = sessionId,
     sessionConfig,
     agentStartupAllowed = true,
     modelSelectionService,
   } = params;
   const workspaceKey = workspaceIdentity?.trim() || workspacePath;
+  const nativeHostAvailable = useNativeHostAvailable();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
   const zcodeSessionService = useZCodeSessionService(workspacePath, null, workspaceIdentity);
   const { settings: sharedSettings } = useSettings();
@@ -255,6 +259,7 @@ export function useDraftConfigControl(params: {
     true,
     "remote-waiting",
     {
+      ...(nativeHostAvailable && modelSessionId ? { sessionId: modelSessionId } : {}),
       selection: draft.modelSelection ?? null,
     },
   );
@@ -330,7 +335,9 @@ export function useDraftConfigControl(params: {
     (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
   const effectiveSelection =
     nativeModelView?.nativeSession !== undefined
-      ? (nativeModelView.nativeSession ? nativeModelView.preferredSelection : undefined)
+      ? (nativeModelView.nativeSession?.sessionId === modelSessionId
+          ? nativeModelView.preferredSelection
+          : undefined)
       : modelSelectionView && !sessionConfigPending
         ? (modelSelectionView.effectiveSelection ?? undefined)
         : draft.modelSelection;
@@ -850,6 +857,7 @@ export function useDraftConfigControl(params: {
   // 目录已 ready（reload/广播/上次水合写过）则跳过；否则读取最小 workspace presentation。
   useEffect(() => {
     const isDraft = sessionId === null;
+    const flightKey = nativeHostAvailable ? JSON.stringify([workspaceKey, modelSessionId]) : workspaceKey;
     const store = useZCodeSessionStore.getState();
     const workspaceState = store.getWorkspaceState(workspacePath, workspaceIdentity);
     if (!agentStartupAllowed) {
@@ -864,7 +872,7 @@ export function useDraftConfigControl(params: {
       (option) => option.category === "mode" && option.type === "select",
     );
     const hasSlashCommandCatalog = workspaceState.slashCommands.length > 0;
-    const shouldHydrateCatalog = shouldHydrateWorkspaceCatalog({
+    const shouldHydrateCatalog = nativeHostAvailable || shouldHydrateWorkspaceCatalog({
       configOptions,
       sessionId,
       slashCommands: workspaceState.slashCommands,
@@ -873,11 +881,11 @@ export function useDraftConfigControl(params: {
       catalogScope: isDraft ? "draft" : "known-session",
       hasModePresentation,
       hasSlashCommandCatalog,
-      flightInProgress: workspaceCatalogHydrationFlights.has(workspaceKey),
+      flightInProgress: workspaceCatalogHydrationFlights.has(flightKey),
       configOptionsStatus: workspaceState.configOptionsStatus,
       workspaceKey,
     });
-    const existingFlight = workspaceCatalogHydrationFlights.get(workspaceKey);
+    const existingFlight = workspaceCatalogHydrationFlights.get(flightKey);
     if (existingFlight) {
       return;
     }
@@ -889,6 +897,7 @@ export function useDraftConfigControl(params: {
     const flight = prepareWorkspaceWithZCodeSessionService({
       workspacePath,
       workspaceIdentity,
+      ...(nativeHostAvailable && modelSessionId ? { sessionId: modelSessionId } : {}),
       provider: displayProvider,
       zcodeSessionService,
     })
@@ -920,13 +929,15 @@ export function useDraftConfigControl(params: {
         logger.warn(`[v4-workspace-catalog] workspace 目录水合失败: ${String(error)}`);
       })
       .finally(() => {
-        workspaceCatalogHydrationFlights.delete(workspaceKey);
+        workspaceCatalogHydrationFlights.delete(flightKey);
       });
-    workspaceCatalogHydrationFlights.set(workspaceKey, flight);
+    workspaceCatalogHydrationFlights.set(flightKey, flight);
   }, [
     agentStartupAllowed,
     displayProvider,
     sessionId,
+    modelSessionId,
+    nativeHostAvailable,
     workspaceIdentity,
     workspaceKey,
     workspacePath,
@@ -944,15 +955,16 @@ export function useDraftConfigControl(params: {
         (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
       if (catalog?.nativeSession !== undefined) {
         const nativeSession = catalog.nativeSession;
-        if (!nativeSession?.chatAvailable || !sessionId ||
-            nativeSession.sessionId !== sessionId ||
+        if (!nativeSession?.chatAvailable || !modelSessionId ||
+            nativeSession.sessionId !== modelSessionId ||
+            nativeSession.workspacePath !== workspacePath ||
             modelSelectionRead.state.status !== "ready" || !modelSelectionService?.setSessionModel) {
           return Promise.reject(new Error("Continue this native session before changing its model"));
         }
         // The native session owns this choice; never project the browser's request as success.
         return modelSelectionService
           .setSessionModel({
-            sessionId,
+            sessionId: modelSessionId,
             providerId: modelProvider,
             modelId: model,
           })
@@ -978,6 +990,7 @@ export function useDraftConfigControl(params: {
     [
       modelSelectionView,
       sessionId,
+      modelSessionId,
       modelSelectionRead.state,
       modelSelectionService,
       modelSelectionRead.refresh,

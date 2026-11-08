@@ -11,8 +11,13 @@ import { cn } from "@/components/lib/utils.js";
 export function createDirectoryBrowserReadParams(
   path: string,
   showHiddenDirectories: boolean,
-): { path: string; includeHidden?: boolean } {
-  return showHiddenDirectories ? { path, includeHidden: true } : { path };
+  directoriesOnly = false,
+): { path: string; includeHidden?: boolean; directoriesOnly?: boolean } {
+  return {
+    path,
+    ...(showHiddenDirectories ? { includeHidden: true } : {}),
+    ...(directoriesOnly ? { directoriesOnly: true } : {}),
+  };
 }
 
 export function filterDirectoryBrowserEntries(entries: FileEntry[]): FileEntry[] {
@@ -59,6 +64,9 @@ export function DirectoryBrowser({
   selectLabel,
   selecting,
   formatError,
+  onCreate,
+  directoriesOnly = false,
+  selectionError,
 }: {
   services: {
     fileService: Pick<IServiceAccessor["fileService"], "readdir">;
@@ -75,6 +83,9 @@ export function DirectoryBrowser({
   selectLabel?: string;
   selecting?: boolean;
   formatError?: (error: unknown) => string;
+  onCreate?: (path: string) => void;
+  directoriesOnly?: boolean;
+  selectionError?: string;
 }) {
   const [currentPath, setCurrentPath] = useState("");
   const [inputPath, setInputPath] = useState("");
@@ -129,7 +140,7 @@ export function DirectoryBrowser({
     setError("");
     try {
       const result = await services.fileService.readdir(
-        createDirectoryBrowserReadParams(path, nextShowHiddenDirectories),
+        createDirectoryBrowserReadParams(path, nextShowHiddenDirectories, directoriesOnly),
       );
       if (!requestGuardRef.current.isCurrent(requestId)) {
         return;
@@ -197,7 +208,7 @@ export function DirectoryBrowser({
   };
 
   const handleSelectCurrentPath = () => {
-    const selectedPath = currentPath.trim();
+    const selectedPath = (directoriesOnly ? inputPath : currentPath).trim();
     if (!selectedPath || loading || selecting) {
       return;
     }
@@ -227,6 +238,7 @@ export function DirectoryBrowser({
         <form onSubmit={handleInputSubmit} className="flex flex-col gap-2 sm:flex-row">
           <Input
             type="text"
+            data-testid="directory-browser-path"
             aria-label={intl.formatMessage({
               id: "directoryBrowser.pathPlaceholder",
             })}
@@ -267,7 +279,9 @@ export function DirectoryBrowser({
       </div>
 
       {/* 错误提示 */}
-      {error ? <div className="text-ui-base text-destructive">{error}</div> : null}
+      {error || selectionError ? (
+        <div className="text-ui-base text-destructive" role="alert">{selectionError || error}</div>
+      ) : null}
 
       {/* 目录列表；embedded 时外层 dir-shell 已带边框，列表不再叠加内层边框（原型单层框内分区）。 */}
       <div
@@ -329,7 +343,7 @@ export function DirectoryBrowser({
       {/* Bugfix: 非嵌入模式之前只能继续进入子目录，没有确认当前目录的路径。
             Web 目录浏览器作为独立选择器使用时因此永远拿不到 onSelect 结果。
             这里把确认动作收口到弹窗 footer，选择当前浏览路径并交回上层。 */}
-      <div className="mt-3 flex shrink-0 justify-end gap-2">
+      <div className="mt-3 flex shrink-0 flex-wrap justify-end gap-2">
         <Button
           type="button"
           variant="secondary"
@@ -339,6 +353,19 @@ export function DirectoryBrowser({
         >
           {intl.formatMessage({ id: "common.cancel" })}
         </Button>
+        {onCreate ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="lg"
+            className="h-10 min-w-0 px-5 text-ui-base"
+            data-testid="directory-browser-create"
+            disabled={!inputPath.trim() || selecting}
+            onClick={() => onCreate(inputPath.trim())}
+          >
+            {intl.formatMessage({ id: "project.create" })}
+          </Button>
+        ) : null}
         <Button
           type="button"
           size="lg"

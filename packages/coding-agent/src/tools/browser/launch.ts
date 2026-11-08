@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Process } from "@oh-my-pi/pi-natives";
 import {
 	$which,
 	getPuppeteerDir,
@@ -604,6 +605,12 @@ export interface HeadlessLaunchFeatures {
 export interface LaunchHeadlessOptions extends HeadlessLaunchFeatures {
 	headless: boolean;
 	viewport?: { width: number; height: number; deviceScaleFactor?: number };
+	/** Explicit installed executable; bypasses all executable resolution and download paths. */
+	executablePath?: string;
+	/** Child-only environment override; omitted to preserve Puppeteer's inherited environment. */
+	env?: NodeJS.ProcessEnv;
+	/** Forward browser stdout/stderr for opt-in startup diagnostics, including pre-connection failures. */
+	dumpio?: boolean;
 	/** Additional Chromium arguments merged with the centralized launch defaults. */
 	args?: readonly string[];
 	/** Additional exact Puppeteer default arguments to suppress. */
@@ -708,11 +715,13 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 		// A reused profile can hold the file of a browser that was killed.
 		const staleActivePort = pipe ? await readActivePort(activePortFile) : undefined;
 		if (userDataDir) await seedOwnedProfilePreferences(userDataDir);
-		const executablePath = await ensureChromiumExecutable();
+		const executablePath = opts.executablePath ?? (await ensureChromiumExecutable());
 		const browser = await puppeteer.launch({
 			headless: opts.headless,
 			defaultViewport: opts.headless ? initialViewport : null,
 			executablePath,
+			...(opts.env === undefined ? {} : { env: opts.env }),
+			...(opts.dumpio === undefined ? {} : { dumpio: opts.dumpio }),
 			args: launchArgs,
 			ignoreDefaultArgs: [
 				...new Set([...stealthIgnoreDefaultArgs(executablePath), ...(opts.ignoreDefaultArgs ?? [])]),
@@ -732,9 +741,55 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 	}
 }
 
-/** Close a browser {@link launchHeadlessBrowser} started, force-killing its process tree when the close hangs. */
-export async function closeLaunchedBrowser(browser: Browser): Promise<void> {
+/** Close a launched browser; strict cleanup confirms owned process exit and rejects unresolved failures. */
+export async function closeLaunchedBrowser(browser: Browser, options?: { strict?: boolean }): Promise<void> {
 	const proc = browser.process();
+	if (options?.strict) {
+		if (!proc || proc.pid === undefined) {
+			throw new Error("Cannot confirm headless browser exit without its owned process");
+		}
+		if (proc.exitCode !== null || proc.signalCode !== null) return;
+		// Pin the owned child before closing its transport: looking up its PID
+		// after it exits could instead find an unrelated replacement process.
+		const ownedProcess = Process.fromPid(proc.pid);
+		if (!ownedProcess) {
+			throw new Error(`Cannot retain owned headless browser process ${proc.pid} for cleanup`);
+		}
+		const processes = [ownedProcess];
+		const visited = new Set([ownedProcess.pid]);
+		for (let index = 0; index < processes.length; index++) {
+			for (const child of processes[index]!.children()) {
+				if (visited.has(child.pid)) continue;
+				visited.add(child.pid);
+				processes.push(child);
+			}
+		}
+		const deadline = Date.now() + HEADLESS_CLOSE_TIMEOUT_MS;
+		try {
+			await withTimeout(browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
+			const exited = await Promise.all(
+				processes.map(process => process.waitForExit({ timeoutMs: Math.max(0, deadline - Date.now()) })),
+			);
+			if (exited.every(Boolean)) return;
+			throw new Error("Timed out waiting for headless browser process exit");
+		} catch (err) {
+			logger.debug("Failed to close headless browser; force-killing", { error: toError(err).message });
+			// Match gracefulKillTreeOnce's existing budgets, but retain its exit
+			// result and the stable identity instead of reopening the PID.
+			const failures: unknown[] = [err];
+			for (const process of processes) {
+				try {
+					if (await process.waitForExit({ timeoutMs: 0 })) continue;
+					if (!(await process.terminate({ gracefulMs: 2000, timeoutMs: 500 })))
+						failures.push(new Error(`Owned headless browser process ${process.pid} did not exit`));
+				} catch (error) {
+					failures.push(error);
+				}
+			}
+			if (failures.length === 1) return;
+			throw new AggregateError(failures, "Timed out terminating owned headless browser process tree");
+		}
+	}
 	try {
 		await withTimeout(browser.close(), HEADLESS_CLOSE_TIMEOUT_MS, "Timed out closing headless browser");
 	} catch (err) {
@@ -875,14 +930,15 @@ export async function resolveSharedBrowserLaunchSpec(opts: {
  * Remove an OMP-owned headless Chromium profile directory, tolerating the brief
  * window on Windows in which Chromium (or an orphaned browser subprocess) still
  * holds the profile lock. The shared temp remover centralizes retry handling
- * for EBUSY/EPERM/ENOTEMPTY; if the directory is still busy afterwards we warn
- * and leave it for a later cleanup pass rather than throwing — a shutdown cleanup
- * failure must never crash the process (issue #7058).
+ * for EBUSY/EPERM/ENOTEMPTY; by default, if the directory is still busy afterwards
+ * we warn and leave it for a later cleanup pass rather than throwing (issue #7058).
+ * Strict cleanup propagates the failure so its owner can retain and retry it.
  */
-export async function removeUserDataDir(dir: string): Promise<void> {
+export async function removeUserDataDir(dir: string, options?: { strict?: boolean }): Promise<void> {
 	try {
 		await removeWithRetries(dir);
 	} catch (error) {
+		if (options?.strict) throw error;
 		logger.warn("Left Chromium profile directory in place after cleanup failure", {
 			dir,
 			error: error instanceof Error ? error.message : String(error),

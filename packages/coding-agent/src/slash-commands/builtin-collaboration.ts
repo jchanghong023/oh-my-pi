@@ -120,10 +120,23 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			if (verb === "dump") {
 				const isRaw = rest.toLowerCase() === "raw";
 				const text = runtime.session.formatAdvisorHistoryAsText({ compact: !isRaw });
+				if ("host" in runtime && text === "") {
+					await runtime.output("Advisor has no history yet.");
+					return commandConsumed({ failed: true });
+				}
 				await runtime.output(text ?? "Advisor is not active for this session.");
+				if (text && "host" in runtime)
+					await (runtime as import("./types").WebGuiSlashCommandRuntime).host.browserAction({
+						action: "copyText",
+						text,
+					});
 				return commandConsumed();
 			}
 			if (verb === "configure") {
+				if ("host" in runtime) {
+					const webgui = runtime as import("./types").WebGuiSlashCommandRuntime;
+					return webgui.host.collaboration.advisor(command, webgui);
+				}
 				await runtime.output(
 					"/advisor configure opens an interactive editor and is only available in the interactive TUI.",
 				);
@@ -188,6 +201,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "export",
 		description: "Export session to HTML file",
 		inlineHint: "[--themes] [path]",
+		handleWebGui: (command, runtime) => runtime.host.collaboration.export(command, runtime),
 		allowArgs: true,
 		handle: async (command, runtime) => {
 			try {
@@ -211,6 +225,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		name: "trace",
 		icon: "stats",
 		description: "Open this session's trace in the stats dashboard",
+		handleWebGui: (command, runtime) => runtime.host.collaboration.trace(command, runtime),
 		handle: async (_command, runtime) => {
 			const sessionFile = runtime.session.sessionFile;
 			if (!sessionFile) {
@@ -263,6 +278,11 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					return commandConsumed();
 				}
 				await runtime.output(formatDumpArchiveReport(archive).join("\n"));
+				if ("host" in runtime)
+					await (runtime as import("./types").WebGuiSlashCommandRuntime).host.browserAction({
+						action: "copyText",
+						text: archive.path,
+					});
 				return commandConsumed();
 			}
 			if (verb) return usage("Usage: /dump [all|anon]", runtime);
@@ -285,6 +305,11 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 					"This file persists on disk and may contain raw context/secrets — treat accordingly.",
 				);
 			await runtime.output(lines.join("\n"));
+			if ("host" in runtime)
+				await (runtime as import("./types").WebGuiSlashCommandRuntime).host.browserAction({
+					action: "copyText",
+					text: lines.join("\n"),
+				});
 			return commandConsumed();
 		},
 		handleTui: async (command, runtime) => {
@@ -300,6 +325,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		name: "share",
 		icon: "share",
 		description: "Share session via an encrypted link (share server or secret gist)",
+		handleWebGui: (command, runtime) => runtime.host.collaboration.share(command, runtime),
 		handle: async (_command, runtime) => {
 			try {
 				const result = await shareSession(runtime.sessionManager, {
@@ -341,6 +367,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			{ name: "stop", description: "Stop sharing" },
 		],
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.collaboration.collab(command, runtime),
 		getTuiAutocompleteDescription: runtime => {
 			const host = runtime.ctx.collabController.host;
 			if (host) {
@@ -474,6 +501,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 			: "Join a shared collab session",
 		inlineHint: intranetCollabEnabled() ? "<username|link>" : "<link>",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.collaboration.join(command, runtime),
 		handleTui: async (command, runtime) => {
 			const ctx = runtime.ctx;
 			clearSubmittedText(runtime);
@@ -514,6 +542,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		name: "leave",
 		icon: "signOut",
 		description: "Leave the collab session",
+		handleWebGui: (command, runtime) => runtime.host.collaboration.leave(command, runtime),
 		getTuiAutocompleteDescription: runtime => {
 			if (runtime.ctx.collabController.host) return "Leave collab: hosting";
 			if (runtime.ctx.collabGuest) return "Leave collab: guest";
@@ -610,6 +639,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "copy",
 		description: "Pick text or code from the conversation to copy",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.collaboration.copy(command, runtime),
 		handleTui: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (!arg) {
@@ -662,6 +692,7 @@ export const BUILTIN_COLLABORATION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpe
 		icon: "globe",
 		description: "Open the last link from the conversation in your browser (or pick one with /copy)",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.collaboration.open(command, runtime),
 		handleTui: async (command, runtime) => {
 			const arg = command.args.trim().toLowerCase();
 			if (arg && arg !== "link" && arg !== "url") {

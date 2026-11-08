@@ -167,7 +167,11 @@ export function GitPane({
     diffGenerationRef.current += 1;
     pendingDiffKeysRef.current.clear();
     setDiffStateByKey({});
-  }, [gitState.revision, workspacePath]);
+    return () => {
+      diffGenerationRef.current += 1;
+      pendingDiffKeysRef.current.clear();
+    };
+  }, [gitService, gitState.revision, gitState.workspaceKey, workspacePath]);
 
   useEffect(() => {
     if (!expandedPath) {

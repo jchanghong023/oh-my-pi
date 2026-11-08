@@ -8,7 +8,7 @@ import type {
 import { resolveContainedPath } from "../discovery/contained-path";
 import { loadSkillPromptBody, type Skill } from "../extensibility/skills";
 import { checkSkillReadAccess, SkillAccessDeniedError } from "../spec-driven/skill-policy";
-import { assertNativeChat } from "./native-chat";
+import { resolveWebGuiSession } from "./native-session-host";
 import type { WebGuiMethod, WebGuiServiceContext } from "./rpc-contract";
 
 function scopeOf(skill: Skill, cwd: string): SkillScope {
@@ -26,8 +26,11 @@ function scopeOf(skill: Skill, cwd: string): SkillScope {
 /** Exposes only the bound session's effective catalog; never scans inactive providers or personal roots. */
 export function createNativeSkillMethods(context: WebGuiServiceContext): Readonly<Record<string, WebGuiMethod>> {
 	return {
-		list: async (): Promise<SkillsListResult> => {
-			const session = assertNativeChat(context);
+		list: async (options?: unknown): Promise<SkillsListResult> => {
+			const sessionId =
+				typeof options === "object" && options !== null && "sessionId" in options ? options.sessionId : undefined;
+			if (sessionId !== undefined && typeof sessionId !== "string") throw new Error("Expected a native session ID");
+			const session = await resolveWebGuiSession(context, sessionId);
 			const manager = session.sessionManager;
 			const cwd = manager.getCwd();
 			const catalog = session.skills;
@@ -78,7 +81,7 @@ export function createNativeSkillMethods(context: WebGuiServiceContext): Readonl
 					...(skill._source?.pluginName !== undefined && { pluginName: skill._source.pluginName }),
 				});
 			}
-			assertNativeChat(context);
+			await resolveWebGuiSession(context, session.sessionId);
 			if (session.sessionManager !== manager || manager.getCwd() !== cwd || session.skills !== catalog) {
 				throw new Error("Native skill catalog changed while it was being read");
 			}

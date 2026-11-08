@@ -76,7 +76,7 @@ import { ConversationWorkflowDigests } from "@/v4/ConversationWorkflowDigests.js
 import { ConversationWorkflowCompletion } from "@/v4/ConversationWorkflowCompletion.js";
 import { resolveWorkflowTurnDigests } from "@/v4/workflowTurnDigests.js";
 import { resolveWorkflowTurnCompletion } from "@/v4/workflowTurnCompletion.js";
-import { ConversationAssistantTextActions } from "@/v4/ConversationRowView.js";
+import { ConversationAssistantTextActions, ConversationRetryAction } from "@/v4/ConversationRowView.js";
 import { readAssistantFeedback } from "@/v4/ConversationRowView.js";
 import type {
   AssistantFeedbackHandler,
@@ -96,6 +96,7 @@ import { formatConversationWorkDuration } from "@/v4/conversationWorkDuration.js
 import { ConversationTurnRow, resolveAssistantCopyText } from "@/v4/ConversationTurnRow.js";
 import { ConversationHookDetailsAction } from "@/v4/ConversationHookDetailsAction.js";
 import { toolCallRowToLegacyNode } from "@/v4/toolCallRowAdapter.js";
+import { resolveToolCallIdentity } from "@/lib/toolIdentity.js";
 
 interface ConversationTurnGroupProps {
   unit: ConversationTurnRenderUnit;
@@ -103,6 +104,7 @@ interface ConversationTurnGroupProps {
   apiRetry?: ApiRetryState | null;
   context: ConversationRowRenderContext;
   onFork?: (target: ConversationRowTarget) => void;
+  onRetry?: (target: ConversationRowTarget) => Promise<void> | void;
   onFeedbackChange?: AssistantFeedbackHandler;
   onEdit?: (
     target: ConversationRowTarget,
@@ -342,10 +344,25 @@ function ConversationAssistantWorkItems({
 }) {
   const showReasoning = context.messageStreamShowReasoning === true;
   const firstReasoningRowId = context.messageStreamFirstReasoningRowId;
+  const nativeDisplayMode = context.nativeDisplayMode;
+  const nativeHiddenTools = useMemo(() => nativeDisplayMode === "compact"
+    ? rows.filter((row) => row.kind === "toolCall" &&
+        resolveToolCallIdentity(toolCallRowToLegacyNode(row).toolCall).family !== "file-write")
+    : [], [nativeDisplayMode, rows]);
+  const visibleRows = useMemo(() => {
+    if (!nativeDisplayMode || nativeDisplayMode === "detailed") return rows;
+    return rows.filter((row) => {
+      if (row.kind === "reasoning") return nativeDisplayMode !== "clean";
+      if (row.kind === "subagent") return false;
+      if (row.kind !== "toolCall") return true;
+      return nativeDisplayMode === "compact" &&
+        resolveToolCallIdentity(toolCallRowToLegacyNode(row).toolCall).family === "file-write";
+    });
+  }, [nativeDisplayMode, rows]);
   const items = useMemo(
     () =>
       buildAssistantWorkRenderItems(
-        rows,
+        visibleRows,
         {
           messageStreamShowReasoning: showReasoning,
           ...(firstReasoningRowId !== undefined
@@ -369,7 +386,7 @@ function ConversationAssistantWorkItems({
       context.toolGroupingTerminalEnabled,
       stageTailIsRunning,
       firstReasoningRowId,
-      rows,
+      visibleRows,
       showReasoning,
     ],
   );
@@ -377,7 +394,7 @@ function ConversationAssistantWorkItems({
   // history 外壳不能在这层投影前创建：当 CUA 消费原 message
   // 或运行中 shell 被延迟分类时，会留下 pt-5 和空的 gap-4 容器。只有确认
   // 内层存在可渲染项后才创建 CollapsibleContent，让外壳与内容一起消失。
-  if (items.length === 0) {
+  if (items.length === 0 && nativeHiddenTools.length === 0) {
     return null;
   }
 
@@ -385,6 +402,13 @@ function ConversationAssistantWorkItems({
   // 取代继承父级 gap-5/gap-2 + 每行 py-2 的双重且不一致的间距。
   const content = (
     <div className="flex flex-col gap-4">
+      {nativeHiddenTools.length > 0 ? (
+        <div data-testid="v4-native-compact-activity" className="line-clamp-2 text-ui-sm text-foreground-subtle">
+          {nativeHiddenTools.slice(-2).map((row) => row.kind === "toolCall" ? (
+            <div key={row.rowId}>{row.toolName} · {row.status}</div>
+          ) : null)}
+        </div>
+      ) : null}
       {items.map((item) =>
         item.kind === "row" ? (
           <ConversationTurnRow
@@ -1106,6 +1130,7 @@ function ConversationTurnGroupImpl({
   apiRetry = null,
   context,
   onFork,
+  onRetry,
   onFeedbackChange,
   onEdit,
   topClearedByTimeline = false,
@@ -1120,7 +1145,7 @@ function ConversationTurnGroupImpl({
   const assistantRowContext = useMemo<ConversationRowRenderContext>(
     () => ({
       ...context,
-      ...(firstReasoningRowId !== undefined
+      ...(!context.nativeHideThinking && firstReasoningRowId !== undefined
         ? { messageStreamFirstReasoningRowId: firstReasoningRowId }
         : {}),
     }),
@@ -1225,6 +1250,9 @@ function ConversationTurnGroupImpl({
     !unit.isRunning &&
     unit.hookInvocations.some((row) => row.executions.some((execution) => execution.didExecute));
   const canForkLatestAssistant = latestAssistantTextRow?.actions?.canFork === true;
+  const retryRow = onRetry
+    ? unit.assistantTextRows.findLast((row) => row.actions?.canRetry === true && row.entityId)
+    : undefined;
   const backgroundResultTitle = resolveBackgroundResultTitle(unit);
   const hasAssistantWorkContent = unit.timelineOnly
     ? unit.assistantWorkRows.length > 0
@@ -1235,6 +1263,7 @@ function ConversationTurnGroupImpl({
     hasAssistantWorkContent ||
     Boolean(unit.header?.fileChanges) ||
     canRenderAssistantActions ||
+    Boolean(retryRow) ||
     hasHookActions ||
     workflowTurnDigests.length > 0;
   const editWorkspaceRewindAvailability = useMemo<EditWorkspaceRewindAvailability>(() => {
@@ -1358,6 +1387,16 @@ function ConversationTurnGroupImpl({
               context={assistantRowContext}
               assistantCodeCommentProjectionEnabled={assistantCodeCommentProjectionEnabled}
             />
+          ) : null}
+          {retryRow?.entityId && onRetry ? (
+            <MessageActions>
+              <ConversationRetryAction
+                key={`${retryRow.rowId}:${retryRow.entityId}`}
+                target={{ rowId: retryRow.rowId, entityId: retryRow.entityId }}
+                onRetry={onRetry}
+                compactForRemoteControl={context.compactForRemoteControl}
+              />
+            </MessageActions>
           ) : null}
           {canRenderAssistantActions && latestAssistantTextRow ? (
             // 文件 summary 是整轮完成后的聚合结果；轮尾工具栏如果跟着

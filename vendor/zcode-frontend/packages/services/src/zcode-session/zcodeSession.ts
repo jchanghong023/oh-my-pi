@@ -26,10 +26,25 @@ export interface ZCodeSessionWorkspaceTarget {
   remoteSessionId?: string;
 }
 
-export type ZCodeSessionReadWorkspacePresentationParams = ZCodeSessionWorkspaceTarget;
+export interface ZCodeSessionReadWorkspacePresentationParams extends ZCodeSessionWorkspaceTarget {
+  sessionId?: string;
+}
 
 export interface ZCodeTaskTarget extends ZCodeSessionWorkspaceTarget {
   sessionId: string;
+}
+
+export interface ZCodeSessionBrowserMediaStateParams extends ZCodeTaskTarget {
+  connectionId?: string;
+  clientId?: string;
+  event: {
+    kind: "record" | "live";
+    mediaId: string;
+    state: "stopped" | "error";
+    downloadStarted?: boolean;
+    fileName?: string;
+    error?: string;
+  };
 }
 
 export interface ZCodeSessionCreateParams extends ZCodeSessionWorkspaceTarget {
@@ -144,6 +159,8 @@ export interface IZCodeSessionService {
   readWorkspacePresentation(
     params: ZCodeSessionReadWorkspacePresentationParams,
   ): Promise<ZCodeWorkspacePresentation>;
+  /** Native WebGUI-only terminal media event, authenticated by its originating connection. */
+  reportBrowserMediaState?(params: ZCodeSessionBrowserMediaStateParams): Promise<{ accepted: true }>;
   createSession(params: ZCodeSessionCreateParams): Promise<ZCodeSessionStateSnapshot>;
   resumeSession(params: ZCodeSessionResumeParams): Promise<ZCodeSessionStateSnapshot>;
   listSessions(params: ZCodeSessionListParams): Promise<ZCodeSessionInfo[]>;

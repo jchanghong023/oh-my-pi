@@ -32,6 +32,7 @@ import type {
 	SlashCommandRuntime,
 	SlashCommandSpec,
 	TuiSlashCommandRuntime,
+	WebGuiSlashCommandRuntime,
 } from "./types";
 
 function formatFreshSessionResult(result: FreshSessionResult): string {
@@ -65,6 +66,8 @@ function formatWorkspaceDirectories(runtime: SlashCommandRuntime, note?: string)
 	return note ? `${note}\n${lines.join("\n")}` : lines.join("\n");
 }
 async function fatalMoveFailure(text: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+	// A browser root and its leases belong to the native host, including failed settlement.
+	if ("host" in runtime) throw new Error(text);
 	await runtime.output(text);
 	await runtime.session.dispose();
 	return commandConsumed();
@@ -135,6 +138,31 @@ async function relocateHeadlessSession(
 	return undefined;
 }
 
+async function relocateWebGuiSession(
+	runtime: WebGuiSlashCommandRuntime,
+	cwd: string,
+): Promise<SlashCommandResult | undefined> {
+	let failure: SlashCommandResult = undefined;
+	let relocationFailed: Error | undefined;
+	try {
+		await runtime.host.moveSession(
+			cwd,
+			async () => {
+				failure = await relocateHeadlessSession(runtime, cwd);
+				if (failure) {
+					relocationFailed = new Error("Session relocation did not complete");
+					throw relocationFailed;
+				}
+			},
+			() => rescopeHeadlessToCwd(runtime, runtime.sessionManager.getCwd()),
+		);
+	} catch (error) {
+		if (relocationFailed && error === relocationFailed) return failure;
+		throw error;
+	}
+	return undefined;
+}
+
 /** Session id `/pin` and `/unpin` act on (the argument's match, else the active session), or the usage result. */
 async function resolvePinTarget(
 	command: ParsedSlashCommand,
@@ -170,6 +198,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		],
 		allowArgs: true,
 		handle: handleSshAcp,
+		handleWebGui: (command, runtime) => handleSshAcp(command, runtime, { nativeTuiOptions: true }),
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleSSHCommand(command.text);
@@ -179,6 +208,10 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "new",
 		icon: "plus",
 		description: "Start a new session",
+		handleWebGui: async (_command, runtime) => {
+			await runtime.host.createNewSession();
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleNewCommand();
@@ -241,6 +274,10 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "delete",
 		icon: "trash",
 		description: "Delete the current session and start a new one",
+		handleWebGui: async (_command, runtime) => {
+			await runtime.host.deleteCurrentSession();
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleDeleteCommand();
@@ -449,6 +486,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Resume a different session",
 		inlineHint: "[session id|@claude|@codex]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.resume(command, runtime),
 		handleTui: async (command, runtime) => {
 			const sessionArg = command.args.trim();
 			clearSubmittedText(runtime);
@@ -515,6 +553,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Ask a side question, or browse this session's BTW history",
 		inlineHint: "[question]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.btw(command, runtime),
 		handleTui: async (command, runtime) => {
 			const question = command.text.slice(`/${command.name}`.length).trim();
 			await runWithDetachedDraft(
@@ -531,6 +570,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Run a full background agent on tangential work",
 		inlineHint: "<work>",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.tan(command, runtime),
 		handleTui: async (command, runtime) => {
 			const work = command.text.slice(`/${command.name}`.length).trim();
 			await runWithDetachedDraft(command, runtime, () => runtime.ctx.handleTanCommand(work, runtime.input?.images), {
@@ -544,6 +584,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Forge a TTSR rule from a complaint to stop a recurring behavior",
 		inlineHint: "<complaint>",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.omfg(command, runtime),
 		handleTui: async (command, runtime) => {
 			if (refuseImages(command, runtime)) return;
 			const complaint = command.text.slice(`/${command.name}`.length).trim();
@@ -557,6 +598,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		description: "Detect and fix project diagnostics with weighted parallel subagents",
 		inlineHint: "[request] [--all]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.cleanse(command, runtime),
 		handleTui: async (command, runtime) => {
 			if (refuseImages(command, runtime)) return;
 			const args = command.text.slice(`/${command.name}`.length).trim();
@@ -603,6 +645,7 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		name: "debug",
 		icon: "bug",
 		description: "Open debug tools selector",
+		handleWebGui: (command, runtime) => runtime.host.lifecycle.debug(command, runtime),
 		handleTui: async (_command, runtime) => {
 			await runtime.ctx.showDebugSelector();
 			clearSubmittedText(runtime);
@@ -783,6 +826,33 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		acpDescription: "Move the current session to a different directory",
 		inlineHint: "[<path>]",
 		allowArgs: true,
+		handleWebGui: async (command, runtime) => {
+			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
+			const input =
+				command.args.trim() ||
+				(await runtime.ui.input("Move session to directory", runtime.sessionManager.getCwd()))?.trim();
+			if (!input) return commandConsumed();
+			const unquoted = input.startsWith('"') && input.endsWith('"') ? input.slice(1, -1) : input;
+			const resolvedPath = resolveToCwd(unquoted, runtime.sessionManager.getCwd());
+			const stat = await fs.stat(resolvedPath).catch(() => undefined);
+			if (stat && !stat.isDirectory()) return usage(`Not a directory: ${resolvedPath}`, runtime);
+			if (!stat) {
+				if (!(await fs.stat(path.dirname(resolvedPath)).catch(() => undefined))?.isDirectory())
+					return usage(`Cannot create "${path.basename(resolvedPath)}": parent directory does not exist`, runtime);
+				if (
+					!(await runtime.ui.confirm(
+						"Create directory?",
+						`"${path.basename(resolvedPath)}" does not exist. Create it?`,
+					))
+				)
+					return commandConsumed();
+				await fs.mkdir(resolvedPath, { recursive: true });
+			}
+			const failure = await relocateWebGuiSession(runtime, resolvedPath);
+			if (failure) return failure;
+			await runtime.output(`Moved to ${runtime.sessionManager.getCwd()}.`);
+			return commandConsumed();
+		},
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot move while streaming.", runtime);
 			if (!command.args) return usage("Usage: /move <path>", runtime);
@@ -814,6 +884,21 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 		acpDescription: "Move this session into a new or existing branch worktree",
 		inlineHint: "[<branch>]",
 		allowArgs: true,
+		handleWebGui: async (command, runtime) => {
+			if (runtime.session.isStreaming) return usage("Cannot create a worktree while streaming.", runtime);
+			const cwd = runtime.sessionManager.getCwd();
+			const worktree = await createSessionWorktree(
+				cwd,
+				runtime.settings,
+				command.args.trim() || defaultSessionWorktreeBranch(),
+			);
+			if (worktree.path !== cwd) {
+				const failure = await relocateWebGuiSession(runtime, worktree.path);
+				if (failure) return failure;
+			}
+			await runtime.output(formatSessionWorktreeSummary(worktree));
+			return commandConsumed();
+		},
 		handle: async (command, runtime) => {
 			if (runtime.session.isStreaming) return usage("Cannot create a worktree while streaming.", runtime);
 			const branch = command.args.trim() || defaultSessionWorktreeBranch();
@@ -910,12 +995,20 @@ export const BUILTIN_LIFECYCLE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> =
 	{
 		name: "exit",
 		description: "Exit the application",
+		handleWebGui: async (_command, runtime) => {
+			await runtime.host.close();
+			return commandConsumed();
+		},
 		handleTui: shutdownHandlerTui,
 	},
 	{
 		name: "restart",
 		icon: "restart",
 		description: "Restart omp with the same launch flags, resuming this session and its running subagents",
+		handleWebGui: async (_command, runtime) => {
+			await runtime.host.restart();
+			return commandConsumed();
+		},
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.restart();

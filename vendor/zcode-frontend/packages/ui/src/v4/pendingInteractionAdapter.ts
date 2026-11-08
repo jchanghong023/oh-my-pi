@@ -98,17 +98,29 @@ export interface V4UserInputViewModel {
   prompt: string;
   freeText: boolean;
   sensitive?: boolean;
+  multiline?: boolean;
+  prefill?: string;
+  placeholder?: string;
+  allowEmpty?: boolean;
+  preserveWhitespace?: boolean;
   options: ReadonlyArray<{ optionId: string; label: string }>;
 }
 
 export function pendingUserInputToViewModel(
   interaction: PendingInteraction & { payload: UserInputRequestPayload },
 ): V4UserInputViewModel {
+  const input = interaction.payload.input && typeof interaction.payload.input === "object"
+    ? interaction.payload.input as Record<string, unknown> : {};
   return {
     interactionId: interaction.interactionId,
     prompt: interaction.payload.prompt,
     freeText: interaction.payload.freeText,
     sensitive: interaction.payload.sensitive,
+    ...(input.multiline === true ? { multiline: true } : {}),
+    ...(typeof input.prefill === "string" ? { prefill: input.prefill } : {}),
+    ...(typeof input.placeholder === "string" ? { placeholder: input.placeholder } : {}),
+    ...(interaction.interactionId.startsWith("webgui-question:")
+      ? { allowEmpty: true, preserveWhitespace: true } : {}),
     options: interaction.payload.options ?? [],
   };
 }

@@ -1073,6 +1073,16 @@ export class ExtensionRunner {
 		return this.#uiContext;
 	}
 
+	/** Scoped host takeover; restoring never overwrites a newer runtime/UI binding. */
+	overrideUIContext(ui: ExtensionUIContext): () => void {
+		const previous = this.#uiContext;
+		const installed = this.#trackUserWait ? trackUserWaits(ui, this.#trackUserWait) : ui;
+		this.#uiContext = installed;
+		return () => {
+			if (this.#uiContext === installed) this.#uiContext = previous;
+		};
+	}
+
 	hasUI(): boolean {
 		return this.#uiContext !== noOpUIContext;
 	}

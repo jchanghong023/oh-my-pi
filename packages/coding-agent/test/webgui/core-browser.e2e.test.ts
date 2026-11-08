@@ -6,7 +6,7 @@ import type { Page } from "puppeteer-core";
 import { createCoreBrowserFixture } from "./core-browser-fixture";
 import type { CoreBrowserFixture } from "./core-browser-types";
 import { historyScenario } from "./core-history-scenario";
-import { inputScenario } from "./core-input-scenario";
+import { editRetryScenario, inputScenario, parallelInputScenario } from "./core-input-scenario";
 import { subagentScenario } from "./core-subagent-scenario";
 import { workflowScenario } from "./core-workflow-scenario";
 import { modelIsolationScenario } from "./core-model-isolation-scenario";
@@ -51,7 +51,8 @@ async function diagnoseFailure(page: Page, run: () => Promise<void>): Promise<vo
 }
 
 // A single Bun runner shares one frontend build, loopback server and Chromium.
-// Native cases exercise SDK + RPC; component-only child/Workflow cases cover retained presentation.
+// Native cases use the real SDK + RPC with a local scripted provider, never real-model/Firefox acceptance.
+// Component-only child/Workflow cases cover retained presentation.
 describe.serial("retained WebGUI core browser integration", () => {
 	let fixture: CoreBrowserFixture;
 	beforeAll(async () => {
@@ -74,6 +75,24 @@ describe.serial("retained WebGUI core browser integration", () => {
 		const native = await fixture.nativeCase();
 		try {
 			await diagnoseFailure(native.page, () => inputScenario(native));
+		} finally {
+			await native.close();
+		}
+	}, 60_000);
+
+	test("native queued input, guides, cancellation and ask waiters stay session-owned", async () => {
+		const native = await fixture.nativeCase();
+		try {
+			await diagnoseFailure(native.page, () => parallelInputScenario(native));
+		} finally {
+			await native.close();
+		}
+	}, 60_000);
+
+	test("native edits branch without workspace rollback and failed turns retry their original request", async () => {
+		const native = await fixture.nativeCase();
+		try {
+			await diagnoseFailure(native.page, () => editRetryScenario(native));
 		} finally {
 			await native.close();
 		}

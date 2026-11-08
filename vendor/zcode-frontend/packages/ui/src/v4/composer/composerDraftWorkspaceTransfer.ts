@@ -56,8 +56,9 @@ export function stageV4ComposerDraftAttachments(
   workspaceIdentity: string | undefined,
   draftFocusVersion: number,
   handoff: ComposerDraftHandoff,
+  sessionId?: string,
 ): void {
-  const targetKey = getWorkspaceKey(workspacePath, workspaceIdentity);
+  const targetKey = `${getWorkspaceKey(workspacePath, workspaceIdentity)}${sessionId ? `\0${sessionId}` : ""}`;
   // 同目录的新项目也有独立的附件 scope；显式创建交接不能因 cwd 相同而跳过。
   incomingAttachments.set(targetKey, { draftFocusVersion, attachments: handoff.attachments });
 }
@@ -65,9 +66,11 @@ export function stageV4ComposerDraftAttachments(
 export function consumeV4ComposerDraftAttachments(
   workspaceKey: string,
   draftFocusVersion: number,
+  sessionId?: string | null,
 ): readonly ChatComposerAttachment[] | null {
-  const pending = incomingAttachments.get(workspaceKey);
-  incomingAttachments.delete(workspaceKey);
+  const targetKey = `${workspaceKey}${sessionId ? `\0${sessionId}` : ""}`;
+  const pending = incomingAttachments.get(targetKey);
+  incomingAttachments.delete(targetKey);
   // 目标草稿若已换代，晚挂载的输入区不能接收旧命令。
   return pending?.draftFocusVersion === draftFocusVersion ? pending.attachments : null;
 }

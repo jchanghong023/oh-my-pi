@@ -1,7 +1,7 @@
 import { MAX_CRAWL_WAIT_SECONDS, runCrawl, type CrawlOptions } from "../tools/browser/crawl";
 import { parseCommandArgs } from "../utils/command-args";
 import { commandConsumed, errorMessage, usage } from "./helpers/parse";
-import type { SlashCommandRuntime, SlashCommandSpec } from "./types";
+import type { ParsedSlashCommand, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 const CRAWL_USAGE =
 	"Usage: /crawl <URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | /crawl stop";
@@ -106,6 +106,59 @@ function sessionState(runtime: SlashCommandRuntime): CrawlSessionState {
 	return state;
 }
 
+async function handleCrawlCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+	let options: CrawlOptions | "stop";
+	try {
+		options = parseCrawlOptions(command.args);
+	} catch (error) {
+		return usage(errorMessage(error), runtime);
+	}
+	const state = sessionState(runtime);
+	if (options === "stop") {
+		const job = state.current;
+		if (!job) return usage("No crawl is running in this session.", runtime);
+		job.controller.abort();
+		await runtime.output("Stopping crawl; already saved files will be retained.");
+		await job.completion;
+		return commandConsumed();
+	}
+	if (state.current) return usage("A crawl is already running in this session. Use /crawl stop first.", runtime);
+	if (state.closed || runtime.session.isDisposed || runtime.signal?.aborted)
+		return usage("Cannot start crawl: session or request is closed.", runtime);
+
+	const controller = new AbortController();
+	const completion = Promise.withResolvers<void>();
+	const job: CrawlJob = { controller, completion: completion.promise, visible: true };
+	state.current = job;
+	const unregisterHostShutdown = browser
+		? runtime.registerHostShutdown?.(async () => {
+				job.visible = false;
+				controller.abort();
+				await job.completion;
+			})
+		: undefined;
+	const onAbort = () => controller.abort(runtime.signal?.reason);
+	runtime.signal?.addEventListener("abort", onAbort, { once: true });
+	const output = (text: string) => {
+		if (job.visible && !state.closed && !runtime.session.isDisposed) return runtime.output(text);
+	};
+	const task = async () => {
+		try {
+			await runCrawl({ ...runtime, output }, options, controller.signal);
+		} catch (error) {
+			await output(controller.signal.aborted ? "Crawl cancelled." : `Crawl failed: ${errorMessage(error)}`);
+		} finally {
+			runtime.signal?.removeEventListener("abort", onAbort);
+			unregisterHostShutdown?.();
+			if (state.current === job) state.current = undefined;
+			completion.resolve();
+		}
+	};
+	if (runtime.runCommandInBackground) runtime.runCommandInBackground(task);
+	else void task();
+	return commandConsumed();
+}
+
 export const BUILTIN_CRAWL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "crawl",
@@ -113,49 +166,7 @@ export const BUILTIN_CRAWL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		allowArgs: true,
 		inlineHint:
 			"<URL> [--recursive] [--no-scroll] [--output <directory>] [--concurrency <number>] [--max-pages <number>] [--max-depth <depth>] [--wait <seconds>] | stop",
-		handle: async (command, runtime) => {
-			let options: CrawlOptions | "stop";
-			try {
-				options = parseCrawlOptions(command.args);
-			} catch (error) {
-				return usage(errorMessage(error), runtime);
-			}
-			const state = sessionState(runtime);
-			if (options === "stop") {
-				const job = state.current;
-				if (!job) return usage("No crawl is running in this session.", runtime);
-				job.controller.abort();
-				await runtime.output("Stopping crawl; already saved files will be retained.");
-				await job.completion;
-				return commandConsumed();
-			}
-			if (state.current) return usage("A crawl is already running in this session. Use /crawl stop first.", runtime);
-			if (state.closed || runtime.session.isDisposed || runtime.signal?.aborted)
-				return usage("Cannot start crawl: session or request is closed.", runtime);
-
-			const controller = new AbortController();
-			const completion = Promise.withResolvers<void>();
-			const job: CrawlJob = { controller, completion: completion.promise, visible: true };
-			state.current = job;
-			const onAbort = () => controller.abort(runtime.signal?.reason);
-			runtime.signal?.addEventListener("abort", onAbort, { once: true });
-			const output = (text: string) => {
-				if (job.visible && !state.closed && !runtime.session.isDisposed) return runtime.output(text);
-			};
-			const task = async () => {
-				try {
-					await runCrawl({ ...runtime, output }, options, controller.signal);
-				} catch (error) {
-					await output(controller.signal.aborted ? "Crawl cancelled." : `Crawl failed: ${errorMessage(error)}`);
-				} finally {
-					runtime.signal?.removeEventListener("abort", onAbort);
-					if (state.current === job) state.current = undefined;
-					completion.resolve();
-				}
-			};
-			if (runtime.runCommandInBackground) runtime.runCommandInBackground(task);
-			else void task();
-			return commandConsumed();
-		},
+		handle: handleCrawlCommand,
+		handleWebGui: (command, runtime) => handleCrawlCommand(command, runtime, true),
 	},
 ];

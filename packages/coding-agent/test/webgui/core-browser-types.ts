@@ -1,5 +1,6 @@
 import type { AgentSession } from "../../src/session/agent-session";
 import type { Browser, Page } from "puppeteer-core";
+import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
 
 export type CoreUiCase = "subagent" | "workflow";
 
@@ -23,7 +24,12 @@ export interface NativeBrowserCase {
 	readonly session: AgentSession;
 	readonly url: string;
 	seedHistory(title: string, userText: string, assistantText: string, historyCwd?: string): Promise<SeededHistory>;
-	setReply(prefix: string, suffix: string): ControlledReply;
+	setReply(prefix: string, suffix: string, session?: AgentSession): ControlledReply;
+	setFailure(reason: string, session?: AgentSession): void;
+	sessionFor(sessionId: string): AgentSession;
+	createSibling(): Promise<AgentSession>;
+	resumeHistory(sessionId: string): Promise<AgentSession>;
+	contextFor(session: AgentSession): WebGuiServiceContext;
 	rejectNextPrompt(reason: string): void;
 	close(): Promise<void>;
 }

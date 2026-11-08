@@ -30,6 +30,7 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "sketch",
 		description: "Draw in a local browser canvas and attach the PNG to your draft",
+		handleWebGui: (command, runtime) => runtime.host.sketch(command, runtime),
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			const { editor, session, sessionManager } = ctx;

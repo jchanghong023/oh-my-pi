@@ -253,6 +253,7 @@ export class DevCancellationService {
 			committed.set(change.commitSha, group);
 		}
 		const shas = [...committed.keys()];
+		const parents = new Map<string, string[]>();
 		const predecessors = new Map<string, Set<string>>();
 		for (const sha of shas) {
 			const details = await this.#options.repo.commitDetails(sha, signal);
@@ -265,12 +266,30 @@ export class DevCancellationService {
 					});
 				}
 			}
+			parents.set(sha, details.parents);
+		}
+		for (const sha of shas) {
 			const ancestors = new Set<string>();
-			for (const other of shas) {
-				if (other !== sha && (await this.#options.repo.mergeBase(other, sha, signal)) === other)
-					ancestors.add(other);
+			const pending = [...parents.get(sha)!];
+			while (pending.length) {
+				const parent = pending.pop()!;
+				if (!committed.has(parent) || ancestors.has(parent)) continue;
+				ancestors.add(parent);
+				pending.push(...parents.get(parent)!);
 			}
 			predecessors.set(sha, ancestors);
+		}
+		// Owned parent links already prove ancestry. Only gaps need a native graph walk,
+		// and one merge-base answers both directions for each remaining pair.
+		for (let i = 0; i < shas.length; i++) {
+			for (let j = i + 1; j < shas.length; j++) {
+				const left = shas[i];
+				const right = shas[j];
+				if (predecessors.get(left)!.has(right) || predecessors.get(right)!.has(left)) continue;
+				const base = await this.#options.repo.mergeBase(left, right, signal);
+				if (base === left) predecessors.get(right)!.add(left);
+				else if (base === right) predecessors.get(left)!.add(right);
+			}
 		}
 		const ordered: DevOwnedChange[] = [];
 		// Captures are appended in mutation order. Index layers describe location, not chronology.
@@ -493,12 +512,13 @@ export class DevCancellationService {
 				}
 			}
 			const initialDirtyTree = await this.#options.repo.writeTree(index, signal);
+			let dirtyTree = initialDirtyTree;
 			for (const change of ordered) {
 				if (!change.patch || (change.layer !== "committed" && !change.baselineIndexVersion)) {
 					conflicts.push({ path: change.path, reason: "Owned patch or original index baseline is unavailable" });
 					continue;
 				}
-				const beforeTree = await this.#options.repo.writeTree(index, signal);
+				const beforeTree = dirtyTree;
 				try {
 					await this.#options.repo.applyPatch(
 						change.patch,
@@ -520,18 +540,14 @@ export class DevCancellationService {
 					];
 					if (changedPaths.some(file => !paths.includes(file)))
 						throw new Error("Owned patch touches an undeclared path (including rename endpoint)");
+					dirtyTree = afterTree;
 				} catch (error) {
 					conflicts.push({ path: change.path, reason: errorText(error) });
 					// This alternate index is private; restoring it never touches the real index/worktree.
 					await this.#options.repo.readTree(beforeTree, index, signal);
 				}
 			}
-			const inverse = await this.#options.repo.diffTree(
-				initialDirtyTree,
-				await this.#options.repo.writeTree(index, signal),
-				true,
-				signal,
-			);
+			const inverse = await this.#options.repo.diffTree(initialDirtyTree, dirtyTree, true, signal);
 			if (inverse) {
 				try {
 					const { expected } = await this.#options.repo.previewOwnedPatch(inverse, { reverse: false }, signal);

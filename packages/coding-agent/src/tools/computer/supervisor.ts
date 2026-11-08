@@ -56,7 +56,7 @@ export interface ComputerController {
 		signal?: AbortSignal,
 		context?: AgentToolContext,
 	): Promise<ComputerRunOk>;
-	revokeControl?(): Promise<void>;
+	revokeControl?(options?: { strict?: boolean }): Promise<void>;
 	/** The owner's agent turn `turn` ended: let the display sleep now, keeping control, refs and the worker. */
 	releaseDisplay?(turn: number): void;
 	/**
@@ -67,7 +67,7 @@ export interface ComputerController {
 	/** The user's message acknowledges every Escape stop so far, lifting the refusal they set. */
 	resumeAfterEscape?(): void;
 	capabilities(snapshot: ComputerSessionSnapshot, signal?: AbortSignal): Promise<DesktopCapabilities | undefined>;
-	close(): Promise<void>;
+	close(options?: { strict?: boolean }): Promise<void>;
 }
 
 /** Minimal Bun worker lifecycle surface used by the supervisor. */
@@ -208,6 +208,8 @@ export class ComputerSupervisor implements ComputerController {
 	/** A worker was started, so its sessions may have counted stops under the key. */
 	#started = false;
 	#closed = false;
+	#strictCloseCall?: Promise<void>;
+	#strictCloseCompleted = false;
 	#unsubscribeMessage?: () => void;
 	#unsubscribeError?: () => void;
 
@@ -449,7 +451,7 @@ export class ComputerSupervisor implements ComputerController {
 		}
 	}
 
-	async revokeControl(): Promise<void> {
+	async revokeControl(options?: { strict?: boolean }): Promise<void> {
 		this.#controlEpoch += 1;
 		for (const pending of this.#pending.values()) {
 			for (const controller of pending.toolCalls.values()) controller.abort(new ToolAbortError());
@@ -462,7 +464,7 @@ export class ComputerSupervisor implements ComputerController {
 		try {
 			await withTimeout(acknowledged.promise, CLOSE_TIMEOUT_MS, "Timed out revoking computer control");
 		} catch (error) {
-			await this.#terminate(error);
+			await this.#terminate(error, options?.strict);
 		} finally {
 			this.#revocations.delete(id);
 		}
@@ -554,9 +556,9 @@ export class ComputerSupervisor implements ComputerController {
 		await this.#terminate(error);
 	}
 
-	async #terminate(reason: unknown): Promise<void> {
+	async #terminate(reason: unknown, strict = false): Promise<void> {
 		const worker = this.#worker;
-		this.#worker = undefined;
+		if (!strict) this.#worker = undefined;
 		this.#startPromise = undefined;
 		this.#startReject?.(reason);
 		this.#startReject = undefined;
@@ -574,10 +576,49 @@ export class ComputerSupervisor implements ComputerController {
 		this.#pendingCapabilities.clear();
 		for (const resolve of this.#revocations.values()) resolve();
 		this.#revocations.clear();
-		await worker?.terminate().catch(() => undefined);
+		if (strict) {
+			await worker?.terminate();
+			if (this.#worker === worker) this.#worker = undefined;
+		} else {
+			await worker?.terminate().catch(() => undefined);
+		}
 	}
 
-	async close(): Promise<void> {
+	async close(options?: { strict?: boolean }): Promise<void> {
+		if (options?.strict) {
+			if (this.#strictCloseCompleted) return;
+			this.#strictCloseCall ??= (async () => {
+				this.#closed = true;
+				if (this.#started) {
+					try {
+						this.#escapeStops.forget(this.#escapeKey);
+					} catch {
+						// Older addons kept no Escape counter; the worker must still close.
+					}
+				}
+				const worker = this.#worker;
+				if (worker) {
+					const closed = Promise.withResolvers<void>();
+					const unsubscribe = worker.onMessage(message => {
+						if (message.type === "closed") closed.resolve();
+					});
+					try {
+						worker.send({ type: "close" });
+						await withTimeout(closed.promise, this.#timeouts.closeMs, "Timed out closing computer worker");
+					} catch {
+						// The existing bounded fallback must itself succeed in strict mode.
+					} finally {
+						unsubscribe();
+					}
+					await this.#terminate(new ToolError("Computer session closed"), true);
+				}
+				this.#strictCloseCompleted = true;
+			})().catch(error => {
+				this.#strictCloseCall = undefined;
+				throw error;
+			});
+			return this.#strictCloseCall;
+		}
 		if (this.#closed) return;
 		this.#closed = true;
 		if (this.#started) {
@@ -622,8 +663,19 @@ export function registerComputerController(ownerId: string | undefined, controll
 }
 
 /** Revoke task-scoped foreground ownership without resetting frames or the worker. */
-export async function revokeComputerControlForOwner(ownerId: string | undefined): Promise<void> {
+export async function revokeComputerControlForOwner(
+	ownerId: string | undefined,
+	options?: { strict?: boolean },
+): Promise<void> {
 	if (!ownerId) return;
+	if (options?.strict) {
+		const results = await Promise.allSettled(
+			Array.from(ownedSupervisors.get(ownerId) ?? [], controller => controller.revokeControl?.({ strict: true })),
+		);
+		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Failed revoking owned computer control");
+		return;
+	}
 	await Promise.allSettled(
 		Array.from(ownedSupervisors.get(ownerId) ?? [], controller => controller.revokeControl?.()),
 	);
@@ -680,8 +732,28 @@ export function resumeComputerUseForOwner(ownerId: string | undefined): void {
 }
 
 /** Closes every computer session owned by an agent session. */
-export async function releaseComputerSessionsForOwner(ownerId: string | undefined): Promise<void> {
+export async function releaseComputerSessionsForOwner(
+	ownerId: string | undefined,
+	options?: { strict?: boolean },
+): Promise<void> {
 	if (!ownerId) return;
+	if (options?.strict) {
+		const controllers = ownedSupervisors.get(ownerId);
+		if (!controllers) return;
+		const results = await Promise.allSettled(
+			Array.from(controllers, async controller => {
+				await controller.close({ strict: true });
+				controllers.delete(controller);
+			}),
+		);
+		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Failed closing owned computer sessions");
+		if (ownedSupervisors.get(ownerId) === controllers && controllers.size === 0) {
+			ownedSupervisors.delete(ownerId);
+			ownerTurns.delete(ownerId);
+		}
+		return;
+	}
 	ownerTurns.delete(ownerId);
 	const controllers = ownedSupervisors.get(ownerId);
 	if (!controllers) return;

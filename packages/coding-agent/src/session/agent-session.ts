@@ -1217,7 +1217,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	readonly #evalToolSession: ToolSession | undefined;
 	/** Manager owned by this top-level session; subagents borrow but never dispose it. */
 	readonly #ownedAsyncJobManager: AsyncJobManager | undefined;
-	readonly #releaseOwnedAsyncJobManager: (() => Promise<boolean | void>) | undefined;
+	readonly #releaseOwnedAsyncJobManager: ((options?: { strict?: boolean }) => Promise<boolean | void>) | undefined;
 	/** Root-scoped manager shared with descendants; job queries and cancellation stay owner-scoped. */
 	readonly #asyncJobManager: AsyncJobManagerApi | undefined;
 	/** Clears this session's owner delivery sink registration; set when a manager + agent id exist. */
@@ -3660,6 +3660,22 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// prior session's background result cannot inject into the next transcript.
 		this.#asyncDeliveryEpoch += 1;
 		this.yieldQueue.clear("async-result");
+	}
+
+	async #settleOwnAsyncJobs(): Promise<void> {
+		const manager = this.#asyncJobManager;
+		if (!manager || !this.#agentId) return;
+		const deadline = Date.now() + 3_000;
+		if (!(await manager.waitForOwnerJobs(this.#agentId, { timeoutMs: 3_000 }))) {
+			throw new Error("Session owned async jobs did not settle during strict cleanup");
+		}
+		if (
+			!(await manager.drainDeliveries({
+				timeoutMs: Math.max(0, deadline - Date.now()),
+				filter: { ownerId: this.#agentId },
+			}))
+		)
+			throw new Error("Session owned async deliveries did not settle during strict cleanup");
 	}
 
 	/**
@@ -6582,10 +6598,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * call this before their first await — otherwise work started in that async
 	 * gap slips past the disposal guards.
 	 */
-	beginDispose(): void {
+	beginDispose(options?: { strict?: boolean }): void {
 		this.#isDisposed = true;
 		this.#abortCustomCommands("Session disposed");
-		for (const dispose of this.#disposers.splice(0)) dispose();
+		if (!options?.strict) for (const dispose of this.#disposers.splice(0)) dispose();
 		this.#modelDiscoveryAbortController.abort();
 		this.#queuedMessageDrainBlocked = false;
 		this.#usagePreflightReadyForNextModelCall = false;
@@ -6622,7 +6638,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 */
 	#disposeCall?: Promise<void>;
 	#disposePreparationCall?: Promise<boolean>;
+	#strictDisposeCall?: Promise<void>;
+	#strictDisposalRequested = false;
+	#strictDisposeCleanup?: Set<() => void | Promise<void>>;
+	#strictDisposeFinalizers?: Set<() => void | Promise<void>>;
+	#strictShutdownEvent?: Promise<boolean | void>;
 	dispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
+		if (options.strict) this.#strictDisposalRequested = true;
+		if (this.#strictDisposalRequested) {
+			this.#strictDisposeCall ??= this.#doStrictDispose(options).catch(error => {
+				this.#strictDisposeCall = undefined;
+				throw error;
+			});
+			return this.#strictDisposeCall;
+		}
 		if (!this.#disposeCall) {
 			this.#disposeCall = this.#doDispose(options).catch(error => {
 				// Retain one-time shutdown preparation, but allow a failed final
@@ -6634,7 +6663,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		return this.#disposeCall;
 	}
 
-	async #disposeOwnedAsyncJobs(): Promise<void> {
+	async #disposeOwnedAsyncJobs(strict = false): Promise<void> {
 		// Unregister before cancelling: a job completing during teardown must
 		// dead-letter rather than enqueue a follow-up into a disposing session.
 		this.#unregisterAsyncDeliverySink?.();
@@ -6647,7 +6676,20 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// explicit hard kill) leaves `#ownedAsyncJobManager` undefined and must
 		// propagate a generic cancellation so its nested children stay terminal.
 		this.#cancelOwnAsyncJobs(manager ? ASYNC_JOB_MANAGER_SHUTDOWN_REASON : undefined);
-		if (!manager) return;
+		if (!manager) {
+			if (strict) await this.#settleOwnAsyncJobs();
+			return;
+		}
+		if (strict) {
+			const drained = this.#releaseOwnedAsyncJobManager
+				? await this.#releaseOwnedAsyncJobManager({ strict: true })
+				: await manager.dispose({ timeoutMs: 3_000, strict: true });
+			if (drained === false) throw new Error("Async job completion deliveries still pending during strict dispose");
+			if (!this.#releaseOwnedAsyncJobManager && AsyncJobManager.instance() === manager) {
+				AsyncJobManager.setInstance(undefined);
+			}
+			return;
+		}
 
 		try {
 			const drained = this.#releaseOwnedAsyncJobManager
@@ -6759,6 +6801,144 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			// Consolidation may embed final memories, so drop the embedding-server connection only afterward.
 			await shutdownMnemopiEmbedClient();
 		}
+	}
+
+	async #doStrictDispose(options: AgentSessionDisposeOptions): Promise<void> {
+		this.beginDispose({ strict: true });
+		if (!this.#strictDisposeCleanup) {
+			if (this.#cacheWarmer) {
+				this.#cacheWarmer.onWarmed = undefined;
+				this.#cacheWarmer.onRefreshStart = undefined;
+				this.#cacheWarmer.onRefreshEnd = undefined;
+				this.#cacheWarmer.cancel();
+			}
+			this.#recordSessionExit(options.reason ?? "dispose");
+			this.#cancelExitRecorder?.();
+			this.#cancelExitRecorder = undefined;
+			this.#cancelFatalRecoveryHint?.();
+			this.#cancelFatalRecoveryHint = undefined;
+			this.#fallbackExtensionTimers?.clearAll();
+			this.abortRetry();
+			this.abortCompaction();
+			const abortReason = options.reason === postmortem.Reason.EXIT ? INTERRUPTED_TURN_ERROR : undefined;
+			const postPromptDrain = this.#cancelPostPromptTasks(abortReason);
+			this.agent.abort(abortReason);
+			const hindsightState = this.getHindsightSessionState();
+			const mnemopiState = setMnemopiSessionState(this, undefined);
+			const ownerId = this.#eval.getKernelOwnerId();
+			// Retain each failed operation and its captured resource; successful
+			// operations are removed individually rather than replayed on retry.
+			this.#strictDisposeCleanup = new Set<() => void | Promise<void>>([
+				() =>
+					withTimeout(
+						postPromptDrain,
+						POST_PROMPT_DRAIN_TIMEOUT_MS,
+						"Timed out draining post-prompt tasks during dispose",
+					),
+				() =>
+					this.#autolearnCaptureTask
+						? withTimeout(
+								this.#autolearnCaptureTask,
+								3_000,
+								"Timed out draining auto-learn capture during dispose",
+							)
+						: undefined,
+				() => this.#memory.transition,
+				() => this.#disposeOwnedAsyncJobs(true),
+				() => this.#eval.disposeKernels({ strict: true }),
+				() =>
+					withTimeout(
+						releaseTabsForOwner(ownerId, { kill: true, strict: true }),
+						3_000,
+						"Timed out releasing owned browser tabs during dispose",
+					).then(() => {}),
+				() =>
+					withTimeout(
+						releaseComputerSessionsForOwner(ownerId, { strict: true }),
+						3_000,
+						"Timed out releasing native computer session during dispose",
+					),
+				() =>
+					this.#disconnectOwnedMcpManager
+						? withTimeout(
+								this.#disconnectOwnedMcpManager(),
+								3_000,
+								"Timed out disconnecting owned MCP manager during dispose",
+							)
+						: undefined,
+				() => this.#advisors.recorderClosed(),
+				() => hindsightState?.flushRetainQueue(),
+				() => mnemopiState?.dispose({ timeoutMs: options.mnemopiConsolidateTimeoutMs }),
+				() => flushSharpshooterExtraction(this, options.mnemopiConsolidateTimeoutMs, { strict: true }),
+				() => releaseShellSessions(this.sessionManager.getSessionId()),
+			]);
+			this.#strictDisposeFinalizers = new Set<() => void | Promise<void>>([
+				() => releaseSharpshooterSession(this),
+				() => shutdownMnemopiEmbedClient(),
+				() => this.#releasePowerAssertion(),
+				async () => {
+					await cleanupEmptyMoveSession(this.sessionManager, this.#movedFromEmptySessionFile);
+					this.#movedFromEmptySessionFile = undefined;
+				},
+				() => this.#maintenance.cancelSpeculation(),
+				() => {
+					hindsightState?.dispose();
+					this.setHindsightSessionState(undefined);
+				},
+				() => this.#disconnectFromAgent(),
+			]);
+			for (const [key, state] of this.#providerSessionState) {
+				this.#strictDisposeFinalizers.add(() => {
+					state.close();
+					if (this.#providerSessionState.get(key) === state) this.#providerSessionState.delete(key);
+				});
+			}
+			this.#strictShutdownEvent = this.#disposePreparationCall
+				? Promise.resolve()
+				: emitSessionShutdownEvent(this.#extensionRunner).catch(error => {
+						logger.warn("Failed to emit session_shutdown event", { error: String(error) });
+					});
+			this.agent.setProviderResponseInterceptor(undefined);
+			this.agent.setRawSseEventInterceptor(undefined);
+		}
+		await this.#strictShutdownEvent;
+		for (const dispose of this.#disposers.splice(0)) this.#strictDisposeCleanup.add(dispose);
+		const cleanup = this.#strictDisposeCleanup;
+		const results = await Promise.allSettled(
+			[...cleanup].map(async dispose => {
+				await dispose();
+				cleanup.delete(dispose);
+			}),
+		);
+		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Session owned subsystem cleanup failed");
+		// A bounded wait is a failed strict attempt, not permission to seal the
+		// transcript or release ownership while a late handler can still write.
+		await withTimeout(
+			(async () => {
+				await this.waitForAdmittedSubmissions();
+				await this.waitForIdle();
+			})(),
+			options.drainTimeoutMs ?? POST_PROMPT_DRAIN_TIMEOUT_MS,
+			"Timed out waiting for the active agent run to settle during dispose",
+		);
+		const finalizers = this.#strictDisposeFinalizers!;
+		const finalized = await Promise.allSettled(
+			[...finalizers].map(async dispose => {
+				await dispose();
+				finalizers.delete(dispose);
+			}),
+		);
+		const finalFailures = finalized.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (finalFailures.length) throw new AggregateError(finalFailures, "Session final resource cleanup failed");
+		this.#eventListeners = [];
+		this.#runStateListeners.clear();
+		this.#ircWakeHoldListeners.clear();
+		this.#sessionChangeCallbacks.clear();
+		this.sessionManager.seal();
+		await this.sessionManager.close();
+		this.#releaseRetainedSessionMemory();
+		this.#accountPoolScope?.release();
 	}
 
 	async #doDispose(options: AgentSessionDisposeOptions = {}): Promise<void> {
@@ -7174,6 +7354,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#usageFallbackConfirmer = confirmer
 			? (confirmation, signal) => this.waitForUser(() => confirmer(confirmation, signal))
 			: undefined;
+	}
+
+	/** Temporarily replace the decision surface without losing its exact prior wrapped identity. */
+	overrideUsageFallbackConfirmer(confirmer: UsageFallbackConfirmer): () => void {
+		const previous = this.#usageFallbackConfirmer;
+		this.setUsageFallbackConfirmer(confirmer);
+		const installed = this.#usageFallbackConfirmer;
+		return () => {
+			if (this.#usageFallbackConfirmer === installed) this.#usageFallbackConfirmer = previous;
+		};
 	}
 
 	#allowQueuedMessageDrainRetry(): void {
@@ -10218,7 +10408,16 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	async joinActiveTurn(
 		text: string,
 		images?: ImageContent[],
-		options?: { queue?: "steering" | "followUp" },
+		options?: Pick<PromptOptions, "inputId" | "sourceCommand" | "inputClientId" | "attachments"> & {
+			queue?: "steering" | "followUp";
+			/** The caller forwards autonomous run events, not only client prompt events. */
+			allowAutonomous?: boolean;
+			/** A policy-checked user skill payload, retaining native skill attribution and details. */
+			customMessage?: Pick<CustomMessage, "content" | "display" | "details"> & {
+				customType: typeof SKILL_PROMPT_MESSAGE_TYPE;
+				attribution: "user";
+			};
+		},
 	): Promise<boolean> {
 		// Liveness first: an idle session hands the content back
 		// (`promptRequired` at the ACP bridge) without validating it — the
@@ -10243,7 +10442,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// promptTurn), so a steer admitted into one would answer invisibly
 		// and be reported `injected`. Refuse instead — the host keeps its
 		// content and resubmits through session/prompt.
-		if (this.#clientPromptInFlightCount === 0) return false;
+		const autonomous = options?.allowAutonomous === true;
+		if (autonomous ? !this.agent.state.isStreaming : this.#clientPromptInFlightCount === 0) return false;
 		if (text.startsWith("/")) {
 			this.#throwIfExtensionCommand(text);
 		}
@@ -10271,14 +10471,51 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				// admits, never an autonomous run's streaming.
 			}
 		}
-		const mode = options?.queue === "followUp" ? "followUp" : "steer";
-		const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
-		return await this.#queueUserMessage(expandedText, images, mode, {
-			timestamp: Date.now(),
-			rawText: text,
-			requireActiveRun: true,
-			skipIdleDrain: true,
-		});
+		let targetEnded = false;
+		const unsubscribe = autonomous
+			? this.agent.subscribe(event => {
+					if (event.type === "agent_end") targetEnded = true;
+				})
+			: undefined;
+		try {
+			const mode = options?.queue === "followUp" ? "followUp" : "steer";
+			if (options?.customMessage) {
+				const message = options.customMessage;
+				const details = message.details;
+				const args =
+					details && typeof details === "object" && "args" in details && typeof details.args === "string"
+						? details.args
+						: "";
+				const notices = this.#createMagicKeywordNotices(args);
+				const sessionAgentNotice = this.#tools.takeSessionAgentNotice();
+				return await this.#queueCustomMessage(message, mode, {
+					queueChipText: text,
+					inputId: options.inputId,
+					sourceCommand: options.sourceCommand,
+					inputClientId: options.inputClientId,
+					attachments: options.attachments,
+					prependMessages: sessionAgentNotice ? [...notices, sessionAgentNotice] : notices,
+					requireActiveRun: true,
+					activeRunGuard: autonomous ? () => !targetEnded && this.agent.state.isStreaming : undefined,
+					skipIdleDrain: true,
+					onPromptQueued: mode === "steer" ? queued => this.#fireSteeringArrival(queued) : undefined,
+				});
+			}
+			const expandedText = expandPromptTemplate(text, [...this.#promptTemplates]);
+			return await this.#queueUserMessage(expandedText, images, mode, {
+				timestamp: Date.now(),
+				rawText: text,
+				inputId: options?.inputId,
+				sourceCommand: options?.sourceCommand,
+				inputClientId: options?.inputClientId,
+				attachments: options?.attachments,
+				requireActiveRun: true,
+				activeRunGuard: autonomous ? () => !targetEnded && this.agent.state.isStreaming : undefined,
+				skipIdleDrain: true,
+			});
+		} finally {
+			unsubscribe?.();
+		}
 	}
 
 	/**
@@ -10351,6 +10588,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			 * no interleaving drain can race it.
 			 */
 			requireActiveRun?: boolean;
+			/** Explicit autonomous admission is fenced to the exact still-live run. */
+			activeRunGuard?: () => boolean;
 			/**
 			 * `joinActiveTurn` admission: never schedule the idle queue drain —
 			 * the live run owns delivery (its loop polls the steering queue at
@@ -10422,7 +10661,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		// between this check and the message landing on the queue.
 		if (
 			options?.requireActiveRun &&
-			(this.#abortInProgress || !this.isStreaming || this.#clientPromptInFlightCount === 0)
+			(this.#abortInProgress ||
+				(options.activeRunGuard
+					? !options.activeRunGuard()
+					: !this.isStreaming || this.#clientPromptInFlightCount === 0))
 		) {
 			return false;
 		}
@@ -10924,6 +11166,10 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			onPromptAdmitted?: () => void;
 			/** Called synchronously with the messages pushed onto the queue. See {@link PromptOptions.onPromptQueued}. */
 			onPromptQueued?: (queued: readonly AgentMessage[]) => void;
+			/** Live-run-only admission from joinActiveTurn; never wakes an idle autonomous turn. */
+			requireActiveRun?: boolean;
+			activeRunGuard?: () => boolean;
+			skipIdleDrain?: boolean;
 		},
 	): Promise<boolean> {
 		options = { ...options, inputId: options?.inputId ?? crypto.randomUUID() };
@@ -10974,6 +11220,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		) {
 			return false;
 		}
+		if (
+			options?.requireActiveRun &&
+			(this.#abortInProgress ||
+				(options.activeRunGuard
+					? !options.activeRunGuard()
+					: !this.isStreaming || this.#clientPromptInFlightCount === 0))
+		) {
+			return false;
+		}
 		if (deliverAs === "aside") {
 			if (await this.#sessionGenerationChanged(sessionGeneration)) return false;
 			// Non-interrupting: rides the same step-boundary aside poll as
@@ -11012,7 +11267,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#emitQueueUpdateIfChanged();
 		onPromptQueued?.([...prependMessages, ...(descriptionNotice ? [descriptionNotice] : []), normalizedAppMessage]);
 		onPromptAdmitted?.();
-		this.#scheduleIdleQueueDrain();
+		if (!options?.skipIdleDrain) this.#scheduleIdleQueueDrain();
 		return true;
 	}
 
@@ -11604,7 +11859,15 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	mutateQueuedInput(
 		inputId: string,
 		operation: "edit" | "delete" | "reorder" | "sendNow",
-		options: { text?: string; beforeInputId?: string | null } = {},
+		options: {
+			text?: string;
+			beforeInputId?: string | null;
+			/** Rebuilt and policy-checked by the host before atomically replacing this queued input. */
+			customMessage?: Pick<CustomMessage, "content" | "display" | "details"> & {
+				customType: typeof SKILL_PROMPT_MESSAGE_TYPE;
+				attribution: "user";
+			};
+		} = {},
 	): boolean {
 		for (const queue of ["steering", "followUp"] as const) {
 			const selected = queue === "steering" ? this.agent.peekSteeringQueue() : this.agent.peekFollowUpQueue();
@@ -11633,15 +11896,31 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 					"content" in original && Array.isArray(original.content)
 						? original.content.filter(part => part.type === "image")
 						: [];
-				const replacement = {
-					role: "user" as const,
-					content: [{ type: "text" as const, text: options.text }, ...images],
-					timestamp: original.timestamp,
-					attribution: "user" as const,
-					inputId,
-					attachments: (original as AgentMessage & { attachments?: PromptOptions["attachments"] }).attachments,
-					...(queue === "steering" ? { steering: true } : {}),
-				};
+				const replacement = options.customMessage
+					? {
+							role: "custom" as const,
+							...options.customMessage,
+							details: {
+								...(options.customMessage.details && typeof options.customMessage.details === "object"
+									? options.customMessage.details
+									: {}),
+								__queueChipText: options.text,
+							},
+							timestamp: original.timestamp,
+							inputId,
+							attachments: (original as AgentMessage & { attachments?: PromptOptions["attachments"] })
+								.attachments,
+						}
+					: {
+							role: "user" as const,
+							content: [{ type: "text" as const, text: options.text }, ...images],
+							timestamp: original.timestamp,
+							attribution: "user" as const,
+							inputId,
+							attachments: (original as AgentMessage & { attachments?: PromptOptions["attachments"] })
+								.attachments,
+							...(queue === "steering" ? { steering: true } : {}),
+						};
 				Object.assign(replacement, {
 					sourceCommand: (original as AgentMessage & { sourceCommand?: PromptOptions["sourceCommand"] })
 						.sourceCommand,
@@ -11652,7 +11931,12 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#queuedMessageRawText.set(replacement, options.text);
 				const source = this.#goalAutoOrchestrateInitialSources.get(original);
 				if (source) this.#goalAutoOrchestrateInitialSources.set(replacement, source);
-				remaining.splice(start, 0, ...this.#createMagicKeywordNotices(options.text, source?.goalId), replacement);
+				const details = options.customMessage?.details;
+				const keywordText =
+					details && typeof details === "object" && "args" in details && typeof details.args === "string"
+						? details.args
+						: options.text;
+				remaining.splice(start, 0, ...this.#createMagicKeywordNotices(keywordText, source?.goalId), replacement);
 				this.agent.replaceQueue(queue, remaining);
 			} else {
 				let before = remaining.length;
@@ -12556,6 +12840,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	 * abort. Omit it for internal/lifecycle aborts.
 	 */
 	async abort(options?: {
+		/** Require this session's owned work to settle without disposing the session. */
+		strict?: boolean;
 		goalReason?: "interrupted" | "internal";
 		reason?: string;
 		/** Force queued user follow-ups into the continuation after a user interrupt. */
@@ -12594,6 +12880,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		const unwind = Promise.withResolvers<void>();
 		this.#abortUnwinds.add(unwind.promise);
 		try {
+			if (options?.strict) this.#cancelOwnAsyncJobs(options.reason);
 			this.#emit({ type: "session_abort", reason: options?.reason });
 			this.#titleGenerationAbortController.abort();
 			if (!this.#isDisposed) this.#titleGenerationAbortController = new AbortController();
@@ -12637,7 +12924,9 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			}
 			this.abortBash();
 			this.abortEval();
-			const computerControlRevocation = revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
+			const computerControlRevocation = options?.strict
+				? revokeComputerControlForOwner(this.#eval.getKernelOwnerId(), { strict: true })
+				: revokeComputerControlForOwner(this.#eval.getKernelOwnerId());
 			const postPromptDrain = this.#cancelPostPromptTasks(options?.reason);
 			this.agent.abort(options?.reason);
 			await Promise.all([postPromptDrain, computerControlRevocation]);
@@ -12657,6 +12946,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			await manualCompactionCleanup;
 			await this.#drainAutolearnCapture();
 			await this.#goalRuntime.onTaskAborted({ reason: options?.goalReason ?? "interrupted" });
+			if (options?.strict) await this.#settleOwnedWorkAfterAbort();
 			// The loop has restored any claimed input by now. Promote forced follow-ups
 			// before flushing agent_end so observers see the pending continuation.
 			if (forceQueuedDelivery) this.#promoteForcedFollowUps();
@@ -12701,6 +12991,30 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#abortUnwinds.delete(unwind.promise);
 			unwind.resolve();
 		}
+	}
+
+	async #settleOwnedWorkAfterAbort(): Promise<void> {
+		const ownerId = this.#eval.getKernelOwnerId();
+		const results = await Promise.allSettled([
+			this.#settleOwnAsyncJobs(),
+			this.#eval.disposeKernels({ strict: true }),
+			withTimeout(
+				releaseTabsForOwner(ownerId, { kill: true, strict: true }),
+				3_000,
+				"Timed out releasing owned browser tabs during abort",
+			),
+			withTimeout(
+				this.#drainInFlightEventHandlers(),
+				POST_PROMPT_DRAIN_TIMEOUT_MS,
+				"Timed out draining session event handlers during abort",
+			),
+			this.#autolearnCaptureTask
+				? withTimeout(this.#autolearnCaptureTask, 3_000, "Timed out draining auto-learn capture during abort")
+				: Promise.resolve(),
+			this.#bash.flushPending(),
+		]);
+		const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+		if (failures.length) throw new AggregateError(failures, "Session owned work did not settle during strict abort");
 	}
 
 	/**

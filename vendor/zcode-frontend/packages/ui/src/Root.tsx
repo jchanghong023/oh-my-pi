@@ -14,22 +14,34 @@ import { TooltipProvider } from "@/components/ui/tooltip.js";
 import { Button } from "@/components/ui/button.js";
 import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useComposerClientNamespace } from "@/hooks/useServices.js";
-import { BackendBusinessAvailabilityProvider } from "@/hooks/useBackendBusinessAvailability.js";
+import {
+  BackendBusinessAvailabilityProvider,
+  NativeHostAvailabilityProvider,
+  NativeWorkspaceSessionProvider,
+  type NativeWorkspaceSessionScope,
+} from "@/hooks/useBackendBusinessAvailability.js";
 import { RemoteProjectPresentationProvider } from "@/hooks/RemoteProjectPresentationContext.js";
 import {
   readComposerWorkspaceScope,
   readV4ComposerDraft,
+  persistV4ComposerDraft,
   V4_DRAFT_SCOPE_ROOT,
 } from "@/v4/composer/composerDraftStore.js";
+import {
+  captureV4ComposerDraftHandoff,
+  stageV4ComposerDraftAttachments,
+} from "@/v4/composer/composerDraftWorkspaceTransfer.js";
+import { selectWorkbenchSession } from "@/v4/workbenchSessionPlacement.js";
 import { DirectoryBrowser } from "@/DirectoryBrowser.js";
 import { restorePersistedRemoteWorkspaceSessions } from "@/root/remoteWorkspaceSessionPersistence.js";
 import type { AppSettings } from "@zcode/shared";
 import { useTabPersistence, type WorkspacePersistenceGate } from "@/hooks/useTabPersistence.js";
-import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { bindNativeWorkspaceServices, useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { SettingsPage } from "@/SettingsPage.js";
 import { ProviderSetupScreen } from "@/ProviderSetupScreen.js";
 import { setDefaultFileDisplayBasePath } from "@/lib/fileDisplay.js";
+import { areWorkspaceFilePathsEqual } from "@/workspace-file-tree/model.js";
 import {
   shouldEnableProviderAvailabilityLoginEntryGuard,
   shouldResolveProviderStartupState,
@@ -55,6 +67,8 @@ import { useRootWorkspaceActions } from "@/root/useRootWorkspaceActions.js";
 import { useBotBroadcastEffects } from "@/root/useBotBroadcastEffects.js";
 import { registerBaseWorkspaceServices } from "@/store/remoteWorkspaceSessionStore.js";
 import type { RootProps } from "@/root/types.js";
+import type { CreateTaskRequest } from "@/app-shell/types.js";
+import { toast } from "@/components/ui/toast.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 import {
   CODE_COMMENT_REMOVE_BROADCAST_CHANNEL,
@@ -97,6 +111,10 @@ export function Root(props: RootProps) {
           composerClientNamespace={props.composerClientNamespace}
         >
           <BackendBusinessAvailabilityProvider available={props.backendBusinessAvailable !== false}>
+          <NativeHostAvailabilityProvider
+            available={props.nativeHostAvailable === true}
+            openProject={props.onOpenProject}
+          >
           <PlatformProvider platform={props.platform}>
             <StoreProvider
               broadcastService={props.services.broadcastService}
@@ -113,6 +131,7 @@ export function Root(props: RootProps) {
               </TabStoreProvider>
             </StoreProvider>
           </PlatformProvider>
+          </NativeHostAvailabilityProvider>
           </BackendBusinessAvailabilityProvider>
         </ServiceProvider>
       </TooltipProvider>
@@ -132,6 +151,9 @@ function RootInner({
   isDesktop,
   responsiveBrowserLayout = false,
   backendBusinessAvailable = true,
+  nativeHostAvailable = false,
+  initialDirectoryPath,
+  onOpenProject,
   restoreSession = true,
   supportsSettings = true,
   allowOpenWorkspace = true,
@@ -175,6 +197,9 @@ function RootInner({
     [services.modelSelectionService],
   );
   const [directoryBrowserOpen, setDirectoryBrowserOpen] = useState(false);
+  const [projectOpening, setProjectOpening] = useState(false);
+  const [projectOpenError, setProjectOpenError] = useState<string | null>(null);
+  const nativeCreationRef = useRef<Promise<void> | null>(null);
   const [isCreatingFallbackWorkspace, setIsCreatingFallbackWorkspace] = useState(false);
   const [isBootstrappingInitialWorkspace, setIsBootstrappingInitialWorkspace] = useState(
     Boolean(initialWorkspaceAbsPath),
@@ -302,6 +327,82 @@ function RootInner({
     workspaceShellRemoteSessionId,
     workspaceShellIdentity,
   );
+  const selectedNativeSessionId = useZCodeSessionStore((state) => workspaceShellPath
+    ? state.getWorkspaceState(workspaceShellPath, workspaceShellIdentity).activeTaskId : null);
+  const selectedNativeRead = useModelSelectionServiceView(
+    workspaceScopedServices.modelSelectionService,
+    nativeHostAvailable && Boolean(selectedNativeSessionId),
+    "remote-waiting",
+    selectedNativeSessionId ? { sessionId: selectedNativeSessionId } : undefined,
+  );
+  const selectedNativeSession = selectedNativeRead.state.status === "ready"
+    ? selectedNativeRead.state.view.nativeSession : undefined;
+  const selectedNativeResident = selectedNativeSession?.chatAvailable === true &&
+    selectedNativeSession.sessionId === selectedNativeSessionId;
+  const [confirmedNativeScope, setConfirmedNativeScope] = useState<{
+    services: typeof workspaceScopedServices;
+    scope: NativeWorkspaceSessionScope;
+  } | null>(null);
+  const retainedNativeScope = confirmedNativeScope?.services === workspaceScopedServices &&
+    confirmedNativeScope.scope.workspacePath === workspaceShellPath
+    ? confirmedNativeScope.scope : undefined;
+  const defaultNativeSession = rootModelSelectionView?.nativeSession;
+  const nativeWorkspaceScope = useMemo<NativeWorkspaceSessionScope>(() => {
+    const path = workspaceShellPath ?? "";
+    if (selectedNativeResident && selectedNativeSession) {
+      if (!areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, path)) {
+        return { workspacePath: path, ready: false };
+      }
+      if (retainedNativeScope?.sessionId === selectedNativeSession.sessionId) return retainedNativeScope;
+      return { workspacePath: path, sessionId: selectedNativeSession.sessionId, ready: true };
+    }
+    if (selectedNativeSessionId && selectedNativeRead.state.status !== "ready") {
+      return { workspacePath: path, ready: false };
+    }
+    // Viewing a readonly history never changes the last confirmed execution/file owner.
+    if (retainedNativeScope) return retainedNativeScope;
+    if (defaultNativeSession?.chatAvailable &&
+        areWorkspaceFilePathsEqual(defaultNativeSession.workspacePath, path)) {
+      return { workspacePath: path, sessionId: defaultNativeSession.sessionId, ready: true };
+    }
+    return {
+      workspacePath: path,
+      ready: !selectedNativeSessionId ||
+        (selectedNativeRead.state.status === "ready" && !selectedNativeResident),
+    };
+  }, [
+    workspaceShellPath, selectedNativeSessionId, selectedNativeResident,
+    selectedNativeSession?.sessionId, selectedNativeSession?.workspacePath,
+    selectedNativeRead.state.status, retainedNativeScope,
+    defaultNativeSession?.sessionId, defaultNativeSession?.workspacePath,
+    defaultNativeSession?.chatAvailable,
+  ]);
+  useEffect(() => {
+    if (!nativeHostAvailable || !nativeWorkspaceScope.sessionId) return;
+    setConfirmedNativeScope((previous) =>
+      previous?.services === workspaceScopedServices &&
+      previous.scope.sessionId === nativeWorkspaceScope.sessionId &&
+      previous.scope.workspacePath === nativeWorkspaceScope.workspacePath
+        ? previous : { services: workspaceScopedServices, scope: nativeWorkspaceScope });
+  }, [nativeHostAvailable, nativeWorkspaceScope, workspaceScopedServices]);
+  useEffect(() => {
+    if (!nativeHostAvailable || !selectedNativeResident || !selectedNativeSession ||
+        !workspaceShellPath ||
+        areWorkspaceFilePathsEqual(selectedNativeSession.workspacePath, workspaceShellPath)) return;
+    // Same-project /cd still requires rebuilding every absolute-path service and pane.
+    const target = new URL(window.location.href);
+    target.searchParams.set("session", selectedNativeSession.sessionId);
+    window.location.replace(target.href);
+  }, [
+    nativeHostAvailable, selectedNativeResident, selectedNativeSession?.sessionId,
+    selectedNativeSession?.workspacePath, workspaceShellPath,
+  ]);
+  const nativeScopedWorkspaceServices = useMemo(
+    () => nativeHostAvailable
+      ? bindNativeWorkspaceServices(workspaceScopedServices, nativeWorkspaceScope)
+      : workspaceScopedServices,
+    [nativeHostAvailable, workspaceScopedServices, nativeWorkspaceScope],
+  );
 
   const addTab = useTabStore((state) => state.addTab);
   const activateTabByPath = useTabStore((state) => state.activateTabByPath);
@@ -386,10 +487,10 @@ function RootInner({
     handleSelectConversationWorkspace,
     handleResolveConversationWorkspace,
     handleEnsureConversationWorkspace,
-    handleCreateConversationTask,
+    handleCreateConversationTask: handleCreateZCodeConversationTask,
     handleOpenWorkspace,
     handleOpenFolderFromWorkspaceMenu,
-    handleCreateTask,
+    handleCreateTask: handleCreateZCodeTask,
     handleBackFromSettings,
   } = useRootWorkspaceActions({
     intl,
@@ -405,6 +506,129 @@ function RootInner({
     preferDirectoryBrowser: shouldPreferDirectoryBrowser,
     openDirectoryBrowser: handleOpenDirectoryBrowser,
   });
+
+  const handleSelectBrowserProject = useCallback(async (path: string, create = false) => {
+    if (!onOpenProject || projectOpening) return;
+    setProjectOpening(true);
+    setProjectOpenError(null);
+    try {
+      await onOpenProject(path, create);
+      setDirectoryBrowserOpen(false);
+    } catch (error) {
+      setProjectOpenError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setProjectOpening(false);
+    }
+  }, [onOpenProject, projectOpening]);
+
+  const composerClientNamespace = useComposerClientNamespace();
+  const handleCreateTask = useCallback((request?: CreateTaskRequest) => {
+    if (!nativeHostAvailable) return handleCreateZCodeTask(request);
+    if (nativeCreationRef.current) return nativeCreationRef.current;
+    if (!workspaceShellPath) {
+      setDirectoryBrowserOpen(true);
+      return;
+    }
+    const options = typeof request === "object" ? request : undefined;
+    const originState = useZCodeSessionStore.getState()
+      .getWorkspaceState(workspaceShellPath, workspaceShellIdentity);
+    const originTaskId = originState.activeTaskId;
+    const originDraftVersion = originState.draftFocusVersion;
+    const originTabId = tabStoreApi.getState().activeTabId;
+    const isCurrent = () => options?.isCurrent?.() !== false &&
+      tabStoreApi.getState().activeTabId === originTabId &&
+      useZCodeSessionStore.getState()
+        .getWorkspaceState(workspaceShellPath, workspaceShellIdentity).activeTaskId === originTaskId &&
+      useZCodeSessionStore.getState()
+        .getWorkspaceState(workspaceShellPath, workspaceShellIdentity).draftFocusVersion === originDraftVersion;
+    const creation = (async () => {
+      try {
+        if (!nativeWorkspaceScope.ready) throw new Error("Native workspace ownership is changing; retry after rebinding.");
+        let targetPath = options?.targetWorkspace?.workspacePath;
+        if (options?.projectId && !targetPath) {
+          const projectService = workspaceScopedServices.projectService;
+          if (!projectService) throw new Error("The native project service is unavailable.");
+          const project = (await projectService.readProjects())
+            .find((candidate) => candidate.id === options.projectId);
+          if (!project) throw new Error("The selected native project is unavailable.");
+          targetPath = (project.roots.find((root) => root.isPrimary) ?? project.roots[0])?.rootPath;
+          if (!targetPath) throw new Error("The selected native project has no root directory.");
+        }
+        if (!isCurrent()) return;
+        if (targetPath && targetPath !== workspaceShellPath) {
+          if (!onOpenProject) throw new Error("Project navigation is unavailable.");
+          await onOpenProject(targetPath, false, true);
+          return;
+        }
+        const created = await workspaceScopedServices.zcodeSessionService.createSession({
+          workspacePath: workspaceShellPath,
+          ...(workspaceShellIdentity ? { workspaceIdentity: workspaceShellIdentity } : {}),
+        });
+        if (!created.session.sessionId) throw new Error("The native host did not return a session.");
+        if (!isCurrent()) return;
+        const incomingDraft = options?.initialComposerDraft ?? (!originTaskId
+          ? captureV4ComposerDraftHandoff(
+              workspaceShellPath, workspaceShellIdentity, composerClientNamespace,
+            ) : undefined);
+        const initialDraft = incomingDraft?.draft;
+        if (initialDraft || options?.initialPrompt?.trim()) {
+          persistV4ComposerDraft(
+            workspaceShellPath, workspaceShellIdentity, created.session.sessionId,
+            {
+              ...initialDraft,
+              text: options?.initialPrompt ?? initialDraft?.text ?? "",
+              ...(options?.initialPromptMention ? { mention: options.initialPromptMention } : {}),
+            },
+          );
+        }
+        if (incomingDraft) {
+          stageV4ComposerDraftAttachments(
+            workspaceShellPath, workspaceShellIdentity,
+            useZCodeSessionStore.getState()
+              .getWorkspaceState(workspaceShellPath, workspaceShellIdentity).draftFocusVersion,
+            incomingDraft, created.session.sessionId,
+          );
+        }
+        selectWorkbenchSession(
+          originTaskId ? {
+            workspaceScope: {
+              workspacePath: workspaceShellPath,
+              ...(workspaceShellIdentity ? { workspaceIdentity: workspaceShellIdentity } : {}),
+            },
+            sessionId: originTaskId,
+          } : null,
+          {
+            workspacePath: workspaceShellPath,
+            ...(workspaceShellIdentity ? { workspaceIdentity: workspaceShellIdentity } : {}),
+            sessionId: created.session.sessionId,
+          },
+        );
+        useZCodeSessionStore.getState().setActiveTaskId(
+          workspaceShellPath, created.session.sessionId, workspaceShellIdentity,
+        );
+        options?.onComplete?.();
+      } catch (error) {
+        if (!isCurrent()) return;
+        if (options?.onError) options.onError(error);
+        else toast(error instanceof Error ? error.message : String(error), { variant: "warning" });
+      }
+    })();
+    nativeCreationRef.current = creation;
+    void creation.finally(() => {
+      if (nativeCreationRef.current === creation) nativeCreationRef.current = null;
+    });
+    return creation;
+  }, [
+    nativeWorkspaceScope.ready,
+    handleCreateZCodeTask, nativeHostAvailable, tabStoreApi,
+    composerClientNamespace,
+    onOpenProject,
+    workspaceScopedServices, workspaceShellIdentity, workspaceShellPath,
+  ]);
+  const handleCreateConversationTask = useCallback(
+    () => nativeHostAvailable ? handleCreateTask() : handleCreateZCodeConversationTask(),
+    [nativeHostAvailable, handleCreateTask, handleCreateZCodeConversationTask],
+  );
 
   const handleResolveConversationWorkspaceForShell = useCallback(
     async () =>
@@ -435,7 +659,6 @@ function RootInner({
     setWorkspaceActionError(null);
   }, [activeWorkspacePath, setWorkspaceActionError]);
 
-  const composerClientNamespace = useComposerClientNamespace();
   const restorePersistedSession = useCallback(
     async (settings: AppSettings) => {
       const conversationWorkspace =
@@ -554,7 +777,9 @@ function RootInner({
     platform,
     activateTabByPath,
     startDraftInWorkspace,
-    startNewTaskFromActiveWorkspace,
+    startNewTaskFromActiveWorkspace: nativeHostAvailable
+      ? () => { void handleCreateTask(); }
+      : startNewTaskFromActiveWorkspace,
     openWorkspace: handleOpenWorkspace,
     openWorkspacePath: handleSelectProject,
     setWorkspaceActionError,
@@ -679,7 +904,8 @@ function RootInner({
       workspaceShellPath,
     ],
   );
-  const directoryBrowserDialog = directoryBrowserOpen ? (
+  const directoryBrowserDialog = directoryBrowserOpen ||
+    (nativeHostAvailable && !workspaceShellPath && !isSettingsTabActive) ? (
     <ScopedErrorBoundary
       scope="directory-browser"
       resetKeys={["directory-browser"]}
@@ -687,11 +913,23 @@ function RootInner({
     >
       <DirectoryBrowser
         services={services}
-        onCancel={() => setDirectoryBrowserOpen(false)}
-        onSelect={(path) => {
-          setDirectoryBrowserOpen(false);
-          void handleSelectProject(path);
+        initialPath={initialDirectoryPath ?? workspaceShellPath ?? undefined}
+        directoriesOnly={nativeHostAvailable}
+        selecting={projectOpening}
+        selectionError={projectOpenError ?? undefined}
+        onCancel={() => {
+          if (!projectOpening) setDirectoryBrowserOpen(false);
         }}
+        onSelect={(path) => {
+          if (onOpenProject) void handleSelectBrowserProject(path);
+          else {
+            setDirectoryBrowserOpen(false);
+            void handleSelectProject(path);
+          }
+        }}
+        onCreate={onOpenProject ? (path) => {
+          void handleSelectBrowserProject(path, true);
+        } : undefined}
       />
     </ScopedErrorBoundary>
   ) : null;
@@ -786,7 +1024,7 @@ function RootInner({
   }
 
   if (!workspaceShellPath) {
-    return directoryBrowserOpen || rootModelSelectionErrorNode ? (
+    return directoryBrowserDialog || rootModelSelectionErrorNode ? (
       <RootShell>
         {rootModelSelectionErrorNode}
         {directoryBrowserDialog}
@@ -805,8 +1043,9 @@ function RootInner({
                 recovery={remoteWorkspaceRecoveryByWorkspaceKey}
                 onReconnect={handleReconnectRemoteWorkspace}
               >
+              <NativeWorkspaceSessionProvider scope={nativeWorkspaceScope}>
               <RootWorkspaceContent
-                workspaceScopedServices={workspaceScopedServices}
+                workspaceScopedServices={nativeScopedWorkspaceServices}
                 workspaceShellPath={workspaceShellPath}
                 workspaceIdentity={workspaceShellIdentity}
                 workspaceRemoteSessionId={workspaceShellRemoteSessionId}
@@ -831,6 +1070,7 @@ function RootInner({
                 initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 isDesktop={isDesktop}
               />
+              </NativeWorkspaceSessionProvider>
               </RemoteProjectPresentationProvider>
         {onboardingDialog}
     </RootShell>

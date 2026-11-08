@@ -23,6 +23,7 @@ import { toast } from "@/components/ui/toast.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { logger } from "@/logger.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { getPathLeaf } from "@/lib/path.js";
 import {
   addPendingSettingsSectionListener,
@@ -135,6 +136,7 @@ export function SettingsPage({
   allowOpenWorkspace?: boolean;
 }) {
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
   const { settingsSectionGroups, settingsSections } = useMemo(
     () => createSettingsPageConfig(),
     [],
@@ -768,14 +770,16 @@ export function SettingsPage({
                               />
                             </ServiceProvider>
                           ) : activeSection === "personalization" ? (
-                            // 个性化指令编辑的是本机 ~/.zcode/AGENTS.md（Agent 实际读取的文件）。
-                            // 仅桌面本地入口可编辑：手机远控的 base services 可能归属远程
-                            // Source（remoteWorkspaceServiceCollection 注册的是远端 settingService），
-                            // 编辑会写错机器；Web 端只显示本地桌面端指引。
-                            <PersonalizationSection
-                              settingService={localHostServices.settingService}
-                              isDesktop={Boolean(isDesktop)}
-                            />
+                            isDesktop || nativeHostAvailable ? (
+                              <PersonalizationSection
+                                settingService={localHostServices.settingService}
+                                isDesktop={Boolean(isDesktop)}
+                              />
+                            ) : (
+                              <p className="text-ui-base text-foreground-subtle">
+                                {intl.formatMessage({ id: "settings.personalization.localOnly" })}
+                              </p>
+                            )
                           ) : activeSection === "memory" ? (
                             <ServiceProvider services={localHostServices}>
                               {/* Memory catalog 始终使用本地 Host，避免远程 workspace 误读本机数据。 */}

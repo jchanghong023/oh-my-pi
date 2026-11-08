@@ -61,6 +61,9 @@ export interface ConversationRowRenderContext {
   chatLoadingBlockedByInteraction?: boolean;
   /** 常规设置：是否在对话消息流中渲染 reasoning / thought 行。 */
   messageStreamShowReasoning?: boolean;
+  /** Explicit native /display hideThinking also hides the first reasoning summary. */
+  nativeHideThinking?: boolean;
+  nativeDisplayMode?: "clean" | "compact" | "detailed";
   /** 当前 assistant 轮次的第一条 reasoning row；关闭完整思考时仍需展示。 */
   messageStreamFirstReasoningRowId?: number;
   /** 常规设置：是否在对话消息流中渲染 Todo 工具卡片。 */
@@ -220,14 +223,14 @@ export interface ConversationFileChangesRequestOptions {
 
 export type ConversationReasoningVisibility = Pick<
   ConversationRowRenderContext,
-  "messageStreamShowReasoning" | "messageStreamFirstReasoningRowId"
+  "messageStreamShowReasoning" | "messageStreamFirstReasoningRowId" | "nativeHideThinking"
 >;
 
 export function isConversationReasoningRowVisible(
   rowId: number,
   visibility: ConversationReasoningVisibility,
 ): boolean {
-  return (
+  return !visibility.nativeHideThinking && (
     visibility.messageStreamShowReasoning === true ||
     visibility.messageStreamFirstReasoningRowId === rowId
   );

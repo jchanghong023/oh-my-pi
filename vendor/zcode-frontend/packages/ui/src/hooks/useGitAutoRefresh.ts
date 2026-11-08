@@ -9,6 +9,8 @@ import {
 } from "@/lib/gitAutoRefresh.js";
 import { logger } from "@/logger.js";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
+import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
 // agent 批量写文件时，150ms watcher 防抖 + 350ms Git 防抖仍会把长批次拆成多轮
 // `git status`。这里把 Git 自动刷新延后到 1 分钟，降低大工作区里的重复 Git I/O。
@@ -38,11 +40,13 @@ export function useGitAutoRefresh({
 }) {
   const workspaceServices = useWorkspaceServices(workspacePath, remoteSessionId, workspaceIdentity);
   const { fileWatcherService, systemService } = workspaceServices;
+  const nativeHostAvailable = useNativeHostAvailable();
+  const watchingAvailable = useFileWatchingAvailable(fileWatcherService, enabled && nativeHostAvailable);
   const refreshRef = useRef(onRefreshGit);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const currentWorkspaceKey = workspaceIdentity?.trim() || workspacePath;
   const canWatchCurrentWorkspace = shouldEnableGitAutoRefreshForWorkspace({
-    enabled,
+    enabled: enabled && (!nativeHostAvailable || watchingAvailable),
     currentWorkspaceKey,
     summaryWorkspaceKey: gitSummaryWorkspaceKey,
   });
@@ -82,7 +86,9 @@ export function useGitAutoRefresh({
         canWatchCurrentWorkspace
           ? buildGitAutoRefreshWatchPaths(
               gitSummary,
-              workspacePlatform ? { platform: workspacePlatform } : null,
+              nativeHostAvailable
+                ? { platform: workspacePlatform ?? "", nativeRecursive: true }
+                : workspacePlatform ? { platform: workspacePlatform } : null,
             )
           : [],
       ),
@@ -94,6 +100,7 @@ export function useGitAutoRefresh({
       gitSummary.workspacePath,
       gitSummary.autoRefreshWatchPaths,
       workspacePlatform,
+      nativeHostAvailable,
     ],
   );
   const watchPaths = useMemo(
@@ -108,6 +115,7 @@ export function useGitAutoRefresh({
     const registrations: GitWatcherRegistration[] = [];
 
     const scheduleRefresh = (path: string) => {
+      if (cancelled) return;
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
       }
@@ -118,7 +126,7 @@ export function useGitAutoRefresh({
           path,
         });
         refreshRef.current();
-      }, GIT_AUTO_REFRESH_DEBOUNCE_MS);
+      }, nativeHostAvailable ? 350 : GIT_AUTO_REFRESH_DEBOUNCE_MS);
     };
 
     // Git summary 每次刷新都会带回新的 autoRefreshWatchPaths 数组引用。
@@ -131,7 +139,9 @@ export function useGitAutoRefresh({
         })
         .then(({ id }) => {
           if (cancelled) {
-            void fileWatcherService.unwatch({ id });
+            void fileWatcherService.unwatch({ id }).catch((error: unknown) => {
+              logger.warn("[GitAutoRefresh] Failed to release superseded watcher", { error });
+            });
             return;
           }
 
@@ -173,5 +183,5 @@ export function useGitAutoRefresh({
         });
       }
     };
-  }, [fileWatcherService, watchPaths, workspacePath]);
+  }, [fileWatcherService, nativeHostAvailable, watchPaths, workspacePath]);
 }

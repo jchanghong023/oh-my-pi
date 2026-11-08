@@ -58,6 +58,8 @@ export const SHUTDOWN_CONSOLIDATE_BUDGET_MS = 1_500;
 
 /** Options controlling session disposal. */
 export interface AgentSessionDisposeOptions {
+	/** Require owned cleanup and draining to succeed; failed cleanup remains retryable. */
+	strict?: boolean;
 	mnemopiConsolidateTimeoutMs?: number;
 	/**
 	 * Deadline for the settle/drain wait before the terminal memory release
@@ -381,7 +383,7 @@ export interface AgentSessionConfig {
 	/** Async job manager whose ownership is released when this session closes. */
 	ownedAsyncJobManager?: AsyncJobManager;
 	/** Release a shared SDK ownership lease instead of disposing the manager outright. */
-	releaseOwnedAsyncJobManager?: () => Promise<boolean | void>;
+	releaseOwnedAsyncJobManager?: (options?: { strict?: boolean }) => Promise<boolean | void>;
 	/** Async job manager visible to this session. */
 	asyncJobManager?: AsyncJobManagerApi;
 	/** Registry identity used for IRC routing. */

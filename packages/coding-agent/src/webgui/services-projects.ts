@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import { normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import type {
 	ProjectTree,
 	VirtualProject,
@@ -11,19 +13,52 @@ import type {
 	ZCodeTaskMeta,
 	ZCodeTaskSnapshot,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-task-types-core";
-import { legacyMessages, listNativeHistory, nativeChatRuntime } from "./native-chat";
+import { legacyMessages, listNativeHistory } from "./native-chat";
 import { sessionDisplayName, type SessionInfo } from "../session/session-listing";
 import { createWebGuiService } from "./service-channel";
+import { listBrowserProjects, resolveBrowserProjectRoot } from "./project-registry";
+import { resumeWebGuiNativeSession, webGuiSessionProject } from "./native-session-host";
 
 /** The sidebar is a read-only projection of native histories, not new ZCode project/task records. */
 export function createProjectServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
+	const residents = () =>
+		listBrowserProjects()
+			.filter(project => project.mode === "webgui")
+			.flatMap(project => [...(project.nativeSessions ?? [])])
+			.filter(session => !session.isDisposed);
+	const projects = (): VirtualProject[] =>
+		listBrowserProjects()
+			.filter(project => project.mode === "webgui")
+			.map((project, position) => ({
+				id: project.projectId,
+				hostId: "local",
+				name: path.basename(project.root) || project.root,
+				nameOverridden: false,
+				roots: [{ rootPath: project.root, position: 0, isPrimary: true }],
+				position,
+				pinned: false,
+				deleted: false,
+				createdAt: project.createdAt ?? 0,
+				updatedAt: project.updatedAt ?? project.createdAt ?? 0,
+			}));
+	const projectForCwd = async (cwd: string): Promise<string | null> => {
+		const root = await resolveBrowserProjectRoot(cwd).catch(() => undefined);
+		if (!root) return null;
+		return (
+			listBrowserProjects().find(
+				project =>
+					project.mode === "webgui" &&
+					normalizePathForComparison(project.root) === normalizePathForComparison(root),
+			)?.projectId ?? null
+		);
+	};
 	const taskMeta = (info: SessionInfo): ZCodeTaskMeta => {
-		const active = context.nativeSession?.sessionId === info.id ? context.nativeSession : undefined;
+		const active = residents().find(session => session.sessionId === info.id);
 		return {
 			taskId: info.id,
 			traceId: info.id,
 			title: sessionDisplayName(info),
-			workspacePath: context.workspacePath!,
+			workspacePath: info.cwd,
 			createdAt: info.created.getTime(),
 			updatedAt: info.modified.getTime(),
 			mode: "build",
@@ -31,14 +66,25 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 			...(active?.model ? { model: active.model.id, thoughtLevel: active.thinkingLevel } : {}),
 		};
 	};
-	const tasks = async (): Promise<ProjectTask[]> =>
-		(await listNativeHistory(context)).map(info => ({
-			...taskMeta(info),
-			projectId: null,
-			hostId: "local",
-			pinned: false,
-			archived: false,
-		}));
+	const tasks = async (): Promise<ProjectTask[]> => {
+		const byCwd = new Map<string, Promise<string | null>>();
+		return Promise.all(
+			(await listNativeHistory(context)).map(async info => {
+				let project = byCwd.get(info.cwd);
+				if (!project) {
+					project = projectForCwd(info.cwd);
+					byCwd.set(info.cwd, project);
+				}
+				return {
+					...taskMeta(info),
+					projectId: await project,
+					hostId: "local",
+					pinned: false,
+					archived: false,
+				};
+			}),
+		);
+	};
 	const find = async (value: unknown): Promise<SessionInfo | undefined> => {
 		if (!value || typeof value !== "object" || !("taskId" in value) || typeof value.taskId !== "string")
 			throw new TypeError("Expected native taskId");
@@ -65,28 +111,27 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 	};
 	return [
 		createWebGuiService("project", {
-			readProjects: (): VirtualProject[] => [],
-			readTree: async (): Promise<ProjectTree> => ({ projects: [], tasks: await tasks(), deletedTasks: [] }),
+			readProjects: projects,
+			readTree: async (): Promise<ProjectTree> => ({ projects: projects(), tasks: await tasks(), deletedTasks: [] }),
 			resolveSessionDirectories: async value => {
 				const info = await find(value);
 				if (!info) throw new Error("Native session not found");
-				return { workspacePath: context.workspacePath!, additionalDirectories: [], projectId: null };
+				return { workspacePath: info.cwd, additionalDirectories: [], projectId: await projectForCwd(info.cwd) };
 			},
 		}),
 		createWebGuiService("task-groups", {
 			read: (): TaskGroupStructure => ({ groups: [], members: [], order: [] }),
 		}),
-		// Runtime mutation, prompt queues, files and permissions stay unavailable.
 		createWebGuiService("zcode-task", {
-			initialize: (): { available: boolean; version?: string } => ({
-				available: !!context.nativeSession,
-				...(context.nativeSession ? { version: "omp-native" } : {}),
-			}),
+			initialize: (): { available: boolean; version: string } => ({ available: true, version: "omp-native" }),
 			listTasks: tasks,
 			listPinnedTaskIds: () => [],
 			listPinnedTasks: () => [],
 			listDeletedTaskIds: () => [],
-			listActiveTaskIds: () => (context.nativeSession?.isStreaming ? [context.nativeSession.sessionId] : []),
+			listActiveTaskIds: () =>
+				residents()
+					.filter(session => session.isStreaming)
+					.map(session => session.sessionId),
 			listArchivedTasks: () => [],
 			listTaskList: async value => {
 				const query =
@@ -125,8 +170,9 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 			resumeTask: async value => {
 				const info = await find(value);
 				if (!info) throw new Error("Native session not found");
-				await nativeChatRuntime(context).resume(context, info.id);
-				return taskMeta(info);
+				const session = await resumeWebGuiNativeSession(context, info.id);
+				const project = webGuiSessionProject(session);
+				return { ...taskMeta(info), ...project, workspacePath: session.sessionManager.getCwd() };
 			},
 			getTaskSnapshotBody: () => null,
 			getTaskSnapshotRef: () => null,
@@ -134,7 +180,7 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 			getTaskConfigOptions: () => [],
 			getTaskModelSelection: async value => {
 				const info = await find(value);
-				const current = info?.id === context.nativeSession?.sessionId ? context.nativeSession?.model : undefined;
+				const current = residents().find(session => session.sessionId === info?.id)?.model;
 				return current ? { providerId: current.provider, modelId: current.id } : null;
 			},
 		}),

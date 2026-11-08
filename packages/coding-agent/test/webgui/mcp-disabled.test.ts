@@ -6,9 +6,11 @@ import { Emitter, Event } from "../../../../vendor/zcode-frontend/packages/rpc/s
 import { SocketProtocol } from "../../../../vendor/zcode-frontend/packages/rpc/src/protocol";
 import { WEBGUI_RPC_PATH } from "../../../../vendor/zcode-frontend/preview/session-info";
 import { WebGuiRpcHost, type WebGuiSocketData } from "../../src/webgui/rpc-server";
+import { hasWebGuiNativeResources } from "../../src/webgui/native-session-host";
 
 // Exercise the production channel registration and binary wire, not a service-array snapshot.
 test("WebGUI rejects the retired MCP channel without disrupting retained Skills RPC", async () => {
+	expect(hasWebGuiNativeResources()).toBe(false);
 	using temp = TempDir.createSync("@pi-webgui-rpc-services-");
 	const rpc = new WebGuiRpcHost();
 	const server = Bun.serve<WebGuiSocketData>({
@@ -51,6 +53,9 @@ test("WebGUI rejects the retired MCP channel without disrupting retained Skills 
 		});
 		// Rejection must be a normal RPC error, not transport shutdown or an empty MCP catalog.
 		expect(await skills.call("list")).toMatchObject({ skills: [] });
+		// An unbound RPC connection must not activate composition, including during disposal.
+		rpc.dispose();
+		expect(hasWebGuiNativeResources()).toBe(false);
 	} finally {
 		client.dispose();
 		protocol.dispose();

@@ -45,6 +45,11 @@ export const BUILTIN_SPEC_DRIVEN_SLASH_COMMANDS: SlashCommandSpec[] = [
 		description: "进入浏览器 Dev 工作台；再次输入退出并恢复普通会话",
 		// Retired verbs receive a consumed rejection, never a prompt fallback.
 		allowArgs: true,
+		handleWebGui: (command, runtime) =>
+			handleDevCommand(command, {
+				...runtime,
+				toggleDevWorkbench: () => runtime.host.toggleMode("dev"),
+			}),
 		handle: handleDevCommand,
 	},
 ];

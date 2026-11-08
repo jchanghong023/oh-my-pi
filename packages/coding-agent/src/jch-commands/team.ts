@@ -11,9 +11,15 @@
  * - everything else (config errors, missing session model) is reported by the
  *   controller without running stages.
  */
-import type { SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime } from "../slash-commands/types";
+import type {
+	ParsedSlashCommand,
+	SlashCommandResult,
+	SlashCommandRuntime,
+	SlashCommandSpec,
+	TuiSlashCommandRuntime,
+} from "../slash-commands/types";
 import { clearSubmittedText, restoreDetachedDraft } from "../slash-commands/helpers/draft";
-import { showTeamConfig } from "../team/config-ui";
+import { showTeamConfig, showWebGuiTeamConfig } from "../team/config-ui";
 
 const USAGE = "用法：/team <问题或需求> — 用一段自然语言描述要分析的问题、需求或设计取舍。不猜测你要分析什么。";
 
@@ -35,6 +41,38 @@ function detachSubmittedImages(runtime: TuiSlashCommandRuntime): boolean {
 	return true;
 }
 
+async function handleTeamCommand(
+	command: ParsedSlashCommand,
+	runtime: SlashCommandRuntime,
+	webGui = false,
+): Promise<SlashCommandResult> {
+	const question = command.args.trim();
+	if (question === "configure") {
+		await runtime.output(
+			"Team 配置请使用 TUI /team configure，或 RPC v3 teamConfig 能力的 get_team_config / get_team_models / set_team_config 接口。此命令不发起讨论。",
+		);
+		return { consumed: true };
+	}
+	if (!question) {
+		await runtime.output(USAGE);
+		return { consumed: true };
+	}
+	// Deferred import keeps command registration free of the orchestrator's
+	// module graph (executor -> extensions -> builtin-registry -> here).
+	const { startTeamDiscussion } = await import("../team/controller");
+	const outcome = await startTeamDiscussion(question, {
+		session: runtime.session,
+		settings: runtime.settings,
+		cwd: runtime.cwd,
+		signal: webGui ? runtime.signal : undefined,
+		ownerId: webGui ? runtime.session.getAgentId() : undefined,
+		hooks: {
+			output: text => runtime.output(text),
+		},
+	});
+	return webGui ? { consumed: true, agentInvoked: outcome.started, failed: !outcome.started } : { consumed: true };
+}
+
 export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "team",
@@ -45,30 +83,10 @@ export const TEAM_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "<问题或需求>",
 		subcommandOptional: true,
 		subcommands: [{ name: "configure", description: "编辑 Team 有序模型槽位（不调用模型）" }],
-		handle: async (command, runtime: SlashCommandRuntime) => {
-			const question = command.args.trim();
-			if (question === "configure") {
-				await runtime.output(
-					"Team 配置请使用 TUI /team configure，或 RPC v3 teamConfig 能力的 get_team_config / get_team_models / set_team_config 接口。此命令不发起讨论。",
-				);
-				return { consumed: true };
-			}
-			if (!question) {
-				await runtime.output(USAGE);
-				return { consumed: true };
-			}
-			// Deferred import keeps command registration free of the orchestrator's
-			// module graph (executor -> extensions -> builtin-registry -> here).
-			const { startTeamDiscussion } = await import("../team/controller");
-			await startTeamDiscussion(question, {
-				session: runtime.session,
-				settings: runtime.settings,
-				cwd: runtime.cwd,
-				hooks: {
-					output: text => runtime.output(text),
-				},
-			});
-			return { consumed: true };
+		handle: handleTeamCommand,
+		handleWebGui: async (command, runtime) => {
+			if (command.args.trim() === "configure") return showWebGuiTeamConfig(runtime);
+			return handleTeamCommand(command, runtime, true);
 		},
 		handleTui: async (command, runtime: TuiSlashCommandRuntime) => {
 			const question = command.args.trim();

@@ -41,6 +41,8 @@ import {
 import { requestV4ComposerDraftWorkspaceTransfer } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { ProjectComposerMenu, ProjectDirectoryProvider } from "@/project-sidebar/index.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
+import { usePlatform } from "@/hooks/usePlatform.js";
 import { GitBranchSwitcher } from "@/GitBranchSwitcher.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 
@@ -317,6 +319,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const platform = usePlatform();
   const isOfficeMode = useIsOfficeMode();
   const baseServices = useBaseWorkspaceServices();
   const tabStoreApi = useTabStoreApi();
@@ -1087,6 +1091,18 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       targetRemoteSessionId?: string,
       expectedUnreadAt?: number,
     ) => {
+      if (nativeHostAvailable) {
+        // History visibility does not admit or switch its cwd. Continue performs that
+        // explicit operation and reconnects the destination project before execution.
+        selectWorkbenchSession(shellWorkbenchBindingRef.current, {
+          workspacePath: workspaceAbsPath,
+          ...(workspaceIdentity ? { workspaceIdentity } : {}),
+          sessionId: taskId,
+        });
+        showChatMainView();
+        handleSelectTask(workspaceAbsPath, taskId, workspaceIdentity, expectedUnreadAt);
+        return true;
+      }
         const workspaceResult = ensureTaskNavigationWorkspace({
           workspacePath: targetWorkspacePath,
           workspaceIdentity: targetWorkspaceIdentity,
@@ -1135,7 +1151,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       }
       return true;
     },
-    [handleSelectTask, intl, showChatMainView, tabStoreApi, workspaceTabs],
+    [handleSelectTask, intl, nativeHostAvailable, showChatMainView, tabStoreApi,
+      workspaceAbsPath, workspaceIdentity, workspaceTabs],
   );
   // 中枢直接启动 accepted 后切到新会话（run 卡已在顶部）：复用运行历史那条导航，
   // target 恒带工作流所属项目坐标（不变式 7），remoteSessionId 决定连接 endpoint。
@@ -1288,6 +1305,14 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       targetWorkspaceIdentity?: string,
       targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
     ) => {
+      if (nativeHostAvailable) {
+        if (targetWorkspacePath !== workspaceAbsPath) {
+          void platform.activateOrSetWorkspace(targetWorkspacePath).catch((error) => {
+            toast(error instanceof Error ? error.message : String(error));
+          });
+        } else showChatMainView();
+        return;
+      }
       showChatMainView();
       handleStartDraftInWorkspace(
         targetWorkspacePath,
@@ -1295,7 +1320,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         targetWorkspacePurpose,
       );
     },
-    [handleStartDraftInWorkspace, showChatMainView],
+    [handleStartDraftInWorkspace, nativeHostAvailable, platform, showChatMainView, workspaceAbsPath],
   );
   const handleCreateProjectDraft = useCallback(
     (path: string, identity?: string) =>
@@ -1362,6 +1387,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         workspaceIdentity={workspaceIdentity}
         onCreateTask={handleCreateTaskInChat}
         onSelectConversationWorkspace={handleSelectConversationWorkspace}
+        onOpenProject={onOpenWorkspace}
       >
         {!isOfficeMode && activeWorkspacePurpose === "project" ? (
           <GitBranchSwitcher
@@ -1377,6 +1403,18 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             avoidPopoverCollisions={false}
           />
         ) : null}
+        {nativeHostAvailable ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            data-testid="native-session-create"
+            onClick={() => handleCreateTaskInChat()}
+          >
+            <MessageCirclePlus className="size-4" />
+            {intl.formatMessage({ id: "taskList.newThread" })}
+          </Button>
+        ) : null}
       </ProjectComposerMenu>
     ),
     [
@@ -1387,6 +1425,9 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       handleRefreshGit,
       handleSelectConversationWorkspace,
       handleCreateTaskInChat,
+      intl,
+      nativeHostAvailable,
+      onOpenWorkspace,
       workspaceAbsPath,
       workspaceIdentity,
     ],
@@ -2294,6 +2335,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 variant="ghost"
                 size="icon-sm"
                 aria-label={intl.formatMessage({ id: "taskList.newThread" })}
+                data-testid="workspace-new-session"
                 disabled={Boolean(workspaceReadOnlyReason)}
                 onClick={() => handleCreateTaskInChat()}
               >

@@ -5,7 +5,6 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import * as ai from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import type { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
@@ -15,18 +14,20 @@ import {
 	maybeStartSharpshooterExtraction,
 } from "@oh-my-pi/pi-coding-agent/sharpshooter/extract";
 import { listSharpshooterDeltas } from "@oh-my-pi/pi-coding-agent/sharpshooter/queue";
+import { getTestModel } from "./helpers/model-fixtures";
 
 function message(role: "user" | "assistant", content: unknown): AgentMessage {
 	return { role, content, timestamp: Date.now() } as unknown as AgentMessage;
 }
 
 function assistantResponse(content: AssistantMessage["content"]): AssistantMessage {
+	const model = getTestModel("ascend");
 	return {
 		role: "assistant",
 		content,
-		api: "anthropic-messages",
-		provider: "anthropic",
-		model: "claude-haiku-4-5",
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
 		stopReason: "stop",
 		usage: {
 			input: 0,
@@ -46,8 +47,7 @@ function extractionDependencies(
 	sessionId = "session-extract",
 	overrides: Record<string, unknown> = {},
 ) {
-	const model = getBundledModel("anthropic", "claude-haiku-4-5");
-	if (!model) throw new Error("Expected bundled Claude Haiku model");
+	const model = getTestModel("ascend");
 	const settings = Settings.isolated({ "sharpshooter.model": `${model.provider}/${model.id}`, ...overrides });
 	const modelRegistry = {
 		getAll: () => [model],
@@ -137,6 +137,84 @@ describe("maybeStartSharpshooterExtraction", () => {
 		expect(completion).toHaveBeenCalledTimes(1);
 		pending.resolve(assistantResponse([{ type: "text", text: "No tool call." }]));
 		await flushSharpshooterExtraction(deps.session);
+	});
+
+	it("keeps pending queue writes retryable after strict flush timeouts without changing ordinary flush", async () => {
+		const root = await fs.mkdtemp(path.join(os.tmpdir(), "sharpshooter-flush-write-"));
+		const cwd = path.join(root, "project");
+		const agentDir = path.join(root, "agent");
+		const deps = extractionDependencies(cwd, [
+			message("user", [{ type: "text", text: "Keep the cyan status indicator across every release." }]),
+		]);
+		const writing = Promise.withResolvers<void>();
+		const releaseWrite = Promise.withResolvers<void>();
+		const write = Bun.write.bind(Bun);
+		let persisted = false;
+		try {
+			vi.spyOn(ai, "completeSimple").mockResolvedValue(
+				assistantResponse([
+					{
+						type: "toolCall",
+						id: "call-record",
+						name: "record_deltas",
+						arguments: {
+							deltas: [
+								{
+									kind: "style_decision",
+									statement: "Status indicator stays cyan.",
+									source: "explicit_user",
+									evidence: "cyan status indicator",
+									friction: { corrective: false, regression: false, subtle: false },
+								},
+							],
+						},
+					},
+				]),
+			);
+			vi.spyOn(Bun, "write").mockImplementation(async (target, content, options) => {
+				if (typeof target !== "string" || !target.startsWith(`${agentDir}${path.sep}`)) {
+					return write(target as string, content as string, options);
+				}
+				writing.resolve();
+				await releaseWrite.promise;
+				const bytes = await write(target, content as string, options);
+				persisted = true;
+				return bytes;
+			});
+
+			maybeStartSharpshooterExtraction({ agentDir, ...deps });
+			await writing.promise;
+
+			await expect(flushSharpshooterExtraction(deps.session, 0)).resolves.toBeUndefined();
+			expect(persisted).toBe(false);
+			expect(await listSharpshooterDeltas(agentDir, cwd)).toEqual([]);
+			await expect(flushSharpshooterExtraction(deps.session, 0, { strict: true })).rejects.toThrow(
+				"Sharpshooter extraction did not finish within 0ms",
+			);
+			// Neither timeout may forget the real producer while its write is still blocked.
+			await expect(flushSharpshooterExtraction(deps.session, 0, { strict: true })).rejects.toThrow(
+				"Sharpshooter extraction did not finish within 0ms",
+			);
+			expect(persisted).toBe(false);
+
+			const retry = flushSharpshooterExtraction(deps.session, undefined, { strict: true });
+			releaseWrite.resolve();
+			await retry;
+
+			expect(persisted).toBe(true);
+			const groups = await listSharpshooterDeltas(agentDir, cwd);
+			expect(groups).toHaveLength(1);
+			expect(groups[0]?.deltas).toHaveLength(1);
+			expect(groups[0]?.deltas[0]?.delta.statement).toBe("Status indicator stays cyan.");
+			await expect(flushSharpshooterExtraction(deps.session, 0, { strict: true })).resolves.toBeUndefined();
+		} finally {
+			releaseWrite.resolve();
+			try {
+				await flushSharpshooterExtraction(deps.session, undefined, { strict: true });
+			} finally {
+				await fs.rm(root, { recursive: true, force: true });
+			}
+		}
 	});
 
 	it("gates short prompts on sharpshooter.minPromptLength, counting user-perceived characters", async () => {

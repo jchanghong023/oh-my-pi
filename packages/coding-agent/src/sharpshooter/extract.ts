@@ -62,14 +62,24 @@ interface ExtractionHost extends AgentSession {
 /**
  * Await the session's in-flight extraction, bounded by `timeoutMs`. Called from
  * session disposal so short-lived processes (print mode) do not exit before a
- * just-fired extraction persists its deltas.
+ * just-fired extraction persists its deltas. Strict disposal rejects on timeout
+ * without discarding the extraction, so a later flush can await its completion.
  */
-export async function flushSharpshooterExtraction(session: AgentSession, timeoutMs = 5_000): Promise<void> {
+export async function flushSharpshooterExtraction(
+	session: AgentSession,
+	timeoutMs = 5_000,
+	options: { strict?: boolean } = {},
+): Promise<void> {
 	const pending = (session as ExtractionHost)[kExtractionInFlight];
 	if (!pending) return;
 	// A settled extraction must not leave the bound's timer holding the event loop open.
 	const bound = Promise.withResolvers<void>();
-	const timer = setTimeout(bound.resolve, Math.max(0, timeoutMs));
+	const timer = setTimeout(
+		options.strict
+			? () => bound.reject(new Error(`Sharpshooter extraction did not finish within ${timeoutMs}ms`))
+			: bound.resolve,
+		Math.max(0, timeoutMs),
+	);
 	try {
 		await Promise.race([pending, bound.promise]);
 	} finally {

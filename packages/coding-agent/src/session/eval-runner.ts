@@ -178,9 +178,10 @@ export class EvalRunner {
 	}
 
 	/** Waits for active work and disposes every retained eval kernel owned by the session. */
-	async disposeKernels(): Promise<void> {
-		const settled = await this.#prepareExecutionsForDispose();
+	async disposeKernels(options?: { strict?: boolean }): Promise<void> {
+		const settled = await this.#prepareExecutionsForDispose(options?.strict);
 		if (!settled) {
+			if (options?.strict) throw new Error("Active eval execution did not settle during strict disposal");
 			logger.warn("Detaching retained eval-kernel ownership during dispose while eval execution is still active");
 		}
 		const results = await Promise.allSettled([
@@ -206,13 +207,15 @@ export class EvalRunner {
 		return true;
 	}
 
-	async #prepareExecutionsForDispose(): Promise<boolean> {
+	async #prepareExecutionsForDispose(strict = false): Promise<boolean> {
 		if (!(await this.#waitForExecutionsToSettle(3_000))) {
 			logger.warn("Aborting active Python execution during dispose before retained kernel cleanup");
 			this.abort();
 			if (!(await this.#waitForExecutionsToSettle(1_000))) {
 				logger.warn(
-					"Python execution is still active after dispose aborted all active runs; retained kernel ownership will still be detached",
+					strict
+						? "Python execution is still active after dispose aborted all active runs; retaining owned kernels for retry"
+						: "Python execution is still active after dispose aborted all active runs; retained kernel ownership will still be detached",
 				);
 				return false;
 			}

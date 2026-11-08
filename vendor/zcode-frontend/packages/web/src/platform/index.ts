@@ -7,7 +7,9 @@ import { playTaskNotificationSound } from "@zcode/ui";
 import { resolveWebCommunityUrl } from "#src/communityUrl.js";
 import { saveBrowserFile } from "#src/platform/saveBrowserFile.js";
 
-export function createWebPlatform(): IPlatformService {
+export function createWebPlatform(options: {
+  activateWorkspace?: (path: string) => Promise<{ activated: boolean }>;
+} = {}): IPlatformService {
   return {
     canSelectFilePath: false,
     canOpenLocalFiles: false,
@@ -22,8 +24,8 @@ export function createWebPlatform(): IPlatformService {
       Promise.reject(new Error("Temporary text attachments require a desktop host")),
     onRemoteConnectionLog: () => () => {},
     onRemoteSessionClosed: () => () => {},
-    // Web 端无多窗口管理
-    activateOrSetWorkspace: () => Promise.resolve({ activated: false }),
+    // OMP project navigation must reconnect to the destination's own RPC binding.
+    activateOrSetWorkspace: options.activateWorkspace ?? (() => Promise.resolve({ activated: false })),
     async connectRemote(
       options: RemoteTarget,
       _requestId?: string,

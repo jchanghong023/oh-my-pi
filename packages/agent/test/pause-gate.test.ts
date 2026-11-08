@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from "bun:test";
+import * as fs from "node:fs/promises";
 import { type } from "@oh-my-pi/omptype";
-import { Agent, agentLoop, agentPauseGate } from "@oh-my-pi/pi-agent-core";
+import { Agent, agentLoop } from "@oh-my-pi/pi-agent-core";
+import { AgentPauseGate, agentPauseGate } from "@oh-my-pi/pi-agent-core/pause";
+import { SpeculativeOperationCoordinator } from "@oh-my-pi/pi-agent-core/speculative-execution";
 import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool } from "@oh-my-pi/pi-agent-core/types";
 import type { Message } from "@oh-my-pi/pi-ai";
 import { createMockModel, type MockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { TempDir } from "@oh-my-pi/pi-utils";
 import { createUserMessage } from "./helpers";
 
 function identityConverter(messages: AgentMessage[]): Message[] {
@@ -71,6 +75,18 @@ function observeGateWait() {
 			agentPauseGate.waitUntilResumed = originalWait;
 		},
 	};
+}
+
+function observePauseGate(expectedWaiters = 1) {
+	const gate = new AgentPauseGate();
+	const parked = Promise.withResolvers<void>();
+	const waitUntilResumed = gate.waitUntilResumed.bind(gate);
+	let waiters = 0;
+	gate.waitUntilResumed = (signal?: AbortSignal) => {
+		if (++waiters >= expectedWaiters) parked.resolve();
+		return waitUntilResumed(signal);
+	};
+	return { gate, parked: parked.promise };
 }
 
 describe("agentPauseGate", () => {
@@ -350,6 +366,220 @@ describe("agentPauseGate", () => {
 			expect(agent.state.isStreaming).toBe(false);
 		} finally {
 			gateWait.restore();
+		}
+	});
+});
+
+describe("explicit root pause gates", () => {
+	it("parks a root and shared-gate descendant without freezing an independent root or ordinary default Agent", async () => {
+		const { gate, parked } = observePauseGate(2);
+		const rootModel = createMockModel({ responses: [{ content: ["root done"] }] });
+		const childModel = createMockModel({ responses: [{ content: ["never sent"] }] });
+		const siblingModel = createMockModel({ responses: [{ content: ["sibling done"] }] });
+		const defaultModel = createMockModel({ responses: [{ content: ["ordinary done"] }] });
+		const root = new Agent({ pauseGate: gate, initialState: { model: rootModel.model }, streamFn: rootModel.stream });
+		const child = new Agent({
+			pauseGate: gate,
+			initialState: { model: childModel.model },
+			streamFn: childModel.stream,
+		});
+		const sibling = new Agent({
+			pauseGate: new AgentPauseGate(),
+			initialState: { model: siblingModel.model },
+			streamFn: siblingModel.stream,
+		});
+		const ordinary = new Agent({ initialState: { model: defaultModel.model }, streamFn: defaultModel.stream });
+		const runs: Promise<unknown>[] = [];
+		gate.pause();
+		try {
+			const rootRun = root.prompt("root");
+			const childRun = child.prompt("descendant");
+			runs.push(rootRun, childRun);
+			await parked;
+			expect(rootModel.calls).toHaveLength(0);
+			expect(childModel.calls).toHaveLength(0);
+			const siblingRun = sibling.prompt("independent root");
+			const ordinaryRun = ordinary.prompt("ordinary singleton default");
+			runs.push(siblingRun, ordinaryRun);
+			await Promise.all([siblingRun, ordinaryRun]);
+			expect(siblingModel.calls).toHaveLength(1);
+			expect(defaultModel.calls).toHaveLength(1);
+			expect(rootModel.calls).toHaveLength(0);
+			child.abort();
+			await childRun;
+			expect(child.state.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+			expect(gate.paused).toBe(true);
+			expect(rootModel.calls).toHaveLength(0);
+			gate.resume();
+			await rootRun;
+			expect(rootModel.calls).toHaveLength(1);
+		} finally {
+			root.abort();
+			child.abort();
+			sibling.abort();
+			ordinary.abort();
+			gate.resume();
+			await Promise.allSettled(runs);
+		}
+	});
+
+	it("holds the paused root's physical tool boundary while another root finishes its tool and follow-up model", async () => {
+		const gate = new AgentPauseGate();
+		const paused = Promise.withResolvers<void>();
+		const rootExecuted: string[] = [];
+		const siblingExecuted: string[] = [];
+		const rootModel = createMockModel({
+			responses: [
+				() => {
+					gate.pause();
+					return { content: [echoCall("root")] };
+				},
+				{ content: ["root done"] },
+			],
+		});
+		const siblingModel = createMockModel({
+			responses: [{ content: [echoCall("sibling")] }, { content: ["sibling done"] }],
+		});
+		const controller = new AbortController();
+		const runs: Promise<unknown>[] = [];
+		try {
+			const rootRun = runLoop(
+				rootModel,
+				[makeEchoTool(rootExecuted)],
+				{
+					pauseGate: gate,
+					onPauseChange: value => {
+						if (value) paused.resolve();
+					},
+				},
+				controller.signal,
+			);
+			runs.push(rootRun);
+			await paused.promise;
+			const siblingRun = runLoop(siblingModel, [makeEchoTool(siblingExecuted)], { pauseGate: new AgentPauseGate() });
+			runs.push(siblingRun);
+			await siblingRun;
+			expect(siblingExecuted).toEqual(["sibling"]);
+			expect(siblingModel.calls).toHaveLength(2);
+			expect(rootExecuted).toEqual([]);
+			expect(rootModel.calls).toHaveLength(1);
+			gate.resume();
+			await rootRun;
+			expect(rootExecuted).toEqual(["root"]);
+			expect(rootModel.calls).toHaveLength(2);
+		} finally {
+			controller.abort();
+			gate.resume();
+			await Promise.allSettled(runs);
+		}
+	});
+
+	it("gates speculative physical file reads by root, and aborts only the parked candidate without executing it", async () => {
+		using temp = TempDir.createSync("@pi-speculative-pause-");
+		const file = temp.join("input.txt");
+		await fs.writeFile(file, "real speculative file bytes");
+		const { gate, parked } = observePauseGate(2);
+		const abort = new AbortController();
+		const executed: string[] = [];
+		const schema = type({ path: "string", owner: "string" });
+		const tool: AgentTool<typeof schema> = {
+			name: "read",
+			label: "Read",
+			description: "Read a native file",
+			parameters: schema,
+			speculation: {
+				finalized: {
+					assess: ({ args }) => ({
+						eligible: true,
+						effect: {
+							kind: "local_read",
+							resources: [{ scheme: "file", path: String(args.path), access: "read" }],
+						},
+					}),
+					async execute({ args }) {
+						executed.push(String(args.owner));
+						return {
+							kind: "result",
+							isError: false,
+							result: {
+								content: [{ type: "text", text: await fs.readFile(String(args.path), "utf8") }],
+							},
+						};
+					},
+				},
+			},
+			async execute(_id, args) {
+				return { content: [{ type: "text", text: await fs.readFile(args.path, "utf8") }] };
+			},
+		};
+		const model = createMockModel({ responses: [] }).model;
+		const makeCoordinator = (pauseGate: AgentPauseGate, signal?: AbortSignal) =>
+			new SpeculativeOperationCoordinator(
+				{ enabled: true, host: { authorize: () => ({ allowed: true }) } },
+				{
+					context: { systemPrompt: [], messages: [], tools: [tool] },
+					loopConfig: { model, convertToLlm: identityConverter, pauseGate },
+					signal,
+				},
+			);
+		const root = makeCoordinator(gate);
+		const descendant = makeCoordinator(gate, abort.signal);
+		const sibling = makeCoordinator(new AgentPauseGate());
+		const idleSignals = [root, descendant, sibling].map(coordinator => {
+			const idle = Promise.withResolvers<void>();
+			coordinator.onIdle = () => idle.resolve();
+			return { coordinator, idle: idle.promise };
+		});
+		const admit = (coordinator: SpeculativeOperationCoordinator, owner: string) =>
+			coordinator.admit({
+				candidateId: owner,
+				parentToolCallId: "streaming-parent",
+				dependencies: [],
+				tool,
+				source: "eval_shadow",
+				toolCall: { type: "toolCall", id: `${owner}-read`, name: "read", arguments: { path: file, owner } },
+			});
+		gate.pause();
+		try {
+			const rootRead = await admit(root, "root");
+			const childRead = await admit(descendant, "descendant");
+			if (!rootRead || !childRead) throw new Error("Native speculative reads were not admitted");
+			await Promise.all([root.finalizeAdmissions(), descendant.finalizeAdmissions()]);
+			await Promise.race([
+				parked,
+				rootRead.outcome.then(() => {
+					throw new Error("Root speculative read completed before reaching its pause gate");
+				}),
+				childRead.outcome.then(() => {
+					throw new Error("Descendant speculative read completed before reaching its pause gate");
+				}),
+			]);
+			const siblingRead = await admit(sibling, "sibling");
+			if (!siblingRead) throw new Error("Sibling speculative read was not admitted");
+			await sibling.finalizeAdmissions();
+			const result = await siblingRead.outcome;
+			expect(result.result.content).toEqual([{ type: "text", text: "real speculative file bytes" }]);
+			expect(executed).toEqual(["sibling"]);
+			abort.abort(new Error("Descendant aborted"));
+			await expect(childRead.outcome).rejects.toThrow("Descendant aborted");
+			expect(gate.paused).toBe(true);
+			expect(executed).toEqual(["sibling"]);
+			gate.resume();
+			expect((await rootRead.outcome).result.content).toEqual([
+				{ type: "text", text: "real speculative file bytes" },
+			]);
+			expect(executed).toEqual(["sibling", "root"]);
+		} finally {
+			abort.abort();
+			gate.resume();
+			await Promise.all([
+				root.close("test cleanup"),
+				descendant.close("test cleanup"),
+				sibling.close("test cleanup"),
+			]);
+			await Promise.all(
+				idleSignals.map(({ coordinator, idle }) => (coordinator.isRunning ? idle : Promise.resolve())),
+			);
 		}
 	});
 });

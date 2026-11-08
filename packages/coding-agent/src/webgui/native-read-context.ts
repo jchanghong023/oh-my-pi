@@ -7,29 +7,33 @@ import {
 	UrlContainmentError,
 } from "../internal-urls/filesystem-resource";
 import { resolveToCwd } from "../tools/path-utils";
-import { assertNativeChat } from "./native-chat";
-import { listBrowserProjects } from "./project-registry";
+import { resolveWebGuiSession } from "./native-session-host";
+import { readBrowserProject } from "./project-registry";
 import type { WebGuiServiceContext } from "./rpc-contract";
 
 /** Snapshot one admitted read, not a persistent workspace binding. */
-export async function nativeReadContext(context: WebGuiServiceContext) {
-	const session = assertNativeChat(context);
+export async function nativeReadContext(context: WebGuiServiceContext, sessionId?: string) {
+	const session = await resolveWebGuiSession(context, sessionId);
+	const admittedSessionId = session.sessionId;
 	const cwd = session.sessionManager.getCwd();
+	const ownerId = context.projectId ? readBrowserProject(context.projectId)?.ownerId : undefined;
 	const assertCurrent = () => {
+		context.signal.throwIfAborted();
+		const project = context.projectId ? readBrowserProject(context.projectId) : undefined;
 		if (
-			assertNativeChat(context) !== session ||
+			session.isDisposed ||
+			session.sessionId !== admittedSessionId ||
 			session.sessionManager.getCwd() !== cwd ||
 			session.isSessionTransitioning
 		)
 			throw new Error("The native workspace changed during the read");
 		if (
-			!listBrowserProjects().some(
-				project =>
-					project.nativeSession === session &&
-					project.mode === "webgui" &&
-					project.phase === "active" &&
-					pathIsWithin(project.root, cwd),
-			)
+			!project ||
+			project.ownerId !== ownerId ||
+			project.mode !== "webgui" ||
+			project.phase !== "active" ||
+			!project.nativeSessions?.has(session) ||
+			!pathIsWithin(project.root, cwd)
 		)
 			throw new Error("The native workspace has no active owner");
 	};
@@ -43,9 +47,9 @@ export async function nativeReadContext(context: WebGuiServiceContext) {
 export async function resolveNativeReadPath(
 	context: WebGuiServiceContext,
 	requested: string,
-	options?: { allowMissing?: boolean },
+	options?: { allowMissing?: boolean; sessionId?: string },
 ) {
-	const read = await nativeReadContext(context);
+	const read = await nativeReadContext(context, options?.sessionId);
 	const target = path.resolve(resolveToCwd(requested, read.cwd));
 	// Rebase the lexical spelling onto the canonical cwd before the central link checks.
 	const relative = path.relative(read.cwd, target);

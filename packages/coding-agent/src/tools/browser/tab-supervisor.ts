@@ -37,6 +37,7 @@ import {
 	holdBrowser,
 	type PuppeteerBrowserHandle,
 	releaseBrowser,
+	connectBrowserForCleanup,
 	type TernBrowserHandle,
 } from "./registry";
 import {
@@ -229,6 +230,8 @@ export interface ReleaseTabOptions {
 	keepPage?: boolean;
 	/** Maximum time for each asynchronous cleanup resource before close fails with diagnostics. */
 	timeoutMs?: number;
+	/** Fail without forgetting unfinished resources; a later release retries only remaining stages. */
+	strict?: boolean;
 }
 
 const tabs = new Map<string, TabSession>();
@@ -1267,11 +1270,89 @@ async function recoverWorkerTab(
  */
 const releaseInflight = new WeakMap<TabSession, { promise: Promise<"released" | "kept">; opts: ReleaseTabOptions }>();
 
+type TabCleanupStage = "worker" | "page" | "uploads" | "browser" | "shared" | "kill" | "connection";
+interface TabCleanupProgress {
+	wasAlive: boolean;
+	done: Set<TabCleanupStage>;
+	pending: Map<TabCleanupStage, Promise<unknown>>;
+	cleanupBrowser?: PuppeteerBrowserHandle;
+	closePage?: boolean;
+	kill?: boolean;
+	strictPageConfirmed?: boolean;
+}
+const tabCleanupProgress = new WeakMap<TabSession, TabCleanupProgress>();
+// A failed strict close remains owner-reachable even if its name is replaced.
+const strictTabs = new Set<TabSession>();
+
+function cleanupProgress(tab: TabSession): TabCleanupProgress {
+	let progress = tabCleanupProgress.get(tab);
+	if (!progress) {
+		progress = { wasAlive: tab.state === "alive", done: new Set(), pending: new Map() };
+		tabCleanupProgress.set(tab, progress);
+	}
+	return progress;
+}
+
+/** Keep timed-out work reachable and join it on retry instead of starting it twice. */
+async function strictCleanupStage(
+	tab: TabSession,
+	stage: TabCleanupStage,
+	timeoutMs: number,
+	resource: string,
+	run: () => Promise<unknown>,
+): Promise<void> {
+	const progress = cleanupProgress(tab);
+	if (progress.done.has(stage)) return;
+	let pending = progress.pending.get(stage);
+	if (!pending) {
+		pending = Promise.resolve()
+			.then(run)
+			.then(() => {
+				progress.done.add(stage);
+			})
+			.finally(() => {
+				progress.pending.delete(stage);
+			});
+		progress.pending.set(stage, pending);
+	}
+	await waitForTabCleanup(tab, timeoutMs, resource, pending);
+	if (!progress.done.has(stage))
+		throw new ToolError(`Could not confirm cleanup of ${resource} for tab ${JSON.stringify(tab.name)}`);
+}
+
+function trackCleanupStage<T>(tab: TabSession, stage: TabCleanupStage, run: Promise<T>): Promise<T> {
+	const progress = cleanupProgress(tab);
+	const pending = run
+		.then(value => {
+			if (stage !== "page" || value !== false) progress.done.add(stage);
+			return value;
+		})
+		.finally(() => {
+			progress.pending.delete(stage);
+		});
+	progress.pending.set(stage, pending);
+	return pending;
+}
+
 export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Promise<boolean> {
 	const tab = tabs.get(name);
 	if (!tab) {
 		logger.debug("releaseTab: unknown tab", { name });
 		return false;
+	}
+	return await releaseKnownTab(tab, opts);
+}
+
+async function releaseKnownTab(tab: TabSession, opts: ReleaseTabOptions): Promise<boolean> {
+	const name = tab.name;
+	if (strictTabs.has(tab)) opts.strict = true;
+	if (opts.strict) {
+		strictTabs.add(tab);
+		const progress = cleanupProgress(tab);
+		progress.closePage ||= !opts.keepPage;
+		progress.kill ||= opts.kill;
+		if (progress.closePage) opts.keepPage = false;
+		if (progress.kill) opts.kill = true;
 	}
 	const ongoing = releaseInflight.get(tab);
 	if (ongoing) {
@@ -1281,9 +1362,17 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		// as the first release has not finished. (Not directly testable
 		// in-process: observing it needs a real spawned application.)
 		ongoing.opts.kill = ongoing.opts.kill || opts.kill;
+		ongoing.opts.strict ||= opts.strict;
+		if (opts.strict) strictTabs.add(tab);
 		// A joining close wins over a session end's `keepPage` while the page is still undecided.
 		if (!opts.keepPage) ongoing.opts.keepPage = false;
 		const joined = await ongoing.promise;
+		if (opts.strict) {
+			strictTabs.add(tab);
+			const progress = cleanupProgress(tab);
+			await releaseTabStrict(tab, name, opts, progress);
+			return true;
+		}
 		if (!opts.keepPage && joined === "kept" && tab.backend === "worker") {
 			// The first release already decided to keep the page and may have disconnected.
 			// Reconnect to its browser, not a same-name tab which could now belong to another caller;
@@ -1311,7 +1400,7 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
 		// The upgrade above lands too late when the first release already
 		// passed `releaseBrowser`: verify a still-running spawned app is
 		// terminated rather than trusting the joined outcome.
-		if (opts.kill) await ensureSpawnedKilled(tab.browser);
+		if (opts.kill) await ensureSpawnedKilled(tab.browser, opts.strict);
 		return true;
 	}
 	const entry = { promise: releaseTabInner(tab, name, opts), opts };
@@ -1329,11 +1418,16 @@ export async function releaseTab(name: string, opts: ReleaseTabOptions = {}): Pr
  * Fires only behind a live subprocess handle (kernel-tracked, so no
  * pid-reuse hazard): anything else already died or was never ours to kill.
  */
-async function ensureSpawnedKilled(browser: BrowserHandle): Promise<void> {
+async function ensureSpawnedKilled(browser: BrowserHandle, strict = false): Promise<void> {
 	if (browser.kind.kind !== "spawned" || !("subprocess" in browser)) return;
 	const { pid, subprocess } = browser;
 	if (pid === undefined || !subprocess || subprocess.exitCode !== null) return;
-	await gracefulKillTreeOnce(pid).catch(() => undefined);
+	if (strict) {
+		await gracefulKillTreeOnce(pid);
+		await subprocess.exited;
+	} else {
+		await gracefulKillTreeOnce(pid).catch(() => undefined);
+	}
 }
 
 /** Test hook for the kill guards without a live application. */
@@ -1342,7 +1436,8 @@ export function ensureSpawnedKilledForTest(browser: BrowserHandle): Promise<void
 }
 
 async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOptions): Promise<"released" | "kept"> {
-	const wasAlive = tab.state === "alive";
+	const progress = cleanupProgress(tab);
+	const wasAlive = progress.wasAlive;
 	tab.state = "dead";
 	const closeError = postmortem.markExpectedCleanupError(new ToolError(`Tab ${JSON.stringify(name)} was closed`));
 	for (const [id, pending] of tab.pending) {
@@ -1366,6 +1461,7 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 	}
 	tab.pending.clear();
 	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
+	if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 	if (tab.backend === "tern") {
 		let closeError: unknown;
 		if (wasAlive) {
@@ -1374,24 +1470,47 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 					tab,
 					timeoutMs,
 					`Tern browser block ${tab.targetId} (close)`,
-					tab.ternTab.close({ timeoutMs }),
+					trackCleanupStage(
+						tab,
+						"page",
+						tab.ternTab
+							.close({
+								timeoutMs,
+								get strict() {
+									return opts.strict;
+								},
+							})
+							.then(() => tab.browser.tern.connected),
+					),
 				);
 			} catch (err) {
 				closeError = err;
 			}
 		}
+		if (opts.strict) {
+			if (closeError) throw closeError;
+			return await releaseTabStrict(tab, name, opts, progress);
+		}
 		try {
-			await releaseBrowser(tab.browser, {
-				kill: opts.kill ?? false,
-				timeoutMs,
-				resource: `tab ${JSON.stringify(name)}`,
-			});
+			await trackCleanupStage(
+				tab,
+				"browser",
+				releaseBrowser(tab.browser, {
+					kill: opts.kill ?? false,
+					get strict() {
+						return opts.strict;
+					},
+					timeoutMs,
+					resource: `tab ${JSON.stringify(name)}`,
+				}),
+			);
 		} catch (error) {
 			closeError ??= error;
 		} finally {
-			tabs.delete(name);
+			if (!opts.strict && tabs.get(name) === tab) tabs.delete(name);
 		}
 		if (closeError) throw closeError;
+		if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 		return "released";
 	}
 	if (tab.backend === "cmux") {
@@ -1402,9 +1521,14 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 					tab,
 					timeoutMs,
 					`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
-					tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs }),
+					trackCleanupStage(
+						tab,
+						"page",
+						tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs }),
+					),
 				);
 			} catch (err) {
+				if (opts.strict) throw err;
 				if (isLastSurfaceCloseError(err)) {
 					logger.debug("Leaving cmux browser surface open because it is the last surface in the workspace", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1414,18 +1538,27 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 				}
 			}
 		}
+		if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 		try {
-			await releaseBrowser(tab.browser, {
-				kill: opts.kill ?? false,
-				timeoutMs,
-				resource: `tab ${JSON.stringify(name)}`,
-			});
+			await trackCleanupStage(
+				tab,
+				"browser",
+				releaseBrowser(tab.browser, {
+					kill: opts.kill ?? false,
+					get strict() {
+						return opts.strict;
+					},
+					timeoutMs,
+					resource: `tab ${JSON.stringify(name)}`,
+				}),
+			);
 		} catch (error) {
 			closeError ??= error;
 		} finally {
-			tabs.delete(name);
+			if (!opts.strict && tabs.get(name) === tab) tabs.delete(name);
 		}
 		if (closeError) throw closeError;
+		if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 		return "released";
 	}
 	let cleanupError: unknown;
@@ -1438,12 +1571,24 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 			// The close by id below confirms an owned page is gone either way.
 		}
 	}
-	await tab.worker.terminate().catch(() => undefined);
+	await trackCleanupStage(tab, "worker", tab.worker.terminate()).catch(error => {
+		if (opts.strict) throw error;
+	});
+	if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 	// Decided after the worker is gone, so a close that joined meanwhile still closes the page by id below. A page
 	// kept open stays the user's: its staged uploads wait for the sweep like a borrowed page's.
 	const closesPage = tab.ownsPage && !opts.keepPage;
 	// omp closes the pages it owns, and with them goes the last reader of their staged uploads.
-	if (closesPage) await removeUploadStaging(tab.uploadDir);
+	if (closesPage)
+		await trackCleanupStage(
+			tab,
+			"uploads",
+			removeUploadStaging(tab.uploadDir, {
+				get strict() {
+					return opts.strict;
+				},
+			}),
+		);
 	// Close a live tab's owned page by id as well, which confirms it is gone: a worker's own
 	// close can fail and still report `closed` (its CDP socket broke), and the relay retracts a
 	// target whose debugger the user dismissed, so the worker cannot close it at all. A dead
@@ -1457,25 +1602,38 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 				tab,
 				timeoutMs,
 				`orphan CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
-				closeOrphanTarget(tab, timeoutMs),
+				trackCleanupStage(tab, "page", closeOrphanTarget(tab, timeoutMs)),
 			));
 		} catch (error) {
 			targetCloseFailed = true;
 			cleanupError = error;
 		}
 	}
+	if (targetCloseFailed) progress.done.delete("page");
+	if (opts.strict) {
+		if (cleanupError) throw cleanupError;
+		if (targetCloseFailed) throw new ToolError(`Could not confirm closure of tab ${JSON.stringify(name)}`);
+		return await releaseTabStrict(tab, name, opts, progress);
+	}
 	try {
-		await releaseBrowser(tab.browser, {
-			kill: opts.kill ?? false,
-			timeoutMs,
-			resource: `tab ${JSON.stringify(name)}`,
-		});
+		await trackCleanupStage(
+			tab,
+			"browser",
+			releaseBrowser(tab.browser, {
+				kill: opts.kill ?? false,
+				get strict() {
+					return opts.strict;
+				},
+				timeoutMs,
+				resource: `tab ${JSON.stringify(name)}`,
+			}),
+		);
 	} catch (error) {
 		cleanupError ??= error;
 	} finally {
-		tabs.delete(name);
+		if (!opts.strict && tabs.get(name) === tab) tabs.delete(name);
 		const scope = sharedScopeOf(tab.browser);
-		if (scope) {
+		if (scope && !opts.strict) {
 			if (targetCloseFailed) {
 				// The target outlived its close, so it is still open in the
 				// shared Chromium. Keep its durable ownership record — the only
@@ -1497,7 +1655,87 @@ async function releaseTabInner(tab: TabSession, name: string, opts: ReleaseTabOp
 		}
 	}
 	if (cleanupError) throw cleanupError;
+	if (opts.strict) return await releaseTabStrict(tab, name, opts, progress);
 	return wasAlive && tab.ownsPage && !closesPage ? "kept" : "released";
+}
+
+async function releaseTabStrict(
+	tab: TabSession,
+	name: string,
+	opts: ReleaseTabOptions,
+	progress: TabCleanupProgress,
+): Promise<"released" | "kept"> {
+	const timeoutMs = opts.timeoutMs ?? DEFAULT_TAB_CLOSE_TIMEOUT_MS;
+	if (tab.backend === "tern") {
+		await strictCleanupStage(tab, "page", timeoutMs, `Tern browser block ${tab.targetId} (close)`, async () => {
+			if (progress.wasAlive) await tab.ternTab.close({ timeoutMs, strict: true });
+		});
+	} else if (tab.backend === "cmux") {
+		await strictCleanupStage(
+			tab,
+			"page",
+			timeoutMs,
+			`cmux surface ${JSON.stringify(tab.targetId)} (surface.close)`,
+			async () => {
+				if (progress.wasAlive && tab.cmuxOwnsSurface) {
+					await tab.browser.client.request("surface.close", { surface_id: tab.targetId }, { timeoutMs });
+				}
+			},
+		);
+	} else {
+		await strictCleanupStage(tab, "worker", timeoutMs, "tab worker termination", async () => {
+			if (progress.wasAlive && !(tab.worker as ExitTrackedWorker)[kWorkerExited]) {
+				try {
+					tab.worker.send({ type: "close", keepPage: opts.keepPage });
+					await waitForClosed(tab);
+				} catch {
+					// Target closure below is authoritative, but termination must settle.
+				}
+			}
+			await tab.worker.terminate();
+		});
+		if (progress.cleanupBrowser && !progress.pending.has("page")) await disconnectCleanupConnection(tab, timeoutMs);
+		if (tab.ownsPage && !opts.keepPage) {
+			if (tab.browser.kind.kind === "relay" && !progress.strictPageConfirmed) progress.done.delete("page");
+			await strictCleanupStage(
+				tab,
+				"page",
+				timeoutMs,
+				`CDP target ${JSON.stringify(tab.targetId)} (Page.close)`,
+				async () => {
+					if (!(await closeOrphanTarget(tab, timeoutMs, true))) {
+						throw new ToolError(`Could not confirm closure of tab ${JSON.stringify(name)}`);
+					}
+				},
+			);
+			await disconnectCleanupConnection(tab, timeoutMs);
+			await strictCleanupStage(tab, "uploads", timeoutMs, "upload staging", () =>
+				removeUploadStaging(tab.uploadDir, { strict: true }),
+			);
+		}
+		const scope = sharedScopeOf(tab.browser);
+		if (scope) {
+			await strictCleanupStage(tab, "shared", timeoutMs, "shared target ownership", () =>
+				forgetSharedTarget(scope, tab.targetId),
+			);
+		}
+	}
+	await strictCleanupStage(tab, "browser", timeoutMs, "browser handle", () =>
+		releaseBrowser(tab.browser, {
+			kill: opts.kill ?? false,
+			strict: true,
+			timeoutMs,
+			resource: `tab ${JSON.stringify(name)}`,
+		}),
+	);
+	if (opts.kill && tab.browser.refCount === 0) {
+		await strictCleanupStage(tab, "kill", timeoutMs, "spawned browser process", () =>
+			ensureSpawnedKilled(tab.browser, true),
+		);
+	}
+	if (tabs.get(name) === tab) tabs.delete(name);
+	strictTabs.delete(tab);
+	return tab.backend === "worker" && tab.ownsPage && opts.keepPage ? "kept" : "released";
 }
 
 export async function releaseAllTabs(opts: ReleaseTabOptions = {}): Promise<number> {
@@ -1533,6 +1771,22 @@ export async function dropHeadlessTabs(): Promise<void> {
  */
 export async function releaseTabsForOwner(ownerId: string, opts: ReleaseTabOptions = {}): Promise<number> {
 	if (!ownerId) return 0;
+	if (opts.strict) {
+		const owned = new Set([...tabs.values(), ...strictTabs].filter(tab => tab.ownerSessionId === ownerId));
+		const errors: unknown[] = [];
+		let count = 0;
+		for (const tab of owned) {
+			const keepPage = tab.persist === true && tab.kindTag === "relay";
+			try {
+				if (await releaseKnownTab(tab, { ...opts, keepPage })) count++;
+			} catch (error) {
+				errors.push(error);
+			}
+		}
+		if (errors.length)
+			throw new AggregateError(errors, `Failed to release browser tabs for owner ${JSON.stringify(ownerId)}`);
+		return count;
+	}
 	const names = [...tabs.values()].filter(tab => tab.ownerSessionId === ownerId).map(tab => tab.name);
 	let count = 0;
 	for (const name of names) {
@@ -2339,8 +2593,55 @@ function recheckSharedBrowser(scope: SharedTargetScope): void {
  * `budgetMs` is the caller's bound on the whole close. The `targetDestroyed`
  * wait gets half of it, leaving the rest for the `Target.getTargets` fallback.
  */
-async function closeOrphanTarget(tab: WorkerTabSession, budgetMs: number): Promise<boolean> {
-	return await closeTargetById(tab.browser, tab.targetId, budgetMs / 2);
+async function closeOrphanTarget(tab: WorkerTabSession, budgetMs: number, strict = false): Promise<boolean> {
+	if (!strict) return await closeTargetById(tab.browser, tab.targetId, budgetMs / 2);
+	const progress = cleanupProgress(tab);
+	let browser = tab.browser;
+	if (!browser.browser.connected) {
+		const process = browser.browser.process();
+		if (
+			browser.kind.kind === "headless" &&
+			!browser.sharedDaemon &&
+			process &&
+			(typeof process.exitCode === "number" || typeof process.signalCode === "string")
+		)
+			return true;
+		const connection = await connectBrowserForCleanup(browser);
+		progress.done.delete("connection");
+		progress.cleanupBrowser = { ...browser, browser: connection };
+		browser = progress.cleanupBrowser;
+	}
+	try {
+		let closed: boolean;
+		if (browser.kind.kind === "relay") {
+			const channel = browserConnection(browser.browser);
+			await closeRelayTarget(channel, tab.targetId);
+			try {
+				const { targetInfo } = await channel.send("Target.getTargetInfo", { targetId: tab.targetId });
+				closed = targetInfo.targetId !== tab.targetId;
+			} catch {
+				closed = false;
+			}
+		} else {
+			closed = await closeTargetById(browser, tab.targetId, budgetMs / 2);
+		}
+		if (closed) {
+			progress.done.add("page");
+			progress.strictPageConfirmed = true;
+		}
+		return closed;
+	} finally {
+		await disconnectCleanupConnection(tab, budgetMs);
+	}
+}
+
+async function disconnectCleanupConnection(tab: WorkerTabSession, timeoutMs: number): Promise<void> {
+	const progress = cleanupProgress(tab);
+	if (!progress.cleanupBrowser) return;
+	await strictCleanupStage(tab, "connection", timeoutMs, "temporary cleanup CDP connection", async () => {
+		progress.cleanupBrowser!.browser.disconnect();
+		progress.cleanupBrowser = undefined;
+	});
 }
 
 /**

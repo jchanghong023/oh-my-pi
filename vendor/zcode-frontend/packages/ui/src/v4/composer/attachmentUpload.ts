@@ -21,6 +21,38 @@ export type AttachmentPutFn = (
   options?: AttachmentUploadOptions,
 ) => Promise<V4AttachmentPutResult>;
 
+/** FileReader also supports browsers without Blob.arrayBuffer (Firefox 68). */
+export function readComposerFileBase64(file: File, signal: AbortSignal): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const abort = () => reader.abort();
+    const cleanup = () => signal.removeEventListener("abort", abort);
+    reader.onload = () => {
+      cleanup();
+      const result = reader.result;
+      if (typeof result !== "string" || !result.includes(",")) {
+        reject(new Error(`Unable to read attachment: ${file.name}`));
+        return;
+      }
+      resolve(result.slice(result.indexOf(",") + 1));
+    };
+    reader.onerror = () => {
+      cleanup();
+      reject(reader.error ?? new Error(`Unable to read attachment: ${file.name}`));
+    };
+    reader.onabort = () => {
+      cleanup();
+      reject(new DOMException("Attachment read cancelled", "AbortError"));
+    };
+    if (signal.aborted) {
+      reject(new DOMException("Attachment read cancelled", "AbortError"));
+      return;
+    }
+    signal.addEventListener("abort", abort, { once: true });
+    reader.readAsDataURL(file);
+  });
+}
+
 function encodeTextToBase64(text: string): string {
   const bytes = new TextEncoder().encode(text);
   let binary = "";

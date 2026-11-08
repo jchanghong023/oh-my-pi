@@ -30,6 +30,7 @@ import { ModelConfigSelect, type ModelSelectGroup } from "@/ModelConfigSelect.js
 import type { ComposerModelOptions } from "@/chat-input-toolbar/ComposerModelMenu.js";
 import { Button } from "@/components/ui/button.js";
 import { toast } from "@/components/ui/toast.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import {
   getNextThoughtLevelValue,
   getThoughtLevelLabel,
@@ -139,7 +140,7 @@ function V4ComposerModelControlsImpl({
 }: V4ComposerToolbarProps) {
   const { intl } = useZCodeIntl();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
-  const isNativeModelSelection = modelSelectionView?.nativeSession !== undefined;
+  const isNativeModelSelection = useNativeHostAvailable() || modelSelectionView?.nativeSession !== undefined;
   // 配置面读取：workspace 缺省目录（taskId=null），不读旧会话态。
   const { error: configOptionsError } = useToolbarConfigOptions(
     workspacePath,
@@ -287,6 +288,7 @@ function V4ComposerModelControlsImpl({
       if (isNativeModelSelection) {
         if (!decoded || !modelSelectionView?.nativeSession?.chatAvailable ||
             modelSelectionView.nativeSession.sessionId !== sessionId ||
+            modelSelectionView.nativeSession.workspacePath !== workspacePath ||
             modelSelectionState.status !== "ready" || disabled || nativeModelPending) return;
         setNativeModelPending(true);
         void Promise.resolve()
@@ -476,7 +478,8 @@ function V4ComposerModelControlsImpl({
     disabled ||
     (isNativeModelSelection &&
       (!modelSelectionView?.nativeSession?.chatAvailable ||
-        modelSelectionView.nativeSession.sessionId !== sessionId)) ||
+        modelSelectionView.nativeSession.sessionId !== sessionId ||
+        modelSelectionView.nativeSession.workspacePath !== workspacePath)) ||
     nativeModelPending ||
     recoveryPending ||
     (modelSelectionState.status !== "ready" &&

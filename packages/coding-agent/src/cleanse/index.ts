@@ -23,6 +23,8 @@ const DISPLAY_FILE_LIMIT = 50;
 
 /** User-facing options for `omp cleanse`. */
 export interface CleanseCommandOptions {
+	/** Explicit workspace for session-scoped hosts; CLI/TUI retain their process workspace. */
+	cwd?: string;
 	maxAgents?: number;
 	model?: string;
 	includeTests?: boolean;
@@ -59,7 +61,7 @@ export async function runCleanse(
 	const maxAgents = options.maxAgents ?? 32;
 	if (!Number.isInteger(maxAgents) || maxAgents <= 0) throw new Error("--agents must be a positive integer");
 	const model = options.model?.trim() || DEFAULT_MODEL;
-	const cwd = getProjectDir();
+	const cwd = options.cwd ?? getProjectDir();
 	let runtime: CleanseAgentRuntime | undefined;
 	let runtimePromise: Promise<CleanseAgentRuntime> | undefined;
 	let loopResult: CleanseLoopResult | undefined;

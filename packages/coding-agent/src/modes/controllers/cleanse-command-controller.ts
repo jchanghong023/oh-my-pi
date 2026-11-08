@@ -150,7 +150,7 @@ export class CleanseCommandController {
 }
 
 /** Parse `/cleanse` arguments; flag names mirror the `omp cleanse` CLI. */
-function parseCleanseArgs(args: string): ParsedCleanseArgs {
+export function parseCleanseArgs(args: string): ParsedCleanseArgs {
 	const tokens = args.split(/\s+/).filter(Boolean);
 	const requestParts: string[] = [];
 	const parsed: ParsedCleanseArgs = { all: false, includeTests: false };

@@ -175,6 +175,7 @@ import {
 import type { ShakeMode } from "../session/shake-types";
 import { BUILTIN_SLASH_COMMAND_RESERVED_NAMES, buildTuiBuiltinSlashCommands } from "../slash-commands/builtin-registry";
 import { buildStaticInlineHint } from "../slash-commands/builtin-completions";
+import { activateNativeWebGuiComposition } from "../webgui/native-composition";
 import { formatCoarseDuration } from "@oh-my-pi/pi-tui/chrome/format";
 import { type DictationTarget, MicCursor, type SttCallbacks, STTController, type SttState } from "../stt";
 import type { SpaceHoldHandler } from "@oh-my-pi/pi-tui/space-hold";
@@ -464,7 +465,7 @@ import { cfgCycleOrder, cfgModelRoles } from "../config/model-settings";
 import { cfgExtensionHandlersModeControl } from "../extensibility/settings";
 import { cfgGoalContinuationModes, cfgGoalEnabled } from "../goals/settings";
 import { GoalContinuationGuard, goalFromModeData } from "../goals/state";
-import { cfgPlanDefaultOnStartup, cfgPlanEnabled } from "../plan-mode/settings";
+import { cfgPlanEnabled, shouldEnterPlanModeOnStartup } from "../plan-mode/settings";
 import { cfgStreamRedactPatterns } from "../stream/settings";
 import { cfgSttEnabled } from "../stt/settings";
 import { combine, type SettingValueOf } from "../config/registry";
@@ -671,20 +672,6 @@ function readPersistedToolNames(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	if (!value.every(name => typeof name === "string")) return undefined;
 	return value as string[];
-}
-
-export function shouldEnterPlanModeOnStartup(
-	sessionManager: Pick<SessionManager, "buildSessionContext" | "getEntries">,
-	sessionSettings: Settings,
-): boolean {
-	const hasConversationContext = sessionManager.buildSessionContext().messages.length > 0;
-	const hasExplicitMode = sessionManager.getEntries().some(entry => entry.type === "mode_change");
-	return (
-		!hasConversationContext &&
-		!hasExplicitMode &&
-		cfgPlanDefaultOnStartup.get(sessionSettings) &&
-		cfgPlanEnabled.get(sessionSettings)
-	);
 }
 
 /** Options for creating an InteractiveMode instance (for future API use) */
@@ -1860,6 +1847,7 @@ export class InteractiveMode implements InteractiveModeContext {
 	mcpManager?: MCPManager;
 	readonly nativeMcpUiAuthHandler: MCPAuthHandler;
 	readonly #toolUiContextSetter: (uiContext: ExtensionUIContext, hasUI: boolean) => void;
+	#activeToolUIContext: ExtensionUIContext | undefined;
 
 	readonly #codexResetFireworksController: CodexResetFireworksController;
 	readonly #btwController: BtwController;
@@ -8814,6 +8802,16 @@ export class InteractiveMode implements InteractiveModeContext {
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void {
 		this.#toolUiContextSetter(uiContext, hasUI);
+		this.#activeToolUIContext = uiContext;
+	}
+
+	/** Ownership probe for browser teardown; the tool getter remains the enriched TUI context. */
+	ownsToolUIContext(uiContext: ExtensionUIContext): boolean {
+		return this.#activeToolUIContext === uiContext;
+	}
+
+	initializeWebGuiNativeHost(): void {
+		activateNativeWebGuiComposition();
 	}
 
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void {

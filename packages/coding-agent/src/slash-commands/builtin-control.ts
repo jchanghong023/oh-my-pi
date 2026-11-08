@@ -94,6 +94,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "live",
 		icon: "voice",
 		description: "Start Codex-backed realtime voice mode",
+		handleWebGui: (_command, runtime) => runtime.runNativeModeCommand("live", ""),
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.handleLiveCommand();
@@ -103,6 +104,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "record",
 		icon: "export",
 		description: "Start or stop recording this screen to a replayable file (omp play)",
+		handleWebGui: (_command, runtime) => runtime.runNativeModeCommand("record", ""),
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			await runtime.ctx.toggleRecording();
@@ -112,6 +114,7 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "pause",
 		icon: "pause",
 		description: "Freeze all agents (main, subagents, advisor) until resumed",
+		handleWebGui: (_command, runtime) => runtime.runNativeModeCommand("pause", ""),
 		handleTui: async (_command, runtime) => {
 			clearSubmittedText(runtime);
 			const ctx = runtime.ctx;
@@ -133,6 +136,10 @@ export const BUILTIN_CONTROL_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["q"],
 		icon: "power",
 		description: "Quit the application",
+		handleWebGui: async (_command, runtime) => {
+			await runtime.host.close();
+			return commandConsumed();
+		},
 		handleTui: shutdownHandlerTui,
 	},
 ];

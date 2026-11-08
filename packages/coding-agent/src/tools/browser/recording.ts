@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { ToolError } from "@oh-my-pi/pi-tui/tools/tool-errors";
 import { untilAborted } from "@oh-my-pi/pi-utils/abortable";
 import type { HTMLElement } from "@oh-my-pi/pi-utils/dom";
-import { TempDir } from "@oh-my-pi/pi-utils/temp";
+import { removeWithRetries, TempDir } from "@oh-my-pi/pi-utils/temp";
 import type { Protocol } from "devtools-protocol";
 import type { CDPSession, Page } from "puppeteer-core";
 import { resizeImage } from "../../utils/image-resize";
@@ -158,8 +158,8 @@ export interface RecordingFrameSource {
 	captureFrame(quality: number, signal?: AbortSignal): Promise<Uint8Array>;
 	/** Install the cursor overlay page script (`installCursorOverlay`) for current and future documents. */
 	installCursor(signal?: AbortSignal): Promise<void>;
-	/** Remove the cursor overlay from future and current documents; never throws. */
-	removeCursor(): Promise<void>;
+	/** Remove the cursor overlay; strict cleanup propagates native release failures. */
+	removeCursor(options?: { strict?: boolean }): Promise<void>;
 }
 
 interface RecordedFrame {
@@ -178,6 +178,16 @@ interface ActiveRecording {
 	nextFrame: number;
 	writeError?: unknown;
 	finalizing: boolean;
+	strictFinalization?: StrictRecordingFinalization;
+}
+
+interface StrictRecordingFinalization {
+	durationMs: number;
+	sourceStopped: boolean;
+	cursorRemoved: boolean;
+	encoded: boolean;
+	contactSheet?: string;
+	result?: RecordingStopResult;
 }
 
 /** Named user-facing recording failure raised by every `tab.record*` helper. */
@@ -543,7 +553,8 @@ export class RecordingController {
 	}
 
 	/** Stop and finalize the active recording. */
-	async stop(context: RecordingStopContext = {}): Promise<RecordingStopResult> {
+	async stop(context: RecordingStopContext = {}, options?: { strict?: boolean }): Promise<RecordingStopResult> {
+		if (options?.strict) return await this.#stopStrict(context);
 		const active = this.#active;
 		if (!active) throw new BrowserRecordingError("tab.recordStop() requires an active recording");
 		if (active.finalizing)
@@ -609,6 +620,82 @@ export class RecordingController {
 		}
 	}
 
+	/** Keep completed stages and their inputs until every strict cleanup stage succeeds. */
+	async #stopStrict(context: RecordingStopContext): Promise<RecordingStopResult> {
+		const active = this.#active;
+		if (!active) throw new BrowserRecordingError("tab.recordStop() requires an active recording");
+		if (active.finalizing)
+			throw new BrowserRecordingError("tab.recordStop() is already finalizing the active recording");
+		active.finalizing = true;
+		const state: StrictRecordingFinalization = (active.strictFinalization ??= {
+			durationMs: Math.max(0, Date.now() - active.startedAt),
+			sourceStopped: false,
+			cursorRemoved: false,
+			encoded: false,
+		});
+		try {
+			if (!state.sourceStopped) {
+				await untilAborted(context.signal, () => active.source.stop());
+				state.sourceStopped = true;
+			}
+			await Promise.all(active.pendingWrites);
+			if (active.writeError) throw active.writeError;
+			if (active.options.cursor && !state.cursorRemoved) {
+				await active.source.removeCursor({ strict: true });
+				state.cursorRemoved = true;
+			}
+			if (active.frames.length === 0) {
+				const fallback = active.spool.join("frame-000000000.jpg");
+				const bytes = await active.source.captureFrame(active.options.quality, context.signal);
+				await Bun.write(fallback, bytes);
+				active.frames.push({ path: fallback, timestampMs: 0 });
+			}
+			if (!state.encoded) {
+				await encodeRecording(active, state.durationMs, context.signal);
+				state.encoded = true;
+			}
+			if (active.options.contactSheet && !state.contactSheet) {
+				const sheet = await buildChangedFrameContactSheetPng(
+					active.path,
+					{
+						outputPath: `${active.path}.contact.png`,
+						fps: active.options.fps,
+						threshold: active.options.contactSheetThreshold,
+						maxTiles: MAX_CONTACT_SHEET_TILES,
+					},
+					context.signal,
+				);
+				if (context.output) {
+					const resized = await resizeImage(
+						{ type: "image", data: sheet.png.data, mimeType: sheet.png.mimeType },
+						{ excludeWebP: context.excludeWebP },
+					);
+					context.output.push({ type: "image", data: resized.data, mimeType: resized.mimeType });
+				}
+				state.contactSheet = sheet.path;
+			}
+			if (!state.result) {
+				const stat = await fs.stat(active.path);
+				state.result = {
+					path: active.path,
+					durationMs: state.durationMs,
+					frames: active.frames.length,
+					bytes: stat.size,
+					...(state.contactSheet ? { contactSheet: state.contactSheet } : {}),
+				};
+			}
+			// TempDir.remove() caches rejections; use its removal helper so a failed
+			// attempt remains retryable without re-encoding the completed output.
+			await removeWithRetries(active.spool.path());
+			if (this.#active === active) this.#active = undefined;
+			return state.result;
+		} catch (error) {
+			throw recordingError(error, "tab.recordStop()");
+		} finally {
+			active.finalizing = false;
+		}
+	}
+
 	/** Finalize an active recording, then immediately begin another. */
 	async restart(
 		source: RecordingFrameSource,
@@ -634,9 +721,9 @@ export class RecordingController {
 		};
 	}
 
-	/** Finalize the active recording during tab teardown, discarding failed output. */
-	async close(): Promise<void> {
+	/** Finalize during teardown; strict cleanup retains failed stages for retry. */
+	async close(options?: { strict?: boolean }): Promise<void> {
 		if (!this.#active) return;
-		await this.stop();
+		await this.stop({}, options);
 	}
 }

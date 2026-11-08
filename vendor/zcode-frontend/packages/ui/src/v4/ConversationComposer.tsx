@@ -102,10 +102,12 @@ import { advanceComposerDraftRevision } from "@/v4/composer/composerDraftRevisio
 import type { AppSlashCommand } from "@/slashCommandHelpers.js";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import type { ComposerMentionPrefill } from "@/store/zcodeSessionStoreTypes.js";
 import { FileDisplayIcon, resolveFileDisplayDescriptor } from "@/lib/fileDisplay.js";
 import {
+  MAX_CHAT_ATTACHMENTS,
   isImageChatComposerAttachment,
   isPdfChatComposerAttachment,
   isMediaChatComposerAttachment,
@@ -380,6 +382,12 @@ function arePromptHistoryEntriesEqual(left: readonly string[], right: readonly s
   return left.length === right.length && left.every((entry, index) => entry === right[index]);
 }
 
+export interface NativeComposerTarget {
+  addFile(file: File): boolean;
+  removeFile(id: string): void;
+  setDraft(text: string, files: File[], onlyIfEmpty: boolean): boolean;
+}
+
 export interface ConversationComposerProps {
   snapshot: ConversationSnapshot | null;
   /** 真实命令已发出、权威输入投影尚未接管；直接消费 projection store，不另存展示状态。 */
@@ -431,6 +439,8 @@ export interface ConversationComposerProps {
    */
   blockingRequestId?: string | null;
   disabled?: boolean;
+  ensureAttachmentSession?: () => Promise<string>;
+  modelSelectionSessionId?: string | null;
   onRetryInitialization?: () => void;
   onRetryError?: () => void;
   /**
@@ -517,6 +527,7 @@ export interface ConversationComposerProps {
   appSlashCommands?: readonly AppSlashCommand[];
   /** 把 composer 的 drop 路由暴露给整个对话 pane / 桌面草稿标题栏。 */
   onDropTargetControllerChange?: (controller: ConversationDropTargetController | null) => void;
+  onNativeComposerTargetChange?: (target: NativeComposerTarget | null) => void;
 }
 
 function formatAttachmentLineCount(attachment: ChatComposerAttachment, locale: string): string {
@@ -549,6 +560,8 @@ function ConversationComposerImpl({
   workingDurationMs,
   blockingRequestId = null,
   disabled: disabledProp = false,
+  ensureAttachmentSession,
+  modelSelectionSessionId = sessionId,
   onRetryInitialization,
   onRetryError,
   autoFocusEnabled = true,
@@ -588,6 +601,7 @@ function ConversationComposerImpl({
   suppressGoalCommands = false,
   appSlashCommands,
   onDropTargetControllerChange,
+  onNativeComposerTargetChange,
 }: ConversationComposerProps) {
   const remoteAvailable = useRemoteConversationAvailable();
   const [targetSelectionPending, setTargetSelectionPending] = useState(false);
@@ -599,6 +613,7 @@ function ConversationComposerImpl({
   const disabled = disabledProp || !remoteAvailable || targetSelectionPending;
   const { intl, locale } = useZCodeIntl();
   const services = useOptionalServices();
+  const nativeHostAvailable = useNativeHostAvailable();
   const draftScopeId =
     sessionId ??
     (rootDraftScopeKey ? `${V4_DRAFT_SCOPE_ROOT}:${rootDraftScopeKey}` : V4_DRAFT_SCOPE_ROOT);
@@ -705,7 +720,7 @@ function ConversationComposerImpl({
     [onTextChange, workspaceIdentity, workspacePath],
   );
 
-  const nativeChatSurface = modelSelectionView?.nativeSession !== undefined;
+  const nativeChatSurface = nativeHostAvailable || modelSelectionView?.nativeSession !== undefined;
   const initialization = snapshot?.runtimeInitialization;
   const runtimeBlocked =
     (initialization !== undefined && initialization.status !== "ready") ||
@@ -719,17 +734,18 @@ function ConversationComposerImpl({
     scopeId: draftScopeId,
     attachmentSessionId,
     attachmentPut,
+    stageBrowserFiles: nativeChatSurface,
+    ensureSessionId: ensureAttachmentSession,
     onRuntimeRestart,
     onRuntimeLifecycle,
-    disabled: disabled || runtimeBlocked || nativeChatSurface,
-    listenAddToChatEvents:
-      listenAddToChatEvents && !disabled && !runtimeBlocked && !nativeChatSurface,
+    disabled: disabled || runtimeBlocked,
+    listenAddToChatEvents: listenAddToChatEvents && !disabled && !runtimeBlocked,
   });
   // 对齐旧版 useChatComposer：窗口级 dragover 会在指针进入 ChatView 前预先点亮
   // 整个聊天区与桌面草稿标题栏；workspace payload 的文案优先于系统附件。
   const { externalFileDragging, workspaceFileDragging } = usePromptEditorDragState({
-    enableExternalFileDrop: !nativeChatSurface,
-    enableWorkspaceFileDrop: !nativeChatSurface,
+    enableExternalFileDrop: !disabled && !runtimeBlocked,
+    enableWorkspaceFileDrop: !disabled && !runtimeBlocked,
   });
   const handleConversationDragOver = useCallback(
     (event: DragEvent<HTMLElement>) => {
@@ -862,6 +878,7 @@ function ConversationComposerImpl({
   const activeSubmissionDraftTransactionRef = useRef<ComposerSubmissionDraftTransaction | null>(
     null,
   );
+  const nativeSubmittedDraft = useRef<{ text: string; revision: number; attachmentIds: Set<string> } | null>(null);
 
   const snapshotDraftOfEditor = useCallback((): {
     text: string;
@@ -920,6 +937,31 @@ function ConversationComposerImpl({
       persistDraftNow(draftScopeRef.current);
     }, 350);
   }, [persistDraftNow, stageComposerContent]);
+  useEffect(() => {
+    onNativeComposerTargetChange?.({
+      addFile: (file) => attachmentsApi.addAttachmentFiles([file]).length === 1,
+      removeFile: attachmentsApi.removeAttachment,
+      setDraft: (text, files, onlyIfEmpty) => {
+        const currentText = inputApiRef.current?.getMarkdown() ?? textRef.current;
+        const submitted = nativeSubmittedDraft.current;
+        const hasUnsubmittedText = currentText.length > 0 &&
+          !(pendingRef.current && submitted?.text === currentText && submitted.revision === contentRevisionRef.current);
+        const hasUnsubmittedAttachments = attachmentsApi.attachments.some((attachment) =>
+          !pendingRef.current || !submitted?.attachmentIds.has(attachment.id));
+        if (onlyIfEmpty && (hasUnsubmittedText || hasUnsubmittedAttachments)) return false;
+        if (files.length > MAX_CHAT_ATTACHMENTS) throw new Error("Too many images for the native draft");
+        attachmentsApi.clearAttachments();
+        if (files.length > 0 && attachmentsApi.addAttachmentFiles(files).length !== files.length)
+          throw new Error("The native draft could not accept all restored images");
+        inputApiRef.current?.setText(text);
+        updateText(text);
+        scheduleDraftPersist();
+        return true;
+      },
+    });
+    return () => onNativeComposerTargetChange?.(null);
+  }, [attachmentsApi.addAttachmentFiles, attachmentsApi.removeAttachment, attachmentsApi.clearAttachments,
+    attachmentsApi.attachments, draftScopeId, onNativeComposerTargetChange, updateText, scheduleDraftPersist]);
 
   // ── 自动聚焦（新建任务 / 切会话 / 挂载后把光标交还输入框）──
   // 触发源：startDraft 递增的 draftFocusVersion（覆盖 Cmd/Ctrl+N 与所有「新建任务」入口）、
@@ -929,10 +971,10 @@ function ConversationComposerImpl({
     (state) => state.getWorkspaceState(workspacePath, workspaceIdentity).draftFocusVersion,
   );
   useEffect(() => {
-    if (!draftScopeId.startsWith(V4_DRAFT_SCOPE_ROOT)) return;
-    const attachments = consumeV4ComposerDraftAttachments(workspaceKey, draftFocusVersion);
+    if (!sessionId && !draftScopeId.startsWith(V4_DRAFT_SCOPE_ROOT)) return;
+    const attachments = consumeV4ComposerDraftAttachments(workspaceKey, draftFocusVersion, sessionId);
     if (attachments) attachmentsApi.restoreDraftAttachments(attachments);
-  }, [draftFocusVersion, draftScopeId, workspaceKey, attachmentsApi.restoreDraftAttachments]);
+  }, [draftFocusVersion, draftScopeId, sessionId, workspaceKey, attachmentsApi.restoreDraftAttachments]);
   const pendingFocusRef = useRef(false);
   // 修饰键点击先于 form submit；这里只保存这一拍的 delivery 反转意图，submit 消费后清零。
   const reversePointerDeliveryRef = useRef(false);
@@ -1382,12 +1424,15 @@ function ConversationComposerImpl({
         !remoteAvailable ||
         !submissionReady ||
         runtimeBlocked ||
-        (createSubmissionFromComposer !== undefined && submission === null) ||
+        (createSubmissionFromComposer !== undefined && submission === null && !(nativeChatSurface && sessionId === null)) ||
         attachmentsApi.hasUnreadyAttachments
       ) {
         return;
       }
       pendingRef.current = true;
+      nativeSubmittedDraft.current = {
+        text: submittedDraft.text, revision: contentRevisionRef.current, attachmentIds: new Set(submittedAttachmentIds),
+      };
       setPending(true);
       const localTtft = existingLocalTtft ??
         (!workspaceIdentity?.trim()
@@ -1622,6 +1667,7 @@ function ConversationComposerImpl({
         logger.warn(`[v4-composer] 发送失败: ${String(error)}`);
       } finally {
         pendingRef.current = false;
+        nativeSubmittedDraft.current = null;
         setPending(false);
       }
     },
@@ -2220,7 +2266,7 @@ function ConversationComposerImpl({
               modelSelectionView={modelSelectionView}
               modelSelectionState={modelSelectionState}
               modelSelectionReload={modelSelectionReload}
-              sessionId={sessionId ?? null}
+              sessionId={modelSelectionSessionId ?? null}
               phase={composerPhase}
               provider={provider}
               isWebRemoteControl={isWebRemoteControl}
@@ -2235,6 +2281,27 @@ function ConversationComposerImpl({
               onSwitchMode={onSwitchMode}
               onRecoverCustomModelSelection={onRecoverCustomModelSelection}
             />
+          </span>
+        ) : null}
+        {nativeChatSurface && canStop && hasDraftToSubmit ? (
+          <span className="flex items-center gap-1">
+            {([
+              ["queue", "chat.followup.addToQueue"],
+              ["guide", "chat.followup.guideCurrent"],
+              ["startNow", "chat.followup.sendNow"],
+            ] as const).map(([delivery, label]) => (
+              <Button
+                key={delivery}
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={!canSend}
+                data-testid={`v4-composer-delivery-${delivery}`}
+                onClick={() => void submit(undefined, undefined, undefined, delivery)}
+              >
+                {intl.formatMessage({ id: label })}
+              </Button>
+            ))}
           </span>
         ) : null}
         {showStopControl ? (
@@ -2277,6 +2344,11 @@ function ConversationComposerImpl({
     ),
     [
       canSend,
+      canStop,
+      hasDraftToSubmit,
+      nativeChatSurface,
+      submit,
+      intl,
       activeConfigPicker,
       composerPhase,
       disabled,
@@ -2292,6 +2364,7 @@ function ConversationComposerImpl({
       modelSelectionReload,
       modelSelectionState,
       modelSelectionView,
+      modelSelectionSessionId,
       onSelectThought,
       onRecoverCustomModelSelection,
       onSwitchMode,
@@ -2390,6 +2463,7 @@ function ConversationComposerImpl({
       <input
         ref={attachmentsApi.attachmentInputRef}
         type="file"
+        data-testid="v4-composer-upload-input"
         multiple
         className="hidden"
         onChange={attachmentsApi.handleAttachmentInputChange}
@@ -2485,12 +2559,12 @@ function ConversationComposerImpl({
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}
           submitLabel={sendTooltipTitle}
-          showSlashButton={!nativeChatSurface}
+          showSlashButton
           // @ 是 Plugin / 文件 / 对话 / 画板主入口；# 会话与 $ / ¥ / ￥ Skills
           // 仍由 MentionPlugin 保留兼容触发，但不在 + 菜单重复展示。
-          showMentionButton={!nativeChatSurface}
+          showMentionButton
           topContent={topContentNode}
-          attachmentAction={runtimeBlocked || nativeChatSurface ? undefined : attachmentAction}
+          attachmentAction={runtimeBlocked ? undefined : attachmentAction}
           inputTestId={TID_V4_COMPOSER_INPUT}
           inputApiRef={inputApiRef}
           promptHistory={promptHistory}
@@ -2506,7 +2580,7 @@ function ConversationComposerImpl({
                   command.recovery ? recoveryAvailable : !runtimeBlocked,
                 )
           }
-          enableMentionPanel={!nativeChatSurface}
+          enableMentionPanel
           leadingActions={leadingActionsNode}
           submitControl={submitControlNode}
           layout={layout}

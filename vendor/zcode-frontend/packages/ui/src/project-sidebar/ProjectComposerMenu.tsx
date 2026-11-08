@@ -21,6 +21,10 @@ import {
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { cn } from "@/components/lib/utils.js";
 import { logger } from "@/logger.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
+import { getPathLeaf } from "@/lib/path.js";
+import { usePlatform } from "@/hooks/usePlatform.js";
+import { toast } from "@/components/ui/toast.js";
 import {
   TID_COMPOSER_PROJECT_DETACH,
   TID_COMPOSER_WORK_OUTSIDE_PROJECT,
@@ -44,6 +48,7 @@ export function ProjectComposerMenu({
   allowConversationWorkspaceDetach = allowConversationWorkspaceSelection,
   onCreateTask,
   onSelectConversationWorkspace,
+  onOpenProject,
   containerClassName,
   triggerClassName,
   triggerIndicator,
@@ -58,6 +63,7 @@ export function ProjectComposerMenu({
   allowConversationWorkspaceDetach?: boolean;
   onCreateTask: ProjectSidebarProps["onCreateTask"];
   onSelectConversationWorkspace: () => void | Promise<void>;
+  onOpenProject?: () => void;
   /** 调用方局部调整 workspace chip 外层视觉，不改变普通会话默认样式。 */
   containerClassName?: string;
   /** 调用方局部调整 workspace trigger 视觉，不改变普通会话默认样式。 */
@@ -70,6 +76,8 @@ export function ProjectComposerMenu({
   children?: ReactNode;
 }) {
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const platform = usePlatform();
   const [workspaceSearchQuery, setWorkspaceSearchQuery] = useState("");
   const {
     allProjects,
@@ -111,10 +119,13 @@ export function ProjectComposerMenu({
   const [editingChat, setEditingChat] = useState<typeof chat | null>(null);
   // 原因：目录可以属于多个项目，tab/cwd 不能决定归属；只读草稿的项目身份。
   const currentProject = projects.find(
-    (project) => project.id === projectId,
+    (project) => nativeHostAvailable
+      ? project.roots.some((root) => root.rootPath === workspacePath)
+      : project.id === projectId,
   );
   const canEditProject =
     showEditProject &&
+    !nativeHostAvailable &&
     currentProject &&
     !currentProject.legacySingleRoot &&
     (availability.get(projectKey(currentProject))?.online ?? true) &&
@@ -122,6 +133,7 @@ export function ProjectComposerMenu({
   const isConversationWorkspace = !currentProject;
   const canDetachProject =
     allowConversationWorkspaceSelection &&
+    !nativeHostAvailable &&
     allowConversationWorkspaceDetach &&
     !isConversationWorkspace;
   const visibleProjects = useMemo(() => {
@@ -134,7 +146,8 @@ export function ProjectComposerMenu({
     );
   }, [projects, workspaceSearchQuery]);
   const currentWorkspaceTitle =
-    currentProject?.name ?? intl.formatMessage({ id: "chat.empty.selectProject" });
+    currentProject?.name ?? (nativeHostAvailable ? getPathLeaf(workspacePath) || workspacePath
+      : intl.formatMessage({ id: "chat.empty.selectProject" }));
   const currentWorkspaceIconClassName = cn(
     "size-4 text-foreground-subtle transition-opacity",
     // Bugfix: 关闭按钮和项目图标占用同一位置。只有允许脱离项目时才隐藏底层图标，
@@ -236,6 +249,17 @@ export function ProjectComposerMenu({
                       checked={currentProject === project}
                       disabled={disabled}
                       onSelect={() => {
+                        if (nativeHostAvailable) {
+                          const root = project.roots.find((item) => item.isPrimary) ?? project.roots[0];
+                          if (!root) {
+                            toast("The selected native project has no root directory.");
+                            return;
+                          }
+                          void platform.activateOrSetWorkspace(root.rootPath).catch((cause) => {
+                            toast(cause instanceof Error ? cause.message : String(cause));
+                          });
+                          return;
+                        }
                         logger.info("[ProjectComposerMenu] 选择项目", {
                           projectId: project.id,
                           hostId: project.hostId,
@@ -266,13 +290,13 @@ export function ProjectComposerMenu({
             {/* 项目创建依赖共享服务，不能受本机原生打开文件夹的能力开关限制。 */}
             <DropdownMenuItem
               data-testid="composer-create-project"
-              disabled={!service || !remoteService}
-              onSelect={() => setCreating(true)}
+              disabled={nativeHostAvailable ? !onOpenProject : !service || !remoteService}
+              onSelect={() => nativeHostAvailable ? onOpenProject?.() : setCreating(true)}
             >
               <FolderPlus className="size-4 text-foreground-subtle" />
               <span>{intl.formatMessage({ id: "project.create" })}</span>
             </DropdownMenuItem>
-            {allowConversationWorkspaceSelection ? (
+            {allowConversationWorkspaceSelection && !nativeHostAvailable ? (
               <DropdownMenuCheckboxItem
                 data-testid={TID_COMPOSER_WORK_OUTSIDE_PROJECT}
                 checked={isConversationWorkspace}

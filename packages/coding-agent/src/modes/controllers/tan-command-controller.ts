@@ -41,8 +41,17 @@ async function removeCloneSession(cloneFile: string): Promise<void> {
 	]);
 }
 
+/** Host-independent inputs for the native background dispatch operation. */
+export type TanCommandContext = Pick<
+	InteractiveModeContext,
+	"session" | "sessionManager" | "settings" | "mcpManager" | "showStatus" | "showError"
+> & {
+	rebuildChatFromMessages?: () => void;
+	sessionScopedCwd?: boolean;
+};
+
 export class TanCommandController {
-	constructor(private readonly ctx: InteractiveModeContext) {}
+	constructor(private readonly ctx: TanCommandContext) {}
 
 	/** Dispatch `work` to a background clone of this session; resolves `false` when nothing was dispatched. */
 	async start(work: string, images?: ImageContent[]): Promise<boolean> {
@@ -119,7 +128,9 @@ export class TanCommandController {
 		const sessionDir = parentFile.slice(0, -6);
 		const settings = createSubagentSettings(this.ctx.settings);
 		const enableLsp = cfgTaskEnableLsp.get(this.ctx.settings) !== false;
-		const agentRegistry = AgentRegistry.global();
+		const agentRegistry = this.ctx.sessionScopedCwd
+			? (session.agentRegistry ?? AgentRegistry.global())
+			: AgentRegistry.global();
 		const cloneId = `Tan-${Snowflake.next()}`;
 		const cloneFile = path.join(sessionDir, `${cloneId}.jsonl`);
 		const label = `/tan ${previewWork(trimmedWork)}`;
@@ -166,6 +177,7 @@ export class TanCommandController {
 								model,
 								thinkingLevel,
 								systemPrompt,
+								bindProcessState: this.ctx.sessionScopedCwd ? false : undefined,
 								toolNames,
 								mountedToolNames,
 								advertiseHeadlessAsk: activeToolNames.includes("ask"),
@@ -357,7 +369,7 @@ export class TanCommandController {
 			},
 			{ triggerTurn: false, deliverAs: "nextTurn" },
 		);
-		if (!wasStreaming) this.ctx.rebuildChatFromMessages();
+		if (!wasStreaming) this.ctx.rebuildChatFromMessages?.();
 		this.ctx.showStatus(`Dispatched background tan ${jobId}`);
 		return true;
 	}

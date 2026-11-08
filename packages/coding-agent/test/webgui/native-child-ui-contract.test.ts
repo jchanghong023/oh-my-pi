@@ -15,7 +15,8 @@ import { createAgentSession } from "../../src/sdk";
 import type { AgentSession } from "../../src/session/agent-session";
 import { SessionManager } from "../../src/session/session-manager";
 import { nativeChatRuntime } from "../../src/webgui/native-chat";
-import { acquireBrowserProject, type BrowserProjectLease } from "../../src/webgui/project-registry";
+import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
+import { acquireBrowserProject, type BrowserProjectLease, readBrowserProject } from "../../src/webgui/project-registry";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "../../src/webgui/rpc-contract";
 import { createAgentServices } from "../../src/webgui/services-agent";
 import { readWebGuiSessionInfo } from "../../src/webgui/session-source";
@@ -24,6 +25,7 @@ import { getTestModel } from "../helpers/model-fixtures";
 
 test("native task rows open the real child UUID, stream its conversation and reject child input without restoring the root", async () => {
 	using temp = TempDir.createSync("@pi-native-child-ui-");
+	activateNativeWebGuiComposition();
 	const authStorage = createInMemoryAuthStorage();
 	const model = getTestModel("ascend");
 	authStorage.keys.setRuntime(model.provider, "isolated-test-key");
@@ -40,6 +42,7 @@ test("native task rows open the real child UUID, stream its conversation and rej
 	async function create(manager: SessionManager, id: string, parent?: AgentSession): Promise<AgentSession> {
 		const { session } = await createAgentSession({
 			cwd: temp.path(),
+			bindProcessState: false,
 			agentDir: temp.join("agent"),
 			sessionManager: manager,
 			authStorage,
@@ -58,7 +61,7 @@ test("native task rows open the real child UUID, stream its conversation and rej
 			enableLsp: false,
 			agentRegistry: registry,
 			agentId: id,
-			taskDepth: 1,
+			taskDepth: parent ? 1 : 0,
 			parentAgentId: parent?.getAgentId(),
 			subagentEventBus: parent?.subagentEventBus,
 		});
@@ -106,6 +109,7 @@ test("native task rows open the real child UUID, stream its conversation and rej
 		const rootId = root.sessionId;
 		lease = await acquireBrowserProject(temp.path(), "webgui");
 		await lease.activate(() => readWebGuiSessionInfo(root), { allowLan: false, nativeSession: root });
+		const originalProject = readBrowserProject(lease.projectId);
 		const context: WebGuiServiceContext = {
 			connectionId: "native-child-pane",
 			projectId: lease.projectId,
@@ -118,6 +122,11 @@ test("native task rows open the real child UUID, stream its conversation and rej
 		if (!agent) throw new Error("Missing native agent channel");
 		const target = { workspacePath: lease.root };
 		const runtime = nativeChatRuntime(context);
+		// Task readers attach lazily on their first RPC, not when the service definitions are created.
+		expect(runtime.taskRunsAvailable).toBe(false);
+		const runs = await agent.call<NativeTaskRunsSnapshot>(context, "listNativeTaskRuns", [
+			{ ...target, sessionId: rootId },
+		]);
 		expect(runtime.taskRunsAvailable).toBe(true);
 		const parent = await runtime.snapshot(context, rootId);
 		const row = parent.rows.window.find(
@@ -126,9 +135,6 @@ test("native task rows open the real child UUID, stream its conversation and rej
 		expect(row).toMatchObject({ kind: "subagent", childSessionId: childId });
 		expect(childId).not.toBe("Worker");
 		expect(parent.subagents?.childSessionIds).toContain(childId);
-		const runs = await agent.call<NativeTaskRunsSnapshot>(context, "listNativeTaskRuns", [
-			{ ...target, sessionId: rootId },
-		]);
 		expect(runs.runs[0]?.actors).toContainEqual(expect.objectContaining({ sessionId: childId }));
 		const childSnapshot = await runtime.snapshot(context, childId);
 		expect(childSnapshot.inputRouting).toEqual({ mode: "reject", reasonCode: "guard.nativeChildReadOnly" });
@@ -138,6 +144,11 @@ test("native task rows open the real child UUID, stream its conversation and rej
 		await expect(
 			agent.call(context, "sendPrompt", [{ ...target, sessionId: childId, content: "Forbidden input" }]),
 		).rejects.toThrow("read-only");
+		expect(root.sessionId).toBe(rootId);
+		expect(root.sessionManager).toBe(manager);
+		expect(readBrowserProject(lease.projectId)).toBe(originalProject);
+		expect(originalProject?.nativeSession).toBe(root);
+		expect([...(originalProject?.nativeSessions ?? [])]).toEqual([root]);
 		await agent.call(context, "initializeConversationV4", [
 			{
 				kind: "clientHello",

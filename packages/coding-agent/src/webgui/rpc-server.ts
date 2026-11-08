@@ -13,11 +13,61 @@ import {
 	ProtocolMessageType,
 	SocketProtocol,
 } from "../../../../vendor/zcode-frontend/packages/rpc/src/protocol";
+import {
+	commandEnvelopeSchema,
+	commandPayloadSchemas,
+} from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/command";
+import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
+import type { AgentSession } from "../session/agent-session";
+import {
+	configureNativeWebGuiHandoffAdmission,
+	nativeWebGuiQuestions,
+	type NativeWebGuiInteractionOrigin,
+} from "./native-interactions";
 import { type BrowserProjectRecord, readBrowserProject } from "./project-registry";
-import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
+import type { WebGuiHandoffBinding, WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
+import { assertWebGuiNativeAdmission } from "./native-session-host";
 import { createWebGuiServices, disposeWebGuiServices } from "./services";
 
-const MAX_BINARY_MESSAGE = 16 * 1024 * 1024;
+// Match the listener envelope: 20 MiB native attachment bytes expand to about 26.7 MiB in JSON.
+const MAX_BINARY_MESSAGE = 32 * 1024 * 1024;
+const connections = new Map<string, WebGuiConnection>();
+
+interface ConnectionHandoff extends Omit<WebGuiHandoffBinding, "interactionId"> {
+	interactionId?: string;
+	projectId: string;
+	ownerId: string;
+	session: AgentSession;
+	expiresAt: number;
+	timer: Timer;
+	consumed: boolean;
+}
+
+/** Native-only admission before a selected root leaves its original WebGUI mode owner. */
+export function beginWebGuiConnectionHandoff(
+	origin: NativeWebGuiInteractionOrigin,
+	session: AgentSession,
+): AbortSignal {
+	const connection = connections.get(origin.connectionId);
+	if (!connection) throw new Error("Originating WebGUI connection is no longer available");
+	return connection.beginHandoff(origin, session);
+}
+
+/** Installed only on the explicit RPC host; the broker supplies its newly minted opaque ID. */
+export function admitWebGuiConnectionHandoffAction(
+	origin: NativeWebGuiInteractionOrigin,
+	interactionId: string,
+	session: AgentSession,
+): boolean {
+	return connections.get(origin.connectionId)?.admitHandoffAction(origin, interactionId, session) ?? false;
+}
+
+/** Retire every old business binding except the single opaque native handoff control drain. */
+export function retireWebGuiConnectionsForHandoff(keepConnectionId: string): void {
+	for (const [id, connection] of connections) {
+		if (id !== keepConnectionId) connection.fail(1001, "Native WebGUI mode has ended");
+	}
+}
 
 export class WebGuiRequestError extends Error {
 	constructor(
@@ -139,6 +189,8 @@ class WebGuiConnection {
 	#server: ChannelServer<WebGuiServiceContext> | undefined;
 	#services: readonly WebGuiServiceDefinition[] = [];
 	#disposed = false;
+	#context: WebGuiServiceContext;
+	#handoff?: ConnectionHandoff;
 
 	constructor(readonly websocket: ServerWebSocket<WebGuiSocketData>) {
 		this.#socket = new BunRpcSocket(websocket);
@@ -152,9 +204,12 @@ class WebGuiConnection {
 			nativeSession: project?.nativeSession,
 			signal: this.#abort.signal,
 		};
+		this.#context = context;
+		connections.set(context.connectionId, this);
 		try {
 			this.#services = createWebGuiServices(context);
 			this.#server = new ChannelServer(this.#protocol, context, undefined, true);
+			const connection = this;
 			for (const service of this.#services) {
 				this.#server.registerChannel(service.name, {
 					async call<T>(
@@ -163,12 +218,55 @@ class WebGuiConnection {
 						arg?: unknown,
 						cancellationToken?: CancellationToken,
 					): Promise<T> {
-						assertProjectOwner(project);
-						return service.call<T>(ctx, command, arg, cancellationToken);
+						if (service.name === ServiceChannels.FileWatcher && command === "watch")
+							assertWebGuiNativeAdmission();
+						let handoff: ConnectionHandoff | undefined;
+						try {
+							assertProjectOwner(project);
+						} catch (error) {
+							handoff = connection.#claimHandoff(service.name, command, arg);
+							if (!handoff) throw error;
+						}
+						try {
+							const result = await service.call<T>(ctx, command, arg, cancellationToken);
+							if (handoff) setTimeout(() => connection.fail(1000, "Native mode handoff acknowledged"), 0);
+							return result;
+						} catch (error) {
+							if (handoff) handoff.consumed = false;
+							throw error;
+						}
 					},
 					listen<T>(ctx: WebGuiServiceContext, event: string, arg?: unknown): Event<T> {
 						assertProjectOwner(project);
-						return service.listen<T>(ctx, event, arg);
+						assertWebGuiNativeAdmission();
+						const source = service.listen<T>(ctx, event, arg);
+						return listener =>
+							source(frame => {
+								let active = true;
+								try {
+									assertProjectOwner(project);
+								} catch {
+									active = false;
+								}
+								if (active) {
+									listener(frame);
+									return;
+								}
+								const handoff = connection.#activeHandoff();
+								if (
+									!handoff?.interactionId ||
+									service.name !== "zcode-agent" ||
+									event !== "onDynamicConversationFrame"
+								)
+									return;
+								const drained = service.drainHandoffFrame?.(arg, frame, {
+									connectionId: handoff.connectionId,
+									clientId: handoff.clientId,
+									sessionId: handoff.sessionId,
+									interactionId: handoff.interactionId,
+								});
+								if (drained !== undefined) listener(drained as T);
+							});
 					},
 				});
 			}
@@ -177,6 +275,95 @@ class WebGuiConnection {
 			this.dispose();
 			throw error;
 		}
+	}
+
+	beginHandoff(origin: NativeWebGuiInteractionOrigin, session: AgentSession): AbortSignal {
+		assertProjectOwner(this.websocket.data.project);
+		const project = this.websocket.data.project;
+		const live = project ? readBrowserProject(project.projectId) : null;
+		if (
+			this.#disposed ||
+			this.#handoff ||
+			!project ||
+			!live?.nativeSessions?.has(session) ||
+			(origin.sessionId !== undefined && origin.sessionId !== session.sessionId)
+		)
+			throw new Error("Native handoff does not belong to this WebGUI connection");
+		const timer = setTimeout(() => this.fail(1008, "Native mode handoff expired"), 30_000);
+		this.#handoff = {
+			connectionId: this.#context.connectionId,
+			clientId: origin.clientId,
+			sessionId: session.sessionId,
+			projectId: project.projectId,
+			ownerId: project.ownerId,
+			session,
+			expiresAt: Date.now() + 30_000,
+			timer,
+			consumed: false,
+		};
+		return this.#abort.signal;
+	}
+
+	admitHandoffAction(origin: NativeWebGuiInteractionOrigin, interactionId: string, session: AgentSession): boolean {
+		const handoff = this.#activeHandoff();
+		if (
+			!handoff ||
+			handoff.interactionId ||
+			!interactionId ||
+			handoff.session !== session ||
+			handoff.clientId !== origin.clientId ||
+			handoff.sessionId !== origin.sessionId
+		)
+			return false;
+		handoff.interactionId = interactionId;
+		return true;
+	}
+
+	#activeHandoff(): ConnectionHandoff | undefined {
+		const handoff = this.#handoff;
+		if (
+			!handoff ||
+			this.#disposed ||
+			handoff.consumed ||
+			Date.now() >= handoff.expiresAt ||
+			readBrowserProject(handoff.projectId)?.ownerId !== handoff.ownerId
+		)
+			return undefined;
+		return handoff;
+	}
+
+	#claimHandoff(service: string, command: string, arg: unknown): ConnectionHandoff | undefined {
+		const handoff = this.#activeHandoff();
+		if (
+			!handoff?.interactionId ||
+			service !== "zcode-agent" ||
+			command !== "sendConversationCommandV4" ||
+			!arg ||
+			typeof arg !== "object" ||
+			!("envelope" in arg)
+		)
+			return undefined;
+		const envelope = commandEnvelopeSchema.safeParse(arg.envelope);
+		if (
+			!envelope.success ||
+			envelope.data.type !== "resolveInteraction" ||
+			envelope.data.sessionId !== handoff.sessionId ||
+			envelope.data.clientId !== handoff.clientId
+		)
+			return undefined;
+		const payload = commandPayloadSchemas.resolveInteraction.safeParse(envelope.data.payload);
+		if (!payload.success || payload.data.interactionId !== handoff.interactionId) return undefined;
+		if (
+			!nativeWebGuiQuestions(handoff.session)
+				.pendingInteractionsFor({
+					connectionId: handoff.connectionId,
+					clientId: handoff.clientId,
+				})
+				.some(interaction => interaction.interactionId === handoff.interactionId)
+		)
+			return undefined;
+		handoff.consumed = true;
+		return handoff;
 	}
 
 	receive(message: string | Uint8Array): void {
@@ -193,7 +380,12 @@ class WebGuiConnection {
 			return;
 		}
 		try {
-			assertProjectOwner(this.websocket.data.project);
+			const handoff = this.#handoff;
+			const draining =
+				handoff &&
+				Date.now() < handoff.expiresAt &&
+				readBrowserProject(handoff.projectId)?.ownerId === handoff.ownerId;
+			if (!draining) assertProjectOwner(this.websocket.data.project);
 			this.#socket.accept(message);
 		} catch (error) {
 			logger.warn("WebGUI RPC connection ended", { error: String(error) });
@@ -213,6 +405,8 @@ class WebGuiConnection {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		if (this.#handoff) clearTimeout(this.#handoff.timer);
+		connections.delete(this.#context.connectionId);
 		this.#abort.abort();
 		this.#server?.dispose();
 		disposeWebGuiServices(this.#services);
@@ -224,6 +418,7 @@ class WebGuiConnection {
 export class WebGuiRpcHost {
 	#sockets = new Set<ServerWebSocket<WebGuiSocketData>>();
 	#disposed = false;
+	#restoreHandoffAdmission?: () => void;
 	readonly websocket: WebSocketHandler<WebGuiSocketData> = {
 		maxPayloadLength: MAX_BINARY_MESSAGE,
 		backpressureLimit: MAX_BINARY_MESSAGE,
@@ -231,6 +426,7 @@ export class WebGuiRpcHost {
 		perMessageDeflate: false,
 		open: socket => {
 			if (this.#disposed) return socket.close(1001, "WebGUI server is stopping");
+			this.#restoreHandoffAdmission ??= configureNativeWebGuiHandoffAdmission(admitWebGuiConnectionHandoffAction);
 			this.#sockets.add(socket);
 			try {
 				assertProjectOwner(socket.data.project);
@@ -253,6 +449,7 @@ export class WebGuiRpcHost {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		this.#restoreHandoffAdmission?.();
 		for (const socket of this.#sockets) socket.data.connection?.fail(1001, "WebGUI server is stopping");
 		this.#sockets.clear();
 	}

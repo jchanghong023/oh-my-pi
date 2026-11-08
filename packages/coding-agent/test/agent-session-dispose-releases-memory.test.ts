@@ -3,19 +3,26 @@ import * as path from "node:path";
 import { Agent, type AgentMessage, AppendOnlyContextManager } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { AsyncJobManager } from "@oh-my-pi/pi-coding-agent/async";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
+import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
+import {
+	type AgentSessionStartupCleanupFailure,
+	type CreateAgentSessionOptions,
+	createAgentSession,
+} from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import type { ToolSession } from "@oh-my-pi/pi-coding-agent/tools";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInMemoryAuthStorage } from "./helpers/agent-session-setup";
+import { getTestModel } from "./helpers/model-fixtures";
 
 // Regression: a keep-alive subagent's AgentSession is disposed at park() but
 // stays reachable through the lifecycle adoption record's reviver closure
@@ -33,7 +40,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	beforeEach(() => {
 		tempDir = TempDir.createSync("@omp-dispose-release-");
 		authStorage = createInMemoryAuthStorage();
-		authStorage.keys.setRuntime("anthropic", "test-key");
+		authStorage.keys.setRuntime(getTestModel("ascend").provider, "test-key");
 	});
 
 	afterEach(async () => {
@@ -47,8 +54,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	});
 
 	function createSession(): AgentSession {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -195,8 +201,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	});
 
 	it("drains pending notifications before releasing retained session memory", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -281,8 +286,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	});
 
 	it("keeps session memory empty when notifications finish after the drain deadline", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -362,8 +366,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	});
 
 	it("seals the session file at release so an immediate revival owns it exclusively", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -546,8 +549,7 @@ describe("AgentSession dispose releases retained memory", () => {
 	});
 
 	it("preserves the agent_end transcript for an asynchronous extension during dispose", async () => {
-		const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-		if (!model) throw new Error("expected bundled model");
+		const model = getTestModel("ascend");
 		const mock = createMockModel({ handler: () => ({ content: ["ok"] }) });
 		const agent = new Agent({
 			getApiKey: () => "test-key",
@@ -621,5 +623,247 @@ describe("AgentSession dispose releases retained memory", () => {
 		await disposeP;
 		session = undefined;
 		expect(observedMessageCount).toBe(1);
+	});
+});
+
+describe("SDK strict owned disposal", () => {
+	let tempDir: TempDir;
+	let authStorage: AuthStorage;
+	let registry: AgentRegistry;
+	const sessions: AgentSession[] = [];
+
+	beforeEach(() => {
+		tempDir = TempDir.createSync("@omp-strict-dispose-");
+		authStorage = createInMemoryAuthStorage();
+		authStorage.keys.setRuntime(getTestModel("ascend").provider, "test-key");
+		registry = new AgentRegistry();
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		try {
+			const results = await Promise.allSettled(sessions.splice(0).map(current => current.dispose({ strict: true })));
+			const failures = results.flatMap(result => (result.status === "rejected" ? [result.reason] : []));
+			if (failures.length) throw new AggregateError(failures, "SDK fixture cleanup failed");
+		} finally {
+			authStorage.close();
+			tempDir.removeSync();
+		}
+	});
+
+	async function createSession(
+		agentId: string,
+		options: Partial<CreateAgentSessionOptions> = {},
+	): Promise<AgentSession> {
+		const model = getTestModel("ascend");
+		const { session } = await createAgentSession({
+			cwd: tempDir.path(),
+			agentDir: tempDir.path(),
+			agentId,
+			agentRegistry: registry,
+			authStorage,
+			modelRegistry: new ModelRegistry(authStorage, path.join(tempDir.path(), "models.yml")),
+			sessionManager: SessionManager.inMemory(tempDir.path()),
+			settings: Settings.isolated({
+				"async.enabled": false,
+				"browser.enabled": false,
+				"computer.enabled": false,
+				"compaction.enabled": false,
+				"todo.enabled": false,
+			}),
+			model,
+			offline: true,
+			bindProcessState: false,
+			disableExtensionDiscovery: true,
+			skills: [],
+			contextFiles: [],
+			workspaceTree: {
+				rootPath: tempDir.path(),
+				rendered: "",
+				truncated: false,
+				totalLines: 0,
+				agentsMdFiles: [],
+			},
+			promptTemplates: [],
+			slashCommands: [],
+			rules: [],
+			enableMCP: false,
+			enableLsp: false,
+			...options,
+		});
+		sessions.push(session);
+		return session;
+	}
+
+	function registerCleanup(current: AgentSession, callback: () => Promise<void>): void {
+		// The SDK's actual read tool owns the ToolSession used by native resources.
+		const toolSession: ToolSession | undefined = Reflect.get(current.getToolByName("read") ?? {}, "session");
+		if (!toolSession?.registerDisposeCallback) throw new Error("expected native ToolSession cleanup registration");
+		toolSession.registerDisposeCallback(callback);
+	}
+
+	it("retains the root route after a real final-close failure until retry, without closing another root", async () => {
+		const current = await createSession("strict-close-root");
+		const sibling = await createSession("independent-root");
+		const ref = registry.get("strict-close-root");
+		const siblingRef = registry.get("independent-root");
+		expect(ref?.session).toBe(current);
+		expect(siblingRef?.session).toBe(sibling);
+		const siblingClose = vi.spyOn(sibling.sessionManager, "close");
+		const close = current.sessionManager.close.bind(current.sessionManager);
+		const failure = new Error("owned transcript close failed");
+		const closeSpy = vi
+			.spyOn(current.sessionManager, "close")
+			.mockRejectedValueOnce(failure)
+			.mockImplementation(close);
+		const resourceCleanup = vi.fn(async () => {});
+		registerCleanup(current, resourceCleanup);
+
+		const failedClose = await current.dispose({ strict: true }).then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		expect(failedClose instanceof AggregateError ? failedClose.errors : [failedClose]).toContain(failure);
+		expect(closeSpy).toHaveBeenCalledTimes(1);
+		expect(registry.get("strict-close-root")).toBe(ref);
+		expect(registry.get("strict-close-root")?.session).toBe(current);
+		expect(registry.get("independent-root")).toBe(siblingRef);
+		expect(siblingClose).not.toHaveBeenCalled();
+		const completedCleanups = resourceCleanup.mock.calls.length;
+
+		await current.dispose({ strict: true });
+		expect(closeSpy).toHaveBeenCalledTimes(2);
+		expect(registry.get("strict-close-root")).toBeUndefined();
+		expect(resourceCleanup).toHaveBeenCalledTimes(Math.max(1, completedCleanups));
+		expect(registry.get("independent-root")).toBe(siblingRef);
+		expect(siblingClose).not.toHaveBeenCalled();
+	});
+
+	it("retries failed resource callbacks without duplicating completed cleanup or losing the registry route", async () => {
+		const current = await createSession("strict-resources-root");
+		const ref = registry.get("strict-resources-root");
+		const closeSpy = vi.spyOn(current.sessionManager, "close");
+		let fail = true;
+		const failure = new Error("owned native resource close failed");
+		const completed = vi.fn(async () => {});
+		const failing = vi.fn(async () => {
+			if (fail) throw failure;
+		});
+		const independent = vi.fn(async () => {});
+		registerCleanup(current, completed);
+		registerCleanup(current, failing);
+		registerCleanup(current, independent);
+		try {
+			const failedCleanup = await current.dispose({ strict: true }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(failedCleanup instanceof AggregateError ? failedCleanup.errors : [failedCleanup]).toContain(failure);
+			expect(registry.get("strict-resources-root")).toBe(ref);
+			expect(completed).toHaveBeenCalledTimes(1);
+			expect(failing).toHaveBeenCalledTimes(1);
+			expect(independent).toHaveBeenCalledTimes(1);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+
+			fail = false;
+			await current.dispose({ strict: true });
+			expect(registry.get("strict-resources-root")).toBeUndefined();
+			expect(completed).toHaveBeenCalledTimes(1);
+			expect(failing).toHaveBeenCalledTimes(2);
+			expect(independent).toHaveBeenCalledTimes(1);
+			expect(closeSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			fail = false;
+		}
+	});
+
+	it("retains actual failed startup resources and coalesces cleanup retries before releasing the root", async () => {
+		const startupError = new Error("native startup failed after session attachment");
+		const cleanupError = new Error("native startup resource remains busy");
+		const retryReached = Promise.withResolvers<void>();
+		const finishRetry = Promise.withResolvers<void>();
+		let failCleanup = true;
+		let actualSession: AgentSession | undefined;
+		let pending: AgentSessionStartupCleanupFailure | undefined;
+		let cleanupFailures = 0;
+		const completed = vi.fn(async () => {});
+		const failing = vi.fn(async () => {
+			if (failCleanup) throw cleanupError;
+			retryReached.resolve();
+			await finishRetry.promise;
+		});
+		const attachSession = registry.attachSession.bind(registry);
+		vi.spyOn(registry, "attachSession").mockImplementation((id, session, sessionFile, expected) => {
+			const attached = attachSession(id, session, sessionFile, expected);
+			if (!attached) return attached;
+			actualSession = session as AgentSession;
+			registerCleanup(actualSession, completed);
+			registerCleanup(actualSession, failing);
+			throw startupError;
+		});
+		function cleanupErrors(error: unknown): unknown[] {
+			return error instanceof AggregateError ? error.errors.flatMap(cleanupErrors) : [error];
+		}
+		try {
+			const error = await createSession("strict-startup-root", {
+				strictStartupCleanup: true,
+				onStartupCleanupFailure: failure => {
+					cleanupFailures++;
+					pending = failure;
+				},
+			}).then(
+				() => undefined,
+				(failure: unknown) => failure,
+			);
+			expect(cleanupErrors(error)).toContain(startupError);
+			expect(cleanupErrors(error)).toContain(cleanupError);
+			expect(cleanupFailures).toBe(1);
+			expect(actualSession).toBeDefined();
+			expect(pending?.session).toBe(actualSession);
+			const ref = registry.get("strict-startup-root");
+			expect(ref?.session).toBe(actualSession);
+			expect(completed).toHaveBeenCalledTimes(1);
+			expect(failing).toHaveBeenCalledTimes(1);
+			if (!pending) throw new Error("expected actual retained startup cleanup");
+
+			failCleanup = false;
+			const firstRetry = pending.cleanup();
+			const concurrentRetry = pending.cleanup();
+			try {
+				await retryReached.promise;
+				expect(registry.get("strict-startup-root")).toBe(ref);
+				expect(completed).toHaveBeenCalledTimes(1);
+				expect(failing).toHaveBeenCalledTimes(2);
+			} finally {
+				finishRetry.resolve();
+				await Promise.all([firstRetry, concurrentRetry]);
+			}
+			expect(registry.get("strict-startup-root")).toBeUndefined();
+			expect(completed).toHaveBeenCalledTimes(1);
+			expect(failing).toHaveBeenCalledTimes(2);
+			expect(cleanupFailures).toBe(1);
+		} finally {
+			failCleanup = false;
+			finishRetry.resolve();
+			await pending?.cleanup();
+		}
+	});
+
+	it("preserves ordinary SDK disposal's unregister-before-resource-error behavior", async () => {
+		const current = await createSession("ordinary-dispose-root");
+		let fail = true;
+		const failure = new Error("ordinary native resource failure");
+		registerCleanup(current, async () => {
+			if (fail) throw failure;
+		});
+		try {
+			await expect(current.dispose()).rejects.toBe(failure);
+			expect(registry.get("ordinary-dispose-root")).toBeUndefined();
+		} finally {
+			fail = false;
+			await current.dispose();
+			const index = sessions.indexOf(current);
+			if (index !== -1) sessions.splice(index, 1);
+		}
 	});
 });

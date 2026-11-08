@@ -1075,3 +1075,210 @@ describe("AgentLifecycleManager", () => {
 		expect(revived.disposeCalls()).toBe(0);
 	});
 });
+
+describe("AgentLifecycleManager strict owned release", () => {
+	function cleanupErrors(error: unknown): unknown[] {
+		return error instanceof AggregateError ? error.errors.flatMap(cleanupErrors) : [error];
+	}
+
+	it("retains failed nested cleanup routes, settles independent branches, and retries only unfinished resources", async () => {
+		const registry = new AgentRegistry();
+		const lifecycle = new AgentLifecycleManager(registry);
+		const root = registry.register({ id: "owned-root", displayName: "root", kind: "main", session: null });
+		let failDispose = true;
+		let failResource = true;
+		const disposeFailure = new Error("nested session close failed");
+		const resourceFailure = new Error("parked workspace close failed");
+		const childSession = makeSessionStub(async () => {
+			if (failDispose) throw disposeFailure;
+		});
+		const child = registry.register({
+			id: "owned-child",
+			displayName: "child",
+			kind: "sub",
+			parentId: root.id,
+			session: childSession.session,
+			status: "idle",
+		});
+		const branch = registry.register({
+			id: "owned-branch",
+			displayName: "branch",
+			kind: "sub",
+			parentId: root.id,
+			session: null,
+			status: "parked",
+		});
+		const grandchild = registry.register({
+			id: "owned-grandchild",
+			displayName: "grandchild",
+			kind: "sub",
+			parentId: branch.id,
+			session: null,
+			status: "parked",
+		});
+		const siblingSession = makeSessionStub();
+		const sibling = registry.register({
+			id: "owned-sibling",
+			displayName: "sibling",
+			kind: "sub",
+			parentId: root.id,
+			session: siblingSession.session,
+			status: "running",
+		});
+		const childRelease = vi.fn(async () => {});
+		const grandchildRelease = vi.fn(async () => {
+			if (failResource) throw resourceFailure;
+		});
+		const siblingRelease = vi.fn(async () => {});
+		const childReviverDropped = vi.fn(() => {});
+		const grandchildReviverDropped = vi.fn(() => {});
+		lifecycle.adopt(
+			child.id,
+			{
+				idleTtlMs: 0,
+				revive: async () => childSession.session,
+				onRelease: childRelease,
+				onReviverDropped: childReviverDropped,
+			},
+			child,
+		);
+		lifecycle.adopt(
+			grandchild.id,
+			{
+				idleTtlMs: 0,
+				revive: async () => makeSessionStub().session,
+				onRelease: grandchildRelease,
+				onReviverDropped: grandchildReviverDropped,
+			},
+			grandchild,
+		);
+		lifecycle.adopt(sibling.id, { idleTtlMs: 0, onRelease: siblingRelease }, sibling);
+		try {
+			const failure = await lifecycle.releaseDescendants(root, undefined, { strict: true }).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			expect(failure).toBeInstanceOf(AggregateError);
+			expect(cleanupErrors(failure)).toContain(disposeFailure);
+			expect(cleanupErrors(failure)).toContain(resourceFailure);
+			expect(registry.get(child.id)).toBe(child);
+			expect(registry.get(grandchild.id)).toBe(grandchild);
+			expect(registry.get(branch.id)).toBe(branch);
+			expect(lifecycle.has(child.id, child)).toBe(true);
+			expect(lifecycle.has(grandchild.id, grandchild)).toBe(true);
+			expect(childReviverDropped).not.toHaveBeenCalled();
+			expect(grandchildReviverDropped).not.toHaveBeenCalled();
+			expect(grandchildRelease).toHaveBeenCalledTimes(1);
+			expect(registry.get(sibling.id)).toBeUndefined();
+			expect(siblingSession.disposeCalls()).toBe(1);
+			expect(siblingRelease).toHaveBeenCalledTimes(1);
+			const completedChildReleases = childRelease.mock.calls.length;
+
+			failDispose = false;
+			failResource = false;
+			await lifecycle.releaseDescendants(root, undefined, { strict: true });
+			expect(registry.list()).toEqual([root]);
+			expect(childSession.disposeCalls()).toBe(2);
+			expect(childRelease).toHaveBeenCalledTimes(Math.max(1, completedChildReleases));
+			expect(grandchildRelease).toHaveBeenCalledTimes(2);
+			expect(childReviverDropped).toHaveBeenCalledTimes(1);
+			expect(grandchildReviverDropped).toHaveBeenCalledTimes(1);
+			expect(siblingRelease).toHaveBeenCalledTimes(1);
+		} finally {
+			failDispose = false;
+			failResource = false;
+			await lifecycle.dispose();
+		}
+	});
+
+	it("retries a failed old generation without releasing its same-id replacement", async () => {
+		const registry = new AgentRegistry();
+		const lifecycle = new AgentLifecycleManager(registry);
+		const oldSession = makeSessionStub();
+		const oldRef = registry.register({
+			id: "reused-child",
+			displayName: "old",
+			kind: "sub",
+			session: oldSession.session,
+			status: "idle",
+		});
+		let fail = true;
+		const releaseOld = vi.fn(async () => {
+			if (fail) throw new Error("old workspace is busy");
+		});
+		const dropOldReviver = vi.fn(() => {});
+		lifecycle.adopt(
+			oldRef.id,
+			{
+				idleTtlMs: 0,
+				onRelease: releaseOld,
+				onReviverDropped: dropOldReviver,
+			},
+			oldRef,
+		);
+		try {
+			await expect(lifecycle.release(oldRef.id, oldRef, { strict: true })).rejects.toThrow();
+			expect(registry.get(oldRef.id)).toBe(oldRef);
+			expect(lifecycle.has(oldRef.id, oldRef)).toBe(true);
+			expect(dropOldReviver).not.toHaveBeenCalled();
+
+			const replacementSession = makeSessionStub();
+			const replacement = registry.register({
+				id: oldRef.id,
+				displayName: "replacement",
+				kind: "sub",
+				session: replacementSession.session,
+				status: "idle",
+			});
+			const releaseReplacement = vi.fn(async () => {});
+			lifecycle.adopt(replacement.id, { idleTtlMs: 0, onRelease: releaseReplacement }, replacement);
+			expect(dropOldReviver).not.toHaveBeenCalled();
+			fail = false;
+			expect(await lifecycle.release(oldRef.id, oldRef, { strict: true })).toBe(true);
+			expect(releaseOld).toHaveBeenCalledTimes(2);
+			expect(oldSession.disposeCalls()).toBe(1);
+			expect(dropOldReviver).toHaveBeenCalledTimes(1);
+			expect(registry.get(replacement.id)).toBe(replacement);
+			expect(lifecycle.has(replacement.id, replacement)).toBe(true);
+			expect(replacementSession.disposeCalls()).toBe(0);
+			expect(releaseReplacement).not.toHaveBeenCalled();
+			await lifecycle.release(replacement.id, replacement, { strict: true });
+			expect(releaseReplacement).toHaveBeenCalledTimes(1);
+		} finally {
+			fail = false;
+			await lifecycle.release(oldRef.id, oldRef, { strict: true });
+			await lifecycle.dispose();
+		}
+	});
+
+	it("keeps default soft release best-effort and removes the failed ref and adoption", async () => {
+		const registry = new AgentRegistry();
+		const lifecycle = new AgentLifecycleManager(registry);
+		const session = makeSessionStub(async () => {
+			throw new Error("soft dispose failure");
+		});
+		const ref = registry.register({
+			id: "ordinary-child",
+			displayName: "ordinary",
+			kind: "sub",
+			session: session.session,
+			status: "idle",
+		});
+		const onRelease = vi.fn(async () => {
+			throw new Error("soft resource failure");
+		});
+		const onReviverDropped = vi.fn(() => {});
+		lifecycle.adopt(ref.id, { idleTtlMs: 0, onRelease, onReviverDropped }, ref);
+		try {
+			expect(await lifecycle.release(ref.id, ref)).toBe(true);
+			expect(registry.get(ref.id)).toBeUndefined();
+			expect(lifecycle.has(ref.id, ref)).toBe(false);
+			expect(session.disposeCalls()).toBe(1);
+			expect(onRelease).toHaveBeenCalledTimes(1);
+			expect(onReviverDropped).toHaveBeenCalledTimes(1);
+			expect(await lifecycle.release(ref.id, ref)).toBe(false);
+		} finally {
+			await lifecycle.dispose();
+		}
+	});
+});

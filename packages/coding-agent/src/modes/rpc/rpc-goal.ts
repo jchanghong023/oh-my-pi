@@ -128,6 +128,29 @@ export class RpcGoalController {
 		this.#continuationGeneration++;
 	}
 
+	/** Re-arm continuation after an explicit host action such as changing an active goal's budget. */
+	notifyHostAction(): void {
+		this.#resetContinuation();
+		this.#scheduleContinuation();
+	}
+
+	/** Expose the real goal tool for an interview while preserving the tool set restored on goal exit. */
+	async prepareInterview(): Promise<() => Promise<void>> {
+		await this.settled();
+		this.#assertCanEnter();
+		if (this.#session.getGoalModeState()?.goal) {
+			throw new Error("Resume or drop the current goal before starting an interview.");
+		}
+		const previousTools = this.#previousTools ?? this.#session.getEnabledToolNames();
+		if (this.#previousTools === undefined) {
+			await this.#session.setActiveToolsByName([...new Set([...previousTools, "goal"])]);
+			this.#previousTools = previousTools;
+		}
+		return async () => {
+			if (this.#previousTools === previousTools && !this.#session.getGoalModeState()?.goal) await this.#exit();
+		};
+	}
+
 	get #state(): RpcGoalResult {
 		const state = this.#session.getGoalModeState();
 		return { goal: state?.goal ?? null, state: state ?? null };

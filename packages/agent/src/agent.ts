@@ -39,7 +39,7 @@ import {
 	unpairedToolCallTail,
 } from "./agent-loop";
 import type { AppendOnlyContextManager } from "./append-only-context";
-import { agentPauseGate } from "./pause";
+import { type AgentPauseGate, agentPauseGate } from "./pause";
 import { isProviderRefusalMessage } from "./replay-policy";
 import { SentToolDefinitions } from "./sent-tool-definitions";
 import { Tokenizer } from "./tokenizer";
@@ -135,6 +135,8 @@ export class AgentBusyError extends Error {
 }
 export interface AgentOptions {
 	initialState?: Partial<AgentState>;
+	/** Gate shared by this agent and its owned workers. Defaults to the process-wide gate. */
+	pauseGate?: AgentPauseGate;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
@@ -509,10 +511,12 @@ export class Agent {
 
 	#runningPrompt?: Promise<void>;
 	#isPaused = false;
+	/** Actual gate controlling this agent's safe execution boundaries. */
+	readonly pauseGate: AgentPauseGate;
 
-	/** True while this unfinished turn is safely parked by the process pause gate. */
+	/** True while this unfinished turn is safely parked by its pause gate. */
 	get isPaused(): boolean {
-		return this.#isPaused && agentPauseGate.paused && !this.#abortController?.signal.aborted;
+		return this.#isPaused && this.pauseGate.paused && !this.#abortController?.signal.aborted;
 	}
 	#resolveRunningPrompt?: () => void;
 	#kimiApiFormat?: "openai" | "anthropic";
@@ -594,6 +598,7 @@ export class Agent {
 	hasQueuedAsides?: AgentLoopConfig["hasQueuedAsides"];
 
 	constructor(opts: AgentOptions = {}) {
+		this.pauseGate = opts.pauseGate ?? agentPauseGate;
 		this.#state = { ...this.#state, ...opts.initialState };
 		if (opts.initialState?.messages) this.#state.messages = opts.initialState.messages.slice();
 		if (opts.initialState?.pendingToolCalls)
@@ -2077,6 +2082,7 @@ export class Agent {
 
 		const config: AgentLoopConfig = {
 			model,
+			pauseGate: this.pauseGate,
 			reasoning,
 			disableReasoning: this.#state.disableReasoning,
 			temperature: this.#temperature,

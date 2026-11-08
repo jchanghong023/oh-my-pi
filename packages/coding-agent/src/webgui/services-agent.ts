@@ -1,4 +1,4 @@
-import { logger } from "@oh-my-pi/pi-utils";
+import { logger, normalizePathForComparison } from "@oh-my-pi/pi-utils";
 import { Emitter, type Event } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
 import type {
 	ZCodeAgentInitializeResult,
@@ -31,6 +31,7 @@ import {
 	commandEnvelopeSchema,
 	commandPayloadSchemas,
 	type CommandAck,
+	type CommandEnvelope,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/command";
 import {
 	assertNativeChat,
@@ -39,13 +40,32 @@ import {
 	legacySnapshot,
 	listNativeHistory,
 	nativeChatRuntime,
+	nativeChatProjectRuntime,
+	nativeChatChanges,
+	nativeChatRuntimeForSession,
+	resolveNativeChatRuntime,
 	type NativeChatRuntime,
 } from "./native-chat";
-import { createNativeTaskRunAdapter } from "./native-task-runs";
+import { createNativeTaskRunAdapter, type NativeTaskRunAdapter } from "./native-task-runs";
+import type { NativeWebGuiMediaState } from "./native-command-modes";
+import { nativeWebGuiQuestions } from "./native-interactions";
+import {
+	assertWebGuiNativeAdmission,
+	createWebGuiNativeSession,
+	installedWebGuiNativePorts,
+	listWebGuiNativeSessions,
+	resolveWebGuiSession,
+	runWebGuiSession,
+	subscribeWebGuiNativeSessions,
+	webGuiNativePorts,
+	webGuiSessionProject,
+} from "./native-session-host";
+import { listBrowserProjects, readBrowserProject } from "./project-registry";
 import {
 	WebGuiNotImplementedError,
 	type WebGuiMethod,
 	type WebGuiServiceContext,
+	type WebGuiHandoffBinding,
 	type WebGuiServiceDefinition,
 } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
@@ -53,6 +73,26 @@ import { createWebGuiService } from "./service-channel";
 function record(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Expected RPC parameters");
 	return value as Record<string, unknown>;
+}
+
+function mediaState(value: unknown): NativeWebGuiMediaState {
+	const event = record(value);
+	if ((event.kind !== "record" && event.kind !== "live") || (event.state !== "stopped" && event.state !== "error"))
+		throw new TypeError("Invalid native media state");
+	if (
+		(event.downloadStarted !== undefined && typeof event.downloadStarted !== "boolean") ||
+		(event.fileName !== undefined && typeof event.fileName !== "string") ||
+		(event.error !== undefined && typeof event.error !== "string")
+	)
+		throw new TypeError("Invalid native media result");
+	return {
+		kind: event.kind,
+		mediaId: nonempty(event.mediaId, "mediaId"),
+		state: event.state,
+		...(typeof event.downloadStarted === "boolean" ? { downloadStarted: event.downloadStarted } : {}),
+		...(typeof event.fileName === "string" ? { fileName: event.fileName } : {}),
+		...(typeof event.error === "string" ? { error: event.error } : {}),
+	};
 }
 
 function nonempty(value: unknown, name: string): string {
@@ -118,22 +158,32 @@ class BrowserAgentAttachment {
 	#storage: ZCodeAgentStorageStartupSnapshot = { generation: 0, state: null };
 	#storageEvents = new Emitter<ZCodeAgentStorageStartupSnapshot>();
 	#runtime?: NativeChatRuntime;
-	#release?: () => void;
+	#receipts: NativeChatRuntime;
+	#residents = new Map<NativeChatRuntime, () => void>();
 	#changes?: { dispose(): void };
+	#unsubscribeLifecycle?: () => void;
 	#refreshing = false;
 	#refreshAgain = false;
 	#flowState: "saturated" | "drained" | "closed" = "drained";
-	#lastIndexVersion = -1;
+	#indexDirty = true;
+	#indexVersions = new Map<NativeChatRuntime, number>();
+	#deliveredSeq = new Map<string, number>();
+	#ownerId?: string;
+	#workspaceScopes = new Set<string>();
 	#disposed = false;
 	#onAbort = () => this.dispose();
 
 	constructor(context: WebGuiServiceContext) {
 		this.#context = context;
-		if (context.nativeSession) {
-			this.#runtime = nativeChatRuntime(context);
-			this.#release = this.#runtime.retain();
-			this.#changes = this.#runtime.changes.event(() => this.#scheduleRefresh());
-		}
+		if (context.workspacePath) this.#workspaceScopes.add(normalizePathForComparison(context.workspacePath));
+		this.#ownerId = context.projectId ? readBrowserProject(context.projectId)?.ownerId : undefined;
+		this.#runtime = nativeChatRuntime(context);
+		this.#receipts = nativeChatProjectRuntime(context);
+		this.#changes = nativeChatChanges.event(() => this.#scheduleRefresh());
+		this.#unsubscribeLifecycle = subscribeWebGuiNativeSessions(() => {
+			this.#indexDirty = true;
+			this.#scheduleRefresh();
+		});
 		context.signal.addEventListener("abort", this.#onAbort, { once: true });
 		if (context.signal.aborted) this.dispose();
 	}
@@ -145,18 +195,107 @@ class BrowserAgentAttachment {
 	target(value: unknown): ZCodeAgentWorkspaceTarget {
 		this.#assertOpen();
 		const target = workspaceTarget(value);
-		if (!this.#context.workspacePath || target.workspacePath !== this.#context.workspacePath)
+		const expected = this.#context.workspacePath;
+		const requestedId = record(value).sessionId;
+		const project = this.#context.projectId ? readBrowserProject(this.#context.projectId) : undefined;
+		const residents = [...(project?.nativeSessions ?? [])].filter(
+			session => !session.isDisposed && (typeof requestedId !== "string" || session.sessionId === requestedId),
+		);
+		if (
+			!expected ||
+			(normalizePathForComparison(target.workspacePath) !== normalizePathForComparison(expected) &&
+				!residents.some(
+					session =>
+						normalizePathForComparison(session.sessionManager.getCwd()) ===
+						normalizePathForComparison(target.workspacePath),
+				))
+		)
 			throw new WebGuiNotImplementedError(
 				"zcode-agent.workspace: workspace is not bound to this browser connection",
 			);
+		this.#workspaceScopes.add(normalizePathForComparison(target.workspacePath));
 		return target;
+	}
+
+	get clientId(): string | undefined {
+		return this.#clientHello?.clientId;
 	}
 
 	runtime(value: unknown): NativeChatRuntime {
 		this.target(value);
-		assertNativeChat(this.#context);
-		if (!this.#runtime) throw new WebGuiNotImplementedError("zcode-agent: native chat is unavailable");
-		return this.#runtime;
+		return this.#runtime!;
+	}
+
+	#capturedWorkspace(value: unknown): void {
+		this.#assertOpen();
+		const target = workspaceTarget(value);
+		if (!this.#workspaceScopes.has(normalizePathForComparison(target.workspacePath)))
+			throw new Error("This workspace was not admitted by the originating browser connection.");
+	}
+
+	#receiptRuntime(value: unknown, envelope: CommandEnvelope): NativeChatRuntime {
+		if (envelope.type === "resolveInteraction" && envelope.sessionId) {
+			const payload = commandPayloadSchemas.resolveInteraction.safeParse(envelope.payload);
+			if (
+				payload.success &&
+				[...this.#residents.keys()].some(
+					runtime =>
+						runtime.conversations.has(envelope.sessionId!) &&
+						runtime
+							.browserActions(this.#context, envelope.clientId)
+							.some(action => action.interactionId === payload.data.interactionId),
+				)
+			) {
+				this.#capturedWorkspace(value);
+				return this.#receipts;
+			}
+		}
+		this.target(value);
+		return this.#receipts;
+	}
+
+	async sessionRuntime(value: unknown, id?: string): Promise<NativeChatRuntime> {
+		this.target(value);
+		await this.#observeResidents();
+		return this.#runtimeForId(id ?? nonempty(record(value).sessionId, "sessionId"));
+	}
+
+	async #runtimeForId(id: string): Promise<NativeChatRuntime> {
+		const retained = [...this.#residents.keys()].find(
+			runtime =>
+				runtime.conversations.has(id) &&
+				runtime.browserActions(this.#context, this.#clientHello?.clientId).length > 0,
+		);
+		return retained ?? resolveNativeChatRuntime(this.#context, id);
+	}
+
+	async #observeResidents(): Promise<void> {
+		if (!this.#context.projectId || this.#context.nativeSession?.isDisposed) return;
+		try {
+			assertWebGuiNativeAdmission();
+		} catch {
+			return;
+		}
+		const project = readBrowserProject(this.#context.projectId);
+		if (!project || project.mode !== "webgui" || project.phase !== "active" || project.ownerId !== this.#ownerId)
+			return;
+		for (const session of await listWebGuiNativeSessions(this.#context)) {
+			const runtime = nativeChatRuntimeForSession(session);
+			if (!this.#residents.has(runtime)) this.#residents.set(runtime, runtime.retain());
+		}
+	}
+
+	mediaSession(value: unknown) {
+		this.target(value);
+		const project = this.#context.projectId ? readBrowserProject(this.#context.projectId) : undefined;
+		if (!project || project.ownerId !== this.#ownerId || project.mode !== "webgui" || project.phase !== "active")
+			throw new Error("The native media owner is no longer bound to this browser connection.");
+		const id = nonempty(record(value).sessionId, "sessionId");
+		const session = [...(project.nativeSessions ?? [])].find(
+			candidate => !candidate.isDisposed && candidate.sessionId === id,
+		);
+		if (!session) throw new Error("The native media session is no longer resident.");
+		return session;
 	}
 	setFlowState(value: unknown): void {
 		this.target(value);
@@ -235,6 +374,57 @@ class BrowserAgentAttachment {
 		return this.#conversationFrames.event;
 	}
 
+	drainHandoffFrame(value: unknown, frame: unknown, binding: WebGuiHandoffBinding): unknown | undefined {
+		if (
+			this.#disposed ||
+			binding.connectionId !== this.#context.connectionId ||
+			(binding.clientId !== undefined && binding.clientId !== this.#clientHello?.clientId)
+		)
+			return undefined;
+		try {
+			this.#capturedWorkspace(value);
+		} catch {
+			return undefined;
+		}
+		if (!frame || typeof frame !== "object") return undefined;
+		const wire = frame as ConversationTopicWireFrame;
+		if (wire.kind !== "complete" || wire.topic !== `conversation/${binding.sessionId}` || !wire.frame)
+			return undefined;
+		const subscription = this.#conversations.get(wire.subscriptionId);
+		if (!subscription || subscription.sessionId !== binding.sessionId) return undefined;
+		const runtime = [...this.#residents.keys()].find(
+			candidate =>
+				candidate.conversations.has(binding.sessionId) &&
+				candidate
+					.browserActions(this.#context, binding.clientId)
+					.some(action => action.interactionId === binding.interactionId),
+		);
+		const action = runtime
+			?.browserActions(this.#context, binding.clientId)
+			.find(candidate => candidate.interactionId === binding.interactionId);
+		if (!action) return undefined;
+		const fromSeq = this.#deliveredSeq.get(subscription.id) ?? wire.frame.fromSeq;
+		const toSeq = Math.max(fromSeq + 1, wire.frame.toSeq);
+		this.#deliveredSeq.set(subscription.id, toSeq);
+		return {
+			wireVersion: V4_WIRE_PROTOCOL_VERSION,
+			kind: "complete",
+			deliveryKind: "online",
+			logicalFrameId: wire.logicalFrameId,
+			logicalFrameOrdinal: wire.logicalFrameOrdinal,
+			topic: wire.topic,
+			subscriptionId: subscription.id,
+			frame: {
+				topic: wire.topic,
+				subscriptionId: subscription.id,
+				fromSeq,
+				toSeq,
+				sentAt: Date.now(),
+				payload: { kind: "deltas", deltas: [{ op: "state.updated", patch: { pendingInteractions: [action] } }] },
+			},
+		};
+	}
+
 	#later(run: () => void): void {
 		const timer = setTimeout(() => {
 			this.#timers.delete(timer);
@@ -245,6 +435,20 @@ class BrowserAgentAttachment {
 
 	async #indexFrame(subscription: IndexSubscription, deliveryKind: "initial" | "online" | "recovery"): Promise<void> {
 		const sessions = await listNativeHistory(this.#context);
+		await this.#observeResidents();
+		const residents = new Map(
+			listBrowserProjects().flatMap(project =>
+				[...(project.nativeSessions ?? [])]
+					.filter(session => !session.isDisposed)
+					.map(session => [session.sessionId, session] as const),
+			),
+		);
+		const summaries = sessions.map(info =>
+			(residents.has(info.id) ? nativeChatRuntimeForSession(residents.get(info.id)!) : this.#runtime!).summary(
+				info,
+				subscription.index.workspaceId,
+			),
+		);
 		if (this.#disposed || !this.#subscriptions.has(subscription.id)) return;
 		const topic = sessionsIndexTopic(subscription.index.workspaceId);
 		const frame: SessionsIndexTopicFrame = {
@@ -259,9 +463,7 @@ class BrowserAgentAttachment {
 					protocolVersion: 1,
 					workspaceId: subscription.index.workspaceId,
 					logEpoch: subscription.index.epoch,
-					sessions: this.#runtime
-						? sessions.map(info => this.#runtime!.summary(info, subscription.index.workspaceId))
-						: [],
+					sessions: summaries,
 				},
 			},
 		};
@@ -389,6 +591,15 @@ class BrowserAgentAttachment {
 			};
 		}
 		subscription.snapshot = snapshot;
+		const owner = this.#context.projectId ? readBrowserProject(this.#context.projectId) : undefined;
+		if (
+			owner &&
+			owner.ownerId === this.#ownerId &&
+			owner.mode === "webgui" &&
+			owner.phase === "active" &&
+			(!this.#context.nativeSession || owner.nativeSessions?.has(this.#context.nativeSession))
+		)
+			this.#deliveredSeq.set(subscription.id, snapshot.seq);
 		for (const wire of encodeTopicWireFrames(frame, {
 			deliveryKind,
 			topic,
@@ -403,9 +614,9 @@ class BrowserAgentAttachment {
 	async subscribeConversation(value: unknown): Promise<V4ConversationSubscribeResult> {
 		this.#assertInitialized();
 		const params = record(value);
-		const runtime = this.runtime(value);
 		const sessionId = nonempty(params.sessionId, "sessionId");
-		const snapshot = await runtime.snapshot(this.#context, sessionId);
+		const runtime = await this.sessionRuntime(value, sessionId);
+		const snapshot = await runtime.snapshot(this.#context, sessionId, this.#clientHello?.clientId);
 		for (const existing of this.#conversations.values())
 			if (existing.sessionId === sessionId) this.#conversations.delete(existing.id);
 		const subscription: ConversationSubscription = { id: crypto.randomUUID(), sessionId, ordinal: 0, snapshot };
@@ -427,7 +638,8 @@ class BrowserAgentAttachment {
 
 	async resyncConversation(value: unknown): Promise<V4ConversationResyncResult> {
 		const subscription = this.#ownedConversation(value);
-		const snapshot = await this.#runtime!.snapshot(this.#context, subscription.sessionId);
+		const runtime = await this.sessionRuntime(value, subscription.sessionId);
+		const snapshot = await runtime.snapshot(this.#context, subscription.sessionId, this.#clientHello?.clientId);
 		this.#later(() => {
 			this.#publishConversation(subscription, snapshot, "recovery");
 			this.#scheduleRefresh();
@@ -461,17 +673,35 @@ class BrowserAgentAttachment {
 
 	async #refresh(): Promise<void> {
 		if (!this.#runtime || this.#disposed || this.#flowState !== "drained") return;
+		await this.#observeResidents();
+		const project = this.#context.projectId ? readBrowserProject(this.#context.projectId) : undefined;
+		let controlsOnly =
+			!!this.#context.nativeSession?.isDisposed ||
+			(!!this.#context.projectId &&
+				(!project || project.ownerId !== this.#ownerId || project.mode !== "webgui" || project.phase !== "active"));
+		try {
+			assertWebGuiNativeAdmission();
+		} catch {
+			controlsOnly = true;
+		}
 		for (const subscription of this.#conversations.values()) {
-			if (this.#runtime.state(subscription.sessionId).seq <= subscription.snapshot.seq) continue;
+			const retained = [...this.#residents.keys()].find(
+				candidate =>
+					candidate.conversations.has(subscription.sessionId) &&
+					candidate.browserActions(this.#context, this.#clientHello?.clientId).length > 0,
+			);
+			if (controlsOnly && !retained) continue;
+			const runtime = retained ?? (await this.#runtimeForId(subscription.sessionId));
+			if (runtime.state(subscription.sessionId).seq <= subscription.snapshot.seq) continue;
 			try {
 				this.#publishConversation(
 					subscription,
-					await this.#runtime.snapshot(this.#context, subscription.sessionId),
+					await runtime.snapshot(this.#context, subscription.sessionId, this.#clientHello?.clientId),
 					"online",
 				);
 			} catch (error) {
 				if (this.#disposed || this.#context.signal.aborted) return;
-				const state = this.#runtime.state(subscription.sessionId);
+				const state = runtime.state(subscription.sessionId);
 				const previous = subscription.snapshot;
 				this.#publishConversation(
 					subscription,
@@ -496,57 +726,238 @@ class BrowserAgentAttachment {
 				);
 			}
 		}
-		if (this.#lastIndexVersion !== this.#runtime.indexVersion) {
-			this.#lastIndexVersion = this.#runtime.indexVersion;
+		if (controlsOnly) return;
+		for (const runtime of this.#residents.keys()) {
+			if (this.#indexVersions.get(runtime) === runtime.indexVersion) continue;
+			this.#indexVersions.set(runtime, runtime.indexVersion);
+			this.#indexDirty = true;
+		}
+		if (this.#indexDirty) {
+			this.#indexDirty = false;
 			for (const subscription of this.#subscriptions.values()) await this.#indexFrame(subscription, "online");
 		}
 	}
 
-	async command(value: unknown): Promise<CommandAck> {
-		const runtime = this.runtime(value);
+	command(value: unknown): Promise<CommandAck> {
 		const envelope = commandEnvelopeSchema.parse(record(value).envelope);
-		const sessionId = nonempty(envelope.sessionId, "sessionId");
-		const key = JSON.stringify([sessionId, envelope.commandId]);
+		const runtime = this.#receiptRuntime(value, envelope);
+		const key = JSON.stringify([envelope.sessionId, envelope.commandId]);
 		const existing = runtime.commands.get(key);
+		if (existing) return Promise.resolve(existing);
+		const pending = runtime.commandAdmissions.get(key);
+		if (pending) return pending;
+		const operation = this.#executeCommand(value);
+		runtime.commandAdmissions.set(key, operation);
+		void operation.then(
+			() => runtime.commandAdmissions.delete(key),
+			() => runtime.commandAdmissions.delete(key),
+		);
+		return operation;
+	}
+
+	async #executeCommand(value: unknown): Promise<CommandAck> {
+		const envelope = commandEnvelopeSchema.parse(record(value).envelope);
+		const receiptRuntime = this.#receiptRuntime(value, envelope);
+		const key = JSON.stringify([envelope.sessionId, envelope.commandId]);
+		const existing = receiptRuntime.commands.get(key);
 		if (existing) return existing;
+		let runtime = receiptRuntime;
+		let id = envelope.sessionId;
 		let ack: CommandAck;
 		try {
-			if (envelope.type !== "sendText") throw new WebGuiNotImplementedError(`zcode-agent.command.${envelope.type}`);
-			const input = record(envelope.payload);
-			const payload = commandPayloadSchemas.sendText.parse(input);
-			const { text, attachments, requestedDelivery, modelSelection, mode, planEnabled, ...extraInput } = payload;
-			if (
-				attachments?.length ||
-				Object.values(extraInput).some(value => value !== undefined) ||
-				Object.entries(input).some(([key, value]) => value !== undefined && !Object.hasOwn(payload, key)) ||
-				(requestedDelivery !== undefined && requestedDelivery !== "startNow") ||
-				(mode !== undefined && mode !== "build") ||
-				planEnabled === true
-			)
-				throw new WebGuiNotImplementedError(
-					"native chat: plain text only; contextual input and execution overrides are unavailable",
-				);
-			if (
-				modelSelection &&
-				(modelSelection.providerId !== runtime.session.model?.provider ||
-					modelSelection.modelId !== runtime.session.model?.id ||
-					(modelSelection.options?.reasoningLevel !== undefined &&
-						modelSelection.options.reasoningLevel !== (runtime.session.thinkingLevel ?? "off")))
-			)
-				throw new WebGuiNotImplementedError("native chat: submission must use the current native model selection");
-			await runtime.submit(
-				this.#context,
-				sessionId,
-				text,
-				envelope.commandId,
-				envelope.clientId,
-				envelope.commandId,
-			);
+			if (this.#clientHello && envelope.clientId !== this.#clientHello.clientId)
+				throw new Error("The command client identity does not match this browser connection.");
+			let result: CommandAck["result"];
+			if (envelope.type === "createSession") {
+				if (id !== null) throw new Error("createSession requires a null envelope sessionId.");
+				const payload = commandPayloadSchemas.createSession.parse(envelope.payload);
+				if (payload.sessionId || payload.additionalDirectories?.length || payload.mcpServers?.length)
+					throw new Error("Native session identity and tool configuration are owned by the native project.");
+				const session = await createWebGuiNativeSession(this.#context, this.target(value).workspacePath);
+				id = session.sessionId;
+				runtime = nativeChatRuntimeForSession(session);
+				await this.#observeResidents();
+				if (payload.config?.followupMode) runtime.setFollowupMode(payload.config.followupMode);
+				const selection = payload.firstInput?.modelSelection ?? payload.config?.modelSelection;
+				if (selection) {
+					const model = session
+						.getAvailableModels()
+						.find(candidate => candidate.provider === selection.providerId && candidate.id === selection.modelId);
+					if (!model) throw new Error("The requested native model is unavailable or unauthenticated.");
+					assertNativeChat(runtime.context(this.#context));
+					const project = this.#context.projectId ? readBrowserProject(this.#context.projectId) : undefined;
+					const operation = runWebGuiSession(session, () => session.setModelTemporary(model));
+					project?.pendingModelSelections?.add(operation);
+					try {
+						await operation;
+					} finally {
+						project?.pendingModelSelections?.delete(operation);
+					}
+				}
+				if (payload.config)
+					this.#assertSubmission(runtime, {
+						mode: payload.config.mode,
+						planEnabled: payload.config.planEnabled,
+						modelSelection: payload.config.modelSelection,
+					});
+				if (payload.config?.thought !== undefined && payload.config.thought !== (session.thinkingLevel ?? "off"))
+					throw new Error(
+						"The requested thinking level differs from the native session; select it through native commands.",
+					);
+				if (
+					(payload.config?.provider !== undefined && payload.config.provider !== session.model?.provider) ||
+					(payload.config?.model !== undefined && payload.config.model !== session.model?.id)
+				)
+					throw new Error("Use the native model selection identity for session creation.");
+				runtime.notify();
+				let input: { delivery: "startNow" | "queue" | "guide"; inputId: string } | undefined;
+				if (payload.firstInput) {
+					this.#assertSubmission(runtime, payload.firstInput);
+					const delivery = await runtime.submit(
+						this.#context,
+						id,
+						payload.firstInput.text,
+						envelope.commandId,
+						envelope.clientId,
+						envelope.commandId,
+						{ attachments: payload.firstInput.attachments },
+					);
+					input = { delivery, inputId: envelope.commandId };
+				}
+				result = { type: "createSession", sessionId: id, ...(input ? { input } : {}) };
+			} else {
+				id = nonempty(id, "sessionId");
+				const interaction =
+					envelope.type === "resolveInteraction"
+						? commandPayloadSchemas.resolveInteraction.parse(envelope.payload)
+						: undefined;
+				const retained = interaction
+					? [...this.#residents.keys()].find(
+							candidate =>
+								candidate.conversations.has(id!) &&
+								candidate
+									.browserActions(this.#context, envelope.clientId)
+									.some(action => action.interactionId === interaction.interactionId),
+						)
+					: undefined;
+				const session = retained?.boundSession ?? (await resolveWebGuiSession(this.#context, id));
+				runtime = retained ?? nativeChatRuntimeForSession(session);
+				await this.#observeResidents();
+				if (envelope.type !== "resolveInteraction") assertNativeChat(runtime.context(this.#context));
+				if (
+					webGuiNativePorts().collabGuest(session) &&
+					envelope.type !== "sendText" &&
+					envelope.type !== "stop" &&
+					envelope.type !== "resolveInteraction"
+				)
+					throw new Error("This native collaboration control is owned by the host.");
+				switch (envelope.type) {
+					case "sendText": {
+						const payload = commandPayloadSchemas.sendText.parse(envelope.payload);
+						this.#assertSubmission(runtime, payload);
+						const delivery = await runtime.submit(
+							this.#context,
+							id,
+							payload.text,
+							envelope.commandId,
+							envelope.clientId,
+							envelope.commandId,
+							payload,
+						);
+						result = { type: "inputAccepted", delivery, inputId: envelope.commandId };
+						break;
+					}
+					case "stop": {
+						const payload = commandPayloadSchemas.stop.parse(envelope.payload);
+						await runtime.stop(this.#context, payload.expectedForegroundExecutionId);
+						break;
+					}
+					case "resolveInteraction": {
+						const payload = commandPayloadSchemas.resolveInteraction.parse(envelope.payload);
+						await runWebGuiSession(session, () =>
+							nativeWebGuiQuestions(session).resolveInteraction(payload.interactionId, payload.answer, {
+								connectionId: this.#context.connectionId,
+								clientId: envelope.clientId,
+							}),
+						);
+						result = {
+							type: "resolveInteraction",
+							resolvedBy: {
+								clientId: envelope.clientId,
+								optionId: payload.answer.optionId,
+							},
+						};
+						break;
+					}
+					case "setFollowupMode":
+						runtime.setFollowupMode(commandPayloadSchemas.setFollowupMode.parse(envelope.payload).mode);
+						break;
+					case "setAutoDrain": {
+						const payload = commandPayloadSchemas.setAutoDrain.parse(envelope.payload);
+						// Resuming an idle queue schedules native work; retain this root's registry.
+						runWebGuiSession(session, () => session.setQueueAutoDrain(payload.autoDrain));
+						break;
+					}
+					case "editQueueItem": {
+						const payload = commandPayloadSchemas.editQueueItem.parse(envelope.payload);
+						await runtime.editQueued(this.#context, payload.queueItemId, payload.newText);
+						break;
+					}
+					case "deleteQueueItem": {
+						const payload = commandPayloadSchemas.deleteQueueItem.parse(envelope.payload);
+						if (!session.mutateQueuedInput(payload.queueItemId, "delete"))
+							throw new Error("The queued input is no longer pending.");
+						webGuiNativePorts().forgetInputOrigin(session, payload.queueItemId);
+						break;
+					}
+					case "reorderQueueItem": {
+						const payload = commandPayloadSchemas.reorderQueueItem.parse(envelope.payload);
+						if (
+							!session.mutateQueuedInput(payload.queueItemId, "reorder", {
+								beforeInputId: payload.beforeQueueItemId,
+							})
+						)
+							throw new Error("The queued input is no longer pending.");
+						break;
+					}
+					case "sendQueuedNow": {
+						const payload = commandPayloadSchemas.sendQueuedNow.parse(envelope.payload);
+						this.#assertSubmission(runtime, payload);
+						await runtime.sendQueuedNow(this.#context, payload.queueItemId, envelope.clientId);
+						break;
+					}
+					case "editUserQuery": {
+						const payload = commandPayloadSchemas.editUserQuery.parse(envelope.payload);
+						if (payload.workspaceMode === "rewind") throw new Error("Native editing preserves workspace files.");
+						this.#assertSubmission(runtime, payload);
+						const branchId = await runtime.edit(
+							this.#context,
+							payload.target,
+							payload.newText,
+							envelope.commandId,
+							envelope.clientId,
+							payload.attachments,
+						);
+						result = { type: "editUserQuery", disposition: "fork", sessionId: branchId };
+						break;
+					}
+					case "retryTurn":
+						await runtime.retry(
+							this.#context,
+							commandPayloadSchemas.retryTurn.parse(envelope.payload).target,
+							envelope.clientId,
+						);
+						break;
+					default:
+						throw new WebGuiNotImplementedError(`zcode-agent.command.${envelope.type}`);
+				}
+				runtime.notify();
+			}
 			ack = {
 				commandId: envelope.commandId,
 				status: "accepted",
-				revisionAtDecision: runtime.state(sessionId).seq,
-				result: { type: "inputAccepted", delivery: "startNow", inputId: envelope.commandId },
+				revisionAtDecision: runtime.state(id ?? "").seq,
+				...(result ? { result } : {}),
 			};
 		} catch (error) {
 			ack = {
@@ -554,15 +965,45 @@ class BrowserAgentAttachment {
 				status: "rejected",
 				reasonCode: "guard.nativeChatUnavailable",
 				message: error instanceof Error ? error.message : String(error),
-				revisionAtDecision: runtime.state(sessionId).seq,
+				revisionAtDecision: runtime.state(id ?? "").seq,
 			};
 		}
-		runtime.commands.set(key, ack);
+		receiptRuntime.commands.set(key, ack);
+		this.#indexDirty = true;
+		this.#scheduleRefresh();
 		return ack;
 	}
 
+	#assertSubmission(
+		runtime: NativeChatRuntime,
+		payload: {
+			modelSelection?: { providerId: string; modelId: string; options?: { reasoningLevel?: string } };
+			mode?: string;
+			planEnabled?: boolean;
+			modelExecution?: unknown;
+		},
+	): void {
+		const planning = runtime.session.getPlanModeState()?.enabled === true;
+		if (
+			(payload.mode !== undefined && payload.mode !== (planning ? "plan" : "build")) ||
+			(payload.planEnabled !== undefined && payload.planEnabled !== planning) ||
+			payload.modelExecution
+		)
+			throw new Error("Use native commands to change the native execution mode.");
+		const model = payload.modelSelection;
+		if (
+			model &&
+			(model.providerId !== runtime.session.model?.provider ||
+				model.modelId !== runtime.session.model?.id ||
+				(model.options?.reasoningLevel !== undefined &&
+					model.options.reasoningLevel !== (runtime.session.thinkingLevel ?? "off")))
+		)
+			throw new Error("The submitted model selection is stale; refresh the selected native session.");
+	}
+
 	queryCommands(value: unknown): unknown {
-		const runtime = this.runtime(value);
+		this.target(value);
+		const runtime = this.#receipts;
 		const commands = record(value).commands;
 		if (!Array.isArray(commands)) throw new TypeError("Expected command keys");
 		return {
@@ -578,7 +1019,20 @@ class BrowserAgentAttachment {
 		this.#disposed = true;
 		this.#context.signal.removeEventListener("abort", this.#onAbort);
 		this.#changes?.dispose();
-		this.#release?.();
+		this.#unsubscribeLifecycle?.();
+		const ports = installedWebGuiNativePorts();
+		if (ports)
+			void ports.disconnectMedia(this.#context.connectionId).catch(error => {
+				logger.warn("Native browser media did not settle on connection close", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		for (const [runtime, release] of this.#residents) {
+			if (runtime.boundSession)
+				nativeWebGuiQuestions(runtime.boundSession).cancelConnectionActions(this.#context.connectionId);
+			release();
+		}
+		this.#residents.clear();
 		for (const timer of this.#timers) clearTimeout(timer);
 		this.#timers.clear();
 		this.#subscriptions.clear();
@@ -593,28 +1047,32 @@ class BrowserAgentAttachment {
 
 export function createAgentServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	const attachment = new BrowserAgentAttachment(context);
-	const runtime = context.nativeSession ? nativeChatRuntime(context) : undefined;
-	const directory = runtime?.childDirectory;
-	const taskRuns = directory ? createNativeTaskRunAdapter(context, directory) : undefined;
-	const releaseTaskRuns = taskRuns ? runtime!.registerTaskRuns() : undefined;
+	const adapters = new Map<
+		NativeChatRuntime,
+		{
+			adapter: NativeTaskRunAdapter;
+			release: () => void;
+			changes: { dispose(): void };
+		}
+	>();
+	const taskRunChanges = new Emitter<{ sessionId: string; revision: number }>();
 	let taskRunsDisposed = false;
 	const disposeTaskRuns = () => {
 		if (taskRunsDisposed) return;
 		taskRunsDisposed = true;
 		context.signal.removeEventListener("abort", disposeTaskRuns);
-		taskRuns?.dispose();
-		releaseTaskRuns?.();
+		for (const { adapter, release, changes } of adapters.values()) {
+			changes.dispose();
+			adapter.dispose();
+			release();
+		}
+		adapters.clear();
+		taskRunChanges.dispose();
 	};
 	context.signal.addEventListener("abort", disposeTaskRuns, { once: true });
 	if (context.signal.aborted) disposeTaskRuns();
 	const initialize = (value: unknown): ZCodeAgentInitializeResult => {
 		const target = attachment.target(value);
-		if (!context.nativeSession)
-			return {
-				available: false,
-				workspaceKey: workspaceKey(target),
-				reason: "No native OMP session is bound to this browser connection.",
-			};
 		attachment.runtime(value);
 		return {
 			available: true,
@@ -626,31 +1084,80 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 	};
 	const sessionId = (value: unknown): string => nonempty(record(value).sessionId, "sessionId");
 	const taskReads: Record<string, WebGuiMethod> = {};
-	if (taskRuns)
-		for (const [name, method] of Object.entries(taskRuns.methods)) {
-			taskReads[name] = (value: unknown) => {
-				attachment.runtime(value);
-				return method(value);
-			};
-		}
+	for (const name of ["listNativeTaskRuns", "readNativeTaskOutput"]) {
+		taskReads[name] = async (value: unknown) => {
+			const runtime = await attachment.sessionRuntime(value);
+			let entry = adapters.get(runtime);
+			if (!entry) {
+				const directory = runtime.childDirectory;
+				if (!directory) throw new Error("The native task registry is unavailable.");
+				const adapter = createNativeTaskRunAdapter(runtime.context(context), directory);
+				entry = {
+					adapter,
+					release: runtime.registerTaskRuns(),
+					changes: adapter.onDidChange(change => taskRunChanges.fire(change)),
+				};
+				adapters.set(runtime, entry);
+			}
+			return entry.adapter.methods[name](value);
+		};
+	}
 	const reads: Record<string, WebGuiMethod> = {
+		reportBrowserMediaState: async value => {
+			attachment.target(value);
+			const params = record(value);
+			if (
+				(params.connectionId !== undefined && params.connectionId !== context.connectionId) ||
+				(params.clientId !== undefined && params.clientId !== attachment.clientId)
+			)
+				throw new Error("The native media report belongs to another browser origin.");
+			const session = attachment.mediaSession(value);
+			const event = mediaState(params.event);
+			await runWebGuiSession(session, () =>
+				webGuiNativePorts().reportMediaState(
+					session,
+					{ connectionId: context.connectionId, clientId: attachment.clientId },
+					event,
+				),
+			);
+			nativeChatRuntimeForSession(session).notify();
+			return { accepted: true };
+		},
+		createSession: async value => {
+			const target = attachment.target(value);
+			const session = await createWebGuiNativeSession(context, target.workspacePath);
+			const runtime = await attachment.sessionRuntime(value, session.sessionId);
+			runtime.notify();
+			return legacySnapshot(runtime.context(context), session.sessionId);
+		},
 		getWorkspaceRuntimeIdentity: value => {
 			const runtime = attachment.runtime(value);
 			return {
-				generation: runtime.session.sessionGeneration,
+				generation: runtime.hasSession ? runtime.session.sessionGeneration : 0,
 				identity: `${process.pid}:${context.projectId}`,
 				processId: process.pid,
 				workspaceKey: workspaceKey(attachment.target(value)),
 			};
 		},
-		readWorkspacePresentation: value => {
+		readWorkspacePresentation: async value => {
 			attachment.runtime(value);
 			const target = attachment.target(value);
-			return { workspace: { ...target, workspaceKey: workspaceKey(target) }, mode: "build", slashCommands: [] };
+			const id = record(value).sessionId;
+			const sessions = await listWebGuiNativeSessions(context);
+			const session = typeof id === "string" ? sessions.find(candidate => candidate.sessionId === id) : sessions[0];
+			return {
+				workspace: { ...target, workspaceKey: workspaceKey(target) },
+				mode: session?.getPlanModeState()?.enabled ? "plan" : "build",
+				slashCommands: session ? await webGuiNativePorts().listCommands(session) : [],
+			};
 		},
 		listSessions: async value => {
 			attachment.runtime(value);
-			return (await listNativeHistory(context)).map(info => legacySessionInfo(context, info));
+			return Promise.all(
+				(await listNativeHistory(context)).map(async info =>
+					legacySessionInfo((await resolveNativeChatRuntime(context, info.id)).context(context), info),
+				),
+			);
 		},
 		listSessionSubagents: value => {
 			const runtime = attachment.runtime(value);
@@ -679,132 +1186,149 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 		resumeSession: async value => {
 			const runtime = attachment.runtime(value);
 			const id = sessionId(value);
-			await runtime.resume(context, id);
-			return legacySnapshot(context, id);
+			const session = await runtime.resume(context, id);
+			const project = webGuiSessionProject(session);
+			if (!project) throw new Error("The resumed native project is unavailable.");
+			const rebound = {
+				...context,
+				projectId: project.projectId,
+				workspacePath: project.root,
+				nativeSession: session,
+			};
+			return {
+				...(await legacySnapshot(rebound, id)),
+				projectId: project.projectId,
+				workspacePath: project.root,
+				projectUrl: project.url,
+			};
 		},
 	};
-	return [
-		createWebGuiService(
-			"zcode-agent",
-			{
-				...reads,
-				...taskReads,
-				prepareStorage: async value => {
-					attachment.runtime(value);
-					await listNativeHistory(context);
-				},
-				getSessionLifecycle: async value => {
-					const runtime = attachment.runtime(value);
-					const id = sessionId(value);
-					await runtime.info(context, id);
-					const child = await runtime.child(context, id);
-					return {
-						sessionId: id,
-						state: runtime.session.sessionId === id || child?.session ? "ready" : "unloaded",
-						generation: child?.generation ?? runtime.session.sessionGeneration,
-						revision: runtime.state(id).seq,
-						lastError: null,
-					};
-				},
-				reconcileSessionsIndexV4: async value => {
-					const runtime = attachment.runtime(value);
-					const params = record(value);
-					if (!Array.isArray(params.sessionIds)) throw new TypeError("Expected session IDs");
-					const infos = new Map((await listNativeHistory(context)).map(info => [info.id, info]));
-					for (const value of params.sessionIds) {
-						const id = nonempty(value, "sessionId");
-						if (!infos.has(id)) {
-							const child = await runtime.child(context, id);
-							if (child) infos.set(id, child.info);
-						}
+	const agentService = createWebGuiService(
+		"zcode-agent",
+		{
+			...reads,
+			...taskReads,
+			prepareStorage: async value => {
+				attachment.runtime(value);
+				await listNativeHistory(context);
+			},
+			getSessionLifecycle: async value => {
+				const id = sessionId(value);
+				const runtime = await attachment.sessionRuntime(value, id);
+				await runtime.info(context, id);
+				const child = await runtime.child(context, id);
+				return {
+					sessionId: id,
+					state: (runtime.hasSession && runtime.session.sessionId === id) || child?.session ? "ready" : "unloaded",
+					generation: child?.generation ?? (runtime.hasSession ? runtime.session.sessionGeneration : 0),
+					revision: runtime.state(id).seq,
+					lastError: null,
+				};
+			},
+			reconcileSessionsIndexV4: async value => {
+				const runtime = attachment.runtime(value);
+				const params = record(value);
+				if (!Array.isArray(params.sessionIds)) throw new TypeError("Expected session IDs");
+				const infos = new Map((await listNativeHistory(context)).map(info => [info.id, info]));
+				for (const value of params.sessionIds) {
+					const id = nonempty(value, "sessionId");
+					if (!infos.has(id)) {
+						const child = await runtime.child(context, id);
+						if (child) infos.set(id, child.info);
 					}
-					return {
-						sessions: params.sessionIds.map(id => {
-							const info = infos.get(String(id));
-							return info
-								? {
-										sessionId: info.id,
-										exists: true,
-										deleted: false,
-										title: info.title || info.firstMessage,
-										titleSource: info.title ? "custom" : "default",
-										createdAt: info.created.getTime(),
-										updatedAt: info.modified.getTime(),
-									}
-								: { sessionId: String(id), exists: false, deleted: false };
-						}),
-					};
-				},
-				sendPrompt: async value => {
-					const runtime = attachment.runtime(value);
-					const params = record(value);
-					if (Array.isArray(params.attachments) && params.attachments.length)
-						throw new WebGuiNotImplementedError("native chat: plain text only");
-					const id = sessionId(value);
-					await runtime.submit(
-						context,
-						id,
-						nonempty(params.content, "content"),
-						typeof params.inputId === "string" ? params.inputId : crypto.randomUUID(),
-					);
-					return { sessionId: id, accepted: true, stateRevision: runtime.state(id).seq };
-				},
-				subscribeConversationV4: value => attachment.subscribeConversation(value),
-				resyncConversationV4: value => attachment.resyncConversation(value),
-				unsubscribeConversationV4: value => attachment.unsubscribeConversation(value),
-				conversationRowsRangeV4: async value => {
-					const runtime = attachment.runtime(value);
-					const params = record(value);
-					if (
-						typeof params.limit !== "number" ||
-						!Number.isInteger(params.limit) ||
-						params.limit < 1 ||
-						params.limit > 200
-					)
-						throw new TypeError("Row limit must be 1..200");
-					if (
-						params.residency === "resident-only" &&
-						sessionId(value) !== runtime.session.sessionId &&
-						!(await runtime.child(context, sessionId(value)))?.session
-					)
-						throw new Error("proto.sessionNotResident");
-					const snapshot = await runtime.snapshot(context, sessionId(value));
-					const candidates = snapshot.rows.window.filter(
-						row => typeof params.beforeRowId !== "number" || row.rowId < params.beforeRowId,
-					);
-					return {
-						rows: candidates.slice(-params.limit),
-						atSeq: snapshot.seq,
-						atRevision: snapshot.revision,
-						atLogEpoch: snapshot.logEpoch,
-						hasMore: candidates.length > params.limit,
-					};
-				},
-				sendConversationCommandV4: value => attachment.command(value),
-				queryConversationCommandsV4: value => attachment.queryCommands(value),
-				setConnectionFlowStateV4: value => attachment.setFlowState(value),
-				initialize,
-				getStorageStartupState: value => attachment.storageState(value),
-				helloConversationV4: () => attachment.hello(),
-				initializeConversationV4: value => attachment.initialize(value),
-				subscribeSessionsIndexV4: value => attachment.subscribe(value),
-				resyncSessionsIndexV4: value => attachment.resync(value),
-				unsubscribeSessionsIndexV4: value => attachment.unsubscribe(value),
+				}
+				return {
+					sessions: params.sessionIds.map(id => {
+						const info = infos.get(String(id));
+						return info
+							? {
+									sessionId: info.id,
+									exists: true,
+									deleted: false,
+									title: info.title || info.firstMessage,
+									titleSource: info.title ? "custom" : "default",
+									createdAt: info.created.getTime(),
+									updatedAt: info.modified.getTime(),
+								}
+							: { sessionId: String(id), exists: false, deleted: false };
+					}),
+				};
 			},
-			{
-				...(taskRuns ? { events: { onNativeTaskRunsChanged: taskRuns.onDidChange } } : {}),
-				dynamicEvents: {
-					onDynamicSessionsIndexFrame: value => attachment.frames(value),
-					onDynamicConversationFrame: value => attachment.conversationFrames(value),
-					// Native journal storage has no ZCode database migration attempt.
-					onDynamicStorageStartupState: value => attachment.storageEvents(value),
-				},
-				dispose: () => {
-					disposeTaskRuns();
-					attachment.dispose();
-				},
+			sendPrompt: async value => {
+				const runtime = await attachment.sessionRuntime(value);
+				const params = record(value);
+				const payload = commandPayloadSchemas.sendText.parse({ ...params, text: params.content });
+				const id = sessionId(value);
+				await runtime.submit(
+					context,
+					id,
+					payload.text,
+					typeof params.inputId === "string" ? params.inputId : crypto.randomUUID(),
+					attachment.clientId,
+					undefined,
+					payload,
+				);
+				return { sessionId: id, accepted: true, stateRevision: runtime.state(id).seq };
 			},
-		),
+			subscribeConversationV4: value => attachment.subscribeConversation(value),
+			resyncConversationV4: value => attachment.resyncConversation(value),
+			unsubscribeConversationV4: value => attachment.unsubscribeConversation(value),
+			conversationRowsRangeV4: async value => {
+				const runtime = await attachment.sessionRuntime(value);
+				const params = record(value);
+				if (
+					typeof params.limit !== "number" ||
+					!Number.isInteger(params.limit) ||
+					params.limit < 1 ||
+					params.limit > 200
+				)
+					throw new TypeError("Row limit must be 1..200");
+				if (
+					params.residency === "resident-only" &&
+					(!runtime.hasSession || sessionId(value) !== runtime.session.sessionId) &&
+					!(await runtime.child(context, sessionId(value)))?.session
+				)
+					throw new Error("proto.sessionNotResident");
+				const snapshot = await runtime.snapshot(context, sessionId(value));
+				const candidates = snapshot.rows.window.filter(
+					row => typeof params.beforeRowId !== "number" || row.rowId < params.beforeRowId,
+				);
+				return {
+					rows: candidates.slice(-params.limit),
+					atSeq: snapshot.seq,
+					atRevision: snapshot.revision,
+					atLogEpoch: snapshot.logEpoch,
+					hasMore: candidates.length > params.limit,
+				};
+			},
+			sendConversationCommandV4: value => attachment.command(value),
+			queryConversationCommandsV4: value => attachment.queryCommands(value),
+			setConnectionFlowStateV4: value => attachment.setFlowState(value),
+			initialize,
+			getStorageStartupState: value => attachment.storageState(value),
+			helloConversationV4: () => attachment.hello(),
+			initializeConversationV4: value => attachment.initialize(value),
+			subscribeSessionsIndexV4: value => attachment.subscribe(value),
+			resyncSessionsIndexV4: value => attachment.resync(value),
+			unsubscribeSessionsIndexV4: value => attachment.unsubscribe(value),
+		},
+		{
+			events: { onNativeTaskRunsChanged: taskRunChanges.event },
+			dynamicEvents: {
+				onDynamicSessionsIndexFrame: value => attachment.frames(value),
+				onDynamicConversationFrame: value => attachment.conversationFrames(value),
+				// Native journal storage has no ZCode database migration attempt.
+				onDynamicStorageStartupState: value => attachment.storageEvents(value),
+			},
+			dispose: () => {
+				disposeTaskRuns();
+				attachment.dispose();
+			},
+		},
+	);
+	agentService.drainHandoffFrame = (arg, frame, binding) => attachment.drainHandoffFrame(arg, frame, binding);
+	return [
+		agentService,
 		createWebGuiService("zcode-session", {
 			...reads,
 			initializeWorkspace: initialize,

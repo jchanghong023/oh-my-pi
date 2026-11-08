@@ -26,6 +26,7 @@ import { nativeReadContext, resolveNativeReadPath } from "./native-read-context"
 import { WebGuiNotImplementedError, type WebGuiMethod, type WebGuiServiceContext } from "./rpc-contract";
 
 interface RepositoryRead {
+	sessionId: string;
 	root: string;
 	repo: VcsGitRepo | null;
 	assertCurrent(): void;
@@ -41,11 +42,13 @@ interface StatusEntry {
 function request(value: unknown): Record<string, unknown> {
 	if (!isRecord(value) || typeof value.workspacePath !== "string" || !value.workspacePath)
 		throw new TypeError("Git reads require a workspacePath");
+	if (value.sessionId !== undefined && (typeof value.sessionId !== "string" || !value.sessionId.trim()))
+		throw new TypeError("Git reads require a nonempty native sessionId");
 	return value;
 }
 
 async function repositoryRead(context: WebGuiServiceContext, params: Record<string, unknown>): Promise<RepositoryRead> {
-	const read = await nativeReadContext(context);
+	const read = await nativeReadContext(context, typeof params.sessionId === "string" ? params.sessionId : undefined);
 	if (typeof params.workspacePath !== "string") throw new TypeError("Git reads require a workspacePath");
 	const requested = await fs.realpath(resolveToCwd(params.workspacePath, read.cwd));
 	read.assertCurrent();
@@ -54,6 +57,7 @@ async function repositoryRead(context: WebGuiServiceContext, params: Record<stri
 	const repo = vcs.git(read.root);
 	const info = repo?.info();
 	return {
+		sessionId: read.session.sessionId,
 		root: read.root,
 		repo,
 		assertCurrent() {
@@ -255,7 +259,7 @@ async function changes(
 		const count = counts.get(entry.path);
 		let added = count?.added ?? 0;
 		if (untracked) {
-			await resolveNativeReadPath(context, target);
+			await resolveNativeReadPath(context, target, { sessionId: read.sessionId });
 			const bytes = await fileBytes(target);
 			read.assertCurrent();
 			if (bytes.truncated) throw new Error("Untracked Git content exceeds the native inline output budget");
@@ -297,7 +301,10 @@ async function diff(
 	if (typeof params.path !== "string" || !params.path) throw new TypeError("Git diff requires a path");
 	const repo = requireRepository(read);
 	const source = sourceId(params);
-	const admitted = await resolveNativeReadPath(context, params.path, { allowMissing: true });
+	const admitted = await resolveNativeReadPath(context, params.path, {
+		allowMissing: true,
+		sessionId: read.sessionId,
+	});
 	read.assertCurrent();
 	const target = path.resolve(
 		read.root,

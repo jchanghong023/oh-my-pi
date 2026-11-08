@@ -14,7 +14,7 @@ import {
 } from "../skillshare/installer";
 import { clearSubmittedText } from "./helpers/draft";
 import { commandConsumed, errorMessage, parseSubcommand } from "./helpers/parse";
-import type { SlashCommandSpec } from "./types";
+import type { ParsedSlashCommand, SlashCommandRuntime, SlashCommandSpec } from "./types";
 
 const USAGE = [
 	"Skill registry (skills.omp.sh) commands:",
@@ -37,6 +37,42 @@ function parseTargets(rest: string): { names: string[]; global: boolean } | { er
 	return { names, global };
 }
 
+async function handleProtocolSkillsCommand(command: ParsedSlashCommand, runtime: SlashCommandRuntime, browser = false) {
+	let failed = false;
+	const warnings: string[] = [];
+	await handleSkillsCommand(command.args, {
+		cwd: runtime.cwd,
+		registryUrl: cfgSkillsRegistryUrl.get(runtime.settings) || DEFAULT_SKILLS_URL,
+		output: text => (browser ? runtime.output(text) : runtime.session.emitNotice("info", text)),
+		error: async text => {
+			failed = browser;
+			runtime.session.emitNotice("error", text);
+			if (browser) await runtime.output(text);
+		},
+		refresh: async () => {
+			await runtime.session.refreshSkills();
+			await runtime.refreshCommands();
+		},
+		refreshAfterFailure: browser,
+		hooks: {
+			warn: message => {
+				runtime.session.emitNotice("warning", message);
+				if (browser) warnings.push(message);
+			},
+			confirmScripts: request => {
+				if (!runtime.ui) throw new Error("Installing a skill with scripts requires a confirmation UI.");
+				return runtime.ui.confirm(
+					"Install skill with scripts?",
+					formatScriptApproval(request),
+					runtime.signal ? { signal: runtime.signal } : undefined,
+				);
+			},
+		},
+	});
+	for (const warning of warnings) await runtime.output(warning);
+	return commandConsumed({ failed });
+}
+
 export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "skills",
@@ -53,30 +89,8 @@ export const BUILTIN_SKILLS_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 		],
 		allowArgs: true,
-		handle: async (command, runtime) => {
-			await handleSkillsCommand(command.args, {
-				cwd: runtime.cwd,
-				registryUrl: cfgSkillsRegistryUrl.get(runtime.settings) || DEFAULT_SKILLS_URL,
-				output: text => runtime.session.emitNotice("info", text),
-				error: text => runtime.session.emitNotice("error", text),
-				refresh: async () => {
-					await runtime.session.refreshSkills();
-					await runtime.refreshCommands();
-				},
-				hooks: {
-					warn: message => runtime.session.emitNotice("warning", message),
-					confirmScripts: request => {
-						if (!runtime.ui) throw new Error("Installing a skill with scripts requires a confirmation UI.");
-						return runtime.ui.confirm(
-							"Install skill with scripts?",
-							formatScriptApproval(request),
-							runtime.signal ? { signal: runtime.signal } : undefined,
-						);
-					},
-				},
-			});
-			return commandConsumed();
-		},
+		handle: handleProtocolSkillsCommand,
+		handleWebGui: (command, runtime) => handleProtocolSkillsCommand(command, runtime, true),
 		handleTui: async (command, runtime) => {
 			const { ctx } = runtime;
 			const session = ctx.session;
@@ -103,6 +117,7 @@ interface SkillCommandContext {
 	output(text: string, options?: { dim?: boolean }): Promise<void> | void;
 	error(text: string): Promise<void> | void;
 	refresh(): Promise<void>;
+	refreshAfterFailure?: boolean;
 	hooks: SkillInstallHooks;
 }
 
@@ -119,6 +134,7 @@ async function reportSkillChanges(context: SkillCommandContext, changes: SkillCh
 async function handleSkillsCommand(args: string, context: SkillCommandContext): Promise<void> {
 	const { verb, rest } = parseSubcommand(args);
 	const cwd = context.cwd;
+	let failedMutationMayNeedRefresh = false;
 	try {
 		switch (verb) {
 			case "search": {
@@ -141,6 +157,7 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output(`Installing ${targets.names.join(", ")}…`, { dim: true });
+				failedMutationMayNeedRefresh = true;
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
 					installSkillPackages(
 						client,
@@ -148,6 +165,7 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 						context.hooks,
 					),
 				);
+				failedMutationMayNeedRefresh = false;
 				await reportSkillChanges(context, changes);
 				return;
 			}
@@ -161,9 +179,11 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 					return;
 				}
 				await context.output("Checking the registry for updates…", { dim: true });
+				failedMutationMayNeedRefresh = true;
 				const changes = await withSkillRegistryClient(context.registryUrl, client =>
 					updateSkillPackages(client, { names: targets.names, global: targets.global, cwd }, context.hooks),
 				);
+				failedMutationMayNeedRefresh = false;
 				await reportSkillChanges(context, changes);
 				return;
 			}
@@ -176,6 +196,14 @@ async function handleSkillsCommand(args: string, context: SkillCommandContext): 
 		}
 	} catch (error) {
 		await context.error(`Skills: ${errorMessage(error)}`);
+		// Manifest/lock persistence or store pruning can fail after a real change.
+		if (context.refreshAfterFailure && failedMutationMayNeedRefresh) {
+			try {
+				await context.refresh();
+			} catch (refreshError) {
+				await context.error(`Skills refresh failed: ${errorMessage(refreshError)}`);
+			}
+		}
 	}
 }
 

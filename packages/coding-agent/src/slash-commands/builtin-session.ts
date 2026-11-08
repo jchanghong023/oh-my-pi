@@ -239,6 +239,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			return `Todos: ${pending + inProgress} open (${inProgress} in progress, ${completed} done)`;
 		},
 		handle: handleTodoAcp,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.todo(command, runtime),
 		handleTui: async (command, runtime) => {
 			await runtime.ctx.handleTodoCommand(command.args);
 			clearSubmittedText(runtime);
@@ -260,6 +261,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 		],
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.session(command, runtime, handleSessionPinCommand),
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb || (verb === "info" && !rest)) {
@@ -427,6 +429,8 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 			},
 		],
 		allowArgs: true,
+		handleWebGui: (command, runtime) =>
+			runtime.host.sessionViews.usage(command, runtime, handleUsageResetCommand, buildUsageReportText),
 		handle: async (command, runtime) => {
 			const { verb, rest } = parseSubcommand(command.args);
 			if (!verb || (verb === "show" && !rest)) {
@@ -530,6 +534,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "hotkeys",
 		icon: "keyboard",
 		description: "Show all keyboard shortcuts",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.hotkeys(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.handleHotkeysCommand();
 			clearSubmittedText(runtime);
@@ -588,6 +593,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["status"],
 		icon: "extension",
 		description: "Open Extension Control Center dashboard",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.extensions(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showExtensionsDashboard();
 			clearSubmittedText(runtime);
@@ -597,6 +603,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "agents",
 		icon: "agents",
 		description: "Open the agents hub (per-agent model, prewalk, and advisor)",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.agents(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showAgentsDashboard();
 			clearSubmittedText(runtime);
@@ -618,6 +625,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open the git UI (split diff viewer, staging, commit composer)",
 		inlineHint: "[revision]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.git(command, runtime),
 		handleTui: (command, runtime) => {
 			runtime.ctx.showGitUi(command.args.trim() || undefined);
 			clearSubmittedText(runtime);
@@ -629,6 +637,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Open a session local:// file in $EDITOR (picker when no name given)",
 		inlineHint: "[name]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.local(command, runtime),
 		handleTui: async (command, runtime) => {
 			clearSubmittedText(runtime);
 			await openLocalFileInEditor(runtime.ctx, command.args);
@@ -639,6 +648,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["subagents"],
 		icon: "agents",
 		description: "Open the live Agent Hub (subagents, including finished ones)",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.hub(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showAgentHub({ initialSection: "activity" });
 			clearSubmittedText(runtime);
@@ -649,6 +659,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		aliases: ["rewind"],
 		icon: "branch",
 		description: "Rewind to a previous message, keeping the old path as a branch",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.branch(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showUserMessageSelector();
 			clearSubmittedText(runtime);
@@ -665,6 +676,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		],
 		subcommandOptional: true,
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.fork(command, runtime),
 		handleTui: async (command, runtime) => {
 			const args = command.args.trim();
 			let placement: "pane" | "window" | undefined;
@@ -698,6 +710,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		name: "tree",
 		icon: "tree",
 		description: "Navigate session tree (switch branches)",
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.branch(command, runtime),
 		handleTui: (_command, runtime) => {
 			runtime.ctx.showTreeSelector();
 			clearSubmittedText(runtime);
@@ -709,6 +722,7 @@ export const BUILTIN_SESSION_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		description: "Login with OAuth provider",
 		inlineHint: "[provider|redirect URL]",
 		allowArgs: true,
+		handleWebGui: (command, runtime) => runtime.host.sessionViews.login(command, runtime),
 		getTuiAutocompleteDescription: runtime =>
 			runtime.ctx.oauthManualInput.hasPending()
 				? `Login: waiting for ${runtime.ctx.oauthManualInput.pendingProviderId ?? "OAuth"} callback`

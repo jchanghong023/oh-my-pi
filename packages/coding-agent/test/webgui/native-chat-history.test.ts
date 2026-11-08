@@ -1,20 +1,29 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { AgentRegistry, createAgentSession, type CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
-import { NativeChatRuntime } from "../../src/webgui/native-chat";
+import { nativeChatRuntime } from "../../src/webgui/native-chat";
+import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
 import { acquireBrowserProject, readBrowserProject, type BrowserProjectLease } from "../../src/webgui/project-registry";
 import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
 import { readWebGuiSessionInfo } from "../../src/webgui/session-source";
+import {
+	closeWebGuiNativeSessions,
+	enableWebGuiNativeSessions,
+	releaseWebGuiNativeProjects,
+	resumeWebGuiNativeSession,
+} from "../../src/webgui/native-session-host";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
 
-test("reading historical native chat projects V4 content without changing its journal or the active owner", async () => {
+test("native history stays read-only and continues independently without replacing a streaming owner", async () => {
 	using temp = TempDir.createSync("@pi-native-chat-history-");
 	const activeCwd = temp.join("active-project");
 	const historicalCwd = temp.join("historical-project");
@@ -68,16 +77,24 @@ test("reading historical native chat projects V4 content without changing its jo
 	let session: AgentSession | undefined;
 	let lease: BrowserProjectLease | undefined;
 	let release: (() => void) | undefined;
+	let restoreHistory: (() => void) | undefined;
+	const finish = Promise.withResolvers<void>();
+	let running: Promise<boolean> | undefined;
 	try {
-		({ session } = await createAgentSession({
+		activateNativeWebGuiComposition();
+		enableWebGuiNativeSessions();
+		const options: CreateAgentSessionOptions = {
 			cwd: activeCwd,
 			agentDir: temp.join("agent"),
 			sessionManager: activeManager,
 			authStorage,
 			modelRegistry: new ModelRegistry(authStorage, temp.join("models.yml")),
-			settings: Settings.isolated({ "compaction.enabled": false }),
+			settings: Settings.isolated({ "compaction.enabled": false, "async.enabled": false }),
 			model: getTestModel("ascend"),
 			disableExtensionDiscovery: true,
+			bindProcessState: false,
+			offline: true,
+			agentRegistry: new AgentRegistry(),
 			skills: [],
 			contextFiles: [],
 			promptTemplates: [],
@@ -89,7 +106,8 @@ test("reading historical native chat projects V4 content without changing its jo
 			enableLsp: false,
 			taskDepth: 1,
 			agentId: "SubAgent",
-		}));
+		};
+		({ session } = await createAgentSession(options));
 		const nativeSession = session;
 		lease = await acquireBrowserProject(activeCwd, "webgui");
 		await lease.activate(() => readWebGuiSessionInfo(nativeSession), { allowLan: false, nativeSession });
@@ -100,7 +118,7 @@ test("reading historical native chat projects V4 content without changing its jo
 			signal: new AbortController().signal,
 			nativeSession,
 		};
-		const runtime = new NativeChatRuntime(nativeSession);
+		const runtime = nativeChatRuntime(context);
 		release = runtime.retain();
 		// Supplying only fixture metadata keeps history resolution away from listAll().
 		runtime.recordHistory([historicalInfo]);
@@ -139,7 +157,7 @@ test("reading historical native chat projects V4 content without changing its jo
 			}),
 		]);
 		expect(snapshot.control.phase).toBe("completedSuccess");
-		expect(snapshot.inputRouting).toEqual({ mode: "reject", reasonCode: "guard.nativeHistoryWorkingDirectory" });
+		expect(snapshot.inputRouting.mode).toBe("reject");
 		expect(snapshot.usage.cumulative).toEqual({
 			inputTokens: 13,
 			outputTokens: 5,
@@ -155,16 +173,71 @@ test("reading historical native chat projects V4 content without changing its jo
 		expect(readBrowserProject(lease.projectId)).toBe(owner);
 		expect(owner?.nativeSession).toBe(nativeSession);
 		expect(await readFile(historicalPath)).toEqual(historicalBytes);
+
+		const model = nativeSession.model!;
+		authStorage.keys.setRuntime(model.provider, "isolated-history-key");
+		const mock = createMockModel({ responses: [{ content: ["The original project finishes independently."] }] });
+		const began = Promise.withResolvers<void>();
+		nativeSession.agent.streamFn = (selectedModel, messages, streamOptions) => {
+			const stream = new AssistantMessageEventStream();
+			void (async () => {
+				began.resolve();
+				await finish.promise;
+				for await (const event of mock.stream(selectedModel, messages, streamOptions)) stream.push(event);
+			})().catch(error => stream.fail(error));
+			return stream;
+		};
+		running = nativeSession.prompt("Continue the original project while another history resumes.");
+		await began.promise;
+		expect(nativeSession.isStreaming).toBe(true);
+		const historySpy = spyOn(SessionManager, "listAll").mockResolvedValue([historicalInfo]);
+		restoreHistory = () => historySpy.mockRestore();
+		const continued = await resumeWebGuiNativeSession(context, historicalInfo.id, options);
+		expect(continued).not.toBe(nativeSession);
+		expect(continued.sessionId).toBe(historicalInfo.id);
+		expect(continued.sessionManager.getCwd()).toBe(historicalCwd);
+		expect(continued.messages).toEqual(messages);
+		expect(await resumeWebGuiNativeSession(context, historicalInfo.id, options)).toBe(continued);
+		expect(nativeSession.isStreaming).toBe(true);
+		expect(nativeSession.sessionId).toBe(activeId);
+		expect(nativeSession.sessionManager).toBe(activeManager);
+		expect(activeManager.getCwd()).toBe(activeCwd);
+		expect(readBrowserProject(lease.projectId)?.nativeSession).toBe(nativeSession);
+		finish.resolve();
+		await running;
+		expect(nativeSession.messages.filter(message => message.role === "assistant").at(-1)?.content).toEqual([
+			{ type: "text", text: "The original project finishes independently." },
+		]);
 	} finally {
 		release?.();
-		try {
-			await lease?.close();
-		} finally {
-			try {
+		finish.resolve();
+		const failures: unknown[] = [];
+		for (const dispose of [
+			async () => {
+				await running;
+			},
+			async () => {
+				restoreHistory?.();
+			},
+			closeWebGuiNativeSessions,
+			releaseWebGuiNativeProjects,
+			async () => {
+				await lease?.close();
+			},
+			async () => {
 				await session?.dispose();
-			} finally {
+			},
+			async () => {
 				authStorage.close();
+			},
+		]) {
+			try {
+				await dispose();
+			} catch (error) {
+				failures.push(error);
 			}
 		}
+		if (failures.length) throw new AggregateError(failures, "Native history fixture cleanup failed");
+		enableWebGuiNativeSessions();
 	}
 });

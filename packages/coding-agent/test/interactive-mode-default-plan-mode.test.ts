@@ -12,7 +12,8 @@ import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../src/config/model-registry";
 import type { CustomTool } from "../src/extensibility/custom-tools/types";
 import { resolveLocalUrlToPath } from "../src/internal-urls";
-import { InteractiveMode, shouldEnterPlanModeOnStartup } from "../src/modes/interactive-mode";
+import { InteractiveMode } from "../src/modes/interactive-mode";
+import { shouldEnterPlanModeOnStartup } from "../src/plan-mode/settings";
 import { resolveXdevTool, type XdevState } from "../src/tools/xdev";
 
 import { cfgStartupQuiet } from "@oh-my-pi/pi-coding-agent/modes/settings";

@@ -3,6 +3,22 @@
  * settings-panel order; `config/all-settings.ts` registers every domain.
  */
 import { register } from "../config/registry";
+import type { Settings } from "../config/settings";
+import type { SessionManager } from "../session/session-manager";
+
+export function shouldEnterPlanModeOnStartup(
+	sessionManager: Pick<SessionManager, "buildSessionContext" | "getEntries">,
+	sessionSettings: Settings,
+): boolean {
+	const hasConversationContext = sessionManager.buildSessionContext().messages.length > 0;
+	const hasExplicitMode = sessionManager.getEntries().some(entry => entry.type === "mode_change");
+	return (
+		!hasConversationContext &&
+		!hasExplicitMode &&
+		cfgPlanDefaultOnStartup.get(sessionSettings) &&
+		cfgPlanEnabled.get(sessionSettings)
+	);
+}
 
 // ────────────────────────────────────────────────────────────────────────
 // Tasks

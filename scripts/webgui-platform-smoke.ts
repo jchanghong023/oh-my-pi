@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Opt-in only: attach to an already-running OMP URL; never build, download, or start OMP.
-// Firefox uses W3C WebDriver and an isolated temporary profile. Android requires a
+// Firefox uses native Marionette and an isolated temporary profile. Android requires a
 // physical USB-debuggable device and an isolated CDP browser context (no emulation).
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
@@ -8,6 +8,8 @@ import * as path from "node:path";
 import { createServer } from "node:net";
 import type { Browser, BrowserContext } from "puppeteer-core";
 import { loadPuppeteer } from "../packages/coding-agent/src/tools/browser/launch";
+import { gracefulKillTreeOnce } from "../packages/coding-agent/src/tools/browser/attach";
+import { connectFirefox68Marionette, type Firefox68Marionette } from "./webgui-firefox68-marionette";
 
 export class PlatformPrerequisiteError extends Error {
 	constructor(
@@ -147,13 +149,49 @@ function visibleExpression(selector: string): string {
 }
 const snapshotExpression = `(function(){var e=document.querySelector(${JSON.stringify(INPUT)});return {url:location.href,title:document.title,userAgent:navigator.userAgent,width:innerWidth,height:innerHeight,ready:${visibleExpression(INPUT)},draft:e?e.textContent:''};})()`;
 
-interface ProbePage {
+export interface ProbePage {
 	navigate(url: string): Promise<void>;
 	reload(): Promise<void>;
 	evaluate<T>(expression: string): Promise<T>;
 	click(selector: string): Promise<void>;
 	typeDraft(text: string): Promise<void>;
 	clearDraft(): Promise<void>;
+}
+
+/** Native automation only; evaluates observations, never application service calls. */
+export interface DevelopmentPage extends ProbePage {
+	hover(selector: string): Promise<void>;
+	type(selector: string, text: string): Promise<void>;
+	clear(selector: string): Promise<void>;
+	press(selector: string, key: string): Promise<void>;
+	upload(selector: string, files: string[]): Promise<void>;
+	screenshot(file: string): Promise<void>;
+	draw(selector: string, points: Array<{ x: number; y: number }>): Promise<void>;
+	close(): Promise<void>;
+}
+
+/** Read rendered editor text only; never touch React/Lexical state or mutate the DOM. */
+// Lexical adds a terminal layout <br> (and on Firefox a marked image). Ignore
+// only that placeholder, retaining intentional line breaks, blank lines and spaces.
+export async function readEditableText(page: ProbePage, selector: string): Promise<string | null> {
+	return page.evaluate<string | null>(
+		`(function(){var root=document.querySelector(${JSON.stringify(selector)});if(!root)return null;if(root.tagName==='INPUT'||root.tagName==='TEXTAREA')return root.value;function read(e){if(e.nodeType===3)return e.nodeValue||'';if(e.nodeType!==1)return '';if(e.tagName==='BR'){var previous=e.previousSibling;return !e.nextSibling&&(e.parentNode===root||/^(P|DIV)$/.test(e.parentNode.tagName))?'':previous&&previous.nodeType===1&&previous.hasAttribute('data-lexical-linebreak')?'':'\\n';}if(e.hasAttribute('data-lexical-linebreak'))return '';var text='';for(var child=e.firstChild;child;child=child.nextSibling){text+=read(child);if(child.nextSibling&&child.nodeType===1&&/^(P|DIV)$/.test(child.tagName))text+='\\n\\n';}return text;}return read(root);})()`,
+	);
+}
+
+export interface DevelopmentBrowser {
+	identity: Record<string, unknown>;
+	page: DevelopmentPage;
+	newPage(): Promise<DevelopmentPage>;
+	pages(): Promise<DevelopmentPage[]>;
+}
+
+export interface Firefox68Options {
+	firefox?: string;
+	downloadDirectory?: string;
+	environment?: Record<string, string>;
+	headless?: boolean;
+	viewport?: { width: number; height: number };
 }
 
 interface ProbeOptions {
@@ -164,7 +202,6 @@ interface ProbeOptions {
 	menu?: string;
 	session?: string;
 	firefox?: string;
-	geckodriver?: string;
 	adb?: string;
 	serial?: string;
 	socket: string;
@@ -237,7 +274,10 @@ async function exercise(page: ProbePage, options: ProbeOptions): Promise<object>
 	};
 }
 
-async function firefoxProbe(options: ProbeOptions): Promise<object> {
+export async function withFirefox68Browser<T>(
+	options: Firefox68Options,
+	run: (browser: DevelopmentBrowser) => Promise<T>,
+): Promise<T> {
 	const binary = options.firefox;
 	if (
 		!binary ||
@@ -250,135 +290,358 @@ async function firefoxProbe(options: ProbeOptions): Promise<object> {
 			"firefox68-binary",
 			"Pass --firefox with an installed Firefox 68 executable; this probe never downloads browsers",
 		);
-	const driver = options.geckodriver ?? Bun.which("geckodriver");
-	if (!driver)
-		prerequisite(
-			"geckodriver",
-			"Install a Firefox-68-compatible geckodriver (for example 0.26.x) and pass --geckodriver or put it on PATH",
-		);
 	const port = await freePort();
 	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-firefox68-"));
 	let child: Bun.Subprocess<"ignore", "ignore", "pipe"> | undefined;
+	let client: Firefox68Marionette | undefined;
 	let sessionId: string | undefined;
-	let diagnostics: Promise<string> | undefined;
-	const endpoint = `http://127.0.0.1:${port}`;
-	async function request<T>(method: string, resource: string, body?: object): Promise<T> {
-		const response = await fetch(`${endpoint}${resource}`, {
-			method,
-			headers: { "Content-Type": "application/json" },
-			...(body ? { body: JSON.stringify(body) } : {}),
-			signal: AbortSignal.timeout(timeout),
-		});
-		const payload = (await response.json()) as { value: T & { error?: string; message?: string } };
-		if (!response.ok || payload.value?.error)
-			throw new Error(`WebDriver ${method} ${resource}: ${payload.value?.message ?? response.status}`);
-		return payload.value;
-	}
 	try {
-		try {
-			child = Bun.spawn([driver, "--host", "127.0.0.1", "--port", String(port)], {
-				stdin: "ignore",
-				stdout: "ignore",
-				stderr: "pipe",
-			});
-		} catch (error) {
-			prerequisite("geckodriver", `Unable to start ${driver}: ${String(error)}`);
-		}
-		diagnostics = new Response(child.stderr).text();
-		await waitUntil(
-			async () => {
-				if (child?.exitCode !== null)
-					prerequisite("geckodriver", `geckodriver exited before becoming ready: ${await diagnostics}`);
-				return fetch(`${endpoint}/status`, { signal: AbortSignal.timeout(1000) }).then(
-					response => response.ok,
-					() => false,
-				);
-			},
-			Boolean,
-			"geckodriver readiness",
-		);
-		let session: {
-			sessionId: string;
-			capabilities: {
-				browserName: string;
-				browserVersion: string;
-				platformName: string;
-				"moz:geckodriverVersion"?: string;
-			};
+		const preferences: Record<string, string | number | boolean> = {
+			"marionette.port": port,
+			"browser.shell.checkDefaultBrowser": false,
+			"browser.startup.page": 0,
+			"browser.startup.homepage_override.mstone": "ignore",
+			"browser.sessionstore.resume_from_crash": false,
+			"datareporting.policy.dataSubmissionPolicyBypassNotification": true,
+			"toolkit.telemetry.reportingpolicy.firstRun": false,
+			...(options.downloadDirectory
+				? {
+						"browser.download.folderList": 2,
+						"browser.download.dir": options.downloadDirectory,
+						"browser.download.useDownloadDir": true,
+						"browser.helperApps.neverAsk.saveToDisk":
+							"video/webm,video/mp4,application/octet-stream,text/html,text/plain,application/json",
+						"browser.download.manager.showWhenStarting": false,
+					}
+				: {}),
 		};
+		await fs.writeFile(
+			path.join(profile, "user.js"),
+			Object.entries(preferences)
+				.map(([key, value]) => `user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`)
+				.join("\n"),
+		);
 		try {
-			session = await request("POST", "/session", {
-				capabilities: {
-					alwaysMatch: { browserName: "firefox", "moz:firefoxOptions": { binary, args: ["-profile", profile] } },
+			child = Bun.spawn(
+				[
+					binary,
+					"-no-remote",
+					"-marionette",
+					"-profile",
+					profile,
+					...(options.headless ? ["-headless"] : []),
+					"about:blank",
+				],
+				{
+					stdin: "ignore",
+					stdout: "ignore",
+					stderr: "pipe",
+					...(options.environment ? { env: options.environment } : {}),
 				},
-			});
-		} catch (error) {
-			return prerequisite(
-				"firefox-webdriver-session",
-				`Firefox 68 and compatible geckodriver must start with a temporary profile: ${String(error)}`,
 			);
+		} catch (error) {
+			prerequisite("firefox68-binary", `Unable to start ${binary}: ${String(error)}`);
 		}
+		const firefox = child;
+		const diagnostics = new Response(firefox.stderr).text();
+		client = await waitUntil(
+			async () => {
+				if (firefox.exitCode !== null)
+					prerequisite(
+						"firefox-marionette-session",
+						`Firefox exited before Marionette became ready: ${await diagnostics}`,
+					);
+				try {
+					return await connectFirefox68Marionette(port, timeout);
+				} catch (error) {
+					if (error instanceof Error && "code" in error && error.code === "ECONNREFUSED") return undefined;
+					throw error;
+				}
+			},
+			value => value !== undefined,
+			"isolated Firefox Marionette readiness",
+		);
+		if (!client) throw new Error("Firefox Marionette did not connect");
+		const marionette = client;
+		const command = <TValue>(name: string, parameters?: object) => marionette.command<TValue>(name, parameters);
+		const session = await command<{
+			sessionId: string;
+			capabilities: { browserName: string; browserVersion: string; platformName: string };
+		}>("WebDriver:NewSession", {
+			acceptInsecureCerts: false,
+			timeouts: { implicit: 0, pageLoad: timeout, script: timeout },
+		});
 		sessionId = session.sessionId;
-		const route = `/session/${sessionId}`;
-		await request("POST", `${route}/timeouts`, { implicit: 0, pageLoad: timeout, script: timeout });
-		const evaluate = <T>(expression: string) =>
-			request<T>("POST", `${route}/execute/sync`, { script: `return ${expression};`, args: [] });
+		if (typeof sessionId !== "string" || !sessionId) throw new Error("Firefox Marionette returned no session ID");
+		if (options.viewport) await command("WebDriver:SetWindowRect", options.viewport);
+		const evaluate = <TValue>(expression: string) =>
+			command<TValue>("WebDriver:ExecuteScript", { script: `return ${expression};`, args: [], newSandbox: true });
 		const userAgent = await evaluate<string>("navigator.userAgent");
 		if (session.capabilities.browserName.toLowerCase() !== "firefox")
-			prerequisite("firefox68-version", "WebDriver did not launch Firefox");
+			prerequisite("firefox68-version", "Marionette did not launch Firefox");
 		assertFirefox68Identity(session.capabilities.browserVersion, userAgent);
 		const element = async (selector: string) => {
-			const result = await request<Record<string, string>>("POST", `${route}/element`, {
+			const result = await command<Record<string, string>>("WebDriver:FindElement", {
 				using: "css selector",
 				value: selector,
 			});
 			const id = result["element-6066-11e4-a52e-4f735466cecf"];
-			if (!id) throw new Error(`WebDriver returned no element for ${selector}`);
-			return `${route}/element/${encodeURIComponent(id)}`;
+			if (!id) throw new Error(`Marionette returned no element for ${selector}`);
+			return id;
 		};
-		const result = await exercise(
-			{
-				evaluate,
-				async navigate(url) {
-					await request("POST", `${route}/url`, { url });
-				},
-				async reload() {
-					await request("POST", `${route}/refresh`, {});
-				},
-				async click(selector) {
-					await request("POST", `${await element(selector)}/click`, {});
-				},
-				async typeDraft(text) {
-					const input = await element(INPUT);
-					await request("POST", `${input}/click`, {});
-					await request("POST", `${input}/value`, { text, value: text.split("") });
-				},
-				async clearDraft() {
-					const input = await element(INPUT);
-					await request("POST", `${input}/clear`, {});
-				},
+		// Marionette has one selected window per session. Keep each page operation
+		// (selection, element lookup and native action) atomic across parallel pages.
+		let pendingOperation: Promise<void> = Promise.resolve();
+		const exclusive = <TValue>(operation: () => Promise<TValue>): Promise<TValue> => {
+			const result = pendingOperation.then(operation);
+			pendingOperation = result.then(
+				() => {},
+				() => {},
+			);
+			return result;
+		};
+		const windowHandle = (value: unknown): string => {
+			if (typeof value !== "string" || !value.trim())
+				throw new Error(`Marionette returned an invalid window handle: ${JSON.stringify(value)}`);
+			return value;
+		};
+		const windowHandles = async (): Promise<string[]> => {
+			const values = await command<unknown>("WebDriver:GetWindowHandles");
+			if (!Array.isArray(values)) throw new Error("Marionette returned an invalid window handle list");
+			const handles = values.map(windowHandle);
+			if (new Set(handles).size !== handles.length) throw new Error("Marionette returned duplicate window handles");
+			return handles;
+		};
+		const initial = windowHandle(await command<unknown>("WebDriver:GetWindowHandle"));
+		const ownedHandles = new Set(await windowHandles());
+		if (!ownedHandles.has(initial)) throw new Error("Marionette's initial window is not in its session handle list");
+		const select = async (handle: string) => {
+			if (!ownedHandles.has(handle)) throw new Error(`Firefox page is no longer owned: ${handle}`);
+			// Firefox 68's native command takes `name`, not modern geckodriver's
+			// `handle`. These are actual handles returned by this owned session.
+			await command("WebDriver:SwitchToWindow", { name: handle });
+			if (windowHandle(await command<unknown>("WebDriver:GetWindowHandle")) !== handle)
+				throw new Error(`Marionette did not switch to Firefox window ${handle}`);
+		};
+		type NativeKeyAction = { type: "keyDown" | "keyUp"; value: string } | { type: "pause"; duration: number };
+		// Firefox 68's ElementSendKeys loops synchronously over the entire string:
+		// Lexical cannot commit its first input before later characters arrive.
+		// Actions provide separate key events, explicit modifier release and a
+		// native timer tick for the editor's pending input/selection updates.
+		// Official 68 sources: testing/marionette/{event,action}.js at
+		// https://hg.mozilla.org/releases/mozilla-release/file/FIREFOX_68_0_2_RELEASE/
+		const nativeKeys = async (actions: NativeKeyAction[]) => {
+			if (!actions.length) return;
+			try {
+				await command("WebDriver:PerformActions", {
+					actions: [{ type: "key", id: "omp-acceptance-keyboard", actions }],
+				});
+			} finally {
+				await command("WebDriver:ReleaseActions");
+			}
+		};
+		const makePage = (handle: string): DevelopmentPage => {
+			windowHandle(handle);
+			const selected = <TValue>(operation: () => Promise<TValue>) =>
+				exclusive(async () => {
+					await select(handle);
+					return operation();
+				});
+			const page: DevelopmentPage = {
+				evaluate: <TValue>(expression: string) => selected(() => evaluate<TValue>(expression)),
+				navigate: url =>
+					selected(async () => {
+						await command("WebDriver:Navigate", { url });
+					}),
+				reload: () =>
+					selected(async () => {
+						await command("WebDriver:Refresh");
+					}),
+				click: selector =>
+					selected(async () => {
+						await command("WebDriver:ElementClick", { id: await element(selector) });
+					}),
+				hover: selector =>
+					selected(async () => {
+						await element(selector);
+						const point = await evaluate<{ x: number; y: number }>(
+							`(function(){var e=document.querySelector(${JSON.stringify(selector)});var r=e.getBoundingClientRect();return {x:Math.floor(r.left+r.width/2),y:Math.floor(r.top+r.height/2)};})()`,
+						);
+						try {
+							await command("WebDriver:PerformActions", {
+								actions: [
+									{
+										type: "pointer",
+										id: "omp-acceptance-pointer",
+										parameters: { pointerType: "mouse" },
+										actions: [{ type: "pointerMove", origin: "viewport", duration: 80, ...point }],
+									},
+								],
+							});
+						} finally {
+							await command("WebDriver:ReleaseActions");
+						}
+					}),
+				type: (selector, text) =>
+					selected(async () => {
+						const input = await element(selector);
+						await command("WebDriver:ElementClick", { id: input });
+						const actions: NativeKeyAction[] = [];
+						for (const character of text.replace(/\r\n?/g, "\n")) {
+							if (character === "\n") {
+								actions.push(
+									{ type: "keyDown", value: "\uE008" },
+									{ type: "keyDown", value: "\uE006" },
+									{ type: "keyUp", value: "\uE006" },
+									{ type: "keyUp", value: "\uE008" },
+								);
+							} else {
+								actions.push({ type: "keyDown", value: character }, { type: "keyUp", value: character });
+							}
+							actions.push({ type: "pause", duration: 1 });
+						}
+						await nativeKeys(actions);
+					}),
+				clear: selector =>
+					selected(async () => {
+						await command("WebDriver:ElementClick", { id: await element(selector) });
+						const modifier = /mac|darwin/i.test(session.capabilities.platformName) ? "\uE03D" : "\uE009";
+						await nativeKeys([
+							{ type: "keyDown", value: modifier },
+							{ type: "keyDown", value: "a" },
+							{ type: "keyUp", value: "a" },
+							{ type: "keyUp", value: modifier },
+							{ type: "pause", duration: 1 },
+							{ type: "keyDown", value: "\uE003" },
+							{ type: "keyUp", value: "\uE003" },
+							{ type: "pause", duration: 1 },
+						]);
+					}),
+				press: (selector, key) =>
+					selected(async () => {
+						const keys: Record<string, string> = {
+							Enter: "\uE007",
+							Escape: "\uE00C",
+							Tab: "\uE004",
+							Backspace: "\uE003",
+							ArrowDown: "\uE015",
+							ArrowUp: "\uE013",
+						};
+						const value = keys[key];
+						if (!value) throw new Error(`Unsupported Marionette key ${key}`);
+						await command("WebDriver:ElementClick", { id: await element(selector) });
+						await nativeKeys([
+							{ type: "keyDown", value },
+							{ type: "keyUp", value },
+							{ type: "pause", duration: 1 },
+						]);
+					}),
+				upload: (selector, files) =>
+					selected(async () => {
+						const text = files.join("\n");
+						await command("WebDriver:ElementSendKeys", { id: await element(selector), text });
+					}),
+				draw: (selector, points) =>
+					selected(async () => {
+						if (points.length < 2) throw new Error("A real canvas stroke requires at least two points");
+						const rectangle = await evaluate<{ left: number; top: number }>(
+							`(function(){var r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return {left:r.left,top:r.top};})()`,
+						);
+						const move = (point: { x: number; y: number }) => ({
+							type: "pointerMove",
+							origin: "viewport",
+							duration: 80,
+							x: Math.round(rectangle.left + point.x),
+							y: Math.round(rectangle.top + point.y),
+						});
+						try {
+							await command("WebDriver:PerformActions", {
+								actions: [
+									{
+										type: "pointer",
+										id: "omp-acceptance-pointer",
+										parameters: { pointerType: "mouse" },
+										actions: [
+											move(points[0]!),
+											{ type: "pointerDown", button: 0 },
+											...points.slice(1).map(move),
+											{ type: "pointerUp", button: 0 },
+										],
+									},
+								],
+							});
+						} finally {
+							await command("WebDriver:ReleaseActions");
+						}
+					}),
+				close: () =>
+					exclusive(async () => {
+						if (!ownedHandles.has(handle)) return;
+						if ((await windowHandles()).includes(handle)) {
+							await select(handle);
+							await command("WebDriver:CloseWindow");
+						}
+						ownedHandles.delete(handle);
+					}),
+				screenshot: file =>
+					selected(async () => {
+						const image = await command<string>("WebDriver:TakeScreenshot", { full: false });
+						await fs.writeFile(file, Buffer.from(image, "base64"));
+					}),
+				typeDraft: text => page.type(INPUT, text),
+				clearDraft: () => page.clear(INPUT),
+			};
+			return page;
+		};
+		return await run({
+			identity: {
+				executable: binary,
+				automationProtocol: "marionette",
+				capabilities: session.capabilities,
+				windowRect: await command("WebDriver:GetWindowRect"),
+				userAgent,
+				profile,
+				isolatedProfile: true,
+				...(options.downloadDirectory ? { downloadDirectory: options.downloadDirectory } : {}),
 			},
-			options,
-		);
-		return {
-			executable: binary,
-			geckodriver: driver,
-			capabilities: session.capabilities,
-			userAgent,
-			profile: "temporary; removed after session",
-			...result,
-		};
+			page: makePage(initial),
+			newPage: () =>
+				exclusive(async () => {
+					const before = await windowHandles();
+					const opened = await command<{ handle: string; type: string }>("WebDriver:NewWindow", {
+						type: "tab",
+						focus: false,
+					});
+					const handle = windowHandle(opened.handle);
+					if (before.includes(handle) || !(await windowHandles()).includes(handle))
+						throw new Error(`Marionette did not create a new Firefox window with handle ${handle}`);
+					ownedHandles.add(handle);
+					await select(handle);
+					return makePage(handle);
+				}),
+			pages: () =>
+				exclusive(async () => (await windowHandles()).filter(handle => ownedHandles.has(handle)).map(makePage)),
+		});
 	} finally {
 		try {
-			if (sessionId) await request("DELETE", `/session/${sessionId}`);
+			if (sessionId && client) await client.command("WebDriver:DeleteSession");
 		} finally {
+			client?.close();
 			if (child) {
-				child.kill();
+				await gracefulKillTreeOnce(child.pid);
 				await child.exited;
 			}
-			await fs.rm(profile, { recursive: true, force: true });
+			await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 		}
 	}
+}
+
+async function firefoxProbe(options: ProbeOptions): Promise<object> {
+	return withFirefox68Browser(options, async browser => ({
+		...browser.identity,
+		profile: "temporary; removed after session",
+		...(await exercise(browser.page, options)),
+	}));
 }
 
 async function androidProbe(options: ProbeOptions): Promise<object> {
@@ -474,7 +737,18 @@ async function androidProbe(options: ProbeOptions): Promise<object> {
 				},
 				async typeDraft(text) {
 					await page.tap(INPUT);
-					await page.keyboard.type(text);
+					const lines = text.replace(/\r\n?/g, "\n").split("\n");
+					for (let index = 0; index < lines.length; index++) {
+						if (index) {
+							await page.keyboard.down("Shift");
+							try {
+								await page.keyboard.press("Enter");
+							} finally {
+								await page.keyboard.up("Shift");
+							}
+						}
+						if (lines[index]) await page.keyboard.sendCharacter(lines[index]!);
+					}
 				},
 				async clearDraft() {
 					await page.tap(INPUT);
@@ -518,7 +792,6 @@ function parseOptions(args: string[]): ProbeOptions {
 		"menu-selector",
 		"session-selector",
 		"firefox",
-		"geckodriver",
 		"adb",
 		"serial",
 		"socket",
@@ -529,7 +802,7 @@ function parseOptions(args: string[]): ProbeOptions {
 		if (!key || !allowed.has(key) || !value || value.startsWith("--"))
 			prerequisite(
 				"arguments",
-				"Use --platform firefox68|android --url DIRECT_OMP_URL --nav-selector CSS --nav-ready-selector CSS [--menu-selector CSS --session-selector CSS] [--firefox PATH --geckodriver PATH] [--adb PATH --serial SERIAL --socket chrome_devtools_remote]",
+				"Use --platform firefox68|android --url DIRECT_OMP_URL --nav-selector CSS --nav-ready-selector CSS [--menu-selector CSS --session-selector CSS] [--firefox PATH] [--adb PATH --serial SERIAL --socket chrome_devtools_remote]",
 			);
 		values.set(key, value);
 	}
@@ -554,7 +827,6 @@ function parseOptions(args: string[]): ProbeOptions {
 		menu: values.get("menu-selector"),
 		session: values.get("session-selector"),
 		firefox: values.get("firefox") ?? process.env.FIREFOX68_EXECUTABLE,
-		geckodriver: values.get("geckodriver") ?? process.env.GECKODRIVER_EXECUTABLE,
 		adb: values.get("adb") ?? process.env.ADB_EXECUTABLE,
 		serial: values.get("serial") ?? process.env.ANDROID_SERIAL,
 		socket: values.get("socket") ?? "chrome_devtools_remote",

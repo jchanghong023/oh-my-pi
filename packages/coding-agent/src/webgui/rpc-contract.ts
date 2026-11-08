@@ -20,10 +20,18 @@ export interface WebGuiServiceContext {
 }
 
 export type WebGuiMethod = (...args: unknown[]) => unknown | Promise<unknown>;
+export interface WebGuiHandoffBinding {
+	sessionId: string;
+	interactionId: string;
+	connectionId: string;
+	clientId?: string;
+}
 
 export interface WebGuiServiceDefinition extends IServerChannel<WebGuiServiceContext> {
 	readonly name: string;
 	dispose(): void;
+	/** A retiring connection may project only its already-admitted opaque control action. */
+	drainHandoffFrame?(arg: unknown, frame: unknown, binding: WebGuiHandoffBinding): unknown | undefined;
 }
 
 export interface WebGuiServiceOptions {

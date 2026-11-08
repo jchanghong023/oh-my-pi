@@ -88,12 +88,11 @@ export function normalizeSlashCommandValue(name: string): string {
   return name.trim().replace(/^\/+/, "");
 }
 
-export function buildSlashSuggestions(commands: ZCodeSlashCommand[]): PromptInputSuggestionItem[] {
+export function buildSlashSuggestions(commands: ZCodeSlashCommand[], options?: { includeNativeCommands?: boolean }): PromptInputSuggestionItem[] {
   return commands.flatMap((command) => {
     const value = normalizeSlashCommandValue(command.name);
-    // Plan 是 Composer 本地操作。旧 Agent 仍可能广播同名命令，不能让它重新
-    // 变成插入文本、等到发送时才切模式的旧入口；其余命令仍以 CLI catalog 为准。
-    if (!value || value.toLowerCase() === "plan") {
+    // Legacy /plan stays a local composer operation; native hosts own their full catalogue.
+    if (!value || (!options?.includeNativeCommands && value.toLowerCase() === "plan")) {
       return [];
     }
     return [

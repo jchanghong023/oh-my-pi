@@ -3,18 +3,18 @@ import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
 import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { AgentRegistry, createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { nativeChatRuntime } from "@oh-my-pi/pi-coding-agent/webgui/native-chat";
+import { activateNativeWebGuiComposition } from "@oh-my-pi/pi-coding-agent/webgui/native-composition";
 import { acquireBrowserProject, type BrowserProjectLease } from "@oh-my-pi/pi-coding-agent/webgui/project-registry";
 import type { WebGuiServiceContext } from "@oh-my-pi/pi-coding-agent/webgui/rpc-contract";
 import { readWebGuiSessionInfo } from "@oh-my-pi/pi-coding-agent/webgui/session-source";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import type { ConversationSnapshot } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/snapshot";
 import { createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
-
-type Snapshot = Awaited<ReturnType<ReturnType<typeof nativeChatRuntime>["snapshot"]>>;
 
 test("native text streaming shares stable V4 rows across consumers and survives one consumer disconnecting", async () => {
 	using temp = TempDir.createSync("@pi-webgui-native-stream-");
@@ -24,6 +24,7 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 	let session: AgentSession | undefined;
 	let lease: BrowserProjectLease | undefined;
 	try {
+		activateNativeWebGuiComposition();
 		const model = getTestModel("ascend");
 		authStorage.keys.setRuntime(model.provider, "test-key");
 		const manager = SessionManager.inMemory(temp.path());
@@ -38,6 +39,9 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 			toolNames: [],
 			disableExtensionDiscovery: true,
 			skills: [],
+			bindProcessState: false,
+			offline: true,
+			agentRegistry: new AgentRegistry(),
 			contextFiles: [],
 			promptTemplates: [],
 			slashCommands: [],
@@ -112,10 +116,10 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 		]);
 
 		function observe(context: WebGuiServiceContext) {
-			const seen: Snapshot[] = [];
+			const seen: ConversationSnapshot[] = [];
 			const pending = new Set<{
-				matches: (snapshot: Snapshot) => boolean;
-				resolve: (snapshot: Snapshot) => void;
+				matches: (snapshot: ConversationSnapshot) => boolean;
+				resolve: (snapshot: ConversationSnapshot) => void;
 				reject: (error: unknown) => void;
 			}>();
 			const release = runtime.retain();
@@ -146,10 +150,10 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 			return {
 				seen,
 				close,
-				waitFor(matches: (snapshot: Snapshot) => boolean) {
+				waitFor(matches: (snapshot: ConversationSnapshot) => boolean) {
 					const previous = seen.find(matches);
 					if (previous) return Promise.resolve(previous);
-					const waiter = Promise.withResolvers<Snapshot>();
+					const waiter = Promise.withResolvers<ConversationSnapshot>();
 					pending.add({ matches, resolve: waiter.resolve, reject: waiter.reject });
 					return waiter.promise;
 				},
@@ -194,7 +198,7 @@ test("native text streaming shares stable V4 rows across consumers and survives 
 			);
 			const streaming = await Promise.all(partials);
 			for (const snapshot of streaming) {
-				expect(snapshot.inputRouting).toEqual({ mode: "reject", reasonCode: "guard.nativeSessionBusy" });
+				expect(snapshot.inputRouting.mode).toBe("enqueue");
 				expect(snapshot.control.sessionEnded).toBe(false);
 				expect(snapshot.rows.window.filter(row => row.kind === "userInput").map(row => row.text)).toEqual(
 					inputs.slice(0, index + 1),

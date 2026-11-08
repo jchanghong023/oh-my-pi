@@ -11,6 +11,7 @@ import type { AgentsListResult } from "../../../../vendor/zcode-frontend/package
 import type { WebGuiMethod, WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createNativeSkillMethods } from "./native-skills";
 import { createWebGuiService } from "./service-channel";
+import { listWebGuiNativeSessions, resolveWebGuiSession, webGuiNativePorts } from "./native-session-host";
 
 const unavailableReason = "OMP WebGUI protocol is connected; native extension configuration is not bound.";
 
@@ -40,7 +41,7 @@ export function createExtensionServices(context: WebGuiServiceContext): readonly
 				capability: { userScopeAvailable: false, userScopeReason: "desktop_only" },
 				diagnostics: [],
 			}),
-			...(context.nativeSession ? createNativeSkillMethods(context) : {}),
+			...(context.projectId || context.nativeSession ? createNativeSkillMethods(context) : {}),
 			// TODO(omp-skills): Bind setEnabled/buildPromptContext/copyToCommon/removeFromCommon/deleteSkill.
 			// Missing business methods use the channel's explicit OMP_WEBGUI_NOT_IMPLEMENTED dispatch.
 		}),
@@ -67,14 +68,25 @@ export function createExtensionServices(context: WebGuiServiceContext): readonly
 			// remain unavailable. In particular no nonexistent directory is advertised as available.
 		}),
 		createWebGuiService(ServiceChannels.Commands, {
-			list: (): CommandsListResult => ({
-				commands: [],
-				userCommands: [],
-				pluginCommands: [],
-				capability: { userScopeAvailable: false, userScopeReason: "desktop_only" },
-			}),
-			// TODO(omp-native-settings): Bind command discovery; writeCommandFile/updateCommandFile,
-			// deleteCommandFile/setCommandEnabled/getPrimaryUserCommandsDirectory remain unavailable.
+			list: async (
+				options?: unknown,
+			): Promise<CommandsListResult & { nativeCommands: Array<{ name: string; description: string }> }> => {
+				const sessionId =
+					typeof options === "object" && options !== null && "sessionId" in options
+						? options.sessionId
+						: undefined;
+				if (sessionId !== undefined && typeof sessionId !== "string")
+					throw new Error("Expected a native session ID");
+				const resident = context.projectId ? await listWebGuiNativeSessions(context) : [];
+				const session = resident.length ? await resolveWebGuiSession(context, sessionId) : undefined;
+				return {
+					commands: [],
+					userCommands: [],
+					pluginCommands: [],
+					nativeCommands: session ? await webGuiNativePorts().listCommands(session) : [],
+					capability: { userScopeAvailable: false },
+				};
+			},
 		}),
 		createWebGuiService(ServiceChannels.Hooks, {
 			// TODO(omp-native-settings): Bind native hook discovery and authority;

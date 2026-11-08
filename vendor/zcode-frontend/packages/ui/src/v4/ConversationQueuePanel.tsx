@@ -187,6 +187,8 @@ const QueueRow = memo(function QueueRow({
       data-index={index}
       data-kind={item.kind}
       data-dispatch-state={item.dispatch.state}
+      data-delivery-requested={item.delivery.requested}
+      data-delivery-admitted={item.delivery.admitted}
       data-edit-pending={editPending ? "true" : "false"}
       className={cn(
         "relative flex items-center gap-2 rounded-xl px-1.5 py-1 pr-1 transition-colors hover:bg-hover/30",

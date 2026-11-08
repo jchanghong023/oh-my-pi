@@ -83,6 +83,8 @@ export interface ReleaseBrowserOptions {
 	kill: boolean;
 	timeoutMs?: number;
 	resource?: string;
+	/** Retain the last hold and registry route until cleanup succeeds. */
+	strict?: boolean;
 }
 
 const browsers = new Map<string, BrowserHandle>();
@@ -91,6 +93,8 @@ const browsers = new Map<string, BrowserHandle>();
  * `settled` resolves once the open settles or its caller aborts, whichever comes first.
  */
 const pendingOpens = new Map<string, { settled: Promise<void> }>();
+const strictReleases = new WeakMap<BrowserHandle, { promise?: Promise<void> }>();
+const strictlyClosedBrowsers = new WeakSet<BrowserHandle>();
 
 export function browserKey(kind: BrowserKind): string {
 	switch (kind.kind) {
@@ -123,6 +127,13 @@ export async function acquireBrowser(kind: BrowserKind, opts: AcquireBrowserOpti
 	for (;;) {
 		const existing = browsers.get(key);
 		if (existing) {
+			const release = strictReleases.get(existing);
+			if (release) {
+				if (!release.promise)
+					throw new ToolError("Browser is awaiting failed strict cleanup; retry its owner's release");
+				await untilAborted(opts.signal, () => release.promise!);
+				continue;
+			}
 			if ("client" in existing) return existing;
 			if ("tern" in existing ? existing.tern.connected : existing.browser.connected) return existing;
 			browsers.delete(key);
@@ -390,17 +401,53 @@ async function openBrowserHandle(kind: BrowserKind, opts: AcquireBrowserOptions)
 }
 
 export function holdBrowser(handle: BrowserHandle): void {
+	if (strictReleases.has(handle)) throw new ToolError("Browser is awaiting strict cleanup; retry its owner's release");
 	handle.refCount++;
 }
 
+/** Reattach cleanup to the same browser endpoint, never launch or adopt a replacement. */
+export async function connectBrowserForCleanup(handle: PuppeteerBrowserHandle): Promise<Browser> {
+	return await connectPuppeteer(await loadPuppeteer(), {
+		browserWSEndpoint: handle.wsEndpoint,
+		defaultViewport: null,
+		protocolTimeout: BROWSER_PROTOCOL_TIMEOUT_MS,
+	});
+}
+
 export async function releaseBrowser(handle: BrowserHandle, opts: ReleaseBrowserOptions): Promise<void> {
+	if (opts.strict && handle.refCount <= 1) {
+		let entry = strictReleases.get(handle);
+		if (entry?.promise) return entry.promise;
+		entry ??= {};
+		strictReleases.set(handle, entry);
+		const release = entry;
+		release.promise = disposeBrowserHandle(handle, opts)
+			.then(() => {
+				handle.refCount = Math.max(0, handle.refCount - 1);
+				if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
+				strictReleases.delete(handle);
+			})
+			.finally(() => {
+				release.promise = undefined;
+			});
+		return release.promise;
+	}
 	handle.refCount = Math.max(0, handle.refCount - 1);
 	if (handle.refCount === 0) {
 		// Only evict if the registry still points at THIS handle. After a disconnect,
 		// `acquireBrowser` may have already replaced the entry with a fresh live handle
 		// under the same key; deleting blindly would orphan that new browser.
 		if (browsers.get(handle.key) === handle) browsers.delete(handle.key);
-		await disposeBrowserHandle(handle, opts);
+		try {
+			await disposeBrowserHandle(handle, opts);
+		} catch (error) {
+			if (opts.strict) {
+				handle.refCount++;
+				strictReleases.set(handle, {});
+				if (!browsers.has(handle.key)) browsers.set(handle.key, handle);
+			}
+			throw error;
+		}
 	}
 }
 
@@ -426,16 +473,20 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserO
 				try {
 					handle.browser.disconnect();
 				} catch (err) {
+					if (opts.strict) throw err;
 					logger.debug("Failed to disconnect from shared browser", { error: (err as Error).message });
 				}
 			}
 			return;
 		}
-		if (handle.browser.connected) await closeLaunchedBrowser(handle.browser);
+		if (!strictlyClosedBrowsers.has(handle) && (handle.browser.connected || opts.strict)) {
+			await closeLaunchedBrowser(handle.browser, opts);
+			if (opts.strict) strictlyClosedBrowsers.add(handle);
+		}
 		// OMP owns the profile directory (puppeteer's temp cleanup is disabled by
 		// our explicit --user-data-dir), so remove it now the process tree has
 		// exited. Tolerant of the Windows lock-held window (issue #7058).
-		if (handle.userDataDir) await removeUserDataDir(handle.userDataDir);
+		if (handle.userDataDir) await removeUserDataDir(handle.userDataDir, opts);
 		return;
 	}
 	// Connected and relay browsers belong to the user: drop our CDP link, never kill.
@@ -444,6 +495,7 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserO
 			try {
 				handle.browser.disconnect();
 			} catch (err) {
+				if (opts.strict) throw err;
 				logger.debug("Failed to disconnect from remote browser", { error: (err as Error).message });
 			}
 		}
@@ -453,6 +505,7 @@ async function disposeBrowserHandle(handle: BrowserHandle, opts: ReleaseBrowserO
 		try {
 			handle.browser.disconnect();
 		} catch (err) {
+			if (opts.strict) throw err;
 			logger.debug("Failed to disconnect from spawned browser", { error: (err as Error).message });
 		}
 	}

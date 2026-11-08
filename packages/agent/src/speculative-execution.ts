@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
+import { agentPauseGate } from "./pause";
 import { validateAgentToolArguments } from "./tool-arguments";
 import type {
 	AgentContext,
@@ -924,6 +925,14 @@ export class SpeculativeOperationCoordinator {
 						await this.#discardCandidate(candidate, "discarded", "host declined speculative evidence capture");
 						return;
 					}
+				}
+				// Explicit root isolation must also cover speculative physical work.
+				// Leave the ordinary process-global speculative path unchanged.
+				const pauseGate = this.environment?.loopConfig.pauseGate;
+				if (pauseGate && pauseGate !== agentPauseGate && pauseGate.paused) {
+					await pauseGate.waitUntilResumed(signal);
+					// Aborting a parked candidate releases only its wait, not its gate.
+					signal.throwIfAborted();
 				}
 				const outcome = await candidate.policy.execute(executionContext, signal);
 				if (candidate.state === "discarded") return;

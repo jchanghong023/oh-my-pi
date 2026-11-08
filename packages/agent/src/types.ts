@@ -23,6 +23,7 @@ import type {
 import type { Dialect } from "@oh-my-pi/pi-ai/dialect";
 import type { HarmonyAuditEvent } from "@oh-my-pi/pi-ai/utils/harmony-leak";
 import type { AppendOnlyContextManager } from "./append-only-context";
+import type { AgentPauseGate } from "./pause";
 import type { AgentRunCoverage, AgentRunSummary } from "./run-collector";
 import type { SentToolDefinitions } from "./sent-tool-definitions";
 import type { AgentTelemetryConfig } from "./telemetry";
@@ -193,8 +194,10 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model;
 	/** Reuse the Agent's current model-aware token counter for request-only usage accounting. */
 	getTokenizer?: () => Tokenizer;
+	/** Gate shared by the owning root and its workers. Defaults to the process-wide gate. */
+	pauseGate?: AgentPauseGate;
 
-	/** Reports whether this loop has reached a safe process-pause boundary. */
+	/** Reports whether this loop has reached a safe pause boundary. */
 	onPauseChange?: (paused: boolean) => void;
 
 	/**

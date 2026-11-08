@@ -1,17 +1,25 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
+import { createAgentSession, type CreateAgentSessionOptions } from "@oh-my-pi/pi-coding-agent/sdk";
 import { AgentStorage } from "@oh-my-pi/pi-coding-agent/session/agent-storage";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { cfgTemperature } from "@oh-my-pi/pi-coding-agent/session/settings";
 import { getProjectAgentDir, TempDir } from "@oh-my-pi/pi-utils";
-import { NativeChatRuntime } from "../../src/webgui/native-chat";
+import { nativeChatRuntime, type NativeChatRuntime } from "../../src/webgui/native-chat";
+import { activateNativeWebGuiComposition } from "../../src/webgui/native-composition";
 import { NativeCwdHost } from "../../src/webgui/native-cwd";
 import { acquireBrowserProject, readBrowserProject } from "../../src/webgui/project-registry";
 import type { WebGuiServiceContext } from "../../src/webgui/rpc-contract";
+import {
+	closeWebGuiNativeSessions,
+	enableWebGuiNativeSessions,
+	releaseWebGuiNativeProjects,
+	resumeWebGuiNativeSession,
+	webGuiSessionProject,
+} from "../../src/webgui/native-session-host";
 import { readWebGuiSessionInfo } from "../../src/webgui/session-source";
 import { createAssistantMessage, createInMemoryAuthStorage } from "../helpers/agent-session-setup";
 import { getTestModel } from "../helpers/model-fixtures";
@@ -33,6 +41,8 @@ function history(manager: SessionManager): SessionInfo {
 }
 
 async function fixture(temp: TempDir, unavailableModel = false) {
+	activateNativeWebGuiComposition();
+	enableWebGuiNativeSessions();
 	const cwdA = temp.join("source");
 	const cwdB = temp.join("target");
 	for (const [cwd, temperature, marker] of [
@@ -85,7 +95,7 @@ async function fixture(temp: TempDir, unavailableModel = false) {
 		apiKey: "fixture-key",
 		models: [model, savedModel].map(candidate => ({ ...candidate, contextWindow, maxTokens })),
 	});
-	const { session } = await createAgentSession({
+	const options: CreateAgentSessionOptions = {
 		cwd: cwdA,
 		agentDir: temp.join("agent"),
 		sessionManager: source,
@@ -106,7 +116,8 @@ async function fixture(temp: TempDir, unavailableModel = false) {
 		enableLsp: false,
 		taskDepth: 1,
 		agentId: "SubAgent",
-	});
+	};
+	const { session } = await createAgentSession(options);
 	await source.ensureOnDisk();
 	await source.flush();
 	const sourceInfo = history(source);
@@ -121,10 +132,11 @@ async function fixture(temp: TempDir, unavailableModel = false) {
 		nativeSession: session,
 		signal: controller.signal,
 	};
-	const runtime = new NativeChatRuntime(session);
+	const runtime = nativeChatRuntime(context);
 	runtime.recordHistory([sourceInfo, targetInfo]);
 	return {
 		session,
+		options,
 		host,
 		runtime,
 		context,
@@ -152,6 +164,66 @@ async function fixture(temp: TempDir, unavailableModel = false) {
 	};
 }
 
+test("historical cwd stays read-only until explicit continuation admits an independent resident root", async () => {
+	using temp = TempDir.createSync("@pi-native-cwd-independent-");
+	const f = await fixture(temp);
+	const historySpy = spyOn(SessionManager, "listAll").mockResolvedValue([f.sourceInfo, f.targetInfo]);
+	const originalAgent = f.session.agent;
+	const originalManager = f.session.sessionManager;
+	const processCwd = process.cwd();
+	try {
+		expect((await f.runtime.snapshot(f.context, f.targetInfo.id)).inputRouting).toEqual({
+			mode: "reject",
+			reasonCode: "guard.nativeHistoryRequiresResume",
+		});
+		expect(await f.runtime.messages(f.context, f.targetInfo.id)).toHaveLength(2);
+		const unopened = await acquireBrowserProject(f.cwdB, "dev");
+		await unopened.close();
+		expect(f.session.sessionManager).toBe(originalManager);
+		expect(f.session.sessionId).toBe(f.sourceInfo.id);
+		const continued = await resumeWebGuiNativeSession(f.context, f.targetInfo.id, { ...f.options, model: undefined });
+		expect(continued).not.toBe(f.session);
+		expect(continued.agent).not.toBe(originalAgent);
+		expect(continued.sessionId).toBe(f.targetInfo.id);
+		expect(continued.sessionManager.getCwd()).toBe(f.cwdB);
+		expect(continued.settings.getCwd()).toBe(f.cwdB);
+		expect(cfgTemperature.get(continued.settings)).toBe(0.8);
+		expect(continued.model).toMatchObject({ provider: f.savedModel.provider, id: f.savedModel.id });
+		expect(await readMarker(continued)).toContain("TARGET");
+		expect(await f.runtime.resume(f.context, f.targetInfo.id)).toBe(continued);
+		expect(f.session.agent).toBe(originalAgent);
+		expect(f.session.sessionManager).toBe(originalManager);
+		expect(f.session.sessionId).toBe(f.sourceInfo.id);
+		expect(f.settings.getCwd()).toBe(f.cwdA);
+		expect(cfgTemperature.get(f.settings)).toBe(0.2);
+		expect(await readMarker(f.session)).toContain("SOURCE");
+		expect(process.cwd()).toBe(processCwd);
+		const target = webGuiSessionProject(continued);
+		const targetContext: WebGuiServiceContext = {
+			...f.context,
+			projectId: target.projectId,
+			workspacePath: target.root,
+			nativeSession: continued,
+		};
+		await expect(
+			nativeChatRuntime(targetContext).submit(f.context, continued.sessionId, "Wrong project", "stale"),
+		).rejects.toThrow(/not resident/);
+		await expect(f.runtime.submit(targetContext, f.sourceInfo.id, "Wrong session", "cross-project")).rejects.toThrow(
+			/not resident/,
+		);
+		for (const cwd of [f.cwdA, f.cwdB]) await expect(acquireBrowserProject(cwd, "dev")).rejects.toThrow(/占用/);
+	} finally {
+		historySpy.mockRestore();
+		try {
+			await closeWebGuiNativeSessions();
+			await releaseWebGuiNativeProjects();
+		} finally {
+			await f.close();
+			enableWebGuiNativeSessions();
+		}
+	}
+});
+
 async function readMarker(session: NativeChatRuntime["session"]): Promise<string> {
 	const tool = session.getToolByName("read");
 	if (!tool) throw new Error("Missing real SDK read tool");
@@ -162,14 +234,16 @@ async function readMarker(session: NativeChatRuntime["session"]): Promise<string
 		.join("\n");
 }
 
-test("cross-project continuation rebinds actual tools/settings on the same native session and retains both leases until exit", async () => {
+test("explicit native workspace recovery rebinds tools/settings and retains both leases until exit", async () => {
 	using temp = TempDir.createSync("@pi-native-cwd-");
 	const f = await fixture(temp);
 	const processCwd = process.cwd();
 	const nativeAgent = f.session.agent;
 	try {
-		expect((await f.runtime.snapshot(f.context, f.targetInfo.id)).inputRouting).toEqual({ mode: "startNow" });
-		await f.runtime.resume(f.context, f.targetInfo.id);
+		await f.host.resume(f.targetInfo.path, f.cwdB, f.targetInfo.id, f.controller.signal, () => {
+			if (readBrowserProject(f.lease.projectId)?.nativeSession !== f.session)
+				throw new Error("Native fixture owner changed");
+		});
 		expect(f.session.model).toMatchObject({ provider: f.savedModel.provider, id: f.savedModel.id });
 		expect(f.session.agent).toBe(nativeAgent);
 		expect(f.session.sessionManager.getCwd()).toBe(f.cwdB);
@@ -180,7 +254,10 @@ test("cross-project continuation rebinds actual tools/settings on the same nativ
 		expect(readBrowserProject(f.lease.projectId)?.nativeSession).toBe(f.session);
 		await expect(acquireBrowserProject(f.cwdA, "dev")).rejects.toThrow(/占用/);
 		await expect(acquireBrowserProject(f.cwdB, "dev")).rejects.toThrow(/占用/);
-		await f.runtime.resume(f.context, f.sourceInfo.id);
+		await f.host.resume(f.sourceInfo.path, f.cwdA, f.sourceInfo.id, f.controller.signal, () => {
+			if (readBrowserProject(f.lease.projectId)?.nativeSession !== f.session)
+				throw new Error("Native fixture owner changed");
+		});
 		expect(f.session.model).toMatchObject({ provider: f.model.provider, id: f.model.id });
 		expect(cfgTemperature.get(f.settings)).toBe(0.2);
 		expect(await readMarker(f.session)).toContain("SOURCE");
@@ -195,12 +272,17 @@ test("cross-project continuation rebinds actual tools/settings on the same nativ
 	}
 });
 
-test("a target Dev lease rejects continuation before changing native tools or configuration", async () => {
+test("a target Dev lease rejects explicit workspace recovery before changing tools or configuration", async () => {
 	using temp = TempDir.createSync("@pi-native-cwd-conflict-");
 	const f = await fixture(temp);
 	const contender = await acquireBrowserProject(f.cwdB, "dev");
 	try {
-		await expect(f.runtime.resume(f.context, f.targetInfo.id)).rejects.toThrow(/占用/);
+		await expect(
+			f.host.resume(f.targetInfo.path, f.cwdB, f.targetInfo.id, f.controller.signal, () => {
+				if (readBrowserProject(f.lease.projectId)?.nativeSession !== f.session)
+					throw new Error("Native fixture owner changed");
+			}),
+		).rejects.toThrow(/占用/);
 		expect(f.session.sessionId).toBe(f.sourceInfo.id);
 		expect(f.settings.getCwd()).toBe(f.cwdA);
 		expect(cfgTemperature.get(f.settings)).toBe(0.2);
@@ -222,9 +304,12 @@ for (const failure of ["model", "cancel"] as const) {
 			if (failure === "cancel") f.controller.abort(new Error("Cancelled recovery"));
 		});
 		try {
-			await expect(f.runtime.resume(f.context, f.targetInfo.id)).rejects.toThrow(
-				failure === "model" ? /Could not restore model/ : /Cancelled recovery/,
-			);
+			await expect(
+				f.host.resume(f.targetInfo.path, f.cwdB, f.targetInfo.id, f.controller.signal, () => {
+					if (readBrowserProject(f.lease.projectId)?.nativeSession !== f.session)
+						throw new Error("Native fixture owner changed");
+				}),
+			).rejects.toThrow(failure === "model" ? /Could not restore model/ : /Cancelled recovery/);
 			expect(reachedTarget).toBe(true);
 			expect(f.session.sessionId).toBe(f.sourceInfo.id);
 			expect(f.session.sessionManager.getCwd()).toBe(f.cwdA);

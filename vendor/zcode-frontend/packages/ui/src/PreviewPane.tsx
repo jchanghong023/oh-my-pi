@@ -20,7 +20,8 @@ import { cn } from "@/components/lib/utils.js";
 import type { FileBinaryPreview, FileMediaPreview, FileTextSlice } from "@zcode/shared";
 import { TID_PREVIEW_PANE } from "@zcode/shared/test-ids";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
-import { usePptxFileWatch } from "@/hooks/usePptxFileWatch.js";
+import { usePreviewFileWatch } from "@/hooks/usePreviewFileWatch.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { usePdfViewerLabels, usePptxViewerLabels } from "@/hooks/usePreviewViewerLabels.js";
 import {
@@ -518,6 +519,7 @@ export function PreviewPane({
   markdownSelectionTarget?: MarkdownSelectionTarget;
 }) {
   const { intl } = useZCodeIntl();
+  const nativeHostAvailable = useNativeHostAvailable();
   const theme = useZCodeStore((state) => state.theme);
   const codePreviewSettings = useZCodeStore((state) => state.codePreviewSettings);
   const source = useMemo(
@@ -540,6 +542,15 @@ export function PreviewPane({
     source?.workspaceIdentity,
   );
   const sourceFilePath = source?.path;
+  const watchedFilePath = source &&
+    source.type !== "text" && source.type !== "patch" && source.type !== "multi-file-diff" &&
+    (nativeHostAvailable || source.type === "pptx" ||
+      (source.type === "file" && isPptxPreviewPath(source.path)))
+    ? source.path : null;
+  const { ready: previewFileWatchReady, reloadGeneration: previewReloadGeneration } = usePreviewFileWatch({
+    filePath: watchedFilePath,
+    fileWatcherService,
+  });
   const loadImageDownloadSource = useCallback(async () => {
     if (!sourceFilePath) throw new Error("Image source path is unavailable");
     // SVG 文本预览按 UTF-8 解码；下载必须从同一来源 Host 读取原字节，保留其他编码及 XML 声明。
@@ -599,10 +610,8 @@ export function PreviewPane({
   const showDocumentHeaderDivider = shouldShowPreviewPaneHeaderDivider(source);
   const pptxSourcePath = pptxSource?.path ?? null;
   const pptxReferenceNavigation = pptxSource?.referenceNavigation ?? null;
-  const { ready: pptxFileWatchReady, reloadGeneration: pptxReloadGeneration } = usePptxFileWatch({
-    filePath: pptxSourcePath,
-    fileWatcherService,
-  });
+  const pptxFileWatchReady = previewFileWatchReady;
+  const pptxReloadGeneration = previewReloadGeneration;
   const diffFilePreviewSource = useMemo(
     () =>
       source?.type === "patch" || source?.type === "multi-file-diff"
@@ -923,7 +932,7 @@ export function PreviewPane({
     return () => {
       disposed = true;
     };
-  }, [fileService, fileSource, intl]);
+  }, [fileService, fileSource, intl, previewReloadGeneration]);
 
   useEffect(() => {
     let disposed = false;
@@ -972,7 +981,7 @@ export function PreviewPane({
     return () => {
       disposed = true;
     };
-  }, [fileService, imageSource, intl]);
+  }, [fileService, imageSource, intl, previewReloadGeneration]);
 
   useEffect(() => {
     let disposed = false;
@@ -1065,7 +1074,7 @@ export function PreviewPane({
         void mediaPreviewService.release({ previewId: preparedPreviewId }).catch(() => undefined);
       }
     };
-  }, [intl, mediaPreviewService, mediaSource]);
+  }, [intl, mediaPreviewService, mediaSource, previewReloadGeneration]);
 
   const handleMediaError = useCallback(
     (event: SyntheticEvent<HTMLMediaElement>) => {
@@ -1227,7 +1236,7 @@ export function PreviewPane({
     return () => {
       disposed = true;
     };
-  }, [fileService, pdfSource, intl]);
+  }, [fileService, pdfSource, intl, previewReloadGeneration]);
 
   useEffect(() => {
     let disposed = false;
@@ -1279,7 +1288,7 @@ export function PreviewPane({
     return () => {
       disposed = true;
     };
-  }, [fileService, intl, officePreviewKind, source]);
+  }, [fileService, intl, officePreviewKind, source, previewReloadGeneration]);
 
   useEffect(() => {
     const navigation = pptxReferenceNavigation;

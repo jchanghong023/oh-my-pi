@@ -1,27 +1,24 @@
 /**
- * Process-global pause gate for agent loops.
+ * Cooperative pause gate for agent loops.
  *
- * Every agent in a process — main session, in-process subagents, advisor —
- * funnels through {@link ../agent-loop!agentLoop}, which polls this gate at its
- * two action boundaries: before each model call and before each tool call
- * starts. Engaging the gate therefore freezes all of them at the next safe
- * point without aborting anything: in-flight provider streams and
- * already-started tool executions run to completion, then every loop parks
- * until {@link AgentPauseGate.resume}. Queued steering/follow-up messages stay
- * queued and deliver normally after resume.
+ * Every agent loop polls its owning gate before each model call and tool
+ * execution. Engaging a gate freezes its agents at the next safe point without
+ * aborting anything: in-flight provider streams and already-started tools run
+ * to completion, then the loops park until {@link AgentPauseGate.resume}.
+ * Queued steering/follow-up messages remain queued until resume.
  *
- * A run's own `AbortSignal` still unwinds a parked loop immediately: the park
- * releases on abort (without releasing the gate), so cancelling one run never
- * requires resuming the whole process.
+ * A run's own `AbortSignal` releases only its wait without releasing the gate,
+ * so cancelling one run never resumes its siblings or another root.
  *
- * Hosts drive the singleton {@link agentPauseGate} (e.g. the TUI `/pause`
- * command); library code only ever reads it.
+ * By default agents share {@link agentPauseGate}, preserving process-wide TUI
+ * `/pause`. Hosts with independent roots provide one explicit gate per root
+ * and share it with that root's descendant, advisor, and capture agents.
  */
 
 /** Listener invoked with the new state on every pause/resume transition. */
 export type AgentPauseListener = (paused: boolean) => void;
 
-/** Freeze switch shared by every agent loop in the process. See module docs. */
+/** Freeze switch shared by an owning root's loops, or by the process default. */
 export class AgentPauseGate {
 	/** Pending while paused; resolved and cleared on resume. */
 	#gate: PromiseWithResolvers<void> | undefined;
@@ -69,7 +66,7 @@ export class AgentPauseGate {
 	/**
 	 * Park until the gate is released. Resolves immediately when not paused.
 	 * An abort on `signal` releases only this wait — the gate stays engaged —
-	 * so a cancelled run unwinds while the rest of the process stays frozen.
+	 * so a cancelled run unwinds while the gate's other agents stay frozen.
 	 */
 	async waitUntilResumed(signal?: AbortSignal): Promise<void> {
 		// Loop: resume() swaps the gate promise, so a pause re-engaged while a
@@ -103,5 +100,5 @@ export class AgentPauseGate {
 	}
 }
 
-/** The process-wide gate polled by the agent loop. */
+/** Default process-wide gate when no explicit owning gate is supplied. */
 export const agentPauseGate = new AgentPauseGate();

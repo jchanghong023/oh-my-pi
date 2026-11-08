@@ -9,7 +9,6 @@ import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "bun:
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
@@ -29,6 +28,7 @@ import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manage
 import { Container } from "@oh-my-pi/pi-tui";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { createInteractiveModeContext } from "./helpers/interactive-mode-context";
+import { getTestModel } from "./helpers/model-fixtures";
 
 type StubEditor = {
 	setText: (text: string) => void;
@@ -573,10 +573,9 @@ interface SessionFixture {
 async function createRealSession(): Promise<SessionFixture> {
 	const tempDir = TempDir.createSync("@pi-skill-queue-real-");
 	const authStorage = await AuthStorage.create(path.join(tempDir.path(), "testauth.db"));
-	authStorage.keys.setRuntime("anthropic", "test-key");
+	const model = getTestModel("ascend", candidate => candidate.input.includes("image"));
+	authStorage.keys.setRuntime(model.provider, "test-key");
 	const modelRegistry = new ModelRegistry(authStorage);
-	const model = getBundledModel("anthropic", "claude-sonnet-4-5");
-	if (!model) throw new Error("Expected built-in anthropic model to exist");
 
 	const agent = new Agent({
 		initialState: {

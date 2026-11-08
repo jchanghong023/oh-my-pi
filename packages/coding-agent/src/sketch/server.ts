@@ -23,38 +23,61 @@ const SECURITY_HEADERS = {
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
 };
 
-/** One capability-protected, loopback-only sketch session, ready on return. */
-export function startSketchServer(): SketchServer {
-	const path = `/sketch/${crypto.randomUUID()}/`;
+export interface SketchResource {
+	readonly path: string;
+	readonly result: Promise<Buffer | null>;
+	fetch(request: Request): Promise<Response>;
+	close(): void;
+}
+
+/** Canvas and PNG validation shared by terminal launch and the native in-process browser host. */
+export function createSketchResource(
+	options: {
+		path?: string;
+		origin?: () => string;
+		/** Browser hosts acknowledge only after the originating draft has received the real PNG. */
+		onSubmit?: (png: Buffer) => Promise<void>;
+	} = {},
+): SketchResource {
+	const path = options.path ?? `/sketch/${crypto.randomUUID()}/`;
 	const { promise, resolve } = Promise.withResolvers<Buffer | null>();
 	let settled = false;
-	let origin = "";
-
+	let completing = false;
 	function reply(message: string, status = 200): Response {
 		return new Response(message, {
 			status,
 			headers: { ...SECURITY_HEADERS, "content-type": "text/plain; charset=utf-8" },
 		});
 	}
-
-	function complete(value: Buffer | null): Response {
-		if (settled) return reply("Sketch session has ended.", 409);
-		settled = true;
-		// Graceful stop keeps this response alive, even if the result's consumer
-		// immediately calls close(). Never force-close an acknowledgement socket.
-		void server.stop(false);
-		resolve(value);
-		return reply("OK");
+	async function complete(value: Buffer | null): Promise<Response> {
+		if (settled || completing) return reply("Sketch session has ended or is being attached.", 409);
+		completing = true;
+		try {
+			if (value && options.onSubmit) await options.onSubmit(value);
+			settled = true;
+			resolve(value);
+			return reply("OK");
+		} catch (error) {
+			return reply(error instanceof Error ? error.message : "Sketch attachment failed.", 409);
+		} finally {
+			completing = false;
+		}
 	}
-
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		maxRequestBodySize: MAX_ENCODED_BYTES,
+	return {
+		path,
+		result: promise,
+		close() {
+			if (settled) return;
+			settled = true;
+			resolve(null);
+		},
 		async fetch(request) {
 			const url = new URL(request.url);
 			const requestOrigin = request.headers.get("origin");
-			if (url.origin !== origin || (requestOrigin !== null && requestOrigin !== origin)) {
+			if (
+				(options.origin && url.origin !== options.origin()) ||
+				(requestOrigin !== null && requestOrigin !== url.origin)
+			) {
 				return reply("Forbidden origin.", 403);
 			}
 			if (url.pathname !== path && url.pathname !== `${path}submit` && url.pathname !== `${path}cancel`) {
@@ -68,11 +91,9 @@ export function startSketchServer(): SketchServer {
 			}
 			if (request.method !== "POST" || url.pathname === path) return reply("Method not allowed.", 405);
 			if (url.pathname === `${path}cancel`) return complete(null);
-
 			const contentLength = request.headers.get("content-length");
-			if (contentLength !== null && Number(contentLength) > MAX_ENCODED_BYTES) {
+			if (contentLength !== null && Number(contentLength) > MAX_ENCODED_BYTES)
 				return reply("Image exceeds the attachment size limit.", 413);
-			}
 			let body: string;
 			try {
 				body = await request.text();
@@ -86,24 +107,39 @@ export function startSketchServer(): SketchServer {
 			if (bytes.byteLength > MAX_IMAGE_INPUT_BYTES) return reply("Image exceeds the attachment size limit.", 413);
 			if (parseImageMetadata(bytes)?.mimeType !== "image/png") return reply("Expected a PNG image.", 400);
 			try {
-				// Check the compressed image, not just its signature, without encoding
-				// another full-size copy. The original bytes become the attachment.
 				await new Bun.Image(bytes).resize(1, 1).png().bytes();
 			} catch {
 				return reply("PNG image could not be decoded.", 400);
 			}
 			return complete(bytes);
 		},
+	};
+}
+
+/** One capability-protected, loopback-only sketch session, ready on return. */
+export function startSketchServer(): SketchServer {
+	let origin = "";
+	const resource = createSketchResource({ origin: () => origin });
+	const server = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		maxRequestBodySize: MAX_ENCODED_BYTES,
+		fetch: request => resource.fetch(request),
 	});
 	origin = `http://127.0.0.1:${server.port}`;
-
+	// Keep the acknowledgement socket alive while the consumer receives the image.
+	let stopped = false;
+	void resource.result.then(() => {
+		stopped = true;
+		return server.stop(false);
+	});
 	return {
-		url: `${origin}${path}`,
-		result: promise,
+		url: `${origin}${resource.path}`,
+		result: resource.result,
 		close() {
-			if (settled) return;
-			settled = true;
-			resolve(null);
+			if (stopped) return;
+			stopped = true;
+			resource.close();
 			void server.stop(true);
 		},
 	};

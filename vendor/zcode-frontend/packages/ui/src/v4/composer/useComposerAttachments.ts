@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { registerImageComposerTarget } from "@/image-preview-editor/index.js";
 import { toast } from "@/components/ui/toast.js";
 import { nanoid } from "nanoid";
-import type { AttachmentRef } from "@zcode/shared/zcode-protocol-v4";
+import { PROTOCOL_V4_LIMITS, type AttachmentRef } from "@zcode/shared/zcode-protocol-v4";
 import { WORKSPACE_FILE_DRAG_MIME } from "@/lib/workspaceFileDrag.js";
 import {
   MAX_CHAT_ATTACHMENTS,
@@ -43,7 +43,7 @@ import {
   type ComposerAttachmentUploadItem,
   type ComposerAttachmentUploadStatus,
 } from "@/store/composerAttachmentUploadStore.js";
-import { uploadComposerAttachment, type AttachmentPutFn } from "@/v4/composer/attachmentUpload.js";
+import { readComposerFileBase64, uploadComposerAttachment, type AttachmentPutFn } from "@/v4/composer/attachmentUpload.js";
 
 export const COMPOSER_ATTACHMENT_UPLOAD_CONCURRENCY = 2;
 export const COMPOSER_ATTACHMENT_AUTO_RETRY_DELAY_MS = 500;
@@ -67,6 +67,8 @@ interface UploadTarget {
   remoteSessionId?: string;
   attachmentPut: AttachmentPutFn;
   transferService: IPromptAttachmentTransferService;
+  stageBrowserFiles: boolean;
+  ensureSessionId?: () => Promise<string>;
 }
 
 interface UploadQueueEntry {
@@ -113,6 +115,9 @@ export interface UseComposerAttachmentsOptions {
   scopeId: string;
   attachmentSessionId?: string | null;
   attachmentPut: AttachmentPutFn;
+  /** Native WebGUI stages real browser bytes in the selected session. */
+  stageBrowserFiles?: boolean;
+  ensureSessionId?: () => Promise<string>;
   onRuntimeRestart?: (listener: () => void) => () => void;
   /**
    * 承载 transport 暴露 runtime 存活态时优先用它，替代 onRuntimeRestart。
@@ -200,6 +205,8 @@ export function useComposerAttachments(
     scopeId,
     attachmentSessionId = null,
     attachmentPut,
+    stageBrowserFiles = false,
+    ensureSessionId,
     onRuntimeRestart,
     onRuntimeLifecycle,
     disabled = false,
@@ -239,6 +246,8 @@ export function useComposerAttachments(
     remoteSessionId,
     attachmentPut,
     transferService: promptAttachmentTransferService,
+    stageBrowserFiles,
+    ensureSessionId,
   });
 
   const commitScope = useCallback(
@@ -316,7 +325,41 @@ export function useComposerAttachments(
         const item = readComposerAttachmentScope(targetScopeKey).find(
           (candidate) => candidate.id === attachmentId,
         );
-        if (!item || !target.sessionId) return;
+        if (!item) return;
+        if (target.stageBrowserFiles && item.file && item.file.size > PROTOCOL_V4_LIMITS.attachmentMaxBytes)
+          throw new Error(`Attachment exceeds ${formatAttachmentSize(PROTOCOL_V4_LIMITS.attachmentMaxBytes)}: ${item.filename}`);
+        if (!target.sessionId && target.ensureSessionId)
+          target = { ...target, sessionId: await target.ensureSessionId() };
+        if (!target.sessionId || controllersRef.current.get(controllerKey) !== controller) return;
+        if (target.stageBrowserFiles) {
+          if (!item.file) throw new Error(`Attachment bytes are unavailable: ${item.filename}`);
+          const bytesBase64 = await readComposerFileBase64(item.file, controller.signal);
+          if (controllersRef.current.get(controllerKey) !== controller) return;
+          const result = await target.transferService.stage({
+            operationId: item.operationId,
+            sessionId: target.sessionId,
+            workspacePath: target.workspacePath,
+            ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
+            ...(target.remoteSessionId ? { remoteSessionId: target.remoteSessionId } : {}),
+            localPath: "",
+            bytesBase64,
+            fileName: item.filename,
+            mime: item.mimeType,
+            sizeBytes: item.sizeBytes,
+          });
+          if (controllersRef.current.get(controllerKey) !== controller) return;
+          if (!result.staged) throw new Error("The native host did not stage the attachment");
+          finishWithReady(targetScopeKey, attachmentId, {
+            ref: result.ref,
+            fileName: item.filename,
+            mime: item.mimeType,
+            bytes: result.bytes,
+            ...(item.sourceKind
+              ? { sourceKind: item.sourceKind, messageCount: item.messageCount }
+              : {}),
+          }, true);
+          return;
+        }
         if (item.localPath && isRemoteAttachmentTarget(target)) {
           if (!target.remoteSessionId) {
             updateItem(targetScopeKey, attachmentId, (current) => ({
@@ -494,7 +537,7 @@ export function useComposerAttachments(
       const waitingForRemoteSession = Boolean(
         target && item.localPath && isRemoteAttachmentTarget(target) && !target.remoteSessionId,
       );
-      if (!target?.sessionId || waitingForRemoteSession) {
+      if ((!target?.sessionId && !target?.ensureSessionId) || waitingForRemoteSession) {
         updateItem(entry.scopeKey, entry.attachmentId, (current) => ({
           ...current,
           uploadStatus: "waitingSession",
@@ -649,13 +692,13 @@ export function useComposerAttachments(
       const items: ComposerAttachmentUploadItem[] = accepted.map((attachment) => {
         // 远端 identity 往往早于 remoteSessionId 注入；这段窗口不能退化为本地路径直读。
         const localZeroCopy = Boolean(
-          attachment.localPath && target && !isRemoteAttachmentTarget(target),
+          attachment.localPath && target && !target.stageBrowserFiles && !isRemoteAttachmentTarget(target),
         );
         return {
           ...attachment,
           referenceOwnership: "composer",
           operationId: `prompt-attachment-${attachment.id}`,
-          uploadStatus: localZeroCopy ? "ready" : target?.sessionId ? "queued" : "waitingSession",
+          uploadStatus: localZeroCopy ? "ready" : target?.sessionId || target?.ensureSessionId ? "queued" : "waitingSession",
           uploadProgress: localZeroCopy ? 100 : 0,
           ...(localZeroCopy && attachment.localPath
             ? {
@@ -725,7 +768,7 @@ export function useComposerAttachments(
       showAttachmentLimitWarning();
       return;
     }
-    if (!platform.canSelectFilePath) {
+    if (stageBrowserFiles || !platform.canSelectFilePath) {
       attachmentInputRef.current?.click();
       return;
     }
@@ -740,7 +783,7 @@ export function useComposerAttachments(
           ),
         );
       });
-  }, [addAttachmentLocalPaths, intl, platform, scopeKey, showAttachmentLimitWarning]);
+  }, [addAttachmentLocalPaths, intl, platform, scopeKey, showAttachmentLimitWarning, stageBrowserFiles]);
 
   const handleAttachmentInputChange = useCallback(
     (event: React.ChangeEvent<HTMLInputElement>) => {

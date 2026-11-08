@@ -21,7 +21,7 @@ export interface WorkspaceFileSearchParams {
 export interface IFileService {
   /** Host 匹配并返回有界候选，避免 Renderer 下载完整文件索引。 */
   searchWorkspaceFiles(params: WorkspaceFileSearchParams): Promise<WorkspaceFileEntry[]>;
-  readdir(params: { path: string; includeHidden?: boolean }): Promise<FileEntry[]>;
+  readdir(params: { path: string; includeHidden?: boolean; directoriesOnly?: boolean }): Promise<FileEntry[]>;
   stat(params: { path: string }): Promise<FileStat>;
   checkFilesExist(params: { paths: string[] }): Promise<Array<{ path: string; exists: boolean }>>;
   resolvePath(params: { path: string }): Promise<string>;

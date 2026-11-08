@@ -13,6 +13,7 @@ import {
   useSourceSettingsServices,
 } from "@/store/sourceSettingsServiceStore.js";
 import { logger } from "@/logger.js";
+import { useNativeHostAvailable, useNativeWorkspaceSession } from "@/hooks/useBackendBusinessAvailability.js";
 
 /** 配置专用解析；不改变 conversation 的 workspace attachment / replay 边界。 */
 export function useConfigWorkspaceServicesResolution(
@@ -96,14 +97,22 @@ export function useConfigWorkspaceServicesResolution(
 export function useConfigWorkspaceReadCatalogResolution(
   ...args: Parameters<typeof useWorkspaceServicesResolution>
 ) {
-  const workspace = useConfigWorkspaceServicesResolution(...args);
+  const nativeHostAvailable = useNativeHostAvailable();
+  const nativeScope = useNativeWorkspaceSession();
+  const workspace = useConfigWorkspaceServicesResolution(
+    nativeHostAvailable && nativeScope ? nativeScope.workspacePath : args[0],
+    args[1], args[2], args[3], args[4],
+  );
   const parsed = args[2] && parseRemoteWorkspaceIdentity(args[2]);
   const sourceId = parsed && parsed.kind === "server" ? parsed.sourceServerId : undefined;
   const sourceServices = useSourceSettingsServices(sourceId);
   const readServices = !workspace.rpcReady && sourceServices ? sourceServices : workspace.services;
   const catalog = useModelSelectionServiceView(
     readServices.modelSelectionService,
-    workspace.rpcReady || Boolean(sourceServices),
+    (workspace.rpcReady || Boolean(sourceServices)) &&
+      (!nativeHostAvailable || (nativeScope?.ready === true && Boolean(nativeScope.sessionId))),
+    "remote-waiting",
+    nativeHostAvailable && nativeScope?.sessionId ? { sessionId: nativeScope.sessionId } : undefined,
   );
   const view = catalog.state.status === "ready" ? catalog.state.view : undefined;
   const native = view?.nativeSession;
@@ -115,7 +124,7 @@ export function useConfigWorkspaceReadCatalogResolution(
     services: view?.nativeSession !== undefined ? readServices : workspace.services,
     catalog,
     catalogError,
-    nativeCatalog: view?.nativeSession !== undefined,
+    nativeCatalog: nativeHostAvailable || view?.nativeSession !== undefined,
     nativeSession: native,
     catalogReady: Boolean(view && !catalogError && (view.nativeSession === undefined
       ? workspace.rpcReady

@@ -35,6 +35,7 @@ import type {
 	SlashCommandRuntime,
 	SlashCommandSpec,
 	TuiSlashCommandRuntime,
+	WebGuiSlashCommandRuntime,
 } from "./types";
 
 export type { BuiltinSlashCommand, SubcommandDef } from "./types";
@@ -219,6 +220,27 @@ export async function executeBuiltinSlashCommand(
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */
 export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | undefined {
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
+}
+
+/** Execute the canonical registry with browser-native host and interaction capabilities. */
+export async function executeWebGuiBuiltinSlashCommand(
+	text: string,
+	runtime: WebGuiSlashCommandRuntime,
+): Promise<SlashCommandResult | false> {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return false;
+	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
+	if (!command) return false;
+	if (parsed.args.length > 0 && !(command.acpAllowArgs ?? command.allowArgs)) {
+		throw new Error(`/${command.name} does not accept arguments`);
+	}
+	if (runtime.isCollabGuest && !COLLAB_GUEST_ALLOWED_COMMANDS[command.name]) {
+		throw new Error(`/${command.name} is host-only during a collab session`);
+	}
+	const handler = command.handleWebGui ?? command.handleRpc ?? command.handle;
+	if (!handler) throw new Error(`Native browser host has no /${command.name} operation`);
+	const result = await handler({ ...parsed, name: command.name }, runtime);
+	return result ?? { consumed: true };
 }
 
 export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };

@@ -1097,7 +1097,7 @@ const zhCN: Record<string, string> = {
   "chat.toolbar.model.loadFailedRetry": "模型加载失败，重试",
   "chat.toolbar.model.remoteWaiting": "等待远程模型",
   "chat.toolbar.model.targetMissing": "暂无模型目标",
-  "chat.toolbar.model.nativeUnbound": "尚未绑定 OMP 原生会话。请从运行中的 OMP 会话打开 Web UI 后选择模型。",
+  "chat.toolbar.model.nativeUnbound": "尚未创建 OMP 原生会话。请新建会话或直接发送首条消息，创建后可选择模型。",
   "chat.toolbar.model.nativeEmpty": "当前 OMP 会话暂无可用模型。",
   "settings.subagents.modelLoadFailed": "模型列表加载失败。",
   "root.modelSelection.loadFailed": "模型配置加载失败。",

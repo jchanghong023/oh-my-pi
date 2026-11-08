@@ -431,6 +431,9 @@ export interface InteractiveModeContext {
 
 	// Extension UI integration
 	setToolUIContext(uiContext: ExtensionUIContext, hasUI: boolean): void;
+	/** Check browser override ownership without changing the enriched TUI tool context. */
+	ownsToolUIContext?(uiContext: ExtensionUIContext): boolean;
+	initializeWebGuiNativeHost?(): void;
 	initializeHookRunner(uiContext: ExtensionUIContext, hasUI: boolean): void;
 	/** Stack extension autocomplete behavior on top of the built-in editor provider. */
 	addAutocompleteProvider(factory: AutocompleteProviderFactory): void;

@@ -6,7 +6,7 @@ import { logger } from "@/logger.js";
 import { getContainingDirectoryPath } from "@/lib/path.js";
 import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
-interface PptxFileWatchSnapshot {
+interface PreviewFileWatchSnapshot {
   filePath: string | null;
   fileWatcherService: IFileWatcherService | null;
   ready: boolean;
@@ -20,20 +20,19 @@ function normalizeFileWatchPathForCompare(path: string): string {
     : normalized;
 }
 
-export function shouldReloadPptxPreviewForWatchEvent(
+export function shouldReloadPreviewForWatchEvent(
   event: FileWatchEvent,
   filePath: string,
 ): boolean {
   if (!event.changedPath) {
     return true;
   }
-  return (
-    normalizeFileWatchPathForCompare(event.changedPath) ===
-    normalizeFileWatchPathForCompare(filePath)
-  );
+  const changedPath = normalizeFileWatchPathForCompare(event.changedPath);
+  const targetPath = normalizeFileWatchPathForCompare(filePath);
+  return changedPath === targetPath || targetPath.startsWith(`${changedPath}/`);
 }
 
-export function usePptxFileWatch({
+export function usePreviewFileWatch({
   filePath,
   fileWatcherService,
 }: {
@@ -41,7 +40,7 @@ export function usePptxFileWatch({
   fileWatcherService: IFileWatcherService;
 }): { ready: boolean; reloadGeneration: number } {
   const watchingAvailable = useFileWatchingAvailable(fileWatcherService, Boolean(filePath));
-  const [snapshot, setSnapshot] = useState<PptxFileWatchSnapshot>({
+  const [snapshot, setSnapshot] = useState<PreviewFileWatchSnapshot>({
     filePath: null,
     fileWatcherService: null,
     ready: false,
@@ -82,16 +81,18 @@ export function usePptxFileWatch({
       .watch({ path: directoryPath })
       .then(({ id }) => {
         if (cancelled) {
-          void fileWatcherService.unwatch({ id });
+          void fileWatcherService.unwatch({ id }).catch((error: unknown) => {
+            logger.warn("[PreviewFileWatch] Failed to release superseded watcher", { filePath, error });
+          });
           return;
         }
         watcherId = id;
         subscription = fileWatcherService.onDynamicChange(id)((event) => {
           if (cancelled) return;
-          if (!shouldReloadPptxPreviewForWatchEvent(event, filePath)) {
+          if (!shouldReloadPreviewForWatchEvent(event, filePath)) {
             return;
           }
-          logger.debug("[PptxFileWatch] 源文件发生变化，刷新已打开预览", {
+          logger.debug("[PreviewFileWatch] 源文件发生变化，刷新已打开预览", {
             path: filePath,
             changedPath: event.changedPath,
           });
@@ -109,7 +110,7 @@ export function usePptxFileWatch({
         setSnapshot((current) =>
           current.filePath === filePath &&
           current.fileWatcherService === fileWatcherService
-            ? { ...current, ready: true }
+            ? { ...current, ready: true, reloadGeneration: current.reloadGeneration + 1 }
             : current,
         );
       })
@@ -118,7 +119,7 @@ export function usePptxFileWatch({
           return;
         }
         // 文件监听只负责自动刷新；注册失败时仍允许首次读取和手动重新打开文件。
-        logger.warn("[PptxFileWatch] 监听 PPTX 所在目录失败", {
+        logger.warn("[PreviewFileWatch] 监听预览文件所在目录失败", {
           path: filePath,
           directoryPath,
           error: error instanceof Error ? error.message : String(error),
@@ -138,7 +139,7 @@ export function usePptxFileWatch({
         void fileWatcherService
           .unwatch({ id: watcherId })
           .catch((error: unknown) => {
-            logger.warn("[PptxFileWatch] 停止监听 PPTX 所在目录失败", {
+            logger.warn("[PreviewFileWatch] 停止监听预览文件所在目录失败", {
               path: filePath,
               error: error instanceof Error ? error.message : String(error),
             });

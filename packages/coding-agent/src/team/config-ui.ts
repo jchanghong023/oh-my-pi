@@ -1,6 +1,7 @@
 import { type Component, type OverlayHandle, matchesKey, wrapLiteralLine } from "@oh-my-pi/pi-tui";
 import { getActiveProfile, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { InteractiveModeContext } from "../modes/types";
+import type { SlashCommandResult, WebGuiSlashCommandRuntime } from "../slash-commands/types";
 import { TeamConfigError, TeamConfigService } from "./config";
 import type { TeamConfigSnapshot, TeamMemberSlot, TeamModelRef } from "./config-types";
 import { cfgTeamMembers } from "./settings";
@@ -17,6 +18,189 @@ function printable(value: unknown): string {
 /** Configuration only: never dispatches a model call or mutates the session model. */
 export function showTeamConfig(ctx: InteractiveModeContext): void {
 	new TeamConfigPanel(ctx).open();
+}
+
+/** Browser dialogs edit the same ordered draft and revision-checked user setting as the TUI panel. */
+export async function showWebGuiTeamConfig(runtime: WebGuiSlashCommandRuntime): Promise<SlashCommandResult> {
+	const { session, settings, sessionManager, cwd } = runtime;
+	const sessionId = session.sessionId;
+	const registry = session.modelRegistry;
+	const current = (): boolean =>
+		!runtime.signal?.aborted &&
+		!session.isDisposed &&
+		session.sessionId === sessionId &&
+		session.settings === settings &&
+		session.modelRegistry === registry &&
+		sessionManager.getCwd() === cwd;
+	const assertCurrent = (): void => {
+		runtime.signal?.throwIfAborted();
+		if (!current()) throw new Error("The initiating Team configuration context is no longer current");
+	};
+	const service = new TeamConfigService({
+		getSettings: () => settings,
+		getModelRegistry: () => registry,
+		isCurrent: current,
+	});
+	const adopt = (config: TeamConfigSnapshot): DraftMember[] | null =>
+		config.userMembers?.map(slot => (slot.model ? { ...slot.model } : { rawSelector: slot.rawSelector })) ?? null;
+	const label = (member: DraftMember): string =>
+		"rawSelector" in member ? member.rawSelector : `${member.provider}/${member.modelId}`;
+	const cancel = async (): Promise<SlashCommandResult> => {
+		await runtime.output("Team 配置已取消；未提交保存，不发起讨论。");
+		return { consumed: true };
+	};
+	try {
+		assertCurrent();
+		let snapshot = await service.getConfig();
+		assertCurrent();
+		let draft = adopt(snapshot);
+		let revision = snapshot.revision;
+		let generation = 0;
+		for (;;) {
+			assertCurrent();
+			snapshot = await service.getConfig({ clientRevision: String(++generation), members: draft });
+			assertCurrent();
+			const preview = snapshot.preview!;
+			await runtime.output(
+				[
+					`Team 用户配置：${settings.getAgentDir()}（有效来源：${snapshot.source ?? "env"}）`,
+					`已保存：${snapshot.userMembers === undefined ? "读取失败" : snapshot.userMembers === null ? "继承默认" : snapshot.userMembers.map(slot => slot.rawSelector).join(" → ") || "空列表"}`,
+					`有序草稿：${draft === null ? "继承默认" : draft.map(label).join(" → ") || "空列表"}`,
+					`有效预览：${preview.effectiveMembers === null ? "配置不可用" : preview.effectiveMembers.map(slot => slot.rawSelector).join(" → ") || "当前会话模型"}`,
+					preview.participants.length
+						? `独立规划槽位：${preview.participants.map(slot => `${slot.label}: ${slot.model.provider}/${slot.model.modelId}`).join(" → ")}`
+						: preview.effectiveMembers?.length === 0
+							? "未配置或空列表时使用当前会话模型；至少三个独立规划槽位，重复模型仍为独立代理。"
+							: "有效槽位不可用；讨论会按原生预检拒绝，不跳过无效模型。",
+					...snapshot.issues.map(issue => `${issue.code}：${issue.message}`),
+					...preview.issues.map(issue => `${issue.code}：${issue.message}`),
+					...(revision !== snapshot.revision ? ["外部版本已改变；草稿保留，请重读比较后保存。"] : []),
+				].join("\n"),
+			);
+			const action = await runtime.ui.select("Team configure（不调用模型）", [
+				"添加模型槽位",
+				...(draft?.length ? ["编辑或移动槽位"] : []),
+				"清空为当前会话模型",
+				"删除用户覆盖（继承）",
+				"重读配置",
+				"保存",
+				"取消",
+			]);
+			assertCurrent();
+			if (action === undefined || action === "取消") return cancel();
+			if (action === "重读配置") {
+				const fresh = await service.getConfig();
+				assertCurrent();
+				const discard = await runtime.ui.confirm(
+					"重读 Team 配置",
+					"放弃当前草稿并采用最新用户值？选择否保留草稿，仅采用新版本供比较。",
+				);
+				assertCurrent();
+				if (discard) draft = adopt(fresh);
+				revision = fresh.revision;
+				continue;
+			}
+			if (action === "清空为当前会话模型") {
+				draft = [];
+				continue;
+			}
+			if (action === "删除用户覆盖（继承）") {
+				draft = null;
+				continue;
+			}
+			if (action === "保存") {
+				if (!revision || !snapshot.writableScopes.includes("user")) {
+					throw new TeamConfigError("execution_failed", "当前配置不可安全写入，请先修复读取问题并重读。");
+				}
+				if (revision !== snapshot.revision) {
+					await runtime.output("revision_conflict：外部版本已改变；草稿保留，请重读比较后保存。");
+					continue;
+				}
+				if (draft?.some(member => "rawSelector" in member)) {
+					await runtime.output("旧槽位尚未解析：请替换或删除后保存。");
+					continue;
+				}
+				if (
+					!(await runtime.ui.confirm("保存 Team 配置", "保存有序草稿到此原生配置的用户设置？此操作不调用模型。"))
+				) {
+					assertCurrent();
+					continue;
+				}
+				assertCurrent();
+				const members =
+					draft === null
+						? null
+						: draft.flatMap(member =>
+								"rawSelector" in member ? [] : [{ provider: member.provider, modelId: member.modelId }],
+							);
+				const result = await service.setConfig({ scope: "user", expectedRevision: revision, members });
+				await runtime.output(
+					`${result.saveState}：${result.effectiveMatchesRequested ? "保存且生效" : "已保存但有效值受高层覆盖"}；${printable(result.write)} ${result.effectiveNote ?? ""}`,
+				);
+				return { consumed: true };
+			}
+			let index: number | undefined;
+			if (action === "编辑或移动槽位" && draft?.length) {
+				const labels = draft.map((member, slot) => `${slot + 1}. ${label(member)}`);
+				const selected = await runtime.ui.select("选择有序槽位", labels);
+				assertCurrent();
+				if (selected === undefined) continue;
+				index = labels.indexOf(selected);
+				if (index < 0) continue;
+				const operation = await runtime.ui.select(`槽位 ${index + 1}`, [
+					"替换模型",
+					"删除槽位",
+					...(index > 0 ? ["上移"] : []),
+					...(index + 1 < draft.length ? ["下移"] : []),
+				]);
+				assertCurrent();
+				if (operation === undefined) continue;
+				if (operation === "删除槽位") {
+					draft.splice(index, 1);
+					continue;
+				}
+				if (operation === "上移" || operation === "下移") {
+					const target = index + (operation === "上移" ? -1 : 1);
+					[draft[index], draft[target]] = [draft[target]!, draft[index]!];
+					continue;
+				}
+			}
+			if (action !== "添加模型槽位" && index === undefined) continue;
+			const query = await runtime.ui.input("搜索 Team 模型（留空显示全部）", "provider / model / name");
+			assertCurrent();
+			if (query === undefined) continue;
+			const models = service.getModels(query).models;
+			const selectable = models.filter(model => model.selectable);
+			if (!selectable.length) {
+				await runtime.output(
+					[
+						"没有可选 Team 模型。",
+						...models.map(model => `${model.model.provider}/${model.model.modelId}：${model.reason ?? "不可用"}`),
+					].join("\n"),
+				);
+				continue;
+			}
+			const options = selectable.map(model => ({
+				label: `${model.model.provider}/${model.model.modelId}`,
+				description: model.name,
+			}));
+			const selected = await runtime.ui.select("选择 Team 模型（重复模型保留为独立槽位）", options);
+			assertCurrent();
+			if (selected === undefined) continue;
+			const model = selectable[options.findIndex(option => option.label === selected)]?.model;
+			if (!model) continue;
+			draft ??= [];
+			if (index === undefined) draft.push(model);
+			else draft[index] = model;
+		}
+	} catch (error) {
+		await runtime.output(
+			error instanceof TeamConfigError
+				? `${error.code}：${error.message}${error.data ? `；${printable(error.data)}` : ""}`
+				: printable(error instanceof Error ? error.message : error),
+		);
+		return { consumed: true, failed: true };
+	}
 }
 
 class TeamConfigPanel implements Component {

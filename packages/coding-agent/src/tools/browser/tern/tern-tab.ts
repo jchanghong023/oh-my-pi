@@ -541,26 +541,36 @@ export class TernTab implements InProcessRunTab {
 	/**
 	 * Close omp's PiP (its page goes), or release an adopted block: Tern stops
 	 * driving it and resets what omp set, the user's page stays. A Tern without
-	 * `release` (answers `invalid`) only gets omp's scripts cleared, best-effort.
-	 * A block already gone is no error.
+	 * `release` (answers `invalid`) only gets omp's scripts cleared, best-effort
+	 * unless strict cleanup was requested. A block already gone is no error;
+	 * strict cleanup requires a native acknowledgement, not a closed transport.
 	 */
-	async close(opts: { timeoutMs: number }): Promise<void> {
-		await this.#recording.close().catch(error => {
-			logger.warn("Failed to finalize a Tern browser recording during close", {
-				error: error instanceof Error ? error.message : String(error),
+	async close(opts: { timeoutMs: number; strict?: boolean }): Promise<void> {
+		if (opts.strict) {
+			await this.#recording.close({ strict: true });
+		} else {
+			await this.#recording.close().catch(error => {
+				if (opts.strict) throw error;
+				logger.warn("Failed to finalize a Tern browser recording during close", {
+					error: error instanceof Error ? error.message : String(error),
+				});
 			});
-		});
+		}
 		try {
 			await this.#client.request(
 				{ op: this.adopted ? "release" : "close", block: this.block },
 				{ timeoutMs: opts.timeoutMs },
 			);
 		} catch (error) {
-			if (error instanceof TernError && (error.kind === "not_found" || error.kind === "closed")) return;
+			if (error instanceof TernError && (error.kind === "not_found" || (!opts.strict && error.kind === "closed")))
+				return;
 			if (!(this.adopted && error instanceof TernError && error.kind === "invalid")) throw error;
 			await this.#client
 				.request({ op: "scripts", block: this.block, scripts: [] }, { timeoutMs: opts.timeoutMs })
-				.catch(() => undefined);
+				.catch(cleanupError => {
+					if (opts.strict && !(cleanupError instanceof TernError && cleanupError.kind === "not_found"))
+						throw cleanupError;
+				});
 		}
 	}
 
@@ -2693,6 +2703,7 @@ export class TernTab implements InProcessRunTab {
 	#recordingSource(): RecordingFrameSource {
 		let active = false;
 		let loop: Promise<void> | undefined;
+		let cursorScriptsRemoved = false;
 		const tab = this;
 		const capture = async (quality: number): Promise<Uint8Array> =>
 			await tab.captureBytes({ format: "jpeg", quality: Math.max(1, Math.min(100, Math.round(quality))) });
@@ -2731,14 +2742,41 @@ export class TernTab implements InProcessRunTab {
 			},
 			captureFrame: async quality => await capture(quality),
 			installCursor: async () => {
+				cursorScriptsRemoved = false;
 				tab.#cursorOverlay = true;
 				await tab.#syncScripts();
 				await tab.#eval(installCursorOverlay.toString(), [], "page", null).catch(() => undefined);
 			},
-			removeCursor: async () => {
+			removeCursor: async options => {
 				tab.#cursorOverlay = false;
-				await tab.#syncScripts().catch(() => undefined);
-				await tab.#eval(removeCursorOverlay.toString(), [], "page", null).catch(() => undefined);
+				if (!options?.strict) {
+					await tab.#syncScripts().catch(() => undefined);
+					await tab.#eval(removeCursorOverlay.toString(), [], "page", null).catch(() => undefined);
+					return;
+				}
+				// Teardown must not inherit the completed run's cancellation signal.
+				const timeoutMs = resolveOpTimeouts(tab.#cellMs).budgetBound;
+				try {
+					if (!cursorScriptsRemoved) {
+						await tab.#client.request(
+							{ op: "scripts", block: tab.block, scripts: tab.#scripts() },
+							{ timeoutMs },
+						);
+						cursorScriptsRemoved = true;
+					}
+					await tab.#client.request(
+						{
+							op: "eval",
+							block: tab.block,
+							function: removeCursorOverlay.toString(),
+							args: [],
+							world: "page",
+						},
+						{ timeoutMs },
+					);
+				} catch (error) {
+					if (!(error instanceof TernError && error.kind === "not_found")) throw error;
+				}
 			},
 		};
 	}

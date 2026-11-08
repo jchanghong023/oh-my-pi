@@ -12,6 +12,8 @@ interface ParsedSshAddArgs {
 	username?: string;
 	port?: number;
 	keyPath?: string;
+	description?: string;
+	compat?: boolean;
 	error?: string;
 }
 
@@ -19,6 +21,8 @@ type SshAddOptionParser = (parsed: ParsedSshAddArgs, value: string | undefined) 
 
 const SSH_ADD_USAGE =
 	"Usage: /ssh add <name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>] [--scope project|user]";
+const SSH_NATIVE_ADD_USAGE =
+	"Usage: /ssh add <name> --host <host> [--user <user>] [--port <port>] [--key <keyPath>] [--desc <description>] [--compat] [--scope project|user]";
 
 const SSH_ADD_OPTION_PARSERS = new Map<string, SshAddOptionParser>([
 	[
@@ -64,6 +68,14 @@ const SSH_ADD_OPTION_PARSERS = new Map<string, SshAddOptionParser>([
 		},
 	],
 	[
+		"--desc",
+		(parsed, value) => {
+			if (!value) return "Missing value for --desc.";
+			parsed.description = value;
+			return undefined;
+		},
+	],
+	[
 		"--scope",
 		(parsed, value) => {
 			if (!value || (value !== "project" && value !== "user")) return "Invalid --scope value. Use project or user.";
@@ -73,7 +85,7 @@ const SSH_ADD_OPTION_PARSERS = new Map<string, SshAddOptionParser>([
 	],
 ]);
 
-function parseSshAddArgs(rest: string): ParsedSshAddArgs {
+function parseSshAddArgs(rest: string, nativeTuiOptions: boolean): ParsedSshAddArgs {
 	const tokens = parseCommandArgs(rest);
 	const parsed: ParsedSshAddArgs = { scope: "project" };
 	let index = 0;
@@ -83,6 +95,13 @@ function parseSshAddArgs(rest: string): ParsedSshAddArgs {
 	}
 	while (index < tokens.length) {
 		const arg = tokens[index]!;
+		if (!nativeTuiOptions && (arg === "--desc" || arg === "--compat"))
+			return { ...parsed, error: `Unknown option: ${arg}` };
+		if (arg === "--compat") {
+			parsed.compat = true;
+			index++;
+			continue;
+		}
 		const parser = SSH_ADD_OPTION_PARSERS.get(arg);
 		if (!parser) return { ...parsed, error: `Unknown option: ${arg}` };
 		const error = parser(parsed, tokens[index + 1]);
@@ -151,9 +170,13 @@ async function handleRemoveCommand(rest: string, runtime: SlashCommandRuntime): 
 	}
 }
 
-async function handleAddCommand(rest: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
-	if (!rest) return usage(SSH_ADD_USAGE, runtime);
-	const parsed = parseSshAddArgs(rest);
+async function handleAddCommand(
+	rest: string,
+	runtime: SlashCommandRuntime,
+	nativeTuiOptions: boolean,
+): Promise<SlashCommandResult> {
+	if (!rest) return usage(nativeTuiOptions ? SSH_NATIVE_ADD_USAGE : SSH_ADD_USAGE, runtime);
+	const parsed = parseSshAddArgs(rest, nativeTuiOptions);
 	if (parsed.error) return usage(parsed.error, runtime);
 	if (!parsed.name) return usage("Host name required. Usage: /ssh add <name> --host <host> ...", runtime);
 	if (!parsed.host) return usage("--host is required. Usage: /ssh add <name> --host <host> ...", runtime);
@@ -161,6 +184,8 @@ async function handleAddCommand(rest: string, runtime: SlashCommandRuntime): Pro
 	if (parsed.username) hostConfig.username = parsed.username;
 	if (parsed.port) hostConfig.port = parsed.port;
 	if (parsed.keyPath) hostConfig.keyPath = parsed.keyPath;
+	if (parsed.description) hostConfig.description = parsed.description;
+	if (parsed.compat) hostConfig.compat = true;
 	try {
 		const filePath = getSSHConfigPath(parsed.scope, runtime.cwd);
 		await addSSHHost(filePath, parsed.name, hostConfig);
@@ -176,10 +201,15 @@ async function handleAddCommand(rest: string, runtime: SlashCommandRuntime): Pro
 export async function handleSshAcp(
 	command: ParsedSlashCommand,
 	runtime: SlashCommandRuntime,
+	options?: { nativeTuiOptions?: boolean },
 ): Promise<SlashCommandResult> {
 	const { verb, rest } = parseSubcommand(command.args);
 	if (!verb || verb === "help") {
-		await runtime.output(SSH_HELP_TEXT);
+		await runtime.output(
+			options?.nativeTuiOptions
+				? SSH_HELP_TEXT.replace(SSH_ADD_USAGE.slice("Usage: ".length), SSH_NATIVE_ADD_USAGE.slice("Usage: ".length))
+				: SSH_HELP_TEXT,
+		);
 		return commandConsumed();
 	}
 	switch (verb) {
@@ -189,7 +219,7 @@ export async function handleSshAcp(
 		case "rm":
 			return await handleRemoveCommand(rest, runtime);
 		case "add":
-			return await handleAddCommand(rest, runtime);
+			return await handleAddCommand(rest, runtime, options?.nativeTuiOptions === true);
 		default:
 			return usage(`Unknown /ssh subcommand: ${verb}. Use /ssh help for available subcommands.`, runtime);
 	}

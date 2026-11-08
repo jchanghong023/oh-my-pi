@@ -13,7 +13,7 @@ import { useSidePaneFullView } from "@/side-pane-full-view/index.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useWorkspaceProviderConfigFile } from "@/hooks/useWorkspaceProviderConfigFile.js";
 import { useWorkspaceActiveTaskState } from "@/hooks/useWorkspaceActiveTaskState.js";
-import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
+import { useNativeHostAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceReadOnly, isWorkspaceTab } from "@/store/tabStore.js";
 import type { TaskChatMessage as TestChatMessage } from "@/lib/taskChatMessageTypes.js";
@@ -227,23 +227,15 @@ export function App({
     }),
   });
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
-  const nativeModelSelection = useModelSelectionServiceView(
-    services.modelSelectionService,
-    !backendBusinessAvailable,
-  );
-  const nativeSession =
-    nativeModelSelection.state.status === "ready"
-      ? nativeModelSelection.state.view.nativeSession
-      : undefined;
-  const boundNativeSessionId = nativeSession?.chatAvailable ? nativeSession.sessionId : null;
+  const nativeHostAvailable = useNativeHostAvailable();
   useEffect(() => {
-    if (!boundNativeSessionId) return;
-    // Bind the original pane to the actual OMP session, never a browser-created draft/runtime.
-    // Model-only changes retain the selected history; native session switches reach every browser.
-    useZCodeSessionStore
-      .getState()
-      .setActiveTaskId(workspaceAbsPath, boundNativeSessionId, workspaceIdentity);
-  }, [boundNativeSessionId, workspaceAbsPath, workspaceIdentity]);
+    if (!nativeHostAvailable) return;
+    // Selection belongs to this page, not to the server's default resident session.
+    const url = new URL(window.location.href);
+    if (activeTaskId) url.searchParams.set("session", activeTaskId);
+    else url.searchParams.delete("session");
+    window.history.replaceState(window.history.state, "", url.href);
+  }, [activeTaskId, nativeHostAvailable]);
   const notificationEnabled = useZCodeStore((s) => s.notificationEnabled);
   useWorkspaceTerminalTaskNotifications({
     workspacePath: workspaceAbsPath,

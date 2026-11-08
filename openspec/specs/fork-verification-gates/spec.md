@@ -62,7 +62,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。旧 Dev TUI 专属消费者 MUST 由新工作台网页及原生消费者替换。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留；冷启动、准备失败／EOF、新流程冷读、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等有效边界不得删减。四个开发角色的 missing／malformed／unknown 材料失败矩阵及现有平台条件转由工作台控制器、材料和公开网页／进程消费者承接，每例 provider／fixture 隔离不得共享。仅删除固定三行、旧模式 toggle、直接跳过业务检查、finish-business、执行 Next 终结、drop 留文件和旧状态恢复等已废止产品断言，不新增 skip、放宽时限或删减有效需求。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
 - Dev 工作台 source 测试 `packages/coding-agent/test/dev-workbench/` MUST 纳入 fork 白名单；`browser.e2e.test.ts` 与 `process.e2e.test.ts` 属于既有启动敏感组，不建立绕过共享预算的专属通道。collab-web 仅精确新增 `test/dev-workbench.test.tsx`、`test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，native 仅精确新增 `packages/natives/test/dev-workbench-vcs.test.ts`；不因此纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
-- Bun fork 套件版本 MUST 使用 `suiteRevision: 4`；完整基线与计时提示资格须匹配新消费者范围，旧版本完整报告不作为新范围完整证据。新增 WebGUI 范围仅精确纳入 `test/webgui/core-browser.e2e.test.ts`、`native-chat-history.test.ts` 与 `native-chat-stream.test.ts`；单个 browser runner 复用既有启动敏感组及共享预算，动态 Vite 前端与夹具输入定向触发该 runner，其余可追踪变更继续使用 Bun 原生 affected 选测。affected、失败及未完成报告的原语义不变。
+- Bun fork 套件版本 MUST 使用 `suiteRevision: 4`；完整基线与计时提示资格须匹配当前消费者范围，旧范围完整报告不作为新范围完整证据。WebGUI 按 `scripts/ci-test-ts.ts` 的显式文件白名单选入核心浏览器、聊天、原生子代理／任务、目录／文件／Git／Skill、MCP 关闭、平台前置与资源消费者；本次精确补入 `test/webgui/native-attachments.test.ts`、`native-interactions.test.ts`、`native-browser-release.test.ts`、`project-ownership.test.ts`，以及 `test/registry/agent-lifecycle.test.ts`、`agent-session-dispose-releases-memory.test.ts`、`sharpshooter-extract.test.ts` 与 `packages/agent/test/pause-gate.test.ts`，验证严格结清／重试、独立根暂停及原默认行为，不扩大整个上游 agent 或通用 browser 套件。单个 browser runner 复用既有启动敏感组及共享预算，动态 Vite 前端与夹具输入定向触发该 runner，其余可追踪变更继续使用 Bun 原生 affected 选测。affected、失败及未完成报告的原语义不变。
 - WebGUI 不再对接 MCP；移除 `test/webgui/native-mcp.test.ts`、`native-mcp-binding.test.ts` 及其白名单，精确保留 `test/webgui/mcp-disabled.test.ts` 验证真实 RPC 旧通道不可调用，核心浏览器消费者验证设置与 Skill 等保留页面正常。原生 Agent／TUI／Dev 的 MCP 测试与能力边界保持不变，不因浏览器清退删除原生覆盖或增加连接／授权验收。
 - 显示验证 MUST 围绕 clean 基线、按文件目标筛选且与上游 detailed 一致的 write／edit 原组件显示、固定两行活动区及隐藏独立模型处理忙碌提示的消费者契约，复用既有普通测试入口和必要的共享布局、渲染、恢复验证；不按文件名收集 compact 大套件。纯上下文压缩模式注册、算法、预算、队列和 `/compact` 参数派发不因名称相似纳入。
 - 旧 `compact_display` 命令、独立清单、执行通道、排除参数、专属报告和基线要求 MUST 移除，不保留兼容别名或用新名称重建同类通道。仍适用的显示消费者测试由普通选测机制发现，只执行一次，不再从普通组排除后另行执行。
@@ -137,6 +137,60 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 | 普通 TUI 输入／焦点／菜单／compact／Team／Goal 与双启动入口 | 保留的混合普通 TUI 消费者及原生 TUI PTY smoke；双启动入口另由启动敏感组的工作台 process 消费者覆盖 |
 
 - **AND** 表中 coding-agent 测试路径以 `packages/coding-agent/` 为基准；纯组件测试不冒充真实浏览器，原生资源独立入口继续覆盖。普通 TUI、权限、Team／Goal、预算、并发、授权及跳过规则不因消费者替换而放松。
+
+### Requirement: 本次 WebGUI 交付的真实模型双浏览器独立验收
+
+本次 WebGUI 交付 MUST 分别取得默认 `bun run fastcheck` 成功、默认 `bun run fulltest` 成功、真实 Chrome 完整业务 E2E 成功及本机真实 Firefox 68 完整业务 E2E 成功的证据，四者缺一不可、不得互代。真实模型双浏览器 E2E 是用户为本次交付明确授权的独立验收，不改变日常门禁范围、预算、选测、报告或授权边界，不把公网模型、真实提供者认证、生产构建或 Firefox 68 引入默认 fulltest 的每次运行。
+
+#### Scenario: 分开判断默认门禁与独立业务验收
+
+- **WHEN** 判断本次 WebGUI 交付是否完成验收
+- **THEN** `bun run fastcheck` 和 `bun run fulltest` 均以现有默认入口、范围及预算实际成功，不加 `--full`、不新增验收 flags、不放宽时间预算，不以 skip、删减有效用例或替换成较小入口掩盖失败；affected 选择仍按原规则如实报告，不能声称完整新回归
+- **AND** Chrome 与 Firefox 68 各自完成下述全部十五项行为，不能将两浏览器的部分结果拼为完整结果，不能用 Chrome、Chromium 或兼容模式代替真实 Firefox 68，也不能用普通 TUI smoke、默认浏览器测试或仅页面可打开代替任一业务 E2E
+- **AND** 本次需求文档维护本身不执行门禁、构建或业务 E2E；上述成功标准适用于后续交付验收，文档写入不构成已运行或通过证据
+
+#### Scenario: 使用真实模型与同一份生产页面资源
+
+- **WHEN** 执行本次独立 WebGUI 业务 E2E
+- **THEN** 使用真实 OpenCode Go 提供者 `opencode-go` 的 Beam Free 模型，通过权威模型 catalog 或实际 discovery 确认并记录真实 model id，不从显示名称猜测 id；记录目录／发现来源及实际请求所用 provider、model id，不以其他模型、模拟响应或本地 echo 替代
+- **AND** 两浏览器使用同一份生产构建的完整 WebGUI 页面资源，经公开 HTTP／WebSocket 入口驱动实际业务，不使用测试专用聊天页、开发服务器资源、绕过网页的内部调用或为旧浏览器另做简化页面；保留原有 ZCode 精简 UI 及仍有效的原生底层功能，不恢复已明确删除的 ZCode 产品页面
+- **AND** 使用已安装的真实 Chrome 和本机真实 Firefox 68，各自采用隔离浏览器 profile、应用 profile、工作区、会话及端口；认证仅使用本次授权的凭据，不读取或修改个人浏览器配置，不自动安装浏览器、驱动或其他工具
+- **AND** 每浏览器均通过网页发起真实原生 Agent 开发任务，观察真实模型请求、原生工具执行、目标工作区实际文件写入及可核对的开发结果；启动成功、消息回显、虚构工具事件或预先写入的文件不构成成功
+- **AND** 本地 mock 可补充过期、拒绝、断线及确定性失败路径，但必须单列其证据与范围，不能代替任一浏览器真实模型端到端完整流程
+
+#### Scenario: 每浏览器完整覆盖十五项可观察行为
+
+- **WHEN** 在 Chrome 或 Firefox 68 中验收本次 WebGUI
+- **THEN** 该浏览器独立完成下表全部行为，并对每项记录实际操作、预期、结果及可观察业务证据；需失败路径配合时区分真实执行与本地 mock 辅助覆盖：
+
+| 项 | 行为 | 必须观察到的验收结果 |
+| --- | --- | --- |
+| 1 | 独立启动与项目选择／打开／创建 | 独立 `omp webgui` 启动保持 lazy：未显式工作前无自动 Agent、项目记录、项目占用或模型调用；网页能选择、打开、创建真实项目，页面项目作用域不等于全局 current，跨项目切换后旧连接不能读写另一项目。 |
+| 2 | 新建原生会话与真实开发／历史继续 | 显式创建会话或发送首条消息后实际建立原生 AgentSession 并用真实工具完成开发写文件，不使用模拟会话、ZCode 执行器或独立 SDK 进程；允许同进程原生 SDK 创建。全部可访问历史仍可只读查看，不因 current 改变静默删减；显式继续历史按目标真实 cwd 取得准入，再加载独立驻留原生会话，已驻留则复用该会话，不切走另一执行中会话。 |
+| 3 | 独立停止／取消 | 按原生 abort 语义取消指定会话，保留历史、不删除开发文件、不回滚 Git，不终止兄弟会话；实际取消状态与会话归属可核对。 |
+| 4 | 原生补充问答 | 网页显示真实原生问题、选项及输入，回答返回该会话的真实等待点；过期、重复及跨会话回答不影响其他请求，失败不假装已回答。 |
+| 5 | 文件／图片上传 | 上传真实字节，保留文件名、MIME、大小与会话归属；图片进入原生图片输入并按实际模型能力处理，不假设模型支持。取消／断线清理不删除仍被已接纳消息使用的附件。 |
+| 6 | `@` 文件上下文 | 引用经过授权路径解析，模型实际收到被引用上下文并用于任务；越权路径被拒绝，不能仅回显引用文字或读取另一项目文件冒充成功。 |
+| 7 | 忙时队列 | 忙时消息默认采用原生 follow-up，显示真实入队、处理或拒绝状态，消息被正确会话消费，不能以用户消息 echo 冒充已经执行。 |
+| 8 | 运行 guide／立即发送 | guide 采用原生 steer 并产生可见接受、执行或拒绝状态；显式立即发送遵循原生中断和队列语义，不暗中中断，也不串入另一会话。 |
+| 9 | 编辑已有提问重发 | 使用原生 branch 语义形成正确会话分支并重新执行，默认不回滚工作区；失败保留编辑内容与草稿，不静默改写原历史或丢失输入。 |
+| 10 | 失败回复重试 | 失败回复通过原生 retry 在正确会话重试，真实结果可追踪；失败保留编辑／草稿，不能用新建无归属请求或回显替代重试。 |
+| 11 | 当前 profile 用户 AGENTS | 展示当前进程有效 profile 的用户级 AGENTS 实际目标路径，读取、编辑、保存真实文件；不写项目 AGENTS 或 `~/.zcode`。未保存与保存失败均保留内容，切换上下文不写错 profile。 |
+| 12 | 文件及 Git 自动刷新 | 原生工具写入与外部修改均自动更新文件树、预览和 Git 状态，不依赖手工刷新；切换／退出清理订阅及 watcher，不新增 Git 写操作。 |
+| 13 | 多会话并行与隔离 | 独立原生会话实际并行执行，项目绑定、临时模型选择、草稿、问答、队列、取消及递归子代理均保持各自归属；切换或重连不让旧事件、连接及附件影响另一会话，关页不取消工作。 |
+| 14 | 全部内置命令与有效 Skills | 按当次原生 TUI 完整命令／Skill 目录逐项对应并执行，参数与执行语义一致；未知命令明确报错而不发给模型当普通文字，交互命令由网页完成对应交互，模式／退出类保持已有独占、结清及权限语义。不能将“全部支持”降为只展示目录、大部分可用或不可用兜底；原生 Agent／TUI／Dev 能力保留。 |
+| 15 | 所有并行工作的退出结清 | 退出先禁止新工作，结清本实例全部并行 root 及任意深度子工作、在途问答、队列、上传和配置写入，再释放自有 socket、watcher、listener 与 lease；失败保持锁定且可重试，不影响其他进程，不错误 dispose 借用的 TUI 原会话。 |
+
+#### Scenario: 保留逐项证据与诚实的完成状态
+
+- **WHEN** 汇总本次 WebGUI 验收
+- **THEN** 分别保留两个默认门禁的实际命令、退出码、耗时、范围及原有报告位置；Chrome 和 Firefox 68 各自保留可执行文件实际路径、精确版本、隔离目录、生产构建来源及资源标识、实际公开 HTTP／WebSocket 入口，证明两者使用同一份生产资源，而非以版本声明代替实际加载证据
+- **AND** 记录真实模型的 provider、实际 model id 及确认来源，每项业务结果对应项目真实 cwd、会话／分支归属、真实问答／队列／工具事件、写入文件路径及可核对内容；命令与 Skill 验收保留原生有效目录和逐项结果，不以单个代表命令覆盖全部
+- **AND** 命令逐项结果遵守同一原生能力与权限前提：本机已具备且已授权的正向操作必须实际完成；显式取消或缺少特定外部服务／设备／认证时，验证对应的原生取消／拒绝及无错误副作用。不得将 WebGUI 缺少 handler、未适配提示或伪成功当作原生前提不足，也不得用这些拒绝替代上述核心开发功能的正向验收
+- **AND** 对退出记录所有本实例 root、递归子工作、在途操作的结清结果，以及自有端口、连接、watcher、listener、lease 和进程资源的释放证据；同时记录兄弟会话、其他进程及借用 TUI 原会话未被错误终止或处置的结果
+- **AND** 验证 WebGUI 不干扰正常 OMP／TUI：未启用时无网页资源或交互绑定副作用；普通源入口的聊天、工具、问答、原命令与默认暂停／录制路径保持原样；从真实 TUI 进入 WebGUI 后结清退出，原会话、草稿、工具／扩展 UI 与审批输入恢复且可继续执行。复用既有普通 TUI smoke 和相关原生消费者，只对缺少的真实进入／退出边界补充验证，网页通过不代替 TUI 非干扰证据
+- **AND** 缺认证、模型不可用、浏览器／工具缺失、业务失败、未运行及证据不足分别如实标为阻塞、失败或未验证，不能跳过后宣称完成；重试保留前次记录，任何 gate 或任一浏览器未完整成功都不能宣称本次交付通过
+- **AND** 本次独立验收仅含两个默认门禁和上述两浏览器，不扩展手机实机、安装发布物、发行、部署或发布流水线验收，不自动下载安装或修改个人浏览器配置
 
 ### Requirement: 原生测试选择
 

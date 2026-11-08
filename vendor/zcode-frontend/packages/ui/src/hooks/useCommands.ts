@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo } from "react";
 import type { ICommandsService } from "@zcode/services";
 import { useCommandsStore } from "@/store/commandsStore.js";
+import { useNativeHostAvailable, useNativeWorkspaceSession } from "@/hooks/useBackendBusinessAvailability.js";
 import type {
   CommandAgentSource,
   CommandConfig,
@@ -26,9 +27,14 @@ export function useCommands(options: UseCommandsOptions) {
     commandsService,
     workspacePath,
     workspaceIdentity,
-    cacheAuthorityKey,
+    cacheAuthorityKey: requestedAuthorityKey,
     enabled = true,
   } = options;
+  const nativeHostAvailable = useNativeHostAvailable();
+  const nativeScope = useNativeWorkspaceSession();
+  const cacheAuthorityKey = nativeHostAvailable
+    ? `${requestedAuthorityKey?.trim() || "omp-native"}\0${nativeScope?.sessionId ?? "unbound"}`
+    : requestedAuthorityKey;
 
   const commands = useCommandsStore((state) => state.commands);
   const userCommands = useCommandsStore((state) => state.userCommands);

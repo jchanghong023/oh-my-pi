@@ -113,11 +113,12 @@ import {
 	SPECULATIVE_STREAM_SESSION,
 } from "./types";
 
-async function waitForProcessPause(config: AgentLoopConfig, signal?: AbortSignal): Promise<void> {
+async function waitForPause(config: AgentLoopConfig, signal?: AbortSignal): Promise<void> {
+	const pauseGate = config.pauseGate ?? agentPauseGate;
 	try {
-		while (agentPauseGate.paused && !signal?.aborted) {
+		while (pauseGate.paused && !signal?.aborted) {
 			config.onPauseChange?.(true);
-			await agentPauseGate.waitUntilResumed(signal);
+			await pauseGate.waitUntilResumed(signal);
 		}
 	} finally {
 		config.onPauseChange?.(false);
@@ -1359,10 +1360,9 @@ async function runLoopBody(
 					endAgentStream(stream, newMessages, telemetry, stepCounter.count);
 					return;
 				}
-				// Park at the turn boundary while the process-wide pause gate is
-				// engaged (host /pause). An external abort releases the park so a
-				// cancelled run still unwinds while everything else stays frozen.
-				if (agentPauseGate.paused) await waitForProcessPause(config, signal);
+				// Park at the owning gate's turn boundary. An external abort releases
+				// only this run's park, leaving the root's other workers paused.
+				if ((config.pauseGate ?? agentPauseGate).paused) await waitForPause(config, signal);
 
 				// Build the provider-bound context before opening the turn. Queue
 				// messages are added now but their events remain deferred until
@@ -1486,7 +1486,7 @@ async function runLoopBody(
 				let message: AssistantMessage;
 				let inputsEmitted = false;
 				try {
-					if (agentPauseGate.paused) await waitForProcessPause(config, signal);
+					if ((config.pauseGate ?? agentPauseGate).paused) await waitForPause(config, signal);
 					message = await streamAssistantResponse(
 						currentContext,
 						config,
@@ -3362,6 +3362,7 @@ async function executeToolCalls(
 	liveSteering: readonly AgentMessage[],
 ): Promise<{ toolResults: ToolResultMessage[]; additionalContext?: string }> {
 	const tools = currentContext.tools;
+	const pauseGate = config.pauseGate ?? agentPauseGate;
 	const {
 		hasSteeringMessages,
 		hasIrcInterrupts,
@@ -3464,7 +3465,7 @@ async function executeToolCalls(
 	// Derive batch readiness from existing dispatch records, not extra participants.
 	const refreshPauseState = (): void => {
 		config.onPauseChange?.(
-			agentPauseGate.paused &&
+			pauseGate.paused &&
 				!signal?.aborted &&
 				!speculationCoordinator?.isRunning &&
 				records.some(record => !record.started && !record.skipped && !record.toolResultMessage) &&
@@ -3630,12 +3631,11 @@ async function executeToolCalls(
 			record.skipped = true;
 			return;
 		}
-		// Park before starting this tool while the process-wide pause gate is
-		// engaged. Tools already executing are unaffected (pausing never aborts);
-		// a batch interrupted mid-pause unwinds via the signal checks below.
-		while (agentPauseGate.paused && !record.signal.aborted) {
+		// Park before starting this tool while the owning gate is engaged.
+		// Tools already executing are unaffected; an abort releases only this wait.
+		while (pauseGate.paused && !record.signal.aborted) {
 			refreshPauseState();
-			await agentPauseGate.waitUntilResumed(record.signal);
+			await pauseGate.waitUntilResumed(record.signal);
 		}
 		config.onPauseChange?.(false);
 

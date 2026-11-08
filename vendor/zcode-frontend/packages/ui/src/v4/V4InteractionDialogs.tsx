@@ -26,6 +26,8 @@ import {
 } from "@/v4/pendingInteractionAdapter.js";
 import { V4UserInputDialog } from "@/v4/V4UserInputDialog.js";
 import { useV4Conversation } from "@/v4/V4ConversationContext.js";
+import { V4NativeBrowserAction } from "@/v4/V4NativeBrowserAction.js";
+import { nativeBrowserActionInput, type NativeBrowserActionInput } from "@/v4/nativeBrowserActions.js";
 
 export interface V4InteractionDialogsProps {
   sessionId: string;
@@ -37,6 +39,7 @@ export interface V4InteractionDialogsProps {
   snapshot: ConversationSnapshot | null;
   onCommandSettled?: (commandId: string) => void;
   onPlanInteractionAccepted?: (interactionId: string) => void;
+  onBrowserAction?: (input: NativeBrowserActionInput, interactionId: string) => Promise<Record<string, unknown>>;
 }
 
 export function getCurrentSessionInteractionSnapshot(
@@ -101,6 +104,7 @@ export function V4InteractionDialogs({
   snapshot,
   onCommandSettled,
   onPlanInteractionAccepted,
+  onBrowserAction,
 }: V4InteractionDialogsProps) {
   const { sendCommand } = useV4Conversation();
   const connectWorkspaceHookCommands = useWorkspaceHookReviewStore((state) => state.connect);
@@ -195,6 +199,9 @@ export function V4InteractionDialogs({
     failed: boolean;
   } | null>(null);
   const permissionResponseFlight = useRef<string | null>(null);
+  const [interactionFailure, setInteractionFailure] = useState<{ interactionId: string; message: string } | null>(null);
+  const [questionSubmitting, setQuestionSubmitting] = useState<string | null>(null);
+  const questionFlight = useRef<string | null>(null);
 
   const resolveInteraction = useCallback(
     async (
@@ -206,6 +213,7 @@ export function V4InteractionDialogs({
         content?: Record<string, unknown>;
       },
     ) => {
+      setInteractionFailure(null);
       const envelope = createCommandEnvelope({
         type: "resolveInteraction",
         sessionId,
@@ -219,6 +227,7 @@ export function V4InteractionDialogs({
         const accepted =
           ack.status === "accepted" || ack.status === "duplicate" || ack.status === "noop";
         if (!accepted) {
+          setInteractionFailure({ interactionId, message: ack.reasonCode ?? ack.status });
           logger.warn("[v4-interaction] resolveInteraction 被拒绝", {
             interactionId,
             status: ack.status,
@@ -228,6 +237,7 @@ export function V4InteractionDialogs({
         return accepted;
       } catch (error) {
         logger.error("[v4-interaction] resolveInteraction 失败", { interactionId, error });
+        setInteractionFailure({ interactionId, message: error instanceof Error ? error.message : String(error) });
         return false;
       } finally {
         onCommandSettled?.(envelope.commandId);
@@ -369,6 +379,36 @@ export function V4InteractionDialogs({
       />
     );
   }
+  const browserAction = pending.payload.toolName === "webgui-command" &&
+    pending.interactionId.startsWith("webgui-question:")
+    ? nativeBrowserActionInput(pending.payload.input) : null;
+  if (browserAction) {
+    return (
+      <V4NativeBrowserAction
+        key={`${sessionId}:${pending.interactionId}`}
+        prompt={typeof browserAction.instructions === "string"
+          ? `${pending.payload.prompt}\n${browserAction.instructions}` : pending.payload.prompt}
+        action={browserAction.action}
+        interactionId={pending.interactionId}
+        execute={() => {
+          if (!onBrowserAction || browserAction.originSessionId !== sessionId)
+            return Promise.reject(new Error("The originating browser session is unavailable"));
+          return onBrowserAction(browserAction, pending.interactionId);
+        }}
+        resolve={(answer) => resolveInteraction(pending.interactionId, answer)}
+        cancel={["liveOffer", "liveAnswer", "recordStart"].includes(browserAction.action) && onBrowserAction
+          ? async (result) => {
+              await onBrowserAction({
+                ...browserAction,
+                action: browserAction.action === "recordStart" ? "recordStop" : "liveStop",
+                ...(typeof result?.voiceSessionId === "string" ? { voiceSessionId: result.voiceSessionId } : {}),
+                ...(typeof result?.recordingId === "string" ? { recordingId: result.recordingId } : {}),
+              }, `${pending.interactionId}:cancel`);
+            }
+          : undefined}
+      />
+    );
+  }
 
   const projectedElicitationRequest = pendingUserInputToElicitationRequest(sessionId, {
     ...pending,
@@ -384,6 +424,9 @@ export function V4InteractionDialogs({
       pending.payload.toolName?.trim().toLowerCase() === "askuserquestion" ||
       pending.autoResolution !== undefined;
     return (
+      <fieldset disabled={questionSubmitting === pending.interactionId}
+        data-testid="v4-native-question" data-interaction-id={pending.interactionId} data-session-id={sessionId}
+        aria-busy={questionSubmitting === pending.interactionId}>
       <ElicitationDialog
         key={buildV4ElicitationProgressKey(elicitationRequest)}
         request={elicitationRequest}
@@ -410,10 +453,15 @@ export function V4InteractionDialogs({
             : undefined
         }
         onRespond={(_requestId, action, content) => {
+          if (questionFlight.current === pending.interactionId) return;
+          questionFlight.current = pending.interactionId;
+          setQuestionSubmitting(pending.interactionId);
           void resolveInteraction(pending.interactionId, {
             action,
             ...(content ? { content } : {}),
           }).then((accepted) => {
+            questionFlight.current = null;
+            setQuestionSubmitting(null);
             if (!accepted) return;
             removeElicitationDraft(pending.interactionId);
             if (isExitPlanMode) {
@@ -424,6 +472,10 @@ export function V4InteractionDialogs({
           });
         }}
       />
+      {interactionFailure?.interactionId === pending.interactionId ? (
+        <p role="alert" className="mt-2 text-ui-sm text-destructive">{interactionFailure.message}</p>
+      ) : null}
+      </fieldset>
     );
   }
 
@@ -433,10 +485,10 @@ export function V4InteractionDialogs({
   });
   return (
     <V4UserInputDialog
+      key={`${sessionId}:${pending.interactionId}`}
       model={model}
-      onSubmit={(answer) => {
-        void resolveInteraction(pending.interactionId, answer);
-      }}
+      errorMessage={interactionFailure?.interactionId === pending.interactionId ? interactionFailure.message : undefined}
+      onSubmit={(answer) => resolveInteraction(pending.interactionId, answer)}
     />
   );
 }

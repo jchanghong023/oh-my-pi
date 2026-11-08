@@ -165,7 +165,11 @@ export function newUploadStagingDir(): string {
 }
 
 /** Remove a tab's staging folder, once the page that may read its copies is gone. */
-export async function removeUploadStaging(directory: string): Promise<void> {
+export async function removeUploadStaging(directory: string, options?: { strict?: boolean }): Promise<void> {
+	if (options?.strict) {
+		await fs.rm(directory, { recursive: true, force: true });
+		return;
+	}
 	await fs.rm(directory, { recursive: true, force: true }).catch(() => undefined);
 }
 

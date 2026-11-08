@@ -10,8 +10,91 @@ import { useResolvedRemoteWorkspaceSessionId } from "@/hooks/useResolvedRemoteWo
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
 import { REMOTE_WORKSPACE_DISCONNECTED_ERROR_CODE } from "@/lib/remoteWorkspaceServiceError.js";
+import {
+  useNativeHostAvailable,
+  useNativeWorkspaceSession,
+  type NativeWorkspaceSessionScope,
+} from "@/hooks/useBackendBusinessAvailability.js";
 
 let disconnectedRemoteServices: IServiceAccessor | null = null;
+
+const nativeScopedServices = new WeakMap<IServiceAccessor, WeakMap<NativeWorkspaceSessionScope, IServiceAccessor>>();
+const nativeServiceOwners = new WeakMap<IServiceAccessor, IServiceAccessor>();
+const NATIVE_FILE_READ_METHODS = new Set<PropertyKey>([
+  "readdir", "stat", "checkFilesExist", "resolvePath", "searchWorkspaceFiles",
+  "readTextFile", "readMediaPreview", "readFileRange", "readBinaryPreview",
+  "listWorkspaceFilesLength", "listWorkspaceFilesRange", "readWorkspaceFileSearchIgnore",
+]);
+const NATIVE_GIT_READ_METHODS = new Set<PropertyKey>([
+  "getRepositorySummary", "getChanges", "getDiff", "getCommitGraph",
+  "getLocalBranches", "refresh",
+]);
+const NATIVE_WATCH_METHODS = new Set<PropertyKey>(["watch"]);
+const NATIVE_CATALOG_READ_METHODS = new Set<PropertyKey>(["list"]);
+
+/** Browser-only read routing. Explicit pane identities remain authoritative; no global current changes. */
+export function bindNativeWorkspaceServices(
+  services: IServiceAccessor,
+  scope: NativeWorkspaceSessionScope,
+): IServiceAccessor {
+  const owner = nativeServiceOwners.get(services) ?? services;
+  let scopes = nativeScopedServices.get(owner);
+  if (!scopes) nativeScopedServices.set(owner, scopes = new WeakMap());
+  const existing = scopes.get(scope);
+  if (existing) return existing;
+  const scopedService = <T extends object>(
+    service: T, methods: ReadonlySet<PropertyKey>, requiresSession = false,
+  ): T => {
+    const functions = new Map<PropertyKey, unknown>();
+    return new Proxy(service, {
+      get(target, key) {
+        const value = Reflect.get(target, key);
+        if (typeof value !== "function" || !methods.has(key)) return value;
+        if (functions.has(key)) return functions.get(key);
+        const method = (input: unknown, ...rest: unknown[]) => {
+          if (requiresSession && input === undefined) input = {};
+          if (!input || typeof input !== "object" || Array.isArray(input)) {
+            return Reflect.apply(value, target, [input, ...rest]);
+          }
+          const params = input as Record<string, unknown>;
+          if (params.sessionId !== undefined || (key === "readdir" && params.directoriesOnly === true)) {
+            return Reflect.apply(value, target, [input, ...rest]);
+          }
+          if (!scope.ready) return Promise.reject(new Error("Native session ownership is not confirmed."));
+          if (requiresSession && !scope.sessionId) {
+            return Promise.reject(new Error("Create a native session before reading its effective catalog."));
+          }
+          if (typeof params.workspacePath === "string" && params.workspacePath !== scope.workspacePath) {
+            return Promise.reject(new Error("The requested workspace is not bound to the selected native session."));
+          }
+          return Reflect.apply(value, target, [
+            scope.sessionId ? { ...params, sessionId: scope.sessionId } : params, ...rest,
+          ]);
+        };
+        functions.set(key, method);
+        return method;
+      },
+    });
+  };
+  const fileService = scopedService(owner.fileService, NATIVE_FILE_READ_METHODS);
+  const fileWatcherService = scopedService(owner.fileWatcherService, NATIVE_WATCH_METHODS);
+  const gitService = scopedService(owner.gitService, NATIVE_GIT_READ_METHODS);
+  const skillsService = scopedService(owner.skillsService, NATIVE_CATALOG_READ_METHODS, true);
+  const commandsService = scopedService(owner.commandsService, NATIVE_CATALOG_READ_METHODS, true);
+  const bound = new Proxy(owner, {
+    get(target, key) {
+      if (key === "fileService") return fileService;
+      if (key === "fileWatcherService") return fileWatcherService;
+      if (key === "gitService") return gitService;
+      if (key === "skillsService") return skillsService;
+      if (key === "commandsService") return commandsService;
+      return Reflect.get(target, key);
+    },
+  });
+  nativeServiceOwners.set(bound, owner);
+  scopes.set(scope, bound);
+  return bound;
+}
 
 interface WorkspaceServiceTargetTab {
   workspacePath: string;
@@ -77,7 +160,8 @@ export function resolveBaseWorkspaceServices(
   contextServices: IServiceAccessor,
   registeredBaseServices: IServiceAccessor | null,
 ): IServiceAccessor {
-  return registeredBaseServices ?? contextServices;
+  return nativeServiceOwners.get(contextServices) === registeredBaseServices
+    ? contextServices : registeredBaseServices ?? contextServices;
 }
 
 function hasRemoteWorkspaceMetadata(tab: WorkspaceServiceTargetTab | null | undefined): boolean {
@@ -144,7 +228,9 @@ export function useOptionalBaseWorkspaceServices(): IServiceAccessor | null {
   // usage entitlement 等 app-global 能力曾从当前 workspace ServiceProvider
   // 取服务；远端 tab 在 attachment ready 前会得到断连代理并产生无效 RPC。base host 才是
   // app-global 权威；Web/SSR 未注册 base services 时保留原有 context/null 降级语义。
-  return registeredBaseServices ?? contextServices;
+  return contextServices
+    ? resolveBaseWorkspaceServices(contextServices, registeredBaseServices)
+    : registeredBaseServices;
 }
 
 export interface WorkspaceServicesResolution {
@@ -163,6 +249,8 @@ export function useWorkspaceServicesResolution(
   options?: { unscopedServices?: IServiceAccessor; forceUnscoped?: boolean },
 ): WorkspaceServicesResolution {
   const currentContextServices = useServices();
+  const nativeHostAvailable = useNativeHostAvailable();
+  const nativeSessionScope = useNativeWorkspaceSession();
   const resolvedRemoteSessionId = useResolvedRemoteWorkspaceSessionId(
     workspacePath,
     preferredRemoteSessionId,
@@ -202,6 +290,12 @@ export function useWorkspaceServicesResolution(
       ? "remote-ready"
       : "remote-waiting"
     : "local-ready";
+  const scopedServices = useMemo(() => {
+    if (!nativeHostAvailable || !nativeSessionScope || isRemoteTarget) return resolvedServices;
+    const scope = workspacePath && workspacePath !== nativeSessionScope.workspacePath
+      ? { ...nativeSessionScope, ready: false } : nativeSessionScope;
+    return bindNativeWorkspaceServices(resolvedServices, scope);
+  }, [nativeHostAvailable, nativeSessionScope, isRemoteTarget, resolvedServices, workspacePath]);
 
   // 远程 SSH host 断开后，若在 resolvedRemoteSessionId 为空时回退到 baseServices，
   // /root 这类远程 task 会被本机 host 查询并报“task 不存在”。远程目标缺少 session 时必须保持断连态，
@@ -210,13 +304,13 @@ export function useWorkspaceServicesResolution(
   // 调用方必须暂停 workspace RPC，断连代理只保留为最终越界保护，不能把预期等待态当失败重试。
   return useMemo(
     () => ({
-      services: resolvedServices,
+      services: scopedServices,
       remoteSessionId: effectiveRemoteSessionId,
       isRemoteTarget,
       connectionKind,
       rpcReady: connectionKind !== "remote-waiting",
     }),
-    [connectionKind, effectiveRemoteSessionId, isRemoteTarget, resolvedServices],
+    [connectionKind, effectiveRemoteSessionId, isRemoteTarget, scopedServices],
   );
 }
 

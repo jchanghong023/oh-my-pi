@@ -196,6 +196,7 @@ export interface ModelSelectionProviderView extends Pick<
 
 export interface ModelSelectionViewInput {
   readonly selection: ModelSelection | null;
+  readonly sessionId?: string;
 }
 
 export interface ModelSelectionView extends Partial<EffectiveModelSelectionResult> {

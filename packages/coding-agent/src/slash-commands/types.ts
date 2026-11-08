@@ -1,7 +1,7 @@
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { ImageContent, Model } from "@oh-my-pi/pi-ai";
 import type { Settings } from "../config/settings";
 import type { SlashCommandIconName } from "@oh-my-pi/pi-tui/theme/symbols";
-import type { ExtensionUIContext } from "../extensibility/extensions/types";
+import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensibility/extensions/types";
 import type { InteractiveModeContext, SubmittedUserInput } from "../modes/types";
 import type { ConversationPosition } from "../modes/utils/conversation-position";
 import type { MCPManager } from "../mcp/manager";
@@ -9,6 +9,7 @@ import type { MCPServerConfig } from "../mcp/types";
 import type { AgentSession } from "../session/agent-session";
 import type { NewSessionOptions } from "../session/session-entries";
 import type { SessionManager } from "../session/session-manager";
+import type { SessionContinuation } from "../session/session-listing";
 
 /** Declarative subcommand definition for commands like /mcp. */
 export interface SubcommandDef {
@@ -174,6 +175,122 @@ export interface RpcSlashCommandRuntime extends SlashCommandRuntime {
 	runModeCommand: (mode: "plan" | "loop" | "goal" | "goal-autopilot", args: string) => Promise<SlashCommandResult>;
 }
 
+export type WebGuiBrowserAction =
+	| { action: "copyText"; text: string }
+	| { action: "openUrl"; url: string; instructions?: string }
+	| {
+			action: "openSession";
+			sessionId: string;
+			placement?: "pane" | "window";
+			projectId?: string;
+			root?: string;
+			url?: string;
+			workspacePath?: string;
+			model?: { providerId: string; modelId: string } | null;
+	  }
+	| { action: "setTodoExpanded"; expanded: boolean; markdown?: string }
+	| { action: "setDisplayMode"; mode: "clean" | "compact" | "detailed"; hideThinking: boolean }
+	| { action: "attachImage"; fileName: string; mimeType: string; dataBase64: string }
+	| { action: "setDraft"; text: string; images?: ImageContent[]; onlyIfEmpty?: boolean }
+	| { action: "recordStart"; recordingId?: string }
+	| { action: "recordStop"; recordingId?: string }
+	| { action: "liveOffer"; voiceSessionId?: string }
+	| { action: "liveAnswer"; sdpAnswer: string; voiceSessionId?: string }
+	| { action: "liveStop"; voiceSessionId?: string }
+	| { action: "diagnostics"; probe: "state" | "protocols" };
+
+export type WebGuiNativeCommandOperation = (
+	command: ParsedSlashCommand,
+	runtime: WebGuiSlashCommandRuntime,
+) => Promise<SlashCommandResult>;
+export interface WebGuiLifecycleCommands {
+	resume: WebGuiNativeCommandOperation;
+	btw: WebGuiNativeCommandOperation;
+	tan: WebGuiNativeCommandOperation;
+	omfg: WebGuiNativeCommandOperation;
+	cleanse: WebGuiNativeCommandOperation;
+	debug: WebGuiNativeCommandOperation;
+}
+
+export interface WebGuiCollaborationCommands {
+	advisor: WebGuiNativeCommandOperation;
+	collab: WebGuiNativeCommandOperation;
+	join: WebGuiNativeCommandOperation;
+	leave: WebGuiNativeCommandOperation;
+	copy: WebGuiNativeCommandOperation;
+	open: WebGuiNativeCommandOperation;
+	export: WebGuiNativeCommandOperation;
+	trace: WebGuiNativeCommandOperation;
+	share: WebGuiNativeCommandOperation;
+}
+export type WebGuiSessionAccountCommand = (
+	argument: string,
+	session: AgentSession,
+	output: SlashCommandRuntime["output"],
+) => Promise<void>;
+export interface WebGuiSessionViewCommands {
+	todo: WebGuiNativeCommandOperation;
+	session: (
+		command: ParsedSlashCommand,
+		runtime: WebGuiSlashCommandRuntime,
+		pin: WebGuiSessionAccountCommand,
+	) => Promise<SlashCommandResult>;
+	usage: (
+		command: ParsedSlashCommand,
+		runtime: WebGuiSlashCommandRuntime,
+		reset: WebGuiSessionAccountCommand,
+		report: (runtime: WebGuiSlashCommandRuntime) => Promise<string>,
+	) => Promise<SlashCommandResult>;
+	hotkeys: WebGuiNativeCommandOperation;
+	extensions: WebGuiNativeCommandOperation;
+	agents: WebGuiNativeCommandOperation;
+	git: WebGuiNativeCommandOperation;
+	local: WebGuiNativeCommandOperation;
+	hub: WebGuiNativeCommandOperation;
+	branch: WebGuiNativeCommandOperation;
+	fork: WebGuiNativeCommandOperation;
+	login: WebGuiNativeCommandOperation;
+}
+
+/** Lifecycle operations owned by the browser's real native host, not a fabricated TUI. */
+export interface WebGuiCommandHost {
+	readonly lifecycle: WebGuiLifecycleCommands;
+	readonly collaboration: WebGuiCollaborationCommands;
+	readonly sessionViews: WebGuiSessionViewCommands;
+	sketch: WebGuiNativeCommandOperation;
+	withSessionScope<T>(operation: () => T): T;
+	close(): Promise<void>;
+	restart(): Promise<void>;
+	createNewSession(): Promise<void>;
+	resetContext(): Promise<void>;
+	deleteCurrentSession(options?: { selectAfter?: boolean }): Promise<void>;
+	resumeSession(sessionFile: string, options?: { continuation?: SessionContinuation }): Promise<void>;
+	moveSession(cwd: string, operation: () => Promise<void>, recover?: () => Promise<void>): Promise<void>;
+	toggleMode(mode: "webgui" | "dev"): Promise<void>;
+	browserAction(action: WebGuiBrowserAction, options?: ExtensionUIDialogOptions): Promise<Record<string, unknown>>;
+}
+
+/** Browser commands share native operations, with dialogs transported to their session's browser. */
+export interface WebGuiSlashCommandRuntime extends RpcSlashCommandRuntime {
+	ui: ExtensionUIContext;
+	host: WebGuiCommandHost;
+	isCollabGuest?: boolean;
+	runNativeModeCommand(
+		command:
+			| "settings"
+			| "setup"
+			| "display"
+			| "plan-review"
+			| "vibe"
+			| "guided-goal"
+			| "queue"
+			| "live"
+			| "record"
+			| "pause",
+		args: string,
+	): Promise<SlashCommandResult>;
+}
+
 /**
  * Runtime visible to TUI-only handlers (`handleTui`). Carries the interactive
  * mode context. Intentionally narrower than `SlashCommandRuntime` so existing
@@ -234,6 +351,13 @@ export interface SlashCommandSpec extends BuiltinSlashCommand {
 		command: ParsedSlashCommand,
 		runtime: RpcSlashCommandRuntime,
 	) => SlashCommandResult | Promise<SlashCommandResult>;
+	/** Browser-native adapter; terminal/RPC/ACP dispatch never calls this handler. */
+	handleWebGui?:
+		| ((
+				command: ParsedSlashCommand,
+				runtime: WebGuiSlashCommandRuntime,
+		  ) => SlashCommandResult | Promise<SlashCommandResult>)
+		| ((command: ParsedSlashCommand, runtime: WebGuiSlashCommandRuntime) => void | Promise<void>);
 	/**
 	 * TUI-only handler that supersedes `handle` when both are present. Use for
 	 * selectors, wizards, dashboards, and anything else that requires

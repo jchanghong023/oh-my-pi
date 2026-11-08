@@ -26,6 +26,7 @@ import {
   GitBranchIcon,
   GoalIcon,
   PencilIcon,
+  RotateCcwIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
   TrendingUpDownIcon,
@@ -42,6 +43,7 @@ import {
   TID_V4_FEEDBACK_DISLIKE,
   TID_V4_FEEDBACK_LIKE,
   TID_V4_FORK,
+  TID_V4_RETRY,
   TID_V4_ROW,
   TID_V4_ROW_ATTACHMENTS,
   testId,
@@ -971,6 +973,7 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
   );
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [draft, setDraft] = useState(row.text);
   const [editAttachments, setEditAttachments] = useState<AttachmentRef[]>(() => [
     ...(row.attachments ?? []),
@@ -1071,6 +1074,7 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
     setEditAttachments([...(row.attachments ?? [])]);
     setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
     setEditPromptContexts(parsedPrompt);
+    setEditError(null);
     setEditing(true);
   }, [parsedPrompt, row.attachments]);
 
@@ -1092,6 +1096,7 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
       if (!onEdit) return;
       if (!nextText.trim() && editAttachments.length === 0 && editContextCount === 0) return;
       setSubmitting(true);
+      setEditError(null);
       try {
         const result = await onEdit(
           { rowId: row.rowId, entityId: row.entityId! },
@@ -1118,16 +1123,21 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
           setConflictOpen(true);
           return;
         }
-        if (result !== false) {
-          setEditing(false);
-          setConflictOpen(false);
+        if (result === false) {
+          setEditError(intl.formatMessage({ id: "chat.error.sendFailed" }));
+          return;
         }
+        setEditing(false);
+        setConflictOpen(false);
+      } catch (error) {
+        setEditError(error instanceof Error ? error.message : String(error));
       } finally {
         setSubmitting(false);
       }
     },
     [
       editAttachments,
+      intl,
       editContextCount,
       editPromptContexts,
       onEdit,
@@ -1285,6 +1295,11 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
           }}
           onCancel={handleCancelEdit}
         />
+        {editError ? (
+          <p role="alert" className="mt-2 text-ui-sm text-destructive">
+            {editError}
+          </p>
+        ) : null}
         <ConversationFileRewindDialog
           variant="editConflict"
           open={conflictOpen}
@@ -1469,6 +1484,52 @@ const UserInputRowView = memo(function UserInputRowView(
 
 // memo 组件的数组默认值必须是模块级常量：内联 [] 每次渲染都是新引用，会让 memo 比较失效。
 const EMPTY_SOURCE_COMMAND_IDS: readonly string[] = [];
+
+/** Retry uses the projected assistant identity, never the unsent composer content. */
+export const ConversationRetryAction = memo(function ConversationRetryAction({
+  target,
+  onRetry,
+  compactForRemoteControl,
+}: {
+  target: ConversationRowTarget;
+  onRetry: (target: ConversationRowTarget) => Promise<void> | void;
+  compactForRemoteControl?: boolean;
+}) {
+  const { intl } = useZCodeIntl();
+  const pendingRef = useRef(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const label = intl.formatMessage({ id: "chat.message.retry" });
+  const handleRetry = useCallback(async () => {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      await onRetry(target);
+    } catch (failure: unknown) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      pendingRef.current = false;
+      setPending(false);
+    }
+  }, [onRetry, target]);
+  return (
+    <>
+      <MessageAction
+        aria-label={label}
+        label={label}
+        tooltip={compactForRemoteControl ? undefined : label}
+        data-testid={testId(TID_V4_RETRY, String(target.rowId))}
+        disabled={pending}
+        onClick={() => void handleRetry()}
+      >
+        <RotateCcwIcon className="size-3.5" />
+      </MessageAction>
+      {error ? <span role="alert" className="text-ui-sm text-destructive">{error}</span> : null}
+    </>
+  );
+});
 
 export const ConversationAssistantTextActions = memo(function ConversationAssistantTextActions({
   rowId,
@@ -2064,6 +2125,24 @@ const TimelineMarkerRowView = memo(function TimelineMarkerRowView({
     }
     return () => onNavigate(marker.parentSessionId, marker.parentRowId);
   }, [marker, onNavigate]);
+  if (marker.type === "nativeNotice") {
+    return (
+      <RowShell rowId={row.rowId}>
+        <section
+          role={marker.level === "info" ? "status" : "alert"}
+          data-marker-type="nativeNotice"
+          data-level={marker.level}
+          data-source={marker.source}
+          className={cn("rounded-lg border border-card-border bg-card px-4 py-3 text-ui-base",
+            marker.level === "error" && "text-destructive",
+            marker.level === "warning" && "text-warning")}
+        >
+          {marker.source ? <p className="mb-1 text-ui-sm text-foreground-subtle">{marker.source}</p> : null}
+          <pre className="whitespace-pre-wrap break-words font-sans">{marker.text}</pre>
+        </section>
+      </RowShell>
+    );
+  }
 
   if (!view) {
     return null;
@@ -2393,6 +2472,10 @@ function ConversationRowViewImpl({
     case "timelineMarker":
       return <TimelineMarkerRowView row={row} context={context} />;
     case "toolCall":
+      if (context.nativeDisplayMode === "clean" ||
+          (context.nativeDisplayMode === "compact" &&
+            resolveToolCallIdentity(toolCallRowToLegacyNode(row).toolCall).family !== "file-write"))
+        return null;
       // 只在 ToolCallBlock 内返回 null 会留下空 RowShell 和多余间距；
       // 在行分发处按同一工具身份规则裁剪，设置关闭时不产生任何 Todo DOM。
       if (
@@ -2403,6 +2486,7 @@ function ConversationRowViewImpl({
       }
       return <ToolCallRowView row={row} context={context} />;
     case "subagent":
+      if (context.nativeDisplayMode === "clean" || context.nativeDisplayMode === "compact") return null;
       return <SubagentRowView row={row} />;
     case "artifact":
       return <ArtifactRowView row={row} />;
