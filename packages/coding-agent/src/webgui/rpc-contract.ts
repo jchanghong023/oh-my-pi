@@ -1,6 +1,7 @@
 import type { IServerChannel } from "../../../../vendor/zcode-frontend/packages/rpc/src/channels.shared";
 import type { Event } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
 import { WEBGUI_UNAVAILABLE_CODE } from "../../../../vendor/zcode-frontend/preview/session-info";
+import type { AgentSession } from "../session/agent-session";
 
 export {
 	WEBGUI_RPC_PATH,
@@ -14,6 +15,7 @@ export interface WebGuiServiceContext {
 	connectionId: string;
 	projectId?: string;
 	workspacePath?: string;
+	readonly nativeSession?: AgentSession;
 	signal: AbortSignal;
 }
 

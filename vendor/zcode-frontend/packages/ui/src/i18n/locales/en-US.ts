@@ -1782,6 +1782,8 @@ const enUS: Record<string, string> = {
   "chat.toolbar.model.loadFailedRetry": "Models failed to load. Retry",
   "chat.toolbar.model.remoteWaiting": "Waiting for remote models",
   "chat.toolbar.model.targetMissing": "No model target",
+  "chat.toolbar.model.nativeUnbound": "No native OMP session is bound. Open Web UI from an active OMP session to choose its model.",
+  "chat.toolbar.model.nativeEmpty": "No models are available for this OMP session.",
   "settings.subagents.modelLoadFailed": "The model list failed to load.",
   "root.modelSelection.loadFailed": "Model configuration failed to load.",
   "modelTrajectory.openSourceDirectory": "Open source folder",

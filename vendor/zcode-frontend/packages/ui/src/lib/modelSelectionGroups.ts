@@ -35,6 +35,26 @@ export function buildRegistryModelSelectGroups(
   view: ModelSelectionView,
   labels: ModelProviderGroupLabelOptions = {},
 ): ModelSelectGroup[] {
+  if (view.nativeSession !== undefined) {
+    const groups = new Map<string, ModelSelectGroup>();
+    for (const model of view.nativeSession?.models ?? []) {
+      let group = groups.get(model.providerId);
+      if (!group) {
+        group = {
+          key: `native-provider:${model.providerId}`,
+          label: model.providerId,
+          items: [],
+        };
+        groups.set(model.providerId, group);
+      }
+      group.items.push({
+        key: encodeCustomModelValue(model.providerId, model.modelId),
+        value: encodeCustomModelValue(model.providerId, model.modelId),
+        name: model.name,
+      });
+    }
+    return [...groups.values()];
+  }
   return view.providers.flatMap((provider) => {
     if (!supportsRegistryApiFormat(selectedProvider, provider.config.api?.type)) {
       return [];

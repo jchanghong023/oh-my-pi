@@ -95,6 +95,12 @@ export type ProviderSettingsConnectivityTester = (
 export interface IModelSelectionService {
   readonly onDidChange: Event<ModelSelectionView>;
   getView(input?: ModelSelectionViewInput): Promise<ModelSelectionView>;
+  /** OMP only: change the bound session model, never the global default. */
+  setSessionModel?(input: {
+    sessionId: string;
+    providerId: string;
+    modelId: string;
+  }): Promise<ModelSelectionView>;
 }
 
 export interface ModelSelectionConfiguredDefaultSource {

@@ -6,9 +6,9 @@
  * ChatModeSwitchControl / ThoughtLevelCycleControl / ChatContextUsage），外观与旧
  * ChatInputToolbar 对齐；但状态编排是全新 v4 wiring，不复活旧 ChatInputToolbar 的
  * effect 链 / 旧协议写路径：
- * - 当前模型/档位来自 Composer；已运行会话的用量来自 snapshot.usage.contextWindow
- * - 模型、思考深度和模式只更新下一次 Submission 的 Composer 意图
- * - 模型静态事实来自目标 Host ModelSelectionView；workspace configOptions 只提供
+ * - 普通 Host 的模型、思考深度和模式来自 Composer，更新下一次 Submission 意图
+ * - OMP 模型来自绑定原生会话，点击成功写入临时模型后重读 Host；不开放思考深度写入
+ * - 模型事实来自目标 Host ModelSelectionView；workspace configOptions 只提供
  *   mode 等非模型 presentation
  *
  * 新任务和已有会话采用相同的 Composer 显示事实；prewarm 不补模型或档位。
@@ -42,6 +42,7 @@ import { ModelConfigSelect, type ModelSelectGroup } from "@/ModelConfigSelect.js
 import type { ComposerModelOptions } from "@/chat-input-toolbar/ComposerModelMenu.js";
 import { Button } from "@/components/ui/button.js";
 import { HighspeedModelIndicator } from "@/highspeed/HighspeedModelIndicator.js";
+import { toast } from "@/components/ui/toast.js";
 import { formatHighspeedRemainingTime } from "@/highspeed/highspeedTime.js";
 import { ChatContextUsage } from "@/chat-input-toolbar/display.js";
 import {
@@ -426,7 +427,7 @@ export interface V4ComposerToolbarProps {
     model: string,
     sourceModel: ModelSelectionSource | null,
     reasoningLevel?: string,
-  ) => void;
+  ) => void | Promise<void>;
   /** 选中思考深度；modelContext 固定本次用户操作的目标模型。 */
   onSelectThought: (thought: string, modelContext: { provider: string; model: string }) => void;
   onSwitchMode: (mode: string) => void;
@@ -470,6 +471,7 @@ function V4ComposerModelControlsImpl({
   const { intl, locale } = useZCodeIntl();
   const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const displayProvider = provider ?? ZCODE_AGENT_PROVIDER;
+  const isNativeModelSelection = modelSelectionView?.nativeSession !== undefined;
   // 配置面读取：workspace 缺省目录（taskId=null），不读旧会话态。
   const { error: configOptionsError } = useToolbarConfigOptions(
     workspacePath,
@@ -499,6 +501,7 @@ function V4ComposerModelControlsImpl({
   // Ctrl+M 热键：递增 openRequestKey 请求 ModelConfigSelect 打开菜单（旧 handleOpenModelMenuShortcut 语义）。
   const [modelMenuOpenRequestKey, setModelMenuOpenRequestKey] = useState(0);
   const [recoveryPending, setRecoveryPending] = useState(false);
+  const [nativeModelPending, setNativeModelPending] = useState(false);
   const handleOpenModelMenuShortcut = useCallback(() => {
     setModelMenuOpenRequestKey((current) => current + 1);
   }, []);
@@ -515,7 +518,11 @@ function V4ComposerModelControlsImpl({
     [onConfigPickerOpenChange],
   );
 
-  const modelOption = modelSelectionView?.providers.some((provider) => provider.models.length > 0)
+  const modelOption = (
+    isNativeModelSelection
+      ? modelSelectionView?.nativeSession?.models.length
+      : modelSelectionView?.providers.some((provider) => provider.models.length > 0)
+  )
     ? ({
         id: "model",
         name: "Model",
@@ -886,7 +893,8 @@ function V4ComposerModelControlsImpl({
     setPendingSettingsSectionIntent("modelProvider");
     openSettingsTab();
   }, [openSettingsTab]);
-  const showManageModelsAction = shouldShowManageModelsAction(handleOpenModelProviderSettings);
+  const showManageModelsAction =
+    !isNativeModelSelection && shouldShowManageModelsAction(handleOpenModelProviderSettings);
   const manageModelsLabel = intl.formatMessage({
     id: "chat.toolbar.model.manageModels",
   });
@@ -894,6 +902,9 @@ function V4ComposerModelControlsImpl({
   // 当前投影模型的编码值：provider 命中目录则按自定义模型编码，否则回落裸 model id。
   const rawModelValue = useMemo(() => {
     if (!effectiveConfig || !effectiveConfig.model) return "";
+    if (isNativeModelSelection) {
+      return encodeCustomModelValue(effectiveConfig.provider, effectiveConfig.model);
+    }
     const providerExists = modelSelectionView?.providers.some(
       (candidate) => candidate.providerId === effectiveConfig.provider,
     );
@@ -901,7 +912,7 @@ function V4ComposerModelControlsImpl({
       return encodeCustomModelValue(effectiveConfig.provider, effectiveConfig.model);
     }
     return effectiveConfig.model;
-  }, [effectiveConfig, modelSelectionView]);
+  }, [effectiveConfig, isNativeModelSelection, modelSelectionView]);
 
   // 触发器显示兜底——`<synthetic>`（SDK 恢复时合成的占位模型）或当前模型
   // 不在可选组（失效/下线/退登）→ 回落占位/默认「选择模型」，不直显协议内部占位符或失效
@@ -916,9 +927,16 @@ function V4ComposerModelControlsImpl({
       ),
     [manageModelsLabel, modelSelectGroups, rawModelValue, showManageModelsAction],
   );
-  const normalizedModelValue = triggerDisplay.value ?? "";
+  const normalizedModelValue = isNativeModelSelection ? rawModelValue : (triggerDisplay.value ?? "");
 
   const modelTriggerDisplay = useMemo(() => {
+    if (isNativeModelSelection && effectiveConfig?.model) {
+      const name = modelSelectionView?.nativeSession?.models.find(
+        (model) =>
+          model.providerId === effectiveConfig.provider && model.modelId === effectiveConfig.model,
+      )?.name ?? effectiveConfig.model;
+      return { fullLabel: `${effectiveConfig.provider}/${name}`, modelLabel: name };
+    }
     // 非可选值（未选 / synthetic / 不可用）：占位文案或默认「选择模型」。
     const fallbackLabel =
       triggerDisplay.placeholder ?? intl.formatMessage({ id: "chat.toolbar.model.label" });
@@ -935,7 +953,9 @@ function V4ComposerModelControlsImpl({
     });
   }, [
     effectiveConfig?.provider,
+    effectiveConfig?.model,
     intl,
+    isNativeModelSelection,
     modelSelectionView,
     modelSelectGroups,
     normalizedModelValue,
@@ -945,6 +965,20 @@ function V4ComposerModelControlsImpl({
     (value: string, reasoningLevel?: string) => {
       if (modelLocked) return;
       const decoded = decodeCustomModelValue(value);
+      if (isNativeModelSelection) {
+        if (!decoded || !modelSelectionView?.nativeSession || nativeModelPending) return;
+        setNativeModelPending(true);
+        void Promise.resolve()
+          .then(() => onSelectModel(decoded.providerId, decoded.modelName ?? "", null))
+          .catch((error) => {
+            logger.warn("[v4-toolbar] native session model switch failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            toast(intl.formatMessage({ id: "chat.toolbar.draftConfigWriteFailed" }));
+          })
+          .finally(() => setNativeModelPending(false));
+        return;
+      }
       // 草稿的点击时可见模型可能只存在于 catalog，或已经被最新 draft
       // intent 覆盖，不能让 SessionPane 再从迟到的 prewarm projection 反推。
       const sourceModel =
@@ -1004,6 +1038,9 @@ function V4ComposerModelControlsImpl({
       configOptionsError,
       displayProvider,
       draftMode,
+      intl,
+      isNativeModelSelection,
+      nativeModelPending,
       effectiveConfig?.model,
       effectiveConfig?.provider,
       onRecoverCustomModelSelection,
@@ -1071,14 +1108,14 @@ function V4ComposerModelControlsImpl({
 
   const draftModelThoughtOption = useMemo(
     () =>
-      effectiveConfig
+      effectiveConfig && !isNativeModelSelection
         ? resolveDraftModelThoughtOption(
             effectiveConfig.provider,
             effectiveConfig.model,
             modelSelectionView,
           )
         : null,
-    [effectiveConfig, modelSelectionView],
+    [effectiveConfig, isNativeModelSelection, modelSelectionView],
   );
 
   // 候选档位只来自目标 Host 的 ModelSelectionView，已选档位只来自 Composer。
@@ -1215,6 +1252,13 @@ function V4ComposerModelControlsImpl({
   // 模型留空是正常的待选择状态，包括已有会话；不能因为没有已选模型隐藏重选入口。
   // 有可选组时正常显示；无组但有「管理模型」入口时也显示，避免用户零模型入口。
   const modelMenuVisible = modelSelectGroups.length > 0 || showManageModelsAction;
+  const modelPickerDisabled =
+    (isNativeModelSelection ? !modelSelectionView?.nativeSession : disabled) ||
+    nativeModelPending ||
+    recoveryPending ||
+    modelLocked ||
+    (modelSelectionState.status !== "ready" &&
+      !(modelSelectionState.status === "loading" && modelSelectionState.catalog));
   // 配置恢复不是用户改选：未知时不显示“选择模型”，首次恢复不播放新旧标签滚动。
   const sessionConfigPending = sessionId !== null && draftConfig?.mode === undefined;
   // Bug 根因：手机端固定宽度的二级菜单没有消费 Radix 测得的当前方向可用宽度，
@@ -1225,9 +1269,10 @@ function V4ComposerModelControlsImpl({
       : undefined;
   useToolbarShortcutBindings({
     hasAnyOption: Boolean(modelOption) || Boolean(thoughtOption),
-    toolbarDisabled: disabled || recoveryPending || connectionSwitch.pending,
-    modelMenuDisabled:
-      disabled || recoveryPending || modelLocked || connectionSwitch.pending || !modelMenuVisible,
+    toolbarDisabled: isNativeModelSelection
+      ? modelPickerDisabled
+      : disabled || recoveryPending || connectionSwitch.pending,
+    modelMenuDisabled: modelPickerDisabled || connectionSwitch.pending || !modelMenuVisible,
     modelOption,
     thoughtOption: thoughtOption ?? undefined,
     onOpenModelMenu: handleOpenModelMenuShortcut,
@@ -1285,6 +1330,15 @@ function V4ComposerModelControlsImpl({
           sweepActive={highspeedSweepActive}
           animateEntrance={highspeedEntranceAnimated}
         />
+      ) : isNativeModelSelection &&
+        (!modelSelectionView?.nativeSession || modelSelectGroups.length === 0) ? (
+        <span className="px-2 text-ui-sm text-foreground-subtle" role="status">
+          {intl.formatMessage({
+            id: modelSelectionView?.nativeSession
+              ? "chat.toolbar.model.nativeEmpty"
+              : "chat.toolbar.model.nativeUnbound",
+          })}
+        </span>
       ) : modelSelectionState.status === "error" && modelSelectionReload ? (
         <Button
           type="button"
@@ -1305,6 +1359,7 @@ function V4ComposerModelControlsImpl({
           })}
         </span>
       ) : modelMenuVisible &&
+        !isNativeModelSelection &&
         !providerSourcesLoading &&
         planGroups.length === 0 &&
         !connectionSwitch.pending ? (
@@ -1332,7 +1387,7 @@ function V4ComposerModelControlsImpl({
           triggerLabel={
             sessionConfigPending && !effectiveConfig?.model ? "" : modelTriggerDisplay.modelLabel
           }
-          composerOptions={composerOptions}
+          composerOptions={isNativeModelSelection ? undefined : composerOptions}
           showManageModelsAction={showManageModelsAction}
           manageModelsLabel={manageModelsLabel}
           onManageModels={handleOpenModelProviderSettings}
@@ -1343,12 +1398,12 @@ function V4ComposerModelControlsImpl({
           })}
           isItemLocked={isModelOptionLocked}
           onValueChange={handleModelValueChange}
-          disabled={
-            disabled ||
-            recoveryPending ||
-            modelLocked ||
-            (modelSelectionState.status !== "ready" &&
-              !(modelSelectionState.status === "loading" && modelSelectionState.catalog))
+          disabled={modelPickerDisabled}
+          pending={nativeModelPending}
+          pendingLabel={
+            nativeModelPending
+              ? intl.formatMessage({ id: "chat.toolbar.modelSwitch.stage.settingModel" })
+              : undefined
           }
           tooltipTitle={modelTriggerDisplay.fullLabel}
           shortcutLabel={modelShortcutLabel}

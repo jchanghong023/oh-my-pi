@@ -7,6 +7,7 @@ import type {
 	WebGuiProject,
 	WebGuiSessionInfo,
 } from "../../../../vendor/zcode-frontend/preview/session-info";
+import type { AgentSession } from "../session/agent-session";
 import { assertSpecWritePath } from "../spec-driven/artifacts";
 import { DevWorkspace } from "../spec-driven/workspace";
 
@@ -19,13 +20,19 @@ export interface BrowserProjectRecord {
 	readonly pid: number;
 	readonly allowLan: boolean;
 	readonly readInfo?: () => WebGuiSessionInfo;
+	readonly nativeSession?: AgentSession;
+	/** Already-admitted native mutations must settle before the binding releases its lease. */
+	readonly pendingModelSelections?: Set<Promise<void>>;
 }
 
 export interface BrowserProjectLease {
 	readonly projectId: string;
 	readonly root: string;
 	readonly mode: BrowserProjectMode;
-	activate(readInfo: () => WebGuiSessionInfo, options?: { allowLan?: boolean }): Promise<void>;
+	activate(
+		readInfo: () => WebGuiSessionInfo,
+		options?: { allowLan?: boolean; nativeSession?: AgentSession },
+	): Promise<void>;
 	markExiting(): Promise<void>;
 	close(): Promise<void>;
 }
@@ -88,6 +95,8 @@ async function acquireResolvedProject(root: string, mode: BrowserProjectMode): P
 					phase: "active",
 					readInfo,
 					allowLan: options?.allowLan ?? mode === "webgui",
+					nativeSession: options?.nativeSession,
+					pendingModelSelections: options?.nativeSession ? new Set() : undefined,
 				};
 			},
 			async markExiting() {

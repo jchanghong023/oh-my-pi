@@ -7,7 +7,10 @@ import type {
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { logger } from "@/logger.js";
 
-type ModelSelectionCatalog = Pick<ModelSelectionView, "revision" | "providers">;
+type ModelSelectionCatalog = Pick<
+  ModelSelectionView,
+  "revision" | "providers" | "nativeSession" | "preferredSelection"
+>;
 
 export type ModelSelectionState =
   | { status: "loading"; catalog?: ModelSelectionCatalog }
@@ -69,10 +72,14 @@ function retainedCatalog(
   )
     return undefined;
   // 调档/换模型只改变解析输入；清空同 Host 目录会让菜单收缩闪烁。
-  // 仅保留目录，绝不把旧 effectiveSelection 当作新选择的解析结果。
+  // 不保留旧 effectiveSelection；OMP preferredSelection 是原生会话事实，不是浏览器意图。
   if (previous.state.status === "ready") {
-    const { revision, providers } = previous.state.view;
-    return { revision, providers };
+    const { revision, providers, nativeSession, preferredSelection } = previous.state.view;
+    return {
+      revision,
+      providers,
+      ...(nativeSession !== undefined ? { nativeSession, preferredSelection } : {}),
+    };
   }
   return previous.state.status === "loading" ? previous.state.catalog : undefined;
 }

@@ -2,7 +2,7 @@ import { readLines } from "@oh-my-pi/pi-utils";
 import type { DevWorkbenchHandle } from "../dev-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import { openPathWithResult } from "../utils/open";
-import { acquireBrowserProject } from "./project-registry";
+import { acquireBrowserProject, readBrowserProject } from "./project-registry";
 import { closeWebServer, ensureWebServer } from "./server";
 import { readWebGuiSessionInfo } from "./session-source";
 
@@ -48,6 +48,8 @@ async function bindWebGui(session: AgentSession): Promise<WebGuiHandle> {
 			if (!closing) {
 				const pending = (async () => {
 					await lease.markExiting();
+					const pendingModels = readBrowserProject(lease.projectId)?.pendingModelSelections;
+					if (pendingModels) await Promise.allSettled(pendingModels);
 					await lease.close();
 					handles.delete(handle);
 				})();
@@ -63,7 +65,7 @@ async function bindWebGui(session: AgentSession): Promise<WebGuiHandle> {
 	try {
 		const server = await ensureWebServer({ webgui: true });
 		if (exiting) throw new Error("WebGUI exited during server startup");
-		await lease.activate(() => readWebGuiSessionInfo(session), { allowLan: true });
+		await lease.activate(() => readWebGuiSessionInfo(session), { allowLan: true, nativeSession: session });
 		if (exiting) throw new Error("WebGUI exited during project activation");
 		const selected = (address: string): string => {
 			const url = new URL(address);

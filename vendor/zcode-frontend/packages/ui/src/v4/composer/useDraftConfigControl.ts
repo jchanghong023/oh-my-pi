@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Composer 草稿 owner 同时收口选择、正文与提交生命周期，保持单一状态边界。 */
 // 当前编辑由 Composer 持有；进入已有 Session 从当前快照恢复权限/Plan，在线只响应新变化。
-// 菜单点击立即保存 Renderer 意图，Prewarm 与 Submission 只消费它，不反向覆盖。
+// 普通 Host 的菜单意图保存到 Renderer；OMP 模型只显示原生会话事实，切换必须由 Host 接纳。
 //
 // Workspace presentation 水合只提供 mode 与 slash commands；模型候选、能力和首选值
 // 统一来自目标 Host ModelSelectionView。
@@ -120,7 +120,11 @@ export interface DraftConfigControl {
     selection: ModelSelection,
     expectedSelection?: ModelSelection,
   ) => () => void;
-  handleDraftSelectModel: (modelProvider: string, model: string, reasoningLevel?: string) => void;
+  handleDraftSelectModel: (
+    modelProvider: string,
+    model: string,
+    reasoningLevel?: string,
+  ) => void | Promise<void>;
   handleDraftSelectThought: (thought: string) => void;
   handleDraftSwitchMode: (mode: string) => void;
   /** 预热身份就绪后观察所属草稿的新授权，不改变 Composer 的 root scope。 */
@@ -321,10 +325,15 @@ export function useDraftConfigControl(params: {
   // 正文/模式自动保存继续保存 draft 中的原意图；读取未就绪时保留展示，提交由 View 门禁阻断。
   // 已有会话首份配置未恢复时，null selection 的 View 只是新任务默认值，不能显示到此会话。
   const sessionConfigPending = sessionId !== null && !currentState.observedConfig;
+  const nativeModelView =
+    modelSelectionView ??
+    (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
   const effectiveSelection =
-    modelSelectionView && !sessionConfigPending
-      ? (modelSelectionView.effectiveSelection ?? undefined)
-      : draft.modelSelection;
+    nativeModelView?.nativeSession !== undefined
+      ? (nativeModelView.nativeSession ? nativeModelView.preferredSelection : undefined)
+      : modelSelectionView && !sessionConfigPending
+        ? (modelSelectionView.effectiveSelection ?? undefined)
+        : draft.modelSelection;
   const draftConfig = useMemo<Partial<SessionConfigState>>(
     () => ({
       mode:
@@ -933,6 +942,21 @@ export function useDraftConfigControl(params: {
       const catalog =
         modelSelectionView ??
         (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
+      if (catalog?.nativeSession !== undefined) {
+        const nativeSession = catalog.nativeSession;
+        if (!nativeSession || !modelSelectionService?.setSessionModel) {
+          return Promise.reject(new Error("No bound native session for model selection"));
+        }
+        // The native session owns this choice; never project the browser's request as success.
+        return modelSelectionService
+          .setSessionModel({
+            sessionId: nativeSession.sessionId,
+            providerId: modelProvider,
+            modelId: model,
+          })
+          .then(() => modelSelectionRead.refresh())
+          .then(() => undefined);
+      }
       const modelSelection = reasoningLevel
         ? { ...parsedSelection, options: { reasoningLevel } }
         : catalog
@@ -952,6 +976,8 @@ export function useDraftConfigControl(params: {
     [
       modelSelectionView,
       modelSelectionRead.state,
+      modelSelectionService,
+      modelSelectionRead.refresh,
       updateDraftConfig,
       workspaceIdentity,
       workspacePath,
@@ -960,6 +986,7 @@ export function useDraftConfigControl(params: {
 
   const handleDraftSelectThought = useCallback(
     (thought: string) => {
+      if (nativeModelView?.nativeSession !== undefined) return;
       updateDraftConfig((current) => {
         const providerId = current.modelSelection?.providerId ?? current.provider?.trim();
         const modelId = current.modelSelection?.modelId ?? current.model?.trim();
@@ -983,7 +1010,7 @@ export function useDraftConfigControl(params: {
         };
       });
     },
-    [updateDraftConfig],
+    [nativeModelView, updateDraftConfig],
   );
 
   const handleDraftSwitchMode = useCallback(

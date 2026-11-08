@@ -511,7 +511,7 @@ export interface ConversationComposerProps {
     model: string,
     sourceModel: ModelSelectionSource | null,
     reasoningLevel?: string,
-  ) => void;
+  ) => void | Promise<void>;
   /** 选中思考深度；同时带上用户操作时看到的模型，避免异步回流后把 thought 归到另一模型。 */
   onSelectThought: (thought: string, modelContext: { provider: string; model: string }) => void;
   onSwitchMode: (mode: string) => void;
@@ -2485,8 +2485,11 @@ function ConversationComposerImpl({
       nextModel: string,
       sourceModel: ModelSelectionSource | null,
       reasoningLevel?: string,
-    ) =>
-      runUserAction({
+    ) => {
+      if (modelSelectionView?.nativeSession !== undefined) {
+        return onSelectModel(nextProvider, nextModel, sourceModel);
+      }
+      return runUserAction({
         input: {
           featureId: "conversation.composer.config",
           action: "change_model",
@@ -2498,8 +2501,9 @@ function ConversationComposerImpl({
             : onSelectModel(nextProvider, nextModel, sourceModel, reasoningLevel),
         completed: { resultSource: "optimistic_projection" },
         failureStage: "model_change",
-      }),
-    [onSelectModel],
+      });
+    },
+    [modelSelectionView?.nativeSession, onSelectModel],
   );
   const submitControlNode = useMemo(
     () => (
@@ -2512,7 +2516,7 @@ function ConversationComposerImpl({
             {intl.formatMessage({ id: "remote.conversation.sendUnavailable" })}
           </span>
         ) : null}
-        {remoteAvailable ? (
+        {remoteAvailable || modelSelectionView?.nativeSession !== undefined ? (
           <span className="flex min-w-0 shrink items-center gap-1 overflow-hidden empty:hidden">
             <V4ComposerModelControls
               workspacePath={workspacePath}

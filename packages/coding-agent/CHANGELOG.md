@@ -5,7 +5,8 @@
 ### Added
 
 - Open WebGUI with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to close this instance's web service and restore terminal input.
-- Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels; business capabilities remain unconnected.
+- Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels; chat and other business capabilities remain unconnected.
+- Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
 
 ### Changed
 

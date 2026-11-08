@@ -149,6 +149,7 @@ class WebGuiConnection {
 			connectionId: crypto.randomUUID(),
 			projectId: project?.projectId,
 			workspacePath: project?.root ?? websocket.data.workspacePath,
+			nativeSession: project?.nativeSession,
 			signal: this.#abort.signal,
 		};
 		try {

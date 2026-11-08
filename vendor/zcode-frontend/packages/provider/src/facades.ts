@@ -202,6 +202,15 @@ export interface ModelSelectionView extends Partial<EffectiveModelSelectionResul
   readonly revision: number;
   readonly providers: readonly ModelSelectionProviderView[];
   readonly preferredSelection?: ModelSelection;
+  /** OMP attachment only: null means no native session is bound to this page. */
+  readonly nativeSession?: {
+    readonly sessionId: string;
+    readonly models: readonly {
+      readonly providerId: string;
+      readonly modelId: string;
+      readonly name: string;
+    }[];
+  } | null;
 }
 
 export class ProviderSettingsFacade {

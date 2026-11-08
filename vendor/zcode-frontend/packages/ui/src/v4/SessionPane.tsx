@@ -4583,7 +4583,7 @@ export function SessionPane({
         model,
         branch: "composer-submission-intent",
       });
-      handleDraftSelectModel(resolvedProvider, model, reasoningLevel);
+      return handleDraftSelectModel(resolvedProvider, model, reasoningLevel);
     },
     [activeHighspeedCard, draftConfigRef, handleDraftSelectModel, intl],
   );
@@ -4656,7 +4656,7 @@ export function SessionPane({
           provider: displayProvider,
           zcodeSessionService,
         });
-        handleDraftSelectModel(modelSelection.providerId, modelSelection.modelId);
+        await handleDraftSelectModel(modelSelection.providerId, modelSelection.modelId);
         store.setConfigOptions(workspacePath, prepareResult.configOptions ?? [], workspaceIdentity);
         store.setConfigOptionsStatus(workspacePath, "ready", workspaceIdentity);
         store.setSlashCommands(workspacePath, prepareResult.slashCommands ?? [], workspaceIdentity);

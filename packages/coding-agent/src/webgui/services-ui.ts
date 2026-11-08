@@ -1,7 +1,4 @@
-import type {
-	ModelSelectionView,
-	ProviderSettingsView,
-} from "../../../../vendor/zcode-frontend/packages/provider/src/facades";
+import type { ProviderSettingsView } from "../../../../vendor/zcode-frontend/packages/provider/src/facades";
 import type { BroadcastClaimAcquireResult } from "../../../../vendor/zcode-frontend/packages/services/src/broadcast/broadcast";
 import type { ClientScenesResponse } from "../../../../vendor/zcode-frontend/packages/services/src/client-scenes/clientScenes";
 import type { OffPeakClientConfig } from "../../../../vendor/zcode-frontend/packages/services/src/coding-plan-subscription/codingPlanSubscription";
@@ -27,6 +24,7 @@ import type { AppSettings } from "../../../../vendor/zcode-frontend/packages/sha
 import type { UsageEntitlementSnapshot } from "../../../../vendor/zcode-frontend/packages/shared/src/usage-stats";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
+import { createModelSelectionService } from "./services-model-selection";
 
 /** Connection-local presentation views, not snapshots of native OMP configuration or accounts. */
 export function createUiServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
@@ -40,11 +38,13 @@ export function createUiServices(context: WebGuiServiceContext): readonly WebGui
 		providerOrder: [],
 		providers: [],
 	};
-	const modelSelection: ModelSelectionView = { revision: 0, providers: [] };
 	const oauthProviders: OAuthProviderMeta[] = [];
 	const signedOut: OAuthCachedSessionRestoreResult = { status: "signed-out" };
 	const dynamicWorkflow: DynamicWorkflowClientConfig = createDynamicWorkflowClientConfig("disabled", "default");
-	const offPeak: OffPeakClientConfig = { enabled: false, modelSelectionView: modelSelection };
+	const offPeak: OffPeakClientConfig = {
+		enabled: false,
+		modelSelectionView: { revision: 0, providers: [] },
+	};
 	const clientConfig: ClientConfigSnapshot = {
 		pluginStoreOrder: null,
 		zsrcUrl: null,
@@ -87,10 +87,7 @@ export function createUiServices(context: WebGuiServiceContext): readonly WebGui
 			refresh: (): ProviderSettingsView => providerSettings,
 			// TODO(omp-providers): Map provider/model creation, overlays, deletion, ordering, drafts, enablement, resolution, connectivity tests, and onDidChange publishing to OMP adapters.
 		}),
-		createWebGuiService(ServiceChannels.ModelSelection, {
-			getView: (): ModelSelectionView => modelSelection,
-			// TODO(omp-model-selection): Publish onDidChange when real OMP model adapters become attached to this connection.
-		}),
+		createModelSelectionService(context),
 		createWebGuiService(ServiceChannels.UsageStats, {
 			getEntitlementSnapshot: (): UsageEntitlementSnapshot => ({
 				generatedAt: Date.now(),

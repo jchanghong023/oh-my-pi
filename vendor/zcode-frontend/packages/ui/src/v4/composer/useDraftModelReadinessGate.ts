@@ -7,7 +7,7 @@ import {
 } from "@/lib/chatPrepareError.js";
 import { logger } from "@/logger.js";
 
-type DraftModelReadinessStatus = "checking" | "ready" | "missing" | "check-failed";
+type DraftModelReadinessStatus = "checking" | "ready" | "missing" | "check-failed" | "model-only";
 
 interface DraftModelReadinessState {
   scope: object;
@@ -28,7 +28,9 @@ export interface DraftModelReadinessGate {
 
 export function resolveModelSelectionReadinessStatus(
   view: ModelSelectionView,
-): Extract<DraftModelReadinessStatus, "ready" | "missing"> {
+): Extract<DraftModelReadinessStatus, "ready" | "missing" | "model-only"> {
+  // A native model catalog does not enable the unrelated ZCode Agent startup/send path.
+  if (view.nativeSession !== undefined) return "model-only";
   return view.providers.some((provider) => provider.models.length > 0) ? "ready" : "missing";
 }
 
@@ -143,6 +145,7 @@ export function useDraftModelReadinessGate(params: {
       const view = await modelSelectionService.getView();
       const status = resolveModelSelectionReadinessStatus(view);
       commitStatus(status, { revealMissing: status === "missing" });
+      if (status === "model-only") return false;
       if (status === "missing") {
         logger.info("[v4-draft-readiness] 无可用 provider/model，草稿首发在 UI admission 拒绝", {
           providerCount: view.providers.length,
