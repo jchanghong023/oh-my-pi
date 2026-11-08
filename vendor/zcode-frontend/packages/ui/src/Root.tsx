@@ -17,7 +17,6 @@ import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useComposerClientNamespace } from "@/hooks/useServices.js";
 import { BackendBusinessAvailabilityProvider } from "@/hooks/useBackendBusinessAvailability.js";
 import { RemoteProjectPresentationProvider } from "@/hooks/RemoteProjectPresentationContext.js";
-import { isWindowsKeyboardPlatform } from "@/lib/keyboardShortcuts.js";
 import {
   readComposerWorkspaceScope,
   readV4ComposerDraft,
@@ -126,7 +125,6 @@ export function Root(props: RootProps) {
         <ServiceProvider
           services={props.services}
           composerClientNamespace={props.composerClientNamespace}
-          terminalOwnerId={props.terminalOwnerId}
         >
           <BackendBusinessAvailabilityProvider available={props.backendBusinessAvailable !== false}>
           <PlatformProvider platform={props.platform}>
@@ -169,7 +167,6 @@ function RootInner({
   initialTaskId,
   initialTaskDraft,
   isDesktop,
-  isWindowsDesktop = isWindowsKeyboardPlatform(),
   responsiveBrowserLayout = false,
   backendBusinessAvailable = true,
   restoreSession = true,
@@ -1075,7 +1072,6 @@ function RootInner({
                 backendBusinessAvailable={backendBusinessAvailable}
                 initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 isDesktop={isDesktop}
-                isWindowsDesktop={isWindowsDesktop}
               />
               </RemoteProjectPresentationProvider>
         )}

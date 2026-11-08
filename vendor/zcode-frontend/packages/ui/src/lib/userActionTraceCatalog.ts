@@ -25,8 +25,6 @@ export const CORE_USER_ACTION_FEATURES = {
   "conversation.subagent": ["expand", "open_side_pane", "open_split"],
   "conversation.background_work": ["open", "cancel"],
   "workbench.file": ["open_tree", "refresh", "open_file", "open_preview"],
-  "workbench.terminal": ["open", "close"],
-  "workbench.browser": ["open", "navigate", "back", "forward", "refresh", "open_external"],
   "workbench.git": ["open", "commit", "generate_commit_message", "run_action"],
   "extension.plugin": [
     "open_store",
@@ -64,7 +62,6 @@ export const SETTINGS_USER_ACTION_FEATURES = {
     "toggle_code_line_wrap",
     "change_code_font_size",
   ],
-  "settings.terminal": ["toggle_system_profile", "save_font_family", "change_shell"],
   "settings.search": ["toggle_native_search"],
   "settings.network": ["save_http_proxy", "save_no_proxy", "save_ca_certificate"],
   "settings.desktop": ["toggle_hardware_acceleration", "toggle_close_to_tray", "toggle_keep_awake"],
@@ -85,13 +82,6 @@ export const SETTINGS_USER_ACTION_FEATURES = {
   "settings.task": ["toggle_auto_archive", "change_auto_archive_days"],
   "settings.storage": ["change_data_directory"],
   "settings.memory": ["toggle_memory", "refresh_memory", "change_memory_scope"],
-  "settings.browser": [
-    "toggle_browser_use",
-    "import_browser_data",
-    "toggle_insecure_certificates",
-    "clear_cache",
-    "clear_all_data",
-  ],
 } as const;
 
 export type CoreUserActionFeatureId = keyof typeof CORE_USER_ACTION_FEATURES;

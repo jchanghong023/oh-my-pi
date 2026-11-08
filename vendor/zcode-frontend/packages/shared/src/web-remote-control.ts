@@ -378,7 +378,6 @@ export type WebRemoteControlPlatformResponse =
   | WebRemoteControlPlatformErrorResponse;
 
 export interface WebRemoteControlExternalLocalWorkspaceBridge {
-  terminalOwnerId?: string;
   bridgeSessionId: string;
   bridgeGeneration?: number;
   recoveryId?: string;
@@ -389,7 +388,6 @@ export interface WebRemoteControlExternalLocalWorkspaceBridge {
 }
 
 export interface WebRemoteControlExternalRemoteWorkspaceBridge {
-  terminalOwnerId?: string;
   bridgeSessionId: string;
   bridgeGeneration?: number;
   recoveryId?: string;

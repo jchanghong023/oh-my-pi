@@ -4,7 +4,6 @@ import type {
   ZCodeAutomationScheduleRule,
   ZCodeMcpListMode,
 } from "@zcode/shared";
-import type { McpAppsAppToolCallResult, McpAppsAppToolDescriptor } from "@zcode/shared/mcp-apps";
 
 export interface ZCodeAgentWorkspaceTarget {
   workspacePath: string;
@@ -21,7 +20,6 @@ export interface ZCodeAgentPluginMutationTarget extends ZCodeAgentWorkspaceTarge
       | "store_detail"
       | "side_pane_market"
       | "recommended_prompt"
-      | "recommended_ui"
       | "component_settings";
     client_kind?: "desktop" | "mobile";
     trigger?: "user" | "automatic" | "dependency" | "restore" | "sync";
@@ -124,72 +122,6 @@ export interface ZCodeAgentSkillReferenceCatalogParams extends ZCodeAgentWorkspa
   sessionId?: string;
 }
 
-/** 插件 UI：UI 发起的 `ui://` 资源读取。 */
-export interface ZCodeAgentReadMcpResourceParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  uri: string;
-}
-
-/** 插件 UI 页面发起的 `resources/read`；参数与 readMcpResource 同形，结果受 8 MiB 与 mimeType 白名单约束。 */
-export type ZCodeAgentReadMcpResourceForUiParams = ZCodeAgentReadMcpResourceParams;
-
-/** 插件 UI：UI 回调本插件工具；不进审批流，归属由 agent 侧 catalog fail closed。 */
-export interface ZCodeAgentCallMcpToolForUiParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  toolName: string;
-  arguments?: Record<string, unknown>;
-  /** 宿主生成的调用 id，配合 cancelMcpToolCallForUi。 */
-  callId: string;
-}
-/** 插件 UI 页面发起的 resources/list、resources/templates/list、subscribe、unsubscribe。 */
-export interface ZCodeAgentListMcpResourcesForUiParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  cursor?: string;
-}
-/** App-Provided Tools：实例身份 = 会话 + 沙箱作用域 + 代际。 */
-export interface ZCodeAgentAppToolInstanceForUiParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  scopeId: string;
-  generation: number;
-}
-export interface ZCodeAgentRegisterAppToolsForUiParams extends ZCodeAgentAppToolInstanceForUiParams {
-  tools: McpAppsAppToolDescriptor[];
-}
-export interface ZCodeAgentAppToolCallForUiParams extends ZCodeAgentAppToolInstanceForUiParams {
-  callId: string;
-}
-export interface ZCodeAgentResolveAppToolCallForUiParams extends ZCodeAgentAppToolCallForUiParams {
-  result?: McpAppsAppToolCallResult;
-  error?: { message: string };
-}
-export interface ZCodeAgentMcpResourceSubscriptionForUiParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  scopeId: string;
-  generation: number;
-  uri: string;
-}
-export interface ZCodeAgentCancelMcpToolCallForUiParams extends ZCodeAgentWorkspaceTarget {
-  instance: import("@zcode/shared/mcp-apps").McpAppInstance;
-  sessionId: string;
-  pluginId: string;
-  serverName: string;
-  callId: string;
-}
 export interface ZCodeAgentResolveSuggestedPluginReferenceParams extends ZCodeAgentWorkspaceTarget {
   stableId: string;
   operationId: string;

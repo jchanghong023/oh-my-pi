@@ -5,9 +5,6 @@ import type { IProjectService } from "#src/project/contract.js";
 import type { IGenUiService } from "./gen-ui/contract.js";
 import { IOffPeakTaskService } from "./session/offPeakTask.js";
 import type { IHighspeedCardService } from "./highspeed/highspeedCard.js";
-import type { IPluginUiBridgeService } from "./plugin-ui-bridge/contract.js";
-import type { IPluginUiSamplingService } from "./plugin-ui-bridge/samplingContract.js";
-import type { IPluginUiAppToolsService } from "./plugin-ui-bridge/appToolsContract.js";
 import type { IFileService } from "./file/file.js";
 import type { IMediaPreviewService } from "./media-preview/mediaPreview.js";
 import type { ICloudContentService } from "#src/cloud-content/cloudContent.js";
@@ -15,7 +12,6 @@ import type { IMarketingTouchService } from "#src/marketing-touch/marketingTouch
 import type { IGitService } from "./git/git.js";
 import type { IGitCheckpointService } from "./git/gitCheckpoint.js";
 import type { ISystemService } from "./system/system.js";
-import type { ITerminalService } from "./terminal/terminal.js";
 import type { ISettingService } from "./setting/setting.js";
 import type { ICredentialService } from "./credential/credential.js";
 import type { IBroadcastService } from "./broadcast/broadcast.js";
@@ -69,7 +65,6 @@ export interface IServiceAccessor {
   readonly gitService: IGitService;
   readonly gitCheckpointService: IGitCheckpointService;
   readonly systemService: ISystemService;
-  readonly terminalService: ITerminalService;
   readonly settingService: ISettingService;
   /** Onboarding 完成记录（本地持久化）；旧测试 double / 不支持的 host 可不提供。 */
   readonly onboardingRecordService?: IOnboardingRecordService;
@@ -108,13 +103,7 @@ export interface IServiceAccessor {
   readonly skillsService: ISkillsService;
   readonly skillSyncService: ISkillSyncService;
   readonly mcpSyncService: IMcpSyncService;
-  /** 插件 UI 桥；web 或旧 host 可不提供，UI 据此回退普通 MCP 卡片。 */
   readonly genUiService?: IGenUiService;
-  readonly pluginUiBridgeService?: IPluginUiBridgeService;
-  /** 页面 sampling；只有桌面本地任务开放。 */
-  readonly pluginUiSamplingService?: IPluginUiSamplingService;
-  /** App-Provided Tools；只有桌面本地 agent 时存在。 */
-  readonly pluginUiAppToolsService?: IPluginUiAppToolsService;
   readonly pluginSyncService: IPluginSyncService;
   /** 数据同步：子智能体 / 命令 / 钩子共用的用户配置同步通道（按 category 区分）。 */
   readonly userConfigSyncService: IUserConfigSyncService;

@@ -13,8 +13,7 @@ export type QuickPickCommandIcon =
   | "sidebarOpen"
   | "skills"
   | "themeDark"
-  | "themeLight"
-  | "terminal";
+  | "themeLight";
 
 export type QuickPickCommandSectionId =
   | "suggested"
@@ -57,8 +56,6 @@ interface QuickPickCommandHandlers {
   login?: () => void | Promise<void>;
   logout?: () => void | Promise<void>;
   toggleSidebar: () => void;
-  toggleTerminal: () => void;
-  openTerminalTab: () => void;
   openReviewTab: () => void;
 }
 
@@ -67,14 +64,12 @@ interface CreateQuickPickCommandsOptions {
   canOpenCommunity: boolean;
   isSidebarVisible: boolean;
   isLoggedIn: boolean;
-  supportsTerminal?: boolean;
   supportsReview?: boolean;
   themeTarget: "dark" | "light";
   shortcuts: {
     newTask: string;
     openWorkspace: string;
     toggleSidebar: string;
-    toggleTerminal: string;
   };
   handlers: QuickPickCommandHandlers;
 }
@@ -84,7 +79,6 @@ export function createQuickPickCommands({
   canOpenCommunity,
   isSidebarVisible,
   isLoggedIn,
-  supportsTerminal = true,
   supportsReview = true,
   themeTarget,
   shortcuts,
@@ -126,23 +120,6 @@ export function createQuickPickCommands({
       shortcut: shortcuts.toggleSidebar,
       keywords: ["sidebar", "left sidebar", "toggle sidebar", "侧栏", "侧边栏", "切换侧栏"],
       run: handlers.toggleSidebar,
-    },
-    {
-      id: "toggle-terminal",
-      sectionId: "panels",
-      titleId: "quickPick.command.toggleTerminal",
-      icon: "terminal",
-      shortcut: shortcuts.toggleTerminal,
-      keywords: ["terminal", "shell", "console", "终端"],
-      run: handlers.toggleTerminal,
-    },
-    {
-      id: "add-terminal-tab",
-      sectionId: "panels",
-      titleId: "quickPick.command.addTerminalTab",
-      icon: "terminal",
-      keywords: ["add", "terminal", "tab", "new terminal", "添加终端", "终端标签"],
-      run: handlers.openTerminalTab,
     },
     {
       id: "add-review-tab",
@@ -249,10 +226,5 @@ export function createQuickPickCommands({
     });
   }
 
-  return commands.filter(
-    (command) =>
-      (supportsTerminal ||
-        (command.id !== "toggle-terminal" && command.id !== "add-terminal-tab")) &&
-      (supportsReview || command.id !== "add-review-tab"),
-  );
+  return commands.filter((command) => supportsReview || command.id !== "add-review-tab");
 }

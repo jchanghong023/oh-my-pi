@@ -349,7 +349,7 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
  *
  * 只有根级错误边界时，workspace 内任意一个面板 render 抛错都会一路冒泡到根，
  * 最终把整套界面替换成全屏错误页。这里提供可复用的局部边界，让 sidebar、chat、
- * terminal、side pane 等区域各自失败各自恢复，避免单个组件问题扩大成整窗不可用。
+ * side pane 等区域各自失败各自恢复，避免单个组件问题扩大成整窗不可用。
  */
 export class ScopedErrorBoundary extends Component<
   ScopedErrorBoundaryProps,
@@ -378,7 +378,7 @@ export class ScopedErrorBoundary extends Component<
     );
     this.props.onCaughtReactError?.(normalizedError, errorInfo, this.props.scope);
     // 同根级边界：scoped 区域捕获的渲染异常同样不会冒泡到 RUM，按 scope 区分上报，
-    // 让 sidebar/chat/terminal/settings 等局部崩溃在 RUM 里可见、可定位。
+    // 让 sidebar/chat/settings 等局部崩溃在 RUM 里可见、可定位。
     reportReactErrorToArms({
       error: normalizedError,
       componentStack: errorInfo.componentStack ?? "",

@@ -60,10 +60,8 @@ export function WorkspaceHeader({
   gitDirtyFileCount,
   simplifyForNarrowViewport = false,
   isSidebarVisible,
-  isTerminalOpen,
   isSidePaneOpen,
   onRefreshGit,
-  onToggleTerminal,
   onToggleSidePane,
   toggleSidePaneShortcutLabel,
   onReloadSession,
@@ -99,10 +97,8 @@ export function WorkspaceHeader({
   gitDirtyFileCount: number;
   simplifyForNarrowViewport?: boolean;
   isSidebarVisible: boolean;
-  isTerminalOpen: boolean;
   isSidePaneOpen: boolean;
   onRefreshGit: () => void;
-  onToggleTerminal: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onReloadSession: (options?: {
@@ -188,9 +184,7 @@ export function WorkspaceHeader({
           readOnlyReason={readOnlyReason}
           workspaceAbsPath={workspaceAbsPath}
           workspaceIdentity={workspaceIdentity}
-          isTerminalOpen={isTerminalOpen}
           isSidePaneOpen={isSidePaneOpen}
-          onToggleTerminal={onToggleTerminal}
           onToggleSidePane={onToggleSidePane}
           toggleSidePaneShortcutLabel={toggleSidePaneShortcutLabel}
           simplifyForNarrowViewport={simplifyForNarrowViewport}

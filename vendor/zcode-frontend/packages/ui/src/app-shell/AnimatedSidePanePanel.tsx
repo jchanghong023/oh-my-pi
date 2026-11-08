@@ -19,7 +19,6 @@ import { FileManagerPane } from "@/WorkspaceFileTree.js";
 import type { FileManagerTarget } from "@/lib/workspaceSidePane.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { composerScopeKey, resolveComposerScope } from "@/v4/composer/composerDraftStore.js";
-import { SidePaneTerminalPane } from "@/SidePaneTerminalPane.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 import { WorkspaceSidePaneToggleButton } from "@/WorkspaceSidePaneToggleButton.js";
 import {
@@ -94,7 +93,6 @@ import {
   FolderOpenIcon,
   MessageSquareTextIcon,
   PlusIcon,
-  SquareTerminalIcon,
   type LucideIcon,
 } from "lucide-react";
 
@@ -242,7 +240,6 @@ function useWindowResizeSettling(enabled: boolean) {
 export function AnimatedSidePanePanel({
   services,
   isDesktop,
-  isWindowsDesktop,
   isVisible,
   sidePaneState,
   recentClosedSidePaneTabs,
@@ -271,7 +268,6 @@ export function AnimatedSidePanePanel({
   onOpenDeveloperTools,
   onOpenFileManager,
   onNavigateFileManager,
-  onOpenTerminalTab,
   onOpenReviewTab,
   onOpenSelectionSideConversation,
   onRevealGitFileInTree,
@@ -314,7 +310,6 @@ export function AnimatedSidePanePanel({
   /** 面板内容区（tab 栏下方），完整视图的对话宿主按它定位。 */
   fullViewSlotRef?: (element: HTMLDivElement | null) => void;
   isDesktop?: boolean;
-  isWindowsDesktop?: boolean;
   isVisible: boolean;
   sidePaneState: WorkspaceSidePaneState | null;
   recentClosedSidePaneTabs: RecentClosedSidePaneTab[];
@@ -344,7 +339,6 @@ export function AnimatedSidePanePanel({
   onOpenDeveloperTools: () => void;
   onOpenFileManager: (target?: FileManagerTarget) => void;
   onNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  onOpenTerminalTab: () => void;
   onOpenReviewTab: () => void;
   onOpenSelectionSideConversation: () => void;
   onRevealGitFileInTree?: (path: string) => void;
@@ -693,13 +687,6 @@ export function AnimatedSidePanePanel({
       icon: FileDiffIcon,
       onOpen: onOpenReviewTab,
     },
-    terminal: {
-      id: "terminal",
-      label: intl.formatMessage({ id: "terminal.title" }),
-      description: intl.formatMessage({ id: "sidePane.launcher.terminal" }),
-      icon: SquareTerminalIcon,
-      onOpen: onOpenTerminalTab,
-    },
     "developer-tools": {
       id: "developer-tools",
       label: intl.formatMessage({ id: "developerTools.title" }),
@@ -713,7 +700,7 @@ export function AnimatedSidePanePanel({
     developerToolsEnabled,
     hasReviewTab,
   })
-    .filter((itemId) => !isOfficeMode || (itemId !== "terminal" && itemId !== "review"))
+    .filter((itemId) => !isOfficeMode || itemId !== "review")
     .map((itemId) => openTabLauncherItemById[itemId]);
   const closeSidePaneButton =
     isVisible && !mobileOverlay && onCloseSidePane ? (
@@ -1181,16 +1168,6 @@ export function AnimatedSidePanePanel({
                               enabled={isVisible && tab.id === contentActiveTabId}
                             />
                           </ServiceProvider>
-                        ) : tab.type === "terminal" ? (
-                          <SidePaneTerminalPane
-                            services={services}
-                            sessionId={tab.id}
-                            workspaceKey={workspaceKey}
-                            cwd={tab.cwd ?? workspaceAbsPath}
-                            isVisible={isVisible && tab.id === contentActiveTabId}
-                            isWindowsDesktop={isWindowsDesktop}
-                            onOpenBrowserUrl={onOpenBrowserUrl}
-                          />
                         ) : null}
                       </TabsContent>
                     );
@@ -1237,7 +1214,7 @@ export function AnimatedSidePanePanel({
         />
       ) : null}
       <ResizablePanel
-        id="browser"
+        id="side-pane"
         panelRef={panelRef}
         elementRef={panelElementRef}
         defaultSize={panelLayout.defaultSize}

@@ -533,8 +533,6 @@ export const conversationSnapshotSchema = z.object({
   workspaceHookAdmission: workspaceHookAdmissionStateSchema.nullable().default(null),
   // 旧发送端可缺席；null 或缺席均无 MCP 待审核提示。
   workspaceMcpAdmission: workspaceMcpAdmissionStateSchema.nullable().optional(),
-  // （2026-09-12）：原 additive 字段 pluginUiSurfaces 已删除，插件面板 widgetState 只留在
-  // 宿主 renderer 内存。
   // B 区
   rows: rowsWindowSchema,
 });

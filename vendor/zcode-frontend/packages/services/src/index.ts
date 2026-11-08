@@ -67,9 +67,6 @@ export { IGitCheckpointService } from "./git/gitCheckpoint.js";
 // System service — ISystemService is both a type (interface) and value (descriptor)
 export { ISystemService } from "./system/system.js";
 
-// Terminal service — ITerminalService is both a type (interface) and value (descriptor)
-export { ITerminalService } from "./terminal/terminal.js";
-
 // Setting service — ISettingService is both a type (interface) and value (descriptor)
 export { ISettingService } from "./setting/setting.js";
 
@@ -348,38 +345,6 @@ export type {
 export { readProjectCatalog, projectSelectionId } from "#src/project-catalog/index.js";
 export type { ProjectCatalogPort, ProjectCatalogSnapshot } from "#src/project-catalog/contract.js";
 
-// 插件 UI 桥：描述符、参数类型与工厂；App-Provided Tools 另有独立描述符。
-export {
-  createPluginUiBridgeService,
-  createPluginUiAppToolsService,
-  createPluginUiSamplingService,
-  IPluginUiSamplingService,
-  type PluginUiSamplingParams,
-  type PluginUiCancelSamplingParams,
-  PluginUiBridgeError,
-  IPluginUiAppToolsService,
-  type PluginUiAppToolInstanceParams,
-  type PluginUiAppToolCallParams,
-  type PluginUiAppToolAcceptedResult,
-  type PluginUiRegisterAppToolsParams,
-  type PluginUiRegisterAppToolsResult,
-  type PluginUiResolveAppToolCallParams,
-} from "./plugin-ui-bridge/index.js";
-export {
-  IPluginUiBridgeService,
-  type PluginUiCallToolParams,
-  type PluginUiCallToolResult,
-  type PluginUiPrepareSandboxParams,
-  type PluginUiReadResourceParams,
-  type PluginUiReadResourceResult,
-  type PluginUiPluginScope,
-  type PluginUiListResourcesParams,
-  type PluginUiListResourcesResult,
-  type PluginUiListResourceTemplatesResult,
-  type PluginUiResourceSubscriptionParams,
-  type PluginUiSurfaceEntry,
-  type PluginUiWorkspaceTarget,
-} from "./plugin-ui-bridge/contract.js";
 export { IClientConfigService } from "./client-config/clientConfig.js";
 
 export { IHighspeedCardService } from "./highspeed/highspeedCard.js";

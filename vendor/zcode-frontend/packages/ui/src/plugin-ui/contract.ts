@@ -1,5 +1,4 @@
-import type { AttachmentRef, ConversationInputSource } from "@zcode/shared/zcode-protocol-v4";
-import type { PluginUiImageBlock } from "./domain/pluginUiImageBlocks.js";
+import type { ConversationInputSource } from "@zcode/shared/zcode-protocol-v4";
 
 /** DOM 位置属于视图，页面实例属于窗口 owner；跨容器移动只能走保活承载层。 */
 export interface SandboxPagePlacement {
@@ -18,11 +17,10 @@ export interface PluginUiSessionScope {
 
 /** Session actions shared by generated-UI sandboxes. */
 export interface PluginUiSessionActions {
-  /** images 先经会话的附件上传入口变成 AttachmentRef，再随 sendText 发送。 */
+  /** 沿用当前会话的发送配置与 admission。 */
   sendFollowUp(input: {
     prompt: string;
     source: ConversationInputSource;
-    images?: readonly PluginUiImageBlock[];
   }): Promise<void>;
 }
 
@@ -30,14 +28,8 @@ export interface PluginUiSessionActions {
 export interface PluginUiSessionCommandPort {
   sendText(
     prompt: string,
-    options: { source: ConversationInputSource; attachments?: AttachmentRef[] },
+    options: { source: ConversationInputSource },
   ): Promise<"sent" | "blocked" | "confirmationRequired" | undefined>;
-  /** 内联图片 → 会话附件引用（走 v4 attachmentPut，与 composer 粘贴截图同一条链路）。 */
-  uploadAttachment(input: {
-    fileName: string;
-    mime: string;
-    dataBase64: string;
-  }): Promise<AttachmentRef>;
 }
 
 

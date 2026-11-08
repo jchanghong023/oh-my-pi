@@ -6,7 +6,6 @@ import {
   IGitService,
   IGitCheckpointService,
   ISystemService,
-  ITerminalService,
   ISettingService,
   IOnboardingRecordService,
   ICredentialService,
@@ -41,9 +40,6 @@ import {
   ISkillSyncService,
   IUserConfigSyncService,
   IMcpSyncService,
-  IPluginUiAppToolsService,
-  IPluginUiSamplingService,
-  IPluginUiBridgeService,
   IPluginSyncService,
   IPluginsService,
   IPluginManagementService,
@@ -83,7 +79,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly gitService: IGitService;
   readonly gitCheckpointService: IGitCheckpointService;
   readonly systemService: ISystemService;
-  readonly terminalService: ITerminalService;
   readonly settingService: ISettingService;
   readonly onboardingRecordService: IOnboardingRecordService;
   readonly credentialService: ICredentialService;
@@ -122,9 +117,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly skillSyncService: ISkillSyncService;
   readonly mcpSyncService: IMcpSyncService;
   readonly genUiService?: IGenUiService;
-  readonly pluginUiBridgeService?: IPluginUiBridgeService;
-  readonly pluginUiSamplingService?: IPluginUiSamplingService;
-  readonly pluginUiAppToolsService?: IPluginUiAppToolsService;
   readonly pluginSyncService: IPluginSyncService;
   readonly userConfigSyncService: IUserConfigSyncService;
   readonly pluginsService: IPluginsService;
@@ -172,9 +164,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
     );
     this.systemService = ProxyChannel.toService<ISystemService>(
       channelClient.getChannel(ISystemService.channelName),
-    );
-    this.terminalService = ProxyChannel.toService<ITerminalService>(
-      channelClient.getChannel(ITerminalService.channelName),
     );
     this.settingService = ProxyChannel.toService<ISettingService>(
       channelClient.getChannel(ISettingService.channelName),
@@ -301,15 +290,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
     if (!options.browserDirect) {
       this.genUiService = ProxyChannel.toService<IGenUiService>(
         channelClient.getChannel(IGenUiService.channelName),
-      );
-      this.pluginUiBridgeService = ProxyChannel.toService<IPluginUiBridgeService>(
-        channelClient.getChannel(IPluginUiBridgeService.channelName),
-      );
-      this.pluginUiSamplingService = ProxyChannel.toService<IPluginUiSamplingService>(
-        channelClient.getChannel(IPluginUiSamplingService.channelName),
-      );
-      this.pluginUiAppToolsService = ProxyChannel.toService<IPluginUiAppToolsService>(
-        channelClient.getChannel(IPluginUiAppToolsService.channelName),
       );
     }
     this.pluginSyncService = ProxyChannel.toService<IPluginSyncService>(

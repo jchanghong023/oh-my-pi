@@ -22,7 +22,6 @@ import { createTopicWireFrameSchema, topicWireFrameCandidateSchema } from "./wir
 // ── 连接与握手 ──
 export const hostCapabilitiesSchema = z.object({
   nativeDialogs: z.boolean(),
-  localTerminal: z.boolean(),
   // ws binary（relay 链路探测用）。
   binaryFrames: z.boolean(),
   compression: z.enum(["none", "permessage-deflate"]),
@@ -434,7 +433,6 @@ export const V4_NOTIFICATIONS = {
   localTtftFacts: "v4/telemetry/local-ttft",
   // 仅当前进程 live ToolCallResult 产生；历史与 replayable 链路不得补造。
   cuaPermissionObservation: "v4/cua/permission-observation",
-  pluginUiToolResult: "v4/plugin-ui/tool-result",
 } as const;
 
 /** 3.3.6 SSH 历史任务归属证明与 sessions-index 冷种子共享同一有界窗口。 */

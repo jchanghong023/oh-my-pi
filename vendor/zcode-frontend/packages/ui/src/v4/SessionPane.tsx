@@ -5756,21 +5756,6 @@ export function SessionPane({
       ) : null}
     </>
   );
-  // 沙箱页面与草稿附件共用有效 session，首发提升不迁移附件。
-  const uploadSandboxAttachment = useCallback(
-    async (input: { fileName: string; mime: string; dataBase64: string }) => {
-      if (!effectiveSessionId) throw new Error("Sandbox attachments need an open session");
-      const { ref } = await attachmentPut({ sessionId: effectiveSessionId, ...input });
-      const padding = input.dataBase64.endsWith("==") ? 2 : input.dataBase64.endsWith("=") ? 1 : 0;
-      return {
-        ref,
-        fileName: input.fileName,
-        mime: input.mime,
-        bytes: Math.floor((input.dataBase64.length * 3) / 4) - padding,
-      };
-    },
-    [attachmentPut, effectiveSessionId],
-  );
   // 分享浮窗不再替换输入区，保持 Composer 与对话滚动位置稳定。
   const conversationBottomDock = conversationBottomDockContent ? (
     <ConversationBottomDockTransition mode="chat">
@@ -5786,7 +5771,6 @@ export function SessionPane({
       sessionId={sessionRuntimeReady ? effectiveSessionId : null}
       readOnly={readOnly || !sessionRuntimeReady || (sessionId === null && !focused)}
       sendText={dispatchSendText}
-      uploadAttachment={uploadSandboxAttachment}
     >
       <div
         ref={paneRef}

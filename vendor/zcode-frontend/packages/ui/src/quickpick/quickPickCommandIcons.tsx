@@ -11,7 +11,6 @@ import {
   PanelLeftOpen,
   ServerIcon,
   SettingsIcon,
-  SquareTerminalIcon,
   SunIcon,
   UsersIcon,
   WandSparkles,
@@ -34,5 +33,4 @@ export const QUICK_PICK_ICON_BY_KIND = {
   skills: WandSparkles,
   themeDark: MoonIcon,
   themeLight: SunIcon,
-  terminal: SquareTerminalIcon,
 } satisfies Record<QuickPickCommandIcon, typeof MessageCirclePlus>;

@@ -60,9 +60,7 @@ export interface WorkspaceHeaderActionSectionProps {
   readOnlyReason?: string;
   workspaceAbsPath: string;
   workspaceIdentity?: string;
-  isTerminalOpen: boolean;
   isSidePaneOpen: boolean;
-  onToggleTerminal: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onSelectedEditorChange?: (editor: EditorInfo | null) => void;

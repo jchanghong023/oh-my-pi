@@ -34,7 +34,6 @@ interface RootWorkspaceContentProps extends WorkspaceRemoteNavigationProps {
   backendBusinessAvailable?: RootProps["backendBusinessAvailable"];
   initialSidebarFileTreeOpen?: boolean;
   isDesktop?: RootProps["isDesktop"];
-  isWindowsDesktop?: RootProps["isWindowsDesktop"];
 }
 
 export function RootWorkspaceContent({
@@ -59,7 +58,6 @@ export function RootWorkspaceContent({
   backendBusinessAvailable,
   initialSidebarFileTreeOpen,
   isDesktop,
-  isWindowsDesktop,
   onConnectRemote,
   onSelectRemoteProject,
   onCancelRemoteProject,
@@ -146,7 +144,6 @@ export function RootWorkspaceContent({
                 initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 isWorkspaceVisible={!isSettingsTabActive}
                 isDesktop={isDesktop}
-                isWindowsDesktop={isWindowsDesktop}
               />
             </ScopedErrorBoundary>
           </ServiceProvider>
