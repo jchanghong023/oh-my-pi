@@ -36,7 +36,6 @@ export { shouldAutoScanOnboardingSessions } from "@/onboarding/useOnboardingMigr
 const ONBOARDING_STEP_ORDER: OnboardingWizardStep[] = [
   "session",
   "skills-import",
-  "mcp-import",
   // 插件导入步骤未启用。
   // "plugins-import",
   "commands-import",
@@ -78,13 +77,6 @@ export function OnboardingDialog(props: {
   const skillsImportState = useExternalAgentImportCategoryState({
     category: "skills",
     enabled: wizardStep === "skills-import",
-    settingsSyncService,
-    workspacePath: props.workspacePath,
-    workspaceIdentity: props.workspaceIdentity,
-  });
-  const mcpImportState = useExternalAgentImportCategoryState({
-    category: "mcpServers",
-    enabled: wizardStep === "mcp-import",
     settingsSyncService,
     workspacePath: props.workspacePath,
     workspaceIdentity: props.workspaceIdentity,
@@ -135,14 +127,12 @@ export function OnboardingDialog(props: {
   const externalImportSelections = useMemo(
     () => [
       ...skillsImportState.selections,
-      ...mcpImportState.selections,
       ...commandsImportState.selections,
     ],
-    [commandsImportState.selections, mcpImportState.selections, skillsImportState.selections],
+    [commandsImportState.selections, skillsImportState.selections],
   );
   const totalExternalImportSelectedCount =
     skillsImportState.selectedCount +
-    mcpImportState.selectedCount +
     commandsImportState.selectedCount;
   const { finishExecution, resetFinishExecution } = useOnboardingMigration(
     wizardStep,
@@ -416,14 +406,6 @@ export function OnboardingDialog(props: {
           <OnboardingExternalAgentImportStep
             category="skills"
             state={skillsImportState}
-            workspacePath={props.workspacePath}
-          />
-        );
-      case "mcp-import":
-        return (
-          <OnboardingExternalAgentImportStep
-            category="mcpServers"
-            state={mcpImportState}
             workspacePath={props.workspacePath}
           />
         );

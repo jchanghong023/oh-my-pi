@@ -54,19 +54,6 @@ export function createWebPlatform(): IPlatformService {
     listWSLDistros: () => Promise.resolve([]),
     listDockerContainers: () => Promise.resolve([]),
     listSSHConfigAliases: () => Promise.resolve([]),
-    loadMcpFromUserDirectory: () => Promise.resolve({ servers: [] }),
-    saveMcpToUserDirectory: () =>
-      Promise.resolve({
-        success: false,
-        error: "MCP native directory management requires a desktop attachment",
-      }),
-    migrateLegacyCommonMcp: () =>
-      Promise.resolve({
-        servers: {},
-        totalCount: 0,
-        importedCount: 0,
-        skippedCount: 0,
-      }),
     openExternal: (url) => {
       window.open(url, "_blank", "noopener,noreferrer");
     },

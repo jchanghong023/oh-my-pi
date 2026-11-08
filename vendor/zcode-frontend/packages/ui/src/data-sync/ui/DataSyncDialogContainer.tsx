@@ -16,7 +16,6 @@ import { useTabStore } from "@/store/TabStoreProvider.js";
 import type {
   DataSyncCategoryId,
   DataSyncDeviceSummary,
-  DataSyncWorkspaceMapping,
   IDeviceSyncStateService,
   IServiceAccessor,
 } from "@/data-sync/contract.js";
@@ -69,7 +68,6 @@ export function DataSyncDialogContainer(props: {
   sourceServices: IServiceAccessor;
   requestSourceSettingsAttachment?: (sourceServerId: string) => Promise<{ attachmentId: string }>;
   initialCategory?: DataSyncCategoryId;
-  workspace?: DataSyncWorkspaceMapping;
   onClose(): void;
   onPushFinished(result: DeviceSyncResult): Promise<void>;
 }) {
@@ -100,7 +98,6 @@ export function DataSyncDialogContainer(props: {
       workspaceHistory={props.workspaceHistory}
       workspaceTabs={workspaceTabs}
       initialCategory={props.initialCategory}
-      workspace={props.workspace}
       onOpenChange={(open) => {
         if (!open) props.onClose();
       }}

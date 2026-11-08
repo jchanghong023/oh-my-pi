@@ -8,7 +8,7 @@ import {
 } from "@/data-sync/ui/DataSyncEntry.js";
 
 /**
- * 技能、MCP、插件设置页的「远端上下文」：当前目标是已连接的 SSH / WSL / Docker 远程 workspace 时，
+ * 技能、插件设置页的「远端上下文」：当前目标是已连接的 SSH / WSL / Docker 远程 workspace 时，
  * 显示「当前远端工作区」提示。同步按钮的显示条件见 `useSettingsDataSyncEntry`。
  */
 export function shouldShowRemoteSyncActions(params: {
@@ -39,9 +39,8 @@ export function formatRemoteSyncTargetLabel(
 }
 
 /**
- * 技能、MCP、插件设置页的同步按钮：打开数据同步弹窗并定位到该页分类。
+ * 技能、插件设置页的同步按钮：打开数据同步弹窗并定位到该页分类。
  * 显示条件：Scope 菜单选中的是某台在线远端设备的「用户」（调用方此时传入它的 sourceServerId）。
- * 设置页入口不传 workspace 映射（MCP 只做 home 改写）。
  * `onPushFinished` 用于刷新本页列表（分类的 afterPush 只刷新该设备上已打开项目的运行态）。
  */
 export function useSettingsDataSyncEntry(params: {

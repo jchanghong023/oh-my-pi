@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- 远端 workspace 历史集中维护持久化、凭据和 MCP 路径映射元数据，拆分会扩大恢复链路回归面。 */
+/* eslint-disable max-lines -- 远端 workspace 历史集中维护持久化、凭据和本机路径元数据，拆分会扩大恢复链路回归面。 */
 import type {
   AppSettings,
   PersistedWorkspaceSessionEntry,
@@ -439,8 +439,7 @@ export function buildRemoteWorkspaceSessionMutation(params: {
           workspacePurpose: params.workspacePurpose ?? currentEntry?.workspacePurpose,
         }
       : {}),
-    // Bugfix: filesystem MCP 同步需要用“本机 workspace -> 远端 workspace”映射。
-    // 远端历史之前只保存远端路径，已连接后的 Settings/Header 入口无法再恢复本机基准路径。
+    // 保留模型连通性检查所需的本机 workspace 上下文。
     ...(localWorkspacePath ? { localWorkspacePath } : {}),
     workspaceIdentity: resolvedWorkspaceIdentity,
     target: nextSnapshot,

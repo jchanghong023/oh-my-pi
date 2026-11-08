@@ -13,7 +13,6 @@ import { useSidePaneFullView } from "@/side-pane-full-view/index.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useWorkspaceProviderConfigFile } from "@/hooks/useWorkspaceProviderConfigFile.js";
 import { useWorkspaceActiveTaskState } from "@/hooks/useWorkspaceActiveTaskState.js";
-import { useEnsureWorkspaceMcpLoaded } from "@/hooks/useEnsureWorkspaceMcpLoaded.js";
 import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceReadOnly, isWorkspaceTab } from "@/store/tabStore.js";
@@ -712,11 +711,6 @@ export function App({
     setTestMessages,
   });
 
-  useEnsureWorkspaceMcpLoaded(
-    workspaceAbsPath,
-    workspaceIdentity,
-    backendBusinessAvailable && workspaceRpcReady,
-  );
 
   const testActions = useMemo<TestActions>(
     () => ({
@@ -932,10 +926,6 @@ export function App({
           openSettings: openSettingsTab,
           openSkillsSettings: () => {
             setPendingSettingsPluginIntent("skills");
-            openSettingsTab();
-          },
-          openMcpSettings: () => {
-            setPendingSettingsPluginIntent("mcps");
             openSettingsTab();
           },
           switchTheme: handleSwitchTheme,

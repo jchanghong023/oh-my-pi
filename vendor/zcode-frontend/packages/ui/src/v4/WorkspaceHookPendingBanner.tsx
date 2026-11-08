@@ -1,25 +1,17 @@
 import { memo, useCallback, useState, useSyncExternalStore } from "react";
-import type { WorkspaceMcpAdmissionSnapshotState } from "@zcode/shared/zcode-protocol-v4";
-import { getWorkspaceKey } from "@/lib/workspaceKey.js";
 import {
-  TID_V4_WORKSPACE_MCP_PENDING_TRIGGER,
-  TID_V4_WORKSPACE_MCP_PENDING_POPOVER,
-  TID_V4_WORKSPACE_MCP_PENDING_UNREAD,
-  TID_V4_WORKSPACE_MCP_PENDING_REVIEW,
-  TID_V4_WORKSPACE_MCP_PENDING_DISMISS,
   TID_V4_WORKSPACE_HOOK_PENDING_POPOVER,
   TID_V4_WORKSPACE_HOOK_PENDING_TRIGGER,
   TID_V4_WORKSPACE_HOOK_PENDING_UNREAD,
   TID_V4_WORKSPACE_HOOK_PENDING_DISMISS,
   TID_V4_WORKSPACE_HOOK_PENDING_REVIEW,
 } from "@zcode/shared/test-ids";
-import { Anchor, Cable } from "lucide-react";
+import { Anchor } from "lucide-react";
 import { Button } from "@/components/ui/button.js";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
   setPendingSettingsSectionIntent,
-  setPendingSettingsPluginIntent,
 } from "@/lib/settingsNavigation.js";
 import { logger } from "@/logger.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
@@ -184,105 +176,3 @@ export const WorkspaceHookPendingIndicator = memo(function WorkspaceHookPendingI
   );
 });
 
-export const WorkspaceMcpPendingIndicator = memo(function WorkspaceMcpPendingIndicator({
-  sessionId,
-  workspacePath,
-  workspaceIdentity,
-  admission,
-}: {
-  sessionId: string;
-  workspacePath: string;
-  workspaceIdentity?: string;
-  admission: WorkspaceMcpAdmissionSnapshotState;
-}) {
-  const { intl } = useZCodeIntl();
-  const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
-  const [open, setOpen] = useState(false);
-  const workspaceKey = getWorkspaceKey(workspacePath, workspaceIdentity);
-  // MCP 与 Hook 共用 renderer 订阅机制；类型和工作区参与 key，避免已读/忽略互相覆盖。
-  const reminderKey = JSON.stringify(["mcp", workspaceKey, sessionId, admission.bundleDigest]);
-  const reminderState = useSyncExternalStore(subscribeReminder, () =>
-    reminderStates.get(reminderKey),
-  );
-  if (
-    admission.pendingCount <= 0 ||
-    (admission.workspaceIdentity && admission.workspaceIdentity !== workspaceKey) ||
-    reminderState === "dismissed"
-  )
-    return null;
-  const message = intl.formatMessage(
-    { id: "chat.workspaceMcpPending.message" },
-    { count: admission.pendingCount },
-  );
-
-  return (
-    <Popover
-      open={open}
-      onOpenChange={(nextOpen) => {
-        setOpen(nextOpen);
-        if (nextOpen) setReminderState(reminderKey, "read");
-      }}
-    >
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-md"
-          data-testid={TID_V4_WORKSPACE_MCP_PENDING_TRIGGER}
-          aria-label={intl.formatMessage({ id: "chat.workspaceMcpPending.label" })}
-          aria-description={message}
-          className="relative text-foreground-subtle"
-        >
-          <Cable className="size-4" />
-          {!reminderState ? (
-            <span
-              data-testid={TID_V4_WORKSPACE_MCP_PENDING_UNREAD}
-              aria-hidden="true"
-              className="pointer-events-none absolute right-0.5 top-0.5 size-1.5 rounded-full bg-brand"
-            />
-          ) : null}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent
-        side="top"
-        align="start"
-        collisionPadding={12}
-        data-testid={TID_V4_WORKSPACE_MCP_PENDING_POPOVER}
-        aria-label={intl.formatMessage({ id: "chat.workspaceMcpPending.label" })}
-        className="w-80 max-w-[calc(100vw-24px)] gap-3 border-popover-border p-3"
-      >
-        <p className="text-ui-sm text-foreground">{message}</p>
-        <div className="flex items-center justify-end gap-2">
-          <Button
-            type="button"
-            variant="ghost"
-            data-testid={TID_V4_WORKSPACE_MCP_PENDING_DISMISS}
-            className="rounded-lg text-foreground-subtle"
-            onClick={() => {
-              setOpen(false);
-              setReminderState(reminderKey, "dismissed");
-              logger.info("[workspace-mcp-pending] dismissed", { sessionId, workspaceKey });
-            }}
-          >
-            {intl.formatMessage({ id: "chat.workspaceMcpPending.dismiss" })}
-          </Button>
-          <Button
-            type="button"
-            data-testid={TID_V4_WORKSPACE_MCP_PENDING_REVIEW}
-            className="rounded-lg"
-            disabled={!openSettingsTab}
-            onClick={() => {
-              setOpen(false);
-              // 导航固定到当前工作区，不能沿用设置页上一次查看的其它目标。
-              setPendingSettingsPluginIntent("mcps", { scopeKey: workspaceKey });
-              openSettingsTab?.();
-              logger.info("[workspace-mcp-pending] open settings", { sessionId, workspaceKey });
-            }}
-          >
-            {intl.formatMessage({ id: "chat.workspaceMcpPending.review" })}
-          </Button>
-        </div>
-      </PopoverContent>
-    </Popover>
-  );
-});

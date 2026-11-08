@@ -17,7 +17,6 @@ import type { ZCodeAutomation, ZCodeAutomationRun } from "@zcode/shared";
 import type {
   ZCodeStorageStartupState,
   ZCodeDeliveryKind,
-  ZCodeAgentMcpServer,
   ZCodeBackgroundTurnAttribution,
   TraceId,
   ZCodeSessionCompactResult,
@@ -32,9 +31,6 @@ import type {
   ZCodeMcpResourceSample,
   ZCodeToolExecResource,
   ZCodeProcessChildProcess,
-  ZCodeMcpListResult,
-  WorkspaceMcpTrustDecision,
-  ZCodeWorkspaceMcpTrustResult,
   ZCodePluginsListResult,
   ZCodePluginsOverviewResult,
   ZCodePluginsMarketplaceMutationResult,
@@ -139,7 +135,6 @@ import type {
   ZCodeAgentDeleteAutomationRunParams,
   ZCodeAgentDescribePluginParams,
   ZCodeAgentInstallPluginParams,
-  ZCodeAgentListMcpServerStatusesParams,
   ZCodeAgentPluginViewParams,
   ZCodeAgentPluginReferenceCatalogParams,
   ZCodeAgentSkillReferenceCatalogParams,
@@ -174,7 +169,6 @@ export interface ZCodeAgentResumeSessionParams extends ZCodeAgentSessionTarget {
   additionalDirectories?: string[];
   model?: ModelSelection;
   thoughtLevel?: string;
-  mcpServers?: ZCodeAgentMcpServer[];
   // 冷恢复会重建 runtime，工具面隔离必须和 create 保持同一安全边界（CUA 只放行 zcode-cua 工具、
   // 禁 Bash 等）。否则 resume 后模型可见工具面/执行权限会比创建时更宽。
   toolAllowlist?: string[];
@@ -227,7 +221,6 @@ export interface ZCodeAgentCreateSessionParams extends ZCodeAgentWorkspaceTarget
   thoughtLevel?: string;
   /** automation 执行会话关闭模型二次命名，保持首条用户 query 作为稳定标题。 */
   titleGenerationEnabled?: boolean;
-  mcpServers?: ZCodeAgentMcpServer[];
   toolAllowlist?: string[];
   toolDenylist?: string[];
   importedHistory?: ZCodeSessionImportHistory;
@@ -681,8 +674,6 @@ export interface IZCodeAgentService {
   grantWorkspaceHookTrust(
     params: ZCodeAgentGrantWorkspaceHookTrustParams,
   ): Promise<ZCodeWorkspaceHookTrustGrantResult>;
-  setWorkspaceMcpTrust(params: WorkspaceMcpTrustDecision): Promise<ZCodeWorkspaceMcpTrustResult>;
-  listMcpServerStatuses(params: ZCodeAgentListMcpServerStatusesParams): Promise<ZCodeMcpListResult>;
   listPlugins(params: ZCodeAgentPluginViewParams): Promise<ZCodePluginsListResult>;
   /**
    * Plugin 对话引用 catalog：session-scoped 只读投影。

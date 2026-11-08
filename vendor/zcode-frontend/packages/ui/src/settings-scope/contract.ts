@@ -89,7 +89,7 @@ export interface SettingsScopeState {
   deviceTargets: ConfigWorkspaceTarget[];
   /** 选中设备的「用户」目标（选中项目时也提供，表单可切回同设备的「用户」）。 */
   user: SettingsUserScope;
-  /** 选中某台在线远端设备的「用户」时为其 sourceServerId：技能、MCP、插件页的同步按钮只在此时显示。 */
+  /** 选中某台在线远端设备的「用户」时为其 sourceServerId：技能、插件页的同步按钮只在此时显示。 */
   syncSourceServerId: string | null;
   /** 选中设备是否就是当前 workspace 所在设备（插件商店等只作用于当前 workspace 的入口据此显示）。 */
   isActiveWorkspaceDevice: boolean;

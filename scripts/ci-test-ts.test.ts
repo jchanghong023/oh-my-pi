@@ -787,6 +787,7 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/lsp/edits.test.ts",
 			"packages/coding-agent/test/slash-commands/shared-skills.test.ts",
 			"packages/coding-agent/test/acp-builtins.test.ts",
+			"packages/coding-agent/test/webgui/mcp-disabled.test.ts",
 			"packages/tui/test/composer-inline-shrink.test.ts",
 			"packages/tui/test/composer-welcome-scrollback.test.ts",
 			"packages/tui/test/transcript-container.test.ts",
@@ -810,6 +811,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/task/worktree.test.ts",
 			"packages/coding-agent/test/rpc.test.ts",
 			"packages/coding-agent/test/settings-full-scope.test.ts",
+			"packages/coding-agent/test/webgui/native-mcp.test.ts",
+			"packages/coding-agent/test/webgui/native-mcp-binding.test.ts",
 		];
 		for (const file of [...selected, ...excluded]) await put(file, fixture(file));
 		await put(

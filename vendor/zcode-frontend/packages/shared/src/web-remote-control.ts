@@ -9,13 +9,6 @@ import type {
   CreateTempTextAttachmentResult,
 } from "./platform.js";
 
-import type {
-  LoadCliMcpFromUserDirectoryRequest,
-  LoadCliMcpFromUserDirectoryResult,
-  MigrateLegacyCommonMcpRequest,
-  MigrateLegacyCommonMcpResult,
-  SaveCliMcpToUserDirectoryRequest,
-} from "./mcp.js";
 import type { ZCodeProvider } from "./zcode-task-types-core.js";
 import type { SessionWorkflowActivity } from "./zcode-protocol-v4/sessions-index-workflow-activity.js";
 import type { WebRemoteControlRpcTransportPayload } from "./web-remote-control-rpc-transport.js";
@@ -326,9 +319,6 @@ export interface WebRemoteControlPlatformMethodArgsMap {
   listDockerContainers: undefined;
   listSSHConfigAliases: undefined;
   createTempTextAttachment: CreateTempTextAttachmentRequest;
-  loadMcpFromUserDirectory: LoadCliMcpFromUserDirectoryRequest | undefined;
-  saveMcpToUserDirectory: SaveCliMcpToUserDirectoryRequest;
-  migrateLegacyCommonMcp: MigrateLegacyCommonMcpRequest | undefined;
 }
 
 export interface WebRemoteControlPlatformMethodResultMap {
@@ -337,9 +327,6 @@ export interface WebRemoteControlPlatformMethodResultMap {
   listDockerContainers: DockerContainerInfo[];
   listSSHConfigAliases: SSHConfigAliasOption[];
   createTempTextAttachment: CreateTempTextAttachmentResult;
-  loadMcpFromUserDirectory: LoadCliMcpFromUserDirectoryResult;
-  saveMcpToUserDirectory: { success: boolean; error?: string };
-  migrateLegacyCommonMcp: MigrateLegacyCommonMcpResult;
 }
 
 export type WebRemoteControlPlatformMethod = keyof WebRemoteControlPlatformMethodResultMap;

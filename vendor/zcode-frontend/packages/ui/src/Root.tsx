@@ -38,7 +38,6 @@ import {
   shouldOpenFallbackWorkspaceAfterCreate,
 } from "@/lib/rootStartupGate.js";
 import { StoreProvider } from "@/store/StoreProvider.js";
-import { setMcpStorePlatform } from "@/store/mcpStore.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { TabStoreProvider, useTabStore, useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { isSettingsTab, isWorkspaceTab } from "@/store/tabStore.js";
@@ -142,10 +141,8 @@ function RootInner({
 }: RootProps) {
   useEffect(() => {
     setRequestSecurityReporter(platform);
-    setMcpStorePlatform(platform);
     return () => {
       setRequestSecurityReporter(null);
-      setMcpStorePlatform(null);
     };
   }, [isDesktop, platform]);
 

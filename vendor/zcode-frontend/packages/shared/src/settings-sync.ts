@@ -18,7 +18,7 @@ export type SettingsSyncAgent =
   | "codeBuddy"
   | "agents";
 
-export type SettingsSyncCategory = "providers" | "skills" | "commands" | "plugins" | "mcpServers";
+export type SettingsSyncCategory = "providers" | "skills" | "commands" | "plugins";
 
 export type SettingsSyncSourceScope = "global" | "project";
 
@@ -72,14 +72,6 @@ export interface SettingsSyncSourcePluginSummary {
   version?: string;
 }
 
-export type SettingsSyncMcpServerSkipReason = "sameNameExists";
-
-export interface SettingsSyncSourceMcpServerSummary {
-  name: string;
-  path: string;
-  importable: boolean;
-  skipReason?: SettingsSyncMcpServerSkipReason;
-}
 
 export interface SettingsSyncSourceRootSummary {
   scope: SettingsSyncSourceScope;
@@ -90,7 +82,6 @@ export interface SettingsSyncSourceRootSummary {
   skills?: SettingsSyncSourceSkillSummary[];
   commands?: SettingsSyncSourceCommandSummary[];
   plugins?: SettingsSyncSourcePluginSummary[];
-  mcpServers?: SettingsSyncSourceMcpServerSummary[];
 }
 
 export interface SettingsSyncCategorySummary {
@@ -135,15 +126,6 @@ export interface SettingsSyncPluginImportResult {
   version?: string;
 }
 
-export type SettingsSyncMcpServerImportStatus = "imported" | "skipped" | "failed";
-
-export interface SettingsSyncMcpServerImportResult {
-  name: string;
-  path: string;
-  sourceScope: SettingsSyncSourceScope;
-  status: SettingsSyncMcpServerImportStatus;
-  skipReason?: SettingsSyncMcpServerSkipReason;
-}
 
 export interface SettingsSyncAgentSummary {
   agent: SettingsSyncAgent;
@@ -164,7 +146,6 @@ export interface SettingsSyncSelection {
   skillPaths?: string[];
   commandPaths?: string[];
   pluginPaths?: string[];
-  mcpServerPaths?: string[];
 }
 
 export interface SettingsSyncProgressEvent {
@@ -187,7 +168,6 @@ export interface SettingsSyncTaskImportResult {
   skillResults?: SettingsSyncSkillImportResult[];
   commandResults?: SettingsSyncCommandImportResult[];
   pluginResults?: SettingsSyncPluginImportResult[];
-  mcpServerResults?: SettingsSyncMcpServerImportResult[];
 }
 
 export interface SettingsSyncImportResult {

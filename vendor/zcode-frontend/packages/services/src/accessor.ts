@@ -28,7 +28,6 @@ import type { ISkillsService } from "./skills/skills.js";
 import type { ISkillSyncService } from "./skill-sync/skillSync.js";
 import type { IDeviceSyncStateService, IUserConfigSyncService } from "./data-sync/index.js";
 import type { IProviderProvisioningStatusService } from "./provider-provisioning-status/index.js";
-import type { IMcpSyncService } from "./mcp-sync/mcpSync.js";
 import type { IPluginSyncService } from "./plugin-sync/pluginSync.js";
 import type { IPluginManagementService } from "./plugins/pluginManagement.js";
 import type { ISubagentsService } from "./subagents/subagents.js";
@@ -83,7 +82,6 @@ export interface IServiceAccessor {
   readonly clientScenesService?: IClientScenesService;
   readonly skillsService: ISkillsService;
   readonly skillSyncService: ISkillSyncService;
-  readonly mcpSyncService: IMcpSyncService;
   readonly genUiService?: IGenUiService;
   readonly pluginSyncService?: IPluginSyncService;
   /** 数据同步：子智能体 / 命令 / 钩子共用的用户配置同步通道（按 category 区分）。 */

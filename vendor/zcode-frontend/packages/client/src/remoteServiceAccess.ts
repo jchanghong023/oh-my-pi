@@ -30,7 +30,6 @@ import {
   ISkillsService,
   ISkillSyncService,
   IUserConfigSyncService,
-  IMcpSyncService,
   IPluginSyncService,
   IPluginManagementService,
   ISubagentsService,
@@ -95,7 +94,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly clientConfigService: IClientConfigService;
   readonly skillsService: ISkillsService;
   readonly skillSyncService: ISkillSyncService;
-  readonly mcpSyncService: IMcpSyncService;
   readonly genUiService?: IGenUiService;
   readonly pluginSyncService?: IPluginSyncService;
   readonly userConfigSyncService: IUserConfigSyncService;
@@ -238,9 +236,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
     );
     this.skillSyncService = ProxyChannel.toService<ISkillSyncService>(
       channelClient.getChannel(ISkillSyncService.channelName),
-    );
-    this.mcpSyncService = ProxyChannel.toService<IMcpSyncService>(
-      channelClient.getChannel(IMcpSyncService.channelName),
     );
     if (!options.browserDirect) {
       this.genUiService = ProxyChannel.toService<IGenUiService>(

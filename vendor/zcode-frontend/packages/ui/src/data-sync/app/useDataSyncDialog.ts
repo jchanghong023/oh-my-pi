@@ -4,7 +4,6 @@ import type {
   DataSyncImportItem,
   DataSyncImportResultItem,
   DataSyncListItem,
-  DataSyncWorkspaceMapping,
   DeviceSyncResult,
   SourceServerWorkspaceHistoryEntry,
 } from "@zcode/shared";
@@ -97,7 +96,7 @@ type HashCache = Map<string, { signature: string; hash: string }>;
 
 /**
  * 弹窗内缓存（性能措施 5）：签名不变的项复用上次的哈希；推送涉及的目标项在推送后失效。
- * 没有签名的条目（JSON 类，例如 MCP）哈希很便宜，不进缓存：否则签名恒为空，本机编辑后仍会命中旧哈希。
+ * 没有签名的条目不进缓存：否则签名恒为空，本机编辑后仍会命中旧哈希。
  * 返回缓存命中的哈希和仍需向服务请求的 key。
  */
 function readHashCache(
@@ -151,12 +150,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
-function workspaceParam(workspace: DataSyncWorkspaceMapping | undefined): {
-  workspace?: DataSyncWorkspaceMapping;
-} {
-  return workspace ? { workspace } : {};
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -176,8 +169,6 @@ export function useDataSyncDialog(params: {
   online: boolean;
   workspaceHistory?: readonly SourceServerWorkspaceHistoryEntry[];
   workspaceTabs?: DataSyncAfterPushContext["workspaceTabs"];
-  /** 只传给来源端（哈希与导出）；弹窗打开期间不变。 */
-  workspace?: DataSyncWorkspaceMapping;
   onPushFinished(result: DeviceSyncResult): void | Promise<void>;
 }) {
   const { categories, sourceServices } = params;
@@ -247,12 +238,7 @@ export function useDataSyncDialog(params: {
         const targetCached = readHashCache(targetCache, targetList.items, requests.targetKeys);
         const [sourceHashes, targetHashes] = await Promise.all([
           sourceCached.missing.length > 0
-            ? // 来源端带上目标端 home：需要路径改写的分类（MCP）按目标端路径计算后再比较。
-              sourceService.getSyncContentHashes({
-                keys: sourceCached.missing,
-                targetHomeDir: targetList.homeDir,
-                ...workspaceParam(latestParamsRef.current.workspace),
-              })
+            ? sourceService.getSyncContentHashes({ keys: sourceCached.missing })
             : Promise.resolve({ hashes: {} }),
           targetCached.missing.length > 0
             ? targetService.getSyncContentHashes({ keys: targetCached.missing })
@@ -384,7 +370,6 @@ export function useDataSyncDialog(params: {
           try {
             const payload = await sourceService.exportSyncItems({
               keys: batch.map((row) => row.key),
-              ...workspaceParam(latestParamsRef.current.workspace),
             });
             assertAlive();
             const imported = await targetService.importSyncItems({

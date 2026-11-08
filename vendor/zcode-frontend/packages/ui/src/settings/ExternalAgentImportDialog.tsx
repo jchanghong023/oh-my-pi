@@ -18,8 +18,6 @@ import type {
   SettingsSyncImportResult,
   SettingsSyncSelection,
   SettingsSyncImportMode,
-  SettingsSyncMcpServerImportResult,
-  SettingsSyncSourceMcpServerSummary,
   SettingsSyncPluginImportResult,
   SettingsSyncSkillImportResult,
   SettingsSyncSourceCommandSummary,
@@ -57,17 +55,15 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
 
 type ImportStep = "selection" | "importing" | "complete";
-export type ImportResourceCategory = Extract<SettingsSyncCategory, "skills" | "commands" | "plugins" | "mcpServers">;
+export type ImportResourceCategory = Extract<SettingsSyncCategory, "skills" | "commands" | "plugins">;
 type ImportItemSummary =
   | SettingsSyncSourceSkillSummary
   | SettingsSyncSourceCommandSummary
-  | SettingsSyncSourcePluginSummary
-  | SettingsSyncSourceMcpServerSummary;
+  | SettingsSyncSourcePluginSummary;
 type ImportItemResult =
   | SettingsSyncSkillImportResult
   | SettingsSyncCommandImportResult
-  | SettingsSyncPluginImportResult
-  | SettingsSyncMcpServerImportResult;
+  | SettingsSyncPluginImportResult;
 
 interface ExternalAgentImportDialogProps {
   open: boolean;
@@ -151,18 +147,14 @@ export function buildExternalAgentImportSelections(
         ? { skillPaths: [] }
         : payload.category === "commands"
           ? { commandPaths: [] }
-          : payload.category === "plugins"
-            ? { pluginPaths: [] }
-            : { mcpServerPaths: [] }),
+          : { pluginPaths: [] }),
     };
     if (payload.category === "skills") {
       selection.skillPaths = [...(selection.skillPaths ?? []), payload.resourcePath];
     } else if (payload.category === "commands") {
       selection.commandPaths = [...(selection.commandPaths ?? []), payload.resourcePath];
-    } else if (payload.category === "plugins") {
-      selection.pluginPaths = [...(selection.pluginPaths ?? []), payload.resourcePath];
     } else {
-      selection.mcpServerPaths = [...(selection.mcpServerPaths ?? []), payload.resourcePath];
+      selection.pluginPaths = [...(selection.pluginPaths ?? []), payload.resourcePath];
     }
     grouped.set(groupKey, selection);
   }
@@ -182,9 +174,7 @@ function getImportResults(
       ? taskResult.skillResults ?? []
       : category === "commands"
         ? taskResult.commandResults ?? []
-        : category === "plugins"
-          ? taskResult.pluginResults ?? []
-          : taskResult.mcpServerResults ?? [],
+        : taskResult.pluginResults ?? [],
   ) ?? [];
 }
 
@@ -260,9 +250,7 @@ function getSourceRootItems(
     ? sourceRoot.skills ?? []
     : resourceCategory === "commands"
       ? sourceRoot.commands ?? []
-      : resourceCategory === "plugins"
-        ? sourceRoot.plugins ?? []
-        : sourceRoot.mcpServers ?? [];
+      : sourceRoot.plugins ?? [];
 }
 
 function normalizePathForScope(path: string): string {
@@ -339,10 +327,6 @@ export function CommandsImportDialog(props: ExternalAgentImportDialogProps) {
 
 export function PluginsImportDialog(props: ExternalAgentImportDialogProps) {
   return <ExternalAgentImportDialog {...props} category="plugins" />;
-}
-
-export function McpServersImportDialog(props: ExternalAgentImportDialogProps) {
-  return <ExternalAgentImportDialog {...props} category="mcpServers" />;
 }
 
 export interface ExternalAgentImportCategoryState {
@@ -734,7 +718,7 @@ function ExternalAgentImportDialog({
                       { count: String(totalImportableCount) },
                     )}
                   </div>
-                  {step === "selection" && category !== "mcpServers" ? (
+                  {step === "selection" ? (
                     <ImportModeSelect
                       category={category}
                       importMode={importMode}
@@ -855,18 +839,16 @@ export function ExternalAgentImportSelectionPanel({
           )}
         </div>
         <div className="flex items-center gap-3">
-          {category !== "mcpServers" ? (
-            <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-ui-base text-foreground-subtlest">
-                {intl.formatMessage({ id: `settings.${category}.import.modeLabel` })}
-              </span>
-              <ImportModeSelect
-                category={category}
-                importMode={state.importMode}
-                onImportModeChange={state.setImportMode}
-              />
-            </div>
-          ) : null}
+          <div className="flex items-center gap-1.5">
+            <span className="shrink-0 text-ui-base text-foreground-subtlest">
+              {intl.formatMessage({ id: `settings.${category}.import.modeLabel` })}
+            </span>
+            <ImportModeSelect
+              category={category}
+              importMode={state.importMode}
+              onImportModeChange={state.setImportMode}
+            />
+          </div>
           <div className="flex items-center gap-1.5">
             <span className="shrink-0 text-ui-base text-foreground-subtlest">
               {intl.formatMessage({ id: `settings.${category}.import.targetLabel` })}

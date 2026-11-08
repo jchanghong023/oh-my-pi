@@ -8,7 +8,6 @@ import {
 import { toast } from "@/components/ui/toast.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { CreateTaskRequest } from "@/app-shell/types.js";
-import { McpSettingsSection } from "@/settings/McpSettingsSection.js";
 import { SkillsSection } from "@/settings/SkillsSection.js";
 import { CommandsSection } from "@/settings/CommandsSection.js";
 import { SettingsSearchInput } from "@/settings/SettingsSearchInput.js";
@@ -16,11 +15,10 @@ import { PluginScopeMenu, getPluginWorkspaceKey } from "@/settings/PluginScopeMe
 import { useTabStore } from "@/store/TabStoreProvider.js";
 
 interface PluginsSectionProps {
-  mode: "mcp" | "skill" | "command";
+  mode: "skill" | "command";
   initialScopeKey?: string;
   workspacePath?: string | null;
   workspaceIdentity?: string;
-  isWebRemoteControl?: boolean;
   onCreateTask?: (request?: CreateTaskRequest) => void;
 }
 
@@ -29,7 +27,6 @@ export function PluginsSection({
   initialScopeKey,
   workspacePath,
   workspaceIdentity,
-  isWebRemoteControl = false,
   onCreateTask,
 }: PluginsSectionProps) {
   const { intl } = useZCodeIntl();
@@ -77,11 +74,9 @@ export function PluginsSection({
     if (!open) setFormScopeKey(null);
   }, []);
   const blocked = resolveSettingsScopeBlock(scope, isUserScope);
-  const titleId = mode === "mcp"
-    ? "settings.plugin.tab.mcps"
-    : mode === "skill"
-      ? "settings.plugin.tab.skills"
-      : "settings.plugin.tab.commands";
+  const titleId = mode === "skill"
+    ? "settings.plugin.tab.skills"
+    : "settings.plugin.tab.commands";
 
   return (
     <SettingsScopeDeviceProvider device={scope.device} userAvailable={userScope.status !== "unavailable"}>
@@ -106,11 +101,9 @@ export function PluginsSection({
               onClear={() => setSearchQuery("")}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder={intl.formatMessage({
-                id: mode === "mcp"
-                  ? "settings.mcp.searchPlaceholder"
-                  : mode === "skill"
-                    ? "settings.skills.searchPlaceholder"
-                    : "settings.commands.searchPlaceholder",
+                id: mode === "skill"
+                  ? "settings.skills.searchPlaceholder"
+                  : "settings.commands.searchPlaceholder",
               })}
             />
           </div>
@@ -130,23 +123,6 @@ export function PluginsSection({
             onVisibleCountChange={setVisibleCount}
             unscopedServices={isUserScope ? userServices : undefined}
             cacheAuthorityKey={isUserScope ? userAuthorityKey : undefined}
-          />
-        ) : mode === "mcp" && editorTarget ? (
-          <McpSettingsSection
-            workspacePath={editorTarget.workspacePath}
-            workspaceIdentity={editorTarget.workspaceIdentity}
-            remoteSessionId={editorTarget.remoteSessionId}
-            remoteTarget={editorTarget.remoteTarget}
-            isWebRemoteControl={isWebRemoteControl}
-            scopeFilter={effectiveScopeKey === "user" ? "user" : "workspace"}
-            parentScopeKey={localScopeKey}
-            workspaceTabs={workspaceTabs}
-            searchQuery={searchQuery}
-            onVisibleCountChange={setVisibleCount}
-            onEditorOpenChange={handleEditorOpenChange}
-            onFormScopeKeyChange={setFormScopeKey}
-            unscopedServices={effectiveScopeKey === "user" ? userServices : undefined}
-            cacheAuthorityKey={effectiveScopeKey === "user" ? userAuthorityKey : undefined}
           />
         ) : mode === "command" && editorTarget ? (
           <CommandsSection

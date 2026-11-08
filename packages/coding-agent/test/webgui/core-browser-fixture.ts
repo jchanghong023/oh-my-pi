@@ -236,7 +236,7 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				await page.goto(`${baseUrl}/components?case=${kind}`, { waitUntil: "load" });
 				return page;
 			},
-			async nativeCase() {
+			async nativeCase(options = {}) {
 				if (cases.size)
 					throw new Error("Native browser cases must close sequentially before the history spy can be replaced");
 				const cwd = temp.join(`native-${nativeIndex++}`);
@@ -301,6 +301,13 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 				try {
 					const model = getTestModel("ascend");
 					auth.keys.setRuntime(model.provider, "test-key");
+					const skillFile = path.join(cwd, "skills", "webgui-retained-skill", "SKILL.md");
+					if (options.withSkill) {
+						await Bun.write(
+							skillFile,
+							"---\nname: webgui-retained-skill\ndescription: Retained native skill\n---\nRead-only fixture instructions.\n",
+						);
+					}
 					({ session } = await createAgentSession({
 						cwd,
 						agentDir: cwd,
@@ -318,7 +325,18 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 						bindProcessState: false,
 						offline: true,
 						agentRegistry: new AgentRegistry(),
-						skills: [],
+						skills: options.withSkill
+							? [
+									{
+										name: "webgui-retained-skill",
+										description: "Retained native skill",
+										filePath: skillFile,
+										baseDir: path.dirname(skillFile),
+										// The file belongs to this case's isolated agentDir; settings initially show user skills.
+										source: "user",
+									},
+								]
+							: [],
 						contextFiles: [],
 						promptTemplates: [],
 						slashCommands: [],

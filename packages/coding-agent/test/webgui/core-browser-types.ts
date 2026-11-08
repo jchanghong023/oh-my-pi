@@ -30,7 +30,7 @@ export interface NativeBrowserCase {
 
 export interface CoreBrowserFixture {
 	readonly browser: Browser;
-	nativeCase(): Promise<NativeBrowserCase>;
+	nativeCase(options?: { withSkill?: boolean }): Promise<NativeBrowserCase>;
 	componentPage(kind: CoreUiCase): Promise<Page>;
 	close(): Promise<void>;
 }

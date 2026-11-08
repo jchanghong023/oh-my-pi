@@ -9,7 +9,7 @@
 - 模型提供商（只读，不是 `IDataSyncCategoryService`）：`domain/providers.ts`（Personal Layer 提供商行、API Key 掩码、状态展示态）+ `app/useDataSyncProviders.ts`（本机 `providerSettingsService.getView()` 与 `providerProvisioningStatusService` 的 lane 状态 / 重试）+ `ui/DataSyncProvidersPanel.tsx`。不参与勾选与「推送全部」；最近结果的唯一数据源是 Main 协调器的 lane。
 - `domain/marketplacePlugins.ts` + `app/marketplacePluginSync.ts`：marketplace 插件把插件管理服务的 add / install 编排成 `IDataSyncCategoryService` 形状（export 在来源端、import 在目标端），与 inline 插件组合为「插件」分类。两端都以各自 Host 的 home（`systemService.info`）+ `configScope: "user"` 读取 User scope。
 
-- `ui/DataSyncEntry.tsx` + `domain/entry.ts`：旧同步入口（连接向导、Header、侧栏项目菜单、技能 / MCP / 插件设置页）统一打开弹窗。`resolveDataSyncEntrySourceServerId` 从 tab 的 workspace identity 解析设备（SSH / WSL / Docker；旧格式返回 null），`useDataSyncDeviceOnline` 取管理快照的在线状态，`useDataSyncEntry().open({ sourceServerId, category, workspace? })` 打开弹窗并写入设备同步状态。只有平台提供 `requestSourceSettingsAttachment`（桌面端）时可用。
+- `ui/DataSyncEntry.tsx` + `domain/entry.ts`：旧同步入口（连接向导、Header、侧栏项目菜单、技能 / 插件设置页）统一打开弹窗。`resolveDataSyncEntrySourceServerId` 从 tab 的 workspace identity 解析设备（SSH / WSL / Docker；旧格式返回 null），`useDataSyncDeviceOnline` 取管理快照的在线状态，`useDataSyncEntry().open({ sourceServerId, category })` 打开弹窗并写入设备同步状态。只有平台提供 `requestSourceSettingsAttachment`（桌面端）时可用。
 - `ui/DataSyncDialogContainer.tsx`：设置页与入口共用的弹窗容器（申请 attachment、收集 tab、记录结果）。
 
 不变量：
@@ -19,6 +19,7 @@
 - 推送按分类串行；每次推送（单个分类或推送全部）结束后调用一次 `onPushFinished`，设备行只从设备同步状态读取上次结果。
 - `afterPush` 只刷新运行态，不属于 push session：分类导入结束后进入弹窗内的串行队列，按推送顺序执行，失败只记日志。推送结束、`onPushFinished` 和下一次推送都不等待它。
 - 推送永不删除远端独有条目；黄色「差异」项默认不勾选，用户可手动勾选覆盖。
+- 同步分类仅包含技能、插件、子智能体、命令和钩子；插件推送后刷新技能与命令。子智能体可保留原始依赖元数据，但依赖提示仅比较已有技能分类列表，不读取 MCP 列表。
 
 ```text
 open → list×2 → contentHashes（两端都有的项）→ compare → 勾选

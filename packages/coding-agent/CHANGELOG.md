@@ -9,7 +9,7 @@
 - Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
 - Read native OMP session histories and send basic text messages with streaming replies synchronized across connected WebGUI browsers, without changing the original TUI.
 - Inspect native subagent conversations and observed task/workpool ancestry, status, actors and outputs without starting another execution engine.
-- Browse native workspace files, Git changes/history, effective Skills and loaded MCP configuration/status through read-only WebGUI adapters.
+- Browse native workspace files, Git changes/history and effective Skills through read-only WebGUI adapters.
 
 ### Changed
 
@@ -23,14 +23,15 @@
 
 ### Removed
 
-- Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and MCP/Skill pages.
+- Remove WebGUI MCP settings, imports/sync and RPC adapters; native Agent, TUI and Dev MCP remain unchanged.
+- Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and Skill pages.
 - Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
 - Removed placeholder WebGUI RPC registrations for purchases, plugin management, remote workspaces and terminals; retained native chat, session history and temporary model selection.
 - Removed orphaned purchase UI, payment SDKs/assets and remote-control-only Web code while preserving direct browser access.
 - Removed WebGUI terminal panels and shortcut, deployment/browser launchers, and ZCode app-plugin interfaces with their dedicated placeholder integrations; native OMP tools and plugins remain unchanged.
 - Removed unused ZCode plugin recommendation/install flows, Relay/MessagePort clients, the orphaned Bots dialog and hidden Claude session-migration page; shared project navigation and native capability views remain.
 - Removed ZCode marketing, rewards, Highspeed cards, Coding Plan entitlement/reset interactions, feedback tickets, product analytics, cloud sharing, off-peak subscription tasks, account login, occupation surveys and office promotions; retained native development views and ordinary automation.
-- Removed the retired products' placeholder WebGUI backend interfaces and client proxies; retained unbound interfaces for native chat, subagents, files/Git, Workflow, MCP/Skill and model capabilities.
+- Removed the retired products' placeholder WebGUI backend interfaces and client proxies; retained unbound interfaces for native chat, subagents, files/Git, Workflow, Skill and model capabilities.
 - Removed unused Bots helpers, retired migration-page selection state, legacy RPC remote wrappers and retired-product resources/fixtures while retaining direct browser transport and practical onboarding.
 - Removed unused frontend state, legacy plugin/update/relay wrappers, retired Treemapping UI, orphaned resources and unused drag-and-drop dependencies; retained chat Workflow animations and shared development capabilities.
 - Remove WebGUI usage and cost statistics pages, charts, counters and dedicated service interfaces; native accounting and `omp stats` remain unchanged.

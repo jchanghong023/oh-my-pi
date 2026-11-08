@@ -1,7 +1,6 @@
 import type { SessionLifecycleSnapshot } from "@zcode/shared";
 import {
   WorkspaceHookPendingIndicator,
-  WorkspaceMcpPendingIndicator,
 } from "@/v4/WorkspaceHookPendingBanner.js";
 import { ComposerSubmissionPendingContext } from "@/project-sidebar/index.js";
 /* oxlint-disable eslint(max-lines) -- composer 集中收口输入区 wiring（附件/草稿/历史/mention），拆分会打散收口粒度。 */
@@ -2337,20 +2336,6 @@ function ConversationComposerImpl({
             admission={snapshot.workspaceHookAdmission}
           />
         ) : null}
-        {sessionId && snapshot?.workspaceMcpAdmission ? (
-          <WorkspaceMcpPendingIndicator
-            key={JSON.stringify([
-              workspaceIdentity,
-              workspacePath,
-              sessionId,
-              snapshot.workspaceMcpAdmission.bundleDigest,
-            ])}
-            sessionId={sessionId}
-            workspacePath={workspacePath}
-            workspaceIdentity={workspaceIdentity}
-            admission={snapshot.workspaceMcpAdmission}
-          />
-        ) : null}
         <ConversationBackgroundWorkTrigger
           backgroundWorks={snapshot?.backgroundWorks ?? []}
           runningSubagentCount={runningSubagentCount}
@@ -2373,7 +2358,6 @@ function ConversationComposerImpl({
       runningSubagentCount,
       sessionId,
       snapshot?.workspaceHookAdmission,
-      snapshot?.workspaceMcpAdmission,
       snapshot?.backgroundWorks,
       workspaceIdentity,
       workspacePath,

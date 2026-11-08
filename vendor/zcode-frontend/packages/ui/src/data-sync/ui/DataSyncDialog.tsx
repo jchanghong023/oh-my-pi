@@ -61,7 +61,6 @@ const BLOCKED_REASON_MESSAGE_ID: Record<DataSyncBlockedReason, string> = {
   "target-symlink": "remoteSync.blocked.targetSymlink",
   "compat-directory": "remoteSync.blocked.compatDirectory",
   "external-directory": "remoteSync.blocked.externalDirectory",
-  "target-compat-config": "remoteSync.blocked.targetCompatConfig",
   "source-removed": "remoteSync.blocked.sourceRemoved",
   "remote-latest-mismatch": "remoteSync.blocked.remoteLatestMismatch",
   "cross-marketplace-dependency": "remoteSync.blocked.crossMarketplaceDependency",
@@ -99,30 +98,15 @@ function formatItemError(formatMessage: FormatMessage, error: DataSyncItemError)
       );
 }
 
-/** 多个缺失项合并为一行：同类名称之间、MCP 与技能两组之间各用本地化分隔符。 */
+/** 多个缺失技能合并为一行，名称之间使用本地化分隔符。 */
 function formatMissingDependencies(
   formatMessage: FormatMessage,
   missing: DataSyncMissingDependencies,
 ): string {
-  const nameSeparator = formatMessage({ id: "remoteSync.dependency.nameSeparator" });
-  const groups: string[] = [];
-  if (missing.mcpServers.length > 0) {
-    groups.push(
-      formatMessage(
-        { id: "remoteSync.dependency.missingMcp" },
-        { names: missing.mcpServers.join(nameSeparator) },
-      ),
-    );
-  }
-  if (missing.skills.length > 0) {
-    groups.push(
-      formatMessage(
-        { id: "remoteSync.dependency.missingSkills" },
-        { names: missing.skills.join(nameSeparator) },
-      ),
-    );
-  }
-  return groups.join(formatMessage({ id: "remoteSync.dependency.groupSeparator" }));
+  return formatMessage(
+    { id: "remoteSync.dependency.missingSkills" },
+    { names: missing.skills.join(formatMessage({ id: "remoteSync.dependency.nameSeparator" })) },
+  );
 }
 
 /** 依赖提示的两端列表：只用已就绪分类的最近一次加载结果，推送后刷新完成即随之更新。 */
@@ -143,7 +127,6 @@ export function DataSyncDialog(props: DataSyncDialogProps) {
     online: props.online,
     workspaceHistory: props.workspaceHistory,
     workspaceTabs: props.workspaceTabs,
-    workspace: props.workspace,
     onPushFinished: props.onPushFinished,
   });
   const providers = useDataSyncProviders({
@@ -264,7 +247,6 @@ export function DataSyncDialog(props: DataSyncDialogProps) {
                   key={activeCategory.id}
                   view={activeView}
                   dependencyTargets={{
-                    mcp: readyDependencyKeys(state.views.mcp),
                     skills: readyDependencyKeys(state.views.skills),
                   }}
                   disabled={disabled}

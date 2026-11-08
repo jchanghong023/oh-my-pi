@@ -484,8 +484,7 @@ const forkCodingAgentFiles = new Set([
 	"test/webgui/native-files.test.ts",
 	"test/webgui/native-git.test.ts",
 	"test/webgui/native-skills.test.ts",
-	"test/webgui/native-mcp.test.ts",
-	"test/webgui/native-mcp-binding.test.ts",
+	"test/webgui/mcp-disabled.test.ts",
 	"test/webgui/platform-probe.test.ts",
 	"test/webgui/packaged-assets.test.ts",
 ]);

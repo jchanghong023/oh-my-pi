@@ -364,12 +364,6 @@ export const TID_SETTINGS_ASK_USER_QUESTION_AUTO_RESOLUTION_SWITCH =
 export const TID_SETTINGS_LOCALE_SELECT_TRIGGER = "settings-locale-select-trigger";
 /** 设置页通用分区的界面语言下拉项（动态后缀为 locale preference） */
 export const TID_SETTINGS_LOCALE_SELECT_ITEM = "settings-locale-select-item";
-/** 用户/工作区 MCP 列表行（动态后缀为 MCP runtime 名称） */
-export const TID_MCP_SERVER_ROW = "mcp-server-row";
-/** 插件 MCP 列表行（动态后缀为 MCP runtime 名称） */
-export const TID_PLUGIN_MCP_SERVER_ROW = "plugin-mcp-server-row";
-/** MCP OAuth 授权按钮（动态后缀为 MCP runtime 名称） */
-export const TID_MCP_OPEN_AUTHORIZATION_BUTTON = "mcp-open-authorization-button";
 /** 子智能体列表行（动态后缀为子智能体名称） */
 export const TID_SUBAGENT_ROW = "subagent-row";
 /** 内置子智能体模型选择控件（动态后缀为子智能体名称） */
@@ -475,12 +469,6 @@ export const TID_V4_WORKSPACE_HOOK_PENDING_POPOVER = "v4-workspace-hook-pending-
 export const TID_V4_WORKSPACE_HOOK_PENDING_REVIEW = "v4-workspace-hook-pending-review";
 /** v4 工作区 Hook 待审核浮层「忽略」按钮 */
 export const TID_V4_WORKSPACE_HOOK_PENDING_DISMISS = "v4-workspace-hook-pending-dismiss";
-/** v4 composer 工作区 MCP 待审核入口、未读点与点击浮层 */
-export const TID_V4_WORKSPACE_MCP_PENDING_TRIGGER = "v4-workspace-mcp-pending-trigger";
-export const TID_V4_WORKSPACE_MCP_PENDING_UNREAD = "v4-workspace-mcp-pending-unread";
-export const TID_V4_WORKSPACE_MCP_PENDING_POPOVER = "v4-workspace-mcp-pending-popover";
-export const TID_V4_WORKSPACE_MCP_PENDING_REVIEW = "v4-workspace-mcp-pending-review";
-export const TID_V4_WORKSPACE_MCP_PENDING_DISMISS = "v4-workspace-mcp-pending-dismiss";
 /** v4 composer 容器 */
 export const TID_V4_COMPOSER = "v4-composer";
 /** v4 composer 文本输入 */

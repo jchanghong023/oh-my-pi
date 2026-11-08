@@ -352,7 +352,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - Dev 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 Dev 模式、兼容入口、双轨运行或旧流程迁移／恢复。
 - Dev MUST 是显式启用的独立功能模块；`/dev` 进入后当前 TUI 只接受再次 `/dev` 退出，NEVER 与网页并行执行普通命令或输入。退出 MUST 先结清 Dev 工作再恢复原普通会话，不取消需求或回滚 Git；关闭页面不退出。未开启时不启动 Dev 服务／任务或改写其状态；借用资源不得污染普通 OMP，共享接口只保留确实必要且默认不启用的能力，配置继续沿用原方式。
 - WebGUI 提供 `/webgui`／`omp webgui`，沿用 Dev 的 TUI 独占门禁，不改原始 TUI 输入、旁观与恢复逻辑。每个 OMP 进程独立持有随机端口的 Web 服务，同进程项目复用；Dev 直接挂载原生 HTTP／WS，WebGUI 提供静态资源和 RPC，NEVER 引入独立 worker、常驻 Vite、内部 HTTP、Relay 或桌面远控。
-- WebGUI 保留裁剪后的核心界面，不加调试栏或预览外框。复用原生聊天、历史、临时选模、子代理及 task／workpool 运行视图；NEVER 将 Team、Dev、提示词命令冒充任意图工作流引擎。文件／Git、有效 Skill 和已加载 MCP 配置仅按批准的只读范围接入；不再提供用量与成本统计 UI，原生记账与 `omp stats` 保持不变。未接入能力明确不可用，不伪造成功。
+- WebGUI 保留裁剪后的核心界面，不加调试栏或预览外框。复用原生聊天、历史、临时选模、子代理及 task／workpool 运行视图；NEVER 将 Team、Dev、提示词命令冒充任意图工作流引擎。文件／Git、有效 Skill 仅按批准的只读范围接入；WebGUI NEVER 对接 MCP，须移除其页面、接口、专属状态与测试，原生 Agent／TUI／Dev 的 MCP 能力保持不变。不再提供用量与成本统计 UI，原生记账与 `omp stats` 保持不变。未接入能力明确不可用，不伪造成功。
 - WebGUI 跨目录续聊使用同一原生会话及现有 host 重绑与目标项目占用；同一真实项目根跨进程／profile／配置根仅一个 Dev 或 WebGUI owner。再次输入模式命令先结清本实例工作、关闭其服务、释放自有占用，再恢复普通会话；失败保持锁定，不关闭其他实例，关网页不退出。独立 `omp webgui` 不创建 Agent 或占用项目，仅提供真实工作目录显示上下文。Dev 保留完整随机能力地址和非 offline 仅本机边界。
 - WebGUI 源码位于 `packages/coding-agent/src/webgui/`，前端入口为 `vendor/zcode-frontend/preview/`。`bun run build:webgui` 构建前端，正式二进制与 npm 构建通过 `scripts/generate-webgui-resources.ts` 携带同一份指纹校验资源；运行时不依赖源码目录、Vite 或下载。源码检出需先准备依赖。Chromium、Firefox 68、手机实机和发行产物必须分别验证，不相互代称通过。
 - 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，Firefox 52 ESR 保守语法／基础 API 基线不等于公司实机验证。

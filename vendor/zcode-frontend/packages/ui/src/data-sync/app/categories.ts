@@ -2,7 +2,6 @@ import {
   Anchor,
   Blocks,
   Bot,
-  Cable,
   LayoutDashboard,
   Terminal,
   WandSparkles,
@@ -19,7 +18,6 @@ import { getWorkspaceSourceServerId } from "@/conversation-workspace-target/sour
 import {
   refreshSlashCommandsAfterRemoteSync,
   refreshWorkspacePluginCapabilitiesAfterRemoteSync,
-  reloadMcpStoreIfCurrentWorkspace,
 } from "@/lib/remotePluginSyncRefresh.js";
 import { refreshSharedSkillStoreForWorkspace } from "@/lib/skillStoreRefresh.js";
 import {
@@ -44,7 +42,7 @@ export interface DataSyncAfterPushContext {
 
 /**
  * 数据同步分类适配器。新增分类只需：服务实现 IDataSyncCategoryService → 在这里注册 → 文案
- * `remoteSync.category.<id>`。导航顺序即数组顺序（设计稿：概览、模型提供商、子智能体、插件、MCP、技能、命令、钩子）。
+ * `remoteSync.category.<id>`。导航顺序即数组顺序（设计稿：概览、模型提供商、子智能体、插件、技能、命令、钩子）。
  */
 export interface DataSyncCategoryAdapter {
   id: DataSyncCategoryId;
@@ -90,7 +88,7 @@ async function refreshSkillsAfterPush(context: DataSyncAfterPushContext): Promis
 }
 
 /**
- * 插件推送后复用旧插件同步入口的完整刷新链：依次刷新技能、slash commands、MCP，并发送插件管理通知。
+ * 插件推送后刷新技能、slash commands，并发送插件管理通知。
  */
 async function refreshPluginsAfterPush(context: DataSyncAfterPushContext): Promise<void> {
   const { targetServices } = context;
@@ -135,16 +133,6 @@ async function refreshSubagentsAfterPush(context: DataSyncAfterPushContext): Pro
   await refreshSubagentsStoreForRemoteWorkspaces(tabsOnDevice(context));
 }
 
-/** MCP 推送后只刷新全局 MCP store 当前指向的项目（不切换当前项目），见 reloadMcpStoreIfCurrentWorkspace。 */
-async function refreshMcpAfterPush(context: DataSyncAfterPushContext): Promise<void> {
-  for (const tab of tabsOnDevice(context)) {
-    await reloadMcpStoreIfCurrentWorkspace({
-      workspacePath: tab.workspacePath,
-      workspaceIdentity: tab.workspaceIdentity,
-    });
-  }
-}
-
 /**
  * 钩子推送后使该设备上已打开项目的预热会话失效，与设置页保存钩子（HooksSection）走同一入口。
  * 修复：这里原来不做推送后处理，理由是「Agent 侧沿用现有的配置读取时机」。但会话只在创建时读一次钩子，
@@ -187,12 +175,6 @@ export const DATA_SYNC_CATEGORIES: readonly DataSyncCategoryAdapter[] = [
     getService: (services, control) => createPluginCategoryDataSyncService(services, control),
     maxBatchBytes: PLUGIN_DATA_SYNC_MAX_ITEM_BYTES,
     afterPush: refreshPluginsAfterPush,
-  },
-  {
-    id: "mcp",
-    icon: Cable,
-    getService: (services) => services.mcpSyncService,
-    afterPush: refreshMcpAfterPush,
   },
   {
     id: "skills",

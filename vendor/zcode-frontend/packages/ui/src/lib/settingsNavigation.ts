@@ -7,7 +7,6 @@ export type SettingsSectionId =
   | "modelProvider"
   | "personalization"
   | "memory"
-  | "mcp"
   | "skill"
   | "projects"
   | "archives"
@@ -18,7 +17,7 @@ export type SettingsSectionId =
   | "automations"
   | "shortcuts";
 
-export type SettingsPluginTabTarget = "mcps" | "skills" | "commands";
+export type SettingsPluginTabTarget = "skills" | "commands";
 
 const SETTINGS_SECTION_INTENT_KEY = "zcode-settings-section-intent",
   SETTINGS_PLUGIN_SCOPE_KEY_INTENT_KEY = "zcode-settings-plugin-scope-key-intent";
@@ -51,7 +50,6 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "modelProvider" ||
     value === "personalization" ||
     value === "memory" ||
-    value === "mcp" ||
     value === "skill" ||
     value === "projects" ||
     value === "archives" ||
@@ -162,7 +160,7 @@ export function setPendingSettingsPluginIntent(
     scopeKey?: string;
   } = {},
 ): void {
-  const section = tab === "mcps" ? "mcp" : tab === "skills" ? "skill" : "commands";
+  const section = tab === "skills" ? "skill" : "commands";
   setPendingSettingsSectionIntent(section, {
     pluginScopeKey: options.scopeKey,
   });

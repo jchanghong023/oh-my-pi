@@ -16,12 +16,6 @@ function canonicalPluginName(value: string): string {
   return value.trim().toLocaleLowerCase();
 }
 
-export function needsMcpAttention(resource: {
-  authorization?: { authorizationUrl?: string };
-}): boolean {
-  return Boolean(resource.authorization?.authorizationUrl);
-}
-
 export function selectBuiltInPlugins(
   plugins: readonly ZCodePluginInfo[],
   installedPlugins: readonly ZCodeInstalledPluginSummary[],

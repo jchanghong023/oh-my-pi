@@ -2,11 +2,6 @@ import type { WebRemoteControlAuthStateChange } from "./web-remote-control.js";
 /* eslint-disable max-lines -- 通信频道和请求响应映射必须集中定义，避免跨进程 channel 字符串散落。 */
 import type {
   ResourceUsageSnapshot,
-  LoadCliMcpFromUserDirectoryRequest,
-  LoadCliMcpFromUserDirectoryResult,
-  MigrateLegacyCommonMcpRequest,
-  MigrateLegacyCommonMcpResult,
-  SaveCliMcpToUserDirectoryRequest,
 } from "./index.js";
 import type { OAuthStateRegistration } from "./oauth.js";
 import type {
@@ -135,8 +130,6 @@ export const ServiceChannels = {
   Skills: "skills",
   /** SSH 远程 skills 同步服务 */
   SkillSync: "skill-sync",
-  /** SSH 远程 MCP 同步服务 */
-  McpSync: "mcp-sync",
   /** SSH 远程 plugin 同步服务 */
   PluginSync: "plugin-sync",
   /** 数据同步：子智能体、命令、钩子共用的用户配置同步通道（按 category 区分，不进手机白名单） */
@@ -229,10 +222,6 @@ export const PlatformChannels = {
   ListDockerContainers: "zcode:list-docker-containers",
   /** Renderer → Main：列出 SSH config 里可用于快速填表的 alias */
   ListSSHConfigAliases: "zcode:list-ssh-config-aliases",
-  /** Renderer → Main：从用户目录加载 CLI MCP 配置 */
-  LoadMcpFromUserDirectory: "zcode:load-mcp-from-user-directory",
-  /** Renderer → Main：保存 CLI MCP 配置到用户目录 */
-  SaveMcpToUserDirectory: "zcode:save-mcp-to-user-directory",
   /** Renderer → Main：查询"关闭驻留托盘"能力（Linux 置灰判断；spec：docs/desktop/linux-close-to-tray.md） */
   GetCloseToTrayCapability: "zcode:get-close-to-tray-capability",
   /** Renderer 日志转发到 main 进程统一存储 */
@@ -429,8 +418,6 @@ export const PlatformChannels = {
   SetApplicationLocale: "zcode:set-application-locale",
   /** Renderer → Main：同步标题栏亮暗色，用于原生窗口控制按钮配色 */
   SetTitleBarTheme: "zcode:set-title-bar-theme",
-  /** Renderer → Main：迁移旧版 Common MCP 配置 */
-  MigrateLegacyCommonMcp: "zcode:migrate-legacy-common-mcp",
   /** Renderer → Main：获取当前设备的稳定标识符（deviceMid） */
   GetDeviceId: "zcode:get-device-id",
 } as const;
@@ -776,18 +763,6 @@ export interface PlatformChannelMap {
   [PlatformChannels.ListSSHConfigAliases]: {
     request: void;
     response: SSHConfigAliasOption[];
-  };
-  [PlatformChannels.LoadMcpFromUserDirectory]: {
-    request: LoadCliMcpFromUserDirectoryRequest;
-    response: LoadCliMcpFromUserDirectoryResult;
-  };
-  [PlatformChannels.SaveMcpToUserDirectory]: {
-    request: SaveCliMcpToUserDirectoryRequest;
-    response: { success: boolean; error?: string };
-  };
-  [PlatformChannels.MigrateLegacyCommonMcp]: {
-    request: MigrateLegacyCommonMcpRequest;
-    response: MigrateLegacyCommonMcpResult;
   };
   [PlatformChannels.Log]: {
     request: { level: "info" | "warn" | "error"; args: unknown[] };

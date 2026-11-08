@@ -1,8 +1,6 @@
 import type {
   ModelSelection,
-  ZCodeAgentMcpServer,
   ZCodeAutomationScheduleRule,
-  ZCodeMcpListMode,
 } from "@zcode/shared";
 
 export interface ZCodeAgentWorkspaceTarget {
@@ -30,10 +28,6 @@ export interface ZCodeAgentPluginViewParams extends ZCodeAgentWorkspaceTarget {
   configScope?: "user" | "workspace";
 }
 
-export interface ZCodeAgentListMcpServerStatusesParams extends ZCodeAgentWorkspaceTarget {
-  mcpServers?: ZCodeAgentMcpServer[];
-  mode?: ZCodeMcpListMode;
-}
 
 export interface ZCodeAgentAddPluginMarketplaceParams extends ZCodeAgentPluginMutationTarget {
   dryRun?: boolean;

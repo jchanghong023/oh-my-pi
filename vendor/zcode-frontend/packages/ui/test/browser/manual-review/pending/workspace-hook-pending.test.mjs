@@ -1,4 +1,4 @@
-// HK05 / WMT-04：图标弹层的触摸、已读隔离和投影变化；审核导航由各自 Desktop E2E 覆盖。
+// HK05：Hook 图标弹层的触摸、已读隔离和投影变化；审核导航由 Desktop E2E 覆盖。
 import assert from "node:assert/strict";
 import { before, after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -16,11 +16,11 @@ const fixture = `
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
-import { WorkspaceHookPendingIndicator, WorkspaceMcpPendingIndicator } from "@/v4/WorkspaceHookPendingBanner.js";
+import { WorkspaceHookPendingIndicator } from "@/v4/WorkspaceHookPendingBanner.js";
 import "@/styles.css";
 const query = new URLSearchParams(location.search);
 const theme = query.get("theme");
-const Indicator = query.get("kind") === "mcp" ? WorkspaceMcpPendingIndicator : WorkspaceHookPendingIndicator;
+const Indicator = WorkspaceHookPendingIndicator;
 document.documentElement.className = theme + " theme-zai-" + theme;
 function Fixture() {
   const [bundle, setBundle] = useState(1);
@@ -36,12 +36,6 @@ function Fixture() {
         <Indicator key={session + bundle} sessionId={session}
           workspacePath="/workspace/example" admission={{pendingCount: pending ? 2 : 0, bundleDigest: String(bundle)}} />
       </div>
-      {query.get("companions") === "1" ? <aside className="fixed bottom-4 right-4">
-        <WorkspaceMcpPendingIndicator key={"second" + session + bundle} sessionId={session}
-          workspacePath="/workspace/example" admission={{pendingCount: pending ? 2 : 0, bundleDigest: String(bundle)}} />
-        <WorkspaceHookPendingIndicator key={"hook" + session + bundle} sessionId={session}
-          workspacePath="/workspace/example" admission={{pendingCount: pending ? 2 : 0, bundleDigest: String(bundle)}} />
-      </aside> : null}
     </main>
   </ZCodeIntlProvider>;
 }
@@ -109,7 +103,7 @@ after(async () => {
   await server?.close();
 });
 
-for (const kind of ["hook", "mcp"])
+for (const kind of ["hook"])
   for (const mobile of [false, true])
     for (const theme of ["light", "dark"])
       for (const locale of ["zh-CN", "en-US"]) {
@@ -141,13 +135,9 @@ for (const kind of ["hook", "mcp"])
             assert.equal(await unread.count(), 0);
             assert.match(
               await popover.innerText(),
-              kind === "mcp"
-                ? locale === "zh-CN"
-                  ? /2 个工作区 MCP 待信任/
-                  : /2 workspace MCP server/
-                : locale === "zh-CN"
-                  ? /2 个工作区 Hook 待审核/
-                  : /2 workspace hook\(s\) pending review/,
+              locale === "zh-CN"
+                ? /2 个工作区 Hook 待审核/
+                : /2 workspace hook\(s\) pending review/,
             );
             const bounds = await popover.boundingBox();
             assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width && bounds.y >= 0);
@@ -181,23 +171,3 @@ for (const kind of ["hook", "mcp"])
         });
       }
 
-test("MCP 多 pane 同步已读和忽略，且不影响 Hook", async () => {
-  const page = await browser.newPage({ viewport: { width: 1200, height: 844 } });
-  try {
-    await page.goto(`${origin}fixture?theme=light&locale=zh-CN&kind=mcp&companions=1`);
-    const unread = page.getByTestId("v4-workspace-mcp-pending-unread");
-    const trigger = page.getByTestId("v4-workspace-mcp-pending-trigger");
-    await unread.first().waitFor();
-    assert.equal(await unread.count(), 2);
-    await trigger.first().click();
-    await unread.first().waitFor({ state: "hidden" });
-    assert.equal(await unread.count(), 0);
-    assert.equal(await page.getByTestId("v4-workspace-hook-pending-unread").count(), 1);
-    await page.getByTestId("v4-workspace-mcp-pending-dismiss").click();
-    await trigger.first().waitFor({ state: "hidden" });
-    assert.equal(await trigger.count(), 0);
-    assert.equal(await page.getByTestId("v4-workspace-hook-pending-trigger").count(), 1);
-  } finally {
-    await page.close();
-  }
-});

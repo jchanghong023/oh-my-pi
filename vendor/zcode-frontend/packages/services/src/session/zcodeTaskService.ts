@@ -24,7 +24,6 @@ import type {
   ZCodeWorkspaceEvent,
   TraceId,
   ZCodeSessionFile,
-  ZCodeAgentMcpServer,
   ZCodeTaskSnapshot,
   ZCodeTaskSnapshotBody,
   ZCodeTaskSnapshotToolCallsSlice,
@@ -214,7 +213,6 @@ export interface IZCodeTaskService {
     /** @deprecated 仅供尚未迁移的旧调用边界读取。 */
     thoughtLevel?: string;
     forkedFromTaskId?: string;
-    mcpServers?: ZCodeAgentMcpServer[];
     /** 定时任务派发时标记所属 automation，落 tasks-index 的 cron_automation_id 并归入 cron 分组。 */
     automationId?: string;
     /**
@@ -416,7 +414,6 @@ export interface IZCodeTaskService {
     thoughtLevel?: string;
     /** 定时任务派发时恢复已有 targetTaskId，沿用 automation 工具面隔离。 */
     automationId?: string;
-    mcpServers?: ZCodeAgentMcpServer[];
   }): Promise<ZCodeTaskMeta>;
 
   /** 列出 workspace 下所有已持久化的 task */

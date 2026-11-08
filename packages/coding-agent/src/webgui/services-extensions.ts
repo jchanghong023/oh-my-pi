@@ -9,7 +9,6 @@ import type { SettingsSyncClaudeAgentsFileMigrationStatus } from "../../../../ve
 import type { SkillsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/skills-types";
 import type { AgentsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/subagents-types";
 import type { WebGuiMethod, WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
-import { createNativeMcpMethods } from "./native-mcp";
 import { createNativeSkillMethods } from "./native-skills";
 import { createWebGuiService } from "./service-channel";
 
@@ -49,12 +48,6 @@ export function createExtensionServices(context: WebGuiServiceContext): readonly
 			...disabledSyncReads(),
 			// TODO(omp-skills): Bind native listSyncItems/getSyncContentHashes/checkSyncWriteAccess;
 			// exportSyncItems/importSyncItems remain explicitly unavailable, never successful empty imports.
-		}),
-		createWebGuiService(ServiceChannels.McpSync, {
-			...disabledSyncReads(),
-			...createNativeMcpMethods(context),
-			// Reads require the bound owner's live manager and expose its loaded cache only.
-			// Export/import/trust/save operations remain unavailable.
 		}),
 		createWebGuiService(ServiceChannels.UserConfigSync, {
 			...disabledSyncReads(),

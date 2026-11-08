@@ -6,7 +6,6 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 export type OnboardingWizardStep =
   | "session"
   | "skills-import"
-  | "mcp-import"
   // 插件导入步骤未启用。
   // | "plugins-import"
   | "commands-import"
@@ -20,12 +19,11 @@ const WIZARD_STEPS: Array<{
 }> = [
   { key: "session", index: 1, titleId: "onboarding.step.session" },
   { key: "skills-import", index: 2, titleId: "onboarding.step.skillsImport" },
-  { key: "mcp-import", index: 3, titleId: "onboarding.step.mcpImport" },
   // 插件导入步骤未启用。
-  // { key: "plugins-import", index: 4, titleId: "onboarding.step.pluginsImport" },
-  { key: "commands-import", index: 4, titleId: "onboarding.step.commandsImport" },
-  { key: "agents-file", index: 5, titleId: "onboarding.step.agentsFile" },
-  { key: "migration", index: 6, titleId: "onboarding.step.migration" },
+  // { key: "plugins-import", index: 3, titleId: "onboarding.step.pluginsImport" },
+  { key: "commands-import", index: 3, titleId: "onboarding.step.commandsImport" },
+  { key: "agents-file", index: 4, titleId: "onboarding.step.agentsFile" },
+  { key: "migration", index: 5, titleId: "onboarding.step.migration" },
 ];
 
 export function getOnboardingStepMessageKey(step: OnboardingWizardStep): string {
@@ -34,8 +32,6 @@ export function getOnboardingStepMessageKey(step: OnboardingWizardStep): string 
       return "session";
     case "skills-import":
       return "skillsImport";
-    case "mcp-import":
-      return "mcpImport";
     case "commands-import":
       return "commandsImport";
     case "agents-file":
@@ -293,7 +289,6 @@ export function OnboardingWizardFooter(props: {
 function isOnboardingExternalImportStep(step: OnboardingWizardStep): boolean {
   return (
     step === "skills-import" ||
-    step === "mcp-import" ||
     // 插件导入步骤未启用。
     // step === "plugins-import" ||
     step === "commands-import"

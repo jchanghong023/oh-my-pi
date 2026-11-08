@@ -158,7 +158,7 @@ export interface RemoteWorkspaceSessionSnapshot {
   workspacePath: string;
   /** 用户可见的 workspace 分类；旧远端快照缺失时按 project 兼容读取。 */
   workspacePurpose?: WorkspacePurpose;
-  /** 发起远程连接时的本机 workspace 路径，仅用于 MCP filesystem 路径改写。 */
+  /** 发起远程连接时的本机 workspace 路径，用于模型连通性检查的本机上下文。 */
   localWorkspacePath?: string;
   /** 远程 workspace 的稳定身份键（authority + canonicalPath）。 */
   workspaceIdentity?: string;

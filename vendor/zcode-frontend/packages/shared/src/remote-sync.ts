@@ -19,8 +19,6 @@ export type DataSyncBlockedReason =
   | "compat-directory"
   /** 目标端同名 inline 插件不在 `~/.zcode/plugins` 下（例如开发中的 checkout）。 */
   | "external-directory"
-  /** 目标端整类不能导入：远端实际生效的是 `~/.agents` 兼容配置（MCP），推送会使其失效。 */
-  | "target-compat-config"
   /** marketplace 插件：本机来源已删除（Orphaned Installed Plugin）。 */
   | "source-removed"
   /** marketplace 插件：远端来源的最新版本与本机版本不一致，不能更新。 */
@@ -38,7 +36,7 @@ export interface DataSyncItemSignature {
 
 /**
  * 子智能体分类：frontmatter 中按名称引用的依赖（只含运行时支持的字符串形式；对象形式的 MCP 是内联配置，不依赖目标端）。
- * 弹窗用同一弹窗中 MCP / 技能分类的目标端列表判断缺失，名称按各分类对齐规则（trim + 小写）匹配。
+ * WebGUI 仅根据同一弹窗中的技能列表判断技能依赖；其余原始依赖元数据保持不变。
  */
 export interface DataSyncItemDependencies {
   mcpServers?: string[];
@@ -82,14 +80,6 @@ export interface DataSyncListResult {
   importBlockedReason?: DataSyncBlockedReason;
 }
 
-/**
- * 带项目上下文的入口（连接向导、Header、侧栏项目菜单）传入的 workspace 映射：本机项目路径 → 远端项目路径。
- * 需要路径改写的分类（MCP）比较与推送时先做 workspace 改写再做 home 改写；其他分类忽略。设置页入口不传。
- */
-export interface DataSyncWorkspaceMapping {
-  sourceWorkspacePath: string;
-  targetWorkspacePath: string;
-}
 
 export interface DataSyncContentHashesResult {
   /** 只包含仍然存在且能计算的 key。 */

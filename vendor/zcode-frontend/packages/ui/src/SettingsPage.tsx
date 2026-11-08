@@ -121,7 +121,6 @@ function SettingsSidebarButton({
 
 export function SettingsPage({
   isDesktop,
-  isWebRemoteControl = false,
   captionWorkspacePath,
   onBack,
   onCreateTask,
@@ -129,7 +128,6 @@ export function SettingsPage({
   allowOpenWorkspace = true,
 }: {
   isDesktop?: boolean;
-  isWebRemoteControl?: boolean;
   captionWorkspacePath?: string | null;
   onBack?: () => void;
   onCreateTask?: (request?: CreateTaskRequest) => void;
@@ -274,13 +272,12 @@ export function SettingsPage({
   useEffect(
     () =>
       addPendingSettingsSectionListener((section, detail) => {
-        // SettingsPage 已打开时再次从 quickpick 点“个性化/MCP”等设置入口，
+        // SettingsPage 已打开时再次从 quickpick 点“个性化/技能”等设置入口，
         // 页面不会重新挂载，之前写入的 pending section 无人消费，看起来像点击没反应。
         // 这里订阅同窗口跳转意图，立即切换当前设置分区。
         setActiveSettingsSection(section, activeSection);
         // 设置入口是一级路由边界。即使仍落在同一 section，也必须销毁旧的 New/Edit/Detail 子状态。
         setSettingsSectionNavigationVersion((version) => version + 1);
-        // MCP 独立分区也接收工作区意图，否则会话内审核会误落到用户配置。
         setPluginScopeKey(detail?.pluginScopeKey);
         if (section === "modelProvider" && detail?.modelProviderId) {
           setPendingModelProviderTarget({
@@ -790,21 +787,11 @@ export function SettingsPage({
                                 workspaceDisplayNames={memoryWorkspaceDisplayNames}
                               />
                             </ServiceProvider>
-                          ) : activeSection === "mcp" ? (
-                            <PluginsSection
-                              key={`mcp:${settingsSectionNavigationVersion}`}
-                              mode="mcp"
-                              initialScopeKey={pluginScopeKey}
-                              isWebRemoteControl={isWebRemoteControl}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              onCreateTask={onCreateTask}
-                            />
                           ) : activeSection === "skill" ? (
                             <PluginsSection
                               key={`skill:${settingsSectionNavigationVersion}`}
                               mode="skill"
-                              isWebRemoteControl={isWebRemoteControl}
+                              initialScopeKey={pluginScopeKey}
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                               onCreateTask={onCreateTask}
@@ -837,7 +824,7 @@ export function SettingsPage({
                           ) : activeSection === "commands" ? (
                             <PluginsSection
                               mode="command"
-                              isWebRemoteControl={isWebRemoteControl}
+                              initialScopeKey={pluginScopeKey}
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                               onCreateTask={onCreateTask}

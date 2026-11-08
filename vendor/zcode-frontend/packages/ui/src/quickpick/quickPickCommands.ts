@@ -4,7 +4,6 @@ export type QuickPickCommandIcon =
   | "diff"
   | "folder"
   | "message"
-  | "mcp"
   | "settings"
   | "sidebarClose"
   | "sidebarOpen"
@@ -45,7 +44,6 @@ interface QuickPickCommandHandlers {
   openWorkspace: () => void;
   openSettings: () => void;
   openSkillsSettings: () => void;
-  openMcpSettings: () => void;
   switchTheme: () => void;
   openCommunity: () => void | Promise<void>;
   openProductDocs: () => void | Promise<void>;
@@ -147,14 +145,6 @@ export function createQuickPickCommands({
       icon: "skills",
       keywords: ["skills", "skill", "配置", "技能"],
       run: handlers.openSkillsSettings,
-    },
-    {
-      id: "mcp-settings",
-      sectionId: "configure",
-      titleId: "quickPick.command.mcpServers",
-      icon: "mcp",
-      keywords: ["mcp", "server", "servers", "MCP", "服务器"],
-      run: handlers.openMcpSettings,
     },
   ];
 

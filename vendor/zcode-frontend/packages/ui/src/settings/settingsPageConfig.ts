@@ -13,7 +13,6 @@ import {
   AlarmClock,
   Anchor,
   Brain,
-  Cable,
   WandSparkles,
   Keyboard,
   FileSearch,
@@ -91,12 +90,6 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     id: "subagents",
     icon: Bot,
     titleId: "settings.subagents.title",
-    groupId: "agentCapabilities",
-  },
-  {
-    id: "mcp",
-    icon: Cable,
-    titleId: "settings.mcpTitle",
     groupId: "agentCapabilities",
   },
   {

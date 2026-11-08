@@ -108,7 +108,6 @@ import {
 	isInteractiveHost,
 	isRecord,
 	logger,
-	normalizePathForComparison,
 	postmortem,
 	prompt,
 	Snowflake,
@@ -195,7 +194,6 @@ import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sh
 import type { IrcMessage } from "@oh-my-pi/pi-tui/tools/irc";
 import type { JobWidgetEntry } from "@oh-my-pi/pi-tui/tools/job-widget";
 import type { DaemonCompletionNotification } from "../launch/protocol";
-import { MCPManager } from "../mcp/manager";
 import { MEMORY_RECALL_CHANGES_MESSAGE_TYPE } from "../memory-backend/recall-entry";
 import { shutdownMnemopiEmbedClient } from "../mnemopi/embed-client";
 import { getMnemopiSessionState, type MnemopiSessionState, setMnemopiSessionState } from "../mnemopi/state";
@@ -3368,20 +3366,6 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	get asyncJobManager(): AsyncJobManagerApi | undefined {
 		return this.#asyncJobManager;
-	}
-
-	/** Current-workspace SDK capability only; reading never starts discovery or borrows a global manager. */
-	get mcpManager(): MCPManager | undefined {
-		const tools = this.#evalToolSession;
-		const manager = tools?.enableMCP === true ? tools.mcpManager : undefined;
-		if (
-			this.#isDisposed ||
-			!(manager instanceof MCPManager) ||
-			normalizePathForComparison(manager.getCwd()) !== normalizePathForComparison(this.sessionManager.getCwd())
-		) {
-			return undefined;
-		}
-		return manager;
 	}
 
 	/** This session's owning registry; browser adapters must not guess an ambient registry. */

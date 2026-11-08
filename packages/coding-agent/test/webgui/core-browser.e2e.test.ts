@@ -11,6 +11,7 @@ import { subagentScenario } from "./core-subagent-scenario";
 import { workflowScenario } from "./core-workflow-scenario";
 import { modelIsolationScenario } from "./core-model-isolation-scenario";
 import { parallelSubagentScenario } from "./core-parallel-subagent-scenario";
+import { settingsScenario } from "./core-settings-scenario";
 
 const diagnosticsPath = path.join(os.tmpdir(), `omp-core-browser-failures-${process.pid}.jsonl`);
 
@@ -77,6 +78,15 @@ describe.serial("retained WebGUI core browser integration", () => {
 			await native.close();
 		}
 	}, 60_000);
+
+	test("settings omit MCP configuration while the native Skill catalog remains readable", async () => {
+		const native = await fixture.nativeCase({ withSkill: true });
+		try {
+			await diagnoseFailure(native.page, () => settingsScenario(native));
+		} finally {
+			await native.close();
+		}
+	}, 30_000);
 
 	test("subagent presentation preserves identity, deduplicates tabs and isolates messages", async () => {
 		const page = await fixture.componentPage("subagent");

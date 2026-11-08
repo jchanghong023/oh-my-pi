@@ -464,27 +464,6 @@ export class MCPManager implements MCPManagerApi {
 		return this.cwd;
 	}
 
-	/** Cached readiness only; absent evidence is not a synthetic connection failure. */
-	getStartupStatus(): MCPStartupStatus {
-		const status: MCPStartupStatus = { connected: [], pending: [], failed: [] };
-		for (const name of this.#startupServers) {
-			if (
-				this.#startupUpdates.has(name) ||
-				this.#pendingToolLoads.has(name) ||
-				this.#pendingConnections.has(name) ||
-				this.#pendingReconnections.has(name)
-			) {
-				status.pending.push(name);
-			} else if (this.#connections.get(name)?.tools !== undefined) {
-				status.connected.push(name);
-			} else {
-				const error = this.#startupFailures.get(name);
-				if (error !== undefined) status.failed.push({ name, error });
-			}
-		}
-		return status;
-	}
-
 	/**
 	 * Register a listener for MCP connection lifecycle events
 	 * (`connecting` / `connected` / `failed`).

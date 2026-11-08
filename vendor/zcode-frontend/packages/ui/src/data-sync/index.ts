@@ -21,5 +21,4 @@ export type {
   DataSyncCategoryId,
   DataSyncDeviceSummary,
   DataSyncDialogProps,
-  DataSyncWorkspaceMapping,
 } from "@/data-sync/contract.js";

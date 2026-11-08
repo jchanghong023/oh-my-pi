@@ -209,9 +209,6 @@ export const webRemoteControlPlatformMethodSchema = z.enum([
   "listWSLDistros",
   "listDockerContainers",
   "listSSHConfigAliases",
-  "loadMcpFromUserDirectory",
-  "saveMcpToUserDirectory",
-  "migrateLegacyCommonMcp",
 ]);
 
 // 手机动作请求：workspaceIdentity 与 KMP 一致为可选；远程任务缺 identity 时由 controller 按路径解析。

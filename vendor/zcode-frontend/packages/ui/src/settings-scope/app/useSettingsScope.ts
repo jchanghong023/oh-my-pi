@@ -98,7 +98,7 @@ function normalizeInitialScopeKey(key: string | undefined): string | null {
 }
 
 /**
- * 设置页 Scope 的唯一状态 owner（插件 / MCP / 技能 / 命令 / 子智能体 / 钩子共用）。
+ * 设置页 Scope 的唯一状态 owner（插件 / 技能 / 命令 / 子智能体 / 钩子共用）。
  *
  * ```text
  * 配置目录目录表（项目）──┐

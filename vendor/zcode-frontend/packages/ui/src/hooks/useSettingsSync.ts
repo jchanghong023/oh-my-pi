@@ -110,7 +110,6 @@ function countSelectionItems(selection: SettingsSyncSelection): number {
     selection.skillPaths?.length ??
     selection.commandPaths?.length ??
     selection.pluginPaths?.length ??
-    selection.mcpServerPaths?.length ??
     1
   );
 }
@@ -444,7 +443,7 @@ export function useSettingsSync(params: {
       }
       discoveryRequestRef.current += 1;
       // 修复（决定 24）：原来没有 workspacePath 时直接 return，从数据同步页「迁移」进入时
-      // 技能 / MCP / 命令导入被整体静默跳过，结果页仍显示完成。导入服务支持没有项目：
+      // 技能 / 命令导入被整体静默跳过，结果页仍显示完成。导入服务支持没有项目：
       // 用户级的项照常导入；需要项目的项不导入，记为失败并计数，由完成页写明原因。
       const workspaceRequired = new Set(
         params.workspacePath ? [] : selections.filter(selectionRequiresWorkspace),

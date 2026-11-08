@@ -210,7 +210,7 @@ function compareVersionOnlyRow(
 
 /**
  * 生成本机条目的行；远端独有的条目不展示，也永不删除。排序：推送 → 更新 → 差异 → 已同步 → 不能同步。
- * `targetBlockedReason`：目标端整类不能导入（例如远端 MCP 使用 ~/.agents 兼容配置），所有行都不可选。
+ * `targetBlockedReason`：目标端整类不能导入时，所有行都不可选。
  */
 export function compareDataSyncItems(params: {
   sourceItems: readonly DataSyncListItem[];
@@ -244,11 +244,10 @@ export function compareDataSyncItems(params: {
 }
 
 export interface DataSyncMissingDependencies {
-  mcpServers: string[];
   skills: string[];
 }
 
-/** MCP 与技能分类的对齐 key 都是名称 trim + 小写。 */
+/** 技能分类的对齐 key 是名称 trim + 小写。 */
 function toDependencyKey(name: string): string {
   return name.trim().toLowerCase();
 }
@@ -260,19 +259,18 @@ export interface DataSyncDependencyKeys {
 }
 
 /**
- * 依赖提示：引用的 MCP / 技能在本机对应列表中存在、且不在目标端列表中，才算远端缺少。
+ * 依赖提示：引用的技能在本机对应列表中存在、且不在目标端列表中，才算远端缺少。
  * 两端列表取自同一弹窗中对应分类的加载结果，不额外请求；某分类未就绪（加载中或失败）时传 undefined，
  * 不对该类做判断。只用于行内提示，不影响行状态与勾选。没有缺失项时返回 undefined。
  */
 export function findMissingDataSyncDependencies(
   dependencies: DataSyncItemDependencies | undefined,
   categoryKeys: {
-    mcp: DataSyncDependencyKeys | undefined;
     skills: DataSyncDependencyKeys | undefined;
   },
 ): DataSyncMissingDependencies | undefined {
   if (!dependencies) return undefined;
-  // 修复：原先只看目标端列表，内置技能、插件提供的技能 / MCP 不在用户列表中，被误报为远端缺少。
+  // 修复：原先只看目标端列表，内置技能、插件提供的技能不在用户列表中，被误报为远端缺少。
   // 改为只提示本机列表里有（用户能在本弹窗推送）而远端没有的依赖。
   const missing = (
     names: readonly string[] | undefined,
@@ -285,10 +283,9 @@ export function findMissingDataSyncDependencies(
         })
       : [];
   const result = {
-    mcpServers: missing(dependencies.mcpServers, categoryKeys.mcp),
     skills: missing(dependencies.skills, categoryKeys.skills),
   };
-  return result.mcpServers.length > 0 || result.skills.length > 0 ? result : undefined;
+  return result.skills.length > 0 ? result : undefined;
 }
 
 export type DataSyncCheckState = boolean | "indeterminate";

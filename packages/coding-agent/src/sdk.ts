@@ -3193,8 +3193,7 @@ async function createAgentSessionScoped(
 			options.ownMcpManager && !options.parentTaskPrefix && mcpManager instanceof MCPManager
 				? mcpManager
 				: undefined;
-		// AgentSession reads this same live capability slot, including deferred discovery.
-		// Its public getter rejects a manager whose discovery cwd no longer matches the session.
+		// Native MCP resources and child sessions use this session-local capability.
 		toolSession.mcpManager = mcpManager;
 		toolSession.mcpToolScope = options.mcpToolScope;
 		toolSession.enableMCP = enableMCP;

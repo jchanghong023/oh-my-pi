@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type MouseEvent, type ReactNode } from "react";
-import { BlocksIcon, CableIcon, ChevronDown, UploadCloud, WandIcon } from "lucide-react";
+import { BlocksIcon, ChevronDown, UploadCloud, WandIcon } from "lucide-react";
 import type { DeviceSyncResult } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import {
@@ -12,7 +12,7 @@ import { useOptionalPlatform } from "@/hooks/usePlatform.js";
 import { useRemoteDevicePresentationInput } from "@/hooks/useSourceServerStatuses.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import type { DataSyncCategoryId, DataSyncWorkspaceMapping } from "@/data-sync/contract.js";
+import type { DataSyncCategoryId } from "@/data-sync/contract.js";
 import {
   DataSyncDialogContainer,
   isDataSyncDeviceOnline,
@@ -20,14 +20,12 @@ import {
   toDataSyncDeviceSummary,
 } from "@/data-sync/ui/DataSyncDialogContainer.js";
 
-/** 旧入口能定位的分类：技能、MCP、插件。 */
-export type DataSyncEntryCategory = Extract<DataSyncCategoryId, "skills" | "mcp" | "plugins">;
+/** 旧入口能定位的分类：技能、插件。 */
+export type DataSyncEntryCategory = Extract<DataSyncCategoryId, "skills" | "plugins">;
 
 export interface DataSyncEntryRequest {
   sourceServerId: string;
   category: DataSyncEntryCategory;
-  /** 只有带项目上下文的入口传入（连接向导、Header、侧栏项目菜单）。 */
-  workspace?: DataSyncWorkspaceMapping;
 }
 
 /** 设备在线判断与数据同步页一致：取自管理快照的同一份展示输入；不会为此建立连接。 */
@@ -90,7 +88,6 @@ function DataSyncEntryDialog(props: {
       sourceServices={base}
       requestSourceSettingsAttachment={props.requestSourceSettingsAttachment}
       initialCategory={props.request.category}
-      workspace={props.request.workspace}
       onClose={props.onClose}
       onPushFinished={async (result) => {
         await recordDataSyncResult(base.deviceSyncStateService, sourceServerId, result);
@@ -106,11 +103,10 @@ const ENTRY_ITEMS: ReadonlyArray<{
   icon: typeof WandIcon;
 }> = [
   { category: "skills", messageId: "remote.syncSkills", icon: WandIcon },
-  { category: "mcp", messageId: "remote.syncMcp", icon: CableIcon },
   { category: "plugins", messageId: "remote.syncPlugins", icon: BlocksIcon },
 ];
 
-/** Header 更多菜单与连接向导下拉共用的三个同步项；设备离线时禁用。 */
+/** Header 更多菜单与连接向导下拉共用的同步项；设备离线时禁用。 */
 export function DataSyncEntryMenuItems(props: {
   disabled?: boolean;
   stopMouseDownPropagation?: boolean;
