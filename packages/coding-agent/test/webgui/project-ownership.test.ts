@@ -5,8 +5,26 @@ import * as path from "node:path";
 import { ptree } from "@oh-my-pi/pi-utils";
 
 const registryModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/project-registry.ts"));
-const sharedServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/shared-server.ts"));
+const serverModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/server.ts"));
+const nativeServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/dev-workbench/server.ts"));
 const processTreeModule = JSON.stringify(path.join(import.meta.dir, "../../../utils/src/ptree.ts"));
+
+const bootstrapFixture = `
+import { closeWebServer, ensureWebServer } from ${serverModule};
+import { startDevWorkbenchServer } from ${nativeServerModule};
+async function startBootstrap(projectId) {
+	// Bootstrap must not require native sessions, models or business callbacks.
+	const host = new Proxy({}, {
+		get() { throw new Error("Bootstrap unexpectedly accessed the native host"); },
+	});
+	const html = new TextEncoder().encode("<!doctype html><title>Native bootstrap fixture</title>");
+	return startDevWorkbenchServer(host, {
+		basePath: "/dev/" + projectId + "/",
+		offline: false,
+		asset: async assetPath => assetPath === "/" ? { bytes: html, contentType: "text/html; charset=utf-8" } : null,
+	});
+}
+`;
 
 interface OwnershipAttempt {
 	outcome: "acquired" | "rejected";
@@ -36,10 +54,9 @@ console.log(JSON.stringify(result));
 
 async function runScenario<T>(root: string, body: string): Promise<T> {
 	const script = `
-import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { acquireBrowserProject, listBrowserProjects, readBrowserProject, webGuiRuntimeDir } from ${registryModule};
-import { ensureSharedWebServer } from ${sharedServerModule};
+import { acquireBrowserProject, listBrowserProjects, readBrowserProject } from ${registryModule};
+${bootstrapFixture}
 import * as ptree from ${processTreeModule};
 const root = process.env.OWNERSHIP_FIXTURE_ROOT;
 const contenderScript = ${JSON.stringify(contenderScript)};
@@ -111,7 +128,9 @@ test("a live native owner excludes another mode across directory aliases, profil
 			profile: OwnershipAttempt;
 			config: OwnershipAttempt;
 			afterClose: OwnershipAttempt;
-		}>(root, `
+		}>(
+			root,
+			`
 	const project = path.join(root, "project");
 	const alias = path.join(root, "alias");
 	const alternateConfig = { OMP_CONFIG_ROOT: path.join(root, "other-config"), OMP_PROFILE: "other", PI_PROFILE: "other" };
@@ -126,7 +145,8 @@ test("a live native owner excludes another mode across directory aliases, profil
 	} finally {
 		await owner.close();
 	}
-`);
+`,
+		);
 		expectOccupied(result.alias);
 		expectOccupied(result.profile);
 		expectOccupied(result.config);
@@ -141,7 +161,7 @@ test("a live native owner excludes another mode across directory aliases, profil
 	}
 }, 60_000);
 
-test("projects retain independent leases through exiting and close, and stale discovery cannot revive an owner", async () => {
+test("projects retain independent process-local leases through exiting and close", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-owners-"));
 	try {
 		const projectA = path.join(root, "a");
@@ -153,9 +173,11 @@ test("projects retain independent leases through exiting and close, and stale di
 			whileExiting: OwnershipAttempt;
 			afterClose: OwnershipAttempt;
 			otherProject: OwnershipAttempt;
-			stale: unknown;
+			released: unknown;
 			remaining: { root: string; mode: string }[];
-		}>(root, `
+		}>(
+			root,
+			`
 	let a;
 	let b;
 	try {
@@ -166,21 +188,18 @@ test("projects retain independent leases through exiting and close, and stale di
 		await a.markExiting();
 		const exitingPhase = (await readBrowserProject(a.projectId))?.phase;
 		const whileExiting = await contend(a.root, "dev");
-		const recordPath = path.join(webGuiRuntimeDir(), "projects", a.projectId + ".json");
-		const staleRecord = await fs.readFile(recordPath, "utf8");
 		await a.close();
 		const afterClose = await contend(a.root, "dev");
 		await a.close();
 		const otherProject = await contend(b.root, "webgui");
-		// Recreate the real persisted registration, as after an unclean owner shutdown.
-		await fs.writeFile(recordPath, staleRecord);
-		const stale = await readBrowserProject(a.projectId);
+		const released = await readBrowserProject(a.projectId);
 		const remaining = summarize(await listBrowserProjects());
-		return { projects, exitingPhase, whileExiting, afterClose, otherProject, stale, remaining };
+		return { projects, exitingPhase, whileExiting, afterClose, otherProject, released, remaining };
 	} finally {
 		await Promise.all([a?.close(), b?.close()]);
 	}
-`);
+`,
+		);
 		const canonicalA = await fs.realpath(projectA);
 		const canonicalB = await fs.realpath(projectB);
 		expect(result.projects).toEqual([
@@ -191,154 +210,184 @@ test("projects retain independent leases through exiting and close, and stale di
 		expectOccupied(result.whileExiting);
 		expect(result.afterClose).toMatchObject({ outcome: "acquired", root: canonicalA, mode: "dev" });
 		expectOccupied(result.otherProject);
-		expect(result.stale).toBeNull();
+		expect(result.released).toBeNull();
 		expect(result.remaining).toEqual([{ root: canonicalB, mode: "dev" }]);
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 60_000);
 
-test("the shared gateway isolates project selection and only shuts down after its final owner closes", async () => {
-	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-gateway-"));
+test("the native process runtime isolates project modes and closes only its own listener", async () => {
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-project-runtime-"));
 	try {
 		await Promise.all([fs.mkdir(path.join(root, "a")), fs.mkdir(path.join(root, "b"))]);
-		const workerScript = `import { runSharedWebServerWorker } from ${sharedServerModule}; await runSharedWebServerWorker();`;
+		const peerScript = `
+${bootstrapFixture}
+const native = await startBootstrap("independent-process");
+try {
+	console.log(JSON.stringify({ url: native.loopbackUrl }));
+	await Bun.stdin.text();
+} finally {
+	await native.close();
+	await closeWebServer();
+}
+`;
 		const result = await runScenario<{
 			reused: boolean;
+			sameNativeListener: boolean;
+			independentListener: boolean;
 			devInfo: number;
 			webInfo: number;
 			missingCapability: number;
 			wrongCapability: number;
+			wrongOrigin: number;
+			wrongHost: number;
 			browserBootstrap: number;
 			scopedBrowserCookie: boolean;
+			browserCookieReused: boolean;
+			browserCookieRequired: number;
 			publicTargetHidden: boolean;
 			closedInfo: number;
+			closedNative: number;
 			survivingInfo: number;
-			occupiedShutdown: number;
-			emptyShutdown: number;
-			workerExit: number;
-		}>(root, `
-	const workerEnv = { ...process.env };
-	delete workerEnv.BUN_BE_BUN;
-	const worker = ptree.spawn([process.execPath, "--eval", ${JSON.stringify(workerScript)}], {
-		cwd: root, env: workerEnv, stdin: "ignore", timeout: 40_000, subreaper: true,
+			localStopped: boolean;
+			peerSurviving: number;
+			peerExit: number | null;
+		}>(
+			root,
+			`
+	const peer = ptree.spawn([process.execPath, "--eval", ${JSON.stringify(peerScript)}], {
+		cwd: root, env: { ...process.env }, stdin: "pipe", timeout: 35_000, subreaper: true,
 	});
-	const workerDone = worker.wait({ allowNonZero: true, allowAbort: true });
+	let peerDone;
 	let a;
 	let b;
 	let native;
 	try {
-		const descriptorPath = path.join(webGuiRuntimeDir(), "server.json");
-		const deadline = Date.now() + 30_000;
-		let discovery;
-		while (Date.now() < deadline) {
-			if (worker.exitCode !== null) throw new Error("Shared gateway worker exited before readiness");
-			try {
-				const candidate = JSON.parse(await fs.readFile(descriptorPath, "utf8"));
-				const response = await fetch(candidate.apiOrigin + "/internal/omp/ready", {
-					headers: { Authorization: "Bearer " + candidate.token },
-					signal: AbortSignal.timeout(1_000),
-				});
-				await response.body?.cancel();
-				if (response.status === 200) { discovery = candidate; break; }
-			} catch (error) {
-				if (error.code !== "ENOENT") throw error;
+		const reader = peer.stdout.getReader();
+		let ready = "";
+		try {
+			const decoder = new TextDecoder();
+			while (!ready.includes("\\n")) {
+				const chunk = await reader.read();
+				if (chunk.done) throw new Error("Independent native process exited before readiness");
+				ready += decoder.decode(chunk.value, { stream: true });
 			}
-			await Bun.sleep(50);
+		} finally {
+			reader.releaseLock();
 		}
-		if (!discovery) throw new Error("Shared gateway did not publish a ready descriptor");
-		// Ensure must discover this explicitly owned worker, never start an untracked service.
-		const server = await ensureSharedWebServer();
+		peerDone = peer.wait({ allowNonZero: true, allowAbort: true });
+		const peerUrl = JSON.parse(ready.slice(0, ready.indexOf("\\n"))).url;
+		const server = await ensureWebServer();
+		const reused = (await ensureWebServer()).loopbackUrl === server.loopbackUrl;
 		a = await acquireBrowserProject(path.join(root, "a"), "dev");
 		b = await acquireBrowserProject(path.join(root, "b"), "webgui");
-		const capability = crypto.randomUUID().replaceAll("-", "") + crypto.randomUUID().replaceAll("-", "");
-		const nativePrefix = "/" + capability + "/";
-		let nativeOrigin;
-		// Protocol fixture: the native boundary must receive both the capability and rewritten browser headers.
-		native = Bun.serve({
-			hostname: "127.0.0.1", port: 0,
-			fetch(request) {
-				const url = new URL(request.url);
-				if (request.headers.get("host") !== new URL(nativeOrigin).host ||
-					request.headers.get("origin") !== nativeOrigin) return new Response(null, { status: 403 });
-				if (url.pathname !== nativePrefix + "api/browser") return new Response(null, { status: 404 });
-				if (request.method !== "GET") return new Response(null, { status: 405 });
-				return Response.json({ browserId: "fixture-browser" }, {
-					headers: { "Set-Cookie": "omp_dev_fixture=fixture-browser; Path=" + nativePrefix + "; HttpOnly; SameSite=Strict" },
-				});
-			},
-		});
-		nativeOrigin = "http://127.0.0.1:" + native.port;
-		await a.activate(() => ({ bound: false }), nativeOrigin + nativePrefix);
-		await b.activate(() => ({ bound: false }));
+		native = await startBootstrap(a.projectId);
+		await a.activate(() => ({ bound: false }), { allowLan: false });
+		await b.activate(() => ({ bound: false }), { allowLan: false });
 		async function status(url, options = {}) {
 			const response = await fetch(url, { ...options, signal: AbortSignal.timeout(5_000) });
 			await response.body?.cancel();
 			return response.status;
 		}
 		const infoUrl = project => server.loopbackUrl + "api/omp/session-info?projectId=" + project.projectId;
-		const shutdown = () => status(discovery.apiOrigin + "/internal/omp/shutdown", {
-			method: "POST", headers: { Authorization: "Bearer " + discovery.token },
-		});
 		const devInfo = await status(infoUrl(a));
 		const webInfo = await status(infoUrl(b));
+		const nativeUrl = new URL(native.loopbackUrl);
 		const publicDevBase = server.loopbackUrl + "dev/" + a.projectId + "/";
-		const publicDevPrefix = "/dev/" + a.projectId + "/" + capability + "/";
-		const browserHeaders = { Origin: new URL(server.loopbackUrl).origin };
+		const capability = nativeUrl.pathname.slice(new URL(publicDevBase).pathname.length, -1);
+		const browserHeaders = { Origin: nativeUrl.origin };
 		const missingCapability = await status(publicDevBase + "api/browser", { headers: browserHeaders });
 		const wrongCapability = await status(publicDevBase +
 			(capability[0] === "0" ? "1" : "0") + capability.slice(1) + "/api/browser", { headers: browserHeaders });
-		const bootstrap = await fetch(server.loopbackUrl + publicDevPrefix.slice(1) + "api/browser", {
+		const bootstrapUrl = new URL("api/browser", nativeUrl);
+		const wrongOrigin = await status(bootstrapUrl, { headers: { Origin: "http://attacker.invalid" } });
+		const wrongHost = await status(bootstrapUrl, { headers: { Host: "attacker.invalid" } });
+		const bootstrap = await fetch(bootstrapUrl, {
 			headers: browserHeaders, signal: AbortSignal.timeout(5_000),
 		});
 		const browserBootstrap = bootstrap.status;
-		const cookiePath = bootstrap.headers.get("set-cookie")?.split(";")
+		const setCookie = bootstrap.headers.get("set-cookie");
+		const cookiePath = setCookie?.split(";")
 			.map(part => part.trim()).find(part => part.toLowerCase().startsWith("path="))?.slice(5);
-		const scopedBrowserCookie = cookiePath === publicDevPrefix;
-		await bootstrap.body?.cancel();
+		const scopedBrowserCookie = cookiePath === nativeUrl.pathname;
+		const browser = await bootstrap.json();
+		const repeated = await fetch(bootstrapUrl, {
+			headers: { ...browserHeaders, Cookie: setCookie?.split(";")[0] ?? "" },
+			signal: AbortSignal.timeout(5_000),
+		});
+		const repeatedBrowser = await repeated.json();
+		const browserCookieReused = repeated.status === 200 && repeatedBrowser.browserId === browser.browserId;
+		const browserCookieRequired = await status(new URL("api/requirements", nativeUrl), { headers: browserHeaders });
 		const projectsResponse = await fetch(server.loopbackUrl + "api/omp/projects", {
 			signal: AbortSignal.timeout(5_000),
 		});
+		if (projectsResponse.status !== 200) throw new Error("Process project list is unavailable");
 		const publicProjects = await projectsResponse.json();
-		const listedDev = publicProjects.projects.find(project => project.projectId === a.projectId);
-		if (!listedDev) throw new Error("Public project discovery omitted the live Dev owner");
+		if (!publicProjects.projects.some(project => project.projectId === a.projectId && project.mode === "dev") ||
+			!publicProjects.projects.some(project => project.projectId === b.projectId && project.mode === "webgui"))
+			throw new Error("Process project list omitted an owned mode");
 		const publicTargetHidden = !JSON.stringify(publicProjects).includes(capability);
+		await native.close();
 		await a.close();
 		const closedInfo = await status(infoUrl(a));
+		const closedNative = await status(bootstrapUrl, { headers: browserHeaders });
 		const survivingInfo = await status(infoUrl(b));
-		const occupiedShutdown = await shutdown();
 		await b.close();
-		const emptyShutdown = await shutdown();
-		const stopped = await workerDone;
+		await closeWebServer();
+		let localStopped = false;
+		try {
+			await status(server.loopbackUrl + "api/omp/projects");
+		} catch {
+			localStopped = true;
+		}
+		const peerSurviving = await status(new URL("api/browser", peerUrl), {
+			headers: { Origin: new URL(peerUrl).origin },
+		});
+		peer.stdin.end();
+		const stopped = await peerDone;
 		return {
-			reused: server.loopbackUrl === discovery.loopbackUrl,
-			devInfo, webInfo, closedInfo, survivingInfo, occupiedShutdown, emptyShutdown,
-			missingCapability, wrongCapability, browserBootstrap, scopedBrowserCookie, publicTargetHidden,
-			workerExit: stopped.exitCode,
+			reused,
+			sameNativeListener: nativeUrl.origin === new URL(server.loopbackUrl).origin,
+			independentListener: new URL(peerUrl).origin !== nativeUrl.origin,
+			devInfo, webInfo, closedInfo, closedNative, survivingInfo, localStopped, peerSurviving,
+			missingCapability, wrongCapability, wrongOrigin, wrongHost, browserBootstrap,
+			scopedBrowserCookie, browserCookieReused, browserCookieRequired, publicTargetHidden,
+			peerExit: stopped.exitCode,
 		};
 	} finally {
 		try {
-			await Promise.all([a?.close(), b?.close(), native?.stop(true)]);
+			await native?.close();
+			await Promise.all([a?.close(), b?.close()]);
+			await closeWebServer();
 		} finally {
-			worker.kill();
-			await workerDone;
+			peer.kill();
+			await (peerDone ?? peer.wait({ allowNonZero: true, allowAbort: true }));
 		}
 	}
-`);
+`,
+		);
 		expect(result).toEqual({
 			reused: true,
+			sameNativeListener: true,
+			independentListener: true,
 			devInfo: 409,
 			webInfo: 200,
 			missingCapability: 404,
 			wrongCapability: 404,
+			wrongOrigin: 403,
+			wrongHost: 403,
 			browserBootstrap: 200,
 			scopedBrowserCookie: true,
+			browserCookieReused: true,
+			browserCookieRequired: 401,
 			publicTargetHidden: true,
 			closedInfo: 404,
+			closedNative: 404,
 			survivingInfo: 200,
-			occupiedShutdown: 409,
-			emptyShutdown: 200,
-			workerExit: 0,
+			localStopped: true,
+			peerSurviving: 200,
+			peerExit: 0,
 		});
 	} finally {
 		await fs.rm(root, { recursive: true, force: true });

@@ -21,6 +21,7 @@ export interface WorkspaceHeaderReloadSessionOptions {
 
 export interface WorkspaceHeaderTitleSectionProps {
   variant?: WorkspaceHeaderVariant;
+  backendBusinessAvailable?: boolean;
   readOnlyReason?: string;
   workspaceAbsPath: string;
   remoteSessionId?: string;

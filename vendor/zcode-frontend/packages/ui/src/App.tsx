@@ -118,6 +118,8 @@ export function App({
   remoteConnectionInProgress = false,
   onReturnToWorkspace,
   allowOpenWorkspace = true,
+  responsiveBrowserLayout = false,
+  backendBusinessAvailable = true,
   webRemoteControlWorkspaceSwitcher,
   initialSidebarFileTreeOpen,
   initialWebRemoteControlMobileNavigationIntent,
@@ -285,14 +287,14 @@ export function App({
     workspacePath: workspaceAbsPath,
     ...(workspaceIdentity ? { workspaceIdentity } : {}),
     ...(workspaceRemoteSessionId ? { endpointKey: workspaceRemoteSessionId } : {}),
-    rpcReady: workspaceRpcReady,
+    rpcReady: backendBusinessAvailable && workspaceRpcReady,
   });
   useWorkspaceTerminalTaskNotifications({
     workspacePath: workspaceAbsPath,
     ...(workspaceIdentity ? { workspaceIdentity } : {}),
     ...(workspaceRemoteSessionId ? { endpointKey: workspaceRemoteSessionId } : {}),
-    enabled: notificationEnabled,
-    rpcReady: workspaceRpcReady,
+    enabled: backendBusinessAvailable && notificationEnabled,
+    rpcReady: backendBusinessAvailable && workspaceRpcReady,
     platform,
     formatMessage: intl.formatMessage,
   });
@@ -300,7 +302,7 @@ export function App({
   useOffPeakTaskNotifications({
     offPeakTaskService: services.offPeakTaskService,
     platform,
-    enabled: Boolean(notificationEnabled && isDesktop),
+    enabled: Boolean(backendBusinessAvailable && notificationEnabled && isDesktop),
     formatMessage: intl.formatMessage,
   });
   const lastHandledDraftSidePaneCloseRef = useRef({
@@ -413,6 +415,7 @@ export function App({
     workspaceHeaderProvider,
     workspaceRemoteSessionId,
     workspaceIdentity,
+    { enabled: backendBusinessAvailable },
   );
   const workspaceTabs = useMemo(
     () =>
@@ -814,6 +817,7 @@ export function App({
   );
 
   useWorkspaceShellLifecycle({
+    enabled: backendBusinessAvailable,
     workspaceAbsPath,
     workspaceIdentity,
     services,
@@ -821,7 +825,11 @@ export function App({
     setTestMessages,
   });
 
-  useEnsureWorkspaceMcpLoaded(workspaceAbsPath, workspaceIdentity, workspaceRpcReady);
+  useEnsureWorkspaceMcpLoaded(
+    workspaceAbsPath,
+    workspaceIdentity,
+    backendBusinessAvailable && workspaceRpcReady,
+  );
 
   const testActions = useMemo<TestActions>(
     () => ({
@@ -1023,6 +1031,11 @@ export function App({
   });
 
   useEffect(() => {
+    if (!backendBusinessAvailable) {
+      // TODO: 接入 OMP 帮助配置后再探测社区入口，不请求原 ZCode 后端。
+      setCanOpenCommunityFromQuickPick(false);
+      return;
+    }
     let disposed = false;
 
     void platform.canOpenCommunity(locale).then(
@@ -1041,7 +1054,7 @@ export function App({
     return () => {
       disposed = true;
     };
-  }, [locale, platform]);
+  }, [backendBusinessAvailable, locale, platform]);
 
   const quickPickCommands = useMemo(
     () =>
@@ -1209,6 +1222,8 @@ export function App({
           onOpenRemoteWorkspace={onOpenRemoteWorkspace}
           remoteConnectionInProgress={remoteConnectionInProgress}
           allowOpenWorkspace={allowOpenWorkspace}
+          responsiveBrowserLayout={responsiveBrowserLayout}
+          backendBusinessAvailable={backendBusinessAvailable}
           webRemoteControlWorkspaceSwitcher={webRemoteControlWorkspaceSwitcher}
           initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
           initialWebRemoteControlMobileNavigationIntent={

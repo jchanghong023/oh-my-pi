@@ -10,12 +10,14 @@ import {
 } from "@/store/zcodeSessionStore.js";
 
 export function useWorkspaceShellLifecycle({
+  enabled = true,
   workspaceAbsPath,
   workspaceIdentity,
   services,
   setBrowserNavigationRequest,
   setTestMessages,
 }: {
+  enabled?: boolean;
   workspaceAbsPath: string;
   workspaceIdentity?: string;
   services: IServiceAccessor;
@@ -76,6 +78,10 @@ export function useWorkspaceShellLifecycle({
         .getState()
         .setWorkspaceInitState(workspaceAbsPath, "idle", null, workspaceIdentity);
 
+      // TODO(omp-business): Bind workspace preparation ownership/release to OMP.
+      // Local workspace state still settles when native business is unavailable.
+      if (!enabled) return;
+
       void services.zcodeTaskService
         .releaseWorkspacePreparation({
           workspacePath: workspaceAbsPath,
@@ -89,5 +95,5 @@ export function useWorkspaceShellLifecycle({
           );
         });
     };
-  }, [services.zcodeTaskService, workspaceIdentity, workspaceAbsPath]);
+  }, [enabled, services.zcodeTaskService, workspaceIdentity, workspaceAbsPath]);
 }

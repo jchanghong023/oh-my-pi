@@ -297,6 +297,12 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
   dispose(): void {
     this.protocolListener?.dispose();
     this.protocolListener = null;
+    for (const requests of this.pendingRequests.values()) {
+      for (const { timer } of requests) {
+        clearTimeout(timer);
+      }
+    }
+    this.pendingRequests.clear();
     for (const disposable of this.activeRequests.values()) {
       disposable.dispose();
     }

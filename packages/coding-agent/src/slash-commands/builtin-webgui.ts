@@ -5,7 +5,7 @@ import type { SlashCommandResult, SlashCommandSpec } from "./types";
 export const BUILTIN_WEBGUI_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 	{
 		name: "webgui",
-		description: "Open the WebGUI interface preview; enter /webgui again to exit and restore the terminal",
+		description: "Open WebGUI; enter /webgui again to close this instance's web service and restore the terminal",
 		handleTui: async (command, runtime): Promise<SlashCommandResult> => {
 			const { ctx } = runtime;
 			const consumed = !runtime.draftDetached && ctx.editor.getExpandedText() === command.text;

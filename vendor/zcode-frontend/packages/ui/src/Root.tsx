@@ -164,7 +164,7 @@ export function Root(props: RootProps) {
           <PlatformProvider platform={props.platform}>
             <StoreProvider
               broadcastService={props.services.broadcastService}
-              initialIsRestoringOAuthSession
+              initialIsRestoringOAuthSession={props.backendBusinessAvailable !== false}
             >
               <TabStoreProvider>
                 <ProjectDirectoryProvider isDesktop={props.isDesktop}>
@@ -208,6 +208,8 @@ function RootInner({
   isDesktop,
   isMacDesktop,
   isWindowsDesktop,
+  responsiveBrowserLayout = false,
+  backendBusinessAvailable = true,
   restoreSession = true,
   supportsSettings = true,
   allowOpenWorkspace = true,
@@ -261,7 +263,7 @@ function RootInner({
 
   const { intl, locale } = useZCodeIntl();
   const handleRemoteConnectionTargetChange = useSourceServerUpdateNotifications({
-    enabled: isDesktop === true,
+    enabled: backendBusinessAvailable && isDesktop === true,
     management: services.sourceServerManagementService,
   });
   const theme = useZCodeStore((state) => state.theme);
@@ -282,14 +284,14 @@ function RootInner({
   // docs/dynamic-workflow/launch.md「The user's choice」：设置里的动态工作流选择变化后，通知本窗口
   // 的 Host 重发 CLI 策略（并转发给远程 Host），再重读灰度快照。
   useDynamicWorkflowUserModeSync({
-    settingsLoaded: Boolean(appSettings),
+    settingsLoaded: backendBusinessAvailable && Boolean(appSettings),
     userMode: appSettings?.dynamicWorkflowMode,
     zcodeAgentService: services.zcodeAgentService,
     codingPlanSubscriptionService: services.codingPlanSubscriptionService,
   });
   const [welcomeScreenOpenReason, setWelcomeScreenOpenReason] =
     useState<WelcomeScreenOpenReason | null>(() =>
-      consumeZcodeJwtInvalidRestartMarker() ? "session-expired" : null,
+      backendBusinessAvailable && consumeZcodeJwtInvalidRestartMarker() ? "session-expired" : null,
     );
   const [providerFamilyDomainMigrationComplete, setProviderFamilyDomainMigrationComplete] =
     useState(false);
@@ -351,6 +353,7 @@ function RootInner({
           return;
         }
         void refreshAppSettings();
+        if (!backendBusinessAvailable) return;
         void services.zcodeAgentService.syncAppRuntimePreferences(parsed.data).catch((error) => {
           logger.warn("[settings] 同步跨窗口运行时偏好失败", error);
         });
@@ -389,6 +392,7 @@ function RootInner({
       disposable.dispose();
     };
   }, [
+    backendBusinessAvailable,
     refreshAppSettings,
     services.botsService,
     services.broadcastService,
@@ -396,7 +400,8 @@ function RootInner({
   ]);
 
   useEffect(() => {
-    if (!appSettings) {
+    // TODO(omp-business): Bind runtime preference propagation to the OMP Agent and bots.
+    if (!backendBusinessAvailable || !appSettings) {
       return;
     }
     void services.zcodeAgentService
@@ -418,6 +423,7 @@ function RootInner({
         logger.warn("[settings] 初始化 Bot 运行时偏好失败", error);
       });
   }, [
+    backendBusinessAvailable,
     appSettings?.askUserQuestionAutoResolutionEnabled,
     appSettings?.modelIoFullRetentionEnabled,
     services.botsService,
@@ -543,6 +549,8 @@ function RootInner({
   const refreshProviderState = useRootProviderStateRefresh(services);
   useRootProviderSettingsSnapshot(services);
   useEffect(() => {
+    // TODO(omp-business): Bind account/provider-family migration to real OMP configuration.
+    if (!backendBusinessAvailable) return;
     let disposed = false;
 
     void (async () => {
@@ -570,21 +578,24 @@ function RootInner({
     return () => {
       disposed = true;
     };
-  }, [refreshAppSettings, refreshProviderState, services]);
+  }, [backendBusinessAvailable, refreshAppSettings, refreshProviderState, services]);
 
   const shouldPreferDirectoryBrowser = Boolean(preferDirectoryBrowser);
   const supportsEmbeddedBrowser = explicitSupportsEmbeddedBrowser ?? Boolean(isDesktop);
-  const isResolvingStartupAuthState = isRestoringOAuthSession;
+  const isResolvingStartupAuthState = backendBusinessAvailable && isRestoringOAuthSession;
   const rootProviderAvailability = resolveProviderAvailabilityState({
     modelSelectionView: rootModelSelectionView,
   });
-  const providerStartupSyncPending = isProviderStartupSyncPending({
-    providerFamilyDomainMigrationComplete,
-    modelSelectionViewHydrated:
-      rootProviderAvailability.hydrated || rootModelSelectionRead.state.status === "error",
-  });
+  const providerStartupSyncPending =
+    backendBusinessAvailable &&
+    isProviderStartupSyncPending({
+      providerFamilyDomainMigrationComplete,
+      modelSelectionViewHydrated:
+        rootProviderAvailability.hydrated || rootModelSelectionRead.state.status === "error",
+    });
   const isWebRemoteControlRoot = Boolean(webRemoteControlWorkspaceSwitcher);
   const providerAvailabilityLoginEntryGuardEnabled =
+    backendBusinessAvailable &&
     shouldEnableProviderAvailabilityLoginEntryGuard({
       isWebRemoteControlRoot,
     });
@@ -613,11 +624,13 @@ function RootInner({
         });
       },
     });
-  const isResolvingProviderStartupState = shouldResolveProviderStartupState({
-    isWebRemoteControlRoot,
-    providerStartupSyncPending,
-    providerAvailabilityStartupCheckCompleted,
-  });
+  const isResolvingProviderStartupState =
+    backendBusinessAvailable &&
+    shouldResolveProviderStartupState({
+      isWebRemoteControlRoot,
+      providerStartupSyncPending,
+      providerAvailabilityStartupCheckCompleted,
+    });
   const isStartupProviderLoginEntryOpen = welcomeScreenOpenReason === "startup-provider-required";
   // 首次安装时 provider 登录入口判定晚于 workspace 注入，ChatView 会先 mount 并触发草稿预热。
   // 这里把 provider 启动检查纳入 workspace 恢复门禁，避免未连接账号前启动 ZCode session。
@@ -940,7 +953,7 @@ function RootInner({
     // 首次安装未连接账号时，provider 登录入口判定会晚于 workspace 恢复。
     // 如果这里先恢复 workspace，ChatView mount 会触发草稿 session 预热并在登录页背后报错。
     restoreSession: restoreSession && canRestoreWorkspaceSession,
-    persistSession: restoreSession && canRestoreWorkspaceSession,
+    persistSession: backendBusinessAvailable && restoreSession && canRestoreWorkspaceSession,
     persistenceGate: workspacePersistenceGate,
     restorePersistedSession,
     buildPersistPatch: buildPersistedTabPatch,
@@ -1061,6 +1074,7 @@ function RootInner({
   }, [platform]);
 
   useRootOAuthEffects({
+    enabled: backendBusinessAvailable,
     accountIntentKey: JSON.stringify([
       user?.id,
       appSettings?.providerFamilyDomain,
@@ -1082,6 +1096,7 @@ function RootInner({
   useEffect(
     () =>
       platform.onPostUpdateReleaseNotes((payload) => {
+        if (!backendBusinessAvailable) return;
         logger.info("[Root] 收到更新说明，改为静默确认", {
           version: payload.version,
           title: payload.title,
@@ -1114,7 +1129,7 @@ function RootInner({
             }
           });
       }),
-    [platform],
+    [backendBusinessAvailable, platform],
   );
 
   const canEnterNativeThemeSyncSurface = Boolean(
@@ -1163,6 +1178,7 @@ function RootInner({
 
   useEffect(() => {
     if (
+      !backendBusinessAvailable ||
       shouldBlockRootRender({
         isResolvingStartupAuthState,
         isResolvingProviderStartupState,
@@ -1215,6 +1231,7 @@ function RootInner({
       });
   }, [
     allowOpenWorkspace,
+    backendBusinessAvailable,
     handleSelectConversationWorkspace,
     isBootstrappingInitialWorkspace,
     isResolvingProviderStartupState,
@@ -1488,6 +1505,7 @@ function RootInner({
         workspacePath={workspaceShellPath || undefined}
         workspaceIdentity={workspaceShellIdentity}
         isDesktop={isDesktop}
+        enabled={backendBusinessAvailable}
       />
     </ScopedErrorBoundary>
   );
@@ -1589,6 +1607,7 @@ function RootInner({
       {remoteConnectionDialog}
       {directoryBrowserDialog}
       <OccupationOnboarding
+        enabled={backendBusinessAvailable}
         showWindowControls={Boolean(isWindowsDesktop || (isDesktop && !isMacDesktop))}
         showChildrenWhileLoading={!workspaceShellPath && isSettingsTabActive}
         isMacDesktop={isMacDesktop}
@@ -1649,6 +1668,8 @@ function RootInner({
                 remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
                 remoteConnectionLogs={remoteConnectionLogs}
                 allowOpenWorkspace={allowOpenWorkspace}
+                responsiveBrowserLayout={responsiveBrowserLayout}
+                backendBusinessAvailable={backendBusinessAvailable}
                 webRemoteControlWorkspaceSwitcher={webRemoteControlWorkspaceSwitcher}
                 initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 initialWebRemoteControlMobileNavigationIntent={

@@ -63,6 +63,14 @@ import {
   type IServiceAccessor,
 } from "@zcode/services";
 
+export interface RemoteServiceAccessOptions {
+  sourceServerManagementService?: boolean;
+  deviceSyncStateService?: boolean;
+  windowProjectDirectory?: boolean;
+  /** Direct browsers have no desktop, remote-control or native plugin host. */
+  browserDirect?: boolean;
+}
+
 /**
  * RemoteServiceAccess — 通过 ChannelClient 自动创建类型安全的服务代理
  *
@@ -81,15 +89,13 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly credentialService: ICredentialService;
   readonly broadcastService: IBroadcastService;
   readonly zcodeTaskService: IZCodeTaskService;
-  readonly windowControllerService: IWindowControllerService;
+  readonly windowControllerService?: IWindowControllerService;
   readonly zcodeAgentService: IZCodeAgentService;
   readonly zcodeSessionService: IZCodeSessionService;
   readonly taskGroupService: ITaskGroupService;
   readonly projectService: IProjectService;
-  readonly remoteProjectService: IRemoteProjectService;
-  // cuaPermissionService 在 IServiceAccessor 上是可选（远端/bots host 不提供），但桌面 renderer
-  // 经 RPC 一定能拿到（main host 始终注册此 descriptor；非 macOS / 未启用时方法返回 available:false）。
-  readonly cuaPermissionService: ICuaPermissionService;
+  readonly remoteProjectService?: IRemoteProjectService;
+  readonly cuaPermissionService?: ICuaPermissionService;
   readonly conversationShareService: IConversationShareService;
   readonly botsService: IBotsService;
   readonly fileWatcherService: IFileWatcherService;
@@ -97,7 +103,7 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly providerSettingsService: IProviderSettingsService;
   readonly modelSelectionService: IModelSelectionService;
   /** Host-only target proxy；不属于 IServiceAccessor，避免向 Renderer 暴露 Secret 写入接口。 */
-  readonly providerProvisioningTargetService!: IProviderProvisioningTargetService;
+  readonly providerProvisioningTargetService?: IProviderProvisioningTargetService;
   readonly sourceServerWorkspaceService: ISourceServerWorkspaceService;
   /** 仅 desktop base attachment 注册；其他 scope 必须按可选能力消费。 */
   readonly sourceServerManagementService?: ISourceServerManagementService;
@@ -115,10 +121,10 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly skillsService: ISkillsService;
   readonly skillSyncService: ISkillSyncService;
   readonly mcpSyncService: IMcpSyncService;
-  readonly genUiService: IGenUiService;
-  readonly pluginUiBridgeService: IPluginUiBridgeService;
-  readonly pluginUiSamplingService: IPluginUiSamplingService;
-  readonly pluginUiAppToolsService: IPluginUiAppToolsService;
+  readonly genUiService?: IGenUiService;
+  readonly pluginUiBridgeService?: IPluginUiBridgeService;
+  readonly pluginUiSamplingService?: IPluginUiSamplingService;
+  readonly pluginUiAppToolsService?: IPluginUiAppToolsService;
   readonly pluginSyncService: IPluginSyncService;
   readonly userConfigSyncService: IUserConfigSyncService;
   readonly pluginsService: IPluginsService;
@@ -134,14 +140,10 @@ export class RemoteServiceAccess implements IServiceAccessor {
 
   constructor(
     channelClient: IChannelClient,
-    options: {
-      sourceServerManagementService?: boolean;
-      deviceSyncStateService?: boolean;
-      windowProjectDirectory?: boolean;
-    } = {},
+    options: RemoteServiceAccessOptions = {},
   ) {
     // 远端工作区的 project 必须保留 Source 语义；只有显式能力才创建完整窗口目录组。
-    if (options.windowProjectDirectory) {
+    if (!options.browserDirect && options.windowProjectDirectory) {
       this.windowProjectDirectory = {
         projectService: ProxyChannel.toService(
           channelClient.getChannel(IWindowProjectService.channelName),
@@ -189,15 +191,19 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.zcodeTaskService = ProxyChannel.toService<IZCodeTaskService>(
       channelClient.getChannel(IZCodeTaskService.channelName),
     );
-    this.windowControllerService = ProxyChannel.toService<IWindowControllerService>(
-      channelClient.getChannel(IWindowControllerService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.windowControllerService = ProxyChannel.toService<IWindowControllerService>(
+        channelClient.getChannel(IWindowControllerService.channelName),
+      );
+    }
     this.zcodeAgentService = ProxyChannel.toService<IZCodeAgentService>(
       channelClient.getChannel(IZCodeAgentService.channelName),
     );
-    this.remoteProjectService = ProxyChannel.toService<IRemoteProjectService>(
-      channelClient.getChannel(IRemoteProjectService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.remoteProjectService = ProxyChannel.toService<IRemoteProjectService>(
+        channelClient.getChannel(IRemoteProjectService.channelName),
+      );
+    }
     this.taskGroupService = ProxyChannel.toService<ITaskGroupService>(
       channelClient.getChannel(ITaskGroupService.channelName),
     );
@@ -207,9 +213,11 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.zcodeSessionService = ProxyChannel.toService<IZCodeSessionService>(
       channelClient.getChannel(IZCodeSessionService.channelName),
     );
-    this.cuaPermissionService = ProxyChannel.toService<ICuaPermissionService>(
-      channelClient.getChannel(ICuaPermissionService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.cuaPermissionService = ProxyChannel.toService<ICuaPermissionService>(
+        channelClient.getChannel(ICuaPermissionService.channelName),
+      );
+    }
     this.conversationShareService = ProxyChannel.toService<IConversationShareService>(
       channelClient.getChannel(IConversationShareService.channelName),
     );
@@ -228,29 +236,31 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.modelSelectionService = ProxyChannel.toService<IModelSelectionService>(
       channelClient.getChannel(IModelSelectionService.channelName),
     );
-    Object.defineProperty(this, "providerProvisioningTargetService", {
-      value: ProxyChannel.toService<IProviderProvisioningTargetService>(
-        channelClient.getChannel(IProviderProvisioningTargetService.channelName),
-      ),
-      enumerable: false,
-    });
+    if (!options.browserDirect) {
+      Object.defineProperty(this, "providerProvisioningTargetService", {
+        value: ProxyChannel.toService<IProviderProvisioningTargetService>(
+          channelClient.getChannel(IProviderProvisioningTargetService.channelName),
+        ),
+        enumerable: false,
+      });
+    }
     this.sourceServerWorkspaceService = ProxyChannel.toService<ISourceServerWorkspaceService>(
       channelClient.getChannel(ISourceServerWorkspaceService.channelName),
     );
     // Bug 原因：ProxyChannel 是惰性的，无论服务端是否注册 channel 都能构造出“看似存在”
     // 的对象，optional 合同因此在首次调用时才失败。scope 创建时必须显式声明能力。
-    this.sourceServerManagementService = options.sourceServerManagementService
+    this.sourceServerManagementService = !options.browserDirect && options.sourceServerManagementService
       ? ProxyChannel.toService<ISourceServerManagementService>(
           channelClient.getChannel(ISourceServerManagementService.channelName),
         )
       : undefined;
-    this.deviceSyncStateService = options.deviceSyncStateService
+    this.deviceSyncStateService = !options.browserDirect && options.deviceSyncStateService
       ? ProxyChannel.toService<IDeviceSyncStateService>(
           channelClient.getChannel(IDeviceSyncStateService.channelName),
         )
       : undefined;
     // 与设备同步状态同属数据同步页的本机 Host 服务：同一开关（只在桌面 base 连接打开）。
-    this.providerProvisioningStatusService = options.deviceSyncStateService
+    this.providerProvisioningStatusService = !options.browserDirect && options.deviceSyncStateService
       ? ProxyChannel.toService<IProviderProvisioningStatusService>(
           channelClient.getChannel(IProviderProvisioningStatusService.channelName),
         )
@@ -288,18 +298,20 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.mcpSyncService = ProxyChannel.toService<IMcpSyncService>(
       channelClient.getChannel(IMcpSyncService.channelName),
     );
-    this.genUiService = ProxyChannel.toService<IGenUiService>(
-      channelClient.getChannel(IGenUiService.channelName),
-    );
-    this.pluginUiBridgeService = ProxyChannel.toService<IPluginUiBridgeService>(
-      channelClient.getChannel(IPluginUiBridgeService.channelName),
-    );
-    this.pluginUiSamplingService = ProxyChannel.toService<IPluginUiSamplingService>(
-      channelClient.getChannel(IPluginUiSamplingService.channelName),
-    );
-    this.pluginUiAppToolsService = ProxyChannel.toService<IPluginUiAppToolsService>(
-      channelClient.getChannel(IPluginUiAppToolsService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.genUiService = ProxyChannel.toService<IGenUiService>(
+        channelClient.getChannel(IGenUiService.channelName),
+      );
+      this.pluginUiBridgeService = ProxyChannel.toService<IPluginUiBridgeService>(
+        channelClient.getChannel(IPluginUiBridgeService.channelName),
+      );
+      this.pluginUiSamplingService = ProxyChannel.toService<IPluginUiSamplingService>(
+        channelClient.getChannel(IPluginUiSamplingService.channelName),
+      );
+      this.pluginUiAppToolsService = ProxyChannel.toService<IPluginUiAppToolsService>(
+        channelClient.getChannel(IPluginUiAppToolsService.channelName),
+      );
+    }
     this.pluginSyncService = ProxyChannel.toService<IPluginSyncService>(
       channelClient.getChannel(IPluginSyncService.channelName),
     );

@@ -23,7 +23,10 @@ export function ProjectSidebarNavigation({
   onCreate(): void;
 }) {
   const { intl } = useZCodeIntl();
-  const deviceNavigation = props.webRemoteControlWorkspaceSwitcher?.deviceNavigation;
+  // Browser responsiveness is presentation only; device controls belong to the real remote flow.
+  const deviceNavigation = props.isWebRemoteControl
+    ? props.webRemoteControlWorkspaceSwitcher?.deviceNavigation
+    : undefined;
   return (
     <div
       data-testid="sidebar-primary-navigation"

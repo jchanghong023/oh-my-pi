@@ -34,12 +34,14 @@ async function appendOnboardingRecord(
 
 export function OccupationOnboarding({
   children,
+  enabled = true,
   showWindowControls = false,
   showChildrenWhileLoading = false,
   isMacDesktop,
   isWindowsDesktop,
 }: {
   children: ReactNode;
+  enabled?: boolean;
   /** Windows/Linux 自绘窗控：引导全屏覆盖主界面（含标题栏），需在此补最小化/最大化/关闭。 */
   showWindowControls?: boolean;
   /** 独立设置页不依赖引导设置加载，避免应用级引导外层遮住设置内容。 */
@@ -75,6 +77,7 @@ export function OccupationOnboarding({
   const [dismissed, setDismissed] = useState(false);
   const loadDeviceMid = useCallback(() => platform.getDeviceId(), [platform]);
   const [needsOnboarding, markOnboarded] = useOnboardingTrigger({
+    enabled,
     onboardingRecord,
     userId,
     loadDeviceMid,
@@ -100,12 +103,12 @@ export function OccupationOnboarding({
     setStep(0);
     setDismissed(true);
     setRequested(false);
-    if (onboardingRecord) {
+    if (enabled && onboardingRecord) {
       void onboardingRecord.dismissOnboarding(platform.getDeviceId()).catch((cause: unknown) => {
         logger.warn("[occupation-onboarding] 写入关闭决策失败", { error: String(cause) });
       });
     }
-  }, [captureEnd, intl, onboardingRecord, platform, setRequested]);
+  }, [enabled, captureEnd, intl, onboardingRecord, platform, setRequested]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
@@ -164,7 +167,10 @@ export function OccupationOnboarding({
   // 预填异步后到时不得覆盖用户已经做出的选择。
   const userEditedRef = useRef(false);
   useEffect(() => {
-    if (!onboardingRecord) return;
+    if (!enabled || !onboardingRecord) {
+      setLatestEntry(null);
+      return;
+    }
     let cancelled = false;
     onboardingRecord.getLatestEntry().then(
       (entry) => {
@@ -177,7 +183,7 @@ export function OccupationOnboarding({
     return () => {
       cancelled = true;
     };
-  }, [onboardingRecord, userId]);
+  }, [enabled, onboardingRecord, userId]);
   const markUserEdited = () => {
     userEditedRef.current = true;
   };
@@ -210,7 +216,7 @@ export function OccupationOnboarding({
     applyLatestEntry();
     // eslint-disable-line react-hooks/exhaustive-deps
   }, [latestEntry]);
-  if (!settings) return showChildrenWhileLoading ? <>{children}</> : null;
+  if (!settings) return !enabled || showChildrenWhileLoading ? <>{children}</> : null;
   // 判定进行中先不渲染，避免引导闪现后立即消失（判定为需引导）或先闪引导再进主界面。
   // 只有疑似首跑（settings 里也没有职业）才等待记录判定；存量用户（已有
   // onboardingOccupation）不等 RPC 直接进主界面，杜绝黑屏。
@@ -218,6 +224,11 @@ export function OccupationOnboarding({
   if (!onboardingVisible) return <>{children}</>;
   const save = async (skip = false) => {
     if (savingRef.current) return;
+    // TODO: Bind OMP onboarding preferences and native config before accepting saves.
+    if (!enabled) {
+      setError(true);
+      return;
+    }
     savingRef.current = true;
     const reportEnd = captureEnd(skip ? "skip" : "start", t(skip ? "skip" : "start"));
     setSaving(true);

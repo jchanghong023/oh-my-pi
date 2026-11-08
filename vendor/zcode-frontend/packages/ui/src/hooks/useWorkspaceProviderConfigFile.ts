@@ -120,6 +120,7 @@ export function useWorkspaceProviderConfigFile(
   useEffect(() => {
     let disposed = false;
 
+    // TODO(omp-business): Resolve native provider configuration through OMP when available.
     if (!workspacePath || !enabled || !workspaceRpcEnabled) {
       requestVersionRef.current += 1;
       // Bugfix: 恢复断连远端 workspace 时，provider 配置路径读取不能抢在 remote session

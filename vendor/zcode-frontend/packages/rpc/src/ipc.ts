@@ -18,18 +18,18 @@
 import {
   Event,
   Emitter,
-  IDisposable,
+  type IDisposable,
   DisposableStore,
   CancellationToken,
   EventMultiplexer,
 } from "./foundation.js";
 import { BufferReader, BufferWriter, serialize, deserialize } from "./serialization.js";
-import { IMessagePassingProtocol } from "./protocol.js";
+import type { IMessagePassingProtocol } from "./protocol.js";
 import {
-  IChannel,
-  IServerChannel,
-  IChannelServer,
-  IChannelClient,
+  type IChannel,
+  type IServerChannel,
+  type IChannelServer,
+  type IChannelClient,
   ChannelServer,
   ChannelClient,
   getDelayedChannel,

@@ -49,12 +49,15 @@ export function OnboardingDialog(props: {
   workspacePath?: string;
   workspaceIdentity?: string;
   isDesktop?: boolean;
+  enabled?: boolean;
 }) {
+  const { enabled = true } = props;
   const { intl } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
   const settingsSync = useSettingsSync({
     workspacePath: props.workspacePath,
     workspaceIdentity: props.workspaceIdentity,
+    autoStartEnabled: enabled,
   });
   const sessionMigration = useClaudeSessionMigration({
     workspacePath: props.workspacePath ?? null,
@@ -188,6 +191,7 @@ export function OnboardingDialog(props: {
     // 组件常驻挂载，弹窗关闭时每次启动也会扫描 Claude 历史。修法：只在弹窗打开时自动扫描；
     // 关闭时上面的 effect 会重置标记，下次打开再扫一次。
     if (
+      !enabled ||
       !settingsSync.state.open ||
       !shouldAutoScanOnboardingSessions({
         wizardStep,
@@ -204,6 +208,7 @@ export function OnboardingDialog(props: {
     autoScannedSessionStepRef.current = true;
     void sessionMigration.scan();
   }, [
+    enabled,
     sessionMigration.candidates.length,
     sessionMigration.isScanning,
     sessionMigration.scan,

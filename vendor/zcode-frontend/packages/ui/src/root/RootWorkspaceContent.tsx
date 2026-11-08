@@ -43,6 +43,8 @@ interface RootWorkspaceContentProps {
 
   remoteConnectionLogs?: AppProps["remoteConnectionLogs"];
   allowOpenWorkspace: NonNullable<RootProps["allowOpenWorkspace"]>;
+  responsiveBrowserLayout?: RootProps["responsiveBrowserLayout"];
+  backendBusinessAvailable?: RootProps["backendBusinessAvailable"];
   webRemoteControlWorkspaceSwitcher?: RootProps["webRemoteControlWorkspaceSwitcher"];
   initialSidebarFileTreeOpen?: boolean;
   initialWebRemoteControlMobileNavigationIntent?: RootProps["initialWebRemoteControlMobileNavigationIntent"];
@@ -85,6 +87,8 @@ export function RootWorkspaceContent({
 
   remoteConnectionLogs,
   allowOpenWorkspace,
+  responsiveBrowserLayout,
+  backendBusinessAvailable,
   webRemoteControlWorkspaceSwitcher,
   initialSidebarFileTreeOpen,
   initialWebRemoteControlMobileNavigationIntent,
@@ -171,6 +175,8 @@ export function RootWorkspaceContent({
                 remoteConnectionInProgress={remoteConnectionInProgress}
                 onReturnToWorkspace={handleBackFromSettings}
                 allowOpenWorkspace={allowOpenWorkspace}
+                responsiveBrowserLayout={responsiveBrowserLayout}
+                backendBusinessAvailable={backendBusinessAvailable}
                 webRemoteControlWorkspaceSwitcher={webRemoteControlWorkspaceSwitcher}
                 initialSidebarFileTreeOpen={initialSidebarFileTreeOpen}
                 initialWebRemoteControlMobileNavigationIntent={

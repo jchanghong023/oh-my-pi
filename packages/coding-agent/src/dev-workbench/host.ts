@@ -84,7 +84,7 @@ import { parseSlashCommand } from "../slash-commands/helpers/parse";
 import { parseCommandArgs } from "../utils/command-args";
 import { acquireBrowserProject, type BrowserProjectLease } from "../webgui/project-registry";
 import { readWebGuiSessionInfo } from "../webgui/session-source";
-import { ensureSharedWebServer } from "../webgui/shared-server";
+import { closeWebServer } from "../webgui/server";
 
 // Only session-scoped handlers belong here: no global setup, session switching or TUI lifecycle.
 const DEV_SESSION_BUILTINS = new Set([
@@ -109,7 +109,10 @@ export interface DevWorkbenchHandle {
 
 /** A failed entry still owns its project until this host can finish settling. */
 export class DevWorkbenchStartError extends AggregateError {
-	constructor(errors: readonly unknown[], readonly host: DevWorkbenchHost) {
+	constructor(
+		errors: readonly unknown[],
+		readonly host: DevWorkbenchHost,
+	) {
 		super(errors, "Dev host startup and settlement failed");
 	}
 }
@@ -135,8 +138,6 @@ type EntryListener = NonNullable<AgentSession["sessionManager"]["onEntryAppended
 type FrameListener = (frame: HostFrame | DevComposerPredictionFrame | object) => void;
 const hosts = new Map<string, Promise<DevWorkbenchHost>>();
 const services = new WeakMap<DevWorkbenchHost, Promise<DevWorkbenchHandle>>();
-// SDK startup failures do not expose a reliable settlement handle; only process exit may release these.
-const unsettledStartupProjects = new Set<BrowserProjectLease>();
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Browser human interaction uses the existing interactive Goal policy, never a settings override. */
@@ -1144,7 +1145,10 @@ export class DevWorkbenchHost {
 		this.#service = service;
 	}
 	trackServiceStartup(startup: Promise<DevWorkbenchHandle>): void {
-		this.#serviceStartup = startup.then(() => {}, () => {});
+		this.#serviceStartup = startup.then(
+			() => {},
+			() => {},
+		);
 	}
 	get stopping(): boolean {
 		return this.#stopping;
@@ -1185,7 +1189,7 @@ export class DevWorkbenchHost {
 				failures.push(error);
 			}
 		}
-		const results = await Promise.allSettled([...this.#work]);
+		const results = await Promise.allSettled(this.#work);
 		for (const result of results) if (result.status === "rejected") failures.push(result.reason);
 		for (const goal of this.#goals.values()) {
 			try {
@@ -1227,10 +1231,13 @@ export async function createDevWorkbenchHost(input: {
 	let pending = hosts.get(cacheKey);
 	if (!pending) {
 		pending = (async () => {
-			const projectLease = input.projectLease ?? await acquireBrowserProject(cwd, "dev");
+			const projectLease = input.projectLease ?? (await acquireBrowserProject(cwd, "dev"));
 			let host: DevWorkbenchHost | undefined;
 			try {
-				if (projectLease.mode !== "dev" || normalizePathForComparison(projectLease.root) !== normalizePathForComparison(cwd))
+				if (
+					projectLease.mode !== "dev" ||
+					normalizePathForComparison(projectLease.root) !== normalizePathForComparison(cwd)
+				)
 					throw new Error("Dev project ownership does not match its native workspace");
 				const candidate = input.mcpManager ?? input.session.nativeChildCapabilities?.mcpManager;
 				const manager = candidate instanceof MCPManager ? candidate : undefined;
@@ -1300,24 +1307,22 @@ export function getOrStartDevWorkbench(
 	if (!pending) {
 		if (host.stopping) return Promise.reject(new DevWorkbenchStartError([new Error("Dev host is exiting")], host));
 		const opening = (async () => {
-			// The native capability listener is private; only the shared gateway publishes Dev URLs.
-			const internal = await startDevWorkbenchServer(host, { ...options, offline: false });
-			host.attachService(internal);
+			const endpoint = await startDevWorkbenchServer(host, {
+				...options,
+				basePath: `/dev/${host.projectLease.projectId}/`,
+			});
+			host.attachService(endpoint);
 			if (host.stopping) throw new Error("Dev host exited during listener startup");
-			const shared = await ensureSharedWebServer();
-			if (host.stopping) throw new Error("Dev host exited during gateway startup");
-			const allowLan = offlineFromEnv();
-			await host.projectLease.activate(() => readWebGuiSessionInfo(host.rootSession), internal.loopbackUrl, allowLan);
+			const allowLan = options?.offline ?? offlineFromEnv();
+			await host.projectLease.activate(() => readWebGuiSessionInfo(host.rootSession), { allowLan });
 			if (host.stopping) {
 				await host.projectLease.markExiting();
 				throw new Error("Dev host exited during project activation");
 			}
-			const publicPath = `/dev/${host.projectLease.projectId}${new URL(internal.loopbackUrl).pathname}`;
-			const publicAddress = (address: string): string => new URL(publicPath, address).href;
 			return {
-				url: publicAddress(allowLan ? shared.url : shared.loopbackUrl),
-				urls: (allowLan ? shared.urls : [shared.loopbackUrl]).map(publicAddress),
-				loopbackUrl: publicAddress(shared.loopbackUrl),
+				url: endpoint.url,
+				urls: endpoint.urls,
+				loopbackUrl: endpoint.loopbackUrl,
 				close: () => host.close(),
 			};
 		})();
@@ -1336,7 +1341,7 @@ export function getOrStartDevWorkbench(
 	return pending;
 }
 export async function closeAllDevWorkbenches(): Promise<void> {
-	const opening = await Promise.allSettled([...hosts.values()]);
+	const opening = await Promise.allSettled(hosts.values());
 	const owned = opening.filter(result => result.status === "fulfilled").map(result => result.value);
 	const results = await Promise.allSettled(owned.map(host => host.close()));
 	const failed = [...opening, ...results].filter(result => result.status === "rejected");
@@ -1394,7 +1399,9 @@ async function createDevWorkbenchSession(
 	if (parsed.noPty) Bun.env.PI_NO_PTY = "1";
 	if (parsed.noTitle) Bun.env.PI_NO_TITLE = "1";
 	const authStorage = await discoverAuthStorage(undefined, { settings: activeSettings });
-	ownResource(async () => { authStorage.close(); });
+	ownResource(async () => {
+		authStorage.close();
+	});
 	const authSync = createAuthStorageSettingsSync(activeSettings, authStorage);
 	ownResource(async () => {
 		authSync.stop();
@@ -1478,7 +1485,7 @@ export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[
 		await shutdown.promise;
 	} catch (error) {
 		if (!sessionReturned) {
-			unsettledStartupProjects.add(projectLease);
+			// The process-local registry retains its OS lock; no unknown SDK owner is released.
 			throw new Error(
 				"Dev 原生会话启动失败，无法确认内部资源已结清；项目占用将保持到当前 OMP 进程结束。请结束此 OMP 进程后重试。",
 				{ cause: error },
@@ -1504,6 +1511,7 @@ export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[
 					await shutdown.promise;
 				}
 			}
+			await closeWebServer();
 		} finally {
 			for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.off(name, signal);
 		}

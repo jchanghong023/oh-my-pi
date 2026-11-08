@@ -24,9 +24,10 @@ export function useOnboardingTrigger(options: {
   userId: string | null;
   loadDeviceMid: () => string;
   update: (patch: Partial<AppSettings>) => Promise<void>;
+  enabled?: boolean;
 }): [boolean | null, () => void] {
-  const { onboardingRecord, userId, loadDeviceMid, update } = options;
-  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
+  const { onboardingRecord, userId, loadDeviceMid, update, enabled = true } = options;
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(enabled ? null : false);
   // 记录上一次判定时的 userId，回填只在身份实际变化后发生（见下方回填条件）。
   const lastSyncedUserIdRef = useRef<string | null | undefined>(undefined);
   // 状态镜像：超时回调读"是否已产生判定结果"，避免闭包捕获陈旧 state。
@@ -37,6 +38,13 @@ export function useOnboardingTrigger(options: {
   // 不再生效——不得把已放行的主界面或进行中的引导翻掉。
   const releaseDeadlineRef = useRef<number | null>(null);
   useEffect(() => {
+    // TODO: Bind OMP onboarding records and native config before enabling automatic discovery.
+    if (!enabled) {
+      releaseDeadlineRef.current = null;
+      lastSyncedUserIdRef.current = undefined;
+      setNeedsOnboarding(false);
+      return;
+    }
     let cancelled = false;
     // 服务不可用（旧测试 double / 未注册的 host）保守判不引导：老用户一定不弹，
     // 真新用户等装配修复后下次启动补弹或走设置页手动入口。
@@ -71,9 +79,10 @@ export function useOnboardingTrigger(options: {
       .catch((cause: unknown) => {
         logger.warn("[occupation-onboarding] 认领匿名引导记录失败", { error: String(cause) });
       })
-      .then(() => onboardingRecord.shouldOnboard(loadDeviceMid()))
+      .then(() => (cancelled ? undefined : onboardingRecord.shouldOnboard(loadDeviceMid())))
       .then(
         (result) => {
+          if (cancelled || result === undefined) return;
           if (!cancelled) {
             releaseDeadlineRef.current = null;
             setNeedsOnboarding(result);
@@ -122,9 +131,9 @@ export function useOnboardingTrigger(options: {
     // 重跑条件=判定上下文（服务实例 / 身份 / 设备 id）；重跑只刷新判定上下文，不重置
     // 放行预算（见 releaseDeadlineRef）。不依赖 settings：settings 不再参与资格判定
     // （spec §6），仅由调用方用于"存量用户不等判定直接进主界面"的 UI 放行。
-  }, [onboardingRecord, userId, loadDeviceMid]);
+  }, [enabled, onboardingRecord, userId, loadDeviceMid]);
   return [
-    needsOnboarding,
+    enabled ? needsOnboarding : false,
     () => {
       // 用户完成引导保存成功即产生判定结果，结束放行预算，防止残留轮次的兜底翻转。
       releaseDeadlineRef.current = null;

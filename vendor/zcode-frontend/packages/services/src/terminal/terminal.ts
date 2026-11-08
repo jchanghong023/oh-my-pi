@@ -1,7 +1,7 @@
 import type { Event } from "@zcode/rpc";
 import { ServiceChannels } from "@zcode/shared";
 import { createServiceDescriptor } from "../descriptors.js";
-import type { TerminalFontFamilySource, TerminalThemeProfile } from "./terminalProfile.js";
+import type { TerminalFontFamilySource, TerminalThemeProfile } from "./terminalProfileTypes.js";
 
 export interface TerminalWindowsPtyInfo {
   backend: "conpty" | "winpty";

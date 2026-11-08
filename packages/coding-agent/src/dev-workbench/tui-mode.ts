@@ -6,8 +6,10 @@ import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
 import { nativeBusy } from "../spec-driven/controller";
 import { openPathWithResult } from "../utils/open";
-import { startWebGui, WebGuiStartError, type WebGuiHandle } from "../webgui/host";
+import { closeAllWebGuis, startWebGui, WebGuiStartError, type WebGuiHandle } from "../webgui/host";
+import { closeWebServer } from "../webgui/server";
 import {
+	closeAllDevWorkbenches,
 	createDevWorkbenchHost,
 	DevWorkbenchStartError,
 	type DevWorkbenchHandle,
@@ -53,12 +55,11 @@ export class DevWorkbenchTuiMode {
 	}
 
 	get #label(): string {
-		return this.#mode === "dev" ? "Dev 工作台" : "WebGUI 界面预览";
+		return this.#mode === "dev" ? "Dev 工作台" : "WebGUI";
 	}
 
 	async toggle(mode: "dev" | "webgui" = "dev"): Promise<void> {
-		if (this.active && mode !== this.#mode)
-			throw new Error(`请先再次输入 ${this.#command} 退出 ${this.#label}。`);
+		if (this.active && mode !== this.#mode) throw new Error(`请先再次输入 ${this.#command} 退出 ${this.#label}。`);
 		if (!this.active) this.#mode = mode;
 		if (this.#pending) {
 			await this.#pending;
@@ -82,6 +83,7 @@ export class DevWorkbenchTuiMode {
 			}
 		}
 		if (this.active) await this.toggle(this.#mode);
+		else await this.#settle();
 	}
 
 	handleInput(data: string): boolean {
@@ -170,7 +172,9 @@ export class DevWorkbenchTuiMode {
 			throw new Error(`当前终端未提供互斥准入检查，请使用 omp ${this.#mode}。`);
 		if (blocked) throw new Error(blocked);
 		if (nativeBusy(context.session))
-			throw new Error(`普通原生任务或自动续跑尚未结清；请先停止或等待，再输入 ${this.#command}。不会自动停止普通任务。`);
+			throw new Error(
+				`普通原生任务或自动续跑尚未结清；请先停止或等待，再输入 ${this.#command}。不会自动停止普通任务。`,
+			);
 		this.#previousDisableSubmit = context.editor.disableSubmit;
 		context.editor.disableSubmit = true;
 		this.#phase = "entering";
@@ -178,9 +182,9 @@ export class DevWorkbenchTuiMode {
 			this.#showOverlay("正在启动，请稍候。");
 			let handle: DevWorkbenchHandle;
 			if (this.#mode === "webgui") {
-				const preview = await startWebGui(context.session);
-				this.#host = preview;
-				handle = preview;
+				const gui = await startWebGui(context.session);
+				this.#host = gui;
+				handle = gui;
 			} else {
 				const host = await createDevWorkbenchHost({
 					session: context.session,
@@ -200,15 +204,14 @@ export class DevWorkbenchTuiMode {
 		} catch (error) {
 			if (error instanceof DevWorkbenchStartError) this.#host = error.host;
 			else if (error instanceof WebGuiStartError) this.#host = error.handle;
-			if (this.#host) {
-				try {
-					await this.#host.close();
-					this.#host = undefined;
-				} catch (cleanupError) {
-					this.#phase = "exiting";
-					this.#showOverlay(`服务启动失败且 ${this.#label}尚未结清；普通终端保持暂停。输入 ${this.#command} 重试退出。`);
-					throw new AggregateError([error, cleanupError], `${this.#label}服务启动失败，且资源仍待结清`);
-				}
+			try {
+				await this.#settle();
+			} catch (cleanupError) {
+				this.#phase = "exiting";
+				this.#showOverlay(
+					`服务启动失败且 ${this.#label}尚未结清；普通终端保持暂停。输入 ${this.#command} 重试退出。`,
+				);
+				throw new AggregateError([error, cleanupError], `${this.#label}服务启动失败，且资源仍待结清`);
 			}
 			this.#release();
 			throw error;
@@ -227,12 +230,23 @@ export class DevWorkbenchTuiMode {
 		});
 	}
 
+	async #settle(): Promise<void> {
+		const results = await Promise.allSettled([this.#host?.close(), closeAllDevWorkbenches(), closeAllWebGuis()]);
+		const failed = results.filter(result => result.status === "rejected");
+		if (failed.length)
+			throw new AggregateError(
+				failed.map(result => result.reason),
+				`${this.#label}资源尚未结清`,
+			);
+		await closeWebServer();
+		this.#host = undefined;
+	}
+
 	async #exit(): Promise<void> {
 		this.#phase = "exiting";
 		this.#showOverlay(`正在停止并结清${this.#label}；普通终端将在结清后恢复。`);
 		try {
-			await this.#host?.close();
-			this.#host = undefined;
+			await this.#settle();
 		} catch (error) {
 			this.#showOverlay(`${this.#label}尚未结清；普通终端保持暂停。输入 ${this.#command} 重试退出。`);
 			throw error;

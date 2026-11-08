@@ -68,7 +68,7 @@ export const devHelp = {
 } satisfies CommandMetadata;
 
 export const webGuiHelp = {
-	description: "Open the shared WebGUI project browser without creating an Agent or occupying a project",
+	description: "Open this OMP instance's WebGUI browser interface without creating an Agent or occupying a project",
 } satisfies CommandMetadata;
 
 export const dryBalanceHelp = {

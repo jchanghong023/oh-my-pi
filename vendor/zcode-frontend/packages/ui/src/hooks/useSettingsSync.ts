@@ -199,7 +199,12 @@ function applyTaskResults(
   });
 }
 
-export function useSettingsSync(params: { workspacePath?: string; workspaceIdentity?: string }) {
+export function useSettingsSync(params: {
+  workspacePath?: string;
+  workspaceIdentity?: string;
+  autoStartEnabled?: boolean;
+}) {
+  const { autoStartEnabled = true } = params;
   const { settingsSyncService } = useServices();
   const zcodeSessionService = useZCodeSessionService(
     params.workspacePath,
@@ -302,6 +307,11 @@ export function useSettingsSync(params: { workspacePath?: string; workspaceIdent
     };
     // 新工作区不能沿用上一工作区的检测结果或加载状态。
     setState(createInitialState());
+    // TODO: Bind OMP onboarding/config discovery before enabling first-run migration.
+    // Not starting is not the same as persisting the first-run prompt as handled.
+    if (!autoStartEnabled) {
+      return cancel;
+    }
     if (!params.workspacePath) {
       return cancel;
     }
@@ -345,7 +355,7 @@ export function useSettingsSync(params: { workspacePath?: string; workspaceIdent
     })();
 
     return cancel;
-  }, [loadDiscovery, params.workspacePath, settingsSyncService]);
+  }, [autoStartEnabled, loadDiscovery, params.workspacePath, settingsSyncService]);
 
   const selectedCount = state.selectedKeys.length;
   const taskProgress = useMemo(() => {

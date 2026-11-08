@@ -309,6 +309,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   onOpenRemoteWorkspace,
   allowOpenWorkspace = true,
   webRemoteControlWorkspaceSwitcher,
+  responsiveBrowserLayout = false,
+  backendBusinessAvailable = true,
   initialSidebarFileTreeOpen,
   initialWebRemoteControlMobileNavigationIntent,
   webRemoteControlTerminalTransportState,
@@ -461,6 +463,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   );
   const isLinuxDesktop = Boolean(isDesktop && !isMacDesktop && !isWindowsDesktop);
   const isWebRemoteControlShell = Boolean(webRemoteControlWorkspaceSwitcher);
+  const usesResponsiveLayout = responsiveBrowserLayout || isWebRemoteControlShell;
   // Windows/Linux 原先遗漏外层留白，导致独立面板贴住窗口边缘；桌面统一使用 4px 间距。
   const hasDesktopPanelInset = isMacDesktop || isWindowsDesktop || isLinuxDesktop;
   const usesInlineWindowControls = Boolean(isWindowsDesktop || isLinuxDesktop);
@@ -1138,7 +1141,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   }, [isWebRemoteControlNavigationCollapsed, webRemoteControlNavigationHeightPx]);
   useEffect(() => {
     if (
-      !isWebRemoteControlShell ||
+      !usesResponsiveLayout ||
       typeof window === "undefined" ||
       typeof window.matchMedia !== "function"
     ) {
@@ -1162,7 +1165,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     return () => {
       mediaQueryList.removeListener(syncMobileViewport);
     };
-  }, [isWebRemoteControlShell]);
+  }, [usesResponsiveLayout]);
 
   useEffect(() => {
     if (!isWebRemoteControlShell || typeof window === "undefined") {
@@ -1530,7 +1533,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             workspacePath: targetWorkspacePath,
           });
           toast(intl.formatMessage({ id: "automations.runs.openSessionFailed" }));
-          return;
+          return false;
         }
         if (workspaceResult.openedLocalTab) {
           logger.info("[automations] 为运行历史会话补开本地 workspace tab", {
@@ -1562,6 +1565,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       } else {
         handleSelectTask(targetWorkspacePath, taskId, targetWorkspaceIdentity);
       }
+      return true;
     },
     [handleSelectTask, intl, isWebRemoteControlShell, showChatMainView, tabStoreApi, workspaceTabs],
   );
@@ -2189,14 +2193,50 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             }
           : handleOpenSidebarFiles
       }
-      onSelectTask={handleSelectTaskInChat}
-      onStartDraftInWorkspace={handleStartDraftInWorkspaceInChat}
+      onSelectTask={
+        mobile && !isWebRemoteControlShell
+          ? (...args) => {
+              if (handleSelectTaskInChat(...args)) mobile.navigateToChat();
+            }
+          : handleSelectTaskInChat
+      }
+      onStartDraftInWorkspace={
+        mobile && !isWebRemoteControlShell
+          ? (...args) => {
+              handleStartDraftInWorkspaceInChat(...args);
+              mobile.navigateToChat();
+            }
+          : handleStartDraftInWorkspaceInChat
+      }
       onOpenCodeViewer={handleOpenCodeViewer}
       onOpenBrowserUrl={handleOpenBrowserUrl}
       fileTreeOpenRequest={fileTreeOpenRequest}
-      onCreateTask={handleCreateTaskInChat}
-      onCreateConversationTask={onCreateConversationTask ?? handleCreateTaskInChat}
-      onCreateConversationTaskOnSource={onCreateConversationTaskOnSource}
+      onCreateTask={
+        mobile && !isWebRemoteControlShell
+          ? (request) => {
+              handleCreateTaskInChat(request);
+              if (!workspaceReadOnlyReason) mobile.navigateToChat();
+            }
+          : handleCreateTaskInChat
+      }
+      onCreateConversationTask={
+        mobile && !isWebRemoteControlShell
+          ? () => {
+              showChatMainView();
+              (onCreateConversationTask ?? handleCreateTaskInChat)();
+              if (!workspaceReadOnlyReason) mobile.navigateToChat();
+            }
+          : (onCreateConversationTask ?? handleCreateTaskInChat)
+      }
+      onCreateConversationTaskOnSource={
+        mobile && !isWebRemoteControlShell && onCreateConversationTaskOnSource
+          ? (sourceServerId) => {
+              showChatMainView();
+              onCreateConversationTaskOnSource(sourceServerId);
+              if (!workspaceReadOnlyReason) mobile.navigateToChat();
+            }
+          : onCreateConversationTaskOnSource
+      }
       onOpenFolderFromWorkspaceMenu={onOpenFolderFromWorkspaceMenu}
       onOpenRemoteWorkspace={onOpenRemoteWorkspace}
       webRemoteControlWorkspaceSwitcher={webRemoteControlWorkspaceSwitcher}
@@ -2225,9 +2265,23 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       goBackShortcutLabel={goBackShortcutLabel}
       goForwardShortcutLabel={goForwardShortcutLabel}
       onOpenCommandCenter={handleOpenCommandCenter}
-      onOpenAutomations={handleOpenAutomations}
+      onOpenAutomations={
+        mobile && !isWebRemoteControlShell
+          ? () => {
+              handleOpenAutomations();
+              mobile.navigateToChat();
+            }
+          : handleOpenAutomations
+      }
       automationsActive={workspaceMainView === "automations"}
-      onOpenPluginStore={handleOpenPluginStore}
+      onOpenPluginStore={
+        mobile && !isWebRemoteControlShell
+          ? () => {
+              handleOpenPluginStore();
+              mobile.navigateToChat();
+            }
+          : handleOpenPluginStore
+      }
       pluginStoreActive={workspaceMainView === "plugin-store"}
       // 桌面没有 mobile 导航动作；内联包装曾让右侧开关穿透侧栏 memo，重复渲染全部项目。
       onWebRemoteTaskOpen={
@@ -2250,12 +2304,13 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     />
   );
 
-  // 断点切换曾卸载查看 Reporter，伪造离开后返回并清掉手动未读。
-  // 同一 Shell 持有查看与手机导航，只替换布局内容；真实 Home/后台仍立即撤销查看。
-  const renderRemoteShell = (wideContent: ReactNode) =>
-    webRemoteControlWorkspaceSwitcher ? (
+  // Keep the original mobile navigation across breakpoint changes. A remote switcher
+  // adds task reporting; direct browsers opt into presentation only.
+  const renderResponsiveShell = (wideContent: ReactNode) =>
+    usesResponsiveLayout ? (
       <WebRemoteControlMobileShell
         isMobileViewport={isWebRemoteControlMobileViewport}
+        isWorkspaceVisible={isWorkspaceVisible}
         taskViewEnabled={
           isWorkspaceVisible && workspaceMainView === "chat" && !isWebRemoteControlTaskSwitching
         }
@@ -2264,7 +2319,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
         activeWorkspacePath={workspaceAbsPath}
         initialNavigationIntent={initialWebRemoteControlMobileNavigationIntent}
         webRemoteControlTerminalTransportState={webRemoteControlTerminalTransportState}
-        isSidePaneOpen={isSidePaneOpen}
+        isSidePaneOpen={workspaceMainView === "chat" && isSidePaneOpen}
         onCloseSidePane={isSidePaneOpen ? handleToggleSidePane : undefined}
         renderTaskHome={renderWorkspaceSidebar}
         switcher={webRemoteControlWorkspaceSwitcher}
@@ -2277,6 +2332,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
               className="border-b"
             >
               <WorkspaceHeader
+                backendBusinessAvailable={backendBusinessAvailable}
                 variant={activeTaskId === null ? "draft" : "task"}
                 draftDropTargetController={
                   activeTaskId === null ? draftHeaderDropTargetController : undefined
@@ -2685,6 +2741,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                           className="border-b"
                         >
                           <WorkspaceHeader
+                            backendBusinessAvailable={backendBusinessAvailable}
                             reserveWindowControls={!isSidePaneVisible}
                             variant={activeTaskId === null ? "draft" : "task"}
                             draftDropTargetController={
@@ -3045,7 +3102,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       isWindowsDesktop={isWindowsDesktop}
       headerTestId={TID_APP_HEADER}
     >
-      {isWebRemoteControlShell ? renderRemoteShell(wideContent) : wideContent}
+      {renderResponsiveShell(wideContent)}
     </DesktopWindowFrame>
   );
 });

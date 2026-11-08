@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
-import * as os from "node:os";
 import * as path from "node:path";
-import type { ServerWebSocket } from "bun";
+import type { ServerWebSocket, WebSocketHandler } from "bun";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import type { GuestFrame } from "@oh-my-pi/pi-wire";
 import { wordCompletionQuery } from "@oh-my-pi/pi-tui/prompt/word-completion";
@@ -17,14 +16,33 @@ import type {
 	DevStage,
 	SpecDocument,
 } from "../spec-driven/types";
+import { getWorkbenchAddresses } from "../utils/browser-network";
+import type { OmpWebSocketData } from "../webgui/application";
+import { registerDevApplication } from "../webgui/server";
 import { getDevWorkbenchAsset, getDevWorkbenchAssetManifest, type DevWorkbenchAsset } from "./assets";
 import type { DevWorkbenchHandle, DevWorkbenchHost } from "./host";
 
-interface BrowserConnection {
+export interface BrowserConnection {
+	readonly kind: "dev";
+	readonly application: DevWorkbenchApplication;
 	browserId: string;
 	requirementId: string | null;
 	dispose?: () => Promise<void>;
 	closed: boolean;
+}
+
+export interface DevWorkbenchApplication {
+	readonly basePath: string;
+	readonly allowLan: boolean;
+	fetch(request: Request, server: Bun.Server<OmpWebSocketData>): Response | undefined | Promise<Response | undefined>;
+	readonly websocket: WebSocketHandler<BrowserConnection>;
+	close(): Promise<void>;
+}
+
+export interface DevWorkbenchApplicationOptions {
+	basePath?: string;
+	asset?: (assetPath: string) => Promise<DevWorkbenchAsset | null>;
+	offline?: boolean;
 }
 const object = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -190,33 +208,24 @@ function documentResponse(document: SpecDocument): Response {
 		},
 	});
 }
-export function getWorkbenchAddresses(allowLan: boolean): string[] {
-	if (!allowLan) return ["127.0.0.1"];
-	const discovered = Object.values(os.networkInterfaces())
-		.flatMap(entries => entries ?? [])
-		.filter(entry => entry.family === "IPv4" && !entry.internal && entry.address !== "0.0.0.0")
-		.map(entry => entry.address);
-	return [...new Set([...discovered, "127.0.0.1"])];
-}
 
-/** No browser subscription owns a task. Only close() stops the listening service. */
-export async function startDevWorkbenchServer(
+/** Browser subscriptions never own native tasks or the shared listening service. */
+export async function createDevWorkbenchApplication(
 	host: DevWorkbenchHost,
-	options: {
-		asset?: (assetPath: string) => Promise<DevWorkbenchAsset | null>;
-		offline?: boolean;
-	} = {},
-): Promise<DevWorkbenchHandle> {
+	options: DevWorkbenchApplicationOptions = {},
+): Promise<DevWorkbenchApplication> {
 	const asset = options.asset ?? getDevWorkbenchAsset;
-	// Preparation failures must happen before publishing a listening URL.
+	// Preparation failures must happen before publishing an application URL.
 	if (!(await asset("/"))) throw new Error("Workbench production HTML is unavailable");
 	const offline = options.offline ?? offlineFromEnv();
 	const capability = randomBytes(32).toString("hex");
-	const prefix = `/${capability}/`;
+	const prefix = `${(options.basePath ?? "").replace(/\/$/, "")}/${capability}/`;
 	const cookieName = `omp_dev_${capability.slice(0, 12)}`;
 	const browsers = new Set<string>();
 	const connections = new Set<ServerWebSocket<BrowserConnection>>();
+	const opening = new Set<Promise<void>>();
 	const closing = new Set<Promise<void>>();
+	let closePromise: Promise<void> | undefined;
 	const allowedAddresses = getWorkbenchAddresses(offline);
 	const cookies = (request: Request): string | undefined => {
 		const cookie = request.headers
@@ -237,12 +246,12 @@ export async function startDevWorkbenchServer(
 		closing.add(task);
 		void task.catch(() => {}).finally(() => closing.delete(task));
 	};
-	const server = Bun.serve<BrowserConnection>({
-		hostname: offline ? "0.0.0.0" : "127.0.0.1",
-		port: 0,
-		maxRequestBodySize: 24 * 1024 * 1024,
+	const application: DevWorkbenchApplication = {
+		basePath: prefix,
+		allowLan: offline,
 		async fetch(request, server) {
 			const url = new URL(request.url);
+			if (!url.pathname.startsWith(prefix)) return undefined;
 			const expectedHost = `${url.hostname}:${server.port}`;
 			if (!allowedAddresses.includes(url.hostname) || request.headers.get("host") !== expectedHost)
 				return json({ error: "Unrecognized workbench Host" }, 403);
@@ -251,7 +260,6 @@ export async function startDevWorkbenchServer(
 				return json({ error: "Cross-origin workbench requests are not allowed" }, 403);
 			if (request.headers.get("sec-fetch-site") === "cross-site")
 				return json({ error: "Cross-site workbench requests are not allowed" }, 403);
-			if (!url.pathname.startsWith(prefix)) return json({ error: "Workbench capability is missing" }, 404);
 			let route: string;
 			try {
 				route = decodeURIComponent(url.pathname.slice(prefix.length - 1));
@@ -293,7 +301,12 @@ export async function startDevWorkbenchServer(
 				if (!origin) return json({ error: "WebSocket Origin is required" }, 403);
 				const requirementId = url.searchParams.get("requirementId") || null;
 				if (requirementId) await host.controller.getRequirement(requirementId);
-				if (server.upgrade(request, { data: { browserId, requirementId, closed: false } })) return;
+				if (
+					server.upgrade(request, {
+						data: { kind: "dev", application, browserId, requirementId, closed: false },
+					})
+				)
+					return;
 				return json({ error: "WebSocket upgrade failed" }, 400);
 			}
 			try {
@@ -511,6 +524,8 @@ export async function startDevWorkbenchServer(
 				};
 				const disposeBrowser = host.observeBrowser(socket.data.browserId, send);
 				const disposeBusiness = host.controller.observe(snapshot => send({ t: "requirement", snapshot }));
+				const setup = Promise.withResolvers<void>();
+				opening.add(setup.promise);
 				try {
 					send({ t: "requirements", requirements: await host.controller.listRequirements() });
 					const disposeNative = await host.subscribeNative(socket.data.browserId, socket.data.requirementId, send);
@@ -528,6 +543,9 @@ export async function startDevWorkbenchServer(
 					disposeBrowser();
 					disposeBusiness();
 					send({ t: "error", message: error instanceof Error ? error.message : String(error) });
+				} finally {
+					opening.delete(setup.promise);
+					setup.resolve();
 				}
 			},
 			message(socket) {
@@ -537,13 +555,6 @@ export async function startDevWorkbenchServer(
 			},
 			close: disconnect,
 		},
-	});
-	const urls = allowedAddresses.map(address => `http://${address}:${server.port}${prefix}`);
-	let closePromise: Promise<void> | undefined;
-	return {
-		url: urls[0],
-		urls,
-		loopbackUrl: `http://127.0.0.1:${server.port}${prefix}`,
 		close() {
 			if (!closePromise) {
 				const pending = (async () => {
@@ -551,8 +562,8 @@ export async function startDevWorkbenchServer(
 						disconnect(socket);
 						socket.close(1001, "Dev mode exited");
 					}
-					await Promise.all([...closing]);
-					await server.stop(true);
+					await Promise.all(opening);
+					await Promise.all(closing);
 				})();
 				closePromise = pending;
 				void pending.catch(() => {
@@ -562,4 +573,19 @@ export async function startDevWorkbenchServer(
 			return closePromise;
 		},
 	};
+	return application;
+}
+
+/** Register the native application on this process's OMP listener. */
+export async function startDevWorkbenchServer(
+	host: DevWorkbenchHost,
+	options: DevWorkbenchApplicationOptions = {},
+): Promise<DevWorkbenchHandle> {
+	const application = await createDevWorkbenchApplication(host, options);
+	try {
+		return await registerDevApplication(application);
+	} catch (error) {
+		await application.close();
+		throw error;
+	}
 }

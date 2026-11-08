@@ -21,8 +21,8 @@
  *   可以调用远端的 channel 了！
  */
 
-import { Emitter, IDisposable, toDisposable } from "./foundation.js";
-import { ISocket } from "./protocol.js";
+import { Emitter, type IDisposable, toDisposable } from "./foundation.js";
+import type { ISocket } from "./protocol.js";
 import { PersistentProtocol } from "./persistent-protocol.js";
 import { IPCClient } from "./ipc.js";
 

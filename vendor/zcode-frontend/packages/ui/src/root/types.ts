@@ -75,6 +75,10 @@ export interface RootProps {
   isMacDesktop?: boolean;
   /** Windows 桌面端需要展示更准确的资源管理器文案 */
   isWindowsDesktop?: boolean;
+  /** Opt into responsive browser presentation without enabling remote-control behavior. */
+  responsiveBrowserLayout?: boolean;
+  /** Backend account, Agent and configuration business bindings are available; defaults to true. */
+  backendBusinessAvailable?: boolean;
   /** 是否恢复上次关闭时的标签页，首个窗口 true，新窗口 false */
   restoreSession?: boolean;
   /** 是否允许访问本地设置服务，远程窗口 false */

@@ -43,6 +43,7 @@ export function resolveTopOverlayLeadingPaddingClass({
 
 export function WorkspaceHeader({
   variant = "task",
+  backendBusinessAvailable = true,
 
   draftDropTargetController,
   readOnlyReason,
@@ -91,6 +92,7 @@ export function WorkspaceHeader({
   reloadSessionPending,
 }: {
   variant?: WorkspaceHeaderVariant;
+  backendBusinessAvailable?: boolean;
   draftDropTargetController?: ConversationDropTargetController | null;
   readOnlyReason?: string;
   workspaceAbsPath: string;
@@ -185,6 +187,7 @@ export function WorkspaceHeader({
         {variant === "task" || remoteTarget || workspaceIdentity || remoteSessionId ? (
           <WorkspaceHeaderTitleSection
             variant={variant}
+            backendBusinessAvailable={backendBusinessAvailable}
             readOnlyReason={readOnlyReason}
             workspaceAbsPath={workspaceAbsPath}
             remoteSessionId={remoteSessionId}

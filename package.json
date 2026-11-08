@@ -84,6 +84,7 @@
 		"claude:trace": "bun scripts/claude-trace.ts",
 		"build": "bun run --workspaces --if-present build",
 		"build:native": "bun --cwd=packages/natives run build",
+		"build:webgui": "bun vendor/zcode-frontend/node_modules/vite/bin/vite.js build --config vendor/zcode-frontend/preview/vite.config.ts",
 		"test": "bun scripts/ci-test-ts.ts local",
 		"test:ts": "bun scripts/ci-test-ts.ts local-ts",
 		"test:scripts": "bun scripts/test-report-bun.ts scripts",

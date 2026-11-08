@@ -73,6 +73,7 @@ export {
 
 export function WorkspaceHeaderTitleSection({
   variant,
+  backendBusinessAvailable = true,
   readOnlyReason,
   workspaceAbsPath,
   remoteSessionId,
@@ -187,6 +188,8 @@ export function WorkspaceHeaderTitleSection({
     taskId: activeTaskId ?? "",
     // 任务日志查询与 Header 当前展示态使用同一个 provider。
     provider: menuTaskProvider,
+    loadProviderConfig: backendBusinessAvailable,
+    loadTaskPaths: backendBusinessAvailable,
     intl,
   });
   const remoteWorkspaceHostLabel = remoteTarget
