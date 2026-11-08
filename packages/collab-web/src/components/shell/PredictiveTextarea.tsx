@@ -66,7 +66,7 @@ export function PredictiveTextarea({ ref, ...props }: Props): ReactNode {
 			borderStyle: "solid",
 			borderColor: "transparent",
 			textAlign: style.textAlign as CSSProperties["textAlign"],
-			tabSize: style.tabSize,
+			MozTabSize: style.getPropertyValue("-moz-tab-size"),
 			textIndent: style.textIndent,
 		});
 		if (mirror.current) {

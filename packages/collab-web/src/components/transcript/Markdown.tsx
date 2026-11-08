@@ -169,7 +169,7 @@ export function renderStreamingMarkdown(
 	if (text.includes("\r")) return { html: renderMarkdown(text), prefix: NO_PREFIX };
 	// Tabs expand to four spaces (as marked's own normalization does), so token
 	// raws tile `src` exactly.
-	const src = text.includes("\t") ? text.replaceAll("\t", "    ") : text;
+	const src = text.includes("\t") ? text.replace(/\t/g, "    ") : text;
 	const base = src.length > prefix.source.length && src.startsWith(prefix.source) ? prefix : NO_PREFIX;
 	const rest = base.source.length === 0 ? src : src.slice(base.source.length);
 	try {

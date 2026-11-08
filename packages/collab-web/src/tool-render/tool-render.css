@@ -7,18 +7,24 @@
  * 4px radii, whisper hovers. */
 
 .tv-card {
-	--tv-fg: var(--fg, var(--text, oklch(0.92 0.01 307)));
-	--tv-muted: var(--fg-muted, var(--muted, oklch(0.71 0.016 307)));
-	--tv-faint: var(--fg-faint, var(--dim, oklch(0.53 0.018 307)));
-	--tv-accent: var(--accent, oklch(0.674 0.23 341));
-	--tv-ok: var(--ok, var(--success, oklch(0.76 0.14 150)));
-	--tv-err: var(--err, var(--error, oklch(0.66 0.19 25)));
-	--tv-warn: var(--warn, var(--warning, oklch(0.79 0.14 85)));
-	--tv-border: var(--border, oklch(1 0 0 / 9%));
-	--tv-inset: var(--bg-inset, var(--info-bg, oklch(0 0 0 / 22%)));
-	--tv-raised: var(--bg-raised, var(--container-bg, oklch(1 0 0 / 4%)));
-	--tv-ring: var(--ring, oklch(0.817 0.112 205 / 70%));
-	--tv-mono: var(--font-mono, ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace);
+	--tv-fg: var(--fg, var(--text, #e6e3ea));
+	--tv-muted: var(--fg-muted, var(--muted, #a49faa));
+	--tv-faint: var(--fg-faint, var(--dim, #6e6974));
+	--tv-accent: var(--accent, #ed4abf);
+	--tv-ok: var(--ok, var(--success, #68ca80));
+	--tv-err: var(--err, var(--error, #f05653));
+	--tv-warn: var(--warn, var(--warning, #e4b33f));
+	--tv-border: var(--border, rgba(255, 255, 255, 0.09));
+	--tv-inset: var(--bg-inset, var(--info-bg, rgba(0, 0, 0, 0.22)));
+	--tv-raised: var(--bg-raised, var(--container-bg, rgba(255, 255, 255, 0.04)));
+	--tv-ring: var(--ring, rgba(90, 216, 229, 0.7));
+	--tv-fg-rgb: var(--fg-rgb, 230, 227, 234);
+	--tv-faint-rgb: var(--fg-faint-rgb, 110, 105, 116);
+	--tv-accent-rgb: var(--accent-rgb, 237, 74, 191);
+	--tv-ok-rgb: var(--ok-rgb, 104, 202, 128);
+	--tv-err-rgb: var(--err-rgb, 240, 86, 83);
+	--tv-warn-rgb: var(--warn-rgb, 228, 179, 63);
+	--tv-mono: var(--font-mono, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace);
 
 	border: 1px solid var(--tv-border);
 	border-radius: 6px;
@@ -31,7 +37,7 @@
 }
 
 .tv-card--error {
-	border-color: color-mix(in oklch, var(--tv-err) 40%, var(--tv-border));
+	border-color: rgba(var(--tv-err-rgb), 0.4);
 }
 
 /* ---- header ---- */
@@ -49,14 +55,13 @@
 	text-align: left;
 	cursor: pointer;
 	touch-action: manipulation;
-	-webkit-tap-highlight-color: transparent;
 }
 
 .tv-head:hover {
-	background: color-mix(in oklch, var(--tv-fg) 4%, transparent);
+	background: rgba(var(--tv-fg-rgb), 0.04);
 }
 
-.tv-head:focus-visible {
+.tv-head:focus {
 	outline: 2px solid var(--tv-ring);
 	outline-offset: -2px;
 }
@@ -85,7 +90,7 @@
 	width: 9px;
 	height: 9px;
 	border-radius: 50%;
-	border: 1.5px solid color-mix(in oklch, var(--tv-faint) 50%, transparent);
+	border: 1.5px solid rgba(var(--tv-faint-rgb), 0.5);
 	border-top-color: var(--tv-accent);
 	animation: tv-rot 0.7s linear infinite;
 }
@@ -170,22 +175,22 @@
 }
 
 .tv-badge--accent {
-	background: color-mix(in oklch, var(--tv-accent) 16%, transparent);
-	color: color-mix(in oklch, var(--tv-accent) 80%, var(--tv-fg));
+	background: rgba(var(--tv-accent-rgb), 0.16);
+	color: var(--tv-accent);
 }
 
 .tv-badge--ok {
-	background: color-mix(in oklch, var(--tv-ok) 14%, transparent);
+	background: rgba(var(--tv-ok-rgb), 0.14);
 	color: var(--tv-ok);
 }
 
 .tv-badge--err {
-	background: color-mix(in oklch, var(--tv-err) 14%, transparent);
+	background: rgba(var(--tv-err-rgb), 0.14);
 	color: var(--tv-err);
 }
 
 .tv-badge--warn {
-	background: color-mix(in oklch, var(--tv-warn) 14%, transparent);
+	background: rgba(var(--tv-warn-rgb), 0.14);
 	color: var(--tv-warn);
 }
 
@@ -204,7 +209,7 @@
 }
 
 .tv-pattern {
-	color: color-mix(in oklch, var(--tv-accent) 75%, var(--tv-fg));
+	color: var(--tv-accent);
 }
 
 .tv-muted {
@@ -231,11 +236,11 @@
 }
 
 .tv-agent-link:hover {
-	background: color-mix(in oklch, var(--tv-accent) 26%, transparent);
+	background: rgba(var(--tv-accent-rgb), 0.26);
 	text-decoration: underline;
 }
 
-.tv-agent-link:focus-visible {
+.tv-agent-link:focus {
 	outline: 2px solid var(--tv-ring);
 	outline-offset: 1px;
 }
@@ -290,7 +295,7 @@
 	font-size: 11.5px;
 	line-height: 1.5;
 	overflow-x: auto;
-	tab-size: 3;
+	-moz-tab-size: 3;
 }
 
 .tv-pre--wrap {
@@ -332,7 +337,7 @@
 	text-decoration: underline;
 }
 
-.tv-expand:focus-visible {
+.tv-expand:focus {
 	outline: 2px solid var(--tv-ring);
 	outline-offset: 1px;
 	border-radius: 2px;
@@ -349,7 +354,7 @@
 .tv-cmd-prompt {
 	flex: none;
 	color: var(--tv-accent);
-	user-select: none;
+	-moz-user-select: none;
 }
 
 .tv-cmd-text {
@@ -380,13 +385,13 @@
 }
 
 .tv-diff-row--add {
-	background: color-mix(in oklch, var(--tv-ok) 11%, transparent);
-	color: color-mix(in oklch, var(--tv-ok) 70%, var(--tv-fg));
+	background: rgba(var(--tv-ok-rgb), 0.11);
+	color: var(--tv-ok);
 }
 
 .tv-diff-row--del {
-	background: color-mix(in oklch, var(--tv-err) 11%, transparent);
-	color: color-mix(in oklch, var(--tv-err) 70%, var(--tv-fg));
+	background: rgba(var(--tv-err-rgb), 0.11);
+	color: var(--tv-err);
 }
 
 .tv-diff-row--hunk {
@@ -395,7 +400,7 @@
 
 .tv-diff-row--gap {
 	color: var(--tv-faint);
-	user-select: none;
+	-moz-user-select: none;
 }
 
 /* ---- cells (eval / ast ops) ---- */
@@ -513,17 +518,17 @@
 }
 
 .tv-note--err {
-	background: color-mix(in oklch, var(--tv-err) 10%, transparent);
+	background: rgba(var(--tv-err-rgb), 0.1);
 	color: var(--tv-err);
 }
 
 .tv-note--warn {
-	background: color-mix(in oklch, var(--tv-warn) 10%, transparent);
+	background: rgba(var(--tv-warn-rgb), 0.1);
 	color: var(--tv-warn);
 }
 
 .tv-note--ok {
-	background: color-mix(in oklch, var(--tv-ok) 10%, transparent);
+	background: rgba(var(--tv-ok-rgb), 0.1);
 	color: var(--tv-ok);
 }
 
@@ -569,7 +574,7 @@
 .tv-pre .hljs-section,
 .tv-pre .hljs-name,
 .tv-pre .hljs-tag {
-	color: color-mix(in oklch, var(--tv-accent) 72%, var(--tv-fg));
+	color: var(--tv-accent);
 }
 
 .tv-pre .hljs-string,
@@ -594,7 +599,7 @@
 .tv-pre .hljs-selector-class,
 .tv-pre .hljs-type,
 .tv-pre .hljs-built_in {
-	color: color-mix(in oklch, var(--tv-fg) 80%, var(--tv-accent));
+	color: var(--tv-fg);
 }
 
 .tv-pre .hljs-deletion {

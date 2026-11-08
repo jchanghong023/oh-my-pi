@@ -112,6 +112,15 @@ test("ordinary TUI remains unchanged before Dev and restores original model, ima
 				const url = /http:\/\/(?:127\.0\.0\.1|localhost):\d+\/[^\s│\x1b]*/u.exec(screen)?.[0];
 				if (!url) throw new Error("/dev did not print a complete ready URL");
 				const base = url.endsWith("/") ? url : `${url}/`;
+				await tui("expect", "text", url, "--link", url);
+				const terminalState: unknown = JSON.parse(await tui("state", "--json"));
+				if (!isRecord(terminalState) || !isRecord(terminalState.data))
+					throw new Error("Terminal state is unavailable");
+				expect(terminalState.data.mouse_mode).toBe("none");
+				await tui("resize", "64", "36");
+				const narrow = await tui("text");
+				expect(narrow.replace(/\s+/gu, "")).toContain(url);
+				await tui("resize", "120", "36");
 				const bootstrap = await fetch(new URL("api/browser", base));
 				const cookie = bootstrap.headers.get("set-cookie")?.split(";", 1)[0];
 				if (!cookie) throw new Error("Native workbench browser identity was not allocated");
@@ -134,9 +143,14 @@ test("ordinary TUI remains unchanged before Dev and restores original model, ima
 				]) {
 					await tui("submit", input);
 					await tui("expect", "text", input, "--timeout", "30000");
+					await tui("expect", "text", "普通聊天、命令和快捷操作已暂停", "--timeout", "30000");
 					await tui("key", "press", "End", "Ctrl+U");
 				}
-				for (const shortcut of ["Escape", "Ctrl+C", "Ctrl+Enter", "Alt+P"]) await tui("key", "press", shortcut);
+				for (const shortcut of ["Escape", "Ctrl+C", "Ctrl+Enter", "Alt+P"]) {
+					await tui("key", "press", shortcut);
+					if (shortcut === "Escape" || shortcut === "Ctrl+C")
+						await tui("expect", "text", "请明确输入 /dev 退出", "--timeout", "30000");
+				}
 				expect(
 					await fetch(new URL("api/requirements", base), { headers: { cookie } }).then(response =>
 						response.json(),

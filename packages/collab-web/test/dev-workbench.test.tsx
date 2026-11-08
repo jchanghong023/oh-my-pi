@@ -639,61 +639,12 @@ describe("native UI surface state", () => {
 
 /** Browser HTTP surface backed by real requests to each test's Bun server. */
 function installBrowserHttp(location: URL): () => void {
-	const descriptors = {
-		window: Object.getOwnPropertyDescriptor(globalThis, "window"),
-		XMLHttpRequest: Object.getOwnPropertyDescriptor(globalThis, "XMLHttpRequest"),
-	};
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
 	const restore = (): void => {
-		for (const name of ["window", "XMLHttpRequest"] as const) {
-			const descriptor = descriptors[name];
-			if (descriptor) Object.defineProperty(globalThis, name, descriptor);
-			else Reflect.deleteProperty(globalThis, name);
-		}
+		if (descriptor) Object.defineProperty(globalThis, "window", descriptor);
+		else Reflect.deleteProperty(globalThis, "window");
 	};
-	const nativeFetch = globalThis.fetch;
-	class FetchXMLHttpRequest {
-		status = 0;
-		responseText = "";
-		withCredentials = false;
-		onload: (() => void) | null = null;
-		onerror: (() => void) | null = null;
-		onabort: (() => void) | null = null;
-		ontimeout: (() => void) | null = null;
-		#method = "GET";
-		#url = "";
-		#headers = new Headers();
-		#responseHeaders = new Headers();
-
-		open(method: string, url: string, asynchronous: boolean): void {
-			if (!asynchronous) throw new Error("The test HTTP fixture requires asynchronous XHR");
-			this.#method = method;
-			this.#url = new URL(url, location).href;
-		}
-		setRequestHeader(name: string, value: string): void {
-			this.#headers.append(name, value);
-		}
-		getResponseHeader(name: string): string | null {
-			return this.#responseHeaders.get(name);
-		}
-		send(body: string | FormData | null): void {
-			void nativeFetch(this.#url, { method: this.#method, headers: this.#headers, body })
-				.then(async response => {
-					const text = await response.text();
-					this.status = response.status;
-					this.responseText = text;
-					this.#responseHeaders = response.headers;
-					this.onload?.();
-				})
-				.catch(() => this.onerror?.());
-		}
-	}
-	try {
-		Object.defineProperty(globalThis, "window", { configurable: true, value: { location } });
-		Object.defineProperty(globalThis, "XMLHttpRequest", { configurable: true, value: FetchXMLHttpRequest });
-	} catch (error) {
-		restore();
-		throw error;
-	}
+	Object.defineProperty(globalThis, "window", { configurable: true, value: { location } });
 	return restore;
 }
 

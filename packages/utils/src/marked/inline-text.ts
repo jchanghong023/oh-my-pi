@@ -307,7 +307,7 @@ export class TextRun {
 	/** Appends the source text from `start` to `end`. */
 	append(tokens: Token[], start: number, end: number): void {
 		if (end <= start) return;
-		const previous = tokens.at(-1);
+		const previous = tokens[tokens.length - 1];
 		if (previous?.type === "text" && previous.tokens === undefined && previous.escaped === false) {
 			// An extension may have rewritten this token; then append by concatenation as marked does.
 			if (

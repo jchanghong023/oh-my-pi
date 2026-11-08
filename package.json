@@ -183,7 +183,6 @@
 		"@types/bun": "catalog:",
 		"@types/react": "catalog:",
 		"acorn": "8.19.0",
-		"core-js": "3.51.0",
 		"lint-staged": "catalog:",
 		"oxfmt": "catalog:",
 		"oxlint": "catalog:",

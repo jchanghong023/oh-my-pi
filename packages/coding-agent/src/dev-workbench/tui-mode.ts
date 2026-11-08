@@ -1,3 +1,6 @@
+import { type Component, Container, Text, replaceTabs } from "@oh-my-pi/pi-tui";
+import { urlHyperlinkAlways } from "@oh-my-pi/pi-tui/render";
+import { theme } from "@oh-my-pi/pi-tui/theme";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
@@ -7,6 +10,13 @@ import { createDevWorkbenchHost, type DevWorkbenchHandle, type DevWorkbenchHost,
 
 const modes = new WeakMap<InteractiveModeContext, DevWorkbenchTuiMode>();
 
+/** Keep the exit field inside the overlay's focus boundary without replacing its restore target. */
+class DevWorkbenchOverlay extends Container {
+	ownsOverlayFocusTarget(component: Component): boolean {
+		return this.children.includes(component);
+	}
+}
+
 /** An exclusive input owner, not a second terminal workflow or session binding. */
 export class DevWorkbenchTuiMode {
 	readonly #context: InteractiveModeContext;
@@ -14,6 +24,7 @@ export class DevWorkbenchTuiMode {
 	#host: DevWorkbenchHost | undefined;
 	#pending: Promise<void> | undefined;
 	#overlay: HookInputComponent | undefined;
+	#notice: Text | undefined;
 	#overlayHandle: { hide(): void } | undefined;
 	#previousDisableSubmit = false;
 
@@ -64,38 +75,59 @@ export class DevWorkbenchTuiMode {
 	async submit(text: string): Promise<boolean> {
 		if (!this.active) return false;
 		if (text.trim() !== "/dev") {
-			this.#context.showWarning("Dev 工作台占用当前终端；普通聊天、命令和快捷操作已暂停。仅再次输入 /dev 可退出。");
+			this.#showNotice(
+				"Dev 工作台占用当前终端；普通聊天、命令和快捷操作已暂停。仅再次输入 /dev 可退出。",
+				"warning",
+			);
 			return true;
 		}
 		if (this.#pending) {
-			this.#context.showStatus("Dev 工作台正在切换，请等待结清后再次输入 /dev。");
+			this.#showNotice("Dev 工作台正在切换，请等待结清后再次输入 /dev。", "muted");
 			return true;
 		}
 		await this.toggle();
 		return true;
 	}
 
-	#showOverlay(detail: string): void {
+	#showNotice(text: string, color: "warning" | "error" | "muted"): void {
+		if (this.#notice) {
+			this.#notice.setText(theme.fg(color, replaceTabs(text)));
+			this.#context.ui.requestRender();
+		} else if (color === "error") {
+			this.#context.showError(text);
+		}
+	}
+
+	#showOverlay(detail: string, urls: readonly string[] = []): void {
 		this.#overlayHandle?.hide();
 		this.#overlay?.dispose();
+		const surface = new DevWorkbenchOverlay();
+		surface.addChild(new Text(theme.fg("accent", "Dev 浏览器工作台"), 0, 0));
+		for (const url of urls) surface.addChild(new Text(urlHyperlinkAlways(url, url), 0, 0));
+		surface.addChild(new Text(replaceTabs(detail), 0, 0));
+		surface.addChild(new Text("普通终端操作已暂停；仅输入 /dev 并提交可退出。关闭网页不会退出。", 0, 1));
+		this.#notice = new Text("", 0, 0);
+		surface.addChild(this.#notice);
 		const overlay = new HookInputComponent(
-			`Dev 浏览器工作台\n${detail}\n普通终端操作已暂停；仅输入 /dev 并提交可退出。关闭网页不会退出。`,
+			"退出 Dev",
 			"/dev",
 			text => {
 				void this.submit(text).catch(error =>
-					this.#context.showError(error instanceof Error ? error.message : String(error)),
+					this.#showNotice(error instanceof Error ? error.message : String(error), "error"),
 				);
 			},
-			() => this.#context.showWarning("请明确输入 /dev 退出；Esc、Ctrl+C 和关闭网页不退出 Dev。"),
+			() => this.#showNotice("请明确输入 /dev 退出；Esc、Ctrl+C 和关闭网页不退出 Dev。", "warning"),
 			{ tui: this.#context.ui },
 		);
+		surface.addChild(overlay);
 		this.#overlay = overlay;
-		this.#overlayHandle = this.#context.ui.showOverlay(overlay, {
+		this.#overlayHandle = this.#context.ui.showOverlay(surface, {
 			anchor: "bottom-center",
 			width: "100%",
 			maxHeight: "100%",
 			margin: 0,
 			fullscreen: true,
+			mouseTracking: false,
 		});
 		this.#context.ui.setFocus(overlay);
 		this.#context.ui.requestRender();
@@ -106,6 +138,7 @@ export class DevWorkbenchTuiMode {
 		this.#overlayHandle = undefined;
 		this.#overlay?.dispose();
 		this.#overlay = undefined;
+		this.#notice = undefined;
 		this.#context.editor.disableSubmit = this.#previousDisableSubmit;
 		this.#phase = "inactive";
 		this.#context.ui.requestRender();
@@ -133,11 +166,10 @@ export class DevWorkbenchTuiMode {
 			});
 			const handle = await getOrStartDevWorkbench(this.#host);
 			this.#phase = "active";
-			this.#showOverlay(handle.urls.join("\n"));
-			for (const url of handle.urls) context.showStatus(`Dev 工作台已就绪：${url}`);
-			if (offlineFromEnv() && handle.urls.length === 1)
-				context.showWarning("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。");
+			this.#showOverlay("地址可选择复制，或按住 Ctrl 点击在浏览器中打开。", handle.urls);
 			this.#openBrowser(handle);
+			if (offlineFromEnv() && handle.urls.length === 1)
+				this.#showNotice("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。", "warning");
 		} catch (error) {
 			if (this.#host) {
 				try {
@@ -156,13 +188,12 @@ export class DevWorkbenchTuiMode {
 
 	#openBrowser(handle: DevWorkbenchHandle): void {
 		if (process.env.OMP_DEV_NO_OPEN === "1") {
-			this.#context.showStatus(`已按 OMP_DEV_NO_OPEN=1 跳过自动打开浏览器；请复制此地址访问：${handle.loopbackUrl}`);
+			this.#showNotice("已按 OMP_DEV_NO_OPEN=1 跳过自动打开浏览器；请使用上方地址访问。", "muted");
 			return;
 		}
 		void openPathWithResult(handle.loopbackUrl).then(result => {
 			if (this.#phase !== "active") return;
-			if (!result.opened)
-				this.#context.showWarning(`浏览器未自动打开：${result.reason}\n请复制此地址访问：${handle.loopbackUrl}`);
+			if (!result.opened) this.#showNotice(`浏览器未自动打开：${result.reason}\n请使用上方地址访问。`, "warning");
 		});
 	}
 

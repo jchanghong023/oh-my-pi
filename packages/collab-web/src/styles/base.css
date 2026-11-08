@@ -11,8 +11,6 @@
 
 html {
 	height: 100%;
-	-webkit-text-size-adjust: 100%;
-	text-size-adjust: 100%;
 	overscroll-behavior-y: none;
 }
 
@@ -29,8 +27,6 @@ body {
 	font: 400 13.5px / 1.5 var(--font-ui);
 	background: var(--bg);
 	color: var(--fg);
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
 	text-rendering: optimizeLegibility;
 	font-feature-settings: "cv11", "ss01";
 	overflow: hidden;
@@ -43,7 +39,6 @@ select,
 a {
 	font: inherit;
 	color: inherit;
-	-webkit-tap-highlight-color: transparent;
 	touch-action: manipulation;
 }
 
@@ -61,7 +56,7 @@ kbd {
 	font-family: var(--font-mono);
 }
 
-:focus-visible {
+:focus {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;
 	border-radius: 4px;
@@ -80,28 +75,6 @@ textarea {
 * {
 	scrollbar-width: thin;
 	scrollbar-color: var(--border-strong) transparent;
-}
-
-*::-webkit-scrollbar {
-	width: 10px;
-	height: 10px;
-}
-
-*::-webkit-scrollbar-thumb {
-	background: var(--border-strong);
-	border: 2px solid transparent;
-	background-clip: padding-box;
-	border-radius: 999px;
-}
-
-*::-webkit-scrollbar-thumb:hover {
-	background: var(--fg-faint);
-	border: 2px solid transparent;
-	background-clip: padding-box;
-}
-
-*::-webkit-scrollbar-track {
-	background: transparent;
 }
 
 /* shared animations */

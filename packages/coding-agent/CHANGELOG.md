@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.
+
+### Fixed
+
+- Select and copy complete Dev workbench URLs or Ctrl-click their links, and see blocked-input warnings immediately without leaving Dev.
+
 ## [18.18.1] - 2026-11-08
 
 ### Breaking Changes

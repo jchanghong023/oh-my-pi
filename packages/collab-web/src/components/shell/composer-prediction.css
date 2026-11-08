@@ -33,7 +33,7 @@
 
 .sh-message-prediction-choice[aria-pressed="true"],
 .sh-message-prediction-choice:hover,
-.sh-message-prediction-choice:focus-visible {
+.sh-message-prediction-choice:focus {
 	border-color: var(--border-strong);
 	background: var(--bg-raised);
 }

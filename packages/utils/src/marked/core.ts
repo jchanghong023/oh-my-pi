@@ -578,7 +578,8 @@ function matchLink(src: string, lexer: Lexer, closers: InlineClosers): NestedMat
 /** Matches emphasis or strong emphasis at the start of `rest`, a suffix of `closers`' source, lexed after `output`. */
 function matchEmphasis(rest: string, output: Token[], closers: InlineClosers): NestedMatch | undefined {
 	const marker = rest[0];
-	const previous = output.at(-1)?.raw.at(-1) ?? "\n";
+	const previousRaw = output[output.length - 1]?.raw;
+	const previous = previousRaw?.[previousRaw.length - 1] ?? "\n";
 	if (marker !== "*" && marker !== "_") return undefined;
 	if (rest.startsWith(marker.repeat(3)) && canOpenDelimiter(rest, 0, 3, marker, previous)) {
 		const end = findDelimiter(rest, marker.repeat(3), 3);
@@ -887,7 +888,7 @@ function parseList(lines: string[], index: number, lexer: Lexer): { token: Token
 	const first = isList(lines[index]!);
 	if (!first) return undefined;
 	const ordered = /^\d/.test(first[2]!);
-	const delimiter = ordered ? first[2]!.at(-1)! : first[2]!;
+	const delimiter = ordered ? first[2]![first[2]!.length - 1]! : first[2]!;
 	const start = ordered ? Number.parseInt(first[2]!, 10) : "";
 	const rawItems: Array<{ raw: string; text: string; taskRaw?: string; checked?: boolean }> = [];
 	let cursor = index;
@@ -896,7 +897,7 @@ function parseList(lines: string[], index: number, lexer: Lexer): { token: Token
 		if (
 			!match ||
 			/^\d/.test(match[2]!) !== ordered ||
-			(ordered ? match[2]!.at(-1) !== delimiter : match[2] !== delimiter)
+			(ordered ? match[2]![match[2]!.length - 1] !== delimiter : match[2] !== delimiter)
 		)
 			break;
 		const itemStart = cursor;
@@ -927,7 +928,9 @@ function parseList(lines: string[], index: number, lexer: Lexer): { token: Token
 					const compatible =
 						followingList !== null &&
 						/^\d/.test(followingList[2]!) === ordered &&
-						(ordered ? followingList[2]!.at(-1) === delimiter : followingList[2] === delimiter);
+						(ordered
+							? followingList[2]![followingList[2]!.length - 1] === delimiter
+							: followingList[2] === delimiter);
 					if (!compatible) break;
 				}
 				text += next;
@@ -1019,7 +1022,7 @@ function blockTokens(src: string, lexer: Lexer, output: Token[]): Token[] {
 			let raw = "";
 			while (i < lines.length && /^\s*\n$/.test(lines[i]!)) raw += lines[i++]!;
 			if (output.length > 0) {
-				const previous = output.at(-1)!;
+				const previous = output[output.length - 1]!;
 				if (previous.raw.endsWith("\n")) previous.raw = previous.raw.slice(0, -1);
 				raw = `\n${raw}`;
 			}

@@ -21,7 +21,7 @@ import type { AgentPort, SessionTransport } from "../lib/client";
 import type { TextPredictionPort } from "../components/shell/PredictiveTextarea";
 import { SessionReplica } from "../lib/client";
 import { reduceNativeView } from "./native-state";
-import { workbenchHttp } from "./legacy-http";
+import { workbenchHttp } from "./http";
 import type { NativeViewState } from "./native-state";
 
 export type NativeCommand = DevNativeCommand;

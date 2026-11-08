@@ -33,12 +33,12 @@ const LOCAL_HOSTNAMES: Record<string, true> = { localhost: true, "127.0.0.1": tr
 export function encodeBase64Url(bytes: Uint8Array): string {
 	let binary = "";
 	for (const byte of bytes) binary += String.fromCharCode(byte);
-	return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function decodeBase64Url(text: string): Uint8Array | null {
 	if (!B64URL_RE.test(text)) return null;
-	const base64 = text.replaceAll("-", "+").replaceAll("_", "/");
+	const base64 = text.replace(/-/g, "+").replace(/_/g, "/");
 	const padded = base64.length % 4 === 0 ? base64 : base64 + "=".repeat(4 - (base64.length % 4));
 	let binary: string;
 	try {

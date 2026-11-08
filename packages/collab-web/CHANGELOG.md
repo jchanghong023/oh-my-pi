@@ -9,7 +9,7 @@
 ### Changed
 
 - Show Dev requirements, stages, materials and shared chat in a compact dark workbench with a mobile materials/chat switch and a native-session model control.
-- Serve the Dev workbench as one locally embedded classic-script build with old-browser API and layout fallbacks, rather than separate modern and legacy frontends.
+- Run the Dev workbench on Firefox 68 native browser capabilities with one embedded build, without runtime polyfills or old-browser layout fallbacks.
 
 ### Fixed
 

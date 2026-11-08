@@ -16,7 +16,6 @@ import { PredictiveTextarea, TextPredictionContext } from "../components/shell/P
 import { WorkbenchClient } from "./client";
 import type { OperationConfirmation } from "./client";
 import { DevConversation } from "./Conversation";
-import "./styles.css";
 
 export const STAGES: readonly { id: DevStage; label: string }[] = [
 	{ id: "business", label: "业务需求" },
@@ -199,32 +198,11 @@ function DocumentTools({
 		if (text === null) return;
 		const request = ++copyRequest.current;
 		try {
-			if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
 			await navigator.clipboard.writeText(text);
 			if (request === copyRequest.current) setCopied(true);
 			return;
 		} catch {
 			if (request !== copyRequest.current) return;
-			const previousFocus = document.activeElement;
-			const field = document.createElement("textarea");
-			field.value = text;
-			field.readOnly = true;
-			field.style.position = "fixed";
-			field.style.left = "-10000px";
-			document.body.appendChild(field);
-			try {
-				field.focus();
-				field.select();
-				if (document.execCommand("copy")) {
-					setCopied(true);
-					return;
-				}
-			} catch {
-				// Browsers without clipboard access still allow manual copying below.
-			} finally {
-				document.body.removeChild(field);
-				if (previousFocus instanceof HTMLElement) previousFocus.focus();
-			}
 			setManualCopy(true);
 		}
 	};

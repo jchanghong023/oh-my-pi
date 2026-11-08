@@ -38,7 +38,7 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	user-select: none;
+	-moz-user-select: none;
 }
 
 .tr-row--user .tr-gutter {
@@ -72,7 +72,6 @@
 .tr-body > .tr-md {
 	align-self: stretch;
 }
-
 
 .tr-row--custom .tr-body {
 	color: var(--fg-muted);
@@ -122,15 +121,15 @@
 }
 
 .tr-chip--err {
-	border-color: color-mix(in oklch, var(--err) 50%, var(--border));
+	border-color: rgba(var(--err-rgb), 0.5);
 	color: var(--err);
-	background: color-mix(in oklch, var(--err) 10%, transparent);
+	background: rgba(var(--err-rgb), 0.1);
 }
 
 .tr-chip--warn {
-	border-color: color-mix(in oklch, var(--warn) 50%, var(--border));
+	border-color: rgba(var(--warn-rgb), 0.5);
 	color: var(--warn);
-	background: color-mix(in oklch, var(--warn) 10%, transparent);
+	background: rgba(var(--warn-rgb), 0.1);
 }
 
 .tr-stop {
@@ -199,7 +198,7 @@
 	margin: 16px 0;
 	color: var(--fg-faint);
 	font-size: 12px;
-	user-select: none;
+	-moz-user-select: none;
 }
 
 .tr-divider::before,
@@ -366,8 +365,7 @@
 	font-size: 12.5px;
 }
 
-/* Table cells need `anywhere` so long URLs/identifiers contribute a shrinkable
- * intrinsic width instead of expanding under the transcript's clipped overflow. */
+/* Emergency wrapping keeps long URLs and identifiers from expanding the table. */
 .tr-md th,
 .tr-md td {
 	padding: 3px 8px;

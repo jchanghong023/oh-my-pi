@@ -48,26 +48,24 @@ function Images({
 					const files = Array.from(event.currentTarget.files ?? []);
 					event.currentTarget.value = "";
 					void Promise.all(
-						files.map(file => {
-							const { promise, resolve, reject } = Promise.withResolvers<ImageContent>();
-							try {
-								if (!file.type.startsWith("image/")) {
-									reject(new Error(`${file.name}: unsupported image type`));
-									return promise;
-								}
-								const reader = new FileReader();
-								reader.onerror = () => reject(new Error(`Cannot read ${file.name}`));
-								reader.onabort = () => reject(new Error(`Reading ${file.name} was cancelled`));
-								reader.onload = () => {
-									const data = String(reader.result);
-									resolve({ type: "image", data: data.slice(data.indexOf(",") + 1), mimeType: file.type });
-								};
-								reader.readAsDataURL(file);
-							} catch (error) {
-								reject(error);
-							}
-							return promise;
-						}),
+						files.map(
+							file =>
+								// FileReader completion is event-driven; a Promise bridges that native lifecycle.
+								new Promise<ImageContent>((resolve, reject) => {
+									if (!file.type.startsWith("image/")) {
+										reject(new Error(`${file.name}: unsupported image type`));
+										return;
+									}
+									const reader = new FileReader();
+									reader.onerror = () => reject(new Error(`Cannot read ${file.name}`));
+									reader.onabort = () => reject(new Error(`Reading ${file.name} was cancelled`));
+									reader.onload = () => {
+										const data = String(reader.result);
+										resolve({ type: "image", data: data.slice(data.indexOf(",") + 1), mimeType: file.type });
+									};
+									reader.readAsDataURL(file);
+								}),
+						),
 					).then(
 						images => onChange([...value, ...images]),
 						error => onError(String(error)),

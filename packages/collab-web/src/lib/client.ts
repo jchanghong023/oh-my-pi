@@ -262,13 +262,15 @@ export class SessionReplica {
 	 * session end) where re-polling from the same cursor is correct.
 	 */
 	fetchTranscript(agentId: string, fromByte: number): Promise<TranscriptResult | null> {
+		// A reply arrives through the socket event lifecycle, not an awaitable browser operation.
 		const reqId = ++this.#reqSeq;
-		const { promise, resolve } = Promise.withResolvers<TranscriptResult | null>();
-		const timer = setTimeout(() => {
-			this.#pendingTranscripts.delete(reqId);
-			resolve(null);
-		}, TRANSCRIPT_TIMEOUT_MS);
-		this.#pendingTranscripts.set(reqId, { resolve, timer });
+		const promise = new Promise<TranscriptResult | null>(resolve => {
+			const timer = setTimeout(() => {
+				this.#pendingTranscripts.delete(reqId);
+				resolve(null);
+			}, TRANSCRIPT_TIMEOUT_MS);
+			this.#pendingTranscripts.set(reqId, { resolve, timer });
+		});
 		this.#socket.send({ t: "fetch-transcript", reqId, agentId, fromByte });
 		return promise;
 	}

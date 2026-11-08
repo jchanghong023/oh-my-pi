@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import * as vm from "node:vm";
 import { parse } from "acorn";
 import {
 	decodeDevWorkbenchAssets,
@@ -69,9 +68,9 @@ test("prepared source payload serves every manifest file with actual digest and 
 	const javascript = await getDevWorkbenchAsset(scriptPath);
 	if (!javascript) throw new Error(`Workbench script missing: ${scriptPath}`);
 	expect(javascript.contentType).toContain("text/javascript");
-	// Script-mode ES5 parsing rejects module imports/exports as well as newer syntax.
+	// One classic script uses the syntax generation available to the native Firefox 68 consumer.
 	expect(() =>
-		parse(new TextDecoder().decode(javascript.bytes), { ecmaVersion: 5, sourceType: "script" }),
+		parse(new TextDecoder().decode(javascript.bytes), { ecmaVersion: 2019, sourceType: "script" }),
 	).not.toThrow();
 	for (const stylesheet of stylesheets) {
 		const stylesheetPath = new URL(stylesheet.attributes.get("href")!, base).pathname;
@@ -81,24 +80,6 @@ test("prepared source payload serves every manifest file with actual digest and 
 	}
 	expect(await getDevWorkbenchAsset("/missing-ui.js")).toBeNull();
 	expect(await getDevWorkbenchAsset("/../../package.json")).toBeNull();
-});
-
-test("delivered legacy script initializes boxed Symbol and Promise without native Symbol", async () => {
-	const script = (await getDevWorkbenchAssetManifest()).files.find(file =>
-		file.contentType.startsWith("text/javascript"),
-	);
-	if (!script) throw new Error("Workbench script missing");
-	const asset = await getDevWorkbenchAsset(script.path);
-	if (!asset) throw new Error("Workbench script missing");
-	const realm = vm.createContext({ Symbol: undefined, Promise: undefined, setTimeout, clearTimeout });
-	try {
-		// The rest of the app needs a DOM; the polyfills execute before it.
-		vm.runInContext(new TextDecoder().decode(asset.bytes), realm, { timeout: 10_000 });
-	} catch {
-		// The browser UI cannot mount in this deliberately DOM-less realm.
-	}
-	expect(vm.runInContext("Symbol('legacy').description", realm)).toBe("legacy");
-	expect(await vm.runInContext("Promise.resolve(2).then(function (value) { return value * 3; })", realm)).toBe(6);
 });
 
 test("isolated corrupt or incomplete generated payloads fail rather than serving a demo", () => {

@@ -1,5 +1,5 @@
 /* Shell styles (sh-*). Token vars only — no raw colors.
- * Layout: glass topbar, then one inset panel (transcript + docked composer)
+ * Layout: solid topbar, then one inset panel (transcript + docked composer)
  * with the agents rail framed beside it on the page background. */
 
 /* ---- app frame ---- */
@@ -108,7 +108,7 @@
 
 .sh-btn:hover:not(:disabled) {
 	border-color: var(--edge-top);
-	background: color-mix(in srgb, var(--bg-overlay) 88%, var(--fg));
+	background: var(--control-hover);
 }
 
 .sh-btn:active:not(:disabled) {
@@ -129,19 +129,19 @@
 
 .sh-btn-primary:hover:not(:disabled) {
 	color: var(--fg-inverse);
-	background: color-mix(in srgb, var(--fg) 86%, transparent);
+	background: rgba(var(--fg-rgb), 0.86);
 	border-color: transparent;
 }
 
 .sh-btn-stop {
 	color: var(--err);
-	background: color-mix(in srgb, var(--err) 12%, transparent);
-	border-color: color-mix(in srgb, var(--err) 30%, transparent);
+	background: rgba(var(--err-rgb), 0.12);
+	border-color: rgba(var(--err-rgb), 0.3);
 }
 
 .sh-btn-stop:hover:not(:disabled) {
-	background: color-mix(in srgb, var(--err) 18%, transparent);
-	border-color: color-mix(in srgb, var(--err) 45%, transparent);
+	background: rgba(var(--err-rgb), 0.18);
+	border-color: rgba(var(--err-rgb), 0.45);
 }
 
 .sh-btn-icon {
@@ -240,7 +240,7 @@
 	font-weight: 500;
 }
 
-/* ---- header (glass) ---- */
+/* ---- header ---- */
 .sh-header {
 	position: relative;
 	z-index: 20;
@@ -251,9 +251,7 @@
 	min-height: var(--topbar-h);
 	padding: 8px 12px 8px 16px;
 	padding-top: calc(8px + env(safe-area-inset-top, 0px));
-	background: color-mix(in srgb, var(--bg) 72%, transparent);
-	backdrop-filter: blur(14px) saturate(160%);
-	-webkit-backdrop-filter: blur(14px) saturate(160%);
+	background: var(--bg);
 }
 
 .sh-header-left {
@@ -452,7 +450,7 @@
 	opacity: 0.55;
 }
 
-.sh-composer-input:focus-visible {
+.sh-composer-input:focus {
 	outline: none;
 }
 
@@ -502,7 +500,7 @@
 
 .sh-ask-option:hover {
 	border-color: var(--border-strong);
-	background: color-mix(in srgb, var(--bg-raised) 92%, var(--fg));
+	background: var(--raised-hover);
 }
 
 .sh-ask-option-checked {
@@ -565,9 +563,7 @@
 	font-size: 12.5px;
 	white-space: nowrap;
 	color: var(--fg);
-	background: var(--glass);
-	backdrop-filter: blur(14px) saturate(160%);
-	-webkit-backdrop-filter: blur(14px) saturate(160%);
+	background: var(--bg-overlay);
 	border: 1px solid var(--border-strong);
 	border-radius: 999px;
 	box-shadow: var(--shadow-overlay);
@@ -599,9 +595,7 @@
 	display: flex;
 	flex-direction: column;
 	gap: 8px;
-	background: var(--glass);
-	backdrop-filter: blur(20px) saturate(170%);
-	-webkit-backdrop-filter: blur(20px) saturate(170%);
+	background: var(--bg-overlay);
 	border: 1px solid var(--border-strong);
 	border-radius: var(--radius-xl);
 	box-shadow: var(--shadow-overlay);
@@ -646,9 +640,7 @@
 	padding: 10px 12px;
 	font-size: 12.5px;
 	color: var(--fg);
-	background: var(--glass);
-	backdrop-filter: blur(16px) saturate(160%);
-	-webkit-backdrop-filter: blur(16px) saturate(160%);
+	background: var(--bg-overlay);
 	border: 1px solid var(--border-strong);
 	border-radius: var(--radius-lg);
 	box-shadow: var(--shadow-overlay);
@@ -801,7 +793,7 @@
 	border-color: var(--edge-top);
 }
 
-.sh-input:focus-visible {
+.sh-input:focus {
 	outline: none;
 }
 
@@ -819,7 +811,7 @@
 	padding: 8px 10px;
 	font-size: 12.5px;
 	color: var(--err);
-	background: color-mix(in srgb, var(--err) 12%, transparent);
+	background: rgba(var(--err-rgb), 0.12);
 	border-radius: var(--radius);
 }
 
@@ -857,9 +849,7 @@
 		max-width: 86vw;
 		margin: 0;
 		padding: 6px;
-		background: var(--glass);
-		backdrop-filter: blur(18px) saturate(160%);
-		-webkit-backdrop-filter: blur(18px) saturate(160%);
+		background: var(--bg-overlay);
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius-xl);
 		box-shadow: var(--rail-mobile-shadow);

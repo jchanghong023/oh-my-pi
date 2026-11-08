@@ -1,10 +1,8 @@
 /* Design tokens — pure-black chassis, one inset panel, alpha hairlines, and
  * one omp accent gradient (cyan → pink). Dark is the default;
  * `[data-theme="light"]` and the prefers-color-scheme fallback flip to light.
- * Raw colors live here, including literal Dev fallbacks for pre-variable engines. */
+ * Raw colors and native RGB channels live here. */
 :root {
-	color-scheme: dark;
-
 	/* surface ramp: page → inset panel → card → raised */
 	--bg: #000;
 	--panel: #09090a;
@@ -32,15 +30,24 @@
 	--ambient-b: rgba(237, 74, 191, 0.06);
 
 	/* omp mark gradient stops (magenta → iris → cyan) */
-	--mark-a: oklch(0.7 0.24 340);
-	--mark-b: oklch(0.62 0.21 295);
-	--mark-c: oklch(0.81 0.14 200);
+	--mark-a: #f84fcc;
+	--mark-b: #9362f4;
+	--mark-c: #00dbe4;
 
 	/* status; green `--live` is reserved for real-time presence */
 	--ok: #3ecf8e;
 	--live: #3ecf8e;
 	--warn: #f5a524;
 	--err: #ff6166;
+	--fg-rgb: 237, 237, 239;
+	--fg-faint-rgb: 108, 108, 116;
+	--accent-rgb: 240, 104, 200;
+	--ok-rgb: 62, 207, 142;
+	--warn-rgb: 245, 165, 36;
+	--err-rgb: 255, 97, 102;
+	--control-hover: #313134;
+	--raised-hover: #202022;
+	--subtle-hover: #1b1b1d;
 
 	/* hairlines: alpha so one value reads on every surface step */
 	--border: rgba(255, 255, 255, 0.07);
@@ -51,8 +58,8 @@
 	--ring-soft: rgba(90, 216, 230, 0.18);
 
 	/* type — system stacks only */
-	--font-ui: "Inter var", "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-	--font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+	--font-ui: "Inter var", "Inter", "Segoe UI", sans-serif;
+	--font-mono: "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 
 	/* radii by role: chip · control · card · panel */
 	--radius-sm: 6px;
@@ -69,531 +76,8 @@
 	--backdrop: rgba(0, 0, 0, 0.55);
 }
 
-/* Dev-only reference palette; ordinary Collab keeps its own theme. */
-.dw-workbench {
-	--bg: #181818;
-	--panel: #181818;
-	--bg-inset: #181818;
-	--bg-raised: #303030;
-	--bg-overlay: #232323;
-	--hover: #363636;
-	--selected: #303030;
-	--fg: #f3f3f3;
-	--fg-muted: #b0b0b0;
-	--fg-faint: #9b9b9b;
-	--border: #353535;
-	--border-strong: #555555;
-	--accent: #a8bff3;
-	--accent-solid: #4266c1;
-	--accent-muted: #253d73;
-	--ring: #a8bff3;
-	--ring-soft: rgba(66, 102, 193, 0.1333);
-	--warn: #e9a461;
-	--err: #efaaa5;
-	--ok: #8ecda1;
-}
-
-/* Universal Dev literal palette. Old engines ignore var() declarations in the
- * component sheets, so these scoped values must not depend on custom properties.
- * Keep these literals aligned with the Dev tokens above; Collab is unaffected. */
-.dw-document body,
-.dw-workbench {
-	color: #f3f3f3;
-	background: #181818;
-	font:
-		14px/1.6 "Inter var",
-		"Inter",
-		ui-sans-serif,
-		system-ui,
-		-apple-system,
-		"Segoe UI",
-		Arial,
-		sans-serif;
-}
-.dw-workbench button,
-.dw-workbench input,
-.dw-workbench select,
-.dw-workbench textarea {
-	color: #f3f3f3;
-	background-color: #303030;
-	border: 1px solid #555555;
-	border-radius: 6px;
-}
-.dw-workbench input,
-.dw-workbench select,
-.dw-workbench textarea {
-	background-color: #181818;
-}
-.dw-workbench a,
-.dw-workbench .dw-participants > button,
-.dw-workbench .dw-model-picker,
-.dw-workbench .tr-badge,
-.dw-workbench .sh-ask-option-marker,
-.dw-workbench .sh-queued,
-.dw-workbench .tv-pattern,
-.dw-workbench .tv-cmd-prompt {
-	color: #a8bff3;
-}
-.dw-workbench .dw-sidebar,
-.dw-workbench .dw-topbar,
-.dw-workbench .dw-conversation,
-.dw-workbench .dw-composer-wrap,
-.dw-workbench .dw-document-panel {
-	background: #181818;
-	border-color: #353535;
-}
-.dw-workbench .dw-document-panel > header,
-.dw-workbench .dw-document-tabs,
-.dw-workbench .dw-document-footer,
-.dw-workbench .dw-secondary-operations {
-	border-color: #353535;
-}
-.dw-workbench .dw-document-footer {
-	background: #232323;
-}
-.dw-workbench .dw-journey,
-.dw-workbench .dw-workflow-controls,
-.dw-workbench .dw-modal,
-.dw-workbench .ag-drawer,
-.dw-workbench .sh-toast {
-	color: #f3f3f3;
-	background: #232323;
-	border-color: #555555;
-	border-radius: 12px;
-}
-.dw-workbench .dw-new-request,
-.dw-workbench .dw-candidate,
-.dw-workbench .dw-result,
-.dw-workbench .dw-native-ui,
-.dw-workbench .dw-error,
-.dw-workbench .dw-warning,
-.dw-workbench .dw-chat-badge,
-.dw-workbench .dw-status-badge,
-.dw-workbench .sh-btn,
-.dw-workbench .sh-ask-option,
-.dw-workbench .sh-chip,
-.dw-workbench .ag-btn,
-.dw-workbench .ag-heading-count,
-.dw-workbench .tr-chip,
-.dw-workbench .tr-earlier,
-.dw-workbench .tr-md code,
-.dw-workbench .tr-md th,
-.dw-workbench .tv-card,
-.dw-workbench .tv-badge,
-.dw-workbench .tv-note,
-.dw-workbench .dw-list-head small,
-.dw-workbench .dw-list-heading small {
-	background: #303030;
-	border-color: #555555;
-	border-radius: 6px;
-}
-.dw-workbench .dw-search,
-.dw-workbench .dw-modal input:not([type="checkbox"]),
-.dw-workbench .dw-modal textarea,
-.dw-workbench .dw-modal select,
-.dw-workbench .dw-native-ui textarea,
-.dw-workbench .ag-chat-input,
-.dw-workbench .tr-md pre,
-.dw-workbench .dw-modal pre,
-.dw-workbench .tv-pre,
-.dw-workbench .tv-diff {
-	background: #181818;
-	border-color: #555555;
-	border-radius: 6px;
-}
-.dw-workbench .dw-composer-wrap .sh-composer-inner {
-	background: #363636;
-	border-color: #555555;
-}
-.dw-workbench .dw-search input,
-.dw-workbench .dw-composer-wrap .sh-composer-input,
-.dw-workbench .dw-requirement-row > button:first-child,
-.dw-workbench .dw-request-delete,
-.dw-workbench .dw-filters button,
-.dw-workbench .dw-document-tabs button,
-.dw-workbench .dw-topbar button,
-.dw-workbench .dw-workflow-controls button,
-.dw-workbench .dw-candidate button,
-.dw-workbench .dw-modal button,
-.dw-workbench .dw-native-ui button,
-.dw-workbench .dw-empty button,
-.dw-workbench .dw-composer-wrap > button,
-.dw-workbench .dw-model-picker,
-.dw-workbench .dw-stage,
-.dw-workbench .ag-row,
-.dw-workbench .ag-iconbtn,
-.dw-workbench .tr-think-head,
-.dw-workbench .tv-head,
-.dw-workbench .tv-expand,
-.dw-workbench .sh-message-prediction-choice {
-	color: #f3f3f3;
-	background-color: transparent;
-}
-.dw-workbench .dw-requirement-row > button:first-child,
-.dw-workbench .dw-filters button,
-.dw-workbench .dw-model-picker,
-.dw-workbench .ag-row,
-.dw-workbench .ag-iconbtn,
-.dw-workbench .tr-think-head,
-.dw-workbench .tv-head,
-.dw-workbench .tv-expand,
-.dw-workbench .sh-message-prediction-choice {
-	border-color: transparent;
-}
-.dw-workbench .dw-workflow-controls button,
-.dw-workbench .dw-candidate button,
-.dw-workbench .dw-modal button,
-.dw-workbench .dw-native-ui button,
-.dw-workbench .dw-empty button,
-.dw-workbench .dw-composer-wrap > button {
-	background-color: #303030;
-}
-.dw-workbench .dw-new-request:hover,
-.dw-workbench .dw-requirement-row > button[aria-pressed="true"]:first-child,
-.dw-workbench .dw-view-notice,
-.dw-workbench .dw-workflow-controls button[data-action="next"],
-.dw-workbench .dw-modal button[type="submit"],
-.dw-workbench .dw-composer-wrap .dw-composer .sh-btn-primary,
-.dw-workbench .sh-ask-option-checked,
-.dw-workbench .tr-badge,
-.dw-workbench .sh-queued,
-.dw-workbench .tv-badge--accent,
-.dw-workbench .tv-agent-link {
-	color: #f3f3f3;
-	background: #253d73;
-	border-color: #a8bff3;
-}
-.dw-workbench .dw-requirement-row > button:first-child:hover,
-.dw-workbench .dw-filters button[aria-pressed="true"],
-.dw-workbench .dw-mobile-switch,
-.dw-workbench .dw-mobile-switch button[aria-pressed="true"],
-.dw-workbench .ag-row:hover,
-.dw-workbench .ag-row--selected,
-.dw-workbench .ag-btn:hover,
-.dw-workbench .sh-btn:hover:not(:disabled),
-.dw-workbench .sh-message-prediction-choice[aria-pressed="true"],
-.dw-workbench .sh-message-prediction-choice:hover,
-.dw-workbench .tv-head:hover {
-	background: #363636;
-	color: #f3f3f3;
-}
-.dw-workbench .dw-requirement-row > button[aria-pressed="true"]:first-child {
-	background: #253d73;
-	border-color: #4266c1;
-}
-.dw-workbench .dw-requirement-row > button[aria-pressed="true"]:first-child .dw-requirement-status,
-.dw-workbench .dw-view-notice {
-	color: #a8bff3;
-}
-.dw-workbench .dw-transcript .tr-row--user .tr-body {
-	background: #303030;
-	border-color: #353535;
-}
-.dw-workbench .dw-brand-mark,
-.dw-workbench .dw-stage-mark,
-.dw-workbench .dw-participant-avatar {
-	background: #232323;
-	color: #a8bff3;
-	border-color: #555555;
-}
-.dw-workbench .dw-stage[aria-current="step"] .dw-stage-mark {
-	color: #fff;
-	background: #4266c1;
-	border-color: #4266c1;
-	box-shadow: 0 0 0 4px rgba(66, 102, 193, 0.1333);
-}
-.dw-workbench .dw-stage[aria-current="step"] .dw-stage-name,
-.dw-workbench .dw-stage[aria-current="step"] small,
-.dw-workbench .dw-document-tabs button[aria-pressed="true"] {
-	color: #a8bff3;
-	border-color: #a8bff3;
-}
-.dw-workbench .dw-stage[data-confirmed="true"]:not([aria-current="step"]) .dw-stage-mark {
-	color: #a8bff3;
-	border-color: #4266c1;
-	background: #253d73;
-}
-.dw-workbench .dw-stage[data-confirmed="true"]::after {
-	background: #4266c1;
-}
-.dw-workbench .dw-stage:hover {
-	background: #303030;
-}
-.dw-workbench .dw-stage[aria-pressed="true"] {
-	background: rgba(255, 255, 255, 0.02);
-}
-.dw-workbench .dw-brand strong,
-.dw-workbench .dw-stage-name,
-.dw-workbench .dw-model-label,
-.dw-workbench .dw-chat-title h2,
-.dw-workbench .dw-empty strong,
-.dw-workbench .dw-empty h1,
-.dw-workbench .dw-empty h2,
-.dw-workbench .tr-root,
-.dw-workbench .dw-material .tr-md h1,
-.dw-workbench .dw-material .tr-md h2,
-.dw-workbench .dw-material .tr-md h3,
-.dw-workbench .dw-material .tr-md strong,
-.dw-workbench .ag-stat-value,
-.dw-workbench .tv-path,
-.dw-workbench .tv-kv-val {
-	color: #f3f3f3;
-}
-.dw-workbench .dw-sidebar-label,
-.dw-workbench .dw-requirement-id,
-.dw-workbench .dw-requirement-status,
-.dw-workbench .dw-topbar,
-.dw-workbench .dw-list-head,
-.dw-workbench .dw-list-heading,
-.dw-workbench .dw-metadata,
-.dw-workbench .dw-heading-id,
-.dw-workbench .dw-readonly-hint,
-.dw-workbench .dw-chat-header p,
-.dw-workbench .dw-chat-badge,
-.dw-workbench .dw-document-panel > header small,
-.dw-workbench .dw-document-footer,
-.dw-workbench .dw-material,
-.dw-workbench .dw-participants,
-.dw-workbench .dw-participant-role,
-.dw-workbench .dw-session-label,
-.dw-workbench .dw-stage small,
-.dw-workbench .dw-model-effort,
-.dw-workbench .dw-native-ui small,
-.dw-workbench .dw-native-widget,
-.dw-workbench .dw-composer-wrap > p,
-.dw-workbench .dw-composer-footnote,
-.dw-workbench .dw-composer-hint,
-.dw-workbench .dw-empty,
-.dw-workbench .dw-operation,
-.dw-workbench .dw-facts dt,
-.dw-workbench .dw-modal p,
-.dw-workbench .dw-modal label,
-.dw-workbench .dw-workflow-controls p,
-.dw-workbench .tr-gutter,
-.dw-workbench .tr-marker,
-.dw-workbench .tr-think-head,
-.dw-workbench .tr-think-body,
-.dw-workbench .tr-divider,
-.dw-workbench .tr-shimmer,
-.dw-workbench .tr-chip,
-.dw-workbench .tr-md blockquote,
-.dw-workbench .ag-heading,
-.dw-workbench .ag-heading-count,
-.dw-workbench .ag-row-meta,
-.dw-workbench .ag-row-activity,
-.dw-workbench .ag-stats,
-.dw-workbench .ag-stat-label,
-.dw-workbench .ag-chip,
-.dw-workbench .ag-empty,
-.dw-workbench .tv-name,
-.dw-workbench .tv-sum,
-.dw-workbench .tv-muted,
-.dw-workbench .tv-faint,
-.dw-workbench .tv-intent,
-.dw-workbench .tv-lines,
-.dw-workbench .tv-partial,
-.dw-workbench .tv-kv-key,
-.dw-workbench .tv-out-title,
-.dw-workbench .tv-cell-title,
-.dw-workbench .tv-row-key,
-.dw-workbench .tv-diff-row--hunk,
-.dw-workbench .tv-diff-row--gap,
-.dw-workbench .sh-ask-option-description,
-.dw-workbench .sh-message-prediction-hint,
-.dw-workbench .sh-word-prediction {
-	color: #b0b0b0;
-}
-.dw-workbench .dw-error,
-.dw-workbench .dw-request-delete:hover,
-.dw-workbench .tr-stop-msg,
-.dw-workbench .tr-chip--err,
-.dw-workbench .ag-fetch-error,
-.dw-workbench .ag-btn--danger,
-.dw-workbench .ag-chip--aborted,
-.dw-workbench .tv-err-text,
-.dw-workbench .tv-pre--error,
-.dw-workbench .tv-note--err,
-.dw-workbench .tv-badge--err,
-.dw-workbench .tv-diff-row--del,
-.dw-workbench .sh-btn-stop {
-	color: #efaaa5;
-	border-color: #905c58;
-	background-color: #392624;
-}
-.dw-workbench .dw-warning,
-.dw-workbench .tr-chip--warn,
-.dw-workbench .ag-chip--parked,
-.dw-workbench .tv-warn-text,
-.dw-workbench .tv-note--warn,
-.dw-workbench .tv-badge--warn {
-	color: #e9a461;
-	border-color: #8b633c;
-	background-color: #382d22;
-}
-.dw-workbench .ag-chip--running,
-.dw-workbench .tv-ok-text,
-.dw-workbench .tv-note--ok,
-.dw-workbench .tv-badge--ok,
-.dw-workbench .tv-diff-row--add {
-	color: #8ecda1;
-	border-color: #51775b;
-	background-color: #25332a;
-}
-.dw-workbench .dw-status-badge[data-tone="green"],
-.dw-workbench .dw-status-badge[data-tone="success"] {
-	color: #8ecda1;
-	background: #25332a;
-}
-.dw-workbench .dw-status-badge[data-tone="amber"],
-.dw-workbench .dw-status-badge[data-tone="warning"] {
-	color: #e9a461;
-	background: #382d22;
-}
-.dw-workbench .dw-status-badge[data-tone="red"],
-.dw-workbench .dw-status-badge[data-tone="error"] {
-	color: #efaaa5;
-	background: #392624;
-}
-.dw-workbench .dw-status-badge[data-tone="blue"] {
-	color: #a8bff3;
-	background: #253d73;
-}
-.dw-workbench .dw-modal-backdrop,
-.dw-workbench .ag-drawer-backdrop {
-	background: rgba(0, 0, 0, 0.65);
-}
-.dw-workbench .dw-stage::after,
-.dw-workbench .tr-divider::before,
-.dw-workbench .tr-divider::after,
-.dw-workbench .tr-md hr {
-	background: #353535;
-}
-.dw-workbench .ag-dot,
-.dw-workbench .tv-status--pending {
-	background: #9b9b9b;
-}
-.dw-workbench .dw-stage[aria-pressed="true"]::before {
-	background: #a8bff3;
-}
-.dw-workbench .ag-dot--running,
-.dw-workbench .tv-status--ok {
-	background: #8ecda1;
-}
-.dw-workbench .ag-dot--parked,
-.dw-workbench .ag-gauge-fill--warn {
-	background: #e9a461;
-}
-.dw-workbench .ag-dot--aborted,
-.dw-workbench .tv-status--err {
-	background: #efaaa5;
-}
-.dw-workbench .ag-gauge {
-	background: #555555;
-}
-.dw-workbench .ag-gauge-fill {
-	background: #a8bff3;
-}
-.dw-workbench .tr-md th,
-.dw-workbench .tr-md td,
-.dw-workbench .tr-msg-img,
-.dw-workbench .tv-img {
-	border-color: #555555;
-}
-/* Surface-specific edges/radii retain the existing Dev visual hierarchy. */
-.dw-workbench .dw-journey,
-.dw-workbench .dw-workflow-controls,
-.dw-workbench .dw-result,
-.dw-workbench .tr-md code,
-.dw-workbench .tr-md pre,
-.dw-workbench .tr-md th,
-.dw-workbench .tr-md td,
-.dw-workbench .tv-card {
-	border-color: #353535;
-}
-.dw-workbench .dw-new-request {
-	background: #232323;
-	border-color: #353535;
-	border-radius: 8px;
-}
-.dw-workbench .dw-workflow-controls {
-	border-radius: 9px;
-}
-.dw-workbench .dw-stage-mark {
-	color: #b0b0b0;
-}
-.dw-workbench .dw-brand-mark {
-	border-color: #a8bff3;
-}
-.dw-workbench .dw-participant-avatar {
-	background: #253d73;
-}
-.dw-workbench .dw-error,
-.dw-workbench .dw-warning {
-	background: #303030;
-	border-color: #555555;
-}
-.dw-workbench .dw-requirement-group-heading,
-.dw-workbench .dw-requirement-meta,
-.dw-workbench .dw-participant-summary,
-.dw-workbench .dw-read-only,
-.dw-workbench .dw-document-note,
-.dw-workbench .dw-action-status,
-.dw-workbench .dw-secondary-operations,
-.dw-workbench .dw-secondary-operations button,
-.dw-workbench .dw-secondary-operations summary {
-	color: #9b9b9b;
-}
-.dw-workbench .dw-material .tr-md {
-	color: #e4e4e4;
-}
-.dw-workbench .dw-icon-button,
-.dw-workbench .dw-empty-icon,
-.dw-workbench .dw-mobile-switch {
-	background: #303030;
-	border-color: #353535;
-}
-.dw-workbench .dw-mobile-switch button[aria-pressed="true"] {
-	background: #363636;
-	color: #f3f3f3;
-}
-.dw-workbench .dw-stage-actions .dw-stage-primary:not(:disabled) {
-	background: #4266c1;
-	border-color: #4266c1;
-	color: #fff;
-}
-.dw-document .dw-workbench :focus {
-	outline: 2px solid #a8bff3;
-	outline-offset: 2px;
-}
-.dw-workbench input:-moz-placeholder,
-.dw-workbench textarea:-moz-placeholder {
-	color: #9b9b9b;
-}
-.dw-workbench input::-moz-placeholder,
-.dw-workbench textarea::-moz-placeholder {
-	color: #9b9b9b;
-	opacity: 1;
-}
-.dw-workbench input::-webkit-input-placeholder,
-.dw-workbench textarea::-webkit-input-placeholder {
-	color: #9b9b9b;
-}
-.dw-document ::selection {
-	background: #253d73;
-	color: #f3f3f3;
-}
-.dw-document ::-moz-selection {
-	background: #253d73;
-	color: #f3f3f3;
-}
-.dw-document ::-webkit-scrollbar-thumb {
-	background: #555555;
-}
-
 /* Light theme — explicit override (toggle writes data-theme="light"). */
 [data-theme="light"] {
-	color-scheme: light;
-
 	--bg: #f2f2f3;
 	--panel: #fff;
 	--bg-raised: #fff;
@@ -619,6 +103,15 @@
 	--live: #12a36b;
 	--warn: #c77c02;
 	--err: #dc3a40;
+	--fg-rgb: 21, 21, 24;
+	--fg-faint-rgb: 139, 139, 148;
+	--accent-rgb: 196, 37, 150;
+	--ok-rgb: 18, 163, 107;
+	--warn-rgb: 199, 124, 2;
+	--err-rgb: 220, 58, 64;
+	--control-hover: #e3e3e3;
+	--raised-hover: #ececed;
+	--subtle-hover: #f1f1f1;
 
 	--border: rgba(0, 0, 0, 0.08);
 	--border-strong: rgba(0, 0, 0, 0.14);
@@ -636,8 +129,6 @@
 /* Light theme — system fallback when no explicit preference is stored. */
 @media (prefers-color-scheme: light) {
 	:root:not([data-theme]) {
-		color-scheme: light;
-
 		--bg: #f2f2f3;
 		--panel: #fff;
 		--bg-raised: #fff;
@@ -663,6 +154,15 @@
 		--live: #12a36b;
 		--warn: #c77c02;
 		--err: #dc3a40;
+		--fg-rgb: 21, 21, 24;
+		--fg-faint-rgb: 139, 139, 148;
+		--accent-rgb: 196, 37, 150;
+		--ok-rgb: 18, 163, 107;
+		--warn-rgb: 199, 124, 2;
+		--err-rgb: 220, 58, 64;
+		--control-hover: #e3e3e3;
+		--raised-hover: #ececed;
+		--subtle-hover: #f1f1f1;
 
 		--border: rgba(0, 0, 0, 0.08);
 		--border-strong: rgba(0, 0, 0, 0.14);
