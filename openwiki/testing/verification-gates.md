@@ -11,10 +11,6 @@ sources:
     resource: repo://openspec/specs/fork-verification-gates/spec.md
   - id: openwiki-source-5b54a58d1b51cd490b0e7162
     resource: repo://package.json
-  - id: openwiki-source-704c316d93e9233b510b8b19
-    resource: repo://packages/coding-agent/test/modes/zcode-permissions.e2e.ts
-  - id: openwiki-source-e22b712b1ea6819c51498049
-    resource: repo://packages/coding-agent/test/modes/zcode-provider-config.test.ts
   - id: openwiki-source-cc7568176733f1a616b77baa
     resource: repo://packages/coding-agent/test/spec-driven/controller.test.ts
   - id: openwiki-source-6a1e00f633f30a33142dda91
@@ -122,7 +118,6 @@ fulltest 将脚本、静态检查和测试绑定到同一 post-native source ide
 | --- | --- | --- |
 | 门禁选择、超时、进程回收、报告 | `scripts/test-gate-delta.test.ts`、`test-gate-runtime.test.ts`、`test-reporting.test.ts` | 对应 `fulltest.test.ts`、`slowtest.test.ts` 和获授权的真实入口；短任务自测不替代真实门禁。 |
 | Dev/OpenSpec 编排与资源 | `test/spec-driven/controller.test.ts`、`resources.test.ts` | `process.e2e.test.ts`、资源进程测试及相关 `tui-*.e2e.test.ts`，覆盖真实入口、失败和生命周期。 |
-| ZCode 协议、权限、模型配置 | `test/modes/zcode-commands.test.ts`、`zcode-provider-config.test.ts` | 对应 `zcode-process-*.test.ts`、`zcode-permissions.e2e.ts`、`zcode-spec-driven.e2e.ts`；见 [ZCode app-server](../integrations/zcode-app-server.md)。 |
 | Knowledge 文档索引 | 相关消费者测试及 `pi-knowledge`、`pi-natives` fork Rust 测试 | 跨语言或配置变更还需相应进程和索引回归；见 [Knowledge 文档索引](../concepts/knowledge-document-index.md)。 |
 | TUI 输入、状态和焦点 | 相应组件/控制器测试 | 相关 spec-driven TUI PTY 场景和隔离 dev-TUI 冒烟，保留取消、恢复、焦点等不同边界。 |
 

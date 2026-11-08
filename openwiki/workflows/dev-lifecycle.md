@@ -7,8 +7,6 @@ verified:
   - by: openwiki/0.0.0-unknown
     at: 2026-11-01T04:03:23.095Z
 sources:
-  - id: openwiki-source-50d4d78ffbb852b9ba6cbf68
-    resource: repo://packages/coding-agent/src/modes/zcode/spec-driven.ts
   - id: openwiki-source-3822569445fe0ae24a50d7e7
     resource: repo://packages/coding-agent/src/prompts/spec-driven-communication.md
   - id: openwiki-source-0f96158c9cd5b33cc751f6cc
@@ -101,7 +99,6 @@ Team 仅在**进入方案阶段**且配置启用时实际运行；讨论须完�
 
 验收先持久化全部正式材料的版本和原始决定，再调用原生 `openspec archive`，由其负责规格同步、验证及归档。进度和实际副作用被记录；失败后重试只继续剩余收尾，且再次检查已验收字节。可根据版本寻找唯一已完成归档，无法唯一识别则阻塞；清理遗留路径须先明确处理。同步、归档或未恢复的实际副作用发生后禁止回退，持久化失败也不能假装外部副作用已回滚。
 
-ZCode 的桥接层观察控制器并在 `.omp/spec-sessions/<runId>/zcode.json` 保存查询索引和版本身份，不拥有材料正文。冷查询不创建或恢复控制器；历史视图只读，文件版本不再匹配时不能从索引恢复旧正文。实时操作绑定 run、generation、phase 和材料摘要，过期绑定被拒绝。参见 [ZCode App Server](../integrations/zcode-app-server.md)。
 
 ## 验证范围
 

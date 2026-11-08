@@ -58,8 +58,8 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 
 - 三层门禁及根脚本直接调用既有 Bun／Cargo 检查、构建与测试原语，保持平台限制和报告语义；fastcheck 不运行测试，保留既有工具及增量编译缓存，但不缓存门禁或完整命令结果以免执行。不建立 fork 专用 Bazel 验证图或自建结果缓存框架。上游原有显式目标 Bazel 工具及其 CI 原生产物不属于此门禁改动。
 - 日常门禁包含真实 Rust 编译和 Clippy：`check:rs` 依次运行 `cargo fmt --all -- --check`、`cargo build --workspace`（保留既有 vendored fork 排除）和与 `lint:rs` 相同的 workspace Clippy（保留既有第三方排除、`--no-deps` 与 `-D warnings`）。编译必须生成并链接产物，不能以 Clippy／`cargo check` 代替；fastcheck 及复用它的 fulltest／slowtest 均检查 Rust 编译器与 Clippy 警告并以非零退出阻断。固定工具链、显式 `lint:rs`／`fix:rs` 入口、其他检查和测试范围及预算保持不变。
-- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 Dev/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、ZCode app-server 权限及模型配置、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；Dev 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
-- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。旧 Dev TUI／ZCode 专属消费者 MUST 由新工作台网页及原生消费者替换，不保留 Dev↔ZCode 接入验收义务；普通 ZCode 会话、权限、模型配置和动态 workflow 等覆盖保持。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留；冷启动、准备失败／EOF、新流程冷读、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等有效边界不得删减。四个开发角色的 missing／malformed／unknown 材料失败矩阵及现有平台条件转由工作台控制器、材料和公开网页／进程消费者承接，每例 provider／fixture 隔离不得共享。仅删除固定三行、旧模式 toggle、直接跳过业务检查、finish-business、执行 Next 终结、drop 留文件和旧状态恢复等已废止产品断言，不新增 skip、放宽时限或删减有效需求。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
+- 日常 `bun run test`、`test:ts`、`test:rs`、fulltest 和 slowtest 测试 fork 自有功能；父仓静态检查与测试发现排除 `vendor/openwiki` 子模块，构建和运行仍使用真实 fork。保留 Dev/OpenSpec 资源与原生编排、Team/Goal（包括取消与持久化）、Knowledge 索引、OpenWiki、company/Ascend/CodeAgent、offline/代理/统一数据根、共享 Skills、compact/中文 TUI 与状态栏、审批模式/个人命令/默认值及 fork 分发消费者边界；Dev 真实 E2E 不得省略。`/wt` 新策略由消费者测试覆盖，不因此运行全部 task/worktree 或 pi-vcs。
+- 通用 Browser/upload/relay/CMUX/Tern、shell/VCS/builtins、通用 task/worktree、独立 RPC/ACP/SDK、全 provider 矩阵、基础 TUI 库与旁支包的完整回归不纳入日常范围；纯上游继承或仅 bugfix 专项即使记载于规格也不因此纳入。上游测试文件与已有显式手动入口保留。旧 Dev TUI 专属消费者 MUST 由新工作台网页及原生消费者替换。真实 PTY 中普通 TUI 的错误、状态和焦点边界保留；冷启动、准备失败／EOF、新流程冷读、owner／profile 隔离、权限、取消、Windows 句柄和公开打包资源等有效边界不得删减。四个开发角色的 missing／malformed／unknown 材料失败矩阵及现有平台条件转由工作台控制器、材料和公开网页／进程消费者承接，每例 provider／fixture 隔离不得共享。仅删除固定三行、旧模式 toggle、直接跳过业务检查、finish-business、执行 Next 终结、drop 留文件和旧状态恢复等已废止产品断言，不新增 skip、放宽时限或删减有效需求。本次 tui-presentation 允许清退的旧 compact 专属测试、fixture 和断言仍按原边界处理；上游、clean、detailed、共享布局或其他 fork 功能不在清退范围。
 - 默认 fulltest 的普通 Bun 测试在 fork 白名单内以原生 `--changed` 根据变更及依赖选测；缺少合格基线或工具不支持时回退完整白名单，不能回退整个上游测试集。新 compact 的显示差异纳入普通 Bun 消费者范围，不再设始终完整运行的 compact 专属通道。显式选测及 `local`／`local-ts` 须如实报告范围，宿主 `CI` 或 `OMP_TEST_SHARD` 不改变本地范围；保留文件隔离、TSX 和共享并发预算。仓库脚本自测只在对应脚本或门禁模块本轮变化时选入，独立 `test:scripts` 保留。
 - Dev 工作台 source 测试 `packages/coding-agent/test/dev-workbench/` MUST 纳入 fork 白名单；`browser.e2e.test.ts` 与 `process.e2e.test.ts` 属于既有启动敏感组，不建立绕过共享预算的专属通道。collab-web 仅精确新增 `test/dev-workbench.test.tsx`、`test/composer.test.tsx`、`test/transcript.test.tsx`、`test/tool-view.test.tsx`、`test/markdown.test.tsx`，native 仅精确新增 `packages/natives/test/dev-workbench-vcs.test.ts`；不因此纳入整个 collab-web 或通用 VCS 套件。测试发现、文件计数、空选择探针和报告 MUST 同时识别 `.test.tsx`。
 - Bun fork 套件版本 MUST 使用 `suiteRevision: 3`；完整基线与计时提示资格须匹配新消费者范围，旧版本完整报告不作为新范围完整证据。affected、失败及未完成报告的原语义不变。
@@ -90,7 +90,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 - native 生成后静态检查与测试按依赖安全调度：Rust 测试等待 Rust 静态检查完成；普通 Bun、Dev 工作台公开 process／browser 及保留的普通 TUI／RPC goal 启动敏感组尽早并行启动，各组按实测耗时长任务优先，不再让启动敏感长测试等待整个普通队列结束。时钟、watchdog、未知脚本和共享写入者的仓库自测须先隔离执行；明确允许的纯夹具脚本可在预留容量内最多两个并行，与重负载阶段重叠。移除独立 `test/compact_display` 调度及其专属环境／资源分配；仍适用的显示消费者测试随普通组或已有启动敏感组执行，共享原有 CPU 预算。全部静态、普通、启动敏感、Rust、仓库脚本及其余重负载工作结束后运行独立隔离的普通 TUI smoke。小预算机器串行，先完成静态检查，再优先运行启动敏感长测试。启动敏感测试文件内串行，保持各自独立的 HOME、工作区、端口及清理，不扩大用例时限或弱化业务断言。fastcheck 保留独立的 360 秒非编译预算；保留既有 target、profile、features 与 flags，不杀其他 Agent 的 Cargo 进程或放宽时限。
 - 测试运行器按当前可用核心数动态限制并发，任务不足时进一步缩小。Windows 本机 TS（包括初始完整轮、无合格计时提示及 fulltest 短任务池）、启动敏感测试和 Rust Nextest 均最多 `min(28, 当前可用核心数, 可运行任务数)`；Linux 等其他平台维持同一上限。Bun 的 chunk 池与每个 chunk 的文件 worker 共同分配预算，不能相乘后越过上限；显式配置仍可降低并发。fulltest 为静态检查和独立脚本预留容量，普通 Bun、启动敏感 Bun 与 Rust 测试池共享剩余 CPU 预算：普通 Bun 与 Rust 两端都有工作时，短 Rust 阶段最多分配 4 个 worker；并行的启动敏感阶段最多分配 4 个 worker，其余分配给普通 Bun。只有启动敏感阶段有工作时可使用剩余容量。没有选中 Rust 工作时不得继续为其预留测试 worker。容量不足时串行运行重负载。后置普通 TUI smoke 最多使用三个 PTY worker，仍受继承的外层额度约束。`--full` 同样受高成本 integration／E2E 子限制约束；调度不改变测试覆盖、隔离、超时、时间预算或计费。
 - fulltest MUST 将可用实测耗时最长的分块优先启动。排序提示可使用最近七天内同平台、架构、Bun 版本及 `suiteRevision: 3` 的 `fulltest: fork feature suites` 运行中已经完成的分块，即使整轮失败、部分完成或被中断；优先读取独立 producer 记录，每个精确分块取最新、有效且无歧义的实际命令墙钟耗时。当前运行、未完成分块、缺失报告、非法耗时或有歧义的同次测量不得提供提示；提示缺失不阻止必需工作，未知分块保留稳定顺序。允许历史报告来自不同的有效 Git 提交，但只有 label 与预算／报告参数以外的 argv 精确匹配的原分块才能复用，不拆分文件耗时或跨分块重组。历史耗时仅用于排序，不是测试结果缓存，不写成本轮新执行，也不改变分片、超时及结果合同；失败或未完成运行仍不能成为受影响选测的完整成功基线。
-- 本地高成本 integration／E2E chunk（包括按路径归入的 ZCode 真实 process 测试及 Dev 范围 Git 发布消费者 `test/dev-workbench/git.test.ts`）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
+- 本地高成本 integration／E2E chunk（包括 Dev 范围 Git 发布与撤销消费者 `test/dev-workbench/git.test.ts`、`test/dev-workbench/cancel.test.ts`）同时运行不得超过 4 个，且仍受上述 Bun 测试并发上限约束；达到此子限制时，空余并发 MUST 继续调度其他可运行工作，不得因等待高成本 chunk 而闲置，不因此增加普通全局并发。此子限制不改变超时、断言、覆盖及结果合同。
 - Knowledge CLI 的既有真实消费者场景可在单个测试文件内最多两个并行，并遵守调用方单槽预算。每个场景须独立拥有 provider、查询状态、观测、子进程、配置、工作区及清理；只可共享只读的预备索引字节，再复制为各自的数据库／WAL，不共享可变应用状态或 CLI 进程。既有全部用例、分页正文、控制字符、错误、移除索引和真实至少 500ms 对外等待断言保持，不以减少矩阵或跳过实际启动加速。
 - 门禁只以轻量 Git 查询记录本轮开始时的 HEAD 和工作区状态，不遍历、读取或哈希全仓文件及子模块源码，不维护源码指纹、阶段快照或对应环境参数／报告字段。运行期间文件、未跟踪临时文件或 HEAD 变化 MUST NOT 触发整轮失败、取消或自动重跑，也不要求为本机门禁先提交或清空工作区。native 生成仍先于静态检查和测试读取者；版本记录不作为内容未变化的证明，受影响测试选择与实际失败报告保持独立。
 - Windows 测试子进程的 PATH 排除 WindowsApps 执行占位程序，复用已安装的真实 Python；Python 夹具的 UTF-8 标准流协议不依赖宿主 ANSI 代码页。环境覆盖遵循 Windows 变量名大小写不敏感语义，不修改系统 PATH 或宿主配置。测试使用隔离应用配置、HOME 和凭据，不读取用户真实配置。
@@ -124,7 +124,7 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 
 #### Scenario: Dev 工作台取代旧专属消费者
 
-- **WHEN** 清退旧 Dev TUI／ZCode 验收或规划新工作台测试
+- **WHEN** 清退旧 Dev TUI 验收或规划新工作台测试
 - **THEN** 按下表保留有效合同，不用源码字符串、文案回显、静态页面或接线存在代替行为证据：
 
 | 有效合同 | 对应新消费者 |
@@ -134,9 +134,8 @@ OMP MUST 按各入口规定范围、预算、Git 版本记录与失败汇总执�
 | 八阶段、导入零对话、人工决定、范围 Git／PR、完整撤销、合入后自身记录限制与修复 | `test/dev-workbench/{records,git,cancel,host,server,cli}.test.ts`、`browser.e2e.test.ts`、`process.e2e.test.ts` 及新增 native VCS 消费者 |
 | 全部原生问答／审批、附件／草稿／队列、迟到事件、断线不停止及重连不重放、HTTP／WS offline Collab | `test/dev-workbench/{host,server,collab}.test.ts`、真实浏览器与精确选入的共享 TSX 组件消费者 |
 | 普通 TUI 输入／焦点／菜单／compact／Team／Goal 与双启动入口 | 保留的混合普通 TUI 消费者及原生 TUI PTY smoke；双启动入口另由启动敏感组的工作台 process 消费者覆盖 |
-| 普通 ZCode 保留且不再开放 Dev 路由／投影 | 既有 `test/modes/zcode-{commands,sessions,projection,hosts-command-catalog}.test.ts`，不新增 Dev 协议 |
 
-- **AND** 表中 coding-agent 测试路径以 `packages/coding-agent/` 为基准；纯组件测试不冒充真实浏览器，原生资源独立入口继续覆盖，不经 ZCode 驱动 Dev。普通 TUI、权限、Team／Goal、预算、并发、授权及跳过规则不因消费者替换而放松。
+- **AND** 表中 coding-agent 测试路径以 `packages/coding-agent/` 为基准；纯组件测试不冒充真实浏览器，原生资源独立入口继续覆盖。普通 TUI、权限、Team／Goal、预算、并发、授权及跳过规则不因消费者替换而放松。
 
 ### Requirement: 原生测试选择
 

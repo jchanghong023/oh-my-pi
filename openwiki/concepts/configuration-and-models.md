@@ -91,7 +91,7 @@ CLI 在加载依赖档案环境的模块之前提取 `--profile`（或 `-P`）�
 
 coding-agent 的 `session/auth-storage.ts` 只是重导出；实现属于 [pi-ai AuthStorage](../../packages/ai/src/auth-storage.ts)。它组合凭据存储、OAuth 刷新、多账户选择、会话绑定和限流状态。普通 key 查找使用自身的级联：运行时、配置、OAuth、登录 key、环境、已存 key；这不是 `Settings` 合并顺序。`auth.accountPolicies` 可运行时更新，非法或有歧义的策略不会替换当前策略。切换 broker 的 store 时先加载新 store，失败保留旧 store；成功后重建依赖旧行 ID 的状态并保留运行时覆盖等订阅。
 
-公司 lane 只在启用 offline 时存在。它从 Claude 活动配置目录的 `settings.json` 读取 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`，校验后在主线程缓存成功或失败的启动快照，worker 复用快照而不重新读文件。修改文件或修复错误后需要重启；普通启动不读取该公司快照。不要把这里的 token 当作普通登录凭据或从常规设置热重载推断其生命周期。配置要求与离线操作见 [内网与离线运行](../operations/intranet-offline.md)，桌面集成边界见 [zcode app server](../integrations/zcode-app-server.md)。
+公司 lane 只在启用 offline 时存在。它从 Claude 活动配置目录的 `settings.json` 读取 `env.ANTHROPIC_BASE_URL` 和 `env.ANTHROPIC_AUTH_TOKEN`，校验后在主线程缓存成功或失败的启动快照，worker 复用快照而不重新读文件。修改文件或修复错误后需要重启；普通启动不读取该公司快照。不要把这里的 token 当作普通登录凭据或从常规设置热重载推断其生命周期。配置要求与离线操作见 [内网与离线运行](../operations/intranet-offline.md)。
 
 ## 验证与排查
 

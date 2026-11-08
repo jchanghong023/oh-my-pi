@@ -350,7 +350,6 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - [已批准需求](openspec/specs/)是 fork 的权威需求目录；[待定变更](openspec/changes/)尚未批准。[项目定位](openspec/specs/fork-product-scope/spec.md)、[维护约束](openspec/specs/fork-maintenance/spec.md)、[验证门禁](openspec/specs/fork-verification-gates/spec.md)和[上游基线](openspec/specs/fork-upstream-baseline/spec.md)分别维护相关约束；适用的 fork 约束优先于上游通用约定。
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - Dev 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 Dev 模式、兼容入口、双轨运行或旧流程迁移／恢复。
-- Dev MUST 与 ZCode 完全脱钩：移除旧 Dev 专属接线，NEVER 新建或保留 Dev 的 ZCode 协议、投影、命令或 UI 接入；需求清理仅删除此类对接的现行及历史条款，保留其他 Dev 历史、普通 ZCode 功能及其他能力需求。
 - Dev MUST 是显式启用的独立功能模块；`/dev` 进入后当前 TUI 只接受再次 `/dev` 退出，NEVER 与网页并行执行普通命令或输入。退出 MUST 先结清 Dev 工作再恢复原普通会话，不取消需求或回滚 Git；关闭页面不退出。未开启时不启动 Dev 服务／任务或改写其状态；借用资源不得污染普通 OMP，共享接口只保留确实必要且默认不启用的能力，配置继续沿用原方式。
 - 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，Firefox 52 ESR 保守语法／基础 API 基线不等于公司实机验证。
 - offline 内网用户名协作：`packages/coding-agent/src/collab/intranet.ts`（门禁、登录名、入口与查找）、`packages/coding-agent/src/collab/relay-server.ts`（内置 Relay）；[本次变更需求](openspec/changes/add-intranet-username-collab/specs/)覆盖协作、运行与命令边界，[内网快速指南](docs-zh-CN/quick-start-intranet.md)提供普通 WS 直连部署入口。仅 offline 启用；非 offline 保持既有协作与安全策略。

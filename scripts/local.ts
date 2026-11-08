@@ -59,7 +59,6 @@ async function main(): Promise<void> {
 		const buildEnv: NodeJS.ProcessEnv = { ...process.env };
 		delete buildEnv.CROSS_TARGET;
 		delete buildEnv.BUN_COMPILE_EXECUTABLE_PATH;
-		delete buildEnv.ZCODE_ARTIFACT_ROOT;
 		console.log("Building the native addon and local executable...");
 		await run(
 			[

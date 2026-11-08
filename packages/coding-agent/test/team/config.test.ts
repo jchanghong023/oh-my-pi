@@ -5,7 +5,6 @@ import { AuthStorage } from "@oh-my-pi/pi-ai";
 import { TempDir } from "@oh-my-pi/pi-utils";
 import { ModelRegistry } from "../../src/config/model-registry";
 import { Settings } from "../../src/config/settings";
-import { ompSaveReceiptSchema, ompTeamConfigSchema } from "../../src/modes/zcode/schema/omp-config-extension";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { TeamConfigError, TeamConfigService } from "../../src/team/config";
 import { cfgTeamMembers } from "../../src/team/settings";
@@ -74,7 +73,6 @@ describe("TeamConfigService", () => {
 		expect(before.revision).toBeString();
 		expect(before.writableScopes).toEqual(["user"]);
 		expect(before.storage).toEqual({ readState: "present" });
-		expect(ompTeamConfigSchema.parse(before)).toEqual(before);
 		expect(before.userMembers?.map(slot => slot.rawSelector)).toEqual([
 			"deepseek/Qwen3.8-27B",
 			"retired old selector",
@@ -96,7 +94,6 @@ describe("TeamConfigService", () => {
 		expect(result.write.status).toBe("saved");
 		expect(result.config.participants.map(slot => slot.label)).toEqual(["A", "B", "C"]);
 		expect(result.config.userMembers).toHaveLength(2);
-		expect(ompSaveReceiptSchema.parse(result)).toEqual(result);
 		expect(result.effectiveMatchesRequested).toBe(true);
 		expect(notifications).toEqual([{ type: "settings_changed", scope: "user" }]);
 	});

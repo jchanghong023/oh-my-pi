@@ -3,7 +3,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { COMPILED_EXTERNAL_DEPENDENCIES, compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
-import { captureArtifactSource, produceZCodeArtifacts, requireArtifactVersion } from "./zcode-artifact";
 
 interface BinaryTarget {
 	id: string;
@@ -196,9 +195,6 @@ async function main(): Promise<void> {
 	if (selectedTargets.length === 0) {
 		throw new Error("No release targets selected.");
 	}
-	const artifactRoot = Bun.env.ZCODE_ARTIFACT_ROOT;
-	const artifactVersion = artifactRoot && !isDryRun ? requireArtifactVersion(buildVersion) : undefined;
-	const artifactSource = artifactVersion ? await captureArtifactSource(repoRoot) : undefined;
 
 	await fs.mkdir(binariesDir, { recursive: true });
 	// Generate inside the try so resetArtifacts() always restores the empty
@@ -210,17 +206,6 @@ async function main(): Promise<void> {
 		}
 	} finally {
 		await resetArtifacts();
-	}
-	if (artifactSource && artifactRoot && artifactVersion) {
-		await produceZCodeArtifacts({
-			source: artifactSource,
-			version: artifactVersion,
-			outputRoot: artifactRoot,
-			binaries: selectedTargets.map(target => ({
-				target: target.id,
-				executable: binaryOutfile(target),
-			})),
-		});
 	}
 }
 

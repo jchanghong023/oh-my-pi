@@ -135,16 +135,6 @@
       ]
     },
     {
-      "id": "claim_f7c448fa105a417a9d761f99bbcc523a",
-      "statement": "ZCode app-server 是要求 --stdio 的独立命令边界，并非原生 RPC 或 ACP 模式；其控制台诊断被重定向以保护协议。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L93",
-          "version": "repo-lines-v1:sha256:cf28c3e694a101626db1cd182d7fc460942b793685ce3ddbab14fe4777d910f4:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZDI1NmJmMWY4NjI1N2NjZTUzNjg5NTRjOWVmZmE4MWI2MTZhYTdhNDc0OTUwMzUyNTM0MmZhNTE4YjU3YTYifQ"
-        }
-      ]
-    },
-    {
       "id": "claim_d8bc81530b9449cbbec3be7e17c3fe9a",
       "statement": "仓库的 Python、Go 和 Rust 辅助 SDK 位于各自的 omp-rpc 目录，是 RPC 接入而非进程内 TypeScript SDK。",
       "evidence": [

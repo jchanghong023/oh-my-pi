@@ -82,7 +82,7 @@
     },
     {
       "id": "claim_64fee8eff831456091cc01c59f6c06a8",
-      "statement": "终端 TUI 和 ZCode 桌面均以 fork OMP 为核心，零配置目标仍以服务和认证就绪为前提，各自须经真实入口验收消息、模型与工具。",
+      "statement": "终端 TUI 以 fork OMP 为核心，零配置目标仍以服务和认证就绪为前提，须经真实入口验收消息、模型与工具。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",
@@ -233,28 +233,6 @@
         {
           "resource": "repo://scripts/setup.ts#L83-L110",
           "version": "repo-lines-v1:sha256:28c8ec9f2f96c94b29cf354bcf7b86772561bbb199e3a06a81d87717456ca5bd:eyJzZWxlY3RlZExpbmVDb3VudCI6MjgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZTI2MTVkY2M4ZWY3NzdmMzhhNzNiY2Y3ZWY3ZDlmNzU3MWI0ZTJlYzI1YTNmYjUxZTVkODZhZGNlNjQ2ODEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjoxLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_ae9a9c2d6c3347b1b7553c270c8fcfd3",
-      "statement": "可选 ZCode 产物要求显式发布版本，并要求干净源码、目标格式校验和失败清理，不属于当前 CI Release 附件。",
-      "evidence": [
-        {
-          "resource": "repo://.github/workflows/ci.yml#L268-L279",
-          "version": "repo-lines-v1:sha256:8ad44042680abbce4710fc41953623e206ad30cf1eb4d8f60b3160a4ea5863da:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ5ZjUxMzVkMWQ2MmU4MThhYmJhYjcwZjFmY2Y3YzZkNjk3ODY1ZmNiOWYxZjI4YjdlOGM2MzFjNDRiOWQ3YjQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjAxMTYzZGFlMTM4MDk1ZjY4MzkzMTcwNTkxMDc3ZWJmYWNiNTM1OGNjY2U1NGJlN2M0YjUyN2EzNTNhZGVhYTUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjMyZjQ3Yjc4NWIyZGJhMDdlM2RhNzkwMDlhZGZkNzViZDg4NzAxODMzOWFlYzEwY2MxNzhmMTBhMDkzY2UxY2IiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjowLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImUzYjBjNDQyOThmYzFjMTQ5YWZiZjRjODk5NmZiOTI0MjdhZTQxZTQ2NDliOTM0Y2E0OTU5OTFiNzg1MmI4NTUifQ"
-        },
-        {
-          "resource": "repo://openspec/specs/fork-runtime/spec.md#L131-L150",
-          "version": "repo-lines-v1:sha256:62e470f90b4231b02a0beb7778f4a29da2d8ae4e502c1fa7a5bd80dfe3fa3391:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhjOGJmM2U5MjFjNGJlY2EzMzM2ODFhNjAxMzE4NmQxNjJjOGFjZWMwNWQ2MWY5NjRjMDIwYjhkMTVhZjdlZTQiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImMwMWU3MDQwZTE2N2EwNThmMjIzOWIyOWI0NzBmNmQ1ZWIwZDI2ODllZmFlNDk3YThiNDhjMDgxYzNjZGQyNDYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjE1NjQyMTFmNzkxZGY3ZjY2YjY5MWNjODE2OWM3MDkxN2JkYTVkZjYxYzhiNmRmYWQwZjY4MTk3MmIyOTNhMzEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjFkNGVkNzk1ZGM1ZmY3NmFkYjE4NjE3ZWIzNDg5MjdjN2E3M2JiZWViZWZjMzJlYzE4NmY3ZjJiMWEyZWM1YzgifQ"
-        },
-        {
-          "resource": "repo://openspec/specs/fork-runtime/spec.md#L282-L292",
-          "version": "repo-lines-v1:sha256:745f05d5b18fc619fef3603fbf12a9cfdc5eafabcf0773f701e2fc93bd498bf3:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImE1YWJlM2M3ZGNkNTcxYjRiZWFmZWU1YmZmOWI3M2E1MmVkOGM4YWMxZjc5MWQyNWIwMjNhNTFkNmVlNGQ0YzAiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjMyNzFiOTE2NTJkZDRhNjI5MWNkYWIxMzM0ZDliM2YyMDhiMjI1MmVmNmM1M2NlODZiNmI3NTZjYTA5ZjI3Y2QiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjYxMjdkMjdmNTJjOTY5ZGJkZTg2ZTcyYTZjMTNmODNhYWRiMjJlMTJhNDZkMDI5OGY0MWE4MjY5MWU1NjM3YmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjM3OGJlMmQzNDZmMDNhNTUzNmM0ZjU5OGYwN2Q4M2NjNzcyYTk0Nzk4ZmU3OWY0MzUyMzk3ODQxZDQyM2M2ZTgifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/scripts/build-binary.ts#L75-L83",
-          "version": "repo-lines-v1:sha256:d867e9d4e78d6939376034d0b84466bef40f0da6893f40787c391b48b4cc04ea:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiOTE4NDQ2NTU5OGRlMjhlNTdlNWYyYWE2M2FhODZjNjBkNWUxZmZlMWNkMDMwNjdkOWExMTljNjNlMGJiYjA5YiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZmVmMjYzYzA4NjQ3NGUwMDg0ZDg2YzAyMWIxOGJmYjI4MDk3NGE4N2VlNWE0ZWMzOTI3ZTkwY2YwMzUyMjdmZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjI5NjQwNzljM2M1YzgxNTIwZWYzM2EyYjlkMmUxNWExYjg0ZDcyODBkYjg1OTBkY2Q2NTc0N2UzZTAxMmE0MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiNDE0YTk5Y2Y1YjM4YTIwNmZlZjQ3MDYwMWVmZTkwOTUxZTM0ZmU1ODU1MzJiNWJmMjE0ZWZiOWM0ZDQwMGMzZCJ9"
         }
       ]
     },

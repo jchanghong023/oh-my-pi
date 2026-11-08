@@ -4,25 +4,11 @@
   "claims": [
     {
       "id": "claim_44224e842f4b41ac86c92d2d8d64fbcd",
-      "statement": "本 fork 的主要入口为原生终端 TUI 和由 ZCode 宿主启动的 app-server，两者使用本 fork OMP 核心；零配置文件仍要求模型服务和必要认证。",
+      "statement": "本 fork 的主要入口为原生终端 TUI；零配置文件仍要求模型服务和必要认证。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",
           "version": "repo-lines-v1:sha256:6164bafe7027876666ec1d4489c9a06c1233e0d440fdc77218f3fc12a13d1669:eyJzZWxlY3RlZExpbmVDb3VudCI6MTAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjJhZjE2MWM2YTFiNmRhNDBiNGEwMjA3ZWIyOTJkNzAzMGM1N2QwMzg2NjBiNjBlNjE5M2ZhZDM3ODViM2Y0YmUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjhlY2FlMjViODUzOTgwMGU5MGJlMDRmYTdhNzYyNGJiN2IxOTc2YzE5NDkxMDllYmFjYWI4ZmFlMjEyMWU5NzEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjNjYzE4YWU0YWQ2ZmFhZmJmZDU4YjA4N2EzYjMyOWRiZjkxNDZiYzVmNGM5N2Q5NmIxYjYwMTA5NWNhZDRiYTIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEyMWNmNzg4ZmM0MWRiNTBjYjk1MTkwODBmNDJjYWYzZWNhY2IxM2FhYmMxZmI3YWYwY2NkM2YyMThmMjgwZTcifQ"
-        },
-        {
-          "resource": "repo://openspec/specs/zcode-app-server/spec.md#L9-L16",
-          "version": "repo-lines-v1:sha256:85be3a5697cb1b0cbdedc805a1660f0bc0362280c44372c16e35abf7bb7a9b00:eyJzZWxlY3RlZExpbmVDb3VudCI6OCwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTdhODNjNjMxMTI1NWNhMTQ0M2VmZjE0NTQ3MGNiZjY0OGRmZGI2OGU1N2NhZGI1ZWIyYzhhM2FlYzgxNGRkNSIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiZjMyN2RhY2YyOGMwMzk3NWZiM2Q2NTlkNjdjMzdlZjhiYjVjYzYzNDMxYzBhYTI4YzA4MmRlYmZkMTI4OTY1ZSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiYzMzYmEwMGZmMmY1ZjczZjkwMmYzNmI2MDQ3OTM2MzVlMzdhNDc3NTdhNWU2ODE3Yjg0ZTljMDkwYzVjYzFkZSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiN2VmOTNmYTMzNTUwZmU0NjY3YzIzNTI5ZGMxMjc5NDlmNTc3YmRiMjAwNzhkMDA0ZTI0Y2JjYjlkOWNjZWMwOSJ9"
-        }
-      ]
-    },
-    {
-      "id": "claim_04a33439a03849dfb8bcbc8b25b82e98",
-      "statement": "ZCode 使用 ZCODE_AGENT_SERVER_COMMAND=omp 启动 omp app-server --stdio，提供专用协议和同进程多会话，不等同独立 RPC。",
-      "evidence": [
-        {
-          "resource": "repo://openspec/specs/zcode-app-server/spec.md#L9-L20",
-          "version": "repo-lines-v1:sha256:94975a0aa254a5cf8964e11133989352ff195953a5055cdfd8da12d2497fa94b:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjE3YTgzYzYzMTEyNTVjYTE0NDNlZmYxNDU0NzBjYmY2NDhkZmRiNjhlNTdjYWRiNWViMmM4YTNhZWM4MTRkZDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjI3MjVhNDdkOWNlN2JmNWU0NWFlYmJiNDYyYTVkNTMyZjcxNDEwZThkMzQ0MTBhNmJkZWQwNDc0NTU0ZTg5YzciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImMzM2JhMDBmZjJmNWY3M2Y5MDJmMzZiNjA0NzkzNjM1ZTM3YTQ3NzU3YTVlNjgxN2I4NGU5YzA5MGM1Y2MxZGUiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI3ZmU2N2JjNmZiMGViYmJlYWQwM2EzM2Y2MjM1MTVmNDE3ODE2MjU3MGQ0ZjM2N2Y3MWYwMmE2YzA2ODkyN2MifQ"
         }
       ]
     },
@@ -64,7 +50,7 @@
     },
     {
       "id": "claim_3fbca6c00cfc4385820b25cec6b41551",
-      "statement": "终端和 ZCode 应分别在真实入口验证消息、模型响应和工具执行，服务及认证就绪是共同验收前提。",
+      "statement": "终端应在真实入口验证消息、模型响应和工具执行，服务及认证就绪是验收前提。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/fork-product-scope/spec.md#L18-L27",

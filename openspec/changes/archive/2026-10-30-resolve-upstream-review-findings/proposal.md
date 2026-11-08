@@ -9,7 +9,7 @@
 - 保留 managed-skills 根目录拒绝符号链接，以及多行输入中非末行的输入法安全布局，并明确其可观察边界。
 - 按用户选择，将 HTML 会话导出、CodeAgent 的 commit 消息与标题生成失败回退、Provider 原始错误码扩展、扩展工具宽松校验、恢复请求的推测执行、服务启动后日志读取失败回执、Web Search 失败回执、Spinner 速度、Robomp GitHub 请求失败处理、JTD 转换与归档编码取消恢复为对应上游行为。恢复范围仅限上述已确认差异；不借此撤销其他已批准的 fork 功能。
 - `xd://` 设备写入只以 `?` 请求设备文档，不再把空内容和 `help` 当作该帮助入口；空内容和 `help` 的其他处理沿用既有设备协议。
-- 修复 `spec-executor` 必需委派与等待能力、ZCode 本地产物版本校验、native 替换后让位文件清理、LSP 未应用动作的成功状态、Windows `timeout -k` 取消回退退出码、`local -p` 诊断命令名、显示档位旁路开关、设置页汉化和深色主题文档默认值与现有需求不一致的问题。
+- 修复 `spec-executor` 必需委派与等待能力、native 替换后让位文件清理、LSP 未应用动作的成功状态、Windows `timeout -k` 取消回退退出码、`local -p` 诊断命令名、显示档位旁路开关、设置页汉化和深色主题文档默认值与现有需求不一致的问题。
 - 以审查所用的已集成上游基线 `95db18ef9936bff96fbd33268b2363ab25a9bb9d` 为本次“恢复上游”的对照；若后续实际实施前上游基线变化，须在实施前核对并明确对照范围，不能静默改变已确认的行为或撤销无关 fork 能力。
 
 ## Capabilities
@@ -26,7 +26,6 @@
 - `personal-commands`：明确 `xd://` 帮助入口和 LSP 动作的真实成功／失败状态。
 - `shell-semantics`：落实声明命令诊断和 Windows timeout 取消回退退出码。
 - `spec-driven-orchestration`：落实执行代理委派实施、审查和等待所需的原生能力。
-- `fork-runtime`：落实 ZCode 本地构建产物的版本前置条件。
 - `fork-verification-gates`：落实 native 换入成功后的让位文件清理。
 - `tui-presentation`：明确多行输入法安全布局，落实显示档位、主要设置页汉化及深色主题文档一致性。
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env bun
 
 import * as path from "node:path";
-import { captureArtifactSource, produceZCodeArtifacts, requireArtifactVersion } from "../../../scripts/zcode-artifact";
 import { compileCodingAgent } from "./compile-binary";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -60,9 +59,6 @@ async function main(): Promise<void> {
 	const platform = crossBuild?.platform ?? process.platform;
 	const arch = crossBuild?.arch ?? process.arch;
 	console.log(`[build-binary] Starting build for ${platform}-${arch}`);
-	const artifactRoot = Bun.env.ZCODE_ARTIFACT_ROOT;
-	const artifactVersion = artifactRoot ? requireArtifactVersion(Bun.env.RELEASE_VERSION) : undefined;
-	const artifactSource = artifactRoot ? await captureArtifactSource(repoRoot) : undefined;
 	const shouldAdhocSign =
 		process.platform === "darwin" &&
 		(!crossBuild || crossBuild.platform === "darwin") &&
@@ -107,20 +103,6 @@ async function main(): Promise<void> {
 	} finally {
 		console.log("[build-binary] Resetting generated stats client...");
 		await runCommand(["bun", "--cwd=../stats", "run", "gen:stats:reset"]);
-	}
-	if (artifactRoot && artifactSource && artifactVersion) {
-		console.log(`[build-binary] Producing ZCode artifacts: ${artifactRoot}`);
-		await produceZCodeArtifacts({
-			source: artifactSource,
-			version: artifactVersion,
-			outputRoot: artifactRoot,
-			binaries: [
-				{
-					target: `${platform}-${arch}`,
-					executable: executablePath,
-				},
-			],
-		});
 	}
 	console.log(
 		`[build-binary] Build complete: ${executablePath} (${((performance.now() - startedAt) / 1000).toFixed(1)}s)`,

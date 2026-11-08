@@ -136,7 +136,7 @@ async function main() {
 			.digest("hex");
 		const build = Bun.spawn([process.execPath, path.join(packageDir, "scripts/build-binary.ts")], {
 			cwd: repoRoot,
-			env: { ...process.env, CROSS_TARGET: "", ZCODE_ARTIFACT_ROOT: "" },
+			env: { ...process.env, CROSS_TARGET: "" },
 			stdin: "ignore",
 			stdout: "inherit",
 			stderr: "inherit",

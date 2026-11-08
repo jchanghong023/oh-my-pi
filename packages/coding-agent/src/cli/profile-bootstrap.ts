@@ -68,7 +68,7 @@ export interface ProfileBootstrapResult {
  * registered command that owns its own flags (e.g. `grep`): everything from
  * that token onward is forwarded verbatim so a subcommand's own flags and
  * positionals are never stolen (`omp grep --profile <path>` greps for
- * `--profile`; it does not select a profile). `launch`, `acp`, and `app-server`
+ * `--profile`; it does not select a profile). `launch`, `acp`, `dev`, and `openwiki`
  * accept profile selection after their command token, before their modules load.
  *
  * Throws when either flag is supplied without a value.

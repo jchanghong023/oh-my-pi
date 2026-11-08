@@ -6,7 +6,7 @@
 
 **Architecture:** 在既有包内资源生成阶段调整八项技能的 frontmatter，不另建运行时发现、依赖授权或会话激活机制。技能正文、上游原件副本、配套文件和固定版本不变；现有 Provider、普通 `skill://` 读取及 `/spec` 阶段门禁继续承担各自职责。
 
-**Tech Stack:** Bun、TypeScript、既有 YAML/frontmatter 工具、包内 tar.gz 资源、Bun 测试和现有 app-server＋localhost 模型夹具。
+**Tech Stack:** Bun、TypeScript、既有 YAML/frontmatter 工具、包内 tar.gz 资源、Bun 测试和隔离 localhost 模型夹具。
 
 **Spec:** `openspec/specs/spec-driven-orchestration/spec.md` 中的技能发现要求及 AC-02；本计划原引用的行号对应迁移前文档。
 
@@ -25,7 +25,7 @@
 ## Review Focus
 
 1. 普通会话没有任何调用记录时，八项应出现在模型索引并能通过真实 `skill://` 读取；正文不预装。由既有 discovery/access 集成用例覆盖。
-2. 手动启动 `brainstorming` 后读取 `writing-plans`，不应再索要 B 的独立调用授权；其他隐藏技能仍被拒绝。由真实 app-server 的同会话资源读取场景覆盖。
+2. 手动启动 `brainstorming` 后读取 `writing-plans`，不应再索要 B 的独立调用授权；其他隐藏技能仍被拒绝。由同会话资源读取场景覆盖。
 3. 当前处于 `/spec` 需求阶段时，新公开的 `writing-plans` 仍不能读取或注入。由既有 wrong-stage 用例覆盖。
 4. 隐藏入口继续要求当前分支调用记录或程序授权，授权撤销不影响普通技能但仍收回隐藏技能访问。由既有 provenance/grant 用例覆盖。
 5. `executing-plans`、`writing-skills` 仍能找到 `using-superpowers/references/`；资源重新生成不能删除平台说明或启用 bootstrap。用本轮临时资源/公开入口冒烟核验，不新增复制或措辞快照测试。
@@ -112,7 +112,7 @@
   - 在手动 `/skill:brainstorming` 的同一会话中，通过 `allowedPaths` 读取 `skill://writing-plans:raw`，不发送 `/skill:writing-plans`。按工具调用 ID 断言模型收到的真实工具结果和公开工具行成功；`using-superpowers` 等其他隐藏正文仍拒绝。该场景只读取，不让模拟模型执行计划或自动交接。
   - 一次性核对真实包内 `using-superpowers/references/codex-tools.md`、`gemini-tools.md` 和执行器引用的目录能按既有路径使用；不把该目录的读取当作 bootstrap 技能启动。
   Run: `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/process.e2e.test.ts --test-name-pattern "packaged skills preserve default discovery and explicit-only access"`
-  Expected: 实际 `src/cli.ts app-server --stdio`＋隔离 localhost 服务验证模型请求的包内上游技能索引仅有十项、正文按需读取、A→B 成功、隐藏项拒绝、项目没有实现/归档/提交副作用，进程正常退出。运行后移除本轮临时脚本和夹具；不宣称真实模型遵循质量、编译发行包或其他平台已验收。
+  Expected: 当时的公开入口＋隔离 localhost 服务验证模型请求的包内上游技能索引仅有十项、正文按需读取、A→B 成功、隐藏项拒绝、项目没有实现/归档/提交副作用，进程正常退出。运行后移除本轮临时脚本和夹具；不宣称真实模型遵循质量、编译发行包或其他平台已验收。
 
 - [x] **Step 7: 同步用户可见说明并做必要静态检查。**
   - 修改需求索引对应行和现有 Unreleased Changed 条目，明确八项恢复发现、两个隐藏入口保留；验证记录只报告本次真实证据，不把旧 fulltest 改称本次通过。

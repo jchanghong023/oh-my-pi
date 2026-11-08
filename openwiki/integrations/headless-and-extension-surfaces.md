@@ -25,8 +25,6 @@ sources:
     resource: repo://packages/coding-agent/src/modes/rpc/rpc-input.ts
   - id: openwiki-source-59be65bbf2d6dc511ac00ff5
     resource: repo://packages/coding-agent/src/modes/rpc/rpc-mode.ts
-  - id: openwiki-source-40341921ab37f1dea4d84d83
-    resource: repo://packages/coding-agent/src/modes/zcode/index.ts
   - id: openwiki-source-db87366a8cec881cc7139a2b
     resource: repo://packages/coding-agent/src/sdk.ts
   - id: openwiki-source-1928ea068181e9c06c2572d0
@@ -58,9 +56,8 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 | print | 单次无头执行，输出文本或 JSON 事件 | 运行完成后释放 session 并返回退出码 | JSON 输出是事件流，不是可交互 RPC；无 UI |
 | RPC | stdin 逐行 JSON 命令，stdout 响应和事件；支持协议版本协商 | 一个运行中的 session 接受 prompt、队列操作、abort 及宿主工具 | prompt 成功响应表示输入已接纳，不意味着 agent 已完成 |
 | ACP | ACP JSON-RPC over stdio，客户端请求会话并接收更新 | `AcpAgent` 管理多个 workspace session 和连接关闭时的清理 | 客户端能力控制文件和终端桥；权限请求由会话策略决定 |
-| ZCode app-server | 独立 `app-server --stdio` 命令及专用帧契约 | 独立服务入口与宿主工作区生命周期 | 不是 RPC 或 ACP 的别名；详见 [ZCode app-server](zcode-app-server.md) |
 
-实现入口分别见 [SDK](../../packages/coding-agent/src/sdk.ts)、[print](../../packages/coding-agent/src/modes/print-mode.ts)、[RPC](../../packages/coding-agent/src/modes/rpc/rpc-mode.ts)、[ACP](../../packages/coding-agent/src/modes/acp/acp-mode.ts) 和 [app-server](../../packages/coding-agent/src/modes/zcode/index.ts)。`sdk/python/omp-rpc`、`sdk/go/omp-rpc`、`sdk/rust/omp-rpc` 是 RPC 消费者边界，不应假设它们是进程内 TypeScript SDK 或自动具有其他协议的能力。
+实现入口分别见 [SDK](../../packages/coding-agent/src/sdk.ts)、[print](../../packages/coding-agent/src/modes/print-mode.ts)、[RPC](../../packages/coding-agent/src/modes/rpc/rpc-mode.ts)和 [ACP](../../packages/coding-agent/src/modes/acp/acp-mode.ts)。`sdk/python/omp-rpc`、`sdk/go/omp-rpc`、`sdk/rust/omp-rpc` 是 RPC 消费者边界，不应假设它们是进程内 TypeScript SDK 或自动具有其他协议的能力。
 
 ## 无头请求与宿主工具
 

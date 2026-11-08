@@ -216,16 +216,8 @@
     },
     {
       "id": "claim_d55ea814b1594fff9594f41ab5a8b8a7",
-      "statement": "Dev 的控制器、资源、进程和 TUI 测试与 ZCode 的协议、配置、进程及权限测试提供按改动域分层选择的焦点回归入口。",
+      "statement": "Dev 的控制器、资源、进程和 TUI 测试提供按改动域分层选择的焦点回归入口。",
       "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-permissions.e2e.ts",
-          "version": "repo-file-v1:sha256:ee8b57028d21b231ac02143c7274c9975b69ace42916f73cb86adab9f2742c56"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-provider-config.test.ts",
-          "version": "repo-file-v1:sha256:035d70361928e0b813e979c647bc539649aaa6e99e99bfed34d31bbe51494cbd"
-        },
         {
           "resource": "repo://packages/coding-agent/test/spec-driven/controller.test.ts",
           "version": "repo-file-v1:sha256:6e766a5eb84e197e00cd3e28f13f98078af15fb49c7e2948e1c322a6608f45c6"

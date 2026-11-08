@@ -105,7 +105,7 @@ omp config get team.members --json
 
 ### RPC：GUI／Agent 共用的配置入口
 
-RPC v3 的 `teamConfig` 能力提供三个接口。调用方 MUST 在目标 profile 的 RPC 进程操作；配置属于全局用户层，不是会话私有名单。ZCode 使用 `omp/team/configure {workspace, request}` 调用同一服务，无需先选择或创建聊天会话。接口存在不表示外部 ZCode GUI 已完成集成或验收。
+RPC v3 的 `teamConfig` 能力提供三个接口。调用方 MUST 在目标 profile 的 RPC 进程操作；配置属于全局用户层，不是会话私有名单。
 
 - `get_team_config`：读取版本 `revision`、用户／有效名单、来源、槽位、诊断和存储状态。可传 `preview: {clientRevision, members}` 只读预览拟保存名单与最终有效参与者；`members` 使用 `{provider, modelId}` 数组，保留顺序与重复项。无法解析的旧槽位可用 `{rawSelector}` 参与预览诊断，但不能直接保存。调用方只展示仍匹配当前 workspace、profile 与 `clientRevision` 的结果。
 - `get_team_models`：可选 `query`，返回完整目录的确定性候选及 `selectable`／不可选原因。中文查找线索同上述面板规则；不调用模型替用户猜选。

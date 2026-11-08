@@ -191,24 +191,6 @@
       ]
     },
     {
-      "id": "claim_d141e95df6a84060a15da8e04f514189",
-      "statement": "ZCode omp/team 对会话提供 list、read、stop 并投影原生 job、子调用及 journal；只构造有调用标签证据的审查修订复核边，冷历史无 live owner 的运行状态为 unavailable。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L376-L399",
-          "version": "repo-lines-v1:sha256:e615fd240db363d2128b3eef470434e8b55131d7fd9346c7d45b59ce7e5b80b8:eyJzZWxlY3RlZExpbmVDb3VudCI6MjQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQxNmM4MDFkZGJmM2EyZWJjMzZkZGNjM2UwZjkzN2UzMzAxNGI4OGViODg1NmEyZmRlZjI5NjdjZTUzMzkzZTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjU0YmZmN2U0NTc0ODg0ODI2NmExNTE5M2JmMmFmYmZlYzhiMjhmNTI5ODEyYTZmZjRhNWY2OGFmZmU0MjkzNGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjlkODY1Y2RlMzUwNjM4NzlkYTE0NmExMTMyZTVmZDkxMzRmN2M4M2MyMDdhZmUyYTY5ZWI3MzU4OTVkNTJjMWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImFhMmQzYTE3ZWE2MTFkY2U4YWMxNGQwZWJjMjc0ZGQ4MzdhOWJhMDNlYjNiZDUzZjYwMDQzNWU3YWMzMDJiNTMifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L478-L517",
-          "version": "repo-lines-v1:sha256:d2b0302ea0359f72ac41396d5bb7d7d49cabe5fbc79132d288b3e3d71d85b258:eyJzZWxlY3RlZExpbmVDb3VudCI6NDAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY3MzQ4ZjM1YTcyNTJlZGM3NjEwNjQ0NzliZDRjZmVjMTc4Zjk0YzM3NzAzN2NhNTQ1ZjhkMTI5Y2JiZjM4MzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImY3NDdjOGE0NmU1ODg3Mjg1NTFmODgyNTcyYmJkYjA5NzVjZGZmNTJhYTg5OThhMDYxZjY1MjRiYTgxYzhmOTAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijg3Y2Q2MWRmOTUwNmY0ZmI5NWE0YjRkMGZlMmEwMWM4YWVjZDRmNWNhN2ZhYTBiZjU2Y2NlYzM3N2U4YTEzYWYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjhiMzgyNmM0MzBhNTk1Yjg1NDQ3NjAxZGE3NDYwN2QwMjJmYzJhZWIxOWU2NjA4ZjBiMmZkYzk2MTYwNzIxMzkifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/team.ts#L79-L199",
-          "version": "repo-lines-v1:sha256:5973f61d84aca22dc9008128cd0bcb9eb987a46eee7cf7d56d3d08f2cd5ceb9d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTIxLCJmaXJzdFNlbGVjdGVkTGluZUhhc2giOiJiZTFmN2E0ODMzNmUzODNlZjVhY2YxYjM3ZWFlNTQzYmFmMjYyNjczMTJhMThiNDY2MGQ5NjMzYTkyZjE0Y2JmIiwibGFzdFNlbGVjdGVkTGluZUhhc2giOiJjMWE4MGI4ODU4ODkwNzBjZTE2ZTU2NTJlNDQ0MzQ0NDIyZWE2MDZkNDgzZTk2YmRmMmFkZjUxNTM1ZTIxOWJmIiwicHJlY2VkaW5nQ29udGV4dExpbmVDb3VudCI6MywicHJlY2VkaW5nQ29udGV4dEhhc2giOiI3N2FmNjZiNzk1MTMzZWU1Mjk2NDNkMzc3NzZhYWQ2NjYyMjU3ZjA1ZWRmMjFmNDNjZDc2OWE4NTBhZGYzZWE1IiwiZm9sbG93aW5nQ29udGV4dExpbmVDb3VudCI6MywiZm9sbG93aW5nQ29udGV4dEhhc2giOiI1NGZkODZkYjNkYmU4ODY5NGVjMjUwZDBjOGJjOWUwNzIyNzkyYjJjZDkwNmNkOTk0NGJiZGYyYmJhOTI2NzE3In0"
-        }
-      ]
-    },
-    {
       "id": "claim_7697881560d7432d9de545bd00610ce2",
       "statement": "Dev 方案入口显式启用 Team 时由 Dev 阶段上下文拥有讨论，检查批准版本并复用成员解析、runner 和编排器，只有完成且有可采用候选才交给方案角色。",
       "evidence": [
@@ -220,12 +202,8 @@
     },
     {
       "id": "claim_fb62d693598c40aeb0a895f41e074909",
-      "statement": "Team 相关测试覆盖配置、成员、编排、runner、隔离及控制器，运行视图规范明确完整 UI 验收尚待完成。",
+      "statement": "Team 相关测试覆盖配置、成员、编排、runner、隔离及控制器。",
       "evidence": [
-        {
-          "resource": "repo://openspec/specs/team-run-view/spec.md#L19-L32",
-          "version": "repo-lines-v1:sha256:e68cb3b9a7ce4342c1469cd216fe6244dfea509edb1a10a6261558cf05d17995:eyJzZWxlY3RlZExpbmVDb3VudCI6MTQsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA1MTY1NmVjODYyNGM1MjljZmQ0ODUyMTE4YzRiMDZiODQ0ZGY0ZTQ4MzllYWQzZGRiNTQyYWMxNmRiNzI5NWIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQ4YzI5NDQzYTA3MWVjYzQwYjg4MTRjMGE1MDRjNjQ4ZjM0MjViNzkzMmJjNmNkZmIyOGY3MTljYzdmMjhkOGQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjVhMGQ1NzhkOTJkNTY2YTA4MTVmNmQ1YjU2MWZkZjdlNmNkYmVhNDQ1ZThiYjQ4NGEyYWViOTA3NmQ3NzY1ZDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImQzNGFjODhkY2FlN2ZlMzA0OTczNTVmYTJmYWZiNTdiZmUzZDA1MjNkOGJkNGQ0YjZiOWE1M2U3NWZlYTM2YTYifQ"
-        },
         {
           "resource": "repo://packages/coding-agent/test/team/config.test.ts",
           "version": "repo-file-v1:sha256:3570e7069089db48f185c4c10ae1864d96446bcde0dd5311f580df0d68c71a70"

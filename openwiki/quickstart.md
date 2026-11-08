@@ -1,8 +1,8 @@
 ---
 type: 指南
 title: 快速开始与任务导航
-description: 从终端或 ZCode 桌面启动本 fork，核对模型认证、源码开发与离线前提，并按任务进入架构、工作流、索引和验证文档。
-tags: [quickstart, navigation, terminal, desktop, development]
+description: 从原生终端启动本 fork，核对模型认证、源码开发与离线前提，并按任务进入架构、工作流、索引和验证文档。
+tags: [quickstart, navigation, terminal, development]
 verified:
   - by: openwiki/0.0.0-unknown
     at: 2026-11-01T04:03:23.095Z
@@ -13,8 +13,6 @@ sources:
     resource: repo://openspec/specs/fork-product-scope/spec.md
   - id: openwiki-source-ba154f518e7ac4ceb4f38ab1
     resource: repo://openspec/specs/fork-runtime/spec.md
-  - id: openwiki-source-2d911f2a107f60ec864716fa
-    resource: repo://openspec/specs/zcode-app-server/spec.md
   - id: openwiki-source-5b54a58d1b51cd490b0e7162
     resource: repo://package.json
   - id: openwiki-source-5ad84278e31a922db452b5c3
@@ -28,7 +26,7 @@ generated: { by: "openwiki/0.0.0-unknown", at: "2026-11-01T04:03:23.095Z" }
 
 # 快速开始与任务导航
 
-本 fork 有两个主要入口：在项目目录运行 `omp` 的原生终端 TUI，以及由 ZCode 宿主启动本 fork 的 `omp app-server --stdio`。两者使用同一个 OMP Agent 核心，但各有宿主、交互和验收边界。**零配置文件不是零依赖**：模型服务必须可达，必要认证必须就绪；它也不意味着不会保存会话、缓存或用户选择。先看[系统分层与运行入口](architecture/system-map.md)。
+本 fork 的主要入口是在项目目录运行 `omp` 的原生终端 TUI。**零配置文件不是零依赖**：模型服务必须可达，必要认证必须就绪；它也不意味着不会保存会话、缓存或用户选择。先看[系统分层与运行入口](architecture/system-map.md)。
 
 ## 1. 选择运行方式
 
@@ -56,11 +54,7 @@ bun run dev
 
 `setup` 依次安装依赖、构建 native addon、链接 coding-agent 和 `omp`，中途失败即停止；默认 native 构建使用本地 Cargo/N-API。`dev` 运行本仓 `packages/coding-agent/src/cli.ts`，不是安装的 Release 二进制；它的脚本工作目录是 `packages/coding-agent`，做项目级验收时应核对实际工作目录，也可在目标项目用 setup 链接出的 `omp` 启动。Bun 最低版本由 CLI 在启动时检查。源码依赖和 native 构建可能需要预先准备或访问构建资源，不能把运行时 offline 承诺当作离线构建保证。
 
-### ZCode 桌面：由宿主启动
-
-在兼容的 ZCode 环境中，让宿主能找到本 fork 的 `omp`，并设置 `ZCODE_AGENT_SERVER_COMMAND=omp`；宿主以 stdio 启动 `omp app-server --stdio`。这是 ZCode 专用协议及同进程多会话服务，不是独立 RPC 模式，也不是仅运行 CLI 命令就拥有桌面界面。具体宿主装配、协议和能力协商见 [ZCode 桌面与 app-server 边界](integrations/zcode-app-server.md)。
-
-**分别从真实入口验收**：服务和认证就绪后，在终端与实际桌面各发送消息，确认真实模型响应与工具执行。源码测试、协议测试或安装成功不能代替外部 ZCode 桌面验收；无可用桌面环境时应明确标记未验收，而非推断通过。
+**从真实入口验收**：服务和认证就绪后，在终端发送消息，确认真实模型响应与工具执行。源码测试或安装成功不能代替真实入口验收。
 
 ## 2. 公司内网与认证
 

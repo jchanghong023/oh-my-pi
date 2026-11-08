@@ -1392,9 +1392,8 @@ describe("ChainJudge", () => {
 });
 
 /**
- * judge 候选池的会话隔离契约(缺陷来源: omp-child-approval-isolation-defect,
- * forkZcode docs/testing/omp-integration-blockers.md 第 3 节):子会话的自动
- * thinking judge 曾按全局 judge 默认链外呼会话/项目未配置的远端模型
+ * judge 候选池的会话隔离契约：子会话的自动 thinking judge 曾按全局 judge
+ * 默认链外呼会话/项目未配置的远端模型
  * (opencode-zen/claude-haiku-5-5,401 后才回本地)。会话/项目通过 enabledModels
  * 配置模型集合后,作用域外的远端不得进入 judge 候选链——主候选与 fallback 均
  * 不得外呼,无作用域内候选时直接失败。

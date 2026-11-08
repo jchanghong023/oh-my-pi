@@ -5,48 +5,13 @@ import { TempDir } from "@oh-my-pi/pi-utils/temp";
 import { $ } from "bun";
 import { resolveCrossBuild } from "../packages/coding-agent/scripts/build-binary";
 import { compileCodingAgent } from "../packages/coding-agent/scripts/compile-binary";
-import { requireArtifactVersion } from "./zcode-artifact";
 
 const repoRoot = path.join(import.meta.dir, "..");
 
-describe("ZCode artifact release version", () => {
-	it("rejects missing and invalid local release versions before starting a build", async () => {
-		using temp = TempDir.createSync("@omp-artifact-version-");
-		for (const version of [undefined, "", "1.2", "not-a-version", "1.2.3+"]) {
-			const outputRoot = temp.join("artifact");
-			const env = { ...process.env, ZCODE_ARTIFACT_ROOT: outputRoot };
-			if (version === undefined) delete env.RELEASE_VERSION;
-			else env.RELEASE_VERSION = version;
-			const proc = Bun.spawn([process.execPath, "packages/coding-agent/scripts/build-binary.ts"], {
-				cwd: repoRoot,
-				env,
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [stdout, stderr, exitCode] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-			expect(exitCode).not.toBe(0);
-			expect(stderr).toContain(version ? "OMP artifact invalid version" : "requires RELEASE_VERSION");
-			expect(stdout).not.toContain("Generating stats client");
-			expect(
-				await fs.stat(outputRoot).then(
-					() => true,
-					() => false,
-				),
-			).toBe(false);
-		}
-	});
-
-	it("preserves a valid explicit version with build metadata", () => {
-		expect(requireArtifactVersion("18.12.5+fork.9")).toBe("18.12.5+fork.9");
-	});
-
-	it("ignores ZCODE_ARTIFACT_ROOT and invalid release provenance during a dry run", async () => {
-		using temp = TempDir.createSync("@omp-artifact-dry-run-");
-		const outputRoot = temp.join("existing-artifacts");
+describe("release binary dry run", () => {
+	it("plans selected targets without changing existing binaries during a dry run", async () => {
+		using temp = TempDir.createSync("@omp-release-dry-run-");
+		const outputRoot = temp.join("binaries");
 		await fs.mkdir(outputRoot);
 		const sentinel = path.join(outputRoot, "keep.json");
 		await Bun.write(sentinel, '{"userOwned":true}\n');
@@ -56,9 +21,7 @@ describe("ZCode artifact release version", () => {
 				cwd: repoRoot,
 				env: {
 					...process.env,
-					ZCODE_ARTIFACT_ROOT: outputRoot,
-					RELEASE_VERSION: "not-a-version",
-					RELEASE_COMMIT: "0".repeat(40),
+					OMP_RELEASE_BINARY_DIR: outputRoot,
 				},
 				stdout: "pipe",
 				stderr: "pipe",

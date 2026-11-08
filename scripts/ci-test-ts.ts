@@ -291,9 +291,8 @@ const nativeAndIntegrationPackages = [
 ];
 
 // Discover coding-agent tests at file granularity before chunking. Full mode
-// uses Bun's test filename conventions plus the standalone ZCode E2E files.
+// uses Bun's test filename conventions.
 const forkCodingAgentDirectories = ["test/spec-driven/", "test/dev-workbench/", "test/team/", "test/goals/"];
-const forkCodingAgentPatterns = [/^test\/modes\/zcode-[^/]+\.(?:test|e2e)\.ts$/];
 const forkCodingAgentFiles = new Set([
 	"test/acp-builtins.test.ts", // /wt consumer
 	"test/cli/collab-serve.test.ts",
@@ -423,7 +422,7 @@ const forkCodingAgentFiles = new Set([
 	"test/modes/components/settings-layout.test.ts",
 	"test/modes/controllers/input-controller-tool-expansion.test.ts",
 	"test/modes/controllers/jobs-command.test.ts",
-	"test/modes/goal-autopilot-process-websocket.test.ts",
+	"test/modes/goal-autopilot-websocket.test.ts",
 	"test/native-pipe-fallback-contract.test.ts",
 	"test/online-tiny-candidates.test.ts",
 	"test/openwiki/agents-instructions.test.ts",
@@ -508,11 +507,7 @@ const forkPackageFiles: Record<string, string[]> = {
 };
 
 export function isForkCodingAgentTest(file: string): boolean {
-	return (
-		forkCodingAgentFiles.has(file) ||
-		forkCodingAgentDirectories.some(dir => file.startsWith(dir)) ||
-		forkCodingAgentPatterns.some(pattern => pattern.test(file))
-	);
+	return forkCodingAgentFiles.has(file) || forkCodingAgentDirectories.some(dir => file.startsWith(dir));
 }
 
 const projectToolTestCommand: TestCommand = {
@@ -647,11 +642,7 @@ async function collectTestsUnder(root: string, baseDir: string, all = false): Pr
 		const relative = path.relative(baseDir, filePath).split(path.sep).join("/");
 		if (
 			!entry.isFile() ||
-			!(
-				entry.name.endsWith(".test.ts") ||
-				(all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)) ||
-				/^test\/modes\/zcode-[^/]+\.e2e\.ts$/.test(relative)
-			)
+			!(entry.name.endsWith(".test.ts") || (all && /(?:\.|_)(?:test|spec)\.(?:js|jsx|ts|tsx)$/.test(entry.name)))
 		) {
 			continue;
 		}
@@ -725,17 +716,15 @@ async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTest
 	return promise;
 }
 
-// Start explicitly named end-to-end, integration and ZCode process tests early.
+// Start explicitly named end-to-end and integration tests early.
 // Preserve order within each group.
 function isIntegrationTest(testFile: string): boolean {
 	return (
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
-		/^(?:\.\/)?test\/modes\/(?:zcode-process(?:-(?:projection|session|catalog|execution))?|zcode-workflow-(?:sandbox-)?process)\.test\.ts$/.test(
-			testFile,
-		) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
-		// Scoped publication exercises repeated native Git subprocesses, not a unit-only fixture.
+		// Scoped publication and cancellation exercise repeated native Git subprocesses, not unit-only fixtures.
 		testFile === "test/dev-workbench/git.test.ts" ||
+		testFile === "test/dev-workbench/cancel.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
@@ -750,12 +739,11 @@ function isStartupTest(file: string): boolean {
 	return (
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
 		/^test\/dev-workbench\/(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
-		file === "test/modes/zcode-hosts-goal.test.ts" ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
 		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
 		file === "test/goals/goal-autopilot-public-views.test.ts" ||
-		file === "test/modes/goal-autopilot-process-websocket.test.ts"
+		file === "test/modes/goal-autopilot-websocket.test.ts"
 	);
 }
 

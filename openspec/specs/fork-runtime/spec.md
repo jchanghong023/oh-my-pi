@@ -91,12 +91,12 @@ OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失�
 - 二进制必须携带 fork 版本和更新仓库信息。
 - `PI_UPDATE_REPOSITORY` MUST 可覆盖 `omp update` 使用的更新仓库；未设置时固定为本 fork 仓库。该变量 MUST NOT 写入配置文件或构建产物。
 - 本地构建脚本 `packages/coding-agent/scripts/build-binary.ts` 同样注入本 fork 更新仓库：本地构建产物的 `omp update` 指向本 fork Release，不会回退官方渠道（版本号不注入，`--version` 无 `+fork.N` 后缀属预期）。
-- 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名、生成文件恢复及可选 ZCode 产物阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
+- 本地二进制构建 MUST 向终端输出目标平台、资源生成、编译、适用的签名及生成文件恢复阶段；仅在全部步骤成功后输出构建完成、实际可执行文件路径和总耗时，避免把编译阶段的静默成功误判为未执行而重复构建。
 - `omp update` 先比较正常 SemVer，再比较同基线的 fork build counter；本地构建未带 `+fork.N` 时按 counter 0 比较，因此可取得同基线的新 fork Release，而不把更高上游基线降级。支持 `%2B` 编码的 `+` 版本 URL；GitHub 元数据和资产统一优先环境令牌，再尝试本机 `gh auth token`，无凭据才匿名请求。
 - `omp update` 下载二进制时，在交互终端显示下载百分比、速度与预计剩余时间；非 TTY 输出（如 CI、管道）不显示动态进度。若 `PATH` 中的 `omp` 与更新目标解析为不同文件，更新前警告并提示更新后运行 `omp --version` 核对实际生效的版本；指向同一文件的符号链接不视为冲突。
 - `update.channel=canary` 在 fork 二进制上不可用：显式执行 `omp update` 时提示该配置并指向 `omp update --stable`，不在启动时检查或提示更新渠道。
 - `-fork.N` 时代（fork build ≤ 35，2026-08-26 及更早）的旧安装内嵌只认 `vX.Y.Z-fork.N` 的校验，会拒绝此后所有 `+fork.N` Release（报 `Invalid fork release tag`）且无法自愈，只能用安装器重装后再交给 `omp update`。
-- 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。CI 只构建 Linux glibc x64 和 Windows x64 二进制，Release 上传的附件仅为 `omp-linux-x64`、`omp-windows-x64.exe` 和 `omp-browser-relay-extension.zip`；GitHub 自动提供的源码归档不属于上传附件。更新器使用 GitHub 资产元数据的 SHA-256。CI 不生成 ZCode 产物，其他平台不再提供新的预编译版本。
+- 发布链路不发布核心或平台 npm 包，也不发布 Homebrew tap；Release notes 由 GitHub 自动生成。CI 只构建 Linux glibc x64 和 Windows x64 二进制，Release 上传的附件仅为 `omp-linux-x64`、`omp-windows-x64.exe` 和 `omp-browser-relay-extension.zip`；GitHub 自动提供的源码归档不属于上传附件。更新器使用 GitHub 资产元数据的 SHA-256。其他平台不再提供新的预编译版本。
 - 安装器只安装 fork Release 的预编译二进制；当前 Release 仅提供 Linux glibc x64 和 Windows x64，其他 Linux 架构及 musl 无对应新版本资产。`install.sh` 在 macOS 上于联网前明确拒绝安装。安装目标已是所选 Release 版本时提示已安装并跳过下载，同时仍检查 PATH 配置。
 - fork 不提供源码安装：两个安装器都不再有 source 模式，安装验证只覆盖 Release 二进制。上游的源码安装测试 `scripts/install.test.ts` 与 `scripts/install-tests/source.dockerfile` 在 fork 中删除，`run-ci.sh` 不再执行源码安装冒烟；同步时 MUST NOT 恢复这些入口，除非先显式修改本节需求。
 - Windows 安装与更新不要求额外安装 PowerShell 7：安装器必须能在系统自带的 Windows PowerShell 5.1 x64 下直接执行；`omp update` 使用自身 HTTP 下载、SHA-256 校验和二进制替换链路，不依赖 `pwsh.exe`，不得要求用户升级 PowerShell 来绕过兼容问题。
@@ -178,7 +178,7 @@ OMP MUST 在所有运行平台的普通与 offline 启动中省去自动更新�
 
 #### Scenario: 启动不检查更新
 
-- **WHEN** 启动终端交互、print、RPC、ACP 或 ZCode app-server，或创建、恢复会话
+- **WHEN** 启动终端交互、print、RPC 或 ACP，或创建、恢复会话
 - **THEN** 不自动查询 OMP 新版本，不自动刷新、检查或升级插件市场，不创建相应后台任务或展示新版通知。
 - **AND** 删除 `startup.checkUpdate`、`marketplace.autoUpdate` 设置与对应 UI；遗留配置值不能重新启用这些行为，不改写用户配置。
 - **AND** 普通启动不加载仅供更新命令使用的实现；显式 `omp update`（含检查模式）及插件市场刷新、升级仍沿用原有入口和行为，已启用来源的已安装插件照常加载；Claude 插件来源默认不扫描，具体边界见[默认设置](../fork-runtime-defaults/spec.md#requirement-claude-插件发现默认关闭)。
@@ -249,27 +249,6 @@ OMP MUST 将安装诊断写入按运行唯一命名的日志文件，字段脱�
 
 - **WHEN** 安装器在可写或不可写的数据根下执行
 - **THEN** 可写时生成唯一命名的安装日志并按 20 次／5 天保留，不可写时仅打印一行提示且安装继续
-
-### Requirement: ZCode 发布产物的校验与布局
-
-OMP MUST 只为干净且已提交的源码生成 ZCode 产物，并按目标校验可执行文件格式后原子发布。
-
-#### Scenario: ZCode 发布产物的校验与布局的详细边界
-
-- **WHEN** 本节所述功能在适用条件下运行
-- **THEN** 以下具体约束适用：
-
-- `ZCODE_ARTIFACT_ROOT` 在 dry-run 下 MUST NOT 生效；启用时 MUST 要求 `RELEASE_VERSION`，缺失即失败。
-- 输出根 MUST 不存在且由本次调用新建：已存在时 MUST 失败，MUST NOT 删除或复用用户已有目录；失败后 MUST 递归删除本次自建的输出根，不留半成品。
-- 源码 MUST 干净且 HEAD 与调用方给出的期望提交一致；构建前、拷贝后 MUST 各校验一次，拷贝前后同一文件 MUST 字节一致，否则失败。
-- 每个 target MUST 校验可执行头与目标匹配（PE 的机器类型、ELF 的类／字节序／机器、Mach-O 的魔数与 CPU 类型），不匹配即失败。
-- 产物布局 MUST 为：每个 target 目录下的 `omp`（Windows 为 `omp.exe`）、`omp-artifact.json`（含 `schemaVersion: 1`、`version`、`commit`、`protocolBaseline`、`files` 的 SHA-256）以及输出根下的 `omp-release.json`（版本、提交、协议基线及各 target manifest 的 SHA-256）。
-- 版本号 MUST 符合语义化版本形式，target 列表 MUST 非空且不重复。
-
-#### Scenario: ZCode 发布产物的校验与布局的可观察行为
-
-- **WHEN** 带 `ZCODE_ARTIFACT_ROOT` 构建发布二进制
-- **THEN** 输出根为新建目录，内含逐 target 的 `omp`／`omp.exe`、`omp-artifact.json` 与根级 `omp-release.json`；不干净、提交不符或可执行格式不符时整体失败并删除自建输出根
 
 ### Requirement: POSIX 安装器对运行中会话的检测
 
@@ -413,18 +392,6 @@ OMP MUST 在 `irc` 发送成功的回执中保留消息身份，使冷恢复能�
 
 - **WHEN** 含 `irc` 发送的会话被重新加载
 - **THEN** 已发送消息与对端接收记录按同一 `id`／`ts` 对应，不重复计数
-
-### Requirement: 本地构建的 ZCode 产物版本前置条件
-
-OMP MUST 对本地二进制构建产生的 ZCode 产物执行与已批准产物契约相同的显式版本前置条件。
-
-#### Scenario: 缺少发布版本
-- **WHEN** 本地二进制构建设置了 `ZCODE_ARTIFACT_ROOT`，但未提供有效的 `RELEASE_VERSION`
-- **THEN** MUST 失败，不得以 package 版本替代发布版本生成 ZCode 产物。
-
-#### Scenario: 显式发布版本
-- **WHEN** 设置 `ZCODE_ARTIFACT_ROOT` 且提供有效 `RELEASE_VERSION`
-- **THEN** 生成的 ZCode 产物版本 MUST 使用该值，并继续满足源码、目标格式、目录和清理的既有产物契约；未启用产物输出的普通本地构建保持原有版本行为。
 
 ### Requirement: Windows 统计端口恢复
 

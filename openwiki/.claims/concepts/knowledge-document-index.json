@@ -258,7 +258,7 @@
     },
     {
       "id": "claim_9690d24e0ac54282bcc188b965d086ca",
-      "statement": "TUI、`knowledge_search` 工具与 ZCode 复用执行端服务和 profile 数据库；远端目录须在执行端有效，生命周期结束或请求换代时取消并丢弃迟到结果。",
+      "statement": "TUI 与 `knowledge_search` 工具复用执行端服务和 profile 数据库；生命周期结束或请求换代时取消并丢弃迟到结果。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/knowledge-index/spec.md#L54-L63",
@@ -267,10 +267,6 @@
         {
           "resource": "repo://packages/coding-agent/src/knowledge/service.ts",
           "version": "repo-file-v1:sha256:bdfdc4656db33d66f9ec82654476e712ad9bb4fa108abd4e5ed1f4a37c7db3f4"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/indexes.ts#L125-L175",
-          "version": "repo-lines-v1:sha256:f3c50b8da77d7ee8c4a21f362927953294eca0937cde72820c54371be728ca7d:eyJzZWxlY3RlZExpbmVDb3VudCI6NTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjllZTczM2Q2M2YwOTI4ZmJhZWI2MDIwNTY2MDMxODJhZTY1NGZmMWM3NjY3MDQ1YzBjODY3M2FmOTA4NjRmYjIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjFjZTkwNTYxZDVhZWQyNDAzYjMwNmQ1ZWU5MGJmYjY2Y2Q1YjgzODA1MjcwNzBiMzVlMzg0ODc5ZWEyZWVlNjQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjU0YmE3MjYzYzEwODcwMmE1NWNjOWRjZjU4MWYxMTMzMzc4Mjk3NmRlN2U2MDRkMTIxNWU2ZDhjZjUxYTA4ZmYiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjczOTc3MDNmMTQ2MmRjMDYzN2NiZjc4OWFkOTgzYzA3MWU1NzdiYTljZTdjNjY1ZjZhZTJjZWI0ZDJhN2NmYjkifQ"
         }
       ]
     },

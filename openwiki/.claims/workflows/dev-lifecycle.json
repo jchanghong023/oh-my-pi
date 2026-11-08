@@ -187,16 +187,6 @@
       ]
     },
     {
-      "id": "claim_700f06c1f54541eca66edd74cf5f6901",
-      "statement": "ZCode Dev 桥接只维护观察索引，不拥有正文；冷查询只读且不恢复控制器，实时操作使用运行、阶段、generation 和文件版本绑定。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/spec-driven.ts",
-          "version": "repo-file-v1:sha256:eef4661e823135c73a561c3067a836680bb57154d237202b82328d5cfeb4c4a5"
-        }
-      ]
-    },
-    {
       "id": "claim_c09bc50473874137918a775fcdcf7817",
       "statement": "Dev 模式进入、需求接受、计划批准、软件验收与 Git 或发布授权互不等价，结构通过不证明软件正确。",
       "evidence": [

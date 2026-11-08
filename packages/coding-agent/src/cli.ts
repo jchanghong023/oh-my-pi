@@ -14,9 +14,6 @@ try {
  * CLI entry point — registers all commands explicitly and delegates to the
  * lightweight CLI runner from pi-utils.
  */
-import { createInterface as createWorkflowChildInterface } from "node:readline";
-import { pathToFileURL } from "node:url";
-import * as workflowChildVm from "node:vm";
 import type * as WorkerThreads from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import type { CliConfig, CommandMetadata } from "@oh-my-pi/pi-utils/cli";
@@ -471,19 +468,6 @@ let runningCommand: string | undefined;
 
 /** Run the CLI with the given argv (no `process.argv` prefix). */
 export async function runCli(argv: string[]): Promise<void> {
-	// The workflow entry is self-contained. Dispatch before profile/CLI parsing:
-	// compiled OMP executables cannot interpret Node's heap/eval flags.
-	if (argv[0] === "__zcode_dwf_child") {
-		if (argv.length !== 2 || !argv[1]) {
-			throw new Error("__zcode_dwf_child requires exactly one sandbox entry file");
-		}
-		const vm = workflowChildVm;
-		const createInterface = createWorkflowChildInterface;
-		const entry = await import(pathToFileURL(argv[1]).href);
-		if (typeof entry.start !== "function") throw new Error("Workflow sandbox entry must export start");
-		await entry.start({ vm, createInterface, stdin: process.stdin, stdout: process.stdout });
-		return;
-	}
 	// `omp zsh|bash|sh [args...]`: the whole argv belongs to the shell (`--help`,
 	// `--profile`, `-c` included), so it dispatches before profile bootstrap,
 	// prepaint, network setup and the command table.

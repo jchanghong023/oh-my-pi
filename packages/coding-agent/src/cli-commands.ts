@@ -38,11 +38,6 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.acpHelp,
 	},
 	{
-		name: "app-server",
-		load: () => import("./modes/zcode").then(m => m.default),
-		help: commandHelp.appServerHelp,
-	},
-	{
 		name: "auth",
 		load: () => import("./commands/auth").then(m => m.default),
 		help: commandHelp.authHelp,
@@ -352,7 +347,6 @@ export const LAUNCH_FLAG_COMMANDS: Readonly<Record<string, true>> = { launch: tr
 /** Commands whose trailing profile flags must be applied before their modules load. */
 export const PROFILE_FLAG_COMMANDS: Readonly<Record<string, true>> = {
 	...LAUNCH_FLAG_COMMANDS,
-	"app-server": true,
 	openwiki: true,
 };
 

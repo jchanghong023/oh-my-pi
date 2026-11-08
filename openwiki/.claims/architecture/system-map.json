@@ -4,19 +4,11 @@
   "claims": [
     {
       "id": "claim_26940e84fd0441c8ab975eb695d1f5a7",
-      "statement": "终端启动路径和 ZCode app-server 都通过 createAgentSession 汇合到共享的 coding-agent 会话，而 app-server 是独立的宿主命令路径。",
+      "statement": "终端启动路径通过 createAgentSession 组装 coding-agent 会话。",
       "evidence": [
         {
           "resource": "repo://packages/coding-agent/src/main.ts#L2614-L2635",
           "version": "repo-lines-v1:sha256:4345a07e4aabb835ac8ed81127255dd59907f7bf3109cc36ded26657f366af7b:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImJlNGNmYmJhNjA2MmE3NDk5Mjg1ZjIyNWMzNmUzNDE2Y2UwYTdlMWVlMDI0NWRiM2RlMjBkZDZmMWEyY2E5MDUiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImEwNzMwMmZlZWEyZWRhZGY3NTc2NzUzNmUxYmNkNTAwZjkyMmQzZTdkNDEyYjQ3ZDJjY2M3ODAyMmU3NzQyZDYiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjMjYxYjNjMmNmMWNiNjYxNGEyZDhjMjkzOTc4YjY0MGQ3YzE3YWFkNjMxYjEzNzRhZTgzYzk1NDNhNzMwM2QiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImI3MWMxNWFiNThjMjJjMWIxMWQ1OGZiYmVlMzYxYzRmYmZiMzAwMDFiMDkyZDhiNmY4MmUyMzJmYjU1NWZiZDIifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L74",
-          "version": "repo-lines-v1:sha256:e767d1778173875cbe83f36fb5a26b7125e00af9fd3100835b6e4650591bed53:eyJzZWxlY3RlZExpbmVDb3VudCI6MjIsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzYTRmMDU4YTkyMzE0ZTAwYjY0NTkxMjVmNTA5MzE1YjgyNjM0ZGZiYTVjMTMxMmQ4ODRjNzJmNTk5MjRmNDUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijk1YWU0ODhhNzllMjI0MDFhZmM2NmU0MDRiOGU1NWZmN2Q1Y2MzNTVjZGI2NmM1ZTk5OWE5N2JjNjI1ZjdlY2QifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L686-L718",
-          "version": "repo-lines-v1:sha256:859fc0a848bee630687b588d6c974de4d77232582036773b4012d9940069d40b:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZDMwM2I0MWJiNGU2NDQ4NTJjM2VkYjYwZTYzODNlZmQ2MGUzNzAzNTMyOGMxMGNlYzZlMDc4MmYxNDA2NGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMzYyMWU2NzIzMGFmZTc1NjYxN2YzMzAxNGEyOGUyNTY3ZjE5YjViYWUxMGY3ZWEwOTM3ZDUzYjZlOWQwMjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBjNzE4M2UzODI0MWQxMTVhNTNhN2ZiNmNjN2E4MzM3NDVhODEyNWYzMmQ5NjVkZGQ3MWUyNGFlZDVhYjlmYWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcyZDIzZDMxYzQzNDg2YzViNjQzNzM0ZDU2MzIwYjg3NzQzYzE0ZGFhODk5OTc5ZWUwNzMxZDEwZmRhNmJlNmIifQ"
         }
       ]
     },
@@ -81,44 +73,6 @@
         {
           "resource": "repo://packages/coding-agent/src/cli.ts#L52-L57",
           "version": "repo-lines-v1:sha256:9aa0adf4b681f0a7f4956d5e7030384f53f7e2eddf46f31712c8ce39a6e42fc6:eyJzZWxlY3RlZExpbmVDb3VudCI6NiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMTdjZjFlNTA5NTFkOGU2YzQ0YTI2ZmEwNTg4OTZkNjBkOTBkYjc0YWMxZjRlOThhZmY2NGViYjg5ZTJmMzQ3ZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiODJiMWFiYjVjYmNjMjhiYjVkZGVjMjU3ZWJmMDg3NWYxYzE1NDZjNDJmNDdlZjRmMmVkZmUwMDlkMGZiZDk4YyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiYTI1MWM3MTgwYjI1MTkzNmUxNmFhYjQzMzkxZWNlYzUyZjU5YmUyM2UxZDRiOGEyMjliZTJlMjRlYTc0YTc2OSJ9"
-        }
-      ]
-    },
-    {
-      "id": "claim_984767f428ce422a9246913699f41aeb",
-      "statement": "app-server 要求 stdio，指定 cwd 必须为已有目录的绝对路径，启动时将诊断 console 输出重定向到 stderr 以保护协议通道。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/index.ts#L53-L93",
-          "version": "repo-lines-v1:sha256:cf28c3e694a101626db1cd182d7fc460942b793685ce3ddbab14fe4777d910f4:eyJzZWxlY3RlZExpbmVDb3VudCI6NDEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVlZjFjODFjYjUwYTljY2RlNDU2ODgyNWU4MGM2ZDJkNWJiMGZjOGRmN2JhZjBhYzIwN2Q2MmNmNzZkYmU0MGEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImYyOTY0MDc5YzNjNWM4MTUyMGVmMzNhMmI5ZDJlMTVhMWI4NGQ3MjgwZGI4NTkwZGNkNjU3NDdlM2UwMTJhNDAiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjExZDI1NmJmMWY4NjI1N2NjZTUzNjg5NTRjOWVmZmE4MWI2MTZhYTdhNDc0OTUwMzUyNTM0MmZhNTE4YjU3YTYifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_be8a4cc3b9c64df1b112d4ca9dc450f5",
-      "statement": "ZCode 宿主创建持久会话前先准备 journal 和可用 MCP 工具，受限制会话不能启用指定 MCP servers，并向 SDK 传入会话管理器、独立 registry 和工具限制而不绑定进程状态。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L663-L719",
-          "version": "repo-lines-v1:sha256:9f1e50e0962ea2bae3d150f6818227b13973582f44b84012578320e340041a74:eyJzZWxlY3RlZExpbmVDb3VudCI6NTcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQ1NjBiNDlkN2I0ZWQxZjgwMDU5Yjc1OTRkYTc1ZjhiZjY4YzIyZmM0YmMxMzBiN2Y2MmQ1MGIzY2UxMmUwNmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjA0MGI4ODk4NDA2NWE0OTI2NTRlMTRkMWRiNTQzZGNlYzAyNGU4ZjNjNjIwNGJkNDcxYjAwZmRmNzA4MjkwZDciLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6Ijc0OGNiMDRlZWRmMTI4YTA1NmM5NDU3NWZkOWUzOTRkMDFiOGJmZDU2NjJlNGY5MmE4OTE2NzNmYzQyMmYzZTQiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjVjNDQ4ZGFjNDQxYWRiNGZmNDFjNDRkZWFkOTIzYjA0MDI3YjZlY2I5ZWVkYTg5ZmVmMjE4Yjg4MzkxYmJkOGUifQ"
-        }
-      ]
-    },
-    {
-      "id": "claim_6102662facce47cfa5b23b197bab819e",
-      "statement": "ZCode 宿主负责协议投影、交互和会话记录，复用 coding-agent 会话而不是另建 Agent 引擎。",
-      "evidence": [
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/server.ts#L116-L124",
-          "version": "repo-lines-v1:sha256:75a0da0b6952b628db4303b8e0898970d802af2f646735438411945674cba8ea:eyJzZWxlY3RlZExpbmVDb3VudCI6OSwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiZTY0OTAwOTdkZGQ0MDkxYTAxOTY4OWMzNzZmYzFiMmZlNzFlMmJlNmMxNmM4OGMyYjJiNGIzMWJkZTQ5M2FiMyIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNDEyY2EzNDVjY2Y3NWJmOWMwODA2YmNlNjk1YmU4ZGU4MDhiNzk5ODQyNTFhN2E1NGQyMDJjZjYxMDFkZDQ1MSIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiZjI5NjQwNzljM2M1YzgxNTIwZWYzM2EyYjlkMmUxNWExYjg0ZDcyODBkYjg1OTBkY2Q2NTc0N2UzZTAxMmE0MCIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiODQxMjVmNDAzODQ4NjM1NzI4YWExOGQ1YTRlZDMxZjMyMzliMzllNGY2NWI2MmU5YmVlM2RkMGU4MzRjZDcxZSJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/server.ts#L16-L33",
-          "version": "repo-lines-v1:sha256:7b34ab72ab9ad28411c80b5ae086b5bf98269e1298ca6d28657b8fa0e8f0860d:eyJzZWxlY3RlZExpbmVDb3VudCI6MTgsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY0NDZhODdlNjE5YTlkN2M0ODk4YzQ5ZTMzOWM5YzQzNDY4MzVkNDg4N2EyMjJlODJjNjdhZWRkNGEwMTUxMjciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjZjMmI5N2VkY2EzMmRlYWRkNGM3NjFlMzFhYWQ0NDkzZGFkNjhkOTMzOGZlYjE0MDAxZGIyYmEwODU1MDc3MjAiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjA5NTc4ZjZhZTM1YTRjYjAxMGY3NGUxMGQzMmUzNDY0N2FkNmFjNWI0OTVkN2M4OTg3MGM1MWMzYjY5NDU5NTgiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjEwYWEzOTlkNGQ4OGMxZTU2NjUzODk2M2FiMzhiY2U0NzcyYzE0YjhlNjY1ZWE0ZWJmOWFhNjc4YjA1Mjc0NmEifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/sessions.ts#L686-L718",
-          "version": "repo-lines-v1:sha256:859fc0a848bee630687b588d6c974de4d77232582036773b4012d9940069d40b:eyJzZWxlY3RlZExpbmVDb3VudCI6MzMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6Ijg3ZDMwM2I0MWJiNGU2NDQ4NTJjM2VkYjYwZTYzODNlZmQ2MGUzNzAzNTMyOGMxMGNlYzZlMDc4MmYxNDA2NGYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjExMzYyMWU2NzIzMGFmZTc1NjYxN2YzMzAxNGEyOGUyNTY3ZjE5YjViYWUxMGY3ZWEwOTM3ZDUzYjZlOWQwMjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjBjNzE4M2UzODI0MWQxMTVhNTNhN2ZiNmNjN2E4MzM3NDVhODEyNWYzMmQ5NjVkZGQ3MWUyNGFlZDVhYjlmYWEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjcyZDIzZDMxYzQzNDg2YzViNjQzNzM0ZDU2MzIwYjg3NzQzYzE0ZGFhODk5OTc5ZWUwNzMxZDEwZmRhNmJlNmIifQ"
         }
       ]
     },
@@ -194,23 +148,11 @@
     },
     {
       "id": "claim_1a98b039f02f492aaeb203d96f89f040",
-      "statement": "app-server 的进程、会话和核心协议有对应聚焦测试，根脚本还提供 Go 和 Rust SDK 测试入口。",
+      "statement": "根脚本提供 Go 和 Rust SDK 测试入口。",
       "evidence": [
         {
           "resource": "repo://package.json#L92-L94",
           "version": "repo-lines-v1:sha256:0f5fad339965c1fd09a10cfc728d3034d788326571315b7c7de6aef546d035c8:eyJzZWxlY3RlZExpbmVDb3VudCI6MywiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiMDU0NmFlNjI4NmRhYjQxNmI2YTZhOGYwOWNkNzZiZTQyZWQ2Yzk3MzFhYjEyYWQzZTQ1YTA0N2NiOTQyMmNkZiIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiNWUxN2M2NmViNWU2YjU5MGYzMDdhMTRlNTJlYjVlMDgyYThiMjJhYjQwNDlhYjNkYmE5NzhmOTBkMDExY2M0YiIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiMzNiZTNkMTc2NTY0Y2JiNzNkY2RlZmQ1Mzk2Zjc1MzdhZTMzYmIyY2NkMjNjODFkN2E5MmQ2M2ViYTAzOGY2MSIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiZWRiOTgwYTVjMzY0YjMyNmRlNTE0MTRiMmY5MTc4MzQ2MjMyMDc1NzBkNTkxYmFkMDg0OTFiN2YxZmZjYTVhOCJ9"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-core-protocol.e2e.ts",
-          "version": "repo-file-v1:sha256:1c028ba25be10e430bd81fcd18f19b8dc2907d5910f9d5f7407244a43380e8c1"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-process.test.ts",
-          "version": "repo-file-v1:sha256:e9c09e3324bab4c04f2a506a57d7bb16170fd1769bf5c062f86a6cc88ed2f0f1"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-sessions.test.ts",
-          "version": "repo-file-v1:sha256:4770689d91228adf13ba378d5499bfa68779e022f882d3a9288c3dfd13cf587d"
         }
       ]
     }

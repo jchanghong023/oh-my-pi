@@ -8,7 +8,7 @@ OMP 已有可复用基础：Mnemopi 的 Embedding API 调用与向量配置解�
 
 ## What Changes
 
-- **保持查询接口不变。** `wiki` 的 `query`、`mode: "search" | "grep"`、`case`、`cursor`，`DocsService` 的查询入口，以及 TUI、RPC、ZCode 既有方法、参数与结果结构均不增加语义搜索专用字段或模式。省略 `mode` 仍等价于 `search`。
+- **保持查询接口不变。** `wiki` 的 `query`、`mode: "search" | "grep"`、`case`、`cursor`，`DocsService` 的查询入口，以及 TUI、RPC 既有方法、参数与结果结构均不增加语义搜索专用字段或模式。省略 `mode` 仍等价于 `search`。
 - **普通搜索内部自适应。** 对新的 `search` 查询，查询向量有效且当前 Wiki 范围内存在与该模型匹配的完整有效向量代际时，同时执行既有全文召回和有效语料的语义召回，再按 RRF 融合。某索引的已存向量代际不兼容时仅排除该代际，其余有效索引仍可融合；查询向量无效、模型不可用或没有剩余有效向量代际时整体使用既有全文基础结果，不向用户报告“缺少向量能力”的失败。
 - **空状态保持 HEAD 基线。** 不改变数据库打开、空库创建和无索引错误：按既有规则打开不存在的文档索引数据库会创建空 WAL 库，但没有已发布索引的查询仍报无索引，不改成正常空结果，也不新增区分缺库与空库的展示或返回字段。
 - **grep 保持原义。** 显式 grep 只扫描数据库原始 Markdown，不调用 Embedding 或 Reranker、不做语义召回或 RRF；无索引错误与正常零命中的区别沿用 HEAD。
@@ -35,11 +35,11 @@ OMP 已有可复用基础：Mnemopi 的 Embedding API 调用与向量配置解�
 
 ### Modified Capabilities
 
-- `wiki-index`：将普通搜索改为内部自适应的全文／语义融合，并可选精排；明确可选向量准备、模型与语料身份、RRF 和精排的证据保护、分级回退、分页一致性以及 TUI／RPC／ZCode 同源消费行为；空状态沿用 HEAD。
+- `wiki-index`：将普通搜索改为内部自适应的全文／语义融合，并可选精排；明确可选向量准备、模型与语料身份、RRF 和精排的证据保护、分级回退、分页一致性以及 TUI／RPC 同源消费行为；空状态沿用 HEAD。
 
 ## Impact
 
-- 受影响的实现区域：`crates/pi-wiki/`、`crates/pi-natives/src/wiki/`、`crates/pi-natives/src/vectors.rs`、`packages/coding-agent/src/docs/`、`src/tools/wiki.ts` 及其 TUI／RPC／ZCode 消费端。原全文／grep 内核继续使用 Rust；数值计算优先复用已有原生向量内核，不要求为全 Rust 而重写已有轻量宿主逻辑。
+- 受影响的实现区域：`crates/pi-wiki/`、`crates/pi-natives/src/wiki/`、`crates/pi-natives/src/vectors.rs`、`packages/coding-agent/src/docs/`、`src/tools/wiki.ts` 及其 TUI／RPC 消费端。原全文／grep 内核继续使用 Rust；数值计算优先复用已有原生向量内核，不要求为全 Rust 而重写已有轻量宿主逻辑。
 - 现有复用依据：`packages/mnemopi/src/core/embeddings.ts`、`vector-index.ts`、`polyphonic-recall.ts`、`packages/coding-agent/src/mnemopi/company-embeddings.ts`，以及 `packages/ai/src/rerank/`。只复用必要公共能力，不要求开启记忆系统，不复制一套 API 请求、配置、向量数学、RRF 或 rerank 客户端；现有客户端不构成公司网关已经兼容的证明。
 - 算法参考：[QMD 2.8.3](https://github.com/tobi/qmd/tree/v2.8.3) 的全文／向量双路召回、RRF 和有限候选精排思路。不是引入 QMD SDK、CLI、MCP、模型下载器或数据库格式；不新增外部常驻向量服务或自研 ANN 索引。
 - 有意变更的既有合同：默认 `search` 不再固定纯全文；可选向量准备与查询可以调用已配置 Embedding，普通搜索还可调用独立配置的可选 Reranker。基础全文结果不依赖模型，grep 不调用任何模型；原始证据仍来自当前 profile 的 Wiki 数据库，不回读源目录。

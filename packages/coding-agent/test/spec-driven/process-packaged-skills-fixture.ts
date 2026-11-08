@@ -2,20 +2,18 @@ import { expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter, TempDir } from "@oh-my-pi/pi-utils";
-import { LegacyProtocol, v4ConversationRowsRangeResultSchema } from "../../src/modes/zcode/schema";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import {
 	bounded,
 	fixture,
 	GATE_BUDGET,
 	git,
-	isConversation,
 	launch,
+	listSkills,
 	PublicPeer,
 	run,
 	test,
 	textValues,
-	workspace,
 } from "./process-fixture";
 import { contentText, createProviderFixture, MARKER, rolePayload } from "./provider-fixture";
 
@@ -32,7 +30,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			if (hasOpenSpec) await fs.mkdir(path.join(config.cwd, "openspec"));
 			const baseline = await git(config.cwd, config.env, ["rev-parse", "HEAD"]);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
-			await peer.ready();
+			await peer.start();
 			const coreOpenSpec = new Set([
 				"openspec-propose",
 				"openspec-explore",
@@ -45,13 +43,12 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const defaultSkills: Record<string, true> = {};
 			for (const entry of inventory.skills.filter(entry => coreOpenSpec.has(entry.name)))
 				defaultSkills[entry.name] = true;
-			const ordinary = await peer.create(config.cwd);
-			let since = await peer.send(ordinary, `${MARKER} ordinary greeting, no skills requested`);
-			await peer.next(
-				frame =>
-					isConversation(frame, ordinary) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
-				since,
+			let events = await peer.promptAndWait(
+				`${MARKER} ordinary greeting, no skills requested`,
+				undefined,
+				GATE_BUDGET,
 			);
+			expect(textValues(events).some(text => text.includes(`${MARKER}_CHAT_READY`))).toBe(true);
 			const ordinaryRequests = provider.requests.filter(request => (request.tools?.length ?? 0) > 0);
 			expect(ordinaryRequests.length).toBeGreaterThan(0);
 			for (const request of ordinaryRequests)
@@ -60,9 +57,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					expect(JSON.stringify(request.messages)).not.toContain(`name: ${skill.name}`);
 					expect(JSON.stringify(request.messages)).not.toContain(skill.path);
 				}
-			const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
-				await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: ordinary }),
-			);
+			const catalog = await listSkills(config.cwd, config.env);
 			const resourceMetadata = new Map<string, { name: string; description: string }>();
 			for (const entry of inventory.skills) {
 				const skill = catalog.skills.find(item => item.name === entry.name);
@@ -75,7 +70,7 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					continue;
 				}
 				if (!skill) throw new Error(`Public packaged skill missing: ${entry.name}`);
-				const canonical = await fs.realpath(skill.path);
+				const canonical = await fs.realpath(skill.filePath);
 				expect(path.relative(config.root, canonical).startsWith("..")).toBe(false);
 				expect(canonical.replaceAll("\\", "/")).toEndWith(entry.path);
 				const source = await fs.readFile(canonical, "utf8");
@@ -100,20 +95,18 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 			const unauthorizedPaths = superpowers.map(entry => `skill://${entry.name}:raw`);
 			const unauthorizedRequestStart = provider.requests.length;
 			const unauthorizedTurn = "unauthorized";
-			since = await peer.send(
-				ordinary,
+			events = await peer.promptAndWait(
 				`${MARKER} inspect resource access without invoking a skill\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({
 					turn: unauthorizedTurn,
 					path: unauthorizedPaths[0],
 					allowedPaths: [],
 					deniedPaths: unauthorizedPaths.slice(1),
 				})}`,
+				undefined,
+				GATE_BUDGET,
 			);
-			await peer.next(
-				frame =>
-					isConversation(frame, ordinary) &&
-					textValues(frame).some(text => text.includes(`${MARKER}_RESOURCE_READY_${unauthorizedTurn}`)),
-				since,
+			expect(textValues(events).some(text => text.includes(`${MARKER}_RESOURCE_READY_${unauthorizedTurn}`))).toBe(
+				true,
 			);
 			const unauthorizedRequests = provider.requests
 				.slice(unauthorizedRequestStart)
@@ -129,31 +122,25 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 				expect(unauthorizedResults).not.toContain(resourceMetadata.get(entry.name)!.description);
 			}
 			for (const entry of inventory.skills.filter(entry => !isHiddenOpenSpec(entry))) {
-				const session = await peer.create(config.cwd);
+				expect((await peer.newSession()).cancelled).toBe(false);
 				const requestStart = provider.requests.length;
 				const turn = entry.name;
 				const selectedPath = `skill://${entry.name}:raw`;
 				const allowedPaths: string[] = [];
 				const others = inventory.skills.filter(other => other.name !== entry.name && !defaultSkills[other.name]);
 				const deniedPaths = others.map(other => `skill://${other.name}:raw`);
-				since = await peer.send(
-					session,
+				events = await peer.promptAndWait(
 					`/skill:${entry.name} ${MARKER} capability inspection only; do not implement, archive, commit, launch servers or execute destructive scripts.\nOMP_SPEC_MANUAL_RESOURCE ${JSON.stringify({ turn, path: selectedPath, allowedPaths, deniedPaths })}`,
+					undefined,
+					GATE_BUDGET,
 				);
-				await peer.next(
-					frame =>
-						isConversation(frame, session) &&
-						textValues(frame).some(text => text.includes(`${MARKER}_RESOURCE_READY_${turn}`)),
-					since,
-				);
+				expect(textValues(events).some(text => text.includes(`${MARKER}_RESOURCE_READY_${turn}`))).toBe(true);
 				const requests = provider.requests.slice(requestStart).filter(request => (request.tools?.length ?? 0) > 0);
 				expect(requests.length).toBeGreaterThan(0);
 				// Inspect native results delivered back to the model, correlated by the
 				// public provider tool-call ID. The model's final text is only a barrier.
 				const completed = requests.at(-1)!;
-				const published = v4ConversationRowsRangeResultSchema.parse(
-					await peer.request("v4/conversation/rowsRange", { sessionId: session, limit: 100 }),
-				);
+				const published = await peer.getMessages();
 				const readResult = (target: string): string => {
 					const call = completed.messages
 						.flatMap(message => (message.role === "assistant" ? (message.tool_calls ?? []) : []))
@@ -174,13 +161,15 @@ export function registerPackagedSkillTest(hasOpenSpec: boolean): void {
 					);
 					if (!result) throw new Error(`No native read result for ${target}`);
 					if (target === selectedPath || allowedPaths.includes(target)) {
-						const row = published.rows.find(item => item.kind === "toolCall" && item.toolCallId === call.id);
-						if (!row || row.kind !== "toolCall" || row.status !== "success")
+						const resultMessage = published.find(
+							item => item.role === "toolResult" && item.toolCallId === call.id,
+						);
+						if (!resultMessage || resultMessage.role !== "toolResult" || resultMessage.isError)
 							throw new Error(
 								`Selected package read failed: ${bounded({
 									resource: entry.name,
 									path: target,
-									status: row?.kind === "toolCall" ? row.status : "missing",
+									isError: resultMessage?.role === "toolResult" ? resultMessage.isError : "missing",
 									output: contentText(result.content).slice(0, 500),
 								})}`,
 							);

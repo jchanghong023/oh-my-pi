@@ -8,7 +8,7 @@
 
 ### Requirement: 独立能力与开发模式的边界
 
-OMP MUST 保留独立 OpenSpec、Superpowers、JCH、普通会话和 Dev 专有 Agent 能力。新建开发需求只使用浏览器八阶段流程，业务文档检查必经；终端 `/dev` 进入 Dev 并打开网页，当前 TUI 此后只接受再次 `/dev` 退出，不提供旧 Dev 终端子操作。只处理新流程，不提供旧模式兼容、旧流程迁移或旧状态恢复。Dev 与 ZCode 完全脱钩，不保留 Dev 专属协议、投影、命令或 UI 接入，也不要求通过 ZCode 观测、控制、协商或共享宿主接口；普通 ZCode 能力不在删除范围。
+OMP MUST 保留独立 OpenSpec、Superpowers、JCH、普通会话和 Dev 专有 Agent 能力。新建开发需求只使用浏览器八阶段流程，业务文档检查必经；终端 `/dev` 进入 Dev 并打开网页，当前 TUI 此后只接受再次 `/dev` 退出，不提供旧 Dev 终端子操作。只处理新流程，不提供旧模式兼容、旧流程迁移或旧状态恢复。
 
 #### Scenario: 独立能力与开发模式的详细边界
 - **WHEN** 用户使用独立 OpenSpec、Superpowers、JCH 或普通 OMP 会话
@@ -21,7 +21,7 @@ OMP MUST 保留独立 OpenSpec、Superpowers、JCH、普通会话和 Dev 专有 
 - **WHEN** 用户正常使用 OMP，或显式开启并使用 Dev
 - **THEN** Dev MUST 作为单独功能模块，普通 OMP 启动、会话和命令不得隐式启动 Dev 服务、任务或持久状态；只有显式 Dev 入口启动工作台，具体任务与业务状态变更仍须相应明确操作，打开或查看页面不启动模型、Team 或 Goal
 - **AND** Dev 会话、临时模型／主题设置、工具限制、锁及生命周期 MUST 隔离于普通 OMP，不串用普通聊天、不覆盖其配置、不阻塞无关普通工作；停止、取消和关闭只处理 Dev 自有资源
-- **AND** 为 Dev 扩展的公共接口 MUST 仅保留必要且默认关闭的接入，非 Dev 调用者保持原默认语义及配置作用域；Collab 网页适配优先复用普通接口，不使普通 TUI、命令、模型、Team、Goal、Collab 或 ZCode 回归。不新增网页全局 Team／模型角色配置入口，继续既有配置方式；不另建角色权限或重复配置系统
+- **AND** 为 Dev 扩展的公共接口 MUST 仅保留必要且默认关闭的接入，非 Dev 调用者保持原默认语义及配置作用域；Collab 网页适配优先复用普通接口，不使普通 TUI、命令、模型、Team、Goal 或 Collab 回归。不新增网页全局 Team／模型角色配置入口，继续既有配置方式；不另建角色权限或重复配置系统
 
 #### Scenario: 网页 Dev 与当前普通 TUI 互斥
 

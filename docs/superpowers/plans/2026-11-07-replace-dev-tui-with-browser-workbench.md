@@ -2,20 +2,19 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 一次性以真实浏览器工作台替换 Dev 专属 TUI，完整交付新需求的八阶段、五类原生 Agent、offline Collab、需求级 Git／PR 操作和人工决定；保留普通 OMP TUI、普通 ZCode 与其他独立能力。
+**Goal:** 一次性以真实浏览器工作台替换 Dev 专属 TUI，完整交付新需求的八阶段、五类原生 Agent、offline Collab、需求级 Git／PR 操作和人工决定；保留普通 OMP TUI 与其他独立能力。
 
 **Architecture:** 同一 OMP 宿主持有 `SpecDrivenController`、原生 runtime／AgentSession 和长寿命 Bun 工作台服务；浏览器只呈现快照、订阅原生事件、提交明确动作。业务逻辑留在 `spec-driven/`，传输、网页会话适配和宿主生命周期集中于 `dev-workbench/`；复用 collab-web React transcript、Markdown、工具卡及 Composer，不建立第二聊天／执行引擎。每需求最小业务记录纳入 Git，本地原生会话和操作恢复资料保持本地。使用现有 native VCS 和 Forge runner，不调用整 index 提交 TUI，不创建分支或 worktree。
 
 **Tech Stack:** Bun、TypeScript、React、现有 `@oh-my-pi/pi-wire`／CollabSocket／native crypto、`@oh-my-pi/pi-natives/vcs`、Rust `pi-vcs`／N-API、包内 OpenSpec 1.15.0、Superpowers 7.0.1、既有 Team／Goal／权限与资源插件、Bun 定向测试及隔离 Chromium 消费者测试。
 
-**Spec:** `openspec/changes/replace-dev-tui-with-browser-workbench/proposal.md`；该变更下 `specs/dev-browser-workbench/spec.md`、`specs/spec-driven-orchestration/spec.md`、`specs/personal-commands/spec.md`；`docs-zh-CN/lander-sailor-six-stage-agent-workflow.md`，特别是 4.1、4.4—4.8 节。需求与既有主规格冲突时，以本次已批准变更的明确替代条款为准，不恢复已经清理的 Dev↔ZCode 条款。
+**Spec:** `openspec/changes/replace-dev-tui-with-browser-workbench/proposal.md`；该变更下 `specs/dev-browser-workbench/spec.md`、`specs/spec-driven-orchestration/spec.md`、`specs/personal-commands/spec.md`；`docs-zh-CN/lander-sailor-six-stage-agent-workflow.md`，特别是 4.1、4.4—4.8 节。需求与既有主规格冲突时，以本次已批准变更的明确替代条款为准。
 
-**Status:** 实施及 Win32 x64／Bun 1.4.4 定向验收完成。参考四区、默认深色、右侧原生命令／技能输入已由真实 Chrome 观察并执行；八阶段 PR／独立测试／关联修复／复测／只读、未合入取消与原生问答／权限／附件场景均已有有效通过证据。普通 TUI 独占进入退出、原生 Goal、普通会话历史、Collab、ZCode及未受影响的 Git／native 结果复用；不重复跑已有效范围。源码、实际 npm CLI 与 Windows 独立二进制均已运行验证，具体来源和限制见账本。未执行 fulltest／slowtest、真实模型／外部 Forge 凭据／真实桌面 opener或其他平台验收；未 commit／push／发布，未执行 OpenSpec sync／archive。
+**Status:** 实施及 Win32 x64／Bun 1.4.4 定向验收完成。参考四区、默认深色、右侧原生命令／技能输入已由真实 Chrome 观察并执行；八阶段 PR／独立测试／关联修复／复测／只读、未合入取消与原生问答／权限／附件场景均已有有效通过证据。普通 TUI 独占进入退出、原生 Goal、普通会话历史、Collab及未受影响的 Git／native 结果复用；不重复跑已有效范围。源码、实际 npm CLI 与 Windows 独立二进制均已运行验证，具体来源和限制见账本。未执行 fulltest／slowtest、真实模型／外部 Forge 凭据／真实桌面 opener或其他平台验收；未 commit／push／发布，未执行 OpenSpec sync／archive。
 
 ## Global Constraints
 
 - 一次性切换，只接纳本次新流程。删除旧 Dev UI、终端子操作、旧状态恢复／迁移与兼容分支；不删除已有用户材料、代码或 Git 历史。内部依赖波次不是分期交付，不允许只交网页外壳或保留双轨。
-- Dev 与 ZCode 完全脱钩：只清退旧 Dev 专属 bridge、schema、projection、catalog、路由与消费者；不建设新 ZCode 适配、协议、协商、观测或控制，不扩展 OmpCode 跨仓交付。普通 ZCode 的会话、权限、动态 workflow、Team／Goal 等保持。
 - 八个业务阶段与五个 Agent 角色分开；ST／PR／测试复用执行会话辅助而非新增三个专有 Agent。导入业务材料时允许没有业务 Actor／recipient。读取记录、查看阶段、打开页面均不启动模型、Team 或 Goal。
 - 保留真实原生工具、MCP、扩展、模型设置、技能发现／按需授权、上下文、附件、队列、问答、审批、流式工具、子代理、Team 与 Goal；不能为浏览器采用裸 SDK 默认值、模拟 TUI context 或虚假的“执行成功”。当前资源发现规则按当前规格保留，不照搬旧计划示例中的过期发现集合。
 - `/dev` 进入独占模式：普通任务未结清时拒绝进入，不自动终止普通工作；进入后当前TUI只接受再次 `/dev` 退出，不与网页同时执行普通输入、命令或快捷操作。退出先按原生机制停止并结清Dev工作、关闭服务，再恢复原普通会话；不取消需求、不撤销Git。关页不退出。借用原root及Provider／MCP，删除只为普通 `/new`／`/move`／dispose并存新增的快照、克隆或线程桥。
@@ -43,7 +42,7 @@
 5. 合入后测试只写自身记录，原生工具、shell、扩展、自定义工具、Team／Goal 和任意深度后代不能绕过；无法约束的测试命令明确受阻。见 T04、V04、V14。
 6. HTTP／普通 WS offline 纯浏览器参与同一原生会话；薄 guest transport 不抢房主 `ctx.collabGuest`，不依赖远端浏览器 WebCrypto、不另建 Relay、不自动跟阶段。见 T08—T10、V08—V10。
 7. 真实网页完整原生交互，不把只有 select/editor 当成全部审批；身份、reqId、队列、附件、迟到事件和断线各自有实际消费者验收。见 T04、T08—T10、V09、V10、V14。
-8. 两入口完整资源链、普通聊天不换绑、旧 TUI／旧 Dev↔ZCode 所有消费者一次退役；有效材料失败矩阵、普通 TUI、权限、取消、Team／Goal 覆盖不随旧 UI 删除。见 T11—T15、V11—V15。
+8. 两入口完整资源链、普通聊天不换绑、旧 TUI 所有消费者一次退役；有效材料失败矩阵、普通 TUI、权限、取消、Team／Goal 覆盖不随旧 UI 删除。见 T11—T15、V11—V15。
 
 ## File Structure and Ownership
 
@@ -76,20 +75,16 @@
 | `packages/coding-agent/src/commands/dev.ts` | Create；懒加载 CLI 入口、有效环境、长寿命宿主，T11 |
 | `packages/coding-agent/src/cli-commands.ts`、`cli/command-help.ts`、`slash-commands/builtin-spec-driven.ts`、`slash-commands/types.ts`、`utils/open.ts` | Modify；双启动入口、帮助／拒绝旧参数、可观察 opener，T11；旧模式方法由 T12 清除 |
 | `packages/coding-agent/src/modes/interactive-mode.ts`、`modes/types.ts`、`modes/controllers/input-controller.ts`、`command-controller.ts`、`session-focus-controller.ts`、`modes/utils/ui-helpers.ts` | Modify；只删除 Dev TUI 接线，保留普通输入、focus、compaction、菜单、widget 容器，T12 |
-| `packages/coding-agent/src/modes/zcode/spec-driven.ts`、`modes/zcode/schema/omp-spec-extension.ts` | Retire；旧 Dev 专属 bridge／schema，T12；先迁出仍属普通协议的非 Dev定义，再删除无消费者文件 |
-| `packages/coding-agent/src/modes/zcode/{server.ts,commands.ts,sessions.ts,projection.ts,topics.ts}`、`modes/zcode/hosts/command-catalog.ts` | Modify；删除旧 Dev import／状态／能力／查询／输入／退出接线，不接新工作台，T12 |
 | `packages/coding-agent/scripts/dev-workbench-resources.ts`、`packages/coding-agent/src/dev-workbench/assets.ts` | Create；单一 content-addressed UI 载荷与 Bun 插件，T13 |
 | `packages/coding-agent/scripts/{bundle-dist.ts,compile-binary.ts,build-binary.ts}`、`packages/coding-agent/package.json`、`packages/collab-web/package.json`、根`package.json` | Modify；source准备／postinstall与npm／binary共用资源生成链和白名单，T13 |
 | `packages/coding-agent/src/dev-workbench/assets.generated.json` | Create generated；同一生成器输出的内容寻址UI载荷，源码／SDK延迟读取，打包插件内嵌，T13 |
-| `packages/coding-agent/test/spec-driven/{orchestrator,controller,artifacts,runtime,actors,actors-descendants,workspace,command,skill-policy,resources}.test.ts`、`packages/coding-agent/test/spec-driven/{process,process-resources}.e2e.test.ts` | Modify；真实文件名的原生／独立资源消费者，Dev公开驱动迁移而非保留ZCode接入，T01—T04、T11、T14 |
+| `packages/coding-agent/test/spec-driven/{orchestrator,controller,artifacts,runtime,actors,actors-descendants,workspace,command,skill-policy,resources}.test.ts`、`packages/coding-agent/test/spec-driven/{process,process-resources}.e2e.test.ts` | Modify；真实文件名的原生／独立资源消费者，Dev公开驱动迁移至原生消费者，T01—T04、T11、T14 |
 | `packages/coding-agent/test/dev-workbench/{records,git,cancel,host,server,collab,cli,resources}.test.ts` | Create；各片真实最小 fixture，T01、T06—T08、T10、T11、T13 |
 | `packages/coding-agent/test/dev-workbench/{browser,process}.e2e.test.ts`、`fixture.ts` | Create；source真实服务／浏览器／CLI消费者；不依赖npm／binary预构建产物，T14 |
 | `packages/coding-agent/scripts/verify-dev-workbench-package.ts` | Create；独立显式成品验收程序，非Bun test命名，默认发现及`--full`均不执行；必须提供本次产物及manifest，T14 |
 | `packages/collab-web/test/dev-workbench.test.tsx` | Create；工作台纯组件／输入归属合同，T09；不替代真实浏览器 |
 | `packages/collab-web/test/{composer,transcript,tool-view,markdown}.test.tsx` | Modify only if interface affected；现有组件覆盖随最小端口改造保持，T09 |
 | `packages/coding-agent/test/spec-driven/tui*.ts`、`native-surface.test.ts` | Retire Dev-only expectations／helpers；已核实目录内旧 TUI E2E 转由 T14 网页／原生消费者承接；混合普通 TUI断言保留，T14 |
-| `packages/coding-agent/test/modes/{zcode-spec-extension.test.ts,zcode-spec-materials.test.ts,zcode-spec-version-contract.test.ts,zcode-spec-driven.e2e.ts}` | Retire Dev-only consumers；必要的“Dev 已无接线”拒绝断言并入现有普通 ZCode tests，不保留专门新 Dev协议测试，T14 |
-| `packages/coding-agent/test/modes/{zcode-commands.test.ts,zcode-sessions.test.ts,zcode-projection.test.ts,zcode-hosts-command-catalog.test.ts}` | Modify；普通能力不变与无 Dev route／projection，T12、T14 |
 | `scripts/{ci-test-ts.ts,fulltest.ts,fulltest-ui-smoke.ts,test-report-ui-smoke.ts,ci-test-ts.test.ts,fulltest.test.ts}` | Modify；旧 Dev专属 smoke／白名单／启动敏感选择替换为新消费者，普通 TUI覆盖保留，T14 |
 | `openspec/specs/fork-verification-gates/spec.md` | Modify；只替换旧 Dev TUI 特有合同及消费者，预算／跳过／授权规则不变，T15 |
 | `openspec/specs/spec-driven-orchestration/spec.md`、`openspec/changes/replace-dev-tui-with-browser-workbench/specs/spec-driven-orchestration/spec.md` | Modify only retained provenance wording；把“仅本地历史确证”对齐为宿主从真实原生结果确证并持久化最小版本事实，历史可用仍核对；不放松方案来源和Team可采用合同，T04／T15 |
@@ -416,7 +411,7 @@ openPathWithResult(urlOrPath: string): Promise<
 | A | T01共享类型／records／owner先完成 | 这是所有切片的必要共同契约，不先开多套状态机 |
 | B | T02阶段；T03材料／同步；T04会话／权限；T05native scoped commit | 在T01合同上并行；T02独占controller/orchestrator，T03独占artifacts/resources，T04独占actors/runtime，T05独占native |
 | C | T06 Git／Forge → T07取消；T08宿主／传输 | T06依赖T01/T05；T07依赖T04/T06；T08依赖T02/T04，接口可先写但不伪称完整 |
-| D | T09网页、T10 Collab、T11入口、T12旧UI／ZCode清退 | 依赖T08及T06/T07动作。T09独占collab-web；T10独占Collab宿主适配；T11独占命令；T12统一修改旧消费者，不同时让其他片编辑同一接线 |
+| D | T09网页、T10 Collab、T11入口、T12旧UI清退 | 依赖T08及T06/T07动作。T09独占collab-web；T10独占Collab宿主适配；T11独占命令；T12统一修改旧消费者，不同时让其他片编辑同一接线 |
 | E | T13资源；T14消费者／门禁迁移；T15文档与一次性集成验收 | T13等待真实UI入口；T14归并各片fixture与旧覆盖；最后T15由主代理统一执行已授权验证。任一任务未完成均不可交付新模式 |
 
 每个任务实施者写测试但跳过运行；测试文件所有权随生产片，T14只集成公共fixture／覆盖迁移，不在半成品上启动并行gates。
@@ -609,21 +604,18 @@ openPathWithResult(urlOrPath: string): Promise<
 
 **Verification:** V11及V14。**Pass:** 两真实入口同业务能力；新 `/dev` 仅切换独占模式，不恢复旧阶段TUI或子操作，地址真实完整可复制。
 
-## Task 12: Remove Old Dev TUI and Dev–ZCode Consumers Completely
+## Task 12: Remove Old Dev TUI Consumers Completely
 
-**Files:** File Structure中的T12全部现有modes／zcode消费者；T11独占命令主体，T12统一清退其已无用runtime接口。
+**Files:** File Structure中的T12全部现有modes消费者；T11独占命令主体，T12统一清退其已无用runtime接口。
 
-**Interfaces:** 删除旧Dev专属 `bindMainSession/showDevCommandStatus/isDevInputRoute/handleDevInput/exitDevForSessionMove`及Dev input mode；不把新API接到ZCode。
+**Interfaces:** 删除旧Dev专属 `bindMainSession/showDevCommandStatus/isDevInputRoute/handleDevInput/exitDevForSessionMove`及Dev input mode。
 
 - [x] 删除interactive-mode中的Devobserver／状态字段、`native-dev-input`三行widget注册、空transcript视图、Dev详情前缀、stage主聊天切换／retry隐藏、退出／session／cwd切换隐式dispose。保留通用widget容器、普通状态栏、菜单、原生聊天及host shutdown真实资源清理。
 - [x] input-controller清除Dev专属Esc、draft detach／restore、target切换、retry／queue分支；command-controller清除shell cwd前旧Dev退出；session-focus移除无消费者专用包装。ui-helpers只删除Dev空视图接线，保留按session隔离compaction queue、迟到拒绝、Team draft恢复及普通focus。
-- [x] 删除ZCode旧Devbridge及索引写读、`omp-spec-extension`中Dev协议、`ompSpecDriven/includeSpecDriven/includeSpecBusiness/sendText.specRun`、Dev topics snapshot／delta／replay过滤、workspace/session runs合并及material APIs中的旧Dev分支、Dev catalog命令／模式／退出路由。普通dynamic workflow、artifact版本、会话、权限等共用定义先保留到所属普通schema，不能整块误删。
-- [x] 不让ZCode普通`sendText`因通用注册表新增 `/dev` 而启动网页或接管新流程；按其现有命令目录规则把Dev列为不可用／不暴露，旧Dev命令明确不再支持。普通TUI `/dev`仍为网页入口；这是彻底脱钩，不是协商fallback。
-- [x] 删除旧Dev index terminal推导（businessCompleted或idle+archive）、本地 `.omp/spec-sessions/<runId>/zcode.json`消费者及恢复入口，但不主动删除磁盘用户索引／历史。不要给新记录建ZCode projection或能力标识。
 - [x] 更新所有旧类型import／registry消费者和混合tests；仅删除已无消费者的Dev专属文件／exports／注释，不保留deprecated别名／兼容shim。普通命令、模型、子代理、workflow、权限、TUI菜单／附件／compact都保持原行为。
-- [x] 写V12普通消费者正向＋Dev拒绝断言：普通ZCode run／artifact／permissions／session／workflow仍有效，所有transport快照／delta／replay无Dev专属字段；普通TUI在Dev退出后retry／queue／cwd／focus无回归，不要求两模式并行。
+- [x] 普通TUI在Dev退出后retry／queue／cwd／focus无回归，不要求两模式并行。
 
-**Verification:** V12及T14覆盖迁移审查。**Pass:** 无新ZCode接入、无旧Dev产品残留或双轨，普通功能保留。
+**Verification:** T14覆盖迁移审查。**Pass:** 无旧Dev产品残留或双轨，普通功能保留。
 
 ## Task 13: Embed One UI Payload Across Source, Npm and Binary
 
@@ -634,7 +626,7 @@ openPathWithResult(urlOrPath: string): Promise<
 资源验收元数据也由同一生成器固定：`DevAssetManifest = { digest: string; sourceDigest: string; files: readonly { path: string; contentType: string; version: string }[] }`；`getDevWorkbenchAssetManifest(): Promise<DevAssetManifest>`，服务capability内`GET /api/assets-manifest`返回这个形状。`digest`覆盖实际UI载荷；`sourceDigest`在构建时对本工作台运行依赖、生成输入及所用包内资源的规范路径／实际字节排序取SHA-256，源码与成品同算法，运行时只读嵌入值、不重新扫描工作区。成品程序用本次生成manifest比对两个摘要，不能用相同版本号／旧dist文件的存在代替本次来源。此为验收身份而非运行遥测、聊天／业务状态或新发布系统。
 
 - [x] 从真实 `collab-web/dev-workbench.html`／React入口用Bun构建生产HTML／JS／CSS及需要的既有renderer资源，content-addressed manifest保存实际MIME与字节；不要把现有export-viewer生成器冒充完整工作台。
-- [x] 参照现有resource archive plugin在npm `bundleDist()`及binary `compileCodingAgent()`接入同一插件；`build-binary.ts`及所有调用compile helper的既有发行消费者自动得到工作台，不依赖某一wrapper先生成。普通ZCode打包保持，不加Dev协议。
+- [x] 参照现有resource archive plugin在npm `bundleDist()`及binary `compileCodingAgent()`接入同一插件；`build-binary.ts`及所有调用compile helper的既有发行消费者自动得到工作台，不依赖某一wrapper先生成。
 - [x] 新生成器CLI固定`bun packages/coding-agent/scripts/dev-workbench-resources.ts --write`，写`assets.generated.json`（manifest／digest／MIME／base64字节）。源码准备接根`postinstall`及显式`gen:dev-workbench`脚本；`getDevWorkbenchAsset`只延迟读取／缓存已生成载荷，HTTP请求不编译、不联网／启动前端server。缺载荷明确报准备缺失，不回退运行时构建或演示页。
 - [x] npm prepack／`bundleDist()`和公共`compileCodingAgent()`调用同一生成器／插件，SDK源文件白名单包含生成载荷，不依赖同级collab-web checkout；root现有postinstall的OpenWiki准备保留。新UI生成不等于发布；保留stats／export-viewer／OpenWiki／spec链和仅自有输出清理，禁止CDN／远程字体／JS补取。
 - [x] 写V13 source资源fixture：clean manifest、所有HTML引用／MIME／完整依赖、无公网补取；缺asset明确失败。npm／binary实际消费者由T14独立成品程序执行，不在普通测试中要求成品路径，更不能以源码替代成品证据。
@@ -643,17 +635,16 @@ openPathWithResult(urlOrPath: string): Promise<
 
 ## Task 14: Replace Old UI Acceptance While Retaining Effective Native Coverage
 
-**Files:** Create `test/dev-workbench/{fixture.ts,browser.e2e.test.ts,process.e2e.test.ts}`和独立非test程序`packages/coding-agent/scripts/verify-dev-workbench-package.ts`；迁移列明旧spec-driven TUI／native-surface及Dev ZCode消费者；Modify既有选测／smoke／脚本自测文件。
+**Files:** Create `test/dev-workbench/{fixture.ts,browser.e2e.test.ts,process.e2e.test.ts}`和独立非test程序`packages/coding-agent/scripts/verify-dev-workbench-package.ts`；迁移列明旧spec-driven TUI／native-surface消费者；Modify既有选测／smoke／脚本自测文件。
 
-**Interfaces:** 复用provider／环境准备，不复用旧`process-fixture.ts`的ZCode PublicPeer驱动Dev；保留其非Dev资源场景。fixture新增`resolveInstalledDevChromium(): Promise<string>`：先校验显式`PUPPETEER_EXECUTABLE_PATH`，否则只枚举现有`systemChromiumCandidatesForTest()`并用`chromiumExecutableProbeForTest(path)`做无下载版本探测；仅返回已存在且可执行的Chromium，缺失立即前置失败。随后固定该环境变量并给`loadPuppeteer().launch`明确`executablePath`，复用`closeLaunchedBrowser`清理。**不调用会走`browsers.install()`的未固定ensure路径**，不自动下载／安装。命名为ForTest的现有探测只在本测试fixture使用，不变更生产browser安装策略。
+**Interfaces:** 复用provider／环境准备。fixture新增`resolveInstalledDevChromium(): Promise<string>`：先校验显式`PUPPETEER_EXECUTABLE_PATH`，否则只枚举现有`systemChromiumCandidatesForTest()`并用`chromiumExecutableProbeForTest(path)`做无下载版本探测；仅返回已存在且可执行的Chromium，缺失立即前置失败。随后固定该环境变量并给`loadPuppeteer().launch`明确`executablePath`，复用`closeLaunchedBrowser`清理。**不调用会走`browsers.install()`的未固定ensure路径**，不自动下载／安装。命名为ForTest的现有探测只在本测试fixture使用，不变更生产browser安装策略。
 
 - [x] 建立隔离HOME／profile／config／data／cache／TEMP、临时真实Git／bare remote、localhost模型、独立工作台端口和既有Relay的最小fixture；继承门禁Bun transpiler cache约定。所有进程／浏览器／端口／native任务在自有cleanup结清，不读取用户凭据、不访问真实模型／remote。
 - [x] 对旧 `tui.e2e`、business／materials／closing／lifecycle／interactions／capabilities／resources／compact-mixed等真实覆盖建立逐项去向表：材料缺失／格式／版本／路径失败矩阵进T02/T03，权限／停止／后代／Team／Goal进T04，交互／附件／draft／错误与生命周期进网页native consumer；只删除固定三行、旧toggle、直接requirements、finish-business、四次next终结、drop留文件和旧恢复这类废止产品断言。
 - [x] 精确保留两处四角色材料失败矩阵：`tui-materials-cases.ts`及`process-fixture.ts`的requirements／solution／planner／executor × missing／malformed／unknown迁到新公开消费者；每例独立provider，原阶段／批准／输入／历史不变、具体错误可见、无后继模型，原平台条件／时限不放宽。`tui-compact-mixed`普通长会话／工具／子代理／压缩、`tui-resources`普通技能、`tui-capabilities`普通工具错误／独立需求场景继续保留，不能因文件前缀退役。
 - [x] `native-surface.test.ts`不再验Dev三行和stage换绑；保留其普通TUI native surface、draft／附件／viewport／cwd相关有效断言到现有普通消费者。不删除TUI引擎或通用PTY smoke来让范围变小。
-- [x] Dev-only ZCode tests退役，混合普通protocol／workflow／artifact version（包括超过16版本）／permissions场景迁入仍存在的普通tests，补旧Dev字段／命令拒绝；绝不将旧Dev协议tests改成新workbench协议tests。
 - [x] `browser.e2e.test.ts`用实际headless Chromium和已服务的真实构建UI，不用renderToStaticMarkup替代DOM：完整八阶段、Markdown导入零对话、所有候选、只读导航、审批／工具／附件、Back／ST报告、同次Git标记及失败／续办、删除冲突、合入后修复／只读、刷新重连无重放；模型夹具只提供确定输入，断言真实工具／文件／Git／PR结果，不把模型回答当通过。
-- [x] 新`process.e2e.test.ts`经真实`src/cli.ts dev`及普通TUI `/dev`验证双入口／环境／聊天不换绑；普通TUI部分复用既有`tui-harness.ts`／`tui-test`，不另造PTY/ANSI驱动。保留真实Team持久化／取消、Goal手动／报告后停止及长任务断线消费者；Dev部分不再用app-server PublicPeer。
+- [x] 新`process.e2e.test.ts`经真实`src/cli.ts dev`及普通TUI `/dev`验证双入口／环境／聊天不换绑；普通TUI部分复用既有`tui-harness.ts`／`tui-test`，不另造PTY/ANSI驱动。保留真实Team持久化／取消、Goal手动／报告后停止及长任务断线消费者。
 - [x] `fulltest-ui-smoke.ts`按场景只替换真实旧Dev接线，保留普通CLI／`/team`／取消／输入／退出及真实JUnit。`test/dev-workbench/`仅放不依赖成品的source tests，并显式接fork白名单；新process/browser归既有启动敏感组，普通TUI／Goal保留，不开绕预算通道。成品程序在scripts下采用非`.test/.spec/.e2e`命名，普通发现、全仓Bun及`--full`均不会执行，不靠skip排除。
 - [x] 默认fork目前不含collab-web，精确新增`dev-workbench.test.tsx`、`composer.test.tsx`、`transcript.test.tsx`、`tool-view.test.tsx`、`markdown.test.tsx`，不加入整个包／Browser／upload／relay套件；native只加`test/dev-workbench-vcs.test.ts`。同步`:1839/:1852`一类文件计数／空选择探针识别`.test.tsx`，使执行与报告一致。
 - [x] `ci-test-ts.ts`当前`suiteRevision:2`统一升为3并更新所有完整基线资格／脚本期望，旧完整报告不得冒充新消费者范围完整证据；affected／失败报告语义不变。新public process fixture声明对实际workbench启动／资源／tools registry的静态依赖，不仅字符串spawn CLI，也不import执行主入口造图。预算、并发、高成本chunk上限、skip／授权及平台时限完全不变。
@@ -671,12 +662,12 @@ openPathWithResult(urlOrPath: string): Promise<
 
 - [x] 将fork gate中固定旧Dev TUI的测试表、smoke、startup-sensitive及报告合同精确换成T14消费者；保留有效材料失败矩阵、native构建、权限／取消／Team／Goal和普通TUI，不改预算／并发／skip／fulltest授权，不扩大整collab-web suite。
 - [ ] 中文说明／命令帮助／Unreleased同步八阶段、五角色、无对话导入、本地业务、ST报告、归档后修订、mark同次Git、PR等待占用／merge释放、cancel冲突、合入后状态限制及修复、断线／宿主边界、两个完整地址入口和内嵌资源。既有说明已经正确的内容保留，不以“已实现”冒充未验证平台。
-- [ ] collab-web README区分独立GuestClient既有secure-context限制与新工作台native transport的offline普通HTTP／WS；不能全局删除非offline安全说明，也不能继续写工作台不支持内网HTTP。文档不宣传新ZCode接入、worktree、旧恢复或双轨。
+- [ ] collab-web README区分独立GuestClient既有secure-context限制与新工作台native transport的offline普通HTTP／WS；不能全局删除非offline安全说明，也不能继续写工作台不支持内网HTTP。文档不宣传worktree、旧恢复或双轨。
 - [ ] 根据R01—R31矩阵逐项核对所有callsite／tests／docs及旧专属删除清单；从实际消费链审查，不用源代码文字快照代替行为。检查新API确有生产调用者、没有只写类型或静态页面；删除本次自有临时夹具／脚手架，不删除用户旧材料或历史。
 - [ ] 全部片落地后主代理只运行完成当前变更所需的最小定向验证，统一记录实际命令、退出码、平台、范围和阻塞；未运行写未运行。新的广泛授权覆盖必要命令，不使下表成为必跑清单，也不要求fulltest／slowtest、重复构建或无关真实外部集成；满足验收即停止。Git范围与发布安全边界继续有效，文档同步不执行软件检查。
 - [ ] 完成交付只能宣称实际覆盖结果；列出未验证平台／发行产物／真实Forge／模型／桌面边界。任何必需代码／功能未完成则继续实施，不把内部波次当可单独完成交付。
 
-**Verification:** V15文档／门禁选择合同＋全部授权V01—V14证据。**Pass:** 产品、实现、命令、测试、发行资源一致，31项完整，没有旧轨或新ZCode面。
+**Verification:** V15文档／门禁选择合同＋全部授权V01—V14证据。**Pass:** 产品、实现、命令、测试、发行资源一致，31项完整，没有旧轨。
 
 ## Exact Verification Commands and Observable Results
 
@@ -686,7 +677,7 @@ openPathWithResult(urlOrPath: string): Promise<
 | --- | --- | --- |
 | V01 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/records.test.ts packages/coding-agent/test/spec-driven/workspace.test.ts` | Git业务事实冷读、CAS和跨进程名额，无旧状态接管／模型副作用 |
 | V02 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/orchestrator.test.ts packages/coding-agent/test/spec-driven/controller.test.ts` | 八阶段、零业务会话导入、五步批准／Back、ST版本、人工mark及终态 |
-| V03 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/artifacts.test.ts packages/coding-agent/test/spec-driven/resources.test.ts packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts` | 真实native校验／归档／修订同步及资源桥，原生独立资源语义保留；矩阵Dev驱动已迁离ZCode |
+| V03 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/artifacts.test.ts packages/coding-agent/test/spec-driven/resources.test.ts packages/coding-agent/test/spec-driven/process-resources.e2e.test.ts` | 真实native校验／归档／修订同步及资源桥，原生独立资源语义保留 |
 | V04 | `bun scripts/test-report-bun.ts packages/coding-agent/test/spec-driven/actors.test.ts packages/coding-agent/test/spec-driven/actors-descendants.test.ts packages/coding-agent/test/spec-driven/runtime.test.ts packages/coding-agent/test/spec-driven/skill-policy.test.ts` | 所有原生权限／技能／历史／Team／Goal及后代限制与实际结清 |
 | V05 | 已当次授权native生成／构建时，`bun --cwd packages/natives run build:bindings`（该现有脚本本身生成声明并安装host addon，无需再重复native build），然后 `bun scripts/test-report-bun.ts packages/natives/test/dev-workbench-vcs.test.ts` | 专属Bun native消费者覆盖scoped commit／index协调／remoteRef／guarded patch；ref成功index失败不重commit，hook未执行；不直接Cargo，不把全部VCS或test:rs知识范围纳入日常覆盖 |
 | V06 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/git.test.ts` | 真实临时Git＋bare remote、同次保存／commit／push、SHA解析、未授权祖先拒推、部分失败幂等 |
@@ -695,7 +686,6 @@ openPathWithResult(urlOrPath: string): Promise<
 | V09 | `bun scripts/test-report-bun.ts packages/collab-web/test/dev-workbench.test.tsx packages/collab-web/test/composer.test.tsx packages/collab-web/test/transcript.test.tsx packages/collab-web/test/tool-view.test.tsx packages/collab-web/test/markdown.test.tsx` | 工作台只读导航、共享组件与输入合同；这些组件测试不冒充实际浏览器 |
 | V10 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/collab.test.ts` | 真实既有Relay／Host、两个browser peer、普通HTTP/WS offline、非offline及deny不放宽 |
 | V11 | `bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/cli.test.ts packages/coding-agent/test/spec-driven/command.test.ts`；公开帮助探针 `bun packages/coding-agent/src/cli.ts dev --help` | dev确为注册命令、双入口真实语义／环境，旧参数拒绝、opener失败保留URL |
-| V12 | `bun scripts/test-report-bun.ts packages/coding-agent/test/modes/zcode-commands.test.ts packages/coding-agent/test/modes/zcode-sessions.test.ts packages/coding-agent/test/modes/zcode-projection.test.ts packages/coding-agent/test/modes/zcode-hosts-command-catalog.test.ts` | 普通ZCode正向能力保留，Dev路由／字段／projection已无，不建立新适配 |
 | V13 | 新生成器实现且单独授权build后 `bun packages/coding-agent/scripts/dev-workbench-resources.ts --write`；`bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/resources.test.ts`；单独授权成品构建时 `bun packages/coding-agent/scripts/bundle-dist.ts`、`bun packages/coding-agent/scripts/build-binary.ts` | 同一预构建载荷进入source／npm／binary；source HTTP不编译，普通resources测试不依赖成品，不自动发布／releasebuild |
 | V14 | source消费者：`bun scripts/test-report-bun.ts packages/coding-agent/test/dev-workbench/browser.e2e.test.ts packages/coding-agent/test/dev-workbench/process.e2e.test.ts packages/coding-agent/test/spec-driven/native-surface.test.ts packages/coding-agent/test/spec-driven/tui-compact-mixed.e2e.test.ts packages/coding-agent/test/spec-driven/tui-resources.e2e.test.ts packages/coding-agent/test/spec-driven/tui-capabilities.e2e.test.ts`。**另行明确授权成品验收且V13生成实际产物后**，Windows：`bun packages/coding-agent/scripts/verify-dev-workbench-package.ts --npm-entry packages/coding-agent/dist/cli.js --binary packages/coding-agent/dist/omp.exe --assets-manifest packages/coding-agent/src/dev-workbench/assets.generated.json`；Linux同命令仅binary参数为`packages/coding-agent/dist/omp` | source／普通TUI与成品证据分开；成品非普通test，不会被fork／`--full`自动执行，不添加skip、空测试或下载；验本次真实资源／来源及无checkout／CDN依赖 |
 | V15 | `bun scripts/test-report-bun.ts scripts/ci-test-ts.test.ts scripts/fulltest.test.ts` | 旧Dev专属选测已替换，新消费者进入原预算／范围，普通TUI仍在，未扩大上游suite |
@@ -717,8 +707,7 @@ openPathWithResult(urlOrPath: string): Promise<
 | 通过：独立process-resources（V03） | `2026-11-07T08-00-47.543Z-108904-f21db053`，exit 0 | `spec-driven/process-resources.e2e.test.ts` 12 pass／0 fail。 |
 | 通过：Dev＋普通Collab／重连回归（V10及普通OMP） | `2026-11-07T07-17-04.834Z-110496-4dd354ed`，exit 0 | Dev Collab、普通Collab controller／read-only／relay-client-reconnect及mcp-reconnect共136 pass／0 fail；不代替完整网页流程。 |
 | 通过：native runtime／历史（V04） | `2026-11-07T08-00-47.530Z-81884-51626ca0`，exit 0；受影响历史由下方 source process 结果补足 | runtime 当时46 pass／0 fail；session 存放修正后的普通 `--continue`、真实 Goal 与退出恢复以 `2026-11-07T10-08-10.237Z-82052-a907e37e` 为准，不将旧历史结果重复累计。 |
-| 通过：普通ZCode projection＋选测gate（V12／V15的实际子集） | `2026-11-07T07-10-47.818Z-77300-ff822704`，exit 0 | `zcode-projection.test.ts`＋`scripts/ci-test-ts.test.ts`共68 pass／0 fail；不是fulltest执行结果。 |
-| 通过：其余四个普通ZCode文件（V12及普通OMP） | `2026-11-07T06-52-07.854Z-81628-194b6f2c` | 文件汇总：commands 32 pass、sessions 14 pass、hosts-command-catalog 8 pass、process-execution 10 pass，各0 fail。该组合run exit 1／3 fail，失败仅在projection及选测gate，已由上一行后续运行修正；不宣称原组合run通过，不叠加其旧projection／gate结果。 |
+| 通过：选测gate（V15的实际子集） | `2026-11-07T07-10-47.818Z-77300-ff822704`，exit 0 | `scripts/ci-test-ts.test.ts`通过；原混合运行共68 pass／0 fail，不是该文件单独计数，也不是fulltest执行结果。 |
 | 通过：UI资源source消费者（V13） | `2026-11-07T07-41-23.300Z-108400-49f63cdd`，exit 0 | `dev-workbench/resources.test.ts` 2 pass／0 fail；不冒充npm／binary成品验收。 |
 | 历史通过：server／client／Composer／Workbench定向消费者（V08／V09的实际子集） | `2026-11-07T08-51-33.753Z-104040-4bbed1ee`，exit 0 | 当时server、collab-web client、composer、dev-workbench四文件共55 pass／0 fail；未受影响服务证据保留，前端直接受影响合同待最小复验，既有组件结果不证明新呈现或实际浏览器E2E通过。 |
 | 通过：当前两package类型检查 | 主代理实际 `check:types` | coding-agent 5540 files、collab-web 142 files均通过；不代表浏览器完整流程通过。 |
@@ -744,7 +733,6 @@ openPathWithResult(urlOrPath: string): Promise<
 | R01 | 一次性替换、无旧模式兼容 | T01、T11、T12、T14、T15 | 只新记录／新流程，旧入口拒绝，无双轨／迁移／删用户历史 |
 | R02 | 删除Dev阶段TUI、保留普通TUI | T08、T11、T12、T14 | `/dev`独占期间普通输入／命令被阻止；再次 `/dev`结清退出，恢复原普通会话／草稿／模型／菜单 |
 | R03 | 复用五Agent／技能／工具／会话／Team／Goal | T02、T04、T08、T09、T14 | 真实原生工具流／问答／权限／模型／后代／Team／Goal消费者完整 |
-| R04 | 完全脱钩ZCode、只清旧专属接线／条款 | T12、T14、T15 | 无Dev bridge/schema/capability/projection/routes，新工作台无ZCode适配；普通ZCode通过 |
 | R05 | 双入口与完整地址 | T08、T11、T13、T14 | `/dev`／`omp dev`真实ready URL；TUI再次 `/dev`退出，关页不退出；opener失败仍可复制 |
 | R06 | 参考四区／默认深色／当前阶段简洁控制 | T09、T14 | 实际左列表、中央材料上方八阶段、中央只读材料、右共享会话及底部输入；非像素复制，无JSON／命令下拉／调试控制台；已实际Chrome观察，见当前深色布局证据 |
 | R07 | 查看不推进、会话改文档、上传下载 | T03、T08、T09、T14 | 视图导航零副作用，中央只读，实际Markdown往返与会话修改 |
@@ -776,6 +764,6 @@ openPathWithResult(urlOrPath: string): Promise<
 ## Plan Completion Criteria
 
 - [ ] T01—T15全部实现，31项均有实际生产路径与对应消费者，不以内部波次、静态原型、类型声明或mock结果替代交付。
-- [ ] 所有旧Dev专属入口／类型／callsite／tests／文档合同完成cutover；普通TUI与普通ZCode保留，没有新增ZCode接入、worktree或旧兼容。
+- [ ] 所有旧Dev专属入口／类型／callsite／tests／文档合同完成cutover；普通TUI保留，没有新增worktree或旧兼容。
 - [ ] 已授权验证的真实证据按source／npm／binary、平台、原生／浏览器、mock模型／真实外部能力分别报告；未运行不称通过。
 - [ ] 未授权commit／push／发布不执行；实施与验证状态据实际证据更新。

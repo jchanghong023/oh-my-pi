@@ -299,22 +299,14 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of [
-		"zcode-process.test.ts",
-		"zcode-process-projection.test.ts",
-		"zcode-process-session.test.ts",
-		"zcode-process-catalog.test.ts",
-		"zcode-process-execution.test.ts",
-		"zcode-workflow-process.test.ts",
-		"zcode-workflow-sandbox-process.test.ts",
-	]) {
-		expect(isIntegrationCommand(command("packages/coding-agent", [`test/modes/${file}`]))).toBe(true);
+	for (const file of ["test/dev-workbench/git.test.ts", "test/dev-workbench/cancel.test.ts"]) {
+		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
+		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
+		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
 	}
-	expect(isIntegrationCommand(command("packages/coding-agent", ["test/modes/zcode-process-unit.test.ts"]))).toBe(
+	expect(isIntegrationCommand(command("packages/coding-agent", ["test/dev-workbench/cancel-policy.test.ts"]))).toBe(
 		false,
 	);
-	expect(isIntegrationCommand(command("packages/coding-agent", ["test/other/zcode-process.test.ts"]))).toBe(false);
-	expect(isIntegrationCommand(command("packages/coding-agent", ["test/modes/zcode-workflow.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integrationish.test.ts"]))).toBe(false);
 	expect(isIntegrationCommand(command("packages/tui", ["test/process.e2e.test.ts"]))).toBe(false);
 });
@@ -331,7 +323,6 @@ test("startup integration chunks bypass only the heavy integration limit", () =>
 		expect(isIntegrationCommand(command(file))).toBe(true);
 		expect(isLimitedIntegrationCommand(command(file))).toBe(false);
 	}
-	expect(isLimitedIntegrationCommand(command("test/modes/zcode-hosts-goal.test.ts"))).toBe(false);
 	expect(isLimitedIntegrationCommand(command("test/dev-workbench/host.test.ts"))).toBe(false);
 	expect(isLimitedIntegrationCommand(command("test/dev-workbench/other.e2e.test.ts"))).toBe(true);
 	expect(isLimitedIntegrationCommand(command("test/integration/session.test.ts"))).toBe(true);
@@ -358,9 +349,11 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 					"test",
 					item === "h1"
 						? "test/dev-workbench/git.test.ts"
-						: item.startsWith("h")
-							? "test/modes/zcode-process.test.ts"
-							: "test/unit.test.ts",
+						: item === "h5"
+							? "test/dev-workbench/cancel.test.ts"
+							: item.startsWith("h")
+								? "test/integration/session.test.ts"
+								: "test/unit.test.ts",
 				],
 			}),
 		4,
@@ -788,8 +781,6 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
-			"packages/coding-agent/test/modes/zcode-permissions.e2e.ts",
-			"packages/coding-agent/test/modes/zcode-process-session.test.ts",
 			"packages/coding-agent/test/knowledge-index.test.ts",
 			"packages/coding-agent/test/knowledge-models.test.ts",
 			"packages/coding-agent/test/knowledge-semantic.test.ts",
@@ -832,7 +823,6 @@ test("local suites select fork consumers and drain failures without widening to 
 		const fullMarkers = [...selected, "failure", "after-failure"].sort();
 		const dry = await run([process.execPath, "scripts/ci-test-ts.ts", "local-ts", "--dry-run"]);
 		expect(await executed()).toEqual([]);
-		expect(dry).toContain("./test/modes/zcode-permissions.e2e.ts");
 		expect(dry).toContain(`scope=fork-features selected-files=${selected.length + 1} `);
 		expect(dry).not.toContain("verify-dev-workbench-package.ts");
 		const fullDry = await run([process.execPath, "scripts/ci-test-ts.ts", "all", "--unsharded", "--dry-run"]);
@@ -900,7 +890,7 @@ test("local suites select fork consumers and drain failures without widening to 
 			"test/spec-driven/tui-resources.e2e.test.ts",
 			"test/spec-driven/tui-capabilities.e2e.test.ts",
 			"test/goals/goal-autopilot-tui.e2e.test.ts",
-			"test/modes/zcode-hosts-goal.test.ts",
+			"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
 		];
 		for (const file of startupFiles) {
 			await put(

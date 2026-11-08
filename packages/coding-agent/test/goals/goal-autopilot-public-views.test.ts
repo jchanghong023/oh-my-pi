@@ -1,19 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { ModelRegistry } from "../../src/config/model-registry";
+import { Settings } from "../../src/config/settings";
+import { createAgentSession } from "../../src/sdk";
+import { AuthStorage } from "../../src/session/auth-storage";
+import { SessionManager } from "../../src/session/session-manager";
 import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
-import { LegacyProtocol, workspaceConfigTopicWireFrameSchema } from "../../src/modes/zcode/schema";
-import {
-	command,
-	create,
-	deadline,
-	findInteraction,
-	fixture,
-	ProcessPeer,
-	subscribe,
-	workspace,
-} from "../modes/zcode-process-harness";
-import { contentText, MARKER } from "../spec-driven/provider-fixture";
+import { contentText, createProviderFixture, MARKER } from "../spec-driven/provider-fixture";
+import { deadline, goalCliFixture } from "./goal-cli-fixture";
 import {
 	clearNativeDraft,
 	eventually,
@@ -25,7 +20,7 @@ import {
 } from "../spec-driven/tui-harness";
 
 type Entry = Record<string, unknown>;
-type PublicFixture = { agentDir: string; cwdA: string; env: NodeJS.ProcessEnv };
+type PublicFixture = Awaited<ReturnType<typeof goalCliFixture>>;
 type PersistedJournal = { file: string; entries: Entry[] };
 const noticeType = "goal-auto-orchestrate-context";
 const commands: Array<"goal" | "goal-autopilot"> = ["goal", "goal-autopilot"];
@@ -71,97 +66,6 @@ function notices(entries: Entry[]) {
 	return entries.filter(entry => entry.type === "custom_message" && entry.customType === noticeType);
 }
 
-function strings(value: unknown): string[] {
-	if (typeof value === "string") return [value];
-	if (Array.isArray(value)) return value.flatMap(strings);
-	return isRecord(value) ? Object.values(value).flatMap(strings) : [];
-}
-
-async function isolatedConfig(config: PublicFixture) {
-	await fs.writeFile(
-		path.join(config.agentDir, "config.yml"),
-		JSON.stringify({
-			modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
-			tools: { xdev: false },
-			skills: { enabled: false },
-			startup: { setupWizard: false },
-			compaction: { enabled: false },
-			goal: { continuationModes: [] },
-		}),
-	);
-}
-
-async function slash(peer: ProcessPeer, sessionId: string, text: string, result: string) {
-	const start = peer.seen.length;
-	expect(await command(peer, sessionId, "sendText", { text })).toMatchObject({ status: "accepted" });
-	await peer.next(
-		item =>
-			peer.seen.indexOf(item) >= start &&
-			item.method === "v4/conversation/frame" &&
-			isRecord(item.params) &&
-			item.params.topic === `conversation/${sessionId}` &&
-			strings(item.params).some(value => value.includes(result)),
-	);
-	await eventually(
-		async () =>
-			LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(await peer.request("session/read", { sessionId })),
-		snapshot => snapshot.projection.status === "idle",
-	);
-}
-
-async function drop(peer: ProcessPeer, sessionId: string, prefix: string, answer: "yes" | "no") {
-	const start = peer.seen.length;
-	expect(await command(peer, sessionId, "sendText", { text: `/${prefix} drop` })).toMatchObject({
-		status: "accepted",
-	});
-	const frame = await peer.next(
-		item =>
-			peer.seen.indexOf(item) >= start &&
-			item.method === "v4/conversation/frame" &&
-			isRecord(item.params) &&
-			item.params.topic === `conversation/${sessionId}` &&
-			Boolean(
-				findInteraction(
-					item.params,
-					payload => typeof payload.prompt === "string" && payload.prompt.startsWith("Drop goal?"),
-				),
-			),
-	);
-	const interaction = findInteraction(
-		frame.params,
-		payload => typeof payload.prompt === "string" && payload.prompt.startsWith("Drop goal?"),
-	);
-	if (!interaction) throw new Error("The real Goal host did not request drop confirmation");
-	expect(interaction.payload).toMatchObject({
-		freeText: false,
-		options: [
-			{ optionId: "yes", label: "Confirm" },
-			{ optionId: "no", label: "Cancel" },
-		],
-	});
-	const replyStart = peer.seen.length;
-	expect(
-		await command(peer, sessionId, "resolveInteraction", {
-			interactionId: interaction.interactionId,
-			answer: { optionId: answer },
-		}),
-	).toMatchObject({ status: "accepted" });
-	if (answer === "yes")
-		await peer.next(
-			item =>
-				peer.seen.indexOf(item) >= replyStart &&
-				item.method === "v4/conversation/frame" &&
-				isRecord(item.params) &&
-				item.params.topic === `conversation/${sessionId}` &&
-				strings(item.params).includes("Goal dropped."),
-		);
-	await eventually(
-		async () =>
-			LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(await peer.request("session/read", { sessionId })),
-		snapshot => snapshot.projection.status === "idle",
-	);
-}
-
 // One-shot public RPC consumer, not an imported session or a model substitute.
 // Protocol v1 is deliberately retained so this exercises get_messages itself,
 // rather than RpcClient's negotiated get_messages_page optimization.
@@ -176,7 +80,7 @@ async function queryPublicHistory(config: PublicFixture, file: string) {
 			"--session",
 			file,
 			"--cwd",
-			config.cwdA,
+			config.cwd,
 			"--model",
 			"deepseek/chat-a",
 			"--no-extensions",
@@ -184,7 +88,7 @@ async function queryPublicHistory(config: PublicFixture, file: string) {
 			"--no-title",
 		],
 		{
-			cwd: config.cwdA,
+			cwd: config.cwd,
 			env: config.env,
 			stdin: "pipe",
 			stdout: "pipe",
@@ -196,16 +100,30 @@ async function queryPublicHistory(config: PublicFixture, file: string) {
 		for (const type of ["get_messages", "get_entries", "get_state"])
 			child.stdin.write(`${JSON.stringify({ id: type, type })}\n`);
 		const results = new Map<string, Entry>();
+		const dumps: string[] = [];
+		let dumped = false;
+		child.stdin.write(`${JSON.stringify({ id: "dump", type: "prompt", message: "/dump" })}\n`);
 		await deadline(
 			(async () => {
 				for await (const frame of readJsonl<unknown>(child.stdout)) {
-					if (!isRecord(frame) || frame.type !== "response" || typeof frame.id !== "string") continue;
-					expect(frame).toMatchObject({ success: true, command: frame.id });
-					if (!isRecord(frame.data)) throw new Error(`Missing public ${frame.id} payload`);
-					results.set(frame.id, frame.data);
-					if (results.size === 3) child.stdin.end();
+					if (!isRecord(frame)) continue;
+					if (frame.type === "command_output" && typeof frame.text === "string") dumps.push(frame.text);
+					if (frame.type === "response" && typeof frame.id === "string") {
+						expect(frame).toMatchObject({ success: true, command: frame.id === "dump" ? "prompt" : frame.id });
+						if (frame.id === "dump") {
+							// Local slash commands complete in their response and do not
+							// emit prompt_result (the runtime discards that prompt ticket).
+							expect(frame.data).toMatchObject({ agentInvoked: false });
+							dumped = true;
+						} else {
+							if (!isRecord(frame.data)) throw new Error(`Missing public ${frame.id} payload`);
+							results.set(frame.id, frame.data);
+						}
+					}
+					if (results.size === 3 && dumped) child.stdin.end();
 				}
-				if (results.size !== 3) throw new Error(`RPC ended before public history queries: ${await stderr}`);
+				if (results.size !== 3 || !dumped)
+					throw new Error(`RPC ended before public history queries and dump: ${await stderr}`);
 			})(),
 		);
 		expect(await deadline(child.exited)).toBe(0);
@@ -213,6 +131,7 @@ async function queryPublicHistory(config: PublicFixture, file: string) {
 			messages: results.get("get_messages")!.messages as Entry[],
 			entries: results.get("get_entries")!.entries as Entry[],
 			state: results.get("get_state")!,
+			dumps,
 		};
 	} finally {
 		if (child.exitCode === null) {
@@ -223,159 +142,79 @@ async function queryPublicHistory(config: PublicFixture, file: string) {
 }
 
 describe("Goal public management and history views", () => {
-	// Both mode origins are crossed with both management spellings; ordinary
-	// resume through /goal-autopilot must not silently opt the target in.
-	test.each(commands)(
-		"app-server manages and cold-restores %s without changing its mode or history",
-		async origin => {
-			await using root = await TempDir.create("@goal-public-manage-");
-			await using config = await fixture(root);
-			await isolatedConfig(config);
-			const objective = `ZCODE_TEST_PUBLIC_${origin === "goal" ? "ORDINARY" : "AUTO"} complete the assigned public work`;
-			let sessionId: string;
-			let originalId: unknown;
-			let originalNotices: string[];
-			{
-				await using peer = new ProcessPeer(config.cwdA, config.env);
-				await peer.ready();
-				sessionId = await create(peer, config.cwdA);
-				await subscribe(peer, sessionId);
-				const topic = `workspace-config/${config.cwdA}`;
-				await peer.request("v4/conversation/subscribe", {
-					topic,
-					connectionId: "goal-public-catalog",
-					clientMode: "desktop-continuous",
-					workspace: workspace(config.cwdA),
-				});
-				const frame = await peer.next(
-					item => item.method === "v4/conversation/frame" && isRecord(item.params) && item.params.topic === topic,
-				);
-				const wire = workspaceConfigTopicWireFrameSchema.parse(frame.params);
-				if (wire.kind !== "complete" || wire.frame.payload.kind !== "snapshot")
-					throw new Error("Missing real Goal command catalog");
-				const catalog = wire.frame.payload.snapshot.config.slashCommands;
-				for (const name of commands) {
-					const matches = catalog.filter(item => item.name.replace(/^\//u, "") === name);
-					expect(matches).toHaveLength(1);
-					expect(matches[0]!.source).toBe("builtin");
-					expect(matches[0]!.inputHint).toBe("[objective]");
-				}
-				await slash(peer, sessionId, `/${origin} ${objective}`, `${objective.split(" ")[0]}_DONE`);
-				const initial = (await journal(config.agentDir, sessionId)).entries;
-				originalId = goal(initial).id;
-				originalNotices = notices(initial).map(entry => JSON.stringify(entry));
-				expect(goal(initial)).toMatchObject({
-					objective,
-					mode: "goal",
-					auto: origin === "goal-autopilot",
-					status: "active",
-				});
-				expect(originalNotices).toHaveLength(origin === "goal-autopilot" ? 1 : 0);
-				const calls = config.requests.length;
-				for (const prefix of commands) {
-					await slash(peer, sessionId, `/${prefix} show`, `Objective: ${objective}`);
-					await slash(peer, sessionId, `/${prefix} budget 900000`, "Goal budget set to 900000.");
-					expect(goal((await journal(config.agentDir, sessionId)).entries)).toMatchObject({
-						id: originalId,
-						tokenBudget: 900000,
-						auto: origin === "goal-autopilot",
-					});
-					await slash(peer, sessionId, `/${prefix} budget off`, "Goal budget cleared.");
-					expect(goal((await journal(config.agentDir, sessionId)).entries).tokenBudget).toBeUndefined();
-					await slash(peer, sessionId, `/${prefix} pause`, "Goal mode paused.");
-					expect(goal((await journal(config.agentDir, sessionId)).entries)).toMatchObject({
-						id: originalId,
-						mode: "goal_paused",
-						status: "paused",
-						auto: origin === "goal-autopilot",
-					});
-					await slash(peer, sessionId, `/${prefix} resume`, "Goal mode resumed.");
-					await drop(peer, sessionId, prefix, "no");
-					const current = (await journal(config.agentDir, sessionId)).entries;
-					expect(goal(current)).toMatchObject({
-						id: originalId,
-						objective,
-						status: "active",
-						auto: origin === "goal-autopilot",
-					});
-					expect(notices(current).map(entry => JSON.stringify(entry))).toEqual(originalNotices);
-				}
-				expect(config.requests).toHaveLength(calls);
-				expect(await peer.eof()).toBe(0);
-			}
-			const calls = config.requests.length;
-			await using cold = new ProcessPeer(config.cwdA, config.env);
-			await cold.ready();
-			await cold.request("session/resume", { sessionId });
-			await subscribe(cold, sessionId);
-			await slash(cold, sessionId, "/goal-autopilot show", `Objective: ${objective}`);
-			const restored = (await journal(config.agentDir, sessionId)).entries;
-			expect(goal(restored)).toMatchObject({
-				id: originalId,
-				objective,
-				mode: "goal_paused",
-				status: "paused",
-				auto: origin === "goal-autopilot",
-			});
-			expect(notices(restored).map(entry => JSON.stringify(entry))).toEqual(originalNotices);
-			expect(config.requests).toHaveLength(calls);
-			await slash(cold, sessionId, "/goal-autopilot resume", "Goal mode resumed.");
-			expect(config.requests).toHaveLength(calls);
-			const replacement = origin === "goal" ? "goal-autopilot" : "goal";
-			await slash(
-				cold,
-				sessionId,
-				`/${replacement} set ZCODE_TEST_PUBLIC_REPLACEMENT literal replacement`,
-				"ZCODE_TEST_PUBLIC_REPLACEMENT_DONE",
-			);
-			const replaced = (await journal(config.agentDir, sessionId)).entries;
-			expect(goal(replaced)).toMatchObject({
-				objective: "ZCODE_TEST_PUBLIC_REPLACEMENT literal replacement",
-				auto: replacement === "goal-autopilot",
-			});
-			expect(goal(replaced).id).not.toBe(originalId);
-			expect(
-				notices(replaced)
-					.slice(0, originalNotices.length)
-					.map(entry => JSON.stringify(entry)),
-			).toEqual(originalNotices);
-			expect(notices(replaced)).toHaveLength(1);
-			await drop(cold, sessionId, origin, "yes");
-			const dropped = (await journal(config.agentDir, sessionId)).entries;
-			expect(mode(dropped).mode).toBe("none");
-			expect(notices(dropped)).toEqual(notices(replaced));
-		},
-		120_000,
-	);
-
 	// The same real notification is followed across transport consumers, not
 	// four independently constructed strings that happen to share a marker.
 	test("one auto notice retains user attribution and target identity in Provider, JSONL, dump, get_messages and get_entries", async () => {
 		await using root = await TempDir.create("@goal-public-views-");
-		await using config = await fixture(root);
-		await isolatedConfig(config);
-		const objective =
-			"ZCODE_TEST_PUBLIC_VIEWS Keep literal {{target}} & <user> text.\n\nPreserve  internal\t whitespace.";
+		await using provider = createProviderFixture({ reply: () => ({ text: "GOAL_PUBLIC_VIEWS_DONE" }) });
+		const config = await goalCliFixture(root, provider.baseUrl);
+		await Bun.write(
+			path.join(config.agentDir, "config.yml"),
+			JSON.stringify({
+				modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
+				tools: { xdev: false },
+				skills: { enabled: false },
+				startup: { setupWizard: false },
+				compaction: { enabled: false },
+				goal: { continuationModes: [] },
+			}),
+		);
+		const objective = "GOAL_PUBLIC_VIEWS Keep literal {{target}} & <user> text.\n\nPreserve  internal\t whitespace.";
 		let sessionId: string;
 		let saved: PersistedJournal;
-		let dumps: string[];
 		let count: number;
-		{
-			await using peer = new ProcessPeer(config.cwdA, config.env);
-			await peer.ready();
-			sessionId = await create(peer, config.cwdA);
-			await subscribe(peer, sessionId);
-			await slash(peer, sessionId, `/goal-autopilot ${objective}`, "ZCODE_TEST_PUBLIC_VIEWS_DONE");
+		const auth = await AuthStorage.create(root.join("auth.db"));
+		let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+		try {
+			auth.keys.setRuntime("deepseek", "isolated-goal-public-key");
+			const settings = Settings.isolated({
+				modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
+				"tools.xdev": false,
+				"async.enabled": false,
+				"compaction.enabled": false,
+				"providers.cacheWarming": "off",
+				"goal.continuationModes": [],
+			});
+			const registry = new ModelRegistry(auth, path.join(config.agentDir, "models.yml"), { settings });
+			const model = registry.find("deepseek", "chat-a");
+			if (!model) throw new Error("Missing native Goal public-view fixture model");
+			({ session } = await createAgentSession({
+				cwd: config.cwd,
+				agentDir: config.agentDir,
+				authStorage: auth,
+				modelRegistry: registry,
+				model,
+				settings,
+				sessionManager: SessionManager.create(config.cwd, path.join(config.agentDir, "sessions")),
+				disableExtensionDiscovery: true,
+				skills: [],
+				contextFiles: [],
+				promptTemplates: [],
+				slashCommands: [],
+				rules: [],
+				extensions: [],
+				enableMCP: false,
+				enableLsp: false,
+				enableIrc: false,
+				bindProcessState: false,
+				workspaceTree: { rootPath: config.cwd, rendered: "", truncated: false, totalLines: 0, agentsMdFiles: [] },
+			}));
+			await session.setActiveToolsByName(["read", "write", "goal"]);
+			// Use the supported SDK Goal lifecycle, as in the adjacent auxiliary
+			// consumers. CLI RPC below only consumes this session's persisted views.
+			const state = await session.goalRuntime.createGoal({ objective, autoOrchestrate: true });
+			await deadline(session.prompt(objective, { goalAutoOrchestrateInitialId: state.goal.id }));
+			sessionId = session.sessionId;
+			count = provider.requests.length;
+			await session.dispose();
+			session = undefined;
 			saved = await journal(config.agentDir, sessionId);
-			count = config.requests.length;
-			await slash(peer, sessionId, "/dump", `## ${noticeType}`);
-			const history = LegacyProtocol.zcodeSessionMessagesResultSchema.parse(
-				await peer.request("session/messages", { sessionId }),
-			);
-			dumps = history.messages
-				.flatMap(message => message.parts)
-				.flatMap(part => (part.type === "text" && part.text.includes(`## ${noticeType}`) ? [part.text] : []));
-			expect(await peer.eof()).toBe(0);
+		} finally {
+			if (session) {
+				await session.abort({ goalReason: "internal" });
+				await session.dispose();
+			}
+			auth.close();
 		}
 		const views = await queryPublicHistory(config, saved.file);
 		// Observe the real cold RPC restoration before the independent view
@@ -394,7 +233,7 @@ describe("Goal public management and history views", () => {
 		expect(originalNotice.details).toEqual({ source: "goal-auto-orchestrate", goalId: goal(saved.entries).id });
 		// Identify the execution request by its real Goal tool schema,
 		// independently of the notification whose exact bytes are asserted.
-		const executionRequests = config.requests.filter(request =>
+		const executionRequests = provider.requests.filter(request =>
 			request.tools?.some(tool => isRecord(tool) && isRecord(tool.function) && tool.function.name === "goal"),
 		);
 		expect(executionRequests).toHaveLength(1);
@@ -415,9 +254,7 @@ describe("Goal public management and history views", () => {
 			// Keep the received fixture bytes in failure output instead of
 			// reducing the mismatch to []. Never print system prompts or headers.
 			const fixtureMessages = request.messages
-				.filter(
-					message => message.role !== "system" && contentText(message.content).includes("ZCODE_TEST_PUBLIC_VIEWS"),
-				)
+				.filter(message => message.role !== "system" && contentText(message.content).includes("GOAL_PUBLIC_VIEWS"))
 				.map(message => ({ role: message.role, content: message.content }));
 			throw new Error(
 				`Goal fixture notification wire mismatch:\n${JSON.stringify(
@@ -434,7 +271,7 @@ describe("Goal public management and history views", () => {
 		}
 		const noticeContent = originalNotice.content;
 		if (typeof noticeContent !== "string") throw new Error("Expected the persisted Goal notification text");
-		expect(dumps.map(dump => dump.split(noticeContent).length)).toEqual([2]);
+		expect(views.dumps.map(dump => dump.split(noticeContent).length)).toEqual([2]);
 		const original = notices(saved.entries)[0]!;
 		const entryViews = notices(views.entries);
 		expect(entryViews).toEqual([original]);
@@ -456,7 +293,7 @@ describe("Goal public management and history views", () => {
 			attribution: "user",
 			display: original.display,
 		});
-		expect(config.requests).toHaveLength(count);
+		expect(provider.requests).toHaveLength(count);
 		expect(notices((await journal(config.agentDir, sessionId)).entries)).toEqual([original]);
 	}, 90_000);
 

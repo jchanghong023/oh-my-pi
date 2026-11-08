@@ -2,20 +2,18 @@ import { describe, expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { LegacyProtocol } from "../../src/modes/zcode/schema";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
 import {
 	fixture,
 	GATE_BUDGET,
 	git,
-	isConversation,
 	launch,
+	listSkills,
 	PublicPeer,
 	registerInvalidFileTests,
 	run,
 	test,
 	textValues,
-	workspace,
 } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
 import { contentText, createProviderFixture, MARKER, respond, rolePayload } from "./provider-fixture";
@@ -79,15 +77,10 @@ describe("spec-driven actual OMP public entry", () => {
 			await using provider = createProviderFixture();
 			const config = await fixture(root, provider.baseUrl);
 			await using peer = new PublicPeer(config.cwd, config.env, provider);
-			await peer.ready();
-			const session = await peer.create(config.cwd);
+			await peer.start();
 			const argumentsText = `${MARKER} proposal with spaces 中文需求`;
-			const since = await peer.send(session, `/opsx-propose "${argumentsText}"`);
-			await peer.next(
-				frame =>
-					isConversation(frame, session) && textValues(frame).some(text => text.includes(`${MARKER}_CHAT_READY`)),
-				since,
-			);
+			const events = await peer.promptAndWait(`/opsx-propose "${argumentsText}"`, undefined, GATE_BUDGET);
+			expect(textValues(events).some(text => text.includes(`${MARKER}_CHAT_READY`))).toBe(true);
 			const request = provider.requests.find(item =>
 				item.messages.some(
 					message => message.role === "user" && contentText(message.content).includes(argumentsText),
@@ -192,16 +185,11 @@ describe("spec-driven actual OMP public entry", () => {
 			expect(version.stdout).toContain(inventory.openspec.version);
 			let resourceRoot: string;
 			{
-				// Locate the distribution through its public skill catalog, not the source resource loader.
-				await using peer = new PublicPeer(config.cwd, config.env, provider);
-				await peer.ready();
-				const session = await peer.create(config.cwd);
-				const catalog = LegacyProtocol.zcodeSkillsReferenceCatalogResultSchema.parse(
-					await peer.request("skills/referenceCatalog", { workspace: workspace(config.cwd), sessionId: session }),
-				);
+				// Discover the installed distribution through the isolated native CLI.
+				const catalog = await listSkills(config.cwd, config.env);
 				const entry = catalog.skills.find(skill => skill.name === "openspec-propose");
-				if (!entry) throw new Error("Packaged OpenSpec skill unavailable through public catalog");
-				resourceRoot = path.resolve(entry.path, "../../../..");
+				if (!entry) throw new Error("Packaged OpenSpec skill unavailable through public CLI");
+				resourceRoot = path.resolve(entry.filePath, "../../../..");
 				expect((await fs.realpath(resourceRoot)).startsWith(await fs.realpath(config.root))).toBe(true);
 			}
 			const catalogRequestCount = provider.requests.length;

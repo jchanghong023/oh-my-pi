@@ -417,9 +417,8 @@ OMP 按要求先确定范围与统一规则，再拆分独立工作项、排队�
 
 这些是发送给模型的执行要求，**不是工具层拦截或绝对保证**。结果应列出完成项、失败或受阻项、修改文件和实际文件级检查，并明确注明测试未运行、跨文件及运行时行为未验证；不能把批处理结束当成功能验收通过。
 
-OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目录、补全与提交使用同一机制，无需新增批处理协议；这不代表桌面 GUI 联调或真实模型的大规模批处理已验收。
 
-完整行为与优先级见[需求：JCH 命令](../openspec/specs/personal-commands/spec.md)，app-server 命令接入见[ZCode 接入需求](../openspec/specs/zcode-app-server/spec.md)。
+完整行为与优先级见[需求：JCH 命令](../openspec/specs/personal-commands/spec.md)。
 
 ### 4.7 `/goal-autopilot`：无人值守目标
 
@@ -463,7 +462,7 @@ OMP 终端与 ZCode 桌面（app-server 命令链路）支持同一命令，目�
 
 它不同于第 4.6 节的独立批处理命令，**不会自动附带“禁止测试、禁止全仓检查”的限制**；检查和测试按本次目标及项目规则执行。用 `/todo`、`/hub` 查看任务与子代理进度，是否完成以实际结果为准。
 
-OMP 终端与 ZCode 桌面均支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
+OMP 终端支持此命令。完整契约见 [Goal 自动编排需求](../openspec/specs/goal-autopilot/spec.md)，实现与验收边界见[历史验证记录](verification-history.md)。
 
 ### 4.8 `/dev`：协同开发模式
 
@@ -515,7 +514,7 @@ Dev 只有六个入口，普通模式下子命令不会隐式进入：
 
 系统终端还可运行 `omp superpowers <relative-skill-script> [args...]`，仅执行清单内的原版技能脚本，例如 `omp superpowers skills/writing-skills/render-graphs.js <技能目录>` 或 `omp superpowers skills/subagent-driven-development/scripts/review-package <计划文件> <base> <head> [输出文件]`；`omp superpowers --help` 查看用法。这是用户手动使用的宿主 CLI，不是前三个节点可执行命令的模型工具。JavaScript 通过 OMP 自带 Bun 运行，不依赖全局 Node 或上游源码目录；原版技能中的直接 `node`／Bash 配方不会因此变成系统已安装命令，应使用这个伴随入口。Shell 脚本仍需 Bash 和 POSIX 工具（Windows 使用 Git Bash），审查包还需 Git，绘图仍需 Graphviz 的 `dot`；缺少条件或脚本参数错误时保留真实错误和退出码，不在线安装、不伪造结果。
 
-包内资源清单固定为 OpenSpec **1.15.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器，ZCode 通过显式协商的既有协议扩展读取材料与操作事实；不另建独立 wire 协议、执行／批准状态机、GUI 页面或工作流设计器，后续 GUI 接入也不能另立审批规则。
+包内资源清单固定为 OpenSpec **1.15.0**、Superpowers **7.0.1**（修订 `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`），并包含真实 JCH `jch-grill-me` 技能及配套元数据，不要求内网运行时在线安装或另行克隆 JCH。现有共享命令消费者使用同一原生控制器。
 
 此流程预期增加请求、token、费用和等待，不承诺降本或把弱模型变强。实际投入依可取得证据报告，未知费用仍为未知，调用数不等于账单。本地模拟模型只验证编排，不代表真实 Provider 的任务质量、计费或服务可用性已验收；源码入口、打包产物、各平台及桌面 UI 的验收范围须分别报告，不能互相代替。完整门禁与验收条件见[规格驱动编排需求](../openspec/specs/spec-driven-orchestration/spec.md)，各项证据边界见[历史验证记录](verification-history.md)。
 
@@ -667,6 +666,3 @@ omp collab serve --host 0.0.0.0 --port 7466
 ## 7. 项目地址
 
 - **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本指南使用的 OMP fork。
-- **桌面 App**：[OmpCode](https://github.com/jchanghong023/OmpCode)，内置 OMP 核心，无需另装 CLI。提供 **CentOS 7 x64 专用兼容 ZIP**，可由普通用户解压后离线运行，无需 root 或升级系统 glibc；仍需图形会话和系统桌面库。
-
-CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。公司 Citrix 图形环境尚未验证；下载和运行方法见 OmpCode 项目 README。内网使用前，应在可联网环境准备好安装包，再传入内网。

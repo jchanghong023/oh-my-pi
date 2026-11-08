@@ -1,19 +1,12 @@
-import { expect, test as bunTest } from "bun:test";
-import type { Subprocess } from "bun";
+import { test as bunTest } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { isRecord, readJsonl, TempDir } from "@oh-my-pi/pi-utils";
+import { isRecord, ptree, TempDir } from "@oh-my-pi/pi-utils";
 import { requireGit } from "@oh-my-pi/pi-natives/vcs";
 import { initializeRepository } from "../dev-workbench/fixture";
-import {
-	COMMANDS_REQUIRING_BASE_REVISION,
-	LegacyProtocol,
-	TopicWireFrameAssembler,
-	conversationTopicFrameSchema,
-	conversationTopicWireCandidateSchema,
-	v4ConversationRowsRangeResultSchema,
-} from "../../src/modes/zcode/schema";
+import { RpcClient } from "../../src/modes/rpc/rpc-client";
+import type { SkillsCommandResult } from "../../src/cli/skill-list";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import {
 	contentText,
@@ -113,40 +106,21 @@ function executorToolDiagnostics(request: ModelRequest | undefined): unknown[] {
 		}));
 }
 
-class PublicPeer {
-	readonly child: Subprocess<"pipe", "pipe", "pipe">;
-	readonly seen: Frame[] = [];
-	readonly stderr: Promise<string>;
-	#changed = Promise.withResolvers<void>();
-	#ended = false;
-	#failure?: unknown;
-	#id = 0;
-	#pump: Promise<void>;
-	#currentCommand?: Frame;
-	#waiting?: string;
-	#stderrText = "";
-	#observed: Frame[] = [];
-	#assembler = new TopicWireFrameAssembler(conversationTopicFrameSchema);
+class PublicPeer extends RpcClient {
 	constructor(cwd: string, env: NodeJS.ProcessEnv, provider: { requests: ModelRequest[]; failures: string[] }) {
-		const child = Bun.spawn([...launch, "app-server", "--stdio", "--surface", "desktop", "--cwd", cwd], {
-			cwd,
-			env,
-			stdin: "pipe",
-			stdout: "pipe",
-			stderr: "pipe",
+		// Supplying the native process adapter avoids RpcClient's ambient-environment
+		// merge: no developer credentials, configuration or sessions enter this CLI.
+		super({
+			spawn: args => ptree.spawn([...launch, ...args], { cwd, env, stdin: "pipe" }),
+			provider: "deepseek",
+			model: "deepseek-v4-flash",
 		});
-		this.child = child;
+		const events: unknown[] = [];
+		this.onSessionEvent(event => {
+			events.push(event);
+			if (events.length > 12) events.shift();
+		});
 		caseDiagnostics.getStore()?.push(() => ({
-			command: this.#currentCommand,
-			waiting: this.#waiting,
-			conversationTopics: [
-				...new Set(
-					this.seen
-						.filter(frame => frame.method === "v4/conversation/frame")
-						.map(frame => (isRecord(frame.params) ? frame.params.topic : undefined)),
-				),
-			],
-			conversationFrames: this.seen.filter(frame => frame.method === "v4/conversation/frame").slice(-8),
 			providerFailures: provider.failures.slice(-12),
 			executorTools: executorToolDiagnostics(
 				provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor"),
@@ -162,189 +136,23 @@ class PublicPeer {
 					...(message.role === "tool" ? { content: contentText(message.content) } : {}),
 				})),
 			})),
-			stderr: this.#stderrText,
-			ended: this.#ended,
-			frames: this.#observed,
+			stderr: this.getStderr(),
+			events,
 		}));
-		this.stderr = (async () => {
-			const decoder = new TextDecoder();
-			for await (const chunk of child.stderr)
-				this.#stderrText = `${this.#stderrText}${decoder.decode(chunk, { stream: true })}`.slice(-8_000);
-			this.#stderrText = `${this.#stderrText}${decoder.decode()}`.slice(-8_000);
-			return this.#stderrText;
-		})();
-		this.#pump = (async () => {
-			try {
-				for await (const value of readJsonl<unknown>(child.stdout)) {
-					if (!isRecord(value) || "jsonrpc" in value || "type" in value || !("method" in value || "id" in value))
-						throw new Error(`Non-public stdout frame: ${JSON.stringify(value)}`);
-					this.#observed.push(value);
-					if (this.#observed.length > 12) this.#observed.shift();
-					if (typeof value.method === "string" && value.id !== undefined) {
-						if (value.method === "session/requestRuntimePreferences")
-							this.write({
-								id: value.id,
-								result: { nativeSearchEnhancementsEnabled: false, memoryEnabled: false },
-							});
-						else if (value.method === "subagents/readRuntimeConfig")
-							this.write({
-								id: value.id,
-								error: {
-									code: -32601,
-									message: "Fixture host does not override native subagent configuration",
-								},
-							});
-					}
-					if (value.method === "v4/conversation/frame") {
-						for (const event of this.#assembler.accept(
-							conversationTopicWireCandidateSchema.parse(value.params),
-						)) {
-							if (event.kind === "fault")
-								throw new Error(`Public conversation assembly failed: ${event.fault.reasonCode}`);
-							this.seen.push({ method: value.method, params: event.frame });
-						}
-					} else this.seen.push(value);
-					const changed = this.#changed;
-					this.#changed = Promise.withResolvers<void>();
-					changed.resolve();
-				}
-			} catch (error) {
-				this.#failure = error;
-			} finally {
-				this.#ended = true;
-				this.#changed.resolve();
-			}
-		})();
-	}
-	write(frame: Frame): void {
-		this.child.stdin.write(`${JSON.stringify(frame)}\n`);
-	}
-	async next(predicate: (frame: Frame) => boolean | Promise<boolean>, since = 0): Promise<Frame> {
-		let cursor = since;
-		for (;;) {
-			if (this.#failure) throw this.#failure;
-			for (; cursor < this.seen.length; cursor++) if (await predicate(this.seen[cursor]!)) return this.seen[cursor]!;
-			if (this.#ended) throw new Error(`OMP ended before expected public output: ${await this.stderr}`);
-			await this.#changed.promise;
-		}
-	}
-	async request(method: string, params: unknown): Promise<unknown> {
-		const id = `spec-public-${++this.#id}`;
-		this.#waiting = `${method} (${id})`;
-		this.write({ id, method, params });
-		const frame = await this.next(item => item.id === id);
-		if (frame.error) throw new Error(`${method}: ${JSON.stringify(frame.error)}`);
-		this.#waiting = undefined;
-		return frame.result;
-	}
-	async ready(): Promise<void> {
-		this.#waiting = "startup/storageState ready";
-		await this.next(frame => {
-			if (frame.method !== "startup/storageState" || !isRecord(frame.params)) return false;
-			if (frame.params.phase === "failed")
-				throw new Error(`Public storage startup failed: ${bounded(frame.params)}`);
-			return frame.params.phase === "ready";
-		});
-		this.#waiting = undefined;
-	}
-	async create(cwd: string): Promise<string> {
-		const snapshot = LegacyProtocol.zcodeSessionStateSnapshotSchema.parse(
-			await this.request("session/create", {
-				workspace: workspace(cwd),
-				model: { providerId: "deepseek", modelId: "deepseek-v4-flash" },
-				titleGenerationEnabled: false,
-			}),
-		);
-		const id = snapshot.session.sessionId;
-		await this.request("v4/conversation/subscribe", {
-			topic: `conversation/${id}`,
-			connectionId: `spec-${id}`,
-			clientMode: "desktop-continuous",
-		});
-		return id;
-	}
-	async send(
-		sessionId: string,
-		text: string,
-		status: "accepted" | "rejected" | "failed" = "accepted",
-	): Promise<number> {
-		const since = this.seen.length;
-		const issuedAt = Date.now();
-		this.#currentCommand = { sessionId, text, issuedAt, since };
-		const type = "sendText";
-		const current = COMMANDS_REQUIRING_BASE_REVISION.has(type)
-			? v4ConversationRowsRangeResultSchema.parse(
-					await this.request("v4/conversation/rowsRange", { sessionId, limit: 1 }),
-				)
-			: undefined;
-		expect(
-			await this.request("v4/command", {
-				commandId: crypto.randomUUID(),
-				clientId: "omp-spec-acceptance",
-				sessionId,
-				type,
-				payload: { text },
-				...(current ? { baseRevision: current.atRevision } : {}),
-				issuedAt,
-			}),
-		).toMatchObject({ status, ...(status === "failed" ? { reasonCode: "fault.command.execution" } : {}) });
-		return since;
-	}
-	async settled(sessionId: string, since: number) {
-		const command = this.#currentCommand;
-		if (command?.since !== since || typeof command.issuedAt !== "number")
-			throw new Error(`Native settlement has no matching public command: ${bounded({ sessionId, since, command })}`);
-		await this.request("v4/conversation/subscribe", {
-			topic: `conversation/${sessionId}`,
-			connectionId: crypto.randomUUID(),
-			clientMode: "desktop-continuous",
-		});
-		let cursor = this.seen.length;
-		for (;;) {
-			const result = v4ConversationRowsRangeResultSchema.parse(
-				await this.request("v4/conversation/rowsRange", { sessionId, limit: 200 }),
-			);
-			const header = result.rows.findLast(row => row.kind === "turnHeader");
-			if (header?.kind === "turnHeader" && header.startedAt >= command.issuedAt) {
-				const rows = result.rows.filter(row => row.turnId === header.turnId);
-				const hasInput = rows.some(row => row.kind === "userInput" && row.text.trim().length > 0);
-				if (header.state === "failed" || header.state === "completedInterrupted")
-					throw new Error(
-						`Native turn did not complete successfully: ${bounded({ sessionId, command, header, rows })}`,
-					);
-				const hasResult = rows.some(
-					row => row.kind === "assistantText" && row.state === "complete" && row.text.trim().length > 0,
-				);
-				if (hasInput && hasResult && header.state === "completedSuccess") {
-					this.#waiting = undefined;
-					return;
-				}
-			}
-			this.#waiting = `settled: native turn completion on conversation/${sessionId}`;
-			const event = await this.next(frame => isConversation(frame, sessionId), cursor);
-			cursor = this.seen.indexOf(event) + 1;
-		}
 	}
 	async [Symbol.asyncDispose](): Promise<void> {
-		if (this.child.exitCode === null) this.child.kill();
-		await this.child.exited;
-		await this.#pump;
+		await this.stop();
 	}
 }
-function workspace(cwd: string) {
-	return { workspacePath: cwd, workspaceKey: cwd };
+async function listSkills(cwd: string, env: NodeJS.ProcessEnv): Promise<SkillsCommandResult> {
+	const result = await run(cwd, env, [...launch, "skill", "list", "--json"]);
+	if (result.exitCode !== 0) throw new Error(`Native skill discovery failed: ${bounded(result)}`);
+	return JSON.parse(result.stdout) as SkillsCommandResult;
 }
 function textValues(value: unknown): string[] {
 	if (typeof value === "string") return [value];
 	if (Array.isArray(value)) return value.flatMap(textValues);
 	return isRecord(value) ? Object.values(value).flatMap(textValues) : [];
-}
-function isConversation(frame: Frame, sessionId: string): boolean {
-	return (
-		frame.method === "v4/conversation/frame" &&
-		isRecord(frame.params) &&
-		frame.params.topic === `conversation/${sessionId}`
-	);
 }
 async function fixture(root: TempDir, baseUrl: string) {
 	const cwd = root.join("project");
@@ -440,12 +248,11 @@ export {
 	fixture,
 	GATE_BUDGET,
 	git,
-	isConversation,
 	launch,
+	listSkills,
 	PublicPeer,
 	registerInvalidFileTests,
 	run,
 	test,
 	textValues,
-	workspace,
 };

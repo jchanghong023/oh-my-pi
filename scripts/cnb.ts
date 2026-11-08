@@ -282,7 +282,6 @@ async function main(): Promise<void> {
 			OMP_RELEASE_BINARY_DIR: windowsCompleted,
 			OMP_BUILD_CACHE_DIR: path.join(windowsCache, "build-assets"),
 		};
-		delete cleanEnv.ZCODE_ARTIFACT_ROOT;
 		delete cleanEnv.CNB_TOKEN;
 		const wslEnv = { ...process.env };
 		delete wslEnv.CNB_TOKEN;

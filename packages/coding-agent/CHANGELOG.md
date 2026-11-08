@@ -4,13 +4,11 @@
 
 ### Breaking Changes
 
-- Replace Dev-only terminal mode and Dev↔ZCode routes with the eight-stage browser workbench opened by `/dev` or `omp dev`; old Dev subcommands/state are not migrated. In Dev, the current TUI accepts only another `/dev` to settle native work and restore the original session; ordinary work must settle before entry, and page closure does not exit Dev. Ordinary TUI, ZCode and existing user files/history remain.
-- Removed the fork's Repo code index, `repo` tool, `/repo` panel, Python-symbol indexing and ZCode Repo extensions; use existing file search, AST and LSP tools for code navigation. Existing user databases and project files are left untouched.
+- Replace Dev-only terminal mode with the eight-stage browser workbench opened by `/dev` or `omp dev`; old Dev subcommands/state are not migrated. In Dev, the current TUI accepts only another `/dev` to settle native work and restore the original session; ordinary work must settle before entry, and page closure does not exit Dev. Ordinary TUI and existing user files/history remain.
+- Removed the fork's Repo code index, `repo` tool, `/repo` panel and Python-symbol indexing; use existing file search, AST and LSP tools for code navigation. Existing user databases and project files are left untouched.
 - Limit chat providers to Company, OpenAI Codex, CodeAgent, Ascend, OpenCode Go and DeepSeek; remove OpenCode Zen while preserving other non-chat services and stored credential management.
-- Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; databases with the old name are no longer adopted. ZCode's frozen `omp/wiki/*` wire protocol remains unchanged.
-- Removed Team operations from the OMP `session/configure` extension; use the global `omp/team/configure` interface instead.
-- Removed ZCode Host account and provider configuration compatibility; app-server uses native OMP providers and credentials.
-- Removed MCP OAuth `client_credentials` support. To recover a closed ZCode session using this grant, resume it with an explicit replacement `mcpServers` array; `[]` explicitly removes all MCP servers. The replacement is saved for subsequent cold resumes.
+- Renamed the enterprise document search tool from `wiki` to `knowledge_search`, the panel to `/knowledge`, the CLI to `omp knowledge`, and reranker settings to `knowledge.reranker.*`. Update tool lists, `tools.approval.knowledge_search`, commands and settings; old names have no aliases. The profile database is `knowledge.db`; databases with the old name are no longer adopted.
+- Removed MCP OAuth `client_credentials` support.
 - Removed JchTools remote Agent discovery and execution.
 - Removed Linux offline `/dev/shm` runtime storage and its automatic backups; existing data is not migrated.
 - Removed the `fullsend` keyword, `/fullsend` command, and associated setting.
@@ -24,6 +22,7 @@
 
 ### Removed
 
+- Removed the fork's ZCode desktop integration and `omp app-server` entrypoint. Native TUI, Dev, Team, Goal and Knowledge remain available; existing user configuration, credentials, sessions and databases are untouched. Upstream Z.ai OAuth is unchanged.
 - Removed the built-in `/code-review-export` command.
 - Removed full-repository source fingerprint scans and gate failures caused by source or temporary-file changes during verification; Git revision reporting and affected-test selection remain available.
 
@@ -64,9 +63,6 @@
 - Keep one development slot per existing Git root/branch without creating worktrees or branches, and store minimal requirement/decision/Git facts without copying chat into Git. The embedded UI uses the existing source/npm/binary resource chain; integration and platform/artifact acceptance remain pending.
 - Let `/dev` requirements and solution agents query existing Knowledge indexes directly while retaining their stage-specific file write restrictions.
 - Let `/dev` requirements, solution and planning agents delegate investigation to read-only Scout subagents without expanding stage write access.
-- Added `omp app-server --stdio` with the ZCode protocol, isolated in-process sessions, native permission approvals, Skill/Provider management, Team observation, Knowledge operations, profile identity, Tan delegation and supervised storage preparation. Native slash commands preserve raw arguments and publish durable command output during active streams; the native TUI and independent RPC entrypoints remain unchanged.
-- Support ZCode workspace text generation for Git commit messages with native model configuration, isolated cancellation and owner-EOF cleanup, without creating a chat session.
-- Support globally shared Team model/member settings from ZCode without selecting or creating a chat session, using the native user-profile configuration service with revision checks and resident-session refresh.
 - Added `omp://team.md` with Team usage, multi-model setup, natural-language model lookup for Agent-assisted configuration, and Linux offline instructions for updating both shm and persistent configuration.
 - Added `/team configure` ordered drafts and shared RPC v3 Team configuration APIs, with cross-provider model selection, read-only previews, revision-aware saving and explicit offline persistence results without switching the session model.
 - Added `/jchime` with executable intranet IBus recovery instructions for smaller models, current-user/X11-display isolation, daemon restart and Chinese-engine verification, plus evidence-driven recovery choices when the first approach fails.
@@ -89,7 +85,7 @@
 
 - Run real Rust workspace builds and restore Clippy in fastcheck and inherited fulltest/slowtest checks, rejecting Rust compiler and Clippy warnings without running tests in fastcheck.
 - Reduce standalone and npm bundle size by storing OpenWiki visual assets and Developer Test Agent resources as single compressed assets, preserving offline use and existing resource caches.
-- Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev and ZCode host callbacks stay on their owning thread.
+- Keep task, IRC and background-job ownership isolated per root with worker-hosted subagents; native Dev host callbacks stay on their owning thread.
 - Cycle thinking levels with `Alt+E` instead of `Shift+F1`.
 - Store Knowledge databases and WAL/SHM files directly in the selected `OMP_CACHE_DIR` performance root, without old-data migration, backup or recovery.
 - Reduce Knowledge search memory and repeated vector reads without changing recall, ranking, reranker inputs or continuation cursors.
@@ -138,8 +134,7 @@
 - Restore upstream HTML export resource loading, extension-tool schema validation, service log failure propagation, Web Search failure receipts, and JTD conversion.
 - Save the clean, compact, and detailed tiers as `display.mode`; remove independent compact/hide switches while retaining image-setting precedence.
 - Require `?` to request `xd://` device documentation; empty content and `help` follow the device's normal input rules.
-- Notify same-process Team settings and app-server clients when user configuration is saved; preserve unsaved TUI drafts during refresh.
-- Apply desktop presentation to app-server sessions and keep display shortcuts aligned with `/display`.
+- Notify same-process Team settings consumers when user configuration is saved; preserve unsaved TUI drafts during refresh.
 - Keep completion thinking disabled for smol and default tiers, including fallback models.
 - Require confirmation for execution in ask-and-remember mode even when a target was previously approved.
 
@@ -192,7 +187,6 @@
 - Disable LSP by default in main sessions and task subagents; preserve explicit settings and make automatic file formatting, diagnostics and LSP file notifications honor the LSP enable switch.
 
 - Keep standalone OpenSpec requirements maintenance independent of `/dev`; Dev workspace recovery does not change ordinary sessions or independent capabilities.
-- ZCode workspace model catalogs now follow the native OMP registry, default role and thinking levels, including credential-free built-in models and live configuration updates; fork desktop authentication uses the native OMP credential chain.
 - Restore upstream automatic session-title behavior: `fork` is the default, with the title-model path available via `tiny`.
 - Offline processes coalesce cumulative streaming updates every 100ms and disable automatic table charts, terminal-title state animations, and replan title refresh through non-persistent runtime overrides, without changing word completion or normal launches.
 - Run fork verification gates and developer scripts directly through their Bun and Cargo primitives instead of the fork-only Bazel graph, adapters and cache; upstream explicit-target Bazel tooling remains available.
@@ -205,7 +199,7 @@
 ### Fixed
 
 - Keep requirement records readable during Windows atomic replacement retries, and preserve the previous record when a save fails.
-- Keep Dev scoped Git publication tests within the existing heavy integration concurrency cap without extending their deadlines.
+- Keep Dev scoped Git publication and cancellation tests within the existing shared heavy integration concurrency cap without extending their deadlines.
 - Fix Windows-only Rust warnings and Clippy failures in shell lifecycle, locale and system helpers, and Git process setup.
 - Reuse installed Chromium binaries during isolated fulltest runs without sharing browser profiles or application state.
 - Keep Dev browser stages, materials and conversation controls usable as windows resize; preserve local writing and explicit guest reconnect.
@@ -232,15 +226,12 @@
 - Honor explicit user confirmation policies even when the tool policy allows an operation.
 - Report corrupt OpenWiki state instead of treating it as a fresh workspace.
 - Refresh resident sessions immediately after user model-role configuration changes without switching their current model.
-- Preserve structured Skills notifications and send one cancellation receipt for index operations.
 - Explain unavailable background pipe streams instead of returning a missing resource.
 - Reject invalid known-unit `/loop` intervals instead of silently treating them as task text.
 - Keep existing Markdown requirements when advancing a confirmed Dev business document, and enforce stage-local edit and speculation settings on new and restored stage sessions.
 - Reject missing or unreadable configuration in explicit `config set` / `reset` commands, preserve unrelated configuration, and return the committed revision.
-- Read cold workflow artifacts without activating the parent session or acquiring its write lease.
 - Keep Team configuration storage and run previews collapsed until explicitly opened, without displaying a chat session's main model.
 - Reject non-user model-role writes with the structured `scope_not_allowed` error.
-- Validate ZCode artifact versions using strict SemVer, including prerelease and build metadata combinations.
 - Preserve both recovery files when native installation rollback fails.
 - Stop validation after protected source changes, rerun after failed or incomplete prior runs, and scrub Windows credential variables regardless of casing.
 - Select writable Windows test temporary drives correctly when the system drive is not C: or available space is unknown.
@@ -250,7 +241,6 @@
 - Accept company rerank responses without a model while rejecting explicit mismatches, and expose sanitized HTTP, timeout and response-validation failures as offline-visible warnings.
 - Avoid CNB release failures from mismatched Windows/WSL Bun versions and dirty generated files, with WSL build scripts synchronized only through Git.
 - Keep input, Collab and provider protocol settings in their intended settings groups, preserving the upstream Collab section name.
-- Fix ZCode session creation and reads when a model's context or output limit is unknown.
 
 - Preserve offline company embedding and reranker configuration in knowledge workers so indexes created from the knowledge panel include available semantic vectors.
 
@@ -276,11 +266,9 @@
 - Allow built-in `spec-executor` agents to delegate implementation and review work and await native results within existing stage and depth limits.
 - Restore CodeAgent commit-message and session-title retries and fallbacks, and normal speculative execution for recovered requests.
 - Report unapplied LSP code actions as failures instead of successful applications.
-- Require a valid explicit release version for local ZCode artifact builds.
 - Show worktree-scope settings in Simplified Chinese.
 - Suggest a similar available model when a `/team` session model is unavailable without silently replacing it.
 - Avoid forcing full TypeScript tests or UI smoke for changes limited to root documentation and `AGENTS.md` when a valid baseline exists.
-- Avoid spurious app-server command rejections when a session journal changes while being indexed.
 - Correct the Linux x64 musl baseline release target passed to Bun.
 
 - Stabilize local verification by isolating mock task-label requests and waiting for completed terminal redraws without extending test timeouts.
@@ -297,7 +285,6 @@
 - Keep manual CI limited to build and packaging; do not run tests or make release publication depend on test jobs.
 - Let `/dev` execution agents wait for asynchronous subagent results without repeatedly polling status or filling the conversation with waiting updates.
 - Fix `/dev` native execution capabilities, recursive requirements handoff and approval checks, report acceptance boundaries, cancellation settlement, stage recovery, and partial sync/archive cleanup so failures and remaining work are retained accurately.
-- Enforce material-version bindings for ordinary `/dev` desktop inputs and recognize explicit requests to continue the approved plan without requiring a fixed repair keyword.
 - Preserve a single native manual-compaction lifecycle after upstream integration, with shared operation identity, committed-only summary references and terminal events after settlement.
 - Show actual diffs for conflict resolutions, including successful files when a bulk resolution partially fails.
 - Keep lazy llama.cpp and LM Studio metadata refresh cache-only in offline processes, including model selection and post-response refreshes.
@@ -308,17 +295,17 @@
 - Exclude vendored dependency test files from fork test dispatch.
 - Reject symbolic links, Windows junctions and hard-linked targets in Dev requirements, solution and planning document writes, preventing an allowed document path from modifying business files while retaining normal document creation and editing.
 - Keep Dev command failures visible outside Dev, restore dropped stage input, and allow failed entry cleanup to be retried without advancing the saved phase or losing workspace ownership.
-- Preserve ZCode stage row controls and ordinary mutations after Dev; closing a worker view or resuming a live root no longer stops its Dev flow, and malformed historical observations are skipped.
+- Closing a worker view or resuming a live root no longer stops its Dev flow, and malformed historical observations are skipped.
 - Reject formal materials changed between approval checks and handoff or acceptance, and stop executor work and collaboration when accepted materials become invalid.
 - Restore the pre-Goal tool set on completion and pause even when native Goal events have already disabled the mode, preventing the Goal tool from reappearing after completion.
-- Re-enter Dev using the root session's current workspace after native directory changes, preserve native subscription initialization while rebinding stage sessions, and keep ZCode candidate selection and unapproved material revisions aligned with the same native controller.
+- Re-enter Dev using the root session's current workspace after native directory changes and preserve native subscription initialization while rebinding stage sessions.
 - Let `/team` finish valid discussions that explicitly exclude an unavailable proposal, while still rejecting a later endorsement of it.
 - Preserve current `/dev` file revisions and original user replies across visible file/save failures without reusing stale model replies or generating model handoff summaries.
 - Prevent a new `/dev` run from replacing one whose cancellation or runtime cleanup has not settled, and expose actionable native model/provider failure details.
 - Reject missing or malformed `/dev` stage artifacts using their actual on-disk contents, and keep complete solution files and raw user confirmations available to the planner.
 - Prevent repeated company-configuration warnings from corrupting the TUI during session and subagent initialization, while retaining startup notifications and standalone CLI diagnostics.
 - Keep native Dev stopping, workspace ownership and actual archive locations observable without reviving completed acceptance, repeating completed closing steps or permitting Loop/desktop rewind bypasses.
-- Interrupt the current Dev solution's in-flight Team discussion on ordinary Escape or ZCode stop, await owned work settling, and retain the flow without replaying the discussion, clearing native queued input or releasing stop ownership held by an in-progress exit/drop.
+- Interrupt the current Dev solution's in-flight Team discussion on ordinary Escape, await owned work settling, and retain the flow without replaying the discussion, clearing native queued input or releasing stop ownership held by an in-progress exit/drop.
 
 - Run bash commands without pipe stream taps when the loaded native addon predates `PipeStreams`, instead of failing every call with `undefined is not a constructor` and leaving `pty` retries the only path to output; `proc://<id>/streams` reports the missing taps, and a newer JS tree beside a previous release's addon no longer breaks plain commands.
 - Open the live background-jobs panel from `/jobs` in ordinary terminals too, showing continuously updated Bash output without a model call; `/jobs full` remains a full-command snapshot.
@@ -328,28 +315,11 @@
 - Use `node:fs/promises` for native task isolation patch writes (including nested patches) and publication reads, avoiding Bun file I/O `ENOENT` failures on Windows session artifact paths longer than `MAX_PATH`.
 - Preserve native stage input, attachments and drafts when Dev admission or artifact checks fail; retain no-agent Dev mode after successful completion without manufacturing model replies.
 - Load bundled OpenSpec and Superpowers commands after profile selection, preserving profile-specific environment bootstrap and global profile flags.
-- Correct ZCode child approvals, command and Tan receipts, persistent profile isolation, streaming identities and Skill catalogs, while keeping Team observations faithful to native changes and leaving the TUI and existing protocol unchanged.
-- Keep ZCode clock calibration independent of history scans and reuse indexed receipts across restarts, without queuing foreground lookups behind full background rebuilds or shortening deduplication history.
-- Allow ZCode profile switching after a completed session deletion, reject incompatible concurrent resume options, and retain structured Team configuration error codes and save receipts on the wire.
-- Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log, native Goal and ZCode coverage and leaving upstream RPC behavior unchanged.
-- Keep native ZCode subagent detail sessions read-only across live and cold history, retain each child's configured model/thinking/tools, and hydrate late subscribers from the owning native stream without starting a second runtime.
-- Preserve workflow actors' parent-scoped user interactions, publish the bounded causality/flow/handoff graph for saved launches, and keep actor sessions out of the public root task index while retaining run history drill-down.
-- Refresh ZCode context usage from the owning native session after replies and compaction, including cold-restored sessions whose model selection does not change, and publish the final watermark atomically with terminal state so idle controls do not race a delayed usage refresh.
+- Remove retired fork-only RPC dialog diagnostics and Goal RPC v3 acceptance fixtures while retaining SQLite failure-log and native Goal coverage and leaving upstream RPC behavior unchanged.
 - Route explicit Anthropic context-window exhaustion through the existing overflow recovery path instead of retrying unchanged history with an output-limit continuation.
-- Apply independent ZCode Goal pause/resume controls while work is busy without admitting them to the queued objective stream.
-- Keep the executing ZCode turn header running before first content and during tool work, then settle it from native lifecycle and trustworthy timing facts without reviving historical turns.
-- Preserve admitted Highspeed card facts through ZCode queue promotion and native history restoration, and persist validated card metrics without inferring cards for ordinary turns.
-- Deliver an explicitly selected stopped ZCode queue item through native admission instead of leaving it blocked by the stopped queue hold, preserving its identity and unselected queued inputs.
-- Apply explicitly promoted queued Goal intent through the native command owner before an open provider stream finishes, while preserving native steering admission, original input identity and unselected queued inputs.
-- Refresh ZCode queue pause and auto-drain projection when native hold state changes without a queue-content event, keeping paused controls consistent after Stop and Resume.
-- Apply frozen ZCode execution mode and Plan intent at native input delivery, refresh model metadata without rewriting selection intent, release partially bound workflow actors without waiting on their own initialization, and settle unfinished cold-history tool rows as interrupted.
 - Keep background Bash output readable from cold subagent sessions while their original execution owner is still alive, without reviving tasks or exposing another session's output.
-- Order same-identity ZCode recreation after deletion without a circular wait, while allowing already admitted command-journal reads to finish and releasing the retired runtime lease.
-- Preserve admitted automation run identity and manual/scheduled attribution in native ZCode turn telemetry so Host-dispatched executions report their real steps and completion.
 - Publish authoritative queued-input updates while manual compaction suspends agent listeners, so queued Goal inputs remain visible until normal delivery resumes.
 - Keep execution model fallbacks active across tool turns without reusing another provider's credentials or retaining expired child authorization.
-- Keep ZCode history pagination complete when late rows arrive, avoid executing extensions during cold workspace catalog reads, and reject unsupported tool approval dialogs without disguising them as user questions.
-- Keep ZCode fork dividers after the actual inherited response and resolve native parent journal paths to session identities across live and cold history.
 - Keep runtime journal leases exclusive within one process and held through writer shutdown; preserve callable tool schemas through admission wrappers and cancel failed MCP initialization without affecting other sessions.
 - Fail affected Rust analysis closed, report native setup/artifact failures before cleanup, and preserve bounded failure/deadline exits under pipe backpressure without automatically installing WSL dependencies.
 - Fixed HTTPS release queries and fallback downloads failing with send errors in Windows PowerShell 5.1, without requiring PowerShell 7.

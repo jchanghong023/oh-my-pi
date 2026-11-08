@@ -136,8 +136,5 @@
 ## 项目与实现参考
 
 - **CLI（终端版）**：[oh-my-pi](https://github.com/jchanghong023/oh-my-pi)，本文使用的 OMP fork。
-- **桌面 App**：[OmpCode](https://github.com/jchanghong023/OmpCode)，内置 OMP 核心，无需另装 CLI。提供 **CentOS 7 x64 专用兼容 ZIP**，可由普通用户解压后离线运行，无需 root 或升级系统 glibc；仍需图形会话和系统桌面库。
 - **文档转换**：[xberg](https://github.com/jchanghong023/xberg)，fork 自上游 [xberg-io/xberg](https://github.com/xberg-io/xberg)。把办公文档、PDF 以及音频视频统一转换成 Markdown；代码约 217 万行，核心为约 156 万行 Rust，其余为 Dart、Python、Swift、Java、C# 等上游生态语言绑定。
 - **关键词与执行指令**：[magic keywords 文档](../docs/magic-keywords.md)、[`workflowz` 通知](../packages/coding-agent/src/prompts/system/workflow-notice.md)、[`orchestrate` 通知](../packages/coding-agent/src/prompts/system/orchestrate-notice.md)；本 fork 斜杠命令见[需求约定](../openspec/specs/personal-commands/spec.md)。
-
-CentOS 7 兼容包使用已停止维护的 Electron 28，并关闭 Chromium 沙箱，仅用于可信工作区。下载和运行方法见 OmpCode 项目 README。

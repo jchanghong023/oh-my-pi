@@ -29,8 +29,6 @@ sources:
     resource: repo://packages/coding-agent/src/knowledge/engine.ts
   - id: openwiki-source-3f14ee65070eb38d807b07f5
     resource: repo://packages/coding-agent/src/knowledge/service.ts
-  - id: openwiki-source-524187b4e403689198c9587c
-    resource: repo://packages/coding-agent/src/modes/zcode/indexes.ts
   - id: openwiki-source-315d8a55792b04f27856932c
     resource: repo://packages/coding-agent/test/knowledge-semantic.test.ts
   - id: openwiki-source-89c07cbbf8e0f5d77f4d30d9
@@ -81,7 +79,7 @@ Rust `pi-knowledge` 负责文件发现、Markdown 切分、哈希、SQLite schem
 
 ```mermaid
 flowchart TD
-    Caller["工具、TUI 或 ZCode"] --> Service["KnowledgeService 子进程"]
+    Caller["工具或 TUI"] --> Service["KnowledgeService 子进程"]
     Service --> Engine["TypeScript 检索编排"]
     Engine --> Native["N-API 与 Rust 查询内核"]
     Native --> DB["knowledge.db 读快照"]
@@ -123,7 +121,7 @@ flowchart TD
 
 ## 交互、取消与验收
 
-`/knowledge` 面板检索所选索引，默认搜索与显式 grep 共用后端；只读 `knowledge_search` 工具可覆盖多个索引。非受限默认会话可通过 `xd://knowledge_search` 按需暴露工具，审批和调度仍遵守 Knowledge 自身规则，参见 [工具与执行](../architecture/tools-and-execution.md)。ZCode 的 Knowledge 页面通过执行端的 bridge 复用当前 profile 的 `knowledge.db` 和服务；远端导入目录必须是执行端路径，不是桌面本机路径。切换上下文、关闭页面或取消时释放自有操作并丢弃迟到结果；失败或取消续页保留已展示证据。
+`/knowledge` 面板检索所选索引，默认搜索与显式 grep 共用后端；只读 `knowledge_search` 工具可覆盖多个索引。非受限默认会话可通过 `xd://knowledge_search` 按需暴露工具，审批和调度仍遵守 Knowledge 自身规则，参见 [工具与执行](../architecture/tools-and-execution.md)。
 
 可选模型故障可以降级，**用户取消不能降级成成功结果**：取消应停止该调用，不继续交付全文或基础排名。成功搜索包括正常零命中和续页，对外总时长至少 **500ms**，这是下限而不是性能上限；实际工作完成后不足部分以可取消异步等待补足，错误和取消不等待。诊断应区分真实工作、等待和总时长，不能把下限当缓存 TTL 或性能提升。
 

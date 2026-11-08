@@ -9,10 +9,6 @@
         {
           "resource": "repo://packages/coding-agent/src/goals/runtime.ts",
           "version": "repo-file-v1:sha256:5d4dc77e0f7141069996855357d4c2e391ab44cf8ce521daa5dd87b6014a25cb"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L2-L12",
-          "version": "repo-lines-v1:sha256:a9bee72a579025b3c0cbbd271531eb583a41c273ba418f19635522de140dd481:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNTA3ZWQxMmM5NGNjOWFhM2RhOGQ3OGI3MDk3MWIzYWVkZmNmMGU5ZTMwMDY1OGY2ZDRkYTRiNTAzYjJiODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYyZTA4YmYyNzc5NGU0MzlhMjg3NjliODNlMTAwYWU5YzYzYTdlNTkyNjhhMzY2YzViMzZkNjFkMjg5NTJmMTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoxLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjYzU5YTMwNTA4YWQzNDdkYjM5OTBkYTczMDlkNzU3OTRkZWIwODk3MTkyNDA2ODYxODViZDI1ZWE5ZDNlNGIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIzMGI5MzAyYTM3YWZkMmE4ZjU4ZDliODcyNzhkYjM1NGU4YTQ4MTA4Zjg4ZDFhZTU1ZDU3MGY3ZWE1NDdhNDIifQ"
         }
       ]
     },
@@ -36,15 +32,11 @@
     },
     {
       "id": "claim_1eb39939d646413984a203b7b3050c02",
-      "statement": "Goal 功能和底栏默认开启，自动续跑默认只允许 interactive，ZCode headless 使用 rpc 配置值；配置本身不创建目标。",
+      "statement": "Goal 功能和底栏默认开启，自动续跑默认只允许 interactive；配置本身不创建目标。",
       "evidence": [
         {
           "resource": "repo://packages/coding-agent/src/goals/settings.ts",
           "version": "repo-file-v1:sha256:1f35c3b0ee0c27a5ef8de60798dbbcf2ff2bef0eb321cb0f7a3624bff252c31b"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L35-L36",
-          "version": "repo-lines-v1:sha256:be0318d1927ad873eca726840b0be4e8255aa8020835e0e8a68ea2c574d4fc4a:eyJzZWxlY3RlZExpbmVDb3VudCI6MiwiZmlyc3RTZWxlY3RlZExpbmVIYXNoIjoiYmUxZjA4MjlhOTYzYzM0NDJjOWI2MjY1MTdmNmE2MjdkMTMyYjhmMjA1NmYzY2Q4Yjk2MGY4OTFmOTg0MmMwZCIsImxhc3RTZWxlY3RlZExpbmVIYXNoIjoiYzk3ZmE1NGQ3YTA3N2Q4OGQ4NDEzYTFkYmQ0MDAzZWY4ZWYxOGQ4YWVlYjc4NGYwYmRiMTUzOTJiNGM0ZGJiZCIsInByZWNlZGluZ0NvbnRleHRMaW5lQ291bnQiOjMsInByZWNlZGluZ0NvbnRleHRIYXNoIjoiOTZmZDJjMmE4N2JiZWVjMDBlYTA0ZmFmNmE3YTRmOTg1ZDY4NTQ3ZDcyZTJiZDE0MmIzOWM5ZjdlZTg5YWFkMyIsImZvbGxvd2luZ0NvbnRleHRMaW5lQ291bnQiOjMsImZvbGxvd2luZ0NvbnRleHRIYXNoIjoiMGNmNWEyMjhjOTIxNWI3Mzc1OTMxZmQ3ZTk2NTg0YTlkYjFkNmI0YzI4MTBlMzBhM2UyYTlmNTFiMmI0MDMxNSJ9"
         }
       ]
     },
@@ -98,33 +90,21 @@
     },
     {
       "id": "claim_40a0aea0658d4acc9234c4265dd1604c",
-      "statement": "会话 mode_change 数据用于恢复目标，缺少必要字段的记录不能构造目标；会话切换的宿主重协调避免沿用其他会话状态。",
+      "statement": "会话 mode_change 数据用于恢复目标，缺少必要字段的记录不能构造目标。",
       "evidence": [
         {
           "resource": "repo://packages/coding-agent/src/goals/state.ts#L42-L68",
           "version": "repo-lines-v1:sha256:dc9970eb77e990ca1fa4948deb30f58cea3626efcb80fe161593326a295bb726:eyJzZWxlY3RlZExpbmVDb3VudCI6MjcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImQwMjZmMjM4ZDljNjQ2MDhmMWY3ODM4MjI0OGMxNTA5ZThiNzMzNjM4ZjY1MzUzNTYzMDRiZTE1ZThiOWNjNWEiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjQxMmNhMzQ1Y2NmNzViZjljMDgwNmJjZTY5NWJlOGRlODA4Yjc5OTg0MjUxYTdhNTRkMjAyY2Y2MTAxZGQ0NTEiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImE3NWZmN2NlOGU2NDFmNjg4ODYyNzU5OGJjMjg3NTIzMTRmYjczNThkZGI2ODYwMzNlNDdjMGViMjVkZGJiYmEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImMwMjllNjFmYmM5Y2NlMTE4N2RlNmEwYTc4MmJjZTcxNjdiODUwZWU2MzA5NmMxYjhiYzc1YTY2MDZjNTFiZmMifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L94-L113",
-          "version": "repo-lines-v1:sha256:8a715d776af7bd0a311e87fdd2ec2bd1b37e6aad24bbf8beca23143a6f798119:eyJzZWxlY3RlZExpbmVDb3VudCI6MjAsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjVhNWQ2YTE4OTQ5YzZkNjg2NTU3ZTc4ZDY1NzRmZTIxZWU2ZDdjM2FmNDgwYzUwZDVlY2UyNzc0ODNiNjU4YzIiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjM4OWIzYzExMWY5NjUzYWMxNTU5MDljZDU3NjJjMTJiOGI5ZjcyMTUzYWUxMTJjYTQ4OWU0ZTdjNTVmNzFiMDQiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImQzNzMzMDA1NTcxNzk5YjIyOWQ2MTJiOTc4MDdiZTIxMjY3MmI3YzQxNTkyYTdhOGQwOGMxZDBiZTZjNDI4NTEiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImVmMmI2N2Q2NzQ2YTVkMzk1MWZjZDhjZmNiYmQ4YTA0YWMzZmI4OTNkZWI5NGQzM2Q0NjdiMTE3NzQ2YTM2NWIifQ"
         }
       ]
     },
     {
       "id": "claim_d3022ae91c8d4b3cb56f642e0c9cad3a",
-      "statement": "交互宿主仅在活动 Goal、模式配置、空闲和输入等门禁允许时延迟提交隐藏续跑，并在计时器触发后重新检查会话与目标；ZCode 使用生命周期驱动并在中止时阻止续跑。",
+      "statement": "交互宿主仅在活动 Goal、模式配置、空闲和输入等门禁允许时延迟提交隐藏续跑，并在计时器触发后重新检查会话与目标。",
       "evidence": [
         {
           "resource": "repo://packages/coding-agent/src/modes/interactive-mode.ts#L3631-L3707",
           "version": "repo-lines-v1:sha256:d3937dea84660c34eb4589ad467d3262178a1e85269729ae303ef98950a81529:eyJzZWxlY3RlZExpbmVDb3VudCI6NzcsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6IjEzMjc3MjZlYjFlMDU4ZjAyMTJhMDJlYWFhMjFlYzU0NmRmNTUwMDgxMWM3MmIwM2YzYTY1MGQ1ZTdiYjFmMmYiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImNlYmE1ODJjZmVmMjNlNDY1MGY3YWZkNmFhZTNmNWY4YzdlMWU2YjU0ZjA0NGIzNmVlYjIwZjk1ODg1MzE4MGUiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjFjYjVmODUwYmU4YTU3Y2I0ZWFhNjJhZjNhYWJiZjJlOTBmN2I5NjYzMDcxM2Y2ZTQxMDEzYjkwYzMxOGNkMWIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6ImYyOWZlYzVjMzkwZmY4Mjg4MDI4YWY1ZTEwMjU5ZGQ4MjEzNjlhNDk3NGViODU4ZmFlOGNhZGRhYjc4NzY3MjEifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L2-L12",
-          "version": "repo-lines-v1:sha256:a9bee72a579025b3c0cbbd271531eb583a41c273ba418f19635522de140dd481:eyJzZWxlY3RlZExpbmVDb3VudCI6MTEsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImFkNTA3ZWQxMmM5NGNjOWFhM2RhOGQ3OGI3MDk3MWIzYWVkZmNmMGU5ZTMwMDY1OGY2ZDRkYTRiNTAzYjJiODciLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6ImYyZTA4YmYyNzc5NGU0MzlhMjg3NjliODNlMTAwYWU5YzYzYTdlNTkyNjhhMzY2YzViMzZkNjFkMjg5NTJmMTgiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjoxLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6ImNjYzU5YTMwNTA4YWQzNDdkYjM5OTBkYTczMDlkNzU3OTRkZWIwODk3MTkyNDA2ODYxODViZDI1ZWE5ZDNlNGIiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6IjIzMGI5MzAyYTM3YWZkMmE4ZjU4ZDliODcyNzhkYjM1NGU4YTQ4MTA4Zjg4ZDFhZTU1ZDU3MGY3ZWE1NDdhNDIifQ"
-        },
-        {
-          "resource": "repo://packages/coding-agent/src/modes/zcode/hosts/goal-host.ts#L203-L215",
-          "version": "repo-lines-v1:sha256:d34e3f4e89d141e602f7deb8a4b54c114a7dadf8187eb895020fcf9a045b8f80:eyJzZWxlY3RlZExpbmVDb3VudCI6MTMsImZpcnN0U2VsZWN0ZWRMaW5lSGFzaCI6ImVkOWQ4Y2EyYmNhNmJiZDE2YjU5Y2JmNTJiNDM1ZDNlNzY3NjA3MTk4NjQ1Njc0YTdjN2ZiOGMyZTA1NjA2YTMiLCJsYXN0U2VsZWN0ZWRMaW5lSGFzaCI6IjY3Y2RhODJkYTYwNjIzOGUwNWU2MjM5OTU2OWM1ZWUwMzk5MzQxOTY0OGFlNWQ0M2EyYmY4Y2Q2MzQ3ZjgyNjMiLCJwcmVjZWRpbmdDb250ZXh0TGluZUNvdW50IjozLCJwcmVjZWRpbmdDb250ZXh0SGFzaCI6IjQzYWY2ZTA3NmYxZTQwODFhODUyYmE2ODA4MDJiMjMyOGFmN2ViMWViYTY3Y2QyMGExZTZhOTk2MTBhYWY1MjkiLCJmb2xsb3dpbmdDb250ZXh0TGluZUNvdW50IjozLCJmb2xsb3dpbmdDb250ZXh0SGFzaCI6Ijg0NDc5MDBiOGNmMDI2ZTU1YTI5MjIyZWEyZGE2OTJkYzQ3ZTM2MjZiMWNmNjIyZTBiZTlkYjVhYzg5MDcyYzkifQ"
         }
       ]
     },
@@ -250,7 +230,7 @@
     },
     {
       "id": "claim_c367c43c39e9412fb6bfeb790cf97d76",
-      "statement": "局部回归测试覆盖 Goal 计量、续跑保护、运行中压缩和 ZCode 宿主；规格要求的真实入口与协议验收不等同于局部测试证明模型质量或费用节省。",
+      "statement": "局部回归测试覆盖 Goal 计量、续跑保护和运行中压缩；规格要求的真实入口与协议验收不等同于局部测试证明模型质量或费用节省。",
       "evidence": [
         {
           "resource": "repo://openspec/specs/goal-autopilot/spec.md#L191-L219",
@@ -267,10 +247,6 @@
         {
           "resource": "repo://packages/coding-agent/test/goals/goal-runtime.test.ts",
           "version": "repo-file-v1:sha256:bed27f72a8b691260f06082ea0b3285df1c812989f06c5df8ebf3cf3186280c2"
-        },
-        {
-          "resource": "repo://packages/coding-agent/test/modes/zcode-hosts-goal.test.ts",
-          "version": "repo-file-v1:sha256:c81500d0e55cafc80a9a60f80e685bec1a07050b182a1b6ccad3dbc8a48233f9"
         }
       ]
     }

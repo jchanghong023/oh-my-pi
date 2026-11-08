@@ -31,7 +31,6 @@ Dev 需求必须统一表达已有工作区的唯一流程、唯一控制者、�
 ### Modified Capabilities
 
 - `spec-driven-orchestration`：替换 Dev 的命令、工作区归属、原生聊天及三行状态区、仅 Team 配置、阶段交接与同阶段续聊、`next` 产物检查、只返回结果的批准版本检查、统一停止、验收收尾及最小业务持久化恢复契约。
-- `zcode-app-server`：仅保留普通多会话、子代理、动态工作流、记忆及调度等非 Dev 历史合同；Dev 接入条款已清理。
 
 ## Impact
 

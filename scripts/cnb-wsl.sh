@@ -10,7 +10,7 @@ commit=$4
 key=$5
 case "$key" in *[!0-9a-f]*|'') echo 'Invalid CNB cache identity' >&2; exit 1 ;; esac
 if [ "${#key}" -ne 64 ]; then echo 'Invalid CNB cache identity' >&2; exit 1; fi
-unset ZCODE_ARTIFACT_ROOT CNB_TOKEN
+unset CNB_TOKEN
 export RELEASE_VERSION="$6"
 export UPDATE_REPOSITORY="$7"
 cd "$repo"

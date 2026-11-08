@@ -7,10 +7,6 @@ verified:
   - by: openwiki/0.0.0-unknown
     at: 2026-11-01T04:03:23.095Z
 sources:
-  - id: openwiki-source-762393e99cca9df2ffc9b47c
-    resource: repo://openspec/specs/team-run-view/spec.md
-  - id: openwiki-source-afe4a6d1b05e1ddefac0578a
-    resource: repo://packages/coding-agent/src/modes/zcode/team.ts
   - id: openwiki-source-ec58819131cc392d1bcd8468
     resource: repo://packages/coding-agent/src/spec-driven/runtime.ts
   - id: openwiki-source-ebd262f42825081b8fdb9615
@@ -92,13 +88,12 @@ flowchart TD
 
 独立运行完成后，控制器等待会话不再 streaming，再用 `appendCustomMessage` 将 `team-result` 作为可见持久消息写入，而非作为模型下一轮输入。失败可持久化失败说明；取消不发布成功报告。完整聚合结果也保存在 job 中，可通过 `proc://` 读取以恢复交付失败的结果；持久化后的 UI 回调失败不撤销已写入的报告。
 
-## 运行视图、Dev 与原生 task 的边界
+## Dev 与原生 task 的边界
 
-ZCode 的 `omp/team` 提供按会话的 `list`、`read`、`stop`，它是原生运行事实的观察层，不是另一套编排器。`stop` 仅对当前仍运行且属于该会话的 job 请求取消；关闭详情或读取历史不启动也不取消 Agent。桥接层从 job、子代理事件和注册表建立节点、时间线及持久化观察快照；同模型槽位按调用身份区分。关系边只依据原生调用标签生成 `reviews`、`revises`、`rechecks`，未公开的对齐输入和综合消费因果关系标为 unavailable，不按时间或模型猜测。冷历史从 journal 重建；若最后记录为运行中但已无 live owner，则显示 unavailable，而不虚构成功。参见 [ZCode App Server](../integrations/zcode-app-server.md)。
 
 Dev 的方案阶段可显式启用 Team：Dev runtime 在 solution 入口检查已批准版本，复用成员解析、runner 和 orchestrator，再把成功且至少有一个可采用候选的结果交给方案角色。它由 Dev 的阶段上下文和取消信号拥有，而非独立 `/team` 的后台 job 或配置保存触发；批准版本变化或讨论无可采用候选会阻断该阶段。后续需求、方案、计划和实施的门槛见 [Dev 生命周期](dev-lifecycle.md)。原生 task 与 Team 共享底层子进程执行设施和并发设置，但 Team 自己拥有五阶段编排、只读工具集和审查门槛；一般工具执行边界见[工具与执行](../architecture/tools-and-execution.md)。
 
 ## 验证与维护线索
 
 <!-- openwiki: broken internal link [../../packages/coding-agent/test/team] file "../../packages/coding-agent/test/team" does not exist. Fix the href or restore the target, then delete this comment. -->
-重点回归位于 [`test/team`](../../packages/coding-agent/test/team)：`members.test.ts` 覆盖名单展开与模型预检，`config.test.ts` 覆盖配置读写与预览，`orchestrator.test.ts` 覆盖轮换、阻断和失败，`runner.test.ts` 与 `read-isolation.test.ts` 覆盖绑定、清理及隔离，`controller.test.ts` 覆盖取消和报告交付。并行审查回归另见 [`parallel-review-TeamDiscussion-regression.test.ts`](../../packages/coding-agent/test/parallel-review-TeamDiscussion-regression.test.ts)。变更报告合同、工具集合或生命周期时，应同时检查这些测试与 [Team 讨论规范](../../openspec/specs/team-discussion/spec.md)；运行视图规范仍明确将完整 UI 验收视为待完成，不能把观察 API 的存在等同于全部界面验收通过。
+重点回归位于 [`test/team`](../../packages/coding-agent/test/team)：`members.test.ts` 覆盖名单展开与模型预检，`config.test.ts` 覆盖配置读写与预览，`orchestrator.test.ts` 覆盖轮换、阻断和失败，`runner.test.ts` 与 `read-isolation.test.ts` 覆盖绑定、清理及隔离，`controller.test.ts` 覆盖取消和报告交付。并行审查回归另见 [`parallel-review-TeamDiscussion-regression.test.ts`](../../packages/coding-agent/test/parallel-review-TeamDiscussion-regression.test.ts)。变更报告合同、工具集合或生命周期时，应同时检查这些测试与 [Team 讨论规范](../../openspec/specs/team-discussion/spec.md)。

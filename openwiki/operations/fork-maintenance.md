@@ -77,15 +77,15 @@ flowchart TD
 
 ## 保护运行契约，而非保留所有历史补丁
 
-两种主要场景分别是原生终端 TUI 与 ZCode app-server，均以本 fork OMP 为 Agent 核心；零配置是目标，不消除模型服务和认证前提。验收须分别从真实入口完成消息、模型和工具链；公司 offline 场景还需无公网。详见[系统概览](../architecture/system-map.md)和[内网与离线运行](intranet-offline.md)。
+主要使用入口为原生终端 TUI，以本 fork OMP 为 Agent 核心；零配置是目标，不消除模型服务和认证前提。验收须从真实入口完成消息、模型和工具链；公司 offline 场景还需无公网。详见[系统概览](../architecture/system-map.md)和[内网与离线运行](intranet-offline.md)。
 
-同步审查尤其要保护：`OMP_OFFLINE` 的进程级临时覆盖与本地资源、`OMP_CONFIG_ROOT` 和 profile 数据隔离、Windows 安装及更新、ZCode 协议、工具取消和持久化等已批准契约。offline 不是无需模型服务，配置覆盖也不应写回用户文件。规格同时限定指定行为恢复上游语义；若恢复与其他批准契约冲突，应报告并取得用户决定，而不是静默扩大回滚。
+同步审查尤其要保护：`OMP_OFFLINE` 的进程级临时覆盖与本地资源、`OMP_CONFIG_ROOT` 和 profile 数据隔离、Windows 安装及更新、工具取消和持久化等已批准契约。offline 不是无需模型服务，配置覆盖也不应写回用户文件。规格同时限定指定行为恢复上游语义；若恢复与其他批准契约冲突，应报告并取得用户决定，而不是静默扩大回滚。
 
 ## 资源所有权与构建链
 
 `vendor/openwiki` 是指向 OpenWiki fork 的子模块，正式发行由父仓库 gitlink 固定，而不是 URL、浮动分支或独立包版本。OpenWiki 的知识核心、Agent 和编排在该 fork 维护；OMP 保留宿主接线及构建规则，不复制第二套实现。CI 递归 checkout 后比对 gitlink 并检查必要入口；本地资源构建则有意使用当前子模块工作区，包括未提交修改，不能把它冒充固定提交的正式发行物。更多接入边界见 [OpenWiki 生成](../integrations/openwiki-generation.md)。
 
-本地 `packages/coding-agent/scripts/build-binary.ts` 与发布脚本 `scripts/ci-release-build-binaries.ts` 共用 `compileCodingAgent`：生成或检查 stats 与导出 viewer，编译 CLI 并在 `finally` 恢复 stats 生成占位文件。编译器嵌入目标 native、文档索引、OpenWiki skills 和可视化资源，并用插件装入 spec-driven 归档。发布脚本目标表比实际 CI 矩阵宽；表中存在某平台不代表该平台有 fork Release。可选 ZCode 产物需要显式 `RELEASE_VERSION`，并遵循干净源码、目标格式、清理和 manifest 契约。
+本地 `packages/coding-agent/scripts/build-binary.ts` 与发布脚本 `scripts/ci-release-build-binaries.ts` 共用 `compileCodingAgent`：生成或检查 stats 与导出 viewer，编译 CLI 并在 `finally` 恢复 stats 生成占位文件。编译器嵌入目标 native、文档索引、OpenWiki skills 和可视化资源，并用插件装入 spec-driven 归档。发布脚本目标表比实际 CI 矩阵宽；表中存在某平台不代表该平台有 fork Release。
 
 OpenWiki 资源生成从当前 vendor 读取 skills、构建浏览器脚本，并纳入图、Markdown、净化器、Mermaid 及许可证；生成前后指纹不一致则失败，JSON 通过临时文件与 rename 发布。子模块缺失时 `--if-present` 删除旧视觉资源并警告，避免旧缓存冒充当前输入。spec-driven 归档则直接打包已检入的 vendor 树及其依赖，不在打包时联网安装；排序和归一化归档元数据用于稳定缓存键。生成物不是第二份可维护源码。相关资源机制见 [Skills 与规格资源](../integrations/skills-and-spec-resources.md)。
 
@@ -93,7 +93,7 @@ OpenWiki 资源生成从当前 vendor 读取 skills、构建浏览器脚本，�
 
 [CI 工作流](../../.github/workflows/ci.yml)只接受手动派发，默认 `publish_release=false`，同 ref 排队且不取消正在运行的任务，默认权限 `contents: read`。它从基线节的唯一版本行和工作流 `run_number` 生成 `vX.Y.Z+fork.N`；版本行缺失、重复或格式不符会失败。因此不要重命名或重建工作流文件而重置计数。只有显式选择发布且在 `main`，元数据、所有二进制和浏览器扩展成功后，发布 job 才取得 `contents: write`。构建不运行测试，也不构成功能验收。
 
-CI 的发行矩阵仅为 Linux glibc x64 和 Windows x64，上传两个二进制及浏览器扩展；不发布 npm、Homebrew 或 ZCode 产物。安装器只安装 fork Release 二进制，不恢复上游源码安装。Windows 支持系统自带 PowerShell 5.1；替换前验证下载，失败保护旧安装或保留已验证产物。Linux 原子替换不终止旧会话；Windows 优先重命名旧映像，只有失败时才按精确映像路径强杀回退。安装器默认放宽 TLS 验证，版本检查不等同端点身份认证，应在受控环境评估风险。开发 setup 不等同发行安装：`scripts/setup.ts` 顺序安装依赖、构建 native、链接 coding-agent 和 `omp`，Windows 链接失败可回退复制。
+CI 的发行矩阵仅为 Linux glibc x64 和 Windows x64，上传两个二进制及浏览器扩展；不发布 npm或 Homebrew 产物。安装器只安装 fork Release 二进制，不恢复上游源码安装。Windows 支持系统自带 PowerShell 5.1；替换前验证下载，失败保护旧安装或保留已验证产物。Linux 原子替换不终止旧会话；Windows 优先重命名旧映像，只有失败时才按精确映像路径强杀回退。安装器默认放宽 TLS 验证，版本检查不等同端点身份认证，应在受控环境评估风险。开发 setup 不等同发行安装：`scripts/setup.ts` 顺序安装依赖、构建 native、链接 coding-agent 和 `omp`，Windows 链接失败可回退复制。
 
 ## 验证入口与证据边界
 
