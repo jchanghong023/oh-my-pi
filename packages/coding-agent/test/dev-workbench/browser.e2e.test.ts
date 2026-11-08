@@ -227,7 +227,8 @@ test("real Chromium imports Markdown without business dialogue, renders all stag
 	await page.waitForSelector('[data-testid="material-view"]');
 	const upload = fixture.root.join("uploaded-business.md");
 	await fs.writeFile(upload, BUSINESS);
-	const input = await page.waitForSelector('input[data-action="import"]');
+	// 材料校验完成前控件已存在但被禁用，提前设置文件会被导入前置门禁忽略。
+	const input = await page.waitForSelector('input[data-action="import"]:not([disabled])');
 	if (!input) throw new Error("Markdown upload control missing");
 	await input.uploadFile(upload);
 	await eventually(

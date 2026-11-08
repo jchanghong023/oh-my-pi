@@ -775,11 +775,13 @@ function ConversationComposerImpl({
   // 手机 Web 远控输入框会重新触发 Safari 的页面缩放。
   const avoidIosInputFocusZoom = shouldAvoidIosInputFocusZoom({
     isMobileTextInputViewport,
-    isWebRemoteControl,
+    isWebRemoteControl: isWebRemoteControl || modelSelectionView?.nativeSession !== undefined,
   });
   // Bugfix：手机远控把完整能力说明放进绝对定位 placeholder 后，三行英文会越过
   // 40px 编辑区并覆盖工具栏。手机端改用短文案并限制两行；桌面端继续保留完整提示。
-  const compactMobilePlaceholder = isWebRemoteControl && isMobileTextInputViewport;
+  const compactMobilePlaceholder =
+    (isWebRemoteControl || modelSelectionView?.nativeSession !== undefined) &&
+    isMobileTextInputViewport;
   const sendShortcut = resolveChatEnterShortcut({ enterSubmits });
   const updateText = useCallback(
     (next: string) => {
@@ -805,6 +807,7 @@ function ConversationComposerImpl({
     [onTextChange, workspaceIdentity, workspacePath],
   );
 
+  const nativeChatSurface = modelSelectionView?.nativeSession !== undefined;
   const initialization = snapshot?.runtimeInitialization;
   const runtimeBlocked =
     (initialization !== undefined && initialization.status !== "ready") ||
@@ -820,14 +823,15 @@ function ConversationComposerImpl({
     attachmentPut,
     onRuntimeRestart,
     onRuntimeLifecycle,
-    disabled: disabled || runtimeBlocked,
-    listenAddToChatEvents: listenAddToChatEvents && !disabled && !runtimeBlocked,
+    disabled: disabled || runtimeBlocked || nativeChatSurface,
+    listenAddToChatEvents:
+      listenAddToChatEvents && !disabled && !runtimeBlocked && !nativeChatSurface,
   });
   // 对齐旧版 useChatComposer：窗口级 dragover 会在指针进入 ChatView 前预先点亮
   // 整个聊天区与桌面草稿标题栏；workspace payload 的文案优先于系统附件。
   const { externalFileDragging, workspaceFileDragging } = usePromptEditorDragState({
-    enableExternalFileDrop: true,
-    enableWorkspaceFileDrop: true,
+    enableExternalFileDrop: !nativeChatSurface,
+    enableWorkspaceFileDrop: !nativeChatSurface,
   });
   const handleConversationDragOver = useCallback(
     (event: DragEvent<HTMLElement>) => {
@@ -1408,7 +1412,7 @@ function ConversationComposerImpl({
     (command) => command.recovery && command.value === "reload",
   );
   // 面板选择是 AppSlashCommand 操作，草稿不是参数；只有文本提交才要求独立命令。
-  const recoveryAvailable = Boolean(recoveryCommand) && remoteAvailable;
+  const recoveryAvailable = !nativeChatSurface && Boolean(recoveryCommand) && remoteAvailable;
   const recoveryAllowed =
     recoveryAvailable &&
     !hasAttachments &&
@@ -1457,7 +1461,7 @@ function ConversationComposerImpl({
       const hasPendingConversationSelections = currentConversationSelections.length > 0;
       const submittedShareContext = pendingShareContext;
       // /reload 是本地操作，在模型配置、队列和消息历史处理之前截获；参数和附件不发给模型。
-      if (/^\/reload(?:\s|$)/.test(trimmed)) {
+      if (!nativeChatSurface && /^\/reload(?:\s|$)/.test(trimmed)) {
         if (
           trimmed !== "/reload" ||
           !recoveryCommand ||
@@ -1855,6 +1859,7 @@ function ConversationComposerImpl({
       submissionReady,
       remoteAvailable,
       runtimeBlocked,
+      nativeChatSurface,
       getCodeCommentContexts,
       telemetryDraftConfig,
       modelSelectionView,
@@ -2642,7 +2647,7 @@ function ConversationComposerImpl({
           workspaceIdentity={workspaceIdentity}
           provider={provider}
           draftConfig={draftConfig}
-          disabled={disabled || runtimeBlocked}
+          disabled={disabled || runtimeBlocked || nativeChatSurface}
           activeConfigPicker={activeConfigPicker}
           onConfigPickerOpenChange={handleConfigPickerOpenChange}
           onSwitchMode={onSwitchMode}
@@ -2692,6 +2697,7 @@ function ConversationComposerImpl({
       canStop,
       disabled,
       runtimeBlocked,
+      nativeChatSurface,
       draftConfig,
       handleConfigPickerOpenChange,
       isWebRemoteControl,
@@ -2859,12 +2865,12 @@ function ConversationComposerImpl({
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}
           submitLabel={sendTooltipTitle}
-          showSlashButton
+          showSlashButton={!nativeChatSurface}
           // @ 是 Plugin / 文件 / 对话 / 画板主入口；# 会话与 $ / ¥ / ￥ Skills
           // 仍由 MentionPlugin 保留兼容触发，但不在 + 菜单重复展示。
-          showMentionButton
+          showMentionButton={!nativeChatSurface}
           topContent={topContentNode}
-          attachmentAction={runtimeBlocked ? undefined : attachmentAction}
+          attachmentAction={runtimeBlocked || nativeChatSurface ? undefined : attachmentAction}
           inputTestId={TID_V4_COMPOSER_INPUT}
           inputApiRef={inputApiRef}
           promptHistory={promptHistory}
@@ -2873,10 +2879,14 @@ function ConversationComposerImpl({
           // Bugfix 原因：命令目录必须完整来自 CLI workspace slash catalog；UI 只在
           // secondary pane 按产品能力隐藏 goal，不再追加任何内建命令或别名。
           excludedSlashCommandNames={suppressGoalCommands ? ["goal"] : undefined}
-          appSlashCommands={appSlashCommands?.filter((command) =>
-            command.recovery ? recoveryAvailable : !runtimeBlocked,
-          )}
-          enableMentionPanel
+          appSlashCommands={
+            nativeChatSurface
+              ? undefined
+              : appSlashCommands?.filter((command) =>
+                  command.recovery ? recoveryAvailable : !runtimeBlocked,
+                )
+          }
+          enableMentionPanel={!nativeChatSurface}
           leadingActions={leadingActionsNode}
           submitControl={submitControlNode}
           layout={layout}

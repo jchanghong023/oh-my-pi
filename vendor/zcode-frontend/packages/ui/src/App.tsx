@@ -15,6 +15,7 @@ import { usePlatform } from "@/hooks/usePlatform.js";
 import { useWorkspaceProviderConfigFile } from "@/hooks/useWorkspaceProviderConfigFile.js";
 import { useWorkspaceActiveTaskState } from "@/hooks/useWorkspaceActiveTaskState.js";
 import { useEnsureWorkspaceMcpLoaded } from "@/hooks/useEnsureWorkspaceMcpLoaded.js";
+import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceReadOnly, isWorkspaceTab } from "@/store/tabStore.js";
 import type { TaskChatMessage as TestChatMessage } from "@/lib/taskChatMessageTypes.js";
@@ -282,6 +283,23 @@ export function App({
     }),
   });
   const workspaceKey = workspaceIdentity?.trim() || workspaceAbsPath;
+  const nativeModelSelection = useModelSelectionServiceView(
+    services.modelSelectionService,
+    !backendBusinessAvailable,
+  );
+  const nativeSession =
+    nativeModelSelection.state.status === "ready"
+      ? nativeModelSelection.state.view.nativeSession
+      : undefined;
+  const boundNativeSessionId = nativeSession?.chatAvailable ? nativeSession.sessionId : null;
+  useEffect(() => {
+    if (!boundNativeSessionId) return;
+    // Bind the original pane to the actual OMP session, never a browser-created draft/runtime.
+    // Model-only changes retain the selected history; native session switches reach every browser.
+    useZCodeSessionStore
+      .getState()
+      .setActiveTaskId(workspaceAbsPath, boundNativeSessionId, workspaceIdentity);
+  }, [boundNativeSessionId, workspaceAbsPath, workspaceIdentity]);
   const notificationEnabled = useZCodeStore((s) => s.notificationEnabled);
   useMarketingTaskCompletionRefresh({
     workspacePath: workspaceAbsPath,

@@ -2,6 +2,7 @@ import type { ModelSelectionView } from "../../../../vendor/zcode-frontend/packa
 import { Emitter } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
 import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
 import { cfgEnabledModels } from "../config/model-settings";
+import { nativeChatRuntime } from "./native-chat";
 import { readBrowserProject } from "./project-registry";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
@@ -69,6 +70,7 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 			providers: [],
 			nativeSession: {
 				sessionId: session.sessionId,
+				chatAvailable: true,
 				models: session.getAvailableModels().map(model => ({
 					providerId: model.provider,
 					modelId: model.id,
@@ -83,8 +85,16 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 		revision++;
 		changes.fire(getView());
 	};
+	let observedSessionId = session?.sessionId;
+	const runtimeChanges =
+		session &&
+		nativeChatRuntime(context).changes.event(() => {
+			if (session.sessionId === observedSessionId) return;
+			observedSessionId = session.sessionId;
+			publish();
+		});
 	const unsubscribeSession = session?.subscribe(event => {
-		if (event.type === "model_changed") publish();
+		if (event.type === "model_changed" || event.type === "queue_update") publish();
 	});
 	const unsubscribeCatalog = session?.modelRegistry.subscribeMirror(publish).unsubscribe;
 	const unsubscribeEnabledModels = session && cfgEnabledModels.listen(session.settings, publish);
@@ -120,6 +130,7 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 			dispose: () => {
 				disposed = true;
 				unsubscribeSession?.();
+				runtimeChanges?.dispose();
 				unsubscribeCatalog?.();
 				unsubscribeEnabledModels?.();
 				changes.dispose();

@@ -1912,6 +1912,8 @@ export function SessionPane({
   const modelSelectionDisplayView =
     modelSelectionView ??
     (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
+  const extendedConversationAvailable =
+    modelSelectionDisplayView != null && modelSelectionDisplayView.nativeSession === undefined;
   const draftModelSelectionRevisionRef = useRef<number | null>(null);
   useEffect(() => {
     if (sessionId !== null) {
@@ -2628,7 +2630,7 @@ export function SessionPane({
     // 无差别发这条查询等于拿子会话 id 去问一条按**父会话**建键的 journal；CLI 的冷会话前置
     // 随即为正在运行的 detached actor 会话物化第二个 runtime（幽灵），双写事件日志，
     // 直播冻结在「已工作 xx 秒」。只读 pane 也不消费 join 回退与任务列表页脚，直接关掉。
-    enabled: !readOnly && runtimeReady,
+    enabled: extendedConversationAvailable && !readOnly && runtimeReady,
     live: state.status === "live" && runtimeReady,
     limit: WORKFLOW_RUN_DIRECTORY_LIMIT,
     refreshKey: workflowRunDirectoryRefreshKey(snapshot?.workflowRuns?.runs),
@@ -3439,9 +3441,21 @@ export function SessionPane({
   }, [layer, effectiveSessionId]);
 
   useEffect(() => {
-    if (!sessionId || !lease || snapshot?.sessionId !== sessionId) return;
+    if (
+      !extendedConversationAvailable ||
+      !sessionId ||
+      !lease ||
+      snapshot?.sessionId !== sessionId
+    )
+      return;
     void lease.store.refreshPlans();
-  }, [lease, sessionId, snapshot?.sessionId, state.planDirectoryRevision]);
+  }, [
+    extendedConversationAvailable,
+    lease,
+    sessionId,
+    snapshot?.sessionId,
+    state.planDirectoryRevision,
+  ]);
 
   // 预热会话订阅失败（CLI 重启内存会话消失等）→ 丢弃旧 binding，下一次发送由 owner 重试。
   useEffect(() => {
@@ -3712,6 +3726,41 @@ export function SessionPane({
       highspeedOriginAtSend: HighspeedPaneOrigin,
       taskGroupIdAtSend?: string | null,
     ) => {
+      if (modelSelectionView?.nativeSession !== undefined) {
+        if (!modelSelectionView.nativeSession?.chatAvailable || !sessionId) return "blocked" as const;
+        const nativeSnapshot = snapshotRef.current;
+        if (
+          nativeSnapshot?.sessionId !== sessionId ||
+          nativeSnapshot.inputRouting.mode !== "startNow"
+        )
+          return "blocked" as const;
+        if (
+          options?.attachments?.length ||
+          options?.sharedContextRefs?.length ||
+          options?.contextAttachmentCount ||
+          options?.conversationQuotes?.length
+        ) {
+          throw new Error("OMP browser chat currently supports plain text only.");
+        }
+        const submission = createSubmissionFromComposer();
+        if (!submission) return "blocked" as const;
+        // Keep the original V4 command/projection lifecycle, without Agent creation,
+        // provider recommendation, Highspeed or generated-UI context side effects.
+        const ack = await dispatchCommand(
+          "sendText",
+          { text, ...submission },
+          sessionId,
+          undefined,
+          undefined,
+          options?.telemetrySeed,
+          undefined,
+          options?.onCommandCreated
+            ? (envelope) => options.onCommandCreated?.(envelope.commandId)
+            : undefined,
+        );
+        if (ack.status !== "accepted") throw new Error(ack.reasonCode ?? "sendText rejected");
+        return;
+      }
       let onAcceptedSelection: (() => void) | undefined;
       const prepareHighspeedTurn = prepareHighspeedTurnFrom(highspeedOriginAtSend);
       const dispatchSubmissionCommand = async (...args: Parameters<typeof dispatchCommand>) => {
@@ -3988,6 +4037,7 @@ export function SessionPane({
       prepareHighspeedTurnFrom,
       resolveInitialDraftConfig,
       createSubmissionFromComposer,
+      modelSelectionView,
       sessionId,
       settleCurrentQueueInputs,
       waitForDraftSession,
@@ -5682,6 +5732,8 @@ export function SessionPane({
       onExternalTextInsertApplied={handleExternalTextInsertApplied}
       autoFocusEnabled={focused}
       disabled={
+        (modelSelectionDisplayView?.nativeSession !== undefined &&
+          (!modelSelectionDisplayView.nativeSession?.chatAvailable || !sessionId)) ||
         connecting ||
         draftRuntimeRebuilding ||
         queueEditActiveForCurrentComposer ||
@@ -6114,7 +6166,7 @@ export function SessionPane({
               workspacePath={workspacePath}
             >
               <BotGroupDeliveryProvider
-                taskId={sessionId}
+                taskId={extendedConversationAvailable ? sessionId : null}
                 workspacePath={workspacePath}
                 workspaceIdentity={workspaceIdentity}
               >

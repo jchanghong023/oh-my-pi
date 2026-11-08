@@ -22,6 +22,27 @@ export function createComposerSubmissionConfig(
   if (!composer) {
     return null;
   }
+  if (view?.nativeSession !== undefined) {
+    const selection = view.preferredSelection;
+    if (
+      !view.nativeSession?.chatAvailable ||
+      !selection ||
+      !view.nativeSession.models.some(
+        (model) =>
+          model.providerId === selection.providerId && model.modelId === selection.modelId,
+      )
+    )
+      return null;
+    // Native execution owns model/mode; do not resolve through unrelated ZCode providers.
+    return Object.freeze({
+      mode: "build",
+      planEnabled: false,
+      modelSelection: Object.freeze({
+        ...selection,
+        ...(selection.options ? { options: Object.freeze({ ...selection.options }) } : {}),
+      }),
+    });
+  }
   const selection = composer.modelSelection;
   const mode = submissionModeSchema.safeParse(composer.mode);
   const model =

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import type {
   GroupTaskRef,
   MoveGroupNode,
@@ -13,7 +14,12 @@ const EMPTY: TaskGroupStructure = { groups: [], members: [], order: [] };
 /** 控制端唯一订阅；三个筛选视图和所有任务菜单共享同一份已接受结构。 */
 export function useTaskGroups(tree: ProjectTree) {
   const services = useBaseWorkspaceServices();
-  const service = services.taskGroupService;
+  const modelSelection = useModelSelectionServiceView(services.modelSelectionService);
+  const service =
+    modelSelection.state.status === "ready" &&
+    modelSelection.state.view.nativeSession === undefined
+      ? services.taskGroupService
+      : undefined;
   const [structure, setStructure] = useState(EMPTY);
   const [error, setError] = useState<string | null>(null);
   const serial = useRef(0);

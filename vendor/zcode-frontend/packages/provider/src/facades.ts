@@ -205,6 +205,7 @@ export interface ModelSelectionView extends Partial<EffectiveModelSelectionResul
   /** OMP attachment only: null means no native session is bound to this page. */
   readonly nativeSession?: {
     readonly sessionId: string;
+    readonly chatAvailable?: boolean;
     readonly models: readonly {
       readonly providerId: string;
       readonly modelId: string;

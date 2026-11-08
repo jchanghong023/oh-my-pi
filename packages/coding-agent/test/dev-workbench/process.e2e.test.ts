@@ -28,6 +28,51 @@ afterEach(async () => {
 	owned.clear();
 });
 
+async function readWorkbenchReadyLink(
+	tui: (...args: string[]) => Promise<string>,
+): Promise<{ screen: string; url: string; mouseMode: unknown }> {
+	const screen = await eventually(
+		() => tui("text", "--full"),
+		value => /http:\/\/(?:127\.0\.0\.1|localhost):\d+\//u.test(value),
+	);
+	const terminalState: unknown = JSON.parse(await tui("state", "--json"));
+	if (
+		!isRecord(terminalState) ||
+		!isRecord(terminalState.data) ||
+		typeof terminalState.data.cols !== "number" ||
+		typeof terminalState.data.rows !== "number"
+	)
+		throw new Error("Terminal state is unavailable");
+	// Painted URLs wrap across rows; OSC 8 cell destinations retain the full capability path.
+	const cells: unknown = JSON.parse(
+		await tui("cells", "0", "0", String(terminalState.data.cols), String(terminalState.data.rows), "--json"),
+	);
+	if (!isRecord(cells) || !isRecord(cells.data) || !Array.isArray(cells.data.cells))
+		throw new Error("Terminal hyperlink cells are unavailable");
+	const linkedCell: unknown = cells.data.cells.find(
+		(cell: unknown) =>
+			isRecord(cell) &&
+			typeof cell.link === "string" &&
+			/^http:\/\/(?:127\.0\.0\.1|localhost):\d+\//u.test(cell.link),
+	);
+	if (!isRecord(linkedCell) || typeof linkedCell.link !== "string")
+		throw new Error("/dev did not print a complete ready URL");
+	return { screen, url: linkedCell.link, mouseMode: terminalState.data.mouse_mode };
+}
+
+async function waitForWorkbenchClose(base: string): Promise<void> {
+	// 等待真实监听器关闭，不把状态提示的空格或措辞当作退出协议。
+	await eventually(
+		() =>
+			fetch(new URL("api/browser", base)).then(
+				() => false,
+				() => true,
+			),
+		Boolean,
+		30_000,
+	);
+}
+
 test("source omp dev serves a durable empty workbench without model or Git side effects", async () => {
 	await using fixture = await WorkbenchFixture.create();
 	owned.add(fixture);
@@ -105,18 +150,10 @@ test("ordinary TUI remains unchanged before Dev and restores original model, ima
 				expect(provider.requests.every(request => !rolePayload(request))).toBe(true);
 				const count = provider.requests.length;
 				await tui("submit", "/dev");
-				const screen = await eventually(
-					() => tui("text", "--full"),
-					value => /http:\/\/(?:127\.0\.0\.1|localhost):\d+\//u.test(value),
-				);
-				const url = /http:\/\/(?:127\.0\.0\.1|localhost):\d+\/[^\s│\x1b]*/u.exec(screen)?.[0];
-				if (!url) throw new Error("/dev did not print a complete ready URL");
+				const { screen, url, mouseMode } = await readWorkbenchReadyLink(tui);
 				const base = url.endsWith("/") ? url : `${url}/`;
 				await tui("expect", "text", url, "--link", url);
-				const terminalState: unknown = JSON.parse(await tui("state", "--json"));
-				if (!isRecord(terminalState) || !isRecord(terminalState.data))
-					throw new Error("Terminal state is unavailable");
-				expect(terminalState.data.mouse_mode).toBe("none");
+				expect(mouseMode).toBe("none");
 				await tui("resize", "64", "36");
 				const narrow = await tui("text");
 				expect(narrow.replace(/\s+/gu, "")).toContain(url);
@@ -171,7 +208,7 @@ test("ordinary TUI remains unchanged before Dev and restores original model, ima
 				).toBe(false);
 				await tui("key", "press", "End", "Ctrl+U");
 				await tui("submit", "/dev");
-				await tui("expect", "text", "已退出 Dev 工作台", "--timeout", "30000");
+				await waitForWorkbenchClose(base);
 				expect(provider.requests).toHaveLength(count);
 				const image = path.join(cwd, "ordinary-input.png");
 				await fs.writeFile(
@@ -425,12 +462,7 @@ test("second TUI dev command settles owned Dev work without cancelling records o
 			async ({ cwd, provider, tui, state }) => {
 				const baseline = await requireGit(cwd).headSha();
 				await tui("submit", "/dev");
-				const screen = await eventually(
-					() => tui("text", "--full"),
-					value => /http:\/\/(?:127\.0\.0\.1|localhost):\d+\//u.test(value),
-				);
-				const printed = /http:\/\/(?:127\.0\.0\.1|localhost):\d+\/[^\s│\x1b]*/u.exec(screen)?.[0];
-				if (!printed) throw new Error("Exclusive Dev did not publish its actual ready URL");
+				const { url: printed } = await readWorkbenchReadyLink(tui);
 				const base = printed.endsWith("/") ? printed : `${printed}/`;
 				const browser = await fetch(new URL("api/browser", base));
 				const cookie = browser.headers.get("set-cookie")?.split(";", 1)[0];
@@ -467,7 +499,7 @@ test("second TUI dev command settles owned Dev work without cancelling records o
 				});
 				await eventually(async () => held, Boolean);
 				await tui("submit", "/dev");
-				await tui("expect", "text", "已退出 Dev 工作台", "--timeout", "30000");
+				await waitForWorkbenchClose(base);
 				expect(aborted).toBe(true);
 				const persisted = (await state()).requirements.find(item => item.record.requirementId === id);
 				if (!persisted) throw new Error("Exiting Dev removed the requirement record");

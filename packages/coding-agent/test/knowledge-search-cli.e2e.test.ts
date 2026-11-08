@@ -97,6 +97,7 @@ describe("knowledge_search CLI without source files", () => {
 		{ query = "WIKIE2EBEACON", mode, caseSensitive }: ScenarioInput = {},
 		prepared?: typeof preparedIndex,
 	) {
+		const deadline = performance.now() + 120_000;
 		const scenarioDirectory = await fs.mkdtemp(path.join(directory!, "scenario-"));
 		const root = path.join(scenarioDirectory, "project");
 		const configRoot = path.join(scenarioDirectory, "config");
@@ -266,6 +267,10 @@ describe("knowledge_search CLI without source files", () => {
 		}
 
 		async function cli(args: string[]): Promise<string> {
+			// Setup, every page/model turn, the final response and any earlier CLI calls
+			// share the existing scenario budget instead of separate 20-second watchdogs.
+			const remainingMs = Math.ceil(deadline - performance.now());
+			if (remainingMs <= 0) throw new Error("Wiki CLI scenario exceeded its 120-second budget");
 			// Launch the public source entry directly: `bun run dev` owns only a wrapper,
 			// whose exit does not prove the CLI and its knowledge worker have exited.
 			const child = ptree.exec(
@@ -294,7 +299,7 @@ describe("knowledge_search CLI without source files", () => {
 					stderr: "full",
 					detached: process.platform !== "win32",
 					signal: lifetime.signal,
-					timeout: 20_000,
+					timeout: remainingMs,
 					allowNonZero: true,
 					allowAbort: true,
 				},

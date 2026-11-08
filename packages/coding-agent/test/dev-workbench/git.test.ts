@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { VcsGitRepo } from "@oh-my-pi/pi-natives";
 import * as vcs from "@oh-my-pi/pi-natives/vcs";
-import { isFileLockHeld } from "@oh-my-pi/pi-utils";
+import { isFileLockHeld, removeWithRetries } from "@oh-my-pi/pi-utils";
 import { artifactVersion } from "../../src/spec-driven/artifacts";
 import { DevForgeService, devRepositoryIdentity } from "../../src/spec-driven/forge";
 import { DevGitService, type DevGitRecords, sanitizeDevRemoteUrl } from "../../src/spec-driven/git";
@@ -22,7 +22,7 @@ import { gitlab } from "../../src/utils/gitlab";
 const roots: string[] = [];
 const signal = () => new AbortController().signal;
 afterEach(async () => {
-	await Promise.all(roots.splice(0).map(root => fs.rm(root, { recursive: true, force: true })));
+	await Promise.all(roots.splice(0).map(root => removeWithRetries(root)));
 });
 
 /** A minimal ordinary Git repository, constructed without invoking Git or accessing network credentials. */
@@ -141,6 +141,8 @@ interface Fixture {
 	target: DevGitTarget;
 }
 
+// 真实仓库初始化、提交、推送和失败后观察共享集成场景预算；
+// 默认单元用例 30 秒不能早于原生单步操作的 30 秒边界触发清理。
 describe("requirement-scoped native Git publication", () => {
 	test("commits only confirmed paths and preserves unrelated staged content", async () => {
 		const f = await fixture();
@@ -159,7 +161,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(await f.repo.diffText({ cached: true, files: ["other.txt"] })).toBe(beforeUnrelated);
 		expect(await f.repo.diffText({ cached: true, files: ["code.txt"] })).toBe("");
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(sha);
-	});
+	}, 120_000);
 	test("publishes a business draft without approving its template or advancing the stage", async () => {
 		const f = await fixture();
 		await saveDevRequirement(f.cwd, { ...f.stored.record, stage: "business" }, f.stored.recordVersion);
@@ -177,7 +179,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(result.snapshot.record.gitOperations[0].kind).toBe("commit");
 		expect((await f.repo.showBlob(`${result.persistence.commit.sha}:${draftPath}`)).data.toString()).toBe(draft);
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(result.persistence.commit.sha);
-	});
+	}, 120_000);
 	test("publishes separate execution batches without report approval or stage advancement", async () => {
 		const f = await fixture();
 		await fs.writeFile(path.join(f.cwd, "code.txt"), "first execution batch\n");
@@ -204,7 +206,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(second.snapshot.record.gitOperations.map(operation => operation.kind)).toEqual(["commit", "commit"]);
 		expect(second.snapshot.record.gitOperations[1].knownCommitShas).toContain(firstSha);
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(secondSha);
-	});
+	}, 120_000);
 	test("limits an explicit testing-stage commit to its own record while preserving development dirt", async () => {
 		const f = await fixture();
 		await saveDevRequirement(
@@ -231,7 +233,7 @@ describe("requirement-scoped native Git publication", () => {
 		);
 		expect(await fs.readFile(path.join(f.cwd, "code.txt"), "utf8")).toBe("another development's unstaged work\n");
 		expect(await f.repo.diffText({ cached: true, files: ["other.txt"] })).toBe(staged);
-	});
+	}, 120_000);
 	test("denies a fresh explicit commit after completion without moving Git or rewriting the record", async () => {
 		const f = await fixture();
 		const completed = await saveDevRequirement(
@@ -243,7 +245,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect((await readDevRequirement(f.cwd, "requirement-a")).recordVersion).toBe(completed.recordVersion);
 		expect(await f.repo.headSha()).toBe(f.initial);
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBeNull();
-	});
+	}, 120_000);
 	test("settles duplicate confirmations once and rejects a competing raw decision", async () => {
 		const f = await fixture();
 		const entered = Promise.withResolvers<void>();
@@ -286,7 +288,7 @@ describe("requirement-scoped native Git publication", () => {
 			release.resolve();
 			await first;
 		}
-	});
+	}, 120_000);
 	test("resolves its SHA from the actual record blob and parent without self-reference commits", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "own-sha");
@@ -302,7 +304,7 @@ describe("requirement-scoped native Git publication", () => {
 		) as DevRequirementRecord;
 		expect(committed.gitOperations).toHaveLength(1);
 		expect(committed.gitOperations[0].knownCommitShas).not.toContain(sha);
-	});
+	}, 120_000);
 	test("resolves committed operation identity without any local recovery receipt", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "cold-commit-resolution");
@@ -316,7 +318,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect((await readDevRequirement(f.cwd, "requirement-a")).record.gitOperations[0].knownCommitShas).not.toContain(
 			result.persistence.commit.sha,
 		);
-	});
+	}, 120_000);
 	test("rejects a stale HEAD/index confirmation before saving the decision", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "stale-index");
@@ -326,7 +328,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(result.persistence.save).toBe("failed");
 		expect(await f.repo.headSha()).toBe(f.initial);
 		expect((await readDevRequirement(f.cwd, "requirement-a")).record.gitOperations).toHaveLength(0);
-	});
+	}, 120_000);
 	test("reuses a contained capture directory without rebasing its preimage or relaxing document guards", async () => {
 		const f = await fixture();
 		const capture = await f.service.beginOwnedPaths("requirement-a", "reused-write-capture", ["code.txt"], signal());
@@ -354,7 +356,7 @@ describe("requirement-scoped native Git publication", () => {
 				.complete,
 		).toBe(true);
 		expect(await fs.readFile(path.join(f.cwd, "code.txt"), "utf8")).toBe("one\ntwo\nthree\n");
-	});
+	}, 120_000);
 	test("serializes concurrent owned-capture ledger updates and preserves both native cancellations", async () => {
 		const f = await fixture();
 		const entered = Promise.withResolvers<void>();
@@ -421,7 +423,7 @@ describe("requirement-scoped native Git publication", () => {
 			release.resolve();
 			await Promise.allSettled(second ? [first, second] : [first]);
 		}
-	});
+	}, 120_000);
 	test("refuses changed content without enlarging the confirmed scope", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "stale-content");
@@ -429,7 +431,7 @@ describe("requirement-scoped native Git publication", () => {
 		const result = await f.service.executeDevGitOperation(prepared.preview, prepared.decision, signal());
 		expect(result.persistence.save).toBe("failed");
 		expect(await f.repo.headSha()).toBe(f.initial);
-	});
+	}, 120_000);
 	test("rejects a changed remote tip before saving an old confirmation", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "remote-tip-changed");
@@ -443,7 +445,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(result.persistence.save).toBe("failed");
 		expect(await f.repo.headSha()).toBe(f.initial);
 		expect((await readDevRequirement(f.cwd, "requirement-a")).record.gitOperations).toHaveLength(0);
-	});
+	}, 120_000);
 	test("retains a successful commit and resumes only failed publication", async () => {
 		const f = await fixture();
 		const original = f.repo.push.bind(f.repo);
@@ -466,7 +468,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(resumed.persistence.push.status).toBe("succeeded");
 		expect(resumed.persistence.commit.sha).toBe(failed.persistence.commit.sha);
 		expect((await f.repo.commitDetails(resumed.persistence.commit.sha!)).parents).toEqual([f.initial]);
-	});
+	}, 120_000);
 	test("finds a real operation commit after its native result is lost and never commits it again", async () => {
 		const f = await fixture();
 		const original = f.repo.commitCreateScoped.bind(f.repo);
@@ -489,7 +491,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(resumed.persistence.commit.sha).toBe(first.persistence.commit.sha);
 		expect((await f.repo.commitDetails(resumed.persistence.commit.sha!)).parents).toEqual([f.initial]);
 		expect(resumed.snapshot.record.decisions).toHaveLength(1);
-	});
+	}, 120_000);
 	test("observes a successful fixed-SHA upload after its response is lost", async () => {
 		const f = await fixture();
 		const original = f.repo.push.bind(f.repo);
@@ -504,7 +506,7 @@ describe("requirement-scoped native Git publication", () => {
 		const result = await f.service.executeDevGitOperation(prepared.preview, prepared.decision, signal());
 		expect(result.persistence.push.status).toBe("succeeded");
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBe(result.persistence.commit.sha);
-	});
+	}, 120_000);
 	test("does not claim synchronization while post-upload remote observation is unknown", async () => {
 		const f = await fixture();
 		const prepared = await prepare(f, "unknown-remote");
@@ -534,7 +536,7 @@ describe("requirement-scoped native Git publication", () => {
 		const observed = await f.service.readDevGitOperation("requirement-a", "unknown-remote", signal());
 		expect(observed.persistence.push.status).toBe("succeeded");
 		expect(pushes).toBe(1);
-	});
+	}, 120_000);
 	test("never publishes an unrelated B ancestor while saving A's status", async () => {
 		const f = await fixture();
 		await fs.writeFile(path.join(f.cwd, "other.txt"), "requirement B private commit\n");
@@ -547,7 +549,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(result.persistence.push.status).not.toBe("succeeded");
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBeNull();
 		expect(result.persistence.error).toContain("awaiting synchronization");
-	});
+	}, 120_000);
 	test("captures an exact controlled hunk without consuming another hunk in the same file", async () => {
 		const f = await fixture();
 		const lines = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`);
@@ -574,7 +576,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(
 			(await f.service.getOwnedChanges("requirement-a", signal())).filter(change => change.layer !== "committed"),
 		).toHaveLength(0);
-	});
+	}, 120_000);
 	test("read-only receipt observation never retries a failed push", async () => {
 		const f = await fixture();
 		let attempts = 0;
@@ -591,12 +593,12 @@ describe("requirement-scoped native Git publication", () => {
 		expect(observed.persistence.commit.sha).toBe(failed.persistence.commit.sha);
 		expect(attempts).toBe(1);
 		expect(await f.repo.headSha()).toBe(before);
-	});
+	}, 120_000);
 	test("discovers an ordinary existing branch topology without custom omp configuration", async () => {
 		const f = await fixture();
 		const targets = await f.service.discoverDevGitTargets("requirement-a", signal());
 		expect(targets).toContainEqual(f.target);
-	});
+	}, 120_000);
 	test("recovers an actually saved operation after its save response is lost", async () => {
 		const f = await fixture();
 		let saves = 0;
@@ -620,7 +622,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(saves).toBe(1);
 		expect(resumed.snapshot.record.decisions).toHaveLength(1);
 		expect((await f.repo.commitDetails(resumed.persistence.commit.sha!)).parents).toEqual([f.initial]);
-	});
+	}, 120_000);
 	test("separates save failure from native commit and publication", async () => {
 		const f = await fixture();
 		const records: DevGitRecords = {
@@ -636,7 +638,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(result.persistence.save).toBe("failed");
 		expect(result.persistence.commit.sha).toBeNull();
 		expect(await f.repo.headSha()).toBe(f.initial);
-	});
+	}, 120_000);
 	test("binds a human test-state decision to the same committed operation", async () => {
 		const f = await fixture();
 		const service = new DevGitService({
@@ -665,7 +667,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(committed.decisions[0]).toEqual(accepted);
 		expect(committed.gitOperations[0].kind).toBe("set-test-state");
 		expect(committed.marks).toEqual({});
-	});
+	}, 120_000);
 	test("distinguishes pre-existing dirty files from new unowned writes without claiming either", async () => {
 		const f = await fixture(true);
 		await fs.writeFile(path.join(f.cwd, "unowned-new.txt"), "unknown shell or external writer\n");
@@ -675,7 +677,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(
 			(await f.service.getOwnedChanges("requirement-a", signal())).some(change => change.path === "unowned-new.txt"),
 		).toBe(false);
-	});
+	}, 120_000);
 	test("preserves the saved decision when native signing fails before HEAD movement", async () => {
 		const f = await fixture();
 		await f.repo.configSet("commit.gpgsign", "true");
@@ -688,7 +690,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(await f.repo.headSha()).toBe(f.initial);
 		expect((await f.repo.remoteRef("fixture", "refs/heads/feature")).sha).toBeNull();
 		expect(await f.service.getPendingCommitOperation("requirement-a")).toBe("signing-failure");
-	});
+	}, 120_000);
 	test("keeps cancellation authoritative until the exact committed tombstone is atomically published", async () => {
 		const f = await fixture();
 		let failFinalSave = true;
@@ -730,7 +732,7 @@ describe("requirement-scoped native Git publication", () => {
 		expect(final.snapshot.recordVersion).toBe(artifactVersion(blob));
 		expect(await f.repo.headSha()).toBe(sha);
 		expect((await f.repo.commitDetails(sha)).parents).toEqual([f.initial]);
-	});
+	}, 120_000);
 	test("uses canonical native scope trees while binding raw CRLF worktree versions", async () => {
 		const f = await fixture();
 		await f.repo.configSet("core.autocrlf", "true");
@@ -756,7 +758,7 @@ describe("requirement-scoped native Git publication", () => {
 			beforeVersion: artifactVersion(updated),
 			afterVersion: artifactVersion(original),
 		});
-	});
+	}, 120_000);
 	test("preserves both rename endpoints in one non-audit committed ownership group", async () => {
 		const f = await fixture();
 		const capture = await f.service.beginOwnedPaths(
@@ -789,21 +791,25 @@ describe("requirement-scoped native Git publication", () => {
 			artifactVersion("one\ntwo\nthree\n"),
 		);
 		expect(reverse.expected.find(file => file.path === "moved.txt")?.afterVersion).toBeNull();
-	});
-	test.each(["pre-commit", "pre-push"])("blocks an effective %s hook requirement before saving", async hookName => {
-		const f = await fixture();
-		const hooks = path.join(f.cwd, "owned-hooks");
-		await fs.mkdir(hooks);
-		const marker = path.join(f.cwd, "hook-executed");
-		const hook = path.join(hooks, hookName);
-		await fs.writeFile(hook, `#!/bin/sh\nprintf executed > '${marker.replaceAll("\\", "/")}'\n`);
-		await fs.chmod(hook, 0o755);
-		await f.repo.configSet("core.hooksPath", hooks);
-		await expect(prepare(f, "hook-blocked")).rejects.toThrow(hookName);
-		expect((await readDevRequirement(f.cwd, "requirement-a")).record.gitOperations).toHaveLength(0);
-		expect(await f.repo.headSha()).toBe(f.initial);
-		expect(await Bun.file(marker).exists()).toBe(false);
-	});
+	}, 120_000);
+	test.each(["pre-commit", "pre-push"])(
+		"blocks an effective %s hook requirement before saving",
+		async hookName => {
+			const f = await fixture();
+			const hooks = path.join(f.cwd, "owned-hooks");
+			await fs.mkdir(hooks);
+			const marker = path.join(f.cwd, "hook-executed");
+			const hook = path.join(hooks, hookName);
+			await fs.writeFile(hook, `#!/bin/sh\nprintf executed > '${marker.replaceAll("\\", "/")}'\n`);
+			await fs.chmod(hook, 0o755);
+			await f.repo.configSet("core.hooksPath", hooks);
+			await expect(prepare(f, "hook-blocked")).rejects.toThrow(hookName);
+			expect((await readDevRequirement(f.cwd, "requirement-a")).record.gitOperations).toHaveLength(0);
+			expect(await f.repo.headSha()).toBe(f.initial);
+			expect(await Bun.file(marker).exists()).toBe(false);
+		},
+		120_000,
+	);
 });
 
 describe("exact Forge facts and recovery", () => {

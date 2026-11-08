@@ -14,7 +14,12 @@ const platform = createWebPlatform();
 type BrowserState =
   | { status: "connecting" }
   | { status: "failed"; error: Error }
-  | { status: "connected"; services: IServiceAccessor; workspace?: ServerRemoteWorkspaceInfo };
+  | {
+      status: "connected";
+      services: IServiceAccessor;
+      workspace?: ServerRemoteWorkspaceInfo;
+      initialTaskId?: string;
+    };
 
 function BrowserApplication() {
   const [state, setState] = useState<BrowserState>({ status: "connecting" });
@@ -53,8 +58,14 @@ function BrowserApplication() {
           fail(new Error(reason || `Workspace server connection closed (${code}).`));
         },
       });
+      const { nativeSession } = await services.modelSelectionService.getView();
       if (connection.signal.aborted) return;
-      setState({ status: "connected", services, workspace: info.workspaces[0] });
+      setState({
+        status: "connected",
+        services,
+        workspace: info.workspaces[0],
+        ...(nativeSession?.chatAvailable ? { initialTaskId: nativeSession.sessionId } : {}),
+      });
     }
 
     const disconnect = () => connection.abort();
@@ -80,6 +91,7 @@ function BrowserApplication() {
         platform={platform}
         initialWorkspaceAbsPath={state.workspace?.path}
         initialWorkspaceIdentity={state.workspace?.workspaceIdentity}
+        initialTaskId={state.initialTaskId}
         restoreSession={false}
         responsiveBrowserLayout
         backendBusinessAvailable={false}

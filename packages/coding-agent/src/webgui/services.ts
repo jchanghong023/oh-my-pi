@@ -6,7 +6,7 @@ import { createFileServices } from "./services-files";
 import { createProjectServices } from "./services-projects";
 import { createUiServices } from "./services-ui";
 
-/** One catalog per attachment: no state or event emitter is shared across browsers. */
+/** One disposable channel catalog per browser, observing the project's same native session. */
 export function createWebGuiServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	const services: WebGuiServiceDefinition[] = [];
 	const names = new Set<string>();
