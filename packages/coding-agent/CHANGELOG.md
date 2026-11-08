@@ -21,12 +21,13 @@
 - Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
 - Removed placeholder WebGUI RPC registrations for purchases, plugin management, remote workspaces and terminals; retained native chat, session history and temporary model selection.
 - Removed orphaned purchase UI, payment SDKs/assets and remote-control-only Web code while preserving normal Web and sharing entry points.
+- Removed WebGUI terminal panels and shortcut, deployment/browser launchers, and ZCode app-plugin interfaces with their dedicated placeholder integrations; native OMP tools and plugins remain unchanged.
 
 ### Fixed
 
 - Keep WebGUI session history visible during refresh and apply the browser's theme background to the sidebar.
 - Fix standalone Web license-resource delivery and remove service-package exports that pointed to absent host-only implementations.
-- Restore shared project navigation and Windows terminal input wiring; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
+- Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
 - Open WebGUI on Firefox 68 without a blank page or collapsed layout, while retaining the same production resources for Chrome.
 - Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.

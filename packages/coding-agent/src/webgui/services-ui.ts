@@ -33,7 +33,6 @@ export function createUiServices(context: WebGuiServiceContext): readonly WebGui
 	const clientConfig: ClientConfigSnapshot = {
 		pluginStoreOrder: null,
 		zsrcUrl: null,
-		uiPluginRecommendations: [],
 	};
 	const clientScenes: ClientScenesResponse = { code: 0, msg: "", data: [] };
 

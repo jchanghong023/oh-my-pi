@@ -8,11 +8,6 @@ import type { IServiceAccessor } from "@zcode/services";
 
 const ServiceContext = createContext<IServiceAccessor | null>(null);
 const ComposerClientNamespaceContext = createContext("desktop");
-const TerminalOwnerContext = createContext<string | undefined>(undefined);
-
-export function useTerminalOwnerId(): string | undefined {
-  return useContext(TerminalOwnerContext);
-}
 
 /** 手机同源可连接多台桌面；稳定设备身份不能用临时 bridge ID 替代。 */
 export function useComposerClientNamespace(): string {
@@ -23,20 +18,15 @@ export function ServiceProvider({
   services,
   children,
   composerClientNamespace,
-  terminalOwnerId,
 }: {
   services: IServiceAccessor;
   children: ReactNode;
   composerClientNamespace?: string;
-  terminalOwnerId?: string;
 }) {
   const inheritedNamespace = useComposerClientNamespace();
-  const inheritedTerminalOwner = useTerminalOwnerId();
   return (
     <ComposerClientNamespaceContext.Provider value={composerClientNamespace ?? inheritedNamespace}>
-      <TerminalOwnerContext.Provider value={terminalOwnerId ?? inheritedTerminalOwner}>
-        <ServiceContext.Provider value={services}>{children}</ServiceContext.Provider>
-      </TerminalOwnerContext.Provider>
+      <ServiceContext.Provider value={services}>{children}</ServiceContext.Provider>
     </ComposerClientNamespaceContext.Provider>
   );
 }

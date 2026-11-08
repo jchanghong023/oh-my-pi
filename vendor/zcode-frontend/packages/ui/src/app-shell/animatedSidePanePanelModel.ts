@@ -4,7 +4,6 @@ export type OpenTabLauncherItemId =
   | "selection-side-conversation"
   | "files"
   | "review"
-  | "terminal"
   | "developer-tools";
 
 export function resolveOpenTabLauncherItemIds({
@@ -18,7 +17,6 @@ export function resolveOpenTabLauncherItemIds({
 }): OpenTabLauncherItemId[] {
   const itemIds: OpenTabLauncherItemId[] = ["files"];
 
-  itemIds.push("terminal");
 
   if (!hasReviewTab) {
     itemIds.push("review");

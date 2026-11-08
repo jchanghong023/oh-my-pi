@@ -197,7 +197,7 @@ class BrowserAgentAttachment {
 			clientMode: "desktop-continuous",
 			deliveryProfile: "continuous",
 			serverTime: Date.now(),
-			capabilities: { nativeDialogs: false, localTerminal: false, binaryFrames: true, compression: "none" },
+			capabilities: { nativeDialogs: false, binaryFrames: true, compression: "none" },
 			auth: {},
 		};
 	}

@@ -183,8 +183,6 @@ export interface AppProps extends WorkspaceRemoteNavigationProps {
   workspaceIdentity?: string;
   isWorkspaceVisible?: boolean;
   isDesktop?: boolean;
-  /** Terminal composition handling only; does not enable desktop window chrome. */
-  isWindowsDesktop?: boolean;
 }
 
 export interface GitChangeSummary {
@@ -221,7 +219,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   toggleSidePaneFullViewShortcutLabel?: string;
   canTaskNavBack: boolean;
   canTaskNavForward: boolean;
-  isTerminalOpen: boolean;
   isSidebarVisible: boolean;
   isGitOpen: boolean;
   isSidePaneOpen: boolean;
@@ -300,12 +297,10 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   handleOpenCommandCenter: () => void;
   handleRefreshGit: () => void;
   handleToggleSidebar: () => void;
-  handleToggleTerminal: () => void;
   handleOpenWhiteboard: () => void;
   handleOpenDeveloperTools: () => void;
   handleOpenFileManager: (target?: FileManagerTarget) => void;
   handleNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  handleOpenTerminalTab: () => void;
   handleToggleGit: () => void;
   handleOpenGitReview: (sourceId?: GitChangeSourceId) => void;
   handleToggleSidePane: () => void;
@@ -338,7 +333,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   handleCloseOtherSidePaneTabs: (tabId: string) => void;
   handleCloseAllSidePaneTabs: () => void;
   handleReopenClosedSidePaneTab: (tabId: string) => void;
-  setIsTerminalOpen: (open: boolean) => void;
   setGitSelectedSourceId: (value: GitChangeSourceId) => void;
   taskFindDialogProps: TaskFindDialogProps;
 }

@@ -36,38 +36,6 @@ export const browserViewportInputSchema = browserViewportSizeSchema.extend({
     .max(BROWSER_VIEWPORT_LIMITS.maxHeight),
 });
 
-export const BROWSER_VIEWPORT_ZOOM_OPTIONS = [
-  "fit",
-  "50",
-  "75",
-  "100",
-  "125",
-  "150",
-  "200",
-] as const;
-export const browserViewportZoomSchema = z.enum(BROWSER_VIEWPORT_ZOOM_OPTIONS);
-export type BrowserViewportZoom = z.infer<typeof browserViewportZoomSchema>;
-
-export const DEFAULT_BROWSER_VIEWPORT_ZOOM: BrowserViewportZoom = "fit";
-
-/** 仅用于人类用户主动打开 Browser tab 的显示偏好；Agent viewport 运行态不得读写。 */
-export const embeddedBrowserViewportPreferenceSchema = z
-  .object({
-    mode: z.enum(["normal", "responsive"]),
-    viewport: browserViewportInputSchema,
-    zoom: browserViewportZoomSchema,
-  })
-  .strict();
-export type EmbeddedBrowserViewportPreference = z.infer<
-  typeof embeddedBrowserViewportPreferenceSchema
->;
-
-export const DEFAULT_EMBEDDED_BROWSER_VIEWPORT_PREFERENCE: EmbeddedBrowserViewportPreference = {
-  mode: "normal",
-  viewport: { width: 393, height: 852 },
-  zoom: DEFAULT_BROWSER_VIEWPORT_ZOOM,
-};
-
 /** browser-use 的统一命令方法集，各分支由 BrowserCommand 的 method 判别。 */
 export const browserCommandMethodSchema = z.enum([
   "navigate",

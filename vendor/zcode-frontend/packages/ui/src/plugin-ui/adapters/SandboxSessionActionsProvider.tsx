@@ -12,7 +12,6 @@ export function SandboxSessionActionsProvider({
   sessionId,
   readOnly,
   sendText,
-  uploadAttachment,
   children,
 }: Omit<PluginUiSessionScope, "sessionId"> & {
   sessionId: string | null;
@@ -23,8 +22,8 @@ export function SandboxSessionActionsProvider({
     () => (sessionId ? { workspacePath, workspaceIdentity, remoteSessionId, sessionId } : null),
     [workspacePath, workspaceIdentity, remoteSessionId, sessionId],
   );
-  const port = useRef({ sendText, uploadAttachment });
-  port.current = { sendText, uploadAttachment };
+  const port = useRef({ sendText });
+  port.current = { sendText };
   useEffect(() => {
     if (!scope || readOnly) return;
     // 修复：发送配置变更会重建回调，但不应让同一挂载中的待确认请求失效。
@@ -32,7 +31,6 @@ export function SandboxSessionActionsProvider({
       scope,
       createPluginUiSessionActions(scope, {
         sendText: (...args) => port.current.sendText(...args),
-        uploadAttachment: (...args) => port.current.uploadAttachment(...args),
       }),
     );
   }, [scope, readOnly]);

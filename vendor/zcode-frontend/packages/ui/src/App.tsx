@@ -110,14 +110,12 @@ export function App({
   workspaceIdentity: explicitWorkspaceIdentity,
   isWorkspaceVisible = true,
   isDesktop,
-  isWindowsDesktop,
 }: AppProps) {
   // 展示 label 统一从快捷键生效表取（用户改键后 tooltip 同步更新），不再硬编码键位。
   const toggleSidebarShortcutLabel = useShortcutCommandLabel("toggleSidebar");
   const newTaskShortcutLabel = useShortcutCommandLabel("newTask");
   const goBackShortcutLabel = useShortcutCommandLabel("navigateBack");
   const goForwardShortcutLabel = useShortcutCommandLabel("navigateForward");
-  const toggleTerminalShortcutLabel = useShortcutCommandLabel("toggleTerminal");
   const toggleSidePaneShortcutLabel = useShortcutCommandLabel("toggleSidePane");
   const toggleSidePaneFullViewShortcutLabel = useShortcutCommandLabel("toggleSidePaneFullView");
   const openWorkspaceShortcutLabel = useShortcutCommandLabel("openWorkspace");
@@ -194,8 +192,6 @@ export function App({
     useState<ChatViewSummaryPanelVariant | null>(null);
   const draftFocusVersion = workspaceShellZCodeState.draftFocusVersion;
   const {
-    isTerminalOpen,
-    setIsTerminalOpen,
     sidePaneState,
     recentClosedSidePaneTabs,
     isSidePaneCollapsed,
@@ -210,7 +206,6 @@ export function App({
     handleOpenDeveloperTools,
     handleOpenFileManager,
     handleNavigateFileManager,
-    handleOpenTerminalTab,
     handleOpenSubagentSession,
     handleOpenBackgroundBash,
     handleOpenSubagentDirectory,
@@ -222,7 +217,6 @@ export function App({
     handleOpenWorkflowActorSession,
     handleOpenWorkflowWorkspace,
     handleOpenWorkflowArtifact,
-    handleToggleTerminal,
     handleToggleSidebar,
     handleToggleSidePaneCollapse,
     handleCloseCodeViewer,
@@ -561,16 +555,6 @@ export function App({
     },
     [onCreateTask, workspaceReadOnlyReason],
   );
-  const handleToggleTerminalIfWritable = useCallback(() => {
-    if (!workspaceReadOnlyReason) {
-      handleToggleTerminal();
-    }
-  }, [handleToggleTerminal, workspaceReadOnlyReason]);
-  const handleOpenTerminalTabIfWritable = useCallback(() => {
-    if (!workspaceReadOnlyReason) {
-      handleOpenTerminalTab();
-    }
-  }, [handleOpenTerminalTab, workspaceReadOnlyReason]);
   const handleOpenGitIfWritable = useCallback(() => {
     if (!workspaceReadOnlyReason) {
       handleOpenGit();
@@ -946,7 +930,6 @@ export function App({
     findInTask: handleOpenTaskFind,
     toggleSidebar: () => runVisibleWorkspaceCommand(handleToggleSidebar),
     switchTheme: handleSwitchTheme,
-    toggleTerminal: () => runVisibleWorkspaceCommand(handleToggleTerminalIfWritable),
     // ⌥⌘B 与 header 最右侧按钮共用同一条 toggle 入口，
     // 避免快捷键和按钮行为漂移；空面板的展示统一由 Open tab 空态承接。
     toggleSidePane: () => runVisibleWorkspaceCommand(handleToggleSidePane),
@@ -992,7 +975,6 @@ export function App({
   const quickPickCommands = useMemo(
     () =>
       createQuickPickCommands({
-        supportsTerminal: !isOfficeMode,
         supportsReview: !isOfficeMode,
         allowOpenWorkspace,
         canOpenCommunity: canOpenCommunityFromQuickPick,
@@ -1005,7 +987,6 @@ export function App({
           newTask: newTaskShortcutLabel,
           openWorkspace: openWorkspaceShortcutLabel,
           toggleSidebar: toggleSidebarShortcutLabel,
-          toggleTerminal: toggleTerminalShortcutLabel,
         },
         handlers: {
           createTask: () => runVisibleWorkspaceCommand(() => handleCreateTaskIfWritable()),
@@ -1026,8 +1007,6 @@ export function App({
           login: onLogin,
           logout: onLogout,
           toggleSidebar: () => runVisibleWorkspaceCommand(handleToggleSidebar),
-          toggleTerminal: () => runVisibleWorkspaceCommand(handleToggleTerminalIfWritable),
-          openTerminalTab: () => runVisibleWorkspaceCommand(handleOpenTerminalTabIfWritable),
           openReviewTab: () => runVisibleWorkspaceCommand(handleOpenGitIfWritable),
         },
       }),
@@ -1041,9 +1020,7 @@ export function App({
       handleOpenSettingsSection,
       handleSwitchTheme,
       handleOpenGitIfWritable,
-      handleOpenTerminalTabIfWritable,
       handleToggleSidebar,
-      handleToggleTerminalIfWritable,
       isLoggedIn,
       isSidebarVisible,
       newTaskShortcutLabel,
@@ -1055,7 +1032,6 @@ export function App({
       openSettingsTab,
       openWorkspaceShortcutLabel,
       toggleSidebarShortcutLabel,
-      toggleTerminalShortcutLabel,
       themeTarget,
     ],
   );
@@ -1143,7 +1119,6 @@ export function App({
           workspaceIdentity={workspaceIdentity}
           isWorkspaceVisible={isWorkspaceVisible}
           isDesktop={isDesktop}
-          isWindowsDesktop={isWindowsDesktop}
           workspaceShellZCodeState={workspaceShellZCodeState}
           theme={theme}
           sidebarContainerRef={sidebarContainerRef}
@@ -1154,7 +1129,6 @@ export function App({
           toggleSidePaneFullViewShortcutLabel={toggleSidePaneFullViewShortcutLabel}
           canTaskNavBack={canTaskNavBack}
           canTaskNavForward={canTaskNavForward}
-          isTerminalOpen={isTerminalOpen}
           isSidebarVisible={isSidebarVisible}
           isGitOpen={isGitOpen}
           isSidePaneOpen={isSidePaneOpen}
@@ -1202,12 +1176,10 @@ export function App({
           handleRefreshGit={handleRefreshGit}
           handleOpenGitReview={handleOpenGitReview}
           handleToggleSidebar={handleToggleSidebar}
-          handleToggleTerminal={handleToggleTerminalIfWritable}
           handleOpenWhiteboard={handleOpenWhiteboard}
           handleOpenDeveloperTools={handleOpenDeveloperTools}
           handleOpenFileManager={handleOpenFileManager}
           handleNavigateFileManager={handleNavigateFileManager}
-          handleOpenTerminalTab={handleOpenTerminalTabIfWritable}
           handleToggleGit={handleToggleGitIfWritable}
           handleToggleSidePane={handleToggleSidePane}
           handleOpenBrowserUrl={handleOpenBrowserUrl}
@@ -1233,7 +1205,6 @@ export function App({
           handleCloseOtherSidePaneTabs={handleCloseOtherSidePaneTabs}
           handleCloseAllSidePaneTabs={handleCloseAllSidePaneTabs}
           handleReopenClosedSidePaneTab={handleReopenClosedSidePaneTab}
-          setIsTerminalOpen={setIsTerminalOpen}
           setGitSelectedSourceId={setGitSelectedSourceId}
           // taskFindDialogProps 是对象 prop，内联创建会让 shell 在流式刷新中每轮都看到新引用。
           taskFindDialogProps={taskFindDialogProps}

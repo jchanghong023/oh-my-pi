@@ -8,7 +8,6 @@ export {
 } from "./AssistantCodeCommentFeatureProvider.js";
 export { Root } from "./Root.js";
 export { ConfirmDialogHost } from "./ConfirmDialog.js";
-export { Terminal } from "./Terminal.js";
 export { GitGraphPane } from "./git-graph/GitGraphPane.js";
 export { layoutGitGraph } from "./git-graph/layout.js";
 export type {
@@ -57,7 +56,6 @@ export {
   useReaddir,
   useSystemInfo,
   useIntranetProbe,
-  useTerminal,
   useSettings,
   useRecentProjects,
   useConfirmDialog,

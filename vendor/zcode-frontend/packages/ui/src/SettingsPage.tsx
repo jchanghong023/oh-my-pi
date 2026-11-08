@@ -16,8 +16,6 @@ import {
 } from "react";
 import type {
   AppSettings,
-  IntegratedTerminalShellOption,
-  IntegratedTerminalShellSelection,
   Locale,
   UsageEntitlementSnapshot,
   UserInfo,
@@ -665,13 +663,6 @@ export function SettingsPage({
   const askUserQuestionAutoResolutionEnabled =
     sharedSettings?.askUserQuestionAutoResolutionEnabled !== false;
   const modelIoFullRetentionEnabled = sharedSettings?.modelIoFullRetentionEnabled === true;
-  const [terminalInheritSystemProfile, setTerminalInheritSystemProfile] = useState(true);
-  const [terminalFontFamily, setTerminalFontFamily] = useState("");
-  const [integratedTerminalShell, setIntegratedTerminalShell] =
-    useState<IntegratedTerminalShellSelection>({ mode: "auto" });
-  const [integratedTerminalShellOptions, setIntegratedTerminalShellOptions] = useState<
-    IntegratedTerminalShellOption[]
-  >([]);
   const [httpProxy, setHttpProxy] = useState("");
   const [httpProxyNoProxy, setHttpProxyNoProxy] = useState("");
   const [httpProxyCaCertPath, setHttpProxyCaCertPath] = useState("");
@@ -684,7 +675,6 @@ export function SettingsPage({
   const [toolGroupingChangesEnabled, setToolGroupingChangesEnabled] = useState(false);
   const [zcodeInteractionBehavior, setZCodeInteractionBehavior] =
     useState<ZCodeInteractionBehavior>("queue");
-  const [hostPlatform, setHostPlatform] = useState("");
 
   useEffect(() => {
     if (
@@ -735,51 +725,28 @@ export function SettingsPage({
 
   useEffect(() => {
     let active = true;
-    // 修复原因：远程 tab 的 services 属于 Source，但 Main 启动、native picker 和
-    // 本机 shell 枚举都使用 Desktop 配置；读写必须同属 base Host，不能随 tab 切换。
+    // 网络配置属于 base Host，不随 Source tab 切换。
     localHostServices.settingService
       .get()
       .then((settings: AppSettings) => {
         if (!active) return;
-        setIntegratedTerminalShell(settings.integratedTerminalShell ?? { mode: "auto" });
         setHttpProxy(settings.httpProxy ?? "");
         setHttpProxyNoProxy(settings.httpProxyNoProxy ?? "");
         setHttpProxyCaCertPath(settings.httpProxyCaCertPath ?? "");
       })
       .catch(() => {});
-    localHostServices.systemService
-      .info()
-      .then((info) => {
-        if (!active) return;
-        setHostPlatform(info.platform);
-        if (info.platform !== "win32") {
-          setIntegratedTerminalShellOptions([]);
-          return;
-        }
-        void localHostServices.systemService
-          .listIntegratedTerminalShells()
-          .then((options) => {
-            if (active) setIntegratedTerminalShellOptions(options);
-          })
-          .catch(() => {
-            if (active) setIntegratedTerminalShellOptions([]);
-          });
-      })
-      .catch(() => {});
     return () => {
       active = false;
     };
-  }, [localHostServices.systemService, localHostServices.settingService, isWindowsDesktop]);
+  }, [localHostServices.settingService]);
 
   useEffect(() => {
     let active = true;
-    // 终端 Profile 与任务归档由目标 Environment 消费，仍读 Source；切换后丢弃旧响应。
+    // 任务归档由目标 Environment 消费，仍读 Source；切换后丢弃旧响应。
     services.settingService
       .get()
       .then((settings: AppSettings) => {
         if (!active) return;
-        setTerminalInheritSystemProfile(settings.terminalInheritSystemProfile ?? true);
-        setTerminalFontFamily(settings.terminalFontFamily ?? "");
         setTaskAutoArchiveEnabled(settings.taskAutoArchiveEnabled ?? false);
         setTaskAutoArchiveOlderThanDays(settings.taskAutoArchiveOlderThanDays ?? 30);
       })
@@ -800,54 +767,6 @@ export function SettingsPage({
     setToolGroupingChangesEnabled(sharedSettings.toolGroupingChangesEnabled ?? false);
     setZCodeInteractionBehavior(sharedSettings.zcodeInteractionBehavior ?? "queue");
   }, [sharedSettings]);
-  const handleTerminalInheritSystemProfileChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.terminal",
-        action: "toggle_system_profile",
-        trigger: "switch",
-        operation: () => services.settingService.update({ terminalInheritSystemProfile: enabled }),
-        completed: {
-          resultSource: "setting_service",
-          stateAfter: enabled ? "enabled" : "disabled",
-        },
-      });
-      setTerminalInheritSystemProfile(enabled);
-    },
-    [services.settingService],
-  );
-  const handleTerminalFontFamilyChange = useCallback(
-    async (fontFamily: string) => {
-      const normalizedFontFamily = fontFamily.trim();
-      await runSettingsActionAsync({
-        featureId: "settings.terminal",
-        action: "save_font_family",
-        trigger: "button",
-        operation: () =>
-          services.settingService.update({ terminalFontFamily: normalizedFontFamily }),
-        completed: { resultSource: "setting_service", configured: normalizedFontFamily.length > 0 },
-      });
-      setTerminalFontFamily(normalizedFontFamily);
-    },
-    [services.settingService],
-  );
-  const handleIntegratedTerminalShellChange = useCallback(
-    async (selection: IntegratedTerminalShellSelection) => {
-      await runSettingsActionAsync({
-        featureId: "settings.terminal",
-        action: "change_shell",
-        trigger: "select",
-        operation: () =>
-          localHostServices.settingService.update({ integratedTerminalShell: selection }),
-        completed: {
-          resultSource: "setting_service",
-          valueAfter: selection.mode === "auto" ? "auto" : "explicit",
-        },
-      });
-      setIntegratedTerminalShell(selection);
-    },
-    [localHostServices.settingService],
-  );
   const handleToolSearchModeChange = useCallback(
     async (mode: AppToolSearchMode) => {
       await runSettingsActionAsync({
@@ -1437,17 +1356,12 @@ export function SettingsPage({
                               platform={platform}
                               notificationEnabled={notificationEnabled}
                               notificationSoundEnabled={notificationSoundEnabled}
-                              terminalInheritSystemProfile={terminalInheritSystemProfile}
-                              terminalFontFamily={terminalFontFamily}
-                              integratedTerminalShell={integratedTerminalShell}
-                              integratedTerminalShellOptions={integratedTerminalShellOptions}
                               toolSearchMode={toolSearchMode}
                               onToolSearchModeChange={handleToolSearchModeChange}
                               nativeSearchEnhancementsEnabled={nativeSearchEnhancementsEnabled}
                               httpProxy={httpProxy}
                               httpProxyNoProxy={httpProxyNoProxy}
                               httpProxyCaCertPath={httpProxyCaCertPath}
-                              showIntegratedTerminalShell={hostPlatform === "win32"}
                               setLocalePreference={handleFooterLocaleChange}
                               setNotificationEnabled={(enabled) =>
                                 runUserAction({
@@ -1489,11 +1403,6 @@ export function SettingsPage({
                                 askUserQuestionAutoResolutionEnabled
                               }
                               modelIoFullRetentionEnabled={modelIoFullRetentionEnabled}
-                              onTerminalInheritSystemProfileChange={
-                                handleTerminalInheritSystemProfileChange
-                              }
-                              onTerminalFontFamilyChange={handleTerminalFontFamilyChange}
-                              onIntegratedTerminalShellChange={handleIntegratedTerminalShellChange}
                               onNativeSearchEnhancementsEnabledChange={
                                 handleNativeSearchEnhancementsEnabledChange
                               }

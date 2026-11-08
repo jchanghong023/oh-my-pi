@@ -1,38 +1,8 @@
-/**
- * MCP Apps 协议契约：agent、host、renderer 与 main 共用的常量、工具 UI 元数据类型、沙箱句柄与登记载荷。
- * 页面 ↔ 宿主的线协议（`ui/*` 方法、握手、版本协商、JSON-RPC）由官方 `@modelcontextprotocol/ext-apps` 定义，
- * 这里只保留 ZCode 自己的扩展键与限额。只放类型与常量；归一化与 schema 在同目录其他文件，经 index.ts 导出。
- */
+/** GenUI 与宿主 renderer 共用的沙箱句柄、资源安全策略和平台端口。 */
 
-/** MCP 扩展标识（规范「Extension Identifier」）；与官方 SDK `EXTENSION_ID` 一致。 */
-export const MCP_APPS_EXTENSION_ID = "io.modelcontextprotocol/ui";
-/** UI 资源 mimeType（规范 MUST）；与官方 SDK `RESOURCE_MIME_TYPE` 一致。 */
-export const MCP_APPS_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
-/** 弃用的扁平键 `_meta["ui/resourceUri"]`；规范要求宿主 MUST 同时兼容，与官方 SDK `RESOURCE_URI_META_KEY` 一致。 */
-export const MCP_APPS_LEGACY_RESOURCE_URI_META_KEY = "ui/resourceUri";
-
-/**
- * MCP client `initialize` 里的 ui 扩展能力声明（规范「Client (Host) Capabilities」）。
- * 用 type 而不是 interface：MCP SDK 的 `ClientCapabilities.extensions` 要求值带字符串索引签名。
- */
-export type McpAppsClientCapability = { mimeTypes: string[] };
-/** agent 对每个 MCP server 宣告的能力片段；放进 `Client` 构造参数的 `capabilities.extensions`。 */
-export function buildMcpAppsClientCapabilities(): {
-  extensions: { [extensionId: string]: McpAppsClientCapability };
-} {
-  return { extensions: { [MCP_APPS_EXTENSION_ID]: { mimeTypes: [MCP_APPS_RESOURCE_MIME_TYPE] } } };
-}
-
-/** 宿主 hostInfo.name；hostInfo.version 只供页面 feature detect，与应用版本无关。 */
-export const MCP_APPS_HOST_NAME = "zcode";
-export const MCP_APPS_HOST_VERSION = "1";
-/** `ui/initialize` 握手超时（端口到达起算）与卸载前 `ui/resource-teardown` 的等待上限。 */
-export const MCP_APPS_HANDSHAKE_TIMEOUT_MS = 15_000;
-export const MCP_APPS_TEARDOWN_TIMEOUT_MS = 500;
-
-export type McpAppsDisplayMode = "inline" | "fullscreen" | "pip";
-export type McpAppsToolVisibility = "model" | "app";
-export const MCP_APPS_DEFAULT_TOOL_VISIBILITY: readonly McpAppsToolVisibility[] = ["model", "app"];
+/** 沙箱页面提交图片的共享白名单及单张解码大小上限。 */
+export const MCP_APPS_IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
+export const MCP_APPS_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 
 /** MCP Apps 资源级 CSP（`McpUiResourceCsp`）：四类域。资源 `_meta` 为主，工具级 `_meta.ui.csp` 只在资源没有声明时兜底。 */
 export interface McpToolUiCsp {
@@ -103,68 +73,6 @@ export interface McpAppResourceMeta {
 }
 /** 随沙箱句柄回到 renderer 的资源级呈现信息；CSP 与放宽只在 main 生效，不回传。 */
 export type PluginSandboxResourceMeta = Omit<McpAppResourceMeta, "csp" | "cspRelaxations">;
-/** 工具 `_meta` 归一化后的 UI 描述；`resourceUri` 非法时整个描述不存在。 */
-export interface McpToolUiDescriptor {
-  resourceUri: string;
-  visibility?: McpAppsToolVisibility[];
-  preferredDisplayMode?: McpAppsDisplayMode;
-  csp?: McpToolUiCsp;
-  prefersBorder?: boolean;
-  /** 工具结果归属的面板 id（清单 `ui.surfaces[].id`）。 */
-  surface?: string;
-  /** 工具级 `openai/widgetShowCodexWidgetInline`，卡片强制常驻。 */
-  showInline?: boolean;
-}
-
-/** `_meta.ui.surface` / 清单 surface id 的长度与字符集（与 sandboxId 同源：可进 CSP host-source）。 */
-export const MCP_APPS_SURFACE_ID_MAX_CHARS = 128;
-export const MCP_APPS_SURFACE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
-
-export const MCP_APPS_UI_RESOURCE_SCHEME = "ui://";
-export const MCP_APPS_RESOURCE_URI_MAX_CHARS = 2048;
-/**
- * `display.ui.structuredContent` / `widgetMeta` / `content` 的持久化上限（JSON 文本的 UTF-8 字节）。
- * 超限不截断字符串（半截 JSON 没有意义）：字段整个省略，`truncated: true` 且 `truncatedBytes` 记被丢弃的字节数；
- * 页面侧 `toolOutput` 为 null、`toolResponseMetadata["zcode/truncated"] = { bytes }`，可用 tools/call 重取。
- */
-export const MCP_APPS_STRUCTURED_CONTENT_MAX_BYTES = 64 * 1024;
-export const MCP_APPS_WIDGET_META_MAX_BYTES = 16 * 1024;
-export const MCP_APPS_CONTENT_MAX_BYTES = 32 * 1024;
-export const MCP_APPS_TRUNCATED_META_KEY = "zcode/truncated";
-/** host 侧接受的 `ui://` HTML 上限与 mimeType 白名单（规范只认带 profile 的；无 profile 的 text/html 是有意的宽松超集）。 */
-// 官方 pdf-server 示例的单文件页面（内联 pdf.js）就有 4.3 MB，4 MiB 会把它拒掉；放到 16 MiB。
-export const MCP_APPS_HTML_MAX_BYTES = 16 * 1024 * 1024;
-export const MCP_APPS_HTML_MIME_TYPES = [MCP_APPS_RESOURCE_MIME_TYPE, "text/html"] as const;
-/**
- * 页面经 ui/update-model-context 与 ui/message 送来的 image 块：白名单三种位图，单张解码后 ≤ 4 MiB；
- * 不在白名单或超限整个请求 -32602 `unsupported_content`。
- */
-export const MCP_APPS_IMAGE_MIME_TYPES = ["image/png", "image/jpeg", "image/webp"] as const;
-export const MCP_APPS_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
-export {
-  MCP_APPS_UI_READ_RESOURCE_MAX_BYTES,
-  MCP_APPS_UI_READ_RESOURCE_MIME_ALLOWLIST,
-  isMcpAppsUiReadResourceMimeAllowed,
-} from "./resourceMime.js";
-
-/**
- * `hostCapabilities.experimental` 里 ZCode 扩展的键。官方 SDK 的 zod 会剥掉标准位之外的未知能力键，
- * 扩展一律放 experimental（规范预留位），页面按键 feature detect。
- */
-export const MCP_APPS_WIDGET_STATE_EXPERIMENTAL_KEY = "zcode/widgetState";
-export const MCP_APPS_RESOURCE_SUBSCRIBE_EXPERIMENTAL_KEY = "zcode/resourceSubscribe";
-export const MCP_APPS_SURFACE_EXPERIMENTAL_KEY = "zcode/surface";
-/**
- * 宿主允许插件文档内部创建子 frame（srcdoc / about:blank 预览、声明的 frameDomains）而不把它当作页面重载撤销实例。
- * 旧宿主会在子 frame 导航时停止页面；需要嵌套预览的插件据此键降级，而不是创建 frame 后被释放。
- */
-export const MCP_APPS_NESTED_FRAMES_EXPERIMENTAL_KEY = "zcode/nestedFrames";
-/**
- * ZCode 扩展方法 `ui/set-widget-state { widgetState }`（MCP Apps 无 widgetState）：页面把界面状态交给宿主
- * renderer 内存保存（不持久化，会话内重挂载可恢复）；初值经 hostContext 的 `zcode/widgetState` 键随握手下发。
- */
-export const MCP_APPS_SET_WIDGET_STATE_METHOD = "ui/set-widget-state";
-export const MCP_APPS_WIDGET_STATE_CONTEXT_KEY = "zcode/widgetState";
 
 /** 宿主 renderer ↔ relay shell 之间唯一一条 MessageChannel 的名字；上面跑原始 JSON-RPC（官方 AppBridge / App）。 */
 export const PLUGIN_SANDBOX_PORT_NAME = "plugin-sandbox-rpc";
@@ -212,17 +120,6 @@ export interface PluginSandboxCaptureRequest {
   viewportSize: { width: number; height: number };
 }
 
-/**
- * 沙箱作用域。工具卡片按 toolCallId，面板（清单 `ui.surfaces[]`）按 surfaceId；
- * 两者都映射到一个字符串 scopeId 进注册表幂等键与 widgetState 路由，避免 main / host 认识"面板"概念。
- */
-export type PluginUiScopeRef =
-  | { kind: "toolCall"; toolCallId: string }
-  | { kind: "surface"; surfaceId: string };
-export function buildPluginSandboxScopeId(scope: PluginUiScopeRef): string {
-  return scope.kind === "toolCall" ? `tool:${scope.toolCallId}` : `surface:${scope.surfaceId}`;
-}
-
 /** host → main 登记沙箱内容的消息载荷（模式同 LocalMediaPreviewPathAuthorize*）。 */
 export interface PluginSandboxRegisterRequestPayload {
   instance: import("./instance.js").McpAppInstance;
@@ -237,10 +134,10 @@ export interface PluginSandboxRegisterRequestPayload {
   pluginId?: string;
   /** 资源所属的 MCP server 运行时名；沙箱 partition 按它派生（同一 server 的页面共享一份持久存储）。 */
   serverName?: string;
-  /** `buildPluginSandboxScopeId` 的结果：`tool:<toolCallId>` 或 `surface:<surfaceId>`。 */
+  /** 沙箱登记与 renderer 内存状态路由的作用域。 */
   scopeId: string;
   html: string;
-  /** 有效 CSP：资源级优先，工具级兜底（host plugin-ui-bridge 已合并）。 */
+  /** 资源的有效内容安全策略。 */
   csp?: McpToolUiCsp;
   /** 资源级 `_meta["zcode/csp"]` 声明的放宽项。 */
   cspRelaxations?: McpAppCspRelaxations;

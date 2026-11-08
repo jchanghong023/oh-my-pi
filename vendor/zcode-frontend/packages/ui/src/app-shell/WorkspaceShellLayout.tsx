@@ -9,9 +9,6 @@ import type {
 } from "react";
 import type { PanelImperativeHandle } from "react-resizable-panels";
 import { ArrowLeft, ArrowRight, MessageCirclePlus, PanelLeft } from "lucide-react";
-// 保活：workspace tab 真正关闭时，按 workspaceKey 回收 side pane terminal 的常驻 PTY/xterm。
-// 对称下侧 Terminal.tsx 的 openWorkspaceKeys 回收。
-import { sidePaneTerminalSessionRegistry } from "@/terminal/sidePaneTerminalSessionRegistry.js";
 import { V4ChatPane } from "@/v4/V4ChatPane.js";
 import { V4WorkspaceChatArea } from "@/v4/V4WorkspaceChatArea.js";
 import { V4SplitPaneEntryProvider } from "@/v4/splitPaneEntryContext.js";
@@ -59,7 +56,6 @@ import { WebRemoteControlMobileShell } from "@/WebRemoteControlMobileShell.js";
 import { resolveTopOverlayLeadingPaddingClass, WorkspaceHeader } from "@/WorkspaceHeader.js";
 import { WorkspaceSidebar, type SidebarFileTreeOpenRequest } from "@/WorkspaceSidebar.js";
 import { AnimatedSidePanePanel } from "@/app-shell/AnimatedSidePanePanel.js";
-import { AnimatedTerminalPanel } from "@/app-shell/AnimatedTerminalPanel.js";
 import { SIDE_PANE_DEFAULT_EXPANDED_SIZE } from "@/app-shell/sidePaneLayout.js";
 import { useAnimatedResizablePanel } from "@/app-shell/useAnimatedResizablePanel.js";
 import { ensureTaskNavigationWorkspace } from "@/app-shell/taskNavigationWorkspace.js";
@@ -112,8 +108,7 @@ const CONVERSATION_AUTO_COLLAPSE_SIDEBAR_WIDTH_PX = 360;
 const CONVERSATION_AUTO_COLLAPSE_RESIZE_IDLE_MS = 300;
 // 性能修复：ResizablePanelGroup 收到深相等的新 panelIds 数组，
 // 会跟随 chat streaming render 重算布局上下文；固定数组语义上不会随消息变化。
-const WORKSPACE_BODY_PANEL_IDS = ["conversation-column", "browser"];
-const WORKSPACE_CONVERSATION_PANEL_IDS = ["conversation", "terminal"];
+const WORKSPACE_BODY_PANEL_IDS = ["conversation-column", "side-pane"];
 
 
 type WorkspaceSidebarResizeSession = {
@@ -237,7 +232,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   workspaceIdentity,
   isWorkspaceVisible = true,
   isDesktop,
-  isWindowsDesktop,
   workspaceShellZCodeState,
   theme,
   sidebarContainerRef,
@@ -248,7 +242,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   toggleSidePaneFullViewShortcutLabel,
   canTaskNavBack,
   canTaskNavForward,
-  isTerminalOpen,
   isSidebarVisible,
   isSidePaneOpen,
   sidePaneFullView,
@@ -293,12 +286,10 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   handleOpenCommandCenter,
   handleRefreshGit,
   handleToggleSidebar,
-  handleToggleTerminal,
   handleOpenWhiteboard,
   handleOpenDeveloperTools,
   handleOpenFileManager,
   handleNavigateFileManager,
-  handleOpenTerminalTab,
   handleToggleGit,
   handleOpenGitReview,
   handleToggleSidePane,
@@ -325,7 +316,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   handleCloseOtherSidePaneTabs,
   handleCloseAllSidePaneTabs,
   handleReopenClosedSidePaneTab,
-  setIsTerminalOpen,
   setGitSelectedSourceId,
   taskFindDialogProps,
 }: WorkspaceShellLayoutProps) {
@@ -600,20 +590,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     () => readStoredWorkspaceSidebarWidthPx() ?? WORKSPACE_SIDEBAR_DEFAULT_WIDTH_PX,
   );
   const workspaceSidebarPanelWidthPxRef = useRef(workspaceSidebarPanelWidthPx);
-  const openWorkspaceKeys = useMemo(
-    () => workspaceTabs.map((tab) => tab.workspaceIdentity?.trim() || tab.workspacePath),
-    [workspaceTabs],
-  );
-  // 保活回收：workspace tab 真正关闭（从 openWorkspaceKeys 移除）时，回收属于该 workspace 的
-  // side pane terminal 常驻 session（杀 PTY + 销 xterm），避免孤儿进程泄漏。
-  // 切 workspace 不会让 workspaceKey 离开这个集合，所以保活的 session 不受影响。
-  // 对称下侧 Terminal.tsx:145-177 的 openWorkspaceKeys 回收逻辑。
-  useEffect(() => {
-    const retained = new Set(openWorkspaceKeys);
-    sidePaneTerminalSessionRegistry.releaseByPredicate(
-      (entry) => Boolean(entry.workspaceKey) && !retained.has(entry.workspaceKey),
-    );
-  }, [openWorkspaceKeys]);
   // 完整视图（docs/ui/side-pane-full-view.md）只读派生：不改侧栏、面板宽度等原有状态，退出后自然恢复。
   const fullViewController = sidePaneFullView;
   const activeFullView =
@@ -647,16 +623,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     activeTaskTitle?.trim() || intl.formatMessage({ id: "taskList.untitled" });
   // 完整视图保留左侧任务列表与左上角按钮组，侧栏显隐只由用户开关决定。
   const isSidebarPanelVisible = isSidebarVisible;
-  const {
-    panelRef: terminalPanelRef,
-    panelElementRef: terminalPanelElementRef,
-    isVisible: isTerminalVisible,
-  } = useAnimatedResizablePanel({
-    // 浮窗只承载对话本身；终端只在普通视图和完整视图的对话 tab 中显示，开合状态不变。
-    open: isTerminalOpen && !isFloatingFullView,
-    expandedSize: "30%",
-    rememberExpandedSize: true,
-  });
   const {
     panelRef: sidePanePanelRef,
     panelElementRef: sidePanePanelElementRef,
@@ -1609,7 +1575,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
     <AnimatedSidePanePanel
       services={services}
       isDesktop={isDesktop}
-      isWindowsDesktop={isWindowsDesktop}
       isVisible={
         isWorkspaceVisible &&
         workspaceMainView === "chat" &&
@@ -1670,7 +1635,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       onOpenDeveloperTools={handleOpenDeveloperTools}
       onOpenFileManager={handleOpenFileManager}
       onNavigateFileManager={handleNavigateFileManager}
-      onOpenTerminalTab={handleOpenTerminalTab}
       onOpenReviewTab={handleToggleGit}
       onOpenSelectionSideConversation={handleOpenSelectionSideConversationLauncher}
       onRevealGitFileInTree={handleRevealGitFileInTree}
@@ -1835,10 +1799,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 gitDirtyFileCount={gitDirtyFileCount}
                 simplifyForNarrowViewport
                 isSidebarVisible
-                isTerminalOpen={isTerminalOpen}
                 isSidePaneOpen={isSidePaneOpen}
                 onRefreshGit={handleRefreshGit}
-                onToggleTerminal={handleToggleTerminal}
                 onToggleSidePane={handleToggleSidePane}
                 toggleSidePaneShortcutLabel={toggleSidePaneShortcutLabel}
                 onReloadSession={handleReloadSession}
@@ -2055,7 +2017,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
             )}
           />
         ) : null}
-        {/* 右侧主工作区：上方 header，下面左侧会话+终端，右侧共享 browser/code-viewer 槽位 */}
+        {/* 右侧主工作区：会话与共享侧面板。 */}
         <div
           data-panel=""
           id="content"
@@ -2090,17 +2052,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 onAnchorChange={handleFloatingAnchorChange}
                 onOpenConversation={handleOpenFullViewConversation}
               >
-                <ResizablePanelGroup
-                  orientation="vertical"
-                  layoutId="workspace-conversation-column-layout"
-                  panelIds={WORKSPACE_CONVERSATION_PANEL_IDS}
-                  className="h-full min-h-0"
-                >
-                  <ResizablePanel
-                    id="conversation"
-                    elementRef={conversationPanelElementRef}
-                    minSize="35%"
-                  >
+                <div ref={conversationPanelElementRef} className="h-full min-h-0">
                     <section
                       data-workspace-conversation-frame="true"
                       className={cn(
@@ -2108,7 +2060,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                         isSidePaneVisible
                           ? "rounded-[var(--workspace-panel-radius)] border border-border"
                           : "border-0",
-                        isTerminalVisible && "rounded-b-[var(--workspace-panel-radius)] border-b",
                         "border-[0.5px]",
                         !isFullView && "shadow-xs",
                         // 完整视图由面板外框或浮窗外框承担边框与圆角，对话 frame 不再叠一层。
@@ -2154,10 +2105,8 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                             gitDirtyFileCount={gitDirtyFileCount}
                             simplifyForNarrowViewport={simplifyHeaderForNarrowViewport}
                             isSidebarVisible={isSidebarVisible}
-                            isTerminalOpen={isTerminalOpen}
                             isSidePaneOpen={isSidePaneOpen}
                             onRefreshGit={handleRefreshGit}
-                            onToggleTerminal={handleToggleTerminal}
                             onToggleSidePane={handleToggleSidePane}
                             toggleSidePaneShortcutLabel={toggleSidePaneShortcutLabel}
                             onReloadSession={handleReloadSession}
@@ -2305,28 +2254,7 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                         )}
                       </div>
                     </section>
-                  </ResizablePanel>
-                  {workspaceMainView === "chat" ? (
-                    <AnimatedTerminalPanel
-                      frameClassName={cn(
-                        isSidePaneVisible
-                          ? "rounded-[var(--workspace-panel-radius)] border border-border"
-                          : "border-0",
-                        "rounded-t-[var(--workspace-panel-radius)] border-t",
-                      )}
-                      services={services}
-                      workspaceAbsPath={workspaceAbsPath}
-                      workspaceIdentity={workspaceIdentity}
-                      openWorkspaceKeys={openWorkspaceKeys}
-                      isVisible={isTerminalVisible}
-                      isWindowsDesktop={isWindowsDesktop}
-                      panelRef={terminalPanelRef}
-                      panelElementRef={terminalPanelElementRef}
-                      onClose={() => setIsTerminalOpen(false)}
-                      onOpenBrowserUrl={handleOpenBrowserUrl}
-                    />
-                  ) : null}
-                </ResizablePanelGroup>
+                </div>
               </SidePaneFullViewConversationHost>
             </ResizablePanel>
             {sidePanePanel}

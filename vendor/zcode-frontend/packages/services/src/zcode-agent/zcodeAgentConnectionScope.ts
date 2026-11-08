@@ -217,7 +217,6 @@ function createHello(context: ZCodeAgentV4ConnectionContext): HelloMessage {
     serverTime: Date.now(),
     capabilities: {
       nativeDialogs: continuous,
-      localTerminal: continuous,
       binaryFrames: false,
       compression: "none",
       workspaceHookReview: true,
@@ -923,13 +922,6 @@ export function createZCodeAgentConnectionScope(
       return base.onDynamicConversationTelemetryFact(
         withTrustedConnection(workspaceTarget(params), forwardedConnection(params)),
       );
-    },
-    onDynamicPluginUiToolResult() {
-      assertOpen();
-      // 页面创建只属于本地桌面；手机回放和 relay 不拥有原生 guest。
-      if (role !== "terminal-client" || context.clientMode !== "desktop-continuous")
-        return RpcEvent.None;
-      return base.onDynamicPluginUiToolResult();
     },
     onDynamicCuaPermissionObservation() {
       assertOpen();

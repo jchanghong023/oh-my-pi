@@ -58,11 +58,8 @@ export interface RootProps {
   initialTaskDraft?: CreateTaskOptions;
   /** Stable identity of the connected local OMP server. */
   composerClientNamespace?: string;
-  terminalOwnerId?: string;
   /** Runtime identity retained for non-UI service integration. */
   isDesktop?: boolean;
-  /** Windows terminal composition identity; does not enable desktop chrome. */
-  isWindowsDesktop?: boolean;
   /** Opt into responsive browser presentation without enabling remote-control behavior. */
   responsiveBrowserLayout?: boolean;
   /** Backend account, Agent and configuration business bindings are available; defaults to true. */

@@ -118,8 +118,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 		} satisfies Record<keyof IGitCheckpointService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.System, {
 			info: (): SystemInfo => ({ homedir: os.homedir(), platform: process.platform }),
-			// TODO(omp-system): Connect native shell discovery and network probes.
-			listIntegratedTerminalShells: unavailable("system.listIntegratedTerminalShells"),
+			// TODO(omp-system): Connect native network probes.
 			probeIntranet: unavailable("system.probeIntranet"),
 		} satisfies Record<keyof ISystemService, WebGuiMethod>),
 		// TODO(omp-file-watcher): Connect native watch/unwatch/disposeAll and the

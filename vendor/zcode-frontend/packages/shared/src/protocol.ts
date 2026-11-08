@@ -5,7 +5,6 @@ import type { ProviderFamilyConnectionSelectionSettings } from "./provider-famil
 import type { ZCodeProvider } from "./zcode-task-types-core.js";
 import type { WorkspacePurpose } from "./workspacePurpose.js";
 import type { DynamicWorkflowMode } from "./dynamic-workflow-feature.js";
-import type { EmbeddedBrowserViewportPreference } from "./browser-use/command-metadata.js";
 import type { AppToolSearchMode } from "./app-runtime-preferences.js";
 
 // ── Domain types ──
@@ -84,29 +83,6 @@ export type ZCodeInteractionBehavior = "queue" | "guide";
 
 /** 桌面端 Electron 自动更新发布通道。 */
 export type ElectronReleaseChannel = "stable" | "preview";
-
-/** Windows Bash 工具可使用的集成终端 shell 方言。 */
-export type IntegratedTerminalShellDialect = "cmd" | "git-bash";
-
-/** 设置页中 Windows Bash shell 的用户选择。 */
-export type IntegratedTerminalShellSelection =
-  | { mode: "auto" }
-  | {
-      mode: "shell";
-      dialect: IntegratedTerminalShellDialect;
-      id: string;
-      label: string;
-      path: string;
-    };
-
-/** 当前 host 可识别的 Windows shell 选项。 */
-export interface IntegratedTerminalShellOption {
-  dialect: IntegratedTerminalShellDialect;
-  id: string;
-  label: string;
-  path: string;
-  source: "system" | "path";
-}
 
 /** 默认语言 */
 export const DEFAULT_LOCALE: Locale = "zh-CN";
@@ -267,12 +243,6 @@ export interface AppSettings {
   shortcutBindings?: Record<string, string[]>;
   /** 界面语言偏好；locale 保存偏好解析后的实际语言，供 main/menu/远控等非浏览器上下文使用。 */
   localePreference?: LocalePreference;
-  /** 是否尽量继承系统终端 profile、shell 环境和字体 */
-  terminalInheritSystemProfile?: boolean;
-  /** 用户显式覆盖的终端字体；为空时从系统终端配置自动探测 */
-  terminalFontFamily?: string;
-  /** Windows 下 Bash 工具使用的本机 shell；未配置时自动选择。 */
-  integratedTerminalShell?: IntegratedTerminalShellSelection;
   /** HTTP/HTTPS 出口代理，例如 http://127.0.0.1:7890；为空时直连。下次启动 app/agent 生效。 */
   httpProxy?: string;
   /** 代理绕过规则，例如 localhost,127.0.0.1,.example.com；只在 httpProxy 存在时影响 renderer，agent/tool 仍按显式环境使用。 */
@@ -284,8 +254,6 @@ export interface AppSettings {
    * 只影响内置浏览器出口，不影响 ZCode 自身对后端与模型 API 的请求。默认关闭，重启后生效。
    */
   embeddedBrowserAllowInsecureCertificates?: boolean;
-  /** 人类用户主动打开 Browser tab 时的一次性显示偏好；Agent Browser Use 不读写。 */
-  embeddedBrowserViewportPreference?: EmbeddedBrowserViewportPreference;
   /**
    * 用户已在设置页关闭输入框的「电脑操作」按钮（内部 hidden 态）。
    * 取 hidden 语义而非 visible：undefined 即默认显示，老用户无需数据迁移。

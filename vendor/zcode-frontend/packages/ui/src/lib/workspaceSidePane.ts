@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- Side pane tab 状态集中维护文件、Git、终端和对话工作流面板。 */
+/* eslint-disable max-lines -- Side pane tab 状态集中维护文件、Git 和对话工作流面板。 */
 import { createUuid } from "@zcode/shared";
 import { inferMediaPreview, isPptxPreviewPath, type CodeViewerSource } from "@/lib/codeViewer.js";
 import { normalizeCodeViewerSource } from "@/lib/codeViewerSource.js";
@@ -84,16 +84,6 @@ export interface DeveloperToolsSidePaneTab {
   openedAt?: number;
 }
 
-export interface TerminalSidePaneTab {
-  id: string;
-  type: "terminal";
-  ownerTaskId?: string | null;
-  workspaceKey?: string | null;
-  openedAt?: number;
-  title: string;
-  cwd?: string;
-  remoteSessionId?: string | null;
-}
 
 
 export interface OpenBackgroundBashSideTabRequest {
@@ -508,7 +498,6 @@ export type WorkspaceSidePaneTab =
   | WhiteboardSidePaneTab
   | ModelTrajectorySidePaneTab
   | DeveloperToolsSidePaneTab
-  | TerminalSidePaneTab
   | SubagentSessionSidePaneTab
   | SubagentDirectorySidePaneTab
   | SelectionSideChatPaneTab
@@ -540,11 +529,10 @@ export function normalizeWorkspaceSidePaneState(
     return null;
   }
 
-  // Treemapping 当前需要从侧边栏隐藏。旧版本可能已经把 treemapping tab
-  // 写进了 workspace 级 side pane 记忆，这里在状态边界统一过滤，避免恢复后入口继续出现。
+  // 已移除的界面不从旧版面板记忆恢复。
   const filteredTabs = current.tabs.filter(
     (tab) =>
-      !["treemapping", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui"].includes(
+      !["treemapping", "terminal", "deploy", "browser", "browser-use", "browser-permissions", "plugin-market", "plugin-ui", "workspace-plugin-preview"].includes(
         tab.type,
       ),
   );
@@ -636,20 +624,6 @@ function createDeveloperToolsSidePaneTab(): DeveloperToolsSidePaneTab {
   };
 }
 
-function createTerminalSidePaneTab(options: {
-  title: string;
-  cwd?: string;
-  remoteSessionId?: string | null;
-}): TerminalSidePaneTab {
-  return {
-    id: `terminal:${createUuid()}`,
-    type: "terminal",
-    openedAt: Date.now(),
-    title: options.title,
-    ...(options.cwd ? { cwd: options.cwd } : {}),
-    ...(options.remoteSessionId ? { remoteSessionId: options.remoteSessionId } : {}),
-  };
-}
 
 export function encodeSidePaneTabIdPart(value: string): string {
   return encodeURIComponent(value);
@@ -1080,7 +1054,6 @@ export function isSidePaneTabVisibleInScope(
     case "whiteboard":
     case "model-trajectory":
     case "new-tab":
-    case "terminal":
       return sidePaneOwnerKey(tab.ownerTaskId) === sidePaneOwnerKey(scope.ownerTaskId);
   }
 }
@@ -1304,12 +1277,6 @@ export function activateDeveloperToolsSidePane(
   return activateSidePaneTab(current, createDeveloperToolsSidePaneTab());
 }
 
-export function openTerminalSidePane(
-  current: WorkspaceSidePaneState | null,
-  options: { title: string; cwd?: string; remoteSessionId?: string | null },
-): WorkspaceSidePaneState {
-  return activateSidePaneTab(current, createTerminalSidePaneTab(options));
-}
 
 export function openSubagentSessionSidePane(
   current: WorkspaceSidePaneState | null,

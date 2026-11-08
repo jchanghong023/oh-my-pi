@@ -11,7 +11,6 @@ const pluginDimensionEnums: Record<string, readonly string[]> = {
     "store_detail",
     "side_pane_market",
     "recommended_prompt",
-    "recommended_ui",
     "component_settings",
     "unknown",
   ],
