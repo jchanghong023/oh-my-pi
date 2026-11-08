@@ -17,18 +17,25 @@ import { logger } from "@/logger.js";
 //     但**不记住失败**：换一份 service 实例会重试。手机 `/remote` 在工作区桥接前拿到的是
 //     unsupported 代理，必然抛错，桥接完成后 accessor 会换一份，那一次必须能纠正回来。
 
-export type DynamicWorkflowAvailabilityStatus = "loading" | "ready";
+export type DynamicWorkflowAvailabilityStatus = "loading" | "ready" | "unavailable";
 
 export interface DynamicWorkflowAvailabilitySnapshot {
   readonly status: DynamicWorkflowAvailabilityStatus;
-  /** loading 期间恒为 false：未知即不提供，入口宁可晚半拍出现也不闪一下再收起。 */
+  /** Runtime operations remain disabled while loading or when this host has no business binding. */
   readonly enabled: boolean;
   /**
-   * 未就绪或取数失败时为 null；`source` 只用于观测，区分「服务端关」与「本地覆盖」。
+   * 未就绪、宿主未接入或取数失败时为 null；不为展示导航伪造运行时配置。
    * `offeredMode` 是服务端提供的默认模式（哪个选项标「默认」），`mode` 是生效模式。
    */
   readonly config: DynamicWorkflowClientConfig | null;
 }
+
+/** Browser navigation is retained separately; no backend config or execution is implied. */
+export const UNAVAILABLE_DYNAMIC_WORKFLOW_SNAPSHOT: DynamicWorkflowAvailabilitySnapshot = {
+  status: "unavailable",
+  enabled: false,
+  config: null,
+};
 
 interface DynamicWorkflowAvailabilityState extends DynamicWorkflowAvailabilitySnapshot {
   /** 首次取数；同一个 service 出过结果后是 no-op，并发调用共用同一次请求。 */

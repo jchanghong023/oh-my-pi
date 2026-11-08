@@ -5,7 +5,7 @@ import type { KeyboardEvent, MouseEvent } from "react";
 import { useDraggable, useDroppable } from "@dnd-kit/core";
 import type { UniqueIdentifier } from "@dnd-kit/core";
 import { isCronTask, isOffPeakTask } from "@zcode/shared";
-import { ArrowUpToLine, Clock, Cloud, Folder, ListTree, LoaderIcon, Moon, X } from "lucide-react";
+import { ArrowUpToLine, Clock, Folder, ListTree, LoaderIcon, Moon, X } from "lucide-react";
 import { cn } from "@/components/lib/utils.js";
 import { Badge } from "@/components/ui/badge.js";
 import { toast } from "@/components/ui/toast.js";
@@ -43,7 +43,6 @@ function GroupedTaskRowComponent({
   groups,
   remoteSessionId,
   isActive,
-  isMobileActive,
   workspaceLabel,
   onSelectTask,
   onCloseTask,
@@ -63,7 +62,6 @@ function GroupedTaskRowComponent({
   groups: TaskGroupMenuItem[];
   remoteSessionId?: string;
   isActive: boolean;
-  isMobileActive: boolean;
   workspaceLabel: string;
   onSelectTask: (workspacePath: string, taskId: string, workspaceIdentity?: string) => void;
   onCloseTask: (task: ZCodeTaskMeta) => void;
@@ -153,7 +151,6 @@ function GroupedTaskRowComponent({
     <div
       role={dragOverlay ? undefined : "button"}
       tabIndex={dragOverlay ? undefined : 0}
-      data-mobile-active-task={!dragOverlay && isMobileActive ? "true" : undefined}
       className={cn(
         "group/task-row",
         TASK_GROUP_ROW_CLASS,
@@ -339,7 +336,7 @@ function GroupedTaskRowComponent({
   // 同时保留键盘、触摸设备和手机远控 active task 的入口。
   const shouldMountHoverActions =
     !task.pendingInteraction &&
-    (taskRowHovered || taskRowFocusWithin || isHoverNone || isMobileActive);
+    (taskRowHovered || taskRowFocusWithin || isHoverNone);
   // 触屏端 isHoverNone 只负责常驻 action；时间、状态点和 cron/off-peak 元信息
   // 仍应保留，仅在真实 hover / focus 交互时让位，避免手机端永久丢失任务状态。
   const shouldSuppressTaskMetadata = taskRowHovered || taskRowFocusWithin;
@@ -364,7 +361,6 @@ function GroupedTaskRowComponent({
       data-grouped-task-key={groupedTaskDomKey}
       data-testid={testId(TID_TASK_ITEM, task.taskId)}
       data-task-item-key={groupedTaskDomKey}
-      data-mobile-active-task={isMobileActive ? "true" : undefined}
       className={cn(
         "group/task-row",
         TASK_GROUP_ROW_CLASS,
@@ -468,11 +464,7 @@ function GroupedTaskRowComponent({
             <ContextMenuTrigger asChild>{interactiveTaskRow}</ContextMenuTrigger>
           </TooltipTrigger>
           <TooltipContent side="right" align="center" sideOffset={6}>
-            {remoteSessionId ? (
-              <Cloud aria-hidden="true" className="size-3.5 shrink-0" />
-            ) : (
               <Folder aria-hidden="true" className="size-3.5 shrink-0" />
-            )}
             <span className="min-w-0 max-w-48 truncate">{workspaceLabel}</span>
             {taskChangeParts.length > 0 ? (
               <>

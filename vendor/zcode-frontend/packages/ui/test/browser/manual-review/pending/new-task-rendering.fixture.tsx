@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Event, ProxyChannel } from "@zcode/rpc";
-import { useRemoteWorkspaceHistory } from "@/root/useRemoteWorkspaceHistory.js";
+import { PlatformProvider } from "@/hooks/usePlatform.js";
 import { createRoot } from "react-dom/client";
 import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import { ChatLoading } from "@/components/ai-elements/chat-loading.js";
@@ -143,7 +143,7 @@ const common = {
   reconnectingRemoteWorkspaceKeys: [],
   remoteWorkspaceErrorByWorkspaceKey: {},
   onOpenCommandCenter: noop,
-} satisfies Omit<ProjectSidebarProps, "onCreateTask">;
+} satisfies Omit<ProjectSidebarProps, "onCreateTask" | "onCreateConversationTask">;
 const actions = {
   intl: { formatMessage: ({ id }: { id: string }) => id } as never,
   platform: {
@@ -246,21 +246,7 @@ function Fixture() {
   const [revision, setRevision] = useState(0);
   const task = useZCodeSessionStore((state) => state.workspaces["/example"]?.activeTaskId);
   // 模拟 Root 每轮装配导航实现；执行和侧栏均使用真实生产 hook/组件。
-  const remote = useRemoteWorkspaceHistory({
-    intl: actions.intl,
-    services,
-    platform: actions.platform,
-    supportsSettings: false,
-    isDesktop: !mobile,
-    allowRemoteWorkspace: false,
-    tabStoreApi: actions.tabStoreApi,
-    activateTabByPath: activate,
-    addTab: noop,
-  });
-  const navigation = useRootWorkspaceActions({
-    ...actions,
-    openRemoteProjectWorkspace: async () => {},
-  });
+  const navigation = useRootWorkspaceActions(actions);
   return (
     <ProjectDirectoryProvider isDesktop={!mobile}>
       <div className="flex h-screen bg-background text-foreground">
@@ -269,8 +255,13 @@ function Fixture() {
             {...common}
             onCreateTask={navigation.handleCreateTask}
             onCreateConversationTask={navigation.handleCreateConversationTask}
-            onSelectRemoteProject={remote.handleSelectRemoteProject}
-            onReconnectRemoteWorkspace={remote.handleReconnectRemoteWorkspace}
+            onConnectRemote={navigation.handleConnectRemote}
+            onSelectRemoteProject={navigation.handleSelectRemoteProject}
+            onCancelRemoteProject={navigation.handleCancelRemoteProject}
+            onReconnectRemoteWorkspace={navigation.handleReconnectRemoteWorkspace}
+            reconnectingRemoteWorkspaceKeys={navigation.reconnectingRemoteWorkspaceKeys}
+            remoteWorkspaceRecoveryByWorkspaceKey={navigation.remoteWorkspaceRecoveryByWorkspaceKey}
+            remoteWorkspaceErrorByWorkspaceKey={navigation.remoteWorkspaceErrorByWorkspaceKey}
           />
         </div>
         <main className="min-w-0 p-2 text-ui-sm">
@@ -297,7 +288,9 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
     <TooltipProvider>
-      <Fixture />
+      <PlatformProvider platform={actions.platform}>
+        <Fixture />
+      </PlatformProvider>
     </TooltipProvider>
   </ZCodeIntlProvider>,
 );

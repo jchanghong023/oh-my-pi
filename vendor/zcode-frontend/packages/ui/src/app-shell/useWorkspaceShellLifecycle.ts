@@ -1,7 +1,6 @@
 import { useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { IServiceAccessor } from "@zcode/services";
 import type { TaskChatMessage as TestChatMessage } from "@/lib/taskChatMessageTypes.js";
-import type { BrowserNavigationRequest } from "@/hooks/useAppPanels.js";
 import { logger } from "@/logger.js";
 import {
   getWorkspaceDisplayedTaskState,
@@ -14,14 +13,12 @@ export function useWorkspaceShellLifecycle({
   workspaceAbsPath,
   workspaceIdentity,
   services,
-  setBrowserNavigationRequest,
   setTestMessages,
 }: {
   enabled?: boolean;
   workspaceAbsPath: string;
   workspaceIdentity?: string;
   services: IServiceAccessor;
-  setBrowserNavigationRequest: Dispatch<SetStateAction<BrowserNavigationRequest | null>>;
   setTestMessages: Dispatch<SetStateAction<TestChatMessage[] | null>>;
 }) {
   const previousWorkspaceAbsPathRef = useRef(workspaceAbsPath);
@@ -39,9 +36,8 @@ export function useWorkspaceShellLifecycle({
     // 避免把上一项目的代码预览或测试覆盖消息串到新项目里。
     // side pane 现在按 workspaceIdentity/workspacePath 做内存恢复。
     // 这里不能再按 workspacePath 变化清掉 Git/source 或 tabs，否则跨 workspace 切回时会覆盖缓存。
-    setBrowserNavigationRequest(null);
     setTestMessages(null);
-  }, [setBrowserNavigationRequest, setTestMessages, workspaceAbsPath]);
+  }, [setTestMessages, workspaceAbsPath]);
 
   useEffect(() => {
     return () => {

@@ -144,10 +144,6 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 				return current ? { providerId: current.provider, modelId: current.id } : null;
 			},
 		}),
-		// TODO(omp-project-source-identity): Integrate native OMP project identity and
-		// migration ownership. The Source contract has no unconnected result variant;
-		// resolution, migration counts/reports and migration commands all reject.
-		createWebGuiService("source-server-workspace", {}),
 		// TODO(omp-scheduler): Integrate native OMP scheduler persistence and provider
 		// admission. Empty attachment reads do not inspect persisted scheduled jobs;
 		// create/cancel/pause/continue/delete/deleteHistory/update remain unavailable.

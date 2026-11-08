@@ -1,4 +1,3 @@
-import { useCodingPlanEntryGate } from "@/settings/CodingPlanEntryButton.js";
 /* eslint-disable max-lines -- 定时任务主视图集中维护列表、创建/编辑整页路由与启停/删除操作，集中更利于交互一致。 */
 import {
   useCallback,
@@ -12,7 +11,6 @@ import {
 import { CircleCheck, RotateCcw, TriangleAlert } from "lucide-react";
 import {
   AUTOMATION_CREATE_LIMIT,
-  BUILTIN_MODEL_PROVIDER_IDS,
   isAutomationCreateLimitError,
   resolveWorkspaceKey,
   type ZCodeAutomation,
@@ -56,10 +54,6 @@ import { useOffPeakEligibility } from "@/hooks/useOffPeakEligibility.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { logger } from "@/logger.js";
 import {
-  createIdleTimeCodingPlanFunnelContext,
-  resolveCodingPlanEntryPlanStateFromProviderSettings,
-} from "@/lib/codingPlanFunnelTelemetry.js";
-import {
   useAutomationManagementStore,
   type AutomationRunNowResult,
 } from "@/store/automationManagementStore.js";
@@ -99,7 +93,6 @@ import {
   AutomationRunNowIcon,
   AutomationTrashIcon,
 } from "@/settings/AutomationDesignPrimitives.js";
-import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
@@ -131,7 +124,7 @@ import {
   AutomationsPageTitle,
   type AutomationsPageTab,
 } from "@/settings/saved-workflows/AutomationsPageTitleSwitch.js";
-import { useDynamicWorkflowAvailability } from "@/hooks/useDynamicWorkflowAvailability.js";
+import { useDynamicWorkflowNavigationAvailable } from "@/hooks/useDynamicWorkflowAvailability.js";
 import {
   readAutomationsPageTab,
   writeAutomationsPageTab,
@@ -533,11 +526,9 @@ export function AutomationsSection({
   const platform = usePlatform();
   const { clientScenesService, offPeakTaskService, zcodeAgentService } = useServices();
   const confirmDialog = useConfirmDialog();
-  const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const providerSettingsRead = useProviderSettingsView();
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
-  const { status: entryStatus, label: entryLabel, retry: retryEntry } = useCodingPlanEntryGate();
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings();
   useOffPeakEligibility(sharedSettings, providerSettingsView?.revision);
 
@@ -605,18 +596,17 @@ export function AutomationsSection({
     (filter: AutomationStatusFilter) => setTabState((previous) => ({ ...previous, filter })),
     [],
   );
-  // 动态工作流灰度：未命中就没有「工作流」标签，
-  // 页面退回单一的「自动化」。快照未就绪时 enabled 为 false，宁可标题晚半拍长出切换，也不先闪
-  // 一个标签再收起——中枢很少是用户进 app 后第一眼看的东西。
-  const { enabled: dynamicWorkflowEnabled } = useDynamicWorkflowAvailability();
+  // Standalone browser keeps Workflow navigation without a purchase/gray-policy request.
+  // Runtime controls continue to use the separate fail-closed availability snapshot.
+  const dynamicWorkflowNavigationAvailable = useDynamicWorkflowNavigationAvailable();
   // 顶级标签「自动化 / 工作流」：页标题即切换。中枢已是跨项目视图，记忆不再按项目分桶，用 app 级单 key。
   const [storedPageTab, setPageTabState] = useState<AutomationsPageTab>(() =>
     readAutomationsPageTab(),
   );
-  // 灰度关时忽略 sessionStorage 里记住的「工作流」：只收窄读出来的值，记忆本身不清，
-  // 灰度再开时用户仍然回到上次那一页。中枢只在 `pageTab === "workflow"` 分支挂载，
-  // 收窄 pageTab 等于 SavedWorkflowsSection 永不挂载，不会有一帧的误挂载去发查询。
-  const pageTab: AutomationsPageTab = dynamicWorkflowEnabled ? storedPageTab : "automation";
+  // Complete hosts still respect their effective user mode without clearing the remembered tab.
+  const pageTab: AutomationsPageTab = dynamicWorkflowNavigationAvailable
+    ? storedPageTab
+    : "automation";
   const setPageTab = useCallback((next: AutomationsPageTab) => {
     setPageTabState(next);
     writeAutomationsPageTab(next);
@@ -728,7 +718,7 @@ export function AutomationsSection({
     if (!openAutomationTab) return;
     // 灰度关：请求的「工作流」标签不存在，
     // 落到「自动化」并把深链消费掉——不消费会让请求一直挂着，反复把页面拉回来。
-    if (openAutomationTab === "workflow" && !dynamicWorkflowEnabled) {
+    if (openAutomationTab === "workflow" && !dynamicWorkflowNavigationAvailable) {
       setPageTab("automation");
       onOpenAutomationConsumed?.();
       return;
@@ -757,7 +747,7 @@ export function AutomationsSection({
     if (result.tab !== tab) setTab(result.tab);
     onOpenAutomationConsumed?.();
   }, [
-    dynamicWorkflowEnabled,
+    dynamicWorkflowNavigationAvailable,
     loadedWorkspaceKey,
     offPeakStoreLoading,
     onOpenAutomationConsumed,
@@ -844,44 +834,15 @@ export function AutomationsSection({
     );
   }, [currentWorkspaceIsRemote]);
 
-  const handleOpenCodingPlanUpgrade = useCallback(() => {
-    const providerId =
-      sharedSettings?.providerFamilyDomain === "bigmodel"
-        ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-        : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-    const eventText = intl.formatMessage({
-      id: "settings.modelProvider.codingPlan.upgrade",
-    });
-    // 埋点缺失原因：Automations 的闲时入口此前绕过了购买漏斗 context，只打开弹窗。
-    // 这里在用户点击时冻结入口套餐状态，后续 OAuth 只刷新鉴权，不重建 funnel。
-    openCodingPlanUpgrade({
-      providerId,
-      initialAudience: "personal",
-      funnelContext: createIdleTimeCodingPlanFunnelContext({
-        providerId,
-        eventText,
-        entryPlanState: resolveCodingPlanEntryPlanStateFromProviderSettings(providerSettingsView),
-      }),
-    });
-  }, [intl, openCodingPlanUpgrade, providerSettingsView, sharedSettings?.providerFamilyDomain]);
-
   const showCodingPlanRequiredToast = useCallback(() => {
-    toast(entryLabel ?? intl.formatMessage({ id: "offPeak.create.codingPlanToast" }), {
+    toast(intl.formatMessage({ id: "offPeak.create.codingPlanToast" }), {
       durationMs: 8000,
       position: "top-center",
       variant: "info",
-      actionLabel:
-        entryStatus === "loading"
-          ? undefined
-          : (entryLabel ??
-            intl.formatMessage({
-              id: "settings.modelProvider.codingPlan.upgrade",
-            })),
-      onAction: entryStatus === "error" ? retryEntry : handleOpenCodingPlanUpgrade,
       dismissible: true,
       dismissLabel: intl.formatMessage({ id: "common.close" }),
     });
-  }, [handleOpenCodingPlanUpgrade, intl, entryStatus, entryLabel, retryEntry]);
+  }, [intl]);
 
   const showAutomationCreateLimitToast = useCallback(() => {
     toast(
@@ -1461,7 +1422,7 @@ export function AutomationsSection({
   const pageHeader = (
     <div className="flex flex-col gap-3">
       <AutomationsPageTitle
-        workflowTabEnabled={dynamicWorkflowEnabled}
+        workflowTabEnabled={dynamicWorkflowNavigationAvailable}
         value={pageTab}
         onValueChange={setPageTab}
       />

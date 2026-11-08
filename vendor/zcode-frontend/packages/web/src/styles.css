@@ -2,3 +2,18 @@
 
 /* 共享样式只扫描 UI 包；Web 独立入口的状态类也必须参与 Tailwind 生成。 */
 @source "./**/*.{ts,tsx}";
+
+/* 共享样式为桌面窗口保留透明底色；浏览器入口需要自己的主题背景与文字色。 */
+#root {
+  background: var(--color-background) !important;
+  color: var(--color-foreground);
+}
+
+/* Firefox 68 has viewport units but not dynamic viewport units. */
+@layer utilities {
+  @supports not (height: 100dvh) {
+    .h-dvh {
+      height: 100vh;
+    }
+  }
+}

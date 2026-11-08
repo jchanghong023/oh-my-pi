@@ -41,6 +41,13 @@ export function isAppleKeyboardPlatform(
   return /Mac|iPhone|iPad|iPod/.test(userAgent);
 }
 
+export function isWindowsKeyboardPlatform(
+  platformInfo: KeyboardShortcutPlatformInfo = readNavigatorPlatformInfo(),
+): boolean {
+  return /^win/i.test(platformInfo.platform ?? "") ||
+    /Windows/i.test(platformInfo.userAgent ?? "");
+}
+
 function getCommandModifierLabel(platformInfo?: KeyboardShortcutPlatformInfo): string {
   return isAppleKeyboardPlatform(platformInfo) ? "⌘" : "Ctrl";
 }

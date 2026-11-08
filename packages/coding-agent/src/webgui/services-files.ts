@@ -6,7 +6,6 @@ import type { IGitCheckpointService } from "../../../../vendor/zcode-frontend/pa
 import type { IMediaPreviewService } from "../../../../vendor/zcode-frontend/packages/services/src/media-preview/mediaPreview";
 import type { IPromptAttachmentTransferService } from "../../../../vendor/zcode-frontend/packages/services/src/prompt-attachment-transfer/promptAttachmentTransfer";
 import type { ISystemService } from "../../../../vendor/zcode-frontend/packages/services/src/system/system";
-import type { ITerminalService } from "../../../../vendor/zcode-frontend/packages/services/src/terminal/terminal";
 import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
 import type {
 	GitRefreshResult,
@@ -123,15 +122,6 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			listIntegratedTerminalShells: unavailable("system.listIntegratedTerminalShells"),
 			probeIntranet: unavailable("system.probeIntranet"),
 		} satisfies Record<keyof ISystemService, WebGuiMethod>),
-		// TODO(omp-terminal): Connect native PTY creation/I/O/resize/disposal and
-		// onDynamicData/onDynamicExit publishers. The channel factory owns real,
-		// disposable idle event subscriptions; no terminal or output is fabricated.
-		createWebGuiService(ServiceChannels.Terminal, {
-			create: unavailable("terminal.create"),
-			write: unavailable("terminal.write"),
-			resize: unavailable("terminal.resize"),
-			dispose: unavailable("terminal.dispose"),
-		} satisfies Record<Exclude<keyof ITerminalService, "onDynamicData" | "onDynamicExit">, WebGuiMethod>),
 		// TODO(omp-file-watcher): Connect native watch/unwatch/disposeAll and the
 		// onDynamicChange publisher. Subscription disposal is protocol-only, never
 		// a claim that fs.watch was installed or a native watcher id was allocated.

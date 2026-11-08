@@ -7,22 +7,16 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 export function CodingPlanStatusMeta({
   renewTime,
   expireTime,
-  extraAction,
   statusLabel,
-  manageLabel,
   unlinkLabel,
   unlinkLoading,
-  onManage,
   onUnlink,
 }: {
-  extraAction?: ReactNode;
   statusLabel?: ReactNode;
   renewTime?: string | null;
   expireTime?: string | null;
-  manageLabel?: string | null;
   unlinkLabel?: string | null;
   unlinkLoading?: boolean;
-  onManage?: () => void;
   onUnlink?: () => void;
 }) {
   const { intl, locale } = useZCodeIntl();
@@ -44,11 +38,7 @@ export function CodingPlanStatusMeta({
       )
     : null;
   const hasMetaContent = Boolean(
-    statusLabel ||
-    subscriptionTimeLabel ||
-    extraAction ||
-    (manageLabel && onManage) ||
-    (unlinkLabel && onUnlink),
+    statusLabel || subscriptionTimeLabel || (unlinkLabel && onUnlink),
   );
   const fallbackStatusLabel =
     statusLabel ??
@@ -62,19 +52,8 @@ export function CodingPlanStatusMeta({
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {fallbackStatusLabel ? <span>{fallbackStatusLabel}</span> : null}
       {subscriptionTimeLabel ? <span>{subscriptionTimeLabel}</span> : null}
-      <CodingPlanMetaSeparator visible={Boolean(subscriptionTimeLabel && extraAction)} />
-      {extraAction}
       <CodingPlanMetaSeparator
-        visible={Boolean((subscriptionTimeLabel || extraAction) && manageLabel)}
-      />
-      {manageLabel && onManage ? (
-        <CodingPlanMetaAction label={manageLabel} onClick={onManage} />
-      ) : null}
-      <CodingPlanMetaSeparator
-        visible={Boolean(
-          (subscriptionTimeLabel || extraAction || manageLabel || fallbackStatusLabel) &&
-          unlinkLabel,
-        )}
+        visible={Boolean((subscriptionTimeLabel || fallbackStatusLabel) && unlinkLabel)}
       />
       {unlinkLabel && onUnlink ? (
         <CodingPlanMetaAction label={unlinkLabel} loading={unlinkLoading} onClick={onUnlink} />
@@ -139,7 +118,7 @@ export function StartPlanStatusMeta({
       )
     : null;
   // 产品语义：待生效时展示排期；到点但额度桶尚未同步时提供就地刷新；
-  // 对应额度桶出现后只保留过期日期。免费套餐无管理页，升级入口在卡片右侧。
+  // 对应额度桶出现后只保留过期日期。
   return (
     <span className="flex flex-wrap items-center gap-1.5 text-ui-base text-foreground-subtle">
       {pendingEffectiveTimeLabel ? (

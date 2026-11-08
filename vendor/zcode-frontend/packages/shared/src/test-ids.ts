@@ -391,14 +391,6 @@ export const TID_SETTINGS_PERSONALIZATION_SIZE_HINT = "settings-personalization-
 export const TID_SETTINGS_TOOL_SEARCH_SELECT = "settings-tool-search-select";
 export const TID_SETTINGS_TOOL_SEARCH_OPTION = "settings-tool-search-option";
 export const TID_SETTINGS_NATIVE_SEARCH_SWITCH = "settings-native-search-switch";
-/** 常规设置中的数据存储路径只读输入框 */
-export const TID_SETTINGS_DATA_BASE_DIR_INPUT = "settings-data-base-dir-input";
-/** 常规设置中的数据存储路径目录选择按钮 */
-export const TID_SETTINGS_DATA_BASE_DIR_BROWSE = "settings-data-base-dir-browse";
-/** 常规设置中的数据存储路径保存按钮 */
-export const TID_SETTINGS_DATA_BASE_DIR_SAVE = "settings-data-base-dir-save";
-/** 常规设置中的数据存储路径复制/待重启/失败状态 */
-export const TID_SETTINGS_DATA_BASE_DIR_STATUS = "settings-data-base-dir-status";
 /** 资源管理器顶部 tab（suffix=cpu|memory|storage） */
 export const TID_RESOURCE_MANAGER_TAB = "resource-manager-tab";
 /** 资源管理器「存储」tab：分区容器 */

@@ -1,6 +1,5 @@
 export type QuickPickCommandIcon =
   | "book"
-  | "browser"
   | "community"
   | "diff"
   | "feedback"
@@ -59,9 +58,7 @@ interface QuickPickCommandHandlers {
   logout?: () => void | Promise<void>;
   toggleSidebar: () => void;
   toggleTerminal: () => void;
-  togglePreview: () => void;
   openTerminalTab: () => void;
-  openBrowserTab: () => void;
   openReviewTab: () => void;
 }
 
@@ -70,7 +67,6 @@ interface CreateQuickPickCommandsOptions {
   canOpenCommunity: boolean;
   isSidebarVisible: boolean;
   isLoggedIn: boolean;
-  supportsEmbeddedBrowser?: boolean;
   supportsTerminal?: boolean;
   supportsReview?: boolean;
   themeTarget: "dark" | "light";
@@ -88,7 +84,6 @@ export function createQuickPickCommands({
   canOpenCommunity,
   isSidebarVisible,
   isLoggedIn,
-  supportsEmbeddedBrowser = true,
   supportsTerminal = true,
   supportsReview = true,
   themeTarget,
@@ -141,29 +136,6 @@ export function createQuickPickCommands({
       keywords: ["terminal", "shell", "console", "终端"],
       run: handlers.toggleTerminal,
     },
-    ...(supportsEmbeddedBrowser
-      ? [
-          {
-            id: "toggle-preview",
-            sectionId: "panels",
-            titleId: "quickPick.command.togglePreview",
-            icon: "browser",
-            keywords: [
-              "preview",
-              "browser",
-              "web",
-              "show",
-              "hide",
-              "预览",
-              "浏览器",
-              "网页",
-              "显示",
-              "隐藏",
-            ],
-            run: handlers.togglePreview,
-          } satisfies QuickPickCommand,
-        ]
-      : []),
     {
       id: "add-terminal-tab",
       sectionId: "panels",
@@ -172,18 +144,6 @@ export function createQuickPickCommands({
       keywords: ["add", "terminal", "tab", "new terminal", "添加终端", "终端标签"],
       run: handlers.openTerminalTab,
     },
-    ...(supportsEmbeddedBrowser
-      ? [
-          {
-            id: "add-browser-tab",
-            sectionId: "panels",
-            titleId: "quickPick.command.addBrowserTab",
-            icon: "browser",
-            keywords: ["add", "browser", "tab", "preview", "添加浏览器", "浏览器标签"],
-            run: handlers.openBrowserTab,
-          } satisfies QuickPickCommand,
-        ]
-      : []),
     {
       id: "add-review-tab",
       sectionId: "panels",

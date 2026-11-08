@@ -1,12 +1,10 @@
 import { logger } from "@oh-my-pi/pi-utils";
 import { Emitter, type Event } from "../../../../vendor/zcode-frontend/packages/rpc/src/foundation";
 import type {
-	IZCodeAgentService,
 	ZCodeAgentInitializeResult,
 	ZCodeAgentStorageStartupSnapshot,
 } from "../../../../vendor/zcode-frontend/packages/services/src/zcode-agent/zcodeAgent";
 import type { ZCodeAgentWorkspaceTarget } from "../../../../vendor/zcode-frontend/packages/services/src/zcode-agent/zcodeAgentPluginParams";
-import type { IZCodeSessionService } from "../../../../vendor/zcode-frontend/packages/services/src/zcode-session/zcodeSession";
 import { V4_WIRE_PROTOCOL_VERSION } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/core";
 import { sessionsIndexTopic } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol-v4/sessions-index";
 import {
@@ -44,8 +42,8 @@ import {
 	type NativeChatRuntime,
 } from "./native-chat";
 import {
-	type WebGuiMethod,
 	WebGuiNotImplementedError,
+	type WebGuiMethod,
 	type WebGuiServiceContext,
 	type WebGuiServiceDefinition,
 } from "./rpc-contract";
@@ -573,149 +571,6 @@ class BrowserAgentAttachment {
 	}
 }
 
-function unavailableMethods(channel: string, names: readonly string[]): Record<string, WebGuiMethod> {
-	const methods: Record<string, WebGuiMethod> = {};
-	for (const name of names)
-		methods[name] = () => {
-			throw new WebGuiNotImplementedError(`${channel}.${name}`);
-		};
-	return methods;
-}
-
-// Native runtime mutation and non-chat reads remain explicitly unavailable.
-const nativeAgentReads = [
-	"createSession",
-	"listSessionSubagents",
-	"getAppUsageStats",
-	"measureSessionData",
-	"purgeSessionData",
-	"getTaskTokenUsage",
-	"readSessionDebug",
-	"readSessionEvents",
-	"ensureSessionReady",
-	"stopSessionRuntime",
-	"restartSessionRuntime",
-	"disposeWorkspace",
-	"disposeAll",
-	"collectLocalRuntimeChildProcesses",
-	"hasActiveCuaOperationTurn",
-] as const satisfies readonly (keyof IZCodeAgentService)[];
-
-// TODO(omp-agent-configuration): Bind native preferences, model/auth/trust, MCP/plugin/workflow/automation capabilities.
-const nativeAgentConfiguration = [
-	"syncAppRuntimePreferences",
-	"syncDynamicWorkflowUserMode",
-	"grantWorkspaceHookTrust",
-	"setWorkspaceMcpTrust",
-	"listMcpServerStatuses",
-	"listPlugins",
-	"getPluginReferenceCatalog",
-	"getSkillReferenceCatalog",
-	"openMcpUiInstance",
-	"validateMcpUiInstance",
-	"recycleMcpUiInstance",
-	"closeMcpUiInstance",
-	"readMcpResource",
-	"sampleMcpApp",
-	"cancelMcpAppSampling",
-	"callMcpToolForUi",
-	"cancelMcpToolCallForUi",
-	"readMcpResourceForUi",
-	"listMcpResourcesForUi",
-	"listMcpResourceTemplatesForUi",
-	"subscribeMcpResourceForUi",
-	"unsubscribeMcpResourceForUi",
-	"registerAppToolsForUi",
-	"unregisterAppToolsForUi",
-	"claimAppToolCallForUi",
-	"resolveAppToolCallForUi",
-	"listPluginUiSurfaces",
-	"listSavedWorkflows",
-	"getSavedWorkflow",
-	"updateSavedWorkflowMeta",
-	"deleteSavedWorkflow",
-	"listSavedWorkflowRuns",
-	"moveSavedWorkflow",
-	"saveSavedWorkflowFromRun",
-	"findSavedWorkflowForRun",
-	"resolveSuggestedPluginReference",
-	"getPluginsOverview",
-	"addPluginMarketplace",
-	"removePluginMarketplace",
-	"updatePluginMarketplace",
-	"installPlugin",
-	"cancelPluginOperation",
-	"uninstallPlugin",
-	"updatePlugin",
-	"restoreBuiltinPlugin",
-	"configurePlugin",
-	"resetPluginConfig",
-	"validatePlugin",
-	"describePlugin",
-	"setPluginEnabled",
-	"listAutomations",
-	"listAllAutomations",
-	"createAutomation",
-	"updateAutomation",
-	"deleteAutomation",
-	"setAutomationEnabled",
-	"restartAutomation",
-	"runAutomationNow",
-	"listAutomationRuns",
-	"deleteAutomationRun",
-	"generateWorkspaceText",
-	"testModelConnectivity",
-	"setModel",
-	"setThoughtLevel",
-	"setMode",
-	"respondProviderRuntimeHeaders",
-	"respondSessionRuntimePreferences",
-] as const satisfies readonly (keyof IZCodeAgentService)[];
-
-// Non-chat conversation commands, configuration and attachments are not exposed.
-const nativeConversation = [
-	"compactSession",
-	"goalSession",
-	"closeSession",
-	"conversationPlansV4",
-	"conversationInputPredictionV4",
-	"conversationWorkflowRunEventsV4",
-	"conversationWorkflowRunsV4",
-	"conversationWorkflowRunArtifactsV4",
-	"conversationWorkflowRunArtifactDataV4",
-	"conversationWorkflowRunArtifactReadV4",
-	"conversationWorkflowRunWorkspaceV4",
-	"conversationWorkflowRunNodeResultV4",
-	"backgroundBashOutputV4",
-	"conversationFileChangesV4",
-	"conversationFileRewindPreviewV4",
-	"attachmentBeginV4",
-	"attachmentChunkV4",
-	"attachmentCommitV4",
-	"attachmentAbortV4",
-	"attachmentPreviewSourceV4",
-	"attachmentReadV4",
-	"conversationAttachmentReadV4",
-	"conversationAttachmentStatV4",
-	"controlOffPeakExecutionV4",
-	"subscribeWorkspaceConfigV4",
-	"resyncWorkspaceConfigV4",
-	"unsubscribeWorkspaceConfigV4",
-] as const satisfies readonly (keyof IZCodeAgentService)[];
-
-// Session creation, mutations and provider approvals are not part of browser chat.
-const nativeSessionMethods = [
-	"createSession",
-	"readSessionEvents",
-	"promoteDeferredDraftSession",
-	"closeSession",
-	"closeDeferredDraftSession",
-	"setModel",
-	"setThoughtLevel",
-	"setMode",
-	"respondProviderRuntimeHeaders",
-] as const satisfies readonly (keyof IZCodeSessionService)[];
-
 export function createAgentServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	const attachment = new BrowserAgentAttachment(context);
 	const initialize = (value: unknown): ZCodeAgentInitializeResult => {
@@ -781,9 +636,6 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 		createWebGuiService(
 			"zcode-agent",
 			{
-				...unavailableMethods("zcode-agent", nativeAgentReads),
-				...unavailableMethods("zcode-agent", nativeAgentConfiguration),
-				...unavailableMethods("zcode-agent", nativeConversation),
 				...reads,
 				prepareStorage: async value => {
 					attachment.runtime(value);
@@ -886,7 +738,6 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 			},
 		),
 		createWebGuiService("zcode-session", {
-			...unavailableMethods("zcode-session", nativeSessionMethods),
 			...reads,
 			initializeWorkspace: initialize,
 		}),

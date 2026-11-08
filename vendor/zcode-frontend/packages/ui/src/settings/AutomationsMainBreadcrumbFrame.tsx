@@ -12,12 +12,10 @@ import {
 export function AutomationsMainBreadcrumbFrame({
   ariaLabel,
   children,
-  isDesktop,
   sectionLabel,
 }: {
   ariaLabel: string;
   children: ReactNode;
-  isDesktop: boolean;
   sectionLabel: string;
 }) {
   const [items, setItems] = useState<readonly SettingsBreadcrumbItem[]>([]);
@@ -25,14 +23,11 @@ export function AutomationsMainBreadcrumbFrame({
   return (
     <SettingsBreadcrumbProvider onItemsChange={setItems} sectionLabel={sectionLabel}>
       <div className="flex min-h-0 flex-1 flex-col">
-        {isDesktop ? (
           <div
-            className="h-12 shrink-0 [app-region:drag]"
-            data-testid="automations-main-drag-region"
+            className="h-12 shrink-0"
           >
             <SettingsHeaderBreadcrumb ariaLabel={ariaLabel} items={items} />
           </div>
-        ) : null}
         {children}
       </div>
     </SettingsBreadcrumbProvider>

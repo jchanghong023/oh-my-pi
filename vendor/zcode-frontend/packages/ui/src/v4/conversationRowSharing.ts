@@ -59,13 +59,12 @@ export function shareStructure<T>(prev: unknown, next: T): T {
  */
 export class ConversationRowPool {
   private readonly rows = new Map<string, WeakRef<ConversationRow>>();
-  private readonly registry = new FinalizationRegistry<{
-    key: string;
-    ref: WeakRef<ConversationRow>;
-  }>(({ key, ref }) => {
-    // 只删仍指向已回收行的条目，避免误删同 key 后来登记的新行。
-    if (this.rows.get(key) === ref) this.rows.delete(key);
-  });
+  private readonly registry = typeof WeakRef === "function" && typeof FinalizationRegistry === "function"
+    ? new FinalizationRegistry<{ key: string; ref: WeakRef<ConversationRow> }>(({ key, ref }) => {
+        // 只删仍指向已回收行的条目，避免误删同 key 后来登记的新行。
+        if (this.rows.get(key) === ref) this.rows.delete(key);
+      })
+    : undefined;
 
   private key(topic: string, rowId: number): string {
     return `${topic}\u0000${rowId}`;
@@ -73,6 +72,8 @@ export class ConversationRowPool {
 
   /** 只登记不比较：流式 row.delta 的新字符串本来就是新的，逐帧深比较是纯开销。 */
   remember(topic: string, row: ConversationRow): void {
+    // Without weak references, skip this optional cache rather than retaining old conversations.
+    if (!this.registry) return;
     const key = this.key(topic, row.rowId);
     if (this.rows.get(key)?.deref() === row) return;
     const ref = new WeakRef(row);

@@ -7,9 +7,6 @@ import { StoreContext } from "@/store/StoreProvider.js";
 import { toTelemetryUiMode } from "@/lib/appTelemetry.js";
 import { ComposerSubmissionPendingContext } from "@/project-sidebar/index.js";
 /* oxlint-disable eslint(max-lines) -- composer 集中收口输入区 wiring（附件/草稿/历史/mention），拆分会打散收口粒度。 */
-import { useRemoteProjectReconnect } from "@/hooks/RemoteProjectPresentationContext.js";
-import { useOptionalRemoteWorkspaceController } from "@/remote/useRemoteWorkspaceController.js";
-import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import { useRemoteConversationAvailable } from "@/v4/RemoteConversationAvailability.js";
 import { getLocalTtftObserver } from "@/v4/telemetry/local-ttft/contract.js";
 import { formatConversationWorkDuration } from "@/v4/conversationWorkDuration.js";
@@ -181,18 +178,12 @@ import {
 } from "@/v4/composer/composerPromptContexts.js";
 import { useCodeCommentContexts } from "@/v4/composer/useCodeCommentContexts.js";
 import { useWebElementContexts } from "@/v4/composer/useWebElementContexts.js";
-import {
-  PluginUiModelContextChip,
-  usePluginUiContextImages,
-  usePluginUiModelContexts,
-} from "@/plugin-ui/index.js";
 import { usePptxElementReferences } from "@/v4/composer/usePptxElementReferences.js";
 import { PptxElementReferenceChip } from "@/v4/composer/PptxElementReferenceChip.js";
 import { useOpenPptxElementReference } from "@/v4/composer/useOpenPptxElementReference.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { useConversationSelectionReferences } from "@/v4/composer/useConversationSelectionReferences.js";
 import { ConversationBackgroundWorkTrigger } from "@/v4/composer/ConversationBackgroundWorkTrigger.js";
-import { V4ComposerCuaEntry } from "@/v4/composer/V4ComposerCuaEntry.js";
 import {
   V4ComposerModeSwitch,
   V4ComposerModelControls,
@@ -414,7 +405,6 @@ export interface ConversationComposerProps {
   sessionId?: string | null;
   /** Skill catalog authority；草稿预热完成后为 prewarmSessionId，不改变 task/draft 身份。 */
   skillCatalogSessionId?: string | null;
-  pluginUiSessionId?: string | null;
   /** draft 态无 snapshot，但仍可 createSession 首发。 */
   draftMode?: boolean;
   /** renderer 当前草稿配置意图；只在 draftMode 下覆盖迟到的 prewarm projection。 */
@@ -535,7 +525,6 @@ export interface ConversationComposerProps {
   onDismissError?: () => void;
   /** 无可用模型横幅的恢复动作；由 SessionPane 注入壳层导航，组件不直接操作 tab。 */
   onOpenModelSettings?: () => void;
-  onOpenModelUpgrade?: () => void;
   modelConfigTarget?: ChatErrorBannerModelConfigTarget;
   onOpenCodeViewer?: (source: CodeViewerSource) => void;
   /**
@@ -574,7 +563,6 @@ function ConversationComposerImpl({
   lifecycle,
   sessionId = null,
   skillCatalogSessionId = sessionId,
-  pluginUiSessionId = sessionId,
   draftMode = false,
   draftConfig,
   composerDraft,
@@ -631,7 +619,6 @@ function ConversationComposerImpl({
   error,
   onDismissError,
   onOpenModelSettings,
-  onOpenModelUpgrade,
   modelConfigTarget = "local",
   onOpenCodeViewer,
   listenAddToChatEvents = true,
@@ -644,16 +631,6 @@ function ConversationComposerImpl({
   onDropTargetControllerChange,
 }: ConversationComposerProps) {
   const remoteAvailable = useRemoteConversationAvailable();
-  const remoteController = useOptionalRemoteWorkspaceController();
-  const reconnectProject = useRemoteProjectReconnect();
-  const remoteKind = useOptionalTabStore((state) =>
-    state.tabs.find(
-      (tab) =>
-        tab.kind === "workspace" &&
-        (tab.workspaceIdentity?.trim() || tab.workspacePath) ===
-          (workspaceIdentity?.trim() || workspacePath),
-    ),
-  );
   const [targetSelectionPending, setTargetSelectionPending] = useState(false);
   const targetSelectionPendingRef = useRef(false);
   const updateTargetSelectionPending = useCallback((pending: boolean) => {
@@ -916,15 +893,6 @@ function ConversationComposerImpl({
     listenAddToChatEvents: listenAddToChatEvents && !disabled,
     scopeId: draftScopeId,
   });
-  // 插件 UI 经 ui/update-model-context 附加的上下文；按 sessionId 接收，随发送清空。
-  const {
-    contexts: pluginUiContexts,
-    hasContexts: hasPluginUiContexts,
-    removeContext: removePluginUiContext,
-    clearContexts: clearPluginUiContexts,
-  } = usePluginUiModelContexts({ sessionId: pluginUiSessionId, workspacePath, workspaceIdentity });
-  // 上下文里的 image 块 → 本 composer 的图片附件，随下一回合发送。
-  usePluginUiContextImages(pluginUiContexts, attachmentsApi);
   const {
     references: pptxElementReferences,
     hasReferences: hasPptxElementReferences,
@@ -1120,8 +1088,7 @@ function ConversationComposerImpl({
           codeCommentContexts.length > 0 ||
           webElementContexts.length > 0 ||
           pptxElementReferences.length > 0 ||
-          conversationSelectionReferences.length > 0 ||
-          pluginUiContexts.length > 0,
+          conversationSelectionReferences.length > 0,
         inputApi: inputApiRef.current,
         request: composerRestoreRequest,
         requestFocus: requestComposerFocus,
@@ -1163,7 +1130,6 @@ function ConversationComposerImpl({
     updateText,
     webElementContexts.length,
     pptxElementReferences.length,
-    pluginUiContexts.length,
     workspaceKey,
   ]);
 
@@ -1386,7 +1352,6 @@ function ConversationComposerImpl({
     hasWebElementContexts ||
     hasPptxElementReferences ||
     hasConversationSelectionReferences ||
-    hasPluginUiContexts ||
     Boolean(pendingShareContext);
   const hasComposerDraftContent =
     textPresence.raw ||
@@ -1395,7 +1360,6 @@ function ConversationComposerImpl({
     hasWebElementContexts ||
     hasPptxElementReferences ||
     hasConversationSelectionReferences ||
-    hasPluginUiContexts ||
     Boolean(pendingShareContext);
   useEffect(() => {
     onDraftStateChange?.({
@@ -1420,7 +1384,6 @@ function ConversationComposerImpl({
     !hasWebElementContexts &&
     !hasPptxElementReferences &&
     !hasConversationSelectionReferences &&
-    !hasPluginUiContexts &&
     !pendingShareContext;
   const canReload = recoveryAllowed && reloadText && remoteAvailable;
   const canSend =
@@ -1453,8 +1416,6 @@ function ConversationComposerImpl({
       const hasPendingCodeCommentContexts = currentCodeCommentContexts.length > 0;
       const currentWebElementContexts = webElementContexts;
       const hasPendingWebElementContexts = currentWebElementContexts.length > 0;
-      const currentPluginUiContexts = pluginUiContexts;
-      const hasPendingPluginUiContexts = currentPluginUiContexts.length > 0;
       const currentPptxElementReferences = pptxElementReferences;
       const hasPendingPptxElementReferences = currentPptxElementReferences.length > 0;
       const currentConversationSelections = conversationSelectionReferences;
@@ -1507,7 +1468,6 @@ function ConversationComposerImpl({
           !hasPendingWebElementContexts &&
           !hasPendingPptxElementReferences &&
           !hasPendingConversationSelections &&
-          !hasPendingPluginUiContexts &&
           !submittedShareContext) ||
         pendingRef.current ||
         targetSelectionPendingRef.current ||
@@ -1640,7 +1600,6 @@ function ConversationComposerImpl({
         attachmentsApi.clearAttachments(submittedAttachmentIds);
         currentCodeCommentContexts.forEach(removeCodeCommentContext);
         currentWebElementContexts.forEach((context) => removeWebElementContext(context.id));
-        currentPluginUiContexts.forEach((context) => removePluginUiContext(context.id));
         currentPptxElementReferences.forEach((reference) =>
           removePptxElementReference(reference.id),
         );
@@ -1718,7 +1677,6 @@ function ConversationComposerImpl({
           conversationSelections: [],
           webElements: currentWebElementContexts,
           pptxElements: currentPptxElementReferences,
-          pluginUiContexts: currentPluginUiContexts,
         });
         const contextAttachmentCount =
           countComposerPromptContexts({
@@ -1726,7 +1684,6 @@ function ConversationComposerImpl({
             conversationSelections: currentConversationSelections,
             webElements: currentWebElementContexts,
             pptxElements: currentPptxElementReferences,
-            pluginUiContexts: currentPluginUiContexts,
           }) + (submittedShareContext ? 1 : 0);
         if (trimmed) {
           promptHistoryBeforeSend = readPromptHistoryEntries(workspacePath);
@@ -1872,8 +1829,6 @@ function ConversationComposerImpl({
       removeConversationSelectionReference,
       removePptxElementReference,
       removeWebElementContext,
-      removePluginUiContext,
-      pluginUiContexts,
       sessionId,
       snapshotDraftOfEditor,
       updateText,
@@ -2140,8 +2095,7 @@ function ConversationComposerImpl({
       codeCommentContexts.length === 0 &&
       webElementContexts.length === 0 &&
       pptxElementReferences.length === 0 &&
-      conversationSelectionReferences.length === 0 &&
-      pluginUiContexts.length === 0
+      conversationSelectionReferences.length === 0
     ) {
       return null;
     }
@@ -2414,8 +2368,7 @@ function ConversationComposerImpl({
         {codeCommentContexts.length > 0 ||
         webElementContexts.length > 0 ||
         pptxElementReferences.length > 0 ||
-        conversationSelectionReferences.length > 0 ||
-        pluginUiContexts.length > 0 ? (
+        conversationSelectionReferences.length > 0 ? (
           <div
             className="flex max-w-full flex-wrap items-center gap-2"
             data-composer-context-attachments-row="true"
@@ -2429,11 +2382,6 @@ function ConversationComposerImpl({
               contexts={webElementContexts}
               onRemove={removeWebElementContext}
               onRemoveAll={clearWebElementContexts}
-            />
-            <PluginUiModelContextChip
-              contexts={pluginUiContexts}
-              onRemove={removePluginUiContext}
-              onRemoveAll={clearPluginUiContexts}
             />
             <PptxElementReferenceChip
               references={pptxElementReferences}
@@ -2456,7 +2404,6 @@ function ConversationComposerImpl({
     clearCodeCommentContexts,
     clearConversationSelectionReferences,
     clearWebElementContexts,
-    clearPluginUiContexts,
     clearPptxElementReferences,
     codeCommentContexts,
     composerAttachments,
@@ -2467,12 +2414,10 @@ function ConversationComposerImpl({
     removeCodeCommentContext,
     removeConversationSelectionReference,
     removeWebElementContext,
-    removePluginUiContext,
     removePptxElementReference,
     conversationSelectionReferences,
     pendingShareContext,
     webElementContexts,
-    pluginUiContexts,
     pptxElementReferences,
     onOpenCodeViewer,
     openPptxElementReference,
@@ -2637,7 +2582,7 @@ function ConversationComposerImpl({
     ],
   );
 
-  // 左下：模式选择 + CUA 入口 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
+  // 左下：模式选择 + 当前 session 后台任务入口。followupMode 由 app 设置页同步到 CLI，
   // 不在 composer 暴露局部开关；后台入口只消费同一 snapshot，不维护第二份任务状态。
   const leadingActionsNode = useMemo(
     () => (
@@ -2675,15 +2620,6 @@ function ConversationComposerImpl({
             admission={snapshot.workspaceMcpAdmission}
           />
         ) : null}
-        {/* Bug 原因：附件画廊 rebase 曾整段覆盖 leadingActions，误删 staging 的 CUA 常驻入口。
-            入口自身继续负责平台、远程与设置可见性，不在 composer 重复判定。 */}
-        <V4ComposerCuaEntry
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          remoteSessionId={remoteSessionId}
-          isWebRemoteControl={isWebRemoteControl}
-          currentSessionBusy={canStop}
-        />
         <ConversationBackgroundWorkTrigger
           backgroundWorks={snapshot?.backgroundWorks ?? []}
           runningSubagentCount={runningSubagentCount}
@@ -2694,18 +2630,15 @@ function ConversationComposerImpl({
     ),
     [
       activeConfigPicker,
-      canStop,
       disabled,
       runtimeBlocked,
       nativeChatSurface,
       draftConfig,
       handleConfigPickerOpenChange,
-      isWebRemoteControl,
       backgroundWorkOpenTarget,
       onOpenRunningBackgroundWorks,
       onSwitchMode,
       provider,
-      remoteSessionId,
       runningSubagentCount,
       sessionId,
       snapshot?.workspaceHookAdmission,
@@ -2753,25 +2686,9 @@ function ConversationComposerImpl({
         <div className="mb-6 w-full shrink-0">
           <ChatErrorBanner
             error={visibleError}
-            remoteKind={
-              remoteKind?.kind === "workspace" ? remoteKind.remoteTarget?.kind : undefined
-            }
-            onReconnect={
-              reconnectProject || remoteController
-                ? () => {
-                    const request = reconnectProject
-                      ? reconnectProject(workspaceKey)
-                      : remoteController?.dispatch({ type: "reconnect-workspace", workspaceKey });
-                    void request?.catch((error: unknown) =>
-                      logger.warn("[v4-composer] 项目重连失败", { error }),
-                    );
-                  }
-                : undefined
-            }
             onRetry={onRetryError}
             onDismiss={onDismissError}
             onOpenModelSettings={onOpenModelSettings}
-            onOpenUpgrade={onOpenModelUpgrade}
             modelConfigTarget={modelConfigTarget}
           />
         </div>
@@ -2859,8 +2776,7 @@ function ConversationComposerImpl({
             hasAttachments ||
             hasWebElementContexts ||
             hasPptxElementReferences ||
-            hasConversationSelectionReferences ||
-            hasPluginUiContexts
+            hasConversationSelectionReferences
           }
           enterSubmits={enterSubmits}
           onModifiedSubmit={modifiedEnterSubmits ? handleModifiedEditorSubmit : undefined}

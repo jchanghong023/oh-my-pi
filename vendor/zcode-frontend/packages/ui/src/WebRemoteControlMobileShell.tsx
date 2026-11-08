@@ -4,10 +4,6 @@ import { type WebRemoteControlMobileNavigationIntent } from "@zcode/shared";
 import { Button } from "@/components/ui/button.js";
 import { WebRemoteControlThemeMenu } from "@/WebRemoteControlThemeMenu.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { WebRemoteControlTaskViewReporter } from "@/web-remote-control/index.js";
-import type { WebRemoteControlTerminalTransportState } from "@/root/types.js";
-import type { WebRemoteControlWorkspaceSwitcherApi } from "@/root/types.js";
-import { useWebRemoteControlTerminalTransportState } from "@/webRemoteControlTerminalTransportState.js";
 
 type WebRemoteControlMobilePage = "home" | "chat";
 
@@ -56,40 +52,12 @@ function resolveInitialWebRemoteControlMobilePage(
   return "home";
 }
 
-function WebRemoteControlReconnectNotice({
-  serverSnapshot,
-}: {
-  serverSnapshot?: WebRemoteControlTerminalTransportState;
-}) {
-  const { intl } = useZCodeIntl();
-  const terminalTransportState = useWebRemoteControlTerminalTransportState(serverSnapshot);
-  if (terminalTransportState !== "reconnecting") return null;
-
-  return (
-    <div
-      className="pointer-events-none absolute top-3 left-1/2 z-50 flex -translate-x-1/2 justify-center px-3"
-      aria-live="polite"
-      aria-busy="true"
-      data-web-remote-control-reconnect-notice="true"
-    >
-      <div className="flex max-w-[calc(100vw-1.5rem)] items-center gap-2 rounded-lg border border-border bg-toast px-3 py-2 text-ui-base text-foreground shadow-lg">
-        <LoaderIcon className="size-4 shrink-0 animate-spin text-foreground-subtle" />
-        <span className="min-w-0 whitespace-nowrap">
-          {intl.formatMessage({ id: "webRemoteControl.mobileShell.reconnecting" })}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 export function WebRemoteControlMobileShell({
   children,
   isMobileViewport = true,
   isWorkspaceVisible = true,
   activeTaskId,
-  activeWorkspaceIdentity,
-  activeWorkspacePath,
-  taskViewEnabled = true,
   chatContent,
   chatOverlay,
   initialNavigationIntent,
@@ -98,17 +66,11 @@ export function WebRemoteControlMobileShell({
   renderTaskHome,
   renderChatHeader,
   sidePaneContent,
-  switcher,
-  webRemoteControlTerminalTransportState,
 }: {
   children?: ReactNode;
   isMobileViewport?: boolean;
   isWorkspaceVisible?: boolean;
-  switcher?: WebRemoteControlWorkspaceSwitcherApi;
-  activeWorkspacePath: string;
-  activeWorkspaceIdentity?: string;
   activeTaskId: string | null;
-  taskViewEnabled?: boolean;
   initialNavigationIntent?: WebRemoteControlMobileNavigationIntent;
   isSidePaneOpen?: boolean;
   onCloseSidePane?: () => void;
@@ -120,7 +82,6 @@ export function WebRemoteControlMobileShell({
   chatContent: ReactNode;
   chatOverlay?: ReactNode;
   sidePaneContent?: ReactNode;
-  webRemoteControlTerminalTransportState?: WebRemoteControlTerminalTransportState;
 }) {
   const { intl } = useZCodeIntl();
   const [currentPage, setCurrentPage] = useState<WebRemoteControlMobilePage>(() =>
@@ -152,23 +113,22 @@ export function WebRemoteControlMobileShell({
   }, [initialNavigationIntent]);
 
   useEffect(() => {
-    // Direct-browser workspace tabs can stay mounted while hidden. Consume the shared
-    // browser navigation when a task/draft activates another tab, without a remote switcher.
+    // Browser workspace tabs can stay mounted while hidden. Consume the shared
+    // navigation when a task or draft activates another tab.
     if (
-      !switcher &&
       isWorkspaceVisible &&
       typeof window !== "undefined" &&
       isWebRemoteControlMobileChatHistoryState(window.history.state)
     ) {
       setCurrentPage("chat");
     }
-  }, [activeTaskId, isWorkspaceVisible, switcher]);
+  }, [activeTaskId, isWorkspaceVisible]);
 
   useEffect(() => {
-    if (isMobileViewport && currentPage === "chat" && (switcher || isWorkspaceVisible)) {
+    if (isMobileViewport && currentPage === "chat" && isWorkspaceVisible) {
       pushWebRemoteControlMobileChatHistory();
     }
-  }, [isMobileViewport, currentPage, isWorkspaceVisible, switcher]);
+  }, [isMobileViewport, currentPage, isWorkspaceVisible]);
 
   useEffect(() => {
     if (!isMobileViewport || typeof window === "undefined") {
@@ -191,19 +151,6 @@ export function WebRemoteControlMobileShell({
   // 让 subagent 输出、进程面板和正文在抽屉内换行。
   return (
     <>
-      {switcher ? (
-        <WebRemoteControlTaskViewReporter
-          enabled={
-            taskViewEnabled &&
-            (!isMobileViewport ||
-              (currentPage === "chat" && !shouldInertChatSurface && !switchingWorkspace))
-          }
-          activeTaskId={activeTaskId}
-          workspacePath={activeWorkspacePath}
-          workspaceIdentity={activeWorkspaceIdentity}
-          switcher={switcher}
-        />
-      ) : null}
       {isMobileViewport ? (
         <div className="relative flex h-full min-h-0 min-w-0 flex-col bg-background">
           {currentPage === "home" ? (
@@ -299,11 +246,6 @@ export function WebRemoteControlMobileShell({
                 {intl.formatMessage({ id: "common.loading" })}
               </div>
             </div>
-          ) : null}
-          {switcher ? (
-            <WebRemoteControlReconnectNotice
-              serverSnapshot={webRemoteControlTerminalTransportState}
-            />
           ) : null}
         </div>
       ) : (

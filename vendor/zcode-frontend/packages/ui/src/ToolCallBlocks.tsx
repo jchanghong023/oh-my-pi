@@ -15,7 +15,6 @@ import {
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { CuaGroupToolCallBlock } from "@/ToolCallBlocks/renderers/cua-group.js";
 import { resolveToolCallRenderer } from "@/ToolCallBlocks/resolveRenderer.js";
-import * as PluginUi from "@/plugin-ui/index.js";
 import { resolveToolCallIdentity } from "@/lib/toolIdentity.js";
 import {
   readRawToolCallFileSummaries,
@@ -86,7 +85,6 @@ function ToolCallBlockComponent({
   onOpenBrowserUrl,
   onOpenAutomationsMain,
   onOpenPlanDetail,
-  pluginUi: providedPluginUi,
   onOpenWorkflowRun,
   onResumeWorkflowRun,
   onOpenWorkflowActor,
@@ -121,7 +119,6 @@ function ToolCallBlockComponent({
   onOpenBrowserUrl?: (url: string) => void;
   onOpenAutomationsMain?: (automationId?: string) => void;
   onOpenPlanDetail?: ToolCallBlockRenderContext["onOpenPlanDetail"];
-  pluginUi?: ToolCallBlockRenderContext["pluginUi"];
   onOpenWorkflowRun?: ToolCallBlockRenderContext["onOpenWorkflowRun"];
   /** 工具卡页脚的 Resume；与 workflowRun 同样不向子工具卡透传。 */
   onResumeWorkflowRun?: ToolCallBlockRenderContext["onResumeWorkflowRun"];
@@ -157,8 +154,6 @@ function ToolCallBlockComponent({
   ) => ReactNode;
 }) {
   const presentationCapabilities = useToolPresentationHostCapabilities(workspacePath);
-  const inheritedPluginUi = PluginUi.usePluginUiToolBinding(toolCallNode.toolCall.toolId);
-  const pluginUi = providedPluginUi ?? inheritedPluginUi;
   const { toolCall, childToolCalls } = toolCallNode;
   const { intl } = useZCodeIntl();
   const isOfficeMode = useIsOfficeMode();
@@ -321,7 +316,6 @@ function ToolCallBlockComponent({
       onOpenBrowserUrl,
       onOpenAutomationsMain,
       onOpenPlanDetail,
-      pluginUi,
       // onOpenWorkflowRun 之前只被透传给子工具卡，从未进过 renderContext，
       // 于是 CreateWorkflow renderer 永远收不到它——「打开详情页」的入口不是被埋深了，
       // 是根本没渲染过。run 态紧凑卡就挂在这个回调上，所以它必须在这里。
@@ -350,7 +344,6 @@ function ToolCallBlockComponent({
       onOpenAutomationsMain,
       onOpenBrowserUrl,
       onOpenPlanDetail,
-      pluginUi,
       onOpenWorkflowRun,
       onResumeWorkflowRun,
       onOpenWorkflowActor,
@@ -372,12 +365,7 @@ function ToolCallBlockComponent({
     ],
   );
 
-  const ToolCallRenderer = useMemo(() => {
-    const Renderer = resolveToolCallRenderer(renderContext);
-    // 插件声明与 session 绑定已由宿主校验，不能再用通用 renderer 身份截断入口。
-    // 没有合法插件声明时仍保持共同注册表的专用工具优先级。
-    return PluginUi.shouldRenderPluginUi(renderContext) ? PluginUi.PluginUiToolCallBlock : Renderer;
-  }, [renderContext]);
+  const ToolCallRenderer = useMemo(() => resolveToolCallRenderer(renderContext), [renderContext]);
   // early return 必须在所有 hook 之后（见上方注释说明的崩溃原因）
   if (!showTodoToolCalls && identity.family === "todo") {
     return null;

@@ -1,10 +1,8 @@
-/* oxlint-disable eslint(max-lines) -- 侧栏 Tab trigger 集中维护拖拽、上下文菜单与各类图标；本次只增加 Browser 驻留态测试属性，不为行数拆散既有交互。 */
 import { useRef, type CSSProperties } from "react";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import {
   FolderOpenIcon,
-  PuzzleIcon,
   BotIcon,
   BotMessageSquareIcon,
   BugIcon,
@@ -14,11 +12,9 @@ import {
   MapIcon,
   MessageSquareTextIcon,
   ListTreeIcon,
-  PlugIcon,
   NotepadTextIcon,
   PackageIcon,
   PaletteIcon,
-  ShieldCheckIcon,
   SquareTerminalIcon,
   TerminalIcon,
   WaypointsIcon,
@@ -36,8 +32,6 @@ import { TabsTrigger } from "@/components/ui/tabs.js";
 import { FileDisplayIcon, resolveFileDisplayDescriptor } from "@/lib/fileDisplay.js";
 import type { WorkspaceSidePaneTab } from "@/lib/workspaceSidePane.js";
 import { Button } from "@/components/ui/button.js";
-import { BrowserUseTabIcon } from "@/app-shell/BrowserUseTabIcon.js";
-import { BrowserTabFavicon } from "@/app-shell/BrowserTabFavicon.js";
 import { SidePaneTabTitleTooltip } from "@/app-shell/SidePaneTabTitleTooltip.js";
 
 // tab 默认按 156px 等宽排列；空间不足时以相同 grow/shrink 参数平均收缩到 60px，
@@ -101,7 +95,6 @@ export function SortableSidePaneTabTrigger({
       <div
         ref={setNodeRef}
         data-side-pane-tab-id={tab.id}
-        data-browser-tab-residency={"residency" in tab ? tab.residency : undefined}
         data-active={isActive ? "" : undefined}
         data-state={isActive ? "active" : "inactive"}
         style={style}
@@ -276,9 +269,6 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
   if (tab.type === "plan-detail") {
     return <NotepadTextIcon className="size-3.5" />;
   }
-  if (tab.type === "plugin-ui") {
-    return <PlugIcon className="size-3.5" />;
-  }
   // 同一条约定：来源卡片（CreateWorkflow）用 lucide Workflow，tab 必须与它一致。
   if (tab.type === "workflow-run") {
     return <WorkflowIcon className="size-3.5" />;
@@ -313,14 +303,6 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
     return <ListTreeIcon className="size-3.5" />;
   }
 
-  if (tab.type === "browser") {
-    return <BrowserTabFavicon faviconUrl={tab.faviconUrl} />;
-  }
-
-  if (tab.type === "browser-permissions") {
-    return <ShieldCheckIcon className="size-3.5" />;
-  }
-
   if (tab.type === "git") {
     return <FileDiffIcon className="size-3.5" />;
   }
@@ -338,7 +320,6 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
   }
 
   if (tab.type === "new-tab") return <FileIcon className="size-3.5" />;
-  if (tab.type === "plugin-market") return <PuzzleIcon className="size-3.5" />;
 
   if (tab.type === "developer-tools") {
     return <BugIcon className="size-3.5" />;
@@ -347,15 +328,6 @@ export function SidePaneTabIcon({ tab }: { tab: WorkspaceSidePaneTab }) {
   if (tab.type === "terminal" || tab.type === "bash-output") {
     return <SquareTerminalIcon className="size-3.5" />;
   }
-
-  // 同 getSidePaneTabTitle——browser-use tab 无 source，若不在此拦截会 fallthrough
-  // 到下方 `tab.source.type` 读 undefined.type 崩溃。
-  // agent 导航后由 <webview> favicon 事件回填 faviconUrl，与 human browser tab 一致地展示真实图标；
-  // 缺省（about:blank/未取到）回退地球图标。
-  if (tab.type === "browser-use") {
-    return <BrowserUseTabIcon tab={tab} />;
-  }
-
   if (tab.source.type === "patch") {
     const fileDisplayTarget = getPatchFileDisplayTarget(tab.source);
     if (fileDisplayTarget) {
@@ -526,16 +498,6 @@ export function getSidePaneTabTitle(
   if (tab.type === "subagent-directory") {
     return formatMessage({ id: "sidePane.subagentDirectory" });
   }
-
-  if (tab.type === "browser") {
-    const pageTitle = tab.title?.trim();
-    return pageTitle || formatMessage({ id: "browser.title" });
-  }
-
-  if (tab.type === "browser-permissions") {
-    return formatMessage({ id: "browser.permission.settings" });
-  }
-
   if (tab.type === "git") {
     return formatMessage({ id: "sidePane.review" });
   }
@@ -553,7 +515,6 @@ export function getSidePaneTabTitle(
   }
 
   if (tab.type === "new-tab") return formatMessage({ id: "sidePane.newTab" });
-  if (tab.type === "plugin-market") return formatMessage({ id: "workspace.openPluginsSettings" });
 
   if (tab.type === "developer-tools") {
     return formatMessage({ id: "developerTools.title" });
@@ -562,18 +523,6 @@ export function getSidePaneTabTitle(
   if (tab.type === "terminal" || tab.type === "bash-output") {
     return tab.title || formatMessage({ id: "terminal.title" });
   }
-
-  // browser-use tab 之前未在此分派，会 fallthrough 到底部 `tab.source.title`，
-  // 而 browser-use tab 无 source 字段 → 读 undefined.title 触发 React 崩溃（整棵 workspace 子树挂掉）。
-  // 用页面标题（agent 导航后由 getState 回填），缺省复用 browser.title 文案。
-  if (tab.type === "browser-use") {
-    return tab.title?.trim() || formatMessage({ id: "browser.title" });
-  }
-
-  if (tab.type === "plugin-ui") {
-    return tab.title.trim() || formatMessage({ id: "sidePane.pluginUi" });
-  }
-
   if (tab.type === "file-manager")
     return tab.source?.title || formatMessage({ id: "fileManager.title" });
   return tab.source.title || formatMessage({ id: "codeViewer.title" });

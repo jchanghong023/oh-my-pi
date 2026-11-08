@@ -87,9 +87,6 @@ function Pane({ service, session }: { service: IUsageStatsService; session: stri
           state={banner.state}
           onShown={banner.markShown}
           onDismiss={banner.dismiss}
-          onUpgrade={() => {
-            document.body.dataset.upgraded = "true";
-          }}
         />
       ) : null}
     </section>

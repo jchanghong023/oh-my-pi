@@ -144,9 +144,7 @@ export interface ProjectSidebarProps {
   onOpenRepoWiki?: () => void;
   repoWikiActive?: boolean;
   onOpenAutomations?: () => void;
-  onOpenPluginStore?: () => void;
   automationsActive?: boolean;
-  pluginStoreActive?: boolean;
   onFileTreeOpenChange?: (open: boolean) => void;
   onWebRemoteTaskOpen?: (options: { crossWorkspace: boolean }) => void;
   onWebRemoteTaskSwitchingChange?: (switching: boolean) => void;

@@ -12,7 +12,5 @@ export const conversationWorkspaceTargetModule = {
     "purpose.ts",
     "sourceIdentity.ts",
     "workbenchTarget.ts",
-    "usePluginCreator.ts",
-    "PluginAddMenu.tsx",
   ],
 } as const;

@@ -33,7 +33,6 @@ import {
   AUTOMATION_CONFIRM_DIALOG_CONTENT_CLASS,
   AUTOMATION_CONFIRM_DIALOG_DESCRIPTION_CLASS,
 } from "@/settings/automationConfirmDialogPresentation.js";
-import { SourceServerBoundaryDialogContent } from "@/remote/SourceServerBoundaryDialogContent.js";
 
 export function ConfirmDialogHost() {
   const { intl } = useZCodeIntl();
@@ -64,7 +63,6 @@ export function ConfirmDialogHost() {
     checkboxSelection.request === displayedRequest && checkboxSelection.checked;
   const open = Boolean(pendingRequest);
   const isAutomationConfirmation = displayedRequest?.presentation === "automation-confirmation";
-  const isSourceServerBoundary = displayedRequest?.presentation === "source-server-boundary";
   const isYoloConfirmation = displayedRequest?.presentation === "yolo-confirmation";
   const confirmLabel =
     displayedRequest?.confirmLabel ?? intl.formatMessage({ id: "common.confirm" });
@@ -199,28 +197,6 @@ export function ConfirmDialogHost() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    );
-  }
-
-  if (isSourceServerBoundary) {
-    return (
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent
-          data-confirm-intent={displayedRequest?.intent}
-          data-testid="source-server-boundary-dialog"
-          showCloseButton={false}
-          // Bug 原因：continuity dialog 曾用 bg-popover/98 组件级拼接 alpha，主题表面 token 因而无法统一维护。
-          // 直接使用完整的 popover surface，保留对话框层级和专用 continuity panel。
-          className="gap-0 overflow-hidden rounded-2xl border-none bg-popover p-0 ring-border shadow-2xl sm:max-w-xl"
-        >
-          <SourceServerBoundaryDialogContent
-            title={displayedRequest?.title}
-            description={displayedRequest?.description}
-            confirmLabel={confirmLabel}
-            onConfirm={handleConfirm}
-          />
-        </DialogContent>
-      </Dialog>
     );
   }
 

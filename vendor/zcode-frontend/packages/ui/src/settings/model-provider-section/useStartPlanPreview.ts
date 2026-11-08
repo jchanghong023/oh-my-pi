@@ -2,7 +2,7 @@ import type { StartPlanPreviewConfig } from "@zcode/shared";
 import { useCallback, useEffect, useState } from "react";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
-import { normalizeErrorMessage as normalizeCodingPlanErrorMessage } from "@/settings/model-provider-section/useCodingPlanProducts.js";
+import { normalizeErrorMessage as normalizeCodingPlanErrorMessage } from "@/settings/model-provider-section/utils.js";
 
 interface StartPlanPreviewState {
   preview: StartPlanPreviewConfig | null;
@@ -57,7 +57,7 @@ export function useStartPlanPreview(options?: { enabled?: boolean }) {
       });
     } catch (error) {
       // Start Plan preview 和套餐列表共用 client/configs。
-      // 远端返回 HTML/非 JSON 时也不能把解析错误原样显示到升级面板。
+      // 远端返回 HTML/非 JSON 时也不能把解析错误原样显示给用户。
       const message = normalizeCodingPlanErrorMessage(error);
       logger.warn("[useStartPlanPreview] 读取 Start Plan 预览失败", {
         error: message,

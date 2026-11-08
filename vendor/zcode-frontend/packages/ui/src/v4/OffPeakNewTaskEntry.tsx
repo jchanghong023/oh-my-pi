@@ -1,10 +1,9 @@
-import { useCodingPlanEntryGate } from "@/settings/CodingPlanEntryButton.js";
 /* New task 页闲时任务入口（Figma ⚫️ Z.ai - Zcode / node 5488-3978；spec §5「模板」/ D30-4 第二入口）。
    引导横幅「Use free run Idle-time task」+ Client Scenes 模板卡（预填创建表单，Customize=空白）。
    灰度未命中不渲染（D31）；横幅可关闭（本会话内，D28「关闭后下次登录/重启再开」→ session 级）。
    点击卡片：暂存预填草稿 → 打开 Automations 主视图（idle tab）创建表单消费草稿。
    入口位于草稿页底部固定区（距底 38px），模板恢复为桌面三列横排、窄屏单列；
-   业务逻辑（灰度、Coding Plan 判定、Upgrade Toast、草稿预填、埋点）保持不变。 */
+   业务逻辑（灰度、Coding Plan 判定、资格提示、草稿预填、埋点）保持不变。 */
 import { BUILTIN_MODEL_PROVIDER_IDS } from "@zcode/shared";
 import { Megaphone, Moon, X } from "lucide-react";
 import { ClientSceneLucideIcon } from "@/components/ClientSceneLucideIcon.js";
@@ -22,17 +21,12 @@ import { useServices } from "@/hooks/useServices.js";
 import { useSettings } from "@/hooks/useSettingService.js";
 import { logger } from "@/logger.js";
 import {
-  createIdleTimeCodingPlanFunnelContext,
-  resolveCodingPlanEntryPlanStateFromProviderSettings,
-} from "@/lib/codingPlanFunnelTelemetry.js";
-import {
   appendLocalCustomizeTemplate,
   materializeOffPeakTemplateDraft,
   resolveOffPeakTemplateText,
   type OffPeakAutomationTemplate,
 } from "@/settings/automationTemplateCatalog.js";
 import { useAutomationTemplates } from "@/settings/useAutomationTemplates.js";
-import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useOffPeakTaskStore, type OffPeakCreateDraft } from "@/store/offPeakTaskStore.js";
 import { useMemo } from "react";
 
@@ -54,8 +48,6 @@ export function OffPeakNewTaskEntry({ onOpenAutomations }: OffPeakNewTaskEntryPr
   const providerSettingsView =
     providerSettingsRead.state.status === "ready" ? providerSettingsRead.state.view : null;
   useOffPeakEligibility(sharedSettings, providerSettingsView?.revision);
-  const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
-  const entryGate = useCodingPlanEntryGate();
   const grayConfig = useOffPeakTaskStore((state) => state.grayConfig);
   const dismissed = useOffPeakTaskStore((state) => state.newTaskBannerDismissed);
   const dismiss = useOffPeakTaskStore((state) => state.dismissNewTaskBanner);
@@ -64,48 +56,26 @@ export function OffPeakNewTaskEntry({ onOpenAutomations }: OffPeakNewTaskEntryPr
   // 灰度未命中 / 用户已关闭 → 不渲染（D31 曝光门控 + D28 可关闭）。
   if (grayConfig?.enabled !== true || dismissed) return null;
 
-  const entryPlanState = resolveCodingPlanEntryPlanStateFromProviderSettings(providerSettingsView);
+  const hasCodingPlan = providerSettingsView?.providers.some(
+    ({ providerId, effectiveConfig }) =>
+      effectiveConfig.access?.type === "zhipu-account" &&
+      effectiveConfig.access.entitled === true &&
+      (providerId === BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan ||
+        providerId === BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan ||
+        providerId === BUILTIN_MODEL_PROVIDER_IDS.zaiTeamCodingPlan ||
+        providerId === BUILTIN_MODEL_PROVIDER_IDS.bigmodelTeamCodingPlan),
+  );
   const codingPlanUnavailable =
     grayConfig.codingPlanActive === false ||
     (grayConfig.codingPlanActive === undefined &&
       providerSettingsView !== null &&
-      entryPlanState.entryPlanStatus !== "coding_plan");
+      !hasCodingPlan);
 
   const showCodingPlanRequiredToast = () => {
-    toast(entryGate.label ?? intl.formatMessage({ id: "offPeak.create.codingPlanToast" }), {
+    toast(intl.formatMessage({ id: "offPeak.create.codingPlanToast" }), {
       durationMs: 8000,
       position: "top-center",
       variant: "info",
-      actionLabel:
-        entryGate.status === "loading"
-          ? undefined
-          : (entryGate.label ??
-            intl.formatMessage({
-              id: "settings.modelProvider.codingPlan.upgrade",
-            })),
-      onAction:
-        entryGate.status === "error"
-          ? entryGate.retry
-          : () => {
-              const providerId =
-                sharedSettings?.providerFamilyDomain === "bigmodel"
-                  ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-                  : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-              const eventText = intl.formatMessage({
-                id: "settings.modelProvider.codingPlan.upgrade",
-              });
-              // 埋点缺失原因：闲时入口此前只传 providerId，购买面板无法建立来源明确的漏斗，
-              // OAuth 前后也没有可延续的归因上下文。点击时冻结一次 context，由全局弹窗跨登录持有。
-              codingPlanUpgradeDialog?.openCodingPlanUpgrade({
-                providerId,
-                initialAudience: "personal",
-                funnelContext: createIdleTimeCodingPlanFunnelContext({
-                  providerId,
-                  eventText,
-                  entryPlanState,
-                }),
-              });
-            },
       dismissible: true,
       dismissLabel: intl.formatMessage({ id: "common.close" }),
     });

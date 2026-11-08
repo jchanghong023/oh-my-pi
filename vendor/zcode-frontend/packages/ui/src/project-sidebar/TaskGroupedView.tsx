@@ -308,7 +308,6 @@ export function TaskGroupedView({
       isActive:
         buildTaskWorkspaceKey(workspacePath, workspaceIdentity) === key &&
         activeTaskId === task.taskId,
-      isMobileActive: presentation.mobileActiveTaskKey === `${key}:${task.taskId}`,
     };
   };
   const [stickyId, setStickyId] = useState<string | null>(null);
@@ -464,7 +463,6 @@ export function TaskGroupedView({
                     activeWorkspacePath={workspacePath}
                     activeWorkspaceIdentity={workspaceIdentity}
                     activeTaskId={activeTaskId}
-                    mobileActiveTaskKey={presentation.mobileActiveTaskKey}
                     node={node}
                     getTaskRemoteSessionId={getTaskRemoteSessionId}
                     getTaskWorkspaceLabel={getWorkspaceLabel}

@@ -39,7 +39,7 @@ export interface ProjectRemovalOptions {
   deleteData?: { totalBytes?: number };
 }
 
-/** 数据只在本机删除：远程项目的数据在其设备上，入口移除也不涉及数据。 */
+/** Only project soft-deletion can be combined with local data removal. */
 export const isProjectDataCandidate = (row: ProjectManagementRow) =>
   row.removal === "delete" && row.project.hostId === "local";
 
@@ -274,7 +274,7 @@ export function useProjectManagement() {
             () => purge(purgeFailed),
           );
         if (!removed.length) return;
-        // 不带撤销：本机项目已无法恢复，只撤销远程入口会误导。
+        // Data deletion is irreversible, so this result deliberately has no undo action.
         return () =>
           resultToast(
             formatCountMessage(intl, "projectManagement.data.removedToast", removed.length, {

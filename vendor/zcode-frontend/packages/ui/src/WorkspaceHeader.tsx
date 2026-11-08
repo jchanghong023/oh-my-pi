@@ -4,7 +4,6 @@ import type {
   ZCodeTaskChangeSummary,
   EditorInfo,
   GitRepositorySummary,
-  RemoteTarget,
   UserInfo,
 } from "@zcode/shared";
 import { useState } from "react";
@@ -19,26 +18,15 @@ import {
 import type { WorkspaceHeaderVariant } from "@/WorkspaceHeaderSections/shared.js";
 
 /**
- * 侧栏收起时左上角浮层（侧栏开关、前进后退、新建、更新）盖在内容区顶栏上，顶栏需要让出的左侧留白。
+ * 侧栏收起时左上角浮层（侧栏开关、前进后退、新建）盖在内容区顶栏上，顶栏需要让出的左侧留白。
  * WorkspaceHeader 与 Side Pane 完整视图的 tab 栏共用这一规则。
  */
 export function resolveTopOverlayLeadingPaddingClass({
   isSidebarVisible,
-  isMacDesktop,
-  isMacFullscreen,
-  hasUpdateReady,
 }: {
   isSidebarVisible: boolean;
-  isMacDesktop?: boolean;
-  isMacFullscreen?: boolean;
-  hasUpdateReady?: boolean;
 }): string | false {
-  if (isSidebarVisible) return false;
-  if (isMacDesktop) {
-    if (hasUpdateReady) return isMacFullscreen ? "pl-48" : "pl-66";
-    return isMacFullscreen ? "pl-38" : "pl-58";
-  }
-  return hasUpdateReady ? "pl-44" : "pl-38";
+  return !isSidebarVisible && "pl-38";
 }
 
 export function WorkspaceHeader({
@@ -50,12 +38,9 @@ export function WorkspaceHeader({
   workspaceAbsPath,
   remoteSessionId,
   workspaceIdentity,
-  remoteTarget,
-  localWorkspacePath,
   projectName,
   activeTaskTitle,
   activeTaskChangeSummary,
-  hasUpdateReady,
   activeTaskId,
   user,
   activeTraceId,
@@ -73,13 +58,7 @@ export function WorkspaceHeader({
   workspaceHeaderState,
   gitSummary,
   gitDirtyFileCount,
-  isMacDesktop,
-  isMacFullscreen,
-  isWindowsDesktop,
-  isWebRemoteControl = false,
-
-  isDesktop,
-  simplifyForNarrowRemote = false,
+  simplifyForNarrowViewport = false,
   isSidebarVisible,
   isTerminalOpen,
   isSidePaneOpen,
@@ -98,12 +77,9 @@ export function WorkspaceHeader({
   workspaceAbsPath: string;
   remoteSessionId?: string;
   workspaceIdentity?: string;
-  remoteTarget?: RemoteTarget;
-  localWorkspacePath?: string;
   projectName: string;
   activeTaskTitle: string;
   activeTaskChangeSummary?: ZCodeTaskChangeSummary | null;
-  hasUpdateReady: boolean;
   activeTaskId: string | null;
   user?: UserInfo | null;
   activeTraceId: string | null;
@@ -121,20 +97,12 @@ export function WorkspaceHeader({
   workspaceHeaderState: WorkspaceHeaderState;
   gitSummary: GitRepositorySummary;
   gitDirtyFileCount: number;
-  isMacDesktop?: boolean;
-  isMacFullscreen?: boolean;
-  isWindowsDesktop?: boolean;
-  reserveWindowControls?: boolean;
-  isWebRemoteControl?: boolean;
-  windowsWindowControlsRightPaddingPx?: number;
-  isDesktop?: boolean;
-  simplifyForNarrowRemote?: boolean;
+  simplifyForNarrowViewport?: boolean;
   isSidebarVisible: boolean;
   isTerminalOpen: boolean;
   isSidePaneOpen: boolean;
   onRefreshGit: () => void;
   onToggleTerminal: () => void;
-  onToggleBrowser: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onReloadSession: (options?: {
@@ -148,13 +116,8 @@ export function WorkspaceHeader({
   allowOpenWorkspace?: boolean;
 }) {
   const [selectedEditor, setSelectedEditor] = useState<EditorInfo | null>(null);
-  // Linux 与 Windows 共用内联窗控，不再预留旧悬浮窗控的标题栏区域。
-  const usesInlineWindowControls = Boolean(isWindowsDesktop || (isDesktop && !isMacDesktop));
-  const headerWindowControlsPaddingClass = resolveTopOverlayLeadingPaddingClass({
+  const headerLeadingPaddingClass = resolveTopOverlayLeadingPaddingClass({
     isSidebarVisible,
-    isMacDesktop,
-    isMacFullscreen,
-    hasUpdateReady,
   });
 
   return (
@@ -168,7 +131,7 @@ export function WorkspaceHeader({
     >
       {variant === "draft" && draftDropTargetController?.active ? (
         <div
-          className="absolute inset-0 z-40 bg-accent/55 backdrop-blur-sm pointer-events-auto [app-region:no-drag]"
+          className="absolute inset-0 z-40 bg-accent/55 backdrop-blur-sm pointer-events-auto"
           data-testid="new-task-draft-drop-mask"
           onDragOver={draftDropTargetController.onDragOver}
           onDragLeave={draftDropTargetController.onDragLeave}
@@ -177,14 +140,11 @@ export function WorkspaceHeader({
       ) : null}
       <div
         className={cn(
-          // 大会话 resize trace 显示 titlebar padding 动画层会触发 scrollbar-color 非合成动画；
-          // 明确限定 transition-property 为 padding，避免 duration-300 退回默认 all。
-          "flex h-12 flex-1 min-w-0 items-center justify-between gap-2 overflow-hidden p-2 [app-region:drag] transition-[padding] duration-300",
-          // 旧 caption 菜单移除后不能继续清零右边距，否则终端按钮会贴住面板边框。
-          headerWindowControlsPaddingClass,
+          "flex h-12 flex-1 min-w-0 items-center justify-between gap-2 overflow-hidden p-2 transition-[padding] duration-300",
+          headerLeadingPaddingClass,
         )}
       >
-        {variant === "task" || remoteTarget || workspaceIdentity || remoteSessionId ? (
+        {variant === "task" ? (
           <WorkspaceHeaderTitleSection
             variant={variant}
             backendBusinessAvailable={backendBusinessAvailable}
@@ -192,8 +152,6 @@ export function WorkspaceHeader({
             workspaceAbsPath={workspaceAbsPath}
             remoteSessionId={remoteSessionId}
             workspaceIdentity={workspaceIdentity}
-            remoteTarget={remoteTarget}
-            localWorkspacePath={localWorkspacePath}
             projectName={projectName}
             activeTaskTitle={activeTaskTitle}
             activeTaskChangeSummary={activeTaskChangeSummary}
@@ -213,11 +171,7 @@ export function WorkspaceHeader({
             providerWorkspaceConfigExists={providerWorkspaceConfigExists}
             providerWorkspaceConfigLoading={providerWorkspaceConfigLoading}
             workspaceHeaderState={workspaceHeaderState}
-            isMacDesktop={isMacDesktop}
-            isMacFullscreen={isMacFullscreen}
-            isWindowsDesktop={isWindowsDesktop}
-            isWebRemoteControl={isWebRemoteControl}
-            simplifyForNarrowRemote={simplifyForNarrowRemote}
+            simplifyForNarrowViewport={simplifyForNarrowViewport}
             selectedEditor={selectedEditor}
             onReloadSession={onReloadSession}
             reloadSessionDisabled={reloadSessionDisabled}
@@ -234,19 +188,13 @@ export function WorkspaceHeader({
           readOnlyReason={readOnlyReason}
           workspaceAbsPath={workspaceAbsPath}
           workspaceIdentity={workspaceIdentity}
-          remoteSessionId={remoteSessionId}
-          remoteTarget={remoteTarget}
-          isWebRemoteControl={isWebRemoteControl}
-          isDesktop={isDesktop}
           isTerminalOpen={isTerminalOpen}
           isSidePaneOpen={isSidePaneOpen}
           onToggleTerminal={onToggleTerminal}
           onToggleSidePane={onToggleSidePane}
           toggleSidePaneShortcutLabel={toggleSidePaneShortcutLabel}
-          simplifyForNarrowRemote={simplifyForNarrowRemote}
+          simplifyForNarrowViewport={simplifyForNarrowViewport}
           hideHelpMenu={false}
-          showWindowControls={usesInlineWindowControls}
-          // 面板操作按钮沿用 macOS 紧凑样式，Windows/Linux 窗控跟随最右侧 Header。
           onSelectedEditorChange={setSelectedEditor}
         />
       </div>

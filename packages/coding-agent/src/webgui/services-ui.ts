@@ -1,18 +1,8 @@
 import type { ProviderSettingsView } from "../../../../vendor/zcode-frontend/packages/provider/src/facades";
 import type { BroadcastClaimAcquireResult } from "../../../../vendor/zcode-frontend/packages/services/src/broadcast/broadcast";
 import type { ClientScenesResponse } from "../../../../vendor/zcode-frontend/packages/services/src/client-scenes/clientScenes";
-import type { OffPeakClientConfig } from "../../../../vendor/zcode-frontend/packages/services/src/coding-plan-subscription/codingPlanSubscription";
 import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
 import type { ClientConfigSnapshot } from "../../../../vendor/zcode-frontend/packages/shared/src/clientConfig";
-import type {
-	CodingPlanBatchPreviewResponse,
-	CodingPlanBillingDiscountConfig,
-	StartPlanPreviewConfig,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/coding-plan-subscription";
-import {
-	createDynamicWorkflowClientConfig,
-	type DynamicWorkflowClientConfig,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/dynamic-workflow-feature";
 import type { MarketingTouchSnapshot } from "../../../../vendor/zcode-frontend/packages/shared/src/marketingTouch";
 import type {
 	OAuthCachedSessionRestoreResult,
@@ -40,27 +30,17 @@ export function createUiServices(context: WebGuiServiceContext): readonly WebGui
 	};
 	const oauthProviders: OAuthProviderMeta[] = [];
 	const signedOut: OAuthCachedSessionRestoreResult = { status: "signed-out" };
-	const dynamicWorkflow: DynamicWorkflowClientConfig = createDynamicWorkflowClientConfig("disabled", "default");
-	const offPeak: OffPeakClientConfig = {
-		enabled: false,
-		modelSelectionView: { revision: 0, providers: [] },
-	};
 	const clientConfig: ClientConfigSnapshot = {
 		pluginStoreOrder: null,
 		zsrcUrl: null,
 		uiPluginRecommendations: [],
 	};
 	const clientScenes: ClientScenesResponse = { code: 0, msg: "", data: [] };
-	const subscription: CodingPlanBatchPreviewResponse = {
-		productList: [],
-		isSubscribed: false,
-		isAuthenticated: false,
-	};
 
 	return [
 		createWebGuiService(ServiceChannels.Setting, {
 			get: (): AppSettings => settings,
-			// TODO(omp-settings): Map update/updateDataBaseDir and user instruction reads/writes to native OMP settings.
+			// TODO(omp-settings): Map update and user instruction reads/writes to native OMP settings.
 			// Presentation changes are also unavailable until they genuinely mutate connection-owned state and publish changes.
 		}),
 		// TODO(omp-onboarding): Map record reads, onboarding decisions, append/dismiss/claim, preference sync/update, and clear to OMP onboarding.
@@ -99,14 +79,6 @@ export function createUiServices(context: WebGuiServiceContext): readonly WebGui
 				quota: null,
 			}),
 			// TODO(omp-usage): Map app/local and Coding Plan usage reads, TPS, reset status/opportunity/use/history, and getSnapshot to OMP accounting; never fabricate zero usage.
-		}),
-		createWebGuiService(ServiceChannels.CodingPlanSubscription, {
-			batchPreview: (): CodingPlanBatchPreviewResponse => subscription,
-			getDynamicWorkflowClientConfig: (): DynamicWorkflowClientConfig => dynamicWorkflow,
-			getOffPeakClientConfig: (): OffPeakClientConfig => offPeak,
-			getStartPlanPreview: (): StartPlanPreviewConfig | null => null,
-			getBillingDiscount: (): CodingPlanBillingDiscountConfig | undefined => undefined,
-			// TODO(omp-subscription): Map product catalogs/details, manual claims, verification/update configs, model context policy, enterprise pricing/balance/orders, previews, payments, and saved cards to OMP subscription capabilities.
 		}),
 		createWebGuiService(ServiceChannels.ClientConfig, {
 			getSnapshot: (): ClientConfigSnapshot => clientConfig,

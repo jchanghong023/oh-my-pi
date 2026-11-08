@@ -12,7 +12,6 @@ export function canOpenMarketingPopup() {
       [
         '[role="dialog"]',
         '[role="alertdialog"]',
-        '[data-testid="coding-plan-upgrade-surface"]',
         ...additionalRequestModalSelectors,
       ].join(", "),
     )
@@ -58,8 +57,7 @@ export function adaptMarketingPopup(
             : action.type === "navigate"
               ? {
                   type: "navigate",
-                  destination:
-                    action.args.page === "plugin_marketplace" ? "plugin_store" : "settings",
+                  destination: "settings",
                 }
               : { type: "claim_plan", planId: action.args.plan_id };
     return {

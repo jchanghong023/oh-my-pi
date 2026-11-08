@@ -7,24 +7,17 @@ import type {
   ZCodeTaskRuntimeStatus,
   ZCodeTaskMeta,
   GitChangeSourceId,
-  DesktopWindowChromeState,
-  IPlatformService,
   RemoteTarget,
   SourceServerUpdateTarget,
-  RemoteWorkspaceSessionEntry,
-  UpdateStatePayload,
   UserInfo,
 } from "@zcode/shared";
 import type { IFeedbackService, IServiceAccessor } from "@zcode/services";
 import type { SavedWorkflowsOpenTarget } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
 import type { SavedWorkflowHubTarget } from "@/v4/savedWorkflowHubContext.js";
-import type { WebRemoteControlWorkspaceSwitcherApi } from "@/root/types.js";
-import type { WebRemoteControlTerminalTransportState } from "@/root/types.js";
-import type { BrowserNavigationRequest, RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
+import type { RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type { AssistantPreviewCardsAutoOpenRequest } from "@/lib/assistantPreviewCards.js";
 import type {
-  BrowserSidePaneMetadata,
   OpenScopedSubagentSideTabRequest,
   OpenBackgroundBashSideTabRequest,
   OpenSelectionSideChatRequest,
@@ -47,6 +40,18 @@ import type { ComposerMentionPrefill } from "@/store/zcodeSessionStoreTypes.js";
 import type { TaskFindDialogProps } from "@/quickpick/TaskFindDialog.js";
 import type { AutomationsNavigationTab, OpenAutomationsMain } from "@/lib/taskNavigationHistory.js";
 import type { SidePaneFullViewController } from "@/side-pane-full-view/contract.js";
+import type { ProjectSidebarProps } from "@/project-sidebar/contract.js";
+
+export type WorkspaceRemoteNavigationProps = Pick<
+  ProjectSidebarProps,
+  | "onConnectRemote"
+  | "onSelectRemoteProject"
+  | "onCancelRemoteProject"
+  | "onReconnectRemoteWorkspace"
+  | "reconnectingRemoteWorkspaceKeys"
+  | "remoteWorkspaceRecoveryByWorkspaceKey"
+  | "remoteWorkspaceErrorByWorkspaceKey"
+>;
 
 export interface WorkspaceShellZCodeState {
   activeTaskId: WorkspaceZCodeUIState["activeTaskId"];
@@ -152,30 +157,14 @@ export interface RemoteConnectionOpenPreference {
   preferredProfileId?: string;
 }
 
-export interface AppProps {
+export interface AppProps extends WorkspaceRemoteNavigationProps {
   services: IServiceAccessor;
   baseFeedbackService: IFeedbackService;
-  onConnectRemote: (options: RemoteTarget, requestId?: string) => Promise<string>;
-  onSelectRemoteProject: (
-    sessionId: string,
-    path: string,
-    localWorkspacePath?: string,
-    preparedWorkspaceIdentity?: string,
-    isCurrent?: () => boolean | Promise<boolean>,
-  ) => Promise<void>;
-  onCancelRemoteProject: (sessionId: string) => Promise<void>;
-  onReconnectRemoteWorkspace: (workspaceKey: string) => Promise<void>;
   onLogout?: () => void;
   onLogin?: () => void;
   user?: UserInfo | null;
-  reconnectingRemoteWorkspaceKeys: string[];
-  remoteWorkspaceRecoveryByWorkspaceKey?: Record<string, RemoteWorkspaceRecoveryStatus>;
-  remoteWorkspaceErrorByWorkspaceKey: Record<string, string>;
-
-  remoteConnectionLogs?: RemoteConnectionLogEntry[];
   onCreateTask: (request?: CreateTaskRequest) => void;
   onCreateConversationTask?: () => void;
-  onCreateConversationTaskOnSource?: (sourceServerId: string) => void;
   /** 解析“在项目外工作”的目标；identity 由 Root 按 Source 归属给出，Shell 不得按路径反查。 */
   onResolveConversationWorkspace?: () => Promise<{
     workspacePath: string;
@@ -184,25 +173,18 @@ export interface AppProps {
   onOpenWorkspace: () => void;
   onOpenFolderFromWorkspaceMenu: () => void;
   onOpenRemoteWorkspace?: (preference?: RemoteConnectionOpenPreference) => void | boolean;
-  remoteConnectionInProgress?: boolean;
   onReturnToWorkspace?: () => void;
   allowOpenWorkspace?: boolean;
   responsiveBrowserLayout?: boolean;
   backendBusinessAvailable?: boolean;
-  webRemoteControlWorkspaceSwitcher?: WebRemoteControlWorkspaceSwitcherApi;
   initialSidebarFileTreeOpen?: boolean;
-  initialWebRemoteControlMobileNavigationIntent?: import("@zcode/shared").WebRemoteControlMobileNavigationIntent;
-  webRemoteControlTerminalTransportState?: WebRemoteControlTerminalTransportState;
-  allowRemoteWorkspace?: boolean;
-  remoteWorkspaceSessions?: RemoteWorkspaceSessionEntry[];
   workspaceAbsPath: string;
   workspaceRemoteSessionId?: string;
   workspaceIdentity?: string;
   isWorkspaceVisible?: boolean;
   isDesktop?: boolean;
-  isMacDesktop?: boolean;
+  /** Terminal composition handling only; does not enable desktop window chrome. */
   isWindowsDesktop?: boolean;
-  supportsEmbeddedBrowser?: boolean;
 }
 
 export interface GitChangeSummary {
@@ -210,12 +192,11 @@ export interface GitChangeSummary {
   removed: number;
 }
 
-export type WorkspaceMainView = "chat" | "automations" | "plugin-store";
+export type WorkspaceMainView = "chat" | "automations";
 
 export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackService"> {
   workspaceReadOnlyReason?: string;
   workspaceMainView: WorkspaceMainView;
-  pluginStoreOpenVersion: number;
   openAutomationId: string | null;
   openAutomationTab: AutomationsNavigationTab | null;
   /** 中枢深链：落到某个已保存工作流的详情页；定位后由 `onOpenWorkflowConsumed` 清空。 */
@@ -229,34 +210,22 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   onWorkspaceMainViewChange: (view: WorkspaceMainView) => void;
   onOpenAutomationConsumed: () => void;
   handleOpenAutomations: OpenAutomationsMain;
-  handleOpenPluginStore: () => void;
   workspaceShellZCodeState: WorkspaceShellZCodeState;
   theme: Theme;
-  isMacFullscreen: boolean;
-  desktopWindowChromeState: DesktopWindowChromeState | null;
-  macWindowControlsLeftPaddingPx: number;
-  windowsWindowControlsRightPaddingPx: number;
-  updateReadyVersion: string | null;
-  updateState: UpdateStatePayload | null;
   sidebarContainerRef: RefObject<HTMLElement | null>;
   toggleSidebarShortcutLabel: string;
-  newTaskShortcutLabel: string;
   goBackShortcutLabel: string;
   goForwardShortcutLabel: string;
   toggleSidePaneShortcutLabel: string;
-  /** 「进入 / 退出完整视图」快捷键标签（仅桌面）。 */
+  /** 「进入 / 退出完整视图」快捷键标签。 */
   toggleSidePaneFullViewShortcutLabel?: string;
-  canGoBack: boolean;
-  canGoForward: boolean;
   canTaskNavBack: boolean;
   canTaskNavForward: boolean;
   isTerminalOpen: boolean;
   isSidebarVisible: boolean;
-  isBrowserOpen: boolean;
-  supportsEmbeddedBrowser: boolean;
   isGitOpen: boolean;
   isSidePaneOpen: boolean;
-  /** Side Pane 完整视图控制器（仅桌面；spec：docs/ui/side-pane-full-view.md）。 */
+  /** Side Pane 完整视图控制器。 */
   sidePaneFullView?: SidePaneFullViewController;
   summaryPanelVariantOverride: ChatViewSummaryPanelVariant | null;
   onSummaryPanelVariantOverrideChange: (variant: ChatViewSummaryPanelVariant | null) => void;
@@ -268,7 +237,7 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
     workspacePath: string;
     label: string;
     remoteSessionId?: string;
-    remoteTarget?: import("@zcode/shared").RemoteTarget;
+    remoteTarget?: RemoteTarget;
     workspaceIdentity?: string;
     workspacePurpose?: import("@zcode/shared").WorkspacePurpose;
     localWorkspacePath?: string;
@@ -289,8 +258,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   gitWorktreeChangeSummary: GitChangeSummary;
   activeGitSourceId: GitChangeSourceId;
   gitState: ReturnType<typeof import("@/hooks/useGitRepository.js").useGitRepository>;
-  browserNavigationRequest: BrowserNavigationRequest | null;
-  browserRestoreUrls: Record<string, string>;
   providerConfigFile: ReturnType<
     typeof import("@/hooks/useWorkspaceProviderConfigFile.js").useWorkspaceProviderConfigFile
   >;
@@ -310,8 +277,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   fileChangeFindNavigationRequestId: number;
   fileChangeFindQuery: string;
   onFileChangeFindMatchCountChange: (count: number) => void;
-  appLogoUrl: string;
-  platform: IPlatformService;
   reloadSessionDisabled: boolean;
   reloadSessionPending: boolean;
   handleReloadSession: (options?: {
@@ -334,18 +299,12 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   ) => void;
   handleOpenCommandCenter: () => void;
   handleRefreshGit: () => void;
-  handleBrowserUrlChange: (tabId: string, url: string) => void;
-  handleBrowserPageMetadataChange: (tabId: string, metadata: BrowserSidePaneMetadata) => void;
   handleToggleSidebar: () => void;
   handleToggleTerminal: () => void;
-  handleToggleBrowser: () => void;
-  handleOpenBrowserTab: () => void;
-  handleOpenBrowserPermissionSettings: (origin: string) => void;
   handleOpenWhiteboard: () => void;
   handleOpenDeveloperTools: () => void;
   handleOpenFileManager: (target?: FileManagerTarget) => void;
   handleNavigateFileManager: (tabId: string, source: CodeViewerSource) => void;
-  handleOpenPluginMarket: () => void;
   handleOpenTerminalTab: () => void;
   handleToggleGit: () => void;
   handleOpenGitReview: (sourceId?: GitChangeSourceId) => void;
@@ -379,7 +338,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   handleCloseOtherSidePaneTabs: (tabId: string) => void;
   handleCloseAllSidePaneTabs: () => void;
   handleReopenClosedSidePaneTab: (tabId: string) => void;
-  handleBrowserNavigationRequestHandled: (requestId: string) => void;
   setIsTerminalOpen: (open: boolean) => void;
   setGitSelectedSourceId: (value: GitChangeSourceId) => void;
   taskFindDialogProps: TaskFindDialogProps;

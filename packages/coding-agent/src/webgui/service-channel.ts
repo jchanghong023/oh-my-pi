@@ -86,7 +86,7 @@ class WebGuiService implements WebGuiServiceDefinition {
 			try {
 				const method = Object.hasOwn(this.#methods, command) ? this.#methods[command] : undefined;
 				if (!method) {
-					// TODO: Connect Agent/chat, tools, files, Git, terminal, and native configuration business dispatch.
+					// Only explicitly registered methods are callable.
 					throw new WebGuiNotImplementedError(`${this.name}.${command}`);
 				}
 				if (arg !== undefined && !Array.isArray(arg)) {
@@ -131,7 +131,7 @@ class WebGuiService implements WebGuiServiceDefinition {
 					source = this.#options.events[event];
 				}
 				if (this.#disposed) return subscription;
-				// TODO: Attach remaining business event publishers; idle subscriptions never invent business events.
+				// Missing publishers do not produce synthetic business events.
 				upstream = source?.(value => emitter.fire(value));
 				// A synchronous publisher can close the connection while its subscription is being created.
 				if (this.#disposed) upstream?.dispose();

@@ -4,7 +4,6 @@ import type {
   ZCodeTaskChangeSummary,
   EditorInfo,
   GitRepositorySummary,
-  RemoteTarget,
   UserInfo,
 } from "@zcode/shared";
 
@@ -26,8 +25,6 @@ export interface WorkspaceHeaderTitleSectionProps {
   workspaceAbsPath: string;
   remoteSessionId?: string;
   workspaceIdentity?: string;
-  remoteTarget?: RemoteTarget;
-  localWorkspacePath?: string;
   projectName: string;
   activeTaskTitle: string;
   activeTaskChangeSummary?: ZCodeTaskChangeSummary | null;
@@ -51,11 +48,7 @@ export interface WorkspaceHeaderTitleSectionProps {
   reloadSessionPending?: boolean;
   onRefreshGit: () => void;
   workspaceHeaderState: WorkspaceHeaderState;
-  isMacDesktop?: boolean;
-  isMacFullscreen?: boolean;
-  isWindowsDesktop?: boolean;
-  isWebRemoteControl?: boolean;
-  simplifyForNarrowRemote?: boolean;
+  simplifyForNarrowViewport?: boolean;
   selectedEditor: EditorInfo | null;
   compact?: boolean;
 }
@@ -67,18 +60,12 @@ export interface WorkspaceHeaderActionSectionProps {
   readOnlyReason?: string;
   workspaceAbsPath: string;
   workspaceIdentity?: string;
-  remoteSessionId?: string;
-  remoteTarget?: RemoteTarget;
-  isWebRemoteControl?: boolean;
-  isDesktop?: boolean;
   isTerminalOpen: boolean;
   isSidePaneOpen: boolean;
   onToggleTerminal: () => void;
   onToggleSidePane: () => void;
   toggleSidePaneShortcutLabel?: string;
   onSelectedEditorChange?: (editor: EditorInfo | null) => void;
-  simplifyForNarrowRemote?: boolean;
+  simplifyForNarrowViewport?: boolean;
   hideHelpMenu?: boolean;
-  showWindowControls?: boolean;
-  useWindowsCaptionSpacing?: boolean;
 }

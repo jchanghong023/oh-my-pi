@@ -29,7 +29,7 @@ function BrowserApplication() {
     const params = new URLSearchParams();
     const project = new URLSearchParams(window.location.search).get("project");
     if (project) params.set("project", project);
-    const query = params.size ? `?${params}` : "";
+    const query = params.toString() ? `?${params}` : "";
 
     const fail = (error: unknown) => {
       if (connection.signal.aborted) return;
@@ -97,18 +97,15 @@ function BrowserApplication() {
         backendBusinessAvailable={false}
         isDesktop={false}
         supportsSettings
-        supportsEmbeddedBrowser={false}
         allowOpenWorkspace
         preferDirectoryBrowser
-        allowRemoteWorkspace={false}
-        webRemoteControlFeatureEnabled={false}
       />
     </ZCodeIntlProvider>
   );
 }
 
 createRoot(document.getElementById("root")!).render(
-  <AppErrorBoundary isDesktop={false}>
+  <AppErrorBoundary>
     <BrowserApplication />
   </AppErrorBoundary>,
 );

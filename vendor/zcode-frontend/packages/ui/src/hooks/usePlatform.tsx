@@ -42,11 +42,19 @@ export function useSelectDirectory() {
 export function useConnectRemote() {
   const platform = usePlatform();
   return useCallback(
-    async (options: RemoteTarget, requestId?: string) => {
-      const result = await platform.connectRemote(options, requestId);
+    async (
+      options: RemoteTarget,
+      requestId?: string,
+      context?: Parameters<IPlatformService["connectRemote"]>[2],
+    ): Promise<string> => {
+      const result = await platform.connectRemote(options, requestId, context);
       if (!result.success) {
         throw new Error(result.error || "Connection failed");
       }
+      if (!result.sessionId) {
+        throw new Error("Remote connection succeeded without a session ID");
+      }
+      return result.sessionId;
     },
     [platform],
   );

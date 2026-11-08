@@ -11,3 +11,4 @@ export {
   getPluginUiSessionActions,
   registerPluginUiSessionActions,
 } from "./adapters/pluginUiSessionActions.js";
+export { SandboxSessionActionsProvider } from "./adapters/SandboxSessionActionsProvider.js";

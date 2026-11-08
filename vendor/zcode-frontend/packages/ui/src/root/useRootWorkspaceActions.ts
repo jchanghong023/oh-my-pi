@@ -1,7 +1,6 @@
 import { stageV4ComposerDraftAttachments } from "@/v4/composer/composerDraftWorkspaceTransfer.js";
 import { readProjectSidebarView } from "@/project-sidebar/index.js";
-/* eslint-disable max-lines -- Root workspace action hook 集中编排项目、远程和 conversation 入口；合并期保持动作边界完整，后续按领域拆分。 */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DesktopCommandIds,
   remoteHostIdFromWorkspaceIdentity,
@@ -11,16 +10,28 @@ import {
   type ZCodeTaskClientMode,
 } from "@zcode/shared";
 import type { IServiceAccessor } from "@zcode/services";
+import type { IntlInstance } from "@/i18n/IntlProvider.js";
 import type {
   CreateTaskOptions,
   CreateTaskRequest,
-  RemoteConnectionOpenPreference,
 } from "@/app-shell/types.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
+import { useConnectRemote } from "@/hooks/usePlatform.js";
+import type { WorkspaceRemoteNavigationProps, RemoteWorkspaceRecoveryStatus } from "@/app-shell/types.js";
+import { attachRemoteProjectWorkspace } from "@/project-sidebar/remote-navigation.js";
+import {
+  bindRemoteWorkspaceIdentity,
+  bindRemoteWorkspacePath,
+  clearRemoteWorkspaceConnectionState,
+  getRemoteWorkspaceSession,
+  setRemoteWorkspaceConnectionState,
+  unregisterRemoteWorkspaceSession,
+  useRemoteWorkspaceSessionStore,
+} from "@/store/remoteWorkspaceSessionStore.js";
+import { isWorkspaceTab } from "@/store/tabStore.js";
 import { reportAppTelemetryEvent } from "@/lib/appTelemetry.js";
 import { resolveLogoutProviderFamilyDomain } from "@/lib/providerFamilyDomainSettings.js";
 import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
-import { parseWslUncWorkspacePath } from "@/lib/wslUncWorkspace.js";
 import { logger } from "@/logger.js";
 import { toast } from "@/components/ui/toast.js";
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
@@ -102,12 +113,9 @@ export function useRootWorkspaceActions({
   setUser,
   onProviderFamilyDomainClearedAfterLogout,
   userId,
-  onOpenRemoteConnection,
-  openRemoteProjectWorkspace,
-  openMobileProjectDraft,
   workbenchGroupClientMode = "desktop-continuous",
 }: {
-  intl: ReturnType<typeof import("@/i18n/IntlProvider.js").useZCodeIntl>["intl"];
+  intl: IntlInstance;
   platform: IPlatformService;
   services: IServiceAccessor;
   tabStoreApi: TabStore;
@@ -125,27 +133,207 @@ export function useRootWorkspaceActions({
   setUser: (user: UserInfo | null) => void;
   onProviderFamilyDomainClearedAfterLogout?: () => void;
   userId?: string;
-  onOpenRemoteConnection?: (preference?: RemoteConnectionOpenPreference) => void;
-  openRemoteProjectWorkspace?: (target: {
-    hostId: string;
-    workspacePath: string;
-    workspaceIdentity?: string;
-    expectedMembershipId?: string;
-    projectId: string | null;
-    isCurrent?: () => boolean;
-  }) => Promise<void>;
-  openMobileProjectDraft?: (request: CreateTaskOptions) => Promise<void>;
   workbenchGroupClientMode?: ZCodeTaskClientMode;
 }) {
   const navigationSequence = useRef(0);
   const [workspaceActionError, setWorkspaceActionError] = useState<string | null>(null);
   const requestConfirmation = useConfirmDialog();
-  // Root 的远端装配依赖本 hook 返回的动作，函数引用每轮都会变化；它只用于点击执行，
-  // 不应使整个新建入口失稳。与任务导航一致，读取最近已提交实现，并冻结本次操作的实现。
-  const remoteProjectOpener = useRef(openRemoteProjectWorkspace);
-  useLayoutEffect(() => {
-    remoteProjectOpener.current = openRemoteProjectWorkspace;
-  });
+  const handleConnectRemote = useConnectRemote();
+  const [remoteWorkspaceRecoveryByWorkspaceKey, setRemoteWorkspaceRecovery] = useState<
+    Record<string, RemoteWorkspaceRecoveryStatus>
+  >({});
+  const [remoteWorkspaceErrorByWorkspaceKey, setRemoteWorkspaceErrors] = useState<
+    Record<string, string>
+  >({});
+  const reconnectingRemoteWorkspaceKeys = useMemo(
+    () => Object.keys(remoteWorkspaceRecoveryByWorkspaceKey),
+    [remoteWorkspaceRecoveryByWorkspaceKey],
+  );
+  const reconnectFlights = useRef(new Map<string, Promise<void>>());
+  const clearRemoteRecovery = useCallback((workspaceKey: string) => {
+    clearRemoteWorkspaceConnectionState(workspaceKey);
+    setRemoteWorkspaceRecovery((current) => {
+      const next = { ...current };
+      delete next[workspaceKey];
+      return next;
+    });
+    setRemoteWorkspaceErrors((current) => {
+      const next = { ...current };
+      delete next[workspaceKey];
+      return next;
+    });
+  }, []);
+  const handleCancelRemoteProject = useCallback(async (sessionId: string) => {
+    try {
+      await platform.disposeRemoteSession(sessionId);
+    } finally {
+      unregisterRemoteWorkspaceSession(sessionId);
+    }
+  }, [platform]);
+  const handleSelectRemoteProject = useCallback<
+    WorkspaceRemoteNavigationProps["onSelectRemoteProject"]
+  >(async (sessionId, path, localWorkspacePath, preparedWorkspaceIdentity, isCurrent) => {
+    const assertCurrent = async () => {
+      if (isCurrent && !(await isCurrent())) throw new Error("project.navigation-cancelled");
+    };
+    await assertCurrent();
+    const session = getRemoteWorkspaceSession(sessionId);
+    if (!session) throw new Error(`Remote workspace session not found: ${sessionId}`);
+    const canonicalPath = await session.services.fileService.resolvePath({ path });
+    await assertCurrent();
+    const previousTab = tabStoreApi.getState().tabs.find(
+      (tab) => isWorkspaceTab(tab) && tab.workspacePath === path &&
+        tab.workspaceIdentity === preparedWorkspaceIdentity,
+    );
+    const workspacePurpose =
+      (previousTab && isWorkspaceTab(previousTab) ? previousTab.workspacePurpose : undefined) ??
+      session.workspacePurpose ?? "project";
+    const binding = await platform.bindRemoteWorkspaceSessionContext?.({
+      remoteSessionId: sessionId,
+      workspacePath: canonicalPath,
+      workspaceIdentity: preparedWorkspaceIdentity,
+      workspacePurpose,
+    });
+    await assertCurrent();
+    // Binding replaces the transport; never keep the pre-bind service accessor.
+    const bound = getRemoteWorkspaceSession(sessionId);
+    const workspaceIdentity = binding?.workspaceIdentity?.trim() || bound?.workspaceIdentity?.trim();
+    if (!bound || !workspaceIdentity)
+      throw new Error(`Remote workspace bind did not return an authoritative identity: ${sessionId}`);
+    const workspacePath = binding?.workspacePath ?? bound.workspacePath ?? canonicalPath;
+    bindRemoteWorkspaceIdentity(workspaceIdentity, sessionId);
+    bindRemoteWorkspacePath(workspacePath, sessionId);
+    tabStoreApi.getState().ensureWorkspaceTab(workspacePath, {
+      remoteSessionId: sessionId,
+      workspaceIdentity,
+      previousWorkspaceIdentity: binding?.previousWorkspaceIdentity,
+      remoteTarget: bound.target ?? session.target,
+      workspacePurpose: binding?.workspacePurpose ?? bound.workspacePurpose ?? workspacePurpose,
+      localWorkspacePath,
+    });
+    clearRemoteRecovery(workspaceIdentity);
+  }, [clearRemoteRecovery, platform, tabStoreApi]);
+  const handleReconnectRemoteWorkspace = useCallback((workspaceKey: string): Promise<void> => {
+    const running = reconnectFlights.current.get(workspaceKey);
+    if (running) return running;
+    const reconnect = async () => {
+      const tab = tabStoreApi.getState().tabs.find(
+        (entry) => isWorkspaceTab(entry) &&
+          (entry.workspaceIdentity?.trim() || entry.workspacePath) === workspaceKey,
+      );
+      if (!tab || !isWorkspaceTab(tab) || !tab.workspaceIdentity)
+        throw new Error(`Remote workspace not found: ${workspaceKey}`);
+      const hostId = remoteHostIdFromWorkspaceIdentity(tab.workspaceIdentity);
+      const directory = services.windowProjectDirectory ?? services;
+      const remoteService = directory.remoteProjectService;
+      if (!hostId || !remoteService) throw new Error("project.connection-unavailable");
+      const isCurrent = () => tabStoreApi.getState().tabs.some(
+        (entry) => isWorkspaceTab(entry) && entry.id === tab.id &&
+          entry.workspaceIdentity === tab.workspaceIdentity,
+      );
+      setRemoteWorkspaceRecovery((current) => ({ ...current, [workspaceKey]: { mode: "manual" } }));
+      setRemoteWorkspaceConnectionState(workspaceKey, "reconnecting");
+      try {
+        await attachRemoteProjectWorkspace({
+          hostId,
+          workspacePath: tab.workspacePath,
+          workspaceIdentity: tab.workspaceIdentity,
+          remoteService,
+          isCurrent,
+          findSession: (identity) => Object.values(useRemoteWorkspaceSessionStore.getState().sessionsById)
+            .find((session) => session.workspaceIdentity === identity),
+          connect: handleConnectRemote,
+          bind: (sessionId, path, guard) =>
+            handleSelectRemoteProject(sessionId, path, tab.localWorkspacePath, tab.workspaceIdentity, guard),
+          cancel: handleCancelRemoteProject,
+        });
+        clearRemoteRecovery(workspaceKey);
+      } catch (error) {
+        setRemoteWorkspaceConnectionState(workspaceKey, "disconnected");
+        setRemoteWorkspaceErrors((current) => ({
+          ...current,
+          [workspaceKey]: error instanceof Error ? error.message : String(error),
+        }));
+        throw error;
+      } finally {
+        setRemoteWorkspaceRecovery((current) => {
+          const next = { ...current };
+          delete next[workspaceKey];
+          return next;
+        });
+      }
+    };
+    const flight = reconnect().finally(() => reconnectFlights.current.delete(workspaceKey));
+    reconnectFlights.current.set(workspaceKey, flight);
+    return flight;
+  }, [clearRemoteRecovery, handleCancelRemoteProject, handleConnectRemote, handleSelectRemoteProject, services, tabStoreApi]);
+
+  useEffect(() => {
+    const stopClosed = platform.onRemoteSessionClosed((event) => {
+      const affected = tabStoreApi.getState().tabs.filter(
+        (tab) => isWorkspaceTab(tab) && tab.remoteSessionId === event.sessionId,
+      );
+      unregisterRemoteWorkspaceSession(event.sessionId);
+      if (!event.recoverable) tabStoreApi.setState((state) => ({
+        tabs: state.tabs.map((tab) =>
+          isWorkspaceTab(tab) && tab.remoteSessionId === event.sessionId
+            ? { ...tab, remoteSessionId: undefined }
+            : tab,
+        ),
+      }));
+      for (const tab of affected) {
+        if (!isWorkspaceTab(tab)) continue;
+        const key = tab.workspaceIdentity?.trim() || tab.workspacePath;
+        setRemoteWorkspaceConnectionState(key, event.recoverable ? "reconnecting" : "disconnected");
+        setRemoteWorkspaceRecovery((current) => {
+          const next = { ...current };
+          if (event.recoverable) next[key] = {
+            mode: "automatic", attempt: event.recoveryAttempt, limit: event.recoveryLimit,
+          };
+          else delete next[key];
+          return next;
+        });
+        if (event.recoverable) continue;
+        const message = event.recoveryBudgetExhausted
+          ? intl.formatMessage({ id: "remote.error.recoveryBudgetExhausted" }, {
+              attempt: event.recoveryAttempt ?? "?", limit: event.recoveryLimit ?? "?",
+            })
+          : event.error || event.reasonCode ||
+            ((event.exitCode != null && event.exitCode !== 0) || event.signal
+              ? intl.formatMessage({ id: "remote.error.connectionClosed" })
+              : undefined);
+        setRemoteWorkspaceErrors((current) => {
+          const next = { ...current };
+          if (message) next[key] = message;
+          else delete next[key];
+          return next;
+        });
+      }
+    });
+    const stopReconnected = platform.onRemoteSessionReconnected?.((event) => {
+      const tab = tabStoreApi.getState().tabs.find(
+        (entry) => isWorkspaceTab(entry) &&
+          entry.workspacePath === event.workspacePath &&
+          entry.workspaceIdentity === event.workspaceIdentity &&
+          (!entry.remoteSessionId || entry.remoteSessionId === event.previousSessionId),
+      );
+      if (!tab || !isWorkspaceTab(tab)) return;
+      unregisterRemoteWorkspaceSession(event.previousSessionId);
+      tabStoreApi.getState().ensureWorkspaceTab(event.workspacePath, {
+        remoteSessionId: event.sessionId,
+        workspaceIdentity: event.workspaceIdentity,
+        previousWorkspaceIdentity: tab.workspaceIdentity,
+      });
+      bindRemoteWorkspaceIdentity(event.workspaceIdentity, event.sessionId);
+      bindRemoteWorkspacePath(event.workspacePath, event.sessionId);
+      clearRemoteRecovery(tab.workspaceIdentity?.trim() || tab.workspacePath);
+      clearRemoteRecovery(event.workspaceIdentity);
+    });
+    return () => {
+      stopClosed();
+      stopReconnected?.();
+    };
+  }, [clearRemoteRecovery, intl, platform, tabStoreApi]);
 
   useEffect(() => {
     useWorkbenchGroupStore.getState().configureClientMode(workbenchGroupClientMode);
@@ -250,7 +438,6 @@ export function useRootWorkspaceActions({
 
   const startNewTaskFromActiveWorkspace = useCallback(
     async (source: string, request?: CreateTaskRequest) => {
-      const openRemoteProjectWorkspace = remoteProjectOpener.current;
       const sequence = ++navigationSequence.current;
       const originTab = tabStoreApi.getState().activeTabId;
       const originWorkspace = activeWorkspacePath
@@ -319,12 +506,6 @@ export function useRootWorkspaceActions({
           }),
         );
         if (!hasExplicitProject && newTaskTarget) {
-          // 原因：仅远程继承项目会让本地快捷键落入未归类。按任务完整身份读取归属，不能由 cwd 猜项目。
-          if (newTaskTarget.workspaceIdentity) {
-            hostId =
-              remoteHostIdFromWorkspaceIdentity(newTaskTarget.workspaceIdentity) ?? undefined;
-            if (!hostId) throw new Error("project.host-identity-required");
-          }
           const workspace = useZCodeSessionStore
             .getState()
             .getWorkspaceState(
@@ -358,20 +539,8 @@ export function useRootWorkspaceActions({
               projectId = undefined;
             }
           }
-          if (hostId && hostId !== "local" && !projectId)
-            throw new Error("project.remote-project-required");
         }
         if (!isCurrent()) return;
-        if (workbenchGroupClientMode === "web-remote-replayable") {
-          if (!openMobileProjectDraft) throw new Error("project.remote-navigation-unavailable");
-          // 归属先在共享入口解析，目录仍只由 bridge owner 准备；旧 Root 不写交接后的草稿。
-          await openMobileProjectDraft({
-            ...requestOptions,
-            ...(projectId ? { projectId } : {}),
-            ...(hostId ? { hostId } : {}),
-          });
-          return;
-        }
         if (!services.projectService) throw new Error("project.service-unavailable");
         const pendingDraft =
           !projectId && (!hostId || hostId === "local")
@@ -386,24 +555,11 @@ export function useRootWorkspaceActions({
             : {}),
         });
         if (!isCurrent()) return;
-        if (hostId && hostId !== "local") {
-          if (!target.workspaceIdentity || !openRemoteProjectWorkspace)
-            throw new Error("project.remote-navigation-unavailable");
-          await openRemoteProjectWorkspace({
-            ...target,
-            hostId,
-            isCurrent,
-            ...(typeof request === "object" && request.remoteProjectMembershipId
-              ? { expectedMembershipId: request.remoteProjectMembershipId }
-              : {}),
-          });
-        }
         // 目录准备成功才提交导航；失败保留当前会话和分屏。
-        if (!hostId || hostId === "local")
-          addTab(target.workspacePath, {
-            workspacePurpose: target.projectId ? "project" : "conversation",
-            ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
-          });
+        addTab(target.workspacePath, {
+          workspacePurpose: target.projectId ? "project" : "conversation",
+          ...(target.workspaceIdentity ? { workspaceIdentity: target.workspaceIdentity } : {}),
+        });
         startDraftInWorkspace(target.workspacePath, target.workspaceIdentity, {
           ...(typeof request === "string" ? { provider: request } : request),
           ...(pendingDraft ? { draftId: pendingDraft.draftId } : {}),
@@ -446,7 +602,6 @@ export function useRootWorkspaceActions({
       activeWorkspaceIdentity,
       tabStoreApi,
       addTab,
-      openMobileProjectDraft,
       workbenchGroupClientMode,
       startDraftInWorkspace,
     ],
@@ -567,31 +722,6 @@ export function useRootWorkspaceActions({
         );
       };
       try {
-        const wslUncWorkspace = parseWslUncWorkspacePath(path);
-        if (wslUncWorkspace && onOpenRemoteConnection) {
-          const shouldOpenWslConnection = await requestConfirmation({
-            title: intl.formatMessage({ id: "workspace.wslUncPrompt.title" }),
-            description: intl.formatMessage(
-              { id: "workspace.wslUncPrompt.description" },
-              {
-                path,
-              },
-            ),
-            confirmLabel: intl.formatMessage({ id: "workspace.wslUncPrompt.openWsl" }),
-            cancelLabel: intl.formatMessage({ id: "workspace.wslUncPrompt.continuePath" }),
-          });
-          if (shouldOpenWslConnection) {
-            logger.info("[Root] 用户选择通过 WSL 远程连接打开 UNC 工作区", {
-              distro: wslUncWorkspace.distro,
-              path,
-            });
-            onOpenRemoteConnection({
-              preferredKind: "wsl",
-              preferredWslDistro: wslUncWorkspace.distro,
-            });
-            return;
-          }
-        }
 
         if (!isCurrent()) return;
         // 项目模型迁移后，单独 addTab 不再赋予项目归属。桌面目录入口必须先由
@@ -629,10 +759,7 @@ export function useRootWorkspaceActions({
     },
     [
       addTab,
-      intl,
-      onOpenRemoteConnection,
       platform,
-      requestConfirmation,
       services.projectService,
       isDesktop,
       startDraftInWorkspace,
@@ -765,6 +892,13 @@ export function useRootWorkspaceActions({
   }, [activeWorkspaceIdentity, activeWorkspacePath, tabStoreApi]);
 
   return {
+    handleConnectRemote,
+    handleSelectRemoteProject,
+    handleCancelRemoteProject,
+    handleReconnectRemoteWorkspace,
+    reconnectingRemoteWorkspaceKeys,
+    remoteWorkspaceRecoveryByWorkspaceKey,
+    remoteWorkspaceErrorByWorkspaceKey,
     workspaceActionError,
     setWorkspaceActionError,
     startDraftInWorkspace,

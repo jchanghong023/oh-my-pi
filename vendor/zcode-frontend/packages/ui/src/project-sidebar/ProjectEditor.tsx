@@ -2,13 +2,8 @@ import { formatProjectError } from "@/project-sidebar/view.js";
 import { useOptionalProjectDirectory } from "@/project-sidebar/ProjectDirectoryProvider.js";
 import { useEffect, useRef, useState } from "react";
 import {
-  ChevronRight,
   Folder,
   FolderPlus,
-  LoaderCircle,
-  Monitor,
-  Plus,
-  Server,
   X,
 } from "lucide-react";
 import type {
@@ -16,6 +11,7 @@ import type {
   VirtualProject,
   RemoteProjectHost,
   ProjectDevice,
+  IRemoteProjectService,
 } from "@/project-sidebar/contract.js";
 import {
   Dialog,
@@ -25,107 +21,53 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog.js";
 import { Button } from "@/components/ui/button.js";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select.js";
 import { Input } from "@/components/ui/input.js";
 import { DirectoryBrowser } from "@/DirectoryBrowser.js";
-import { useRemoteBoundaryAcknowledgement } from "@/RemoteConnectionDialogContent.js";
 import { useProjectDirectoryServices } from "@/project-sidebar/useProjectDirectoryServices.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useOptionalPlatform } from "@/hooks/usePlatform.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { getPathLeaf } from "@/lib/path.js";
-import { RemoteProjectList } from "@/project-sidebar/RemoteProjectList.js";
-import type { IRemoteProjectService } from "@/project-sidebar/contract.js";
 import { logger } from "@/logger.js";
 import { remoteHostLabel } from "@/project-sidebar/RemoteHostSection.js";
-import {
-  resolveRemoteConnectionPresentation,
-  type RemoteConnectionStatus,
-} from "@/lib/remoteConnectionPresentation.js";
 import {
   ProjectFolderTrustDialog,
   type ProjectFolderTrustRequest,
 } from "@/project-sidebar/ProjectFolderTrustDialog.js";
 
 const FIELD_LABEL = "text-ui-sm font-medium text-foreground";
-// SelectItem 的 ItemText 默认按内容收缩；撑满整行后状态才能靠右，长名称截断时不挤掉状态。
-const DEVICE_ITEM = "pr-8 *:[span]:last:min-w-0 *:[span]:last:flex-1";
-
-/** 设备行：图标 + 名称 + 状态；状态颜色只取远程连接展示模型，在线只留圆点。 */
-function DeviceOption({ label, status }: { label: string; status?: string }) {
-  const { intl } = useZCodeIntl();
-  const presentation = status
-    ? resolveRemoteConnectionPresentation({ state: status as RemoteConnectionStatus })
-    : undefined;
-  const Icon = status ? Server : Monitor;
-  return (
-    <span className="flex w-full min-w-0 items-center gap-2">
-      <Icon className="size-4 text-foreground-subtle" />
-      <span className="min-w-0 truncate">{label}</span>
-      {presentation ? (
-        <span
-          data-testid="virtual-project-device-status"
-          data-status={status}
-          className="ml-auto flex shrink-0 items-center gap-1.5 text-ui-sm text-foreground-subtle"
-        >
-          {presentation.icon === "spinner" ? (
-            <LoaderCircle className={`size-3 animate-spin ${presentation.foreground}`} />
-          ) : (
-            <span className={`size-2 rounded-full ${presentation.dot}`} />
-          )}
-          <span className={status === "online" ? "sr-only" : undefined}>
-            {intl.formatMessage({ id: `project.deviceStatus.${status}` })}
-          </span>
-        </span>
-      ) : null}
-    </span>
-  );
-}
 
 export function ProjectEditor({
   project,
   host,
   initialRoots = [],
-  fixedFolder,
   isCurrent = () => true,
   projects,
   service,
   onClose,
   onSaved,
   onDeleted,
+  suspended = false,
   devices,
   defaultDeviceId,
-  suspended = false,
+  fixedFolder,
   onBeforeSave,
-  onConnectDevice,
-  onAddDevice,
-  remoteService,
-  onBrowseExisting,
-  onPrepareExisting,
-  onSavedExisting = async () => undefined,
 }: {
   project: VirtualProject | null;
+  host?: RemoteProjectHost;
+  devices?: ProjectDevice[];
+  defaultDeviceId?: string;
+  /** 聊天已确认的远程目录；表单不能改成另一个 Host 或 root。 */
+  fixedFolder?: { hostId: string; path: string; deviceLabel: string };
+  onBeforeSave?(hostId: string): Promise<void>;
   remoteService?: IRemoteProjectService;
   onSavedExisting?(isCurrent?: () => boolean): Promise<void>;
   onBrowseExisting?(device: ProjectDevice): Promise<boolean>;
   onPrepareExisting?(hostId: string, isCurrent: () => boolean): Promise<RemoteProjectHost>;
-  devices?: ProjectDevice[];
-  defaultDeviceId?: string;
-  suspended?: boolean;
-  onBeforeSave?(hostId: string): Promise<void>;
   onConnectDevice?(device: ProjectDevice): Promise<boolean>;
   onAddDevice?(selectDevice: (id: string) => Promise<void>): void;
-  host?: RemoteProjectHost;
   initialRoots?: string[];
-  /** 聊天已确认的远程目录；表单不能改成另一个 Host 或 root。 */
-  fixedFolder?: { hostId: string; path: string; deviceLabel: string };
+  suspended?: boolean;
   isCurrent?(): boolean;
   projects: VirtualProject[];
   service: IProjectService;
@@ -136,7 +78,7 @@ export function ProjectEditor({
   const { intl } = useZCodeIntl();
   const sidebar = useOptionalProjectDirectory();
   const platform = useOptionalPlatform();
-  const [selectedDeviceId, setSelectedDeviceId] = useState(defaultDeviceId ?? "local");
+  const [selectedDeviceId] = useState(defaultDeviceId ?? "local");
   const hostId =
     project?.hostId ?? fixedFolder?.hostId ?? host?.id ?? (devices ? selectedDeviceId : undefined);
   const remote = Boolean(hostId && hostId !== "local");
@@ -155,9 +97,7 @@ export function ProjectEditor({
       initialRoots[0] ??
       "",
   );
-  const [existing, setExisting] = useState(false);
   const [legacyDeviceId, setLegacyDeviceId] = useState<string | null>(null);
-  const existingButton = useRef<HTMLButtonElement>(null);
   const [browsing, setBrowsing] = useState(false);
   const directory = useProjectDirectoryServices(service, hostId);
   const [error, setError] = useState<string | null>(null);
@@ -169,7 +109,6 @@ export function ProjectEditor({
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const confirm = useConfirmDialog();
-  const acknowledgeBoundary = useRemoteBoundaryAcknowledgement();
   const epoch = useRef(0);
   const alive = useRef(true);
   useEffect(() => {
@@ -189,22 +128,6 @@ export function ProjectEditor({
   }, [suspended]);
   const current = (request: number) => alive.current && epoch.current === request;
   const selectedDevice = devices?.find((device) => device.id === selectedDeviceId);
-  const changeDevice = async (next: string) => {
-    if (next === selectedDeviceId) return;
-    const request = ++epoch.current;
-    // 确认前不提交任何字段；旧目录响应也随此次设备选择失效，避免跨设备污染草稿。
-    if (
-      roots.length &&
-      !(await confirm({ title: msg("switchDevice"), description: msg("switchDeviceDescription") }))
-    )
-      return;
-    if (!current(request)) return;
-    setRoots([]);
-    setPrimary("");
-    setBrowsing(false);
-    setError(null);
-    setSelectedDeviceId(next);
-  };
   const addRoots = (values: string[]) => {
     if (remote && project) return;
     const next = remote
@@ -216,33 +139,8 @@ export function ProjectEditor({
   };
   const browse = async () => {
     const request = ++epoch.current;
-    if (remote && devices && selectedDevice?.status !== "online") {
-      if (!selectedDevice || !onConnectDevice) {
-        setError(msg("connectionUnavailable"));
-        return;
-      }
-      setBusy(true);
-      try {
-        const ready = await onConnectDevice(selectedDevice);
-        if (current(request) && ready) setBrowsing(true);
-      } catch (cause) {
-        if (current(request)) setError(formatProjectError(cause, intl.formatMessage));
-      } finally {
-        if (current(request)) setBusy(false);
-      }
-      return;
-    }
     // 本地曾统一走 Host 文件列表，绕过系统多选；按项目 Host 与平台能力选入口，不能借当前 tab 判定。
     if ((hostId && hostId !== "local") || !platform?.selectDirectories) {
-      if (remote) {
-        setBusy(true);
-        try {
-          // 已连接设备可直接浏览目录，仍须经过与主动连接相同的首次介绍；失效表单不记已读。
-          if (!(await acknowledgeBoundary(() => current(request) && !suspendedRef.current))) return;
-        } finally {
-          if (current(request)) setBusy(false);
-        }
-      }
       if (current(request) && !suspendedRef.current) setBrowsing(true);
       return;
     }
@@ -381,21 +279,7 @@ export function ProjectEditor({
       setBusy(false);
     }
   };
-  const browseExisting = async () => {
-    if (!selectedDevice || !onBrowseExisting) return;
-    const request = ++epoch.current;
-    setBusy(true);
-    setError(null);
-    try {
-      if ((await onBrowseExisting(selectedDevice)) && current(request)) setExisting(true);
-    } catch (cause) {
-      if (current(request)) setError(formatProjectError(cause, intl.formatMessage));
-    } finally {
-      if (current(request)) setBusy(false);
-    }
-  };
   const browserEpoch = epoch.current;
-  const needsConnection = remote && Boolean(devices) && selectedDevice?.status !== "online";
   return (
     <Dialog
       open={!suspended}
@@ -412,26 +296,6 @@ export function ProjectEditor({
         className="max-w-lg gap-5"
         onKeyDown={fixedFolder ? (event) => event.stopPropagation() : undefined}
       >
-        {existing && selectedDevice && remoteService ? (
-          <RemoteProjectList
-            key={selectedDevice.id}
-            embedded
-            device={selectedDevice}
-            service={service}
-            remoteService={remoteService}
-            onBeforeAdd={(isCurrent) => onPrepareExisting!(selectedDevice.id, isCurrent)}
-            onLegacyCapability={(legacy) => setLegacyDeviceId(legacy ? selectedDevice.id : null)}
-            onSaved={async (isCurrent) => {
-              await onSavedExisting(isCurrent);
-            }}
-            onClose={() => {
-              epoch.current++;
-              setExisting(false);
-              requestAnimationFrame(() => existingButton.current?.focus());
-            }}
-          />
-        ) : (
-          <>
             <DialogTitle>
               {browsing ? msg("browse") : project ? msg("edit") : msg("create")}
             </DialogTitle>
@@ -475,89 +339,7 @@ export function ProjectEditor({
                     }}
                     className="h-9 rounded-lg max-md:text-mobile-input-safe"
                   />
-                  {fixedFolder ? (
-                    <p className="break-all text-ui-sm text-foreground-subtle">
-                      {fixedFolder.deviceLabel}
-                    </p>
-                  ) : null}
                 </div>
-                {devices ? (
-                  <div className="grid min-w-0 gap-1.5">
-                    <label htmlFor="project-device" className={FIELD_LABEL}>
-                      {msg("device")}
-                    </label>
-                    <Select
-                      value={selectedDeviceId}
-                      onValueChange={(value) => {
-                        if (value === "add-device") onAddDevice?.(changeDevice);
-                        else void changeDevice(value);
-                      }}
-                      disabled={busy || Boolean(created)}
-                    >
-                      <SelectTrigger
-                        id="project-device"
-                        data-testid="virtual-project-device"
-                        className="h-9 w-full min-w-0 rounded-lg *:data-[slot=select-value]:w-full *:data-[slot=select-value]:min-w-0"
-                      >
-                        <SelectValue>
-                          <DeviceOption
-                            label={
-                              selectedDeviceId === "local"
-                                ? msg("thisComputer")
-                                : (selectedDevice?.label ?? selectedDeviceId)
-                            }
-                            status={
-                              selectedDeviceId === "local"
-                                ? undefined
-                                : (selectedDevice?.status ?? "offline")
-                            }
-                          />
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent position="popper" className="w-(--radix-select-trigger-width)">
-                        <SelectItem value="local" data-device-id="local" className={DEVICE_ITEM}>
-                          <DeviceOption label={msg("thisComputer")} />
-                        </SelectItem>
-                        {devices.map((device) => (
-                          <SelectItem
-                            key={device.id}
-                            value={device.id}
-                            data-device-id={device.id}
-                            className={DEVICE_ITEM}
-                          >
-                            <DeviceOption label={device.label} status={device.status} />
-                          </SelectItem>
-                        ))}
-                        {onAddDevice ? (
-                          <>
-                            <SelectSeparator />
-                            <SelectItem value="add-device">
-                              <Plus className="text-foreground-subtle" />
-                              {msg("addRemoteDevice")}
-                            </SelectItem>
-                          </>
-                        ) : null}
-                      </SelectContent>
-                    </Select>
-                    {/* 旧入口是一行 ghost 文字，用户看不出可点也不知用途；改为挨着设备的问句 + 下划线链接。 */}
-                    {remote && selectedDevice && onBrowseExisting ? (
-                      <p className="flex flex-wrap items-center gap-x-1 text-ui-sm text-foreground-subtle">
-                        {msg("existingOnDeviceHint")}
-                        <button
-                          ref={existingButton}
-                          type="button"
-                          disabled={busy || Boolean(created)}
-                          data-testid="virtual-project-existing"
-                          className="inline-flex items-center gap-0.5 rounded-sm text-brand underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30 disabled:opacity-50"
-                          onClick={() => void browseExisting()}
-                        >
-                          {msg("existingOnDeviceAction")}
-                          <ChevronRight className="size-3.5" />
-                        </button>
-                      </p>
-                    ) : null}
-                  </div>
-                ) : null}
                 <fieldset disabled={busy || Boolean(created)} className="min-w-0">
                   <legend className={`mb-1.5 ${FIELD_LABEL}`}>{msg("folders")}</legend>
                   {/* 有目录时使用同一列表的末行添加，只有零目录才展示空态大卡片。 */}
@@ -627,7 +409,7 @@ export function ProjectEditor({
                       <button
                         type="button"
                         data-testid="virtual-project-browse"
-                        aria-label={msg(needsConnection ? "connectAndBrowse" : "browse")}
+                        aria-label={msg("browse")}
                         className={`group flex w-full items-center gap-2 text-ui-base transition-colors hover:bg-surface-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/30 ${roots.length ? "min-h-12 px-3 py-2 text-left" : "min-h-32 flex-col justify-center rounded-lg border border-dashed border-border px-4 py-5 text-center hover:border-border-hover"}`}
                         onClick={() => {
                           void browse();
@@ -637,7 +419,7 @@ export function ProjectEditor({
                           <>
                             <FolderPlus className="size-4 shrink-0 text-foreground-subtle" />
                             <span>
-                              {msg(needsConnection ? "connectAndBrowse" : "addSourceFolder")}
+                              {msg("addSourceFolder")}
                             </span>
                           </>
                         ) : (
@@ -646,19 +428,10 @@ export function ProjectEditor({
                               <FolderPlus className="size-4" />
                             </span>
                             <span className="font-medium">
-                              {msg(needsConnection ? "connectAndBrowse" : "browse")}
+                              {msg("browse")}
                             </span>
                             <span className="text-ui-sm text-foreground-subtle">
-                              {needsConnection
-                                ? intl.formatMessage(
-                                    { id: "project.connectAndBrowseHint" },
-                                    {
-                                      status: msg(
-                                        `deviceStatus.${selectedDevice?.status ?? "offline"}`,
-                                      ),
-                                    },
-                                  )
-                                : msg("browseHint")}
+                              {msg("browseHint")}
                             </span>
                           </>
                         )}
@@ -666,11 +439,6 @@ export function ProjectEditor({
                     ) : null}
                   </div>
                 </fieldset>
-                {legacyDeviceId === hostId ? (
-                  <p className="text-ui-sm text-foreground-subtle">
-                    {msg("legacyUpgradeRequired")}
-                  </p>
-                ) : null}
                 {error ? (
                   <p role="alert" className="text-ui-sm text-destructive">
                     {error}
@@ -706,8 +474,6 @@ export function ProjectEditor({
                 </DialogFooter>
               </>
             )}
-          </>
-        )}
         {/* 确认框须留在父弹层的 React 树内；兄弟节点的触摸取消会被延迟判为外部点击，连带关闭草稿。 */}
         {folderTrust && !suspended ? (
           <ProjectFolderTrustDialog
