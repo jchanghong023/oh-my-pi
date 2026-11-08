@@ -1,24 +1,18 @@
 import { memo } from "react";
 import { shallow } from "zustand/shallow";
-import { Plug } from "lucide-react";
 import type {
   IProjectService,
-  IRemoteProjectService,
-  ProjectRowAction,
   ProjectSidebarProps,
   VirtualProject,
 } from "@/project-sidebar/contract.js";
-import { buildRemoteHostWorkspaceIdentity } from "@/project-sidebar/contract.js";
 import { ProjectNode } from "@/project-sidebar/ProjectNode.js";
 import type { ProjectNodeProps } from "@/project-sidebar/ProjectNodeContent.js";
-import { projectSourceServerId } from "@/project-sidebar/view.js";
 import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { toast } from "@/components/ui/toast.js";
 import { logger } from "@/logger.js";
-import { useZCodeStoreWithDefault } from "@/store/StoreProvider.js";
 
 export function runProjectAction(body: () => Promise<void>) {
   void body().catch((cause) => {
@@ -30,9 +24,6 @@ export function runProjectAction(body: () => Promise<void>) {
 type Props = Pick<
   ProjectNodeProps,
   | "project"
-  | "remoteHost"
-  | "deviceLabel"
-  | "diagnostics"
   | "expanded"
   | "hasUnread"
   | "availability"
@@ -40,16 +31,11 @@ type Props = Pick<
   | "onSelect"
   | "refresh"
 > &
-  Pick<
-    ProjectSidebarProps,
-    "isDesktop" | "isWebRemoteControl" | "onCreateTask" | "onReconnectRemoteWorkspace"
-  > & {
+  Pick<ProjectSidebarProps, "isDesktop" | "isWebRemoteControl" | "onCreateTask"> & {
     service?: IProjectService;
-    remoteService?: IRemoteProjectService;
     onExpandedChange(project: VirtualProject, expanded: boolean): void;
     onEdit(value: { project: VirtualProject }): void;
     onViewFiles(project: VirtualProject, rootPath: string): Promise<void>;
-    remoteActions(project: VirtualProject): ProjectRowAction[];
   };
 
 // Bug 根因：任务活动每秒更新目录，父组件随之重建所有项目的菜单与回调，穿透内容层 memo。
@@ -57,44 +43,24 @@ type Props = Pick<
 export const ProjectSidebarNode = memo(
   function ProjectSidebarNode({
     project,
-    remoteHost,
     service,
-    remoteService,
     isDesktop,
     isWebRemoteControl,
     onCreateTask,
-    onReconnectRemoteWorkspace,
     onExpandedChange,
     onEdit,
     onViewFiles,
-    remoteActions,
     ...display
   }: Props) {
     const { intl } = useZCodeIntl();
     const confirm = useConfirmDialog();
     const tabStore = useTabStoreApi();
     const msg = (id: string) => intl.formatMessage({ id: `project.${id}` });
-    const sourceServerId = projectSourceServerId(project);
-    // 本机偏好只控制桌面行内标签，手机与完整身份详情仍保留设备名。
-    const hideDeviceName = useZCodeStoreWithDefault(
-      (state) => Boolean(isDesktop) && state.hideProjectDeviceNames,
-      false,
-    );
-    const { refresh, availability } = display;
+    const { refresh } = display;
     return (
       <ProjectNode
         {...display}
         project={project}
-        remoteHost={remoteHost}
-        hideDeviceName={hideDeviceName}
-        onOpenDeviceSettings={
-          isDesktop && sourceServerId
-            ? () => {
-                setPendingSettingsSectionIntent("remoteDevices", { sourceServerId });
-                tabStore.getState().openSettingsTab();
-              }
-            : undefined
-        }
         onManageProjects={
           isDesktop
             ? () => {
@@ -103,48 +69,13 @@ export const ProjectSidebarNode = memo(
               }
             : undefined
         }
-        additionalActions={[
-          ...remoteActions(project),
-          ...(remoteHost && remoteHost.connectionStatus !== "online"
-            ? [
-                {
-                  id: "connect",
-                  label: msg("connect"),
-                  icon: Plug,
-                  run: () =>
-                    runProjectAction(async () => {
-                      // 远端连接仍经现有意图分派，保留缺凭据、安装和升级流程。
-                      if (isDesktop && project.roots[0]) {
-                        await onReconnectRemoteWorkspace(
-                          buildRemoteHostWorkspaceIdentity(
-                            project.hostId,
-                            project.roots[0].rootPath,
-                          ),
-                        );
-                      } else {
-                        await remoteService!.connectHost(project.hostId);
-                      }
-                      await refresh();
-                    }),
-                },
-              ]
-            : []),
-        ]}
         onExpandedChange={(expanded) => onExpandedChange(project, expanded)}
-        onRemoveEntry={() =>
-          runProjectAction(async () => {
-            const entryId = availability?.entryId;
-            if (!entryId || !remoteService) throw new Error("remote-project.entry-not-found");
-            await remoteService.removeEntry(entryId);
-            await refresh();
-          })
-        }
         onCreate={() =>
           runProjectAction(async () => {
             onCreateTask({
               projectId: project.id,
               taskGroupId: null,
-              ...(isWebRemoteControl || remoteHost ? { hostId: project.hostId } : {}),
+              ...(isWebRemoteControl ? { hostId: project.hostId } : {}),
             });
           })
         }

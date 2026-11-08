@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -35,13 +34,6 @@ import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
 import { ConversationTurnGroup } from "@/v4/ConversationTurnGroup.js";
-import {
-  createLogicalUiInstancesSelector,
-  getPluginUiDisclosureSnapshot,
-  setPluginUiInstanceDerivation,
-  subscribePluginUiDisclosure,
-  type PluginUiRowPinResolver,
-} from "@/plugin-ui/index.js";
 import { ConversationPendingGuideList } from "@/v4/ConversationPendingGuideList.js";
 import type { AssistantFeedbackHandler } from "@/v4/ConversationRowView.js";
 import { ConversationTurnNavigator } from "@/v4/ConversationTurnNavigator.js";
@@ -452,27 +444,6 @@ function ConversationTimelineImpl({
   // 「冻结历史 + 尾轮」分区（spec：docs/ui/chat-virtual-scroll.md「每帧派生成本」）：
   // 下面的派生都按 history 引用缓存历史段，流式帧只计算尾轮。
   const rowsPartition = getConversationRowsPartition(rows);
-  // 插件卡片展示模型——同资源替代 + 最近三回合自动展开 + 手动固定；推导结果发布给卡片自己读。
-  const selectPluginUiDerivation = useMemo(() => createLogicalUiInstancesSelector(), []);
-  const pluginUiDerivation = useMemo(
-    () => selectPluginUiDerivation(rows, rowsPartition),
-    [rows, rowsPartition, selectPluginUiDerivation],
-  );
-  useEffect(() => {
-    setPluginUiInstanceDerivation(sessionKey, pluginUiDerivation);
-  }, [pluginUiDerivation, sessionKey]);
-  const pluginUiPins = useSyncExternalStore(
-    subscribePluginUiDisclosure,
-    () => getPluginUiDisclosureSnapshot(sessionKey),
-    () => getPluginUiDisclosureSnapshot(sessionKey),
-  );
-  const pluginUiPinResolver = useMemo<PluginUiRowPinResolver>(
-    () => (toolCallId) => ({
-      disposition: pluginUiDerivation.byToolCallId[toolCallId],
-      manualPinned: pluginUiPins.get(toolCallId),
-    }),
-    [pluginUiDerivation, pluginUiPins],
-  );
   const selectRenderUnits = useMemo(() => createConversationTurnRenderUnitsSelector(), []);
   const topicPreparations = useBotTopicPreparations();
   const renderUnits = useMemo(
@@ -481,14 +452,12 @@ function ConversationTimelineImpl({
         selectRenderUnits(rowsPartition, {
           nowMs: liveNowMs,
           sessionPhase,
-          pluginUiPinResolver,
         }),
         rows,
         topicPreparations,
       ),
     [
       liveNowMs,
-      pluginUiPinResolver,
       rows,
       rowsPartition,
       sessionPhase,

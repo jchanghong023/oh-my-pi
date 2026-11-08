@@ -17,7 +17,6 @@ import {
   type ArchiveSort,
 } from "@/project-sidebar/archive-view.js";
 import { useArchiveManagement } from "@/project-sidebar/useArchiveManagement.js";
-import { remoteHostLabel } from "@/project-sidebar/RemoteHostSection.js";
 import { ArchiveGroupCard } from "@/project-sidebar/ArchiveGroupCard.js";
 import { ProjectDirectoryProvider } from "@/project-sidebar/ProjectDirectoryProvider.js";
 
@@ -45,9 +44,7 @@ function ArchiveManagementContent() {
   const rows = useMemo(() => groups.flatMap((g) => g.tasks), [groups]);
   const name = (group: ArchiveGroup) => {
     const title = group.project?.name ?? msg(group.projectId ? "removedProject" : "unclassified");
-    const source = state.directory.hosts.find((h) => h.id === group.hostId);
-    const host = source ? remoteHostLabel(source) : undefined;
-    return `${title}${group.project?.deleted ? ` · ${msg("removed")}` : ""}${host ? ` · ${host}` : ""}`;
+    return `${title}${group.project?.deleted ? ` · ${msg("removed")}` : ""}`;
   };
   return (
     <section data-testid="archive-management" className="min-w-0 space-y-6">

@@ -2,8 +2,10 @@ import { useEffect, useMemo, useRef } from "react";
 import type { ICodingPlanSubscriptionService, IZCodeAgentService } from "@zcode/services";
 import type { DynamicWorkflowMode } from "@zcode/shared";
 import { logger } from "@/logger.js";
+import { useBackendBusinessAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import {
   useDynamicWorkflowAvailabilityStore,
+  UNAVAILABLE_DYNAMIC_WORKFLOW_SNAPSHOT,
   type DynamicWorkflowAvailabilitySnapshot,
 } from "@/store/dynamicWorkflowAvailabilityStore.js";
 
@@ -13,11 +15,25 @@ import {
  * 工作区级 ServiceProvider 内（远程 Host 的 accessor），让它们各自取数会把 app 级那一份覆盖掉。
  */
 export function useDynamicWorkflowAvailability(): DynamicWorkflowAvailabilitySnapshot {
+  const backendBusinessAvailable = useBackendBusinessAvailable();
   // 逐字段订阅：返回对象字面量的 selector 每次都是新引用，useSyncExternalStore 会判定为变化。
   const status = useDynamicWorkflowAvailabilityStore((state) => state.status);
   const enabled = useDynamicWorkflowAvailabilityStore((state) => state.enabled);
   const config = useDynamicWorkflowAvailabilityStore((state) => state.config);
-  return useMemo(() => ({ status, enabled, config }), [config, enabled, status]);
+  return useMemo(
+    () =>
+      backendBusinessAvailable
+        ? { status, enabled, config }
+        : UNAVAILABLE_DYNAMIC_WORKFLOW_SNAPSHOT,
+    [backendBusinessAvailable, config, enabled, status],
+  );
+}
+
+/** A retained browser navigation entry is not permission to execute Workflow operations. */
+export function useDynamicWorkflowNavigationAvailable(): boolean {
+  const backendBusinessAvailable = useBackendBusinessAvailable();
+  const { enabled } = useDynamicWorkflowAvailability();
+  return !backendBusinessAvailable || enabled;
 }
 
 /**
@@ -27,10 +43,11 @@ export function useDynamicWorkflowAvailability(): DynamicWorkflowAvailabilitySna
 export function useDynamicWorkflowAvailabilityLoader(
   service: ICodingPlanSubscriptionService,
 ): void {
+  const backendBusinessAvailable = useBackendBusinessAvailable();
   const ensureLoaded = useDynamicWorkflowAvailabilityStore((state) => state.ensureLoaded);
   useEffect(() => {
-    void ensureLoaded(service);
-  }, [ensureLoaded, service]);
+    if (backendBusinessAvailable) void ensureLoaded(service);
+  }, [backendBusinessAvailable, ensureLoaded, service]);
 }
 
 /**
@@ -48,11 +65,12 @@ export function useDynamicWorkflowUserModeSync(params: {
   codingPlanSubscriptionService: ICodingPlanSubscriptionService;
 }): void {
   const { settingsLoaded, userMode, zcodeAgentService, codingPlanSubscriptionService } = params;
+  const backendBusinessAvailable = useBackendBusinessAvailable();
   const reload = useDynamicWorkflowAvailabilityStore((state) => state.reload);
   const observedRef = useRef<{ userMode: DynamicWorkflowMode | undefined } | null>(null);
   const chainRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
-    if (!settingsLoaded) return;
+    if (!backendBusinessAvailable || !settingsLoaded) return;
     const observed = observedRef.current;
     observedRef.current = { userMode };
     if (observed === null || observed.userMode === userMode) return;
@@ -66,5 +84,12 @@ export function useDynamicWorkflowUserModeSync(params: {
       }
       await reload(codingPlanSubscriptionService);
     });
-  }, [codingPlanSubscriptionService, reload, settingsLoaded, userMode, zcodeAgentService]);
+  }, [
+    backendBusinessAvailable,
+    codingPlanSubscriptionService,
+    reload,
+    settingsLoaded,
+    userMode,
+    zcodeAgentService,
+  ]);
 }

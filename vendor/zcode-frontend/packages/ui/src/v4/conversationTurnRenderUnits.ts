@@ -1,4 +1,3 @@
-import { isPluginUiPinnedToolRow } from "@/plugin-ui/index.js";
 import type {
   ConversationTurnRenderUnit,
   BuildConversationTurnRenderUnitsOptions,
@@ -291,7 +290,6 @@ function materializeDraftUnit(
     forceOpenHistory,
     timelineOnly,
     nowMs: options.nowMs,
-    ...(options.pluginUiPinResolver ? { pluginUiPinResolver: options.pluginUiPinResolver } : {}),
   });
   const orderedAssistantHistoryRows = workSegments.flatMap(
     (segment) => segment.assistantHistoryRows,
@@ -513,7 +511,7 @@ export interface ConversationTurnRenderUnitsPartition {
  * Bug 根因：原选择器每帧都要对全部 rows 分组，并对每个历史轮逐行确认“没变”，
  * 成本随历史长度线性增长；宽屏问题目录补齐完整历史后，长会话流式输出明显卡顿。
  * 现在历史段结果按 history 数组引用缓存。只有历史中存在无 header 的轮次（读 phase）、
- * 仍在运行的轮次（读时钟）或可固定的插件卡片（读固定裁决）时，缓存键才额外带上对应输入。
+ * 仍在运行的轮次（读时钟）时，缓存键才额外带上对应输入。
  * 跨轮规则在合并时处理：尾轮 unit 被过滤掉时，历史末项按最后一轮重新归一化；
  * highspeed footer 只在含卡片的 unit 上收口，不含卡片的 unit 既不影响也不会得到 footer，
  * 所以在“含卡片历史 unit + 尾轮 unit”子序列上收口，结果与全量收口相同。
@@ -524,7 +522,6 @@ export function createConversationTurnRenderUnitsSelector() {
     isLast: boolean;
     phase: SessionPhase | undefined;
     clock: number | undefined;
-    pinnedRows: ConversationRow[];
     unit: ConversationTurnRenderUnit;
   };
   type UnitMap = Map<string, ConversationTurnRenderUnit>;
@@ -535,8 +532,6 @@ export function createConversationTurnRenderUnitsSelector() {
     phase: SessionPhase | undefined;
     clockDependent: boolean;
     clock: number;
-    pinDependent: boolean;
-    resolver: BuildConversationTurnRenderUnitsOptions["pluginUiPinResolver"];
     // 已过滤并按“后面还有尾轮”归一化，尚未收口 footer。
     units: ConversationTurnRenderUnit[];
     cardIndexes: number[];
@@ -571,24 +566,18 @@ export function createConversationTurnRenderUnitsSelector() {
     const isLast = index === total - 1;
     const phase = draft.header ? undefined : options.sessionPhase;
     const clock = resolveTurnRunning(draft, options) ? options.nowMs : undefined;
-    // resolver 随插件派生重建，但普通消息不会改变插件的实际折叠裁决。
-    const pinnedRows = draft.orderedRows.filter((row) =>
-      isPluginUiPinnedToolRow(row, options.pluginUiPinResolver),
-    );
     const unchanged =
       old &&
       old.draft.header === draft.header &&
       sameItems(old.draft.orderedRows, draft.orderedRows) &&
       old.isLast === isLast &&
       old.phase === phase &&
-      old.clock === clock &&
-      sameItems(old.pinnedRows, pinnedRows);
+      old.clock === clock;
     const entry: Entry = {
       draft,
       isLast,
       phase,
       clock,
-      pinnedRows,
       unit: unchanged ? old.unit : materializeDraftUnit(draft, index, total, options),
     };
     next.set(draft.key, entry);
@@ -619,8 +608,7 @@ export function createConversationTurnRenderUnitsSelector() {
     cache !== null &&
     cache.rows === rows &&
     (!cache.phaseDependent || cache.phase === options.sessionPhase) &&
-    (!cache.clockDependent || cache.clock === options.nowMs) &&
-    (!cache.pinDependent || cache.resolver === options.pluginUiPinResolver);
+    (!cache.clockDependent || cache.clock === options.nowMs);
 
   return (
     partition: ConversationRowsPartition,
@@ -664,11 +652,6 @@ export function createConversationTurnRenderUnitsSelector() {
         phase: currentOptions.sessionPhase,
         clockDependent,
         clock: currentOptions.nowMs,
-        // 不传 resolver 时，isPluginUiPinnedToolRow 恰好判定“该行是否受固定裁决影响”。
-        pinDependent: drafts.some((draft) =>
-          draft.orderedRows.some((row) => isPluginUiPinnedToolRow(row)),
-        ),
-        resolver: currentOptions.pluginUiPinResolver,
         units,
         cardIndexes: units.flatMap((unit, index) => (hasHighspeedCard(unit) ? [index] : [])),
       };

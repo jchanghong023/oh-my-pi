@@ -1,5 +1,3 @@
-import { DataSyncSection } from "@/data-sync/index.js";
-import { getWorkspaceSourceServerId } from "@/conversation-workspace-target/sourceIdentity.js";
 /* oxlint-disable eslint(max-lines) */
 import { ArrowLeft, type LucideIcon } from "lucide-react";
 import { useStore } from "zustand";
@@ -18,7 +16,6 @@ import {
 } from "react";
 import type {
   AppSettings,
-  DesktopCloseToTrayCapability,
   IntegratedTerminalShellOption,
   IntegratedTerminalShellSelection,
   Locale,
@@ -31,12 +28,10 @@ import {
   TID_SETTINGS_BACK_BUTTON,
   TID_SETTINGS_PAGE,
   TID_SETTINGS_SECTION_NAV,
-  TID_SETTINGS_USAGE_TAB,
   testId,
 } from "@zcode/shared/test-ids";
 import { Button } from "@/components/ui/button.js";
 import { toast } from "@/components/ui/toast.js";
-import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { logger } from "@/logger.js";
@@ -45,14 +40,9 @@ import { useProviderSettingsView } from "@/hooks/useProviderSettingsView.js";
 import { useUsageEntitlement } from "@/hooks/useUsageEntitlement.js";
 import {
   addPendingSettingsSectionListener,
-  clearPendingSettingsPluginOrigin,
   clearPendingSettingsPluginScopeKey,
   consumeInitialSettingsSection,
-  consumePendingSettingsSourceServerId,
-  consumePendingSettingsSourceServerDetails,
-  consumePendingSettingsPluginOrigin,
   consumePendingSettingsPluginScopeKey,
-  consumePendingSettingsPluginTab,
   consumePendingSettingsModelProviderTarget,
   consumePendingSettingsUsageTab,
   resolveSettingsSection,
@@ -70,11 +60,8 @@ import { buildUsageEntitlementCacheKey } from "@/lib/usageEntitlementCache.js";
 import {
   ArchiveManagement,
   ProjectManagement,
-  useOptionalProjectDirectory,
 } from "@/project-sidebar/index.js";
-import { resolveRecentRemoteProjectPreference } from "@/project-sidebar/remote-project-connection.js";
 import { ModelProviderSection } from "@/settings/ModelProviderSection.js";
-import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useEnterpriseCodingPlanProducts } from "@/settings/model-provider-section/useEnterpriseCodingPlanProducts.js";
 import { UsageStatsSection, type UsageStatsSectionTab } from "@/settings/UsageStatsSection.js";
 import {
@@ -84,14 +71,12 @@ import {
 import { buildPersonalCodingPlanUsageSource } from "@/lib/codingPlanUsageSources.js";
 import { SubagentsSection } from "@/settings/SubagentsSection.js";
 import { AutomationsSection } from "@/settings/AutomationsSection.js";
-import { SegmentPill } from "@/settings/PluginStoreListView.js";
+import { SettingsSegmentedTabs } from "@/settings/SettingsSegmentedTabs.js";
 import { PluginsSection } from "@/settings/PluginsSection.js";
 import { HooksSection } from "@/settings/HooksSection.js";
 import { WorkspaceFileSearchSection } from "@/settings/WorkspaceFileSearchSection.js";
 import { MemorySettingsSection } from "@/settings/MemorySettingsSection.js";
 import { PersonalizationSection } from "@/settings/PersonalizationSection.js";
-import { BrowserSettingsSection } from "@/settings/BrowserSettingsSection.js";
-import { ComputerUseSection } from "@/settings/ComputerUseSection.js";
 import { ShortcutSettingsSection } from "@/settings/ShortcutSettingsSection.js";
 import { MigrationSection } from "@/settings/MigrationSection.js";
 import { SETTINGS_FRAME_CONTENT_CLASSNAME } from "@/settings/SettingsPageParts.js";
@@ -104,18 +89,15 @@ import { useZCodeStore } from "@/store/StoreProvider.js";
 import { useTabStore } from "@/store/TabStoreProvider.js";
 import { isWorkspaceTab } from "@/store/tabStore.js";
 import type { Theme } from "@/useTheme.js";
-import { WindowsTopLeftLogo } from "@/WindowsTopLeftLogo.js";
 
-import { DesktopWindowControls } from "@/DesktopWindowControls.js";
 import { WorkspaceHelpMenuButton } from "@/WorkspaceHelpMenuButton.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { cn } from "@/components/lib/utils.js";
-import { useSelectDirectory } from "@/hooks/usePlatform.js";
 import { ServiceProvider, useServices } from "@/hooks/useServices.js";
 import type { AppToolSearchMode } from "@zcode/shared";
 import { useSettings } from "@/hooks/useSettingService.js";
-import type { CreateTaskRequest, RemoteConnectionOpenPreference } from "@/app-shell/types.js";
+import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { resolveModelProviderConnectivityWorkspacePath } from "@/lib/modelProviderConnectivityTarget.js";
 import {
@@ -123,15 +105,10 @@ import {
   GeneralSectionContent,
   GeneralSectionHeader,
   TaskAutoArchiveSettings,
-  isSettingsSectionAvailable,
   resolveSettingsSectionForPlatform,
 } from "@/settingsPageHelpers.js";
-import { SourceServerManagementPanel } from "@/settings/SourceServerManagementPanel.js";
-import { useSourceServerManagementSnapshot } from "@/hooks/useSourceServerManagementSnapshot.js";
-import { useOptionalRemoteWorkspaceController } from "@/remote/useRemoteWorkspaceController.js";
 import { AppearanceSectionContent } from "./settingsCodePreview.js";
 import type { SettingsSectionId } from "@/lib/settingsNavigation.js";
-import { requestPluginStoreOpen } from "@/lib/pluginStoreNavigation.js";
 import {
   runUserAction,
   runUserActionAsync,
@@ -194,17 +171,11 @@ function SettingsUsageProviderTabs({
       : activeTab;
 
   return (
-    <div className="flex items-center gap-1.5">
-      {tabItems.map((item) => (
-        <SegmentPill
-          key={item.id}
-          active={visibleActiveTab === item.id}
-          label={item.label}
-          testId={testId(TID_SETTINGS_USAGE_TAB, item.id)}
-          onClick={() => onTabChange(item.id)}
-        />
-      ))}
-    </div>
+    <SettingsSegmentedTabs
+      value={visibleActiveTab}
+      items={tabItems.map((item) => ({ value: item.id, label: item.label }))}
+      onValueChange={onTabChange}
+    />
   );
 }
 
@@ -295,31 +266,22 @@ function SettingsSidebarButton({
 
 export function SettingsPage({
   isDesktop,
-  isWindowsDesktop,
-  isMacDesktop,
   isWebRemoteControl = false,
-  windowsWindowControlsRightPaddingPx: _windowsWindowControlsRightPaddingPx,
   captionWorkspacePath,
   onBack,
   onCreateTask,
   onOpenWorkspace,
-  onOpenRemoteWorkspace,
   allowOpenWorkspace = true,
   onLogin,
   onLogout,
   user,
 }: {
   isDesktop?: boolean;
-  isWindowsDesktop?: boolean;
-  isMacDesktop?: boolean;
   isWebRemoteControl?: boolean;
-  windowsWindowControlsRightPaddingPx?: number;
   captionWorkspacePath?: string | null;
   onBack?: () => void;
   onCreateTask?: (request?: CreateTaskRequest) => void;
   onOpenWorkspace?: () => void;
-  onOpenRemoteWorkspace?: (preference?: RemoteConnectionOpenPreference) => void;
-  /** 远程设备卡「新任务」：激活该设备已打开的 tab 并开新草稿（Root 注入）。 */
   allowOpenWorkspace?: boolean;
   onLogin?: () => void;
   onLogout?: () => void;
@@ -327,18 +289,10 @@ export function SettingsPage({
 }) {
   const { intl, localePreference, setLocalePreference } = useZCodeIntl();
   const { settingsSectionGroups, settingsSections } = useMemo(
-    () =>
-      createSettingsPageConfig({
-        isDesktop: Boolean(isDesktop),
-        isMacDesktop: Boolean(isMacDesktop),
-        isWindowsDesktop: Boolean(isWindowsDesktop),
-      }),
-    [isDesktop, isMacDesktop, isWindowsDesktop],
+    () => createSettingsPageConfig(),
+    [],
   );
-  const isLinuxDesktop = Boolean(isDesktop && !isMacDesktop && !isWindowsDesktop);
-  const usesInlineWindowControls = Boolean(isWindowsDesktop || isLinuxDesktop);
   const platform = usePlatform();
-  const remoteWorkspaceController = useOptionalRemoteWorkspaceController();
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(() => {
     const initialSection = consumeInitialSettingsSection("general");
     const visibleInitialSection = resolveSettingsSectionForPlatform(
@@ -350,45 +304,6 @@ export function SettingsPage({
     writeLastSettingsSectionPreference(visibleInitialSection);
     return visibleInitialSection;
   });
-  const [targetSourceServerId, setTargetSourceServerId] = useState(
-    consumePendingSettingsSourceServerId,
-  );
-  const [targetSourceServerDetails, setTargetSourceServerDetails] = useState(
-    consumePendingSettingsSourceServerDetails,
-  );
-  const [pluginTab, setPluginTab] = useState(() => consumePendingSettingsPluginTab());
-  // Linux 关闭驻留托盘能力查询（spec：docs/desktop/linux-close-to-tray.md）：打开设置页时
-  // 经 platform IPC 触发 main 侧探测（带 stale 缓存），用户装完 AppIndicator 扩展重开
-  // 设置页即可解除置灰；Web/远控无桥不查询。
-  const [linuxCloseToTrayCapability, setLinuxCloseToTrayCapability] =
-    useState<DesktopCloseToTrayCapability | null>(null);
-  useEffect(() => {
-    if (!isLinuxDesktop) {
-      return;
-    }
-    let cancelled = false;
-    platform
-      .getCloseToTrayCapability?.()
-      .then((capability) => {
-        if (!cancelled) {
-          setLinuxCloseToTrayCapability(capability);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [isLinuxDesktop, platform]);
-  const linuxCloseToTray = isLinuxDesktop
-    ? {
-        // 探测中按不可用锁定，防止查询完成前误开导致关窗失联
-        disabled: linuxCloseToTrayCapability === null || !linuxCloseToTrayCapability.supported,
-        unavailable: linuxCloseToTrayCapability?.supported === false,
-        gnomeLikeHint:
-          linuxCloseToTrayCapability?.supported === false &&
-          linuxCloseToTrayCapability.gnomeLikeWithoutTray,
-      }
-    : undefined;
   const marketingRequest = useStore(marketingNavigation, (state) => state.request);
   useEffect(() => {
     if (marketingRequest?.target.page !== "settings") return;
@@ -400,17 +315,11 @@ export function SettingsPage({
       finishMarketingNavigation(marketingRequest.id);
     }
   }, [activeSection, marketingRequest, settingsSections]);
-  const [pluginNavigationOrigin, setPluginNavigationOrigin] = useState(() =>
-    consumePendingSettingsPluginOrigin(),
-  );
   const [pluginScopeKey, setPluginScopeKey] = useState(() =>
     consumePendingSettingsPluginScopeKey(),
   );
   const [settingsSectionNavigationVersion, setSettingsSectionNavigationVersion] = useState(0);
   useEffect(() => {
-    // React Strict Mode 会双执行 state initializer；来源和 scopeKey 都在挂载完成后再清理，
-    // Marketplace 只返回 User 已安装视图；Workspace 仍通过设置页自身的配置层切换进入。
-    clearPendingSettingsPluginOrigin();
     clearPendingSettingsPluginScopeKey();
   }, []);
   const [settingsBreadcrumbItems, setSettingsBreadcrumbItems] = useState<
@@ -424,8 +333,6 @@ export function SettingsPage({
   const setCodePreviewSettings = useZCodeStore((state) => state.setCodePreviewSettings);
   const uiFontSizePx = useZCodeStore((state) => state.uiFontSizePx);
   const setUiFontSizePx = useZCodeStore((state) => state.setUiFontSizePx);
-  const hideProjectDeviceNames = useZCodeStore((state) => state.hideProjectDeviceNames);
-  const setHideProjectDeviceNames = useZCodeStore((state) => state.setHideProjectDeviceNames);
   const notificationEnabled = useZCodeStore((state) => state.notificationEnabled);
   const setNotificationEnabled = useZCodeStore((state) => state.setNotificationEnabled);
   const notificationSoundEnabled = useZCodeStore((state) => state.notificationSoundEnabled);
@@ -633,7 +540,6 @@ export function SettingsPage({
     usageBigmodelEnterpriseProducts.loading ||
     usageZaiEnterpriseProducts.loading;
   const [initialModelProviderTarget] = useState(() => consumePendingSettingsModelProviderTarget());
-  const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
   const [pendingModelProviderTarget, setPendingModelProviderTarget] = useState<
     SettingsModelProviderTarget | undefined
   >(() => initialModelProviderTarget);
@@ -675,7 +581,6 @@ export function SettingsPage({
   const setNewUserOnboardingOpen = useZCodeStore((state) => state.setNewUserOnboardingOpen);
   // 「通用」页「打开引导」打开职业引导；迁移向导只从数据同步页「迁移」进入。
   const openOccupationOnboarding = () => setNewUserOnboardingOpen(true);
-  const requestMigrationDialog = useZCodeStore((state) => state.requestOnboardingDialog);
   const setActiveSettingsSection = useCallback(
     (section: SettingsSectionId, fallbackSection: SettingsSectionId = activeSection) => {
       const resolvedSection = resolveSettingsSection(section, fallbackSection);
@@ -683,23 +588,6 @@ export function SettingsPage({
       writeLastSettingsSectionPreference(resolvedSection);
     },
     [activeSection],
-  );
-  useEffect(() => {
-    if (!isSettingsSectionAvailable(activeSection, Boolean(isDesktop))) {
-      setActiveSettingsSection("general");
-    }
-  }, [activeSection, isDesktop, setActiveSettingsSection]);
-  const handleOpenCodingPlanUpgradeSettings = useCallback(
-    (
-      providerId: string,
-      funnelContext?: import("@/lib/codingPlanFunnelTelemetry.js").CodingPlanFunnelContext,
-    ) => {
-      openCodingPlanUpgrade({
-        providerId,
-        funnelContext,
-      });
-    },
-    [openCodingPlanUpgrade],
   );
   const handleOpenModelProviderSettings = useCallback(() => {
     setActiveSettingsSection("modelProvider");
@@ -710,8 +598,6 @@ export function SettingsPage({
     setActiveSettingsSection("usage");
   }, [setActiveSettingsSection]);
   const activeWorkspacePath = useTabStore((state) => state.activeWorkspacePath);
-  const activateTab = useTabStore((state) => state.activateTab);
-  const openSettingsTab = useTabStore((state) => state.openSettingsTab);
   const tabs = useTabStore((state) => state.tabs);
   const workspaceTabs = useMemo(() => tabs.filter(isWorkspaceTab), [tabs]);
   // Settings 打开后 activeTab 会变成 settings，本地反查 activeTab 读 identity 会稳定丢失。
@@ -751,26 +637,14 @@ export function SettingsPage({
     activeWorkspaceTab?.remoteSessionId?.trim() ||
     activeWorkspaceTab?.remoteTarget,
   );
-  const selectDirectory = useSelectDirectory();
   const services = useServices();
   const onboardingRecordService = services.onboardingRecordService;
   const localHostServices = useBaseWorkspaceServices();
-  const projectDirectory = useOptionalProjectDirectory();
   // SettingsPage 可能挂在远端 workspace 的 ServiceProvider 下；共享设置属于本机 Host，
   // 读写必须固定走本机 settingService，否则会写进远端 setting。
   const { settings: sharedSettings, update: updateSharedSettings } = useSettings({
     services: localHostServices,
   });
-  const sourceManagement = localHostServices.sourceServerManagementService;
-  const { snapshot: sourceManagementSnapshot } = useSourceServerManagementSnapshot(
-    sourceManagement,
-    {
-      onError: (error) =>
-        logger.warn("[SettingsPage] 读取 Source 状态失败", {
-          error: error instanceof Error ? error.message : String(error),
-        }),
-    },
-  );
   const memoryWorkspaceDisplayNames = useMemo(() => {
     const names = new Set<string>();
     // Memory Scope 的项目顺序以 settings.json recentProjects 为准；打开中的
@@ -791,7 +665,6 @@ export function SettingsPage({
   const askUserQuestionAutoResolutionEnabled =
     sharedSettings?.askUserQuestionAutoResolutionEnabled !== false;
   const modelIoFullRetentionEnabled = sharedSettings?.modelIoFullRetentionEnabled === true;
-  const [dataBaseDir, setDataBaseDir] = useState("");
   const [terminalInheritSystemProfile, setTerminalInheritSystemProfile] = useState(true);
   const [terminalFontFamily, setTerminalFontFamily] = useState("");
   const [integratedTerminalShell, setIntegratedTerminalShell] =
@@ -802,17 +675,8 @@ export function SettingsPage({
   const [httpProxy, setHttpProxy] = useState("");
   const [httpProxyNoProxy, setHttpProxyNoProxy] = useState("");
   const [httpProxyCaCertPath, setHttpProxyCaCertPath] = useState("");
-  const [embeddedBrowserAllowInsecureCertificates, setEmbeddedBrowserAllowInsecureCertificates] =
-    useState(false);
   const [taskAutoArchiveEnabled, setTaskAutoArchiveEnabled] = useState(false);
   const [taskAutoArchiveOlderThanDays, setTaskAutoArchiveOlderThanDays] = useState(30);
-  const [closeToTrayOnWindows, setCloseToTrayOnWindows] = useState(Boolean(isWindowsDesktop));
-  const [
-    desktopChromiumHardwareAccelerationEnabled,
-    setDesktopChromiumHardwareAccelerationEnabled,
-  ] = useState(true);
-  const [receivePreviewUpdates, setReceivePreviewUpdates] = useState(false);
-  const [autoDownloadAndInstallUpdates, setAutoDownloadAndInstallUpdates] = useState(false);
   const [messageStreamShowReasoning, setMessageStreamShowReasoning] = useState(true);
   const [messageStreamShowTodos, setMessageStreamShowTodos] = useState(false);
   const [toolGroupingExploreEnabled, setToolGroupingExploreEnabled] = useState(true);
@@ -820,7 +684,6 @@ export function SettingsPage({
   const [toolGroupingChangesEnabled, setToolGroupingChangesEnabled] = useState(false);
   const [zcodeInteractionBehavior, setZCodeInteractionBehavior] =
     useState<ZCodeInteractionBehavior>("queue");
-  const [defaultHomeDir, setDefaultHomeDir] = useState("");
   const [hostPlatform, setHostPlatform] = useState("");
 
   useEffect(() => {
@@ -856,21 +719,11 @@ export function SettingsPage({
         setActiveSettingsSection(section, activeSection);
         // 设置入口是一级路由边界。即使仍落在同一 section，也必须销毁旧的 New/Edit/Detail 子状态。
         setSettingsSectionNavigationVersion((version) => version + 1);
-        setTargetSourceServerId(section === "remoteDevices" ? detail?.sourceServerId : undefined);
-        setTargetSourceServerDetails(
-          section === "remoteDevices" && detail?.sourceServerDetails === true,
-        );
         if (section === "usage" && detail?.usageTab) {
           setUsageActiveTab(detail.usageTab);
         }
         // MCP 独立分区也接收工作区意图，否则会话内审核会误落到用户配置。
         setPluginScopeKey(detail?.pluginScopeKey);
-        if (resolveSettingsSection(section) === "plugin" && detail?.pluginTab) {
-          setPluginTab(detail.pluginTab);
-          setPluginNavigationOrigin(detail.pluginOrigin);
-        } else if (resolveSettingsSection(section) !== "plugin") {
-          setPluginNavigationOrigin(undefined);
-        }
         if (section === "modelProvider" && detail?.modelProviderId) {
           setPendingModelProviderTarget({
             providerId: detail.modelProviderId,
@@ -888,25 +741,16 @@ export function SettingsPage({
       .get()
       .then((settings: AppSettings) => {
         if (!active) return;
-        setDataBaseDir(settings.dataBaseDir ?? "");
         setIntegratedTerminalShell(settings.integratedTerminalShell ?? { mode: "auto" });
         setHttpProxy(settings.httpProxy ?? "");
         setHttpProxyNoProxy(settings.httpProxyNoProxy ?? "");
         setHttpProxyCaCertPath(settings.httpProxyCaCertPath ?? "");
-        setEmbeddedBrowserAllowInsecureCertificates(
-          settings.embeddedBrowserAllowInsecureCertificates ?? false,
-        );
-        setCloseToTrayOnWindows(settings.closeToTrayOnWindows ?? Boolean(isWindowsDesktop));
-        setDesktopChromiumHardwareAccelerationEnabled(
-          settings.desktopChromiumHardwareAccelerationEnabled ?? true,
-        );
       })
       .catch(() => {});
     localHostServices.systemService
       .info()
       .then((info) => {
         if (!active) return;
-        setDefaultHomeDir(info.homedir);
         setHostPlatform(info.platform);
         if (info.platform !== "win32") {
           setIntegratedTerminalShellOptions([]);
@@ -955,8 +799,6 @@ export function SettingsPage({
     setToolGroupingTerminalEnabled(sharedSettings.toolGroupingTerminalEnabled ?? true);
     setToolGroupingChangesEnabled(sharedSettings.toolGroupingChangesEnabled ?? false);
     setZCodeInteractionBehavior(sharedSettings.zcodeInteractionBehavior ?? "queue");
-    setReceivePreviewUpdates(sharedSettings.receivePreviewUpdates ?? false);
-    setAutoDownloadAndInstallUpdates(sharedSettings.autoDownloadAndInstallUpdates ?? false);
   }, [sharedSettings]);
   const handleTerminalInheritSystemProfileChange = useCallback(
     async (enabled: boolean) => {
@@ -1155,21 +997,6 @@ export function SettingsPage({
     },
     [localHostServices.settingService, intl],
   );
-  const handleDataBaseDirChange = useCallback(
-    async (dir: string) => {
-      await runSettingsActionAsync({
-        featureId: "settings.storage",
-        action: "change_data_directory",
-        trigger: "button",
-        operation: () => localHostServices.settingService.updateDataBaseDir(dir || undefined),
-        completed: { resultSource: "setting_service", requiresRestart: true },
-        failureStage: "data_directory_update",
-      });
-      // Bugfix: 迁移失败时不能先把本地状态改成失败路径，否则设置页会误显示为已切换。
-      setDataBaseDir(dir);
-    },
-    [localHostServices.settingService],
-  );
   const handleTaskAutoArchiveEnabledChange = useCallback(
     async (enabled: boolean) => {
       await runSettingsActionAsync({
@@ -1198,122 +1025,6 @@ export function SettingsPage({
       setTaskAutoArchiveOlderThanDays(days);
     },
     [services.settingService],
-  );
-  const handleCloseToTrayOnWindowsChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.desktop",
-        action: "toggle_close_to_tray",
-        trigger: "switch",
-        operation: () => localHostServices.settingService.update({ closeToTrayOnWindows: enabled }),
-        completed: {
-          resultSource: "setting_service",
-          stateAfter: enabled ? "enabled" : "disabled",
-        },
-      });
-      platform.syncAppSettings?.({ closeToTrayOnWindows: enabled });
-      setCloseToTrayOnWindows(enabled);
-    },
-    [localHostServices.settingService, platform],
-  );
-  // keep-awake：走 useSettings 统一写盘 + syncAppSettings，和 Automations/创建页入口共享同一状态源。
-  const handleKeepAwakeWhileRunningChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.desktop",
-        action: "toggle_keep_awake",
-        trigger: "switch",
-        operation: () => updateSharedSettings({ keepAwakeWhileRunning: enabled }),
-        completed: {
-          resultSource: "shared_settings",
-          stateAfter: enabled ? "enabled" : "disabled",
-        },
-      });
-    },
-    [updateSharedSettings],
-  );
-  const handleDesktopChromiumHardwareAccelerationChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.desktop",
-        action: "toggle_hardware_acceleration",
-        trigger: "switch",
-        operation: () =>
-          localHostServices.settingService.update({
-            desktopChromiumHardwareAccelerationEnabled: enabled,
-          }),
-        completed: {
-          resultSource: "setting_service",
-          stateAfter: enabled ? "enabled" : "disabled",
-          requiresRestart: true,
-        },
-      });
-      setDesktopChromiumHardwareAccelerationEnabled(enabled);
-      toast(
-        intl.formatMessage({
-          id: "settings.desktopChromiumHardwareAccelerationSavedHint",
-        }),
-      );
-    },
-    [localHostServices.settingService, intl],
-  );
-  const handleEmbeddedBrowserAllowInsecureCertificatesChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.browser",
-        action: "toggle_insecure_certificates",
-        trigger: "switch",
-        operation: () =>
-          localHostServices.settingService.update({
-            embeddedBrowserAllowInsecureCertificates: enabled,
-          }),
-        completed: {
-          resultSource: "setting_service",
-          stateAfter: enabled ? "enabled" : "disabled",
-          requiresRestart: true,
-        },
-      });
-      setEmbeddedBrowserAllowInsecureCertificates(enabled);
-      // 证书策略在 main 启动时装到 Session 上，改完必须重启才会换掉 verifyProc。
-      toast(
-        intl.formatMessage({
-          id: "settings.embeddedBrowserAllowInsecureCertificatesSavedHint",
-        }),
-      );
-    },
-    [localHostServices.settingService, intl],
-  );
-  const handleReceivePreviewUpdatesChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.update",
-        action: "toggle_preview_updates",
-        trigger: "switch",
-        operation: () => updateSharedSettings({ receivePreviewUpdates: enabled }),
-        completed: {
-          resultSource: "shared_settings",
-          stateAfter: enabled ? "enabled" : "disabled",
-        },
-      });
-      setReceivePreviewUpdates(enabled);
-    },
-    [updateSharedSettings],
-  );
-  const handleAutoDownloadAndInstallUpdatesChange = useCallback(
-    async (enabled: boolean) => {
-      await runSettingsActionAsync({
-        featureId: "settings.update",
-        action: "toggle_auto_update",
-        trigger: "switch",
-        operation: () => updateSharedSettings({ autoDownloadAndInstallUpdates: enabled }),
-        completed: {
-          resultSource: "shared_settings",
-          stateAfter: enabled ? "enabled" : "disabled",
-        },
-      });
-      setAutoDownloadAndInstallUpdates(enabled);
-    },
-    [updateSharedSettings],
   );
   const handleMessageStreamShowReasoningChange = useCallback(
     async (enabled: boolean) => {
@@ -1478,8 +1189,6 @@ export function SettingsPage({
     [setCodePreviewSettings],
   );
   const activeSectionMeta = settingsSections.find((section) => section.id === activeSection);
-  // 灰度裁决异步到达：sections 列表可能在挂载后变化（如 computerUse 区被灰度移除）。
-  // 若用户正停留在被移除的 section，回落到第一个可见区，避免整页 return null。
   useEffect(() => {
     setActiveSection((current) => resolveSettingsSectionForPlatform(current, settingsSections));
   }, [settingsSections]);
@@ -1490,51 +1199,21 @@ export function SettingsPage({
   const activeSectionLabel = intl.formatMessage({
     id: activeSectionMeta.contentTitleId ?? activeSectionMeta.titleId,
   });
-  const settingsBreadcrumbSectionLabel =
-    activeSection === "plugin" && pluginNavigationOrigin === "plugin-store"
-      ? intl.formatMessage({ id: "workspace.openPluginsSettings" })
-      : activeSectionLabel;
+  const settingsBreadcrumbSectionLabel = activeSectionLabel;
   const visibleSettingsBreadcrumbItems =
     settingsBreadcrumbItems[0]?.label === settingsBreadcrumbSectionLabel
       ? settingsBreadcrumbItems
       : [];
   const hasVisibleSettingsBreadcrumb = visibleSettingsBreadcrumbItems.length >= 2;
-  const showActiveSectionTitle =
-    !hasVisibleSettingsBreadcrumb ||
-    (activeSection === "plugin" && pluginNavigationOrigin === "plugin-store");
+  const showActiveSectionTitle = !hasVisibleSettingsBreadcrumb;
 
   return (
     <>
-      <DesktopWindowFrame
-        title={intl.formatMessage({ id: "settings.title" })}
-        isDesktop={isDesktop}
-        isMacDesktop={isMacDesktop}
-        isWindowsDesktop={isWindowsDesktop}
-      >
         <div
           data-testid={TID_SETTINGS_PAGE}
           data-active-section={activeSection}
-          // 隐式 auto 行会按 Memory viewer 的内容高度撑出窗口，随后被 DesktopWindowFrame 裁切且没有滚动条。
-          // 固定为单个 minmax(0, 1fr) 行，让普通设置页和内部滚动 viewer 都以窗口剩余高度为边界。
           className="relative grid h-screen min-h-full w-full grid-cols-[68px_minmax(0,1fr)] grid-rows-[minmax(0,1fr)] lg:grid-cols-[268px_minmax(0,1fr)]"
         >
-          {isWindowsDesktop ? <WindowsTopLeftLogo /> : null}
-
-          {usesInlineWindowControls ? (
-            <div
-              className={cn(
-                "absolute z-30 mt-px mr-px flex h-12 items-center gap-0.5 px-2 pointer-events-auto [app-region:no-drag]",
-                // 外沿留白变化后，悬浮操作组也必须同步，否则与内容 Header 错位。
-                isWindowsDesktop ? "right-1.5 top-1.5" : "right-1 top-1",
-              )}
-            >
-              {/* Bug 原因：Windows/Linux 设置页仍保留旧 caption 下箭头，与主界面和 macOS 的帮助入口不一致。
-                  统一复用问号帮助按钮，并让它在普通 flex 流中紧邻自绘窗控。
-                  Settings 的独立标题层还需计入 4px 外层留白和 1px 边框，才能与 Workspace 控制组对齐。 */}
-              <WorkspaceHelpMenuButton isDesktop={Boolean(isDesktop)} />
-              <DesktopWindowControls />
-            </div>
-          ) : null}
           <aside className="min-w-0">
             <div className="flex h-full flex-col">
               <div className="h-12 [app-region:drag]"></div>
@@ -1564,9 +1243,6 @@ export function SettingsPage({
                             trigger: "button",
                           },
                           operation: () => {
-                            if (pluginNavigationOrigin === "plugin-store") {
-                              requestPluginStoreOpen("user");
-                            }
                             onBack?.();
                           },
                           completed: { resultSource: "local_commit" },
@@ -1613,7 +1289,6 @@ export function SettingsPage({
                           {groupLabel}
                         </div>
                         {group.sections
-                          .filter(({ id }) => isSettingsSectionAvailable(id, Boolean(isDesktop)))
                           .map(({ id, icon: Icon, titleId }) => {
                             const isActive = activeSection === id;
                             const label = intl.formatMessage({ id: titleId });
@@ -1635,8 +1310,6 @@ export function SettingsPage({
                                       trigger: "button",
                                     },
                                     operation: () => {
-                                      setPluginNavigationOrigin(undefined);
-                                      setTargetSourceServerId(undefined);
                                       setSettingsSectionNavigationVersion((version) => version + 1);
                                       setActiveSettingsSection(id);
                                     },
@@ -1667,14 +1340,10 @@ export function SettingsPage({
                   onThemeChange={handleFooterThemeChange}
                   onSettingsButtonClick={onBack}
                   onUsageClick={handleOpenUsageSettings}
-                  onUpgradeClick={handleOpenCodingPlanUpgradeSettings}
                   onLogin={onLogin}
                   onLogout={onLogout}
                   settingsButtonMode="back"
                   user={user}
-                  // 头像菜单是 WorkspaceSidebarFooter 的共享菜单，Settings 场景不能丢失桌面平台能力。
-                  // 之前这里没透传 isDesktop，导致同一个头像菜单在设置页缺少界面缩放入口。
-                  isDesktop={isDesktop}
                 />
               </div>
             </div>
@@ -1682,30 +1351,12 @@ export function SettingsPage({
 
           <section
             data-settings-content-frame="true"
-            className={cn(
-              "flex min-h-0 flex-col",
-              // 桌面平台统一复用主工作区的面板 inset；左侧仍与导航相接，顶部由独立拖拽留白承接。
-              isDesktop ? (isWindowsDesktop ? "pr-1.5 pb-1.5" : "pr-1 pb-1") : "p-0",
-            )}
+            className="flex min-h-0 flex-col"
           >
             <div
-              data-settings-top-inset={isDesktop ? "true" : undefined}
-              // 下方面板使用 h-full；顶部留白不能参与 flex 收缩，否则 6px 会变成小数像素。
-              className={cn(
-                "shrink-0 [app-region:drag]",
-                isDesktop && (isWindowsDesktop ? "h-1.5" : "h-1"),
-                isMacDesktop && "max-lg:h-16",
-              )}
-            />
-            <div
               data-settings-panel-frame="true"
-              className={cn(
-                "relative flex flex-col min-h-0 h-full border border-border bg-background",
-                // 直接写像素圆角会绕过设计 token；设置页与工作区统一复用 rounded-md（默认 6px）。
-                isWindowsDesktop ? "rounded-md" : "rounded-xl",
-              )}
+              className="relative flex min-h-0 h-full flex-col rounded-xl border border-border bg-background"
             >
-              {!usesInlineWindowControls ? (
                 <div
                   className={cn(
                     // Settings 使用和 new task 一致的问号定位：在内容面板内定位，外层让出自绘窗口按钮区，内层保持 top-2.5/right-2.5。
@@ -1716,11 +1367,9 @@ export function SettingsPage({
                   <div className="absolute right-2.5 top-2.5 pointer-events-auto [app-region:no-drag]">
                     <WorkspaceHelpMenuButton
                       className="relative z-50 [app-region:no-drag]"
-                      isDesktop={Boolean(isDesktop)}
                     />
                   </div>
                 </div>
-              ) : null}
               <SettingsBreadcrumbProvider
                 onItemsChange={setSettingsBreadcrumbItems}
                 sectionLabel={settingsBreadcrumbSectionLabel}
@@ -1728,17 +1377,7 @@ export function SettingsPage({
                 <div className="flex min-h-0 flex-1 flex-col">
                   <div className="flex h-12 shrink-0">
                     <div
-                      // Settings 窄布局会像左侧导航一样在 max-lg 收成 icon rail。
-                      // 此时外层已经提供 max-lg:h-16 的顶部拖拽/避让区，内层 h-10 再保留会把内容额外压低。
-                      // Electron 的 drag 区不能和右上角帮助/窗口按钮命中区域重叠；
-                      // 这里把右侧按钮区域从拖拽条里让出来，避免真实鼠标点击被标题栏拖拽吞掉。
-                      // Windows/Linux 设置页共同避开右上角菜单与内联窗控组。
-
-                      className={cn(
-                        "min-w-0 flex-1 [app-region:drag]",
-                        // 四个 28px 按钮、组内 2px 间距和左右 8px padding，共 134px。
-                        usesInlineWindowControls ? "mr-[134px]" : "mr-12",
-                      )}
+                      className="min-w-0 flex-1 mr-12"
                     >
                       <SettingsHeaderBreadcrumb
                         ariaLabel={intl.formatMessage({
@@ -1754,12 +1393,8 @@ export function SettingsPage({
                         className={cn(
                           SETTINGS_FRAME_CONTENT_CLASSNAME,
                           "flex flex-col gap-8",
-                          isMacDesktop && "pt-0",
-                          // isWindowsDesktop && "pt-12",
                         )}
                       >
-                        {/* 数据同步自带标题与迁移入口，避免公共页头重复显示标题和间距。 */}
-                        {activeSection !== "dataSync" ? (
                           <div>
                             <div className="flex flex-wrap items-center justify-between gap-3">
                               <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -1793,28 +1428,15 @@ export function SettingsPage({
                               </p>
                             ) : null}
                           </div>
-                        ) : null}
                         <div className="space-y-8">
                           {activeSection === "general" ? (
                             <GeneralSectionContent
                               localePreference={localePreference}
                               interfaceMode={interfaceMode}
                               setInterfaceMode={setInterfaceMode}
-                              isDesktop={isDesktop}
-                              isWindowsDesktop={isWindowsDesktop}
-                              isLinuxDesktop={isLinuxDesktop}
-                              linuxCloseToTray={linuxCloseToTray}
                               platform={platform}
                               notificationEnabled={notificationEnabled}
                               notificationSoundEnabled={notificationSoundEnabled}
-                              closeToTrayOnWindows={closeToTrayOnWindows}
-                              keepAwakeWhileRunning={sharedSettings?.keepAwakeWhileRunning ?? false}
-                              desktopChromiumHardwareAccelerationEnabled={
-                                desktopChromiumHardwareAccelerationEnabled
-                              }
-                              receivePreviewUpdates={receivePreviewUpdates}
-                              autoDownloadAndInstallUpdates={autoDownloadAndInstallUpdates}
-                              dataBaseDir={dataBaseDir}
                               terminalInheritSystemProfile={terminalInheritSystemProfile}
                               terminalFontFamily={terminalFontFamily}
                               integratedTerminalShell={integratedTerminalShell}
@@ -1825,7 +1447,6 @@ export function SettingsPage({
                               httpProxy={httpProxy}
                               httpProxyNoProxy={httpProxyNoProxy}
                               httpProxyCaCertPath={httpProxyCaCertPath}
-                              defaultHomeDir={defaultHomeDir}
                               showIntegratedTerminalShell={hostPlatform === "win32"}
                               setLocalePreference={handleFooterLocaleChange}
                               setNotificationEnabled={(enabled) =>
@@ -1868,8 +1489,6 @@ export function SettingsPage({
                                 askUserQuestionAutoResolutionEnabled
                               }
                               modelIoFullRetentionEnabled={modelIoFullRetentionEnabled}
-                              onDataBaseDirChange={handleDataBaseDirChange}
-                              onSelectDataBaseDir={selectDirectory}
                               onTerminalInheritSystemProfileChange={
                                 handleTerminalInheritSystemProfileChange
                               }
@@ -1884,15 +1503,6 @@ export function SettingsPage({
                               onHttpProxyChange={handleHttpProxyChange}
                               onHttpProxyNoProxyChange={handleHttpProxyNoProxyChange}
                               onHttpProxyCaCertPathChange={handleHttpProxyCaCertPathChange}
-                              onCloseToTrayOnWindowsChange={handleCloseToTrayOnWindowsChange}
-                              onKeepAwakeWhileRunningChange={handleKeepAwakeWhileRunningChange}
-                              onDesktopChromiumHardwareAccelerationChange={
-                                handleDesktopChromiumHardwareAccelerationChange
-                              }
-                              onReceivePreviewUpdatesChange={handleReceivePreviewUpdatesChange}
-                              onAutoDownloadAndInstallUpdatesChange={
-                                handleAutoDownloadAndInstallUpdatesChange
-                              }
                               onMessageStreamShowReasoningChange={
                                 handleMessageStreamShowReasoningChange
                               }
@@ -1925,136 +1535,6 @@ export function SettingsPage({
                                 })
                               }
                             />
-                          ) : activeSection === "dataSync" ? (
-                            isDesktop ? (
-                              <DataSyncSection
-                                snapshot={sourceManagementSnapshot}
-                                sourceServices={localHostServices}
-                                deviceSyncStateService={localHostServices.deviceSyncStateService}
-                                requestSourceSettingsAttachment={
-                                  platform?.requestSourceSettingsAttachment
-                                }
-                                onOpenRemoteConnection={onOpenRemoteWorkspace}
-                                onOpenMigration={requestMigrationDialog}
-                              />
-                            ) : null
-                          ) : activeSection === "remoteDevices" ? (
-                            sharedSettings && isDesktop && sourceManagement ? (
-                              <SourceServerManagementPanel
-                                key={`remote:${settingsSectionNavigationVersion}`}
-                                targetSourceServerId={targetSourceServerId}
-                                targetSourceServerDetails={targetSourceServerDetails}
-                                onTargetSourceServerFocused={() => {
-                                  setTargetSourceServerId(undefined);
-                                  setTargetSourceServerDetails(false);
-                                }}
-                                management={sourceManagement}
-                                onCreateConnection={
-                                  onOpenRemoteWorkspace
-                                    ? () =>
-                                        onOpenRemoteWorkspace({ completion: "device-management" })
-                                    : undefined
-                                }
-                                onConnectProfile={
-                                  remoteWorkspaceController
-                                    ? (profileId) =>
-                                        remoteWorkspaceController.dispatch({
-                                          type: "connect-device",
-                                          profileId,
-                                          effect: "device-management",
-                                        })
-                                    : onOpenRemoteWorkspace
-                                      ? (profileId) =>
-                                          onOpenRemoteWorkspace({
-                                            preferredProfileId: profileId,
-                                            completion: "device-management",
-                                          })
-                                      : undefined
-                                }
-                                onDisconnectSource={
-                                  remoteWorkspaceController
-                                    ? (sourceServerId) =>
-                                        remoteWorkspaceController.dispatch({
-                                          type: "disconnect-device",
-                                          sourceServerId,
-                                        })
-                                    : undefined
-                                }
-                                onOpenProject={
-                                  onOpenRemoteWorkspace
-                                    ? async (sourceServerId, path, profileId) => {
-                                        // 仅传目录会被 Root 当成新建；复用侧栏唯一目录 owner，同步固定原入口。
-                                        const preference =
-                                          projectDirectory &&
-                                          resolveRecentRemoteProjectPreference(
-                                            projectDirectory.directory,
-                                            {
-                                              sourceServerId,
-                                              path,
-                                              profileId,
-                                            },
-                                          );
-                                        if (!preference) {
-                                          throw Object.assign(
-                                            new Error("remote-project.entry-not-found"),
-                                            {
-                                              code: "recent-project-unresolved",
-                                            },
-                                          );
-                                        }
-                                        onBack?.();
-                                        onOpenRemoteWorkspace(preference);
-                                      }
-                                    : undefined
-                                }
-                                onShowUpdateDetails={(sourceServerId) => {
-                                  setPendingSettingsSectionIntent("remoteDevices", {
-                                    sourceServerId,
-                                    sourceServerDetails: true,
-                                  });
-                                  openSettingsTab();
-                                }}
-                                workspaceTabs={workspaceTabs}
-                                onShowInSidebar={(sourceServerId) => {
-                                  const target = workspaceTabs.find(
-                                    (tab) =>
-                                      getWorkspaceSourceServerId(tab, {
-                                        workspaceHistory:
-                                          sourceManagementSnapshot?.workspaceHistory,
-                                      }) === sourceServerId,
-                                  );
-                                  onBack?.();
-                                  if (target) {
-                                    activateTab(target.id);
-                                    requestAnimationFrame(() => {
-                                      const row = Array.from(
-                                        document.querySelectorAll<HTMLElement>(
-                                          "[data-remote-project-identity]",
-                                        ),
-                                      ).find(
-                                        (element) =>
-                                          element.dataset.remoteProjectIdentity ===
-                                          target.workspaceIdentity,
-                                      );
-                                      row?.scrollIntoView({ block: "center" });
-                                      row
-                                        ?.querySelector<HTMLElement>('[role="button"]')
-                                        ?.focus({ preventScroll: true });
-                                    });
-                                  }
-                                }}
-                                settings={sharedSettings}
-                                onUpdateSettings={updateSharedSettings}
-                                hideProjectDeviceNames={hideProjectDeviceNames}
-                                onHideProjectDeviceNamesChange={setHideProjectDeviceNames}
-                              />
-                            ) : (
-                              <p className="text-ui-sm text-remote-foreground-muted">
-                                {intl.formatMessage({
-                                  id: sharedSettings ? "settings.source.empty" : "common.loading",
-                                })}
-                              </p>
-                            )
                           ) : activeSection === "appearance" ? (
                             <AppearanceSectionContent
                               codePreviewSettings={codePreviewSettings}
@@ -2115,25 +1595,6 @@ export function SettingsPage({
                                 workspaceDisplayNames={memoryWorkspaceDisplayNames}
                               />
                             </ServiceProvider>
-                          ) : activeSection === "plugin" ? (
-                            <PluginsSection
-                              key={`plugin:${settingsSectionNavigationVersion}`}
-                              isDesktop={Boolean(isDesktop)}
-                              isMacDesktop={Boolean(isMacDesktop)}
-                              isWindowsDesktop={Boolean(isWindowsDesktop)}
-                              isWebRemoteControl={isWebRemoteControl}
-                              initialTab={pluginTab}
-                              initialScopeKey={pluginScopeKey}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              showMarketplaceBreadcrumb={pluginNavigationOrigin === "plugin-store"}
-                              onCreateTask={onCreateTask}
-                              onOpenPluginStore={(_returnScopeKey, intent) => {
-                                // 添加市场与浏览插件都先离开设置层，再显示商店。
-                                requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                                onBack?.();
-                              }}
-                            />
                           ) : activeSection === "mcp" ? (
                             <PluginsSection
                               key={`mcp:${settingsSectionNavigationVersion}`}
@@ -2143,11 +1604,6 @@ export function SettingsPage({
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                               onCreateTask={onCreateTask}
-                              onOpenPluginStore={(_returnScopeKey, intent) => {
-                                // 添加市场与浏览插件都先离开设置层，再显示商店。
-                                requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                                onBack?.();
-                              }}
                             />
                           ) : activeSection === "skill" ? (
                             <PluginsSection
@@ -2157,11 +1613,6 @@ export function SettingsPage({
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                               onCreateTask={onCreateTask}
-                              onOpenPluginStore={(_returnScopeKey, intent) => {
-                                // 添加市场与浏览插件都先离开设置层，再显示商店。
-                                requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                                onBack?.();
-                              }}
                             />
                           ) : activeSection === "migration" ? (
                             <MigrationSection
@@ -2209,11 +1660,6 @@ export function SettingsPage({
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                               onCreateTask={onCreateTask}
-                              onOpenPluginStore={(_returnScopeKey, intent) => {
-                                // 添加市场与浏览插件都先离开设置层，再显示商店。
-                                requestPluginStoreOpen({ returnScopeKey: "user", intent });
-                                onBack?.();
-                              }}
                             />
                           ) : activeSection === "hooks" ? (
                             <HooksSection
@@ -2225,30 +1671,6 @@ export function SettingsPage({
                               workspacePath={activeWorkspacePath}
                               workspaceIdentity={activeWorkspaceIdentity}
                             />
-                          ) : activeSection === "browser" ? (
-                            <BrowserSettingsSection
-                              isDesktop={Boolean(isDesktop)}
-                              isWindowsDesktop={isWindowsDesktop}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              embeddedBrowserAllowInsecureCertificates={
-                                embeddedBrowserAllowInsecureCertificates
-                              }
-                              onEmbeddedBrowserAllowInsecureCertificatesChange={
-                                handleEmbeddedBrowserAllowInsecureCertificatesChange
-                              }
-                            />
-                          ) : activeSection === "computerUse" ? (
-                            <ComputerUseSection
-                              isDesktop={Boolean(isDesktop)}
-                              isMacDesktop={Boolean(isMacDesktop)}
-                              isWindowsDesktop={Boolean(isWindowsDesktop)}
-                              workspacePath={activeWorkspacePath}
-                              workspaceIdentity={activeWorkspaceIdentity}
-                              remoteSessionId={activeWorkspaceTab?.remoteSessionId}
-                              remoteTarget={activeWorkspaceTab?.remoteTarget}
-                              localWorkspacePath={activeWorkspaceTab?.localWorkspacePath}
-                            />
                           ) : null}
                         </div>
                       </div>
@@ -2259,7 +1681,6 @@ export function SettingsPage({
             </div>
           </section>
         </div>
-      </DesktopWindowFrame>
     </>
   );
 }

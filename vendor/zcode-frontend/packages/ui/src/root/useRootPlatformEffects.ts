@@ -3,7 +3,7 @@ import { getConversationShareErrorDetails } from "@/lib/conversationShareError.j
 import { useEffect, useRef, useState } from "react";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import type { CreateTaskOptions } from "@/app-shell/types.js";
-import type { IPlatformService, ZCodeTaskClientMode } from "@zcode/shared";
+import type { IPlatformService, ZCodeTaskClientMode, WorkspacePurpose, Locale } from "@zcode/shared";
 import { readV4ComposerDraft, V4_DRAFT_SCOPE_ROOT } from "@/v4/composer/composerDraftStore.js";
 import { readComposerWorkspaceScope } from "@/v4/composer/composerDraftStore.js";
 import { useComposerClientNamespace } from "@/hooks/useServices.js";
@@ -15,10 +15,8 @@ import { dismissToast, toast, updateToast } from "@/components/ui/toast.js";
 import { matchesPrimaryShortcut } from "@/lib/keyboardShortcuts.js";
 import { isShortcutRecordingActive } from "@/shortcuts/bindings.js";
 import { isRendererReloadNavigation } from "@/lib/rendererNavigation.js";
-import {
-  useWebRemoteControlWorkspaceSync,
-  shouldPublishCompleteWorkspaceSnapshot,
-} from "@/root/rootPlatformWorkspaceSync.js";
+import type { IntlInstance } from "@/i18n/IntlProvider.js";
+import { shouldPublishCompleteWorkspaceSnapshot } from "@/root/rootPlatformWorkspaceSync.js";
 import { useOptionalBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import {
   createShareImportIntent,
@@ -50,16 +48,13 @@ export function useRootPlatformEffects({
   tabs,
   activeWorkspacePath,
   activeWorkspaceIdentity,
-  reconnectingRemoteWorkspaceKeys = [],
-  remoteWorkspaceErrorByWorkspaceKey = {},
-  webRemoteControlFeatureEnabled = false,
   hasCompletedFullTabRestore = true,
   intl,
   isRestoringOAuthSession,
 }: {
   initialWorkspaceAbsPath?: string;
   initialWorkspaceIdentity?: string;
-  initialWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose;
+  initialWorkspacePurpose?: WorkspacePurpose;
   initialTaskId?: string;
   initialTaskDraft?: CreateTaskOptions;
   clientMode?: ZCodeTaskClientMode;
@@ -68,7 +63,7 @@ export function useRootPlatformEffects({
     workspacePath: string,
     options?: {
       workspaceIdentity?: string;
-      workspacePurpose?: import("@zcode/shared").WorkspacePurpose;
+      workspacePurpose?: WorkspacePurpose;
     },
   ) => void;
   setIsBootstrappingInitialWorkspace: (value: boolean) => void;
@@ -85,15 +80,12 @@ export function useRootPlatformEffects({
   setWorkspaceActionError: (message: string | null) => void;
   allowOpenWorkspace?: boolean;
   isDesktop?: boolean;
-  locale: ReturnType<typeof import("@/i18n/IntlProvider.js").useZCodeIntl>["locale"];
+  locale: Locale;
   tabs: WindowTabState[];
   activeWorkspacePath?: string | null;
   activeWorkspaceIdentity?: string | null;
-  reconnectingRemoteWorkspaceKeys?: string[];
-  remoteWorkspaceErrorByWorkspaceKey?: Record<string, string>;
-  webRemoteControlFeatureEnabled?: boolean;
   hasCompletedFullTabRestore?: boolean;
-  intl: ReturnType<typeof import("@/i18n/IntlProvider.js").useZCodeIntl>["intl"];
+  intl: IntlInstance;
   isRestoringOAuthSession: boolean;
 }) {
   const didBootstrapInitialWorkspaceRef = useRef(false);
@@ -577,15 +569,6 @@ export function useRootPlatformEffects({
     platform.syncWindowTabs(paths);
   }, [hasCompletedFullTabRestore, isDesktop, platform, tabs]);
 
-  useWebRemoteControlWorkspaceSync({
-    platform,
-    tabs,
-    isDesktop: Boolean(isDesktop),
-    featureEnabled: webRemoteControlFeatureEnabled,
-    hasCompletedFullTabRestore,
-    reconnectingRemoteWorkspaceKeys,
-    remoteWorkspaceErrorByWorkspaceKey,
-  });
 
   useEffect(() => {
     if (isDesktop) {
@@ -623,28 +606,6 @@ export function useRootPlatformEffects({
       window.removeEventListener("keydown", handleWindowKeydown, true);
     };
   }, [isDesktop, openWorkspace, startNewTaskFromActiveWorkspace]);
-
-  useEffect(() => {
-    if (!isDesktop) {
-      return;
-    }
-
-    let disposed = false;
-
-    // 原生菜单文案之前在 main 进程里写死，renderer 切换 locale 只会更新 React 标题栏菜单。
-    // 结果就是桌面端会同时出现两套语言，Help 里的反馈/导出日志也无法跟随当前语言切换。
-    // 这里把当前 locale 主动同步给 main，让原生菜单和标题栏菜单都从同一份语言状态重建。
-    platform.setApplicationLocale(locale).catch((error) => {
-      if (disposed) {
-        return;
-      }
-      logger.error("[Root] 同步应用菜单语言失败", { locale, error });
-    });
-
-    return () => {
-      disposed = true;
-    };
-  }, [isDesktop, locale, platform]);
 
   const activeTabId = useTabStore((state: TabStoreState) => state.activeTabId);
   const activeTabCandidate = useTabStore((state: TabStoreState) =>

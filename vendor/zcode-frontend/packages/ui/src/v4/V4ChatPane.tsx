@@ -1,7 +1,3 @@
-import {
-  RemoteConversationBanner,
-  RemoteConversationDisconnected,
-} from "@/project-sidebar/RemoteConversationDisconnected.js";
 import type { ReactNode } from "react";
 import type {
   GitChangeSourceId,
@@ -139,20 +135,6 @@ export function V4ChatPane({
       sessionId={sessionId ?? null}
       workspacePath={workspacePath}
       workspaceIdentity={workspaceIdentity}
-      unavailableFallback={
-        <RemoteConversationDisconnected
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          sessionId={sessionId}
-        />
-      }
-      disconnectedBanner={
-        <RemoteConversationBanner
-          workspacePath={workspacePath}
-          workspaceIdentity={workspaceIdentity}
-          sessionId={sessionId}
-        />
-      }
     >
       <SessionPane
         paneId="workspace-main"

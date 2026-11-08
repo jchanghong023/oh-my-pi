@@ -49,7 +49,6 @@ import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { normalizeInterfaceMode } from "@/lib/interfaceMode.js";
 import type { Theme } from "@/useTheme.js";
-import { WorkspaceWebRemoteControlTrigger } from "@/WorkspaceWebRemoteControlTrigger.js";
 import {
   WorkspaceSidebarFooterPlanBadge,
   WorkspaceSidebarFooterUsageSummaryContent,
@@ -96,15 +95,12 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onThemeChange,
   onSettingsButtonClick,
   onUsageClick,
-  onUpgradeClick,
   onLogin,
   onLogout,
   settingsButtonMode = "settings",
   user,
   workspacePath,
   workspaceIdentity,
-  workspaceRemoteSessionId,
-  activeTaskId,
   isDesktop = false,
   banner,
   className,
@@ -115,17 +111,12 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
   onThemeChange: (value: string) => void;
   onSettingsButtonClick?: () => void;
   onUsageClick?: () => void;
-  onUpgradeClick?: Parameters<
-    typeof WorkspaceSidebarFooterUsageSummaryContent
-  >[0]["onUpgradeClick"];
   onLogin?: () => void;
   onLogout?: () => void;
   settingsButtonMode?: "settings" | "back";
   user?: UserInfo | null;
   workspacePath?: string;
   workspaceIdentity?: string;
-  workspaceRemoteSessionId?: string;
-  activeTaskId?: string | null;
   isDesktop?: boolean;
   banner?: ReactNode;
   className?: string;
@@ -429,11 +420,8 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             ) : null}
-            {/* Bugfix: 升级入口状态不再以菜单开关为生命周期边界。 */}
             <WorkspaceSidebarFooterUsageSummaryContent
-              state={usageSummaryState}
               onUsageClick={usageButtonClick}
-              onUpgradeClick={onUpgradeClick}
             />
             {user ? (
               <DropdownMenuItem onSelect={() => openRewards?.()} data-testid="rewards-menu-item">
@@ -466,15 +454,6 @@ export const WorkspaceSidebarFooter = memo(function WorkspaceSidebarFooterCompon
           </DropdownMenuContent>
         </DropdownMenu>
         <div className="flex shrink-0 items-center gap-1.5">
-          {isDesktop && workspacePath ? (
-            <WorkspaceWebRemoteControlTrigger
-              workspacePath={workspacePath}
-              workspaceIdentity={workspaceIdentity}
-              remoteSessionId={workspaceRemoteSessionId}
-              initialTaskId={activeTaskId ?? undefined}
-              compact
-            />
-          ) : null}
           <ControlHintTooltip title={settingsButtonLabel}>
             <Button
               type="button"

@@ -42,7 +42,6 @@ export const ProjectTaskRow = memo(function Row({
   );
   // 原因：内联 JSX 每次都会创建新引用，导致 TaskList 的 memo 比较失效。
   const organizationActions = useMemo(() => <TaskGroupTaskMenu task={task} />, [task]);
-  // 原因：会话行复用项目详情会在浏览任务时重复弹层；远程身份详情只由项目入口承载。
   return (
     // 每行独立渲染 TaskList，外层留白避免选中和悬停背景粘连。
     <div className="py-px">
@@ -56,7 +55,6 @@ export const ProjectTaskRow = memo(function Row({
         pinnedTasks={task.pinned ? rows : EMPTY}
         activeTaskId={activeId}
         isWorkspaceActive={presentation.activeWorkspaceKey === workspaceKey}
-        mobileActiveTaskKey={presentation.mobileActiveTaskKey}
         onOpenFileTree={
           presentation.onOpenTaskFiles &&
           showFiles &&

@@ -1,7 +1,3 @@
-import {
-  RemoteConversationBanner,
-  RemoteConversationDisconnected,
-} from "@/project-sidebar/RemoteConversationDisconnected.js";
 /* oxlint-disable eslint(max-lines) -- WorkbenchLeafPane 集中承载 pane focus、per-pane provider 与恢复守卫；拆散会让 focus/session 绑定链路跨文件跳转。 */
 // 分屏叶子 pane：Focus 层外壳 + per-pane 数据面接线 + 恢复守卫。宿主 = V4WorkspaceChatArea。
 import { memo, useCallback, useEffect, useMemo, type CSSProperties, type ReactNode } from "react";
@@ -394,8 +390,6 @@ export function WorkbenchLeafPane({
       <V4PaneConversationProvider
         scope={scope}
         sessionId={sessionId}
-        unavailableFallback={<RemoteConversationDisconnected {...scope} sessionId={sessionId} />}
-        disconnectedBanner={<RemoteConversationBanner {...scope} sessionId={sessionId} />}
       >
         {(isPrimary ? primaryBinding : binding)?.restoredUnvalidated && sessionId ? (
           <PaneRestoredGuard

@@ -1,4 +1,3 @@
-import { V4_PRIMARY_PANE_ID } from "@/v4/paneLayoutStore.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useSessionRuntimeRestart } from "@/app-shell/useWorkspaceSessionReload.js";
 import { isRequestVerificationConfigNetworkError } from "@/request-security-edition/errors.js";
@@ -31,7 +30,6 @@ import {
 } from "react";
 import { Hand } from "lucide-react";
 import {
-  BUILTIN_MODEL_PROVIDER_IDS,
   buildCustomSupplierKey,
   isHighspeedProviderId,
   isRemoteWorkspaceIdentity,
@@ -60,11 +58,7 @@ import type {
   V4ConversationFileChangesResult,
 } from "@zcode/shared/zcode-protocol-v4";
 import { logger } from "@/logger.js";
-import {
-  PluginUiSessionProvider,
-  registerPluginUiPaneSession,
-  useOpenPluginUi,
-} from "@/plugin-ui/index.js";
+import { SandboxSessionActionsProvider } from "@/plugin-ui/hostPrimitives.js";
 import {
   getConversationShareErrorDetails,
   resolveConversationShareFallbackIssueCode,
@@ -77,7 +71,6 @@ import type {
   ConversationShareTurnPreflightResult,
   ImportedConversationShare,
 } from "@zcode/services";
-import { useCodingPlanBillingDiscountFromService } from "@/CodingPlanBillingDiscount.js";
 import { toast } from "@/components/ui/toast.js";
 import { cn } from "@/components/lib/utils.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -149,10 +142,6 @@ import { useBaseWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { selectGenUiModelContext } from "@zcode/shared/gen-ui";
 import { useWorkspaceHomePath } from "@/hooks/useWorkspaceHomePath.js";
 import { prepareWorkspaceWithZCodeSessionService } from "@/hooks/useWorkspacePrepare.js";
-import {
-  createCodingPlanFunnelContext,
-  resolveCodingPlanEntryPlanState,
-} from "@/lib/codingPlanFunnelTelemetry.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
 import { prepareComposerRecentReceipt } from "@/lib/composerRecent.js";
@@ -236,7 +225,6 @@ import {
 } from "@/v4/conversationShareAttempt.js";
 import { resolveConversationSelectionTooltipEnabled } from "@/v4/conversationShareModePolicy.js";
 import { buildConversationTurnRenderUnits } from "@/v4/conversationTurnRenderUnits.js";
-import { SessionPluginReferenceIconBoundary } from "@/v4/SessionPluginReferenceIconProvider.js";
 import {
   resolveConversationStatusPanelVariant,
   shouldUseConversationStatusPanelInlineLayout,
@@ -278,10 +266,6 @@ import {
   resolveLatestCompletedAssistantPreviewTurn,
   type AssistantPreviewPptxAutoOpenTarget,
 } from "@/v4/assistantPreviewPptxAutoOpen.js";
-import {
-  hasPluginReferenceRowsInPartition,
-  isSessionPluginCatalogReady,
-} from "@/v4/pluginReferenceIconProjection.js";
 import { shouldResyncForStaleAuthority } from "@/v4/staleAuthorityRecovery.js";
 import { createCommandEnvelope } from "@/v4/commandFactory.js";
 import { createConfigCommandBarrier } from "@/v4/configCommandBarrier.js";
@@ -322,7 +306,6 @@ import {
 import type { ZCodeUiError } from "@/lib/zcodeUiError.js";
 import type { ChatErrorBannerModelConfigTarget } from "@/ChatErrorBanner.js";
 import { isProviderNotReadyError } from "@/lib/chatPrepareError.js";
-import { useOptionalCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
 import { useOptionalTabStore } from "@/store/TabStoreProvider.js";
 import { useIsMobileTextInputViewport } from "@/lib/mobileTextInput.js";
@@ -1151,10 +1134,6 @@ export function SessionPane({
     },
     [compactForRemoteControl, lease, sessionId, workspaceIdentity, workspacePath],
   );
-  const pluginReferenceIconsEnabled =
-    isSessionPluginCatalogReady(state.status, sessionId, snapshot?.sessionId) &&
-    rowsPartition !== null &&
-    hasPluginReferenceRowsInPartition(rowsPartition);
   // send_result 的落定信号：用户消息真正画进对话历史。z-code 没有乐观渲染，
   // 气泡必须等投影回流出 userInput row 才出现，所以 ACK accepted 不能算发送完成。
   // 取 useEffect 而非 store 订阅回调 —— effect 在 DOM commit 之后跑，此刻气泡已在屏幕上。
@@ -1944,11 +1923,7 @@ export function SessionPane({
     () => createComposerSubmissionConfig(draftConfig, modelSelectionView) !== null,
     [draftConfig, modelSelectionView],
   );
-  const codingPlanUpgradeDialog = useOptionalCodingPlanUpgradeDialog();
   const openSettingsTab = useOptionalTabStore((state) => state.openSettingsTab);
-  const billingDiscount = useCodingPlanBillingDiscountFromService(
-    baseWorkspaceServices.codingPlanSubscriptionService,
-  );
   const projectDirectory = useOptionalProjectDirectoryActions();
   const commitCreatedTask = projectDirectory?.commitCreatedTask;
   const refreshTaskGroups = projectDirectory?.refreshTaskGroups;
@@ -3208,95 +3183,22 @@ export function SessionPane({
     async () => undefined,
   );
   const effectiveSessionId = sessionId ?? recoveringDraft?.sessionId ?? prewarmSessionId;
-  const pluginUiRuntimeReady = Boolean(
+  const sessionRuntimeReady = Boolean(
     effectiveSessionId &&
     lease?.sessionId === effectiveSessionId &&
     snapshot?.sessionId === effectiveSessionId &&
     (!snapshot.runtimeInitialization || snapshot.runtimeInitialization.status === "ready"),
   );
   useEffect(() => {
-    if (sessionId === null && effectiveSessionId && pluginUiRuntimeReady && snapshot) {
+    if (sessionId === null && effectiveSessionId && sessionRuntimeReady && snapshot) {
       observeDraftPermissionGrant(effectiveSessionId, snapshot.config);
     }
   }, [
     sessionId,
     effectiveSessionId,
-    pluginUiRuntimeReady,
+    sessionRuntimeReady,
     snapshot?.config,
     observeDraftPermissionGrant,
-  ]);
-  useLayoutEffect(() => {
-    if (!effectiveSessionId || !pluginUiRuntimeReady || readOnly) return;
-    return registerPluginUiPaneSession(
-      paneId,
-      sessionId,
-      {
-        workspacePath,
-        workspaceIdentity,
-        remoteSessionId: remoteSessionId ?? undefined,
-        sessionId: effectiveSessionId,
-      },
-      sessionId === null ? prewarmBinding?.retain : undefined,
-    );
-  }, [
-    paneId,
-    sessionId,
-    effectiveSessionId,
-    pluginUiRuntimeReady,
-    workspacePath,
-    workspaceIdentity,
-    remoteSessionId,
-    readOnly,
-    prewarmBinding,
-  ]);
-  const openPluginUi = useOpenPluginUi();
-  const pluginUiOpenRequest = useZCodeSessionStore(
-    (store) => store.getWorkspaceState(workspacePath, workspaceIdentity).pluginUiOpenRequest,
-  );
-  useEffect(() => {
-    if (
-      !pluginUiOpenRequest ||
-      paneId !== V4_PRIMARY_PANE_ID ||
-      !focused ||
-      sessionId !== null ||
-      readOnly
-    )
-      return;
-    const store = useZCodeSessionStore.getState();
-    // 请求归属原草稿代际；StrictMode 重放与配置变化不能让旧请求打开新会话。
-    if (
-      store.getWorkspaceState(workspacePath, workspaceIdentity).pluginUiOpenRequest !==
-      pluginUiOpenRequest
-    )
-      return;
-    if (pluginUiOpenRequest.invalidationVersion !== draftRuntimeInvalidationVersion) {
-      store.clearPluginUiOpenRequest(
-        workspacePath,
-        pluginUiOpenRequest.requestId,
-        workspaceIdentity,
-      );
-      return;
-    }
-    if (!pluginUiRuntimeReady || !effectiveSessionId || !openPluginUi) return;
-    store.clearPluginUiOpenRequest(workspacePath, pluginUiOpenRequest.requestId, workspaceIdentity);
-    const {
-      requestId: _requestId,
-      invalidationVersion: _version,
-      ...request
-    } = pluginUiOpenRequest;
-    openPluginUi({ ...request, parentSessionId: effectiveSessionId });
-  }, [
-    pluginUiOpenRequest,
-    paneId,
-    focused,
-    sessionId,
-    readOnly,
-    workspacePath,
-    workspaceIdentity,
-    draftRuntimeInvalidationVersion,
-    pluginUiRuntimeReady,
-    effectiveSessionId,
-    openPluginUi,
   ]);
 
   useEffect(() => {
@@ -5240,7 +5142,7 @@ export function SessionPane({
     sendSubmissionError,
   ]);
   // 远端 workspace 的模型目录来自远端 Registry；本机配置保存后由 Provisioning 自动下发，
-  // 因此缺模型横幅只切换措辞，配置/升级动作仍统一指向本机。
+  // 因此缺模型横幅只切换措辞，配置动作仍统一指向本机。
   const modelConfigTarget: ChatErrorBannerModelConfigTarget = isRemoteWorkspaceIdentity(
     workspaceIdentity ?? "",
   )
@@ -5250,41 +5152,6 @@ export function SessionPane({
     setPendingSettingsSectionIntent("modelProvider");
     openSettingsTab();
   }, [openSettingsTab]);
-  const handleOpenModelUpgrade = useCallback(() => {
-    if (!codingPlanUpgradeDialog) return;
-    const providerId =
-      sharedSettings?.providerFamilyDomain === "bigmodel"
-        ? BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan
-        : BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan;
-    codingPlanUpgradeDialog.openCodingPlanUpgrade({ providerId });
-  }, [codingPlanUpgradeDialog, sharedSettings?.providerFamilyDomain]);
-  const handleOpenQuotaUpgrade = useCallback(() => {
-    const providerId = quotaBanner.upgradeProviderId;
-    if (!providerId || !codingPlanUpgradeDialog) return;
-    const eventText = intl.formatMessage({
-      id: quotaBanner.upgradeActionLabelId,
-    });
-    // 横幅只建立漏斗上下文；coding_plan_upgrade_ck 仍由真实购买面板打开后统一上报。
-    codingPlanUpgradeDialog.openCodingPlanUpgrade({
-      providerId,
-      funnelContext: createCodingPlanFunnelContext({
-        providerId,
-        upgradeSource: "session_quota_alert",
-        eventRegion: "app.session",
-        eventText,
-        entryPlanState: resolveCodingPlanEntryPlanState({
-          providerId,
-          displayStatus: "purchased",
-          planLevel: "start",
-        }),
-      }),
-    });
-  }, [
-    codingPlanUpgradeDialog,
-    intl,
-    quotaBanner.upgradeActionLabelId,
-    quotaBanner.upgradeProviderId,
-  ]);
 
   const handleConfirmShareDisclosure = useCallback(async () => {
     if (!sessionId || !shareDraft || sharePublishing) return;
@@ -5652,7 +5519,6 @@ export function SessionPane({
       // 草稿 taskId 仍为 null，但 prewarm 已经拥有独立 AgentRuntime。
       // 只给 Skill catalog 下发 effective id，避免 UI 扫到 prewarm runtime 尚未加载的新 Skill。
       skillCatalogSessionId={effectiveSessionId}
-      pluginUiSessionId={effectiveSessionId}
       draftMode={isDraft}
       draftConfig={draftConfig}
       composerDraft={composerDraft}
@@ -5728,7 +5594,6 @@ export function SessionPane({
       onRetryInitialization={handleRetrySubscribe}
       onRetryError={retryConfigReadEnabled ? handleRetryConfigRead : undefined}
       onOpenModelSettings={handleOpenModelSettings}
-      onOpenModelUpgrade={handleOpenModelUpgrade}
       modelConfigTarget={modelConfigTarget}
       onOpenCodeViewer={onOpenCodeViewer}
       suppressGoalCommands={selectionSideChat}
@@ -5825,14 +5690,6 @@ export function SessionPane({
         <ConversationQuotaBanner
           state={quotaBanner.state}
           onShown={quotaBanner.markShown}
-          billingDiscountActive={billingDiscount.active}
-          billingDiscountConfig={billingDiscount.config}
-          upgradeActionLabelId={quotaBanner.upgradeActionLabelId}
-          onUpgrade={
-            quotaBanner.upgradeProviderId && codingPlanUpgradeDialog
-              ? handleOpenQuotaUpgrade
-              : undefined
-          }
           onDismiss={quotaBanner.dismiss}
         />
       ) : null}
@@ -5899,10 +5756,10 @@ export function SessionPane({
       ) : null}
     </>
   );
-  // 插件图片与草稿附件共用有效 session，首发提升不迁移附件。
-  const pluginUiUploadAttachment = useCallback(
+  // 沙箱页面与草稿附件共用有效 session，首发提升不迁移附件。
+  const uploadSandboxAttachment = useCallback(
     async (input: { fileName: string; mime: string; dataBase64: string }) => {
-      if (!effectiveSessionId) throw new Error("Plugin UI attachments need an open session");
+      if (!effectiveSessionId) throw new Error("Sandbox attachments need an open session");
       const { ref } = await attachmentPut({ sessionId: effectiveSessionId, ...input });
       const padding = input.dataBase64.endsWith("==") ? 2 : input.dataBase64.endsWith("=") ? 1 : 0;
       return {
@@ -5922,15 +5779,14 @@ export function SessionPane({
   ) : null;
 
   return (
-    <PluginUiSessionProvider
+    <SandboxSessionActionsProvider
       workspacePath={workspacePath}
       workspaceIdentity={workspaceIdentity}
       remoteSessionId={remoteSessionId}
-      sessionId={pluginUiRuntimeReady ? effectiveSessionId : null}
-      readOnly={readOnly || !pluginUiRuntimeReady || (sessionId === null && !focused)}
+      sessionId={sessionRuntimeReady ? effectiveSessionId : null}
+      readOnly={readOnly || !sessionRuntimeReady || (sessionId === null && !focused)}
       sendText={dispatchSendText}
-      uploadAttachment={pluginUiUploadAttachment}
-      projectionStore={pluginUiRuntimeReady ? lease?.store : null}
+      uploadAttachment={uploadSandboxAttachment}
     >
       <div
         ref={paneRef}
@@ -6106,13 +5962,6 @@ export function SessionPane({
               }
             />
           ) : (
-            <SessionPluginReferenceIconBoundary
-              enabled={pluginReferenceIconsEnabled}
-              remoteSessionId={remoteSessionId}
-              sessionId={sessionId}
-              workspaceIdentity={workspaceIdentity}
-              workspacePath={workspacePath}
-            >
               <BotGroupDeliveryProvider
                 taskId={sessionId}
                 workspacePath={workspacePath}
@@ -6229,10 +6078,9 @@ export function SessionPane({
                   }
                 />
               </BotGroupDeliveryProvider>
-            </SessionPluginReferenceIconBoundary>
           )}
         </div>
       </div>
-    </PluginUiSessionProvider>
+    </SandboxSessionActionsProvider>
   );
 }

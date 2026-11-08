@@ -1,20 +1,14 @@
 import type { ReactNode } from "react";
 import { AlertDialogHost } from "@/AlertDialogHost.js";
 import { ConfirmDialogHost } from "@/ConfirmDialog.js";
-import { CuaPermissionObservationAttachment } from "@/cua-permission/CuaPermissionObservationAttachment.js";
-import { PluginUiBackgroundHost, PluginUiFollowUpDialogHost } from "@/plugin-ui/index.js";
 
 export function RootShell({ children }: { children: ReactNode }) {
-  // Web 远控在手机浏览器里不能用固定 100vh，
-  // 地址栏收放会让底部输入区被裁到视口外；根节点改用动态视口高度。
+  // 手机浏览器地址栏收放时，用动态视口高度保证底部输入区完整可见。
   return (
     <div className="relative h-dvh">
       {children}
-      <CuaPermissionObservationAttachment />
       <AlertDialogHost />
       <ConfirmDialogHost />
-      <PluginUiFollowUpDialogHost />
-      <PluginUiBackgroundHost />
     </div>
   );
 }

@@ -15,15 +15,13 @@
     <title>ZCode</title>
     <script>
       (() => {
-        // Bugfix: Web 远控跨 workspace 跳转时，JS bundle 还没执行前就会先渲染启动壳。
-        // 这里提前按本地主题偏好决定首屏底色，避免 dark 用户在这一帧看到白底闪烁。
+        // JS bundle 执行前按本地主题偏好决定首屏底色，避免 dark 用户看到白底闪烁。
         const STORAGE_KEY = "zcode-theme";
         const DEFAULT_THEME = "zai-dark";
         const BROWSER_THEME_COLORS = {
           dark: "#161616",
           light: "#f8f8f8",
         };
-        const BOOTSTRAP_SNAPSHOT_KEY = "zcode:web-remote-control:bootstrap-shell";
 
         const normalizeResolvedTheme = (theme) => {
           if (theme === "dark") return "dark";
@@ -43,49 +41,6 @@
         };
 
         try {
-          let bootstrapTheme = null;
-          const bootstrapSnapshotRaw = window.sessionStorage.getItem(BOOTSTRAP_SNAPSHOT_KEY);
-          if (bootstrapSnapshotRaw) {
-            window.sessionStorage.removeItem(BOOTSTRAP_SNAPSHOT_KEY);
-            try {
-              const snapshot = JSON.parse(bootstrapSnapshotRaw);
-              if (snapshot && typeof snapshot === "object") {
-                const normalizedTheme = snapshot.theme === "dark" ? "dark" : "light";
-                bootstrapTheme = normalizedTheme;
-                document.documentElement.style.setProperty(
-                  "--zcode-bootstrap-bg",
-                  typeof snapshot.background === "string"
-                    ? snapshot.background
-                    : normalizedTheme === "dark"
-                      ? "#0f172a"
-                      : "#f8fafc",
-                );
-                document.documentElement.style.setProperty(
-                  "--zcode-bootstrap-fg",
-                  typeof snapshot.foreground === "string"
-                    ? snapshot.foreground
-                    : normalizedTheme === "dark"
-                      ? "#e2e8f0"
-                      : "#334155",
-                );
-                if (typeof snapshot.border === "string") {
-                  document.documentElement.style.setProperty(
-                    "--zcode-bootstrap-border",
-                    snapshot.border,
-                  );
-                }
-                if (typeof snapshot.card === "string") {
-                  document.documentElement.style.setProperty(
-                    "--zcode-bootstrap-card",
-                    snapshot.card,
-                  );
-                }
-              }
-            } catch {
-              // ignore invalid snapshot
-            }
-          }
-
           const saved = localStorage.getItem(STORAGE_KEY) || DEFAULT_THEME;
           const resolved =
             saved === "system"
@@ -93,8 +48,7 @@
                 ? "dark"
                 : "light"
               : normalizeResolvedTheme(saved);
-          const fallbackTheme = resolved === "dark" ? "dark" : "light";
-          const finalTheme = bootstrapTheme ?? fallbackTheme;
+          const finalTheme = resolved === "dark" ? "dark" : "light";
           document.documentElement.setAttribute("data-zcode-bootstrap-theme", finalTheme);
           syncBrowserThemeSurface(finalTheme);
           if (finalTheme === "dark") {

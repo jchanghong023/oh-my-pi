@@ -66,18 +66,14 @@ import {
   SettingsResourceList,
 } from "@/settings/SettingsResourceGroup.js";
 import { McpServersImportDialog } from "@/settings/ExternalAgentImportDialog.js";
-import {
-  formatRemoteSyncTargetLabel,
-  shouldShowRemoteSyncActions,
-  useSettingsDataSyncEntry,
-} from "@/data-sync/index.js";
+import { shouldShowRemoteSyncActions } from "@/data-sync/index.js";
 import { useMcpStore } from "@/store/mcpStore.js";
 import { usePluginManagementStore } from "@/store/pluginManagementStore.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useConfigWorkspaceServices as useWorkspaceServices } from "@/workspace-config-catalog/index.js";
 import type { ConfigWorkspaceTarget } from "@/workspace-config-catalog/index.js";
 import { getPluginWorkspaceKey } from "@/settings/PluginScopeMenu.js";
-import { ExternalLink, Import, Plus, UploadCloud } from "lucide-react";
+import { ExternalLink, Import, Plus } from "lucide-react";
 import { SettingsSegmentedTabs } from "@/settings/SettingsSegmentedTabs.js";
 import { selectPluginsForScope } from "@/settings/pluginCapabilityProjection.js";
 
@@ -571,10 +567,6 @@ interface McpSettingsSectionProps {
   onVisibleCountChange?: (count: number) => void;
   onEditorOpenChange?: (open: boolean) => void;
   onFormScopeKeyChange?: (scopeKey: string | null) => void;
-  onOpenPluginStore?: () => void;
-  showMarketplaceBreadcrumb?: boolean;
-  /** Scope 选中在线远端设备的「用户」时为该设备；同步按钮只在此时显示。 */
-  dataSyncSourceServerId?: string | null;
   unscopedServices?: IServiceAccessor;
   cacheAuthorityKey?: string;
 }
@@ -592,9 +584,6 @@ export function McpSettingsSection({
   onVisibleCountChange,
   onEditorOpenChange,
   onFormScopeKeyChange,
-  onOpenPluginStore,
-  showMarketplaceBreadcrumb = false,
-  dataSyncSourceServerId,
   unscopedServices,
   cacheAuthorityKey,
 }: McpSettingsSectionProps) {
@@ -1252,20 +1241,6 @@ export function McpSettingsSection({
   useEffect(() => {
     onVisibleCountChange?.(filteredMcpCount);
   }, [filteredMcpCount, onVisibleCountChange]);
-  const remoteMcpSyncTargetLabel = connectedRemoteSyncTarget
-    ? formatRemoteSyncTargetLabel(connectedRemoteSyncTarget, activeWorkspacePath ?? "")
-    : "";
-  // 同步按钮打开数据同步弹窗的 MCP 分类。设置页入口不传 workspace 映射：MCP 只做 home 改写。
-  const dataSync = useSettingsDataSyncEntry({
-    category: "mcp",
-    sourceServerId: dataSyncSourceServerId,
-    onPushFinished: async () => {
-      const loaded = await loadMcpFromUserDirectory();
-      if (loaded) {
-        await requestMcpServerStatusList();
-      }
-    },
-  });
 
   async function handleToggle(id: string, enabled: boolean) {
     await toggleServer(id, enabled);
@@ -1469,23 +1444,13 @@ export function McpSettingsSection({
       setEditorMode("form");
       onFormScopeKeyChange?.(null);
     };
-    const pluginsBreadcrumbLabel = intl.formatMessage({ id: "settings.plugins.title" });
     const formBreadcrumbLabel =
       editingServer?.name ?? intl.formatMessage({ id: "settings.mcp.form.createTitle" });
     return (
       <div className="space-y-6">
         <SettingsBreadcrumbReporter
-          items={
-            showMarketplaceBreadcrumb
-              ? [
-                  { label: pluginsBreadcrumbLabel, onSelect: closeFormView },
-                  { label: formBreadcrumbLabel },
-                ]
-              : [{ label: formBreadcrumbLabel }]
-          }
-          onSectionSelect={
-            showMarketplaceBreadcrumb && onOpenPluginStore ? onOpenPluginStore : closeFormView
-          }
+          items={[{ label: formBreadcrumbLabel }]}
+          onSectionSelect={closeFormView}
         />
         <div className="space-y-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1545,34 +1510,6 @@ export function McpSettingsSection({
 
   return (
     <div className="space-y-4">
-      {dataSync.visible ? (
-        <div className="flex justify-end">
-          <ControlHintTooltip title={intl.formatMessage({ id: "settings.mcp.remoteSync.open" })}>
-            <Button
-              type="button"
-              variant="outline"
-              size="icon-lg"
-              data-testid="data-sync-entry-mcp"
-              disabled={dataSync.disabled}
-              aria-label={intl.formatMessage({
-                id: "settings.mcp.remoteSync.open",
-              })}
-              onClick={dataSync.open}
-            >
-              <UploadCloud className="size-3.5" aria-hidden="true" />
-            </Button>
-          </ControlHintTooltip>
-        </div>
-      ) : null}
-
-      {connectedRemoteSyncTarget ? (
-        <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
-          {intl.formatMessage(
-            { id: "settings.mcp.remoteContext" },
-            { target: remoteMcpSyncTargetLabel },
-          )}
-        </div>
-      ) : null}
 
       {!mcpProjectionReady ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
@@ -1697,7 +1634,6 @@ export function McpSettingsSection({
           await loadMcpFromUserDirectory();
         }}
       />
-      {dataSync.dialog}
     </div>
   );
 }

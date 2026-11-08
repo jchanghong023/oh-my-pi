@@ -1,47 +1,15 @@
 import { OnboardingMeshBackground } from "@/onboarding/OnboardingMeshBackground.js";
-import { useEffect, useState } from "react";
-import { logger } from "@/logger.js";
-import { usePlatform } from "@/hooks/usePlatform.js";
-import { resolveWorkspaceShellPanelRadiusPx } from "@/app-shell/workspaceShellWindowChrome.js";
 import { ZCodeStartupLogoBadge } from "@/root/RootStartupLoading.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { cn } from "@/components/lib/utils.js";
 import { useResolvedThemeHeroPalette } from "@/openWorkspacePageThemeHero.js";
 import "@/onboarding/onboardingLogoSweep.css";
 
-export function OccupationOnboardingVisual({
-  isMacDesktop,
-  isWindowsDesktop,
-}: {
-  isMacDesktop?: boolean;
-  isWindowsDesktop?: boolean;
-}) {
-  const platform = usePlatform();
-  const [macOSMajorVersion, setMacOSMajorVersion] = useState<number | null>(null);
-  useEffect(() => {
-    if (!isMacDesktop || !platform.getDesktopWindowChromeState) return;
-    let disposed = false;
-    // 系统版本在会话内固定；复用主界面的版本查询和圆角规则，未知版本沿用其保守值。
-    void platform.getDesktopWindowChromeState().then(
-      (state) => {
-        if (!disposed) setMacOSMajorVersion(state.macOSMajorVersion ?? null);
-      },
-      (error) => logger.warn("[onboarding] 读取窗口圆角信息失败", { error }),
-    );
-    return () => {
-      disposed = true;
-    };
-  }, [isMacDesktop, platform]);
-  const borderRadius = resolveWorkspaceShellPanelRadiusPx({
-    isMacDesktop,
-    isWindowsDesktop,
-    macOSMajorVersion,
-  });
+export function OccupationOnboardingVisual() {
   const { intl } = useZCodeIntl();
   const palette = useResolvedThemeHeroPalette();
   return (
     <aside
-      style={{ borderRadius }}
       className="relative hidden min-h-0 flex-col items-center overflow-y-auto bg-surface-hover px-[clamp(64px,4vw,72px)] py-[clamp(32px,4vw,72px)] dark:bg-background-alt lg:flex"
     >
       <OnboardingMeshBackground />

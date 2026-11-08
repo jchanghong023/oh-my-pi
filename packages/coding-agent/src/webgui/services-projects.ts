@@ -9,8 +9,6 @@ import type {
 	VirtualProject,
 } from "../../../../vendor/zcode-frontend/packages/services/src/project-storage/repository-contract";
 import type { TaskGroupStructure } from "../../../../vendor/zcode-frontend/packages/services/src/task-groups/contract";
-import type { ZCodeTaskListResult } from "../../../../vendor/zcode-frontend/packages/services/src/session/zcodeTaskListTypes";
-import type { ZCodeTaskSnapshotWithEtagResult } from "../../../../vendor/zcode-frontend/packages/services/src/session/zcodeTaskService";
 import type { WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
 
@@ -33,35 +31,6 @@ export function createProjectServices(_context: WebGuiServiceContext): readonly 
 		createWebGuiService("task-groups", {
 			read: (): TaskGroupStructure => ({ groups: [], members: [], order: [] }),
 		}),
-		// TODO(omp-session-manager): Connect native SessionManager task/history reads.
-		// Every list and nullable lookup below observes the same empty attachment view;
-		// none scans native history, prepares a workspace, or starts an Agent.
-		// Runtime, prompt/queue, permissions, bot-topic, import, configuration, file,
-		// usage and mutation operations remain explicitly unavailable by default.
-		// Task/workspace event subscriptions use the channel's connection-owned,
-		// disposable emitters until native SessionManager publishers are integrated.
-		createWebGuiService("zcode-task", {
-			initialize: (): { available: boolean; version?: string } => ({ available: false }),
-			listTasks: () => [],
-			listPinnedTaskIds: () => [],
-			listPinnedTasks: () => [],
-			listDeletedTaskIds: () => [],
-			listActiveTaskIds: () => [],
-			listArchivedTasks: () => [],
-			listTaskList: (): ZCodeTaskListResult => ({ items: [], total: 0, hasMore: false }),
-			getTaskMeta: () => null,
-			getTaskSnapshot: () => null,
-			getTaskSnapshotWithEtag: (): ZCodeTaskSnapshotWithEtagResult => ({ snapshot: null }),
-			getTaskSnapshotBody: () => null,
-			getTaskSnapshotRef: () => null,
-			getTaskSnapshotToolCallsSlice: () => null,
-			getTaskConfigOptions: () => [],
-			getTaskModelSelection: () => null,
-		}),
-		// TODO(omp-project-source-identity): Integrate native OMP project identity and
-		// migration ownership. The Source contract has no unconnected result variant;
-		// resolution, migration counts/reports and migration commands all reject.
-		createWebGuiService("source-server-workspace", {}),
 		// TODO(omp-scheduler): Integrate native OMP scheduler persistence and provider
 		// admission. Empty attachment reads do not inspect persisted scheduled jobs;
 		// create/cancel/pause/continue/delete/deleteHistory/update remain unavailable.

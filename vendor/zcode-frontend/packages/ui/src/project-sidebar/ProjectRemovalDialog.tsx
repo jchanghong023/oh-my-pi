@@ -19,7 +19,6 @@ import {
   summarizeProjectRemoval,
   type ProjectManagementRow,
 } from "@/project-sidebar/project-management-view.js";
-import { DeviceTag } from "@/project-sidebar/ProjectManagementRow.js";
 import {
   isProjectDataCandidate,
   type ProjectDataTotals,
@@ -45,7 +44,7 @@ export function ProjectRemovalDialog({
   onCancel(): void;
   onConfirm(rows: readonly ProjectManagementRow[], options?: ProjectRemovalOptions): void;
 }) {
-  const { intl, locale } = useZCodeIntl();
+  const { intl } = useZCodeIntl();
   const msg = (id: string, values?: Record<string, string | number>) =>
     intl.formatMessage({ id: `projectManagement.${id}` }, values);
   const count = (id: string, n: number, values?: Record<string, string | number>) =>
@@ -79,17 +78,10 @@ export function ProjectRemovalDialog({
   }, [rows, measureData]);
 
   const summary = shown ? summarizeProjectRemoval(shown) : null;
-  const hasLocal = summary?.devices.some((device) => device.hostId === "local");
-  const hasRemote = summary?.devices.some((device) => device.hostId !== "local");
   const localCount = shown?.filter(isProjectDataCandidate).length ?? 0;
   const totals = data && data !== "measuring" ? data : null;
   const confirmWord = msg("confirm.data.word");
   const deleting = deleteData && Boolean(totals);
-  const remoteDevices = new Intl.ListFormat(locale, { type: "conjunction" }).format(
-    (summary?.devices ?? [])
-      .filter((device) => device.hostId !== "local")
-      .map((device) => device.label ?? device.hostId),
-  );
   const toggleData = (checked: boolean) => {
     setDeleteData(checked);
     // 取消勾选即清空确认词，再次勾选必须重新输入。
@@ -128,20 +120,10 @@ export function ProjectRemovalDialog({
                     <span className="min-w-0 flex-1 text-ui-base">
                       {count("projectsCount", device.count)}
                     </span>
-                    <DeviceTag host={device.host} label={device.label} />
-                  </div>
-                  {device.hostId !== "local" ? (
                     <span className="text-ui-sm text-foreground-subtle">
-                      {formatCountMessage(
-                        intl,
-                        "projectManagement.confirm.remoteNote",
-                        device.count,
-                        {
-                          device: device.label ?? device.hostId,
-                        },
-                      )}
+                      {intl.formatMessage({ id: "project.thisComputer" })}
                     </span>
-                  ) : null}
+                  </div>
                 </div>
               ))}
             </div>
@@ -199,9 +181,7 @@ export function ProjectRemovalDialog({
                         ) : null}
                       </span>
                       <span className="text-ui-sm">
-                        {hasRemote
-                          ? msg("confirm.data.notDeletedRemote", { devices: remoteDevices })
-                          : msg("confirm.data.notDeleted")}
+                        {msg("confirm.data.notDeleted")}
                       </span>
                     </>
                   ) : (
@@ -236,8 +216,7 @@ export function ProjectRemovalDialog({
               </>
             ) : (
               <div className="flex flex-col gap-1 text-ui-sm text-foreground-subtle">
-                {hasLocal ? <span>{msg("confirm.restoreLocal")}</span> : null}
-                {hasRemote ? <span>{msg("confirm.restoreRemote")}</span> : null}
+                <span>{msg("confirm.restoreLocal")}</span>
               </div>
             )}
             <AlertDialogFooter>

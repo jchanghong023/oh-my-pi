@@ -119,10 +119,6 @@ for (const width of [390, 1200])
           await banner.waitFor({ state: "hidden" });
           await page.getByRole("button", { name: "New cycle", exact: true }).click();
           await banner.waitFor();
-          await banner
-            .getByRole("button", { name: locale === "zh-CN" ? "升级" : "Upgrade", exact: true })
-            .click();
-          assert.equal(await page.locator("body").getAttribute("data-upgraded"), "true");
           await update("daily", 100);
           await banner.waitFor({ state: "hidden" });
           await update("daily", 10);

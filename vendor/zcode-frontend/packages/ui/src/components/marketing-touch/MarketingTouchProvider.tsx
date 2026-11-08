@@ -7,20 +7,15 @@ import { useStartPlanEntitlement } from "@/hooks/useStartPlanEntitlement.js";
 import { createContext, useContext, useEffect, useCallback, useState, useRef } from "react";
 import type { ReactNode } from "react";
 import { useStore } from "zustand";
-import { useCodingPlanUpgradeDialog } from "@/settings/CodingPlanUpgradeDialogProvider.js";
 import { useOpenRewards } from "@/rewards/RewardsProvider.js";
-import { useWorkspaceSidebarFooterUsageSummaryState } from "@/WorkspaceSidebarFooterUsageSummary.js";
-import { useTabStore, useTabStoreApi } from "@/store/TabStoreProvider.js";
+import { useTabStore } from "@/store/TabStoreProvider.js";
 import { setPendingSettingsSectionIntent } from "@/lib/settingsNavigation.js";
-import { requestPluginStoreOpen } from "@/lib/pluginStoreNavigation.js";
 import {
   requestMarketingNavigation,
-  marketingNavigation,
-  finishMarketingNavigation,
   marketingSettingsSections,
   waitForMarketingCapability,
 } from "@/lib/marketingNavigation.js";
-import { BUILTIN_MODEL_PROVIDER_IDS, ZCODE_ENV } from "@zcode/shared";
+import { BUILTIN_MODEL_PROVIDER_IDS, ZCODE_ENV, type MarketingPopup } from "@zcode/shared";
 import { useServices } from "@/hooks/useServices.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
@@ -52,6 +47,19 @@ const Context = createContext<MarketingTouchController | null>(null);
 // 导出给左下角活动仲裁层（SidebarBottomActivity）读取 Banner 可见性；控制器仍是唯一 owner。
 export { Context as MarketingTouchContext };
 
+function withoutRemovedNavigationActions(buttons: MarketingPopup["buttons"]): MarketingPopup["buttons"] {
+  return buttons.filter(({ action }) => {
+    if (action.type !== "navigate") return true;
+    const target = action.args;
+    if (target.page === "upgrade" || target.page === "plugin_marketplace") return false;
+    return (
+      target.page !== "settings" ||
+      !target.section ||
+      Boolean(marketingSettingsSections[target.section])
+    );
+  });
+}
+
 export function MarketingTouchProvider({
   children,
   desktop,
@@ -62,17 +70,6 @@ export function MarketingTouchProvider({
   const services = useServices();
   const platform = usePlatform();
   const openSettingsTab = useTabStore((state) => state.openSettingsTab);
-  const tabStore = useTabStoreApi();
-  const { openCodingPlanUpgrade } = useCodingPlanUpgradeDialog();
-  const workspacePath = useTabStore((state) => state.activeWorkspacePath);
-  const workspaceIdentity = useTabStore((state) => state.activeWorkspaceIdentity);
-  const { upgradeTargetProviderId } = useWorkspaceSidebarFooterUsageSummaryState({
-    enabled: true,
-    workspacePath: workspacePath ?? undefined,
-    workspaceIdentity: workspaceIdentity ?? undefined,
-  });
-  const upgradeTargetRef = useRef(upgradeTargetProviderId);
-  upgradeTargetRef.current = upgradeTargetProviderId;
   const user = useZCodeStore((state) => state.user);
   const restoring = useZCodeStore((state) => state.isRestoringOAuthSession);
   const requestLogin = useZCodeStore((state) => state.requestLoginEntry);
@@ -92,7 +89,35 @@ export function MarketingTouchProvider({
     if (!service || restoring) return null;
     let poller: ReturnType<typeof createMarketingTouchPoller>;
     const controller = createMarketingTouchController({
-      query: () => service.query({ locale }),
+      query: async () => {
+        const snapshot = await service.query({ locale });
+        return {
+          ...snapshot,
+          deliveries: snapshot.deliveries.map((delivery) =>
+            delivery.resource_position === "banner"
+              ? {
+                  ...delivery,
+                  banner: {
+                    ...delivery.banner,
+                    buttons: withoutRemovedNavigationActions(delivery.banner.buttons),
+                    success_popup: delivery.banner.success_popup
+                      ? {
+                          ...delivery.banner.success_popup,
+                          buttons: withoutRemovedNavigationActions(delivery.banner.success_popup.buttons),
+                        }
+                      : undefined,
+                  },
+                }
+              : {
+                  ...delivery,
+                  popup: {
+                    ...delivery.popup,
+                    buttons: withoutRemovedNavigationActions(delivery.popup.buttons),
+                  },
+                },
+          ),
+        };
+      },
       report: (input) => service.report(input),
       locale,
       canOpen: canOpenMarketingPopup,
@@ -163,55 +188,21 @@ export function MarketingTouchProvider({
               if (!openRewardsRef.current) throw new Error("marketing_navigation_unavailable");
               await openRewardsRef.current();
             } else {
-              const opening = new AbortController();
-              const abortOpening = () => opening.abort();
-              signal.addEventListener("abort", abortOpening, { once: true });
-              try {
-                await requestMarketingNavigation(action.args, signal, () => {
-                  if (action.args.page === "upgrade") {
-                    if (!desktop) throw new Error("marketing_navigation_unavailable");
-                    const requestId = marketingNavigation.getState().request!.id;
-                    if (
-                      !openCodingPlanUpgrade(
-                        { providerId: upgradeTargetRef.current },
-                        {
-                          signal: opening.signal,
-                          onResult: (opened) =>
-                            finishMarketingNavigation(
-                              requestId,
-                              opened ? undefined : new Error("marketing_upgrade_unavailable"),
-                            ),
-                        },
-                      )
-                    )
-                      throw new Error("marketing_upgrade_unavailable");
-                    return;
-                  }
-                  if (action.args.page === "settings") {
-                    if (action.args.section)
-                      setPendingSettingsSectionIntent(
-                        marketingSettingsSections[action.args.section],
-                        { modelProviderId: action.args.provider_id },
-                      );
-                    openSettingsTab();
-                  } else if (action.args.page === "plugin_marketplace") {
-                    const tabs = tabStore.getState();
-                    if (!tabs.activeWorkspacePath)
-                      throw new Error("marketing_navigation_unavailable");
-                    requestPluginStoreOpen(action.args.plugin_id);
-                    // 市场在工作区内；仅发事件会在设置层后挂载，必须退出设置并激活原工作区。
-                    if (
-                      !tabs.activateTabByPath(tabs.activeWorkspacePath, {
-                        workspaceIdentity: tabs.activeWorkspaceIdentity ?? undefined,
-                      })
-                    )
-                      throw new Error("marketing_navigation_unavailable");
-                  }
-                });
-              } finally {
-                signal.removeEventListener("abort", abortOpening);
-                opening.abort();
-              }
+              if (action.args.page !== "settings")
+                throw new Error("marketing_navigation_unavailable");
+              const target = action.args;
+              const section = target.section
+                ? marketingSettingsSections[target.section]
+                : undefined;
+              if (target.section && !section)
+                throw new Error("marketing_navigation_unavailable");
+              await requestMarketingNavigation(target, signal, () => {
+                if (section)
+                  setPendingSettingsSectionIntent(section, {
+                    modelProviderId: target.provider_id,
+                  });
+                openSettingsTab();
+              });
             }
             return { status: "success" };
           } catch (error) {
@@ -314,8 +305,6 @@ export function MarketingTouchProvider({
     requestLogin,
     desktop,
     openSettingsTab,
-    tabStore,
-    openCodingPlanUpgrade,
   ]);
   const [runtime, setRuntime] = useState<ReturnType<typeof createRuntime>>(null);
   useEffect(() => {

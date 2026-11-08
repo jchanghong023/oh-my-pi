@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useShortcutCommandLabel } from "@/shortcuts/useShortcutBindings.js";
-import { WINDOWS_CAPTION_CONTROL_CLASS } from "@/windowCaptionControls.js";
 import { runUserAction } from "@/lib/userActionTelemetry.js";
 import { useIsOfficeMode } from "@/hooks/useInterfaceMode.js";
 
@@ -13,12 +12,10 @@ export function WorkspaceTerminalToggleButton({
   isTerminalOpen,
   onToggleTerminal,
   disabledReason,
-  useWindowsCaptionSpacing = false,
 }: {
   isTerminalOpen: boolean;
   onToggleTerminal: () => void;
   disabledReason?: string;
-  useWindowsCaptionSpacing?: boolean;
 }) {
   const { intl } = useZCodeIntl();
   const isOfficeMode = useIsOfficeMode();
@@ -40,8 +37,7 @@ export function WorkspaceTerminalToggleButton({
         size="icon-md"
         data-testid={TID_TERMINAL_TOGGLE}
         className={cn(
-          "text-foreground hover:bg-hover hover:text-foreground [app-region:no-drag]",
-          useWindowsCaptionSpacing && WINDOWS_CAPTION_CONTROL_CLASS,
+          "text-foreground hover:bg-hover hover:text-foreground",
           isTerminalOpen && "!bg-selected text-foreground",
         )}
         aria-label={label}

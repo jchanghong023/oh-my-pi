@@ -5,15 +5,10 @@ import { toast } from "@/components/ui/toast.js";
 import { CloudContentDialog } from "@/components/cloud-content-dialog/CloudContentDialog.js";
 import { MarketingFailureDialog } from "@/components/marketing-touch/MarketingFailureDialog.js";
 import { adaptMarketingPopup } from "@/components/marketing-touch/marketingPopupAdapter.js";
-import { marketingNavigation } from "@/lib/marketingNavigation.js";
 import type { MarketingTouchController } from "@/components/marketing-touch/marketingTouchController.js";
 
 export function MarketingDialogs({ controller }: { controller: MarketingTouchController }) {
   const state = useStore(controller.store);
-  const openingUpgrade = useStore(
-    marketingNavigation,
-    (state) => state.request?.target.page === "upgrade",
-  );
   const { locale, intl } = useZCodeIntl();
   const claimError = state.errorAction === "claim_zcode_plan" ? state.error : null;
   useEffect(() => {
@@ -51,7 +46,7 @@ export function MarketingDialogs({ controller }: { controller: MarketingTouchCon
       {payload && content ? (
         <CloudContentDialog
           payload={payload}
-          open={!openingUpgrade && !claimError}
+          open={!claimError}
           actionPending={state.pending}
           onClose={() => {
             void controller.closeDialog();

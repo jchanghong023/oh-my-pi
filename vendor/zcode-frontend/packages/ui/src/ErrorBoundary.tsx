@@ -2,7 +2,6 @@ import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
 import type { Locale } from "@zcode/shared";
 import { DEFAULT_LOCALE } from "@zcode/shared";
-import { DesktopWindowFrame } from "@/DesktopWindowFrame.js";
 import zhCN from "@/i18n/locales/zh-CN.js";
 import enUS from "@/i18n/locales/en-US.js";
 import { logger } from "@/logger.js";
@@ -13,12 +12,9 @@ import { AlertTriangleIcon, RefreshCw } from "lucide-react";
 
 interface AppErrorBoundaryProps {
   children: ReactNode;
-  isDesktop?: boolean;
-  isMacDesktop?: boolean;
-  isWindowsDesktop?: boolean;
   /**
    * React 错误边界捕获的异常不会冒泡到 window.onerror，监控 SDK默认收不到。
-   * Desktop 等宿主可传入此回调，将 React 错误边界捕获的异常转发到监控 SDK。
+   * 宿主可传入此回调，将 React 错误边界捕获的异常转发到监控 SDK。
    */
   onCaughtReactError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
@@ -105,28 +101,16 @@ function ErrorFallback({
   componentStack,
   onReset,
   onReload,
-  isDesktop,
-  isMacDesktop,
-  isWindowsDesktop,
 }: {
   error: Error;
   componentStack: string;
   onReset: () => void;
   onReload: () => void;
-  isDesktop?: boolean;
-  isMacDesktop?: boolean;
-  isWindowsDesktop?: boolean;
 }) {
   const errorSummary = error.message.trim() || formatBoundaryMessage("appError.unknown");
 
   return (
-    <DesktopWindowFrame
-      title={formatBoundaryMessage("appError.title")}
-      isDesktop={isDesktop}
-      isMacDesktop={isMacDesktop}
-      isWindowsDesktop={isWindowsDesktop}
-    >
-      <div className="flex h-full min-h-0 justify-center overflow-y-auto p-6">
+    <main className="flex h-dvh min-h-0 justify-center overflow-y-auto bg-background p-6 text-foreground">
         <div
           role="alert"
           // 错误信息和组件堆栈可能非常长，之前外层不可滚动会把内容挤出视口，
@@ -176,8 +160,7 @@ function ErrorFallback({
             </details>
           ) : null}
         </div>
-      </div>
-    </DesktopWindowFrame>
+    </main>
   );
 }
 
@@ -356,9 +339,6 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
         componentStack={this.state.componentStack}
         onReset={this.handleReset}
         onReload={this.handleReload}
-        isDesktop={this.props.isDesktop}
-        isMacDesktop={this.props.isMacDesktop}
-        isWindowsDesktop={this.props.isWindowsDesktop}
       />
     );
   }

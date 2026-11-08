@@ -1,7 +1,6 @@
 import {
   BIGMODEL_PROVIDER_ID,
   buildBigModelApiUrl,
-  buildBigModelCodingPlanPersonalManageUrl,
   BUILTIN_MODEL_PROVIDER_IDS,
   createUuid,
   type OAuthProviderId,
@@ -21,9 +20,6 @@ export function generateId(): string {
 
 export const PRESET_SUBSCRIPTION_TIMEOUT_MS = 2 * 60 * 1000;
 export const BIGMODEL_REGISTRATION_URL = buildBigModelApiUrl({ ZCODE_ENV }, "/login");
-export const BIGMODEL_CODING_PLAN_PERSONAL_MANAGE_URL = buildBigModelCodingPlanPersonalManageUrl({
-  ZCODE_ENV,
-});
 
 export interface PresetProviderSpec {
   id: BuiltinModelProviderId;
@@ -71,7 +67,6 @@ interface CodingPlanProviderSpec {
   oauthProviderId: OAuthProviderId;
   label: string;
   providerName: string;
-  purchaseUrl?: string;
 }
 
 export const CODING_PLAN_PROVIDER_SPECS: CodingPlanProviderSpec[] = [
@@ -80,28 +75,24 @@ export const CODING_PLAN_PROVIDER_SPECS: CodingPlanProviderSpec[] = [
     oauthProviderId: ZAI_PROVIDER_ID,
     label: "Z.ai - Coding Plan",
     providerName: "Z.ai",
-    purchaseUrl: "https://z.ai/manage-apikey/subscription",
   },
   {
     id: BUILTIN_MODEL_PROVIDER_IDS.zaiIndividualCodingPlan,
     oauthProviderId: ZAI_PROVIDER_ID,
     label: "Z.ai - Coding Plan",
     providerName: "Z.ai",
-    purchaseUrl: "https://z.ai/manage-apikey/subscription",
   },
   {
     id: BUILTIN_MODEL_PROVIDER_IDS.bigmodelIndividualCodingPlan,
     oauthProviderId: BIGMODEL_PROVIDER_ID,
     label: "BigModel - Coding Plan",
     providerName: "BigModel",
-    purchaseUrl: BIGMODEL_CODING_PLAN_PERSONAL_MANAGE_URL,
   },
   {
     id: BUILTIN_MODEL_PROVIDER_IDS.bigmodelStartPlan,
     oauthProviderId: BIGMODEL_PROVIDER_ID,
     label: "BigModel- Coding Plan",
     providerName: "BigModel",
-    purchaseUrl: BIGMODEL_CODING_PLAN_PERSONAL_MANAGE_URL,
   },
 ];
 
@@ -166,7 +157,6 @@ export type ModelProviderNavItem =
       quotaLimits?: UsageQuotaLimit[];
       /** 官方 Server MCP 额度（服务端下发的总额度）。不在 quota.limits[] 里，单独透传给额度卡片。 */
       mcpQuotaLimit?: UsageQuotaLimit | null;
-      purchaseUrl?: string;
       /** 权益查询明确要求重新登录；文案不参与操作分支判定。 */
       accountLoginRequired?: boolean;
       statusLabelId?: string;
@@ -197,7 +187,6 @@ export type ModelProviderNavItem =
       quotaLimits?: UsageQuotaLimit[];
       /** 官方 Server MCP 额度（服务端下发的总额度）。不在 quota.limits[] 里，单独透传给额度卡片。 */
       mcpQuotaLimit?: UsageQuotaLimit | null;
-      purchaseUrl?: string;
       statusLabelId?: string;
       statusMessage?: string | null;
       /** Team 状态的业务原因。交互不得再从 i18n 文案反推。 */

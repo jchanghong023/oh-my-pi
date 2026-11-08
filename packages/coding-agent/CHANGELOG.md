@@ -14,8 +14,18 @@
 
 - Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.
 
+### Removed
+
+- Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and MCP/Skill pages.
+- Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
+- Removed placeholder WebGUI RPC registrations for purchases, plugin management, remote workspaces, terminals and chat/session business operations; retained native session model selection.
+- Removed orphaned purchase UI, payment SDKs/assets and remote-control-only Web code while preserving normal Web and sharing entry points.
+
 ### Fixed
 
+- Fix standalone Web license-resource delivery and remove service-package exports that pointed to absent host-only implementations.
+- Restore shared project navigation and Windows terminal input wiring; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
+- Open WebGUI on Firefox 68 without a blank page or collapsed layout, while retaining the same production resources for Chrome.
 - Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
 - Serve the Dev favicon from the same embedded capability-scoped resources as the page.

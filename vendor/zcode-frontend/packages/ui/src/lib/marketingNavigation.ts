@@ -4,21 +4,21 @@ import type { MarketingAction } from "@zcode/shared";
 import type { SettingsSectionId } from "@/lib/settingsNavigation.js";
 
 export type MarketingNavigationTarget = Extract<MarketingAction, { type: "navigate" }>["args"];
-export const marketingSettingsSections = {
+type MarketingSettingsSection = NonNullable<
+  Extract<MarketingNavigationTarget, { page: "settings" }>["section"]
+>;
+export const marketingSettingsSections: Partial<Record<MarketingSettingsSection, SettingsSectionId>> = {
   general: "general",
   appearance: "appearance",
   models: "modelProvider",
-  browser: "browser",
-  computer_use: "computerUse",
   memory: "memory",
   subagents: "subagents",
-  plugins: "plugin",
   mcp: "mcp",
   skills: "skill",
   commands: "commands",
   hooks: "hooks",
   usage: "usage",
-} as const satisfies Record<string, SettingsSectionId>;
+};
 type Request = { id: number; target: MarketingNavigationTarget; finish: (error?: Error) => void };
 export const marketingNavigation = createStore<{ request: Request | null }>(() => ({
   request: null,

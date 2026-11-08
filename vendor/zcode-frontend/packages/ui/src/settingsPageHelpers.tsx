@@ -31,7 +31,6 @@ import { Switch } from "@/components/ui/switch.js";
 import { Input } from "@/components/ui/input.js";
 import { Button } from "@/components/ui/button.js";
 import { SettingsBadge, SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js";
-import { DataBaseDirControl } from "@/settings/DataBaseDirControl.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { ProactiveSuggestionsSetting } from "@/settings/ProactiveSuggestionsSetting.js";
@@ -42,7 +41,6 @@ import {
   resolveSettingsSectionForPlatform,
   SETTINGS_SECTION_GROUPS,
   SETTINGS_SECTIONS,
-  isSettingsSectionAvailable,
   type SettingsSectionId,
 } from "@/settings/settingsPageConfig.js";
 
@@ -50,7 +48,6 @@ export type { Locale, LocalePreference } from "@zcode/shared";
 export { type SettingsSectionId };
 export { createSettingsPageConfig, resolveSettingsSectionForPlatform };
 export { SETTINGS_SECTION_GROUPS, SETTINGS_SECTIONS };
-export { isSettingsSectionAvailable };
 
 const TASK_AUTO_ARCHIVE_DAY_OPTIONS = [3, 7, 14, 30] as const;
 const ZCODE_INTERACTION_BEHAVIOR_OPTIONS: readonly ZCodeInteractionBehavior[] = ["queue", "guide"];
@@ -133,12 +130,6 @@ export function GeneralSectionContent({
   setInterfaceMode = () => {},
   notificationEnabled,
   notificationSoundEnabled,
-  closeToTrayOnWindows,
-  keepAwakeWhileRunning = false,
-  desktopChromiumHardwareAccelerationEnabled = true,
-  receivePreviewUpdates,
-  autoDownloadAndInstallUpdates,
-  dataBaseDir,
   terminalInheritSystemProfile = true,
   terminalFontFamily = "",
   integratedTerminalShell = { mode: "auto" },
@@ -149,11 +140,6 @@ export function GeneralSectionContent({
   httpProxy = "",
   httpProxyNoProxy = "",
   httpProxyCaCertPath = "",
-  defaultHomeDir,
-  isDesktop,
-  isWindowsDesktop,
-  isLinuxDesktop,
-  linuxCloseToTray,
   showIntegratedTerminalShell = false,
   setLocalePreference,
   setNotificationEnabled,
@@ -166,8 +152,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior,
   askUserQuestionAutoResolutionEnabled = true,
   modelIoFullRetentionEnabled = false,
-  onDataBaseDirChange,
-  onSelectDataBaseDir,
   onTerminalInheritSystemProfileChange = async () => {},
   onTerminalFontFamilyChange = async () => {},
   onIntegratedTerminalShellChange = async () => {},
@@ -175,11 +159,6 @@ export function GeneralSectionContent({
   onHttpProxyChange = async () => {},
   onHttpProxyNoProxyChange = async () => {},
   onHttpProxyCaCertPathChange = async () => {},
-  onCloseToTrayOnWindowsChange,
-  onKeepAwakeWhileRunningChange = async () => {},
-  onDesktopChromiumHardwareAccelerationChange = async () => {},
-  onReceivePreviewUpdatesChange,
-  onAutoDownloadAndInstallUpdatesChange,
   onMessageStreamShowReasoningChange,
   onMessageStreamShowTodosChange,
   onToolGroupingExploreEnabledChange,
@@ -195,12 +174,6 @@ export function GeneralSectionContent({
   setInterfaceMode?: (mode: InterfaceMode) => void;
   notificationEnabled: boolean;
   notificationSoundEnabled: boolean;
-  closeToTrayOnWindows: boolean;
-  keepAwakeWhileRunning?: boolean;
-  desktopChromiumHardwareAccelerationEnabled?: boolean;
-  receivePreviewUpdates: boolean;
-  autoDownloadAndInstallUpdates: boolean;
-  dataBaseDir: string;
   terminalInheritSystemProfile: boolean;
   terminalFontFamily: string;
   integratedTerminalShell?: IntegratedTerminalShellSelection;
@@ -211,20 +184,6 @@ export function GeneralSectionContent({
   httpProxy?: string;
   httpProxyNoProxy?: string;
   httpProxyCaCertPath?: string;
-  defaultHomeDir: string;
-  isDesktop?: boolean;
-  isWindowsDesktop?: boolean;
-  /** Linux 桌面端（isDesktop 且非 win/mac）；关闭驻留托盘设置在 Linux 上按能力自适应展示 */
-  isLinuxDesktop?: boolean;
-  /** Linux 关闭驻留托盘能力状态（spec：docs/desktop/linux-close-to-tray.md）；Windows 不传 */
-  linuxCloseToTray?: {
-    /** 能力探测中或确认不可用，开关锁定 */
-    disabled: boolean;
-    /** 确认不可用（描述文案切换为"未提供系统托盘"） */
-    unavailable: boolean;
-    /** GNOME 系桌面且无托盘（追加 AppIndicator 扩展安装提示） */
-    gnomeLikeHint: boolean;
-  };
   showIntegratedTerminalShell?: boolean;
   platform?: IPlatformService;
   setLocalePreference: (locale: LocalePreference) => void;
@@ -238,8 +197,6 @@ export function GeneralSectionContent({
   zcodeInteractionBehavior: ZCodeInteractionBehavior;
   askUserQuestionAutoResolutionEnabled?: boolean;
   modelIoFullRetentionEnabled?: boolean;
-  onDataBaseDirChange: (dir: string) => Promise<void>;
-  onSelectDataBaseDir: () => Promise<string | null>;
   onTerminalInheritSystemProfileChange: (enabled: boolean) => Promise<void>;
   onTerminalFontFamilyChange: (fontFamily: string) => Promise<void>;
   onIntegratedTerminalShellChange?: (selection: IntegratedTerminalShellSelection) => Promise<void>;
@@ -247,11 +204,6 @@ export function GeneralSectionContent({
   onHttpProxyChange?: (httpProxy: string) => Promise<void>;
   onHttpProxyNoProxyChange?: (noProxy: string) => Promise<void>;
   onHttpProxyCaCertPathChange?: (caCertPath: string) => Promise<void>;
-  onCloseToTrayOnWindowsChange: (enabled: boolean) => Promise<void>;
-  onKeepAwakeWhileRunningChange?: (enabled: boolean) => Promise<void>;
-  onDesktopChromiumHardwareAccelerationChange?: (enabled: boolean) => Promise<void>;
-  onReceivePreviewUpdatesChange: (enabled: boolean) => Promise<void>;
-  onAutoDownloadAndInstallUpdatesChange: (enabled: boolean) => Promise<void>;
   onMessageStreamShowReasoningChange: (enabled: boolean) => Promise<void>;
   onMessageStreamShowTodosChange: (enabled: boolean) => Promise<void>;
   onToolGroupingExploreEnabledChange: (enabled: boolean) => Promise<void>;
@@ -683,63 +635,6 @@ export function GeneralSectionContent({
       </SettingsGroupCard>
 
       <SettingsGroupCard>
-        {isDesktop ? (
-          <>
-            <SettingsRow
-              label={intl.formatMessage({
-                id: "settings.desktopChromiumHardwareAcceleration",
-              })}
-              description={intl.formatMessage({
-                id: "settings.desktopChromiumHardwareAccelerationDescription",
-              })}
-              control={
-                <Switch
-                  aria-label={intl.formatMessage({
-                    id: "settings.desktopChromiumHardwareAcceleration",
-                  })}
-                  checked={desktopChromiumHardwareAccelerationEnabled}
-                  onCheckedChange={(checked) => {
-                    void onDesktopChromiumHardwareAccelerationChange(checked);
-                  }}
-                />
-              }
-            />
-            <SettingsRow
-              label={intl.formatMessage({ id: "settings.receivePreviewUpdates" })}
-              description={intl.formatMessage({
-                id: "settings.receivePreviewUpdatesDescription",
-              })}
-              control={
-                <Switch
-                  aria-label={intl.formatMessage({ id: "settings.receivePreviewUpdates" })}
-                  checked={receivePreviewUpdates}
-                  onCheckedChange={(checked) => {
-                    void onReceivePreviewUpdatesChange(checked);
-                  }}
-                />
-              }
-            />
-            <SettingsRow
-              label={intl.formatMessage({
-                id: "settings.autoDownloadAndInstallUpdates",
-              })}
-              description={intl.formatMessage({
-                id: "settings.autoDownloadAndInstallUpdatesDescription",
-              })}
-              control={
-                <Switch
-                  aria-label={intl.formatMessage({
-                    id: "settings.autoDownloadAndInstallUpdates",
-                  })}
-                  checked={autoDownloadAndInstallUpdates}
-                  onCheckedChange={(checked) => {
-                    void onAutoDownloadAndInstallUpdatesChange(checked);
-                  }}
-                />
-              }
-            />
-          </>
-        ) : null}
         <SettingsRow
           label={intl.formatMessage({ id: "settings.notification" })}
           description={intl.formatMessage({
@@ -762,50 +657,6 @@ export function GeneralSectionContent({
             />
           }
         />
-        {isWindowsDesktop || isLinuxDesktop ? (
-          <SettingsRow
-            label={intl.formatMessage({ id: "settings.closeToTrayOnWindows" })}
-            description={
-              linuxCloseToTray?.unavailable
-                ? linuxCloseToTray.gnomeLikeHint
-                  ? `${intl.formatMessage({ id: "settings.closeToTrayUnavailable" })} ${intl.formatMessage({ id: "settings.closeToTrayGnomeHint" })}`
-                  : intl.formatMessage({ id: "settings.closeToTrayUnavailable" })
-                : intl.formatMessage({
-                    id: "settings.closeToTrayOnWindowsDescription",
-                  })
-            }
-            control={
-              <Switch
-                checked={closeToTrayOnWindows}
-                // Linux 上托盘能力未知（探测中）或确认不可用时都锁定，防止误开导致关窗失联
-                //（spec：docs/desktop/linux-close-to-tray.md）。
-                disabled={Boolean(linuxCloseToTray?.disabled)}
-                onCheckedChange={(checked) => {
-                  void onCloseToTrayOnWindowsChange(checked);
-                }}
-              />
-            }
-          />
-        ) : null}
-        {isDesktop ? (
-          <SettingsRow
-            label={intl.formatMessage({ id: "settings.keepAwakeWhileRunning" })}
-            description={intl.formatMessage({
-              id: "settings.keepAwakeWhileRunningDescription",
-            })}
-            control={
-              <Switch
-                aria-label={intl.formatMessage({
-                  id: "settings.keepAwakeWhileRunning",
-                })}
-                checked={keepAwakeWhileRunning}
-                onCheckedChange={(checked) => {
-                  void onKeepAwakeWhileRunningChange(checked);
-                }}
-              />
-            }
-          />
-        ) : null}
       </SettingsGroupCard>
 
       <SettingsGroupCard>
@@ -945,23 +796,6 @@ export function GeneralSectionContent({
               onCheckedChange={(checked) => {
                 void onToolGroupingChangesEnabledChange(checked);
               }}
-            />
-          }
-        />
-      </SettingsGroupCard>
-
-      <SettingsGroupCard>
-        <SettingsRow
-          label={intl.formatMessage({ id: "settings.dataBaseDir" })}
-          description={intl.formatMessage({
-            id: "settings.dataBaseDirDescription",
-          })}
-          control={
-            <DataBaseDirControl
-              dataBaseDir={dataBaseDir}
-              defaultHomeDir={defaultHomeDir}
-              onDataBaseDirChange={onDataBaseDirChange}
-              onSelectDataBaseDir={onSelectDataBaseDir}
             />
           }
         />

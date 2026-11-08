@@ -8,7 +8,6 @@ import {
   Import,
   Plus,
   Trash2,
-  UploadCloud,
   WandSparkles,
 } from "lucide-react";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -29,6 +28,7 @@ import type { CreateTaskRequest } from "@/app-shell/types.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { toast } from "@/components/ui/toast.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
+import { useBackendBusinessAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useConfigWorkspaceServicesResolution as useWorkspaceServicesResolution } from "@/workspace-config-catalog/index.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
@@ -40,7 +40,6 @@ import {
   SettingsResourceGroupHeader,
   SettingsResourceList,
 } from "@/settings/SettingsResourceGroup.js";
-import { SettingsBreadcrumbReporter } from "@/settings/SettingsHeaderBreadcrumb.js";
 import {
   PluginInstallEmptyState,
   PluginLoadingState,
@@ -52,11 +51,6 @@ import {
 } from "@/settings/pluginStoreListing.js";
 import { groupSkillsByPlugin } from "@/settings/pluginManagedResourceGroups.js";
 import { SkillsImportDialog } from "@/settings/ExternalAgentImportDialog.js";
-import {
-  formatRemoteSyncTargetLabel,
-  shouldShowRemoteSyncActions,
-  useSettingsDataSyncEntry,
-} from "@/data-sync/index.js";
 import { refreshSharedSkillStoreForWorkspace } from "@/lib/skillStoreRefresh.js";
 import { buildSourceSettingsProjectionKey } from "@/settings/settingsSourceWorkspace.js";
 import { usePluginManagementStore } from "@/store/pluginManagementStore.js";
@@ -65,6 +59,8 @@ import {
   selectPluginsForScope,
   selectSkillsForScope,
 } from "@/settings/pluginCapabilityProjection.js";
+
+const EMPTY_PLUGIN_INVENTORY: never[] = [];
 
 function getWorkspaceBasename(workspacePath: string | null): string {
   if (!workspacePath) return "";
@@ -148,17 +144,11 @@ interface SkillsSectionProps {
   workspaceIdentity?: string;
   remoteSessionId?: string;
   remoteTarget?: RemoteTarget;
-  isWebRemoteControl?: boolean;
   scopeFilter: "user" | "workspace";
   searchQuery: string;
   onVisibleCountChange?: (count: number) => void;
   onCreateTask?: (request?: CreateTaskRequest) => void;
   onDetailOpenChange?: (open: boolean) => void;
-  onOpenPluginStore?: () => void;
-  showMarketplaceBreadcrumb?: boolean;
-  reportDetailBreadcrumb?: boolean;
-  /** Scope 选中在线远端设备的「用户」时为该设备；同步按钮只在此时显示。 */
-  dataSyncSourceServerId?: string | null;
   unscopedServices?: IServiceAccessor;
   cacheAuthorityKey?: string;
 }
@@ -168,24 +158,26 @@ export function SkillsSection({
   workspaceIdentity,
   remoteSessionId,
   remoteTarget,
-  isWebRemoteControl = false,
   scopeFilter,
   searchQuery,
   onVisibleCountChange,
   onCreateTask,
   onDetailOpenChange,
-  onOpenPluginStore,
-  showMarketplaceBreadcrumb = false,
-  reportDetailBreadcrumb = false,
-  dataSyncSourceServerId,
   unscopedServices,
   cacheAuthorityKey,
 }: SkillsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const platform = usePlatform();
-  const plugins = usePluginManagementStore((state) => state.plugins);
-  const installedPlugins = usePluginManagementStore((state) => state.installedPlugins);
-  const availablePlugins = usePluginManagementStore((state) => state.availablePlugins);
+  const backendBusinessAvailable = useBackendBusinessAvailable();
+  const plugins = usePluginManagementStore((state) =>
+    backendBusinessAvailable ? state.plugins : EMPTY_PLUGIN_INVENTORY,
+  );
+  const installedPlugins = usePluginManagementStore((state) =>
+    backendBusinessAvailable ? state.installedPlugins : EMPTY_PLUGIN_INVENTORY,
+  );
+  const availablePlugins = usePluginManagementStore((state) =>
+    backendBusinessAvailable ? state.availablePlugins : EMPTY_PLUGIN_INVENTORY,
+  );
   const pluginListingById = useMemo(
     () => new Map(availablePlugins.map((plugin) => [plugin.id, plugin.listing])),
     [availablePlugins],
@@ -232,7 +224,8 @@ export function SkillsSection({
     !activeWorkspacePath || loadedSkillTargetKey === activeSkillTargetKey;
 
   useEffect(() => {
-    if (!activeWorkspacePath || !targetServiceResolution.rpcReady) return;
+    if (!backendBusinessAvailable || !activeWorkspacePath || !targetServiceResolution.rpcReady)
+      return;
     void initializePlugins({
       workspacePath: activeWorkspacePath,
       workspaceIdentity: activeWorkspaceIdentity,
@@ -241,6 +234,7 @@ export function SkillsSection({
       pluginService: pluginManagementService,
     });
   }, [
+    backendBusinessAvailable,
     activeWorkspaceIdentity,
     activeWorkspacePath,
     cacheAuthorityKey,
@@ -251,22 +245,6 @@ export function SkillsSection({
   ]);
 
   const workspaceLabel = getWorkspaceBasename(activeWorkspacePath);
-  const connectedRemoteSyncTarget =
-    targetServiceResolution.rpcReady &&
-    shouldShowRemoteSyncActions({ remoteSessionId, remoteTarget, isWebRemoteControl }) &&
-    activeWorkspacePath
-      ? remoteTarget
-      : null;
-  const remoteSkillSyncTargetLabel = connectedRemoteSyncTarget
-    ? formatRemoteSyncTargetLabel(connectedRemoteSyncTarget, activeWorkspacePath ?? "")
-    : "";
-  const dataSync = useSettingsDataSyncEntry({
-    category: "skills",
-    sourceServerId: dataSyncSourceServerId,
-    onPushFinished: async () => {
-      await Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()]);
-    },
-  });
 
   const renderScopeLabel = useCallback(
     (skill: SkillSummary): string => {
@@ -472,6 +450,13 @@ export function SkillsSection({
 
   const scopedProviderSkills = useMemo(() => {
     const allProviderSkills = filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
+    if (!backendBusinessAvailable) {
+      // The resource list is authoritative without ZCode inventory. Plugin scope has no
+      // user/workspace ownership field, so retain it rather than inventing membership.
+      return allProviderSkills.filter(
+        (skill) => skill.scope === scopeFilter || skill.scope === "plugin",
+      );
+    }
     const pluginStoreMatchesTarget =
       (pluginWorkspaceIdentity?.trim() || pluginWorkspacePath || "") ===
         (activeWorkspaceIdentity?.trim() || activeWorkspacePath || "") &&
@@ -482,6 +467,7 @@ export function SkillsSection({
       scopeFilter,
     );
   }, [
+    backendBusinessAvailable,
     activeWorkspaceIdentity,
     activeWorkspacePath,
     installedPlugins,
@@ -679,57 +665,9 @@ export function SkillsSection({
       newActionId="settings.skills.create.open"
     />
   );
-  const remoteSyncAction = dataSync.visible ? (
-    <ControlHintTooltip title={intl.formatMessage({ id: "settings.skills.remoteSync.open" })}>
-      <Button
-        type="button"
-        variant="outline"
-        size="icon-lg"
-        data-testid="data-sync-entry-skills"
-        disabled={dataSync.disabled}
-        aria-label={intl.formatMessage({
-          id: "settings.skills.remoteSync.open",
-        })}
-        onClick={dataSync.open}
-      >
-        <UploadCloud className="size-3.5" aria-hidden="true" />
-      </Button>
-    </ControlHintTooltip>
-  ) : null;
 
   return (
     <div className="space-y-4">
-      {/* Bug 原因：独立 Skills 分区的详情是弹窗，不属于页面级导航；只有插件容器需要上报详情层级。 */}
-      {reportDetailBreadcrumb && detailSkill ? (
-        <SettingsBreadcrumbReporter
-          items={
-            showMarketplaceBreadcrumb
-              ? [
-                  {
-                    label: intl.formatMessage({ id: "settings.plugins.title" }),
-                    onSelect: () => setSelectedSkill(null),
-                  },
-                  { label: detailSkill.name },
-                ]
-              : [{ label: detailSkill.name }]
-          }
-          onSectionSelect={
-            showMarketplaceBreadcrumb && onOpenPluginStore
-              ? onOpenPluginStore
-              : () => setSelectedSkill(null)
-          }
-        />
-      ) : null}
-      {remoteSyncAction ? <div className="flex justify-end">{remoteSyncAction}</div> : null}
-
-      {connectedRemoteSyncTarget ? (
-        <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
-          {intl.formatMessage(
-            { id: "settings.skills.remoteContext" },
-            { target: remoteSkillSyncTargetLabel },
-          )}
-        </div>
-      ) : null}
 
       {targetServiceResolution.rpcReady && diagnostics.length > 0 ? (
         <div className="overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/10 text-ui-base text-foreground">
@@ -994,7 +932,6 @@ export function SkillsSection({
           await refresh();
         }}
       />
-      {dataSync.dialog}
     </div>
   );
 }

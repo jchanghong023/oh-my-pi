@@ -77,7 +77,6 @@ import {
   type MarkdownImageProps,
 } from "@/components/ai-elements/markdown-image.js";
 import { STREAMDOWN_CONTROLS } from "@/components/ai-elements/streamdown-controls.js";
-import { resolveMessageLinkOpenTarget } from "@/embeddedBrowserHelpers.js";
 import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import { persistLastSelectedEditorId } from "@/lib/editorPreference.js";
 import {
@@ -102,7 +101,7 @@ import type { CodePreviewSettings } from "@/lib/codePreviewSettings.js";
 import { DEFAULT_CODE_PREVIEW_SETTINGS } from "@/lib/codePreviewSettings.js";
 import { useZCodeStore } from "@/store/StoreProvider.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
-import { useOptionalPlatform, usePlatform } from "@/hooks/usePlatform.js";
+import { usePlatform } from "@/hooks/usePlatform.js";
 import { FileApplicationChoices, FileSaveAsMenuItem } from "@/file-menu/index.js";
 import { useFileApplications } from "@/file-menu/index.js";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
@@ -1024,29 +1023,9 @@ function MessageExternalLink({
   ...props
 }: MessageExternalLinkProps) {
   const { intl } = useZCodeIntl();
-  const platform = useOptionalPlatform();
   const handleOpen = useCallback(
-    (options: { forceExternal?: boolean; forceInApp?: boolean } = {}) => {
-      // 交互语义：本机/私网白名单只决定左键单击的默认目标；右键的两个打开动作各自强制一个目标。
-      // 菜单「打开」过去复用左键默认行为，公网链接（如飞书文档）两项都会跳系统浏览器。
-      const target = resolveMessageLinkOpenTarget({ href, ...options });
-      logger.debug("[MessageExternalLink] 打开 Markdown 外链", {
-        forceExternal: Boolean(options.forceExternal),
-        forceInApp: Boolean(options.forceInApp),
-        href,
-        target,
-      });
-
-      if (target === "app-browser" || !platform) {
-        // Share/普通 Web 没有 Desktop PlatformProvider；仍交给调用方的安全 URL handler，
-        // 避免 MessageResponse 因缺少宿主上下文整棵 Markdown 降级为纯文本。
-        onOpenExternalUrl(href);
-        return;
-      }
-
-      platform.openExternal(href);
-    },
-    [href, onOpenExternalUrl, platform],
+    () => onOpenExternalUrl(href),
+    [href, onOpenExternalUrl],
   );
   const handleClick = useCallback(
     (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1055,7 +1034,7 @@ function MessageExternalLink({
         return;
       }
 
-      handleOpen({ forceExternal: event.metaKey || event.ctrlKey });
+      handleOpen();
     },
     [handleOpen, onClick],
   );
@@ -1084,20 +1063,14 @@ function MessageExternalLink({
           )}
           title={href}
           {...props}
-          // markdown 外链之前被统一降级成 span，用户看得到链接却点不开。
-          // 这里仍阻断原生 a 标签跳转，但不再把所有 http/https 都默认送进内置浏览器。
+          // Links use the host's external URL handler; no embedded browser is created.
           onClick={handleClick}
         >
           {children}
         </button>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
-        {/* 通用“打开”无法说明目标；两个打开动作同组，用文案和图标区分内置与外部浏览器。 */}
-        <ContextMenuItem onSelect={() => handleOpen({ forceInApp: true })}>
-          <PanelRightIcon className="size-4" />
-          <span>{intl.formatMessage({ id: "chat.message.link.openInZCode" })}</span>
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={() => handleOpen({ forceExternal: true })}>
+        <ContextMenuItem onSelect={handleOpen}>
           <ExternalLinkIcon className="size-4" />
           <span>{intl.formatMessage({ id: "chat.previewCards.openExternal" })}</span>
         </ContextMenuItem>

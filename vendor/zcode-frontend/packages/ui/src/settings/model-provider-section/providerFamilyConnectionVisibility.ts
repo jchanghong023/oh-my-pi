@@ -504,9 +504,6 @@ function appendSubscribedTeamPlanItems({
           planLevel: teamPlanName,
           inactivePlanTitle: teamPlanName,
           currentProductId: product.productId,
-          // Team Plan 复用对应 family 的 Coding Plan provider，但管理入口必须进入团队套餐页；
-          // 继续继承个人 Coding Plan 的 personal/overview 会把用户带到错误的套餐上下文。
-          purchaseUrl: getModelProviderFamilySpec(productFamily).teamCodingPlanManageUrl,
           // 修复原因：Team Plan 入口存在、项目 Key ID 已就绪，都不能证明团队套餐有效。
           // 有效性必须由团队 quota snapshot 决定，避免继续显示个人套餐的已启用状态。
           status: teamPlanUnavailable ? ("unavailable" as const) : ("purchased" as const),
@@ -652,7 +649,6 @@ function buildEntitlementTeamPlanItems(
       // enterprise pricing/customerInfo 只负责后续校正名称和商品字段，不能让连接方式退回 Coding Plan。
       planLevel: teamPlanName,
       currentProductId: productId,
-      purchaseUrl: familySpec.teamCodingPlanManageUrl,
       subscriptionBillingCycle: null,
       subscriptionRenewTime: null,
       subscriptionExpireTime: null,
@@ -698,7 +694,6 @@ function buildSelectedTeamPlanFallbackItems({
       // 避免和输入框/registry 的 Team Plan 选择短暂断裂。
       planLevel: teamPlanName,
       currentProductId: selection.productId,
-      purchaseUrl: familySpec.teamCodingPlanManageUrl,
       subscriptionBillingCycle: null,
       subscriptionRenewTime: null,
       subscriptionExpireTime: null,

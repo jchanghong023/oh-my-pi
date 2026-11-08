@@ -11,7 +11,11 @@ import type {
   ZCodePluginsDescribeResult,
 } from "@zcode/shared";
 import { isPluginCommand, isUserCommand, ZCODE_COMMAND_AGENT_SOURCE } from "@zcode/shared";
-import type { PluginComponentDisplayGroup } from "@/settings/PluginComponentGroups.js";
+interface PluginComponentDisplayGroup {
+  kind: ZCodePluginComponentKind;
+  count: number;
+  items: Array<{ name: string; description?: string }>;
+}
 
 export interface ResourceGroups<TLocal, TPlugin> {
   local: TLocal[];

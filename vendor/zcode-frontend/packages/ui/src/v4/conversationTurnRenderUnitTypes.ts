@@ -1,4 +1,3 @@
-import type { PluginUiRowPinResolver } from "@/plugin-ui/index.js";
 import type { BotTopicPreparation } from "@zcode/shared";
 import type {
   AssistantTextRow,
@@ -62,6 +61,4 @@ export interface ConversationTurnRenderUnit extends HighspeedOutputFooterMark {
 export interface BuildConversationTurnRenderUnitsOptions {
   nowMs?: number;
   sessionPhase?: SessionPhase;
-  /** 插件卡片折叠裁决（时间线由推导结果 + 手动状态组装）。 */
-  pluginUiPinResolver?: PluginUiRowPinResolver;
 }

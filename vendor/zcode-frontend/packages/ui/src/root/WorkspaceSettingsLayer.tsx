@@ -7,15 +7,10 @@ import type { WorkspaceSettingsLayerProps } from "@/root/types.js";
 export function WorkspaceSettingsLayer({
   workspaceScopedServices,
   isDesktop,
-  isMacDesktop,
-  isWindowsDesktop,
-  isWebRemoteControl,
-  windowsWindowControlsRightPaddingPx,
   captionWorkspacePath,
   onBack,
   onCreateTask,
   onOpenWorkspace,
-  onOpenRemoteWorkspace,
   allowOpenWorkspace,
   onLogin,
   onLogout,
@@ -34,15 +29,10 @@ export function WorkspaceSettingsLayer({
         <ServiceProvider services={workspaceScopedServices}>
           <SettingsPage
             isDesktop={isDesktop}
-            isMacDesktop={isMacDesktop}
-            isWindowsDesktop={isWindowsDesktop}
-            isWebRemoteControl={isWebRemoteControl}
-            windowsWindowControlsRightPaddingPx={windowsWindowControlsRightPaddingPx}
             captionWorkspacePath={captionWorkspacePath}
             onBack={onBack}
             onCreateTask={onCreateTask}
             onOpenWorkspace={onOpenWorkspace}
-            onOpenRemoteWorkspace={onOpenRemoteWorkspace}
             allowOpenWorkspace={allowOpenWorkspace}
             onLogin={onLogin}
             onLogout={onLogout}
@@ -52,15 +42,10 @@ export function WorkspaceSettingsLayer({
       ) : (
         <SettingsPage
           isDesktop={isDesktop}
-          isMacDesktop={isMacDesktop}
-          isWindowsDesktop={isWindowsDesktop}
-          isWebRemoteControl={isWebRemoteControl}
-          windowsWindowControlsRightPaddingPx={windowsWindowControlsRightPaddingPx}
           captionWorkspacePath={captionWorkspacePath}
           onBack={onBack}
           onCreateTask={onCreateTask}
           onOpenWorkspace={onOpenWorkspace}
-          onOpenRemoteWorkspace={onOpenRemoteWorkspace}
           allowOpenWorkspace={allowOpenWorkspace}
           onLogin={onLogin}
           onLogout={onLogout}

@@ -13,7 +13,7 @@ import {
   resolveEnterpriseCodingPlanProductList,
   type EnterpriseCodingPlanProductDisplay,
 } from "@/settings/model-provider-section/enterpriseCodingPlanProducts.js";
-import { normalizeErrorMessage } from "@/settings/model-provider-section/useCodingPlanProducts.js";
+import { normalizeErrorMessage } from "@/settings/model-provider-section/utils.js";
 
 interface EnterpriseCodingPlanProductsState {
   snapshot: EnterpriseCodingPlanProductsSnapshot | null;
@@ -25,8 +25,6 @@ export interface EnterpriseCodingPlanProductsSnapshot {
   productList: EnterpriseCodingPlanProductDisplay[];
   raw: EnterpriseCodingPlanPricingResponse;
   authenticated: boolean;
-  /** 静态目录控制购买横幅，不能用实时 pricing 补造目录中缺失的商品。 */
-  staticProductIds?: string[];
 }
 
 export function shouldRetainEnterprisePricingSnapshotForRefresh(
@@ -89,11 +87,8 @@ export function useEnterpriseCodingPlanProducts({
   enabled,
   authenticated,
   family = "bigmodel",
-  staticOnly = false,
 }: {
   enabled: boolean;
-  /** 未登录购买横幅只读取公开静态目录，不请求实时 pricing。 */
-  staticOnly?: boolean;
   authenticated: boolean;
   family?: ProviderFamilyDomain;
 }) {
@@ -104,7 +99,7 @@ export function useEnterpriseCodingPlanProducts({
     "unscoped",
   );
   // 原因：鉴权布尔值不能区分两个账号或同账号重新登录，旧目录必须按完整身份隔离。
-  const scope = useMemo(() => ({}), [service, family, authenticated, authScope, staticOnly]);
+  const scope = useMemo(() => ({}), [service, family, authenticated, authScope]);
   const owner = useRef({ scope, enabled, mounted: true });
   owner.current = { scope, enabled, mounted: true };
   const codingPlanProviderId = getModelProviderFamilySpec(family).individualCodingPlanProviderId;
@@ -164,7 +159,7 @@ export function useEnterpriseCodingPlanProducts({
         // 企业/个人切换和登录态刷新时不应把套餐区域替换成整块 loading；
         // 保留上一轮企业套餐数据，让刷新状态只体现在刷新按钮和卡片局部状态上。
         // 但公开 pricing 与登录态 pricing 的字段语义不同，切换鉴权来源时必须丢弃旧数据，
-        // 否则升级 Coding Plan 列表页会继续展示未鉴权的套餐结果。
+        // 否则团队连接列表会继续展示未鉴权的套餐结果。
         snapshot: shouldRetainEnterprisePricingSnapshotForRefresh(current.snapshot, authenticated)
           ? current.snapshot
           : null,
@@ -177,9 +172,7 @@ export function useEnterpriseCodingPlanProducts({
         // 两者必须独立请求，避免灰度环境缺少新配置字段时阻断已购 Team Plan 的恢复。
         const [staticResult, pricingResult] = await Promise.allSettled([
           service.getStaticTeamProducts(),
-          staticOnly
-            ? Promise.resolve<EnterpriseCodingPlanPricingResponse>({ productList: [] })
-            : service.getEnterprisePricing({ authenticated, family }),
+          service.getEnterprisePricing({ authenticated, family }),
         ]);
         // 原因：登出、family 或服务切换后，旧网络响应不能复活上一个身份的目录。
         if (owner.current.scope !== scope || !owner.current.enabled || !owner.current.mounted)
@@ -218,7 +211,6 @@ export function useEnterpriseCodingPlanProducts({
         setState({
           snapshot: {
             raw,
-            staticProductIds: staticProducts?.map((product) => product.productId) ?? [],
             productList: tagEnterpriseProductsFamily(
               resolveEnterpriseCodingPlanProductList(staticProducts, raw.productList),
               family,
@@ -259,7 +251,7 @@ export function useEnterpriseCodingPlanProducts({
         }));
       }
     },
-    [authenticated, codingPlanProviderId, enabled, family, service, staticOnly, scope, setState],
+    [authenticated, codingPlanProviderId, enabled, family, service, scope, setState],
   );
 
   useEffect(() => {

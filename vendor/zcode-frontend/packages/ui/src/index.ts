@@ -2,20 +2,11 @@ export { App } from "./App.js";
 export { AppErrorBoundary, ScopedErrorBoundary } from "./ErrorBoundary.js";
 export type { ScopedErrorBoundaryVariant } from "./ErrorBoundary.js";
 export { Button, buttonVariants } from "./components/ui/button.js";
-export { DesktopWindowFrame } from "./DesktopWindowFrame.js";
-export { WebRemoteControlDialog } from "@/web-remote-control/index.js";
-export {
-  WebRemoteControlFeatureProvider,
-  useWebRemoteControlFeatureEnabled,
-} from "./WebRemoteControlFeatureProvider.js";
 export {
   AssistantCodeCommentFeatureProvider,
   useAssistantCodeCommentFeatureEnabled,
 } from "./AssistantCodeCommentFeatureProvider.js";
 export { Root } from "./Root.js";
-export { UpdateStatusWindowRoot } from "./UpdateStatusWindowRoot.js";
-export type { WebRemoteControlTerminalTransportState } from "./root/types.js";
-export { setWebRemoteControlTerminalTransportState } from "./webRemoteControlTerminalTransportState.js";
 export { ConfirmDialogHost } from "./ConfirmDialog.js";
 export { Terminal } from "./Terminal.js";
 export { GitGraphPane } from "./git-graph/GitGraphPane.js";
@@ -29,7 +20,6 @@ export type {
   GitGraphRef,
   GitGraphRefKind,
 } from "./git-graph/layout.js";
-export { SSHDialog, RemoteConnectionDialog } from "./SSHDialog.js";
 export { useTheme } from "./useTheme.js";
 export type { Theme } from "./useTheme.js";
 export { useTestActions } from "./test-actions.js";

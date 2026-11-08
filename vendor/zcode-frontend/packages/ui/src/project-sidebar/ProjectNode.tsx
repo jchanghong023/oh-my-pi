@@ -96,7 +96,6 @@ export function ProjectNode(props: ProjectNodeProps) {
             ? buildRemoteHostWorkspaceIdentity(project.hostId, project.roots[0]!.rootPath)
             : undefined
         }
-        data-connection-state={props.remoteHost?.connectionStatus}
         data-project-name={project.name}
         data-primary-root-status={project.primaryRootStatus}
         className={`min-w-0 rounded-xl ${sessionDropTarget ? "bg-accent" : ""}`}

@@ -4,7 +4,6 @@ import type { Hook } from "../../../../vendor/zcode-frontend/packages/shared/src
 import type { Memory } from "../../../../vendor/zcode-frontend/packages/shared/src/memory";
 import type { LoadCliMcpFromUserDirectoryResult } from "../../../../vendor/zcode-frontend/packages/shared/src/mcp";
 import type { OutputStyle } from "../../../../vendor/zcode-frontend/packages/shared/src/output-style";
-import type { PluginsOverviewResult } from "../../../../vendor/zcode-frontend/packages/shared/src/plugin-types";
 import type {
 	DataSyncContentHashesResult,
 	DataSyncListResult,
@@ -17,18 +16,8 @@ import type {
 } from "../../../../vendor/zcode-frontend/packages/shared/src/settings-sync";
 import type { SkillsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/skills-types";
 import type { AgentsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/subagents-types";
-import type {
-	ZCodeMcpListResult,
-	ZCodePluginsListResult,
-	ZCodePluginsOverviewResult,
-	ZCodePluginsReferenceCatalogResult,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol/index";
-import {
-	type WebGuiMethod,
-	WebGuiNotImplementedError,
-	type WebGuiServiceContext,
-	type WebGuiServiceDefinition,
-} from "./rpc-contract";
+import type { ZCodeMcpListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol/index";
+import type { WebGuiMethod, WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
 import { createWebGuiService } from "./service-channel";
 
 const unavailableReason = "OMP WebGUI protocol is connected; native extension configuration is not bound.";
@@ -51,7 +40,7 @@ function disabledSyncReads(): Readonly<Record<string, WebGuiMethod>> {
 }
 
 /** Browser-facing extension interfaces, deliberately separate from OMP business bindings. */
-export function createExtensionServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
+export function createExtensionServices(_context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	return [
 		createWebGuiService(ServiceChannels.Skills, {
 			list: (): SkillsListResult => ({
@@ -75,57 +64,10 @@ export function createExtensionServices(context: WebGuiServiceContext): readonly
 			// exportSyncItems/importSyncItems/setWorkspaceMcpTrust/saveMcpToUserDirectory are unavailable.
 			// No configured servers are claimed connected, and no native MCP configuration is scanned.
 		}),
-		createWebGuiService(ServiceChannels.PluginSync, {
-			...disabledSyncReads(),
-			// TODO(omp-plugins): Bind native sync reads; exportSyncItems/importSyncItems,
-			// exportMarketplaceSourceArchive/inspectMarketplaceSourceMirror/importMarketplaceSourceArchive
-			// remain unavailable until OMP plugin source and installation authority are connected.
-		}),
 		createWebGuiService(ServiceChannels.UserConfigSync, {
 			...disabledSyncReads(),
 			// TODO(omp-native-settings): Bind category-specific native sync reads;
 			// exportSyncItems/importSyncItems must reject until OMP user configuration is connected.
-		}),
-		createWebGuiService(ServiceChannels.Plugins, {
-			getOverview: (): PluginsOverviewResult => ({
-				marketplaces: [],
-				availablePlugins: [],
-				installedPlugins: [],
-				capability: { supported: false, reason: "desktop_only" },
-			}),
-			// TODO(omp-plugins): Bind native getOverview; addMarketplace/removeMarketplace/updateMarketplace,
-			// installPlugin/uninstallPlugin/setPluginEnabled stay unavailable, not successful no-ops.
-		}),
-		createWebGuiService(ServiceChannels.PluginManagement, {
-			listPlugins: (): ZCodePluginsListResult => ({ plugins: [], diagnostics: [] }),
-			getPluginsOverview: (): ZCodePluginsOverviewResult => ({
-				marketplaces: [],
-				availablePlugins: [],
-				installedPlugins: [],
-				restorableBuiltins: [],
-				diagnostics: [],
-				capability: { supported: false, reason: unavailableReason },
-			}),
-			getPluginReferenceCatalog: (params: unknown): ZCodePluginsReferenceCatalogResult => {
-				// An unconnected workspace view cannot impersonate a session-owned frozen catalog.
-				if (
-					typeof params === "object" &&
-					params !== null &&
-					"sessionId" in params &&
-					params.sessionId !== undefined
-				) {
-					throw new WebGuiNotImplementedError(`${ServiceChannels.PluginManagement}.getPluginReferenceCatalog`);
-				}
-				if (context.signal.aborted) {
-					throw new WebGuiNotImplementedError(`${ServiceChannels.PluginManagement}.getPluginReferenceCatalog`);
-				}
-				return { authority: "workspace", plugins: [] };
-			},
-			// TODO(omp-plugins): Bind native catalogs and resolveSuggestedPluginReference/describePlugin;
-			// addPluginMarketplace/removePluginMarketplace/updatePluginMarketplace/installPlugin,
-			// cancelPluginOperation/uninstallPlugin/updatePlugin/restoreBuiltinPlugin/configurePlugin,
-			// resetPluginConfig/validatePlugin/setPluginEnabled are explicitly unavailable.
-			// onDynamicPluginOperationProgress is a connection-owned idle subscription until real operations exist.
 		}),
 		createWebGuiService(ServiceChannels.Subagents, {
 			list: (): AgentsListResult => ({

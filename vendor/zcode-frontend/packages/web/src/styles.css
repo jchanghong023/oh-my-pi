@@ -2,3 +2,12 @@
 
 /* 共享样式只扫描 UI 包；Web 独立入口的状态类也必须参与 Tailwind 生成。 */
 @source "./**/*.{ts,tsx}";
+
+/* Firefox 68 has viewport units but not dynamic viewport units. */
+@layer utilities {
+  @supports not (height: 100dvh) {
+    .h-dvh {
+      height: 100vh;
+    }
+  }
+}

@@ -1,21 +1,8 @@
 import { useSessionRuntimeRestart } from "@/app-shell/useWorkspaceSessionReload.js";
-import { useOptionalProjectDirectory } from "@/project-sidebar/index.js";
-import { resolveWorkspaceRemoteSessionId } from "@/lib/workspaceServiceResolver.js";
-import { RemoteConnectionStateIcon } from "@/remote-connection/RemoteConnectionStateIcon.js";
-import { useRemoteProjectPresentationFacts } from "@/hooks/RemoteProjectPresentationContext.js";
-import { useRemoteWorkspaceSessionStore } from "@/store/remoteWorkspaceSessionStore.js";
-import {
-  formatRemoteDeviceName,
-  resolveRemoteConnectionPresentation,
-} from "@/lib/remoteConnectionPresentation.js";
 import { WorkspaceContextPath } from "@/WorkspaceHeaderSections/WorkspaceContextPath.js";
 import { WorkspaceLastActivity } from "@/WorkspaceHeaderSections/WorkspaceLastActivity.js";
 /* eslint-disable max-lines -- Header 标题区当前同时承载 task 菜单、路径上下文和 workspace 级状态提示，先保持单文件收口，避免菜单链路迁移时再引入回归。 */
-import {
-  parseRemoteWorkspaceIdentity,
-  remoteHostIdFromWorkspaceIdentity,
-  type ZCodeTaskMeta,
-} from "@zcode/shared";
+import type { ZCodeTaskMeta } from "@zcode/shared";
 import {
   TID_WORKSPACE_MORE_BUTTON,
   TID_WORKSPACE_PATH,
@@ -39,10 +26,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import {
-  formatRemoteWorkspaceDisplayLabel,
-  formatRemoteWorkspaceHeaderHostLabel,
-} from "@/lib/remoteWorkspaceHistory.js";
 import { resolveWorkspaceHeaderProvider } from "@/lib/workspaceHeaderProvider.js";
 import { toast } from "@/components/ui/toast.js";
 import { useFeedbackStore } from "@/feedback/feedbackStore.js";
@@ -56,14 +39,6 @@ import type {
 import { applyTaskQueryCacheMutation } from "@/store/taskQueryCacheStore.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
 import { TaskRenameDialog } from "@/TaskRenameDialog.js";
-import {
-  DataSyncEntryMenuItems,
-  resolveDataSyncEntrySourceServerId,
-  useDataSyncDeviceOnline,
-  useDataSyncEntry,
-} from "@/data-sync/index.js";
-import { useSourceServerDisplayNames } from "@/hooks/useSourceServerDisplayNames.js";
-import { useRemoteDevicePresentationInput } from "@/hooks/useSourceServerStatuses.js";
 
 export type { WorkspaceHeaderState, WorkspaceHeaderTitleSectionProps };
 export {
@@ -78,8 +53,6 @@ export function WorkspaceHeaderTitleSection({
   workspaceAbsPath,
   remoteSessionId,
   workspaceIdentity,
-  remoteTarget,
-  localWorkspacePath,
   projectName,
   activeTaskTitle,
   activeTaskChangeSummary: _activeTaskChangeSummary,
@@ -101,12 +74,8 @@ export function WorkspaceHeaderTitleSection({
   reloadSessionPending,
   workspaceHeaderState,
   onRefreshGit: _onRefreshGit,
-  isMacDesktop: _isMacDesktop,
-  isMacFullscreen: _isMacFullscreen,
-  isWindowsDesktop: _isWindowsDesktop,
-  isWebRemoteControl: _isWebRemoteControl = false,
   selectedEditor: _selectedEditor,
-  simplifyForNarrowRemote = false,
+  simplifyForNarrowViewport = false,
   compact = false,
 }: WorkspaceHeaderTitleSectionProps) {
   const { intl } = useZCodeIntl();
@@ -192,45 +161,7 @@ export function WorkspaceHeaderTitleSection({
     loadTaskPaths: backendBusinessAvailable,
     intl,
   });
-  const remoteWorkspaceHostLabel = remoteTarget
-    ? formatRemoteWorkspaceHeaderHostLabel(remoteTarget)
-    : null;
-  const sourceServerDisplayNames = useSourceServerDisplayNames();
-  const sourceServerId = parseRemoteWorkspaceIdentity(workspaceIdentity ?? "")?.sourceServerId;
-  const sourceServerDisplayName = sourceServerId
-    ? sourceServerDisplayNames.get(sourceServerId)?.trim()
-    : undefined;
-  const deviceInput = useRemoteDevicePresentationInput(sourceServerId);
-  // 远控 tab 只携带身份，bridge 已在身份索引登记；直接读 tab sessionId 会误报断线。
-  const attached = useRemoteWorkspaceSessionStore((state) => {
-    const sessionId = resolveWorkspaceRemoteSessionId(
-      { workspacePath: workspaceAbsPath, workspaceIdentity, remoteSessionId, remoteTarget },
-      state,
-    );
-    return Boolean(sessionId && state.sessionsById[sessionId]?.services);
-  });
-  // 远控没有 Source 管理服务，设备名称复用窗口目录；精确 Host 身份避免同路径串设备。
-  const projectDirectory = useOptionalProjectDirectory();
-  const hostId = remoteHostIdFromWorkspaceIdentity(workspaceIdentity ?? "");
-  const directoryTarget = projectDirectory?.directory.hosts.find(
-    (host) => host.id === hostId,
-  )?.target;
-  const projectFacts = useRemoteProjectPresentationFacts(
-    workspaceIdentity?.trim() || workspaceAbsPath,
-  );
-  const presentation = resolveRemoteConnectionPresentation({
-    ...deviceInput,
-    attached,
-    ...projectFacts,
-  });
-  const remoteStatusLabel = presentation.recovery
-    ? intl.formatMessage({ id: presentation.recovery.messageId }, presentation.recovery.values)
-    : intl.formatMessage({ id: presentation.shortMessageId });
-  const workspaceDisplayLabel = formatRemoteWorkspaceDisplayLabel(projectName, remoteTarget);
-  const remoteDeviceName =
-    formatRemoteDeviceName(remoteTarget ?? directoryTarget ?? undefined, sourceServerDisplayName) ??
-    intl.formatMessage({ id: "workspaceSidebar.remoteProject" });
-  const workspaceContextLabel = workspaceDisplayLabel;
+  const workspaceContextLabel = projectName;
   const workspaceBranchLabel = gitSummary.isRepository
     ? resolveGitBranchTriggerLabel({
         headRefType: gitSummary.headRefType,
@@ -239,18 +170,6 @@ export function WorkspaceHeaderTitleSection({
         fallbackLabel: intl.formatMessage({ id: "git.branchSwitcher.label" }),
       })
     : null;
-  const isRemoteWorkspace = Boolean(
-    remoteWorkspaceHostLabel || workspaceIdentity?.trim() || remoteSessionId,
-  );
-  // 同步入口打开数据同步弹窗：设备取自 tab 的 workspace identity，MCP 按当前项目做 workspace 映射。
-  const dataSync = useDataSyncEntry();
-  const dataSyncSourceServerId = resolveDataSyncEntrySourceServerId({
-    workspacePath: workspaceAbsPath,
-    workspaceIdentity,
-    remoteTarget,
-  });
-  const dataSyncDeviceOnline = useDataSyncDeviceOnline(dataSyncSourceServerId);
-  const showDataSyncEntry = dataSync.available && Boolean(dataSyncSourceServerId);
   const workspaceActionLoading = reloadSessionPending;
   const workspaceActionLoadingTitle = intl.formatMessage({
     id: "appHeader.workspaceSessionActionLoading",
@@ -405,10 +324,8 @@ export function WorkspaceHeaderTitleSection({
   return (
     <div
       className={cn(
-        // 标题区必须按内容占宽，不能 flex-1 铺满整条 header。
-        // 父级 header 是 drag 区域；如果 no-drag 的标题区铺满剩余空间，mac/Windows 标题栏空白处会无法拖动窗口。
-        "flex min-w-0 items-center gap-2 overflow-hidden [app-region:no-drag]",
-        simplifyForNarrowRemote && "max-md:gap-1",
+        "flex min-w-0 items-center gap-2 overflow-hidden",
+        simplifyForNarrowViewport && "max-md:gap-1",
       )}
     >
       <TaskRenameDialog
@@ -427,7 +344,7 @@ export function WorkspaceHeaderTitleSection({
           void handleSubmitRenameTask();
         }}
       />
-      {!isDraftNewTask || isRemoteWorkspace ? (
+      {!isDraftNewTask ? (
         <ControlHintTooltip
           open={workspaceContextOpen}
           onOpenChange={setWorkspaceContextOpen}
@@ -440,39 +357,12 @@ export function WorkspaceHeaderTitleSection({
               className="flex w-full min-w-0 flex-col gap-3 text-left"
             >
               <span className="flex min-w-0 items-start gap-2">
-                {isRemoteWorkspace ? (
-                  <RemoteConnectionStateIcon presentation={presentation} project />
-                ) : (
-                  <Folder className="size-4 shrink-0" />
-                )}
+                <Folder className="size-4 shrink-0" />
                 <span className="flex min-w-0 flex-1 flex-col gap-1">
                   <span className="min-w-0 break-words [overflow-wrap:anywhere]">
                     {workspaceContextLabel}
                   </span>
-                  {isRemoteWorkspace ? (
-                    <span className="inline-flex w-fit min-w-0 max-w-full items-center gap-1 rounded-full bg-surface py-px pl-1.5 pr-2 text-ui-sm font-normal text-foreground-subtle">
-                      <span className={cn("size-1.5 shrink-0 rounded-full", presentation.dot)} />
-                      <span className="truncate">{remoteDeviceName}</span>
-                      {presentation.status !== "online" ? (
-                        <span>
-                          {presentation.recovery
-                            ? intl.formatMessage(
-                                { id: presentation.recovery.messageId },
-                                presentation.recovery.values,
-                              )
-                            : intl.formatMessage({ id: presentation.shortMessageId })}
-                        </span>
-                      ) : null}
-                    </span>
-                  ) : null}
-                  {workspaceContextOpen && isRemoteWorkspace ? (
-                    <span
-                      data-workspace-context-path=""
-                      className="break-all font-mono text-ui-sm text-foreground-subtle"
-                    >
-                      {workspaceAbsPath}
-                    </span>
-                  ) : workspaceContextOpen ? (
+                  {workspaceContextOpen ? (
                     <WorkspaceContextPath
                       workspacePath={workspaceAbsPath}
                       workspaceIdentity={workspaceIdentity}
@@ -500,31 +390,16 @@ export function WorkspaceHeaderTitleSection({
           <Button
             type="button"
             variant="ghost"
-            size={isRemoteWorkspace ? "sm" : compact ? "icon-sm" : "icon-md"}
-            className={
-              isRemoteWorkspace
-                ? "min-w-0 max-w-40 gap-1.5 px-1.5 text-foreground-subtle"
-                : undefined
-            }
+            size={compact ? "icon-sm" : "icon-md"}
             data-testid={TID_WORKSPACE_PATH}
             // 上下文信息改为 tooltip 承载后，这个按钮不再有 DOM title；工作区绝对路径
             // 是 e2e 判定“header 属于哪个工作区”的唯一锚点（aria-label 只有显示名），
             // 因此单独用数据属性暴露，避免和 tooltip 争抢原生提示。
             data-workspace-abs-path={workspaceAbsPath}
-            aria-description={isRemoteWorkspace ? remoteStatusLabel : undefined}
             aria-label={[workspaceContextLabel, workspaceBranchLabel].filter(Boolean).join(" · ")}
             onClick={() => setWorkspaceContextOpen(true)}
           >
-            {isRemoteWorkspace ? (
-              <>
-                <RemoteConnectionStateIcon presentation={presentation} project />
-                <span data-workspace-device-name="" className="min-w-0 truncate text-ui-sm">
-                  {remoteDeviceName}
-                </span>
-              </>
-            ) : (
-              <Folder className="size-4 text-foreground-subtle" />
-            )}
+            <Folder className="size-4 text-foreground-subtle" />
           </Button>
         </ControlHintTooltip>
       ) : null}
@@ -533,7 +408,7 @@ export function WorkspaceHeaderTitleSection({
           data-testid={TID_WORKSPACE_TITLE}
           className={cn(
             "flex min-w-12 max-w-100 shrink items-center gap-2 truncate font-semibold text-foreground @max-[560px]/workspace-header:max-w-[30vw] @max-[420px]/workspace-header:max-w-[22vw]",
-            simplifyForNarrowRemote && "max-md:max-w-[42vw]",
+            simplifyForNarrowViewport && "max-md:max-w-[42vw]",
             compact ? "text-[0.92rem]" : "text-ui-base",
           )}
           title={activeTaskTitle}
@@ -570,28 +445,6 @@ export function WorkspaceHeaderTitleSection({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-48">
-              {showDataSyncEntry && dataSyncSourceServerId ? (
-                <>
-                  <DataSyncEntryMenuItems
-                    disabled={!dataSyncDeviceOnline}
-                    onSelect={(category) =>
-                      dataSync.open({
-                        sourceServerId: dataSyncSourceServerId,
-                        category,
-                        ...(localWorkspacePath
-                          ? {
-                              workspace: {
-                                sourceWorkspacePath: localWorkspacePath,
-                                targetWorkspacePath: workspaceAbsPath,
-                              },
-                            }
-                          : {}),
-                      })
-                    }
-                  />
-                  <DropdownMenuSeparator />
-                </>
-              ) : null}
               <TaskActionMenuContent
                 intl={intl}
                 isPinned={isPinned}
@@ -604,7 +457,7 @@ export function WorkspaceHeaderTitleSection({
                 disableTaskActions={Boolean(readOnlyReason)}
                 disabledReason={readOnlyReason}
                 disablePinTaskAction={taskMenuMembershipLoading}
-                hideMobileUnsupportedActions={simplifyForNarrowRemote}
+                hideMobileUnsupportedActions={simplifyForNarrowViewport}
                 Item={DropdownMenuItem}
                 Separator={DropdownMenuSeparator}
                 onRestartTask={
@@ -739,7 +592,6 @@ export function WorkspaceHeaderTitleSection({
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        {dataSync.dialog}
         {!isDraftNewTask && workspaceActionLoading ? (
           <ControlHintTooltip
             title={workspaceActionLoadingTitle}

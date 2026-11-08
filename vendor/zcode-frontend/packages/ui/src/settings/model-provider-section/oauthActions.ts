@@ -7,6 +7,10 @@ import {
 } from "@/lib/appTelemetry.js";
 import { logger } from "@/logger.js";
 
+export type CodingPlanLoginOptions = {
+  forceOAuth?: boolean;
+};
+
 export async function startPresetSubscriptionLogin(params: {
   presetId: BuiltinModelProviderId;
   oauthService: IOAuthService;

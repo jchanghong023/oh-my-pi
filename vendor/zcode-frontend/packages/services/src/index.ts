@@ -46,8 +46,7 @@ export type {
   ConversationShareTurnPreflightResult,
   PublishTextConversationInput,
 } from "./conversation-share/conversationShare.js";
-// Conversation share 的具体实现依赖 Node 文件系统，只能从 @zcode/services/node 引入；
-// 根入口必须保持 browser-safe，避免 renderer 解析到 node:* 模块。
+// This frontend source package exposes browser-safe contracts, not Node host implementations.
 export {
   createConversationTelemetryService,
   type ConversationTelemetryWorkspaceTarget,

@@ -14,10 +14,8 @@ import {
   InfoIcon,
   MessageSquareIcon,
   UsersIcon,
-  RefreshCwIcon,
   ShieldAlertIcon,
 } from "lucide-react";
-import { Badge } from "@/components/ui/badge.js";
 import { Button } from "@/components/ui/button.js";
 import {
   DropdownMenu,
@@ -29,7 +27,6 @@ import {
 import { cn } from "@/components/lib/utils.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { useFeedbackStore } from "@/feedback/feedbackStore.js";
-import { useDesktopUpdateMenu } from "@/hooks/useDesktopUpdateMenu.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useVulnerabilityReportUrl } from "@/hooks/useVulnerabilityReportUrl.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
@@ -52,7 +49,6 @@ export function WorkspaceHelpMenuButton({
   const [open, setOpen] = useState(false);
   const { url: vulnerabilityReportUrl, loading: vulnerabilityReportLoading } =
     useVulnerabilityReportUrl(open);
-  const updateMenu = useDesktopUpdateMenu(isDesktop);
   const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
   const openFeatureRequest = useFeedbackStore((state) => state.openFeatureRequest);
   const helpMenuLabel = intl.formatMessage({ id: "workspaceHeader.help.menu" });
@@ -161,29 +157,6 @@ export function WorkspaceHelpMenuButton({
               <ActivityIcon className="size-4" />
               {intl.formatMessage({ id: "titleBar.menu.help.resourceManager" })}
             </DropdownMenuItem>
-            {updateMenu.visible ? (
-              <DropdownMenuItem
-                disabled={updateMenu.disabled}
-                onSelect={updateMenu.checkForUpdates}
-              >
-                <RefreshCwIcon className="size-4" />
-                {updateMenu.labelId === "desktopMenu.help.restartToUpdate" ? (
-                  <>
-                    <span className="whitespace-nowrap">
-                      {intl.formatMessage({ id: "desktopMenu.help.restartUpdateAction" })}
-                    </span>
-                    <Badge
-                      variant="secondary"
-                      className="h-4 px-1.5 py-0 bg-success/10 text-success"
-                    >
-                      {updateMenu.labelValues?.version}
-                    </Badge>
-                  </>
-                ) : (
-                  intl.formatMessage({ id: updateMenu.labelId }, updateMenu.labelValues)
-                )}
-              </DropdownMenuItem>
-            ) : null}
             <DropdownMenuItem onSelect={handleShowAbout}>
               <InfoIcon className="size-4" />
               {intl.formatMessage({ id: "titleBar.menu.help.about" })}

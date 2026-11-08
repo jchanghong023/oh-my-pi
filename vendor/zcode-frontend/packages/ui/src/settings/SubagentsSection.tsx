@@ -51,6 +51,7 @@ import { settingsResourceRowInteraction } from "@/settings/settingsResourceRowIn
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { useConfigWorkspaceServicesResolution as useWorkspaceServicesResolution } from "@/workspace-config-catalog/index.js";
+import { useBackendBusinessAvailable } from "@/hooks/useBackendBusinessAvailability.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
   buildRegistryModelSelectGroups,
@@ -87,6 +88,8 @@ import {
 import { PluginStoreAvatar } from "@/settings/PluginStoreAvatar.js";
 import type { StorePluginItem } from "@/settings/pluginStoreListing.js";
 import { usePluginManagementStore } from "@/store/pluginManagementStore.js";
+
+const EMPTY_PLUGIN_INVENTORY: never[] = [];
 
 const AGENT_COLORS: AgentColor[] = [...SUBAGENT_COLORS];
 const COLOR_DOT_CLASS: Record<AgentColor, string> = SUBAGENT_COLOR_CLASS;
@@ -1289,8 +1292,13 @@ export function SubagentsSection({
 }: SubagentsSectionProps) {
   const { intl, locale } = useZCodeIntl();
   const confirmDialog = useConfirmDialog();
-  const plugins = usePluginManagementStore((state) => state.plugins);
-  const availablePlugins = usePluginManagementStore((state) => state.availablePlugins);
+  const backendBusinessAvailable = useBackendBusinessAvailable();
+  const plugins = usePluginManagementStore((state) =>
+    backendBusinessAvailable ? state.plugins : EMPTY_PLUGIN_INVENTORY,
+  );
+  const availablePlugins = usePluginManagementStore((state) =>
+    backendBusinessAvailable ? state.availablePlugins : EMPTY_PLUGIN_INVENTORY,
+  );
   const initializePlugins = usePluginManagementStore((state) => state.initialize);
   // Scope 状态唯一 owner：默认选中当前 workspace 所在设备的「用户」。
   // Bug 根因：旧实现把 User 固定为本机（避免远程 tab 下误写远端 home），用户在远程 tab 里看不出
@@ -1448,7 +1456,12 @@ export function SubagentsSection({
   }, [loadAgents, targetServiceResolution.rpcReady]);
 
   useEffect(() => {
-    if (!pluginInventoryWorkspacePath || !targetServiceResolution.rpcReady) return;
+    if (
+      !backendBusinessAvailable ||
+      !pluginInventoryWorkspacePath ||
+      !targetServiceResolution.rpcReady
+    )
+      return;
     let active = true;
     // 冷启动 seed 晚于文件首读，旧用户页又跳过 inventory 初始化，导致插件直到重进才出现。
     // 复用已有初始化完成事件刷新只读资源，不阻塞用户列表、不轮询，也不把项目配置带入用户页。
@@ -1471,6 +1484,7 @@ export function SubagentsSection({
       active = false;
     };
   }, [
+    backendBusinessAvailable,
     activeScope,
     cacheAuthorityKey,
     initializePlugins,

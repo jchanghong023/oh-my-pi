@@ -5,16 +5,11 @@ export type SettingsSectionId =
   | "general"
   | "appearance"
   | "migration"
-  | "browser"
   | "modelProvider"
-  | "remoteDevices"
-  | "dataSync"
   | "personalization"
   | "memory"
-  | "plugin"
   | "mcp"
   | "skill"
-  | "plugins"
   | "projects"
   | "archives"
   | "usage"
@@ -22,21 +17,15 @@ export type SettingsSectionId =
   | "commands"
   | "hooks"
   | "workspaceFileSearch"
-  | "computerUse"
   | "automations"
   | "shortcuts";
 
 export type SettingsUsageTabTarget = "app" | "codingPlan";
-export type SettingsPluginTabTarget = "plugins" | "mcps" | "skills" | "commands";
-export type SettingsPluginNavigationOrigin = "plugin-store";
+export type SettingsPluginTabTarget = "mcps" | "skills" | "commands";
 
 const SETTINGS_SECTION_INTENT_KEY = "zcode-settings-section-intent",
   SETTINGS_USAGE_TAB_INTENT_KEY = "zcode-settings-usage-tab-intent",
-  SETTINGS_PLUGIN_TAB_INTENT_KEY = "zcode-settings-plugin-tab-intent",
-  SETTINGS_PLUGIN_ORIGIN_INTENT_KEY = "zcode-settings-plugin-origin-intent",
   SETTINGS_PLUGIN_SCOPE_KEY_INTENT_KEY = "zcode-settings-plugin-scope-key-intent";
-const SETTINGS_SOURCE_SERVER_ID_INTENT_KEY = "zcode-settings-source-server-id-intent";
-const SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY = "zcode-settings-source-server-details-intent";
 const SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY = "zcode-settings-model-provider-id-intent";
 const SETTINGS_SECTION_INTENT_EVENT = "zcode:settings-section-intent",
   SETTINGS_LAST_SECTION_STORAGE_KEY = "zcode-settings-last-section";
@@ -44,8 +33,6 @@ const HIDDEN_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
   // 产品语义：定时任务是 workspace 主视图，不能再作为设置页分区出现。
   // 注意：hooks 已是正式设置页分区，不在此列。
   "automations",
-  // 旧插件市场已迁出设置页；保留 id 只用于迁移历史偏好和旧调用。
-  "plugins",
   // 工作区搜索（.zcodeignore）设置入口先隐藏：规则文件仍生效并可手动编辑，
   // 编辑页代码保留，放开时从这里移除即可。
   "workspaceFileSearch",
@@ -53,13 +40,9 @@ const HIDDEN_SETTINGS_SECTIONS = new Set<SettingsSectionId>([
 
 export interface SettingsSectionIntentEventDetail {
   section: SettingsSectionId;
-  pluginTab?: SettingsPluginTabTarget;
-  pluginOrigin?: SettingsPluginNavigationOrigin;
   pluginScopeKey?: string;
   usageTab?: SettingsUsageTabTarget;
   modelProviderId?: string;
-  sourceServerId?: string;
-  sourceServerDetails?: boolean;
 }
 
 export interface SettingsModelProviderTarget {
@@ -71,16 +54,11 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "general" ||
     value === "appearance" ||
     value === "migration" ||
-    value === "browser" ||
     value === "modelProvider" ||
-    value === "remoteDevices" ||
-    value === "dataSync" ||
     value === "personalization" ||
     value === "memory" ||
-    value === "plugin" ||
     value === "mcp" ||
     value === "skill" ||
-    value === "plugins" ||
     value === "projects" ||
     value === "archives" ||
     value === "usage" ||
@@ -88,7 +66,6 @@ function isSettingsSectionId(value: string): value is SettingsSectionId {
     value === "commands" ||
     value === "hooks" ||
     value === "workspaceFileSearch" ||
-    value === "computerUse" ||
     value === "automations" ||
     value === "shortcuts"
   );
@@ -102,8 +79,7 @@ export function resolveSettingsSection(
   section: SettingsSectionId,
   fallbackSection: SettingsSectionId = "general",
 ): SettingsSectionId {
-  if (section === "plugins") return "plugin";
-  return isSettingsSectionEnabled(section) ? section : fallbackSection;
+  return isSettingsSectionId(section) && isSettingsSectionEnabled(section) ? section : fallbackSection;
 }
 
 function getLocalStorage(): Storage | null {
@@ -132,12 +108,6 @@ export function readLastSettingsSectionPreference(
 
   try {
     const raw = storage.getItem(SETTINGS_LAST_SECTION_STORAGE_KEY);
-    // 旧 section id 已并入 plugin；迁移持久化值，避免继续传播历史路由语义。
-    if (raw === "plugins") {
-      storage.setItem(SETTINGS_LAST_SECTION_STORAGE_KEY, "plugin");
-      setPendingPluginTab("plugins");
-      return "plugin";
-    }
     if (raw === "skills") {
       storage.setItem(SETTINGS_LAST_SECTION_STORAGE_KEY, "skill");
       return "skill";
@@ -206,21 +176,11 @@ export function setPendingSettingsUsageCodingPlanIntent(): void {
 export function setPendingSettingsPluginIntent(
   tab: SettingsPluginTabTarget,
   options: {
-    origin?: SettingsPluginNavigationOrigin;
     scopeKey?: string;
   } = {},
 ): void {
-  const section =
-    tab === "mcps"
-      ? "mcp"
-      : tab === "skills"
-        ? "skill"
-        : tab === "commands"
-          ? "commands"
-          : "plugin";
+  const section = tab === "mcps" ? "mcp" : tab === "skills" ? "skill" : "commands";
   setPendingSettingsSectionIntent(section, {
-    pluginTab: tab === "plugins" ? tab : undefined,
-    pluginOrigin: options.origin,
     pluginScopeKey: options.scopeKey,
   });
 }
@@ -228,12 +188,8 @@ export function setPendingSettingsPluginIntent(
 export function setPendingSettingsSectionIntent(
   section: SettingsSectionId,
   options: {
-    pluginTab?: SettingsPluginTabTarget;
-    pluginOrigin?: SettingsPluginNavigationOrigin;
     pluginScopeKey?: string;
     modelProviderId?: string;
-    sourceServerId?: string;
-    sourceServerDetails?: boolean;
     usageTab?: SettingsUsageTabTarget;
   } = {},
 ): void {
@@ -243,16 +199,6 @@ export function setPendingSettingsSectionIntent(
 
   try {
     window.sessionStorage.setItem(SETTINGS_SECTION_INTENT_KEY, section);
-    if (options.pluginTab) {
-      window.sessionStorage.setItem(SETTINGS_PLUGIN_TAB_INTENT_KEY, options.pluginTab);
-    } else {
-      window.sessionStorage.removeItem(SETTINGS_PLUGIN_TAB_INTENT_KEY);
-    }
-    if (options.pluginOrigin) {
-      window.sessionStorage.setItem(SETTINGS_PLUGIN_ORIGIN_INTENT_KEY, options.pluginOrigin);
-    } else {
-      window.sessionStorage.removeItem(SETTINGS_PLUGIN_ORIGIN_INTENT_KEY);
-    }
     const normalizedPluginScopeKey = options.pluginScopeKey?.trim();
     if (normalizedPluginScopeKey) {
       window.sessionStorage.setItem(SETTINGS_PLUGIN_SCOPE_KEY_INTENT_KEY, normalizedPluginScopeKey);
@@ -261,23 +207,6 @@ export function setPendingSettingsSectionIntent(
     }
     if (options.usageTab) {
       window.sessionStorage.setItem(SETTINGS_USAGE_TAB_INTENT_KEY, options.usageTab);
-    }
-    if (section === "remoteDevices" && options.sourceServerId?.trim()) {
-      window.sessionStorage.setItem(
-        SETTINGS_SOURCE_SERVER_ID_INTENT_KEY,
-        options.sourceServerId.trim(),
-      );
-    } else {
-      window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_ID_INTENT_KEY);
-    }
-    if (
-      section === "remoteDevices" &&
-      options.sourceServerId?.trim() &&
-      options.sourceServerDetails
-    ) {
-      window.sessionStorage.setItem(SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY, "true");
-    } else {
-      window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY);
     }
     if (options.modelProviderId) {
       window.sessionStorage.setItem(SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY, options.modelProviderId);
@@ -294,17 +223,9 @@ export function setPendingSettingsSectionIntent(
     new CustomEvent<SettingsSectionIntentEventDetail>(SETTINGS_SECTION_INTENT_EVENT, {
       detail: {
         section,
-        pluginTab: options.pluginTab,
-        pluginOrigin: options.pluginOrigin,
         pluginScopeKey: options.pluginScopeKey?.trim() || undefined,
         usageTab: options.usageTab,
         modelProviderId: options.modelProviderId,
-        ...(section === "remoteDevices" && options.sourceServerId?.trim()
-          ? {
-              sourceServerId: options.sourceServerId.trim(),
-              ...(options.sourceServerDetails ? { sourceServerDetails: true } : {}),
-            }
-          : {}),
       },
     }),
   );
@@ -317,12 +238,8 @@ function clearPendingSettingsSectionIntent(): void {
 
   try {
     window.sessionStorage.removeItem(SETTINGS_SECTION_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_ID_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY);
     window.sessionStorage.removeItem(SETTINGS_USAGE_TAB_INTENT_KEY);
     window.sessionStorage.removeItem(SETTINGS_MODEL_PROVIDER_ID_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_PLUGIN_TAB_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_PLUGIN_ORIGIN_INTENT_KEY);
     window.sessionStorage.removeItem(SETTINGS_PLUGIN_SCOPE_KEY_INTENT_KEY);
   } catch {
     // 忽略浏览器存储异常，不影响主流程。
@@ -356,36 +273,6 @@ export function consumePendingSettingsSection(
   return fallbackSection;
 }
 
-function setPendingPluginTab(tab: SettingsPluginTabTarget): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(SETTINGS_PLUGIN_TAB_INTENT_KEY, tab);
-  } catch {
-    // 忽略浏览器存储异常，不影响设置页打开。
-  }
-}
-
-export function consumePendingSettingsPluginTab(): SettingsPluginTabTarget | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const raw = window.sessionStorage.getItem(SETTINGS_PLUGIN_TAB_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_PLUGIN_TAB_INTENT_KEY);
-    return raw === "plugins" || raw === "mcps" || raw === "skills" ? raw : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function consumePendingSettingsPluginOrigin(): SettingsPluginNavigationOrigin | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const raw = window.sessionStorage.getItem(SETTINGS_PLUGIN_ORIGIN_INTENT_KEY);
-    return raw === "plugin-store" ? raw : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export function consumePendingSettingsPluginScopeKey(): string | undefined {
   if (typeof window === "undefined") return undefined;
   try {
@@ -405,14 +292,6 @@ export function clearPendingSettingsPluginScopeKey(): void {
   }
 }
 
-export function clearPendingSettingsPluginOrigin(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.removeItem(SETTINGS_PLUGIN_ORIGIN_INTENT_KEY);
-  } catch {
-    // 忽略浏览器存储异常，不影响设置页打开。
-  }
-}
 
 export function consumePendingSettingsUsageTab(): SettingsUsageTabTarget | undefined {
   if (typeof window === "undefined") {
@@ -498,25 +377,3 @@ export function addPendingSettingsSectionListener(
   };
 }
 
-/** 设置页先消费分区，再消费卡片目标；已挂载页面由同一导航事件直接接收。 */
-export function consumePendingSettingsSourceServerId(): string | undefined {
-  if (typeof window === "undefined") return undefined;
-  try {
-    const id = window.sessionStorage.getItem(SETTINGS_SOURCE_SERVER_ID_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_ID_INTENT_KEY);
-    return id?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function consumePendingSettingsSourceServerDetails(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    const details = window.sessionStorage.getItem(SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY);
-    window.sessionStorage.removeItem(SETTINGS_SOURCE_SERVER_DETAILS_INTENT_KEY);
-    return details === "true";
-  } catch {
-    return false;
-  }
-}
