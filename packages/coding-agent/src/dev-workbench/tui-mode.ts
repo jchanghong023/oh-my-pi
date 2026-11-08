@@ -18,7 +18,7 @@ class DevWorkbenchOverlay extends Container {
 	}
 }
 
-/** An exclusive input owner, not a second terminal workflow or session binding. */
+/** An exclusive input owner, not a second terminal workflow. */
 export class DevWorkbenchTuiMode {
 	readonly #context: InteractiveModeContext;
 	#phase: "inactive" | "entering" | "active" | "exiting" = "inactive";
@@ -172,7 +172,7 @@ export class DevWorkbenchTuiMode {
 			this.#showOverlay("正在启动，请稍候。");
 			let handle: DevWorkbenchHandle;
 			if (this.#mode === "webgui") {
-				const preview = await startWebGui();
+				const preview = await startWebGui(context.session);
 				this.#host = preview;
 				handle = preview;
 			} else {

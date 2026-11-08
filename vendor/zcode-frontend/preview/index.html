@@ -4,24 +4,47 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <title>ZCode 界面预览 · 未连接 OMP</title>
+    <title>ZCode 界面预览 · OMP 会话信息</title>
     <style>
       html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
-      #preview-notice { box-sizing: border-box; height: 56px; padding: 5px 12px; display: flex; flex-direction: column; justify-content: center; gap: 2px; background: #fff3ce; color: #593c00; font: 12px/20px system-ui, sans-serif; }
+      body { display: flex; flex-direction: column; height: 100dvh; }
+      #preview-notice { box-sizing: border-box; flex: none; min-height: 56px; padding: 5px 12px; display: flex; flex-direction: column; justify-content: center; gap: 2px; background: #fff3ce; color: #593c00; font: 12px/20px system-ui, sans-serif; }
       #preview-notice strong { white-space: nowrap; }
       #preview-notice nav { display: flex; gap: 14px; overflow: auto; white-space: nowrap; }
       #preview-notice a { color: inherit; text-decoration: underline; }
       #preview-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      #root { height: calc(100dvh - 56px); min-width: 0; }
+      #session-info { flex: none; box-sizing: border-box; max-height: 42dvh; overflow: auto; padding: 8px 12px; background: Canvas; color: CanvasText; border-bottom: 1px solid GrayText; font: 12px/1.5 system-ui, sans-serif; }
+      #session-info header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+      #session-info h2, #session-info-status { margin: 0; font-size: inherit; }
+      #session-info button { font: inherit; cursor: pointer; }
+      #session-info dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 12px; margin: 6px 0 0; }
+      #session-info dl[hidden] { display: none; }
+      #session-info dt { font-weight: 600; }
+      #session-info dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+      #session-info-status { white-space: pre-wrap; overflow-wrap: anywhere; }
+      #root { flex: 1; min-height: 0; min-width: 0; }
       #root > .h-dvh { height: 100%; }
       #preview-phone { display: block; width: min(430px, 100%); height: 100%; margin: auto; border: 0; background: white; }
     </style>
   </head>
   <body>
     <aside id="preview-notice" aria-label="界面预览说明">
-      <div id="preview-status" role="status"><strong>仅界面预览 · 未连接 OMP</strong> · 无账号、模型或文件服务</div>
+      <div id="preview-status" role="status"><strong>界面预览</strong> · 聊天和其他业务仍为预览，会话信息单独显示</div>
       <nav aria-label="预览布局"><a href="?">自适应首页</a><a href="?view=chat">空会话</a><a href="?mobile=1">手机首页</a><a href="?mobile=1&view=chat">手机空会话</a></nav>
     </aside>
+    <section id="session-info" aria-labelledby="session-info-heading">
+      <header><h2 id="session-info-heading">OMP 会话信息（只读）</h2><button id="session-info-refresh" type="button">刷新会话信息</button></header>
+      <p id="session-info-status" role="status" aria-live="polite">正在读取会话信息…</p>
+      <dl id="session-info-fields" hidden>
+        <dt>当前目录</dt><dd id="session-info-cwd"></dd>
+        <dt>会话名称</dt><dd id="session-info-name"></dd>
+        <dt>持久 ID</dt><dd id="session-info-id"></dd>
+        <dt>模型提供方</dt><dd id="session-info-provider"></dd>
+        <dt>模型 ID</dt><dd id="session-info-model-id"></dd>
+        <dt>模型名称</dt><dd id="session-info-model-name"></dd>
+        <dt>忙闲状态</dt><dd id="session-info-busy"></dd>
+      </dl>
+    </section>
     <div id="root"></div>
     <script type="module" src="./main.tsx"></script>
   </body>

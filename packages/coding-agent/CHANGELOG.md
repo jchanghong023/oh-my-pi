@@ -5,6 +5,7 @@
 ### Added
 
 - Open the copied WebGUI interface preview with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to stop its server and restore terminal input, without connecting an Agent backend.
+- View the current OMP session's directory, name, persistent ID, model and busy state in the WebGUI information panel, with manual refresh; standalone previews remain unbound and chat stays disconnected.
 
 ### Changed
 

@@ -4,7 +4,7 @@ import type { WebRemoteControlWorkspaceSwitcherApi } from "../packages/ui/src/ro
 
 export const previewWorkspacePath = "/preview/interface-only";
 export const previewProjectId = "interface-preview";
-export const previewUnavailableMessage = "仅界面预览，未连接 OMP：此功能不可用。";
+export const previewUnavailableMessage = "仅界面预览，聊天及其他业务未接入：此功能不可用。";
 
 export function rejectPreviewAction(action: string): never {
   const message = `${previewUnavailableMessage} (${action})`;

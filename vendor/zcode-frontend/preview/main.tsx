@@ -11,6 +11,49 @@ import {
   previewWorkspaceSwitcher,
   rejectPreviewAction,
 } from "./display-data.js";
+import { WEBGUI_SESSION_INFO_PATH, type WebGuiSessionInfo } from "./session-info.js";
+
+const sessionInfoStatus = document.getElementById("session-info-status")!;
+const sessionInfoFields = document.getElementById("session-info-fields")!;
+let sessionInfoRequest = 0;
+
+async function refreshSessionInfo() {
+  const request = ++sessionInfoRequest;
+  sessionInfoStatus.textContent = "正在读取会话信息…";
+  sessionInfoFields.hidden = true;
+  try {
+    const response = await fetch(WEBGUI_SESSION_INFO_PATH, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const info: WebGuiSessionInfo = await response.json();
+    if (request !== sessionInfoRequest) return;
+    if (info.bound === false) {
+      sessionInfoStatus.textContent = "未绑定 OMP 会话；聊天和其他业务仍为预览。";
+      return;
+    }
+    if (info.bound !== true) throw new Error("无效的会话信息响应");
+    const values = {
+      cwd: info.cwd,
+      name: info.sessionName || "未命名",
+      id: info.sessionId,
+      provider: info.model?.provider ?? "未选择模型",
+      "model-id": info.model?.id ?? "未选择模型",
+      "model-name": info.model?.name ?? "未选择模型",
+      busy: info.busy ? "忙碌（busy）" : "空闲（idle）",
+    };
+    for (const [field, value] of Object.entries(values)) {
+      document.getElementById(`session-info-${field}`)!.textContent = value;
+    }
+    sessionInfoFields.hidden = false;
+    sessionInfoStatus.textContent = "仅会话信息已接入，聊天和其他业务仍为预览。";
+  } catch (error) {
+    if (request !== sessionInfoRequest) return;
+    sessionInfoFields.hidden = true;
+    sessionInfoStatus.textContent = `会话信息读取失败：${error instanceof Error ? error.message : String(error)}。请手动刷新重试。`;
+  }
+}
+
+document.getElementById("session-info-refresh")!.addEventListener("click", () => { void refreshSessionInfo(); });
+void refreshSessionInfo();
 
 const params = new URLSearchParams(window.location.search);
 const mount = document.getElementById("root")!;

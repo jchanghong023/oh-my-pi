@@ -351,7 +351,7 @@ Fork releases require explicit user authorization and use the manual CI workflow
 - [个人命令](openspec/specs/personal-commands/spec.md)维护 fork 内置斜杠命令及其行为边界。
 - Dev 网页工作台 MUST 一次性完成替换，只处理新建需求；保留并复用原生 Agent 和底层能力，NEVER 保留旧 Dev 模式、兼容入口、双轨运行或旧流程迁移／恢复。
 - Dev MUST 是显式启用的独立功能模块；`/dev` 进入后当前 TUI 只接受再次 `/dev` 退出，NEVER 与网页并行执行普通命令或输入。退出 MUST 先结清 Dev 工作再恢复原普通会话，不取消需求或回滚 Git；关闭页面不退出。未开启时不启动 Dev 服务／任务或改写其状态；借用资源不得污染普通 OMP，共享接口只保留确实必要且默认不启用的能力，配置继续沿用原方式。
-- WebGUI 当前仅提供 `/webgui`／`omp webgui` 的独立界面预览入口，复用 Dev 的 TUI 独占门禁；再次 `/webgui` 停止自有服务后恢复原会话。源码位于 `packages/coding-agent/src/webgui/`，前端资源为 `vendor/zcode-frontend/`；本步不对接业务后端、不改迁入界面，不宣称已随发行二进制打包。
+- WebGUI 提供 `/webgui`／`omp webgui` 的界面预览入口，复用 Dev 的 TUI 独占门禁；再次 `/webgui` 停止自有服务后恢复原会话。会话内入口仅通过同源只读接口显示真实目录、会话名称／持久 ID、模型及忙闲状态，独立入口不创建 Agent、明确未绑定；聊天和其他业务仍为预览。源码位于 `packages/coding-agent/src/webgui/`，前端为 `vendor/zcode-frontend/preview/`；不改迁入界面，不宣称已随发行二进制打包。
 - 原生 TUI `/sketch`：`packages/coding-agent/src/sketch/` 及 `packages/coding-agent/src/slash-commands/builtin-sketch.ts`；资源静态内嵌，Firefox 52 ESR 保守语法／基础 API 基线不等于公司实机验证。
 - offline 内网用户名协作：`packages/coding-agent/src/collab/intranet.ts`（门禁、登录名、入口与查找）、`packages/coding-agent/src/collab/relay-server.ts`（内置 Relay）；[本次变更需求](openspec/changes/add-intranet-username-collab/specs/)覆盖协作、运行与命令边界，[内网快速指南](docs-zh-CN/quick-start-intranet.md)提供普通 WS 直连部署入口。仅 offline 启用；非 offline 保持既有协作与安全策略。
 - Developer Test Agent 内置资源位于 `packages/coding-agent/src/extensibility/plugins/bundled/developer-test-agent/`；其命令和技能使用 OMP 原生接口，业务流程边界见[个人命令](openspec/specs/personal-commands/spec.md)。
