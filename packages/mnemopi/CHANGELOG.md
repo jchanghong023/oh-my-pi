@@ -14,6 +14,8 @@
 
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
+## [18.18.1] - 2026-11-08
+
 ### Fixed
 
 - Retry transient overloads for strict API embedding requests with bounded backoff and shared cancellation and timeout limits.
