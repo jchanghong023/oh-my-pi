@@ -55,7 +55,7 @@ function Fixture() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ZCodeIntlProvider initialLocale={params.get("locale") === "en-US" ? "en-US" : "zh-CN"}>
+    <ZCodeIntlProvider>
       <PlatformProvider platform={platform}>
         <Fixture />
       </PlatformProvider>

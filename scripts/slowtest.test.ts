@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { parseSlowtestArgs, runSlowtest, type SlowtestDependencies } from "./slowtest";
 import type { WslSelection, WslStageResult } from "./slowtest-wsl-stage";
 import { GATE_LIMIT_SECONDS, runGate } from "./test-gate-runtime";
@@ -82,21 +83,17 @@ async function fixture(selection: WslSelection, dirty = false) {
 	return { root, deps, execute, records, localRecord, linuxRecord };
 }
 
-function completingCurrentValidation(f: { deps: SlowtestDependencies }, delayMs = 50) {
+function completingCurrentValidation(f: { deps: SlowtestDependencies }, completion: Promise<void> = Bun.sleep(50)) {
 	const state = { completed: false };
 	f.deps.fulltest = async gate => {
-		await gate.charged(
-			() =>
-				new Promise<void>((resolve, reject) => {
-					const timer = setTimeout(resolve, delayMs);
-					const abort = () => {
-						clearTimeout(timer);
-						reject(gate.signal.reason);
-					};
-					if (gate.signal.aborted) abort();
-					else gate.signal.addEventListener("abort", abort, { once: true });
-				}),
-		);
+		await gate.charged(() => {
+			const finished = Promise.withResolvers<void>();
+			const abort = () => finished.reject(gate.signal.reason);
+			void completion.then(finished.resolve, finished.reject);
+			if (gate.signal.aborted) abort();
+			else gate.signal.addEventListener("abort", abort, { once: true });
+			return finished.promise.finally(() => gate.signal.removeEventListener("abort", abort));
+		});
 		state.completed = true;
 	};
 	return state;
@@ -156,7 +153,9 @@ describe("slowtest isolated mechanism", () => {
 		"executed WSL $0 records the failure without cancelling local validation",
 		async status => {
 			const f = await fixture({ status: "AVAILABLE", distro: "Ubuntu-24.04" });
-			const local = completingCurrentValidation(f, 500);
+			// 子进程在高负载下可能晚于旧 500ms 定时器完成；用事件屏障而非墙钟竞争确认取消。
+			const completion = Promise.withResolvers<void>();
+			const local = completingCurrentValidation(f, completion.promise);
 			const exitCode = status === "TIMEOUT" ? 124 : status === "CANCELLED" ? 130 : 17;
 			f.deps.wsl = async gate => {
 				await gate.capture({
@@ -164,6 +163,10 @@ describe("slowtest isolated mechanism", () => {
 					argv: [process.execPath, stub, f.linuxRecord, "none", "linux", String(exitCode)],
 					allowFailure: true,
 				});
+				if (status !== "TIMEOUT" && status !== "CANCELLED") {
+					// 先让 WSL 结果在当前微任务中被记录，再允许本机验证完成。
+					void setImmediate().then(() => completion.resolve());
+				}
 				return { status, reason: "original executed failure", exitCode };
 			};
 			const result = await f.execute();

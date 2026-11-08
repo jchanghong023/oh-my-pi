@@ -405,7 +405,6 @@ export function WorkbenchLeafPane({
           readOnly={readOnly}
           readOnlyReason={isShellWorkspace ? shell.readOnlyReason : undefined}
           sessionId={sessionId}
-          openTrigger={isPrimary ? "sidebar" : "split"}
           activeSelectionSideChatSessionId={resolvePaneActiveSelectionSideChatSessionId(
             sessionId,
             shell.activeSessionId ?? shell.sessionId,
@@ -414,7 +413,6 @@ export function WorkbenchLeafPane({
           workspacePath={scope.workspacePath}
           workspaceIdentity={scope.workspaceIdentity}
           remoteSessionId={scope.remoteSessionId}
-          isDesktop={shell.isDesktop}
           compactForRemoteControl={shell.compactForRemoteControl ?? false}
           provider={isPrimary && isShellWorkspace ? shell.provider : undefined}
           onSessionCreated={handleSessionCreated}

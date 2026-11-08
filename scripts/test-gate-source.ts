@@ -19,12 +19,38 @@ function isTestSelectionInput(file: string): boolean {
 	return file !== "AGENTS.md" && !file.startsWith("docs/") && !file.startsWith("docs-zh-CN/");
 }
 
+const coreBrowserTestRoot = "packages/coding-agent/test/webgui/";
+const copiedFrontendRoot = "vendor/zcode-frontend/";
+
+/** Vite resolves these inputs outside Bun's test import graph. */
+function isCoreBrowserInput(file: string): boolean {
+	if (file.startsWith(coreBrowserTestRoot)) {
+		const relative = file.slice(coreBrowserTestRoot.length);
+		return (
+			/^core-(?:browser[^/]*|ui-entry|(?:history|input|subagent|workflow)-scenario)\.[cm]?tsx?$/.test(relative) ||
+			/^fixtures\/[^/]+\.[cm]?tsx?$/.test(relative)
+		);
+	}
+	if (!file.startsWith(copiedFrontendRoot)) return false;
+	const relative = file.slice(copiedFrontendRoot.length);
+	return (
+		/^(?:preview|packages|public|config)\//.test(relative) ||
+		/^(?:package\.json|bun\.lock|tsconfig\.base\.json)$/.test(relative) ||
+		/^third-party\/runtime\//.test(relative)
+	);
+}
+
+/** Only the browser runner needs the dynamically bundled frontend/fixture closure. */
+export function bunCoreBrowserInputsChanged(changed: readonly string[]): boolean {
+	return changed.some(isCoreBrowserInput);
+}
+
 /** Conservative boundary for inputs Bun cannot trace through native or dynamic builds. */
 export function bunRequiresFullSelection(changed: readonly string[]): boolean {
 	const ordinarySource = (file: string) =>
 		/^packages\/coding-agent\/src\/(?:tools|repo)\/.+\.[cm]?tsx?$/.test(file) &&
 		!/(?:^|\/)(?:generated|generator|generators|fixtures?|native|build|config)(?:\/|[.-])/i.test(file);
-	return changed.some(file => isTestSelectionInput(file) && !ordinarySource(file));
+	return changed.some(file => isTestSelectionInput(file) && !ordinarySource(file) && !isCoreBrowserInput(file));
 }
 
 /** Runtime paths changed against a revision, including both sides of renames and untracked files. */

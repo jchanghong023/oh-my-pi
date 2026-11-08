@@ -58,8 +58,6 @@ import {
 export interface V4WorkspaceChatAreaProps {
   workspacePath: string;
   workspaceIdentity?: string;
-  /** Prompt 模板埋点当前仅覆盖 Desktop；Web / 手机远控保留 UI 行为但不触发该事件。 */
-  isDesktop?: boolean;
   readOnly?: boolean;
   readOnlyReason?: string;
   allowEscapeStopOutsidePane?: boolean;
@@ -134,7 +132,6 @@ export interface V4WorkspaceChatAreaProps {
 export function V4WorkspaceChatArea({
   workspacePath,
   workspaceIdentity,
-  isDesktop = false,
   readOnly = false,
   readOnlyReason,
   allowEscapeStopOutsidePane = false,
@@ -262,7 +259,6 @@ export function V4WorkspaceChatArea({
       workspacePath,
       ...(workspaceIdentity ? { workspaceIdentity } : {}),
       ...(remoteSessionId ? { remoteSessionId } : {}),
-      isDesktop,
       compactForRemoteControl,
       readOnly,
       readOnlyReason,
@@ -313,7 +309,6 @@ export function V4WorkspaceChatArea({
       workspacePath,
       workspaceIdentity,
       remoteSessionId,
-      isDesktop,
       compactForRemoteControl,
       readOnly,
       readOnlyReason,

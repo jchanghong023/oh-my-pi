@@ -18,6 +18,7 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin, writeOpenWikiResource } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
+import { prepareWebGuiResources, writeWebGuiResources } from "../../../scripts/generate-webgui-resources";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 
 const packageDir = path.join(import.meta.dir, "..");
@@ -116,6 +117,8 @@ async function cleanBundleOutputs(outDir: string): Promise<void> {
 export async function bundleDist(outDir: string = defaultOutDir): Promise<void> {
 	const cliPath = path.join(outDir, "cli.js");
 	const start = Bun.nanoseconds();
+	const webGuiResources = await prepareWebGuiResources(path.resolve(packageDir, "../.."));
+	await writeWebGuiResources(outDir, webGuiResources);
 	await cleanBundleOutputs(outDir);
 	// The npm bundle ships no stats dashboard sources, so embed the dashboard
 	// archive the same way compiled binaries do (scripts/build-binary.ts). Reset
@@ -179,6 +182,7 @@ export async function bundleDist(outDir: string = defaultOutDir): Promise<void> 
 				"process.env.PI_BUNDLED": JSON.stringify("true"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify(docsPayload.payload),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
+				"process.env.PI_WEBGUI_EMBED": JSON.stringify(webGuiResources.embedded),
 			},
 			minify: {
 				whitespace: true,

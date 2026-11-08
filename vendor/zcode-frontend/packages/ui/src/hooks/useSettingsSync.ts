@@ -8,7 +8,6 @@ import type {
 } from "@zcode/shared";
 import { logger } from "@/logger.js";
 import { useServices } from "@/hooks/useServices.js";
-import { useZCodeSessionService } from "@/hooks/useZCodeSessionService.js";
 import { invalidateDeferredDraftSessionForSkillChange } from "@/lib/zcodeDraftSkillInvalidation.js";
 import type { SettingsSyncUiState, SettingsSyncUiTask } from "@/settings-sync/types.js";
 
@@ -206,11 +205,6 @@ export function useSettingsSync(params: {
 }) {
   const { autoStartEnabled = true } = params;
   const { settingsSyncService } = useServices();
-  const zcodeSessionService = useZCodeSessionService(
-    params.workspacePath,
-    undefined,
-    params.workspaceIdentity,
-  );
   const runningImportRef = useRef(0);
   const discoveryRequestRef = useRef(0);
   const [state, setState] = useState<SettingsSyncUiState>(createInitialState);
@@ -307,6 +301,7 @@ export function useSettingsSync(params: {
     };
     // 新工作区不能沿用上一工作区的检测结果或加载状态。
     setState(createInitialState());
+    runningImportRef.current += 1;
     // TODO: Bind OMP onboarding/config discovery before enabling first-run migration.
     // Not starting is not the same as persisting the first-run prompt as handled.
     if (!autoStartEnabled) {
@@ -407,31 +402,6 @@ export function useSettingsSync(params: {
     });
   }, []);
 
-  const setAgentSelection = useCallback((agent: string, checked: boolean) => {
-    setState((current) => {
-      if (!current.discovery) {
-        return current;
-      }
-      const next = new Set(current.selectedKeys);
-      const targetAgent = current.discovery.agents.find((item) => item.agent === agent);
-      if (!targetAgent) {
-        return current;
-      }
-      for (const category of targetAgent.categories) {
-        const key = getSelectionKey(agent, category.category);
-        if (checked) {
-          next.add(key);
-        } else {
-          next.delete(key);
-        }
-      }
-      return {
-        ...current,
-        selectedKeys: [...next],
-      };
-    });
-  }, []);
-
   const setCategorySelectionAllAgents = useCallback(
     (category: SettingsSyncCategory, checked: boolean) => {
       setState((current) => {
@@ -513,20 +483,22 @@ export function useSettingsSync(params: {
         workspaceRequiredCount,
       });
 
-      const importPromise =
-        importableSelections.length > 0
-          ? settingsSyncService
-              .importSelected({
+      // Attach failure handling immediately while retaining the visible task pacing.
+      const importPromise = Promise.resolve()
+        .then(async () => {
+          const imported = importableSelections.length > 0
+            ? await settingsSyncService.importSelected({
                 workspacePath: params.workspacePath,
                 workspaceIdentity: params.workspaceIdentity,
                 selections: importableSelections,
               })
-              .then((imported) =>
-                mergeWorkspaceRequiredResults(selections, workspaceRequired, imported),
-              )
-          : Promise.resolve(
-              mergeWorkspaceRequiredResults(selections, workspaceRequired, EMPTY_IMPORT_RESULT),
-            );
+            : EMPTY_IMPORT_RESULT;
+          return mergeWorkspaceRequiredResults(selections, workspaceRequired, imported);
+        })
+        .then(
+          (result) => ({ ok: true as const, result }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
 
       for (let index = 0; index < initialTasks.length; index += 1) {
         if (runningImportRef.current !== runId) {
@@ -546,7 +518,9 @@ export function useSettingsSync(params: {
       }
 
       try {
-        const result = await importPromise;
+        const outcome = await importPromise;
+        if (!outcome.ok) throw outcome.error;
+        const result = outcome.result;
         if (runningImportRef.current !== runId) {
           return;
         }
@@ -599,21 +573,17 @@ export function useSettingsSync(params: {
             })),
           },
         }));
+        throw error;
       }
     },
     [
       params.workspaceIdentity,
       params.workspacePath,
       settingsSyncService,
-      zcodeSessionService,
       state.discovery,
       state.selectedKeys,
     ],
   );
-
-  const startImport = useCallback(async () => {
-    await startImportWithAdditionalSelections();
-  }, [startImportWithAdditionalSelections]);
 
   const finish = useCallback(() => {
     close();
@@ -626,11 +596,8 @@ export function useSettingsSync(params: {
     actions: {
       close,
       reopen,
-      reloadDiscovery: loadDiscovery,
       toggleSelection,
-      setAgentSelection,
       setCategorySelectionAllAgents,
-      startImport,
       startImportWithAdditionalSelections,
       finish,
     },

@@ -9,7 +9,6 @@ import "@/styles.css";
 
 const params = new URLSearchParams(location.search);
 const theme = params.get("theme") ?? "light";
-const locale = params.get("locale") === "zh-CN" ? "zh-CN" : "en-US";
 document.documentElement.className = `${theme} theme-zai-${theme}`;
 document.documentElement.style.setProperty("--ui-font-size", `${params.get("font") ?? 14}px`);
 const noop = () => {};
@@ -51,7 +50,7 @@ Object.assign(window, {
   },
 });
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale={locale}>
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <main className="min-h-screen bg-background p-4 text-foreground">
         <section className="w-64 max-w-full bg-sidebar" aria-label="Sidebar">

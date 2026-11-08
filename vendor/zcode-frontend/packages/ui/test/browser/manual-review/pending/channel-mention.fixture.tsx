@@ -46,7 +46,7 @@ const queue = {
   revision: 1,
 } as unknown as QueueState;
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="zh-CN">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <main className="min-h-screen bg-background p-6 text-foreground">
         <div className="mx-auto flex max-w-3xl flex-col gap-6">

@@ -29,7 +29,6 @@ import type {
   SessionPhase,
 } from "@zcode/shared/zcode-protocol-v4";
 import { cn } from "@/components/lib/utils.js";
-import { runUserAction } from "@/lib/userActionTelemetry.js";
 import { Button } from "@/components/ui/button.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { logger } from "@/logger.js";
@@ -37,7 +36,6 @@ import { ConversationTurnGroup } from "@/v4/ConversationTurnGroup.js";
 import { ConversationPendingGuideList } from "@/v4/ConversationPendingGuideList.js";
 import type { AssistantFeedbackHandler } from "@/v4/ConversationRowView.js";
 import { ConversationTurnNavigator } from "@/v4/ConversationTurnNavigator.js";
-import { syncConversationShareSelectionPanelLayout } from "@/v4/conversationShareSelectionPanelLayout.js";
 import type { ConversationRowRenderContext } from "@/v4/conversationRowContext.js";
 import {
   isSameConversationLatestTurnSummary,
@@ -46,8 +44,6 @@ import {
   withTopicPreparationUnits,
   type ConversationLatestTurnSummary,
 } from "@/v4/conversationTimelineLiveTail.js";
-import { armHighspeedFooterExpiryClock } from "@/highspeed/highspeedFooterExpiryClock.js";
-import { resolveNextHighspeedExpiryMsInPartition } from "@/highspeed/highspeedConversationRows.js";
 import { getConversationRowsPartition } from "@/v4/conversationProjectionStore.js";
 import {
   CONVERSATION_STATUS_PANEL_TOP_CLEARANCE_CLASS_NAME,
@@ -159,14 +155,7 @@ function ConversationBackToBottomButton({
       variant="outline"
       className={cn("rounded-full bg-card hover:bg-card-selected", className)}
       data-testid={TID_V4_TIMELINE_BOTTOM}
-      onClick={() =>
-        runUserAction({
-          input: { featureId: "conversation.navigation", action: "jump_bottom", trigger: "button" },
-          operation: onClick,
-          completed: { resultSource: "local_commit" },
-          failureStage: "timeline_scroll",
-        })
-      }
+      onClick={onClick}
     >
       <ArrowDownIcon className="size-4" />
     </Button>
@@ -282,7 +271,6 @@ export interface ConversationTimelineProps {
   /** 行渲染上下文（theme/codePreviewSettings/workspacePath）；宿主保证引用稳定。 */
   rowContext: ConversationRowRenderContext;
   onFork?: (target: ConversationRowTarget) => void;
-  onRetry?: (target: ConversationRowTarget) => void;
   onFeedbackChange?: AssistantFeedbackHandler;
   onEdit?: (
     target: ConversationRowTarget,
@@ -306,15 +294,6 @@ export interface ConversationTimelineProps {
   turnNavigatorDirectoryRevision?: number;
   /** 与旧 ChatView 对齐：composer dock 属于同一个滚动视口，sticky 到滚动容器底部。 */
   bottomDock?: ReactNode;
-  /** 分享选择面板所在的共享父容器；用于把 dock 的真实位置写入同一坐标系。 */
-  selectionPanelLayoutContainerRef?: { current: HTMLElement | null };
-  /**
-   * 锁定背景滚动。
-   *
-   * 分享选择面板只用 scrim 隔离了正文指针事件，滚动容器仍是 overflow-y-auto，
-   * 原生滚动条拖拽和键盘 PageUp/Down 仍能改变 scrollTop，勾选目标会在面板下方漂走。
-   */
-  backgroundScrollLocked?: boolean;
   /** rows 为空时的可选内容；正式空 session 传空，草稿态传问候语。 */
   emptyState?: ReactNode;
   /**
@@ -383,7 +362,6 @@ function ConversationTimelineImpl({
   scrollMemoryKey = null,
   rowContext,
   onFork,
-  onRetry,
   onFeedbackChange,
   onEdit,
   canLoadOlder = false,
@@ -392,8 +370,6 @@ function ConversationTimelineImpl({
   onLoadAllOlder,
   turnNavigatorDirectoryRevision = 0,
   bottomDock,
-  selectionPanelLayoutContainerRef,
-  backgroundScrollLocked = false,
   emptyState,
   headerSlot,
   centerEmptyStateWithDock = false,
@@ -505,10 +481,6 @@ function ConversationTimelineImpl({
     };
     onLatestTurnSummaryChange(latestTurnSummary);
   }, [latestTurnSummary, onLatestTurnSummaryChange]);
-  const nextHighspeedExpiryMs = useMemo(
-    () => resolveNextHighspeedExpiryMsInPartition(rowsPartition, liveNowMs),
-    [liveNowMs, rowsPartition],
-  );
   const selectTurnNavigatorQueryRowIds = useMemo(
     () => createConversationTurnNavigatorQueryRowIdsSelector(),
     [],
@@ -611,10 +583,6 @@ function ConversationTimelineImpl({
   const composerDockRef = useRef<HTMLDivElement>(null);
   const floatingComposerDockRef = useRef(floatingComposerDock);
   floatingComposerDockRef.current = floatingComposerDock;
-  const shareSelectionPanelLayoutRef = useRef<{
-    centerYPx: number;
-    maxHeightPx: number;
-  } | null>(null);
   // 右侧状态面板完整 inline 展开时，中间消息列和输入 dock 必须使用同一偏移；
   // 否则面板会覆盖正文，而不是并排布局。
   const summaryPanelInlineOffsetClassName =
@@ -623,47 +591,6 @@ function ConversationTimelineImpl({
     centeredEmptyLayout,
     statusPanelLayout: summaryPanelLayout,
   });
-
-  const syncShareSelectionPanelLayout = useCallback(() => {
-    if (!backgroundScrollLocked) return;
-    const container = selectionPanelLayoutContainerRef?.current;
-    const dock = composerDockRef.current;
-    if (!container || !dock) return;
-
-    // 选择面板是 SessionPane 的兄弟节点，不能把 CSS 变量写在 Timeline
-    // 自身，否则面板拿不到 dock 的真实边界；统一写入共享父容器供两者使用。
-    const layout = syncConversationShareSelectionPanelLayout(container, dock);
-    const previous = shareSelectionPanelLayoutRef.current;
-    if (previous?.centerYPx === layout.centerYPx && previous.maxHeightPx === layout.maxHeightPx) {
-      return;
-    }
-    shareSelectionPanelLayoutRef.current = layout;
-  }, [backgroundScrollLocked, selectionPanelLayoutContainerRef]);
-
-  useLayoutEffect(() => {
-    if (!backgroundScrollLocked) return;
-    const container = selectionPanelLayoutContainerRef?.current;
-    const dock = composerDockRef.current;
-    if (!container || !dock) return;
-
-    syncShareSelectionPanelLayout();
-    let resizeObserver: ResizeObserver | null = null;
-    if (typeof ResizeObserver !== "undefined") {
-      resizeObserver = new ResizeObserver(syncShareSelectionPanelLayout);
-      resizeObserver.observe(container);
-      resizeObserver.observe(timelineRootRef.current ?? container);
-      if (scrollRef.current) resizeObserver.observe(scrollRef.current);
-      resizeObserver.observe(dock);
-    }
-
-    // ResizeObserver 在部分 Electron flex 布局中可能晚于窗口尺寸变化回调，
-    // 因此窗口 resize 也始终触发一次几何同步，保证面板随窗口放大/缩小。
-    window.addEventListener("resize", syncShareSelectionPanelLayout);
-    return () => {
-      window.removeEventListener("resize", syncShareSelectionPanelLayout);
-      resizeObserver?.disconnect();
-    };
-  }, [backgroundScrollLocked, selectionPanelLayoutContainerRef, syncShareSelectionPanelLayout]);
 
   const hasBottomDock = Boolean(bottomDock);
   useLayoutEffect(() => {
@@ -693,18 +620,6 @@ function ConversationTimelineImpl({
 
     return () => window.clearInterval(timer);
   }, [hasRunningUnit]);
-
-  useEffect(() => {
-    if (nextHighspeedExpiryMs === undefined) return;
-
-    // Bug 根因：会话完成后工作时钟会停止；若 Highspeed 卡稍后才到期，footer 不会自行出现。
-    // 单独订阅最近的卡片到期边界，避免为了等待倒计时持续刷新整个历史列表。
-    // spec §9.3：到期唤醒基于 renderer setTimeout，窗口隐藏/被遮挡时会被 Chromium 冻结停摆；
-    // helper 额外监听窗口恢复可见/获得焦点并即时追平 liveNowMs，footer 才能不依赖用户再发
-    // 消息就出现。与 SessionPane 的 highspeedAutoShareClock 窗口唤醒补偿分工：那条刷新分享
-    // 入口/查看按钮的完成态数据，这条刷新组尾 footer 的显隐时钟。
-    return armHighspeedFooterExpiryClock(nextHighspeedExpiryMs, () => setLiveNowMs(Date.now()));
-  }, [nextHighspeedExpiryMs]);
 
   useLayoutEffect(() => {
     const element = timelineRootRef.current;
@@ -2035,7 +1950,6 @@ function ConversationTimelineImpl({
         ref={scrollRef}
         data-testid={TID_V4_TIMELINE}
         data-v4-timeline-scroll="true"
-        data-v4-timeline-scroll-locked={backgroundScrollLocked ? "true" : "false"}
         data-markdown-table-layout-root="true"
         data-row-count={rows.length}
         data-window-row-count={rows.length}
@@ -2059,9 +1973,6 @@ function ConversationTimelineImpl({
           // 只声明 overflow-y-auto 会让浏览器把横轴计算为 auto，宽内容会把
           // 整条 Conversation 撑出横向滚动；表格和代码块应由各自内部容器滚动。
           "min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable_both-edges] [--markdown-table-layout-left-inset:16px] [--markdown-table-layout-right-inset:16px] max-md:[--markdown-table-layout-left-inset:8px] max-md:[--markdown-table-layout-right-inset:8px]",
-          // 分享选择面板展开时改为 overflow-hidden：scrollTop 与 scrollbar-gutter 都保持不变，
-          // 但原生滚动条、滚轮和键盘翻页都不再能移动背景，勾选目标不会漂走。
-          backgroundScrollLocked && "!overflow-y-hidden",
           compactForRemoteControl && "min-w-0",
           // 浮窗形态：滚动容器止于输入框上方 12px，消息底部再留 16px 空白。
           floatingComposerDock &&
@@ -2161,11 +2072,9 @@ function ConversationTimelineImpl({
                     >
                       <ConversationTurnGroup
                         unit={unit}
-                        nowMs={unit.isRunning ? liveNowMs : undefined}
                         apiRetry={null}
                         context={rowContext}
                         onFork={onFork}
-                        onRetry={onRetry}
                         onFeedbackChange={onFeedbackChange}
                         onEdit={onEdit}
                         topClearedByTimeline={clearsStatusPanel}
@@ -2195,11 +2104,9 @@ function ConversationTimelineImpl({
                 >
                   <ConversationTurnGroup
                     unit={liveUnit}
-                    nowMs={liveUnit.isRunning ? liveNowMs : undefined}
                     apiRetry={apiRetry}
                     context={rowContext}
                     onFork={onFork}
-                    onRetry={onRetry}
                     onFeedbackChange={onFeedbackChange}
                     onEdit={onEdit}
                     topClearedByTimeline={sessionStartAtTop && liveUnitIndex === 0}

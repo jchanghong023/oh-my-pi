@@ -258,7 +258,7 @@ for (const [width, locale, theme] of [
       assert.equal(requests, 1);
       assert.equal(
         await page.evaluate(() => localStorage.getItem("zcode-interface-mode")),
-        "office",
+        "general",
       );
       // 个人与当前来源搜索继续按各自原来的名称顺序。
       await page.getByTestId("plugin-store-segment-personal").click();

@@ -37,7 +37,6 @@ export function AutomationsPageTitle({
 
 /**
  * 页标题本身就是切换：「自动化 / 工作流」两个 30px 标题词并排，未选中的用次级色。
- * 不在标题下再长一排标签——定时任务 / 闲时任务的胶囊行留在「自动化」内部，两级各用一种视觉。
  * 字号沿用 AutomationsSection 原 h1 的标题层级。
  */
 export function AutomationsPageTitleSwitch({

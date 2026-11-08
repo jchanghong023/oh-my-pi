@@ -61,22 +61,28 @@ interface UseClientScenesResourceOptions {
 }
 
 export function useClientScenesResource(
-  clientScenesService: IClientScenesService,
+  clientScenesService: IClientScenesService | null | undefined,
   options: UseClientScenesResourceOptions = {},
 ) {
-  const enabled = options.enabled ?? true;
-  const authorityId = getServiceAuthorityId(clientScenesService);
+  const available = clientScenesService != null;
+  const enabled = available && (options.enabled ?? true);
+  const authorityId = clientScenesService ? getServiceAuthorityId(clientScenesService) : null;
   const { cache } = useSWRConfig();
-  const visibilityAuthority = getVisibilityAuthority(clientScenesService, cache as object);
+  const visibilityAuthority = clientScenesService
+    ? getVisibilityAuthority(clientScenesService, cache as object)
+    : null;
+  const fetchScenes = clientScenesService
+    ? async () => {
+        const response = await clientScenesService.list();
+        if (response.code !== 0) {
+          throw new ClientScenesBusinessError(response.code, response.msg);
+        }
+        return response.data;
+      }
+    : null;
   const resource = useSWR<ClientSceneConfig[], Error>(
     enabled ? [CLIENT_SCENES_RESOURCE_KEY, authorityId] : null,
-    async () => {
-      const response = await clientScenesService.list();
-      if (response.code !== 0) {
-        throw new ClientScenesBusinessError(response.code, response.msg);
-      }
-      return response.data;
-    },
+    fetchScenes,
     {
       dedupingInterval: CLIENT_SCENES_DEDUPING_INTERVAL_MS,
       focusThrottleInterval: CLIENT_SCENES_DEDUPING_INTERVAL_MS,
@@ -89,7 +95,7 @@ export function useClientScenesResource(
   );
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !visibilityAuthority) return;
     // macOS 点击关闭只 hide BrowserWindow，renderer 与 SWR 缓存不会销毁；
     // 重新 show 时若仍在去重窗口内，内建 focus revalidate 会继续复用旧 Scene。
     // hidden -> visible 必须绕过去重窗口强制重验，同时按 Service/cache authority 合并并发消费方。
@@ -99,10 +105,11 @@ export function useClientScenesResource(
   }, [enabled, resource.mutate, visibilityAuthority]);
 
   return {
-    scenes: resource.data ?? EMPTY_SCENES,
+    available,
+    scenes: enabled ? (resource.data ?? EMPTY_SCENES) : EMPTY_SCENES,
     loading: enabled && resource.data === undefined && resource.isLoading,
-    revalidating: resource.isValidating,
-    error: resource.error,
+    revalidating: enabled && resource.isValidating,
+    error: enabled ? resource.error : undefined,
     revalidate: resource.mutate,
   };
 }

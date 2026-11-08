@@ -23,7 +23,6 @@ import type {
 } from "@/lib/workspaceSidePane.js";
 import { V4ConversationProvider } from "@/v4/V4ConversationContext.js";
 import { SessionPane } from "@/v4/SessionPane.js";
-import type { SessionOpenTrigger } from "@/lib/sessionOpenArmsTelemetry.js";
 import type {
   ChatSearchResultHighlightRequest,
   ChatViewSummaryPanelVariant,
@@ -33,16 +32,12 @@ import type {
 export interface V4ChatPaneProps {
   workspacePath: string;
   workspaceIdentity?: string;
-  /** Prompt 模板埋点当前仅覆盖 Desktop。 */
-  isDesktop?: boolean;
   readOnly?: boolean;
   readOnlyReason?: string;
   allowEscapeStopOutsidePane?: boolean;
   compactForRemoteControl?: boolean;
   /** CLI session id；null = draft 首发。 */
   sessionId: string | null;
-  /** 当前 workspace 主 pane 的打开入口，未提供时按 sidebar 统计。 */
-  openTrigger?: SessionOpenTrigger;
   provider?: ZCodeProvider;
   onSessionCreated?: (sessionId: string) => void;
   /** deleteSession：删除当前会话后回到 draft。 */
@@ -88,13 +83,11 @@ export interface V4ChatPaneProps {
 export function V4ChatPane({
   workspacePath,
   workspaceIdentity,
-  isDesktop = false,
   readOnly = false,
   readOnlyReason,
   allowEscapeStopOutsidePane = false,
   compactForRemoteControl = false,
   sessionId,
-  openTrigger = "sidebar",
   provider,
   onSessionCreated,
   onSessionDeleted,
@@ -142,10 +135,8 @@ export function V4ChatPane({
         readOnlyReason={readOnlyReason}
         allowEscapeStopOutsidePane={allowEscapeStopOutsidePane}
         sessionId={sessionId}
-        openTrigger={openTrigger}
         workspacePath={workspacePath}
         workspaceIdentity={workspaceIdentity}
-        isDesktop={isDesktop}
         compactForRemoteControl={compactForRemoteControl}
         provider={provider}
         onSessionCreated={onSessionCreated}

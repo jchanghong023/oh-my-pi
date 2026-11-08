@@ -5,7 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip.js";
 import { WorkflowArtifactPill } from "@/components/workflow-timeline/WorkflowArtifactPill.js";
 import { WorkflowNotificationToolRow } from "@/v4/WorkflowNotificationToolRow.js";
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="en-US">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <WorkflowArtifactPill
         artifact={{ id: "sample", kind: "markdown", title: "Sample" }}

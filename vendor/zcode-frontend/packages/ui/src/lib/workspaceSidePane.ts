@@ -41,19 +41,6 @@ export interface CodeViewerSidePaneTab {
   sourceKey: string | null;
 }
 
-export type TreemappingSidePaneSource =
-  | { kind: "current" }
-  | { kind: "message"; messageId: string; turnIndex?: number };
-
-export interface TreemappingSidePaneTab {
-  id: "treemapping";
-  type: "treemapping";
-  ownerTaskId?: string | null;
-  workspaceKey?: string | null;
-  openedAt?: number;
-  source?: TreemappingSidePaneSource;
-}
-
 export interface WhiteboardSidePaneTab {
   id: string;
   type: "whiteboard";
@@ -494,7 +481,6 @@ export type WorkspaceSidePaneTab =
   | BackgroundBashSidePaneTab
   | GitSidePaneTab
   | CodeViewerSidePaneTab
-  | TreemappingSidePaneTab
   | WhiteboardSidePaneTab
   | ModelTrajectorySidePaneTab
   | DeveloperToolsSidePaneTab
@@ -589,17 +575,6 @@ export function normalizeWorkspaceSidePaneState(
 
 function createGitSidePaneTab(): GitSidePaneTab {
   return { id: "git", type: "git", openedAt: Date.now() };
-}
-
-function createTreemappingSidePaneTab(
-  source: TreemappingSidePaneSource = { kind: "current" },
-): TreemappingSidePaneTab {
-  return {
-    id: "treemapping",
-    type: "treemapping",
-    openedAt: Date.now(),
-    source,
-  };
 }
 
 function createModelTrajectorySidePaneTab(options: {
@@ -1035,7 +1010,6 @@ export function isSidePaneTabVisibleInScope(
   switch (tab.type) {
     case "git":
     case "developer-tools":
-    case "treemapping":
       return true;
     case "subagent-session":
     case "subagent-directory":
@@ -1240,13 +1214,6 @@ export function activateGitSidePane(
   current: WorkspaceSidePaneState | null,
 ): WorkspaceSidePaneState {
   return activateSidePaneTab(current, createGitSidePaneTab());
-}
-
-export function activateTreemappingSidePane(
-  current: WorkspaceSidePaneState | null,
-  source?: TreemappingSidePaneSource,
-): WorkspaceSidePaneState {
-  return activateSidePaneTab(current, createTreemappingSidePaneTab(source));
 }
 
 export function openWhiteboardSidePane(

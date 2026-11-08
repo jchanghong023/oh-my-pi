@@ -20,6 +20,11 @@ const EMPTY_STATE: PluginReferenceCatalogState = {
   error: null,
 };
 
+const UNAVAILABLE_STATE: PluginReferenceCatalogState = {
+  ...EMPTY_STATE,
+  error: "Plugin management is unavailable on this host.",
+};
+
 interface ScopedPluginReferenceCatalogState {
   scope: object | null;
   value: PluginReferenceCatalogState;
@@ -105,10 +110,11 @@ export function usePluginReferenceCatalog(
   // 不得复用旧进程冻结的 catalog Promise。
   const requestKey = `${workspaceKey}|${remoteSessionId ?? "local"}|${sessionId ?? "draft"}|runtime:${runtimeRevision}|refresh:${options?.refreshRevision ?? 0}`;
   const services = resolution.services;
+  const pluginService = services.pluginManagementService;
   const rpcReady = resolution.rpcReady;
 
   useEffect(() => {
-    if (!enabled || !workspacePath || !sessionId || !rpcReady) return;
+    if (!enabled || !workspacePath || !sessionId || !rpcReady || !pluginService) return;
     const subscription = services.zcodeAgentService.onAgentRuntimeRestarted((event) => {
       if (event.workspaceKey !== workspaceKey) return;
       // Runtime restart 后 workspace/session/attachment 都可能保持不变；显式推进代次，
@@ -116,17 +122,17 @@ export function usePluginReferenceCatalog(
       setRuntimeRevision((current) => current + 1);
     });
     return () => subscription.dispose();
-  }, [enabled, rpcReady, services, sessionId, workspaceKey, workspacePath]);
+  }, [enabled, rpcReady, services, pluginService, sessionId, workspaceKey, workspacePath]);
   // 每次 Picker 重新打开、workspace/session/remote attachment 改变，或 services
   // 实例重连时都创建新的请求身份。渲染只接受同一 scope 的结果，因此 effect 尚未
   // 发出新请求的首帧也不会短暂泄露上一 authority 的 catalog。
   const requestScope = useMemo(
     () => ({}),
-    [enabled, remoteSessionId, requestKey, rpcReady, services, workspacePath],
+    [enabled, remoteSessionId, requestKey, rpcReady, services, pluginService, workspacePath],
   );
 
   useEffect(() => {
-    if (!enabled || !workspacePath || !rpcReady) {
+    if (!enabled || !workspacePath || !rpcReady || !pluginService) {
       return;
     }
     const seq = ++requestSeqRef.current;
@@ -150,14 +156,14 @@ export function usePluginReferenceCatalog(
         sessionCatalogRequests.set(services, serviceCache);
       }
       const cached = serviceCache.get(requestKey);
-      request = cached ?? services.pluginManagementService.getPluginReferenceCatalog(params);
+      request = cached ?? pluginService.getPluginReferenceCatalog(params);
       requestServiceCache = serviceCache;
       if (!cached) {
         serviceCache.set(requestKey, request);
         releaseSessionCatalogRequestWhenSettled(services, serviceCache, requestKey, request);
       }
     } else {
-      request = services.pluginManagementService.getPluginReferenceCatalog(params);
+      request = pluginService.getPluginReferenceCatalog(params);
     }
     request
       .then((result) => {
@@ -208,11 +214,15 @@ export function usePluginReferenceCatalog(
     requestScope,
     rpcReady,
     services,
+    pluginService,
     sessionId,
     workspaceIdentity,
     workspacePath,
   ]);
 
+  if (enabled && workspacePath && rpcReady && !pluginService) {
+    return UNAVAILABLE_STATE;
+  }
   if (!enabled || !workspacePath || !rpcReady || scopedState.scope !== requestScope) {
     return EMPTY_STATE;
   }

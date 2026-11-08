@@ -1024,7 +1024,7 @@ function ReadonlyTurn({
 
 export function ConversationShareReadonlyTimeline(props: ConversationShareReadonlyTimelineProps) {
   return (
-    <ZCodeIntlProvider initialLocale={props.locale ?? "zh-CN"}>
+    <ZCodeIntlProvider>
       <ConversationShareReadonlyTimelineContent {...props} />
     </ZCodeIntlProvider>
   );

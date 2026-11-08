@@ -1,11 +1,9 @@
 import type {
-  WorkflowRunActor,
   WorkflowRunNode,
   WorkflowRunState,
 } from "@zcode/shared/zcode-protocol-v4";
 import { phaseBinder } from "./instance-phases.js";
 import {
-  isSyntheticLaneId,
   type StepRunStatus,
   type StepStatusTable,
   type WorkflowCausalityGraphData,
@@ -154,21 +152,4 @@ export function workflowRunOverlay(
   }
 
   return { statuses, animatedEdges: anyRunning };
-}
-
-/**
- * 车道 → 该车道上的 actor 实例（phase 5 的 transcript 下钻：单实例直接开，多实例弹选择器）。
- *
- * 车道 site id 是身份，显示名只是展示（沿用 causality-graph 的命名契约）。
- * `workspace` 与 `unknown` 是合成车道，上面没有会话，所以恒返回空——world-read step
- * 因此只有选中态、没有下钻。
- */
-export function workflowRunActorsForLane(
-  run: WorkflowRunState | undefined,
-  laneId: string,
-): WorkflowRunActor[] {
-  if (!run || isSyntheticLaneId(laneId)) return [];
-  return run.actors
-    .filter((actor) => actor.siteId === laneId)
-    .sort((left, right) => left.ordinal - right.ordinal);
 }

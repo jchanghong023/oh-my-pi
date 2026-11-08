@@ -260,7 +260,9 @@ export function GitPane({
           }));
         })
         .finally(() => {
-          pendingDiffKeysRef.current.delete(cacheKey);
+          if (diffGenerationRef.current === generation) {
+            pendingDiffKeysRef.current.delete(cacheKey);
+          }
         });
     },
     [diffStateByKey, gitService, workspacePath],

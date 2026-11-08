@@ -240,12 +240,35 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
   }
 
   private disposeActiveRequest(id: number): void {
+    for (const [channelName, requests] of this.pendingRequests) {
+      if (requests.some(({ request }) => request.id === id)) {
+        this.removePendingRequest(channelName, id);
+        break;
+      }
+    }
     const disposable = this.activeRequests.get(id);
     if (!disposable) {
       return;
     }
     disposable.dispose();
     this.activeRequests.delete(id);
+  }
+
+  private removePendingRequest(channelName: string, id: number): boolean {
+    const requests = this.pendingRequests.get(channelName);
+    if (!requests) {
+      return false;
+    }
+    const index = requests.findIndex(({ request }) => request.id === id);
+    if (index === -1) {
+      return false;
+    }
+    const [pending] = requests.splice(index, 1);
+    clearTimeout(pending.timer);
+    if (requests.length === 0) {
+      this.pendingRequests.delete(channelName);
+    }
+    return true;
   }
 
   private collectPendingRequest(request: any): void {
@@ -255,10 +278,10 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
     }
 
     const timer = setTimeout(() => {
-      console.error(`Unknown channel: ${request.channelName}`);
-      if (request.type !== RequestType.Promise) {
+      if (!this.removePendingRequest(request.channelName, request.id)) {
         return;
       }
+      console.error(`Unknown channel: ${request.channelName}`);
 
       this.sendResponse({
         id: request.id,
@@ -267,7 +290,9 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
           message: `Channel name '${request.channelName}' timed out after ${this.timeoutDelay}ms`,
           stack: undefined,
         },
-        type: ResponseType.PromiseError,
+        type: request.type === RequestType.Promise
+          ? ResponseType.PromiseError
+          : ResponseType.EventError,
       });
     }, this.timeoutDelay);
 
@@ -280,8 +305,9 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
       return;
     }
 
-    for (const { request, timer } of requests) {
-      clearTimeout(timer);
+    while (requests.length > 0) {
+      const { request } = requests[0];
+      this.removePendingRequest(channelName, request.id);
       switch (request.type) {
         case RequestType.Promise:
           this.onPromise(request);
@@ -291,7 +317,6 @@ export class ChannelServer<TContext = string> implements IChannelServer<TContext
           break;
       }
     }
-    this.pendingRequests.delete(channelName);
   }
 
   dispose(): void {

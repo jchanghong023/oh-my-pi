@@ -33,17 +33,11 @@ import {
 } from "@/quickpick/taskFindNavigationState.js";
 import { createQuickPickCommands } from "@/quickpick/quickPickCommands.js";
 import { CommandCenterDialog } from "@/command-center/CommandCenterDialog.js";
-import { FeedbackHost } from "@/feedback/FeedbackHost.js";
-import { useFeedbackStore } from "@/feedback/feedbackStore.js";
 import {
   resolveQuickPickConversationNavigation,
   selectQuickPickConversationTaskIds,
 } from "@/lib/quickPickConversationNavigation.js";
-import {
-  setPendingSettingsPluginIntent,
-  setPendingSettingsSection,
-  type SettingsSectionId,
-} from "@/lib/settingsNavigation.js";
+import { setPendingSettingsPluginIntent } from "@/lib/settingsNavigation.js";
 import { runWorkspaceVisibleCommand } from "@/lib/workspaceVisibleCommand.js";
 import { ZCODE_PRODUCT_DOCS_URL } from "@/lib/productDocs.js";
 import { resolveTheme } from "@/useTheme.js";
@@ -60,15 +54,12 @@ import { useTaskSidePaneMemoryBridge } from "@/app-shell/useTaskSidePaneMemoryBr
 import { resolveAppWorkspaceRpcTarget } from "@/app-shell/workspaceRpcTarget.js";
 import { useWorkspaceServicesResolution } from "@/hooks/useWorkspaceServices.js";
 import { useWorkspaceTerminalTaskNotifications } from "@/hooks/useTaskNotifications.js";
-import { useMarketingTaskCompletionRefresh } from "@/components/marketing-touch/useMarketingTaskCompletionRefresh.js";
-import { useOffPeakTaskNotifications } from "@/hooks/useOffPeakTaskNotifications.js";
 import type { AppProps, WorkspaceMainView } from "@/app-shell/types.js";
 import type {
   ChatSearchResultHighlightRequest,
   ChatViewSummaryPanelVariant,
   ConversationFindMatchState,
 } from "@/v4/legacyChatViewTypes.js";
-import { getActiveSidePaneTab } from "@/lib/workspaceSidePane.js";
 import { logger } from "@/logger.js";
 import { taskListE2EActions } from "@/lib/taskListE2EActions.js";
 import {
@@ -84,10 +75,6 @@ import { startMemoryDiagnosticsLogger } from "@/lib/memoryDiagnostics.js";
 
 export function App({
   services,
-  baseFeedbackService,
-  onLogout,
-  onLogin,
-  user,
   onCreateTask,
   onCreateConversationTask,
   onResolveConversationWorkspace,
@@ -119,7 +106,7 @@ export function App({
   const toggleSidePaneShortcutLabel = useShortcutCommandLabel("toggleSidePane");
   const toggleSidePaneFullViewShortcutLabel = useShortcutCommandLabel("toggleSidePaneFullView");
   const openWorkspaceShortcutLabel = useShortcutCommandLabel("openWorkspace");
-  const { intl, locale, setLocale } = useZCodeIntl();
+  const { intl, locale } = useZCodeIntl();
   const isOfficeMode = useIsOfficeMode();
   const platform = usePlatform();
   // 进程内存本地诊断日志：每窗口一个 60s 采样器，
@@ -182,10 +169,12 @@ export function App({
   const workspaceReadOnlyReason = workspaceReadOnly
     ? intl.formatMessage({ id: "workspaceSidebar.unavailableLocalDirectory" })
     : undefined;
-  const { workspaceShellZCodeState, reloadSessionDisabled } = useWorkspaceShellZCodeState(
-    workspaceAbsPath,
-    workspaceIdentity,
-  );
+  const {
+    workspaceShellZCodeState,
+    reloadSessionDisabled: workspaceReloadSessionDisabled,
+  } = useWorkspaceShellZCodeState(workspaceAbsPath, workspaceIdentity);
+  // This action restarts a ZCode workspace process, not the bound native OMP conversation.
+  const reloadSessionDisabled = !backendBusinessAvailable || workspaceReloadSessionDisabled;
   const activeTaskId = workspaceShellZCodeState.activeTaskId;
   const sidePaneOwnerId = activeTaskId;
   const [summaryPanelVariantOverride, setSummaryPanelVariantOverride] =
@@ -257,12 +246,6 @@ export function App({
       .setActiveTaskId(workspaceAbsPath, boundNativeSessionId, workspaceIdentity);
   }, [boundNativeSessionId, workspaceAbsPath, workspaceIdentity]);
   const notificationEnabled = useZCodeStore((s) => s.notificationEnabled);
-  useMarketingTaskCompletionRefresh({
-    workspacePath: workspaceAbsPath,
-    ...(workspaceIdentity ? { workspaceIdentity } : {}),
-    ...(workspaceRemoteSessionId ? { endpointKey: workspaceRemoteSessionId } : {}),
-    rpcReady: backendBusinessAvailable && workspaceRpcReady,
-  });
   useWorkspaceTerminalTaskNotifications({
     workspacePath: workspaceAbsPath,
     ...(workspaceIdentity ? { workspaceIdentity } : {}),
@@ -270,13 +253,6 @@ export function App({
     enabled: backendBusinessAvailable && notificationEnabled,
     rpcReady: backendBusinessAvailable && workspaceRpcReady,
     platform,
-    formatMessage: intl.formatMessage,
-  });
-  // 闲时任务终态/等确认通知：仅桌面本地链路，main 进程按 status:taskId 去重多窗口重复。
-  useOffPeakTaskNotifications({
-    offPeakTaskService: services.offPeakTaskService,
-    platform,
-    enabled: Boolean(backendBusinessAvailable && notificationEnabled && isDesktop),
     formatMessage: intl.formatMessage,
   });
   const lastHandledDraftSidePaneCloseRef = useRef({
@@ -392,8 +368,6 @@ export function App({
     [tabs],
   );
   const commandCenterWorkspaceTabs = useMemo(() => tabs.filter(isWorkspaceTab), [tabs]);
-  const activeSidePaneTab = useMemo(() => getActiveSidePaneTab(sidePaneState), [sidePaneState]);
-  const isGitOpen = activeSidePaneTab?.type === "git";
   const hasGitTab = sidePaneState?.tabs.some((tab) => tab.type === "git") ?? false;
   const handleRefreshGit = useCallback(() => {
     setGitRefreshVersion((value) => value + 1);
@@ -647,27 +621,6 @@ export function App({
   const handleOpenQuickPick = useCallback(() => {
     setIsQuickPickOpen((open) => !open);
   }, []);
-  const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
-  const openFeedbackTickets = useFeedbackStore((state) => state.openTickets);
-  const isLoggedIn = Boolean(user);
-  const handleOpenFeedback = useCallback(() => {
-    void platform.openFeedback();
-  }, [platform]);
-
-  useEffect(() => {
-    // 内置反馈中心合并了"提交反馈 / 我的反馈"两个 Tab，
-    // 老的 OpenTicketsPanel IPC 仍然兼容（直接打开列表），未来如果还需要单独入口可以复用。
-    const disposeFeedbackDialog = platform.onOpenFeedbackDialog?.(() => {
-      openFeedbackSubmit();
-    });
-    const disposeTicketsPanel = platform.onOpenTicketsPanel?.(() => {
-      openFeedbackTickets();
-    });
-    return () => {
-      disposeFeedbackDialog?.();
-      disposeTicketsPanel?.();
-    };
-  }, [openFeedbackSubmit, openFeedbackTickets, platform]);
   const handleOpenCommunity = useCallback(() => platform.openCommunity(), [platform]);
   const handleOpenProductDocs = useCallback(() => {
     platform.openExternal(ZCODE_PRODUCT_DOCS_URL);
@@ -676,13 +629,6 @@ export function App({
   const handleSwitchTheme = useCallback(() => {
     setTheme(themeTarget);
   }, [setTheme, themeTarget]);
-  const handleOpenSettingsSection = useCallback(
-    (section: SettingsSectionId) => {
-      setPendingSettingsSection(section);
-      openSettingsTab();
-    },
-    [openSettingsTab],
-  );
   const { reloadSessionPending, handleReloadSession } = useWorkspaceSessionReload({
     intl,
     services,
@@ -694,7 +640,6 @@ export function App({
       targetWorkspacePath: string,
       targetWorkspaceIdentity?: string,
       targetWorkspacePurpose?: WorkspacePurpose,
-      createSource?: import("@zcode/shared").SessionCreateSource,
     ) => {
       const store = useZCodeSessionStore.getState();
       const resolvedTargetWorkspaceIdentity =
@@ -747,7 +692,6 @@ export function App({
         targetWorkspacePath,
         targetSelectedProvider,
         resolvedTargetWorkspaceIdentity,
-        { createSource: createSource ?? "project" },
       );
     },
     [
@@ -786,7 +730,6 @@ export function App({
       getTheme: () => theme,
       setTheme,
       getLocale: () => locale,
-      setLocale,
       setChatMessages: (messages) => {
         setTestMessages([...messages]);
       },
@@ -805,7 +748,6 @@ export function App({
       services.botsService,
       services.zcodeTaskService,
       services.zcodeAgentService,
-      setLocale,
       theme,
       setTheme,
       testMessages,
@@ -921,7 +863,6 @@ export function App({
   }, [handleSelectAdjacentConversation]);
   const handlePrimaryNavigationBack = handleTaskNavBack;
   const canPrimaryNavigationBack = canTaskNavBack;
-  const shellPanelIds = useMemo(() => ["sidebar", "content"], []);
 
   useAppKeyboard({
     openCommandCenter: handleOpenQuickPick,
@@ -979,9 +920,6 @@ export function App({
         allowOpenWorkspace,
         canOpenCommunity: canOpenCommunityFromQuickPick,
         isSidebarVisible,
-        // quick pick 命令只关心登录态布尔值。
-        // 如果依赖完整 user 对象，auth store 返回等价新引用时会重建整组 command/run 闭包。
-        isLoggedIn,
         themeTarget,
         shortcuts: {
           newTask: newTaskShortcutLabel,
@@ -1001,11 +939,8 @@ export function App({
             openSettingsTab();
           },
           switchTheme: handleSwitchTheme,
-          openFeedback: handleOpenFeedback,
           openCommunity: handleOpenCommunity,
           openProductDocs: handleOpenProductDocs,
-          login: onLogin,
-          logout: onLogout,
           toggleSidebar: () => runVisibleWorkspaceCommand(handleToggleSidebar),
           openReviewTab: () => runVisibleWorkspaceCommand(handleOpenGitIfWritable),
         },
@@ -1015,18 +950,13 @@ export function App({
       isOfficeMode,
       canOpenCommunityFromQuickPick,
       handleOpenCommunity,
-      handleOpenFeedback,
       handleOpenProductDocs,
-      handleOpenSettingsSection,
       handleSwitchTheme,
       handleOpenGitIfWritable,
       handleToggleSidebar,
-      isLoggedIn,
       isSidebarVisible,
       newTaskShortcutLabel,
       handleCreateTaskIfWritable,
-      onLogin,
-      onLogout,
       onOpenWorkspace,
       runVisibleWorkspaceCommand,
       openSettingsTab,
@@ -1081,8 +1011,6 @@ export function App({
         onSearchResultHighlightRequest={handleSearchResultHighlightRequest}
         onOpenCodeViewer={handleOpenCodeViewerIfWritable}
       />
-      {/* 反馈是应用级能力，始终使用本机 base host。 */}
-      <FeedbackHost feedbackService={baseFeedbackService} platform={platform} />
         <WorkspaceShellLayout
           services={services}
           workspaceReadOnlyReason={workspaceReadOnlyReason}
@@ -1095,9 +1023,6 @@ export function App({
           onWorkspaceMainViewChange={setWorkspaceMainView}
           onOpenAutomationConsumed={handleOpenAutomationConsumed}
           handleOpenAutomations={handleOpenAutomations}
-          onLogout={onLogout}
-          onLogin={onLogin}
-          user={user}
           onCreateTask={handleCreateTaskIfWritable}
           onCreateConversationTask={onCreateConversationTask}
           onResolveConversationWorkspace={onResolveConversationWorkspace}
@@ -1130,14 +1055,12 @@ export function App({
           canTaskNavBack={canTaskNavBack}
           canTaskNavForward={canTaskNavForward}
           isSidebarVisible={isSidebarVisible}
-          isGitOpen={isGitOpen}
           isSidePaneOpen={isSidePaneOpen}
           sidePaneFullView={supportsSidePaneFullView ? sidePaneFullView : undefined}
           summaryPanelVariantOverride={summaryPanelVariantOverride}
           onSummaryPanelVariantOverrideChange={setSummaryPanelVariantOverride}
           sidePaneState={sidePaneState}
           recentClosedSidePaneTabs={recentClosedSidePaneTabs}
-          shellPanelIds={shellPanelIds}
           projectName={projectName}
           workspaceTabs={workspaceTabs}
           activeTaskId={activeTaskId}

@@ -1,4 +1,3 @@
-import { useEffect, useMemo } from "react";
 import { create } from "zustand";
 import type {
   ZCodeAvailablePluginSummary,
@@ -7,13 +6,11 @@ import type {
   ZCodePluginInfo,
   ZCodePluginMarketplaceSummary,
   ZCodePluginScope,
-  ZCodePluginsDescribeResult,
 } from "@zcode/shared";
 import { CLAUDE_OFFICIAL_PLUGIN_MARKETPLACE_ID } from "@zcode/shared";
 import type { IPluginManagementService } from "@zcode/services";
 import { logger } from "@/logger.js";
 import {
-  beginPluginOperation,
   loadInto,
   runWorkspaceOperation,
   subscribePluginManagementChanges,
@@ -21,13 +18,6 @@ import {
   notifyPluginManagementChange,
 } from "@/store/pluginManagementStoreLoading.js";
 import { setPluginEnabledOptimistically } from "@/store/pluginManagementStoreEnabled.js";
-
-// 市场详情按需拉取的组件清单缓存：按 pluginId 记 loading/data/error，避免重复请求与切换闪烁。
-export interface PluginDescribeEntry {
-  status: "loading" | "loaded" | "error";
-  data?: ZCodePluginsDescribeResult;
-  error?: string;
-}
 
 // 设置页「插件管理」的数据源: 经 IPluginManagementService 薄服务由 zcode-cli 提供 (list + enable/disable)。
 // UI 不再直触 IZCodeAgentService，plugins/* 旧协议词的消费收拢到服务实现一处。
@@ -50,7 +40,7 @@ export interface PluginManagementState {
   error: string | null;
   /**
    * 最近一次失败操作的归属插件：带 pluginId 的操作（如 setEnabled）失败写该
-   * id；无插件目标的操作（marketplace add/update/validate、列表加载、refresh）写 null。
+   * id；无插件目标的操作（marketplace add/update、列表加载、refresh）写 null。
    * 消费方（CUA 输入框按钮等）只应把「目标是自己」的 error 当成自身错误，避免共享
    * error 字段把无关失败误映射成自己的错误态。
    */
@@ -58,13 +48,12 @@ export interface PluginManagementState {
   togglingPluginId: string | null;
   activeOperations: ReadonlyArray<{ id: string }>;
   operationVersion: number;
-  describeCache: Record<string, PluginDescribeEntry>;
   initialize: (params: {
     workspacePath: string;
     workspaceIdentity?: string;
     authorityKey?: string;
     configScope?: ZCodePluginScope;
-    pluginService: IPluginManagementService;
+    pluginService?: IPluginManagementService;
   }) => Promise<void>;
   refresh: (
     pluginService?: IPluginManagementService,
@@ -104,25 +93,12 @@ export interface PluginManagementState {
     pluginService: IPluginManagementService,
     scope?: ZCodePluginScope,
   ) => Promise<boolean>;
-  validateSource: (source: string, pluginService: IPluginManagementService) => Promise<void>;
   setEnabled: (
     pluginId: string,
     enabled: boolean,
     pluginService: IPluginManagementService,
     scope?: ZCodePluginScope,
   ) => Promise<boolean>;
-  // 按需拉取插件组件清单（名称+描述）；force 跳过缓存重试。
-  describePlugin: (
-    pluginId: string,
-    pluginName: string,
-    marketplace: string,
-    pluginService: IPluginManagementService,
-    force?: boolean,
-  ) => Promise<void>;
-}
-
-function toMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function throwForErrorDiagnostic(diagnostics: ZCodePluginDiagnostic[]): void {
@@ -132,8 +108,11 @@ function throwForErrorDiagnostic(diagnostics: ZCodePluginDiagnostic[]): void {
   }
 }
 
+const PLUGIN_MANAGEMENT_UNAVAILABLE = "Plugin management is unavailable on this host.";
+
 export const createPluginManagementStore = (initialService?: IPluginManagementService) => {
   let lastService = initialService;
+  let loadRevision = 0;
   return create<PluginManagementState>((set, get) => ({
     workspacePath: null,
     workspaceIdentity: null,
@@ -152,7 +131,6 @@ export const createPluginManagementStore = (initialService?: IPluginManagementSe
     togglingPluginId: null,
     activeOperations: [],
     operationVersion: 0,
-    describeCache: {},
 
     async initialize({
       workspacePath,
@@ -162,6 +140,7 @@ export const createPluginManagementStore = (initialService?: IPluginManagementSe
       pluginService,
     }) {
       lastService = pluginService;
+      const revision = ++loadRevision;
       const normalizedIdentity = workspaceIdentity?.trim() || null;
       const normalizedAuthorityKey = authorityKey?.trim() || null;
       const normalizedConfigScope = configScope ?? null;
@@ -183,15 +162,16 @@ export const createPluginManagementStore = (initialService?: IPluginManagementSe
         authorityKey: normalizedAuthorityKey,
         configScope: normalizedConfigScope,
         // 有缓存时后台刷新、保留列表, 避免切换 workspace 时闪烁; 无缓存才显示阻塞 loading。
-        loading: !hasCache,
-        marketplaceAvailabilityKnown: hasCache ? current.marketplaceAvailabilityKnown : false,
-        error: null,
+        loading: Boolean(pluginService) && !hasCache,
+        marketplaceAvailabilityKnown:
+          pluginService && hasCache ? current.marketplaceAvailabilityKnown : false,
+        error: pluginService ? null : PLUGIN_MANAGEMENT_UNAVAILABLE,
         lastFailedPluginId: null,
         // 配置保存后的 overview 刷新可能还没结束，用户已切到另一层配置视图；
         // 旧层的 activeOperations 不能继续把新层的输入控件置灰。旧操作结束时由独立条目防止
         // 它误清理新层后来启动的同名操作。
-        // 先清空旧目标的投影，避免新项目加载期间仍能操作旧项目卡片或复用 describe 缓存。
-        ...(contextChanged
+        // 先清空旧目标的投影，避免新项目加载期间仍能操作旧项目卡片。
+        ...(contextChanged || !pluginService
           ? {
               activeOperations: [],
               operationVersion: current.operationVersion + 1,
@@ -202,33 +182,55 @@ export const createPluginManagementStore = (initialService?: IPluginManagementSe
               installedPlugins: [],
               restorableBuiltins: [],
               diagnostics: [],
-              describeCache: {},
             }
           : {}),
       });
-      await loadInto(set, get, {
-        workspacePath,
-        workspaceIdentity: normalizedIdentity,
-        authorityKey: normalizedAuthorityKey,
-        configScope: normalizedConfigScope,
-        pluginService,
-      });
+      if (!pluginService) return;
+      await loadInto(
+        (partial) => {
+          if (revision === loadRevision) set(partial);
+        },
+        get,
+        {
+          workspacePath,
+          workspaceIdentity: normalizedIdentity,
+          authorityKey: normalizedAuthorityKey,
+          configScope: normalizedConfigScope,
+          pluginService,
+        },
+      );
     },
 
     async refresh(pluginService = lastService, options = {}) {
       const { workspacePath, workspaceIdentity, authorityKey, configScope } = get();
-      if (!workspacePath || !pluginService) return;
+      if (!workspacePath) return;
+      if (!pluginService) {
+        set({
+          loading: false,
+          marketplaceAvailabilityKnown: false,
+          error: PLUGIN_MANAGEMENT_UNAVAILABLE,
+          lastFailedPluginId: null,
+        });
+        return;
+      }
       lastService = pluginService;
+      const revision = ++loadRevision;
       if (!options.background) set({ error: null, lastFailedPluginId: null });
-      await loadInto(set, get, {
-        workspacePath,
-        workspaceIdentity,
-        authorityKey,
-        configScope,
-        pluginService,
-        fresh: !options.background,
-        background: options.background,
-      });
+      await loadInto(
+        (partial) => {
+          if (revision === loadRevision) set(partial);
+        },
+        get,
+        {
+          workspacePath,
+          workspaceIdentity,
+          authorityKey,
+          configScope,
+          pluginService,
+          fresh: !options.background,
+          background: options.background,
+        },
+      );
       if (!options.background)
         notifyPluginManagementChange({
           owner: get,
@@ -406,84 +408,8 @@ export const createPluginManagementStore = (initialService?: IPluginManagementSe
       );
     },
 
-    async validateSource(source, pluginService) {
-      const { workspacePath, workspaceIdentity } = get();
-      if (!workspacePath) return;
-      const finish = beginPluginOperation(set, get, `marketplace:validate:${source}`);
-      const version = get().operationVersion;
-      try {
-        const result = await pluginService.validatePlugin({
-          workspacePath,
-          ...(workspaceIdentity ? { workspaceIdentity } : {}),
-          source,
-        });
-        if (get().operationVersion === version) set({ diagnostics: result.diagnostics });
-      } catch (error) {
-        logger.error("[plugins] validate source failed", { source, error: toMessage(error) });
-        if (get().operationVersion === version) {
-          set({ error: toMessage(error), lastFailedPluginId: null });
-        }
-      } finally {
-        finish();
-      }
-    },
-
     async setEnabled(pluginId, enabled, pluginService, scope = "user") {
       return setPluginEnabledOptimistically(set, get, pluginId, enabled, pluginService, scope);
-    },
-
-    async describePlugin(pluginId, pluginName, marketplace, pluginService, force = false) {
-      const { workspacePath, workspaceIdentity, describeCache } = get();
-      if (!workspacePath) return;
-      const cached = describeCache[pluginId];
-      // 已加载或正在加载时命中缓存，不重复请求；force 时强制重试。
-      if (!force && cached && cached.status !== "error") return;
-      const request: PluginDescribeEntry = { status: "loading" };
-      set({ describeCache: { ...get().describeCache, [pluginId]: request } });
-      try {
-        const data = await pluginService.describePlugin({
-          workspacePath,
-          ...(workspaceIdentity ? { workspaceIdentity } : {}),
-          marketplace,
-          pluginName,
-        });
-        // 旧项目或已被重试替代的 describe 响应不能回填当前详情缓存。
-        if (get().describeCache[pluginId] !== request) return;
-        const blockingDiagnostic = data.diagnostics?.find(
-          (diagnostic) => diagnostic.severity === "error",
-        );
-        if (data.components.length === 0 && blockingDiagnostic) {
-          // CLI 的 describe 对不可解析来源采用 diagnostics 回包而非 RPC reject。
-          // 旧 UI 把该回包缓存为 loaded，详情只显示空白且永远没有重试入口；这里将无组件的
-          // error diagnostic 映射成可恢复错误态，同时保留正常的部分成功回包。
-          set({
-            describeCache: {
-              ...get().describeCache,
-              [pluginId]: { status: "error", error: blockingDiagnostic.message },
-            },
-          });
-          return;
-        }
-        set({
-          describeCache: {
-            ...get().describeCache,
-            [pluginId]: { status: "loaded", data },
-          },
-        });
-      } catch (error) {
-        if (get().describeCache[pluginId] !== request) return;
-        logger.error("[plugins] describe failed", {
-          pluginId,
-          marketplace,
-          error: toMessage(error),
-        });
-        set({
-          describeCache: {
-            ...get().describeCache,
-            [pluginId]: { status: "error", error: toMessage(error) },
-          },
-        });
-      }
     },
   }));
 };
@@ -503,10 +429,3 @@ function subscribeStore(store: ReturnType<typeof createPluginManagementStore>) {
 }
 subscribeStore(usePluginManagementStore);
 
-/** 每个市场/管理视图持有独立查询投影，写入仍由同一个 CLI 插件服务负责。 */
-export function useScopedPluginManagementStore(pluginService: IPluginManagementService) {
-  // 服务切换后不能复用旧主机的目录和在途写入状态。
-  const store = useMemo(() => createPluginManagementStore(pluginService), [pluginService]);
-  useEffect(() => subscribeStore(store), [store]);
-  return store;
-}

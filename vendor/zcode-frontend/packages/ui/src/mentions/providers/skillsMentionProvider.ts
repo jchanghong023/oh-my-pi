@@ -1,11 +1,10 @@
 import { useMemo } from "react";
-import type { Locale, SkillScope, ZCodeProvider } from "@zcode/shared";
+import type { SkillScope, ZCodeProvider } from "@zcode/shared";
 import type { MentionCategoryResult, MentionItem } from "@/mentions/mentionTypes.js";
 import { filterMentionItemsWithOptions } from "@/mentions/mentionSearch.js";
 import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
 import { useSkills } from "@/hooks/useSkills.js";
 import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
-import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { resolveSkillDisplayDescription, resolveSkillSourceLabel } from "@/lib/builtinSkillI18n.js";
 
 export function mapSkillsToMentionItemsForTest(
@@ -17,7 +16,6 @@ export function mapSkillsToMentionItemsForTest(
     scope: SkillScope;
     pluginName?: string;
   }>,
-  locale?: Locale,
 ): MentionItem[] {
   const uniqueSkillsByName = new Map<string, (typeof skills)[number]>();
   const scopePriority: Record<SkillScope, number> = {
@@ -38,8 +36,8 @@ export function mapSkillsToMentionItemsForTest(
   const uniqueSkills = [...uniqueSkillsByName.values()];
 
   return uniqueSkills.map((skill) => {
-    const sourceLabel = resolveSkillSourceLabel(skill.scope, locale);
-    const description = resolveSkillDisplayDescription(skill, locale);
+    const sourceLabel = resolveSkillSourceLabel(skill.scope);
+    const description = resolveSkillDisplayDescription(skill);
     return {
       id: `skill:${skill.id}`,
       category: "skills",
@@ -67,7 +65,6 @@ export function useSkillsMentionProvider(
   emptyText: string,
   title: string,
 ): MentionCategoryResult {
-  const { locale } = useZCodeIntl();
   const { skills, loading, error } = useSkills({
     workspacePath,
     workspaceIdentity,
@@ -79,9 +76,8 @@ export function useSkillsMentionProvider(
     () =>
       mapSkillsToMentionItemsForTest(
         filterSkillsForProvider(skills, provider).filter((skill) => skill.enabled),
-        locale,
       ),
-    [locale, provider, skills],
+    [provider, skills],
   );
 
   const items = useMemo(

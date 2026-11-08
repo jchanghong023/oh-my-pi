@@ -83,7 +83,7 @@ function Fixture() {
   };
   return (
     <StoreContext.Provider value={store}>
-      <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
+      <ZCodeIntlProvider>
         <TooltipProvider>
           <main className="@container/plugin-store min-h-screen bg-background p-4 text-foreground">
             {detailOpen ? (

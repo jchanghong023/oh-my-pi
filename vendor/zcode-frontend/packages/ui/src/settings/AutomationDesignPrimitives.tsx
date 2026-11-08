@@ -42,7 +42,7 @@ export const AUTOMATION_FORM_FIELD_CLASSNAME = "flex flex-col gap-1.5";
 
 export type AutomationSettingsHistoryTab = "settings" | "history";
 
-/** 定时与闲时共用运行历史空态，防止透明留白与卡片容器样式再次漂移。 */
+/** 自动化运行历史空态。 */
 export function AutomationHistoryEmptyState({
   children,
 }: {
@@ -55,7 +55,7 @@ export function AutomationHistoryEmptyState({
   );
 }
 
-/** 定时与闲时设置页复用 Hooks scope tabs 的 pill 视觉，避免详情页分段样式漂移。 */
+/** 自动化设置与历史分段导航。 */
 export function AutomationSettingsHistoryTabs({
   value,
   settingsLabel,
@@ -101,11 +101,11 @@ export function AutomationKeepAwakeNotice({
         <AutomationInfoIcon className="size-4" />
       </span>
       <p className="min-w-0 flex-1 text-ui-base leading-5">
-        {intl.formatMessage({ id: "offPeak.keepAwakeBanner" })}
+        {intl.formatMessage({ id: "settings.keepAwakeWhileRunningDescription" })}
       </p>
       <AutomationSwitchToggle
         checked={checked}
-        ariaLabel={intl.formatMessage({ id: "offPeak.keepAwakeBanner" })}
+        ariaLabel={intl.formatMessage({ id: "settings.keepAwakeWhileRunning" })}
         onChange={onChange}
         color="blue"
         size="sm"

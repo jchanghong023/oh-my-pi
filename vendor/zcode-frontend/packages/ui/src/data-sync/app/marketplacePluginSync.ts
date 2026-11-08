@@ -6,17 +6,12 @@ import {
   type DataSyncListResult,
   type PluginDataSyncPayload,
   type PluginOptionSyncValue,
-  type IPlatformService,
-  type RemoteTarget,
   type ZCodePluginsInstallResult,
 } from "@zcode/shared";
 import {
-  withPluginTelemetry,
   type IDataSyncCategoryService,
-  type IPluginManagementService,
   type IServiceAccessor,
 } from "@zcode/services";
-import { reportAppTelemetryEvent } from "@/lib/appTelemetry.js";
 import { logger } from "@/logger.js";
 import {
   buildMarketplacePluginSyncItems,
@@ -36,65 +31,14 @@ import {
  * 方向只取决于调用方把哪一端当 source、哪一端当 target。
  */
 
-/** 一个插件在目标端导入结束后的终态，用于逐插件 sync 埋点。 */
-export interface PluginSyncOutcome {
-  pluginId: string;
-  marketplace: string;
-  result: DataSyncImportResultItem;
-  durationMs: number;
-}
-
-/** 推送中由弹窗注入：某项进入 / 离开可「停止」的阶段（远端 add / install），以及逐插件结果上报。 */
+/** 推送中由弹窗注入：某项进入 / 离开可「停止」的阶段（远端 add / install）。 */
 export interface DataSyncPushControl {
   setStoppable(key: string, stop: (() => void) | null): void;
-  reportPluginSyncResult?(outcome: PluginSyncOutcome): void;
 }
 
 /** 按行停止后该项的错误标记，弹窗显示为「已停止」。 */
 export const DATA_SYNC_STOPPED_ERROR = "stopped";
 
-function toPluginSyncTelemetryResult(item: DataSyncImportResultItem): string {
-  if (item.status === "created" || item.status === "updated") return "success";
-  if (item.status === "skipped") return "noop";
-  if (item.error === DATA_SYNC_STOPPED_ERROR) return "cancelled";
-  return "failure";
-}
-
-/**
- * 逐插件 sync 终态埋点（docs/monitoring/plugin-lifecycle-telemetry.md）。
- * 修复原因：旧插件同步弹窗删除后，逐插件「同步最终结果」的上报一起被删除，没有替代；
- * 底层 install / enable 的 trigger=sync 事件表达不了安装后版本核验、options 失败这类终态。
- * 只上报白名单字段，不带原始错误或路径；上报失败不影响同步结果。
- */
-export function createPluginSyncResultReporter(
-  platform: Pick<IPlatformService, "reportTelemetryEvent">,
-  remoteKind: RemoteTarget["kind"] | undefined,
-): (outcome: PluginSyncOutcome) => void {
-  return ({ pluginId, marketplace, result, durationMs }) => {
-    void reportAppTelemetryEvent(
-      platform,
-      {
-        elementName: "plugin_lifecycle",
-        eventRegion: "app",
-        eventType: "result",
-        eventExtraDetail: {
-          schema_version: "1",
-          action: "sync",
-          trigger: "sync",
-          scope: USER_SCOPE,
-          plugin_id: pluginId,
-          marketplace,
-          client_kind: "desktop",
-          workspace_kind: "remote",
-          ...(remoteKind ? { remote_kind: remoteKind } : {}),
-          result: toPluginSyncTelemetryResult(result),
-          duration_ms: String(Math.max(0, Math.round(durationMs))),
-        },
-      },
-      "DataSync",
-    );
-  };
-}
 
 type MarketplaceSourcePayload =
   | { kind: "official" }
@@ -156,16 +100,29 @@ function sameOptions(
   );
 }
 
+function requirePluginManagementService(services: IServiceAccessor) {
+  const service = services.pluginManagementService;
+  if (!service) throw new Error("Plugin management is unavailable on this host.");
+  return service;
+}
+
+function requirePluginSyncService(services: IServiceAccessor) {
+  const service = services.pluginSyncService;
+  if (!service) throw new Error("Plugin synchronization is unavailable on this host.");
+  return service;
+}
+
 /**
  * 该端 User scope 的插件视图。数据同步从设置页打开时没有项目：两端都以该端 Host 的 home
  * （systemService.info）作为 workspacePath、不带 workspace identity，与设置页远端 User scope 的口径一致。
  */
 async function readUserPlugins(services: IServiceAccessor) {
+  const management = requirePluginManagementService(services);
   const { homedir } = await services.systemService.info();
   const view = { workspacePath: homedir, configScope: USER_SCOPE };
   const [overview, list] = await Promise.all([
-    services.pluginManagementService.getPluginsOverview(view),
-    services.pluginManagementService.listPlugins(view),
+    management.getPluginsOverview(view),
+    management.listPlugins(view),
   ]);
   return {
     homeDir: homedir,
@@ -180,10 +137,13 @@ async function inspectMirrorBlocked(
   plugins: readonly UserMarketplacePlugin[],
 ): Promise<Set<string>> {
   const blocked = new Set<string>();
+  const groups = groupMirrorMarketplacePlugins(plugins);
+  if (groups.size === 0) return blocked;
+  const pluginSync = requirePluginSyncService(services);
   await Promise.all(
-    [...groupMirrorMarketplacePlugins(plugins)].map(async ([marketplaceId, group]) => {
+    [...groups].map(async ([marketplaceId, group]) => {
       try {
-        const inspection = await services.pluginSyncService.inspectMarketplaceSourceMirror({
+        const inspection = await pluginSync.inspectMarketplaceSourceMirror({
           marketplaceId,
           pluginNames: group.plugins.map((plugin) => plugin.installed.name),
           source: group.source,
@@ -229,7 +189,7 @@ export function createMarketplacePluginDataSyncService(
         .filter((candidate) => !mirrorBlocked.has(candidate.installed.id))
         .map((candidate) => candidate.installed.name);
       try {
-        const exported = await services.pluginSyncService.exportMarketplaceSourceArchive({
+        const exported = await requirePluginSyncService(services).exportMarketplaceSourceArchive({
           marketplaceId: marketplace.id,
           pluginNames,
           source: plan.source,
@@ -262,7 +222,9 @@ export function createMarketplacePluginDataSyncService(
     },
 
     // marketplace 镜像写入 ~/.zcode/plugins，安装与配置写入 ~/.zcode/cli，与 inline 插件的预检目录相同。
-    checkSyncWriteAccess: () => services.pluginSyncService.checkSyncWriteAccess(),
+    async checkSyncWriteAccess() {
+      return requirePluginSyncService(services).checkSyncWriteAccess();
+    },
 
     async exportSyncItems({ keys }) {
       const side = await readUserPlugins(services);
@@ -289,10 +251,7 @@ export function createMarketplacePluginDataSyncService(
     },
 
     async importSyncItems({ payload, items }): Promise<DataSyncImportResult> {
-      const management: IPluginManagementService = withPluginTelemetry(
-        services.pluginManagementService,
-        { trigger: "sync", client_kind: "desktop" },
-      );
+      const management = requirePluginManagementService(services);
       const { homedir } = await services.systemService.info();
       const workspace = { workspacePath: homedir };
       const overview = await management.getPluginsOverview({
@@ -339,7 +298,7 @@ export function createMarketplacePluginDataSyncService(
         let input = source.kind === "network" ? source.input : "";
         if (source.kind === "mirror") {
           input = (
-            await services.pluginSyncService.importMarketplaceSourceArchive({
+            await requirePluginSyncService(services).importMarketplaceSourceArchive({
               archive: source.archive,
             })
           ).path;
@@ -426,7 +385,6 @@ export function createMarketplacePluginDataSyncService(
       const results: DataSyncImportResultItem[] = [];
       // 逐项串行，每项单独成功或失败。
       for (const item of items) {
-        const startedAt = Date.now();
         let result: DataSyncImportResultItem;
         try {
           result = await importItem(item);
@@ -439,13 +397,6 @@ export function createMarketplacePluginDataSyncService(
           };
         }
         results.push(result);
-        const exported = payloadByKey.get(item.key);
-        control?.reportPluginSyncResult?.({
-          pluginId: exported?.pluginId ?? item.key,
-          marketplace: exported?.marketplace ?? item.key.slice(item.key.lastIndexOf("@") + 1),
-          result,
-          durationMs: Date.now() - startedAt,
-        });
       }
       return { results };
     },
@@ -463,10 +414,10 @@ export function createPluginCategoryDataSyncService(
   services: IServiceAccessor,
   control?: DataSyncPushControl,
 ): IDataSyncCategoryService<PluginCategorySyncPayload> {
-  const inline = services.pluginSyncService;
   const marketplace = createMarketplacePluginDataSyncService(services, control);
   return {
     async listSyncItems() {
+      const inline = requirePluginSyncService(services);
       const [inlineList, marketplaceList] = await Promise.all([
         inline.listSyncItems(),
         marketplace.listSyncItems(),
@@ -477,13 +428,19 @@ export function createPluginCategoryDataSyncService(
       };
     },
     // marketplace 条目只按版本比较，不会被请求哈希。
-    getSyncContentHashes: (params) => inline.getSyncContentHashes(params),
-    checkSyncWriteAccess: () => inline.checkSyncWriteAccess(),
+    async getSyncContentHashes(params) {
+      return requirePluginSyncService(services).getSyncContentHashes(params);
+    },
+    async checkSyncWriteAccess() {
+      return requirePluginSyncService(services).checkSyncWriteAccess();
+    },
     async exportSyncItems({ keys }) {
       const inlineKeys = keys.filter(isInlineKey);
       const marketplaceKeys = keys.filter((key) => !isInlineKey(key));
       const [inlinePayload, marketplacePayload] = await Promise.all([
-        inlineKeys.length > 0 ? inline.exportSyncItems({ keys: inlineKeys }) : undefined,
+        inlineKeys.length > 0
+          ? requirePluginSyncService(services).exportSyncItems({ keys: inlineKeys })
+          : undefined,
         marketplaceKeys.length > 0
           ? marketplace.exportSyncItems({ keys: marketplaceKeys })
           : undefined,
@@ -498,28 +455,12 @@ export function createPluginCategoryDataSyncService(
       const inlineItems = items.filter((item) => isInlineKey(item.key));
       const marketplaceItems = items.filter((item) => !isInlineKey(item.key));
       if (payload.inline && inlineItems.length > 0) {
-        // inline 插件按批导入，耗时为该批的耗时；整批失败时逐项上报失败后照常抛出。
-        const pluginIdByKey = new Map(
-          payload.inline.items.map((item) => [item.key, item.pluginId]),
-        );
-        const startedAt = Date.now();
-        const report = (result: DataSyncImportResultItem) =>
-          control?.reportPluginSyncResult?.({
-            pluginId: pluginIdByKey.get(result.key) ?? result.key,
-            marketplace: "inline",
-            result,
-            durationMs: Date.now() - startedAt,
-          });
-        let inlineResults: DataSyncImportResultItem[];
-        try {
-          inlineResults = (
-            await inline.importSyncItems({ payload: payload.inline, items: inlineItems })
-          ).results;
-        } catch (error) {
-          for (const item of inlineItems) report({ key: item.key, status: "failed" });
-          throw error;
-        }
-        for (const result of inlineResults) report(result);
+        const inlineResults = (
+          await requirePluginSyncService(services).importSyncItems({
+            payload: payload.inline,
+            items: inlineItems,
+          })
+        ).results;
         results.push(...inlineResults);
       }
       if (payload.marketplace && marketplaceItems.length > 0) {

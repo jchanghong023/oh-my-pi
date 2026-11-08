@@ -4,6 +4,7 @@ import type { IFileWatcherService } from "@zcode/services";
 import type { FileWatchEvent } from "@zcode/shared";
 import { logger } from "@/logger.js";
 import { getContainingDirectoryPath } from "@/lib/path.js";
+import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
 interface PptxFileWatchSnapshot {
   filePath: string | null;
@@ -39,6 +40,7 @@ export function usePptxFileWatch({
   filePath: string | null;
   fileWatcherService: IFileWatcherService;
 }): { ready: boolean; reloadGeneration: number } {
+  const watchingAvailable = useFileWatchingAvailable(fileWatcherService, Boolean(filePath));
   const [snapshot, setSnapshot] = useState<PptxFileWatchSnapshot>({
     filePath: null,
     fileWatcherService: null,
@@ -54,10 +56,10 @@ export function usePptxFileWatch({
     setSnapshot({
       filePath,
       fileWatcherService,
-      ready: false,
+      ready: !watchingAvailable,
       reloadGeneration: 0,
     });
-    if (!filePath) {
+    if (!filePath || !watchingAvailable) {
       return () => {
         cancelled = true;
       };
@@ -85,6 +87,7 @@ export function usePptxFileWatch({
         }
         watcherId = id;
         subscription = fileWatcherService.onDynamicChange(id)((event) => {
+          if (cancelled) return;
           if (!shouldReloadPptxPreviewForWatchEvent(event, filePath)) {
             return;
           }
@@ -142,10 +145,11 @@ export function usePptxFileWatch({
           });
       }
     };
-  }, [filePath, fileWatcherService]);
+  }, [filePath, fileWatcherService, watchingAvailable]);
 
   // 远程重连或 Host 替换会在 source path 不变时切换 workspace service。
   // ready 必须属于当前 watcher service，不能在 effect 清理前复用旧 service 的订阅状态。
+  if (!watchingAvailable && filePath) return { ready: true, reloadGeneration: 0 };
   return snapshot.filePath === filePath &&
     snapshot.fileWatcherService === fileWatcherService
     ? {

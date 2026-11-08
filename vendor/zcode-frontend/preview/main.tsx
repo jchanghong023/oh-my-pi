@@ -81,11 +81,7 @@ function BrowserApplication() {
   if (state.status === "connecting") return null;
 
   return (
-    <ZCodeIntlProvider
-      initialLocale="zh-CN"
-      settingService={state.services.settingService}
-      broadcastService={state.services.broadcastService}
-    >
+    <ZCodeIntlProvider>
       <Root
         services={state.services}
         platform={platform}

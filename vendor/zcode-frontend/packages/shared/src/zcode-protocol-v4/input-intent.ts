@@ -6,10 +6,8 @@ import { botGroupInputSourceSchema } from "../bots.js";
 import { z } from "zod";
 import { timestampSchema } from "./core.js";
 import { attachmentRefSchema } from "./attachment-ref.js";
-import { highspeedMessageMetaSchema } from "../highspeed.js";
 import { modelSelectionSchema } from "../model-selection.js";
 import { submissionModeSchema } from "./submission.js";
-import { sharedContextRefSchema } from "./shared-context-ref.js";
 
 export const conversationInputSourceSchema = z.discriminatedUnion("kind", [
   z
@@ -68,13 +66,11 @@ export const conversationInputIntentSchema = z
     mode: submissionModeSchema.optional(),
     planEnabled: z.boolean().optional(),
     genUiContext: genUiModelContextSchema.optional(),
-    sharedContextRefs: z.array(sharedContextRefSchema).max(1).optional(),
     delivery: conversationInputDeliverySchema,
     order: conversationInputOrderSchema,
     steer: conversationInputSteerSchema,
     dispatch: conversationInputDispatchSchema,
     admittedAt: timestampSchema,
-    highspeed: highspeedMessageMetaSchema.optional(),
     provenance: z
       .object({
         sourceCommandId: z.string().min(1),

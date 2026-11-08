@@ -10,7 +10,6 @@ import { remoteHostIdFromWorkspaceIdentity } from "@/project-sidebar/contract.js
 import type {
   ProjectSidebarProps,
   VirtualProject,
-  Locale,
   Theme,
 } from "@/project-sidebar/contract.js";
 import { useProjectPinIntent } from "@/project-sidebar/useProjectPinIntent.js";
@@ -43,7 +42,6 @@ import { ProjectSections } from "@/project-sidebar/ProjectSections.js";
 import { ProjectSidebarListHeader } from "@/project-sidebar/ProjectSidebarListHeader.js";
 import { ProjectSidebarNavigation } from "@/project-sidebar/ProjectSidebarNavigation.js";
 import { WorkspaceSidebarFooter } from "@/WorkspaceSidebarFooter.js";
-import { SidebarBottomActivity } from "@/sidebar-activity/SidebarBottomActivity.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useTabStoreApi } from "@/store/TabStoreProvider.js";
 import { useZCodeSessionStore } from "@/store/zcodeSessionStore.js";
@@ -71,7 +69,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
   } = useProjectDirectory();
   const { tree, pin } = useProjectPinIntent(authoritativeTree);
   const onSelectTask = useProjectTaskNavigation(props, tree, remoteService);
-  const { intl, localePreference, setLocalePreference } = useZCodeIntl();
+  const { intl } = useZCodeIntl();
   const tabStore = useTabStoreApi();
   const setTheme = useZCodeStore((state) => state.setTheme);
   const { view, setView } = preferences;
@@ -171,12 +169,7 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
   const openSettings = useCallback(() => {
     tabStore.getState().openSettingsTab();
   }, [tabStore]);
-  const changeLocale = useCallback(
-    (value: string) => setLocalePreference(value as Locale | "system"),
-    [setLocalePreference],
-  );
   const changeTheme = useCallback((value: string) => setTheme(value as Theme), [setTheme]);
-  const banner = useMemo(() => <SidebarBottomActivity />, []);
   return (
     <ProjectTaskListContext.Provider value={taskPresentation}>
       <SidebarTooltipProvider>
@@ -254,7 +247,6 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
                             stickyTarget={groupedSticky}
                             workspacePath={props.workspacePath}
                             workspaceIdentity={props.workspaceIdentity}
-                            onOpenAutomations={props.onOpenAutomations}
                             onCreate={(groupId) =>
                               action(() => start(undefined, undefined, groupId))
                             }
@@ -288,18 +280,9 @@ export const ProjectSidebar = memo(function ProjectSidebar(props: ProjectSidebar
               <WorkspaceSidebarFooter
                 className="pr-3"
                 theme={props.theme}
-                localeMenuValue={localePreference}
-                onLocaleChange={changeLocale}
                 onThemeChange={changeTheme}
                 onSettingsButtonClick={openSettings}
-                onUsageClick={openSettings}
-                onLogin={props.onLogin}
-                onLogout={props.onLogout}
-                user={props.user}
-                workspacePath={props.workspacePath}
-                workspaceIdentity={props.workspaceIdentity}
                 isDesktop={props.isDesktop}
-                banner={banner}
               />
             </div>
           </div>

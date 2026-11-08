@@ -70,11 +70,3 @@ export function writeSafeLocalStorage(key: string, value: string): void {
     // 写入失败不应阻断 UI 渲染，真实偏好下次仍可从 settingService 或默认值恢复。
   }
 }
-
-export function readNavigatorLanguage(): string | null {
-  if (typeof navigator === "undefined" || typeof navigator.language !== "string") {
-    return null;
-  }
-
-  return navigator.language;
-}

@@ -70,7 +70,9 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 			providers: [],
 			nativeSession: {
 				sessionId: session.sessionId,
+				workspacePath: session.sessionManager.getCwd(),
 				chatAvailable: true,
+				taskRunsAvailable: nativeChatRuntime(context).taskRunsAvailable,
 				models: session.getAvailableModels().map(model => ({
 					providerId: model.provider,
 					modelId: model.id,
@@ -87,12 +89,13 @@ export function createModelSelectionService(context: WebGuiServiceContext): WebG
 	};
 	let observedSessionId = session?.sessionId;
 	const runtimeChanges =
-		session &&
-		nativeChatRuntime(context).changes.event(() => {
-			if (session.sessionId === observedSessionId) return;
-			observedSessionId = session.sessionId;
-			publish();
-		});
+		session && !session.isDisposed && hasLiveOwner()
+			? nativeChatRuntime(context).changes.event(() => {
+					if (session.sessionId === observedSessionId) return;
+					observedSessionId = session.sessionId;
+					publish();
+				})
+			: undefined;
 	const unsubscribeSession = session?.subscribe(event => {
 		if (event.type === "model_changed" || event.type === "queue_update") publish();
 	});

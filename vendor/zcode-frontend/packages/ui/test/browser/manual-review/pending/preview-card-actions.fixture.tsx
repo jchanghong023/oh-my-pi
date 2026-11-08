@@ -68,7 +68,7 @@ function Fixture() {
 }
 
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale={locale}>
+  <ZCodeIntlProvider>
     <ServiceProvider services={services}>
       <PlatformProvider platform={platform}>
         <TabStoreProvider>

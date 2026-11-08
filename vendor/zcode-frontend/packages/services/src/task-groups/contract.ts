@@ -29,7 +29,7 @@ export interface MoveGroupNode {
   anchor?: { node: GroupNode; side: "before" | "after" };
 }
 export type GroupTaskFact = GroupTaskRef &
-  Pick<ZCodeTaskMeta, "cronAutomationId" | "offPeakTaskId"> & {
+  Pick<ZCodeTaskMeta, "cronAutomationId"> & {
     createdAt?: number;
     archived?: boolean;
     deleted?: boolean;

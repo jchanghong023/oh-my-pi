@@ -92,7 +92,7 @@ function Fixture() {
   const locate = useRef<((target: { unitIndex: number; rowId: number }) => void) | null>(null);
   return (
     <TooltipProvider>
-      <ZCodeIntlProvider initialLocale={query.get("mobile") === "true" ? "en-US" : "zh-CN"}>
+      <ZCodeIntlProvider>
         <div className="flex h-dvh min-w-0 flex-col bg-background text-foreground">
           <nav className="flex shrink-0 gap-2 text-ui-caption">
             <button onClick={() => setSession((value) => (value === "a" ? "b" : "a"))}>

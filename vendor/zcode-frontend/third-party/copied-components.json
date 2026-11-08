@@ -31,7 +31,6 @@
       "packages/ui/src/components/ai-elements/commit.tsx",
       "packages/ui/src/components/ai-elements/confirmation.tsx",
       "packages/ui/src/components/ai-elements/connection.tsx",
-      "packages/ui/src/components/ai-elements/context.tsx",
       "packages/ui/src/components/ai-elements/controls.tsx",
       "packages/ui/src/components/ai-elements/conversation.tsx",
       "packages/ui/src/components/ai-elements/edge.tsx",

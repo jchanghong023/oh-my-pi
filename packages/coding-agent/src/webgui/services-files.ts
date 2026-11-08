@@ -13,6 +13,8 @@ import type {
 	GitWorkspaceRepositoryInfo,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/git";
 import type { SystemInfo } from "../../../../vendor/zcode-frontend/packages/shared/src/protocol";
+import { createNativeFileMethods } from "./native-files";
+import { createNativeGitMethods } from "./native-git";
 import {
 	type WebGuiMethod,
 	WebGuiNotImplementedError,
@@ -28,8 +30,7 @@ function unavailable(feature: string): WebGuiMethod {
 }
 
 export function createFileServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
-	// TODO(omp-git): Connect repository discovery/status. These fields describe this
-	// attachment's unavailable Git capability, not a disk scan or a clean repository.
+	// Unbound attachments retain unavailable reads without scanning any native workspace.
 	const repositorySummary = (): GitRepositorySummary => ({
 		workspacePath: context.workspacePath ?? "",
 		repoRoot: "",
@@ -61,8 +62,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 
 	return [
 		createWebGuiService(ServiceChannels.File, {
-			// TODO(omp-files): Connect native directory/search/index, path/stat/read,
-			// workspace creation and ignore-file editing; do not invent files or paths.
+			// Workspace creation, unsupported previews and ignore-file edits remain unavailable.
 			searchWorkspaceFiles: unavailable("file.searchWorkspaceFiles"),
 			readdir: unavailable("file.readdir"),
 			stat: unavailable("file.stat"),
@@ -80,6 +80,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			readWorkspaceFileSearchIgnore: unavailable("file.readWorkspaceFileSearchIgnore"),
 			applyWorkspaceFileSearchIgnoreTransform: unavailable("file.applyWorkspaceFileSearchIgnoreTransform"),
 			writeWorkspaceFileSearchIgnore: unavailable("file.writeWorkspaceFileSearchIgnore"),
+			...(context.nativeSession ? createNativeFileMethods(context) : {}),
 		} satisfies Record<keyof IFileService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.MediaPreview, {
 			// TODO(omp-media): Connect native media authorization, bytes and URL lifecycle.
@@ -91,8 +92,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			getRepositorySummary: repositorySummary,
 			getWorkspaceRepositoryInfo: repositoryInfo,
 			refresh,
-			// TODO(omp-git): Connect native branch/history/diff/identity reads and Git
-			// mutations, including provider-backed commit-message generation.
+			// Unsupported reads and all Git mutations remain unavailable.
 			getLocalBranches: unavailable("git.getLocalBranches"),
 			getCommitGraph: unavailable("git.getCommitGraph"),
 			switchBranch: unavailable("git.switchBranch"),
@@ -108,6 +108,7 @@ export function createFileServices(context: WebGuiServiceContext): readonly WebG
 			commit: unavailable("git.commit"),
 			push: unavailable("git.push"),
 			getIdentity: unavailable("git.getIdentity"),
+			...(context.nativeSession ? createNativeGitMethods(context) : {}),
 		} satisfies Record<keyof IGitService, WebGuiMethod>),
 		createWebGuiService(ServiceChannels.GitCheckpoint, {
 			// TODO(omp-git-checkpoints): Connect native checkpoint storage/diff/restore.

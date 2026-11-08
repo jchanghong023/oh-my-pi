@@ -26,7 +26,6 @@ type FormatMessage = (descriptor: { id: string }, values?: Record<string, string
 const REASON_LABEL_KEY: Readonly<Record<string, string>> = {
   rate_limited: "throttle.reason.rateLimited",
   provider_overloaded: "throttle.reason.overloaded",
-  offpeak_queued: "throttle.reason.offpeak",
   server_error: "throttle.reason.transient",
   network_error: "throttle.reason.transient",
   timeout: "throttle.reason.transient",

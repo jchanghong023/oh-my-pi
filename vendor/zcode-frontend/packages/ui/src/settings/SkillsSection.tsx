@@ -29,7 +29,7 @@ import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { toast } from "@/components/ui/toast.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useBackendBusinessAvailable } from "@/hooks/useBackendBusinessAvailability.js";
-import { useConfigWorkspaceServicesResolution as useWorkspaceServicesResolution } from "@/workspace-config-catalog/index.js";
+import { useConfigWorkspaceReadCatalogResolution as useWorkspaceServicesResolution } from "@/workspace-config-catalog/useConfigWorkspaceServices.js";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog.js";
 import { buildSkillMentionMarkdown } from "@/mentions/mentionMarkdown.js";
 import { filterSkillsForProvider } from "@/lib/skillSourceFilter.js";
@@ -189,15 +189,19 @@ export function SkillsSection({
   // useConfirmDialog 是纯 Zustand selector（不含 useState），放在这里不会影响 SkillsSection
   // 既有的「按 useState 调用次序」单测桩（见下方 selectedSkill 附近的注释）。
   const confirmDialog = useConfirmDialog();
-  const activeWorkspacePath = workspacePath ?? null;
-  const activeWorkspaceIdentity = workspaceIdentity;
   const targetServiceResolution = useWorkspaceServicesResolution(
-    activeWorkspacePath,
+    workspacePath ?? null,
     remoteSessionId,
-    activeWorkspaceIdentity,
+    workspaceIdentity,
     remoteTarget,
     { unscopedServices, forceUnscoped: Boolean(cacheAuthorityKey || unscopedServices) },
   );
+  const nativeCatalog = targetServiceResolution.nativeCatalog;
+  const activeWorkspacePath = nativeCatalog
+    ? targetServiceResolution.nativeSession?.workspacePath ?? null
+    : workspacePath ?? null;
+  const activeWorkspaceIdentity = nativeCatalog ? undefined : workspaceIdentity;
+  const catalogReady = targetServiceResolution.catalogReady;
   // PluginsSection 已把 Scope target 传入，但 Skills 仍从当前 ServiceProvider
   // 取服务，导致跨远程 host 误路由。技能读写改用同一 target 解析结果。
   const { pluginManagementService, skillsService } = targetServiceResolution.services;
@@ -219,12 +223,13 @@ export function SkillsSection({
     activeWorkspacePath,
     activeWorkspaceIdentity,
     cacheAuthorityKey,
-  );
+  ) + targetServiceResolution.catalogKey;
   const projectionMatchesTarget =
     !activeWorkspacePath || loadedSkillTargetKey === activeSkillTargetKey;
 
   useEffect(() => {
-    if (!backendBusinessAvailable || !activeWorkspacePath || !targetServiceResolution.rpcReady)
+    if (!catalogReady || nativeCatalog || !backendBusinessAvailable || !pluginManagementService ||
+        !activeWorkspacePath || !targetServiceResolution.rpcReady)
       return;
     void initializePlugins({
       workspacePath: activeWorkspacePath,
@@ -235,6 +240,8 @@ export function SkillsSection({
     });
   }, [
     backendBusinessAvailable,
+    catalogReady,
+    nativeCatalog,
     activeWorkspaceIdentity,
     activeWorkspacePath,
     cacheAuthorityKey,
@@ -285,7 +292,7 @@ export function SkillsSection({
 
   const loadSkills = useCallback(
     async (showBlockingLoading: boolean) => {
-      if (!targetServiceResolution.rpcReady) return;
+      if (!catalogReady) return;
       if (!activeWorkspacePath) {
         setSkills([]);
         setCapability(null);
@@ -299,7 +306,7 @@ export function SkillsSection({
         activeWorkspacePath,
         activeWorkspaceIdentity,
         cacheAuthorityKey,
-      );
+      ) + targetServiceResolution.catalogKey;
       setLoading(showBlockingLoading);
       setError(null);
       const requestId = ++latestRequestIdRef.current;
@@ -331,12 +338,17 @@ export function SkillsSection({
       activeWorkspacePath,
       cacheAuthorityKey,
       skillsService,
-      targetServiceResolution.rpcReady,
+      catalogReady,
+      targetServiceResolution.catalogKey,
     ],
   );
 
   useEffect(() => {
-    if (!targetServiceResolution.rpcReady) {
+    setSelectedSkill(null);
+    setSkills([]);
+    setCapability(null);
+    setDiagnostics([]);
+    if (!catalogReady) {
       latestRequestIdRef.current += 1;
       setLoading(false);
       setError(null);
@@ -346,7 +358,10 @@ export function SkillsSection({
     // 首屏或切换 Scope target 时必须显示阻塞 loading；手动刷新仍走后台刷新，
     // 避免有当前 target 数据时整块闪烁。
     void loadSkills(true);
-  }, [activeWorkspacePath, loadSkills, targetServiceResolution.rpcReady]);
+    return () => {
+      latestRequestIdRef.current += 1;
+    };
+  }, [activeWorkspacePath, loadSkills, catalogReady]);
 
   const refresh = useCallback(async () => {
     await loadSkills(false);
@@ -362,7 +377,7 @@ export function SkillsSection({
 
   const setEnabled = useCallback(
     async (skillId: string, enabled: boolean) => {
-      if (!activeWorkspacePath) {
+      if (nativeCatalog || !activeWorkspacePath) {
         return;
       }
       // 移除三方来源后，技能状态统一写入 ZCode Agent 上下文，避免旧 provider 前缀带来分桶漂移。
@@ -391,6 +406,7 @@ export function SkillsSection({
     },
     [
       activeWorkspaceIdentity,
+      nativeCatalog,
       activeWorkspacePath,
       loadSkills,
       refreshSharedSkillStoreForCurrentWorkspace,
@@ -403,7 +419,7 @@ export function SkillsSection({
   // 复用应用根部已挂载的确认弹窗 store（useConfirmDialog），与子智能体删除流程保持一致。
   const handleDeleteSkill = useCallback(
     async (skill: SkillSummary) => {
-      if (!activeWorkspacePath || skill.scope === "plugin") {
+      if (nativeCatalog || !activeWorkspacePath || skill.scope === "plugin") {
         return;
       }
       const confirmed = await confirmDialog({
@@ -439,6 +455,7 @@ export function SkillsSection({
     },
     [
       activeWorkspaceIdentity,
+      nativeCatalog,
       activeWorkspacePath,
       confirmDialog,
       intl,
@@ -449,8 +466,9 @@ export function SkillsSection({
   );
 
   const scopedProviderSkills = useMemo(() => {
-    const allProviderSkills = filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
-    if (!backendBusinessAvailable) {
+    if (!catalogReady || !projectionMatchesTarget) return [];
+    const allProviderSkills = nativeCatalog ? skills : filterSkillsForProvider(skills, ZCODE_AGENT_PROVIDER);
+    if (nativeCatalog || !backendBusinessAvailable || !pluginManagementService) {
       // The resource list is authoritative without ZCode inventory. Plugin scope has no
       // user/workspace ownership field, so retain it rather than inventing membership.
       return allProviderSkills.filter(
@@ -468,6 +486,10 @@ export function SkillsSection({
     );
   }, [
     backendBusinessAvailable,
+    catalogReady,
+    projectionMatchesTarget,
+    nativeCatalog,
+    pluginManagementService,
     activeWorkspaceIdentity,
     activeWorkspacePath,
     installedPlugins,
@@ -510,7 +532,7 @@ export function SkillsSection({
     onVisibleCountChange?.(filteredSkillCount);
   }, [filteredSkillCount, onVisibleCountChange]);
   const handleCreateSkill = () => {
-    if (!activeWorkspacePath || !onCreateTask) {
+    if (nativeCatalog || !activeWorkspacePath || !onCreateTask) {
       return;
     }
     const effectiveProvider: ZCodeProvider = ZCODE_AGENT_PROVIDER;
@@ -544,7 +566,7 @@ export function SkillsSection({
     });
   };
 
-  const detailSkill = selectedSkill
+  const detailSkill = catalogReady && projectionMatchesTarget && selectedSkill
     ? (skills.find((skill) => skill.id === selectedSkill.id) ?? selectedSkill)
     : null;
   const selectedSkillPublishedAt = formatSkillPublishedAt(detailSkill?.metadata?.publishedAt);
@@ -621,7 +643,11 @@ export function SkillsSection({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {skill.scope === "plugin" ? null : (
+          {nativeCatalog ? (
+            <span className="text-ui-sm text-foreground-subtle">
+              {skill.enabled ? "Native · 只读" : "Native · 策略禁用"}
+            </span>
+          ) : skill.scope === "plugin" ? null : (
             <>
               <Switch
                 checked={skill.enabled}
@@ -657,9 +683,12 @@ export function SkillsSection({
 
   const skillHeaderActions = (
     <SettingsResourceHeaderActions
-      onRefresh={() => void Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()])}
-      onImport={() => setImportDialogOpen(true)}
-      onNew={handleCreateSkill}
+      onRefresh={() => void (nativeCatalog
+        ? refresh()
+        : Promise.all([refresh(), refreshSharedSkillStoreForCurrentWorkspace()]))}
+      onImport={nativeCatalog ? undefined : () => setImportDialogOpen(true)}
+      onNew={nativeCatalog ? undefined : handleCreateSkill}
+      refreshing={loading}
       importDisabled={!capability?.userScopeAvailable}
       importActionId="settings.skills.import.open"
       newActionId="settings.skills.create.open"
@@ -668,8 +697,14 @@ export function SkillsSection({
 
   return (
     <div className="space-y-4">
+      {nativeCatalog ? (
+        <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
+          当前 Native 会话的有效技能目录（只读）：{activeWorkspacePath ?? "未绑定会话"}。
+          策略禁用和资源读取失败见下方诊断；此处不支持启用、创建、导入或删除。
+        </div>
+      ) : null}
 
-      {targetServiceResolution.rpcReady && diagnostics.length > 0 ? (
+      {catalogReady && projectionMatchesTarget && diagnostics.length > 0 ? (
         <div className="overflow-hidden rounded-lg border border-amber-500/40 bg-amber-500/10 text-ui-base text-foreground">
           <button
             type="button"
@@ -733,19 +768,30 @@ export function SkillsSection({
         </div>
       ) : null}
 
-      {targetServiceResolution.rpcReady && !capability?.userScopeAvailable ? (
+      {catalogReady && capability && !nativeCatalog && !capability.userScopeAvailable ? (
         <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
           {intl.formatMessage({ id: "settings.skills.userScopeDesktopOnly" })}
         </div>
       ) : null}
 
-      {targetServiceResolution.rpcReady && error ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
-          {error}
+      {(projectionMatchesTarget && error) || targetServiceResolution.catalogError ? (
+        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-ui-base text-destructive">
+          {targetServiceResolution.catalogError?.message ?? error}
+          <Button type="button" variant="outline" size="sm" onClick={() => {
+            if (catalogReady) void refresh();
+            else targetServiceResolution.catalog.reload();
+          }}>{intl.formatMessage({ id: "common.refresh" })}</Button>
         </div>
       ) : null}
 
-      {!targetServiceResolution.rpcReady ? (
+      {nativeCatalog && !catalogReady && !targetServiceResolution.catalogError ? (
+        <div className="space-y-2 text-foreground-subtle">
+          <p>Native 会话未绑定，技能只读目录不可用。</p>
+          <Button variant="outline" onClick={targetServiceResolution.catalog.reload}>
+            {intl.formatMessage({ id: "common.refresh" })}
+          </Button>
+        </div>
+      ) : targetServiceResolution.catalogError ? null : !catalogReady ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.connecting" })} />
       ) : loading || !projectionMatchesTarget ? (
         <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
@@ -771,13 +817,13 @@ export function SkillsSection({
               renderSkillList(groupedSkills.local)
             ) : directInstalledSkillCount === 0 && !query.trim() ? (
               <PluginInstallEmptyState
-                title={intl.formatMessage({
+                title={nativeCatalog ? "此作用域没有已加载的 Native 技能" : intl.formatMessage({
                   id: "settings.plugin.skills.emptyInstalledTitle",
                 })}
-                description={intl.formatMessage({
-                  id: "settings.plugin.skills.emptyInstalledDescription",
-                })}
-                actions={
+                description={nativeCatalog
+                  ? "仅显示当前会话有效目录；策略与资源问题见诊断，不扫描其他配置档案。"
+                  : intl.formatMessage({ id: "settings.plugin.skills.emptyInstalledDescription" })}
+                actions={nativeCatalog ? undefined :
                   <>
                     <Button type="button" variant="default" size="lg" onClick={handleCreateSkill}>
                       <Plus data-icon="inline-start" aria-hidden="true" />
@@ -824,7 +870,7 @@ export function SkillsSection({
         </div>
       )}
       <Dialog
-        open={selectedSkill !== null}
+        open={detailSkill !== null}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedSkill(null);
@@ -901,16 +947,16 @@ export function SkillsSection({
                     mono
                     className="col-span-2"
                   />
-                  <SkillPathDetailField
-                    label={intl.formatMessage({
-                      id: "settings.skills.detail.path",
-                    })}
-                    path={detailSkill.path}
-                    openLabel={intl.formatMessage({
-                      id: "settings.skills.detail.openPath",
-                    })}
-                    onOpen={() => void openSkillFilePath(detailSkill.path)}
-                  />
+                  {nativeCatalog ? (
+                    <SkillDetailField label="Native 路径（只读）" value={detailSkill.path} mono />
+                  ) : (
+                    <SkillPathDetailField
+                      label={intl.formatMessage({ id: "settings.skills.detail.path" })}
+                      path={detailSkill.path}
+                      openLabel={intl.formatMessage({ id: "settings.skills.detail.openPath" })}
+                      onOpen={() => void openSkillFilePath(detailSkill.path)}
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -918,7 +964,7 @@ export function SkillsSection({
         </DialogContent>
       </Dialog>
       <SkillsImportDialog
-        open={importDialogOpen && targetServiceResolution.rpcReady}
+        open={importDialogOpen && catalogReady && !nativeCatalog}
         workspacePath={activeWorkspacePath}
         workspaceIdentity={activeWorkspaceIdentity}
         settingsSyncService={targetServiceResolution.services.settingsSyncService}

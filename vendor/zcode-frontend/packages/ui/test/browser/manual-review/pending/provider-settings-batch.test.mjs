@@ -11,7 +11,6 @@ import { chromium } from "playwright-core";
 import { registerProviderPresentationCases } from "./provider-settings-presentation-cases.mjs";
 import { registerProviderModelEditorCases } from "./provider-model-editor-cases.mjs";
 import { registerProgressiveModelEditorCases } from "./provider-model-editor-progressive-cases.mjs";
-import { registerOffPeakEligibilityCases } from "./offpeak-eligibility-cases.mjs";
 
 const root = fileURLToPath(new URL("../../../../../../", import.meta.url));
 const entry = "/packages/ui/test/browser/manual-review/pending/provider-settings-batch.fixture.tsx";
@@ -61,7 +60,6 @@ after(async () => {
 });
 
 const artifacts = join(tmpdir(), "zcode-provider-settings-batch");
-registerOffPeakEligibilityCases(() => ({ browser, origin }));
 registerProviderPresentationCases(() => ({ browser, origin, artifacts }));
 registerProviderModelEditorCases(() => ({ browser, origin, artifacts }));
 registerProgressiveModelEditorCases(() => ({ browser, origin, artifacts }));
@@ -302,33 +300,6 @@ for (const [width, locale, theme] of [
         join(artifacts, `header-options-${width}.json`),
         JSON.stringify({ mutations, visualEvidence }, null, 2),
       );
-    } finally {
-      await page.close();
-    }
-  });
-}
-for (const [width, locale, theme] of [
-  [390, "zh-CN", "light"],
-  [1200, "en-US", "dark"],
-]) {
-  test(`account has no provider toggle ${width}/${locale}/${theme}`, async () => {
-    const page = await browser.newPage({ viewport: { width, height: 900 } });
-    const mutations = [];
-    await page.route("**/mutation", async (route) => {
-      mutations.push(route.request().postDataJSON());
-      await route.fulfill({ status: 200, body: "{}" });
-    });
-    try {
-      await page.goto(
-        `${origin}fixture?${new URLSearchParams({ locale, theme, access: "account" })}`,
-      );
-      await page.getByTestId("detail").getByText("GLM-5.3", { exact: true }).waitFor();
-      assert.equal(await page.getByTestId("model-provider-enabled-switch").count(), 0);
-      assert.ok(
-        (await page.getByTestId("detail").getByRole("switch").count()) > 0,
-        "model switches remain available",
-      );
-      assert.deepEqual(mutations, [], "rendering must not save an enable override");
     } finally {
       await page.close();
     }

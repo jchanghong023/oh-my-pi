@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { DynamicWorkflowClientConfig } from "@zcode/shared";
-import type { ICodingPlanSubscriptionService } from "@zcode/services";
+import type { IRuntimePolicyService } from "@zcode/services";
 import { logger } from "@/logger.js";
 
 // ============================================================
@@ -39,14 +39,14 @@ export const UNAVAILABLE_DYNAMIC_WORKFLOW_SNAPSHOT: DynamicWorkflowAvailabilityS
 
 interface DynamicWorkflowAvailabilityState extends DynamicWorkflowAvailabilitySnapshot {
   /** 首次取数；同一个 service 出过结果后是 no-op，并发调用共用同一次请求。 */
-  ensureLoaded(service: ICodingPlanSubscriptionService): Promise<void>;
+  ensureLoaded(service: IRuntimePolicyService): Promise<void>;
   /** 绕过闩与 Host 的 1h 快照缓存重取（forceRefresh）。 */
-  refresh(service: ICodingPlanSubscriptionService): Promise<void>;
+  refresh(service: IRuntimePolicyService): Promise<void>;
   /**
    * 绕过闩但不 forceRefresh：用户改了动态工作流选择、Host 重发策略之后重读生效值
    * （launch.md「The user's choice」）。服务端的「提供」没变，不需要重拉 client/configs。
    */
-  reload(service: ICodingPlanSubscriptionService): Promise<void>;
+  reload(service: IRuntimePolicyService): Promise<void>;
 }
 
 const INITIAL_SNAPSHOT: DynamicWorkflowAvailabilitySnapshot = {
@@ -57,12 +57,12 @@ const INITIAL_SNAPSHOT: DynamicWorkflowAvailabilitySnapshot = {
 
 let inFlight: Promise<void> | null = null;
 /** 已经出过结果（成功或失败）的 service 实例；同一实例不再重复请求。 */
-let settledService: ICodingPlanSubscriptionService | null = null;
+let settledService: IRuntimePolicyService | null = null;
 
 type PublishSnapshot = (snapshot: DynamicWorkflowAvailabilitySnapshot) => void;
 
 async function loadDynamicWorkflowConfig(
-  service: ICodingPlanSubscriptionService,
+  service: IRuntimePolicyService,
   options: { forceRefresh?: boolean },
   publish: PublishSnapshot,
 ): Promise<void> {

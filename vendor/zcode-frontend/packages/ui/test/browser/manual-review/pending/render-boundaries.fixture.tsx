@@ -359,7 +359,7 @@ function SearchNavigation() {
   );
 }
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="en-US">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       {params.get("mode") === "draft" ? (
         <DraftOwner />

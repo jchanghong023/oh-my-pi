@@ -4,10 +4,14 @@ import type {
   ZCodeSessionContentProfile,
 } from "@zcode/shared";
 /* eslint-disable max-lines -- ZCode agent service 接口集中声明 protocol/session/workspace 方法，拆分会增加 service descriptor 迁移成本。 */
-import type { RemoteConversationTelemetryEvent } from "@zcode/shared/conversation-telemetry";
 import type { Event, IDisposable } from "@zcode/rpc";
 import { ServiceChannels } from "@zcode/shared";
-import type { AppUsageRange, AppUsageSnapshot, ZCodeTaskTokenUsageResult } from "@zcode/shared";
+import type {
+  NativeTaskOutputContent,
+  NativeTaskOutputRequest,
+  NativeTaskRunsRequest,
+  NativeTaskRunsSnapshot,
+} from "@zcode/shared";
 import type { DynamicWorkflowMode } from "@zcode/shared";
 import type { ZCodeAutomation, ZCodeAutomationRun } from "@zcode/shared";
 import type {
@@ -85,7 +89,6 @@ import type {
   CommandKey,
   CommandsQueryResult,
   ConversationTopicWireCandidate,
-  ConversationTelemetryFact,
   CuaPermissionObservation,
   ConversationRowTarget,
   HelloMessage,
@@ -242,13 +245,6 @@ export interface ZCodeAgentListSessionSubagentsParams extends ZCodeAgentSessionT
   /** 远程 workspace 的宿主连接身份；只用于选择现有 Host，不进入 CLI wire query。 */
   remoteSessionId?: string;
 }
-
-export interface ZCodeAgentAppUsageParams {
-  range: AppUsageRange;
-  timeZone?: string;
-}
-
-export interface ZCodeAgentTaskTokenUsageParams extends ZCodeAgentSessionTarget {}
 
 export interface ZCodeAgentReadSessionParams extends ZCodeAgentSessionTarget {
   deliveryKind?: ZCodeDeliveryKind;
@@ -655,7 +651,14 @@ export interface IZCodeAgentService {
   listSessionSubagents(
     params: ZCodeAgentListSessionSubagentsParams,
   ): Promise<ZCodeSessionSubagentsResult>;
-  getAppUsageStats(params: ZCodeAgentAppUsageParams): Promise<AppUsageSnapshot>;
+  /** Observed native task/workpool runs; absent on non-native hosts. */
+  listNativeTaskRuns?(
+    params: ZCodeAgentWorkspaceTarget & NativeTaskRunsRequest,
+  ): Promise<NativeTaskRunsSnapshot>;
+  readNativeTaskOutput?(
+    params: ZCodeAgentWorkspaceTarget & NativeTaskOutputRequest,
+  ): Promise<NativeTaskOutputContent>;
+  readonly onNativeTaskRunsChanged?: Event<{ sessionId: string; revision: number }>;
   /** 项目数据删除前的测量：只读，用本机已有 runtime 或管理面进程，不为某个项目拉起 Agent。 */
   measureSessionData?(params: V4SessionDataParams): Promise<V4SessionDataMeasureResult>;
   /**
@@ -665,7 +668,6 @@ export interface IZCodeAgentService {
   purgeSessionData?(
     params: V4SessionDataParams & { workspace: ZCodeAgentWorkspaceTarget },
   ): Promise<V4SessionDataPurgeResult>;
-  getTaskTokenUsage(params: ZCodeAgentTaskTokenUsageParams): Promise<ZCodeTaskTokenUsageResult>;
   readSession(params: ZCodeAgentReadSessionParams): Promise<ZCodeSessionStateSnapshot>;
   readSessionMessages(
     params: ZCodeAgentReadSessionMessagesParams,
@@ -824,10 +826,7 @@ export interface IZCodeAgentService {
    * 该事件不属于 session/conversation continuous 或 replayable 状态。
    */
   onDynamicProcessResourceSample(): Event<AgentLaneResourceSample>;
-  /** MCP 进程生命周期与低频内存事件，仅供可信 Host relay 上报 ARMS。 */
-  /** 仅 trusted Host relay 订阅；手机统计不依赖 renderer 生命周期。 */
-  onDynamicRemoteConversationTelemetry(): Event<RemoteConversationTelemetryEvent>;
-
+  /** MCP 进程生命周期与低频内存事件，仅供可信 Host relay 诊断。 */
   onDynamicMcpTelemetry(): Event<ZCodeMcpTelemetryEvent>;
   /** MCP 进程树资源事实，只供可信 Host 汇总上报。 */
   onDynamicMcpResourceSamples(): Event<ZCodeMcpResourceSample[]>;
@@ -936,20 +935,10 @@ export interface IZCodeAgentService {
   onDynamicConversationFrame(
     params: ZCodeAgentWorkspaceTarget,
   ): Event<ConversationTopicWireCandidate>;
-  /** workspace 级 live telemetry 事实；connection facade 仅向可信 desktop-continuous 下游暴露。 */
+  /** 本地桌面首 token 时延事实，不进入远程会话流。 */
   onDynamicLocalTtftFacts(
     params: ZCodeAgentWorkspaceTarget,
   ): Event<import("@zcode/shared").LocalTtftFacts>;
-  onDynamicConversationTelemetryFact(
-    params: ZCodeAgentWorkspaceTarget,
-  ): Event<ConversationTelemetryFact>;
-  /** Host 消费驻留 CLI 的闲时生命周期；不参与聊天快照恢复。 */
-  onDynamicOffPeakLifecycle(
-    params: ZCodeAgentWorkspaceTarget,
-  ): Event<import("@zcode/shared").OffPeakLifecycleNotification>;
-  controlOffPeakExecutionV4(
-    params: ZCodeAgentWorkspaceTarget & { control: import("@zcode/shared").OffPeakControlParams },
-  ): Promise<import("@zcode/shared").OffPeakControlResult>;
   /** 当前窗口全部本地 live task 的 CUA 权限观察；历史、远程与 replayable 不在此事件面。 */
   onDynamicCuaPermissionObservation(): Event<ZCodeAgentCuaPermissionObservation>;
   /** 只读 CLI 持久事实；不恢复会话运行实例。旧远端可以不提供此能力。 */

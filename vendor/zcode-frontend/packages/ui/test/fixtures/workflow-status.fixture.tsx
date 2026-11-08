@@ -174,7 +174,7 @@ function Fixture() {
     },
   } as unknown as ToolCallBlockRenderContext;
   return (
-    <ZCodeIntlProvider initialLocale="en-US">
+    <ZCodeIntlProvider>
       <TooltipProvider>
         {[
           "running",

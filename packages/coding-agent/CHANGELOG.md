@@ -4,14 +4,20 @@
 
 ### Added
 
-- Open WebGUI with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to close this instance's web service and restore terminal input.
+- Open WebGUI with `/webgui` or `omp webgui` from source or packaged OMP; enter `/webgui` again to close this instance's web service and restore terminal input.
 - Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels.
 - Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
 - Read native OMP session histories and send basic text messages with streaming replies synchronized across connected WebGUI browsers, without changing the original TUI.
+- Inspect native subagent conversations and observed task/workpool ancestry, status, actors and outputs without starting another execution engine.
+- Browse native workspace files, Git changes/history, effective Skills and loaded MCP configuration/status through read-only WebGUI adapters.
 
 ### Changed
 
 - Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
+- Load WebGUI code/diff highlighting workers only when opening a viewer, instead of on the empty home page.
+- Use a Chinese-only WebGUI without language-switching resources or controls.
+- Continue historical conversations across working directories using native workspace rebinding and project ownership checks.
+- Ship fingerprint-checked WebGUI resources in binary and npm builds without a runtime source checkout, Vite server or download.
 
 - Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.
 
@@ -20,15 +26,31 @@
 - Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and MCP/Skill pages.
 - Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
 - Removed placeholder WebGUI RPC registrations for purchases, plugin management, remote workspaces and terminals; retained native chat, session history and temporary model selection.
-- Removed orphaned purchase UI, payment SDKs/assets and remote-control-only Web code while preserving normal Web and sharing entry points.
+- Removed orphaned purchase UI, payment SDKs/assets and remote-control-only Web code while preserving direct browser access.
 - Removed WebGUI terminal panels and shortcut, deployment/browser launchers, and ZCode app-plugin interfaces with their dedicated placeholder integrations; native OMP tools and plugins remain unchanged.
+- Removed unused ZCode plugin recommendation/install flows, Relay/MessagePort clients, the orphaned Bots dialog and hidden Claude session-migration page; shared project navigation and native capability views remain.
+- Removed ZCode marketing, rewards, Highspeed cards, Coding Plan entitlement/reset interactions, feedback tickets, product analytics, cloud sharing, off-peak subscription tasks, account login, occupation surveys and office promotions; retained native development views and ordinary automation.
+- Removed the retired products' placeholder WebGUI backend interfaces and client proxies; retained unbound interfaces for native chat, subagents, files/Git, Workflow, MCP/Skill and model capabilities.
+- Removed unused Bots helpers, retired migration-page selection state, legacy RPC remote wrappers and retired-product resources/fixtures while retaining direct browser transport and practical onboarding.
+- Removed unused frontend state, legacy plugin/update/relay wrappers, retired Treemapping UI, orphaned resources and unused drag-and-drop dependencies; retained chat Workflow animations and shared development capabilities.
+- Remove WebGUI usage and cost statistics pages, charts, counters and dedicated service interfaces; native accounting and `omp stats` remain unchanged.
 
 ### Fixed
 
+- Restore WebGUI startup, settings navigation and automation-page rendering after product-only interface removal; keep unbound capabilities explicitly unavailable.
+- Preserve project and task-group identity when resending recovered commands; retain visible Provider save/delete errors and current automation edits.
+- Keep RPC subscriptions and pending requests consistent across initialization, cancellation, timeout and re-subscription.
+- Keep onboarding discovery scoped to the current workspace and display actual import errors; preserve explicit preview themes and current-generation Git requests.
+- Serve PDF workers and Chinese CMaps through the production WebGUI build, and separate Workflow landing feedback from its entry animation.
 - Keep WebGUI session history visible during refresh and apply the browser's theme background to the sidebar.
+- Enable explicit WebGUI history continuation before its runtime is active; keep sending and model changes blocked until native recovery is confirmed.
+- Keep native task runs, Actor messages and outputs readable after continuing a WebGUI conversation in another directory.
+- Serve packaged WebGUI notification audio instead of returning 404.
+- Report unbound provider/configuration reads as unavailable instead of returning empty native configuration.
 - Fix standalone Web license-resource delivery and remove service-package exports that pointed to absent host-only implementations.
 - Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
 - Open WebGUI on Firefox 68 without a blank page or collapsed layout, while retaining the same production resources for Chrome.
+- Restore Firefox 68 code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
 - Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
 - Serve the Dev favicon from the same embedded capability-scoped resources as the page.

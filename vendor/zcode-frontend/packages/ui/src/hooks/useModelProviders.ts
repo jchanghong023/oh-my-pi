@@ -6,7 +6,6 @@ import { useServices } from "@/hooks/useServices.js";
 import { logger } from "@/logger.js";
 import { useProviderSettingsServiceView } from "@/hooks/useProviderSettingsView.js";
 import {
-  projectProviderSettingsViewToFormProviders,
   resolveProviderSettingsFormProviders,
   resolveProviderOrdering,
 } from "@/lib/providerSettingsFormProjection.js";
@@ -75,12 +74,11 @@ export function useModelProviders(target: {
   }, [commitProviderSettingsView, providerSettingsService]);
 
   const saveProvider = useCallback(
-    async (provider: ProviderSettingsFormProvider) => {
+    async (provider: ProviderSettingsFormProvider): Promise<void> => {
       // 新建 Provider 尚未进入 Registry，自然也不会出现在当前 Settings View。
       // 保存边界允许缺少继承层，并直接从新建表单构造完整配置。
       const savedView = await persistPersonalProvider({ provider, providerSettingsService });
       commitProviderSettingsView(savedView);
-      return projectProviderSettingsViewToFormProviders(savedView);
     },
     [commitProviderSettingsView, providerSettingsService],
   );

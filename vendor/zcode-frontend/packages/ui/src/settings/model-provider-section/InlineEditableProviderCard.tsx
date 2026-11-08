@@ -79,12 +79,9 @@ export function runProviderDeleteWithDraftCleanupGuard({
   try {
     const result = onDelete();
     if (isPromiseLike(result)) {
-      void Promise.resolve(result)
-        .catch(() => undefined)
-        .finally(() => {
-          deleteRequestedRef.current = false;
-        });
-      return;
+      return Promise.resolve(result).finally(() => {
+        deleteRequestedRef.current = false;
+      });
     }
   } catch (error) {
     deleteRequestedRef.current = false;
@@ -738,11 +735,36 @@ export function InlineEditableProviderCard({
     [onReorderModelIds, optimisticModelOrder, provider.providerId],
   );
 
-  const handleDeleteProvider = useCallback(() => {
-    runProviderDeleteWithDraftCleanupGuard({
-      deleteRequestedRef,
-      onDelete,
-    });
+  const handleDeleteProvider = useCallback(async () => {
+    const notification = saveNotificationRef.current;
+    const feedbackKey = `provider-delete:${notification.providerId}`;
+    notification.dismissFeedback(feedbackKey);
+    try {
+      await runProviderDeleteWithDraftCleanupGuard({
+        deleteRequestedRef,
+        onDelete,
+      });
+    } catch (error) {
+      logger.error("[ModelProviderSection] 删除模型供应商失败", error);
+      notification.showFeedback({
+        key: feedbackKey,
+        message: notification.formatMessage(
+          { id: "settings.modelProvider.providerDeleteFailure" },
+          {
+            provider: notification.providerDisplayName,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        ),
+        state: "failure",
+        durationMs: 0,
+        actionLabel: notification.formatMessage({ id: "common.retry" }),
+        onAction: () => {
+          void handleDeleteProvider();
+        },
+        dismissible: true,
+        dismissLabel: notification.formatMessage({ id: "common.close" }),
+      });
+    }
   }, [onDelete]);
 
   const headerProviderName = providerDisplayName;

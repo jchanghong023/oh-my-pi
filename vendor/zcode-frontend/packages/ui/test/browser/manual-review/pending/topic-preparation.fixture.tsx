@@ -37,7 +37,7 @@ function Fixture() {
     ? ([{ kind: "userInput", botGroupSource: { messageId: "first" } }] as UserInputRow[])
     : [];
   return (
-    <ZCodeIntlProvider initialLocale={chinese ? "zh-CN" : "en-US"}>
+    <ZCodeIntlProvider>
       <TooltipProvider>
         <main className="min-h-screen bg-background p-6 text-foreground @container/conversation">
           <div className="mx-auto flex max-w-3xl flex-col items-end" data-testid="formal">

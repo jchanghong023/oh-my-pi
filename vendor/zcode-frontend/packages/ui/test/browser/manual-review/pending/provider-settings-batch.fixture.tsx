@@ -24,8 +24,6 @@ import {
 } from "@/lib/providerSettingsFormTypes.js";
 import release from "../../../../../../config/provider/zcode-builtin.json";
 import { ProviderModelEditorFixture } from "./provider-model-editor.fixture.js";
-import { OffPeakEligibilityFixture } from "./offpeak-eligibility.fixture.js";
-import { OffPeakTeamEntryFixture } from "./offpeak-team-entry.fixture.js";
 import "@/styles.css";
 import { Checkbox } from "@/components/ui/checkbox.js";
 
@@ -42,19 +40,6 @@ function createProvider(templateId: string): ProviderSettingsFormProvider {
     group: "standard-personal" as const,
     access: { ...template.config.access, apiKey: "fixture-key" },
   };
-  const startPlan = params.get("access")?.startsWith("start-");
-  if (params.get("access") === "account" || params.get("access") === "team" || startPlan) {
-    config.access = {
-      type: "zhipu-account",
-      accountType: params.get("access") === "start-zai" ? "zai" : "bigmodel",
-      mode: startPlan
-        ? "start-plan"
-        : params.get("access") === "team"
-          ? "team-coding-plan"
-          : "individual-coding-plan",
-      entitled: true,
-    };
-  }
   return {
     providerId: "fixture",
     providerName: "Fixture Provider",
@@ -111,7 +96,7 @@ function Fixture() {
             statusTooltip={getToolCallErrorText({
               status: "failed",
               error:
-                "Cannot start subagent: No reasoning level selected / 未选择思考档位 [reason=reasoning-level-missing; selection=account:bigmodel-team-coding-plan/GLM-5.3]",
+                "Cannot start subagent: No reasoning level selected / 未选择思考档位 [reason=reasoning-level-missing; selection=fixture/GLM-5.3]",
             })}
           />
         </section>
@@ -177,7 +162,6 @@ function Fixture() {
               },
             ]}
             selectedNodeKey="fixture"
-            presetLoading={false}
             customLoading={false}
             onSelectNavItem={() => setPicker(false)}
             onReorderProviderIds={async (ids) => {
@@ -262,12 +246,8 @@ createRoot(document.getElementById("root")!).render(
     }
   >
     <TooltipProvider>
-      <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
-        {params.has("teamEntry") ? (
-          <OffPeakTeamEntryFixture />
-        ) : params.has("offpeak") ? (
-          <OffPeakEligibilityFixture />
-        ) : params.has("editor") ? (
+      <ZCodeIntlProvider>
+        {params.has("editor") ? (
           <ProviderModelEditorFixture />
         ) : (
           <Fixture />

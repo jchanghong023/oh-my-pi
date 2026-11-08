@@ -29,7 +29,7 @@ export function SandboxSessionActionsProvider({
     // 修复：发送配置变更会重建回调，但不应让同一挂载中的待确认请求失效。
     return registerPluginUiSessionActions(
       scope,
-      createPluginUiSessionActions(scope, {
+      createPluginUiSessionActions({
         sendText: (...args) => port.current.sendText(...args),
       }),
     );

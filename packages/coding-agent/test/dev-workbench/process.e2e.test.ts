@@ -155,7 +155,12 @@ test("ordinary TUI remains unchanged before Dev and restores original model, ima
 				await tui("expect", "text", url, "--link", url);
 				expect(mouseMode).toBe("none");
 				await tui("resize", "64", "36");
-				const narrow = await tui("text");
+				// resize 返回时重绘可能尚未消费 SIGWINCH；等待完整能力地址，不能读取中间帧。
+				const narrow = await eventually(
+					() => tui("text"),
+					value => value.replace(/\s+/gu, "").includes(url),
+					5_000,
+				);
 				expect(narrow.replace(/\s+/gu, "")).toContain(url);
 				await tui("resize", "120", "36");
 				const bootstrap = await fetch(new URL("api/browser", base));

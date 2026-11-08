@@ -62,8 +62,7 @@ after(async () => {
 
 for (const mobile of [false, true])
   for (const theme of ["light", "dark"])
-    for (const highspeed of [false, true]) {
-      test(`HK08/HK11 ${mobile ? "mobile" : "desktop"}/${theme}/${highspeed ? "highspeed-no-text" : "normal"}`, async () => {
+      test(`HK08/HK11 ${mobile ? "mobile" : "desktop"}/${theme}`, async () => {
         const page = await browser.newPage({
           viewport: { width: mobile ? 390 : 1200, height: 800 },
           isMobile: mobile,
@@ -71,20 +70,16 @@ for (const mobile of [false, true])
         });
         const errors = [];
         page.on("pageerror", (error) => errors.push(String(error)));
-        const prefix = `${mobile ? "mobile" : "desktop"}-${theme}-${highspeed ? "highspeed-no-text" : "normal"}`;
+        const prefix = `${mobile ? "mobile" : "desktop"}-${theme}`;
         try {
           await page.goto(
-            `${origin}fixture?mobile=${mobile}&theme=${theme}&highspeed=${highspeed}`,
+            `${origin}fixture?mobile=${mobile}&theme=${theme}`,
           );
           const turn = page.locator('[data-turn-id="hook-footer"]');
           await turn.waitFor();
           const hook = turn.getByTestId("v4-hook-details-trigger-hook-footer");
           assert.equal(await hook.count(), 1, "同一轮必须恰好一个 Hook 入口");
-          assert.equal(
-            await turn.locator('[data-highspeed-output-footer="true"]').count(),
-            Number(highspeed),
-          );
-          assert.equal(await turn.getByTestId("v4-copy-4").count(), Number(!highspeed));
+          assert.equal(await turn.getByTestId("v4-copy-4").count(), 1);
           if (!mobile) await turn.hover();
           await hook.waitFor({ state: "visible" });
           await hook.evaluate(async (element) => {
@@ -123,4 +118,3 @@ for (const mobile of [false, true])
           await page.close();
         }
       });
-    }

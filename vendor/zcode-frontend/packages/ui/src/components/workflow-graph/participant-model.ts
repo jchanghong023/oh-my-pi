@@ -9,7 +9,6 @@ import {
   type WorkflowCausalityGraphData,
   type WorkflowHandoffData,
   type WorkflowParticipantData,
-  type WorkflowPhaseData,
 } from "./types.js";
 
 /**
@@ -68,65 +67,6 @@ export function participantsOfPhase(
   );
 }
 
-export function participantById(
-  graph: WorkflowCausalityGraphData,
-  id: string,
-): WorkflowParticipantData | undefined {
-  return graph.participants.find((participant) => participant.id === id);
-}
-
-/** 两端都在给定集合里的交接边（阶段内部的边）。 */
-export function handoffsWithin(
-  graph: WorkflowCausalityGraphData,
-  ids: ReadonlySet<string>,
-): WorkflowHandoffData[] {
-  return graph.handoffs.filter((edge) => ids.has(edge.from) && ids.has(edge.to));
-}
-
-export function handoffsAround(
-  graph: WorkflowCausalityGraphData,
-  id: string,
-): { incoming: WorkflowHandoffData[]; outgoing: WorkflowHandoffData[] } {
-  return {
-    incoming: graph.handoffs.filter((edge) => edge.to === id),
-    outgoing: graph.handoffs.filter((edge) => edge.from === id),
-  };
-}
-
-/** 卡片次行的计数素材：ask 数与工作区读取数（一张卡只会有其中一种非零）。 */
-export interface ParticipantCounts {
-  asks: number;
-  reads: number;
-}
-
-export function participantCounts(
-  graph: WorkflowCausalityGraphData,
-  participant: WorkflowParticipantData,
-): ParticipantCounts {
-  const kinds = new Map(graph.steps.map((step) => [step.id, step.kind]));
-  let asks = 0;
-  let reads = 0;
-  for (const id of participant.steps) {
-    const kind = kinds.get(id);
-    // 留白自己的站点（kind `hole`）不是 ask：那里还没有代码。
-    if (kind === "hole") continue;
-    if (kind === "world-read") reads += 1;
-    else asks += 1;
-  }
-  return { asks, reads };
-}
-
-/** 任一 step 带 `repeat` ⇒ 卡片显示重复图元（自环在参与者粒度上消失，这是它留下的线索）。 */
-export function participantRepeats(
-  graph: WorkflowCausalityGraphData,
-  participant: WorkflowParticipantData,
-): boolean {
-  const repeating = new Set(
-    graph.steps.filter((step) => step.repeat !== undefined).map((step) => step.id),
-  );
-  return participant.steps.some((id) => repeating.has(id));
-}
-
 /**
  * 多个 step 状态的折叠：收集名下**存在条目**的 step 的状态，交给 `aggregateRunStatuses`
  * （唯一的折叠，格见那里）。没有条目的 step 不参与——它是控制流没走的站点，不是排队中的
@@ -155,19 +95,6 @@ export function participantStatus(
   participantStatuses?: Record<string, StepRunStatus>,
 ): StepRunStatus | undefined {
   return participantStatuses?.[participant.id] ?? collapseStatuses(participant.steps, statuses);
-}
-
-/** 同一条车道还出现在哪些其他阶段（检视器「also in」一行）。 */
-export function participantAlsoIn(
-  graph: WorkflowCausalityGraphData,
-  participant: WorkflowParticipantData,
-): WorkflowPhaseData[] {
-  const phases = new Set(
-    graph.participants
-      .filter((other) => other.lane === participant.lane && other.phase !== participant.phase)
-      .map((other) => other.phase),
-  );
-  return (graph.phases ?? []).filter((phase) => phases.has(phase.id));
 }
 
 /** 拆分出的实例卡 id：`${participant.id}@${ordinal}`。 */

@@ -19,6 +19,8 @@ import type { AgentSessionEvent } from "../session/agent-session-events";
 import { loadSessionMessagesReadOnly, normalizeAssistantUsage } from "../session/session-loader";
 import { SessionManager } from "../session/session-manager";
 import { sessionDisplayName, type SessionInfo } from "../session/session-listing";
+import { nativeCwdHost } from "./native-cwd";
+import { NativeChildDirectory, type OwnedNativeChild } from "./native-subagents";
 import { readBrowserProject } from "./project-registry";
 import { WebGuiNotImplementedError, type WebGuiServiceContext } from "./rpc-contract";
 
@@ -96,8 +98,71 @@ export class NativeChatRuntime {
 	#streamMessage?: AgentMessage;
 	#lastSessionId: string;
 	#submitting = false;
+	#resuming = false;
 	indexVersion = 0;
 	#history = new Map<string, SessionInfo>();
+	#children?: NativeChildDirectory;
+	#unsubscribeChildren?: () => void;
+	#taskRunAdapters = 0;
+
+	get childDirectory(): NativeChildDirectory | undefined {
+		if (!this.#references || !this.session.agentRegistry) return undefined;
+		if (!this.#children) {
+			this.#children = new NativeChildDirectory(this.session);
+			this.#unsubscribeChildren = this.#children.subscribe(change => {
+				for (const id of change.sessionIds) {
+					this.state(id).seq++;
+					this.changes.fire(id);
+				}
+			});
+		}
+		return this.#children;
+	}
+
+	get taskRunsAvailable(): boolean {
+		return this.#taskRunAdapters > 0;
+	}
+
+	registerTaskRuns(): () => void {
+		this.#taskRunAdapters++;
+		return () => {
+			this.#taskRunAdapters--;
+		};
+	}
+
+	async #withChildren<T>(read: (directory: NativeChildDirectory | undefined) => Promise<T>): Promise<T> {
+		const owned = this.childDirectory;
+		if (owned || !this.session.agentRegistry) return read(owned);
+		const temporary = new NativeChildDirectory(this.session);
+		try {
+			return await read(temporary);
+		} finally {
+			temporary.dispose();
+		}
+	}
+
+	async child(context: WebGuiServiceContext, id: string): Promise<OwnedNativeChild | undefined> {
+		assertNativeChat(context);
+		if (id === this.session.sessionId) return undefined;
+		return this.#withChildren(async directory => {
+			if (!directory) return undefined;
+			try {
+				return await directory.resolve(context, id);
+			} catch (error) {
+				if (error instanceof Error && error.message === `Native child conversation not found: ${id}`)
+					return undefined;
+				throw error;
+			}
+		});
+	}
+
+	async listSubagents(context: WebGuiServiceContext, id: string, cursor?: string, limit?: number) {
+		assertNativeChat(context);
+		return this.#withChildren(async directory => {
+			if (!directory) throw new WebGuiNotImplementedError("native child registry is unavailable");
+			return directory.list(context, id, cursor, limit);
+		});
+	}
 
 	recordHistory(infos: SessionInfo[]): void {
 		this.#history = new Map(infos.map(info => [info.id, info]));
@@ -113,13 +178,21 @@ export class NativeChatRuntime {
 			this.#unsubscribe = this.session.subscribe(event => this.#onEvent(event));
 			this.#unsubscribeRunState = this.session.subscribeRunState(() => this.notify());
 		}
+		let released = false;
 		return () => {
+			if (released) return;
+			released = true;
 			if (--this.#references !== 0) return;
 			this.#unsubscribe?.();
 			this.#unsubscribeRunState?.();
 			this.#unsubscribe = undefined;
 			this.#unsubscribeRunState = undefined;
 			this.#streamMessage = undefined;
+			this.#unsubscribeChildren?.();
+			this.#children?.dispose();
+			this.#unsubscribeChildren = undefined;
+			this.#children = undefined;
+			for (const state of this.conversations.values()) state.snapshot = undefined;
 		};
 	}
 
@@ -157,6 +230,8 @@ export class NativeChatRuntime {
 
 	async info(context: WebGuiServiceContext, id: string): Promise<SessionInfo> {
 		assertNativeChat(context);
+		const child = await this.child(context, id);
+		if (child) return child.info;
 		const info = this.#history.get(id) ?? (await listNativeHistory(context)).find(candidate => candidate.id === id);
 		if (!info) throw new Error(`Native session not found: ${id}`);
 		if (id !== this.session.sessionId) return info;
@@ -175,6 +250,8 @@ export class NativeChatRuntime {
 			const stream = this.#streamMessage ?? this.session.agent.state.streamMessage;
 			return stream && !messages.includes(stream) ? [...messages, stream] : messages;
 		}
+		const child = await this.child(context, id);
+		if (child) return this.#withChildren(async directory => directory!.messages(context, id));
 		const info = await this.info(context, id);
 		await fs.stat(info.path);
 		const messages = await loadSessionMessagesReadOnly(info.path);
@@ -184,25 +261,43 @@ export class NativeChatRuntime {
 
 	async resume(context: WebGuiServiceContext, id: string): Promise<void> {
 		const session = assertNativeChat(context);
-		if (session.sessionId === id) return;
-		if (session.isStreaming || session.isSessionTransitioning || this.#submitting)
+		if (await this.child(context, id)) throw new Error("Native child conversations are read-only.");
+		if (this.#resuming || session.isStreaming || session.isSessionTransitioning || this.#submitting)
 			throw new Error("The native session is busy; wait for it to finish before continuing another history.");
-		const info = (await listNativeHistory(context)).find(candidate => candidate.id === id);
-		if (!info) throw new Error(`Native session not found: ${id}`);
-		assertNativeChat(context);
-		if (session.isStreaming || session.isSessionTransitioning || this.#submitting)
-			throw new Error("The native session became busy before recovery.");
-		if (
-			info.cwd &&
-			normalizePathForComparison(info.cwd) !== normalizePathForComparison(session.sessionManager.getCwd())
-		)
-			throw new Error(
-				"This native history is read-only here: continuing it requires a host-managed working-directory change.",
-			);
-		if (!(await session.switchSession(info.path))) throw new Error("Native session recovery was cancelled.");
-		assertNativeChat(context);
-		if (session.sessionId !== id) throw new Error("The requested native history was not restored.");
-		this.notify();
+		if (session.sessionId === id) return;
+		const previousId = session.sessionId;
+		this.#resuming = true;
+		try {
+			const info =
+				this.#history.get(id) ?? (await listNativeHistory(context)).find(candidate => candidate.id === id);
+			if (!info) throw new Error(`Native session not found: ${id}`);
+			assertNativeChat(context);
+			if (
+				session.sessionId !== previousId ||
+				session.isStreaming ||
+				session.isSessionTransitioning ||
+				this.#submitting
+			)
+				throw new Error("The native session changed or became busy before recovery.");
+			const host = nativeCwdHost(session);
+			if (host) {
+				await host.resume(info.path, info.cwd || session.sessionManager.getCwd(), id, context.signal, () => {
+					assertNativeChat(context);
+				});
+			} else {
+				if (
+					info.cwd &&
+					normalizePathForComparison(info.cwd) !== normalizePathForComparison(session.sessionManager.getCwd())
+				)
+					throw new Error("Continuing this history requires an active native workspace host.");
+				if (!(await session.switchSession(info.path))) throw new Error("Native session recovery was cancelled.");
+			}
+			assertNativeChat(context);
+			if (session.sessionId !== id) throw new Error("The requested native history was not restored.");
+			this.notify();
+		} finally {
+			this.#resuming = false;
+		}
 	}
 
 	async submit(
@@ -263,11 +358,15 @@ export class NativeChatRuntime {
 	async snapshot(context: WebGuiServiceContext, id: string): Promise<ConversationSnapshot> {
 		assertNativeChat(context);
 		const state = this.state(id);
+		const seq = state.seq;
+		const child = await this.child(context, id);
 		const active = id === this.session.sessionId;
 		if (active && state.snapshot?.seq === state.seq) return state.snapshot;
 		const info = await this.info(context, id);
 		const messages = await this.messages(context, id);
-		const busy = active && (this.session.isStreaming || this.session.isSessionTransitioning || this.#submitting);
+		const busy = child
+			? child.status === "running" || child.status === "waiting" || child.status === "blocked"
+			: active && (this.session.isStreaming || this.session.isSessionTransitioning || this.#submitting);
 		const rows: ConversationRow[] = [];
 		let turnId = `${id}:history`;
 		let lastUserIndex = -1;
@@ -314,9 +413,10 @@ export class NativeChatRuntime {
 				});
 			} else if (message.role === "assistant") {
 				const streaming =
-					active &&
 					busy &&
-					(message === this.#streamMessage || message === this.session.agent.state.streamMessage);
+					(child
+						? message === child.session?.agent.state.streamMessage
+						: active && (message === this.#streamMessage || message === this.session.agent.state.streamMessage));
 				if (message.stopReason === "error")
 					lastAssistantError = { message: message.errorMessage || "Native model request failed.", at };
 				for (let partIndex = 0; partIndex < message.content.length; partIndex++) {
@@ -361,6 +461,29 @@ export class NativeChatRuntime {
 									}
 								: {}),
 						});
+						const childIds = await this.#withChildren(async directory =>
+							directory && (active || child) ? directory.childSessionIdsForToolCall(context, id, part.id) : [],
+						);
+						for (const childId of childIds) {
+							const actor = await this.child(context, childId);
+							if (!actor) continue;
+							rows.push({
+								...rowBase(`${index}:${partIndex}:child:${childId}`, actor.startedAt),
+								kind: "subagent",
+								parentToolCallId: part.id,
+								childSessionId: childId,
+								subagentType: actor.subagentType,
+								status:
+									actor.status === "waiting" || actor.status === "blocked"
+										? "running"
+										: actor.status === "lost"
+											? "failed"
+											: actor.status,
+								summaryText: actor.summary || actor.info.title || actor.nativeAgentId,
+								startedAt: actor.startedAt,
+								endedAt: actor.endedAt,
+							});
+						}
 					}
 				}
 			}
@@ -371,23 +494,28 @@ export class NativeChatRuntime {
 			state.error ??
 			(lastAssistant?.role === "assistant" && lastAssistant.stopReason === "error" ? lastAssistantError : undefined);
 		const denied = { allowed: false as const, reasonCode: "guard.nativeChatOnly" };
-		const model = active ? this.session.model : undefined;
+		const model = active ? this.session.model : child?.session?.model;
 		const canContinue =
-			active ||
-			!info.cwd ||
-			normalizePathForComparison(info.cwd) === normalizePathForComparison(this.session.sessionManager.getCwd());
+			!child &&
+			(active ||
+				Boolean(nativeCwdHost(this.session)) ||
+				!info.cwd ||
+				normalizePathForComparison(info.cwd) === normalizePathForComparison(this.session.sessionManager.getCwd()));
+		const subagents = await this.#withChildren(async directory =>
+			directory && (active || child) ? directory.projection(context, id) : undefined,
+		);
 		const snapshot = conversationSnapshotSchema.parse({
 			protocolVersion: 1,
 			sessionId: id,
 			logEpoch: state.epoch,
-			seq: state.seq,
-			revision: state.seq,
+			seq,
+			revision: seq,
 			control: {
 				phase: busy
 					? "running"
-					: error
+					: error || child?.status === "failed" || child?.status === "lost"
 						? "error"
-						: info.status === "aborted" || info.status === "interrupted"
+						: child?.status === "cancelled" || info.status === "aborted" || info.status === "interrupted"
 							? "completedInterrupted"
 							: "completedSuccess",
 				sessionEnded: !busy && !error,
@@ -416,16 +544,18 @@ export class NativeChatRuntime {
 				pauseGoal: denied,
 				resumeGoal: denied,
 			},
-			inputRouting: busy
-				? { mode: "reject", reasonCode: "guard.nativeSessionBusy" }
-				: !canContinue
-					? { mode: "reject", reasonCode: "guard.nativeHistoryWorkingDirectory" }
-					: { mode: "startNow" },
+			inputRouting: child
+				? { mode: "reject", reasonCode: "guard.nativeChildReadOnly" }
+				: busy
+					? { mode: "reject", reasonCode: "guard.nativeSessionBusy" }
+					: !canContinue
+						? { mode: "reject", reasonCode: "guard.nativeHistoryWorkingDirectory" }
+						: { mode: "startNow" },
 			meta: { title: sessionDisplayName(info), titleSource: "default" },
 			config: {
 				provider: model?.provider ?? "",
 				model: model?.id ?? "",
-				thought: active ? (this.session.thinkingLevel ?? "off") : "off",
+				thought: active ? (this.session.thinkingLevel ?? "off") : (child?.session?.thinkingLevel ?? "off"),
 				followupMode: "queue",
 				mode: "build",
 				...(model ? { modelSelection: { providerId: model.provider, modelId: model.id } } : {}),
@@ -449,6 +579,7 @@ export class NativeChatRuntime {
 			pendingInteractions: [],
 			pendingCommands: [],
 			backgroundWorks: [],
+			...(subagents ? { subagents } : {}),
 			goal: null,
 			plan: null,
 			rows: { window: rows, totalCount: rows.length, firstRowId: rows[0]?.rowId ?? null },

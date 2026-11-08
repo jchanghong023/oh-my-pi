@@ -4,7 +4,6 @@ import { botGroupInputSourceSchema } from "../bots.js";
 // 三条结构性规则：row 自包含（渲染任一行不需看别的行）；
 // 结构变化换整行（row.upserted），文本增长用 append（row.delta）；turn 是 row 上的标签不是容器。
 import { z } from "zod";
-import { highspeedMessageMetaSchema } from "../highspeed.js";
 import { executionOutputPreviewSchema } from "../execution-output-preview.js";
 import { timestampSchema } from "./core.js";
 import { conversationInputSourceSchema } from "./input-intent.js";
@@ -155,8 +154,6 @@ export const userInputRowSchema = z.object({
   rootSourceCommandId: z.string().optional(),
   // 提交端身份由 CLI admission 写入；旧 transcript 可缺省。
   clientId: z.string().optional(),
-  // accelerated 历史展示的持久事实；缺省兼容普通消息和旧 snapshot。
-  highspeed: highspeedMessageMetaSchema.optional(),
   // 重复定义曾在出队后的 row 校验中剥掉来源，导致历史附件丢失预览入口；与入站引用共用 schema。
   attachments: z.array(attachmentRefSchema).optional(),
   // 插件 UI 代发的消息带来源；卡片显示"来自插件 X"。旧 transcript 可缺省。

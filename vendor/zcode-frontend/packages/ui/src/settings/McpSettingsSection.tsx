@@ -14,6 +14,8 @@ import {
 } from "@zcode/shared/test-ids";
 import type {
   RemoteTarget,
+  NativeMcpServerRecord,
+  ZCodeMcpListResult,
   WorkspaceMcpTrustDecision,
   ZCodeWorkspaceMcpTrustResult,
   ZCodeAvailablePluginSummary,
@@ -72,6 +74,7 @@ import { usePluginManagementStore } from "@/store/pluginManagementStore.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
 import { useConfigWorkspaceServices as useWorkspaceServices } from "@/workspace-config-catalog/index.js";
 import type { ConfigWorkspaceTarget } from "@/workspace-config-catalog/index.js";
+import { useConfigWorkspaceReadCatalogResolution } from "@/workspace-config-catalog/useConfigWorkspaceServices.js";
 import { getPluginWorkspaceKey } from "@/settings/PluginScopeMenu.js";
 import { ExternalLink, Import, Plus } from "lucide-react";
 import { SettingsSegmentedTabs } from "@/settings/SettingsSegmentedTabs.js";
@@ -571,7 +574,148 @@ interface McpSettingsSectionProps {
   cacheAuthorityKey?: string;
 }
 
-export function McpSettingsSection({
+/** Native summaries deliberately never enter the legacy editable MCP store or migration path. */
+export function McpSettingsSection(props: McpSettingsSectionProps) {
+  const { intl } = useZCodeIntl();
+  const owner = useConfigWorkspaceReadCatalogResolution(
+    props.workspacePath,
+    props.remoteSessionId,
+    props.workspaceIdentity,
+    props.remoteTarget,
+    {
+      unscopedServices: props.unscopedServices,
+      forceUnscoped: Boolean(props.cacheAuthorityKey || props.unscopedServices),
+    },
+  );
+  if (owner.catalogError) {
+    return (
+      <div role="alert" className="space-y-3 text-destructive">
+        <p>{owner.catalogError.message}</p>
+        <Button variant="outline" onClick={owner.catalog.reload}>
+          {intl.formatMessage({ id: "common.refresh" })}
+        </Button>
+      </div>
+    );
+  }
+  if (owner.nativeCatalog && !owner.catalogReady) {
+    return <p className="text-foreground-subtle">Native 会话未绑定，MCP 只读目录不可用。</p>;
+  }
+  if (!owner.catalogReady) {
+    return <PluginLoadingState label={intl.formatMessage({ id: "common.connecting" })} />;
+  }
+  if (owner.nativeCatalog && owner.nativeSession?.workspacePath) {
+    return (
+      <NativeMcpReadCatalog
+        key={owner.catalogKey}
+        service={owner.services.mcpSyncService}
+        workspacePath={owner.nativeSession.workspacePath}
+        scopeFilter={props.scopeFilter}
+        searchQuery={props.searchQuery}
+        onVisibleCountChange={props.onVisibleCountChange}
+      />
+    );
+  }
+  return <LegacyMcpSettingsSection {...props} />;
+}
+
+function NativeMcpReadCatalog({
+  service,
+  workspacePath,
+  scopeFilter,
+  searchQuery,
+  onVisibleCountChange,
+}: {
+  service: IMcpSyncService;
+  workspacePath: string;
+  scopeFilter: "user" | "workspace";
+  searchQuery: string;
+  onVisibleCountChange?: (count: number) => void;
+}) {
+  const { intl } = useZCodeIntl();
+  const [servers, setServers] = useState<NativeMcpServerRecord[]>([]);
+  const [statuses, setStatuses] = useState<ZCodeMcpListResult["statuses"]>({});
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const [config, snapshot] = await Promise.all([
+        service.loadMcpFromUserDirectory({ workspacePath }),
+        service.listWorkspaceMcpServerStatuses({ workspacePath, mode: "status" }),
+      ]);
+      if (requestId !== requestIdRef.current) return;
+      setServers(config.servers);
+      setStatuses(snapshot.statuses);
+    } catch (cause) {
+      if (requestId !== requestIdRef.current) return;
+      setServers([]);
+      setStatuses({});
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [service, workspacePath]);
+  useEffect(() => {
+    void load();
+    return () => {
+      requestIdRef.current += 1;
+    };
+  }, [load]);
+  const query = searchQuery.trim().toLocaleLowerCase();
+  const visibleServers = servers.filter(
+    (server) =>
+      (server.scope === scopeFilter || server.scope === "common") &&
+      (!query || server.name.toLocaleLowerCase().includes(query)),
+  );
+  useEffect(() => {
+    onVisibleCountChange?.(visibleServers.length);
+  }, [onVisibleCountChange, visibleServers.length]);
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border border-border bg-card px-3 py-2 text-ui-base text-foreground-subtle">
+        当前已加载的 Native MCP 配置与缓存连接状态（只读）：{workspacePath}。
+        这不是完整用户目录导出，不包含凭据，也不能作为可编辑配置保存。
+        此处不支持保存、信任、重连、导入或删除；刷新仅重新读取 Native 缓存。
+      </div>
+      <SettingsResourceGroupHeader
+        title="Native MCP"
+        count={visibleServers.length}
+        actions={<SettingsResourceHeaderActions onRefresh={() => void load()} refreshing={loading} />}
+      />
+      {error ? <p role="alert" className="text-destructive">{error}</p> : null}
+      {loading ? (
+        <PluginLoadingState label={intl.formatMessage({ id: "common.loading" })} />
+      ) : visibleServers.length === 0 ? (
+        <p className="text-ui-base text-foreground-subtle">
+          {query ? "没有匹配的已加载 MCP。" : "当前 Native 会话在此作用域没有已加载的 MCP。"}
+        </p>
+      ) : (
+        <SettingsResourceList
+          items={visibleServers}
+          getKey={(server) => `${server.scope}:${server.name}`}
+          renderItem={(server) => {
+            const status = statuses[server.name];
+            return (
+              <div className="space-y-1 px-4 py-3">
+                <div className="font-medium">{server.name}</div>
+                <div className="text-ui-sm text-foreground-subtle">
+                  {server.scope} · {server.config.type ?? "stdio"} · {status?.status ?? "unknown"}
+                  {status ? ` · ${status.toolCount ?? 0} tools` : ""}
+                </div>
+                {status?.error ? <p className="text-ui-sm text-destructive">{status.error}</p> : null}
+              </div>
+            );
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LegacyMcpSettingsSection({
   workspacePath,
   workspaceIdentity,
   remoteSessionId,

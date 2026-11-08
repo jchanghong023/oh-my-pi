@@ -1,10 +1,4 @@
-export { cloudContentPayloadSchema, contentBundleSchema } from "./cloudContent.js";
 export * from "./networkCapture.js";
-export type {
-  CloudContentPayload,
-  CloudContentBundle,
-  CloudContentHeroType,
-} from "./cloudContent.js";
 export type {
   FileBinaryPreview,
   FileEntry,
@@ -34,7 +28,7 @@ export type { WorkspacePurpose } from "./workspacePurpose.js";
 export { DEFAULT_LOCALE } from "./protocol.js";
 export { ZCODE_VERSION, ZCODE_COMMIT, ZCODE_BUILD_TIME } from "./version.js";
 export type { HelloMessage, HelloAckMessage } from "./handshake.js";
-export type { ArmsRumEnv, ZCodeEnv, ZCodeProductFlavor } from "./env.js";
+export type { ZCodeEnv, ZCodeProductFlavor } from "./env.js";
 export type { RemoteAssetInstallMode } from "./remoteAssetInstallMode.js";
 export type {
   RemoteResourcePackageId,
@@ -70,10 +64,7 @@ export {
   ZCODE_APP_VERSION_ENV,
   ZCODE_BUILD_COMMIT_ID_ENV,
   RUNTIME_ZCODE_DEBUG,
-  ZCODE_ARMS_RUM_ENDPOINT,
-  ZCODE_TELEMETRY_REPORT_ENDPOINT,
   ZCODE_AUTO_UPDATE_ENABLED,
-  mapZCodeEnvToArmsRumEnv,
   normalizeZCodeEnv,
   normalizeZCodeProductFlavor,
 } from "./env.js";
@@ -82,7 +73,6 @@ export {
   USER_INSTRUCTIONS_MAX_BYTES,
   USER_INSTRUCTIONS_TOO_LARGE_ERROR_CODE,
 } from "./userInstructions.js";
-export * from "./rendererActionTrace.js";
 export * from "./validation.js";
 export * from "./api.js";
 export * from "./zcode-protocol/index.js";
@@ -98,7 +88,6 @@ export * from "./zcode-session-visible-content.js";
 export * from "./official-mcp-auth.js";
 export * from "./official-mcp-tool-error.js";
 export * from "./conversation-message-projection-policy.js";
-export * from "./conversation-share.js";
 export * from "./conversation-share-content.js";
 export * from "./conversation-preview-artifacts.js";
 export * from "./zcode-session-task-status.js";
@@ -130,14 +119,11 @@ export * from "./channels.js";
 export * from "./storage.js";
 export * from "./oauth.js";
 export * from "./desktopMenu.js";
-export * from "./feedback.js";
 export * from "./e2e-test-bridge.js";
 export * from "./remoteAppConfig.js";
 export * from "./helpAppConfig.js";
 export * from "./remoteAssetInstallMode.js";
-export * from "./onboardingRecord.js";
 export * from "./remoteResourcePackages.js";
-export * from "./plan-identity.js";
 export {
   BROWSER_SCREENSHOT_SURFACE_PREPARE_TIMEOUT_MS,
   BROWSER_VIEW_RESTORE_BOOTSTRAP_URL,
@@ -149,45 +135,6 @@ export {
   createOpenInEditorRemoteTarget,
   unwrapRemoteWorkspaceBindResult,
 } from "./platform.js";
-export type {
-  ArmsCustomEventPayload,
-  ConfigureFinalArmsCustomEventE2ERequest,
-  FinalArmsCustomEventE2EEntry,
-  FinalArmsCustomEventPayload,
-  MobilePluginDiscoveryTelemetry,
-  RendererTelemetryEventPayload,
-  TelemetryEventPayload,
-  TelemetryRendererContext,
-  TelemetryUiMode,
-} from "./telemetry.js";
-export {
-  PLUGIN_TELEMETRY_EVENTS,
-  mobilePluginDiscoveryTelemetrySchema,
-  sanitizePluginTelemetryDetail,
-  collectTelemetryRendererContext,
-  normalizeTelemetryUiMode,
-  telemetryUiModeSchema,
-  resolveSafeTelemetryHostname,
-  sanitizeTelemetryErrorMessage,
-  sanitizeTelemetrySkillName,
-  sanitizeTelemetryEventDetail,
-} from "./telemetry.js";
-export type {
-  RedactTelemetryTextOptions,
-  TelemetryProviderIdentity,
-  TelemetryProviderScope,
-} from "./telemetryRedaction.js";
-export {
-  TELEMETRY_SAFE_BUILTIN_MODEL_IDS,
-  TELEMETRY_TEXT_MAX_LENGTH,
-  redactTelemetryText,
-  redactTelemetryUrl,
-  resolveTelemetryModelId,
-  resolveTelemetryProviderScope,
-  sanitizeTelemetryModelValue,
-} from "./telemetryRedaction.js";
-export * from "./remoteUsageTelemetry.js";
-export * from "./sessionCreateTelemetry.js";
 export type { LaunchMarks } from "./launchMarks.js";
 export { LAUNCH_MARKS_QUERY_KEY, parseLaunchMarks, serializeLaunchMarks } from "./launchMarks.js";
 export type {
@@ -246,7 +193,6 @@ export type {
   IPlatformService,
   OpenInEditorRemoteTarget,
   OpenInEditorOptions,
-  PostUpdateReleaseNotesPayload,
   RemoteConnectionRuntimeLog,
   RemoteSessionClosedEvent,
   RemoteSessionReconnectedEvent,
@@ -254,7 +200,6 @@ export type {
   SSHConfigAliasOption,
   TaskNotificationPayload,
   UpdateCheckResultPayload,
-  UpdateStatePayload,
   WSLDistro,
   WindowControlsOverlayReadyPayload,
   ZCodeStdioTapDevState,
@@ -268,7 +213,6 @@ export type {
 export type { ZCodeTaskCreateResult } from "./zcode-task-types.js";
 export * from "./zcode-task-types.js";
 export * from "./automation-types.js";
-export * from "./off-peak-types.js";
 export * from "./background-task-control-merge.js";
 export * from "./background-task-controls.js";
 export * from "./background-task-notifications.js";
@@ -318,8 +262,7 @@ export * from "#src/web-remote-relay/index.js";
 export * from "./web-remote-control-rpc-transport.js";
 export * from "./settings-sync.js";
 export * from "./uuid.js";
-export * from "./usage-stats.js";
-export * from "./coding-plan-subscription.js";
+export * from "./native-task-runs.js";
 export * from "./forceUpdate.js";
 export * from "./intranetProbe.js";
 export * from "./intranetDefaults.js";
@@ -331,8 +274,6 @@ export * from "./workspaceSessionRestore.js";
 export * from "./skill-scan-policy.js";
 export * from "./browser-use/index.js";
 
-export * from "./coding-plan-reset.js";
-export * from "./highspeed.js";
 export {
   parseSubagentMarkdownSelection,
   formatSubagentMarkdownModel,
@@ -353,11 +294,7 @@ export * from "./local-ttft/contract.js";
 export * from "./pluginStoreOrder.js";
 export * from "./clientConfig.js";
 export * from "./pluginStoreOrdering.js";
-export * from "./marketingTouch.js";
-export * from "./rewardsEmbedded.js";
-export * from "./rewardsBridge.js";
 export * from "./session-debug.js";
-export { redactFeedbackText } from "./feedbackPrivacy.js";
 export { API_KEY_USAGE_SCENE, type ApiKeyCreationUsageScene } from "./api-key-usage-scene.js";
 export {
   projectAccessTokenFingerprint,

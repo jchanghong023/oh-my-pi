@@ -7,7 +7,6 @@ import {
   IGitCheckpointService,
   ISystemService,
   ISettingService,
-  IOnboardingRecordService,
   ICredentialService,
   IBroadcastService,
   IZCodeTaskService,
@@ -17,10 +16,8 @@ import {
   ITaskGroupService,
   IRemoteProjectService,
   ICuaPermissionService,
-  IConversationShareService,
   IBotsService,
   IFileWatcherService,
-  IOAuthService,
   IModelSelectionService,
   IProviderSettingsService,
   IProviderProvisioningTargetService,
@@ -28,20 +25,13 @@ import {
   ISourceServerManagementService,
   IDeviceSyncStateService,
   IProviderProvisioningStatusService,
-  IUsageStatsService,
-  ICodingPlanSubscriptionService,
+  IRuntimePolicyService,
   IClientConfigService,
-  IClientScenesService,
-  ICloudContentService,
-  IMarketingTouchService,
-  IOffPeakTaskService,
-  IHighspeedCardService,
   ISkillsService,
   ISkillSyncService,
   IUserConfigSyncService,
   IMcpSyncService,
   IPluginSyncService,
-  IPluginsService,
   IPluginManagementService,
   ISubagentsService,
   ICommandsService,
@@ -49,7 +39,6 @@ import {
   IMemoryService,
   IOutputStyleService,
   ISettingsSyncService,
-  IFeedbackService,
   IPromptAttachmentTransferService,
   IWindowControllerService,
   IWindowProjectService,
@@ -80,7 +69,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly gitCheckpointService: IGitCheckpointService;
   readonly systemService: ISystemService;
   readonly settingService: ISettingService;
-  readonly onboardingRecordService: IOnboardingRecordService;
   readonly credentialService: ICredentialService;
   readonly broadcastService: IBroadcastService;
   readonly zcodeTaskService: IZCodeTaskService;
@@ -91,43 +79,33 @@ export class RemoteServiceAccess implements IServiceAccessor {
   readonly projectService: IProjectService;
   readonly remoteProjectService?: IRemoteProjectService;
   readonly cuaPermissionService?: ICuaPermissionService;
-  readonly conversationShareService: IConversationShareService;
   readonly botsService: IBotsService;
   readonly fileWatcherService: IFileWatcherService;
-  readonly oauthService: IOAuthService;
   readonly providerSettingsService: IProviderSettingsService;
   readonly modelSelectionService: IModelSelectionService;
   /** Host-only target proxy；不属于 IServiceAccessor，避免向 Renderer 暴露 Secret 写入接口。 */
   readonly providerProvisioningTargetService?: IProviderProvisioningTargetService;
-  readonly sourceServerWorkspaceService: ISourceServerWorkspaceService;
+  readonly sourceServerWorkspaceService?: ISourceServerWorkspaceService;
   /** 仅 desktop base attachment 注册；其他 scope 必须按可选能力消费。 */
   readonly sourceServerManagementService?: ISourceServerManagementService;
   /** 仅 desktop base attachment 注册：数据同步页的设备同步状态。 */
   readonly deviceSyncStateService?: IDeviceSyncStateService;
   readonly providerProvisioningStatusService?: IProviderProvisioningStatusService;
-  readonly usageStatsService: IUsageStatsService;
-  readonly codingPlanSubscriptionService: ICodingPlanSubscriptionService;
+  readonly runtimePolicyService?: IRuntimePolicyService;
   readonly clientConfigService: IClientConfigService;
-  readonly clientScenesService: IClientScenesService;
-  readonly cloudContentService: ICloudContentService;
-  readonly marketingTouchService: IMarketingTouchService;
-  readonly offPeakTaskService: IOffPeakTaskService;
-  readonly highspeedCardService: IHighspeedCardService;
   readonly skillsService: ISkillsService;
   readonly skillSyncService: ISkillSyncService;
   readonly mcpSyncService: IMcpSyncService;
   readonly genUiService?: IGenUiService;
-  readonly pluginSyncService: IPluginSyncService;
+  readonly pluginSyncService?: IPluginSyncService;
   readonly userConfigSyncService: IUserConfigSyncService;
-  readonly pluginsService: IPluginsService;
-  readonly pluginManagementService: IPluginManagementService;
+  readonly pluginManagementService?: IPluginManagementService;
   readonly subagentsService: ISubagentsService;
   readonly commandsService: ICommandsService;
   readonly hooksService: IHooksService;
   readonly memoryService: IMemoryService;
   readonly outputStyleService: IOutputStyleService;
   readonly settingsSyncService: ISettingsSyncService;
-  readonly feedbackService: IFeedbackService;
   readonly promptAttachmentTransferService: IPromptAttachmentTransferService;
 
   constructor(
@@ -168,9 +146,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
     this.settingService = ProxyChannel.toService<ISettingService>(
       channelClient.getChannel(ISettingService.channelName),
     );
-    this.onboardingRecordService = ProxyChannel.toService<IOnboardingRecordService>(
-      channelClient.getChannel(IOnboardingRecordService.channelName),
-    );
     this.credentialService = ProxyChannel.toService<ICredentialService>(
       channelClient.getChannel(ICredentialService.channelName),
     );
@@ -207,17 +182,11 @@ export class RemoteServiceAccess implements IServiceAccessor {
         channelClient.getChannel(ICuaPermissionService.channelName),
       );
     }
-    this.conversationShareService = ProxyChannel.toService<IConversationShareService>(
-      channelClient.getChannel(IConversationShareService.channelName),
-    );
     this.botsService = ProxyChannel.toService<IBotsService>(
       channelClient.getChannel(IBotsService.channelName),
     );
     this.fileWatcherService = ProxyChannel.toService<IFileWatcherService>(
       channelClient.getChannel(IFileWatcherService.channelName),
-    );
-    this.oauthService = ProxyChannel.toService<IOAuthService>(
-      channelClient.getChannel(IOAuthService.channelName),
     );
     this.providerSettingsService = ProxyChannel.toService<IProviderSettingsService>(
       channelClient.getChannel(IProviderSettingsService.channelName),
@@ -233,9 +202,11 @@ export class RemoteServiceAccess implements IServiceAccessor {
         enumerable: false,
       });
     }
-    this.sourceServerWorkspaceService = ProxyChannel.toService<ISourceServerWorkspaceService>(
-      channelClient.getChannel(ISourceServerWorkspaceService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.sourceServerWorkspaceService = ProxyChannel.toService<ISourceServerWorkspaceService>(
+        channelClient.getChannel(ISourceServerWorkspaceService.channelName),
+      );
+    }
     // Bug 原因：ProxyChannel 是惰性的，无论服务端是否注册 channel 都能构造出“看似存在”
     // 的对象，optional 合同因此在首次调用时才失败。scope 创建时必须显式声明能力。
     this.sourceServerManagementService = !options.browserDirect && options.sourceServerManagementService
@@ -254,29 +225,13 @@ export class RemoteServiceAccess implements IServiceAccessor {
           channelClient.getChannel(IProviderProvisioningStatusService.channelName),
         )
       : undefined;
-    this.usageStatsService = ProxyChannel.toService<IUsageStatsService>(
-      channelClient.getChannel(IUsageStatsService.channelName),
-    );
-    this.codingPlanSubscriptionService = ProxyChannel.toService<ICodingPlanSubscriptionService>(
-      channelClient.getChannel(ICodingPlanSubscriptionService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.runtimePolicyService = ProxyChannel.toService<IRuntimePolicyService>(
+        channelClient.getChannel(IRuntimePolicyService.channelName),
+      );
+    }
     this.clientConfigService = ProxyChannel.toService<IClientConfigService>(
       channelClient.getChannel(IClientConfigService.channelName),
-    );
-    this.clientScenesService = ProxyChannel.toService<IClientScenesService>(
-      channelClient.getChannel(IClientScenesService.channelName),
-    );
-    this.cloudContentService = ProxyChannel.toService<ICloudContentService>(
-      channelClient.getChannel(ICloudContentService.channelName),
-    );
-    this.marketingTouchService = ProxyChannel.toService<IMarketingTouchService>(
-      channelClient.getChannel(IMarketingTouchService.channelName),
-    );
-    this.offPeakTaskService = ProxyChannel.toService<IOffPeakTaskService>(
-      channelClient.getChannel(IOffPeakTaskService.channelName),
-    );
-    this.highspeedCardService = ProxyChannel.toService<IHighspeedCardService>(
-      channelClient.getChannel(IHighspeedCardService.channelName),
     );
     this.skillsService = ProxyChannel.toService<ISkillsService>(
       channelClient.getChannel(ISkillsService.channelName),
@@ -292,18 +247,19 @@ export class RemoteServiceAccess implements IServiceAccessor {
         channelClient.getChannel(IGenUiService.channelName),
       );
     }
-    this.pluginSyncService = ProxyChannel.toService<IPluginSyncService>(
-      channelClient.getChannel(IPluginSyncService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.pluginSyncService = ProxyChannel.toService<IPluginSyncService>(
+        channelClient.getChannel(IPluginSyncService.channelName),
+      );
+    }
     this.userConfigSyncService = ProxyChannel.toService<IUserConfigSyncService>(
       channelClient.getChannel(IUserConfigSyncService.channelName),
     );
-    this.pluginsService = ProxyChannel.toService<IPluginsService>(
-      channelClient.getChannel(IPluginsService.channelName),
-    );
-    this.pluginManagementService = ProxyChannel.toService<IPluginManagementService>(
-      channelClient.getChannel(IPluginManagementService.channelName),
-    );
+    if (!options.browserDirect) {
+      this.pluginManagementService = ProxyChannel.toService<IPluginManagementService>(
+        channelClient.getChannel(IPluginManagementService.channelName),
+      );
+    }
     this.subagentsService = ProxyChannel.toService<ISubagentsService>(
       channelClient.getChannel(ISubagentsService.channelName),
     );
@@ -321,9 +277,6 @@ export class RemoteServiceAccess implements IServiceAccessor {
     );
     this.settingsSyncService = ProxyChannel.toService<ISettingsSyncService>(
       channelClient.getChannel(ISettingsSyncService.channelName),
-    );
-    this.feedbackService = ProxyChannel.toService<IFeedbackService>(
-      channelClient.getChannel(IFeedbackService.channelName),
     );
     this.promptAttachmentTransferService = ProxyChannel.toService<IPromptAttachmentTransferService>(
       channelClient.getChannel(IPromptAttachmentTransferService.channelName),

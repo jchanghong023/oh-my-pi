@@ -23,8 +23,6 @@ export function shouldAutoScanOnboardingSessions(params: {
     params.wizardStep === "session" &&
     params.supported &&
     !params.isScanning &&
-    params.candidateCount === 0 &&
-    !params.scanError &&
     !params.hasAutoScannedInCurrentEntry
   );
 }
@@ -110,7 +108,7 @@ export function useOnboardingMigration(
 
         const result = await sessionMigration.importSessions(workspace.sessionIds);
         if (!result) {
-          throw new Error(sessionMigration.importError ?? "Session migration failed");
+          throw new Error("Session migration is unavailable");
         }
 
         setFinishExecution((current) => ({

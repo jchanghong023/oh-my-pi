@@ -5,8 +5,6 @@
 // 本接口；plugins/* 词表的 host 侧消费点收拢到 pluginManagementService 一处（插件的
 // 事实源在 zcode-cli 进程，服务实现仍经 agent 协议往返——plugins 词表的收口归属
 // 插件能力面自身的协议演进，不在会话 v4 词表范围内）。
-// 注意与既有 IPluginsService（已 retired 的 marketplace pluginStore 通道）区分：
-// 那套接口按 pluginName+marketplace 寻址且方法语义过时，不复用避免签名冲突。
 import type { Event } from "@zcode/rpc";
 import type {
   ZCodePluginOperationProgressNotification,
@@ -92,30 +90,3 @@ export const IPluginManagementService = createServiceDescriptor<IPluginManagemen
   ServiceChannels.PluginManagement,
 );
 
-/** 入口只附加观测上下文；RPC 方法由 Proxy 动态提供，不能通过对象展开复制。 */
-export function withPluginTelemetry(
-  service: IPluginManagementService,
-  telemetry: NonNullable<ZCodeAgentInstallPluginParams["telemetry"]>,
-): IPluginManagementService {
-  const mutations = new Set<PropertyKey>([
-    "addPluginMarketplace",
-    "removePluginMarketplace",
-    "updatePluginMarketplace",
-    "installPlugin",
-    "uninstallPlugin",
-    "updatePlugin",
-    "restoreBuiltinPlugin",
-    "configurePlugin",
-    "resetPluginConfig",
-    "setPluginEnabled",
-  ]);
-  return new Proxy(service, {
-    get(target, property) {
-      const method = Reflect.get(target, property, target);
-      if (typeof method !== "function") return method;
-      if (!mutations.has(property)) return method.bind(target);
-      return (params: ZCodeAgentInstallPluginParams) =>
-        method.call(target, { ...params, telemetry });
-    },
-  });
-}

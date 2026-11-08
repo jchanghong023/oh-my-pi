@@ -30,6 +30,7 @@ import type {
   SavedWorkflowsOpenArtifactParams,
   SavedWorkflowsOpenRunParams,
 } from "@/settings/saved-workflows/savedWorkflowContract.js";
+import { NativeTaskRunsGate } from "@/settings/saved-workflows/NativeTaskRunsSection.js";
 
 export type {
   SavedWorkflowProjectTarget,
@@ -77,11 +78,19 @@ function resolveOptionKey(option: AutomationWorkspaceOption): string {
   });
 }
 
+export function SavedWorkflowsSection(props: SavedWorkflowsSectionProps) {
+  return (
+    <NativeTaskRunsGate {...props}>
+      <LegacySavedWorkflowsSection {...props} />
+    </NativeTaskRunsGate>
+  );
+}
+
 /**
  * 已保存工作流中枢：顶部固定「全局」组，
  * 其下按已打开项目分组。页只持有刷新计数器、每组的加载态、详情态；「项目」= `buildAutomationWorkspaceOptions`。
  */
-export function SavedWorkflowsSection({
+function LegacySavedWorkflowsSection({
   header,
   workspacePath,
   workspaceIdentity,

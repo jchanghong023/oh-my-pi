@@ -31,10 +31,7 @@ export { useWorkspaceHomePath } from "./useWorkspaceHomePath.js";
 // 设置服务
 export { useSettings, useRecentProjects } from "./useSettingService.js";
 export { useSkills } from "./useSkills.js";
-export { usePlugins } from "./usePlugins.js";
 
-// Onboarding 完成记录服务（本地持久化，后续上传服务器）
-export { useOnboardingRecordService } from "./useOnboardingRecordService.js";
 
 // 通用确认弹窗
 export { useConfirmDialog } from "./useConfirmDialog.js";
@@ -52,4 +49,3 @@ export { useGitActions } from "./useGitActions.js";
 export { useWorkspaceProviderConfigFile } from "./useWorkspaceProviderConfigFile.js";
 export { useTaskNativeSessionLogFile } from "./useTaskNativeSessionLogFile.js";
 export { useTaskSessionFilePath } from "./useTaskSessionFilePath.js";
-export { useUsageStats } from "./useUsageStats.js";

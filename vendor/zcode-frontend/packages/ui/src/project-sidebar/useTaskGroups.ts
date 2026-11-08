@@ -56,7 +56,7 @@ export function useTaskGroups(tree: ProjectTree) {
   const signature = useMemo(() => {
     // 原来每次活动渲染都排序并在比较器中反复序列化；只在事实输入变化时计算一次键。
     const entries = [
-      ...tree.tasks.map((task) => [groupTaskRef(task), task.cronAutomationId, task.offPeakTaskId]),
+      ...tree.tasks.map((task) => [groupTaskRef(task), task.cronAutomationId]),
       ...(tree.deletedTasks ?? []).map((task) => [task, "deleted"]),
     ].map((entry) => JSON.stringify(entry));
     entries.sort((a, b) => a.localeCompare(b));

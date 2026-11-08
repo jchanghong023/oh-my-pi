@@ -1,4 +1,4 @@
-import { CRON_DEFAULT_GROUP_ID, OFF_PEAK_DEFAULT_GROUP_ID } from "@zcode/shared";
+import { CRON_DEFAULT_GROUP_ID } from "@zcode/shared";
 import type {
   GroupTaskRef,
   ProjectTask,
@@ -87,7 +87,5 @@ export function taskGroupTitleMessageId(
   group: Pick<TaskGroup, "id" | "title">,
 ): string | undefined {
   if (group.id === CRON_DEFAULT_GROUP_ID && group.title === "cron") return "taskGroup.cron";
-  if (group.id === OFF_PEAK_DEFAULT_GROUP_ID && group.title === "off-peak")
-    return "taskGroup.offPeak";
   return undefined;
 }

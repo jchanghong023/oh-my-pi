@@ -22,7 +22,7 @@ function Fixture() {
   const [special, setSpecial] = useState(false);
   const [running, setRunning] = useState(true);
   return (
-    <ZCodeIntlProvider initialLocale={query.get("mobile") === "true" ? "en-US" : "zh-CN"}>
+    <ZCodeIntlProvider>
       <TooltipProvider>
         <div className="h-dvh overflow-auto bg-background text-foreground text-ui-base">
           <nav className="sticky top-0 z-10 flex flex-wrap gap-2 bg-background">

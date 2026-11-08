@@ -7,14 +7,12 @@ import { logger } from "@/logger.js";
 import { WorkspaceSettingsLayer } from "@/root/WorkspaceSettingsLayer.js";
 import type { AppProps, WorkspaceRemoteNavigationProps } from "@/app-shell/types.js";
 import type { RootProps } from "@/root/types.js";
-import type { IFeedbackService, IServiceAccessor } from "@zcode/services";
-import { ConversationTelemetryWorkspaceAttachment } from "@/v4/telemetry/ConversationTelemetryAttachment.js";
+import type { IServiceAccessor } from "@zcode/services";
 
 const StableWorkspaceApp = memo(App);
 
 interface RootWorkspaceContentProps extends WorkspaceRemoteNavigationProps {
   workspaceScopedServices: IServiceAccessor;
-  baseFeedbackService: IFeedbackService;
   workspaceShellPath: string;
   workspaceIdentity?: string;
   workspaceRemoteSessionId?: string;
@@ -26,9 +24,6 @@ interface RootWorkspaceContentProps extends WorkspaceRemoteNavigationProps {
   handleOpenWorkspace: AppProps["onOpenWorkspace"];
   handleOpenFolderFromWorkspaceMenu: AppProps["onOpenFolderFromWorkspaceMenu"];
   handleBackFromSettings: () => void;
-  handleLogout?: () => void;
-  onLogin?: () => void;
-  user: AppProps["user"];
   allowOpenWorkspace: NonNullable<RootProps["allowOpenWorkspace"]>;
   responsiveBrowserLayout?: RootProps["responsiveBrowserLayout"];
   backendBusinessAvailable?: RootProps["backendBusinessAvailable"];
@@ -38,7 +33,6 @@ interface RootWorkspaceContentProps extends WorkspaceRemoteNavigationProps {
 
 export function RootWorkspaceContent({
   workspaceScopedServices,
-  baseFeedbackService,
   workspaceShellPath,
   workspaceIdentity,
   workspaceRemoteSessionId,
@@ -50,9 +44,6 @@ export function RootWorkspaceContent({
   handleOpenWorkspace,
   handleOpenFolderFromWorkspaceMenu,
   handleBackFromSettings,
-  handleLogout,
-  onLogin,
-  user,
   allowOpenWorkspace,
   responsiveBrowserLayout,
   backendBusinessAvailable,
@@ -101,14 +92,6 @@ export function RootWorkspaceContent({
             用户在设置页按 Cmd/Ctrl+K 时状态已打开却完全不可见，所以必须保持布局占位只关闭交互。
             修复原因：只用 opacity 和 pointer-events 仍会让底层权限/AskUserQuestion 卡片的 autofocus
             抢走设置表单焦点；设置页覆盖期间必须把整棵 workspace 标为 inert，等用户显式返回后再恢复交互。 */}
-        <ConversationTelemetryWorkspaceAttachment
-          enabled={isDesktop === true}
-          foregroundEnabled={!isSettingsTabActive}
-          services={workspaceScopedServices}
-          workspacePath={workspaceShellPath}
-          workspaceIdentity={workspaceIdentity}
-          remoteSessionId={workspaceRemoteSessionId}
-        >
           <ServiceProvider services={workspaceScopedServices}>
             <ScopedErrorBoundary
               scope="workspace-app"
@@ -118,10 +101,6 @@ export function RootWorkspaceContent({
             >
               <StableWorkspaceApp
                 services={workspaceScopedServices}
-                baseFeedbackService={baseFeedbackService}
-                onLogout={handleLogout}
-                onLogin={onLogin}
-                user={user}
                 workspaceAbsPath={workspaceShellPath}
                 workspaceRemoteSessionId={workspaceRemoteSessionId}
                 workspaceIdentity={workspaceIdentity}
@@ -147,7 +126,6 @@ export function RootWorkspaceContent({
               />
             </ScopedErrorBoundary>
           </ServiceProvider>
-        </ConversationTelemetryWorkspaceAttachment>
       </div>
 
       {isSettingsTabActive ? (
@@ -165,9 +143,6 @@ export function RootWorkspaceContent({
             onCreateTask={handleCreateTask}
             onOpenWorkspace={handleOpenWorkspace}
             allowOpenWorkspace={allowOpenWorkspace}
-            onLogin={onLogin}
-            onLogout={handleLogout}
-            user={user}
           />
         </ScopedErrorBoundary>
       ) : null}

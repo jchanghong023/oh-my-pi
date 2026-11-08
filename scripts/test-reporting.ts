@@ -28,7 +28,7 @@ export interface TestSelection {
 	packages?: string[];
 	reportPath?: string;
 	group?: "ordinary" | "startup";
-	suiteRevision?: 3;
+	suiteRevision?: 4;
 }
 
 export interface TestProducerRecord {
@@ -116,7 +116,7 @@ export async function latestLocalTestProducers(
 					producer.report !== "available" ||
 					producer.selection?.tool !== "bun" ||
 					producer.selection.mode !== "full" ||
-					producer.selection.suiteRevision !== 3 ||
+					producer.selection.suiteRevision !== 4 ||
 					!["ordinary", "startup"].includes(producer.selection.group ?? "") ||
 					!Number.isInteger(producer.exitCode) ||
 					producer.exitCode < 0 ||

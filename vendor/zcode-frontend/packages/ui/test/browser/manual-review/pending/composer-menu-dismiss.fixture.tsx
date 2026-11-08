@@ -116,7 +116,7 @@ function Fixture() {
   );
 }
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="en-US">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <Fixture />
     </TooltipProvider>

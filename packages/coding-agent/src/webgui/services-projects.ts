@@ -1,9 +1,3 @@
-import type { HighspeedServiceSnapshot } from "../../../../vendor/zcode-frontend/packages/shared/src/highspeed";
-import type {
-	OffPeakCodingPlanSupport,
-	OffPeakTakeNumberAvailability,
-	ZCodeOffPeakTask,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/off-peak-types";
 import type {
 	ProjectTree,
 	VirtualProject,
@@ -143,24 +137,6 @@ export function createProjectServices(context: WebGuiServiceContext): readonly W
 				const current = info?.id === context.nativeSession?.sessionId ? context.nativeSession?.model : undefined;
 				return current ? { providerId: current.provider, modelId: current.id } : null;
 			},
-		}),
-		// TODO(omp-scheduler): Integrate native OMP scheduler persistence and provider
-		// admission. Empty attachment reads do not inspect persisted scheduled jobs;
-		// create/cancel/pause/continue/delete/deleteHistory/update remain unavailable.
-		createWebGuiService("off-peak-task", {
-			getCodingPlanSupport: (): OffPeakCodingPlanSupport => ({
-				supported: false,
-				reason: "connection_unavailable",
-			}),
-			getTakeNumberAvailability: (): OffPeakTakeNumberAvailability => ({ canTakeNumber: false }),
-			list: (): ZCodeOffPeakTask[] => [],
-			get: (): ZCodeOffPeakTask | null => null,
-		}),
-		// TODO(omp-session-manager-highspeed): Integrate native OMP provider/billing
-		// admission. This attachment owns no card or draw; prepareTurn, invalidateCard
-		// and healthy remain unavailable rather than pretending a subscription exists.
-		createWebGuiService("highspeed-card", {
-			getSnapshot: (): HighspeedServiceSnapshot => ({ card: null, nextDrawAt: null, drawing: false }),
 		}),
 		// TODO(omp-session-manager-bots): Integrate native OMP SessionManager/project
 		// channel delivery and configuration. Bot status has no unavailable variant;

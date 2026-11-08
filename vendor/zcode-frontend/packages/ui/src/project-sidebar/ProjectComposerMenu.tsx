@@ -26,7 +26,6 @@ import {
   TID_COMPOSER_WORK_OUTSIDE_PROJECT,
   TID_COMPOSER_WORKSPACE_TRIGGER,
 } from "@zcode/shared/test-ids";
-import { runUserAction, runUserActionAsync } from "@/lib/userActionTelemetry.js";
 
 import type { ProjectSidebarProps } from "@/project-sidebar/contract.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
@@ -162,16 +161,7 @@ export function ProjectComposerMenu({
             data-testid={TID_COMPOSER_PROJECT_DETACH}
             onClick={(event) => {
               event.stopPropagation();
-              void runUserActionAsync({
-                input: {
-                  featureId: "workspace.project_binding",
-                  action: "detach",
-                  trigger: "button",
-                },
-                operation: () => Promise.resolve(onSelectConversationWorkspace()),
-                completed: { resultSource: "optimistic_projection" },
-                failureStage: "project_detach",
-              });
+              void Promise.resolve(onSelectConversationWorkspace());
             }}
           >
             <X className="size-3.5" />
@@ -250,17 +240,7 @@ export function ProjectComposerMenu({
                           projectId: project.id,
                           hostId: project.hostId,
                         });
-                        runUserAction({
-                          input: {
-                            featureId: "workspace.project_binding",
-                            action: isConversationWorkspace ? "attach" : "switch",
-                            trigger: "menu",
-                            workspaceKind: "local",
-                          },
-                          operation: () => createProjectTask({ projectId: project.id }),
-                          completed: { resultSource: "local_commit" },
-                          failureStage: "project_switch",
-                        });
+                        createProjectTask({ projectId: project.id });
                       }}
                     >
                         <ProjectFolderIcon
@@ -297,16 +277,7 @@ export function ProjectComposerMenu({
                 data-testid={TID_COMPOSER_WORK_OUTSIDE_PROJECT}
                 checked={isConversationWorkspace}
                 onSelect={() =>
-                  void runUserActionAsync({
-                    input: {
-                      featureId: "workspace.project_binding",
-                      action: "work_outside_project",
-                      trigger: "menu",
-                    },
-                    operation: () => Promise.resolve(onSelectConversationWorkspace()),
-                    completed: { resultSource: "optimistic_projection" },
-                    failureStage: "project_detach",
-                  })
+                  void Promise.resolve(onSelectConversationWorkspace())
                 }
               >
                 <MessageCircle className="size-4 text-foreground-subtle" />

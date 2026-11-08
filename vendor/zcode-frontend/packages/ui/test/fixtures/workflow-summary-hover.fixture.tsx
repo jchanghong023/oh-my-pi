@@ -4,7 +4,7 @@ import { ZCodeIntlProvider } from "@/i18n/IntlProvider.js";
 import { TooltipProvider } from "@/components/ui/tooltip.js";
 import { WorkflowToolSummary } from "@/v4/WorkflowToolSummary.js";
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="en-US">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <WorkflowToolSummary
         toolCallId="hover"

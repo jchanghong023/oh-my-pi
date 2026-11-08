@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- 文件树数据 hook 需要集中维护目录加载、watcher 刷新和 Git 状态竞态。 */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
+import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { logger } from "@/logger.js";
 import {
   WORKSPACE_FILE_TREE_WATCH_BULK_REFRESH_THRESHOLD,
@@ -63,11 +64,16 @@ export function useWorkspaceFileTreeData({
   workspaceRemoteSessionId?: string;
   enableWorkspaceFeatures?: boolean;
 }) {
-  const { fileService, fileWatcherService, gitService } = useWorkspaceServices(
+  const { fileService, fileWatcherService, gitService, modelSelectionService } = useWorkspaceServices(
     workspacePath,
     workspaceRemoteSessionId,
     workspaceIdentity,
   );
+  const modelSelectionRead = useModelSelectionServiceView(modelSelectionService, enableWorkspaceFeatures);
+  // Native Git admits status/diff reads, but has no ignored-path read capability.
+  const ignoredPathsAvailable = modelSelectionRead.state.status === "ready" &&
+    !modelSelectionRead.state.refreshError &&
+    modelSelectionRead.state.view.nativeSession === undefined;
   const workspaceGenerationRef = useRef(0);
   const requestVersionRef = useRef(0);
   const directoryRequestVersionRef = useRef<Map<string, number>>(new Map());
@@ -227,7 +233,7 @@ export function useWorkspaceFileTreeData({
           return "stale";
         }
 
-        if (enableWorkspaceFeatures) {
+        if (enableWorkspaceFeatures && ignoredPathsAvailable) {
           void gitService
             .getIgnoredPaths({
               workspacePath,
@@ -308,6 +314,7 @@ export function useWorkspaceFileTreeData({
       enableWorkspaceFeatures,
       fileService,
       gitService,
+      ignoredPathsAvailable,
       setDirectoryLoaded,
       setDirectoryLoading,
       workspacePath,

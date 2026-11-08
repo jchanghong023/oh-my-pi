@@ -17,6 +17,7 @@ export async function refreshRootProviderState(
     );
   } catch (error) {
     logger.error("[Root] 刷新 Provider Runtime 失败:", error);
+    throw error;
   }
 }
 

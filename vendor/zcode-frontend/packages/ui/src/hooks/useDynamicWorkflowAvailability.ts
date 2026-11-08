@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
-import type { ICodingPlanSubscriptionService, IZCodeAgentService } from "@zcode/services";
+import type { IRuntimePolicyService, IZCodeAgentService } from "@zcode/services";
 import type { DynamicWorkflowMode } from "@zcode/shared";
 import { logger } from "@/logger.js";
 import { useBackendBusinessAvailable } from "@/hooks/useBackendBusinessAvailability.js";
@@ -41,7 +41,7 @@ export function useDynamicWorkflowNavigationAvailable(): boolean {
  * 取数与失败重试的规则见 dynamicWorkflowAvailabilityStore。
  */
 export function useDynamicWorkflowAvailabilityLoader(
-  service: ICodingPlanSubscriptionService,
+  service: IRuntimePolicyService,
 ): void {
   const backendBusinessAvailable = useBackendBusinessAvailable();
   const ensureLoaded = useDynamicWorkflowAvailabilityStore((state) => state.ensureLoaded);
@@ -62,9 +62,9 @@ export function useDynamicWorkflowUserModeSync(params: {
   settingsLoaded: boolean;
   userMode: DynamicWorkflowMode | undefined;
   zcodeAgentService: Pick<IZCodeAgentService, "syncDynamicWorkflowUserMode">;
-  codingPlanSubscriptionService: ICodingPlanSubscriptionService;
+  runtimePolicyService: IRuntimePolicyService;
 }): void {
-  const { settingsLoaded, userMode, zcodeAgentService, codingPlanSubscriptionService } = params;
+  const { settingsLoaded, userMode, zcodeAgentService, runtimePolicyService } = params;
   const backendBusinessAvailable = useBackendBusinessAvailable();
   const reload = useDynamicWorkflowAvailabilityStore((state) => state.reload);
   const observedRef = useRef<{ userMode: DynamicWorkflowMode | undefined } | null>(null);
@@ -82,11 +82,11 @@ export function useDynamicWorkflowUserModeSync(params: {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      await reload(codingPlanSubscriptionService);
+      await reload(runtimePolicyService);
     });
   }, [
     backendBusinessAvailable,
-    codingPlanSubscriptionService,
+    runtimePolicyService,
     reload,
     settingsLoaded,
     userMode,

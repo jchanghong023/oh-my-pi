@@ -12,12 +12,13 @@ import {
 
 export type AutomationTemplateCatalogState = AutomationTemplateCatalog & {
   loading: boolean;
+  availability: "available" | "unavailable";
 };
 
 export function useAutomationTemplates(
-  clientScenesService: IClientScenesService,
+  clientScenesService: IClientScenesService | null | undefined,
 ): AutomationTemplateCatalogState {
-  const { scenes, loading, error } = useClientScenesResource(clientScenesService);
+  const { scenes, loading, error, available } = useClientScenesResource(clientScenesService);
   const catalog = useMemo(
     () => mapClientScenesToAutomationTemplates(scenes, isValidCronExpr),
     [scenes],
@@ -47,5 +48,6 @@ export function useAutomationTemplates(
   return {
     ...catalog,
     loading,
+    availability: available ? "available" : "unavailable",
   };
 }

@@ -41,7 +41,7 @@ function Fixture() {
     return () => window.removeEventListener(WORKSPACE_FILE_ADD_TO_CHAT_EVENT, onAdd);
   }, []);
   return (
-    <ZCodeIntlProvider initialLocale={locale}>
+    <ZCodeIntlProvider>
       <div style={{ height: "calc(100% - 52px)" }}>
         {kind === "svg" ? (
           <SvgPreviewContent title={ref.name} svgContent={svg} fileReference={ref} />

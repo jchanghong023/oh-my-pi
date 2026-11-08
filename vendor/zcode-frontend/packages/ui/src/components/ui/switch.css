@@ -1,0 +1,94 @@
+/* Firefox 68 cannot apply the generated group selectors, individual translate,
+ * or color-mix track. Keep the modern utilities and Radix behavior unchanged. */
+@supports not (color: color-mix(in srgb, black 30%, transparent)) {
+  [data-slot="switch"] {
+    /* Classic equivalents of Tailwind neutral-950 / neutral-50 and sky-400.
+     * The default theme tokens contain oklch, unsupported in Firefox 68. */
+    --switch-legacy-primary: #0a0a0a;
+    --switch-legacy-foreground: #fafafa;
+    --switch-legacy-focus: #38bdf8;
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    padding: 1px;
+    background-color: transparent;
+  }
+
+  .dark [data-slot="switch"] {
+    --switch-legacy-primary: #fafafa;
+    --switch-legacy-foreground: #0a0a0a;
+  }
+
+  /* Both Zai themes already supply classic hex/rgba values; retain their tokens. */
+  .theme-zai-light [data-slot="switch"],
+  .theme-zai-dark [data-slot="switch"] {
+    --switch-legacy-primary: var(--color-primary);
+    --switch-legacy-foreground: var(--color-primary-foreground);
+    --switch-legacy-focus: var(--color-input-border-focused);
+  }
+
+  [data-slot="switch"][data-size="default"] {
+    width: 32px;
+    height: 18px;
+  }
+
+  [data-slot="switch"][data-size="sm"] {
+    width: 28px;
+    height: 16px;
+  }
+
+  /* A separate track layer preserves primary/30 without fading the thumb. */
+  [data-slot="switch"]::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    border-radius: inherit;
+    background-color: var(--switch-legacy-primary);
+    opacity: 0.3;
+    pointer-events: none;
+  }
+
+  [data-slot="switch"][data-state="checked"]::before {
+    opacity: 1;
+  }
+
+  [data-slot="switch"] > [data-slot="switch-thumb"] {
+    position: relative;
+    display: block;
+    flex-shrink: 0;
+    background-color: var(--switch-legacy-foreground);
+    transform: translateX(0);
+  }
+
+  [data-slot="switch"][data-size="default"] > [data-slot="switch-thumb"] {
+    width: 16px;
+    height: 16px;
+  }
+
+  [data-slot="switch"][data-size="sm"] > [data-slot="switch-thumb"] {
+    width: 14px;
+    height: 14px;
+  }
+
+  [data-slot="switch"][data-size="default"] > [data-slot="switch-thumb"][data-state="checked"] {
+    transform: translateX(14px);
+  }
+
+  [data-slot="switch"][data-size="sm"] > [data-slot="switch-thumb"][data-state="checked"] {
+    transform: translateX(12px);
+  }
+
+  [data-slot="switch"][data-disabled] {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+
+  /* Firefox 68 predates :focus-visible; keep keyboard focus visible. */
+  [data-slot="switch"]:-moz-focusring {
+    outline: 2px solid var(--switch-legacy-focus);
+    outline-offset: 2px;
+  }
+}

@@ -944,13 +944,15 @@ export function useDraftConfigControl(params: {
         (modelSelectionRead.state.status === "loading" ? modelSelectionRead.state.catalog : null);
       if (catalog?.nativeSession !== undefined) {
         const nativeSession = catalog.nativeSession;
-        if (!nativeSession || !modelSelectionService?.setSessionModel) {
-          return Promise.reject(new Error("No bound native session for model selection"));
+        if (!nativeSession?.chatAvailable || !sessionId ||
+            nativeSession.sessionId !== sessionId ||
+            modelSelectionRead.state.status !== "ready" || !modelSelectionService?.setSessionModel) {
+          return Promise.reject(new Error("Continue this native session before changing its model"));
         }
         // The native session owns this choice; never project the browser's request as success.
         return modelSelectionService
           .setSessionModel({
-            sessionId: nativeSession.sessionId,
+            sessionId,
             providerId: modelProvider,
             modelId: model,
           })
@@ -975,6 +977,7 @@ export function useDraftConfigControl(params: {
     },
     [
       modelSelectionView,
+      sessionId,
       modelSelectionRead.state,
       modelSelectionService,
       modelSelectionRead.refresh,

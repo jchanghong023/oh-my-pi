@@ -1629,7 +1629,6 @@
     "packages/ui/src/components/ai-elements/commit.tsx": "e9f5dcffac4ec7702b6d77b41cfc28fab54f0595375dd2c992dc972c0a9e74d2",
     "packages/ui/src/components/ai-elements/confirmation.tsx": "bb39ae89d5550f4ffcbb36e73dc8b75d1c9930f0fdba28cc8ff135d753b65a9b",
     "packages/ui/src/components/ai-elements/connection.tsx": "6e6cf65efcef612a3d14f5fda69e27009bc06046d1f7aa842a1a93b9142a7f81",
-    "packages/ui/src/components/ai-elements/context.tsx": "9f9a766dcab0010b1483b5276f9d5f4b4c3b31bd85434731fc7ce4d8bf9913f7",
     "packages/ui/src/components/ai-elements/controls.tsx": "3123e9cb668171780944fb91632c68977617ae4ef46312540c1f7ddecc3fc568",
     "packages/ui/src/components/ai-elements/conversation.tsx": "1fda6a3c198ae104e8736b70992e9ce8549f667a942246d9a9762be8f4431e3a",
     "packages/ui/src/components/ai-elements/diagram-preview-dialog.tsx": "cc142f8808370897dfc40cd7aea3f1aa42fd07ce471a7fbb284d9ae728b1299a",
@@ -19391,7 +19390,6 @@
         "packages/ui/src/components/ai-elements/commit.tsx",
         "packages/ui/src/components/ai-elements/confirmation.tsx",
         "packages/ui/src/components/ai-elements/connection.tsx",
-        "packages/ui/src/components/ai-elements/context.tsx",
         "packages/ui/src/components/ai-elements/controls.tsx",
         "packages/ui/src/components/ai-elements/conversation.tsx",
         "packages/ui/src/components/ai-elements/edge.tsx",
@@ -19571,10 +19569,6 @@
         {
           "file": "packages/ui/src/components/ai-elements/connection.tsx",
           "sha256": "6e6cf65efcef612a3d14f5fda69e27009bc06046d1f7aa842a1a93b9142a7f81"
-        },
-        {
-          "file": "packages/ui/src/components/ai-elements/context.tsx",
-          "sha256": "9f9a766dcab0010b1483b5276f9d5f4b4c3b31bd85434731fc7ce4d8bf9913f7"
         },
         {
           "file": "packages/ui/src/components/ai-elements/controls.tsx",

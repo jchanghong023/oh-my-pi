@@ -92,7 +92,7 @@ export function registerProviderPresentationCases(getEnvironment) {
       const page = await context.newPage();
       try {
         await page.goto(
-          `${origin}fixture?${new URLSearchParams({ locale, theme, access: "account", selectionError: "1" })}`,
+          `${origin}fixture?${new URLSearchParams({ locale, theme, access: "manual", selectionError: "1" })}`,
         );
         await page
           .getByTestId("subagent-error")
@@ -107,7 +107,7 @@ export function registerProviderPresentationCases(getEnvironment) {
         await detail.locator('button:not([role="tooltip"] button)').click();
         const copied = await page.evaluate(() => navigator.clipboard.readText());
         assert.match(copied, /reason=reasoning-level-missing/);
-        assert.match(copied, /selection=account:bigmodel-team-coding-plan\/GLM-5\.3/);
+        assert.match(copied, /selection=fixture\/GLM-5\.3/);
         assert.match(copied, /No reasoning level selected/);
         await mkdir(artifacts, { recursive: true });
         await page.screenshot({ path: join(artifacts, `subagent-error-${width}.png`) });
@@ -124,7 +124,7 @@ export function registerProviderPresentationCases(getEnvironment) {
       const { browser, origin, artifacts } = getEnvironment();
       const page = await browser.newPage({ viewport: { width, height: 1100 } });
       try {
-        for (const access of ["start-zai", "start-bigmodel", "account", "team", "manual"]) {
+        const access = "manual";
           await page.goto(
             `${origin}fixture?${new URLSearchParams({ locale, theme, access, vision: "1" })}`,
           );
@@ -145,7 +145,6 @@ export function registerProviderPresentationCases(getEnvironment) {
           assert.equal(await flashItem.getByText(label, { exact: true }).count(), 1);
           await mkdir(artifacts, { recursive: true });
           await page.screenshot({ path: join(artifacts, `vision-${access}-${width}.png`) });
-        }
       } finally {
         await page.close();
       }

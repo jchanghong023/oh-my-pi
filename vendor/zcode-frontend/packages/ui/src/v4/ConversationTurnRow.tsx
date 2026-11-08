@@ -20,7 +20,6 @@ interface ConversationTurnRowProps {
   row: ConversationRow;
   context: ConversationRowRenderContext;
   onFork?: (target: ConversationRowTarget) => void;
-  onRetry?: (target: ConversationRowTarget) => void;
   onFeedbackChange?: AssistantFeedbackHandler;
   onEdit?: (
     target: ConversationRowTarget,
@@ -44,7 +43,6 @@ export function ConversationTurnRow({
   row,
   context,
   onFork,
-  onRetry,
   onFeedbackChange,
   onEdit,
   editWorkspaceRewindAvailability,
@@ -63,7 +61,6 @@ export function ConversationTurnRow({
       row={row}
       context={context}
       onFork={onFork}
-      onRetry={onRetry}
       onFeedbackChange={onFeedbackChange}
       onEdit={onEdit}
       editWorkspaceRewindAvailability={editWorkspaceRewindAvailability}

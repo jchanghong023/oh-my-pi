@@ -26,7 +26,7 @@ function Fixture() {
   const [bundle, setBundle] = useState(1);
   const [session, setSession] = useState("a");
   const [pending, setPending] = useState(true);
-  return <ZCodeIntlProvider initialLocale={query.get("locale")}>
+  return <ZCodeIntlProvider>
     <main className="h-screen bg-background text-foreground p-3">
       <button data-testid="outside">Outside</button>
       <button data-testid="bundle" onClick={() => setBundle(value => value + 1)}>Bundle</button>

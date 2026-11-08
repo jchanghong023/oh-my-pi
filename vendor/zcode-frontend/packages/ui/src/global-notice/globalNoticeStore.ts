@@ -53,38 +53,20 @@ function emptyState(): PersistedGlobalNoticeState {
   };
 }
 
-function isLegacyHighspeedMockNotice(notice: GlobalNoticeEnvelope | null): boolean {
-  if (notice?.type !== "highspeed-share") return false;
-  const cardId = notice.payload.cardId;
-  return typeof cardId === "string" && cardId.startsWith("hsc_mock_");
-}
-
 function readState(
   storage: GlobalNoticeStorage,
-  onPersistError?: (error: unknown) => void,
 ): PersistedGlobalNoticeState {
   try {
     const raw = storage.getItem(STORAGE_KEY);
     if (!raw) return emptyState();
     const parsed = JSON.parse(raw) as Partial<PersistedGlobalNoticeState>;
     if (parsed.version !== 1) return emptyState();
-    const state: PersistedGlobalNoticeState = {
+    return {
       version: 1,
       latest: parsed.latest ?? null,
       dismissedUntilByKey: parsed.dismissedUntilByKey ?? {},
       requiresPublishAfterDismissalByKey: parsed.requiresPublishAfterDismissalByKey ?? {},
     };
-    if (!isLegacyHighspeedMockNotice(state.latest)) return state;
-
-    // Bug 根因：早期 Highspeed mock 通知使用 latest-only 持久化，关闭 mock 后重启仍会恢复假分享数据。
-    const cleaned = { ...state, latest: null };
-    // 清理写失败不能把整份状态（含 24h 静默）打回空：内存态照常用 cleaned。
-    try {
-      storage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
-    } catch (error) {
-      onPersistError?.(error);
-    }
-    return cleaned;
   } catch {
     return emptyState();
   }
@@ -97,14 +79,11 @@ export function createGlobalNoticeStore(options: {
   onPersistError?: (error: unknown) => void;
 }): GlobalNoticeStore {
   const now = options.now ?? Date.now;
-  let state = readState(options.storage, options.onPersistError);
+  let state = readState(options.storage);
   const listeners = new Set<() => void>();
 
   const persist = () => {
-    // Bug 根因：setItem 抛错会让 publish/dismiss 抛出，订阅者收不到已更新的内存态；而调用方
-    // （SessionPane 自动分享）已先 claim 再 publish，异常会留下不可重试的 claim，用户看不到分享卡且
-    // 当前 Renderer 生命周期内无法恢复。持久化只是展示增强：内存态先更新、写存储 best-effort、
-    // 无论成败都通知订阅者（spec §6）。
+    // 持久化仅增强展示；写入失败仍更新内存并通知订阅者。
     try {
       options.storage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch (error) {

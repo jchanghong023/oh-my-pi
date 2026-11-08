@@ -39,7 +39,7 @@ function Fixture() {
     canToggle: true,
   } as unknown as ToolCallBlockRenderContext;
   return (
-    <ZCodeIntlProvider initialLocale="en-US">
+    <ZCodeIntlProvider>
       <TooltipProvider>
         <button data-testid="complete" onClick={() => setState("completed")}>
           Complete

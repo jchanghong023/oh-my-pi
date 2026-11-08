@@ -3,7 +3,6 @@ import { localTtftFactsSchema } from "../local-ttft/contract.js";
 // 传输外壳：连接握手 / 订阅 / 帧信封。
 // 阶段为类型占位（后半接通道层时启用），数据形状已按规范定稿。
 import { z } from "zod";
-import { APP_USAGE_RANGES, appUsageSnapshotSchema } from "../usage-stats.js";
 import { zcodeWorkspaceRefSchema } from "../zcode-protocol-legacy-types.js";
 import {
   PROTOCOL_V4_LIMITS,
@@ -200,6 +199,7 @@ type Timestamp = z.infer<typeof timestampSchema>;
 
 // conversation topic 的具体帧 schema（五件套实例化）。
 // 传输外壳/黄金测试用它做帧合法性校验；host 通道层 复用。
+// usage / subagents / workflowRuns 与工具行由 snapshot / deltas 承载，不依赖产品遥测事件通道。
 export const conversationTopicFrameSchema = createTopicFrameSchema(
   conversationSnapshotSchema,
   conversationDeltaSchema,
@@ -358,7 +358,6 @@ export const V4_METHODS = {
   conversationPlans: "v4/conversation/plans",
   conversationFileChanges: "v4/conversation/fileChanges",
   backgroundBashOutput: "v4/conversation/backgroundBashOutput",
-  offPeakControl: "v4/conversation/offPeakControl",
   conversationFileRewindPreview: "v4/conversation/fileRewindPreview",
   // workflow run 的事件日志分页（详情页审计面）：只读、无状态、超时重发安全。
   // 新方法天然偏斜安全——旧桌面根本不会调用它。
@@ -376,11 +375,6 @@ export const V4_METHODS = {
   // 照产物的 ①/③ 拆法：Workspace 是轻行清单（不带正文），NodeResult 是一个节点的有界正文。
   conversationWorkflowRunWorkspace: "v4/conversation/workflowRunWorkspace",
   conversationWorkflowRunNodeResult: "v4/conversation/workflowRunNodeResult",
-  // usage query（模式同 rows/range：只读、无状态、超时重发安全）。
-  // usage 事实源在 CLI 的 session 库（model_usage/turn_usage 聚合），host 侧无副本，
-  // 故收敛为 v4 query 而非 host 直连；旧词 usage/stats、session/usage 就此消费清零。
-  usageStats: "v4/usage/stats",
-  conversationUsage: "v4/conversation/usage",
   // 项目数据彻底删除（schema 在 session-data.ts）：measure 只读；purge 幂等，已不存在的会话按 0 字节成功。
   // 新方法偏斜安全：旧 CLI 返回 method-not-found，Host 据此不显示「删除数据」选项。
   sessionDataMeasure: "v4/storage/sessionData/measure",
@@ -425,11 +419,8 @@ export type V4ConnectionFlowParams = z.infer<typeof v4ConnectionFlowParamsSchema
 export const v4ConnectionFlowResultSchema = z.object({}).strict();
 
 export const V4_NOTIFICATIONS = {
-  offPeakLifecycle: "v4/offPeak/lifecycle",
   // 下行帧（snapshot / deltas），params = ConversationTopicFrame。
   conversationFrame: "v4/conversation/frame",
-  // 仅 live ingest 的无正文事实；不进入 topic snapshot/recovery。
-  conversationTelemetryFact: "v4/telemetry/event",
   localTtftFacts: "v4/telemetry/local-ttft",
   // 仅当前进程 live ToolCallResult 产生；历史与 replayable 链路不得补造。
   cuaPermissionObservation: "v4/cua/permission-observation",
@@ -805,43 +796,6 @@ export const v4ConversationFileRewindPreviewResultSchema = z
 export type V4ConversationFileRewindPreviewResult = z.infer<
   typeof v4ConversationFileRewindPreviewResultSchema
 >;
-
-// ── usage query──
-// app 级用量聚合：range/timeZone 入参与旧 usage/stats 同形（消费者语义不变），
-// 结果 = AppUsageSnapshot（形状归属中性模块 usage-stats.ts，不与旧词表文件耦合）。
-export const v4UsageStatsParamsSchema = z
-  .object({
-    range: z.enum(APP_USAGE_RANGES),
-    timeZone: z.string().optional(),
-  })
-  .strict();
-export type V4UsageStatsParams = z.infer<typeof v4UsageStatsParamsSchema>;
-export const v4UsageStatsResultSchema = appUsageSnapshotSchema;
-export type V4UsageStatsResult = z.infer<typeof v4UsageStatsResultSchema>;
-
-// 会话级 token 用量（旧 session/usage 的 v4 名字空间落位：会话是协议一等概念，
-// task 是 UI 投影概念不进协议词表）。字段与旧 result 同形，旧 schema 随词一起死。
-export const v4ConversationUsageParamsSchema = z
-  .object({
-    sessionId: z.string().min(1),
-  })
-  .strict();
-export type V4ConversationUsageParams = z.infer<typeof v4ConversationUsageParamsSchema>;
-export const v4ConversationUsageResultSchema = z
-  .object({
-    sessionId: z.string().min(1),
-    totalTokens: z.number().int().nonnegative(),
-    inputTokens: z.number().int().nonnegative(),
-    outputTokens: z.number().int().nonnegative(),
-    reasoningTokens: z.number().int().nonnegative(),
-    cacheCreationTokens: z.number().int().nonnegative(),
-    cacheReadTokens: z.number().int().nonnegative(),
-    modelRequestCount: z.number().int().nonnegative(),
-    modelErrorCount: z.number().int().nonnegative(),
-    inputBaselineBySource: z.record(z.string(), z.number().int().nonnegative()),
-  })
-  .strict();
-export type V4ConversationUsageResult = z.infer<typeof v4ConversationUsageResultSchema>;
 
 // ── 附件上行事务 ──
 // UI 高层仍用 put(input)->ref；这份 full-data schema 只描述 renderer 内部调用，绝不作为

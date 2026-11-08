@@ -9,7 +9,6 @@ import {
   Bot,
   Palette,
   Sun,
-  BarChart3,
   Terminal,
   AlarmClock,
   Anchor,
@@ -138,12 +137,6 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     titleId: "settings.workspaceFileSearch.title",
     groupId: "basics",
   },
-  {
-    id: "usage",
-    icon: BarChart3,
-    titleId: "settings.usageTitle",
-    groupId: "dataAndStats",
-  },
   // 项目管理排在归档管理之前（docs/superpowers/specs/2026-10-24-project-management.md）。
   {
     id: "projects",
@@ -157,12 +150,6 @@ const BASE_SETTINGS_SECTIONS: SettingsSectionDefinition[] = [
     titleId: "archives.nav",
     groupId: "dataAndStats",
   },
-  // 暂时隐藏设置页里的 Migration 入口，只保留页面实现，后续可以直接恢复这一项。
-  // {
-  //   id: "migration",
-  //   icon: ArrowLeftRight,
-  //   titleId: "settings.migration.title",
-  // },
 ];
 
 export const SETTINGS_SECTIONS = BASE_SETTINGS_SECTIONS.filter((section) =>

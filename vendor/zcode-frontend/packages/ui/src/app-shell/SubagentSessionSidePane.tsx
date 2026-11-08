@@ -4,6 +4,10 @@ import type { CodeViewerSource } from "@/lib/codeViewer.js";
 import type {
   OpenScopedSubagentSideTabRequest,
   OpenBackgroundBashSideTabRequest,
+  OpenScopedWorkflowActorSessionSideTabRequest,
+  OpenScopedWorkflowArtifactSideTabRequest,
+  OpenScopedWorkflowRunSideTabRequest,
+  OpenScopedWorkflowWorkspaceSideTabRequest,
   SubagentSessionSidePaneTab,
 } from "@/lib/workspaceSidePane.js";
 import type { PaneWorkspaceScope } from "@/v4/paneLayoutStore.js";
@@ -19,6 +23,10 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
   onOpenFileLink,
   onOpenSubagentSession,
   onOpenBackgroundBash,
+  onOpenWorkflowActorSession,
+  onOpenWorkflowArtifact,
+  onOpenWorkflowRun,
+  onOpenWorkflowWorkspace,
 }: {
   tab: SubagentSessionSidePaneTab;
   focused: boolean;
@@ -28,6 +36,10 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
   onOpenFileLink?: (target: MessageFileLinkTarget) => void;
   onOpenBackgroundBash?: (request: OpenBackgroundBashSideTabRequest) => void;
   onOpenSubagentSession: (request: OpenScopedSubagentSideTabRequest) => void;
+  onOpenWorkflowActorSession?: (request: OpenScopedWorkflowActorSessionSideTabRequest) => void;
+  onOpenWorkflowArtifact?: (request: OpenScopedWorkflowArtifactSideTabRequest) => void;
+  onOpenWorkflowRun?: (request: OpenScopedWorkflowRunSideTabRequest) => void;
+  onOpenWorkflowWorkspace?: (request: OpenScopedWorkflowWorkspaceSideTabRequest) => void;
 }) {
   const scope = useMemo<PaneWorkspaceScope>(
     () => ({
@@ -43,13 +55,11 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
       <SessionPane
         paneId={tab.id}
         sessionId={tab.childSessionId}
-        openTrigger="subagent"
         rootSessionId={tab.rootSessionId}
         readOnly
         allowWorkspaceFileRewind
         compactForRemoteControl={compactForRemoteControl}
         focused={focused}
-        telemetryVisible={focused}
         workspacePath={tab.workspacePath}
         workspaceIdentity={tab.workspaceIdentity}
         remoteSessionId={tab.remoteSessionId}
@@ -58,6 +68,10 @@ export const SubagentSessionSidePane = memo(function SubagentSessionSidePane({
         onOpenFileLink={onOpenFileLink}
         onOpenSubagentSession={onOpenSubagentSession}
         onOpenBackgroundBash={onOpenBackgroundBash}
+        {...(onOpenWorkflowActorSession === undefined ? {} : { onOpenWorkflowActorSession })}
+        {...(onOpenWorkflowArtifact === undefined ? {} : { onOpenWorkflowArtifact })}
+        {...(onOpenWorkflowRun === undefined ? {} : { onOpenWorkflowRun })}
+        {...(onOpenWorkflowWorkspace === undefined ? {} : { onOpenWorkflowWorkspace })}
       />
     </V4PaneConversationProvider>
   );

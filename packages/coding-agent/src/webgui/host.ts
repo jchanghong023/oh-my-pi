@@ -2,7 +2,8 @@ import { readLines } from "@oh-my-pi/pi-utils";
 import type { DevWorkbenchHandle } from "../dev-workbench/host";
 import type { AgentSession } from "../session/agent-session";
 import { openPathWithResult } from "../utils/open";
-import { acquireBrowserProject, readBrowserProject } from "./project-registry";
+import { NativeCwdHost } from "./native-cwd";
+import { acquireBrowserProject } from "./project-registry";
 import { closeWebServer, ensureWebServer } from "./server";
 import { readWebGuiSessionInfo } from "./session-source";
 
@@ -36,6 +37,7 @@ export function startWebGui(session: AgentSession): Promise<WebGuiHandle> {
 
 async function bindWebGui(session: AgentSession): Promise<WebGuiHandle> {
 	const lease = await acquireBrowserProject(session.sessionManager.getCwd(), "webgui");
+	const cwdHost = new NativeCwdHost(session, lease);
 	let closing: Promise<void> | undefined;
 	let exiting = false;
 	const handle: WebGuiHandle = {
@@ -47,10 +49,7 @@ async function bindWebGui(session: AgentSession): Promise<WebGuiHandle> {
 			exiting = true;
 			if (!closing) {
 				const pending = (async () => {
-					await lease.markExiting();
-					const pendingModels = readBrowserProject(lease.projectId)?.pendingModelSelections;
-					if (pendingModels) await Promise.allSettled(pendingModels);
-					await lease.close();
+					await cwdHost.close();
 					handles.delete(handle);
 				})();
 				closing = pending;

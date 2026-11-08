@@ -63,82 +63,79 @@ export class ChannelClient implements IChannelClient, IDisposable {
       return Promise.reject(new Error("Cancelled"));
     }
 
-    let disposable: IDisposable | undefined;
-    const result = new Promise<any>((resolve, reject) => {
-      this.pendingRejections.set(id, reject);
-      const doRequest = () => {
-        // dispose/cancel 可能发生在 Initialize 之前；此时不能再把已经 rejected
-        // 的请求发送到新连接或已终结的传输上。
-        if (this.isDisposed || !this.pendingRejections.has(id)) {
-          return;
-        }
-
-        const handler: IHandler = (response) => {
-          switch (response.type) {
-            case ResponseType.PromiseSuccess:
-              this.handlers.delete(id);
-              this.pendingRejections.delete(id);
-              resolve(response.data);
-              return;
-            case ResponseType.PromiseError: {
-              this.handlers.delete(id);
-              this.pendingRejections.delete(id);
-              const error = new Error(response.data.message) as Error & Record<string, unknown>;
-              error.name = response.data.name;
-              if (response.data.stack) {
-                error.stack = response.data.stack.join("\n");
-              }
-              const passthroughKeys = [
-                "code",
-                "kind",
-                "status",
-                "retryAfterMs",
-                "data",
-                "detail",
-                "details",
-                "taskId",
-                "traceId",
-                "retryable",
-                "profileId",
-              ] as const;
-              for (const key of passthroughKeys) {
-                const value = response.data[key];
-                if (value !== undefined) {
-                  error[key] = value;
-                }
-              }
-              reject(error);
-              return;
-            }
-            case ResponseType.PromiseErrorObj:
-              this.handlers.delete(id);
-              this.pendingRejections.delete(id);
-              reject(response.data);
-              return;
-          }
-        };
-
-        this.handlers.set(id, handler);
-        this.sendRequest(RequestType.Promise, id, channelName, name, arg);
-      };
-
-      if (this.state === State.Idle) {
-        doRequest();
-      } else {
-        this.whenInitialized().then(doRequest);
+    const { promise: result, resolve, reject } = Promise.withResolvers<any>();
+    this.pendingRejections.set(id, reject);
+    const doRequest = () => {
+      // dispose/cancel before Initialize must not send an already rejected request.
+      if (this.isDisposed || !this.pendingRejections.has(id)) {
+        return;
       }
 
-      disposable = cancellationToken.onCancellationRequested(() => {
-        if (!this.pendingRejections.has(id)) {
-          return;
+      const handler: IHandler = (response) => {
+        switch (response.type) {
+          case ResponseType.PromiseSuccess:
+            this.handlers.delete(id);
+            this.pendingRejections.delete(id);
+            resolve(response.data);
+            return;
+          case ResponseType.PromiseError: {
+            this.handlers.delete(id);
+            this.pendingRejections.delete(id);
+            const error = new Error(response.data.message) as Error & Record<string, unknown>;
+            error.name = response.data.name;
+            if (response.data.stack) {
+              error.stack = response.data.stack.join("\n");
+            }
+            const passthroughKeys = [
+              "code",
+              "kind",
+              "status",
+              "retryAfterMs",
+              "data",
+              "detail",
+              "details",
+              "taskId",
+              "traceId",
+              "retryable",
+              "profileId",
+            ] as const;
+            for (const key of passthroughKeys) {
+              const value = response.data[key];
+              if (value !== undefined) {
+                error[key] = value;
+              }
+            }
+            reject(error);
+            return;
+          }
+          case ResponseType.PromiseErrorObj:
+            this.handlers.delete(id);
+            this.pendingRejections.delete(id);
+            reject(response.data);
+            return;
         }
-        this.sendCancelOrDispose(RequestType.PromiseCancel, id);
-        this.handlers.delete(id);
-        this.pendingRejections.delete(id);
-        reject(new Error("Cancelled"));
-      });
-      this.activeRequests.add(disposable);
+      };
+
+      this.handlers.set(id, handler);
+      this.sendRequest(RequestType.Promise, id, channelName, name, arg);
+    };
+
+    const disposable = cancellationToken.onCancellationRequested(() => {
+      if (!this.pendingRejections.has(id)) {
+        return;
+      }
+      this.sendCancelOrDispose(RequestType.PromiseCancel, id);
+      this.handlers.delete(id);
+      this.pendingRejections.delete(id);
+      reject(new Error("Cancelled"));
     });
+    this.activeRequests.add(disposable);
+
+    if (this.state === State.Idle) {
+      doRequest();
+    } else {
+      this.whenInitialized().then(doRequest);
+    }
 
     return result.finally(() => {
       disposable?.dispose();
@@ -149,11 +146,37 @@ export class ChannelClient implements IChannelClient, IDisposable {
   }
 
   private requestEvent(channelName: string, name: string, arg?: any): Event<any> {
-    const id = this.lastRequestId++;
+    let subscriptionId: number | undefined;
     const emitter = new Emitter<any>({
       onWillAddFirstListener: () => {
+        if (this.isDisposed) {
+          return;
+        }
+        const id = this.lastRequestId++;
+        subscriptionId = id;
+        this.activeRequests.add(emitter);
+        this.handlers.set(id, (response) => {
+          if (subscriptionId !== id) {
+            return;
+          }
+          if (response.type === ResponseType.EventFire) {
+            emitter.fire(response.data);
+          } else if (response.type === ResponseType.EventError) {
+            // Subscription failures terminate this generation, never the normal event stream.
+            subscriptionId = undefined;
+            this.handlers.delete(id);
+            this.activeRequests.delete(emitter);
+            emitter.dispose();
+            const error = new Error(response.data.message);
+            error.name = response.data.name;
+            if (response.data.stack) error.stack = response.data.stack.join("\n");
+            console.error(`RPC event subscription failed: ${channelName}.${name}`, error);
+          }
+        });
         const doRequest = () => {
-          this.activeRequests.add(emitter);
+          if (this.isDisposed || subscriptionId !== id) {
+            return;
+          }
           this.sendRequest(RequestType.EventListen, id, channelName, name, arg);
         };
 
@@ -164,25 +187,15 @@ export class ChannelClient implements IChannelClient, IDisposable {
         }
       },
       onDidRemoveLastListener: () => {
+        const id = subscriptionId;
+        if (id === undefined) {
+          return;
+        }
+        subscriptionId = undefined;
         this.activeRequests.delete(emitter);
+        this.handlers.delete(id);
         this.sendCancelOrDispose(RequestType.EventDispose, id);
-        this.handlers.delete(id);
       },
-    });
-
-    this.handlers.set(id, (response) => {
-      if (response.type === ResponseType.EventFire) {
-        emitter.fire(response.data);
-      } else if (response.type === ResponseType.EventError) {
-        // 订阅失败必须结束其监听器，不能把错误对象写入终端等正常事件流，也不能继续保留旧请求。
-        this.handlers.delete(id);
-        this.activeRequests.delete(emitter);
-        emitter.dispose();
-        const error = new Error(response.data.message);
-        error.name = response.data.name;
-        if (response.data.stack) error.stack = response.data.stack.join("\n");
-        console.error(`RPC event subscription failed: ${channelName}.${name}`, error);
-      }
     });
 
     return emitter.event;
@@ -286,6 +299,7 @@ export class ChannelClient implements IChannelClient, IDisposable {
     }
     this.activeRequests.clear();
     this.pendingRejections.clear();
+    this.handlers.clear();
     this._onDidInitialize.dispose();
   }
 }

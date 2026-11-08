@@ -1,13 +1,10 @@
 {
 	"extends": "../tsconfig.workspace.json",
-	"include": [
-		"src",
-		"test",
-		"scripts"
-	],
+	"include": ["src", "test", "scripts"],
 	"exclude": [
 		"node_modules",
 		"dist",
+		"test/webgui/fixtures",
 		"src/spec-driven/vendor",
 		"scripts/openwiki-vendor-entry.ts"
 	]

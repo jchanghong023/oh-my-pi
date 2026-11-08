@@ -1,6 +1,4 @@
-import type { MobilePluginDiscoveryTelemetry } from "./telemetry.js";
 import { z } from "zod";
-import type { MobileSessionCreateTelemetry } from "./sessionCreateTelemetry.js";
 /* eslint-disable max-lines -- Web 远程控制共享 App payload 与 workspace bridge 契约。 */
 import type { WebRemoteControlRelayV2PairStatus } from "#src/web-remote-relay/index.js";
 import type {
@@ -606,10 +604,6 @@ export interface WebRemoteControlMobileDiagnosticPayload {
 }
 
 export type WebRemoteControlAppPayload =
-  | {
-      zcode_type: "telemetry-report";
-      event: MobileSessionCreateTelemetry | MobilePluginDiscoveryTelemetry;
-    }
   | WebRemoteControlBootstrapRequestPayload
   | WebRemoteControlBootstrapResponsePayload
   | WebRemoteControlWorkspaceListRequestPayload

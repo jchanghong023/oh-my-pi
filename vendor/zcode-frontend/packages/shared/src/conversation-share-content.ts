@@ -7,7 +7,6 @@ import {
   workflowRunSchema,
 } from "./zcode-protocol-v4/workflow-runs.js";
 
-export const CONVERSATION_SHARE_CONTENT_VERSIONS = { workflow: 2, "tool-presentation": 1 } as const;
 export const SHARE_CONTENT_LIMITS = {
   blocks: 200,
   artifacts: 32,
@@ -243,11 +242,4 @@ export function decodeConversationShareContentBlocks(
     const parsed = conversationShareContentBlockSchema.safeParse(block);
     return parsed.success ? [parsed.data] : [];
   });
-}
-export function supportsConversationShareContent(
-  capabilities: { content_block_versions?: Record<string, number> },
-  type: string = "workflow",
-  version = 1,
-): boolean {
-  return (capabilities.content_block_versions?.[type] ?? 0) >= version;
 }

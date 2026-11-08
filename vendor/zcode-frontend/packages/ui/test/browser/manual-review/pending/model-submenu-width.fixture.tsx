@@ -12,11 +12,11 @@ const name =
     ? "GLM"
     : params.get("name") === "extreme"
       ? `GLM-${"LongModelName".repeat(20)}`
-      : "GLM-5.3-Highspeed";
+      : "GLM-LongModelName";
 function Fixture() {
   const [selected, setSelected] = useState("text");
   return (
-    <ZCodeIntlProvider initialLocale="en-US">
+    <ZCodeIntlProvider>
       <div className="p-8">
         <ModelConfigSelect
           modelGroups={[

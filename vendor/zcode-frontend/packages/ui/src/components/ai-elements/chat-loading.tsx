@@ -42,7 +42,7 @@ export function ChatLoading({
   size: _size,
   ...props
 }: ChatLoadingProps) {
-  const { intl, locale } = useZCodeIntl();
+  const { intl } = useZCodeIntl();
   const [elapsedMs, setElapsedMs] = useState(initialElapsedMs);
   useEffect(() => {
     if (!loading) return;
@@ -73,7 +73,6 @@ export function ChatLoading({
         {formatRunningWorkDuration(
           elapsedMs,
           (descriptor) => intl.formatMessage(descriptor),
-          locale,
         )}
       </span>
     </div>

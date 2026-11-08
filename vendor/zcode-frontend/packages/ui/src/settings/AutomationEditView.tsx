@@ -1,5 +1,4 @@
 /* eslint-disable max-lines -- 定时任务编辑整页集中维护 Settings/History 两个 tab、cron builder、项目/模型选择器与运行历史，集中更利于交互一致。 */
-import { useStartPlanRecommendation } from "@/hooks/useStartPlanRecommendation.js";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { completeNewModelSelection } from "@zcode/provider";
 import {
@@ -132,7 +131,6 @@ import { useModelSelectionServiceView } from "@/hooks/useModelSelectionView.js";
 import { resolveModelThoughtOption } from "@/lib/modelThoughtOption.js";
 import { decodeCustomModelValue, encodeCustomModelValue } from "@/lib/zcodeCustomModelValue.js";
 import { parseModelPickerValue } from "@/lib/zcodeSessionProjection.js";
-import { startUserAction } from "@/lib/userActionTelemetry.js";
 import { logger } from "@/logger.js";
 import {
   findAutomationWorkspaceOptionByKey,
@@ -1234,7 +1232,6 @@ export function AutomationEditView({
   const [thoughtLevel, setThoughtLevel] = useState<string>("");
   const thoughtLevelRef = useRef("");
   const modelManuallyChangedRef = useRef(false);
-  const thoughtManuallyChangedRef = useRef(false);
   const thoughtTriggerRef = useRef<HTMLSpanElement | null>(null);
   // 不能首帧先渲染默认的“每天 09:00”、再由 effect 回填持久化调度。
   // 子级调度控件会先注册 value 回调，从而把默认值误记成 dirty baseline；编辑态必须首帧即使用真实值。
@@ -1280,9 +1277,12 @@ export function AutomationEditView({
   );
   const workspaceOptionsRef = useRef(workspaceOptions);
   workspaceOptionsRef.current = workspaceOptions;
+  const initializedAutomationIdRef = useRef<string | null>(null);
 
-  // 打开/切换编辑对象时重置表单。
+  // 仅打开/切换任务时灌入表单；启停或后台刷新同一任务不能覆盖未保存输入。
   useEffect(() => {
+    if (editing && initializedAutomationIdRef.current === editing.automationId) return;
+    initializedAutomationIdRef.current = editing?.automationId ?? null;
     setTab("settings");
     setRunsPage(1);
     setTouchedFields(new Set());
@@ -1292,7 +1292,6 @@ export function AutomationEditView({
       setScheduleRemoved(false);
       titleTouchedRef.current = false;
       modelManuallyChangedRef.current = false;
-      thoughtManuallyChangedRef.current = false;
       setTitle(editing.title);
       setPrompt(editing.prompt);
       const editingModel = editing.modelSelection
@@ -1314,7 +1313,6 @@ export function AutomationEditView({
       // 新建页的默认标题可随 locale 更新；模板标题仍属于用户明确选择的内容。
       titleTouchedRef.current = false;
       modelManuallyChangedRef.current = false;
-      thoughtManuallyChangedRef.current = false;
       setTitle(initialDraft?.title ?? localizedDefaultCreateTitle);
       setPrompt(initialDraft?.prompt ?? "");
       modelSelection.current = "";
@@ -1473,27 +1471,8 @@ export function AutomationEditView({
     return buildAutomationModelSelectGroups({
       selectedProvider: ZCODE_AGENT_PROVIDER,
       labels: {
-        apiKeyLabel: intl.formatMessage({ id: "settings.modelProvider.apiKey" }),
         apiKeyBadgeLabel: intl.formatMessage({
           id: "settings.modelProvider.connectionMode.apiKeyBadge",
-        }),
-        codingPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlan",
-        }),
-        codingPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.codingPlanBadge",
-        }),
-        startPlanLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlan",
-        }),
-        startPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.startPlanBadge",
-        }),
-        teamPlanBadgeLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlanBadge",
-        }),
-        teamPlanFallbackLabel: intl.formatMessage({
-          id: "settings.modelProvider.connectionMode.teamPlan",
         }),
       },
       registrySelectionView: modelSelectionView,
@@ -1510,7 +1489,6 @@ export function AutomationEditView({
   const handleSelectProject = (key: string) => {
     if (!findAutomationWorkspaceOptionByKey(workspaceOptions, key)) return;
     modelManuallyChangedRef.current = false;
-    thoughtManuallyChangedRef.current = false;
     modelSelection.current = "";
     setModel("");
     setWorkspaceKey(key);
@@ -1525,7 +1503,6 @@ export function AutomationEditView({
   const handleModelValueChange = useCallback(
     (value: string) => {
       modelManuallyChangedRef.current = true;
-      thoughtManuallyChangedRef.current = false;
       modelSelection.current = value;
       setModel(value);
       const selection =
@@ -1582,7 +1559,6 @@ export function AutomationEditView({
     // 导致初次创建按钮永远禁用。目标 Host ready 后直接选中并固化 preferredSelection。
     modelSelection.current = preferredModelValue;
     setModel(preferredModelValue);
-    thoughtManuallyChangedRef.current = false;
     const preferredReasoning =
       modelSelectionView?.preferredSelection?.options?.reasoningLevel ?? "";
     thoughtLevelRef.current = preferredReasoning;
@@ -1743,7 +1719,6 @@ export function AutomationEditView({
   // 字段才能触发未保存提示，否则仅打开已有任务再返回也会被误判为修改。
   const hasUnsavedChanges = Boolean(editing) && changedFields.length > 0;
 
-  const recommendStartPlan = useStartPlanRecommendation(modelSelectionView);
   const submitAutomation = useCallback(
     async (options: { validationSource: "save" | "run-now"; returnToList?: boolean }) => {
       if (saving) return false;
@@ -1778,36 +1753,20 @@ export function AutomationEditView({
           : null;
       // 只禁用按钮无法覆盖快捷键或异步回调；提交边界也必须拒绝无有效项目的新建。
       if (!target) return false;
-      if (input.modelSelection && (!editing || changedFields.includes("model"))) {
-        const chosen = await recommendStartPlan(input.modelSelection);
-        if (!chosen) return false;
-        input.modelSelection = chosen;
+      const submittedSignatures = currentEditSignaturesRef.current
+        ? { ...currentEditSignaturesRef.current, mode: modeRef.current }
+        : null;
+      const ok = await onSubmit({ input, ...target });
+      if (ok && submittedSignatures) {
+        // 以本次持久化的输入重建基线；等待期间的新输入仍与该基线比较，不能被标成已保存。
+        touchedFieldBaselinesRef.current = submittedSignatures;
+        setTouchedFields((current) => new Set(current));
       }
-      const trace = startUserAction({
-        featureId: "automation.lifecycle",
-        action: editing ? "update" : "create",
-        trigger: "button",
-        workspaceKind: editing?.workspaceIdentity?.trim() ? "remote" : "local",
-        automationKind: "scheduled",
-      });
-      try {
-        const ok = await onSubmit({ input, ...target });
-        if (ok) {
-          trace.complete({ resultSource: "platform_result" });
-          if (options?.returnToList !== false) onBack();
-        } else {
-          trace.reject({ resultSource: "platform_result" });
-        }
-        return ok;
-      } catch (error) {
-        trace.fail({ failureStage: "automation_save" });
-        throw error;
-      }
+      if (ok && options.returnToList !== false) onBack();
+      return ok;
     },
     [
       buildSubmitInput,
-      changedFields,
-      recommendStartPlan,
       canSubmit,
       editing,
       onBack,
@@ -1865,8 +1824,7 @@ export function AutomationEditView({
       return;
     }
 
-    // 定时任务曾单独维护“保存 / 放弃修改”弹窗，与闲时任务的确认弹窗
-    // 尺寸和动作持续漂移；统一复用远程 Automation presentation，仅保留“取消 / 丢弃”语义。
+    // 复用统一确认弹窗的尺寸和动作样式，仅保留“取消 / 丢弃”语义。
     const confirmed = await confirmDialog({
       title: intl.formatMessage({ id: "automations.unsaved.title" }),
       description: intl.formatMessage({
@@ -1897,7 +1855,6 @@ export function AutomationEditView({
 
   const handleTabChange = useCallback(
     (nextTab: AutomationSettingsHistoryTab) => {
-      // 新建定时任务曾直接禁用 History trigger，和闲时任务可查看空历史的交互不一致。
       logger.debug("[AutomationEditView] 切换设置页签", {
         automationId: editing?.automationId ?? null,
         nextTab,
@@ -2701,7 +2658,6 @@ export function AutomationEditView({
                           // 用户改档位时以正在显示的模型身份形成新意图；只读刷新不改表单。
                           modelSelection.current = effectiveModelValue;
                           setModel(effectiveModelValue);
-                          thoughtManuallyChangedRef.current = true;
                           thoughtLevelRef.current = value;
                           setThoughtLevel(value);
                         }}
@@ -2725,7 +2681,6 @@ export function AutomationEditView({
                 {runsEntry.error}
               </div>
             ) : runs.length === 0 ? (
-              // 定时任务曾仅渲染透明的 py-10 文本块，缺少与闲时任务一致的空态背景、边框和高度。
               <AutomationHistoryEmptyState>
                 {intl.formatMessage({ id: "automations.runs.empty" })}
               </AutomationHistoryEmptyState>

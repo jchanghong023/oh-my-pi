@@ -268,8 +268,7 @@ for (const width of [390, 1200])
           await choose(page, "build");
           await page.evaluate(() => window.syncYoloMode("yolo"));
           assert.equal(await dialog(page).count(), 0);
-          for (const surface of ["automation", "offpeak"]) {
-            await page.goto(`${url}&surface=${surface}`);
+            await page.goto(`${url}&surface=automation`);
             const trigger = page.getByTestId("chat-mode-select-trigger");
             await trigger.waitFor();
             const before = await trigger.textContent();
@@ -289,7 +288,6 @@ for (const width of [390, 1200])
             await page.evaluate(() => window.changeYoloTarget());
             await dialog(page).waitFor({ state: "hidden" });
             assert.equal(await trigger.textContent(), before);
-          }
           await page.goto(`${url}&surface=approval`);
           await page.getByRole("option").nth(1).click();
           await dialog(page).waitFor();

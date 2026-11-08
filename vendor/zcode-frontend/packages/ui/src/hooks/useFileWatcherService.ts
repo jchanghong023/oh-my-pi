@@ -9,6 +9,7 @@ import type { FileEntry } from "@zcode/shared";
 import type { IDisposable } from "@zcode/rpc";
 import { useServices } from "./useServices.js";
 import { logger } from "@/logger.js";
+import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
 /**
  * 带文件系统监视的目录读取 hook
@@ -18,6 +19,7 @@ import { logger } from "@/logger.js";
  */
 export function useWatchedReaddir(path: string) {
   const { fileService, fileWatcherService } = useServices();
+  const watchingAvailable = useFileWatchingAvailable(fileWatcherService, Boolean(path));
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
@@ -42,6 +44,7 @@ export function useWatchedReaddir(path: string) {
 
   // 文件系统监视：挂载时 watch，卸载时 unwatch
   useEffect(() => {
+    if (!watchingAvailable) return;
     let cancelled = false;
     let watcherId: string | null = null;
     const disposables: IDisposable[] = [];
@@ -61,6 +64,7 @@ export function useWatchedReaddir(path: string) {
 
         // 订阅变更事件，收到时自动刷新目录列表
         const sub = fileWatcherService.onDynamicChange(id)(() => {
+          if (cancelled) return;
           logger.info(`[FileWatcher] 目录变更，自动刷新 path=${path}`);
           refreshRef.current();
         });
@@ -78,7 +82,7 @@ export function useWatchedReaddir(path: string) {
       for (const d of disposables) d.dispose();
       if (watcherId) fileWatcherService.unwatch({ id: watcherId });
     };
-  }, [fileWatcherService, path, refresh]);
+  }, [fileWatcherService, path, refresh, watchingAvailable]);
 
   return { entries, loading, error, refresh };
 }

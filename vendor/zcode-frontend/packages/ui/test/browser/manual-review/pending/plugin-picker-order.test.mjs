@@ -27,15 +27,16 @@ before(async () => {
             return 'import {useServices} from "@/hooks/useServices.js"; export function useWorkspaceServicesResolution(){ return {services:useServices(),rpcReady:true,remoteSessionId:"attachment"}; }';
           if (id.endsWith("/v4/activeTaskProvider.ts"))
             return 'export function useChatViewActiveTaskProvider(){return "zcode";}';
+          if (id.endsWith("/providers/subagentsMentionProvider.ts"))
+            return "export const mapSubagentsToMentionItemsForTest=()=>[];";
           for (const [file, fn] of [
             ["fileMentionProvider", "useFileMentionProvider"],
             ["sessionsMentionProvider", "useSessionsMentionProvider"],
             ["skillsMentionProvider", "useSkillsMentionProvider"],
-            ["subagentsMentionProvider", "useSubagentsMentionProvider"],
           ]) {
             if (id.endsWith("/providers/" + file + ".ts"))
               return (
-                "export const mapSkillsToMentionItemsForTest=()=>[]; export const mapSubagentsToMentionItemsForTest=()=>[]; export function " +
+                "export const mapSkillsToMentionItemsForTest=()=>[]; export function " +
                 fn +
                 '(){return {items:[],loading:false,error:null,title:"",emptyText:""};}'
               );

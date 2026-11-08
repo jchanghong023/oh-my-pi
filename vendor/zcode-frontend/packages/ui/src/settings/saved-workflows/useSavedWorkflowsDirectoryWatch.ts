@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import type { IFileWatcherService } from "@zcode/services";
 import { logger } from "@/logger.js";
+import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
 const WATCH_DEBOUNCE_MS = 300;
 
@@ -35,8 +36,12 @@ export function useSavedWorkflowsDirectoryWatch({
 }): void {
   const resolvedDirectory =
     directory ?? (workspacePath ? savedWorkflowsDirectoryPath(workspacePath) : null);
+  const watchingAvailable = useFileWatchingAvailable(
+    fileWatcherService,
+    enabled && Boolean(resolvedDirectory),
+  );
   useEffect(() => {
-    if (!enabled || !resolvedDirectory) return;
+    if (!watchingAvailable || !resolvedDirectory) return;
     let disposed = false;
     let watchId: string | null = null;
     let subscription: { dispose: () => void } | null = null;
@@ -51,6 +56,7 @@ export function useSavedWorkflowsDirectoryWatch({
         }
         watchId = id;
         subscription = fileWatcherService.onDynamicChange(id)(() => {
+          if (disposed) return;
           if (timer) clearTimeout(timer);
           timer = setTimeout(() => {
             timer = null;
@@ -70,5 +76,5 @@ export function useSavedWorkflowsDirectoryWatch({
       subscription?.dispose();
       if (watchId) void fileWatcherService.unwatch({ id: watchId });
     };
-  }, [enabled, fileWatcherService, refresh, resolvedDirectory]);
+  }, [watchingAvailable, fileWatcherService, refresh, resolvedDirectory]);
 }

@@ -152,47 +152,6 @@ export type OAuthCachedSessionRestoreResult =
 /** OAuth owner 已完成会话凭据变更；不携带用户资料或 token。 */
 export type OAuthSessionState = "signed-in" | "signed-out";
 
-/** Host 在检测到 ZCode JWT 失效后通知 Renderer 展示确认并重启。 */
-export const ZCODE_JWT_INVALID_BROADCAST_CHANNEL = "auth:zcode-jwt-invalid";
-
-export type JwtExpirationResult =
-  | { kind: "valid"; expiresAt: number }
-  | { kind: "expired"; expiresAt: number }
-  | { kind: "unknown" };
-
-/**
- * 只解析 JWT 的 exp 来判断本地生命周期，不承担签名校验。
- * 无法证明已过期的历史或非标准 token 保持兼容，最终有效性仍由服务端决定。
- */
-export function resolveJwtExpiration(
-  token: string,
-  now = Date.now(),
-  clockSkewMs = 30_000,
-): JwtExpirationResult {
-  try {
-    const payloadSegment = token.split(".")[1];
-    if (!payloadSegment) {
-      return { kind: "unknown" };
-    }
-
-    const normalized = payloadSegment.replace(/-/g, "+").replace(/_/g, "/");
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-    const decoded = globalThis.atob(padded);
-    const bytes = Uint8Array.from(decoded, (character) => character.charCodeAt(0));
-    const payload = JSON.parse(new TextDecoder().decode(bytes)) as { exp?: unknown };
-    if (typeof payload.exp !== "number" || !Number.isFinite(payload.exp) || payload.exp <= 0) {
-      return { kind: "unknown" };
-    }
-
-    const expiresAt = payload.exp * 1_000;
-    return now + Math.max(0, clockSkewMs) >= expiresAt
-      ? { kind: "expired", expiresAt }
-      : { kind: "valid", expiresAt };
-  } catch {
-    return { kind: "unknown" };
-  }
-}
-
 /** 归一化用户信息 */
 export interface OAuthUserProfile {
   id: string;

@@ -179,8 +179,6 @@ export function useDataSyncDialog(params: {
   /** 只传给来源端（哈希与导出）；弹窗打开期间不变。 */
   workspace?: DataSyncWorkspaceMapping;
   onPushFinished(result: DeviceSyncResult): void | Promise<void>;
-  /** 逐插件 sync 终态上报；没有平台（例如测试）时不传。 */
-  reportPluginSyncResult?: DataSyncPushControl["reportPluginSyncResult"];
 }) {
   const { categories, sourceServices } = params;
   const connection = params.online ? params.targetServices : undefined;
@@ -354,9 +352,6 @@ export function useDataSyncDialog(params: {
           else stoppers.delete(key);
           const keys = new Set(stoppers.keys());
           updateView(category.id, (current) => ({ ...current, stoppable: keys }));
-        },
-        reportPluginSyncResult(outcome) {
-          latestParamsRef.current.reportPluginSyncResult?.(outcome);
         },
       };
       const sourceService = category.getService(sourceServices);

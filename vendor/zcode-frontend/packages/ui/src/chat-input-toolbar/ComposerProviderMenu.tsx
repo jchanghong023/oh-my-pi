@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon } from "lucide-react";
+import { useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import type { ModelSelectGroup } from "@/ModelConfigSelect.js";
 import { ProviderLogo } from "@/settings/model-provider-section/ProviderLogo.js";
@@ -38,58 +38,34 @@ function ProviderAccessBadge({ group }: { group: ModelSelectGroup }) {
 
 export function ComposerProviderMenu({
   groups,
-  disabled = false,
-  loading = false,
-  isDisabled,
-  separatorBeforeKey,
   group,
   label,
   providerFooter,
   onSelect,
   children,
-  error,
 }: {
   groups: readonly ModelSelectGroup[];
-  disabled?: boolean;
-  loading?: boolean;
-  isDisabled?: (group: ModelSelectGroup) => boolean;
-  separatorBeforeKey?: string;
   group: ModelSelectGroup | undefined;
   label: string;
   providerFooter?: ReactNode;
   onSelect: (group: ModelSelectGroup) => void;
   children: ReactNode;
-  error?: string | null;
 }) {
   const { intl } = useZCodeIntl();
   const narrow = useSyncExternalStore(subscribe, snapshot, () => false);
   const [open, setOpen] = useState(false);
-  // 切换失败后回到对应操作区域，避免错误藏在已关闭的 Provider 子菜单。
-  useEffect(() => {
-    if (error) setOpen(true);
-  }, [error]);
   const triggerRef = useRef<HTMLDivElement>(null);
   const [offset, setOffset] = useState({ side: 9, align: -5 });
   const contents = (
     <>
-      {error ? (
-        <div role="alert" className="px-2 py-1 text-ui-sm text-destructive">
-          {error}
-        </div>
-      ) : null}
       <DropdownMenuRadioGroup
         value={group?.key}
         data-composer-provider-list
         className="min-h-0 overflow-y-auto"
       >
-        {groups.map((candidate, index) => (
-          <Fragment key={candidate.key}>
-            {index > 0 && candidate.key === separatorBeforeKey ? (
-              // 原因：默认负边距会撑出滚动列表 4px；列表内分隔线必须留在横向边界内。
-              <DropdownMenuSeparator className="mx-0 shrink-0 bg-border/50" />
-            ) : null}
+        {groups.map((candidate) => (
             <DropdownMenuRadioItem
-              disabled={disabled || isDisabled?.(candidate)}
+              key={candidate.key}
               value={candidate.key}
               aria-label={[candidate.label, candidate.labelBadge].filter(Boolean).join(" ")}
               data-testid={testId(TID_CHAT_MODEL_SELECT_GROUP, candidate.key)}
@@ -106,7 +82,6 @@ export function ComposerProviderMenu({
               <span className="min-w-0 whitespace-normal break-words">{candidate.label}</span>
               <ProviderAccessBadge group={candidate} />
             </DropdownMenuRadioItem>
-          </Fragment>
         ))}
       </DropdownMenuRadioGroup>
       {providerFooter ? (
@@ -124,21 +99,10 @@ export function ComposerProviderMenu({
       {group ? <ProviderAccessBadge group={group} /> : null}
     </span>
   );
-  const loadingIndicator = loading ? (
-    <span
-      data-testid="composer-provider-loading"
-      role="status"
-      aria-label={intl.formatMessage({ id: "common.loading" })}
-      className="ml-auto inline-flex size-4 shrink-0 items-center justify-center text-foreground-subtle"
-    >
-      <Loader2Icon aria-hidden="true" className="size-4 animate-spin motion-reduce:animate-none" />
-    </span>
-  ) : undefined;
   const triggerProps = {
     "data-testid": "composer-provider-trigger",
     "aria-label": `${label}: ${group?.label ?? "—"}`,
-    disabled: disabled || loading || (!group && !providerFooter),
-    "aria-busy": loading || undefined,
+    disabled: !group && !providerFooter,
     className:
       "min-h-8 gap-3 data-[highlighted]:bg-menu-hover/50 data-[state=open]:bg-menu-hover/50",
   };
@@ -169,9 +133,7 @@ export function ComposerProviderMenu({
           }}
         >
           {title}
-          {loadingIndicator ?? (
-            <ChevronRightIcon className="ml-auto size-4 text-foreground-subtle" />
-          )}
+          <ChevronRightIcon className="ml-auto size-4 text-foreground-subtle" />
         </DropdownMenuItem>
         {children}
       </>
@@ -190,7 +152,7 @@ export function ComposerProviderMenu({
           setOpen(next);
         }}
       >
-        <DropdownMenuSubTrigger {...triggerProps} ref={triggerRef} indicator={loadingIndicator}>
+        <DropdownMenuSubTrigger {...triggerProps} ref={triggerRef}>
           {title}
         </DropdownMenuSubTrigger>
         <DropdownMenuPortal>

@@ -74,7 +74,6 @@ export const BOT_REPLY_GRANULARITIES = [
 ] as const satisfies readonly BotReplyGranularity[];
 
 export const ALL_BOT_WORKSPACES = "*";
-export const BOT_BIND_CODE_TTL_MS = 30_000;
 
 export interface BotWorkspaceRef {
   id: string;

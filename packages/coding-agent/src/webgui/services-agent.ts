@@ -41,6 +41,7 @@ import {
 	nativeChatRuntime,
 	type NativeChatRuntime,
 } from "./native-chat";
+import { createNativeTaskRunAdapter } from "./native-task-runs";
 import {
 	WebGuiNotImplementedError,
 	type WebGuiMethod,
@@ -511,13 +512,32 @@ class BrowserAgentAttachment {
 		let ack: CommandAck;
 		try {
 			if (envelope.type !== "sendText") throw new WebGuiNotImplementedError(`zcode-agent.command.${envelope.type}`);
-			const payload = commandPayloadSchemas.sendText.parse(envelope.payload);
-			if (payload.attachments?.length || payload.context_refs?.length)
-				throw new WebGuiNotImplementedError("native chat: plain text only");
+			const input = record(envelope.payload);
+			const payload = commandPayloadSchemas.sendText.parse(input);
+			const { text, attachments, requestedDelivery, modelSelection, mode, planEnabled, ...extraInput } = payload;
+			if (
+				attachments?.length ||
+				Object.values(extraInput).some(value => value !== undefined) ||
+				Object.entries(input).some(([key, value]) => value !== undefined && !Object.hasOwn(payload, key)) ||
+				(requestedDelivery !== undefined && requestedDelivery !== "startNow") ||
+				(mode !== undefined && mode !== "build") ||
+				planEnabled === true
+			)
+				throw new WebGuiNotImplementedError(
+					"native chat: plain text only; contextual input and execution overrides are unavailable",
+				);
+			if (
+				modelSelection &&
+				(modelSelection.providerId !== runtime.session.model?.provider ||
+					modelSelection.modelId !== runtime.session.model?.id ||
+					(modelSelection.options?.reasoningLevel !== undefined &&
+						modelSelection.options.reasoningLevel !== (runtime.session.thinkingLevel ?? "off")))
+			)
+				throw new WebGuiNotImplementedError("native chat: submission must use the current native model selection");
 			await runtime.submit(
 				this.#context,
 				sessionId,
-				payload.text,
+				text,
 				envelope.commandId,
 				envelope.clientId,
 				envelope.commandId,
@@ -573,6 +593,20 @@ class BrowserAgentAttachment {
 
 export function createAgentServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	const attachment = new BrowserAgentAttachment(context);
+	const runtime = context.nativeSession ? nativeChatRuntime(context) : undefined;
+	const directory = runtime?.childDirectory;
+	const taskRuns = directory ? createNativeTaskRunAdapter(context, directory) : undefined;
+	const releaseTaskRuns = taskRuns ? runtime!.registerTaskRuns() : undefined;
+	let taskRunsDisposed = false;
+	const disposeTaskRuns = () => {
+		if (taskRunsDisposed) return;
+		taskRunsDisposed = true;
+		context.signal.removeEventListener("abort", disposeTaskRuns);
+		taskRuns?.dispose();
+		releaseTaskRuns?.();
+	};
+	context.signal.addEventListener("abort", disposeTaskRuns, { once: true });
+	if (context.signal.aborted) disposeTaskRuns();
 	const initialize = (value: unknown): ZCodeAgentInitializeResult => {
 		const target = attachment.target(value);
 		if (!context.nativeSession)
@@ -591,6 +625,14 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 		};
 	};
 	const sessionId = (value: unknown): string => nonempty(record(value).sessionId, "sessionId");
+	const taskReads: Record<string, WebGuiMethod> = {};
+	if (taskRuns)
+		for (const [name, method] of Object.entries(taskRuns.methods)) {
+			taskReads[name] = (value: unknown) => {
+				attachment.runtime(value);
+				return method(value);
+			};
+		}
 	const reads: Record<string, WebGuiMethod> = {
 		getWorkspaceRuntimeIdentity: value => {
 			const runtime = attachment.runtime(value);
@@ -609,6 +651,15 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 		listSessions: async value => {
 			attachment.runtime(value);
 			return (await listNativeHistory(context)).map(info => legacySessionInfo(context, info));
+		},
+		listSessionSubagents: value => {
+			const runtime = attachment.runtime(value);
+			const params = record(value);
+			if (params.endedCursor !== undefined && typeof params.endedCursor !== "string")
+				throw new TypeError("Invalid native child cursor");
+			if (params.endedLimit !== undefined && typeof params.endedLimit !== "number")
+				throw new TypeError("Invalid native child page size");
+			return runtime.listSubagents(context, sessionId(value), params.endedCursor, params.endedLimit);
 		},
 		readSession: value => {
 			attachment.runtime(value);
@@ -637,6 +688,7 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 			"zcode-agent",
 			{
 				...reads,
+				...taskReads,
 				prepareStorage: async value => {
 					attachment.runtime(value);
 					await listNativeHistory(context);
@@ -645,19 +697,27 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 					const runtime = attachment.runtime(value);
 					const id = sessionId(value);
 					await runtime.info(context, id);
+					const child = await runtime.child(context, id);
 					return {
 						sessionId: id,
-						state: runtime.session.sessionId === id ? "ready" : "unloaded",
-						generation: runtime.session.sessionGeneration,
+						state: runtime.session.sessionId === id || child?.session ? "ready" : "unloaded",
+						generation: child?.generation ?? runtime.session.sessionGeneration,
 						revision: runtime.state(id).seq,
 						lastError: null,
 					};
 				},
 				reconcileSessionsIndexV4: async value => {
-					attachment.runtime(value);
+					const runtime = attachment.runtime(value);
 					const params = record(value);
 					if (!Array.isArray(params.sessionIds)) throw new TypeError("Expected session IDs");
 					const infos = new Map((await listNativeHistory(context)).map(info => [info.id, info]));
+					for (const value of params.sessionIds) {
+						const id = nonempty(value, "sessionId");
+						if (!infos.has(id)) {
+							const child = await runtime.child(context, id);
+							if (child) infos.set(id, child.info);
+						}
+					}
 					return {
 						sessions: params.sessionIds.map(id => {
 							const info = infos.get(String(id));
@@ -702,7 +762,11 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 						params.limit > 200
 					)
 						throw new TypeError("Row limit must be 1..200");
-					if (params.residency === "resident-only" && sessionId(value) !== runtime.session.sessionId)
+					if (
+						params.residency === "resident-only" &&
+						sessionId(value) !== runtime.session.sessionId &&
+						!(await runtime.child(context, sessionId(value)))?.session
+					)
 						throw new Error("proto.sessionNotResident");
 					const snapshot = await runtime.snapshot(context, sessionId(value));
 					const candidates = snapshot.rows.window.filter(
@@ -728,13 +792,17 @@ export function createAgentServices(context: WebGuiServiceContext): readonly Web
 				unsubscribeSessionsIndexV4: value => attachment.unsubscribe(value),
 			},
 			{
+				...(taskRuns ? { events: { onNativeTaskRunsChanged: taskRuns.onDidChange } } : {}),
 				dynamicEvents: {
 					onDynamicSessionsIndexFrame: value => attachment.frames(value),
 					onDynamicConversationFrame: value => attachment.conversationFrames(value),
 					// Native journal storage has no ZCode database migration attempt.
 					onDynamicStorageStartupState: value => attachment.storageEvents(value),
 				},
-				dispose: () => attachment.dispose(),
+				dispose: () => {
+					disposeTaskRuns();
+					attachment.dispose();
+				},
 			},
 		),
 		createWebGuiService("zcode-session", {

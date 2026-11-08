@@ -8,6 +8,7 @@ import { MultiFileDiff, PatchDiff } from "@pierre/diffs/react";
 
 import { cn } from "@/components/lib/utils.js";
 import { DIFFS_PREFERRED_HIGHLIGHTER } from "@/lib/diffsHighlighterEngine.js";
+import { DiffsWorkerPoolProvider } from "@/root/DiffsWorkerPoolProvider.js";
 
 type DiffViewerStyle = CSSProperties & {
   "--diffs-bg"?: string;
@@ -50,6 +51,25 @@ export interface DiffViewerSelectedLineRange {
 }
 
 function DiffViewerComponent(props: DiffViewerProps) {
+  return (
+    <DiffsWorkerPoolProvider
+      disabled={props.disableWorkerPool}
+      renderOptions={{
+        theme:
+          props.lightTheme && props.darkTheme
+            ? { light: props.lightTheme, dark: props.darkTheme }
+            : undefined,
+        lineDiffType: "word-alt",
+        preferredHighlighter: DIFFS_PREFERRED_HIGHLIGHTER,
+        ...props.options,
+      }}
+    >
+      <DiffViewerContent {...props} />
+    </DiffsWorkerPoolProvider>
+  );
+}
+
+function DiffViewerContent(props: DiffViewerProps) {
   const rendersPatch = isPatchDiffProps(props);
   const {
     options: optionsOverride,

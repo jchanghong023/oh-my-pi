@@ -15,7 +15,6 @@ import {
   resolveMcpFailureMessageId,
 } from "@/settings/McpFailurePresentation.js";
 import { SettingsResourceList } from "@/settings/SettingsResourceGroup.js";
-import { runUserAction } from "@/lib/userActionTelemetry.js";
 import { CircleIcon, Cable, Loader2Icon, ExternalLink, Plus } from "lucide-react";
 
 export function McpStatusDot({
@@ -188,12 +187,7 @@ function McpServerItem({
             data-testid={testId(TID_MCP_OPEN_AUTHORIZATION_BUTTON, server.name)}
             title={openAuthorizationLabel}
             onClick={() =>
-              runUserAction({
-                input: { featureId: "extension.mcp", action: "authorize", trigger: "button" },
-                operation: () => onOpenAuthorization?.(server),
-                completed: { resultSource: "platform_result" },
-                failureStage: "mcp_authorize",
-              })
+              onOpenAuthorization?.(server)
             }
           >
             <ExternalLink className="size-4" aria-hidden="true" />

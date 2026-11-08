@@ -49,12 +49,6 @@ import {
 } from "./display-help.js";
 import { RollingToolbarLabel } from "@/chat-input-toolbar/RollingToolbarLabel.js";
 
-export {
-  ChatContextUsage,
-  getContextCompressionCommand,
-  getRenderableTaskUsage,
-} from "@/chat-input-toolbar/contextUsage.js";
-
 type ConfigSelectTriggerSize = ComponentProps<typeof SelectTrigger>["size"];
 type ConfigSelectTriggerVariant = ComponentProps<
   typeof SelectTrigger

@@ -53,9 +53,13 @@ function projectLockPath(root: string): string {
 	return path.join(normalizePathForComparison(root), ".omp", "dev-workbench", "browser-mode");
 }
 
+export async function resolveBrowserProjectRoot(cwd: string): Promise<string> {
+	return (await DevWorkspace.resolve(cwd)).root;
+}
+
 /** One OS lease for the canonical project, regardless of mode, profile or native process. */
 export async function acquireBrowserProject(cwd: string, mode: BrowserProjectMode): Promise<BrowserProjectLease> {
-	const { root } = await DevWorkspace.resolve(cwd);
+	const root = await resolveBrowserProjectRoot(cwd);
 	return acquireResolvedProject(root, mode);
 }
 

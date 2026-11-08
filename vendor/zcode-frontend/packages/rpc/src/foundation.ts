@@ -173,7 +173,6 @@ interface EmitterOptions {
 
 /**
  * Relay 是一个"事件中继器"，可以动态切换输入源。
- * 用于 getDelayedChannel 中：先创建 Relay，等 channel promise resolve 后切换 input。
  */
 export class Relay<T> implements IDisposable {
   private emitter = new Emitter<T>();
@@ -194,7 +193,6 @@ export class Relay<T> implements IDisposable {
 
 /**
  * EventMultiplexer 聚合多个事件源为一个事件。
- * IPCServer 的 getMulticastEvent 用它来聚合所有客户端的同名事件。
  */
 export class EventMultiplexer<T> implements IDisposable {
   private readonly emitter = new Emitter<T>();

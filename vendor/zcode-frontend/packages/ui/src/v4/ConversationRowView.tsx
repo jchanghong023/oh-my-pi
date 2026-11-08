@@ -101,9 +101,6 @@ import {
 import { ToolCallBlock } from "@/ToolCallBlocks.js";
 import { resolveWorkflowRunOpenToolCallId } from "@/v4/workflowRunCardJoin.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
-import { useOptionalPlatform } from "@/hooks/usePlatform.js";
-import { reportAppTelemetryEvent } from "@/lib/appTelemetry.js";
-import { runUserAction, runUserActionAsync } from "@/lib/userActionTelemetry.js";
 import { logger } from "@/logger.js";
 import type { AssistantPreviewCard } from "@/lib/assistantPreviewCards.js";
 import {
@@ -140,7 +137,6 @@ import { splitUserInputEpilogue } from "@/v4/ConversationUserInputEpilogue.js";
 import { ConversationHookDetailsAction } from "@/v4/ConversationHookDetailsAction.js";
 import { formatModelChangeLabel } from "@/v4/composer/modelTriggerDisplay.js";
 import { formatMessageTimeLabel } from "@/v4/messageTimeLabel.js";
-import { parseConversationShareContext } from "@/lib/conversationShareContext.js";
 
 function RowShell({
   rowId,
@@ -194,12 +190,7 @@ const CopyRowAction = memo(function CopyRowAction({
   const [copied, setCopied] = useState(false);
   const handleCopy = useCallback(() => {
     if (!text || !navigator.clipboard) return;
-    void runUserActionAsync({
-      input: { featureId: "conversation.history.feedback", action: "copy", trigger: "button" },
-      operation: () => navigator.clipboard.writeText(text),
-      completed: { resultSource: "platform_result" },
-      failureStage: "clipboard_write",
-    }).then(() => {
+    void navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1200);
     });
@@ -261,8 +252,6 @@ export interface ConversationRowViewProps {
   onFork?: (target: ConversationRowTarget) => void;
   /** assistant entity 反馈 CAS；UI 先乐观更新，命令失败时回滚。 */
   onFeedbackChange?: AssistantFeedbackHandler;
-  /** 协议兼容：上层仍可提供 retryTurn capability，但产品 UI 不渲染普通重试入口。 */
-  onRetry?: (target: ConversationRowTarget) => void;
   /** user 行的 edit 入口（editUserQuery command，用行内编辑文本替换该轮）。 */
   onEdit?: UserInputEditHandler;
   editWorkspaceRewindAvailability?: EditWorkspaceRewindAvailability;
@@ -325,6 +314,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
   const [previewIndex, setPreviewIndex] = useState(0);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [failedRefs, setFailedRefs] = useState<ReadonlySet<string>>(() => new Set());
+  const failedRefsScope = useRef({ sessionId, rowId, entityId });
   const [thumbnailUrls, setThumbnailUrls] = useState<ReadonlyMap<string, string>>(() => new Map());
   // 可见消息行预取 image/video Blob：图片直接显示，视频由无控件播放器展示首帧；
   // video URL 同时供 gallery 复用，避免用户点击后再次读取大文件。
@@ -400,6 +390,26 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
   });
 
   useEffect(() => {
+    const previousScope = failedRefsScope.current;
+    const scopeChanged =
+      previousScope.sessionId !== sessionId ||
+      previousScope.rowId !== rowId ||
+      previousScope.entityId !== entityId;
+    failedRefsScope.current = { sessionId, rowId, entityId };
+    setFailedRefs((current) => {
+      if (current.size === 0) return current;
+      if (scopeChanged || attachmentKind === "file") return new Set();
+      const next = new Set(
+        [...current].filter((ref) =>
+          attachments?.some(
+            (attachment) =>
+              attachment.mime.startsWith("image/") &&
+              (attachment.previewRef ?? attachment.ref) === ref,
+          ),
+        ),
+      );
+      return next.size === current.size ? current : next;
+    });
     if (attachmentKind === "file" || !attachments || !sessionId || !readAttachment) {
       return;
     }
@@ -432,7 +442,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
                 }
               : {}),
           });
-          if (cancelled) return;
+          if (cancelled || controller.signal.aborted) return;
           const isLocalUrl = "url" in result;
           const url = isLocalUrl
             ? result.url
@@ -442,7 +452,7 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
                 }),
               );
           if (!isLocalUrl) thumbnailObjectUrlsRef.current.add(url);
-          if (cancelled) {
+          if (cancelled || controller.signal.aborted) {
             if (!isLocalUrl) {
               thumbnailObjectUrlsRef.current.delete(url);
               URL.revokeObjectURL(url);
@@ -451,6 +461,12 @@ const UserInputAttachmentList = memo(function UserInputAttachmentList({
           }
           thumbnailUrlsRef.current.set(ref, url);
           setThumbnailUrls(new Map(thumbnailUrlsRef.current));
+          setFailedRefs((current) => {
+            if (!current.has(ref)) return current;
+            const next = new Set(current);
+            next.delete(ref);
+            return next;
+          });
         } catch (error) {
           if (cancelled || controller.signal.aborted) return;
           if (!isVideo) setFailedRefs((current) => new Set(current).add(ref));
@@ -953,13 +969,6 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
     }),
     [context.workspaceIdentity, context.workspacePath, bodyText, row.conversationQuotes],
   );
-  // 只用于把历史消息里的 share URL 尾块从可见正文里剥掉。
-  // 该块已不再产出（见 ConversationComposer 的 promptText 注释）；这里保留解析，是为了让
-  // 接线修复到本次删除之间发出的消息不至于把裸 markup 当正文显示出来。
-  const parsedShareContext = useMemo(
-    () => parseConversationShareContext(parsedPrompt.visibleContent),
-    [parsedPrompt.visibleContent],
-  );
   const [editing, setEditing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [draft, setDraft] = useState(row.text);
@@ -992,7 +1001,7 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
       : intl.formatMessage({
           id: `chat.edit.resetConversationAndFiles.${editWorkspaceRewindAvailability?.reason ?? "noFiles"}`,
         });
-  const visibleText = parsedShareContext.visibleContent;
+  const visibleText = parsedPrompt.visibleContent;
   const codeCommentContexts = parsedPrompt.codeComments;
   const webElementContexts = parsedPrompt.webElements;
   const pptxElementReferences = parsedPrompt.pptxElements;
@@ -1034,7 +1043,7 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
 
   useEffect(() => {
     if (!editing) {
-      setDraft(parsedShareContext.visibleContent);
+      setDraft(parsedPrompt.visibleContent);
       setEditAttachments([...(row.attachments ?? [])]);
       setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
       setEditPromptContexts(parsedPrompt);
@@ -1058,20 +1067,20 @@ const SingleUserInputRowView = memo(function SingleUserInputRowView({
   const handleOpenEdit = useCallback(() => {
     // v4 迁移时把 user query 编辑误接成“直接读取主 composer 提交”，
     // 主 composer 为空时点击只会 warn。这里恢复旧行内编辑态。
-    setDraft(parsedShareContext.visibleContent);
+    setDraft(parsedPrompt.visibleContent);
     setEditAttachments([...(row.attachments ?? [])]);
     setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
     setEditPromptContexts(parsedPrompt);
     setEditing(true);
-  }, [parsedPrompt, parsedShareContext, row.attachments]);
+  }, [parsedPrompt, row.attachments]);
 
   const handleCancelEdit = useCallback(() => {
-    setDraft(parsedShareContext.visibleContent);
+    setDraft(parsedPrompt.visibleContent);
     setEditAttachments([...(row.attachments ?? [])]);
     setEditAttachmentIndices((row.attachments ?? []).map((_, index) => index));
     setEditPromptContexts(parsedPrompt);
     setEditing(false);
-  }, [parsedPrompt, parsedShareContext, row.attachments]);
+  }, [parsedPrompt, row.attachments]);
 
   const handleRemoveEditAttachment = useCallback((index: number) => {
     setEditAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
@@ -1469,7 +1478,6 @@ export const ConversationAssistantTextActions = memo(function ConversationAssist
   compactForRemoteControl = false,
   feedback = null,
   hookInvocations,
-  sessionId,
   turnId,
   sourceCommandIds = EMPTY_SOURCE_COMMAND_IDS,
   onFork,
@@ -1483,16 +1491,13 @@ export const ConversationAssistantTextActions = memo(function ConversationAssist
   compactForRemoteControl?: boolean;
   feedback?: AssistantMessageFeedback | null;
   hookInvocations?: readonly HookInvocationRow[];
-  sessionId?: string | null;
   turnId?: string;
   sourceCommandIds?: readonly string[];
   onFork?: (target: ConversationRowTarget) => void;
-  onRetry?: (target: ConversationRowTarget) => void;
   onFeedbackChange?: AssistantFeedbackHandler;
   className?: string;
 }) {
   const { intl, locale } = useZCodeIntl();
-  const platform = useOptionalPlatform();
   const [localFeedback, setLocalFeedback] = useState<AssistantMessageFeedback | null>(feedback);
   const copyLabel = intl.formatMessage({ id: "chat.message.copy" });
   const likeLabel = intl.formatMessage({
@@ -1535,31 +1540,12 @@ export const ConversationAssistantTextActions = memo(function ConversationAssist
           },
         );
       }
-      if (platform && entityId) {
-        void reportAppTelemetryEvent(
-          platform,
-          {
-            elementName: "assistant_message_feedback",
-            eventRegion: "chat",
-            eventType: "ck",
-            eventExtraDetail: { reaction: resolvedFeedback ?? "none" },
-            ...(sessionId ? { talkId: sessionId } : {}),
-            messageId: entityId,
-          },
-          "ConversationRowView",
-        );
-      }
     },
-    [entityId, localFeedback, onFeedbackChange, platform, rowId, sessionId],
+    [entityId, localFeedback, onFeedbackChange, rowId],
   );
   const handleFork = useCallback(() => {
     if (entityId) {
-      runUserAction({
-        input: { featureId: "conversation.history.branch", action: "fork", trigger: "button" },
-        operation: () => onFork?.({ rowId, entityId }),
-        completed: { resultSource: "optimistic_projection" },
-        failureStage: "fork",
-      });
+      onFork?.({ rowId, entityId });
     }
   }, [entityId, onFork, rowId]);
   return (
@@ -1640,7 +1626,6 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
   row,
   context,
   onFork,
-  onRetry,
   onFeedbackChange,
   hideActions,
   deferActions,
@@ -1653,7 +1638,6 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
   row: AssistantTextRow;
   context: ConversationRowRenderContext;
   onFork?: (target: ConversationRowTarget) => void;
-  onRetry?: (target: ConversationRowTarget) => void;
   onFeedbackChange?: AssistantFeedbackHandler;
   hideActions?: boolean;
   deferActions?: boolean;
@@ -1791,9 +1775,7 @@ const AssistantTextRowView = memo(function AssistantTextRowView({
           createdAt={row.createdAt}
           compactForRemoteControl={context.compactForRemoteControl}
           feedback={readAssistantFeedback(row)}
-          sessionId={context.sessionId}
           onFork={onFork}
-          onRetry={onRetry}
           onFeedbackChange={onFeedbackChange}
           className={cn(
             "mt-1",
@@ -2353,14 +2335,13 @@ const SubagentRowView = memo(function SubagentRowView({ row }: { row: SubagentRo
 
 /**
  * v4 row 渲染分发。memo：虚拟列表逐行渲染，父投影变化时只有 props 真正变化的行才重渲染
- * （前提是 onFork/onRetry/onEdit 为稳定引用 + context 引用稳定，见 SessionPane 的
+ * （前提是 onFork/onEdit 为稳定引用 + context 引用稳定，见 SessionPane 的
  * useCallback/useMemo）。
  */
 function ConversationRowViewImpl({
   row,
   context,
   onFork,
-  onRetry,
   onFeedbackChange,
   onEdit,
   editWorkspaceRewindAvailability,
@@ -2391,7 +2372,6 @@ function ConversationRowViewImpl({
           row={row}
           context={context}
           onFork={onFork}
-          onRetry={onRetry}
           onFeedbackChange={onFeedbackChange}
           hideActions={hideAssistantActions}
           deferActions={deferAssistantActions}

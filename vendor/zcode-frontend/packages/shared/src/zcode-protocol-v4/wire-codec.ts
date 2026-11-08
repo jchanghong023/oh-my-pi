@@ -47,7 +47,7 @@ export function measureTopicNotificationEnvelopeBytes(wire: TopicWireFrameCandid
     vqlByteLength(CHANNEL_EVENT_RESPONSE_TYPE) +
     maxEventIdSerializedBytes;
   const channelPayloadBytes = channelHeaderBytes + 1 + vqlByteLength(wireJsonBytes) + wireJsonBytes;
-  // SocketProtocol/PersistentProtocol 在 Channel payload 外再加固定 13-byte frame header。
+  // SocketProtocol 在 Channel payload 外再加固定 13-byte frame header。
   const channelSocketBytes = channelPayloadBytes + SOCKET_PROTOCOL_HEADER_BYTES;
   // topic encoder 继续用 legacy 单片 outer 作为保守 logical budget；production 已不发送该形态，
   // Channel payload 会再经 acknowledged raw adapter 独立分片并按最终 JSON 精确计量。

@@ -37,7 +37,7 @@ function Fixture() {
     [scope],
   );
   return (
-    <ZCodeIntlProvider initialLocale={locale}>
+    <ZCodeIntlProvider>
       <button onClick={() => setOpen(true)}>Open</button>
       <ImagePreviewDialog
         open={open}

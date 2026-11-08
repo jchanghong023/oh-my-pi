@@ -17,6 +17,7 @@ import { createLegacyPiVirtualModulePlugin } from "./legacy-pi-virtual-module";
 import { buildOpenWikiResources, createOpenWikiVisualArchivePlugin } from "./openwiki-resources";
 import { createOpenWikiVendorLoaderPlugin } from "./openwiki-vendor-loader-plugin";
 import { buildSpecDrivenArchive, createSpecDrivenArchivePlugin } from "./spec-driven-resources";
+import { prepareWebGuiResources } from "../../../scripts/generate-webgui-resources";
 import { withChargedActivity, withCompilerActivity } from "../../../scripts/test-gate-events";
 
 /**
@@ -68,6 +69,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 		Bun.env.BUN_NO_CODESIGN_MACHO_BINARY = "1";
 	}
 	try {
+		const webGuiResources = await prepareWebGuiResources(options.repoRoot);
 		const openWikiResources = await buildOpenWikiResources();
 		const workbenchAssets = await buildDevWorkbenchAssets();
 		await writeDevWorkbenchAssets(workbenchAssets);
@@ -80,6 +82,7 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 				"process.env.PI_COMPILED": JSON.stringify("true"),
 				"process.env.PI_OPENWIKI_SKILLS": JSON.stringify(JSON.stringify(openWikiResources.skills)),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
+				"process.env.PI_WEBGUI_EMBED": JSON.stringify(webGuiResources.embedded),
 				...(options.buildVersion ? { "process.env.PI_BUILD_VERSION": JSON.stringify(options.buildVersion) } : {}),
 				...(options.updateRepository
 					? { "process.env.PI_UPDATE_REPOSITORY": JSON.stringify(options.updateRepository) }

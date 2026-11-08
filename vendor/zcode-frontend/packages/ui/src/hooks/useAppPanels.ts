@@ -47,7 +47,6 @@ import {
   syncSubagentSessionSidePaneTabs,
   toggleGitSidePane,
   stampSidePaneTabsOwnership,
-  type TreemappingSidePaneTab,
   type OpenScopedSubagentSideTabRequest,
   type OpenBackgroundBashSideTabRequest,
   openBackgroundBashSidePane,
@@ -418,17 +417,6 @@ export function useAppPanels(options: {
       return next;
     });
   }, [isOfficeMode, commitOpenedSidePaneState, revealSidePaneForCurrentOwner, workspaceAbsPath]);
-
-  const handleOpenTreemapping = useCallback(
-    (source?: TreemappingSidePaneTab["source"]) => {
-      // Treemapping 功能当前需要从侧边栏隐藏。保留回调形状给消息链路兼容，
-      // 但不再创建 side pane tab，避免 header 或旧入口绕过菜单隐藏。
-      logger.debug(
-        `[App] 已隐藏 treemapping 侧边栏入口 workspace=${workspaceAbsPath} source=${source?.kind ?? "current"}`,
-      );
-    },
-    [workspaceAbsPath],
-  );
 
   const handleOpenWhiteboard = useCallback(() => {
     const board = useWhiteboardStore.getState().createBoard({
@@ -970,7 +958,6 @@ export function useAppPanels(options: {
     handleOpenBrowserUrl,
     handleToggleGit,
     handleOpenGit,
-    handleOpenTreemapping,
     handleOpenWhiteboard,
     handleOpenDeveloperTools,
     handleOpenNewSidePaneTab,

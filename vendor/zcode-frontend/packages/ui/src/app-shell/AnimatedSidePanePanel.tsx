@@ -29,7 +29,6 @@ import {
 } from "@/side-pane-full-view/index.js";
 import { ScopedErrorBoundary } from "@/ErrorBoundary.js";
 import { GitPane } from "@/GitPane.js";
-import { TreemappingPane } from "@/TreemappingPane.js";
 import { WhiteboardPane } from "@/WhiteboardPane.js";
 import { ModelTrajectoryPane } from "@/ModelTrajectoryPane.js";
 import { DeveloperToolsPane } from "@/DeveloperToolsPane.js";
@@ -770,7 +769,6 @@ export function AnimatedSidePanePanel({
         reviewTitle: intl.formatMessage({ id: "sidePane.review" }),
         fileManagerTitle: intl.formatMessage({ id: "fileManager.title" }),
         codeViewerTitle: intl.formatMessage({ id: "codeViewer.title" }),
-        treemappingTitle: intl.formatMessage({ id: "treemapping.title" }),
         whiteboardTitle: intl.formatMessage({ id: "whiteboard.title" }),
         modelTrajectoryTitle: intl.formatMessage({
           id: "modelTrajectory.title",
@@ -1008,6 +1006,16 @@ export function AnimatedSidePanePanel({
                             onOpenFileLink={onOpenFileLink}
                             onOpenSubagentSession={onOpenSubagentSession}
                             onOpenBackgroundBash={onOpenBackgroundBash}
+                            {...(onOpenWorkflowActorSession === undefined
+                              ? {}
+                              : { onOpenWorkflowActorSession })}
+                            {...(onOpenWorkflowArtifact === undefined
+                              ? {}
+                              : { onOpenWorkflowArtifact })}
+                            {...(onOpenWorkflowRun === undefined ? {} : { onOpenWorkflowRun })}
+                            {...(onOpenWorkflowWorkspace === undefined
+                              ? {}
+                              : { onOpenWorkflowWorkspace })}
                           />
                         ) : tab.type === "subagent-directory" ? (
                           <SubagentDirectorySidePane
@@ -1135,13 +1143,6 @@ export function AnimatedSidePanePanel({
                             onClose={onCloseGit}
                             onRefresh={onRefreshGit}
                             onRevealFileInTree={onRevealGitFileInTree}
-                          />
-                        ) : tab.type === "treemapping" ? (
-                          <TreemappingPane
-                            activeTaskId={activeTaskId}
-                            workspacePath={workspaceAbsPath}
-                            workspaceIdentity={workspaceIdentity}
-                            source={tab.source ?? { kind: "current" }}
                           />
                         ) : tab.type === "whiteboard" ? (
                           <WhiteboardPane

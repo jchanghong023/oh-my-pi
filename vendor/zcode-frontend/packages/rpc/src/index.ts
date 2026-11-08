@@ -4,15 +4,8 @@
  * 架构总览（从底到顶）：
  *
  * ┌──────────────────────────────────────────────────────────────┐
- * │  Layer 6: Remote 远程连接                                     │
- * │  RemoteAuthorityResolver → SocketFactory → PersistentProtocol │
- * │  → IPCClient → channel.call()                                │
- * ├──────────────────────────────────────────────────────────────┤
- * │  Layer 5: ProxyChannel 服务自动代理                            │
+ * │  Layer 4: ProxyChannel 服务自动代理                            │
  * │  fromService(service) ↔ toService(channel)                   │
- * ├──────────────────────────────────────────────────────────────┤
- * │  Layer 4: IPCServer(1:N) / IPCClient(1:1 双向)               │
- * │  连接管理、路由、多播                                          │
  * ├──────────────────────────────────────────────────────────────┤
  * │  Layer 3: ChannelServer / ChannelClient                      │
  * │  基于 Channel 的 RPC (call/listen)                            │
@@ -69,7 +62,6 @@ export {
   type MessagePortLike,
   createQueuePair,
 } from "./protocol.js";
-export { PersistentProtocol, type PersistentProtocolOptions } from "./persistent-protocol.js";
 
 // Layer 3: Channel RPC
 export {
@@ -79,54 +71,7 @@ export {
   type IChannelClient,
   ChannelServer,
   ChannelClient,
-  getDelayedChannel,
 } from "./channels.js";
 
-// Layer 4: 连接管理
-export {
-  type ClientConnectionEvent,
-  type Client,
-  type IConnectionHub,
-  type IClientRouter,
-  IPCServer,
-  IPCClient,
-  StaticRouter,
-} from "./ipc.js";
-
-// Layer 5: 服务代理
+// Layer 4: 服务代理
 export { ProxyChannel } from "./proxy-channel.js";
-
-// 日志中间件 —— 装饰 ChannelServer/ChannelClient，统一记录 RPC 调用
-export {
-  type RPCLogger,
-  LoggingChannelServer,
-  LoggingChannelClient,
-} from "./logging-middleware.js";
-
-export {
-  type NetworkTransportKind,
-  type NetworkObservation,
-  type NetworkTelemetrySink,
-  setNetworkTelemetrySink,
-  emitNetworkTelemetryObservation,
-  NetworkTelemetryChannelServer,
-  NetworkTelemetryChannelClient,
-} from "./network-telemetry-middleware.js";
-
-// Layer 6: Remote
-export {
-  RemoteConnectionType,
-  WebSocketRemoteConnection,
-  ManagedRemoteConnection,
-  type RemoteConnection,
-  type ResolvedAuthority,
-  type IRemoteAuthorityResolver,
-  RemoteAuthorityResolverService,
-  type ISocketFactory,
-  RemoteSocketFactoryService,
-  type IURITransformer,
-  type SimpleURI,
-  createURITransformer,
-  RemoteAgentConnection,
-  type RemoteConnectionState,
-} from "./remote.js";

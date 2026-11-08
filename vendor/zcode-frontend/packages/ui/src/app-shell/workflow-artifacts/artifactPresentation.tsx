@@ -59,10 +59,6 @@ export function ArtifactKindIcon({
 
 /**
  * 字节数的展示写法。
- *
- * 刻意在本模块另写一份而不是 import `feedback/feedbackSubmissionJob.ts` 里那个同名函数：
- * 那是反馈上传作业模块，为了五行算术把整条上传链路拖进 app-shell 的依赖图不划算，
- * 而两者若漂移也不会有人受害（一个说文件多大，一个说传了多少）。
  */
 export function formatArtifactBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "";

@@ -91,7 +91,7 @@ function joined(
 }
 
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale="en-US">
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <div className="relative h-8" data-testid="spine-preview">
         <SpineRail ink="march" position="above" />

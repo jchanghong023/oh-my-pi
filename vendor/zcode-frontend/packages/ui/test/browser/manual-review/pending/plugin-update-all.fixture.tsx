@@ -112,7 +112,7 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <StoreContext.Provider value={store}>
     <TabStoreProvider>
-      <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
+      <ZCodeIntlProvider>
         <TooltipProvider>
           <Fixture />
         </TooltipProvider>

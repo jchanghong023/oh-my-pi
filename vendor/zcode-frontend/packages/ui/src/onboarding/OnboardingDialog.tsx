@@ -69,6 +69,8 @@ export function OnboardingDialog(props: {
   const [selectedWorkspacePaths, setSelectedWorkspacePaths] = useState<string[]>([]);
   const initializedWorkspaceSelectionRef = useRef(false);
   const autoScannedSessionStepRef = useRef(false);
+  const pendingAutoScanRef = useRef(false);
+  const sessionScanEntryRef = useRef(0);
 
   // 引导阶段没有 Scope 选择，target 恒为当前上下文 workspace，直接注入其 service。
   const { settingsSyncService } = useServices();
@@ -155,6 +157,7 @@ export function OnboardingDialog(props: {
 
   useEffect(() => {
     if (!settingsSync.state.open) {
+      sessionScanEntryRef.current += 1;
       setWizardStep("session");
       setSelectedWorkspacePaths([]);
       resetFinishExecution();
@@ -181,12 +184,6 @@ export function OnboardingDialog(props: {
   ]);
 
   useEffect(() => {
-    if (wizardStep !== "session") {
-      autoScannedSessionStepRef.current = false;
-    }
-  }, [wizardStep]);
-
-  useEffect(() => {
     // 修复原因：删除欢迎页时一并删掉了 `view === "wizard"` 门禁，而 wizardStep 初始就是 session、
     // 组件常驻挂载，弹窗关闭时每次启动也会扫描 Claude 历史。修法：只在弹窗打开时自动扫描；
     // 关闭时上面的 effect 会重置标记，下次打开再扫一次。
@@ -206,7 +203,19 @@ export function OnboardingDialog(props: {
     }
 
     autoScannedSessionStepRef.current = true;
-    void sessionMigration.scan();
+    initializedWorkspaceSelectionRef.current = false;
+    setSelectedWorkspacePaths([]);
+    pendingAutoScanRef.current = true;
+    const entry = ++sessionScanEntryRef.current;
+    void sessionMigration.scan().then((candidates) => {
+      if (entry !== sessionScanEntryRef.current) return;
+      if (candidates) {
+        initializedWorkspaceSelectionRef.current = true;
+        setSelectedWorkspacePaths([...new Set(candidates.map((candidate) => candidate.workspacePath))]);
+      }
+    }).finally(() => {
+      if (entry === sessionScanEntryRef.current) pendingAutoScanRef.current = false;
+    });
   }, [
     enabled,
     sessionMigration.candidates.length,
@@ -219,6 +228,9 @@ export function OnboardingDialog(props: {
   ]);
 
   useEffect(() => {
+    if (!settingsSync.state.open || sessionMigration.isScanning || pendingAutoScanRef.current) {
+      return;
+    }
     setSelectedWorkspacePaths((previous) => {
       const nextWorkspacePaths = [
         ...new Set(sessionMigration.candidates.map((candidate) => candidate.workspacePath)),
@@ -236,7 +248,7 @@ export function OnboardingDialog(props: {
 
       return previous.filter((workspacePath) => nextWorkspacePaths.includes(workspacePath));
     });
-  }, [sessionMigration.candidates]);
+  }, [sessionMigration.candidates, sessionMigration.isScanning, settingsSync.state.open]);
 
   const selectedWorkspaceCount = selectedWorkspacePaths.length;
   // 暂时隐藏数据迁移向导里的代理设置步骤，同时不把默认选中的代理设置暗中计入迁移任务。

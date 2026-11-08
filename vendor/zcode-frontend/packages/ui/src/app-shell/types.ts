@@ -3,15 +3,13 @@ import type { ComposerDraftHandoff } from "@/v4/composer/composerDraftWorkspaceT
 import type { RefObject } from "react";
 import type {
   ZCodeProvider,
-  SessionCreateSource,
   ZCodeTaskRuntimeStatus,
   ZCodeTaskMeta,
   GitChangeSourceId,
   RemoteTarget,
   SourceServerUpdateTarget,
-  UserInfo,
 } from "@zcode/shared";
-import type { IFeedbackService, IServiceAccessor } from "@zcode/services";
+import type { IServiceAccessor } from "@zcode/services";
 import type { SavedWorkflowsOpenTarget } from "@/settings/saved-workflows/SavedWorkflowsSection.js";
 import type { SavedWorkflowHubTarget } from "@/v4/savedWorkflowHubContext.js";
 import type { RecentClosedSidePaneTab } from "@/hooks/useAppPanels.js";
@@ -68,7 +66,6 @@ export interface WorkspaceShellZCodeState {
 export interface CreateTaskOptions {
   /** Renderer 发起方租约；异步准备期间取消或换草稿后不得导航。 */
   isCurrent?: () => boolean;
-  remoteProjectMembershipId?: string;
   /** 只在目标准备和新草稿导航完成后通知发起界面；不自动发送。 */
   onComplete?: () => void;
   onError?: (error: unknown) => void;
@@ -81,7 +78,6 @@ export interface CreateTaskOptions {
   /** 仅分组组织意图，不决定执行项目或 cwd。 */
   taskGroupId?: string | null;
   hostId?: string;
-  createSource?: SessionCreateSource;
   /** 新草稿输入框预填文本；只写草稿，不自动发送。 */
   initialPrompt?: string;
   /** 创建项目后的当前草稿交接，仅在 renderer 内存中传递。 */
@@ -159,10 +155,6 @@ export interface RemoteConnectionOpenPreference {
 
 export interface AppProps extends WorkspaceRemoteNavigationProps {
   services: IServiceAccessor;
-  baseFeedbackService: IFeedbackService;
-  onLogout?: () => void;
-  onLogin?: () => void;
-  user?: UserInfo | null;
   onCreateTask: (request?: CreateTaskRequest) => void;
   onCreateConversationTask?: () => void;
   /** 解析“在项目外工作”的目标；identity 由 Root 按 Source 归属给出，Shell 不得按路径反查。 */
@@ -192,7 +184,7 @@ export interface GitChangeSummary {
 
 export type WorkspaceMainView = "chat" | "automations";
 
-export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackService"> {
+export interface WorkspaceShellLayoutProps extends AppProps {
   workspaceReadOnlyReason?: string;
   workspaceMainView: WorkspaceMainView;
   openAutomationId: string | null;
@@ -220,7 +212,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   canTaskNavBack: boolean;
   canTaskNavForward: boolean;
   isSidebarVisible: boolean;
-  isGitOpen: boolean;
   isSidePaneOpen: boolean;
   /** Side Pane 完整视图控制器。 */
   sidePaneFullView?: SidePaneFullViewController;
@@ -228,7 +219,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
   onSummaryPanelVariantOverrideChange: (variant: ChatViewSummaryPanelVariant | null) => void;
   sidePaneState: WorkspaceSidePaneState | null;
   recentClosedSidePaneTabs: RecentClosedSidePaneTab[];
-  shellPanelIds: string[];
   projectName: string;
   workspaceTabs: Array<{
     workspacePath: string;
@@ -292,7 +282,6 @@ export interface WorkspaceShellLayoutProps extends Omit<AppProps, "baseFeedbackS
     targetWorkspacePath: string,
     targetWorkspaceIdentity?: string,
     targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
-    createSource?: SessionCreateSource,
   ) => void;
   handleOpenCommandCenter: () => void;
   handleRefreshGit: () => void;

@@ -32,7 +32,7 @@ store.subscribe((state) => logger.debug("install-state", JSON.stringify(state.ac
 function Fixture() {
   const state = store();
   return (
-    <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
+    <ZCodeIntlProvider>
       <main className="flex flex-col gap-4 bg-background p-4 text-foreground">
         {["first", "second"].map((name) => (
           <div key={name}>

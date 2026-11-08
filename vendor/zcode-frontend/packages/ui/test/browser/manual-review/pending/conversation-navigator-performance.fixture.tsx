@@ -93,7 +93,7 @@ function Fixture() {
   });
   return (
     <TooltipProvider>
-      <ZCodeIntlProvider initialLocale={params.get("mobile") === "true" ? "en-US" : "zh-CN"}>
+      <ZCodeIntlProvider>
         <div className="@container/conversation flex h-dvh min-w-0 flex-col bg-background text-foreground">
           <ConversationTimeline
             rows={rows}

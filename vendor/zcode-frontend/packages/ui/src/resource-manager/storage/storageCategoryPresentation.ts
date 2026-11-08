@@ -12,7 +12,6 @@ import {
   Route,
 } from "lucide-react";
 import type { StorageCategoryId, StorageCategoryUsage, StorageRootUsage } from "@zcode/shared";
-import { APP_USAGE_MODEL_CHART_COLORS } from "@/settings/usage-stats/appUsageChartPalette.js";
 
 export const STORAGE_CATEGORY_ICONS: Record<StorageCategoryId, typeof Folder> = {
   sessionStore: Database,
@@ -28,7 +27,7 @@ export const STORAGE_CATEGORY_ICONS: Record<StorageCategoryId, typeof Folder> = 
   other: Folder,
 };
 
-export const STORAGE_LEGEND_MAX_ITEMS = APP_USAGE_MODEL_CHART_COLORS.length;
+export const STORAGE_LEGEND_MAX_ITEMS = 6;
 export const STORAGE_LEGEND_REST_COLOR = "var(--color-foreground-subtlest)";
 
 export function storageCategoryTitleId(id: StorageCategoryId): string {
@@ -83,7 +82,7 @@ export function buildStorageLegend(totals: StorageCategoryTotal[]): StorageLegen
   const legend: StorageLegendItem[] = head.map((item, index) => ({
     id: item.id,
     bytes: item.bytes,
-    color: APP_USAGE_MODEL_CHART_COLORS[index] ?? STORAGE_LEGEND_REST_COLOR,
+    color: `var(--color-usage-chart-${index + 1})`,
   }));
   if (rest.length > 0) {
     legend.push({

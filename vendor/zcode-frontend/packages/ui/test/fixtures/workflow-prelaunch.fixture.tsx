@@ -32,7 +32,7 @@ function Fixture() {
     canToggle: true,
   } as unknown as ToolCallBlockRenderContext;
   return (
-    <ZCodeIntlProvider initialLocale="en-US">
+    <ZCodeIntlProvider>
       <TooltipProvider>
         <button data-testid="advance-state" onClick={() => setState("pendingApproval")}>
           Await confirmation

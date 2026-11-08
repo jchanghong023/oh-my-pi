@@ -1,7 +1,6 @@
 /* oxlint-disable eslint(max-lines) -- settings helper 聚合网络与自动归档等多个设置分组。 */
 import type {
   AppToolSearchMode,
-  LocalePreference,
   ZCodeInteractionBehavior,
 } from "@zcode/shared";
 import { appToolSearchModeSchema } from "@zcode/shared";
@@ -13,11 +12,7 @@ import {
 } from "@zcode/shared/test-ids";
 import { useState, useCallback, useEffect } from "react";
 import type { IPlatformService } from "@zcode/shared";
-import {
-  TID_SETTINGS_LOCALE_SELECT_ITEM,
-  TID_SETTINGS_LOCALE_SELECT_TRIGGER,
-  testId,
-} from "@zcode/shared/test-ids";
+import { testId } from "@zcode/shared/test-ids";
 import {
   Select,
   SelectContent,
@@ -28,7 +23,7 @@ import {
 import { Switch } from "@/components/ui/switch.js";
 import { Input } from "@/components/ui/input.js";
 import { Button } from "@/components/ui/button.js";
-import { SettingsBadge, SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js";
+import { SettingsGroupCard, SettingsRow } from "@/settings/SettingsPageParts.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import { useOptionalServices } from "@/hooks/useServices.js";
 import { ProactiveSuggestionsSetting } from "@/settings/ProactiveSuggestionsSetting.js";
@@ -42,7 +37,6 @@ import {
   type SettingsSectionId,
 } from "@/settings/settingsPageConfig.js";
 
-export type { Locale, LocalePreference } from "@zcode/shared";
 export { type SettingsSectionId };
 export { createSettingsPageConfig, resolveSettingsSectionForPlatform };
 export { SETTINGS_SECTION_GROUPS, SETTINGS_SECTIONS };
@@ -123,7 +117,6 @@ export function TaskAutoArchiveSettings({
 }
 
 export function GeneralSectionContent({
-  localePreference,
   interfaceMode = "coding",
   setInterfaceMode = () => {},
   notificationEnabled,
@@ -134,7 +127,6 @@ export function GeneralSectionContent({
   httpProxy = "",
   httpProxyNoProxy = "",
   httpProxyCaCertPath = "",
-  setLocalePreference,
   setNotificationEnabled,
   setNotificationSoundEnabled,
   messageStreamShowReasoning,
@@ -157,9 +149,7 @@ export function GeneralSectionContent({
   onZCodeInteractionBehaviorChange,
   onAskUserQuestionAutoResolutionEnabledChange = async () => {},
   onModelIoFullRetentionEnabledChange = async () => {},
-  onOpenOnboardingDialog,
 }: {
-  localePreference: LocalePreference;
   interfaceMode?: InterfaceMode;
   setInterfaceMode?: (mode: InterfaceMode) => void;
   notificationEnabled: boolean;
@@ -171,7 +161,6 @@ export function GeneralSectionContent({
   httpProxyNoProxy?: string;
   httpProxyCaCertPath?: string;
   platform?: IPlatformService;
-  setLocalePreference: (locale: LocalePreference) => void;
   setNotificationEnabled: (enabled: boolean) => void;
   setNotificationSoundEnabled: (enabled: boolean) => void;
   messageStreamShowReasoning: boolean;
@@ -194,7 +183,6 @@ export function GeneralSectionContent({
   onZCodeInteractionBehaviorChange: (behavior: ZCodeInteractionBehavior) => Promise<void>;
   onAskUserQuestionAutoResolutionEnabledChange?: (enabled: boolean) => Promise<void>;
   onModelIoFullRetentionEnabledChange?: (enabled: boolean) => Promise<void>;
-  onOpenOnboardingDialog: () => void;
 }) {
   const { intl } = useZCodeIntl();
   const hasServices = Boolean(useOptionalServices());
@@ -244,47 +232,6 @@ export function GeneralSectionContent({
 
   return (
     <div className="space-y-4">
-      <SettingsGroupCard>
-        <SettingsRow
-          label={intl.formatMessage({ id: "settings.locale" })}
-          description={intl.formatMessage({ id: "settings.localeDescription" })}
-          control={
-            <Select
-              value={localePreference}
-              onValueChange={(value) => setLocalePreference(value as LocalePreference)}
-            >
-              <SelectTrigger
-                size="lg"
-                className="w-[260px] min-w-0 justify-between"
-                data-testid={TID_SETTINGS_LOCALE_SELECT_TRIGGER}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem
-                  value="system"
-                  data-testid={testId(TID_SETTINGS_LOCALE_SELECT_ITEM, "system")}
-                >
-                  {intl.formatMessage({ id: "settings.locale.system" })}
-                </SelectItem>
-                <SelectItem
-                  value="zh-CN"
-                  data-testid={testId(TID_SETTINGS_LOCALE_SELECT_ITEM, "zh-CN")}
-                >
-                  {intl.formatMessage({ id: "settings.locale.zh-CN" })}
-                </SelectItem>
-                <SelectItem
-                  value="en-US"
-                  data-testid={testId(TID_SETTINGS_LOCALE_SELECT_ITEM, "en-US")}
-                >
-                  {intl.formatMessage({ id: "settings.locale.en-US" })}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          }
-        />
-      </SettingsGroupCard>
-
       <SettingsGroupCard>
         <SettingsRow
           controlLayout="wide"
@@ -647,31 +594,6 @@ export function GeneralSectionContent({
         />
       </SettingsGroupCard>
 
-      <SettingsGroupCard>
-        <SettingsRow
-          label={intl.formatMessage({ id: "settings.onboarding" })}
-          description={intl.formatMessage({
-            id: "settings.onboardingDescription",
-          })}
-          control={
-            <Button type="button" size="lg" variant="outline" onClick={onOpenOnboardingDialog}>
-              {intl.formatMessage({ id: "settings.onboardingOpen" })}
-            </Button>
-          }
-        />
-      </SettingsGroupCard>
-    </div>
-  );
-}
-
-export function GeneralSectionHeader({ localePreference }: { localePreference: LocalePreference }) {
-  const { intl } = useZCodeIntl();
-
-  return (
-    <div className="mt-4 flex flex-wrap gap-2">
-      <SettingsBadge>
-        {intl.formatMessage({ id: `settings.locale.${localePreference}` })}
-      </SettingsBadge>
     </div>
   );
 }

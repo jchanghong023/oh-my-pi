@@ -3,7 +3,6 @@ import { createServiceDescriptor } from "../descriptors.js";
 import type {
   ZCodeConfigOption,
   ZCodeProvider,
-  BotConfig,
   BotContextState,
   BotInboundMessage,
   BotOutboundMessage,
@@ -15,30 +14,6 @@ import type {
   ZCodeAutomationBotDeliveryTarget,
 } from "@zcode/shared";
 import type { ZCodeAgentAppRuntimePreferences } from "../zcode-agent/zcodeAgent.js";
-
-export interface BotCreateBindCodeParams {
-  botId?: string;
-  allowedWorkspaces?: string[];
-  ttlMs?: number;
-}
-
-export interface BotSaveBotParams {
-  bot: BotConfig;
-  credentialValue?: string;
-  webhookSecretValue?: string;
-}
-
-export interface BotTestResult {
-  ok: boolean;
-  message: string;
-  name?: string;
-  provider?: BotProvider;
-}
-
-export interface BotBindCodeResult {
-  code: string;
-  expiresAt: number;
-}
 
 export interface BotListWorkspaceRefsParams {
   currentWorkspace?: BotWorkspaceRef;
@@ -59,73 +34,6 @@ export interface BotAutomationRunWatchParams {
   workspaceIdentity?: string;
 }
 
-export interface BotWeixinRegistrationBeginResult {
-  qrCode: string;
-  qrUrl: string;
-  interval: number;
-  expiresAt: number;
-}
-
-export interface BotWeixinRegistrationPollParams {
-  qrCode: string;
-}
-
-export type BotWeixinRegistrationPollResult =
-  | {
-      status: "pending" | "scanned";
-      interval: number;
-    }
-  | {
-      status: "success";
-      botToken: string;
-      botId?: string;
-    }
-  | {
-      status: "expired" | "error";
-      message?: string;
-    };
-
-export interface BotFeishuRegistrationBeginParams {
-  domain?: "feishu" | "lark";
-}
-
-export interface BotFeishuRegistrationBeginResult {
-  deviceCode: string;
-  qrUrl: string;
-  userCode: string;
-  interval: number;
-  expiresAt: number;
-  domain: "feishu" | "lark";
-  pollDomain?: "feishu" | "lark";
-}
-
-export interface BotFeishuRegistrationPollParams {
-  deviceCode: string;
-  domain?: "feishu" | "lark";
-  pollDomain?: "feishu" | "lark";
-}
-
-export type BotFeishuRegistrationPollResult =
-  | {
-      status: "pending";
-      interval: number;
-      domain: "feishu" | "lark";
-      pollDomain?: "feishu" | "lark";
-    }
-  | {
-      status: "success";
-      appId: string;
-      appSecret: string;
-      domain: "feishu" | "lark";
-      appName?: string;
-      openId?: string;
-    }
-  | {
-      status: "access_denied" | "expired" | "error";
-      message?: string;
-      domain: "feishu" | "lark";
-    };
-
 export interface IBotsService {
   replyToChannel?(
     params: import("@zcode/shared").ChannelReplyHostRequest,
@@ -144,23 +52,6 @@ export interface IBotsService {
   getConfig(): Promise<BotsConfigFile>;
   listWorkspaceRefs(params?: BotListWorkspaceRefsParams): Promise<BotWorkspaceRef[]>;
   getUserConfigOptions(params: BotUserConfigOptionsParams): Promise<ZCodeConfigOption[]>;
-  beginFeishuRegistration(
-    params?: BotFeishuRegistrationBeginParams,
-  ): Promise<BotFeishuRegistrationBeginResult>;
-  pollFeishuRegistration(
-    params: BotFeishuRegistrationPollParams,
-  ): Promise<BotFeishuRegistrationPollResult>;
-  beginWeixinRegistration(): Promise<BotWeixinRegistrationBeginResult>;
-  pollWeixinRegistration(
-    params: BotWeixinRegistrationPollParams,
-  ): Promise<BotWeixinRegistrationPollResult>;
-  saveConfig(config: BotsConfigFile): Promise<BotsConfigFile>;
-  listBots(): Promise<BotConfig[]>;
-  saveBot(params: BotSaveBotParams): Promise<BotConfig>;
-  removeBotSecret(botId: string): Promise<BotConfig>;
-  deleteBot(botId: string): Promise<void>;
-  testBot(botId: string): Promise<BotTestResult>;
-  createBindCode(params: BotCreateBindCodeParams): Promise<BotBindCodeResult>;
   getGroupMemberNames?(params: { botId: string; chatId: string }): Promise<Record<string, string>>;
   getBotStates(): Promise<BotContextState[]>;
   retryTopicPreparation?(params: {
@@ -213,16 +104,3 @@ export interface IBotsService {
 }
 
 export const IBotsService = createServiceDescriptor<IBotsService>(ServiceChannels.Bots);
-
-/** Host 负责把旧线路身份解析到当前 Source；不允许 services 猜测连接目录。 */
-export interface BotRemoteWorkspaceResolution {
-  workspacePath: string;
-  workspaceIdentity: string;
-  target: import("@zcode/shared").RemoteTarget;
-  /** 只有当前窗口存在在线 logical session 才有值，用于 attachment 换代隔离。 */
-  runtimeKey?: string;
-}
-export type BotRemoteWorkspaceResolver = (
-  workspace: { workspacePath: string; workspaceIdentity: string },
-  purpose: "lookup" | "reconnect",
-) => Promise<BotRemoteWorkspaceResolution | null>;

@@ -45,7 +45,7 @@ function Fixture() {
     timelineOnly: false,
   };
   return (
-    <ZCodeIntlProvider initialLocale="en-US">
+    <ZCodeIntlProvider>
       <PlatformProvider platform={{} as IPlatformService}>
         <TooltipProvider>
           <button onClick={() => setJoined(true)}>Join run</button>

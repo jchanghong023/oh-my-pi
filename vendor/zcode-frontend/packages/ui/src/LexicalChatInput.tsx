@@ -58,7 +58,6 @@ import {
   PromptMentionNode,
 } from "./mentions/nodes/PromptMentionNode.js";
 import { logger } from "./logger.js";
-import { recordInputLag } from "./lib/uiPerfArmsTelemetry.js";
 import { navigatePromptHistory } from "./lib/promptHistory.js";
 import { resolveMobileInputTextSizeClassName } from "@/lib/mobileTextInput.js";
 import type { MentionItemData } from "@/mentions/mentionTypes.js";
@@ -857,13 +856,11 @@ function TextContentPlugin({
   onUserInputClear,
   onUserInputPresenceChange,
   onUserInputStart,
-  taskId,
 }: {
   onChange?: (text: string) => void;
   onUserInputClear?: () => void;
   onUserInputPresenceChange?: (presence: UserInputPresence) => void;
   onUserInputStart?: () => void;
-  taskId?: string | null;
 }) {
   const [editor] = useLexicalComposerContext();
   // IME 组合态标记:不直接依赖 editor.isComposing(),因为它在 update listener 同步执行时
@@ -977,9 +974,8 @@ function TextContentPlugin({
         });
         return;
       }
-      // 输入卡顿计时：普通输入只序列化当前状态一次；IME 候选阶段完全留在 Lexical，
+      // 普通输入只序列化当前状态一次；IME 候选阶段完全留在 Lexical，
       // compositionend 后的最终 update 才序列化并发布给 React 草稿 owner。
-      const startedAt = performance.now();
       const nextText = getEditorMarkdown(editorState);
       onUserInputPresenceChange?.({
         raw: nextText.length > 0,
@@ -987,7 +983,6 @@ function TextContentPlugin({
       });
       if (nextText.length === 0 && userInputUpdate) onUserInputClear?.();
       const publicationState = publicationRef.current!;
-      const compositionCommit = publicationState.pendingComposition;
       const publication = resolveTextContentPublication({
         composing: composingRef.current,
         nextText,
@@ -998,17 +993,8 @@ function TextContentPlugin({
 
       onChange(publication.publish);
 
-      const lagMs = performance.now() - startedAt;
-      // 程序化改写与 IME 组合态不算打字卡顿(判定在 recordInputLag 内统一短路)。
-      recordInputLag({
-        lagMs,
-        textLength: nextText.length,
-        isProgrammatic: tags.has(PROGRAMMATIC_UPDATE_TAG),
-        isComposing: composingRef.current || compositionCommit,
-        taskId: taskId ?? undefined,
-      });
     });
-  }, [editor, onChange, onUserInputClear, onUserInputPresenceChange, onUserInputStart, taskId]);
+  }, [editor, onChange, onUserInputClear, onUserInputPresenceChange, onUserInputStart]);
 
   return null;
 }
@@ -1633,7 +1619,6 @@ export function LexicalChatInput({
             onUserInputClear={onUserInputClear}
             onUserInputPresenceChange={onUserInputPresenceChange}
             onUserInputStart={onUserInputStart}
-            taskId={taskId}
           />
           <KeyboardPlugin
             onSubmit={handleSubmit}

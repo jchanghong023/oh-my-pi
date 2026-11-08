@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea.js";
 import type { CodeCommentPreview, CodeCommentRange } from "@/lib/codeCommentContext.js";
 import { isDarkCodePreviewTheme } from "@/lib/codePreviewPreferences.js";
 import { DIFFS_PREFERRED_HIGHLIGHTER } from "@/lib/diffsHighlighterEngine.js";
+import { DiffsWorkerPoolProvider } from "@/root/DiffsWorkerPoolProvider.js";
 import {
   formatCommandShortcutLabel,
   isAppleKeyboardPlatform,
@@ -442,7 +443,15 @@ export function CodeCommentAnnotation({
   );
 }
 
-export function CodeViewer({
+export function CodeViewer(props: CodeViewerProps) {
+  return (
+    <DiffsWorkerPoolProvider renderOptions={{ theme: props.theme }}>
+      <CodeViewerContent {...props} />
+    </DiffsWorkerPoolProvider>
+  );
+}
+
+function CodeViewerContent({
   code,
   enableSyntaxHighlighting = true,
   language,

@@ -17,7 +17,6 @@ import "@/styles.css";
 const query = new URLSearchParams(location.search);
 const mobile = query.get("mobile") === "1";
 const theme = query.get("theme") ?? "light";
-const locale = query.get("locale") === "en-US" ? "en-US" : "zh-CN";
 const channel = new BroadcastChannel("project-device-preference-fixture");
 const broadcast: IBroadcastService = {
   send: async (message) => channel.postMessage(message),
@@ -136,7 +135,7 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <StoreContext.Provider value={store}>
     <ServiceProvider services={{} as never}>
-      <ZCodeIntlProvider initialLocale={locale}>
+      <ZCodeIntlProvider>
         <TooltipProvider>
           <TabStoreProvider>
             <Fixture />

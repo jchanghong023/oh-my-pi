@@ -25,39 +25,12 @@ export {
 
 // Accessor
 export type { IServiceAccessor } from "./accessor.js";
-export {
-  ConversationShareServiceError,
-  createUnsupportedConversationShareService,
-  IConversationShareService,
-} from "./conversation-share/conversationShare.js";
-export type {
-  ConversationShareSelection,
-  ConversationSharePublishProgress,
-  ConversationShareImportProgress,
-  ImportConversationShareInput,
-  ImportConversationShareResult,
-  ImportedConversationShare,
-  ConversationShareServiceErrorKind,
-  ConversationShareFailureIssue,
-  ConversationShareFailureIssueCode,
-  ConversationSharePreflightInput,
-  ConversationSharePreflightResult,
-  ConversationShareAllowedArtifact,
-  ConversationShareTurnPreflightResult,
-  PublishTextConversationInput,
-} from "./conversation-share/conversationShare.js";
-// This frontend source package exposes browser-safe contracts, not Node host implementations.
-export {
-  createConversationTelemetryService,
-  type ConversationTelemetryWorkspaceTarget,
-  type IConversationTelemetryService,
-} from "./conversation-telemetry/conversationTelemetry.js";
+export { IRuntimePolicyService } from "./runtime-policy/runtimePolicy.js";
+export * from "./client-scenes/clientScenes.js";
 
 // File service — IFileService is both a type (interface) and value (descriptor)
 export { IFileService } from "./file/file.js";
 export { IMediaPreviewService } from "./media-preview/mediaPreview.js";
-export { ICloudContentService } from "#src/cloud-content/cloudContent.js";
-export { IMarketingTouchService } from "#src/marketing-touch/marketingTouch.js";
 export type { MediaPreviewPreparation } from "./media-preview/mediaPreview.js";
 
 // Git service — IGitService is both a type (interface) and value (descriptor)
@@ -81,16 +54,6 @@ export {
 // Broadcast service — IBroadcastService is both a type (interface) and value (descriptor)
 export { IBroadcastService } from "./broadcast/broadcast.js";
 
-// Onboarding 完成记录服务（本地持久化，后续上传服务器）
-export { IOnboardingRecordService } from "./onboarding/onboardingRecord.js";
-export type {
-  CreateOnboardingRecordServiceOptions,
-  OnboardingRecordServiceFactory,
-} from "./onboarding/onboardingRecord.js";
-// 这里只能导出 descriptor 和类型。根 index 会被 renderer 经 value import 拉进浏览器包，
-// 若 value 导出 createOnboardingRecordService，会连带 fs/atomicFileUtils → @zcode/shared/node →
-// node:timers/promises 整条 Node 链进浏览器，模块加载直接抛错导致整个应用黑屏。
-// 工厂函数由 host 侧（node.ts）与测试从实现文件路径直接导入，与 createSettingService 同惯例。
 export type {
   BroadcastClaimAcquireResult,
   BroadcastClaimLease,
@@ -205,13 +168,7 @@ export type {
 // Bots service — IBotsService is both a type (interface) and value (descriptor).
 export { IBotsService } from "./bots/bots.js";
 export type {
-  BotRemoteWorkspaceResolver,
-  BotRemoteWorkspaceResolution,
-  BotBindCodeResult,
-  BotCreateBindCodeParams,
   BotListWorkspaceRefsParams,
-  BotSaveBotParams,
-  BotTestResult,
 } from "./bots/bots.js";
 
 // Hooks service — IHooksService is both a type (interface) and value (descriptor).
@@ -232,33 +189,12 @@ export type { SessionRealtimePort } from "./session/sessionRealtimePort.js";
 // FileWatcher service — IFileWatcherService is both a type (interface) and value (descriptor)
 export { IFileWatcherService } from "./fileWatcher/fileWatcher.js";
 
-// OAuth service — IOAuthService is both a type (interface) and value (descriptor)
-export { IOAuthService } from "./oauth/oauth.js";
-
-// UsageStats service — IUsageStatsService is both a type (interface) and value (descriptor)
-export { IUsageStatsService } from "./usage-stats/usageStats.js";
 
 // Storage（资源管理器「存储」tab）：数据类型在 @zcode/shared；这里只导出服务接口与卷分组纯函数
 // StorageRootSpec 随契约再导出：desktop 的 Worker 协议按 contract.ts 的口径只从 services 入口取类型。
 export type { IStorageService, StorageRootSpec } from "./storage/contract.js";
 
-// CodingPlanSubscription service — ICodingPlanSubscriptionService is both a type (interface) and value (descriptor)
-export {
-  ICodingPlanSubscriptionService,
-  type OffPeakClientConfig,
-} from "./coding-plan-subscription/codingPlanSubscription.js";
-export {
-  IClientScenesService,
-  type ClientSceneConfig,
-  type ClientSceneItem,
-  type ClientSceneOption,
-  type ClientSceneResponseBody,
-  type ClientScenesResponse,
-} from "./client-scenes/clientScenes.js";
 export { isValidCronExpr } from "./session/automationCronValidation.js";
-// 闲时任务管理服务（与 automation 服务面独立）；接口/描述符 browser-safe。
-export { IOffPeakTaskService } from "./session/offPeakTask.js";
-export type { OffPeakUpdateTaskParams } from "./session/offPeakTask.js";
 
 // Skills service — ISkillsService is both a type (interface) and value (descriptor)
 export { ISkillsService } from "./skills/skills.js";
@@ -283,10 +219,8 @@ export {
   type CuaPipSessionService,
 } from "./cua-permission-broker/cuaPipSession.js";
 
-// Plugins service — IPluginsService is both a type (interface) and value (descriptor)
-export { IPluginsService } from "./plugins/plugins.js";
 // 设置页插件管理薄服务（UI 平台能力面不再直触 zcodeAgentService）
-export { IPluginManagementService, withPluginTelemetry } from "./plugins/pluginManagement.js";
+export { IPluginManagementService } from "./plugins/pluginManagement.js";
 
 // Subagents service — ISubagentsService is both a type (interface) and value (descriptor)
 export { ISubagentsService } from "./subagents/subagents.js";
@@ -296,8 +230,6 @@ export { ICommandsService } from "./commands/commands.js";
 
 export { ISettingsSyncService } from "./settings-sync/settingsSync.js";
 
-export { IFeedbackService } from "./feedback/feedback.js";
-export type { FeedbackUploadProgress } from "./feedback/feedback.js";
 export { IPromptAttachmentTransferService } from "./prompt-attachment-transfer/promptAttachmentTransfer.js";
 export type {
   PromptAttachmentStageParams,
@@ -305,23 +237,6 @@ export type {
   PromptAttachmentTransferPhase,
   PromptAttachmentTransferProgress,
 } from "./prompt-attachment-transfer/promptAttachmentTransfer.js";
-export type {
-  CreateFeedbackTicketInput,
-  FeedbackAttachment,
-  FeedbackAttachmentKind,
-  FeedbackComment,
-  FeedbackDeviceInfo,
-  FeedbackListQuery,
-  FeedbackListResult,
-  FeedbackReporter,
-  FeedbackTicketDetail,
-  FeedbackTicketFramework,
-  FeedbackTicketModule,
-  FeedbackTicketSeverity,
-  FeedbackTicketStatus,
-  FeedbackTicketSummary,
-  FeedbackTicketType,
-} from "@zcode/shared";
 
 export { IProjectService, LEGACY_SINGLE_ROOT_PROJECT_PREFIX } from "#src/project/contract.js";
 export type {
@@ -347,13 +262,6 @@ export type { ProjectCatalogPort, ProjectCatalogSnapshot } from "#src/project-ca
 
 export { IClientConfigService } from "./client-config/clientConfig.js";
 
-export { IHighspeedCardService } from "./highspeed/highspeedCard.js";
-export {
-  HighspeedCardService,
-  createHighspeedHttpTransport,
-  buildHighspeedTurnExecution,
-} from "./highspeed/highspeedCardService.js";
-export { createHighspeedMockTransport } from "./highspeed/highspeedMockTransport.js";
 
 export { IGenUiService } from "./gen-ui/contract.js";
 export type { GenUiPrepareParams } from "./gen-ui/contract.js";

@@ -147,6 +147,14 @@ const common = {
 const actions = {
   intl: { formatMessage: ({ id }: { id: string }) => id } as never,
   platform: {
+    selectDirectory: async () => null,
+    selectDirectories: async () => [],
+    connectRemote: async () => ({
+      success: false,
+      error: "Remote connections are disabled in this fixture",
+    }),
+    disposeRemoteSession: async () => {},
+    syncWindowUnreadCount: noop,
     onRemoteConnectionLog: () => noop,
     onRemoteSessionClosed: () => noop,
     onRemoteSessionReconnected: () => noop,
@@ -159,17 +167,9 @@ const actions = {
   supportsSettings: true,
   allowOpenWorkspace: true,
   preferDirectoryBrowser: false,
-  refreshProviderState: async () => {},
-  updateAppSettings: async () => {},
-  setOAuthError: noop,
-  setUser: noop,
   workbenchGroupClientMode: mobile
     ? ("web-remote-replayable" as const)
     : ("desktop-continuous" as const),
-  // 手机 bridge 只模拟导航完成；Renderer 仍走实际 replayable 分支。
-  openMobileProjectDraft: async () => {
-    useZCodeSessionStore.getState().startDraft("/example");
-  },
 };
 function Controls() {
   const directory = useOptionalProjectDirectory()!;
@@ -286,7 +286,7 @@ function Fixture() {
   );
 }
 createRoot(document.getElementById("root")!).render(
-  <ZCodeIntlProvider initialLocale={params.get("locale") === "zh-CN" ? "zh-CN" : "en-US"}>
+  <ZCodeIntlProvider>
     <TooltipProvider>
       <PlatformProvider platform={actions.platform}>
         <Fixture />

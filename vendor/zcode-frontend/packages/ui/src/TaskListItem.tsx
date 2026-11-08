@@ -5,10 +5,9 @@ import {
   Clock,
   LoaderIcon,
   ListTree,
-  Moon,
   Pin,
 } from "lucide-react";
-import { isCronTask, isOffPeakTask, type ZCodeTaskMeta } from "@zcode/shared";
+import { isCronTask, type ZCodeTaskMeta } from "@zcode/shared";
 import { TID_TASK_ARCHIVE, TID_TASK_ITEM, testId } from "@zcode/shared/test-ids";
 import { Badge } from "@/components/ui/badge.js";
 import { Button } from "@/components/ui/button.js";
@@ -24,9 +23,7 @@ import { getTaskListAttention, getTaskListRowActivity } from "@/v4/taskListRowAc
 import { TaskListItemContextMenu } from "@/TaskListItemContextMenu.js";
 import { TaskInteractionBadge } from "@/TaskInteractionBadge.js";
 import { useTaskListItemContextActions } from "@/useTaskListItemContextActions.js";
-import { useFeedbackStore } from "@/feedback/feedbackStore.js";
 import { useModelTrajectoryStore } from "@/store/modelTrajectoryStore.js";
-import { buildTaskFeedbackDescription } from "@/lib/taskFeedbackDraft.js";
 import { toast } from "@/components/ui/toast.js";
 import { buildTaskWorkspaceKey } from "@/lib/taskQueryCache.js";
 import { useV4SplitPaneEntry } from "@/v4/splitPaneEntryContext.js";
@@ -43,7 +40,6 @@ import { isWorkspaceReadOnly } from "@/store/tabStore.js";
 import { TaskTitleOverflowText } from "@/components/TaskTitleOverflowText.js";
 import { createTaskWorkbenchDragPreview } from "@/lib/taskWorkbenchDragPreview.js";
 import { logger } from "@/logger.js";
-import { runUserAction, runUserActionAsync } from "@/lib/userActionTelemetry.js";
 import { TaskRowActionButton } from "@/workspace-grouped-tasks/task-row-action-button.js";
 import { TaskWorkflowRunLines } from "@/components/workflow-run-line/TaskWorkflowRunLines.js";
 
@@ -251,12 +247,7 @@ export const MemoTaskItem = memo(function TaskListItem({
       id: task.forkedFromTaskId ? "taskList.forkedUntitled" : "taskList.untitled",
     });
   const handleSelect = useCallback(() => {
-    runUserAction({
-      input: { featureId: "task.lifecycle", action: "open", trigger: "button" },
-      operation: () => onSelectTask(task.taskId),
-      completed: { resultSource: "optimistic_projection" },
-      failureStage: "task_open",
-    });
+    onSelectTask(task.taskId);
   }, [onSelectTask, task.taskId]);
   const handleDragStart = useCallback(
     (event: React.DragEvent<HTMLLIElement>) => {
@@ -316,12 +307,7 @@ export const MemoTaskItem = memo(function TaskListItem({
         event.stopPropagation();
         return;
       }
-      runUserAction({
-        input: { featureId: "task.lifecycle", action: "archive", trigger: "button" },
-        operation: () => onArchiveTaskInline(event, task.taskId),
-        completed: { resultSource: "optimistic_projection" },
-        failureStage: "task_archive",
-      });
+      onArchiveTaskInline(event, task.taskId);
     },
     [onArchiveTaskInline, task.taskId, workspaceActionsDisabled],
   );
@@ -350,9 +336,6 @@ export const MemoTaskItem = memo(function TaskListItem({
     [task, taskActivity],
   );
   const isTaskCron = isCronTask(task);
-  // 月亮身份改为持久 meta 标记判断；off-peak store 反查在任务被删除后会丢失
-  // 会话溯源，且让每一行多背一个全局 store 订阅。
-  const isTaskOffPeak = isOffPeakTask(task);
   const showPinnedState = isPinned && leadingIndicator === "none";
   // 修复原因：手机会在 click 前合成 mouseenter/focus；此时切换内容会让首次点击只进入 hover。
   // Touch layouts keep metadata and actions stable; pointer layouts use hover/focus presentation.
@@ -452,12 +435,7 @@ export const MemoTaskItem = memo(function TaskListItem({
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          void runUserActionAsync({
-            input: { featureId: "workbench.file", action: "open_tree", trigger: "button" },
-            operation: async () => onOpenFileTree?.(),
-            completed: { resultSource: "local_commit" },
-            failureStage: "file_tree_open",
-          }).catch((cause) => {
+          void (async () => onOpenFileTree?.())().catch((cause) => {
             logger.error("[task-list] 查看文件失败", cause);
             toast(String(cause));
           });
@@ -637,14 +615,6 @@ export const MemoTaskItem = memo(function TaskListItem({
                       })}
                       className="size-3.5 shrink-0"
                     />
-                  ) : isTaskOffPeak ? (
-                    <Moon
-                      data-off-peak-task-icon="true"
-                      aria-label={intl.formatMessage({
-                        id: "taskList.offPeakTaskLabel",
-                      })}
-                      className="size-3.5 shrink-0"
-                    />
                   ) : null}
                   <span className="mr-1">{taskTimeLabel}</span>
                 </span>
@@ -708,12 +678,6 @@ export const MemoTaskItem = memo(function TaskListItem({
                     })}
                     className="size-3.5 shrink-0"
                   />
-                ) : isTaskOffPeak ? (
-                  <Moon
-                    data-off-peak-task-icon="true"
-                    aria-label={intl.formatMessage({ id: "taskList.offPeakTaskLabel" })}
-                    className="size-3.5 shrink-0"
-                  />
                 ) : null}
                 {taskTimeLabel}
               </span>
@@ -766,7 +730,6 @@ export function TaskListItemContextMenuContent({
   const workspaceActionsDisabledReason = workspaceActionsDisabled
     ? (disabledReason ?? intl.formatMessage({ id: "workspaceSidebar.unavailableLocalDirectory" }))
     : undefined;
-  const openFeedbackSubmit = useFeedbackStore((state) => state.openSubmit);
   const {
     taskSessionFile,
     taskNativeSessionLogFile,
@@ -793,41 +756,6 @@ export function TaskListItemContextMenuContent({
       id: task.forkedFromTaskId ? "taskList.forkedUntitled" : "taskList.untitled",
     });
 
-  const handleOpenTaskFeedback = useCallback(async () => {
-    // 任务右键菜单之前只能复制日志/路径，反馈时缺少任务上下文。
-    // 这里复用反馈中心 draft，只预填脱敏后的任务线索，附件由用户主动选择。
-    openFeedbackSubmit({
-      title: intl
-        .formatMessage(
-          { id: "feedback.submit.template.section.taskFeedbackTitle" },
-          { title: taskTitle },
-        )
-        .slice(0, 80),
-      type: "bug",
-      module: "Agent任务执行失败",
-      severity: "P2-中",
-      includeLogs: true,
-      description: buildTaskFeedbackDescription({
-        taskTitle,
-        taskId: task.taskId,
-        workspacePath,
-        taskSessionPath: taskSessionFile.path,
-        taskLogPath: taskNativeSessionLogFile.path,
-        formatMessage: (id: string, values?: Record<string, string>) =>
-          intl.formatMessage({ id }, values),
-      }),
-      screenshots: [],
-    });
-    toast(intl.formatMessage({ id: "taskList.feedbackOpened" }));
-  }, [
-    intl,
-    openFeedbackSubmit,
-    task.taskId,
-    taskNativeSessionLogFile.path,
-    taskSessionFile.path,
-    taskTitle,
-    workspacePath,
-  ]);
 
   return (
     <TaskListItemContextMenu
@@ -853,9 +781,6 @@ export function TaskListItemContextMenuContent({
       }}
       onMarkTaskAsUnread={() => {
         onMarkTaskAsUnread(task.taskId);
-      }}
-      onOpenTaskFeedback={() => {
-        void handleOpenTaskFeedback();
       }}
       onOpenTaskPathInFileManager={() => {
         void handleOpenTaskPathInFileManager();

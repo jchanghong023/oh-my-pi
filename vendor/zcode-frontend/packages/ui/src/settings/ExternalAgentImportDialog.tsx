@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- 外部 Agent 导入弹窗复用 skills/commands 的交互状态机，业务扫描与导入在服务层按类别分开 */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircleIcon,
   CheckIcon,
@@ -379,15 +379,38 @@ export function useExternalAgentImportCategoryState({
   workspacePath: string | null | undefined;
   workspaceIdentity?: string;
 }): ExternalAgentImportCategoryState {
-  const [loading, setLoading] = useState(false);
-  const [discovery, setDiscovery] = useState<SettingsSyncDiscoveryResult | null>(null);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [expandedSourceKeys, setExpandedSourceKeys] = useState<string[]>([]);
-  const [activeScope, setActiveScope] = useState<SettingsSyncSourceScope>("global");
-  const [importTargetScope, setImportTargetScope] =
+  const context = useMemo(
+    () => ({ category, settingsSyncService, workspaceIdentity, workspacePath }),
+    [category, settingsSyncService, workspaceIdentity, workspacePath],
+  );
+  const contextRef = useRef(context);
+  contextRef.current = context;
+  const requestRef = useRef(0);
+  const [loadedContext, setLoadedContext] = useState<typeof context | null>(null);
+  const [loadingState, setLoading] = useState(false);
+  const [discoveryState, setDiscovery] = useState<SettingsSyncDiscoveryResult | null>(null);
+  const [selectedKeysState, setSelectedKeys] = useState<string[]>([]);
+  const [expandedSourceKeysState, setExpandedSourceKeys] = useState<string[]>([]);
+  const [activeScopeState, setActiveScope] = useState<SettingsSyncSourceScope>("global");
+  const [importTargetScopeState, setImportTargetScope] =
     useState<SettingsSyncSourceScope>("global");
   const [importMode, setImportMode] = useState<SettingsSyncImportMode>("symlink");
-  const [error, setError] = useState<string | null>(null);
+  const [errorState, setError] = useState<string | null>(null);
+  const isLoadedContext = loadedContext === context;
+  const loading = isLoadedContext && loadingState;
+  const discovery = isLoadedContext ? discoveryState : null;
+  const selectedKeys = useMemo(
+    () => isLoadedContext ? selectedKeysState : [],
+    [isLoadedContext, selectedKeysState],
+  );
+  const expandedSourceKeys = isLoadedContext ? expandedSourceKeysState : [];
+  const activeScope = isLoadedContext ? activeScopeState : "global";
+  const importTargetScope = isLoadedContext ? importTargetScopeState : "global";
+  const error = isLoadedContext ? errorState : null;
+
+  useEffect(() => () => {
+    requestRef.current += 1;
+  }, [context]);
 
   const totalImportableCount = useMemo(
     () =>
@@ -404,6 +427,14 @@ export function useExternalAgentImportCategoryState({
   );
 
   const loadDiscovery = useCallback(async () => {
+    const requestId = ++requestRef.current;
+    const isCurrent = () => contextRef.current === context && requestRef.current === requestId;
+    setLoadedContext(context);
+    setDiscovery(null);
+    setSelectedKeys([]);
+    setExpandedSourceKeys([]);
+    setActiveScope("global");
+    setImportTargetScope("global");
     setLoading(true);
     setError(null);
     try {
@@ -413,21 +444,23 @@ export function useExternalAgentImportCategoryState({
         categories: [category],
         intent: "manualImport",
       });
+      if (!isCurrent()) return;
       setDiscovery(nextDiscovery);
       setSelectedKeys([]);
       setExpandedSourceKeys([]);
       setActiveScope("global");
       setImportTargetScope("global");
     } catch (loadError) {
+      if (!isCurrent()) return;
       const message = normalizeError(loadError);
       logger.error("[ExternalAgentImportDialog] scan failed", { category, error: message });
       setError(message);
       setDiscovery({ agents: [] });
       setSelectedKeys([]);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [category, settingsSyncService, workspaceIdentity, workspacePath]);
+  }, [category, context, settingsSyncService, workspaceIdentity, workspacePath]);
 
   useEffect(() => {
     if (!enabled || discovery || loading) {
@@ -512,6 +545,12 @@ function ExternalAgentImportDialog({
   onImported,
 }: CategorizedExternalAgentImportDialogProps) {
   const { intl } = useZCodeIntl();
+  const importContext = useMemo(
+    () => ({ category, open, workspacePath, workspaceIdentity, settingsSyncService }),
+    [category, open, workspacePath, workspaceIdentity, settingsSyncService],
+  );
+  const importContextRef = useRef(importContext);
+  importContextRef.current = importContext;
   const [step, setStep] = useState<ImportStep>("selection");
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<SettingsSyncImportResult | null>(null);
@@ -547,7 +586,8 @@ function ExternalAgentImportDialog({
     setResult(null);
     setImportError(null);
     setStep("selection");
-  }, [open]);
+    setImporting(false);
+  }, [open, workspacePath, workspaceIdentity]);
 
   const startImport = useCallback(async (targetScope: SettingsSyncSourceScope) => {
     if (selectedKeys.length === 0) {
@@ -568,19 +608,22 @@ function ExternalAgentImportDialog({
         workspaceIdentity,
         selections: buildExternalAgentImportSelections(selectedKeys, targetScope, importMode),
       });
+      if (importContextRef.current !== importContext) return;
       setResult(importResult);
       setStep("complete");
       await onImported();
     } catch (importError) {
+      if (importContextRef.current !== importContext) return;
       const message = normalizeError(importError);
       logger.error("[ExternalAgentImportDialog] import failed", { category, error: message });
       setImportError(message);
       setStep("selection");
     } finally {
-      setImporting(false);
+      if (importContextRef.current === importContext) setImporting(false);
     }
   }, [
     onImported,
+    importContext,
     category,
     importMode,
     selectedKeys,

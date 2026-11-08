@@ -1,11 +1,7 @@
 import { Component } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import type { Locale } from "@zcode/shared";
-import { DEFAULT_LOCALE } from "@zcode/shared";
 import zhCN from "@/i18n/locales/zh-CN.js";
-import enUS from "@/i18n/locales/en-US.js";
 import { logger } from "@/logger.js";
-import { reportReactErrorToArms } from "@/lib/reactErrorArmsTelemetry.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
 import { AlertTriangleIcon, RefreshCw } from "lucide-react";
@@ -36,8 +32,6 @@ interface ScopedErrorBoundaryProps {
   onCaughtReactError?: (error: Error, errorInfo: ErrorInfo, scope: string) => void;
 }
 
-const LOCALE_PREFERENCE_KEY = "zcode-locale-preference";
-
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) {
     return error;
@@ -58,31 +52,8 @@ function serializeErrorForLog(error: Error): {
   };
 }
 
-function resolveBoundaryLocale(): Locale {
-  if (typeof localStorage !== "undefined" && typeof localStorage.getItem === "function") {
-    try {
-      const storedPreference = localStorage.getItem(LOCALE_PREFERENCE_KEY);
-      if (storedPreference === "zh-CN" || storedPreference === "en-US") {
-        return storedPreference;
-      }
-    } catch {
-      // 在 Node 测试环境里，可能出现“localStorage 对象存在但能力不完整/不可读”的场景
-      // （例如只有占位对象或读取阶段直接抛错）。错误边界若不兜底会在 fallback 渲染期再次崩溃，
-      // 用户就会看到白屏。这里吞掉存储层异常，继续回退到 navigator / 默认语言。
-    }
-  }
-
-  if (typeof navigator !== "undefined") {
-    return navigator.language.toLowerCase().startsWith("zh") ? "zh-CN" : "en-US";
-  }
-
-  return DEFAULT_LOCALE;
-}
-
 function formatBoundaryMessage(id: string): string {
-  const locale = resolveBoundaryLocale();
-  const messages = locale === "en-US" ? enUS : zhCN;
-  return messages[id] ?? id;
+  return zhCN[id] ?? id;
 }
 
 function haveResetKeysChanged(
@@ -306,12 +277,6 @@ export class AppErrorBoundary extends Component<AppErrorBoundaryProps, AppErrorB
       errorInfo.componentStack,
     );
     this.props.onCaughtReactError?.(normalizedError, errorInfo);
-    // React 错误边界拦截了异常、阻止其冒泡到 window.onerror，RUM Browser SDK 默认收不到。
-    // 主动转发到 ARMS 自定义事件干道（reporter 在 renderer 入口早注入），补上根级渲染崩溃盲区。
-    reportReactErrorToArms({
-      error: normalizedError,
-      componentStack: errorInfo.componentStack ?? "",
-    });
     this.setState({ componentStack: errorInfo.componentStack ?? "" });
   }
 
@@ -377,13 +342,6 @@ export class ScopedErrorBoundary extends Component<
       errorInfo.componentStack,
     );
     this.props.onCaughtReactError?.(normalizedError, errorInfo, this.props.scope);
-    // 同根级边界：scoped 区域捕获的渲染异常同样不会冒泡到 RUM，按 scope 区分上报，
-    // 让 sidebar/chat/settings 等局部崩溃在 RUM 里可见、可定位。
-    reportReactErrorToArms({
-      error: normalizedError,
-      componentStack: errorInfo.componentStack ?? "",
-      scope: this.props.scope,
-    });
     this.setState({ componentStack: errorInfo.componentStack ?? "" });
   }
 

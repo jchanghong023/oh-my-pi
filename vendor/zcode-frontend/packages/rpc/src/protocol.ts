@@ -232,7 +232,7 @@ export function writeProtocolMessage(msg: ProtocolMessage): VSBuffer {
 
 /**
  * 基础 Protocol: 在 ISocket 上加消息帧，实现 IMessagePassingProtocol。
- * 只做消息分帧，不做 ACK/重连（那是 PersistentProtocol 的事）。
+ * 只做消息分帧，不做 ACK/重连。
  */
 export class SocketProtocol implements IMessagePassingProtocol {
   private readonly _onMessage = new Emitter<VSBuffer>();

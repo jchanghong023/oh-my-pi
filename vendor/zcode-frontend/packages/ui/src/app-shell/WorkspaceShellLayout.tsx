@@ -208,9 +208,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
   onWorkspaceMainViewChange,
   onOpenAutomationConsumed,
   handleOpenAutomations,
-  onLogout,
-  onLogin,
-  user,
   onCreateTask,
   onCreateConversationTask,
   onResolveConversationWorkspace,
@@ -1290,21 +1287,19 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       targetWorkspacePath: string,
       targetWorkspaceIdentity?: string,
       targetWorkspacePurpose?: import("@zcode/shared").WorkspacePurpose,
-      createSource?: import("@zcode/shared").SessionCreateSource,
     ) => {
       showChatMainView();
       handleStartDraftInWorkspace(
         targetWorkspacePath,
         targetWorkspaceIdentity,
         targetWorkspacePurpose,
-        createSource,
       );
     },
     [handleStartDraftInWorkspace, showChatMainView],
   );
   const handleCreateProjectDraft = useCallback(
     (path: string, identity?: string) =>
-      handleStartDraftInWorkspaceInChat(path, identity, undefined, "project"),
+      handleStartDraftInWorkspaceInChat(path, identity),
     [handleStartDraftInWorkspaceInChat],
   );
   const activeWorkspacePurpose =
@@ -1724,9 +1719,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
       remoteWorkspaceRecoveryByWorkspaceKey={remoteWorkspaceRecoveryByWorkspaceKey}
       remoteWorkspaceErrorByWorkspaceKey={remoteWorkspaceErrorByWorkspaceKey}
       isDesktop={isDesktop}
-      onLogout={onLogout}
-      onLogin={onLogin}
-      user={user}
       isSidebarVisible={isSidebarVisible}
       onToggleSidebar={handleToggleSidebar}
       toggleSidebarShortcutLabel={toggleSidebarShortcutLabel}
@@ -1781,7 +1773,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                 activeTaskTitle={activeTaskTitle}
                 activeTaskChangeSummary={activeTaskChangeSummary}
                 activeTaskId={activeTaskId}
-                user={user}
                 activeTraceId={activeTraceId}
                 activeSessionId={activeSessionId}
                 activeTaskProvider={activeTaskProvider}
@@ -1883,7 +1874,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                   readOnlyReason={workspaceReadOnlyReason}
                   workspacePath={workspaceAbsPath}
                   workspaceIdentity={workspaceIdentity}
-                  isDesktop={isDesktop === true}
                   sessionId={activeTaskId}
                   provider={activeTaskProvider ?? undefined}
                   onSessionCreated={handleV4SessionCreated}
@@ -2087,7 +2077,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                             activeTaskTitle={activeTaskTitle}
                             activeTaskChangeSummary={activeTaskChangeSummary}
                             activeTaskId={activeTaskId}
-                            user={user}
                             activeTraceId={activeTraceId}
                             activeSessionId={activeSessionId}
                             activeTaskProvider={activeTaskProvider}
@@ -2197,7 +2186,6 @@ const WorkspaceShellLayoutContent = memo(function WorkspaceShellLayoutComponent(
                                 foregroundEnabled={isWorkspaceVisible}
                                 workspacePath={workspaceAbsPath}
                                 workspaceIdentity={workspaceIdentity}
-                                isDesktop={isDesktop === true}
                                 remoteSessionId={workspaceRemoteSessionId}
                                 sessionId={activeTaskId}
                                 activeSelectionSideChatSessionId={activeSelectionSideChatSessionId}

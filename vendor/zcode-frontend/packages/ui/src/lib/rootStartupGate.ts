@@ -1,5 +1,4 @@
 interface RootStartupGateState {
-  isResolvingStartupAuthState: boolean;
   isResolvingProviderStartupState: boolean;
   isRestoring: boolean;
   isBootstrappingInitialWorkspace: boolean;
@@ -15,10 +14,6 @@ interface FallbackWorkspaceCreateState {
   activeWorkspacePath: string | null;
 }
 
-interface ProviderStartupSyncState {
-  providerFamilyDomainMigrationComplete: boolean;
-  modelSelectionViewHydrated: boolean;
-}
 
 interface ProviderAvailabilityLoginEntryGuardState {
   isWebRemoteControlRoot: boolean;
@@ -32,7 +27,6 @@ interface ProviderStartupResolutionState {
 
 export function shouldBlockRootRender(state: RootStartupGateState): boolean {
   return (
-    state.isResolvingStartupAuthState ||
     state.isResolvingProviderStartupState ||
     state.isRestoring ||
     state.isBootstrappingInitialWorkspace
@@ -42,16 +36,14 @@ export function shouldBlockRootRender(state: RootStartupGateState): boolean {
 export function shouldShowRootStartupLoading(
   state: RootStartupLoadingVisibilityState,
 ): boolean {
-  // 修复原因：登录入口是启动门禁的结果，不是可继续被门禁遮挡的后台状态。
-  // 如果 WelcomeScreen 已经打开，继续返回启动 loading 会把未登录用户卡在黑屏 logo。
+  // Provider 配置入口已经打开时，不再用启动 loading 遮挡真实配置页面。
   return Boolean(state.isDesktop) && !state.welcomeScreenOpen && shouldBlockRootRender(state);
 }
 
 export function shouldEnableProviderAvailabilityLoginEntryGuard(
   state: ProviderAvailabilityLoginEntryGuardState,
 ): boolean {
-  // 修复原因：手机 Web 远控只 attachment 到桌面已有 host，不能用本地空 provider
-  // 快照触发登录页，否则断连/home-only 首页会被 WelcomeScreen 覆盖。
+  // 手机 attachment 的 Provider 配置属于 Host，不由本地空快照触发配置页面。
   return !state.isWebRemoteControlRoot;
 }
 
@@ -76,11 +68,3 @@ export function shouldOpenFallbackWorkspaceAfterCreate(
   return state.isMounted && !state.activeWorkspacePath;
 }
 
-export function isProviderStartupSyncPending(
-  state: ProviderStartupSyncState,
-): boolean {
-  return (
-    !state.providerFamilyDomainMigrationComplete ||
-    !state.modelSelectionViewHydrated
-  );
-}

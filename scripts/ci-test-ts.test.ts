@@ -99,14 +99,14 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "ordinary", suiteRevision: 3 },
+					selection: { mode: "full", group: "ordinary", suiteRevision: 4 },
 				},
 				{
 					scope: "ci-test-ts:local-ts",
 					exitCode: 0,
 					status: "passed",
 					report: "available",
-					selection: { mode: "full", group: "startup", suiteRevision: 3 },
+					selection: { mode: "full", group: "startup", suiteRevision: 4 },
 				},
 				{
 					scope: "rust-fork-features",
@@ -171,17 +171,17 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		report.producers[0]!.selection = { mode: "full", group: "ordinary" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 3 };
+		report.producers[0]!.selection = { mode: "full", group: "ordinary", suiteRevision: 4 };
 		report.producers[1]!.selection = { mode: "full", group: "startup" };
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
-		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 3 };
+		report.producers[1]!.selection = { mode: "full", group: "startup", suiteRevision: 4 };
 		await save();
 		for (const index of [0, 1]) {
-			report.producers[index]!.selection!.suiteRevision = 2;
+			report.producers[index]!.selection!.suiteRevision = 3;
 			await save();
 			expect((await bunTestSelection(root)).mode).toBe("full");
-			report.producers[index]!.selection!.suiteRevision = 3;
+			report.producers[index]!.selection!.suiteRevision = 4;
 		}
 		await save();
 		expect(await bunTestSelection(root)).toMatchObject({ mode: "affected", baseline: revision });
@@ -215,7 +215,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 			exitCode: 0,
 			status: "passed",
 			report: "available",
-			selection: { mode: "full", group: "ordinary", suiteRevision: 3 },
+			selection: { mode: "full", group: "ordinary", suiteRevision: 4 },
 		};
 		const startup = report.producers.splice(1, 1)[0]!;
 		await save();
@@ -228,7 +228,7 @@ test("affected selection needs a qualifying full TS baseline reachable in Git", 
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
-		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 3 } });
+		report.producers.push({ ...startup, selection: { mode: "full", group: "ordinary", suiteRevision: 4 } });
 		await save();
 		expect((await bunTestSelection(root)).mode).toBe("full");
 		report.producers.pop();
@@ -522,7 +522,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 		durationSeconds: 12,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 3 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 4 },
 		report: "available",
 	} satisfies TestProducerRecord & { report: string };
 	const put = async (overrides: object = {}, records: unknown[] = [producer]) => {
@@ -602,7 +602,7 @@ test("completed chunk hints do not require a successful or finalized fulltest", 
 			{ startedAt: new Date(now + 1000).toISOString() },
 			{ startedAt: new Date(now - 180_000).toISOString() },
 			{ selection: { ...producer.selection, mode: "affected" } },
-			{ selection: { ...producer.selection, suiteRevision: 2 } },
+			{ selection: { ...producer.selection, suiteRevision: 3 } },
 			{ selection: { tool: "bun", mode: "full", group: "ordinary" } },
 			{ selection: { ...producer.selection, group: "other" } },
 		]) {
@@ -638,7 +638,7 @@ test("each exact chunk keeps its latest usable measurement across interrupted ru
 		durationSeconds,
 		exitCode: 0,
 		status: "passed",
-		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 3 },
+		selection: { tool: "bun", mode: "full", group: "ordinary", suiteRevision: 4 },
 		report: "available",
 	});
 	const put = async (name: string, age: number, records: object[], overrides: object = {}) => {
@@ -842,7 +842,7 @@ test("local suites select fork consumers and drain failures without widening to 
 		const bunProducers = report.producers.filter(producer => producer.scope === expectedScope);
 		expect(bunProducers.length).toBeGreaterThan(0);
 		for (const producer of bunProducers) {
-			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 3 });
+			expect(producer.selection).toMatchObject({ tool: "bun", mode: "full", suiteRevision: 4 });
 			expect(producer.exitCode).toBe(0);
 			expect(producer.status).toBe("passed");
 		}

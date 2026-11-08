@@ -15,24 +15,6 @@ import {
   sourceServerWorkspaceHistoryEntrySchema,
 } from "./source-server/contracts.js";
 
-/** 引导职业枚举；单独导出供 onboarding 记录回填 settings 时做窄化校验。 */
-const appSettingsOccupationSchema = z.enum([
-  "office",
-  "developer",
-  "independent",
-  "infrastructure",
-  "product",
-  "design",
-  "student",
-  "creator",
-  "operations",
-  "marketing",
-  "finance",
-  "accounting",
-  "legal",
-  "other",
-]);
-export const appSettingsOccupationEnum = appSettingsOccupationSchema;
 
 const nonEmptyStringSchema = z.string().trim().min(1);
 
@@ -510,7 +492,6 @@ const appSettingsObjectSchema = z.object({
   providerFamilyDomainMigrated: z.boolean().default(false),
   nativeSearchEnhancementsEnabled: z.boolean().default(true),
   toolSearchMode: appToolSearchModeSchema.default("off"),
-  onboardingOccupation: appSettingsOccupationSchema.nullish(),
   proactiveSuggestionsEnabled: z.boolean().optional(),
   memoryEnabled: z.boolean().default(false),
   lastWorkspaceSession: z.array(appWorkspaceSessionEntrySchema).default([]),
@@ -599,24 +580,6 @@ export const appSettingsPatchSchema = z.object({
   providerFamilyDomainMigrated: z.boolean().optional(),
   nativeSearchEnhancementsEnabled: z.boolean().optional(),
   toolSearchMode: appToolSearchModeSchema.optional(),
-  onboardingOccupation: z
-    .enum([
-      "office",
-      "developer",
-      "independent",
-      "infrastructure",
-      "product",
-      "design",
-      "student",
-      "creator",
-      "operations",
-      "marketing",
-      "finance",
-      "accounting",
-      "legal",
-      "other",
-    ])
-    .nullish(),
   proactiveSuggestionsEnabled: z.boolean().optional(),
   memoryEnabled: z.boolean().optional(),
   lastWorkspaceSession: z.array(appWorkspaceSessionEntrySchema).optional(),

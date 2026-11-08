@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import type { IFileWatcherService } from "@zcode/services";
 import { logger } from "@/logger.js";
 import type { WorkspaceFileTreeWatcherRegistration } from "@/workspace-file-tree/types.js";
+import { useFileWatchingAvailable } from "@/hooks/useFileWatchingAvailable.js";
 
 export function useWorkspaceFileTreeWatchers({
   fileWatcherService,
@@ -12,6 +13,11 @@ export function useWorkspaceFileTreeWatchers({
   watchedDirectoryPaths: Set<string>;
   onDirectoryChange: (path: string) => void;
 }) {
+  const watchingAvailable = useFileWatchingAvailable(
+    fileWatcherService,
+    watchedDirectoryPaths.size > 0,
+  );
+  const watchingAvailableRef = useRef(watchingAvailable);
   const fileWatcherServiceRef = useRef(fileWatcherService);
   const watcherGenerationRef = useRef(0);
   const watchedDirectoryPathsRef = useRef<Set<string>>(new Set());
@@ -34,7 +40,8 @@ export function useWorkspaceFileTreeWatchers({
       });
     };
 
-    if (fileWatcherServiceRef.current !== fileWatcherService) {
+    if (fileWatcherServiceRef.current !== fileWatcherService ||
+        watchingAvailableRef.current !== watchingAvailable) {
       watcherGenerationRef.current += 1;
       for (const [directoryPath, registration] of watcherRegistrationsRef.current) {
         releaseWatcherRegistration(directoryPath, registration);
@@ -42,16 +49,19 @@ export function useWorkspaceFileTreeWatchers({
       watcherRegistrationsRef.current = new Map();
       pendingWatcherDirectoryPathsRef.current = new Set();
       fileWatcherServiceRef.current = fileWatcherService;
+      watchingAvailableRef.current = watchingAvailable;
     }
 
-    watchedDirectoryPathsRef.current = watchedDirectoryPaths;
+    watchedDirectoryPathsRef.current = watchingAvailable ? watchedDirectoryPaths : new Set();
 
     for (const [directoryPath, registration] of watcherRegistrationsRef.current) {
-      if (!watchedDirectoryPaths.has(directoryPath)) {
+      if (!watchedDirectoryPathsRef.current.has(directoryPath)) {
         watcherRegistrationsRef.current.delete(directoryPath);
         releaseWatcherRegistration(directoryPath, registration);
       }
     }
+
+    if (!watchingAvailable) return;
 
     for (const directoryPath of watchedDirectoryPaths) {
       if (
@@ -66,7 +76,9 @@ export function useWorkspaceFileTreeWatchers({
       void fileWatcherService
         .watch({ path: directoryPath })
         .then(({ id }) => {
-          pendingWatcherDirectoryPathsRef.current.delete(directoryPath);
+          if (watcherGeneration === watcherGenerationRef.current) {
+            pendingWatcherDirectoryPathsRef.current.delete(directoryPath);
+          }
           if (
             watcherGeneration !== watcherGenerationRef.current ||
             !watchedDirectoryPathsRef.current.has(directoryPath)
@@ -76,6 +88,8 @@ export function useWorkspaceFileTreeWatchers({
           }
 
           const subscription = fileWatcherService.onDynamicChange(id)((event) => {
+            if (watcherGeneration !== watcherGenerationRef.current ||
+                !watchedDirectoryPathsRef.current.has(directoryPath)) return;
             onDirectoryChange(event.dirPath);
           });
           watcherRegistrationsRef.current.set(directoryPath, {
@@ -85,7 +99,9 @@ export function useWorkspaceFileTreeWatchers({
           });
         })
         .catch((error) => {
-          pendingWatcherDirectoryPathsRef.current.delete(directoryPath);
+          if (watcherGeneration === watcherGenerationRef.current) {
+            pendingWatcherDirectoryPathsRef.current.delete(directoryPath);
+          }
           logger.warn("[WorkspaceFileTree] 监听目录失败", {
             path: directoryPath,
             error: error instanceof Error ? error.message : String(error),
@@ -94,7 +110,7 @@ export function useWorkspaceFileTreeWatchers({
     }
 
     return undefined;
-  }, [fileWatcherService, onDirectoryChange, watchedDirectoryPaths]);
+  }, [fileWatcherService, onDirectoryChange, watchedDirectoryPaths, watchingAvailable]);
 
   useEffect(
     () => () => {

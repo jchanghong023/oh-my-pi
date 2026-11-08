@@ -15,9 +15,8 @@ export interface TaskNavEntry extends WorkspaceNavEntryBase {
   taskId: string;
 }
 
-// "workflow" 是自动化页的顶级「工作流」标签；
-// scheduled / idle 仍是「自动化」标签内部的胶囊。
-export type AutomationsNavigationTab = "scheduled" | "idle" | "workflow";
+/** 自动化管理页的定时任务与顶级工作流导航目标。 */
+export type AutomationsNavigationTab = "scheduled" | "workflow";
 
 export type OpenAutomationsMain = (
   automationId?: string,

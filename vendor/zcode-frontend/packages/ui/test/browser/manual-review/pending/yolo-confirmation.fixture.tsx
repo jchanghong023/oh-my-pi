@@ -9,7 +9,6 @@ import { ConfirmDialogHost } from "@/ConfirmDialog.js";
 import { PermissionDialog } from "@/PermissionDialog.js";
 import { V4ComposerModeSwitch } from "@/v4/composer/V4ComposerModeControls.js";
 import { AutomationEditView } from "@/settings/AutomationEditView.js";
-import { OffPeakEditView } from "@/settings/OffPeakEditView.js";
 import { TabStoreProvider } from "@/store/TabStoreProvider.js";
 import { TooltipProvider } from "@/components/ui/tooltip.js";
 import "@/styles.css";
@@ -96,20 +95,6 @@ function Fixture() {
           }}
         />
       )}
-      {surface === "offpeak" && (
-        <OffPeakEditView
-          key={target}
-          editing={null}
-          modelSelectionView={modelView}
-          defaultWorkspacePath="/example"
-          saving={false}
-          onBack={() => setResponse("back")}
-          onSubmit={async (value) => {
-            setResponse(JSON.stringify(value));
-            return true;
-          }}
-        />
-      )}
       <output className="sr-only" data-testid="state">
         {JSON.stringify({ mode, planEnabled, commits, response })}
       </output>
@@ -120,7 +105,7 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <ServiceProvider services={services}>
     <PlatformProvider platform={{} as IPlatformService}>
-      <ZCodeIntlProvider initialLocale={params.get("locale") === "en-US" ? "en-US" : "zh-CN"}>
+      <ZCodeIntlProvider>
         <TabStoreProvider>
           <TooltipProvider>
             <Fixture />

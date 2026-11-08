@@ -38,7 +38,7 @@ function Fixture() {
 }
 createRoot(document.getElementById("root")!).render(
   <ServiceProvider services={services}>
-    <ZCodeIntlProvider initialLocale={params.get("locale") === "en-US" ? "en-US" : "zh-CN"}>
+    <ZCodeIntlProvider>
       <Fixture />
     </ZCodeIntlProvider>
   </ServiceProvider>,

@@ -1,23 +1,16 @@
 import { ServiceChannels } from "../../../../vendor/zcode-frontend/packages/shared/src/channels";
 import type { CommandsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/command-types";
-import type { Hook } from "../../../../vendor/zcode-frontend/packages/shared/src/hooks";
-import type { Memory } from "../../../../vendor/zcode-frontend/packages/shared/src/memory";
-import type { LoadCliMcpFromUserDirectoryResult } from "../../../../vendor/zcode-frontend/packages/shared/src/mcp";
-import type { OutputStyle } from "../../../../vendor/zcode-frontend/packages/shared/src/output-style";
 import type {
 	DataSyncContentHashesResult,
 	DataSyncListResult,
 	RemoteSyncWriteAccessResult,
 } from "../../../../vendor/zcode-frontend/packages/shared/src/remote-sync";
-import type {
-	SettingsSyncClaudeAgentsFileMigrationStatus,
-	SettingsSyncDiscoveryResult,
-	SettingsSyncFirstRunPromptState,
-} from "../../../../vendor/zcode-frontend/packages/shared/src/settings-sync";
+import type { SettingsSyncClaudeAgentsFileMigrationStatus } from "../../../../vendor/zcode-frontend/packages/shared/src/settings-sync";
 import type { SkillsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/skills-types";
 import type { AgentsListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/subagents-types";
-import type { ZCodeMcpListResult } from "../../../../vendor/zcode-frontend/packages/shared/src/zcode-protocol/index";
 import type { WebGuiMethod, WebGuiServiceContext, WebGuiServiceDefinition } from "./rpc-contract";
+import { createNativeMcpMethods } from "./native-mcp";
+import { createNativeSkillMethods } from "./native-skills";
 import { createWebGuiService } from "./service-channel";
 
 const unavailableReason = "OMP WebGUI protocol is connected; native extension configuration is not bound.";
@@ -39,8 +32,8 @@ function disabledSyncReads(): Readonly<Record<string, WebGuiMethod>> {
 	};
 }
 
-/** Browser-facing extension interfaces, deliberately separate from OMP business bindings. */
-export function createExtensionServices(_context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
+/** Read-only native catalogs with explicit unavailable mutation boundaries. */
+export function createExtensionServices(context: WebGuiServiceContext): readonly WebGuiServiceDefinition[] {
 	return [
 		createWebGuiService(ServiceChannels.Skills, {
 			list: (): SkillsListResult => ({
@@ -48,6 +41,7 @@ export function createExtensionServices(_context: WebGuiServiceContext): readonl
 				capability: { userScopeAvailable: false, userScopeReason: "desktop_only" },
 				diagnostics: [],
 			}),
+			...(context.nativeSession ? createNativeSkillMethods(context) : {}),
 			// TODO(omp-skills): Bind setEnabled/buildPromptContext/copyToCommon/removeFromCommon/deleteSkill.
 			// Missing business methods use the channel's explicit OMP_WEBGUI_NOT_IMPLEMENTED dispatch.
 		}),
@@ -58,11 +52,9 @@ export function createExtensionServices(_context: WebGuiServiceContext): readonl
 		}),
 		createWebGuiService(ServiceChannels.McpSync, {
 			...disabledSyncReads(),
-			loadMcpFromUserDirectory: (): LoadCliMcpFromUserDirectoryResult => ({ servers: [] }),
-			listWorkspaceMcpServerStatuses: (): ZCodeMcpListResult => ({ statuses: {} }),
-			// TODO(omp-mcp): Bind native directory reads and workspace status authority above;
-			// exportSyncItems/importSyncItems/setWorkspaceMcpTrust/saveMcpToUserDirectory are unavailable.
-			// No configured servers are claimed connected, and no native MCP configuration is scanned.
+			...createNativeMcpMethods(context),
+			// Reads require the bound owner's live manager and expose its loaded cache only.
+			// Export/import/trust/save operations remain unavailable.
 		}),
 		createWebGuiService(ServiceChannels.UserConfigSync, {
 			...disabledSyncReads(),
@@ -92,19 +84,14 @@ export function createExtensionServices(_context: WebGuiServiceContext): readonl
 			// deleteCommandFile/setCommandEnabled/getPrimaryUserCommandsDirectory remain unavailable.
 		}),
 		createWebGuiService(ServiceChannels.Hooks, {
-			loadHooks: (): { hooks: Hook[]; hooksEnabled: boolean } => ({ hooks: [], hooksEnabled: false }),
 			// TODO(omp-native-settings): Bind native hook discovery and authority;
 			// saveHooks/grantWorkspaceHookTrust remain unavailable, never grant fabricated trust.
 		}),
 		createWebGuiService(ServiceChannels.Memory, {
-			loadMemory: (): { memory: Memory | null } => ({ memory: null }),
-			listProjectMemories: () => [],
 			// TODO(omp-native-settings): Bind native memory discovery; saveMemory/clearMemory,
 			// getUserMemoryDirectory/readProjectMemoryFile remain unavailable (including directory creation).
 		}),
 		createWebGuiService(ServiceChannels.OutputStyle, {
-			listStyles: (): { styles: OutputStyle[] } => ({ styles: [] }),
-			getActiveStyle: (): { styleId: string | null } => ({ styleId: null }),
 			// TODO(omp-native-settings): Bind native output style discovery; addStyle/updateStyle/deleteStyle,
 			// getUserStylesDirectory/setActiveStyle remain unavailable.
 		}),
@@ -116,23 +103,9 @@ export function createExtensionServices(_context: WebGuiServiceContext): readonl
 				targetExists: false,
 				supported: false,
 			}),
-			detect: (): SettingsSyncDiscoveryResult => ({ agents: [] }),
-			getFirstRunPromptState: (): SettingsSyncFirstRunPromptState => ({ handled: false }),
 			// TODO(omp-native-settings): Bind native migration status/discovery/first-run persistence;
 			// copyClaudeAgentsFileToZcodeAgentsFile/importSelected/markFirstRunPromptHandled stay unavailable.
 			// Browser startup must gate native migration, not pretend the first-run prompt was handled.
-		}),
-		createWebGuiService(ServiceChannels.Feedback, {
-			// TODO(omp-feedback): Bind create/cancelCreate/list/get/comment/uploadAttachment,
-			// uploadAttachmentWithProgress/cancelUpload/uploadAttachmentData/attachLogsFromExport,
-			// getDeviceSnapshot/prepareCompactLogArchive/cleanupPreparedLogArchive/revealLogArchive.
-			// onDynamicUploadProgress has real disposable connection ownership but no fabricated progress.
-		}),
-		createWebGuiService(ServiceChannels.ConversationShare, {
-			getImportedConversation: () => null,
-			// TODO(omp-share): Bind getCapabilities/preflight/publish/importShare/getPreview/getContinuation.
-			// getImportedConversation currently has no connection-owned imports; no native history is read.
-			// onDynamicPublishProgress/onDynamicImportProgress remain idle until actual publishing is bound.
 		}),
 	];
 }

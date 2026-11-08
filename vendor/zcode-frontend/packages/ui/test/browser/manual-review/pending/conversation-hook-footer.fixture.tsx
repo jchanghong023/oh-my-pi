@@ -9,7 +9,6 @@ import "@/styles.css";
 
 const query = new URLSearchParams(location.search);
 const mobile = query.get("mobile") === "true";
-const highspeed = query.get("highspeed") === "true";
 const theme = query.get("theme") === "light" ? "light" : "dark";
 document.documentElement.className = `${theme} theme-zai-${theme}`;
 const base = { turnId: "hook-footer", createdAt: 1_700_000_000_000, createdAtSeq: 1 };
@@ -19,7 +18,7 @@ const rows: ConversationRow[] = [
     rowId: 1,
     kind: "turnHeader",
     origin: "userInput",
-    state: highspeed ? "completedInterrupted" : "completedSuccess",
+    state: "completedSuccess",
     startedAt: base.createdAt,
   },
   {
@@ -28,19 +27,6 @@ const rows: ConversationRow[] = [
     kind: "userInput",
     origin: "realUser",
     text: "nihao",
-    ...(highspeed
-      ? {
-          highspeed: {
-            schemaVersion: 1,
-            cardId: "hsc-hooks",
-            taskId: "hook-footer",
-            provider: "zai",
-            model: "glm-5",
-            issuedAt: 1_000,
-            expiresAt: 10_000,
-          },
-        }
-      : {}),
   },
   {
     ...base,
@@ -71,35 +57,30 @@ const rows: ConversationRow[] = [
       },
     ],
   },
-  ...(!highspeed
-    ? [
-        {
-          ...base,
-          rowId: 4,
-          kind: "assistantText" as const,
-          state: "complete" as const,
-          entityId: "assistant-1",
-          text: "你好！我是 ZCode，有什么可以帮你的吗？\n\n直接告诉我你想做什么就行。",
-        },
-      ]
-    : []),
+  {
+    ...base,
+    rowId: 4,
+    kind: "assistantText",
+    state: "complete",
+    entityId: "assistant-1",
+    text: "你好！有什么可以帮你的吗？\n\n直接告诉我你想做什么就行。",
+  },
 ];
 const [unit] = buildConversationTurnRenderUnits(rows);
 
 // 真实组件、主题与点击行为；只读投影输入固定，不建立 runtime 或远控连接。
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>
-    <ZCodeIntlProvider initialLocale={mobile ? "en-US" : "zh-CN"}>
+    <ZCodeIntlProvider>
       <main className="min-h-dvh bg-background text-foreground @container/conversation">
         <ConversationTurnGroup
-          unit={{ ...unit!, showHighspeedOutputFooter: highspeed }}
+          unit={unit!}
           context={{
             workspacePath: "/fixture",
             theme,
             codePreviewSettings: DEFAULT_CODE_PREVIEW_SETTINGS,
             compactForRemoteControl: mobile,
           }}
-          onFeedbackChange={() => undefined}
         />
       </main>
     </ZCodeIntlProvider>

@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { windowsTestTempOverride } from "./windows-test-temp";
 import { BunTestFailureObserver, GateCommandError, reportGateFailure } from "./test-gate-failure-events";
 import { testConcurrencyLimit } from "./test-gate-scheduler";
-import { bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
+import { bunCoreBrowserInputsChanged, bunRequiresFullSelection, captureChangedPaths } from "./test-gate-source";
 import type { GateRun } from "./test-gate-runtime";
 import {
 	beginTestRun,
@@ -57,7 +57,7 @@ export interface BunSelection {
 	selected?: number;
 	group?: "ordinary" | "startup";
 	/** Distinguishes the current fork test scope from older, narrower reports. */
-	suiteRevision?: 3;
+	suiteRevision?: 4;
 }
 
 /** A clean full TS baseline lets Bun compare the current worktree against its revision. */
@@ -118,7 +118,7 @@ export async function bunTestSelection(
 						producer.status === "passed" &&
 						producer.report === "available" &&
 						producer.selection?.mode === "full" &&
-						(producer.selection as BunSelection).suiteRevision === 3,
+						(producer.selection as BunSelection).suiteRevision === 4,
 				) ||
 				!["ordinary", "startup"].every(group =>
 					producers.some(
@@ -160,8 +160,8 @@ export async function bunTestSelection(
 	return fallback;
 }
 
-/** Git failure or a dynamic/native input makes automatic Bun selection unsafe. */
-async function bunCanTraceChanges(root: string, baseline: string): Promise<boolean> {
+/** Capture once for both conservative native fallback and the explicit Vite dependency closure. */
+async function bunChangedPaths(root: string, baseline: string): Promise<string[] | undefined> {
 	try {
 		const gitGate = {
 			charged: async <T>(work: () => Promise<T>) => work(),
@@ -172,9 +172,9 @@ async function bunCanTraceChanges(root: string, baseline: string): Promise<boole
 				return { stdout };
 			},
 		} as unknown as GateRun;
-		return !bunRequiresFullSelection(await captureChangedPaths(gitGate, root, baseline));
+		return await captureChangedPaths(gitGate, root, baseline);
 	} catch {
-		return false;
+		return undefined;
 	}
 }
 /** Consolidation is safe only when Git confirms that the baseline is the entire current tree. */
@@ -474,6 +474,20 @@ const forkCodingAgentFiles = new Set([
 	"test/parallel-review-SessionRuntimeCompact-regression.test.ts",
 	"test/developer-test-agent-materialization.test.ts",
 	"test/task/structured-subagent.test.ts",
+	"test/webgui/core-browser.e2e.test.ts",
+	"test/webgui/native-chat-history.test.ts",
+	"test/webgui/native-chat-stream.test.ts",
+	"test/webgui/native-subagents.test.ts",
+	"test/webgui/native-child-ui-contract.test.ts",
+	"test/webgui/native-task-runs.test.ts",
+	"test/webgui/native-cwd.test.ts",
+	"test/webgui/native-files.test.ts",
+	"test/webgui/native-git.test.ts",
+	"test/webgui/native-skills.test.ts",
+	"test/webgui/native-mcp.test.ts",
+	"test/webgui/native-mcp-binding.test.ts",
+	"test/webgui/platform-probe.test.ts",
+	"test/webgui/packaged-assets.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {
 	"packages/agent": ["test/discovery-per-call-context.test.ts", "test/output-budget.test.ts"],
@@ -739,6 +753,7 @@ function isStartupTest(file: string): boolean {
 	return (
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
 		/^test\/dev-workbench\/(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
+		file === "test/webgui/core-browser.e2e.test.ts" ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
 		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
@@ -1801,16 +1816,15 @@ if (import.meta.main) {
 		: localMode
 			? await bunTestSelection()
 			: { tool: "bun", mode: "full", reason: "full selection requested" };
-	if (
-		!changedArgs.length &&
-		selection.mode === "affected" &&
-		selection.baseline &&
-		!(await bunCanTraceChanges(repoRoot, selection.baseline))
-	) {
-		selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
+	let changedPaths: string[] | undefined;
+	if (selection.mode === "affected") {
+		changedPaths = await bunChangedPaths(repoRoot, selection.baseline ?? "HEAD");
+		if (!changedArgs.length && (!changedPaths || bunRequiresFullSelection(changedPaths))) {
+			selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
+		}
 	}
 	if (deferStartup || onlyStartup) selection.group = onlyStartup ? "startup" : "ordinary";
-	if (requestedMode === "local-ts") selection.suiteRevision = 3;
+	if (requestedMode === "local-ts") selection.suiteRevision = 4;
 	if (
 		requestedCommands.length &&
 		requestedMode === "local-ts" &&
@@ -1844,8 +1858,19 @@ if (import.meta.main) {
 	);
 	for (const command of requestedCommands) {
 		if (command.parallel === undefined) continue;
-		command.selection = selection;
-		if (selection.mode === "affected") command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
+		// Frontend assets and Vite's entrypoints are invisible to Bun --changed.
+		// Run this single startup chunk without --changed only when that closure changed;
+		// other chunks retain Bun's native affected selection and existing budgets.
+		const browserInputsChanged =
+			selection.mode === "affected" &&
+			command.cwd === "packages/coding-agent" &&
+			command.command.includes("test/webgui/core-browser.e2e.test.ts") &&
+			(!changedPaths || bunCoreBrowserInputsChanged(changedPaths));
+		command.selection = browserInputsChanged
+			? { ...selection, mode: "full", reason: "explicit browser Vite/fixture dependency mapping" }
+			: selection;
+		if (selection.mode === "affected" && !browserInputsChanged)
+			command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.
 	requestedCommands.sort((a, b) => Number(isIntegrationCommand(b)) - Number(isIntegrationCommand(a)));

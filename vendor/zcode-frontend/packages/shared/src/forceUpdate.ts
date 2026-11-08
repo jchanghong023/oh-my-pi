@@ -1,10 +1,3 @@
-import type { ForceUpdateConfig } from "./coding-plan-subscription.js";
-
-export interface ForceUpdateRequirement {
-  currentVersion: string;
-  minimalVersion: string;
-}
-
 interface ParsedSemver {
   major: number;
   minor: number;
@@ -15,9 +8,7 @@ interface ParsedSemver {
 function parseSemver(version: string): ParsedSemver | null {
   const normalized = version.trim().replace(/^v/i, "");
 
-  // 远端配置可能只传主版本号（如 "45"）或主次版本号（如 "4.5"），
-  // 严格 semver（X.Y.Z）解析会返回 null，导致 resolveForceUpdateRequirement
-  // 永远不触发。这里依次尝试标准版本和补齐版本，兼容服务端简写格式。
+  // 兼容省略次版本号或补丁版本号的简写格式。
   const strictMatch = normalized.match(
     /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
   );
@@ -114,24 +105,4 @@ export function compareSemverVersions(leftVersion: string, rightVersion: string)
   }
 
   return comparePrerelease(left.prerelease, right.prerelease);
-}
-
-export function resolveForceUpdateRequirement(params: {
-  currentVersion: string;
-  forceUpdate?: ForceUpdateConfig | null;
-}): ForceUpdateRequirement | null {
-  const minimalVersion = params.forceUpdate?.minimalVersion.trim();
-  if (!minimalVersion) {
-    return null;
-  }
-
-  const comparison = compareSemverVersions(params.currentVersion, minimalVersion);
-  if (comparison === null || comparison >= 0) {
-    return null;
-  }
-
-  return {
-    currentVersion: params.currentVersion,
-    minimalVersion,
-  };
 }
