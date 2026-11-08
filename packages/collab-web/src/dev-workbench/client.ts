@@ -9,6 +9,7 @@ import type {
 	DevNativeUiResponse,
 	DevNativeCommand,
 	DevRequirementSnapshot,
+	DevStage,
 	DevSessionTarget,
 	SpecDocument,
 	DevInputTarget,
@@ -30,6 +31,11 @@ export interface OperationConfirmation {
 	operationId: string;
 	confirmationToken: string;
 	userReply: string;
+}
+
+export interface WorkbenchView {
+	requirementId: string;
+	stage: DevStage;
 }
 
 class WorkbenchHttpError extends Error {
@@ -56,6 +62,7 @@ export function inputTargetIdentity(target: DevInputTarget | null): string {
 }
 export interface WorkbenchState {
 	requirements: readonly DevRequirementSnapshot[];
+	requirementsLoaded: boolean;
 	connected: boolean;
 	error: string | null;
 	nativeUi: readonly DevNativeUiRequest[];
@@ -91,6 +98,7 @@ export class WorkbenchClient {
 	readonly #listeners = new Set<() => void>();
 	#snapshot: WorkbenchState = {
 		requirements: [],
+		requirementsLoaded: false,
 		connected: false,
 		error: null,
 		nativeUi: [],
@@ -169,6 +177,45 @@ export class WorkbenchClient {
 	url(path: string): URL {
 		return new URL(path.replace(/^\//, ""), this.#base);
 	}
+	#viewStorageKey(): string {
+		return `omp.dev.view:${this.#base.origin}${this.#base.pathname}`;
+	}
+	/** Restore navigation only after the host has supplied its actual requirements. */
+	restoreView(): WorkbenchView | null {
+		if (!this.#snapshot.requirementsLoaded) return null;
+		try {
+			const value: unknown = JSON.parse(sessionStorage.getItem(this.#viewStorageKey()) ?? "null");
+			if (
+				value &&
+				typeof value === "object" &&
+				"requirementId" in value &&
+				typeof value.requirementId === "string" &&
+				"stage" in value &&
+				["business", "requirements", "solution", "planning", "executing", "st", "pr", "testing"].includes(
+					value.stage as string,
+				) &&
+				this.#snapshot.requirements.some(item => item.record.requirementId === value.requirementId)
+			) {
+				return { requirementId: value.requirementId, stage: value.stage as DevStage };
+			}
+			sessionStorage.removeItem(this.#viewStorageKey());
+		} catch {
+			try {
+				sessionStorage.removeItem(this.#viewStorageKey());
+			} catch {}
+		}
+		return null;
+	}
+	saveView(view: WorkbenchView | null): void {
+		try {
+			if (view)
+				sessionStorage.setItem(
+					this.#viewStorageKey(),
+					JSON.stringify({ requirementId: view.requirementId, stage: view.stage }),
+				);
+			else sessionStorage.removeItem(this.#viewStorageKey());
+		} catch {}
+	}
 	ready(): Promise<void> {
 		if (this.#bootstrap) return this.#bootstrap;
 		const bootstrap = this.request<{ browserId: string }>("api/browser")
@@ -226,7 +273,7 @@ export class WorkbenchClient {
 	}
 	async refresh(): Promise<void> {
 		const requirements = await this.request<DevRequirementSnapshot[]>("api/requirements");
-		this.#publish({ requirements, error: null });
+		this.#publish({ requirements, requirementsLoaded: true, error: null });
 	}
 	select(requirementId: string | null, force = false): void {
 		if (this.#snapshot.joined && !force) {
@@ -268,7 +315,7 @@ export class WorkbenchClient {
 				const frame = JSON.parse(String(event.data)) as WorkbenchEvent;
 				switch (frame.t) {
 					case "requirements":
-						this.#publish({ requirements: frame.requirements });
+						this.#publish({ requirements: frame.requirements, requirementsLoaded: true });
 						break;
 					case "requirement": {
 						const exists = this.#snapshot.requirements.some(
@@ -698,12 +745,17 @@ export class WorkbenchClient {
 		this.#publish({});
 		return result.document;
 	}
-	async importBusiness(id: string, source: File | string): Promise<void> {
+	async importBusiness(id: string, source: File | string, replaceVersion?: string): Promise<void> {
 		if (typeof source === "string")
-			await this.request(`api/business/${encodeURIComponent(id)}`, { kind: "host-path", path: source });
+			await this.request(`api/business/${encodeURIComponent(id)}`, {
+				kind: "host-path",
+				path: source,
+				replaceVersion,
+			});
 		else {
 			const form = new FormData();
 			form.append("file", source);
+			if (replaceVersion !== undefined) form.append("replaceVersion", replaceVersion);
 			await this.request(`api/business/${encodeURIComponent(id)}`, form);
 		}
 		await this.refresh();

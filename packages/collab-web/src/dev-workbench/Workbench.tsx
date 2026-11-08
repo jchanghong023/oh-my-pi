@@ -872,6 +872,8 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 	const state = useSyncExternalStore(client.subscribe, client.getSnapshot, client.getSnapshot);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
 	const [viewed, setViewed] = useState<DevStage>("business");
+	const [viewRestored, setViewRestored] = useState(false);
+	const restoringView = useRef(false);
 	const [mobilePane, setMobilePane] = useState<"materials" | "chat">("materials");
 	const [navOpen, setNavOpen] = useState(false);
 	const [secondaryOperationsFor, setSecondaryOperationsFor] = useState<string | null>(null);
@@ -889,6 +891,9 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 	const [relatedId, setRelatedId] = useState("");
 	const [hostPath, setHostPath] = useState("");
 	const [importOpen, setImportOpen] = useState(false);
+	const [replacementConsent, setReplacementConsent] = useState<{ requirementId: string; version: string } | null>(
+		null,
+	);
 	const [preview, setPreview] = useState<DevActionPreview | null>(null);
 	const [previewSnapshot, setPreviewSnapshot] = useState<DevRequirementSnapshot | null>(null);
 	const [result, setResult] = useState<DevActionResult | null>(null);
@@ -918,6 +923,8 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		stage: DevStage;
 		materials: DevMaterialRef[];
 		error: string | null;
+		snapshot: DevRequirementSnapshot;
+		refresh: number;
 	} | null>(null);
 	const selected = state.requirements.find(item => item.record.requirementId === selectedId) ?? null;
 	const newModal = useModalFocus<HTMLFormElement>(newOpen);
@@ -953,6 +960,35 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		selected ? candidate[selected.record.requirementId] : undefined,
 		solutionMaterial?.version,
 	);
+	const importMaterialsReady = Boolean(
+		selected &&
+		materialRead?.requirementId === selectedId &&
+		materialRead.snapshot === selected &&
+		materialRead.refresh === state.materialRefresh &&
+		!materialRead.error &&
+		!materialLifecycleNotice,
+	);
+	const businessMaterial = importMaterialsReady
+		? materialRead?.materials.find(item => item.kind === "business")
+		: undefined;
+	const replacementAllowed =
+		!businessMaterial ||
+		(replacementConsent?.requirementId === selectedId && replacementConsent?.version === businessMaterial.version);
+	const openImport = (): void => {
+		setReplacementConsent(null);
+		setMaterialRead(null);
+		setError(null);
+		setImportOpen(true);
+	};
+	const importBusiness = (source: File | string): void => {
+		if (!selected || !importMaterialsReady || !replacementAllowed) return;
+		const id = selected.record.requirementId;
+		const replaceVersion = businessMaterial?.version;
+		void run(async () => {
+			await client.importBusiness(id, source, replaceVersion);
+			setImportOpen(false);
+		});
+	};
 	const title = (item: DevRequirementSnapshot): string =>
 		titles[item.record.requirementId] ??
 		`新建需求 · ${item.record.requirementId.replace(/^requirement[-_]/i, "").slice(0, 8)}`;
@@ -975,6 +1011,30 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		void client.connect();
 		return () => client.close();
 	}, [client]);
+	useEffect(() => {
+		if (!state.requirementsLoaded) return;
+		if (!restoringView.current) {
+			restoringView.current = true;
+			const saved = client.restoreView();
+			if (saved) {
+				setSelectedId(saved.requirementId);
+				setViewed(saved.stage);
+				client.select(saved.requirementId);
+			}
+			setViewRestored(true);
+		} else if (viewRestored && selectedId && !selected) {
+			setSelectedId(null);
+			setViewed("business");
+			setImportOpen(false);
+			client.select(null);
+		}
+	}, [client, state.requirementsLoaded, state.requirements, selectedId, selected, viewRestored]);
+	useEffect(() => {
+		if (viewRestored) client.saveView(selectedId ? { requirementId: selectedId, stage: viewed } : null);
+	}, [client, selectedId, viewed, viewRestored]);
+	useEffect(() => {
+		setReplacementConsent(null);
+	}, [importOpen, selectedId, businessMaterial?.version, importMaterialsReady]);
 	useEffect(() => {
 		setVisited(items => (items.includes(conversationKey) ? items : [...items, conversationKey]));
 	}, [conversationKey]);
@@ -1037,7 +1097,14 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		void client.materials(selectedId).then(
 			materials => {
 				if (!active) return;
-				setMaterialRead({ requirementId: selectedId, stage: viewed, materials, error: null });
+				setMaterialRead({
+					requirementId: selectedId,
+					stage: viewed,
+					materials,
+					error: null,
+					snapshot: selected,
+					refresh: state.materialRefresh,
+				});
 				setMaterialId(current =>
 					current && materials.some(item => item.id === current && MATERIAL_KINDS[viewed].includes(item.kind))
 						? current
@@ -1057,13 +1124,20 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 			},
 			failure => {
 				if (active)
-					setMaterialRead({ requirementId: selectedId, stage: viewed, materials: [], error: reason(failure) });
+					setMaterialRead({
+						requirementId: selectedId,
+						stage: viewed,
+						materials: [],
+						error: reason(failure),
+						snapshot: selected,
+						refresh: state.materialRefresh,
+					});
 			},
 		);
 		return () => {
 			active = false;
 		};
-	}, [client, selectedId, selected, viewed, state.materialRefresh, materialLifecycleNotice]);
+	}, [client, selectedId, selected, viewed, state.materialRefresh, materialLifecycleNotice, importOpen]);
 	const updateSelection = (snapshot: DevRequirementSnapshot | null): void => {
 		const id = snapshot?.record.requirementId ?? null;
 		setNavOpen(false);
@@ -1072,6 +1146,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		setViewed(snapshot?.record.stage ?? "business");
 		setError(null);
 		setImportOpen(false);
+		setReplacementConsent(null);
 		setVisited(items => (items.includes(id ?? "local") ? items : [...items, id ?? "local"]));
 	};
 	const select = (snapshot: DevRequirementSnapshot | null): void => {
@@ -1283,7 +1358,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 											</div>
 										)}
 										{selected.record.stage === "business" && (
-											<button type="button" data-action="show-import" onClick={() => setImportOpen(true)}>
+											<button type="button" data-action="show-import" onClick={openImport}>
 												导入已有 Markdown
 											</button>
 										)}
@@ -1946,20 +2021,46 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 						>
 							<h2>导入业务 Markdown</h2>
 							<p>只导入本需求副本，不改写或删除外部源文件。</p>
+							{businessMaterial && (
+								<>
+									<p>
+										本需求已有业务材料：<code>{businessMaterial.path}</code>
+									</p>
+									<label>
+										<input
+											type="checkbox"
+											checked={replacementAllowed}
+											disabled={busy}
+											onChange={event =>
+												setReplacementConsent(
+													event.target.checked
+														? {
+																requirementId: selected.record.requirementId,
+																version: businessMaterial.version,
+															}
+														: null,
+												)
+											}
+										/>
+										确认替换上述本需求副本，保留外部源文件不变
+									</label>
+								</>
+							)}
+							{!importMaterialsReady && (
+								<p role={materialRead?.error ? "alert" : "status"}>
+									{materialRead?.error ?? materialLifecycleNotice ?? "正在读取当前业务材料，请稍候…"}
+								</p>
+							)}
 							<label>
 								上传本机 Markdown
 								<input
 									data-action="import"
 									type="file"
 									accept=".md,.markdown,text/markdown"
-									disabled={busy}
+									disabled={busy || !state.connected || !importMaterialsReady || !replacementAllowed}
 									onChange={event => {
 										const file = event.currentTarget.files?.[0];
-										if (file)
-											void run(async () => {
-												await client.importBusiness(selected.record.requirementId, file);
-												setImportOpen(false);
-											});
+										if (file) importBusiness(file);
 										event.currentTarget.value = "";
 									}}
 								/>
@@ -1980,13 +2081,14 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 								<button
 									type="button"
 									data-action="import-path"
-									disabled={busy || !hostPath.trim()}
-									onClick={() =>
-										void run(async () => {
-											await client.importBusiness(selected.record.requirementId, hostPath);
-											setImportOpen(false);
-										})
+									disabled={
+										busy ||
+										!state.connected ||
+										!hostPath.trim() ||
+										!importMaterialsReady ||
+										!replacementAllowed
 									}
+									onClick={() => importBusiness(hostPath)}
 								>
 									导入文档
 								</button>

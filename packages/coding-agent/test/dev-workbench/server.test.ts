@@ -9,7 +9,12 @@ import { startDevWorkbenchServer } from "../../src/dev-workbench/server";
 import { createAgentSession } from "../../src/sdk";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
-import type { DevMaterialRef, DevRequirementSnapshot, DevNativeUiRequest } from "../../src/spec-driven/types";
+import type {
+	DevMaterialRef,
+	DevRequirementSnapshot,
+	DevNativeUiRequest,
+	SpecDocument,
+} from "../../src/spec-driven/types";
 
 const markdown =
 	"# 业务需求：服务边界 Ω\n\n" +
@@ -244,6 +249,77 @@ describe("workbench capability HTTP service", () => {
 			expect(await fs.readFile(external, "utf8")).toBe(externalContent);
 			expect(await fs.readFile(path.join(f.cwd, "baseline.txt"), "utf8")).toBe("unrelated bytes\n");
 		}
+	}, 120_000);
+
+	test("reimport requires exact replacement consent and only changes the demand-owned Markdown", async () => {
+		await using f = await fixture();
+		const created = (await (
+			await f.request("api/requirements", { source: "import" })
+		).json()) as DevRequirementSnapshot;
+		const id = created.record.requirementId;
+		const external = path.join(f.cwd, "external.md");
+		await fs.writeFile(external, markdown);
+		const first = (await (await f.request(`api/business/${id}`, { path: external })).json()) as SpecDocument;
+		const target = path.join(f.cwd, first.path);
+		const other = path.join(f.cwd, "docs/business-requirements/other.md");
+		await fs.writeFile(other, "Another requirement's bytes.\n");
+		const before = (await (await f.request(`api/requirements/${id}`)).json()) as DevRequirementSnapshot;
+		const recordPath = path.join(f.cwd, "docs/dev-requirements", `${id}.json`);
+		const originalRecord = await fs.readFile(recordPath, "utf8");
+		const head = await requireGit(f.cwd).head();
+		async function upload(content: string, replaceVersion?: string | File) {
+			const form = new FormData();
+			form.set("file", new File([content], "replacement.md", { type: "text/markdown" }));
+			if (replaceVersion !== undefined) form.set("replaceVersion", replaceVersion);
+			return fetch(new URL(`api/business/${id}`, f.base), {
+				method: "POST",
+				headers: { cookie: f.cookie, origin: f.base.origin },
+				body: form,
+			});
+		}
+		for (const response of [
+			await upload("Unconfirmed replacement"),
+			await f.request(`api/business/${id}`, { path: external }),
+		]) {
+			expect(response.status).toBe(409);
+			const body = await response.text();
+			expect(body).toContain("确认");
+			expect(body).not.toContain("EEXIST");
+		}
+		expect((await upload("Stale replacement", "stale-version")).status).toBe(409);
+		expect((await f.request(`api/business/${id}`, { path: external, replaceVersion: false })).status).toBe(409);
+		expect((await upload("Invalid consent", new File(["version"], "version.txt"))).status).toBe(409);
+		expect(await fs.readFile(target, "utf8")).toBe(markdown);
+		expect(await fs.readFile(recordPath, "utf8")).toBe(originalRecord);
+		const replacementContent = "# Confirmed replacement Ω\n";
+		const replaced = await upload(replacementContent, first.version);
+		expect(replaced.status).toBe(200);
+		const replacement = (await replaced.json()) as SpecDocument;
+		expect(replacement.version).not.toBe(first.version);
+		expect(await fs.readFile(target, "utf8")).toBe(replacementContent);
+		expect(await fs.readFile(external, "utf8")).toBe(markdown);
+		expect((await f.request(`api/business/${id}`, { path: external, replaceVersion: first.version })).status).toBe(
+			409,
+		);
+		expect(await fs.readFile(target, "utf8")).toBe(replacementContent);
+		const restored = await f.request(`api/business/${id}`, { path: external, replaceVersion: replacement.version });
+		expect(restored.status).toBe(200);
+		const after = (await (await f.request(`api/requirements/${id}`)).json()) as DevRequirementSnapshot;
+		expect(after.record.materials.find(material => material.kind === "business")?.version).toBe(first.version);
+		expect({ ...after.record, materials: [] }).toEqual({ ...before.record, materials: [] });
+		expect(after.runtime).toBeNull();
+		expect(f.host.controller.nativeSessions()).toEqual([]);
+		expect(f.session.messages).toEqual([]);
+		expect((await requireGit(f.cwd).head()).commit).toBe(head.commit);
+		await fs.writeFile(target, "Changed after confirmation.\n");
+		expect((await upload("Must not replace edited bytes", first.version)).status).toBe(409);
+		expect(await fs.readFile(target, "utf8")).toBe("Changed after confirmation.\n");
+		await fs.unlink(target);
+		expect((await upload("Must not recreate deleted material", first.version)).status).toBe(409);
+		await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
+		expect(await fs.readFile(external, "utf8")).toBe(markdown);
+		expect(await fs.readFile(other, "utf8")).toBe("Another requirement's bytes.\n");
+		expect(await fs.readFile(path.join(f.cwd, "baseline.txt"), "utf8")).toBe("unrelated bytes\n");
 	}, 120_000);
 
 	test("native human UI resolves through HTTP once and ordinary root is not rebound", async () => {

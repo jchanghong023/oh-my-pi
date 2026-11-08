@@ -300,6 +300,11 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 		}
 		if (!scriptPath || !stylesheetPath)
 			throw new Error("Dev workbench build must include its classic script and stylesheet");
+		const faviconPath = "public/favicon-32x32.png";
+		const faviconFile = path.join(collabDir, faviconPath);
+		const faviconBytes = await fs.readFile(faviconFile);
+		inputs.set(faviconFile, faviconBytes);
+		assets.set(`/${faviconPath}`, { bytes: faviconBytes, contentType: contentType(faviconPath) });
 		const document = html
 			.replace(sourceScript!, `<script src=".${scriptPath}"></script>`)
 			.replace(/<\/head\s*>/i, `\t<link rel="stylesheet" href=".${stylesheetPath}" />\n\t</head>`);

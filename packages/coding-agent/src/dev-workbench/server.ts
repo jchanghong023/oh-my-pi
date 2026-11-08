@@ -333,20 +333,24 @@ export async function startDevWorkbenchServer(
 						const form = await request.formData();
 						const file = form.get("file");
 						if (!(file instanceof File)) throw new Error("Choose a Markdown file");
+						const replaceVersion = form.has("replaceVersion")
+							? text(form.get("replaceVersion"), "replaceVersion")
+							: undefined;
 						return json(
-							await host.controller.importBusiness(business[1], {
-								kind: "upload",
-								name: file.name,
-								bytes: new Uint8Array(await file.arrayBuffer()),
-							}),
+							await host.controller.importBusiness(
+								business[1],
+								{ kind: "upload", name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) },
+								replaceVersion,
+							),
 						);
 					}
 					const input = bodyObject(await request.json());
 					return json(
-						await host.controller.importBusiness(business[1], {
-							kind: "host-path",
-							path: text(input.path, "host path"),
-						}),
+						await host.controller.importBusiness(
+							business[1],
+							{ kind: "host-path", path: text(input.path, "host path") },
+							input.replaceVersion === undefined ? undefined : text(input.replaceVersion, "replaceVersion"),
+						),
 					);
 				}
 				const input = bodyObject(await request.json());

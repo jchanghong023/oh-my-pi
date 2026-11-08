@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { parse as parseYaml } from "yaml";
+import { replaceFileAtomically } from "../utils/atomic-file";
 import { assertDevSpecSchema, runOpenSpec, runOpenSpecDirectory, type SpecDrivenProcessResult } from "./resources";
 import type {
 	DevMaterialRef,
@@ -972,8 +973,11 @@ export async function importDevBusiness(
 	cwd: string,
 	record: DevRequirementRecord,
 	source: { kind: "upload"; name: string; bytes: Uint8Array } | { kind: "host-path"; path: string },
+	replaceVersion?: string,
 ): Promise<SpecDocument> {
 	if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(record.changeId)) throw new Error("Invalid change ID");
+	if (replaceVersion !== undefined && (typeof replaceVersion !== "string" || !replaceVersion.trim()))
+		throw new Error("业务文档替换须提供已确认的当前版本");
 	const name = source.kind === "upload" ? source.name : source.path;
 	if (!/\.md$/i.test(name) || /^[a-z][a-z0-9+.-]*:\/\//i.test(name))
 		throw new Error("业务文档导入仅支持 Markdown 文件，不支持 URL");
@@ -984,9 +988,47 @@ export async function importDevBusiness(
 	const file = `docs/business-requirements/${record.changeId}.md`;
 	await assertSpecWritePath(cwd, file);
 	const target = await containedSpecPath(cwd, file);
-	await fs.mkdir(path.dirname(target), { recursive: true });
-	await assertSpecWritePath(cwd, file);
-	await fs.writeFile(target, bytes, { flag: "wx" });
+	if (replaceVersion === undefined) {
+		await fs.mkdir(path.dirname(target), { recursive: true });
+		await assertSpecWritePath(cwd, file);
+		try {
+			await fs.writeFile(target, bytes, { flag: "wx" });
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "EEXIST")
+				throw new Error("业务文档已存在，请明确确认替换当前版本后重试");
+			throw error;
+		}
+	} else {
+		const registered = record.materials.filter(material => material.kind === "business");
+		if (registered.length !== 1 || registered[0].path !== file)
+			throw new Error("业务文档未登记在此需求的专属路径，不能替换");
+		// Stage new bytes separately: even a raced hard-link alias must never mutate an external original.
+		const staging = `${target}.${process.pid}.${crypto.randomUUID()}.tmp`;
+		const handle = await fs.open(staging, "wx");
+		try {
+			try {
+				await handle.writeFile(bytes);
+				await handle.sync();
+			} finally {
+				await handle.close();
+			}
+			await assertSpecWritePath(cwd, file);
+			let current: Buffer;
+			try {
+				current = await fs.readFile(target);
+			} catch (error) {
+				if (isEnoent(error)) throw new Error("业务文档已不存在，请重新读取材料后导入");
+				throw error;
+			}
+			if (artifactVersion(current) !== replaceVersion) throw new Error("业务文档版本已改变，请重新读取并确认替换");
+			await assertSpecWritePath(cwd, file);
+			const existing = await fs.lstat(target);
+			await fs.chmod(staging, existing.mode);
+			await replaceFileAtomically(staging, target);
+		} finally {
+			await fs.rm(staging, { force: true });
+		}
+	}
 	// Admission uses the one readBusiness template validator only when the person clicks Next.
 	return {
 		path: file,

@@ -437,7 +437,7 @@ describe("record-driven native controller", () => {
 	}, 120_000);
 });
 
-test("an incomplete import remains editable material but cannot create a business decision or a successor", async () => {
+test("an incomplete import requires admission, and a confirmed replacement updates an existing runtime before Next", async () => {
 	await using f = await fixture();
 	const created = await f.owner.createRequirement({ source: "import" });
 	const bytes = "# 业务需求：订单\n\n## 基本信息\n导入不等于批准。\n";
@@ -454,6 +454,24 @@ test("an incomplete import remains editable material but cannot create a busines
 	expect(after.runtime?.recipient ?? null).toBeNull();
 	expect(await fs.readFile(path.join(f.cwd, document.path), "utf8")).toBe(bytes);
 	expect(f.provider.requests).toEqual([]);
+	const replacement = await f.owner.importBusiness(
+		created.record.requirementId,
+		{ kind: "upload", name: "complete.md", bytes: new TextEncoder().encode(business) },
+		document.version,
+	);
+	const replaced = await f.owner.getRequirement(created.record.requirementId);
+	expect(replaced.record.stage).toBe("business");
+	expect(replaced.record.decisions).toEqual([]);
+	expect(replaced.record.materials.find(material => material.kind === "business")?.version).toBe(replacement.version);
+	expect(f.provider.requests).toEqual([]);
+	const next = await f.preview(replaced, { kind: "next" });
+	expect(next.action.binding.files.find(file => file.path === document.path)?.version).toBe(replacement.version);
+	const advanced = await f.confirm(next);
+	expect(advanced.snapshot.record.stage).toBe("requirements");
+	expect(advanced.snapshot.record.decisions[0].files.find(file => file.path === document.path)?.version).toBe(
+		replacement.version,
+	);
+	expect(await fs.readFile(path.join(f.cwd, document.path), "utf8")).toBe(business);
 }, 120_000);
 
 test("cold records are readable without native history or legacy-state adoption", async () => {

@@ -8,6 +8,10 @@
 
 ### Fixed
 
+- Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
+- Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
+- Serve the Dev favicon from the same embedded capability-scoped resources as the page.
+
 - Select and copy complete Dev workbench URLs or Ctrl-click their links, and see blocked-input warnings immediately without leaving Dev.
 
 ## [18.18.1] - 2026-11-08

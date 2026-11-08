@@ -864,6 +864,7 @@ export class SpecDrivenController {
 	async importBusiness(
 		id: string,
 		source: { kind: "upload"; name: string; bytes: Uint8Array } | { kind: "host-path"; path: string },
+		replaceVersion?: string,
 	): Promise<SpecDocument> {
 		return this.#exclusive(async () => {
 			const workspace = await this.#owner();
@@ -878,7 +879,7 @@ export class SpecDrivenController {
 			]);
 			let document: SpecDocument;
 			try {
-				document = await importDevBusiness(workspace.root, stored.record, source);
+				document = await importDevBusiness(workspace.root, stored.record, source, replaceVersion);
 			} finally {
 				await git.endOwnedPaths(id, capture);
 			}

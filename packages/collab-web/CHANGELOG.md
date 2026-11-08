@@ -13,10 +13,14 @@
 
 ### Fixed
 
+- Restore the selected Dev requirement and viewed stage after refresh without replaying messages or approvals.
+- Replace existing Dev business Markdown only after explicit current-version confirmation, preserving external originals.
+- Load the Dev favicon from embedded production resources instead of requesting a missing root icon.
+
 - Preserve development-workbench composer drafts and attachments until host admission is known; unconfirmed workbench sends retain input.
 - Keep shared tool renderers safe to import during server-side rendering; custom elements initialize only through their browser entry.
 - Keep Dev stage navigation, document controls and the chat composer usable as the browser window narrows.
-- Preserve selected Dev materials after refresh, admit local business writing, and let disconnected guests rejoin explicitly.
+- Admit local business writing and let disconnected guests rejoin explicitly.
 - Keep the Dev composer visible while short windows scroll and show long confirmation scopes before the reply field.
 - Avoid false native editor-sync errors after a Dev message is accepted.
 

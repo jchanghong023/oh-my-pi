@@ -149,6 +149,32 @@ describe("business imports use real bytes and owned Markdown", () => {
 		expect(await fs.readFile(path.join(cwd, document.path), "utf8")).toBe(completeBusiness());
 	});
 
+	test("replacement requires registered ownership and never changes linked external originals", async () => {
+		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-replacement-"));
+		roots.push(cwd);
+		const record = importedRecord();
+		const source = { kind: "upload" as const, name: "new.md", bytes: new Uint8Array([0xff, 0x00, 0x0a]) };
+		const first = await importDevBusiness(cwd, record, {
+			kind: "upload",
+			name: "first.md",
+			bytes: new TextEncoder().encode(completeBusiness()),
+		});
+		const target = path.join(cwd, first.path);
+		await expect(importDevBusiness(cwd, record, source, first.version)).rejects.toThrow("未登记");
+		record.materials = [{ id: "business", kind: "business", path: first.path, version: first.version }];
+		const outside = path.join(cwd, "external.md");
+		await fs.link(target, outside);
+		await expect(importDevBusiness(cwd, record, source, first.version)).rejects.toThrow("unlinked regular file");
+		expect(await fs.readFile(outside, "utf8")).toBe(completeBusiness());
+		await fs.unlink(outside);
+		record.materials[0].path = "docs/business-requirements/another-requirement.md";
+		await expect(importDevBusiness(cwd, record, source, first.version)).rejects.toThrow("专属路径");
+		record.materials[0].path = first.path;
+		const replaced = await importDevBusiness(cwd, record, source, first.version);
+		expect(new Uint8Array(await fs.readFile(target))).toEqual(source.bytes);
+		expect(replaced.version).toBe(artifactVersion(source.bytes));
+	});
+
 	test("copies a host file without acquiring ownership of or changing the source", async () => {
 		const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-host-import-"));
 		const external = await fs.mkdtemp(path.join(os.tmpdir(), "omp-business-external-"));

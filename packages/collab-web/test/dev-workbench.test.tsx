@@ -648,6 +648,123 @@ function installBrowserHttp(location: URL): () => void {
 	return restore;
 }
 
+function installViewStorage(): { values: Map<string, string>; restore(): void } {
+	const descriptor = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
+	const values = new Map<string, string>();
+	Object.defineProperty(globalThis, "sessionStorage", {
+		configurable: true,
+		value: {
+			getItem: (key: string) => values.get(key) ?? null,
+			setItem: (key: string, value: string) => values.set(key, value),
+			removeItem: (key: string) => values.delete(key),
+		},
+	});
+	return {
+		values,
+		restore() {
+			if (descriptor) Object.defineProperty(globalThis, "sessionStorage", descriptor);
+			else Reflect.deleteProperty(globalThis, "sessionStorage");
+		},
+	};
+}
+
+describe("workbench navigation refresh", () => {
+	it("restores only a live requirement and independently viewed stage without a mutation or input replay", async () => {
+		const current = snapshot();
+		let requirements = [current];
+		const requests: Array<{ method: string; path: string }> = [];
+		const selectedSocket = Promise.withResolvers<void>();
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request, server) {
+				const url = new URL(request.url);
+				requests.push({ method: request.method, path: url.pathname });
+				if (url.pathname.endsWith("/api/events")) {
+					if (url.searchParams.get("requirementId") === current.record.requirementId) selectedSocket.resolve();
+					if (server.upgrade(request)) return;
+					return new Response("upgrade rejected", { status: 400 });
+				}
+				if (url.pathname.endsWith("/api/browser")) return Response.json({ browserId: "view-browser" });
+				if (url.pathname.endsWith("/api/requirements")) return Response.json(requirements);
+				return new Response("unexpected mutation", { status: 400 });
+			},
+			websocket: {
+				open(socket) {
+					socket.send(JSON.stringify(welcome));
+				},
+				message() {},
+			},
+		});
+		const base = new URL(`http://127.0.0.1:${server.port}/cap/`);
+		const original = new WorkbenchClient(base);
+		const refreshed = new WorkbenchClient(base);
+		const otherProject = new WorkbenchClient(new URL("other-cap/", base));
+		const otherHost = new WorkbenchClient(new URL(`http://localhost:${server.port}/cap/`));
+		const storage = installViewStorage();
+		const restoreHttp = installBrowserHttp(base);
+		try {
+			await original.refresh();
+			expect(original.restoreView()).toBeNull();
+			original.saveView({ requirementId: "req-a", stage: "testing" });
+			expect(refreshed.restoreView()).toBeNull();
+			expect(storage.values.size).toBe(1);
+			await refreshed.connect();
+			const view = refreshed.restoreView();
+			expect(view).toEqual({ requirementId: "req-a", stage: "testing" });
+			refreshed.select(view!.requirementId);
+			const timeout = setTimeout(() => selectedSocket.reject(new Error("Restored session did not subscribe")), 2000);
+			try {
+				await selectedSocket.promise;
+			} finally {
+				clearTimeout(timeout);
+			}
+			expect(refreshed.getSnapshot().requirements[0]).toEqual(current);
+			expect(current.record.stage).toBe("business");
+			expect(current.record.decisions).toEqual([]);
+			expect(requests.every(request => request.method === "GET")).toBe(true);
+			expect(requests.every(request => /\/api\/(browser|requirements|events)$/.test(request.path))).toBe(true);
+			await otherProject.refresh();
+			expect(otherProject.restoreView()).toBeNull();
+			otherHost.saveView({ requirementId: "req-other-host", stage: "solution" });
+			expect(storage.values.size).toBe(2);
+			expect(refreshed.restoreView()).toEqual(view);
+			original.saveView({ requirementId: "deleted-requirement", stage: "planning" });
+			expect(refreshed.restoreView()).toBeNull();
+			expect(storage.values.size).toBe(1);
+			original.saveView({ requirementId: "req-a", stage: "testing" });
+			const viewKey = [...storage.values.keys()].find(key => key.includes("127.0.0.1"))!;
+			storage.values.set(viewKey, JSON.stringify({ requirementId: "req-a", stage: "not-a-stage" }));
+			expect(refreshed.restoreView()).toBeNull();
+			storage.values.set(viewKey, "{broken JSON");
+			expect(refreshed.restoreView()).toBeNull();
+			original.saveView({ requirementId: "req-a", stage: "planning" });
+			requirements = [];
+			await refreshed.refresh();
+			expect(refreshed.restoreView()).toBeNull();
+			Object.defineProperty(globalThis, "sessionStorage", {
+				configurable: true,
+				get() {
+					throw new Error("Storage blocked");
+				},
+			});
+			refreshed.saveView({ requirementId: "req-a", stage: "business" });
+			expect(refreshed.restoreView()).toBeNull();
+		} finally {
+			original.close();
+			refreshed.close();
+			otherProject.close();
+			otherHost.close();
+			try {
+				await server.stop(true);
+			} finally {
+				restoreHttp();
+				storage.restore();
+			}
+		}
+	});
+});
+
 describe("workbench same-origin HTTP admission", () => {
 	it("uses host-issued request IDs, preserves unknown status, and inspects without resubmitting", async () => {
 		const requests: Array<{ path: string; body: unknown }> = [];
