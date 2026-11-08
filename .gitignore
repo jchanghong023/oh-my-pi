@@ -119,3 +119,11 @@ packages/coding-agent/models.db
 
 # Vendored, pinned spec-driven source and offline runtime assets.
 !/packages/coding-agent/src/spec-driven/vendor/resources/**
+
+# Local artifacts for the vendored ZCode frontend preview.
+/vendor/zcode-frontend/**/build/
+/vendor/zcode-frontend/**/.vite/
+/vendor/zcode-frontend/**/.vite-temp/
+/vendor/zcode-frontend/**/.cache/
+/vendor/zcode-frontend/**/.env.*
+!/vendor/zcode-frontend/**/.env*.example

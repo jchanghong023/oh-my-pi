@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>ZCode 界面预览 · 未连接 OMP</title>
+    <style>
+      html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+      #preview-notice { box-sizing: border-box; height: 56px; padding: 5px 12px; display: flex; flex-direction: column; justify-content: center; gap: 2px; background: #fff3ce; color: #593c00; font: 12px/20px system-ui, sans-serif; }
+      #preview-notice strong { white-space: nowrap; }
+      #preview-notice nav { display: flex; gap: 14px; overflow: auto; white-space: nowrap; }
+      #preview-notice a { color: inherit; text-decoration: underline; }
+      #preview-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #root { height: calc(100dvh - 56px); min-width: 0; }
+      #root > .h-dvh { height: 100%; }
+      #preview-phone { display: block; width: min(430px, 100%); height: 100%; margin: auto; border: 0; background: white; }
+    </style>
+  </head>
+  <body>
+    <aside id="preview-notice" aria-label="界面预览说明">
+      <div id="preview-status" role="status"><strong>仅界面预览 · 未连接 OMP</strong> · 无账号、模型或文件服务</div>
+      <nav aria-label="预览布局"><a href="?">自适应首页</a><a href="?view=chat">空会话</a><a href="?mobile=1">手机首页</a><a href="?mobile=1&view=chat">手机空会话</a></nav>
+    </aside>
+    <div id="root"></div>
+    <script type="module" src="./main.tsx"></script>
+  </body>
+</html>
