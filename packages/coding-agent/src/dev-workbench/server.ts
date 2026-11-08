@@ -190,8 +190,8 @@ function documentResponse(document: SpecDocument): Response {
 		},
 	});
 }
-function addresses(offline: boolean): string[] {
-	if (!offline) return ["127.0.0.1"];
+export function getWorkbenchAddresses(allowLan: boolean): string[] {
+	if (!allowLan) return ["127.0.0.1"];
 	const discovered = Object.values(os.networkInterfaces())
 		.flatMap(entries => entries ?? [])
 		.filter(entry => entry.family === "IPv4" && !entry.internal && entry.address !== "0.0.0.0")
@@ -217,7 +217,7 @@ export async function startDevWorkbenchServer(
 	const browsers = new Set<string>();
 	const connections = new Set<ServerWebSocket<BrowserConnection>>();
 	const closing = new Set<Promise<void>>();
-	const allowedAddresses = addresses(offline);
+	const allowedAddresses = getWorkbenchAddresses(offline);
 	const cookies = (request: Request): string | undefined => {
 		const cookie = request.headers
 			.get("cookie")

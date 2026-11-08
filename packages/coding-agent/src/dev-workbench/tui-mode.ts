@@ -6,6 +6,7 @@ import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
 import { nativeBusy } from "../spec-driven/controller";
 import { openPathWithResult } from "../utils/open";
+import { startWebGui, type WebGuiHandle } from "../webgui/host";
 import { createDevWorkbenchHost, type DevWorkbenchHandle, type DevWorkbenchHost, getOrStartDevWorkbench } from "./host";
 
 const modes = new WeakMap<InteractiveModeContext, DevWorkbenchTuiMode>();
@@ -21,7 +22,8 @@ class DevWorkbenchOverlay extends Container {
 export class DevWorkbenchTuiMode {
 	readonly #context: InteractiveModeContext;
 	#phase: "inactive" | "entering" | "active" | "exiting" = "inactive";
-	#host: DevWorkbenchHost | undefined;
+	#host: DevWorkbenchHost | WebGuiHandle | undefined;
+	#mode: "dev" | "webgui" = "dev";
 	#pending: Promise<void> | undefined;
 	#overlay: HookInputComponent | undefined;
 	#notice: Text | undefined;
@@ -40,7 +42,18 @@ export class DevWorkbenchTuiMode {
 		return this.#phase !== "inactive";
 	}
 
-	async toggle(): Promise<void> {
+	get #command(): string {
+		return `/${this.#mode}`;
+	}
+
+	get #label(): string {
+		return this.#mode === "dev" ? "Dev 工作台" : "WebGUI 界面预览";
+	}
+
+	async toggle(mode: "dev" | "webgui" = "dev"): Promise<void> {
+		if (this.active && mode !== this.#mode)
+			throw new Error(`请先再次输入 ${this.#command} 退出 ${this.#label}。`);
+		if (!this.active) this.#mode = mode;
 		if (this.#pending) {
 			await this.#pending;
 			return;
@@ -62,7 +75,7 @@ export class DevWorkbenchTuiMode {
 				/* A failed close remains retryable below. */
 			}
 		}
-		if (this.active) await this.toggle();
+		if (this.active) await this.toggle(this.#mode);
 	}
 
 	handleInput(data: string): boolean {
@@ -74,18 +87,18 @@ export class DevWorkbenchTuiMode {
 
 	async submit(text: string): Promise<boolean> {
 		if (!this.active) return false;
-		if (text.trim() !== "/dev") {
+		if (text.trim() !== this.#command) {
 			this.#showNotice(
-				"Dev 工作台占用当前终端；普通聊天、命令和快捷操作已暂停。仅再次输入 /dev 可退出。",
+				`${this.#label}占用当前终端；普通聊天、命令和快捷操作已暂停。仅再次输入 ${this.#command} 可退出。`,
 				"warning",
 			);
 			return true;
 		}
 		if (this.#pending) {
-			this.#showNotice("Dev 工作台正在切换，请等待结清后再次输入 /dev。", "muted");
+			this.#showNotice(`${this.#label}正在切换，请等待结清后再次输入 ${this.#command}。`, "muted");
 			return true;
 		}
-		await this.toggle();
+		await this.toggle(this.#mode);
 		return true;
 	}
 
@@ -102,21 +115,21 @@ export class DevWorkbenchTuiMode {
 		this.#overlayHandle?.hide();
 		this.#overlay?.dispose();
 		const surface = new DevWorkbenchOverlay();
-		surface.addChild(new Text(theme.fg("accent", "Dev 浏览器工作台"), 0, 0));
+		surface.addChild(new Text(theme.fg("accent", this.#label), 0, 0));
 		for (const url of urls) surface.addChild(new Text(urlHyperlinkAlways(url, url), 0, 0));
 		surface.addChild(new Text(replaceTabs(detail), 0, 0));
-		surface.addChild(new Text("普通终端操作已暂停；仅输入 /dev 并提交可退出。关闭网页不会退出。", 0, 1));
+		surface.addChild(new Text(`普通终端操作已暂停；仅输入 ${this.#command} 并提交可退出。关闭网页不会退出。`, 0, 1));
 		this.#notice = new Text("", 0, 0);
 		surface.addChild(this.#notice);
 		const overlay = new HookInputComponent(
-			"退出 Dev",
-			"/dev",
+			`退出 ${this.#mode === "dev" ? "Dev" : "WebGUI"}`,
+			this.#command,
 			text => {
 				void this.submit(text).catch(error =>
 					this.#showNotice(error instanceof Error ? error.message : String(error), "error"),
 				);
 			},
-			() => this.#showNotice("请明确输入 /dev 退出；Esc、Ctrl+C 和关闭网页不退出 Dev。", "warning"),
+			() => this.#showNotice(`请明确输入 ${this.#command} 退出；Esc、Ctrl+C 和关闭网页不退出。`, "warning"),
 			{ tui: this.#context.ui },
 		);
 		surface.addChild(overlay);
@@ -148,27 +161,35 @@ export class DevWorkbenchTuiMode {
 		const context = this.#context;
 		const blocked = context.getDevWorkbenchEntryBlocker?.();
 		if (!context.getDevWorkbenchEntryBlocker)
-			throw new Error("当前终端未提供真实 Dev 互斥准入检查，请使用 omp dev。");
+			throw new Error(`当前终端未提供互斥准入检查，请使用 omp ${this.#mode}。`);
 		if (blocked) throw new Error(blocked);
 		if (nativeBusy(context.session))
-			throw new Error("普通原生任务或自动续跑尚未结清；请先停止或等待，再输入 /dev。不会自动停止普通任务。");
+			throw new Error(`普通原生任务或自动续跑尚未结清；请先停止或等待，再输入 ${this.#command}。不会自动停止普通任务。`);
 		this.#previousDisableSubmit = context.editor.disableSubmit;
 		context.editor.disableSubmit = true;
 		this.#phase = "entering";
 		try {
 			this.#showOverlay("正在启动，请稍候。");
-			this.#host = await createDevWorkbenchHost({
-				session: context.session,
-				settings: context.settings,
-				cwd: context.sessionManager.getCwd(),
-				mcpManager: context.mcpManager,
-				nativeMcpUiAuthHandler: context.nativeMcpUiAuthHandler,
-			});
-			const handle = await getOrStartDevWorkbench(this.#host);
+			let handle: DevWorkbenchHandle;
+			if (this.#mode === "webgui") {
+				const preview = await startWebGui();
+				this.#host = preview;
+				handle = preview;
+			} else {
+				const host = await createDevWorkbenchHost({
+					session: context.session,
+					settings: context.settings,
+					cwd: context.sessionManager.getCwd(),
+					mcpManager: context.mcpManager,
+					nativeMcpUiAuthHandler: context.nativeMcpUiAuthHandler,
+				});
+				this.#host = host;
+				handle = await getOrStartDevWorkbench(host);
+			}
 			this.#phase = "active";
 			this.#showOverlay("地址可选择复制，或按住 Ctrl 点击在浏览器中打开。", handle.urls);
 			this.#openBrowser(handle);
-			if (offlineFromEnv() && handle.urls.length === 1)
+			if ((this.#mode === "webgui" || offlineFromEnv()) && handle.urls.length === 1)
 				this.#showNotice("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。", "warning");
 		} catch (error) {
 			if (this.#host) {
@@ -177,8 +198,8 @@ export class DevWorkbenchTuiMode {
 					this.#host = undefined;
 				} catch (cleanupError) {
 					this.#phase = "exiting";
-					this.#showOverlay("服务启动失败且 Dev 尚未结清；普通终端保持暂停。输入 /dev 重试退出。");
-					throw new AggregateError([error, cleanupError], "Dev 服务启动失败，且资源仍待结清");
+					this.#showOverlay(`服务启动失败且 ${this.#label}尚未结清；普通终端保持暂停。输入 ${this.#command} 重试退出。`);
+					throw new AggregateError([error, cleanupError], `${this.#label}服务启动失败，且资源仍待结清`);
 				}
 			}
 			this.#release();
@@ -187,8 +208,9 @@ export class DevWorkbenchTuiMode {
 	}
 
 	#openBrowser(handle: DevWorkbenchHandle): void {
-		if (process.env.OMP_DEV_NO_OPEN === "1") {
-			this.#showNotice("已按 OMP_DEV_NO_OPEN=1 跳过自动打开浏览器；请使用上方地址访问。", "muted");
+		const noOpen = this.#mode === "dev" ? "OMP_DEV_NO_OPEN" : "OMP_WEBGUI_NO_OPEN";
+		if (process.env[noOpen] === "1") {
+			this.#showNotice(`已按 ${noOpen}=1 跳过自动打开浏览器；请使用上方地址访问。`, "muted");
 			return;
 		}
 		void openPathWithResult(handle.loopbackUrl).then(result => {
@@ -199,16 +221,16 @@ export class DevWorkbenchTuiMode {
 
 	async #exit(): Promise<void> {
 		this.#phase = "exiting";
-		this.#showOverlay("正在停止接收新操作并结清 Dev 工作；普通终端将在结清后恢复。");
+		this.#showOverlay(`正在停止并结清${this.#label}；普通终端将在结清后恢复。`);
 		try {
 			await this.#host?.close();
 			this.#host = undefined;
 		} catch (error) {
-			this.#showOverlay("Dev 尚未结清；普通终端保持暂停。输入 /dev 重试退出。");
+			this.#showOverlay(`${this.#label}尚未结清；普通终端保持暂停。输入 ${this.#command} 重试退出。`);
 			throw error;
 		}
 		this.#release();
-		this.#context.showStatus("已退出 Dev 工作台，普通会话和草稿保持不变。");
+		this.#context.showStatus(`已退出${this.#label}，普通会话和草稿保持不变。`);
 	}
 }
 

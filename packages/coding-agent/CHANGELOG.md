@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Open the copied WebGUI interface preview with `/webgui` or `omp webgui` from a prepared source checkout; enter `/webgui` again to stop its server and restore terminal input, without connecting an Agent backend.
+
 ### Changed
 
 - Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.

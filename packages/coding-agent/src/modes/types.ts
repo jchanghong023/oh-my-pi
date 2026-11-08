@@ -215,7 +215,7 @@ export interface InteractiveModeContext {
 	readonly rootSession: AgentSession;
 	/** Dispose long-lived native resources only during real host shutdown. */
 	registerHostShutdown(dispose: () => Promise<void>): () => void;
-	/** Installed by the real `/dev` entry only; absent for ordinary TUI consumers. */
+	/** Installed by `/dev` or `/webgui`; both share the same exclusive browser-mode owner. */
 	isDevWorkbenchModeActive?: () => boolean;
 	handleDevWorkbenchModeInput?: (data: string) => boolean;
 	handleDevWorkbenchModeSubmit?: (text: string) => Promise<boolean>;

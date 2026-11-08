@@ -115,6 +115,11 @@ export const commands: CommandEntry[] = [
 		help: commandHelp.devHelp,
 	},
 	{
+		name: "webgui",
+		load: () => import("./commands/webgui").then(m => m.default),
+		help: commandHelp.webGuiHelp,
+	},
+	{
 		name: "knowledge",
 		load: () => import("./commands/knowledge").then(m => m.default),
 		help: commandHelp.knowledgeHelp,

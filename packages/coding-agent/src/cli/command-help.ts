@@ -67,6 +67,10 @@ export const devHelp = {
 	description: "Open the browser Dev workbench and keep its native host running",
 } satisfies CommandMetadata;
 
+export const webGuiHelp = {
+	description: "Open the copied WebGUI interface preview without connecting an Agent backend",
+} satisfies CommandMetadata;
+
 export const dryBalanceHelp = {
 	description: "Dry-run OAuth account balancing across random session ids",
 } satisfies CommandMetadata;

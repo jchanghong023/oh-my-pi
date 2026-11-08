@@ -3242,7 +3242,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			return "Wait for the ordinary session's mode transition to settle.";
 		if (this.session.isSessionTransitioning) return "Wait for the ordinary session switch to settle.";
 		if (this.collabController.host || this.collabGuest)
-			return "Stop the ordinary Collab share or leave its guest session before entering Dev workbench mode.";
+			return "Stop the ordinary Collab share or leave its guest session before entering a browser workbench.";
 		if (this.focusedAgentId) return "Return to the ordinary local session first.";
 		if (
 			this.ui.hasOverlay() ||
@@ -3268,7 +3268,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.#goalContinuationTimer ||
 			this.#pendingGoalContinuationTurns > 0
 		)
-			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering Dev workbench mode.";
+			return "Exit the ordinary Plan, Goal, Vibe or Loop mode before entering a browser workbench.";
 		if (
 			this.#pendingSubmittedInput ||
 			this.#inputController.hasOtherSubmissionDispatches() ||
@@ -3282,7 +3282,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	#assertOrdinaryTuiInputAllowed(): void {
 		if (this.isDevWorkbenchModeActive?.())
-			throw new Error("Exit Dev workbench mode with /dev before using ordinary TUI commands.");
+			throw new Error("Exit the active browser workbench with its exit command before using ordinary TUI commands.");
 	}
 
 	#bindSessionEventBus(): void {
@@ -3923,7 +3923,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			state: this.#getSessionModeState(),
 		});
 		if (this.isDevWorkbenchModeActive?.())
-			return refuse("conflict", "Exit Dev workbench mode with /dev before changing the ordinary session mode.");
+			return refuse("conflict", "Exit the active browser workbench before changing the ordinary session mode.");
 		if (!cfgExtensionHandlersModeControl.get(this.session.settings)) {
 			return refuse("disabled", "Extension mode control is disabled in settings (extensionHandlers.modeControl).");
 		}
