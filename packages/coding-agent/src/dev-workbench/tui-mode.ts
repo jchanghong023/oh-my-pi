@@ -5,6 +5,7 @@ import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
 import { nativeBusy } from "../spec-driven/controller";
+import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
 import {
 	closeAllWebGuis,
@@ -220,7 +221,7 @@ export class DevWorkbenchTuiMode {
 								this.#host = transferred.host;
 								this.#mode = "dev";
 								this.#phase = "active";
-								this.#showOverlay("地址可选择复制，或按住 Ctrl 点击在浏览器中打开。", transferred.handle.urls);
+								this.#showAddress(transferred.handle);
 								return;
 							}
 							await this.close();
@@ -242,7 +243,7 @@ export class DevWorkbenchTuiMode {
 				handle = await getOrStartDevWorkbench(host);
 			}
 			this.#phase = "active";
-			this.#showOverlay("地址可选择复制，或按住 Ctrl 点击在浏览器中打开。", handle.urls);
+			this.#showAddress(handle);
 			this.#openBrowser(handle);
 			if ((this.#mode === "webgui" || offlineFromEnv()) && handle.urls.length === 1)
 				this.#showNotice("未找到非 loopback IPv4 网络接口；当前仅可使用本机地址。", "warning");
@@ -261,6 +262,16 @@ export class DevWorkbenchTuiMode {
 			this.#release();
 			throw error;
 		}
+	}
+
+	#showAddress(handle: DevWorkbenchHandle): void {
+		const copyRequested = requestOfflineBrowserUrlCopy(handle.loopbackUrl);
+		this.#showOverlay(
+			copyRequested
+				? "已尝试复制完整本机地址，可在浏览器地址栏粘贴；未生效时请手动复制上方地址。"
+				: "地址可选择复制，或按住 Ctrl 点击在浏览器中打开。",
+			handle.urls,
+		);
 	}
 
 	#openBrowser(handle: DevWorkbenchHandle): void {

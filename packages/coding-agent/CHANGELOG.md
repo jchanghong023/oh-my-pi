@@ -5,6 +5,7 @@
 ### Added
 
 - Open WebGUI with `/webgui` or `omp webgui` from source or packaged OMP; enter `/webgui` again to close this instance's web service and restore terminal input.
+- Automatically copy complete localhost URLs when opening Dev, WebGUI or `/sketch` in offline Linux sessions.
 - Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels.
 - Select a real OMP model from the WebGUI chat composer for the bound session only, without changing the global default; refreshes retain the native session's current selection.
 - Create native development sessions from standalone WebGUI, choose or create projects, and run sessions independently without replacing ordinary OMP or TUI execution.
@@ -42,7 +43,7 @@
 
 ### Fixed
 
-- Open Dev and WebGUI through the user's `ff` browser alias on Linux csh/tcsh, with setup guidance when the alias is missing.
+- Open Dev and WebGUI through the user's `ff` browser alias only in offline Linux csh/tcsh sessions, with setup guidance when the alias is missing; preserve default browser opening elsewhere.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.
 - Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.

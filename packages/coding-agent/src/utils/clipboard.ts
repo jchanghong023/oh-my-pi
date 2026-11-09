@@ -9,6 +9,7 @@ import { writeTerminalSequence } from "@oh-my-pi/pi-tui/terminal";
 import { isWsl } from "@oh-my-pi/pi-utils";
 import * as logger from "@oh-my-pi/pi-utils/logger";
 import { SUPPORTED_IMAGE_MIME_TYPES } from "@oh-my-pi/pi-utils/mime";
+import { offlineFromEnv } from "../cli/args";
 import MAC_FILE_URL_SCRIPT from "./mac-file-urls.applescript" with { type: "text" };
 
 type SpawnCaptureOptions = { input?: string; timeoutMs?: number; env?: Record<string, string | undefined> };
@@ -184,6 +185,15 @@ export async function copyToClipboard(text: string): Promise<void> {
 	} finally {
 		releaseWrite?.();
 	}
+}
+
+/** Best-effort browser URL copy for company Linux sessions; true means attempted, not confirmed. */
+export function requestOfflineBrowserUrlCopy(url: string): boolean {
+	if (process.platform !== "linux" || !offlineFromEnv()) return false;
+	void copyToClipboard(url).catch(() => {
+		logger.warn("clipboard: browser URL copy request failed");
+	});
+	return true;
 }
 
 // PowerShell one-liner that emits the Windows clipboard image as base64-encoded

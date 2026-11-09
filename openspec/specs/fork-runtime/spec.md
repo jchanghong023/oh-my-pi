@@ -57,19 +57,31 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 
 ### Requirement: Dev 与 WebGUI 的 csh 浏览器启动
 
-Dev 与 WebGUI MUST 在 Linux 且 `SHELL` 路径末段为 `csh` 或 `tcsh` 时，通过该 Shell 的交互启动文件加载 `ff` 浏览器别名并打开 HTTP／HTTPS 地址，不要求修改系统默认浏览器。
+Dev 与 WebGUI MUST 仅在 `OMP_OFFLINE` 启用、Linux 且 `SHELL` 路径末段为 `csh` 或 `tcsh` 时，通过该 Shell 的交互启动文件加载 `ff` 浏览器别名并打开 HTTP／HTTPS 地址，不要求修改系统默认浏览器；offline 判定复用统一的环境变量真值规则。
 
 #### Scenario: 使用已有 Firefox 别名
 
 - **WHEN** 用户打开 Dev、TUI WebGUI 或独立 `omp webgui`，且该 Shell 的启动文件定义了 `ff`
 - **THEN** 沿用用户的模块初始化、显示环境与别名启动浏览器；地址作为独立参数交给 Shell 引用，不拼接为可执行命令文本，不等待浏览器窗口关闭
-- **AND** 仅在这些显式网页入口启用；普通 OMP 的其他链接／文件打开、其他 Shell 和其他平台沿用原打开方式，既有跳过自动打开的环境变量仍有效
+- **AND** 仅在这些显式网页入口的上述 offline 环境启用；非 offline、普通 OMP 的其他链接／文件打开、其他 Shell 和其他平台沿用原打开方式，不读取 `ff` 或提示配置别名，既有跳过自动打开的环境变量仍有效
 
 #### Scenario: 未配置 ff
 
-- **WHEN** 对应 csh／tcsh 启动环境中没有 `ff` 浏览器别名
+- **WHEN** 上述 offline Linux csh／tcsh 启动环境中没有 `ff` 浏览器别名
 - **THEN** MUST 提醒用户加载 Firefox 模块并在 `~/.cshrc` 或 `~/.tcshrc` 设置 `alias ff` 后重试，保留可手动打开的完整地址，不静默回退其他浏览器，不自动改写 Shell 配置
 - **AND** Shell 初始化或其他启动失败仍按实际失败报告；启动交接成功不等于公司 CentOS 或 Firefox 实机验证通过
+
+### Requirement: 内网网页入口自动复制本机地址
+
+仅在 Linux 且 `OMP_OFFLINE` 按统一真值规则启用时，原生 TUI 进入 Dev／WebGUI、独立 `omp webgui` 启动以及原生 `/sketch` 打开画布 MUST 自动请求复制对应的完整 `http://127.0.0.1:<port>/…` 地址；保留端口、随机能力路径和查询参数，不选择局域网地址，不改写系统剪贴板设置。
+
+#### Scenario: 浏览器未打开页面时手动粘贴
+
+- **WHEN** 上述入口已成功取得可访问的本机地址
+- **THEN** 复用统一剪贴板写入能力，请求终端 OSC 52 与原生剪贴板复制；Linux X11 复用进程保活的 selection owner，不增加下载、安装或外部剪贴板服务
+- **AND** Dev／WebGUI 跳过自动打开浏览器时仍复制；复制故障不阻断服务、画布或退出，不改变草稿、模型调用及任务状态
+- **AND** 地址仍可手动选择复制；界面仅提示已尝试复制，不将无回执的终端请求冒充客户端剪贴板成功。SSH／X11 到 Windows 的粘贴取决于终端／Exceed 配置，复制回环地址不等于自动建立 SSH 端口转发
+- **AND** 非 offline 或非 Linux 保持原行为，不自动覆盖剪贴板；未显式进入这些入口不触发复制
 
 ### Requirement: 安装与运行
 

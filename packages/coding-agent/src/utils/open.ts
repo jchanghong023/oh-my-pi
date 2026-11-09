@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import { $which, isWsl, logger } from "@oh-my-pi/pi-utils";
+import { offlineFromEnv } from "../cli/args";
 
 const URL_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
 
@@ -71,7 +72,7 @@ function windowsOpenerCommand(target: string): string[] {
 }
 
 function cshBrowserCommand(target: string): string[] | undefined {
-	if (process.platform !== "linux" || !/^https?:\/\//i.test(target)) return undefined;
+	if (!offlineFromEnv() || process.platform !== "linux" || !/^https?:\/\//i.test(target)) return undefined;
 	const shell = process.env.SHELL;
 	if (!shell || !["csh", "tcsh"].includes(path.posix.basename(shell))) return undefined;
 	// Read aliases through the user's own startup files. Keep the URL in argv,

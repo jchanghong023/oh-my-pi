@@ -18,7 +18,7 @@ const existingLinuxPath = "/mnt/c/Users/example/Downloads/session.html";
 const windowsPath = "C:\\Users\\example\\Downloads\\session.html";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "SHELL"] as const;
+const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "SHELL", "OMP_OFFLINE"] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 function setPlatform(value: NodeJS.Platform): void {
@@ -92,6 +92,7 @@ describe("openPath", () => {
 	it("tells csh users to configure ff instead of silently opening another browser", async () => {
 		setPlatform("linux");
 		process.env.SHELL = "/bin/tcsh";
+		process.env.OMP_OFFLINE = "1";
 		const calls: SpawnCall[] = [];
 		spySpawn(calls, 127);
 
@@ -110,6 +111,7 @@ describe("openPath", () => {
 	it("does not misdiagnose shell initialization failures as an undefined ff alias", async () => {
 		setPlatform("linux");
 		process.env.SHELL = "/bin/csh";
+		process.env.OMP_OFFLINE = "1";
 		const calls: SpawnCall[] = [];
 		spySpawn(calls, 1);
 
@@ -117,6 +119,18 @@ describe("openPath", () => {
 			opened: false,
 			reason: expect.stringContaining("1"),
 		});
+	});
+
+	it("uses the default opener without ff setup guidance in non-offline csh sessions", async () => {
+		setPlatform("linux");
+		process.env.SHELL = "/bin/csh";
+		const calls: SpawnCall[] = [];
+		spySpawn(calls, 127);
+
+		const result = await openPathWithResult("http://127.0.0.1:1234/", { useCshBrowserAlias: true });
+
+		expect(result).toEqual({ opened: false, reason: expect.stringContaining("127") });
+		expect(calls.map(call => call.cmd)).toEqual([["xdg-open", "http://127.0.0.1:1234/"]]);
 	});
 
 	it("opens existing WSL mount files through wslview with a Windows path", () => {

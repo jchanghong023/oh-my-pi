@@ -18,6 +18,7 @@ OMP MUST 在原生交互 TUI 提供无需安装扩展或额外配置的 `/sketch
 - **AND** 画布 HTML、脚本、样式等离线资源 MUST 随源码和发行二进制静态内嵌；绘图本身 MUST NOT 请求公网、CDN 或外部模型服务
 - **AND** 浏览器脚本 MUST 以 Firefox 52 ESR 的保守语法和基础 API 为基线（ES5 风格函数、`XMLHttpRequest`，不使用可选链、`async`/`await` 或 `NodeList.forEach`）；该设计基线 MUST NOT 被表述为公司旧 Firefox、CentOS 或桌面环境的实机兼容认证
 - **AND** 本功能仅属于原生 TUI，MUST NOT 宣称 GUI、ACP 或 RPC 绘图集成，也不提供远程自动转发；OMP 与浏览器应在同一主机，异地主机须由用户自行将显示端口通过 SSH 转发至 OMP 的回环地址
+- **AND** Linux offline 打开原生 `/sketch` 时按[内网网页入口自动复制本机地址](../fork-runtime/spec.md#requirement-内网网页入口自动复制本机地址)请求复制完整画布地址，保留手动复制地址与原有草稿、取消和图片提交行为；其他环境不自动覆盖剪贴板
 
 #### Scenario: 取消、隔离与本地服务清理
 

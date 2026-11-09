@@ -17,6 +17,7 @@ import { executeBuiltinSlashCommand } from "@oh-my-pi/pi-coding-agent/slash-comm
 import type { RpcSlashCommandRuntime } from "@oh-my-pi/pi-coding-agent/slash-commands/types";
 import * as sketch from "@oh-my-pi/pi-coding-agent/sketch/server";
 import { decodePng } from "@oh-my-pi/pi-coding-agent/tools/browser/screenshot";
+import * as clipboard from "@oh-my-pi/pi-coding-agent/utils/clipboard";
 import * as open from "@oh-my-pi/pi-coding-agent/utils/open";
 import { encodeRawPng } from "@oh-my-pi/pi-coding-agent/utils/png-encode";
 import { createInteractiveModeContext } from "../helpers/interactive-mode-context";
@@ -142,6 +143,7 @@ describe("native /sketch", () => {
 		setAgentDir(dir);
 		await Settings.init({ inMemory: true });
 		spyOn(open, "openPath").mockImplementation(() => {});
+		spyOn(clipboard, "requestOfflineBrowserUrlCopy").mockReturnValue(false);
 	});
 	afterEach(async () => {
 		for (const dispose of cleanup.splice(0)) dispose();

@@ -5,6 +5,7 @@ import { restartArgv } from "../cli/flag-tables";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import type { DevWorkbenchHandle } from "../dev-workbench/host";
 import type { AgentSession } from "../session/agent-session";
+import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
 import { NativeCwdHost } from "./native-cwd";
 import {
@@ -242,6 +243,8 @@ export async function runWebGuiCommand(): Promise<void> {
 		const server = await ensureWebServer({ webgui: true });
 		process.stdout.write("WebGUI 已启动，请在浏览器打开或创建项目后新建原生会话。\n");
 		for (const url of server.urls) process.stdout.write(`${url}\n`);
+		if (requestOfflineBrowserUrlCopy(server.loopbackUrl))
+			process.stdout.write("已尝试复制完整本机地址，可在浏览器地址栏粘贴；未生效时请手动复制上方地址。\n");
 		process.stdout.write("输入 /webgui 退出并关闭当前 OMP 的 Web 服务。\n");
 		if (process.env.OMP_WEBGUI_NO_OPEN === "1") {
 			process.stderr.write("已按 OMP_WEBGUI_NO_OPEN=1 跳过自动打开浏览器；请使用上方地址访问。\n");

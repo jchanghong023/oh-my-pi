@@ -3,6 +3,7 @@ import { formatVisionMarker, referencedAttachments } from "@oh-my-pi/pi-tui/prom
 import { InternalUrlRouter } from "../internal-urls/router";
 import type { AgentSession } from "../session/agent-session";
 import { startSketchServer, type SketchServer } from "../sketch/server";
+import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPath } from "../utils/open";
 import { restoreDetachedDraft } from "./helpers/draft";
 import { errorMessage } from "./helpers/parse";
@@ -116,7 +117,11 @@ export const BUILTIN_SKETCH_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 					{ prepend: true },
 				);
 				ctx.setHookStatus(statusKey, "Sketch open · Esc to cancel");
-				ctx.showStatus(`Sketch canvas: ${server.url} (open this URL if the browser does not launch)`);
+				const copyRequested = requestOfflineBrowserUrlCopy(server.url);
+				const hint = copyRequested
+					? "已尝试复制完整绘图地址，可在浏览器地址栏粘贴；未生效时请手动复制此地址"
+					: "open this URL if the browser does not launch";
+				ctx.showStatus(`Sketch canvas: ${server.url} (${hint})`);
 				openPath(server.url);
 				const png = await server.result;
 				if (!png || !isCurrent()) return;
