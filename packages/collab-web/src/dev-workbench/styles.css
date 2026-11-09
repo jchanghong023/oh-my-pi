@@ -172,7 +172,6 @@
 .dw-workbench .dw-document-note,
 .dw-document,
 .dw-document #root,
-.dw-workbench .dw-document-panel,
 .dw-workbench .dw-transcript,
 .dw-workbench .dw-model-name,
 .dw-workbench .dw-requirement-meta,
@@ -1516,7 +1515,6 @@
 	display: none;
 }
 .dw-workbench .dw-body,
-.dw-workbench .dw-workflow-controls button[data-action="next"],
 .dw-workbench .dw-empty {
 	flex: 1;
 }
@@ -1721,7 +1719,6 @@
 	border-bottom-color: var(--accent);
 }
 .dw-workbench .dw-requirement-row > button:first-child,
-.dw-workbench .dw-workflow-controls button[data-action="next"],
 .dw-workbench .dw-modal button[type="submit"],
 .dw-workbench .dw-filters button[aria-pressed="true"] {
 	color: var(--fg);
@@ -1965,10 +1962,6 @@
 }
 .dw-workbench .dw-composer-wrap .sh-ask-option {
 	padding: 8px;
-}
-.dw-workbench .dw-workflow-controls button[data-action="next"] {
-	background: var(--accent-muted);
-	border-color: var(--accent);
 }
 .dw-workbench .dw-secondary-operations summary {
 	padding: 4px 0;
@@ -2769,6 +2762,81 @@
 	outline-offset: -2px;
 }
 
+.dw-workbench .dw-document-toolbar {
+	flex-wrap: wrap;
+}
+.dw-workbench .dw-document-toolbar .dw-document-label {
+	flex: 1 0 100px;
+}
+.dw-workbench .dw-document-toolbar .dw-document-actions {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	flex-wrap: wrap;
+	gap: 8px;
+	max-width: 100%;
+	margin-left: auto;
+}
+.dw-workbench .dw-stage-controls {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding-left: 8px;
+	border-left: 1px solid var(--border);
+	white-space: nowrap;
+}
+.dw-workbench .dw-stage-controls button {
+	width: auto;
+	min-height: 32px;
+	margin: 0;
+	padding: 6px 9px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: var(--bg-raised);
+	color: var(--fg);
+	font-size: 12px;
+}
+.dw-workbench .dw-stage-controls .dw-stage-primary:not(:disabled) {
+	background: var(--accent-solid);
+	border-color: var(--accent-solid);
+}
+.dw-workbench .dw-stage-controls .dw-secondary-operations {
+	position: relative;
+	overflow: visible;
+	max-height: none;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+.dw-workbench #dw-secondary-operation-controls {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	z-index: 4;
+	box-sizing: border-box;
+	width: 288px;
+	max-width: calc(100vw - 36px);
+	max-height: 40vh;
+	overflow: auto;
+	padding: 12px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius-sm);
+	background: var(--bg-raised);
+	white-space: normal;
+	box-shadow: 0 8px 24px var(--bg);
+}
+.dw-workbench #dw-secondary-operation-controls > * + * {
+	margin-top: 10px;
+}
+.dw-workbench .dw-material-operations:empty {
+	display: none;
+}
+.dw-workbench .dw-material-operations .dw-workflow-controls,
+.dw-workbench .dw-material-operations .dw-secondary-operations {
+	max-height: none;
+	margin: 0 0 12px;
+}
+
 @media (min-width: 1750px) {
 	.dw-workbench .dw-sidebar {
 		width: 256px;
@@ -3117,10 +3185,6 @@
 	}
 	.dw-workbench .dw-transcript .tr-empty {
 		padding: 4px 0;
-	}
-	.dw-workbench .dw-session > .dw-workflow-controls {
-		max-height: none;
-		flex: 0 0 auto;
 	}
 	.dw-workbench .dw-composer-wrap {
 		position: absolute;

@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Move Dev stage actions beside document tools and keep secondary actions and receipts out of the chat area, including on narrow screens.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying messages or approvals.
 - Replace existing Dev business Markdown only after explicit current-version confirmation, preserving external originals.
 - Load the Dev favicon from embedded production resources instead of requesting a missing root icon.

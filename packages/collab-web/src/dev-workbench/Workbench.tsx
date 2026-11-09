@@ -877,6 +877,8 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 	const [mobilePane, setMobilePane] = useState<"materials" | "chat">("materials");
 	const [navOpen, setNavOpen] = useState(false);
 	const [secondaryOperationsFor, setSecondaryOperationsFor] = useState<string | null>(null);
+	const secondaryOperations = useRef<HTMLElement>(null);
+	const secondaryOperationsButton = useRef<HTMLButtonElement>(null);
 	const conversationPanel = useRef<HTMLElement>(null);
 	const [conversationFocus, setConversationFocus] = useState(0);
 	const [visited, setVisited] = useState<readonly string[]>(["local"]);
@@ -1036,6 +1038,46 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		setReplacementConsent(null);
 	}, [importOpen, selectedId, businessMaterial?.version, importMaterialsReady]);
 	useEffect(() => {
+		setSecondaryOperationsFor(null);
+	}, [selectedId, viewed]);
+	useEffect(() => {
+		if (!secondaryOperationsOpen) return;
+		const position = (): void => {
+			const anchor = secondaryOperations.current;
+			const panel = anchor?.querySelector<HTMLElement>("#dw-secondary-operation-controls");
+			if (!anchor || !panel) return;
+			const bounds = anchor.getBoundingClientRect();
+			const below = window.innerHeight - bounds.bottom - 12;
+			const above = bounds.top - 68;
+			const limit = window.innerHeight * 0.4;
+			const upwards = below < Math.min(panel.scrollHeight, limit) && above > below;
+			panel.style.top = upwards ? "auto" : "calc(100% + 8px)";
+			panel.style.bottom = upwards ? "calc(100% + 8px)" : "auto";
+			panel.style.maxHeight = `${Math.max(0, Math.min(limit, upwards ? above : below))}px`;
+		};
+		position();
+		window.addEventListener("resize", position);
+		document.addEventListener("scroll", position, true);
+		const closeOutside = (event: MouseEvent): void => {
+			if (event.target instanceof Node && !secondaryOperations.current?.contains(event.target))
+				setSecondaryOperationsFor(null);
+		};
+		const closeEscape = (event: KeyboardEvent): void => {
+			if (event.key !== "Escape") return;
+			event.preventDefault();
+			setSecondaryOperationsFor(null);
+			secondaryOperationsButton.current?.focus();
+		};
+		document.addEventListener("mousedown", closeOutside);
+		document.addEventListener("keydown", closeEscape);
+		return () => {
+			document.removeEventListener("mousedown", closeOutside);
+			document.removeEventListener("keydown", closeEscape);
+			window.removeEventListener("resize", position);
+			document.removeEventListener("scroll", position, true);
+		};
+	}, [secondaryOperationsOpen]);
+	useEffect(() => {
 		setVisited(items => (items.includes(conversationKey) ? items : [...items, conversationKey]));
 	}, [conversationKey]);
 	useEffect(() => {
@@ -1186,7 +1228,13 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 	const prepare = (intent: DevActionIntent, snapshot = selected): void => {
 		if (!snapshot) return;
 		if (busyRef.current) return;
-		operationFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		operationFocus.current =
+			document.activeElement instanceof HTMLElement && secondaryOperations.current?.contains(document.activeElement)
+				? secondaryOperationsButton.current
+				: document.activeElement instanceof HTMLElement
+					? document.activeElement
+					: null;
+		setSecondaryOperationsFor(null);
 		void run(async () => {
 			const needsGit = ["commit", "mark", "cancel", "set-test-state", "link-fix"].includes(intent.kind);
 			if (!needsGit) {
@@ -1246,80 +1294,37 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 				: selected?.record.stage === "testing"
 					? "tested"
 					: "next";
-	const operations = (
-		<>
-			{error || state.error ? (
-				<div className="dw-secondary-operations dw-error" role="alert">
-					{error ?? state.error}
-				</div>
-			) : null}
-			{selected && (
+	const stageControls = selected && (
+		<div className="dw-stage-controls" aria-label="当前阶段操作">
+			{viewed !== selected.record.stage ? (
+				<button type="button" onClick={() => setViewed(selected.record.stage)}>
+					回到当前阶段
+				</button>
+			) : (
 				<>
-					<div className="dw-workflow-controls" aria-label="当前需求操作">
-						<div className="dw-action-heading">
-							{active ? (
-								<ArrowRight className="dw-icon" size={16} aria-hidden="true" />
-							) : (
-								<Lock className="dw-icon" size={16} aria-hidden="true" />
-							)}
-							<strong>
-								{active
-									? `当前执行：${stageLabel(selected.record.stage)}`
-									: selected.record.lifecycle === "completed"
-										? "本轮需求已完成"
-										: requirementStatus(selected)}
-							</strong>
-							<span className="dw-action-status">{requirementStatus(selected)}</span>
+					{active && (
+						<div className="dw-stage-actions">
+							{STAGES.findIndex(stage => stage.id === selected.record.stage) < 5 &&
+								control("next", `确认${stageLabel(selected.record.stage)} · Next`, {
+									kind: "next",
+									...(selected.record.stage === "solution" && selectedCandidate
+										? { candidateId: selectedCandidate }
+										: {}),
+								})}
+							{selected.record.stage === "st" &&
+								control("st-complete", "标记 ST 完成", { kind: "mark", mark: "st-complete" })}
+							{selected.record.stage === "pr" &&
+								(selected.record.marks["pr-submitted"]
+									? control("pr-merged", "标记 PR 已合入", { kind: "mark", mark: "pr-merged" })
+									: control("pr-submitted", "标记 PR 已提交", { kind: "mark", mark: "pr-submitted" }))}
+							{selected.record.stage === "testing" &&
+								control("tested", "标记已测试", { kind: "mark", mark: "tested" })}
 						</div>
-						<p className="dw-action-context">
-							{active
-								? STAGE_CONTEXT[selected.record.stage]
-								: selected.record.lifecycle === "completed"
-									? "材料只读。新的修改请新建关联需求，不覆盖本次结论。"
-									: "当前需求已停止或正在结清；仅查看保留的状态与审计事实。"}
-						</p>
-						{active && (
-							<div className="dw-stage-actions">
-								{STAGES.findIndex(stage => stage.id === selected.record.stage) < 5 &&
-									control("next", `确认${stageLabel(selected.record.stage)} · Next`, {
-										kind: "next",
-										...(selected.record.stage === "solution" && selectedCandidate
-											? { candidateId: selectedCandidate }
-											: {}),
-									})}
-								{selected.record.stage === "st" &&
-									control("st-complete", "标记 ST 完成", { kind: "mark", mark: "st-complete" })}
-								{selected.record.stage === "pr" &&
-									(selected.record.marks["pr-submitted"]
-										? control("pr-merged", "标记 PR 已合入", { kind: "mark", mark: "pr-merged" })
-										: control("pr-submitted", "标记 PR 已提交", { kind: "mark", mark: "pr-submitted" }))}
-								{selected.record.stage === "testing" &&
-									control("tested", "标记已测试", { kind: "mark", mark: "tested" })}
-							</div>
-						)}
-					</div>
-					{(state.joined ||
-						selected.runtime?.blockedReason ||
-						(active && !available(currentActionId).available) ||
-						selected.record.lifecycle === "completed") && (
-						<section className="dw-secondary-operations" aria-label="需求状态">
-							{state.joined && (
-								<p className="dw-warning">
-									材料与操作属于当前本地需求；右侧是已加入的共享会话，聊天不会批准或修改本地材料。
-								</p>
-							)}
-							{selected.runtime?.blockedReason && <p>{selected.runtime.blockedReason}</p>}
-							{active &&
-								!available(currentActionId).available &&
-								available(currentActionId).blockedReason !== selected.runtime?.blockedReason && (
-									<p>{available(currentActionId).blockedReason}</p>
-								)}
-							{selected.record.lifecycle === "completed" && <p>已完成，只能查看；后续调整请新建关联需求。</p>}
-						</section>
 					)}
 					{(active || selected.record.stage === "testing" || selected.record.lifecycle === "completed") && (
-						<section className="dw-secondary-operations" aria-label="更多需求操作">
+						<section ref={secondaryOperations} className="dw-secondary-operations" aria-label="更多需求操作">
 							<button
+								ref={secondaryOperationsButton}
 								type="button"
 								data-action="toggle-secondary-operations"
 								aria-expanded={secondaryOperationsOpen}
@@ -1328,7 +1333,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 									setSecondaryOperationsFor(secondaryOperationsOpen ? null : secondaryOperationsKey)
 								}
 							>
-								更多操作
+								更多 ⋯
 							</button>
 							<div id="dw-secondary-operation-controls" hidden={!secondaryOperationsOpen}>
 								{active && (
@@ -1428,6 +1433,62 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 					)}
 				</>
 			)}
+		</div>
+	);
+	const operations = (
+		<>
+			{error || state.error ? (
+				<div className="dw-secondary-operations dw-error" role="alert">
+					{error ?? state.error}
+				</div>
+			) : null}
+			{selected && (
+				<>
+					<div className="dw-workflow-controls" aria-label="当前需求操作">
+						<div className="dw-action-heading">
+							{active ? (
+								<ArrowRight className="dw-icon" size={16} aria-hidden="true" />
+							) : (
+								<Lock className="dw-icon" size={16} aria-hidden="true" />
+							)}
+							<strong>
+								{active
+									? `当前执行：${stageLabel(selected.record.stage)}`
+									: selected.record.lifecycle === "completed"
+										? "本轮需求已完成"
+										: requirementStatus(selected)}
+							</strong>
+							<span className="dw-action-status">{requirementStatus(selected)}</span>
+						</div>
+						<p className="dw-action-context">
+							{active
+								? STAGE_CONTEXT[selected.record.stage]
+								: selected.record.lifecycle === "completed"
+									? "材料只读。新的修改请新建关联需求，不覆盖本次结论。"
+									: "当前需求已停止或正在结清；仅查看保留的状态与审计事实。"}
+						</p>
+					</div>
+					{(state.joined ||
+						selected.runtime?.blockedReason ||
+						(active && !available(currentActionId).available) ||
+						selected.record.lifecycle === "completed") && (
+						<section className="dw-secondary-operations" aria-label="需求状态">
+							{state.joined && (
+								<p className="dw-warning">
+									材料与操作属于当前本地需求；右侧是已加入的共享会话，聊天不会批准或修改本地材料。
+								</p>
+							)}
+							{selected.runtime?.blockedReason && <p>{selected.runtime.blockedReason}</p>}
+							{active &&
+								!available(currentActionId).available &&
+								available(currentActionId).blockedReason !== selected.runtime?.blockedReason && (
+									<p>{available(currentActionId).blockedReason}</p>
+								)}
+							{selected.record.lifecycle === "completed" && <p>已完成，只能查看；后续调整请新建关联需求。</p>}
+						</section>
+					)}
+				</>
+			)}
 			{localMode && !selected && (
 				<div className="dw-workflow-controls" aria-label="本地业务文档操作">
 					<p>本地业务写作不提交仓库。完成后下载文档，交给开发人员另建需求导入。</p>
@@ -1449,7 +1510,8 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 				</div>
 			)}
 			{(state.unknownInput || result || operationId || confirmed) && (
-				<section className="dw-secondary-operations" aria-label="操作回执与恢复">
+				<details className="dw-secondary-operations" aria-label="操作回执与恢复" open>
+					<summary>操作回执与恢复</summary>
 					{state.unknownInput && (
 						<button
 							type="button"
@@ -1496,7 +1558,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 							续办未完成操作
 						</button>
 					)}
-				</section>
+				</details>
 			)}
 		</>
 	);
@@ -1718,18 +1780,21 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 														? MATERIAL_LABELS[MATERIAL_KINDS[viewed][0]]
 														: stageLabel(viewed)}
 											</strong>
-											<DocumentTools
-												key={`${selectedId}:${material?.id ?? viewed}:${material?.version ?? ""}`}
-												text={materialText}
-												notice={materialLifecycleNotice ?? "只读"}
-												downloadUrl={
-													material && !materialLifecycleNotice
-														? client.url(
-																`api/materials/${encodeURIComponent(selectedId!)}/${encodeURIComponent(material.id)}`,
-															).href
-														: undefined
-												}
-											/>
+											<div className="dw-document-actions">
+												<DocumentTools
+													key={`${selectedId}:${material?.id ?? viewed}:${material?.version ?? ""}`}
+													text={materialText}
+													notice={materialLifecycleNotice ?? "只读"}
+													downloadUrl={
+														material && !materialLifecycleNotice
+															? client.url(
+																	`api/materials/${encodeURIComponent(selectedId!)}/${encodeURIComponent(material.id)}`,
+																).href
+															: undefined
+													}
+												/>
+												{stageControls}
+											</div>
 										</header>
 										{currentMaterials.length > 1 && (
 											<nav className="dw-document-tabs" aria-label="阶段材料">
@@ -1748,15 +1813,8 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 												))}
 											</nav>
 										)}
-										{viewed !== selected.record.stage && (
-											<div className="dw-view-notice">
-												<span>正在查看{stageLabel(viewed)} · 不会改变当前进度</span>
-												<button type="button" onClick={() => setViewed(selected.record.stage)}>
-													回到当前阶段
-												</button>
-											</div>
-										)}
 										<div className="dw-document-scroll">
+											<div className="dw-material-operations">{operations}</div>
 											{materialLifecycleNotice ? (
 												<div className="dw-empty" role="status">
 													<h2>{materialLifecycleNotice}</h2>
@@ -1859,11 +1917,12 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 											/>
 										</header>
 										<div className="dw-document-scroll">
+											<div className="dw-material-operations">{operations}</div>
 											{localContent === null ? (
 												<div className="dw-empty dw-empty-material">
 													<FileText className="dw-empty-icon" size={32} aria-hidden="true" />
 													<h2>通过会话完善业务需求</h2>
-													<p>文档生成后，点击右侧“读取最新业务文档”查看与下载。</p>
+													<p>文档生成后，点击中间材料区的“读取最新业务文档”查看与下载。</p>
 													<button type="button" onClick={showConversation}>
 														前往会话完善材料
 													</button>
@@ -1890,6 +1949,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 									{!client.initialized && <p role="status">正在初始化浏览器连接…</p>}
 								</section>
 							)}
+							{!selected && !localMode && <div className="dw-material-operations">{operations}</div>}
 						</main>
 						<aside ref={conversationPanel} className="dw-conversation" tabIndex={-1} aria-label="共享 AI 会话">
 							{visited.map(id => (
@@ -1902,7 +1962,6 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 									enabled={Boolean(state.joined || selected || localMode)}
 									inputReady={Boolean(state.joined || selected || client.target())}
 									readOnly={!state.joined && selected !== null && selected.record.lifecycle !== "active"}
-									operations={id === conversationKey ? operations : null}
 									onError={setError}
 									onLeave={() => {
 										if (state.joined) void run(() => client.leave());

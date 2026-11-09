@@ -99,12 +99,12 @@ async function clickAction(
 		const control =
 			action === "cancel"
 				? '.dw-requirement-row > [data-requirement-id][aria-pressed="true"] + .dw-request-delete[data-action="cancel"]'
-				: `${CONVERSATION} ${action.startsWith("[") ? action : `[data-action="${action}"]`}`;
+				: `${MATERIALS} ${action.startsWith("[") ? action : `[data-action="${action}"]`}`;
 		await page.waitForSelector(`${control}:not([disabled])`, { signal: abort.signal });
 		if (action === "cancel" && (await page.$eval(control, element => element.getBoundingClientRect().height === 0)))
 			await page.click('[aria-label="打开需求列表"]');
 		if (await page.$eval(control, element => Boolean(element.closest("#dw-secondary-operation-controls")))) {
-			const toggle = `${CONVERSATION} [data-action="toggle-secondary-operations"]`;
+			const toggle = `${MATERIALS} [data-action="toggle-secondary-operations"]`;
 			await page.waitForSelector(toggle, { visible: true, signal: abort.signal });
 			if (!(await page.$eval(toggle, element => element.getAttribute("aria-expanded") === "true")))
 				await page.click(toggle);
@@ -169,6 +169,7 @@ async function openRequirement(page: Page, snapshot: DevRequirementSnapshot): Pr
 }
 
 const CONVERSATION = ".dw-conversation .dw-session:not([hidden])";
+const MATERIALS = ".dw-main";
 const COMPOSER = `${CONVERSATION} [data-testid="composer"] textarea`;
 const SEND = `${CONVERSATION} [data-testid="composer"] button[title="send (Enter)"]`;
 
@@ -252,7 +253,10 @@ test("real Chromium imports Markdown without business dialogue, renders all stag
 	expect(
 		await page.$('[data-testid="material-view"] textarea, [data-testid="material-view"] [contenteditable="true"]'),
 	).toBeNull();
-	await page.click('[data-stage="business"]');
+	expect(await page.$(`${MATERIALS} [data-action="next"]`)).toBeNull();
+	await page.click(`${MATERIALS} .dw-stage-controls > button`);
+	await page.waitForSelector('[data-stage="business"][aria-pressed="true"]');
+	expect((await fixture.get(id)).recordVersion).toBe(beforeNavigation.recordVersion);
 	await fs.writeFile(path.join(fixture.cwd, "unrelated-staged.txt"), "Preserve this unrelated staged user change\n");
 	await requireGit(fixture.cwd).stageFiles(["unrelated-staged.txt"]);
 	for (const [index, stage] of ["business", "requirements", "solution", "planning", "executing"].entries()) {
@@ -295,17 +299,27 @@ test("real Chromium imports Markdown without business dialogue, renders all stag
 			await expect(requireGit(fixture.cwd).showBlob(`${head}:unrelated-staged.txt`)).rejects.toThrow();
 			if (stage === "business") {
 				const previousViewport = page.viewport();
-				const more = `${CONVERSATION} [data-action="toggle-secondary-operations"]`;
-				if ((await page.$eval(more, element => element.getAttribute("aria-expanded"))) !== "true")
-					await page.click(more);
+				const transcriptHeight = await page.$eval(
+					`${CONVERSATION} .dw-transcript`,
+					element => element.getBoundingClientRect().height,
+				);
+				const more = `${MATERIALS} [data-action="toggle-secondary-operations"]`;
+				await page.click(more);
+				expect(
+					await page.$eval(`${CONVERSATION} .dw-transcript`, element => element.getBoundingClientRect().height),
+				).toBe(transcriptHeight);
+				await page.keyboard.press("Escape");
+				expect(await page.$eval(more, element => element === document.activeElement)).toBe(true);
+				await page.click(more);
 				await page.setViewport({ width: 320, height: 480 });
-				await page.click('[aria-label="工作区面板"] button:last-child');
-				const scrollTop = await page.$eval(CONVERSATION, element => {
-					const session = element as Element & { scrollTop: number; scrollHeight: number };
-					session.scrollTop = session.scrollHeight;
-					return session.scrollTop;
+				const menu = await page.$eval("#dw-secondary-operation-controls", element => {
+					const bounds = element.getBoundingClientRect();
+					return { left: bounds.left, right: bounds.right, bottom: bounds.bottom };
 				});
-				expect(scrollTop).toBeGreaterThan(0);
+				expect(menu.left).toBeGreaterThanOrEqual(0);
+				expect(menu.right).toBeLessThanOrEqual(320);
+				expect(menu.bottom).toBeLessThanOrEqual(480);
+				await page.click('[aria-label="工作区面板"] button:last-child');
 				const composer = await page.$eval(COMPOSER, element => {
 					const bounds = element.getBoundingClientRect();
 					return { top: bounds.top, bottom: bounds.bottom };
@@ -526,12 +540,12 @@ test("human ST marking commits once, reports a real push failure and resumes onl
 	await repo.stageFiles(["unrelated-staged.txt"]);
 	const { page } = await fixture.browser();
 	await openRequirement(page, snapshot);
-	const mark = `${CONVERSATION} [data-mark="st-complete"]:not([disabled])`;
+	const mark = `${MATERIALS} [data-mark="st-complete"]:not([disabled])`;
 	// Selecting a requirement reconnects its session; a rendered control can still be disabled.
 	await page.waitForSelector(mark, { visible: true });
 	const previousViewport = page.viewport();
 	await page.setViewport({ width: 320, height: 480 });
-	await page.click('[aria-label="工作区面板"] button:last-child');
+	await page.click('[aria-label="工作区面板"] button:first-child');
 	const previewResponse = page.waitForResponse(
 		response => response.url().endsWith("/api/action-preview") && response.request().method() === "POST",
 	);
@@ -614,9 +628,9 @@ test("human ST marking commits once, reports a real push failure and resumes onl
 		// The HTTP result precedes the client's refresh and React's release of the busy controls.
 		await page.waitForSelector('[data-testid="confirmation-submit"]', { hidden: true });
 		await page.setViewport(previousViewport ?? { width: 1440, height: 900 });
-		const resume = `${CONVERSATION} [data-action="resume"]:not([disabled])`;
+		const resume = `${MATERIALS} [data-action="resume"]:not([disabled])`;
 		await page.waitForSelector(resume, { visible: true });
-		expect(await page.$eval(`${CONVERSATION} [data-result="push"]`, element => element.textContent)).toBe("失败");
+		expect(await page.$eval(`${MATERIALS} [data-result="push"]`, element => element.textContent)).toBe("失败");
 		expect(failed.snapshot.record.marks["st-complete"]?.operationId).toBe(preview.action.binding.operationId);
 		expect(failed.snapshot.record.stage).toBe("pr");
 		expect(failed.persistence.commit.status).toBe("succeeded");
@@ -640,7 +654,7 @@ test("human ST marking commits once, reports a real push failure and resumes onl
 		expect(retried.ok()).toBe(true);
 		expect(retried.request().postData()).toBe(submitted.request().postData());
 		const resumed = (await retried.json()) as DevActionResult;
-		await page.waitForSelector(`${CONVERSATION} [data-action="resume"]`, { hidden: true });
+		await page.waitForSelector(`${MATERIALS} [data-action="resume"]`, { hidden: true });
 		expect(resumed.persistence.push.status).toBe("succeeded");
 		expect(resumed.persistence.commit.sha).toBe(commit);
 		expect(await repo.headSha()).toBe(commit);

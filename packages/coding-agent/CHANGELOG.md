@@ -17,6 +17,7 @@
 ### Changed
 
 - Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
+- Move Dev stage confirmation and secondary actions to the central document toolbar, leaving more room for chat without changing approval gates.
 - Load WebGUI code/diff highlighting workers only when opening a viewer, instead of on the empty home page.
 - Use a Chinese-only WebGUI without language-switching resources or controls.
 - Continue historical conversations across working directories using native workspace rebinding and project ownership checks.

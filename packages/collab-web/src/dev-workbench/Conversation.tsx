@@ -30,7 +30,6 @@ export interface DevConversationProps {
 	readOnly: boolean;
 	enabled: boolean;
 	inputReady: boolean;
-	operations?: ReactNode;
 	onError(message: string): void;
 	onLeave(): void;
 }
@@ -44,7 +43,6 @@ export function DevConversation({
 	readOnly,
 	enabled,
 	inputReady,
-	operations,
 	onError,
 	onLeave,
 }: DevConversationProps): ReactNode {
@@ -280,7 +278,6 @@ export function DevConversation({
 					/>
 				)}
 			</div>
-			{operations}
 			<div className="dw-composer-wrap">
 				{state.statuses.map((status, index) => (
 					<p role="status" data-native-status="command" key={index}>
