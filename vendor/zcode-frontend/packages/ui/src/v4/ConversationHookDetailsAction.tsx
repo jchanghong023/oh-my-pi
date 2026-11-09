@@ -33,7 +33,7 @@ interface HookDetailItem {
 function buildHookDetailItems(rows: readonly HookInvocationRow[]): HookDetailItem[] {
   const items: HookDetailItem[] = [];
   for (const row of rows) {
-    for (const execution of row.executions.toSorted(
+    for (const execution of [...row.executions].sort(
       (left, right) => left.hookIndex - right.hookIndex,
     )) {
       if (!execution.didExecute) continue;

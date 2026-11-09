@@ -14,7 +14,6 @@
     "@extend-ai/react-docx": "^0.8.1",
     "@extend-ai/react-xlsx": "^0.16.0",
     "@floating-ui/dom": "1.7.6",
-    "@juggle/resize-observer": "^3.4.0",
     "@lexical/react": "^0.42.0",
     "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/core": "2.0.0",
@@ -38,7 +37,6 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "core-js": "^3.51.0",
     "croner": "^10.0.1",
     "d3-path": "^3.1.0",
     "docx-preview": "^0.4.0",
@@ -75,12 +73,5 @@
     "vite": "^8.0.2",
     "zod": "4.6.5",
     "zustand": "^5.0.12"
-  },
-  "devDependencies": {
-    "@babel/core": "^8.1.0",
-    "@babel/plugin-transform-unicode-property-regex": "^8.0.1",
-    "postcss": "^8.5.32",
-    "postcss-preset-env": "^11.6.2",
-    "regexpu-core": "^6.5.4"
   }
 }

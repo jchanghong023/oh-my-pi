@@ -1,8 +1,6 @@
 import * as React from "react";
 import { Switch as SwitchPrimitive } from "radix-ui";
 
-import "./switch.css";
-
 import { cn } from "../lib/utils.js";
 
 function Switch({

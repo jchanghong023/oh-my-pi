@@ -33,19 +33,7 @@ function createDirectiveStartPattern(
   const minimumColonCount = options.allowSingleColon ? 1 : 2;
   const maximumColonCount = options.allowTripleColon ? 3 : 2;
   const prefix = `:{${minimumColonCount},${maximumColonCount}}`;
-  return new RegExp(`${prefix}${escapeRegExp(directiveName)}\\s*\\{`, "g");
-}
-
-function findNextDirectiveStart(content: string, pattern: RegExp): RegExpExecArray | null {
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(content)) !== null) {
-    // Check the colon boundary without lookbehind, which Firefox 68 cannot compile.
-    // Keep the match itself unchanged so raw text and source offsets stay exact.
-    if (content[match.index - 1] !== ":") return match;
-    // A rejected suffix must not consume a later, possibly overlapping valid start.
-    pattern.lastIndex = match.index + 1;
-  }
-  return null;
+  return new RegExp(`(?<!:)${prefix}${escapeRegExp(directiveName)}\\s*\\{`, "g");
 }
 
 interface DirectiveQuoteState {
@@ -185,7 +173,7 @@ export function extractAssistantDirectives(
   const directives: ParsedAssistantDirective[] = [];
   let consumedUntil = 0;
   let match: RegExpExecArray | null;
-  while ((match = findNextDirectiveStart(content, startPattern)) !== null) {
+  while ((match = startPattern.exec(content)) !== null) {
     const start = match.index ?? 0;
     if (start < consumedUntil) continue;
     const openBraceIndex = start + (match[0]?.lastIndexOf("{") ?? -1);
@@ -295,7 +283,7 @@ export function findUnclosedAssistantDirectiveStart(
   const startPattern = createDirectiveStartPattern(directiveName, options);
   let unclosedStart: number | null = null;
   let match: RegExpExecArray | null;
-  while ((match = findNextDirectiveStart(content, startPattern)) !== null) {
+  while ((match = startPattern.exec(content)) !== null) {
     const start = match.index ?? 0;
     const openBraceIndex = start + (match[0]?.lastIndexOf("{") ?? -1);
     if (

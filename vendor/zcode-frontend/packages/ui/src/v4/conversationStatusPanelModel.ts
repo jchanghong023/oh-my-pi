@@ -206,7 +206,7 @@ function buildSessionPlansModel(
         row.toolName === "ExitPlanMode" &&
         (row.status === "success" || row.status === "error" || row.status === "cancelled"),
     )
-    .toSorted((left, right) => right.rowId - left.rowId)
+    .sort((left, right) => right.rowId - left.rowId)
     .flatMap((row) => {
       const content = extractPlanToolCallContent(row, workspacePath ?? "");
       if (!content.markdown) return [];

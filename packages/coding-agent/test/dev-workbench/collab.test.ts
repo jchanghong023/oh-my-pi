@@ -155,6 +155,40 @@ async function fixture(options: { ready?: boolean; remote?: boolean; delayMs?: n
 }
 
 describe("workbench native collaboration transport", () => {
+	it("counts the owner once for local mirrors and retains a distinct same-name remote participant", async () => {
+		const f = await fixture();
+		const counts: number[] = [];
+		f.port.onCollabStatus = status => {
+			if (status) counts.push(status.participantCount);
+		};
+		const owner = f.host.participants[0]!;
+		const inbox = new Frames();
+		const local = f.host.connectLocal(frame => inbox.push(frame));
+		const secondLocal = f.host.connectLocal(() => {});
+		cleanups.push(async () => {
+			secondLocal.close();
+			local.close();
+		});
+		const welcome = await inbox.take(frame => frame.t === "welcome");
+		if (welcome.t !== "welcome") throw new Error("Missing local welcome");
+		expect(welcome.state.participants).toEqual([owner]);
+		expect(f.host.participants).toEqual([owner]);
+		expect(counts.at(-1)).toBe(1);
+
+		const remote = await f.join(owner.name);
+		const joined = await inbox.take(frame => frame.t === "state" && frame.state.participants.length === 2);
+		if (joined.t !== "state") throw new Error("Missing joined state");
+		expect(joined.state.participants).toEqual([owner, { name: owner.name, role: "guest" }]);
+		expect(counts.at(-1)).toBe(2);
+		expect(remote.identity.canWrite).toBe(true);
+
+		await f.bridge.leaveDevCollab(owner.name);
+		const left = await inbox.take(frame => frame.t === "state" && frame.state.participants.length === 1);
+		if (left.t !== "state") throw new Error("Missing departed state");
+		expect(left.state.participants).toEqual([owner]);
+		expect(counts.at(-1)).toBe(1);
+	});
+
 	it("delivers native frames through plain HTTP/WS to two production browser reducers without browser cryptography", async () => {
 		const f = await fixture();
 		const server = Bun.serve<{ id: string }>({

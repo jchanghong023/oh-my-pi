@@ -21,7 +21,7 @@ export type AttachmentPutFn = (
   options?: AttachmentUploadOptions,
 ) => Promise<V4AttachmentPutResult>;
 
-/** FileReader also supports browsers without Blob.arrayBuffer (Firefox 68). */
+/** Native data-URL encoding avoids a JS byte-string copy and supports cancelling the read. */
 export function readComposerFileBase64(file: File, signal: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

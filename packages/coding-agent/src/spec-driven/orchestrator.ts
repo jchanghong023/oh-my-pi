@@ -264,6 +264,20 @@ export class SpecDrivenOrchestrator {
 		);
 	}
 	async inspect(intent: DevActionIntent): Promise<{ files: SpecFileVersion[]; candidateId?: string }> {
+		if (intent.kind !== "next") return this.#inspect(intent);
+		const previousReason = this.#blockedReason;
+		try {
+			const inspected = await this.#inspect(intent);
+			this.#blockedReason = undefined;
+			return inspected;
+		} catch (error) {
+			this.#blockedReason = error instanceof Error ? error.message : String(error);
+			throw error;
+		} finally {
+			if (this.#blockedReason !== previousReason) this.#options.onStatusChange?.(this.status());
+		}
+	}
+	async #inspect(intent: DevActionIntent): Promise<{ files: SpecFileVersion[]; candidateId?: string }> {
 		this.#assertWritable();
 		if (this.#transition) throw new SpecAdmissionError("当前控制操作尚未结清");
 		if (intent.kind === "commit") {

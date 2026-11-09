@@ -291,13 +291,16 @@ export function createDevCollabController(port: CollabHostPort): CollabControlle
 	return new CollabController({ nativePort: port });
 }
 
+export interface DevLocalSessionBridge {
+	sendFrame(frame: GuestFrame): Promise<DevSubmitResult>;
+	refreshParticipants(): void;
+	close(): Promise<void>;
+}
+
 export function createDevLocalSessionBridge(
 	port: CollabHostPort,
 	onFrame: (frame: HostFrame) => void,
-): {
-	sendFrame(frame: GuestFrame): Promise<DevSubmitResult>;
-	close(): Promise<void>;
-} {
+): DevLocalSessionBridge {
 	const projection = new CollabHost({ nativePort: port });
 	const connection = projection.connectLocal(onFrame);
 	return {
@@ -311,6 +314,7 @@ export function createDevLocalSessionBridge(
 				return { kind: "rejected", message: error instanceof Error ? error.message : String(error) };
 			}
 		},
+		refreshParticipants: () => projection.refreshParticipants(),
 		async close() {
 			connection.close();
 			await projection.stop("Workbench subscription closed");

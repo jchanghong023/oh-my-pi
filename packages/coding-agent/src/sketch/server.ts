@@ -50,7 +50,7 @@ export function createSketchResource(
 		});
 	}
 	async function complete(value: Buffer | null): Promise<Response> {
-		if (settled || completing) return reply("Sketch session has ended or is being attached.", 409);
+		if (settled || completing) return reply("绘图会话已结束或正在添加附件。", 409);
 		completing = true;
 		try {
 			if (value && options.onSubmit) await options.onSubmit(value);
@@ -58,7 +58,7 @@ export function createSketchResource(
 			resolve(value);
 			return reply("OK");
 		} catch (error) {
-			return reply(error instanceof Error ? error.message : "Sketch attachment failed.", 409);
+			return reply(error instanceof Error ? error.message : "添加绘图附件失败。", 409);
 		} finally {
 			completing = false;
 		}
@@ -78,38 +78,38 @@ export function createSketchResource(
 				(options.origin && url.origin !== options.origin()) ||
 				(requestOrigin !== null && requestOrigin !== url.origin)
 			) {
-				return reply("Forbidden origin.", 403);
+				return reply("不允许此请求来源。", 403);
 			}
 			if (url.pathname !== path && url.pathname !== `${path}submit` && url.pathname !== `${path}cancel`) {
-				return reply("Not found.", 404);
+				return reply("未找到页面。", 404);
 			}
-			if (settled) return reply("Sketch session has ended.", 409);
+			if (settled) return reply("绘图会话已结束。", 409);
 			if (request.method === "GET" && url.pathname === path) {
 				return new Response(sketchHtmlText, {
 					headers: { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8" },
 				});
 			}
-			if (request.method !== "POST" || url.pathname === path) return reply("Method not allowed.", 405);
+			if (request.method !== "POST" || url.pathname === path) return reply("不支持此请求方法。", 405);
 			if (url.pathname === `${path}cancel`) return complete(null);
 			const contentLength = request.headers.get("content-length");
 			if (contentLength !== null && Number(contentLength) > MAX_ENCODED_BYTES)
-				return reply("Image exceeds the attachment size limit.", 413);
+				return reply("图片超过附件大小限制。", 413);
 			let body: string;
 			try {
 				body = await request.text();
 			} catch {
-				return reply("Image body could not be read or exceeds the attachment size limit.", 413);
+				return reply("无法读取图片数据或图片超过附件大小限制。", 413);
 			}
-			if (body.length > MAX_ENCODED_BYTES) return reply("Image exceeds the attachment size limit.", 413);
+			if (body.length > MAX_ENCODED_BYTES) return reply("图片超过附件大小限制。", 413);
 			const decoded = decodeBase64ImageData(body);
-			if (decoded.reason !== undefined) return reply("Expected a base64 PNG image.", 400);
+			if (decoded.reason !== undefined) return reply("需要 Base64 编码的 PNG 图片。", 400);
 			const bytes = decoded.bytes;
-			if (bytes.byteLength > MAX_IMAGE_INPUT_BYTES) return reply("Image exceeds the attachment size limit.", 413);
-			if (parseImageMetadata(bytes)?.mimeType !== "image/png") return reply("Expected a PNG image.", 400);
+			if (bytes.byteLength > MAX_IMAGE_INPUT_BYTES) return reply("图片超过附件大小限制。", 413);
+			if (parseImageMetadata(bytes)?.mimeType !== "image/png") return reply("需要 PNG 格式的图片。", 400);
 			try {
 				await new Bun.Image(bytes).resize(1, 1).png().bytes();
 			} catch {
-				return reply("PNG image could not be decoded.", 400);
+				return reply("无法解码 PNG 图片。", 400);
 			}
 			return complete(bytes);
 		},

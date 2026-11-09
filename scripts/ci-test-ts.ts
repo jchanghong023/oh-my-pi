@@ -493,6 +493,7 @@ const forkCodingAgentFiles = new Set([
 	"test/webgui/native-skills.test.ts",
 	"test/webgui/mcp-disabled.test.ts",
 	"test/webgui/platform-probe.test.ts",
+	"test/webgui/directive-streaming.test.ts",
 	"test/webgui/packaged-assets.test.ts",
 ]);
 const forkPackageFiles: Record<string, string[]> = {

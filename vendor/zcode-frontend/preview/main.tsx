@@ -162,9 +162,12 @@ function BrowserApplication() {
     }
 
     const disconnect = () => connection.abort();
+    // Firefox closes the old document's socket before pagehide during navigation.
+    window.addEventListener("beforeunload", disconnect);
     window.addEventListener("pagehide", disconnect);
     void connect().catch(fail);
     return () => {
+      window.removeEventListener("beforeunload", disconnect);
       window.removeEventListener("pagehide", disconnect);
       connection.abort();
     };

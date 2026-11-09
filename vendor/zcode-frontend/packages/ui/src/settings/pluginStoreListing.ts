@@ -244,7 +244,7 @@ export function sortMarketplaceSources(
   locale: string,
 ): ZCodePluginMarketplaceSummary[] {
   const officialRank = new Map(OFFICIAL_MARKETPLACE_ORDER.map((id, index) => [id, index]));
-  return marketplaces.toSorted((left, right) => {
+  return [...marketplaces].sort((left, right) => {
     const leftRank = officialRank.get(left.id);
     const rightRank = officialRank.get(right.id);
     if (leftRank !== undefined || rightRank !== undefined) {
@@ -276,7 +276,7 @@ export function sortPersonalMarketplaceGroups(
       marketplace.lastUpdated ? ([[marketplace.id, marketplace.lastUpdated]] as const) : [],
     ),
   );
-  return groups.toSorted((left, right) => {
+  return [...groups].sort((left, right) => {
     const leftAt = lastUpdatedById.get(left.marketplace) ?? "";
     const rightAt = lastUpdatedById.get(right.marketplace) ?? "";
     // 空串字典序小于任何时间串，倒序比较自然把缺失时间沉底。
@@ -447,7 +447,7 @@ export function sortInstalledStripItems(
   items: StorePluginItem[],
   locale: string,
 ): StorePluginItem[] {
-  return items.toSorted((left, right) => {
+  return [...items].sort((left, right) => {
     const documentPriority = compareDocumentPluginPriority(left.id, right.id);
     if (documentPriority !== 0) return documentPriority;
 

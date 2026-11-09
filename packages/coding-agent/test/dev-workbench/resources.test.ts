@@ -1,5 +1,4 @@
 import { expect, test } from "bun:test";
-import { parse } from "acorn";
 import {
 	decodeDevWorkbenchAssets,
 	devWorkbenchAssetDigest,
@@ -68,10 +67,6 @@ test("prepared source payload serves every manifest file with actual digest and 
 	const javascript = await getDevWorkbenchAsset(scriptPath);
 	if (!javascript) throw new Error(`Workbench script missing: ${scriptPath}`);
 	expect(javascript.contentType).toContain("text/javascript");
-	// One classic script uses the syntax generation available to the native Firefox 68 consumer.
-	expect(() =>
-		parse(new TextDecoder().decode(javascript.bytes), { ecmaVersion: 2019, sourceType: "script" }),
-	).not.toThrow();
 	for (const stylesheet of stylesheets) {
 		const stylesheetPath = new URL(stylesheet.attributes.get("href")!, base).pathname;
 		const css = await getDevWorkbenchAsset(stylesheetPath);

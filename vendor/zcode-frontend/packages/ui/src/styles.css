@@ -692,7 +692,7 @@ html[data-document-hidden] *::after {
 }
 
 /* Keep this outside utility layers so the global scrollbar reset cannot override
- * it. Firefox 68 supports scrollbar-width; older Chromium uses the pseudo-element.
+ * it. Firefox supports scrollbar-width; Chrome 109 uses the pseudo-element.
  * Only hide the scrollbar, leaving native scrolling and focus navigation intact. */
 [data-v4-draft-suggested-prompts] {
   scrollbar-width: none;

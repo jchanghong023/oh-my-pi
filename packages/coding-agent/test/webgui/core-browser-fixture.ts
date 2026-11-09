@@ -155,12 +155,11 @@ export async function createCoreBrowserFixture(): Promise<CoreBrowserFixture> {
 			return bundle.output;
 		});
 		const css = output.filter(asset => asset.type === "asset" && asset.fileName.endsWith(".css"));
-		const compat = output.find(asset => asset.fileName.endsWith("browser-compat.js"));
-		if (!compat || !css.length) throw new Error("Production frontend build omitted compatibility script or styles");
+		if (!css.length) throw new Error("Production frontend build omitted styles");
 		const html = (name: string) => {
 			const entry = output.find(asset => asset.type === "chunk" && asset.isEntry && asset.name === name);
 			if (!entry) throw new Error(`Missing frontend entry ${name}`);
-			return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><script src="/${compat.fileName}"></script>${css.map(asset => `<link rel="stylesheet" href="/${asset.fileName}">`).join("")}</head><body><div id="root" style="height:100vh"></div><script type="module" src="/${entry.fileName}"></script></body></html>`;
+			return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">${css.map(asset => `<link rel="stylesheet" href="/${asset.fileName}">`).join("")}</head><body><div id="root" style="height:100vh"></div><script type="module" src="/${entry.fileName}"></script></body></html>`;
 		};
 		const appHtml = html("app");
 		const componentHtml = html("components");

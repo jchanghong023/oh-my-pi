@@ -309,7 +309,7 @@ test("real Chromium imports Markdown without business dialogue, renders all stag
 					await page.$eval(`${CONVERSATION} .dw-transcript`, element => element.getBoundingClientRect().height),
 				).toBe(transcriptHeight);
 				await page.keyboard.press("Escape");
-				expect(await page.$eval(more, element => element === document.activeElement)).toBe(true);
+				expect(await page.$eval(more, element => element.matches(":focus"))).toBe(true);
 				await page.click(more);
 				await page.setViewport({ width: 320, height: 480 });
 				const menu = await page.$eval("#dw-secondary-operation-controls", element => {
@@ -777,11 +777,26 @@ test("two plain-HTTP Chromium peers explicitly join one native Relay session wit
 					.length > 1,
 		),
 	).toEqual([]);
+	await page.waitForFunction(
+		`document.querySelector('.dw-session:not([hidden]) .dw-participant-summary')?.textContent === '3 位参与者'`,
+	);
 	const joinedParticipants = await peers[1]!.$$eval(`${CONVERSATION} .dw-participants`, elements =>
 		elements.map(element => element.textContent),
 	);
 	expect(joinedParticipants.join("\n")).toContain("browser-one");
 	expect(joinedParticipants.join("\n")).toContain("browser-two");
+	await peers[0]!.click(`${CONVERSATION} [data-action="collab-leave"]`);
+	await page.waitForFunction(
+		`document.querySelector('.dw-session:not([hidden]) .dw-participant-summary')?.textContent === '2 位参与者'`,
+	);
+	await peers[1]!.waitForFunction(
+		`document.querySelectorAll('.dw-session:not([hidden]) .dw-participant').length === 2`,
+	);
+	const remainingParticipants = await peers[1]!.$$eval(`${CONVERSATION} .dw-participants`, elements =>
+		elements.map(element => element.textContent),
+	);
+	expect(remainingParticipants.join("\n")).not.toContain("browser-one");
+	expect(remainingParticipants.join("\n")).toContain("browser-two");
 	await fixture.stage(snapshot.record.requirementId, "requirements");
 	await fixture.act(await fixture.get(snapshot.record.requirementId), { kind: "next" });
 	const next = await fixture.stage(snapshot.record.requirementId, "solution");
@@ -790,7 +805,7 @@ test("two plain-HTTP Chromium peers explicitly join one native Relay session wit
 		await peers[1]!.$$eval(`${CONVERSATION} .dw-participants`, elements =>
 			elements.map(element => element.textContent),
 		),
-	).toEqual(joinedParticipants);
+	).toEqual(remainingParticipants);
 	await network.detach();
 	expect(fixture.provider.failures).toEqual([]);
 }, 180_000);

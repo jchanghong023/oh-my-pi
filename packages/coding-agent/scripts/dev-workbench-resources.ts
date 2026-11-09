@@ -3,7 +3,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type PluginObj, transformAsync, types as t } from "@babel/core";
+import { transformAsync } from "@babel/core";
 import { parse } from "acorn";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 import {
@@ -115,78 +115,7 @@ async function sourceDigest(inputs: ReadonlyMap<string, Uint8Array>): Promise<st
 }
 
 /**
- * Specialize the installed React production code before bundling. Its own Promise
- * scheduling, ErrorEvent reporting, MessageChannel work loop and AbortController
- * implementations are native at our boundary; unavailable alternatives are erased.
- * No globals are installed or replaced in the browser.
- */
-function nativeReactFeatures(): PluginObj {
-	const globals: Record<string, string> = {
-		AbortController: "function",
-		MessageChannel: "function",
-		Promise: "function",
-		WeakMap: "function",
-		WeakSet: "function",
-		setTimeout: "function",
-		clearTimeout: "function",
-		performance: "object",
-		queueMicrotask: "undefined",
-		reportError: "undefined",
-		setImmediate: "undefined",
-		navigation: "undefined",
-		process: "undefined",
-	};
-	return {
-		visitor: {
-			MemberExpression(nodePath) {
-				const { node } = nodePath;
-				if (
-					!node.computed &&
-					t.isIdentifier(node.object, { name: "navigator" }) &&
-					t.isIdentifier(node.property, { name: "connection" }) &&
-					!nodePath.scope.hasBinding("navigator", true)
-				)
-					nodePath.replaceWith(t.nullLiteral());
-			},
-			ConditionalExpression(nodePath) {
-				const { test } = nodePath.node;
-				if (
-					t.isMemberExpression(test) &&
-					!test.computed &&
-					t.isIdentifier(test.object, { name: "Math" }) &&
-					t.isIdentifier(test.property, { name: "clz32" })
-				)
-					nodePath.replaceWith(nodePath.node.consequent);
-			},
-			UnaryExpression(nodePath) {
-				const { node } = nodePath;
-				if (node.operator !== "typeof") return;
-				const argument = node.argument;
-				let value: string | undefined;
-				if (t.isIdentifier(argument)) {
-					if (!nodePath.scope.hasBinding(argument.name, true)) value = globals[argument.name];
-					// React's aliases are initialized from the global probes above.
-					else if (argument.name === "localPromise") value = "function";
-					else if (argument.name === "localSetImmediate") value = "undefined";
-				} else if (t.isMemberExpression(argument) && !argument.computed) {
-					if (
-						(t.isIdentifier(argument.object, { name: "Object" }) &&
-							t.isIdentifier(argument.property, { name: "is" })) ||
-						(t.isIdentifier(argument.object, { name: "performance" }) &&
-							t.isIdentifier(argument.property, { name: "now" })) ||
-						(t.isIdentifier(argument.object, { name: "window" }) &&
-							t.isIdentifier(argument.property, { name: "ErrorEvent" }))
-					)
-						value = "function";
-				}
-				if (value !== undefined) nodePath.replaceWith(t.stringLiteral(value));
-			},
-		},
-	};
-}
-
-/**
- * Build the one native Firefox 68 Dev entry. Bun bundles TS/JSX and dependencies;
+ * Build the one native Firefox 128 Dev entry. Bun bundles TS/JSX and dependencies;
  * Babel lowers only syntax outside that browser's boundary, without API injection.
  * Final filenames and manifest hashes describe the transformed bytes.
  */
@@ -227,20 +156,6 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 							build.onLoad({ filter: /.*/, namespace: "file" }, async ({ path: file }) => {
 								const source = await fs.readFile(file);
 								inputs.set(file, source);
-								if (
-									/[\\/]node_modules[\\/](?:react|react-dom|scheduler)[\\/]cjs[\\/].+\.production\.js$/.test(
-										file,
-									)
-								) {
-									const specialized = await transformAsync(source.toString("utf8"), {
-										filename: file,
-										babelrc: false,
-										configFile: false,
-										plugins: [nativeReactFeatures],
-									});
-									if (!specialized?.code) throw new Error(`React native specialization failed: ${file}`);
-									return { contents: specialized.code, loader: "js" };
-								}
 								return undefined;
 							});
 						},
@@ -273,7 +188,7 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 							[
 								Bun.resolveSync("@babel/preset-env", repoRoot),
 								{
-									targets: { firefox: "68" },
+									targets: { firefox: "128" },
 									modules: false,
 									bugfixes: true,
 									useBuiltIns: false,
@@ -282,9 +197,9 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 						],
 					}),
 				);
-				if (!transformed?.code) throw new Error("Dev workbench Firefox 68 transformation produced no script");
-				// Script mode rejects module chunks and syntax beyond the baseline generation.
-				parse(transformed.code, { ecmaVersion: 2019, sourceType: "script" });
+				if (!transformed?.code) throw new Error("Dev workbench Firefox 128 transformation produced no script");
+				// Script mode rejects module chunks; Babel owns browser-specific syntax lowering.
+				parse(transformed.code, { ecmaVersion: 2024, sourceType: "script" });
 				bytes = new TextEncoder().encode(`${transformed.code}\n`);
 				name = `/dev-workbench-${Bun.SHA256.hash(bytes, "hex")}.js`;
 				scriptPath = name;

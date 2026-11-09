@@ -87,6 +87,8 @@ export interface CollabHostPort {
 	getContextUsage(): { tokens: number; contextWindow: number };
 	showStatus(message: string, options?: { dim?: boolean }): void;
 	onCollabStatus?(status: { role: "host"; participantCount: number } | null): void;
+	/** Optional roster from the owning room when this host only projects a local view. */
+	getParticipants?(): CollabParticipant[] | undefined;
 	onPendingMessagesChanged?(): void;
 }
 
@@ -452,10 +454,17 @@ export class CollabHost {
 
 	get participants(): CollabParticipant[] {
 		const list: CollabParticipant[] = [{ name: collabDisplayName(this.#ctx), role: "host" }];
-		for (const peer of this.#peers.values()) {
+		for (const [peerId, peer] of this.#peers) {
+			// Trusted local workbench connections mirror the host, not another person.
+			if (this.#localPeers.has(peerId)) continue;
 			list.push({ name: peer.name, role: "guest", readOnly: peer.canWrite ? undefined : true });
 		}
 		return list;
+	}
+
+	/** Re-read the owning room's roster without changing connections or permissions. */
+	refreshParticipants(): void {
+		this.#scheduleStateBroadcast();
 	}
 
 	/**
@@ -1356,7 +1365,7 @@ export class CollabHost {
 				contextWindow: breakdown.contextWindow,
 				percent: breakdown.contextWindow > 0 ? (tokens / breakdown.contextWindow) * 100 : 0,
 			},
-			participants: this.participants,
+			participants: this.#ctx.getParticipants?.() ?? this.participants,
 		};
 	}
 
@@ -1553,6 +1562,10 @@ export class CollabHost {
 	}
 
 	#updateStatusSegment(): void {
-		this.#ctx.onCollabStatus?.({ role: "host", participantCount: this.#peers.size + 1 });
+		let participantCount = 1;
+		for (const peerId of this.#peers.keys()) {
+			if (!this.#localPeers.has(peerId)) participantCount++;
+		}
+		this.#ctx.onCollabStatus?.({ role: "host", participantCount });
 	}
 }

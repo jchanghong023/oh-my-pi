@@ -97,6 +97,98 @@ test("source omp dev serves a durable empty workbench without model or Git side 
 	expect(process.child.exitCode).toBeNull();
 }, 180_000);
 
+test("failed Next diagnostics reach the native repair turn without approving or retrying the stage", async () => {
+	const repairMarker = "DEV_VALIDATION_REPAIR";
+	const repairedProposal =
+		"## Why\nProvide deterministic greeting behavior so callers can normalize outer whitespace and empty names consistently without losing internal whitespace.\n\n## What Changes\nAdd greet(name).\n";
+	let observedDiagnostic = "";
+	let repairWrites = 0;
+	await using fixture = await WorkbenchFixture.create({
+		reply(request) {
+			const payload = rolePayload(request);
+			if (payload?.specDrivenRole !== "requirements") return respond(request);
+			const repairIndex = request.messages.findLastIndex(
+				message => message.role === "user" && contentText(message.content).includes(repairMarker),
+			);
+			if (repairIndex < 0) return respond(request, { fileFailure: { role: "requirements", kind: "malformed" } });
+			for (const message of request.messages) {
+				try {
+					const facts: unknown = JSON.parse(contentText(message.content));
+					if (isRecord(facts) && "approvedVersionsMatch" in facts && typeof facts.error === "string")
+						observedDiagnostic = facts.error;
+				} catch {
+					// Ordinary messages are not lifecycle facts.
+				}
+			}
+			if (!observedDiagnostic) return { text: "No host validation diagnostic is available." };
+			if (
+				request.messages
+					.slice(repairIndex + 1)
+					.some(message =>
+						message.tool_calls?.some(
+							call =>
+								isRecord(call) &&
+								isRecord(call.function) &&
+								typeof call.function.name === "string" &&
+								call.function.name.replace(/^_/u, "") === "write",
+						),
+					)
+			)
+				return { text: "The proposal is corrected; human Next is still required." };
+			const write = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === "write")?.function;
+			const outputPaths = payload.input.outputPaths;
+			if (!write || !Array.isArray(outputPaths) || typeof outputPaths[0] !== "string")
+				throw new Error("Native repair requires the actual write tool and proposal path");
+			repairWrites++;
+			return {
+				tool: {
+					name: write.name,
+					args: { i: "Correcting invalid proposal", path: outputPaths[0], content: repairedProposal },
+				},
+			};
+		},
+	});
+	owned.add(fixture);
+	await fixture.start();
+	const initial = await fixture.imported();
+	const id = initial.record.requirementId;
+	await fixture.act(initial, { kind: "next" });
+	const generated = await fixture.stage(id, "requirements");
+	const requestsBeforeNext = fixture.provider.requests.length;
+	const failed = await fixture.response("action-preview", {
+		requirementId: id,
+		expectedRecordVersion: generated.recordVersion,
+		expectedStage: generated.record.stage,
+		intent: { kind: "next" },
+		gitTarget: null,
+	});
+	expect(failed.status).toBe(409);
+	const diagnostic = (await failed.json()) as { error: string };
+	expect(diagnostic.error).toContain("Why");
+	const rejected = await fixture.get(id);
+	expect(rejected.runtime?.blockedReason).toBe(diagnostic.error);
+	expect(rejected.record.decisions).toEqual(generated.record.decisions);
+	expect(fixture.provider.requests).toHaveLength(requestsBeforeNext);
+	const recipient = rejected.runtime?.recipient;
+	if (!recipient || !rejected.runtime) throw new Error("Missing native repair recipient");
+	const prepared = await fixture.request<{ requestId: string }>("input-preview", {
+		target: { requirementId: id, sessionId: recipient.sessionId, generation: rejected.runtime.generation },
+	});
+	await fixture.request("input", {
+		requestId: prepared.requestId,
+		text: `${repairMarker} 请停止访谈，根据刚才的校验错误修正需求文件。`,
+	});
+	const repaired = await fixture.stage(id, "requirements");
+	expect(observedDiagnostic).toBe(diagnostic.error);
+	expect(repairWrites).toBe(1);
+	await fixture.preview(repaired, { kind: "next" });
+	const checked = await fixture.get(id);
+	expect(checked.runtime?.blockedReason).toBeUndefined();
+	expect(checked.record.stage).toBe("requirements");
+	expect(checked.record.decisions).toEqual(generated.record.decisions);
+	expect(fixture.provider.failures).toEqual([]);
+}, 180_000);
+
 test("ordinary TUI remains unchanged before Dev and restores original model, image input and queue only after Dev exit", async () => {
 	if (!tuiTest) throw new Error("tui-test is required for /dev public acceptance");
 	const first = "ORDINARY_IMAGE_AFTER_DEV";

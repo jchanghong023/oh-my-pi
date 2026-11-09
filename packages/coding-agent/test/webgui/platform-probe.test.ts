@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-	assertFirefox68Identity,
+	assertFirefoxIdentity,
 	assertPhysicalAndroid,
 	PlatformPrerequisiteError,
 	selectAndroidSerial,
@@ -32,11 +32,36 @@ const androidAgent =
 	"Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 Chrome/130.0.0.0 Mobile Safari/537.36";
 
 describe("opt-in actual-platform prerequisite boundaries", () => {
-	test("requires both Firefox capability and observed UA major 68", () => {
-		expect(() => assertFirefox68Identity("68.12.0", "Mozilla/5.0 Firefox/68.0")).not.toThrow();
-		expectPrerequisite("firefox68-version", () => assertFirefox68Identity("128.0", "Mozilla/5.0 Firefox/68.0"));
-		expectPrerequisite("firefox68-version", () => assertFirefox68Identity("68.0", "Mozilla/5.0 Firefox/128.0"));
-		expectPrerequisite("firefox68-version", () => assertFirefox68Identity("68.0", "Mozilla/5.0 Chrome/68.0"));
+	test("returns the verified Firefox 128 identity with matching capability and observed UA majors", () => {
+		const userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0";
+		expect(assertFirefoxIdentity("firefox", "128.14.0", userAgent)).toEqual({
+			browserName: "firefox",
+			browserVersion: "128.14.0",
+			userAgent,
+			major: 128,
+		});
+	});
+
+	test("admits later Firefox releases only when the observed UA major agrees", () => {
+		const userAgent = "Mozilla/5.0 Firefox/140.0";
+		expect(assertFirefoxIdentity("Firefox", "140.4.0", userAgent)).toEqual({
+			browserName: "firefox",
+			browserVersion: "140.4.0",
+			userAgent,
+			major: 140,
+		});
+	});
+
+	test("rejects Firefox below 128, mismatched versions, and non-Firefox identities", () => {
+		for (const [browserName, version, userAgent] of [
+			["firefox", "127.0", "Mozilla/5.0 Firefox/127.0"],
+			["firefox", "140.0", "Mozilla/5.0 Firefox/128.0"],
+			["chrome", "128.0", "Mozilla/5.0 Firefox/128.0"],
+			["firefox", "128.0", "Mozilla/5.0 Chrome/128.0"],
+			["firefox", "", "Mozilla/5.0 Firefox/128.0"],
+		] as const) {
+			expectPrerequisite("firefox-version", () => assertFirefoxIdentity(browserName, version, userAgent));
+		}
 	});
 
 	test("does not treat missing, unauthorized, or ambiguous ADB devices as a pass", () => {

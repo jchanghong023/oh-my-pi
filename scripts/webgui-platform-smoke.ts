@@ -1,15 +1,13 @@
 #!/usr/bin/env bun
 // Opt-in only: attach to an already-running OMP URL; never build, download, or start OMP.
-// Firefox uses native Marionette and an isolated temporary profile. Android requires a
+// Firefox uses Selenium/geckodriver and an isolated temporary profile. Android requires a
 // physical USB-debuggable device and an isolated CDP browser context (no emulation).
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createServer } from "node:net";
 import type { Browser, BrowserContext } from "puppeteer-core";
 import { loadPuppeteer } from "../packages/coding-agent/src/tools/browser/launch";
-import { gracefulKillTreeOnce } from "../packages/coding-agent/src/tools/browser/attach";
-import { connectFirefox68Marionette, type Firefox68Marionette } from "./webgui-firefox68-marionette";
+import { connectFirefoxSelenium, type FirefoxSelenium } from "./webgui-firefox-selenium";
 
 export class PlatformPrerequisiteError extends Error {
 	constructor(
@@ -25,10 +23,28 @@ function prerequisite(code: string, message: string): never {
 	throw new PlatformPrerequisiteError(code, message);
 }
 
-export function assertFirefox68Identity(version: string, userAgent: string): void {
-	if (!/^68(?:\.|$)/.test(version) || !/Firefox\/68(?:\.|\s|$)/.test(userAgent)) {
-		prerequisite("firefox68-version", `Actual Firefox 68 required; WebDriver=${version}, userAgent=${userAgent}`);
+export interface FirefoxIdentity {
+	browserName: "firefox";
+	browserVersion: string;
+	userAgent: string;
+	major: number;
+}
+
+export function assertFirefoxIdentity(browserName: string, version: string, userAgent: string): FirefoxIdentity {
+	const major = Number(/^(\d+)(?:\.|$)/.exec(version)?.[1]);
+	const userAgentMajor = Number(/(?:^|\s)Firefox\/(\d+)(?:\.|\s|$)/.exec(userAgent)?.[1]);
+	if (
+		browserName.toLowerCase() !== "firefox" ||
+		!Number.isSafeInteger(major) ||
+		major < 128 ||
+		major !== userAgentMajor
+	) {
+		prerequisite(
+			"firefox-version",
+			`Actual Firefox >=128 with matching WebDriver and user-agent majors required; browser=${browserName}, WebDriver=${version}, userAgent=${userAgent}`,
+		);
 	}
+	return { browserName: "firefox", browserVersion: version, userAgent, major };
 }
 
 export interface AndroidDeviceIdentity {
@@ -117,22 +133,6 @@ async function waitUntil<T>(read: () => Promise<T>, ready: (value: T) => boolean
 	throw new Error(`Timed out waiting for ${description}`);
 }
 
-async function freePort(): Promise<number> {
-	const { promise, resolve, reject } = Promise.withResolvers<number>();
-	const server = createServer();
-	server.once("error", reject);
-	server.listen(0, "127.0.0.1", () => {
-		const address = server.address();
-		if (!address || typeof address === "string") {
-			server.close();
-			reject(new Error("No local TCP port allocated"));
-			return;
-		}
-		server.close(error => (error ? reject(error) : resolve(address.port)));
-	});
-	return promise;
-}
-
 interface PageSnapshot {
 	url: string;
 	title: string;
@@ -143,7 +143,6 @@ interface PageSnapshot {
 	draft: string;
 }
 
-// ES5 source is intentional: these expressions also run in actual Firefox 68.
 function visibleExpression(selector: string): string {
 	return `(function(){var e=document.querySelector(${JSON.stringify(selector)}); if(!e)return false;var r=e.getBoundingClientRect();var s=getComputedStyle(e);return r.width>0&&r.height>0&&s.visibility!=='hidden'&&s.display!=='none';})()`;
 }
@@ -186,7 +185,7 @@ export interface DevelopmentBrowser {
 	pages(): Promise<DevelopmentPage[]>;
 }
 
-export interface Firefox68Options {
+export interface FirefoxOptions {
 	firefox?: string;
 	downloadDirectory?: string;
 	environment?: Record<string, string>;
@@ -195,7 +194,7 @@ export interface Firefox68Options {
 }
 
 interface ProbeOptions {
-	platform: "firefox68" | "android";
+	platform: "firefox" | "android";
 	url: string;
 	navigation: string;
 	destination: string;
@@ -274,8 +273,8 @@ async function exercise(page: ProbePage, options: ProbeOptions): Promise<object>
 	};
 }
 
-export async function withFirefox68Browser<T>(
-	options: Firefox68Options,
+export async function withFirefoxBrowser<T>(
+	options: FirefoxOptions,
 	run: (browser: DevelopmentBrowser) => Promise<T>,
 ): Promise<T> {
 	const binary = options.firefox;
@@ -287,17 +286,14 @@ export async function withFirefox68Browser<T>(
 		))
 	)
 		prerequisite(
-			"firefox68-binary",
-			"Pass --firefox with an installed Firefox 68 executable; this probe never downloads browsers",
+			"firefox-binary",
+			"Pass --firefox with an installed Firefox >=128 executable; this probe never downloads browsers",
 		);
-	const port = await freePort();
-	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-firefox68-"));
-	let child: Bun.Subprocess<"ignore", "ignore", "pipe"> | undefined;
-	let client: Firefox68Marionette | undefined;
+	const profile = await fs.mkdtemp(path.join(os.tmpdir(), "omp-firefox-"));
+	let client: FirefoxSelenium | undefined;
 	let sessionId: string | undefined;
 	try {
 		const preferences: Record<string, string | number | boolean> = {
-			"marionette.port": port,
 			"browser.shell.checkDefaultBrowser": false,
 			"browser.startup.page": 0,
 			"browser.startup.homepage_override.mstone": "ignore",
@@ -315,81 +311,42 @@ export async function withFirefox68Browser<T>(
 					}
 				: {}),
 		};
-		await fs.writeFile(
-			path.join(profile, "user.js"),
-			Object.entries(preferences)
-				.map(([key, value]) => `user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`)
-				.join("\n"),
-		);
-		try {
-			child = Bun.spawn(
-				[
-					binary,
-					"-no-remote",
-					"-marionette",
-					"-profile",
-					profile,
-					...(options.headless ? ["-headless"] : []),
-					"about:blank",
-				],
-				{
-					stdin: "ignore",
-					stdout: "ignore",
-					stderr: "pipe",
-					...(options.environment ? { env: options.environment } : {}),
-				},
-			);
-		} catch (error) {
-			prerequisite("firefox68-binary", `Unable to start ${binary}: ${String(error)}`);
-		}
-		const firefox = child;
-		const diagnostics = new Response(firefox.stderr).text();
-		client = await waitUntil(
-			async () => {
-				if (firefox.exitCode !== null)
-					prerequisite(
-						"firefox-marionette-session",
-						`Firefox exited before Marionette became ready: ${await diagnostics}`,
-					);
-				try {
-					return await connectFirefox68Marionette(port, timeout);
-				} catch (error) {
-					if (error instanceof Error && "code" in error && error.code === "ECONNREFUSED") return undefined;
-					throw error;
-				}
-			},
-			value => value !== undefined,
-			"isolated Firefox Marionette readiness",
-		);
-		if (!client) throw new Error("Firefox Marionette did not connect");
-		const marionette = client;
-		const command = <TValue>(name: string, parameters?: object) => marionette.command<TValue>(name, parameters);
+		client = connectFirefoxSelenium(timeout, options.environment);
+		const selenium = client;
+		const command = <TValue>(name: string, parameters?: object) => selenium.command<TValue>(name, parameters);
 		const session = await command<{
 			sessionId: string;
 			capabilities: { browserName: string; browserVersion: string; platformName: string };
 		}>("WebDriver:NewSession", {
+			firefox: binary,
+			profile,
+			headless: options.headless ?? false,
+			preferences,
+			environment: options.environment,
 			acceptInsecureCerts: false,
 			timeouts: { implicit: 0, pageLoad: timeout, script: timeout },
 		});
 		sessionId = session.sessionId;
-		if (typeof sessionId !== "string" || !sessionId) throw new Error("Firefox Marionette returned no session ID");
+		if (typeof sessionId !== "string" || !sessionId) throw new Error("Selenium returned no Firefox session ID");
 		if (options.viewport) await command("WebDriver:SetWindowRect", options.viewport);
 		const evaluate = <TValue>(expression: string) =>
-			command<TValue>("WebDriver:ExecuteScript", { script: `return ${expression};`, args: [], newSandbox: true });
+			command<TValue>("WebDriver:ExecuteScript", { script: `return ${expression};`, args: [] });
 		const userAgent = await evaluate<string>("navigator.userAgent");
-		if (session.capabilities.browserName.toLowerCase() !== "firefox")
-			prerequisite("firefox68-version", "Marionette did not launch Firefox");
-		assertFirefox68Identity(session.capabilities.browserVersion, userAgent);
+		const identity = assertFirefoxIdentity(
+			session.capabilities.browserName,
+			session.capabilities.browserVersion,
+			userAgent,
+		);
 		const element = async (selector: string) => {
 			const result = await command<Record<string, string>>("WebDriver:FindElement", {
 				using: "css selector",
 				value: selector,
 			});
 			const id = result["element-6066-11e4-a52e-4f735466cecf"];
-			if (!id) throw new Error(`Marionette returned no element for ${selector}`);
+			if (!id) throw new Error(`Selenium returned no element for ${selector}`);
 			return id;
 		};
-		// Marionette has one selected window per session. Keep each page operation
+		// WebDriver has one selected window per session. Keep each page operation
 		// (selection, element lookup and native action) atomic across parallel pages.
 		let pendingOperation: Promise<void> = Promise.resolve();
 		const exclusive = <TValue>(operation: () => Promise<TValue>): Promise<TValue> => {
@@ -402,34 +359,28 @@ export async function withFirefox68Browser<T>(
 		};
 		const windowHandle = (value: unknown): string => {
 			if (typeof value !== "string" || !value.trim())
-				throw new Error(`Marionette returned an invalid window handle: ${JSON.stringify(value)}`);
+				throw new Error(`Selenium returned an invalid window handle: ${JSON.stringify(value)}`);
 			return value;
 		};
 		const windowHandles = async (): Promise<string[]> => {
 			const values = await command<unknown>("WebDriver:GetWindowHandles");
-			if (!Array.isArray(values)) throw new Error("Marionette returned an invalid window handle list");
+			if (!Array.isArray(values)) throw new Error("Selenium returned an invalid window handle list");
 			const handles = values.map(windowHandle);
-			if (new Set(handles).size !== handles.length) throw new Error("Marionette returned duplicate window handles");
+			if (new Set(handles).size !== handles.length) throw new Error("Selenium returned duplicate window handles");
 			return handles;
 		};
 		const initial = windowHandle(await command<unknown>("WebDriver:GetWindowHandle"));
 		const ownedHandles = new Set(await windowHandles());
-		if (!ownedHandles.has(initial)) throw new Error("Marionette's initial window is not in its session handle list");
+		if (!ownedHandles.has(initial)) throw new Error("Selenium's initial window is not in its session handle list");
 		const select = async (handle: string) => {
 			if (!ownedHandles.has(handle)) throw new Error(`Firefox page is no longer owned: ${handle}`);
-			// Firefox 68's native command takes `name`, not modern geckodriver's
-			// `handle`. These are actual handles returned by this owned session.
-			await command("WebDriver:SwitchToWindow", { name: handle });
+			await command("WebDriver:SwitchToWindow", { handle });
 			if (windowHandle(await command<unknown>("WebDriver:GetWindowHandle")) !== handle)
-				throw new Error(`Marionette did not switch to Firefox window ${handle}`);
+				throw new Error(`Selenium did not switch to Firefox window ${handle}`);
 		};
 		type NativeKeyAction = { type: "keyDown" | "keyUp"; value: string } | { type: "pause"; duration: number };
-		// Firefox 68's ElementSendKeys loops synchronously over the entire string:
-		// Lexical cannot commit its first input before later characters arrive.
-		// Actions provide separate key events, explicit modifier release and a
-		// native timer tick for the editor's pending input/selection updates.
-		// Official 68 sources: testing/marionette/{event,action}.js at
-		// https://hg.mozilla.org/releases/mozilla-release/file/FIREFOX_68_0_2_RELEASE/
+		// Native Actions keep modifier release explicit and allow editor updates
+		// between input events; no application service calls or synthetic DOM input.
 		const nativeKeys = async (actions: NativeKeyAction[]) => {
 			if (!actions.length) return;
 			try {
@@ -528,7 +479,7 @@ export async function withFirefox68Browser<T>(
 							ArrowUp: "\uE013",
 						};
 						const value = keys[key];
-						if (!value) throw new Error(`Unsupported Marionette key ${key}`);
+						if (!value) throw new Error(`Unsupported Selenium key ${key}`);
 						await command("WebDriver:ElementClick", { id: await element(selector) });
 						await nativeKeys([
 							{ type: "keyDown", value },
@@ -585,7 +536,7 @@ export async function withFirefox68Browser<T>(
 					}),
 				screenshot: file =>
 					selected(async () => {
-						const image = await command<string>("WebDriver:TakeScreenshot", { full: false });
+						const image = await command<string>("WebDriver:TakeScreenshot");
 						await fs.writeFile(file, Buffer.from(image, "base64"));
 					}),
 				typeDraft: text => page.type(INPUT, text),
@@ -595,11 +546,11 @@ export async function withFirefox68Browser<T>(
 		};
 		return await run({
 			identity: {
+				...identity,
 				executable: binary,
-				automationProtocol: "marionette",
+				automationProtocol: "selenium-geckodriver",
 				capabilities: session.capabilities,
 				windowRect: await command("WebDriver:GetWindowRect"),
-				userAgent,
 				profile,
 				isolatedProfile: true,
 				...(options.downloadDirectory ? { downloadDirectory: options.downloadDirectory } : {}),
@@ -610,11 +561,10 @@ export async function withFirefox68Browser<T>(
 					const before = await windowHandles();
 					const opened = await command<{ handle: string; type: string }>("WebDriver:NewWindow", {
 						type: "tab",
-						focus: false,
 					});
 					const handle = windowHandle(opened.handle);
 					if (before.includes(handle) || !(await windowHandles()).includes(handle))
-						throw new Error(`Marionette did not create a new Firefox window with handle ${handle}`);
+						throw new Error(`Selenium did not create a new Firefox window with handle ${handle}`);
 					ownedHandles.add(handle);
 					await select(handle);
 					return makePage(handle);
@@ -626,18 +576,17 @@ export async function withFirefox68Browser<T>(
 		try {
 			if (sessionId && client) await client.command("WebDriver:DeleteSession");
 		} finally {
-			client?.close();
-			if (child) {
-				await gracefulKillTreeOnce(child.pid);
-				await child.exited;
+			try {
+				await client?.close();
+			} finally {
+				await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 			}
-			await fs.rm(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 		}
 	}
 }
 
 async function firefoxProbe(options: ProbeOptions): Promise<object> {
-	return withFirefox68Browser(options, async browser => ({
+	return withFirefoxBrowser(options, async browser => ({
 		...browser.identity,
 		profile: "temporary; removed after session",
 		...(await exercise(browser.page, options)),
@@ -802,15 +751,15 @@ function parseOptions(args: string[]): ProbeOptions {
 		if (!key || !allowed.has(key) || !value || value.startsWith("--"))
 			prerequisite(
 				"arguments",
-				"Use --platform firefox68|android --url DIRECT_OMP_URL --nav-selector CSS --nav-ready-selector CSS [--menu-selector CSS --session-selector CSS] [--firefox PATH] [--adb PATH --serial SERIAL --socket chrome_devtools_remote]",
+				"Use --platform firefox|android --url DIRECT_OMP_URL --nav-selector CSS --nav-ready-selector CSS [--menu-selector CSS --session-selector CSS] [--firefox PATH] [--adb PATH --serial SERIAL --socket chrome_devtools_remote]",
 			);
 		values.set(key, value);
 	}
 	const platform = values.get("platform");
-	if (platform !== "firefox68" && platform !== "android")
+	if (platform !== "firefox" && platform !== "android")
 		prerequisite(
 			"platform",
-			"Explicit --platform firefox68 or --platform android is required; this is never a Chromium mobile-emulation pass",
+			"Explicit --platform firefox or --platform android is required; this is never a Chromium mobile-emulation pass",
 		);
 	const navigation = values.get("nav-selector");
 	const destination = values.get("nav-ready-selector");
@@ -826,7 +775,7 @@ function parseOptions(args: string[]): ProbeOptions {
 		destination,
 		menu: values.get("menu-selector"),
 		session: values.get("session-selector"),
-		firefox: values.get("firefox") ?? process.env.FIREFOX68_EXECUTABLE,
+		firefox: values.get("firefox") ?? process.env.FIREFOX_EXECUTABLE,
 		adb: values.get("adb") ?? process.env.ADB_EXECUTABLE,
 		serial: values.get("serial") ?? process.env.ANDROID_SERIAL,
 		socket: values.get("socket") ?? "chrome_devtools_remote",
@@ -836,7 +785,7 @@ function parseOptions(args: string[]): ProbeOptions {
 if (import.meta.main) {
 	try {
 		const options = parseOptions(process.argv.slice(2));
-		const evidence = await (options.platform === "firefox68" ? firefoxProbe(options) : androidProbe(options));
+		const evidence = await (options.platform === "firefox" ? firefoxProbe(options) : androidProbe(options));
 		console.log(
 			JSON.stringify(
 				{
@@ -849,7 +798,7 @@ if (import.meta.main) {
 						"manual visual review",
 						"OS keyboard/IME",
 						"all business operations",
-						...(options.platform === "firefox68"
+						...(options.platform === "firefox"
 							? ["phone hardware", "pre-load browser error collection", "Firefox release channel"]
 							: ["soft keyboard/IME"]),
 					],

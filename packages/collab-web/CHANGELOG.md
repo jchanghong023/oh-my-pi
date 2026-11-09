@@ -9,7 +9,8 @@
 ### Changed
 
 - Show Dev requirements, stages, materials and shared chat in a compact dark workbench with a mobile materials/chat switch and a native-session model control.
-- Run the Dev workbench on Firefox 68 native browser capabilities with one embedded build, without runtime polyfills or old-browser layout fallbacks.
+- Build the Dev workbench for native Firefox 128 capabilities instead of Firefox 68, without overriding React's native microtask and error-reporting feature detection.
+- Open Dev requirement creation as a spacious full-page form without changing creation, Markdown import, or local-writing behavior.
 
 ### Fixed
 

@@ -669,7 +669,7 @@ export class SpecDrivenController {
 				execution: owned.stopping ? "stopping" : busy ? "running" : owned.execution,
 				recipient: owned.core.recipient() ?? null,
 				history: owned.core.recipient() ? "available" : owned.history,
-				blockedReason: owned.blockedReason,
+				blockedReason: owned.blockedReason ?? owned.core.status().blockedReason,
 			};
 		} else if (stored.record.lifecycle === "active" && stored.record.stage !== "business") {
 			runtime = {

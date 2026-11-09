@@ -2,7 +2,7 @@
 <!--
 Adapted for native OMP from ogulcancelik/pi-extensions/packages/pi-sketch/extensions/sketch.html
 https://github.com/ogulcancelik/pi-extensions
-Firefox 52 ESR-compatible standalone drawing UI; no remote assets.
+Firefox 128-compatible standalone drawing UI; no remote assets.
 
 MIT License
 
@@ -26,27 +26,30 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 -->
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OMP sketch</title>
+  <title>OMP 画布</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
     body {
       font-family: system-ui, -apple-system, sans-serif;
       background: #1a1a1a;
-      min-height: 100vh;
-      padding: 20px;
       color: #aaa;
-      text-align: center;
+      display: flex;
+      flex-direction: column;
     }
     .toolbar {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
       justify-content: center;
-      margin-bottom: 16px;
+      flex: none;
+      max-height: 40%;
+      overflow: auto;
+      padding: 4px;
       font-size: 14px;
     }
     .toolbar > * { margin: 4px 6px; }
@@ -87,11 +90,15 @@ SOFTWARE.
     }
     .color-btn:hover { opacity: 0.8; }
     .color-btn.active { border-color: #fff; }
-    .canvas-container { position: relative; display: inline-block; }
+    .viewport { position: relative; flex: 1; min-height: 0; overflow: hidden; touch-action: none; }
+    .canvas-container { position: absolute; transform-origin: 0 0; }
+    .viewport.pan { cursor: grab; }
+    .viewport.panning, .viewport.panning canvas { cursor: grabbing; }
+    .viewport.pan canvas { cursor: inherit; }
     canvas {
       display: block;
       background: #fff;
-      border-radius: 8px;
+      touch-action: none;
       cursor: crosshair;
       box-shadow: 0 4px 24px rgba(0,0,0,0.3);
     }
@@ -107,40 +114,52 @@ SOFTWARE.
       opacity: 0.7;
     }
     .resize-handle:hover { opacity: 1; }
-    .hint { color: #999; font-size: 13px; margin-top: 16px; }
-    kbd { background: #333; padding: 2px 6px; border-radius: 4px; font-family: inherit; }
-    #status { min-height: 24px; margin: 12px 0; }
+    .footer { flex: none; padding: 6px 12px; font-size: 12px; text-align: center; }
+    .hint { color: #999; }
+    kbd { background: #333; padding: 2px 4px; border-radius: 4px; font-family: inherit; }
+    #status { min-height: 18px; margin-top: 4px; }
+    #zoomLevel { min-width: 48px; text-align: center; font-variant-numeric: tabular-nums; }
     #status[data-state="error"] { color: #fca5a5; }
     #status[data-state="success"] { color: #86efac; }
   </style>
 </head>
 <body>
   <div class="toolbar">
-    <div class="colors" aria-label="Ink color">
-      <button class="color-btn active" data-color="#000000" style="background: #000;" title="Black" aria-label="Black"></button>
-      <button class="color-btn" data-color="#ef4444" style="background: #ef4444;" title="Red" aria-label="Red"></button>
-      <button class="color-btn" data-color="#22c55e" style="background: #22c55e;" title="Green" aria-label="Green"></button>
-      <button class="color-btn" data-color="#3b82f6" style="background: #3b82f6;" title="Blue" aria-label="Blue"></button>
-      <button class="color-btn" data-color="#ffffff" style="background: #fff;" title="White (eraser)" aria-label="White eraser"></button>
+    <div class="colors" aria-label="画笔颜色">
+      <button class="color-btn active" data-color="#000000" style="background: #000;" title="黑色" aria-label="黑色"></button>
+      <button class="color-btn" data-color="#ef4444" style="background: #ef4444;" title="红色" aria-label="红色"></button>
+      <button class="color-btn" data-color="#22c55e" style="background: #22c55e;" title="绿色" aria-label="绿色"></button>
+      <button class="color-btn" data-color="#3b82f6" style="background: #3b82f6;" title="蓝色" aria-label="蓝色"></button>
+      <button class="color-btn" data-color="#ffffff" style="background: #fff;" title="白色（橡皮擦）" aria-label="白色橡皮擦"></button>
     </div>
-    <div class="brush-sizes" aria-label="Brush size">
-      <button class="brush-size" data-size="2" title="Small" aria-label="Small brush"><span class="dot" style="width: 4px; height: 4px;"></span></button>
-      <button class="brush-size active" data-size="4" title="Medium" aria-label="Medium brush"><span class="dot" style="width: 8px; height: 8px;"></span></button>
-      <button class="brush-size" data-size="8" title="Large" aria-label="Large brush"><span class="dot" style="width: 14px; height: 14px;"></span></button>
+    <div class="brush-sizes" aria-label="画笔粗细">
+      <button class="brush-size" data-size="2" title="细画笔" aria-label="细画笔"><span class="dot" style="width: 4px; height: 4px;"></span></button>
+      <button class="brush-size active" data-size="4" title="中画笔" aria-label="中画笔"><span class="dot" style="width: 8px; height: 8px;"></span></button>
+      <button class="brush-size" data-size="8" title="粗画笔" aria-label="粗画笔"><span class="dot" style="width: 14px; height: 14px;"></span></button>
     </div>
-    <button id="clearButton">Clear</button>
-    <button id="undoButton">Undo</button>
-    <button class="primary" id="sendButton">Attach sketch</button>
-    <button id="cancelButton">Cancel</button>
+    <button id="panButton" aria-pressed="false" title="拖动以平移视野，不绘制笔迹">平移</button>
+    <button id="zoomOutButton" aria-label="缩小">−</button>
+    <output id="zoomLevel" aria-label="缩放比例">100%</output>
+    <button id="zoomInButton" aria-label="放大">+</button>
+    <button id="actualSizeButton" title="按原始比例显示">100%</button>
+    <button id="fitButton">适应窗口</button>
+    <button id="clearButton">清空</button>
+    <button id="undoButton">撤销</button>
+    <button class="primary" id="sendButton">添加为附件</button>
+    <button id="cancelButton">取消</button>
   </div>
-  <div class="canvas-container">
-    <canvas id="canvas" width="1000" height="600" aria-label="Sketch canvas"></canvas>
-    <div class="resize-handle" id="resizeHandle" title="Drag to resize"></div>
-  </div>
-  <div class="hint">
-    <kbd>Ctrl+V</kbd> paste image · <kbd>Enter</kbd> attach · <kbd>Esc</kbd> cancel · <kbd>C</kbd> clear · <kbd>Z</kbd> undo · <kbd>1-3</kbd> brush size
-  </div>
-  <div id="status" role="status" aria-live="polite" data-state="ready">Draw or paste a screenshot. Attaching does not send a message.</div>
+  <main class="viewport" id="viewport" aria-label="绘图工作区">
+    <div class="canvas-container" id="canvasContainer">
+      <canvas id="canvas" width="1000" height="600" aria-label="绘图画布"></canvas>
+      <div class="resize-handle" id="resizeHandle" title="拖动以调整图像尺寸"></div>
+    </div>
+  </main>
+  <footer class="footer">
+    <div class="hint">
+      滚轮：缩放 · <kbd>空格</kbd>＋拖动／中键拖动：平移 · <kbd>Ctrl+V</kbd> 粘贴 · <kbd>Enter</kbd> 添加附件 · <kbd>Esc</kbd> 取消 · <kbd>C</kbd> 清空 · <kbd>Z</kbd> 撤销 · <kbd>1-3</kbd> 画笔粗细
+    </div>
+    <div id="status" role="status" aria-live="polite" data-state="ready">可直接绘图或粘贴截图。添加附件不会自动发送消息。</div>
+  </footer>
   <script>
     (function () {
       'use strict';
@@ -149,6 +168,21 @@ SOFTWARE.
       var status = document.getElementById('status');
       var sendButton = document.getElementById('sendButton');
       var cancelButton = document.getElementById('cancelButton');
+      const viewport = document.getElementById('viewport');
+      const container = document.getElementById('canvasContainer');
+      const panButton = document.getElementById('panButton');
+      const zoomLevel = document.getElementById('zoomLevel');
+      const initialWidth = Math.max(1, viewport.clientWidth);
+      const initialHeight = Math.max(1, viewport.clientHeight);
+      let zoom = 1;
+      let offsetX = 0;
+      let offsetY = 0;
+      let panMode = false;
+      let spaceHeld = false;
+      let pointerId = null;
+      let panning = false;
+      let panX = 0;
+      let panY = 0;
       var brushSize = 4;
       var brushColor = '#000000';
       var drawing = false;
@@ -171,6 +205,53 @@ SOFTWARE.
 
       function busy() { return pending || finished || restoring; }
 
+      function updateView() {
+        container.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${zoom})`;
+        zoomLevel.textContent = `${Math.round(zoom * 100)}%`;
+        viewport.classList.toggle('pan', panMode || spaceHeld);
+        viewport.classList.toggle('panning', panning);
+        panButton.setAttribute('aria-pressed', String(panMode));
+      }
+
+      function zoomAt(value, x, y) {
+        if (busy() || resizing || pointerId !== null) return;
+        const next = Math.max(0.1, Math.min(8, value));
+        offsetX = x - (x - offsetX) * next / zoom;
+        offsetY = y - (y - offsetY) * next / zoom;
+        zoom = next;
+        updateView();
+      }
+
+      function fitCanvas() {
+        zoom = Math.max(0.1, Math.min(8, viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height));
+        offsetX = (viewport.clientWidth - canvas.width * zoom) / 2;
+        offsetY = (viewport.clientHeight - canvas.height * zoom) / 2;
+        updateView();
+      }
+
+      viewport.addEventListener('wheel', function (event) {
+        event.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewport.clientHeight : 1);
+        zoomAt(zoom * Math.exp(-delta * 0.0015), event.clientX - rect.left, event.clientY - rect.top);
+      }, { passive: false });
+      document.getElementById('zoomInButton').addEventListener('click', function () {
+        zoomAt(zoom * 1.25, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('zoomOutButton').addEventListener('click', function () {
+        zoomAt(zoom / 1.25, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('actualSizeButton').addEventListener('click', function () {
+        zoomAt(1, viewport.clientWidth / 2, viewport.clientHeight / 2);
+      });
+      document.getElementById('fitButton').addEventListener('click', function () {
+        if (!busy() && !resizing && pointerId === null) fitCanvas();
+      });
+      panButton.addEventListener('click', function () {
+        panMode = !panMode;
+        updateView();
+      });
+
       function whiteBackground() {
         ctx.fillStyle = '#fff';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -191,10 +272,11 @@ SOFTWARE.
         if (busy() || resizing) return;
         pasteGeneration++;
         drawing = false;
-        canvas.width = DEFAULT_WIDTH;
-        canvas.height = DEFAULT_HEIGHT;
+        canvas.width = initialWidth;
+        canvas.height = initialHeight;
         whiteBackground();
         saveState();
+        fitCanvas();
       }
 
       function undo() {
@@ -210,10 +292,11 @@ SOFTWARE.
           ctx.drawImage(image, 0, 0);
           states.pop();
           restoring = false;
+          fitCanvas();
         };
         image.onerror = function () {
           restoring = false;
-          setStatus('error', 'Undo could not restore the image. Your drawing is unchanged.');
+          setStatus('error', '撤销时无法恢复图像。当前绘图保持不变。');
         };
         image.src = previous.data;
       }
@@ -226,19 +309,39 @@ SOFTWARE.
         };
       }
 
-      canvas.addEventListener('mousedown', function (event) {
-        if (event.button !== 0 || busy() || resizing) return;
+      viewport.addEventListener('pointerdown', function (event) {
+        if (busy() || resizing || pointerId !== null || (event.button !== 0 && event.button !== 1)) return;
+        const shouldPan = event.button === 1 || panMode || spaceHeld;
+        if (!shouldPan && event.target !== canvas) return;
         event.preventDefault();
-        drawing = true;
-        var pos = getPos(event);
-        lastX = pos.x;
-        lastY = pos.y;
-        ctx.beginPath();
-        ctx.arc(pos.x, pos.y, brushSize / 2, 0, Math.PI * 2);
-        ctx.fillStyle = brushColor;
-        ctx.fill();
+        pointerId = event.pointerId;
+        viewport.setPointerCapture(pointerId);
+        panning = shouldPan;
+        if (panning) {
+          panX = event.clientX;
+          panY = event.clientY;
+          updateView();
+        } else {
+          drawing = true;
+          var pos = getPos(event);
+          lastX = pos.x;
+          lastY = pos.y;
+          ctx.beginPath();
+          ctx.arc(pos.x, pos.y, brushSize / 2, 0, Math.PI * 2);
+          ctx.fillStyle = brushColor;
+          ctx.fill();
+        }
       });
-      canvas.addEventListener('mousemove', function (event) {
+      viewport.addEventListener('pointermove', function (event) {
+        if (event.pointerId !== pointerId) return;
+        if (panning) {
+          offsetX += event.clientX - panX;
+          offsetY += event.clientY - panY;
+          panX = event.clientX;
+          panY = event.clientY;
+          updateView();
+          return;
+        }
         if (!drawing) return;
         var pos = getPos(event);
         ctx.beginPath();
@@ -252,8 +355,18 @@ SOFTWARE.
         lastX = pos.x;
         lastY = pos.y;
       });
-      document.addEventListener('mouseup', finishStroke);
-      canvas.addEventListener('mouseleave', finishStroke);
+      function finishPointer(event) {
+        if (event.pointerId !== pointerId) return;
+        finishStroke();
+        const capturedId = pointerId;
+        pointerId = null;
+        panning = false;
+        if (viewport.hasPointerCapture(capturedId)) viewport.releasePointerCapture(capturedId);
+        updateView();
+      }
+      viewport.addEventListener('pointerup', finishPointer);
+      viewport.addEventListener('pointercancel', finishPointer);
+      viewport.addEventListener('lostpointercapture', finishPointer);
 
       function selectButton(selector, selected) {
         var buttons = document.querySelectorAll(selector);
@@ -279,30 +392,30 @@ SOFTWARE.
         pending = true;
         sendButton.disabled = true;
         cancelButton.disabled = true;
-        setStatus('pending', action === 'submit' ? 'Attaching sketch…' : 'Cancelling…');
+        setStatus('pending', action === 'submit' ? '正在添加绘图附件…' : '正在取消…');
         var xhr = new XMLHttpRequest();
         function failed(message) {
           pending = false;
           sendButton.disabled = false;
           cancelButton.disabled = false;
-          setStatus('error', message + ' Your drawing is still here; try again.');
+          setStatus('error', message + ' 绘图已保留，请重试。');
         }
         xhr.open('POST', endpoint + action, true);
         xhr.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
         xhr.onload = function () {
           if (xhr.status !== 200) {
-            failed(xhr.responseText || 'The sketch could not be attached.');
+            failed(xhr.responseText || '无法添加绘图附件。');
             return;
           }
           finished = true;
           pending = false;
           setStatus('success', action === 'submit'
-            ? 'Sketch attached. Return to OMP to add text and send the message. You can close this tab.'
-            : 'Sketch cancelled. You can close this tab.');
+            ? '绘图已添加为附件。请返回 OMP 补充文字并手动发送消息。可以关闭此标签页。'
+            : '已取消绘图。可以关闭此标签页。');
           window.close();
         };
-        xhr.onerror = function () { failed('Could not reach OMP.'); };
-        xhr.onabort = function () { failed('The request was interrupted.'); };
+        xhr.onerror = function () { failed('无法连接 OMP。'); };
+        xhr.onabort = function () { failed('请求已中断。'); };
         xhr.send(body);
       }
       function send() {
@@ -315,7 +428,7 @@ SOFTWARE.
           pending = false;
           sendButton.disabled = false;
           cancelButton.disabled = false;
-          setStatus('error', 'Could not attach the sketch. Your drawing is still here; try again.');
+          setStatus('error', '无法添加绘图附件。绘图已保留，请重试。');
         }
       }
       function cancel() {
@@ -331,6 +444,12 @@ SOFTWARE.
 
       document.addEventListener('keydown', function (event) {
         var key = (event.key || '').toLowerCase();
+        if (key === ' ' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          spaceHeld = true;
+          updateView();
+          return;
+        }
         if (key === 'enter') { event.preventDefault(); send(); }
         else if (key === 'escape' || key === 'esc') { event.preventDefault(); cancel(); }
         else if (event.ctrlKey || event.metaKey || event.altKey) return;
@@ -339,6 +458,17 @@ SOFTWARE.
         else if (key === '1') document.querySelector('[data-size="2"]').click();
         else if (key === '2') document.querySelector('[data-size="4"]').click();
         else if (key === '3') document.querySelector('[data-size="8"]').click();
+      });
+      document.addEventListener('keyup', function (event) {
+        if (event.key !== ' ') return;
+        event.preventDefault();
+        spaceHeld = false;
+        updateView();
+      });
+      window.addEventListener('blur', function () {
+        spaceHeld = false;
+        if (pointerId !== null) finishPointer({ pointerId });
+        updateView();
       });
 
       function pasteImage(blob) {
@@ -355,10 +485,11 @@ SOFTWARE.
           whiteBackground();
           ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
           saveState();
+          fitCanvas();
         };
         image.onerror = function () {
           URL.revokeObjectURL(objectUrl);
-          setStatus('error', 'The pasted image could not be loaded. Your drawing is unchanged.');
+          setStatus('error', '无法加载粘贴的图片。当前绘图保持不变。');
         };
         image.src = objectUrl;
       }
@@ -377,33 +508,47 @@ SOFTWARE.
         }
       });
 
-      document.getElementById('resizeHandle').addEventListener('mousedown', function (event) {
-        if (event.button !== 0 || busy() || resizing) return;
+      const resizeHandle = document.getElementById('resizeHandle');
+      resizeHandle.addEventListener('pointerdown', function (event) {
+        if (event.button !== 0 || busy() || resizing || pointerId !== null) return;
         event.preventDefault();
+        event.stopPropagation();
         finishStroke();
         pasteGeneration++;
         resizing = true;
-        var startX = event.clientX;
-        var startY = event.clientY;
-        var startWidth = canvas.width;
-        var startHeight = canvas.height;
-        var imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const resizeId = event.pointerId;
+        resizeHandle.setPointerCapture(resizeId);
+        const startX = event.clientX;
+        const startY = event.clientY;
+        const startWidth = canvas.width;
+        const startHeight = canvas.height;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         function move(moveEvent) {
-          canvas.width = Math.max(200, startWidth + moveEvent.clientX - startX);
-          canvas.height = Math.max(150, startHeight + moveEvent.clientY - startY);
+          if (moveEvent.pointerId !== resizeId) return;
+          canvas.width = Math.max(200, Math.round(startWidth + (moveEvent.clientX - startX) / zoom));
+          canvas.height = Math.max(150, Math.round(startHeight + (moveEvent.clientY - startY) / zoom));
           whiteBackground();
           ctx.putImageData(imageData, 0, 0);
         }
-        function finishResize() {
+        function finishResize(finishEvent) {
+          if (finishEvent.pointerId !== resizeId) return;
           resizing = false;
           saveState();
-          document.removeEventListener('mousemove', move);
-          document.removeEventListener('mouseup', finishResize);
+          resizeHandle.removeEventListener('pointermove', move);
+          resizeHandle.removeEventListener('pointerup', finishResize);
+          resizeHandle.removeEventListener('pointercancel', finishResize);
+          resizeHandle.removeEventListener('lostpointercapture', finishResize);
+          if (resizeHandle.hasPointerCapture(resizeId)) resizeHandle.releasePointerCapture(resizeId);
         }
-        document.addEventListener('mousemove', move);
-        document.addEventListener('mouseup', finishResize);
+        resizeHandle.addEventListener('pointermove', move);
+        resizeHandle.addEventListener('pointerup', finishResize);
+        resizeHandle.addEventListener('pointercancel', finishResize);
+        resizeHandle.addEventListener('lostpointercapture', finishResize);
       });
 
+      canvas.width = initialWidth;
+      canvas.height = initialHeight;
+      updateView();
       whiteBackground();
       saveState();
       window.addEventListener('beforeunload', function () {

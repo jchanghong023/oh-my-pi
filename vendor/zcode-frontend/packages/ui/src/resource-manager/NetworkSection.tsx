@@ -59,7 +59,7 @@ export function NetworkSection({ bridge }: { bridge?: NetworkCaptureBridge }) {
             .toLowerCase()
             .includes(query),
       )
-      .toSorted((left, right) => right.timestamp - left.timestamp || right.id - left.id);
+      .sort((left, right) => right.timestamp - left.timestamp || right.id - left.id);
   }, [snapshot, filter]);
   const pageCount = Math.max(1, Math.ceil(records.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount - 1);

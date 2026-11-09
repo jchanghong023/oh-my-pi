@@ -42,7 +42,7 @@ export function partitionPluginsForSettings(
     installed: materializedPlugins.filter((plugin) => !builtInPluginIds.has(plugin.id)),
     builtIn: materializedPlugins
       .filter((plugin) => builtInPluginIds.has(plugin.id))
-      .toSorted((left, right) => compareDocumentPluginPriority(left.id, right.id)),
+      .sort((left, right) => compareDocumentPluginPriority(left.id, right.id)),
   };
 }
 

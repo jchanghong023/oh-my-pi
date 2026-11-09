@@ -21,7 +21,7 @@ import { initializeRepository } from "../packages/coding-agent/test/dev-workbenc
 import {
 	PlatformPrerequisiteError,
 	validateDirectUrl,
-	withFirefox68Browser,
+	withFirefoxBrowser,
 	type DevelopmentBrowser,
 	type DevelopmentPage,
 } from "./webgui-platform-smoke";
@@ -37,7 +37,7 @@ import {
 } from "./webgui-development-scenarios";
 
 export interface DevelopmentE2EOptions {
-	browser: "chrome" | "firefox68" | "both";
+	browser: "chrome" | "firefox" | "both";
 	chrome?: string;
 	firefox?: string;
 	headless?: boolean;
@@ -66,7 +66,7 @@ interface ResourceIdentity {
 	mime?: string;
 }
 interface BrowserReport {
-	browser: "chrome" | "firefox68";
+	browser: "chrome" | "firefox";
 	status: "passed" | "failed" | "blocked";
 	identity?: Record<string, unknown>;
 	isolation?: Record<string, unknown>;
@@ -1034,7 +1034,7 @@ export async function runDevelopmentE2E(
 	);
 	const sourceFingerprint = digest(JSON.stringify(source));
 	const reports: BrowserReport[] = [];
-	for (const name of options.browser === "both" ? (["chrome", "firefox68"] as const) : [options.browser]) {
+	for (const name of options.browser === "both" ? (["chrome", "firefox"] as const) : [options.browser]) {
 		const browserDir = path.join(evidenceDir, name);
 		await fs.mkdir(browserDir, { recursive: true });
 		for (const directory of ["home", "appdata", "localappdata", "tmp"])
@@ -1143,7 +1143,7 @@ export async function runDevelopmentE2E(
 						report.browserCleanup = evidence;
 					});
 				else
-					await withFirefox68Browser(
+					await withFirefoxBrowser(
 						{
 							firefox: options.firefox,
 							headless: options.headless ?? true,
@@ -1228,15 +1228,15 @@ function argumentsFrom(args: string[]): DevelopmentE2EOptions {
 		if (!key || !allowed.has(key) || !value || value.startsWith("--"))
 			throw new PlatformPrerequisiteError(
 				"arguments",
-				"Use --browser both|chrome|firefox68 [--chrome PATH --firefox PATH --evidence-dir DIR --timeout-ms N --production-dir DIR --headless true|false]",
+				"Use --browser both|chrome|firefox [--chrome PATH --firefox PATH --evidence-dir DIR --timeout-ms N --production-dir DIR --headless true|false]",
 			);
 		values.set(key, value);
 	}
 	const browser = values.get("browser");
-	if (browser !== "both" && browser !== "chrome" && browser !== "firefox68")
+	if (browser !== "both" && browser !== "chrome" && browser !== "firefox")
 		throw new PlatformPrerequisiteError(
 			"browser",
-			"Explicit --browser both|chrome|firefox68 is required; this is opt-in, not a default gate",
+			"Explicit --browser both|chrome|firefox is required; this is opt-in, not a default gate",
 		);
 	const timeoutMs = values.has("timeout-ms") ? Number(values.get("timeout-ms")) : undefined;
 	if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0))
@@ -1249,7 +1249,7 @@ function argumentsFrom(args: string[]): DevelopmentE2EOptions {
 			(process.platform === "win32" ? "C:/Program Files/Google/Chrome/Application/chrome.exe" : undefined),
 		firefox:
 			values.get("firefox") ??
-			process.env.FIREFOX68_EXECUTABLE ??
+			process.env.FIREFOX_EXECUTABLE ??
 			(process.platform === "win32" ? "C:/Program Files (x86)/Mozilla Firefox/firefox.exe" : undefined),
 		evidenceDir: values.get("evidence-dir"),
 		productionDir: values.get("production-dir"),

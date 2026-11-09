@@ -3202,3 +3202,60 @@
 		max-height: 60px;
 	}
 }
+
+/* Creation owns a full page; other confirmations retain their compact dialogs. */
+.dw-workbench .dw-new-page {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	box-sizing: border-box;
+	overflow: auto;
+	padding: clamp(16px, 3vw, 40px);
+	background: var(--bg);
+}
+.dw-workbench .dw-new-form {
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	width: 1040px;
+	max-width: 100%;
+	min-height: calc(100vh - 2 * clamp(16px, 3vw, 40px));
+	max-height: none;
+	margin: 0 auto;
+	padding: 0;
+	border: 0;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+}
+.dw-workbench .dw-new-form h2 {
+	margin-bottom: 24px;
+	font-size: 24px;
+}
+.dw-workbench .dw-new-form .dw-new-description {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+}
+.dw-workbench .dw-new-description .sh-predictive-textarea {
+	display: flex;
+	flex-direction: column;
+	margin-top: 6px;
+}
+.dw-workbench .dw-new-description .sh-prediction-mirror {
+	max-width: 100%;
+}
+.dw-workbench .dw-new-description textarea {
+	flex: 1;
+	min-height: clamp(240px, 45vh, 600px);
+	margin-top: 6px;
+	font-size: 15px;
+	line-height: 1.7;
+}
+.dw-workbench .dw-new-description .sh-predictive-textarea > textarea {
+	margin-top: 0;
+}
+.dw-workbench .dw-new-form footer {
+	margin-top: auto;
+	padding-top: 20px;
+}

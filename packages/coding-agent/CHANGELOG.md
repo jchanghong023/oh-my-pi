@@ -17,6 +17,8 @@
 
 ### Changed
 
+- Use a full-window `/sketch` workspace on Firefox 128, with cursor-centered zoom, pan controls and full-image PNG attachments independent of the current view.
+- Show `/sketch` controls, tooltips, accessibility labels and built-in status/error messages in Chinese.
 - Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
 - Move Dev stage confirmation and secondary actions to the central document toolbar, leaving more room for chat without changing approval gates.
 - Load WebGUI code/diff highlighting workers only when opening a viewer, instead of on the empty home page.
@@ -24,10 +26,12 @@
 - Continue historical conversations across working directories using native workspace rebinding and project ownership checks.
 - Ship fingerprint-checked WebGUI resources in binary and npm builds without a runtime source checkout, Vite server or download.
 
-- Run the Dev webpage on Firefox 68 native capabilities without polyfills, preserving its layout, stages and interactions.
+- Target Firefox 128 for Dev and WebGUI builds, removing Firefox 68-specific polyfills, syntax rewrites and DOM/style fallbacks.
+- Run Firefox acceptance through installed Selenium and geckodriver with isolated profiles; use `firefox` browser/platform arguments and `FIREFOX_EXECUTABLE`.
 
 ### Removed
 
+- Remove added legacy-browser API, WASM and style fallbacks from WebGUI without changing its features or layout.
 - Remove WebGUI MCP settings, imports/sync and RPC adapters; native Agent, TUI and Dev MCP remain unchanged.
 - Removed ZCode-only plugin, remote-workspace, remote-control, embedded-browser, computer-control settings and desktop-host interfaces from WebGUI; retained direct browser access and Skill pages.
 - Removed the original Coding Plan purchase dialogs, `.zcode/v2` data-directory migration setting, and desktop update menu from WebGUI.
@@ -43,6 +47,9 @@
 
 ### Fixed
 
+- Give Dev agents the exact failed Next diagnostic on the next user turn and clarify existing requirement-format limits without changing validation or approval gates.
+- Show the Dev host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
+- Fix coding-agent type checks for Dev workbench keyboard-focus verification.
 - Preserve complete Dev and WebGUI URLs when csh startup files rewrite arguments, and use the offline `ff` browser alias for `omp dev` too.
 - Open Dev and WebGUI through the user's `ff` browser alias only in offline Linux csh/tcsh sessions, with setup guidance when the alias is missing; preserve default browser opening elsewhere.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
@@ -61,8 +68,8 @@
 - Report unbound provider/configuration reads as unavailable instead of returning empty native configuration.
 - Fix standalone Web license-resource delivery and remove service-package exports that pointed to absent host-only implementations.
 - Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
-- Open WebGUI and render native assistant replies on Firefox 68 without a blank page or collapsed layout, using the same production resources as Chrome.
-- Restore Firefox 68 code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
+- Open WebGUI and render native assistant replies without a blank page or collapsed layout, using the same production resources as Chrome.
+- Restore WebGUI code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
 - Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
 - Serve the Dev favicon from the same embedded capability-scoped resources as the page.

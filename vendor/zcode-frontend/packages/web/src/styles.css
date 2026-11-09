@@ -9,11 +9,3 @@
   color: var(--color-foreground);
 }
 
-/* Firefox 68 has viewport units but not dynamic viewport units. */
-@layer utilities {
-  @supports not (height: 100dvh) {
-    .h-dvh {
-      height: 100vh;
-    }
-  }
-}

@@ -36,7 +36,12 @@ import type {
 import { DevWorkspace } from "../spec-driven/workspace";
 import { cfgGoalEnabled } from "../goals/settings";
 import { startTeamDiscussion } from "../team/controller";
-import { createDevCollabController, createDevLocalSessionBridge, DevCollabBridge } from "./collab";
+import {
+	createDevCollabController,
+	createDevLocalSessionBridge,
+	DevCollabBridge,
+	type DevLocalSessionBridge,
+} from "./collab";
 import { DevNativeUiController } from "./native-ui";
 import { startDevWorkbenchServer } from "./server";
 import { $env } from "@oh-my-pi/pi-utils/env";
@@ -157,10 +162,7 @@ export class DevWorkbenchHost {
 	readonly nativeUi = new DevNativeUiController();
 	readonly guests: DevCollabBridge;
 	readonly #frames = new Map<string, Set<FrameListener>>();
-	readonly #native = new Map<
-		string,
-		{ target: DevSessionTarget; sendFrame(frame: GuestFrame): Promise<DevSubmitResult>; close(): Promise<void> }
-	>();
+	readonly #native = new Map<string, DevLocalSessionBridge & { target: DevSessionTarget }>();
 	readonly #interactionOwners = new Map<string, DevSessionTarget>();
 	readonly #rooms = new Map<AgentSession, CollabController>();
 	readonly #goals = new Map<AgentSession, RpcGoalController>();
@@ -443,6 +445,12 @@ export class DevWorkbenchHost {
 			showStatus: text => {
 				for (const browserId of this.#frames.keys()) this.#emit(browserId, { t: "native-status", message: text });
 			},
+			getParticipants: () => this.#rooms.get(session)?.host?.participants,
+			onCollabStatus: () => {
+				for (const bridge of this.#native.values()) {
+					if (bridge.target.sessionId === session.sessionId) bridge.refreshParticipants();
+				}
+			},
 		};
 	}
 	subscribeEntries(listener: EntryListener): () => void {
@@ -485,9 +493,7 @@ export class DevWorkbenchHost {
 		requirementId: string | null,
 		listener: (frame: HostFrame | DevComposerPredictionFrame) => void,
 	): Promise<() => Promise<void>> {
-		let bridge:
-			| { target: DevSessionTarget; sendFrame(frame: GuestFrame): Promise<DevSubmitResult>; close(): Promise<void> }
-			| undefined;
+		let bridge: (DevLocalSessionBridge & { target: DevSessionTarget }) | undefined;
 		let closed = false;
 		const attach = (session: AgentSession) => {
 			if (closed || bridge || this.guests.getParticipant(browserId)) return;

@@ -929,7 +929,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 		refresh: number;
 	} | null>(null);
 	const selected = state.requirements.find(item => item.record.requirementId === selectedId) ?? null;
-	const newModal = useModalFocus<HTMLFormElement>(newOpen);
+	const newPage = useModalFocus<HTMLFormElement>(newOpen);
 	const importModal = useModalFocus<HTMLElement>(Boolean(importOpen && selected));
 	const targetModal = useModalFocus<HTMLElement>(Boolean(targetChoice), operationFocus.current);
 	const secondaryOperationsKey = selected ? `${selected.record.requirementId}:${selected.record.stage}` : null;
@@ -1973,11 +1973,11 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 					</div>
 				</div>
 				{newOpen && (
-					<div className="dw-modal-backdrop">
+					<div className="dw-new-page">
 						<form
-							ref={newModal}
+							ref={newPage}
 							tabIndex={-1}
-							className="dw-modal"
+							className="dw-modal dw-new-form"
 							role="dialog"
 							aria-modal="true"
 							aria-label="新建需求"
@@ -2025,7 +2025,7 @@ export function Workbench({ client: supplied }: { client?: WorkbenchClient }): R
 								</select>
 							</label>
 							{source !== "import" && (
-								<label>
+								<label className="dw-new-description">
 									描述需求
 									<PredictiveTextarea
 										data-testid="new-request"

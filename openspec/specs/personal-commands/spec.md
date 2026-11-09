@@ -14,11 +14,20 @@ OMP MUST 在原生交互 TUI 提供无需安装扩展或额外配置的 `/sketch
 
 - **WHEN** 用户在原生 TUI 调用 `/sketch`
 - **THEN** 打开自包含浏览器画布，支持手绘、剪贴板图片粘贴与标注、颜色、笔刷大小、撤销、清空和画布尺寸调整；图片粘贴取决于实际桌面剪贴板能力
+- **AND** 画布页面的按钮、操作说明、悬浮提示、无障碍标签及内置状态／错误提示 MUST 使用中文，保留快捷键名称和 PNG 等必要技术标识
 - **AND** 浏览器按 `Enter` MUST 将 PNG 作为真实图片附件加入原输入草稿，保留已有文字与附件，MUST NOT 自动发送或启动模型回合；用户可补充描述后自行发送
 - **AND** 画布 HTML、脚本、样式等离线资源 MUST 随源码和发行二进制静态内嵌；绘图本身 MUST NOT 请求公网、CDN 或外部模型服务
-- **AND** 浏览器脚本 MUST 以 Firefox 52 ESR 的保守语法和基础 API 为基线（ES5 风格函数、`XMLHttpRequest`，不使用可选链、`async`/`await` 或 `NodeList.forEach`）；该设计基线 MUST NOT 被表述为公司旧 Firefox、CentOS 或桌面环境的实机兼容认证
+- **AND** 浏览器脚本、样式及 API MUST 以 Firefox 128 默认原生能力为基线，不再兼容 Firefox 52；本机浏览器验证 MUST 使用 Selenium＋geckodriver 和隔离临时 profile，MUST NOT 将本机验证表述为公司 CentOS 或实际桌面环境的兼容认证
 - **AND** 本功能仅属于原生 TUI，MUST NOT 宣称 GUI、ACP 或 RPC 绘图集成，也不提供远程自动转发；OMP 与浏览器应在同一主机，异地主机须由用户自行将显示端口通过 SSH 转发至 OMP 的回环地址
 - **AND** Linux offline 打开原生 `/sketch` 时按[内网网页入口自动复制本机地址](../fork-runtime/spec.md#requirement-内网网页入口自动复制本机地址)请求复制完整画布地址，保留手动复制地址与原有草稿、取消和图片提交行为；其他环境不自动覆盖剪贴板
+
+#### Scenario: 全窗口画布与视野操作
+
+- **WHEN** 用户打开 `/sketch` 页面
+- **THEN** 工具栏和状态区之外的浏览器窗口 MUST 全部用于绘图工作区，新画布初始尺寸匹配该区域；不强制浏览器进入系统全屏模式
+- **AND** 支持滚轮围绕光标缩放、缩放按钮、100% 和适应窗口；支持空格加拖动、中键拖动和显式平移模式，平移不得产生笔迹，缩放和平移后绘图及画布尺寸调整的坐标 MUST 正确
+- **AND** 缩放、平移及浏览器窗口尺寸变化 MUST NOT 改写已有图像像素或导出尺寸；提交 MUST 导出完整画布 PNG，而非当前可见区域，保留现有撤销、粘贴、清空和手动附件提交语义
+
 
 #### Scenario: 取消、隔离与本地服务清理
 
@@ -541,16 +550,16 @@ OMP MUST 提供 `/webgui` 和 `omp webgui`，复用已迁入并精简后的 ZCod
 
 #### Scenario: 完整业务验收
 - **WHEN** 验收 WebGUI 原生开发能力
-- **THEN** 按 `fork-verification-gates` 的 WebGUI 验收 Requirements／Scenarios，使用同一份生产构建和公开 HTTP／WS 入口，在真实 Chrome 与本机真实 Firefox 68 分别完成本规范全部业务，证明真实原生会话调用工具并产生实际开发文件结果及正确归属，而非仅打开页面
+- **THEN** 按 `fork-verification-gates` 的 WebGUI 验收 Requirements／Scenarios，使用同一份生产构建和公开 HTTP／WS 入口，在真实 Chrome 与本机真实 Firefox 128（当前版本 128.14.0）分别完成本规范全部业务，证明真实原生会话调用工具并产生实际开发文件结果及正确归属，而非仅打开页面
 - **AND** 使用真实 OpenCode Go（provider `opencode-go`）／Beam Free 模型，实际 model id 以权威 catalog／discovery 确认并记录；`bun run fastcheck` 与 `bun run fulltest` 必须按现有默认成功，不加 `--full`、不放宽预算或 skip 掩盖失败。证据、隔离、缺失前提和失败路径规则以该 gate 规格为准，不以 mock、Chrome 结果或截图替代另一浏览器的真实业务结果
 - **AND** 保留手机响应式能力，但本次不新增手机实机、发行物或部署验收；不自动安装浏览器／工具或修改个人浏览器配置，缺认证、目标模型或浏览器时如实报告阻塞，不声明通过
 
-#### Scenario: Firefox 68 与 Chrome 共用入口
-- **WHEN** 用户通过 Firefox 68 或当前 Chrome 打开 WebGUI
-- **THEN** 使用同一份生产资源与原有界面；构建转换不兼容的 JavaScript／Unicode 正则及 CSS，入口先加载标准 API 和尺寸观察兼容实现，不修改个人浏览器配置
+#### Scenario: Firefox 128 与 Chrome 共用入口
+- **WHEN** 用户通过 Firefox 128 或当前 Chrome 打开 WebGUI
+- **THEN** 使用同一份生产资源与原有界面，以 Firefox 128 默认启用的能力为兼容基线，不修改个人浏览器配置；移除 fork 为 Firefox 68、Chrome 109 新增的 API shim、WASM 加载改写、CSS 降级及专用回退，不改既有功能和布局；ZCode 原版自身的通用兼容逻辑不在本次清理范围
 - **AND** 缺少 WeakRef／FinalizationRegistry 时不启用可选的跨 store 弱引用行缓存，不用强引用延长历史会话寿命；Dev 工作台原有原生能力边界不变
-- **AND** 代码／Diff 预览在支持构造式样式表的浏览器继续使用原生 adoptedStyleSheets；Firefox 68 使用局部 Shadow DOM 样式兼容路径，按需加载可直接读取的高亮 WASM，不伪造空预览或修改浏览器安全设置
-- **AND** Firefox 68 的开关轨道、滑块及推荐区滚动条保持可见、可用；Chrome 原有外观、Workflow 动画规则、状态机及 reduced-motion 行为不变
+- **AND** 代码／Diff 预览在目标浏览器使用原生 adoptedStyleSheets，按需加载真实高亮 WASM，不要求旧版浏览器专属 Shadow DOM 样式兼容路径，不伪造空预览或修改浏览器安全设置
+- **AND** Firefox 128 的开关轨道、滑块及推荐区滚动条保持可见、可用；Chrome 原有外观、Workflow 动画规则、状态机及 reduced-motion 行为不变
 - **AND** 两个浏览器均须完成上述完整业务验收，页面启动、刷新、导航和输入只是其中一部分，不能据此声明全部功能已通过；手机实机结论仍不得从响应式截图推导
 
 #### Scenario: 浏览器直连不依赖 ZCode 专属界面
