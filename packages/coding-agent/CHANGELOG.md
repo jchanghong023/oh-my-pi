@@ -17,6 +17,8 @@
 
 ### Changed
 
+- Keep Dev, WebGUI and `/sketch` browser launch manual in offline mode while retaining complete URLs and offline Linux clipboard requests.
+
 - Use a full-window `/sketch` workspace on Firefox 128, with cursor-centered zoom, pan controls and full-image PNG attachments independent of the current view.
 - Show `/sketch` controls, tooltips, accessibility labels and built-in status/error messages in Chinese.
 - Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
@@ -52,8 +54,6 @@
 - Give Dev agents the exact failed Next diagnostic on the next user turn and clarify existing requirement-format limits without changing validation or approval gates.
 - Show the Dev host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
 - Fix coding-agent type checks for Dev workbench keyboard-focus verification.
-- Preserve complete Dev and WebGUI URLs when csh startup files rewrite arguments, and use the offline `ff` browser alias for `omp dev` too.
-- Open Dev and WebGUI through the user's `ff` browser alias only in offline Linux csh/tcsh sessions, with setup guidance when the alias is missing; preserve default browser opening elsewhere.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.
 - Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.

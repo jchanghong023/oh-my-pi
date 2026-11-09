@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as url from "node:url";
 import { $which, isWsl, logger } from "@oh-my-pi/pi-utils";
-import { offlineFromEnv } from "../cli/args";
 
 const URL_SCHEME_PATTERN = /^[a-zA-Z][a-zA-Z\d+.-]*:/;
 
@@ -71,30 +70,10 @@ function windowsOpenerCommand(target: string): string[] {
 	];
 }
 
-function cshBrowserCommand(target: string): string[] | undefined {
-	if (!offlineFromEnv() || process.platform !== "linux" || !/^https?:\/\//i.test(target)) return undefined;
-	const shell = process.env.SHELL;
-	if (!shell || !["csh", "tcsh"].includes(path.posix.basename(shell))) return undefined;
-	// Startup files and module initialization may rewrite argv. Pass the URL
-	// separately so ff retains its environment without losing the address.
-	return [
-		shell,
-		"-ic",
-		`set omp_ff_status = 127
-if ( "\`alias ff\`" != "" ) then
-ff $OMP_BROWSER_URL:q &
-set omp_ff_status = $status
-endif
-exit $omp_ff_status`,
-	];
-}
-
 /** Open a URL or file path in the default application, reporting the opener's actual result. */
 export async function openPathWithResult(
 	urlOrPath: string,
-	options?: { useCshBrowserAlias?: boolean },
 ): Promise<{ opened: true } | { opened: false; reason: string }> {
-	const browserCommand = options?.useCshBrowserAlias ? cshBrowserCommand(urlOrPath) : undefined;
 	let cmd: string[] = [];
 	try {
 		switch (process.platform) {
@@ -105,8 +84,8 @@ export async function openPathWithResult(
 				cmd = windowsOpenerCommand(urlOrPath);
 				break;
 			default: {
-				const wslPath = browserCommand ? undefined : getExistingWslLocalPath(urlOrPath);
-				cmd = browserCommand ?? (wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath]);
+				const wslPath = getExistingWslLocalPath(urlOrPath);
+				cmd = wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath];
 				break;
 			}
 		}
@@ -115,14 +94,10 @@ export async function openPathWithResult(
 			stdout: "ignore",
 			stderr: "ignore",
 			windowsHide: process.platform === "win32",
-			...(browserCommand ? { env: { ...process.env, OMP_BROWSER_URL: urlOrPath } } : {}),
 		});
 		const exitCode = await child.exited;
 		if (exitCode !== 0) {
-			const reason =
-				browserCommand && exitCode === 127
-					? "未找到 ff 浏览器别名；请加载 Firefox 模块，并在 ~/.cshrc（或 ~/.tcshrc）中设置 alias ff '/实际路径/firefox'，确认 ff 可打开网页后重试。"
-					: `External opener exited with status ${exitCode}`;
+			const reason = `External opener exited with status ${exitCode}`;
 			logger.warn(reason, { command: cmd[0], target: urlOrPath, exitCode });
 			return { opened: false, reason };
 		}

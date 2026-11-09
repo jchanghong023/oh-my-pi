@@ -2,6 +2,7 @@ import { createInterface } from "node:readline";
 import { getActiveProfile, logger, postmortem } from "@oh-my-pi/pi-utils";
 import { execReplace } from "@oh-my-pi/pi-natives";
 import { restartArgv } from "../cli/flag-tables";
+import { offlineFromEnv } from "../cli/args";
 import { resolveCliEntryCmd } from "../subprocess/worker-client";
 import type { DevWorkbenchHandle } from "../dev-workbench/host";
 import type { AgentSession } from "../session/agent-session";
@@ -246,10 +247,12 @@ export async function runWebGuiCommand(): Promise<void> {
 		if (requestOfflineBrowserUrlCopy(server.loopbackUrl))
 			process.stdout.write("已尝试复制完整本机地址，可在浏览器地址栏粘贴；未生效时请手动复制上方地址。\n");
 		process.stdout.write("输入 /webgui 退出并关闭当前 OMP 的 Web 服务。\n");
-		if (process.env.OMP_WEBGUI_NO_OPEN === "1") {
+		if (offlineFromEnv()) {
+			process.stderr.write("offline 模式不自动打开浏览器；请使用上方地址访问。\n");
+		} else if (process.env.OMP_WEBGUI_NO_OPEN === "1") {
 			process.stderr.write("已按 OMP_WEBGUI_NO_OPEN=1 跳过自动打开浏览器；请使用上方地址访问。\n");
 		} else {
-			const result = await openPathWithResult(server.loopbackUrl, { useCshBrowserAlias: true });
+			const result = await openPathWithResult(server.loopbackUrl);
 			if (!result.opened) process.stderr.write(`浏览器未自动打开：${result.reason}\n`);
 		}
 		// Own a closable reader: cancelling Bun's native stdin stream can wait

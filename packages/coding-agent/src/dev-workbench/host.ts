@@ -1481,10 +1481,12 @@ export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[
 		if (handle.urls.length === 1 && parsedArgs.offline) {
 			process.stderr.write("No non-loopback IPv4 interface was found; only the local URL is available.\n");
 		}
-		if (process.env.OMP_DEV_NO_OPEN === "1") {
+		if (offlineFromEnv()) {
+			process.stderr.write("offline 模式不自动打开浏览器；请使用上方地址访问。\n");
+		} else if (process.env.OMP_DEV_NO_OPEN === "1") {
 			process.stderr.write("Browser opener skipped (OMP_DEV_NO_OPEN=1); use the ready URL.\n");
 		} else {
-			const opened = await openPathWithResult(handle.loopbackUrl, { useCshBrowserAlias: true });
+			const opened = await openPathWithResult(handle.loopbackUrl);
 			if (!opened.opened)
 				process.stderr.write(`Browser opener failed: ${opened.reason}. Service remains ready at ${handle.url}\n`);
 		}

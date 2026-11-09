@@ -89,47 +89,14 @@ afterEach(() => {
 });
 
 describe("openPath", () => {
-	it("tells csh users to configure ff instead of silently opening another browser", async () => {
+	it("keeps explicit URL opening available in offline csh sessions", async () => {
 		setPlatform("linux");
 		process.env.SHELL = "/bin/tcsh";
 		process.env.OMP_OFFLINE = "1";
 		const calls: SpawnCall[] = [];
-		spySpawn(calls, 127);
+		spySpawn(calls);
 
-		const result = await openPathWithResult("http://127.0.0.1:1234/dev/capability/", {
-			useCshBrowserAlias: true,
-		});
-
-		expect(result.opened).toBe(false);
-		if (result.opened) throw new Error("Missing ff must not be reported as opened");
-		expect(result.reason).toContain("ff");
-		expect(result.reason).toContain("alias");
-		expect(result.reason).toContain("~/.cshrc");
-		expect(calls.some(call => call.cmd[0] === "xdg-open")).toBe(false);
-	});
-
-	it("does not misdiagnose shell initialization failures as an undefined ff alias", async () => {
-		setPlatform("linux");
-		process.env.SHELL = "/bin/csh";
-		process.env.OMP_OFFLINE = "1";
-		const calls: SpawnCall[] = [];
-		spySpawn(calls, 1);
-
-		expect(await openPathWithResult("http://127.0.0.1:1234/", { useCshBrowserAlias: true })).toEqual({
-			opened: false,
-			reason: expect.stringContaining("1"),
-		});
-	});
-
-	it("uses the default opener without ff setup guidance in non-offline csh sessions", async () => {
-		setPlatform("linux");
-		process.env.SHELL = "/bin/csh";
-		const calls: SpawnCall[] = [];
-		spySpawn(calls, 127);
-
-		const result = await openPathWithResult("http://127.0.0.1:1234/", { useCshBrowserAlias: true });
-
-		expect(result).toEqual({ opened: false, reason: expect.stringContaining("127") });
+		expect(await openPathWithResult("http://127.0.0.1:1234/")).toEqual({ opened: true });
 		expect(calls.map(call => call.cmd)).toEqual([["xdg-open", "http://127.0.0.1:1234/"]]);
 	});
 
