@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test";
 import { readFile, readdir } from "node:fs/promises";
 import * as path from "node:path";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { openWikiLicensedPackages } from "../../src/openwiki/resource-dependencies";
+import { openWikiResourceFingerprint } from "../../src/openwiki/resource-fingerprint";
 import { materializeOpenWikiSkills } from "../../src/openwiki/resources";
 
 describe("OpenWiki embedded generation resources", () => {
@@ -53,4 +55,66 @@ describe("OpenWiki embedded generation resources", () => {
 			}
 		},
 	);
+});
+
+async function fingerprintFixture(root: string): Promise<void> {
+	for (const name of [
+		"vendor/openwiki/src/visualize/client.ts",
+		"vendor/openwiki/skills/mermaid-diagrams/SKILL.md",
+		"vendor/openwiki/LICENSE",
+		"vendor/openwiki/package.json",
+		"packages/coding-agent/package.json",
+		"packages/coding-agent/scripts/openwiki-resources.ts",
+		"packages/coding-agent/src/openwiki/resource-dependencies.ts",
+		"packages/coding-agent/src/openwiki/resource-fingerprint.ts",
+		"bun.lock",
+	]) {
+		await Bun.write(path.join(root, name), name.endsWith("package.json") ? '{"version":"1.0.0"}' : "original");
+	}
+	for (const name of openWikiLicensedPackages) {
+		await Bun.write(
+			path.join(root, "node_modules", name, "package.json"),
+			JSON.stringify({ name, version: "1.0.0", license: "MIT" }),
+		);
+	}
+	for (const [name, asset] of [
+		["force-graph", "dist/force-graph.min.js"],
+		["openwiki-marked", "marked.min.js"],
+		["dompurify", "dist/purify.min.js"],
+		["mermaid", "dist/mermaid.min.js"],
+	] as const) {
+		await Bun.write(path.join(root, "node_modules", name, asset), "browser asset");
+	}
+}
+
+describe("OpenWiki resource validity", () => {
+	it("keeps generated resources valid after an OMP version bump or unrelated lockfile change", async () => {
+		using dir = TempDir.createSync("@omp-openwiki-fingerprint-");
+		await fingerprintFixture(dir.path());
+		const generated = openWikiResourceFingerprint(dir.path());
+		await Bun.write(dir.join("packages/coding-agent/package.json"), '{"version":"2.0.0"}');
+		expect(openWikiResourceFingerprint(dir.path())).toBe(generated);
+		await Bun.write(dir.join("bun.lock"), "unrelated dependency update");
+		expect(openWikiResourceFingerprint(dir.path())).toBe(generated);
+	});
+
+	it("keeps identical resources valid when the checkout moves", async () => {
+		using first = TempDir.createSync("@omp-openwiki-fingerprint-first-");
+		using second = TempDir.createSync("@omp-openwiki-fingerprint-second-");
+		await fingerprintFixture(first.path());
+		await fingerprintFixture(second.path());
+		expect(openWikiResourceFingerprint(second.path())).toBe(openWikiResourceFingerprint(first.path()));
+	});
+
+	it.each([
+		"vendor/openwiki/src/visualize/client.ts",
+		"node_modules/mermaid/package.json",
+		"node_modules/mermaid/dist/mermaid.min.js",
+	])("invalidates resources when their actual input changes: %s", async name => {
+		using dir = TempDir.createSync("@omp-openwiki-fingerprint-input-");
+		await fingerprintFixture(dir.path());
+		const generated = openWikiResourceFingerprint(dir.path());
+		await Bun.write(dir.join(name), name.endsWith("package.json") ? '{"version":"2.0.0"}' : "changed");
+		expect(openWikiResourceFingerprint(dir.path())).not.toBe(generated);
+	});
 });

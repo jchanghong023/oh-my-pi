@@ -213,6 +213,12 @@ OMP MUST 保留 OpenWiki 的关系图、Markdown 阅读器、实时刷新和静�
 - **WHEN** 用户通过 `--export <dir>` 导出并将该目录放在静态 HTTP 服务的子路径下
 - **THEN** 导出内容保留页面、图和阅读器，资源按导出路径解析，不需要运行 OpenWiki Agent、MCP 或 OMP 生成服务
 
+#### Scenario: 可视化资源只由相关输入失效
+- **WHEN** 仅 OMP 版本、无关依赖锁记录或源码检出路径变化，OpenWiki 源码、资源生成代码、实际安装的相关依赖与浏览器资源保持相同
+- **THEN** 已生成的可视化资源继续有效，不要求重新生成
+- **AND** OpenWiki 源码、生成代码、相关实际依赖、许可证或浏览器资源内容变化时，仍拒绝旧资源并明确要求重新生成，不绕过资源一致性校验
+
+
 ### Requirement: 默认接入不安装外部 OpenWiki 链路
 
 OMP 的仓库 Wiki 入口 MUST NOT 隐式创建安装并运行独立 OpenWiki 的 workflow、拉取外部知识连接器或改写 `CLAUDE.md`。执行仓库 `--init`／`--update` 时，OMP MUST 在仓库根目录的 `AGENTS.md` 创建或刷新 OpenWiki 标记区块，告知 Agent Wiki 位置及只读查询方式，保留区块之外的内容；标记损坏或重复时 MUST 报错且不修改文件。此约束不改变显式生成对 `openwiki/` 的预期写入；`--dry-run` 不修改 Agent 指令。

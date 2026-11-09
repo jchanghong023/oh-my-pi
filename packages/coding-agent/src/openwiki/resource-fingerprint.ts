@@ -3,7 +3,7 @@ import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 import { openWikiLicensedPackages, openWikiPackageDirectory } from "./resource-dependencies";
 
-/** Fingerprint the checkout inputs used to generate browser assets and notices. */
+/** Fingerprint OpenWiki sources, installed dependencies and notices, not unrelated OMP metadata. */
 export function openWikiResourceFingerprint(repoRoot: string): string {
 	const hash = createHash("sha256");
 	function add(relative: string): void {
@@ -25,11 +25,9 @@ export function openWikiResourceFingerprint(repoRoot: string): string {
 	for (const name of [
 		"vendor/openwiki/LICENSE",
 		"vendor/openwiki/package.json",
-		"packages/coding-agent/package.json",
 		"packages/coding-agent/scripts/openwiki-resources.ts",
 		"packages/coding-agent/src/openwiki/resource-dependencies.ts",
 		"packages/coding-agent/src/openwiki/resource-fingerprint.ts",
-		"bun.lock",
 	])
 		file(name);
 	const packageDir = path.join(repoRoot, "packages/coding-agent");
@@ -46,8 +44,10 @@ export function openWikiResourceFingerprint(repoRoot: string): string {
 		visited.add(dir);
 		const manifest = path.join(dir, "package.json");
 		const content = readFileSync(manifest);
-		hash.update(manifest);
+		hash.update(name);
+		hash.update("\0");
 		hash.update(content);
+		hash.update("\0");
 		const pkg = JSON.parse(content.toString()) as {
 			dependencies?: Record<string, string>;
 			optionalDependencies?: Record<string, string>;

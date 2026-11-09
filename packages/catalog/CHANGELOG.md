@@ -11,6 +11,8 @@
 
 - Added `company/Deepseek-v4.1-Flash` to the offline intranet model catalog with the same configuration as `DeepSeek-V4-Flash-public`.
 
+## [18.18.3] - 2026-11-09
+
 ### Changed
 
 - Added a `balanced` delegation bias between `eager` and `restrained`; models without a `delegation-bias` rule now resolve to it instead of `eager`
