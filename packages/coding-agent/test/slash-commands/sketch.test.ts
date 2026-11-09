@@ -8,6 +8,7 @@ import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { imageAttachmentSource } from "@oh-my-pi/pi-tui/prompt/image-source";
 import { getEditorTheme, initTheme } from "@oh-my-pi/pi-tui/theme";
 import { setAgentDir } from "@oh-my-pi/pi-utils";
+import * as args from "@oh-my-pi/pi-coding-agent/cli/args";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { InternalUrlRouter } from "@oh-my-pi/pi-coding-agent/internal-urls/router";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
@@ -143,6 +144,7 @@ describe("native /sketch", () => {
 		setAgentDir(dir);
 		await Settings.init({ inMemory: true });
 		spyOn(open, "openPath").mockImplementation(() => {});
+		spyOn(args, "offlineFromEnv").mockReturnValue(false);
 		spyOn(clipboard, "requestOfflineBrowserUrlCopy").mockReturnValue(false);
 	});
 	afterEach(async () => {
@@ -158,6 +160,25 @@ describe("native /sketch", () => {
 		cleanup.push(h.dispose);
 		return h;
 	}
+
+	it("keeps the offline canvas URL and PNG attachment flow without launching a browser", async () => {
+		spyOn(args, "offlineFromEnv").mockReturnValue(true);
+		spyOn(clipboard, "requestOfflineBrowserUrlCopy").mockReturnValue(true);
+		const h = createHarness();
+		const s = service();
+		h.editor.setText("offline draft");
+		const run = executeBuiltinSlashCommand("/sketch", { ctx: h.ctx });
+		expect(open.openPath).not.toHaveBeenCalled();
+		expect(clipboard.requestOfflineBrowserUrlCopy).toHaveBeenCalledWith(s.server.url);
+		expect(h.ctx.showStatus).toHaveBeenCalledWith(expect.stringContaining(s.server.url));
+		s.resolve(PNG);
+		await run;
+		expect(h.ctx.showError).not.toHaveBeenCalled();
+		expect(h.editor.getExpandedText()).toStartWith("offline draft");
+		expect(h.editor.pendingImages).toHaveLength(1);
+		expect(h.prompt).not.toHaveBeenCalled();
+		expect(s.close).toHaveBeenCalled();
+	});
 
 	it("refuses RPC invocation and TUI arguments without starting a sketch or changing the draft", async () => {
 		const h = createHarness();

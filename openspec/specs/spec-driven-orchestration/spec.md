@@ -8,7 +8,7 @@
 
 ### Requirement: 独立能力与开发模式的边界
 
-OMP MUST 保留独立 OpenSpec、Superpowers、JCH、普通会话和 Dev 专有 Agent 能力。新建开发需求只使用浏览器八阶段流程，业务文档检查必经；终端 `/dev` 进入 Dev 并打开网页，当前 TUI 此后只接受再次 `/dev` 退出，不提供旧 Dev 终端子操作。只处理新流程，不提供旧模式兼容、旧流程迁移或旧状态恢复。
+OMP MUST 保留独立 OpenSpec、Superpowers、JCH、普通会话和 Dev 专有 Agent 能力。新建开发需求只使用浏览器八阶段流程，业务文档检查必经；终端 `/dev` 进入 Dev 并输出网页地址，非 offline 自动打开浏览器，offline 由用户手动打开，当前 TUI 此后只接受再次 `/dev` 退出，不提供旧 Dev 终端子操作。只处理新流程，不提供旧模式兼容、旧流程迁移或旧状态恢复。
 
 #### Scenario: 独立能力与开发模式的详细边界
 - **WHEN** 用户使用独立 OpenSpec、Superpowers、JCH 或普通 OMP 会话

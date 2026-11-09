@@ -101,13 +101,11 @@ Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS�
 
 普通模式不追加上述规则，Windows offline 不追加 Linux/csh 段落；不改变 Shell 执行器或用户配置。提示词不替代实际网络隔离、存储权限和公司实机验证。
 
-### Dev／WebGUI 自动打开 Firefox
+### Dev／WebGUI／sketch 手动打开网页
 
-仅在 `OMP_OFFLINE` 启用、Linux 且 `SHELL` 为 csh／tcsh 时，`/dev`、`omp dev`、`/webgui` 与 `omp webgui` 会读取该 Shell 的交互启动文件，通过已有的 `ff` 别名打开网页，不需要修改系统默认浏览器。请将原来加载 Firefox 模块的 `ma` 命令和 `ff` 定义保留在 `~/.cshrc`（tcsh 也可用 `~/.tcshrc`）；只在当前终端临时定义的别名不能被子进程继承。OMP 通过子进程专用的 `OMP_BROWSER_URL` 环境变量传递完整地址，不依赖可能被初始化脚本改写的 `$argv`；无需手动设置该变量。已有 `env GTK_IM_MODULE=xim /绝对路径/firefox` 别名及 X11 显示环境保持不变。
+`OMP_OFFLINE` 启用时，`/dev`、`omp dev`、`/webgui`、`omp webgui` 和原生 `/sketch` 不自动启动浏览器，适用于所有平台和 Shell。请在浏览器中手动打开 OMP 显示的完整地址；OMP 不读取 csh／tcsh 启动文件或调用 `ff` 别名，也不要求配置别名。非 offline 保留系统默认浏览器打开方式，`OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 仍可分别跳过自动打开。
 
-上述 offline 环境没有 `ff` 时，OMP 会提示设置别名，并保留完整访问地址，不静默打开其他浏览器。不会自动修改你的配置；仍需可用的 X11 显示环境。非 offline、其他 Shell、Windows 和普通 OMP 链接／文件打开保持原行为，不要求配置 `ff`。`OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 仍可分别跳过自动打开。启动交接成功不代表已在公司 CentOS／Firefox 实机验证。
-
-Linux offline 环境进入 `/dev`、`/webgui`，启动 `omp webgui`，或打开原生 `/sketch` 后，会自动尝试复制完整的 `http://127.0.0.1:端口/…` 地址，包括随机路径。浏览器只打开了窗口但没有导航时，可直接在地址栏粘贴；`OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 跳过打开浏览器时仍会复制。其他环境不自动覆盖剪贴板。
+Linux offline 环境进入 `/dev`、`/webgui`，启动 `omp webgui`，或打开原生 `/sketch` 后，仍会自动尝试复制完整的 `http://127.0.0.1:端口/…` 地址，包括随机路径，可在浏览器地址栏粘贴。其他环境不自动覆盖剪贴板。
 
 复制复用 OMP 的终端 OSC 52 和原生 X11 剪贴板，不需要另装 `xclip`／`xsel`。公司 SSH／Exceed 是否能粘贴到 Windows 取决于终端剪贴板权限和 X11 剪贴板共享设置；界面提示“已尝试复制”不等于实机已确认。不能粘贴时仍可手动复制显示的完整地址；复制不会建立端口转发，`127.0.0.1` 必须指向运行 OMP 的机器。
 
