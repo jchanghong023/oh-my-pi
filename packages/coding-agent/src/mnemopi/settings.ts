@@ -13,7 +13,7 @@ export const cfgMnemopiDbPath = register({
 		tab: "memory",
 		group: "Mnemopi",
 		label: "Mnemopi 数据库路径",
-		description: "可选的 SQLite 数据库路径。默认为 Agent 记忆目录。",
+		description: "可选的 SQLite 数据库路径；开头的 ~ 表示用户主目录。默认为 Agent 记忆目录。",
 		condition: "mnemopiActive",
 	},
 });

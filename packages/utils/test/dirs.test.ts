@@ -7,6 +7,7 @@ import { resolvePersistentRoot } from "@oh-my-pi/pi-natives/offline-root";
 import {
 	__resetDirsFromEnvForTests,
 	__resetProjectDirCacheForTests,
+	directoryExists,
 	getAgentDir,
 	getBaseConfigRoot,
 	getConfigRootDir,
@@ -99,12 +100,16 @@ describe("project directory state", () => {
 		},
 	);
 
-	it("treats denied stat as probeable rather than missing", async () => {
+	it("keeps forgiving probe defaults and propagates denied stat in strict mode", async () => {
 		const stat = spyOn(fs.promises, "stat").mockRejectedValue(
 			Object.assign(new Error("operation not permitted"), { code: "EACCES" }),
 		);
 		try {
-			expect(await directoryIsMissing(path.join(os.tmpdir(), "blocked"))).toBe(false);
+			const blocked = path.join(os.tmpdir(), "blocked");
+			for (const probe of [directoryExists, directoryIsMissing]) {
+				expect(await probe(blocked)).toBe(false);
+				await expect(probe(blocked, { strict: true })).rejects.toMatchObject({ code: "EACCES" });
+			}
 		} finally {
 			stat.mockRestore();
 		}

@@ -8,6 +8,7 @@
  * ask toolResults).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, type Mock, vi } from "bun:test";
+import type { AgentToolContext } from "@oh-my-pi/pi-agent-core";
 import { resetSettingsForTest, Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { SelectorController } from "@oh-my-pi/pi-coding-agent/modes/controllers/selector-controller";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
@@ -176,6 +177,44 @@ describe("SelectorController.showTreeSelector re-answering the active ask leaf",
 		expect(navigateTree).toHaveBeenCalledWith("leaf-ask", expect.objectContaining({ allowAskReopen: true }));
 		expect(showError).toHaveBeenCalledWith("Ask tool UI is not ready");
 		expect(showStatus).toHaveBeenCalledWith("Re-answer cancelled");
+	});
+
+	it("does not commit or resume a historical answer when a guest redirects to chat", async () => {
+		const entry = askResultEntry("leaf-ask");
+		const { ctx, editorContainer, navigateTree, showError, resumeAfterAskReanswer } = createCtx(entry, {
+			reopenAsk: {
+				questions: [
+					{ id: "deploy", question: "Deploy where?", options: [{ label: "staging" }, { label: "production" }] },
+				],
+			},
+		});
+		const dialog = vi.fn(async () => ({ kind: "chat" as const }));
+		const context = {
+			hasUI: true,
+			ui: { askDialog: dialog },
+			abort: vi.fn(),
+		} as unknown as AgentToolContext;
+		Object.assign(ctx, {
+			settings: Settings.isolated({ "ask.notify": "off" }),
+			getToolUIContext: () => context.ui,
+		});
+		Object.assign(ctx.sessionManager, {
+			getCwd: () => process.cwd(),
+			getSessionFile: () => undefined,
+		});
+		Object.assign(ctx.session, {
+			getPlanModeState: () => undefined,
+			buildAskReanswerContext: () => context,
+		});
+		const controller = new SelectorController(ctx);
+
+		controller.showTreeSelector();
+		await pickEntry(editorContainer, "leaf-ask");
+
+		expect(dialog).toHaveBeenCalledTimes(1);
+		expect(navigateTree).toHaveBeenCalledTimes(1);
+		expect(resumeAfterAskReanswer).not.toHaveBeenCalled();
+		expect(showError).toHaveBeenCalledWith(expect.stringContaining("Chat about this"));
 	});
 
 	it("resumes the agent only after rebuilding the transcript when navigateTree reports a committed re-answer", async () => {

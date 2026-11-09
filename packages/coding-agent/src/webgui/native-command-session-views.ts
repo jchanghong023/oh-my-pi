@@ -249,6 +249,7 @@ export async function handleWebGuiExtensions(
 	const dashboard = createExtensionDashboardRuntime({
 		cwd: runtime.cwd,
 		settings: runtime.settings,
+		extensionRoots: () => runtime.session.effectiveExtensionRoots,
 		mcpManager: runtime.mcpManager,
 		onMcpToolsChanged: tools => runtime.session.refreshMCPTools(tools),
 	});

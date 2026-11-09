@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { parseHTML } from "@oh-my-pi/pi-utils/dom";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToolView } from "../src/tool-render";
 
@@ -189,68 +190,68 @@ describe("ToolView xd:// dispatches", () => {
 describe("ToolView ask renderer", () => {
 	const questions = [
 		{
-			id: "auth",
-			question: "Which auth method?",
-			options: [{ label: "JWT" }, { label: "OAuth2" }],
+			id: "db",
+			question: "Storage backend",
+			options: [{ label: "SQLite" }, { label: "Postgres" }],
+			recommended: 0,
 		},
+		{ id: "notes", question: "Notes & caveats", options: [] },
 	];
 
-	it("renders the user-added note from a single-question answer", () => {
+	it("outlines pending questions and marks the recommended option", () => {
+		const html = renderToStaticMarkup(<ToolView name="ask" defaultOpen args={{ questions }} />);
+
+		expect(html).toContain("Storage backend");
+		expect(html).toContain("Notes &amp; caveats");
+		expect(html).toContain("2 questions");
+		expect(html).toContain("recommended");
+	});
+
+	it("pairs each question with its selection and flags timed-out answers", () => {
 		const html = renderToStaticMarkup(
 			<ToolView
 				name="ask"
 				defaultOpen
 				args={{ questions }}
 				result={{
-					content: [{ type: "text", text: "OAuth2 User added note: keep the redirect short-lived" }],
-					details: {
-						question: "Which auth method?",
-						options: ["JWT", "OAuth2"],
-						multi: false,
-						selectedOptions: ["OAuth2"],
-						note: "keep the redirect short-lived",
-					},
-				}}
-			/>,
-		);
-
-		expect(html).toContain("<span>OAuth2</span>");
-		expect(html).toContain("keep the redirect short-lived");
-	});
-
-	it("renders per-question notes from results[] answers", () => {
-		const html = renderToStaticMarkup(
-			<ToolView
-				name="ask"
-				defaultOpen
-				args={{
-					questions: [
-						{ id: "db", question: "Storage backend?", options: [{ label: "SQLite" }, { label: "Postgres" }] },
-						{ id: "cache", question: "Cache?", options: [{ label: "Redis" }, { label: "None" }] },
-					],
-				}}
-				result={{
-					content: [{ type: "text", text: "User answers:" }],
+					content: [{ type: "text", text: "User selected Postgres." }],
 					details: {
 						results: [
 							{
 								id: "db",
-								question: "Storage backend?",
-								multi: false,
+								question: "Storage backend",
+								options: ["SQLite", "Postgres"],
 								selectedOptions: ["Postgres"],
-								note: "managed instance",
+								note: "Use the existing database",
+								timedOut: true,
 							},
-							{ id: "cache", question: "Cache?", multi: false, selectedOptions: ["Redis"] },
+							{ id: "notes", question: "Notes & caveats", options: [], selectedOptions: [] },
 						],
 					},
 				}}
 			/>,
 		);
 
-		expect(html).toContain("<span>Postgres</span>");
-		expect(html).toContain("managed instance");
-		// The cache question answered without a note must not leak the db note.
-		expect(html.match(/managed instance/g)?.length).toBe(1);
+		const { document } = parseHTML(`<html><body>${html}</body></html>`);
+		const selectedLabels = Array.from(document.querySelectorAll(".tv-row"))
+			.filter(row => row.querySelector(".tv-row-key")?.textContent === "●")
+			.map(row => row.querySelector(".tv-row-val")?.textContent);
+		expect(selectedLabels).toEqual(["Postgres"]);
+		expect(document.querySelectorAll(".tv-note--warn")).toHaveLength(1);
+		expect(document.body.textContent).toContain("Use the existing database");
+	});
+
+	it("falls back to the result text when details carry no answers", () => {
+		const html = renderToStaticMarkup(
+			<ToolView
+				name="ask"
+				defaultOpen
+				args={{ questions: [] }}
+				result={{ content: [{ type: "text", text: "Ask needs at least one question." }], isError: true }}
+			/>,
+		);
+
+		expect(html).toContain("at least one question");
 	});
 });
 

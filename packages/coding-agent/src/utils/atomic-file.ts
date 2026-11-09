@@ -1,21 +1,30 @@
 import * as fs from "node:fs";
 import { hasFsCode, isEexist, isEnoent, logger, toError } from "@oh-my-pi/pi-utils";
 
-const RENAME_RETRIES = 40;
-const RENAME_RETRY_DELAY_MS = 50;
+const RENAME_RETRY_BUDGET_MS = 2_000;
+const RENAME_RETRY_INITIAL_MS = 5;
+const RENAME_RETRY_MAX_MS = 100;
 
 /**
- * Publish a staged sibling without removing the live destination. Windows
- * replacement failures can be transient while readers hold a file handle.
+ * Publish a staged sibling without moving the old destination aside, so readers
+ * never observe a missing file while transient Windows replacement denials clear.
  */
 export async function replaceFileAtomically(tempPath: string, targetPath: string): Promise<void> {
-	for (let attempt = 0; ; attempt++) {
+	const deadline = Date.now() + RENAME_RETRY_BUDGET_MS;
+	for (let failures = 0; ; failures++) {
 		try {
 			await fs.promises.rename(tempPath, targetPath);
 			return;
 		} catch (error) {
-			if ((!hasFsCode(error, "EPERM") && !isEexist(error)) || attempt >= RENAME_RETRIES) throw error;
-			await Bun.sleep(RENAME_RETRY_DELAY_MS);
+			if (
+				process.platform !== "win32" ||
+				(!hasFsCode(error, "EPERM") && !hasFsCode(error, "EACCES") && !isEexist(error))
+			) {
+				throw error;
+			}
+			const remaining = deadline - Date.now();
+			if (remaining <= 0) throw error;
+			await Bun.sleep(Math.min(remaining, RENAME_RETRY_MAX_MS, RENAME_RETRY_INITIAL_MS * 2 ** failures));
 		}
 	}
 }

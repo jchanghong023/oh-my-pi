@@ -1,5 +1,4 @@
 import { getAllOAuthProviders, getOAuthCredentialProvider, type OAuthProviderInfo } from "@oh-my-pi/pi-ai/oauth";
-import type { ModelRegistry } from "../../config/model-registry";
 import type { AgentSession } from "../../session/agent-session";
 import type { AuthStorage, OAuthAccountIdentity, StoredAuthCredential } from "../../session/auth-storage";
 
@@ -119,7 +118,10 @@ export type LogoutCommandResult =
 
 /** One logout operation, shared by the native selectors and protocol-backed dialogs. */
 export async function logoutProviderForCommand(
-	session: Pick<AgentSession, "modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed">,
+	session: Pick<
+		AgentSession,
+		"modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed" | "refreshScopedModels"
+	>,
 	providerId: string | undefined,
 	ui: LogoutCommandUI,
 	signal?: AbortSignal,
@@ -135,8 +137,9 @@ export async function logoutProviderForCommand(
 	const authStorage = modelRegistry.authStorage;
 	await authStorage.credentials.reload();
 	if (!provider) {
-		const storedProviders = providers.filter(candidate =>
-			authStorage.credentials.has(getOAuthCredentialProvider(candidate.id)),
+		const storedProviders = providers.filter(
+			candidate =>
+				candidate.id === getOAuthCredentialProvider(candidate.id) && authStorage.credentials.has(candidate.id),
 		);
 		if (storedProviders.length === 0) {
 			return {
@@ -197,6 +200,7 @@ export async function logoutProviderForCommand(
 		};
 	}
 	await modelRegistry.refreshProvider(storageProvider, "online");
+	await session.refreshScopedModels();
 	return {
 		status: "removed",
 		account,
@@ -239,12 +243,12 @@ export async function listLogoutAccounts(
  * names the auth source that still authenticates the provider, if any.
  */
 export async function logoutCredential(
-	modelRegistry: ModelRegistry,
+	session: Pick<AgentSession, "modelRegistry" | "sessionId" | "refreshScopedModels">,
 	loginProvider: string,
 	credentialId: number,
-	sessionId: string,
 ): Promise<{ removed: boolean; remainingSource?: string }> {
 	const provider = getOAuthCredentialProvider(loginProvider);
+	const modelRegistry = session.modelRegistry;
 	const authStorage = modelRegistry.authStorage;
 	// Reload so an id stored by another process is found, not reported missing.
 	await authStorage.credentials.reload();
@@ -255,5 +259,6 @@ export async function logoutCredential(
 	// authoritative cache row and keep showing models the credential
 	// unlocked (#5780). Other providers are left untouched.
 	await modelRegistry.refreshProvider(provider, "online");
-	return { removed: true, remainingSource: authStorage.keys.describe(provider, sessionId) };
+	await session.refreshScopedModels();
+	return { removed: true, remainingSource: authStorage.keys.describe(provider, session.sessionId) };
 }

@@ -14,6 +14,12 @@
 
 - Keep Linux offline memory databases, banks, blobs, plugins and checkpoints inside the active shm domain without automatically adopting legacy disk data.
 
+## [18.18.2] - 2026-11-08
+
+### Fixed
+
+- Fixed recall returning episodic summaries for working memories that had been invalidated.
+
 ## [18.18.1] - 2026-11-08
 
 ### Fixed

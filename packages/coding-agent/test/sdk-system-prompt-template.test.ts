@@ -12,16 +12,16 @@ import { getOfflineSystemNotice } from "@oh-my-pi/pi-coding-agent/utils/offline-
 import { getTestModel } from "./helpers/model-fixtures";
 
 type SystemPromptOption = string | string[] | ((defaultPrompt: string[]) => string | string[]);
-type ExplicitSystemPromptOptions = Pick<
+type SessionOverrides = Pick<
 	CreateAgentSessionOptions,
-	"systemPromptTemplate" | "customSystemPrompt" | "offline" | "taskDepth" | "getApiKey" | "extensions"
+	"systemPromptTemplate" | "customSystemPrompt" | "offline" | "taskDepth" | "getApiKey" | "extensions" | "settings"
 >;
 
 async function withSession<T>(
 	nativeTemplate: string,
 	systemPrompt: SystemPromptOption,
 	fn: (session: AgentSession) => Promise<T>,
-	explicitSystemPromptOptions: ExplicitSystemPromptOptions = {},
+	overrides: SessionOverrides = {},
 ): Promise<T> {
 	using tempDir = TempDir.createSync("@omp-sdk-system-prompt-template-");
 	const cwd = tempDir.join("project");
@@ -49,7 +49,7 @@ async function withSession<T>(
 			enableMCP: false,
 			enableLsp: false,
 			systemPrompt,
-			...explicitSystemPromptOptions,
+			...overrides,
 		});
 		session = result.session;
 		return await fn(session);
@@ -99,13 +99,27 @@ describe("SDK systemPrompt replacements", () => {
 		await withSession(
 			"{{#if eagerTasks}}",
 			defaultPrompt => {
-				expect(defaultPrompt.join("\n\n")).toContain("§ Tool Policy");
+				expect(defaultPrompt.join("\n\n")).toContain("⁂ Tool Policy");
 				return "callback replacement";
 			},
 			async session => {
 				expect(session.systemPrompt).toEqual(["callback replacement"]);
 			},
 		);
+	});
+
+	it("applies task.eager to the main agent prompt only, never to subagents", async () => {
+		const render = (taskDepth: number) =>
+			withSession(
+				"{{#if eagerTasks}}EAGER{{else}}MODEL_POLICY{{/if}}",
+				defaultPrompt => defaultPrompt,
+				async session => session.systemPrompt.join("\n\n"),
+				{ settings: Settings.isolated({ "task.eager": "always" }), taskDepth },
+			);
+		expect(await render(0)).toContain("EAGER");
+		const subagentPrompt = await render(1);
+		expect(subagentPrompt).toContain("MODEL_POLICY");
+		expect(subagentPrompt).not.toContain("EAGER");
 	});
 });
 

@@ -24,6 +24,10 @@
 - Keep the Dev composer visible while short windows scroll and show long confirmation scopes before the reply field.
 - Avoid false native editor-sync errors after a Dev message is accepted.
 
+### Changed
+
+- Preserve structured `ask` question cards, recommended choices, selected answers and notes, including explicit timeout-selection feedback.
+
 ## [18.15.0] - 2026-11-01
 
 ### Changed

@@ -32,18 +32,23 @@ async function logoutFixture() {
 		{ type: "oauth", access: "access-b", refresh: "refresh-b", expires: Date.now() + 60_000, email: "b@example.com" },
 	]);
 	const refreshProvider = vi.fn(async () => {});
+	const refreshScopedModels = vi.fn(async () => {});
 	const session = {
 		sessionId: "logout-session",
 		sessionGeneration: 0,
 		isDisposed: false,
+		refreshScopedModels,
 		modelRegistry: { authStorage: storage, refreshProvider },
-	} as unknown as Pick<AgentSession, "modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed">;
-	return { storage, refreshProvider, session };
+	} as unknown as Pick<
+		AgentSession,
+		"modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed" | "refreshScopedModels"
+	>;
+	return { storage, refreshProvider, refreshScopedModels, session };
 }
 
 describe("shared logout business", () => {
 	test("no argument selects a real provider and removes only the selected stored account", async () => {
-		const { storage, session, refreshProvider } = await logoutFixture();
+		const { storage, session, refreshProvider, refreshScopedModels } = await logoutFixture();
 		const originalRows = storage.credentials.list("anthropic");
 		const selectedId = originalRows[1]!.id;
 		const ui: LogoutCommandUI = {
@@ -68,6 +73,7 @@ describe("shared logout business", () => {
 		expect(result.status).toBe("removed");
 		expect(storage.credentials.list("anthropic").map(row => row.id)).toEqual([originalRows[0]!.id]);
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
+		expect(refreshScopedModels).toHaveBeenCalledTimes(1);
 		expect(result.status === "removed" && result.account.credentialId).toBe(selectedId);
 	});
 
@@ -175,6 +181,9 @@ describe("shared logout business", () => {
 		const result = await logoutProviderForCommand(session, undefined, {
 			selectProvider: async providers => {
 				expect(providers.length).toBeGreaterThanOrEqual(2);
+				expect(providers.map(provider => provider.id)).toEqual(
+					Array.from(new Set(providers.map(provider => getOAuthCredentialProvider(provider.id)))),
+				);
 				for (const provider of providers)
 					expect(storage.credentials.has(getOAuthCredentialProvider(provider.id))).toBe(true);
 				return undefined;

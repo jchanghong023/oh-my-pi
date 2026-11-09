@@ -18,12 +18,17 @@ async function fixture() {
 	storages.push(storage);
 	await storage.credentials.set("anthropic", [{ type: "api_key", key: "stored-key" }]);
 	const refreshProvider = vi.fn(async () => {});
+	const refreshScopedModels = vi.fn(async () => {});
 	const session = {
 		sessionId: "logout-no-ui",
 		sessionGeneration: 0,
 		isDisposed: false,
+		refreshScopedModels,
 		modelRegistry: { authStorage: storage, refreshProvider },
-	} as unknown as Pick<AgentSession, "modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed">;
+	} as unknown as Pick<
+		AgentSession,
+		"modelRegistry" | "sessionId" | "sessionGeneration" | "isDisposed" | "refreshScopedModels"
+	>;
 	const output: string[] = [];
 	const runtime = {
 		session,
@@ -36,15 +41,16 @@ async function fixture() {
 		refreshCommands: async () => {},
 		reloadPlugins: async () => {},
 	} as unknown as SlashCommandRuntime;
-	return { storage, session, refreshProvider, runtime };
+	return { storage, session, refreshProvider, refreshScopedModels, runtime };
 }
 
 describe("logout without ACP elicitation", () => {
 	test.each(["/logout", "/logout anthropic"])("%s removes the only stored account without a UI", async command => {
-		const { storage, runtime, refreshProvider } = await fixture();
+		const { storage, runtime, refreshProvider, refreshScopedModels } = await fixture();
 		expect(await executeAcpBuiltinSlashCommand(command, runtime)).toEqual({ consumed: true });
 		expect(storage.credentials.list("anthropic")).toEqual([]);
 		expect(refreshProvider).toHaveBeenCalledWith("anthropic", "online");
+		expect(refreshScopedModels).toHaveBeenCalledTimes(1);
 	});
 
 	test("multiple accounts without a UI remain stored even with an explicit provider", async () => {

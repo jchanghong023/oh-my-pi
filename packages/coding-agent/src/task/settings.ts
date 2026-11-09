@@ -238,7 +238,7 @@ export const cfgTaskEager = register({
 		tab: "tasks",
 		group: "Subagents",
 		label: "优先委派任务",
-		description: "推动将工作委派给 Subagent 的程度",
+		description: "推动主 Agent 委派工作的程度；Subagent 保留模型自身的策略",
 		options: [
 			{
 				value: "default",
