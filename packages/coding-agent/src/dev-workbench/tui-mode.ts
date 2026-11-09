@@ -269,7 +269,7 @@ export class DevWorkbenchTuiMode {
 			this.#showNotice(`已按 ${noOpen}=1 跳过自动打开浏览器；请使用上方地址访问。`, "muted");
 			return;
 		}
-		void openPathWithResult(handle.loopbackUrl).then(result => {
+		void openPathWithResult(handle.loopbackUrl, { useCshBrowserAlias: true }).then(result => {
 			if (this.#phase !== "active") return;
 			if (!result.opened) this.#showNotice(`浏览器未自动打开：${result.reason}\n请使用上方地址访问。`, "warning");
 		});

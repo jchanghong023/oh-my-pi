@@ -69,10 +69,32 @@ function windowsOpenerCommand(target: string): string[] {
 		Buffer.from(script, "utf16le").toString("base64"),
 	];
 }
+
+function cshBrowserCommand(target: string): string[] | undefined {
+	if (process.platform !== "linux" || !/^https?:\/\//i.test(target)) return undefined;
+	const shell = process.env.SHELL;
+	if (!shell || !["csh", "tcsh"].includes(path.posix.basename(shell))) return undefined;
+	// Read aliases through the user's own startup files. Keep the URL in argv,
+	// quoted by csh itself, and do not wait for the browser window to close.
+	return [
+		shell,
+		"-ic",
+		`set omp_ff_status = 127
+if ( "\`alias ff\`" != "" ) then
+ff $argv:q &
+set omp_ff_status = $status
+endif
+exit $omp_ff_status`,
+		target,
+	];
+}
+
 /** Open a URL or file path in the default application, reporting the opener's actual result. */
 export async function openPathWithResult(
 	urlOrPath: string,
+	options?: { useCshBrowserAlias?: boolean },
 ): Promise<{ opened: true } | { opened: false; reason: string }> {
+	const browserCommand = options?.useCshBrowserAlias ? cshBrowserCommand(urlOrPath) : undefined;
 	let cmd: string[] = [];
 	try {
 		switch (process.platform) {
@@ -83,8 +105,8 @@ export async function openPathWithResult(
 				cmd = windowsOpenerCommand(urlOrPath);
 				break;
 			default: {
-				const wslPath = getExistingWslLocalPath(urlOrPath);
-				cmd = wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath];
+				const wslPath = browserCommand ? undefined : getExistingWslLocalPath(urlOrPath);
+				cmd = browserCommand ?? (wslPath ? ["wslview", wslPath] : ["xdg-open", urlOrPath]);
 				break;
 			}
 		}
@@ -96,7 +118,10 @@ export async function openPathWithResult(
 		});
 		const exitCode = await child.exited;
 		if (exitCode !== 0) {
-			const reason = `External opener exited with status ${exitCode}`;
+			const reason =
+				browserCommand && exitCode === 127
+					? "未找到 ff 浏览器别名；请加载 Firefox 模块，并在 ~/.cshrc（或 ~/.tcshrc）中设置 alias ff '/实际路径/firefox'，确认 ff 可打开网页后重试。"
+					: `External opener exited with status ${exitCode}`;
 			logger.warn(reason, { command: cmd[0], target: urlOrPath, exitCode });
 			return { opened: false, reason };
 		}

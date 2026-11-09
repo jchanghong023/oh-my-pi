@@ -101,6 +101,12 @@ Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS�
 
 普通模式不追加上述规则，Windows offline 不追加 Linux/csh 段落；不改变 Shell 执行器或用户配置。提示词不替代实际网络隔离、存储权限和公司实机验证。
 
+### Dev／WebGUI 自动打开 Firefox
+
+Linux 下，若 `SHELL` 为 csh／tcsh，`/dev`、`/webgui` 与 `omp webgui` 会读取该 Shell 的交互启动文件，通过已有的 `ff` 别名打开网页，不需要修改系统默认浏览器。请将原来加载 Firefox 模块的 `ma` 命令和 `ff` 定义保留在 `~/.cshrc`（tcsh 也可用 `~/.tcshrc`）；只在当前终端临时定义的别名不能被子进程继承。
+
+没有 `ff` 时，OMP 会提示设置别名，并保留完整访问地址，不静默打开其他浏览器。不会自动修改你的配置；仍需可用的 X11 显示环境。其他 Shell、Windows 和普通 OMP 链接／文件打开保持原行为。`OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 仍可分别跳过自动打开。启动交接成功不代表已在公司 CentOS／Firefox 实机验证。
+
 ### 中文输入法突然失效
 
 在发生故障的 OMP 输入框输入 `/jchime` 并发送；也可输入 `/jchime 只有当前窗口不能输入中文` 补充现象。内置指令已包含供较小模型执行的完整恢复块，无需另找脚本或填写总线地址。

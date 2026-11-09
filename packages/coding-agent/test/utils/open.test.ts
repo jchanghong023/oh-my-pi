@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { openPath } from "@oh-my-pi/pi-coding-agent/utils/open";
+import { openPath, openPathWithResult } from "@oh-my-pi/pi-coding-agent/utils/open";
 import * as piUtils from "@oh-my-pi/pi-utils";
 import type { Subprocess } from "bun";
 
@@ -18,7 +18,7 @@ const existingLinuxPath = "/mnt/c/Users/example/Downloads/session.html";
 const windowsPath = "C:\\Users\\example\\Downloads\\session.html";
 
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP"] as const;
+const ENV_KEYS = ["WSL_DISTRO_NAME", "WSL_INTEROP", "SHELL"] as const;
 let savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {};
 
 function setPlatform(value: NodeJS.Platform): void {
@@ -29,22 +29,22 @@ function restorePlatform(): void {
 	if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 }
 
-function fakeProcess(): Subprocess {
+function fakeProcess(exitCode = 0): Subprocess {
 	return {
 		pid: 1,
-		exited: Promise.resolve(0),
+		exited: Promise.resolve(exitCode),
 		kill: () => true,
 	} as unknown as Subprocess;
 }
 
-function spySpawn(calls: SpawnCall[]) {
+function spySpawn(calls: SpawnCall[], exitCode = 0) {
 	function mockSpawn(opts: SpawnOptions & { cmd: string[] }): Subprocess;
 	function mockSpawn(cmd: string[], opts?: SpawnOptions): Subprocess;
 	function mockSpawn(first: string[] | (SpawnOptions & { cmd: string[] }), second?: SpawnOptions): Subprocess {
 		const cmd = Array.isArray(first) ? first : first.cmd;
 		const options = Array.isArray(first) ? (second ?? ({} as SpawnOptions)) : (first as SpawnOptions);
 		calls.push({ cmd, options });
-		return fakeProcess();
+		return fakeProcess(exitCode);
 	}
 	return vi.spyOn(Bun, "spawn").mockImplementation(mockSpawn);
 }
@@ -89,6 +89,36 @@ afterEach(() => {
 });
 
 describe("openPath", () => {
+	it("tells csh users to configure ff instead of silently opening another browser", async () => {
+		setPlatform("linux");
+		process.env.SHELL = "/bin/tcsh";
+		const calls: SpawnCall[] = [];
+		spySpawn(calls, 127);
+
+		const result = await openPathWithResult("http://127.0.0.1:1234/dev/capability/", {
+			useCshBrowserAlias: true,
+		});
+
+		expect(result.opened).toBe(false);
+		if (result.opened) throw new Error("Missing ff must not be reported as opened");
+		expect(result.reason).toContain("ff");
+		expect(result.reason).toContain("alias");
+		expect(result.reason).toContain("~/.cshrc");
+		expect(calls.some(call => call.cmd[0] === "xdg-open")).toBe(false);
+	});
+
+	it("does not misdiagnose shell initialization failures as an undefined ff alias", async () => {
+		setPlatform("linux");
+		process.env.SHELL = "/bin/csh";
+		const calls: SpawnCall[] = [];
+		spySpawn(calls, 1);
+
+		expect(await openPathWithResult("http://127.0.0.1:1234/", { useCshBrowserAlias: true })).toEqual({
+			opened: false,
+			reason: expect.stringContaining("1"),
+		});
+	});
+
 	it("opens existing WSL mount files through wslview with a Windows path", () => {
 		setPlatform("linux");
 		process.env.WSL_DISTRO_NAME = "Ubuntu";
@@ -211,24 +241,15 @@ describe("openPath", () => {
 		}
 	});
 
-	it("logs when the opener exits non-zero so Start-Process failures are diagnosable", async () => {
+	it("reports a failed OS handoff instead of claiming the browser opened", async () => {
 		setPlatform("win32");
 		vi.spyOn(fs, "existsSync").mockReturnValue(true);
-		const warnSpy = vi.spyOn(piUtils.logger, "warn").mockImplementation((() => {}) as never);
-		const failing = {
-			pid: 1,
-			exited: Promise.resolve(1),
-			kill: () => true,
-		} as unknown as Subprocess;
-		vi.spyOn(Bun, "spawn").mockImplementation(() => failing);
+		const calls: SpawnCall[] = [];
+		spySpawn(calls, 1);
 
-		openPath("https://example.com");
-		await failing.exited;
-		await Promise.resolve();
-
-		expect(warnSpy).toHaveBeenCalledWith(
-			"External opener exited with non-zero status",
-			expect.objectContaining({ exitCode: 1 }),
-		);
+		expect(await openPathWithResult("https://example.com")).toEqual({
+			opened: false,
+			reason: expect.stringContaining("1"),
+		});
 	});
 });

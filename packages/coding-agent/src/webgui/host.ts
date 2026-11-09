@@ -246,7 +246,7 @@ export async function runWebGuiCommand(): Promise<void> {
 		if (process.env.OMP_WEBGUI_NO_OPEN === "1") {
 			process.stderr.write("已按 OMP_WEBGUI_NO_OPEN=1 跳过自动打开浏览器；请使用上方地址访问。\n");
 		} else {
-			const result = await openPathWithResult(server.loopbackUrl);
+			const result = await openPathWithResult(server.loopbackUrl, { useCshBrowserAlias: true });
 			if (!result.opened) process.stderr.write(`浏览器未自动打开：${result.reason}\n`);
 		}
 		// Own a closable reader: cancelling Bun's native stdin stream can wait

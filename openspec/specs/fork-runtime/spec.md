@@ -55,6 +55,22 @@ OMP MUST 仅在 offline 会话追加环境规则；CLI、SDK 和 task 子代理 
 - **THEN** 保留原有提示词内容并追加适用规则；最终 provider 上下文已有完整规则时不重复追加，自定义提示词替换不能绕过 offline 规则。
 - **AND** 这些规则仅指导模型，不替代网络隔离、文件权限或现有数据目录解析，不自动执行安装、环境切换或数据搬迁。
 
+### Requirement: Dev 与 WebGUI 的 csh 浏览器启动
+
+Dev 与 WebGUI MUST 在 Linux 且 `SHELL` 路径末段为 `csh` 或 `tcsh` 时，通过该 Shell 的交互启动文件加载 `ff` 浏览器别名并打开 HTTP／HTTPS 地址，不要求修改系统默认浏览器。
+
+#### Scenario: 使用已有 Firefox 别名
+
+- **WHEN** 用户打开 Dev、TUI WebGUI 或独立 `omp webgui`，且该 Shell 的启动文件定义了 `ff`
+- **THEN** 沿用用户的模块初始化、显示环境与别名启动浏览器；地址作为独立参数交给 Shell 引用，不拼接为可执行命令文本，不等待浏览器窗口关闭
+- **AND** 仅在这些显式网页入口启用；普通 OMP 的其他链接／文件打开、其他 Shell 和其他平台沿用原打开方式，既有跳过自动打开的环境变量仍有效
+
+#### Scenario: 未配置 ff
+
+- **WHEN** 对应 csh／tcsh 启动环境中没有 `ff` 浏览器别名
+- **THEN** MUST 提醒用户加载 Firefox 模块并在 `~/.cshrc` 或 `~/.tcshrc` 设置 `alias ff` 后重试，保留可手动打开的完整地址，不静默回退其他浏览器，不自动改写 Shell 配置
+- **AND** Shell 初始化或其他启动失败仍按实际失败报告；启动交接成功不等于公司 CentOS 或 Firefox 实机验证通过
+
 ### Requirement: 安装与运行
 
 OMP MUST 按有效持久根、性能目录、网络与安装边界运行；失败保留旧安装或已验证产物并如实报告。
