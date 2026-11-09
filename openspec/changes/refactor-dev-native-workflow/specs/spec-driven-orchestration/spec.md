@@ -4,11 +4,15 @@
 
 ### Requirement: 新 Dev 模块与普通 OMP 的隔离
 
-本次 Dev MUST 一次性替换旧 Dev 流程并复用 OMP 原生能力。普通 OMP、TUI、独立 OpenSpec、Superpowers、JCH、原生工具及既有用户配置 MUST 不因新工作台改变默认行为；未启用功能时不启动额外工作。
+本次 Dev MUST 一次性替换旧 Dev 流程并复用 OMP 原生能力；前端先完整复制 WebGUI 代码替换旧 Dev，再仅修改 Dev 副本。原 WebGUI 前后端、入口、协议、构建配置及正式资源 MUST 不修改，MUST NOT 以 Dev 需求改造 `src/webgui/` 或向原 WebGUI 注入新业务。普通 OMP、TUI、独立 OpenSpec、Superpowers、JCH、原生工具及既有用户配置 MUST 不因新工作台改变默认行为；未启用功能时不启动额外工作。
 
 #### Scenario: 独立能力照常使用
 - **WHEN** 用户未启用 Dev 或使用独立需求命令
 - **THEN** 保留包内固定版本、schema、技能发现和原生校验；不强制进入工作台，不添加阶段批准或后台证据任务。
+
+#### Scenario: 原 WebGUI 独立保持原状
+- **WHEN** 新 Dev 增加多项目需求整理、review、冻结保护或四阶段开发
+- **THEN** 这些能力由 Dev 副本与 Dev 宿主集成承载，不修改原 WebGUI；原 `/webgui`／`omp webgui` 沿用既有服务合同和行为，不读取或驱动新增 Dev 工作流。
 
 #### Scenario: 旧流程退役
 - **WHEN** 用户目录含旧 Dev 状态或使用旧子操作

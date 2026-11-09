@@ -57,9 +57,17 @@ Dev 工作台 MUST 以 Firefox 128 默认启用的原生能力作为最低运行
 
 ## ADDED Requirements
 
-### Requirement: 基于 WebGUI 的三栏 Dev 与紧凑导航
+### Requirement: 完整复制 WebGUI 后改造 Dev 三栏与紧凑导航
 
-新 Dev MUST 基于复制并重构的 WebGUI 界面交付，使用左侧需求导航、中间 AI 会话、右侧只读材料。左侧固定新建需求、导入、Release 选择和当前 Release 的平铺 IR 标题，项目切换与设置位于左下角。
+新 Dev 实现的第一步 MUST 将现有 WebGUI 前端代码完整复制到 Dev 自有前端并替换旧 Dev 前端，再仅修改复制后的 Dev 代码实现本组需求。MUST NOT 仅参考布局、挑选组件、直接挂载原 WebGUI 或在原 WebGUI 中增加 Dev 分支；原 WebGUI 前后端、入口、协议、构建配置及正式资源 MUST 保持不变。Dev 副本使用自己的前端状态、构建和资源入口，复用 OMP 原生能力而不另建执行器。新 Dev 使用左侧需求导航、中间 AI 会话、右侧只读材料；左侧固定新建需求、导入、Release 选择和当前 Release 的平铺 IR 标题，项目切换与设置位于左下角。
+
+#### Scenario: 先完整替换再实现
+- **WHEN** 开始重构 Dev 前端
+- **THEN** 先完整复制 `vendor/zcode-frontend/preview/` 的 WebGUI 前端代码替换现有 Dev 前端，后续需求改动仅落在 Dev 副本及其 Dev 集成，不保留旧 Dev 前端或双轨入口。
+
+#### Scenario: 原 WebGUI 不受改造影响
+- **WHEN** Dev 副本增加需求导航、多项目设置、材料查看及四阶段控制
+- **THEN** `/webgui`／`omp webgui` 仍使用原来的前端与宿主，不新增 Dev 工作流，不修改原 WebGUI 源码、构建配置或正式资源；Dev 新状态不污染原 WebGUI 的项目、会话或浏览器状态。
 
 #### Scenario: 紧凑需求列表
 - **WHEN** 用户查看项目需求
