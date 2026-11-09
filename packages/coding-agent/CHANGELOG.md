@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.
 - Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.
 - Cancel native Dev requirements faster while preserving unrelated staged changes.
