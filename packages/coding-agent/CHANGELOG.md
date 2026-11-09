@@ -47,6 +47,8 @@
 
 ### Fixed
 
+- Avoid false connection-close errors when navigating between WebGUI projects in Firefox.
+- Render streamed assistant replies and file references without a missing directive-parser function error.
 - Give Dev agents the exact failed Next diagnostic on the next user turn and clarify existing requirement-format limits without changing validation or approval gates.
 - Show the Dev host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
 - Fix coding-agent type checks for Dev workbench keyboard-focus verification.
