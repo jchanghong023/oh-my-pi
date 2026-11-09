@@ -1478,7 +1478,7 @@ export async function runDevWorkbenchCommand(parsedArgs: Args, _rawArgs: string[
 		if (process.env.OMP_DEV_NO_OPEN === "1") {
 			process.stderr.write("Browser opener skipped (OMP_DEV_NO_OPEN=1); use the ready URL.\n");
 		} else {
-			const opened = await openPathWithResult(handle.loopbackUrl);
+			const opened = await openPathWithResult(handle.loopbackUrl, { useCshBrowserAlias: true });
 			if (!opened.opened)
 				process.stderr.write(`Browser opener failed: ${opened.reason}. Service remains ready at ${handle.url}\n`);
 		}

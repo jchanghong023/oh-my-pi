@@ -43,6 +43,7 @@
 
 ### Fixed
 
+- Preserve complete Dev and WebGUI URLs when csh startup files rewrite arguments, and use the offline `ff` browser alias for `omp dev` too.
 - Open Dev and WebGUI through the user's `ff` browser alias only in offline Linux csh/tcsh sessions, with setup guidance when the alias is missing; preserve default browser opening elsewhere.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.

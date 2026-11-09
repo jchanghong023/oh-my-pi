@@ -75,18 +75,17 @@ function cshBrowserCommand(target: string): string[] | undefined {
 	if (!offlineFromEnv() || process.platform !== "linux" || !/^https?:\/\//i.test(target)) return undefined;
 	const shell = process.env.SHELL;
 	if (!shell || !["csh", "tcsh"].includes(path.posix.basename(shell))) return undefined;
-	// Read aliases through the user's own startup files. Keep the URL in argv,
-	// quoted by csh itself, and do not wait for the browser window to close.
+	// Startup files and module initialization may rewrite argv. Pass the URL
+	// separately so ff retains its environment without losing the address.
 	return [
 		shell,
 		"-ic",
 		`set omp_ff_status = 127
 if ( "\`alias ff\`" != "" ) then
-ff $argv:q &
+ff $OMP_BROWSER_URL:q &
 set omp_ff_status = $status
 endif
 exit $omp_ff_status`,
-		target,
 	];
 }
 
@@ -116,6 +115,7 @@ export async function openPathWithResult(
 			stdout: "ignore",
 			stderr: "ignore",
 			windowsHide: process.platform === "win32",
+			...(browserCommand ? { env: { ...process.env, OMP_BROWSER_URL: urlOrPath } } : {}),
 		});
 		const exitCode = await child.exited;
 		if (exitCode !== 0) {

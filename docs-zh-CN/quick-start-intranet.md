@@ -103,7 +103,7 @@ Linux offline 额外提醒项目持久材料及必要备份使用获准的 NFS�
 
 ### Dev／WebGUI 自动打开 Firefox
 
-仅在 `OMP_OFFLINE` 启用、Linux 且 `SHELL` 为 csh／tcsh 时，`/dev`、`/webgui` 与 `omp webgui` 会读取该 Shell 的交互启动文件，通过已有的 `ff` 别名打开网页，不需要修改系统默认浏览器。请将原来加载 Firefox 模块的 `ma` 命令和 `ff` 定义保留在 `~/.cshrc`（tcsh 也可用 `~/.tcshrc`）；只在当前终端临时定义的别名不能被子进程继承。
+仅在 `OMP_OFFLINE` 启用、Linux 且 `SHELL` 为 csh／tcsh 时，`/dev`、`omp dev`、`/webgui` 与 `omp webgui` 会读取该 Shell 的交互启动文件，通过已有的 `ff` 别名打开网页，不需要修改系统默认浏览器。请将原来加载 Firefox 模块的 `ma` 命令和 `ff` 定义保留在 `~/.cshrc`（tcsh 也可用 `~/.tcshrc`）；只在当前终端临时定义的别名不能被子进程继承。OMP 通过子进程专用的 `OMP_BROWSER_URL` 环境变量传递完整地址，不依赖可能被初始化脚本改写的 `$argv`；无需手动设置该变量。已有 `env GTK_IM_MODULE=xim /绝对路径/firefox` 别名及 X11 显示环境保持不变。
 
 上述 offline 环境没有 `ff` 时，OMP 会提示设置别名，并保留完整访问地址，不静默打开其他浏览器。不会自动修改你的配置；仍需可用的 X11 显示环境。非 offline、其他 Shell、Windows 和普通 OMP 链接／文件打开保持原行为，不要求配置 `ff`。`OMP_DEV_NO_OPEN=1`／`OMP_WEBGUI_NO_OPEN=1` 仍可分别跳过自动打开。启动交接成功不代表已在公司 CentOS／Firefox 实机验证。
 

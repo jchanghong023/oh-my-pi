@@ -62,7 +62,7 @@ Dev 与 WebGUI MUST 仅在 `OMP_OFFLINE` 启用、Linux 且 `SHELL` 路径末段
 #### Scenario: 使用已有 Firefox 别名
 
 - **WHEN** 用户打开 Dev、TUI WebGUI 或独立 `omp webgui`，且该 Shell 的启动文件定义了 `ff`
-- **THEN** 沿用用户的模块初始化、显示环境与别名启动浏览器；地址作为独立参数交给 Shell 引用，不拼接为可执行命令文本，不等待浏览器窗口关闭
+- **THEN** 沿用用户的模块初始化、显示环境与别名启动浏览器；完整地址通过子进程专用环境变量 `OMP_BROWSER_URL` 交给 Shell 引用，不依赖启动脚本可能改写的 `$argv`，不拼接为可执行命令文本，不等待浏览器窗口关闭
 - **AND** 仅在这些显式网页入口的上述 offline 环境启用；非 offline、普通 OMP 的其他链接／文件打开、其他 Shell 和其他平台沿用原打开方式，不读取 `ff` 或提示配置别名，既有跳过自动打开的环境变量仍有效
 
 #### Scenario: 未配置 ff
