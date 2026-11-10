@@ -21,8 +21,7 @@ export interface DevAssetPayload {
 // Replaced by the production resource plugin; source uses the generated file only.
 declare const OMP_DEV_WORKBENCH_ASSETS: string | undefined;
 const embeddedPayload = typeof OMP_DEV_WORKBENCH_ASSETS === "undefined" ? null : OMP_DEV_WORKBENCH_ASSETS;
-const preparation =
-	"Run bun run gen:dev-workbench (bun packages/coding-agent/scripts/dev-workbench-resources.ts --write).";
+const preparation = "Run bun run gen:dev (bun packages/coding-agent/scripts/dev-workbench-resources.ts --write).";
 
 /** Hash the ordered paths, MIME types and exact byte hashes without ambiguous framing. */
 export function devWorkbenchAssetDigest(files: DevAssetManifest["files"]): string {

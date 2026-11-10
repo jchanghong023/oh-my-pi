@@ -36,7 +36,7 @@ describe("ordinary native TSP surface", () => {
 		await Settings.init({ inMemory: true, cwd: tempDir.path() });
 		authStorage = await AuthStorage.create(path.join(tempDir.path(), "auth.db"));
 		const modelRegistry = new ModelRegistry(authStorage);
-		provider = createProviderFixture({ requirementsQuestion: "TSP_STAGE_QUESTION" });
+		provider = createProviderFixture();
 		modelRegistry.registerProvider("deepseek", {
 			api: "openai-completions",
 			baseUrl: provider.baseUrl,

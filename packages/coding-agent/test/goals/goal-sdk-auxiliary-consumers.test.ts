@@ -6,7 +6,7 @@ import { renderOrchestrateNotice } from "@oh-my-pi/pi-coding-agent/modes/magic-k
 import { createAgentSession } from "@oh-my-pi/pi-coding-agent/sdk";
 import type { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { convertToLlm, type CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
+import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { getTaskSchema } from "@oh-my-pi/pi-coding-agent/task/types";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
@@ -383,7 +383,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 			const notice = await h.run(() => enter(h.session, h.signal));
 			const bytes = JSON.stringify(notice);
 			const text = contentText(notice.content);
-			const providerNotice = convertToLlm([notice])[0]!;
 			await h.session.sessionManager.ensureOnDisk();
 			await h.session.sessionManager.flush();
 			const before = h.provider.requests.length;
@@ -446,7 +445,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 						return result;
 					});
 					await h.run(() => child.prompt("Read the existing history; do not recreate the root Goal notice."));
-					expect(convertToLlm(notices(child))).toEqual([providerNotice]);
 					expect(
 						child.sessionManager
 							.getBranch()
@@ -531,7 +529,6 @@ describe("Goal SDK indirect capability and auxiliary history consumers", () => {
 						)
 						.map(entry => entry.id),
 				).toEqual(entryIds);
-				expect(convertToLlm([notices(h.session)[0]!])[0]).toEqual(providerNotice);
 			} else {
 				// Only the successful root commit may create one recovery, after
 				// the auxiliary model has consumed its applicable history context.

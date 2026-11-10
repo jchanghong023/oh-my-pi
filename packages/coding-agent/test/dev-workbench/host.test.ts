@@ -9,11 +9,30 @@ import {
 	createDevGoalController,
 	createDevWorkbenchHost,
 	getOrStartDevWorkbench,
-	type DevComposerPredictionFrame,
+	type DevWorkbenchHost,
 } from "../../src/dev-workbench/host";
-import { createDevLocalSessionBridge } from "../../src/dev-workbench/collab";
-import { DevNativeUiController } from "../../src/dev-workbench/native-ui";
-import type { Skill } from "../../src/extensibility/skills";
+import {
+	bindDevNativeSurface,
+	devNativeSurfaceSnapshot,
+	nativeWebGuiQuestions,
+	releaseDevNativeSurface,
+	subscribeDevNativeSurface,
+	updateDevNativeSurfaceEditor,
+	withNativeWebGuiInteractionScope,
+} from "../../src/dev-workbench/native/native-interactions";
+import { nativeChatRuntimeForSession } from "../../src/dev-workbench/native/native-chat";
+import { devNativePredictionAction } from "../../src/dev-workbench/native/native-predictions";
+import type {
+	DevNativePredictionSnapshot,
+	DevNativeSurfaceTarget,
+} from "../../src/dev-workbench/native/native-surface-types";
+import { cfgComposerPredictionAlternatives, cfgComposerPredictions } from "../../src/modes/settings";
+import {
+	executeWebGuiSessionCommand,
+	nativeWebGuiSessionCommands,
+	resolveWebGuiSession,
+} from "../../src/dev-workbench/native/native-session-host";
+import { loadSkillPromptBody } from "../../src/extensibility/skills";
 import { cfgGoalContinuationModes } from "../../src/goals/settings";
 import { RpcGoalController } from "../../src/modes/rpc/rpc-goal";
 import { createAgentSession } from "../../src/sdk";
@@ -21,38 +40,29 @@ import { AuthStorage } from "../../src/session/auth-storage";
 import { SessionManager } from "../../src/session/session-manager";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "../../src/session/messages";
 import { cfgTeamMembers } from "../../src/team/settings";
-import type { DevSessionTarget } from "../../src/spec-driven/types";
+import { TEAM_RESULT_MESSAGE_TYPE } from "../../src/team/controller";
+import { TEAM_READ_ONLY_TOOLS } from "../../src/team/runner";
 import { bindSpecSkillPolicy, checkSkillReadAccess } from "../../src/spec-driven/skill-policy";
 import { contentText, createProviderFixture, type ModelRequest, type Reply } from "../spec-driven/provider-fixture";
 import { MCPManager, type MCPAuthHandler } from "../../src/mcp/manager";
+import { eventually, registeredFixtureProject } from "./fixture";
+
+interface NativeHostFixture {
+	host: DevWorkbenchHost;
+	projectId: string;
+}
 
 async function fixture(
-	delay?: () => Promise<void>,
-	authMode?: "session-ui" | "programmatic",
-	skillCommands?: boolean,
-	prediction: { enabled?: boolean; alternatives?: boolean; reply?: (request: ModelRequest) => Reply } = {},
+	options: {
+		delay?: () => Promise<void>;
+		authMode?: "session-ui" | "programmatic";
+		skillCommands?: boolean;
+		reply?: (request: ModelRequest) => Reply;
+	} = {},
 ) {
 	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-workbench-host-"));
 	const agentDir = path.join(cwd, "agent");
 	await fs.mkdir(agentDir);
-	const skills: Skill[] = [];
-	if (skillCommands !== undefined) {
-		const baseDir = path.join(agentDir, "skills", "jch-grill-me");
-		await fs.mkdir(baseDir, { recursive: true });
-		const filePath = path.join(baseDir, "SKILL.md");
-		await fs.writeFile(
-			filePath,
-			"---\nname: jch-grill-me\ndescription: Native input probe\n---\nAsk one precise native skill question at a time.\n",
-		);
-		skills.push({
-			name: "jch-grill-me",
-			description: "Native input probe",
-			baseDir,
-			filePath,
-			source: "bundled-jch",
-			hide: true,
-		});
-	}
 	for (const directory of ["objects", "refs/heads"])
 		await fs.mkdir(path.join(cwd, ".git", directory), { recursive: true });
 	await fs.writeFile(path.join(cwd, ".git/HEAD"), "ref: refs/heads/main\n");
@@ -66,13 +76,13 @@ async function fixture(
 	await repo.commitCreate("fixture", {});
 	const provider = createProviderFixture({
 		reply: async request => {
-			await delay?.();
-			return prediction.reply?.(request) ?? { text: "Native response" };
+			await options.delay?.();
+			return options.reply?.(request) ?? { text: "Native response" };
 		},
 	});
 	await fs.writeFile(
 		path.join(agentDir, "models.yml"),
-		`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
+		`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        input: [text, image]\n        contextWindow: 1000000\n`,
 	);
 	const settings = await Settings.loadIsolated({
 		cwd,
@@ -85,9 +95,8 @@ async function fixture(
 			"tools.xdev": false,
 			"async.enabled": false,
 			"mcp.startupTimeoutMs": 0,
-			...(skillCommands === undefined ? {} : { "skills.enableSkillCommands": skillCommands }),
-			"composer.predictions": prediction.enabled ?? false,
-			"composer.predictionAlternatives": prediction.alternatives ?? false,
+			"composer.predictions": false,
+			...(options.skillCommands === undefined ? {} : { "skills.enableSkillCommands": options.skillCommands }),
 		},
 	});
 	const authStorage = await AuthStorage.create(":memory:");
@@ -95,7 +104,7 @@ async function fixture(
 	const model = registry.find("deepseek", "chat-a");
 	if (!model) throw new Error("Isolated provider model unavailable");
 	let ordinaryAuthCalls = 0;
-	const sourceMcp = authMode
+	const sourceMcp = options.authMode
 		? new MCPManager(cwd, null, async () => ({ configs: {}, exaApiKeys: [], sources: {} }))
 		: undefined;
 	const ordinaryAuthHandler: MCPAuthHandler = async () => {
@@ -116,7 +125,7 @@ async function fixture(
 		sessionManager: SessionManager.inMemory(cwd),
 		contextFiles: [],
 		rules: [],
-		skills,
+		skills: [],
 		promptTemplates: [],
 		slashCommands: [],
 		disableExtensionDiscovery: true,
@@ -132,15 +141,17 @@ async function fixture(
 		settings,
 		cwd,
 		mcpManager: sourceMcp,
-		nativeMcpUiAuthHandler: authMode === "session-ui" ? ordinaryAuthHandler : undefined,
+		nativeMcpUiAuthHandler: options.authMode === "session-ui" ? ordinaryAuthHandler : undefined,
 	});
+	const project = await registeredFixtureProject((await host.workflow.view()).projects, cwd);
 	return {
 		cwd,
+		agentDir,
 		host,
+		projectId: project.id,
 		session,
 		settings,
 		provider,
-		skill: skills[0],
 		sourceMcp,
 		ordinaryAuthHandler,
 		ordinaryAuthCalls: () => ordinaryAuthCalls,
@@ -156,178 +167,55 @@ async function fixture(
 	};
 }
 
-describe("native workbench host", () => {
-	test("one native side turn supplies all browsers and persists prediction usage without browser-triggered requests", async () => {
-		await using f = await fixture(undefined, undefined, undefined, {
-			enabled: true,
-			alternatives: true,
-			reply: () => ({ text: "run the tests\nshow the diff" }),
-		});
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
-		const offered = Promise.withResolvers<DevComposerPredictionFrame>();
-		const frames: DevComposerPredictionFrame[] = [];
-		const observe = f.host.observeBrowser("browser-a", frame => {
-			if ("t" in frame && frame.t === "composer-prediction") {
-				const prediction = frame as DevComposerPredictionFrame;
-				frames.push(prediction);
-				if (prediction.choices.length) offered.resolve(prediction);
-			}
-		});
-		const detach = await f.host.subscribeNative("browser-a", target.requirementId, () => {});
-		try {
-			expect(f.host.composerPrediction("browser-a", target)).toEqual({ choices: [] });
-			expect(f.provider.requests).toHaveLength(0);
-			const input = f.host.prepareDevInput("browser-a", target);
-			expect(await f.host.submitDevInput("browser-a", { requestId: input.requestId, text: "fix the bug" })).toEqual({
-				kind: "accepted",
-			});
-			expect(await offered.promise).toEqual({
-				t: "composer-prediction",
-				target,
-				choices: ["run the tests", "show the diff"],
-			});
-			const secondBrowser: object[] = [];
-			const detachSecond = await f.host.subscribeNative("browser-b", target.requirementId, frame =>
-				secondBrowser.push(frame),
-			);
-			try {
-				expect(secondBrowser).toContainEqual({
-					t: "composer-prediction",
-					target,
-					choices: ["run the tests", "show the diff"],
-				});
-				expect(f.host.composerPrediction("browser-b", target).choices).toEqual(["run the tests", "show the diff"]);
-				f.host.composerPrediction("browser-a", target, "shown");
-				f.host.composerPrediction("browser-a", target, "accepted", 1);
-				expect(() => f.host.composerPrediction("browser-a", target, "accepted", 2)).toThrow();
-				expect(() =>
-					f.host.composerPrediction("browser-a", { ...target, generation: target.generation + 1 }),
-				).toThrow();
-				expect(f.provider.requests).toHaveLength(2);
-				expect(native.sessionManager.getEntries().filter(entry => entry.type === "model_usage")).toContainEqual(
-					expect.objectContaining({ purpose: "composer-prediction" }),
-				);
-				expect(native.messages.filter(message => message.role === "assistant")).toHaveLength(1);
-				expect(f.session.messages).toEqual([]);
-			} finally {
-				await detachSecond();
-			}
-		} finally {
-			observe();
-			await detach();
-		}
-	}, 120_000);
+async function draft(f: NativeHostFixture, browserId = "browser-a") {
+	const projectId = f.projectId;
+	await f.host.workflow.bind(browserId, { projectId });
+	let view = await f.host.workflow.view(projectId);
+	await f.host.workflow.command(browserId, {
+		type: "createRelease",
+		projectId,
+		title: "Native host acceptance",
+		operationId: crypto.randomUUID(),
+		expectedRevision: view.revision,
+	});
+	view = await f.host.workflow.view(projectId);
+	const releaseId = view.releases.at(-1)?.id;
+	if (!releaseId) throw new Error("Release missing");
+	const created = await f.host.workflow.command(browserId, {
+		type: "createBrowserDraft",
+		projectId,
+		releaseId,
+		operationId: crypto.randomUUID(),
+		expectedRevision: view.revision,
+	});
+	if (!created.irId) throw new Error("IR missing");
+	const ref = { projectId, irId: created.irId };
+	await f.host.workflow.bind(browserId, ref);
+	return ref;
+}
 
-	test("a native draft skips the billed prediction request", async () => {
-		await using f = await fixture(undefined, undefined, undefined, { enabled: true });
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
-		f.host.updateNativeEditor("browser-a", target, "already drafting the next message");
-		await native.prompt("fix the bug");
-		await f.host.close();
-		expect(f.provider.requests).toHaveLength(1);
-		expect(native.sessionManager.getEntries().filter(entry => entry.type === "model_usage")).toEqual([]);
-	}, 120_000);
+async function conversation(f: NativeHostFixture) {
+	const ref = await draft(f);
+	const native = await f.host.workflow.prepare("browser-a", ref);
+	const project = await f.host.workflow.project(ref.projectId);
+	const session = project.runtime.session(native);
+	const context = await f.host.workflow.nativeContext("browser-a", ref.projectId);
+	return { ref, native, session, context, runtime: project.runtime };
+}
 
-	test("host close cancels and settles its prediction without offering a held reply", async () => {
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		let requests = 0;
-		await using f = await fixture(
-			async () => {
-				if (++requests === 2) {
-					entered.resolve();
-					await release.promise;
-				}
-			},
-			undefined,
-			undefined,
-			{ enabled: true },
-		);
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
-		const offered: object[] = [];
-		const observe = f.host.observeBrowser("browser-a", frame => {
-			if (
-				"t" in frame &&
-				frame.t === "composer-prediction" &&
-				"choices" in frame &&
-				Array.isArray(frame.choices) &&
-				frame.choices.length
-			)
-				offered.push(frame);
-		});
-		try {
-			await native.prompt("fix the bug");
-			await entered.promise;
-			await f.host.close();
-			release.resolve();
-			expect(offered).toEqual([]);
-			expect(f.provider.requests).toHaveLength(2);
-		} finally {
-			release.resolve();
-			observe();
-		}
-	}, 120_000);
-
-	test("a new native turn retires a held prediction and cannot leak it into the next draft", async () => {
-		const entered = Promise.withResolvers<void>();
-		const release = Promise.withResolvers<void>();
-		let requests = 0;
-		await using f = await fixture(
-			async () => {
-				if (++requests === 2) {
-					entered.resolve();
-					await release.promise;
-				}
-			},
-			undefined,
-			undefined,
-			{ enabled: true },
-		);
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
-		const offered: object[] = [];
-		const observe = f.host.observeBrowser("browser-a", frame => {
-			if (
-				"t" in frame &&
-				frame.t === "composer-prediction" &&
-				"choices" in frame &&
-				Array.isArray(frame.choices) &&
-				frame.choices.length
-			)
-				offered.push(frame);
-		});
-		try {
-			await native.prompt("first task");
-			await entered.promise;
-			f.host.updateNativeEditor("browser-a", target, "the next draft already exists");
-			await native.prompt("different task");
-			expect(f.host.composerPrediction("browser-a", target)).toEqual({ choices: [] });
-			release.resolve();
-			await f.host.close();
-			expect(offered).toEqual([]);
-			expect(f.provider.requests).toHaveLength(3);
-		} finally {
-			release.resolve();
-			observe();
-		}
-	}, 120_000);
-
-	test("canonical repeated opening preserves the real root and cold records have no actors", async () => {
+describe("native workflow host", () => {
+	test("canonical opening reuses listener and root, isolates settings, and read-only selection creates no actor", async () => {
 		await using f = await fixture();
-		const rootId = f.session.sessionId;
 		const reopened = await createDevWorkbenchHost({
 			session: f.session,
 			settings: f.settings,
 			cwd: path.join(f.cwd, "."),
 		});
-		expect(reopened).toBe(f.host);
+		expect(reopened.cwd).toBe(f.host.cwd);
+		const unselected = await reopened.workflow.view();
+		expect(unselected.currentProjectId).toBeUndefined();
+		expect(unselected.sessions).toEqual([]);
+		expect(reopened.workflow.binding("browser-a")).toBeUndefined();
 		const ordinaryMembers = cfgTeamMembers.get(f.settings);
 		cfgTeamMembers.set(f.host.settings, ["dev-only/model"]);
 		expect(cfgTeamMembers.get(f.host.settings)).toEqual(["dev-only/model"]);
@@ -346,401 +234,519 @@ describe("native workbench host", () => {
 			getOrStartDevWorkbench(f.host, options),
 			getOrStartDevWorkbench(reopened, options),
 		]);
-		expect(first).toBe(second);
-		expect(first.url).toBe(second.url);
+		expect(first.loopbackUrl).toBe(second.loopbackUrl);
 		expect((await fetch(first.loopbackUrl)).status).toBe(200);
-		expect(await f.host.controller.listRequirements()).toEqual([]);
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		expect(imported.runtime).toBeNull();
-		expect(f.host.controller.nativeSessions()).toEqual([]);
-		expect(f.provider.requests).toEqual([]);
-		expect(f.session.sessionId).toBe(rootId);
+		const ref = await draft(f);
+		const before = await f.host.workflow.view(ref.projectId);
+		const beforeRequests = f.provider.requests.length;
+		await f.host.workflow.bind("browser-b", ref);
+		const after = await f.host.workflow.view(ref.projectId);
+		expect(after.revision).toBe(before.revision);
+		expect(after.sessions).toEqual(before.sessions);
+		expect(after.running).toEqual(before.running);
+		expect(f.provider.requests).toHaveLength(beforeRequests);
+		expect(f.host.rootSession).toBe(f.session);
 		expect(f.session.messages).toEqual([]);
 	}, 120_000);
 
-	test("composer model slash input uses native selection once per bound receipt without touching the ordinary root", async () => {
+	test("native model selector answers once without changing the ordinary root or running a model", async () => {
 		await using f = await fixture();
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
+		const { session } = await conversation(f);
 		const rootModel = f.session.model;
-		const rootMessages = [...f.session.messages];
-		const prepared = f.host.prepareDevInput("browser-a", target);
-		const selection = f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "/model" });
-		const request = f.host.nativeUi.pending().find(item => item.kind === "select" && item.title === "Native model");
-		if (!request) throw new Error("Composer slash command did not open the native model selector");
-		expect((await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "/model" })).kind).toBe(
-			"unknown",
-		);
-		expect(f.host.nativeUi.pending().filter(item => item.requestId === request.requestId)).toHaveLength(1);
-		expect((await f.host.respondNativeUi({ ...request, value: "deepseek/chat-a" })).accepted).toBe(true);
-		expect(await selection).toEqual({ kind: "accepted" });
-		expect(
-			await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "/model nonexistent" }),
-		).toEqual({ kind: "accepted" });
-		expect(f.host.nativeUi.pending()).toHaveLength(0);
-		expect(native.model?.id).toBe("chat-a");
+		const broker = nativeWebGuiQuestions(session);
+		const origin = { connectionId: "model-picker", clientId: "browser-a", sessionId: session.sessionId };
+		const selecting = executeWebGuiSessionCommand(session, "/model", origin);
+		const request = await eventually(async () => broker.pendingInteractions[0], Boolean);
+		if (!request || request.payload.kind !== "userInput") throw new Error("Native model selector missing");
+		const option = request.payload.options?.find(item => item.label.includes("chat-a"));
+		if (!option) throw new Error("Configured native model was not offered");
+		await broker.resolveInteraction(request.interactionId, { optionId: option.optionId }, origin);
+		await selecting;
+		await expect(
+			broker.resolveInteraction(request.interactionId, { optionId: option.optionId }, origin),
+		).rejects.toThrow();
+		expect(session.model?.id).toBe("chat-a");
 		expect(f.session.model).toBe(rootModel);
-		expect(f.session.messages).toEqual(rootMessages);
+		expect(f.session.messages).toEqual([]);
 		expect(f.provider.requests).toEqual([]);
 	}, 120_000);
 
-	test("composer skill input loads native instructions and preserves admission, identity, display and scope", async () => {
-		const release = Promise.withResolvers<void>();
+	test("native skill input retains user attribution and queued identity while phase policy denies unauthorized expansion", async () => {
 		const entered = Promise.withResolvers<void>();
-		await using f = await fixture(
-			async () => {
+		const release = Promise.withResolvers<void>();
+		await using f = await fixture({
+			skillCommands: true,
+			delay: async () => {
 				entered.resolve();
 				await release.promise;
 			},
-			undefined,
-			true,
-		);
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const native = f.host.controller.resolveSession(target);
-		const skill = f.skill;
-		if (!skill) throw new Error("Native skill fixture is required");
-		const access = { scope: native.sessionManager, getSessionBranch: () => native.sessionManager.getBranch() };
-		expect(() => checkSkillReadAccess(skill, access)).toThrow("explicit current-session invocation required");
-		const text = "/skill:jch-grill-me BROWSER_NATIVE_SKILL_SLASH_PROBE";
-		const prepared = f.host.prepareDevInput("browser-a", target);
+		});
+		const { ref, native, session, context } = await conversation(f);
+		const skill = session.skills.find(item => item.name === "jch-grill-me");
+		if (!skill) throw new Error("Native requirements skill catalogue missing");
+		const access = { scope: session.sessionManager, getSessionBranch: () => session.sessionManager.getBranch() };
+		const chat = nativeChatRuntimeForSession(session);
+		const inputId = crypto.randomUUID();
+		const text = "/skill:jch-grill-me NATIVE_SKILL_PROBE";
 		try {
-			expect(await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text })).toEqual({
-				kind: "accepted",
-			});
+			const body = await loadSkillPromptBody(skill, access);
+			expect(await chat.submit(context, session.sessionId, text, inputId, "browser-a", inputId)).toBe("startNow");
+			expect(await nativeWebGuiSessionCommands(session)).toContainEqual(
+				expect.objectContaining({ name: "skill:jch-grill-me" }),
+			);
 			await entered.promise;
-			expect(native.isStreaming).toBe(true);
-			expect(f.host.inspectDevInput("browser-a", prepared.requestId)).toEqual({ kind: "accepted" });
-			expect(await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text })).toEqual({
-				kind: "accepted",
-			});
-			const message = native.messages.find(
+			const activation = session.messages.find(
 				item => item.role === "custom" && item.customType === SKILL_PROMPT_MESSAGE_TYPE,
 			);
-			expect(message).toMatchObject({
+			expect(activation).toMatchObject({
 				role: "custom",
-				customType: SKILL_PROMPT_MESSAGE_TYPE,
-				inputId: prepared.requestId,
+				inputId,
+				inputClientId: "browser-a",
+				sourceCommand: { sessionId: session.sessionId, commandId: inputId },
 				display: true,
 				attribution: "user",
-				details: { name: skill.name, path: skill.filePath, args: "BROWSER_NATIVE_SKILL_SLASH_PROBE", prompt: text },
+				details: { name: skill.name, path: skill.filePath, args: "NATIVE_SKILL_PROBE", prompt: text },
 			});
-			expect(contentText(message && "content" in message ? message.content : undefined)).toContain(
-				"Ask one precise native skill question at a time.",
+			expect(f.provider.requests[0]?.messages.map(message => contentText(message.content)).join("\n")).toContain(
+				body,
 			);
-			const providerText = f.provider.requests[0]?.messages.map(item => contentText(item.content)).join("\n") ?? "";
-			expect(providerText).toContain("Ask one precise native skill question at a time.");
-			expect(providerText).toContain("BROWSER_NATIVE_SKILL_SLASH_PROBE");
 			expect(() => checkSkillReadAccess(skill, access)).not.toThrow();
-			expect(() => checkSkillReadAccess(skill, { scope: f.session.sessionManager })).toThrow(
-				"explicit current-session invocation required",
+			expect(() => checkSkillReadAccess(skill, { scope: f.session.sessionManager })).toThrow();
+			await f.host.workflow.bind("browser-b", ref);
+			const foreign = await f.host.workflow.nativeContext("browser-b", ref.projectId);
+			await expect(
+				chat.submit(foreign, session.sessionId, "MUST_NOT_QUEUE_FOREIGN_BROWSER", crypto.randomUUID(), "browser-b"),
+			).rejects.toThrow("Only the admitted native input's browser");
+			await expect(
+				withNativeWebGuiInteractionScope(
+					{ connectionId: context.connectionId, clientId: "browser-a", sessionId: crypto.randomUUID() },
+					() =>
+						f.host.workflow.runNativeInput(session, () =>
+							session.prompt("MUST_NOT_QUEUE_FOREIGN_SESSION", { streamingBehavior: "followUp" }),
+						),
+				),
+			).rejects.toThrow("exact originating browser session");
+			const held = await f.host.workflow.view(ref.projectId);
+			await expect(
+				f.host.workflow.submit("browser-a", {
+					...ref,
+					sessionId: native.sessionId,
+					round: native.round,
+					operationId: crypto.randomUUID(),
+					expectedRevision: held.revision,
+					text: "MUST_NOT_START_ANOTHER_FORMAL_INPUT",
+				}),
+			).rejects.toThrow("durable native input already owns this project");
+			expect((await f.host.workflow.view(ref.projectId)).operations).toEqual(held.operations);
+			expect(session.getQueuedInputMessages()).toEqual([]);
+			const queuedId = crypto.randomUUID();
+			expect(
+				await chat.submit(
+					context,
+					session.sessionId,
+					"/skill:jch-grill-me queued arguments",
+					queuedId,
+					"browser-a",
+					queuedId,
+				),
+			).toBe("queue");
+			expect(session.getQueuedInputMessages()).toContainEqual(
+				expect.objectContaining({
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					inputId: queuedId,
+					inputClientId: "browser-a",
+					attribution: "user",
+					sourceCommand: expect.objectContaining({ sessionId: session.sessionId, commandId: queuedId }),
+					details: expect.objectContaining({ args: "queued arguments" }),
+				}),
 			);
-			const queued = f.host.prepareDevInput("browser-a", target);
-			const queuedText = "  /skill:jch-grill-me queued native arguments  ";
-			expect(await f.host.submitDevInput("browser-a", { requestId: queued.requestId, text: queuedText })).toEqual({
-				kind: "accepted",
-			});
-			expect(native.getQueuedMessages().followUp).toEqual([queuedText]);
-			expect(native.getQueuedInputMessages()).toHaveLength(1);
-			expect(native.getQueuedInputMessages()[0]).toMatchObject({
-				customType: SKILL_PROMPT_MESSAGE_TYPE,
-				inputId: queued.requestId,
-				details: { args: "queued native arguments", prompt: queuedText.trim() },
-			});
-			expect(f.provider.requests).toHaveLength(1);
-			expect(native.mutateQueuedInput(queued.requestId, "delete")).toBe(true);
+			expect((await chat.snapshot(context, session.sessionId, "browser-a")).queue.items).toContainEqual(
+				expect.objectContaining({
+					queueItemId: queuedId,
+					sourceCommandId: queuedId,
+					clientId: "browser-a",
+					text: "/skill:jch-grill-me queued arguments",
+					dispatch: { state: "queued" },
+				}),
+			);
+			expect(session.mutateQueuedInput(queuedId, "delete")).toBe(true);
+			expect((await chat.snapshot(context, session.sessionId, "browser-a")).queue.items).toEqual([]);
 			release.resolve();
-			await native.waitForIdle();
+			await session.waitForIdle();
+			const beforeDenied = JSON.stringify(session.messages);
+			await expect(
+				chat.submit(
+					context,
+					session.sessionId,
+					"/skill:foreign-unregistered denied",
+					crypto.randomUUID(),
+					"browser-a",
+				),
+			).rejects.toThrow("Unknown native command: /skill:foreign-unregistered");
 			expect(f.provider.requests).toHaveLength(1);
+			const unbind = bindSpecSkillPolicy(session.sessionManager, { phase: "blocked probe", allowedSkills: [] });
+			try {
+				await expect(
+					chat.submit(context, session.sessionId, text, crypto.randomUUID(), "browser-a"),
+				).rejects.toThrow("not allowed during blocked probe");
+			} finally {
+				unbind();
+			}
+			expect(f.provider.requests).toHaveLength(1);
+			expect(JSON.stringify(session.messages)).toEqual(beforeDenied);
 			expect(f.session.messages).toEqual([]);
 		} finally {
 			release.resolve();
 		}
 	}, 120_000);
 
-	test("composer skill dispatch respects the native skill setting and phase policy", async () => {
-		await using disabled = await fixture(undefined, undefined, false);
-		const disabledRecord = await disabled.host.controller.createRequirement({ source: "import" });
-		const disabledTarget = await disabled.host.controller.prepareSession(disabledRecord.record.requirementId);
-		const disabledNative = disabled.host.controller.resolveSession(disabledTarget);
-		const prepared = disabled.host.prepareDevInput("browser-a", disabledTarget);
-		const text = "/skill:jch-grill-me ordinary text while skill commands are disabled";
-		expect(await disabled.host.submitDevInput("browser-a", { requestId: prepared.requestId, text })).toEqual({
-			kind: "accepted",
-		});
-		await disabledNative.waitForIdle();
-		expect(
-			disabledNative.messages.some(item => item.role === "custom" && item.customType === SKILL_PROMPT_MESSAGE_TYPE),
-		).toBe(false);
-		const disabledUserText =
-			disabled.provider.requests[0]?.messages
-				.filter(item => item.role === "user")
-				.map(item => contentText(item.content))
-				.join("\n") ?? "";
-		expect(disabledUserText).toContain(text);
-		expect(disabledUserText).not.toContain("Ask one precise native skill question at a time.");
-
-		await using enabled = await fixture(undefined, undefined, true);
-		const enabledRecord = await enabled.host.controller.createRequirement({ source: "import" });
-		const enabledTarget = await enabled.host.controller.prepareSession(enabledRecord.record.requirementId);
-		const enabledNative = enabled.host.controller.resolveSession(enabledTarget);
-		const enabledMessages = [...enabledNative.messages];
-		const unbind = bindSpecSkillPolicy(enabledNative.sessionManager, { phase: "blocked probe", allowedSkills: [] });
-		try {
-			const denied = enabled.host.prepareDevInput("browser-a", enabledTarget);
-			const result = await enabled.host.submitDevInput("browser-a", { requestId: denied.requestId, text });
-			expect(result).toMatchObject({
-				kind: "rejected",
-				message: expect.stringContaining("not allowed during blocked probe"),
-			});
-			expect(enabled.host.inspectDevInput("browser-a", denied.requestId)).toEqual(result);
-			expect(await enabled.host.submitDevInput("browser-a", { requestId: denied.requestId, text })).toEqual(result);
-			expect(enabled.provider.requests).toEqual([]);
-			expect(enabledNative.messages).toEqual(enabledMessages);
-		} finally {
-			unbind();
-		}
-	}, 120_000);
-
-	test("native input identity rejects other browsers and stale targets before execution", async () => {
-		await using f = await fixture();
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const prepared = f.host.prepareDevInput("browser-a", target);
-		expect(
-			(await f.host.submitDevInput("browser-b", { requestId: prepared.requestId, text: "must not run" })).kind,
-		).toBe("rejected");
-		expect(f.host.inspectDevInput("browser-b", prepared.requestId).kind).toBe("unknown");
-		expect(() => f.host.prepareDevInput("browser-a", { ...target, generation: target.generation + 1 })).toThrow();
-		expect(f.host.getNativeCommands(target).some(command => command.name === "goal")).toBe(false);
-		expect(
-			(
-				await f.host.runDevNativeCommand("browser-a", {
-					target,
-					command: "goal",
-					args: ["start", "Not authorized in the business stage"],
-				})
-			).kind,
-		).toBe("rejected");
-		expect(f.host.controller.resolveSession(target).getGoalModeState()).toBeUndefined();
-		expect(f.provider.requests).toEqual([]);
-		const native = f.host.controller.resolveSession(target);
-		const frames: object[] = [];
-		const bridge = createDevLocalSessionBridge(f.host.sessionPort(native), frame => frames.push(frame));
-		const messagesBefore = [...native.messages];
-		const release = Promise.withResolvers<void>();
-		const entered = Promise.withResolvers<void>();
-		const holding = f.host.controller.submitNativeInput(target, async () => {
-			entered.resolve();
-			await release.promise;
-		});
-		try {
-			await entered.promise;
-			expect((await bridge.sendFrame({ t: "prompt", text: "must not bypass Dev admission" })).kind).toBe("rejected");
-			expect(frames).toContainEqual(
-				expect.objectContaining({ t: "error", message: expect.stringContaining("原生输入不会排队越过此边界") }),
-			);
-			expect(native.messages).toEqual(messagesBefore);
-			expect(f.provider.requests).toEqual([]);
-			release.resolve();
-			expect(await holding).toBe(false);
-			await f.host.controller.stop(imported.record.requirementId);
-			const stoppedMessages = [...native.messages];
-			expect((await bridge.sendFrame({ t: "prompt", text: "must not reuse the captured generation" })).kind).toBe(
-				"rejected",
-			);
-			expect(frames).toContainEqual(
-				expect.objectContaining({ t: "error", message: expect.stringContaining("代际已改变") }),
-			);
-			expect(native.messages).toEqual(stoppedMessages);
-			expect(f.provider.requests).toEqual([]);
-		} finally {
-			release.resolve();
-			await holding;
-			await bridge.close();
-		}
-	}, 120_000);
-
-	test("exclusive Dev temporarily binds attributed MCP UI and restores the exact ordinary callback on exit", async () => {
-		await using f = await fixture(undefined, "session-ui");
-		const manager = f.host.rootSession.nativeChildCapabilities?.mcpManager;
-		if (!(manager instanceof MCPManager)) throw new Error("A concrete borrowed native MCP manager is required");
-		const sourceMcp = f.sourceMcp;
-		if (!sourceMcp) throw new Error("The ordinary native MCP manager is required");
-		expect(manager).toBe(sourceMcp);
-		expect(manager.getAuthHandler()).not.toBe(f.ordinaryAuthHandler);
+	test("disabled native skill commands cannot expand instructions or issue a provider request", async () => {
+		await using f = await fixture({ skillCommands: false });
+		const { session, context } = await conversation(f);
 		await expect(
-			f.host.handleNativeMcpAuth("no-server", { wwwAuthenticate: [] }, { scope: "owner", toolCallId: "not-active" }),
+			nativeChatRuntimeForSession(session).submit(
+				context,
+				session.sessionId,
+				"/skill:jch-grill-me disabled",
+				crypto.randomUUID(),
+				"browser-a",
+			),
 		).rejects.toThrow();
-		expect(f.host.nativeUi.pending()).toEqual([]);
-		expect(f.ordinaryAuthCalls()).toBe(0);
+		expect(
+			session.messages.some(
+				message => message.role === "custom" && message.customType === SKILL_PROMPT_MESSAGE_TYPE,
+			),
+		).toBe(false);
 		expect(f.provider.requests).toEqual([]);
+	}, 120_000);
+
+	test("input receipts complete reusable native turns once and reject foreign browsers, revisions, rounds and stale bindings", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		await using f = await fixture({
+			delay: async () => {
+				entered.resolve();
+				await release.promise;
+			},
+		});
+		const { ref, native, session, context } = await conversation(f);
+		const view = await f.host.workflow.view(ref.projectId);
+		const beforeMessages = structuredClone(session.messages);
+		const input = {
+			...ref,
+			sessionId: native.sessionId,
+			round: native.round,
+			expectedRevision: view.revision,
+			operationId: crypto.randomUUID(),
+			text: "NATIVE_SINGLE_RECEIPT",
+		};
+		try {
+			await expect(f.host.workflow.submit("browser-b", input)).rejects.toThrow();
+			await expect(f.host.workflow.submit("browser-a", { ...input, round: native.round + 1 })).rejects.toThrow();
+			await expect(
+				f.host.workflow.submit("browser-a", { ...input, expectedRevision: view.revision - 1 }),
+			).rejects.toThrow();
+			expect(f.provider.requests).toEqual([]);
+			expect(session.messages).toEqual(beforeMessages);
+			await f.host.workflow.submit("browser-a", input);
+			await entered.promise;
+			const chat = nativeChatRuntimeForSession(session);
+			// No browser stream is attached: the owning session must still keep its
+			// projection current across a real running-to-idle transition.
+			const running = await chat.snapshot(context, native.sessionId, "browser-a");
+			expect(running.control.phase).toBe("running");
+			release.resolve();
+			await session.waitForIdle();
+			await eventually(
+				() => f.host.workflow.view(ref.projectId),
+				current =>
+					current.operations.some(
+						operation => operation.operationId === input.operationId && operation.status === "completed",
+					) && current.running.length === 0,
+				5_000,
+			);
+			// The input receipt and native turn complete; the borrowed conversation
+			// remains reusable. Session termination is not a turn-completion guard.
+			const completed = await chat.snapshot(context, native.sessionId, "browser-a");
+			expect(completed.control).toMatchObject({
+				phase: "completedSuccess",
+				canStop: false,
+				stopState: "idle",
+				activeWorks: [],
+				lastError: null,
+			});
+			expect(completed.revision).toBeGreaterThan(running.revision);
+			expect(completed.inputRouting.mode).toBe("startNow");
+			expect(completed.queue.items).toEqual([]);
+			expect(session.isStreaming).toBe(false);
+			expect(session.isDisposed).toBe(false);
+			expect(f.provider.requests).toHaveLength(1);
+			const messages = JSON.stringify(session.messages);
+			expect(
+				session.messages.filter(
+					message => message.role === "user" && contentText(message.content).includes(input.text),
+				),
+			).toHaveLength(1);
+			expect(session.messages.filter(message => message.role === "assistant")).toHaveLength(1);
+			expect(contentText(session.messages.findLast(message => message.role === "assistant")?.content)).toContain(
+				"Native response",
+			);
+			expect(await f.host.workflow.submit("browser-a", input)).toMatchObject({
+				operationId: input.operationId,
+				status: "completed",
+			});
+			expect(JSON.stringify(session.messages)).toEqual(messages);
+			expect(f.provider.requests).toHaveLength(1);
+			await expect(f.host.workflow.submit("browser-a", { ...input, text: "MUST_NOT_REPLAY" })).rejects.toThrow();
+			expect(JSON.stringify(session.messages)).toEqual(messages);
+			await f.host.workflow.bind("browser-b", ref);
+			await expect(f.host.workflow.submit("browser-b", input)).rejects.toThrow();
+			const other = await draft(f);
+			expect(other.irId).not.toBe(ref.irId);
+			expect(() => f.host.workflow.assertNativeContext(context, native.sessionId)).toThrow();
+			await expect(resolveWebGuiSession(context, native.sessionId)).rejects.toThrow();
+			expect(JSON.stringify(session.messages)).toEqual(messages);
+			expect(f.provider.requests).toHaveLength(1);
+		} finally {
+			release.resolve();
+		}
+	}, 120_000);
+
+	test("detaching an observer does not own native work; reconnect reads native history without replay", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		await using f = await fixture({
+			delay: async () => {
+				entered.resolve();
+				await release.promise;
+			},
+		});
+		const { ref, session, context } = await conversation(f);
+		const frames: object[] = [];
+		const detach = f.host.workflow.observe(frame => frames.push(frame));
+		try {
+			const view = await f.host.workflow.view(ref.projectId);
+			await f.host.workflow.submit("browser-a", {
+				...ref,
+				expectedRevision: view.revision,
+				operationId: crypto.randomUUID(),
+				text: "One admitted turn",
+			});
+			await entered.promise;
+			detach();
+			expect(session.isStreaming).toBe(true);
+			release.resolve();
+			await session.waitForIdle();
+			const snapshot = await nativeChatRuntimeForSession(session).snapshot(context, session.sessionId, "browser-a");
+			expect(snapshot.rows.totalCount).toBeGreaterThan(0);
+			expect(frames.length).toBeGreaterThan(0);
+			expect(f.provider.requests).toHaveLength(1);
+			expect(f.session.messages).toEqual([]);
+		} finally {
+			release.resolve();
+			detach();
+		}
+	}, 120_000);
+
+	test("host shutdown cancels pending native permission and settles work without deleting the draft or borrowed root", async () => {
+		await using f = await fixture();
+		const { ref, session } = await conversation(f);
+		const broker = nativeWebGuiQuestions(session);
+		const pending = broker.ui.confirm("Pending permission", "Never implicitly approve on exit").then(
+			value => ({ value }),
+			error => ({ error }),
+		);
+		expect(broker.pendingInteractions).toHaveLength(1);
 		await f.host.close();
-		expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
+		expect(await pending).toHaveProperty("error");
+		expect(session.isStreaming).toBe(false);
 		expect(f.session.isDisposed).toBe(false);
+		expect((await f.host.workflow.store.view(ref.projectId)).drafts.some(item => item.id === ref.irId)).toBe(true);
+		expect(f.provider.requests).toEqual([]);
 	}, 120_000);
 
-	test("exclusive Dev preserves an explicitly programmatic MCP authentication callback", async () => {
-		await using f = await fixture(undefined, "programmatic");
-		const manager = f.host.rootSession.nativeChildCapabilities?.mcpManager;
-		if (!(manager instanceof MCPManager)) throw new Error("A concrete borrowed native MCP manager is required");
-		const sourceMcp = f.sourceMcp;
-		if (!sourceMcp) throw new Error("The ordinary native MCP manager is required");
-		expect(manager).toBe(sourceMcp);
-		expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
-		expect(f.host.nativeUi.pending()).toEqual([]);
-		expect(f.ordinaryAuthCalls()).toBe(0);
-		await f.host.close();
-		expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
-	}, 120_000);
+	test("native Team dispatch runs real read-only descendants and persists its report in the selected workflow session", async () => {
+		const seen = new Set<string>();
+		const readonlyTools = new Set([...TEAM_READ_ONLY_TOOLS, "yield"]);
+		await using f = await fixture({
+			reply(request) {
+				const task = request.messages
+					.filter(message => message.role === "user")
+					.map(message => contentText(message.content))
+					.findLast(text => text.includes("[team-stage:"));
+				const stage = task?.match(/\[team-stage:([^\]]+)\]/u)?.[1];
+				if (!stage) throw new Error("Only actual native Team descendants are expected");
+				// Native title/final-prose turns may omit tools altogether. Only actual
+				// advertisements authorize tool calls; do not invent a schema for them.
+				if (!request.tools?.length) return { text: "Preserve baseline bytes" };
+				for (const tool of request.tools) {
+					expect(readonlyTools.has(tool.function?.name.replace(/^_/u, "") ?? "")).toBe(true);
+				}
+				const advertised = (name: string) => {
+					const actual = request.tools?.find(tool => tool.function?.name.replace(/^_/u, "") === name)?.function
+						?.name;
+					if (!actual) throw new Error(`Team descendant lacks ${name}`);
+					return actual;
+				};
+				const results = request.messages
+					.filter(message => message.role === "tool")
+					.map(message => contentText(message.content));
+				if (!results.length)
+					return { tool: { name: advertised("read"), args: { path: path.join(f.cwd, "baseline.txt") } } };
+				expect(results.join("\n")).toContain("untouched");
+				seen.add(stage.split(/\s|:/u)[0]!);
+				let data: Record<string, unknown>;
+				if (stage.startsWith("proposal"))
+					data = {
+						proposal: "Preserve the observed user bytes.",
+						noViableProposal: false,
+						investigationBlockedReason: "",
+						keyAssumptions: [],
+						risks: [],
+						unknowns: [],
+						acceptanceCriteria: ["Preserve baseline.txt"],
+						ambiguityInterpretations: [],
+						evidence: [{ claim: "Actual baseline bytes read", source: "baseline.txt:1" }],
+					};
+				else if (stage.startsWith("alignment"))
+					data = {
+						unifiedUnderstanding: "Preserve observed user bytes.",
+						acceptanceCriteria: ["Preserve baseline.txt"],
+						factDifferences: [],
+						interpretationDifferences: [],
+					};
+				else if (stage.startsWith("review"))
+					data = {
+						noSubstantiveIssues: true,
+						reviewSummary: "Read current baseline and preserve it.",
+						findings: [],
+						blockingResolutions: [],
+					};
+				else if (stage.startsWith("revision"))
+					data = {
+						revisedProposal: "Preserve observed user bytes.",
+						revisionSummary: "No substantive change required.",
+						responses: [],
+						reviewFlags: {
+							changedCoreDesign: false,
+							claimsResolvedBlocking: false,
+							newEvidenceChangesAssumptions: false,
+							disputesBlockingFinding: false,
+						},
+					};
+				else if (stage.startsWith("synthesis"))
+					data = {
+						reportMarkdown: "## Evidence\nThe actual baseline.txt contains untouched. Preserve these bytes.",
+						recommendedProposal: "A",
+						recommendationReason: "Preserves observed user bytes",
+						recommendationPreconditions: "Keep baseline.txt",
+						hardConstraintViolations: [],
+					};
+				else throw new Error(`Unexpected Team stage ${stage}`);
+				return { tool: { name: advertised("yield"), args: { data } } };
+			},
+		});
+		const { ref, native, session } = await conversation(f);
+		cfgTeamMembers.set(session.settings, ["deepseek/chat-a"]);
+		expect((await nativeWebGuiSessionCommands(session)).some(command => command.name === "team")).toBe(true);
+		expect(
+			await executeWebGuiSessionCommand(
+				session,
+				"/team Read the existing baseline and discuss preserving its bytes; do not modify any material or approve the workflow",
+				{ connectionId: "team-browser", clientId: "browser-a", sessionId: native.sessionId },
+			),
+		).toBe(true);
+		const report = await eventually(
+			async () =>
+				session.messages.find(
+					message => message.role === "custom" && message.customType === TEAM_RESULT_MESSAGE_TYPE,
+				),
+			Boolean,
+		);
+		expect(report).toMatchObject({ role: "custom", attribution: "agent", display: true });
+		expect(contentText(report && "content" in report ? report.content : undefined)).toContain("baseline.txt");
+		expect([...seen].some(stage => stage.startsWith("proposal"))).toBe(true);
+		expect([...seen].some(stage => stage.startsWith("synthesis"))).toBe(true);
+		expect(f.provider.requests.length).toBeGreaterThan(0);
+		expect(f.provider.failures).toEqual([]);
+		expect(await fs.readFile(path.join(f.cwd, "baseline.txt"), "utf8")).toBe("untouched\n");
+		expect(session.sessionId).toBe(native.sessionId);
+		expect(
+			(await f.host.workflow.view(ref.projectId)).drafts.find(item => item.id === ref.irId)?.confirmation,
+		).toBeUndefined();
+		expect(f.session.messages).toEqual([]);
+	}, 180_000);
 
-	test("failed Dev settlement keeps writes blocked and the borrowed root alive until an explicit exit retry succeeds", async () => {
-		await using f = await fixture(undefined, "session-ui");
-		const record = await f.host.controller.createRequirement({ source: "import" });
-		const manager = f.sourceMcp;
-		if (!manager) throw new Error("Native MCP fixture manager is required");
-		const dispose = f.host.controller.dispose.bind(f.host.controller);
+	test("failed native settlement retains exclusive ownership, root and MCP binding until explicit exit retry succeeds", async () => {
+		await using f = await fixture({ authMode: "session-ui" });
+		const { ref, runtime } = await conversation(f);
+		const dispose = runtime.dispose.bind(runtime);
+		const manager = f.sourceMcp!;
 		let blocked = true;
-		f.host.controller.dispose = async () => {
+		runtime.dispose = async () => {
 			if (blocked) throw new Error("Native descendant settlement remains blocked");
 			await dispose();
 		};
 		try {
 			await expect(f.host.close()).rejects.toThrow();
-			expect(() => f.host.assertWritable("browser-a")).toThrow();
+			expect(f.host.stopping).toBe(true);
 			expect(f.session.isDisposed).toBe(false);
 			expect(manager.getAuthHandler()).not.toBe(f.ordinaryAuthHandler);
+			await expect(
+				f.host.workflow.command("browser-a", {
+					type: "createRelease",
+					projectId: ref.projectId,
+					title: "must remain blocked",
+					operationId: crypto.randomUUID(),
+					expectedRevision: (await f.host.workflow.store.view(ref.projectId)).revision,
+				}),
+			).rejects.toThrow();
+			await expect(
+				createDevWorkbenchHost({ session: f.session, settings: f.settings, cwd: f.cwd }),
+			).rejects.toThrow();
 			blocked = false;
 			await f.host.close();
 			expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
 			expect(f.session.isDisposed).toBe(false);
-			const resumed = await createDevWorkbenchHost({
-				session: f.session,
-				settings: f.settings,
-				cwd: f.cwd,
-				mcpManager: manager,
-				nativeMcpUiAuthHandler: f.ordinaryAuthHandler,
-			});
+			const resumed = await createDevWorkbenchHost({ session: f.session, settings: f.settings, cwd: f.cwd });
 			try {
-				expect((await resumed.controller.getRequirement(record.record.requirementId)).record.lifecycle).toBe(
-					"active",
-				);
-				expect(resumed.controller.nativeSessions()).toEqual([]);
+				const view = await resumed.workflow.view(ref.projectId);
+				expect(view.drafts.some(item => item.id === ref.irId)).toBe(true);
+				expect(view.running).toEqual([]);
 				expect(f.provider.requests).toEqual([]);
 			} finally {
 				await resumed.close();
 			}
 		} finally {
 			blocked = false;
-			f.host.controller.dispose = dispose;
+			runtime.dispose = dispose;
 		}
 	}, 120_000);
 
-	test("detaching a browser leaves admitted native work running and repeated input never replays", async () => {
-		const release = Promise.withResolvers<void>();
-		const entered = Promise.withResolvers<void>();
-		await using f = await fixture(async () => {
-			entered.resolve();
-			await release.promise;
-		});
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const frames: object[] = [];
-		const detach = await f.host.subscribeNative("browser-a", imported.record.requirementId, frame =>
-			frames.push(frame),
-		);
-		const prepared = f.host.prepareDevInput("browser-a", target);
-		try {
-			expect(
-				await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "A single native input" }),
-			).toEqual({ kind: "accepted" });
-			await entered.promise;
-			const queued = f.host.prepareDevInput("browser-a", target);
-			expect(
-				(
-					await f.host.submitDevInput("browser-a", {
-						requestId: queued.requestId,
-						text: "Remove only this queued native input",
-					})
-				).kind,
-			).toBe("accepted");
-			expect(f.host.controller.resolveSession(target).queuedMessageCount).toBe(1);
-			const remove = f.host.runDevNativeCommand("browser-a", {
-				target,
-				command: "queue",
-				args: ["remove", queued.requestId],
-			});
-			const permission = f.host.nativeUi.pending().find(request => request.kind === "confirm");
-			if (!permission) throw new Error("Native queue confirmation was not presented");
-			expect((await f.host.respondNativeUi({ ...permission, value: true })).accepted).toBe(true);
-			expect(await remove).toEqual({ kind: "accepted" });
-			expect(f.host.controller.resolveSession(target).queuedMessageCount).toBe(0);
-			await detach();
-			const native = f.host.controller.resolveSession(target);
-			expect(native.isStreaming).toBe(true);
-			expect(
-				await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "must not replay" }),
-			).toEqual({ kind: "accepted" });
-			expect(f.provider.requests).toHaveLength(1);
-			release.resolve();
-			await native.waitForIdle();
-			const restored: object[] = [];
-			const detachAgain = await f.host.subscribeNative("browser-a", imported.record.requirementId, frame =>
-				restored.push(frame),
-			);
-			expect(restored.length).toBeGreaterThan(0);
-			expect(f.provider.requests).toHaveLength(1);
-			await detachAgain();
-		} finally {
-			release.resolve();
-		}
-	}, 120_000);
-
-	test("true host shutdown settles native work and waits without cancelling the requirement record", async () => {
-		const release = Promise.withResolvers<void>();
-		const entered = Promise.withResolvers<void>();
-		await using f = await fixture(async () => {
-			entered.resolve();
-			await release.promise;
-		});
-		const imported = await f.host.controller.createRequirement({ source: "import" });
-		const target = await f.host.controller.prepareSession(imported.record.requirementId);
-		const prepared = f.host.prepareDevInput("browser-a", target);
-		try {
-			expect(
-				(await f.host.submitDevInput("browser-a", { requestId: prepared.requestId, text: "One owned native turn" }))
-					.kind,
-			).toBe("accepted");
-			await entered.promise;
-			const native = f.host.controller.resolveSession(target);
-			const confirm = f.host.nativeUi
-				.createContext(() => target)
-				.confirm("Pending native permission", "No implicit approval on shutdown");
-			const closing = f.host.close();
-			release.resolve();
-			await closing;
-			expect(await confirm).toBe(false);
-			expect(native.isStreaming).toBe(false);
-			expect(f.host.controller.nativeSessions()).toEqual([]);
+	test("exclusive Dev restores the exact interactive MCP callback and leaves explicit programmatic auth unchanged", async () => {
+		for (const authMode of ["session-ui", "programmatic"] as const) {
+			await using f = await fixture({ authMode });
+			const manager = f.sourceMcp;
+			if (!manager) throw new Error("Native MCP manager missing");
+			expect(f.host.rootSession.nativeChildCapabilities?.mcpManager).toBe(manager);
+			if (authMode === "programmatic") expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
+			else expect(manager.getAuthHandler()).not.toBe(f.ordinaryAuthHandler);
+			expect(f.ordinaryAuthCalls()).toBe(0);
+			await f.host.close();
+			expect(manager.getAuthHandler()).toBe(f.ordinaryAuthHandler);
 			expect(f.session.isDisposed).toBe(false);
-			expect((await f.host.controller.getRequirement(imported.record.requirementId)).record.lifecycle).toBe(
-				"active",
-			);
-			expect(f.provider.requests).toHaveLength(1);
-		} finally {
-			release.resolve();
+			expect(f.provider.requests).toEqual([]);
 		}
 	}, 120_000);
 });
 
-test("native RPC keeps its default policy while the workbench explicitly follows existing interactive Goal settings", async () => {
+test("native RPC default and Dev interactive Goal retain independent continuation policies", async () => {
 	await using ordinary = await fixture();
 	cfgGoalContinuationModes.set(ordinary.settings, ["interactive"]);
 	const rpc = new RpcGoalController(ordinary.session);
 	const detachRpc = ordinary.session.subscribe(event => rpc.observe(event));
 	try {
-		await rpc.handle({ op: "create", objective: "Do not start a model under the disabled RPC continuation policy" });
+		await rpc.handle({ op: "create", objective: "Do not start a model under disabled RPC continuation" });
 		expect(rpc.continuationPending).toBe(false);
 		expect(ordinary.provider.requests).toEqual([]);
 		expect(cfgGoalContinuationModes.get(ordinary.settings)).toEqual(["interactive"]);
@@ -749,18 +755,19 @@ test("native RPC keeps its default policy while the workbench explicitly follows
 		await rpc.handle({ op: "pause" });
 		detachRpc();
 	}
-
 	const entered = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	await using workbench = await fixture(async () => {
-		entered.resolve();
-		await release.promise;
+	await using workbench = await fixture({
+		delay: async () => {
+			entered.resolve();
+			await release.promise;
+		},
 	});
 	cfgGoalContinuationModes.set(workbench.settings, ["interactive"]);
 	const interactive = createDevGoalController(workbench.session);
-	const detachInteractive = workbench.session.subscribe(event => interactive.observe(event));
+	const detach = workbench.session.subscribe(event => interactive.observe(event));
 	try {
-		await interactive.handle({ op: "create", objective: "Execute one explicitly authorized native continuation" });
+		await interactive.handle({ op: "create", objective: "Execute one explicitly authorized continuation" });
 		expect(interactive.continuationPending).toBe(true);
 		await entered.promise;
 		interactive.stopForHostAbort();
@@ -773,97 +780,286 @@ test("native RPC keeps its default policy while the workbench explicitly follows
 		release.resolve();
 		await workbench.session.abort();
 		await interactive.handle({ op: "pause" });
-		detachInteractive();
+		detach();
 	}
 }, 120_000);
 
-describe("native human waits", () => {
-	test("first exact response wins while old generations and denied approvals never grant", async () => {
-		const ui = new DevNativeUiController();
-		let target: DevSessionTarget = { requirementId: "r1", sessionId: "native-s1", generation: 1 };
-		const context = ui.createContext(() => target);
-		const selected = context.select("Pick", ["One", "Two"]);
-		const request = ui.pending()[0];
-		expect(await ui.respondDevNativeUi({ ...request, generation: 2, value: "One" })).toEqual({
-			accepted: false,
-			reason: "Native request owner or generation changed",
-		});
-		expect(await ui.respondDevNativeUi({ ...request, value: "One" })).toEqual({ accepted: true });
-		expect(await ui.respondDevNativeUi({ ...request, value: "Two" })).toEqual({
-			accepted: false,
-			reason: "This native request has already ended",
-		});
+describe("native session interaction broker", () => {
+	test("first exact response wins; another native session and a denied permission never gain authority", async () => {
+		await using f = await fixture();
+		const { session } = await conversation(f);
+		const broker = nativeWebGuiQuestions(session);
+		const selected = broker.ui.select("Pick", ["One", "Two"]);
+		const request = broker.pendingInteractions[0]!;
+		await expect(
+			nativeWebGuiQuestions(f.session).resolveInteraction(request.interactionId, { optionId: "0" }),
+		).rejects.toThrow();
+		await expect(broker.resolveInteraction(request.interactionId, { optionId: "9" })).rejects.toThrow();
+		expect(broker.pendingInteractions).toHaveLength(1);
+		await broker.resolveInteraction(request.interactionId, { optionId: "0" });
 		expect(await selected).toBe("One");
-		const approval = context.approve!({ compact: "Sensitive tool", full: "Exact path and arguments" });
-		const pending = ui.pending()[0];
-		expect((await ui.respondDevNativeUi({ ...pending, value: "session" })).accepted).toBe(false);
-		expect((await ui.respondDevNativeUi({ ...pending, value: "deny" })).accepted).toBe(true);
+		await expect(broker.resolveInteraction(request.interactionId, { optionId: "1" })).rejects.toThrow();
+		const approval = broker.ui.approve!({ compact: "Sensitive tool", full: "Exact path and arguments" });
+		const pending = broker.pendingInteractions[0]!;
+		if (pending.payload.kind !== "userInput") throw new Error("Native approval missing");
+		const deny = pending.payload.options?.find(option => option.label === "Deny");
+		if (!deny) throw new Error("Deny option missing");
+		await broker.resolveInteraction(pending.interactionId, { optionId: deny.optionId });
 		expect(await approval).toBe("deny");
-		const stale = context.confirm("Confirm", "Do not answer in another generation");
-		const staleRequest = ui.pending()[0];
-		target = { ...target, generation: 3 };
-		expect((await ui.respondDevNativeUi({ ...staleRequest, value: true })).accepted).toBe(false);
-		ui.close();
-		expect(await stale).toBe(false);
-	});
+		expect(f.provider.requests).toEqual([]);
+	}, 120_000);
 
-	test("native abort closes waits, not subscriber detachment; rich ask returns exact selected facts", async () => {
-		const ui = new DevNativeUiController();
-		const target = { requirementId: "r2", sessionId: "native-s2", generation: 7 };
-		const context = ui.createContext(() => target);
+	test("abort ends native waits, observer detachment does not; rich ask returns the actual human selections", async () => {
+		await using f = await fixture();
+		const { session } = await conversation(f);
+		const broker = nativeWebGuiQuestions(session);
 		const abort = new AbortController();
-		const editor = context.editor("Native editor", "original", { signal: abort.signal });
-		const unsubscribe = ui.observe(() => {});
-		unsubscribe();
-		expect(ui.pending()).toHaveLength(1);
+		const editor = broker.ui.editor("Native editor", "original", { signal: abort.signal });
+		broker.subscribe(() => {})();
+		expect(broker.pendingInteractions).toHaveLength(1);
 		abort.abort();
-		expect(await editor).toBeUndefined();
-		const ask = context.askDialog!([{ id: "q", question: "Choice?", options: [{ label: "A" }, { label: "B" }] }]);
-		const request = ui.pending()[0];
-		const answer = {
-			kind: "submit" as const,
+		await expect(editor).rejects.toThrow();
+		const ask = broker.ui.askDialog!([
+			{ id: "q", question: "Choice?", multi: true, options: [{ label: "A" }, { label: "B" }] },
+		]);
+		const request = broker.pendingInteractions[0]!;
+		await broker.resolveInteraction(request.interactionId, { content: { answer_0: ["A", "B", "human detail"] } });
+		expect(await ask).toEqual({
+			kind: "submit",
 			results: [
 				{
 					id: "q",
 					question: "Choice?",
 					options: ["A", "B"],
-					multi: false,
-					selectedOptions: ["B"],
-					note: "human detail",
+					multi: true,
+					selectedOptions: ["A", "B"],
+					customInput: "human detail",
 				},
 			],
-		};
-		expect((await ui.respondDevNativeUi({ ...request, value: answer })).accepted).toBe(true);
-		expect(await ask).toEqual(answer);
-		ui.close();
-	});
+		});
+	}, 120_000);
 
-	test("native editor and persistent widgets rehydrate facts without replaying paste or notifications", () => {
-		const ui = new DevNativeUiController();
-		const target = { requirementId: "r3", sessionId: "native-s3", generation: 4 };
-		const context = ui.createContext(() => target);
-		ui.updateEditor(target, "Actual browser draft Ω");
-		expect(context.getEditorText()).toBe("Actual browser draft Ω");
-		context.pasteToEditor("\nNative addition");
-		context.setStatus("work", "Native work");
-		context.setWidget("progress", ["native row"], { placement: "belowEditor" });
-		context.notify("Ephemeral notification");
-		const snapshot = ui.snapshot();
-		expect(snapshot).toContainEqual({
-			t: "native-ui-state",
-			target,
-			method: "setEditorText",
-			value: "Actual browser draft Ω\nNative addition",
+	test("browser-origin requests cannot be answered by another connection or replayed after its close", async () => {
+		await using f = await fixture();
+		const { session } = await conversation(f);
+		const broker = nativeWebGuiQuestions(session);
+		const origin = { connectionId: "browser-connection-a", clientId: "browser-a", sessionId: session.sessionId };
+		const action = withNativeWebGuiInteractionScope(origin, () =>
+			broker.browserAction({ action: "openUrl", url: "https://example.invalid/" }),
+		);
+		const request = broker.pendingInteractions[0]!;
+		await expect(
+			broker.resolveInteraction(request.interactionId, { action: "accept" }, { ...origin, connectionId: "foreign" }),
+		).rejects.toThrow();
+		expect(broker.pendingInteractionsFor({ ...origin, connectionId: "foreign" })).toEqual([]);
+		broker.cancelConnectionActions(origin.connectionId);
+		await expect(action).rejects.toThrow();
+		await expect(broker.resolveInteraction(request.interactionId, { action: "accept" }, origin)).rejects.toThrow();
+	}, 120_000);
+});
+
+describe("native shared composer surface", () => {
+	async function surface(f: NativeHostFixture) {
+		const h = await conversation(f);
+		const target: DevNativeSurfaceTarget = {
+			...h.ref,
+			sessionId: h.native.sessionId,
+			phase: h.native.phase,
+			round: h.native.round,
+			clientId: "page-a",
+		};
+		bindDevNativeSurface(h.session, target, () => target);
+		return { ...h, target };
+	}
+
+	test("one native side turn supplies all browsers and persists prediction usage without browser-triggered requests", async () => {
+		await using f = await fixture({ reply: () => ({ text: "run the tests\nshow the diff" }) });
+		const h = await surface(f);
+		cfgComposerPredictions.set(h.session.settings, true);
+		cfgComposerPredictionAlternatives.set(h.session.settings, true);
+		const second = { ...h.target, clientId: "page-b" };
+		bindDevNativeSurface(h.session, second, () => second);
+		const frames: DevNativePredictionSnapshot[] = [];
+		const detach = subscribeDevNativeSurface(h.session, h.target, event => {
+			if (event.t === "native-prediction") frames.push(event.prediction);
 		});
-		expect(snapshot.some(event => event.method === "pasteToEditor" || event.method === "notify")).toBe(false);
-		expect(snapshot).toContainEqual({
-			t: "native-ui-state",
-			target,
-			method: "setWidget",
-			value: { key: "progress", content: ["native row"], options: { placement: "belowEditor" } },
+		try {
+			expect(devNativeSurfaceSnapshot(h.session, h.target).prediction.choices).toEqual([]);
+			expect(devNativeSurfaceSnapshot(h.session, second).prediction.choices).toEqual([]);
+			expect(f.provider.requests).toEqual([]);
+			await h.runtime.submit(h.native, "fix the bug");
+			const prediction = await eventually(
+				async () => devNativeSurfaceSnapshot(h.session, h.target).prediction,
+				value => value.choices.length === 2,
+			);
+			expect(prediction.choices).toEqual(["run the tests", "show the diff"]);
+			expect(devNativeSurfaceSnapshot(h.session, second).prediction).toEqual({ ...prediction, target: second });
+			devNativePredictionAction(h.session, h.target, { type: "shown", generation: prediction.generation });
+			devNativePredictionAction(h.session, h.target, {
+				type: "accepted",
+				generation: prediction.generation,
+				rank: 1,
+			});
+			expect(() =>
+				devNativePredictionAction(h.session, h.target, {
+					type: "accepted",
+					generation: prediction.generation,
+					rank: 2,
+				}),
+			).toThrow();
+			expect(() =>
+				devNativePredictionAction(
+					h.session,
+					{ ...h.target, round: h.target.round + 1 },
+					{ type: "shown", generation: prediction.generation },
+				),
+			).toThrow();
+			expect(frames.some(frame => frame.choices.length === 2)).toBe(true);
+			expect(f.provider.requests).toHaveLength(2);
+			expect(h.session.sessionManager.getEntries().filter(entry => entry.type === "model_usage")).toContainEqual(
+				expect.objectContaining({ purpose: "composer-prediction" }),
+			);
+			expect(h.session.messages.filter(message => message.role === "assistant")).toHaveLength(1);
+			expect(f.session.messages).toEqual([]);
+		} finally {
+			detach();
+		}
+	}, 120_000);
+
+	test("a native draft skips the billed prediction request", async () => {
+		await using f = await fixture();
+		const h = await surface(f);
+		cfgComposerPredictions.set(h.session.settings, true);
+		updateDevNativeSurfaceEditor(h.session, h.target, "already drafting the next message");
+		expect(nativeWebGuiQuestions(h.session).ui.getEditorText()).toBe("already drafting the next message");
+		await h.runtime.submit(h.native, "fix the bug");
+		await releaseDevNativeSurface(h.session);
+		expect(f.provider.requests).toHaveLength(1);
+		expect(
+			h.session.sessionManager
+				.getEntries()
+				.filter(entry => entry.type === "model_usage" && entry.purpose === "composer-prediction"),
+		).toEqual([]);
+	}, 120_000);
+
+	test("host close cancels and settles its prediction without offering a held reply", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let requests = 0;
+		await using f = await fixture({
+			delay: async () => {
+				if (++requests === 2) {
+					entered.resolve();
+					await release.promise;
+				}
+			},
+			reply: () => ({ text: "held next-input suggestion" }),
 		});
-		ui.updateEditor({ ...target, generation: 5 }, "Different generation");
-		expect(context.getEditorText()).toBe("Actual browser draft Ω\nNative addition");
-		ui.close();
-	});
+		const h = await surface(f);
+		cfgComposerPredictions.set(h.session.settings, true);
+		const offered: DevNativePredictionSnapshot[] = [];
+		const detach = subscribeDevNativeSurface(h.session, h.target, event => {
+			if (event.t === "native-prediction" && event.prediction.choices.length) offered.push(event.prediction);
+		});
+		try {
+			await h.runtime.submit(h.native, "first native turn");
+			await entered.promise;
+			const closing = f.host.close();
+			release.resolve();
+			await closing;
+			expect(offered).toEqual([]);
+			expect(() => devNativeSurfaceSnapshot(h.session, h.target)).toThrow();
+			expect(f.provider.requests).toHaveLength(2);
+			expect(f.session.isDisposed).toBe(false);
+		} finally {
+			release.resolve();
+			detach();
+		}
+	}, 120_000);
+
+	test("a new native turn retires a held prediction and cannot leak it into the next draft", async () => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		let requests = 0;
+		await using f = await fixture({
+			delay: async () => {
+				if (++requests === 2) {
+					entered.resolve();
+					await release.promise;
+				}
+			},
+			reply: request => ({
+				text: request.messages.some(message => contentText(message.content).includes("SECOND_NATIVE_TURN"))
+					? "CURRENT_NEW_PREDICTION"
+					: "STALE_HELD_PREDICTION",
+			}),
+		});
+		const h = await surface(f);
+		cfgComposerPredictions.set(h.session.settings, true);
+		const offered: DevNativePredictionSnapshot[] = [];
+		const detach = subscribeDevNativeSurface(h.session, h.target, event => {
+			if (event.t === "native-prediction" && event.prediction.choices.length) offered.push(event.prediction);
+		});
+		try {
+			await h.runtime.submit(h.native, "FIRST_NATIVE_TURN");
+			await entered.promise;
+			const old = devNativeSurfaceSnapshot(h.session, h.target).prediction;
+			updateDevNativeSurfaceEditor(h.session, h.target, "new native draft");
+			updateDevNativeSurfaceEditor(h.session, h.target, "");
+			expect(() =>
+				devNativePredictionAction(h.session, h.target, { type: "shown", generation: old.generation }),
+			).toThrow();
+			await h.runtime.submit(h.native, "SECOND_NATIVE_TURN");
+			const current = await eventually(
+				async () => devNativeSurfaceSnapshot(h.session, h.target).prediction,
+				value => value.choices.includes("CURRENT_NEW_PREDICTION"),
+			);
+			expect(current.generation).toBeGreaterThan(old.generation);
+			release.resolve();
+			await releaseDevNativeSurface(h.session);
+			expect(offered.some(prediction => prediction.choices.includes("STALE_HELD_PREDICTION"))).toBe(false);
+			expect(offered.at(-1)?.choices).toEqual(["CURRENT_NEW_PREDICTION"]);
+			expect(f.provider.requests).toHaveLength(4);
+			expect(f.session.messages).toEqual([]);
+		} finally {
+			release.resolve();
+			detach();
+		}
+	}, 120_000);
+
+	test("native editor and persistent widgets rehydrate facts without replaying paste or notifications", async () => {
+		await using f = await fixture();
+		const h = await surface(f);
+		const ui = nativeWebGuiQuestions(h.session).ui;
+		updateDevNativeSurfaceEditor(h.session, h.target, "Actual browser draft Ω");
+		expect(ui.getEditorText()).toBe("Actual browser draft Ω");
+		ui.pasteToEditor("\nNative addition");
+		ui.setStatus("work", "Native work");
+		ui.setWidget("progress", ["native row"], { placement: "belowEditor" });
+		ui.notify("Ephemeral notification");
+		const reconnect = { ...h.target, clientId: "reconnected-page" };
+		bindDevNativeSurface(h.session, reconnect, () => reconnect);
+		const snapshot = devNativeSurfaceSnapshot(h.session, reconnect);
+		expect(snapshot.events).toContainEqual(
+			expect.objectContaining({
+				t: "native-ui-state",
+				target: reconnect,
+				method: "setEditorText",
+				value: "Actual browser draft Ω\nNative addition",
+			}),
+		);
+		expect(snapshot.events.some(event => event.method === "pasteToEditor" || event.method === "notify")).toBe(false);
+		expect(snapshot.events).toContainEqual(
+			expect.objectContaining({
+				target: reconnect,
+				method: "setWidget",
+				value: { key: "progress", content: ["native row"], options: { placement: "belowEditor" } },
+			}),
+		);
+		expect(() =>
+			updateDevNativeSurfaceEditor(h.session, { ...h.target, round: h.target.round + 1 }, "foreign round"),
+		).toThrow();
+		expect(ui.getEditorText()).toBe("Actual browser draft Ω\nNative addition");
+		expect(f.provider.requests).toEqual([]);
+	}, 120_000);
 });

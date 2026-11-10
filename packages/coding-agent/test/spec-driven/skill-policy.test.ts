@@ -514,14 +514,14 @@ describe("pinned skill discovery and access", () => {
 	it("scopes program grants by session and clears old grants on replacement or lifecycle end", async () => {
 		const skill = await fixture();
 		const scope = {};
-		const dispose = bindSpecSkillPolicy(scope, { phase: "plan", allowedSkills: [skill.name] });
+		const dispose = bindSpecSkillPolicy(scope, { phase: "planning", allowedSkills: [skill.name] });
 		const revoke = grantSpecSkillAccess(scope, skill);
 		expect(() => checkSkillReadAccess(skill, { scope })).not.toThrow();
 		expect(() => checkSkillReadAccess(skill, { scope: {} })).toThrow(SkillAccessDeniedError);
 		revoke();
 		expect(() => checkSkillReadAccess(skill, { scope })).toThrow(SkillAccessDeniedError);
 		grantSpecSkillAccess(scope, skill);
-		const endReplacement = bindSpecSkillPolicy(scope, { phase: "execution", allowedSkills: [skill.name] });
+		const endReplacement = bindSpecSkillPolicy(scope, { phase: "executing", allowedSkills: [skill.name] });
 		dispose();
 		expect(() => checkSkillReadAccess(skill, { scope })).toThrow(SkillAccessDeniedError);
 		grantSpecSkillAccess(scope, skill);

@@ -531,6 +531,40 @@ const forkPackageFiles: Record<string, string[]> = {
 	"packages/snapcompact": ["test/snapcompact.test.ts"],
 };
 
+/** Dev's Vite/public/worker inputs do not appear in Bun's static test import graph. */
+export function isDevFrontendInput(file: string): boolean {
+	if (!file.startsWith("packages/dev-frontend/")) return false;
+	const relative = file.slice("packages/dev-frontend/".length);
+	return (
+		/^(?:preview|packages|public|config|third-party\/runtime)\//.test(relative) ||
+		/^(?:package\.json|bun\.lock|copy-manifest\.json|tsconfig\.base\.json)$/.test(relative)
+	);
+}
+
+export function devWorkbenchInputsChanged(
+	command: Pick<TestCommand, "cwd" | "command">,
+	changed: readonly string[],
+): boolean {
+	const consumesAssets =
+		(command.cwd === "packages/collab-web" && command.command.includes("test/dev-workbench.test.tsx")) ||
+		(command.cwd === "packages/coding-agent" &&
+			command.command.some(
+				file =>
+					/^test\/dev-workbench\/(?:resources|(?:workflow-)?(?:browser|process)\.e2e)\.test\.ts$/.test(file) ||
+					(file.startsWith("test/dev-workbench/") && isBrowserTest(file)),
+			));
+	return (
+		consumesAssets &&
+		changed.some(
+			file =>
+				isDevFrontendInput(file) ||
+				file === "packages/coding-agent/scripts/dev-workbench-resources.ts" ||
+				file === "packages/coding-agent/src/dev-workbench/assets.ts" ||
+				file === "packages/coding-agent/src/dev-workbench/assets.generated.json",
+		)
+	);
+}
+
 export function isForkCodingAgentTest(file: string): boolean {
 	return forkCodingAgentFiles.has(file) || forkCodingAgentDirectories.some(dir => file.startsWith(dir));
 }
@@ -715,6 +749,26 @@ function classifyCodingAgentTest(testFile: string, content: string): CodingAgent
 	return "native";
 }
 
+// Resource ownership follows the real launch/probe imports, not an e2e filename
+// suffix: new browser acceptance files must not escape into the ordinary lane.
+const browserConsumerTests = new Set<string>();
+
+function consumesBrowserProcess(content: string): boolean {
+	return (
+		/\b(?:withWorkflowChromium|launchHeadlessBrowser)\s*\(/.test(content) ||
+		(/\b(?:loadPuppeteer|puppeteer-core)\b/.test(content) && /\b\w+\.launch\s*\(/.test(content)) ||
+		/from\s+["'][^"']*(?:chromium-probe|core-browser-fixture)["']/.test(content)
+	);
+}
+
+function isBrowserTest(file: string): boolean {
+	return (
+		browserConsumerTests.has(file) ||
+		/^test\/dev-workbench\/(?:[^/]*browser(?:\.e2e)?)\.test\.ts$/.test(file) ||
+		file === "test/webgui/core-browser.e2e.test.ts"
+	);
+}
+
 async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTestPartition> {
 	let promise = codingAgentTestPartitionPromises.get(all);
 	if (!promise) {
@@ -731,6 +785,7 @@ async function getCodingAgentTestPartition(all = false): Promise<CodingAgentTest
 
 			for (const testFile of testFiles) {
 				const content = await Bun.file(path.join(codingAgentDir, testFile)).text();
+				if (consumesBrowserProcess(content)) browserConsumerTests.add(testFile);
 				partition[classifyCodingAgentTest(testFile, content)].push(testFile);
 			}
 
@@ -747,9 +802,9 @@ function isIntegrationTest(testFile: string): boolean {
 	return (
 		/(?:^|[./_-])(?:e2e|integration)(?:[./_-]|$)/i.test(testFile) ||
 		/^(?:\.\/)?test\/openwiki\/visualize-browser\.test\.ts$/.test(testFile) ||
-		// Scoped publication and cancellation exercise repeated native Git subprocesses, not unit-only fixtures.
+		// Scoped publication and workflow transitions exercise repeated native Git operations.
 		testFile === "test/dev-workbench/git.test.ts" ||
-		testFile === "test/dev-workbench/cancel.test.ts" ||
+		testFile === "test/dev-workbench/workflow-domain.test.ts" ||
 		testFile === "test/goals/goal-recovery-public-wire.test.ts" ||
 		testFile === "test/goals/goal-sdk-auxiliary-consumers.test.ts" ||
 		testFile === "test/tools/browser/crawl.test.ts"
@@ -762,9 +817,9 @@ export function isIntegrationCommand(command: TestCommand): boolean {
 
 function isStartupTest(file: string): boolean {
 	return (
+		isBrowserTest(file) ||
 		/^test\/spec-driven\/tui-[^/]*\.e2e\.test\.ts$/.test(file) ||
-		/^test\/dev-workbench\/(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
-		file === "test/webgui/core-browser.e2e.test.ts" ||
+		/^test\/dev-workbench\/(?:workflow-)?(?:browser|process)\.e2e\.test\.ts$/.test(file) ||
 		file === "test/zero-config-terminal.test.ts" ||
 		file === "test/goals/goal-autopilot-tui.e2e.test.ts" ||
 		file === "test/goals/goal-ctrl-enter-tui.e2e.test.ts" ||
@@ -776,6 +831,10 @@ function isStartupTest(file: string): boolean {
 // Startup files are isolated before chunking, including in full mode.
 function isStartupCommand(command: TestCommand): boolean {
 	return command.cwd === "packages/coding-agent" && command.command.some(isStartupTest);
+}
+
+function isBrowserCommand(command: TestCommand): boolean {
+	return command.cwd === "packages/coding-agent" && command.command.some(isBrowserTest);
 }
 
 /** Startup chunks run in their own lane; retain the integration cap for other chunks. */
@@ -1496,19 +1555,25 @@ export async function runBoundedPool<T>(
 	isBounded: (item: T) => boolean,
 	boundedLimit: number,
 	run: (item: T) => Promise<void>,
+	isExclusive: (item: T) => boolean = () => false,
 ): Promise<void> {
-	const queue = items.map(item => ({ item, bounded: isBounded(item) }));
+	const queue = items.map(item => ({ item, bounded: isBounded(item), exclusive: isExclusive(item) }));
 	let activeBounded = 0;
+	let activeExclusive = 0;
 	async function worker(): Promise<void> {
 		for (;;) {
-			const index = queue.findIndex(entry => !entry.bounded || activeBounded < boundedLimit);
+			const index = queue.findIndex(
+				entry => (!entry.bounded || activeBounded < boundedLimit) && (!entry.exclusive || activeExclusive === 0),
+			);
 			if (index === -1) return;
 			const [entry] = queue.splice(index, 1);
 			if (entry.bounded) activeBounded++;
+			if (entry.exclusive) activeExclusive++;
 			try {
 				await run(entry.item);
 			} finally {
 				if (entry.bounded) activeBounded--;
+				if (entry.exclusive) activeExclusive--;
 			}
 		}
 	}
@@ -1699,7 +1764,17 @@ async function runTestCommandsInParallel(commands: TestCommand[], concurrency: n
 	}
 
 	const runStartedAt = performance.now();
-	await runBoundedPool(commands, concurrency, command => isLimitedIntegrationCommand(command), 4, runChunk);
+	// A real Chromium owns several native processes and its own CDP transport.
+	// Admit one browser chunk while the other workers continue draining ordinary
+	// startup/integration work; do not lower the lane's CPU/file concurrency.
+	await runBoundedPool(
+		commands,
+		concurrency,
+		command => isLimitedIntegrationCommand(command),
+		4,
+		runChunk,
+		isBrowserCommand,
+	);
 
 	if (quiet) {
 		const totalSeconds = (performance.now() - runStartedAt) / 1000;
@@ -1830,7 +1905,10 @@ if (import.meta.main) {
 	let changedPaths: string[] | undefined;
 	if (selection.mode === "affected") {
 		changedPaths = await bunChangedPaths(repoRoot, selection.baseline ?? "HEAD");
-		if (!changedArgs.length && (!changedPaths || bunRequiresFullSelection(changedPaths))) {
+		if (
+			!changedArgs.length &&
+			(!changedPaths || bunRequiresFullSelection(changedPaths.filter(file => !isDevFrontendInput(file))))
+		) {
 			selection = { tool: "bun", mode: "full", reason: "untraceable native, dynamic, or unknown input" };
 		}
 	}
@@ -1877,10 +1955,22 @@ if (import.meta.main) {
 			command.cwd === "packages/coding-agent" &&
 			command.command.includes("test/webgui/core-browser.e2e.test.ts") &&
 			(!changedPaths || bunCoreBrowserInputsChanged(changedPaths));
-		command.selection = browserInputsChanged
-			? { ...selection, mode: "full", reason: "explicit browser Vite/fixture dependency mapping" }
-			: selection;
-		if (selection.mode === "affected" && !browserInputsChanged)
+		const devInputsChanged =
+			selection.mode === "affected" &&
+			(!changedPaths
+				? devWorkbenchInputsChanged(command, ["packages/dev-frontend/preview/main.tsx"])
+				: devWorkbenchInputsChanged(command, changedPaths));
+		command.selection =
+			browserInputsChanged || devInputsChanged
+				? {
+						...selection,
+						mode: "full",
+						reason: devInputsChanged
+							? "explicit Dev Vite/public/worker dependency mapping"
+							: "explicit browser Vite/fixture dependency mapping",
+					}
+				: selection;
+		if (selection.mode === "affected" && !browserInputsChanged && !devInputsChanged)
 			command.command.push(changedArgs[0] ?? `--changed=${selection.baseline}`);
 	}
 	// Prioritize within the selected shard, without changing shard membership.

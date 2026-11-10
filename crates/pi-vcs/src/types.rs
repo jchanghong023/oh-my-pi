@@ -278,6 +278,15 @@ pub struct RemoteRefResult {
 	pub sha: Option<String>,
 }
 
+/// The live remote HEAD's symbolic branch and advertised object id.
+#[derive(Debug, Clone)]
+pub struct RemoteDefaultBranch {
+	/// Branch path relative to `refs/heads/`, retaining all nested components.
+	pub branch: String,
+	/// Non-null object id advertised for HEAD.
+	pub sha:    String,
+}
+
 /// Operation-oriented raw worktree preimage and postimage SHA-256 digests.
 #[derive(Debug, Clone)]
 pub struct OwnedPatchExpectation {

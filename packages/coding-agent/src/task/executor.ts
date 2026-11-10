@@ -1042,6 +1042,7 @@ export function createMCPProxyTools(mcpManager: MCPManagerApi, scope: MCPToolSco
 			strict: tool.strict,
 			mcpServerName: serverName,
 			mcpToolName,
+			mcpReadOnlyHint: tool.mcpReadOnlyHint,
 			execute: async (toolCallId, params, onUpdate, ctx, signal) => {
 				if (signal?.aborted) {
 					throw new ToolAbortError();
@@ -4229,6 +4230,7 @@ async function configureNativeSubagentSession(
 		"subagentHooks",
 		"extensionProviderOwnership",
 		"preloadedPreparedExtensions",
+		"deferSkillDescriptionCompression",
 	] as const;
 	for (const key of keys) {
 		if (Object.hasOwn(overrides, key)) Object.assign(configured, { [key]: overrides[key] });

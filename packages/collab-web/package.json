@@ -28,7 +28,6 @@
     "relay": "bun scripts/local-relay.ts",
     "build": "rm -rf dist && bun ../../scripts/test-gate-bun.ts build ./index.html --outdir=dist --minify --define process.env.NODE_ENV='\"production\"' --entry-naming=[hash].[ext] --chunk-naming=[hash].[ext] --asset-naming=[hash].[ext] && mv dist/*.html dist/index.html && cp -R public/. dist/",
     "gen:export-viewer": "bun scripts/build-export-viewer.ts",
-    "gen:dev-workbench": "bun ../coding-agent/scripts/dev-workbench-resources.ts --write",
     "prepack": "bun run build",
     "test": "bun ../../scripts/test-report-bun.ts --parallel",
     "check": "oxlint . && oxfmt --check --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.ts' '*.ts' && bun run check:types",
@@ -60,7 +59,6 @@
     "scripts",
     "public",
     "index.html",
-    "dev-workbench.html",
     "README.md",
     "CHANGELOG.md"
   ]

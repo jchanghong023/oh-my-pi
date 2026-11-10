@@ -1,46 +1,39 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { closePublicWorkbenches, WorkbenchFixture } from "../dev-workbench/fixture";
-import { contentText, rolePayload } from "./provider-fixture";
-afterEach(closePublicWorkbenches);
+import { isRecord } from "@oh-my-pi/pi-utils";
+import { workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { createWorkflowStage } from "./tui-materials-cases";
 
-test("Back invalidates downstream decisions but preserves implementation and does not start background work", async () => {
-	await using fixture = await WorkbenchFixture.create();
-	await fixture.start();
-	const executing = await fixture.developUntil("executing");
-	const id = executing.record.requirementId;
-	const source = await fs.readFile(path.join(fixture.cwd, "src/greeting.ts"), "utf8");
-	const before = fixture.provider.requests.length;
-	const result = await fixture.act(executing, { kind: "back" });
-	expect(result.snapshot.record.stage).toBe("planning");
-	expect(result.snapshot.record.decisions.map(decision => decision.stage)).toEqual([
-		"business",
-		"requirements",
-		"solution",
-	]);
-	expect(await fs.readFile(path.join(fixture.cwd, "src/greeting.ts"), "utf8")).toBe(source);
-	expect(fixture.provider.requests).toHaveLength(before);
-	expect((await fixture.get(id)).runtime?.execution).not.toBe("running");
-}, 180_000);
-
-test("stage entry keeps Goal opt-in and handoff contains original material bytes and raw decisions", async () => {
-	await using fixture = await WorkbenchFixture.create();
-	await fixture.start();
-	const snapshot = await fixture.developUntil("executing");
-	const request = fixture.provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === "executor");
-	if (!request) throw new Error("Native executor request missing");
-	const input = rolePayload(request)!.input;
-	const files = input.files as Array<{ path: string; content: string }>;
-	expect(files.length).toBeGreaterThan(0);
-	for (const file of files) expect(file.content).toBe(await fs.readFile(path.join(fixture.cwd, file.path), "utf8"));
-	expect(request.messages.map(message => contentText(message.content)).join("\n")).toContain(
-		snapshot.record.decisions[0]!.userReply,
-	);
+test("executor receives frozen whole-group bytes and explicit decisions while Goal remains opt-in", async () => {
+	const { fixture, srId, view } = await createWorkflowStage("executing");
+	await using owned = fixture;
+	const sr = view.srs.find(item => item.id === srId)!;
+	const request = fixture.provider.requests.findLast(request => workflowNativeContext(request)?.role === "executor");
+	if (!request) throw new Error("Real native executor request missing");
+	const context = workflowNativeContext(request)!;
+	const authority = context.authority as { files: { path: string; content: string }[] };
+	expect(authority.files.length).toBeGreaterThan(1);
+	for (const file of authority.files)
+		expect(file.content).toBe(await fs.readFile(path.join(sr.worktree!.path, file.path), "utf8"));
+	const contextFiles = context.contextFiles as { path: string; content: string }[];
+	for (const material of sr.materials.filter(
+		material => material.valid && ["solution", "planning"].includes(material.stage),
+	)) {
+		const supplied = contextFiles.find(file => file.path === material.path);
+		expect(supplied?.content).toBe(await fs.readFile(path.join(sr.worktree!.path, material.path), "utf8"));
+	}
+	const decisions = JSON.stringify(context.decisions);
+	for (const approval of sr.approvals) expect(decisions).toContain(approval.operationId);
 	const goalCalls = fixture.provider.requests
 		.flatMap(request => request.messages)
 		.flatMap(message => message.tool_calls ?? [])
-		.filter(call => typeof call === "object" && call !== null && JSON.stringify(call).includes('"name":"goal"'));
+		.filter(
+			call =>
+				isRecord(call) &&
+				isRecord(call.function) &&
+				typeof call.function.name === "string" &&
+				call.function.name.replace(/^_/u, "") === "goal",
+		);
 	expect(goalCalls).toEqual([]);
-	expect(snapshot.record.marks).toEqual({});
-}, 180_000);
+}, 240_000);

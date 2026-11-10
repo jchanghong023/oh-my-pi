@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
-import { transformAsync } from "@babel/core";
+import { fileURLToPath } from "node:url";
 import { parse } from "acorn";
+import type { FunctionPluginHooks, OutputBundle } from "rolldown";
+import { build, loadConfigFromFile, type Plugin } from "vite";
+import { resolvePdfJsCMapsDirectory } from "../../dev-frontend/packages/ui/vite/pdfJsCMapsPlugin";
 import { withCompilerActivity } from "../../../scripts/test-gate-events";
 import {
 	decodeDevWorkbenchAssets,
@@ -15,7 +17,7 @@ import {
 } from "../src/dev-workbench/assets";
 
 const repoRoot = path.resolve(import.meta.dir, "../../..");
-const collabDir = path.join(repoRoot, "packages/collab-web");
+const frontendDir = path.join(repoRoot, "packages/dev-frontend");
 const agentDir = path.join(repoRoot, "packages/coding-agent");
 const generatedPath = path.join(agentDir, "src/dev-workbench/assets.generated.json");
 const manifests = new WeakMap<ReadonlyMap<string, DevWorkbenchAsset>, DevAssetManifest>();
@@ -25,8 +27,10 @@ function contentType(file: string): string {
 	const types: Record<string, string> = {
 		".html": "text/html; charset=utf-8",
 		".js": "text/javascript; charset=utf-8",
+		".mjs": "text/javascript; charset=utf-8",
 		".css": "text/css; charset=utf-8",
 		".json": "application/json; charset=utf-8",
+		".map": "application/json; charset=utf-8",
 		".webmanifest": "application/manifest+json; charset=utf-8",
 		".svg": "image/svg+xml",
 		".png": "image/png",
@@ -36,27 +40,84 @@ function contentType(file: string): string {
 		".webp": "image/webp",
 		".avif": "image/avif",
 		".ico": "image/x-icon",
+		".mp3": "audio/mpeg",
 		".woff": "font/woff",
 		".woff2": "font/woff2",
 		".ttf": "font/ttf",
 		".otf": "font/otf",
 		".wasm": "application/wasm",
+		".bcmap": "application/octet-stream",
+		".bin": "application/octet-stream",
 		".txt": "text/plain; charset=utf-8",
+		".xml": "application/xml; charset=utf-8",
+		".pdf": "application/pdf",
 	};
 	const type = types[path.extname(file).toLowerCase()];
 	if (!type) throw new Error(`Unsupported Dev workbench production asset: ${file}`);
 	return type;
 }
 
-/** Check automatic HTML/CSS requests, not user-supplied transcript links. */
+type SyntaxNode = { type: string; [key: string]: unknown };
+
+/** Vite injects this metadata for chunks and assets before output hooks run. */
+export function* devWorkbenchOutputReferences(bundle: OutputBundle): IterableIterator<string> {
+	for (const output of Object.values(bundle)) {
+		if (output.type === "chunk") {
+			yield* output.imports;
+			yield* output.dynamicImports;
+		}
+		const metadata = output.viteMetadata;
+		if (!metadata || !(metadata.importedAssets instanceof Set) || !(metadata.importedCss instanceof Set))
+			throw new Error(`Missing Vite dependency metadata: ${output.fileName}`);
+		yield* metadata.importedAssets;
+		yield* metadata.importedCss;
+	}
+}
+
+/** Inspect only automatic module/asset requests, not user-supplied transcript links. */
 function assertResourceClosure(assets: ReadonlyMap<string, DevWorkbenchAsset>): void {
+	const prefix = "/__dev_resource_prefix__/";
 	function check(reference: string, from: string): void {
 		const ref = reference.trim();
 		if (!ref || ref.startsWith("#") || ref.startsWith("data:")) return;
-		const url = new URL(ref, `https://workbench.invalid${from}`);
-		if (url.origin !== "https://workbench.invalid") throw new Error(`Remote UI dependency is forbidden: ${ref}`);
-		if (!assets.has(decodeURIComponent(url.pathname)))
-			throw new Error(`Missing UI asset ${ref} referenced by ${from}`);
+		const url = new URL(ref, `https://workbench.invalid${prefix}${from.slice(1)}`);
+		if (url.origin !== "https://workbench.invalid" || !url.pathname.startsWith(prefix))
+			throw new Error(`UI dependency escapes the Dev capability prefix: ${ref} in ${from}`);
+		const assetPath = `/${decodeURIComponent(url.pathname.slice(prefix.length))}`;
+		if (!assets.has(assetPath)) throw new Error(`Missing UI asset ${ref} referenced by ${from}`);
+	}
+	function visit(node: SyntaxNode, from: string): void {
+		if (
+			node.type === "ImportDeclaration" ||
+			node.type === "ExportNamedDeclaration" ||
+			node.type === "ExportAllDeclaration" ||
+			node.type === "ImportExpression"
+		) {
+			const source = node.source as SyntaxNode | undefined;
+			if (typeof source?.value === "string") check(source.value, from);
+		}
+		if (node.type === "NewExpression" && (node.callee as SyntaxNode | undefined)?.name === "URL") {
+			const args = node.arguments as SyntaxNode[];
+			const member = args[1];
+			const object = member?.object as SyntaxNode | undefined;
+			if (
+				typeof args[0]?.value === "string" &&
+				member?.type === "MemberExpression" &&
+				object?.type === "MetaProperty" &&
+				(object.meta as SyntaxNode)?.name === "import" &&
+				(member.property as SyntaxNode)?.name === "url"
+			)
+				check(args[0].value, from);
+		}
+		for (const value of Object.values(node)) {
+			if (Array.isArray(value)) {
+				for (const child of value) {
+					if (child && typeof child === "object" && typeof child.type === "string") visit(child, from);
+				}
+			} else if (value && typeof value === "object" && "type" in value && typeof value.type === "string") {
+				visit(value as SyntaxNode, from);
+			}
+		}
 	}
 	for (const [name, asset] of assets) {
 		if (asset.contentType.startsWith("text/html")) {
@@ -70,19 +131,38 @@ function assertResourceClosure(assets: ReadonlyMap<string, DevWorkbenchAsset>): 
 			}
 		} else if (asset.contentType.startsWith("text/css")) {
 			const css = new TextDecoder().decode(asset.bytes);
-			for (const match of css.matchAll(/url\(\s*["']?([^\s"')]+)["']?\s*\)|@import\s+["']([^"']+)["']/gi)) {
+			for (const match of css.matchAll(/url\(\s*["']?([^\s"')]+)["']?\s*\)|@import\s+["']([^"']+)["']/gi))
 				check(match[1] ?? match[2]!, name);
-			}
+		} else if (asset.contentType.startsWith("text/javascript")) {
+			visit(
+				parse(new TextDecoder().decode(asset.bytes), {
+					ecmaVersion: 2024,
+					sourceType: "module",
+				}) as unknown as SyntaxNode,
+				name,
+			);
 		}
 	}
 }
 
-/** Include only generation inputs and declarations needed by the browser build. */
+async function walkFiles(directory: string, visit: (file: string) => Promise<void>): Promise<void> {
+	for (const entry of (await fs.readdir(directory, { withFileTypes: true })).sort((a, b) => compare(a.name, b.name))) {
+		const file = path.join(directory, entry.name);
+		if (entry.isDirectory()) await walkFiles(file, visit);
+		else if (entry.isFile()) await visit(file);
+		else throw new Error(`Unexpected symbolic build input/output: ${file}`);
+	}
+}
+
+/** Include declarations, copied configuration, public bytes and Tailwind-scanned sources. */
 async function collectBuildDeclarations(inputs: Map<string, Uint8Array>): Promise<void> {
 	for (const file of [
 		"package.json",
 		"bun.lock",
-		"packages/collab-web/package.json",
+		"packages/dev-frontend/package.json",
+		"packages/dev-frontend/bun.lock",
+		"packages/dev-frontend/copy-manifest.json",
+		"packages/dev-frontend/tsconfig.base.json",
 		"packages/coding-agent/package.json",
 		"packages/coding-agent/scripts/dev-workbench-resources.ts",
 		"packages/coding-agent/src/dev-workbench/assets.ts",
@@ -90,11 +170,132 @@ async function collectBuildDeclarations(inputs: Map<string, Uint8Array>): Promis
 		const absolute = path.join(repoRoot, file);
 		inputs.set(absolute, await fs.readFile(absolute));
 	}
+	for (const directory of ["preview", "packages/web/public", "config"]) {
+		await walkFiles(path.join(frontendDir, directory), async file => {
+			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
+		});
+	}
+	for (const entry of await fs.readdir(path.join(frontendDir, "packages"), { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		for (const name of ["package.json", "tsconfig.json", "src", "vite"]) {
+			const file = path.join(frontendDir, "packages", entry.name, name);
+			const stat = await fs.stat(file).catch(error => {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+				throw error;
+			});
+			if (!stat) continue;
+			if (stat.isDirectory())
+				await walkFiles(file, async input => {
+					inputs.set(input, await fs.readFile(input));
+				});
+			else inputs.set(file, await fs.readFile(file));
+		}
+	}
 }
 
-// Browser-input provenance only. Backend provenance requires fresh-build evidence
-// and explicit artifact paths; the CLI version identifies a version, not source bytes.
-async function sourceDigest(inputs: ReadonlyMap<string, Uint8Array>): Promise<string> {
+/**
+ * Rolldown exposes getModuleIds/addWatchFile, but not Rollup's getWatchFiles.
+ * Observe dependency declarations at their supported registration point, including
+ * Vite's CSS imports and Tailwind's compiler/scanner inputs outside the module graph.
+ * Hook descriptors (filters/order/sequential) and the original context are preserved.
+ * Wrap hooks in place during configResolved: Vite's resolved plugin list is readonly.
+ */
+export function captureDevWorkbenchWatchFiles(plugin: Plugin, watch: (id: string) => void): void {
+	const hooks = [
+		"buildStart",
+		"resolveId",
+		"resolveDynamicImport",
+		"load",
+		"transform",
+		"moduleParsed",
+		"buildEnd",
+		"renderStart",
+		"renderChunk",
+		"augmentChunkHash",
+		"resolveFileUrl",
+		"renderError",
+		"generateBundle",
+		"writeBundle",
+		"closeBundle",
+		"watchChange",
+		"closeWatcher",
+	] as const satisfies readonly (keyof FunctionPluginHooks)[];
+	for (const name of hooks) {
+		const hook = plugin[name];
+		if (!hook) continue;
+		const handler = typeof hook === "function" ? hook : hook.handler;
+		const observed = function (this: object, ...args: unknown[]) {
+			const context = this;
+			return Reflect.apply(
+				handler,
+				new Proxy(context, {
+					get(target, key) {
+						const value = Reflect.get(target, key, target);
+						if (key === "addWatchFile")
+							return (id: string) => {
+								watch(id);
+								return Reflect.apply(value, target, [id]);
+							};
+						return typeof value === "function" ? value.bind(target) : value;
+					},
+				}),
+				args,
+			);
+		};
+		Object.assign(plugin, { [name]: typeof hook === "function" ? observed : { ...hook, handler: observed } });
+	}
+}
+
+/** Fingerprint installed compiler implementations, not just their entry or version. */
+async function collectBuildTools(inputs: Map<string, Uint8Array>): Promise<void> {
+	const visited = new Set<string>();
+	async function collect(directory: string): Promise<void> {
+		directory = await fs.realpath(directory);
+		if (visited.has(directory)) return;
+		visited.add(directory);
+		const manifestPath = path.join(directory, "package.json");
+		const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+			dependencies?: Record<string, string>;
+			optionalDependencies?: Record<string, string>;
+		};
+		async function walk(directory: string): Promise<void> {
+			for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+				if (entry.name === "node_modules") continue;
+				const file = path.join(directory, entry.name);
+				if (entry.isDirectory()) await walk(file);
+				else if (entry.isFile()) inputs.set(file, await fs.readFile(file));
+				else throw new Error(`Unexpected symbolic compiler input: ${file}`);
+			}
+		}
+		await walk(directory);
+		for (const dependency of new Set([
+			...Object.keys(manifest.dependencies ?? {}),
+			...Object.keys(manifest.optionalDependencies ?? {}),
+		])) {
+			const resolved = await packageDirectory(dependency, directory);
+			if (resolved) await collect(resolved);
+			else if (!(dependency in (manifest.optionalDependencies ?? {})))
+				throw new Error(`Missing Dev build dependency ${dependency} from ${manifestPath}`);
+		}
+	}
+	for (const name of ["vite", "@vitejs/plugin-react", "@tailwindcss/vite"]) {
+		const directory = await packageDirectory(name, import.meta.dir);
+		if (!directory) throw new Error(`Missing Dev build tool: ${name}`);
+		await collect(directory);
+	}
+}
+
+async function packageDirectory(name: string, importer: string): Promise<string | undefined> {
+	// Locate manifests directly: package exports need not expose package.json or ".".
+	for (let directory = importer; ; directory = path.dirname(directory)) {
+		const candidate = path.join(directory, "node_modules", name);
+		if (await Bun.file(path.join(candidate, "package.json")).exists()) return candidate;
+		if (path.dirname(directory) === directory) return undefined;
+	}
+}
+
+// Browser-input provenance only; this is not backend-worktree provenance.
+export async function devWorkbenchSourceDigest(inputs: ReadonlyMap<string, Uint8Array>): Promise<string> {
 	const canonicalRoot = await fs.realpath(repoRoot);
 	const ordered = new Map<string, Uint8Array>();
 	for (const [file, bytes] of inputs) {
@@ -102,6 +303,11 @@ async function sourceDigest(inputs: ReadonlyMap<string, Uint8Array>): Promise<st
 		const relative = path.relative(canonicalRoot, canonical).replaceAll("\\", "/");
 		if (relative.startsWith("../") || path.isAbsolute(relative))
 			throw new Error(`Build input escapes repository: ${file}`);
+		if (
+			(relative.startsWith("vendor/zcode-frontend/") && !relative.includes("/node_modules/")) ||
+			relative.startsWith("packages/coding-agent/src/webgui/")
+		)
+			throw new Error(`Dev build loaded original frontend input: ${file}`);
 		ordered.set(relative, bytes);
 	}
 	const hash = crypto.createHash("sha256");
@@ -114,124 +320,125 @@ async function sourceDigest(inputs: ReadonlyMap<string, Uint8Array>): Promise<st
 	return hash.digest("hex");
 }
 
-/**
- * Build the one native Firefox 128 Dev entry. Bun bundles TS/JSX and dependencies;
- * Babel lowers only syntax outside that browser's boundary, without API injection.
- * Final filenames and manifest hashes describe the transformed bytes.
- */
+/** Build the complete copied Vite/React/Tailwind frontend, including module workers. */
 export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, DevWorkbenchAsset>> {
 	const inputs = new Map<string, Uint8Array>();
-	const entry = path.join(collabDir, "dev-workbench.html");
-	const htmlBytes = await fs.readFile(entry);
-	inputs.set(entry, htmlBytes);
-	const html = new TextDecoder().decode(htmlBytes);
-	const scripts = [...html.matchAll(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi)];
-	const sourceScript = scripts[0]?.[0];
-	const sourceReference = sourceScript?.match(/\bsrc\s*=\s*["']([^"']+)["']/i)?.[1];
-	if (scripts.length !== 1 || sourceReference !== "./src/dev-workbench/main.tsx")
-		throw new Error("Dev workbench HTML must contain only its native application entry");
-	const browserEntry = path.resolve(collabDir, sourceReference);
-	const outdir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-workbench-"));
+	await collectBuildDeclarations(inputs);
+	await collectBuildTools(inputs);
+	const loadedConfig = await loadConfigFromFile(
+		{ command: "build", mode: "production" },
+		path.join(frontendDir, "preview/vite.config.ts"),
+		repoRoot,
+	);
+	if (!loadedConfig) throw new Error("Dev frontend build configuration is unavailable.");
+	const config = loadedConfig.config;
+	const viteEntry = fileURLToPath(import.meta.resolve("vite"));
+	const packageDirectories = new Set<string>();
+	const capture = async (id: string): Promise<void> => {
+		if (id.startsWith("\0")) return;
+		const file = id.startsWith("file:") ? fileURLToPath(id) : id.split("?")[0]!;
+		if (!path.isAbsolute(file)) return;
+		const relative = path.relative(repoRoot, file).replaceAll("\\", "/");
+		if (
+			(relative.startsWith("vendor/zcode-frontend/") && !relative.includes("/node_modules/")) ||
+			relative.startsWith("packages/coding-agent/src/webgui/")
+		)
+			throw new Error(`Dev build attempted to load original frontend input: ${file}`);
+		try {
+			if (!(await fs.stat(file)).isFile()) return;
+			if (!inputs.has(file)) inputs.set(file, await fs.readFile(file));
+			let directory = path.dirname(file);
+			while (!packageDirectories.has(directory)) {
+				packageDirectories.add(directory);
+				const manifest = path.join(directory, "package.json");
+				if (await Bun.file(manifest).exists()) {
+					inputs.set(manifest, await fs.readFile(manifest));
+					break;
+				}
+				if (directory === repoRoot || path.dirname(directory) === directory) break;
+				directory = path.dirname(directory);
+			}
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+	};
+	await capture(viteEntry);
+	for (const dependency of loadedConfig.dependencies) await capture(dependency);
+	const emittedReferences = new Set<string>();
+	const watchedInputs = new Map<string, string>();
+	const provenancePlugin = (): Plugin => ({
+		name: "dev-workbench-source-inputs",
+		enforce: "pre",
+		configResolved(resolved) {
+			for (const plugin of resolved.plugins) {
+				captureDevWorkbenchWatchFiles(plugin, id => {
+					watchedInputs.set(id, resolved.root);
+				});
+			}
+		},
+		async load(id) {
+			await capture(id);
+			return null;
+		},
+		generateBundle: {
+			// Run after Vite removes pure-CSS chunks and transfers their metadata.
+			order: "post",
+			async handler(_options, bundle) {
+				for (const id of this.getModuleIds()) await capture(id);
+				for (const imported of devWorkbenchOutputReferences(bundle)) emittedReferences.add(imported);
+			},
+		},
+	});
+	const workerPlugins = config.worker?.plugins;
 	const assets = new Map<string, DevWorkbenchAsset>();
+	const buildDir = path.join(frontendDir, "build");
+	await fs.mkdir(buildDir, { recursive: true });
+	const outdir = await fs.mkdtemp(path.join(buildDir, "resources-"));
 	try {
-		const output = await withCompilerActivity(() =>
-			Bun.build({
-				entrypoints: [browserEntry],
-				root: collabDir,
-				outdir,
-				target: "browser",
-				format: "iife",
-				splitting: false,
-				minify: true,
-				publicPath: "./",
-				naming: {
-					entry: "[name].[ext]",
-					asset: "assets/[name]-[hash].[ext]",
+		await withCompilerActivity(() =>
+			build({
+				...config,
+				configFile: false,
+				mode: "production",
+				plugins: [...(config.plugins ?? []), provenancePlugin()],
+				worker: {
+					...config.worker,
+					plugins: () => [...(workerPlugins?.() ?? []), provenancePlugin()],
 				},
-				define: { "process.env.NODE_ENV": JSON.stringify("production") },
-				plugins: [
-					{
-						name: "dev-workbench-source-inputs",
-						setup(build) {
-							build.onLoad({ filter: /.*/, namespace: "file" }, async ({ path: file }) => {
-								const source = await fs.readFile(file);
-								inputs.set(file, source);
-								return undefined;
-							});
-						},
-					},
-				],
-				throw: false,
+				build: { ...config.build, outDir: outdir, emptyOutDir: true },
 			}),
 		);
-		if (!output.success) throw new AggregateError(output.logs, "Dev workbench production UI build failed");
-		let scriptPath: string | undefined;
-		let stylesheetPath: string | undefined;
-		for (const artifact of output.outputs) {
-			const relative = path.relative(outdir, artifact.path).replaceAll("\\", "/");
-			if (relative.startsWith("../") || path.isAbsolute(relative))
-				throw new Error(`Unexpected workbench output: ${artifact.path}`);
-			let bytes = new Uint8Array(await artifact.arrayBuffer());
-			let name = `/${relative}`;
-			if (relative.endsWith(".js")) {
-				if (scriptPath || artifact.kind !== "entry-point")
-					throw new Error("Dev workbench must produce exactly one non-splitting classic script");
-				const transformed = await withCompilerActivity(() =>
-					transformAsync(new TextDecoder().decode(bytes), {
-						filename: "dev-workbench.js",
-						babelrc: false,
-						configFile: false,
-						sourceType: "script",
-						comments: false,
-						minified: true,
-						presets: [
-							[
-								Bun.resolveSync("@babel/preset-env", repoRoot),
-								{
-									targets: { firefox: "128" },
-									modules: false,
-									bugfixes: true,
-									useBuiltIns: false,
-								},
-							],
-						],
-					}),
-				);
-				if (!transformed?.code) throw new Error("Dev workbench Firefox 128 transformation produced no script");
-				// Script mode rejects module chunks; Babel owns browser-specific syntax lowering.
-				parse(transformed.code, { ecmaVersion: 2024, sourceType: "script" });
-				bytes = new TextEncoder().encode(`${transformed.code}\n`);
-				name = `/dev-workbench-${Bun.SHA256.hash(bytes, "hex")}.js`;
-				scriptPath = name;
-			} else if (relative.endsWith(".css")) {
-				if (stylesheetPath) throw new Error("Dev workbench must produce exactly one stylesheet");
-				// Retain the directory so bundled relative url() references remain valid.
-				name = `${path.posix.dirname(name)}/dev-workbench-${Bun.SHA256.hash(bytes, "hex")}.css`;
-				name = name.replace(/^\/\//, "/");
-				stylesheetPath = name;
+		// A watch registration may be a Tailwind glob rather than a module ID.
+		// Exact missing dependencies are fatal; empty declared globs are valid.
+		for (const [id, root] of watchedInputs) {
+			const absolute = path.resolve(root, id);
+			if (/[*?[\]{}]/u.test(absolute)) {
+				for await (const file of new Bun.Glob(absolute.replaceAll("\\", "/")).scan({
+					absolute: true,
+					onlyFiles: true,
+				}))
+					await capture(file);
+			} else {
+				const stat = await fs.stat(absolute);
+				if (stat.isDirectory()) await walkFiles(absolute, capture);
+				else await capture(absolute);
 			}
-			if (assets.has(name)) throw new Error(`Duplicate workbench output: ${name}`);
-			assets.set(name, { bytes, contentType: contentType(relative) });
 		}
-		if (!scriptPath || !stylesheetPath)
-			throw new Error("Dev workbench build must include its classic script and stylesheet");
-		const faviconPath = "public/favicon-32x32.png";
-		const faviconFile = path.join(collabDir, faviconPath);
-		const faviconBytes = await fs.readFile(faviconFile);
-		inputs.set(faviconFile, faviconBytes);
-		assets.set(`/${faviconPath}`, { bytes: faviconBytes, contentType: contentType(faviconPath) });
-		const document = html
-			.replace(sourceScript!, `<script src=".${scriptPath}"></script>`)
-			.replace(/<\/head\s*>/i, `\t<link rel="stylesheet" href=".${stylesheetPath}" />\n\t</head>`);
-		assets.set("/index.html", {
-			bytes: new TextEncoder().encode(document),
-			contentType: contentType("index.html"),
+		await walkFiles(outdir, async file => {
+			const relative = path.relative(outdir, file).replaceAll("\\", "/");
+			assets.set(`/${relative}`, { bytes: await fs.readFile(file), contentType: contentType(relative) });
+		});
+		// CMaps are read by the copied emission plugin rather than Vite's module loader.
+		await walkFiles(resolvePdfJsCMapsDirectory(), async file => {
+			if (file.endsWith(".bcmap")) inputs.set(file, await fs.readFile(file));
 		});
 	} finally {
 		await fs.rm(outdir, { recursive: true, force: true });
 	}
+	for (const imported of emittedReferences) {
+		if (!assets.has(`/${imported}`)) throw new Error(`Unbundled Dev UI dependency: ${imported}`);
+	}
 	assertResourceClosure(assets);
-	await collectBuildDeclarations(inputs);
 	const files = [...assets]
 		.sort(([a], [b]) => compare(a, b))
 		.map(([name, asset]) => ({
@@ -241,7 +448,7 @@ export async function buildDevWorkbenchAssets(): Promise<ReadonlyMap<string, Dev
 		}));
 	const manifest: DevAssetManifest = {
 		digest: devWorkbenchAssetDigest(files),
-		sourceDigest: await sourceDigest(inputs),
+		sourceDigest: await devWorkbenchSourceDigest(inputs),
 		files,
 	};
 	manifests.set(assets, manifest);
@@ -276,7 +483,7 @@ export async function writeDevWorkbenchAssets(assets: ReadonlyMap<string, DevWor
 	}
 }
 
-/** Both npm and standalone binaries embed this exact payload, with no file-system fallback. */
+/** npm and standalone binaries embed this exact payload, with no file-system fallback. */
 export function createDevWorkbenchAssetsPlugin(assets: ReadonlyMap<string, DevWorkbenchAsset>): Bun.BunPlugin {
 	const serialized = JSON.stringify(payload(assets));
 	return {

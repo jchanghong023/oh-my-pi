@@ -67,7 +67,7 @@ export function commandConsumed(options?: { agentInvoked?: boolean; failed?: boo
  * ignore the marker; print mode turns it into a nonzero exit code so `omp -p`
  * automation does not treat a failed builtin as success.
  */
-export async function usage(text: string, runtime: SlashCommandRuntime): Promise<SlashCommandResult> {
+export async function usage(text: string, runtime: Pick<SlashCommandRuntime, "output">): Promise<SlashCommandResult> {
 	await runtime.output(text);
 	return commandConsumed({ failed: true });
 }

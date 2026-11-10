@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { loadDevRequirements } from "../../src/spec-driven/records";
-import type { DevStoredRequirement } from "../../src/spec-driven/types";
+import { DevWorkflowStore } from "../../src/dev-workbench/workflow-store";
+import type { DevProject } from "../../src/dev-workbench/workflow-types";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
 import { CompactScreenRecording } from "../helpers/compact-screen-recording";
+import { isolatedWorkflowEnvironment } from "../dev-workbench/workflow-fixture";
 import {
 	contentText,
 	createProviderFixture,
@@ -20,11 +21,11 @@ import {
 
 const tuiTest = Bun.which("tui-test");
 const repo = path.resolve(import.meta.dir, "../../../..");
-type State = { requirements: DevStoredRequirement[] };
+type State = { projects: DevProject[] };
 type Scenario = ProviderScenario & {
-	dialogue?: (request: ModelRequest, input: Record<string, unknown>, signal: AbortSignal) => Reply | Promise<Reply>;
 	reply?: (request: ModelRequest) => Reply | Response | Promise<Reply | Response>;
 	setup?: (cwd: string, agentDir: string) => Promise<void>;
+	startupResponse?: string;
 	configuration?: Record<string, unknown>;
 	screenDiagnostics?: boolean;
 	onScreenFailureEvidence?: (directory: string) => void;
@@ -138,7 +139,6 @@ async function withTui(
 		screen: CompactScreenRecording;
 		state: () => Promise<State>;
 		idle: () => Promise<void>;
-		requirements: () => Promise<unknown[]>;
 		restart: () => Promise<void>;
 		open: (directory: string) => Promise<{ tui: (...args: string[]) => Promise<string>; close: () => Promise<void> }>;
 	}) => Promise<void>,
@@ -147,27 +147,25 @@ async function withTui(
 	await using provider = createProviderFixture(scenario);
 	const cwd = root.join("project");
 	const home = root.join("home");
-	const agentDir = root.join("config", "agent");
+	const agentDir = root.join("config", "profiles", "acceptance", "agent");
 	const temp = root.join("tmp");
 	const appData = root.join("home", "AppData", "Roaming");
 	const localData = root.join("home", "AppData", "Local");
 	const cache = root.join("cache");
 	for (const directory of [cwd, home, agentDir, temp, appData, localData, cache])
 		await fs.mkdir(directory, { recursive: true });
-	// Empty inherited credentials explicitly: tui-test's PTY server may also
-	// inherit them, so merely omitting them from --env would not isolate it.
+	// tui-test's persistent PTY server may predate this fixture, and --env
+	// overrides KEY=VALUE rather than unsetting KEY. Clear inherited application
+	// settings, but preserve Bun's experimental engine options verbatim: an empty
+	// BUN_JSC_* value is an invalid option, not a reset to its default.
 	const env = {
 		...Object.fromEntries(
-			Object.entries(process.env).map(([key, value]) => [
-				key,
-				/(?:key|token|secret|password|credential|authorization|(?:^|_)auth(?:_|$))/i.test(key) ? "" : value,
-			]),
+			Object.entries(process.env).map(([key, value]) => [key, key.startsWith("BUN_JSC_") ? value : ""]),
 		),
+		...isolatedWorkflowEnvironment(root.join("")),
 		TZ: "UTC",
-		OMP_CONFIG_ROOT: root.join("config"),
 		PI_CODING_AGENT_DIR: agentDir,
 		PI_CONFIG_DIR: ".omp",
-		OMP_PROFILE: "default",
 		PI_PROFILE: "",
 		HOME: home,
 		USERPROFILE: home,
@@ -197,6 +195,9 @@ async function withTui(
 	await Bun.write(
 		path.join(agentDir, "config.yml"),
 		JSON.stringify({
+			enabledProviders: ["deepseek"],
+			enabledModels: ["deepseek/chat-a"],
+			retry: { modelFallback: false },
 			composer: { predictions: false },
 			startup: { setupWizard: false },
 			async: { enabled: false },
@@ -287,7 +288,10 @@ async function withTui(
 			await invoke(target, "record", "start", explicitCast);
 			recordingStarted = true;
 		}
-		await invoke(target, "expect", "text", `${MARKER}_CHAT_READY`, "--timeout", "30000");
+		// The scenario's actual ordinary reply must render before input resumes;
+		// an empty composer or startup boilerplate alone cannot prove readiness.
+		await invoke(target, "expect", "text", scenario.startupResponse ?? `${MARKER}_CHAT_READY`, "--timeout", "30000");
+		await invoke(target, "wait", "idle", "--timeout", "30000");
 	}
 	async function restart(): Promise<void> {
 		await tui("close");
@@ -306,16 +310,13 @@ async function withTui(
 		};
 	}
 	async function state(): Promise<State> {
-		return { requirements: await loadDevRequirements(cwd) };
+		return { projects: await new DevWorkflowStore(path.join(agentDir, "dev-projects-v1")).listProjects() };
 	}
 	async function idle(): Promise<void> {
 		await tui("expect", "text", "等待输入", "--timeout", "60000");
 	}
 	try {
 		await start(session, cwd);
-		// The public CLI submits this once after init; only its real local reply
-		// proves startup completed. All subsequent input uses native TUI keys.
-		await tui("expect", "text", `${MARKER}_CHAT_READY`, "--timeout", "30000");
 		expect(
 			provider.requests.filter(request => userTexts(request).at(-1)?.endsWith("ordinary-root-beacon")),
 		).toHaveLength(1);
@@ -330,7 +331,6 @@ async function withTui(
 				screen,
 				state,
 				idle,
-				requirements: () => loadDevRequirements(cwd),
 				restart,
 				open,
 			}),

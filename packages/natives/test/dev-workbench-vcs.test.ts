@@ -172,7 +172,11 @@ describe("Dev workbench native VCS consumers", () => {
 		await fs.writeFile(hook, "#!/bin/sh\nprintf hook > hook-ran\nexit 1\n");
 		await fs.chmod(hook, 0o755);
 		await fixture.repo.configSet("core.hooksPath", hooks);
-		await expect(fixture.repo.commitCreateScoped(message, options)).rejects.toThrow("hook");
+		await expect(fixture.repo.commitCreateScoped(message, options)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
 		expect(await Bun.file(path.join(fixture.root, "hook-ran")).exists()).toBe(false);
 		expect(await fixture.repo.headSha()).toBe(options.expectedHeadSha);
 		await expect(fixture.repo.commitCreate("ordinary commit\n", {})).rejects.toThrow();
@@ -249,6 +253,82 @@ describe("Dev workbench native VCS consumers", () => {
 		expect(await repo.headSha()).toBe(sha);
 	});
 
+	test("reads changed live remote HEAD without trusting or changing cached origin HEAD", async () => {
+		const { root, repo } = await repository();
+		const remote = path.join(root, "default-remote.git");
+		await gitDirectory(remote, true);
+		await repo.configSet("remote.origin.url", remote);
+		const firstSha = await repo.headSha();
+		if (!firstSha) throw new Error("fixture HEAD missing");
+		await repo.push({ remote: "origin", refspec: `${firstSha}:refs/heads/main` });
+		const cached = path.join(root, ".git", "refs", "remotes", "origin");
+		await fs.mkdir(cached, { recursive: true });
+		await fs.writeFile(path.join(cached, "main"), `${firstSha}\n`);
+		await fs.writeFile(path.join(cached, "HEAD"), "ref: refs/remotes/origin/main\n");
+		expect(await repo.remoteDefaultBranch("origin")).toEqual({ branch: "main", sha: firstSha });
+		await fs.writeFile(path.join(root, "tracked.txt"), "new remote default\n");
+		await repo.stageFiles(["tracked.txt"]);
+		await repo.commitCreate("next remote default\n", {});
+		const nextSha = await repo.headSha();
+		if (!nextSha || nextSha === firstSha) throw new Error("fixture needs a distinct commit");
+		const branch = "release/nested/default";
+		await repo.push({ remote: "origin", refspec: `${nextSha}:refs/heads/${branch}` });
+		await fs.writeFile(path.join(remote, "HEAD"), `ref: refs/heads/${branch}\n`);
+		expect(await repo.remoteDefaultBranch("origin")).toEqual({ branch, sha: nextSha });
+		expect(await repo.defaultBranch()).toBe("main");
+		expect(await fs.readFile(path.join(cached, "HEAD"), "utf8")).toBe("ref: refs/remotes/origin/main\n");
+		expect(await repo.headSha()).toBe(nextSha);
+		const abort = new AbortController();
+		abort.abort();
+		await expect(repo.remoteDefaultBranch("origin", abort.signal)).rejects.toThrow();
+	});
+
+	test("rejects missing, detached and non-branch remote defaults distinctly from failed transport", async () => {
+		const { root, repo } = await repository();
+		const remote = path.join(root, "invalid-default-remote.git");
+		await gitDirectory(remote, true);
+		const sha = await repo.headSha();
+		if (!sha) throw new Error("fixture HEAD missing");
+		// An unborn HEAD yields a successful, empty advertisement, not a
+		// transport failure and not an invented main/master branch.
+		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
+		await repo.push({ remote, refspec: `${sha}:refs/heads/main` });
+		await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/heads/missing\n");
+		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
+		await fs.writeFile(path.join(remote, "HEAD"), `${sha}\n`);
+		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
+		await repo.push({ remote, refspec: `${sha}:refs/tags/not-a-branch` });
+		await fs.writeFile(path.join(remote, "HEAD"), "ref: refs/tags/not-a-branch\n");
+		await expect(repo.remoteDefaultBranch(remote)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
+		await expect(repo.remoteDefaultBranch(path.join(root, "missing-remote"))).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Cli",
+			exitCode: 128,
+		});
+		await expect(repo.remoteDefaultBranch("")).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
+		expect(await repo.headSha()).toBe(sha);
+	});
+
 	test("treats a caller deadline and a lost local advertisement as unknown, never absent", async () => {
 		const { root, repo } = await repository();
 		const remote = path.join(root, "network-fixture.git");
@@ -260,9 +340,27 @@ describe("Dev workbench native VCS consumers", () => {
 			"remote.fixture.uploadpack",
 			`"${process.execPath.replaceAll("\\", "/")}" "${program.replaceAll("\\", "/")}"`,
 		);
-		await expect(repo.remoteRef("fixture", "refs/heads/main", AbortSignal.timeout(50))).rejects.toThrow();
+		await expect(repo.remoteRef("fixture", "refs/heads/main", AbortSignal.timeout(50))).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Canceled",
+			exitCode: 1,
+		});
+		await expect(repo.remoteDefaultBranch("fixture", AbortSignal.timeout(50))).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Canceled",
+			exitCode: 1,
+		});
 		await fs.writeFile(program, "process.exit(1);\n");
-		await expect(repo.remoteRef("fixture", "refs/heads/main")).rejects.toThrow();
+		await expect(repo.remoteRef("fixture", "refs/heads/main")).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Cli",
+			exitCode: 128,
+		});
+		await expect(repo.remoteDefaultBranch("fixture")).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Cli",
+			exitCode: 128,
+		});
 	});
 
 	test("reports partial per-file reversal, preserves a changed preimage and resumes idempotently", async () => {
@@ -595,7 +693,11 @@ describe("Dev workbench native VCS consumers", () => {
 		await repo.configSet("core.hooksPath", "required-hooks");
 		expect(await repo.hookPath("pre-push")).toBe(hook);
 		const index = await fs.readFile(path.join(root, ".git", "index"));
-		await expect(repo.commitCreateScoped(message, options)).rejects.toThrow("pre-push");
+		await expect(repo.commitCreateScoped(message, options)).rejects.toMatchObject({
+			name: "VcsError",
+			code: "Backend",
+			exitCode: 1,
+		});
 		expect(await repo.headSha()).toBe(options.expectedHeadSha);
 		expect(await fs.readFile(path.join(root, ".git", "index"))).toEqual(index);
 		expect(await Bun.file(path.join(root, "push-hook-ran")).exists()).toBe(false);

@@ -6,6 +6,8 @@ import {
 	bunCleanBaseline,
 	budgetedParallel,
 	bunTestSelection,
+	devWorkbenchInputsChanged,
+	isDevFrontendInput,
 	isIntegrationCommand,
 	isLimitedIntegrationCommand,
 	prioritizeLocalCommands,
@@ -50,6 +52,54 @@ test("Bun discovery keeps OMP consumers but excludes vendor and explicit package
 		await fs.rm(root, { recursive: true, force: true });
 	}
 }, 20_000);
+
+test("Dev dynamic resource inputs select their consumers without selecting original WebGUI or upstream suites", () => {
+	const command = (cwd: string, file: string) => ({ cwd, command: ["bun", "test", file] });
+	const consumers = [
+		command("packages/coding-agent", "test/dev-workbench/resources.test.ts"),
+		command("packages/coding-agent", "test/dev-workbench/workflow-process.e2e.test.ts"),
+		command("packages/collab-web", "test/dev-workbench.test.tsx"),
+	];
+	for (const input of [
+		"packages/dev-frontend/preview/main.tsx",
+		"packages/dev-frontend/preview/vite.config.ts",
+		"packages/dev-frontend/packages/ui/src/styles.css",
+		"packages/dev-frontend/packages/ui/src/workers/fileSearch.worker.ts",
+		"packages/dev-frontend/packages/ui/vite/pdfJsCMapsPlugin.ts",
+		"packages/dev-frontend/packages/web/public/material-icons/dark/file.svg",
+		"packages/dev-frontend/packages/client/src/index.ts",
+		"packages/dev-frontend/package.json",
+		"packages/dev-frontend/bun.lock",
+		"packages/dev-frontend/copy-manifest.json",
+		"packages/dev-frontend/tsconfig.base.json",
+	]) {
+		expect(isDevFrontendInput(input)).toBe(true);
+		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(true);
+		for (const unrelated of [
+			command("packages/coding-agent", "test/webgui/core-browser.e2e.test.ts"),
+			command("packages/coding-agent", "test/team/integration.test.ts"),
+			command("packages/coding-agent", "test/dev-workbench/workflow-store.test.ts"),
+			command("packages/natives", "test/dev-workbench-vcs.test.ts"),
+		])
+			expect(devWorkbenchInputsChanged(unrelated, [input])).toBe(false);
+	}
+	for (const input of [
+		"packages/dev-frontend/NOTICE.md",
+		"packages/dev-frontend/build/dev/assets/index.js",
+		"packages/dev-frontend/node_modules/react/index.js",
+		"vendor/zcode-frontend/preview/main.tsx",
+		"packages/collab-web/src/main.tsx",
+	]) {
+		expect(isDevFrontendInput(input)).toBe(false);
+		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(false);
+	}
+	for (const input of [
+		"packages/coding-agent/scripts/dev-workbench-resources.ts",
+		"packages/coding-agent/src/dev-workbench/assets.ts",
+		"packages/coding-agent/src/dev-workbench/assets.generated.json",
+	])
+		for (const consumer of consumers) expect(devWorkbenchInputsChanged(consumer, [input])).toBe(true);
+});
 
 test("affected selection needs a qualifying full TS baseline reachable in Git", async () => {
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "omp-bun-baseline-"));
@@ -299,7 +349,7 @@ test("integration chunk classification matches coding-agent test paths only", ()
 		isIntegrationCommand(command("packages/coding-agent", ["test/unit.test.ts", "test/process.e2e.test.ts"])),
 	).toBe(true);
 	expect(isIntegrationCommand(command("packages/coding-agent", ["test/integration/session.test.ts"]))).toBe(true);
-	for (const file of ["test/dev-workbench/git.test.ts", "test/dev-workbench/cancel.test.ts"]) {
+	for (const file of ["test/dev-workbench/git.test.ts", "test/dev-workbench/workflow-domain.test.ts"]) {
 		expect(isIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isLimitedIntegrationCommand(command("packages/coding-agent", [file]))).toBe(true);
 		expect(isIntegrationCommand(command("packages/tui", [file]))).toBe(false);
@@ -314,8 +364,8 @@ test("integration chunk classification matches coding-agent test paths only", ()
 test("startup integration chunks bypass only the heavy integration limit", () => {
 	const command = (file: string) => ({ label: "chunk", cwd: "packages/coding-agent", command: ["bun", "test", file] });
 	for (const file of [
-		"test/dev-workbench/browser.e2e.test.ts",
 		"test/dev-workbench/process.e2e.test.ts",
+		"test/dev-workbench/workflow-process.e2e.test.ts",
 		"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 		"test/goals/goal-autopilot-tui.e2e.test.ts",
 		"test/goals/goal-ctrl-enter-tui.e2e.test.ts",
@@ -350,7 +400,7 @@ test("bounded pool fills ordinary workers past the cap4 heavy queue and drains e
 					item === "h1"
 						? "test/dev-workbench/git.test.ts"
 						: item === "h5"
-							? "test/dev-workbench/cancel.test.ts"
+							? "test/dev-workbench/workflow-domain.test.ts"
 							: item.startsWith("h")
 								? "test/integration/session.test.ts"
 								: "test/unit.test.ts",
@@ -775,9 +825,20 @@ test("local suites select fork consumers and drain failures without widening to 
 			"packages/collab-web/test/transcript.test.tsx",
 			"packages/collab-web/test/tool-view.test.tsx",
 			"packages/collab-web/test/markdown.test.tsx",
-			...["records", "git", "cancel", "host", "server", "collab", "cli", "resources"].map(
-				name => `packages/coding-agent/test/dev-workbench/${name}.test.ts`,
-			),
+			...[
+				"records",
+				"git",
+				"cancel",
+				"host",
+				"server",
+				"collab",
+				"cli",
+				"resources",
+				"workflow-store",
+				"workflow-git",
+				"workflow-runtime",
+				"requirement-package",
+			].map(name => `packages/coding-agent/test/dev-workbench/${name}.test.ts`),
 			"packages/coding-agent/test/spec-driven/process.e2e.test.ts",
 			"packages/coding-agent/test/team/integration.test.ts",
 			"packages/coding-agent/test/goals/goal-runtime.test.ts",
@@ -887,8 +948,8 @@ test("local suites select fork consumers and drain failures without widening to 
 			expect(await executed()).toEqual(fullMarkers);
 		}
 		const startupFiles = [
-			"test/dev-workbench/browser.e2e.test.ts",
 			"test/dev-workbench/process.e2e.test.ts",
+			"test/dev-workbench/workflow-process.e2e.test.ts",
 			"test/spec-driven/tui-compact-mixed.e2e.test.ts",
 			"test/spec-driven/tui-resources.e2e.test.ts",
 			"test/spec-driven/tui-capabilities.e2e.test.ts",

@@ -4,7 +4,7 @@ import { theme } from "@oh-my-pi/pi-tui/theme";
 import { HookInputComponent } from "@oh-my-pi/pi-tui/overlays/hook-input";
 import { offlineFromEnv } from "../cli/args";
 import type { InteractiveModeContext } from "../modes/types";
-import { nativeBusy } from "../spec-driven/controller";
+import type { AgentSession } from "../session/agent-session";
 import { requestOfflineBrowserUrlCopy } from "../utils/clipboard";
 import { openPathWithResult } from "../utils/open";
 import {
@@ -28,6 +28,18 @@ import {
 } from "./host";
 
 const modes = new WeakMap<InteractiveModeContext, DevWorkbenchTuiMode>();
+
+function nativeBusy(session: AgentSession): boolean {
+	return (
+		session.isBusyForSnapshot ||
+		session.hasAdmittedSubmission ||
+		session.queuedMessageCount > 0 ||
+		session.hasPostPromptWork ||
+		session.hasPendingAsyncWork() ||
+		session.hasUnsettledAsyncJobTree() ||
+		session.getGoalModeState()?.enabled === true
+	);
+}
 
 /** Keep the exit field inside the overlay's focus boundary without replacing its restore target. */
 class DevWorkbenchOverlay extends Container {

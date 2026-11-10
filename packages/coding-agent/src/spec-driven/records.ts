@@ -1,11 +1,9 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as vcs from "@oh-my-pi/pi-natives/vcs";
 import { isEnoent } from "@oh-my-pi/pi-utils";
 import { writeFileAtomically } from "../utils/atomic-file";
 import { assertSpecWritePath, containedSpecPath } from "./artifacts";
-import { DEV_STAGES } from "./stages";
 import type { DevRequirementRecord, DevStoredRequirement } from "./types";
 import { DevWorkspace } from "./workspace";
 
@@ -14,6 +12,8 @@ const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const HASH = /^[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40,64}$/;
 type Check = (value: unknown, location: string) => void;
+
+const RECORD_STAGES = ["business", "requirements", "solution", "planning", "executing", "st", "pr", "testing"] as const;
 
 function invalid(location: string, reason: string): never {
 	throw new Error(`Invalid Dev requirement record at ${location}: ${reason}`);
@@ -87,7 +87,7 @@ function object(required: Record<string, Check>, optional: Record<string, Check>
 }
 const version = object({ path: relativePath, version: digest });
 const person = object({ name: text, source: choice("local", "collab") }, { peerId: text });
-const stage = choice(...DEV_STAGES);
+const stage = choice(...RECORD_STAGES);
 const approval = object({ files: array(version), userReply: string }, { candidateId: text });
 const decision = object(
 	{ operationId: text, stage, actor: person, at: text, userReply: string, files: array(version) },
@@ -242,7 +242,7 @@ function decode(bytes: Uint8Array, requirementId: string): DevStoredRequirement 
 	return { record: value, recordVersion: digestBytes(bytes) };
 }
 
-/** Shared by worktree publication and isolated Git trees; this function never mutates its input. */
+/** Preserve the existing workspace record serialization without mutating its input. */
 export function serializeDevRequirement(record: DevRequirementRecord): Uint8Array {
 	validateDevRequirementRecord(record);
 	return Buffer.from(`${JSON.stringify(record, null, 2)}\n`, "utf8");
@@ -251,11 +251,6 @@ async function readAtRoot(root: string, requirementId: string): Promise<DevStore
 	const relative = devRequirementPath(requirementId);
 	await assertSpecWritePath(root, relative);
 	return decode(await fs.readFile(await containedSpecPath(root, relative)), requirementId);
-}
-
-/** Read-only: does not acquire a workspace lease, native runtime or model. */
-export async function readDevRequirement(cwd: string, requirementId: string): Promise<DevStoredRequirement> {
-	return readAtRoot((await DevWorkspace.resolve(cwd)).root, requirementId);
 }
 
 export async function loadDevRequirements(cwd: string): Promise<DevStoredRequirement[]> {
@@ -340,94 +335,4 @@ export async function saveDevRequirementWithOwner(
 	await owner.assertCurrentBranch();
 	await writeFileAtomically(path.join(owner.root, relative), json);
 	return result;
-}
-
-export async function saveDevRequirement(
-	cwd: string,
-	record: DevRequirementRecord,
-	expectedRecordVersion: string | null,
-): Promise<DevStoredRequirement> {
-	const owner = await DevWorkspace.acquire(cwd);
-	try {
-		return await owner.saveRequirement(record, expectedRecordVersion);
-	} finally {
-		owner.release();
-	}
-}
-
-/** Check every dated material namespace: yesterday's cancelled ID is never reusable. */
-export async function allocateDevRequirementId(cwd: string, preferred?: string): Promise<string> {
-	const { root } = await DevWorkspace.resolve(cwd);
-	const base = preferred ?? `requirement-${crypto.randomUUID()}`;
-	identifier(base, "preferred");
-	const reserved = new Set<string>();
-	for (const { record } of await loadDevRequirements(root)) {
-		reserved.add(record.requirementId);
-		reserved.add(record.changeId);
-	}
-	for (const directory of [
-		"openspec/changes",
-		"openspec/changes/archive",
-		"docs/business-requirements",
-		"docs/superpowers/plans",
-	]) {
-		let names: string[];
-		try {
-			names = await fs.readdir(await containedSpecPath(root, directory));
-		} catch (error) {
-			if (isEnoent(error)) continue;
-			throw error;
-		}
-		for (const name of names) {
-			const dated = name.replace(/^\d{4}-\d{2}-\d{2}-/, "");
-			reserved.add(dated);
-			reserved.add(dated.replace(/(?:-solutions\.json|-completion\.md|\.md)$/, ""));
-		}
-	}
-	let candidate = base;
-	for (let suffix = 2; reserved.has(candidate); suffix++) candidate = `${base}-${suffix}`;
-	return candidate;
-}
-
-/** The operation's introducing commit is found from actual record blobs and all parents, never its subject. */
-export async function resolveDevOperationCommit(
-	cwd: string,
-	requirementId: string,
-	operationId: string,
-): Promise<string | null> {
-	const { root } = await DevWorkspace.resolve(cwd);
-	const repo = vcs.requireGit(root);
-	const relative = devRequirementPath(requirementId);
-	text(operationId, "operationId");
-	if (!(await repo.headSha())) return null;
-	const commits = await repo.revListTouching("HEAD", relative, 2_147_483_647);
-	const readOperation = async (commit: string): Promise<boolean> => {
-		try {
-			const blob = await repo.showBlob(`${commit}:${relative}`);
-			if (blob.truncated) throw new Error(`Dev requirement blob is truncated: ${commit}:${relative}`);
-			return decode(blob.data, requirementId).record.gitOperations.some(
-				operation => operation.operationId === operationId,
-			);
-		} catch (error) {
-			if (vcs.isVcsError(error) && (error.code === "ObjectNotFound" || error.code === "RefNotFound")) return false;
-			throw error;
-		}
-	};
-	let found: string | null = null;
-	for (const commit of commits) {
-		if (!(await readOperation(commit))) continue;
-		const details = await repo.commitDetails(commit);
-		let inherited = false;
-		for (const parent of details.parents) {
-			if (await readOperation(parent)) {
-				inherited = true;
-				break;
-			}
-		}
-		if (inherited) continue;
-		if (found && found !== commit)
-			throw new Error(`Dev operation appears in multiple independent commits: ${operationId}`);
-		found = commit;
-	}
-	return found;
 }

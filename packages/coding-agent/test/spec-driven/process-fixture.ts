@@ -8,14 +8,7 @@ import { initializeRepository } from "../dev-workbench/fixture";
 import { RpcClient } from "../../src/modes/rpc/rpc-client";
 import type { SkillsCommandResult } from "../../src/cli/skill-list";
 import "../../src/tools"; // Runtime input of the spawned CLI for Bun --changed.
-import {
-	contentText,
-	createProviderFixture,
-	type ModelRequest,
-	rolePayload,
-	type FixtureRole,
-} from "./provider-fixture";
-import { assertMaterialFailure } from "./tui-materials-cases";
+import { contentText, createProviderFixture, type ModelRequest, rolePayload } from "./provider-fixture";
 
 const executable = Bun.env.OMP_SPEC_TEST_EXECUTABLE?.trim();
 if (executable && !path.isAbsolute(executable))
@@ -232,27 +225,4 @@ async function git(cwd: string, _env: NodeJS.ProcessEnv, args: string[]): Promis
 	throw new Error(`Unsupported native fixture query: ${args.join(" ")}`);
 }
 
-function registerInvalidFileTests(roles: readonly FixtureRole[]): void {
-	for (const role of roles)
-		for (const kind of ["missing", "malformed", "unknown"] as const) {
-			test(
-				`${role} public Next rejects ${kind} files without a successor`,
-				() => assertMaterialFailure(role, kind),
-				GATE_BUDGET,
-			);
-		}
-}
-
-export {
-	bounded,
-	fixture,
-	GATE_BUDGET,
-	git,
-	launch,
-	listSkills,
-	PublicPeer,
-	registerInvalidFileTests,
-	run,
-	test,
-	textValues,
-};
+export { bounded, fixture, GATE_BUDGET, git, launch, listSkills, PublicPeer, run, test, textValues };

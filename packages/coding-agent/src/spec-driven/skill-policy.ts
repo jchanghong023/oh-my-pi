@@ -66,7 +66,7 @@ export function exposeSpecExecutionSkill(skill: Skill): Skill {
 	return { ...skill, hide: false, [executionVisible]: true } as ExecutionVisibleSkill;
 }
 
-/** Bind exact resources to one execution session; never changes name resolution precedence. */
+/** Bind exact catalog identities; only controller-exposed clones consume execution access. */
 export function grantSpecExecutionSkills(scope: object, skills: readonly Skill[]): () => void {
 	const resources = new Set(skills.map(executionKey));
 	executionScopes.set(scope, resources);
@@ -75,8 +75,21 @@ export function grantSpecExecutionSkills(scope: object, skills: readonly Skill[]
 	};
 }
 
-function hasExecutionAccess(skill: Pick<Skill, "name" | "filePath">, context?: SkillAccessContext): boolean {
-	return !!context?.scope && (executionScopes.get(context.scope)?.has(executionKey(skill)) ?? false);
+/** Descendants inherit only their actual parent's execution identities, never its catalog. */
+export function inheritSpecExecutionSkills(parentScope: object, childScope: object): () => void {
+	const resources = new Set(executionScopes.get(parentScope));
+	executionScopes.set(childScope, resources);
+	return () => {
+		if (executionScopes.get(childScope) === resources) executionScopes.delete(childScope);
+	};
+}
+
+function hasExecutionAccess(skill: ExecutionVisibleSkill, context?: SkillAccessContext): boolean {
+	return (
+		skill[executionVisible] === true &&
+		!!context?.scope &&
+		(executionScopes.get(context.scope)?.has(executionKey(skill)) ?? false)
+	);
 }
 
 const scopes = new WeakMap<object, ScopeState>();

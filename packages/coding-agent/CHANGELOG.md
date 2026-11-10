@@ -4,6 +4,10 @@
 
 ### Added
 
+- Add an independently copied Dev frontend with three-column Release/IR/SR navigation, read-only materials, native chat/settings and multi-project registration; leave the original WebGUI unchanged.
+- Add local-worktree and browser-only requirements intake, whole-group format checks, independent review and human confirmation, plus versioned, digest-checked ZIP handoff without source chat or credentials.
+- Revise imported requirements before merge in a fresh local native conversation; verified requirements merge freezes the complete IR/SR group.
+
 - Open WebGUI with `/webgui` or `omp webgui` from source or packaged OMP; enter `/webgui` again to close this instance's web service and restore terminal input.
 - Automatically copy complete localhost URLs when opening Dev, WebGUI or `/sketch` in offline Linux sessions.
 - Connect desktop and phone browsers directly to OMP and view the copied interface without preview banners or debugging panels.
@@ -22,7 +26,9 @@
 - Use a full-window `/sketch` workspace on Firefox 128, with cursor-centered zoom, pan controls and full-image PNG attachments independent of the current view.
 - Show `/sketch` controls, tooltips, accessibility labels and built-in status/error messages in Chinese.
 - Run Dev and WebGUI on one in-process web server per OMP instance, without a separate worker or development server; preserve project ownership exclusion and Dev capability URLs.
-- Move Dev stage confirmation and secondary actions to the central document toolbar, leaving more room for chat without changing approval gates.
+- Run Dev SR development in four explicitly approved phases—solution, planning, executing and PR—with real UT/ST reports and one active SR per project across Releases and worktrees.
+- Separate scoped commit/push from manually created PRs and human status marks; release the project slot only after actual code-merge verification.
+- Preserve code and native history on Dev Back while settling recursive work and invalidating downstream approvals; keep workflow facts in shared atomic JSON outside Git-tracked formal documents.
 - Load WebGUI code/diff highlighting workers only when opening a viewer, instead of on the empty home page.
 - Use a Chinese-only WebGUI without language-switching resources or controls.
 - Continue historical conversations across working directories using native workspace rebinding and project ownership checks.
@@ -32,6 +38,8 @@
 - Run Firefox acceptance through installed Selenium and geckodriver with isolated profiles; use `firefox` browser/platform arguments and `FIREFOX_EXECUTABLE`.
 
 ### Removed
+
+- Retire Dev's eight-stage workflow, loose-Markdown intake, old terminal sub-actions and old-state migration; remove automatic PR/rollback and post-merge repair/cleanup paths.
 
 - Remove added legacy-browser API, WASM and style fallbacks from WebGUI without changing its features or layout.
 - Remove WebGUI MCP settings, imports/sync and RPC adapters; native Agent, TUI and Dev MCP remain unchanged.
@@ -49,16 +57,22 @@
 
 ### Fixed
 
+- Keep Dev resource generation compatible with independently installed frontend build tools.
+
+- Preserve frozen Dev requirements and review evidence in new SR worktrees when Windows checkout filters change line endings.
+- Connect Dev native chat and model controls when selecting or restoring a workflow conversation.
+- Keep read-only Dev task descendants able to query indexed evidence and release their owned session resources cleanly.
+- Keep Dev remote-collaboration input bound to the native host after its browser tab closes, without changing the guest's local workflow.
+- Return to the Dev project overview after deleting a requirement without selecting another IR or removing retained files, Git worktrees or native history.
+- Keep Dev Skill access scoped to each role and its inherited grants; hidden catalog entries no longer authorize execution methods.
 - Keep OpenWiki browser resources valid across OMP version bumps, unrelated lockfile updates and checkout moves; still reject changed OpenWiki sources or installed resource dependencies.
 - Avoid false connection-close errors when navigating between WebGUI projects in Firefox.
 - Render streamed assistant replies and file references without a missing directive-parser function error.
-- Give Dev agents the exact failed Next diagnostic on the next user turn and clarify existing requirement-format limits without changing validation or approval gates.
 - Show the Dev host only once in participant counts and update the local roster when remote collaborators join or leave, preserving distinct same-name guests.
 - Fix coding-agent type checks for Dev workbench keyboard-focus verification.
 - Fix standalone binary builds when WebGUI's model-option workspace package is not locally linked.
 - Keep historical Ask recovery unchanged when a collaborator chooses to chat instead of answering; do not branch or resume the old conversation.
 - Show native WebGUI rejection details, including unsupported image inputs, instead of only generic guard identifiers.
-- Cancel native Dev requirements faster while preserving unrelated staged changes.
 - Restore WebGUI startup, settings navigation and automation-page rendering after product-only interface removal; keep unbound capabilities explicitly unavailable.
 - Preserve project and task-group identity when resending recovered commands; retain visible Provider save/delete errors and current automation edits.
 - Keep RPC subscriptions and pending requests consistent across initialization, cancellation, timeout and re-subscription.
@@ -73,7 +87,6 @@
 - Restore shared project navigation; retain Workflow navigation and native Skill/subagent lists without requests to removed product services.
 - Open WebGUI and render native assistant replies without a blank page or collapsed layout, using the same production resources as Chrome.
 - Restore WebGUI code highlighting, visible switches and hidden recommendation scrollbars without changing Chrome's native rendering or Workflow animations.
-- Reimport existing Dev business Markdown after explicit version-bound confirmation without overwriting external originals.
 - Restore the selected Dev requirement and viewed stage after refresh without replaying native work.
 - Serve the Dev favicon from the same embedded capability-scoped resources as the page.
 

@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
-import { fixture, GATE_BUDGET, PublicPeer, registerInvalidFileTests, test, textValues } from "./process-fixture";
+import { fixture, GATE_BUDGET, PublicPeer, test, textValues } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
 import { createProviderFixture, rolePayload } from "./provider-fixture";
 
@@ -41,8 +41,6 @@ describe("spec-driven actual OMP public entry", () => {
 		},
 		GATE_BUDGET,
 	);
-
-	registerInvalidFileTests(["requirements", "executor"]);
 
 	registerPackagedSkillTest(true);
 });

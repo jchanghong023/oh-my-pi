@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { decodeDevWorkbenchAssets, type DevAssetManifest } from "../src/dev-workbench/assets";
-import { WorkbenchFixture, resolveInstalledDevChromium } from "../test/dev-workbench/fixture";
+import { chromiumExecutableProbeForTest, systemChromiumCandidatesForTest } from "../src/tools/browser/launch";
+import { WorkflowConsumerFixture, withWorkflowChromium } from "../test/dev-workbench/workflow-fixture";
 
 /** Explicit release-artifact consumer; never imported by automatic test discovery. */
 function argumentsFor(argv: string[]): { npmEntry: string; binary: string; assetsManifest: string } {
@@ -24,10 +25,24 @@ function argumentsFor(argv: string[]): { npmEntry: string; binary: string; asset
 	return { npmEntry, binary, assetsManifest };
 }
 
-async function verifyArtifact(name: string, launch: string[], expected: DevAssetManifest): Promise<void> {
-	await using fixture = await WorkbenchFixture.create();
+async function installedChromium(): Promise<string> {
+	const explicit = process.env.PUPPETEER_EXECUTABLE_PATH?.trim();
+	for (const candidate of explicit ? [explicit] : systemChromiumCandidatesForTest()) {
+		if ((await fs.stat(candidate).catch(() => null))?.isFile() && (await chromiumExecutableProbeForTest(candidate)))
+			return candidate;
+	}
+	throw new Error("Packaged Dev verification requires installed Chromium; no browser download is performed");
+}
+
+async function verifyArtifact(
+	name: string,
+	launch: string[],
+	expected: DevAssetManifest,
+	chromium: string,
+): Promise<void> {
+	await using fixture = await WorkflowConsumerFixture.create();
 	const versionProcess = Bun.spawn([...launch, "--version"], {
-		cwd: fixture.cwd,
+		cwd: fixture.project,
 		env: fixture.env,
 		stdin: "ignore",
 		stdout: "pipe",
@@ -49,56 +64,89 @@ async function verifyArtifact(name: string, launch: string[], expected: DevAsset
 	console.log(
 		`${name}: version identity=${version}; UI sourceDigest is not proof of the entire dirty backend worktree`,
 	);
-	await fixture.start(launch);
-	const actual = await fixture.request<DevAssetManifest>("assets-manifest");
+	const process = await fixture.start(launch);
+	const manifestResponse = await process.request("api/assets-manifest");
+	if (!manifestResponse.ok) throw new Error(`${name}: asset manifest HTTP ${manifestResponse.status}`);
+	const actual = (await manifestResponse.json()) as DevAssetManifest;
 	if (
 		actual.digest !== expected.digest ||
 		actual.sourceDigest !== expected.sourceDigest ||
 		JSON.stringify(actual.files) !== JSON.stringify(expected.files)
 	)
 		throw new Error(`${name}: embedded UI payload or UI build inputs differ from the explicit generated manifest`);
-	const { page } = await fixture.browser();
-	const failures: string[] = [];
-	page.on("pageerror", error => failures.push(String(error)));
-	await page.setRequestInterception(true);
-	await page.setCacheEnabled(false);
-	page.on("request", request => {
-		const url = new URL(request.url());
-		if (!["127.0.0.1", "localhost"].includes(url.hostname)) {
-			failures.push(`External dependency: ${url}`);
-			void request.abort();
-		} else void request.continue();
+	const initial = await process.view();
+	const project = initial.projects.find(project => path.resolve(project.root) === path.resolve(fixture.project));
+	if (!project) throw new Error(`${name}: isolated project was not registered`);
+	const release = await process.command({
+		type: "createRelease",
+		operationId: crypto.randomUUID(),
+		expectedRevision: initial.revision,
+		projectId: project.id,
+		title: "Packaged Dev smoke",
 	});
-	await page.reload({ waitUntil: "domcontentloaded" });
-	await page.waitForSelector('[data-testid="workbench"]');
-	await page.waitForSelector('[data-testid="requirement-list"]');
-	await page.click('[data-action="new"]');
-	await page.select('[data-testid="new-source"]', "import");
-	await page.click('[data-testid="new-submit"]');
-	await page.waitForSelector('[data-testid="new-submit"]', { hidden: true });
-	const snapshots = await fixture.list();
-	if (snapshots.length !== 1 || snapshots[0]?.record.stage !== "business")
-		throw new Error(`${name}: real create requirement UI failed`);
-	await page.waitForSelector(`[data-requirement-id="${snapshots[0].record.requirementId}"]`);
-	await page.click(`[data-requirement-id="${snapshots[0].record.requirementId}"]`);
-	await page.waitForSelector('[data-testid="material-view"]');
-	const stages = await page.$$eval('[data-testid="stages"] [data-stage]', elements =>
-		elements.map(element => element.getAttribute("data-stage")),
-	);
-	if (stages.join(",") !== "business,requirements,solution,planning,executing,st,pr,testing")
-		throw new Error(`${name}: complete eight-stage UI was not embedded`);
+	if (!release.response.ok || release.result.status !== "completed")
+		throw new Error(`${name}: real release setup failed: ${JSON.stringify(release.result)}`);
+	const failures: string[] = [];
+	await withWorkflowChromium(chromium, async browser => {
+		const page = await browser.newPage();
+		page.on("pageerror", error => failures.push(String(error)));
+		page.on("requestfailed", request =>
+			failures.push(`Request failed: ${request.url()} ${request.failure()?.errorText}`),
+		);
+		await page.setRequestInterception(true);
+		await page.setCacheEnabled(false);
+		const base = new URL(process.url);
+		page.on("request", request => {
+			const url = new URL(request.url());
+			if (["data:", "blob:"].includes(url.protocol)) void request.continue();
+			else if (url.host !== base.host || !url.pathname.startsWith(base.pathname)) {
+				failures.push(`Dependency escapes isolated Dev origin/capability: ${url}`);
+				void request.abort();
+			} else void request.continue();
+		});
+		page.on("response", response => {
+			if (response.status() >= 400) failures.push(`HTTP ${response.status()}: ${response.url()}`);
+		});
+		await page.goto(process.url, { waitUntil: "domcontentloaded" });
+		await page.waitForSelector('[data-testid="dev-workflow-root"]');
+		await page.waitForSelector('[data-testid="project-select"]');
+		await page.waitForSelector('[data-testid="release-select"]');
+		await page.waitForSelector('[data-testid="import-package"]');
+		await page.waitForSelector('[data-testid="settings"]');
+		await page.waitForSelector('[data-testid="new-browser"]:not([disabled])');
+		await page.click('[data-testid="new-browser"]');
+		await page.waitForSelector('[data-dev-draft="true"][data-ir-id]');
+		const view = await process.view(project.id);
+		const draft = view.drafts[0];
+		if (view.drafts.length !== 1 || !draft || draft.origin !== "browser" || draft.worktree || view.srs.length)
+			throw new Error(`${name}: browser drafting created incorrect workflow or Git state`);
+		await page.waitForSelector(`[data-dev-draft="true"][data-ir-id="${draft.id}"]`);
+		await page.waitForSelector('[data-testid="materials-pane"]');
+		await page.waitForSelector('[data-testid="material-menu"]');
+		if ((await page.$$('[data-testid^="stage-"]')).length)
+			throw new Error(`${name}: an IR incorrectly exposes SR development phases`);
+		for (const selector of ["requirement-confirm", "requirement-download"])
+			if (!(await page.$eval(`[data-testid="${selector}"]`, element => element.hasAttribute("disabled"))))
+				throw new Error(`${name}: empty browser requirements unexpectedly enable ${selector}`);
+		// Browser disposal intentionally aborts any in-flight periodic refresh.
+		page.removeAllListeners("requestfailed");
+	});
 	for (const asset of expected.files) {
-		const response = await fetch(new URL(asset.path.replace(/^\//u, ""), fixture.url));
+		const response = await process.request(asset.path.replace(/^\//u, ""));
 		if (!response.ok) throw new Error(`${name}: embedded asset ${asset.path}: HTTP ${response.status}`);
 		const bytes = new Uint8Array(await response.arrayBuffer());
 		if (new Bun.CryptoHasher("sha256").update(bytes).digest("hex") !== asset.version)
 			throw new Error(`${name}: embedded bytes differ: ${asset.path}`);
-		if (!response.headers.get("content-type")?.startsWith(asset.contentType.split(";", 1)[0]!))
+		if (response.headers.get("content-type") !== asset.contentType)
 			throw new Error(`${name}: incorrect asset MIME: ${asset.path}`);
+		if (response.headers.get("x-content-type-options") !== "nosniff")
+			throw new Error(`${name}: asset MIME sniffing was not disabled: ${asset.path}`);
 	}
+	const missing = await process.request("assets/missing-packaged-resource.js");
+	if (missing.status !== 404) throw new Error(`${name}: missing resource returned ${missing.status} instead of 404`);
 	if (failures.length) throw new Error(`${name}: ${failures.join("\n")}`);
 	if (fixture.provider.requests.length)
-		throw new Error(`${name}: opening or creating imported requirement unexpectedly invoked a model`);
+		throw new Error(`${name}: opening or drafting browser requirements unexpectedly invoked a model`);
 	console.log(`${name}: embedded browser UI verified; digest=${actual.digest}; sourceDigest=${actual.sourceDigest}`);
 }
 
@@ -115,11 +163,11 @@ async function main(): Promise<void> {
 		for await (const bytes of Bun.file(artifact).stream()) hasher.update(bytes);
 		console.log(`Explicit artifact: ${artifact}; sha256=${hasher.digest("hex")}`);
 	}
-	await resolveInstalledDevChromium();
+	const chromium = await installedChromium();
 	const generated: unknown = JSON.parse(await fs.readFile(args.assetsManifest, "utf8"));
 	const { manifest } = decodeDevWorkbenchAssets(generated);
-	await verifyArtifact("npm bundle", [process.execPath, args.npmEntry], manifest);
-	await verifyArtifact("standalone binary", [args.binary], manifest);
+	await verifyArtifact("npm bundle", [process.execPath, args.npmEntry], manifest, chromium);
+	await verifyArtifact("standalone binary", [args.binary], manifest, chromium);
 }
 
 if (import.meta.main) await main();

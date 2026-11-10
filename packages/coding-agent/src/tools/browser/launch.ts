@@ -609,6 +609,8 @@ export interface LaunchHeadlessOptions extends HeadlessLaunchFeatures {
 	executablePath?: string;
 	/** Child-only environment override; omitted to preserve Puppeteer's inherited environment. */
 	env?: NodeJS.ProcessEnv;
+	/** Keep HOME, Windows application data and temporary files inside the newly owned profile. */
+	isolateUserEnvironment?: boolean;
 	/** Forward browser stdout/stderr for opt-in startup diagnostics, including pre-connection failures. */
 	dumpio?: boolean;
 	/** Additional Chromium arguments merged with the centralized launch defaults. */
@@ -692,11 +694,15 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 	// unhandled EBUSY when Chromium still holds the profile lock on Windows
 	// (issue #7058). `removeUserDataDir` cleans it up on our terms instead.
 	let userDataDir: string | undefined;
+	let executablePath = opts.executablePath;
 	let profileDir = findUserDataDirInArgs(launchArgs);
 	if (!profileDir) {
 		userDataDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "omp-chrome-profile-"));
 		profileDir = userDataDir;
 		launchArgs.push(`--user-data-dir=${userDataDir}`);
+	}
+	if (opts.isolateUserEnvironment && !userDataDir) {
+		throw new Error("An isolated browser environment requires a fresh OMP-owned profile");
 	}
 	// Puppeteer picks the pipe transport from `--remote-debugging-pipe`. Chromium
 	// exits when the pipe closes, so it dies with this process even on SIGKILL;
@@ -715,12 +721,16 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 		// A reused profile can hold the file of a browser that was killed.
 		const staleActivePort = pipe ? await readActivePort(activePortFile) : undefined;
 		if (userDataDir) await seedOwnedProfilePreferences(userDataDir);
-		const executablePath = opts.executablePath ?? (await ensureChromiumExecutable());
+		executablePath ??= await ensureChromiumExecutable();
+		const env =
+			opts.isolateUserEnvironment && userDataDir
+				? await isolatedBrowserEnvironment(userDataDir, opts.env ?? process.env)
+				: opts.env;
 		const browser = await puppeteer.launch({
 			headless: opts.headless,
 			defaultViewport: opts.headless ? initialViewport : null,
 			executablePath,
-			...(opts.env === undefined ? {} : { env: opts.env }),
+			...(env === undefined ? {} : { env }),
 			...(opts.dumpio === undefined ? {} : { dumpio: opts.dumpio }),
 			args: launchArgs,
 			ignoreDefaultArgs: [
@@ -736,9 +746,75 @@ export async function launchHeadlessBrowser(opts: LaunchHeadlessOptions): Promis
 			throw error;
 		}
 	} catch (error) {
-		if (userDataDir) await removeUserDataDir(userDataDir);
-		throw error;
+		const launchError = opts.isolateUserEnvironment
+			? new Error(
+					`Chromium startup failed: executable=${executablePath ?? "(unresolved)"}, fresh owned profile=${userDataDir}. ` +
+						"Puppeteer's Windows lockfile diagnostic does not establish another browser owner; see browser stderr.",
+					{ cause: error },
+				)
+			: error;
+		if (userDataDir) {
+			try {
+				// Puppeteer starts closing asynchronously before rejecting launch.
+				// A fresh profile's lockfile is not evidence of another owner's browser.
+				// Retain stable references to only this launch, and confirm exit before
+				// removing its profile (including the isolated environment).
+				if (opts.isolateUserEnvironment && executablePath) {
+					for (const child of Process.fromPath(executablePath)) {
+						if (findUserDataDirInArgs(child.args()) !== userDataDir) continue;
+						if (!(await child.terminate({ gracefulMs: 2000, timeoutMs: 500 })))
+							throw new Error(`Owned Chromium process ${child.pid} did not exit; retained ${userDataDir}`);
+					}
+				}
+				await removeUserDataDir(userDataDir, { strict: opts.isolateUserEnvironment });
+			} catch (cleanupError) {
+				throw new AggregateError(
+					[launchError, cleanupError],
+					`Chromium launch and owned profile cleanup failed: ${executablePath}`,
+				);
+			}
+		}
+		throw launchError;
 	}
+}
+
+/**
+ * Chromium uses more than --user-data-dir on Windows: inherited APPDATA and
+ * TEMP must not point into a different user's environment than USERPROFILE.
+ * Do not mutate the coordinator environment or copy the owner's profile.
+ */
+async function isolatedBrowserEnvironment(
+	userDataDir: string,
+	inherited: NodeJS.ProcessEnv,
+): Promise<NodeJS.ProcessEnv> {
+	const root = path.join(userDataDir, ".omp-environment");
+	const home = path.join(root, "home");
+	const directories = {
+		HOME: home,
+		USERPROFILE: home,
+		APPDATA: path.join(home, "AppData", "Roaming"),
+		LOCALAPPDATA: path.join(home, "AppData", "Local"),
+		TEMP: path.join(root, "tmp"),
+		TMP: path.join(root, "tmp"),
+		TMPDIR: path.join(root, "tmp"),
+		XDG_CONFIG_HOME: path.join(home, ".config"),
+		CHROME_CONFIG_HOME: path.join(home, ".config"),
+		XDG_CACHE_HOME: path.join(home, ".cache"),
+		XDG_DATA_HOME: path.join(home, ".local", "share"),
+		XDG_STATE_HOME: path.join(home, ".local", "state"),
+	};
+	await Promise.all([...new Set(Object.values(directories))].map(dir => fs.promises.mkdir(dir, { recursive: true })));
+	const env: NodeJS.ProcessEnv = {};
+	const replaced = new Set([...Object.keys(directories), "HOMEDRIVE", "HOMEPATH", "CHROME_USER_DATA_DIR"]);
+	for (const [name, value] of Object.entries(inherited)) {
+		if (!replaced.has(process.platform === "win32" ? name.toUpperCase() : name)) env[name] = value;
+	}
+	Object.assign(env, directories);
+	if (process.platform === "win32") {
+		env.HOMEDRIVE = path.parse(home).root.replace(/[\\/]$/, "");
+		env.HOMEPATH = home.slice(env.HOMEDRIVE.length);
+	}
+	return env;
 }
 
 /** Close a launched browser; strict cleanup confirms owned process exit and rejects unresolved failures. */

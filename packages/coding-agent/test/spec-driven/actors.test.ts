@@ -3,143 +3,73 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type } from "@oh-my-pi/omptype";
+import { Type } from "@oh-my-pi/omptype/typebox";
 import { getRunningSubagentBadgeAgentIds } from "@oh-my-pi/pi-tui/overlays/running-subagent-badge";
+import { isTaskToolDetails } from "@oh-my-pi/pi-tui/tools/task";
 import { closeModelCache } from "@oh-my-pi/pi-catalog/model-cache";
 import { AsyncJobManager } from "../../src/async/job-manager";
 import { Settings } from "../../src/config/settings";
 import { ModelRegistry } from "../../src/config/model-registry";
+import { sessionFilesFromDisk } from "../../src/internal-urls/registry-helpers";
+import { KnowledgeService } from "../../src/knowledge/service";
+import { AgentRegistry } from "../../src/registry/agent-registry";
 import { AuthStorage } from "../../src/session/auth-storage";
 import { AgentStorage } from "../../src/session/agent-storage";
 import { HistoryStorage } from "../../src/session/history-storage";
 import { closeSessionIndex } from "../../src/session/session-index";
-import { cfgCompactionEnabled, cfgCompactionThresholdTokens } from "../../src/session/context-settings";
+import { cfgCompactionThresholdTokens } from "../../src/session/context-settings";
 import { ToolRestrictions } from "../../src/session/tool-restrictions";
-import { artifactVersion, SpecArtifactStore } from "../../src/spec-driven/artifacts";
-import { cancelSpecDescendantJobs, createSpecActor } from "../../src/spec-driven/actors";
-import { AgentRegistry } from "../../src/registry/agent-registry";
-import { createAgentSession, type CustomTool } from "../../src/sdk";
+import { createDevNativeActor } from "../../src/spec-driven/actors";
+import { ensureSpecDrivenResources, loadSpecDrivenSkill } from "../../src/spec-driven/resources";
+import type { CustomTool } from "../../src/sdk";
 import { SessionManager } from "../../src/session/session-manager";
-import type { DevRequirementRecord, DevStage, SpecAgentInput, SpecStageRole } from "../../src/spec-driven/types";
-
-function policyRecord(stage: DevStage = "executing"): DevRequirementRecord {
-	return {
-		schemaVersion: 1,
-		requirementId: "native-guard",
-		changeId: "native-guard",
-		branch: "main",
-		stage,
-		lifecycle: "active",
-		materials: [],
-		decisions: [],
-		marks: {},
-		solutionBasis: null,
-		report: { development: null, st: null },
-		syncRevisions: [],
-		gitOperations: [],
-		pr: null,
-		testing: "not-started",
-		relatedRequirementIds: [],
-	};
-}
+import { renderSubagentUserPrompt } from "../../src/task/structured-subagent";
+import { contentText, createProviderFixture, type ModelRequest, type Reply } from "./provider-fixture";
 
 async function consumer(
-	customTools?: CustomTool[],
-	role: SpecStageRole = customTools ? "executor" : "requirements",
-	hooks: Pick<
-		Parameters<typeof createSpecActor>[0],
-		| "reportPath"
-		| "observeReport"
-		| "checkApproved"
-		| "getStatus"
-		| "getRecord"
-		| "repairPaths"
-		| "beginRepair"
-		| "recoverContext"
-		| "entryMethods"
-		| "uiForSession"
-	> & {
+	options: {
+		customTools?: CustomTool[];
 		toolRestrictions?: ToolRestrictions;
-		inheritedToolRestrictions?: ToolRestrictions;
-		registry?: AgentRegistry;
+		check?: (name: string, input: unknown) => Promise<void>;
+		afterTool?: () => Promise<void>;
+		afterStop?: () => Promise<void>;
+		xdev?: boolean;
+		bundledSkills?: boolean;
+		reply?: (request: ModelRequest) => Reply;
 	} = {},
-	selectedToolNames?: string[],
 ) {
-	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-spec-actor-compaction-"));
+	const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "omp-dev-native-actor-"));
 	const agentDir = path.join(cwd, "agent");
 	await fs.mkdir(agentDir);
-	let text = '{"value":"prior"}';
-	let fail = false;
-	let onRequest: ((messages: Array<{ role: string; content?: unknown }>) => void | Promise<void>) | undefined;
-	let nativeTool: { name: string; args: Record<string, unknown> } | undefined;
-	let advertisedTools: string[] = [];
-	const server = Bun.serve({
-		hostname: "127.0.0.1",
-		port: 0,
-		async fetch(request) {
-			if (new URL(request.url).pathname !== "/v1/chat/completions")
-				return new Response("Unexpected route", { status: 400 });
-			const body = (await request.json()) as {
-				messages: Array<{ role: string }>;
-				tools?: Array<{ function: { name: string } }>;
-			};
-			await onRequest?.(body.messages);
-			if (fail)
+	let text = "prior ordinary reply";
+	let failure = false;
+	let queuedTool: Reply["tool"];
+	let observe: ((request: ModelRequest) => void | Promise<void>) | undefined;
+	const provider = createProviderFixture({
+		observe: request => observe?.(request),
+		reply: request => {
+			if (failure)
 				return Response.json(
 					{
-						error: {
-							message: "This API key has expired. Create a new API key.",
-							type: "authentication_error",
-							param: "api_key_expired",
-						},
-						providerPayload: "private-provider-payload",
+						error: { message: "This API key has expired. Create a new API key.", type: "authentication_error" },
+						privatePayload: "private-provider-payload",
 					},
 					{ status: 401 },
 				);
-			advertisedTools = (body.tools ?? []).map(tool => tool.function.name.replace(/^_/u, ""));
-			const queuedTool = nativeTool;
-			nativeTool = undefined;
-			const pendingTool = queuedTool ?? customTools?.[0];
-			const useTool = queuedTool || (pendingTool && !body.messages.some(message => message.role === "tool"));
-			const toolName =
-				body.tools?.find(tool => tool.function.name.replace(/^_/u, "") === pendingTool?.name)?.function.name ??
-				pendingTool?.name;
-			const chunks = [
-				{
-					choices: [
-						{
-							index: 0,
-							delta: useTool
-								? {
-										role: "assistant",
-										tool_calls: [
-											{
-												index: 0,
-												id: `actor-call-${crypto.randomUUID()}`,
-												type: "function",
-												function: { name: toolName, arguments: JSON.stringify(queuedTool?.args ?? {}) },
-											},
-										],
-									}
-								: { role: "assistant", content: text },
-							finish_reason: null,
-						},
-					],
-				},
-				{
-					choices: [{ index: 0, delta: {}, finish_reason: useTool ? "tool_calls" : "stop" }],
-					usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 },
-				},
-			];
-			return new Response(
-				`${chunks.map(chunk => `data: ${JSON.stringify({ id: "actor-fixture", object: "chat.completion.chunk", model: "chat-a", ...chunk })}\n\n`).join("")}data: [DONE]\n\n`,
-				{
-					headers: { "content-type": "text/event-stream" },
-				},
-			);
+			if (queuedTool) {
+				const tool = queuedTool;
+				queuedTool = undefined;
+				return { tool };
+			}
+			if (options.reply) return options.reply(request);
+			return { text };
 		},
 	});
-	const settings = Settings.isolated({
+	await fs.writeFile(
+		path.join(agentDir, "models.yml"),
+		`providers:\n  deepseek:\n    baseUrl: ${provider.baseUrl}\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        input: [text, image]\n        contextWindow: 1000000\n`,
+	);
+	const overrides = {
 		modelRoles: { default: "deepseek/chat-a", smol: "deepseek/chat-a" },
 		"compaction.enabled": false,
 		"compaction.methodOrder": ["soft"],
@@ -147,67 +77,67 @@ async function consumer(
 		"compaction.asyncEnabled": false,
 		"compaction.autoContinue": false,
 		"prewalk.enabled": false,
-		"tools.xdev": false,
-		"eval.js": true,
+		"tools.xdev": options.xdev ?? false,
 		"todo.enabled": false,
-	});
-	await fs.writeFile(
-		path.join(agentDir, "models.yml"),
-		`providers:\n  deepseek:\n    baseUrl: http://127.0.0.1:${server.port}/v1\n    auth: none\n    api: openai-completions\n    models:\n      - id: chat-a\n        reasoning: false\n        contextWindow: 1000000\n`,
-	);
+		"task.speculativeLaunch": false,
+		"task.isolation.enabled": false,
+		"task.maxRecursionDepth": 3,
+	};
+	const settings = options.xdev
+		? await Settings.loadIsolated({ agentDir, cwd, inMemory: true, overrides })
+		: Settings.isolated(overrides);
+	if (options.xdev) {
+		await fs.writeFile(path.join(agentDir, "config.yml"), "mnemopi:\n  noEmbeddings: true\n");
+		await fs.writeFile(
+			path.join(cwd, "indexed.md"),
+			"# Native evidence\nactorindexbeacon complete indexed content\n",
+		);
+		const knowledge = new KnowledgeService({ agentDir, cwd });
+		try {
+			await knowledge.init(".", "native-actor");
+		} finally {
+			await knowledge.close();
+		}
+	}
+	const skills = options.bundledSkills
+		? await Promise.all(
+				(await ensureSpecDrivenResources()).manifest.skills
+					.filter(skill => skill.source === "openspec")
+					.map(skill => loadSpecDrivenSkill(skill.source, skill.name)),
+			)
+		: [];
 	const authStorage = await AuthStorage.create(":memory:");
 	const modelRegistry = new ModelRegistry(authStorage, path.join(agentDir, "models.yml"), { settings });
 	const model = modelRegistry.find("deepseek", "chat-a");
-	if (!model) throw new Error("Local actor fixture model unavailable");
-	const asyncJobManager = new AsyncJobManager({});
-	const parent = hooks.inheritedToolRestrictions
-		? (
-				await createAgentSession({
-					cwd,
-					agentDir,
-					settings,
-					model,
-					authStorage,
-					modelRegistry,
-					toolRestrictions: hooks.inheritedToolRestrictions,
-					sessionManager: SessionManager.inMemory(),
-					contextFiles: [],
-					rules: [],
-					skills: [],
-					promptTemplates: [],
-					slashCommands: [],
-					disableExtensionDiscovery: true,
-					enableMCP: false,
-					enableLsp: false,
-					autoTitle: false,
-					offline: true,
-					bindProcessState: false,
-					toolNames: ["read", "write", "edit"],
-					restrictToolNames: true,
-				})
-			).session
-		: undefined;
-	const createActor = (sessionFile?: string) =>
-		createSpecActor({
-			role,
-			...hooks,
-			sessionFile,
-			sessionDirectory: path.join(cwd, "sessions"),
-			methods: [],
+	if (!model) throw new Error("Local native actor fixture model unavailable");
+	const registry = new AgentRegistry();
+	const jobs = new AsyncJobManager({});
+	const createActor = async (sessionFile?: string) =>
+		createDevNativeActor({
+			name: "requirements",
+			context: "Exact native actor context Ω",
+			check: options.check ?? (async () => {}),
+			afterTool: options.afterTool ?? (async () => {}),
+			afterStop: options.afterStop,
 			options: {
-				toolRestrictions: hooks.toolRestrictions,
 				cwd,
 				agentDir,
 				settings,
 				model,
 				authStorage,
 				modelRegistry,
-				agentRegistry: hooks.registry,
-				parentAgentId: parent?.getAgentId(),
-				asyncJobManager,
+				agentRegistry: registry,
+				asyncJobManager: jobs,
+				sessionManager: await SessionManager.open(
+					sessionFile ?? path.join(cwd, "sessions", `${crypto.randomUUID()}.jsonl`),
+					path.join(cwd, "sessions"),
+					undefined,
+					{ initialCwd: cwd },
+				),
+				toolRestrictions: options.toolRestrictions,
 				contextFiles: [],
 				rules: [],
-				skills: [],
+				skills,
 				promptTemplates: [],
 				slashCommands: [],
 				disableExtensionDiscovery: true,
@@ -215,75 +145,51 @@ async function consumer(
 				enableLsp: false,
 				autoTitle: false,
 				offline: true,
-				interactivePrompts: !!hooks.uiForSession,
-				customTools,
+				customTools: options.customTools,
 				toolNames: [
 					"read",
-					"grep",
-					"glob",
 					"write",
 					"edit",
-					...(hooks.uiForSession ? ["ask"] : []),
-					...(role === "executor" ? ["bash", "eval", "task", "wait"] : []),
+					...(options.xdev ? ["task", "knowledge_search"] : []),
+					...(options.customTools?.map(tool => tool.name) ?? []),
 				],
-				restrictToolNames: true,
-				...(customTools
-					? {
-							toolNames: selectedToolNames ?? customTools.map(tool => tool.name),
-							allowRestrictedCustomTools: true,
-						}
-					: {}),
+				restrictToolNames: !options.xdev,
+				allowRestrictedCustomTools: true,
 			},
 		});
 	let actor = await createActor();
-	const controller = new AbortController();
-	const context = { runId: "actor-compaction", generation: 1, signal: controller.signal };
-	const request = (input: Partial<SpecAgentInput> = {}) =>
-		actor.request(
-			{
-				role,
-				entry: true,
-				request: "请回复当前阶段结果。",
-				files: [],
-				outputPaths: [],
-				...input,
-			},
-			context,
-		);
 	return {
 		cwd,
-		setNativeTool(name: string, args: Record<string, unknown>) {
-			nativeTool = { name, args };
-		},
-		get advertisedTools() {
-			return advertisedTools;
-		},
+		registry,
+		jobs,
+		provider,
+		settings,
 		get actor() {
 			return actor;
 		},
-		async reopen(sessionFile: string) {
-			actor = await createActor(sessionFile);
-		},
-		context,
-		controller,
-		request,
 		setText(value: string) {
 			text = value;
 		},
 		fail() {
-			fail = true;
+			failure = true;
 		},
-		onRequest(callback: (messages: Array<{ role: string; content?: unknown }>) => void | Promise<void>) {
-			onRequest = callback;
+		setTool(name: string, args: Record<string, unknown>) {
+			queuedTool = { name, args };
+		},
+		onRequest(callback: typeof observe) {
+			observe = callback;
+		},
+		async reopen(sessionFile: string) {
+			actor = await createActor(sessionFile);
 		},
 		async [Symbol.asyncDispose]() {
 			try {
 				await actor.dispose();
-				await parent?.dispose();
 			} finally {
-				await asyncJobManager.dispose();
-				server.stop(true);
+				await jobs.dispose();
+				await modelRegistry.awaitBackgroundRefresh();
 				authStorage.close();
+				await provider[Symbol.asyncDispose]();
 				HistoryStorage.close();
 				closeSessionIndex();
 				AgentStorage.close();
@@ -294,18 +200,315 @@ async function consumer(
 	};
 }
 
-test("stage badge follows native turns rather than persistent session lifetime", async () => {
-	const registry = new AgentRegistry();
-	const registrations: string[] = [];
-	registry.onChange(event => {
-		if (event.type === "registered") registrations.push(event.ref.status);
-	});
-	await using fixture = await consumer(undefined, "requirements", { registry });
-	const id = fixture.actor.id;
-	expect(registrations).toEqual(["idle"]);
-	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
+test("preparing and restoring a native actor defers real bundled skill compression", async () => {
+	await using fixture = await consumer({ bundledSkills: true });
+	expect(fixture.actor.session.skills.some(skill => skill.name.startsWith("openspec"))).toBe(true);
+	fixture.actor.session.getContextBreakdown();
+	await Bun.sleep(25);
+	expect(fixture.provider.requests).toHaveLength(0);
+	const file = fixture.actor.session.sessionFile!;
+	await fixture.actor.dispose();
+	await fixture.reopen(file);
+	fixture.actor.session.getContextBreakdown();
+	await Bun.sleep(25);
+	expect(fixture.provider.requests).toHaveLength(0);
+}, 120_000);
 
-	const runTurn = async (start: () => Promise<unknown>) => {
+test("stop uses cleanup-only settlement without weakening ordinary tool settlement", async () => {
+	let locked = false;
+	let toolsSettled = 0;
+	let stopsSettled = 0;
+	await using fixture = await consumer({
+		async afterTool() {
+			if (locked) throw new Error("actor boundary is locked");
+			toolsSettled++;
+		},
+		async afterStop() {
+			stopsSettled++;
+		},
+	});
+	await fixture.actor.prompt("ordinary authorized input");
+	expect(toolsSettled).toBe(1);
+	expect(stopsSettled).toBe(0);
+	locked = true;
+	await fixture.actor.stop();
+	expect(toolsSettled).toBe(1);
+	expect(stopsSettled).toBe(1);
+}, 120_000);
+
+test("canonical native index transport reads indexed content without granting disk or other devices", async () => {
+	const restrictions = new ToolRestrictions();
+	let unsafeCalls = 0;
+	await using fixture = await consumer({
+		xdev: true,
+		toolRestrictions: restrictions,
+		customTools: [
+			{
+				name: "unsafe_read_device",
+				label: "Unsafe read device",
+				description: "Not a canonical builtin index",
+				parameters: Type.Object({}),
+				approval: "read",
+				async execute() {
+					unsafeCalls++;
+					return { content: [{ type: "text", text: "must not execute" }] };
+				},
+			},
+		],
+		async check(name) {
+			if (name === "write" || name === "edit") throw new Error("Phase write denied");
+		},
+	});
+	const search = spyOn(KnowledgeService.prototype, "searchKnowledge");
+	const events: string[] = [];
+	const unsubscribe = fixture.actor.session.subscribe(event => {
+		if (event.type === "tool_execution_start") events.push(event.toolName);
+	});
+	try {
+		fixture.setTool("write", {
+			path: "xd://knowledge_search",
+			content: JSON.stringify({ query: "actorindexbeacon", mode: "grep" }),
+		});
+		await fixture.actor.prompt("read indexed evidence");
+		expect(events).toContain("write");
+		const results = fixture.actor.session.messages.filter(message => message.role === "toolResult");
+		expect(JSON.stringify(results)).toContain("complete indexed content");
+		expect(results.some(result => result.toolName === "write" && !result.isError)).toBe(true);
+		expect(search).toHaveBeenCalledWith("actorindexbeacon", expect.objectContaining({ mode: "grep" }));
+		for (const target of ["business.ts", "xd://unsafe_read_device", "xd://eval", "xd://ast_edit", "xd://missing"]) {
+			fixture.setTool("write", { path: target, content: "{}" });
+			await fixture.actor.prompt(`deny ${target}`);
+			const result = fixture.actor.session.messages.findLast(message => message.role === "toolResult");
+			expect(result?.isError).toBe(true);
+			expect(JSON.stringify(result)).not.toContain("complete indexed content");
+		}
+		const release = restrictions.beginInput(["knowledge_search"]);
+		try {
+			search.mockClear();
+			fixture.setTool("write", {
+				path: "xd://knowledge_search",
+				content: JSON.stringify({ query: "actorindexbeacon", mode: "grep" }),
+			});
+			await fixture.actor.prompt("inactive index must not gain read admission");
+			const denied = fixture.actor.session.messages.findLast(message => message.role === "toolResult");
+			if (!denied || denied.role !== "toolResult") throw new Error("Missing caller-policy denial");
+			expect(denied.toolName).toBe("write");
+			expect(denied.isError).toBe(true);
+			expect(contentText(denied.content).trim().length).toBeGreaterThan(0);
+			expect(JSON.stringify(denied)).not.toContain("complete indexed content");
+			expect(search).not.toHaveBeenCalled();
+		} finally {
+			release();
+		}
+		expect(unsafeCalls).toBe(0);
+		await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+		expect(fixture.provider.failures).toEqual([]);
+	} finally {
+		unsubscribe();
+		search.mockRestore();
+	}
+}, 120_000);
+
+test("real read-only task descendants retain indexed evidence but cannot edit disk", async () => {
+	const marker = "ACTOR_READONLY_INDEX_CHILD";
+	const childPrompt = renderSubagentUserPrompt(marker);
+	// Tiny-model task labels also receive the assignment, but not the native
+	// child's rendered user prompt or its advertised tools.
+	const isChild = (request: ModelRequest) =>
+		Boolean(request.tools?.length) &&
+		request.messages.some(message => message.role === "user" && contentText(message.content).includes(childPrompt));
+	let delegated = false;
+	const query = { query: "actorindexbeacon", mode: "grep" };
+	await using fixture = await consumer({
+		xdev: true,
+		async check(name) {
+			if (name === "write" || name === "edit") throw new Error("Phase write denied");
+		},
+		reply(request) {
+			if (isChild(request)) {
+				const indexTool = request.tools?.some(item => item.function?.name.replace(/^_/u, "") === "knowledge_search")
+					? "knowledge_search"
+					: "write";
+				const lookup: NonNullable<Reply["tool"]>[] =
+					indexTool === "knowledge_search"
+						? [{ name: "knowledge_search", args: query }]
+						: [
+								{ name: "read", args: { i: "Reading indexed device protocol", path: "xd://knowledge_search" } },
+								{
+									name: "write",
+									args: {
+										i: "Querying indexed child evidence",
+										path: "xd://knowledge_search",
+										content: JSON.stringify(query),
+									},
+								},
+							];
+				const tool = [
+					...lookup,
+					{
+						name: "write",
+						args: { i: "Attempting denied child edit", path: "child-edit.ts", content: "must not land" },
+					},
+					{ name: "write", args: { i: "Attempting denied eval device", path: "xd://eval", content: "{}" } },
+				][request.messages.filter(message => message.role === "tool").length];
+				if (!tool) return { text: "read-only evidence complete" };
+				const advertised = request.tools?.find(
+					item => item.function?.name === tool.name || item.function?.name === `_${tool.name}`,
+				)?.function;
+				// Unauthorized attempts still go through the native tool loop.
+				return { tool: { ...tool, name: advertised?.name ?? tool.name } };
+			}
+			if (!delegated) {
+				delegated = true;
+				return {
+					tool: {
+						name: "task",
+						args: {
+							i: "Reading descendant evidence",
+							context: "Read indexed evidence without editing files.",
+							// Native task tools[] passes eval-defined tools, not a capability allowlist.
+							// Scout's registered read-only tool declaration supplies the actual restriction.
+							tasks: [
+								{
+									name: "ReadonlyIndexChild",
+									agent: "scout",
+									task: marker,
+									solutionSpace: "read indexed evidence",
+								},
+							],
+						},
+					},
+				};
+			}
+			return { text: "descendant settled" };
+		},
+	});
+	// Only the indexed database retains this evidence during the child's run.
+	await fs.rm(path.join(fixture.cwd, "indexed.md"));
+	await fixture.actor.prompt("delegate a read-only evidence lookup");
+	const taskResult = fixture.actor.session.messages.findLast(
+		message => message.role === "toolResult" && message.toolName === "task",
+	);
+	if (!taskResult || taskResult.role !== "toolResult" || !isTaskToolDetails(taskResult.details))
+		throw new Error(`Missing native task result: ${JSON.stringify(taskResult)}`);
+	expect(taskResult.isError).not.toBe(true);
+	const child = taskResult.details.progress?.find(progress => progress.assignment === marker);
+	if (!child || !taskResult.details.async)
+		throw new Error(`Missing asynchronous native descendant: ${JSON.stringify(taskResult)}`);
+	expect(child.agent).toBe("scout");
+	const job = fixture.jobs.getJob(taskResult.details.async.jobId);
+	if (!job) throw new Error(`Missing native descendant job: ${taskResult.details.async.jobId}`);
+	expect(job.agentId).toBe(child.id);
+	expect(job.ownerId).toBe(fixture.actor.id);
+	// Dispatch feedback is not completion; settle the real child before reading
+	// its canonical transcript and the tool results delivered to its provider.
+	await job.promise;
+	expect(job.status).toBe("completed");
+	expect(job.errorText).toBeUndefined();
+	expect(job.resultText).toContain("read-only evidence complete");
+	if (!isTaskToolDetails(job.latestDetails))
+		throw new Error(`Missing completed descendant details: ${JSON.stringify(job.latestDetails)}`);
+	expect(job.latestDetails.progress?.find(progress => progress.id === child.id)).toMatchObject({
+		agent: "scout",
+		assignment: marker,
+		status: "completed",
+	});
+	const childRef = fixture.registry.get(child.id);
+	if (!childRef?.session)
+		throw new Error(`Completed native descendant ${child.id} is not retained in its actor's registry`);
+	expect(childRef.parentId).toBe(fixture.actor.id);
+	// Read the canonical transcript without reviving or replacing the retained child.
+	const artifactsDir = fixture.actor.session.sessionManager.getArtifactsDir();
+	if (!artifactsDir) throw new Error("Missing native actor artifacts directory");
+	const sessionFile = (await sessionFilesFromDisk(artifactsDir, { onlyPreferred: true })).get(child.id);
+	if (!sessionFile) throw new Error(`Missing retained native transcript for descendant ${child.id}`);
+	const history = await SessionManager.open(sessionFile, undefined, undefined, {
+		initialCwd: fixture.cwd,
+		suppressBreadcrumb: true,
+		throwIfMissing: true,
+	});
+	try {
+		expect(history.getHeader()?.parentSession).toBe(fixture.actor.session.sessionManager.getSessionFile());
+		expect(history.getEntries().find(entry => entry.type === "session_init")).toMatchObject({
+			agent: "scout",
+			readOnly: true,
+		});
+		const messages = history.buildSessionContext().messages;
+		expect(
+			messages.some(message => message.role === "user" && contentText(message.content).includes(childPrompt)),
+		).toBe(true);
+		const childRequest = fixture.provider.requests.findLast(isChild);
+		if (!childRequest) throw new Error(`Missing provider payload for descendant ${child.id}`);
+		const indexTool = childRequest.tools?.some(item => item.function?.name.replace(/^_/u, "") === "knowledge_search")
+			? "knowledge_search"
+			: "write";
+		const resultFor = (name: string, args: Record<string, unknown>) => {
+			const call = messages
+				.flatMap(message => (message.role === "assistant" ? message.content : []))
+				.find(
+					part =>
+						part.type === "toolCall" &&
+						part.name.replace(/^_/u, "") === name &&
+						Object.entries(args).every(([key, value]) => part.arguments[key] === value),
+				);
+			if (!call || call.type !== "toolCall")
+				throw new Error(`Missing native ${name} call ${JSON.stringify(args)} in descendant ${child.id}`);
+			const result = messages.find(message => message.role === "toolResult" && message.toolCallId === call.id);
+			if (!result || result.role !== "toolResult")
+				throw new Error(`Missing native ${name} result ${JSON.stringify(args)} in descendant ${child.id}`);
+			const delivered = childRequest.messages.find(
+				message => message.role === "tool" && message.tool_call_id === result.toolCallId,
+			);
+			if (!delivered)
+				throw new Error(`Missing provider ${name} result ${JSON.stringify(args)} in descendant ${child.id}`);
+			expect(contentText(delivered.content)).toContain(contentText(result.content));
+			return result;
+		};
+		if (indexTool === "write") expect(resultFor("read", { path: "xd://knowledge_search" }).isError).not.toBe(true);
+		const indexed =
+			indexTool === "knowledge_search"
+				? resultFor("knowledge_search", query)
+				: resultFor("write", { path: "xd://knowledge_search", content: JSON.stringify(query) });
+		if (indexed.isError)
+			throw new Error(
+				`Native scout ${child.id} could not query indexed evidence: ${JSON.stringify({
+					result: indexed,
+					advertisedTools: childRequest.tools?.map(tool => tool.function?.name),
+					init: history.getEntries().find(entry => entry.type === "session_init"),
+				})}`,
+			);
+		expect(contentText(indexed.content)).toContain("actorindexbeacon complete indexed content");
+		if (indexTool === "write")
+			expect(indexed.details).toMatchObject({
+				xdev: { tool: "knowledge_search", mode: "execute", args: query },
+			});
+		expect(resultFor("write", { path: "child-edit.ts" }).isError).toBe(true);
+		expect(resultFor("write", { path: "xd://eval" }).isError).toBe(true);
+		expect(
+			childRequest.messages.some(
+				message =>
+					message.role === "tool" &&
+					contentText(message.content).includes("actorindexbeacon complete indexed content"),
+			),
+		).toBe(true);
+		await expect(fs.stat(path.join(fixture.cwd, "child-edit.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+	} finally {
+		await history.close();
+	}
+	// A completed receipt is not resource disposal: the retained child still owns
+	// its indexed worker until the actor explicitly releases its lifecycle tree.
+	await fixture.actor.dispose();
+	expect(fixture.registry.get(child.id)).toBeUndefined();
+	expect(fixture.registry.get(fixture.actor.id)).toBeUndefined();
+	expect(fixture.jobs.getUnsettledJobs()).toEqual([]);
+	expect(fixture.provider.failures).toEqual([]);
+}, 120_000);
+
+test("native actor badge tracks real turns and restored idle sessions", async () => {
+	await using fixture = await consumer();
+	expect(fixture.registry.get(fixture.actor.id)?.status).toBe("idle");
+	expect(getRunningSubagentBadgeAgentIds(fixture.registry)).toEqual([]);
+	const turn = async (start: () => Promise<unknown>) => {
 		const entered = Promise.withResolvers<void>();
 		const release = Promise.withResolvers<void>();
 		fixture.onRequest(async () => {
@@ -315,41 +518,55 @@ test("stage badge follows native turns rather than persistent session lifetime",
 		const running = start();
 		try {
 			await entered.promise;
-			expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([fixture.actor.id]);
+			expect(getRunningSubagentBadgeAgentIds(fixture.registry)).toEqual([fixture.actor.id]);
 		} finally {
 			release.resolve();
 		}
 		await running;
-		expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
-		expect(registry.get(fixture.actor.id)?.status).toBe("idle");
+		expect(getRunningSubagentBadgeAgentIds(fixture.registry)).toEqual([]);
+		expect(fixture.registry.get(fixture.actor.id)?.status).toBe("idle");
 	};
-	await runTurn(() => fixture.request());
-	// A focused stage session can also be prompted directly, outside actor.request.
-	await runTurn(() => fixture.actor.session.prompt("继续"));
-	const sessionFile = fixture.actor.session.sessionManager.getSessionFile();
-	if (!sessionFile) throw new Error("Expected a persistent stage transcript");
+	await turn(() => fixture.actor.prompt("first native turn"));
+	await turn(() => fixture.actor.session.prompt("direct native turn"));
+	const id = fixture.actor.id;
+	const file = fixture.actor.session.sessionFile!;
 	await fixture.actor.dispose();
-	expect(registry.get(id)).toBeUndefined();
-	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
-	await fixture.reopen(sessionFile);
-	expect(registrations).toEqual(["idle", "idle"]);
-	expect(getRunningSubagentBadgeAgentIds(registry)).toEqual([]);
-	await runTurn(() => fixture.request({ entry: false, feedback: "恢复后继续" }));
+	expect(fixture.registry.get(id)).toBeUndefined();
+	await fixture.reopen(file);
+	expect(fixture.actor.session.sessionFile).toBe(file);
+	expect(getRunningSubagentBadgeAgentIds(fixture.registry)).toEqual([]);
+	await turn(() => fixture.actor.prompt("restored continuation"));
 }, 120_000);
 
-test("actor request retains its current ordinary reply through real native compaction", async () => {
+test("native actor keeps the current ordinary reply through real compaction", async () => {
 	await using fixture = await consumer();
-	for (let index = 0; index < 8; index++) expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
+	const breakdown = fixture.actor.session.getContextBreakdown();
+	if (!breakdown) throw new Error("Native actor context breakdown unavailable");
+	const fixedTokens =
+		breakdown.systemPromptTokens +
+		breakdown.systemToolsTokens +
+		breakdown.systemContextTokens +
+		breakdown.skillsTokens;
+	// A one-token threshold is below the immutable prompt/schema budget, so
+	// native maintenance correctly refuses that impossible recovery target.
+	const threshold = fixedTokens * 2 + 1_024;
+	const prior = "Historical conversation detail. ".repeat(Math.ceil(threshold / 24));
+	for (let index = 0; index < 8; index++) await fixture.actor.prompt(`prior ${index}: ${prior}`);
 	const boundary = fixture.actor.session.messages.length;
 	let compactions = 0;
 	const unsubscribe = fixture.actor.session.subscribe(event => {
 		if (event.type === "auto_compaction_end" && event.result && !event.aborted) compactions++;
 	});
 	try {
-		fixture.setText('{"value":"current"}');
-		cfgCompactionThresholdTokens.set(fixture.actor.session.settings, 1);
-		cfgCompactionEnabled.set(fixture.actor.session.settings, true);
-		expect(await fixture.request()).toEqual({ text: '{"value":"current"}' });
+		fixture.setText("current ordinary reply, no JSON or yield required");
+		cfgCompactionThresholdTokens.override(fixture.actor.session.settings, threshold);
+		expect(cfgCompactionThresholdTokens.get(fixture.actor.session.settings)).toBe(threshold);
+		fixture.actor.session.setAutoCompactionEnabled(true);
+		expect(fixture.actor.session.autoCompactionEnabled).toBe(true);
+		await fixture.actor.prompt("current turn");
+		expect(
+			JSON.stringify(fixture.actor.session.messages.findLast(message => message.role === "assistant")),
+		).toContain("current ordinary reply");
 		expect(compactions).toBeGreaterThan(0);
 		expect(fixture.actor.session.messages.length).toBeLessThan(boundary);
 		expect(fixture.actor.session.sessionManager.getEntries().some(entry => entry.type === "compaction")).toBe(true);
@@ -358,1046 +575,248 @@ test("actor request retains its current ordinary reply through real native compa
 	}
 }, 120_000);
 
-test("actor request rejects a current provider failure rather than reusing a prior valid assistant", async () => {
+test("current provider rejection never reuses a previous successful assistant", async () => {
 	await using fixture = await consumer();
-	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
+	await fixture.actor.prompt("successful turn");
 	fixture.fail();
-	const error = await fixture.request().catch(error => error);
+	const error = await fixture.actor.prompt("failing turn").catch(error => error);
 	expect(error).toBeInstanceOf(Error);
-	if (!(error instanceof Error)) throw new Error("Expected current provider failure");
-	expect(error.message).toContain("Native requirements");
 	expect(error.message).toContain("401");
-	expect(error.message).toContain("This API key has expired. Create a new API key.");
+	expect(error.message).toContain("This API key has expired");
 	expect(error.message).not.toContain("private-provider-payload");
 }, 120_000);
 
-test("actor request retains the missing-result fallback rather than reusing a prior valid assistant", async () => {
+test("ordinary native continuation preserves raw user text and images in the same history", async () => {
 	await using fixture = await consumer();
-	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
-	const prompt = spyOn(fixture.actor.session, "prompt").mockResolvedValue(true);
-	try {
-		await expect(fixture.request()).rejects.toThrow("Native requirements produced no successful assistant result");
-	} finally {
-		prompt.mockRestore();
-	}
-}, 120_000);
-
-test("executor exposes native Goal without creating or rebuilding it per turn", async () => {
-	await using fixture = await consumer(undefined, "executor");
-	const create = spyOn(fixture.actor.session.goalRuntime, "createGoal");
-	const drop = spyOn(fixture.actor.session.goalRuntime, "dropGoal");
-	try {
-		await fixture.request();
-		await fixture.actor.session.goalRuntime.createGoal({ objective: "Manually enabled objective" });
-		await fixture.actor.session.goalRuntime.pauseGoal();
-		const id = fixture.actor.session.getGoalModeState()!.goal.id;
-		await fixture.request({ entry: false, feedback: "解释当前进度", readOnly: true });
-		await fixture.request({ entry: false, feedback: "继续相同任务" });
-		expect(fixture.actor.session.getGoalModeState()!.goal.id).toBe(id);
-		expect(create).toHaveBeenCalledTimes(1);
-		expect(drop).not.toHaveBeenCalled();
-		await fixture.actor.stop();
-		expect(fixture.actor.session.getGoalModeState()!.goal.id).toBe(id);
-		expect(fixture.actor.session.getGoalModeState()!.goal.status).toBe("paused");
-		await fixture.actor.dispose();
-		expect(drop).not.toHaveBeenCalled();
-	} finally {
-		create.mockRestore();
-		drop.mockRestore();
-	}
-}, 120_000);
-
-test("same-stage continuation sends raw text and native images to the same session", async () => {
-	await using fixture = await consumer();
-	const images = [{ type: "image" as const, data: "aGVsbG8=", mimeType: "image/png" }];
-	const prompt = spyOn(fixture.actor.session, "prompt").mockResolvedValue(true);
-	try {
-		// Native busy submission returns admission, not a copied assistant reply.
-		Object.defineProperty(fixture.actor.session, "isStreaming", { configurable: true, get: () => true });
-		try {
-			expect(await fixture.request({ entry: false, feedback: "  保留原文\\n不要重发材料 ", images })).toEqual({
-				text: "",
-			});
-			expect(prompt).toHaveBeenCalledWith(
-				"  保留原文\\n不要重发材料 ",
-				expect.objectContaining({
-					images,
-					streamingBehavior: "followUp",
-					toolDenylist: [],
+	await fixture.actor.prompt("first input");
+	const id = fixture.actor.session.sessionId;
+	const raw = "  保留原文\n完整后续意见 Ω  ";
+	const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==";
+	await fixture.actor.session.prompt(raw, { images: [{ type: "image", data: image, mimeType: "image/png" }] });
+	expect(fixture.actor.session.sessionId).toBe(id);
+	const user = fixture.actor.session.messages.findLast(message => message.role === "user");
+	expect(contentText(user?.content)).toBe(raw);
+	const deliveredImage = Array.isArray(user?.content) ? user.content.find(part => part.type === "image") : undefined;
+	if (!deliveredImage || deliveredImage.type !== "image") throw new Error("Native user history lost its image");
+	const providerInput = fixture.provider.requests
+		.at(-1)
+		?.messages.findLast(message => message.role === "user" && contentText(message.content) === raw);
+	expect(providerInput).toBeDefined();
+	expect(providerInput?.content).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({
+				type: "image_url",
+				image_url: expect.objectContaining({
+					url: `data:${deliveredImage.mimeType};base64,${deliveredImage.data}`,
 				}),
-			);
-		} finally {
-			Reflect.deleteProperty(fixture.actor.session, "isStreaming");
-		}
-	} finally {
-		prompt.mockRestore();
-	}
+			}),
+		]),
+	);
 }, 120_000);
 
-test("actor accepts ordinary final prose without requiring JSON or yield", async () => {
+test("native Goal is user-owned and survives continuation and stop without recreation", async () => {
 	await using fixture = await consumer();
-	fixture.setText("需求文件已更新，请确认。");
-	expect(await fixture.request()).toEqual({ text: "需求文件已更新，请确认。" });
+	await fixture.actor.prompt("ordinary turn");
+	expect(fixture.actor.session.getGoalModeState()?.enabled).not.toBe(true);
+	await fixture.actor.session.goalRuntime.createGoal({ objective: "Manually enabled objective" });
+	await fixture.actor.session.goalRuntime.pauseGoal();
+	const id = fixture.actor.session.getGoalModeState()!.goal.id;
+	await fixture.actor.prompt("explain progress");
+	await fixture.actor.prompt("continue same task");
+	expect(fixture.actor.session.getGoalModeState()!.goal.id).toBe(id);
+	await fixture.actor.stop();
+	expect(fixture.actor.session.getGoalModeState()!.goal.id).toBe(id);
+	expect(fixture.actor.session.getGoalModeState()!.goal.status).toBe("paused");
 }, 120_000);
 
-test("restricted requirements actor can ask natively but writes only its allowed proposal and capability files", async () => {
-	let asked: unknown;
-	await using fixture = await consumer(undefined, "requirements", {
-		uiForSession: session => ({
-			...session.extensionRunner!.getUIContext(),
-			askDialog: async questions => {
-				asked = questions;
-				return {
-					kind: "submit",
-					results: questions.map(question => ({
-						id: question.id,
-						question: question.question,
-						options: question.options.map(option => option.label),
-						selectedOptions: [question.options[0]!.label],
-						multi: !!question.multi,
-					})),
-				};
-			},
-		}),
+test("canonical actor restrictions preserve embedding denylists and enforce the live boundary", async () => {
+	const checked: string[] = [];
+	let frozen = false;
+	await using fixture = await consumer({
+		toolRestrictions: new ToolRestrictions({ denylist: ["write"] }),
+		async check(name) {
+			checked.push(name);
+			if (frozen && name !== "dev-input") throw new Error("whole group frozen");
+		},
 	});
-	const proposal = "openspec/changes/native-guard/proposal.md";
-	const spec = "openspec/changes/native-guard/specs/greeting/spec.md";
-	const outputPaths = [proposal, "openspec/changes/native-guard/specs/*/spec.md"];
-	const questions = [
-		{ id: "scope", question: "采用哪个范围？", options: [{ label: "当前需求" }, { label: "另建需求" }] },
-	];
-	fixture.setNativeTool("ask", { i: "确认需求范围", questions });
-	await fixture.request({ outputPaths });
-	expect(asked).toEqual(questions);
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		toolName: "ask",
-		isError: false,
-	});
-	await fs.writeFile(path.join(fixture.cwd, "baseline.txt"), "original bytes");
-	fixture.setNativeTool("write", { path: "baseline.txt", content: "not authorized by the answer" });
-	await fixture.request({ entry: false, feedback: "继续", outputPaths });
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		toolName: "write",
-		isError: true,
-	});
-	expect(await fs.readFile(path.join(fixture.cwd, "baseline.txt"), "utf8")).toBe("original bytes");
-	for (const file of [proposal, spec]) {
-		fixture.setNativeTool("write", { path: file, content: `Allowed ${file}` });
-		await fixture.request({ outputPaths });
-		expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(`Allowed ${file}`);
-		expect(new Set(fixture.advertisedTools)).toEqual(new Set(["read", "grep", "glob", "write", "edit", "ask"]));
-	}
+	fixture.setTool("write", { path: "denied.md", content: "must not land" });
+	await fixture.actor.prompt("try denied write");
+	await expect(fs.stat(path.join(fixture.cwd, "denied.md"))).rejects.toMatchObject({ code: "ENOENT" });
+	await fs.writeFile(path.join(fixture.cwd, "existing.md"), "existing bytes");
+	frozen = true;
+	fixture.setTool("read", { path: "existing.md" });
+	await fixture.actor.prompt("try frozen tool");
+	expect(checked).toContain("dev-input");
+	expect(checked).toContain("read");
+	expect(JSON.stringify(fixture.actor.session.messages)).toContain("whole group frozen");
+	expect(await fs.readFile(path.join(fixture.cwd, "existing.md"), "utf8")).toBe("existing bytes");
 }, 120_000);
 
-test("business native session writes only its designated document and rejects device and development writes", async () => {
-	await using fixture = await consumer(undefined, "business");
-	const outputPaths = ["docs/business.md"];
-	fixture.setNativeTool("write", { path: outputPaths[0], content: "业务草稿" });
-	await fixture.request({ outputPaths });
-	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务草稿");
-	for (const name of ["bash", "eval", "task", "goal", "lsp", "grep", "glob"]) {
-		expect(fixture.advertisedTools).not.toContain(name);
-	}
-	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md", "xd://bash", "local://other.md"]) {
-		fixture.setNativeTool("write", { path: file, content: "越权" });
-		await fixture.request({ entry: false, feedback: "继续", outputPaths });
-		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-			isError: true,
-		});
-	}
-	for (const file of ["docs/other.md", "openspec/changes/demo/proposal.md"]) {
-		await expect(fs.stat(path.join(fixture.cwd, file))).rejects.toMatchObject({ code: "ENOENT" });
-	}
-	fixture.setNativeTool("edit", { path: outputPaths[0], old_string: "业务草稿", new_string: "业务更新" });
-	await fixture.request({ entry: false, feedback: "更新", outputPaths });
-	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务更新");
-	fixture.setNativeTool("write", { path: outputPaths[0], content: "只读越权" });
-	await fixture.request({ entry: false, feedback: "只读", outputPaths, readOnly: true });
-	expect(await fs.readFile(path.join(fixture.cwd, outputPaths[0]), "utf8")).toBe("业务更新");
-}, 120_000);
-
-test("business native writes reject linked parents, hard links and nonregular targets", async () => {
-	await using fixture = await consumer(undefined, "business");
-	const original = path.join(fixture.cwd, "original.md");
-	await fs.writeFile(original, "原始内容");
-	const targetDir = path.join(fixture.cwd, "target");
-	await fs.mkdir(targetDir);
-	await fs.writeFile(path.join(targetDir, "business.md"), "目录原始内容");
-	await fs.symlink(targetDir, path.join(fixture.cwd, "linked"), process.platform === "win32" ? "junction" : "dir");
-	await fs.link(original, path.join(fixture.cwd, "hard.md"));
-	await fs.mkdir(path.join(fixture.cwd, "directory.md"));
-	for (const file of ["linked/business.md", "hard.md", "directory.md"]) {
-		fixture.setNativeTool("write", { path: file, content: "越权" });
-		await fixture.request({ outputPaths: [file] });
-		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-			isError: true,
-		});
-	}
-	expect(await fs.readFile(original, "utf8")).toBe("原始内容");
-	expect(await fs.readFile(path.join(targetDir, "business.md"), "utf8")).toBe("目录原始内容");
-	expect(await fs.readFile(path.join(fixture.cwd, "hard.md"), "utf8")).toBe("原始内容");
-	expect((await fs.stat(path.join(fixture.cwd, "directory.md"))).isDirectory()).toBe(true);
-}, 120_000);
-
-test("requirements actor preserves an existing mixed-case native capability while rejecting unsafe paths", async () => {
+test("native follow-up queue delivers exact input without overlapping actor submissions", async () => {
 	await using fixture = await consumer();
-	const main = "openspec/specs/area/My_API/spec.md";
-	const delta = "openspec/changes/native-guard/specs/area/My_API/spec.md";
-	const outputPaths = ["openspec/changes/native-guard/specs/**/spec.md"];
-	await fs.mkdir(path.dirname(path.join(fixture.cwd, main)), { recursive: true });
-	await fs.writeFile(path.join(fixture.cwd, main), "existing authority");
-	fixture.setNativeTool("write", { path: delta, content: "first delta" });
-	await fixture.request({ outputPaths });
-	expect(await fs.readFile(path.join(fixture.cwd, delta), "utf8")).toBe("first delta");
-	fixture.setNativeTool("edit", { path: delta, old_string: "first delta", new_string: "updated delta" });
-	await fixture.request({ entry: false, feedback: "更新需求", outputPaths });
-	expect(await fs.readFile(path.join(fixture.cwd, delta), "utf8")).toBe("updated delta");
-	for (const file of [
-		"openspec/changes/native-guard/specs/area/New_API/spec.md",
-		"openspec/changes/native-guard/specs/.hidden/spec.md",
-		"openspec/changes/native-guard/specs/../outside/spec.md",
-		"openspec/changes/other/specs/area/My_API/spec.md",
-	]) {
-		fixture.setNativeTool("write", { path: file, content: "denied" });
-		await fixture.request({ entry: false, feedback: "更新需求", outputPaths });
-		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-			isError: true,
-		});
-	}
-	expect(await fs.readFile(path.join(fixture.cwd, main), "utf8")).toBe("existing authority");
-}, 120_000);
-
-test("mixed-case capability writes reject linked, hard-linked and nonregular delta targets", async () => {
-	await using fixture = await consumer();
-	const root = "openspec/changes/native-guard/specs";
-	const outputPaths = [`${root}/**/spec.md`];
-	const businessDir = path.join(fixture.cwd, "business");
-	const business = path.join(businessDir, "spec.md");
-	await fs.mkdir(businessDir);
-	await fs.writeFile(business, "business bytes");
-	for (const name of ["Link_API", "Hard_API", "Directory_API"]) {
-		const main = path.join(fixture.cwd, "openspec/specs", name, "spec.md");
-		await fs.mkdir(path.dirname(main), { recursive: true });
-		await fs.writeFile(main, "existing authority");
-	}
-	for (const name of ["Link_API", "Hard_API", "Directory_API"]) {
-		const target = path.join(fixture.cwd, root, name, "spec.md");
-		await fs.mkdir(path.join(fixture.cwd, root), { recursive: true });
-		if (name === "Link_API")
-			await fs.symlink(businessDir, path.dirname(target), process.platform === "win32" ? "junction" : "dir");
-		else {
-			await fs.mkdir(path.dirname(target), { recursive: true });
-			if (name === "Hard_API") await fs.link(business, target);
-			else await fs.mkdir(target);
-		}
-		fixture.setNativeTool("write", { path: `${root}/${name}/spec.md`, content: "denied" });
-		await fixture.request({ outputPaths });
-		expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-			isError: true,
-		});
-	}
-	expect(await fs.readFile(business, "utf8")).toBe("business bytes");
-}, 120_000);
-
-test("read-only pending acceptance executor cannot mutate even when the provider requests native write", async () => {
-	await using fixture = await consumer(undefined, "executor");
-	const file = "src/accepted.ts";
-	await fs.mkdir(path.join(fixture.cwd, "src"));
-	await fs.writeFile(path.join(fixture.cwd, file), "original");
-	fixture.setNativeTool("write", { path: file, content: "unauthorized change" });
-	await fixture.request({ readOnly: true, outputPaths: [file] });
-	expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe("original");
-	expect(
-		fixture.actor.session.messages.findLast(message => message.role === "toolResult" && message.toolName === "write"),
-	).toMatchObject({ isError: true });
-}, 120_000);
-
-test("actor request rejects current cancellation despite a prior successful reply", async () => {
-	await using fixture = await consumer();
-	expect(await fixture.request()).toEqual({ text: '{"value":"prior"}' });
-	fixture.setText("这次回复不能被当作成功");
-	fixture.onRequest(() => fixture.controller.abort());
-	await expect(fixture.request()).rejects.toThrow();
-}, 120_000);
-
-test("actor cancellation waits for an in-flight native tool to actually settle", async () => {
 	const entered = Promise.withResolvers<void>();
-	const aborted = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	let toolStopped = false;
-	await using fixture = await consumer([
-		{
-			name: "blocking_probe",
-			label: "Blocking probe",
-			description: "Wait for the test-owned external operation to stop.",
-			parameters: type({}),
-			async execute(_id, _params, _update, _context, signal) {
-				signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
-				entered.resolve();
-				await release.promise;
-				toolStopped = true;
-				return { content: [{ type: "text", text: "External operation stopped" }] };
-			},
-		},
-	]);
-	let settled = false;
-	const request = fixture.request().then(
-		value => {
-			settled = true;
-			return { value, error: undefined };
-		},
-		error => {
-			settled = true;
-			return { value: undefined, error };
-		},
-	);
-	try {
-		await entered.promise;
-		expect(getRunningSubagentBadgeAgentIds(AgentRegistry.global())).toContain(fixture.actor.id);
-		fixture.controller.abort();
-		await aborted.promise;
-		const turn = Promise.withResolvers<void>();
-		setImmediate(turn.resolve);
-		await turn.promise;
-		expect(settled).toBe(false);
-		expect(toolStopped).toBe(false);
-	} finally {
-		release.resolve();
-	}
-	const result = await request;
-	expect(result.error).toBeDefined();
-	expect(result.value).toBeUndefined();
-	expect(toolStopped).toBe(true);
-	expect(fixture.actor.session.isStreaming).toBe(false);
-	expect(getRunningSubagentBadgeAgentIds(AgentRegistry.global())).not.toContain(fixture.actor.id);
-}, 120_000);
-
-test("actor cancellation reaches an idle child agent's background job", async () => {
-	await using fixture = await consumer();
-	const jobs = fixture.actor.session.asyncJobManager;
-	if (!jobs) throw new Error("Actor fixture requires native async jobs");
-	const childId = `actor-child-${crypto.randomUUID()}`;
-	const childRef = AgentRegistry.global().register({
-		id: childId,
-		displayName: "idle child",
-		kind: "sub",
-		parentId: fixture.actor.id,
-		session: null,
-	});
-	const started = Promise.withResolvers<void>();
-	const jobId = jobs.register(
-		"task",
-		"idle child background work",
-		async ({ signal }) => {
-			started.resolve();
-			const aborted = Promise.withResolvers<void>();
-			signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-			await aborted.promise;
-			return "stopped";
-		},
-		{ ownerId: childId },
-	);
-	try {
-		await started.promise;
-		fixture.onRequest(() => fixture.controller.abort());
-		const request = fixture.request().catch(error => error);
-		await request;
-		expect(jobs.getJob(jobId)?.status).toBe("cancelled");
-	} finally {
-		jobs.cancelAll({ ownerId: childId });
-		await jobs.waitForOwnerJobs(childId).catch(() => {});
-		AgentRegistry.global().unregister(childId, childRef);
-	}
-}, 120_000);
-test("cancellation follows unsettled native job lineage after a child leaves the registry", async () => {
-	await using fixture = await consumer();
-	const jobs = fixture.actor.session.asyncJobManager!;
-	const child = `missing-child-${crypto.randomUUID()}`;
-	const childAborted = Promise.withResolvers<void>();
-	const release = Promise.withResolvers<void>();
-	const parentId = jobs.register("task", "parent", async () => "done", {
-		ownerId: fixture.actor.id,
-		agentId: child,
-	});
-	const childId = jobs.register(
-		"task",
-		"child",
-		async ({ signal }) => {
-			signal.addEventListener("abort", () => childAborted.resolve(), { once: true });
-			await release.promise;
-			return "done";
-		},
-		{ ownerId: child, foreground: true },
-	);
-	await jobs.getJob(parentId)!.promise;
-	try {
-		const stopping = cancelSpecDescendantJobs(jobs, fixture.actor.id);
-		await childAborted.promise;
-		expect(jobs.getJob(parentId)?.status).toBe("completed");
-		expect(jobs.getJob(childId)?.status).toBe("cancelled");
-		release.resolve();
-		expect(await stopping).toBe(true);
-	} finally {
-		release.resolve();
-	}
-}, 120_000);
-
-test("actor cancellation waits for owned background work without cancelling an unrelated owner", async () => {
-	await using fixture = await consumer();
-	const jobs = fixture.actor.session.asyncJobManager;
-	if (!jobs) throw new Error("Actor fixture requires native async jobs");
-	const entered = Promise.withResolvers<void>();
-	const aborted = Promise.withResolvers<void>();
-	const release = Promise.withResolvers<void>();
-	const otherRelease = Promise.withResolvers<void>();
-	const jobId = jobs.register(
-		"task",
-		"owned cancellation probe",
-		async ({ signal }) => {
-			signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+	let first = true;
+	fixture.onRequest(async () => {
+		if (first) {
+			first = false;
 			entered.resolve();
 			await release.promise;
-			return "Owned work actually stopped";
-		},
-		{ ownerId: fixture.actor.id },
-	);
-	const otherId = jobs.register(
-		"task",
-		"unrelated owner probe",
-		async () => {
-			await otherRelease.promise;
-			return "Unrelated work completed";
-		},
-		{ ownerId: "unrelated-fixture-owner" },
-	);
-	await entered.promise;
-	fixture.onRequest(() => fixture.controller.abort());
-	let settled = false;
-	const request = fixture.request().then(
-		value => {
-			settled = true;
-			return { value, error: undefined };
-		},
-		error => {
-			settled = true;
-			return { value: undefined, error };
-		},
-	);
-	try {
-		await aborted.promise;
-		const turn = Promise.withResolvers<void>();
-		setImmediate(turn.resolve);
-		await turn.promise;
-		expect(settled).toBe(false);
-		expect(jobs.getJob(otherId)?.status).toBe("running");
-	} finally {
-		release.resolve();
-		otherRelease.resolve();
-	}
-	const result = await request;
-	expect(result.error).toBeDefined();
-	expect(result.value).toBeUndefined();
-	await jobs.waitForOwnerJobs("unrelated-fixture-owner");
-	expect(jobs.getJob(jobId)?.status).toBe("cancelled");
-	expect(jobs.getJob(otherId)?.status).toBe("completed");
-}, 120_000);
-
-test("truthful incomplete report enters read-only acceptance and explicit repair revokes it", async () => {
-	let awaitingAcceptance = false;
-	let repairCount = 0;
-	await using fixture = await consumer(undefined, "executor", {
-		reportPath: "report.md",
-		getStatus: () => ({ phase: "executing", generation: 0, useTeam: false, awaitingAcceptance }),
-		observeReport: () => {
-			awaitingAcceptance = true;
-		},
-		beginRepair: async () => {
-			repairCount++;
-			awaitingAcceptance = false;
-		},
-	});
-	const report =
-		"# 完成报告\n\n## 完成情况\n部分实施。\n\n## 验证结果\n测试失败；审查未运行。\n\n## 未完成项\n修复失败测试并完成审查。\n";
-	fixture.setNativeTool("bash", {
-		command: `bun -e "require('node:fs').writeFileSync('report.md', ${JSON.stringify(report).replaceAll('"', '\\"')})"`,
-	});
-	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
-	expect(awaitingAcceptance).toBe(true);
-	const store = new SpecArtifactStore({
-		cwd: fixture.cwd,
-		changeId: "incomplete",
-		paths: { requirements: [], solution: "solution.json", plan: "plan.md", report: "report.md" },
-	});
-	const validated = await store.readReport();
-	expect(validated.content).toBe(report);
-	expect(validated.version).toBe(artifactVersion(Buffer.from(report)));
-	fixture.setNativeTool("write", { path: "business.ts", content: "not authorized" });
-	await fixture.request({ entry: false, feedback: "解释验证限制" });
-	await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toThrow();
-	fixture.setNativeTool("write", { path: "business.ts", content: "question must not authorize" });
-	await fixture.request({ entry: false, feedback: "修复这个错误是否会影响现有调用？先解释，不要改代码" });
-	expect(repairCount).toBe(0);
-	expect(awaitingAcceptance).toBe(true);
-	await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toThrow();
-	for (const feedback of ["修正这个问题需要改哪些文件", "改正这个错误会影响哪些调用", "不要修复，只解释", "好的"]) {
-		fixture.setNativeTool("write", { path: "business.ts", content: "not authorized" });
-		await fixture.request({ entry: false, feedback });
-		expect(repairCount).toBe(0);
-		expect(awaitingAcceptance).toBe(true);
-		await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toThrow();
-	}
-	fixture.setNativeTool("write", { path: "business.ts", content: "authorized repair" });
-	await fixture.request({ entry: false, feedback: "请修正批准范围内的失败测试" });
-	expect(repairCount).toBe(1);
-	expect(awaitingAcceptance).toBe(false);
-	expect(await fs.readFile(path.join(fixture.cwd, "business.ts"), "utf8")).toBe("authorized repair");
-}, 120_000);
-
-test("successful native report write closes autonomous writes without parsing the report, explicit repair reopens only its input", async () => {
-	let reports = 0;
-	await using fixture = await consumer(undefined, "executor", {
-		reportPath: "report.md",
-		observeReport: () => {
-			reports++;
-		},
-	});
-	fixture.setNativeTool("write", { path: "report.md", content: "Not yet structurally valid" });
-	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
-	expect(reports).toBe(1);
-	fixture.setNativeTool("write", { path: "report.md", content: "Forbidden ordinary change" });
-	await fixture.request({ entry: false, feedback: "解释如何修复这个报告", readOnly: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("Not yet structurally valid");
-	fixture.setNativeTool("write", { path: "report.md", content: "Forbidden negated change" });
-	await fixture.request({ entry: false, feedback: "不要修复这个报告", readOnly: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("Not yet structurally valid");
-	fixture.setNativeTool("write", { path: "report.md", content: "Explicit repair" });
-	await fixture.request({ entry: false, feedback: "请修复这个报告", readOnly: false });
-	const repairResult = fixture.actor.session.messages.findLast(message => message.role === "toolResult");
-	expect(repairResult, JSON.stringify(repairResult)).toMatchObject({ isError: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("Explicit repair");
-	expect(reports).toBe(2);
-	fixture.setNativeTool("write", { path: "english-repair.ts", content: "fixed" });
-	await fixture.request({ entry: false, feedback: "Please fix the approved failure" });
-	expect(await fs.readFile(path.join(fixture.cwd, "english-repair.ts"), "utf8")).toBe("fixed");
-}, 120_000);
-
-test("queued repair authorization starts only when delivered and a new report locks the rest of that same input", async () => {
-	const entered = Promise.withResolvers<void>();
-	const release = Promise.withResolvers<void>();
-	let reports = 0;
-	await using fixture = await consumer(undefined, "executor", {
-		reportPath: "report.md",
-		observeReport: () => {
-			reports++;
-		},
-	});
-	fixture.setNativeTool("write", { path: "report.md", content: "first report" });
-	await fixture.request({ entry: false, feedback: "提交报告", outputPaths: ["report.md"] });
-	let hold = true;
-	let repairWrites = 0;
-	fixture.onRequest(async messages => {
-		if (hold) {
-			hold = false;
-			entered.resolve();
-			await release.promise;
-			fixture.setNativeTool("write", { path: "report.md", content: "ordinary must stay blocked" });
-		} else if (
-			JSON.stringify(messages.findLast(message => message.role === "user")?.content ?? "").includes(
-				"修复这个报告中的错误",
-			)
-		) {
-			if (repairWrites++ === 0)
-				fixture.setNativeTool("write", { path: "report.md", content: "queued explicit repair" });
-			else if (repairWrites === 2)
-				fixture.setNativeTool("write", { path: "after-report.ts", content: "must not land in same input" });
 		}
 	});
-	const running = fixture.request({ entry: false, feedback: "仅解释当前报告", readOnly: true });
+	const running = fixture.actor.prompt("active input");
 	try {
 		await entered.promise;
-		await fixture.request({ entry: false, feedback: "修复这个报告中的错误", readOnly: false });
-		expect(fixture.actor.session.getQueuedMessages().followUp).toEqual(["修复这个报告中的错误"]);
-		expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("first report");
+		await expect(fixture.actor.prompt("overlapping actor input")).rejects.toThrow();
+		await fixture.actor.session.prompt("  queued native feedback Ω  ", { streamingBehavior: "followUp" });
 	} finally {
 		release.resolve();
 	}
 	await running;
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("queued explicit repair");
-	expect(reports).toBe(2);
-	await expect(fs.stat(path.join(fixture.cwd, "after-report.ts"))).rejects.toThrow();
-	fixture.onRequest(() => {});
-	fixture.setNativeTool("write", { path: "report.md", content: "authorization must not persist" });
-	await fixture.request({ entry: false, feedback: "后续普通问题", readOnly: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toBe("queued explicit repair");
+	expect(
+		fixture.actor.session.messages
+			.filter(message => message.role === "user")
+			.map(message => contentText(message.content)),
+	).toContain("  queued native feedback Ω  ");
+	expect(fixture.actor.session.isStreaming).toBe(false);
 }, 120_000);
 
-test("busy continuation uses the native follow-up queue and retains restrictions on that input only", async () => {
+test("actor stop waits for actual native tool cleanup and rejects late completion", async () => {
 	const entered = Promise.withResolvers<void>();
+	const aborted = Promise.withResolvers<void>();
 	const release = Promise.withResolvers<void>();
-	await using fixture = await consumer(
-		[
+	let cleaned = false;
+	await using fixture = await consumer({
+		customTools: [
 			{
-				name: "queue_probe",
-				label: "Queue probe",
-				description: "Hold an actual native tool turn.",
-				parameters: type({}),
-				async execute() {
+				name: "blocking_probe",
+				label: "Blocking probe",
+				description: "Wait for external cleanup",
+				parameters: Type.Object({}),
+				async execute(_id, _params, _update, _context, signal) {
+					signal?.addEventListener("abort", () => aborted.resolve(), { once: true });
 					entered.resolve();
 					await release.promise;
-					return { content: [{ type: "text" as const, text: "released" }] };
+					cleaned = true;
+					return { content: [{ type: "text", text: "late tool completion" }] };
 				},
 			},
 		],
-		"executor",
-		{},
-		["queue_probe", "write", "read"],
-	);
-	const attempted = Promise.withResolvers<void>();
-	let requestedWrite = false;
-	fixture.onRequest(messages => {
-		const user = messages.findLast(message => message.role === "user");
-		if (requestedWrite || !JSON.stringify(user?.content ?? "").includes("仅解释下一步")) return;
-		requestedWrite = true;
-		fixture.setNativeTool("write", { path: "queued-forbidden.ts", content: "must not land" });
-		attempted.resolve();
 	});
-	const running = fixture.request();
+	fixture.setTool("blocking_probe", {});
+	const running = fixture.actor.prompt("start blocking operation").catch(error => error);
+	await entered.promise;
+	let stopped = false;
+	const stopping = fixture.actor.stop().then(() => {
+		stopped = true;
+	});
 	try {
-		await entered.promise;
-		expect(await fixture.request({ entry: false, feedback: "仅解释下一步", readOnly: true })).toEqual({ text: "" });
-		expect(fixture.actor.session.getQueuedMessages().followUp).toEqual(["仅解释下一步"]);
+		await aborted.promise;
+		await Promise.resolve();
+		expect(stopped).toBe(false);
+		expect(cleaned).toBe(false);
 	} finally {
 		release.resolve();
 	}
-	await running;
-	await attempted.promise;
-	await fixture.actor.session.waitForIdle();
-	expect(
-		fixture.actor.session.messages.findLast(message => message.role === "toolResult" && message.toolName === "write"),
-	).toMatchObject({ isError: true });
-	await expect(fs.stat(path.join(fixture.cwd, "queued-forbidden.ts"))).rejects.toMatchObject({ code: "ENOENT" });
+	await stopping;
+	expect(await running).toBeInstanceOf(Error);
+	expect(cleaned).toBe(true);
+	expect(fixture.actor.session.isStreaming).toBe(false);
+	await expect(fixture.actor.prompt("late input")).rejects.toThrow();
 }, 120_000);
 
-test("changed approved bytes block writes while preserving native read-only explanation", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		checkApproved: async () => ({ matches: false, changed: [{ path: "approved.md", reason: "changed" }] }),
-	});
-	fixture.setNativeTool("write", { path: "production.ts", content: "must not land" });
-	fixture.setText("批准材料变化，需要重新确认。");
-	expect(await fixture.request({ entry: false, feedback: "解释阻塞原因" })).toEqual({
-		text: "批准材料变化，需要重新确认。",
-	});
-	await expect(fs.stat(path.join(fixture.cwd, "production.ts"))).rejects.toThrow();
-}, 120_000);
-
-test("PR-stage explanation does not authorize changes to previously approved material", async () => {
-	await using fixture = await consumer(undefined, "executor", { getRecord: () => policyRecord("pr") });
-	await fs.writeFile(path.join(fixture.cwd, "approved.md"), "approved bytes");
-	fixture.setNativeTool("write", { path: "approved.md", content: "replacement" });
-	await fixture.request({ entry: false, feedback: "解释这个归档错误" });
-	expect(await fs.readFile(path.join(fixture.cwd, "approved.md"), "utf8")).toBe("approved bytes");
-}, 120_000);
-
-test("native direct repair revokes report eligibility only at delivered turn start", async () => {
-	let awaitingAcceptance = true;
-	let repairs = 0;
-	await using fixture = await consumer(undefined, "executor", {
-		getStatus: () => ({ phase: "executing", generation: 0, useTeam: false, awaitingAcceptance }),
-		beginRepair: async () => {
-			repairs++;
-			awaitingAcceptance = false;
-		},
-	});
-	await fixture.actor.session.prompt("继续实施已批准计划", {
-		expandPromptTemplates: false,
-		runCommands: false,
-	});
-	expect(repairs).toBe(1);
-	expect(awaitingAcceptance).toBe(false);
-}, 120_000);
-
-test("missing-history context is loaded once by actual native input, not preparation", async () => {
-	let reads = 0;
-	await using fixture = await consumer(undefined, "solution", {
-		recoverContext: async () => {
-			reads++;
-			return "历史不可用；真实正式材料和原始批准";
-		},
-	});
-	expect(reads).toBe(0);
-	await fixture.actor.session.prompt("  首次主动续聊  ", { expandPromptTemplates: false, runCommands: false });
-	expect(reads).toBe(1);
-	await fixture.actor.session.prompt("下一句", { expandPromptTemplates: false, runCommands: false });
-	expect(reads).toBe(1);
-	const recovery = fixture.actor.session.messages.filter(
-		message => message.role === "custom" && message.customType === "dev-history-recovery",
-	);
-	expect(recovery).toHaveLength(1);
-	expect(recovery[0]).toMatchObject({ display: false, content: "历史不可用；真实正式材料和原始批准" });
-	expect(
-		fixture.actor.session.messages.some(
-			message => message.role === "custom" && message.customType === "dev-stage-context",
-		),
-	).toBe(false);
-}, 120_000);
-
-test("entry handoff is hidden native context and ordinary feedback does not replay it", async () => {
+test("actor stop settles idle recursive descendants without cancelling unrelated owners", async () => {
 	await using fixture = await consumer();
-	await fixture.request({
-		request: "完整原始需求",
-		files: [{ path: "original.md", version: "bytes", content: "# 完整材料" }],
-	});
-	const session = fixture.actor.session;
-	const context = session.messages.filter(
-		message => message.role === "custom" && message.customType === "dev-stage-context",
-	);
-	expect(context).toHaveLength(1);
-	expect(context[0]).toMatchObject({ role: "custom", display: false });
-	expect(JSON.stringify(context[0])).toContain("# 完整材料");
-	const firstUser = session.messages.find(message => message.role === "user");
-	expect(JSON.stringify(firstUser)).toContain("完整原始需求");
-	expect(JSON.stringify(firstUser)).not.toContain("## Stage request");
-	await fixture.request({ entry: false, feedback: "  原文追问  " });
-	expect(
-		session.messages.filter(message => message.role === "custom" && message.customType === "dev-stage-context"),
-	).toHaveLength(1);
-	expect(JSON.stringify(session.messages.findLast(message => message.role === "user"))).toContain("  原文追问  ");
-}, 120_000);
-
-test("native conversation receives real synchronization diagnostics without rewriting user text", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		getRecord: () => policyRecord("pr"),
-		getStatus: () => ({
-			phase: "pr",
-			generation: 0,
-			useTeam: false,
-			blockedReason: "Native archive validation failed: missing config",
-			closing: {
-				synced: true,
-				archiveCleanup: { path: "openspec/changes/native-guard", diagnostic: "Source cleanup incomplete" },
-			},
-		}),
-	});
-	await fixture.request({ entry: false, feedback: "  请解释当前真实故障  ", readOnly: true });
-	const messages = fixture.actor.session.messages;
-	const facts = messages.findLast(
-		message => message.role === "custom" && message.customType === "dev-lifecycle-facts",
-	);
-	expect(facts).toMatchObject({ display: false });
-	expect(JSON.stringify(facts)).toContain("Native archive validation failed: missing config");
-	expect(JSON.stringify(facts)).toContain("synced");
-	const user = messages.findLast(message => message.role === "user");
-	expect(JSON.stringify(user)).toContain("  请解释当前真实故障  ");
-	expect(JSON.stringify(user)).not.toContain("missing config");
-}, 120_000);
-
-test("actor clones the supplied parent tool policy without lifting its denylist", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		toolRestrictions: new ToolRestrictions({ denylist: ["write"] }),
-	});
-	fixture.setNativeTool("write", { path: "denied.ts", content: "blocked by parent" });
-	await fixture.request();
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		toolName: "write",
-		isError: true,
-	});
-	await expect(fs.stat(path.join(fixture.cwd, "denied.ts"))).rejects.toMatchObject({ code: "ENOENT" });
-}, 120_000);
-
-test("actual new executor entry clears the previous report turn boundary", async () => {
-	await using fixture = await consumer(undefined, "executor", { reportPath: "report.md" });
-	fixture.setNativeTool("write", { path: "report.md", content: "first report" });
-	await fixture.request({ outputPaths: ["report.md"] });
-	fixture.setNativeTool("write", { path: "implementation.ts", content: "new approved entry" });
-	await fixture.request({ entry: true, outputPaths: ["report.md"] });
-	expect(await fs.readFile(path.join(fixture.cwd, "implementation.ts"), "utf8")).toBe("new approved entry");
-}, 120_000);
-
-test("pending synchronization repair is limited to named plain documents and cannot use shell to bypass approval", async () => {
-	let checks = 0;
-	await using fixture = await consumer(undefined, "executor", {
-		getRecord: () => policyRecord("pr"),
-		repairPaths: () => ["obstruction.md"],
-		getStatus: () => ({
-			phase: "pr",
-			generation: 0,
-			useTeam: false,
-			blockedReason: "Native archive destination is obstructed",
-			closing: { synced: true, archiveCleanup: { path: "obstruction.md", diagnostic: "cleanup pending" } },
-		}),
-		checkApproved: async () => {
-			checks++;
-			return { matches: true, changed: [] };
+	const child = `child-${crypto.randomUUID()}`;
+	const grandchild = `grandchild-${crypto.randomUUID()}`;
+	fixture.registry.register({ id: child, displayName: child, kind: "sub", parentId: fixture.actor.id, session: null });
+	fixture.registry.register({ id: grandchild, displayName: grandchild, kind: "sub", parentId: child, session: null });
+	const entered = Promise.withResolvers<void>();
+	const aborted = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	const unrelatedRelease = Promise.withResolvers<void>();
+	const owned = fixture.jobs.register(
+		"task",
+		"idle descendant work",
+		async ({ signal }) => {
+			entered.resolve();
+			signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+			await release.promise;
+			return "settled";
 		},
-	});
-	await fs.writeFile(path.join(fixture.cwd, "approved.md"), "approved bytes");
-	await fs.writeFile(path.join(fixture.cwd, "obstruction.md"), "temporary obstruction");
-	fixture.setNativeTool("bash", { command: `bun -e "require('node:fs').unlinkSync('obstruction.md')"` });
-	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
-	expect(await fs.readFile(path.join(fixture.cwd, "obstruction.md"), "utf8")).toBe("temporary obstruction");
-	fixture.setNativeTool("write", { path: "approved.md", content: "must not change" });
-	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
-	expect(await fs.readFile(path.join(fixture.cwd, "approved.md"), "utf8")).toBe("approved bytes");
-	fixture.setNativeTool("write", { path: "obstruction.md", content: "explicitly repaired obstruction" });
-	await fixture.request({ entry: false, feedback: "修复这个归档错误，不修改已批准材料" });
-	expect(await fs.readFile(path.join(fixture.cwd, "obstruction.md"), "utf8")).toBe("explicitly repaired obstruction");
-	expect(checks).toBeGreaterThan(0);
-}, 120_000);
-
-test("stage inherits an actual SDK embedding root deny policy without an explicit child policy", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		inheritedToolRestrictions: new ToolRestrictions({ denylist: ["write"] }),
-	});
-	fixture.setNativeTool("write", { path: "inherited-denied.ts", content: "must remain denied" });
-	await fixture.request();
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		toolName: "write",
-		isError: true,
-	});
-	await expect(fs.stat(path.join(fixture.cwd, "inherited-denied.ts"))).rejects.toMatchObject({ code: "ENOENT" });
-}, 120_000);
-
-test("requirements instructions load only for real stage entry, never preparation or follow-up", async () => {
-	let reads = 0;
-	await using fixture = await consumer(undefined, "requirements", {
-		entryMethods: async () => {
-			reads++;
-			return ["完整原始 OpenSpec instructions"];
+		{ ownerId: grandchild },
+	);
+	const unrelated = fixture.jobs.register(
+		"task",
+		"unrelated work",
+		async () => {
+			await unrelatedRelease.promise;
+			return "unrelated";
 		},
-	});
-	const context = { runId: "lazy-instructions", generation: 1, signal: new AbortController().signal };
-	const input: SpecAgentInput = {
-		role: "requirements",
-		entry: false,
-		request: "",
-		files: [],
-		outputPaths: [],
-		feedback: "恢复后澄清",
-	};
-	expect(reads).toBe(0);
-	await fixture.actor.request(input, context);
-	expect(reads).toBe(0);
-	await fixture.actor.request({ ...input, entry: true, request: "真正阶段进入" }, context);
-	expect(reads).toBe(1);
-	const handoff = fixture.actor.session.messages.find(
-		message => message.role === "custom" && message.customType === "dev-stage-context",
+		{ ownerId: "unrelated-owner" },
 	);
-	expect(JSON.stringify(handoff)).toContain("完整原始 OpenSpec instructions");
-	await fixture.actor.request(input, context);
-	expect(reads).toBe(1);
-}, 120_000);
-
-test("missing solution provenance blocks next until a genuine stage reentry establishes its source", async () => {
-	await using fixture = await consumer(undefined, "solution");
-	const candidates = [{ id: "solo", title: "方案", content: "真实方案" }];
-	expect(() => fixture.actor.checkSolutionCandidates(candidates)).toThrow("方案来源无法");
-	const context = { runId: "source-reentry", generation: 1, signal: new AbortController().signal };
-	await fixture.actor.request(
-		{ role: "solution", entry: false, request: "", files: [], outputPaths: [], feedback: "澄清" },
-		context,
-	);
-	expect(() => fixture.actor.checkSolutionCandidates(candidates)).toThrow("方案来源无法");
-	await fixture.actor.request(
-		{ role: "solution", entry: true, request: "重入", files: [], outputPaths: [], useTeam: false },
-		context,
-	);
-	expect(() => fixture.actor.checkSolutionCandidates(candidates)).not.toThrow();
-}, 120_000);
-
-test("stage write allowlist rejects an unrelated exact path even without readOnly and permits its designated output", async () => {
-	await using fixture = await consumer(undefined, "planner");
-	fixture.setNativeTool("write", { path: "business.ts", content: "must not land" });
-	await fixture.request({ outputPaths: ["plan.md"], readOnly: false });
-	await expect(fs.stat(path.join(fixture.cwd, "business.ts"))).rejects.toThrow();
-	const denied = fixture.actor.session.messages.findLast(message => message.role === "toolResult");
-	expect(JSON.stringify(denied)).toContain("未授权的阶段文件写入");
-	fixture.setNativeTool("write", { path: "plan.md", content: "designated plan" });
-	await fixture.request({ entry: false, feedback: "完善计划", readOnly: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "plan.md"), "utf8")).toBe("designated plan");
-	fixture.setNativeTool("edit", { path: "plan.md", old_string: "designated plan", new_string: "updated plan" });
-	await fixture.request({ entry: false, feedback: "更新计划", readOnly: false });
-	expect(await fs.readFile(path.join(fixture.cwd, "plan.md"), "utf8")).toBe("updated plan");
-}, 120_000);
-
-test("requirements write cannot follow an allowed capability directory into a business directory", async () => {
-	await using fixture = await consumer();
-	const business = path.join(fixture.cwd, "src");
-	const specs = path.join(fixture.cwd, "openspec/changes/linked-stage/specs");
-	await fs.mkdir(business);
-	await fs.mkdir(specs, { recursive: true });
-	await fs.writeFile(path.join(business, "spec.md"), "business bytes");
-	await fs.symlink(business, path.join(specs, "sample"), process.platform === "win32" ? "junction" : "dir");
-	fixture.setNativeTool("write", {
-		path: "openspec/changes/linked-stage/specs/sample/spec.md",
-		content: "unauthorized replacement",
+	await entered.promise;
+	let returned = false;
+	const stopping = fixture.actor.stop().then(() => {
+		returned = true;
 	});
-	await fixture.request({ outputPaths: ["openspec/changes/linked-stage/specs/*/spec.md"] });
-	expect(await fs.readFile(path.join(business, "spec.md"), "utf8")).toBe("business bytes");
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		isError: true,
-	});
-}, 120_000);
-
-test("solution write rejects a dangling linked parent before creating a business file", async () => {
-	await using fixture = await consumer(undefined, "solution");
-	const business = path.join(fixture.cwd, "not-created");
-	await fs.symlink(business, path.join(fixture.cwd, "solutions"), process.platform === "win32" ? "junction" : "dir");
-	fixture.setNativeTool("write", { path: "solutions/candidates.json", content: "unauthorized creation" });
-	await fixture.request({ outputPaths: ["solutions/candidates.json"] });
-	await expect(fs.stat(path.join(business, "candidates.json"))).rejects.toThrow();
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		isError: true,
-	});
-}, 120_000);
-
-test("planner edit cannot modify a business file through an allowed hard-linked document", async () => {
-	await using fixture = await consumer(undefined, "planner");
-	const business = path.join(fixture.cwd, "business.md");
-	const plan = path.join(fixture.cwd, "plan.md");
-	await fs.writeFile(business, "business bytes");
-	await fs.link(business, plan);
-	fixture.setNativeTool("edit", { path: "plan.md", old_string: "business bytes", new_string: "unauthorized edit" });
-	await fixture.request({ outputPaths: ["plan.md"] });
-	expect(await fs.readFile(business, "utf8")).toBe("business bytes");
-	expect(await fs.readFile(plan, "utf8")).toBe("business bytes");
-	expect(fixture.actor.session.messages.findLast(message => message.role === "toolResult")).toMatchObject({
-		isError: true,
-	});
-}, 120_000);
-
-for (const boundary of [
-	"mismatch",
-	"rejected-check",
-	"pr",
-	"st",
-	"testing",
-	"completed",
-	"awaitingAcceptance",
-	"approved",
-] as const) {
-	test(`native spawn guard returns a fail-closed decision for ${boundary}`, async () => {
-		await using fixture = await consumer(undefined, "executor", {
-			checkApproved: async () => {
-				if (boundary === "rejected-check") throw new Error("approval read failed");
-				return { matches: boundary !== "mismatch", changed: [] };
-			},
-			getRecord: () => {
-				const record = policyRecord(
-					boundary === "pr" || boundary === "st" || boundary === "testing" ? boundary : "executing",
-				);
-				if (boundary === "completed") record.lifecycle = "completed";
-				return record;
-			},
-			getStatus: () => ({
-				phase: "executing",
-				generation: 0,
-				useTeam: false,
-				awaitingAcceptance: boundary === "awaitingAcceptance",
-			}),
-		});
-		const runner = fixture.actor.session.extensionRunner;
-		expect(runner).toBeDefined();
-		const result = await runner!.emitBeforeSubagentSpawn({
-			type: "before_subagent_spawn",
-			agent: "task",
-			invocationKind: "task",
-			patterns: [],
-		});
-		if (boundary === "approved") expect(result?.block).not.toBe(true);
-		else expect(result).toMatchObject({ block: true, reason: expect.any(String) });
-	}, 120_000);
-}
-
-for (const stage of ["st", "pr", "testing"] as const) {
-	test(`a custom tool named bash cannot bypass ${stage} write isolation`, async () => {
-		let writes = 0;
-		await using fixture = await consumer(
-			[
-				{
-					name: "bash",
-					label: "Untrusted shell alias",
-					description: "Attempt to bypass builtin isolation",
-					parameters: type({}),
-					async execute() {
-						writes++;
-						return { content: [{ type: "text" as const, text: "must not execute" }] };
-					},
-				},
-			],
-			"executor",
-			{ getRecord: () => policyRecord(stage) },
-		);
-		await fixture.request({ entry: false, feedback: "解释当前阶段" });
-		expect(writes).toBe(0);
-	}, 120_000);
-}
-
-for (const state of ["postmerge", "completed"] as const) {
-	for (const tool of ["write", "bash", "eval", "task"] as const) {
-		test(`${state} denies native ${tool}, even for an explicit repair request`, async () => {
-			const facts = policyRecord("testing");
-			if (state === "completed") {
-				facts.lifecycle = "completed";
-				facts.testing = "tested";
-			}
-			await using fixture = await consumer(undefined, "executor", { getRecord: () => facts });
-			expect(fixture.actor.session.getEnabledToolNames()).toContain(tool);
-			const target = path.join(fixture.cwd, "business.ts");
-			await fs.writeFile(target, "original");
-			const args =
-				tool === "write"
-					? { path: "business.ts", content: "unauthorized" }
-					: tool === "bash"
-						? { command: `bun -e "require('node:fs').writeFileSync('business.ts','unauthorized')"` }
-						: tool === "eval"
-							? { language: "js", code: "await tool.write({path:'business.ts',content:'unauthorized'})" }
-							: {
-									context: "Attempt to modify code after merge",
-									tasks: [{ task: "Modify business.ts", solutionSpace: "write business code" }],
-								};
-			fixture.setNativeTool(tool, args);
-			const boundary = fixture.actor.session.messages.length;
-			await fixture.request({ entry: false, feedback: "修复这个错误，继续实施已批准计划" });
-			expect(await fs.readFile(target, "utf8")).toBe("original");
-			const result = fixture.actor.session.messages
-				.slice(boundary)
-				.find(message => message.role === "toolResult" && message.toolName === tool);
-			expect(result).toMatchObject({ isError: true });
-		}, 120_000);
+	try {
+		await aborted.promise;
+		expect(fixture.jobs.getJob(owned)?.status).toBe("cancelled");
+		expect(fixture.jobs.getJob(owned)?.endTime).toBeUndefined();
+		expect(fixture.jobs.getJob(unrelated)?.status).toBe("running");
+		expect(returned).toBe(false);
+	} finally {
+		release.resolve();
 	}
-}
-
-test("ST writes only the current completion report and preserves early-stage code restrictions", async () => {
-	await using fixture = await consumer(undefined, "executor", {
-		getRecord: () => policyRecord("st"),
-		reportPath: "report.md",
-	});
-	await fs.writeFile(path.join(fixture.cwd, "business.ts"), "original");
-	fixture.setNativeTool("write", { path: "business.ts", content: "unauthorized" });
-	await fixture.request({ entry: false, feedback: "记录 ST 结果" });
-	expect(await fs.readFile(path.join(fixture.cwd, "business.ts"), "utf8")).toBe("original");
-	fixture.setNativeTool("write", { path: "report.md", content: "# 完成报告\n\n## ST测试\n失败和未运行如实保留。\n" });
-	await fixture.request({ entry: false, feedback: "记录 ST 结果" });
-	expect(await fs.readFile(path.join(fixture.cwd, "report.md"), "utf8")).toContain("失败和未运行如实保留");
+	await stopping;
+	expect(fixture.jobs.getJob(owned)?.endTime).toBeDefined();
+	unrelatedRelease.resolve();
+	await fixture.jobs.waitForOwnerJobs("unrelated-owner");
 }, 120_000);
 
-test("testing cannot directly rewrite even its own human-decision record", async () => {
-	const facts = policyRecord("testing");
-	await using fixture = await consumer(undefined, "executor", { getRecord: () => facts });
-	const file = `docs/dev-requirements/${facts.requirementId}.json`;
-	await fs.mkdir(path.dirname(path.join(fixture.cwd, file)), { recursive: true });
-	const original = `${JSON.stringify(facts)}\n`;
-	await fs.writeFile(path.join(fixture.cwd, file), original);
-	fixture.setNativeTool("write", {
-		path: file,
-		content: JSON.stringify({ ...facts, lifecycle: "completed", testing: "tested" }),
+test("actor stop follows durable job lineage after a child leaves the registry", async () => {
+	await using fixture = await consumer();
+	const missingChild = `missing-${crypto.randomUUID()}`;
+	const aborted = Promise.withResolvers<void>();
+	const entered = Promise.withResolvers<void>();
+	let childSettled = false;
+	const release = Promise.withResolvers<void>();
+	const parent = fixture.jobs.register("task", "completed parent", async () => "done", {
+		ownerId: fixture.actor.id,
+		agentId: missingChild,
 	});
-	const boundary = fixture.actor.session.messages.length;
-	await fixture.request({ entry: false, feedback: "请把当前需求直接标记已测试" });
-	expect(await fs.readFile(path.join(fixture.cwd, file), "utf8")).toBe(original);
-	expect(
-		fixture.actor.session.messages
-			.slice(boundary)
-			.find(message => message.role === "toolResult" && message.toolName === "write"),
-	).toMatchObject({ isError: true });
+	const child = fixture.jobs.register(
+		"task",
+		"unregistered child",
+		async ({ signal }) => {
+			entered.resolve();
+			signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+			await release.promise;
+			childSettled = true;
+			return "settled";
+		},
+		{ ownerId: missingChild, foreground: true },
+	);
+	const parentJob = fixture.jobs.getJob(parent);
+	if (!parentJob) throw new Error("Registered parent job is unavailable before completion");
+	await parentJob.promise;
+	await entered.promise;
+	expect(fixture.jobs.getAgentParentLinks().get(missingChild)).toBe(fixture.actor.id);
+	let stopped = false;
+	const stopping = fixture.actor.stop().then(() => {
+		stopped = true;
+	});
+	try {
+		await aborted.promise;
+		expect(childSettled).toBe(false);
+		expect(stopped).toBe(false);
+		expect(fixture.jobs.getJob(child)?.endTime).toBeUndefined();
+		expect(fixture.jobs.getJob(child)?.status).toBe("cancelled");
+	} finally {
+		release.resolve();
+	}
+	await stopping;
+	expect(childSettled).toBe(true);
+	expect(fixture.jobs.getJob(child)?.endTime).toBeDefined();
 }, 120_000);

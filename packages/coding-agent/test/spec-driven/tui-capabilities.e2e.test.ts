@@ -1,23 +1,32 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as path from "node:path";
 import { isRecord, parseFrontmatter } from "@oh-my-pi/pi-utils";
+import { buildSkillPromptMessage } from "../../src/extensibility/skills";
 import { KnowledgeIndexEngine } from "../../src/knowledge/engine";
+import type { CustomMessageEntry } from "../../src/session/session-entries";
 import { collectSpecDrivenResources } from "../../src/spec-driven/resource-inventory";
 import { loadSpecDrivenSkill } from "../../src/spec-driven/resources";
+import {
+	checkSkillReadAccess,
+	exposeSpecExecutionSkill,
+	grantSpecExecutionSkills,
+	grantSpecSkillAccess,
+	inheritSpecExecutionSkills,
+	SkillAccessDeniedError,
+} from "../../src/spec-driven/skill-policy";
 import {
 	contentText,
 	IMPLEMENTATION,
 	IMPLEMENTATION_PATH,
-	MARKER,
 	respond,
 	rolePayload,
 	teamStage,
 	type ModelRequest,
 	type Reply,
 } from "./provider-fixture";
-import { eventually, tuiTest, withTui } from "./tui-harness";
-import { closePublicWorkbenches, WorkbenchFixture } from "../dev-workbench/fixture";
-afterEach(closePublicWorkbenches);
+import { tuiTest, withTui } from "./tui-harness";
+import { workflowGit, workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 function calls(request: ModelRequest) {
 	return request.messages
@@ -213,7 +222,7 @@ test.skipIf(!tuiTest || process.platform === "win32")(
 				);
 				expect(await Bun.file(path.join(cwd, target)).text()).toBe(updated);
 				expect(await Bun.file(path.join(cwd, IMPLEMENTATION_PATH)).text()).toBe(IMPLEMENTATION);
-				expect((await state()).requirements).toEqual([]);
+				expect((await state()).projects).toEqual([]);
 				expect(await Bun.file(path.join(cwd, ".omp/dev/state.json")).exists()).toBe(false);
 				expect(provider.requests.every(request => !rolePayload(request) && !teamStage(request))).toBe(true);
 				expect(calls(completed).map(call => call.name)).toEqual(["read", "read", "write", "read"]);
@@ -230,7 +239,89 @@ const stageSkills: Record<string, string[]> = {
 	executor: ["subagent-driven-development", "using-superpowers"],
 };
 
-test("native workbench stages consume indexed Wiki evidence and enforce packaged skill grants", async () => {
+test("inherited packaged catalogs do not grant hidden methods or leak explicit invocations", async () => {
+	const grill = await loadSpecDrivenSkill("jch", "jch-grill-me");
+	const planning = await loadSpecDrivenSkill("superpowers", "writing-plans");
+	const brainstorming = await loadSpecDrivenSkill("superpowers", "brainstorming");
+	const catalog = [grill, planning, brainstorming];
+	const requirements = {};
+	const executor = {};
+	const revokeCatalog = grantSpecExecutionSkills(requirements, catalog);
+	const revokeGrill = grantSpecSkillAccess(requirements, grill);
+	const exposedPlanning = exposeSpecExecutionSkill(planning);
+	const revokeExecution = grantSpecExecutionSkills(executor, [exposedPlanning]);
+	try {
+		expect(catalog.every(skill => skill.hide)).toBe(true);
+		expect(() => checkSkillReadAccess(grill, { scope: requirements })).not.toThrow();
+		for (const skill of [planning, brainstorming])
+			expect(() => checkSkillReadAccess(skill, { scope: requirements })).toThrow(SkillAccessDeniedError);
+		expect(() => checkSkillReadAccess(exposedPlanning, { scope: executor })).not.toThrow();
+		expect(() => checkSkillReadAccess(grill, { scope: executor })).toThrow(SkillAccessDeniedError);
+
+		const invoked = await buildSkillPromptMessage(planning, { args: "" }, "user", undefined, {
+			scope: requirements,
+		});
+		expect(invoked.details.path).toBe(planning.filePath);
+		const invocation: CustomMessageEntry = {
+			type: "custom_message",
+			customType: "skill-prompt",
+			id: "explicit-planning",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			content: invoked.message,
+			display: true,
+			attribution: "user",
+			details: invoked.details,
+		};
+		expect(() =>
+			checkSkillReadAccess(planning, { scope: requirements, getSessionBranch: () => [invocation] }),
+		).not.toThrow();
+		expect(() => checkSkillReadAccess(planning, { scope: requirements })).toThrow(SkillAccessDeniedError);
+		expect(() => checkSkillReadAccess(planning, { scope: {} })).toThrow(SkillAccessDeniedError);
+		expect(catalog.every(skill => skill.hide)).toBe(true);
+	} finally {
+		revokeExecution();
+		revokeGrill();
+		revokeCatalog();
+	}
+	expect(() => checkSkillReadAccess(exposedPlanning, { scope: executor })).toThrow(SkillAccessDeniedError);
+});
+
+test("descendant execution grants snapshot only their parent and survive stale disposers", async () => {
+	const planning = exposeSpecExecutionSkill(await loadSpecDrivenSkill("superpowers", "writing-plans"));
+	const brainstorming = exposeSpecExecutionSkill(await loadSpecDrivenSkill("superpowers", "brainstorming"));
+	const parent = {};
+	const child = {};
+	const grandchild = {};
+	const revokeParent = grantSpecExecutionSkills(parent, [planning]);
+	const revokeChild = inheritSpecExecutionSkills(parent, child);
+	const revokeGrandchild = inheritSpecExecutionSkills(child, grandchild);
+	const revokeReplacement = grantSpecExecutionSkills(child, [brainstorming]);
+	try {
+		revokeParent();
+		revokeChild();
+		expect(() => checkSkillReadAccess(planning, { scope: parent })).toThrow(SkillAccessDeniedError);
+		expect(() => checkSkillReadAccess(planning, { scope: child })).toThrow(SkillAccessDeniedError);
+		expect(() => checkSkillReadAccess(brainstorming, { scope: child })).not.toThrow();
+		expect(() => checkSkillReadAccess(planning, { scope: grandchild })).not.toThrow();
+		expect(() => checkSkillReadAccess(brainstorming, { scope: grandchild })).toThrow(SkillAccessDeniedError);
+		const revokeEmpty = inheritSpecExecutionSkills({}, grandchild);
+		try {
+			revokeGrandchild();
+			expect(() => checkSkillReadAccess(planning, { scope: grandchild })).toThrow(SkillAccessDeniedError);
+		} finally {
+			revokeEmpty();
+		}
+	} finally {
+		revokeReplacement();
+		revokeGrandchild();
+		revokeChild();
+		revokeParent();
+	}
+	expect(() => checkSkillReadAccess(brainstorming, { scope: child })).toThrow(SkillAccessDeniedError);
+});
+
+test("workflow native roles consume indexed Wiki evidence and enforce packaged skill grants", async () => {
 	const { manifest } = await collectSpecDrivenResources(
 		path.resolve(import.meta.dir, "../../src/spec-driven/vendor/resources"),
 	);
@@ -238,12 +329,19 @@ test("native workbench stages consume indexed Wiki evidence and enforce packaged
 	const skills = [...new Set([...Object.values(stageSkills).flat(), ...superpowers])];
 	const token = "OMP_CAPABILITY_WIKI_EVIDENCE";
 	const fact = `${token}: preserve internal whitespace; trim outer whitespace only.`;
-	await using fixture = await WorkbenchFixture.create({
-		async setup(cwd, agentDir) {
-			await Bun.write(path.join(cwd, "src/untouched.ts"), "original user bytes\n");
-			const documents = path.join(cwd, "../wiki-source");
+	const knowledgeDevice = "xd://knowledge_search";
+	const { fixture, view, srId } = await createWorkflowStage("executing", {
+		async setup(fixture) {
+			await Bun.write(path.join(fixture.project, "src/untouched.ts"), "original user bytes\n");
+			await workflowGit(fixture.project, ["add", "--", "src/untouched.ts"], fixture.env);
+			await workflowGit(fixture.project, ["commit", "-m", "Preserved user source"], fixture.env);
+			await workflowGit(fixture.project, ["push", "origin", "HEAD"], fixture.env);
+			const documents = path.join(fixture.root, "wiki-source");
 			await Bun.write(path.join(documents, "greeting.md"), `# Contract\n\n${fact}\n`);
-			const engine = new KnowledgeIndexEngine({ cwd, agentDir });
+			const engine = new KnowledgeIndexEngine({
+				cwd: fixture.project,
+				agentDir: path.join(fixture.root, "config/profiles/acceptance/agent"),
+			});
 			try {
 				await engine.init(documents, "capability-contract");
 			} finally {
@@ -251,17 +349,23 @@ test("native workbench stages consume indexed Wiki evidence and enforce packaged
 			}
 		},
 		reply(request) {
-			const payload = rolePayload(request);
-			if (!payload) return respond(request);
+			const context = workflowNativeContext(request);
+			if (!context) return successfulWorkflowReply(request);
 			const executed = calls(request);
 			for (const name of skills) {
 				const target = `skill://${name}:raw`;
 				if (!executed.some(call => call.name === "read" && call.args.path === target))
-					return invoke(request, "read", { i: "Probing stage resource grant", path: target });
+					return invoke(request, "read", { i: "Probing native resource grant", path: target });
 			}
-			if (payload.specDrivenRole === "requirements") {
-				if (!executed.some(call => call.name === "knowledge_search"))
-					return invoke(request, "knowledge_search", { query: token, mode: "grep" });
+			if (context.role === "requirements") {
+				if (!executed.some(call => call.name === "read" && call.args.path === knowledgeDevice))
+					return invoke(request, "read", { i: "Reading indexed knowledge protocol", path: knowledgeDevice });
+				if (!executed.some(call => call.name === "write" && call.args.path === knowledgeDevice))
+					return invoke(request, "write", {
+						i: "Searching indexed Wiki evidence",
+						path: knowledgeDevice,
+						content: JSON.stringify({ query: token, mode: "grep" }),
+					});
 				if (!executed.some(call => call.name === "write" && call.args.path === "src/untouched.ts"))
 					return invoke(request, "write", {
 						i: "Probing unauthorized mutation",
@@ -269,19 +373,21 @@ test("native workbench stages consume indexed Wiki evidence and enforce packaged
 						content: "unauthorized\n",
 					});
 			}
-			return respond(request);
+			return successfulWorkflowReply(request);
 		},
 	});
-	await fixture.start();
-	await fixture.developUntil("executing");
+	await using owned = fixture;
 	const requirements = fixture.provider.requests.findLast(
-		request => rolePayload(request)?.specDrivenRole === "requirements",
+		request => workflowNativeContext(request)?.role === "requirements",
 	)!;
-	expect(result(requirements, "knowledge_search")).toContain(fact);
-	expect(result(requirements, "write", "src/untouched.ts")).toMatch(/未授权|denied|not allowed/iu);
-	expect(await Bun.file(path.join(fixture.cwd, "src/untouched.ts")).text()).toBe("original user bytes\n");
+	expect(result(requirements, "read", knowledgeDevice)).toContain("query");
+	expect(result(requirements, "write", knowledgeDevice)).toContain(fact);
+	expect(result(requirements, "write", "src/untouched.ts")).toMatch(/未授权|denied|not allowed|boundary/iu);
+	expect(await Bun.file(path.join(fixture.project, "src/untouched.ts")).text()).toBe("original user bytes\n");
+	const sr = view.srs.find(item => item.id === srId)!;
+	expect(await Bun.file(path.join(sr.worktree!.path, "src/untouched.ts")).text()).toBe("original user bytes\n");
 	for (const [role, allowed] of Object.entries(stageSkills)) {
-		const completed = fixture.provider.requests.findLast(request => rolePayload(request)?.specDrivenRole === role)!;
+		const completed = fixture.provider.requests.findLast(request => workflowNativeContext(request)?.role === role)!;
 		for (const name of skills) {
 			const target = `skill://${name}:raw`;
 			const actual = result(completed, "read", target);
@@ -293,75 +399,5 @@ test("native workbench stages consume indexed Wiki evidence and enforce packaged
 			} else expect(actual).toContain(`Skill access denied: ${name}`);
 		}
 	}
-	const executor = fixture.provider.requests.find(request => rolePayload(request)?.specDrivenRole === "executor")!;
-	const system = executor.messages
-		.filter(message => message.role === "system")
-		.map(message => contentText(message.content))
-		.join("\n");
-	const usingSkill = await loadSpecDrivenSkill("superpowers", "using-superpowers");
-	const delegated = await loadSpecDrivenSkill("superpowers", "subagent-driven-development");
-	expect(system.indexOf(await Bun.file(usingSkill.filePath).text())).toBeGreaterThanOrEqual(0);
-	expect(system.indexOf(await Bun.file(delegated.filePath).text())).toBeGreaterThan(
-		system.indexOf(await Bun.file(usingSkill.filePath).text()),
-	);
 	expect(fixture.provider.failures).toEqual([]);
-}, 300_000);
-
-test("Team with no adoptable direction remains blocked without solo fallback or invented candidates", async () => {
-	await using fixture = await WorkbenchFixture.create({
-		reply(request) {
-			const reply = respond(request);
-			if (teamStage(request) === "proposal" && reply.tool && isRecord(reply.tool.args.data))
-				reply.tool.args.data.proposal = `${reply.tool.args.data.proposal}\n\nFetch an external HTTPS template on every greet call.`;
-			if (
-				rolePayload(request)?.specDrivenRole === "requirements" &&
-				reply.tool?.name.replace(/^_/u, "") === "write" &&
-				typeof reply.tool.args.content === "string"
-			)
-				reply.tool.args.content += "\nThe runtime SHALL NOT access the network.\n";
-			if (teamStage(request) !== "synthesis" || !reply.tool) return reply;
-			const labels = [
-				...new Set(
-					request.messages
-						.filter(message => message.role === "user")
-						.flatMap(message =>
-							[...contentText(message.content).matchAll(/^### 方案 ([A-Z]+)(?:（.*）)?$/gmu)].map(
-								match => match[1]!,
-							),
-						),
-				),
-			];
-			if (!labels.length || !isRecord(reply.tool.args.data)) throw new Error("Real Team synthesis context missing");
-			Object.assign(reply.tool.args.data, {
-				reportMarkdown: "All discussed directions violate the explicit offline constraint.",
-				recommendedProposal: "",
-				recommendationReason: "",
-				hardConstraintViolations: labels.map(proposalLabel => ({
-					proposalLabel,
-					issue: "Requires network",
-					evidence: "Runtime must not access network",
-				})),
-			});
-			return reply;
-		},
-	});
-	await fixture.start();
-	await fixture.request("team-config", { requirementId: null, expectedRecordVersion: null, useTeam: true });
-	const requirements = await fixture.developUntil("requirements");
-	await fixture.act(requirements, { kind: "next" });
-	const blocked = await fixture.stage(requirements.record.requirementId, "solution");
-	expect(blocked.runtime?.blockedReason).toMatch(/Team|候选|adoptable/iu);
-	expect(new Set(fixture.provider.requests.map(teamStage).filter(Boolean))).toEqual(
-		new Set(["proposal", "alignment", "review", "synthesis"]),
-	);
-	expect(
-		fixture.provider.requests.filter(request =>
-			["solution", "planner", "executor"].includes(rolePayload(request)?.specDrivenRole ?? ""),
-		),
-	).toEqual([]);
-	expect(blocked.record.decisions).toEqual(expect.arrayContaining(requirements.record.decisions));
-	expect(blocked.record.solutionBasis).toBeNull();
-	const count = fixture.provider.requests.length;
-	await fixture.get(blocked.record.requirementId);
-	expect(fixture.provider.requests).toHaveLength(count);
 }, 300_000);

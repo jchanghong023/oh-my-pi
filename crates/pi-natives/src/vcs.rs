@@ -224,6 +224,12 @@ pub struct VcsScopedCommitResult {
 pub struct VcsRemoteRefResult {
 	pub sha: Either<String, Null>,
 }
+/// Live remote HEAD; branch is relative to refs/heads/, never a cached guess.
+#[napi(object)]
+pub struct VcsRemoteDefaultBranch {
+	pub branch: String,
+	pub sha:    String,
+}
 /// Operation-oriented raw worktree SHA-256 guards; null means absent.
 #[napi(object, use_nullable = true)]
 pub struct VcsOwnedPatchExpectation {
@@ -1584,6 +1590,24 @@ impl VcsGitRepo {
 				.remote_ref(&remote, &full_ref, cancel)
 				.await
 				.map(|result| VcsRemoteRefResult { sha: result.sha.map_or(Either::B(Null), Either::A) })
+		})
+	}
+
+	/// Resolve the live remote HEAD; detached, unborn, or invalid HEAD rejects.
+	#[napi(ts_return_type = "Promise<VcsRemoteDefaultBranch>")]
+	pub fn remote_default_branch<'e>(
+		&self,
+		remote: String,
+		signal: Option<Unknown>,
+		env: &'e Env,
+	) -> Result<Object<'e>> {
+		let repo = self.inner.clone();
+		let cancel = cancellation_token(signal);
+		vcs_future(env, "vcs.remoteDefaultBranch", async move {
+			repo
+				.remote_default_branch(&remote, cancel)
+				.await
+				.map(|result| VcsRemoteDefaultBranch { branch: result.branch, sha: result.sha })
 		})
 	}
 

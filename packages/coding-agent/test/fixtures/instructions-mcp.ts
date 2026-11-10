@@ -31,6 +31,8 @@ export const TOOL_NAME = "do`thing";
 export const TOOL_RESULT = "MCP_DEFERRED_SMOKE_OK_5c92";
 export const BOUNDED_GUIDANCE_MODE = "--bounded-guidance";
 export const CONTEXT_MODE_NO_INSTRUCTIONS_MODE = "--context-mode-no-instructions";
+/** Explicitly declares the sentinel operation read-only; the default stays opaque. */
+export const READONLY_TOOLS_MODE = "--readonly-tools";
 const CONTEXT_MODE_TOOL_NAME = "ctx_execute";
 /** One more tool than the 64-row prompt budget, forcing the static fallback. */
 export const BOUNDED_GUIDANCE_TOOL_COUNT = 65;
@@ -86,6 +88,7 @@ function buildResult(method: string): Record<string, unknown> {
 								? "Execute code through the Context Mode fixture."
 								: "Fixture tool returning a deterministic sentinel.",
 							inputSchema: defaultInputSchema(),
+							...(process.argv.includes(READONLY_TOOLS_MODE) ? { annotations: { readOnlyHint: true } } : {}),
 						},
 					];
 			return { tools };

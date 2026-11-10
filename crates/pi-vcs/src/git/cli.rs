@@ -18,12 +18,16 @@ use std::{ffi::OsStr, path::Path, process::Stdio, time::Duration};
 
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
+#[cfg(windows)]
+use windows_process::ProcessTree;
 
 use super::GitRepo;
 use crate::{
 	error::{Error, Result},
-	types::{CloneOptions, PushOptions, RemoteRefResult},
+	types::{CloneOptions, PushOptions, RemoteDefaultBranch, RemoteRefResult},
 };
+#[cfg(not(windows))]
+type ProcessTree = ();
 
 /// Default deadline for local git plumbing via the fallback runner.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_mins(5);
@@ -214,6 +218,17 @@ pub(crate) async fn run(cwd: &Path, args: &[String], options: &RunOptions) -> Re
 	#[cfg(unix)]
 	detach_from_terminal(cmd.as_std_mut());
 	let mut child = cmd.spawn().map_err(|err| spawn_error(cwd, err))?;
+	#[cfg(windows)]
+	let process_tree = match ProcessTree::new(child.id().expect("newly spawned git has a pid")) {
+		Ok(tree) => tree,
+		Err(err) => {
+			let _ = child.kill().await;
+			let _ = child.wait().await;
+			return Err(Error::Io(err));
+		},
+	};
+	#[cfg(not(windows))]
+	let process_tree = ();
 
 	if let Some(stdin) = &options.stdin
 		&& let Some(mut pipe) = child.stdin.take()
@@ -236,16 +251,18 @@ pub(crate) async fn run(cwd: &Path, args: &[String], options: &RunOptions) -> Re
 		status = tokio::time::timeout(timeout, child.wait()) => match status {
 			Ok(status) => status.map_err(Error::Io)?,
 			Err(_elapsed) => {
-				terminate(&mut child).await;
+				terminate(&mut child, &process_tree).await;
 				stdout_task.abort();
 				stderr_task.abort();
+				let _ = tokio::join!(stdout_task, stderr_task);
 				return Err(Error::CliTimeout { command: format!("git {}", argv.join(" ")) });
 			},
 		},
 		() = cancel.cancelled() => {
-			terminate(&mut child).await;
+			terminate(&mut child, &process_tree).await;
 			stdout_task.abort();
 			stderr_task.abort();
+			let _ = tokio::join!(stdout_task, stderr_task);
 			return Err(Error::Canceled);
 		},
 	};
@@ -527,8 +544,16 @@ async fn read_capped(mut stream: impl tokio::io::AsyncRead + Unpin) -> Result<St
 	Ok(text)
 }
 
-/// SIGTERM, grace period, then SIGKILL.
-async fn terminate(child: &mut tokio::process::Child) {
+/// Settle this invocation's process tree before returning cancellation.
+///
+/// Windows pins every discovered descendant through the shared native process
+/// primitives: killing Git alone leaves upload-pack/SSH handles alive. Readers
+/// are also joined by the caller, so no pipe handle outlives the operation.
+async fn terminate(child: &mut tokio::process::Child, process_tree: &ProcessTree) {
+	#[cfg(windows)]
+	process_tree.terminate().await;
+	#[cfg(not(windows))]
+	let _ = process_tree;
 	#[cfg(unix)]
 	if let Some(pid) = child.id() {
 		// SAFETY: plain kill(2) on a pid we own; no memory is touched.
@@ -544,6 +569,118 @@ async fn terminate(child: &mut tokio::process::Child) {
 	}
 	let _ = child.kill().await;
 	let _ = tokio::time::timeout(TERMINATE_GRACE, child.wait()).await;
+}
+
+/// Windows process ownership built on the same primitives as
+/// `pi_shell::proctree`. Depending on pi-shell here would create a Cargo cycle.
+#[cfg(windows)]
+mod windows_process {
+	use std::{
+		collections::{HashMap, HashSet},
+		io,
+		os::windows::io::OwnedHandle,
+		sync::Arc,
+		time::Duration,
+	};
+
+	use pi_builtins::proc_sys as sys;
+
+	struct Process {
+		pid:     u32,
+		created: u64,
+		handle:  Arc<OwnedHandle>,
+	}
+
+	impl Process {
+		fn open(pid: u32) -> io::Result<Self> {
+			let handle = sys::open_process(
+				pid,
+				sys::PROCESS_TERMINATE | sys::PROCESS_QUERY_LIMITED_INFORMATION | sys::SYNCHRONIZE,
+			)
+			.ok_or_else(io::Error::last_os_error)?;
+			let created = sys::process_times(&handle)
+				.ok_or_else(io::Error::last_os_error)?
+				.0;
+			Ok(Self { pid, created, handle: Arc::new(handle) })
+		}
+
+		async fn exited(&self) {
+			if sys::exited(Arc::clone(&self.handle)).await.is_err() {
+				// A failed wait registration must not release the operation while
+				// an owned process still holds the working directory or its pipes.
+				while !sys::has_exited(&self.handle) {
+					tokio::time::sleep(Duration::from_millis(10)).await;
+				}
+			}
+		}
+	}
+
+	pub(super) struct ProcessTree {
+		root: Process,
+	}
+
+	impl ProcessTree {
+		pub(super) fn new(pid: u32) -> io::Result<Self> {
+			Ok(Self { root: Process::open(pid)? })
+		}
+
+		pub(super) async fn terminate(&self) {
+			let mut owned = vec![&self.root];
+			let mut descendants = Vec::new();
+			let mut seen = HashSet::from([self.root.pid, std::process::id()]);
+			let mut terminated = false;
+			loop {
+				// Retain all pinned parents across waves, even after they exit:
+				// Windows preserves a descendant's original parent id. This catches
+				// children spawned during the preceding termination wave without
+				// ever following a recycled pid or scanning by executable name.
+				let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+				for entry in sys::processes() {
+					children.entry(entry.ppid).or_default().push(entry.pid);
+				}
+				let mut fresh = Vec::new();
+				let mut parents: Vec<_> = owned
+					.iter()
+					.map(|process| (process.pid, process.created))
+					.collect();
+				while let Some((parent_pid, parent_created)) = parents.pop() {
+					for &pid in children.get(&parent_pid).into_iter().flatten() {
+						if seen.contains(&pid) {
+							continue;
+						}
+						let Ok(process) = Process::open(pid) else {
+							continue;
+						};
+						if process.created < parent_created
+							|| sys::parent_pid(&process.handle) != i32::try_from(parent_pid).ok()
+						{
+							continue;
+						}
+						seen.insert(pid);
+						parents.push((pid, process.created));
+						fresh.push(process);
+					}
+				}
+				if fresh.is_empty() && terminated {
+					break;
+				}
+				// Stop parents before children can fork again; all handles remain
+				// pinned until a final snapshot finds no surviving new descendants.
+				for process in owned.iter().copied().chain(fresh.iter()) {
+					let _ = sys::terminate(&process.handle);
+				}
+				for process in owned.iter().copied().chain(fresh.iter()) {
+					process.exited().await;
+				}
+				drop(owned);
+				descendants.extend(fresh);
+				owned = std::iter::once(&self.root)
+					.chain(descendants.iter())
+					.collect();
+				terminated = true;
+			}
+		}
+	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -605,6 +742,82 @@ impl GitRepo {
 			}
 		}
 		Ok(RemoteRefResult { sha })
+	}
+
+	/// Resolve the live remote HEAD, never cached remote-tracking refs.
+	///
+	/// Detached, unborn, missing, or invalid advertisements are errors: there
+	/// is no fallback branch name and no successfully observed "absence".
+	pub async fn remote_default_branch(
+		&self,
+		remote: &str,
+		cancel: Option<CancellationToken>,
+	) -> Result<RemoteDefaultBranch> {
+		const OP: &str = "git ls-remote default branch";
+		if remote.is_empty() {
+			return Err(Error::backend(OP, "an explicit remote is required"));
+		}
+		let args = vec![
+			"ls-remote".to_owned(),
+			"--symref".to_owned(),
+			"--".to_owned(),
+			remote.to_owned(),
+			"HEAD".to_owned(),
+		];
+		let output = run(self.root(), &args, &RunOptions {
+			read_only: true,
+			timeout: Some(NETWORK_TIMEOUT),
+			cancel,
+			..RunOptions::default()
+		})
+		.await?;
+		if is_truncated(&output.stdout) || is_truncated(&output.stderr) {
+			return Err(Error::backend(OP, "truncated remote HEAD advertisement"));
+		}
+		let output = output.into_checked(&args)?;
+		let mut branch = None;
+		let mut sha = None;
+		for line in output.stdout.lines() {
+			let Some((value, name)) = line.split_once('\t') else {
+				return Err(Error::backend(OP, "malformed remote HEAD advertisement"));
+			};
+			if name != "HEAD" {
+				return Err(Error::backend(OP, "mismatched remote HEAD advertisement"));
+			}
+			if let Some(target) = value.strip_prefix("ref: ") {
+				let _: gix::refs::FullName =
+					target.try_into().map_err(|err| Error::backend(OP, err))?;
+				let Some(path) = target
+					.strip_prefix("refs/heads/")
+					.filter(|path| !path.is_empty())
+				else {
+					return Err(Error::backend(
+						OP,
+						"remote HEAD target must be a full refs/heads/ branch",
+					));
+				};
+				if branch.replace(path.to_owned()).is_some() {
+					return Err(Error::backend(OP, "ambiguous remote HEAD symbolic advertisement"));
+				}
+			} else {
+				let id = gix::hash::ObjectId::from_hex(value.as_bytes())
+					.map_err(|err| Error::backend(OP, err))?;
+				if id.is_null() || sha.replace(id.to_hex().to_string()).is_some() {
+					return Err(Error::backend(
+						OP,
+						"ambiguous or null remote HEAD object advertisement",
+					));
+				}
+			}
+		}
+		match (branch, sha) {
+			(Some(branch), Some(sha)) => Ok(RemoteDefaultBranch { branch, sha }),
+			_ => Err(Error::backend(
+				OP,
+				"remote HEAD must advertise a symbolic branch and object id; detached, unborn, or \
+				 missing default",
+			)),
+		}
 	}
 
 	/// Push the current branch (branch-scoped: never follows tags).

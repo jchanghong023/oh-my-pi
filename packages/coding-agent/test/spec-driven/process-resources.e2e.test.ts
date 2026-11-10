@@ -3,70 +3,48 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { isRecord, TempDir } from "@oh-my-pi/pi-utils";
 import inventory from "../../src/spec-driven/vendor/inventory.json";
-import {
-	fixture,
-	GATE_BUDGET,
-	git,
-	launch,
-	listSkills,
-	PublicPeer,
-	registerInvalidFileTests,
-	run,
-	test,
-	textValues,
-} from "./process-fixture";
+import { fixture, GATE_BUDGET, git, launch, listSkills, PublicPeer, run, test, textValues } from "./process-fixture";
 import { registerPackagedSkillTest } from "./process-packaged-skills-fixture";
-import { contentText, createProviderFixture, MARKER, respond, rolePayload } from "./provider-fixture";
-import { WorkbenchFixture } from "../dev-workbench/fixture";
+import { contentText, createProviderFixture, MARKER, rolePayload } from "./provider-fixture";
+import { workflowNativeContext } from "../dev-workbench/workflow-fixture";
+import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
 describe("spec-driven actual OMP public entry", () => {
 	test(
-		"public workbench rejects a linked stage directory without changing external bytes",
+		"public workflow rejects a linked intake directory without changing external bytes",
 		async () => {
-			const outside = { path: "", linked: false };
-			let cwd = "";
-			await using workbench = await WorkbenchFixture.create({
+			let outside = "";
+			let project = "";
+			let linked = false;
+			const h = await createWorkflowStage("requirements", {
+				failure: { role: "requirements", kind: "missing" },
+				async setup(fixture) {
+					project = fixture.project;
+					outside = path.join(fixture.root, "outside");
+					await fs.mkdir(outside);
+					await fs.writeFile(path.join(outside, "requirements.json"), "external user bytes");
+				},
 				async reply(request) {
-					const reply = respond(request);
-					const target = reply.tool?.args.path;
-					if (
-						rolePayload(request)?.specDrivenRole === "requirements" &&
-						typeof target === "string" &&
-						target.endsWith("/spec.md") &&
-						!outside.linked
-					) {
-						const directory = path.dirname(path.join(cwd, target));
+					const context = workflowNativeContext(request);
+					if (context?.role === "requirements" && !linked) {
+						const binding = context.binding as { irId: string };
+						const cwd = path.join(project, ".git/omp-dev-worktrees/requirements", binding.irId);
+						const directory = path.join(cwd, `docs/dev/intake/${binding.irId}`);
 						await fs.mkdir(path.dirname(directory), { recursive: true });
-						await fs.symlink(outside.path, directory, process.platform === "win32" ? "junction" : "dir");
-						outside.linked = true;
+						await fs.symlink(outside, directory, process.platform === "win32" ? "junction" : "dir");
+						linked = true;
 					}
-					return reply;
+					return successfulWorkflowReply(request);
 				},
 			});
-			cwd = workbench.cwd;
-			outside.path = workbench.root.join("external");
-			await fs.mkdir(outside.path);
-			await fs.writeFile(path.join(outside.path, "spec.md"), "business bytes");
-			await workbench.start();
-			const current = await workbench.developUntil("requirements");
-			expect(outside.linked).toBe(true);
-			expect(await fs.readFile(path.join(outside.path, "spec.md"), "utf8")).toBe("business bytes");
-			const count = workbench.provider.requests.length;
-			const response = await workbench.response("action-preview", {
-				requirementId: current.record.requirementId,
-				expectedRecordVersion: current.recordVersion,
-				expectedStage: "requirements",
-				intent: { kind: "next" },
-				gitTarget: null,
-			});
-			expect(response.ok).toBe(false);
-			expect((await workbench.get(current.record.requirementId)).record.decisions).toEqual(current.record.decisions);
-			expect(workbench.provider.requests).toHaveLength(count);
+			await using owned = h.fixture;
+			expect(linked).toBe(true);
+			expect(await fs.readFile(path.join(outside, "requirements.json"), "utf8")).toBe("external user bytes");
+			expect(h.view.groups).toEqual([]);
+			expect(h.view.drafts.find(group => group.id === h.irId)?.confirmation).toBeUndefined();
 		},
 		GATE_BUDGET,
 	);
-
-	registerInvalidFileTests(["solution", "planner"]);
 
 	registerPackagedSkillTest(false);
 

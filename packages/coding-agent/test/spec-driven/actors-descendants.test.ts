@@ -99,3 +99,60 @@ test("arbitrary-depth descendants retain their real settlement barrier after can
 		await jobs.dispose({ timeoutMs: 1_000 });
 	}
 });
+
+test("settlement discovers descendants and owned jobs registered during abort cleanup", async () => {
+	const registry = new AgentRegistry();
+	registry.register({ id: "native-root", displayName: "root", kind: "sub", session: null });
+	const jobs = new AsyncJobManager({});
+	const started = Promise.withResolvers<void>();
+	const lateStarted = Promise.withResolvers<void>();
+	const lateAborted = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let lateId: string | undefined;
+	jobs.register(
+		"task",
+		"initial owned work",
+		async ({ signal }) => {
+			started.resolve();
+			await new Promise<void>(resolve => signal.addEventListener("abort", () => resolve(), { once: true }));
+			registry.register({
+				id: "late-child",
+				displayName: "late child",
+				kind: "sub",
+				parentId: "native-root",
+				session: null,
+			});
+			lateId = jobs.register(
+				"task",
+				"late descendant cleanup",
+				async ({ signal: childSignal }) => {
+					childSignal.addEventListener("abort", () => lateAborted.resolve(), { once: true });
+					lateStarted.resolve();
+					await release.promise;
+					return "late cleanup actually settled";
+				},
+				{ ownerId: "late-child" },
+			);
+			return "initial cleanup finished";
+		},
+		{ ownerId: "native-root" },
+	);
+	await started.promise;
+	let returned = false;
+	const cancelling = cancelSpecDescendantJobs(jobs, "native-root", registry).then(value => {
+		returned = true;
+		return value;
+	});
+	try {
+		await lateStarted.promise;
+		await lateAborted.promise;
+		expect(jobs.getJob(lateId!)?.status).toBe("cancelled");
+		expect(jobs.getJob(lateId!)?.endTime).toBeUndefined();
+		expect(returned).toBe(false);
+	} finally {
+		release.resolve();
+	}
+	expect(await cancelling).toBe(true);
+	expect(jobs.getJob(lateId!)?.endTime).toBeDefined();
+	await jobs.dispose({ timeoutMs: 1_000 });
+});

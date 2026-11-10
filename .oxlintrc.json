@@ -30,6 +30,7 @@
 	},
 	"ignorePatterns": [
 		"**/vendor/**",
+		"packages/dev-frontend/**",
 		"**/node_modules/**",
 		"**/test-sessions.ts",
 		"**/agent_pb.ts",

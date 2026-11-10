@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import type { GuestFrame, HostFrame } from "@oh-my-pi/pi-wire";
+import type { GuestFrame, HostFrame, SubmitResult } from "@oh-my-pi/pi-wire";
 import type { Settings } from "../config/settings";
 import { CollabController } from "../collab/controller";
 import { importRoomKey } from "../collab/crypto";
@@ -13,7 +13,6 @@ import {
 import { COLLAB_PROTO, parseCollabLink } from "../collab/protocol";
 import { CollabSocket } from "../collab/relay-client";
 import { cfgCollabRelayUrl } from "../collab/settings";
-import type { DevSubmitResult } from "../spec-driven/types";
 
 export interface DevCollabParticipant {
 	peerId: string;
@@ -24,11 +23,24 @@ export interface DevCollabParticipant {
 	canWrite: boolean;
 }
 
+export type DevCollabTarget = Pick<DevCollabParticipant, "peerId" | "roomId" | "sessionId" | "generation">;
+export type DevCollabSubmitResult = Exclude<SubmitResult, { kind: "sent" }>;
+
+export function sameDevCollabTarget(left: DevCollabTarget, right: DevCollabTarget): boolean {
+	return (
+		left.peerId === right.peerId &&
+		left.roomId === right.roomId &&
+		left.sessionId === right.sessionId &&
+		left.generation === right.generation
+	);
+}
+
 export interface DevCollabBridgeOptions {
 	settings: Settings;
-	onFrame(browserId: string, frame: HostFrame): void;
-	onDisconnected?(browserId: string, reason: string): void;
+	onFrame(browserId: string, frame: HostFrame, participant: DevCollabParticipant): void;
+	onDisconnected?(browserId: string, reason: string, participant: DevCollabParticipant): void;
 	onJoined?(browserId: string, participant: DevCollabParticipant): void;
+	onConnecting?(browserId: string, participant: DevCollabParticipant): void;
 }
 
 interface BrowserPeer {
@@ -41,6 +53,7 @@ interface BrowserPeer {
 	expectedEntries: number;
 	receivedEntries: number;
 	pendingUi: Set<number>;
+	pendingTranscripts: Set<number>;
 	timer: Timer | undefined;
 	cancel(): void;
 }
@@ -66,7 +79,6 @@ export class DevCollabBridge {
 		signal: AbortSignal,
 	): Promise<{ peerId: string; roomId: string; canWrite: boolean }> {
 		if (this.#closed) throw new Error("Collaboration bridge closed");
-		if (!intranetCollabEnabled()) throw new Error("Browser intranet collaboration requires OMP_OFFLINE");
 		if (signal.aborted) throw new Error("Collaboration join cancelled");
 		if (!input.browserId) throw new Error("Missing browser identity");
 		if (this.#peers.has(input.browserId)) throw new Error("Leave the current collaboration before joining again");
@@ -94,10 +106,12 @@ export class DevCollabBridge {
 			expectedEntries: 0,
 			receivedEntries: 0,
 			pendingUi: new Set(),
+			pendingTranscripts: new Set(),
 			timer: undefined,
 			cancel: () => rejectSnapshot(new Error("Collaboration join cancelled")),
 		};
 		this.#peers.set(input.browserId, peer);
+		this.#options.onConnecting?.(input.browserId, { ...peer.identity });
 		// Attach a rejection observer during async lookup; the awaited promise below still rejects normally.
 		void firstSnapshot.catch(() => {});
 		const current = () => !peer.ended && this.#peers.get(input.browserId) === peer;
@@ -106,11 +120,12 @@ export class DevCollabBridge {
 			peer.joined = false;
 			peer.ended = true;
 			peer.pendingUi.clear();
+			peer.pendingTranscripts.clear();
 			clearTimeout(peer.timer);
 			peer.socket?.discardPendingSends();
 			peer.socket?.close();
 			rejectSnapshot(new Error(reason));
-			this.#options.onDisconnected?.(input.browserId, reason);
+			this.#options.onDisconnected?.(input.browserId, reason, { ...peer.identity });
 		};
 		const armTimeout = () => {
 			clearTimeout(peer.timer);
@@ -121,13 +136,16 @@ export class DevCollabBridge {
 		};
 		signal.addEventListener("abort", onAbort, { once: true });
 		try {
-			const relay = intranetRelayUrl(cfgCollabRelayUrl.get(this.#options.settings));
+			const offline = intranetCollabEnabled();
+			const relay = offline ? intranetRelayUrl(cfgCollabRelayUrl.get(this.#options.settings)) : undefined;
 			const requested = input.usernameOrLink.trim();
-			const link = isIntranetUsername(requested) ? await resolveIntranetUsername(relay, requested) : requested;
+			const link =
+				offline && isIntranetUsername(requested) ? await resolveIntranetUsername(relay!, requested) : requested;
 			if (!current() || signal.aborted) throw new Error("Collaboration join cancelled");
 			const parsed = parseCollabLink(link);
-			if ("error" in parsed) throw new Error(parsed.error);
-			if (new URL(parsed.wsUrl).origin !== relay) throw new Error("Collaboration link belongs to a different relay");
+			if ("error" in parsed) throw new Error(parsed.error.replaceAll(link, "[redacted]"));
+			if (relay && new URL(parsed.wsUrl).origin !== relay)
+				throw new Error("Collaboration link belongs to a different relay");
 			peer.identity.roomId = parsed.roomId;
 			const key = await importRoomKey(parsed.key);
 			if (!current() || signal.aborted) throw new Error("Collaboration join cancelled");
@@ -140,7 +158,9 @@ export class DevCollabBridge {
 				peer.joined = false;
 				peer.welcomed = false;
 				peer.pendingUi.clear();
+				peer.pendingTranscripts.clear();
 				peer.receivedEntries = 0;
+				this.#options.onConnecting?.(input.browserId, { ...peer.identity });
 				armTimeout();
 				socket.send({
 					t: "hello",
@@ -151,9 +171,8 @@ export class DevCollabBridge {
 			};
 			socket.onFrame = (frame, _fromPeer, connectionActive = true) => {
 				if (!current()) return;
-				// A transient close retains queued decryptions for final goodbye/UI ends.
-				// Only the socket that is still live may establish a snapshot or admission.
-				if ((!connectionActive || peer.roomEnded) && frame.t !== "bye" && frame.t !== "ui-request-end") return;
+				// Decryption from a retired connection never changes a new connection's projection.
+				if (!connectionActive || peer.roomEnded) return;
 				if (
 					frame.t === "hello" ||
 					frame.t === "prompt" ||
@@ -195,14 +214,14 @@ export class DevCollabBridge {
 					}
 					armTimeout();
 				} else if (frame.t === "error" && !peer.joined && !peer.roomEnded) {
-					this.#options.onFrame(input.browserId, frame);
+					this.#options.onFrame(input.browserId, frame, { ...peer.identity });
 					fail(frame.message);
 					return;
 				} else if (frame.t !== "bye" && frame.t !== "ui-request-end" && !peer.joined && !peer.roomEnded) return;
 				if (frame.t === "ui-request") peer.pendingUi.add(frame.request.reqId);
 				if (frame.t === "ui-request-end") peer.pendingUi.delete(frame.reqId);
-				// The existing browser client consumes this exact HostFrame grammar, including chunk/UI ends.
-				this.#options.onFrame(input.browserId, frame as HostFrame);
+				if (frame.t === "transcript" && !peer.pendingTranscripts.delete(frame.reqId)) return;
+				this.#options.onFrame(input.browserId, frame as HostFrame, { ...peer.identity });
 				if (frame.t === "snapshot-chunk" && frame.final && !peer.roomEnded) {
 					clearTimeout(peer.timer);
 					peer.joined = true;
@@ -218,8 +237,9 @@ export class DevCollabBridge {
 				peer.roomEnded = true;
 				peer.joined = false;
 				peer.pendingUi.clear();
+				peer.pendingTranscripts.clear();
 				socket.discardPendingSends();
-				this.#options.onDisconnected?.(input.browserId, "Collaboration room ended");
+				this.#options.onDisconnected?.(input.browserId, "Collaboration room ended", { ...peer.identity });
 				armTimeout();
 			};
 			socket.onClose = (reason, willReconnect) => {
@@ -228,9 +248,10 @@ export class DevCollabBridge {
 				peer.joined = false;
 				peer.welcomed = false;
 				peer.pendingUi.clear();
+				peer.pendingTranscripts.clear();
 				socket.discardPendingSends();
 				clearTimeout(peer.timer);
-				this.#options.onDisconnected?.(input.browserId, reason);
+				this.#options.onDisconnected?.(input.browserId, reason, { ...peer.identity });
 				if (!willReconnect) fail(reason);
 				else armTimeout();
 			};
@@ -247,18 +268,23 @@ export class DevCollabBridge {
 		}
 	}
 
-	async sendFrame(browserId: string, frame: GuestFrame): Promise<DevSubmitResult> {
+	async sendFrame(browserId: string, frame: GuestFrame, target: DevCollabTarget): Promise<DevCollabSubmitResult> {
 		const peer = this.#peers.get(browserId);
 		if (!peer?.joined || peer.ended || !peer.socket)
 			return { kind: "rejected", message: "Collaboration is not joined" };
+		if (!sameDevCollabTarget(peer.identity, target))
+			return { kind: "rejected", message: "Collaboration target belongs to an earlier peer, session or connection" };
 		if (frame.t === "hello") return { kind: "rejected", message: "Already joined" };
-		if (frame.t !== "fetch-transcript" && (!intranetCollabEnabled() || !peer.identity.canWrite))
-			return {
-				kind: "rejected",
-				message: "This collaboration link is read-only or offline collaboration is disabled",
-			};
+		if (frame.t !== "fetch-transcript" && !peer.identity.canWrite)
+			return { kind: "rejected", message: "This collaboration link is read-only" };
 		if (frame.t === "ui-response" && !peer.pendingUi.has(frame.reqId))
 			return { kind: "rejected", message: "UI request ended or belongs to an earlier connection" };
+		if (frame.t === "ui-response") peer.pendingUi.delete(frame.reqId);
+		if (frame.t === "fetch-transcript") {
+			if (peer.pendingTranscripts.has(frame.reqId))
+				return { kind: "rejected", message: "Transcript request is already pending" };
+			peer.pendingTranscripts.add(frame.reqId);
+		}
 		peer.socket.send(frame);
 		// Native wire has no admission ACK: even a completed socket flush cannot prove Host acceptance.
 		return {
@@ -274,6 +300,7 @@ export class DevCollabBridge {
 		peer.ended = true;
 		peer.joined = false;
 		peer.pendingUi.clear();
+		peer.pendingTranscripts.clear();
 		clearTimeout(peer.timer);
 		peer.socket?.discardPendingSends();
 		peer.socket?.close();
@@ -292,7 +319,7 @@ export function createDevCollabController(port: CollabHostPort): CollabControlle
 }
 
 export interface DevLocalSessionBridge {
-	sendFrame(frame: GuestFrame): Promise<DevSubmitResult>;
+	sendFrame(frame: GuestFrame): Promise<DevCollabSubmitResult>;
 	refreshParticipants(): void;
 	close(): Promise<void>;
 }

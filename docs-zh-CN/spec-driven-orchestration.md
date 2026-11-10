@@ -1,12 +1,12 @@
-# 从需求到交付：OpenSpec × Superpowers × OMP 的四阶段协作
+# 历史设计：旧 Dev TUI 的 OpenSpec × Superpowers 四阶段协作
 
-> 本文保留旧四阶段 Dev TUI 的设计说明，不是当前浏览器实现的操作指南。当前实现以未归档的 [replace-dev-tui-with-browser-workbench 增量规格](../openspec/changes/replace-dev-tui-with-browser-workbench/specs/spec-driven-orchestration/spec.md)及 [Lander／Sailor 八阶段指南](lander-sailor-six-stage-agent-workflow.md)为准；下文旧 Dev 子命令及三行固定区描述不适用于新工作台。
+> 本文完整保留旧四阶段 Dev TUI 的设计与历史说明，不是当前操作指南。当前入口见 [Lander／Sailor：Release／IR／SR 浏览器研发协作指南](lander-sailor-six-stage-agent-workflow.md)及其[七项配套增量](lander-sailor-six-stage-agent-workflow.md#9-当前证据边界与依据)：完整 IR／SR 先经确认审核与需求 PR 合入冻结，SR 再执行技术方案、开发计划、开发与验证、交付 PR 四阶段。下文旧子命令、三行固定区、候选方案及自动归档规则不适用于新 Dev，也不能作为新流程验收证据。
 
 需求还没确认就开始实现、方案只剩一句总结、计划写完便自动开工——这些问题不能只靠给模型增加一段“请严格遵守流程”解决。OMP 的 `/dev` 在**无代理、需求、方案、计划、执行**五种状态间切换原生会话，其中四个阶段 Agent 负责调查、设计与工程实施；程序管理工作区归属、正式材料及用户明确决定。
 
 ![OMP 四阶段工作流：文件检查、完整交接、明确用户决策和验收后归档](assets/spec-driven-orchestration/omp-workflow.svg)
 
-图中验收与归档是生命周期边界，不是第五、第六个 Agent。本文解释设计，正式行为以[需求规格](../openspec/specs/spec-driven-orchestration/spec.md)为准，不建立第二套需求权威，也不表示这些行为已在所有平台通过验证。
+图中验收与归档是旧设计的生命周期边界，不是第五、第六个 Agent。下文仅解释该历史设计，引用的[旧需求规格](../openspec/specs/spec-driven-orchestration/spec.md)不覆盖上述当前增量；历史验证记录也不表示新浏览器流程或全部平台已经通过验收。
 
 ## 一、为什么只让程序管它能确定的事
 

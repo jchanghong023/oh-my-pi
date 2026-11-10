@@ -13,14 +13,18 @@ import type {
 	DevNativeUiResponse,
 	DevNativeUiState,
 	DevNativeUiStateEvent,
-	DevSessionTarget,
-} from "../spec-driven/types";
+	DevNativeSurfaceTarget as DevSessionTarget,
+} from "./native/native-surface-types";
+import { devNativeSurfaceOwnerKey, sameDevNativeSurfaceOwner } from "./native/native-surface-types";
 
 type UiValue = DevNativeUiResponse["value"];
 type UiEvent =
 	| { t: "native-ui"; request: DevNativeUiRequest }
 	| { t: "native-ui-end"; requestId: string }
 	| DevNativeUiStateEvent;
+type UiEventInput =
+	| Exclude<UiEvent, DevNativeUiStateEvent>
+	| (DevNativeUiState & { t: "native-ui-state"; target: DevSessionTarget });
 interface PendingRequest {
 	request: DevNativeUiRequest;
 	current: () => DevSessionTarget;
@@ -52,16 +56,18 @@ export class DevNativeUiController {
 	readonly #surface = new Map<string, DevNativeUiStateEvent>();
 	#closed = false;
 	#theme: Theme | undefined;
+	#sequence = 0;
 
 	observe(listener: (event: UiEvent) => void): () => void {
 		this.#listeners.add(listener);
 		return () => this.#listeners.delete(listener);
 	}
-	#emit(event: UiEvent): void {
-		if (event.t === "native-ui-state") this.#remember(event);
+	#emit(event: UiEventInput): void {
+		const emitted: UiEvent = event.t === "native-ui-state" ? { ...event, sequence: ++this.#sequence } : event;
+		if (emitted.t === "native-ui-state") this.#remember(emitted);
 		for (const listener of this.#listeners) {
 			try {
-				listener(event);
+				listener(emitted);
 			} catch {
 				this.#listeners.delete(listener);
 			}
@@ -70,7 +76,7 @@ export class DevNativeUiController {
 	#remember(event: DevNativeUiStateEvent): void {
 		if (event.method === "notify" || event.method === "rerenderMessage" || event.method === "refreshTranscript")
 			return;
-		const owner = `${event.target.sessionId}:${event.target.generation}`;
+		const owner = devNativeSurfaceOwnerKey(event.target);
 		if (event.method === "pasteToEditor" || event.method === "setEditorText") {
 			this.#surface.set(`${owner}:editor`, {
 				...event,
@@ -82,23 +88,17 @@ export class DevNativeUiController {
 		const field = event.method === "setStatus" || event.method === "setWidget" ? `:${event.value.key}` : "";
 		this.#surface.set(`${owner}:${event.method}${field}`, event);
 	}
-	snapshot(): DevNativeUiStateEvent[] {
-		return [...this.#surface.values()];
+	snapshot(target?: DevSessionTarget): DevNativeUiStateEvent[] {
+		return [...this.#surface.values()].filter(event => !target || sameDevNativeSurfaceOwner(event.target, target));
 	}
 	pending(target?: DevSessionTarget): DevNativeUiRequest[] {
 		return [...this.#pending.values()]
-			.filter(
-				({ request }) =>
-					!target ||
-					(request.requirementId === (target.requirementId ?? "") &&
-						request.sessionId === target.sessionId &&
-						request.generation === target.generation),
-			)
+			.filter(({ request }) => !target || sameDevNativeSurfaceOwner(request, target))
 			.map(({ request }) => request);
 	}
 	updateEditor(target: DevSessionTarget, text: string): void {
-		this.#editors.set(`${target.sessionId}:${target.generation}`, text);
-		this.#remember({ t: "native-ui-state", target, method: "setEditorText", value: text });
+		this.#editors.set(devNativeSurfaceOwnerKey(target), text);
+		this.#emit({ t: "native-ui-state", target, method: "setEditorText", value: text });
 	}
 	async respondDevNativeUi(input: DevNativeUiResponse): Promise<{ accepted: boolean; reason?: string }> {
 		const pending = this.#pending.get(input.requestId);
@@ -111,12 +111,9 @@ export class DevNativeUiController {
 		}
 		const request = pending.request;
 		if (
-			request.requirementId !== input.requirementId ||
-			request.sessionId !== input.sessionId ||
-			request.generation !== input.generation ||
-			current.sessionId !== request.sessionId ||
-			current.generation !== request.generation ||
-			(current.requirementId ?? "") !== request.requirementId
+			!sameDevNativeSurfaceOwner(request, input) ||
+			request.clientId !== input.clientId ||
+			!sameDevNativeSurfaceOwner(current, request)
 		) {
 			return { accepted: false, reason: "Native request owner or generation changed" };
 		}
@@ -126,6 +123,11 @@ export class DevNativeUiController {
 	}
 	cancelSession(sessionId: string): void {
 		for (const pending of this.#pending.values()) if (pending.request.sessionId === sessionId) pending.settle(null);
+		for (const [key, event] of this.#surface) {
+			if (event.target.sessionId !== sessionId) continue;
+			this.#editors.delete(devNativeSurfaceOwnerKey(event.target));
+			this.#surface.delete(key);
+		}
 	}
 	close(): void {
 		this.#closed = true;
@@ -136,7 +138,7 @@ export class DevNativeUiController {
 	}
 	async #request(
 		current: () => DevSessionTarget,
-		body: Omit<DevNativeUiRequest, "requestId" | "requirementId" | "sessionId" | "generation">,
+		body: Omit<DevNativeUiRequest, keyof DevSessionTarget | "requestId">,
 		validate: (value: UiValue) => boolean,
 		options?: ExtensionUIDialogOptions,
 		timeoutValue?: () => UiValue,
@@ -146,7 +148,6 @@ export class DevNativeUiController {
 		const request: DevNativeUiRequest = {
 			...body,
 			...target,
-			requirementId: target.requirementId ?? "",
 			requestId: randomUUID(),
 		};
 		const { promise, resolve } = Promise.withResolvers<UiValue>();
@@ -175,7 +176,7 @@ export class DevNativeUiController {
 		const controller = this;
 		const editorKey = () => {
 			const target = current();
-			return `${target.sessionId}:${target.generation}`;
+			return devNativeSurfaceOwnerKey(target);
 		};
 		let expanded = false;
 		const emit = (payload: DevNativeUiState) => this.#emit({ ...payload, t: "native-ui-state", target: current() });

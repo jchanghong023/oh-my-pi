@@ -943,6 +943,8 @@ export declare class VcsGitRepo {
   push(options: VcsPushOptions, signal?: unknown | undefined | null): Promise<void>
   /** Observe exactly one full remote ref; transport errors remain unknown. */
   remoteRef(remote: string, fullRef: string, signal?: unknown | undefined | null): Promise<VcsRemoteRefResult>
+  /** Resolve the live remote HEAD; detached, unborn, or invalid HEAD rejects. */
+  remoteDefaultBranch(remote: string, signal?: unknown | undefined | null): Promise<VcsRemoteDefaultBranch>
   /** Fetch a refspec via Git CLI. */
   fetch(remote: string, source: string, target: string, timeoutMs?: number | undefined | null, signal?: unknown | undefined | null): Promise<void>
 }
@@ -4613,6 +4615,12 @@ export interface VcsPushOptions {
   remote?: string
   refspec?: string
   forceWithLease?: boolean
+}
+
+/** Live remote HEAD; branch is relative to refs/heads/, never a cached guess. */
+export interface VcsRemoteDefaultBranch {
+  branch: string
+  sha: string
 }
 
 /** Successful exact remote advertisement observation. */

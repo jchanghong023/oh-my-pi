@@ -1,46 +1,49 @@
-import { afterEach, expect, test } from "bun:test";
+import { expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import type { DevGitTarget } from "../../src/spec-driven/types";
-import { closePublicWorkbenches, WorkbenchFixture } from "../dev-workbench/fixture";
-afterEach(closePublicWorkbenches);
+import { createWorkflowStage, successfulWorkflowReply } from "./tui-materials-cases";
 
-test("fifth Next hands off only to ST; human ST marking preserves disclosed failures and archive remains explicit", async () => {
-	await using fixture = await WorkbenchFixture.create();
-	await fixture.start();
-	let snapshot = await fixture.developUntil("st");
-	const id = snapshot.record.requirementId;
-	expect(snapshot.record.syncRevisions).toEqual([]);
-	expect(
-		await fs
-			.stat(path.join(fixture.cwd, "openspec/changes", snapshot.record.changeId))
-			.then(stat => stat.isDirectory()),
-	).toBe(true);
-	const report = snapshot.record.materials.find(material => material.kind === "report");
-	if (!report) throw new Error("ST must reuse the existing completion report");
-	const original = await fs.readFile(path.join(fixture.cwd, report.path), "utf8");
-	await fs.appendFile(
-		path.join(fixture.cwd, report.path),
-		"\n## ST 测试\n\nFailed: deterministic ST probe; Windows platform not run. Human decision is separate.\n",
-	);
-	const targets = await fixture.request<DevGitTarget[]>(`git-targets/${id}`);
-	if (!targets[0]) throw new Error("Real existing Git target not discoverable");
-	const result = await fixture.act(snapshot, { kind: "mark", mark: "st-complete" }, targets[0]);
-	expect(result.snapshot.record.stage).toBe("pr");
-	expect(result.persistence.commit.status).toBe("succeeded");
-	expect(result.persistence.push.status).toBe("succeeded");
-	expect(result.snapshot.record.report.development).toEqual(snapshot.record.report.development);
-	expect(await fs.readFile(path.join(fixture.cwd, report.path), "utf8")).toContain("Failed: deterministic ST probe");
-	expect(original).not.toContain("Failed: deterministic ST probe");
-	expect(result.snapshot.record.syncRevisions).toEqual([]);
-	snapshot = await fixture.get(id);
-	const synced = await fixture.act(snapshot, { kind: "sync-archive" });
-	expect(synced.snapshot.record.stage).toBe("pr");
-	expect(synced.snapshot.record.lifecycle).toBe("active");
-	expect(synced.snapshot.record.syncRevisions.at(-1)?.archivedChangePath).toBeTruthy();
-	const archive = synced.snapshot.record.syncRevisions.at(-1)!.archivedChangePath!;
-	expect((await fs.stat(path.join(fixture.cwd, archive))).isDirectory()).toBe(true);
-	expect(await fs.readFile(path.join(fixture.cwd, "openspec/specs/greeting/spec.md"), "utf8")).toContain(
-		"Requirement: Greeting",
-	);
-}, 180_000);
+const disclosedFailure =
+	"ST FAILED: deterministic supplied report; Windows hardware was not exercised. Human acceptance is separate.";
+
+test("executing keeps distinct UT and failed ST evidence when a human explicitly approves PR delivery", async () => {
+	const { fixture, process, projectId, irId, srId, view } = await createWorkflowStage("executing", {
+		reply(request) {
+			const reply = successfulWorkflowReply(request);
+			if (
+				!(reply instanceof Response) &&
+				reply.tool?.name.replace(/^_/u, "") === "write" &&
+				typeof reply.tool.args.path === "string" &&
+				reply.tool.args.path.endsWith("/st.md")
+			)
+				reply.tool.args.content = `${reply.tool.args.content}\n\n${disclosedFailure}\n`;
+			return reply;
+		},
+	});
+	await using owned = fixture;
+	const sr = view.srs.find(item => item.id === srId)!;
+	const ut = sr.materials.find(material => material.kind === "ut")!;
+	const st = sr.materials.find(material => material.kind === "st")!;
+	expect(ut.path).not.toBe(st.path);
+	const utBytes = await fs.readFile(path.join(sr.worktree!.path, ut.path), "utf8");
+	const stBytes = await fs.readFile(path.join(sr.worktree!.path, st.path), "utf8");
+	expect(stBytes).toContain(disclosedFailure);
+	const approved = await process.command({
+		type: "approveStage",
+		projectId,
+		irId,
+		srId,
+		stage: "executing",
+		round: sr.round,
+		materialDigest: sr.materialDigest!,
+		expectedRevision: view.revision,
+		operationId: crypto.randomUUID(),
+	});
+	expect(approved.response.ok).toBe(true);
+	const after = await process.view(projectId);
+	expect(after.srs.find(item => item.id === srId)).toMatchObject({ stage: "pr", status: "developing" });
+	expect(after.activeSrId).toBe(srId);
+	expect(await fs.readFile(path.join(sr.worktree!.path, st.path), "utf8")).toBe(stBytes);
+	expect(await fs.readFile(path.join(sr.worktree!.path, ut.path), "utf8")).toBe(utBytes);
+	expect(after.srs.find(item => item.id === srId)?.codeMerge).toBeUndefined();
+}, 240_000);

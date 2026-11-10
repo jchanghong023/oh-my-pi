@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Resolve a Git remote's live default branch with `VcsGitRepo.remoteDefaultBranch()`.
+
+### Fixed
+
+- Cancelling Git requests on Windows now waits for owned remote helper processes to exit.
+
 ## [18.18.2] - 2026-11-08
 
 ### Added

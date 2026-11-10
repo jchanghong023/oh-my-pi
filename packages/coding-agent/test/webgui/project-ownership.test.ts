@@ -7,16 +7,53 @@ import { ptree } from "@oh-my-pi/pi-utils";
 const registryModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/project-registry.ts"));
 const serverModule = JSON.stringify(path.join(import.meta.dir, "../../src/webgui/server.ts"));
 const nativeServerModule = JSON.stringify(path.join(import.meta.dir, "../../src/dev-workbench/server.ts"));
+const workflowStoreModule = JSON.stringify(path.join(import.meta.dir, "../../src/dev-workbench/workflow-store.ts"));
 const processTreeModule = JSON.stringify(path.join(import.meta.dir, "../../../utils/src/ptree.ts"));
+const nativeVcsModule = JSON.stringify(import.meta.resolve("@oh-my-pi/pi-natives/vcs"));
 
 const bootstrapFixture = `
+import * as bootstrapFs from "node:fs/promises";
+import * as bootstrapPath from "node:path";
+import * as bootstrapVcs from ${nativeVcsModule};
 import { closeWebServer, ensureWebServer } from ${serverModule};
 import { startDevWorkbenchServer } from ${nativeServerModule};
-async function startBootstrap(projectId) {
-	// Bootstrap must not require native sessions, models or business callbacks.
-	const host = new Proxy({}, {
-		get() { throw new Error("Bootstrap unexpectedly accessed the native host"); },
+import { DevWorkflowStore } from ${workflowStoreModule};
+function metadataOnly(target, label) {
+	return new Proxy(target, {
+		get(value, key) {
+			if (!Object.hasOwn(value, key))
+				throw new Error("Bootstrap unexpectedly accessed native business capability " + label + "." + String(key));
+			return Reflect.get(value, key);
+		},
 	});
+}
+async function startBootstrap(projectId) {
+	const fixtureRoot = process.env.OWNERSHIP_FIXTURE_ROOT;
+	if (!fixtureRoot) throw new Error("Missing owned bootstrap fixture root");
+	// Keep this Git repository separate from the non-Git a/b ownership fixtures.
+	const directory = bootstrapPath.join(fixtureRoot, "native-bootstrap", projectId);
+	const projectRoot = bootstrapPath.join(directory, "repo");
+	for (const name of ["objects", "refs/heads", "refs/tags", "hooks"])
+		await bootstrapFs.mkdir(bootstrapPath.join(projectRoot, ".git", name), { recursive: true });
+	await bootstrapFs.writeFile(bootstrapPath.join(projectRoot, ".git", "HEAD"), "ref: refs/heads/trunk\\n");
+	await bootstrapFs.writeFile(
+		bootstrapPath.join(projectRoot, ".git", "config"),
+		"[core]\\nrepositoryformatversion = 0\\nautocrlf = false\\n[commit]\\ngpgsign = false\\n[user]\\nname = Ownership Contracts\\nemail = ownership@example.invalid\\n",
+	);
+	const repo = bootstrapVcs.requireGit(projectRoot);
+	await repo.configSet("core.hooksPath", bootstrapPath.join(repo.info().gitDir, "hooks"));
+	await bootstrapFs.writeFile(bootstrapPath.join(projectRoot, "existing.txt"), "owned bootstrap project\\n");
+	await repo.stageFiles(["existing.txt"]);
+	await repo.commitCreate("initial", {});
+	const store = new DevWorkflowStore(bootstrapPath.join(directory, "registry"));
+	await store.registerProject(projectRoot, "Native ownership bootstrap");
+	// Only genuine registered Git metadata is admitted; native sessions, models and business callbacks remain forbidden.
+	const host = metadataOnly({
+		cwd: projectRoot,
+		workflow: metadataOnly({
+			store: metadataOnly({ listProjects: () => store.listProjects() }, "workflow.store"),
+		}, "workflow"),
+	}, "host");
 	const html = new TextEncoder().encode("<!doctype html><title>Native bootstrap fixture</title>");
 	return startDevWorkbenchServer(host, {
 		basePath: "/dev/" + projectId + "/",
@@ -257,7 +294,7 @@ try {
 			root,
 			`
 	const peer = ptree.spawn([process.execPath, "--eval", ${JSON.stringify(peerScript)}], {
-		cwd: root, env: { ...process.env }, stdin: "pipe", timeout: 35_000, subreaper: true,
+		cwd: root, env: { ...process.env }, stdin: "pipe", stderr: "full", timeout: 35_000, subreaper: true,
 	});
 	let peerDone;
 	let a;
@@ -270,7 +307,7 @@ try {
 			const decoder = new TextDecoder();
 			while (!ready.includes("\\n")) {
 				const chunk = await reader.read();
-				if (chunk.done) throw new Error("Independent native process exited before readiness");
+				if (chunk.done) throw new Error("Independent native process exited before readiness (exit " + await peer.exited + "): " + await new Response(peer.stderr).text());
 				ready += decoder.decode(chunk.value, { stream: true });
 			}
 		} finally {
